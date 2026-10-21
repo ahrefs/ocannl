@@ -473,26 +473,30 @@ files.
   that "is not detected" usually has a singleton somewhere — keep every axis at extent >= 2 unless
   the singleton is the point. `test/operations/conv_detection_boundary` pins each class with its
   reason, derived from the lowered maps.
-- **A strided 1x1 conv's GEMM row is the batch axis wherever there is one** (gh-ocannl-1076,
-  gh-ocannl-1148): `classify_matmul` prefers a row the A operand reads at unit coefficient
-  (`Sketch_families.unit_axis`), so a stride-2 1x1 conv (`resnet_block`'s downsample) at batch 2+
-  rows on `b`, with `oh, ow` as interior batch loops (`m_bi`), and every seed stages dense tiles
-  from a strided source address. Only where no unit-stride row exists (batch 1) does the strided
-  window own the row (`m_row_stride = 2`, row `ow`); then every pipeline must pack A through a
+- **A strided 1x1 conv's GEMM row is the taller of `b` and `ow`** (gh-ocannl-1076, gh-ocannl-1148,
+  gh-ocannl-1397): `classify_matmul` has two row candidates, the deepest write loop A reads at unit
+  coefficient (`Sketch_families.unit_axis`; the batch axis of a stride-2 1x1 conv) and the deepest
+  one it reads as a single strided term (`ow`), and picks the strided one where no unit candidate
+  exists (batch 1) or where it is strictly taller (batch 2-8 under a 16-wide `ow`); a tie keeps the
+  unit row. With the batch row (cifar_resnet's b64), `oh, ow` are interior batch loops (`m_bi`) and
+  every seed stages dense tiles from a strided source address. With the strided row
+  (`m_row_stride = 2`, the batch axis and `oh` in `m_bo`) every pipeline must pack A through a
   compacting `Stage` (`Schedule.stage_compaction_factor`: the gcd of the tile part's
   coefficients, so the blocktile's twice-split row `2*tm*i_w + 2*i_t` compacts too), and the
   family tree refutes the shapes that read A in place (unstaged full-K mma, whole-triple,
   hoisted-grid) or pack it at link time (`site_hoistable`: hoisted staging refuses compaction).
-  At batch 2+ the row stays `b` rows tall even though `ow` would be a taller one; that preference
-  is what kept every pre-existing site's seeds unchanged. Inside the full block (at 64 channels;
-  at 16 the shortcut's conv is virtualized into its norm and is no site) cc does not fission it,
-  so its whole-routine seeds are the shortcut's only sketches there; GPU fissions it and the
-  segment's seeds run. `test/operations/schedule_strided_1x1` uses the public `resnet_block`
-  with explicit `out_channels` (gh-ocannl-1146) and PINS the role structure at both batch sizes
-  and every seed's parity (or typed decline, in the block, except cc's whole-routine seeds, which
-  must run); which seeds decline where it only reports on stderr, and the 16-channel
-  virtualization is a manual observation (conv2d into batch_norm2d, 16 channels) that no test
-  exercises.
+  A short batch row divides few block sizes: before the extent rule cifar_resnet's stage-2
+  shortcut at batch 2 seeded one whole-routine geometry on cc, three with the strided row. Inside the full block (at 64 channels; at 16 the shortcut's conv is virtualized
+  into its norm and is no site) cc does not fission it, so its whole-routine seeds are the
+  shortcut's only sketches there; GPU fissions it and the segment's seeds run.
+  `test/operations/schedule_strided_1x1` uses the public `resnet_block` with explicit
+  `out_channels` (gh-ocannl-1146) and PINS the role structure on both sides of the extent rule
+  (batch 1 and 2: strided; batch 8 over an 8-wide row: the tie, batch) and every seed's parity
+  (or typed decline, in the block, except cc's whole-routine seeds, which must run); which seeds
+  decline where it only reports on stderr, and the 16-channel virtualization is a manual
+  observation (conv2d into batch_norm2d, 16 channels) that no test exercises.
+  `benchmarks/runners/ocannl/bench_strided_1x1` times the site alone (roles, seed count, untuned
+  and tuned arms, exact oracle), a build on each side of a classifier change making the A/B.
 - **`Stage` stages only the reads that vary with its tile loops** (gh-ocannl-1147). A whole-routine
   matmul seed stages its A operand while another nest reads the same node at another index vector
   (the 3x3 conv or max pool beside a strided 1x1 shortcut, the K and V projections beside Q).
@@ -1392,9 +1396,10 @@ files.
   `Schedule.search_shaping_key_read` (or `Autotune.search_shaping_key_read` for the seeded plan's),
   so `gpu_*` stated on cc keys nothing -- `flip_abandonment` states every key the predicate calls
   unread on cc OFF its default and requires the warm chain to replay its abandonment record. It
-  states valid values, not garbage, and so pins the identity, not an absence of reads: the
-  placement level above the search does read two of them on cc (`Autotune.placement_surface`
-  segments for the cc mma descriptor as the GPU seeders do).
+  states valid values, not garbage, and so pins the identity, not an absence of reads. The absence
+  of reads at the placement level above the search is `placement_surface`'s claim: its mma sites
+  are segmented as the backend's own seeders segment (`Sched.fission_keep_mapping ~is_gpu`), so cc
+  no longer reads `gpu_fission_keep_mapping` or `gpu_serial_lanes` there (gh-ocannl-1430).
 - **A structural twin of a lost flip is skipped without a budget slot** (gh-ocannl-1274). The
   identity is `placement_surface`'s `ps_twin_identity`: every top-level statement of the raw
   program (`optimized.source`, where an inlined node is still present) that sets or reads the
@@ -2155,7 +2160,7 @@ files.
   the runs on a loaded box, with no trace. `placement_store` re-runs each recording (run 1, run 6,
   the cross-process recorder) in a FRESH directory, up to three attempts (the same directory would
   replay the first attempt's clean searches), and gates the dependent claims through
-  `Verdict.gated ~aggregation:`Environment` on why no entry exists, so the sweep counts the skip.
+  ``Verdict.gated ~aggregation:`Environment`` on why no entry exists, so the sweep counts the skip.
   The test's "clean" predicate is `Train.tune_placements`' own recording rule — uncontended, no
   terminal failure, a finite best — under which an abandoned flip is a measured loser, not spoiled
   evidence; a stricter test-side copy (requiring every report `Searched`/`Cache_replay`) disagrees
@@ -2206,6 +2211,38 @@ files.
   `budget_cut` is the crown's -- and benchmark arms carry it as `budget_s`. It is deliberately not
   a `regime_knobs` key: those are numerics settings the orchestrator's regime gate holds to the
   cell's regime, and a budgeted exact cell would read as a leak.
+- **A `tune_placements` call budget is split, not shared first-come** (gh-ocannl-1440).
+  `tune_call_budget_seconds` runs one clock for the call; each search gets what is left over the
+  searches still planned (`Autotune.call_budget`, reported as `call_budget_s`/`call_share_s` beside
+  the per-search `budget_s`), and is cut at the tighter of its share and its own budget by the same
+  `budget_allows`. A first-come deadline let arm A spend everything and compared arm B on its floors
+  alone. Both arms always search (the positional `?report` contract, and they are the call's
+  floor); the flip chain stops before any alternative once the budget is spent, mid-group included
+  (an unmeasured alternative leaves its node open, like a pruned one), and a decision reached with
+  flips left unsearched is not recorded in the placement store, like one over a cut search. The
+  key is
+  `Placement_shaping`: a share follows the wall clock, so it stays out of the trajectory identity,
+  and a cut trajectory is a prefix of the same order, which early stopping reads conservatively.
+  `test/operations/tune_call_budget.ml` places cuts with two virtual clocks counted in attempts
+  (`Autotune.call_budget_elapsed` for the call, `budget_elapsed` per search, a search's first
+  attempt being its `baseline`); per-search, no non-floor attempt may start at an index at or past
+  the cut.
+- **A deferred cache hit ships its validated code relinked** (gh-ocannl-1440).
+  `Context.compile_outcome ?retain` keeps a successful compile's code, censuses and pre-link
+  context (`Context.retained`, no working pools: those are a link's), and
+  `Context.relink_outcome` links it again on that context with a fresh delta and routine id. The
+  deferred hit releases the validating replay's context and relinks at `compile_deferred`, so the
+  cached schedule compiles once; a relink the device refuses ships the untuned default, as the
+  second compile's failure did. Metal compiles its library at LINK, so a relink alone would compile
+  the source again: the library is memoized on the code value (`Metal_backend`'s `library_memo`),
+  and the link-time compile is counted with the others. The counters: `Context.backend_compiles`
+  (per domain, `Utils.count_backend_compile`: every code generation plus every link-time device
+  compile), `report.compiles`/`replay_compiles`, `Autotune.deferred_compiles`, and
+  `Train.shipped.ship_compiles`, which together account for every compile of a call
+  (`test/operations/deferred_hit_compiles.ml`). A searched winner still recompiles from its saved
+  form: its candidate was compiled in the search lineage, which a `timing_ctx` makes another
+  context. A backend-level code cache (the HIP code-object cache of gh-ocannl-1314) composes:
+  the relink is the backend's own `link`.
 ## Scan-loop scheduling
 
 - **A `Scan_loop` is opaque to the schedule ops in both directions and transparent to the

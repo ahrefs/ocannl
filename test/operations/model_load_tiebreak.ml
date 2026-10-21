@@ -625,8 +625,8 @@ let () =
   in
   let leaves = List.tl explained |> Option.value ~default:[] in
 
-  (* A backend that describes none of its arms (every backend but CUDA: the CPU register tiles,
-     Metal's and HIP's fragments) has no operand-load count for any candidate: none is invented. *)
+  (* A backend that describes none of its arms (the CPU register tiles; CUDA, Metal and HIP describe
+     theirs, gh-ocannl-1456) has no operand-load count for any candidate: none is invented. *)
   let caps = Context.codegen_capabilities ctx in
   let describes =
     List.exists Ir.Ops.all_precs ~f:(fun a_prec ->

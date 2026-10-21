@@ -135,8 +135,11 @@ files.
   at all and in which scope, in the renderer's order: a fragment-marked statement through its
   region (`Low_level.fragment_region`, the renderer's own recognition, finds the backing target), in the
   fragment scope where `mma_fragment_syntax` accepts the target and the update-only call, else as
-  statements against the target; an unmarked one per statement. A
-  backend that describes no arm (CPU register tiles, Metal, HIP) gets `Undescribed`, code with no
+  statements against the target; an unmarked one per statement. CUDA, Metal and HIP describe
+  every arm (Metal's and HIP's since gh-ocannl-1456: their whole-fragment loads, once per reduction
+  step, and no `ldmatrix`), pinned device-free by `mma_format_arm_tables`, which counts the loads of
+  each pure-module reduction loop against `Cost_model.statement_operand_loads`. A
+  backend that describes no arm (the CPU register tiles) gets `Undescribed`, code with no
   `Tile_mma` `No_tile_mma` (`Cost_model.load_count`), and a keyless leaf neither wins nor loses a tie: each review round of staging#1216 that restated an
   emission detail in the cost model found the next arm it got wrong. `Schedule_space.search
   ~tie_break` lets a tied keyed leaf displace a keyed best, never the incumbent, and enters a
@@ -189,6 +192,20 @@ files.
   the gh-ocannl-1190 fp8 site every tensorized leaf ties at `peak_flops` while staged leaves ran
   2.3x faster than unstaged and the fastest was the plain 32x32x32 twin, not a swizzled one. The
   operand-load count orders that top pair wrongly, so pricing it is not the staging term either.
+- **The score is blind to how a scalar blocktile's work is LAUNCHED** (gh-ocannl-1278, measured at
+  gpt2_mini's q/k/v and out projections, b8 and b256, on rog CUDA and minix HIP unified; RANK_ONLY
+  `gh1253_cells.sh` + `bench_rank_site` `qkv`/`outproj`). Every scalar leaf of a site scores the
+  same compute leg whatever its geometry, batch-grid flavor or coalescing: a plain leaf (batch loops
+  serial in the kernel) ties its `bgrid` twin and measures 3-36x slower, and a coalesced leaf ties
+  its uncoalesced twin while the fastest leaf at q/k/v was `64x64x8/4x4 bgrid coal-n` (1.25-1.75x
+  under the seeded plan). The seeded plan scores slightly ABOVE the tie (its zero-fill kernel's
+  ops), so `model_default` under seeding (the `performance`/`approximate` profiles) displaces it
+  with the first leaf of the walk, a plain one: `bench_rank_site` `BENCH_PICK=1` reads
+  `32x32x8/4x4` at q/k/v (8.8-35x slower than seeded) and `64x64x8/4x4` at the out projection
+  (2.6-11x), under gate 32 and `auto` alike. So coalesced leaves stay out of `model_default` until
+  the score prices launch parallelism; they ARE numerics-preserving (`coalesce_numerics`: every
+  `coal-n`/`coal-k` seed computes the scalar family's values bitwise on order-sensitive inputs, on
+  CUDA, HIP and Metal), so admission is a score question only.
 - benchmarks/ is the cross-framework parity+timing suite (self-describing safetensors fixtures,
   one-JSON-line runners, loss-trajectory parity gate ~1e-7 fp32 vs pytorch/cpu). The gate
   doubles as a gradient oracle. tinygrad: realize the loss BEFORE `opt.step()` or it recomputes
@@ -277,14 +294,34 @@ files.
   profiler plus AMD's HSA runtime alone, rootless; rocprofv3 puts that lib/ on LD_LIBRARY_PATH,
   so the step keeps the system's HIP and hiprtc. AMD's 7.1.0 HSA runtime segfaults in the first
   `hipStreamCreateWithPriority` under Ubuntu's 7.1 HIP (also under AMD's own 7.1 HIP); 7.2.4's
-  works. Two non-exclusive runs per box (correctness legs, one repeat each, not measurements):
-  every cell mapped; the in-step medians summed to 89-93% of the inference step p50 and 77-108%
-  of the training one -- above 100% on tuf's training cell, so before quoting a HIP share as
-  precise, check on an exclusive box how rocprofv3's dispatch stamps add up against the step. On
+  works. gh-ocannl-1392's first non-exclusive runs read in-step medians summing to 77-108% of the
+  training step, 108% on tuf's. That does not reproduce (gh-ocannl-1444): in an exclusive tuf
+  window (discrete gfx1102, request `wave-20261021-1444-tuf-amd-linux-1`, 3 repeats) gh-1392's
+  own revision `db06f2b6` summed to 23.87-24.16 ms against a traced step p50 of 26.20-26.43 ms
+  (91-92%; untraced p50 25.70 ms) and the then-current head to 18.22-18.33 of 20.28-20.35 ms (90%;
+  untraced 19.56), with no stamped intervals overlapping and every synced step's device span just
+  under its host time -- tracing costs about 2-3% of the step there, as on rog. Quote tuf's
+  in-step shares, then. The 108% stays unexplained -- the cell is gone, and it recorded neither
+  stamps' composition nor co-tenants; a shared-box co-tenant is the likeliest reading, not a
+  finding -- and every kprof cell now prints the composition that would expose it. **minix is the opposite case**: on its unified gfx1151 rocprofv3 stamps
+  whole batches of a step's dispatches (up to 128) with one start, with graph capture and without
+  (`--ocannl_gpu_graph_capture=false`), so a 16 ms step's segments span 0.4-2.3 ms of trace and
+  overlap by 85-97% of their summed durations. The durations themselves hold up -- graph on and
+  off sum to 14.95 and 14.87 ms, under the 15.8-16.9 ms step -- so per-kernel times and their sum
+  are usable there and positions are not; `kernel_attribution.py` flags such a step `STAMPS`. On
   tuf the inference cell's isolated minima summed to 1.63x their in-step medians in one run (56
   kernels ISO, single kernels 2.7-3.1x off identical twins) and 1.02x in the next (none ISO),
   while the in-step medians moved under 5%: on a shared box an isolated HIP window is as exposed
   to a co-tenant as CUDA's (above).
+- **kprof joins across builds by written nodes, not trace names** (gh-ocannl-1444). Repeats of one
+  build trace identical `<routine>__seg<j>` names (every repeat pair of staging#1202's,
+  staging#1206's and staging#1229's rog traces), but `j` shifts at every segment a change adds or
+  merges before it: on gh-ocannl-1413's base/keep tables 223 of 231 joined kernels had moved index.
+  `stable_key` keys a kernel on the nodes it writes minus the `<namespace>__n<id>` staging nodes the
+  schedule mints (their ids drift with any earlier site's staging); that joined 231 of 235 kernels,
+  the four left over being exactly gh-ocannl-1413's score chain. The `amdgpu` sysfs clock reads 0
+  MHz at 99% busy on tuf (gfxoff between bursts) and samples only every 250 ms, so its line is a
+  coarse reading, not a per-kernel clock.
 - That digest covers the compiled result, NOT the diagnostics. When re-measuring a search's
   decline census after changing only an error message or a log line, `rm benchmarks/autotune_cache/*.sexp`
   first — otherwise the second run reports `state=cache-replay`, `timed=0`, `declines=[]` and every

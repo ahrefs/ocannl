@@ -279,6 +279,17 @@ type report = {
   budget_cut : bool;
   budget_s : float option;
       (** The wall-clock budget this call resolved (gh-ocannl-1438). See the interface. *)
+  call_budget_s : float option;
+      (** The enclosing [Train.tune_placements] call's budget (gh-ocannl-1440). See the interface.
+      *)
+  call_share_s : float option;
+      (** This search's share of [call_budget_s] (gh-ocannl-1440). See the interface. *)
+  compiles : int;
+      (** Backend compiles this call completed before it reported (gh-ocannl-1440). See the
+          interface. *)
+  replay_compiles : int;
+      (** Compiles of a cached schedule's replay among [compiles] (gh-ocannl-1440). See the
+          interface. *)
   beam_width : int;
   sketch_candidates : int;
   epilogue_sketch_candidates : int;
@@ -372,6 +383,10 @@ let no_search_report ~timing =
     round_moves = [];
     budget_cut = false;
     budget_s = None;
+    call_budget_s = None;
+    call_share_s = None;
+    compiles = 0;
+    replay_compiles = 0;
     beam_width = 0;
     sketch_candidates = 0;
     epilogue_sketch_candidates = 0;
@@ -3308,8 +3323,9 @@ let not_dispatched_origin = function
   | Outcome.Cache_replay -> "cache_replay"
   | Outcome.Candidate | Outcome.Advisory | Outcome.User_schedule -> "candidate"
 
-let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> ()) ~static_indices
-    ~base_opt ~canon ~limits ~is_gpu ~is_cpu ~provenance ctx comp bindings spec : gated_compile =
+let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> ()) ?retain
+    ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu ~provenance ctx comp bindings spec :
+    gated_compile =
   let candidate = match label with Some l -> l | None -> spec_label spec in
   let duplicate = ref None in
   let gate ~digest_after opts =
@@ -3381,8 +3397,8 @@ let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> (
           gate ~digest_after [ opt' ];
           [ opt' ]
         in
-        Context.compile_outcome ?name ~lowered_transform:transform ~provenance ~candidate ctx comp
-          bindings
+        Context.compile_outcome ?name ~lowered_transform:transform ~provenance ~candidate ?retain
+          ctx comp bindings
     | Fiss flavor ->
         let transforms fresh =
           let opt = rebase fresh in
@@ -3518,8 +3534,8 @@ let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> (
           gate ~digest_after posts;
           posts
         in
-        Context.compile_outcome ?name ~lowered_transform:transforms ~provenance ~candidate ctx comp
-          bindings
+        Context.compile_outcome ?name ~lowered_transform:transforms ~provenance ~candidate ?retain
+          ctx comp bindings
   in
   (* The [Tile_mma] rendering census travels on the routine ([Context.routine.mma], gh-ocannl-626):
      [Context.compile] collects it around this candidate's kernel compiles, fissioned segments
@@ -3543,11 +3559,11 @@ let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> (
 
 (* The callers that do not deduplicate: a refused form arrives as the typed [Not_dispatched]
    failure, which each of them already handles as a failed or degenerate compile. *)
-let compile_candidate ?name ?label ?on_privatize_drops ~static_indices ~base_opt ~canon ~limits
-    ~is_gpu ~is_cpu ~provenance ctx comp bindings spec : compiled Outcome.outcome =
+let compile_candidate ?name ?label ?on_privatize_drops ?retain ~static_indices ~base_opt ~canon
+    ~limits ~is_gpu ~is_cpu ~provenance ctx comp bindings spec : compiled Outcome.outcome =
   match
-    compile_candidate_gated ?name ?label ?on_privatize_drops ~static_indices ~base_opt ~canon
-      ~limits ~is_gpu ~is_cpu ~provenance ctx comp bindings spec
+    compile_candidate_gated ?name ?label ?on_privatize_drops ?retain ~static_indices ~base_opt
+      ~canon ~limits ~is_gpu ~is_cpu ~provenance ctx comp bindings spec
   with
   | Compiled c -> Ok c
   | Failed failure -> Error failure
@@ -3938,17 +3954,22 @@ let extend_spec (elem : compiled) (u : unit_gen) (op : SC.saved_optop) : spec op
    per-fission-segment (the [F_sketch] granularity — [fission_scheduled] with empty per-segment
    schedules, since only the pre-schedule segment slices are consulted). Fission not applying
    degrades to the whole-routine site; a classified rejection degrades likewise rather than failing
-   the caller (the classification is a ranking input, not a legality fact). *)
-let mma_eligible_sites ~(limits : Ir.Backend_intf.hardware_limits) ~static_indices
+   the caller (the classification is a ranking input, not a legality fact).
+
+   Segmented as THIS backend's seeders segment ([tune]'s [F_sketch] flavor and [model_default] pass
+   [Sched.fission_keep_mapping ~is_gpu]): cc advertises an [mma] descriptor too, and segmenting it
+   the GPU way both judged its sites on a segmentation its own families never see and read the GPU
+   lane keys ([gpu_fission_keep_mapping], [gpu_serial_lanes]) on a backend whose searches never read
+   them (gh-ocannl-1430, raised on gh-ocannl-1331). *)
+let mma_eligible_sites ~is_gpu ~(limits : Ir.Backend_intf.hardware_limits) ~static_indices
     (opt : LL.optimized) : matmul_site list =
   match limits.Ir.Backend_intf.mma with
   | None -> []
   | Some mma ->
       let segments =
         match
-          (* [mma] is a GPU capability: segment as the GPU seeders do. *)
           Sched.fission_scheduled
-            ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu:true ~limits)
+            ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
             ~preset:(fun _ -> [])
             ~zero_sched:(fun _ -> [])
             ~static_indices (scratch_of opt)
@@ -3968,14 +3989,15 @@ let mma_eligible_sites ~(limits : Ir.Backend_intf.hardware_limits) ~static_indic
             (mma_tile_for_precisions_in_scope mma ~scope:(matmul_mma_scope site ~bk:0) ~a_prec
                ~b_prec ~d_prec))
 
-let placement_enablement ~limits ~static_indices ~(base : LL.optimized) ~(allmat : LL.optimized) =
+let placement_enablement ~is_gpu ~limits ~static_indices ~(base : LL.optimized)
+    ~(allmat : LL.optimized) =
   let site_tns sites =
     List.fold sites
       ~init:(Set.empty (module Ir.Tnode))
       ~f:(fun acc site -> Set.add (Set.add (Set.add acc site.m_a) site.m_b) site.m_d)
   in
-  let base_sites = mma_eligible_sites ~limits ~static_indices base in
-  let allmat_sites = mma_eligible_sites ~limits ~static_indices allmat in
+  let base_sites = mma_eligible_sites ~is_gpu ~limits ~static_indices base in
+  let allmat_sites = mma_eligible_sites ~is_gpu ~limits ~static_indices allmat in
   (* An all-materialized site whose destination already carries an eligible default-placement site
      is not enablement: the family is expressible either way, and promoting its operands would rank
      ordinary mma-adjacent flips above genuinely family-unlocking ones. *)
@@ -4324,7 +4346,11 @@ let placement_surface ?name ?ordering ?(evidence = []) ctx comp bindings =
     List.filter_map candidates ~f:(fun fc -> Option.some_if (offers_materialize fc) fc.LL.fc_tn)
   in
   let allmat = Context.lowered_for_decisions ?name ~materialized:to_materialize ctx comp bindings in
-  let enablement, disablement = placement_enablement ~limits ~static_indices ~base ~allmat in
+  let enablement, disablement =
+    placement_enablement
+      ~is_gpu:(Sched.backend_is_gpu (Context.backend_name ctx))
+      ~limits ~static_indices ~base ~allmat
+  in
   let ps_candidates = rank_flip_candidates ~ordering ?profit ~enablement ~disablement candidates in
   let candidate_set =
     Set.of_list (module Ir.Tnode) (List.map ps_candidates ~f:(fun fc -> fc.LL.fc_tn))
@@ -4585,9 +4611,12 @@ let seeded_geometries =
 let seeded_min_blocks = 128
 
 (* The numerics-preserving candidate set (gh-ocannl-1324, gh-ocannl-1253): the unfused scalar
-   blocktile pipeline with no twin flavor. Tensorized forms change numerics, the conv and coalesced
-   families reorder the reduction, and the twins are the search's to time. Shared by the seeding and
-   by [model_default]'s GPU family search, so the two cannot drift. *)
+   blocktile pipeline with no twin flavor. Tensorized forms change numerics and the conv family
+   reorders the reduction. The coalesced layouts do NOT: each keeps every cell's summation order
+   (test/operations/coalesce_numerics executes it), and they stay out, as the twins do, because they
+   are the search's to time -- the ranking score cannot tell a coalesced leaf from its uncoalesced
+   twin (gh-ocannl-1278). Shared by the seeding and by [model_default]'s GPU family search, so the
+   two cannot drift. *)
 let scalar_blocktile p =
   p.sk_gpu && (not p.sk_mma) && (not p.sk_conv) && (not p.sk_epilogue)
   && Option.is_none p.sk_coalesce && (not p.sk_batch_inner) && Option.is_none p.sk_swizzle
@@ -5239,9 +5268,10 @@ let model_seeding ~backend ~limits =
 (* Where the model starts from the seeded plan, the family is restricted to the numerics-preserving
    candidate set the seeding uses ({!scalar_blocktile}, at a site accumulating at its storage
    precision), so a model pick never changes a result the seeded plan would not: tensorized forms
-   reround, the conv and coalesced families reorder the reduction. Other leaves are kept out of the
-   ranking, counted as not numerics-preserving, never an error. Metal, the CPU backends and an
-   unseeded CUDA/HIP compile keep the whole family. *)
+   reround, the conv family reorders the reduction. (The coalesced branch is not enumerated here at
+   all: it preserves numerics, but the score ties it with its uncoalesced twins, gh-ocannl-1278.)
+   Other leaves are kept out of the ranking, counted as not numerics-preserving, never an error.
+   Metal, the CPU backends and an unseeded CUDA/HIP compile keep the whole family. *)
 let model_admits ~seeding ~accum_prec (base_opt : LL.optimized) =
   let preserving =
     lazy
@@ -5322,10 +5352,10 @@ let model_default ?name ?report ctx comp bindings =
     (* Where the model starts from the seeded plan, the family is restricted to the
        numerics-preserving candidate set the seeding uses ({!scalar_blocktile}, at a site
        accumulating at its storage precision), so a model pick never changes a result the seeded
-       plan would not: tensorized forms reround, the conv and coalesced families reorder the
-       reduction. Other leaves are kept out of the ranking, counted as not numerics-preserving
-       ([n_excluded]), never an error. Metal, the CPU backends and an unseeded CUDA/HIP compile keep
-       the whole family. *)
+       plan would not: tensorized forms reround, the conv family reorders the reduction (see
+       [model_admits] on the coalesced branch). Other leaves are kept out of the ranking, counted as
+       not numerics-preserving ([n_excluded]), never an error. Metal, the CPU backends and an
+       unseeded CUDA/HIP compile keep the whole family. *)
     let admits base_opt = model_admits ~seeding:(Lazy.force seeding_here) ~accum_prec base_opt in
     let capabilities = Context.codegen_capabilities ctx in
     (* [model_family_search] with the default as incumbent, logging its ledger; under the
@@ -5747,7 +5777,7 @@ type explain = {
 type segment_explain = { xs_segment : string; xs_candidates : (string * explain) list }
 type explanation = { x_routine : (string * explain) list; x_segments : segment_explain list }
 
-let model_explain ?name ctx comp bindings =
+let model_explain ?name ?(coalesced = false) ctx comp bindings =
   let backend = Context.backend_name ctx in
   let is_gpu = Sched.backend_is_gpu backend and is_cpu = Sched.backend_is_cpu backend in
   let limits = Context.hardware_limits ctx in
@@ -5826,15 +5856,7 @@ let model_explain ?name ctx comp bindings =
     (* The sketch leaves [model_default]'s family search visits on [prog] (a whole routine or one
        segment), in its visiting order. Exactly the leaves it can score: a schedule that fails to
        apply, or whose scheduled form fails validation, is excluded from its ranking too. *)
-    let leaf_explains ~label prog =
-      let admits = model_admits ~seeding ~accum_prec prog in
-      let leaves =
-        match sketch_family_tree ~capabilities:caps ~is_gpu ~is_cpu ~limits prog with
-        | Some tree ->
-            Sspace.leaves
-              (if Lazy.force geometry_lattice_enabled then lift_geometry_lattice tree else tree)
-        | None -> []
-      in
+    let explain_leaves ~label ~admits prog leaves =
       List.filter_map leaves ~f:(fun p ->
           match
             validate_segments_for_model ~limits
@@ -5846,6 +5868,30 @@ let model_explain ?name ctx comp bindings =
           with
           | exception Outcome.Cause_at _ -> None
           | segs -> Some (label p, explain ~ex_admitted:(admits p) segs))
+    in
+    let leaf_explains ~label prog =
+      let leaves =
+        match sketch_family_tree ~capabilities:caps ~is_gpu ~is_cpu ~limits prog with
+        | Some tree ->
+            Sspace.leaves
+              (if Lazy.force geometry_lattice_enabled then lift_geometry_lattice tree else tree)
+        | None -> []
+      in
+      explain_leaves ~label ~admits:(model_admits ~seeding ~accum_prec prog) prog leaves
+    in
+    (* gh-ocannl-1278: the coalesced tuner branch's whole-routine leaves, which [model_default] does
+       not rank, listed on request to check the score's ranking of them against timings. A leaf is
+       marked admitted when its uncoalesced form is: the set [model_default] would rank were the
+       coalesced layouts admitted as numerics-preserving (neither reorders a cell's summation). *)
+    let coalesced_explains prog =
+      if not coalesced then []
+      else
+        let admits = model_admits ~seeding ~accum_prec prog in
+        explain_leaves
+          ~label:(fun p -> spec_label (Whole (W_sketch p)))
+          ~admits:(fun p -> admits { p with sk_coalesce = None })
+          prog
+          (coalesced_seed_params ~capabilities:caps ~is_gpu ~is_cpu ~limits prog)
     in
     (* gh-ocannl-1438: [model_default]'s per-segment substitution, as it derives it -- the
        fold-zeros segmentation of the searched program, when it splits the routine or exposes a
@@ -5874,7 +5920,8 @@ let model_explain ?name ctx comp bindings =
     {
       x_routine =
         (incumbent_label, explain incumbent)
-        :: leaf_explains ~label:(fun p -> spec_label (Whole (W_sketch p))) base;
+        :: (leaf_explains ~label:(fun p -> spec_label (Whole (W_sketch p))) base
+           @ coalesced_explains base);
       x_segments;
     }
 
@@ -5902,6 +5949,33 @@ let on_candidate_attempt : (string -> unit) Seam.t = Seam.make (fun _label -> ()
    crowns and stores needs exactly that: it substitutes a virtual clock (the attempts so far, say).
    Not a production seam: default the identity, and no config key selects it. *)
 let budget_elapsed : (float -> float) Seam.t = Seam.make Fn.id
+
+(* gh-ocannl-1440: a search's share of an enclosing call's budget ([Train.tune_placements]'
+   [tune_call_budget_seconds]). [cb_share_s] may be zero or negative, a call budget already spent:
+   the search then attempts only its untuned floors. *)
+type call_budget = { cb_total_s : float; cb_share_s : float }
+
+(* gh-ocannl-1440: the elapsed seconds a call budget's split reads, given the call's real elapsed
+   seconds -- [budget_elapsed]'s counterpart one level up, read by [Train.tune_placements]. Not a
+   production seam: default the identity, and no config key selects it. *)
+let call_budget_elapsed : (float -> float) Seam.t = Seam.make Fn.id
+
+(* Parsed by [autotune_budget_seconds]' grammar, but not through its typed getter: the typed getters
+   serve the keys an identity renders ([Utils.config_key_defaults]), and this one is
+   [Placement_shaping], which no identity renders. *)
+let call_budget_setting () =
+  let value = Utils.get_global_arg ~arg_name:"tune_call_budget_seconds" ~default:"" in
+  match Utils.canonical_config_value Utils.Positive_float_or_unset value with
+  | Some "" -> None
+  | Some positive -> Some (Float.of_string positive)
+  | None ->
+      raise
+        (Utils.Invalid_config_value
+           {
+             key = "tune_call_budget_seconds";
+             value;
+             expected = "a number, or nothing to leave it unset";
+           })
 
 (* gh-ocannl-1138: the running composite a staffed sweep starts from. Called once per search that
    sweeps, with the coarse keys and their seeded parameters, and the starting composite derived from
@@ -5984,8 +6058,8 @@ let lineage_identity ~static_indices (opt : LL.optimized) =
    ships the untuned default in place of the schedule the report named (a winner or cache replay
    that failed or degenerated), which a deferred caller ranking by the report must hear about. *)
 let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?repeats ?timing
-    ?seed_block_sizes ?cache_dir ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?report
-    ctx comp bindings : unit -> Context.t * Context.routine =
+    ?seed_block_sizes ?cache_dir ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon
+    ?call_budget ?report ctx comp bindings : unit -> Context.t * Context.routine =
   (* gh-ocannl-559: with the search off, [tune] still replays an explicitly provided cache -- a
      pinned schedule is deterministic, and committing one is how a reproducible run keeps a tuned
      schedule -- but never times candidates, whose crowning is the largest cross-machine determinism
@@ -6021,8 +6095,24 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
      a benchmark artifact, otherwise has to guess it from ambient configuration that a [?timing]
      override may not match. Which is why the objective is resolved above this line and not below
      it. *)
-  let budget = budget_setting () in
-  let base_report = { (no_search_report ~timing) with beam_width; budget_s = budget } in
+  (* [budget_s] reports the per-search setting, a fact about the call that a shrinking share must not
+     replace; [budget] is what the search is cut at: the tighter of the setting and the share of an
+     enclosing call's budget (gh-ocannl-1440). *)
+  let budget_s = budget_setting () in
+  let budget =
+    match (budget_s, call_budget) with
+    | b, None -> b
+    | None, Some cb -> Some (Float.max 0. cb.cb_share_s)
+    | Some b, Some cb -> Some (Float.min b (Float.max 0. cb.cb_share_s))
+  in
+  let call_budget_s = Option.map call_budget ~f:(fun cb -> cb.cb_total_s) in
+  let call_share_s = Option.map call_budget ~f:(fun cb -> cb.cb_share_s) in
+  let base_report =
+    { (no_search_report ~timing) with beam_width; budget_s; call_budget_s; call_share_s }
+  in
+  (* gh-ocannl-1440: the backend compiles this call completes, stamped on every report it emits. *)
+  let compiles_at_start = Context.backend_compiles () in
+  let replay_compiles = ref 0 in
   let max_split_reduce_sites =
     max 0
       (Option.value_or_thunk max_split_reduce_sites ~default:(fun () ->
@@ -6151,9 +6241,11 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
     | Error _ -> "failed"
   in
   progress_line "search_start"
-    (Printf.sprintf "backend=%s device=%d search=%b beam=%d rounds=%d budget_s=%s" backend device
-       search beam_width rounds
-       (Option.value_map budget ~default:"none" ~f:(Printf.sprintf "%g")));
+    (let opt = Option.value_map ~default:"none" ~f:(Printf.sprintf "%g") in
+     Printf.sprintf
+       "backend=%s device=%d search=%b beam=%d rounds=%d budget_s=%s call_budget_s=%s \
+        call_share_s=%s"
+       backend device search beam_width rounds (opt budget_s) (opt call_budget_s) (opt call_share_s));
   (* gh-ocannl-1408: set once a deferred call has delivered its report. The deferred compile runs
      after that, and its failure paths ([raise_pre_search], [emit_partial_and_raise]) would
      otherwise report a second time. *)
@@ -6161,7 +6253,14 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
   (* Every report goes through here, exactly once per call on every path (gh-ocannl-550), so this is
      where a search's closing progress line is written: before the callback, which may raise. *)
   let emit_report (r : report) =
-    let r = { r with compile_cost = !compile_cost_total } in
+    let r =
+      {
+        r with
+        compiles = Context.backend_compiles () - compiles_at_start;
+        replay_compiles = !replay_compiles;
+        compile_cost = !compile_cost_total;
+      }
+    in
     if not !sealed then (
       progress_line "search_done"
         (Printf.sprintf
@@ -6626,13 +6725,13 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
     (* Winner (and cache-hit) compiles target the caller's context; they replay against the same
        base lowering as the search's candidates, the caller's lineage lowering to it
        ([Lineage_refused] below). *)
-    let compile_spec_real ?label provenance spec =
+    let compile_spec_real ?label ?retain provenance spec =
       costed
         ~attempt:(Option.value label ~default:(spec_label spec))
         ~verdict_of:outcome_verdict
         (fun () ->
-          compile_candidate ?name ?label ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu
-            ~provenance ctx comp bindings spec)
+          compile_candidate ?name ?label ?retain ~static_indices ~base_opt ~canon ~limits ~is_gpu
+            ~is_cpu ~provenance ctx comp bindings spec)
     in
     let flat_schedule = function
       | Whole_saved saved -> saved
@@ -6792,8 +6891,18 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                legitimate winner. The rejection is decided before codegen
                ([compile_candidate_gated]) and arrives as the typed [Not_dispatched] failure, which
                the [Error] arm below records in [cache_replay_refusal] like any other refused replay
-               (gh-ocannl-1340). This arm is the post-codegen check on what was shipped. *)
-            match compile_spec_real Outcome.Cache_replay spec with
+               (gh-ocannl-1340). This arm is the post-codegen check on what was shipped.
+
+               gh-ocannl-1440: a deferred call keeps the compiled code ([retained]), so the routine
+               it ships is this compile's code linked again rather than a second compile. *)
+            let retained = ref None in
+            let retain = if defer then Some (fun rt -> retained := Some rt) else None in
+            (* Counted as the backend compiles the replay completed, a replay whose link then failed
+               included (review round 2). *)
+            let before = Context.backend_compiles () in
+            let replay_compile = compile_spec_real ?retain Outcome.Cache_replay spec in
+            replay_compiles := !replay_compiles + (Context.backend_compiles () - before);
+            match replay_compile with
             | Ok c when not (shipped_dispatchable ~is_gpu c) ->
                 logf "cache entry replays to an unparallelized routine, re-searching: %s"
                   (spec_label spec);
@@ -6860,7 +6969,11 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                     round_moves = [];
                     (* A fact about the crown, like [best_ms] (gh-ocannl-1409). *)
                     budget_cut = entry.SC.budget_cut;
-                    budget_s = budget;
+                    budget_s;
+                    call_budget_s;
+                    call_share_s;
+                    compiles = 0 (* Stamped by [emit_report]. *);
+                    replay_compiles = 0;
                     beam_width;
                     sketch_candidates = 0;
                     epilogue_sketch_candidates = 0;
@@ -6935,25 +7048,31 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                   (* gh-ocannl-1408: the replay above validated the entry -- a stale one goes on to
                      search, which only a compile can tell -- and supplied the emission census the
                      report carries. Its routine is not kept: a deferred call leaves nothing
-                     resident, so it is compiled again, from the same entry, when the caller asks. A
-                     replay is deterministic, so the second compile is the first one's code; one
-                     that fails anyway ships the untuned default rather than a search, which has
-                     already been reported as not needed. *)
+                     resident. gh-ocannl-1440: its compiled code is, holding no working pools, and
+                     the routine the caller asks for is that code linked again on [ctx]
+                     ({!Context.relink_outcome}) -- the census the report carries is the shipped
+                     code's, and the schedule compiles once. A link that fails anyway ships the
+                     untuned default rather than a search, which has already been reported as not
+                     needed. *)
                   release_quietly ~what:"the validating cache replay of a deferred call" c.cctx;
                   emit_report hit_report;
+                  let retained = !retained in
                   Some
                     (deferred_compile (fun () ->
-                         progress_stage "cache_replay_compile";
-                         match compile_spec_real Outcome.Cache_replay spec with
-                         | Ok c when shipped_dispatchable ~is_gpu c -> (c.cctx, c.routine)
-                         | Ok c ->
-                             release_quietly ~what:"a degenerate deferred cache replay" c.cctx;
-                             substituted := true;
-                             compile_untuned_default ~base:(census ()) ()
+                         progress_stage "cache_replay_relink";
+                         match
+                           match retained with
+                           | Some rt -> Context.relink_outcome rt
+                           | None ->
+                               failwith
+                                 "Autotune: a deferred cache replay compiled without retaining its \
+                                  code"
+                         with
+                         | Ok result -> result
                          | Error (Outcome.Classified classified) ->
                              logf
-                               "the deferred cache replay FAILED (%s), compiling the untuned \
-                                default"
+                               "the deferred cache replay's link FAILED (%s), compiling the \
+                                untuned default"
                                (Outcome.detail_of_cause classified.cause);
                              substituted := true;
                              compile_untuned_default ~base:(census ()) ()
@@ -7429,7 +7548,11 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
             rounds_run = !rounds_run;
             round_moves = List.rev !round_moves;
             budget_cut = !budget_cut;
-            budget_s = budget;
+            budget_s;
+            call_budget_s;
+            call_share_s;
+            compiles = 0 (* Stamped by [emit_report]. *);
+            replay_compiles = 0;
             beam_width;
             sketch_candidates = !n_sketch_candidates;
             epilogue_sketch_candidates = !n_epilogue_sketch_candidates;
@@ -8938,7 +9061,11 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
               rounds_run = !rounds_run;
               round_moves = List.rev !round_moves;
               budget_cut = !budget_cut;
-              budget_s = budget;
+              budget_s;
+              call_budget_s;
+              call_share_s;
+              compiles = 0 (* Stamped by [emit_report]. *);
+              replay_compiles = 0;
               beam_width;
               sketch_candidates = List.length sketch_params;
               epilogue_sketch_candidates = List.count sketch_params ~f:(fun p -> p.sk_epilogue);
@@ -9134,21 +9261,34 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
         ?repeats ?timing ?seed_block_sizes ?cache_dir ?keep_fraction ?max_split_reduce_sites
         ?timing_ctx ?abandon ?report ctx comp bindings ())
 
-type deferred = { compile : unit -> Context.t * Context.routine; substituted : bool ref }
+type deferred = {
+  compile : unit -> Context.t * Context.routine;
+  substituted : bool ref;
+  compiles : int Atomic.t;
+}
 
 let tune_deferred ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?cache_dir
-    ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?log ?progress ?report ctx comp
-    bindings =
+    ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?call_budget ?log ?progress ?report
+    ctx comp bindings =
   let substituted = ref false in
   exclusive_search @@ fun () ->
   with_streams ?log ?progress (fun () ->
       {
         substituted;
+        compiles = Atomic.make 0;
         compile =
           tune_in_stream_scope ~defer:true ~substituted ?name ?search ?beam_width ?rounds ?repeats
             ?timing ?seed_block_sizes ?cache_dir ?keep_fraction ?max_split_reduce_sites ?timing_ctx
-            ?abandon ?report ctx comp bindings;
+            ?abandon ?call_budget ?report ctx comp bindings;
       })
 
-let compile_deferred d = d.compile ()
+let compile_deferred d =
+  let before = Context.backend_compiles () in
+  (* Atomic (review round 3): a memoized call on another domain adds its zero concurrently with the
+     compiling call's count. The counter itself is per domain, and the compile runs on the
+     caller's. *)
+  Exn.protect ~f:d.compile ~finally:(fun () ->
+      ignore (Atomic.fetch_and_add d.compiles (Context.backend_compiles () - before) : int))
+
+let deferred_compiles d = Atomic.get d.compiles
 let shipped_substitute d = !(d.substituted)

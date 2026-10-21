@@ -219,10 +219,11 @@
 #      answers --read=backend, ocannl_slot_kind asks Test_utils.Slot_kind and
 #      prints the grammar batch_resolve parses, and Slot_kind's config_dirs is
 #      BATCH_CONFIG_DIRS.
-#  78. a test configuration's backend counts only where a reached stanza
-#      reads it (gh-ocannl-1095): beside a hip configuration on a small SDMA
-#      pool, a batch reaching only `none` stanzas, or one naming cc, stays
-#      uncapped and --cpu; one reaching a configuration reader is -j 4, --gpu.
+#  78. a test configuration's backend counts only where ocannl_slot_kind says
+#      it does (gh-ocannl-1227: a batch off its configuration-free list or a
+#      plain build): beside a hip configuration on a small SDMA pool, a batch
+#      it answers with no `reads config` line -- naming nothing, or naming cc --
+#      stays uncapped and --cpu; one it answers with one is -j 4, --gpu.
 #  88. a GPU box's batch resolving to cc alone (gh-ocannl-1433) runs and WARNs
 #      in the announcements, the log and the digest, and `--expect-backend`
 #      refuses it before dune (BACKEND REFUSED, exit 2); the GPU backend held,
@@ -1316,8 +1317,8 @@ chmod +x "$repeat_root/tools/test-run.sh"
 # say; `fail` fails the read, `unset` resolves none). The reachability tool
 # records the argv it was asked about and prints FAKE_REACH (by default: no
 # stanza naming a backend, and one reading the configuration -- FAKE_READS --
-# so the configurations count, as they do for any test-running batch; leg 78
-# drives one that reads none, gh-ocannl-1095).
+# so the configurations count, as they do for any batch off the
+# configuration-free list; leg 78 drives one that reads none, gh-ocannl-1227).
 mkdir -p "$repeat_root/test/config" "$repeat_root/arrayjit/test"
 # A build directory, as any worktree that has built has: without one the run's
 # last phase records an empty promotion list without asking dune (gh-ocannl-1087).
@@ -5698,7 +5699,7 @@ fi
   slot_detail="$slot_reach_exe.ml does not ask Test_utils.Slot_kind"
 # The reachability tool's grammar is the one batch_resolve parses: a `names
 # <backend>: <why>` line per backend, a `reads config: <why>` line when a
-# reached stanza reads the configuration, then `end`; or one `unknown: <why>`.
+# configuration counts, then `end`; or one `unknown: <why>`.
 for form in 'printf "names %s: %s\n"' 'printf "reads config: %s\n"' 'printf "end\n"' \
             'printf "unknown: %s\n"'; do
   [ -z "$slot_detail" ] || break
@@ -5706,8 +5707,8 @@ for form in 'printf "names %s: %s\n"' 'printf "reads config: %s\n"' 'printf "end
     slot_detail="$slot_reach_exe.ml has no $form"
 done
 # ...and Slot_kind's own list of the directories whose configuration the runner
-# reads -- a copy of any other's makes a reader's batch every backend -- is
-# BATCH_CONFIG_DIRS (gh-ocannl-1095).
+# reads -- slot_kind_live refuses a reader reading any other's
+# (gh-ocannl-1249) -- is BATCH_CONFIG_DIRS.
 if [ -z "$slot_detail" ]; then
   slot_kind_dirs=$(sed -n 's/^let config_dirs = \[ \(.*\) \]$/\1/p' "$HERE/../test/support/slot_kind.ml" | tr -d '"' | sed 's/ *; */ /g')
   [ "$slot_kind_dirs" = "$slot_dirs" ] ||
@@ -5721,16 +5722,17 @@ fi
 }
 harness_leg_run '58: the backend readers are test/config'\''s #slot' leg_58
 
-# Leg 78: a test configuration's backend counts only where the batch reaches a
-# stanza that reads it (gh-ocannl-1095). A test configuration naming hip --
-# AGENTS.md's one-off route -- under a fleet slot beside a small SDMA pool,
-# minix's shape: a batch reaching only stanzas that name their backend `none`
-# (as @test/operations/scans does) holds no backend, so it runs at dune's own
-# width and --cpu, its log saying why; one reaching a stanza that names cc
-# holds cc alone, the configuration unread. The control: the same batch
-# reaching a stanza that reads the configuration is hip's -- -j 4 and --gpu.
+# Leg 78: a test configuration's backend counts only where ocannl_slot_kind
+# says it does -- every batch but one of its configuration-free aliases or a
+# plain build (gh-ocannl-1227). A test configuration naming hip -- AGENTS.md's
+# one-off route -- under a fleet slot beside a small SDMA pool, minix's shape:
+# a batch answered with no `reads config` line and nothing named (as
+# @test/operations/scans is) holds no backend, so it runs at dune's own width
+# and --cpu, its log saying why; one naming cc holds cc alone, the
+# configuration unread. The control: the same batch answered with a `reads
+# config` line is hip's -- -j 4 and --gpu.
 leg_78() {
-reads_label="batch: a configuration's backend counts only where a reached stanza reads it"
+reads_label="batch: a configuration's backend counts only where the reachability tool says it does"
 reads_detail=
 native_fleet=$fleet_none
 for probe in "none-only|end|build @cheap|--cpu|holds no backend: it reaches no stanza" \
@@ -5764,7 +5766,7 @@ else
   report 1 "$reads_label" "$reads_detail"
 fi
 }
-harness_leg_run '78: a configuration'\''s backend counts only where a reached stanza reads it #slot' leg_78
+harness_leg_run '78: a configuration'\''s backend counts only where the reachability tool says it does #slot' leg_78
 
 # Leg 88 (gh-ocannl-1433): what the batch's backends say about the GPU it was
 # meant to test. On a GPU box (cuda on a native NVIDIA boot, hip beside a KFD

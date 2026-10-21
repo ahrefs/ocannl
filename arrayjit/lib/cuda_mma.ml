@@ -112,6 +112,108 @@ let arm_accumulator = function
   | Inline_ptx (Fp8_m16n8k32 | M16n8k16 _) -> Ops.single
   | Wmma kind -> (wmma_info kind).wc_acc_prec
 
+(* The operand conditions of every wmma rendering, written once for the two hooks that used to
+   repeat them (gh-ocannl-1456): opaque fragments load with [load_matrix_sync] from row- or
+   column-major pointer+stride storage only, so every layout is plain (no supported way feeds them
+   from [ldmatrix] registers, gh-ocannl-481 item 3, D2); the arm's tile divides the extents; the
+   leading dimensions meet its stride multiples; every addressed operand is device or shared memory
+   (generic-address loads cover both; a per-thread stack is not a jointly-owned tile); and the
+   device meets the arm's floor. An update-only statement addresses no destination. *)
+let wmma_accepts kind ~cc ~m ~n ~k ~d ~a:(lda, (a_space, a_layout)) ~b:(ldb, (b_space, b_layout)) =
+  let arm = Wmma kind in
+  let { wc_ab_ld_mult; wc_d_ld_mult; _ } = wmma_info kind in
+  let tm, tn, tk = arm_tile arm in
+  let plain = function `Plain -> true | `Swizzled_b128 -> false in
+  let loadable = function `Device | `Shared -> true | `Thread -> false in
+  (match d with
+    | `Resident d_layout -> plain d_layout
+    | `Addressed (ldd, (d_space, d_layout)) ->
+        plain d_layout && loadable d_space && ldd % wc_d_ld_mult = 0)
+  && plain a_layout && plain b_layout
+  && m % tm = 0
+  && n % tn = 0
+  && k % tk = 0
+  && lda % wc_ab_ld_mult = 0
+  && ldb % wc_ab_ld_mult = 0
+  && loadable a_space && loadable b_space
+  && cc >= arm_floor arm
+
+let wmma_frag_typ kind role typ layout =
+  let tm, tn, tk = arm_tile (Wmma kind) in
+  Printf.sprintf "nvcuda::wmma::fragment<nvcuda::wmma::%s, %d, %d, %d, %s%s>" role tm tn tk typ
+    (match layout with Some l -> ", nvcuda::wmma::" ^ l | None -> "")
+
+(* The serial [k] extent of one wmma block statement: per step, the B-row fragment loads, the A
+   fragment loads, and the mma updates of the accumulator array [acc]. Shared between the
+   self-contained rendering ([acc] = the block-local [__mma_acc]) and the update-only rendering
+   against a resident fragment array (gh-ocannl-480). Each fragment is one whole [load_matrix_sync]
+   once per step, reused across the other operand's free axis: what [operand_fragments] says of the
+   wmma arms ([arm_reloads_operands]). *)
+let wmma_k_loop_lines kind ~acc ~ta ~tb ~lda ~ldb ~m ~n ~k =
+  let { wc_ab_typ = ab_typ; wc_cvt_tf32 = cvt_tf32; _ } = wmma_info kind in
+  let wc_tm, wc_tn, wc_tk = arm_tile (Wmma kind) in
+  let mt = m / wc_tm and nt = n / wc_tn and kt = k / wc_tk in
+  let frag = wmma_frag_typ kind in
+  let a_frag_layout = if ta then "col_major" else "row_major" in
+  let b_frag_layout = if tb then "col_major" else "row_major" in
+  (* tf32 fragments load raw f32 bits; the explicit elementwise [__float_to_tf32] performs the
+     mantissa truncation the intrinsic expects (CUDA programming guide requirement -- without it the
+     multiplicand bits are implementation-defined). *)
+  let cvt_lines frag_expr =
+    if cvt_tf32 then
+      [
+        Printf.sprintf
+          "    for (int __t = 0; __t < %s.num_elements; ++__t) %s.x[__t] = \
+           nvcuda::wmma::__float_to_tf32(%s.x[__t]);"
+          frag_expr frag_expr frag_expr;
+      ]
+    else []
+  in
+  [
+    Printf.sprintf "for (int __ki = 0; __ki < %d; ++__ki) {" kt;
+    Printf.sprintf "  %s __mma_bf[%d];" (frag "matrix_b" ab_typ (Some b_frag_layout)) nt;
+    Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
+    (* Transposed storage ([tb]): the stored matrix is the role's transpose -- index it at (col,
+       row) and declare the fragment [col_major]; the leading dimension stays the operand's own.
+       Same for [ta] below. *)
+    (if tb then
+       Printf.sprintf
+         "    nvcuda::wmma::load_matrix_sync(__mma_bf[__ni], __mma_bp + __ni * %d * %d + __ki * \
+          %d, %d);"
+         wc_tn ldb wc_tk ldb
+     else
+       Printf.sprintf
+         "    nvcuda::wmma::load_matrix_sync(__mma_bf[__ni], __mma_bp + __ki * %d * %d + __ni * \
+          %d, %d);"
+         wc_tk ldb wc_tn ldb);
+  ]
+  @ cvt_lines "__mma_bf[__ni]"
+  @ [
+      "  }";
+      Printf.sprintf "  for (int __mi = 0; __mi < %d; ++__mi) {" mt;
+      Printf.sprintf "    %s __mma_af;" (frag "matrix_a" ab_typ (Some a_frag_layout));
+      (if ta then
+         Printf.sprintf
+           "    nvcuda::wmma::load_matrix_sync(__mma_af, __mma_ap + __ki * %d * %d + __mi * %d, \
+            %d);"
+           wc_tk lda wc_tm lda
+       else
+         Printf.sprintf
+           "    nvcuda::wmma::load_matrix_sync(__mma_af, __mma_ap + __mi * %d * %d + __ki * %d, \
+            %d);"
+           wc_tm lda wc_tk lda);
+    ]
+  @ cvt_lines "__mma_af"
+  @ [
+      Printf.sprintf "    for (int __ni = 0; __ni < %d; ++__ni) {" nt;
+      Printf.sprintf
+        "      nvcuda::wmma::mma_sync(%s[__mi][__ni], __mma_af, __mma_bf[__ni], %s[__mi][__ni]);"
+        acc acc;
+      "    }";
+      "  }";
+      "}";
+    ]
+
 type m16n8k16_spelling = {
   ms_elt_typ : string;
   ms_as_ushort : string;
@@ -172,8 +274,8 @@ let operand_loads ~a_prec ~b_prec ~d_prec ~scope ~ta ~tb ~a ~b =
 (* The inline-PTX bodies load an [a] and a [b] fragment inside their [__mi x __ni x __ki] loops, so
    each is reloaded for every tile of the other's free axis; wmma loads its B row of fragments and
    then each A fragment once per [__ki] step, reusing them across [__mi] / [__ni]. Stated beside the
-   hooks that emit those loops ([Cuda_backend]'s [mma_syntax] bodies and its wmma
-   [k_loop_lines]). *)
+   loops: [Cuda_backend]'s inline-PTX [mma_syntax] bodies and [wmma_k_loop_lines] above, which
+   [test/operations/mma_format_arm_tables] counts against it (gh-ocannl-1456). *)
 let arm_reloads_operands = function Inline_ptx _ -> true | Wmma _ -> false
 
 let operand_fragments ~a_prec ~b_prec ~d_prec ~scope =

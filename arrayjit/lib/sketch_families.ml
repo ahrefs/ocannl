@@ -286,10 +286,11 @@ type matmul_site = {
           sites; smaller when interior batch axes sit between the roles. [m_j] is always on the
           minor axis. *)
   m_row_stride : int;
-      (** [m_a]'s coefficient on [m_i] (gh-ocannl-1148). [1] on every site with a row [m_a] reads at
-          unit stride. Greater only where no such row exists and a strided window owns the row
-          instead: a stride-2 1x1 conv at batch 1 reads its input at [(2*oh, 2*ow)] and has no other
-          output axis. Such a row can only be tiled through a compacting [Stage] of [m_a]
+      (** [m_a]'s coefficient on [m_i] (gh-ocannl-1148). Greater than [1] only where a strided
+          window owns the row: where no row [m_a] reads at unit stride exists (a stride-2 1x1 conv
+          at batch 1 reads its input at [(2*oh, 2*ow)] and has no other output axis), or where the
+          strided candidate is strictly taller than the unit-stride one (the same conv at batch 2-8,
+          gh-ocannl-1397). Such a row can only be tiled through a compacting [Stage] of [m_a]
           ({!Ir.Schedule.stage_compaction_factor}), so the family tree refutes every geometry that
           reads [m_a] in place or packs it at link time. *)
   m_d : Ir.Tnode.t;
@@ -368,11 +369,13 @@ let unit_axis (idcs : Idx.axis_index array) s : int option =
    only handles batch loops above [j]; backprop's other orders arrive through the same interchange,
    gh-ocannl-1325). - Per operand order, [a] must own [k], must not read [j]; [b] must own [j] and
    [k]; [i] is the {e deepest} write loop owned by [a] and absent from [b] — the 2-D tile row; a
-   role symbol owns its component alone (a convolution window [ox + kx] is not a tile axis). Where
-   no write loop qualifies at unit coefficient, the deepest one [a] reads as a single strided term
-   [c*i] owns the row instead ([m_row_stride = c], gh-ocannl-1148): a stride-2 1x1 conv at batch 1
-   has no other output axis for it. A unit-stride row is kept wherever one exists, so every site the
-   classifier admitted before keeps its roles and its seeds. The exclusions are what keep
+   role symbol owns its component alone (a convolution window [ox + kx] is not a tile axis). The
+   deepest write loop [a] reads as a single strided term [c*i] is the row's other candidate
+   ([m_row_stride = c], gh-ocannl-1148), and the two are chosen between by extent (gh-ocannl-1397):
+   the strided one owns the row where no unit-stride candidate exists (a stride-2 1x1 conv at batch
+   1 has no other output axis) or where it is strictly taller (the same conv at batch 2-8, whose
+   [ow] is taller than its [b]); a tie keeps the unit-stride row, which needs no compacting [Stage].
+   Sites with no strided candidate keep their roles and seeds. The exclusions are what keep
    variance-style self-products [d[b,s] += x[b,s,k] * x[b,s,k]] — whose reads mention every loop —
    from masquerading as matmuls: they seeded (and always failed candidate compile) before. -
    Everything else is batch: [m_bo] outside [i], [m_bi] between [i] and [j]; batch symbols and outer
@@ -459,16 +462,22 @@ let classify_matmul ~(loops : (Idx.symbol * int) list) ~(d : Ir.Tnode.t)
                       if Array.exists bi ~f:(Idx.axis_index_mentions_symbol s) then None
                       else match stride ai s with Some c -> Some (role, c) | None -> None)
                 in
+                let unit_row =
+                  List.last
+                    (eligible ~stride:(fun idcs s -> Option.map (sole_axis idcs s) ~f:(fun _ -> 1)))
+                and strided_row =
+                  List.last
+                    (eligible ~stride:(fun idcs s -> Option.map (strided_axis idcs s) ~f:snd))
+                in
+                (* By extent (gh-ocannl-1397): the strided row wins only where it is strictly
+                   taller, so a tie keeps the unit-stride row and its in-place reads. *)
                 let row =
-                  match
-                    List.last
-                      (eligible ~stride:(fun idcs s ->
-                           Option.map (sole_axis idcs s) ~f:(fun _ -> 1)))
-                  with
-                  | Some _ as unit_row -> unit_row
-                  | None ->
-                      List.last
-                        (eligible ~stride:(fun idcs s -> Option.map (strided_axis idcs s) ~f:snd))
+                  match (unit_row, strided_row) with
+                  | Some (((_, n_unit), _), _), Some (((_, n_strided), _), _)
+                    when n_strided > n_unit ->
+                      strided_row
+                  | Some _, _ -> unit_row
+                  | None, _ -> strided_row
                 in
                 Option.map row ~f:(fun (((i, ni), p_row), row_stride) ->
                     let before_i = ref true in

@@ -532,6 +532,8 @@ let () =
   let placement_keys =
     [
       ("tune_inline_flips", "7");
+      (* A call budget no search here comes near: stated, it reaches every search as a share. *)
+      ("tune_call_budget_seconds", "100000");
       ("tune_flip_ordering", "profitable");
       ("tune_flip_profit_margin", "1.25");
       ("tune_ship_arm", "auto");
@@ -649,11 +651,10 @@ let () =
   (* gh-ocannl-1331: the search-shaping keys a cc search never reads -- the GPU presets, lane modes
      and fission mapping, and the seeded plan's [gpu_default_*] -- stated OFF their defaults. They
      used to change the cc identity, so stating one cost a warm chain its records; now the identity
-     leaves them out ([Autotune.search_shaping_key_read]). Valid values, not unparsable text: the
-     placement level above the search does read two of them on cc ([Autotune.placement_surface]
-     segments for the cc mma descriptor as the GPU seeders do), and refusing there skips the flips
-     this leg replays. A keyword's off-default mode is named below, its modes being its read
-     site's. *)
+     leaves them out ([Autotune.search_shaping_key_read]). Valid values: the claim is about the
+     identity, which a valid statement is the case for; that the placement level above the search
+     reads none of the lane keys on cc either is [placement_surface]'s claim (gh-ocannl-1430). A
+     keyword's off-default mode is named below, its modes being its read site's. *)
   let backend = Context.backend_name chain_ctx in
   let search_keys = class_keys Utils.Search_shaping in
   let unread =

@@ -502,8 +502,28 @@ module Impl = struct
         memcpy ~dst_ptr:(Slab.resolve_pool dst.device loc) ~dst_offset:loc.offset
 
   (* --- Compilation and Linking --- *)
+  (* gh-ocannl-1440: the library a code value's first link compiled, on the device it compiled for. A
+     relink of retained code ([Context.relink_outcome]) reuses it: Metal's device compile happens at
+     link, so without this a relink would compile the source a second time. Per code value, so it
+     lives exactly as long as the code (a retained one, or a linked routine's). *)
+  type library_memo = (Me.Device.t * Me.Library.t) option ref
+
+  let sexp_of_library_memo _ = Sexp.Atom "<library>"
+
+  (* The library [source] compiles to on [device], compiled at most once per [memo] and device. *)
+  let memoized_library memo ~device compile =
+    match !memo with
+    | Some (d, library) when phys_equal d device -> library
+    | _ ->
+        let library = compile () in
+        (* A device compile at link time, counted like a compile-time one (gh-ocannl-1440). *)
+        Utils.count_backend_compile ();
+        memo := Some (device, library);
+        library
+
   type code = {
     metal_source : string; (* Store source, the library is built during link *)
+    library : library_memo;
     func_name : string;
     kparams : (string * kparam_source) list;
     bindings : Indexing.unit_bindings;
@@ -516,6 +536,7 @@ module Impl = struct
 
   type code_batch = {
     metal_source : string; (* Store combined source, compiled per device at link time *)
+    batch_library : library_memo;
     funcs : (string * (string * kparam_source) list * Low_level.launch_dims) array;
         (* func_name * kparams * launch dims *)
     bindings : Indexing.unit_bindings;
@@ -835,6 +856,10 @@ module Impl = struct
 
     let mma_arm = Metal_mma.mma_arm
 
+    (* gh-ocannl-1456: how [Metal_mma.k_loop_lines], which both hooks render, loads its operands. *)
+    let mma_operand_loads = Metal_mma.operand_loads
+    let mma_operand_fragments = Metal_mma.operand_fragments
+
     (* MSL leaves the element-to-thread mapping unspecified, so a half/bfloat fragment cannot supply
        the coordinates of a float accumulator (gh-ocannl-1075). Load the row-major table into the
        accumulator's own type and convert scalar cells at the coordinates it names. [simdgroup_load]
@@ -939,7 +964,7 @@ module Impl = struct
              [ldmatrix] analogue, so a swizzled operand layout declines to the caller's scalar
              fallback (gh-ocannl-481 item 3, D2). *)
           let plain = function `Plain -> true | `Swizzled_b128 -> false in
-          let tile = 8 in
+          let tile = Metal_mma.tile in
           let frag_types =
             if plain d_layout && plain a_layout && plain b_layout then
               mma_fragment_types ~d_prec ~a_prec ~b_prec
@@ -950,48 +975,17 @@ module Impl = struct
             | `Shared -> Some "threadgroup"
             | `Thread | `Fragment _ -> None
           in
-          (* Tile load at role-space block (row_i, col_i): transposed storage keeps the operand's
-             own leading dimension and indexes the STORED matrix at (col_i, row_i);
-             [simdgroup_load]'s [transpose_matrix] flag transposes the 8×8 tile in flight. *)
-          let load_line frag ptr ~row_i ~col_i ld ~transpose =
-            if transpose then
-              Printf.sprintf
-                "    simdgroup_load(%s, %s + %s * %d * %d + %s * %d, (ulong)%d, ulong2(0), true);"
-                frag ptr col_i tile ld row_i tile ld
-            else
-              Printf.sprintf "    simdgroup_load(%s, %s + %s * %d * %d + %s * %d, (ulong)%d);" frag
-                ptr row_i tile ld col_i tile ld
-          in
           match (frag_types, d_space, addr_space a_space, addr_space b_space) with
           | Some (_acc_frag, a_frag, b_frag, _d_frag), `Fragment fragment, Some a_as, Some b_as
             when m % tile = 0
                  && n % tile = 0
                  && k % tile = 0
                  && Option.is_some (hardware_limits ()).Backend_intf.mma ->
-              let mt = m / tile and nt = n / tile and kt = k / tile in
               let ptr_decl name aspace elem ptr =
                 string (Printf.sprintf "%s %s *%s = " aspace elem name) ^^ ptr ^^ semi
               in
               let body_lines =
-                [
-                  Printf.sprintf "for (int __ki = 0; __ki < %d; ++__ki) {" kt;
-                  Printf.sprintf "  %s __mma_bf[%d];" b_frag nt;
-                  Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
-                  load_line "__mma_bf[__ni]" "__mma_bp" ~row_i:"__ki" ~col_i:"__ni" ldb
-                    ~transpose:tb;
-                  "  }";
-                  Printf.sprintf "  for (int __mi = 0; __mi < %d; ++__mi) {" mt;
-                  Printf.sprintf "    %s __mma_af;" a_frag;
-                  load_line "__mma_af" "__mma_ap" ~row_i:"__mi" ~col_i:"__ki" lda ~transpose:ta;
-                  Printf.sprintf "    for (int __ni = 0; __ni < %d; ++__ni) {" nt;
-                  Printf.sprintf
-                    "      simdgroup_multiply_accumulate(%s[__mi][__ni], __mma_af, __mma_bf[__ni], \
-                     %s[__mi][__ni]);"
-                    fragment fragment;
-                  "    }";
-                  "  }";
-                  "}";
-                ]
+                Metal_mma.k_loop_lines ~a_frag ~b_frag ~acc:fragment ~ta ~tb ~lda ~ldb ~m ~n ~k
               in
               let body ~a_ptr ~b_ptr =
                 ptr_decl "__mma_ap" (Printf.sprintf "const %s" a_as) (typ_of_prec a_prec) a_ptr
@@ -1015,7 +1009,7 @@ module Impl = struct
                      && n % tile = 0
                      && k % tile = 0
                      && Option.is_some (hardware_limits ()).Backend_intf.mma ->
-                  let mt = m / tile and nt = n / tile and kt = k / tile in
+                  let mt = m / tile and nt = n / tile in
                   let ptr_decl name aspace elem ptr =
                     string (Printf.sprintf "%s %s *%s = " aspace elem name) ^^ ptr ^^ semi
                   in
@@ -1040,26 +1034,9 @@ module Impl = struct
                              (Printf.sprintf "__mma_dp + __mi * %d * %d + __ni * %d" tile ldd tile)
                            ~ldd)
                         ~f:(fun line -> "    " ^ line)
-                    @ [
-                        "  }";
-                        "}";
-                        Printf.sprintf "for (int __ki = 0; __ki < %d; ++__ki) {" kt;
-                        Printf.sprintf "  %s __mma_bf[%d];" b_frag nt;
-                        Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
-                        load_line "__mma_bf[__ni]" "__mma_bp" ~row_i:"__ki" ~col_i:"__ni" ldb
-                          ~transpose:tb;
-                        "  }";
-                        Printf.sprintf "  for (int __mi = 0; __mi < %d; ++__mi) {" mt;
-                        Printf.sprintf "    %s __mma_af;" a_frag;
-                        load_line "__mma_af" "__mma_ap" ~row_i:"__mi" ~col_i:"__ki" lda
-                          ~transpose:ta;
-                        Printf.sprintf "    for (int __ni = 0; __ni < %d; ++__ni) {" nt;
-                        "      simdgroup_multiply_accumulate(__mma_acc[__mi][__ni], __mma_af, \
-                         __mma_bf[__ni], __mma_acc[__mi][__ni]);";
-                        "    }";
-                        "  }";
-                        "}";
-                      ]
+                    @ [ "  }"; "}" ]
+                    @ Metal_mma.k_loop_lines ~a_frag ~b_frag ~acc:"__mma_acc" ~ta ~tb ~lda ~ldb ~m
+                        ~n ~k
                     @ [
                         Printf.sprintf "for (int __mi = 0; __mi < %d; ++__mi) {" mt;
                         Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
@@ -1113,7 +1090,7 @@ module Impl = struct
              [ldmatrix] analogue, so a swizzled operand layout declines to the caller's scalar
              fallback (gh-ocannl-481 item 3, D2). *)
           let plain = function `Plain -> true | `Swizzled_b128 -> false in
-          let tile = 8 in
+          let tile = Metal_mma.tile in
           let frag_types =
             if plain d_layout && plain a_layout && plain b_layout then
               mma_fragment_types ~d_prec ~a_prec ~b_prec
@@ -1614,7 +1591,15 @@ using namespace metal;|}
         ~builtins:Builtins_metal.builtins ~conditional_includes ~compiles_source:false
         ~compile_source ()
     in
-    { metal_source; func_name; kparams; bindings; launch; routine_names = [ (func_name, name) ] }
+    {
+      metal_source;
+      library = ref None;
+      func_name;
+      kparams;
+      bindings;
+      launch;
+      routine_names = [ (func_name, name) ];
+    }
 
   let compile_batch ~names bindings lowereds =
     let metal_source, entries =
@@ -1626,7 +1611,7 @@ using namespace metal;|}
     let routine_names =
       Array.to_list (Array.map2_exn funcs names ~f:(fun (emitted, _, _) given -> (emitted, given)))
     in
-    { metal_source; funcs; bindings; routine_names }
+    { metal_source; batch_library = ref None; funcs; bindings; routine_names }
 
   (* gh-ocannl-344: from the routine's materialized nodes, assign each distinct pool an index (first
      use order), build the [(pool_index, byte_offset)] slot table (one [uint] pair per node,
@@ -1882,8 +1867,9 @@ using namespace metal;|}
   let link prior_context code ctx_buffers =
     let device = prior_context.device.dev in
     let library =
-      compile_metal_source ~name:code.func_name ~routine_names:code.routine_names
-        ~source:code.metal_source ~device
+      memoized_library code.library ~device (fun () ->
+          compile_metal_source ~name:code.func_name ~routine_names:code.routine_names
+            ~source:code.metal_source ~device)
     in
     let lowered_bindings : Indexing.lowered_bindings =
       List.map (Indexing.bound_symbols code.bindings) ~f:(fun s -> (s, ref 0))
@@ -1906,8 +1892,9 @@ using namespace metal;|}
     in
     let base_name = if String.is_empty base_name then "batch" else base_name in
     let library =
-      compile_metal_source ~name:base_name ~routine_names:code_batch.routine_names
-        ~source:code_batch.metal_source ~device
+      memoized_library code_batch.batch_library ~device (fun () ->
+          compile_metal_source ~name:base_name ~routine_names:code_batch.routine_names
+            ~source:code_batch.metal_source ~device)
     in
     let lowered_bindings : Indexing.lowered_bindings =
       List.map (Indexing.bound_symbols code_batch.bindings) ~f:(fun s -> (s, ref 0))

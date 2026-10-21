@@ -1,6 +1,21 @@
-build @test/operations/scans                            names nothing
+build @test/operations/scans                  names nothing
     <the configuration does not count>
-build @test/operations/scans answers names nothing: true
-build @test/operations/runtest-bandwidth_calibration    names nothing + reads config
-    it reaches the rule producing bandwidth_calibration.actual in test/operations, which reads the configuration
-build @test/operations/runtest-bandwidth_calibration answers names nothing + reads config: true
+build @metal-codegen                          names metal
+    <the configuration does not count>
+build bin/projection_shape_bench.exe          names nothing
+    <the configuration does not count>
+build ./test/operations/test_vec_simple.exe   names nothing
+    <the configuration does not count>
+build @lifecycle                              names cc,multidev_cc + reads config
+    it builds @lifecycle, which is not on the configuration-free alias list
+build @test/operations/runtest-env_var_deps   names nothing + reads config
+    it builds @test/operations/runtest-env_var_deps, which is not on the configuration-free alias list
+the live tree is a dune-file inventory, not an empty glob: true
+the live tree breaks no check that keeps the configuration-free answers true: true
+@test/operations/scans holds no backend: true
+@metal-codegen holds Metal and nothing else: true
+a plain build of a bin/ executable holds no backend: true
+a plain build in bisect's spelling holds no backend: true
+@lifecycle, off the list, counts the configuration: true
+a single none-marked test off the list counts the configuration: true
+every file read is one the rule declared: true

@@ -76,3 +76,55 @@ let capability =
     mma_staged_layouts = [];
     mma_pipeline_depths = [ 2 ];
   }
+
+let tile = 8
+
+(* One 8x8 operand tile at role-space block [(row_i, col_i)] from [ptr]: transposed storage keeps
+   the operand's own leading dimension and indexes the STORED matrix at [(col_i, row_i)];
+   [simdgroup_load]'s [transpose_matrix] flag transposes the tile in flight. *)
+let load_line frag ptr ~row_i ~col_i ld ~transpose =
+  if transpose then
+    Printf.sprintf
+      "    simdgroup_load(%s, %s + %s * %d * %d + %s * %d, (ulong)%d, ulong2(0), true);" frag ptr
+      col_i tile ld row_i tile ld
+  else
+    Printf.sprintf "    simdgroup_load(%s, %s + %s * %d * %d + %s * %d, (ulong)%d);" frag ptr row_i
+      tile ld col_i tile ld
+
+(* The serial [k] extent of one block statement, shared by the self-contained rendering ([acc] = its
+   block-local [__mma_acc]) and the update-only one against a resident fragment array
+   (gh-ocannl-480): per reduction step, the row of [nt] [b] fragments, then for each of the [mt] [a]
+   fragments its updates across that row. Each fragment is one whole [simdgroup_load], once per
+   step, reused across the other operand's free axis: what [operand_fragments] says. *)
+let k_loop_lines ~a_frag ~b_frag ~acc ~ta ~tb ~lda ~ldb ~m ~n ~k =
+  let mt = m / tile and nt = n / tile and kt = k / tile in
+  [
+    Printf.sprintf "for (int __ki = 0; __ki < %d; ++__ki) {" kt;
+    Printf.sprintf "  %s __mma_bf[%d];" b_frag nt;
+    Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
+    load_line "__mma_bf[__ni]" "__mma_bp" ~row_i:"__ki" ~col_i:"__ni" ldb ~transpose:tb;
+    "  }";
+    Printf.sprintf "  for (int __mi = 0; __mi < %d; ++__mi) {" mt;
+    Printf.sprintf "    %s __mma_af;" a_frag;
+    load_line "__mma_af" "__mma_ap" ~row_i:"__mi" ~col_i:"__ki" lda ~transpose:ta;
+    Printf.sprintf "    for (int __ni = 0; __ni < %d; ++__ni) {" nt;
+    Printf.sprintf
+      "      simdgroup_multiply_accumulate(%s[__mi][__ni], __mma_af, __mma_bf[__ni], \
+       %s[__mi][__ni]);"
+      acc acc;
+    "    }";
+    "  }";
+    "}";
+  ]
+
+(* [k_loop_lines]' loads, as the cost model counts them (gh-ocannl-1456): the arm's own [tile]
+   cubed, each fragment once per reduction step, loaded whole by one [simdgroup_load]. The same in
+   both emission scopes, whose hooks share [k_loop_lines]. *)
+let operand_fragments ~a_prec ~b_prec ~d_prec ~scope:_ =
+  Option.map (mma_accumulator ~d_prec ~a_prec ~b_prec) ~f:(fun _ ->
+      { Backend_intf.mf_tile = (tile, tile, tile); mf_reloads = false; mf_fragment_loads = true })
+
+(* [simdgroup_load] takes a plain pointer and leading dimension; the hooks decline a swizzled
+   operand (gh-ocannl-481 item 3, D2) and every load [k_loop_lines] emits is that whole-fragment
+   call, so no operand of an accepted call loads through a swizzle-aware matrix load. *)
+let operand_loads ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ ~ta:_ ~tb:_ ~a:_ ~b:_ = (false, false)

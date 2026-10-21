@@ -208,6 +208,7 @@
   (alias runtest-autotune_candidate_release)
   (alias runtest-autotune_callback_release)
   (alias runtest-autotune_device_memory)
+  (alias runtest-deferred_hit_compiles)
   (alias runtest-set_values_pool_coalescing)))
 
 ; This directory's golden-diff rules, aggregated back onto `runtest` (gh-ocannl-726). Each of them
@@ -3398,8 +3399,9 @@
 
 ; gh-ocannl-1004: what Test_utils.Slot_kind says a dune argv reaches -- the half of the fleet slot's
 ; --cpu/--gpu decision that reads the backend markers -- on fixture trees built to separate the
-; cases: per-test and aggregate aliases, @ and @@, runtest directories, path targets, and the
-; constructs whose reach is not modelled exactly.
+; cases: per-test and aggregate aliases, @ and @@, runtest directories, compilation products, the
+; configuration-free alias list, and each refusal of the checks that keep that list honest
+; (gh-ocannl-1227, gh-ocannl-1249).
 
 (test
  ; ocannl-backend: none -- links no backend: it reads dune-file text through Slot_kind.
@@ -3409,9 +3411,12 @@
  (modules slot_kind_cases)
  (libraries base stdio unix test_utils arrayjit.verdict))
 
-; The same reader on the repository's own dune files (gh-ocannl-1095): the answer for
-; `@test/operations/scans`, which holds no backend only while everything it builds is modelled
-; exactly and reads no configuration.
+; The same reader on the repository's own tree (gh-ocannl-1227): the checks that keep the
+; configuration-free alias list and the plain-compilation answer true -- no listed alias reaches a
+; configuration reader, a plain build reaches no backend, every reader reads a configuration the
+; runner resolves (gh-ocannl-1249) -- and the answers they guard. It reads exactly the files its
+; deps hand it through `%{deps}`, never a walk of the build tree, so what it reads is what dune
+; invalidates it on.
 
 (test
  ; ocannl-backend: none -- links no backend: it reads dune-file text through Slot_kind.
@@ -3419,7 +3424,14 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (glob_files_rec ../../dune))
+  (glob_files_rec ../../dune)
+  (glob_files_rec ../../ocannl_config)
+  (glob_files_rec ../../dune-project)
+  (glob_files_rec ../../dune-file)
+  (glob_files_rec ../../*.t)
+  (glob_files ../../dune-workspace))
+ (action
+  (run %{test} %{workspace_root} %{deps}))
  (modules slot_kind_live)
  (libraries base stdio test_utils arrayjit.verdict))
 
@@ -5260,6 +5272,17 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name coalesce_numerics)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules coalesce_numerics)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name schedule_coalesce)
  (package neural_nets_lib)
  (deps
@@ -6522,6 +6545,45 @@
   (env_var OCANNL_BACKEND))
  (modules autotune_device_memory)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1440: one wall-clock budget for a whole Train.tune_placements call, split among its
+; searches, on virtual clocks counted in candidate attempts.
+
+(test
+ ; cc-vector-width: independent -- its claims are attempt counts and shares on a scripted clock, and
+ ; outputs over dyadic inputs.
+ (name tune_call_budget)
+ ; ocannl-backend: cc -- Context.cpu (); the scripted ranking and the split are backend-independent
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules tune_call_budget)
+ (libraries base ocannl stdio arrayjit.verdict ll_test scripted_search)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1440: a deferred schedule-cache hit compiles its schedule once -- the shipped routine is
+; the validating replay's code linked again -- counted through Context.backend_compiles, never timed.
+
+(test
+ ; cc-vector-width: independent -- its claims are compile counts and outputs over dyadic inputs,
+ ; which every width computes alike.
+ ; ocannl-lifecycle: deferred_hit_compiles -- drives the allocator seam to refuse a shipping relink
+ (name deferred_hit_compiles)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules deferred_hit_compiles)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  ll_test
+  scripted_search
+  test_utils)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -8400,6 +8462,21 @@
   scripted_search)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1430: a malformed registered setting reaches Train.tune_placements' caller typed,
+; not absorbed by its arm containment.
+
+(test
+ (name tune_placements_config_refusal)
+ ; ocannl-backend: cc -- Context.cpu (); the refusal is backend-independent
+ ; cc-vector-width: independent -- its claims are on which exception reaches the caller, never on
+ ; what a search seeds, times or keeps.
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules tune_placements_config_refusal)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_ocannl)))
 
 (test
  ; cc-vector-width: independent -- the refused seed is tracked by its code fingerprint, whatever

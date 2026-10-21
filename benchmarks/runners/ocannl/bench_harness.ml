@@ -742,6 +742,7 @@ let tune_json t =
           ~timing:(Autotune.timing_string r.Autotune.timing)
           ~rounds_run:r.Autotune.rounds_run ~beam_width:r.Autotune.beam_width
           ~budget_cut:r.Autotune.budget_cut ~budget_s:r.Autotune.budget_s
+          ~call_budget_s:r.Autotune.call_budget_s ~call_share_s:r.Autotune.call_share_s
           ~timings_contended:r.Autotune.timings_contended
           ~timings_unbatched:r.Autotune.timings_unbatched
           ~timing_decisions:(timing_decisions_wire r.Autotune.timing_decisions)
@@ -1200,6 +1201,24 @@ let segment_geometry seg =
   let dims a = String.concat_array ~sep:";" (Array.map a ~f:Int.to_string) in
   Printf.sprintf "grid=[%s] block=[%s]" (dims d.grid) (dims d.block)
 
+(** A segment's global-memory traffic by the cost model ({!Ir.Cost_model.analyze}, gh-ocannl-1444):
+    [io:<read>/<written>] bytes, the distinct cells each GLOBAL node's accesses touch times its
+    element size -- workgroup-shared tiles and thread-private scratch ({!Ir.Cost_model.global_in}
+    false) stay on chip and are left out, so a staged kernel is not charged its staging twice. A
+    trailing [~] marks a count that is an upper bound (an approximate access image among the global
+    nodes), a trailing [?] code the model cannot see (an [opaque] kernel, whose counts may
+    under-count). *)
+let segment_io seg =
+  let module CM = Ir.Cost_model in
+  let s = CM.analyze seg.Ir.Low_level.llc in
+  let global = List.filter s.CM.per_node ~f:(fun (tn, _) -> CM.global_in seg tn) in
+  let sum f = List.sum (module Int) global ~f:(fun (_, fp) -> f fp) in
+  Printf.sprintf "io:%d/%d%s%s"
+    (sum (fun fp -> fp.CM.fp_read_bytes))
+    (sum (fun fp -> fp.CM.fp_write_bytes))
+    (if List.exists global ~f:(fun (_, fp) -> fp.CM.fp_approx) then "~" else "")
+    (if s.CM.opaque then "?" else "")
+
 (** Diagnostic census of the segments actually compiled, including gradient zeroing, backward and
     optimizer kernels for a training step. IDs match {!time_shipped_segments}. *)
 let print_shipped_census ?(out = Stdio.stdout) routines =
@@ -1246,8 +1265,8 @@ let time_shipped_kernels ?out ?(repeats = 20) ?(stop = fun () -> false)
             Stdio.Out_channel.fprintf out "bench: kernel %d/%d %s DECLINED (%s) w: %s\n" i n
               (segment_geometry seg) detail ws
         | Ok (ms, routine) ->
-            Stdio.Out_channel.fprintf out "bench: kernel %d/%d %.4f ms %s mma:%s vol:%s w: %s\n" i n
-              ms (segment_geometry seg)
+            Stdio.Out_channel.fprintf out "bench: kernel %d/%d %.4f ms %s %s mma:%s vol:%s w: %s\n"
+              i n ms (segment_geometry seg) (segment_io seg)
               (Ir.C_syntax.mma_summary_string routine.Context.mma)
               (Ir.C_syntax.volatility_summary_string routine.Context.volatility)
               ws);

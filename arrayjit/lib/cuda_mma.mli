@@ -146,6 +146,47 @@ type wmma_info = {
 val wmma_info : wmma_kind -> wmma_info
 (** A wmma arm's fragment types and stride constraints; its tile is {!arm_tile}. *)
 
+val wmma_accepts :
+  wmma_kind ->
+  cc:int ->
+  m:int ->
+  n:int ->
+  k:int ->
+  d:[ `Resident of [ `Plain | `Swizzled_b128 ] | `Addressed of int * Backend_intf.mma_operand_place ] ->
+  a:int * Backend_intf.mma_operand_place ->
+  b:int * Backend_intf.mma_operand_place ->
+  bool
+(** Whether a wmma arm renders a statement on a device of compute capability [cc]: every layout
+    plain, {!arm_tile} dividing the extents, the leading dimensions meeting {!wmma_info}'s stride
+    multiples, every addressed operand in device or shared memory, and [cc] at the arm's
+    {!arm_floor}. [d] is [`Resident] for an update-only statement against the fragment array a scope
+    declared (its accumulator is not addressed), and [`Addressed (ldd, place)] for a self-contained
+    statement's destination or a fragment scope's backing target. The one predicate both of
+    [Cuda_backend]'s wmma sites decide by (gh-ocannl-1456); a self-contained statement additionally
+    never has a converted destination ([wc_d_cvt]). *)
+
+val wmma_frag_typ : wmma_kind -> string -> string -> string option -> string
+(** [wmma_frag_typ kind role elt layout]: the [nvcuda::wmma::fragment] type of [role] ([matrix_a],
+    [matrix_b], [accumulator]) over the arm's {!arm_tile} blocks of [elt], with [layout] for an
+    operand. *)
+
+val wmma_k_loop_lines :
+  wmma_kind ->
+  acc:string ->
+  ta:bool ->
+  tb:bool ->
+  lda:int ->
+  ldb:int ->
+  m:int ->
+  n:int ->
+  k:int ->
+  string list
+(** The reduction loop of an accepted [m x n x k] wmma statement, as both of [Cuda_backend]'s hooks
+    render it: [load_matrix_sync]s of the [a] and [b] fragments from [__mma_ap] / [__mma_bp]
+    ([col_major] for transposed storage, [ta] / [tb]; tf32 then converts each element) and
+    [mma_sync] into the [mt x nt] accumulator array [acc]. {!operand_fragments} describes its loads,
+    which [test/operations/mma_format_arm_tables] counts. *)
+
 type m16n8k16_spelling = {
   ms_elt_typ : string;  (** The C element type. *)
   ms_as_ushort : string;  (** The bits-as-ushort intrinsic. *)

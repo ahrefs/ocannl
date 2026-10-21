@@ -36,9 +36,10 @@
 #                 --trace=cuda --cuda-graph-trace=node` (nsys and nvidia-smi on PATH), an
 #                 nvidia-smi clock sampler beside it; BACKEND=hip (gh-ocannl-1392): `rocprofv3
 #                 --kernel-trace` (ROCPROFV3, default rocprofv3 on PATH; benchmarks/rocprofv3-install.sh
-#                 provides one where the distribution ships none), after a device probe
-#                 (bin/device_props) whose one device's memory model, unified or discrete, every
-#                 cell states. Every shipped segment's device duration over the timed steps is
+#                 provides one where the distribution ships none), an amdgpu sysfs clock sampler
+#                 beside it where the box has one amdgpu card (gh-ocannl-1444). On both, a device
+#                 probe (bin/device_props) runs first, and every cell states its one device's memory
+#                 model, unified or discrete. Every shipped segment's device duration over the timed steps is
 #                 joined with the same compile's isolated minimum (benchmarks/kernel_attribution.py,
 #                 which refuses a cell it cannot map), and rows where the two disagree, or the
 #                 in-step spread is wide, are flagged: only the in-step column attributes step
@@ -158,8 +159,9 @@ cd "$root/benchmarks" || exit 2
 echo "gh1133: $(date -u +%FT%TZ) root=$root base=$base out=$out cap=$cap backend=$backend repeats=$repeats"
 echo "gh1133: fixtures: $fixtures; treatments: $treatments; ref: $ref; kernel table: $kernel_table; fixture dir: $fixture_dir; steps: $*"
 built=0 proven=0 failed=0
-# kprof on HIP: the tracer, and the lines every cell's .err states (set by the kprof step).
-rocprof= kprof_header=
+# kprof: HIP's tracer and amdgpu hwmon directory (its clock sampler's source), and the lines every
+# cell's .err states (set by the kprof step).
+rocprof= hwmon= kprof_header=
 # Whether the step-time matrix was asked for: summary owes one only then (OUT starts empty, so no
 # earlier invocation's cells can be in it either way).
 step_stage=0
@@ -232,16 +234,21 @@ capped() {
 # step is its own record), writing OUT/CELL.nsys-rep, and an nvidia-smi sampler records
 # OUT/CELL.smi.csv for the cell's duration. On HIP it is rocprofv3, whose kernel trace records each
 # dispatch at the HSA queue (graph nodes included) in OUT/CELL_kernel_trace.csv, beside
-# OUT/CELL_agent_info.csv; the cell's .err states KPROF_HEADER (the tracer and the memory model).
+# OUT/CELL_agent_info.csv, and an amdgpu sysfs sampler records OUT/CELL.clk.csv. Either way the
+# cell's .err states KPROF_HEADER (the tracer and the memory model).
 cell() {
   local fixture=$1 treatment=$2 tag=$3 exe=${4:-bench_gpt} profile=${5:-} flags r st smi=
   flags=$(flags_of "$treatment") || { failed=1; return 1; }
   r=$(runner_root "$treatment")
   local name="$backend-$fixture-$treatment-$tag" wrap=()
   echo "backend=$backend fixture=$fixture treatment=$treatment runner=$r flags=[$flags]" >"$out/$name.err"
+  [ -z "$profile" ] || printf '%s\n' "$kprof_header" >>"$out/$name.err"
   if [ -n "$profile" ] && [ "$backend" = hip ]; then
-    printf '%s\n' "$kprof_header" >>"$out/$name.err"
     wrap=("$rocprof" --kernel-trace --output-format csv -d "$out" -o "$name" --)
+    if [ -n "$hwmon" ]; then
+      amdgpu_sampler "$hwmon" >"$out/$name.clk.csv" 2>&1 &
+      smi=$!
+    fi
   elif [ -n "$profile" ]; then
     wrap=(nsys profile --trace=cuda --cuda-graph-trace=node --sample=none --cpuctxsw=none
       --force-overwrite=true -o "$out/$name")
@@ -273,20 +280,21 @@ pass_cells() {
   else echo "$list" | tr ' ' '\n' | sed '/^$/d'; fi
 }
 
-# [hip_memory_model]: the memory model of the one HIP device, from this checkout's device probe
-# (bin/device_props: the backend's own `integrated` query, the one its hardware limits read), as
-# `unified|discrete (NAME, ARCH: integrated=BOOL)`. Fails, saying why, on a probe that does not run,
-# sees other than one device (the cell would not say which it ran on; HIP_VISIBLE_DEVICES pins
-# one), or reports no `integrated` flag (a checkout older than gh-ocannl-1392).
-hip_memory_model() {
-  local props n integrated model
-  props=$("$root/_build/default/bin/device_props.exe" --ocannl_backend=hip </dev/null 2>/dev/null) || {
+# [memory_model]: the memory model of the backend's one device, from this checkout's device probe
+# (bin/device_props: the backend's own `integrated` query -- on HIP the one its hardware limits
+# read), as `unified|discrete (NAME, ARCH: integrated=BOOL)`, ARCH the gcn arch on HIP and sm_<cc>
+# on CUDA. Fails, saying why, on a probe that does not run, sees other than one device (the cell
+# would not say which it ran on; HIP_VISIBLE_DEVICES / CUDA_VISIBLE_DEVICES pins one), or reports no
+# `integrated` flag (a checkout older than gh-ocannl-1392 on HIP, gh-ocannl-1444 on CUDA).
+memory_model() {
+  local props n integrated model arch
+  props=$("$root/_build/default/bin/device_props.exe" --ocannl_backend="$backend" </dev/null 2>/dev/null) || {
     echo "gh1133: the device probe $root/_build/default/bin/device_props.exe failed"
     return 1
   }
   n=$(printf '%s\n' "$props" | sed -n 's/^static\.device_count = //p')
   if [ "$n" != 1 ]; then
-    echo "gh1133: kprof on HIP states the memory model of the one device it ran on, and the probe sees ${n:-no} devices (pin one with HIP_VISIBLE_DEVICES)"
+    echo "gh1133: kprof states the memory model of the one device it ran on, and the probe sees ${n:-no} $backend devices (pin one with HIP_VISIBLE_DEVICES or CUDA_VISIBLE_DEVICES)"
     return 1
   fi
   integrated=$(printf '%s\n' "$props" | sed -n 's/^static\.device\[0\]\.integrated = //p')
@@ -295,7 +303,43 @@ hip_memory_model() {
     false) model=discrete ;;
     *) echo "gh1133: the device probe reports no integrated flag for device 0; the memory model is unknown"; return 1 ;;
   esac
-  echo "$model ($(printf '%s\n' "$props" | sed -n 's/^static\.device\[0\]\.device_name = //p'), $(printf '%s\n' "$props" | sed -n 's/^static\.device\[0\]\.gcn_arch_name = //p'): integrated=$integrated)"
+  if [ "$backend" = hip ]; then
+    arch=$(printf '%s\n' "$props" | sed -n 's/^static\.device\[0\]\.gcn_arch_name = //p')
+  else
+    arch=sm_$(printf '%s\n' "$props" | sed -n 's/^static\.device\[0\]\.compute_capability_major = //p')$(printf '%s\n' "$props" | sed -n 's/^static\.device\[0\]\.compute_capability_minor = //p')
+  fi
+  echo "$model ($(printf '%s\n' "$props" | sed -n 's/^static\.device\[0\]\.device_name = //p'), $arch: integrated=$integrated)"
+}
+
+# [amdgpu_hwmon]: the hwmon directory of the box's one amdgpu card that reports its shader clock
+# (freq1_input), or nothing -- saying why on stderr -- when there is none or more than one (the
+# sampler could not say which card the step ran on).
+amdgpu_hwmon() {
+  local found=() f
+  for f in /sys/class/drm/card[0-9]*/device/hwmon/hwmon*/freq1_input; do
+    [ -r "$f" ] && [ "$(cat "${f%/freq1_input}/name" 2>/dev/null)" = amdgpu ] && found+=("${f%/freq1_input}")
+  done
+  if [ "${#found[@]}" -ne 1 ]; then
+    echo "gh1133: no amdgpu clock sampler: ${#found[@]} amdgpu cards report a shader clock" >&2
+    return 0
+  fi
+  echo "${found[0]}"
+}
+
+# [amdgpu_sampler HWMON]: every 250 ms until killed, one CSV row of the card's shader clock (MHz),
+# average power (W), edge temperature (C) and busy percentage -- the HIP counterpart of the
+# nvidia-smi sampler; a reading the card does not offer is left empty.
+amdgpu_sampler() {
+  local h=$1 dev
+  dev=$(cd "$1/../.." && pwd -P)
+  echo "timestamp_ns,sclk_mhz,power_w,temp_c,busy_pct"
+  while :; do
+    awk -v t="$(date +%s%N)" -v f="$(cat "$h/freq1_input" 2>/dev/null)" \
+      -v p="$(cat "$h/power1_average" 2>/dev/null || cat "$h/power1_input" 2>/dev/null)" \
+      -v c="$(cat "$h/temp1_input" 2>/dev/null)" -v b="$(cat "$dev/gpu_busy_percent" 2>/dev/null)" \
+      'BEGIN { printf "%s,%s,%s,%s,%s\n", t, f == "" ? "" : int(f / 1e6), p == "" ? "" : p / 1e6, c == "" ? "" : c / 1e3, b }'
+    sleep 0.25
+  done
 }
 
 need_identity() {
@@ -388,7 +432,11 @@ for step in "$@"; do
             echo "gh1133: kprof on CUDA needs nsys and nvidia-smi on PATH"
             failed=1
             continue
-          fi ;;
+          fi
+          model=$(memory_model) || { echo "$model"; failed=1; continue; }
+          kprof_header="kprof: tracer $(command -v nsys) --cuda-graph-trace=node ($(nsys --version 2>&1 | head -1))
+kprof: memory model $model"
+          printf '%s\n' "$kprof_header" ;;
         hip)
           rocprof=${ROCPROFV3:-rocprofv3}
           if ! command -v "$rocprof" >/dev/null; then
@@ -396,9 +444,11 @@ for step in "$@"; do
             failed=1
             continue
           fi
-          model=$(hip_memory_model) || { echo "$model"; failed=1; continue; }
+          model=$(memory_model) || { echo "$model"; failed=1; continue; }
+          hwmon=$(amdgpu_hwmon)
           kprof_header="kprof: tracer $(command -v "$rocprof") --kernel-trace ($("$rocprof" --version 2>&1 | sed -n 's/^ *version: *//p' | head -1))
-kprof: memory model $model"
+kprof: memory model $model
+kprof: clock sampler ${hwmon:-none}"
           printf '%s\n' "$kprof_header" ;;
         *)
           echo "gh1133: kprof needs BACKEND=cuda (nsys) or BACKEND=hip (rocprofv3), not $backend"

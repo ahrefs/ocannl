@@ -436,6 +436,15 @@ type shipped = {
           the report's crown under it: a compile that substituted the untuned default
           ({!Autotune.shipped_substitute}) with nothing left to fall back to (a forced arm, or the
           last completed result). *)
+  ship_compiles : int;
+      (** The backend compiles ({!Context.backend_compiles}) the call performed outside its
+          searches, whose own each search's report counts ([Autotune.report.compiles]) -- that is,
+          compiling what it returned, a shipping compile that failed or was substituted before it
+          included (gh-ocannl-1440). 0 when the shipped schedule was a schedule-cache hit: the
+          routine is the code the search's validating replay compiled, linked again
+          ({!Context.relink_outcome}). One compile's count for a searched winner, recompiled from
+          its saved form in the caller's lineage (1, or 2 on Metal, whose device compile is counted
+          at link). *)
 }
 (** What {!tune_placements} shipped, as its [on_ship] callback receives it (gh-ocannl-1438): the
     identity of the returned artifact, which the arm reports alone do not determine (see
@@ -453,6 +462,7 @@ val tune_placements :
   ?inline_flips:int ->
   ?ship_arm:placement_arm ->
   ?placement_store:bool ->
+  ?call_budget:float ->
   ?log:bool ->
   ?progress:bool ->
   ?on_ship:(shipped -> unit) ->
@@ -498,22 +508,38 @@ val tune_placements :
     here at all. The whole call is one search ({!Autotune.exclusive_search}, gh-ocannl-1352): made
     while another domain searches, it raises {!Autotune.Concurrent_search} before doing anything.
 
+    [call_budget] (config [tune_call_budget_seconds], gh-ocannl-1440; zero or less means none) is a
+    wall-clock budget for the whole call, on one clock from its start, the placement-store replay
+    included. Each search the call starts gets a share ({!Autotune.call_budget}): what is left of
+    the budget divided among the searches still planned -- the arms not yet searched plus the flip
+    slots still planned ([inline_flips], or the decision surface's alternatives if fewer) -- and is
+    cut at the tighter of its share and [autotune_budget_seconds] by that key's rule. Both arms are
+    always searched: they are the call's floor, a spent budget leaving arm B only its untuned
+    floors, and the positional [report] contract holds. The flip refinement stops before any further
+    alternative once the budget is spent. The budget is cooperative: compiles and timing windows
+    cannot be cancelled, so the call can overrun it by each search's own overrun, by arm B's floors
+    when arm A spent everything, and by the shipped routine's compile. Every report carries the
+    call's budget and the search's share ([call_budget_s], [call_share_s]); a decision reached over
+    a cut search is not recorded in the placement store.
+
     An arm that fails is a {e losing} arm, not a failed run (gh-ocannl-550): a search that
     terminates on a fatal failure ranks at [infinity], the other arm's completed winner ships and
     stays cached, and the failed arm's own report — [Autotune.Search_died], carrying the failure —
     still reaches [report] in position, so the failure is recorded rather than downgraded to "that
     arm merely lost". A failed arm's [best_ms] is deliberately {e not} shippable and not compared:
     its search raised, so there is no routine to compile from [ctx] for it. Only when every arm
-    fails does [tune_placements] propagate, with the first failure's original backtrace — with two
+    fails does [tune_placements] propagate, with the first failure's original backtrace — with three
     exceptions that are not the arm's to absorb and propagate at once: process-level failures
-    ([Out_of_memory], [Sys.Break]) and compiler invariant violations ([Assert_failure],
-    [Stack_overflow]), the same classes {!Ir.Schedule_outcome.classify_raw} refuses to classify. A
-    [report] callback's own exception likewise propagates rather than counting as an arm failure,
-    and so does a failure that poisoned the lineage the arms share ({!Context.poisoned_failure}):
-    every timing run in the sibling would then refuse to execute, so the second arm can only burn a
-    search proving it. Consumers attributing arms by arrival order should read
-    {!Autotune.terminal_failure} — or match the report's [outcome] — before [best_ms], as
-    benchmarks/runners/ocannl/bench_harness.ml does.
+    ([Out_of_memory], [Sys.Break]), compiler invariant violations ([Assert_failure],
+    [Stack_overflow]), the same classes {!Ir.Schedule_outcome.classify_raw} refuses to classify, and
+    a malformed registered setting ([Utils.Invalid_config_value], typed and naming the key, from an
+    arm, a flip or the decision surface alike: contained, it would ship whichever placement happened
+    not to read the key). A [report] callback's own exception likewise propagates rather than
+    counting as an arm failure, and so does a failure that poisoned the lineage the arms share
+    ({!Context.poisoned_failure}): every timing run in the sibling would then refuse to execute, so
+    the second arm can only burn a search proving it. Consumers attributing arms by arrival order
+    should read {!Autotune.terminal_failure} — or match the report's [outcome] — before [best_ms],
+    as benchmarks/runners/ocannl/bench_harness.ml does.
 
     The in-position guarantee is {!Autotune.tune}'s reporting contract, and inherits its one
     carve-out: an argument-precondition violation (an incompatible [timing_ctx]) is detected before

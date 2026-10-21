@@ -768,7 +768,8 @@
 # bounds when the last attempt STARTS, so a search can overrun it by the candidate in flight, the
 # exempt floors and the winner's compile; the base compile before the first check is not bounded
 # either. Each search has its own budget: `Train.tune_placements` runs one per placement arm
-# (plus one per flip), so a step's tuning can take a multiple of it. A cut search's crown is
+# (plus one per flip), so a step's tuning can take a multiple of it -- tune_call_budget_seconds
+# below bounds the whole call. A cut search's crown is
 # stored when its timings were clean, marked as cut (the report's and the cache entry's
 # `budget_cut`): a later call with any budget replays it, while a call without one declines it and
 # searches in full, overwriting it -- an incomplete search must not become the answer of a search
@@ -777,6 +778,24 @@
 # `BENCH_TUNE_CUT_AFTER` (benchmarks/README.md), which refuses timings but still compiles every
 # candidate and stores nothing, this stops the compiles too.
 #autotune_budget_seconds=
+
+# A wall-clock budget, in seconds, for a whole `Train.tune_placements` call (gh-ocannl-1440);
+# empty, zero or negative means none, and text that is no number is refused. One clock runs from
+# the start of the call, the placement-store replay included. Each search the call starts gets a
+# share: what is left of the budget divided by the searches still planned (the arms not yet
+# searched plus the flip slots still planned, tune_inline_flips or the decision surface's
+# alternatives if fewer), so the time a cache hit or a short search leaves goes to the searches
+# after it. A search is cut at the tighter of its share and autotune_budget_seconds, by that key's
+# rule (attempts checked as they start, the untuned floors exempt, a cut crown stored as cut and
+# replayed only by a budgeted call). Both placement arms are always searched -- they are the
+# call's floor, and a spent budget leaves arm B only its untuned floors -- while the flip
+# refinement stops, before any further alternative, once the budget is spent. The budget is
+# cooperative: compiles and timing windows cannot be cancelled, so the call can overrun it by each
+# search's own overrun (its base compile, the candidate in flight, the exempt floors), by arm B's
+# floors when arm A spent everything, and by the shipped routine's compile. A decision reached
+# over a cut search is not recorded in the placement store. `?call_budget` on
+# `Train.tune_placements` overrides it for one call.
+#tune_call_budget_seconds=
 
 # If true, `Autotune.tune` logs each candidate to stderr: its spec, whether it failed (with the
 # error message), deduplicated against an already-seen post-schedule digest, or was timed (and
@@ -976,8 +995,10 @@
 # among schedules that can actually be built. On CUDA and HIP the model starts from the seeded
 # untuned plan instead of the default pipeline (gh-ocannl-1253, gpu_default_sketch_min_reduction),
 # and its sketch candidates are restricted to the seeding's numerics-preserving forms (scalar
-# register-blocktiled sketches at a site accumulating at its storage precision: no tensor-core,
-# conv or coalesced form), so the pick never changes a value the untuned compile computes.
+# register-blocktiled sketches at a site accumulating at its storage precision: no tensor-core
+# or conv form), so the pick never changes a value the untuned compile computes. The coalesced
+# layouts the autotuner seeds preserve values too, but the model does not rank them: its score
+# cannot tell them from their uncoalesced twins (gh-ocannl-1278).
 #model_default_schedule=false
 
 # gh-ocannl-514, the placement levels of the untuned regime: with model_default_schedule=true and

@@ -1,3 +1,5 @@
+the GPU lane keys are stated unparsable for the cc surface: true
+the cc surface reads neither GPU lane key: true
 the enablement set is nonempty: true
 it contains the site operand mbs: true
 it contains the site destination mc: true
@@ -29,6 +31,7 @@ under a measured-losing family the decoy is back in the budget-1 chain: true
 under a measured-paying family the promotion keeps the budget slot: true
 an unconditional ordering records no profitability evidence: true
 the profitable ordering records the verdict it ranked by: true
+the unparsable GPU lane keys left the cc surface's enablement and disablement as they are: true
 the floor is present under the pinned envelope: true
 committing mbs does not lower the floor: true
 committing mc on top does not lower it either: true
