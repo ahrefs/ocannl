@@ -218,7 +218,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test pipelined_move_legality: Ir.Schedule.apply, Ir.Schedule.op_legality, Ir.Schedule.schedule_legality
   test/operations/dune, test privatize_census: Ir.Schedule.apply_classified, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
   test/operations/dune, test privatize_recheck: Ir.Schedule.apply
-  test/operations/dune, test qkv_zero_init: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
+  test/operations/dune, test qkv_zero_init: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
   test/operations/dune, test reduction_forms: Ir.Schedule.apply
   test/operations/dune, test scan_companion_coverage: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
   test/operations/dune, test scan_loop: Ir.Schedule.apply
@@ -226,7 +226,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test schedule_batched_mma: Ir.Schedule.apply
   test/operations/dune, test schedule_coalesce: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.fuse_epilogue_witness, Ir.Schedule.maybe_default_schedules, Ir.Schedule.op_legality, Ir.Schedule.schedule_legality, Ir.Schedule.zero_expansion
   test/operations/dune, test schedule_contraction_nest: Ir.Schedule.apply
-  test/operations/dune, test schedule_conv_gemm: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
+  test/operations/dune, test schedule_conv_gemm: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
   test/operations/dune, test schedule_cpu_pack_matmul: Ir.Schedule.apply
   test/operations/dune, test schedule_epilogue_fusion: Ir.Schedule.apply
   test/operations/dune, test schedule_ldmatrix_matmul: Ir.Schedule.apply

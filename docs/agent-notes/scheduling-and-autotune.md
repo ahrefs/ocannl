@@ -196,7 +196,14 @@ files.
   kept apart: each GPT2 layer's q and k projections merged into one kernel with two matmul sites,
   which no sketch reaches, and the tuned CUDA step doubled. `qkv_zero_init` pins the segmentation
   as the unexpanded one with zero segments folded forward; seed validity alone did not catch it.
-  Sketch families give the folded zero the site's geometry through `companion_geometry`, and the
+  Sketch families give the folded zero the site's geometry through `companion_geometry` when the
+  target is materialized; companion coverage counts only materialized writes, so a target the
+  tensorized fused twin places in workgroup-shared storage (`epilogue_shared`, an intermediate whose
+  only consumer is the fused tail) is annotated by the pipeline itself (`shared_folded_zero`,
+  gh-ocannl-1453) — bare, it failed gh-ocannl-959's binding legality on every such twin. A test of
+  the folded path segments as the tuner does (host limits, promoted locals): `qkv_zero_init`'s
+  `fission` helper (no hardware limits) left that fold a whole-node `Zero_out`, which takes the
+  whole-node expansion and passed on the unfixed code. The
   tuner and model selector explore a singleton segment whose pre-schedule digest the fold changed,
   since whole-routine sketches see the original whole-node zero. The fold is OPT-IN
   (`fission_scheduled ~fold_zeros`): only the sketch candidates and their seeding pass it. The
