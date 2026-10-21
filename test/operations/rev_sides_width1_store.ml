@@ -228,10 +228,10 @@ let node ?(padding = None) dims label =
     ~padding:(lazy padding)
     ()
 
-(* {2 Two width-1 targets naming one node.} [a]'s gradient twice. (The gradient of [(w, w) ++^ ...]
-   is refused at lowering as ambiguous.) Each target alone is injective and surjective, but both
-   write every cell: plain stores would keep only the later column, so a node named by more than one
-   target keeps the read-add-write form and its init. *)
+(* {2 Two width-1 targets naming one node.} [a]'s gradient twice, the targets the front end emits
+   for [(w, w) ++^ ...] (executed end to end in self_concat). Each target alone is injective and
+   surjective, but both write every cell: plain stores would keep only the later column, so a node
+   named by more than one target keeps the read-add-write form and its init. *)
 let shared_case () =
   let label = "shared" in
   let ga, gcat, non_initializing, initializing =

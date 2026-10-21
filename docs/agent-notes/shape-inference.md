@@ -100,3 +100,12 @@ files.
   `join_dim` in `solve_row_ineq`'s GLB merge (whose wildcards keep a side instead of demoting to the
   top) each need a hand-written arm; that audit is the checklist a new dim constructor comes with
   (learned adding `Row.Sym`, gh-ocannl-490).
+- Projection ids live on the `Dim`s of a shape's rows, and `fresh_proj_ids` freshens a shape IN
+  PLACE, so one tensor that is several operands of one step (`(w, w) ++^ ...`, `m +* "a, b; b, c
+  => a, c" m`, `m * m`) used to give every occurrence the same ids: the solver equated the axes the
+  spec keeps apart. A self-product silently computed its diagonal; a self-concatenation lowered one
+  segment twice and died "Ambiguous indices in concatenation" (gh-ocannl-1476).
+  `Shape.dealias_operands` gives each repeated occurrence a shallow copy (same `id`, own rows) and
+  `merge_dealiased_padding` folds the copy's inferred padding back. Pointwise self-operands are
+  unaffected: their equations unify the copies' ids again. Executed parity:
+  `test/operations/self_concat.ml`.

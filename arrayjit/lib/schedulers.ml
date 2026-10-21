@@ -94,6 +94,7 @@ module Multidev (Backend : For_add_scheduler) :
 
   let is_done { dev_state = _; is_done } = Atomic.get is_done
   let get_used_memory _device = get_used_memory ()
+  let get_free_and_total_memory _device = None
 
   let is_idle device =
     let st = device.runner.state in
@@ -302,6 +303,7 @@ module Sync (Backend : For_add_scheduler) = struct
 
   let num_devices () = 1
   let get_used_memory _ = Backend.get_used_memory ()
+  let get_free_and_total_memory _ = None
   let all_work _device = ()
   let is_idle _device = true
   let await _device = ()

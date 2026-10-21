@@ -1157,8 +1157,32 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
        [device.next_pool_id], so every id here is unambiguously this call's. *)
     let minted = ref [] in
     let cache_inserts = ref [] in
-    let alloc_pool_counted ~constant device ~pool_id ~size_in_bytes ~alignment =
-      alloc_pool device ~pool_id ~size_in_bytes ~alignment;
+    (* gh-ocannl-1424: the bytes this call's pools already hold. A group past the per-pool cap is
+       several pools allocated one after another, so a refusal can come part way through, and the
+       driver's free bytes in the refusal are then read with this same compile's earlier pools still
+       allocated. Read bare, that reading looks like memory something else left resident -- which is
+       how a 28 GB materialize-all delta on a 12 GiB card, refused at its third 4 GiB pool, was
+       reported as 8.6 GB "still resident after arm A". So the refusal says so. *)
+    let held = ref 0 in
+    let alloc_pool_counted ~constant ~segment:(index, count, group_bytes) device ~pool_id
+        ~size_in_bytes ~alignment =
+      (try alloc_pool device ~pool_id ~size_in_bytes ~alignment
+       with Schedule_outcome.Device_memory_exhausted r when count > 1 || !held > 0 ->
+         let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+         Stdlib.Printexc.raise_with_backtrace
+           (Schedule_outcome.Device_memory_exhausted
+              {
+                r with
+                detail =
+                  Printf.sprintf
+                    "%s; it was pool %d of %d of %s's %s delta of %d bytes, and this compile's %d \
+                     earlier pool(s), %d bytes, were still allocated when the free bytes were read"
+                    r.detail (index + 1) count name
+                    (if constant then "constant" else "working")
+                    group_bytes (List.length !minted) !held;
+              })
+           backtrace);
+      held := !held + size_in_bytes;
       minted := pool_id :: !minted;
       Alloc_census.record_pool ~device_id:device.device_id ~pool_id ~constant ~size_in_bytes;
       Resource_fault_injection.hit Delta_pool_allocated
@@ -1196,7 +1220,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
               List.fold group ~init:1 ~f:(fun a (key, _) ->
                   max a (Ops.prec_in_bytes (Lazy.force key.Tn.storage_prec)))
             in
-            alloc_pool_counted ~constant device ~pool_id ~size_in_bytes:total ~alignment;
+            alloc_pool_counted ~constant ~segment:(0, 1, total) device ~pool_id ~size_in_bytes:total
+              ~alignment;
             List.iter2_exn group offsets ~f:(fun entry offset ->
                 place entry ~pool_id ~offset ~register);
             if log_buffer_aliasing () then
@@ -1237,8 +1262,11 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
             List.iter2_exn group assignments ~f:(fun (key, _) (seg, _) ->
                 let a = Ops.prec_in_bytes (Lazy.force key.Tn.storage_prec) in
                 if a > !(seg_align.(seg)) then seg_align.(seg) := a);
+            let group_bytes = List.fold segment_sizes ~init:0 ~f:( + ) in
             Array.iteri seg_pool_ids ~f:(fun seg (pool_id, size_in_bytes) ->
-                alloc_pool_counted ~constant device ~pool_id ~size_in_bytes
+                alloc_pool_counted ~constant
+                  ~segment:(seg, Array.length seg_pool_ids, group_bytes)
+                  device ~pool_id ~size_in_bytes
                   ~alignment:!(seg_align.(seg)));
             (* Place each node at its planned (segment, offset). *)
             List.iter2_exn group assignments ~f:(fun entry (seg, offset) ->
@@ -1341,9 +1369,11 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
                 if buffer_overlaps ctx_buffers tn loc then
                   aliased_read_error ~what:("linking " ^ code.name ^ ", input") tn));
         let optimize_ctx = code.lowered.Low_level.optimize_ctx in
-        let bindings, schedule =
+        let bindings, schedule, release_hook =
           match code.proc with
-          | Either.First single -> link context single ctx_buffers
+          | Either.First single ->
+              let bindings, schedule = link context single ctx_buffers in
+              (bindings, schedule, None)
           | Either.Second { batch; count } ->
               (* Fissioned routine: every segment kernel links against the routine's one ctx_buffers
                  delta and shares the one bindings assoc; the combined task launches the segments in
@@ -1360,28 +1390,32 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
                  device-side more cheaply (one Metal command buffer with a serial compute pass)
                  provide [sequence_segments]; the fallback chains an event per boundary: schedule
                  each next segment to wait for all work enqueued so far. No host blocking. *)
-              let schedule =
+              let schedule, release_hook =
                 match
                   sequence_segments context ~name:code.name ~bindings
                     ~uses_merge_buffer:(Option.is_some code.expected_merge_node)
                     tasks
                 with
-                | Some fused -> fused
+                | Some (fused, release) -> (fused, Some release)
                 | None ->
-                    Task.Task
-                      {
-                        context_lifetime = tasks;
-                        description = "fissioned segments of " ^ code.name;
-                        work =
-                          (fun () ->
-                            List.iteri tasks ~f:(fun i t ->
-                                if i > 0 then will_wait_for context (all_work context.device);
-                                Task.run t));
-                      }
+                    ( Task.Task
+                        {
+                          context_lifetime = tasks;
+                          description = "fissioned segments of " ^ code.name;
+                          work =
+                            (fun () ->
+                              List.iteri tasks ~f:(fun i t ->
+                                  if i > 0 then will_wait_for context (all_work context.device);
+                                  Task.run t));
+                        },
+                      None )
               in
-              (bindings, schedule)
+              (bindings, schedule, release_hook)
         in
         let context = make_child ~ctx_buffers ~optimize_ctx context in
+        (* gh-ocannl-1445: released with the context the routine's buffers live in. *)
+        Option.iter release_hook ~f:(fun hook ->
+            context.release_hooks := hook :: !(context.release_hooks));
         let schedule =
           Task.prepend schedule ~work:(fun () ->
               check_merge_buffer context.device ~code_node:code.expected_merge_node)
@@ -1447,9 +1481,17 @@ let finalize (type dev runner event)
                       List.filter ctx.upload_arenas.arenas ~f:(fun a -> a.arena_pool_id <> pool_id));
                   ctx.released_pool_ids <- Set.add ctx.released_pool_ids pool_id))))
   in
+  (* gh-ocannl-1445: the routines' release hooks (cached graph execs), once the pools are freed. Not
+     part of [cleanup]: the flag stays committed when a hook fails, since the pools ARE freed and a
+     context that reads live again would run kernels over them. What a failed hook leaves is
+     destroyed with its routine, by the bindings' own finalizers, or at exit. Every hook is
+     attempted, and the first failure is re-raised. *)
+  let run_release_hooks () = Backend_impl.attempt_each !(ctx.release_hooks) in
   if Atomic.compare_and_set ctx.finalized false true then
     match cleanup () with
-    | () -> Alloc_census.count_context_released ()
+    | () ->
+        Alloc_census.count_context_released ();
+        run_release_hooks ()
     | exception exn ->
         Atomic.set ctx.finalized false;
         raise exn

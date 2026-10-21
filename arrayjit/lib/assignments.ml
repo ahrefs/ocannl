@@ -737,7 +737,7 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
       else Low_level.unflat_lines (padding_resets @ [ for_loops ])
     in
     if needs_init then
-      let init = neutral_init ~reset_margins:false ~projections lhs neutral_value in
+      let init = neutral_init ~projections lhs neutral_value in
       Low_level.Seq (init, for_loops_with_resets)
     else for_loops_with_resets
   (* An initialization pass fills only the cells the accumulation can reach. An axis of [tn] indexed
@@ -753,12 +753,10 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
      keeps the [Fetch] (whose lowering redirects a slice-alias view to its parent). [projections] is
      [tn]'s view as the written side: [lhs_dims] its dims and [project_lhs] its index per axis --
      for a [Rev_sides] target, that target's own projections. The unguarded [Fetch] also establishes
-     a padded target's margins; the guarded nest stores only semantic cells, so [~reset_margins]
-     prepends [tn]'s margin resets to it. [loop_accum] passes [false]: its [padding_resets] already
-     reset the margins of the [lhs] it initializes, whereas [loop_accum_rev]'s reset the side it
-     reads, not its targets. *)
-  and neutral_init ~reset_margins ~(projections : Indexing.projections) tn neutral_value :
-      Low_level.t =
+     a padded target's margins; the guarded nest stores only semantic cells, and leaves them to the
+     margin resets both callers emit for every node they write ([loop_accum]'s [lhs],
+     [loop_accum_rev]'s targets). *)
+  and neutral_init ~(projections : Indexing.projections) tn neutral_value : Low_level.t =
     let extents =
       Array.map projections.project_lhs ~f:(function
         | Indexing.Iterator iter -> bound_extent ~projections iter
@@ -786,15 +784,7 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
                 axis = Serial;
               }
       in
-      let nest =
-        init_loop [] (List.zip_exn (Array.to_list projections.lhs_dims) (Array.to_list extents))
-      in
-      let margins =
-        if not reset_margins then []
-        else
-          match Lazy.force tn.padding with Some (_, v) -> reset_padding_regions tn v | None -> []
-      in
-      if List.is_empty margins then nest else Low_level.unflat_lines (margins @ [ nest ])
+      init_loop [] (List.zip_exn (Array.to_list projections.lhs_dims) (Array.to_list extents))
   and loop_accum_rev ~initialize_neutral ~accum ~(op : Ops.op) ~lhs ~lhses projections : Low_level.t
       =
     let projections : Indexing.projections = Lazy.force projections in
@@ -934,10 +924,21 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
           | conds -> Low_level.If { cond = and_all conds; body = stmt })
     in
     let neutral_value = Ops.neutral_elem accum in
-    (* Establish the committed neutral element in the lhs margins (device buffers are allocated
-       raw). *)
+    (* The padding contract, as [loop_accum] keeps it for its [lhs]: every writer of a padded node
+       carries the (idempotent) fill of its margins, since device buffers are allocated raw. Here
+       the written nodes are the targets, on every path: an initializing scatter whose init is
+       elided or guarded stores only semantic cells, and so does a non-initializing one (a backprop
+       [=+]), which used to lean on the target's own initializer -- [zero_grads]' [Fetch] -- for the
+       margins. The node the scatter READS gets no resets: no reader resets its operand's margins
+       ([loop_accum]'s comment), and writing it would make the lowered code write a node
+       {!collect_written} says this assignment does not (gh-ocannl-1474). A node named by several
+       targets ([(w, w) ++^ ...]) is reset once. *)
     let padding_resets =
-      match Lazy.force lhs.padding with Some (_, v) -> reset_padding_regions lhs v | None -> []
+      Array.to_list lhses
+      |> List.filter_map ~f:(function Node tn -> Some tn | Merge_buffer _ -> None)
+      |> List.dedup_and_sort ~compare:Tn.compare
+      |> List.concat_map ~f:(fun tn ->
+          match Tn.get_padding tn with Some (_, v) -> reset_padding_regions tn v | None -> [])
     in
     let for_loops_with_resets =
       if List.is_empty padding_resets then for_loops
@@ -945,18 +946,7 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
     in
     let init_ops =
       Array.filter_mapi lhses ~f:(fun i buf ->
-          if not target_needs_init.(i) then
-            (* An initializing scatter that elides a target's init writes only its semantic cells,
-               and this record's [padding_resets] cover the side it reads: a padded target's margins
-               are established here, as [neutral_init] would have (device buffers are allocated
-               raw). A non-initializing scatter accumulates into a target its own writer already
-               established. *)
-            match buf with
-            | Node tn when initialize_neutral -> (
-                match Lazy.force tn.padding with
-                | Some (_, v) -> Some (Low_level.unflat_lines (reset_padding_regions tn v))
-                | None -> None)
-            | _ -> None
+          if not target_needs_init.(i) then None
           else
             let array =
               match buf with
@@ -976,7 +966,7 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
                 project_lhs = projections.project_rhs.(i);
               }
             in
-            Some (neutral_init ~reset_margins:true ~projections array neutral_value))
+            Some (neutral_init ~projections array neutral_value))
       |> Array.to_list
     in
     if List.is_empty init_ops then for_loops_with_resets

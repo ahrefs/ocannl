@@ -462,9 +462,8 @@ files.
   `project_rhs.(i)`/`rhs_dims.(i)` directly, NOT from `target_projections`: the selector can still
   drop a target (one mentioning another segment of its component), which would then silently fall
   back to the full fill. The `Fetch` also filled a padded
-  target's margins, so the guarded nest of a scatter target is preceded by that target's margin
-  resets (`~reset_margins`; `loop_accum`'s own `padding_resets` already cover its `lhs`, while
-  `loop_accum_rev`'s cover the side it reads).
+  target's margins and the guarded nest does not: both writers' own `padding_resets` cover every
+  node they write (`loop_accum`'s `lhs`, `loop_accum_rev`'s targets).
   `docs/shape_inference.md` ("Symbolic extents: cells past a bound extent", gh-ocannl-928) makes
   what the init leaves past the extent unspecified and the `Fetch` coverage a promise: keep `Fetch`
   unguarded, because `zero_grads` clearing the whole buffer is what keeps gradient accumulation
@@ -542,12 +541,25 @@ files.
   injective and got read-add-write plus an init (`test/operations/rev_sides_width1_store.ml`).
   Each target's queries see only that target's writes, so a storage named by two targets (a
   hand-built `lhses = [| Node t; Node t |]`, or two slice-alias views of one parent: compare after
-  `resolve_alias`) is never attributed: two plain stores would drop one contribution. A target whose
-  init an initializing scatter elides still gets its padding-margin reset there, since the plain
-  stores write only semantic cells and the record's own `padding_resets` cover the side it reads.
-  Static/runtime extents, mixed slice/whole concat coordinates and proof-arithmetic overflow
-  decline. `test/operations/affine_surjectivity.ml` checks finite images and executed
-  scatters against explicit neutral initialization.
+  `resolve_alias`) is never attributed: two plain stores would drop one contribution; the front end
+  emits that shape for `(w, w) ++^ ...` (`test/operations/self_concat.ml`). Static/runtime extents,
+  mixed slice/whole concat coordinates and proof-arithmetic overflow decline.
+  `test/operations/affine_surjectivity.ml` checks finite images and executed scatters against
+  explicit neutral initialization.
+- **`Rev_sides` resets the margins of the targets it writes, never of the node it reads**
+  (gh-ocannl-1474). A padded target is ordinary: a gradient shares its value's shape, so a
+  concatenation operand a padded convolution also reads has a padded gradient. The scatter's
+  `padding_resets` used to cover its `lhs` -- the side it reads, which `collect_written` says it does
+  not write -- and its targets' margins were set only by an elided init on the initializing path;
+  the non-initializing backprop `=+` leaned on `zero_grads`' whole-buffer `Fetch`. Now every padded
+  target (deduplicated by node) is reset on both paths, matching `loop_accum`'s rule that every
+  writer carries the fill, and `neutral_init` has no margin flag. What the scatter cannot promise: a
+  padded window's transpose (a padded conv's input gradient) stores the padding positions'
+  contributions INTO the operand gradient's margins, after its own resets, so after a whole
+  backward pass a gradient's margins hold data, not the padding value. Nothing reads a gradient
+  through a window, so no value is affected; a reader that did would need those writes clamped.
+  `test/operations/rev_sides_padded_target.ml` runs the front-end scatter over sentinel-seeded
+  physical buffers on both paths, and a training step against the convolutions' definitions.
 
 - **The algebraic-rewrite tier over raw lowered code is `Rewrites`, applied by `Assignments.lower`
   between `to_low_level` and `Low_level.optimize`** (gh-ocannl-483; members `Online_softmax`, then
