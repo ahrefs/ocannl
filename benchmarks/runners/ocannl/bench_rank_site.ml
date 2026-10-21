@@ -36,25 +36,15 @@ let () =
           | [ b; s; o; i ] -> (b, s, o, i)
           | _ -> failwith "BENCH_SITE_DIMS must be b,s,o,i for the wgrad site"
         in
-        let w =
-          Operation.init ~l:"rs_w" ~prec:Ir.Ops.single ~i:[ ni ] ~o:[ no ]
-            ~f:(fun idx -> Float.of_int (1 + ((idx.(0) + (3 * idx.(1))) % 5)) *. 0.125)
-            ~grad_spec:Tensor.Require_grad ()
-        in
-        let x =
-          NTDSL.ndarray
-            (cyc (nb * ns * ni) 5 0.125)
-            ~label:[ "rs_x" ] ~batch_dims:[ nb; ns ] ~output_dims:[ ni ] ()
-        in
-        let dy =
-          NTDSL.ndarray
-            (cyc (nb * ns * no) 7 0.25)
-            ~label:[ "rs_dy" ] ~batch_dims:[ nb; ns ] ~output_dims:[ no ] ()
-        in
-        let%op y = w * x in
-        let%op loss = (y *. dy) ++ "... => 0" in
-        Train.set_materialized (Option.value_exn ~here:[%here] w.Tensor.diff).Tensor.grad;
-        (Printf.sprintf "rs_wgrad_b%d" nb, Train.grad_update loss)
+        (* The contraction alone, as one routine: inside a training step's backprop the GPU search
+           times per-segment candidates only, which no whole-routine leaf of [model_explain]
+           names. *)
+        let k = nb * ns in
+        let dy = NTDSL.ndarray (cyc (k * no) 7 0.25) ~label:[ "rs_dy" ] ~output_dims:[ k; no ] () in
+        let x = NTDSL.ndarray (cyc (k * ni) 5 0.125) ~label:[ "rs_x" ] ~output_dims:[ k; ni ] () in
+        let%op dw = dy +* "ko; ki => oi" x in
+        Train.set_materialized dw.Tensor.value;
+        (Printf.sprintf "rs_wgrad_b%d" nb, Train.forward dw)
     | "fp8mm" ->
         let m, n, k =
           match dims "8192,32,4096" with
