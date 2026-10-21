@@ -126,7 +126,7 @@ let refuse_direct_reads ~fail sites =
               (gh-ocannl-1294)"
              site.Scan.site_path))
 
-let refusal_control () =
+let refusal_control ~wrapper =
   let source = "test/operations/codegen_text_inventory.ml" in
   let refused = ref false in
   let fail _message =
@@ -171,8 +171,25 @@ let refusal_control () =
     [ ("test/unparsable.ml", "let =\n") ]
     (fun root ->
       Verdict.p "a scan handed a source that does not parse refuses it, exiting 1"
-        (Test_utils.Refusal_control_manifest.refuses ~source ~exe:(Fresh_process.executable ())
+        (Test_utils.Refusal_control_manifest.refuses ~source
+           ~claim:"a scan handed a source that does not parse refuses it, exiting 1"
+           ~exe:(Fresh_process.executable ())
            [ root; Stdlib.Filename.concat root "test/unparsable.ml" ]));
+  (* gh-ocannl-1233: the declared-but-unread refusal, executed the same way: this scan handed a
+     library's wrapper interface alone -- the [emitter_fixture] library's, copied into a tree of its
+     own, so that neither the hand-over nor the wrapper's directory holds the members it
+     declares. *)
+  Test_utils.Refusal_control_manifest.with_tree
+    [ ("lib/emitter_fixture.cmi", read wrapper) ]
+    (fun root ->
+      Verdict.p
+        "a scan handed a wrapper interface without its members' interfaces refuses it, exiting 1"
+        (Test_utils.Refusal_control_manifest.refuses ~source
+           ~claim:
+             "a scan handed a wrapper interface without its members' interfaces refuses it, \
+              exiting 1"
+           ~exe:(Fresh_process.executable ())
+           [ root; Stdlib.Filename.concat root "lib/emitter_fixture.cmi" ]));
   (* gh-ocannl-1294: the direct-read refusal, on a test that lists build_files/ itself and pins a
      fragment of what it finds there -- classified by the scan's own reader, so the control fails if
      that reader stops marking such a test. *)
@@ -202,8 +219,8 @@ let refusal_control () =
   Test_utils.Refusal_control_manifest.print source
 
 let () =
-  if Array.length argv = 2 && String.equal argv.(1) "--refusal-control" then (
-    refusal_control ();
+  if Array.length argv = 3 && String.equal argv.(1) "--refusal-control" then (
+    refusal_control ~wrapper:argv.(2);
     Stdlib.exit 0);
   if Array.length argv < 2 then (
     eprintf "Usage: %s <workspace_root> <file...>\n" argv.(0);

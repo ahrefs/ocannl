@@ -2016,9 +2016,11 @@ let scanner_refusal_controls exe =
   Test_utils.Refusal_control_manifest.with_tree refusal_tree (fun root ->
       Verdict.p "config_dep_completeness refuses a tree built to trip its refusals, exiting 1"
         (refuses
+           ~claim:"config_dep_completeness refuses a tree built to trip its refusals, exiting 1"
            (root :: List.map refusal_tree ~f:(fun (path, _) -> Stdlib.Filename.concat root path)));
       Verdict.p "config_dep_completeness refuses a run handed no dune file, exiting 1"
-        (refuses [ root ]));
+        (refuses ~claim:"config_dep_completeness refuses a run handed no dune file, exiting 1"
+           [ root ]));
   (* Run from inside the tree, handed `.` and relative paths: the scanner places a dune file
      relative to the workspace root it is given, and the producer check asks for `test/config/dune`
      by that path -- an absolute temporary path is never it, which would leave the environment's
@@ -2039,15 +2041,16 @@ let scanner_refusal_controls exe =
         ("test/operations/" ^ scanner_source, Stdio.In_channel.read_all scanner_source) :: files
       in
       Test_utils.Refusal_control_manifest.with_tree tree (fun root ->
+          let claim = "config_dep_completeness refuses " ^ what ^ ", exiting 1" in
           let refused =
             Stdlib.Sys.chdir root;
             Exn.protect
               ~f:(fun () ->
-                Test_utils.Refusal_control_manifest.refuses ~source ~exe
+                Test_utils.Refusal_control_manifest.refuses ~source ~claim ~exe
                   ("." :: List.map files ~f:fst))
               ~finally:(fun () -> Stdlib.Sys.chdir here)
           in
-          Verdict.p ("config_dep_completeness refuses " ^ what ^ ", exiting 1") refused))
+          Verdict.p claim refused))
 
 let () =
   let check name expected found =

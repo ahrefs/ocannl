@@ -729,10 +729,13 @@ let scanner_refusal_controls ~digest_exe ~consistency_exe =
       (* From this directory, where each scanner finds its own source for the manifest section it
          prints last. *)
       Verdict.p "digest_completeness refuses the malformed tree, exiting 1"
-        (Manifest.refuses ~source:"test/operations/digest_completeness.ml" ~exe:digest_exe sources);
+        (Manifest.refuses ~source:"test/operations/digest_completeness.ml"
+           ~claim:"digest_completeness refuses the malformed tree, exiting 1" ~exe:digest_exe
+           sources);
       Verdict.p "test_config_consistency refuses the malformed tree, exiting 1"
-        (Manifest.refuses ~source:"test/operations/test_config_consistency.ml" ~exe:consistency_exe
-           (in_tree "reference" :: sources)))
+        (Manifest.refuses ~source:"test/operations/test_config_consistency.ml"
+           ~claim:"test_config_consistency refuses the malformed tree, exiting 1"
+           ~exe:consistency_exe (in_tree "reference" :: sources)))
 
 let () =
   List.iter cases ~f:(fun (name, source, expected) ->

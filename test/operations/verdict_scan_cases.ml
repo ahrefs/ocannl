@@ -171,9 +171,10 @@ let scanner_refusal_controls exe =
   let refuses = Test_utils.Refusal_control_manifest.refuses ~source ~exe in
   Test_utils.Refusal_control_manifest.with_tree refusal_corpus (fun root ->
       Verdict.p "verdict_ratchet refuses a corpus built to trip its refusals, exiting 1"
-        (refuses
+        (refuses ~claim:"verdict_ratchet refuses a corpus built to trip its refusals, exiting 1"
            (root :: List.map refusal_corpus ~f:(fun (path, _) -> Stdlib.Filename.concat root path)));
-      Verdict.p "verdict_ratchet refuses a run handed no source, exiting 1" (refuses [ root ]))
+      Verdict.p "verdict_ratchet refuses a run handed no source, exiting 1"
+        (refuses ~claim:"verdict_ratchet refuses a run handed no source, exiting 1" [ root ]))
 
 let show_printer = Option.value ~default:"<unapplied>"
 

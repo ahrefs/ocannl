@@ -416,9 +416,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   own evidence: a claim marker is emitted only after `Verdict` recorded a passing execution of that
   exact format (and each observation is consumed once), while a direct-failure marker requires
   that the refusal RAN: an `observe_failure` from the caught branch itself, or a
-  `raw_direct_evidence` entry naming a control claim that passed AND a `FAIL:` line of that
-  scanner's refused child run (exit 1; `Refusal_control_manifest.refuses`, or
-  `observe_refused_run` over a harness's own capture) that is the refusal's OWN -- matched by its
+  `raw_direct_evidence` entry naming a control claim that passed AND a `FAIL:` line of a refused
+  child run (exit 1) THAT CLAIM made -- `Refusal_control_manifest.refuses ~claim`, or
+  `observe_refused_run` over a harness's own capture plus `attribute ~claim` beside the claim
+  (env_var_deps' `attribute`) -- that is the refusal's OWN -- matched by its
   format and by no sibling format of the same scanner that fixes more text, so a general refusal
   cannot live on a specific sibling's line. Either half alone counts for nothing: a
   claim over a fixture the scan ACCEPTS, a prose line, or an unrelated passing claim once stood in
@@ -426,6 +427,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   (gh-ocannl-1207; `Manifest.standing` holds the rule, `refusal_control_scan_cases` pins each
   direction). The claim is a gate -- incidental refusals keep a malformed tree's child at exit 1 on
   their own -- and the line is the evidence; map each key to the claim whose run prints it. A
+  line from a sibling claim's run counts for nothing (gh-ocannl-1233): pooled per scanner, the
+  runs let a key stand mapped to a claim whose own run never printed it. A
   refusal no control can reach -- a library constant, a walk defect the raw-text floor exists for
   -- goes in `raw_catalogue_only` with its reason and prints under its own `Catalogue-only:`
   heading, so it stays catalogued without claiming execution; a key in both tables is refused by
