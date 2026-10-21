@@ -5449,12 +5449,18 @@ let model_default ?name ?report ctx comp bindings =
        it: a plan that seeds, splits and sinks nothing IS the default pipeline, so a compilation
        failure of it is the default's and is not retried. *)
     let seeded_changed = ref false in
-    (* The seeded plan's split prelude (CUDA, gh-ocannl-1325) on a hermetic copy; the program itself
-       where the model does not start from the seeded plan. *)
-    let prelude (opt : LL.optimized) =
+    (* The seeded plan's split prelude (CUDA, gh-ocannl-1325); the program itself where the model
+       does not start from the seeded plan. On a hermetic copy for scoring; in place for the pick's
+       application, as the [`Seeded] action's [seeded_apply] splits the compile's own lowering: a
+       pick applied to a copy registers the nodes its transforms create (a fissioned segment's
+       promoted locals) in the copy's placements, not the compiling context's, and the compile then
+       fails on an undecided node (gh-ocannl-1477's fissioned chain, on HIP). *)
+    let prelude ?(hermetic = true) (opt : LL.optimized) =
       match Lazy.force seeding_here with
       | Some (_, min_serial, _) ->
-          fst (seeded_split ~backend ~min_serial ~static_indices (scratch_of opt))
+          fst
+            (seeded_split ~backend ~min_serial ~static_indices
+               (if hermetic then scratch_of opt else opt))
       | None -> opt
     in
     let select (opt : LL.optimized) =
@@ -5592,11 +5598,11 @@ let model_default ?name ?report ctx comp bindings =
                       && List.is_empty c.sd_sunk))
                  seeding opt)
         | `Whole p ->
-            let opt = prelude opt in
+            let opt = prelude ~hermetic:false opt in
             validate_segments_for_model ~limits
               [ Sched.apply_classified ~static_indices (sketch_schedule ~accum_prec ~p opt) opt ]
         | `Fiss (plan, entries) ->
-            let opt = prelude opt in
+            let opt = prelude ~hermetic:false opt in
             validate_segments_for_model ~limits (apply_fiss ~plan ~entries opt)
       in
       match apply_action () with
