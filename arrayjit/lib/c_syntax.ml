@@ -8338,6 +8338,8 @@ struct
       if batch then String.(strip ~drop:(equal_char '_') @@ common_prefix (Array.to_list names))
       else names.(0)
     in
+    (* Before the call: a failed compile was still given these kernels. *)
+    Compile_cost.record_kernels ~rendered:(Array.length names) ~compiled:(Array.length names);
     let result =
       try
         if compiles_source then Compile_cost.time_device (fun () -> compile_source ~name source)
@@ -8348,7 +8350,6 @@ struct
           ~routine_names:(Array.to_list (Array.zip_exn names given_names))
           exn backtrace
     in
-    Compile_cost.record_kernels ~rendered:(Array.length names) ~compiled:(Array.length names);
     (result, Array.map entries ~f:fst)
 
   let compile ~name bindings lowered ~includes ~builtins ?conditional_includes ?compiles_source

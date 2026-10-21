@@ -1334,8 +1334,11 @@ end = struct
          one. *)
       (try Stdlib.Sys.remove (Utils.build_file (name ^ ".hsaco")) with Sys_error _ -> ());
       Stdio.Out_channel.write_all (Utils.build_file (name ^ ".hip_log")) ~data:log_header);
+    Compile_cost.record_kernels ~rendered:n ~compiled:0;
     List.iteri groups ~f:(fun k (options, idxs) ->
         let artifact = if k = 0 then name else name ^ "_" ^ Int.to_string k in
+        (* Before the call: a program hiprtc refuses was still given these kernels. *)
+        Compile_cost.record_kernels ~rendered:0 ~compiled:(List.length idxs);
         let code =
           try
             Compile_cost.time_device (fun () ->
@@ -1352,7 +1355,6 @@ end = struct
             ~keys:(List.map idxs ~f:(fun i -> keys.(i)))
             ~bytes:code.Hiprtc.code_length program;
         List.iter idxs ~f:(fun i -> programs.(i) <- Some program));
-    Compile_cost.record_kernels ~rendered:n ~compiled:n_compiled;
     (Array.map programs ~f:(fun p -> Option.value_exn ~here:[%here] p), r.entries)
 
   let%diagn2_sexp compile ~name bindings lowered =
