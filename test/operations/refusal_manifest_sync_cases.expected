@@ -28,6 +28,8 @@ a claim reworded at one site while it survives at another is unresolved: true
 and no evidence label follows it (the row is still rewritten): true
 nor does a control file's rename of it: the label names the surviving site: true
 a control file deleted since the base leaves every old claim unpaired: true
+an evidence label a reworded formatted claim rendered is unresolved, not left stale: true
+and is not rewritten: true
 the text reader reads the real manifest's rows as compiled: true
 and its direct-evidence entries: true
 and its catalogue-only entries: true

@@ -387,6 +387,9 @@ sub mutate {
         };
     }
     $cancel ||= $baseline_stop;
+    # A batch mutant a signal reached before it started is not run at all: it answers nothing, and
+    # its row reads NOT RUN.
+    return () if $batch && $cancel;
     # What each candidate stdout file is BEFORE the mutated run, the baseline's rewrite included: an
     # output the mutated run did not rewrite is an earlier run's, and counting it would read "never
     # ran" as caught or survived.
@@ -609,10 +612,16 @@ sub mutate {
 }
 my @results;
 for my $mutant (@mutants) {
-    last if $cancel && @results;
+    # A pending cancellation -- the baseline's handlers record one until a mutant installs its own
+    # -- stops a batch before its next mutant (that row and the rest NOT RUN); a single run still
+    # enters, refusing before it mutates, as it always did.
+    $cancel ||= $baseline_stop;
+    last if $cancel && ($batch || @results);
     my ($name, $mutated, $loose) = @$mutant;
     print "== $name ==\n" if $batch;
-    push @results, [$name, mutate($mutated, $loose)];
+    my @outcome = mutate($mutated, $loose);
+    last unless @outcome;
+    push @results, [$name, @outcome];
     last if $cancel;
 }
 rmdir $scratch or warn "mutation-run: cannot remove scratch directory $scratch: $!\n";

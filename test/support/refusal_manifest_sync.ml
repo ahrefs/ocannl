@@ -341,7 +341,19 @@ let plan ?(unpaired_claims = []) ~text ~diagnostics_of ~renamed_claims () =
         | None -> (value, "")
       in
       let identity = identity_of label in
+      (* A label a FORMATTED claim rendered is no format's identity: matched against each old format
+         with substitutions that a rewording or removal retired, it is a hand edit. *)
+      let formatted_retired =
+        List.exists
+          (List.map renamed_claims ~f:fst @ unpaired_claims)
+          ~f:(fun old -> String.mem old '%' && Scan.format_matches ~format:old label)
+      in
       match List.Assoc.find !claims identity ~equal:String.equal with
+      | None when formatted_retired ->
+          unresolved_f
+            "the claim %s's evidence names was rendered by a formatted claim since reworded or \
+             removed: write the label its successor renders by hand"
+            entry.key.value
       | None when Hashtbl.mem ambiguous_claims identity ->
           unresolved_f
             "the claim %s's evidence names occurs more than once and was reworded differently: \

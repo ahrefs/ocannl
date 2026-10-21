@@ -1088,6 +1088,28 @@ bash tools/mutation-restore-signal.sh --batch module.ml "$fixture/patches" @runt
 cmp module.ml "$fixture/pristine"
 grep -q '^  NOT RUN      3-survived.patch$' "$fixture/result" ||
   { cat "$fixture/result"; echo 'batch: a signal during restoration did not stop the batch'; exit 1; }
+# A signal pending before the first mutant starts runs none: every row NOT RUN, nothing mutated.
+perl - tools/mutation-run.sh > tools/mutation-early-signal.sh <<'PERL'
+use strict;
+use warnings;
+local $/;
+open my $f, '<', $ARGV[0] or die $!;
+my $s = <$f>;
+my $anchor = "\nmy \$cancel = \$baseline_stop;\n";
+my $at = index($s, $anchor);
+die "missing post-snapshot anchor" if $at < 0;
+substr($s, $at + length($anchor), 0, qq{kill 'TERM', \$\$;\n});
+print $s;
+PERL
+rm -f "$fixture/observed"
+actual=0
+bash tools/mutation-early-signal.sh --batch module.ml "$fixture/patches" @runtest-probe > "$fixture/result" 2>&1 || actual=$?
+[ "$actual" = 143 ] && [ ! -e "$fixture/observed" ] ||
+  { cat "$fixture/result"; echo "batch early signal: exit $actual, or a mutant ran"; exit 1; }
+grep -q '^batch: 0 of 2 mutant(s) run ' "$fixture/result" &&
+  [ "$(grep -c '^  NOT RUN ' "$fixture/result")" = 2 ] ||
+  { cat "$fixture/result"; echo 'batch: a mutant that never started is not NOT RUN'; exit 1; }
+cmp module.ml "$fixture/pristine"
 printf 'PASS --batch runs one baseline, then each patch restored in turn, and tabulates them; a bad patch or empty directory refuses before launch; a signal stops it restored\n'
 }
 harness_leg_run '21: --batch runs one baseline and tabulates every patch' leg_21

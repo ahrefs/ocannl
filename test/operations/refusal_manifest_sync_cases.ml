@@ -297,6 +297,25 @@ let check ok =
     (List.filter (Scan.diagnostics before) ~f:(fun d -> Poly.equal d.Scan.kind Scan.Claim))
     ~f:(fun d ->
       List.mem (snd (Sync.claim_renames ~before ~after:"")) d.Scan.format ~equal:String.equal);
+  (* A formatted control claim reworded: the evidence label is what it RENDERED, no format's
+     identity, so it is matched against the retired format and left a hand edit. *)
+  let formatted_before =
+    {ocaml|
+let check name ok = Verdict.pf "the %s tree is refused" name ok
+|ocaml}
+  in
+  let formatted_after =
+    {ocaml|
+let check name ok = Verdict.pf "a %s tree is refused" name ok
+|ocaml}
+  in
+  let renamed_claims, unpaired_claims =
+    Sync.claim_renames ~before:formatted_before ~after:formatted_after
+  in
+  let rendered_plan = Sync.plan ~text:outside ~diagnostics_of ~renamed_claims ~unpaired_claims () in
+  p "an evidence label a reworded formatted claim rendered is unresolved, not left stale"
+    (List.length rendered_plan.unresolved = 1);
+  p_empty "and is not rewritten" ~over:outside_plan.edits rendered_plan.edits;
   (* The text reader against the real manifest's compiled tables: every row, key and label it would
      rewrite is the one the tests read. *)
   let live_text = In_channel.read_all "../support/refusal_control_manifest.ml" in
