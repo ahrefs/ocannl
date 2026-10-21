@@ -202,11 +202,15 @@ let () =
       ~catalogue:[]
   in
   let outside_plan = Sync.plan ~text:outside ~diagnostics_of ~renamed_claims () in
-  p "an evidence label naming a claim reworded outside the rows follows it"
-    (List.equal String.equal
-       (List.map (Sync.read_tables (Sync.apply outside outside_plan.edits)).direct_evidence
-          ~f:(fun e -> e.value.value))
-       [ "a malformed tree is refused: true" ]);
+  (* Not followed by text: the same label may back another scanner's evidence from another file. *)
+  p
+    "an evidence label naming a claim reworded outside the scanner sources is unresolved, with the \
+     new text as its hint"
+    (match outside_plan.unresolved with
+    | [ message ] -> String.is_substring message ~substring:"a malformed tree is refused"
+    | _ -> false);
+  let outside_evidence = (Sync.read_tables outside).direct_evidence in
+  p_empty "and is not relabeled" ~over:outside_evidence outside_plan.edits;
   (* The same control file with a claim inserted beside the rewording: nothing pairs the old claim,
      so the label naming it is unresolved rather than left stale behind "nothing to sync". *)
   let beside =
@@ -217,8 +221,7 @@ let () =
   let beside_plan = Sync.plan ~text:outside ~diagnostics_of ~renamed_claims ~unpaired_claims () in
   p "a control file's claim reworded beside an insertion leaves the label naming it unresolved"
     (List.length beside_plan.unresolved = 1);
-  p_empty "and relabels nothing, where the one-for-one rewording did" ~over:outside_plan.edits
-    beside_plan.edits;
+  p_empty "and relabels nothing" ~over:outside_evidence beside_plan.edits;
   (* One format at two sites, its occurrences reworded differently: no single successor. *)
   let twice =
     {ocaml|
@@ -315,7 +318,7 @@ let check name ok = Verdict.pf "a %s tree is refused" name ok
   let rendered_plan = Sync.plan ~text:outside ~diagnostics_of ~renamed_claims ~unpaired_claims () in
   p "an evidence label a reworded formatted claim rendered is unresolved, not left stale"
     (List.length rendered_plan.unresolved = 1);
-  p_empty "and is not rewritten" ~over:outside_plan.edits rendered_plan.edits;
+  p_empty "and is not rewritten" ~over:outside_evidence rendered_plan.edits;
   (* A claim the row leaves unpaired -- reworded beside an inserted failure -- is not renamed by the
      claims-only pairing of the same source, which never sees the failure. *)
   let beside_failure =
@@ -359,6 +362,29 @@ let check ok =
   p_empty "two claims that only swap places leave nothing unpaired"
     ~over:(Scan.diagnostics in_order)
     (snd (Sync.claim_renames ~before:in_order ~after:swapped));
+  (* A claim two scanner sources share, reworded in one: a relabel or golden swap by text would move
+     the other's too. *)
+  let other_scan = {ocaml|
+let check ok = Verdict.p "the malformed tree is refused" ok
+|ocaml} in
+  let shared_text =
+    manifest
+      ~rows:[ ("synthetic_scan.ml", markers before); ("other_scan.ml", markers other_scan) ]
+      ~evidence:[ ("synthetic_scan.ml:" ^ second_before, "the malformed tree is refused: true") ]
+      ~catalogue:[]
+  in
+  let shared_plan =
+    Sync.plan ~text:shared_text
+      ~diagnostics_of:(fun source ->
+        Some (Scan.diagnostics (if String.equal source "other_scan.ml" then other_scan else after)))
+      ~renamed_claims:[] ()
+  in
+  p "a claim another scanner source still makes, reworded in one, is unresolved"
+    (List.exists shared_plan.unresolved ~f:(String.is_substring ~substring:"also another scanner"));
+  p_none ~min:1 "and no evidence label follows it (the row is still rewritten)" shared_plan.changes
+    ~f:(function
+    | Sync.Relabeled _ -> true
+    | Row _ | Rekeyed _ -> false);
   (* The text reader against the real manifest's compiled tables: every row, key and label it would
      rewrite is the one the tests read. *)
   let live_text = In_channel.read_all "../support/refusal_control_manifest.ml" in

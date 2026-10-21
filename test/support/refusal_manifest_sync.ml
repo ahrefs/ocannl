@@ -219,7 +219,7 @@ let plan ?(unpaired_claims = []) ~text ~diagnostics_of ~renamed_claims () =
   (* Per row source: its current diagnostics, and the diagnostic each replaced key's refusal
      became. *)
   let current = Hashtbl.create (module String) and replaced = Hashtbl.create (module String) in
-  let markers = ref [] and claims = ref [] and unpaired = ref [] in
+  let markers = ref [] and claims = ref [] and unpaired = ref [] and pending = ref [] in
   List.iter tables.rows ~f:(fun row ->
       match diagnostics_of row.source with
       | None ->
@@ -265,20 +265,46 @@ let plan ?(unpaired_claims = []) ~text ~diagnostics_of ~renamed_claims () =
                         "%s was reworded at one of its sites in %s and still occurs at another: \
                          the goldens holding it, and any entry naming it, are a hand edit"
                         marker row.source
-                    else (
-                      markers := (marker, Scan.marker d) :: !markers;
-                      Hashtbl.add_multi replaced ~key:(row.source ^ ":" ^ identity) ~data:d;
-                      match d.Scan.kind with
-                      | Scan.Claim -> claims := (identity, d.Scan.format) :: !claims
-                      | Scan.Fail -> ())))));
+                    else pending := (row.source, marker, identity, d) :: !pending))));
+  (* Every row read: a replaced marker another scanner's row still lists, or a reworded claim
+     another scanner still makes, is text two sources share -- a golden swap or a relabel by text
+     would move the other's too, so neither moves. *)
+  let elsewhere ~source predicate =
+    List.exists tables.rows ~f:(fun r -> (not (String.equal r.source source)) && predicate r)
+  in
+  List.iter (List.rev !pending) ~f:(fun (source, marker, identity, d) ->
+      let shared_marker = elsewhere ~source (fun r -> List.mem r.markers marker ~equal:String.equal)
+      and shared_claim =
+        elsewhere ~source (fun r ->
+            Option.value_map (Hashtbl.find current r.source) ~default:false ~f:(fun ds ->
+                List.exists ds ~f:(fun other ->
+                    String.equal other.Scan.identity identity
+                    && match other.Scan.kind with Scan.Claim -> true | Scan.Fail -> false)))
+      in
+      if shared_marker || shared_claim then
+        unresolved_f
+          "%s, reworded in %s, is also another scanner's: the goldens holding it, and any entry \
+           naming it, are a hand edit"
+          marker source
+      else (
+        markers := (marker, Scan.marker d) :: !markers;
+        Hashtbl.add_multi replaced ~key:(source ^ ":" ^ identity) ~data:d;
+        match d.Scan.kind with
+        | Scan.Claim -> claims := (identity, d.Scan.format) :: !claims
+        | Scan.Fail -> ()));
   (* A row's own alignment outranks the claims-only pairing of the same source: a claim the row
      leaves unpaired (reworded beside an inserted failure, say) is not renamed by a pass that never
      saw the failure. *)
   let row_unpaired = !unpaired in
-  List.iter renamed_claims ~f:(fun (old_format, format) ->
-      let identity = identity_of old_format in
-      if not (List.mem row_unpaired identity ~equal:String.equal) then
-        claims := (identity, format) :: !claims);
+  (* A claim reworded outside the scanner sources (a [*_cases.ml] control) is never followed by
+     text: the same label may back another scanner's evidence from another file, which a relabel
+     would hand to a claim its control never runs. Its labels are a hand edit, with the new text as
+     the hint. *)
+  let external_renames =
+    List.filter_map renamed_claims ~f:(fun (old_format, format) ->
+        let identity = identity_of old_format in
+        Option.some_if (not (List.mem row_unpaired identity ~equal:String.equal)) (identity, format))
+  in
   unpaired := List.map unpaired_claims ~f:identity_of @ !unpaired;
   (* One old text to more than one new one: no single successor, so none is chosen. *)
   let ambiguous pairs =
@@ -357,6 +383,12 @@ let plan ?(unpaired_claims = []) ~text ~diagnostics_of ~renamed_claims () =
           ~f:(fun old -> String.mem old '%' && Scan.format_matches ~format:old label)
       in
       match List.Assoc.find !claims identity ~equal:String.equal with
+      | None when List.Assoc.mem external_renames identity ~equal:String.equal ->
+          unresolved_f
+            "the claim %s's evidence names was reworded outside the scanner sources (it now reads \
+             %S): relabel the entry by hand"
+            entry.key.value
+            (List.Assoc.find_exn external_renames identity ~equal:String.equal)
       | None when formatted_retired ->
           unresolved_f
             "the claim %s's evidence names was rendered by a formatted claim since reworded or \

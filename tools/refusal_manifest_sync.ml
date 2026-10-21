@@ -46,18 +46,30 @@ let claim_changes base =
         |> List.filter_map ~f:(fun line ->
             (* [<status>\t<path>], or [R<score>\t<old path>\t<new path>] for a rename. *)
             match String.split line ~on:'\t' with
-            | [ _; path ] -> Some (path, path)
-            | [ _; old_path; path ] -> Some (old_path, path)
+            | [ status; path ] -> Some (String.is_prefix status ~prefix:"A", path, path)
+            | [ _; old_path; path ] -> Some (false, old_path, path)
             | _ -> None)
-        |> List.filter ~f:(fun (_, path) -> String.is_suffix path ~suffix:".ml")
+        (* An .ml on either side: a source renamed out of .ml is, for its claims, a deletion. *)
+        |> List.filter ~f:(fun (_, old_path, path) ->
+            String.is_suffix old_path ~suffix:".ml" || String.is_suffix path ~suffix:".ml")
+  in
+  let ml_source path =
+    if String.is_suffix path ~suffix:".ml" && Stdlib.Sys.file_exists path then
+      In_channel.read_all path
+    else ""
   in
   let renamed, unpaired =
-    List.map changed ~f:(fun (old_path, path) ->
-        match git [ "show"; base ^ ":" ^ old_path ] with
+    List.map changed ~f:(fun (added, old_path, path) ->
+        match
+          (* A source added since [base], or renamed into .ml, had no claims there. *)
+          if (not added) && String.is_suffix old_path ~suffix:".ml" then
+            git [ "show"; base ^ ":" ^ old_path ]
+          else Some ""
+        with
         | None -> ([], [])
         | Some before -> (
             (* A source deleted since [base] claims nothing now: every old claim is unpaired. *)
-            let after = if Stdlib.Sys.file_exists path then In_channel.read_all path else "" in
+            let after = ml_source path in
             try Sync.claim_renames ~before ~after with _ -> ([], [])))
     |> List.unzip
   in
@@ -124,7 +136,35 @@ let () =
   let write = (not !dry_run) && List.is_empty plan.unresolved in
   if write && not (List.is_empty plan.edits) then
     Out_channel.write_all manifest_path ~data:(Sync.apply text plan.edits);
-  let sources = List.dedup_and_sort (Sync.touched_sources plan @ !named) ~compare:String.compare in
+  (* The scanner sources whose manifest entries differ from [base]'s: a hand edit settling an
+     UNRESOLVED item is one, and the next run must still re-run its goldens and the audit. *)
+  let since_base =
+    match git [ "show"; !base ^ ":" ^ manifest_path ] with
+    | None -> []
+    | Some base_text -> (
+        match Sync.read_tables base_text with
+        | exception _ -> []
+        | base_tables ->
+            let now = Sync.read_tables text in
+            let source_of key = Option.value_map (String.lsplit2 key ~on:':') ~default:key ~f:fst in
+            let entries tables =
+              List.map (tables.Sync.direct_evidence @ tables.Sync.catalogue_only) ~f:(fun e ->
+                  (e.Sync.key.value, e.Sync.value.value))
+            in
+            let rows tables = List.map tables.Sync.rows ~f:(fun r -> (r.Sync.source, r.markers)) in
+            let differ xs ys =
+              let absent from = List.filter ~f:(fun x -> not (List.mem from x ~equal:Poly.equal)) in
+              absent ys xs @ absent xs ys
+            in
+            List.map (differ (rows now) (rows base_tables)) ~f:fst
+            @ List.map
+                (differ (entries now) (entries base_tables))
+                ~f:(fun (key, _) -> source_of key))
+  in
+  let sources =
+    List.dedup_and_sort (Sync.touched_sources plan @ !named @ since_base) ~compare:String.compare
+    |> List.filter ~f:(fun source -> List.Assoc.mem catalogue source ~equal:String.equal)
+  in
   (* The goldens the rewording's text reaches, rewritten in place unless this is a dry run. *)
   let rewritten =
     Stdlib.Sys.readdir operations |> Array.to_list |> List.sort ~compare:String.compare
@@ -153,5 +193,5 @@ let () =
   |> List.iter ~f:(fun golden ->
       printf "rerun: @%s/runtest-%s\n" operations
         (String.chop_suffix_exn golden ~suffix:".expected"));
-  if List.is_empty plan.changes && List.is_empty !named then printf "nothing to sync\n";
+  if List.is_empty plan.changes && List.is_empty sources then printf "nothing to sync\n";
   if not (List.is_empty plan.unresolved) then Stdlib.exit 1

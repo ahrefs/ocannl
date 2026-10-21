@@ -6,10 +6,12 @@
 # 1. tools/refusal_manifest_sync.exe extracts every catalogued scanner's diagnostics and rewrites,
 #    in test/support/refusal_control_manifest.ml, each stale `raw_entries` row (the extraction, in
 #    order), each `raw_direct_evidence`/`raw_catalogue_only` key of a direct failure the rewording
-#    replaced, and each `raw_direct_evidence` label naming a control claim reworded in a row's
-#    source or in a test source changed since REV (default HEAD). A key or label follows its
-#    diagnostic only where the registered row and the extraction pair it one for one; anything
-#    else is printed UNRESOLVED and left for a hand edit: then NOTHING is written or run (exit 1),
+#    replaced, and each `raw_direct_evidence` label naming a control claim reworded in that
+#    scanner's own source. A key or label follows its diagnostic only where the registered row
+#    and the extraction pair it one for one and no other scanner shares its text; a control claim
+#    reworded or removed in another test source changed since REV (default HEAD) is never followed
+#    by text (its label may back another scanner's evidence) -- anything of that kind is printed
+#    UNRESOLVED, with the new text as a hint, and left for a hand edit: then NOTHING is written or run (exit 1),
 #    so the next invocation, once the items are settled, still sees every source the rewording
 #    touched. Every argument is checked before anything is written (exit 2).
 # 2. ocamlformat reformats the manifest, and its diff is shown.
@@ -19,8 +21,8 @@
 #    could not pass. Those goldens, each touched or named source's catalogued ones (the
 #    refusal_control_scan_cases stanza's argument list) and the audit's own then run through
 #    tools/test-run.sh; when a diff remains, its corrections are promoted (tools/promote.sh) and
-#    they run again. The exit status is the last run's. Naming a SOURCE re-runs its goldens even
-#    when the manifest needed no edit.
+#    they run again. The exit status is the last run's. A source whose manifest entries differ
+#    from REV's (a hand edit, say) has its goldens re-run too, as does a named SOURCE.
 # --dry-run prints the plan and changes nothing. The plan is a point-in-time reading of the source
 # text: what a run prints is the golden's business, and the confirming run is what says it held.
 set -u
