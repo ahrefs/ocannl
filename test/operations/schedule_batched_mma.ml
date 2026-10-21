@@ -229,17 +229,15 @@ let () =
      [hh]-times larger than the minor dims, which is exactly the case gh-ocannl-528 introduced and
      the case a fragment load addresses differently from a scalar loop.
 
-     Tolerance rather than bitwise on HIP, for the reason [schedule_mma_matmul] documents at length:
-     gfx1151's WMMA does not return the exactly-rounded dot product in any format combination,
-     reproducibly so outside OCANNL. It is loose enough to admit that (worst measured 5.86e-03 in
-     the uniform-bf16 combination) and far tighter than a stride defect, which moves values by
-     O(1). *)
+     Bitwise on every backend, HIP's included: the operands are nonnegative, and gfx11's WMMA is
+     exactly rounded when every product shares a sign (gh-ocannl-1420). These legs held a 5%
+     tolerance while [wb]/[vb] were signed (worst measured 5.86e-03 in the uniform-bf16 combination:
+     the mixed-sign residue, not the format's), until gh-ocannl-1432. *)
   let real_limits = Context.hardware_limits (Context.auto ()) in
   let has_uniform_bf16_tile =
     Ir.Backend_intf.advertises_mma_format real_limits ~a:Ir.Backend_intf.Mma_bf16
       ~b:Ir.Backend_intf.Mma_bf16 ~d:Ir.Backend_intf.Mma_bf16
   in
-  let close a b = Float.(abs (a - b) <= 0.05 * max 1. (abs b)) in
   (* At most this many candidates are executed per site: each one is a full backend compile, and on
      HIP the rocWMMA headers make that expensive. The budget used to go to the first
      [max_candidates] seeds, which stopped covering the site once gh-ocannl-643 added the batch-grid
@@ -304,7 +302,7 @@ let () =
        fallback while its serial neighbour renders the intrinsic, would leave the claims green over
        exactly the coverage this sampling exists to provide. *)
     let sampled = List.count cands ~f:(fun q -> q.Autotune.sk_batch_grid) in
-    let n_ran = (ref 0, ref 0) and n_close = (ref 0, ref 0) and n_intrinsic = (ref 0, ref 0) in
+    let n_ran = (ref 0, ref 0) and n_match = (ref 0, ref 0) and n_intrinsic = (ref 0, ref 0) in
     let of_flavor (serial, grid) q = if q.Autotune.sk_batch_grid then grid else serial in
     List.iter cands ~f:(fun q ->
         (* Every candidate compiles under the one routine name [<tag>_bf16_mma], so each overwrites
@@ -324,7 +322,7 @@ let () =
         with
         | got, mma ->
             Int.incr (of_flavor n_ran q);
-            if Array.for_all2_exn got want ~f:close then Int.incr (of_flavor n_close q);
+            if Array.for_all2_exn got want ~f:Float.equal then Int.incr (of_flavor n_match q);
             if Ir.C_syntax.equal_tensorization mma.Ir.C_syntax.tensorization Ir.C_syntax.Tensorized
             then Int.incr (of_flavor n_intrinsic q)
         | exception _ -> ());
@@ -340,13 +338,13 @@ let () =
       let count refs = !(if grid then snd refs else fst refs) in
       if has_uniform_bf16_tile then
         Stdio.eprintf "%s: %d of %d %s candidates ran, %d matched, %d rendered the intrinsic\n" tag
-          (count n_ran) n_sampled label (count n_close) (count n_intrinsic);
+          (count n_ran) n_sampled label (count n_match) (count n_intrinsic);
       gated ~when_:has_uniform_bf16_tile ~on:backend_name
         (tag ^ " bf16: a sampled " ^ label ^ " candidate compiles and runs")
         (n_sampled = 0 || count n_ran >= 1);
       p
-        (tag ^ " bf16: every running " ^ label ^ " candidate matches the serial twin")
-        (count n_ran = count n_close);
+        (tag ^ " bf16: every running " ^ label ^ " candidate matches the serial twin bitwise")
+        (count n_ran = count n_match);
       gated ~when_:has_uniform_bf16_tile ~on:backend_name
         (tag ^ " bf16: a running " ^ label ^ " candidate renders the tensor-core intrinsic")
         (n_sampled = 0 || count n_intrinsic >= 1)
@@ -355,8 +353,10 @@ let () =
     flavor_claims ~label:"batch-grid" ~grid:true
   in
   let bf16_init ~l ~o ~f = NTDSL.init ~l ~prec:Ir.Ops.bfloat16 ~o ~f () in
-  (* Products are multiples of 1/8 and every partial sum is bounded by 16, so the serial twin is
-     exact and any deviation the tolerance admits is the tensor core's own. *)
+  (* Products are nonnegative multiples of 1/8 of at most 1, so every 32-term partial sum is a
+     multiple of 1/8 in [0, 32], exact in bf16 (8 significant bits): the serial twin is exact, and
+     so is every association of the sum, the tensor unit's included -- one sign is what makes that
+     hold on gfx11 (gh-ocannl-1420). *)
   let ss2 = 32 and kk2 = 32 and jj2 = 32 in
   let xb =
     bf16_init ~l:"xb" ~o:[ bt; ss2; kk2 ]
@@ -364,7 +364,7 @@ let () =
   in
   let wb =
     bf16_init ~l:"wb" ~o:[ kk2; jj2 ]
-      ~f:(Ll_test.cycle ~dims:[| kk2; jj2 |] ~modulus:5 ~offset:(-2.) ~stride:0.5)
+      ~f:(Ll_test.cycle ~dims:[| kk2; jj2 |] ~modulus:5 ~offset:0. ~stride:0.5)
   in
   bf16_leg ~tag:"batched_lb" ~build:(fun () ->
       let%op t = xb +* "bsk;kj=>bsj" wb in
@@ -378,7 +378,7 @@ let () =
   in
   let vb =
     bf16_init ~l:"vb" ~o:[ bt; kk2; hh; jj2 ]
-      ~f:(Ll_test.cycle ~dims:[| bt; kk2; hh; jj2 |] ~modulus:5 ~offset:(-2.) ~stride:0.5)
+      ~f:(Ll_test.cycle ~dims:[| bt; kk2; hh; jj2 |] ~modulus:5 ~offset:0. ~stride:0.5)
   in
   bf16_leg ~tag:"batched_ib" ~build:(fun () ->
       let%op t = attb +* "bihk;bkhj=>bihj" vb in

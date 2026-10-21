@@ -62,14 +62,16 @@ three_axis_companion: the CPU seeds include the register-tiled packed pipelines:
 three_axis_companion: every CPU seed compiles and runs: true
 three_axis_companion: every CPU candidate matches the serial reference bitwise: true
 three_axis_companion: every CPU tensorized candidate renders tensorized per its mma census: true
+out_proj bf16 inputs: every product is a negative multiple of 1/16: true
+out_proj bf16 inputs: every cell's sum is at most 16 in magnitude, so exact in bf16: true
 out_proj bf16: the multi-axis site seeds the backend's advertised tile: true
 out_proj bf16: no pipelined twin is seeded below the async arms' 4-byte element floor: true
 out_proj bf16: the unstaged candidate compiles and runs: true
-out_proj bf16: the unstaged candidate agrees with the serial twin: true
+out_proj bf16: the unstaged candidate agrees with the serial twin bitwise: true
 out_proj bf16: the unstaged candidate renders the tensor-core intrinsic: true
 out_proj bf16: the staged candidate compiles and runs: true
-out_proj bf16: the staged candidate agrees with the serial twin: true
+out_proj bf16: the staged candidate agrees with the serial twin bitwise: true
 out_proj bf16: the staged candidate renders the tensor-core intrinsic: true
 out_proj bf16: the batch-grid candidate compiles and runs: true
-out_proj bf16: the batch-grid candidate agrees with the serial twin: true
+out_proj bf16: the batch-grid candidate agrees with the serial twin bitwise: true
 out_proj bf16: the batch-grid candidate renders the tensor-core intrinsic: true
