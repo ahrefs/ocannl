@@ -227,9 +227,22 @@ files.
   of the key's first 32 bits (`uint32_to_single_uniform`) and narrow it; the `_vec`/`_lane` forms
   consume 16 bits per lane. cc's scalar half was the one exception (the low 16 bits, matching its
   lane form), so a half model seeded through `uniform1` started from different values on cc than on
-  the GPUs and no cc-vs-GPU parity test could seed through it. `reduction_forms` prints the f32,
-  bf16 and f16 draws of one fixed key on stdout — exact by construction, so they are golden lines —
-  and claims each narrow draw is the f32 draw narrowed, and that the host stubs over `builtins.c`
+  the GPUs and no cc-vs-GPU parity test could seed through it.
+- **A narrow draw truncates toward zero, never rounds** (gh-ocannl-1434): every half and bf16
+  form, on every table, goes through one word helper (`uint32_to_{half,bfloat16}_uniform`; a
+  packed lane moves its 16 bits to the top of the word) that clears the f32 draw's mantissa bits
+  the narrow type lacks, then converts. The masked value is representable, so the vendor's
+  conversion is exact whatever its rounding mode — that, not matching rounding, is what keeps the
+  backends bitwise-equal — and the largest draw is the format's greatest value below 1. Rounding to
+  nearest returned exactly 1.0 for one half draw in 4096 and one bf16 draw in 512. Do not "fix"
+  the small downward bias (under 2^-12 for half) by rounding: `u < 1` is the contract consumers
+  (`u < p` masks, `log (1 - u)`) rely on. `cuda_like_builtins_emulation` checks every form of the
+  C, CUDA and HIP tables against an independent floor oracle (the host codec's round-to-nearest,
+  stepped down) over every 16-bit lane value and a sampled set of words; `narrow_uniform_bound`
+  executes the scalar, packed and lane forms on the selected backend from the all-ones key.
+- `reduction_forms` prints the f32, bf16 and f16 draws of one fixed key on stdout — exact by
+  construction, so they are golden lines — and claims each narrow draw is the f32 draw truncated,
+  and that the host stubs over `builtins.c`
   (`Ops.uint4x32_to_*_uniform`) draw the same number, which checks the compiled host and kernel
   consumers even though they now share their C definition table (gh-ocannl-656). The shared
   scalar function returns `HALF_T`; the OCaml stub extracts `HALF_TO_UINT16` bits explicitly.

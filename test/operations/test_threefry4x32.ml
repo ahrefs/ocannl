@@ -77,6 +77,6 @@ let%expect_test "uint4x32_to_prec_uniform different precisions" =
     {|
     Single precision - first value: 0.4638, second value: 0.7325
     All values in [0, 1) range: true
-    Half precision - first value: 0.4434, second value: 0.4639
+    Half precision - first value: 0.4431, second value: 0.4636
     All values in [0, 1) range: true
     |}]

@@ -1,5 +1,5 @@
 Generated 40 uniform random numbers:
-  Stats: mean=0.54 min=0.03 max=1.00 max_abs_error=0.000
+  Stats: mean=0.54 min=0.03 max=0.99 max_abs_error=0.001
   Count is 40: PASS
   All values in [0, 1): PASS
   Matches expected stream within 0.01: PASS
