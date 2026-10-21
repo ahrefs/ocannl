@@ -428,20 +428,25 @@ variables and convolutions.</p>
 <ol type="1">
 <li><strong>Single-character mode</strong> (PyTorch-compatible):
 <ul>
-<li>Triggered when NO commas appear in the spec</li>
+<li>Used when the spec has no comma and none of the multi-char triggers
+below</li>
 <li>Each alphanumeric character is an axis identifier</li>
 <li>Spaces are optional and ignored: <code>&quot;ij&quot;</code> =
 <code>&quot;i j&quot;</code></li>
 </ul></li>
 <li><strong>Multi-character mode</strong>:
 <ul>
-<li>Triggered by ANY comma in the spec</li>
+<li>Triggered by ANY comma in the spec, and by the convolution and
+concatenation syntax (<code>*</code>, <code>+</code>, <code>^</code>,
+<code>&lt;</code>, <code>=</code> other than <code>=&gt;</code>)</li>
 <li>Trailing commas ignored (can be used to trigger multi-char
 mode)</li>
 <li>Identifiers can be multi-character (e.g., <code>height</code>,
 <code>width</code>)</li>
 <li>Must be separated by non-alphanumeric: <code>,</code> <code>|</code>
-<code>-&gt;</code> <code>;</code> <code>=&gt;</code></li>
+<code>-&gt;</code> <code>;</code> <code>=&gt;</code> — never by
+whitespace alone: <code>&quot;s a; s b =&gt; s a^b&quot;</code> is a parse error,
+write <code>&quot;s, a; s, b =&gt; s, a^b&quot;</code></li>
 <li>Makes convolution syntax less confusing:
 <code>stride*out+kernel</code></li>
 </ul></li>

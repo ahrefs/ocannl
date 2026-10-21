@@ -1146,10 +1146,18 @@ generalized einsum notation</h3>
 <ul>
 <li>if there is a comma anywhere in a spec, it is the <em>multichar
 mode</em>: axis identifiers are comma-separated and can have multiple
-characters;</li>
+characters. The convolution and concatenation syntax also selects it:
+any of <code>*</code>, <code>+</code>, <code>^</code>,
+<code>&lt;</code>, <code>&amp;</code>, or an <code>=</code> that does
+not begin <code>=&gt;</code>;</li>
 <li>otherwise, it is the <em>single-char mode</em>: each alphanumeric
 character corresponds to an axis.</li>
 </ul>
+<p>Whitespace never separates axes. In single-char mode it is ignored
+(<code>s a</code> is the two axes <code>sa</code>); in multichar mode
+axes need commas between them, so <code>s a; s b =&gt; s a^b</code> is a
+parse error (the <code>^</code> selected multichar mode) whose message
+names the fix, <code>s, a; s, b =&gt; s, a^b</code>.</p>
 <p>The syntax of a generalized einsum spec has two variants:</p>
 <ul>
 <li>unary: “&lt;rhs&gt; shape spec <code>=&gt;</code> &lt;lhs&gt; shape
@@ -1374,8 +1382,12 @@ axis</li>
 <p>The syntax <code>a^b</code> (or <code>a^b^c</code> etc.) creates a
 single axis of iteration that first iterates over component
 <code>a</code>, then over component <code>b</code>, etc. The components
-are axis labels (identifiers in multi-char mode, single characters in
-single-char mode).</p>
+are axis labels. Since <code>^</code> selects multichar mode, they are
+identifiers and the spec’s axes are comma-separated:
+<code>sa; sb =&gt; sa^b</code> reads as the single axes <code>sa</code>,
+<code>sb</code> and <code>sa^b</code>; concatenating <code>a</code> and
+<code>b</code> under a shared leading axis <code>s</code> is written
+<code>s, a; s, b =&gt; s, a^b</code>.</p>
 <p><strong>Examples of concatenation patterns</strong> (using vector
 notation for simplicity):</p>
 <table>
@@ -1627,6 +1639,16 @@ each model instance, make the construction point explicit with
 <code>let%op mk_f () x = ...</code> and apply <code>mk_f ()</code> once
 per instance. Initializers may use labeled arguments, for example
 <code>kaiming ~scale_sq:2.0 normal1 ()</code>.</li>
+<li><strong>Dimension captures follow the same rule.</strong> Their
+bindings sit where inline declarations do, so in
+<code>let%op f x = x ++ &quot;... | h, w, ..c.. =&gt; ... | ..c..&quot; [&quot;h&quot;; &quot;w&quot;]</code>
+the captured <code>h</code> and <code>w</code> are bound once, when
+<code>f</code> is defined, and every application of <code>f</code>
+unifies with the same two dimensions: a second input of a different
+spatial size fails shape inference. A stateless function that captures
+puts the extension point inside its body instead,
+<code>let f x = let%op r = ... in r</code>, as
+<code>Nn_blocks.global_avg_pool2d</code> does (gh-ocannl-880).</li>
 </ul>
 <h2 id="further-features-of-the-syntax-extension-cd">Further features of
 the syntax extension %cd</h2>
