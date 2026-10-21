@@ -110,7 +110,8 @@ let () =
         (not (String.equal golden updated))
         &&
         (if not !dry_run then Out_channel.write_all path ~data:updated;
-         printf "golden %s: replaced markers and claim labels rewritten\n" file;
+         printf "golden %s: %s its replaced markers and reworded claim rows\n" file
+           (if !dry_run then "would rewrite" else "rewrote");
          true))
   in
   let goldens =

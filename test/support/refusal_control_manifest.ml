@@ -371,7 +371,7 @@ let raw_entries =
         "[scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests";
         "[scanner-refusal:5f2b09efad6e397fb5bd77b84255d0bf] runs inline tests";
         "[scanner-refusal:677d819fac904c64b7025b4f17c07b5a] its stanza starts";
-        "[scanner-refusal:7637eff157ad54e2ce52846535604f2a] scanner refusal";
+        "[scanner-refusal:25657f61eca857f6fd2f34de66e81eaf] scanner refusal";
         "[scanner-refusal:fe4c53f899eb08a9ae67e7a797a5a841] scanner-refusal exemptions no";
         "[scanner-refusal:05b0b536b88908d4ef277447d7e82ae3] exempt_reads";
         "[scanner-refusal:638620a0745d0a136810c5b0256e0ec0] directories exempted from";
@@ -882,7 +882,7 @@ let raw_catalogue_only : (string * string) list =
     ( "env_var_deps.ml:941a9fb77d867c7b1576a0f19ee5db3b",
       "a declaration outside every `deps` field; the scan's own reader of those fields is what \
        would have to miss it" );
-    ( "env_var_deps.ml:7637eff157ad54e2ce52846535604f2a",
+    ( "env_var_deps.ml:25657f61eca857f6fd2f34de66e81eaf",
       "the live orphan refusal; `refusal_control` puts the relationship to a synthetic corpus in \
        process, past this branch" );
     ( "env_var_deps.ml:fe4c53f899eb08a9ae67e7a797a5a841",
@@ -1123,7 +1123,11 @@ let eprint_row_difference ~source diagnostics difference =
         "  same markers in a different order; first difference at entry %d: extracted %s, the row \
          has %s\n"
         position e r);
-  eprintf "  replace its `raw_entries` row in test/support/refusal_control_manifest.ml with:\n%s"
+  eprintf
+    "  replace its `raw_entries` row in test/support/refusal_control_manifest.ml with the row \
+     below -- tools/refusal-manifest-sync.sh does, re-keying the evidence and rewriting the \
+     goldens a rewording reaches:\n\
+     %s"
     (row ~source diagnostics)
 
 (** The [raw_direct_evidence] keys (without the [test/operations/] prefix) of [source]'s direct

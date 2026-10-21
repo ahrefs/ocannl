@@ -336,7 +336,7 @@ env_var_deps.ml: [scanner-refusal:b0ff4d4e5709299b84685f0fc189cc63] the inline-t
 env_var_deps.ml: [scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:5f2b09efad6e397fb5bd77b84255d0bf] runs inline tests (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:677d819fac904c64b7025b4f17c07b5a] its stanza starts (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
-env_var_deps.ml: [scanner-refusal:7637eff157ad54e2ce52846535604f2a] scanner refusal (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:25657f61eca857f6fd2f34de66e81eaf] scanner refusal (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:fe4c53f899eb08a9ae67e7a797a5a841] scanner-refusal exemptions no (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:05b0b536b88908d4ef277447d7e82ae3] exempt_reads (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:638620a0745d0a136810c5b0256e0ec0] directories exempted from (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
