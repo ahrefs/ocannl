@@ -2125,7 +2125,7 @@ files.
   the runs on a loaded box, with no trace. `placement_store` re-runs each recording (run 1, run 6,
   the cross-process recorder) in a FRESH directory, up to three attempts (the same directory would
   replay the first attempt's clean searches), and gates the dependent claims through
-  `Verdict.gated ~aggregation:`Environment` on why no entry exists, so the sweep counts the skip.
+  ``Verdict.gated ~aggregation:`Environment`` on why no entry exists, so the sweep counts the skip.
   The test's "clean" predicate is `Train.tune_placements`' own recording rule — uncontended, no
   terminal failure, a finite best — under which an abandoned flip is a measured loser, not spoiled
   evidence; a stricter test-side copy (requiring every report `Searched`/`Cache_replay`) disagrees
