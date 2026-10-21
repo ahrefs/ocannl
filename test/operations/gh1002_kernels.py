@@ -17,9 +17,9 @@ def check(condition, detail):
         raise SystemExit("FAIL: " + detail)
 
 
-def row(i, total, mma="none", vol=""):
+def row(i, total, mma="none", vol="", io=""):
     return (f"bench: kernel {i}/{total} 0.125 ms grid=[2;3] block=[4;8] "
-            f"mma:{mma} {vol}w: layer_q layer_k\n")
+            f"{io}mma:{mma} {vol}w: layer_q layer_k\n")
 
 
 with tempfile.TemporaryDirectory() as scratch:
@@ -37,10 +37,21 @@ with tempfile.TemporaryDirectory() as scratch:
 
     text = row(0, 1, "tile_mma 16x8x16 fp16", "vol:yes ")
     match = report.KERNEL.match(text.rstrip("\n"))
-    check(match is not None and match.group(6) == "tile_mma 16x8x16 fp16",
+    check(match is not None and match["mma"] == "tile_mma 16x8x16 fp16",
           "multiword mma descriptor must stop before vol")
     check(parse(text) == expected, "vol metadata must not contaminate writes")
     print("multiword mma text with vol preserves the write labels: true")
+
+    # gh-ocannl-1444: the cost model's bytes read/written sit between the geometry and mma:.
+    text = row(0, 1, "tile_mma 16x8x16 fp16", "vol:1 accumulation(s), pinned ", "io:4096/1024~ ")
+    match = report.KERNEL.match(text.rstrip("\n"))
+    check(match is not None and (match["read"], match["written"], match["io_flags"], match["mma"])
+          == ("4096", "1024", "~", "tile_mma 16x8x16 fp16"), "io field: %s" % (match and match.groupdict()))
+    check(parse(text) == expected, "the io field must not contaminate timing, geometry or writes")
+    legacy = report.KERNEL.match(row(0, 1).rstrip("\n"))
+    check(legacy is not None and legacy["read"] is None and legacy["writes"] == "layer_q layer_k",
+          "a row without io must still parse")
+    print("an io field parses into bytes read/written and leaves the other fields as they were: true")
 
     complete = "unrelated diagnostic\n" + row(0, 3) + row(1, 3) + row(2, 3)
     parsed = parse(complete)

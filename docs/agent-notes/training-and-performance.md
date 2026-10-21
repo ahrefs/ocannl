@@ -294,14 +294,34 @@ files.
   profiler plus AMD's HSA runtime alone, rootless; rocprofv3 puts that lib/ on LD_LIBRARY_PATH,
   so the step keeps the system's HIP and hiprtc. AMD's 7.1.0 HSA runtime segfaults in the first
   `hipStreamCreateWithPriority` under Ubuntu's 7.1 HIP (also under AMD's own 7.1 HIP); 7.2.4's
-  works. Two non-exclusive runs per box (correctness legs, one repeat each, not measurements):
-  every cell mapped; the in-step medians summed to 89-93% of the inference step p50 and 77-108%
-  of the training one -- above 100% on tuf's training cell, so before quoting a HIP share as
-  precise, check on an exclusive box how rocprofv3's dispatch stamps add up against the step. On
+  works. gh-ocannl-1392's first non-exclusive runs read in-step medians summing to 77-108% of the
+  training step, 108% on tuf's. That does not reproduce (gh-ocannl-1444): in an exclusive tuf
+  window (discrete gfx1102, request `wave-20261021-1444-tuf-amd-linux-1`, 3 repeats) gh-1392's
+  own revision `db06f2b6` summed to 23.87-24.16 ms against a traced step p50 of 26.20-26.43 ms
+  (91-92%; untraced p50 25.70 ms) and the then-current head to 18.22-18.33 of 20.28-20.35 ms (90%;
+  untraced 19.56), with no stamped intervals overlapping and every synced step's device span just
+  under its host time -- tracing costs about 2-3% of the step there, as on rog. Quote tuf's
+  in-step shares, then. The 108% stays unexplained -- the cell is gone, and it recorded neither
+  stamps' composition nor co-tenants; a shared-box co-tenant is the likeliest reading, not a
+  finding -- and every kprof cell now prints the composition that would expose it. **minix is the opposite case**: on its unified gfx1151 rocprofv3 stamps
+  whole batches of a step's dispatches (up to 128) with one start, with graph capture and without
+  (`--ocannl_gpu_graph_capture=false`), so a 16 ms step's segments span 0.4-2.3 ms of trace and
+  overlap by 85-97% of their summed durations. The durations themselves hold up -- graph on and
+  off sum to 14.95 and 14.87 ms, under the 15.8-16.9 ms step -- so per-kernel times and their sum
+  are usable there and positions are not; `kernel_attribution.py` flags such a step `STAMPS`. On
   tuf the inference cell's isolated minima summed to 1.63x their in-step medians in one run (56
   kernels ISO, single kernels 2.7-3.1x off identical twins) and 1.02x in the next (none ISO),
   while the in-step medians moved under 5%: on a shared box an isolated HIP window is as exposed
   to a co-tenant as CUDA's (above).
+- **kprof joins across builds by written nodes, not trace names** (gh-ocannl-1444). Repeats of one
+  build trace identical `<routine>__seg<j>` names (every repeat pair of staging#1202's,
+  staging#1206's and staging#1229's rog traces), but `j` shifts at every segment a change adds or
+  merges before it: on gh-ocannl-1413's base/keep tables 223 of 231 joined kernels had moved index.
+  `stable_key` keys a kernel on the nodes it writes minus the `<namespace>__n<id>` staging nodes the
+  schedule mints (their ids drift with any earlier site's staging); that joined 231 of 235 kernels,
+  the four left over being exactly gh-ocannl-1413's score chain. The `amdgpu` sysfs clock reads 0
+  MHz at 99% busy on tuf (gfxoff between bursts) and samples only every 250 ms, so its line is a
+  coarse reading, not a per-kernel clock.
 - That digest covers the compiled result, NOT the diagnostics. When re-measuring a search's
   decline census after changing only an error message or a log line, `rm benchmarks/autotune_cache/*.sexp`
   first — otherwise the second run reports `state=cache-replay`, `timed=0`, `declines=[]` and every

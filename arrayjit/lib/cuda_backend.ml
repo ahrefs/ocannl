@@ -1783,6 +1783,10 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
                   (attributes.max_grid_dim_x, attributes.max_grid_dim_y, attributes.max_grid_dim_z)
               );
               ("unified_addressing", [%sexp_of: bool] attributes.unified_addressing);
+              (* The memory model, as HIP's dump states it: an integrated part (a Jetson, a GB10)
+                 shares host DRAM, a discrete one has its own. gh1133_cells.sh's kprof step states
+                 it for every traced cell from here (gh-ocannl-1444). *)
+              ("integrated", [%sexp_of: bool] attributes.integrated);
             ]
           in
           Sexp.message "device" props)

@@ -680,8 +680,41 @@ cell is the step: cite the step cell. Each issue's cell:
   rocprofv3 and an HSA runtime that no rocprofiler-sdk can hook, so
   `benchmarks/rocprofv3-install.sh` unpacks AMD's profiler and HSA runtime (7.2.4) into
   `~/.local/opt` without root and prints the path to pass as `ROCPROFV3=`: the traced step keeps
-  the system's HIP runtime and kernel compiler and runs over AMD's HSA runtime alone. There is no
-  clock sampler on HIP.
+  the system's HIP runtime and kernel compiler and runs over AMD's HSA runtime alone. Where the box
+  has one amdgpu card, an amdgpu sysfs sampler (`CELL.clk.csv`: shader clock, power, temperature,
+  busy %, every 250 ms) runs beside the tracer and the attribution prints the clock of its busy,
+  ungated samples -- a coarse reading, a handful of samples over a short window. CUDA cells state
+  their memory model too (gh-ocannl-1444; the CUDA backend's own `integrated` query).
+  Every cell also says how its in-step durations add up (gh-ocannl-1444): per timed step the
+  durations summed, their union (the device's busy time) and their span, beside the host's step
+  p50 and queued step time. A step's segments run one after another, so stamped intervals that
+  overlap are flagged `STAMPS` (the stamps do not place the kernels in time), and a device span
+  longer than the host wall time enclosing it `CLOCK` (a time-base error). On rog (CUDA) and tuf
+  (discrete gfx1102) the union equals the sum and the device span sits just under the step; on
+  minix (unified gfx1151) rocprofv3 stamps batches of dispatches with one start, with or without
+  graph capture, so every minix cell reads `STAMPS` and only its per-kernel durations stand. In
+  an exclusive tuf window the in-step medians sum to 90-92% of the traced step, so gh-ocannl-1392's
+  108% does not reproduce (the agent note's HIP entry has the numbers). Each row carries the cost model's global-memory MB read/written (the
+  kernel table's `io:` field, staging tiles and scratch left out; `~` an upper bound, `?` code the model cannot see) and the in-step
+  bandwidth they imply. Repeats of one build trace identical kernel names and are compared in the
+  repeatability table; cells whose kernel lists differ (another treatment or revision, where every
+  segment index after a change shifts) get a **kernel join** against the `base` list, keyed by the
+  nodes each kernel writes with schedule-minted staging nodes (`tile__n<id>_...`) set aside, which
+  lists what moved, appeared or went.
+  **Without a tracer** -- Metal, cc, a WSL2 box, or a quick look before a kprof window --
+  `BENCH_KERNEL_TABLE=1` on any of the three runners is the per-kernel recipe: run the runner as a
+  step cell does (from `benchmarks/`, so it finds the suite's `ocannl_config`), e.g.
+  `BENCH_FIXTURE=fixtures/gpt2_mini_train_b256.safetensors BENCH_TUNE=0 BENCH_KERNEL_TABLE=1
+  ../_build/default/benchmarks/runners/ocannl/bench_gpt.exe --ocannl_backend=hip 2>cell.err`,
+  or take the `.err` of any `gh1133_cells.sh` step cell, where the table is on by default. Each
+  `bench: kernel i/n <ms> ms grid=[..] block=[..] io:<read>/<written> mma:.. vol:.. w: <nodes>`
+  row is one shipped segment in step order: its isolated min-of-20 host time (a launch and sync in
+  it), geometry, cost-model bytes, tensorization and written nodes. Sort by the time to find the
+  dominant kernels (`benchmarks/gh1002_cells.py`'s `kernels()` reads a complete table), and compare
+  two builds by written nodes, not by index. It is what found gh-ocannl-1412's 197 ms split first
+  pass on minix. What it cannot give is a share of the step: isolated times run 0.6x-2.3x off
+  in-step on rog (gh-ocannl-1347) and move up to 3.5x between repeats on a shared tuf, and only a
+  kprof cell's in-step column adds up to the step.
   `BENCH_CANON=1` (`bench_conv_diag`) prints whether the schedule cache can key the step's
   lowering (`Schedule_cache.complete` of its canonical form) and, when it cannot, why: the free
   symbols, the loop symbols bound twice (each with the first node its loop body reads) and the
