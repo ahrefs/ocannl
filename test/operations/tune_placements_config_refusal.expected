@@ -1,0 +1,5 @@
+real key: autotune_round_expansion=widest is stated for the call: true
+real key: the caller gets Utils.Invalid_config_value naming autotune_round_expansion: true
+arm B: the refusal was raised at its first attempt: true
+arm B: arm A had completed and reported before it: true
+arm B: the caller gets Utils.Invalid_config_value naming the key, not arm A's winner: true
