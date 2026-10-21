@@ -1276,10 +1276,11 @@ type report = {
           for {!tune} all of them, the shipped routine's included; for {!tune_deferred} all but what
           {!compile_deferred} then does (gh-ocannl-1440). Counted on the calling domain. *)
   replay_compiles : int;
-      (** Of [compiles], the compiles of a cache entry's replay: 1 on a {!Cache_replay}, and on a
-          call whose replay was rejected after compiling (the gh-ocannl-532 post-codegen check); 0
-          otherwise (gh-ocannl-1440). A deferred hit's shipped routine is this compile's code linked
-          again, so the cached schedule compiles once. *)
+      (** Of [compiles], those of a cache entry's replay (gh-ocannl-1440): one compile's count on a
+          {!Cache_replay} (1, or 2 on Metal, whose device compile is counted at link), and on a call
+          whose replay was rejected after compiling -- at its link, or by the gh-ocannl-532
+          post-codegen check; 0 otherwise. A deferred hit's shipped routine is this compile's code
+          linked again, so the cached schedule compiles once. *)
   beam_width : int;
       (** The beam width the search resolved ([?beam_width], else config [autotune_beam_width]): how
           many of the fastest candidates each round expands, and the admitted-timing depth an

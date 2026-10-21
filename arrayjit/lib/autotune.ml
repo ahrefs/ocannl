@@ -6779,8 +6779,11 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                it ships is this compile's code linked again rather than a second compile. *)
             let retained = ref None in
             let retain = if defer then Some (fun rt -> retained := Some rt) else None in
+            (* Counted as the backend compiles the replay completed, a replay whose link then failed
+               included (review round 2). *)
+            let before = Context.backend_compiles () in
             let replay_compile = compile_spec_real ?retain Outcome.Cache_replay spec in
-            if Result.is_ok replay_compile then Int.incr replay_compiles;
+            replay_compiles := !replay_compiles + (Context.backend_compiles () - before);
             match replay_compile with
             | Ok c when not (shipped_dispatchable ~is_gpu c) ->
                 logf "cache entry replays to an unparallelized routine, re-searching: %s"

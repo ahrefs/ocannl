@@ -1523,7 +1523,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                           Int.incr pruned;
                           logf "%s bound-pruned: floor %.4f ms >= incumbent %.4f ms" arm fl chain_ms;
                           None
-                      | _ when stop_for_call_budget () -> None
+                      | _ when stop_for_call_budget () -> Some `Cut
                       | _ ->
                           let apply c = Context.decide_reading c fa.LL.fa_flip [ tn ] in
                           let ctx' = apply base_ctx in
@@ -1544,8 +1544,14 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                 in
                 let outcomes = List.filter_map fc.LL.fc_alternatives ~f:try_alternative in
                 let results =
-                  List.filter_map outcomes ~f:(function `Measured m -> Some m | `Twin -> None)
+                  List.filter_map outcomes ~f:(function
+                    | `Measured m -> Some m
+                    | `Twin | `Cut -> None)
                 in
+                (* gh-ocannl-1440 review round 2: a group the call's budget cut is a comparison not
+                   made -- its unmeasured alternatives might have beaten the measured ones -- so
+                   nothing of it is committed, and its node stays open. *)
+                let group_cut = List.exists outcomes ~f:(function `Cut -> true | _ -> false) in
                 let best =
                   List.min_elt results ~compare:(fun (_, _, a, _, _, _, _) (_, _, b, _, _, _, _) ->
                       Float.compare a b)
@@ -1585,6 +1591,13 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                     | Some id when lost_to_incumbent -> Hashtbl.add lost ~key:id ~data:arm |> ignore
                     | _ -> ());
                 (match best with
+                | Some _ when group_cut ->
+                    logf
+                      "flip group %s: cut by the call budget after %d of its %d alternative(s); \
+                       nothing of it is committed"
+                      (Tn.debug_name tn) (List.length results)
+                      (List.length fc.LL.fc_alternatives)
+                | _ when group_cut -> ()
                 | Some (bfa, r, ms, ctx', timing', rep, _) when Float.(ms < chain_ms) -> (
                     chain := (r, ms, ctx', timing', rep);
                     accepted := (tn, bfa.LL.fa_flip) :: !accepted;

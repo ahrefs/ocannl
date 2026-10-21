@@ -26,6 +26,8 @@ open Ocannl.Operation.DSL_modules
 module FI = Ir.Resource_fault_injection
 module SO = Ir.Schedule_outcome
 open Verdict.Claims
+module SC = Ir.Schedule_cache
+module Cache_plant = Test_utils.Cache_plant
 
 let n = 8
 
@@ -65,20 +67,22 @@ type call = {
   shipped : Train.shipped;
   compiled : int;  (** [Context.backend_compiles] over the whole call. *)
   output : float array;
+  ios : SC.cache_io list;  (** The call's schedule-cache and placement-store operations. *)
 }
 
 let run ?placement_store tag =
   let reports = ref [] and shipped = ref None in
   delivered := 0;
   let before = Context.backend_compiles () in
-  let (ctx, routine), _record =
+  let ((ctx, routine), ios), _record =
     Scripted_search.scripted ~measure (fun () ->
-        Train.tune_placements ~beam_width:1 ~rounds:0 ~repeats:1 ~cache_dir ?placement_store
-          ~report:(fun r ->
-            Int.incr delivered;
-            reports := r :: !reports)
-          ~on_ship:(fun s -> shipped := Some s)
-          (Context.auto ()) loss comp Ir.Indexing.Empty)
+        SC.recording_cache_io (fun () ->
+            Train.tune_placements ~beam_width:1 ~rounds:0 ~repeats:1 ~cache_dir ?placement_store
+              ~report:(fun r ->
+                Int.incr delivered;
+                reports := r :: !reports)
+              ~on_ship:(fun s -> shipped := Some s)
+              (Context.auto ()) loss comp Ir.Indexing.Empty))
   in
   let compiled = Context.backend_compiles () - before in
   let ctx = Context.run ctx routine in
@@ -98,7 +102,7 @@ let run ?placement_store tag =
             Printf.sprintf "%s compiles %d replay %d"
               (Autotune.outcome_name r.Autotune.outcome)
               r.Autotune.compiles r.Autotune.replay_compiles)));
-  { reports; shipped; compiled; output }
+  { reports; shipped; compiled; output; ios }
 
 let replay (r : Autotune.report) =
   match r.Autotune.outcome with Autotune.Cache_replay -> true | _ -> false
@@ -125,6 +129,17 @@ let cold = run "cold"
 let warm = run "warm"
 let bypass = run ~placement_store:false "bypass"
 
+(* Every claim about a warm hit rests on the cold call's stores and the warm lookups: where the
+   context has no timing identity (no cache key) or the filesystem refused one of them, it is an
+   environment skip, never a pass (review round 2). What no refusal waives: the cold call's stores
+   were not all refused. *)
+let identity = Option.is_some (Context.timing_identity (Context.auto ()))
+let hit_claim ios label b = Cache_plant.unless_unkeyed_or_refused ~identity ios label b
+
+let () =
+  Cache_plant.not_every_store_refused ~expected:identity
+    "cold: not every schedule-cache store was refused" cold.ios
+
 let () =
   p "cold: both arms searched, and the A/B winner, arm B, shipped un-replayed"
     (List.length cold.reports = 2
@@ -136,22 +151,24 @@ let () =
   p_all "cold: no search replayed a cached schedule" cold.reports ~f:(fun r ->
       r.Autotune.replay_compiles = 0);
   accounted "cold" cold;
-  p "warm: the recorded decision replayed in one search, a schedule-cache hit"
+  let warm_ios = cold.ios @ warm.ios in
+  hit_claim warm_ios "warm: the recorded decision replayed in one search, a schedule-cache hit"
     (warm.shipped.ship_replayed && match warm.reports with [ r ] -> replay r | _ -> false);
-  p "warm: the hit compiled its schedule once, to validate it"
-    (match warm.reports with [ r ] -> r.Autotune.replay_compiles = 1 | _ -> false);
-  p "warm: the shipped routine took no compile -- the validated code, linked again"
+  hit_claim warm_ios "warm: the hit compiled its schedule once, to validate it"
+    (match warm.reports with [ r ] -> r.Autotune.replay_compiles = one_compile | _ -> false);
+  hit_claim warm_ios "warm: the shipped routine took no compile -- the validated code, linked again"
     (warm.shipped.ship_compiles = 0);
   accounted "warm" warm;
   let shipped_report = bypass.shipped.ship_report in
-  p "bypass: both arms compared afresh, and arm B shipped, a schedule-cache hit"
+  let bypass_ios = cold.ios @ bypass.ios in
+  hit_claim bypass_ios "bypass: both arms compared afresh, and arm B shipped, a schedule-cache hit"
     (List.length bypass.reports = 2
     && (not bypass.shipped.ship_replayed)
     && String.equal bypass.shipped.ship_arm "B"
     && Option.exists shipped_report ~f:replay);
-  p "bypass: that hit compiled its schedule once"
-    (Option.exists shipped_report ~f:(fun r -> r.Autotune.replay_compiles = 1));
-  p "bypass: the shipped arm took no compile" (bypass.shipped.ship_compiles = 0);
+  hit_claim bypass_ios "bypass: that hit compiled its schedule once"
+    (Option.exists shipped_report ~f:(fun r -> r.Autotune.replay_compiles = one_compile));
+  hit_claim bypass_ios "bypass: the shipped arm took no compile" (bypass.shipped.ship_compiles = 0);
   accounted "bypass" bypass;
   p_all2 "warm: the relinked routine computes the cold output bit for bit" warm.output cold.output
     ~f:Float.equal;
@@ -168,11 +185,12 @@ let materialized () =
 
 let deferred ?refuse () =
   let report = ref None in
-  let d, _record =
+  let (d, ios), _record =
     Scripted_search.scripted ~measure (fun () ->
-        Autotune.tune_deferred ~beam_width:1 ~rounds:0 ~repeats:1 ~cache_dir
-          ~report:(fun r -> report := Some r)
-          (materialized ()) comp Ir.Indexing.Empty)
+        SC.recording_cache_io (fun () ->
+            Autotune.tune_deferred ~beam_width:1 ~rounds:0 ~repeats:1 ~cache_dir
+              ~report:(fun r -> report := Some r)
+              (materialized ()) comp Ir.Indexing.Empty))
   in
   let refused = ref 0 in
   let compile () =
@@ -194,7 +212,7 @@ let deferred ?refuse () =
             | _ -> ())
           ~f:(fun () -> Autotune.compile_deferred d)
   in
-  (d, !report, compile, refused)
+  (d, !report, compile, refused, cold.ios @ ios)
 
 let run_routine (ctx, routine) =
   let ctx = Context.run ctx routine in
@@ -203,22 +221,22 @@ let run_routine (ctx, routine) =
   values
 
 let () =
-  let d, report, compile, _ = deferred () in
-  p "deferred: the warm search is a cache hit" (Option.exists report ~f:replay);
+  let d, report, compile, _, ios = deferred () in
+  hit_claim ios "deferred: the warm search is a cache hit" (Option.exists report ~f:replay);
   p "deferred: nothing compiled for the ship before compile_deferred"
     (Autotune.deferred_compiles d = 0);
   let first = compile () in
   let second = compile () in
-  p "deferred: the shipped routine is the validated code linked again, no compile"
+  hit_claim ios "deferred: the shipped routine is the validated code linked again, no compile"
     (Autotune.deferred_compiles d = 0 && not (Autotune.shipped_substitute d));
   p "deferred: a second compile_deferred returns the same routine"
     (phys_equal (fst first) (fst second) && phys_equal (snd first) (snd second));
   p_all2 "deferred: it computes the cold output bit for bit" (run_routine first) cold.output
     ~f:Float.equal;
-  let d, _, compile, refused = deferred ~refuse:() () in
+  let d, _, compile, refused, ios = deferred ~refuse:() () in
   let shipped = compile () in
-  p "refused relink: the device refused the relink's allocation once" (!refused = 1);
-  p "refused relink: the untuned default shipped in the schedule's place"
+  hit_claim ios "refused relink: the device refused the relink's allocation once" (!refused = 1);
+  hit_claim ios "refused relink: the untuned default shipped in the schedule's place"
     (Autotune.shipped_substitute d && Autotune.deferred_compiles d >= 1);
   p_all2 "refused relink: the untuned default computes the cold output bit for bit"
     (run_routine shipped) cold.output ~f:Float.equal

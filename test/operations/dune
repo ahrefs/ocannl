@@ -6518,7 +6518,14 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules deferred_hit_compiles)
- (libraries base ocannl stdio arrayjit.verdict ll_test scripted_search)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  ll_test
+  scripted_search
+  test_utils)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

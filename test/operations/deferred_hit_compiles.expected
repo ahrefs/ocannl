@@ -1,3 +1,4 @@
+cold: not every schedule-cache store was refused: true
 cold: both arms searched, and the A/B winner, arm B, shipped un-replayed: true
 cold: the searched winner's shipped routine is one compile, from its saved form: true
 cold: no search replayed a cached schedule: true
