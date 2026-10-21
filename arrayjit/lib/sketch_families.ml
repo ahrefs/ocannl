@@ -3360,18 +3360,21 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
      k-tile at 8 or 16: on an uncoalesced multi-axis contraction the tile is judged against the
      innermost extent alone, one head. The contraction-coalesced site (gh-ocannl-1279) contracts
      over one merged k, so its menu is a bounded K menu instead: depths 256 down to 32 — 256 being
-     gpt2_mini's whole [h * e], one k-block per output tile — over two 64-thread block shapes, a
-     16x16 tile of 2x2 register tiles and a 32x32 tile of 4x4 ones, deepest first. The usual
-     judgments below bound it: the staged tiles' workgroup-memory floor (16x16x256 in f32 needs 32
-     KiB, exactly Metal's threadgroup limit, and 32x32x256 twice that, which no current GPU's limit
-     admits), the thread cap, pad composition and pad waste, and the launch caps at the leaf. The
-     shallow 8/16 depths are not repeated here: over a merged k they are the family's own tiles of
-     the uncoalesced site, already seeded beside this branch. *)
+     gpt2_mini's whole [h * e], one k-block per output tile — over three block shapes, deepest
+     first: a 16x16 tile of 2x2 register tiles and a 32x32 tile of 4x4 ones (64 threads each), and
+     a 64x64 tile of 4x4 ones (256 threads), the block the uncoalesced family's CUDA winner uses
+     (gh-ocannl-1459). The usual judgments below bound it: the staged tiles' workgroup-memory floor
+     (in f32, 16x16x256 needs 32 KiB, exactly Metal's threadgroup limit, 32x32x256 twice that; the
+     64x64 block needs 32 KiB at depth 64, so CUDA's 48 KiB admits it at 64 and 32, HIP's 64 KiB at
+     128 too, Metal's 32 KiB at 64 exactly), the thread cap, pad composition and pad waste, and the
+     launch caps at the leaf. The shallow 8/16 depths are not repeated here: over a merged k they
+     are the family's own tiles of the uncoalesced site, already seeded beside this branch. *)
+  let coalesced_k_depths = [ 256; 128; 64; 32 ] in
   let blocktile_geometries () =
     match coalesced with
     | Some Coalesce_contraction ->
-        List.concat_map [ 256; 128; 64; 32 ] ~f:(fun bk ->
-            [ (16, 16, bk, 2, 2); (32, 32, bk, 4, 4) ])
+        List.concat_map coalesced_k_depths ~f:(fun bk ->
+            [ (16, 16, bk, 2, 2); (32, 32, bk, 4, 4); (64, 64, bk, 4, 4) ])
     | Some Coalesce_columns | None ->
         [
           (64, 64, 8, 4, 4);
@@ -3576,7 +3579,7 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                advertised limit refutes every completion below the child pre-compile, where
                [Schedule.check_hardware_limits_classified] would otherwise reject it one candidate
                compile at a time. [None]/unknown limit refutes nothing. *)
-            let staged_tiles_exceed ~bm ~bn ~bk ~depth =
+            let staged_tiles_exceed ?(masked_fragment = true) ~bm ~bn ~bk ~depth () =
               match limits.Ir.Backend_intf.max_workgroup_memory_bytes with
               | Some cap when bk > 0 ->
                   (* The gate's own charge ([Sched.kernel_workgroup_bytes]): each operand tile one
@@ -3584,13 +3587,27 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                      per-kernel scratch of the site's triple, which every completion's [Tile_mma]
                      carries — Metal's coordinate table where its boundary converts (gh-ocannl-1330,
                      gh-ocannl-1255). *)
+                  (* A geometry padding the row or column role pad-masks the accumulator, and on
+                     a staged pipeline [Tensorize] places that masked fragment, a [bm x bn] tile at
+                     [d]'s storage precision, in workgroup-shared memory beside the operand tiles
+                     (gh-ocannl-1459: the coalesced K menu's deep tiles reach the limit with it,
+                     32x32x128 f32 on Metal's 32 KiB). A dividing geometry has no mask, so no
+                     fragment is charged: the floor stays a floor. A box of row blocks spanning
+                     dividing and padding members is judged without it ([~masked_fragment:false]):
+                     the charge is not monotone in [bm], so its corner would not bound the box. *)
+                  let masked_fragment =
+                    if (not masked_fragment) || (divides bm site.m_ni && divides bn site.m_nj) then
+                      []
+                    else [ bm * bn * Ir.Ops.prec_in_bytes d_prec ]
+                  in
                   let charge ~mma_triples =
                     Sched.kernel_workgroup_bytes ~capabilities
                       ~arrays:
-                        [
-                          depth * bm * bk * Ir.Ops.prec_in_bytes a_prec;
-                          depth * bk * bn * Ir.Ops.prec_in_bytes b_prec;
-                        ]
+                        ([
+                           depth * bm * bk * Ir.Ops.prec_in_bytes a_prec;
+                           depth * bk * bn * Ir.Ops.prec_in_bytes b_prec;
+                         ]
+                        @ masked_fragment)
                       ~mma_triples
                   in
                   let bytes = charge ~mma_triples:[ (d_prec, a_prec, b_prec) ] in
@@ -3598,13 +3615,17 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                   if bytes > cap then
                     Some
                       (Printf.sprintf
-                         "staged operand tiles need %d bytes of workgroup memory%s%s, exceeding \
+                         "staged operand tiles need %d bytes of workgroup memory%s%s%s, exceeding \
                           the %d-byte limit"
                          bytes
                          (if depth > 1 then Printf.sprintf " at pipeline depth %d" depth else "")
                          (if scratch > 0 then
                             Printf.sprintf " (%d of them tile-MMA scratch)" scratch
                           else "")
+                         (match masked_fragment with
+                         | [ f ] ->
+                             Printf.sprintf " (with the %d-byte pad-masked accumulator fragment)" f
+                         | _ -> "")
                          cap)
                   else None
               | _ -> None
@@ -3618,6 +3639,21 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                ([leaves]) stays the curated menu; the model-argmin driver lifts it under config
                [model_default_geometry_lattice]. Curated staged pairs reappear as lattice singletons
                — the search may re-score them, it never re-times anything. *)
+            (* The curated geometries [(bm, bn, bk)]; [bk = 0] is the unstaged full-K block. On the
+               contraction-coalesced site (gh-ocannl-1459) the menu is a staged K menu like the
+               scalar one ([blocktile_geometries]): depths 256 down to 32 over the two row blocks,
+               deepest first, bounded by the same judgments (the staged-tile floor, [k_menu_gate],
+               pad composition and waste). No unstaged geometry: it would read the operands in place
+               through their flattened [Sub_axis] address, which [Tensorize] declines; staging
+               normalizes them into dense cooperative tiles first, and the accumulator is the site's
+               own, uncoalesced. *)
+            let mma_geometries () =
+              match coalesced with
+              | Some Coalesce_contraction ->
+                  List.concat_map coalesced_k_depths ~f:(fun bk -> [ (16, w, bk); (32, w, bk) ])
+              | Some Coalesce_columns | None ->
+                  [ (16, w, 0); (32, w, 0); (16, w, 32); (32, w, 32); (32, w, 16) ]
+            in
             let lattice_child =
               if site.m_ni / tm_t = 0 || site.m_nk / tk_t = 0 then
                 Sspace.Refuted
@@ -3647,14 +3683,15 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                             let bms = Array.of_list (mults tm_t ~upto:site.m_ni) in
                             let bks = Array.of_list (mults tk_t ~upto:site.m_nk) in
                             interval_axis ~axis:`Bm ~values:bms
-                              ~box_verdict:(fun bm_lo _bm_hi ->
-                                staged_tiles_exceed ~bm:bm_lo ~bn:w ~bk:bks.(0) ~depth:1)
+                              ~box_verdict:(fun bm_lo bm_hi ->
+                                staged_tiles_exceed ~masked_fragment:(bm_lo = bm_hi) ~bm:bm_lo ~bn:w
+                                  ~bk:bks.(0) ~depth:1 ())
                               ~singleton:(fun bm ->
                                 Sspace.Child
                                   (lazy
                                     (interval_axis ~axis:`Bk ~values:bks
                                        ~box_verdict:(fun bk_lo _bk_hi ->
-                                         staged_tiles_exceed ~bm ~bn:w ~bk:bk_lo ~depth:1)
+                                         staged_tiles_exceed ~bm ~bn:w ~bk:bk_lo ~depth:1 ())
                                        ~singleton:(fun bk ->
                                          if not (wide_scope_ok (scope_of_bk bk)) then
                                            Sspace.Refuted (wide_scope_witness (scope_of_bk bk))
@@ -3679,9 +3716,7 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                       worth one compile is not worth its twins'. An unstaged geometry divides by the
                       gates below, so its ratio is 1. The lattice is already excluded wholesale. *)
                    judge_pad_waste
-                     (List.map
-                        [ (16, w, 0); (32, w, 0); (16, w, 32); (32, w, 32); (32, w, 16) ]
-                        ~f:(fun (bm, bn, bk) ->
+                     (List.map (mma_geometries ()) ~f:(fun (bm, bn, bk) ->
                           ( Family_decision.Geometry
                               (Gpu_mma { g_bm = bm; g_bn = bn; g_bk = bk; g_tm = 0; g_tn = 0 }),
                             site_pad_axes ~bm ~bn ~bk,
@@ -3692,7 +3727,7 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                                  ( wide_scope_ok (scope_of_bk bk),
                                    wide_scope_witness (scope_of_bk bk) );
                                ]
-                              @ (match staged_tiles_exceed ~bm ~bn ~bk ~depth:1 with
+                              @ (match staged_tiles_exceed ~bm ~bn ~bk ~depth:1 () with
                                 | Some w -> [ (false, w) ]
                                 | None -> [])
                               @
@@ -3709,7 +3744,7 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                                        intrinsic tile k=%d"
                                       (k_extent_label site) tk_t );
                                 ]
-                              else [ nmul "bk" bk ~of_:"k" tk_t ])
+                              else nmul "bk" bk ~of_:"k" tk_t :: k_menu_gate bk)
                               (fun () ->
                                 let base =
                                   {
@@ -3766,7 +3801,7 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                                                   range 1..2 (Schedule.apply_stage)"
                                                  d)
                                           else
-                                            match staged_tiles_exceed ~bm ~bn ~bk ~depth:d with
+                                            match staged_tiles_exceed ~bm ~bn ~bk ~depth:d () with
                                             | Some w ->
                                                 (* Legality beats policy: the multiplied footprint
                                                    refutes before the measured-cost exclusions
@@ -4819,15 +4854,20 @@ let sketch_seed_params ?capabilities ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.
    the schedule will actually build, and each leaf is stamped with its layout. A separate branch
    beside {!sketch_seed_params}, not a level of its tree: the tree is over one lowering, this branch
    over others. Columns first, then the contraction, whose leaves come from its own K menu
-   ([matmul_flavor_tree ~coalesced]); a site has at most one pair of each. GPU scalar blocktile
-   leaves only: the residual the layouts target is the scalar family's tile extent (#915 closed the
-   tensorized gap on CUDA tf32, and gfx1151 has no f32 tile shape), and the tensorized pipelines'
-   [Tensorize] reads each operand's last two axes as its tile, which a [Sub_axis] run is not.
-   Unfused only: [Fuse_epilogue]'s tail is a nest over the target's own dims, which a coalesced
-   output no longer indexes axis by axis (and the projections have no tail); for the contraction
-   layout, admitting the tensorized, hoisted-packing and fused flavors is a follow-up with its own
-   executed test. The probe's minted symbols are discarded: the seeds carry none, and a seeding pass
-   must not shift the names every later compile mints. *)
+   ([matmul_flavor_tree ~coalesced]); a site has at most one pair of each. GPU leaves only.
+
+   What each layout admits follows from WHAT it flattens. The columns layout flattens the
+   accumulator: [Tensorize] reads the output fragment axis by axis and [Fuse_epilogue] relocates
+   its tail per axis of the store-back site, and both decline a [Sub_axis] there, so it keeps the
+   unfused scalar blocktile leaves (the residual it targets is the scalar family's tile extent
+   anyway: #915 closed the tensorized gap on CUDA tf32). The contraction layout flattens only the
+   operands, and every pipeline it seeds stages them first, so the micro-kernel reads dense tiles
+   and the accumulator is the site's own (gh-ocannl-1459): it admits the scalar leaves, the STAGED
+   tensorized ones (its mma menu has no unstaged geometry, [matmul_flavor_tree]), and both their
+   fused twins. The CPU pipelines' hoisted packing is not reached: its link-time packing program
+   addresses each source axis by its own dim, and refuses a flattened source. The probe's minted
+   symbols are discarded: the seeds carry none, and a seeding pass must not shift the names every
+   later compile mints. *)
 (* Each layout's verdict, for the seeding census (gh-ocannl-1407): its seeds, and [cv_refusal]
    exactly when it has none. Empty off GPU. *)
 type coalesced_verdict = {
@@ -4843,6 +4883,16 @@ let coalesced_seeding ?capabilities ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.h
     Idx.discarding_symbols (fun () ->
         List.map [ Coalesce_columns; Coalesce_contraction ] ~f:(fun layout ->
             let refused why = { cv_layout = layout; cv_seeds = []; cv_refusal = Some why } in
+            let admitted, admits =
+              match layout with
+              | Coalesce_columns ->
+                  ( (fun p -> p.sk_gpu && (not p.sk_mma) && not p.sk_epilogue),
+                    "unfused GPU scalar-blocktile leaf" )
+              | Coalesce_contraction ->
+                  (* The menu proposes no unstaged tensorized geometry; the filter restates the
+                     boundary so a menu change cannot cross it silently. *)
+                  ((fun p -> p.sk_gpu && ((not p.sk_mma) || p.sk_bk > 0)), "staged GPU leaf")
+            in
             match coalesced ~layout opt with
             | None -> refused "no such loop pair at a matmul site, or the Coalesce op declines it"
             | Some (_, prepared) -> (
@@ -4853,14 +4903,10 @@ let coalesced_seeding ?capabilities ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.h
                       matmul_seed_params ~coalesced:layout ?capabilities ~is_gpu ~is_cpu ~limits
                         ~opt:prepared site
                       |> List.filter_map ~f:(fun p ->
-                          if p.sk_gpu && (not p.sk_mma) && not p.sk_epilogue then
-                            Some { p with sk_coalesce = Some layout }
-                          else None)
+                          if admitted p then Some { p with sk_coalesce = Some layout } else None)
                     in
                     match seeds with
-                    | [] ->
-                        refused
-                          "the coalesced site's family has no unfused GPU scalar-blocktile leaf"
+                    | [] -> refused ("the coalesced site's family has no " ^ admits)
                     | _ -> { cv_layout = layout; cv_seeds = seeds; cv_refusal = None }))))
 
 let coalesced_seed_params ?capabilities ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
@@ -4981,7 +5027,22 @@ let seeding_census_lines ~where (c : seeding_census) : string list =
         in
         match v.cv_refusal with
         | Some why -> detail "coalesced %s: refused: %s" layout why
-        | None -> detail "coalesced %s: %d seeds" layout (List.length v.cv_seeds))
+        | None ->
+            (* The leaves' distinct geometries, in seeding order (gh-ocannl-1459): the batch,
+               epilogue and twin flavors of one geometry share its entry, so the line says which
+               tiles the layout seeds without restating every flavor. *)
+            let geometry (q : sketch_params) =
+              if q.sk_mma then Printf.sprintf "mma %dx%dx%d" q.sk_bm q.sk_bn q.sk_bk
+              else Printf.sprintf "%dx%dx%d/%dx%d" q.sk_bm q.sk_bn q.sk_bk q.sk_tm q.sk_tn
+            in
+            let geometries =
+              List.fold v.cv_seeds ~init:[] ~f:(fun acc q ->
+                  let g = geometry q in
+                  if List.mem acc g ~equal:String.equal then acc else g :: acc)
+              |> List.rev
+            in
+            detail "coalesced %s: %d seeds: %s" layout (List.length v.cv_seeds)
+              (String.concat ~sep:" " geometries))
   in
   (head :: family_details) @ coalesced @ nests
 

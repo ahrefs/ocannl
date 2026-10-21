@@ -1569,6 +1569,14 @@ type report = {
           {!Cache_replay} carries the storing search's steps, like its times, when that search had
           this call's shape ({!Ir.Schedule_cache.trajectory}); empty when nothing was timed, for an
           entry older than the field, and for one stored under another shape. *)
+  compile_cost : Ir.Compile_cost.t;
+      (** The compiles this call made before delivering this report -- the baseline's, each
+          candidate attempt's, a cache replay's, the winner's and any untuned fallback's -- summed
+          by phase (gh-ocannl-1314), each as one {!compile_record} reports it. A deferred call's
+          ({!tune_deferred}) shipping compile runs after the report and is in its own
+          {!compile_record} only. Unlike the times above, it describes this call even on a
+          {!Cache_replay}. [kernels_compiled < kernels] when the backend reused compiled kernels
+          ([hip_kernel_cache_mib]). *)
 }
 
 val no_search_report : timing:timing_mode -> report
@@ -1612,6 +1620,12 @@ val no_search_report : timing:timing_mode -> report
       candidate is therefore inside the one its last [candidate] line names. The rate is bounded by
       the attempts themselves, not by a clock: a time bound would leave a window in which the
       candidate being worked on is unnamed.
+    - [compiled] ({!tune}, as every compile it makes RETURNS, gh-ocannl-1314; see
+      {!compile_record}): [routine], [stage], [attempt], [verdict], [took_s] (this compile's wall),
+      [lower_s], [transform_s], [codegen_s], [device_s] ([none] where the backend compiles at link),
+      [link_s], [kernels] and [kernels_compiled]. A candidate's [compiled] line follows its
+      [candidate] line; a compile killed before returning writes none, so the stream's last
+      [candidate] or [stage] line still names it.
     - [stage] ({!tune}): [routine], [elapsed_s], [stage], [attempts], [compile_s], [timing_s],
       written BEFORE each step outside the candidates that can block for long: [base_compile],
       [cache_replay], [baseline_timing], [seed_enumeration] (the lowerings the seeds are derived
@@ -2833,6 +2847,30 @@ val install_timing_call_observer : (timing_call -> unit) -> unit
     in another domain neither reaches nor disturbs it — the treatment [autotune_log] got for
     searches in different domains (see {!with_streams}). A newly spawned domain starts with none.
     How the benchmarks' [BENCH_TIMING_TRACE] is installed. No configuration selects it. *)
+
+type compile_record = {
+  compile_routine : string;
+  compile_stage : string;
+      (** [candidate] for a search attempt; otherwise the progress stage the compile ran in:
+          [base_compile], [cache_replay], [cache_replay_compile], [baseline_relink],
+          [untuned_default_compile], [untuned_control], [winner_compile]. *)
+  compile_attempt : string;  (** The candidate's label; [baseline] for the base compile. *)
+  compile_verdict : string;
+      (** [compiled] (it reached link), [dedup] (a candidate the search already compiled, answered
+          before codegen), [refused] (the typed [Not_dispatched] refusal before codegen), [failed]
+          (any other failure, or an exception). *)
+  compile_wall_s : float;  (** The whole compile's host wall, link included. *)
+  compile_cost : Ir.Compile_cost.t;  (** Its phases, which sum to at most [compile_wall_s]. *)
+}
+(** One compile a {!tune} call made, and what it cost (gh-ocannl-1314): written to the progress
+    stream as a [compiled] event, onto [autotune_log], into {!report.compile_cost}, and to the
+    observers of {!install_compile_observer}. A host wall-clock reading, not a timing claim; it is
+    never part of a candidate's measured time. *)
+
+val install_compile_observer : (compile_record -> unit) -> unit
+(** Adds an observer of every compile a {!tune} call IN THE CALLING DOMAIN makes, as
+    {!install_timing_call_observer} does for timing calls: trace-only, per domain, observers called
+    in installation order. How the benchmarks' [BENCH_TIMING_TRACE] prints compiles. *)
 
 val with_timing_call_observer : (timing_call -> unit) -> (unit -> 'a) -> 'a
 (** [with_timing_call_observer f body] runs [body] with [f] added as by

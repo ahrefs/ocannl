@@ -1517,6 +1517,9 @@ module Impl = struct
         Some metal_file)
       else None
     in
+    (* The kernels this library compiles, counted where Metal's compiler runs (gh-ocannl-1314):
+       [Compile_driver] counted them as rendered only. *)
+    Compile_cost.record_kernels ~rendered:0 ~compiled:(List.length routine_names);
     try Me.Library.on_device device ~source options
     with Failure msg ->
       let options_rendered = Compiler_options.render_metal option_state in
@@ -1585,7 +1588,8 @@ using namespace metal;|}
   let compile ~name bindings lowered =
     let metal_source, kparams, func_name, launch =
       Compile.compile ~name bindings lowered ~includes:metal_includes
-        ~builtins:Builtins_metal.builtins ~conditional_includes ~compile_source ()
+        ~builtins:Builtins_metal.builtins ~conditional_includes ~compiles_source:false
+        ~compile_source ()
     in
     {
       metal_source;
@@ -1600,7 +1604,8 @@ using namespace metal;|}
   let compile_batch ~names bindings lowereds =
     let metal_source, entries =
       Compile.compile_batch ~names bindings lowereds ~includes:metal_includes
-        ~builtins:Builtins_metal.builtins ~conditional_includes ~compile_source ()
+        ~builtins:Builtins_metal.builtins ~conditional_includes ~compiles_source:false
+        ~compile_source ()
     in
     let funcs = Array.map entries ~f:(fun (kparams, name, launch) -> (name, kparams, launch)) in
     let routine_names =

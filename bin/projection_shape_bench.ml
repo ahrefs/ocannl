@@ -1027,12 +1027,15 @@ let () =
           (* The best seed of each class under EACH statistic the gate reads, deduplicated: when the
              statistics rank differently (the gh-755 question), the best under the min-batch or
              queued reading is in the round too, not only the median's pick. *)
-          (* Classes: tensorized, and the scalar seeds per coalesced layout (none, columns,
-             contraction), so the best uncoalesced seed and the best coalesced one of each layout
-             are all re-timed together (gh-ocannl-1279's comparison reads them from this round). *)
+          (* Classes: the scalar seeds per coalesced layout (none, columns, contraction), and the
+             tensorized ones uncoalesced and contraction-coalesced (gh-ocannl-1459: the only layout
+             with tensorized leaves), so the best uncoalesced seed and the best coalesced one of
+             each layout and pipeline are all re-timed together (gh-ocannl-1279's comparison reads
+             the scalar classes from this round). *)
           List.concat_map
             [
               (true, None);
+              (true, Some Autotune.Coalesce_contraction);
               (false, None);
               (false, Some Autotune.Coalesce_columns);
               (false, Some Autotune.Coalesce_contraction);
@@ -1040,7 +1043,7 @@ let () =
             ~f:(fun (mma, layout) ->
               let rows =
                 List.filter seed_rows ~f:(fun ((q : Autotune.sketch_params), _) ->
-                    Bool.equal q.sk_mma mma && (mma || Poly.equal q.sk_coalesce layout))
+                    Bool.equal q.sk_mma mma && Poly.equal q.sk_coalesce layout)
               in
               List.filter_map
                 [ (fun st -> st.st_med); (fun st -> st.st_min); (fun st -> st.st_queued) ]

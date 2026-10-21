@@ -967,7 +967,9 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     let (name : string), (lowered : Low_level.optimized) =
       match prelowered with
       | None ->
-          lower_assignments ~limits:(Device.hardware_limits ()) optim_ctx ?name bindings comp.asgns
+          Compile_cost.time_lower (fun () ->
+              lower_assignments ~limits:(Device.hardware_limits ()) optim_ctx ?name bindings
+                comp.asgns)
       | Some (lowered : Low_level.optimized) ->
           (* gh-ocannl-562 test seam: the caller supplies the lowering. Substituting only the
              codegen input ([lowered_transform]) is not enough to execute hand-built IR — the
@@ -983,6 +985,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     let limits = Device.hardware_limits () in
     let capabilities = Device.codegen_capabilities () in
     let lowereds =
+      Compile_cost.time_transform @@ fun () ->
       Schedule_outcome.tag Schedule_outcome.Transform (fun () ->
           match lowered_transform with
           | Some transform -> (
@@ -1032,7 +1035,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
           Schedule.check_hardware_limits_classified ~name ~limits ~capabilities single;
           let compiled =
             Schedule_outcome.tag Schedule_outcome.Backend_compile (fun () ->
-                compile ~name bindings single)
+                Compile_cost.time_backend_compile (fun () -> compile ~name bindings single))
           in
           (Either.First compiled, single)
       | segments ->
@@ -1041,7 +1044,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
               Schedule.check_hardware_limits_classified ~name:seg_name ~limits ~capabilities seg);
           let batch =
             Schedule_outcome.tag Schedule_outcome.Backend_compile (fun () ->
-                compile_batch ~names:(Array.of_list seg_names) bindings (Array.of_list segments))
+                Compile_cost.time_backend_compile (fun () ->
+                    compile_batch ~names:(Array.of_list seg_names) bindings (Array.of_list segments)))
           in
           (* Keep the whole-routine (pre-fission) lowered code: context allocation and I/O analysis
              need the union footprint, and each segment's [optimized] carries only its filtered

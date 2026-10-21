@@ -333,6 +333,42 @@ let () =
       p_all "matmul: each coalesced layout names a refusal exactly when it seeds nothing" verdicts
         ~f:(fun v ->
           Bool.equal (Option.is_some v.Autotune.cv_refusal) (List.is_empty v.Autotune.cv_seeds)));
+  (* gh-ocannl-1459: an out projection [d[b,s,j] += w[j,h,e] * x[b,s,h,e]] under CUDA-like limits
+     (48 KiB of workgroup memory, 1024 threads): the contraction layout's census line names the
+     leaves' geometries, the 256-thread 64x64 block among them (64 rows of [s], so the block divides
+     the row role). *)
+  let ow =
+    NTDSL.init ~l:"census_ow" ~prec:Ir.Ops.single ~o:[ 64 ] ~i:[ 8; 32 ]
+      ~f:(Ll_test.cycle ~dims:[| 64; 8; 32 |] ~modulus:11 ~offset:(-11.) ~stride:0.5)
+      ()
+  in
+  let ox =
+    NTDSL.init ~l:"census_ox" ~prec:Ir.Ops.single ~b:[ 2; 64 ] ~o:[ 8; 32 ]
+      ~f:(Ll_test.cycle ~dims:[| 2; 64; 8; 32 |] ~modulus:13 ~offset:1. ~stride:0.25)
+      ()
+  in
+  let%op oproj = ow * ox in
+  let oopt = lowering "census_outproj" oproj in
+  let cuda_like =
+    {
+      Ir.Backend_intf.no_hardware_limits with
+      max_workgroup_memory_bytes = Some 49152;
+      max_threads_per_workgroup = Some 1024;
+    }
+  in
+  let occ =
+    Autotune.seeding_census ~coalesced:true ~is_gpu:true ~is_cpu:false ~limits:cuda_like oopt
+  in
+  show ~where:"out projection gpu, coalesced, CUDA-like limits" occ;
+  let contraction_line =
+    List.find
+      (Autotune.seeding_census_lines ~where:"o" occ)
+      ~f:(mentions ~sub:"coalesced contraction: ")
+  in
+  p "out projection: the coalesced contraction line names the 64x64x64 leaf under 48 KiB"
+    (Option.exists contraction_line ~f:(mentions ~sub:" 64x64x64/4x4"));
+  p "out projection: the coalesced contraction line names no 64x64x128 leaf under 48 KiB"
+    (Option.exists contraction_line ~f:(fun l -> not (mentions l ~sub:" 64x64x128/")));
   p "matmul: the head line names the family and its refutation count"
     (match Autotune.seeding_census_lines ~where:"m" mc with
     | head :: _ -> mentions head ~sub:"family=matmul" && mentions head ~sub:" refuted="

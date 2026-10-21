@@ -199,9 +199,11 @@ files.
   serial in the kernel) ties its `bgrid` twin and measures 3-36x slower, and a coalesced leaf ties
   its uncoalesced twin while the fastest leaf at q/k/v was `64x64x8/4x4 bgrid coal-n` (1.25-1.75x
   under the seeded plan). Coalesced leaves therefore stay out of `model_default` until the score
-  prices launch parallelism; they ARE numerics-preserving (`coalesce_numerics`: every
-  `coal-n`/`coal-k` seed computes the scalar family's values bitwise on order-sensitive inputs, on
-  CUDA, HIP and Metal), so admission is a score question only.
+  prices launch parallelism; their scalar leaves ARE numerics-preserving (`coalesce_numerics`: every
+  scalar `coal-n`/`coal-k` seed computes the scalar family's values bitwise on order-sensitive
+  inputs, on CUDA, HIP and Metal), so admission is a score question only. The contraction layout's
+  tensorized and fused leaves (gh-ocannl-1459) are no more admissible than their uncoalesced twins:
+  `model_explain`'s coalesced rows judge each leaf by its uncoalesced form.
 - **Compare a plan and its rivals in ONE kernel decomposition** (gh-ocannl-1477). The ranking score
   sums `max(compute, memory)` per kernel, so a memory-bound kernel run on its own (the seeded plan's
   zero-fill, the default segmentation having no zero fold) is charged in full, while the same writes

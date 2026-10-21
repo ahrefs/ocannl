@@ -19,9 +19,10 @@ type coalesce_layout =
           [Coalesce { outer = last m_ko; inner = m_k }] — so the attention out projection
           [d[b,s,j] += w[j,h,e] * x[b,s,h,e]] contracts over one loop of extent [h * e], and its
           k-tile can span several heads. Output coordinates are untouched, so the zeroing nest is
-          not coalesced. Its seeds come from a bounded K menu of their own (depths 256 down to 32,
-          under the usual workgroup-memory, thread, pad and launch judgments), not the family's
-          8/16-deep tiles. *)
+          not coalesced. Its seeds come from a bounded K menu of their own (depths 256 down to 32
+          over 16x16, 32x32 and 64x64 scalar blocks and 16- or 32-row staged tensorized ones,
+          gh-ocannl-1459, under the usual workgroup-memory, thread, pad and launch judgments), not
+          the family's 8/16-deep tiles. *)
 [@@deriving sexp]
 
 type sketch_params = {
@@ -488,8 +489,9 @@ val seeding_census_lines : where:string -> seeding_census -> string list
 (** The census rendered for stderr: a head line
     [where="…" stmts=N whole_zeros=N family=matmul|conv|none [site=…] seeds=N [refuted=N
      excluded=N]], then indented detail lines — the claiming tree's refutations grouped by witness
-    with the first refuted path, after a conv site's zeroing and real-statement count — and the
-    lowering's conv nests. *)
+    with the first refuted path, after a conv site's zeroing and real-statement count — then, for a
+    census taken with [~coalesced:true], one line per coalesced layout (its refusal, or its seed
+    count and the leaves' distinct geometries, gh-ocannl-1459), and the lowering's conv nests. *)
 
 val coalesce_reduction_pair :
   ?static_indices:Ir.Indexing.static_symbol list ->
@@ -525,9 +527,14 @@ val coalesced_seed_params :
   Ir.Low_level.optimized ->
   sketch_params list
 (** The coalesced tuner branch, beside {!sketch_seed_params}: per layout (columns, then
-    contraction), the matmul family's unfused GPU scalar-blocktile leaves enumerated over the code
-    {!coalesce_prefix} produces — every refutation judged on the coalesced site — each stamped
-    [sk_coalesce = Some layout]. Empty off GPU and where no prefix applies. *)
+    contraction), the matmul family's GPU leaves enumerated over the code {!coalesce_prefix}
+    produces — every refutation judged on the coalesced site — each stamped
+    [sk_coalesce = Some layout]. Which leaves follows from what the layout flattens: the columns
+    layout flattens the accumulator, so it keeps the unfused scalar-blocktile leaves; the
+    contraction layout flattens only the operands, which every pipeline it seeds stages first, so it
+    admits the scalar and the STAGED tensorized leaves and both their [Fuse_epilogue] twins
+    (gh-ocannl-1459; its mma menu has no unstaged geometry, whose in-place flattened reads
+    [Tensorize] declines). Empty off GPU and where no prefix applies. *)
 
 val geometry_lattice_witness : string
 (** The exclusion witness for tile-lattice alternatives beyond the curated geometry menus. *)
