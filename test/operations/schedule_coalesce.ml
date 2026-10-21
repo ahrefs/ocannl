@@ -1018,8 +1018,10 @@ let contraction_leg ~tag ~bb ~ss ~jj ~hh ~ee =
     if on_gpu then contraction_seeds ~limits:(Context.hardware_limits (Context.auto ())) opt
     else seeds
   in
-  Stdio.eprintf "%s: %d contraction seed(s) under this device's limits (not part of the golden)\n"
-    tag (List.length device_seeds);
+  Stdio.eprintf
+    "%s: %d contraction seed(s) under this device's limits: %s (not part of the golden)\n" tag
+    (List.length device_seeds)
+    (String.concat ~sep:", " (List.map device_seeds ~f:Autotune.sketch_params_label));
   gated_all ~when_:on_gpu ~on:backend_name
     (tag ^ ": every contraction seed this device admits executes to the serial reference bitwise")
     device_seeds ~f:(fun q ->
@@ -1038,7 +1040,7 @@ let contraction_leg ~tag ~bb ~ss ~jj ~hh ~ee =
    the limit and the 32x32x256 one (64 KiB) is refuted by the workgroup-memory floor. *)
 let () =
   let kk = 8 * 32 in
-  let opt, seeds, device_seeds = contraction_leg ~tag:"ck_proj" ~bb:2 ~ss:32 ~jj:64 ~hh:8 ~ee:32 in
+  let opt, seeds, device_seeds = contraction_leg ~tag:"ck_proj" ~bb:2 ~ss:64 ~jj:64 ~hh:8 ~ee:32 in
   let geom (bm, bn, bk) q =
     q.Autotune.sk_bm = bm && q.Autotune.sk_bn = bn && q.Autotune.sk_bk = bk
   in
@@ -1062,7 +1064,38 @@ let () =
      among the seeds executed above. *)
   gated_exists ~when_:on_gpu ~on:backend_name
     "ck_proj: this device admits, and so executed, the 16x16x256 tile" device_seeds
-    ~f:(geom (16, 16, 256))
+    ~f:(geom (16, 16, 256));
+  (* gh-ocannl-1459: the 64x64 block of 4x4 register tiles (256 threads), the shape CUDA's
+     uncoalesced winner uses. Its two f32 operand tiles need 512 bytes per unit of depth: 32 KiB at
+     depth 64, so CUDA's 48 KiB admits depths 64 and 32 and refutes 128, and Metal's 32 KiB admits
+     64 exactly at the limit. The row role is [s] (the batch [b] is a batch loop), so [s = 64] makes
+     the 64-row block divide it: on a 32-row site it pads 2x and the pad-waste judgment excludes
+     it. *)
+  let is_64x64 q = q.Autotune.sk_bm = 64 && q.Autotune.sk_bn = 64 in
+  p_exists "ck_proj: the menu offers a 64x64 block of 4x4 register tiles" seeds ~f:(fun q ->
+      is_64x64 q && q.Autotune.sk_tm = 4 && q.Autotune.sk_tn = 4);
+  let cuda_like =
+    { Ir.Backend_intf.no_hardware_limits with max_workgroup_memory_bytes = Some 49152 }
+  in
+  let cuda_seeds = contraction_seeds ~limits:cuda_like opt in
+  p_exists "ck_proj: 48 KiB of workgroup memory admits the 64x64x64 tile" cuda_seeds
+    ~f:(geom (64, 64, 64));
+  p_none "ck_proj: 48 KiB of workgroup memory refutes the 64x64x128 tile" cuda_seeds
+    ~f:(geom (64, 64, 128));
+  p_exists "ck_proj: no-limits enumeration offers the 64x64x128 tile the 48 KiB floor refutes" seeds
+    ~f:(geom (64, 64, 128));
+  p_exists "ck_proj: 32 KiB of workgroup memory admits the 64x64x64 tile, exactly at the limit"
+    limited
+    ~f:(geom (64, 64, 64));
+  let thread_cap n =
+    contraction_seeds
+      ~limits:{ Ir.Backend_intf.no_hardware_limits with max_threads_per_workgroup = Some n }
+      opt
+  in
+  p_exists "ck_proj: a 256-thread cap admits the 64x64 block" (thread_cap 256) ~f:is_64x64;
+  p_none "ck_proj: a 255-thread cap refutes the 64x64 block" (thread_cap 255) ~f:is_64x64;
+  gated_exists ~when_:on_gpu ~on:backend_name
+    "ck_proj: this device admits, and so executed, a 64x64 tile" device_seeds ~f:is_64x64
 
 (* An odd K: h = 3 heads of e = 20, K = 60. A depth whose half already covers K would only pad, so
    the menu offers 64 and 32: a 32-deep tile crosses a head boundary in every block and pads the

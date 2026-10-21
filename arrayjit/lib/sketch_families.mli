@@ -19,9 +19,9 @@ type coalesce_layout =
           [Coalesce { outer = last m_ko; inner = m_k }] — so the attention out projection
           [d[b,s,j] += w[j,h,e] * x[b,s,h,e]] contracts over one loop of extent [h * e], and its
           k-tile can span several heads. Output coordinates are untouched, so the zeroing nest is
-          not coalesced. Its seeds come from a bounded K menu of their own (depths 256 down to 32,
-          under the usual workgroup-memory, thread, pad and launch judgments), not the family's
-          8/16-deep tiles. *)
+          not coalesced. Its seeds come from a bounded K menu of their own (depths 256 down to 32
+          over 16x16, 32x32 and 64x64 blocks, gh-ocannl-1459, under the usual workgroup-memory,
+          thread, pad and launch judgments), not the family's 8/16-deep tiles. *)
 [@@deriving sexp]
 
 type sketch_params = {
@@ -488,8 +488,9 @@ val seeding_census_lines : where:string -> seeding_census -> string list
 (** The census rendered for stderr: a head line
     [where="…" stmts=N whole_zeros=N family=matmul|conv|none [site=…] seeds=N [refuted=N
      excluded=N]], then indented detail lines — the claiming tree's refutations grouped by witness
-    with the first refuted path, after a conv site's zeroing and real-statement count — and the
-    lowering's conv nests. *)
+    with the first refuted path, after a conv site's zeroing and real-statement count — then, for a
+    census taken with [~coalesced:true], one line per coalesced layout (its refusal, or its seed
+    count and the leaves' distinct geometries, gh-ocannl-1459), and the lowering's conv nests. *)
 
 val coalesce_reduction_pair :
   ?static_indices:Ir.Indexing.static_symbol list ->

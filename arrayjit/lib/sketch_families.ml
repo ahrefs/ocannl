@@ -3360,18 +3360,20 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
      k-tile at 8 or 16: on an uncoalesced multi-axis contraction the tile is judged against the
      innermost extent alone, one head. The contraction-coalesced site (gh-ocannl-1279) contracts
      over one merged k, so its menu is a bounded K menu instead: depths 256 down to 32 — 256 being
-     gpt2_mini's whole [h * e], one k-block per output tile — over two 64-thread block shapes, a
-     16x16 tile of 2x2 register tiles and a 32x32 tile of 4x4 ones, deepest first. The usual
-     judgments below bound it: the staged tiles' workgroup-memory floor (16x16x256 in f32 needs 32
-     KiB, exactly Metal's threadgroup limit, and 32x32x256 twice that, which no current GPU's limit
-     admits), the thread cap, pad composition and pad waste, and the launch caps at the leaf. The
-     shallow 8/16 depths are not repeated here: over a merged k they are the family's own tiles of
-     the uncoalesced site, already seeded beside this branch. *)
+     gpt2_mini's whole [h * e], one k-block per output tile — over three block shapes, deepest
+     first: a 16x16 tile of 2x2 register tiles and a 32x32 tile of 4x4 ones (64 threads each), and
+     a 64x64 tile of 4x4 ones (256 threads), the block the uncoalesced family's CUDA winner uses
+     (gh-ocannl-1459). The usual judgments below bound it: the staged tiles' workgroup-memory floor
+     (in f32, 16x16x256 needs 32 KiB, exactly Metal's threadgroup limit, 32x32x256 twice that; the
+     64x64 block needs 32 KiB at depth 64, so CUDA's 48 KiB admits it at 64 and 32, HIP's 64 KiB at
+     128 too, Metal's 32 KiB at 64 exactly), the thread cap, pad composition and pad waste, and the
+     launch caps at the leaf. The shallow 8/16 depths are not repeated here: over a merged k they
+     are the family's own tiles of the uncoalesced site, already seeded beside this branch. *)
   let blocktile_geometries () =
     match coalesced with
     | Some Coalesce_contraction ->
         List.concat_map [ 256; 128; 64; 32 ] ~f:(fun bk ->
-            [ (16, 16, bk, 2, 2); (32, 32, bk, 4, 4) ])
+            [ (16, 16, bk, 2, 2); (32, 32, bk, 4, 4); (64, 64, bk, 4, 4) ])
     | Some Coalesce_columns | None ->
         [
           (64, 64, 8, 4, 4);
@@ -4981,7 +4983,22 @@ let seeding_census_lines ~where (c : seeding_census) : string list =
         in
         match v.cv_refusal with
         | Some why -> detail "coalesced %s: refused: %s" layout why
-        | None -> detail "coalesced %s: %d seeds" layout (List.length v.cv_seeds))
+        | None ->
+            (* The leaves' distinct geometries, in seeding order (gh-ocannl-1459): the batch,
+               epilogue and twin flavors of one geometry share its entry, so the line says which
+               tiles the layout seeds without restating every flavor. *)
+            let geometry (q : sketch_params) =
+              if q.sk_mma then Printf.sprintf "mma %dx%dx%d" q.sk_bm q.sk_bn q.sk_bk
+              else Printf.sprintf "%dx%dx%d/%dx%d" q.sk_bm q.sk_bn q.sk_bk q.sk_tm q.sk_tn
+            in
+            let geometries =
+              List.fold v.cv_seeds ~init:[] ~f:(fun acc q ->
+                  let g = geometry q in
+                  if List.mem acc g ~equal:String.equal then acc else g :: acc)
+              |> List.rev
+            in
+            detail "coalesced %s: %d seeds: %s" layout (List.length v.cv_seeds)
+              (String.concat ~sep:" " geometries))
   in
   (head :: family_details) @ coalesced @ nests
 

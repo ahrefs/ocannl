@@ -77,6 +77,14 @@ ck_proj: 32 KiB of workgroup memory admits the 16x16x256 tile, exactly at the li
 ck_proj: 32 KiB of workgroup memory refutes the 32x32x256 tile: true
 ck_proj: no-limits enumeration offers the 32x32x256 tile the floor refutes: true
 ck_proj: this device admits, and so executed, the 16x16x256 tile: true
+ck_proj: the menu offers a 64x64 block of 4x4 register tiles: true
+ck_proj: 48 KiB of workgroup memory admits the 64x64x64 tile: true
+ck_proj: 48 KiB of workgroup memory refutes the 64x64x128 tile: true
+ck_proj: no-limits enumeration offers the 64x64x128 tile the 48 KiB floor refutes: true
+ck_proj: 32 KiB of workgroup memory admits the 64x64x64 tile, exactly at the limit: true
+ck_proj: a 256-thread cap admits the 64x64 block: true
+ck_proj: a 255-thread cap refutes the 64x64 block: true
+ck_proj: this device admits, and so executed, a 64x64 tile: true
 ck_odd: no cell of the serial reference is zero: true
 ck_odd: the columns layout has no interior batch loop to merge here: true
 ck_odd: the contraction prefix is the one Coalesce of the contraction pair: true
