@@ -66,8 +66,7 @@ dividing: a pipelined depth-2 twin is a leaf: true
     conv-leg = cpu
       conv-shape = serial
         * gpu:false simd:0 bm:0  bn:0 bk:0 tm:0 grid:false epi:false depth:1
-      conv-shape = grid
-        * gpu:false simd:0 bm:0  bn:0 bk:0 tm:0 grid:true epi:false depth:1
+      conv-shape = grid  [refuted: the conv nest's own Grid loop leaves 1 companion nest(s) writing materialized relu_z outside it, which validate_parallel rejects]
       conv-shape = bm8  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
       conv-shape = bm16  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
       conv-shape = bm32  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
@@ -85,7 +84,34 @@ dividing: a pipelined depth-2 twin is a leaf: true
 9x9 conv + bias/relu tail, CPU: the tree's leaves are the seed list: true
 9x9 conv + bias/relu tail, CPU: the claiming family's tree is the conv tree: true
 9x9 conv + bias/relu tail, CPU: every leaf's path agrees with its parameters: true
-tail: the fused flavor has leaves: true
+tail, CPU: the unfused Grid flavor is refuted on its uncovered companion: true
+tail, CPU: the fused Grid flavor is a leaf: true
+== 9x9 conv + bias/relu tail, GPU ==
+  fusion = unfused
+    conv-leg = cpu  [refuted: not a CPU target]
+    conv-leg = gpu  [refuted: GPU conv companion coverage (gh-521): the accumulation nest's aligned chain was trimmed below its 2x9x9x8 geometry, so its companions cannot share it]
+  fusion = fused
+    conv-leg = cpu  [refuted: not a CPU target]
+    conv-leg = gpu
+      conv-staging = plain
+        conv-rows = rows-whole
+          * gpu:true simd:32 bm:0  bn:0 bk:8 tm:8 grid:false epi:true depth:1
+        conv-rows = rows-bm8
+          * gpu:true simd:32 bm:8  bn:0 bk:8 tm:0 grid:false epi:true depth:1
+        conv-rows = rows-bm16  [refuted: row block gives fewer than two blocks of the 9 rows]
+        conv-rows = rows-bm32  [refuted: row block gives fewer than two blocks of the 9 rows]
+      conv-staging = pipelined
+        conv-rows = rows-whole
+          twin = depth2  [excluded: pad-masked flavor: Tensorize stays on the barrier-bracketed per-call arm, whose leading bracket sits between the prefetch and the compute, so the twin could only pay the doubled footprint (Codex P2 on PR #303)]
+        conv-rows = rows-bm8
+          twin = depth2  [excluded: pad-masked flavor: Tensorize stays on the barrier-bracketed per-call arm, whose leading bracket sits between the prefetch and the compute, so the twin could only pay the doubled footprint (Codex P2 on PR #303)]
+        conv-rows = rows-bm16  [refuted: row block gives fewer than two blocks of the 9 rows]
+        conv-rows = rows-bm32  [refuted: row block gives fewer than two blocks of the 9 rows]
+9x9 conv + bias/relu tail, GPU: the tree's leaves are the seed list: true
+9x9 conv + bias/relu tail, GPU: the claiming family's tree is the conv tree: true
+9x9 conv + bias/relu tail, GPU: every leaf's path agrees with its parameters: true
+tail, GPU: the unfused flavor is refuted on companion coverage: true
+tail, GPU: the fused flavor keeps its leaves: true
 == 4x4 conv over 4 images, GPU, grid cap 3 ==
   fusion = unfused
     conv-leg = cpu  [refuted: not a CPU target]

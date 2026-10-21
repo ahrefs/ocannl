@@ -7,14 +7,23 @@
    matmul tree's epilogue-fusion root above a [conv-leg] level (CPU, then GPU), the CPU [conv-shape]
    menu and the GPU [conv-staging] / [conv-rows] menus with the pipelined geometries' depth twins.
    What is pinned here, on synthetic limits so every leg is machine-independent (seeding is a pure
-   function of the lowering):
+   function of the lowering).
 
-   - the tree printed with its verdicts, every refusal at its own decision path; - its leaves ARE
-   the seed list [Autotune.sketch_seed_params] the search enumerates; - every leaf's path agrees
-   with its parameters, read off the walk (fusion vs [sk_epilogue], the leg vs [sk_gpu], the shape,
-   rows and depth vs [sk_grid], [sk_bm] and [sk_depth]); - a site with no fusable tail refutes the
-   fused flavor with the recognizer's own reason; - the launch caps refute at the leaf with the
-   gate's sentence: at the cap the geometry is admitted, one below it refused; -
+   The tree is printed with its verdicts, every refusal at its own decision path. Its leaves ARE the
+   seed list [Autotune.sketch_seed_params] the search enumerates, and every leaf's path agrees with
+   its parameters, read off the walk (fusion vs [sk_epilogue], the leg vs [sk_gpu], the shape, rows
+   and depth vs [sk_grid], [sk_bm] and [sk_depth]).
+
+   Each fusion flavor is judged by its own preconditions. A site with no fusable tail refutes the
+   fused flavor with the recognizer's own reason. On a conv with a bias/relu tail, the unfused CPU
+   Grid flavor (its Grid loop would leave the tail's materialized write uncovered) and the unfused
+   GPU flavor (the tail cannot follow the accumulation nest's chain) are refuted with their
+   witnesses, while the fused flavor, whose tail the fusion relocates into the conv nest, keeps its
+   leaves. Before, both unfused flavors were proposed and failed at every compile.
+
+   The launch caps refute at the leaf with the gate's sentence: at the cap the geometry is admitted,
+   one below it refused.
+
    [Autotune.model_family_search] walks the conv tree (it returned [None] for every conv site
    before, when [model_default] scanned conv seeds flat): with an unbeatable incumbent it scores
    leaves, and its pick is the exhaustive first argmin over the same leaves scored the same way;
@@ -191,11 +200,32 @@ let () =
         ~f:(fun (path, q) -> on_path (FD.Twin (`Depth 2)) path && q.Autotune.sk_depth = 2));
   (* With a tail: both flavors build their subtrees. *)
   let tailed = lowering "cft_tail" (make_conv ~tail:true "ct" ~b:2 ~h:11 ~ic:4 ~oc:8) in
+  let refuted_at tree ds ~sub =
+    List.exists (Sspace.refutations tree) ~f:(fun (path, w) ->
+        List.for_all ds ~f:(fun d -> on_path d path) && String.is_substring w ~substring:sub)
+  in
+  let leaf_at tree ds =
+    List.exists (Sspace.enumerate tree) ~f:(fun (path, _) ->
+        List.for_all ds ~f:(fun d -> on_path d path))
+  in
   (match section "9x9 conv + bias/relu tail, CPU" ~is_gpu:false ~limits:cpu_limits tailed with
   | None -> ()
   | Some tree ->
-      p_exists "tail: the fused flavor has leaves" (Sspace.enumerate tree) ~f:(fun (path, _) ->
-          on_path (FD.Fusion `Fused) path));
+      p "tail, CPU: the unfused Grid flavor is refuted on its uncovered companion"
+        (refuted_at tree
+           [ FD.Fusion `Unfused; FD.Conv_shape `Grid ]
+           ~sub:"which validate_parallel rejects");
+      p "tail, CPU: the fused Grid flavor is a leaf"
+        (leaf_at tree [ FD.Fusion `Fused; FD.Conv_shape `Grid ]));
+  (match section "9x9 conv + bias/relu tail, GPU" ~is_gpu:true ~limits:gpu_limits tailed with
+  | None -> ()
+  | Some tree ->
+      p "tail, GPU: the unfused flavor is refuted on companion coverage"
+        (refuted_at tree
+           [ FD.Fusion `Unfused; FD.Conv_leg `Gpu ]
+           ~sub:"GPU conv companion coverage (gh-521)"
+        && not (leaf_at tree [ FD.Fusion `Unfused ]));
+      p "tail, GPU: the fused flavor keeps its leaves" (leaf_at tree [ FD.Fusion `Fused ]));
   (* Launch caps, at the leaf: a 4-image batch over a 4-row spatial loop puts the batch on grid.y.
      At a 4-wide cap the whole-extent geometry is admitted; at 3 it is refuted with the gate's
      sentence. *)

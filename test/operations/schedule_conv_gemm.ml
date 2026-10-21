@@ -195,9 +195,12 @@ let () =
     in
     ignore (ctx, routine);
     (* The C-backend seed count: serial + Grid, each with its fused-epilogue twin (the 3x3 conv's
-       two kernel-window loops are no obstacle since the whole-window contraction, gh-ocannl-501). A
-       strided row seeds the same four (gh-ocannl-502): the compacting [Stage] packs the strided
-       window densely, so the pipeline applies exactly as on a unit-stride row. *)
+       two kernel-window loops are no obstacle since the whole-window contraction, gh-ocannl-501),
+       less the unfused Grid flavor: the block's inline bias is a materialized tail its Grid loop
+       would leave uncovered, so the conv family tree refutes it (gh-ocannl-697; it used to be
+       proposed and fail validation). A strided row seeds the same three (gh-ocannl-502): the
+       compacting [Stage] packs the strided window densely, so the pipeline applies exactly as on a
+       unit-stride row. *)
     p (tag ^ " C-backend conv seeds") (!n_seeds = want_seeds);
     match !site with
     | None -> p (tag ^ " detected") false
@@ -212,11 +215,11 @@ let () =
             && cx.Autotune.cx_nk = 3)
   in
   detect_leg "cvd_s1v" ~stride:1 ~use_padding:false ~want_stride:1 ~want_offset:0 ~want_row:9
-    ~want_seeds:4;
+    ~want_seeds:3;
   detect_leg "cvd_s2v" ~stride:2 ~use_padding:false ~want_stride:2 ~want_offset:0 ~want_row:5
-    ~want_seeds:4;
+    ~want_seeds:3;
   detect_leg "cvd_s1p" ~stride:1 ~use_padding:true ~want_stride:1 ~want_offset:0 ~want_row:11
-    ~want_seeds:4;
+    ~want_seeds:3;
 
   (* === Pattern discipline: a matmul is not a conv site === *)
   (let ma =
@@ -480,9 +483,11 @@ let () =
     skipped "cvs2: every seeded stride-2 candidate's routine is labeled tensorized");
 
   (* === Autotune seeding on conv+bias+relu: serial + Grid conv pipelines, each with its
-     fused-epilogue twin (2-D convs fuse since the whole-window contraction, gh-ocannl-501; the
-     unfused Grid candidate fails validation — the tail write is uncovered — and only its twin
-     survives); the tuned routine matches the untuned twin === *)
+     fused-epilogue twin (2-D convs fuse since the whole-window contraction, gh-ocannl-501). The
+     unfused Grid flavor would leave the tail write uncovered, so since gh-ocannl-697 the conv family
+     tree refutes it at construction (it used to be proposed and fail validation at compile); its
+     fused twin, which relocates the tail under the Grid loop, survives. The tuned routine matches
+     the untuned twin === *)
   (* A tuning report's seeding counts, on stderr (not part of the golden): what a failing count
      claim saw. *)
   let show_counts tag (r : Autotune.report) =
@@ -530,11 +535,15 @@ let () =
   (match !reports with
   | [ r ] ->
       show_counts "cvt" r;
-      (* metal: the whole-routine zeroed site's two GPU staged flavors, each with its fused-epilogue
-         twin (gh-ocannl-503); a GPU leg that cannot seed an f32 site proposes none. *)
+      (* cc: serial, its fused twin, and the fused Grid flavor (the unfused Grid one refuted on its
+         uncovered tail). metal: the whole-routine zeroed site's two GPU staged flavors, fused only
+         (gh-ocannl-503) -- their unfused flavor is refuted on companion coverage (gh-ocannl-697),
+         the [cvzt] leg below; a GPU leg that cannot seed an f32 site proposes none. *)
       p "conv sketches seeded (serial+grid, with fused-epilogue twins)"
-        (if on_cpu || has_uniform_f32_mma then
-           r.Autotune.sketch_candidates = 4 && r.Autotune.epilogue_sketch_candidates = 2
+        (if on_cpu then
+           r.Autotune.sketch_candidates = 3 && r.Autotune.epilogue_sketch_candidates = 2
+         else if has_uniform_f32_mma then
+           r.Autotune.sketch_candidates = 2 && r.Autotune.epilogue_sketch_candidates = 2
          else if Lazy.force gpu_capable then r.Autotune.sketch_candidates > 0
          else r.Autotune.sketch_candidates = 0)
   | _ -> p "conv sketches seeded (serial+grid, with fused-epilogue twins)" false);
@@ -748,10 +757,11 @@ let () =
      fission seam and executed against the natural form (candidates are timed, not value-checked, so
      an unsound seed would be crowned silently). The zero is load-bearing: the routine runs twice,
      so a zero nest that missed cells would leave the first run's sums in them. Two graphs: the conv
-     alone ([cvz]), and the conv with its bias+relu tail ([cvzt]), whose unfused seeds decline at
-     the companion-coverage gate (the tail cannot follow the accumulation nest's full chain, the
-     same verdict as on the fission segment) while the fused-epilogue twins compile. Gated on the
-     seeder's own capability judgment for an f32 site, never on the seed list. --- *)
+     alone ([cvz]), and the conv with its bias+relu tail ([cvzt]), whose unfused flavor the conv
+     family tree refutes on companion coverage (the tail cannot follow the accumulation nest's full
+     chain; gh-ocannl-697 -- these seeds used to be proposed and decline at compile), while the
+     fused-epilogue twins compile: every seed proposed is a fused one, and every one compiles. Gated
+     on the seeder's own capability judgment for an f32 site, never on the seed list. --- *)
   let whole_routine_gpu_leg ~tag ~build ~want =
     let limits = Context.hardware_limits (Context.auto ()) in
     let seeds = ref [] and zeroed = ref false in
@@ -826,7 +836,9 @@ let () =
     p "cvzt: the whole-routine conv+tail site is zeroed in its lowering" zeroed;
     p_all "cvzt: the whole-routine zeroed conv+tail site seeds GPU staged conv flavors" seeds
       ~f:(fun s -> s.Autotune.sk_conv && s.Autotune.sk_gpu);
-    p_exists "cvzt: a whole-routine zeroed conv+tail GPU candidate compiles" results ~f:ran;
+    p_all "cvzt: every whole-routine zeroed conv+tail GPU seed is a fused-epilogue twin" seeds
+      ~f:(fun s -> s.Autotune.sk_epilogue);
+    p_all "cvzt: every whole-routine zeroed conv+tail GPU candidate compiles" results ~f:ran;
     p_all
       "cvzt: every compiling whole-routine conv+tail GPU candidate matches the natural form, run \
        twice"
@@ -843,7 +855,8 @@ let () =
         "cvz: every whole-routine zeroed GPU candidate's routine is labeled tensorized";
         "cvzt: the whole-routine conv+tail site is zeroed in its lowering";
         "cvzt: the whole-routine zeroed conv+tail site seeds GPU staged conv flavors";
-        "cvzt: a whole-routine zeroed conv+tail GPU candidate compiles";
+        "cvzt: every whole-routine zeroed conv+tail GPU seed is a fused-epilogue twin";
+        "cvzt: every whole-routine zeroed conv+tail GPU candidate compiles";
         "cvzt: every compiling whole-routine conv+tail GPU candidate matches the natural form, run \
          twice";
         "cvzt: every compiling whole-routine conv+tail GPU candidate is labeled tensorized";
