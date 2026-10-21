@@ -146,9 +146,11 @@ files.
   whole-routine candidate and, since gh-ocannl-1438, of each segment of its per-segment
   substitution (`x_segments`: the preset first, then the leaves labeled as `F_sketch` entries). The swizzled staged fp8 twin beats its plain twin, but at the
   gh-ocannl-1190 shape neither is the argmin: an unstaged tensorized leaf ranks strictly below
-  every staged one (the staging copies add ops, the shared tiles add distinct-cell bytes, and the
-  per-block global reads are the same), so making `model_default` pick a staged twin needs the
-  model to price what staging buys, not a tie-break.
+  every staged one (the staging copies add ops and the per-block global reads are the same; until
+  gh-ocannl-1442 the shared tiles also added distinct-cell bytes at the DRAM rate). Every
+  tensorized leaf there is compute-bound at `peak_flops`, so the score cannot see load paths at
+  all: making `model_default` pick a staged twin needs the model to price what staging buys, not a
+  tie-break.
 - The ranking score's `cache_capacity_bytes` and `cache_bandwidth` are calibrated, not looked up
   (gh-ocannl-1253): the working set sums per-block footprints that co-resident blocks share, so
   the boundary sits above any L2. `tools/calibrate_cache_capacity.exe`
@@ -161,6 +163,32 @@ files.
   unified gfx1151 stayed at 1.7 TB/s requested to 10.8 GB, and its class constant is a separate,
   documented per-class decision. `bench_wgrad`'s `wgrad-model:` lines print each plan's per-kernel rank beside its
   distinct-cell bound; `benchmarks/gh1253_cells.sh` runs the whole calibration on one box.
+- The ranking score divides by its own rates, never the bound's ceilings (gh-ocannl-1442):
+  `issue_rate` (scalar operations, the effective rate of a register-blocktiled kernel with its
+  staging) and `dram_bandwidth` (the STREAM rate), `Untimed` fields overridden by
+  `model_issue_rate` / `model_dram_bandwidth`, each read as at most its ceiling and as the ceiling
+  when unset. Before them the two tiers were inert under default config: the DRAM tier divided by
+  the advisory class ceiling (8e12 on CUDA, 6e12 on HIP), and a cache bandwidth below it reads as
+  it. The two rates land together or not at all: an issue rate under the ceiling's DRAM makes the
+  untiled preset compute-bound and the `auto` gate stops seeding (`cost_model_reuse` pins it).
+  `Tile_mma` work stays at `peak_flops` only where the backend's own `mma_accepts` hook accepts
+  it (`Cost_model.accepted_tile_mma_flops`, the operand-load count's walk); declined or unreached
+  tile-MMA work runs its scalar fallback and is priced as scalar. Under the per-block model the
+  chip-resident nodes (`ru_scratch`) leave the DRAM leg, their cost carried by the fitted issue
+  rate for the geometry it was fitted on: an approximation, not a model of copies, barriers or
+  shared gathers. The staffed start's gate tag names both rates, since its per-segment decisions
+  rest on them.
+- What the rates do and do not fix, measured (`benchmarks/gh1253_cells.sh`, 2026-10-21, rog CUDA,
+  minix HIP unified, tuf HIP discrete). The seeded weight-gradient kernel is predicted within
+  0.69-1.35x at b8 and b256 on all three (3-12x too fast at the class peak), and at b1 everywhere
+  but tuf, whose small kernels sit on an erratic 0.1-0.4 ms floor; the issue-rate sweep's
+  intercept does not capture that floor, so a latency term fitted from it would not either. Two
+  orderings it does NOT fix, read off `bench_rank_site` + `benchmarks/gh1442_agreement.py`: among
+  scalar sketches of one site the compute leg ties geometries that measure up to 2x apart (an
+  occupancy effect no leg models; the argmin was a 2x-slower 16x16x8/4x4 on rog and tuf), and at
+  the gh-ocannl-1190 fp8 site every tensorized leaf ties at `peak_flops` while staged leaves ran
+  2.3x faster than unstaged and the fastest was the plain 32x32x32 twin, not a swizzled one. The
+  operand-load count orders that top pair wrongly, so pricing it is not the staging term either.
 - benchmarks/ is the cross-framework parity+timing suite (self-describing safetensors fixtures,
   one-JSON-line runners, loss-trajectory parity gate ~1e-7 fp32 vs pytorch/cpu). The gate
   doubles as a gradient oracle. tinygrad: realize the loss BEFORE `opt.step()` or it recomputes

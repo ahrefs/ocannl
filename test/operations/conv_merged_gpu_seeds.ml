@@ -82,9 +82,9 @@ let fission ~preset opt =
 
 let gpu_seeds seg = Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits seg
 
-let gpu_judgment seg =
+let gpu_real_stmts seg =
   match fst (Autotune.family_seeding ~is_gpu:true ~is_cpu:false ~limits seg) with
-  | Autotune.Seeding_conv { judgment; _ } -> Some judgment
+  | Autotune.Seeding_conv { real_stmts; _ } -> Some real_stmts
   | Autotune.Seeding_matmul _ | Autotune.Seeding_none -> None
 
 let is_conv_segment (seg : LL.optimized) = Option.is_some (Autotune.detect_conv seg.LL.llc)
@@ -143,9 +143,7 @@ let leg ~tag ~rows =
   if not (Array.exists want ~f:(fun v -> Float.(v <> 0.))) then
     failwith (tag ^ ": the reference is all zeros — the parity claims would be vacuous");
   let whole, segment = lowerings ~name:(tag ^ "_probe") (make_merged ~rows (tag ^ "p")) in
-  let real_stmts opt =
-    Option.value_map (gpu_judgment opt) ~default:0 ~f:(fun j -> j.Autotune.cj_real_stmts)
-  in
+  let real_stmts opt = Option.value (gpu_real_stmts opt) ~default:0 in
   let whole_seeds = gpu_seeds whole in
   let seg_seeds = Option.value_map segment ~default:[] ~f:gpu_seeds in
   Stdio.eprintf

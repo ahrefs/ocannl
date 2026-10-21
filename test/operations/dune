@@ -5706,7 +5706,8 @@
 
 (test
  ; cc-vector-width: independent -- the conv family's seed counts read the width only through gates
- ; passing at 16, 32 and 64 bytes.
+ ; passing at 16, 32 and 64 bytes, and through register-tile alternatives none of its 8-channel
+ ; sites has at any width; the 64-channel cvr leg skips where the width affords no twin.
  (name schedule_conv_gemm)
  (package neural_nets_lib)
  (deps
@@ -5984,6 +5985,20 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules sketch_family_tree)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-697: the conv sketch family as a refinement tree, the conv sibling of
+; sketch_family_tree -- pure in the lowering, on synthetic limits, so GPU legs need no GPU.
+
+(test
+ (name conv_family_tree)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules conv_family_tree)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
@@ -9037,6 +9052,19 @@
  (modules capacity_calibration)
  (libraries base ocannl arrayjit.verdict))
 
+; gh-ocannl-1442: the issue-rate calibration behind tools/calibrate_issue_rate.exe -- the fit's
+; readings on synthetic sweeps, and the sweep itself on the configured backend: a toy sweep of the
+; seeded sketch on CUDA/HIP, a refusal elsewhere.
+
+(test
+ (name issue_calibration)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules issue_calibration)
+ (libraries base ocannl arrayjit.verdict))
+
 ; gh-ocannl-1388: the autotuner seeds the seeded untuned plan first, so a search cut to its first
 ; candidate (every later window refused through the measurement seam) crowns the step the untuned
 ; compile ships: the same code, digest for digest, computing bitwise the same gradients; a refused
@@ -9158,6 +9186,28 @@
   (env_var OCANNL_BACKEND))
  (modules workgroup_memory_accounting)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
+ (name rewind_to_last_closure)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules rewind_to_last_closure)
+ (libraries base ocannl stdio unix fresh_process arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
+ (name closed_shape_write_guard)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules closed_shape_write_guard)
+ (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

@@ -603,6 +603,9 @@ let () =
          backend's advisories). *)
       ("model_cache_capacity", "");
       ("model_cache_bandwidth", "");
+      (* gh-ocannl-1442: its scalar issue rate and DRAM rate, likewise. *)
+      ("model_issue_rate", "");
+      ("model_dram_bandwidth", "");
     ]
   in
   p "they are exactly the Untimed_model class" (same_keys model_keys Utils.Untimed_model);

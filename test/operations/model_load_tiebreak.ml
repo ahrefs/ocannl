@@ -193,15 +193,37 @@ let hermetic (o : LL.optimized) =
     LL.optimize_ctx = LL.copy_optimize_ctx o.LL.optimize_ctx;
   }
 
-(* The ranking score [Autotune.model_default] minimizes, under a record's own constants. *)
-let rank (limits : BI.hardware_limits) (o : LL.optimized) =
+(* The tile-MMA work the backend's hook accepts: what the score prices at the matrix units' rate
+   (gh-ocannl-1442), the rest at the scalar issue rate. *)
+let accepted (capabilities : BI.codegen_capabilities) o =
+  CM.accepted_tile_mma_flops ~operand_accepts:capabilities.mma_accepts o
+
+(* The ranking score [Autotune.model_default] minimizes, under a record's own constants and load
+   rule. *)
+let rank ~capabilities (limits : BI.hardware_limits) (o : LL.optimized) =
   CM.ranking_seconds ?peak_flops:limits.peak_flops
     ?peak_memory_bandwidth:limits.peak_memory_bandwidth
     ?cache_capacity_bytes:limits.cache_capacity_bytes ?cache_bandwidth:limits.cache_bandwidth
-    ?max_resident_threads:limits.max_resident_threads ~is_global:(CM.global_in o) o.LL.llc
+    ?issue_rate:limits.issue_rate ?dram_bandwidth:limits.dram_bandwidth
+    ~mma_flops:(accepted capabilities o) ?max_resident_threads:limits.max_resident_threads
+    ~is_global:(CM.global_in o) o.LL.llc
 
-let score limits segs =
-  List.fold segs ~init:(Some 0.) ~f:(fun acc o -> Option.map2 acc (rank limits o) ~f:Float.( + ))
+(* The two legs of one kernel's score, under the same constants. *)
+let legs_with ~capabilities (limits : BI.hardware_limits) ?(issue_rate = limits.issue_rate)
+    (o : LL.optimized) =
+  let r =
+    CM.reuse_traffic ?max_resident_threads:limits.max_resident_threads ~is_global:(CM.global_in o)
+      o.LL.llc
+  in
+  CM.ranking_legs_of ?peak_flops:limits.peak_flops
+    ?peak_memory_bandwidth:limits.peak_memory_bandwidth
+    ?cache_capacity_bytes:limits.cache_capacity_bytes ?cache_bandwidth:limits.cache_bandwidth
+    ?issue_rate ?dram_bandwidth:limits.dram_bandwidth ~mma_flops:(accepted capabilities o)
+    (CM.analyze o.LL.llc) (Some r)
+
+let score ~capabilities limits segs =
+  List.fold segs ~init:(Some 0.) ~f:(fun acc o ->
+      Option.map2 acc (rank ~capabilities limits o) ~f:Float.( + ))
 
 let no_ldmatrix_rule ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ ~ta:_ ~tb:_ ~a:_ ~b:_ = (false, false)
 
@@ -219,6 +241,10 @@ let swizzled_twin (p : Autotune.sketch_params) =
 let site_claims ~tag ~(limits : BI.hardware_limits) ~(capabilities : BI.codegen_capabilities)
     ~evaluated =
   let rule = capabilities in
+  (* Scored under the record's own hook, as [model_default] scores them. *)
+  let rank = rank ~capabilities:rule
+  and legs = legs_with ~capabilities:rule
+  and score = score ~capabilities:rule in
   let no_ldmatrix = { capabilities with mma_operand_loads = no_ldmatrix_rule } in
   let label s = tag ^ ": " ^ s in
   let loads capabilities o =
@@ -250,6 +276,61 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~(capabilities : BI.codegen_
         (show_loads (loads rule plain))
         (show_loads (loads rule swz)));
   let all s f = claim s (lazy ((not (List.is_empty twins)) && List.for_all twins ~f)) in
+  (* gh-ocannl-1442: the tile-MMA work the hook accepts stays at the [peak_flops] ceiling, so a
+     slower scalar issue rate moves only the rest of a tensorized leaf's compute leg; work the hook
+     declines renders its scalar fallback and is priced as scalar work. *)
+  let tensorized =
+    List.filter_map seeds ~f:(fun p ->
+        if p.Autotune.sk_mma then Option.try_with (fun () -> schedule p) else None)
+  in
+  let decline_all =
+    {
+      capabilities with
+      mma_accepts =
+        (fun ~d_prec:_
+          ~a_prec:_
+          ~b_prec:_
+          ~ta:_
+          ~tb:_
+          ~m:_
+          ~n:_
+          ~k:_
+          ~fragment_target:_
+          ~d:_
+          ~a:_
+          ~b:_
+        -> false);
+    }
+  in
+  let peak = Option.value limits.peak_flops ~default:1. in
+  let slows_by ~capabilities o =
+    match
+      ( fst (legs_with ~capabilities limits ~issue_rate:(Some (peak /. 10.)) o),
+        fst (legs_with ~capabilities limits ~issue_rate:None o) )
+    with
+    | Some slow, Some fast -> Some (slow /. fast)
+    | _ -> None
+  in
+  claim "every tensorized leaf has tile-MMA work the hook accepts, within its operations"
+    (lazy
+      ((not (List.is_empty tensorized))
+      && List.for_all tensorized ~f:(fun o ->
+          let a = accepted rule o in
+          a > 0 && a <= (CM.analyze o.LL.llc).CM.flops)));
+  claim "a tenfold slower issue rate slows each tensorized leaf's compute leg less than tenfold"
+    (lazy
+      ((not (List.is_empty tensorized))
+      && List.for_all tensorized ~f:(fun o ->
+          Option.exists (slows_by ~capabilities:rule o) ~f:(fun r -> Float.(r < 10. -. 1e-9)))));
+  claim
+    "under a hook that declines every statement, no work is accepted and the whole compute leg \
+     slows tenfold"
+    (lazy
+      ((not (List.is_empty tensorized))
+      && List.for_all tensorized ~f:(fun o ->
+          accepted decline_all o = 0
+          && Option.exists (slows_by ~capabilities:decline_all o) ~f:(fun r ->
+              Float.(abs (r -. 10.) < 1e-9)))));
   let same f (_, plain, swz) = f plain = f swz in
   all "the gh-ocannl-1190 site seeds staged fp8 twins, and each pair has equal flops"
     (same (fun o -> (CM.analyze o.LL.llc).CM.flops));
@@ -364,6 +445,18 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~(capabilities : BI.codegen_
         | o -> Option.map (score limits [ o ]) ~f:(fun s -> (p, o, s))
         | exception _ -> None)
   in
+  (* The leaves the score ranks lowest, with their legs: what decides the site's argmin. *)
+  if evaluated then
+    List.sort scored ~compare:(fun (_, _, a) (_, _, b) -> Float.compare a b)
+    |> Fn.flip List.take 8
+    |> List.iter ~f:(fun (p, o, s) ->
+        let ms = Option.value_map ~default:"n/a" ~f:(fun x -> Printf.sprintf "%.6f" (x *. 1e3)) in
+        let c, m = legs limits o in
+        Stdio.eprintf
+          "%s: leaf %s%s: rank_ms %.6f compute_ms %s memory_ms %s (not part of the golden)\n" tag
+          (Autotune.sketch_params_label p)
+          (if Set.is_empty o.LL.workgroup_shared then "" else " [staged]")
+          (s *. 1e3) (ms c) (ms m));
   let pick rule =
     if not evaluated then None
     else
@@ -431,31 +524,39 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~(capabilities : BI.codegen_
   claim "among the staged leaves, without ldmatrix it keeps the first-listed plain twin"
     (lazy (Option.exists (staged_pick no_ldmatrix) ~f:(fun p -> not (swizzled p))))
 
+let stand_in_capabilities =
+  {
+    BI.no_codegen_capabilities with
+    mma_operand_loads = Ir.Cuda_mma.operand_loads;
+    mma_operand_fragments = Ir.Cuda_mma.operand_fragments;
+    (* CUDA's acceptance is its hook's, which needs the backend; the stand-in accepts every
+       statement, and the backend-record leg reads the real hook. *)
+    mma_accepts =
+      (fun ~d_prec:_
+        ~a_prec:_
+        ~b_prec:_
+        ~ta:_
+        ~tb:_
+        ~m:_
+        ~n:_
+        ~k:_
+        ~fragment_target:_
+        ~d:_
+        ~a:_
+        ~b:_
+      -> true);
+  }
+
 let () =
-  site_claims ~tag:"stand-in" ~limits:stand_in
-    ~capabilities:
-      {
-        BI.no_codegen_capabilities with
-        mma_operand_loads = Ir.Cuda_mma.operand_loads;
-        mma_operand_fragments = Ir.Cuda_mma.operand_fragments;
-        (* CUDA's acceptance is its hook's, which needs the backend; the stand-in accepts every
-           statement, and the backend-record leg reads the real hook. *)
-        mma_accepts =
-          (fun ~d_prec:_
-            ~a_prec:_
-            ~b_prec:_
-            ~ta:_
-            ~tb:_
-            ~m:_
-            ~n:_
-            ~k:_
-            ~fragment_target:_
-            ~d:_
-            ~a:_
-            ~b:_
-          -> true);
-      }
-    ~evaluated:true
+  site_claims ~tag:"stand-in" ~limits:stand_in ~capabilities:stand_in_capabilities ~evaluated:true
+
+(* gh-ocannl-1442: the same site under the ranking score's own rates, rog's measured DRAM rate and
+   an issue rate in the range the seeded kernel achieved there: the twins still tie exactly, and the
+   loads still decide among them. *)
+let () =
+  site_claims ~tag:"rated stand-in"
+    ~limits:{ stand_in with issue_rate = Some 3.4e12; dram_bandwidth = Some 5.82e11 }
+    ~capabilities:stand_in_capabilities ~evaluated:true
 
 (* The backend's own record and rule, where they describe the staged fp8 twins: CUDA from sm_89. *)
 let () =

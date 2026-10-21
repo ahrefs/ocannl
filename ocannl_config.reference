@@ -674,8 +674,8 @@
 # (gh-ocannl-541). 0 disables the family.
 #autotune_split_reduce_max_sites=8
 
-# If true, the sketch seeding's `register-tile` level (the CPU register-tiled `Tile_mma` leaves,
-# gh-ocannl-619) also proposes a TWO-ROW twin of the renderer's own geometry wherever that
+# If true, the sketch seeding's `register-tile` level (the CPU register-tiled `Tile_mma` leaves of
+# the matmul family, gh-ocannl-619, and of the conv family, gh-ocannl-697) also proposes a TWO-ROW twin of the renderer's own geometry wherever that
 # geometry takes four rows: `Ir.Register_tile.rm_twin`, rm = 2 at the same vector width with the
 # most vector columns the live-register budget admits beside two rows. The reuse model never picks
 # it (two rows reload every B vector twice as often), so only a timing can say whether its lower
@@ -685,7 +685,8 @@
 # schedule cache replays its winner without searching again.
 #autotune_register_tile_rm_twin=false
 
-# The pad-waste threshold of the matmul sketch family's geometry menus (gh-ocannl-740). A
+# The pad-waste threshold of the sketch families' geometry menus (gh-ocannl-740; the conv
+# family's since gh-ocannl-1393, where the default excludes nothing by construction). A
 # pipeline that stages both operands through zero-fringe tiles pads a non-multiple extent to its
 # block size instead of refuting the geometry (gh-ocannl-485, gh-ocannl-730). A pad is exact, but
 # it is work: 64x64 blocks with an 8-deep k-split pad a 20x20x20 site to 64x64x24, 12.3x the
@@ -1053,6 +1054,23 @@
 # leaves re-reads within capacity uncharged; a value below the DRAM bandwidth reads as it.
 # Unset/empty uses the backend's value. Same readers and cache identity as model_cache_capacity.
 #model_cache_bandwidth=
+
+# gh-ocannl-1442: overrides the backend's advisory scalar issue rate (operations/s, an FMA
+# counting two) of the ranking score: the score's compute leg prices a kernel's scalar operations
+# at this rate -- the effective rate of a register-blocktiled kernel, its operand staging
+# included -- and its tile-MMA operations at model_peak_flops, which stays the bound's ceiling. Fit
+# it with `tools/calibrate_issue_rate.exe`, a reduction-extent sweep of the seeded weight-gradient
+# sketch (the slope of time over operations). Read as at most model_peak_flops. `none`: price
+# scalar work at model_peak_flops. Unset/empty uses the backend's value. Same readers and cache
+# identity as model_cache_capacity.
+#model_issue_rate=
+
+# gh-ocannl-1442: overrides the backend's advisory achieved DRAM rate (bytes/s) of the ranking
+# score: its DRAM tier and its charge for distinct bytes, where model_peak_memory_bandwidth stays
+# the bound's class ceiling. Fit it with `tools/calibrate_bandwidth.exe` (the STREAM pass). Read as
+# at most model_peak_memory_bandwidth. `none`: price DRAM traffic at model_peak_memory_bandwidth.
+# Unset/empty uses the backend's value. Same readers and cache identity as model_cache_capacity.
+#model_dram_bandwidth=
 
 # If true, stdout capturing is disabled, so some logs meant for the ppx_minidebug log files
 # (in particular CUDA logs) remain on the stdout.

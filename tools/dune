@@ -93,3 +93,8 @@
  (name calibrate_cache_capacity)
  (modules calibrate_cache_capacity)
  (libraries base stdio utils ir context ocannl))
+
+(executable
+ (name calibrate_issue_rate)
+ (modules calibrate_issue_rate)
+ (libraries base stdio utils context ocannl))

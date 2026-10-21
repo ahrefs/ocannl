@@ -5,18 +5,24 @@
    iteration gives 260 (257.25 rounds up, twice), and one narrowing per step stays at 256. The
    inputs are dyadic, so every partial sum is exact in f32 whatever the order.
 
-   1. The final re-check ([Schedule.privatized_tile_widens]). A wide tile fails it only when a later
-   op puts, into the scope a materializing [Unroll] minted around the tile's update, something that
-   scope's grammar excludes: a hardware-typed loop ([Retype] of a loop inside it) or a tensor-node
-   write ([Stage]'s loads landing inside it). Both legs drive that through [Schedule.apply] and pin
-   the trigger (the tile is judged non-widening), the seam (the pair is recorded in the
-   [privatize_fallbacks] of the domain that applied it, and of no other) and the drop (the tile is
-   back at bf16 storage). Both programs are ones compilation refuses -- a hardware-annotated loop
-   inside a [Local_scope] body (the renderer's hardware-axis table holds none, and
-   [Low_level.validate_parallel] rejects it), a tensor-node write inside one
-   ([Low_level.validate_scope_bodies], gh-ocannl-584) -- and so is each one's twin without
-   [Privatize]: the fallback reaches no executed value. The control is the same schedule without the
-   breaking op: the tile stays wide and executes to the entry program's once-narrowed 258.
+   1. The scope grammar and the tile's lifetime, refused at the op (gh-ocannl-1467). A [Local_scope]
+   body is hoisted out of its position, so a later op that puts into the scope a materializing
+   [Unroll] minted around the tile's update a hardware-typed loop ([Retype] of a loop inside it) or
+   a tensor-node write ([Stage]'s loads landing inside it) is refused at that op, typed, naming it
+   -- through [Schedule.apply_classified], and through [Schedule.op_legality] asked of the program
+   the ops before it left (the race queries alone call the [Grid] retype and the [Stage] legal) --
+   and so is each one's twin without [Privatize]: the rule is the scope's, not the tile's. These
+   were the only triggers of the final re-check ([Schedule.privatized_tile_widens]); compilation
+   refused them at its exit gates, untyped. A hardware-typed loop inside the tile's per-thread
+   lifetime (between its init-load and its store-back) is refused at the later op too, wide tile or
+   not, whether the cell omits the loop or mentions it, and for the privatized loop itself: through
+   [apply_classified] and [schedule_legality], which apply the chain; a single op judged by
+   [op_legality] has no record of the tile ([Op_unknown] -- the tile is routine-local scratch the
+   race queries exempt). The neighbours stay admitted: a [Vectorized] retype or an in-place [Unroll]
+   of the scope-nested loop, a [Stage] whose loads stay outside the scope, a [Grid] retype of a loop
+   enclosing the tile's transfers, a [Vectorized] retype of the omitted loop. The control is the
+   same schedule without the breaking op: the tile stays wide and executes to the entry program's
+   once-narrowed 258.
 
    2. Provenance for loops a [Split] mints. The tile narrows once per execution of [over], which
    matches the serial rendering of the program [apply] was handed only where one execution of [over]
@@ -47,6 +53,7 @@ module Tn = Ir.Tnode
 module LL = Ir.Low_level
 module Sched = Ir.Schedule
 module Numerics = Ir.Numerics
+module Outcome = Ir.Schedule_outcome
 open Verdict.Claims
 
 let bf16 = Ir.Ops.bfloat16
@@ -78,26 +85,47 @@ let exec ~name ~acc ~init ~x ~xs o =
   |> List.hd_exn |> Array.to_list
 
 let claim_control =
-  "without a breaking op the privatized tile stays f32, passes the re-check, leaves the fallback \
-   log unchanged, and executes to the entry program's once-narrowed value (258)"
+  "without a breaking op the privatized tile stays f32, passes the re-check, and executes to the \
+   entry program's once-narrowed value (258)"
 
-let claim_trigger_wgr =
-  "a Workgroup_reduce Retype inside the scope a materializing Unroll minted around a privatized \
-   tile's update leaves an accumulation the final re-check does not widen"
+let claim_scope_hw =
+  "a Workgroup_reduce or Grid Retype of a loop inside the scope a materializing Unroll minted \
+   around a privatized tile's update is refused at the Retype, typed, naming the hardware loop in \
+   the scope"
 
-let claim_seam_wgr =
-  "privatize_fallbacks is per domain: the same trigger run in a second domain records its own \
-   fallback there, each domain's log holds exactly its own, and this one's is left unchanged"
+let claim_scope_stage =
+  "a Stage whose loads land inside that scope is refused at the Stage, typed, naming the \
+   tensor-node write in the scope"
 
-let claim_drop_wgr = "that tile falls back to bf16 storage precision"
+let claim_scope_twins =
+  "the same three schedules without Privatize are refused the same way: the rule is the scope's"
 
-let claim_trigger_stage =
-  "a Stage whose loads land inside that scope trips the re-check too: the fallback is recorded and \
-   the tile is at bf16 storage"
+let claim_scope_oracle =
+  "op_legality asked of the program the Privatize and the Unroll left calls all three ops illegal, \
+   with the refusal apply raises, and probing the Stage leaves that program's traced store as it \
+   was"
 
-let claim_uncompilable =
-  "compilation refuses both fallen-back programs and their twins without Privatize, so the \
-   fallback reaches no executed value"
+let claim_scope_admitted =
+  "a Vectorized retype or an in-place Unroll of that scope-nested loop, and the same Stage applied \
+   ahead of the Unroll (its loads then keep the nest from minting a scope), are admitted by apply \
+   and not called illegal by op_legality"
+
+let claim_lifetime_omitted =
+  "after a Privatize, a Grid or Workgroup Retype of a loop the tile's cell omits, between the \
+   tile's transfers and its update, is refused at the Retype, typed, through apply_classified and \
+   schedule_legality"
+
+let claim_lifetime_single_op =
+  "op_legality judging that Retype alone, on the program an earlier apply privatized, does not \
+   call it illegal: it has no record of the tile"
+
+let claim_lifetime_storage =
+  "on a storage-precision tile, a Grid Retype of an inner loop its cell mentions, or of the \
+   privatized loop itself, is refused at the Retype too"
+
+let claim_lifetime_admitted =
+  "a Grid Retype of a loop enclosing the tile's transfers, and a Vectorized Retype of the omitted \
+   loop, are admitted"
 
 let claim_split_outer =
   "a Privatize over the outer half of a Split of the localizing loop widens like that loop (258 \
@@ -132,7 +160,7 @@ let claim_split_reduce =
   "a Privatize of that node over a Split_reduce's block loop, or over its in-block loop, keeps a \
    bf16 storage tile and the split schedule's own narrowing (256, as without Privatize)"
 
-(* === The final re-check === *)
+(* === The scope grammar and the tile's lifetime === *)
 
 (* [r { s { t { acc[0] += x[r, s, t] } } }], localized at [r]; each [r] iteration adds 1.25. *)
 let xs_rst = [| 0.125; 0.375; 0.5; 0.25; 0.25; 0.5; 0.375; 0.125 |]
@@ -172,6 +200,31 @@ let build_rsut name =
   in
   (Ll_test.optimize ~materialized:[ acc; x ] ~name raw, acc, x, r, s, t)
 
+(* f32 accumulators, so a [Privatize] tile is at storage precision, not wide: [r { i { acc[i] +=
+   x[r, i] } }] (the cell mentions the inner loop [i]) and [i { r { acc[i] += x[i, r] } }] (the
+   cell's [i] selects the element outside the privatized [r]). *)
+let node32 = Ll_test.node_factory ~prec:Ir.Ops.single ~first_id:14300 ~dims:[| 2 |] ()
+
+let build_f32 name ~inner_mentioned =
+  let acc = node32 (name ^ "_acc") and x = node32 ~dims:[| 2; 2 |] (name ^ "_x") in
+  Ll_test.materialize acc;
+  Ll_test.materialize x;
+  let r = Ll_test.sym () and i = Ll_test.sym () in
+  let update =
+    Ll_test.set acc
+      [| it i |]
+      (LL.Binop
+         ( Ir.Ops.Add,
+           (Ll_test.get acc [| it i |], Ir.Ops.single),
+           ( Ll_test.get x (if inner_mentioned then [| it r; it i |] else [| it i; it r |]),
+             Ir.Ops.single ) ))
+  in
+  let raw =
+    if inner_mentioned then Ll_test.loop_n r 2 (Ll_test.loop_n i 2 update)
+    else Ll_test.loop_n i 2 (Ll_test.loop_n r 2 update)
+  in
+  (Ll_test.optimize ~materialized:[ acc; x ] ~name raw, acc, r, i)
+
 let stage_over x t =
   Sched.Stage
     {
@@ -187,107 +240,106 @@ let stage_over x t =
     }
 
 let unroll s = Sched.Unroll { axis = s; materialize = true }
+let retype axis ty = Sched.Retype { axis; ty }
 
-(* Applies [sched], returning the program and the fallbacks this apply recorded in this domain. *)
-let apply_logged sched o =
-  let before = List.length (Sched.privatize_fallbacks ()) in
-  let scheduled = Sched.apply sched o in
-  let after = Sched.privatize_fallbacks () in
-  (scheduled, List.take after (List.length after - before))
+(* The detail of the typed refusal [apply_classified] raises for [sched], [None] when it applies. *)
+let refusal ~name sched o =
+  match Sched.apply_classified sched o with
+  | (_ : LL.optimized) -> None
+  | exception Outcome.Cause_at (Outcome.Transform, Outcome.Illegal_schedule { detail; _ }) ->
+      Stdio.eprintf "privatize_recheck: %s refused: %s (not part of the golden)\n%!" name detail;
+      Some detail
 
-(* Compilation refuses the program for a hardware-annotated loop or a tensor-node write inside a
-   scope body, by whichever check meets it first: the renderer's hardware-axis table or
-   [validate_parallel] for the one, [validate_scope_bodies] for the other. *)
-let refuses_compile ~name ~because o =
-  match Ll_test.run ~name o ~seed:[] with
-  | _ -> false
-  | exception Invalid_argument msg ->
-      Stdio.eprintf "privatize_recheck: %s refused at compile: %s (not part of the golden)\n%!" name
-        msg;
-      String.is_substring msg ~substring:because
+(* Refused at the op [op], the detail saying [what]. *)
+let refused ~name ~op ~what sched o =
+  match refusal ~name sched o with
+  | Some detail ->
+      String.is_prefix detail ~prefix:("Schedule." ^ op ^ ":")
+      && String.is_substring detail ~substring:what
+  | None -> false
 
-let fallback_of ~acc log =
-  match log with [ (target, tile) ] when Tn.equal target acc -> Some tile | _ -> None
+let admitted ~name sched o = Option.is_none (refusal ~name sched o)
 
-let same_pairs a b = List.equal (fun (a1, t1) (a2, t2) -> Tn.equal a1 a2 && Tn.equal t1 t2) a b
+let illegal_with ~what = function
+  | Sched.Op_illegal msg -> String.is_substring msg ~substring:what
+  | Sched.Op_legal | Sched.Op_unknown _ -> false
 
-(* The [Workgroup_reduce] trigger on fresh nodes: the program, its accumulator, and the fallbacks
-   this apply recorded. *)
-let wgr_trigger name =
-  let o, acc, _, r, s, t = build_rst name in
-  let scheduled, log =
-    apply_logged
-      [ pz ~target:acc ~over:r; unroll s; Sched.Retype { axis = t; ty = LL.Workgroup_reduce } ]
-      o
+let not_illegal = function
+  | Sched.Op_illegal _ -> false
+  | Sched.Op_legal | Sched.Op_unknown _ -> true
+
+let in_scope = "hardware-annotated loop"
+and scope_write = "writes the tensor node"
+
+let lifetime = "per-thread lifetime of the Privatize tile"
+
+let scope_legs () =
+  let hw ty name ~privatize =
+    let o, acc, _, r, s, t = build_rst name in
+    let pre = if privatize then [ pz ~target:acc ~over:r ] else [] in
+    refused ~name ~op:"Retype" ~what:in_scope (pre @ [ unroll s; retype t ty ]) o
   in
-  (scheduled, acc, log)
-
-let recheck_legs () =
-  let wgr, wgr_acc, wgr_log = wgr_trigger "prc_wgr" in
-  let wgr_tile = fallback_of ~acc:wgr_acc wgr_log in
-  p claim_trigger_wgr
-    (match wgr_tile with
-    | Some tile ->
-        List.mem (tiles wgr.LL.llc) tile ~equal:Tn.equal
-        && not (Sched.privatized_tile_widens ~tile wgr.LL.llc)
-    | None -> false);
-  (* The seam: a second domain runs the same trigger on nodes of its own. Each domain's log holds
-     exactly its own fallback, and this domain's is unchanged by the other's. *)
-  (let here = Sched.privatize_fallbacks () in
-   let there, there_pair =
-     Stdlib.Domain.join
-       (Stdlib.Domain.spawn (fun () ->
-            let _, acc, log = wgr_trigger "prc_wgr_domain" in
-            ( Sched.privatize_fallbacks (),
-              Option.map (fallback_of ~acc log) ~f:(fun tile -> (acc, tile)) )))
+  let stage name ~privatize =
+    let o, acc, x, r, s, t = build_rsut name in
+    let pre = if privatize then [ pz ~target:acc ~over:r ] else [] in
+    refused ~name ~op:"Stage" ~what:scope_write (pre @ [ unroll s; stage_over x t ]) o
+  in
+  p claim_scope_hw
+    (hw LL.Workgroup_reduce "prc_wgr" ~privatize:true && hw LL.Grid "prc_grid" ~privatize:true);
+  p claim_scope_stage (stage "prc_stage" ~privatize:true);
+  p claim_scope_twins
+    (hw LL.Workgroup_reduce "prc_wgr_twin" ~privatize:false
+    && hw LL.Grid "prc_grid_twin" ~privatize:false
+    && stage "prc_stage_twin" ~privatize:false);
+  (* The oracle, asked of the program the ops before the breaking one left. *)
+  let rst_prefix name =
+    let o, acc, _, r, s, t = build_rst name in
+    (Sched.apply [ pz ~target:acc ~over:r; unroll s ] o, t)
+  in
+  let rsut_prefix name =
+    let o, acc, x, r, s, t = build_rsut name in
+    (Sched.apply [ pz ~target:acc ~over:r; unroll s ] o, x, r, t)
+  in
+  (let pre, t = rst_prefix "prc_oracle_hw" in
+   let st, x, _, t' = rsut_prefix "prc_oracle_stage" in
+   let keys o = List.sort (Hashtbl.keys o.LL.traced_store) ~compare:Tn.compare in
+   let store = keys st in
+   let stage_v = Sched.op_legality st (stage_over x t') in
+   p claim_scope_oracle
+     (illegal_with ~what:in_scope (Sched.op_legality pre (retype t LL.Workgroup_reduce))
+     && illegal_with ~what:in_scope (Sched.op_legality pre (retype t LL.Grid))
+     && illegal_with ~what:scope_write stage_v
+     && List.equal Tn.equal (keys st) store));
+  (let pre, t = rst_prefix "prc_adm_vec" in
+   let pre_u, t_u = rst_prefix "prc_adm_unroll" in
+   let staged =
+     let o, acc, x, r, s, t = build_rsut "prc_adm_stage" in
+     match Sched.apply_classified [ pz ~target:acc ~over:r; stage_over x t; unroll s ] o with
+     | applied -> Ll_test.count_scopes applied.LL.llc = 0
+     | exception Outcome.Cause_at _ -> false
    in
-   p claim_seam_wgr
-     (match (wgr_tile, there_pair) with
-     | Some tile, Some pair ->
-         same_pairs wgr_log [ (wgr_acc, tile) ]
-         && same_pairs there [ pair ]
-         && same_pairs (Sched.privatize_fallbacks ()) here
-     | _ -> false));
-  p claim_drop_wgr
-    (match wgr_tile with
-    | Some tile ->
-        Ir.Ops.equal_prec (Lazy.force tile.Tn.storage_prec) bf16 && only_prec bf16 wgr.LL.llc
-    | None -> false);
-  let stg =
-    let o, acc, x, r, s, t = build_rsut "prc_stage" in
-    let stg, log = apply_logged [ pz ~target:acc ~over:r; unroll s; stage_over x t ] o in
-    p claim_trigger_stage
-      (match fallback_of ~acc log with
-      | Some tile ->
-          (not (Sched.privatized_tile_widens ~tile stg.LL.llc))
-          && Ir.Ops.equal_prec (Lazy.force tile.Tn.storage_prec) bf16
-      | None -> false);
-    stg
-  in
-  let wgr_twin =
-    let o, _, _, _, s, t = build_rst "prc_wgr_twin" in
-    Sched.apply [ unroll s; Sched.Retype { axis = t; ty = LL.Workgroup_reduce } ] o
-  in
-  let stg_twin =
-    let o, _, x, _, s, t = build_rsut "prc_stage_twin" in
-    Sched.apply [ unroll s; stage_over x t ] o
-  in
-  let hw = "hardware-annotated loop" and scope = "validate_scope_bodies" in
-  p claim_uncompilable
-    (refuses_compile ~name:"prc_wgr" ~because:hw wgr
-    && refuses_compile ~name:"prc_wgr_twin" ~because:hw wgr_twin
-    && refuses_compile ~name:"prc_stage" ~because:scope stg
-    && refuses_compile ~name:"prc_stage_twin" ~because:scope stg_twin);
-  (* The control: the same tile with nothing breaking its scope, after the triggers, so the log it
-     must leave unchanged is not empty. *)
+   let st, x, t_st =
+     let o, acc, x, r, _, t = build_rsut "prc_adm_stage_oracle" in
+     (Sched.apply [ pz ~target:acc ~over:r ] o, x, t)
+   in
+   let adm_rst name ty =
+     let o, acc, _, r, s, t = build_rst name in
+     admitted ~name [ pz ~target:acc ~over:r; unroll s; ty t ] o
+   in
+   p claim_scope_admitted
+     (adm_rst "prc_adm_vec" (fun t -> retype t LL.Vectorized)
+     && adm_rst "prc_adm_unroll" (fun t -> Sched.Unroll { axis = t; materialize = false })
+     && staged
+     && not_illegal (Sched.op_legality pre (retype t LL.Vectorized))
+     && not_illegal (Sched.op_legality pre_u (Sched.Unroll { axis = t_u; materialize = false }))
+     && not_illegal (Sched.op_legality st (stage_over x t_st))));
+  (* The control: the same tile with nothing breaking its scope. *)
   let serial =
     let o, acc, x, _, _, _ = build_rst "prc_serial" in
     exec ~name:"prc_serial" ~acc ~init:[| 256.0 |] ~x ~xs:xs_rst o
   in
   let o, acc, x, r, s, _ = build_rst "prc_ctl" in
-  let before = Sched.privatize_fallbacks () in
   let ctl = Sched.apply [ pz ~target:acc ~over:r; unroll s ] o in
-  let after = Sched.privatize_fallbacks () in
   let values = exec ~name:"prc_ctl" ~acc ~init:[| 256.0 |] ~x ~xs:xs_rst ctl in
   Stdio.eprintf "privatize_recheck: serial %s, control %s (not part of the golden)\n%!"
     (floats serial) (floats values);
@@ -297,10 +349,52 @@ let recheck_legs () =
            Sched.privatized_tile_widens ~tile ctl.LL.llc
            && Ir.Ops.equal_prec (Lazy.force tile.Tn.storage_prec) Ir.Ops.single
        | _ -> false)
-    && (not (List.is_empty before))
-    && same_pairs after before
     && List.equal Float.equal serial [ 258.0 ]
     && List.equal Float.equal values serial)
+
+let lifetime_legs () =
+  let omitted name ty =
+    let o, acc, _, r, _, t = build_rst name in
+    let sched = [ pz ~target:acc ~over:r; retype t ty ] in
+    let chain =
+      let o, acc, _, r, _, t = build_rst (name ^ "_chain") in
+      match List.last (Sched.schedule_legality o [ pz ~target:acc ~over:r; retype t ty ]) with
+      | Some (Sched.Retype _, v) -> illegal_with ~what:lifetime v
+      | _ -> false
+    in
+    refused ~name ~op:"Retype" ~what:lifetime sched o && chain
+  in
+  p claim_lifetime_omitted (omitted "prc_life_grid" LL.Grid && omitted "prc_life_wg" LL.Workgroup);
+  (let o, acc, _, r, _, t = build_rst "prc_life_single" in
+   let privatized = Sched.apply [ pz ~target:acc ~over:r ] o in
+   p claim_lifetime_single_op (not_illegal (Sched.op_legality privatized (retype t LL.Grid))));
+  let f32 name ~inner_mentioned ops =
+    let o, acc, r, i = build_f32 name ~inner_mentioned in
+    (o, pz ~target:acc ~over:r :: ops ~r ~i)
+  in
+  p claim_lifetime_storage
+    (let o, sched =
+       f32 "prc_life_mentioned" ~inner_mentioned:true (fun ~r:_ ~i -> [ retype i LL.Grid ])
+     in
+     let o', sched' =
+       f32 "prc_life_over" ~inner_mentioned:true (fun ~r ~i:_ -> [ retype r LL.Grid ])
+     in
+     let o'', sched'' = f32 "prc_life_storage_tile" ~inner_mentioned:true (fun ~r:_ ~i:_ -> []) in
+     let storage_tile =
+       match tiles (Sched.apply sched'' o'').LL.llc with
+       | [ tile ] -> Ir.Ops.equal_prec (Lazy.force tile.Tn.storage_prec) Ir.Ops.single
+       | _ -> false
+     in
+     storage_tile
+     && refused ~name:"prc_life_mentioned" ~op:"Retype" ~what:lifetime sched o
+     && refused ~name:"prc_life_over" ~op:"Retype" ~what:lifetime sched' o');
+  p claim_lifetime_admitted
+    (let o, sched =
+       f32 "prc_life_outer" ~inner_mentioned:false (fun ~r:_ ~i -> [ retype i LL.Grid ])
+     in
+     let o', acc, _, r, _, t = build_rst "prc_life_vec" in
+     admitted ~name:"prc_life_outer" sched o
+     && admitted ~name:"prc_life_vec" [ pz ~target:acc ~over:r; retype t LL.Vectorized ] o')
 
 (* === Provenance for Split-minted loops === *)
 
@@ -580,7 +674,8 @@ let () =
   Test_utils.with_policy
     (fun pol -> { pol with Numerics.bf16_arithmetic = Numerics.Bf16_wide })
     (fun () ->
-      recheck_legs ();
+      scope_legs ();
+      lifetime_legs ();
       provenance_legs ();
       minted_legs ();
       split_reduce_legs ())

@@ -594,9 +594,19 @@ let roofline_seconds ?peak_flops ?peak_memory_bandwidth ~flops ~bytes () : float
    and what makes every untiled contraction score at its roofline floor. The ranking score charges
    what a plan requests once its reused data cannot stay cached: per block, the cells the block
    touches (its [Grid] loops standing still), times the blocks. The reuse factor of a tiling falls
-   out of the per-block footprint; nothing here knows what a matmul is. *)
+   out of the per-block footprint; nothing here knows what a matmul is.
 
-type reuse = { ru_requested : (Tn.t * int) list; ru_working_set_bytes : int } [@@deriving sexp_of]
+   gh-ocannl-1442: the score's rates are its own, not the bound's ceilings — an effective scalar
+   issue rate and an achieved DRAM rate, each read as at most its ceiling — and under the per-block
+   model the bytes of nodes that never leave the chip (workgroup tiles, thread-private scratch) are
+   off the DRAM leg: the fitted issue rate carries their cost for the geometry it was fitted on. *)
+
+type reuse = {
+  ru_requested : (Tn.t * int) list;
+  ru_working_set_bytes : int;
+  ru_scratch : Tn.t list;
+}
+[@@deriving sexp_of]
 
 let global_in (opt : Low_level.optimized) (tn : Tn.t) =
   not
@@ -637,7 +647,11 @@ let reuse_traffic ?max_resident_threads ~is_global (code : Low_level.t) : reuse 
   let threads = max 1 (Array.fold (Low_level.launch_dims code).Low_level.block ~init:1 ~f:( * )) in
   let requested = Hashtbl.create (module Tn) and order = ref [] in
   let nests = Hashtbl.create (module String) in
+  let scratch = Hashtbl.create (module Tn) and scratch_order = ref [] in
   List.iter (Low_level.affine_accesses code) ~f:(fun (a : Tn.t Affine.access) ->
+      if (not (is_global a.a_tn)) && not (Hashtbl.mem scratch a.a_tn) then (
+        Hashtbl.set scratch ~key:a.a_tn ~data:();
+        scratch_order := a.a_tn :: !scratch_order);
       if (not a.a_write) && is_global a.a_tn then (
         let grid = List.filter a.a_loops ~f:(fun (s, _) -> is_grid s) in
         let blocks = List.fold grid ~init:1 ~f:(fun acc (_, r) -> acc * width r) in
@@ -664,6 +678,7 @@ let reuse_traffic ?max_resident_threads ~is_global (code : Low_level.t) : reuse 
   {
     ru_requested = List.rev_map !order ~f:(fun tn -> (tn, !(Hashtbl.find_exn requested tn)));
     ru_working_set_bytes = working_set;
+    ru_scratch = List.rev !scratch_order;
   }
 
 let requested_bytes (s : summary) (r : reuse) =
@@ -681,43 +696,79 @@ let spills ?cache_capacity_bytes (r : reuse) =
   | Some capacity -> r.ru_working_set_bytes > capacity
   | None -> false
 
+(* A ranking rate is at most its ceiling — the envelope constant the bound divides by — so every leg
+   priced at it is at least the bound's leg over the same counts; unset, it is the ceiling. *)
+let ranking_rate ~ceiling rate = match rate with None -> ceiling | Some r -> Float.min r ceiling
+
+let scratch_bytes (s : summary) (r : reuse) =
+  List.sum
+    (module Int)
+    r.ru_scratch
+    ~f:(fun tn ->
+      List.Assoc.find s.per_node tn ~equal:Tn.equal
+      |> Option.value_map ~default:0 ~f:(fun fp -> fp.fp_read_bytes + fp.fp_write_bytes))
+
 let ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
-    (s : summary) (r : reuse option) : float option * float option =
+    ?issue_rate ?dram_bandwidth ?(mma_flops = 0) (s : summary) (r : reuse option) :
+    float option * float option =
   let total = Float.of_int (total_bytes s) in
   let memory =
-    Option.map peak_memory_bandwidth ~f:(fun dram ->
-        match r with
-        | None -> total /. dram
-        | Some r -> (
-            let requested = Float.of_int (requested_bytes s r) in
-            if spills ?cache_capacity_bytes r then requested /. dram
-            else
-              match cache_bandwidth with
-              | None -> total /. dram
-              | Some cache ->
-                  (* A cache slower than DRAM would make raising the capacity raise the score. *)
-                  Float.max (total /. dram) (requested /. Float.max cache dram)))
+    Option.map peak_memory_bandwidth ~f:(fun ceiling ->
+        let dram = ranking_rate ~ceiling dram_bandwidth in
+        let priced =
+          match r with
+          | None -> total /. dram
+          | Some r -> (
+              (* Under the per-block model, the chip-resident nodes' bytes leave the DRAM leg. *)
+              let scratch = Float.of_int (scratch_bytes s r) in
+              let global = Float.max 0. (total -. scratch) in
+              let requested = Float.max 0. (Float.of_int (requested_bytes s r) -. scratch) in
+              if spills ?cache_capacity_bytes r then requested /. dram
+              else
+                match cache_bandwidth with
+                | None -> global /. dram
+                | Some cache ->
+                    (* A cache slower than DRAM would make raising the capacity raise the score. *)
+                    Float.max (global /. dram) (requested /. Float.max cache dram))
+        in
+        (* Never below the bound's memory leg: all the distinct bytes at the ceiling. *)
+        Float.max priced (total /. ceiling))
   in
-  (Option.map peak_flops ~f:(fun p -> Float.of_int s.flops /. p), memory)
+  let compute =
+    Option.map peak_flops ~f:(fun ceiling ->
+        let issue = ranking_rate ~ceiling issue_rate in
+        (* At the ceiling, the bound's own quotient: exact ties between candidates stay exact. *)
+        if Float.(issue >= ceiling) then Float.of_int s.flops /. ceiling
+        else
+          (* Only tile-MMA work the backend accepts runs on its matrix units; the caller's count, at
+             most the summary's operations. *)
+          let mma = Float.of_int (min (max 0 mma_flops) s.flops) in
+          let scalar = Float.of_int s.flops -. mma in
+          (scalar /. issue) +. (mma /. ceiling))
+  in
+  (compute, memory)
 
 let ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
-    (s : summary) (r : reuse option) : float option =
+    ?issue_rate ?dram_bandwidth ?mma_flops (s : summary) (r : reuse option) : float option =
   let compute, memory =
-    ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth s r
+    ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
+      ?issue_rate ?dram_bandwidth ?mma_flops s r
   in
   match List.filter_opt [ compute; memory ] with
   | [] -> None
   | l -> Some (List.reduce_exn l ~f:Float.max)
 
 let ranking_seconds ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
-    ?max_resident_threads ~is_global (code : Low_level.t) : float option =
+    ?issue_rate ?dram_bandwidth ?mma_flops ?max_resident_threads ~is_global (code : Low_level.t) :
+    float option =
   let s = analyze code in
   let r =
     match (cache_capacity_bytes, cache_bandwidth) with
     | None, None -> None
     | _ -> Some (reuse_traffic ?max_resident_threads ~is_global code)
   in
-  ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth s r
+  ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
+    ?issue_rate ?dram_bandwidth ?mma_flops s r
 
 (* {2 Tile-MMA operand loads — gh-ocannl-1254}
 
@@ -756,8 +807,22 @@ let operand_load_instructions ~lanes ~elements ~elt_bytes = function
   (* One load per element a lane gathers, whatever its width. *)
   | Gather _ -> (elements + lanes - 1) / lanes
 
-let tile_mma_operand_loads ~operand_accepts ~operand_fragments ~operand_loads
-    (opt : Low_level.optimized) =
+(* Every [Tile_mma] statement the statement walk reaches, with its executions per lane group ([scale
+   / lanes]), lanes and emission scope -- [None] where the renderer's layouts or the backend's hook
+   decline it, so its scalar fallback renders. Shared by the operand-load count and the accepted
+   tile-MMA work the ranking score prices at the matrix units' rate (gh-ocannl-1442). *)
+type mma_site = {
+  ms_stmt : Low_level.t;
+  ms_scale : int;
+  ms_lanes : int;
+  ms_scope :
+    (Backend_intf.mma_emission_scope
+    * Backend_intf.mma_operand_place
+    * Backend_intf.mma_operand_place)
+    option;
+}
+
+let tile_mma_scopes ~operand_accepts (opt : Low_level.optimized) : mma_site list =
   let prec tn = Lazy.force tn.Tn.storage_prec in
   let layout tn ~ld ~idcs =
     Low_level.mma_operand_layout
@@ -858,56 +923,76 @@ let tile_mma_operand_loads ~operand_accepts ~operand_fragments ~operand_loads
               | Some None | None -> on_its_own)
           | _ -> None
         in
-        let description =
-          Option.map scope ~f:(fun (scope, a_place, b_place) ->
-              ( operand_loads ~a_prec ~b_prec ~d_prec ~scope ~ta ~tb ~a:a_place ~b:b_place,
-                operand_fragments ~a_prec ~b_prec ~d_prec ~scope ))
-        in
-        (* The emitted forms: [a]'s fragment comes in through [ldmatrix .x4] (16 bytes per lane),
-           [b]'s through [.x2] (8 bytes per lane), in every inline-PTX arm; an arm whose fragments
-           load whole ([mf_fragment_loads], wmma) issues one load per fragment. *)
-        let classify tn ldm ~fragment_loads ~lane_bytes =
-          if ldm then Ldmatrix { lane_bytes }
-          else if fragment_loads then Fragment_load
-          else Gather { elt_bytes = Ops.prec_in_bytes (prec tn) }
-        in
-        (* Per intrinsic tile [(tm, tn, tk)] of the arm's own description, the emission loads [a]
-           fragments ([tm x tk]) and [b] fragments ([tk x tn]): once per reduction step each, reused
-           across the other's free axis, or — where the arm reloads — for every tile of that axis
-           too. A statement the backend does not describe, or whose extents the tile does not divide
-           (the arm declines it), has no count. *)
-        let site =
-          match description with
-          | Some
-              ( (a_ldm, b_ldm),
-                Some { Backend_intf.mf_tile = tm, tn, tk; mf_reloads; mf_fragment_loads } )
-            when tm > 0 && tn > 0 && tk > 0 && m % tm = 0 && n % tn = 0 && k % tk = 0 ->
-              let mt = m / tm and nt = n / tn and kt = k / tk in
-              let a_frags, b_frags =
-                if mf_reloads then (mt * nt * kt, mt * nt * kt) else (mt * kt, nt * kt)
-              in
-              Some
-                ( scale / lanes,
-                  [
-                    ( a_tn,
-                      tm * tk,
-                      a_frags,
-                      classify a_tn a_ldm ~fragment_loads:mf_fragment_loads ~lane_bytes:16 );
-                    ( b_tn,
-                      tk * tn,
-                      b_frags,
-                      classify b_tn b_ldm ~fragment_loads:mf_fragment_loads ~lane_bytes:8 );
-                  ],
-                  lanes )
-          | Some (_, _) | None -> None
-        in
-        sites := site :: !sites
+        sites := { ms_stmt = c; ms_scale = scale; ms_lanes = lanes; ms_scope = scope } :: !sites
     | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_dynamic _ | Set_from_vec _
     | Set_local _ | Declare_local _ | Workgroup_barrier ->
         ()
   in
   go ~scale:1 ~env:[] opt.Low_level.llc;
   List.rev !sites
+
+let tile_mma_operand_loads ~operand_accepts ~operand_fragments ~operand_loads
+    (opt : Low_level.optimized) =
+  let prec tn = Lazy.force tn.Tn.storage_prec in
+  List.map (tile_mma_scopes ~operand_accepts opt)
+    ~f:(fun { ms_stmt; ms_scale = scale; ms_lanes = lanes; ms_scope = scope } ->
+      match ms_stmt with
+      | Low_level.Tile_mma { d = d_tn, _; a = a_tn, _; b = b_tn, _; ta; tb; m; n; k; _ } ->
+          let a_prec = prec a_tn and b_prec = prec b_tn and d_prec = prec d_tn in
+          let description =
+            Option.map scope ~f:(fun (scope, a_place, b_place) ->
+                ( operand_loads ~a_prec ~b_prec ~d_prec ~scope ~ta ~tb ~a:a_place ~b:b_place,
+                  operand_fragments ~a_prec ~b_prec ~d_prec ~scope ))
+          in
+          (* The emitted forms: [a]'s fragment comes in through [ldmatrix .x4] (16 bytes per lane),
+             [b]'s through [.x2] (8 bytes per lane), in every inline-PTX arm; an arm whose fragments
+             load whole ([mf_fragment_loads], wmma) issues one load per fragment. *)
+          let classify tn ldm ~fragment_loads ~lane_bytes =
+            if ldm then Ldmatrix { lane_bytes }
+            else if fragment_loads then Fragment_load
+            else Gather { elt_bytes = Ops.prec_in_bytes (prec tn) }
+          in
+          (* Per intrinsic tile [(tm, tn, tk)] of the arm's own description, the emission loads [a]
+             fragments ([tm x tk]) and [b] fragments ([tk x tn]): once per reduction step each,
+             reused across the other's free axis, or — where the arm reloads — for every tile of
+             that axis too. A statement the backend does not describe, or whose extents the tile
+             does not divide (the arm declines it), has no count. *)
+          let site =
+            match description with
+            | Some
+                ( (a_ldm, b_ldm),
+                  Some { Backend_intf.mf_tile = tm, tn, tk; mf_reloads; mf_fragment_loads } )
+              when tm > 0 && tn > 0 && tk > 0 && m % tm = 0 && n % tn = 0 && k % tk = 0 ->
+                let mt = m / tm and nt = n / tn and kt = k / tk in
+                let a_frags, b_frags =
+                  if mf_reloads then (mt * nt * kt, mt * nt * kt) else (mt * kt, nt * kt)
+                in
+                Some
+                  ( scale / lanes,
+                    [
+                      ( a_tn,
+                        tm * tk,
+                        a_frags,
+                        classify a_tn a_ldm ~fragment_loads:mf_fragment_loads ~lane_bytes:16 );
+                      ( b_tn,
+                        tk * tn,
+                        b_frags,
+                        classify b_tn b_ldm ~fragment_loads:mf_fragment_loads ~lane_bytes:8 );
+                    ],
+                    lanes )
+            | Some (_, _) | None -> None
+          in
+          site
+      | _ -> None)
+
+let accepted_tile_mma_flops ~operand_accepts (opt : Low_level.optimized) =
+  List.sum
+    (module Int)
+    (tile_mma_scopes ~operand_accepts opt)
+    ~f:(fun { ms_stmt; ms_scale; ms_lanes; ms_scope } ->
+      match (ms_stmt, ms_scope) with
+      | Low_level.Tile_mma { m; n; k; _ }, Some _ -> ms_scale / ms_lanes * (2 * m * n * k)
+      | _ -> 0)
 
 type load_count = No_tile_mma | Undescribed | Loads of int [@@deriving sexp_of, equal]
 

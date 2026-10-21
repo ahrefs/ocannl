@@ -220,7 +220,7 @@ let conv_leg ~what opt =
       Autotune.seeding_census ~capabilities:standin ~is_gpu:true ~is_cpu:false
         ~limits:(f16_limits None) (scratch opt)
     with
-    | { sc_family = Autotune.Seeding_conv { judgment = { cj_site = site; _ }; _ }; _ } ->
+    | { sc_family = Autotune.Seeding_conv { site; _ }; _ } ->
         let prec tn = Lazy.force tn.Tn.storage_prec in
         Ir.Ops.equal_prec (prec site.c_a) Ir.Ops.half
         && Ir.Ops.equal_prec (prec site.c_b) Ir.Ops.half

@@ -259,3 +259,166 @@ let () =
     (ws narrow = per_block * min 128 (resident / 32));
   p "beside a 256-thread sibling, it keeps only resident / 256 (the launch block's)"
     (ws (Ll_test.seq wide narrow) = per_block * min 128 (resident / 256))
+
+(* {2 The score's own rates and memory spaces (gh-ocannl-1442)}
+
+   Ceilings shaped like CUDA's advisories ([peak_flops] 1.5e13, [peak_memory_bandwidth] 8e12) beside
+   realistic rates (an issue rate of 3.4e12, a DRAM rate of 5.8e11, a cache tier of 1.8e12), within
+   capacity. Not a calibration: numbers in the regime the backends' ceilings and rog's measurements
+   put the score in. *)
+let c_flops = 1.5e13
+and c_bw = 8e12
+and r_issue = 3.4e12
+and r_dram = 5.8e11
+and r_cache = 1.8e12
+
+let huge = Int.max_value / 2
+
+let rated ?issue_rate ?dram_bandwidth ?(cache_bandwidth = r_cache) (o : LL.optimized) =
+  CM.ranking_seconds ~peak_flops:c_flops ~peak_memory_bandwidth:c_bw ~cache_capacity_bytes:huge
+    ~cache_bandwidth ?issue_rate ?dram_bandwidth ~max_resident_threads:resident
+    ~is_global:(CM.global_in o) o.LL.llc
+
+let legs ?issue_rate ?dram_bandwidth ?(scratch = true) (o : LL.optimized) =
+  let s = CM.analyze o.LL.llc in
+  let r = CM.reuse_traffic ~max_resident_threads:resident ~is_global:(CM.global_in o) o.LL.llc in
+  let r = if scratch then r else { r with CM.ru_scratch = [] } in
+  CM.ranking_legs_of ~peak_flops:c_flops ~peak_memory_bandwidth:c_bw ~cache_capacity_bytes:huge
+    ~cache_bandwidth:r_cache ?issue_rate ?dram_bandwidth s (Some r)
+
+let c_bound (o : LL.optimized) =
+  let s = CM.analyze o.LL.llc in
+  CM.roofline_seconds ~peak_flops:c_flops ~peak_memory_bandwidth:c_bw ~flops:s.CM.flops
+    ~bytes:(CM.total_bytes s) ()
+
+let () =
+  let blocktiles = List.filter_map scalar_blocktiles ~f:applied in
+  let plans = untiled :: List.filter_map leaves ~f:applied in
+  let eq a b = Option.equal Float.equal a b in
+  p_all
+    ~min:(1 + List.length scalar_blocktiles)
+    "a rate at or above its ceiling reads as the ceiling: the score is the one without it, on \
+     every leaf"
+    plans
+    ~f:(fun o ->
+      eq (rated ~issue_rate:c_flops ~dram_bandwidth:c_bw o) (rated o)
+      && eq (rated ~issue_rate:(4. *. c_flops) ~dram_bandwidth:(4. *. c_bw) o) (rated o));
+  p_all
+    ~min:(1 + List.length scalar_blocktiles)
+    "raising the issue rate or the DRAM rate never raises the score, on every leaf" plans
+    ~f:(fun o ->
+      le
+        (rated ~issue_rate:(2. *. r_issue) ~dram_bandwidth:r_dram o)
+        (rated ~issue_rate:r_issue ~dram_bandwidth:r_dram o)
+      && le
+           (rated ~issue_rate:r_issue ~dram_bandwidth:(2. *. r_dram) o)
+           (rated ~issue_rate:r_issue ~dram_bandwidth:r_dram o));
+  p_all
+    ~min:(1 + List.length scalar_blocktiles)
+    "with the score's own rates, analyze's roofline under the ceilings is at most the score, on \
+     every leaf"
+    plans
+    ~f:(fun o -> le (c_bound o) (rated ~issue_rate:r_issue ~dram_bandwidth:r_dram o));
+  (* Why the two rates come together: priced at a realistic issue rate but the ceiling's DRAM, the
+     untiled plan reads compute-bound, and no sketch -- the same operations plus its staging -- can
+     be strictly below it; with the achieved DRAM rate too, the re-reads it pays for are back. *)
+  let below ?issue_rate ?dram_bandwidth o =
+    match (rated ?issue_rate ?dram_bandwidth o, rated ?issue_rate ?dram_bandwidth untiled) with
+    | Some a, Some b -> Float.(a < b)
+    | _ -> false
+  in
+  p_exists "under the ceilings, some scalar blocktile ranks strictly below the untiled plan"
+    blocktiles ~f:(fun o -> below o);
+  p_none ~min:1
+    "an issue rate with the ceiling's DRAM leaves no scalar blocktile strictly below the untiled \
+     plan"
+    blocktiles ~f:(below ~issue_rate:r_issue);
+  p_exists "with both rates, some scalar blocktile ranks strictly below the untiled plan" blocktiles
+    ~f:(below ~issue_rate:r_issue ~dram_bandwidth:r_dram);
+  (* Memory spaces: what the reuse model keeps off the DRAM leg is exactly the chip-resident nodes,
+     and every global node's distinct bytes, writes included, stay on it. *)
+  let globals_bytes (o : LL.optimized) =
+    List.sum
+      (module Int)
+      (CM.analyze o.LL.llc).CM.per_node
+      ~f:(fun (tn, fp) ->
+        if CM.global_in o tn then fp.CM.fp_read_bytes + fp.CM.fp_write_bytes else 0)
+  in
+  p_all
+    ~min:(1 + List.length scalar_blocktiles)
+    "every leaf's memory leg is at least its global nodes' distinct bytes, writes included, at the \
+     DRAM rate"
+    plans
+    ~f:(fun o ->
+      match snd (legs ~dram_bandwidth:r_dram o) with
+      | Some m -> Float.(m >= Float.of_int (globals_bytes o) /. r_dram)
+      | None -> false);
+  let scratch_of o =
+    (CM.reuse_traffic ~max_resident_threads:resident ~is_global:(CM.global_in o) o.LL.llc)
+      .CM.ru_scratch
+  in
+  p_all ~min:1 "the reuse extraction lists exactly the nodes no global placement holds" plans
+    ~f:(fun o ->
+      let off =
+        List.filter_map (CM.analyze o.LL.llc).CM.per_node ~f:(fun (tn, _) ->
+            if CM.global_in o tn then None else Some tn)
+      in
+      List.equal Tn.equal
+        (List.sort ~compare:Tn.compare off)
+        (List.sort ~compare:Tn.compare (scratch_of o)));
+  let staged = List.filter blocktiles ~f:(fun o -> not (List.is_empty (scratch_of o))) in
+  p_all ~min:1
+    "a staged blocktile's tiles are off the DRAM leg: its memory leg is below the same extraction \
+     charging them"
+    staged ~f:(fun o ->
+      match
+        (snd (legs ~dram_bandwidth:r_dram o), snd (legs ~dram_bandwidth:r_dram ~scratch:false o))
+      with
+      | Some a, Some b -> Float.(a < b)
+      | _ -> false);
+  (* The compute leg on a hand-made summary: the tile-MMA work the backend accepts (the caller's
+     count) stays at the ceiling; everything else -- declined or unclassified tile-MMA work included
+     -- moves with the issue rate. *)
+  let summary ~flops =
+    {
+      CM.per_node = [];
+      read_bytes = 0;
+      write_bytes = 0;
+      flops;
+      flops_approx = false;
+      opaque = false;
+    }
+  in
+  let compute ?issue_rate ?mma_flops s =
+    fst (CM.ranking_legs_of ~peak_flops:c_flops ?issue_rate ?mma_flops s None)
+  in
+  p "an all-accepted-tile-MMA kernel's compute leg does not depend on the issue rate"
+    (eq
+       (compute ~issue_rate:r_issue ~mma_flops:1_000_000 (summary ~flops:1_000_000))
+       (compute (summary ~flops:1_000_000)));
+  p "with no accepted tile-MMA work, the compute leg is all operations at the issue rate"
+    (eq (compute ~issue_rate:r_issue (summary ~flops:1_000_000)) (Some (1e6 /. r_issue)));
+  p "an accepted count above the operations reads as the operations"
+    (eq
+       (compute ~issue_rate:r_issue ~mma_flops:5_000_000 (summary ~flops:1_000_000))
+       (compute ~issue_rate:r_issue ~mma_flops:1_000_000 (summary ~flops:1_000_000)))
+
+(* The staffed start re-decides each segment of the search's own segmentation under the gate, so its
+   tag -- which joins the search trajectory's identity -- names every reading those decisions rest
+   on: two gates differing only in the issue rate, or only in the DRAM rate, tag apart. *)
+let () =
+  let rated_limits = { limits with peak_flops = Some c_flops; peak_memory_bandwidth = Some c_bw } in
+  let tag ?scalar_rate ?dram_rate () =
+    Autotune.seeded_plan
+      ~seed_gate:(Autotune.Ranked { capacity = Some 0; cache_rate = None; scalar_rate; dram_rate })
+      ~backend:"cuda" ~limits:rated_limits ~accum_prec:Fn.id ~static_indices:[] (hermetic base)
+    |> Option.bind ~f:(fun plan -> plan.Autotune.sp_start)
+    |> Option.map ~f:(fun start -> start.Autotune.gate_tag)
+  in
+  let apart a b = match (a, b) with Some a, Some b -> not (String.equal a b) | _ -> false in
+  p "the staffed start's gate tag tells two issue rates apart"
+    (* At the achieved DRAM rate: an issue rate under the ceiling's DRAM seeds nothing here (above),
+       and a plan that seeds nothing has no start to tag. *)
+    (apart (tag ~dram_rate:r_dram ()) (tag ~scalar_rate:r_issue ~dram_rate:r_dram ()));
+  p "the staffed start's gate tag tells two DRAM rates apart"
+    (apart (tag ()) (tag ~dram_rate:r_dram ()))

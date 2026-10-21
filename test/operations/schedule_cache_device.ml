@@ -62,6 +62,8 @@ let () =
             cache_capacity_bytes = None;
             max_resident_threads = None;
             cache_bandwidth = None;
+            issue_rate = None;
+            dram_bandwidth = None;
           }));
   p "a concrete context's identity is stable"
     (Option.equal BI.equal_timing_identity identity (Context.timing_identity ctx));

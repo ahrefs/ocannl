@@ -331,24 +331,22 @@ type optop =
           tile stays at storage. Likewise sibling statements of any kind, a reduction level the cell
           varies under, a non-reduction or mixed-operator recurrence, an RNG-bearing contribution
           and routine logging all get a storage-precision tile, which code generation renders
-          exactly as it would [target], so the narrowing points do not move. After all ops, and
-          before the finalization passes force its precision, {!apply} re-checks each wide tile
-          against the program the ops left ({!privatized_tile_widens}) and falls it back to storage
-          precision where a later op left an accumulation the decision does not widen
-          ({!privatize_fallbacks}); the finalized program is judged once more, and a tile failing
-          there is refused. The fallback is a safety net, not a path any compilable program takes:
+          exactly as it would [target], so the narrowing points do not move. After the finalization
+          passes {!apply} re-checks each wide tile ({!privatized_tile_widens}) and refuses one whose
+          accumulation the decision no longer widens — a backstop no known op sequence reaches:
           index-rewriting ops map the update and its self-read alike, the materializing [Unroll] and
-          [Partition] mint exactly the scope grammar the decision reads back, and no op rewrites a
-          contribution to read the tile — the only sequences that trip it put a hardware-typed loop
-          ([Retype]) or a tensor-node write ([Stage]'s loads) into such a minted scope, which
-          compilation refuses (a hardware loop in a scope body is in no kernel's hardware-axis
-          table, and [Low_level.validate_parallel] rejects it; [Low_level.validate_scope_bodies]
-          rejects the write). A [target] whose storage is already its residency (f32, f64) is
-          unaffected by all of this. A hardware-typed loop [target]'s cell does not mention, between
-          [over] and the update, is rejected: it would split the accumulation across threads. Any
-          other admissible value is an explicit numerics choice of the schedule, e.g. the storage
-          precision reproduces per-step narrowing. Part of the schedule's identity (the cache saves
-          it). *)
+          [Partition] mint exactly the scope grammar the decision reads back, no op rewrites a
+          contribution to read the tile, and the sequences that would break it (a hardware-typed
+          loop or a tensor-node write put into such a minted scope) are refused at their op by the
+          scope grammar (gh-ocannl-1467, {!apply}). A [target] whose storage is already its
+          residency (f32, f64) is unaffected by all of this. A hardware-typed loop between [over]
+          and the update is rejected — one [target]'s cell does not mention would split the
+          accumulation across threads, and the inner index loops of the tile part must be [Serial] —
+          and so is any LATER op of the same {!apply} that puts a hardware-typed loop inside the
+          tile's per-thread lifetime (between its init-load and its store-back, [Privatize]'s own
+          [over] included, gh-ocannl-1467). Any other admissible value is an explicit numerics
+          choice of the schedule, e.g. the storage precision reproduces per-step narrowing. Part of
+          the schedule's identity (the cache saves it). *)
   | Expand_zero of { tn : Tn.t; indices : Indexing.symbol list }
       (** Expand the unique [Zero_out tn] statement into an ordinary loop nest over the supplied
           symbols (one per axis of [tn]'s padded dims; see {!expand_zero}). Whole-node [Zero_out] of
@@ -634,8 +632,17 @@ val apply :
     schedule, or violates an op precondition (see {!optop}) -- the rendering of the typed refusal
     {!apply_classified} passes through. An empty schedule is the identity. Every op is applied with
     the program the schedule started from in hand, which [Privatize] judges its tile width on, and
-    its wide tiles are re-checked after the ops, before the finalization passes force their
-    precision, and confirmed after them ({!privatized_tile_widens}).
+    its wide tiles are re-checked on the finalized program ({!privatized_tile_widens}).
+
+    Each op is refused, naming it, when the program it leaves breaks the scope grammar
+    (gh-ocannl-1467): a [Local_scope] body is hoisted out of its position, so it may hold neither a
+    hardware-annotated loop ({!Low_level.scope_hardware_loop}) nor an effect beyond its own locals
+    ({!Low_level.scope_purity_violation}) — e.g. a hardware [Retype] of a loop inside the scope a
+    materializing [Unroll] minted, or a [Stage] whose loads land there. Only a violation the op
+    added is refused; an entry program already breaking the grammar (hand-built IR) is left to the
+    compile gates. Likewise when a [Privatize] tile minted earlier in the same application gets a
+    hardware-typed loop inside its per-thread lifetime (see [Privatize] in {!optop}); a tile minted
+    by an earlier [apply] is not seen.
 
     The barrier elision (gh-ocannl-487, widened to every staged anchor by gh-ocannl-567) is a
     synchronization-only rewrite — bitwise identical output, on every backend path. It rests on the
@@ -664,13 +671,8 @@ val privatized_tile_widens : tile:Tn.t -> Low_level.t -> bool
 (** The re-check of a [Privatize] tile minted at the accumulator residency (gh-ocannl-1151): every
     write of [tile] in the program is either a transfer (it does not read the tile) or a
     self-accumulating update whose base {!Low_level.accum_base_widens} — a [Tile_mma]'s scalar
-    fallback judged like any statement. {!apply} asks it of the program its ops left, falling a tile
-    failing it back to its target's storage precision while that is still unforced, and again of the
-    finalized program, refusing there. Exposed for tests. *)
-
-val privatize_fallbacks : unit -> (Tn.t * Tn.t) list
-(** The [(target, tile)] pairs whose wide [Privatize] tile {!apply}'s re-check fell back to storage
-    precision in the calling domain, most recent first. *)
+    fallback judged like any statement. {!apply} asks it of the finalized program and refuses a tile
+    failing it. Exposed for tests. *)
 
 val with_transform_fault : (optop -> unit) -> (unit -> 'a) -> 'a
 (** Test seam (gh-ocannl-1323): [with_transform_fault fault body] runs [body] with [fault] called on
@@ -777,7 +779,12 @@ val op_legality : Low_level.optimized -> optop -> op_verdict
     the staging scope's invariant, stated once for every op shape, so that the beam's menu,
     seeding's {!schedule_legality} and the renderer agree. Likewise, on code marking simdgroup
     fragments (gh-ocannl-1342): an op whose application leaves more {!fragment_scope_violations}
-    than it found is [Op_illegal] with {!fragment_scope_violation_message} of the first it added. *)
+    than it found is [Op_illegal] with {!fragment_scope_violation_message} of the first it added.
+    First of all, on code where some [Local_scope] body holds a loop: an op whose application adds a
+    scope-grammar violation (gh-ocannl-1467, see {!apply}) is [Op_illegal] with the refusal {!apply}
+    would raise — the race queries alone call a [Grid] retype of a scope-nested loop legal. The
+    [Privatize] lifetime check needs the application's record of its tiles, so a single op judged
+    here does not get it; {!schedule_legality} does, as it applies the chain. *)
 
 val schedule_legality : Low_level.optimized -> schedule -> (optop * op_verdict) list
 (** Per-op verdicts, each against the code with the preceding ops applied (on a hermetic copy —
