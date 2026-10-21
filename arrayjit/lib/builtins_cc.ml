@@ -642,38 +642,70 @@ float uint4x32_to_single_uniform(uint4x32_t x) {
 }
 |},
       [ "uint4x32_t"; "uint32_to_single_uniform" ] );
-    ( "uint4x32_to_half_uniform",
+    ( "uint32_to_half_uniform",
       {|
-/* Uint4x32 to float16 uniform - the single draw of the first 32 bits, narrowed: the route every
-   backend's scalar bf16 conversion takes and the one CUDA, HIP and Metal take for half, so one key
-   draws the same half on every backend (gh-ocannl-951; the _vec/_lane forms consume 16 bits per
-   lane on every backend). Returns the half STORAGE type: under native fp16 that is _Float16, and a
-   uint16_t return type would convert the value through an integer (truncating every draw in [0, 1)
-   to 0) and hand an integer to the half FMA builtin. */
-HALF_T uint4x32_to_half_uniform(uint4x32_t x) {
-    float f = uint32_to_single_uniform(x.v[0]);
+/* A 32-bit word to float16 in [0, 1), below 1 by construction (gh-ocannl-1434): the single draw of
+   the word, truncated toward zero to half's 11 significant bits by clearing the 13 f32 mantissa
+   bits half lacks. The truncated draw is representable in half -- below 2^-14 it is a multiple of
+   2^-24, half's subnormal step -- so the narrowing is exact under any rounding mode, which is what
+   makes one word draw the same half on every backend; the largest draw is 1 - 2^-11. Rounding the
+   draw to nearest instead returned exactly 1.0 for every word from 0xFFF00000 up. Every narrow half
+   draw goes through here: the scalar form with the key's first word, the _vec/_lane forms with
+   each 16-bit lane moved to the word's top (the lane's value scaled by 2^-16, as before). Returns
+   the half STORAGE type: under native fp16 that is _Float16, and a uint16_t return type would
+   convert the value through an integer (truncating every draw in [0, 1) to 0) and hand an integer
+   to the half FMA builtin. */
+HALF_T uint32_to_half_uniform(uint32_t x) {
+    float f = uint32_to_single_uniform(x);
+    uint32_t bits;
+    memcpy(&bits, &f, sizeof(bits));
+    bits &= 0xFFFFE000u;
+    memcpy(&f, &bits, sizeof(f));
     return FLOAT_TO_HALF(f);
 }
 |},
-      [ "uint4x32_t"; "HALF_T"; "FLOAT_TO_HALF"; "uint32_to_single_uniform" ] );
+      [ "HALF_T"; "FLOAT_TO_HALF"; "uint32_to_single_uniform" ] );
+    ( "uint32_to_bfloat16_uniform",
+      {|
+/* A 32-bit word to bfloat16 bits in [0, 1), below 1 by construction (gh-ocannl-1434): the single
+   draw of the word truncated toward zero to bfloat16 -- its top 16 bits, which is the exact
+   narrowing of the draw with the 16 f32 mantissa bits bfloat16 lacks cleared, the construction
+   every backend renders. The largest draw is 1 - 2^-8; rounding to nearest instead returned exactly
+   1.0 for every word from 0xFF800000 up. The scalar and _vec/_lane forms all go through here, as
+   for half (uint32_to_half_uniform). */
+uint16_t uint32_to_bfloat16_uniform(uint32_t x) {
+    float f = uint32_to_single_uniform(x);
+    uint32_t bits;
+    memcpy(&bits, &f, sizeof(bits));
+    return (uint16_t)(bits >> 16);
+}
+|},
+      [ "uint32_to_single_uniform" ] );
+    ( "uint4x32_to_half_uniform",
+      {|
+/* Uint4x32 to float16 uniform - the single draw of the first 32 bits, truncated to half (see
+   uint32_to_half_uniform): the route every backend takes for both scalar narrow draws, so one key
+   draws the same half on every backend (gh-ocannl-951; the _vec/_lane forms consume 16 bits per
+   lane on every backend). */
+HALF_T uint4x32_to_half_uniform(uint4x32_t x) {
+    return uint32_to_half_uniform(x.v[0]);
+}
+|},
+      [ "uint4x32_t"; "HALF_T"; "uint32_to_half_uniform" ] );
     ( "uint4x32_to_half_uniform_vec",
       {|
-/* Convert uint4x32 to 8 float16s uniform */
+/* Convert uint4x32 to 8 float16s in [0, 1): each word's low then high 16 bits, moved to the top of
+   a word for uint32_to_half_uniform. */
 half8_t uint4x32_to_half_uniform_vec(uint4x32_t x) {
     half8_t result;
     for (int i = 0; i < 4; i++) {
-        // Extract two 16-bit values and convert to float in [0, 1)
-        float f1 = (x.v[i] & 0xFFFF) * (1.0f / 65536.0f);
-        float f2 = ((x.v[i] >> 16) & 0xFFFF) * (1.0f / 65536.0f);
-        
-        // Convert to half precision - macros handle both native and emulated cases
-        result.v[i*2 + 0] = FLOAT_TO_HALF(f1);
-        result.v[i*2 + 1] = FLOAT_TO_HALF(f2);
+        result.v[i*2 + 0] = uint32_to_half_uniform(x.v[i] << 16);
+        result.v[i*2 + 1] = uint32_to_half_uniform(x.v[i] & 0xFFFF0000u);
     }
     return result;
 }
 |},
-      [ "uint4x32_t"; "half8_t"; "FLOAT_TO_HALF" ] );
+      [ "uint4x32_t"; "half8_t"; "uint32_to_half_uniform" ] );
     (* Pure C conversion functions *)
     ( "bfloat16_to_single",
       {|
@@ -1542,19 +1574,13 @@ uint16_t uint4x32_to_uint16_uniform(uint4x32_t x) {
       [ "uint4x32_t" ] );
     ( "uint4x32_to_bfloat16_uniform",
       {|
-/* Uint4x32 to bfloat16 uniform - uses first 16 bits */
+/* Uint4x32 to bfloat16 uniform - the single draw of the first 32 bits, truncated to bfloat16 (see
+   uint32_to_bfloat16_uniform). */
 uint16_t uint4x32_to_bfloat16_uniform(uint4x32_t x) {
-    /* Convert to float first, then to bfloat16 */
-    float f = uint32_to_single_uniform(x.v[0]);
-    uint32_t bits;
-    memcpy(&bits, &f, sizeof(float));
-    /* Round to nearest even for bfloat16 */
-    uint16_t bf = bits >> 16;
-    if ((bits & 0x8000) && ((bits & 0x7FFF) || (bf & 1))) bf++;
-    return bf;
+    return uint32_to_bfloat16_uniform(x.v[0]);
 }
 |},
-      [ "uint4x32_t"; "uint32_to_single_uniform" ] );
+      [ "uint4x32_t"; "uint32_to_bfloat16_uniform" ] );
     ( "uint4x32_to_fp8_uniform",
       {|
 /* Uint4x32 to fp8 uniform - uses first 8 bits */
@@ -1643,29 +1669,18 @@ uint16x8_t uint4x32_to_uint16_uniform_vec(uint4x32_t x) {
       [ "uint4x32_t"; "uint16x8_t" ] );
     ( "uint4x32_to_bfloat16_uniform_vec",
       {|
-/* Convert uint4x32 to 8 bfloat16s uniform */
+/* Convert uint4x32 to 8 bfloat16s in [0, 1): each word's low then high 16 bits, moved to the top
+   of a word for uint32_to_bfloat16_uniform. */
 uint16x8_t uint4x32_to_bfloat16_uniform_vec(uint4x32_t x) {
     uint16x8_t result;
     for (int i = 0; i < 4; i++) {
-        // Convert each uint32 to two bfloat16 values
-        float f1 = ((x.v[i] & 0xFFFF) >> 0) * (1.0f / 65536.0f);
-        float f2 = ((x.v[i] >> 16) & 0xFFFF) * (1.0f / 65536.0f);
-        uint32_t bits1, bits2;
-        memcpy(&bits1, &f1, sizeof(float));
-        memcpy(&bits2, &f2, sizeof(float));
-        // Round to nearest even for bfloat16
-        uint16_t bf1 = bits1 >> 16;
-        uint16_t bf2 = bits2 >> 16;
-        // Check if we need to round up (guard bit set and round/sticky or LSB)
-        if ((bits1 & 0x8000) && ((bits1 & 0x7FFF) || (bf1 & 1))) bf1++;
-        if ((bits2 & 0x8000) && ((bits2 & 0x7FFF) || (bf2 & 1))) bf2++;
-        result.v[i*2 + 0] = bf1;
-        result.v[i*2 + 1] = bf2;
+        result.v[i*2 + 0] = uint32_to_bfloat16_uniform(x.v[i] << 16);
+        result.v[i*2 + 1] = uint32_to_bfloat16_uniform(x.v[i] & 0xFFFF0000u);
     }
     return result;
 }
 |},
-      [ "uint4x32_t"; "uint16x8_t" ] );
+      [ "uint4x32_t"; "uint16x8_t"; "uint32_to_bfloat16_uniform" ] );
     ( "uint4x32_to_fp8_uniform_vec",
       {|
 /* Convert uint4x32 to 16 fp8s uniform (raw bit patterns). Returns int8x16_t to match

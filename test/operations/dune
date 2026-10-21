@@ -9826,6 +9826,19 @@
 ; compiler beside the C table and compared with it bitwise; the stdlib-only arrayjit.builtins_cuda
 ; and arrayjit.builtins_hip libraries are what let a test link the tables without a backend.
 
+; gh-ocannl-1434: the half and bf16 uniform draws stay below 1 -- the scalar, packed and per-lane
+; conversions executed on the selected backend from an all-ones key, each drawing exactly the
+; format's greatest value below 1.
+
+(test
+ (name narrow_uniform_bound)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules narrow_uniform_bound)
+ (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
+
 (test
  ; ocannl-backend: cc -- compiles the CUDA and HIP tables' helpers with the host C compiler, no device.
  (name cuda_like_builtins_emulation)
@@ -10345,6 +10358,22 @@
   (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules scan_companion_coverage)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1468: a uint4x32 counter set from a fixed index draws the same random bits whether it is
+; inlined beneath its threefry or materialized (the simplify fold no longer re-keys the conversion on
+; a double source).
+
+(test
+ (name uint4x32_fixed_index_parity)
+ (package neural_nets_lib)
+ (deps
+  (env_var OCANNL_BUILD_FILES_PREFIX)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules uint4x32_fixed_index_parity)
+ (libraries base ocannl stdio test_utils arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

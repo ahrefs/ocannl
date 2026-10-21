@@ -485,6 +485,9 @@ files.
   leading-axis rank drop and an unpadded, materializable parent. Host access of an alias view raises:
   read and write the parent, since `from_host` would otherwise allocate a detached buffer and break
   write-through. The alias never enters `ctx_buffers`, so finalization and pool resolution never see it.
+  For the same reason every write through a view goes through `set` and `resolve_alias`, a zero
+  `Fetch` included: a `Zero_out` of the bufferless view would drop silently (gh-ocannl-1475,
+  executed in `test/operations/test_slice_alias.ml`).
 - `Ops.promote_prec` is ordered `Uint4x32_prec` first, then the floats widest-first, then the
   integers: the RNG state precision dominates EVERYTHING (a join of uint4x32 with double is
   uint4x32, which is what keeps a threefry chain from being widened by a float consumer), and
@@ -539,7 +542,10 @@ files.
   Each target's queries see only that target's writes, so a storage named by two targets (a
   hand-built `lhses = [| Node t; Node t |]`, or two slice-alias views of one parent: compare after
   `resolve_alias`) is never attributed: two plain stores would drop one contribution; the front end
-  emits that shape for `(w, w) ++^ ...` (`test/operations/self_concat.ml`).
+  emits that shape for `(w, w) ++^ ...` (`test/operations/self_concat.ml`). Static/runtime extents,
+  mixed slice/whole concat coordinates and proof-arithmetic overflow decline.
+  `test/operations/affine_surjectivity.ml` checks finite images and executed scatters against
+  explicit neutral initialization.
 - **`Rev_sides` resets the margins of the targets it writes, never of the node it reads**
   (gh-ocannl-1474). A padded target is ordinary: a gradient shares its value's shape, so a
   concatenation operand a padded convolution also reads has a padded gradient. The scatter's
@@ -554,10 +560,6 @@ files.
   through a window, so no value is affected; a reader that did would need those writes clamped.
   `test/operations/rev_sides_padded_target.ml` runs the front-end scatter over sentinel-seeded
   physical buffers on both paths, and a training step against the convolutions' definitions.
-  `neutral_init` never `Fetch`es a slice-alias view: the `Fetch` would lower to a `Zero_out` of the
-  bufferless view, which drops silently, so a view gets the nest, whose `set` resolves the alias. Static/runtime
-  extents, mixed slice/whole concat coordinates and proof-arithmetic overflow decline. `test/operations/affine_surjectivity.ml` checks finite images and executed
-  scatters against explicit neutral initialization.
 
 - **The algebraic-rewrite tier over raw lowered code is `Rewrites`, applied by `Assignments.lower`
   between `to_low_level` and `Low_level.optimize`** (gh-ocannl-483; members `Online_softmax`, then

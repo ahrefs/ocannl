@@ -24,7 +24,7 @@ a control-only entry is in both arms, a treatment-only entry in neither: true
 both arms ship the control's placement decision: true
 reading the two caches left them unchanged: true
 a cache stamped by no regime is spliced from, and left whole: true
-where a lookup would have swept it: true
+where a lookup reads the same cache as a miss, and leaves it whole too: true
 writing an arm into a non-empty directory: autotune_cache_splice_arm_t: the arm's cache directory must be absent or empty
 writing an arm into a non-empty directory is refused, naming "absent or empty": true
 a bare index with two fissioned entries: target #2 is ambiguous: 2 entries are fissioned in both caches (111111111111, 222222222222); name one as <entry>#<index>
