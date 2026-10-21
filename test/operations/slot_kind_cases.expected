@@ -162,8 +162,6 @@ build @d/be (env reached through a bin pform) names nothing + reads config
 env reached through a bin pform off the list counts the configuration: true
 build @d/se (a setenv'd backend)         names nothing + reads config
 a setenv'd backend off the list counts the configuration: true
-build @d/dyn (a dynamic-run)             names nothing + reads config
-a dynamic-run off the list counts the configuration: true
 build @d/inc (an included dependency)    unknown: it reaches inc in d, whose dependency (include deps.sexp) this cannot follow
 an included dependency is every backend: true
 an included dependency is nothing to a batch not reaching it: true
@@ -173,6 +171,21 @@ an alias spelled through a pform is nothing to a batch not reaching it: true
 build @d/sbi (a sandboxed included dependency) unknown: it reaches the rule on sbi in d, whose dependency (include deps.sexp) this cannot follow
 a sandboxed included dependency is every backend: true
 a sandboxed included dependency is nothing to a batch not reaching it: true
+build @d/dyn (a dynamic-run)             unknown: it reaches the rule on dyn in d, whose dependency (dynamic-run …) this cannot follow
+a dynamic-run is every backend: true
+a dynamic-run is nothing to a batch not reaching it: true
+build @test/operations/scans (beside an included stanza) unknown: the dune file in w carries a (include …) stanza, which this does not read
+build @test/operations/scans beside an included stanza is every backend: true
+build a/t_cfg.exe (beside an included stanza) unknown: the dune file in w carries a (include …) stanza, which this does not read
+build a/t_cfg.exe beside an included stanza is every backend: true
+runtest c (beside an included stanza)    unknown: the dune file in w carries a (include …) stanza, which this does not read
+runtest c beside an included stanza is every backend: true
+build @test/operations/scans (beside a cram test) unknown: the dune file in w carries a (cram …) stanza, which this does not read
+build @test/operations/scans beside a cram test is every backend: true
+build a/t_cfg.exe (beside a cram test)   unknown: the dune file in w carries a (cram …) stanza, which this does not read
+build a/t_cfg.exe beside a cram test is every backend: true
+runtest c (beside a cram test)           unknown: the dune file in w carries a (cram …) stanza, which this does not read
+runtest c beside a cram test is every backend: true
 build d/r.exe (a rule's .exe)            unknown: it builds d/r.exe, which no executable, test or library stanza in d declares (a rule could produce it)
 a rule-produced .exe is every backend, never a plain build: true
 build @test/operations/scans (a reader inside the listed alias) names nothing + reads config
@@ -213,6 +226,9 @@ a reader with no configuration in reach is refused: true
 a reader beside a copy of a configuration the runner does not resolve:
     the configuration: q_reader running in q, which reads the configuration in hipcfg: not one the runner resolves
 a reader beside a copy of a configuration the runner does not resolve is refused: true
+an undeclared stanza beside a copy of a configuration the runner does not resolve:
+    the configuration: q_undeclared running in q, which reads the configuration in hipcfg: not one the runner resolves
+an undeclared stanza beside a copy of a configuration the runner does not resolve is refused: true
 a reader beside a checked-in configuration the runner does not resolve:
     the configuration: p_reader running in prof, which reads the configuration in prof: not one the runner resolves
 a reader beside a checked-in configuration the runner does not resolve is refused: true

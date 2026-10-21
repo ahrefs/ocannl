@@ -423,7 +423,13 @@ let views_of ~dir ~named ~reads_config sexp =
       (* A copy's wildcard is the glob it copies, not a target this cannot name. *)
       source_like = List.exists produced ~f:source_like || List.exists copies ~f:source_named;
       needs = List.dedup_and_sort (deps @ copied @ file_needs ~dir sexp) ~compare:Poly.compare;
-      unplaced;
+      (* A [dynamic-run] discovers what it needs as it runs (Codex review round 3 on
+         staging#1318). *)
+      unplaced =
+        (unplaced
+        @
+        if List.mem (Scan.atoms sexp) "dynamic-run" ~equal:String.equal then [ "(dynamic-run …)" ]
+        else []);
     }
   in
   let compile =
@@ -457,6 +463,19 @@ let views_of ~dir ~named ~reads_config sexp =
       ]
   in
   run :: compile
+
+(** The head of a stanza the inventory does not read, if it is one: an [(include …)] brings in
+    stanzas never read, a [(cram …)] test runs commands no marker covers. *)
+let unread_head s =
+  match s.role with
+  | Compiles -> None
+  | Runs ->
+      let head = Option.value (Scan.head s.sexp) ~default:"<not a stanza>" in
+      Option.some_if
+        (not
+           (List.exists [ running_heads; compiling_heads; inert_heads ] ~f:(fun l ->
+                List.mem l head ~equal:String.equal)))
+        head
 
 (** The stanzas of one dune file, in [dir]. A marker the contract refuses is not read as absent: it
     raises, and the caller takes the unreadable file as a GPU answer. *)
@@ -1001,6 +1020,15 @@ let answer ?(getenv = Stdlib.Sys.getenv_opt) ?(config_free = config_free_aliases
       | Ok (Some targets) -> (
           match read_stanzas dune_files with
           | Error why -> Unknown why
+          | Ok stanzas when List.exists stanzas ~f:(fun s -> Option.is_some (unread_head s)) ->
+              (* A hole in the inventory is every batch's: what an [(include …)] brings in may sit
+                 on any alias (Codex review round 3 on staging#1318). *)
+              let s = List.find_exn stanzas ~f:(fun s -> Option.is_some (unread_head s)) in
+              Unknown
+                (Printf.sprintf
+                   "the dune file in %s carries a (%s …) stanza, which this does not read"
+                   (if String.is_empty s.dir then "." else s.dir)
+                   (Option.value_exn (unread_head s)))
           | Ok stanzas -> (
               (* An alias the argv names that no stanza in its scope carries is one of dune's own,
                  and only the ones listed are modelled ([revdep-runtest] builds what depends on the
@@ -1165,22 +1193,19 @@ let refusals ?(config_free = config_free_aliases) ~config_files dune_files =
         List.filter_map stanzas ~f:(fun s ->
             match s.role with
             | Compiles -> None
-            | Runs ->
-                let head = Option.value (Scan.head s.sexp) ~default:"<not a stanza>" in
+            | Runs -> (
                 let in_dir = if String.is_empty s.dir then "." else s.dir in
-                if
-                  not
-                    (List.exists [ running_heads; compiling_heads; inert_heads ] ~f:(fun l ->
-                         List.mem l head ~equal:String.equal))
-                then
-                  Some
-                    (Printf.sprintf "the inventory: a (%s …) stanza in %s, which it does not read"
-                       head in_dir)
-                else if List.mem (Scan.atoms s.sexp) "dynamic-run" ~equal:String.equal then
-                  Some
-                    (Printf.sprintf "the inventory: %s, whose dynamic-run it cannot follow"
-                       (describe s))
-                else None)
+                match unread_head s with
+                | Some head ->
+                    Some
+                      (Printf.sprintf "the inventory: a (%s …) stanza in %s, which it does not read"
+                         head in_dir)
+                | None ->
+                    if List.mem (Scan.atoms s.sexp) "dynamic-run" ~equal:String.equal then
+                      Some
+                        (Printf.sprintf "the inventory: %s, whose dynamic-run it cannot follow"
+                           (describe s))
+                    else None))
       in
       let generated =
         List.filter_map stanzas ~f:(fun s ->
@@ -1209,10 +1234,27 @@ let refusals ?(config_free = config_free_aliases) ~config_files dune_files =
                       (Stdlib.Filename.dirname (Config_dep_resolution.under into source)) )))
         in
         let resolved = ambient_config_dir :: config_dirs in
+        (* A stanza declaring neither the variable nor a marker reads the configuration too, the
+           widening way [backend_of_rule] reads it: [env_var_deps] fails it, but that may not have
+           run yet (Codex review round 3 on staging#1318). *)
+        let undeclared =
+          List.map paths ~f:(fun (dune_file, content) ->
+              ( dune_file,
+                List.concat_map (Scan.backend_marker_contract content).Scan.contract_stanzas
+                  ~f:(fun marked ->
+                    match Scan.backend_rule_of marked with
+                    | Scan.Names_neither -> marked.Scan.marker_stanza.Scan.marked_sites
+                    | _ -> []) ))
+        in
         List.concat_map report.Config_dep_resolution.files ~f:(fun file ->
+            let neither =
+              Option.value ~default:[]
+                (List.Assoc.find undeclared file.Config_dep_resolution.dune_file ~equal:String.equal)
+            in
             List.filter_map file.Config_dep_resolution.sites ~f:(fun r ->
                 let site = r.Config_dep_resolution.site in
-                if not site.Scan.declares_backend then None
+                if not (site.Scan.declares_backend || List.mem neither site ~equal:Poly.equal) then
+                  None
                 else
                   let at = r.Config_dep_resolution.directory in
                   let at = if String.is_empty at then "." else at in

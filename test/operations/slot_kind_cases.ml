@@ -387,11 +387,6 @@ let () =
  (alias se) (deps ocannl_config (env_var OCANNL_BACKEND))
  (action (setenv OCANNL_BACKEND hip (run %{dep:d.exe}))))|dune},
         "build @d/se" );
-      ( "a dynamic-run",
-        {dune|(rule
- ; ocannl-backend: none -- links no backend in this fixture.
- (alias dyn) (action (dynamic-run ./d.exe)))|dune},
-        "build @d/dyn" );
     ]
     ~f:(fun (what, dune, argv) ->
       let _, shown = judge ~dune_files:[ ("d", dune); n ] argv in
@@ -417,6 +412,11 @@ let () =
  ; ocannl-backend: none -- links no backend in this fixture.
  (alias sbi) (deps (sandbox always) (:in (include deps.sexp))) (action (run %{dep:d.exe})))|dune},
         "build @d/sbi" );
+      ( "a dynamic-run",
+        {dune|(rule
+ ; ocannl-backend: none -- links no backend in this fixture.
+ (alias dyn) (action (dynamic-run ./d.exe)))|dune},
+        "build @d/dyn" );
     ]
     ~f:(fun (what, dune, argv) ->
       let _, shown = judge ~dune_files:[ ("d", dune); n ] argv in
@@ -429,6 +429,22 @@ let () =
       p
         (Printf.sprintf "%s is nothing to a batch not reaching it" what)
         (String.equal beside "names nothing + reads config"));
+  (* A hole in the inventory is every batch's, the listed alias's and a plain build's included: what
+     an [(include …)] or a [cram] test brings in may sit anywhere (Codex review round 3 on
+     staging#1318). *)
+  List.iter
+    [
+      ("an included stanza", {dune|(include rules.inc)|dune});
+      ("a cram test", {dune|(cram (deps x))|dune});
+    ]
+    ~f:(fun (what, dune) ->
+      let dune_files = ("w", dune) :: tree in
+      List.iter [ "build @test/operations/scans"; "build a/t_cfg.exe"; "runtest c" ] ~f:(fun argv ->
+          let _, shown = judge ~dune_files argv in
+          printf "%-40s %s\n" (argv ^ " (beside " ^ what ^ ")") shown;
+          p
+            (Printf.sprintf "%s beside %s is every backend" argv what)
+            (String.is_prefix shown ~prefix:"unknown: ")));
   (* A rule producing what looks like a compilation product is no plain build. *)
   let _, lookalike =
     judge
@@ -612,6 +628,13 @@ let () =
           base,
         "hipcfg/ocannl_config" :: config_files,
         "reads the configuration in hipcfg" );
+      ( "an undeclared stanza beside a copy of a configuration the runner does not resolve",
+        replace "q"
+          {dune|(copy_files ../hipcfg/ocannl_config)
+(test (name q_undeclared) (deps ocannl_config))|dune}
+          base,
+        "hipcfg/ocannl_config" :: config_files,
+        "q_undeclared running in q, which reads the configuration in hipcfg" );
       ( "a reader beside a checked-in configuration the runner does not resolve",
         replace "prof"
           {dune|(test (name p_reader) (deps ocannl_config (env_var OCANNL_BACKEND)))|dune} base,

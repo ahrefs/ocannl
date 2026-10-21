@@ -3753,15 +3753,16 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `build ./test/operations/x.exe` as `bisect` spells it, a library's `.cma`/`.cmxa`), which
   compiles and runs nothing -- no backend, `--cpu`, dune's own width. Either fails closed: a
   closure that reaches a configuration reader all the same (a tree the scan below has not judged
-  yet) counts the configuration, and a dependency the closure cannot follow (an alias spelled
-  through a pform, an `(include …)`) makes any batch every backend. So a single `none`-marked
+  yet) counts the configuration; a dependency the closure cannot follow (an alias spelled
+  through a pform, an `(include …)`, a `dynamic-run`) makes any batch reaching it every backend;
+  and an unread stanza head anywhere (`include`, `cram`) makes every batch every backend. So a single `none`-marked
   test outside the list counts the configuration again: under a GPU configuration it takes a GPU
   slot, the loud direction, by design; `@lifecycle` stays off the list because its probes read
   the configuration. `slot_kind_live` (in `@test/operations/scans`, reading only the files its
   deps hand it) keeps both answers true of the tree: no listed alias's closure holds a
   configuration reader or a dependency it cannot follow; what every build reaches (compilations,
-  source-like producers, their files) holds no reader and names no backend; every reader runs
-  where its nearest configuration is one the runner resolves -- in `BATCH_CONFIG_DIRS`, or copied
+  source-like producers, their files) holds no reader and names no backend; every reader (a stanza declaring `(env_var OCANNL_BACKEND)`, or neither it nor a
+  marker) runs where its nearest configuration is one the runner resolves -- in `BATCH_CONFIG_DIRS`, or copied
   from one or from the ambient copy, whose producer must keep its two-`cat` shape -- so none reads
   the gitignored root one (gh-ocannl-1249); and no `include`, `cram` or other unread head, nor a
   `dynamic-run`, is in the tree. A backend an action fixes (`setenv`, `--ocannl_backend`,
