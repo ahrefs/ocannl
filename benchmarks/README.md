@@ -342,7 +342,13 @@ cell is the step: cite the step cell. Each issue's cell:
   search pass and on the replay, and its `budget_s` is the budget that arm's call resolved
   (gh-ocannl-1438; `null` for none). Each placement arm is its own search, so a two-arm search pass
   takes about twice S, plus the overrun: the candidate in flight, the floors, the winner's compile,
-  and the base compile, which comes before the first check.
+  and the base compile, which comes before the first check. To bound the whole
+  `Train.tune_placements` call instead, set `tune_call_budget_seconds`
+  (`OCANNL_TUNE_CALL_BUDGET_SECONDS=T`, gh-ocannl-1440): one clock for the call, each search cut at
+  its share of what is left (divided among the searches still planned), and the flip refinement
+  stopped once T is spent. Each arm then carries `call_budget_s` (T) and `call_share_s` (its share)
+  beside `budget_s`; the overrun is each search's own, plus arm B's floors when arm A spent T, plus
+  the shipped routine's compile.
   `BENCH_TIMING_TRACE=1` (all three runners) splits a searching process's wall between candidate
   timing and the rest (gh-ocannl-834). Every `Autotune.time_routine` call reports one record as it
   returns (gh-ocannl-1263), printed as its calibration probes, one call line (the batch depth it

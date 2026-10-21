@@ -192,18 +192,46 @@ val compile :
     Refuses a {!release}d context with {!Ir.Utils.User_error}, raised rather than returned as an
     outcome by {!compile_outcome} as well. *)
 
+type retained
+(** Compiled code that a successful {!compile_outcome} handed to its [retain] callback: the
+    backend's code and the rendering censuses its codegen collected, together with the context it
+    was compiled from (gh-ocannl-1440). It holds no working pools -- those are allocated by a link
+    -- and its code module is reclaimed with it. *)
+
 val compile_outcome :
   ?name:string ->
   ?lowered_transform:(Ir.Low_level.optimized -> Ir.Low_level.optimized list) ->
   ?prelowered:Ir.Low_level.optimized ->
   provenance:Ir.Schedule_outcome.provenance ->
   ?candidate:string ->
+  ?retain:(retained -> unit) ->
   t ->
   Ir.Assignments.comp ->
   Ir.Indexing.unit_bindings ->
   (t * routine) Ir.Schedule_outcome.outcome
 (** Internal containment-aware form of {!compile}. The caller supplies the schedule provenance;
-    public user code should continue to use {!compile}. *)
+    public user code should continue to use {!compile}. [retain], called once on success before the
+    result is returned, receives the compiled code for a later {!relink_outcome} (gh-ocannl-1440);
+    an exception it raises propagates after the routine just linked has been released. *)
+
+val relink_outcome : retained -> (t * routine) Ir.Schedule_outcome.outcome
+(** Links retained code again on the context it was compiled from, as a fresh link of the same code:
+    a new working-pool delta, a new routine id and execution frontier, the same [mma], [peel],
+    [volatility] and [segments] as the compile that produced it, and a link failure classified like
+    the compile's own (phase [Backend_link]). No codegen and no device compile: this is how a search
+    that validated a cached schedule by compiling it, then released the compile, ships it without
+    compiling it twice. It passes the compile's frontend gate again (gh-ocannl-1301: a tainted
+    session or a discarded node refuses it). At most once per retained value ([Invalid_argument] on
+    a second call); refuses a {!release}d source context like {!compile}. A backend-level code cache
+    composes with it: the relink is the backend's own [link]. *)
+
+val backend_compiles : unit -> int
+(** How many backend compiles have completed on the calling domain (gh-ocannl-1440): each code
+    generation a {!compile} or {!compile_outcome} completes -- lowering through codegen, and the
+    device compile where the backend does it then (cc, CUDA, HIP) -- and each device compile a
+    backend defers to link time (Metal's library compile, done at a code value's first link and
+    reused by a {!relink_outcome}). A compile refused inside its transform, before codegen, is not
+    counted. Monotone; read it as a difference around the work in question. *)
 
 val lowered_for_decisions :
   ?name:string ->

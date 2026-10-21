@@ -1,5 +1,12 @@
 open Base
 
+(* gh-ocannl-1440: completed backend compiles on this domain -- each code generation a [Context]
+   compile completes, and each device compile a backend defers to link time (Metal's library
+   compile) -- the work a relink of retained code skips. Read through [Context.backend_compiles]. *)
+let count_backend_compile, backend_compiles =
+  let key = Stdlib.Domain.DLS.new_key (fun () -> ref 0) in
+  ((fun () -> Int.incr (Stdlib.Domain.DLS.get key)), fun () -> !(Stdlib.Domain.DLS.get key))
+
 type settings = {
   mutable log_level : int;
   mutable debug_log_from_routines : bool;
@@ -175,6 +182,7 @@ let known_config_keys =
       "autotune_progress";
       "autotune_log_seeding";
       "tune_inline_flips";
+      "tune_call_budget_seconds";
       "tune_flip_ordering";
       "tune_flip_profit_margin";
       "tune_ship_arm";
@@ -437,6 +445,15 @@ let config_key_classification : (config_key_class * string * string list) list =
       "it makes the tuner try alternative inlining decisions; each alternative is a different \
        program and keys on its own digest",
       [ "tune_inline_flips"; "tune_flip_ordering"; "tune_flip_profit_margin" ] );
+    ( Placement_shaping,
+      "a wall-clock budget on the whole Train.tune_placements call (gh-ocannl-1440), split among \
+       its searches: no Autotune.tune reads the key -- a search receives only its share \
+       (Autotune.call_budget), which cuts it by autotune_budget_seconds' rule and marks a cut \
+       crown budget_cut, so only a budgeted call replays it. Out of the trajectory identity \
+       because the share changes with the wall clock, and a cut trajectory is a prefix of the same \
+       candidate order, which early stopping reads conservatively (a slower incumbent abandons \
+       fewer flips)",
+      [ "tune_call_budget_seconds" ] );
     ( Placement_shaping,
       "it decides which of the two searched placement arms ships, overriding the measured \
        comparison rather than changing either arm: each arm is a different program keyed on its \

@@ -1,0 +1,26 @@
+cold: not every schedule-cache store was refused: true
+cold: both arms searched, and the A/B winner, arm B, shipped un-replayed: true
+cold: the searched winner's shipped routine is one compile, from its saved form: true
+cold: no search replayed a cached schedule: true
+cold: the call's compiles are its reports' plus the ship's: true
+warm: the recorded decision replayed in one search, a schedule-cache hit: true
+warm: the hit compiled its schedule once, to validate it: true
+warm: the shipped routine took no compile -- the validated code, linked again: true
+warm: the call's compiles are its reports' plus the ship's: true
+bypass: both arms compared afresh, and arm B shipped, a schedule-cache hit: true
+bypass: that hit compiled its schedule once: true
+bypass: the shipped arm took no compile: true
+bypass: the call's compiles are its reports' plus the ship's: true
+warm: the relinked routine computes the cold output bit for bit: true
+bypass: the relinked routine computes the cold output bit for bit: true
+deferred: the warm search is a cache hit: true
+deferred: nothing compiled for the ship before compile_deferred: true
+deferred: the shipped routine is the validated code linked again, no compile: true
+deferred: a second compile_deferred returns the same routine: true
+deferred: it computes the cold output bit for bit: true
+refused relink: the device refused the relink's allocation once: true
+refused relink: the untuned default shipped in the schedule's place: true
+refused relink: the untuned default computes the cold output bit for bit: true
+retain raising: its exception propagates: true
+retain raising: the routine linked before it holds no working bytes: true
+deferred_hit_compiles: done

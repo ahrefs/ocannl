@@ -502,8 +502,28 @@ module Impl = struct
         memcpy ~dst_ptr:(Slab.resolve_pool dst.device loc) ~dst_offset:loc.offset
 
   (* --- Compilation and Linking --- *)
+  (* gh-ocannl-1440: the library a code value's first link compiled, on the device it compiled for. A
+     relink of retained code ([Context.relink_outcome]) reuses it: Metal's device compile happens at
+     link, so without this a relink would compile the source a second time. Per code value, so it
+     lives exactly as long as the code (a retained one, or a linked routine's). *)
+  type library_memo = (Me.Device.t * Me.Library.t) option ref
+
+  let sexp_of_library_memo _ = Sexp.Atom "<library>"
+
+  (* The library [source] compiles to on [device], compiled at most once per [memo] and device. *)
+  let memoized_library memo ~device compile =
+    match !memo with
+    | Some (d, library) when phys_equal d device -> library
+    | _ ->
+        let library = compile () in
+        (* A device compile at link time, counted like a compile-time one (gh-ocannl-1440). *)
+        Utils.count_backend_compile ();
+        memo := Some (device, library);
+        library
+
   type code = {
     metal_source : string; (* Store source, the library is built during link *)
+    library : library_memo;
     func_name : string;
     kparams : (string * kparam_source) list;
     bindings : Indexing.unit_bindings;
@@ -516,6 +536,7 @@ module Impl = struct
 
   type code_batch = {
     metal_source : string; (* Store combined source, compiled per device at link time *)
+    batch_library : library_memo;
     funcs : (string * (string * kparam_source) list * Low_level.launch_dims) array;
         (* func_name * kparams * launch dims *)
     bindings : Indexing.unit_bindings;
@@ -1566,7 +1587,15 @@ using namespace metal;|}
       Compile.compile ~name bindings lowered ~includes:metal_includes
         ~builtins:Builtins_metal.builtins ~conditional_includes ~compile_source ()
     in
-    { metal_source; func_name; kparams; bindings; launch; routine_names = [ (func_name, name) ] }
+    {
+      metal_source;
+      library = ref None;
+      func_name;
+      kparams;
+      bindings;
+      launch;
+      routine_names = [ (func_name, name) ];
+    }
 
   let compile_batch ~names bindings lowereds =
     let metal_source, entries =
@@ -1577,7 +1606,7 @@ using namespace metal;|}
     let routine_names =
       Array.to_list (Array.map2_exn funcs names ~f:(fun (emitted, _, _) given -> (emitted, given)))
     in
-    { metal_source; funcs; bindings; routine_names }
+    { metal_source; batch_library = ref None; funcs; bindings; routine_names }
 
   (* gh-ocannl-344: from the routine's materialized nodes, assign each distinct pool an index (first
      use order), build the [(pool_index, byte_offset)] slot table (one [uint] pair per node,
@@ -1833,8 +1862,9 @@ using namespace metal;|}
   let link prior_context code ctx_buffers =
     let device = prior_context.device.dev in
     let library =
-      compile_metal_source ~name:code.func_name ~routine_names:code.routine_names
-        ~source:code.metal_source ~device
+      memoized_library code.library ~device (fun () ->
+          compile_metal_source ~name:code.func_name ~routine_names:code.routine_names
+            ~source:code.metal_source ~device)
     in
     let lowered_bindings : Indexing.lowered_bindings =
       List.map (Indexing.bound_symbols code.bindings) ~f:(fun s -> (s, ref 0))
@@ -1857,8 +1887,9 @@ using namespace metal;|}
     in
     let base_name = if String.is_empty base_name then "batch" else base_name in
     let library =
-      compile_metal_source ~name:base_name ~routine_names:code_batch.routine_names
-        ~source:code_batch.metal_source ~device
+      memoized_library code_batch.batch_library ~device (fun () ->
+          compile_metal_source ~name:base_name ~routine_names:code_batch.routine_names
+            ~source:code_batch.metal_source ~device)
     in
     let lowered_bindings : Indexing.lowered_bindings =
       List.map (Indexing.bound_symbols code_batch.bindings) ~f:(fun s -> (s, ref 0))

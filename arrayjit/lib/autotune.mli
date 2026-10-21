@@ -1247,20 +1247,44 @@ type report = {
           search-disabled calls, and for [~rounds:0]. *)
   budget_cut : bool;
       (** The crown comes from a search that stopped proposing candidates because its wall-clock
-          budget (config [autotune_budget_seconds], gh-ocannl-1409) ran out: this call's own search,
-          whose candidates timed are then a prefix of its menu plus the untuned floors (exempt from
-          the budget), or for a {!Cache_replay} the search that stored the entry, as the entry's
-          [budget_cut] records -- like [best_ms], a fact about the crown rather than about this
-          call. [outcome] stays {!Searched} for a cut search -- it completed and shipped its crown
-          -- so this is the field telling a cut search from a full one. *)
+          budget (config [autotune_budget_seconds], gh-ocannl-1409, or its [call_share_s] of an
+          enclosing call's budget, gh-ocannl-1440) ran out: this call's own search, whose candidates
+          timed are then a prefix of its menu plus the untuned floors (exempt from the budget), or
+          for a {!Cache_replay} the search that stored the entry, as the entry's [budget_cut]
+          records -- like [best_ms], a fact about the crown rather than about this call. [outcome]
+          stays {!Searched} for a cut search -- it completed and shipped its crown -- so this is the
+          field telling a cut search from a full one. *)
   budget_s : float option;
       (** The wall-clock budget this call resolved (config [autotune_budget_seconds],
-          gh-ocannl-1409), [None] for none: what [budget_cut] was measured against, on every report
-          the call emits, a cache replay's and a search-less call's included (a fact about this
-          call, like [beam_width], where [budget_cut] on a replay is the stored crown's). The budget
-          is also the replay rule's input: only a call with a budget replays a cut crown. Recorded
-          here rather than in a benchmark result's [regime_knobs], whose keys are numerics settings
-          the orchestrator's regime gate holds to the cell's regime (gh-ocannl-1438). *)
+          gh-ocannl-1409), [None] for none: what [budget_cut] was measured against, with
+          [call_share_s] where an enclosing call split its own budget, on every report the call
+          emits, a cache replay's and a search-less call's included (a fact about this call, like
+          [beam_width], where [budget_cut] on a replay is the stored crown's). The budget is also
+          the replay rule's input: only a call with a budget -- its own, or a call share -- replays
+          a cut crown. Recorded here rather than in a benchmark result's [regime_knobs], whose keys
+          are numerics settings the orchestrator's regime gate holds to the cell's regime
+          (gh-ocannl-1438). *)
+  call_budget_s : float option;
+      (** The wall-clock budget of the [Train.tune_placements] call this search ran in (config
+          [tune_call_budget_seconds], gh-ocannl-1440), [None] outside one or without one: the
+          sibling of [budget_s] one level up, a fact about the call. *)
+  call_share_s : float option;
+      (** This search's share of [call_budget_s] ({!call_budget}'s [cb_share_s]): what was left of
+          the call's budget when the search started, divided among the searches still planned. The
+          search is cut at the tighter of this and [budget_s]; zero or less means the call's budget
+          was spent, so a search attempted only its untuned floors (a schedule-cache hit still
+          replays: the budget gates search attempts, as [autotune_budget_seconds] does, and the
+          replay's compile is the one that ships). [None] with [call_budget_s]. *)
+  compiles : int;
+      (** Backend compiles ({!Context.backend_compiles}) this call completed before it reported --
+          for {!tune} all of them, the shipped routine's included; for {!tune_deferred} all but what
+          {!compile_deferred} then does (gh-ocannl-1440). Counted on the calling domain. *)
+  replay_compiles : int;
+      (** Of [compiles], those of a cache entry's replay (gh-ocannl-1440): one compile's count on a
+          {!Cache_replay} (1, or 2 on Metal, whose device compile is counted at link), and on a call
+          whose replay was rejected after compiling -- at its link, or by the gh-ocannl-532
+          post-codegen check; 0 otherwise. A deferred hit's shipped routine is this compile's code
+          linked again, so the cached schedule compiles once. *)
   beam_width : int;
       (** The beam width the search resolved ([?beam_width], else config [autotune_beam_width]): how
           many of the fastest candidates each round expands, and the admitted-timing depth an
@@ -1574,7 +1598,8 @@ val no_search_report : timing:timing_mode -> report
     measured prints as [none]. The events, with the keys each carries beyond [wall_s] and [event]:
 
     - [search_start] ({!tune}): [routine], [elapsed_s], [backend], [device], [search], [beam],
-      [rounds].
+      [rounds], [budget_s], and [call_budget_s] and [call_share_s] (gh-ocannl-1440; [none] outside a
+      budgeted [Train.tune_placements] call).
     - [phase] ({!tune}, one per phase with a known size): [routine], [elapsed_s], [phase] ([seeds]
       or [round<k>]), [candidates] (the phase's total), [timed], [attempts], [compile_s],
       [timing_s], [best_ms], [best].
@@ -1591,10 +1616,11 @@ val no_search_report : timing:timing_mode -> report
       written BEFORE each step outside the candidates that can block for long: [base_compile],
       [cache_replay], [baseline_timing], [seed_enumeration] (the lowerings the seeds are derived
       from), [winner_compile], [untuned_default_compile], [untuned_control] (under [autotune_log] or
-      a [?log] only). From {!Train.tune_placements}, [stage] alone: [placement_store] (the decision
-      problem's lowering and replay check) and [flip_surface]. Together with [candidate] and
-      [arm_start] this is the rule the stream keeps: every step that can block is named by a line
-      written before it, so a killed search is inside the step its last line names.
+      a [?log] only), and from {!compile_deferred} of a cache hit [cache_replay_relink]
+      (gh-ocannl-1440). From {!Train.tune_placements}, [stage] alone: [placement_store] (the
+      decision problem's lowering and replay check) and [flip_surface]. Together with [candidate]
+      and [arm_start] this is the rule the stream keeps: every step that can block is named by a
+      line written before it, so a killed search is inside the step its last line names.
     - [search_done] ({!tune}, exactly once per call, with its report): [routine], [elapsed_s],
       [outcome] ({!outcome_name}), [timed], [contended], [timings_retried], [unbatched], [failed],
       [rounds], [budget_cut], [baseline_refused] and [privatize_dropped] (the report's
@@ -1620,6 +1646,9 @@ val no_search_report : timing:timing_mode -> report
       [flips_done] adds [measured], [pruned], [abandoned] (of the [measured]), [twinned] (skipped as
       twins, not among the [measured]), [improved] (whether the chain beat the A/B winner) and
       [best_ms].
+    - [call_budget_spent] ({!Train.tune_placements}, gh-ocannl-1440): the flip refinement stopped
+      because the call's budget ([tune_call_budget_seconds]) is spent: [budget_s], [elapsed_s]
+      (since the call started) and [measured] (the flips searched before the stop).
 
     [elapsed_s] is seconds since that search (or arm) started; [compile_s] and [timing_s] are the
     parts of it spent in candidate compiles and in candidate timing windows, [attempts] the
@@ -3182,6 +3211,11 @@ val tune :
     fallback is still the seeded plan, not {!model_default}'s pick: the floor the search measured. A
     seeded fallback that fails classified recompiles the plain default. *)
 
+type call_budget = { cb_total_s : float; cb_share_s : float }
+(** A search's share of an enclosing call's wall-clock budget (gh-ocannl-1440): [cb_total_s] the
+    call's budget, [cb_share_s] what the search may spend, which may be zero or less once the call's
+    budget is spent. *)
+
 type deferred
 (** The outcome of a {!tune_deferred} search: the compile of what it ships, not yet run. Holds no
     device resources. *)
@@ -3199,6 +3233,7 @@ val tune_deferred :
   ?max_split_reduce_sites:int ->
   ?timing_ctx:Context.t ->
   ?abandon:abandon_rule ->
+  ?call_budget:call_budget ->
   ?log:bool ->
   ?progress:bool ->
   ?report:(report -> unit) ->
@@ -3219,8 +3254,19 @@ val tune_deferred :
     comes after the search has reported its outcome. What the compile runs is what {!tune} would
     have: the winner's saved schedule replayed from [ctx] (falling back to the untuned default where
     {!tune}'s winner replay would), the untuned default where the search shipped that, and for a
-    cache hit the entry's replay -- compiled twice in all, since the first replay (the one that
-    tells a stale entry from a sound one, and supplies the report's emission census) is released. *)
+    cache hit the entry's replay. A cache hit compiles that replay once (gh-ocannl-1440): the replay
+    that tells a stale entry from a sound one, and supplies the report's emission census, is
+    released but its compiled code is kept, and {!compile_deferred} links it again on [ctx]
+    ({!Context.relink_outcome}) -- a link, not a compile. A searched winner is still compiled again
+    from its saved form, since its candidate was compiled in the search lineage.
+
+    [call_budget] (gh-ocannl-1440) is this search's share of an enclosing call's wall-clock budget,
+    [Train.tune_placements]' [tune_call_budget_seconds]: the search is cut at the tighter of that
+    share and its own [autotune_budget_seconds], by the same rule as the latter (see {!tune}'s
+    Budget), and a search the share cut reports [budget_cut] like one its own budget cut. A share of
+    zero or less attempts only the untuned floors when the call searches; a schedule-cache hit
+    replays regardless, as under [autotune_budget_seconds] -- its compile is the one that ships
+    (linked again), and skipping it would compile the untuned default in its place. *)
 
 val lineage_identity :
   static_indices:Ir.Indexing.static_symbol list -> Ir.Low_level.optimized -> string
@@ -3244,6 +3290,13 @@ val compile_deferred : deferred -> Context.t * Context.routine
     call only, which compiles; a later one returns the memoized outcome unguarded. At most once: a
     second call returns the same context and routine, or raises the same exception. A [deferred]
     dropped without this call costs nothing on the device. *)
+
+val deferred_compiles : deferred -> int
+(** The backend compiles ({!Context.backend_compiles}) {!compile_deferred} has performed for this
+    call so far (gh-ocannl-1440): 0 before it, and after it 0 for a cache hit, whose routine is the
+    validating replay's code linked again, one compile's count (1, or 2 on Metal, whose device
+    compile is counted at link) for a searched winner recompiled from its saved form, and the
+    untuned default's compiles where the call ships that. A memoized second call adds nothing. *)
 
 val shipped_substitute : deferred -> bool
 (** Whether {!compile_deferred} shipped the untuned default IN PLACE of the schedule the call's
@@ -3272,6 +3325,16 @@ val budget_elapsed : (float -> float) Seam.t
     reads. A test substitutes a virtual clock -- the attempts so far, say -- to place a cut at a
     chosen candidate, which a wall clock cannot. The default is the identity and no configuration
     selects it. *)
+
+val call_budget_setting : unit -> float option
+(** Config [tune_call_budget_seconds] as [Train.tune_placements] resolves it (gh-ocannl-1440), by
+    {!budget_setting}'s grammar: [Some] seconds for a positive number, [None] for empty, zero or
+    negative, [Utils.Invalid_config_value] for text that is no number. *)
+
+val call_budget_elapsed : (float -> float) Seam.t
+(** Test seam (gh-ocannl-1440): {!budget_elapsed} one level up -- maps a [Train.tune_placements]
+    call's real elapsed seconds to the seconds its budget split reads. The default is the identity
+    and no configuration selects it. *)
 
 val on_candidate_callback :
   ([ `Timed | `Calibration ] -> candidate_ms:float -> incumbent_ms:float -> unit) Seam.t

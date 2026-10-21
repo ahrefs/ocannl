@@ -208,6 +208,7 @@
   (alias runtest-autotune_candidate_release)
   (alias runtest-autotune_callback_release)
   (alias runtest-autotune_device_memory)
+  (alias runtest-deferred_hit_compiles)
   (alias runtest-set_values_pool_coalescing)))
 
 ; This directory's golden-diff rules, aggregated back onto `runtest` (gh-ocannl-726). Each of them
@@ -6519,6 +6520,45 @@
   (env_var OCANNL_BACKEND))
  (modules autotune_device_memory)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1440: one wall-clock budget for a whole Train.tune_placements call, split among its
+; searches, on virtual clocks counted in candidate attempts.
+
+(test
+ ; cc-vector-width: independent -- its claims are attempt counts and shares on a scripted clock, and
+ ; outputs over dyadic inputs.
+ (name tune_call_budget)
+ ; ocannl-backend: cc -- Context.cpu (); the scripted ranking and the split are backend-independent
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules tune_call_budget)
+ (libraries base ocannl stdio arrayjit.verdict ll_test scripted_search)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1440: a deferred schedule-cache hit compiles its schedule once -- the shipped routine is
+; the validating replay's code linked again -- counted through Context.backend_compiles, never timed.
+
+(test
+ ; cc-vector-width: independent -- its claims are compile counts and outputs over dyadic inputs,
+ ; which every width computes alike.
+ ; ocannl-lifecycle: deferred_hit_compiles -- drives the allocator seam to refuse a shipping relink
+ (name deferred_hit_compiles)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules deferred_hit_compiles)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  ll_test
+  scripted_search
+  test_utils)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
