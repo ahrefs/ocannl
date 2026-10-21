@@ -7,6 +7,10 @@ host get_values on alias raises: true
 host set_values on alias raises: true
 alias still absent from ctx_buffers after rejected host access: true
 write-through: parent=[99 99 99 4 5 6] (expect [99 99 99 4 5 6]): true
+zero fill of the view: 0 writes to the view itself: true
+zero fill of the view: the parent receives the writes (>0): true
+zero fill of row 1: parent=[99 99 99 0 0 0] (expect [99 99 99 0 0 0]): true
+constant-7 fill of row 0: parent=[7 7 7 0 0 0] (expect [7 7 7 0 0 0]): true
 eligible slice is aliased: true
 eligible slice lowered with NO copy loop (0 writes to slice): true
 virtual-parent known_virtual: true

@@ -467,10 +467,13 @@ val store : dir:string -> key:string option -> entry -> unit
     artifact and leaves an earlier complete entry intact. Before writing, cache-open serializes
     participating processes on a permanent lock file: an older or absent regime stamp sweeps every
     [.sexp] entry and is atomically replaced by the current stamp; a malformed or newer stamp
-    refuses the operation without changing its stamp or entries. Holding that lock through the write
-    prevents a concurrent regime transition from deleting the new entry. A filesystem refusal is not
-    propagated: the cache is an optimization, and an entry that could not be written is a future
-    miss rather than a failed run. It is noted, with its reason, to {!recording_cache_io}. *)
+    refuses the operation without changing its stamp or entries. A store is the only operation that
+    sweeps a superseded generation ({!lookup} never deletes, gh-ocannl-1439), and it also sweeps the
+    directory's crash-stale staging files ({!Utils.Atomic_file.cleanup_stale_once}) once per
+    directory per process. Holding that lock through the write prevents a concurrent regime
+    transition from deleting the new entry. A filesystem refusal is not propagated: the cache is an
+    optimization, and an entry that could not be written is a future miss rather than a failed run.
+    It is noted, with its reason, to {!recording_cache_io}. *)
 
 val lookup : dir:string -> key:string option -> entry option
 (** [None] on missing file, unparsable content, an entry stored under a different key (a digest
@@ -480,22 +483,25 @@ val lookup : dir:string -> key:string option -> entry option
     spare.
 
     Together with {!store} this participates in the same permanent record lock and regime-stamp
-    protocol described there, and sweeps the cache directory's crash-stale staging files
-    ({!Utils.Atomic_file.cleanup_stale_once}) once per directory per process. Every participating
-    reader and writer holds the lock through its entry I/O, so same-version processes race benignly
-    and an older participating binary refuses after a newer one advances the stamp. The OS releases
-    the record lock on process death; the lock file is never unlinked, avoiding an inode-replacement
+    protocol described there, but a lookup never deletes (gh-ocannl-1439): a directory whose regime
+    stamp is older or absent reads as a miss for every key -- not a refusal -- and keeps its entries
+    and its stamp until the next {!store} sweeps them, so reading a cache another binary wrote
+    cannot destroy what it came to read. Nor does a lookup sweep staging files; the writers do. A
+    newer or malformed stamp refuses the lookup, as it refuses a store. Every participating reader
+    and writer holds the lock through its entry I/O, so same-version processes race benignly and an
+    older participating binary refuses after a newer one advances the stamp. The OS releases the
+    record lock on process death; the lock file is never unlinked, avoiding an inode-replacement
     race. A binary predating this protocol does not participate and must not share a live directory
     during an upgrade. *)
 
 val read_entry_file : string -> (string * Sexp.t) option
 (** The key and undecoded payload stored in one entry file of a cache directory (any kind: a
     schedule {!entry}, or one under the ["placements-"] or ["abandonment-"] prefix), [None] when the
-    file is not a readable entry of this format. Unlike {!lookup} it creates, locks and changes
-    nothing -- {!lookup}'s cache-open sweeps a directory whose regime stamp is older -- and it
-    applies no version check: what a tool reading a cache another binary wrote needs (the
-    splice-segments A/B, gh-ocannl-1277, [benchmarks/runners/ocannl/bench_splice.ml]). Best-effort
-    like {!entry_keys}: run it over a cache no process is writing. *)
+    file is not a readable entry of this format. Unlike {!lookup} it creates and locks nothing, and
+    it applies neither the regime check -- {!lookup} reads a directory whose regime stamp is older
+    as all misses -- nor a version check: what a tool reading a cache another binary wrote needs
+    (the splice-segments A/B, gh-ocannl-1277, [benchmarks/runners/ocannl/bench_splice.ml]).
+    Best-effort like {!entry_keys}: run it over a cache no process is writing. *)
 
 (** {2 The cache-I/O record}
 
@@ -517,7 +523,8 @@ type cache_io = {
           lock, the regime stamp, an uncreatable directory, the write or the bounded commit), or a
           lookup whose cache-open, or whose read of an existing entry, the filesystem refused.
           [None] for a store that committed and for a lookup that was admitted, hit or miss -- a
-          missing directory is a lookup's ordinary miss, not a refusal. *)
+          missing directory, and one whose regime stamp is older or absent, are a lookup's ordinary
+          miss, not a refusal. *)
 }
 [@@deriving sexp_of]
 

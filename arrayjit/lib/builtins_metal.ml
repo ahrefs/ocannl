@@ -201,6 +201,20 @@ using namespace metal;|}, []);
     return (x >> 8) * (1.0f / 16777216.0f);
 }|},
       [] );
+    (* The narrow draws are below 1 by construction (gh-ocannl-1434): the single draw, its f32
+       mantissa bits the narrow type lacks cleared (truncation toward zero), is representable in
+       that type, so the conversion is exact under any rounding mode and renders what the C table's
+       [uint32_to_half_uniform] / [uint32_to_bfloat16_uniform] draw, bitwise. *)
+    ( "uint32_to_half_uniform",
+      {|inline half uint32_to_half_uniform(uint32_t x) {
+    return half(as_type<float>(as_type<uint32_t>(uint32_to_single_uniform(x)) & 0xFFFFE000u));
+}|},
+      [ "uint32_to_single_uniform" ] );
+    ( "uint32_to_bfloat16_uniform",
+      {|inline bfloat uint32_to_bfloat16_uniform(uint32_t x) {
+    return bfloat(as_type<float>(as_type<uint32_t>(uint32_to_single_uniform(x)) & 0xFFFF0000u));
+}|},
+      [ "uint32_to_single_uniform" ] );
     ( "uint4x32_to_single_uniform",
       {|float uint4x32_to_single_uniform(uint4 x) {
     return uint32_to_single_uniform(x.x);
@@ -246,16 +260,14 @@ using namespace metal;|}, []);
       [] );
     ( "uint4x32_to_bfloat16_uniform",
       {|bfloat uint4x32_to_bfloat16_uniform(uint4 x) {
-    float f = uint32_to_single_uniform(x.x);
-    return bfloat(f);
+    return uint32_to_bfloat16_uniform(x.x);
 }|},
-      [ "uint32_to_single_uniform" ] );
+      [ "uint32_to_bfloat16_uniform" ] );
     ( "uint4x32_to_half_uniform",
       {|half uint4x32_to_half_uniform(uint4 x) {
-    float f = uint32_to_single_uniform(x.x);
-    return half(f);
+    return uint32_to_half_uniform(x.x);
 }|},
-      [ "uint32_to_single_uniform" ] );
+      [ "uint32_to_half_uniform" ] );
     ( "uint4x32_to_fp8_uniform",
       {|uint8_t uint4x32_to_fp8_uniform(uint4 x) {
     return uint8_t(x.x & 0xFF);
@@ -344,28 +356,26 @@ using namespace metal;|}, []);
     uint4 v = x;
     for (int i = 0; i < 4; i++) {
         uint32_t val = v[i];
-        float f1 = float(val & 0xFFFF) * (1.0f / 65536.0f);
-        float f2 = float((val >> 16) & 0xFFFF) * (1.0f / 65536.0f);
-        result.v[i*2 + 0] = bfloat(f1);
-        result.v[i*2 + 1] = bfloat(f2);
+        // The word's low then high 16 bits, moved to the top of a word (see the C table)
+        result.v[i*2 + 0] = uint32_to_bfloat16_uniform(val << 16);
+        result.v[i*2 + 1] = uint32_to_bfloat16_uniform(val & 0xFFFF0000u);
     }
     return result;
 }|},
-      [ "bfloat16x8_t" ] );
+      [ "bfloat16x8_t"; "uint32_to_bfloat16_uniform" ] );
     ( "uint4x32_to_half_uniform_vec",
       {|half8_t uint4x32_to_half_uniform_vec(uint4 x) {
     half8_t result;
     uint4 v = x;
     for (int i = 0; i < 4; i++) {
         uint32_t val = v[i];
-        float f1 = float(val & 0xFFFF) * (1.0f / 65536.0f);
-        float f2 = float((val >> 16) & 0xFFFF) * (1.0f / 65536.0f);
-        result.v[i*2 + 0] = half(f1);
-        result.v[i*2 + 1] = half(f2);
+        // The word's low then high 16 bits, moved to the top of a word (see the C table)
+        result.v[i*2 + 0] = uint32_to_half_uniform(val << 16);
+        result.v[i*2 + 1] = uint32_to_half_uniform(val & 0xFFFF0000u);
     }
     return result;
 }|},
-      [ "half8_t" ] );
+      [ "half8_t"; "uint32_to_half_uniform" ] );
     ( "uint4x32_to_fp8_uniform_vec",
       {|int8x16_t uint4x32_to_fp8_uniform_vec(uint4 x) {
     int8x16_t result;

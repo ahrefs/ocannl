@@ -1915,9 +1915,11 @@ files.
 ## Cache regimes and placement replay
 - The schedule-cache directory carries one key-regime stamp, independent of the serialized entry's
   `entry_version` (gh-ocannl-835). Bump `Schedule_cache.cache_regime_version` whenever
-  `key_components` changes: the next cache-open deletes every `.sexp` entry under an older or
-  absent stamp, then atomically publishes the current stamp; there is deliberately no migration
-  arm per historical regime. Every lookup and store takes the same permanent-file `lockf` plus an
+  `key_components` changes: the next STORE's cache-open deletes every `.sexp` entry under an
+  older or absent stamp, then atomically publishes the current stamp; there is deliberately no
+  migration arm per historical regime. A lookup never deletes (gh-ocannl-1439): it reads a
+  superseded generation as misses (not refusals) and leaves entries, stamp and staging files in
+  place, so reading another binary's cache cannot destroy it. Every lookup and store takes the same permanent-file `lockf` plus an
   in-process mutex through the entry I/O, so participating processes cannot write a current entry
   under a sweep, and a binary seeing a newer or malformed stamp refuses cache I/O without changing
   the directory. The lock file stays in place to avoid the unlink/recreate inode race and the OS

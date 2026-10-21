@@ -82,8 +82,8 @@ type contents = {
 }
 
 (* Read through {!SC.read_entry_file}, never {!SC.lookup}: the inputs are another binary's caches,
-   and a lookup's cache-open would sweep a directory whose regime stamp is older than this build's
-   -- destroying the very schedules the A/B is about to replay. An adopted control entry is
+   and a lookup reads a directory whose regime stamp is older than this build's as all misses
+   (gh-ocannl-1439) -- the very schedules the A/B is about to replay. An adopted control entry is
    re-stamped at the current version, which is what [write_arm] stores. *)
 let read_dir ?adopt_version dir =
   match Stdlib.Sys.readdir dir with
