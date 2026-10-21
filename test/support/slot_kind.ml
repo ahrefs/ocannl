@@ -785,6 +785,13 @@ let check_project ~path content =
         failwith (Printf.sprintf "%s declares (%s …)" path h)
     | _ -> ())
 
+(** Raises on a [dune-workspace] (at [path], with [content]) naming more than its language: a
+    context's environment can set the backend, and a second context builds the tree twice. *)
+let check_workspace ~path content =
+  List.iter (Scan.stanzas content) ~f:(function
+    | Sexp.List (Sexp.Atom "lang" :: _) -> ()
+    | other -> failwith (Printf.sprintf "%s carries %s" path (Sexp.to_string other)))
+
 (** Every dune file under [root] that dune itself would read, as [(dir, content)] with [dir]
     relative to [root] ([""] for [root] itself). Into a directory's subdirectories as dune goes: by
     default the ones whose name starts with neither [.] nor [_] (not _build, _opam, .git, ...), and
@@ -866,12 +873,7 @@ let dune_files ?(workspace_root = true) ~root () =
     else root
   in
   let check_workspace file =
-    if Stdlib.Sys.file_exists file then
-      List.iter
-        (Scan.stanzas (Stdio.In_channel.read_all file))
-        ~f:(function
-          | Sexp.List (Sexp.Atom "lang" :: _) -> ()
-          | other -> failwith (Printf.sprintf "%s carries %s" file (Sexp.to_string other)))
+    if Stdlib.Sys.file_exists file then check_workspace ~path:file (Stdio.In_channel.read_all file)
   in
   check_workspace (Stdlib.Filename.concat absolute "dune-workspace");
   (if workspace_root then
@@ -1058,15 +1060,29 @@ let answer ?(getenv = Stdlib.Sys.getenv_opt) ?(config_free = config_free_aliases
                         if List.Assoc.mem acc b ~equal:String.equal then acc else (b, why) :: acc)
                     |> List.rev
                   in
+                  (* The policy first; then, failing closed, the closure itself: a reader reached by
+                     a configuration-free batch is one [slot_kind_live] would refuse, but that scan
+                     may not have run on this checkout yet, so the configuration counts here and now
+                     (Codex review round 2 on staging#1318). *)
                   let reads_config =
-                    List.find_map targets ~f:(function
-                      | Product _ -> None
-                      | Alias _ as t ->
-                          Option.some_if
-                            (not (List.mem config_free t ~equal:Poly.equal))
-                            (Printf.sprintf
-                               "it builds %s, which is not on the configuration-free alias list"
-                               (spell t)))
+                    match
+                      List.find_map targets ~f:(function
+                        | Product _ -> None
+                        | Alias _ as t ->
+                            Option.some_if
+                              (not (List.mem config_free t ~equal:Poly.equal))
+                              (Printf.sprintf
+                                 "it builds %s, which is not on the configuration-free alias list"
+                                 (spell t)))
+                    with
+                    | Some why -> Some why
+                    | None ->
+                        List.find_map found ~f:(fun s ->
+                            Option.some_if s.reads_config
+                              (Printf.sprintf
+                                 "%s, which reads the configuration (a configuration-free batch \
+                                  should not: slot_kind_live refuses it)"
+                                 (describe s)))
                   in
                   Reaches { named; reads_config })))
 

@@ -3398,9 +3398,12 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  ../../dune-project
   (glob_files_rec ../../dune)
-  (glob_files_rec ../../ocannl_config))
+  (glob_files_rec ../../ocannl_config)
+  (glob_files_rec ../../dune-project)
+  (glob_files_rec ../../dune-file)
+  (glob_files_rec ../../*.t)
+  (glob_files ../../dune-workspace))
  (action
   (run %{test} %{workspace_root} %{deps}))
  (modules slot_kind_live)

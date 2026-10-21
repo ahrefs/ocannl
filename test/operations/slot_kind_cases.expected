@@ -175,6 +175,12 @@ a sandboxed included dependency is every backend: true
 a sandboxed included dependency is nothing to a batch not reaching it: true
 build d/r.exe (a rule's .exe)            unknown: it builds d/r.exe, which no executable, test or library stanza in d declares (a rule could produce it)
 a rule-produced .exe is every backend, never a plain build: true
+build @test/operations/scans (a reader inside the listed alias) names nothing + reads config
+    it reaches s_reader in test/operations, which reads the configuration (a configuration-free batch should not: slot_kind_live refuses it)
+a reader inside the listed alias counts the configuration, failing closed: true
+build d/app.exe (a source a reader generates, beside a plain build) names nothing + reads config
+    it reaches the rule producing gen.ml in d, which reads the configuration (a configuration-free batch should not: slot_kind_live refuses it)
+a source a reader generates, beside a plain build counts the configuration, failing closed: true
 the fixture tree passes every check: true
 a reader beside a configuration the runner resolves passes: true
 a path-position read on a listed alias is refused nothing: true

@@ -445,6 +445,42 @@ let () =
   printf "%-40s %s\n" "build d/r.exe (a rule's .exe)" lookalike;
   p "a rule-produced .exe is every backend, never a plain build"
     (String.is_prefix lookalike ~prefix:"unknown: ");
+  (* Failing closed: on a tree the checks below would refuse -- a reader inside a listed alias, a
+     generated source a reader writes -- the answer counts the configuration anyway, since the scan
+     may not have run on the checkout yet (Codex review round 2 on staging#1318). *)
+  List.iter
+    [
+      ( "a reader inside the listed alias",
+        [
+          ( "test/operations",
+            {dune|(test (name s_reader) (deps ocannl_config (env_var OCANNL_BACKEND)))
+(alias (name scans) (deps (alias runtest-s_reader)))|dune}
+          );
+        ],
+        "build @test/operations/scans" );
+      ( "a source a reader generates, beside a plain build",
+        [
+          ( "d",
+            {dune|(executable (name app) (modules app gen))
+(rule
+ (target gen.ml)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (with-stdout-to %{target} (run %{dep:gen_tool.exe}))))|dune}
+          );
+        ],
+        "build d/app.exe" );
+    ]
+    ~f:(fun (what, dune_files, argv) ->
+      let answer, shown = judge ~dune_files argv in
+      let why =
+        match answer with
+        | Slot_kind.Reaches { reads_config = Some why; _ } -> why
+        | _ -> "<the configuration does not count>"
+      in
+      printf "%-40s %s\n    %s\n" (argv ^ " (" ^ what ^ ")") shown why;
+      p
+        (Printf.sprintf "%s counts the configuration, failing closed" what)
+        (String.equal shown "names nothing + reads config"));
   (* {1 The checks that keep the list honest} *)
   let scans_only =
     [ Slot_kind.Alias { dir = "test/operations"; alias = "scans"; recursive = true } ]

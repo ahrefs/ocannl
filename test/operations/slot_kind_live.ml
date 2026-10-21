@@ -7,9 +7,10 @@
     How each answer and each refusal is decided, on fixture trees built to separate the cases, is
     [slot_kind_cases]'s.
 
-    It reads exactly the files the rule hands it -- the dune files, the [ocannl_config] files and
-    the root [dune-project] its deps declare -- and never walks the build tree, which other tests'
-    outputs share with it while it runs: what it reads is what dune invalidates it on. *)
+    It reads exactly the files the rule hands it -- the dune files, the [ocannl_config] files, and
+    the metadata the runner's walk refuses ([dune-project]s, a [dune-workspace], a [dune-file], a
+    [.t] cram test) -- and never walks the build tree, which other tests' outputs share with it
+    while it runs: what it reads is what dune invalidates it on. *)
 
 open Base
 open Stdio
@@ -42,18 +43,29 @@ let () =
     List.map (of_basename "dune") ~f:(fun (path, on_disk) -> (dir_of path, read on_disk))
   in
   let config_files = List.map (of_basename Scan.config_file) ~f:fst in
-  let project =
-    match List.find paths ~f:(fun (path, _) -> String.equal path "dune-project") with
-    | None -> Some "no dune-project among the declared inputs"
-    | Some (_, on_disk) -> (
-        match Slot_kind.check_project ~path:"dune-project" (read on_disk) with
-        | () -> None
-        | exception Failure why -> Some why)
+  (* What dune reads beside the dune files, which the runner's own walk refuses
+     ([Slot_kind.dune_files]): every dune-project's dialect, a workspace naming more than its
+     language, the alternative dune-file name, and an implicitly discovered cram test. Declared too,
+     so the scan refuses what would make the runner answer every backend (Codex review round 2 on
+     staging#1318). *)
+  let checked f path on_disk =
+    match f ~path (read on_disk) with () -> None | exception Failure why -> Some why
+  in
+  let metadata =
+    (if List.exists paths ~f:(fun (path, _) -> String.equal path "dune-project") then []
+     else [ "no root dune-project among the declared inputs" ])
+    @ List.filter_map paths ~f:(fun (path, on_disk) ->
+        match Stdlib.Filename.basename path with
+        | "dune-project" -> checked Slot_kind.check_project path on_disk
+        | "dune-workspace" -> checked Slot_kind.check_workspace path on_disk
+        | "dune-file" -> Some (path ^ " is an alternative dune-file")
+        | base when String.is_suffix base ~suffix:".t" -> Some (path ^ " is a cram test")
+        | _ -> None)
   in
   (* The counts move with the tree, so they go to stderr, which the golden does not record. *)
   eprintf "read %d dune files and %d configurations\n" (List.length dune_files)
     (List.length config_files);
-  let refusals = Slot_kind.refusals ~config_files dune_files @ Option.to_list project in
+  let refusals = Slot_kind.refusals ~config_files dune_files @ metadata in
   List.iter refusals ~f:(fun r -> printf "refused: %s\n" r);
   List.iter
     [

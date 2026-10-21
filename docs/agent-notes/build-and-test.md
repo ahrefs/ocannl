@@ -3751,7 +3751,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   target on `Slot_kind.config_free_aliases` (`@test/operations/scans`, `@metal-codegen`), which
   then holds only what its stanzas name, or a plain compilation product (`build bin/x.exe`,
   `build ./test/operations/x.exe` as `bisect` spells it, a library's `.cma`/`.cmxa`), which
-  compiles and runs nothing -- no backend, `--cpu`, dune's own width. So a single `none`-marked
+  compiles and runs nothing -- no backend, `--cpu`, dune's own width. Either fails closed: a
+  closure that reaches a configuration reader all the same (a tree the scan below has not judged
+  yet) counts the configuration, and a dependency the closure cannot follow (an alias spelled
+  through a pform, an `(include …)`) makes any batch every backend. So a single `none`-marked
   test outside the list counts the configuration again: under a GPU configuration it takes a GPU
   slot, the loud direction, by design; `@lifecycle` stays off the list because its probes read
   the configuration. `slot_kind_live` (in `@test/operations/scans`, reading only the files its
