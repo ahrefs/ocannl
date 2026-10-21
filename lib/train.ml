@@ -550,6 +550,20 @@ let placement_evidence_clean (r : Autotune.report) =
       && Option.is_none (Autotune.terminal_failure r)
       && Float.is_finite r.Autotune.best_ms
 
+(* gh-ocannl-1424: what the device holds at a placement boundary, as progress-line fields.
+   [working_bytes] is the census's live working-pool bytes (process-wide, deterministic: counted at
+   the shared allocator seam on every backend), so equal readings at two boundaries mean nothing of
+   the work between them stayed in OCANNL's pools. [device_free] is the driver's own free bytes,
+   [none] where the backend cannot read them: it also sees what no pool table does (other processes,
+   contexts, loaded code, kernel local memory, instantiated graphs). Read only when the progress
+   stream is on, so a run without it makes no extra driver call. *)
+let placement_memory_fields ?(with_total = false) ctx =
+  let working = (Ir.Alloc_census.snapshot ()).Ir.Alloc_census.live_working_bytes in
+  let reading = try Context.get_free_and_total_memory ctx with _ -> None in
+  let field f = Option.value_map reading ~default:"none" ~f:(fun r -> Int.to_string (f r)) in
+  Printf.sprintf " working_bytes=%d device_free=%s%s" working (field fst)
+    (if with_total then " device_total=" ^ field snd else "")
+
 let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?report ?flip_report
     ?inline_flips ?ship_arm ?placement_store ?log ?progress ?on_ship ctx loss comp bindings =
   (* [?log] and [?progress] scope the two streams over the whole call: the arm lines below and every
@@ -586,6 +600,9 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
        say. This is a measurement-only setting; a normal run ships the measured winner.\n\
        %!"
       (placement_arm_name ship_arm);
+  (* gh-ocannl-1424: the baseline the arm lines' memory fields compare against. *)
+  if Autotune.progress_enabled () then
+    Autotune.progressf "event=placements_start%s" (placement_memory_fields ~with_total:true ctx);
   let last = ref None in
   (* Every report this call observes, arms and flips alike: the evidence a recorded placement
      decision rests on (gh-ocannl-786). *)
@@ -669,7 +686,10 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
     logf "arm %s search:" arm;
     (* gh-ocannl-1061: the arm-level cost record, on {!Autotune.progressf}'s stream. *)
     let stopwatch = Autotune.progress_stopwatch () in
-    Autotune.progressf "event=arm_start arm=%S%s" arm progress_note;
+    let memory_fields () =
+      if Autotune.progress_enabled () then placement_memory_fields ctx else ""
+    in
+    Autotune.progressf "event=arm_start arm=%S%s%s" arm progress_note (memory_fields ());
     last := None;
     let result =
       match
@@ -707,17 +727,17 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
            at. *)
         Autotune.progressf
           "event=arm_done arm=%S%s result=abandoned best_ms=%s after=%d incumbent_ms=%s \
-           elapsed_s=%.1f"
+           elapsed_s=%.1f%s"
           arm progress_note
           (Autotune.progress_ms ab.Autotune.ab_best_ms)
           ab.Autotune.ab_timed
           (Autotune.progress_ms ab.Autotune.ab_incumbent_ms)
-          (stopwatch ())
+          (stopwatch ()) (memory_fields ())
     | _ ->
-        Autotune.progressf "event=arm_done arm=%S%s result=%s best_ms=%s elapsed_s=%.1f" arm
+        Autotune.progressf "event=arm_done arm=%S%s result=%s best_ms=%s elapsed_s=%.1f%s" arm
           progress_note
           (match result with Ok _ -> "ok" | Error _ -> "failed")
-          (Autotune.progress_ms best_ms) (stopwatch ()));
+          (Autotune.progress_ms best_ms) (stopwatch ()) (memory_fields ()));
     (match result with
     | Error (Autotune.Search_abandoned ab, _) ->
         let timing_source =

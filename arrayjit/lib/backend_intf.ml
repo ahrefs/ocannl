@@ -1274,6 +1274,12 @@ module type Backend_device_common = sig
   val get_used_memory : device -> int
   (** Returns (an upper bound of) the memory used for arrays, in bytes. *)
 
+  val get_free_and_total_memory : device -> (int * int) option
+  (** The driver's free and total bytes of the device's memory, read now; [None] where the backend
+      has no such reading (the CPU backends and Metal). Device-global, unlike {!get_used_memory}: it
+      counts every allocation on the device, other processes' and the driver's own (contexts, loaded
+      code, local memory, instantiated graphs) included, in allocation granules (gh-ocannl-1424). *)
+
   val get_global_debug_info : unit -> Sexp.t
   (** Global debug information; backend-specific and might evolve independently on the backends. *)
 

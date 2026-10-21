@@ -237,6 +237,10 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
      [Context.get_used_memory] contract. *)
   let get_used_memory (device : device) = Slab.used_memory device
 
+  let get_free_and_total_memory (device : device) =
+    set_ctx device.dev.primary_context;
+    Some (Cu.Device.get_free_and_total_mem ())
+
   (* The merge buffer is the device's reserved single-tenant pool (id [merge_buffer_pool_id]); grow
      it in place when a larger node arrives ([Slab.alloc_pool] overwrites the reserved entry). *)
   let opt_alloc_merge_buffer ~size_in_bytes (device : device) : unit =

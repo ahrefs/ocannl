@@ -87,6 +87,20 @@ files.
   (gh-ocannl-1408).
   `test/operations/autotune_device_memory` simulates a capacity at the `Delta_pool_allocated`
   fault-injection seam; `autotune_candidate_release` pins zero working pools between candidates.
+- **A refusal's free bytes are read with the refused compile's own earlier pools still allocated**
+  (gh-ocannl-1424). A group past the per-pool cap (4 GiB unless `large_models`, `pool_cap`) is
+  several pools that `allocate_delta` allocates one after another before placing anything, and
+  the driver's free bytes in `Device_memory_exhausted` are read at the refusal, before the unwind
+  gives the earlier pools back. Read bare, that looks like memory something else holds: the b256
+  `gpt2_mini_train` materialize-all arm (28.2 GB working in seven pools, by
+  `Memory_budget.footprint`) was refused at its third pool on rog's 12 GiB card with its first two
+  (8.35 GB) still allocated, and at its second on tuf's 8 GiB card, and the free bytes read as 8.6
+  GB and 3.9 GB "resident after arm A", while arm A (6.9 GB) gives back everything it allocated. The
+  refusal's detail now names the pool's position, the group's total and the bytes the earlier pools
+  held. Before blaming a
+  leak, score the footprint, and compare the `working_bytes` (census) and `device_free` (driver)
+  fields of `Train.tune_placements`' progress lines across the arm boundaries: equal working bytes
+  with a falling `device_free` is memory no pool table accounts for.
 - Device allocation refusals are typed at the GPU pool allocators
   (`Schedule_outcome.Device_memory_exhausted`, the `Resource_exceeded Device_memory` decline with
   the refused bytes and the driver's free bytes), because HIP has no `classify_failure` and its

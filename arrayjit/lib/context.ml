@@ -1080,6 +1080,14 @@ let get_used_memory ctx =
           Backend.get_used_memory c.BI.device);
     }
 
+let get_free_and_total_memory ctx =
+  Backends.query ctx.wrapped
+    {
+      q =
+        (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) c ->
+          Backend.get_free_and_total_memory c.BI.device);
+    }
+
 let release ctx =
   Backends.query ctx.wrapped
     {

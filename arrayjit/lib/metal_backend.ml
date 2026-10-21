@@ -274,6 +274,7 @@ module Impl = struct
 
   (* --- Configuration and Info --- *)
   let get_used_memory _device = Atomic.get allocated_memory
+  let get_free_and_total_memory _device = None
 
   (* [Sexp.message]-shaped device entries, like every other backend's (gh-ocannl-710): the pairs
      used to sit one nesting level deeper, wrapped in a list of their own, which is the same
