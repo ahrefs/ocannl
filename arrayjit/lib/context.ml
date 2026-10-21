@@ -469,7 +469,7 @@ let compile_outcome ?name ?lowered_transform ?prelowered ~provenance ?candidate 
   | Backends.Unwrapped (impl, bctx) -> (
       let module Backend = (val impl.Backends.bi_module) in
       let link code () =
-        let r = Backend.link bctx code in
+        let r = Ir.Compile_cost.time_link (fun () -> Backend.link bctx code) in
         (impl.Backends.bi_wrap r.BI.context, payload_of r)
       in
       (* The [Tile_mma] rendering census is collected HERE, once, around this routine's codegen

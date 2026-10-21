@@ -398,24 +398,12 @@ end = struct
             (H.Device.get_attributes (H.Device.get ~ordinal)).gcn_arch_name)
         |> Array.to_list)
 
-  let%diagn2_sexp hip_to_code ~name hip_src =
-    let name_hip = name ^ ".hip" in
+  (* The options hiprtc compiles [hip_src] with -- the source as assembled, before
+     [prepend_conditional_includes]: whether it uses rocWMMA adds that header tree's include path
+     and the language level it needs. A function of the source and the device set alone, so the
+     kernel code cache keys on it (gh-ocannl-1314). *)
+  let hiprtc_options ~target_archs hip_src =
     let uses_rocwmma = C_syntax.source_mentions ~marker:"rocwmma::" hip_src in
-    let hip_src =
-      C_syntax.prepend_conditional_includes
-        ~conditional_includes:Cuda_like_config.Hip.conditional_includes hip_src
-    in
-    if Utils.settings.output_debug_files_in_build_directory then (
-      let build_file = Utils.open_build_file ~base_name:name ~extension:".hip" in
-      Stdio.Out_channel.output_string build_file.oc hip_src;
-      build_file.finalize ());
-    [%log "compiling to a code object"];
-    (* [with_debug] only asks hiprtc to keep the compilation log on a SUCCESSFUL compile (a failing
-       one carries its log in the exception either way), and the only reader of that log is the
-       [.hip_log] build file written just below -- so it wants exactly the flag that writes it. The
-       [|| log_level > 0] disjunct it used to carry made the log's retention hostage to a verbosity
-       knob that nothing here consults (gh-ocannl-595). *)
-    let with_debug = Utils.settings.output_debug_files_in_build_directory in
     (* hiprtc targets the architecture of the current default device when no [--offload-arch] is
        given. On Linux hiprtc ships built-in HIP headers; on Windows (observed with ROCm 7.1)
        [#include <hip/hip_fp16.h>] is not found without an include path, so point at the SDK's
@@ -434,13 +422,31 @@ end = struct
        the narrow override -- and the infinity sentinels the masked-softmax path emits as values --
        after fast math at compiler scope, covering operators parsed in the HIP headers; its complete
        option matrix is tested without hipjit in arrayjit/test. *)
-    let options =
-      Lazy.force ensure_initialized;
-      let target_archs = hiprtc_target_archs () in
-      Compiler_options.hiprtc ~target_archs ~hip_include_options:hip_include_opt
-        ~rocwmma_include_options:rocwmma_include_opt ~uses_rocwmma
-        ~with_debug:(Utils.with_runtime_debug ())
-    in
+    Compiler_options.hiprtc ~target_archs ~hip_include_options:hip_include_opt
+      ~rocwmma_include_options:rocwmma_include_opt ~uses_rocwmma
+      ~with_debug:(Utils.with_runtime_debug ())
+
+  let with_conditional_includes hip_src =
+    C_syntax.prepend_conditional_includes
+      ~conditional_includes:Cuda_like_config.Hip.conditional_includes hip_src
+
+  let write_source_artifact ~name hip_src =
+    if Utils.settings.output_debug_files_in_build_directory then (
+      let build_file = Utils.open_build_file ~base_name:name ~extension:".hip" in
+      Stdio.Out_channel.output_string build_file.oc hip_src;
+      build_file.finalize ())
+
+  (* One hiprtc program. [log_header] opens the [.hip_log] artifact: the kernel cache's account of
+     which kernels this program compiled. *)
+  let%diagn2_sexp compile_program ~name ?(log_header = "") ~options hip_src =
+    let name_hip = name ^ ".hip" in
+    [%log "compiling to a code object"];
+    (* [with_debug] only asks hiprtc to keep the compilation log on a SUCCESSFUL compile (a failing
+       one carries its log in the exception either way), and the only reader of that log is the
+       [.hip_log] build file written just below -- so it wants exactly the flag that writes it. The
+       [|| log_level > 0] disjunct it used to carry made the log's retention hostage to a verbosity
+       knob that nothing here consults (gh-ocannl-595). *)
+    let with_debug = Utils.settings.output_debug_files_in_build_directory in
     let code =
       C_syntax.with_compiler_options ~compiler:"hiprtc" ~options
         ~enrich:(fun exn ~suffix ->
@@ -456,10 +462,20 @@ end = struct
       Stdio.Out_channel.flush oc;
       Stdio.Out_channel.close oc;
       let oc = Out_channel.open_text @@ Utils.build_file @@ name ^ ".hip_log" in
+      Stdio.Out_channel.output_string oc log_header;
       Stdio.Out_channel.output_string oc @@ Option.value ~default:"" (Hiprtc.compilation_log code);
       Stdio.Out_channel.flush oc;
       Stdio.Out_channel.close oc);
     code
+
+  let hip_to_code ~name hip_src =
+    let options =
+      Lazy.force ensure_initialized;
+      hiprtc_options ~target_archs:(hiprtc_target_archs ()) hip_src
+    in
+    let hip_src = with_conditional_includes hip_src in
+    write_source_artifact ~name hip_src;
+    compile_program ~name ~options hip_src
 
   let run_options () =
     (* NOTE: on the AMD platform these are accepted for CUDA-driver-API compatibility but mostly
@@ -667,8 +683,14 @@ end = struct
         let dst_base = Slab.resolve_pool dst.device loc in
         memcpy ~dst_base ~dst_offset:loc.offset
 
+  (* One hiprtc program's code object. [program_id] identifies it, so a batch whose kernels come
+     from the same program loads it once ([link_batch]). With the kernel code cache (gh-ocannl-1314)
+     the kernels of one batch can come from several programs: the ones it reused from earlier
+     compiles, and the one program it compiled its cache misses into. *)
+  type program = { program_id : int; code : Hiprtc.compile_to_code_result } [@@deriving sexp_of]
+
   type code = {
-    code : Hiprtc.compile_to_code_result;
+    code : program;
     kparams : (string * kparam_source) list;
     bindings : Indexing.unit_bindings;
     name : string;
@@ -677,7 +699,7 @@ end = struct
   [@@deriving sexp_of]
 
   type code_batch = {
-    code : Hiprtc.compile_to_code_result;
+    programs : program array;  (** Per kernel, in batch order: the program holding it. *)
     bindings : Indexing.unit_bindings;
     kparams_and_names : ((string * kparam_source) list * string * Low_level.launch_dims) array;
   }
@@ -1122,22 +1144,182 @@ end = struct
 
   module Compile = C_syntax.Compile_driver (Hip_syntax_config)
 
-  let%diagn2_sexp compile ~name bindings lowered =
-    let code, kparams, name, launch =
-      Compile.compile ~name bindings lowered ~includes:hip_includes ~builtins:Builtins_hip.builtins
-        ~conditional_includes:Cuda_like_config.Hip.conditional_includes ~compile_source:hip_to_code
-        ()
+  let next_program_id = Atomic.make 0
+  let new_program code = { program_id = Atomic.fetch_and_add next_program_id 1; code }
+
+  (* {2 The kernel code cache (gh-ocannl-1314)}
+
+     hiprtc's cost is mostly per PROGRAM, and it compiles one program at a time per process:
+     measured on the dumped 261-kernel source of a [gpt2_mini_train] step, one joint program took
+     5.3 s on gfx1102 (3.0 s on gfx1151), the same kernels as one program each 87.7 s (37.1 s), and
+     threads changed neither, however many. A search candidate re-renders the whole routine and
+     typically changes a handful of its kernels, so the batch path compiles only the kernels no
+     earlier compile in this process produced -- its cache misses -- as ONE program, and reuses the
+     rest.
+
+     A kernel's key is its standalone source ([render_batch]'s [assemble [i]]: the includes, the
+     builtins it uses, its definition, including its name) with its minted names -- loop and
+     static-index symbols, scope-local names -- renamed by first occurrence
+     ([Kernel_code_cache.canonical_symbols]), and the complete hiprtc option list that source
+     compiles under ([hiprtc_options]: the device set's target architectures, the include paths, the
+     numerics flags, the debug flag). Misses with different option lists compile as separate
+     programs, so a kernel's code always came from its own option list. The reused code was compiled
+     from the same kernel text up to that renaming -- a bijection on names the kernel owns, which an
+     emitted kernel's meaning and its machine code do not depend on -- possibly beside other
+     kernels: the builtins are [__forceinline__] helpers and read-only constants, so a companion
+     changes nothing it computes. Process-local and bounded by [hip_kernel_cache_mib]; 0 disables
+     it, and every batch compiles as one program of all its kernels, as before. Parameters, bindings
+     and launch geometry always come from the current rendering, and every kernel still goes through
+     [link_proc]'s checks. *)
+  let kernel_cache_capacity_bytes =
+    lazy
+      (let mib = Utils.get_global_arg ~default:"256" ~arg_name:"hip_kernel_cache_mib" in
+       match Int.of_string_opt (String.strip mib) with
+       | Some m when m >= 0 -> m * 1024 * 1024
+       | _ ->
+           raise
+           @@ Utils.User_error
+                ("hip_kernel_cache_mib must be a non-negative integer (MiB); found: " ^ mib))
+
+  let kernel_cache : program Kernel_code_cache.t =
+    Kernel_code_cache.create ~capacity_bytes:(fun () -> Lazy.force kernel_cache_capacity_bytes)
+
+  (* Held from the cache lookups to the publication of what they missed, so two domains compiling
+     the same kernels cannot both miss and both compile them: the second finds the first's code.
+     hiprtc compiles one program at a time per process anyway, so serializing here costs nothing it
+     was not already paying. *)
+  let kernel_compile_lock = Stdlib.Mutex.create ()
+
+  let compile_kernels ~batch ~names bindings lowereds =
+    Compile_cost.record_reuse_capable ();
+    let r =
+      Compile.render_batch ~names bindings lowereds ~includes:hip_includes
+        ~builtins:Builtins_hip.builtins
+        ~conditional_includes:Cuda_like_config.Hip.conditional_includes ()
     in
-    { code; kparams; bindings; name; launch }
+    let n = Array.length r.entries in
+    Compile_cost.record_kernels ~rendered:n ~compiled:0;
+    let all = List.init n ~f:Fn.id in
+    let kernel_names = Array.map r.entries ~f:(fun (_, name, _) -> name) in
+    (* The artifacts' name, as [Compile_driver.drive] derives it. *)
+    let name =
+      if batch then
+        String.(strip ~drop:(equal_char '_') @@ common_prefix (Array.to_list kernel_names))
+      else kernel_names.(0)
+    in
+    Lazy.force ensure_initialized;
+    let target_archs = hiprtc_target_archs () in
+    (* The routine's full source, as codegen emitted it, is its [.hip] artifact whatever was
+       compiled: the debug view of what codegen emitted (and what tests read) does not depend on
+       what the cache held. The renaming is the key's alone; hiprtc compiles the emitted text. *)
+    let full_source = r.assemble all in
+    write_source_artifact ~name (with_conditional_includes full_source);
+    let programs = Array.create ~len:n None in
+    (* Not under device debugging: a code object's debug info then names the source file it was
+       compiled from, which a later compile of the same routine rewrites, so reuse would point a
+       debugger at text that is not the code's. Every kernel compiles, as with the cache off. *)
+    let enabled = Kernel_code_cache.enabled kernel_cache && not (Utils.with_runtime_debug ()) in
+    let keyed =
+      if not enabled then [||]
+      else
+        Array.init n ~f:(fun i ->
+            let source = r.assemble [ i ] in
+            let options = hiprtc_options ~target_archs source in
+            (* Keyed on the text with its minted names renamed, so the next candidate's unchanged
+               kernel -- rendered with other symbol numbers -- finds this one. *)
+            let canonical = Kernel_code_cache.canonical_symbols ~keep:[ kernel_names.(i) ] source in
+            (options, Kernel_code_cache.key ~parts:(options @ [ canonical ])))
+    in
+    let lookup idxs =
+      List.iter idxs ~f:(fun i ->
+          if Option.is_none programs.(i) then
+            programs.(i) <- Kernel_code_cache.find kernel_cache (snd keyed.(i)))
+    in
+    let misses () = List.filter all ~f:(fun i -> Option.is_none programs.(i)) in
+    (* The lookups run without the lock, so an all-hit compile never waits on another domain's
+       hiprtc; the misses are looked up again under it, where another domain may just have published
+       them. *)
+    if enabled then lookup all;
+    let compile_misses () =
+      if enabled then lookup (misses ());
+      let misses = misses () in
+      let groups =
+        if not enabled then
+          (* As before the cache: one program of every kernel. *)
+          [ (hiprtc_options ~target_archs full_source, all) ]
+        else
+          (* Misses grouped by option list, in batch order: one program per distinct list, so a
+             kernel's code always comes from its own option list. *)
+          let same = List.equal String.equal in
+          let distinct =
+            List.fold misses ~init:[] ~f:(fun acc i ->
+                let options = fst keyed.(i) in
+                if List.mem acc options ~equal:same then acc else acc @ [ options ])
+          in
+          List.map distinct ~f:(fun options ->
+              (options, List.filter misses ~f:(fun i -> same (fst keyed.(i)) options)))
+      in
+      let n_compiled = List.length misses in
+      let log_header =
+        Printf.sprintf "/* kernel code cache: compiled %d of %d kernels, reused %d */\n" n_compiled
+          n (n - n_compiled)
+      in
+      (* A program of every kernel in batch order is the routine's own source, already written as
+         [<name>.hip]; any other program is written as [<name>.part<k>.hip] beside its code object
+         and log, under the name hiprtc was given, so its diagnostics and debug info point at the
+         text it compiled. [.part<k>] is a spelling no routine name takes. *)
+      let whole = match groups with [ (_, idxs) ] -> List.equal Int.equal idxs all | _ -> false in
+      if Utils.settings.output_debug_files_in_build_directory then (
+        (* What an earlier compile of this name left is not this compile's: remove it, so none is
+           left that would read as one. *)
+        let dir = Stdlib.Filename.dirname (Utils.build_file (name ^ ".hsaco")) in
+        let ours file =
+          List.exists [ ".hsaco"; ".hip_log" ] ~f:(fun ext -> String.equal file (name ^ ext))
+          || String.is_prefix file ~prefix:(name ^ ".part")
+        in
+        (try
+           Array.iter (Stdlib.Sys.readdir dir) ~f:(fun file ->
+               if ours file then
+                 try Stdlib.Sys.remove (Stdlib.Filename.concat dir file) with Sys_error _ -> ())
+         with Sys_error _ -> ());
+        if List.is_empty groups then
+          Stdio.Out_channel.write_all (Utils.build_file (name ^ ".hip_log")) ~data:log_header);
+      List.iteri groups ~f:(fun k (options, idxs) ->
+          let artifact = if whole then name else name ^ ".part" ^ Int.to_string k in
+          let source = with_conditional_includes (r.assemble idxs) in
+          if not whole then write_source_artifact ~name:artifact source;
+          (* Before the call: a program hiprtc refuses was still given these kernels. *)
+          Compile_cost.record_kernels ~rendered:0 ~compiled:(List.length idxs);
+          let code =
+            try
+              Compile_cost.time_device (fun () ->
+                  compile_program ~name:artifact ~log_header ~options source)
+            with exn ->
+              let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+              r.attribute idxs exn backtrace
+          in
+          let program = new_program code in
+          (* Published only now, after hiprtc returned: a failed program leaves no entry. *)
+          if enabled then
+            Kernel_code_cache.publish kernel_cache
+              ~keys:(List.map idxs ~f:(fun i -> snd keyed.(i)))
+              ~bytes:code.Hiprtc.code_length program;
+          List.iter idxs ~f:(fun i -> programs.(i) <- Some program))
+    in
+    if List.is_empty (misses ()) then (
+      if Utils.settings.output_debug_files_in_build_directory then
+        Stdlib.Mutex.protect kernel_compile_lock compile_misses)
+    else Stdlib.Mutex.protect kernel_compile_lock compile_misses;
+    (Array.map programs ~f:(fun p -> Option.value_exn ~here:[%here] p), r.entries)
+
+  let%diagn2_sexp compile ~name bindings lowered =
+    let programs, entries = compile_kernels ~batch:false ~names:[| name |] bindings [| lowered |] in
+    let kparams, name, launch = entries.(0) in
+    { code = programs.(0); kparams; bindings; name; launch }
 
   let%diagn2_sexp compile_batch ~names bindings lowereds =
-    let code, kparams_and_names =
-      Compile.compile_batch ~names bindings lowereds ~includes:hip_includes
-        ~builtins:Builtins_hip.builtins
-        ~conditional_includes:Cuda_like_config.Hip.conditional_includes ~compile_source:hip_to_code
-        ()
-    in
-    { code; kparams_and_names; bindings }
+    let programs, kparams_and_names = compile_kernels ~batch:true ~names bindings lowereds in
+    { programs; kparams_and_names; bindings }
 
   (* {2 Post-link scratch validation (gh-ocannl-533)}
 
@@ -1320,7 +1502,7 @@ end = struct
   let%track3_sexp link prior_context (code : code) ctx_buffers =
     let ctx = ctx_of prior_context in
     set_ctx ctx;
-    let run_module = H.Module.load_data_ex code.code (run_options ()) in
+    let run_module = H.Module.load_data_ex code.code.code (run_options ()) in
     prior_context.device.dev.set_builtins_in run_module;
     let idx_params = Indexing.bound_symbols code.bindings in
     let lowered_bindings : Indexing.lowered_bindings =
@@ -1339,11 +1521,19 @@ end = struct
     in
     let ctx = ctx_of prior_context in
     set_ctx ctx;
-    let run_module = H.Module.load_data_ex code_batch.code (run_options ()) in
-    prior_context.device.dev.set_builtins_in run_module;
+    (* Each distinct program is loaded once, its module shared by the kernels it holds; every task
+       keeps its own kernel's module alive through its [context_lifetime], as before. *)
+    let modules = Hashtbl.create (module Int) in
+    let module_of (program : program) =
+      Hashtbl.find_or_add modules program.program_id ~default:(fun () ->
+          let run_module = H.Module.load_data_ex program.code (run_options ()) in
+          prior_context.device.dev.set_builtins_in run_module;
+          run_module)
+    in
     let procs =
-      Array.map code_batch.kparams_and_names ~f:(fun (kparams, name, launch) ->
-          link_proc ~prior_context ~name ~kparams ~launch ~ctx_buffers lowered_bindings run_module)
+      Array.mapi code_batch.kparams_and_names ~f:(fun i (kparams, name, launch) ->
+          link_proc ~prior_context ~name ~kparams ~launch ~ctx_buffers lowered_bindings
+            (module_of code_batch.programs.(i)))
     in
     (lowered_bindings, procs)
 

@@ -2726,6 +2726,31 @@
  (libraries base arrayjit.ir stdio arrayjit.verdict))
 
 (test
+ ; gh-ocannl-1314: a backend's kernel code cache (HIP) compiles only the kernels it has not
+ ; compiled, and changes nothing a kernel computes. Gated on the compile census, skipped elsewhere.
+ ; cc-vector-width: independent -- off HIP its only claims are exact integer outputs, which every
+ ; schedule at every width computes alike; the reuse claims are gated on the HIP cache.
+ (name hip_kernel_cache)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules hip_kernel_cache)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
+ ; ocannl-backend: none -- links arrayjit.ir alone; the kernel code cache is pure host-side state.
+ ; gh-ocannl-1314: the cache's keys, retention, eviction and disabling, which the HIP backend's
+ ; incremental compile relies on, pinned without the hardware.
+ (name kernel_code_cache)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules kernel_code_cache)
+ (libraries base arrayjit.ir arrayjit.verdict))
+
+(test
  ; ocannl-backend: none -- links arrayjit.ir alone; host-side Ndarray writes, no device.
  (name ndarray_flat_writer)
  (package neural_nets_lib)

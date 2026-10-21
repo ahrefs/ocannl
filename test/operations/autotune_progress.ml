@@ -113,13 +113,81 @@ let () =
       match (float_field f "compile_s", float_field f "timing_s", float_field f "elapsed_s") with
       | Some c, Some t, Some e -> Float.(c + t <= e + 0.2)
       | _ -> false);
+  (* gh-ocannl-1314: one [compiled] line as each compile returns, its phases inside its wall. *)
+  let compiled s = List.filter s ~f:(fun (ev, _) -> String.equal ev "compiled") in
+  p_all "each candidate line is answered by one compiled line for the same attempt" searches
+    ~f:(fun s ->
+      let attempts_started = List.filter_map (candidates s) ~f:(fun (_, f) -> field f "attempt") in
+      let attempts_compiled =
+        List.filter_map (compiled s) ~f:(fun (_, f) ->
+            if Option.equal String.equal (field f "stage") (Some "candidate") then field f "attempt"
+            else None)
+      in
+      List.equal String.equal attempts_started attempts_compiled);
+  p_all "each search's base compile has its compiled line, attempt baseline" searches ~f:(fun s ->
+      List.count (compiled s) ~f:(fun (_, f) ->
+          Option.equal String.equal (field f "stage") (Some "base_compile")
+          && Option.equal String.equal (field f "attempt") (Some "baseline"))
+      = 1);
+  let all_compiled = compiled events in
+  p_exists "some compile reached link" all_compiled ~f:(fun (_, f) ->
+      Option.equal String.equal (field f "verdict") (Some "compiled"));
+  p_all "every compiled line has a known verdict, and its phases fit within its wall" all_compiled
+    ~f:(fun (_, f) ->
+      let phase k = float_field f k in
+      let device =
+        match field f "device_s" with
+        | Some "none" -> Some 0.
+        | Some v -> Float.of_string_opt v
+        | None -> None
+      in
+      List.mem
+        [ "compiled"; "dedup"; "refused"; "failed" ]
+        (Option.value (field f "verdict") ~default:"")
+        ~equal:String.equal
+      &&
+      match
+        ( float_field f "took_s",
+          Option.all
+            [ phase "lower_s"; phase "transform_s"; phase "codegen_s"; device; phase "link_s" ] )
+      with
+      | Some wall, Some phases ->
+          List.for_all phases ~f:(fun x -> Float.(x >= -0.001))
+          && Float.(List.sum (module Float) phases ~f:Fn.id <= wall + 0.01)
+      | _ -> false);
+  p_all "a compile renders at least the kernels it compiles, and one that reached link renders some"
+    all_compiled ~f:(fun (_, f) ->
+      match (int_field f "kernels", int_field f "kernels_compiled") with
+      | Some k, Some c ->
+          c >= 0 && c <= k
+          && ((not (Option.equal String.equal (field f "verdict") (Some "compiled"))) || k >= 1)
+      | _ -> false);
+  p_all "a candidate decided before codegen (dedup or refused) rendered no kernel" all_compiled
+    ~f:(fun (_, f) ->
+      (not
+         (List.mem [ "dedup"; "refused" ]
+            (Option.value (field f "verdict") ~default:"")
+            ~equal:String.equal))
+      || Option.equal Int.equal (int_field f "kernels") (Some 0));
+  p_all2 "each report's compile_cost counts the kernels of its search's compiled lines"
+    (Array.of_list searches) (Array.of_list reports) ~f:(fun s (r : Autotune.report) ->
+      List.sum
+        (module Int)
+        (compiled s)
+        ~f:(fun (_, f) -> Option.value (int_field f "kernels") ~default:(-1_000_000))
+      = r.compile_cost.kernels);
   (* Each phase line announces a total; the phase's candidate lines count up to it. *)
   let phases =
     List.concat_map searches ~f:(fun s ->
         List.filter_mapi s ~f:(fun i (ev, f) ->
             if String.equal ev "phase" then
               let name = field f "phase" in
-              let rest = List.drop s (i + 1) in
+              (* A candidate's [compiled] line follows it inside the phase. *)
+              let rest =
+                List.filter
+                  (List.drop s (i + 1))
+                  ~f:(fun (ev, _) -> not (String.equal ev "compiled"))
+              in
               let in_phase =
                 List.take_while rest ~f:(fun (ev, g) ->
                     String.equal ev "candidate" && Option.equal String.equal (field g "phase") name)

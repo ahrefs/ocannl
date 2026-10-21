@@ -347,6 +347,9 @@ type report = {
   best_steps : (int * float) list;
       (** The best-so-far as a step function of the admitted timings (gh-ocannl-1110). See the
           interface. *)
+  compile_cost : Ir.Compile_cost.t;
+      (** The compiles this call made before delivering the report, summed by phase
+          (gh-ocannl-1314). See the interface. *)
 }
 
 (** The report of a [tune] call that never searched (config [autotune_search=false], gh-ocannl-559):
@@ -425,6 +428,7 @@ let no_search_report ~timing =
        and every report from then on carries it. *)
     source_digest = "";
     best_steps = [];
+    compile_cost = Ir.Compile_cost.empty;
   }
 
 (** The stable one-word name of an outcome state, for logs, JSON records and test goldens. *)
@@ -1207,6 +1211,33 @@ let install_timing_call_observer f = ignore (chain_timing_call_observer f : timi
 let with_timing_call_observer f body =
   let enclosing = chain_timing_call_observer f in
   Exn.protect ~f:body ~finally:(fun () -> Stdlib.Domain.DLS.set timing_call_observer enclosing)
+
+(* gh-ocannl-1314: what one compile of a [tune] call cost, by phase. See the interface. *)
+type compile_record = {
+  compile_routine : string;
+  compile_stage : string;
+  compile_attempt : string;
+  compile_verdict : string;
+  compile_wall_s : float;
+  compile_cost : Ir.Compile_cost.t;
+}
+
+(* Trace-only, per domain, composed like [timing_call_observer]. *)
+let compile_observer : (compile_record -> unit) Stdlib.Domain.DLS.key =
+  Stdlib.Domain.DLS.new_key (fun () _ -> ())
+
+let install_compile_observer f =
+  let enclosing = Stdlib.Domain.DLS.get compile_observer in
+  (* Each observer is contained on its own: one that raises is reported and dropped for this record,
+     and the observers after it still see it. *)
+  let contained r =
+    try f r
+    with exn when not (process_fatal_exn exn) ->
+      Stdio.eprintf "autotune: a compile observer raised (ignored): %s\n%!" (Exn.to_string exn)
+  in
+  Stdlib.Domain.DLS.set compile_observer (fun r ->
+      enclosing r;
+      contained r)
 
 (* The measurement proper, after the warmup: the calibration and the timed loop, with the device
    reduced to [batch depth], which dispatches [depth] launches back to back, synchronizes once and
@@ -6155,12 +6186,63 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
      cache replay, the baseline's timing window, the seed enumeration's lowerings, the winner's
      recompile, an untuned fallback -- for the same reason a candidate's line precedes it: a search
      killed inside the step is inside the one its last line names. *)
+  (* The stage the last [stage] line named: the stage of a compile made outside the candidates. *)
+  let current_stage = ref "base_compile" in
   let progress_stage stage =
+    current_stage := stage;
     progress_line "stage" (Printf.sprintf "stage=%s %s" stage (progress_costs ()))
   in
   let timed_into acc f =
     let c = Mtime_clock.counter () in
     Exn.protect ~f ~finally:(fun () -> acc := !acc +. seconds_since c)
+  in
+  (* gh-ocannl-1314: every compile this call makes, by phase, for [report.compile_cost]; and each
+     one's record as it returns: a [compiled] progress event, an [autotune_log] line and the
+     domain's compile observers. An exception is recorded as [failed] and re-raised unchanged. *)
+  let compile_cost_total = ref Ir.Compile_cost.empty in
+  let costed ?stage ~attempt ~verdict_of f =
+    let stage = Option.value stage ~default:!current_stage in
+    let c = Mtime_clock.counter () in
+    let result, cost =
+      Ir.Compile_cost.with_census (fun () ->
+          match f () with
+          | r -> Ok r
+          | exception exn -> Error (exn, Stdlib.Printexc.get_raw_backtrace ()))
+    in
+    let wall_s = seconds_since c in
+    let verdict = match result with Ok r -> verdict_of r | Error _ -> "failed" in
+    compile_cost_total := Ir.Compile_cost.add !compile_cost_total cost;
+    let device = Option.value_map cost.device_s ~default:"none" ~f:(Printf.sprintf "%.3f") in
+    progress_line "compiled"
+      (Printf.sprintf
+         "stage=%s attempt=%S verdict=%s took_s=%.3f lower_s=%.3f transform_s=%.3f codegen_s=%.3f \
+          device_s=%s link_s=%.3f kernels=%d kernels_compiled=%d"
+         stage attempt verdict wall_s cost.lower_s cost.transform_s (Ir.Compile_cost.codegen_s cost)
+         device cost.link_s cost.kernels cost.kernels_compiled);
+    logf
+      "%s: compile %s in %.3f s (lower %.3f, transform %.3f, codegen %.3f, device %s, link %.3f; \
+       %d of %d kernels compiled)"
+      attempt verdict wall_s cost.lower_s cost.transform_s (Ir.Compile_cost.codegen_s cost) device
+      cost.link_s cost.kernels_compiled cost.kernels;
+    (* Trace-only: each observer is contained where it is installed ([install_compile_observer]), so
+       an observer that raises cannot fail a compiled candidate nor strand its context. *)
+    Stdlib.Domain.DLS.get compile_observer
+      {
+        compile_routine = Lazy.force routine_name;
+        compile_stage = stage;
+        compile_attempt = attempt;
+        compile_verdict = verdict;
+        compile_wall_s = wall_s;
+        compile_cost = cost;
+      };
+    match result with
+    | Ok r -> r
+    | Error (exn, backtrace) -> Stdlib.Printexc.raise_with_backtrace exn backtrace
+  in
+  let outcome_verdict = function
+    | Ok _ -> "compiled"
+    | Error failure when is_not_dispatched failure -> "refused"
+    | Error _ -> "failed"
   in
   progress_line "search_start"
     (let opt = Option.value_map ~default:"none" ~f:(Printf.sprintf "%g") in
@@ -6180,6 +6262,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
         r with
         compiles = Context.backend_compiles () - compiles_at_start;
         replay_compiles = !replay_compiles;
+        compile_cost = !compile_cost_total;
       }
     in
     if not !sealed then (
@@ -6335,8 +6418,9 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
     progress_stage "untuned_default_compile";
     let plain () =
       match
-        Context.compile_outcome ?name ~provenance:Ir.Schedule_outcome.User_schedule ctx comp
-          bindings
+        costed ~attempt:"untuned default" ~verdict_of:outcome_verdict (fun () ->
+            Context.compile_outcome ?name ~provenance:Ir.Schedule_outcome.User_schedule ctx comp
+              bindings)
       with
       | Ok result -> result
       | Error failure -> raise_pre_search ?base failure
@@ -6363,8 +6447,9 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
     | None -> plain ()
     | Some lowered_transform -> (
         match
-          Context.compile_outcome ?name ~lowered_transform ~provenance:Outcome.Advisory ctx comp
-            bindings
+          costed ~attempt:"seeded untuned default" ~verdict_of:outcome_verdict (fun () ->
+              Context.compile_outcome ?name ~lowered_transform ~provenance:Outcome.Advisory ctx comp
+                bindings)
         with
         | Ok result -> result
         | Error (Outcome.Classified classified)
@@ -6485,6 +6570,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
     let base_undispatched = ref false in
     progress_stage "base_compile";
     let base_outcome =
+      costed ~stage:"base_compile" ~attempt:"baseline" ~verdict_of:outcome_verdict @@ fun () ->
       Context.compile_outcome ?name
         ~lowered_transform:(fun opt ->
           (* Inside the transform, so an injected fault is classified by the ordinary machinery
@@ -6630,9 +6716,10 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
               execution_effect = Outcome.No_device_writes;
             })
     in
-    let compile_spec =
-      compile_candidate ?name ~on_privatize_drops ~static_indices ~base_opt ~canon ~limits ~is_gpu
-        ~is_cpu ~provenance:Outcome.Candidate search_ctx comp bindings
+    let compile_spec spec =
+      costed ~attempt:(spec_label spec) ~verdict_of:outcome_verdict (fun () ->
+          compile_candidate ?name ~on_privatize_drops ~static_indices ~base_opt ~canon ~limits
+            ~is_gpu ~is_cpu ~provenance:Outcome.Candidate search_ctx comp bindings spec)
     in
     (* The search's own candidate compiles, deduplicated against [seen] before codegen. *)
     let compile_spec_deduped ~seen =
@@ -6642,9 +6729,13 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
     (* Winner (and cache-hit) compiles target the caller's context; they replay against the same
        base lowering as the search's candidates, the caller's lineage lowering to it
        ([Lineage_refused] below). *)
-    let compile_spec_real ?label ?retain provenance =
-      compile_candidate ?name ?label ?retain ~static_indices ~base_opt ~canon ~limits ~is_gpu
-        ~is_cpu ~provenance ctx comp bindings
+    let compile_spec_real ?label ?retain provenance spec =
+      costed
+        ~attempt:(Option.value label ~default:(spec_label spec))
+        ~verdict_of:outcome_verdict
+        (fun () ->
+          compile_candidate ?name ?label ?retain ~static_indices ~base_opt ~canon ~limits ~is_gpu
+            ~is_cpu ~provenance ctx comp bindings spec)
     in
     let flat_schedule = function
       | Whole_saved saved -> saved
@@ -6950,6 +7041,8 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                       (match entry.SC.best_steps with
                       | Some t when same_search_shape t.SC.search_shape -> t.SC.steps
                       | Some _ | None -> []);
+                    (* Filled in by [emit_report], like every report's. *)
+                    compile_cost = Ir.Compile_cost.empty;
                   }
                 in
                 if not defer then (
@@ -7500,6 +7593,8 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
             best_schedule = Option.value_map best_c ~default:[] ~f:(fun c -> flat_schedule c.form);
             source_digest = base_digest;
             best_steps = List.rev !best_steps;
+            (* Filled in by [emit_report], like every report's. *)
+            compile_cost = Ir.Compile_cost.empty;
           }
         in
         let emit_partial_and_raise (fatal : Outcome.fatal) =
@@ -7530,8 +7625,9 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
            [emit_partial_and_raise] ends in [raise_failure], exactly as [Context.compile] does. *)
         let plain_default_or_raise () =
           match
-            Context.compile_outcome ?name ~provenance:Ir.Schedule_outcome.User_schedule ctx comp
-              bindings
+            costed ~attempt:"untuned default" ~verdict_of:outcome_verdict (fun () ->
+                Context.compile_outcome ?name ~provenance:Ir.Schedule_outcome.User_schedule ctx comp
+                  bindings)
           with
           | Ok result -> result
           | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal
@@ -7617,7 +7713,16 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                 | Fiss (F_seeded _) -> seeded_seed_digest := Some digest_after
                 | _ -> ()
               in
-              match timed_into progress_compile_s (fun () -> compile_spec_deduped ~seen spec) with
+              match
+                timed_into progress_compile_s (fun () ->
+                    costed ~stage:"candidate" ~attempt:(spec_label spec)
+                      ~verdict_of:(function
+                        | Compiled _ -> "compiled"
+                        | Duplicate _ -> "dedup"
+                        | Failed failure when is_not_dispatched failure -> "refused"
+                        | Failed _ -> "failed")
+                      (fun () -> compile_spec_deduped ~seen spec))
+              with
               | Duplicate digest_after ->
                   (* Decided before codegen (gh-ocannl-1340): a duplicate pays for the transform
                      only, and its identical twin, timed or refused, is the one the search reasons
@@ -8915,7 +9020,9 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
           (if log_enabled () then
              match
                progress_stage "untuned_control";
-               Context.compile ?name search_ctx comp bindings
+               costed ~attempt:"untuned control"
+                 ~verdict_of:(fun _ -> "compiled")
+                 (fun () -> Context.compile ?name search_ctx comp bindings)
              with
              | cctx, croutine ->
                  (match time_routine ~timing ~repeats cctx croutine with
@@ -8999,6 +9106,8 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
               best_schedule = Option.value_map best_c ~default:[] ~f:(fun c -> flat_schedule c.form);
               source_digest = base_digest;
               best_steps = List.rev !best_steps;
+              (* Filled in by [emit_report], like every report's. *)
+              compile_cost = Ir.Compile_cost.empty;
             }
           in
           (* What ships, as the compile that produces it: run here unless the call is deferred
