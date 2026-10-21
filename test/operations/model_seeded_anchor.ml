@@ -130,11 +130,9 @@ type outcome = {
 }
 
 let run_site s =
-  let compile_run ~what compile =
+  let compile_run ?(ctx = Context.auto ()) ~what compile =
     let ctx, routine =
-      compile
-        ~name:(Printf.sprintf "msa_%s_%s" s.tag what)
-        (Context.auto ()) s.comp Ir.Indexing.Empty
+      compile ~name:(Printf.sprintf "msa_%s_%s" s.tag what) ctx s.comp Ir.Indexing.Empty
     in
     let ctx = Context.run ctx routine in
     Context.sync ctx;
@@ -145,13 +143,14 @@ let run_site s =
     compile_run ~what:"seeded" (fun ~name ctx comp bindings ->
         Autotune.seeded_default ~name ~report:(fun r -> seeded := Some r) ctx comp bindings)
   in
+  (* [model_explain] lowers for decisions only, from the context [model_default] then compiles in
+     (as [cost_model_selection] does): its lowering's placement decisions are that context's. *)
+  let model_ctx = Context.auto () in
   let o_explained =
-    Autotune.model_explain
-      ~name:("msa_" ^ s.tag ^ "_explain")
-      (Context.auto ()) s.comp Ir.Indexing.Empty
+    Autotune.model_explain ~name:("msa_" ^ s.tag ^ "_model") model_ctx s.comp Ir.Indexing.Empty
   in
   let o_model_values =
-    compile_run ~what:"model" (fun ~name ctx comp bindings ->
+    compile_run ~ctx:model_ctx ~what:"model" (fun ~name ctx comp bindings ->
         Autotune.model_default ~name ~report:(fun r -> pick := Some r) ctx comp bindings)
   in
   {
