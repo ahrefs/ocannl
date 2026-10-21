@@ -47,6 +47,7 @@ open Ocannl
 open Ocannl.Operation.DSL_modules
 open Verdict.Claims
 module SC = Ir.Schedule_cache
+module Cache_plant = Test_utils.Cache_plant
 
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 
@@ -344,3 +345,153 @@ let () =
              (Array.to_list (Array.append w_untuned b_untuned))
          else [])
         ~f:(fun (a, b) -> bitwise a b))
+
+(* gh-ocannl-1441: a [tune] call that does not search ships the untuned compile the recipes ship,
+   the seeded plan on CUDA/HIP -- not the plain default pipeline it compiled before. Two of its
+   paths: the search off with no cache (no base compile at all), and the search off with a chosen
+   cache that misses (after the base compile). Values, bitwise, against the untuned compile: where
+   the plan splits, the control above shows the plain default computes the bias gradient
+   differently, so a plain-default fallback fails these claims. *)
+let () =
+  let (w_untuned, b_untuned), _, _ = untuned () in
+  let untuned_values = Array.append w_untuned b_untuned in
+  let searchless ~cache_dir =
+    Scripted_search.clear_cache_dir cache_dir;
+    let report = ref None in
+    let ctx, routine =
+      Autotune.tune ~search:false ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir ~log:false
+        ~report:(fun r -> report := Some r)
+        (Context.auto ()) comp Ir.Indexing.Empty
+    in
+    let w, b = run ctx routine in
+    (Array.append w b, !report)
+  in
+  let leg label ~cache_dir =
+    Verdict.gate ~when_:seeds_here ~on:backend_name label (fun () ->
+        let values, report = searchless ~cache_dir in
+        let disabled =
+          match report with
+          | Some r -> Poly.equal r.Autotune.outcome Autotune.Search_disabled
+          | None -> false
+        in
+        p_all label
+          (if disabled then List.zip_exn (Array.to_list values) (Array.to_list untuned_values)
+           else [])
+          ~f:(fun (a, b) -> bitwise a b))
+  in
+  leg "a search-less tune with no cache ships the untuned compile's gradients, bitwise"
+    ~cache_dir:"";
+  leg "a search-less tune whose cache misses ships the untuned compile's gradients, bitwise"
+    ~cache_dir:"autotune_cache_seeded_searchless"
+
+(* gh-ocannl-1441: two seeds against one trajectory. The seeded plan's digest is in the trajectory
+   identity ([trajectory.search_shape], gh-ocannl-1217), so a record a search stored under one seed
+   is not an equal-depth record for a search under another: it must neither replay that search's
+   abandonment nor carry its steps. No setting changes the seed alone (the keys that steer the plan
+   render in the trajectory's settings themselves), so seed B is the plan replaced by none through
+   [Autotune.on_seeded_plan] -- a real seed state, the one a search takes where the plan is the
+   default pipeline -- on the same computation, cache key and settings as seed A, the plan the
+   search derives. The windows are scripted, so the abandonment rule and the stored records do not
+   depend on the machine.
+
+   The replay claims rest on the cache's stores and lookups, which the filesystem may refuse
+   (gh-ocannl-1040) and which a context without a timing identity never makes: each is waived as an
+   environment skip where its sequence's cache I/O was refused or its contexts were unkeyed
+   ([Test_utils.Cache_plant]), and one claim no refusal waives says not every store was refused. *)
+let () =
+  let seed_b f = Autotune.Seam.with_value Autotune.on_seeded_plan (fun _ -> None) f in
+  (* One call: what it did, its report, the windows it timed, its cache I/O, and whether its own
+     context had a timing identity to key that I/O on. *)
+  let tuned ?abandon ~cache_dir ~seed () =
+    let report = ref None in
+    let ctx = Context.auto () in
+    let identity = Option.is_some (Context.timing_identity ctx) in
+    let (outcome, ios), record =
+      Scripted_search.scripted
+        ~measure:(fun w -> match abandon with Some _ -> 100.0 | None -> w.reading)
+        (fun () ->
+          let body () =
+            SC.recording_cache_io (fun () ->
+                match
+                  Autotune.tune ~search:true ~beam_width:2 ~rounds:0 ~repeats:1 ~seed_block_sizes:[]
+                    ~timing:Autotune.Isolated ~cache_dir ?abandon ~log:false
+                    ~report:(fun r -> report := Some r)
+                    ctx comp Ir.Indexing.Empty
+                with
+                | ctx, _routine ->
+                    Context.release ctx;
+                    `Completed
+                | exception Autotune.Search_abandoned _ -> `Abandoned)
+          in
+          match seed with `A -> body () | `B -> seed_b body)
+    in
+    ((outcome, !report, List.length record.windows), (ios, identity))
+  in
+  let outcome_is ~f = function Some r -> f r.Autotune.outcome | None -> false in
+  let abandon =
+    { Autotune.incumbent_steps = [ (1, 1.0) ]; trailing_ratio = Autotune.flip_abandon_ratio () }
+  in
+  let cache_dir = "autotune_cache_seeded_trajectory" in
+  (* Each sequence runs once, where it is first claimed on; off CUDA/HIP never. Each returns its
+     three calls, then the cache I/O of all three and whether every one of them was keyed. *)
+  let sequence ?abandon () =
+    Scripted_search.clear_cache_dir cache_dir;
+    let first, (ios1, id1) = tuned ?abandon ~cache_dir ~seed:`A () in
+    let again, (ios2, id2) = tuned ?abandon ~cache_dir ~seed:`A () in
+    let other, (ios3, id3) = tuned ?abandon ~cache_dir ~seed:`B () in
+    let timed (_, _, n) = n in
+    Stdio.eprintf "%s legs (not part of the golden): timed %d, %d (same seed), %d (other seed)\n%!"
+      (match abandon with Some _ -> "abandonment" | None -> "crown")
+      (timed first) (timed again) (timed other);
+    ((first, again, other), (ios1 @ ios2 @ ios3, id1 && id2 && id3))
+  in
+  let abandonments = lazy (sequence ~abandon ()) in
+  let crowns = lazy (sequence ()) in
+  (* [~cached:true]: the claim rests on the sequence's cache I/O, so it is waived where that I/O was
+     refused or unkeyed. *)
+  let seed_claim ?(cached = false) label legs f =
+    Verdict.gate ~when_:seeds_here ~on:backend_name label (fun () ->
+        let calls, (ios, identity) = Lazy.force legs in
+        if cached then Cache_plant.unless_unkeyed_or_refused ~identity ios label (f calls)
+        else p label (f calls))
+  in
+  let abandoned_live = function Autotune.Abandoned _ -> true | _ -> false in
+  seed_claim "under seed A the search is abandoned after its first timed candidates" abandonments
+    (fun ((outcome, r, timed), _, _) ->
+      Poly.equal outcome `Abandoned && timed = 2 && outcome_is r ~f:abandoned_live);
+  seed_claim ~cached:true "control: seed A again replays that abandonment without timing anything"
+    abandonments (fun (_, (outcome, r, timed), _) ->
+      Poly.equal outcome `Abandoned && timed = 0
+      && outcome_is r ~f:(function Autotune.Abandonment_replay _ -> true | _ -> false));
+  seed_claim ~cached:true
+    "under seed B the same trajectory searches rather than replay seed A's abandonment" abandonments
+    (fun (_, _, (outcome, r, timed)) ->
+      Poly.equal outcome `Abandoned && timed = 2 && outcome_is r ~f:abandoned_live);
+  let steps r = Option.value_map r ~default:[] ~f:(fun r -> r.Autotune.best_steps) in
+  let replayed r = outcome_is r ~f:(Poly.equal Autotune.Cache_replay) in
+  let same_step (a, x) (b, y) = a = b && Float.equal x y in
+  seed_claim "under seed A the search completes and records its steps" crowns
+    (fun ((outcome, r, _), _, _) ->
+      Poly.equal outcome `Completed
+      && outcome_is r ~f:(Poly.equal Autotune.Searched)
+      && not (List.is_empty (steps r)));
+  seed_claim ~cached:true "control: seed A again replays the crown with its steps" crowns
+    (fun ((_, searched, _), (outcome, r, timed), _) ->
+      Poly.equal outcome `Completed && replayed r && timed = 0
+      && (not (List.is_empty (steps searched)))
+      && List.equal same_step (steps r) (steps searched));
+  (* The record a replay carries is seed A's exactly when it equals A's non-empty steps, as in the
+     control above; a replay under seed B that did not replay, or a seed A search that recorded
+     nothing, fails. *)
+  seed_claim ~cached:true "under seed B the crown replays without seed A's steps" crowns
+    (fun ((_, searched, _), _, (outcome, r, timed)) ->
+      Poly.equal outcome `Completed && replayed r && timed = 0
+      && (not (List.is_empty (steps searched)))
+      && not (List.equal same_step (steps r) (steps searched)));
+  (* Not waived by a refusal: of the stores the sequences attempted, not every one was refused. Each
+     keyed sequence is bound to attempt two: seed A's record and seed B's, both under the one
+     key. *)
+  let label = "not every store of the two-seed sequences was refused" in
+  Verdict.gate ~when_:seeds_here ~on:backend_name label (fun () ->
+      let _, (ios_a, id_a) = Lazy.force abandonments and _, (ios_c, id_c) = Lazy.force crowns in
+      Cache_plant.not_every_store_refused ~expected:(id_a && id_c) label (ios_a @ ios_c))

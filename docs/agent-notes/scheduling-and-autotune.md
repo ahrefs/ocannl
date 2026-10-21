@@ -659,9 +659,20 @@ files.
   plan reads `Untimed` fields under `auto`, so a crown searched under a different seed is a
   different trajectory and never stops this search early. Deriving it costs one detection pass over
   the pristine program, forced lazily (the search, or a trajectory-matched warm hit, forces it; the
-  `seeded untuned plan derived in` log line times it). `limits_field_classes` sanctions exactly
-  this one path to `Untimed` fields from `tune` (`seeded_plan`), and pins that a definition `tune`
-  reaches through it records the digest.
+  `seeded untuned plan derived in` log line times it). `limits_field_classes` sanctions two paths
+  to `Untimed` fields from `tune`: `seeded_plan`, pinning that a definition `tune` reaches through
+  it records the digest, and `seeded_transform`, the untuned fallback of a call that does not
+  search, which stores and replays nothing.
+- **Every untuned fallback in `tune` ships the seeded plan, not the plain default** (gh-ocannl-1441).
+  The post-search fallbacks (nothing timed, a budget cut that left the floor unmeasured, a failed
+  winner replay) replay the plan the search seeded; the paths that never search (search off, a
+  refused lineage, a deferred replay that failed) compile through `seeded_transform`, as
+  `seeded_default` does, and recompile the plain default only when that fails classified. Before,
+  those paths shipped the plain default the recipes had already beaten. A seed changes no cache
+  key, so a crown searched under seed A still replays under seed B, but its `best_steps` and an
+  abandonment recorded under A do not (`autotune_seeded_seed` runs both seeds; only the
+  `Autotune.on_seeded_plan` seam moves the seed alone, since every key that steers the plan also
+  renders in the trajectory's settings).
 - **`gpu_default_sketch_min_reduction=auto` (the default) replaces the threshold by the ranking
   score** (gh-ocannl-1253, `Autotune.Ranked`): a segment seeds when `seeded_params`' sketch ranks
   strictly below the same segment's preset, scored alone under the device's capacity and cache

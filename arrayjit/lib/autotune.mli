@@ -921,9 +921,10 @@ type outcome =
   | Search_disabled
       (** Nothing was searched and there was nothing to replay: config [autotune_search=false] (the
           reproducible profile, gh-ocannl-559) with no chosen cache, or a chosen cache that missed.
-          The caller gets the untuned default compile — the same code {!Context.compile} would have
-          produced. Every counter is zero and every time [infinity]; a declined baseline can still
-          populate [declines]. *)
+          The caller gets the untuned default compile (see {!tune}'s untuned fallback: the seeded
+          plan on CUDA and HIP, the code {!Context.compile} would have produced elsewhere). Every
+          counter is zero and every time [infinity]; a declined baseline can still populate
+          [declines]. *)
   | Pre_search_failure of terminal_failure
       (** The call failed before (or instead of) the search proper — a base compile that failed
           before its lowering was captured, a fatal baseline link, a fatal cache replay, a baseline
@@ -2820,6 +2821,14 @@ val on_staffed_start :
     result. It is how a test gives a key a choice before that key's own sweep, which only a seeded
     plan does in production. The default is the identity and no configuration selects it. *)
 
+val on_seeded_plan : (seeded_plan option -> seeded_plan option) Seam.t
+(** Test seam for the search's seed (gh-ocannl-1441): called with the seeded untuned plan {!tune}
+    derived on its base lowering ({!seeded_plan}; [None] off CUDA/HIP or where it is the default
+    pipeline), at most once per call; the search seeds, falls back to and names in its trajectory
+    identity what it returns. It is how a test runs two seeds against one trajectory, which no
+    setting does alone: the keys that steer the plan render in the trajectory's settings themselves.
+    The default is the identity and no configuration selects it. *)
+
 val on_candidate_preflight : (string -> unit) Seam.t
 (** Fault-injection seam for the pre-dispatch containment tests (gh-ocannl-564), called with a
     routine's name inside the {!Ir.Schedule_outcome.Preflight} region of its timing run, just before
@@ -3012,7 +3021,18 @@ val tune :
     marked as cut ({!Ir.Schedule_cache.entry}'s [budget_cut]); a later call with a budget replays
     it, and one without a budget searches in full and overwrites it. The budget's value is part of
     the search trajectory's identity, so a cut search's [best_steps] serve early stopping only under
-    the same budget. *)
+    the same budget.
+
+    Untuned fallback (gh-ocannl-1441): every path on which {!tune} ships "the untuned default
+    compile" -- search disabled with nothing to replay, a refused lineage, a deferred cache replay
+    that failed, a search that timed nothing, a budget cut that left the floor unmeasured, a winner
+    replay that failed -- compiles the step the recipes ship untuned without
+    [model_default_schedule]: {!seeded_default}'s seeded plan wherever its settings admit one (CUDA
+    and HIP, seeding on), the plain default pipeline elsewhere. After a search the plan is the one
+    the search seeded, replayed as its [F_seeded] candidate; without one it is derived inside the
+    fallback's own compile, as {!seeded_default} derives it. Under [model_default_schedule=true] the
+    fallback is still the seeded plan, not {!model_default}'s pick: the floor the search measured. A
+    seeded fallback that fails classified recompiles the plain default. *)
 
 type deferred
 (** The outcome of a {!tune_deferred} search: the compile of what it ships, not yet run. Holds no
