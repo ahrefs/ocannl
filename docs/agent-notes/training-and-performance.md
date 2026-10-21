@@ -209,9 +209,12 @@ files.
   per-segment substitution folds zeros) vanish under the max. Against the seeded plan as scored,
   every tied leaf "strictly" won, and `model_default` under seeding (the `performance`/`approximate`
   profiles) shipped the walk's first leaf, a plain one, 2.6-35x slower. Each walk is now anchored at
-  the seeded plan's own sketch on the searched program (`Autotune.model_seeded_anchor`, the
-  seeding's per-segment decision applied as a leaf; `model_explain` marks it `ex_anchor`), so only a
-  leaf the score separates displaces the plan. A launch-fill term was set aside rather than landed:
+  the seeded plan's own sketch on the searched program (`Autotune.model_seeded_anchors`: the
+  parameters the plan's record says it applied there, applied as a leaf; `model_explain` marks it
+  `ex_anchor`), so only a leaf the score separates displaces the plan. Read the record, never the
+  gate re-run: under `auto` the ranked judgment of the whole routine (zero nest inside) declined a
+  site whose own segment the plan seeded, and a fix pinned at threshold 32 passed every check while
+  both profiles still shipped the slow leaves. A launch-fill term was set aside rather than landed:
   the `auto` seeding gate reads the same score, the fitted issue rate already absorbs its
   calibration kernel's partial fill, and blocks against `seeded_min_blocks` mis-orders outproj b8
   (its fastest leaf launches 64 blocks). `test/operations/model_seeded_anchor` pins the anchor on

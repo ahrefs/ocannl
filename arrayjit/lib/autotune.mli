@@ -2105,18 +2105,19 @@ val model_default :
     when no candidate strictly beats it ([mc_label] ["seeded"], even where no segment seeds and the
     plan is the default pipeline -- a plan the compile then does not retry on a backend failure, as
     for the default). Each family walk -- the whole routine's, and each keyed segment's of the
-    per-segment substitution -- is anchored at the seeded plan's own sketch on that program, scored
-    as the walk's leaves are (gh-ocannl-1477): the plan runs its zero-fill as a kernel of its own,
+    per-segment substitution -- is anchored at the seeded plan's own sketch on that program (the
+    parameters its record says it applied there, never its gate re-run on that program), scored as
+    the walk's leaves are (gh-ocannl-1477): the plan runs its zero-fill as a kernel of its own,
     which the per-kernel score charges separately while a leaf hides it under its compute leg, so
     without the anchor a leaf that only ties the seeded geometry beat the plan. A leaf the score
-    separates from it still can. The candidates compete on the program after the plan's split
-    prelude, and the sketch candidates are restricted to the seeding's numerics-preserving forms —
-    scalar block tiles at a site accumulating at its storage precision — so the pick never changes a
-    value the untuned compile computes. Fatal failures propagate without retrying. Once the compile
-    is on that pipeline there is nothing left to fall back to, so its failures propagate as they
-    would from {!Context.compile}, without a duplicate attempt. Unlike {!tune}, nothing is executed
-    and no cache is involved — results depend only on the computation, backend, and envelope
-    constants.
+    separates from it still can; a per-segment substitution keeps the seeded sketch on every segment
+    no leaf strictly improves. The candidates compete on the program after the plan's split prelude,
+    and the sketch candidates are restricted to the seeding's numerics-preserving forms — scalar
+    block tiles at a site accumulating at its storage precision — so the pick never changes a value
+    the untuned compile computes. Fatal failures propagate without retrying. Once the compile is on
+    that pipeline there is nothing left to fall back to, so its failures propagate as they would
+    from {!Context.compile}, without a duplicate attempt. Unlike {!tune}, nothing is executed and no
+    cache is involved — results depend only on the computation, backend, and envelope constants.
 
     Being a drop-in for {!Context.compile} includes its [name] (gh-ocannl-669): it names the routine
     and every artifact of this compile — the model pick's, the fallback's, and the hermetic
@@ -2479,10 +2480,11 @@ type explain = {
           is. *)
   ex_anchor : bool;
       (** Whether this sketch leaf is the one {!model_default} anchors the walk at (gh-ocannl-1477):
-          the seeded plan's own sketch on the program, as the seeding's per-segment decision puts it
-          there. A leaf must rank strictly below it, as below the incumbent, to be picked. At most
-          one per walk, and only where the model starts from the seeded plan; listed after the
-          walk's leaves when they do not include it. *)
+          the best-ranked of the seeded plan's own sketches on the program -- the parameters the
+          plan applied ([sd_seeded]) to the units the program covers, applied to it as leaves are. A
+          leaf must rank strictly below it, as below the incumbent, to be picked. At most one per
+          walk, and only where the model starts from a seeded plan that seeds there; listed after
+          the walk's leaves when they do not include it. *)
 }
 (** All times in ms; the score fields are [None] without envelope constants or model coverage. *)
 

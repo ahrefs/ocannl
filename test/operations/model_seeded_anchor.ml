@@ -9,23 +9,29 @@
    and `approximate` profiles shipped it: measured 2.6-35x slower at gpt2_mini's q/k/v and out
    projections, and 2x slower at a weight gradient (a geometry tie, no batch loops). The walks are
    now anchored at the seeded plan's own sketch on the program they search
-   ([Autotune.model_seeded_anchor]).
+   ([Autotune.model_seeded_anchors]: the parameters the plan's record says it applied there).
 
    Four computations, the shapes [bench_rank_site] measures (b8): the q/k/v projection (interior and
    outer batch loops: the plain/[bgrid] tie), the out projection (outer batch loops), the weight
    gradient (no batch loops: geometry ties), and a two-matmul chain whose materialized sums cut it
-   into keyed segments, so the per-segment substitution is anchored too. Where [model_default]
-   starts from the seeded plan (CUDA and HIP, [Autotune.model_seeding]; the gate is pinned at 32
-   here so the claims do not rest on the [auto] gate's device constants), the claims are: - each
-   single-site contraction is seeded, and [model_explain] marks exactly one anchor in its
-   whole-routine walk: the leaf of the seeded plan's own sketch, as the plan's report names it; -
-   [model_default]'s pick is no fallback, and is the seeded plan or a candidate ranking STRICTLY
-   below its walk's anchor (each entry of a per-segment pick below its segment's anchor). On the
-   code before this fix the pick ranked equal to the anchor at every single site: a tie; - the
-   picked routine computes bitwise what [Autotune.seeded_default]'s does, on inputs whose partial
-   sums round (the pick is a scalar blocktile, which keeps every cell's summation order). Elsewhere
-   [model_default] starts from the default pipeline, and no walk is anchored. Ranks go to stderr:
-   they are device constants' quotients, not part of the golden. *)
+   into keyed segments, so the per-segment substitution is anchored too. The seeding gate is the
+   configured one -- [auto] unless something sets it, what the profiles ship: the first version of
+   this fix was checked at threshold 32 only, re-ran the gate on the whole routine to find the
+   anchor, and under [auto] that judgment declined, so both profiles kept the slow picks.
+
+   Where [model_default] starts from the seeded plan (CUDA and HIP, [Autotune.model_seeding]), the
+   claims are these. Each single-site contraction is seeded, and [model_explain] marks exactly one
+   anchor in its whole-routine walk, the leaf of the seeded plan's own sketch as the plan's report
+   names it. The chain's per-segment substitution anchors a segment. [model_default]'s pick is no
+   fallback, and is the seeded plan, or a whole-routine leaf ranking STRICTLY below its walk's
+   anchor, or a per-segment substitution each of whose entries is its segment's anchor or ranks
+   strictly below it, one at least strictly; before this fix the pick ranked equal to the anchor at
+   every single site, a tie. And the picked routine computes bitwise what
+   [Autotune.seeded_default]'s does, on inputs whose partial sums round (the pick is a scalar
+   blocktile, which keeps every cell's summation order).
+
+   Elsewhere [model_default] starts from the default pipeline, and no walk is anchored. Ranks go to
+   stderr: they are device constants' quotients, not part of the golden. *)
 
 open Base
 open Ocannl
@@ -36,11 +42,8 @@ let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~d
 
 (* The bitwise claims compare two kernel shapes over the same summation order: every product
    accumulation is an explicit FMA (the contraction licence, as [seeded_default] pins it), so a GPU
-   compiler's per-kernel contraction choice cannot round them apart. The seeding gate is a
-   threshold, so the seeded plan is the one gh-ocannl-1278's measurements describe. *)
-let () =
-  Unix.putenv "OCANNL_FP_CONTRACT" "true";
-  Unix.putenv "OCANNL_GPU_DEFAULT_SKETCH_MIN_REDUCTION" "32"
+   compiler's per-kernel contraction choice cannot round them apart. *)
+let () = Unix.putenv "OCANNL_FP_CONTRACT" "true"
 
 let seeds_here =
   let ctx = Context.auto () in
@@ -193,14 +196,18 @@ let strictly_below_anchor (o : outcome) =
   else if String.is_prefix pick ~prefix:"W_sketch[" then
     below o.o_explained.x_routine (rank_of o.o_explained.x_routine pick)
   else if String.is_prefix pick ~prefix:"F_sketch[" then
-    (* Every entry against its own segment's anchor; at least one entry. *)
+    (* Every entry against its own segment's anchor: the anchor itself (a segment no leaf strictly
+       improves keeps the seeded sketch) or strictly below it; at least one strictly. *)
     let entries =
       List.concat_map o.o_explained.x_segments ~f:(fun xs ->
           List.filter_map (List.tl_exn xs.Autotune.xs_candidates) ~f:(fun (label, ex) ->
-              if is_entry ~pick label then Some (xs.Autotune.xs_candidates, ex.Autotune.ex_rank_ms)
-              else None))
+              if is_entry ~pick label then Some (xs.Autotune.xs_candidates, ex) else None))
     in
-    (not (List.is_empty entries)) && List.for_all entries ~f:(fun (cands, rank) -> below cands rank)
+    let strictly (cands, (ex : Autotune.explain)) = below cands ex.ex_rank_ms in
+    (not (List.is_empty entries))
+    && List.for_all entries ~f:(fun ((_, (ex : Autotune.explain)) as e) ->
+        ex.ex_anchor || strictly e)
+    && List.exists entries ~f:strictly
   else false
 
 let bitwise a b = Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b)

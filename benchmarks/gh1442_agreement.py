@@ -37,7 +37,8 @@ What model_default actually picks is read off the compile instead (gh-ocannl-147
 --pick output carrying a `rank-site: pick label="..."` line (BENCH_PICK=1) gets a `pick` line --
 the label joined to its measured row as above, its time, the seeded plan's, and their ratio
 (`pick_over_seeded`). A `seeded` pick joins only the F_seeded row whose label is the line's
-`seeded_label`, the plan its own configuration seeds (content digest included). A pick that does not join a measured row is reported
+`seeded_label`, the plan its own configuration seeds (content digest included), or, where that plan
+seeds nothing (`none`), the `baseline` row. An explicit --pick output without a pick line fails too. A pick that does not join a measured row is reported
 `pick_unmatched` and makes the exit status 1: an acceptance that cannot time the pick has not
 passed. Stdout only; exit 2 on unusable input.
 """
@@ -68,21 +69,31 @@ def pick_of(path):
     return None, None
 
 
-def report_pick(name, path, times):
-    """Prints the pick line; False when there is a pick that does not join a measured row."""
+def report_pick(name, path, times, required):
+    """Prints the pick line; False when there is a pick that does not join a measured row, or when
+    a [required] output (an explicit --pick) carries no pick line at all."""
     label, seeded_label = pick_of(path)
     if label is None:
         print(f"{name}: pick none (no `rank-site: pick` line)")
-        return True
-    seeded = row_label("seeded", times)
-    if label == "seeded":
-        # The timed seed must be the very plan the pick's configuration seeds: a profile's auto
-        # gate can seed a different plan than the timing cell's pinned threshold.
-        row = seeded_label if seeded_label in times else None
+        return not required
+    # The seeded plan of the pick's own configuration: the very plan its seeding derives (a profile's
+    # auto gate can seed a different plan than the timing cell's pinned threshold), the `baseline`
+    # row where that plan seeds, splits and sinks nothing (`none`); the timed F_seeded row only for
+    # an older pick line that does not name it.
+    if seeded_label is None:
+        seeded = row_label("seeded", times)
+    elif seeded_label == "none":
+        seeded = row_label("default", times)
     else:
-        row = row_label(label, times)
+        seeded = seeded_label if seeded_label in times else None
+    row = seeded if label == "seeded" else row_label(label, times)
     if row is None:
         print(f"{name}: pick_unmatched label={label!r} seeded_label={seeded_label!r}")
+        return False
+    if seeded is None and seeded_label is not None:
+        # The pick is timed, but not the plan it is to be compared with.
+        print(f"{name}: pick label={label!r} row={row!r} measured_ms={times[row]:.6f}"
+              f" seeded_unmatched seeded_label={seeded_label!r}")
         return False
     line = f"{name}: pick label={label!r} row={row!r} measured_ms={times[row]:.6f}"
     if seeded is not None:
@@ -156,7 +167,7 @@ def main():
             print(f"gh1442_agreement: expected NAME=OUT after --pick, got {spec}", file=sys.stderr)
             return 2
         name, path = spec.split("=", 1)
-        picks_ok = report_pick(name, path, times) and picks_ok
+        picks_ok = report_pick(name, path, times, required=True) and picks_ok
     for spec in args.explain:
         if "=" not in spec:
             print(f"gh1442_agreement: expected NAME=EXPLAIN, got {spec}", file=sys.stderr)
@@ -203,7 +214,7 @@ def main():
                   f" fastest={set_best!r} fastest_ms={joined[set_best][0]:.6f}"
                   f" rank_ms_of_fastest={joined[set_best][1]:.6f}"
                   f" argmin_slowdown={joined[set_pick][0] / joined[set_best][0]:.3f}")
-        picks_ok = report_pick(name, path, times) and picks_ok
+        picks_ok = report_pick(name, path, times, required=False) and picks_ok
         results.append((name, set(pairs), right))
     if len(results) > 1:
         first, first_pairs, first_right = results[0]
