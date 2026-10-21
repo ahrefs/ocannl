@@ -28,6 +28,10 @@ Site -- arrayjit/lib/backends.ml, verify_prior_context:
   42:prior-context-check
 Site -- arrayjit/lib/c_syntax.ml, async_copy_doc:
   487:async-copy-source
+Site -- arrayjit/lib/c_syntax.ml, classify:
+  46:kernel-param-in-context
+  334:kernel-param-virtual-query
+  335:kernel-param-global
 Site -- arrayjit/lib/c_syntax.ml, is_local:
   431:is-local-virtual-query
   432:is-local-materialized-query
@@ -36,10 +40,6 @@ Site -- arrayjit/lib/c_syntax.ml, local_decls:
   336:local-decl-materialized-query
 Site -- arrayjit/lib/c_syntax.ml, pp_device_read_ptr:
   820:volatile-accumulation-read
-Site -- arrayjit/lib/c_syntax.ml, ptr_params:
-  46:kernel-param-in-context
-  334:kernel-param-virtual-query
-  335:kernel-param-global
 Site -- arrayjit/lib/c_syntax.ml, rmw_volatile_reads:
   433:rmw-volatile-pointer
 Site -- arrayjit/lib/c_syntax.ml, thread_storage:

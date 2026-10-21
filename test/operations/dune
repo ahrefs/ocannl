@@ -4914,6 +4914,17 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name fresh_build_kernel_text)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules fresh_build_kernel_text)
+ (libraries base ocannl stdio test_utils arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name fission_equivalence)
  (package neural_nets_lib)
  (deps

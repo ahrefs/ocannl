@@ -45,18 +45,18 @@
 
  void c_fwd(
     const char* log_file_name,
+    float *restrict c,
     float *restrict a,
-    float *restrict b,
-    float *restrict c) {
+    float *restrict b) {
   FILE* log_file = NULL;
   if (log_file_name) {
     log_file = fopen(log_file_name, "w");
   }
   /* Debug initial parameter state. */
 
+  if (log_file_name && log_file) fprintf(log_file, "float *restrict c &[1] = %p\n", (void*)c);
   if (log_file_name && log_file) fprintf(log_file, "float *restrict a &[1] = %p\n", (void*)a);
   if (log_file_name && log_file) fprintf(log_file, "float *restrict b &[1] = %p\n", (void*)b);
-  if (log_file_name && log_file) fprintf(log_file, "float *restrict c &[1] = %p\n", (void*)c);
   /* Local declarations and initialization. */
 
   /* Main logic. */
