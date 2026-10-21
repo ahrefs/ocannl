@@ -3972,7 +3972,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   stanzas red on their own — including one generated alias per member of a `(tests (names …))`
   stanza — read those first, they are the test-logic failures the noise was hiding; `all clean`
   says every red target passed alone; `unjudged (exit N): <aliases>` are the ones the cap cut
-  short, never folded into `all clean`. One or two inline-expectation sites use a capped
+  short, never folded into `all clean`. A `(test)` golden diff, whose site names only its
+  `.expected`, reruns as the stanza its resolved `diff --git` header's `<dir>/<name>.exe.output`
+  operand names, `@<dir>/runtest-<name>` (gh-ocannl-1464); an explicit rule's `.expected` site
+  stays unmapped, since nothing in the log pairs it with its rule. One or two inline-expectation sites use a capped
   `@<dir>/runtest` fallback and name it on a `directory fallback` line; three or more remain on
   `unmapped: [<site>]...`, as do unnamed spans and bare `target` rules. The bound keeps a wide red
   from becoming a full serial directory suite while giving a small inline red the same retry.
@@ -4278,10 +4281,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   TAKE`; a changed fingerprint is reported against the previous failure rather than merely the
   previous run. A red after a green also gets the ready bisect on the line after it
   (gh-ocannl-1375): `<box>/<backend>: bisect on <host>: OCANNL_BACKEND=<backend> tools/test-run.sh
-  bisect <green sha> <this sha> <aliases>`, the aliases being the failing stanzas the serial rerun
-  maps plus each `(test)` golden diff's `@<dir>/runtest-<name>` (from its `.exe.output` operand;
-  the site itself names only the `.expected`), with any site no stanza is found for listed as left
-  out. A green at the same commit prints `bisect: none` instead: nothing in the code moved. Standing identical reds stay quiet, which is the signal-to-noise property the
+  bisect <green sha> <this sha> <aliases>`, the aliases being exactly the failing stanzas the
+  serial rerun maps (`rerun_aliases`, `(test)` golden diffs included), with any site no stanza is
+  found for listed as left out. A green at the same commit prints `bisect: none` instead: nothing in the code moved. Standing identical reds stay quiet, which is the signal-to-noise property the
   cursor exists to preserve. The cursor key includes the requested logical ref, so an exploratory
   branch or historical run cannot become `origin/master`'s predecessor. Golden paths come from the
   full log: ordinary test diffs name their `.expected` file directly, while an explicit rule's
