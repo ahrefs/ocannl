@@ -1,0 +1,32 @@
+equal parts give equal keys: true
+a changed source changes the key: true
+a changed option changes the key: true
+parts do not collide by concatenation: true
+an added option changes the key: true
+enabled at a positive capacity: true
+nothing is found before anything is published: true
+a published group answers every one of its keys with its value: true
+over capacity, the oldest group is evicted whole: true
+the younger groups stay: true
+a value handed out before its eviction is still the value published: true
+the retained bytes are the surviving groups': true
+one group was evicted: true
+a re-published key answers with the newer group's value: true
+evicting the older group (B) left the re-pointed key alone: true
+a group larger than the capacity is not retained: true
+and evicted nothing to make room for it: true
+a lowered capacity evicts the oldest groups down to it: true
+capacity 0 disables the cache: true
+a disabled cache finds nothing: true
+and retains nothing published while disabled: true
+symbols are renamed by first occurrence: true
+kernels differing only in symbol numbers render alike: true
+kernels differing in structure stay apart: true
+string and character literals are left alone: true
+identifiers and numbers merely containing the spelling are left alone: true
+comments are renamed like code: true
+scope-local names are renamed in the same numbering, keeping their node suffix: true
+two lowerings' locals and symbols render alike: true
+a v-prefixed name without the scope shape is left alone: true
+a quote inside a comment is prose: code after it is still renamed: true
+a kept name is left alone whatever its spelling: true

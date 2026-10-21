@@ -1,0 +1,7 @@
+first compile: outputs equal the host reference: true
+second compile: outputs equal the first compile's: true
+the routine compiled at least one kernel: true
+first compile: every kernel it rendered was compiled: true
+second compile: the same kernels rendered, none compiled: true
+the tuned routine's outputs equal the host reference: true
+some candidate compiled part of its kernels and reused the rest: true

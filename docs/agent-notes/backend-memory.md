@@ -372,3 +372,30 @@ files.
   the first nonwinner on every backend and run, and the claims name it and the partial report's
   incumbent exactly. A fault-injection precondition on measured wall-clock is not a stable gate —
   pin the measurement through that seam rather than re-rolling the search for a lucky ordering.
+
+## HIP kernel code cache
+- **hiprtc costs per PROGRAM and compiles one program at a time per process** (gh-ocannl-1314,
+  ROCm 7.1 hiprtc). On the dumped 261-kernel source of a `gpt2_mini_train` step: one joint program
+  5.29 s on gfx1102 (3.03 s on gfx1151), the same kernels as one program each 87.7 s (37.1 s),
+  i.e. a fixed 0.34 s (0.14 s) per program, and 4, 8 or 16 threads changed nothing although
+  hipjit's bindings release the runtime lock. So neither per-kernel modules nor in-process parallel
+  compiles pay; compiling FEWER kernels in one program does.
+- `Hip_backend`'s batch compile therefore renders each kernel with its symbols renamed by first
+  occurrence (`Ir.Kernel_code_cache.canonical_symbols`: every lowering and every loop-splitting op
+  mints fresh `i<N>` symbols, so without it no kernel of the next candidate ever matched), keys it
+  by that standalone source
+  (`Compile_driver.render_batch`'s `assemble [i]`, name included) plus its complete hiprtc option
+  list (`hiprtc_options`), reuses the code of every kernel an earlier compile in the process
+  produced, and compiles the misses as ONE program per distinct option list, published to the cache
+  only after hiprtc returns (`Ir.Kernel_code_cache`: bounded FIFO by bytes,
+  `hip_kernel_cache_mib`, 0 restores one joint program per batch). Parameters, bindings and launch
+  geometry always come from the current rendering; `link_batch` loads each distinct program once and
+  every kernel still goes through `link_proc`'s scratch validation. Within a search the winner's
+  compile hits the cache, so the shipped code is the timed code.
+- The `.hip` build artifact stays the routine's FULL generated source whatever was compiled (tests
+  read it through `Generated`); `.hsaco`/`.hip_log` belong to the program actually compiled, and
+  `.hip_log` opens with `kernel code cache: compiled k of n kernels`. Reuse is only as high as the
+  re-rendered kernels are byte-identical: identifiers and scope scans run over the whole batch, so a
+  changed segment that mints a node can change its neighbours' text (a miss, never a wrong hit).
+  Guards: `kernel_code_cache` (the cache, any backend), `hip_kernel_cache` (reuse on HIP, with an
+  `OCANNL_HIP_KERNEL_CACHE_MIB=0` negative control).

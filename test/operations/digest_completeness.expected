@@ -197,6 +197,9 @@ execution-neutral -- a check that can refuse or report, but never changes what i
   legality_crosscheck
   max_shape_error_origins
 
+execution-neutral -- reuse of compiled kernel code within a process, keyed by the kernel's exact source and compiler options, so a reused kernel was compiled from the same text under the same options: only the compile's cost changes
+  hip_kernel_cache_mib [read at codegen]
+
 execution-neutral -- identifier spelling in generated code and in printouts
   cd_ident_style
   ll_ident_style

@@ -1262,6 +1262,19 @@ files.
   paid for and thrown away", charge each `on_candidate_attempt` the `Link_after_delta` hits and
   `on_candidate_preflight` runs that follow it, under `tune_deferred` so the shipping compile falls
   after the report (`autotune_serial_baseline`).
+- **What a candidate's compile costs is on the record, per compile** (gh-ocannl-1314): every
+  compile a `tune` call makes (the baseline, each candidate attempt, a replay, the winner, an
+  untuned fallback) writes one `compiled` progress event and one `Autotune.compile_record` to the
+  observers `BENCH_TIMING_TRACE` prints, with its verdict (`compiled|dedup|refused|failed`) and its
+  phases from `Ir.Compile_cost`: lowering, transform, codegen, the vendor compiler (`device_s`;
+  `none` on Metal, which compiles at link) and link, plus kernels rendered and compiled; the
+  report sums them in `report.compile_cost`. Read cost questions off these, not off CPU load: after
+  gh-1340 the full `gpt2_mini_train` b8 step on gfx1102 (materialize-all graph) timed its first
+  candidate 16.9 s in, and a candidate compiled in 6.5 s, 5.8 s of it hiprtc on all 261 kernels
+  although a sketch single changes 1-12 of them, against a 4.4 s timing window. The ~300 s
+  candidates the issue reported were serial whole-routine compiles gh-1340 now refuses. The HIP
+  kernel code cache (backend-memory.md#hip-kernel-code-cache) answers the rest: a candidate compiles
+  only the kernels it changed.
 - The base compile staying unscheduled is a settled decision, not an oversight (gh-ocannl-552): the
   default pipeline is `maybe_default_schedules` — fission then per-segment annotation, so several
   kernels in general, not one `optimized` to rebase candidates on; every candidate family assumes

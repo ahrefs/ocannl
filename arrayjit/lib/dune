@@ -87,6 +87,7 @@
   resource_fault_injection
   alloc_census
   compile_cost
+  kernel_code_cache
   ndarray
   indexing
   affine
