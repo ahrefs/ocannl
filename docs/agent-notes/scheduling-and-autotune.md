@@ -496,9 +496,14 @@ files.
   privatized preset's self-reading `Set` leave one index vector; two censuses (tuned benchmark
   cells, the tuning test corpus) never saw it fire. Its target IS written under the loop, so the
   gh-ocannl-1147 move does not carry over: a second accessor would need proved disjointness or a
-  remap into the tile. The preset drops refused proposals silently;
-  `Autotune.privatize_extension` returns them, and `privatize_census` is the tripwire that says
-  when a workload needs the relaxation.
+  remap into the tile. A search's privatized presets report what they drop as
+  `report.privatize_drops` (gh-ocannl-1438), aggregated by cause like `declines` but kept out of it:
+  a drop costs a proposal inside a candidate that still compiles, and counting it there would break
+  `declines`' sum to `candidates_failed`. `Autotune.privatize_extension` returns the drops for
+  segments no search compiles, and `privatize_census` is the tripwire that says when a workload
+  needs the relaxation. Nothing in the corpus reaches a real refusal on cc, so
+  `test/operations/autotune_report_drops` injects one through `Autotune.on_privatize_proposal`,
+  which raises inside the extension's refusal boundary.
 - **A per-segment candidate's executed-parity reference is its own segmentation on the default
   preset, not the unscheduled form, wherever the values are inexact** (gh-ocannl-1217). The
   candidate schedules every OTHER segment by the default preset too, so against the unscheduled
@@ -2138,7 +2143,11 @@ files.
   `best_steps` serves early stopping only under the same budget value. A test places a cut with the
   `Autotune.budget_elapsed` seam's virtual clock, never with a wall clock
   (`test/operations/autotune_budget.ml`). On a small cc chain the default seed dedups against the
-  baseline, so check the floor's TIME (`default_ms`), not its label.
+  baseline, so check the floor's TIME (`default_ms`), not its label. Every report carries the
+  budget its call resolved (`budget_s`, gh-ocannl-1438) -- the call's, where a replay's
+  `budget_cut` is the crown's. It is deliberately not
+  a `regime_knobs` key: those are numerics settings the orchestrator's regime gate holds to the
+  cell's regime, and a budgeted exact cell would read as a leak.
 ## Scan-loop scheduling
 
 - **A `Scan_loop` is opaque to the schedule ops in both directions and transparent to the

@@ -483,7 +483,9 @@ let () =
   let%op t = fa * fb in
   Ir.Tnode.update_prec t.Tensor.value Ir.Ops.single;
   let comp = Train.forward t in
-  let explained = Autotune.model_explain ~name:"mlt_explain" ctx comp Ir.Indexing.Empty in
+  let explained =
+    (Autotune.model_explain ~name:"mlt_explain" ctx comp Ir.Indexing.Empty).Autotune.x_routine
+  in
   List.iter explained ~f:(fun (label, ex) ->
       let ms = Option.value_map ~default:"n/a" ~f:(Printf.sprintf "%.9f") in
       Stdio.eprintf
