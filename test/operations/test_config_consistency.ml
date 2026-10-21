@@ -310,7 +310,15 @@ let () =
      default from that row and refuses a value the kind does not parse. A read anywhere else -- a
      plain [get_global_arg ~default:…], a getter of another kind, a helper defaulting its
      [?arg_name] to the key -- is the per-site fallback and duplicated literal the registry
-     replaced, so it fails here, in every scanned file, whether or not a test executes it. *)
+     replaced, so it fails here, in every scanned file, whether or not a test executes it.
+
+     The library roots only, deliberately (gh-ocannl-1430): this check is the static half of a rule
+     whose runtime half [Utils.get_global_arg_with_source] and the typed getters enforce on every
+     EXECUTED read -- a plain read or another kind's getter raises [Invalid_argument] naming the
+     getter to use -- and a test's reads are executed by the run that tests it. What the static half
+     adds is the read no test reaches, which the test trees do not hold. Scanned all the same, they
+     yield exactly the getters' own refusal tests in [config_class_fingerprint], reading the wrong
+     way on purpose, so including them would buy an exemption list and nothing it guards. *)
   let registered_reads =
     List.concat_map source_files ~f:(fun fname ->
         let base = Stdlib.Filename.basename fname in

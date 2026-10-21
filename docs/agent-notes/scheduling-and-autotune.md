@@ -1379,9 +1379,10 @@ files.
   `Schedule.search_shaping_key_read` (or `Autotune.search_shaping_key_read` for the seeded plan's),
   so `gpu_*` stated on cc keys nothing -- `flip_abandonment` states every key the predicate calls
   unread on cc OFF its default and requires the warm chain to replay its abandonment record. It
-  states valid values, not garbage, and so pins the identity, not an absence of reads: the
-  placement level above the search does read two of them on cc (`Autotune.placement_surface`
-  segments for the cc mma descriptor as the GPU seeders do).
+  states valid values, not garbage, and so pins the identity, not an absence of reads. The absence
+  of reads at the placement level above the search is `placement_surface`'s claim: its mma sites
+  are segmented as the backend's own seeders segment (`Sched.fission_keep_mapping ~is_gpu`), so cc
+  no longer reads `gpu_fission_keep_mapping` or `gpu_serial_lanes` there (gh-ocannl-1430).
 - **A structural twin of a lost flip is skipped without a budget slot** (gh-ocannl-1274). The
   identity is `placement_surface`'s `ps_twin_identity`: every top-level statement of the raw
   program (`optimized.source`, where an inlined node is still present) that sets or reads the

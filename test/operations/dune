@@ -8387,6 +8387,21 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1430: a malformed registered setting reaches Train.tune_placements' caller typed,
+; not absorbed by its arm containment.
+
+(test
+ (name tune_placements_config_refusal)
+ ; ocannl-backend: cc -- Context.cpu (); the refusal is backend-independent
+ ; cc-vector-width: independent -- its claims are on which exception reaches the caller, never on
+ ; what a search seeds, times or keeps.
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules tune_placements_config_refusal)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_ocannl)))
+
 (test
  ; cc-vector-width: independent -- the refused seed is tracked by its code fingerprint, whatever
  ; else the width seeds.

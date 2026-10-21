@@ -890,35 +890,37 @@ type key_reach = {
     -- contributes whatever [external_keys] answers for its path, after a top-level [module X = Y]
     alias of this module has been expanded; the caller decides which modules it can follow, since
     this function sees one file. A field of [Utils.settings] contributes what [settings_field_keys]
-    answers for it (the field's own name by default). *)
+    answers for it (the field's own name by default).
+
+    {b Scope of the name resolution} (gh-ocannl-1430). Aliases follow source order like values do: a
+    top-level [module X = Y] expands [X.v] only in the items after it, a later [module X = …]
+    rebinds [X] from that point on, and [Y] is resolved where the alias is written, so
+    [module X = W] before [module W = Public] keeps naming the outer [W]. What is followed:
+    top-level value bindings, nested [module M = struct … end] (as [M.v]), [include struct … end],
+    [include M] of a structure this file defines or of a top-level alias, and a top-level
+    [include Other] for the bare names no local value answers to. What is not, each read as naming
+    nothing local: an [open] (a bare name under [open Other] resolves only through an [include]), a
+    [let module X = Y in] or a [module X = Y] inside a nested structure, a first-class module, and a
+    functor's body or application. Unlike the shadowing above, an unfollowed form errs SHORT: a key
+    reached only through one is missing from the reach every caller reads ([env_var_deps]' search
+    wrappers, [digest_completeness]' search-shaping reach). *)
 let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
     ?(settings_field_keys = fun field -> [ field ]) content =
   (* The names a binding is credited under: its simple name. *)
   let names_of pattern = Option.to_list (pattern_name pattern) in
   let structure = structure_of content in
-  let aliases =
-    List.filter_map structure ~f:(fun item ->
-        match item.pstr_desc with
-        | Pstr_module
-            {
-              pmb_name = { txt = Some alias; _ };
-              pmb_expr = { pmod_desc = Pmod_ident { txt; _ }; _ };
-              _;
-            } ->
-            Option.map (flatten_module_path txt) ~f:(fun path -> (alias, path))
-        | _ -> None)
-  in
-  (* Transitively: [module X = W] over [module W = Public] reaches [Public] (Codex P2, round 12),
-     with a guard against a malformed cycle. *)
+  (* The top-level [module X = Y] aliases in scope at the item being walked, each target already
+     expanded through the aliases in scope where it was written (gh-ocannl-1430): so one step of
+     lookup is the whole expansion, and an alias written later can neither reach back to an earlier
+     use nor redirect an earlier alias's target. *)
+  let aliases = ref [] in
   let expand path =
-    let rec go seen = function
-      | head :: rest when not (List.mem seen head ~equal:String.equal) -> (
-          match List.Assoc.find aliases head ~equal:String.equal with
-          | Some target -> go (head :: seen) (target @ rest)
-          | None -> head :: rest)
-      | path -> path
-    in
-    go [] path
+    match path with
+    | head :: rest -> (
+        match List.Assoc.find !aliases head ~equal:String.equal with
+        | Some target -> target @ rest
+        | None -> path)
+    | [] -> path
   in
   let placed = ref (Set.empty (module Int)) in
   (* What a binding's body reads itself, and every value path it names -- resolved later, against
@@ -1035,10 +1037,29 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
             env'
         (* A nested structure's values are reached as [M.v], from inside it and from after it. A
            functor's body is not walked: what its values read depends on its argument. *)
-        | Pstr_module { pmb_name = { txt = Some name; _ }; pmb_expr; _ } -> (
-            match (unwrap pmb_expr).pmod_desc with
-            | Pmod_structure inner -> walk ~scope:(scope @ [ name ]) env inner
-            | _ -> env)
+        | Pstr_module { pmb_name = { txt = Some name; _ }; pmb_expr; _ } ->
+            (* Whatever the module is, from here on [name] means it and not an earlier alias: a new
+               alias's target, expanded through the aliases before it ([module W = W] keeps an
+               earlier [W]'s meaning), or nothing. From AFTER the binding: inside the body of
+               [module W = struct … end], [W] still names what it named before (Codex P2, round 1 of
+               PR #1324), so the body is walked first. *)
+            let module_expr = unwrap pmb_expr in
+            let env =
+              match module_expr.pmod_desc with
+              | Pmod_structure inner -> walk ~scope:(scope @ [ name ]) env inner
+              | _ -> env
+            in
+            (if List.is_empty scope then
+               let target =
+                 match module_expr.pmod_desc with
+                 | Pmod_ident { txt; _ } -> Option.map (flatten_module_path txt) ~f:expand
+                 | _ -> None
+               in
+               aliases :=
+                 match target with
+                 | Some target -> List.Assoc.add !aliases name target ~equal:String.equal
+                 | None -> List.Assoc.remove !aliases name ~equal:String.equal);
+            env
         (* An [include struct … end] exports its values into the enclosing scope, so they are walked
            there (gh-ocannl-1320, Codex P2 round 6). An included functor application is not: what
            its values read depends on its argument, as for a functor's body. *)
