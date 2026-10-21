@@ -112,7 +112,8 @@ let quote value =
   Buffer.add_char buffer '"';
   Buffer.contents buffer
 
-(** The identity a marker carries: the digest between [[scanner-refusal:] and [\]]. *)
+(** The identity a marker carries: the digest after its [scanner-refusal:] prefix, up to the closing
+    bracket. *)
 let marker_identity marker =
   Option.bind (String.chop_prefix marker ~prefix:"[scanner-refusal:") ~f:(fun rest ->
       Option.map (String.lsplit2 rest ~on:']') ~f:fst)
