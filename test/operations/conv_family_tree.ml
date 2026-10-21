@@ -24,6 +24,14 @@
    The launch caps refute at the leaf with the gate's sentence: at the cap the geometry is admitted,
    one below it refused.
 
+   Pad waste (gh-ocannl-1393): both conv menus are judged by [judge_pad_waste]. At the default
+   threshold nothing is excluded, by construction (row blocks need two or more blocks, so their
+   waste stays under 2x, and the GPU channel pads are site-wide, so they cancel): no tree here
+   carries a pad-waste exclusion and lifting the policy changes no leaf list. Under a lowered
+   threshold a 16-row block on a 20-row site (1.6x against the whole extent's and the 8-row block's
+   1.2x) is excluded with the witness, the least-padded geometries stay, and
+   [Autotune.lift_pad_waste] re-proposes exactly the excluded leaves and nothing refuted.
+
    [Autotune.model_family_search] walks the conv tree (it returned [None] for every conv site
    before, when [model_default] scanned conv seeds flat): with an unbeatable incumbent it scores
    leaves, and its pick is the exhaustive first argmin over the same leaves scored the same way;
@@ -154,6 +162,8 @@ let agrees path (p : Autotune.sketch_params) =
 
 (* [~refused:true] states the section's passing case is an empty leaf list: every geometry is
    refuted, which the section's own claims then say. *)
+let trees = ref []
+
 let section ?(refused = false) name ~is_gpu ~limits opt =
   Stdio.printf "== %s ==\n" name;
   match Autotune.conv_sketch_tree ~is_gpu ~is_cpu:(not is_gpu) ~limits opt with
@@ -161,6 +171,7 @@ let section ?(refused = false) name ~is_gpu ~limits opt =
       p (name ^ ": the conv family claims the site") false;
       None
   | Some tree ->
+      trees := tree :: !trees;
       print_tree ~indent:"  " tree;
       let seeds = Autotune.sketch_seed_params ~is_gpu ~is_cpu:(not is_gpu) ~limits opt in
       p
@@ -312,3 +323,42 @@ let () =
             (match search ~incumbent:floor with
             | Some (None, st, _) -> st.Sspace.st_scored = 0 && st.Sspace.st_fathomed > 0
             | _ -> false))
+
+(* Pad waste (gh-ocannl-1393). *)
+let pad_waste_prefix = "pad waste:"
+
+let () =
+  p_none "pad waste: at the default threshold no conv tree above excludes a geometry" !trees
+    ~f:(fun tree ->
+      List.exists (Sspace.exclusions tree) ~f:(fun (_, w) ->
+          String.is_prefix w ~prefix:pad_waste_prefix));
+  p_all "pad waste: at the default threshold lifting the policy changes no conv leaf list" !trees
+    ~f:(fun tree ->
+      List.equal Poly.equal (Sspace.leaves (Autotune.lift_pad_waste tree)) (Sspace.leaves tree));
+  let opt = lowering "cft_padwaste" (make_conv "cpw" ~b:2 ~h:22 ~ic:8 ~oc:8) in
+  let tree () = Autotune.conv_sketch_tree ~is_gpu:true ~is_cpu:false ~limits:gpu_limits opt in
+  let default_tree = tree () in
+  Hashtbl.set Utils.config_file_args ~key:"autotune_pad_waste_max" ~data:"1.25";
+  p "pad waste: the lowered threshold is in force" Float.(Autotune.pad_waste_max () = 1.25);
+  (* The tree is lazy and reads the threshold where a menu is built, so it is walked while the
+     threshold is in force. *)
+  let lowered = tree () in
+  Option.iter lowered ~f:(fun t -> ignore (Sspace.enumerate t : _ list));
+  Hashtbl.remove Utils.config_file_args "autotune_pad_waste_max";
+  match (default_tree, lowered) with
+  | Some default_tree, Some lowered ->
+      Stdio.printf "== 20-row conv, GPU, pad-waste threshold 1.25 ==\n";
+      print_tree ~indent:"  " lowered;
+      let excluded_at d =
+        List.exists (Sspace.exclusions lowered) ~f:(fun (path, w) ->
+            on_path d path && String.is_prefix w ~prefix:pad_waste_prefix)
+      in
+      p "pad waste: the 16-row block is excluded with the witness" (excluded_at (FD.Conv_rows 16));
+      p "pad waste: the least-padded geometries stay proposed"
+        ((not (excluded_at (FD.Conv_rows 0))) && not (excluded_at (FD.Conv_rows 8)));
+      let lifted = Autotune.lift_pad_waste lowered in
+      p "pad waste: lifting re-proposes exactly the default threshold's leaves"
+        (List.equal Poly.equal (Sspace.leaves lifted) (Sspace.leaves default_tree));
+      p "pad waste: lifting re-proposes nothing refuted: the refutations are the default's"
+        (List.equal Poly.equal (Sspace.refutations lifted) (Sspace.refutations default_tree))
+  | _ -> p "pad waste: the conv family claims the 20-row site" false

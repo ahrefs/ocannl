@@ -1602,7 +1602,16 @@ files.
   catching a 64-row block on a 32-row site (2x, timed 34x off) needs a gate as low as 2x. Its blast
   radius is the CPU packed menu's 128/256-deep blocks, which pad every site below them — a test
   whose claims need the old menu lifts it (`Autotune.lift_pad_waste`, or `inf` as
-  `Fissioned_chain.small_menu` states it).
+  `Fissioned_chain.small_menu` states it). The conv family's menus are judged too since
+  gh-ocannl-1393 (the CPU `conv-shape` menu on the row, the GPU `conv-rows` menus on row,
+  out-channel and reduction), and exclude NOTHING at the default 2x by construction: a row block
+  needs at least two blocks, so its row waste is under 2x, and the intrinsic-tile pads of the
+  out-channel and reduction extents are site-wide (every conv geometry pads them alike), so they
+  cancel in the relative ratio. A small-channel conv (3 input channels on an 8-deep tile) is never
+  excluded for its channel pads: the menu has no less-padded sibling to replace it with, and an
+  absolute gate would empty the family. The judgment is a witness channel and a lever for a
+  lowered threshold. Trap for a test lowering the threshold: the trees are lazy and read the key
+  where a menu is built, so walk the tree while the setting is in force.
 - **The coalesced layout is a search BRANCH over another lowering, not a level of the family tree**
   (gh-ocannl-1165). The q/k/v site `d[b,s,h,e] += w[h,e,k] * x[b,s,k]` caps its column tile at one
   head; `Sched.Coalesce` merges the adjacent `(h, e)` pair into one loop whose accesses read

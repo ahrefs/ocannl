@@ -675,7 +675,10 @@ val pad_waste_max : unit -> float
     valid, never proposed by default, re-proposed exactly by {!Ir.Schedule_space.lift_excluded}. The
     least-padded geometry is never excluded, and legality refutations take precedence. Judged in the
     GPU blocktile menu, the GPU tensorized curated menu and the CPU packed menu of each packing
-    shape. Exposed so a test judges the tree against the threshold the tree was built with. *)
+    shape, and in the conv family's CPU shape menu and GPU row-geometry menus (gh-ocannl-1393),
+    where nothing is excluded at the default threshold: a row block needs two or more blocks, so its
+    waste stays under 2x, and the GPU channel pads are site-wide, so they cancel. Exposed so a test
+    judges the tree against the threshold the tree was built with. *)
 
 val lift_pad_waste :
   (Family_decision.t, sketch_params) Ir.Schedule_space.tree ->

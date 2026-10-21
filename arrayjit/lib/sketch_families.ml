@@ -4462,14 +4462,20 @@ let conv_family_tree ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~
             else if n_real <= 2 then direct { base with sk_bm = bm }
             else leaf { base with sk_bm = bm }
           in
+          (* The shape menu's pad waste (gh-ocannl-1393, [judge_pad_waste]): a row panel that does
+             not divide the row pads it, relative to the unsplit shapes' ratio of 1. It never fires
+             at the default threshold — two or more panels keep the waste under 2x — but a lowered
+             [autotune_pad_waste_max] judges the panels like any geometry menu. *)
+          let row_axis bm = [ ("row", site.c_nrow, bm) ] in
           subt (fun () ->
               decided_choice
-                ([
-                   (Family_decision.Conv_shape `Serial, leaf base);
-                   (Family_decision.Conv_shape `Grid, grid);
-                 ]
-                @ List.map [ 8; 16; 32 ] ~f:(fun bm ->
-                    (Family_decision.Conv_shape (`Row_block bm), row_block bm)))))
+                (judge_pad_waste
+                   ([
+                      (Family_decision.Conv_shape `Serial, row_axis 0, leaf base);
+                      (Family_decision.Conv_shape `Grid, row_axis 0, grid);
+                    ]
+                   @ List.map [ 8; 16; 32 ] ~f:(fun bm ->
+                       (Family_decision.Conv_shape (`Row_block bm), row_axis bm, row_block bm))))))
   in
   (* The GPU leg: the staged implicit-GEMM pipeline ([gpu_conv_sketch_schedule]). *)
   let gpu_leg ~fused =
@@ -4627,10 +4633,26 @@ let conv_family_tree ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~
                                                    lazy twin )
                                              else twin ))))
                     in
+                    (* The geometry menu's pad waste (gh-ocannl-1393, [judge_pad_waste]): the row
+                       padded to the row block (the intrinsic row tile for the whole extent), the
+                       out-channel and reduction extents to the intrinsic tile. Those two are
+                       site-wide — every geometry pads them alike — so they cancel in the relative
+                       judgment: a small-channel site is never excluded for its channel pads, since
+                       the menu has no less-padded sibling to replace it with, and the least-padded
+                       geometry is never excluded. What the menu judges is the row: never at the
+                       default threshold (two or more row blocks keep their waste under 2x), but
+                       under a lowered [autotune_pad_waste_max]. *)
                     let menu ~pipelined () =
                       decided_choice
-                        (List.map [ 0; 8; 16; 32 ] ~f:(fun bm ->
-                             (Family_decision.Conv_rows bm, geometry ~pipelined bm)))
+                        (judge_pad_waste
+                           (List.map [ 0; 8; 16; 32 ] ~f:(fun bm ->
+                                ( Family_decision.Conv_rows bm,
+                                  [
+                                    ("row", site.c_nrow, if bm = 0 then tm_t else bm);
+                                    ("oc", site.c_noc, tn_t);
+                                    ("red", site.c_nred, tk_t);
+                                  ],
+                                  geometry ~pipelined bm ))))
                     in
                     subt (fun () ->
                         decided_choice
