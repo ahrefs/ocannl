@@ -34,3 +34,10 @@ reused final zero preserves executed parity with the materialized run: true
 the folded matmul and its tail collapse to one segment opening with the zero: true
 the folded segment seeds fused-epilogue twins: true
 no sketch of the folded single segment escapes as an unclassified exception: true
+the routine-local product's reference has positive cells: true
+the routine-local product's reference has relu-clamped cells: true
+the tuner's segmentation folds the routine-local product's zero per cell into one segment: true
+the product is not materialized in the folded segment: true
+the routine-local product's folded segment seeds tensorized fused-epilogue twins: true
+every GPU sketch of the folded routine-local product with its tail matches the materialized run: true
+every tensorized folded routine-local product with its tail sketch renders tensorized and matches the materialized run: true

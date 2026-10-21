@@ -40,6 +40,12 @@ cvzt: the whole-routine zeroed conv+tail site seeds GPU staged conv flavors: tru
 cvzt: a whole-routine zeroed conv+tail GPU candidate compiles: true
 cvzt: every compiling whole-routine conv+tail GPU candidate matches the natural form, run twice: true
 cvzt: every compiling whole-routine conv+tail GPU candidate is labeled tensorized: true
+cvft: the conv segment folds the conv output's per-cell zero, the output not materialized: true
+cvft: the folded conv+tail segment seeds fused-epilogue GPU twins: true
+cvft: every fused-epilogue GPU twin of the folded segment compiles, and matches the natural form run twice: true
+cvft: every compiling candidate of the folded segment matches the natural form run twice: true
+cvft: no candidate of the folded segment fails other than at companion coverage: true
+cvft: every compiling candidate of the folded segment is labeled tensorized: true
 cvu: conv seeds per fission segment (GPU staged on metal; serial+grid on cc): true
 cvu: tuned conv matches the untuned twin within tolerance: true
 cvu2: GPU staged stride-2 conv (compacted) matches the natural form within tolerance: true
