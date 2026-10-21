@@ -128,12 +128,15 @@ let () =
         Context.release plan_ctx;
         (* The shipped kernels, after codegen's own rewrites of the list (GPU zero elision). *)
         List.iter plan_routine.Context.segments ~f:(fun o ->
-            match Autotune.ranking_ms ~limits [ o ] with
+            let capabilities = Context.codegen_capabilities ctx in
+            match Autotune.ranking_ms ~capabilities ~limits [ o ] with
             | Some (rank, bound) ->
                 (* gh-ocannl-1442: the legs, so a prediction says which one it is. *)
                 let leg = Option.value_map ~default:"n/a" ~f:(Printf.sprintf "%.4f") in
                 let compute, memory =
-                  Option.value (Autotune.ranking_legs_ms ~limits [ o ]) ~default:(None, None)
+                  Option.value
+                    (Autotune.ranking_legs_ms ~capabilities ~limits [ o ])
+                    ~default:(None, None)
                 in
                 Stdio.printf
                   "wgrad-model: plan=%s kernel=[%s] rank_ms=%.4f bound_ms=%.4f compute_ms=%s \

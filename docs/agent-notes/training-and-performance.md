@@ -170,7 +170,9 @@ files.
   the advisory class ceiling (8e12 on CUDA, 6e12 on HIP), and a cache bandwidth below it reads as
   it. The two rates land together or not at all: an issue rate under the ceiling's DRAM makes the
   untiled preset compute-bound and the `auto` gate stops seeding (`cost_model_reuse` pins it).
-  `Tile_mma` work (`summary.mma_flops`) stays at `peak_flops`. Under the per-block model the
+  `Tile_mma` work stays at `peak_flops` only where the backend's own `mma_accepts` hook accepts
+  it (`Cost_model.accepted_tile_mma_flops`, the operand-load count's walk); declined or unreached
+  tile-MMA work runs its scalar fallback and is priced as scalar. Under the per-block model the
   chip-resident nodes (`ru_scratch`) leave the DRAM leg, their cost carried by the fitted issue
   rate for the geometry it was fitted on: an approximation, not a model of copies, barriers or
   shared gathers. The staffed start's gate tag names both rates, since its per-segment decisions

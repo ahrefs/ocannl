@@ -136,7 +136,8 @@ let working_set ?(m = 256) ?(n = 1024)
             | Some o ->
                 ( reuse_of o,
                   Ir.Cost_model.total_bytes (Ir.Cost_model.analyze o.Ir.Low_level.llc),
-                  Autotune.ranking_ms ~limits [ o ] )
+                  Autotune.ranking_ms ~capabilities:(Context.codegen_capabilities ctx) ~limits [ o ]
+                )
             | None ->
                 ( { Ir.Cost_model.ru_requested = []; ru_working_set_bytes = 0; ru_scratch = [] },
                   0,
@@ -296,9 +297,12 @@ let issue_sweep ?(m = 512) ?(n = 512) ?(ks = [ 256; 512; 1024; 2048; 4096; 8192;
             match seg with
             | Some o ->
                 let s = summary o in
-                ( s.Ir.Cost_model.flops - s.Ir.Cost_model.mma_flops,
-                  s.Ir.Cost_model.mma_flops,
-                  Autotune.ranking_ms ~limits [ o ] )
+                let capabilities = Context.codegen_capabilities ctx in
+                let mma =
+                  Ir.Cost_model.accepted_tile_mma_flops
+                    ~operand_accepts:capabilities.Ir.Backend_intf.mma_accepts o
+                in
+                (s.Ir.Cost_model.flops - mma, mma, Autotune.ranking_ms ~capabilities ~limits [ o ])
             | None -> (0, 0, None)
           in
           let ctx' = Context.run run_ctx routine in

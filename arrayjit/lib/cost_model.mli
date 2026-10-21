@@ -52,10 +52,6 @@ type summary = {
   read_bytes : int;  (** Sum of [fp_read_bytes] over [per_node]. *)
   write_bytes : int;  (** Sum of [fp_write_bytes] over [per_node]. *)
   flops : int;  (** Whole-kernel arithmetic-op count (loop extents times per-statement ops). *)
-  mma_flops : int;
-      (** The part of [flops] that [Tile_mma] statements contribute (their [2*m*n*k] per tile) —
-          tensor-core work, which the ranking score's scalar issue rate never prices
-          (gh-ocannl-1442). *)
   flops_approx : bool;
       (** [true] when guarded ([If]) code contributed (guards-taken bound), or a short-circuiting
           form was charged in full while executing only in part — a [Where] whose arms carry any
@@ -186,10 +182,13 @@ val roofline_seconds :
       [peak_memory_bandwidth]: class ceilings, so that no kernel beats its bound); the score divides
       by what kernels achieve. [dram_bandwidth] (the STREAM-achieved DRAM rate) prices the DRAM tier
       and the distinct bytes; [issue_rate] (the effective scalar operation rate of a
-      register-blocktiled kernel, its staging included) prices the scalar operations, while
-      [Tile_mma] work ([summary.mma_flops]) stays at [peak_flops]: a scalar rate never prices
-      tensor-core work. Each rate reads as at most its ceiling, and as the ceiling when not given,
-      so a device without them scores exactly as before.
+      register-blocktiled kernel, its staging included) prices the scalar operations, while the
+      [Tile_mma] work the backend accepts (the caller's [mma_flops], {!accepted_tile_mma_flops})
+      stays at [peak_flops]: a scalar rate never prices work on the matrix units. Tile-MMA work
+      not counted there — declined by a layout or by the backend's hook, so its scalar fallback
+      runs, or not classified at all — is priced as scalar work. Each rate reads as at most its
+      ceiling, and as the ceiling when not given, so a device without them scores exactly as
+      before.
     - Memory space (gh-ocannl-1442). Under the per-block model (a reuse extraction given), the bytes
       of the nodes the kernel touches outside global memory ({!reuse.ru_scratch}: staged workgroup
       tiles and thread-private scratch) are off the DRAM leg. Their cost is carried by the fitted
@@ -241,13 +240,15 @@ val ranking_seconds_of :
   ?cache_bandwidth:float ->
   ?issue_rate:float ->
   ?dram_bandwidth:float ->
+  ?mma_flops:int ->
   summary ->
   reuse option ->
   float option
 (** The ranking score of one kernel from its extractions: the larger of the compute leg and the
     two-tier memory leg (section contract; [None] for the reuse means no per-block charge, the
-    roofline). Bandwidths in bytes/s, the issue rate in operations/s. [None] when neither peak is
-    given. *)
+    roofline). Bandwidths in bytes/s, the issue rate in operations/s. [mma_flops] (default 0) is
+    the summary's tile-MMA work the backend accepts ({!accepted_tile_mma_flops}), capped at its
+    operations. [None] when neither peak is given. *)
 
 val ranking_legs_of :
   ?peak_flops:float ->
@@ -256,6 +257,7 @@ val ranking_legs_of :
   ?cache_bandwidth:float ->
   ?issue_rate:float ->
   ?dram_bandwidth:float ->
+  ?mma_flops:int ->
   summary ->
   reuse option ->
   float option * float option
@@ -270,6 +272,7 @@ val ranking_seconds :
   ?cache_bandwidth:float ->
   ?issue_rate:float ->
   ?dram_bandwidth:float ->
+  ?mma_flops:int ->
   ?max_resident_threads:int ->
   is_global:(Tnode.t -> bool) ->
   Low_level.t ->
@@ -328,6 +331,31 @@ type load_count =
 [@@deriving sexp_of, equal]
 
 val combine_load_counts : load_count list -> load_count
+
+val accepted_tile_mma_flops :
+  operand_accepts:
+    (d_prec:Ops.prec ->
+    a_prec:Ops.prec ->
+    b_prec:Ops.prec ->
+    ta:bool ->
+    tb:bool ->
+    m:int ->
+    n:int ->
+    k:int ->
+    fragment_target:(int * Backend_intf.mma_operand_place) option ->
+    d:int * Backend_intf.mma_operand_place ->
+    a:int * Backend_intf.mma_operand_place ->
+    b:int * Backend_intf.mma_operand_place ->
+    bool) ->
+  Low_level.optimized ->
+  int
+(** The [Tile_mma] work that runs on the matrix units (gh-ocannl-1442): [2*m*n*k] per execution of
+    each statement whose emission the renderer's layouts and the backend's hook ([operand_accepts],
+    {!Backend_intf.codegen_capabilities.mma_accepts}) accept, in either scope, exactly as
+    {!operand_load_count} decides it — the same walk, counted per lane group like {!analyze}.
+    A declined statement renders its scalar fallback and counts zero here, and so does a
+    [Tile_mma] the statement walk does not reach (one in a [Local_scope] body), whose work
+    {!analyze} still counts: the ranking score prices both as scalar work. *)
 (** Several kernels' counts as one candidate's: [Undescribed] if any is, else the sum of the [Loads]
     ([No_tile_mma] when there are none). *)
 

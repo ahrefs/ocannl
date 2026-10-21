@@ -26,7 +26,8 @@ with both rates, some scalar blocktile ranks strictly below the untiled plan: tr
 every leaf's memory leg is at least its global nodes' distinct bytes, writes included, at the DRAM rate: true
 the reuse extraction lists exactly the nodes no global placement holds: true
 a staged blocktile's tiles are off the DRAM leg: its memory leg is below the same extraction charging them: true
-an all-tile-MMA kernel's compute leg does not depend on the issue rate: true
-an all-scalar kernel's compute leg is its operations at the issue rate: true
+an all-accepted-tile-MMA kernel's compute leg does not depend on the issue rate: true
+with no accepted tile-MMA work, the compute leg is all operations at the issue rate: true
+an accepted count above the operations reads as the operations: true
 the staffed start's gate tag tells two issue rates apart: true
 the staffed start's gate tag tells two DRAM rates apart: true

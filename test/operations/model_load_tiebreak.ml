@@ -193,16 +193,24 @@ let hermetic (o : LL.optimized) =
     LL.optimize_ctx = LL.copy_optimize_ctx o.LL.optimize_ctx;
   }
 
-(* The ranking score [Autotune.model_default] minimizes, under a record's own constants. *)
-let rank (limits : BI.hardware_limits) (o : LL.optimized) =
+(* The tile-MMA work the backend's hook accepts: what the score prices at the matrix units' rate
+   (gh-ocannl-1442), the rest at the scalar issue rate. *)
+let accepted (capabilities : BI.codegen_capabilities) o =
+  CM.accepted_tile_mma_flops ~operand_accepts:capabilities.mma_accepts o
+
+(* The ranking score [Autotune.model_default] minimizes, under a record's own constants and load
+   rule. *)
+let rank ~capabilities (limits : BI.hardware_limits) (o : LL.optimized) =
   CM.ranking_seconds ?peak_flops:limits.peak_flops
     ?peak_memory_bandwidth:limits.peak_memory_bandwidth
     ?cache_capacity_bytes:limits.cache_capacity_bytes ?cache_bandwidth:limits.cache_bandwidth
     ?issue_rate:limits.issue_rate ?dram_bandwidth:limits.dram_bandwidth
-    ?max_resident_threads:limits.max_resident_threads ~is_global:(CM.global_in o) o.LL.llc
+    ~mma_flops:(accepted capabilities o) ?max_resident_threads:limits.max_resident_threads
+    ~is_global:(CM.global_in o) o.LL.llc
 
 (* The two legs of one kernel's score, under the same constants. *)
-let legs (limits : BI.hardware_limits) ?(issue_rate = limits.issue_rate) (o : LL.optimized) =
+let legs_with ~capabilities (limits : BI.hardware_limits) ?(issue_rate = limits.issue_rate)
+    (o : LL.optimized) =
   let r =
     CM.reuse_traffic ?max_resident_threads:limits.max_resident_threads ~is_global:(CM.global_in o)
       o.LL.llc
@@ -210,10 +218,12 @@ let legs (limits : BI.hardware_limits) ?(issue_rate = limits.issue_rate) (o : LL
   CM.ranking_legs_of ?peak_flops:limits.peak_flops
     ?peak_memory_bandwidth:limits.peak_memory_bandwidth
     ?cache_capacity_bytes:limits.cache_capacity_bytes ?cache_bandwidth:limits.cache_bandwidth
-    ?issue_rate ?dram_bandwidth:limits.dram_bandwidth (CM.analyze o.LL.llc) (Some r)
+    ?issue_rate ?dram_bandwidth:limits.dram_bandwidth ~mma_flops:(accepted capabilities o)
+    (CM.analyze o.LL.llc) (Some r)
 
-let score limits segs =
-  List.fold segs ~init:(Some 0.) ~f:(fun acc o -> Option.map2 acc (rank limits o) ~f:Float.( + ))
+let score ~capabilities limits segs =
+  List.fold segs ~init:(Some 0.) ~f:(fun acc o ->
+      Option.map2 acc (rank ~capabilities limits o) ~f:Float.( + ))
 
 let no_ldmatrix_rule ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ ~ta:_ ~tb:_ ~a:_ ~b:_ = (false, false)
 
@@ -231,6 +241,10 @@ let swizzled_twin (p : Autotune.sketch_params) =
 let site_claims ~tag ~(limits : BI.hardware_limits) ~(capabilities : BI.codegen_capabilities)
     ~evaluated =
   let rule = capabilities in
+  (* Scored under the record's own hook, as [model_default] scores them. *)
+  let rank = rank ~capabilities:rule
+  and legs = legs_with ~capabilities:rule
+  and score = score ~capabilities:rule in
   let no_ldmatrix = { capabilities with mma_operand_loads = no_ldmatrix_rule } in
   let label s = tag ^ ": " ^ s in
   let loads capabilities o =
@@ -262,29 +276,61 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~(capabilities : BI.codegen_
         (show_loads (loads rule plain))
         (show_loads (loads rule swz)));
   let all s f = claim s (lazy ((not (List.is_empty twins)) && List.for_all twins ~f)) in
-  (* gh-ocannl-1442: tile-MMA work is extracted apart and stays at the [peak_flops] ceiling, so a
-     slower scalar issue rate moves only the rest of a tensorized leaf's compute leg. *)
+  (* gh-ocannl-1442: the tile-MMA work the hook accepts stays at the [peak_flops] ceiling, so a
+     slower scalar issue rate moves only the rest of a tensorized leaf's compute leg; work the hook
+     declines renders its scalar fallback and is priced as scalar work. *)
   let tensorized =
     List.filter_map seeds ~f:(fun p ->
         if p.Autotune.sk_mma then Option.try_with (fun () -> schedule p) else None)
   in
-  claim "every tensorized leaf carries its tile-MMA work in mma_flops"
+  let decline_all =
+    {
+      capabilities with
+      mma_accepts =
+        (fun ~d_prec:_
+          ~a_prec:_
+          ~b_prec:_
+          ~ta:_
+          ~tb:_
+          ~m:_
+          ~n:_
+          ~k:_
+          ~fragment_target:_
+          ~d:_
+          ~a:_
+          ~b:_
+        -> false);
+    }
+  in
+  let peak = Option.value limits.peak_flops ~default:1. in
+  let slows_by ~capabilities o =
+    match
+      ( fst (legs_with ~capabilities limits ~issue_rate:(Some (peak /. 10.)) o),
+        fst (legs_with ~capabilities limits ~issue_rate:None o) )
+    with
+    | Some slow, Some fast -> Some (slow /. fast)
+    | _ -> None
+  in
+  claim "every tensorized leaf has tile-MMA work the hook accepts, within its operations"
     (lazy
       ((not (List.is_empty tensorized))
       && List.for_all tensorized ~f:(fun o ->
-          let s = CM.analyze o.LL.llc in
-          s.CM.mma_flops > 0 && s.CM.mma_flops <= s.CM.flops)));
+          let a = accepted rule o in
+          a > 0 && a <= (CM.analyze o.LL.llc).CM.flops)));
   claim "a tenfold slower issue rate slows each tensorized leaf's compute leg less than tenfold"
     (lazy
       ((not (List.is_empty tensorized))
       && List.for_all tensorized ~f:(fun o ->
-          let peak = Option.value_exn limits.peak_flops in
-          match
-            ( fst (legs limits ~issue_rate:(Some (peak /. 10.)) o),
-              fst (legs limits ~issue_rate:None o) )
-          with
-          | Some slow, Some fast -> Float.(slow < 10. *. fast)
-          | _ -> false)));
+          Option.exists (slows_by ~capabilities:rule o) ~f:(fun r -> Float.(r < 10. -. 1e-9)))));
+  claim
+    "under a hook that declines every statement, no work is accepted and the whole compute leg \
+     slows tenfold"
+    (lazy
+      ((not (List.is_empty tensorized))
+      && List.for_all tensorized ~f:(fun o ->
+          accepted decline_all o = 0
+          && Option.exists (slows_by ~capabilities:decline_all o) ~f:(fun r ->
+              Float.(abs (r -. 10.) < 1e-9)))));
   let same f (_, plain, swz) = f plain = f swz in
   all "the gh-ocannl-1190 site seeds staged fp8 twins, and each pair has equal flops"
     (same (fun o -> (CM.analyze o.LL.llc).CM.flops));

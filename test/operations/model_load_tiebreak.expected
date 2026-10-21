@@ -11,8 +11,9 @@ under a keyless best leaf a subtree bounded at the threshold is fathomed unscore
 an undescribed kernel makes a candidate's count unknown: true
 kernels without tile-MMA sites add nothing to the counted ones: true
 a candidate with no tile-MMA site anywhere has nothing to count: true
-stand-in: every tensorized leaf carries its tile-MMA work in mma_flops: true
+stand-in: every tensorized leaf has tile-MMA work the hook accepts, within its operations: true
 stand-in: a tenfold slower issue rate slows each tensorized leaf's compute leg less than tenfold: true
+stand-in: under a hook that declines every statement, no work is accepted and the whole compute leg slows tenfold: true
 stand-in: the gh-ocannl-1190 site seeds staged fp8 twins, and each pair has equal flops: true
 stand-in: each pair has equal bytes: true
 stand-in: each pair has exactly equal ranking scores: true
@@ -28,8 +29,9 @@ stand-in: without ldmatrix the pick issues the fewest operand loads among the le
 stand-in: the tie-break moves no score: both rules' picks score exactly alike: true
 stand-in: among the staged leaves, under CUDA's rule the family search picks a swizzled twin: true
 stand-in: among the staged leaves, without ldmatrix it keeps the first-listed plain twin: true
-rated stand-in: every tensorized leaf carries its tile-MMA work in mma_flops: true
+rated stand-in: every tensorized leaf has tile-MMA work the hook accepts, within its operations: true
 rated stand-in: a tenfold slower issue rate slows each tensorized leaf's compute leg less than tenfold: true
+rated stand-in: under a hook that declines every statement, no work is accepted and the whole compute leg slows tenfold: true
 rated stand-in: the gh-ocannl-1190 site seeds staged fp8 twins, and each pair has equal flops: true
 rated stand-in: each pair has equal bytes: true
 rated stand-in: each pair has exactly equal ranking scores: true
@@ -45,8 +47,9 @@ rated stand-in: without ldmatrix the pick issues the fewest operand loads among 
 rated stand-in: the tie-break moves no score: both rules' picks score exactly alike: true
 rated stand-in: among the staged leaves, under CUDA's rule the family search picks a swizzled twin: true
 rated stand-in: among the staged leaves, without ldmatrix it keeps the first-listed plain twin: true
-backend record: every tensorized leaf carries its tile-MMA work in mma_flops: true
+backend record: every tensorized leaf has tile-MMA work the hook accepts, within its operations: true
 backend record: a tenfold slower issue rate slows each tensorized leaf's compute leg less than tenfold: true
+backend record: under a hook that declines every statement, no work is accepted and the whole compute leg slows tenfold: true
 backend record: the gh-ocannl-1190 site seeds staged fp8 twins, and each pair has equal flops: true
 backend record: each pair has equal bytes: true
 backend record: each pair has exactly equal ranking scores: true

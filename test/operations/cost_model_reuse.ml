@@ -376,28 +376,32 @@ let () =
       with
       | Some a, Some b -> Float.(a < b)
       | _ -> false);
-  (* The compute leg on a hand-made summary: tile-MMA work stays at the ceiling, scalar work moves
-     with the issue rate. *)
-  let summary ~flops ~mma_flops =
+  (* The compute leg on a hand-made summary: the tile-MMA work the backend accepts (the caller's
+     count) stays at the ceiling; everything else -- declined or unclassified tile-MMA work included
+     -- moves with the issue rate. *)
+  let summary ~flops =
     {
       CM.per_node = [];
       read_bytes = 0;
       write_bytes = 0;
       flops;
-      mma_flops;
       flops_approx = false;
       opaque = false;
     }
   in
-  let compute ?issue_rate s = fst (CM.ranking_legs_of ~peak_flops:c_flops ?issue_rate s None) in
-  p "an all-tile-MMA kernel's compute leg does not depend on the issue rate"
+  let compute ?issue_rate ?mma_flops s =
+    fst (CM.ranking_legs_of ~peak_flops:c_flops ?issue_rate ?mma_flops s None)
+  in
+  p "an all-accepted-tile-MMA kernel's compute leg does not depend on the issue rate"
     (eq
-       (compute ~issue_rate:r_issue (summary ~flops:1_000_000 ~mma_flops:1_000_000))
-       (compute (summary ~flops:1_000_000 ~mma_flops:1_000_000)));
-  p "an all-scalar kernel's compute leg is its operations at the issue rate"
+       (compute ~issue_rate:r_issue ~mma_flops:1_000_000 (summary ~flops:1_000_000))
+       (compute (summary ~flops:1_000_000)));
+  p "with no accepted tile-MMA work, the compute leg is all operations at the issue rate"
+    (eq (compute ~issue_rate:r_issue (summary ~flops:1_000_000)) (Some (1e6 /. r_issue)));
+  p "an accepted count above the operations reads as the operations"
     (eq
-       (compute ~issue_rate:r_issue (summary ~flops:1_000_000 ~mma_flops:0))
-       (Some (1e6 /. r_issue)))
+       (compute ~issue_rate:r_issue ~mma_flops:5_000_000 (summary ~flops:1_000_000))
+       (compute ~issue_rate:r_issue ~mma_flops:1_000_000 (summary ~flops:1_000_000)))
 
 (* The staffed start re-decides each segment of the search's own segmentation under the gate, so its
    tag -- which joins the search trajectory's identity -- names every reading those decisions rest

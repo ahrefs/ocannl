@@ -1664,14 +1664,19 @@ val ranking_dram_bandwidth : limits:Ir.Backend_intf.hardware_limits -> float opt
     over the backend's advisory [dram_bandwidth]. An [Untimed] reading, like {!ranking_capacity}. *)
 
 val ranking_ms :
-  limits:Ir.Backend_intf.hardware_limits -> Ir.Low_level.optimized list -> (float * float) option
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  Ir.Low_level.optimized list ->
+  (float * float) option
 (** [(rank, bound)] in milliseconds for scheduled kernels run in sequence: the ranking score
     {!model_default} minimizes and {!model_score}'s roofline lower bound, under {!envelope_legs}'
-    constants and {!ranking_capacity}. [None] without model coverage. For reports
-    ([benchmarks/runners/ocannl/bench_wgrad.ml], [tools/calibrate_cache_capacity.exe]): a ranking
-    score, not a runtime prediction. *)
+    constants and {!ranking_capacity}, pricing at the matrix units' rate only the tile-MMA work
+    [capabilities]' hook accepts (none without them, gh-ocannl-1442). [None] without model coverage.
+    For reports ([benchmarks/runners/ocannl/bench_wgrad.ml], [tools/calibrate_cache_capacity.exe]):
+    a ranking score, not a runtime prediction. *)
 
 val ranking_legs_ms :
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
   limits:Ir.Backend_intf.hardware_limits ->
   Ir.Low_level.optimized list ->
   (float option * float option) option

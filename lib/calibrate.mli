@@ -105,9 +105,11 @@ val fit_capacity : ?dram_rate:float -> ws_point list -> capacity_fit
 type issue_point = {
   ip_k : int;  (** The contraction's reduction extent. *)
   ip_scalar_ops : int;
-      (** The contraction kernel's scalar operations ({!Ir.Cost_model.analyze}'s [flops] less its
-          [mma_flops]): the count the score divides by the issue rate. *)
-  ip_mma_ops : int;  (** Its tile-MMA operations: 0 for the scalar sketch the sweep seeds. *)
+      (** The contraction kernel's scalar operations ({!Ir.Cost_model.analyze}'s [flops] less the
+          tile-MMA work the backend accepts): the count the score divides by the issue rate. *)
+  ip_mma_ops : int;
+      (** Its accepted tile-MMA operations ({!Ir.Cost_model.accepted_tile_mma_flops}): 0 for the
+          scalar sketch the sweep seeds. *)
   ip_kernels : int;  (** The routine's shipped kernels. *)
   ip_ms : float;  (** The routine's best synced wall time over the repeats, in milliseconds. *)
   ip_rank_ms : float option;
