@@ -10,10 +10,10 @@
 #define NAN __int_as_float(0x7fffffff)
 #endif
 extern "C" __global__ void d_fwd(
+    __nv_bfloat16 *__restrict__ d,
     __half *__restrict__ a,
     __half *__restrict__ b,
-    __nv_bfloat16 *__restrict__ c,
-    __nv_bfloat16 *__restrict__ d) {
+    __nv_bfloat16 *__restrict__ c) {
 
   /* Local declarations and initialization. */
 
