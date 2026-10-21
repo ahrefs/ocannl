@@ -10360,3 +10360,15 @@
  (libraries base ocannl arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(test
+ ; gh-ocannl-1474: the Rev_sides scatter establishes the margins of each padded target it writes.
+ (name rev_sides_padded_target)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules rev_sides_padded_target)
+ (libraries base ocannl arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
