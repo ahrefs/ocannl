@@ -7,42 +7,47 @@ open Verdict.Claims
    then 64, 128, 128, 256 -- to the nearest multiple of 8 (ties up, at least 8), and leaves the
    external dimensions alone: the input's channels and the [num_classes] logits. *)
 
+(* A multiplier is written as an integer fraction [num/den]: [num /. den] is the same double as the
+   decimal literal, and the label prints the integers, keeping float formatting out of the
+   golden. *)
+let mult ~num ~den = Float.of_int num /. Float.of_int den
+
 (* The rounding rule on its own, against hand-computed widths: [channels *. width_mult] is in the
    comment of each row. *)
 let () =
   let rows =
     [
       (* 32.0, 64.0: unscaled widths are already multiples of 8. *)
-      (1.0, 32, 32);
-      (1.0, 64, 64);
+      (1, 1, 32, 32);
+      (1, 1, 64, 64);
       (* 24.0, 48.0, 96.0: exact multiples. *)
-      (0.75, 32, 24);
-      (0.75, 64, 48);
-      (0.75, 128, 96);
+      (3, 4, 32, 24);
+      (3, 4, 64, 48);
+      (3, 4, 128, 96);
       (* 19.2 rounds down to 16, 38.4 up to 40, 76.8 up to 80, 153.6 down to 152. *)
-      (0.6, 32, 16);
-      (0.6, 64, 40);
-      (0.6, 128, 80);
-      (0.6, 256, 152);
+      (3, 5, 32, 16);
+      (3, 5, 64, 40);
+      (3, 5, 128, 80);
+      (3, 5, 256, 152);
       (* 36.0 and 108.0 are ties, an odd multiple of 4: they round up. *)
-      (1.125, 32, 40);
-      (1.125, 96, 112);
+      (9, 8, 32, 40);
+      (9, 8, 96, 112);
       (* 3.2, 6.4 and even 0.32 reach the floor of 8; 12.8 is past it. *)
-      (0.1, 32, 8);
-      (0.1, 64, 8);
-      (0.01, 32, 8);
-      (0.1, 128, 16);
+      (1, 10, 32, 8);
+      (1, 10, 64, 8);
+      (1, 100, 32, 8);
+      (1, 10, 128, 16);
       (* Widening: 41.6 rounds down to 40, 332.8 up to 336. *)
-      (1.3, 32, 40);
-      (1.3, 256, 336);
+      (13, 10, 32, 40);
+      (13, 10, 256, 336);
     ]
   in
-  List.iter rows ~f:(fun (width_mult, channels, want) ->
-      let got = Demo_models.scale_channels ~width_mult channels in
-      pf "scale_channels ~width_mult:%g %d = %d" width_mult channels want (got = want))
+  List.iter rows ~f:(fun (num, den, channels, want) ->
+      let got = Demo_models.scale_channels ~width_mult:(mult ~num ~den) channels in
+      pf "scale_channels ~width_mult:%d/%d %d = %d" num den channels want (got = want))
 
-(* An invalid multiplier is refused, by [scale_channels] and by [mobile_cnn] itself before it builds
-   anything. *)
+(* An invalid multiplier is refused, by [scale_channels] and by [mobile_cnn] itself before it
+   creates any tensor: the session's next tensor id does not move. *)
 let () =
   List.iter
     [ ("0", 0.); ("-0.5", -0.5); ("nan", Float.nan); ("infinity", Float.infinity) ]
@@ -50,9 +55,11 @@ let () =
       let refused f = match f () with _ -> false | exception Invalid_argument _ -> true in
       pf "scale_channels refuses width_mult %s" name
         (refused (fun () -> ignore (Demo_models.scale_channels ~width_mult 32 : int)));
-      pf "mobile_cnn refuses width_mult %s" name
+      let next_id = Tensor.get_next_id () in
+      pf "mobile_cnn refuses width_mult %s before creating a tensor" name
         (refused (fun () ->
-             ignore (Demo_models.mobile_cnn ~label:[ "refused" ] ~width_mult () : train_step:_ -> _))))
+             ignore (Demo_models.mobile_cnn ~label:[ "refused" ] ~width_mult () : train_step:_ -> _))
+        && Tensor.get_next_id () = next_id))
 
 let num_classes = 5
 let in_channels = 3
@@ -79,8 +86,9 @@ let oracle_value name =
   else if prefixed "w_classifier" then 1.
   else failwith ("no oracle value for parameter " ^ name)
 
-let run ~width_mult ~widths =
-  let tag = Printf.sprintf "width_mult %g" width_mult in
+let run ~num ~den ~widths =
+  let width_mult = mult ~num ~den in
+  let tag = Printf.sprintf "width_mult %d/%d" num den in
   Verdict.case tag (fun () ->
       Tensor.unsafe_reinitialize ();
       (* 16x16 RGB images: the two stride-2 stages after the stride-2 stem leave 2x2 feature maps,
@@ -171,12 +179,12 @@ let run ~width_mult ~widths =
       Context.release ctx)
 
 let () =
-  run ~width_mult:1.0 ~widths:[ 32; 64; 128; 128; 256 ];
+  run ~num:1 ~den:1 ~widths:[ 32; 64; 128; 128; 256 ];
   (* Exact multiples of 8. *)
-  run ~width_mult:0.75 ~widths:[ 24; 48; 96; 96; 192 ];
+  run ~num:3 ~den:4 ~widths:[ 24; 48; 96; 96; 192 ];
   (* 19.2, 38.4, 76.8, 76.8, 153.6: rounding both down and up. *)
-  run ~width_mult:0.6 ~widths:[ 16; 40; 80; 80; 152 ];
+  run ~num:3 ~den:5 ~widths:[ 16; 40; 80; 80; 152 ];
   (* 36 is a tie, rounding up; 72, 144, 144, 288 are exact. *)
-  run ~width_mult:1.125 ~widths:[ 40; 72; 144; 144; 288 ];
+  run ~num:9 ~den:8 ~widths:[ 40; 72; 144; 144; 288 ];
   (* 3.2, 6.4, 12.8, 12.8, 25.6: the floor of 8 for the first two. *)
-  run ~width_mult:0.1 ~widths:[ 8; 8; 16; 16; 24 ]
+  run ~num:1 ~den:10 ~widths:[ 8; 8; 16; 16; 24 ]

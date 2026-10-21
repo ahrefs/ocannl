@@ -148,35 +148,42 @@ let scale_channels ~width_mult channels =
     width. The external dimensions are not scaled: the input channels are whatever the input has,
     and the output has [num_classes] logits. Raises [Invalid_argument] unless [width_mult] is finite
     and positive. *)
-let%op mobile_cnn ~label ?(num_classes = 1000) ?(width_mult = 1.0) () =
+let mobile_cnn ~label ?(num_classes = 1000) ?(width_mult = 1.0) () =
+  (* The widths are computed, and the multiplier validated, before the [%op] scope opens: its inline
+     parameters ([w_classifier], [b_classifier]) are created as soon as [build ()] is applied, and a
+     refused multiplier must leave nothing behind. *)
   let ch = scale_channels ~width_mult in
-  (* Initial standard conv *)
-  let conv_init =
-    conv_bn_relu ~label:("conv_init" :: label) ~kernel_size:3 ~stride:2 ~out_channels:(ch 32) ()
-  in
-
-  (* Depthwise separable blocks *)
-  let dw_block1 =
-    depthwise_separable_conv2d ~label:("dw1" :: label) ~stride:1 ~out_channels:(ch 64) ()
-  in
-  let dw_block2 =
-    depthwise_separable_conv2d ~label:("dw2" :: label) ~stride:2 ~out_channels:(ch 128) ()
-  in
-  let dw_block3 =
-    depthwise_separable_conv2d ~label:("dw3" :: label) ~stride:1 ~out_channels:(ch 128) ()
-  in
-  let dw_block4 =
-    depthwise_separable_conv2d ~label:("dw4" :: label) ~stride:2 ~out_channels:(ch 256) ()
-  in
-
-  let bn = batch_norm2d ~label:("bn_final" :: label) () in
-
-  fun ~train_step x ->
-    let x =
-      conv_init ~train_step x |> dw_block1 |> relu |> dw_block2 |> relu |> dw_block3 |> relu
-      |> dw_block4 |> relu |> bn ~train_step
+  let c0 = ch 32 and c1 = ch 64 and c2 = ch 128 and c3 = ch 128 and c4 = ch 256 in
+  let%op build ~label () =
+    (* Initial standard conv *)
+    let conv_init =
+      conv_bn_relu ~label:("conv_init" :: label) ~kernel_size:3 ~stride:2 ~out_channels:c0 ()
     in
 
-    (* Global pooling and classification *)
-    let x = global_avg_pool2d x in
-    ({ w_classifier } * x) + { b_classifier = 0.; o = [ num_classes ] }
+    (* Depthwise separable blocks *)
+    let dw_block1 =
+      depthwise_separable_conv2d ~label:("dw1" :: label) ~stride:1 ~out_channels:c1 ()
+    in
+    let dw_block2 =
+      depthwise_separable_conv2d ~label:("dw2" :: label) ~stride:2 ~out_channels:c2 ()
+    in
+    let dw_block3 =
+      depthwise_separable_conv2d ~label:("dw3" :: label) ~stride:1 ~out_channels:c3 ()
+    in
+    let dw_block4 =
+      depthwise_separable_conv2d ~label:("dw4" :: label) ~stride:2 ~out_channels:c4 ()
+    in
+
+    let bn = batch_norm2d ~label:("bn_final" :: label) () in
+
+    fun ~train_step x ->
+      let x =
+        conv_init ~train_step x |> dw_block1 |> relu |> dw_block2 |> relu |> dw_block3 |> relu
+        |> dw_block4 |> relu |> bn ~train_step
+      in
+
+      (* Global pooling and classification *)
+      let x = global_avg_pool2d x in
+      ({ w_classifier } * x) + { b_classifier = 0.; o = [ num_classes ] }
+  in
+  build ~label ()

@@ -1,50 +1,50 @@
-scale_channels ~width_mult:1 32 = 32: true
-scale_channels ~width_mult:1 64 = 64: true
-scale_channels ~width_mult:0.75 32 = 24: true
-scale_channels ~width_mult:0.75 64 = 48: true
-scale_channels ~width_mult:0.75 128 = 96: true
-scale_channels ~width_mult:0.6 32 = 16: true
-scale_channels ~width_mult:0.6 64 = 40: true
-scale_channels ~width_mult:0.6 128 = 80: true
-scale_channels ~width_mult:0.6 256 = 152: true
-scale_channels ~width_mult:1.125 32 = 40: true
-scale_channels ~width_mult:1.125 96 = 112: true
-scale_channels ~width_mult:0.1 32 = 8: true
-scale_channels ~width_mult:0.1 64 = 8: true
-scale_channels ~width_mult:0.01 32 = 8: true
-scale_channels ~width_mult:0.1 128 = 16: true
-scale_channels ~width_mult:1.3 32 = 40: true
-scale_channels ~width_mult:1.3 256 = 336: true
+scale_channels ~width_mult:1/1 32 = 32: true
+scale_channels ~width_mult:1/1 64 = 64: true
+scale_channels ~width_mult:3/4 32 = 24: true
+scale_channels ~width_mult:3/4 64 = 48: true
+scale_channels ~width_mult:3/4 128 = 96: true
+scale_channels ~width_mult:3/5 32 = 16: true
+scale_channels ~width_mult:3/5 64 = 40: true
+scale_channels ~width_mult:3/5 128 = 80: true
+scale_channels ~width_mult:3/5 256 = 152: true
+scale_channels ~width_mult:9/8 32 = 40: true
+scale_channels ~width_mult:9/8 96 = 112: true
+scale_channels ~width_mult:1/10 32 = 8: true
+scale_channels ~width_mult:1/10 64 = 8: true
+scale_channels ~width_mult:1/100 32 = 8: true
+scale_channels ~width_mult:1/10 128 = 16: true
+scale_channels ~width_mult:13/10 32 = 40: true
+scale_channels ~width_mult:13/10 256 = 336: true
 scale_channels refuses width_mult 0: true
-mobile_cnn refuses width_mult 0: true
+mobile_cnn refuses width_mult 0 before creating a tensor: true
 scale_channels refuses width_mult -0.5: true
-mobile_cnn refuses width_mult -0.5: true
+mobile_cnn refuses width_mult -0.5 before creating a tensor: true
 scale_channels refuses width_mult nan: true
-mobile_cnn refuses width_mult nan: true
+mobile_cnn refuses width_mult nan before creating a tensor: true
 scale_channels refuses width_mult infinity: true
-mobile_cnn refuses width_mult infinity: true
-width_mult 1: channels 32, 64, 128, 128, 256
-width_mult 1: every scalable channel boundary has its scaled width: true
-width_mult 1: the listed shapes cover every parameter: true
-width_mult 1: the logits are [batch 2 | 5 classes]: true
-width_mult 1: the executed logits are the last width's channel sum: true
-width_mult 0.75: channels 24, 48, 96, 96, 192
-width_mult 0.75: every scalable channel boundary has its scaled width: true
-width_mult 0.75: the listed shapes cover every parameter: true
-width_mult 0.75: the logits are [batch 2 | 5 classes]: true
-width_mult 0.75: the executed logits are the last width's channel sum: true
-width_mult 0.6: channels 16, 40, 80, 80, 152
-width_mult 0.6: every scalable channel boundary has its scaled width: true
-width_mult 0.6: the listed shapes cover every parameter: true
-width_mult 0.6: the logits are [batch 2 | 5 classes]: true
-width_mult 0.6: the executed logits are the last width's channel sum: true
-width_mult 1.125: channels 40, 72, 144, 144, 288
-width_mult 1.125: every scalable channel boundary has its scaled width: true
-width_mult 1.125: the listed shapes cover every parameter: true
-width_mult 1.125: the logits are [batch 2 | 5 classes]: true
-width_mult 1.125: the executed logits are the last width's channel sum: true
-width_mult 0.1: channels 8, 8, 16, 16, 24
-width_mult 0.1: every scalable channel boundary has its scaled width: true
-width_mult 0.1: the listed shapes cover every parameter: true
-width_mult 0.1: the logits are [batch 2 | 5 classes]: true
-width_mult 0.1: the executed logits are the last width's channel sum: true
+mobile_cnn refuses width_mult infinity before creating a tensor: true
+width_mult 1/1: channels 32, 64, 128, 128, 256
+width_mult 1/1: every scalable channel boundary has its scaled width: true
+width_mult 1/1: the listed shapes cover every parameter: true
+width_mult 1/1: the logits are [batch 2 | 5 classes]: true
+width_mult 1/1: the executed logits are the last width's channel sum: true
+width_mult 3/4: channels 24, 48, 96, 96, 192
+width_mult 3/4: every scalable channel boundary has its scaled width: true
+width_mult 3/4: the listed shapes cover every parameter: true
+width_mult 3/4: the logits are [batch 2 | 5 classes]: true
+width_mult 3/4: the executed logits are the last width's channel sum: true
+width_mult 3/5: channels 16, 40, 80, 80, 152
+width_mult 3/5: every scalable channel boundary has its scaled width: true
+width_mult 3/5: the listed shapes cover every parameter: true
+width_mult 3/5: the logits are [batch 2 | 5 classes]: true
+width_mult 3/5: the executed logits are the last width's channel sum: true
+width_mult 9/8: channels 40, 72, 144, 144, 288
+width_mult 9/8: every scalable channel boundary has its scaled width: true
+width_mult 9/8: the listed shapes cover every parameter: true
+width_mult 9/8: the logits are [batch 2 | 5 classes]: true
+width_mult 9/8: the executed logits are the last width's channel sum: true
+width_mult 1/10: channels 8, 8, 16, 16, 24
+width_mult 1/10: every scalable channel boundary has its scaled width: true
+width_mult 1/10: the listed shapes cover every parameter: true
+width_mult 1/10: the logits are [batch 2 | 5 classes]: true
+width_mult 1/10: the executed logits are the last width's channel sum: true
