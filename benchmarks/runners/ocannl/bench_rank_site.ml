@@ -20,8 +20,9 @@
    schedule cache: every timed candidate appends a calibration row (label and measured time) to
    config [autotune_calibration_file], which the driver joins with the explain lines by label
    (benchmarks/gh1442_agreement.py). The labels are the ones [autotune_log] prints, which
-   [model_explain] uses too. Nothing here is a value check: the tuner's own validation and the
-   timings are the point. *)
+   [model_explain] uses too. [anchor=true] marks the leaf [model_default] anchors its walk at under
+   seeding, the seeded plan's own sketch (gh-ocannl-1477): a leaf must rank strictly below it.
+   Nothing here is a value check: the tuner's own validation and the timings are the point. *)
 
 open Base
 open Ocannl
@@ -99,10 +100,10 @@ let () =
     ~f:(fun (label, ex) ->
       Stdio.printf
         "rank-site: explain site=%s label=%S rank_ms=%s compute_ms=%s memory_ms=%s floor_ms=%s \
-         admitted=%b\n\
+         admitted=%b anchor=%b\n\
          %!"
         site label (ms ex.Autotune.ex_rank_ms) (ms ex.ex_compute_ms) (ms ex.ex_memory_ms)
-        (ms ex.ex_floor_ms) ex.ex_admitted);
+        (ms ex.ex_floor_ms) ex.ex_admitted ex.ex_anchor);
   (* [BENCH_PICK=1] (gh-ocannl-1278): what [Autotune.model_default] actually picks here under the
      configuration in force -- the selection rule the agreement script replays from the explain
      lines, read off the compile itself. Nothing is timed. *)
