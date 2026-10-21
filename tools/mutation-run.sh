@@ -345,6 +345,8 @@ my ($baseline_status, $baseline_stop) = (0, 0);
         my $got = waitpid($pid, 0);
         next if $got < 0 && $! == EINTR;
         $baseline_status = ($? & 127) ? 128 + ($? & 127) : $? >> 8;
+        # Reaped: a late signal must not reach whatever process reuses the pid.
+        $pid = 0;
         last;
     }
 }
@@ -372,17 +374,9 @@ my ($child, $changed) = (0, 0);
 my $cancel = $baseline_stop;
 sub mutate {
     my ($mutated, $loose) = @_;
-    # What each candidate stdout file is BEFORE the mutated run, the baseline's rewrite included: an
-    # output the mutated run did not rewrite is an earlier run's, and counting it would read "never
-    # ran" as caught or survived.
-    %before = map { $_ => signature($_) } @outputs;
+    # This mutant's handlers first, then the baseline's record: a signal in between lands in one of
+    # the two, never in neither (the baseline's handlers only record what they saw).
     ($child, $changed) = (0, 0);
-    my $backup = "$scratch/original";
-    copy($module, $backup) or refuse("backup: $!");
-    my $mode = (stat($module))[2] & 07777;
-    chmod($mode, $backup) or refuse("backup permissions: $!");
-    $| = 1;
-    print "recovery: $backup\n";
     for my $pair ([INT => 2], [TERM => 15], [HUP => 1]) {
         my ($name, $number) = @$pair;
         $SIG{$name} = sub {
@@ -392,6 +386,17 @@ sub mutate {
             kill 'TERM', $child if $child;
         };
     }
+    $cancel ||= $baseline_stop;
+    # What each candidate stdout file is BEFORE the mutated run, the baseline's rewrite included: an
+    # output the mutated run did not rewrite is an earlier run's, and counting it would read "never
+    # ran" as caught or survived.
+    %before = map { $_ => signature($_) } @outputs;
+    my $backup = "$scratch/original";
+    copy($module, $backup) or refuse("backup: $!");
+    my $mode = (stat($module))[2] & 07777;
+    chmod($mode, $backup) or refuse("backup permissions: $!");
+    $| = 1;
+    print "recovery: $backup\n";
     my $code = 2;
     my $error;
     eval {

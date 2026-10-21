@@ -34,19 +34,26 @@ let refuse fmt =
 (* The control claims reworded since [base] in the test sources the working tree changed, and the
    old ones nothing replaced one for one. A [base] git cannot diff against refuses: read as "nothing
    changed", it would report a stale label as nothing to sync. A source new since [base] has no old
-   claims; one that does not parse on either side contributes nothing (the scans report it). *)
+   claims; one renamed since [base] (git's rename detection, [-M]) is read under its old path there;
+   one that does not parse on either side contributes nothing (the scans report it). *)
 let claim_changes base =
   let changed =
-    match git [ "diff"; "--name-only"; base; "--"; "test/operations"; "test/support" ] with
+    match git [ "diff"; "--name-status"; "-M"; base; "--"; "test/operations"; "test/support" ] with
     | None -> refuse "git cannot diff against --base %s" base
     | Some listing ->
         String.split_lines listing
-        |> List.filter ~f:(fun path ->
+        |> List.filter_map ~f:(fun line ->
+            (* [<status>\t<path>], or [R<score>\t<old path>\t<new path>] for a rename. *)
+            match String.split line ~on:'\t' with
+            | [ _; path ] -> Some (path, path)
+            | [ _; old_path; path ] -> Some (old_path, path)
+            | _ -> None)
+        |> List.filter ~f:(fun (_, path) ->
             String.is_suffix path ~suffix:".ml" && Stdlib.Sys.file_exists path)
   in
   let renamed, unpaired =
-    List.map changed ~f:(fun path ->
-        match git [ "show"; base ^ ":" ^ path ] with
+    List.map changed ~f:(fun (old_path, path) ->
+        match git [ "show"; base ^ ":" ^ old_path ] with
         | None -> ([], [])
         | Some before -> (
             try Sync.claim_renames ~before ~after:(In_channel.read_all path) with _ -> ([], [])))
@@ -110,7 +117,10 @@ let () =
     | Sync.Relabeled { key; old_label; new_label } ->
         printf "relabeled %s:\n  - %s\n  + %s\n" key old_label new_label);
   List.iter plan.unresolved ~f:(printf "UNRESOLVED: %s\n");
-  if (not !dry_run) && not (List.is_empty plan.edits) then
+  (* Anything unresolved writes nothing at all: a partial sync would leave the settled part's
+     sources looking unchanged to the next run, whose goldens it would then never re-run. *)
+  let write = (not !dry_run) && List.is_empty plan.unresolved in
+  if write && not (List.is_empty plan.edits) then
     Out_channel.write_all manifest_path ~data:(Sync.apply text plan.edits);
   let sources = List.dedup_and_sort (Sync.touched_sources plan @ !named) ~compare:String.compare in
   (* The goldens the rewording's text reaches, rewritten in place unless this is a dry run. *)
@@ -124,9 +134,9 @@ let () =
         let updated = Sync.rewrite_golden plan golden in
         (not (String.equal golden updated))
         &&
-        (if not !dry_run then Out_channel.write_all path ~data:updated;
+        (if write then Out_channel.write_all path ~data:updated;
          printf "golden %s: %s its replaced markers and reworded claim rows\n" file
-           (if !dry_run then "would rewrite" else "rewrote");
+           (if write then "rewrote" else "would rewrite");
          true))
   in
   let goldens =

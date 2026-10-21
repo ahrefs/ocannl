@@ -9,7 +9,9 @@
 #    replaced, and each `raw_direct_evidence` label naming a control claim reworded in a row's
 #    source or in a test source changed since REV (default HEAD). A key or label follows its
 #    diagnostic only where the registered row and the extraction pair it one for one; anything
-#    else is printed UNRESOLVED and left for a hand edit (exit 1, nothing run).
+#    else is printed UNRESOLVED and left for a hand edit: then NOTHING is written or run (exit 1),
+#    so the next invocation, once the items are settled, still sees every source the rewording
+#    touched. Every argument is checked before anything is written (exit 2).
 # 2. ocamlformat reformats the manifest, and its diff is shown.
 # 3. Every test/operations golden holding a replaced marker has it swapped for its successor,
 #    and a row `<label>: true` of a reworded claim (no substitutions) for the new label -- the
@@ -17,8 +19,8 @@
 #    could not pass. Those goldens, each touched or named source's catalogued ones (the
 #    refusal_control_scan_cases stanza's argument list) and the audit's own then run through
 #    tools/test-run.sh; when a diff remains, its corrections are promoted (tools/promote.sh) and
-#    they run again. The exit status is the last run's. Naming a SOURCE re-runs its goldens even when the manifest needed no
-#    edit, the way back after settling an unresolved item by hand.
+#    they run again. The exit status is the last run's. Naming a SOURCE re-runs its goldens even
+#    when the manifest needed no edit.
 # --dry-run prints the plan and changes nothing. The plan is a point-in-time reading of the source
 # text: what a run prints is the golden's business, and the confirming run is what says it held.
 set -u
@@ -54,8 +56,8 @@ if [ "$(git hash-object "$manifest")" != "$before" ]; then
   git --no-pager diff -- "$manifest"
 fi
 if [ "$status" = 1 ]; then
-  echo "refusal-manifest-sync.sh: settle the UNRESOLVED items by hand, then run this again naming" \
-    "their sources to re-run the goldens" >&2
+  echo "refusal-manifest-sync.sh: nothing was written; settle the UNRESOLVED items by hand," \
+    "then run this again" >&2
   exit 1
 fi
 aliases=()

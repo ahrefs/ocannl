@@ -732,16 +732,21 @@ harness_leg_run '10: INT TERM HUP cancel in the baseline, the fork window and du
 leg_10b() {
 reset_module 'ANCHOR' 'ANCHOR@@@MUTATED'
 # A signal landing after the baseline was judged, before the mutation's own handlers: injected into a
-# copy of the runner right after the baseline, it still cancels before anything is mutated.
-perl - tools/mutation-run.sh > tools/mutation-late-signal.sh <<'PERL'
+# copy of the runner right after the baseline, and again right after the run snapshots the
+# baseline's record (the gap a review found once the mutant became a sub run per patch), it still
+# cancels before anything is mutated.
+for anchor in post-baseline post-snapshot; do
+perl - tools/mutation-run.sh "$anchor" > tools/mutation-late-signal.sh <<'PERL'
 use strict;
 use warnings;
+my $which = $ARGV[1];
 local $/;
 open my $f, '<', $ARGV[0] or die $!;
 my $s = <$f>;
-my $anchor = qq{\nunlink "\$scratch/baseline";\n};
+my $anchor = $which eq 'post-baseline' ? qq{\nunlink "\$scratch/baseline";\n}
+    : qq{\nmy \$cancel = \$baseline_stop;\n};
 my $at = index($s, $anchor);
-die "missing post-baseline anchor" if $at < 0;
+die "missing $which anchor" if $at < 0;
 substr($s, $at + length($anchor), 0, qq{kill 'TERM', \$\$;\n});
 print $s;
 PERL
@@ -750,8 +755,9 @@ rm -f "$fixture/observed"
 actual=0
 bash tools/mutation-late-signal.sh module.ml patch @runtest-probe > "$fixture/result" 2>&1 || actual=$?
 [ "$actual" = 143 ] && [ ! -e "$fixture/observed" ] ||
-  { cat "$fixture/result"; echo "late baseline signal: exit $actual, or the mutant ran"; exit 1; }
+  { cat "$fixture/result"; echo "late baseline signal ($anchor): exit $actual, or the mutant ran"; exit 1; }
 cmp module.ml "$fixture/pristine"
+done
 printf 'PASS a signal between the baseline and the mutation cancels before mutating\n'
 }
 harness_leg_run '10b: a signal between the baseline and the mutation cancels before mutating' leg_10b
@@ -1047,7 +1053,9 @@ if (!$pid) {
     die $!;
 }
 my $ready = 0;
-for (1..200) { if (-e "$dir/ready") { $ready = 1; last } select undef, undef, undef, .05; }
+# The second mutant's readiness follows a baseline and a whole first mutant: a minute's headroom,
+# not the single-run legs' ten seconds, so a loaded box does not read as a failure.
+for (1..1200) { if (-e "$dir/ready") { $ready = 1; last } select undef, undef, undef, .05; }
 kill('TERM', $pid);
 local $SIG{ALRM} = sub { kill 'KILL', $pid; die "batch signal case timed out\n" };
 alarm 15;

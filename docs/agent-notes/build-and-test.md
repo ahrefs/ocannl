@@ -455,7 +455,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   goldens plus the audit -- promoting and re-running only when a diff remains. It follows a
   diagnostic only where the registered row and the extraction pair it one for one (a rewording
   keeps its place; a rewording beside an insertion pairs nothing), and prints anything else
-  `UNRESOLVED` for a hand edit, after which naming the source re-runs its goldens. The golden
+  `UNRESOLVED` for a hand edit -- then it writes and runs nothing, so a rerun once they are settled
+  still sees every source the rewording touched; one old format at two sites reworded differently
+  has no single successor and is unresolved too. Naming a source re-runs its goldens. The golden
   swap is not a hand-computed marker: a marker whose refusal the run does not exercise still
   vanishes from the run's output, and the confirming run says so.
   `refusal_control_scan_cases.expected` holds the manifest equal to mechanical extraction, every entry present in the assigned live/case
