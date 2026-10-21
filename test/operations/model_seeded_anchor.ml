@@ -185,11 +185,12 @@ let is_entry ~pick entry =
 
 let strictly_below_anchor (o : outcome) =
   let pick = o.o_pick.Autotune.mc_label in
+  (* Strictly below the walk's one anchor; a walk without an anchor proves nothing, so it fails:
+     every site here is seeded, which the first claims check. *)
   let below cands rank =
     match (rank, anchors cands) with
     | Some r, [ (_, anchor) ] -> (
         match anchor.Autotune.ex_rank_ms with Some a -> Float.(r < a) | None -> false)
-    | Some _, [] -> true
     | _ -> false
   in
   if String.equal pick "seeded" then true

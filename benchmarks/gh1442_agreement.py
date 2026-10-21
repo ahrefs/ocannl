@@ -38,7 +38,10 @@ What model_default actually picks is read off the compile instead (gh-ocannl-147
 the label joined to its measured row as above, its time, the seeded plan's, and their ratio
 (`pick_over_seeded`). A `seeded` pick joins only the F_seeded row whose label is the line's
 `seeded_label`, the plan its own configuration seeds (content digest included), or, where that plan
-seeds nothing (`none`), the `baseline` row. An explicit --pick output without a pick line fails too. A pick that does not join a measured row is reported
+seeds nothing (`none`), the `baseline` row; and a `seeded` pick that names its plan passes as that
+very plan (ratio 1 by construction) whether or not the timing cell timed it -- an approximate
+profile's plan is not the timing cell's. A leaf pick needs its own row and its configuration's
+seeded plan's row both timed. An explicit --pick output without a pick line fails too. A pick that does not join a measured row is reported
 `pick_unmatched` and makes the exit status 1: an acceptance that cannot time the pick has not
 passed. Stdout only; exit 2 on unusable input.
 """
@@ -86,6 +89,14 @@ def report_pick(name, path, times, required):
         seeded = row_label("default", times)
     else:
         seeded = seeded_label if seeded_label in times else None
+    if label == "seeded" and seeded_label is not None:
+        # The pick IS the configuration's seeded plan: no slower by construction, timed or not (an
+        # approximate profile's plan differs from the timing cell's, its digest with it).
+        timed = (f" row={seeded!r} measured_ms={times[seeded]:.6f}" if seeded is not None
+                 else " (that plan untimed here)")
+        print(f"{name}: pick label='seeded' seeded_label={seeded_label!r}{timed}"
+              f" pick_over_seeded=1.000 (the same plan)")
+        return True
     row = seeded if label == "seeded" else row_label(label, times)
     if row is None:
         print(f"{name}: pick_unmatched label={label!r} seeded_label={seeded_label!r}")
