@@ -20,4 +20,6 @@ deferred: it computes the cold output bit for bit: true
 refused relink: the device refused the relink's allocation once: true
 refused relink: the untuned default shipped in the schedule's place: true
 refused relink: the untuned default computes the cold output bit for bit: true
+retain raising: its exception propagates: true
+retain raising: the routine linked before it holds no working bytes: true
 deferred_hit_compiles: done
