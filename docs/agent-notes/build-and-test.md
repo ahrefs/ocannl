@@ -3096,7 +3096,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   copies its output into `$RUNNER_TEMP/dune-build.log` through `tee`, and a failure-only last step
   runs `tools/ci-failed-rules.sh --github` over it: one entry per dune error header (`File
   "<path>", line(s) N[-M]`), the rule named by its own `alias`/`name`/`target` fields, the command
-  dune ran or the error it printed, each also an `::error` annotation on the run's summary page.
+  dune ran or the error it printed, each also an `::error` annotation on the run's summary page
+  whose message leads with the entry's `<path>:<lines>` (the annotation list shows the message,
+  not `file=`, and a golden mismatch has no other detail to name it; gh-ocannl-1464).
   That step exits 1 deliberately, so `gh run view <id> --log-failed` includes it. The script reads
   a log GitHub serves too (timestamps, colour, CRLF, `--log-failed`'s JOB/STEP prefixes), so
   `gh run view <id> --log-failed | tools/ci-failed-rules.sh` is the first read of any red job; it
