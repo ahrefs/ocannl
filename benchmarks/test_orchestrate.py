@@ -5,6 +5,7 @@ import io
 import json
 import os
 import re
+import shutil
 import signal
 import stat as stat_module
 import subprocess
@@ -6006,9 +6007,17 @@ with torch.autocast("cpu", dtype=torch.bfloat16):
 """
 
 
+def checkout_venv_python():
+    """The bench venv the torch and tinygrad legs run: `BENCH_VENV_PY` or this checkout's own
+    `benchmarks/.venv`, never the box's shared venv (gh-ocannl-1433). The dune rule running this
+    file is sandboxed to what it declares, and a venv in the home directory is no declared input:
+    found there, the legs would run torch on whichever box happens to have one."""
+    return bench_venv.venv_python(HERE, shared=None)
+
+
 def torch_venv_python():
     """`(interpreter, None)` if the bench venv can run the torch runner here, else `(None, why)`."""
-    venv = bench_venv.venv_python(HERE)
+    venv = checkout_venv_python()
     if not venv.exists():
         return None, f"no bench venv at {venv}"
     # numpy too: torch does not depend on it, but safetensors' torch save and load convert through
@@ -6219,7 +6228,7 @@ class TensorPrecisionTest(unittest.TestCase):
         """The tinygrad runner end to end on a tiny CPU fixture, where the bench venv has tinygrad:
         an f32 fixture, an f16 one (read back, not echoed), and the f32 fixture under a half
         DEFAULT_FLOAT. A requested-but-ignored precision is the first run stamped bf16."""
-        venv = bench_venv.venv_python(HERE)
+        venv = checkout_venv_python()
         probe = subprocess.run(
             [str(venv), "-c", "import tinygrad, safetensors.numpy, numpy"],
             capture_output=True, text=True, timeout=120,
@@ -6756,35 +6765,95 @@ class AmbientEnvTest(unittest.TestCase):
 class VenvInterpreterTest(unittest.TestCase):
     """One rule finds the benchmark venv's interpreter, and every driver takes it from there.
 
-    Each measurement box shares one venv outside the checkout, reached through a `benchmarks/.venv`
-    symlink or through `BENCH_VENV_PY`. A driver spelling its own `.venv/bin/python` honours only
-    the symlink, and only on POSIX -- which `gh675_cells.py` did until it took `bench_venv`'s rule.
+    Each measurement box shares one venv outside the checkout, reached through `BENCH_VENV_PY`,
+    a `benchmarks/.venv` symlink, or -- in a fresh worktree, which has neither -- the shared venv
+    itself (gh-ocannl-1433). A driver spelling its own `.venv/bin/python` honours only the
+    symlink, and only on POSIX -- which `gh675_cells.py` did until it took `bench_venv`'s rule.
+    Every leg names its own shared venv, so none reads the box's real `~/.venvs/ocannl-bench`.
     """
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.dir = Path(self.tmp.name)
+        # Resolved: the script leg compares with the path its copy prints, whose HERE is resolved
+        # (macOS's temporary directory is behind a /var -> /private/var link).
+        root = Path(self.tmp.name).resolve()
+        self.dir = root / "benchmarks"
+        self.dir.mkdir()
+        self.shared = root / "shared-venv"
+
+    def make(self, venv, rel="bin/python"):
+        (venv / rel).parent.mkdir(parents=True, exist_ok=True)
+        (venv / rel).touch()
+        return venv / rel
+
+    def resolve(self, environ=None):
+        return bench_venv.resolve(self.dir, {} if environ is None else environ, self.shared)
 
     def test_the_override_wins_over_both_venv_layouts(self):
-        (self.dir / ".venv/Scripts").mkdir(parents=True)
-        (self.dir / ".venv/Scripts/python.exe").touch()
-        found = bench_venv.venv_python(self.dir, {"BENCH_VENV_PY": "/shared/venv/bin/python"})
-        self.assertEqual(found, Path("/shared/venv/bin/python"))
+        self.make(self.dir / ".venv", "Scripts/python.exe")
+        self.make(self.shared)
+        found = self.resolve({"BENCH_VENV_PY": "/shared/venv/bin/python"})
+        self.assertEqual(found, (Path("/shared/venv/bin/python"), "BENCH_VENV_PY"))
+
+    def test_an_empty_override_is_no_override(self):
+        local = self.make(self.dir / ".venv")
+        self.assertEqual(self.resolve({"BENCH_VENV_PY": ""}), (local, "benchmarks/.venv"))
 
     def test_the_windows_layout_is_taken_when_it_exists(self):
-        (self.dir / ".venv/Scripts").mkdir(parents=True)
-        (self.dir / ".venv/Scripts/python.exe").touch()
-        self.assertEqual(bench_venv.venv_python(self.dir, {}), self.dir / ".venv/Scripts/python.exe")
+        windows = self.make(self.dir / ".venv", "Scripts/python.exe")
+        self.assertEqual(self.resolve(), (windows, "benchmarks/.venv"))
+
+    def test_the_checkout_venv_wins_over_the_shared_one(self):
+        local = self.make(self.dir / ".venv")
+        self.make(self.shared)
+        self.assertEqual(self.resolve(), (local, "benchmarks/.venv"))
+
+    def test_a_fresh_worktree_finds_the_shared_venv(self):
+        # The issue's case: no BENCH_VENV_PY and no `.venv` link, the box's venv right there.
+        shared = self.make(self.shared)
+        self.assertEqual(self.resolve(), (shared, f"shared venv {self.shared}"))
+        windows = self.make(self.shared, "Scripts/python.exe")
+        self.assertEqual(self.resolve()[0], windows)
+
+    def test_a_dangling_checkout_link_falls_through_to_the_shared_venv(self):
+        try:
+            (self.dir / ".venv").symlink_to(self.dir.parent / "no-such-venv")
+        except OSError as e:  # Windows without the symlink privilege
+            self.skipTest(f"cannot create a symlink here: {e}")
+        shared = self.make(self.shared)
+        self.assertEqual(self.resolve(), (shared, f"shared venv {self.shared}"))
 
     def test_the_posix_layout_is_the_fallback(self):
         # Not conditional on existence: an unprovisioned checkout names the interpreter it is
         # missing, so the spawn error says where the venv was expected.
-        self.assertEqual(bench_venv.venv_python(self.dir, {}), self.dir / ".venv/bin/python")
+        self.assertEqual(self.resolve(), (self.dir / ".venv/bin/python", "none"))
+        self.assertEqual(bench_venv.venv_python(self.dir, {}, self.shared), self.dir / ".venv/bin/python")
+
+    def test_no_shared_step_when_the_caller_leaves_it_out(self):
+        self.make(self.shared)
+        self.assertEqual(bench_venv.resolve(self.dir, {}, None), (self.dir / ".venv/bin/python", "none"))
+
+    def test_the_default_shared_venv_is_the_box_one(self):
+        # The path check-box.sh's --venv defaults to, and install-linux.sh --bench-venv provisions.
+        self.assertEqual(bench_venv.SHARED_VENV, Path.home() / ".venvs/ocannl-bench")
 
     def test_the_default_environment_is_the_process_environment(self):
         with unittest.mock.patch.dict(os.environ, {"BENCH_VENV_PY": "/from/the/process/python"}):
             self.assertEqual(bench_venv.venv_python(self.dir), Path("/from/the/process/python"))
+
+    def test_the_script_prints_the_interpreter_and_its_route(self):
+        # The line check-box.sh's driver-path item reads; run from a copy beside a `.venv` of its
+        # own, so the route is this leg's and not the box's.
+        shutil.copy(Path(bench_venv.__file__), self.dir / "bench_venv.py")
+        local = self.make(self.dir / ".venv")
+        env = {k: v for k, v in os.environ.items() if k != "BENCH_VENV_PY"}
+        done = subprocess.run(
+            [sys.executable, str(self.dir / "bench_venv.py")],
+            capture_output=True, text=True, timeout=60, env=env,
+        )
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout, f"{local}\tbenchmarks/.venv\n")
 
     def test_every_driver_takes_the_shared_rule(self):
         import gh675_cells
@@ -6864,6 +6933,9 @@ class BoxGateStandIn:
         stub = self.dir / "check-box.sh"
         stub.write_text(
             "#!/usr/bin/env bash\n"
+            # The parser's name reading answers as the real script does for a declared box;
+            # BoxNameTest below asks the real script itself.
+            '[ "$1" != --canonical-box ] || { printf \'%s\\n\' "$2"; exit 0; }\n'
             'here=$(dirname "$0")\n'
             'printf \'%s\\n\' "$*" >>"$here/calls"\n'
             'exit "$(cat "$here/rc")"\n'
@@ -6976,6 +7048,28 @@ class BoxGateTest(BoxGateStandIn, unittest.TestCase):
             vars(ap.parse_args(["--skip-box-check", "--box", "tuf"])),
             {"box": "tuf", "skip_box_check": True},
         )
+
+
+class BoxNameTest(unittest.TestCase):
+    """A driver's `--box` holds the measurement box's ID, also when given the fleet's name for it
+    (gh-ocannl-1433): `rog-nv-linux` is recorded as `rog-nv`, in env.json and every row. The table
+    is the real check-box.sh's, asked through `--canonical-box`."""
+
+    def test_a_fleet_name_parses_to_its_box(self):
+        ap = argparse.ArgumentParser()
+        box_gate.add_arguments(ap)
+        self.assertEqual(ap.parse_args(["--box", "rog-nv-linux"]).box, "rog-nv")
+        self.assertEqual(ap.parse_args(["--box", "minix-amd-linux"]).box, "minix")
+        self.assertEqual(ap.parse_args(["--box", "mac-studio"]).box, "m4-max")
+
+    def test_a_box_id_and_an_unknown_name_stay_as_given(self):
+        # The unknown one is check-box.sh's to refuse, when the gate runs it.
+        self.assertEqual(box_gate.canonical_box("tuf"), "tuf")
+        self.assertEqual(box_gate.canonical_box("rog-nv-wsl"), "rog-nv-wsl")
+
+    def test_a_check_that_cannot_answer_leaves_the_name(self):
+        with unittest.mock.patch.object(box_gate, "CHECK_BOX", Path("/no/such/check-box.sh")):
+            self.assertEqual(box_gate.canonical_box("rog-nv-linux"), "rog-nv-linux")
 
 
 class OrchestrateBoxGateTest(BoxGateStandIn, unittest.TestCase):

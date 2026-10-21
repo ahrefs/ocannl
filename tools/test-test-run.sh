@@ -16,7 +16,7 @@
 # #options (26-28, 37), #width (29-34, 48-52, 64, 70), #digest (35-36,
 # 68-69, 71-73, 80, 87), #fresh (81), #lifecycle (40-47, 65, 74: the run/start
 # lifecycle with its signal legs, and both fork-window negative controls),
-# #source (59-63, 66), #slot (53-58, 78), #device (75-77), #credentials (79),
+# #source (59-63, 66), #slot (53-58, 78, 88), #device (75-77), #credentials (79),
 # #bisect (82), #harness (86). A body that cannot go on (an extraction that
 # matched nothing, a fixture that is not what its checks assume) ends with
 # `harness_abandon DETAIL; return`, failing that leg alone: never `exit`,
@@ -223,6 +223,12 @@
 #      reads it (gh-ocannl-1095): beside a hip configuration on a small SDMA
 #      pool, a batch reaching only `none` stanzas, or one naming cc, stays
 #      uncapped and --cpu; one reaching a configuration reader is -j 4, --gpu.
+#  88. a GPU box's batch resolving to cc alone (gh-ocannl-1433) runs and WARNs
+#      in the announcements, the log and the digest, and `--expect-backend`
+#      refuses it before dune (BACKEND REFUSED, exit 2); the GPU backend held,
+#      cc expected, a Mac, a batch holding no backend say nothing; a WSL bridge
+#      names cuda or hip and recommends neither; the option
+#      still refuses on a Mac and refuses an unread batch; `plan` reports both.
 #  79. credentials never reach dune (gh-ocannl-1280): a run exporting GH_TOKEN
 #      and FOO_API_KEY hands dune neither, while a plain variable and the
 #      OCANNL_TOOL_* exports pass -- observed by a fixture dune, and where a
@@ -5759,6 +5765,110 @@ else
 fi
 }
 harness_leg_run '78: a configuration'\''s backend counts only where a reached stanza reads it #slot' leg_78
+
+# Leg 88 (gh-ocannl-1433): what the batch's backends say about the GPU it was
+# meant to test. On a GPU box (cuda on a native NVIDIA boot, hip beside a KFD
+# pool), a batch resolving to cc alone runs, green, and WARNs in the
+# announcements, the log and the digest; `--expect-backend cuda` refuses it
+# before dune (BACKEND REFUSED, exit 2, no dune call, the digest naming what
+# it held). The controls: the same batch on cuda, or expecting cc, says
+# nothing; a box with no GPU hazard (every Mac) says nothing for cc, yet the
+# option still resolves and refuses there; an unread batch (`exec`) proves no
+# backend and is refused; a batch holding no backend is not warned about;
+# `plan` reports both; a non-backend or a misplaced option is a usage error.
+leg_88() {
+local d= label="backend check: a GPU box's cc-only batch is warned about, and --expect-backend refuses it"
+native_fleet=$fleet_none
+for probe in "nv-cc|$nv_present|$kfd_absent|cuda|" "kfd-cc|$nv_absent|$kfd_small|hip|"; do
+  IFS='|' read -r tag nv kfd gpu _ <<<"$probe"
+  native_probe "be-$tag" "$dxg_absent" "$kfd" "$nv" "" run build @cheap
+  [ "$argv_rc" = 0 ] && [ -n "$argv_calls" ] ||
+    { d="$tag: the warned batch did not run: exit $argv_rc; calls ${argv_calls:-<none>}"; break; }
+  want="WARNING: this box has a GPU backend ($gpu), but this batch holds only cc: it tests nothing on the GPU."
+  grep -qF -- "$want" <<<"$argv_err" ||
+    { d="$tag: stderr lacks the warning: $argv_err"; break; }
+  grep -qF -- "$want" <<<"$argv_out" ||
+    { d="$tag: the digest lacks the warning: $argv_out"; break; }
+  { [ -n "$argv_dir" ] && grep -qF -- "test-run: $want" "$argv_dir/log"; } ||
+    { d="$tag: the log lacks the warning"; break; }
+  native_probe "be-$tag-expect" "$dxg_absent" "$kfd" "$nv" "" run --expect-backend "$gpu" build @cheap
+  if [ "$argv_rc" != 2 ] || [ -n "$argv_calls" ]; then
+    d="$tag --expect-backend $gpu: exit $argv_rc (want 2); dune calls: ${argv_calls:-<none>} (want none)"; break
+  fi
+  case $argv_out in
+    *"verdict: BACKEND REFUSED"*"backend refused: --expect-backend $gpu: this batch holds cc, not $gpu."*) ;;
+    *) d="$tag --expect-backend $gpu: the digest: $argv_out"; break ;;
+  esac
+  # Controls: the GPU backend selected, with and without the option; cc expected outright.
+  for ctl in "selected|$gpu|" "selected-expected|$gpu|--expect-backend $gpu" "cc-expected||--expect-backend cc"; do
+    IFS='|' read -r ctag backend opt <<<"$ctl"
+    # shellcheck disable=SC2086  # the option is word-split on purpose
+    native_probe "be-$tag-$ctag" "$dxg_absent" "$kfd" "$nv" "$backend" run $opt build @cheap
+    if [ "$argv_rc" != 0 ] || [ -z "$argv_calls" ] || grep -q 'WARNING:\|BACKEND REFUSED\|backend refused' <<<"$argv_err$argv_out"; then
+      d="$tag control $ctag: exit $argv_rc; calls ${argv_calls:-<none>}; stderr $argv_err; digest $argv_out"; break 2
+    fi
+  done
+done
+if [ -z "$d" ]; then
+  # A WSL guest's bridge is a hazard for cuda and hip alike: the warning names both and
+  # recommends neither, since minix-amd-wsl's GPU is not cuda (Codex review round 1).
+  native_probe be-wsl "$dxg_present" "$kfd_absent" "$nv_absent" "" run build @cheap
+  grep -qF "WARNING: this box has a GPU backend (cuda or hip), but this batch holds only cc" <<<"$argv_err" &&
+    grep -qF "(OCANNL_BACKEND=<this box's GPU backend>)" <<<"$argv_err" ||
+    d="a WSL bridge: stderr $argv_err"
+fi
+if [ -z "$d" ]; then
+  # No GPU hazard: no warning for cc, but the option still resolves, and refuses.
+  native_probe be-mac "$dxg_absent" "$kfd_absent" "$nv_absent" "" run build @cheap
+  [ "$argv_rc" = 0 ] && ! grep -q 'WARNING' <<<"$argv_err$argv_out" ||
+    d="no hazard: exit $argv_rc; stderr $argv_err; digest $argv_out"
+fi
+if [ -z "$d" ]; then
+  native_probe be-mac-expect "$dxg_absent" "$kfd_absent" "$nv_absent" "" run --expect-backend metal build @cheap
+  [ "$argv_rc" = 2 ] && [ -z "$argv_calls" ] && grep -q 'verdict: BACKEND REFUSED' <<<"$argv_out" ||
+    d="no hazard, --expect-backend metal: exit $argv_rc; calls ${argv_calls:-<none>}; digest $argv_out"
+fi
+if [ -z "$d" ]; then
+  native_probe be-mac-held "$dxg_absent" "$kfd_absent" "$nv_absent" metal run --expect-backend metal build @cheap
+  [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build @cheap" ] ||
+    d="no hazard, metal expected and held: exit $argv_rc; calls ${argv_calls:-<none>}; digest $argv_out"
+fi
+if [ -z "$d" ]; then
+  native_probe be-unread "$dxg_absent" "$kfd_absent" "$nv_present" cuda run --expect-backend cuda exec ./prog.exe
+  [ "$argv_rc" = 2 ] && [ -z "$argv_calls" ] && grep -q 'backends are unread' <<<"$argv_out" ||
+    d="an unread batch: exit $argv_rc; calls ${argv_calls:-<none>}; digest $argv_out"
+fi
+if [ -z "$d" ]; then
+  FAKE_REACH='end' native_probe be-none "$dxg_absent" "$kfd_absent" "$nv_present" "" run build @cheap
+  [ "$argv_rc" = 0 ] && ! grep -q 'WARNING' <<<"$argv_err$argv_out" ||
+    d="a batch holding no backend: exit $argv_rc; stderr $argv_err"
+fi
+if [ -z "$d" ]; then
+  native_probe be-plan "$dxg_absent" "$kfd_absent" "$nv_present" "" plan --expect-backend cuda build @cheap
+  case $argv_out in
+    *"expect-backend: run would refuse this batch (BACKEND REFUSED, exit 2)"*"this batch holds cc, not cuda"*) ;;
+    *) d="plan --expect-backend cuda: exit $argv_rc; output $argv_out" ;;
+  esac
+  [ -n "$d" ] || [ -z "$argv_calls" ] || d="plan ran dune: $argv_calls"
+fi
+if [ -z "$d" ]; then
+  native_probe be-plan-warn "$dxg_absent" "$kfd_absent" "$nv_present" "" plan build @cheap
+  grep -qF 'WARNING: this box has a GPU backend (cuda), but this batch holds only cc' <<<"$argv_out" ||
+    d="plan on a GPU box's cc batch: output $argv_out"
+fi
+if [ -z "$d" ]; then
+  argv_probe be-bad-name run --expect-backend vulkan build @cheap
+  [ "$argv_rc" = 2 ] && [ -z "$argv_calls" ] && grep -q 'not a backend' <<<"$argv_err" ||
+    d="--expect-backend vulkan: exit $argv_rc; stderr $argv_err"
+fi
+if [ -z "$d" ]; then
+  argv_probe be-misplaced run build @cheap --expect-backend cuda
+  [ "$argv_rc" = 2 ] && [ -z "$argv_calls" ] && grep -q 'belongs before the dune arguments' <<<"$argv_err" ||
+    d="a misplaced --expect-backend: exit $argv_rc; stderr $argv_err"
+fi
+if [ -z "$d" ]; then report 0 "$label"; else report 1 "$label" "$d"; fi
+}
+harness_leg_run '88: a GPU box'\''s cc-only batch is warned about, and --expect-backend refuses it #slot' leg_88
 
 # ---------------------------------------------------------------------------
 # Legs 75-77: a wedged device cannot hold a batch (gh-ocannl-1211)

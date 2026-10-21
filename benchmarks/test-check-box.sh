@@ -6,6 +6,9 @@
 # no Python.h, drivers resolving another interpreter, no toolchain, an absent or unrecorded
 # fixture -- reads GAP on that item with exit 1. Usage errors exit 2, and every box the checked-in
 # DIGESTS.txt declares has a profile (the relationship, not a copy of the box list).
+# gh-ocannl-1433: a fresh worktree's drivers find the box's shared venv (route named, and its
+# absence still a GAP), and the fleet's names for the boxes are taken -- pinned against wake-lab.sh's
+# endpoint map and FLEET_BOXES where this host can read them.
 # Usage: benchmarks/test-check-box.sh [--keep|--only REGEX|--help]
 #
 # The subject runs in place against a scratch venv (python3 -m venv, so it has a sys.prefix of
@@ -202,6 +205,35 @@ if harness_leg 'gap: driver path'; then
   BENCH_VENV_PY=$(command -v python3) check driver --box rog-nv
   gap_leg 'drivers resolving another interpreter is a driver-path GAP' driver driver-path
 fi
+# A fresh worktree: no BENCH_VENV_PY and no benchmarks/.venv, from a copy of the subject in a tree
+# of its own (this checkout may have a .venv link, which outranks the shared venv), with HOME
+# holding the shared venv as a link to the scratch one -- or holding nothing.
+if harness_leg 'driver path: the shared venv'; then
+  fresh=$TMP/fresh/benchmarks
+  mkdir -p "$fresh/workloads" "$TMP/home/.venvs" "$TMP/home-bare"
+  cp "$SUBJECT" "$here/bench_venv.py" "$here/fixture_digest.py" "$fresh/"
+  cp "$here"/workloads/*.json "$fresh/workloads/"
+  ln -s "$venv" "$TMP/home/.venvs/ocannl-bench"
+  fresh_check() { # RUN HOME
+    rc=0
+    env -u BENCH_VENV_PY HOME="$2" bash "$fresh/check-box.sh" --venv "$venv" --fixture-dir "$TMP/fixtures" \
+      --digests "$TMP/DIGESTS.txt" --box rog-nv >"$TMP/runs/$1" 2>&1 || rc=$?
+  }
+  fresh_check fresh-shared "$TMP/home"
+  if [ "$rc" = 0 ] &&
+     grep -q '^check-box: driver-path: ok -- drivers here run .*/home/\.venvs/ocannl-bench/bin/python (route: shared venv .*/home/\.venvs/ocannl-bench)$' \
+       "$TMP/runs/fresh-shared"; then
+    report 0 'a fresh worktree reaches the shared venv, and the ok line names that route'
+  else
+    report 1 'a fresh worktree reaches the shared venv, and the ok line names that route' "rc=$rc"
+    sed 's/^/      | /' "$TMP/runs/fresh-shared"
+  fi
+  fresh_check fresh-bare "$TMP/home-bare"
+  gap_leg 'a fresh worktree on a box with no shared venv is still a driver-path GAP' fresh-bare driver-path
+  grep -q '(route: none)' "$TMP/runs/fresh-bare"
+  report $? 'its GAP line says no route resolved'
+fi
+
 if harness_leg 'gap: toolchain'; then
   if [ -e /usr/bin/nvcc ] || [ -e /bin/nvcc ]; then
     skip 'no nvcc is a toolchain GAP' 'this host has nvcc on /usr/bin or /bin'
@@ -247,6 +279,82 @@ if harness_leg 'usage'; then
   "$SUBJECT" --venv "$venv" --fixture-dir "$TMP/fixtures" --digests "$TMP/DIGESTS-newbox.txt" \
     --box newbox >"$TMP/runs/newbox" 2>&1 || rc=$?
   usage_leg 'a declared box with no profile exits 2, not a default' newbox 'has no box_profile entry'
+fi
+if harness_leg 'fleet names'; then
+  check fleet-rog --box rog-nv-linux
+  if [ "$rc" = 0 ] && head -n 1 "$TMP/runs/fleet-rog" |
+       grep -qx "check-box: --box rog-nv-linux is the fleet's name for measurement box rog-nv" &&
+     tail -n 1 "$TMP/runs/fleet-rog" | grep -qx 'check-box: rog-nv: READY (8 items)'; then
+    report 0 "the fleet's name for a box is that box, said before the items, and the verdict names the box"
+  else
+    report 1 "the fleet's name for a box is that box, said before the items, and the verdict names the box" "rc=$rc"
+    sed 's/^/      | /' "$TMP/runs/fleet-rog"
+  fi
+  FAKE_TORCH=hip check fleet-minix --box minix-amd-linux --fixture mlp_small
+  [ "$rc" = 0 ] && tail -n 1 "$TMP/runs/fleet-minix" | grep -qx 'check-box: minix: READY (8 items)'
+  report $? "minix-amd-linux is minix, a hip box" "rc=$rc"
+  check fleet-wsl --box rog-nv-wsl
+  usage_leg 'a WSL alias is no measurement box, and the refusal lists the fleet names' fleet-wsl \
+    "nor the fleet's name for one \(mac-studio rog-nv-linux"
+  # The scratch DIGESTS records rog-nv's bytes, so it can stop declaring minix but not rog-nv.
+  sed 's/^# measurement-boxes: .*/# measurement-boxes: rog-nv/' "$TMP/DIGESTS.txt" >"$TMP/DIGESTS-rog.txt"
+  rc=0
+  "$SUBJECT" --venv "$venv" --fixture-dir "$TMP/fixtures" --digests "$TMP/DIGESTS-rog.txt" \
+    --box minix-amd-linux >"$TMP/runs/fleet-undeclared" 2>&1 || rc=$?
+  usage_leg "a fleet name for a box the DIGESTS file does not declare exits 2" fleet-undeclared \
+    "is the fleet's name for minix, which .* does not declare"
+fi
+if harness_leg 'fleet names: what a driver records'; then
+  # --canonical-box is the gates' reading of --box (box-gate.sh, box_gate.py): a driver records
+  # the box's ID, not the fleet's name for it (Codex review round 1). The shell gate, sourced here
+  # against the real subject, holds the ID; the Python one is test_orchestrate's BoxNameTest.
+  got=$("$SUBJECT" --canonical-box rog-nv-linux),$("$SUBJECT" --canonical-box tuf),$("$SUBJECT" --canonical-box elsewhere)
+  [ "$got" = rog-nv,tuf,elsewhere ]
+  report $? "--canonical-box maps a fleet name to its box and leaves any other name" "got $got"
+  got=$(. "$here/box-gate.sh" && box_gate_args --box minix-amd-linux --other && printf '%s/%s' "$box_gate_box" "$box_gate_shift")
+  [ "$got" = minix/2 ]
+  report $? "box-gate.sh holds the box's ID for a fleet name" "got $got"
+fi
+if harness_leg 'fleet names: the relationships'; then
+  # Every fleet name resolves to a box the checked-in DIGESTS.txt declares and box_profile knows,
+  # and every declared box has a fleet name -- derived from the subject, not listed here.
+  fleet=$("$SUBJECT" --fleet-names) || fleet=
+  bad=
+  [ -n "$fleet" ] || bad=" (--fleet-names printed nothing)"
+  declared_boxes=$(python3 "$here/fixture_digest.py" --list-declared-measurement-boxes)
+  while read -r name box; do
+    [ -n "$name" ] || continue
+    check "fleet-$name" --box "$name" --fixture mlp_small
+    [ "$rc" != 2 ] || bad="$bad $name"
+    grep -qxF -- "$box" <<<"$declared_boxes" || bad="$bad $name->$box(undeclared)"
+    # --canonical-box, which answers without reading DIGESTS, relies on this.
+    ! grep -qxF -- "$name" <<<"$declared_boxes" || bad="$bad $name(is-itself-declared)"
+  done <<<"$fleet"
+  while IFS= read -r box; do
+    awk -v b="$box" '$2 == b { f = 1 } END { exit !f }' <<<"$fleet" || bad="$bad $box(no-fleet-name)"
+  done <<<"$declared_boxes"
+  [ -z "$bad" ]
+  report $? "every fleet name is a declared box with a profile, and every declared box has one" "refused:$bad"
+  # The map's native boots are the fleet's Linux names: each `-linux` alias on a row of wake-lab.sh's
+  # endpoint map is a fleet name here, and each `-linux` fleet name is an alias on the map.
+  wake_lab=${OCANNL_TOOL_SWEEP_WAKE_LAB:-$HOME/bin/wake-lab.sh}
+  if [ -x "$wake_lab" ] && map=$(perl -e 'alarm 60; exec @ARGV' "$wake_lab" endpoint-map 2>/dev/null) &&
+     [ -n "$map" ]; then
+    map_linux=$(tr ' ' '\n' <<<"$map" | grep -e '-linux$' | sort)
+    ours_linux=$(awk '{ print $1 }' <<<"$fleet" | grep -e '-linux$' | sort)
+    [ "$map_linux" = "$ours_linux" ]
+    report $? "the fleet's Linux names are the native boots on wake-lab.sh's endpoint map" \
+      "map: $(echo $map_linux); check-box.sh: $(echo $ours_linux)"
+  else
+    skip "the fleet's Linux names are the native boots on wake-lab.sh's endpoint map" \
+      "no readable wake-lab.sh endpoint-map at $wake_lab (only the fleet's anchor has one)"
+  fi
+  if [ -n "${FLEET_BOXES:-}" ]; then
+    [ "$(tr ' ' '\n' <<<"$FLEET_BOXES" | grep -v '^$' | sort)" = "$(awk '{ print $1 }' <<<"$fleet" | sort)" ]
+    report $? "the fleet names are this host's FLEET_BOXES" "FLEET_BOXES: $FLEET_BOXES; check-box.sh: $(awk '{ print $1 }' <<<"$fleet" | tr '\n' ' ')"
+  else
+    skip "the fleet names are this host's FLEET_BOXES" "FLEET_BOXES is unset (not a fleet host)"
+  fi
 fi
 if harness_leg 'every declared box has a profile'; then
   bad=

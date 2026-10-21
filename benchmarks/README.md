@@ -777,12 +777,16 @@ benchmarks/.venv/bin/python benchmarks/orchestrate.py --box <box>
 no measurement box, measuring for itself, passes `--skip-box-check` instead.
 
 A box that keeps one shared venv outside the checkout (the measurement boxes use
-`~/.venvs/ocannl-bench`) reaches it either by symlinking `benchmarks/.venv` to it or by exporting
-`BENCH_VENV_PY=~/.venvs/ocannl-bench/bin/python`; every driver (`orchestrate.py`, `gh675_cells.py`)
-resolves its interpreter through `bench_venv.py`, so the variable wins over the symlink, and a
-Windows venv's `Scripts/python.exe` is found without it.
+`~/.venvs/ocannl-bench`) needs nothing more: every driver (`orchestrate.py`, `gh675_cells.py`, ...)
+resolves its interpreter through `bench_venv.py`, which takes a non-empty `BENCH_VENV_PY`, else
+`benchmarks/.venv` (a symlink to the shared venv, or a venv of the checkout's own), else
+`~/.venvs/ocannl-bench` itself -- so a fresh worktree, which has neither of the first two, reaches
+the box's venv unprompted (gh-ocannl-1433). A Windows venv's `Scripts/python.exe` is found at
+either place. `python3 benchmarks/bench_venv.py` prints what it resolved and by which route, as
+`check-box.sh`'s driver-path line does.
 
-`test_orchestrate.py`'s legs that run the real torch runner skip where that venv has no torch;
+`test_orchestrate.py`'s legs that run the real torch runner use only the first two routes (the
+dune rule running it declares no venv in the home directory), skip where that venv has no torch;
 `BENCH_TORCH_REQUIRED=1` makes them fail instead. CI's `torch-runner` job runs the file that way
 in a CPU-only venv built from `requirements-ci-torch.txt`, which is also the quickest way to give a
 dev checkout those legs.
@@ -843,7 +847,10 @@ checkout you will measure in, and measure only on exit 0:
 benchmarks/check-box.sh --box rog-nv --fixture gpt2_mini_train --fixture gpt2_mini_train_s512
 ```
 
-`--box` is the box's ID in `fixtures/DIGESTS.txt`'s `measurement-boxes` field; the script's
+`--box` is the box's ID in `fixtures/DIGESTS.txt`'s `measurement-boxes` field, or the fleet's
+name for it (`mac-studio` m4-max, `rog-nv-linux` rog-nv, `minix-amd-linux` minix, `tuf-amd-linux`
+tuf; `check-box.sh --fleet-names` prints the table, the check says which box a fleet name
+resolved to before its items, and a driver given one records the box's ID; gh-ocannl-1433); the script's
 `box_profile` names what that box's torch must reach (cuda on rog-nv, hip on minix and tuf, mps on
 m4-max) and the toolchain its drivers compile with (`nvcc`, `hipcc`, the macOS SDK). It prints one
 `ok`/`GAP`/`skip` line per item -- the venv (`~/.venvs/ocannl-bench`, `--venv` moves it), its
