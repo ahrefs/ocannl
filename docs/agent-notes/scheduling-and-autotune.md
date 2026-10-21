@@ -265,7 +265,14 @@ files.
   on the geometry its `annotate` callback emits — only on the lowering, the site chain, the fused
   flavor's `skip` and the zeroing expansion. If you ever make the verdict consult the emitted
   geometry, the static witness goes stale and the tree will refute families whose candidates
-  would build (or vice versa) — keep the invariant, or re-derive the witness. The fused
+  would build (or vice versa) — keep the invariant, or re-derive the witness. The conv family's
+  GPU staged leg asks the same verdict (`conv_coverage_witness`, gh-ocannl-1406) where it used to
+  cap the lowering at two real statements besides the site's zero: the cap refused every
+  aligned-merged conv segment (conv + relu/bias/pool, 3-6 statements) although the pipeline
+  annotated each companion, and admitted single companions it could not cover. Not yet
+  tree-factored, the conv leg seeds when EITHER flavor is covered (its fused twins are flag-flipped
+  from every seed), so where only the fused flavor is, the unfused seeds decline at build and the
+  leg's notes say so; `conv_merged_gpu_seeds` executes every seed of the merged shape. The fused
   (`Fuse_epilogue`) flavor is judged separately: skipping the epilogue tail can empty the
   coverage demand before the alignment analysis is consulted, so twins can survive a routine the
   unfused family is refuted on (a `Local` product whose consumer shares its kernel). Until
@@ -2184,13 +2191,13 @@ files.
   lowering `tune` and `model_default` seed — the whole routine and each coarse and fine fission
   segment — and once per segment of the plan the CUDA/HIP seeded default chooses. Each line names the
   family that claimed the lowering, its site and seed count, then its refusals: the matmul tree's
-  refutations grouped by witness, or each conv leg's seed count or EVERY failing gate (the
-  companion cap, no mma tile, the vector file, launch caps, workgroup memory), and the
+  refutations grouped by witness, or each conv leg's seed count or EVERY failing gate (companion
+  coverage, no mma tile, the vector file, launch caps, workgroup memory), and the
   lowering's conv nests whatever family claimed it. The conv gates record their own reasons
   (`Sketch_families.conv_seed_judgment`), so the census cannot drift from the seeder. Use it
   before citing a seeding gate as evidence: the decline census can never show a seeding refusal,
-  and on real training graphs the binding conv gates are usually the matmul family claiming the
-  whole routine first and the companion cap, not the gate an issue names.
+  and on real training graphs the binding conv gate is usually the matmul family claiming the
+  whole routine first, not the gate an issue names.
 - A test claims a tensorized seed's PRESENCE wherever the backend advertises the capability, and
   gates on that capability, never on the seed list its claims are about (gh-ocannl-1115). Gated on
   the seeds, a seeding regression — or a claim asking for a seed the seeder excludes by

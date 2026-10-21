@@ -808,7 +808,7 @@
 # `Autotune.model_default`'s whole routine and segments), its statement and whole-node zero
 # counts, the family that claimed it (matmul, conv or none) with its site and seed count, then the
 # refusing gates -- the matmul tree's refutations grouped by witness, or each conv leg's seed count
-# or every failing gate (the companion cap, a zeroed output, no mma tile, ...) and the flavors it
+# or every failing gate (companion coverage, a zeroed output, no mma tile, ...) and the flavors it
 # withheld -- and every conv nest in the lowering. `Autotune.tune`'s lines also give each coalesced
 # layout's seed count or refusal. The untuned seeded default (CUDA/HIP) adds one line per segment
 # of the plan it chose, named by its first unit: the sketch it seeded, or why it refused. A

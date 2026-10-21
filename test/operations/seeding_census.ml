@@ -12,9 +12,11 @@
    tile for f32 operands; a vector file under 8 bytes. The whole-routine lowering's conv output is
    zeroed in the routine, and since gh-ocannl-503 the GPU leg seeds it anyway (the pipeline expands
    the zero with the site's geometry); on the tuner's GPU fission segments the zero folds into a
-   per-cell companion, and the GPU leg seeds there too. With the key on (the dune action passes it),
-   [Autotune.log_seeding] writes exactly the rendered lines, and [Autotune.tune] emits a
-   whole-routine census line. *)
+   per-cell companion, and the GPU leg seeds there too. The GPU leg judges companion coverage, not a
+   statement count (gh-ocannl-1406): an aligned-merged conv of three real statements seeds, a
+   channel reduction of the conv output is refused naming the coverage verdict. With the key on (the
+   dune action passes it), [Autotune.log_seeding] writes exactly the rendered lines, and
+   [Autotune.tune] emits a whole-routine census line. *)
 
 open Base
 open Ocannl
@@ -205,6 +207,54 @@ let () =
   p_exists "a partial workgroup-memory refusal is noted beside the seeds" tight ~f:(fun j ->
       (not (List.is_empty j.cj_gpu.leg_seeds))
       && List.exists j.cj_gpu.leg_notes ~f:(mentions ~sub:"refused by workgroup memory"));
+  (* === gh-ocannl-1406: the GPU leg judges companion coverage, not a statement count. A conv with
+     two materialized elementwise companions (the convnet's conv+relu+scale shape) is an
+     aligned-merged segment of three real statements, which a [real_stmts <= 2] cap refused although
+     the pipeline gives every companion the site's geometry; a channel reduction of the conv output
+     cannot follow the site's full chain, and the leg names the coverage verdict. === *)
+  let gpu_segments opt =
+    Sched.fission_segmented ~promote_locals:true ~fold_zeros:true
+      ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu:true ~limits:gpu_limits)
+      ~preset:(fun seg -> Sched.default_gpu ~min_parallel:1 ~limits:gpu_limits seg)
+      ~zero_sched:(Sched.zero_expansion ~limits:gpu_limits)
+      ~static_indices:[] (scratch opt)
+    |> snd
+    |> List.map ~f:(fun (_, pre, _, _) -> pre)
+  in
+  let conv_lowerings ~where opt =
+    List.filter_mapi (opt :: gpu_segments opt) ~f:(fun i seg ->
+        let where = where ^ if i = 0 then " whole-routine" else " segment" in
+        let c = census ~where ~is_gpu:true ~limits:gpu_limits seg in
+        claim_consistent where ~is_gpu:true ~limits:gpu_limits seg c;
+        conv_judgment c)
+  in
+  let merged tag =
+    let pr = make_conv tag in
+    Ir.Tnode.update_memory_mode pr.Tensor.value Ir.Tnode.On_device (Site "99:test-setup");
+    let%op y2 = relu pr in
+    Ir.Tnode.update_memory_mode y2.Tensor.value Ir.Tnode.On_device (Site "99:test-setup");
+    let%op y3 = y2 *. 0.5 in
+    y3
+  in
+  let merged_js =
+    conv_lowerings ~where:"conv merged gpu" (lowering "census_merged" (merged "cm"))
+  in
+  p_exists "conv merged: a lowering of three or more real statements the GPU leg seeds" merged_js
+    ~f:(fun j -> j.cj_real_stmts >= 3 && not (List.is_empty j.cj_gpu.leg_seeds));
+  p_none "conv merged: no GPU leg refuses on companion coverage" merged_js ~f:(fun j ->
+      mentions (refusal j.cj_gpu) ~sub:"companion coverage");
+  let channel_sum tag =
+    let pr = make_conv tag in
+    Ir.Tnode.update_memory_mode pr.Tensor.value Ir.Tnode.On_device (Site "99:test-setup");
+    let%op s = pr ++ "...|oh, ow, oc => ...|oh, ow" in
+    s
+  in
+  let sum_js =
+    conv_lowerings ~where:"conv channel-sum gpu" (lowering "census_chsum" (channel_sum "cs"))
+  in
+  p_exists "conv channel-sum: the GPU leg's refusal names companion coverage" sum_js ~f:(fun j ->
+      List.is_empty j.cj_gpu.leg_seeds
+      && mentions (refusal j.cj_gpu) ~sub:"GPU conv companion coverage (gh-521)");
   (* === A matmul: the census is the family tree's. === *)
   let a =
     TDSL.ndarray (Array.init 64 ~f:Float.of_int) ~label:[ "ma" ] ~input_dims:[ 8 ]
