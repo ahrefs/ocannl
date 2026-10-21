@@ -295,15 +295,15 @@ val ranking_seconds :
     rule. The count, per execution of the statement (the enclosing loop extents over its lane
     extent), is per lane: an [ldmatrix] operand costs one instruction per [lane_bytes] it delivers
     to each lane — 16 for [a], CUDA's emitted [.x4] form, and 8 for [b], its [.x2] form — a fragment
-    the arm loads whole (wmma's [load_matrix_sync]) one load, a gathered one one load per element
-    (fp8 gathers bytes, the 16-bit arms 16-bit halves, f32 32-bit words) — counted per intrinsic
-    fragment of the arm's own tile, with the reloads its loop nest repeats
-    ({!Backend_intf.mma_fragments}), since ties fall between geometries too. Only a backend that
-    describes its arms counts at all (CUDA). A statement whose accumulator the schedule marked in
-    [optimized.simdgroup_fragments] is counted in the fragment scope where the backend's hook
-    accepts it there as an update-only call, and every other statement per statement where the hook
-    accepts it with its destination's own place ([mma_accepts], the hook itself); a statement the
-    hook declines both ways has no count. *)
+    the arm loads whole (wmma's and rocWMMA's [load_matrix_sync], Metal's [simdgroup_load]) one
+    load, a gathered one one load per element (fp8 gathers bytes, the 16-bit arms 16-bit halves, f32
+    32-bit words) — counted per intrinsic fragment of the arm's own tile, with the reloads its loop
+    nest repeats ({!Backend_intf.mma_fragments}), since ties fall between geometries too. Only a
+    backend that describes its arms counts at all (CUDA, Metal and HIP; gh-ocannl-1456). A statement
+    whose accumulator the schedule marked in [optimized.simdgroup_fragments] is counted in the
+    fragment scope where the backend's hook accepts it there as an update-only call, and every other
+    statement per statement where the hook accepts it with its destination's own place
+    ([mma_accepts], the hook itself); a statement the hook declines both ways has no count. *)
 
 type operand_load =
   | Ldmatrix of { lane_bytes : int }
@@ -318,6 +318,23 @@ val operand_place : Low_level.optimized -> Tnode.t -> Backend_intf.mma_operand_p
 (** A [Tile_mma] operand's space and layout as the renderer classifies them: workgroup-shared when
     the schedule placed the node there, per-thread when its placement is [Local], device otherwise;
     [`Swizzled_b128] for a [Swizzle_b128] entry of [optimized.swizzled]. *)
+
+val statement_operand_loads :
+  Backend_intf.mma_fragments ->
+  ldmatrix:bool * bool ->
+  a_prec:Ops.prec ->
+  b_prec:Ops.prec ->
+  lanes:int ->
+  m:int ->
+  n:int ->
+  k:int ->
+  (int * int) option
+(** The per-lane load instructions ONE execution of an accepted [m x n x k] statement issues for its
+    [a] and [b] operands, under an arm's fragment structure and its [ldmatrix] answer for each
+    operand ({!Backend_intf.codegen_capabilities.mma_operand_loads}) — the per-statement term
+    {!operand_load_count} sums over executions. [None] where the arm's tile does not divide the
+    extents. Exposed so a backend's description can be checked against the loop nest its hook
+    renders ([test/operations/mma_format_arm_tables], gh-ocannl-1456). *)
 
 type load_count =
   | No_tile_mma

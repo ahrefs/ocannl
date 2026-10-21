@@ -82,3 +82,89 @@ let capability =
     mma_staged_layouts = [];
     mma_pipeline_depths = [];
   }
+
+(* {1 Acceptance and operand loads (gh-ocannl-1456)} *)
+
+(* The operand conditions every rocWMMA rendering checks, written once for the three sites that used
+   to repeat them ([Hip_backend]'s update-only and self-contained [mma_syntax] arms and its
+   [mma_fragment_syntax]): the triple has an arm, every layout is plain (rocWMMA fragments are
+   opaque, with no swizzle-aware load: gh-ocannl-481 item 3, D2), the tile divides the extents, the
+   leading dimensions meet the arm's multiples, and every addressed operand is device or shared
+   memory (generic-address loads cover both; a per-thread stack is not a jointly-owned tile). An
+   update-only statement addresses no destination: its accumulator is the resident fragment
+   array. *)
+let accepts ~a_prec ~b_prec ~d_prec ~m ~n ~k ~d ~a:(lda, (a_space, a_layout))
+    ~b:(ldb, (b_space, b_layout)) =
+  let plain = function `Plain -> true | `Swizzled_b128 -> false in
+  let loadable = function `Device | `Shared -> true | `Thread -> false in
+  match mma_accumulator ~a_prec ~b_prec ~d_prec with
+  | None -> false
+  | Some (_, ab_ld_mult, d_ld_mult) ->
+      (match d with
+        | `Resident d_layout -> plain d_layout
+        | `Addressed (ldd, (d_space, d_layout)) ->
+            plain d_layout && loadable d_space && ldd % d_ld_mult = 0)
+      && plain a_layout && plain b_layout
+      && m % tile = 0
+      && n % tile = 0
+      && k % tile = 0
+      && lda % ab_ld_mult = 0
+      && ldb % ab_ld_mult = 0
+      && loadable a_space && loadable b_space
+
+let frag_typ kind typ layout =
+  Printf.sprintf "rocwmma::fragment<rocwmma::%s, %d, %d, %d, %s%s>" kind tile tile tile typ
+    (match layout with Some l -> ", rocwmma::" ^ l | None -> "")
+
+(* The serial [k] extent of one block statement, shared by the self-contained rendering ([acc] = its
+   block-local [__mma_acc]) and the update-only one against a resident fragment array
+   (gh-ocannl-480): per reduction step, the row of [nt] [b] fragments, then for each of the [mt] [a]
+   fragments its updates across that row. Each fragment is one whole [load_matrix_sync], once per
+   step, reused across the other operand's free axis: what [operand_fragments] says. Transposed
+   storage ([ta] / [tb]): the stored matrix is the role's transpose -- index it at (col, row) and
+   declare the fragment [col_major]; the leading dimension stays the operand's own. *)
+let k_loop_lines ~ab_typ ~acc ~ta ~tb ~lda ~ldb ~m ~n ~k =
+  let mt = m / tile and nt = n / tile and kt = k / tile in
+  let a_layout = if ta then "col_major" else "row_major" in
+  let b_layout = if tb then "col_major" else "row_major" in
+  [
+    Printf.sprintf "for (int __ki = 0; __ki < %d; ++__ki) {" kt;
+    Printf.sprintf "  %s __mma_bf[%d];" (frag_typ "matrix_b" ab_typ (Some b_layout)) nt;
+    Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
+    (if tb then
+       Printf.sprintf
+         "    rocwmma::load_matrix_sync(__mma_bf[__ni], __mma_bp + __ni * %d * %d + __ki * %d, %d);"
+         tile ldb tile ldb
+     else
+       Printf.sprintf
+         "    rocwmma::load_matrix_sync(__mma_bf[__ni], __mma_bp + __ki * %d * %d + __ni * %d, %d);"
+         tile ldb tile ldb);
+    "  }";
+    Printf.sprintf "  for (int __mi = 0; __mi < %d; ++__mi) {" mt;
+    Printf.sprintf "    %s __mma_af;" (frag_typ "matrix_a" ab_typ (Some a_layout));
+    (if ta then
+       Printf.sprintf
+         "    rocwmma::load_matrix_sync(__mma_af, __mma_ap + __ki * %d * %d + __mi * %d, %d);" tile
+         lda tile lda
+     else
+       Printf.sprintf
+         "    rocwmma::load_matrix_sync(__mma_af, __mma_ap + __mi * %d * %d + __ki * %d, %d);" tile
+         lda tile lda);
+    Printf.sprintf "    for (int __ni = 0; __ni < %d; ++__ni) {" nt;
+    Printf.sprintf
+      "      rocwmma::mma_sync(%s[__mi][__ni], __mma_af, __mma_bf[__ni], %s[__mi][__ni]);" acc acc;
+    "    }";
+    "  }";
+    "}";
+  ]
+
+(* [k_loop_lines]' loads, as the cost model counts them: the [tile] cube, each fragment once per
+   reduction step, loaded whole by one [load_matrix_sync]. The same in both emission scopes, whose
+   hooks share [k_loop_lines]. *)
+let operand_fragments ~a_prec ~b_prec ~d_prec ~scope:_ =
+  Option.map (mma_accumulator ~a_prec ~b_prec ~d_prec) ~f:(fun _ ->
+      { Backend_intf.mf_tile = (tile, tile, tile); mf_reloads = false; mf_fragment_loads = true })
+
+(* No [ldmatrix] analogue: [accepts] declines a swizzled operand, and every load [k_loop_lines]
+   emits is a whole-fragment [load_matrix_sync]. *)
+let operand_loads ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ ~ta:_ ~tb:_ ~a:_ ~b:_ = (false, false)

@@ -807,6 +807,35 @@ let operand_load_instructions ~lanes ~elements ~elt_bytes = function
   (* One load per element a lane gathers, whatever its width. *)
   | Gather _ -> (elements + lanes - 1) / lanes
 
+(* One execution of an accepted statement, per lane: per intrinsic tile [(tm, tn, tk)] of the arm's
+   own description, the emission loads [a] fragments ([tm x tk]) and [b] fragments ([tk x tn]): once
+   per reduction step each, reused across the other's free axis, or -- where the arm reloads -- for
+   every tile of that axis too. [a]'s [ldmatrix] form is [.x4] (16 bytes per lane), [b]'s [.x2] (8
+   bytes per lane), in every inline-PTX arm; an arm whose fragments load whole ([mf_fragment_loads]:
+   wmma, [simdgroup_load], rocWMMA) issues one load per fragment. Extents the tile does not divide
+   (the arm declines them) have no count. *)
+let statement_operand_loads (fragments : Backend_intf.mma_fragments) ~ldmatrix:(a_ldm, b_ldm)
+    ~a_prec ~b_prec ~lanes ~m ~n ~k =
+  let { Backend_intf.mf_tile = tm, tn, tk; mf_reloads; mf_fragment_loads } = fragments in
+  if tm > 0 && tn > 0 && tk > 0 && m % tm = 0 && n % tn = 0 && k % tk = 0 then
+    let mt = m / tm and nt = n / tn and kt = k / tk in
+    let a_frags, b_frags =
+      if mf_reloads then (mt * nt * kt, mt * nt * kt) else (mt * kt, nt * kt)
+    in
+    let loads prec ldm ~lane_bytes ~elements ~frags =
+      let elt_bytes = Ops.prec_in_bytes prec in
+      let form =
+        if ldm then Ldmatrix { lane_bytes }
+        else if mf_fragment_loads then Fragment_load
+        else Gather { elt_bytes }
+      in
+      frags * operand_load_instructions ~lanes:(max 1 lanes) ~elements ~elt_bytes form
+    in
+    Some
+      ( loads a_prec a_ldm ~lane_bytes:16 ~elements:(tm * tk) ~frags:a_frags,
+        loads b_prec b_ldm ~lane_bytes:8 ~elements:(tk * tn) ~frags:b_frags )
+  else None
+
 (* Every [Tile_mma] statement the statement walk reaches, with its executions per lane group ([scale
    / lanes]), lanes and emission scope -- [None] where the renderer's layouts or the backend's hook
    decline it, so its scalar fallback renders. Shared by the operand-load count and the accepted
@@ -937,52 +966,19 @@ let tile_mma_operand_loads ~operand_accepts ~operand_fragments ~operand_loads
   List.map (tile_mma_scopes ~operand_accepts opt)
     ~f:(fun { ms_stmt; ms_scale = scale; ms_lanes = lanes; ms_scope = scope } ->
       match ms_stmt with
-      | Low_level.Tile_mma { d = d_tn, _; a = a_tn, _; b = b_tn, _; ta; tb; m; n; k; _ } ->
+      | Low_level.Tile_mma { d = d_tn, _; a = a_tn, _; b = b_tn, _; ta; tb; m; n; k; _ } -> (
           let a_prec = prec a_tn and b_prec = prec b_tn and d_prec = prec d_tn in
           let description =
             Option.map scope ~f:(fun (scope, a_place, b_place) ->
                 ( operand_loads ~a_prec ~b_prec ~d_prec ~scope ~ta ~tb ~a:a_place ~b:b_place,
                   operand_fragments ~a_prec ~b_prec ~d_prec ~scope ))
           in
-          (* The emitted forms: [a]'s fragment comes in through [ldmatrix .x4] (16 bytes per lane),
-             [b]'s through [.x2] (8 bytes per lane), in every inline-PTX arm; an arm whose fragments
-             load whole ([mf_fragment_loads], wmma) issues one load per fragment. *)
-          let classify tn ldm ~fragment_loads ~lane_bytes =
-            if ldm then Ldmatrix { lane_bytes }
-            else if fragment_loads then Fragment_load
-            else Gather { elt_bytes = Ops.prec_in_bytes (prec tn) }
-          in
-          (* Per intrinsic tile [(tm, tn, tk)] of the arm's own description, the emission loads [a]
-             fragments ([tm x tk]) and [b] fragments ([tk x tn]): once per reduction step each,
-             reused across the other's free axis, or — where the arm reloads — for every tile of
-             that axis too. A statement the backend does not describe, or whose extents the tile
-             does not divide (the arm declines it), has no count. *)
-          let site =
-            match description with
-            | Some
-                ( (a_ldm, b_ldm),
-                  Some { Backend_intf.mf_tile = tm, tn, tk; mf_reloads; mf_fragment_loads } )
-              when tm > 0 && tn > 0 && tk > 0 && m % tm = 0 && n % tn = 0 && k % tk = 0 ->
-                let mt = m / tm and nt = n / tn and kt = k / tk in
-                let a_frags, b_frags =
-                  if mf_reloads then (mt * nt * kt, mt * nt * kt) else (mt * kt, nt * kt)
-                in
-                Some
-                  ( scale / lanes,
-                    [
-                      ( a_tn,
-                        tm * tk,
-                        a_frags,
-                        classify a_tn a_ldm ~fragment_loads:mf_fragment_loads ~lane_bytes:16 );
-                      ( b_tn,
-                        tk * tn,
-                        b_frags,
-                        classify b_tn b_ldm ~fragment_loads:mf_fragment_loads ~lane_bytes:8 );
-                    ],
-                    lanes )
-            | Some (_, _) | None -> None
-          in
-          site
+          match description with
+          | Some (ldmatrix, Some fragments) ->
+              Option.map
+                (statement_operand_loads fragments ~ldmatrix ~a_prec ~b_prec ~lanes ~m ~n ~k)
+                ~f:(fun (a_loads, b_loads) -> (scale / lanes, a_loads + b_loads))
+          | Some (_, None) | None -> None)
       | _ -> None)
 
 let accepted_tile_mma_flops ~operand_accepts (opt : Low_level.optimized) =
@@ -1010,21 +1006,11 @@ let operand_load_count ~operand_accepts ~operand_fragments ~operand_loads opt =
   | [] -> No_tile_mma
   | sites when List.exists sites ~f:Option.is_none -> Undescribed
   | sites ->
-      let sites = List.filter_opt sites in
       Loads
         (List.sum
            (module Int)
-           sites
-           ~f:(fun (executions, operands, lanes) ->
-             executions
-             * List.sum
-                 (module Int)
-                 operands
-                 ~f:(fun (tn, elements, fragments, cls) ->
-                   fragments
-                   * operand_load_instructions ~lanes ~elements
-                       ~elt_bytes:(Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec))
-                       cls)))
+           (List.filter_opt sites)
+           ~f:(fun (executions, loads) -> executions * loads))
 
 (* {2 The cost of one inlined computation — gh-ocannl-637 Part 2, gh-ocannl-1011}
 

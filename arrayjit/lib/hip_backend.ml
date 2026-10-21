@@ -729,11 +729,7 @@ end = struct
        one copy is what keeps a new arm from reaching only half the emission (the two hooks' guards
        are required to accept together). *)
     let mma_tile = Hip_mma.tile
-
-    let mma_frag_typ kind typ layout =
-      Printf.sprintf "rocwmma::fragment<rocwmma::%s, %d, %d, %d, %s%s>" kind mma_tile mma_tile
-        mma_tile typ
-        (match layout with Some l -> ", rocwmma::" ^ l | None -> "")
+    let mma_frag_typ = Hip_mma.frag_typ
 
     (* The combination table both hooks consult, device-free in [Hip_mma] beside the descriptor it
        must correspond to (gh-ocannl-1246): per storage triple, the accumulator fragment's precision
@@ -749,19 +745,39 @@ end = struct
       | Ops.Bfloat16_prec _ -> "rocwmma::bfloat16_t"
       | prec -> invalid_arg ("Hip_backend.rocwmma_elt: " ^ Ops.prec_string prec)
 
-    (* (a/b fragment element type, accumulator fragment element type, [d] STORAGE element type, ld
-       multiple for a/b, ld multiple for d) of [mma_accumulator]'s arm. *)
-    let mma_combo ~a_prec ~b_prec ~d_prec ~d_layout ~a_layout ~b_layout =
-      (* rocWMMA fragments are opaque like [nvcuda::wmma]'s: there is no swizzle-aware fragment load
-         here, so a swizzled operand layout declines to the caller's scalar fallback (gh-ocannl-481
-         item 3, D2). *)
-      let plain = function `Plain -> true | `Swizzled_b128 -> false in
-      if not (plain d_layout && plain a_layout && plain b_layout) then None
-      else
-        Option.map (mma_accumulator ~a_prec ~b_prec ~d_prec) ~f:(fun (acc_prec, ab_ld, d_ld) ->
-            (rocwmma_elt a_prec, rocwmma_elt acc_prec, rocwmma_elt d_prec, ab_ld, d_ld))
+    (* (a/b fragment element type, accumulator fragment element type, [d] STORAGE element type) of
+       [mma_accumulator]'s arm. Whether a call renders at all is [rocwmma_accepts]'. *)
+    let mma_combo ~a_prec ~b_prec ~d_prec =
+      Option.map (mma_accumulator ~a_prec ~b_prec ~d_prec) ~f:(fun (acc_prec, _, _) ->
+          (rocwmma_elt a_prec, rocwmma_elt acc_prec, rocwmma_elt d_prec))
+
+    (* The one acceptance predicate of the three rocWMMA sites below ([Hip_mma.accepts],
+       gh-ocannl-1456), behind the device gate. A [`Fragment] operand is never an addressed one. *)
+    let rocwmma_accepts ~a_prec ~b_prec ~d_prec ~m ~n ~k ~d ~a:(lda, a_space, a_layout)
+        ~b:(ldb, b_space, b_layout) =
+      let place space layout =
+        match space with
+        | `Fragment _ -> None
+        | (`Device | `Shared | `Thread) as space -> Some (space, layout)
+      in
+      mma_supported ()
+      &&
+      match (place a_space a_layout, place b_space b_layout) with
+      | Some a, Some b -> Hip_mma.accepts ~a_prec ~b_prec ~d_prec ~m ~n ~k ~d ~a:(lda, a) ~b:(ldb, b)
+      | _ -> false
+
+    (* A destination as [Hip_mma.accepts] takes it: a [`Fragment] one is the resident fragment array
+       of an update-only statement, any other an addressed operand. *)
+    let rocwmma_d ~ldd space layout =
+      match space with
+      | `Fragment _ -> `Resident layout
+      | (`Device | `Shared | `Thread) as space -> `Addressed (ldd, (space, layout))
 
     let mma_arm = Hip_mma.mma_arm
+
+    (* gh-ocannl-1456: how [Hip_mma.k_loop_lines], which both hooks render, loads its operands. *)
+    let mma_operand_loads = Hip_mma.operand_loads
+    let mma_operand_fragments = Hip_mma.operand_fragments
 
     (* The [d] boundary of the [mt] x [nt] accumulator-fragment array [acc]: [`Load] brings the
        destination's 16x16 blocks at [__mma_dp] into [acc[__mi][__ni]], [`Store] writes them back.
@@ -871,10 +887,11 @@ end = struct
           ~b:(ldb, b_space, b_layout)
         ->
           let tile = mma_tile in
-          let combo = mma_combo ~a_prec ~b_prec ~d_prec ~d_layout ~a_layout ~b_layout in
-          let loadable = function
-            | `Device | `Shared -> true (* generic-address loads cover both *)
-            | `Thread | `Fragment _ -> false
+          let combo = mma_combo ~a_prec ~b_prec ~d_prec in
+          (* Asked only where the triple has an arm, as the device gate always was. *)
+          let accepted () =
+            rocwmma_accepts ~a_prec ~b_prec ~d_prec ~m ~n ~k ~d:(rocwmma_d ~ldd d_space d_layout)
+              ~a:(lda, a_space, a_layout) ~b:(ldb, b_space, b_layout)
           in
           match d_space with
           | `Fragment fragment -> (
@@ -889,63 +906,15 @@ end = struct
                 PPrint
               in
               match combo with
-              | Some (ab_typ, _acc_typ, _d_typ, ab_ld_mult, _d_ld_mult)
-                when mma_supported ()
-                     && m % tile = 0
-                     && n % tile = 0
-                     && k % tile = 0
-                     && lda % ab_ld_mult = 0
-                     && ldb % ab_ld_mult = 0
-                     && loadable a_space && loadable b_space ->
-                  let mt = m / tile and nt = n / tile and kt = k / tile in
-                  let frag = mma_frag_typ in
+              | Some (ab_typ, _acc_typ, _d_typ) when accepted () ->
                   let ptr_decl name typ ptr =
                     string (Printf.sprintf "%s *%s = reinterpret_cast<%s *>(" typ name typ)
                     ^^ ptr ^^ string ");"
                   in
-                  let a_layout = if ta then "col_major" else "row_major" in
-                  let b_layout = if tb then "col_major" else "row_major" in
                   let barrier = "__syncthreads();" in
                   let body_lines =
-                    [
-                      Printf.sprintf "for (int __ki = 0; __ki < %d; ++__ki) {" kt;
-                      Printf.sprintf "  %s __mma_bf[%d];"
-                        (frag "matrix_b" ab_typ (Some b_layout))
-                        nt;
-                      Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
-                      (if tb then
-                         Printf.sprintf
-                           "    rocwmma::load_matrix_sync(__mma_bf[__ni], __mma_bp + __ni * %d * \
-                            %d + __ki * %d, %d);"
-                           tile ldb tile ldb
-                       else
-                         Printf.sprintf
-                           "    rocwmma::load_matrix_sync(__mma_bf[__ni], __mma_bp + __ki * %d * \
-                            %d + __ni * %d, %d);"
-                           tile ldb tile ldb);
-                      "  }";
-                      Printf.sprintf "  for (int __mi = 0; __mi < %d; ++__mi) {" mt;
-                      Printf.sprintf "    %s __mma_af;" (frag "matrix_a" ab_typ (Some a_layout));
-                      (if ta then
-                         Printf.sprintf
-                           "    rocwmma::load_matrix_sync(__mma_af, __mma_ap + __ki * %d * %d + \
-                            __mi * %d, %d);"
-                           tile lda tile lda
-                       else
-                         Printf.sprintf
-                           "    rocwmma::load_matrix_sync(__mma_af, __mma_ap + __mi * %d * %d + \
-                            __ki * %d, %d);"
-                           tile lda tile lda);
-                      Printf.sprintf "    for (int __ni = 0; __ni < %d; ++__ni) {" nt;
-                      Printf.sprintf
-                        "      rocwmma::mma_sync(%s[__mi][__ni], __mma_af, __mma_bf[__ni], \
-                         %s[__mi][__ni]);"
-                        fragment fragment;
-                      "    }";
-                      "  }";
-                      "}";
-                      barrier;
-                    ]
+                    Hip_mma.k_loop_lines ~ab_typ ~acc:fragment ~ta ~tb ~lda ~ldb ~m ~n ~k
+                    @ [ barrier ]
                   in
                   let body ~a_ptr ~b_ptr =
                     ptr_decl "__mma_ap" ("const " ^ ab_typ) a_ptr
@@ -965,17 +934,9 @@ end = struct
               | _ -> None)
           | `Device | `Shared | `Thread -> (
               match combo with
-              | Some (ab_typ, acc_typ, d_typ, ab_ld_mult, d_ld_mult)
-                when mma_supported ()
-                     && m % tile = 0
-                     && n % tile = 0
-                     && k % tile = 0
-                     && lda % ab_ld_mult = 0
-                     && ldb % ab_ld_mult = 0
-                     && ldd % d_ld_mult = 0
-                     && loadable d_space && loadable a_space && loadable b_space ->
+              | Some (ab_typ, acc_typ, d_typ) when accepted () ->
                   let open PPrint in
-                  let mt = m / tile and nt = n / tile and kt = k / tile in
+                  let mt = m / tile and nt = n / tile in
                   let frag = mma_frag_typ in
                   (* [reinterpret_cast] bridges the node's C element type to the rocWMMA fragment
                      type. *)
@@ -983,8 +944,6 @@ end = struct
                     string (Printf.sprintf "%s *%s = reinterpret_cast<%s *>(" typ name typ)
                     ^^ ptr ^^ string ");"
                   in
-                  let a_layout = if ta then "col_major" else "row_major" in
-                  let b_layout = if tb then "col_major" else "row_major" in
                   let barrier = "__syncthreads();" in
                   let body_lines =
                     [
@@ -992,45 +951,7 @@ end = struct
                       Printf.sprintf "%s __mma_acc[%d][%d];" (frag "accumulator" acc_typ None) mt nt;
                     ]
                     @ mma_d_boundary_lines ~dir:`Load ~acc_typ ~d_typ ~acc:"__mma_acc" ~ldd ~mt ~nt
-                    @ [
-                        Printf.sprintf "for (int __ki = 0; __ki < %d; ++__ki) {" kt;
-                        Printf.sprintf "  %s __mma_bf[%d];"
-                          (frag "matrix_b" ab_typ (Some b_layout))
-                          nt;
-                        Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
-                        (* Transposed storage ([tb]): the stored matrix is the role's transpose --
-                           index it at (col, row) and declare the fragment [col_major]; the leading
-                           dimension stays the operand's own. Same for [ta] below. *)
-                        (if tb then
-                           Printf.sprintf
-                             "    rocwmma::load_matrix_sync(__mma_bf[__ni], __mma_bp + __ni * %d * \
-                              %d + __ki * %d, %d);"
-                             tile ldb tile ldb
-                         else
-                           Printf.sprintf
-                             "    rocwmma::load_matrix_sync(__mma_bf[__ni], __mma_bp + __ki * %d * \
-                              %d + __ni * %d, %d);"
-                             tile ldb tile ldb);
-                        "  }";
-                        Printf.sprintf "  for (int __mi = 0; __mi < %d; ++__mi) {" mt;
-                        Printf.sprintf "    %s __mma_af;" (frag "matrix_a" ab_typ (Some a_layout));
-                        (if ta then
-                           Printf.sprintf
-                             "    rocwmma::load_matrix_sync(__mma_af, __mma_ap + __ki * %d * %d + \
-                              __mi * %d, %d);"
-                             tile lda tile lda
-                         else
-                           Printf.sprintf
-                             "    rocwmma::load_matrix_sync(__mma_af, __mma_ap + __mi * %d * %d + \
-                              __ki * %d, %d);"
-                             tile lda tile lda);
-                        Printf.sprintf "    for (int __ni = 0; __ni < %d; ++__ni) {" nt;
-                        "      rocwmma::mma_sync(__mma_acc[__mi][__ni], __mma_af, __mma_bf[__ni], \
-                         __mma_acc[__mi][__ni]);";
-                        "    }";
-                        "  }";
-                        "}";
-                      ]
+                    @ Hip_mma.k_loop_lines ~ab_typ ~acc:"__mma_acc" ~ta ~tb ~lda ~ldb ~m ~n ~k
                     @ mma_d_boundary_lines ~dir:`Store ~acc_typ ~d_typ ~acc:"__mma_acc" ~ldd ~mt ~nt
                     @ [ barrier ]
                   in
@@ -1071,18 +992,12 @@ end = struct
           ~body
         ->
           let tile = mma_tile in
-          let combo = mma_combo ~a_prec ~b_prec ~d_prec ~d_layout ~a_layout ~b_layout in
-          let loadable = function `Device | `Shared -> true | `Thread | `Fragment _ -> false in
-          match combo with
-          | Some (_ab_typ, acc_typ, d_typ, ab_ld_mult, d_ld_mult)
-            when mma_supported ()
-                 && m % tile = 0
-                 && n % tile = 0
-                 && k % tile = 0
-                 && lda % ab_ld_mult = 0
-                 && ldb % ab_ld_mult = 0
-                 && ldd % d_ld_mult = 0
-                 && loadable d_space && loadable a_space && loadable b_space ->
+          match mma_combo ~a_prec ~b_prec ~d_prec with
+          | Some (_ab_typ, acc_typ, d_typ)
+            when (match d_space with `Fragment _ -> false | `Device | `Shared | `Thread -> true)
+                 && rocwmma_accepts ~a_prec ~b_prec ~d_prec ~m ~n ~k
+                      ~d:(rocwmma_d ~ldd d_space d_layout) ~a:(lda, a_space, a_layout)
+                      ~b:(ldb, b_space, b_layout) ->
               let open PPrint in
               let mt = m / tile and nt = n / tile in
               let frag = mma_frag_typ in
