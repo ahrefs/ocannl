@@ -63,3 +63,6 @@ a two-operand precision setter over a discarded operand is refused before writin
 a parameter whose initializer returns a discarded tensor is refused: true
 a node created after the rewind with a discarded id is not stale: true
 a seed replaced since the closure is restored to the closure's: true
+a scoped seed closed inside with_saved_random_seed does not come back on a rewind: true
+a root handed out after a %cd embedding stays handed out across a rewind: true
+a spec failing after marking an open operand's row (it fails) taints the session: true

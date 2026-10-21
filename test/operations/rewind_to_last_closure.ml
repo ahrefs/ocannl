@@ -316,7 +316,39 @@ let retained_handles () =
   Tensor.set_random_seed ~seed:5 ();
   Tensor.rewind_to_last_closure ();
   p "a seed replaced since the closure is restored to the closure's"
-    (phys_equal seed (Tensor.get_random_seed ()))
+    (phys_equal seed (Tensor.get_random_seed ()));
+  (* A scoped seed installed by [with_saved_random_seed] around a closure is not the closed state's
+     seed. *)
+  Tensor.with_saved_random_seed (fun () ->
+      Tensor.set_random_seed ~seed:9 ();
+      let scoped = Tensor.get_random_seed () in
+      ignore (Shape.to_dims scoped.Tensor.shape : int array));
+  Tensor.rewind_to_last_closure ();
+  p "a scoped seed closed inside with_saved_random_seed does not come back on a rewind"
+    (phys_equal seed (Tensor.get_random_seed ()));
+  (* A closed root embedded by [%cd] (handout marker [Taken]) and then handed out with
+     [consume_forward_code]: the caller holds its code, so a rewind does not make it a root
+     again. *)
+  let y2 = leaf "rw_y2" [| 1.; 2. |] in
+  ignore (Lazy.force y2.Tensor.value.Ir.Tnode.dims : int array);
+  let acc2 = leaf "rw_acc2" [| 0.; 0. |] in
+  let _embedding = [%cd acc2 =+ y2] in
+  ignore (Tensor.consume_forward_code y2 : Ir.Assignments.comp);
+  Tensor.rewind_to_last_closure ();
+  p "a root handed out after a %cd embedding stays handed out across a rewind"
+    (not (Tensor.is_fwd_root y2));
+  (* Inference-set writes count as mutations: a spec failing inside the solver's constraint
+     derivation over an open operand, after marking its row variable, taints. *)
+  let%op xo = { xo = 0.5 } in
+  let failure = outcome (fun () -> TDSL.einsum1 "..a.. a => a" xo ()) in
+  pf "a spec failing after marking an open operand's row (%s) taints the session"
+    (match failure with Error _ -> "it fails" | Ok () -> "it did not fail")
+    (Result.is_error failure
+    &&
+    match outcome (fun () -> NTDSL.O.relu (leaf "rw_after" [| 1. |])) with
+    | Error msg -> String.is_substring msg ~substring:tainted
+    | Ok () -> false);
+  Tensor.rewind_to_last_closure ()
 
 let () =
   match Sys.get_argv () with

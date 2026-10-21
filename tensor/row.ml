@@ -2081,7 +2081,15 @@ let reduce_solved_basis (solved : solved_dim list) : string option =
    closes to 1 rather than widening to it). [At_least_dim] variables keep GLB closing regardless:
    direct indexing is a dim-carrying use. *)
 let resolve_at_use_dim = Hash_set.create (module Dim_var)
-let add_resolve_at_use_dim v = Hash_set.add resolve_at_use_dim v
+
+(* Writes to the module-level inference sets count as session mutations (gh-ocannl-1301): they steer
+   later guessing and resolution of open variables, so a construction that failed after one must
+   taint. *)
+let add_resolve_at_use_dim v =
+  if not (Hash_set.mem resolve_at_use_dim v) then (
+    note_mutation ();
+    Hash_set.add resolve_at_use_dim v)
+
 let is_resolve_at_use_dim v = Hash_set.mem resolve_at_use_dim v
 
 let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ list * _ =
@@ -2571,11 +2579,24 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
 let drop_from_end l n = List.rev @@ List.drop (List.rev l) n
 let take_from_end (l : dim list) (n : int) : dim list = List.rev @@ List.take (List.rev l) n
 let safe_to_guess = Hash_set.create (module Row_var)
-let add_safe_to_guess v = Hash_set.add safe_to_guess v
+
+let add_safe_to_guess v =
+  if not (Hash_set.mem safe_to_guess v) then (
+    note_mutation ();
+    Hash_set.add safe_to_guess v)
+
 let used_in_spec_or_compose = Hash_set.create (module Row_var)
 let used_in_pointwise = Hash_set.create (module Row_var)
-let add_used_in_spec_or_compose v = Hash_set.add used_in_spec_or_compose v
-let add_used_in_pointwise v = Hash_set.add used_in_pointwise v
+
+let add_used_in_spec_or_compose v =
+  if not (Hash_set.mem used_in_spec_or_compose v) then (
+    note_mutation ();
+    Hash_set.add used_in_spec_or_compose v)
+
+let add_used_in_pointwise v =
+  if not (Hash_set.mem used_in_pointwise v) then (
+    note_mutation ();
+    Hash_set.add used_in_pointwise v)
 
 (* gh-ocannl-544: row variables marked here are resolved by their use sites — at the final stages
    they may close to the GLB of their use sites' rows, acquiring axes their own arguments do not
@@ -2585,7 +2606,12 @@ let add_used_in_pointwise v = Hash_set.add used_in_pointwise v
    cones ([Tensor.param] via [Shape.set_resolve_at_use]: the init expression's job is to fill the
    parameter's shape, so its intermediates widen to it), and for explicit [stretch] wrappers. *)
 let resolve_at_use = Hash_set.create (module Row_var)
-let add_resolve_at_use v = Hash_set.add resolve_at_use v
+
+let add_resolve_at_use v =
+  if not (Hash_set.mem resolve_at_use v) then (
+    note_mutation ();
+    Hash_set.add resolve_at_use v)
+
 let is_resolve_at_use v = Hash_set.mem resolve_at_use v
 
 (* Persistent rank-relation graph, global like [global_template_cache] (row variable ids are never
@@ -2631,7 +2657,9 @@ let add_rank_edge ~rows v w k =
   else
     let edges = Hashtbl.find_multi global_rank_edges v in
     if not (List.mem edges (w, k) ~equal:(fun (w1, k1) (w2, k2) -> equal_row_var w1 w2 && k1 = k2))
-    then Hashtbl.add_multi global_rank_edges ~key:v ~data:(w, k)
+    then (
+      note_mutation ();
+      Hashtbl.add_multi global_rank_edges ~key:v ~data:(w, k))
 
 (* Equate two rows, no broadcasting. Does not resolve inequalities. *)
 let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list * _ =
@@ -3649,7 +3677,9 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
         (res_v, opnd_dims_l - res_dims_l, opnd_beg_dims_l - res_beg_dims_l)
       in
       let templ_v : row_var =
-        Hashtbl.find_or_add global_template_cache templ_key ~default:get_row_var
+        Hashtbl.find_or_add global_template_cache templ_key ~default:(fun () ->
+            note_mutation ();
+            get_row_var ())
       in
       if more_dims_l > 0 then add_safe_to_guess templ_v;
       let template : t =

@@ -1148,7 +1148,10 @@ let consume_forward_code t =
   check_not_discarded ~what:"Tensor.consume_forward_code" t;
   (* Handing out the same immutable comp is equivalent to the caller retaining it. In particular,
      roots built since the first handout must neither veto replay nor be consumed by it. *)
-  if equal_handout t.consumption.fwd Taken then t.forward
+  if equal_handout t.consumption.fwd Taken then (
+    (* Taken by an embedding (e.g. [%cd]) and now handed out: a handout all the same. *)
+    record_handout_in_checkpoint ~fwd:true t;
+    t.forward)
   else (
     if not @@ is_fwd_root t then
       raise
@@ -1187,7 +1190,9 @@ let consume_backprop_code t =
                ^ debug_name t,
                Some t ))
   in
-  if equal_handout t.consumption.bprop Taken then diff.backprop
+  if equal_handout t.consumption.bprop Taken then (
+    record_handout_in_checkpoint ~fwd:false t;
+    diff.backprop)
   else (
     if not @@ is_bprop_root t then
       raise
@@ -1238,7 +1243,14 @@ let rec get_random_seed () =
 
 let with_saved_random_seed f =
   let saved = !random_seed in
-  Exn.protectx ~f ~finally:(fun () -> random_seed := saved) ()
+  let ck_count = checkpoint.ck_count in
+  Exn.protectx ~f
+    ~finally:(fun () ->
+      random_seed := saved;
+      (* A closure inside [f] checkpointed [f]'s scoped seed: the restored one is the closed state's
+         (gh-ocannl-1301). *)
+      if checkpoint.ck_count <> ck_count then checkpoint.ck_seed <- saved)
+    ()
 
 let install_validity_check () =
   Tn.validity_check :=

@@ -603,10 +603,22 @@ let compute_block_discardable_vars ~(this_side_rows : Row.t list)
 
 let unused_shapes = Hash_set.create (module Int)
 
+(* Writes to [unused_shapes] count as session mutations (gh-ocannl-1301): it filters which rows
+   [finish_inference] closes. *)
+let unmark_unused id =
+  if Hash_set.mem unused_shapes id then (
+    Row.note_mutation ();
+    Hash_set.remove unused_shapes id)
+
+let mark_unused id =
+  if not (Hash_set.mem unused_shapes id) then (
+    Row.note_mutation ();
+    Hash_set.add unused_shapes id)
+
 let%debug4_sexp get_inequalities ?(for_projections = false)
     ({ shape = cur_sh; logic; _ } as _upd : update_step) :
     proj_axis_env * Row.dim_var_set * Row.constraint_ list =
-  Hash_set.remove unused_shapes cur_sh.id;
+  unmark_unused cur_sh.id;
   let _debug_cur_sh : t = cur_sh in
   let _debug_logic : logic = logic in
   let open Row in
@@ -778,7 +790,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
   | Terminal { is_param; logic = Fetch (Embed_dim _) } -> defaults @@ mark_terminal ~is_param
   | Terminal { is_param; logic = Fetch Embed_self_id } -> defaults @@ mark_terminal ~is_param
   | Transpose (Transpose, sh) ->
-      Hash_set.remove unused_shapes sh.id;
+      unmark_unused sh.id;
       defaults
       @@ [
            Row_ineq
@@ -801,7 +813,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
              };
          ]
   | Transpose (Pointwise_un, sh) ->
-      Hash_set.remove unused_shapes sh.id;
+      unmark_unused sh.id;
       add_var_used_in_pointwise cur_sh.input.bcast;
       add_var_used_in_pointwise sh.input.bcast;
       defaults
@@ -826,8 +838,8 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
              };
          ]
   | Broadcast (Compose, sh1, sh2) ->
-      Hash_set.remove unused_shapes sh1.id;
-      Hash_set.remove unused_shapes sh2.id;
+      unmark_unused sh1.id;
+      unmark_unused sh2.id;
       add_var_used_in_spec_or_compose sh1.input.bcast;
       defaults
       @@ [
@@ -872,8 +884,8 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
              };
          ]
   | Broadcast (Pointwise_bin, sh1, sh2) ->
-      Hash_set.remove unused_shapes sh1.id;
-      Hash_set.remove unused_shapes sh2.id;
+      unmark_unused sh1.id;
+      unmark_unused sh2.id;
       add_var_used_in_pointwise cur_sh.input.bcast;
       add_var_used_in_pointwise sh1.input.bcast;
       add_var_used_in_pointwise sh2.input.bcast;
@@ -917,9 +929,9 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
              };
          ]
   | Broadcast_tern (Compose_accumulate, sh1, sh2, sh3) ->
-      Hash_set.remove unused_shapes sh1.id;
-      Hash_set.remove unused_shapes sh2.id;
-      Hash_set.remove unused_shapes sh3.id;
+      unmark_unused sh1.id;
+      unmark_unused sh2.id;
+      unmark_unused sh3.id;
       add_var_used_in_spec_or_compose sh1.input.bcast;
       defaults
       @@ [
@@ -982,9 +994,9 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
              };
          ]
   | Broadcast_tern (Pointwise_tern, sh1, sh2, sh3) ->
-      Hash_set.remove unused_shapes sh1.id;
-      Hash_set.remove unused_shapes sh2.id;
-      Hash_set.remove unused_shapes sh3.id;
+      unmark_unused sh1.id;
+      unmark_unused sh2.id;
+      unmark_unused sh3.id;
       add_var_used_in_pointwise cur_sh.input.bcast;
       add_var_used_in_pointwise sh1.input.bcast;
       add_var_used_in_pointwise sh2.input.bcast;
@@ -1060,7 +1072,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                ^ " is used as a symbolic dimension extent and cannot also slice a batch axis",
                [] );
       Row.claim_symbol_role slice_sym `Slice;
-      Hash_set.remove unused_shapes sh.id;
+      unmark_unused sh.id;
       let slice_v = get_var () in
       let slice_var = Var slice_v in
       let proj_axis_env =
@@ -1113,7 +1125,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
             Row_eq { r1 = cur_sh.output; r2 = sh.output; origin = get_origin `Output };
           ] )
   | Transpose (Permute (spec, dim_refs), sh) ->
-      Hash_set.remove unused_shapes sh.id;
+      unmark_unused sh.id;
       add_var_used_in_spec_or_compose cur_sh.input.bcast;
       add_var_used_in_spec_or_compose sh.input.bcast;
       let ls_rhs, ls_lhs =
@@ -1291,8 +1303,8 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
              };
          ]
   | Broadcast (Einsum (spec, dim_refs), sh1, sh2) ->
-      Hash_set.remove unused_shapes sh1.id;
-      Hash_set.remove unused_shapes sh2.id;
+      unmark_unused sh1.id;
+      unmark_unused sh2.id;
       add_var_used_in_spec_or_compose cur_sh.input.bcast;
       add_var_used_in_spec_or_compose sh1.input.bcast;
       add_var_used_in_spec_or_compose sh2.input.bcast;
@@ -1314,7 +1326,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
       in
       (proj_env, dim_var_set_empty, inequalities)
   | Block { spec; delayed_vars; rhses } ->
-      List.iter rhses ~f:(fun sh -> Hash_set.remove unused_shapes sh.id);
+      List.iter rhses ~f:(fun sh -> unmark_unused sh.id);
       add_var_used_in_spec_or_compose cur_sh.input.bcast;
       List.iter rhses ~f:(fun sh -> add_var_used_in_spec_or_compose sh.input.bcast);
       let ls_rhses, ls_lhs =
@@ -1347,9 +1359,9 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
       let discardable_vars = Set.union discardable_from_rhs discardable_from_lhs in
       (proj_env, discardable_vars, inequalities)
   | Broadcast_tern (Einsum_tern (spec, dim_refs), sh1, sh2, sh3) ->
-      Hash_set.remove unused_shapes sh1.id;
-      Hash_set.remove unused_shapes sh2.id;
-      Hash_set.remove unused_shapes sh3.id;
+      unmark_unused sh1.id;
+      unmark_unused sh2.id;
+      unmark_unused sh3.id;
       add_var_used_in_spec_or_compose cur_sh.input.bcast;
       add_var_used_in_spec_or_compose sh1.input.bcast;
       add_var_used_in_spec_or_compose sh2.input.bcast;
@@ -1527,8 +1539,8 @@ let set_padding_elem (sh : t) v =
   sh.padding_elem <- v
 
 let infer_equal (sh1 : t) (sh2 : t) =
-  Hash_set.remove unused_shapes sh1.id;
-  Hash_set.remove unused_shapes sh2.id;
+  unmark_unused sh1.id;
+  unmark_unused sh2.id;
   let get_origin kind =
     [
       Row.
@@ -2089,7 +2101,7 @@ let set_scale ~factor delayed_ref_large delayed_ref_small =
             assert false)
 
 let set_terminal ~is_param (sh : t) =
-  Hash_set.add unused_shapes sh.id;
+  mark_unused sh.id;
   let get_origin kind =
     Row.
       {
@@ -2368,10 +2380,25 @@ let merge_dealiased_padding copies =
                Ir.Ops.{ left = max a.left b.left; right = max a.right b.right }))
   in
   List.iter copies ~f:(fun (copy, orig) ->
-      orig.batch_padding <- merge orig.batch_padding copy.batch_padding;
-      orig.input_padding <- merge orig.input_padding copy.input_padding;
-      orig.output_padding <- merge orig.output_padding copy.output_padding;
-      if Option.is_none orig.padding_elem then orig.padding_elem <- copy.padding_elem)
+      let batch = merge orig.batch_padding copy.batch_padding in
+      let input = merge orig.input_padding copy.input_padding in
+      let output = merge orig.output_padding copy.output_padding in
+      (* The closed-shape guard (gh-ocannl-1301): the copy carries [closed] and was guarded itself,
+         so on a closed original these merges are equal; checked anyway, before writing. *)
+      List.iter
+        [
+          ("batch padding", orig.batch_padding, batch);
+          ("input padding", orig.input_padding, input);
+          ("output padding", orig.output_padding, output);
+        ]
+        ~f:(fun (field, old_p, new_p) ->
+          if orig.closed && not (equal_padding old_p new_p) then
+            closed_write_error orig ~field ~old_s:(padding_string old_p)
+              ~new_s:(padding_string new_p));
+      orig.batch_padding <- batch;
+      orig.input_padding <- input;
+      orig.output_padding <- output;
+      if Option.is_none orig.padding_elem then set_padding_elem orig copy.padding_elem)
 
 (** Computes the indexing into subtensors given the shape information of a tensor.
     [derive_projections] should only be invoked when the shapes are fully inferred already! Sets
