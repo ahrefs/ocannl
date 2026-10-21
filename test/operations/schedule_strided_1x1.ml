@@ -9,22 +9,22 @@
    compared here against the unscheduled form, in the style of [schedule_conv_gemm]'s strided legs
    ([cvs2], [cvs2b]).
 
-   Where the stride lands, pinned below from the lowered access maps: NOT on a tiled role. The
-   matmul classifier gives a role only to an axis the operand reads at unit coefficient
-   ([Sketch_families.unit_axis]), so the stride-2 axes [oh, ow] become the site's interior batch
-   loops ([m_bi]), which the pipelines hoist and iterate but never tile or pack along, and the GEMM
-   row is the batch axis. The packing copies [row x k] tiles at a fixed strided spatial position.
-   The executed claims cover that addressing; the structural claims say why no tile row is strided,
-   and a unit-stride control shows the reason predicate discriminates (there the row is [ow]).
+   Where the stride lands, pinned below from the lowered access maps. The GEMM row has two
+   candidates: the batch axis [b], which the input is read at unit coefficient along
+   ([Sketch_families.unit_axis]), and the minor stride-2 output axis [ow]. The classifier chooses by
+   extent (gh-ocannl-1397): [ow] owns the row where it is strictly taller than [b], or where there
+   is no [b] at all (a batch of one, gh-ocannl-1148, where until then no sketch family seeded the
+   site); a tie keeps [b].
 
-   A batch of one leaves no unit-stride output axis for the row, and until gh-ocannl-1148 no sketch
-   family seeded the site at all. Now the strided window owns the row there ([m_row_stride = 2], the
-   minor output axis [ow]), and every pipeline packs A through a compacting [Stage]
-   ({!Ir.Schedule.stage_compaction_factor}): the tile is dense, stored and read at the row's
-   quotient, and only the load keeps the stride. The family tree refutes the geometries that would
-   read A in place or pack it at link time, so the batch-one legs claim what the batch-two legs do:
-   both flavors seed, every seed runs and matches, and the tensorized ones render tensorized. A
-   unit-stride row is still preferred wherever one exists, so the batch-two legs keep their roles.
+   With the batch row, the stride-2 axes [oh, ow] are the site's interior batch loops ([m_bi]),
+   which the pipelines hoist and iterate but never tile or pack along: the packing copies [row x k]
+   tiles at a fixed strided spatial position. With the strided row ([m_row_stride = 2]), every
+   pipeline packs A through a compacting [Stage] ({!Ir.Schedule.stage_compaction_factor}): the tile
+   is dense, stored and read at the row's quotient, and only the load keeps the stride. The family
+   tree refutes the geometries that would read A in place or pack it at link time. Either way the
+   legs claim the same things: both flavors seed, every seed runs and matches, and the tensorized
+   ones render tensorized. A unit-stride control shows the batch-row predicate discriminates (there
+   the row is [ow], read at unit stride).
 
    The producers discriminate: every operand cell is a small positive integer varying with each of
    its indices ([Ll_test.weighted], distinct weights, none a multiple of the modulus), so every
@@ -453,8 +453,19 @@ let probe ~tag s =
               Stdio.eprintf "  %s segment%s: %s\n%!" tag (if fine then " (fine)" else "") (show q))));
   o
 
-(* Why no tile row is strided: the stride-2 symbols are exactly the site's interior batch loops, and
-   the GEMM row is an output axis the input reads at unit stride. *)
+(* A site loop's extent: the row's, or a batch loop's. *)
+let extent (m : Autotune.matmul_site) sym =
+  if Idx.equal_symbol sym m.Autotune.m_i then Some m.Autotune.m_ni
+  else List.Assoc.find (m.Autotune.m_bo @ m.Autotune.m_bi) ~equal:Idx.equal_symbol sym
+
+(* The tallest of [syms] as site loops, [0] for none; [None] when one of them is no site loop. *)
+let tallest m syms =
+  let ns = List.filter_map syms ~f:(extent m) in
+  Option.some_if (List.length ns = List.length syms) (List.fold ns ~init:0 ~f:Int.max)
+
+(* The batch row: the stride-2 symbols are exactly the site's interior batch loops, the GEMM row is
+   an output axis the input reads at unit stride, and no stride-2 axis is taller than it (the extent
+   rule, gh-ocannl-1397: a tie keeps the unit-stride row). *)
 let stride_on_batch_loops o =
   match (o.site, strided_syms o.in_map) with
   | None, _ | _, [] -> false
@@ -464,10 +475,12 @@ let stride_on_batch_loops o =
       && List.mem
            (unit_out_syms ~in_map:o.in_map ~out_map:o.out_map)
            m.Autotune.m_i ~equal:Idx.equal_symbol
+      && Option.value_map (tallest m strided) ~default:false ~f:(fun n -> n <= m.Autotune.m_ni)
 
-(* gh-ocannl-1148, where no output axis is read at unit stride: the GEMM row is the minor stride-2
-   output axis (so no interior batch loop sits between the roles), with the site's stride
-   recorded. *)
+(* The strided row: the GEMM row is the minor stride-2 output axis (so no interior batch loop sits
+   between the roles), with the site's stride recorded, and it is strictly taller than every output
+   axis the input reads at unit stride (none at a batch of one, gh-ocannl-1148; the batch axis at
+   batch 2-8, gh-ocannl-1397). *)
 let stride_on_row o =
   match (o.site, strided_syms o.in_map) with
   | None, _ | _, [] -> false
@@ -475,6 +488,10 @@ let stride_on_row o =
       m.Autotune.m_row_stride = 2
       && List.mem strided m.Autotune.m_i ~equal:Idx.equal_symbol
       && m.Autotune.m_row_axis = Array.length o.out_map - 2
+      && Option.value_map
+           (tallest m (unit_out_syms ~in_map:o.in_map ~out_map:o.out_map))
+           ~default:false
+           ~f:(fun n -> n < m.Autotune.m_ni)
 
 (* The seeder's own judgment of a tensorized pipeline for the site's operands on this backend
    ([Ll_test.tensorized_capability], gh-ocannl-1115): the register tiling on the C backends, an
@@ -501,8 +518,11 @@ let rendered name q census =
 (* The structural claim a leg makes about where the stride lands. *)
 let structure_claim = function
   | `Batch ->
-      "a matmul site whose stride-2 axes are its interior batch loops, the row read at unit stride"
-  | `Strided -> "a matmul site whose row is the minor output axis, read at stride 2"
+      "a matmul site whose stride-2 axes are its interior batch loops, the row read at unit stride \
+       and at least as tall as each of them"
+  | `Strided ->
+      "a matmul site whose row is the minor output axis, read at stride 2 and strictly taller than \
+       every output axis read at unit stride"
 
 let leg ?(declines = false) ?(row = `Batch) ~what ~tag s =
   let o = probe ~tag s in
@@ -752,14 +772,19 @@ let f16_leg ~row ~what ~tag s =
 let () =
   let f32 = Ir.Ops.single in
   let run_leg ?declines ?row ~what ~tag s = ignore (leg ?declines ?row ~what ~tag s : probed) in
-  run_leg ~what:"k11s witness" ~tag:"s11w"
+  (* At batch 2 the strided row [ow] (4 and 16 tall here, 8 in the block below) is taller than the
+     batch row, so it owns the GEMM row (gh-ocannl-1397). *)
+  run_leg ~row:`Strided ~what:"k11s witness" ~tag:"s11w"
     { prec = f32; b = 2; h = 7; w = 7; ic = 4; oc = 8; stride = 2; build = `Einsum valid };
-  run_leg ~what:"downsample einsum f32" ~tag:"s11r"
+  run_leg ~row:`Strided ~what:"downsample einsum f32" ~tag:"s11r"
     { prec = f32; b = 2; h = 16; w = 32; ic = 16; oc = 16; stride = 2; build = `Einsum padded };
+  (* The tie: at batch 8 over an 8-wide strided row the batch axis keeps the row. *)
+  run_leg ~what:"downsample einsum f32, batch as tall as the row" ~tag:"s11t"
+    { prec = f32; b = 8; h = 8; w = 16; ic = 16; oc = 16; stride = 2; build = `Einsum padded };
   (* The production construction — the whole block, main branch included — at a ResNet downsample's
      channel width. (At 16 channels the shortcut's conv output is virtualized instead, inlined as a
      local dot product into each of its batch norm's three consumers, and no family sees a site.) *)
-  run_leg ~declines:true ~what:"resnet block" ~tag:"s11d"
+  run_leg ~declines:true ~row:`Strided ~what:"resnet block" ~tag:"s11d"
     { prec = f32; b = 2; h = 8; w = 16; ic = 64; oc = 64; stride = 2; build = `Resnet_block };
   (* The unit-stride control: the row is [ow], and the predicate above is false. *)
   (let o =
@@ -790,12 +815,23 @@ let () =
      divides, so the staged pipelines pad it and the compacted tile's edge guards hold. *)
   run_leg ~row:`Strided ~what:"batch of one, valid 7x7" ~tag:"s11v"
     { prec = f32; b = 1; h = 7; w = 7; ic = 4; oc = 8; stride = 2; build = `Einsum valid };
-  f16_leg ~row:`Batch ~what:"downsample einsum f16" ~tag:"s11h"
+  f16_leg ~row:`Strided ~what:"downsample einsum f16" ~tag:"s11h"
     {
       prec = Ir.Ops.half;
       b = 2;
       h = 16;
       w = 32;
+      ic = 16;
+      oc = 16;
+      stride = 2;
+      build = `Einsum padded;
+    };
+  f16_leg ~row:`Batch ~what:"downsample einsum f16, batch as tall as the row" ~tag:"s11u"
+    {
+      prec = Ir.Ops.half;
+      b = 8;
+      h = 8;
+      w = 16;
       ic = 16;
       oc = 16;
       stride = 2;

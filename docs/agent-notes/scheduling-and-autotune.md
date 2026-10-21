@@ -462,26 +462,30 @@ files.
   that "is not detected" usually has a singleton somewhere — keep every axis at extent >= 2 unless
   the singleton is the point. `test/operations/conv_detection_boundary` pins each class with its
   reason, derived from the lowered maps.
-- **A strided 1x1 conv's GEMM row is the batch axis wherever there is one** (gh-ocannl-1076,
-  gh-ocannl-1148): `classify_matmul` prefers a row the A operand reads at unit coefficient
-  (`Sketch_families.unit_axis`), so a stride-2 1x1 conv (`resnet_block`'s downsample) at batch 2+
-  rows on `b`, with `oh, ow` as interior batch loops (`m_bi`), and every seed stages dense tiles
-  from a strided source address. Only where no unit-stride row exists (batch 1) does the strided
-  window own the row (`m_row_stride = 2`, row `ow`); then every pipeline must pack A through a
+- **A strided 1x1 conv's GEMM row is the taller of `b` and `ow`** (gh-ocannl-1076, gh-ocannl-1148,
+  gh-ocannl-1397): `classify_matmul` has two row candidates, the deepest write loop A reads at unit
+  coefficient (`Sketch_families.unit_axis`; the batch axis of a stride-2 1x1 conv) and the deepest
+  one it reads as a single strided term (`ow`), and picks the strided one where no unit candidate
+  exists (batch 1) or where it is strictly taller (batch 2-8 under a 16-wide `ow`); a tie keeps the
+  unit row. With the batch row (cifar_resnet's b64), `oh, ow` are interior batch loops (`m_bi`) and
+  every seed stages dense tiles from a strided source address. With the strided row
+  (`m_row_stride = 2`, the batch axis and `oh` in `m_bo`) every pipeline must pack A through a
   compacting `Stage` (`Schedule.stage_compaction_factor`: the gcd of the tile part's
   coefficients, so the blocktile's twice-split row `2*tm*i_w + 2*i_t` compacts too), and the
   family tree refutes the shapes that read A in place (unstaged full-K mma, whole-triple,
   hoisted-grid) or pack it at link time (`site_hoistable`: hoisted staging refuses compaction).
-  At batch 2+ the row stays `b` rows tall even though `ow` would be a taller one; that preference
-  is what kept every pre-existing site's seeds unchanged. Inside the full block (at 64 channels;
-  at 16 the shortcut's conv is virtualized into its norm and is no site) cc does not fission it,
-  so its whole-routine seeds are the shortcut's only sketches there; GPU fissions it and the
-  segment's seeds run. `test/operations/schedule_strided_1x1` uses the public `resnet_block`
-  with explicit `out_channels` (gh-ocannl-1146) and PINS the role structure at both batch sizes
-  and every seed's parity (or typed decline, in the block, except cc's whole-routine seeds, which
-  must run); which seeds decline where it only reports on stderr, and the 16-channel
-  virtualization is a manual observation (conv2d into batch_norm2d, 16 channels) that no test
-  exercises.
+  A short batch row divides few block sizes: before the extent rule cifar_resnet's stage-2
+  shortcut at batch 2 seeded one whole-routine geometry on cc, three with the strided row. Inside the full block (at 64 channels; at 16 the shortcut's conv is virtualized
+  into its norm and is no site) cc does not fission it, so its whole-routine seeds are the
+  shortcut's only sketches there; GPU fissions it and the segment's seeds run.
+  `test/operations/schedule_strided_1x1` uses the public `resnet_block` with explicit
+  `out_channels` (gh-ocannl-1146) and PINS the role structure on both sides of the extent rule
+  (batch 1 and 2: strided; batch 8 over an 8-wide row: the tie, batch) and every seed's parity
+  (or typed decline, in the block, except cc's whole-routine seeds, which must run); which seeds
+  decline where it only reports on stderr, and the 16-channel virtualization is a manual
+  observation (conv2d into batch_norm2d, 16 channels) that no test exercises.
+  `benchmarks/runners/ocannl/bench_strided_1x1` times the site alone (roles, seed count, untuned
+  and tuned arms, exact oracle), a build on each side of a classifier change making the A/B.
 - **`Stage` stages only the reads that vary with its tile loops** (gh-ocannl-1147). A whole-routine
   matmul seed stages its A operand while another nest reads the same node at another index vector
   (the 3x3 conv or max pool beside a strided 1x1 shortcut, the K and V projections beside Q).
