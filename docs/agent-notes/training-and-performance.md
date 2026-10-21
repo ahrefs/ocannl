@@ -297,14 +297,14 @@ files.
   while the in-step medians moved under 5%: on a shared box an isolated HIP window is as exposed
   to a co-tenant as CUDA's (above).
 - **kprof joins across builds by written nodes, not trace names** (gh-ocannl-1444). Repeats of one
-  build trace identical `<routine>__seg<j>` names (every repeat pair of #1202's, #1206's and
-  #1229's rog traces), but `j` shifts at every segment a change adds or merges before it: on
-  #1413's base/keep tables 223 of 231 joined kernels had moved index. `stable_key` keys a kernel on
-  the nodes it writes minus the `<namespace>__n<id>` staging nodes the schedule mints (their ids
-  drift with any earlier site's staging); that joined 231 of 235 kernels, the four left over being
-  exactly #1413's score chain. The `amdgpu` sysfs clock reads 0 MHz at 99% busy on tuf (gfxoff
-  between bursts) and samples only every 250 ms, so its line is a coarse reading, not a
-  per-kernel clock.
+  build trace identical `<routine>__seg<j>` names (every repeat pair of staging#1202's,
+  staging#1206's and staging#1229's rog traces), but `j` shifts at every segment a change adds or
+  merges before it: on gh-ocannl-1413's base/keep tables 223 of 231 joined kernels had moved index.
+  `stable_key` keys a kernel on the nodes it writes minus the `<namespace>__n<id>` staging nodes the
+  schedule mints (their ids drift with any earlier site's staging); that joined 231 of 235 kernels,
+  the four left over being exactly gh-ocannl-1413's score chain. The `amdgpu` sysfs clock reads 0
+  MHz at 99% busy on tuf (gfxoff between bursts) and samples only every 250 ms, so its line is a
+  coarse reading, not a per-kernel clock.
 - That digest covers the compiled result, NOT the diagnostics. When re-measuring a search's
   decline census after changing only an error message or a log line, `rm benchmarks/autotune_cache/*.sexp`
   first — otherwise the second run reports `state=cache-replay`, `timed=0`, `declines=[]` and every
