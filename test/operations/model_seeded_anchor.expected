@@ -5,4 +5,4 @@ on CUDA/HIP model_default's pick is no fallback to the default pipeline: true
 on CUDA/HIP the pick is the seeded plan, or ranks strictly below its walk's anchor (no tie): true
 on CUDA/HIP the picked routine computes bitwise what the seeded plan's does: true
 on CUDA/HIP the outputs are not trivially zero: true
-off CUDA/HIP the explanation lists candidates and anchors none: true
+off CUDA/HIP the explanation lists candidates, none of them an anchor: true

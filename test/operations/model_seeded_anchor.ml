@@ -267,6 +267,6 @@ let () =
       x.Autotune.x_routine
       @ List.concat_map x.Autotune.x_segments ~f:(fun xs -> xs.Autotune.xs_candidates)
   in
-  gated ~when_:(not seeds_here) ~on:backend_name
-    "off CUDA/HIP the explanation lists candidates and anchors none"
-    ((not (List.is_empty unseeded)) && List.is_empty (anchors unseeded))
+  gated_all ~when_:(not seeds_here) ~on:backend_name
+    "off CUDA/HIP the explanation lists candidates, none of them an anchor" unseeded
+    ~f:(fun (_, ex) -> not ex.Autotune.ex_anchor)
