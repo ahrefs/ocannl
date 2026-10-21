@@ -461,8 +461,13 @@ def run(args):
 # ---------------------------------------------------------------------------------------------
 # Summaries
 
-KERNEL = re.compile(r"^bench: kernel (\d+)/(\d+) ([0-9.]+) ms grid=\[([0-9;]+)\] block=\[([0-9;]+)\] "
-                    r"mma:(.*?) (?:vol:.*?)?w: (.*)$")
+# The kernel table's row (Bench_harness.time_shipped_kernels). `io:<read>/<written>` (bytes, by the
+# cost model; a `~` marks an upper bound, a `?` code the model cannot see) is gh-ocannl-1444's and
+# absent from older rows; the groups are named so that a field added to the row renumbers nothing.
+KERNEL = re.compile(r"^bench: kernel (?P<i>\d+)/(?P<n>\d+) (?P<ms>[0-9.]+) ms "
+                    r"grid=\[(?P<grid>[0-9;]+)\] block=\[(?P<block>[0-9;]+)\] "
+                    r"(?:io:(?P<read>\d+)/(?P<written>\d+)(?P<io_flags>[~?]*) )?"
+                    r"mma:(?P<mma>.*?) (?:vol:.*?)?w: (?P<writes>.*)$")
 
 
 def kernels(base):
@@ -473,9 +478,9 @@ def kernels(base):
         for line in open(str(base) + ".err"):
             m = KERNEL.match(line.rstrip("\n"))
             if m:
-                totals.add(int(m.group(2)))
-                ks.append({"i": int(m.group(1)), "ms": float(m.group(3)), "grid": m.group(4),
-                           "block": m.group(5), "w": m.group(7).split()})
+                totals.add(int(m["n"]))
+                ks.append({"i": int(m["i"]), "ms": float(m["ms"]), "grid": m["grid"],
+                           "block": m["block"], "w": m["writes"].split()})
     except OSError:
         return None
     if len(totals) != 1 or [k["i"] for k in ks] != list(range(next(iter(totals)))):

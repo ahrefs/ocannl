@@ -1175,6 +1175,16 @@ let segment_geometry seg =
   let dims a = String.concat_array ~sep:";" (Array.map a ~f:Int.to_string) in
   Printf.sprintf "grid=[%s] block=[%s]" (dims d.grid) (dims d.block)
 
+(** A segment's global-memory traffic by the cost model ({!Ir.Cost_model.analyze}, gh-ocannl-1444):
+    [io:<read>/<written>] bytes, the distinct cells each node's accesses touch times its element
+    size. A trailing [~] marks a footprint that is an upper bound (an approximate access image), a
+    trailing [?] code the model cannot see (an [opaque] kernel, whose counts may under-count). *)
+let segment_io seg =
+  let s = Ir.Cost_model.analyze seg.Ir.Low_level.llc in
+  Printf.sprintf "io:%d/%d%s%s" s.Ir.Cost_model.read_bytes s.Ir.Cost_model.write_bytes
+    (if Ir.Cost_model.footprint_approximate s then "~" else "")
+    (if s.Ir.Cost_model.opaque then "?" else "")
+
 (** Diagnostic census of the segments actually compiled, including gradient zeroing, backward and
     optimizer kernels for a training step. IDs match {!time_shipped_segments}. *)
 let print_shipped_census ?(out = Stdio.stdout) routines =
@@ -1221,8 +1231,8 @@ let time_shipped_kernels ?out ?(repeats = 20) ?(stop = fun () -> false)
             Stdio.Out_channel.fprintf out "bench: kernel %d/%d %s DECLINED (%s) w: %s\n" i n
               (segment_geometry seg) detail ws
         | Ok (ms, routine) ->
-            Stdio.Out_channel.fprintf out "bench: kernel %d/%d %.4f ms %s mma:%s vol:%s w: %s\n" i n
-              ms (segment_geometry seg)
+            Stdio.Out_channel.fprintf out "bench: kernel %d/%d %.4f ms %s %s mma:%s vol:%s w: %s\n"
+              i n ms (segment_geometry seg) (segment_io seg)
               (Ir.C_syntax.mma_summary_string routine.Context.mma)
               (Ir.C_syntax.volatility_summary_string routine.Context.volatility)
               ws);
