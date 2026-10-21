@@ -295,8 +295,8 @@ let dynamic reason = Verdict.fail reason
       eprintf
         "%s: `raw_direct_evidence` or `raw_catalogue_only` key answers to no current \
          direct-failure diagnostic of its source; re-key it from the row difference above \
-         (tools/refusal-manifest-sync.sh does where the rewording pairs it) or drop it (not part of \
-         the golden)\n"
+         (tools/refusal-manifest-sync.sh does where the rewording pairs it) or drop it (not part \
+         of the golden)\n"
         (Option.value (String.chop_prefix key ~prefix:"test/operations/") ~default:key));
   Verdict.p_empty
     "every `raw_direct_evidence` and `raw_catalogue_only` key names a current direct failure of a \

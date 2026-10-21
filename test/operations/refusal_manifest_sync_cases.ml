@@ -164,7 +164,8 @@ let () =
           ())
     = 1);
   let same_words =
-    String.substr_replace_first before ~pattern:"Verdict.fail \"the second refusal reads the old way\""
+    String.substr_replace_first before
+      ~pattern:"Verdict.fail \"the second refusal reads the old way\""
       ~with_:"Verdict.p \"the second refusal reads the old way\" ok"
   in
   p "a direct failure turned into a claim of the same words leaves its key unresolved"
