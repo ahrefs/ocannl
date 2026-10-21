@@ -104,3 +104,32 @@ ck_hje: the site is a multi-axis contraction: true
 ck_hje: the contraction prefix declines on the weight storing the pair apart: true
 ck_hje: the ordinary family still seeds the site: true
 ck_hje: the branch offers no contraction seed: true
+ckt: every tensorized contraction seed is staged: true
+ckt: a tensorized contraction seed's k-tile crosses heads (bk > e = 16): true
+ckt: no tensorized contraction seed is deeper than the merged K = 64: true
+ckt: the uncoalesced family's staged tensorized tiles stay within one head: true
+ckt: every tensorized contraction schedule constructs and validates: true
+ckt: every tensorized contraction schedule loads both operands through the flattened address: true
+ckt: the unstaged form behind the contraction prefix is declined by Tensorize on Sub_axis: true
+ckt_f32: no cell of the serial reference is zero: true
+ckt_f32: the device seeds a tensorized contraction tile crossing heads: true
+ckt_f32: every tensorized contraction seed executes to the serial reference bitwise: true
+ckt_f32: every tensorized contraction seed renders tensorized per its mma census: true
+ckt_f16: no cell of the serial reference is zero: true
+ckt_f16: the device seeds a tensorized contraction tile crossing heads: true
+ckt_f16: every tensorized contraction seed executes to the serial reference bitwise: true
+ckt_f16: every tensorized contraction seed renders tensorized per its mma census: true
+ckf: the relu discriminates: the reference has positive and zero cells: true
+ckf: every fused scalar contraction twin applies and validates: true
+ckf: every fused scalar contraction twin drops the tail statement its unfused sibling keeps: true
+ckf: every fused scalar contraction twin executes to the reference bitwise: true
+ckf: every fused tensorized contraction twin executes to the reference bitwise: true
+ckf: every fused tensorized contraction twin renders tensorized per its mma census: true
+ckf_odd: the relu discriminates: the reference has positive and zero cells: true
+ckf_odd: every fused scalar contraction twin applies and validates: true
+ckf_odd: every fused scalar contraction twin drops the tail statement its unfused sibling keeps: true
+ckf_odd: every fused scalar contraction twin executes to the reference bitwise: true
+ckf_odd: every fused tensorized contraction twin executes to the reference bitwise: true
+ckf_odd: every fused tensorized contraction twin renders tensorized per its mma census: true
+ckm: 32 KiB refutes the padded 32x32x128 tensorized seed (operand tiles plus fragment): true
+ckm: 36 KiB admits the padded 32x32x128 tensorized seed: true

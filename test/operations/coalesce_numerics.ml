@@ -99,8 +99,21 @@ let leg ~tag ~layout cand reversed =
   p_exists (Printf.sprintf "%s: the family offers a scalar blocktile seed" tag) family ~f:(fun _ ->
       true);
   p_exists (Printf.sprintf "%s: the %s layout offers seeds" tag lt) coalesced ~f:(fun _ -> true);
-  p_all (Printf.sprintf "%s: every %s seed is a scalar blocktile but for its coalescing" tag lt)
-    coalesced ~f:(fun q -> Autotune.scalar_blocktile { q with Autotune.sk_coalesce = None });
+  (* The columns layout seeds scalar blocktile leaves only. The contraction layout also seeds staged
+     tensorized leaves and fused twins (gh-ocannl-1459), which reround or relocate the tail by
+     design and are pinned in schedule_coalesce; the question here is the scalar leaves'. *)
+  let scalar =
+    List.filter coalesced ~f:(fun q ->
+        Autotune.scalar_blocktile { q with Autotune.sk_coalesce = None })
+  in
+  (match layout with
+  | Autotune.Coalesce_columns ->
+      p_all (Printf.sprintf "%s: every %s seed is a scalar blocktile but for its coalescing" tag lt)
+        coalesced ~f:(fun q -> Autotune.scalar_blocktile { q with Autotune.sk_coalesce = None })
+  | Autotune.Coalesce_contraction ->
+      p_exists
+        (Printf.sprintf "%s: the %s layout offers a scalar blocktile seed but for its coalescing"
+           tag lt) scalar ~f:(fun _ -> true));
   let run q =
     run_with fwd cand (fun o -> Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q o) o)
   in
@@ -142,8 +155,8 @@ let leg ~tag ~layout cand reversed =
       "coalesce_numerics: %s: the serial reference %s the family (not part of the golden)\n%!" tag
       (if Array.equal Float.equal (run_with fwd cand Fn.id) want then "matches" else "differs from");
   gated_all ~when_:on_gpu ~on:backend_name
-    (Printf.sprintf "%s: every %s seed computes the family's values bitwise" tag lt) coalesced
-    ~f:(fun q ->
+    (Printf.sprintf "%s: every scalar blocktile %s seed computes the family's values bitwise" tag lt)
+    scalar ~f:(fun q ->
       match run q with
       | got ->
           let ok = Array.equal Float.equal got want in
