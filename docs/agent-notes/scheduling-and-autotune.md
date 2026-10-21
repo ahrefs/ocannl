@@ -1225,6 +1225,19 @@ files.
   timed the search stores no cache entry and returns the untuned default compile rather than the
   serial incumbent. On CPU backends the serial form runs at full single-core speed and is still
   timed. When timing anything else through this seam, price the serial form before dispatching it.
+- **What a search refuses or dedups costs no codegen** (gh-ocannl-1340): `compile_candidate_gated`
+  decides both verdicts inside the lowered transform, on the forms it is about to return (the
+  digest is already computed there, before codegen forces placements), and unwinds with a typed
+  `Not_dispatched` cause; the base compile does the same with origin `"baseline"`. Before, the
+  never-dispatched GPU baseline cost 303 s of hiprtc per arm on gfx1102 and `W_preset[bs=cfg]`
+  relinked the base's digest. The callers keep a post-codegen check, on the routine's SHIPPED
+  segments (`shipped_dispatchable`, `routine.segments`), since zero-only segments are elided
+  after the transform. Consequence: on GPU `baseline_declined` is always false (the gh-533 scratch
+  decline is unreachable there, `hip_scratch_tune_survives` is vacuous), and a refused replay
+  reports `cache_replay_refusal = Not_dispatched "cache_replay"`. To assert "no compile was
+  paid for and thrown away", charge each `on_candidate_attempt` the `Link_after_delta` hits and
+  `on_candidate_preflight` runs that follow it, under `tune_deferred` so the shipping compile falls
+  after the report (`autotune_serial_baseline`).
 - The base compile staying unscheduled is a settled decision, not an oversight (gh-ocannl-552): the
   default pipeline is `maybe_default_schedules` — fission then per-segment annotation, so several
   kernels in general, not one `optimized` to rebase candidates on; every candidate family assumes
