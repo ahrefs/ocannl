@@ -1773,6 +1773,7 @@ val model_prefilter : keep_fraction:float -> ('a * float option) list -> ('a * f
     [keep_fraction >= 1]. Exposed for tests. *)
 
 val placement_enablement :
+  is_gpu:bool ->
   limits:Ir.Backend_intf.hardware_limits ->
   static_indices:Ir.Indexing.static_symbol list ->
   base:Ir.Low_level.optimized ->
@@ -1786,8 +1787,9 @@ val placement_enablement :
 
     - [enablement]: operand/destination nodes of an mma-eligible matmul site (the backend advertises
       a format tile and the wide-f16 policy's required scope for the site's unstaged form,
-      whole-routine or per-fission-segment — the granularity the seeders detect at) that exists in
-      the all-materialized lowering but has no eligible counterpart under default placements.
+      whole-routine or per-fission-segment — the granularity the seeders detect at, segmented as the
+      seeders of a GPU ([is_gpu]) or a CPU backend segment, gh-ocannl-1430) that exists in the
+      all-materialized lowering but has no eligible counterpart under default placements.
       Materializing such a node is what makes the tensorized family expressible — the flip changes
       the feasible set, not just the objective, which the per-node recompute-cost bound has no term
       for (on gh-558's [mlp_wide]/hip/bf16, cost ranking buried the family-unlocking cast twins
@@ -2123,6 +2125,12 @@ val model_operand_loads :
     count {!model_family_search} breaks exact ties with and {!model_explain} reports
     (gh-ocannl-1254): [Undescribed] where the backend describes no arm for some statement (every
     backend but CUDA). The walk keys only [Loads]. *)
+
+val scalar_blocktile : sketch_params -> bool
+(** The numerics-preserving candidate set the seeded untuned default draws from and
+    {!model_default}'s family search is restricted to where it starts from the seeded plan
+    (gh-ocannl-1324, gh-ocannl-1253): the unfused GPU scalar blocktile with no twin flavor. Exposed
+    for tests. *)
 
 val model_family_search :
   ?on_rejected:(unit -> unit) ->
@@ -2485,7 +2493,12 @@ type explanation = {
 }
 
 val model_explain :
-  ?name:string -> Context.t -> Ir.Assignments.comp -> Ir.Indexing.unit_bindings -> explanation
+  ?name:string ->
+  ?coalesced:bool ->
+  Context.t ->
+  Ir.Assignments.comp ->
+  Ir.Indexing.unit_bindings ->
+  explanation
 (** What {!model_default} sees of the candidates it ranks for one computation, without choosing or
     compiling (gh-ocannl-1254, the interface gh-ocannl-1269 reads): the whole-routine candidates
     and, per segment, the per-segment ones (gh-ocannl-1438), each with whether the numerics
@@ -2494,7 +2507,12 @@ val model_explain :
     apply or validate are omitted, as {!model_default} excludes them; a segment whose preset has no
     score is listed with its unscored entries, where {!model_default} skips it. Where
     {!model_default} ranks nothing — no envelope constants, or the default annotator off —
-    [x_routine] is the default pipeline alone and [x_segments] is empty. *)
+    [x_routine] is the default pipeline alone and [x_segments] is empty.
+
+    [~coalesced:true] (default [false]) appends to [x_routine] the whole-routine leaves of the
+    coalesced tuner branch ({!coalesced_seed_params}), which {!model_default} does not rank, so the
+    score's ranking of them can be checked against timings (gh-ocannl-1278). Each is marked admitted
+    exactly when its uncoalesced form would be. *)
 
 val untuned_compile :
   ?name:string ->

@@ -21,13 +21,18 @@
 #     -- …`, which env_var_deps enforces on every stanza that does not read the
 #     configuration): they hold it whatever the configuration says.
 #     `ocannl_slot_kind` (test/config, over Test_utils.Slot_kind) lists each
-#     named backend with the first stanza naming it, says whether a reached
-#     stanza reads the configuration (`reads config`), or answers unknown for
-#     an argv it does not model.
-#   - The configuration the reading stanzas read, asked only when the argv
-#     reaches one (gh-ocannl-1095): a batch reaching only stanzas that name
-#     theirs -- `@test/operations/scans`, all `none` -- holds only what they
-#     name, whatever a test configuration says. `ocannl_read_config`
+#     named backend with the first stanza naming it, says whether the
+#     configuration counts (`reads config`), or answers unknown for an argv it
+#     does not model.
+#   - The configuration, which counts for every batch but two shapes
+#     (gh-ocannl-1227): one whose targets are all on Slot_kind's short list of
+#     configuration-free aliases (`@test/operations/scans`, `@metal-codegen`),
+#     which holds only what their stanzas name, and a plain build of
+#     compilation products (`build bin/x.exe`), which runs nothing.
+#     test/operations/slot_kind_live keeps both true of the tree: no listed
+#     alias reaches a configuration reader, what compilation builds first
+#     reaches no backend, and every reader reads a configuration one of the
+#     directories below resolves (gh-ocannl-1249). `ocannl_read_config`
 #     (test/config, the same Utils resolution a test run makes: config file,
 #     environment, command line), asked from each directory whose
 #     `ocannl_config` a test can read -- test/config (copied by every test/*

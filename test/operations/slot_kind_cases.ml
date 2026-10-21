@@ -1,12 +1,14 @@
 (** What {!Test_utils.Slot_kind} says a dune argv reaches, on a fixture tree built to separate the
-    cases (gh-ocannl-1004, gh-ocannl-1066, gh-ocannl-1095): a stanza that NAMES a backend holds it
+    cases (gh-ocannl-1004, gh-ocannl-1066, gh-ocannl-1227): a stanza that NAMES a backend holds it
     whatever the configuration says, so tools/batch-backends.sh counts every backend a reachable
     marker names among the batch's -- for the fleet slot ([--cpu] only when none is a GPU) and for
-    the width (the tightest any of them meets) -- and counts the configurations' backends only when
-    a reachable stanza reads them. Every verdict below is phrased so that [true] is the passing
-    reading, and the golden records the backends each argv was judged to reach, so a change of
-    answer shows as a diff as well as a failed claim. Every tree here is a fixture; what the
-    repository's own tree answers is [slot_kind_live]'s. *)
+    the width (the tightest any of them meets) -- and counts the configurations' backends unless
+    every target is on the configuration-free alias list or a plain compilation product. Then the
+    checks that keep that list honest ({!Test_utils.Slot_kind.refusals}), each on a tree that passes
+    and one that it refuses. Every verdict below is phrased so that [true] is the passing reading,
+    and the golden records the backends each argv was judged to reach, so a change of answer shows
+    as a diff as well as a failed claim. Every tree here is a fixture; what the repository's own
+    tree answers is [slot_kind_live]'s. *)
 
 open Base
 open Stdio
@@ -24,7 +26,10 @@ module Slot_kind = Test_utils.Slot_kind
    files (bandwidth_calibration's executable -> generated [.actual] -> diff alias, an explicit file
    dependency, a [%{read:…}], a glob), [x] reaches [c]'s reader through an alias in another
    directory (plain and recursive), and [g] reaches a reader through the dependencies of a test's
-   and an inline-test library's GENERATED per-stanza aliases. *)
+   and an inline-test library's GENERATED per-stanza aliases.
+
+   And [test/operations], whose recursive [scans] is on the configuration-free list: a stanza naming
+   nothing and one naming Metal, which the list's batch still holds. *)
 let tree =
   [
     ( "a",
@@ -159,6 +164,23 @@ let tree =
   (deps ocannl_config (alias runtest-t_hip_dep))))
 |dune}
     );
+    ( "test/operations",
+      {dune|
+(test
+ ; ocannl-backend: none -- links no backend in this fixture.
+ (name s_none)
+ (deps ocannl_config))
+
+(test
+ ; ocannl-backend: metal -- names the Metal backend by name in this fixture.
+ (name s_metal)
+ (deps ocannl_config))
+
+(alias
+ (name scans)
+ (deps (alias runtest-s_none) (alias runtest-s_metal)))
+|dune}
+    );
   ]
 
 let judge ?(dune_files = tree) argv =
@@ -204,7 +226,6 @@ let cases =
     ("build --workspace=other @c/runtest", `Gpu);
     ("build --frobnicate @c/runtest", `Gpu);
     ("runtest --root /elsewhere c", `Gpu);
-    ("build ./a/t_cfg.exe", `Gpu);
     (* A build-context root is no source directory: dune runs that context's whole suite. *)
     ("build @_build/default/runtest", `Gpu);
     ("build @@_build/default/c/runtest", `Gpu);
@@ -232,35 +253,61 @@ let cases =
     ("build --instrument-with bisect_ppx @c/runtest", `Gpu);
     ("build --diff-command=cmp @c/runtest", `Gpu);
     ("exec ./x.exe", `Gpu);
+    (* A plain compilation product compiles and runs nothing -- the CUDA test's program included --
+       in either spelling, several at once, a library's archive too; a path no stanza declares (a
+       rule's output, a test's output, a product of no stanza there) is unmodelled. *)
+    ("build ./a/t_cfg.exe", `Cpu);
+    ("build a/t_cuda.exe", `Cpu);
+    ("build a/t_cfg.exe b/m.exe g/l.cmxa", `Cpu);
+    ("build a/t_cuda.bc", `Cpu);
+    ("build f/probe.actual", `Gpu);
+    ("build a/t_cfg.exe.output", `Gpu);
+    ("build a/nothere.exe", `Gpu);
+    ("build g/t_gate.cmxa", `Gpu);
+    ("build ../a/t_cfg.exe", `Gpu);
+    ("build ./../a/t_cfg.exe", `Gpu);
+    ("exec a/t_cfg.exe", `Gpu);
   ]
 
 (* The whole set, where a GPU answer's backends matter to the width: a suite reaching stanzas that
    name different GPUs holds each of them, and a marker naming several contributes each. And whether
-   the configurations count: only where a reached stanza reads them -- so a run reaching only
-   [none]-marked stanzas holds nothing at all, whatever a test configuration names (gh-ocannl-1095),
-   and neither does a subcommand that runs no test. *)
+   the configurations count: unless every target is on the configuration-free list -- the recursive
+   [@test/operations/scans] here, so not a [scans] in another directory, nor the same alias without
+   its recursion -- or a plain compilation product (gh-ocannl-1227). A run reaching only
+   [none]-marked stanzas counts them all the same, the state before gh-ocannl-1095. *)
 let sets =
   [
     ("runtest a", "names cuda,cc,hip + reads config");
     ("runtest", "names cuda,cc,hip,metal + reads config");
-    ("build @b/runtest-m", "names cc,metal");
+    ("build @b/runtest-m", "names cc,metal + reads config");
     ("build @a/gpuagg", "names cuda,cc + reads config");
     ("build @a/scans", "names cc + reads config");
-    ("build @a/runtest-t_cc", "names cc");
+    ("build @a/runtest-t_cc", "names cc + reads config");
     ("runtest c", "names nothing + reads config");
-    ("runtest n", "names nothing");
-    ("build @n/scans", "names nothing");
+    ("runtest n", "names nothing + reads config");
+    ("build @n/scans", "names nothing + reads config");
     ("promote", "names nothing");
     (* What no alias the argv names carries, reached all the same. *)
     ("build @f/runtest-probe", "names nothing + reads config");
-    ("build @f/runtest-named", "names cuda");
+    ("build @f/runtest-named", "names cuda + reads config");
     ("build @f/runtest-read", "names nothing + reads config");
     ("build @f/runtest-glob", "names cuda + reads config");
     ("build @@f/default", "names cuda + reads config");
     ("build @x/cross", "names nothing + reads config");
     ("build @x/cross_rec", "names nothing + reads config");
     ("build @g/runtest-t_gate", "names nothing + reads config");
-    ("build @g/runtest-l", "names hip");
+    ("build @g/runtest-l", "names hip + reads config");
+    (* The configuration-free list: what it names still counts. *)
+    ("build @test/operations/scans", "names metal");
+    ("build -j 8 @test/operations/scans", "names metal");
+    ("build @@test/operations/scans", "names metal + reads config");
+    ("build @test/operations/runtest-s_none", "names nothing + reads config");
+    ("build @test/operations/scans @c/runtest", "names metal + reads config");
+    ("build @test/operations/scans a/t_cuda.exe", "names metal");
+    (* Plain compilation products. *)
+    ("build ./a/t_cfg.exe", "names nothing");
+    ("build a/t_cfg.exe b/m.exe g/l.cmxa", "names nothing");
+    ("build a/t_cfg.exe @c/runtest", "names nothing + reads config");
   ]
 
 let () =
@@ -313,335 +360,340 @@ let () =
   printf "%-40s %s\n" "runtest d (two markers)" twice;
   p "a stanza carrying two markers makes the tree unreadable, never names nothing"
     (String.is_prefix twice ~prefix:"unknown: the dune file in d is unreadable");
-  (* The configuration is taken off a batch only on a proof (gh-ocannl-1095, review round 2 on PR
-     #1027): a construct the closure does not model exactly on a stanza it reaches makes the batch
-     every backend -- what it builds is unread, its named backends included (round 5) -- and costs
-     nothing to a batch not reaching it. *)
-  let reason ~dune_files argv =
-    match fst (judge ~dune_files argv) with
-    | Slot_kind.Reaches { reads_config = Some why; _ } -> why
-    | Slot_kind.Reaches { reads_config = None; _ } -> "<the configuration does not count>"
-    | Slot_kind.Unknown why -> "unknown: " ^ why
-  in
+  (* gh-ocannl-1227's residual shapes, and its neighbours, as policy cases: no argv outside the list
+     is ever proven unread, so each counts the configuration (or is every backend) however the
+     stanza is written -- none of them is read, and none needs to be. *)
   let n = ("n", List.Assoc.find_exn tree "n" ~equal:String.equal) in
   List.iter
     [
-      ("package", {dune|(alias (name pkg) (deps (package neural_nets_lib)))|dune}, "build @d/pkg");
-      ("include", {dune|(alias (name inc) (deps (include deps.sexp)))|dune}, "build @d/inc");
-      ("escape", {dune|(alias (name up) (deps (alias ../../elsewhere/runtest)))|dune}, "build @d/up");
-      ("pform alias", {dune|(alias (name pf) (deps (alias %{env:A=x}/runtest)))|dune}, "build @d/pf");
-      ( "pform",
-        {dune|(rule
- ; ocannl-backend: none -- links no backend in this fixture.
- (alias odd) (action (run %{dep:d.exe} %{frobnicate})))|dune},
-        "build @d/odd" );
-      ( "dynamic-run",
-        {dune|(rule
- ; ocannl-backend: none -- links no backend in this fixture.
- (alias dyn) (action (dynamic-run ./d.exe)))|dune},
-        "build @d/dyn" );
-      ("env dependency", {dune|(alias (name ev) (deps %{env:INPUT=plain}))|dune}, "build @d/ev");
-      ( "dependency field mixing a modelled alias with an unmodelled form",
-        {dune|(alias (name mx) (deps (alias gpu-input) (package helper)))|dune},
-        "build @d/mx" );
-      ( "sandbox wrapper",
-        {dune|(alias (name sb) (deps (sandbox (alias runtest-gpu))))|dune},
-        "build @d/sb" );
-      ( "alias form outside a dependency field",
-        {dune|(rule
- ; ocannl-backend: none -- links no backend in this fixture.
- (alias odd2) (action (run %{dep:d.exe})) (enabled_if (alias x)))|dune},
-        "build @d/odd2" );
-    ]
-    ~f:(fun (what, dune, argv) ->
-      let dune_files = [ ("d", dune); n ] in
-      let _, shown = judge ~dune_files argv in
-      let why = reason ~dune_files argv in
-      printf "%-40s %s\n    %s\n" (argv ^ " (" ^ what ^ ")") shown why;
-      p
-        (Printf.sprintf "an unmodelled %s is every backend" what)
-        (String.is_prefix shown ~prefix:"unknown: "
-        && String.is_substring why ~substring:"does not model exactly");
-      let _, beside = judge ~dune_files "build @n/scans" in
-      p
-        (Printf.sprintf "an unmodelled %s is nothing to a batch not reaching it" what)
-        (String.equal beside "names nothing"));
-  (* Holes in what EVERY batch builds are every backend everywhere: a top-level include (the stanzas
-     it brings in are never read), a head the inventory does not know, and a preprocessing action --
-     compilation is followed for every batch, which program links which library is not. *)
-  List.iter
-    [
-      ("a top-level include", {dune|(include rules.inc)|dune});
-      ("a cram test", {dune|(cram (deps ocannl_config))|dune});
-      ("an install stanza", {dune|(install (section share) (files out.dat))|dune});
-      ( "a backend flag in a preprocessing action",
-        {dune|(library (name pp_user) (modules pp_user)
- (preprocess (action (run %{exe:pp.exe} --ocannl_backend=hip %{input-file}))))|dune}
-      );
-      ( "a copy_files attached to an alias",
-        {dune|(copy_files (alias probe) (files ../g/*.dat))|dune} );
-      ("an env setting variables", {dune|(env (_ (env-vars (FOO bar))))|dune});
-      ("an env_vars backend", {dune|(env (_ (env_vars ((OCANNL_BACKEND hip)))))|dune});
-      ("an env's other settings", {dune|(env (_ (binaries tool.exe)))|dune});
-      ( "an env's preprocessor flag",
-        {dune|(env (_ (flags (:standard -pp "gpu-preprocessor --ocannl_backend=hip"))))|dune} );
-      ( "an included flags file",
-        {dune|(library (name l3) (modules l3) (flags (:standard (:include flags.sexp))))|dune} );
-      ( "a library's ppx flag",
-        {dune|(library (name l2) (modules l2) (ocamlopt_flags (:standard -ppx ./gpu.exe)))|dune} );
-      ( "a ppx that can reach a backend",
-        {dune|(library (name evil_ppx) (kind ppx_rewriter) (modules evil_ppx) (libraries ppxlib helper))
-(library (name helper) (modules helper) (libraries arrayjit.backends))
-(library (name user) (modules user) (preprocess (pps evil_ppx)))|dune}
-      );
-      ( "a generated Reason module",
-        {dune|(rule
- (target gen.re)
- (deps ocannl_config (env_var OCANNL_BACKEND))
- (action (with-stdout-to %{target} (run %{dep:gen.exe}))))|dune}
-      );
-      ( "a ctypes field",
-        {dune|(library (name stubs) (ctypes (external_library_name m) (generated_entry_point C)))|dune}
-      );
-      ( "a preprocessing action",
-        {dune|(library (name helper) (modules helper) (preprocess (action (run cat %{input-file}))))|dune}
-      );
-    ]
-    ~f:(fun (what, dune) ->
-      let dune_files = [ ("d", dune); n ] in
-      let _, shown = judge ~dune_files "build @n/scans" in
-      let why = reason ~dune_files "build @n/scans" in
-      printf "%-40s %s\n    %s\n" ("build @n/scans (" ^ what ^ ")") shown why;
-      (* The property is soundness -- no batch proven to read nothing -- whichever of the two safe
-         answers the shape draws; the golden records which. *)
-      p
-        (Printf.sprintf "%s beside the tree leaves no batch proven to read nothing" what)
-        (String.is_prefix shown ~prefix:"unknown: "
-        || String.equal shown "names nothing + reads config"));
-  (* The two shapes review round 2 ran end to end, each a configuration reader dune builds first: a
-     character-class glob (matched as a glob, everything), and a host-only test whose linked
-     library's preprocessing reads a configuration reader's output. *)
-  let reader =
-    {dune|(executable (name reader) (modules reader))
-(rule
- (target a.actual)
- (deps ocannl_config (env_var OCANNL_BACKEND))
- (action (with-stdout-to %{target} (run %{dep:reader.exe}))))|dune}
-  in
-  List.iter
-    [
-      ( "an inferred target on an alias-attached rule",
-        {dune|(executable (name reader) (modules reader))
-(rule
- (alias generate)
- (deps ocannl_config (env_var OCANNL_BACKEND))
- (action (with-stdout-to table.dat (run %{dep:reader.exe}))))
-(alias (name probe) (deps table.dat))|dune},
-        "build @@d/probe" );
-      ( "a target written by an action this does not read",
-        {dune|(rule
- (alias generate)
- (deps ocannl_config (env_var OCANNL_BACKEND))
- (action (format-dune-file input.sexp table.dat)))
-(alias (name probe) (deps table.dat))|dune},
-        "build @@d/probe" );
-      ( "a bare-star glob",
-        reader ^ {dune|
-(alias (name probe) (deps (glob_files *)))|dune},
-        "build @@d/probe" );
-      ( "an alias in a test's link_deps",
-        reader
-        ^ {dune|
-(rule (alias gpu-input) (deps a.actual) (action (progn)))
+      ( "a compiler response file",
+        {dune|(library (name l) (modules l) (flags (:standard -args flags.txt)))
 (test
- ; ocannl-backend: none -- host-only runner in this fixture.
- (name none) (modules none) (link_deps (alias gpu-input)) (deps ocannl_config))|dune},
-        "build @@d/runtest-none" );
-      ( "a character-class glob",
-        reader ^ {dune|
-(alias (name probe) (deps (glob_files "[ab].actual")))|dune},
-        "build @@d/probe" );
-      ( "a linked library's preprocessing",
-        reader
-        ^ {dune|
-(library (name helper) (modules helper)
- (preprocess (action (progn (echo %{read:a.actual}) (run cat %{input-file})))))
-(test
- ; ocannl-backend: none -- host-only runner in this fixture.
- (name none) (modules none) (libraries helper) (deps ocannl_config))|dune},
-        "build @@d/runtest-none" );
-    ]
-    ~f:(fun (what, dune, argv) ->
-      let _, shown = judge ~dune_files:[ ("d", dune) ] argv in
-      printf "%-40s %s\n    %s\n"
-        (argv ^ " (" ^ what ^ ")")
-        shown
-        (reason ~dune_files:[ ("d", dune) ] argv);
-      p
-        (Printf.sprintf "%s reaches the reader, or is every backend" what)
-        (String.is_prefix shown ~prefix:"unknown: "
-        || String.equal shown "names nothing + reads config"));
-  (* A rule producing a source-like file is taken as always built: anything compiling may need it,
-     so a configuration-reading generator makes even the none-only batch read the configuration. *)
-  let _, generated =
-    judge
-      ~dune_files:
-        [
-          ( "s",
-            {dune|(rule
- (target gen.ml)
- (deps ocannl_config (env_var OCANNL_BACKEND))
- (action (with-stdout-to %{target} (run %{dep:gen.exe}))))|dune}
-          );
-          ("n", List.Assoc.find_exn tree "n" ~equal:String.equal);
-        ]
-      "build @n/scans"
-  in
-  printf "%-40s %s\n" "build @n/scans (beside a generated .ml)" generated;
-  p "a configuration-reading generator of a source file is always reached"
-    (String.equal generated "names nothing + reads config");
-  (* A backend set past the configuration -- an env stanza's or a setenv's OCANNL_BACKEND, or a
-     command-line flag on a stanza that reads the configuration -- is what the resolved
-     configuration cannot answer for: every backend, not merely the configuration's. *)
-  List.iter
-    [
-      ("an env's backend", {dune|(env (_ (env-vars (OCANNL_BACKEND hip))))|dune}, "build @n/scans");
+ ; ocannl-backend: none -- links no backend in this fixture.
+ (name t) (modules t) (libraries l) (deps ocannl_config))|dune},
+        "build @d/runtest-t" );
+      ( "a read pform in a command position",
+        {dune|(rule
+ ; ocannl-backend: none -- links no backend in this fixture.
+ (alias rd) (action (system "%{read:cmd.txt}")))|dune},
+        "build @d/rd" );
+      ( "env reached through a bin pform",
+        {dune|(rule
+ (alias be) (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (run %{bin:env} -i %{exe:t.exe})))|dune},
+        "build @d/be" );
       ( "a setenv'd backend",
         {dune|(rule
  (alias se) (deps ocannl_config (env_var OCANNL_BACKEND))
  (action (setenv OCANNL_BACKEND hip (run %{dep:d.exe}))))|dune},
         "build @d/se" );
-      (* A directory target produces any path below it -- an ocannl_config among them. *)
-      ( "a directory target",
-        {dune|(executable (name reader) (modules reader))
-(rule
- (targets (dir output))
- (deps ocannl_config (env_var OCANNL_BACKEND))
- (action (run %{dep:reader.exe})))
-(alias (name probe) (deps output/result))|dune},
-        "build @@d/probe" );
-      ( "a generated configuration",
-        {dune|(rule (target ocannl_config) (action (write-file %{target} "backend=hip")))
-(alias (name gc) (deps ocannl_config))|dune},
-        "build @d/gc" );
-      ( "an environment-clearing env on a reader",
-        {dune|(rule
- (alias ei) (deps ocannl_config (env_var OCANNL_BACKEND))
- (action (run env -i ./d.exe)))|dune},
-        "build @d/ei" );
-      ( "an env-command assignment on a reader",
-        {dune|(rule
- (alias ev2) (deps ocannl_config (env_var OCANNL_BACKEND))
- (action (run env OCANNL_BACKEND=hip %{exe:d.exe})))|dune},
-        "build @d/ev2" );
-      ( "a shell assignment on a reader",
-        {dune|(rule
- (alias sh) (deps ocannl_config (env_var OCANNL_BACKEND))
- (action (system "OCANNL_BACKEND=hip ./d.exe")))|dune},
-        "build @d/sh" );
-      ( "a dropped configuration on a reader",
-        {dune|(rule
- (alias nc) (deps ocannl_config (env_var OCANNL_BACKEND))
- (action (setenv OCANNL_NO_CONFIG_FILE true (run %{dep:d.exe}))))|dune},
-        "build @d/nc" );
-      ( "a prefix-free backend flag on a reader",
-        {dune|(rule
- (alias fl2) (deps ocannl_config (env_var OCANNL_BACKEND))
- (action (run %{dep:d.exe} --backend=hip)))|dune},
-        "build @d/fl2" );
-      ( "a single-dash uppercase backend flag on a reader",
-        {dune|(rule
- (alias fl3) (deps ocannl_config (env_var OCANNL_BACKEND))
- (action (run %{dep:d.exe} -OCANNL-BACKEND hip)))|dune},
-        "build @d/fl3" );
-      ( "a backend flag on a reader",
-        {dune|(rule
- (alias fl) (deps ocannl_config (env_var OCANNL_BACKEND))
- (action (run %{dep:d.exe} --ocannl_backend=hip)))|dune},
-        "build @d/fl" );
     ]
     ~f:(fun (what, dune, argv) ->
       let _, shown = judge ~dune_files:[ ("d", dune); n ] argv in
       printf "%-40s %s\n" (argv ^ " (" ^ what ^ ")") shown;
-      p (Printf.sprintf "%s is every backend" what) (String.is_prefix shown ~prefix:"unknown: "));
-  (* Private libraries are scoped by project: a ppx name two projects each define is read as
-     both. *)
-  let _, scoped =
+      p
+        (Printf.sprintf "%s off the list counts the configuration" what)
+        (String.is_prefix shown ~prefix:"unknown: "
+        || String.is_suffix shown ~suffix:" + reads config"));
+  (* A dependency the closure cannot follow -- an included dependency file, an alias spelled through
+     a pform, either wrapped in a sandbox -- leaves what it builds unread, its named backends
+     included: every backend, not merely the configuration (Codex review round 1 on
+     staging#1318). *)
+  List.iter
+    [
+      ( "an included dependency",
+        {dune|(alias (name inc) (deps (include deps.sexp)))|dune},
+        "build @d/inc" );
+      ( "an alias spelled through a pform",
+        {dune|(alias (name pf) (deps (alias %{env:A=x}/runtest)))|dune},
+        "build @d/pf" );
+      ( "a sandboxed included dependency",
+        {dune|(rule
+ ; ocannl-backend: none -- links no backend in this fixture.
+ (alias sbi) (deps (sandbox always) (:in (include deps.sexp))) (action (run %{dep:d.exe})))|dune},
+        "build @d/sbi" );
+      ( "a dynamic-run",
+        {dune|(rule
+ ; ocannl-backend: none -- links no backend in this fixture.
+ (alias dyn) (action (dynamic-run ./d.exe)))|dune},
+        "build @d/dyn" );
+    ]
+    ~f:(fun (what, dune, argv) ->
+      let _, shown = judge ~dune_files:[ ("d", dune); n ] argv in
+      printf "%-40s %s\n" (argv ^ " (" ^ what ^ ")") shown;
+      p
+        (Printf.sprintf "%s is every backend" what)
+        (String.is_prefix shown ~prefix:"unknown: "
+        && String.is_substring shown ~substring:"this cannot follow");
+      let _, beside = judge ~dune_files:[ ("d", dune); n ] "build @n/scans" in
+      p
+        (Printf.sprintf "%s is nothing to a batch not reaching it" what)
+        (String.equal beside "names nothing + reads config"));
+  (* A hole in the inventory is every batch's, the listed alias's and a plain build's included: what
+     an [(include …)] or a [cram] test brings in may sit anywhere (Codex review round 3 on
+     staging#1318). *)
+  List.iter
+    [
+      ("an included stanza", {dune|(include rules.inc)|dune});
+      ("a cram test", {dune|(cram (deps x))|dune});
+    ]
+    ~f:(fun (what, dune) ->
+      let dune_files = ("w", dune) :: tree in
+      List.iter [ "build @test/operations/scans"; "build a/t_cfg.exe"; "runtest c" ] ~f:(fun argv ->
+          let _, shown = judge ~dune_files argv in
+          printf "%-40s %s\n" (argv ^ " (beside " ^ what ^ ")") shown;
+          p
+            (Printf.sprintf "%s beside %s is every backend" argv what)
+            (String.is_prefix shown ~prefix:"unknown: ")));
+  (* A long-form copy_files attaches its copies to an alias: the alias builds what they copy (Codex
+     review round 4 on staging#1318). *)
+  let _, copied_on_alias =
     judge
       ~dune_files:
         [
-          ( "p1",
-            {dune|(library (name my_ppx) (kind ppx_rewriter) (modules my_ppx) (libraries ocannl))
-(library (name u1) (modules u1) (preprocess (pps my_ppx)))|dune}
+          ( "g2",
+            {dune|(rule
+ ; ocannl-backend: cuda -- names the CUDA backend by name in this fixture.
+ (target probe.actual)
+ (action (with-stdout-to %{target} (run ./gpu_tool))))|dune}
           );
-          ( "p2",
-            {dune|(library (name my_ppx) (kind ppx_rewriter) (modules my_ppx) (libraries ppxlib))|dune}
-          );
-          n;
+          ("test/operations", {dune|(copy_files (alias scans) (files ../../g2/*.actual))|dune});
         ]
-      "build @n/scans"
+      "build @test/operations/scans"
   in
-  printf "%-40s %s\n" "build @n/scans (a ppx name in two projects)" scoped;
-  p "a ppx name defined twice is read as every definition"
-    (String.is_prefix scoped ~prefix:"unknown: ");
-  (* [default] is [(alias_rec all)] even under [@@]; and a stanza the contract found running nothing
-     can run a workspace program by its public name, which then declares nothing. *)
+  printf "%-40s %s\n" "build @test/operations/scans (a copy_files on it)" copied_on_alias;
+  p "a copy_files attached to a listed alias reaches what it copies"
+    (String.equal copied_on_alias "names cuda");
+  (* A rule producing what looks like a compilation product is no plain build. *)
+  let _, lookalike =
+    judge
+      ~dune_files:
+        [
+          ( "d",
+            {dune|(rule
+ ; ocannl-backend: cuda -- names the CUDA backend by name in this fixture.
+ (target r.exe) (action (run ./gpu_tool --out %{target})))|dune}
+          );
+        ]
+      "build d/r.exe"
+  in
+  printf "%-40s %s\n" "build d/r.exe (a rule's .exe)" lookalike;
+  p "a rule-produced .exe is every backend, never a plain build"
+    (String.is_prefix lookalike ~prefix:"unknown: ");
+  (* Failing closed: on a tree the checks below would refuse -- a reader inside a listed alias, a
+     generated source a reader writes -- the answer counts the configuration anyway, since the scan
+     may not have run on the checkout yet (Codex review round 2 on staging#1318). *)
   List.iter
     [
-      ( "an implicit default recursing",
+      ( "a reader inside the listed alias",
         [
-          ( "r/sub",
-            {dune|(executable (name p) (modules p))
+          ( "test/operations",
+            {dune|(test (name s_reader) (deps ocannl_config (env_var OCANNL_BACKEND)))
+(alias (name scans) (deps (alias runtest-s_reader)))|dune}
+          );
+        ],
+        "build @test/operations/scans" );
+      ( "a source a reader generates, beside a plain build",
+        [
+          ( "d",
+            {dune|(executable (name app) (modules app gen))
 (rule
- (target x.actual)
+ (target gen.ml)
  (deps ocannl_config (env_var OCANNL_BACKEND))
- (action (with-stdout-to %{target} (run %{dep:p.exe}))))|dune}
+ (action (with-stdout-to %{target} (run %{dep:gen_tool.exe}))))|dune}
           );
         ],
-        "build @@r/default",
-        "names nothing + reads config" );
-      ( "a reader beside a configuration copied from a directory the runner does not read",
-        [
-          ( "q",
-            {dune|(copy_files ../hipcfg/ocannl_config)
-(test (name rq) (deps ocannl_config (env_var OCANNL_BACKEND)))|dune}
-          );
-        ],
-        "build @q/runtest",
-        "unknown: " );
-      ( "a reader beside a configuration copied from one it does",
-        [
-          ( "q2",
-            {dune|(copy_files ../test/config/ocannl_config)
-(test (name rq2) (deps ocannl_config (env_var OCANNL_BACKEND)))|dune}
-          );
-        ],
-        "build @q2/runtest",
-        "names nothing + reads config" );
-      (* gh-ocannl-1149: the copy every test directory reads is test/config's configuration with the
-         ambient record appended. It resolves test/config's backend, so long as its producer has
-         exactly that shape; one appending anything else is a generated configuration. *)
-      ( "a reader beside the configuration carrying the ambient record",
-        [
-          ( "test/config",
-            {dune|(subdir ambient
+        "build d/app.exe" );
+    ]
+    ~f:(fun (what, dune_files, argv) ->
+      let answer, shown = judge ~dune_files argv in
+      let why =
+        match answer with
+        | Slot_kind.Reaches { reads_config = Some why; _ } -> why
+        | _ -> "<the configuration does not count>"
+      in
+      printf "%-40s %s\n    %s\n" (argv ^ " (" ^ what ^ ")") shown why;
+      p
+        (Printf.sprintf "%s counts the configuration, failing closed" what)
+        (String.equal shown "names nothing + reads config"));
+  (* {1 The checks that keep the list honest} *)
+  let scans_only =
+    [ Slot_kind.Alias { dir = "test/operations"; alias = "scans"; recursive = true } ]
+  in
+  (* The shared configuration and its ambient copy, as the repository has them; [t] reads the
+     copy. *)
+  let ambient_rule =
+    {dune|(subdir ambient
  (rule
   (target ocannl_config)
   (deps ../ocannl_config ../ocannl_ambient)
   (action
    (with-stdout-to %{target} (progn (cat ../ocannl_config) (cat ../ocannl_ambient))))))|dune}
-          );
-          ( "q3",
-            {dune|(copy_files ../test/config/ambient/ocannl_config)
-(test (name rq3) (deps ocannl_config (env_var OCANNL_BACKEND)))|dune}
-          );
-        ],
-        "build @q3/runtest",
-        "names nothing + reads config" );
-      ( "a reader beside an ambient configuration that appends more than the record",
-        [
-          ( "test/config",
-            {dune|(subdir ambient
+  in
+  let base =
+    [
+      ("test/config", ambient_rule);
+      ( "t",
+        {dune|(copy_files (files ../test/config/ambient/ocannl_config))
+(test (name t_reader) (deps ocannl_config (env_var OCANNL_BACKEND)))|dune}
+      );
+      ( "test/operations",
+        {dune|(copy_files (files ../config/ambient/ocannl_config))
+(test
+ ; ocannl-backend: none -- links no backend in this fixture.
+ (name s_none)
+ (deps ocannl_config))
+(test
+ ; ocannl-backend: metal -- names the Metal backend by name in this fixture.
+ (name s_metal)
+ (deps ocannl_config))
+(alias (name scans) (deps (alias runtest-s_none) (alias runtest-s_metal)))|dune}
+      );
+    ]
+  in
+  let config_files = [ "test/config/ocannl_config"; "arrayjit/test/ocannl_config" ] in
+  let refused ?(config_files = config_files) ?(config_free = scans_only) dune_files =
+    Slot_kind.refusals ~config_free ~config_files dune_files
+  in
+  let replace dir dune files = (dir, dune) :: List.Assoc.remove files dir ~equal:String.equal in
+  let clean = refused base in
+  List.iter clean ~f:(printf "unexpected refusal: %s\n");
+  p_empty "the fixture tree passes every check" ~over:base clean;
+  let in_test_config_itself =
+    refused
+      (replace "test/config"
+         (ambient_rule
+        ^ {dune|
+(test (name cfg_reader) (deps ocannl_config (env_var OCANNL_BACKEND)))|dune})
+         base)
+  in
+  p_empty "a reader beside a configuration the runner resolves passes" ~over:base
+    in_test_config_itself;
+  (* A path-position read leaves a listed alias exact: it is a dependency like any file. *)
+  let path_read =
+    refused
+      (replace "test/operations"
+         {dune|(rule (target name.txt) (action (write-file %{target} x)))
+(rule (alias runtest-logs) (deps "%{read:name.txt}.dat") (action (progn)))
+(alias (name scans) (deps (alias runtest-logs)))|dune}
+         base)
+  in
+  p_empty "a path-position read on a listed alias is refused nothing" ~over:base path_read;
+  List.iter
+    [
+      ( "a listed alias's member reading the configuration",
+        replace "test/operations"
+          {dune|(copy_files (files ../config/ambient/ocannl_config))
+(test (name s_reader) (deps ocannl_config (env_var OCANNL_BACKEND)))
+(alias (name scans) (deps (alias runtest-s_reader)))|dune}
+          base,
+        config_files,
+        "the listed @test/operations/scans" );
+      ( "a listed alias reaching a reader through a file",
+        replace "test/operations"
+          {dune|(copy_files (files ../config/ambient/ocannl_config))
+(executable (name probe) (modules probe))
+(rule
+ (target probe.actual)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (with-stdout-to %{target} (run %{dep:probe.exe}))))
+(rule (alias runtest-probe) (action (diff probe.expected probe.actual)))
+(alias (name scans) (deps (alias runtest-probe)))|dune}
+          base,
+        config_files,
+        "the listed @test/operations/scans" );
+      ( "a listed alias no stanza carries",
+        List.Assoc.remove base "test/operations" ~equal:String.equal,
+        config_files,
+        "no stanza carries it" );
+      ( "a listed alias with an included dependency",
+        replace "test/operations" {dune|(alias (name scans) (deps (include deps.sexp)))|dune} base,
+        config_files,
+        "(include deps.sexp) this cannot follow" );
+      ( "a listed alias with a member it cannot follow",
+        replace "test/operations"
+          {dune|(alias (name scans) (deps (alias %{env:WHERE=x}/runtest)))|dune} base,
+        config_files,
+        "cannot follow" );
+      ( "a source file generated by a configuration reader",
+        replace "t"
+          {dune|(copy_files (files ../test/config/ambient/ocannl_config))
+(rule
+ (target gen.ml)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (with-stdout-to %{target} (run %{dep:gen.exe}))))|dune}
+          base,
+        config_files,
+        "a plain compilation" );
+      ( "a source file generated on a named GPU",
+        replace "t"
+          {dune|(rule
+ ; ocannl-backend: cuda -- names the CUDA backend by name in this fixture.
+ (target gen.ml)
+ (deps ocannl_config)
+ (action (with-stdout-to %{target} (run %{dep:gen.exe}))))|dune}
+          base,
+        config_files,
+        "which names cuda" );
+      ( "a reader with no configuration in reach",
+        replace "u" {dune|(test (name u_reader) (deps ocannl_config (env_var OCANNL_BACKEND)))|dune}
+          base,
+        config_files,
+        "no checked-in configuration in reach" );
+      ( "a reader beside a copy of a configuration the runner does not resolve",
+        replace "q"
+          {dune|(copy_files ../hipcfg/ocannl_config)
+(test (name q_reader) (deps ocannl_config (env_var OCANNL_BACKEND)))|dune}
+          base,
+        "hipcfg/ocannl_config" :: config_files,
+        "reads the configuration in hipcfg" );
+      ( "an undeclared stanza beside a copy of a configuration the runner does not resolve",
+        replace "q"
+          {dune|(copy_files ../hipcfg/ocannl_config)
+(test (name q_undeclared) (deps ocannl_config))|dune}
+          base,
+        "hipcfg/ocannl_config" :: config_files,
+        "q_undeclared running in q, which reads the configuration in hipcfg" );
+      ( "a reader of an ambient configuration copied from elsewhere",
+        replace "test/config"
+          {dune|(subdir ambient (copy_files ../../../hipcfg/ocannl_config))|dune} base,
+        "hipcfg/ocannl_config" :: config_files,
+        "t_reader running in t, which reads the configuration in" );
+      ( "a reader of an ambient configuration with no producer",
+        List.Assoc.remove base "test/config" ~equal:String.equal,
+        config_files,
+        "t_reader running in t, which reads the configuration in test/config/ambient" );
+      ( "a listed alias carrying a copy of a reader's output",
+        replace "test/operations" {dune|(copy_files (alias scans) (files ../r/*.actual))|dune}
+          (( "r",
+             {dune|(copy_files (files ../test/config/ambient/ocannl_config))
+(executable (name probe) (modules probe))
+(rule
+ (target probe.actual)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (with-stdout-to %{target} (run %{dep:probe.exe}))))|dune}
+           )
+          :: base),
+        config_files,
+        "the listed @test/operations/scans" );
+      ( "a reader beside a checked-in configuration the runner does not resolve",
+        replace "prof"
+          {dune|(test (name p_reader) (deps ocannl_config (env_var OCANNL_BACKEND)))|dune} base,
+        "prof/ocannl_config" :: config_files,
+        "reads the configuration in prof" );
+      ( "a reader run under a chdir out of its configuration's reach",
+        replace "t"
+          {dune|(copy_files (files ../test/config/ambient/ocannl_config))
+(rule
+ (alias ch)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (chdir ../v (run %{dep:r.exe}))))|dune}
+          base,
+        config_files,
+        "running in v" );
+      ( "an ambient configuration appending more than the record",
+        replace "test/config"
+          {dune|(subdir ambient
  (rule
   (target ocannl_config)
   (deps ../ocannl_config ../ocannl_ambient)
@@ -649,52 +701,72 @@ let () =
    (with-stdout-to
     %{target}
     (progn (cat ../ocannl_config) (cat ../ocannl_ambient) (echo "backend=hip\n"))))))|dune}
-          );
-          ( "q4",
-            {dune|(copy_files ../test/config/ambient/ocannl_config)
-(test (name rq4) (deps ocannl_config (env_var OCANNL_BACKEND)))|dune}
-          );
-        ],
-        "build @q4/runtest",
-        "unknown: " );
-      ( "a workspace program run by name",
-        [
-          ( "w",
-            {dune|(executable (name tool) (public_name gpu_tool) (modules tool))
-(rule (alias wp) (action (run gpu_tool)))|dune}
-          );
-        ],
-        "build @w/wp",
-        "unknown: " );
+          base,
+        config_files,
+        "can write an ocannl_config" );
+      ( "a configuration generated elsewhere",
+        replace "w"
+          {dune|(rule (target ocannl_config) (action (write-file %{target} "backend=hip")))|dune}
+          base,
+        config_files,
+        "can write an ocannl_config" );
+      ( "an included stanza",
+        replace "w" {dune|(include rules.inc)|dune} base,
+        config_files,
+        "(include …)" );
+      ( "a cram test",
+        replace "w" {dune|(cram (deps ocannl_config))|dune} base,
+        config_files,
+        "(cram …)" );
+      ( "a dynamic-run",
+        replace "w"
+          {dune|(rule
+ ; ocannl-backend: none -- links no backend in this fixture.
+ (alias dyn) (action (dynamic-run ./d.exe)))|dune}
+          base,
+        config_files,
+        "dynamic-run" );
     ]
-    ~f:(fun (what, dune_files, argv, want) ->
-      let _, shown = judge ~dune_files argv in
-      printf "%-40s %s\n" (argv ^ " (" ^ what ^ ")") shown;
-      p
-        (Printf.sprintf "%s answers %s" what
-           (String.rstrip want ~drop:(fun c -> Char.equal c ' ' || Char.equal c ':')))
-        (String.is_prefix shown ~prefix:want));
-  (* A glob matches where it points, so a glob over copies reaches the reader through the copy: a
-     [copy_files] produces its copies in its own directory, and needs the glob it copies from. *)
-  let _, copied =
-    judge
-      ~dune_files:
-        [
-          ( "r",
-            {dune|(executable (name reader) (modules reader))
-(rule
- (target a.dat)
- (deps ocannl_config (env_var OCANNL_BACKEND))
- (action (with-stdout-to %{target} (run %{dep:reader.exe}))))|dune}
-          );
-          ("c", {dune|(copy_files ../r/*.dat)
-(alias (name probe) (deps (glob_files *.dat)))|dune});
-        ]
-      "build @@c/probe"
+    ~f:(fun (what, dune_files, config_files, substring) ->
+      let found = refused ~config_files dune_files in
+      List.iter found ~f:(fun r -> printf "%s:\n    %s\n" what r);
+      p_exists (Printf.sprintf "%s is refused" what) found ~f:(String.is_substring ~substring));
+  (* The run-time answer fails closed on the same reader check, whatever the argv (Codex review
+     round 5 on staging#1318): a reader of a foreign copy anywhere makes every batch every backend,
+     the listed alias's included, while the clean tree answers as ever. *)
+  let foreign =
+    replace "q"
+      {dune|(copy_files ../hipcfg/ocannl_config)
+(test (name q_reader) (deps ocannl_config (env_var OCANNL_BACKEND)))|dune}
+      base
   in
-  printf "%-40s %s\n" "build @@c/probe (a glob over copies)" copied;
-  p "a glob over a copy_files' copies reaches the reader they copy"
-    (String.equal copied "names nothing + reads config");
+  List.iter [ "build @test/operations/scans"; "runtest t" ] ~f:(fun argv ->
+      let shown dune_files config_files =
+        Slot_kind.summary (Slot_kind.answer ~config_files ~dune_files (String.split argv ~on:' '))
+      in
+      let refused = shown foreign ("hipcfg/ocannl_config" :: config_files) in
+      let clean = shown base config_files in
+      printf "%-40s %s\n%-40s %s\n" (argv ^ " (a foreign reader)") refused (argv ^ " (clean)") clean;
+      p
+        (Printf.sprintf "%s beside a reader of a foreign configuration is every backend" argv)
+        (String.is_prefix refused ~prefix:"unknown: ");
+      p
+        (Printf.sprintf "%s on the clean tree is no unknown" argv)
+        (not (String.is_prefix clean ~prefix:"unknown: ")));
+  (* A data file a reader produces is no plain compilation's business: nothing compiling needs
+     it. *)
+  let data =
+    refused
+      (replace "t"
+         {dune|(copy_files (files ../test/config/ambient/ocannl_config))
+(executable (name probe) (modules probe))
+(rule
+ (target probe.actual)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (with-stdout-to %{target} (run %{dep:probe.exe}))))|dune}
+         base)
+  in
+  p_empty "a reader producing a data file off the list is refused nothing" ~over:base data;
   (* The inventory goes where dune goes: a [(dirs …)] stanza admits a hidden directory, whose own
      [(dirs …)] restricts it in turn, and an underscore directory stays out. *)
   let root = Stdlib.Filename.temp_file "slot_kind_dirs" "" in

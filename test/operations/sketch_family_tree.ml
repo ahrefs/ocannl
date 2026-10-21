@@ -516,8 +516,8 @@ let () =
       ~is_cpu:false ~limits:(gpu_f16_limits ~wide_scopes:[]) opt_h
   in
   let f16_wide_no_arm_enablement, f16_wide_no_arm_disablement =
-    Autotune.placement_enablement ~limits:(gpu_f16_limits ~wide_scopes:[]) ~static_indices:[]
-      ~base:opt_h ~allmat:opt_h
+    Autotune.placement_enablement ~is_gpu:true ~limits:(gpu_f16_limits ~wide_scopes:[])
+      ~static_indices:[] ~base:opt_h ~allmat:opt_h
   in
   let f16_wide_statement =
     section "half-prec gpu, f16 tiles, wide policy, per-statement scope only" ~is_gpu:true

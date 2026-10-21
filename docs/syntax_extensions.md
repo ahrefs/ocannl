@@ -468,8 +468,10 @@ broadcast through (see below).
 
 The specification syntax has two modes:
 
-- if there is a comma anywhere in a spec, it is the _multichar mode_: axis identifiers are comma-separated and can have multiple characters;
+- if there is a comma anywhere in a spec, it is the _multichar mode_: axis identifiers are comma-separated and can have multiple characters. The convolution and concatenation syntax also selects it: any of `*`, `+`, `^`, `<`, `&`, or an `=` that does not begin `=>`;
 - otherwise, it is the _single-char mode_: each alphanumeric character corresponds to an axis.
+
+Whitespace never separates axes. In single-char mode it is ignored (`s a` is the two axes `sa`); in multichar mode axes need commas between them, so `s a; s b => s a^b` is a parse error (the `^` selected multichar mode) whose message names the fix, `s, a; s, b => s, a^b`.
 
 The syntax of a generalized einsum spec has two variants:
 
@@ -569,7 +571,7 @@ The `^` operator in einsum specifications creates a concatenated axis from multi
 - **Block tensor construction**: Build structured tensors from components
 - **Axis slicing**: Extract or assign to parts of an axis
 
-The syntax `a^b` (or `a^b^c` etc.) creates a single axis of iteration that first iterates over component `a`, then over component `b`, etc. The components are axis labels (identifiers in multi-char mode, single characters in single-char mode).
+The syntax `a^b` (or `a^b^c` etc.) creates a single axis of iteration that first iterates over component `a`, then over component `b`, etc. The components are axis labels. Since `^` selects multichar mode, they are identifiers and the spec's axes are comma-separated: `sa; sb => sa^b` reads as the single axes `sa`, `sb` and `sa^b`; concatenating `a` and `b` under a shared leading axis `s` is written `s, a; s, b => s, a^b`.
 
 **Examples of concatenation patterns** (using vector notation for simplicity):
 

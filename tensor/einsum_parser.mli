@@ -22,7 +22,8 @@ val operators_with_generated_specs : string list
 
 val is_multichar : string -> bool
 (** Determine if a spec uses multichar mode. Multichar mode is triggered by presence of: ',', '*',
-    '+', '^', '&' *)
+    '+', '^', '&', '<', or a '=' that does not begin "=>". In multichar mode axes are separated by
+    commas; whitespace does not separate them. *)
 
 val axis_labels_of_spec : string -> parsed_axis_labels
 (** Parse an axis labels specification.

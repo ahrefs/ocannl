@@ -78,6 +78,36 @@ let () =
   let%op total = t2 ++ "ij => 0" + (d2 ++ "ij => 0") in
   let comp = named "ps" (Train.forward total) in
   let ctx = Context.auto () in
+  (* gh-ocannl-1430: on cc the surface segments its mma sites as cc's own seeders do, so it reads
+     neither GPU lane key -- stated unparsable here, either would refuse the call naming itself. It
+     comes first in the process: [gpu_fission_keep_mapping] is a process-lifetime lazy, which the
+     synthetic GPU limits below force at its default. *)
+  let gpu_lane_keys =
+    [ ("gpu_fission_keep_mapping", "sideways"); ("gpu_serial_lanes", "sideways") ]
+  in
+  List.iter gpu_lane_keys ~f:(fun (key, data) -> Hashtbl.set Utils.config_file_args ~key ~data);
+  let stated =
+    List.map gpu_lane_keys ~f:(fun (key, data) ->
+        ( key,
+          Option.equal String.equal (Option.map (Utils.profile_key_source key) ~f:fst) (Some data)
+        ))
+  in
+  let surface_under_unparsable =
+    Exn.protect
+      ~finally:(fun () ->
+        List.iter gpu_lane_keys ~f:(fun (key, _) -> Hashtbl.remove Utils.config_file_args key))
+      ~f:(fun () ->
+        match Autotune.placement_surface ~ordering:`Enablement ctx comp Ir.Indexing.Empty with
+        | surface -> Ok surface
+        | exception Utils.Invalid_config_value { key; _ } -> Error key)
+  in
+  p_all ~min:2 "the GPU lane keys are stated unparsable for the cc surface" stated ~f:snd;
+  p "the cc surface reads neither GPU lane key"
+    (match surface_under_unparsable with
+    | Ok _ -> true
+    | Error key ->
+        Stdio.eprintf "the cc surface read %s\n%!" key;
+        false);
   let base = Context.lowered_for_decisions ctx comp Ir.Indexing.Empty in
   let candidates = base.LL.flip_candidates in
   let to_materialize =
@@ -91,7 +121,7 @@ let () =
     Context.lowered_for_decisions ~materialized:to_materialize ctx comp Ir.Indexing.Empty
   in
   let enablement, disablement =
-    Autotune.placement_enablement ~limits:gpu_limits ~static_indices:[] ~base ~allmat
+    Autotune.placement_enablement ~is_gpu:true ~limits:gpu_limits ~static_indices:[] ~base ~allmat
   in
   let mem set (t : Tensor.t) = Set.mem set t.Tensor.value in
   let mem_tn (fc : LL.flip_candidate) (t : Tensor.t) = Tn.equal fc.LL.fc_tn t.Tensor.value in
@@ -190,6 +220,12 @@ let () =
     | Some (Autotune.Loses _) -> true
     | _ -> false);
   let surface = Autotune.placement_surface ~ordering:`Enablement ctx comp Ir.Indexing.Empty in
+  p "the unparsable GPU lane keys left the cc surface's enablement and disablement as they are"
+    (match surface_under_unparsable with
+    | Ok s ->
+        Set.equal s.Autotune.ps_enablement surface.Autotune.ps_enablement
+        && Set.equal s.Autotune.ps_disablement surface.Autotune.ps_disablement
+    | Error _ -> false);
   let f0 = surface.Autotune.ps_floor_ms ~materialized:[] in
   let f1 = surface.Autotune.ps_floor_ms ~materialized:[ mbs.Tensor.value ] in
   let f2 = surface.Autotune.ps_floor_ms ~materialized:[ mbs.Tensor.value; mc.Tensor.value ] in

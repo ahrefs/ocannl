@@ -98,6 +98,7 @@ Programs starting a search with a run that can select cc, each pinning the cc ve
   test/operations/dune, test seeding_census (Autotune.tune): independent, by its marker
   test/operations/dune, test symbolic_extent_launch (Autotune.tune): independent, by its marker
   test/operations/dune, test tune_call_budget (Train.tune_placements): independent, by its marker
+  test/operations/dune, test tune_placements_config_refusal (Train.tune_placements): independent, by its marker
   test/training/dune, executable bigram (Autotune.tune): independent, by its marker
   test/training/dune, executable circles_conv (Autotune.tune): independent, by its marker
   test/training/dune, executable fsm_transformer (Autotune.tune): independent, by its marker

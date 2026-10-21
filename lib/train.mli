@@ -528,16 +528,18 @@ val tune_placements :
     still reaches [report] in position, so the failure is recorded rather than downgraded to "that
     arm merely lost". A failed arm's [best_ms] is deliberately {e not} shippable and not compared:
     its search raised, so there is no routine to compile from [ctx] for it. Only when every arm
-    fails does [tune_placements] propagate, with the first failure's original backtrace — with two
+    fails does [tune_placements] propagate, with the first failure's original backtrace — with three
     exceptions that are not the arm's to absorb and propagate at once: process-level failures
-    ([Out_of_memory], [Sys.Break]) and compiler invariant violations ([Assert_failure],
-    [Stack_overflow]), the same classes {!Ir.Schedule_outcome.classify_raw} refuses to classify. A
-    [report] callback's own exception likewise propagates rather than counting as an arm failure,
-    and so does a failure that poisoned the lineage the arms share ({!Context.poisoned_failure}):
-    every timing run in the sibling would then refuse to execute, so the second arm can only burn a
-    search proving it. Consumers attributing arms by arrival order should read
-    {!Autotune.terminal_failure} — or match the report's [outcome] — before [best_ms], as
-    benchmarks/runners/ocannl/bench_harness.ml does.
+    ([Out_of_memory], [Sys.Break]), compiler invariant violations ([Assert_failure],
+    [Stack_overflow]), the same classes {!Ir.Schedule_outcome.classify_raw} refuses to classify, and
+    a malformed registered setting ([Utils.Invalid_config_value], typed and naming the key, from an
+    arm, a flip or the decision surface alike: contained, it would ship whichever placement happened
+    not to read the key). A [report] callback's own exception likewise propagates rather than
+    counting as an arm failure, and so does a failure that poisoned the lineage the arms share
+    ({!Context.poisoned_failure}): every timing run in the sibling would then refuse to execute, so
+    the second arm can only burn a search proving it. Consumers attributing arms by arrival order
+    should read {!Autotune.terminal_failure} — or match the report's [outcome] — before [best_ms],
+    as benchmarks/runners/ocannl/bench_harness.ml does.
 
     The in-position guarantee is {!Autotune.tune}'s reporting contract, and inherits its one
     carve-out: an argument-precondition violation (an incompatible [timing_ctx]) is detected before

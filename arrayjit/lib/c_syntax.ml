@@ -7838,40 +7838,64 @@ module C_syntax (B : C_syntax_config) = struct
        | _ -> Set.empty (module Tn));
     ctx
 
+  (* gh-ocannl-1473: the order the kernel's [traced_store] entries are emitted in -- parameters, the
+     Metal pool-slot table, local declarations. First the entries the code touches, in the order it
+     first touches them ({!Low_level.touched_tns_in_order}); then any it does not (only a kernel
+     holding a [Staged_compilation] callback declares those) in node-creation order. Neither depends
+     on hash-table traversal, whose order follows the nodes' uids: two fresh builds of one program
+     mint different uids for the same nodes, and a traversal of the store listed them differently,
+     so the two builds emitted different kernels (most visibly, Metal bound its pool slots in a
+     different order). The second part's creation order is reproduced by a fresh build too, which
+     constructs its nodes in the same order. *)
+  let store_order ~llc ~(traced_store : Low_level.traced_store) =
+    let touched = List.filter (Low_level.touched_tns_in_order llc) ~f:(Hashtbl.mem traced_store) in
+    let seen = Hash_set.of_list (module Tn) touched in
+    let untouched =
+      Hashtbl.keys traced_store
+      |> List.filter ~f:(fun tn -> not (Hash_set.mem seen tn))
+      |> List.sort ~compare:Tn.compare
+    in
+    (touched, untouched)
+
   let derive_kparams ~llc ~traced_store ~placements ~alias_candidates ~(merge_node : Tn.t option)
       ~idx_params =
-    (* The materialized in-context nodes the kernel's code touches, in deterministic [traced_store]
-       order, with their per-param pointer declaration (used by the [`Per_param] style). Touched,
-       not merely stored (gh-ocannl-1391, ahrefs/ocannl#1387): parameter names come from
-       [get_ident], whose disambiguation visits the code, so a store entry the code never touches
-       would be declared under a name nothing disambiguated -- two such nodes with one label are a
-       duplicate parameter, which a kernel compiled alone (the isolated per-kernel instrument)
-       cannot get past. Every node [Low_level.code_touches_tn] reports is one [get_ident] visits. A
-       [Staged_compilation] callback's accesses are invisible to both, so a kernel holding one keeps
-       every stored entry. *)
-    let touched =
-      if Low_level.has_staged_compilation llc then fun _ -> true
-      else fun tn -> Low_level.code_touches_tn tn llc
+    (* The materialized in-context nodes the kernel's code touches, in [store_order] (canonical
+       across fresh builds, gh-ocannl-1473), with their per-param pointer declaration (used by the
+       [`Per_param] style). Touched, not merely stored (gh-ocannl-1391, ahrefs/ocannl#1387):
+       parameter names come from [get_ident], whose disambiguation visits the code, so a store entry
+       the code never touches would be declared under a name nothing disambiguated -- two such nodes
+       with one label are a duplicate parameter, which a kernel compiled alone (the isolated
+       per-kernel instrument) cannot get past. Every node [Low_level.touched_tns_in_order] lists is
+       one [get_ident] visits. A [Staged_compilation] callback's accesses are invisible to both, so
+       a kernel holding one keeps every stored entry. *)
+    let touched, untouched = store_order ~llc ~traced_store in
+    let classify tn =
+      let backend_info, is_param =
+        let plc = placements in
+        if Tn.Placements.is_virtual_force plc tn (Site "334:kernel-param-virtual-query") then
+          ("Virt", false)
+        else if Tn.Placements.is_in_context_force placements tn (Site "46:kernel-param-in-context")
+        then ("Ctx", true)
+        else if Tn.Placements.is_materialized_force plc tn (Site "335:kernel-param-global") then
+          ("Global", true)
+        else if Tn.Placements.known_not_materialized plc tn then ("Local", false)
+        else assert false
+      in
+      let backend_info = Sexp.Atom backend_info in
+      if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
+        tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
+      is_param
+    in
+    (* Every stored entry is classified (the [backend_info] annotation), touched or not. *)
+    let classified = List.map (touched @ untouched) ~f:(fun tn -> (tn, classify tn)) in
+    let candidates =
+      if Low_level.has_staged_compilation llc then classified
+      else List.take classified (List.length touched)
     in
     let ptr_params : (string * Tn.t) list =
-      List.rev
-      @@ Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:_ acc ->
-          let backend_info, is_param =
-            let plc = placements in
-            if Tn.Placements.is_virtual_force plc tn (Site "334:kernel-param-virtual-query") then
-              ("Virt", false)
-            else if
-              Tn.Placements.is_in_context_force placements tn (Site "46:kernel-param-in-context")
-            then ("Ctx", true)
-            else if Tn.Placements.is_materialized_force plc tn (Site "335:kernel-param-global") then
-              ("Global", true)
-            else if Tn.Placements.known_not_materialized plc tn then ("Local", false)
-            else assert false
-          in
-          let backend_info = Sexp.Atom backend_info in
-          if not @@ Utils.sexp_mem ~elem:backend_info tn.backend_info then
-            tn.backend_info <- Utils.sexp_append ~elem:backend_info tn.backend_info;
-          if is_param && touched tn then (
+      List.filter_map candidates ~f:(fun (tn, is_param) ->
+          if not is_param then None
+          else (
             (* Assignments lowering rewrites every alias-view access to a parent access, so alias
                tnodes never reach this parameter list — but hand-built [Low_level.t] (schedule
                layer, tests) could mint one, and with [restrict_keyword] an aliased parameter pair
@@ -7890,9 +7914,8 @@ module C_syntax (B : C_syntax_config) = struct
               | Some kw when not (Hash_set.mem alias_candidates tn) -> kw ^ " "
               | _ -> ""
             in
-            (B.typ_of_prec (Lazy.force tn.Tn.storage_prec) ^ " *" ^ restrict_ ^ get_ident tn, tn)
-            :: acc)
-          else acc)
+            Some
+              (B.typ_of_prec (Lazy.force tn.Tn.storage_prec) ^ " *" ^ restrict_ ^ get_ident tn, tn)))
     in
     (* [`Per_param]: one typed pointer param per node (C/CUDA, byte-identical to before). [`Pooled
        n]: [n] byte-pointer pool params + one slot table (Metal binding fix). *)
@@ -7930,12 +7953,12 @@ module C_syntax (B : C_syntax_config) = struct
         @@ map merge_node ~f:(fun tn ->
             ("const " ^ B.typ_of_prec (Lazy.force tn.storage_prec) ^ " *merge_buffer", Merge_buffer)))
     in
-    let all_params = log_file_param @ merge_param @ idx_params @ kparams in
-    let sorted_params =
-      List.sort all_params ~compare:(fun (p1_name, _) (p2_name, _) ->
-          compare_string p1_name p2_name)
-    in
-    (ptr_params, sorted_params)
+    (* gh-ocannl-1473: in a fixed order of kinds, each kind in its own canonical order -- the static
+       indices in binding order, the node pointers (or the pools, then the slot table) in
+       [store_order]. Not sorted by spelling: a node's identifier, and a static index's, can carry
+       its minted number ([n99_w], [i12]), and a decimal string sort of those reorders two of them
+       whenever a fresh build's numbers straddle a power of ten. *)
+    (ptr_params, log_file_param @ merge_param @ idx_params @ kparams)
 
   let compile_proc ~name idx_params
       (Low_level.
@@ -8030,12 +8053,12 @@ module C_syntax (B : C_syntax_config) = struct
          | _ -> ()
        in
        scan llc);
-    let ptr_params, sorted_params =
+    let ptr_params, params =
       derive_kparams ~llc ~traced_store ~placements:optimize_ctx.Low_level.placements
         ~alias_candidates:optimize_ctx.Low_level.alias_candidates ~merge_node ~idx_params
     in
     let args_docs =
-      List.mapi sorted_params ~f:(fun pos (name, _) ->
+      List.mapi params ~f:(fun pos (name, _) ->
           string (B.buffer_prefix ^ name ^ B.buffer_suffix ~pos))
       @ List.map B.extra_args ~f:string
     in
@@ -8104,7 +8127,7 @@ module C_syntax (B : C_syntax_config) = struct
                        prologue and logged at their first [Set]; the pool bases / slot table
                        themselves are not separately logged here. *)
                     empty)
-              sorted_params
+              params
        in
        body := !body ^^ debug_init_doc ^^ hardline);
 
@@ -8216,7 +8239,8 @@ module C_syntax (B : C_syntax_config) = struct
                    ~zero_init:node.Low_level.zero_initialized_by_code tn
                  ^^ hardline
              else empty)
-           (Hashtbl.to_alist traced_store)
+           (let touched, untouched = store_order ~llc ~traced_store in
+            List.map (touched @ untouched) ~f:(fun tn -> (tn, Hashtbl.find_exn traced_store tn)))
     in
     body := !body ^^ local_decls ^^ hardline;
     (* gh-ocannl-1255: kernel-scope scratch of the accepted tile-MMA emissions (Metal's converted
@@ -8244,7 +8268,7 @@ module C_syntax (B : C_syntax_config) = struct
     let func_doc =
       func_header () ^^ space ^^ lbrace ^^ nest 2 (hardline ^^ !body) ^^ hardline ^^ rbrace
     in
-    (sorted_params, func_doc, launch)
+    (params, func_doc, launch)
 end
 
 (** One driver owns naming, binding order, emission order and batch source assembly. The compiler

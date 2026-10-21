@@ -1427,8 +1427,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `ocannl_ambient` and lists it beside `ocannl_config`. `config_dep_completeness` requires one of
   the three -- the carrying copy as the nearest configuration, `ocannl_ambient`, or `(universe)` --
   of every site it requires a configuration of, and checks both producers in `test/config/dune`;
-  `Slot_kind` reads the carrying copy as test/config's backend only while its producer has exactly
-  the two-`cat` shape. The per-key declarations that predate the record -- and the derivations in
+  `slot_kind_live` accepts a reader of the carrying copy as reading test/config's backend only
+  while its producer has exactly the two-`cat` shape. The per-key declarations that predate the record -- and the derivations in
   `env_var_deps` that asked for them: named schedule values, the cc width, ambient guards' keys,
   `Generated.init`'s `build_files_prefix` -- are retired (gh-ocannl-1425), and `env_var_deps` now
   refuses an `(env_var …)` of any name `Utils.env_var_in_ambient_record` is true of, the predicate
@@ -3736,25 +3736,39 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   none of them holds a GPU. It asks two
   questions. First, which backends do the stanzas the run can reach NAME (`; ocannl-backend: cuda`
   and friends, which hold that backend whatever the configuration says): `ocannl_slot_kind`
-  (`test/config`, over `Test_utils.Slot_kind`, reading the markers `env_var_deps` enforces and
-  the aliases the argv reaches, their `deps` closure and dune's per-test `runtest-<name>`
-  included, read from a closed set of argv shapes: `runtest` with plain relative directories, `build` with
-  `@`/`@@` alias targets, options from a harmless list; any other word -- `.`, `./x`, `--`, a path
-  target, `--root`, an alias-naming or unknown option -- is every backend) answers, so `runtest test/operations` is a GPU batch while
-  `@test/operations/runtest-<cpu test>` and `@test/operations/scans` are not; a Metal marker
-  counts even on Linux, where its stanza compiles the stub. Second, for the stanzas that read the
-  configuration -- counted unless the same tool PROVES them unread (no `reads config` line): a
-  batch reaching only `none`-marked stanzas (`@test/operations/scans`) then holds no backend and
-  runs uncapped and `--cpu` whatever a test configuration names (gh-ocannl-1095). The proof is the
-  inverted claim, after two review rounds each found dune shapes a closure missed: the reach is the
-  closure of the argv's aliases under everything dune builds first (dependency aliases across
-  directories, generated `runtest-<name>` included; every file a stanza mentions matched by
-  basename to any rule's targets; every compilation in the tree and every source-like producer,
-  for any batch), and it is trusted only where every stanza in it uses constructs modelled
-  exactly -- any other pform, dependency form, stanza head (`include`, `cram`, `install`),
-  `dynamic-run` or preprocessing action makes the batch every backend, and so does a backend set
-  past the configuration (`setenv`/`env-vars` of `OCANNL_BACKEND`, a generated `ocannl_config`). `slot_kind_live`
-  pins the live `scans` answer, so a stanza that breaks the proof shows as a diff. The configurations are resolved, not read off `OCANNL_BACKEND`, because an
+  (`test/config`, over `Test_utils.Slot_kind`, reading the markers `env_var_deps` enforces over
+  the closure of the argv's aliases -- dependency aliases across directories, generated
+  `runtest-<name>` included, every file a stanza mentions matched by basename to any rule's
+  targets, every compilation and every source-like producer -- an over-approximation with a stated
+  boundary, not a proof; read from a closed set of argv shapes: `runtest` with plain relative
+  directories, `build` with `@`/`@@` alias targets or plain compilation products, options from a
+  harmless list; any other word -- `.`, `--`, a rule's output, `--root`, an alias-naming or
+  unknown option -- is every backend) answers, so `runtest test/operations` is a GPU batch while
+  `@test/operations/runtest-<cpu test>` is not; a Metal marker counts even on Linux, where its
+  stanza compiles the stub. Second, the configuration, which counts for every batch but two shapes
+  (gh-ocannl-1227, the maintainer's decision replacing gh-ocannl-1095's proof that a batch read
+  none, which needed an exact model of every dune construct and grew one per review round): every
+  target on `Slot_kind.config_free_aliases` (`@test/operations/scans`, `@metal-codegen`), which
+  then holds only what its stanzas name, or a plain compilation product (`build bin/x.exe`,
+  `build ./test/operations/x.exe` as `bisect` spells it, a library's `.cma`/`.cmxa`), which
+  compiles and runs nothing -- no backend, `--cpu`, dune's own width. Either fails closed: a
+  closure that reaches a configuration reader all the same (a tree the scan below has not judged
+  yet) counts the configuration; a dependency the closure cannot follow (an alias spelled
+  through a pform, an `(include …)`, a `dynamic-run`) makes any batch reaching it every backend;
+  and an unread stanza head anywhere (`include`, `cram`), or a reader of a configuration the
+  runner does not resolve (the check below, run by `ocannl_slot_kind` too), makes every batch
+  every backend. So a single `none`-marked
+  test outside the list counts the configuration again: under a GPU configuration it takes a GPU
+  slot, the loud direction, by design; `@lifecycle` stays off the list because its probes read
+  the configuration. `slot_kind_live` (in `@test/operations/scans`, reading only the files its
+  deps hand it) keeps both answers true of the tree: no listed alias's closure holds a
+  configuration reader or a dependency it cannot follow; what every build reaches (compilations,
+  source-like producers, their files) holds no reader and names no backend; every reader (a stanza declaring `(env_var OCANNL_BACKEND)`, or neither it nor a
+  marker) runs where its nearest configuration is one the runner resolves -- in `BATCH_CONFIG_DIRS`, or copied
+  from one or from the ambient copy, whose producer must keep its two-`cat` shape -- so none reads
+  the gitignored root one (gh-ocannl-1249); and no `include`, `cram` or other unread head, nor a
+  `dynamic-run`, is in the tree. A backend an action fixes (`setenv`, `--ocannl_backend`,
+  `%{bin:env}`) is its marker's to name; nothing analyses actions. The configurations are resolved, not read off `OCANNL_BACKEND`, because an
   ordinary cc batch leaves it unset: `ocannl_read_config`
   (`test/config`, the same Utils resolution a test run makes) is built and asked from each
   directory whose `ocannl_config` sets a backend — `test/config` (copied by every `test/*`

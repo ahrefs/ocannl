@@ -995,8 +995,10 @@
 # among schedules that can actually be built. On CUDA and HIP the model starts from the seeded
 # untuned plan instead of the default pipeline (gh-ocannl-1253, gpu_default_sketch_min_reduction),
 # and its sketch candidates are restricted to the seeding's numerics-preserving forms (scalar
-# register-blocktiled sketches at a site accumulating at its storage precision: no tensor-core,
-# conv or coalesced form), so the pick never changes a value the untuned compile computes.
+# register-blocktiled sketches at a site accumulating at its storage precision: no tensor-core
+# or conv form), so the pick never changes a value the untuned compile computes. The coalesced
+# layouts the autotuner seeds preserve values too, but the model does not rank them: its score
+# cannot tell them from their uncoalesced twins (gh-ocannl-1278).
 #model_default_schedule=false
 
 # gh-ocannl-514, the placement levels of the untuned regime: with model_default_schedule=true and

@@ -3930,17 +3930,22 @@ let extend_spec (elem : compiled) (u : unit_gen) (op : SC.saved_optop) : spec op
    per-fission-segment (the [F_sketch] granularity — [fission_scheduled] with empty per-segment
    schedules, since only the pre-schedule segment slices are consulted). Fission not applying
    degrades to the whole-routine site; a classified rejection degrades likewise rather than failing
-   the caller (the classification is a ranking input, not a legality fact). *)
-let mma_eligible_sites ~(limits : Ir.Backend_intf.hardware_limits) ~static_indices
+   the caller (the classification is a ranking input, not a legality fact).
+
+   Segmented as THIS backend's seeders segment ([tune]'s [F_sketch] flavor and [model_default] pass
+   [Sched.fission_keep_mapping ~is_gpu]): cc advertises an [mma] descriptor too, and segmenting it
+   the GPU way both judged its sites on a segmentation its own families never see and read the GPU
+   lane keys ([gpu_fission_keep_mapping], [gpu_serial_lanes]) on a backend whose searches never read
+   them (gh-ocannl-1430, raised on gh-ocannl-1331). *)
+let mma_eligible_sites ~is_gpu ~(limits : Ir.Backend_intf.hardware_limits) ~static_indices
     (opt : LL.optimized) : matmul_site list =
   match limits.Ir.Backend_intf.mma with
   | None -> []
   | Some mma ->
       let segments =
         match
-          (* [mma] is a GPU capability: segment as the GPU seeders do. *)
           Sched.fission_scheduled
-            ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu:true ~limits)
+            ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
             ~preset:(fun _ -> [])
             ~zero_sched:(fun _ -> [])
             ~static_indices (scratch_of opt)
@@ -3960,14 +3965,15 @@ let mma_eligible_sites ~(limits : Ir.Backend_intf.hardware_limits) ~static_indic
             (mma_tile_for_precisions_in_scope mma ~scope:(matmul_mma_scope site ~bk:0) ~a_prec
                ~b_prec ~d_prec))
 
-let placement_enablement ~limits ~static_indices ~(base : LL.optimized) ~(allmat : LL.optimized) =
+let placement_enablement ~is_gpu ~limits ~static_indices ~(base : LL.optimized)
+    ~(allmat : LL.optimized) =
   let site_tns sites =
     List.fold sites
       ~init:(Set.empty (module Ir.Tnode))
       ~f:(fun acc site -> Set.add (Set.add (Set.add acc site.m_a) site.m_b) site.m_d)
   in
-  let base_sites = mma_eligible_sites ~limits ~static_indices base in
-  let allmat_sites = mma_eligible_sites ~limits ~static_indices allmat in
+  let base_sites = mma_eligible_sites ~is_gpu ~limits ~static_indices base in
+  let allmat_sites = mma_eligible_sites ~is_gpu ~limits ~static_indices allmat in
   (* An all-materialized site whose destination already carries an eligible default-placement site
      is not enablement: the family is expressible either way, and promoting its operands would rank
      ordinary mma-adjacent flips above genuinely family-unlocking ones. *)
@@ -4316,7 +4322,11 @@ let placement_surface ?name ?ordering ?(evidence = []) ctx comp bindings =
     List.filter_map candidates ~f:(fun fc -> Option.some_if (offers_materialize fc) fc.LL.fc_tn)
   in
   let allmat = Context.lowered_for_decisions ?name ~materialized:to_materialize ctx comp bindings in
-  let enablement, disablement = placement_enablement ~limits ~static_indices ~base ~allmat in
+  let enablement, disablement =
+    placement_enablement
+      ~is_gpu:(Sched.backend_is_gpu (Context.backend_name ctx))
+      ~limits ~static_indices ~base ~allmat
+  in
   let ps_candidates = rank_flip_candidates ~ordering ?profit ~enablement ~disablement candidates in
   let candidate_set =
     Set.of_list (module Ir.Tnode) (List.map ps_candidates ~f:(fun fc -> fc.LL.fc_tn))
@@ -4577,9 +4587,12 @@ let seeded_geometries =
 let seeded_min_blocks = 128
 
 (* The numerics-preserving candidate set (gh-ocannl-1324, gh-ocannl-1253): the unfused scalar
-   blocktile pipeline with no twin flavor. Tensorized forms change numerics, the conv and coalesced
-   families reorder the reduction, and the twins are the search's to time. Shared by the seeding and
-   by [model_default]'s GPU family search, so the two cannot drift. *)
+   blocktile pipeline with no twin flavor. Tensorized forms change numerics and the conv family
+   reorders the reduction. The coalesced layouts do NOT: each keeps every cell's summation order
+   (test/operations/coalesce_numerics executes it), and they stay out, as the twins do, because they
+   are the search's to time -- the ranking score cannot tell a coalesced leaf from its uncoalesced
+   twin (gh-ocannl-1278). Shared by the seeding and by [model_default]'s GPU family search, so the
+   two cannot drift. *)
 let scalar_blocktile p =
   p.sk_gpu && (not p.sk_mma) && (not p.sk_conv) && (not p.sk_epilogue)
   && Option.is_none p.sk_coalesce && (not p.sk_batch_inner) && Option.is_none p.sk_swizzle
@@ -5231,9 +5244,10 @@ let model_seeding ~backend ~limits =
 (* Where the model starts from the seeded plan, the family is restricted to the numerics-preserving
    candidate set the seeding uses ({!scalar_blocktile}, at a site accumulating at its storage
    precision), so a model pick never changes a result the seeded plan would not: tensorized forms
-   reround, the conv and coalesced families reorder the reduction. Other leaves are kept out of the
-   ranking, counted as not numerics-preserving, never an error. Metal, the CPU backends and an
-   unseeded CUDA/HIP compile keep the whole family. *)
+   reround, the conv family reorders the reduction. (The coalesced branch is not enumerated here at
+   all: it preserves numerics, but the score ties it with its uncoalesced twins, gh-ocannl-1278.)
+   Other leaves are kept out of the ranking, counted as not numerics-preserving, never an error.
+   Metal, the CPU backends and an unseeded CUDA/HIP compile keep the whole family. *)
 let model_admits ~seeding ~accum_prec (base_opt : LL.optimized) =
   let preserving =
     lazy
@@ -5314,10 +5328,10 @@ let model_default ?name ?report ctx comp bindings =
     (* Where the model starts from the seeded plan, the family is restricted to the
        numerics-preserving candidate set the seeding uses ({!scalar_blocktile}, at a site
        accumulating at its storage precision), so a model pick never changes a result the seeded
-       plan would not: tensorized forms reround, the conv and coalesced families reorder the
-       reduction. Other leaves are kept out of the ranking, counted as not numerics-preserving
-       ([n_excluded]), never an error. Metal, the CPU backends and an unseeded CUDA/HIP compile keep
-       the whole family. *)
+       plan would not: tensorized forms reround, the conv family reorders the reduction (see
+       [model_admits] on the coalesced branch). Other leaves are kept out of the ranking, counted as
+       not numerics-preserving ([n_excluded]), never an error. Metal, the CPU backends and an
+       unseeded CUDA/HIP compile keep the whole family. *)
     let admits base_opt = model_admits ~seeding:(Lazy.force seeding_here) ~accum_prec base_opt in
     let capabilities = Context.codegen_capabilities ctx in
     (* [model_family_search] with the default as incumbent, logging its ledger; under the
@@ -5739,7 +5753,7 @@ type explain = {
 type segment_explain = { xs_segment : string; xs_candidates : (string * explain) list }
 type explanation = { x_routine : (string * explain) list; x_segments : segment_explain list }
 
-let model_explain ?name ctx comp bindings =
+let model_explain ?name ?(coalesced = false) ctx comp bindings =
   let backend = Context.backend_name ctx in
   let is_gpu = Sched.backend_is_gpu backend and is_cpu = Sched.backend_is_cpu backend in
   let limits = Context.hardware_limits ctx in
@@ -5818,15 +5832,7 @@ let model_explain ?name ctx comp bindings =
     (* The sketch leaves [model_default]'s family search visits on [prog] (a whole routine or one
        segment), in its visiting order. Exactly the leaves it can score: a schedule that fails to
        apply, or whose scheduled form fails validation, is excluded from its ranking too. *)
-    let leaf_explains ~label prog =
-      let admits = model_admits ~seeding ~accum_prec prog in
-      let leaves =
-        match sketch_family_tree ~capabilities:caps ~is_gpu ~is_cpu ~limits prog with
-        | Some tree ->
-            Sspace.leaves
-              (if Lazy.force geometry_lattice_enabled then lift_geometry_lattice tree else tree)
-        | None -> []
-      in
+    let explain_leaves ~label ~admits prog leaves =
       List.filter_map leaves ~f:(fun p ->
           match
             validate_segments_for_model ~limits
@@ -5838,6 +5844,30 @@ let model_explain ?name ctx comp bindings =
           with
           | exception Outcome.Cause_at _ -> None
           | segs -> Some (label p, explain ~ex_admitted:(admits p) segs))
+    in
+    let leaf_explains ~label prog =
+      let leaves =
+        match sketch_family_tree ~capabilities:caps ~is_gpu ~is_cpu ~limits prog with
+        | Some tree ->
+            Sspace.leaves
+              (if Lazy.force geometry_lattice_enabled then lift_geometry_lattice tree else tree)
+        | None -> []
+      in
+      explain_leaves ~label ~admits:(model_admits ~seeding ~accum_prec prog) prog leaves
+    in
+    (* gh-ocannl-1278: the coalesced tuner branch's whole-routine leaves, which [model_default] does
+       not rank, listed on request to check the score's ranking of them against timings. A leaf is
+       marked admitted when its uncoalesced form is: the set [model_default] would rank were the
+       coalesced layouts admitted as numerics-preserving (neither reorders a cell's summation). *)
+    let coalesced_explains prog =
+      if not coalesced then []
+      else
+        let admits = model_admits ~seeding ~accum_prec prog in
+        explain_leaves
+          ~label:(fun p -> spec_label (Whole (W_sketch p)))
+          ~admits:(fun p -> admits { p with sk_coalesce = None })
+          prog
+          (coalesced_seed_params ~capabilities:caps ~is_gpu ~is_cpu ~limits prog)
     in
     (* gh-ocannl-1438: [model_default]'s per-segment substitution, as it derives it -- the
        fold-zeros segmentation of the searched program, when it splits the routine or exposes a
@@ -5866,7 +5896,8 @@ let model_explain ?name ctx comp bindings =
     {
       x_routine =
         (incumbent_label, explain incumbent)
-        :: leaf_explains ~label:(fun p -> spec_label (Whole (W_sketch p))) base;
+        :: (leaf_explains ~label:(fun p -> spec_label (Whole (W_sketch p))) base
+           @ coalesced_explains base);
       x_segments;
     }
 
