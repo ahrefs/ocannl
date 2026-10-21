@@ -93,9 +93,12 @@ val is_bprop_root : t -> bool
 val take_forward_code : t -> comp
 (** The unchecked half of {!consume_forward_code}, for a tensor the caller has established is a
     forward root ({!is_fwd_root}): removes it from the forward roots, marks its forward code as
-    taken, and returns the code. This is the handout every path that embeds a tensor's forward code
-    goes through -- {!consume_forward_code} and the [%cd] operands' embedding alike -- so that a
-    later {!consume_forward_code} on the same tensor returns the same comp. *)
+    taken, and returns the code. It is an EMBEDDING, not a handout: {!rewind_to_last_closure} treats
+    an embedding made since the last closure as discarded work and makes the tensor a root again;
+    code a caller keeps is handed out with {!consume_forward_code}. This is the handout every path
+    that embeds a tensor's forward code goes through -- {!consume_forward_code} and the [%cd]
+    operands' embedding alike -- so that a later {!consume_forward_code} on the same tensor returns
+    the same comp. *)
 
 val discard_backprop_code : t -> unit
 (** Drops [t] from the backprop roots without handing its code out, and marks it so: the
@@ -295,6 +298,43 @@ val bump_next_id : int -> unit
 
 val get_next_id : unit -> int
 (** [get_next_id ()] returns the next tensor ID that will be allocated by the session. *)
+
+val rewind_to_last_closure : ?reason:string -> unit -> unit
+(** Restores a usable session after a failed construction, without discarding closed or compiled
+    work (gh-ocannl-1301). A construction that fails after mutating the inference session taints it:
+    from then on, constructions, [Shape.finish_inference] (so forcing dims or projections), code
+    handout and every [Context] compile raise, naming the first failure. Rewinding discards
+    everything opened since the last successful [Shape.finish_inference] -- the failed construction
+    and every construction since that closure, successful or not -- and clears the taint:
+
+    - the solver's open state is emptied (closed shapes carry no variables, and their committed
+      rows, paddings and neutral elements cannot have changed: a write that would change them is
+      refused);
+    - the forward and backprop root maps are restored to their state at the closure, with the
+      handout markers of the restored roots reset; code handed out to callers since then stays
+      handed out;
+    - the tensors allocated since the closure are discarded: using one as an operand, handing out or
+      compiling its code, printing it or transferring its node raises [Session_error] naming the
+      rewind's provenance ("discarded by the rewind after ..."), as do their update steps'
+      projections;
+    - variable references the discarded work bound or set are refused by [Shape.set_dim] and the
+      other reference setters, and by any later einsum they are passed to;
+    - the cached random seed is restored to the closure's.
+
+    Counters are never reset, so later tensors never collide with discarded ones. Contexts, routines
+    and buffers are untouched, and nothing executed is undone. Without a taint it simply discards
+    the open work ([reason] names it in the stale-handle errors). Raises when called from within an
+    [op_asn]. *)
+
+val update_operand_prec : t -> Ir.Ops.prec -> unit
+(** Sets an operand's precision ahead of an operation that requires it; refused (raises
+    [Session_error]) when it would change a closed operand's precision. *)
+
+val update_operands_prec : t list -> Ir.Ops.prec -> unit
+(** {!update_operand_prec} over several operands, all validated before any is written. *)
+
+val check_not_discarded : what:string -> t -> unit
+(** Raises [Session_error] when the tensor's value or gradient node was discarded by a rewind. *)
 
 val unsafe_reinitialize : ?namespace:string -> unit -> unit
 (** Bring global state to its initialization values. This invalidates any previously defined tensors

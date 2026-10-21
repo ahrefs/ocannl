@@ -109,3 +109,15 @@ files.
   `merge_dealiased_padding` folds the copy's inferred padding back. Pointwise self-operands are
   unaffected: their equations unify the copies' ids again. Executed parity:
   `test/operations/self_concat.ml`.
+- Closed shapes are write-guarded (gh-ocannl-1301): `Shape.t.closed` is set by a SUCCESSFUL
+  `finish_inference` (after every derivation), and every write site of rows, paddings and
+  `padding_elem` (`set_rows`, `set_padding`, `set_padding_elem` in `shape.ml`) checks equality first
+  — rows modulo projection ids (`Row.equal_modulo_proj`; `fresh_shape` re-mints them per
+  derivation). A new write site on a shape must go through those helpers. Reads of committed state
+  (`to_dims`/`to_padding` of a closed shape, `get_projections` of a committed step) skip
+  `finish_inference`: a failed closure of OTHER work would otherwise poison a closed tensor's lazies
+  (OCaml lazies re-raise their first exception). Tests that deliberately continue after an
+  expected shape error must `Tensor.rewind_to_last_closure ()` when `Shape.taint_provenance ()` is
+  set (`test_symbolic_extents.ml`), and a test that closes an operand to inspect it (e.g. via
+  `Shape.to_padding`) can no longer then give it a padded consumer — read the fields instead
+  (`neutral_elem_guard.ml`).

@@ -150,7 +150,6 @@ let exempt_zero_reference_exports =
     "Operation.stretch";
     "Operation.sub";
     "Operation.tanh";
-    "Operation.threefry4x32_crypto";
     "Operation.threefry4x32_light";
     "Operation.transpose_op_of_spec";
     "Operation.tropical";
@@ -208,7 +207,6 @@ let exempt_zero_reference_exports =
     "Tnode.is_alphanum_";
     "Tnode.known_not_materialized";
     "Tnode.log_accessible_headers";
-    "Tnode.next_uid";
     "Tnode.prec_of_dalayed";
     "Tnode.scan_host_bounds";
     "Tnode.transition_memory_mode";

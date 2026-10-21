@@ -31,6 +31,16 @@ type t = {
           [Some (Some v)] means all operations use neutral element [v], [Some None] means different
           operations require different neutral elements (margin must be reset before each
           operation). *)
+  mutable closed : bool; [@sexp_drop_if fun _ -> true] [@default false] [@equal.ignore]
+      (** Set by a successful [finish_inference] on every shape of the steps it commits
+          (gh-ocannl-1301): a closed shape's rows (modulo projection ids), paddings and
+          [padding_elem] no longer change -- a write that would change them raises before writing
+          anything. Not part of the shape's value: dropped from sexps, ignored by [equal]. *)
+  mutable discarded_by : string option;
+      [@sexp_drop_if fun _ -> true] [@default None] [@equal.ignore]
+      (** Set by [Tensor.rewind_to_last_closure] on every open shape it discards, to the rewind's
+          provenance: a step over a discarded shape is refused before it is registered. Not part of
+          the shape's value. *)
   id : int;  (** A node that has the same shape as this shape. *)
   debug_name : string;
 }
@@ -49,6 +59,28 @@ type delayed_var_ref = {
 
 let get_variable_ref ref_label =
   { var_ref = Ir.Indexing.{ ref_label; solved_dim = None; solved_sym = None }; var = `Not_set_yet }
+
+(* Variable references are caller-retained (gh-ocannl-1301): the ones open work bound or set since
+   the last closure ([open_refs]) are, after a rewind, stale handles like the work's tensors -- a
+   reference carries what the discarded inference wrote into it (its binding, an inferred
+   [solved_dim]), so reusing it is refused rather than letting it inject a discarded dimension. *)
+let open_refs : delayed_var_ref list ref = ref []
+let discarded_refs : (delayed_var_ref * string) list ref = ref []
+
+let touch_ref (r : delayed_var_ref) =
+  Row.note_mutation ();
+  if not (List.mem !open_refs r ~equal:phys_equal) then open_refs := r :: !open_refs
+
+let check_ref_live (r : delayed_var_ref) =
+  match List.find !discarded_refs ~f:(fun (d, _) -> phys_equal d r) with
+  | None -> ()
+  | Some (_, provenance) ->
+      raise
+      @@ Row.Shape_error
+           ( [%string
+               "the variable reference %{r.var_ref.ref_label} was bound or set by work discarded \
+                by the rewind after %{provenance}; capture it afresh"],
+             [] )
 
 type compose_type =
   | Pointwise_bin
@@ -320,9 +352,11 @@ let add_var_used_in_pointwise row =
 let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~error_shapes
     dim_refs =
   List.filter_map dim_refs ~f:(fun delayed_ref ->
+      check_ref_live delayed_ref;
       let label = delayed_ref.var_ref.ref_label in
       match Hashtbl.find dim_var_env label with
       | Some var -> (
+          touch_ref delayed_ref;
           delayed_ref.var <- `Dim var;
           let origin =
             [
@@ -345,6 +379,7 @@ let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~
       | None -> (
           match Hashtbl.find row_var_env label with
           | Some var ->
+              touch_ref delayed_ref;
               delayed_ref.var <- `Row var;
               if Option.is_some delayed_ref.var_ref.solved_sym then
                 raise
@@ -573,10 +608,22 @@ let compute_block_discardable_vars ~(this_side_rows : Row.t list)
 
 let unused_shapes = Hash_set.create (module Int)
 
+(* Writes to [unused_shapes] count as session mutations (gh-ocannl-1301): it filters which rows
+   [finish_inference] closes. *)
+let unmark_unused id =
+  if Hash_set.mem unused_shapes id then (
+    Row.note_mutation ();
+    Hash_set.remove unused_shapes id)
+
+let mark_unused id =
+  if not (Hash_set.mem unused_shapes id) then (
+    Row.note_mutation ();
+    Hash_set.add unused_shapes id)
+
 let%debug4_sexp get_inequalities ?(for_projections = false)
     ({ shape = cur_sh; logic; _ } as _upd : update_step) :
     proj_axis_env * Row.dim_var_set * Row.constraint_ list =
-  Hash_set.remove unused_shapes cur_sh.id;
+  unmark_unused cur_sh.id;
   let _debug_cur_sh : t = cur_sh in
   let _debug_logic : logic = logic in
   let open Row in
@@ -748,7 +795,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
   | Terminal { is_param; logic = Fetch (Embed_dim _) } -> defaults @@ mark_terminal ~is_param
   | Terminal { is_param; logic = Fetch Embed_self_id } -> defaults @@ mark_terminal ~is_param
   | Transpose (Transpose, sh) ->
-      Hash_set.remove unused_shapes sh.id;
+      unmark_unused sh.id;
       defaults
       @@ [
            Row_ineq
@@ -771,7 +818,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
              };
          ]
   | Transpose (Pointwise_un, sh) ->
-      Hash_set.remove unused_shapes sh.id;
+      unmark_unused sh.id;
       add_var_used_in_pointwise cur_sh.input.bcast;
       add_var_used_in_pointwise sh.input.bcast;
       defaults
@@ -796,8 +843,8 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
              };
          ]
   | Broadcast (Compose, sh1, sh2) ->
-      Hash_set.remove unused_shapes sh1.id;
-      Hash_set.remove unused_shapes sh2.id;
+      unmark_unused sh1.id;
+      unmark_unused sh2.id;
       add_var_used_in_spec_or_compose sh1.input.bcast;
       defaults
       @@ [
@@ -842,8 +889,8 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
              };
          ]
   | Broadcast (Pointwise_bin, sh1, sh2) ->
-      Hash_set.remove unused_shapes sh1.id;
-      Hash_set.remove unused_shapes sh2.id;
+      unmark_unused sh1.id;
+      unmark_unused sh2.id;
       add_var_used_in_pointwise cur_sh.input.bcast;
       add_var_used_in_pointwise sh1.input.bcast;
       add_var_used_in_pointwise sh2.input.bcast;
@@ -887,9 +934,9 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
              };
          ]
   | Broadcast_tern (Compose_accumulate, sh1, sh2, sh3) ->
-      Hash_set.remove unused_shapes sh1.id;
-      Hash_set.remove unused_shapes sh2.id;
-      Hash_set.remove unused_shapes sh3.id;
+      unmark_unused sh1.id;
+      unmark_unused sh2.id;
+      unmark_unused sh3.id;
       add_var_used_in_spec_or_compose sh1.input.bcast;
       defaults
       @@ [
@@ -952,9 +999,9 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
              };
          ]
   | Broadcast_tern (Pointwise_tern, sh1, sh2, sh3) ->
-      Hash_set.remove unused_shapes sh1.id;
-      Hash_set.remove unused_shapes sh2.id;
-      Hash_set.remove unused_shapes sh3.id;
+      unmark_unused sh1.id;
+      unmark_unused sh2.id;
+      unmark_unused sh3.id;
       add_var_used_in_pointwise cur_sh.input.bcast;
       add_var_used_in_pointwise sh1.input.bcast;
       add_var_used_in_pointwise sh2.input.bcast;
@@ -1023,14 +1070,14 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
   | Transpose (Batch_slice ({ static_range; static_symbol; _ } as slice_sym), sh) ->
       (* A slice index and a symbolic extent (gh-490) validate incompatibly (strict [0, range) vs.
          inclusive [0, range]): reject a binding used as both. *)
-      if slice_sym.Idx.used_as_extent then
+      if Row.is_used_as_extent slice_sym then
         raise
         @@ Row.Shape_error
              ( "Static index " ^ Idx.symbol_ident static_symbol
                ^ " is used as a symbolic dimension extent and cannot also slice a batch axis",
                [] );
-      slice_sym.Idx.used_as_slice <- true;
-      Hash_set.remove unused_shapes sh.id;
+      Row.claim_symbol_role slice_sym `Slice;
+      unmark_unused sh.id;
       let slice_v = get_var () in
       let slice_var = Var slice_v in
       let proj_axis_env =
@@ -1083,7 +1130,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
             Row_eq { r1 = cur_sh.output; r2 = sh.output; origin = get_origin `Output };
           ] )
   | Transpose (Permute (spec, dim_refs), sh) ->
-      Hash_set.remove unused_shapes sh.id;
+      unmark_unused sh.id;
       add_var_used_in_spec_or_compose cur_sh.input.bcast;
       add_var_used_in_spec_or_compose sh.input.bcast;
       let ls_rhs, ls_lhs =
@@ -1261,8 +1308,8 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
              };
          ]
   | Broadcast (Einsum (spec, dim_refs), sh1, sh2) ->
-      Hash_set.remove unused_shapes sh1.id;
-      Hash_set.remove unused_shapes sh2.id;
+      unmark_unused sh1.id;
+      unmark_unused sh2.id;
       add_var_used_in_spec_or_compose cur_sh.input.bcast;
       add_var_used_in_spec_or_compose sh1.input.bcast;
       add_var_used_in_spec_or_compose sh2.input.bcast;
@@ -1284,7 +1331,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
       in
       (proj_env, dim_var_set_empty, inequalities)
   | Block { spec; delayed_vars; rhses } ->
-      List.iter rhses ~f:(fun sh -> Hash_set.remove unused_shapes sh.id);
+      List.iter rhses ~f:(fun sh -> unmark_unused sh.id);
       add_var_used_in_spec_or_compose cur_sh.input.bcast;
       List.iter rhses ~f:(fun sh -> add_var_used_in_spec_or_compose sh.input.bcast);
       let ls_rhses, ls_lhs =
@@ -1317,9 +1364,9 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
       let discardable_vars = Set.union discardable_from_rhs discardable_from_lhs in
       (proj_env, discardable_vars, inequalities)
   | Broadcast_tern (Einsum_tern (spec, dim_refs), sh1, sh2, sh3) ->
-      Hash_set.remove unused_shapes sh1.id;
-      Hash_set.remove unused_shapes sh2.id;
-      Hash_set.remove unused_shapes sh3.id;
+      unmark_unused sh1.id;
+      unmark_unused sh2.id;
+      unmark_unused sh3.id;
       add_var_used_in_spec_or_compose cur_sh.input.bcast;
       add_var_used_in_spec_or_compose sh1.input.bcast;
       add_var_used_in_spec_or_compose sh2.input.bcast;
@@ -1352,9 +1399,171 @@ let construction_depth = ref 0
 let active_update_steps = ref []
 let active_constraints = ref []
 
+(** {3 Session consistency (gh-ocannl-1301)}
+
+    [finish_inference] is the session's only commit point. A construction that fails after mutating
+    the inference session taints it: every later construction, finalization and compile is refused
+    until [Tensor.rewind_to_last_closure] discards everything opened since the last successful
+    closure (or [Tensor.unsafe_reinitialize] resets the session). *)
+
+let iter_shapes update_step ~f =
+  f update_step.shape;
+  match update_step.logic with
+  | Terminal _ -> ()
+  | Transpose (_, sh1) -> f sh1
+  | Broadcast (_, sh1, sh2) ->
+      f sh1;
+      f sh2
+  | Broadcast_tern (_, sh1, sh2, sh3) ->
+      f sh1;
+      f sh2;
+      f sh3
+  | Block { rhses; _ } -> List.iter rhses ~f
+
+let taint : string option ref = ref None
+
+let tainted_message provenance =
+  [%string
+    "the session is inconsistent after an earlier shape error at %{provenance}; call \
+     Tensor.rewind_to_last_closure () or Tensor.unsafe_reinitialize ()"]
+
+let check_untainted () =
+  match !taint with
+  | None -> ()
+  | Some provenance -> raise @@ Row.Shape_error (tainted_message provenance, [])
+
+let taint_session ~provenance = if Option.is_none !taint then taint := Some provenance
+let taint_provenance () = !taint
+
+(* What a construction can leave behind: the solver globals (compared physically -- they are
+   persistent values, replaced on every write) and the serial of the other writes. *)
+type fingerprint = {
+  fp_serial : int;
+  fp_state : Row.environment;
+  fp_steps : update_step list;
+  fp_constraints : Row.constraint_ list;
+}
+
+let fingerprint () =
+  {
+    fp_serial = !Row.mutation_serial;
+    fp_state = !state;
+    fp_steps = !active_update_steps;
+    fp_constraints = !active_constraints;
+  }
+
+let mutated_since fp =
+  fp.fp_serial <> !Row.mutation_serial
+  || (not (phys_equal fp.fp_state !state))
+  || (not (phys_equal fp.fp_steps !active_update_steps))
+  || not (phys_equal fp.fp_constraints !active_constraints)
+
+let exn_summary = function
+  | Row.Shape_error (msg, _) -> msg
+  | Utils.User_error msg -> msg
+  | exn -> Exn.to_string exn
+
+let with_taint_on_failure ~describe f =
+  let fp = fingerprint () in
+  try f ()
+  with exn ->
+    let bt = Stdlib.Printexc.get_raw_backtrace () in
+    if mutated_since fp then taint_session ~provenance:(describe exn);
+    Stdlib.Printexc.raise_with_backtrace exn bt
+
+(* The update ids allocated by the last successful closure: steps with a larger id are open. *)
+let update_mark = ref 0
+
+(* Update-id ranges [(lo, hi]] discarded by rewinds, with the rewind's provenance. *)
+let discarded_updates : (int * int * string) list ref = ref []
+
+(* Called after every successful closure; [Tensor] records its checkpoint here. *)
+let on_closure : (unit -> unit) ref = ref (fun () -> ())
+
+let check_step_live (step : update_step) =
+  let (Update_id.Update_id n) = step.id in
+  List.iter !discarded_updates ~f:(fun (lo, hi, provenance) ->
+      if n > lo && n <= hi then
+        raise
+        @@ Row.Shape_error
+             ( [%string
+                 "the shape update step of #%{step.shape.id#Int} %{step.shape.debug_name} was \
+                  discarded by the rewind after %{provenance}; re-run its definition"],
+               [] ))
+
+let check_can_rewind () =
+  if !construction_depth > 0 then
+    raise
+    @@ Row.Shape_error
+         ( "Tensor.rewind_to_last_closure: called from within [op_asn], mid-construction of a \
+            tensor operation -- not supported; rewind after the construction returns or raises",
+           [] )
+
+let rewind_open_state ~provenance =
+  check_can_rewind ();
+  (* Every open shape is in some active step (each construction registers one): mark them, so a
+     retained handle cannot bring one back into inference. *)
+  List.iter !active_update_steps ~f:(fun step ->
+      iter_shapes step ~f:(fun sh -> if not sh.closed then sh.discarded_by <- Some provenance));
+  if !update_uid > !update_mark then
+    discarded_updates := (!update_mark, !update_uid, provenance) :: !discarded_updates;
+  update_mark := !update_uid;
+  discarded_refs := List.map !open_refs ~f:(fun r -> (r, provenance)) @ !discarded_refs;
+  open_refs := [];
+  state := Row.empty_env;
+  active_update_steps := [];
+  active_constraints := [];
+  Row.reset_transient ();
+  Row.drop_symbol_roles ();
+  taint := None
+
+(* The closed-shape write guard: a closed shape's committed content does not change. Checked at
+   every write site before anything is written; equal writes stay allowed (re-applying the
+   environment to a closed operand, re-minting projection ids). *)
+let closed_write_error (sh : t) ~field ~old_s ~new_s =
+  raise
+  @@ Row.Shape_error
+       ( [%string
+           "Shape of #%{sh.id#Int} %{sh.debug_name} is closed (committed by an earlier \
+            finish_inference), but a later operation would change its %{field} from %{old_s} to \
+            %{new_s}. A closed tensor's shape is committed: build such a consumer before closing \
+            the tensor (before compiling it, Shape.to_dims or printing it), or consume a \
+            materialized copy of it"],
+         [ Shape_mismatch [ sh ] ] )
+
+let row_string r = Sexp.to_string_hum ([%sexp_of: Row.t] r)
+
+let check_closed_rows (sh : t) ~batch ~input ~output =
+  if sh.closed then
+    List.iter
+      [
+        ("batch row", sh.batch, batch);
+        ("input row", sh.input, input);
+        ("output row", sh.output, output);
+      ]
+      ~f:(fun (field, old_r, new_r) ->
+        if not (Row.equal_modulo_proj old_r new_r) then
+          closed_write_error sh ~field ~old_s:(row_string old_r) ~new_s:(row_string new_r))
+
+let set_rows (sh : t) ~batch ~input ~output =
+  check_closed_rows sh ~batch ~input ~output;
+  sh.batch <- batch;
+  sh.input <- input;
+  sh.output <- output
+
+let padding_string p = Sexp.to_string_hum ([%sexp_of: padding] p)
+let padding_elem_string e = Sexp.to_string_hum ([%sexp_of: float option option] e)
+
+let set_padding_elem (sh : t) v =
+  if sh.closed && not ([%equal: float option option] sh.padding_elem v) then
+    closed_write_error sh ~field:"padding neutral element"
+      ~old_s:(padding_elem_string sh.padding_elem)
+      ~new_s:(padding_elem_string v);
+  sh.padding_elem <- v
+
 let infer_equal (sh1 : t) (sh2 : t) =
-  Hash_set.remove unused_shapes sh1.id;
-  Hash_set.remove unused_shapes sh2.id;
+  unmark_unused sh1.id;
+  unmark_unused sh2.id;
   let get_origin kind =
     [
       Row.
@@ -1587,6 +1796,8 @@ let product_space_shape ~(shape : t) ~(logic : logic) : t =
     input_padding = None;
     output_padding = None;
     padding_elem = None;
+    closed = false;
+    discarded_by = None;
     id = cur_sh.id;
     debug_name = "pspace:" ^ cur_sh.debug_name;
   }
@@ -1594,6 +1805,7 @@ let product_space_shape ~(shape : t) ~(logic : logic) : t =
 (** Sets the dimension/total-elements for a delayed variable reference. For row variables, this
     creates a [Total_elems] constraint that will be reconciled during [finish_inference]. *)
 let%track7_sexp set_dim (delayed_var_ref : delayed_var_ref) (dim : int) : unit =
+  check_ref_live delayed_var_ref;
   match delayed_var_ref with
   | { var_ref = { solved_sym = Some _; ref_label; _ }; _ } ->
       raise
@@ -1609,8 +1821,10 @@ let%track7_sexp set_dim (delayed_var_ref : delayed_var_ref) (dim : int) : unit =
              [ Row.Dim_mismatch [ Row.get_default_dim ~d:dim2 (); Row.get_default_dim ~d:dim () ] ]
            )
   | { var_ref = { solved_dim = None; _ }; var = `Not_set_yet; _ } ->
+      touch_ref delayed_var_ref;
       delayed_var_ref.var_ref.solved_dim <- Some dim
   | { var_ref = { solved_dim = None; _ }; var = `Dim dim_var; _ } ->
+      touch_ref delayed_var_ref;
       delayed_var_ref.var_ref.solved_dim <- Some dim;
       active_constraints :=
         Row.Dim_eq
@@ -1630,6 +1844,7 @@ let%track7_sexp set_dim (delayed_var_ref : delayed_var_ref) (dim : int) : unit =
           }
         :: !active_constraints
   | { var_ref = { solved_dim = None; _ }; var = `Row row_var; _ } ->
+      touch_ref delayed_var_ref;
       delayed_var_ref.var_ref.solved_dim <- Some dim;
       active_constraints :=
         Row.Rows_constr
@@ -1656,6 +1871,7 @@ let%track7_sexp set_dim (delayed_var_ref : delayed_var_ref) (dim : int) : unit =
     supported (a symbolic total-elements constraint would require symbolic arithmetic). *)
 let%track7_sexp set_sym_dim (delayed_var_ref : delayed_var_ref) (sym : Ir.Indexing.static_symbol) :
     unit =
+  check_ref_live delayed_var_ref;
   (* Eagerly validate the declared range (raises [Utils.User_error] if absent or non-positive). *)
   let sym_dim = Row.get_sym_dim sym in
   let origin =
@@ -1685,8 +1901,10 @@ let%track7_sexp set_sym_dim (delayed_var_ref : delayed_var_ref) (sym : Ir.Indexi
              ^ ": already set to a concrete dimension",
              [ Row.Dim_mismatch [ Row.get_default_dim ~d:dim2 (); sym_dim ] ] )
   | { var_ref = { solved_dim = None; _ }; var = `Not_set_yet; _ } ->
+      touch_ref delayed_var_ref;
       delayed_var_ref.var_ref.solved_sym <- Some sym
   | { var_ref = { solved_dim = None; _ }; var = `Dim dim_var; _ } ->
+      touch_ref delayed_var_ref;
       delayed_var_ref.var_ref.solved_sym <- Some sym;
       active_constraints :=
         Row.Dim_eq { d1 = Row.Var dim_var; d2 = sym_dim; origin } :: !active_constraints
@@ -1698,6 +1916,8 @@ let%track7_sexp set_sym_dim (delayed_var_ref : delayed_var_ref) (sym : Ir.Indexi
              [] )
 
 let set_equal delayed_ref1 delayed_ref2 =
+  check_ref_live delayed_ref1;
+  check_ref_live delayed_ref2;
   (* TODO: use provenance from the row variables once we have it there. *)
   match (delayed_ref1, delayed_ref2) with
   | { var_ref = { solved_sym = Some sym1; _ }; _ }, { var_ref = { solved_sym = Some sym2; _ }; _ }
@@ -1812,6 +2032,8 @@ let set_equal delayed_ref1 delayed_ref2 =
         :: !active_constraints
 
 let set_scale ~factor delayed_ref_large delayed_ref_small =
+  check_ref_live delayed_ref_large;
+  check_ref_live delayed_ref_small;
   if factor < 1 then
     raise
     @@ Row.Shape_error ("Shape.set_scale: factor must be >= 1, got " ^ Int.to_string factor, []);
@@ -1903,7 +2125,7 @@ let set_scale ~factor delayed_ref_large delayed_ref_small =
             assert false)
 
 let set_terminal ~is_param (sh : t) =
-  Hash_set.add unused_shapes sh.id;
+  mark_unused sh.id;
   let get_origin kind =
     Row.
       {
@@ -1926,6 +2148,7 @@ let set_terminal ~is_param (sh : t) =
    variable already unified away transfers the mark to its representative; later unifications
    propagate it further inside [Row.unify_row]. *)
 let set_resolve_at_use (sh : t) =
+  Row.note_mutation ();
   let mark row =
     let row = Row.subst_row !state row in
     (match row.bcast with Row.Row_var v -> Row.add_resolve_at_use v | Row.Broadcastable -> ());
@@ -1941,21 +2164,14 @@ let unsafe_reinitialize () =
   state := Row.empty_env;
   active_update_steps := [];
   active_constraints := [];
-  construction_depth := 0
-
-let iter_shapes update_step ~f =
-  f update_step.shape;
-  match update_step.logic with
-  | Terminal _ -> ()
-  | Transpose (_, sh1) -> f sh1
-  | Broadcast (_, sh1, sh2) ->
-      f sh1;
-      f sh2
-  | Broadcast_tern (_, sh1, sh2, sh3) ->
-      f sh1;
-      f sh2;
-      f sh3
-  | Block { rhses; _ } -> List.iter rhses ~f
+  construction_depth := 0;
+  taint := None;
+  update_mark := 0;
+  discarded_updates := [];
+  open_refs := [];
+  discarded_refs := [];
+  Row.reset_transient ();
+  Row.drop_symbol_roles ()
 
 let all_rows_w_origin update_step =
   let get_origin sh kind =
@@ -2023,9 +2239,11 @@ let fresh_proj_ids update =
     offset + Array.length dims
   in
   let fresh_shape (sh : t) =
-    sh.batch <- Row.fresh_row_proj sh.batch;
-    sh.input <- Row.fresh_row_proj sh.input;
-    sh.output <- Row.fresh_row_proj sh.output;
+    (* Mint in batch, input, output order (labelled arguments evaluate right to left). *)
+    let batch = Row.fresh_row_proj sh.batch in
+    let input = Row.fresh_row_proj sh.input in
+    let output = Row.fresh_row_proj sh.output in
+    set_rows sh ~batch ~input ~output;
     let locked =
       match Ir.Tnode.find ~id:sh.id with
       | Some tn when Lazy.is_val tn.Ir.Tnode.padding -> (
@@ -2043,7 +2261,7 @@ let fresh_proj_ids update =
             (match p with
             | Some (_, v) -> (
                 match sh.padding_elem with
-                | None -> sh.padding_elem <- Some (Some v)
+                | None -> set_padding_elem sh (Some (Some v))
                 | Some (Some v1) when Float.( = ) v1 v -> ()
                 | Some _ ->
                     raise
@@ -2172,10 +2390,25 @@ let merge_dealiased_padding copies =
                Ir.Ops.{ left = max a.left b.left; right = max a.right b.right }))
   in
   List.iter copies ~f:(fun (copy, orig) ->
-      orig.batch_padding <- merge orig.batch_padding copy.batch_padding;
-      orig.input_padding <- merge orig.input_padding copy.input_padding;
-      orig.output_padding <- merge orig.output_padding copy.output_padding;
-      if Option.is_none orig.padding_elem then orig.padding_elem <- copy.padding_elem)
+      let batch = merge orig.batch_padding copy.batch_padding in
+      let input = merge orig.input_padding copy.input_padding in
+      let output = merge orig.output_padding copy.output_padding in
+      (* The closed-shape guard (gh-ocannl-1301): the copy carries [closed] and was guarded itself,
+         so on a closed original these merges are equal; checked anyway, before writing. *)
+      List.iter
+        [
+          ("batch padding", orig.batch_padding, batch);
+          ("input padding", orig.input_padding, input);
+          ("output padding", orig.output_padding, output);
+        ]
+        ~f:(fun (field, old_p, new_p) ->
+          if orig.closed && not (equal_padding old_p new_p) then
+            closed_write_error orig ~field ~old_s:(padding_string old_p)
+              ~new_s:(padding_string new_p));
+      orig.batch_padding <- batch;
+      orig.input_padding <- input;
+      orig.output_padding <- output;
+      if Option.is_none orig.padding_elem then set_padding_elem orig copy.padding_elem)
 
 (** Computes the indexing into subtensors given the shape information of a tensor.
     [derive_projections] should only be invoked when the shapes are fully inferred already! Sets
@@ -2443,10 +2676,25 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
     else Some (Array.of_list paddings)
   in
   let set_padding (sh : t) : unit =
-    Option.iter (padding_of_row sh.batch_padding sh.batch) ~f:(fun p -> sh.batch_padding <- Some p);
-    Option.iter (padding_of_row sh.output_padding sh.output) ~f:(fun p ->
-        sh.output_padding <- Some p);
-    Option.iter (padding_of_row sh.input_padding sh.input) ~f:(fun p -> sh.input_padding <- Some p)
+    let batch = padding_of_row sh.batch_padding sh.batch in
+    let output = padding_of_row sh.output_padding sh.output in
+    let input = padding_of_row sh.input_padding sh.input in
+    (* Validate all three before writing any (gh-ocannl-1301). *)
+    List.iter
+      [
+        ("batch padding", sh.batch_padding, batch);
+        ("output padding", sh.output_padding, output);
+        ("input padding", sh.input_padding, input);
+      ]
+      ~f:(fun (field, old_p, new_p) ->
+        match new_p with
+        | Some p when sh.closed && not (equal_padding old_p (Some p)) ->
+            closed_write_error sh ~field ~old_s:(padding_string old_p)
+              ~new_s:(padding_string (Some p))
+        | _ -> ());
+    Option.iter batch ~f:(fun p -> sh.batch_padding <- Some p);
+    Option.iter output ~f:(fun p -> sh.output_padding <- Some p);
+    Option.iter input ~f:(fun p -> sh.input_padding <- Some p)
   in
   (* Whether THIS step demands nonzero padding on [sh] — i.e. actually reads (rhs) or writes (lhs)
      the margins. [Row.get_dim_padding] only reports the current operation's inferred padding. *)
@@ -2464,7 +2712,7 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
        never sees the margins, so its accumulation neutral is irrelevant. A genuine conflict is
        rejected: the remedy is a materialized copy per neutral. *)
     if step_touches_margins sh then
-      sh.padding_elem <-
+      set_padding_elem sh
         (match (sh.padding_elem, update_step.neutral_elem) with
         | None, None -> None (* Both unknown *)
         | None, Some v -> Some (Some v) (* First operation sets the value *)
@@ -2521,9 +2769,8 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
 (** {3 Shape inference} *)
 
 let apply_env_t env sh =
-  sh.batch <- Row.subst_row env sh.batch;
-  sh.input <- Row.subst_row env sh.input;
-  sh.output <- Row.subst_row env sh.output
+  set_rows sh ~batch:(Row.subst_row env sh.batch) ~input:(Row.subst_row env sh.input)
+    ~output:(Row.subst_row env sh.output)
 
 (** Computes the product of dimensions in a row (both flanks). Returns [None] if any dimension is
     not yet resolved (still a variable or unresolved affine), or if the row ends in a row variable
@@ -2579,8 +2826,9 @@ let update_delayed_var_refs env update_step =
             | Some d ->
                 (* If solved_dim was set by set_dim, preserve it - consistency checked in
                    finish_inference. Otherwise, update from inference. *)
-                if Option.is_none delayed_ref.var_ref.solved_dim then
-                  delayed_ref.var_ref.solved_dim <- Some d
+                if Option.is_none delayed_ref.var_ref.solved_dim then (
+                  touch_ref delayed_ref;
+                  delayed_ref.var_ref.solved_dim <- Some d)
             | None -> () (* Not yet resolved *))
         | `Row row_var -> (
             match Row.get_row_from_env env row_var with
@@ -2589,8 +2837,9 @@ let update_delayed_var_refs env update_step =
                 | Some product ->
                     (* If solved_dim was set by set_dim, preserve it - the Total_elems constraint
                        will be processed in finish_inference to reconcile. Otherwise, update. *)
-                    if Option.is_none delayed_ref.var_ref.solved_dim then
-                      delayed_ref.var_ref.solved_dim <- Some product
+                    if Option.is_none delayed_ref.var_ref.solved_dim then (
+                      touch_ref delayed_ref;
+                      delayed_ref.var_ref.solved_dim <- Some product)
                 | None -> () (* Row has unresolved dimensions *))
             | None -> () (* Row variable not yet resolved *)))
   in
@@ -2606,30 +2855,41 @@ let apply_env_step env update_step =
   update_delayed_var_refs env update_step
 
 let%debug4_sexp propagate_shapes (update_step : update_step) : unit =
-  (* Allow the derivation of constraints to depend on the shapes (currently, only Batch_slice
-     does). *)
-  iter_shapes update_step ~f:(apply_env_t !state);
-  let _, discardable_vars, ineqs = get_inequalities update_step in
-  active_update_steps := update_step :: !active_update_steps;
-  active_constraints := ineqs @ !active_constraints;
-  let ineqs', env = Row.solve_inequalities ~stage:Row.Stage1 ~discardable_vars ineqs !state in
-  let _debug_remaining_constraints : Row.constraint_ list = ineqs' in
-  apply_env_step env update_step;
-  state := env
+  check_untainted ();
+  (* Before anything is written: a step over a shape a rewind discarded (an operand, a [%cd] source
+     or target retained across it) is refused, and taints nothing. *)
+  iter_shapes update_step ~f:(fun sh ->
+      Option.iter sh.discarded_by ~f:(fun provenance ->
+          raise
+          @@ Row.Shape_error
+               ( [%string
+                   "the shape of #%{sh.id#Int} %{sh.debug_name} was discarded by the rewind after \
+                    %{provenance}; re-run its definition"],
+                 [] )));
+  (* The step and its inequalities are registered before the solver runs: a solver failure leaves
+     them registered against the old environment, so it taints the session (gh-ocannl-1301). *)
+  with_taint_on_failure
+    ~describe:(fun exn ->
+      [%string
+        "shape propagation for #%{update_step.shape.id#Int} %{update_step.shape.debug_name}: \
+         %{exn_summary exn}"])
+    (fun () ->
+      (* Allow the derivation of constraints to depend on the shapes (currently, only Batch_slice
+         does). *)
+      iter_shapes update_step ~f:(apply_env_t !state);
+      let _, discardable_vars, ineqs = get_inequalities update_step in
+      active_update_steps := update_step :: !active_update_steps;
+      active_constraints := ineqs @ !active_constraints;
+      let ineqs', env = Row.solve_inequalities ~stage:Row.Stage1 ~discardable_vars ineqs !state in
+      let _debug_remaining_constraints : Row.constraint_ list = ineqs' in
+      apply_env_step env update_step;
+      state := env)
 
 let with_construction_window f =
   Int.incr construction_depth;
   Exn.protect ~f ~finally:(fun () -> Int.decr construction_depth)
 
-let%debug4_sexp finish_inference (() : unit) : unit =
-  if !construction_depth > 0 then
-    raise
-    @@ Row.Shape_error
-         ( "finish_inference: shape inference was finalized from within [op_asn], mid-construction \
-            of a tensor operation (via Shape.to_dims, Shape.to_padding or the projections handle) \
-            -- not supported: the operation's own constraints are not registered yet, so its \
-            operands would close without them. Fix the [op_asn] and reinitialize the session.",
-           [] );
+let%debug4_sexp finish_inference_body (() : unit) : unit =
   let unsolved =
     List.filter !active_constraints ~f:(function
       | Shape_row (r, _) | Terminal_row (_, r, _) ->
@@ -2660,17 +2920,48 @@ let%debug4_sexp finish_inference (() : unit) : unit =
      must happen before clearing active_update_steps. *)
   List.iter !active_update_steps ~f:(fun update_step ->
       if Option.is_none update_step.unsafe_projections then derive_projections update_step);
+  (* The commit: every shape of the applied steps is closed, and the role claims of the open work
+     reach their symbols. *)
+  List.iter !active_update_steps ~f:(fun update_step ->
+      iter_shapes update_step ~f:(fun sh -> sh.closed <- true));
+  Row.commit_symbol_roles ();
+  open_refs := [];
+  update_mark := !update_uid;
   active_constraints := [];
   active_update_steps := [];
   (* There should not be any shape variables remaining in any inference-undergoing update steps. *)
-  state := Row.empty_env
+  state := Row.empty_env;
+  !on_closure ()
 
+let finish_inference (() : unit) : unit =
+  if !construction_depth > 0 then
+    raise
+    @@ Row.Shape_error
+         ( "finish_inference: shape inference was finalized from within [op_asn], mid-construction \
+            of a tensor operation (via Shape.to_dims, Shape.to_padding or the projections handle) \
+            -- not supported: the operation's own constraints are not registered yet, so its \
+            operands would close without them. Fix the [op_asn], then rewind the session \
+            (Tensor.rewind_to_last_closure).",
+           [] );
+  check_untainted ();
+  (* A failed closure leaves the open state unsatisfiable (or partially applied): it always taints,
+     and it marks nothing closed and moves no checkpoint (gh-ocannl-1301). *)
+  try finish_inference_body ()
+  with exn ->
+    let bt = Stdlib.Printexc.get_raw_backtrace () in
+    taint_session ~provenance:("finish_inference: " ^ exn_summary exn);
+    Stdlib.Printexc.raise_with_backtrace exn bt
+
+(* A closed shape's dims and padding are committed: reading them needs no finalization, so a lazy
+   over a closed tensor (its node's dims, padding, or a committed step's projections) never runs the
+   session-global finalizer, and a failed closure of OTHER open work cannot poison it
+   (gh-ocannl-1301). *)
 let to_dims (sh : t) =
-  finish_inference ();
+  if not sh.closed then finish_inference ();
   to_dims_impl sh
 
 let%track4_sexp to_padding (sh : t) : (Ir.Ops.axis_padding array * float) option =
-  finish_inference ();
+  if not sh.closed then finish_inference ();
   try
     (* If any row has padding, we need to return padding for all dimensions. Use zero padding for
        rows without explicit padding. *)
@@ -2730,14 +3021,20 @@ let () =
 (** {2 Shape builders.} *)
 
 let get_projections (update_step : update_step) : Idx.projections =
-  finish_inference ();
+  check_step_live update_step;
   match update_step.unsafe_projections with
-  | Some projections -> projections
-  | None ->
-      (* This shouldn't happen if finish_inference is working correctly, but derive projections just
-         in case *)
-      derive_projections update_step;
-      Option.value_exn update_step.unsafe_projections
+  | Some projections when not (List.mem !active_update_steps update_step ~equal:phys_equal) ->
+      (* Committed by an earlier closure. *)
+      projections
+  | _ -> (
+      finish_inference ();
+      match update_step.unsafe_projections with
+      | Some projections -> projections
+      | None ->
+          (* This shouldn't happen if finish_inference is working correctly, but derive projections
+             just in case *)
+          derive_projections update_step;
+          Option.value_exn update_step.unsafe_projections)
 
 let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
     ?(deduced = Not_constrained) ~debug_name ~id () =
@@ -2807,6 +3104,8 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
       input_padding = None;
       output_padding = None;
       padding_elem = None;
+      closed = false;
+      discarded_by = None;
     }
   in
   (match deduced with
@@ -2908,6 +3207,8 @@ let of_spec ?(deduced = Not_constrained) ~debug_name ~id spec =
       input_padding = None;
       output_padding = None;
       padding_elem = None;
+      closed = false;
+      discarded_by = None;
     }
   in
   (match deduced with

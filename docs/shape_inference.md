@@ -400,6 +400,37 @@ The rationale behind only closing leaf (terminal) tensor shapes to their GLBs, w
 
 This leaf-downward policy is deterministic, not complete as a satisfiability procedure. A satisfiable residual dimension store can still be rejected if satisfying it would require relaxing a capped leaf upward instead of committing it to its GLB. For example, with terminal dimensions `alpha` and `beta` and an interior dimension `gamma`, the constraints `3 ⊑ alpha`, `5 ⊑ beta`, `gamma ⊑ alpha`, and `gamma ⊑ beta` are satisfiable by broadcasting one or both terminals to `1_(bcast_if_1)`. The closing policy instead commits `alpha = 3` and `beta = 5`, then re-solving pins `gamma` below two incompatible atoms and reports a shape error. This is intentional policy behavior: closing chooses the least leaf shapes and does not backtrack to larger broadcastable leaves.
 
+## Session consistency: closure, taint and rewind (gh-ocannl-1301)
+
+Shape inference is session-global. `finish_inference` is its only commit point: it solves every active constraint, applies the solution to every active update step, derives their projections, and empties the open state. A tensor whose step it committed is **closed**: its shape carries no variables, and every later step treats it as committed.
+
+**Closed means committed by a successful `finish_inference`, not "compiled".** A closed shape's rows (compared modulo projection ids, which every projection derivation re-mints), its paddings and its padding neutral element never change again. A later operation whose inference would change them is refused before anything is written, naming the closed shape. Writes of an equal value stay allowed: re-applying the environment to a closed operand, or a padded consumer whose margins the operand already carries. Concretely, and this is a behaviour change from earlier releases:
+
+- **A margin-demanding (padded) consumer of a closed tensor is refused even when the tensor was never compiled.** Earlier, an uncompiled tensor's padding silently grew to fit; a compiled one was already refused, because its buffer layout is committed. Build such consumers before closing the tensor (before compiling it, `Shape.to_dims`-ing it or printing it), or consume a materialized copy.
+- **A closed operand takes no new top-down precision links**, as a forced one did not already, and an operation that would change a closed operand's precision (the `uint4x32` bit operations) is refused.
+- **A closed tensor cannot become a parameter** (`Tensor.param` refuses an initializer that returns one).
+
+Reading a closed shape's committed dims or padding (and a committed step's projections) needs no finalization, so those reads never run the session-global finalizer.
+
+**Taint.** A construction that fails after mutating the inference session taints it. Mutations are the solver's state, active steps and constraints, delayed variable references, the solver's inference sets (`unused_shapes`, the safe-to-guess, use-site-resolution and rank tables), static-symbol role claims, top-down precision links, and graph-root changes (counted by `Row.mutation_serial`, which a write bumps only when it changes something). Such failures include a shape error in `register_update_step`, an `op_asn` that fails after an inner construction, a `grad_asn` failure, and any failure of `finish_inference` itself. A construction that fails before mutating anything does not taint: a stale operand, a refused `set_dim`, an `op_asn` that fails at once. While the session is tainted, every construction, `finish_inference` (and so forcing an open tensor's dims), code handout (`consume_forward_code` / `consume_backprop_code`) and every `Context` compile raises:
+
+> the session is inconsistent after an earlier shape error at \<provenance of the first failure\>; call Tensor.rewind_to_last_closure () or Tensor.unsafe_reinitialize ()
+
+**`Tensor.rewind_to_last_closure ()`** discards everything opened since the last successful `finish_inference`: the failed construction, and every construction since that closure, successful or not. It empties the solver's open state and the role claims not yet committed. It restores the graph-root maps as they were at the closure, with the handout markers of the restored roots reset. It restores the cached random seed to the closure's (dropping one created or replaced since), and clears the taint. Tensors, nodes, update steps, and the variable references the discarded work bound or set (captured dimensions, `Shape.get_variable_ref` references) are **discarded**: using one as an operand, handing out or compiling its code, printing it, or transferring its node raises "… discarded by the rewind after \<provenance\>; re-run its definition". Counters are never reset. Closed and compiled work is untouched: contexts, routines and buffers survive, and nothing executed is undone; code already handed to a caller stays handed out. A rewind without a taint simply discards the open work. Rewinding to a point other than the last closure is gh-ocannl-903's explicit checkpoints.
+
+Construction-time writes on operands' tensor nodes, audited for this contract:
+
+| Write | Verdict |
+|---|---|
+| top-down precision links | deferred until the operation is registered; skipped on closed operands |
+| `uint4x32` precision on operands (`Operation`) | refused when it would change a closed operand |
+| memory mode, context ownership, gradient observability (`Tensor.param`) | `param` over a closed tensor is refused |
+| memory mode, `host_constant` (literals), `slice_of` (`@\|`) | written on the new node only |
+| `alias_of` | written at lowering, not at construction |
+| `observable` (Train's loss) | only ever turned on; can pessimise placement, never values |
+| static-symbol roles (`used_as_extent` / `used_as_slice`) | claims are deferred to a successful closure, dropped by a rewind |
+| host-init data and registry entries of discarded nodes | unreachable garbage (memory only) |
+
 ## Projections inference
 
 Unlike shape inference proper, constraints that participate in projections inference pertain to a single assignment, and projection equations only tie individual instances of tensor accesses in the assignments. In particular even if the same tensor repeats in the assignments, the distinct instances will have different projection ids and participate in disjoint equations, so that they can be indexed differently.
