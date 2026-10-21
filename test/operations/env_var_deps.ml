@@ -111,8 +111,9 @@ let recorded_diagnostic = "which the ambient record already carries"
    naming only WHERE a copy of a run's output goes changes no result, and the reader here is a
    library, whose stanza has no deps to declare it in -- declaring it on every stanza that links the
    library would claim a sensitivity none of them has. Each read an entry exempts is listed in the
-   golden, so one that disappears is a reviewable diff -- rather than a refusal, which the synthetic
-   control trees, carrying no library source, would trip on every run. *)
+   golden, and an entry whose read disappears is refused, like a stale declaration exemption: every
+   synthetic control tree carries a stand-in reader for each entry (`control_context`), so the
+   refusal never fires on a tree that holds no library source (gh-ocannl-1233). *)
 let exempt_reads =
   [
     ( "test/support/verdict.ml:OCANNL_TOOL_VERDICT_RECORDS",
@@ -1733,10 +1734,13 @@ let main () =
          module contract makes [foo.exe] come from [foo.ml]; the source lookup below holds that
          relationship against the files this run was actually handed. This is deliberately a
          callback on the gh-ocannl-813 seam: a scan rule under [(subdir ...)] cannot fall out by
-         needing one more private descent. *)
+         needing one more private descent. The relationship is asked of any tree, as the header of
+         [repository_census] says relationships are: only the census equality over the collected set
+         is a statement about the repository, so a synthetic tree can carry the refusals' controls
+         (gh-ocannl-1233). *)
       check_per_directory (fun subdir group ->
           List.iter group ~f:(fun stanza ->
-              if repository_census && is_repo_wide_scan stanza then (
+              if is_repo_wide_scan stanza then (
                 let executables =
                   Scan.sites_of_stanza subdir stanza
                   |> List.concat_map ~f:(fun site -> site.Scan.executables)
@@ -2871,6 +2875,18 @@ let main () =
       (Printf.sprintf
          "scanner-refusal exemptions no extracted diagnostic needs any more -- drop them: %s"
          (String.concat ~sep:", " (Set.to_list stale_refusal_exemptions)));
+  (* gh-ocannl-1233: the same question of `exempt_reads`. Every control tree carries each entry's
+     reader ([control_context]), so a tree with no library source cannot trip this. *)
+  let stale_reads =
+    Set.diff
+      (Set.of_list (module String) (List.map exempt_reads ~f:fst))
+      (Set.of_list (module String) !exempt_read_table)
+  in
+  if not (Set.is_empty stale_reads) then
+    fail
+      (Printf.sprintf
+         "exempted run-time reads no source makes any more -- drop them from `exempt_reads`: %s"
+         (String.concat ~sep:", " (Set.to_list stale_reads)));
   (* The coverage of the gate half, stated rather than assumed: a library outside these directories
      has no sources here to check its `preprocessor_deps` against, and says so above if it declares
      a gate at all -- but a gate it FAILS to declare is invisible from here, so the boundary belongs
@@ -3236,24 +3252,47 @@ let control_subject ~declares =
    checked for staleness against the files that make it necessary, so a tree without those files
    fails for reasons that have nothing to do with the rule under control. *)
 let control_context () =
-  List.map gateless_dirs ~f:(fun (file, (aliases, _)) ->
-      let content =
-        match aliases with
-        | None ->
-            Printf.sprintf
-              "(test (name gateless) (deps (universe) (env_var %s)) (modules gateless))\n"
-              Scan.backend_env_var
-        | Some aliases ->
-            "(executable (name metal_queue_probe) (modules metal_queue_probe) (libraries metal \
-             ctypes unix))\n"
-            ^ String.concat ~sep:""
-                (List.map aliases ~f:(fun alias ->
-                     Printf.sprintf
-                       "(rule (alias %s) (deps (universe) (env_var %s)) (action (run \
-                        %%{exe:metal_queue_probe.exe})))\n"
-                       alias Scan.backend_env_var))
-      in
-      (file, content))
+  let gateless_files =
+    List.map gateless_dirs ~f:(fun (file, (aliases, _)) ->
+        let content =
+          match aliases with
+          | None ->
+              Printf.sprintf
+                "(test (name gateless) (deps (universe) (env_var %s)) (modules gateless))\n"
+                Scan.backend_env_var
+          | Some aliases ->
+              "(executable (name metal_queue_probe) (modules metal_queue_probe) (libraries metal \
+               ctypes unix))\n"
+              ^ String.concat ~sep:""
+                  (List.map aliases ~f:(fun alias ->
+                       Printf.sprintf
+                         "(rule (alias %s) (deps (universe) (env_var %s)) (action (run \
+                          %%{exe:metal_queue_probe.exe})))\n"
+                         alias Scan.backend_env_var))
+        in
+        (file, content))
+  in
+  (* gh-ocannl-1233: each `exempt_reads` entry's reader, a library source making that one read, so
+     that the refusal of a stale entry is asked of every control tree as it is of the repository. *)
+  let read_files =
+    List.map exempt_reads ~f:(fun (key, _) ->
+        match String.rsplit2 key ~on:':' with Some pair -> pair | None -> (key, key))
+    |> Map.of_alist_multi (module String)
+    |> Map.to_alist
+    |> List.map ~f:(fun (file, names) ->
+        ( file,
+          String.concat (List.map names ~f:(Printf.sprintf "let _ = Stdlib.Sys.getenv_opt %S\n")) ))
+  in
+  let library_dunes =
+    List.map read_files ~f:(fun (file, _) ->
+        let name = Stdlib.Filename.(chop_extension (basename file)) in
+        ( Stdlib.Filename.dirname file ^ "/dune",
+          Printf.sprintf "(library (name %s) (modules %s))\n" name name ))
+    |> Map.of_alist_multi (module String)
+    |> Map.to_alist
+    |> List.map ~f:(fun (dune, stanzas) -> (dune, String.concat stanzas))
+  in
+  gateless_files @ library_dunes @ read_files
 
 let write_file path data =
   let dir = Stdlib.Filename.dirname path in
@@ -3325,6 +3364,12 @@ let run_checker ?(credentials = `Shipped) ~root ~exe args =
     Refusal_manifest.observe_refused_run ~source:"test/operations/env_var_deps.ml" text;
   (status, text)
 
+(* gh-ocannl-1233: the runs a control claim asserts on, attributed to it by its label, so that a
+   `raw_direct_evidence` entry naming the claim is checked against what THOSE runs refused rather
+   than against every run of this process. Called beside the claim, with its label. *)
+let attribute claim runs =
+  Refusal_manifest.attribute ~source:"test/operations/env_var_deps.ml" ~claim (List.map runs ~f:snd)
+
 (* The sources [control_root_paths] names beside its dune file. *)
 let write_control_sources root =
   write_file (Stdlib.Filename.concat root "t/probe.ml") control_probe;
@@ -3377,6 +3422,12 @@ let control () =
      the same tree declaring `(env_var %s)` inside a `(subdir …)` group and\n\
      `(env_var %s)` at the top level besides. Nothing else differs between the two runs.\n\n"
     Scan.backend_env_var control_recorded_key control_recorded_unknown;
+  attribute
+    "the checker exits 1 and names a key the ambient record carries, declared inside a `(subdir \
+     …)` group"
+    [ violating ];
+  attribute "an unknown lowercase name the record carries too is named in the same run"
+    [ violating ];
   Verdict.p
     "the checker exits 1 and names a key the ambient record carries, declared inside a `(subdir \
      …)` group"
@@ -3514,7 +3565,9 @@ let credential_control () =
      then to the same rule reading a name through `%%{env:...}` instead, to the program's module\n\
      reading one by name, and to the near miss again with no deny-list and with one the reader\n\
      refuses (gh-ocannl-1280).\n\n";
-  List.iter claims ~f:(fun (claim, _, _, ok) -> Verdict.p claim ok);
+  List.iter claims ~f:(fun (claim, _, result, ok) ->
+      attribute claim [ result ];
+      Verdict.p claim ok);
   try remove_tree root with Unix.Unix_error _ -> ()
 
 (* gh-ocannl-708's control, and why it is a second tree rather than a stanza added to the one above.
@@ -3603,6 +3656,10 @@ let floor_control () =
     "\n\
      The relationship is put to a tree of one rule, which runs `python3` on a file that is or is\n\
      not one this workspace builds. Nothing else differs between the three runs.\n\n";
+  attribute
+    "an external command handed a file this workspace builds is a stanza the rule reaches, \
+     reported by name when it declares neither"
+    [ reported ];
   Verdict.p
     "an external command handed a file this workspace builds is a stanza the rule reaches, \
      reported by name when it declares neither"
@@ -4212,6 +4269,16 @@ let family_control () =
            OCANNL_LOG_LEVEL_PROBE)))\n")
       ()
   in
+  (* The same tree with the stand-in reader of each `exempt_reads` entry reading nothing. *)
+  let readers =
+    List.filter context ~f:(fun (path, _) ->
+        List.exists exempt_reads ~f:(fun (key, _) -> String.is_prefix key ~prefix:(path ^ ":")))
+  in
+  List.iter readers ~f:(fun (path, _) ->
+      write_file (Stdlib.Filename.concat root path) "let () = ()\n");
+  let stale_read = run ~metal:false ~lifecycle:false ~family:None () in
+  List.iter readers ~f:(fun (path, content) ->
+      write_file (Stdlib.Filename.concat root path) content);
   let omitted_ok family (result : Unix.process_status * string) =
     exited 1 result
     && String.is_substring (snd result) ~substring:unreached
@@ -4339,6 +4406,10 @@ let family_control () =
     "a member inside a `(subdir …)` group is aggregated by a family alias in that same group, \
      which the recursive build from the root reaches"
     subdir_listed_ok;
+  attribute
+    "a runner that runs another directory's executable of the same name does not aggregate this \
+     directory's member"
+    [ runner_elsewhere ];
   Verdict.p
     "a runner that runs another directory's executable of the same name does not aggregate this \
      directory's member"
@@ -4356,6 +4427,10 @@ let family_control () =
     "a marked rule whose only alias is the directory-wide `runtest` has no focused alias to offer, \
      and a family listing `runtest` does not aggregate it"
     runtest_only_ok;
+  attribute
+    "a public name belongs to its own executable, so a rule running the second unit's public name \
+     does not aggregate the first"
+    [ crossed_public ];
   Verdict.p
     "a public name belongs to its own executable, so a rule running the second unit's public name \
      does not aggregate the first"
@@ -4368,6 +4443,10 @@ let family_control () =
     "a family alias defined inside a `(subdir …)` group needs that group's own ambient gate, and \
      is reported without one"
     subdir_ungated_ok;
+  attribute
+    "a `(subdir …)` group whose actions take the training lock and whose gate does not is reported \
+     there too"
+    [ subdir_unlocked ];
   Verdict.p
     "a `(subdir …)` group whose actions take the training lock and whose gate does not is reported \
      there too"
@@ -4388,21 +4467,38 @@ let family_control () =
     sibling_defaults_ok;
   Verdict.p "an absolute path ending in the local executable's name is not the local executable"
     runner_absolute_ok;
+  attribute
+    "a rule on a `(test)`'s generated alias that runs ANOTHER directory's binary is not the \
+     deliberate gate collision, and is reported"
+    [ gate_elsewhere ];
   Verdict.p
     "a rule on a `(test)`'s generated alias that runs ANOTHER directory's binary is not the \
      deliberate gate collision, and is reported"
     gate_elsewhere_ok;
+  attribute
+    "a rule reusing the alias dune generates for a `(test)` in the same `(subdir …)` group is \
+     reported there too"
+    [ subdir_collision ];
   Verdict.p
     "a rule reusing the alias dune generates for a `(test)` in the same `(subdir …)` group is \
      reported there too"
     subdir_collision_ok;
   Verdict.p "a stanza neither derivation calls a member is asked for no family alias" no_member_ok;
+  attribute "declaring a configuration variable the ambient record already carries is refused"
+    [ recorded_declaration ];
   Verdict.p "declaring a configuration variable the ambient record already carries is refused"
     (exited 1 recorded_declaration
     && String.is_substring (snd recorded_declaration) ~substring:recorded_diagnostic);
+  attribute "a tracing dependency without a module reading it is refused" [ stale_trace ];
   Verdict.p "a tracing dependency without a module reading it is refused"
     (exited 1 stale_trace
     && String.is_substring (snd stale_trace) ~substring:"declares the tracing gate");
+  attribute "an exemption whose read disappears is refused" [ stale_read ];
+  Verdict.p "an exemption whose read disappears is refused"
+    (exited 1 stale_read
+    && (not (List.is_empty readers))
+    && String.is_substring (snd stale_read)
+         ~substring:"exempted run-time reads no source makes any more");
   try remove_tree root with Unix.Unix_error _ -> ()
 
 (* gh-ocannl-1037's control, a tree of its own for the reason the others give: the repository's
@@ -4521,9 +4617,15 @@ let inline_alias_control () =
   Verdict.p
     "a rule per tested module passes unaggregated, and the untested helper is asked for nothing"
     complete_ok;
+  attribute "a tested module with no per-module rule is reported, and the checker exits 1"
+    [ missing ];
   Verdict.p "a tested module with no per-module rule is reported, and the checker exits 1"
     missing_ok;
+  attribute "a rule whose alias names one module and whose run tests another is reported"
+    [ crossed ];
   Verdict.p "a rule whose alias names one module and whose run tests another is reported" crossed_ok;
+  attribute "a per-module alias listed in the `runtest` aggregate is reported as a double run"
+    [ aggregated ];
   Verdict.p "a per-module alias listed in the `runtest` aggregate is reported as a double run"
     aggregated_ok;
   try remove_tree root with Unix.Unix_error _ -> ()
@@ -4541,28 +4643,56 @@ let repository_inventory_control () =
       write_file (Stdlib.Filename.concat root file) content);
   write_file (Stdlib.Filename.concat root "t/gate.ml") "let () = ()\n";
   let paths = "t/dune" :: "t/gate.ml" :: List.map context ~f:fst in
-  let run ~target =
+  let run ~target ~action =
     write_file
       (Stdlib.Filename.concat root "t/dune")
       (family_gate ~elsewhere:false
      ^ "\n(rule (alias audit) (deps (alias runtest-gate) (source_tree ../..)) " ^ target
-     ^ " (action (echo checked)))\n");
+     ^ " (action " ^ action ^ "))\n");
     run_checker ~root ~exe ("." :: paths)
   in
-  let observes target diagnostic =
-    let status, text = run ~target in
+  let refused (status, text) diagnostic =
     let passed =
       (match status with Unix.WEXITED 1 -> true | _ -> false)
       && String.is_substring text ~substring:diagnostic
     in
-    if not passed then eprintf "inventory control %s: %s\n%s\n" target (describe_status status) text;
+    if not passed then
+      eprintf "inventory control %s: %s\n%s\n" diagnostic (describe_status status) text;
     passed
   in
+  let targetless = run ~target:"" ~action:"(echo checked)" in
+  let undiffed = run ~target:"(target inventory.actual)" ~action:"(echo checked)" in
+  (* gh-ocannl-1233: the scanner a repository-wide rule runs, related to the source the check was
+     handed -- a relationship asked of whatever tree is in front of the check, so these three need
+     no census of the repository: the rule above runs nothing nameable, a script is no executable a
+     source answers for, and an executable whose source was not handed over is one whose refusals
+     nothing can read. *)
+  let script = run ~target:"" ~action:"(run ./scan.sh)" in
+  let unhanded = run ~target:"" ~action:"(run %{dep:scan.exe})" in
   printf "\nSynthetic controls: escaping source_tree rules must join the scans aggregate.\n";
+  attribute "an unaggregated targetless source_tree scan reports that it inventories the repository"
+    [ targetless ];
   Verdict.p "an unaggregated targetless source_tree scan reports that it inventories the repository"
-    (observes "" "has a rule that inventories the repository");
+    (refused targetless "has a rule that inventories the repository");
+  attribute "an undiffed source_tree output reports that it inventories the repository" [ undiffed ];
   Verdict.p "an undiffed source_tree output reports that it inventories the repository"
-    (observes "(target inventory.actual)" "inventories the repository to produce");
+    (refused undiffed "inventories the repository to produce");
+  attribute "a repository-wide scan rule running nothing this check can name is refused"
+    [ targetless ];
+  Verdict.p "a repository-wide scan rule running nothing this check can name is refused"
+    (refused targetless "this check cannot name the scanner executable it runs");
+  attribute "a repository-wide scan rule running a script rather than an executable is refused"
+    [ script ];
+  Verdict.p "a repository-wide scan rule running a script rather than an executable is refused"
+    (refused script "which is not an executable name this check can relate to a scanner source");
+  attribute
+    "a repository-wide scan rule running an executable whose source the check was not handed is \
+     refused"
+    [ unhanded ];
+  Verdict.p
+    "a repository-wide scan rule running an executable whose source the check was not handed is \
+     refused"
+    (refused unhanded "and this check was handed no `t/scan.ml` source");
   try remove_tree root with Unix.Unix_error _ -> ()
 
 let gateless_scope_control () =
@@ -4663,9 +4793,11 @@ let gateless_scope_control () =
         |> List.map ~f:Sexp.to_string_hum |> String.concat ~sep:"\n"
       in
       write_file (Stdlib.Filename.concat root file) remaining;
-      let status, text =
+      let ((status, text) as result) =
         run_checker ~root ~exe ("." :: source :: canary_source :: List.map context ~f:fst)
       in
+      attribute "each missing scoped exemption is stale even while its sibling alias remains"
+        [ result ];
       let stale =
         (match status with Unix.WEXITED 1 -> true | _ -> false)
         && String.is_substring text ~substring:"directories exempted from the ambient gate"
@@ -5112,6 +5244,9 @@ let search_control () =
   in
   List.iter arms ~f:(fun (label, (result, ok)) -> if not ok then report label result);
   let ok label = snd (List.Assoc.find_exn arms label ~equal:String.equal) in
+  let runs labels =
+    List.map labels ~f:(fun label -> fst (List.Assoc.find_exn arms label ~equal:String.equal))
+  in
   printf
     "\n\
      The cc search rule (gh-ocannl-1368) is put to a tree of one `(test)` whose module starts a\n\
@@ -5120,6 +5255,10 @@ let search_control () =
      the way the small menu does. The arms differ in where the program pins the file, in what its\n\
      stanza says, in one renamed entry point, and in what the stand-in helpers state.\n\n"
     width_key registers_key;
+  attribute
+    "a program starting a search with a run that can select cc is reported when it neither pins \
+     the width nor carries the marker"
+    (runs [ "unanswered" ]);
   Verdict.p
     "a program starting a search with a run that can select cc is reported when it neither pins \
      the width nor carries the marker"
@@ -5135,13 +5274,23 @@ let search_control () =
   Verdict.p "a search started through a framework wrapper of the entry point is a search too"
     (ok "wrapped");
   Verdict.p "a program whose only run names a backend other than cc is not asked" (ok "deviceless");
+  attribute "a marker on a program that starts no search is refused as stale" (runs [ "stale" ]);
   Verdict.p "a marker on a program that starts no search is refused as stale" (ok "stale");
+  attribute "a marker on a program that pins the width is refused as contradictory"
+    (runs [ "both" ]);
   Verdict.p "a marker on a program that pins the width is refused as contradictory" (ok "both");
+  attribute "a marker declaring anything but `independent` is refused" (runs [ "malformed" ]);
   Verdict.p "a marker declaring anything but `independent` is refused" (ok "malformed");
+  attribute "two markers on one stanza are refused" (runs [ "twice" ]);
   Verdict.p "two markers on one stanza are refused" (ok "twice");
+  attribute "the marker's sentinel outside a comment is refused" (runs [ "argument" ]);
   Verdict.p "the marker's sentinel outside a comment is refused" (ok "argument");
+  attribute "a marker on a rule, which names no program's modules, is refused" (runs [ "on_rule" ]);
   Verdict.p "a marker on a rule, which names no program's modules, is refused" (ok "on_rule");
+  attribute "a marker between stanzas is refused rather than attributed" (runs [ "between" ]);
   Verdict.p "a marker between stanzas is refused rather than attributed" (ok "between");
+  attribute "an entry point renamed away is refused as a lost anchor, not read as no search"
+    (runs [ "anchor" ]);
   Verdict.p "an entry point renamed away is refused as a lost anchor, not read as no search"
     (ok "anchor");
   Verdict.p "a helper that only reads the configuration table pins nothing" (ok "peek");
@@ -5176,6 +5325,10 @@ let search_control () =
     (ok "opened");
   Verdict.p "a `setenv` of `-1` around one of a run's invocations undoes the helper's pin"
     (ok "setenv_partial");
+  attribute
+    "a blessed helper that stops stating a key, and a support value stating every key unblessed, \
+     are both refused"
+    (runs [ "lapsed"; "unblessed" ]);
   Verdict.p
     "a blessed helper that stops stating a key, and a support value stating every key unblessed, \
      are both refused"
@@ -5204,8 +5357,11 @@ let malformed_tree_control () =
   printf
     "The checker is put to one dune file built to trip the marker grammar and the declaration\n\
      checks, and to a run handed nothing at all.\n\n";
+  attribute "a dune file built to trip the marker grammar and the declaration checks is refused"
+    [ malformed ];
   Verdict.p "a dune file built to trip the marker grammar and the declaration checks is refused"
     (exited 1 malformed);
+  attribute "a run handed no dune file and no source is refused" [ empty ];
   Verdict.p "a run handed no dune file and no source is refused" (exited 1 empty);
   try remove_tree root with Unix.Unix_error _ -> ()
 

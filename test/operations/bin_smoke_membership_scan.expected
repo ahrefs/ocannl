@@ -2,3 +2,4 @@ bin-smoke covers every public bin executable exactly once: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:9446215c7b3c2270741bbb1cd8300733] executable exactly once
+End of synthetic controls.

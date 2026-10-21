@@ -22,3 +22,4 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:4168ef8491021497635783bb1f7e4232] no source reads
   [scanner-refusal:298f6bafdca761627eb0f4dfecddf6d3] the built-in default
   [scanner-refusal:50ad95ff66f64313a7ce58dadb8aeda9] the cache directory
+End of synthetic controls.

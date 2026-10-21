@@ -108,6 +108,7 @@ a rule reusing the alias dune generates for a `(test)` in the same `(subdir …)
 a stanza neither derivation calls a member is asked for no family alias: true
 declaring a configuration variable the ambient record already carries is refused: true
 a tracing dependency without a module reading it is refused: true
+an exemption whose read disappears is refused: true
 The per-module inline-test aliases (gh-ocannl-1037) are put to a synthetic library of two
 tested modules and an untested helper, once wired completely and once broken each way.
 
@@ -176,6 +177,9 @@ a diff reading an output whose rule does not depend on the gate, or naming a gat
 Synthetic controls: escaping source_tree rules must join the scans aggregate.
 an unaggregated targetless source_tree scan reports that it inventories the repository: true
 an undiffed source_tree output reports that it inventories the repository: true
+a repository-wide scan rule running nothing this check can name is refused: true
+a repository-wide scan rule running a script rather than an executable is refused: true
+a repository-wide scan rule running an executable whose source the check was not handed is refused: true
 
 Synthetic controls: mixed-file gateless exemptions apply only to their named aliases.
 an unrelated configuration-reading alias cannot inherit the probe's gateless exemption: true
@@ -214,6 +218,9 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:533fc9999ad0841992e0c1734d9c1f5d] env_var
   [scanner-refusal:7336dd5a712b0c3a578b64d7defb1654] between stanzas declares
   [scanner-refusal:1aaab6e3cd8f4615e1cd1d0321e309a1] times and only
+  [scanner-refusal:95919586e2a2b25eaaf13ca8093ab584] repository-wide scan rule
+  [scanner-refusal:be41f253ce4b808b6b4ec587c304ec08] repository-wide scan rule
+  [scanner-refusal:b040632469771b25abb3469878413be3] the repository scanner
   [scanner-refusal:bbadfd8513559355fedbc54dc3dc678a] serializes its actions
   [scanner-refusal:eb5d5419b3bd18240469743cbabc58f2] has actions on
   [scanner-refusal:a06dccc27afe2153a7700609691d3c8d] attaches a rule
@@ -241,6 +248,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests
   [scanner-refusal:5f2b09efad6e397fb5bd77b84255d0bf] runs inline tests
   [scanner-refusal:677d819fac904c64b7025b4f17c07b5a] its stanza starts
+  [scanner-refusal:05b0b536b88908d4ef277447d7e82ae3] exempt_reads
   [scanner-refusal:638620a0745d0a136810c5b0256e0ec0] directories exempted from
   [scanner-refusal:edc9c30307628c25acd76b6959b5a172] record carries declared
   [scanner-refusal:b127e705a9263d141f051fd084d920f5] unknown lowercase name
@@ -285,12 +293,16 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:84a1eda5072c0c3e43ecad5c2af6e561] stanza neither derivation
   [scanner-refusal:ed4970402e1305b0dfaabed50860c3fe] configuration variable the
   [scanner-refusal:c5caa846079a8640d0b93242bba8fd1b] tracing dependency without
+  [scanner-refusal:144d103d186b613dbedbe258066e8ccc] whose read disappears
   [scanner-refusal:b8514eb10109dce5b36ef105c1bc36a6] module passes unaggregated
   [scanner-refusal:9dc8db9d29efd1b85da8aff105b1aae8] tested module with
   [scanner-refusal:775f43c0a7dca22c07a091f603457c7a] another is reported
   [scanner-refusal:87104dd3758037b44d4f5c8979a42039] per-module alias listed
   [scanner-refusal:d04fa9759a77fcd06752e1d4a912eb06] source_tree
   [scanner-refusal:760e7621ae0370f92b10878f9d71ee0f] source_tree
+  [scanner-refusal:31948a4b787d4a96777593c36d38abf6] repository-wide scan rule
+  [scanner-refusal:edcdbf38cf4e4cb1afbe781c92620485] repository-wide scan rule
+  [scanner-refusal:cc3ad53b0e8cc88b373a1a474d63f0f7] repository-wide scan rule
   [scanner-refusal:56b7e1396b8287e30b29b436fc729e13] unrelated configuration-reading alias
   [scanner-refusal:32ebbcf3860e0aeff7ce6014cae7dc77] their configuration-free exemption
   [scanner-refusal:33d6f713bd21678df8dc25c1f94de29e] configuration reader attached
@@ -349,10 +361,8 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:d896c784ca87717dc5c6d91befbce0e1] source is refused
 Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):
   [scanner-refusal:f11c09a8318b3a7863444256973f57d4] running an executable
-  [scanner-refusal:95919586e2a2b25eaaf13ca8093ab584] repository-wide scan rule
-  [scanner-refusal:be41f253ce4b808b6b4ec587c304ec08] repository-wide scan rule
-  [scanner-refusal:b040632469771b25abb3469878413be3] the repository scanner
   [scanner-refusal:941a9fb77d867c7b1576a0f19ee5db3b] declares
   [scanner-refusal:7637eff157ad54e2ce52846535604f2a] scanner refusal
   [scanner-refusal:fe4c53f899eb08a9ae67e7a797a5a841] scanner-refusal exemptions no
   [scanner-refusal:09ce44850cdf45c95e308d6c64aed813] the repository's
+End of synthetic controls.

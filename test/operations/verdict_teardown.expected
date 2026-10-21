@@ -20,6 +20,7 @@ a claim whose computed label carries line breaks reports on one line of each str
 a failing run omits the success trailer it prints only when no claim failed: true
 a failed pass_fail claim's stderr line is its stdout row behind FAIL:, bare or detailed: true
 a failing scan's ending omits the failed claim's marker and the success trailer, and only those: true
+a scan whose refusal no longer runs, every claim holding, exits 0 and omits that refusal's marker and only it, still ending on the section's closing row: true
 a case that returns prints only what its claims print: true
 
 Transcripts tools/test-mutation-run.sh replays through tools/mutation-run.sh:
@@ -59,10 +60,26 @@ Transcripts tools/test-mutation-run.sh replays through tools/mutation-run.sh:
   manifest_held stdout | Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   manifest_held stdout |   [scanner-refusal:67ae40e5caabe9be983f0eae2d7ca80a] first manifest claim
   manifest_held stdout |   [scanner-refusal:d34f10c1c23beb8b6a7f6649d4bb088c] last manifest claim
+  manifest_held stdout |   [scanner-refusal:414091dbf83d04749e564766cd13fcf5] the manifest refusal
+  manifest_held stdout | End of synthetic controls.
+  manifest_held stderr | Manifest diagnostics: 3 (not part of the golden)
   manifest_failed stdout | the first manifest claim: false
   manifest_failed stdout | the last manifest claim: true
   manifest_failed stdout |
   manifest_failed stdout | Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   manifest_failed stdout |   [scanner-refusal:d34f10c1c23beb8b6a7f6649d4bb088c] last manifest claim
+  manifest_failed stdout |   [scanner-refusal:414091dbf83d04749e564766cd13fcf5] the manifest refusal
+  manifest_failed stdout | End of synthetic controls.
   manifest_failed stderr | FAIL: the first manifest claim: false
+  manifest_failed stderr | Manifest diagnostics: 3 (not part of the golden)
   manifest_failed stderr | FAILED: 1 check did not hold: "the first manifest claim".
+  manifest_silenced stdout | the first manifest claim: true
+  manifest_silenced stdout | the last manifest claim: true
+  manifest_silenced stdout |
+  manifest_silenced stdout | OK: every manifest claim held.
+  manifest_silenced stdout |
+  manifest_silenced stdout | Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  manifest_silenced stdout |   [scanner-refusal:67ae40e5caabe9be983f0eae2d7ca80a] first manifest claim
+  manifest_silenced stdout |   [scanner-refusal:d34f10c1c23beb8b6a7f6649d4bb088c] last manifest claim
+  manifest_silenced stdout | End of synthetic controls.
+  manifest_silenced stderr | Manifest diagnostics: 3 (not part of the golden)

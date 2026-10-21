@@ -228,3 +228,4 @@ Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_o
   [scanner-refusal:a385ae718c8af3ab39a45701b75fda4d] Utils.known_config_keys
   [scanner-refusal:14b02d2180d3814d6746acd827aecbc3] classifications claim cache-key
   [scanner-refusal:8109160f59717560ff5e6f7251a6a2b2] cache-key components no
+End of synthetic controls.

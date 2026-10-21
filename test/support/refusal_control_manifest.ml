@@ -180,6 +180,7 @@ let raw_entries =
         "[scanner-refusal:b1a8055bff15f499f2f143975afca3d7] reaches the stale-exclusion";
         "[scanner-refusal:2c67621c20b4be85e0176da0370f83cb] reaches the scanner-defect";
         "[scanner-refusal:0e0975906df73fda3897bc10ee9904c0] refuses it exiting";
+        "[scanner-refusal:88b9820837c81d0eb1237428429e025c] members' interfaces refuses";
         "[scanner-refusal:c79e4912bfeafc46c28c350ff68cf352] build_files/";
         "[scanner-refusal:123bedafe19167d3536ddb2ca1115d21] cannot say whether";
         "[scanner-refusal:532d3ed986dd6559fec87d780769ee1f] declares module";
@@ -372,6 +373,7 @@ let raw_entries =
         "[scanner-refusal:677d819fac904c64b7025b4f17c07b5a] its stanza starts";
         "[scanner-refusal:7637eff157ad54e2ce52846535604f2a] scanner refusal";
         "[scanner-refusal:fe4c53f899eb08a9ae67e7a797a5a841] scanner-refusal exemptions no";
+        "[scanner-refusal:05b0b536b88908d4ef277447d7e82ae3] exempt_reads";
         "[scanner-refusal:638620a0745d0a136810c5b0256e0ec0] directories exempted from";
         "[scanner-refusal:7d1923374b5bbf7028b59f2670772e8c] executable either declares";
         "[scanner-refusal:b8641dbf725aa68ffcc15fea6a3eb550] ocannl_config";
@@ -426,12 +428,16 @@ let raw_entries =
         "[scanner-refusal:84a1eda5072c0c3e43ecad5c2af6e561] stanza neither derivation";
         "[scanner-refusal:ed4970402e1305b0dfaabed50860c3fe] configuration variable the";
         "[scanner-refusal:c5caa846079a8640d0b93242bba8fd1b] tracing dependency without";
+        "[scanner-refusal:144d103d186b613dbedbe258066e8ccc] whose read disappears";
         "[scanner-refusal:b8514eb10109dce5b36ef105c1bc36a6] module passes unaggregated";
         "[scanner-refusal:9dc8db9d29efd1b85da8aff105b1aae8] tested module with";
         "[scanner-refusal:775f43c0a7dca22c07a091f603457c7a] another is reported";
         "[scanner-refusal:87104dd3758037b44d4f5c8979a42039] per-module alias listed";
         "[scanner-refusal:d04fa9759a77fcd06752e1d4a912eb06] source_tree";
         "[scanner-refusal:760e7621ae0370f92b10878f9d71ee0f] source_tree";
+        "[scanner-refusal:31948a4b787d4a96777593c36d38abf6] repository-wide scan rule";
+        "[scanner-refusal:edcdbf38cf4e4cb1afbe781c92620485] repository-wide scan rule";
+        "[scanner-refusal:cc3ad53b0e8cc88b373a1a474d63f0f7] repository-wide scan rule";
         "[scanner-refusal:56b7e1396b8287e30b29b436fc729e13] unrelated configuration-reading alias";
         "[scanner-refusal:32ebbcf3860e0aeff7ce6014cae7dc77] their configuration-free exemption";
         "[scanner-refusal:33d6f713bd21678df8dc25c1f94de29e] configuration reader attached";
@@ -662,6 +668,18 @@ let raw_direct_evidence =
   [
     ( "codegen_text_inventory.ml:123bedafe19167d3536ddb2ca1115d21",
       "a scan handed a source that does not parse refuses it, exiting 1: true" );
+    ( "codegen_text_inventory.ml:532d3ed986dd6559fec87d780769ee1f",
+      "a scan handed a wrapper interface without its members' interfaces refuses it, exiting 1: \
+       true" );
+    ( "env_var_deps.ml:05b0b536b88908d4ef277447d7e82ae3",
+      "an exemption whose read disappears is refused: true" );
+    ( "env_var_deps.ml:95919586e2a2b25eaaf13ca8093ab584",
+      "a repository-wide scan rule running nothing this check can name is refused: true" );
+    ( "env_var_deps.ml:be41f253ce4b808b6b4ec587c304ec08",
+      "a repository-wide scan rule running a script rather than an executable is refused: true" );
+    ( "env_var_deps.ml:b040632469771b25abb3469878413be3",
+      "a repository-wide scan rule running an executable whose source the check was not handed is \
+       refused: true" );
     ( "config_dep_completeness.ml:2ade05f14bd972f85a1792722f8a0ab6",
       "config_dep_completeness refuses a run handed no dune file, exiting 1: true" );
     ( "config_dep_completeness.ml:6c29eb9b1db92bba229707a7cd8e1b5b",
@@ -734,8 +752,7 @@ let raw_direct_evidence =
       "a rule on a `(test)`'s generated alias that runs ANOTHER directory's binary is not the \
        deliberate gate collision, and is reported: true" );
     ( "env_var_deps.ml:a06dccc27afe2153a7700609691d3c8d",
-      "a public name belongs to its own executable, so a rule running the second unit's public \
-       name does not aggregate the first: true" );
+      "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "env_var_deps.ml:7f157a5478f43aa3d2da34c9975976a9",
       "an unaggregated targetless source_tree scan reports that it inventories the repository: true"
     );
@@ -862,18 +879,6 @@ let raw_catalogue_only : (string * string) list =
       "a disagreement between this scan's two readers of one dune file: the raw-text floor exists \
        to catch the structural walk missing a stanza, and any input that trips it is a walk \
        defect, not a malformed tree" );
-    ( "env_var_deps.ml:95919586e2a2b25eaaf13ca8093ab584",
-      "deferred (gh-ocannl-1207 hand-back): a repository-wide scan rule this check cannot relate \
-       to a scanner source, which needs a `(source_tree ../..)` rule in a synthetic tree the \
-       scanner census is held equal to" );
-    ( "env_var_deps.ml:be41f253ce4b808b6b4ec587c304ec08",
-      "deferred (gh-ocannl-1207 hand-back): a repository-wide scan rule this check cannot relate \
-       to a scanner source, which needs a `(source_tree ../..)` rule in a synthetic tree the \
-       scanner census is held equal to" );
-    ( "env_var_deps.ml:b040632469771b25abb3469878413be3",
-      "deferred (gh-ocannl-1207 hand-back): a repository-wide scan rule this check cannot relate \
-       to a scanner source, which needs a `(source_tree ../..)` rule in a synthetic tree the \
-       scanner census is held equal to" );
     ( "env_var_deps.ml:941a9fb77d867c7b1576a0f19ee5db3b",
       "a declaration outside every `deps` field; the scan's own reader of those fields is what \
        would have to miss it" );
@@ -901,9 +906,6 @@ let raw_catalogue_only : (string * string) list =
       "a disagreement between this scan's two readers of one dune file: the raw-text floor exists \
        to catch the structural walk missing a stanza, and any input that trips it is a walk \
        defect, not a malformed tree" );
-    ( "codegen_text_inventory.ml:532d3ed986dd6559fec87d780769ee1f",
-      "deferred (gh-ocannl-1207 hand-back): needs a wrapper library's compiled interface handed \
-       over without its members' interfaces" );
   ]
 
 let qualify = List.map ~f:(fun (key, value) -> ("test/operations/" ^ key, value))
@@ -918,16 +920,41 @@ let observe_failure ~source ~format =
   in
   Hash_set.add observed_failures (failure_key ~source ~identity)
 
-(** The refusals a scanner child process printed, by the scanner's source: the [FAIL: ] lines of the
-    captured output of a run a control handed malformed input and the child refused -- exited 1. A
-    run an exception stopped (2), or one that passed, is no refusal, whatever it printed. Feed it
-    refused runs only. *)
-let refused_runs = Hashtbl.create (module String)
-
-let observe_refused_run ~source output =
+(** The [FAIL: ] lines of a child run's captured [output]: what it refused. *)
+let refusal_lines output =
   String.split_lines output
   |> List.filter_map ~f:(fun line -> String.chop_prefix (String.strip line) ~prefix:"FAIL: ")
-  |> List.iter ~f:(fun line -> Hashtbl.add_multi refused_runs ~key:source ~data:line)
+
+(** The refused runs of a scanner child process, by the scanner's source: the captured output of
+    each run a control handed malformed input and the child refused -- exited 1. A run an exception
+    stopped (2), or one that passed, is no refusal, whatever it printed. Feed it refused runs only.
+*)
+let refused_runs = Hashtbl.create (module String)
+
+let observe_refused_run ~source output = Hashtbl.add_multi refused_runs ~key:source ~data:output
+
+(** The refused runs each control claim made, by [source] and claim label (gh-ocannl-1233): a
+    [raw_direct_evidence] entry is checked against the runs of the claim it names, not against every
+    run of the scanner, so a mapping to a claim whose own runs never print the refusal is no
+    evidence, however many sibling runs do. *)
+let claim_runs = Hashtbl.create (module String)
+
+let claim_key ~source ~claim = source ^ "\n" ^ claim
+
+(** [attribute ~source ~claim outputs]: of [outputs], the captured output of child runs exactly as
+    {!observe_refused_run} was handed them, those of runs [source]'s scanner refused are [claim]'s
+    -- the runs it asserts on. An output no refused run produced (a run that passed, or one an
+    exception stopped) attributes nothing. Call it beside the [Verdict] claim it names, with the
+    claim's own label. *)
+let attribute ~source ~claim outputs =
+  let refused = Hashtbl.find_multi refused_runs source in
+  List.iter outputs ~f:(fun output ->
+      if List.mem refused output ~equal:String.equal then
+        Hashtbl.add_multi claim_runs ~key:(claim_key ~source ~claim) ~data:output)
+
+(** The refusal lines of the runs attributed to [claim] of [source]. *)
+let claim_lines ~source claim =
+  Hashtbl.find_multi claim_runs (claim_key ~source ~claim) |> List.concat_map ~f:refusal_lines
 
 (** [with_tree files f] writes [files], each a relative path and its contents, under a fresh
     temporary directory, applies [f] to that directory, and removes the tree again: the malformed
@@ -965,12 +992,17 @@ let with_tree files f =
   Exn.protect ~f:(fun () -> f root) ~finally:(fun () -> remove root)
 
 (** Runs the scanner whose source is [source] as a child process, [exe] over [args], records what it
-    refused through [observe_refused_run], and says whether it refused: exited 1, as Verdict ends a
-    run with a failed check -- not 2, which is a run an exception stopped early. *)
-let refuses ~source ~exe args =
+    refused through [observe_refused_run] as a run of [claim] ({!attribute}), and says whether it
+    refused: exited 1, as Verdict ends a run with a failed check -- not 2, which is a run an
+    exception stopped early. [claim] is the label of the [Verdict] claim this answers, which is the
+    call this one is the argument of. *)
+let refuses ~source ~claim ~exe args =
   let ((status, _, _) as run) = Fresh_process.run ~exe args in
   let refused = Poly.equal status (Unix.WEXITED 1) in
-  if refused then observe_refused_run ~source (Fresh_process.output run)
+  if refused then (
+    let output = Fresh_process.output run in
+    observe_refused_run ~source output;
+    attribute ~source ~claim [ output ])
   else Fresh_process.report ~label:source run;
   refused
 
@@ -1007,29 +1039,36 @@ let owns_line ~rivals ~format line =
             specificity rival > specificity format
             && Refusal_control_scan.format_matches ~format:rival line))
 
+(** The claim label a [raw_direct_evidence] entry names, without its [": true"]. *)
+let evidence_label claim = Option.value (String.chop_suffix claim ~suffix:": true") ~default:claim
+
 (** The [standing] of a direct failure [diagnostic] under [key], from the tables and this run's
     observations, so that the rule can be pinned on tables the repository does not have to contain.
     The refusal RAN when its caught branch was [observed], or when one of the scanner's [refused]
     child-run lines is its own ([owns_line] against the scanner's other formats, [rivals]). A
     [direct_evidence] entry names the control claim that answers for the refusal, and it counts only
-    when that claim passed AND the refusal ran: the claim alone is an accepted fixture as far as
-    this refusal knows, and the line alone is a refusal nothing asserted on; printed output is no
-    input at all. A catalogue-only refusal that ran, by either route, is reported as such. *)
-let standing ~direct_evidence ~catalogue_only ~observed ~refused ~rivals ~passed_labels ~key
-    diagnostic =
+    when that claim passed AND one of the lines of the runs THAT CLAIM made ([claim_lines], by the
+    claim's label; gh-ocannl-1233) is the refusal's own: the claim alone is an accepted fixture as
+    far as this refusal knows, the line alone is a refusal nothing asserted on, and a line from a
+    sibling claim's run is a refusal the mapped claim never asserted on; printed output is no input
+    at all. A catalogue-only refusal that ran, by either route and in any run, is reported as such.
+*)
+let standing ~direct_evidence ~catalogue_only ~observed ~refused ~claim_lines ~rivals ~passed_labels
+    ~key diagnostic =
   let format = diagnostic.Refusal_control_scan.format in
-  let ran = observed || List.exists refused ~f:(owns_line ~rivals ~format) in
+  let owned = List.exists ~f:(owns_line ~rivals ~format) in
+  let ran = observed || owned refused in
   let answered =
     match List.Assoc.find direct_evidence key ~equal:String.equal with
     | None -> false
     | Some claim ->
-        let label = Option.value (String.chop_suffix claim ~suffix:": true") ~default:claim in
-        List.mem passed_labels label ~equal:String.equal
+        let label = evidence_label claim in
+        List.mem passed_labels label ~equal:String.equal && owned (claim_lines label)
   in
   match (List.Assoc.mem catalogue_only key ~equal:String.equal, ran) with
   | true, true -> Executed_yet_catalogue_only
   | true, false -> Catalogue_only
-  | false, _ when observed || (answered && ran) -> Exercised
+  | false, _ when observed || answered -> Exercised
   | false, _ -> Unexercised
 
 (** The [raw_entries] row for [source] (its key without the [test/operations/] prefix) listing
@@ -1135,6 +1174,11 @@ let doubly_classified =
   List.filter_map direct_evidence ~f:(fun (key, _) ->
       Option.some_if (List.Assoc.mem catalogue_only key ~equal:String.equal) key)
 
+(** The last row of every section {!print_section} prints, unconditionally. [tools/mutation-run.sh]
+    reads it by this text, taken from [verdict_teardown]'s transcripts of real runs rather than from
+    this source: a golden ending on it is complete exactly when a run's stdout ends on it. *)
+let closing_row = "End of synthetic controls."
+
 (** The section [print] ends a scan's golden with: its heading, then the marker of each of
     [diagnostics] that [expected] (the source's registered row) lists and this run exercised -- a
     claim's once Verdict recorded it passing, a direct failure's once its refusal ran -- and the
@@ -1142,7 +1186,13 @@ let doubly_classified =
     under. Exposed apart from [print] so that a control can print a section for diagnostics it
     extracted itself, through the same printer: [verdict_teardown]'s transcripts, which
     [tools/test-mutation-run.sh] replays through [tools/mutation-run.sh], are of runs ending here
-    (gh-ocannl-1364). *)
+    (gh-ocannl-1364).
+
+    The section ends on {!closing_row}, printed whatever came before it (gh-ocannl-1251,
+    gh-ocannl-1318): every golden that prints a section pins it, so a run that printed it decided
+    every marker above it. Without it a run cut inside the markers read the same as a complete run
+    whose claim failed, and a run whose only shortfall was one silenced refusal -- every claim
+    passing, so no teardown line -- read as cut short. *)
 let print_section ~source ~expected diagnostics =
   let passed_labels = ref (Verdict.passed_labels ()) in
   let catalogued = ref [] in
@@ -1169,8 +1219,9 @@ let print_section ~source ~expected diagnostics =
             match
               standing ~direct_evidence ~catalogue_only
                 ~observed:(Hash_set.mem observed_failures key)
-                ~refused:(Hashtbl.find_multi refused_runs source)
-                ~rivals ~passed_labels:(Verdict.passed_labels ()) ~key diagnostic
+                ~refused:(List.concat_map (Hashtbl.find_multi refused_runs source) ~f:refusal_lines)
+                ~claim_lines:(claim_lines ~source) ~rivals ~passed_labels:(Verdict.passed_labels ())
+                ~key diagnostic
             with
             | Exercised -> printf "  %s\n" marker
             | Catalogue_only -> catalogued := marker :: !catalogued
@@ -1185,7 +1236,8 @@ let print_section ~source ~expected diagnostics =
   if not (List.is_empty !catalogued) then (
     printf
       "Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):\n";
-    List.iter (List.rev !catalogued) ~f:(printf "  %s\n"))
+    List.iter (List.rev !catalogued) ~f:(printf "  %s\n"));
+  printf "%s\n" closing_row
 
 let print source =
   let source_path =

@@ -4247,6 +4247,8 @@
 
 (rule
  ; ocannl-backend: none -- runs the scanner's synthetic stale-exclusion refusal branch.
+ ; The fixture library's wrapper interface is what its declared-but-unread control copies alone
+ ; into a tree of its own (gh-ocannl-1233).
  (target codegen_text_inventory_control.actual)
  (package neural_nets_lib)
  (deps
@@ -4256,7 +4258,10 @@
  (action
   (with-stdout-to
    %{target}
-   (run %{dep:codegen_text_inventory.exe} --refusal-control))))
+   (run
+    %{dep:codegen_text_inventory.exe}
+    --refusal-control
+    %{dep:.emitter_fixture.objs/byte/emitter_fixture.cmi}))))
 
 (rule
  (alias runtest-codegen_text_inventory_control)

@@ -865,3 +865,4 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:0c4e9524d3ca5b65bcbff10057237e01] read string literals
   [scanner-refusal:52611c0a0d560ef9a05c306005ef3e2a] them as arguments
   [scanner-refusal:d50daada9fe28bdf45d8d12250595a40] one test directory
+End of synthetic controls.
