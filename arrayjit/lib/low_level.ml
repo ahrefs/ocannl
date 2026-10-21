@@ -2798,8 +2798,26 @@ let fresh_footprint_id =
     Int.incr c;
     !c
 
+(* Whether a write of [tn] in [c] mentions [s] in its index: the symbols the inliner substitutes the
+   read site's index for when [c] replays as [tn]'s template (all of [tn]'s write indices agree, or
+   the store is refused with [Non_virtual 4]). *)
+let rec write_index_mentions tn s (c : t) =
+  match c with
+  | Set { tn = t; idcs; _ } | Set_from_vec { tn = t; idcs; _ } ->
+      Tn.equal t tn && Array.exists idcs ~f:(axis_index_mentions_symbol s)
+  | Seq (a, b) -> write_index_mentions tn s a || write_index_mentions tn s b
+  | For_loop { body; _ } | Scan_loop { body; _ } | If { body; _ } -> write_index_mentions tn s body
+  | Noop | Zero_out _ | Set_dynamic _ | Set_local _ | Declare_local _ | Comment _
+  | Staged_compilation _ | Workgroup_barrier | Tile_mma _ ->
+      false
+
+(* [decide_where] is {!where_condition_decided} (defined below the interval machinery it needs, like
+   [elide_stored]): whether a [Where] condition is decided over the static indices and the given
+   loops (gh-ocannl-1469). *)
 let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope) ?only_store
-    ~elide_stored (optim_ctx : optimize_ctx) traced_store reverse_node_map static_indices
+    ~elide_stored
+    ~(decide_where : loops:(Indexing.symbol * (int * int)) list -> scalar_arg -> bool option)
+    (optim_ctx : optimize_ctx) traced_store reverse_node_map static_indices
     ~(footprint_scoped : (Tn.t, Tn.provenance option) Hashtbl.t)
     ~(footprint_retracted : Tnode.t Hash_set.t) (llc : t) : t * Tnode.t Hash_set.t =
   let plc = optim_ctx.placements in
@@ -3031,6 +3049,17 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
     | Noop | Set_local _ | Declare_local _ | Comment _ | Staged_compilation _ | Workgroup_barrier ->
         acc
   in
+  (* gh-ocannl-1469: the loops whose extent may decide a [Where] condition in the walked code —
+     every enclosing loop except the [opaque] ones. Code that executes where it stands holds every
+     loop's extent; code the walk is producing as a node's stored template replays with the read
+     site's index substituted for the template's write-index symbols, which need not lie in the
+     producer's extent, so the capture of a [For_loop] candidate (phase 1 below) makes those symbols
+     [opaque] (the rule [elide_unevaluated_operands] applies to a template, gh-ocannl-625). Any
+     other enclosing loop -- every loop around a statement stored on its own, its write-index loops
+     included -- is outside the stored code, and a template mentioning its symbol is refused at its
+     store ([Non_virtual 9] / [10]): an emitted decision resting on it never reaches a stored
+     template, and its extent holds where the code runs. *)
+  let decision_loops ~opaque enclosing = List.filter enclosing ~f:(fun (s, _) -> not (opaque s)) in
   (* [process_for] holds tensors whose [Get]s must be left untouched (self/recursive references,
      replaced by [Get_local] during the tensor's own [inline_computation]). [owned] holds tensors
      whose whole-loop computation is captured at an enclosing [For_loop]: their per-statement
@@ -3038,9 +3067,11 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
      [process_for] -- reads of them are still inlined, so surviving sibling readers can inline a
      virtualized provider. [in_storage_pass] is set within a per-candidate storage sub-pass so it
      does not recursively re-store nested-loop candidates. See #134. *)
-  let rec loop_proc ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing (llc : t) : t
-      =
-    let loop = loop_proc ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing in
+  let rec loop_proc ~opaque ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
+      (llc : t) : t =
+    let loop =
+      loop_proc ~opaque ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
+    in
     match llc with
     | Noop -> Noop
     | Seq (c1, c2) ->
@@ -3064,8 +3095,8 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
               {
                 c with
                 init =
-                  loop_scalar ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
-                    ~footprint_ok:false c.init;
+                  loop_scalar ~opaque ~process_for ~owned ~in_storage_pass ~guarded ~in_scan
+                    ~enclosing ~footprint_ok:false c.init;
               })
         in
         Scan_loop
@@ -3073,7 +3104,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
             scan_config with
             carried;
             body =
-              loop_proc ~process_for ~owned ~in_storage_pass ~guarded ~in_scan:true
+              loop_proc ~opaque ~process_for ~owned ~in_storage_pass ~guarded ~in_scan:true
                 ~enclosing:((index, (from_, to_)) :: enclosing)
                 body;
           }
@@ -3086,7 +3117,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
             {
               for_config with
               body =
-                loop_proc ~process_for ~owned ~in_storage_pass:true ~guarded ~in_scan
+                loop_proc ~opaque ~process_for ~owned ~in_storage_pass:true ~guarded ~in_scan
                   ~enclosing:enclosing' body;
             }
         else
@@ -3105,7 +3136,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
                 {
                   for_config with
                   body =
-                    loop_proc ~process_for ~owned ~in_storage_pass:false ~guarded ~in_scan
+                    loop_proc ~opaque ~process_for ~owned ~in_storage_pass:false ~guarded ~in_scan
                       ~enclosing:enclosing' body;
                 }
           | _ ->
@@ -3132,12 +3163,18 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
                          [proc_contains_set_from_vec]. *)
                       if proc_contains_set_from_vec tn body then For_loop { for_config with body }
                       else
+                        (* gh-ocannl-1469: this walk becomes [tn]'s stored template, which replays
+                           with the read site's index substituted for its write index's symbols — so
+                           their loops decide no [Where] here (see [decision_loops]). *)
+                        let opaque s =
+                          opaque s || write_index_mentions tn s (For_loop { for_config with body })
+                        in
                         For_loop
                           {
                             for_config with
                             body =
-                              loop_proc ~process_for:store_pf ~owned:owned' ~in_storage_pass:true
-                                ~guarded ~in_scan ~enclosing:enclosing' body;
+                              loop_proc ~opaque ~process_for:store_pf ~owned:owned'
+                                ~in_storage_pass:true ~guarded ~in_scan ~enclosing:enclosing' body;
                           }
                     in
                     (* The stored subtree is rooted AT this loop, so [enclosing] (not [enclosing'])
@@ -3153,8 +3190,8 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
                 {
                   for_config with
                   body =
-                    loop_proc ~process_for ~owned:owned' ~in_storage_pass:false ~guarded ~in_scan
-                      ~enclosing:enclosing' body;
+                    loop_proc ~opaque ~process_for ~owned:owned' ~in_storage_pass:false ~guarded
+                      ~in_scan ~enclosing:enclosing' body;
                 })
     | Zero_out tn ->
         let traced : traced_array = get_node traced_store tn in
@@ -3186,8 +3223,8 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
               tn;
               idcs;
               llsc =
-                loop_scalar ~process_for:next ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
-                  ~footprint_ok llsc;
+                loop_scalar ~opaque ~process_for:next ~owned ~in_storage_pass ~guarded ~in_scan
+                  ~enclosing ~footprint_ok llsc;
               debug;
             }
         in
@@ -3216,8 +3253,8 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
               length;
               vec_unop;
               arg =
-                ( loop_scalar ~process_for:next ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
-                    ~footprint_ok arg_scalar,
+                ( loop_scalar ~opaque ~process_for:next ~owned ~in_storage_pass ~guarded ~in_scan
+                    ~enclosing ~footprint_ok arg_scalar,
                   arg_prec );
               debug;
             }
@@ -3236,7 +3273,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
     | Set_local (id, llsc) ->
         Set_local
           ( id,
-            loop_scalar ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
+            loop_scalar ~opaque ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
               ~footprint_ok:false llsc )
     | Declare_local _ -> llc
     | Comment _ -> llc
@@ -3257,16 +3294,18 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
         If
           {
             cond =
-              ( loop_scalar ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
-                  ~footprint_ok:false c,
+              ( loop_scalar ~opaque ~process_for ~owned ~in_storage_pass ~guarded ~in_scan
+                  ~enclosing ~footprint_ok:false c,
                 prec );
             body =
-              loop_proc ~process_for ~owned ~in_storage_pass ~guarded:true ~in_scan ~enclosing body;
+              loop_proc ~opaque ~process_for ~owned ~in_storage_pass ~guarded:true ~in_scan
+                ~enclosing body;
           }
-  and loop_scalar ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing ~footprint_ok
-      (llsc : scalar_t) : scalar_t =
+  and loop_scalar ~opaque ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
+      ~footprint_ok (llsc : scalar_t) : scalar_t =
     let loop =
-      loop_scalar ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing ~footprint_ok
+      loop_scalar ~opaque ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
+        ~footprint_ok
     in
     match llsc with
     | Constant _ -> llsc
@@ -3331,12 +3370,24 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
           {
             opts with
             body =
-              loop_proc ~process_for:(Set.add process_for opts.id.tn) ~owned ~in_storage_pass
-                ~guarded ~in_scan ~enclosing opts.body;
+              loop_proc ~opaque ~process_for:(Set.add process_for opts.id.tn) ~owned
+                ~in_storage_pass ~guarded ~in_scan ~enclosing opts.body;
           }
     | Get_local _ -> llsc
     | Get_merge_buffer (_, _) -> llsc
     | Embed_index _ -> llsc
+    (* gh-ocannl-1469: the arm of a [Where] whose condition is decided is never evaluated — do not
+       descend into it, as for a projection's discarded operand below: inlining there could reject
+       the routine for code that never runs (a merge-tainted inherited computation), mint a scope,
+       or register a spliced read. It becomes [Constant 0.] at its own precision, the form
+       [elide_unevaluated_operands] gives a stored template (gh-ocannl-625), so the condition and
+       the live arm are still walked and kept exactly. *)
+    | Ternop (Ops.Where, (cnd, cprec), (llv2, prec2), (llv3, prec3)) -> (
+        let cond = (loop cnd, cprec) in
+        match decide_where ~loops:(decision_loops ~opaque enclosing) cond with
+        | Some true -> Ternop (Ops.Where, cond, (loop llv2, prec2), (Constant 0., prec3))
+        | Some false -> Ternop (Ops.Where, cond, (Constant 0., prec2), (loop llv3, prec3))
+        | None -> Ternop (Ops.Where, cond, (loop llv2, prec2), (loop llv3, prec3)))
     | Ternop (op, (llv1, prec1), (llv2, prec2), (llv3, prec3)) ->
         Ternop (op, (loop llv1, prec1), (loop llv2, prec2), (loop llv3, prec3))
     (* Review round 9: a projection's discarded operand is never evaluated — do not descend into it
@@ -3361,6 +3412,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
         current_stmt := i;
         current_writers := statement_writers (Set.empty (module Tnode)) stmt;
         loop_proc
+          ~opaque:(fun _ -> false)
           ~process_for:(Set.empty (module Tnode))
           ~owned:(Set.empty (module Tnode))
           ~in_storage_pass:false ~guarded:false ~in_scan:false ~enclosing:[] stmt)
@@ -4274,25 +4326,40 @@ let try_interval_fold ~ienv ~prec (llsc : scalar_t) : scalar_t option =
    index's symbols ([~opaque]) do not extend the interval environment, since the inliner substitutes
    the read site's index for them and it need not lie in the producer's extent (a kept loop keeps
    its extent, freshened); and no bounds candidate is consulted ([node_bounds = false]). *)
-let elide_unevaluated_operands static_indices ~(opaque : Indexing.symbol -> bool) (llc : t) : t =
-  (* Review round 1: a test is decided only if it comes out the same at every precision it may be
-     EVALUATED at. That is the precision of its slot as the renderer reads it -- a homogeneous
-     operator's operands at the operator's result precision, a [Where] condition at its own
-     annotation (C_syntax.pp_scalar_op) -- mapped through the backend's [compute_prec], which may
-     widen a float, unknown at store time; so a float slot asks every float precision, an integer
-     slot only itself. A half gate of [1e-8] is shut where a single one is open. *)
-  let candidates prec = if Ops.is_float prec then Ops.float_precs else [ prec ] in
-  let decided ~ienv ~prec (c : scalar_t) =
-    let verdict q =
-      let r = interval_of ~ienv ~prec:q c in
-      if Interval.definitely_true r.ival then Some true
-      else if Interval.definitely_false r.ival then Some false
-      else None
-    in
-    match List.map (candidates prec) ~f:verdict with
-    | Some v :: rest when List.for_all rest ~f:(Option.equal Bool.equal (Some v)) -> Some v
-    | _ -> None
+(* Review round 1 of gh-ocannl-625: a test is decided only if it comes out the same at every
+   precision it may be EVALUATED at. That is the precision of its slot as the renderer reads it -- a
+   homogeneous operator's operands at the operator's result precision, a [Where] condition at its
+   own annotation (C_syntax.pp_scalar_op) -- mapped through the backend's [compute_prec], which may
+   widen a float, unknown when the IR is rewritten; so a float slot asks every float precision, an
+   integer slot only itself. A half gate of [1e-8] is shut where a single one is open. *)
+let decided_at_every_precision ~ienv ~prec (c : scalar_t) : bool option =
+  let candidates = if Ops.is_float prec then Ops.float_precs else [ prec ] in
+  let verdict q =
+    let r = interval_of ~ienv ~prec:q c in
+    if Interval.definitely_true r.ival then Some true
+    else if Interval.definitely_false r.ival then Some false
+    else None
   in
+  match List.map candidates ~f:verdict with
+  | Some v :: rest when List.for_all rest ~f:(Option.equal Bool.equal (Some v)) -> Some v
+  | _ -> None
+
+(* gh-ocannl-1469: the decision {!virtual_llc} injects ([~decide_where]) to skip the arm of a
+   [Where] its condition never selects, in the routine's own code. The environment is the static
+   indices plus the loops [virtual_llc] passes -- those whose extent holds at every place the walked
+   code runs (its [decision_loops]) -- and, as for a stored template, no bounds candidate is
+   consulted: a decision resting on one would have to settle it, and the walk is no consumption
+   point of the node's bounds. *)
+let where_condition_decided static_indices ~(loops : (Indexing.symbol * (int * int)) list)
+    ((cnd, cprec) : scalar_arg) : bool option =
+  let ienv =
+    List.fold loops ~init:(ienv_of_static_indices ~node_bounds:false static_indices)
+      ~f:(fun ienv (s, (from_, to_)) -> ienv_extend ienv s ~from_ ~to_)
+  in
+  decided_at_every_precision ~ienv ~prec:cprec cnd
+
+let elide_unevaluated_operands static_indices ~(opaque : Indexing.symbol -> bool) (llc : t) : t =
+  let decided = decided_at_every_precision in
   let elided ((_, prec) : scalar_arg) : scalar_arg = (Constant 0., prec) in
   let extend ienv index ~from_ ~to_ =
     if opaque index then ienv else ienv_extend ienv index ~from_ ~to_
@@ -9311,6 +9378,7 @@ let walked_computations ~(ctx : optimize_ctx) ~placements ~traced_store ~reverse
       ignore
         (virtual_llc ~fresh_symbol:pricing_symbol ~fresh_scope:pricing_scope ~only_store:self
            ~elide_stored:(elide_unevaluated_operands static_indices)
+           ~decide_where:(where_condition_decided static_indices)
            scratch (copy_traced_store traced_store) reverse_node_map static_indices
            ~footprint_scoped:(Hashtbl.copy footprint_scoped)
            ~footprint_retracted:(Hash_set.create (module Tnode))
@@ -9488,6 +9556,7 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
   let virtual_llc_result, spliced_reads =
     virtual_llc
       ~elide_stored:(elide_unevaluated_operands static_indices)
+      ~decide_where:(where_condition_decided static_indices)
       input_ctx traced_store an.an_reverse_node_map static_indices ~footprint_scoped
       ~footprint_retracted llc
   in
