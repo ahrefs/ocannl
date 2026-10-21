@@ -3674,13 +3674,13 @@ let collect_loops registry llc =
 
 (* Perfectly nested serial triples (with extents), for Tensorize proposals. Statement-level only,
    deliberately (gh-ocannl-666): [Tensorize] wraps the micro-kernel in a hardware-annotated
-   [Workgroup] lane loop, which [Low_level.validate_parallel] rejects inside a [Local_scope] body —
-   a scope-nested triple can never compile ([Schedule.op_legality] would not prune it: it answers
-   about races, not scope nesting). No candidates are lost: the loops inside an accumulation mint
-   all reduce into the scope's single loop-invariant cell, so none can play the micro-kernel's
-   output-dim [i]/[j] roles and every role assignment over such a triple would be refuted anyway.
-   Deduplicated by the outer binder, since a non-minting materializing [Unroll] leaves
-   statement-level copies sharing loop symbols. *)
+   [Workgroup] lane loop, which the scope grammar forbids inside a [Local_scope] body — a
+   scope-nested triple can never apply ([Schedule.op_legality] would prune it, gh-ocannl-1467, but
+   only after probing the transform on it, which skipping it saves). No candidates are lost: the
+   loops inside an accumulation mint all reduce into the scope's single loop-invariant cell, so none
+   can play the micro-kernel's output-dim [i]/[j] roles and every role assignment over such a triple
+   would be refuted anyway. Deduplicated by the outer binder, since a non-minting materializing
+   [Unroll] leaves statement-level copies sharing loop symbols. *)
 let collect_serial_triples registry llc =
   let acc = ref [] in
   let seen = Hash_set.create (module Idx.Symbol) in

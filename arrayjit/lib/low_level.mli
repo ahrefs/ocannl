@@ -780,6 +780,13 @@ type hardware_axis_info = {
 val hardware_axes : t -> hardware_axis_info list
 (** All hardware-annotated loops in pre-order, with their positional slots. *)
 
+val scope_hardware_loop : t -> (Indexing.symbol * axis_type * scope_id) option
+(** The first hardware-annotated ([Grid], [Workgroup], [Workgroup_reduce]) loop inside a
+    [Local_scope] body anywhere in [llc] — a scope body is hoisted out of its position and is in no
+    kernel's hardware-axis table — with the scope whose body holds it. The one predicate behind
+    {!validate_parallel}'s rejection and [Schedule]'s refusal of the op that puts such a loop there
+    (gh-ocannl-1467). *)
+
 type lane_all_reduce_site = {
   lar_index : Indexing.symbol;  (** The [Workgroup_reduce] loop's symbol. *)
   lar_extent : int;
