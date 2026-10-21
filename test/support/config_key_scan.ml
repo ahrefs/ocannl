@@ -1037,11 +1037,18 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
             env'
         (* A nested structure's values are reached as [M.v], from inside it and from after it. A
            functor's body is not walked: what its values read depends on its argument. *)
-        | Pstr_module { pmb_name = { txt = Some name; _ }; pmb_expr; _ } -> (
+        | Pstr_module { pmb_name = { txt = Some name; _ }; pmb_expr; _ } ->
             (* Whatever the module is, from here on [name] means it and not an earlier alias: a new
                alias's target, expanded through the aliases before it ([module W = W] keeps an
-               earlier [W]'s meaning), or nothing. *)
+               earlier [W]'s meaning), or nothing. From AFTER the binding: inside the body of
+               [module W = struct … end], [W] still names what it named before (Codex P2, round 1 of
+               PR #1324), so the body is walked first. *)
             let module_expr = unwrap pmb_expr in
+            let env =
+              match module_expr.pmod_desc with
+              | Pmod_structure inner -> walk ~scope:(scope @ [ name ]) env inner
+              | _ -> env
+            in
             (if List.is_empty scope then
                let target =
                  match module_expr.pmod_desc with
@@ -1052,9 +1059,7 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
                  match target with
                  | Some target -> List.Assoc.add !aliases name target ~equal:String.equal
                  | None -> List.Assoc.remove !aliases name ~equal:String.equal);
-            match module_expr.pmod_desc with
-            | Pmod_structure inner -> walk ~scope:(scope @ [ name ]) env inner
-            | _ -> env)
+            env
         (* An [include struct … end] exports its values into the enclosing scope, so they are walked
            there (gh-ocannl-1320, Codex P2 round 6). An included functor application is not: what
            its values read depends on its argument, as for a functor's body. *)

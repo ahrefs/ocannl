@@ -83,6 +83,7 @@ ok: alias reach -- a rebound alias takes its second meaning after it
 ok: alias reach -- an alias of an alias written before it expands through it
 ok: alias reach -- an alias of a module aliased only later names the outer module
 ok: alias reach -- a structure rebinding an alias ends it
+ok: alias reach -- the body of a structure rebinding an alias still sees the alias
 digest_completeness refuses the malformed tree, exiting 1: true
 test_config_consistency refuses the malformed tree, exiting 1: true
 

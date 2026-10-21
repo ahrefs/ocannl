@@ -400,6 +400,11 @@ let reach_alias_cases =
       "module W = Widths\nmodule W = struct module Inner = Foo end\nlet f () = W.Inner.v",
       "f",
       [ "k_unfollowed" ] );
+    (* Inside the body of the structure that rebinds [W], [W] is still the alias. *)
+    ( "the body of a structure rebinding an alias still sees the alias",
+      "module W = Widths\nmodule W = struct let f () = W.v end",
+      "W.f",
+      [ "k_widths" ] );
   ]
 
 let reach_alias_external = function
