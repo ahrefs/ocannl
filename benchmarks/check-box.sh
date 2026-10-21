@@ -30,7 +30,9 @@
 # records), torch-device (the box's torch build round-trips one tensor through its device -- the
 # copy that segfaulted minix's rocm7.1 wheel while is_available() said yes), python-headers
 # (Python.h, which torch.compile's launcher builds against), driver-path (this checkout's drivers,
-# resolving their interpreter through bench_venv.py as they do, reach that same venv; --box-only
+# resolving their interpreter through bench_venv.py as they do, reach that same venv, and the ok
+# line names the route that resolved: BENCH_VENV_PY, benchmarks/.venv, or the shared venv a fresh
+# worktree falls back to; --box-only
 # skips it, since a sweep worktree is no measurement checkout), toolchain (nvcc, hipcc, or the
 # macOS SDK the Metal bindings build against), and one `fixture <name>` item per required fixture
 # (present, and fixture_digest.py --check MATCHes it against DIGESTS).
@@ -221,13 +223,22 @@ sys.exit(0 if os.path.isfile(h) else 1)' 2>&1); then
     item driver-path skip "--box-only: no measurement checkout to resolve from"
   else
     prefix='import os, sys; print(os.path.realpath(sys.prefix))'
-    if ! resolved=$(cd "$here" && python3 -c 'import bench_venv; print(bench_venv.venv_python())' 2>&1); then
+    # `<interpreter><TAB><route>`, bench_venv.py's own report of what it resolved and how.
+    # A failed run, or anything but one line with one tab, resolved nothing.
+    resolved_ok=
+    if resolved=$(cd "$here" && python3 bench_venv.py 2>&1); then
+      case $resolved in *$'\n'* | *$'\t'*$'\t'* | $'\t'* | *$'\t') ;; *$'\t'*) resolved_ok=1 ;; esac
+    fi
+    if [ -z "$resolved_ok" ]; then
       item driver-path GAP "bench_venv.py did not resolve: $(printf '%s\n' "$resolved" | tail -n 1)"
-    elif theirs=$("$resolved" -c "$prefix" 2>/dev/null) && [ "$theirs" = "$("$py" -c "$prefix")" ]; then
-      item driver-path ok "drivers here run $resolved"
     else
-      item driver-path GAP "drivers in $(dirname "$here") would run $resolved, which is not $venv" \
-        "ln -s $venv $here/.venv, or export BENCH_VENV_PY=$py"
+      route=${resolved#*$'\t'} resolved=${resolved%%$'\t'*}
+      if theirs=$("$resolved" -c "$prefix" 2>/dev/null) && [ "$theirs" = "$("$py" -c "$prefix")" ]; then
+        item driver-path ok "drivers here run $resolved (route: $route)"
+      else
+        item driver-path GAP "drivers in $(dirname "$here") would run $resolved (route: $route), which is not $venv" \
+          "ln -s $venv $here/.venv, or export BENCH_VENV_PY=$py"
+      fi
     fi
   fi
 fi

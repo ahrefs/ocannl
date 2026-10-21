@@ -777,12 +777,16 @@ benchmarks/.venv/bin/python benchmarks/orchestrate.py --box <box>
 no measurement box, measuring for itself, passes `--skip-box-check` instead.
 
 A box that keeps one shared venv outside the checkout (the measurement boxes use
-`~/.venvs/ocannl-bench`) reaches it either by symlinking `benchmarks/.venv` to it or by exporting
-`BENCH_VENV_PY=~/.venvs/ocannl-bench/bin/python`; every driver (`orchestrate.py`, `gh675_cells.py`)
-resolves its interpreter through `bench_venv.py`, so the variable wins over the symlink, and a
-Windows venv's `Scripts/python.exe` is found without it.
+`~/.venvs/ocannl-bench`) needs nothing more: every driver (`orchestrate.py`, `gh675_cells.py`, ...)
+resolves its interpreter through `bench_venv.py`, which takes a non-empty `BENCH_VENV_PY`, else
+`benchmarks/.venv` (a symlink to the shared venv, or a venv of the checkout's own), else
+`~/.venvs/ocannl-bench` itself -- so a fresh worktree, which has neither of the first two, reaches
+the box's venv unprompted (gh-ocannl-1433). A Windows venv's `Scripts/python.exe` is found at
+either place. `python3 benchmarks/bench_venv.py` prints what it resolved and by which route, as
+`check-box.sh`'s driver-path line does.
 
-`test_orchestrate.py`'s legs that run the real torch runner skip where that venv has no torch;
+`test_orchestrate.py`'s legs that run the real torch runner use only the first two routes (the
+dune rule running it declares no venv in the home directory), skip where that venv has no torch;
 `BENCH_TORCH_REQUIRED=1` makes them fail instead. CI's `torch-runner` job runs the file that way
 in a CPU-only venv built from `requirements-ci-torch.txt`, which is also the quickest way to give a
 dev checkout those legs.

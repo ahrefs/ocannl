@@ -202,6 +202,35 @@ if harness_leg 'gap: driver path'; then
   BENCH_VENV_PY=$(command -v python3) check driver --box rog-nv
   gap_leg 'drivers resolving another interpreter is a driver-path GAP' driver driver-path
 fi
+# A fresh worktree: no BENCH_VENV_PY and no benchmarks/.venv, from a copy of the subject in a tree
+# of its own (this checkout may have a .venv link, which outranks the shared venv), with HOME
+# holding the shared venv as a link to the scratch one -- or holding nothing.
+if harness_leg 'driver path: the shared venv'; then
+  fresh=$TMP/fresh/benchmarks
+  mkdir -p "$fresh/workloads" "$TMP/home/.venvs" "$TMP/home-bare"
+  cp "$SUBJECT" "$here/bench_venv.py" "$here/fixture_digest.py" "$fresh/"
+  cp "$here"/workloads/*.json "$fresh/workloads/"
+  ln -s "$venv" "$TMP/home/.venvs/ocannl-bench"
+  fresh_check() { # RUN HOME
+    rc=0
+    env -u BENCH_VENV_PY HOME="$2" bash "$fresh/check-box.sh" --venv "$venv" --fixture-dir "$TMP/fixtures" \
+      --digests "$TMP/DIGESTS.txt" --box rog-nv >"$TMP/runs/$1" 2>&1 || rc=$?
+  }
+  fresh_check fresh-shared "$TMP/home"
+  if [ "$rc" = 0 ] &&
+     grep -q '^check-box: driver-path: ok -- drivers here run .*/home/\.venvs/ocannl-bench/bin/python (route: shared venv .*/home/\.venvs/ocannl-bench)$' \
+       "$TMP/runs/fresh-shared"; then
+    report 0 'a fresh worktree reaches the shared venv, and the ok line names that route'
+  else
+    report 1 'a fresh worktree reaches the shared venv, and the ok line names that route' "rc=$rc"
+    sed 's/^/      | /' "$TMP/runs/fresh-shared"
+  fi
+  fresh_check fresh-bare "$TMP/home-bare"
+  gap_leg 'a fresh worktree on a box with no shared venv is still a driver-path GAP' fresh-bare driver-path
+  grep -q '(route: none)' "$TMP/runs/fresh-bare"
+  report $? 'its GAP line says no route resolved'
+fi
+
 if harness_leg 'gap: toolchain'; then
   if [ -e /usr/bin/nvcc ] || [ -e /bin/nvcc ]; then
     skip 'no nvcc is a toolchain GAP' 'this host has nvcc on /usr/bin or /bin'
