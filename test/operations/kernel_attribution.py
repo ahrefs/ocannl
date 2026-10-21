@@ -390,15 +390,15 @@ with tempfile.TemporaryDirectory() as scratch:
           " went: true")
 
 with tempfile.TemporaryDirectory() as scratch:
-    # gh-ocannl-1444: a HIP cell's amdgpu sysfs samples; idle ones (the compile, the teardown) and
-    # ones the card left blank are not the step's.
+    # gh-ocannl-1444: a HIP cell's amdgpu sysfs samples; idle ones (the compile, the teardown),
+    # gated ones (0 MHz however busy) and ones the card left blank are not the step's.
     out = Path(scratch)
     stem = "hip-gpt2_mini_train-base-kprof1"
     write_cell(out, stem, tracer="rocprofv3", model=UNIFIED)
     (out / (stem + ".clk.csv")).write_text(
         "timestamp_ns,sclk_mhz,power_w,temp_c,busy_pct\n1,600,10.0,40.0,0\n2,2800,80.0,60.0,99\n"
-        "3,2600,70.0,61.0,97\n4,2900,,62.0,100\n5,,,,\n6,0,5.0,40.0,3\n")
+        "3,2600,70.0,61.0,97\n4,2900,,62.0,100\n5,,,,\n6,0,5.0,40.0,3\n7,0,1.0,51.0,99\n")
     code, text = report_text(out)
-    check("- shader clock while >= 50% busy (amdgpu sysfs): 2600..2900 MHz, median 2800 (3 samples);"
-          " power median 75.0 W" in text, text)
+    check("- shader clock while >= 50% busy and ungated (amdgpu sysfs): 2600..2900 MHz, median 2800"
+          " (3 samples); power median 75.0 W" in text, text)
     print("a HIP cell reports its busy shader clock and power from the sysfs samples: true")

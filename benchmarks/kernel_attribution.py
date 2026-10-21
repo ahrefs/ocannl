@@ -329,15 +329,20 @@ def clocks(out, stem):
 
 def amdgpu_clocks(out, stem):
     """The shader clock and power over the cell's amdgpu sysfs samples taken while the GPU reported
-    itself at least BUSY_FLOOR % busy (gh-ocannl-1444), or None without a sampler or such samples:
-    (min, median, max MHz, samples, median W or None)."""
+    itself at least BUSY_FLOOR % busy with its clock running (gh-ocannl-1444), or None without a
+    sampler or such samples: (min, median, max MHz, samples, median W or None). The sampler reads
+    every 250 ms, so it sees a few samples of a short window: a coarse reading of the clock the
+    step ran at, not a per-kernel one."""
     path = Path(out) / (stem + ".clk.csv")
     if not path.is_file():
         return None
     mhz, watts = [], []
     for r in csv.DictReader(open(path)):
         try:
-            if r.get("busy_pct") and int(r["busy_pct"]) >= BUSY_FLOOR and r.get("sclk_mhz"):
+            # A zero clock is a gated core (gfxoff), not a speed: tuf's gfx1102 reads 0 MHz at 99%
+            # busy between a step's bursts.
+            if (r.get("busy_pct") and int(r["busy_pct"]) >= BUSY_FLOOR and r.get("sclk_mhz")
+                    and int(r["sclk_mhz"]) > 0):
                 mhz.append(int(r["sclk_mhz"]))
                 if r.get("power_w"):
                     watts.append(float(r["power_w"]))
@@ -431,7 +436,8 @@ def render_cell(out, name, rec, rows):
         print("- SM clock in P0: %d..%d MHz, median %d (%d samples)" % (clk[0], clk[2], clk[1], clk[3]))
     clk = amdgpu_clocks(out, stem)
     if clk:
-        print("- shader clock while >= %d%% busy (amdgpu sysfs): %d..%d MHz, median %d (%d samples)%s"
+        print("- shader clock while >= %d%% busy and ungated (amdgpu sysfs): %d..%d MHz, median %d"
+              " (%d samples)%s"
               % (BUSY_FLOOR, clk[0], clk[2], clk[1], clk[3],
                  "" if clk[4] is None else "; power median %.1f W" % clk[4]))
     # The exclusive column earns its place only where stamped intervals overlap (gh-ocannl-1444).
