@@ -1982,10 +1982,14 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
               split threshold); the fit put the capacity near 13 GB. *)
            cache_capacity_bytes = Some (12 * 1024 * 1024 * 1024);
            cache_bandwidth = Some 1.8e12;
-           (* gh-ocannl-1442: the ranking score's own rates, below the envelope's ceilings. Filled
-              from benchmarks/gh1253_cells.sh measurements. *)
-           issue_rate = None;
-           dram_bandwidth = None;
+           (* gh-ocannl-1442: the ranking score's own rates, below the envelope's ceilings, from
+              benchmarks/gh1253_cells.sh on the RTX 5070 Ti of rog-nv (2026-10-21, 46d84231): the
+              STREAM triad's 603 GB/s, and the seeded register-blocktiled sketch's 3.44e12 scalar
+              operations/s (its 512 x 512 sweep), which predicted the seeded weight gradient at b1,
+              b8 and b256 within 0.87-1.17x. One device's rates for the class, like the cache tier's
+              above: override per machine with model_dram_bandwidth / model_issue_rate. *)
+           issue_rate = Some 3.4e12;
+           dram_bandwidth = Some 6.0e11;
            max_resident_threads =
              min_over (fun (a : Cu.Device.attributes) ->
                  a.multiprocessor_count * a.max_threads_per_multiprocessor);
