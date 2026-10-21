@@ -13,9 +13,9 @@
    every test directory copies. When the environment is unchanged the output is byte-identical and
    dune's early cutoff stops there; when a variable changes, so does every `ocannl_config` copy, and
    every rule depending on one reruns. No key is listed anywhere: the set is whatever the
-   environment holds, classified by `Utils.classify_env_var` -- the function the startup check and
-   `env_var_deps` already share -- so a key the pipeline will start reading tomorrow is covered
-   today.
+   environment holds, filtered by `Utils.env_var_in_ambient_record` -- which `env_var_deps` asks of
+   every `(env_var …)` a dune file declares, refusing a declaration the record already carries
+   (gh-ocannl-1425) -- so a key the pipeline will start reading tomorrow is covered today.
 
    What is left out, and why:
 
@@ -64,13 +64,7 @@ let () =
         match String.lsplit2 binding ~on:'=' with
         (* An empty value is unset at every source ([Utils.read_env_var]). *)
         | None | Some (_, "") -> None
-        | Some (name, value) -> (
-            match Utils.classify_env_var name with
-            | Utils.Env_not_addressed | Utils.Env_reserved _ -> None
-            | Utils.Env_config_key "backend" -> None
-            | Utils.Env_config_key _ | Utils.Env_unknown_key _ | Utils.Env_unread_spelling _
-            | Utils.Env_unread_reserved _ ->
-                Some (name, value)))
+        | Some (name, value) -> Option.some_if (Utils.env_var_in_ambient_record name) (name, value))
     |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
   in
   Stdio.Out_channel.with_file ~binary:true record ~f:(fun out ->
