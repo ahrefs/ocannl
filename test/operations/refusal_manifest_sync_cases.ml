@@ -316,6 +316,49 @@ let check name ok = Verdict.pf "a %s tree is refused" name ok
   p "an evidence label a reworded formatted claim rendered is unresolved, not left stale"
     (List.length rendered_plan.unresolved = 1);
   p_empty "and is not rewritten" ~over:outside_plan.edits rendered_plan.edits;
+  (* A claim the row leaves unpaired -- reworded beside an inserted failure -- is not renamed by the
+     claims-only pairing of the same source, which never sees the failure. *)
+  let beside_failure =
+    String.substr_replace_first after ~pattern:"  Verdict.p \"a malformed"
+      ~with_:"  Verdict.fail \"an inserted refusal\";\n  Verdict.p \"a malformed"
+  in
+  let renamed_claims, unpaired_claims = Sync.claim_renames ~before ~after:beside_failure in
+  p "the claims-only pairing alone does pair the reworded claim" (List.length renamed_claims = 1);
+  let row_text =
+    manifest
+      ~rows:[ ("synthetic_scan.ml", markers before) ]
+      ~evidence:[ ("synthetic_scan.ml:" ^ first, "the malformed tree is refused: true") ]
+      ~catalogue:[]
+  in
+  let row_plan =
+    Sync.plan ~text:row_text
+      ~diagnostics_of:(fun _ -> Some (Scan.diagnostics beside_failure))
+      ~renamed_claims ~unpaired_claims ()
+  in
+  p_none ~min:1 "but the row's alignment outranks it: the evidence label is not relabeled"
+    row_plan.changes ~f:(function
+    | Sync.Relabeled _ -> true
+    | Row _ | Rekeyed _ -> false);
+  p "and the label naming it is unresolved"
+    (List.exists row_plan.unresolved ~f:(String.is_substring ~substring:"nothing pairs it"));
+  (* Two claims that only swap places: the one the alignment drops still occurs, so nothing is
+     unpaired. *)
+  let swapped =
+    {ocaml|
+let check ok =
+  Verdict.p "the last claim keeps its words" ok;
+  Verdict.p "the malformed tree is refused" ok
+|ocaml}
+  and in_order =
+    {ocaml|
+let check ok =
+  Verdict.p "the malformed tree is refused" ok;
+  Verdict.p "the last claim keeps its words" ok
+|ocaml}
+  in
+  p_empty "two claims that only swap places leave nothing unpaired"
+    ~over:(Scan.diagnostics in_order)
+    (snd (Sync.claim_renames ~before:in_order ~after:swapped));
   (* The text reader against the real manifest's compiled tables: every row, key and label it would
      rewrite is the one the tests read. *)
   let live_text = In_channel.read_all "../support/refusal_control_manifest.ml" in

@@ -179,7 +179,9 @@ let claim_renames ~before ~after =
           ((not (String.equal old.Scan.format renamed.Scan.format))
           && not (survives old.Scan.format))
           (old.Scan.format, renamed.Scan.format)),
-    List.map dropped ~f:(fun d -> d.Scan.format) )
+    (* A dropped claim whose format the source still has -- moved, not removed -- is no lost one. *)
+    List.filter_map dropped ~f:(fun d ->
+        Option.some_if (not (survives d.Scan.format)) d.Scan.format) )
 
 (** What a sync changed or could not. *)
 type change =
@@ -269,8 +271,14 @@ let plan ?(unpaired_claims = []) ~text ~diagnostics_of ~renamed_claims () =
                       match d.Scan.kind with
                       | Scan.Claim -> claims := (identity, d.Scan.format) :: !claims
                       | Scan.Fail -> ())))));
+  (* A row's own alignment outranks the claims-only pairing of the same source: a claim the row
+     leaves unpaired (reworded beside an inserted failure, say) is not renamed by a pass that never
+     saw the failure. *)
+  let row_unpaired = !unpaired in
   List.iter renamed_claims ~f:(fun (old_format, format) ->
-      claims := (identity_of old_format, format) :: !claims);
+      let identity = identity_of old_format in
+      if not (List.mem row_unpaired identity ~equal:String.equal) then
+        claims := (identity, format) :: !claims);
   unpaired := List.map unpaired_claims ~f:identity_of @ !unpaired;
   (* One old text to more than one new one: no single successor, so none is chosen. *)
   let ambiguous pairs =

@@ -202,7 +202,8 @@ case "$PROBE_MODE" in
   # A batch's mutants (gh-ocannl-1429), told apart by what each wrote into the module.
   batch)
     case "$(cat module.ml)" in
-      *CAUGHT*) rows 'first: false\nnested: label: true\nlast: true\n'; printf 'FAIL: first: false\n'; exit 1 ;;
+      *CAUGHT*) [ -z "${PROBE_KILL_IDLE:-}" ] || touch "$PROBE_HOME/kill-idle"
+        rows 'first: false\nnested: label: true\nlast: true\n'; printf 'FAIL: first: false\n'; exit 1 ;;
       *SURVIVED*) rows 'first: true\nnested: label: true\nlast: true\n'; exit 0 ;;
       *SLEEPING*) touch "$PROBE_HOME/ready"; exec perl -e 'sleep 60' ;;
       *) echo 'Error: injected compile failure'; exit 1 ;;
@@ -1109,6 +1110,18 @@ bash tools/mutation-early-signal.sh --batch module.ml "$fixture/patches" @runtes
 grep -q '^batch: 0 of 2 mutant(s) run ' "$fixture/result" &&
   [ "$(grep -c '^  NOT RUN ' "$fixture/result")" = 2 ] ||
   { cat "$fixture/result"; echo 'batch: a mutant that never started is not NOT RUN'; exit 1; }
+cmp module.ml "$fixture/pristine"
+# The restoration's lock probe is immune to the signals a batch's restoration records: a TERM that
+# reaches the probe (here the probe sends it to itself, once, after the caught mutant ran) must not
+# kill it into a "lock held" reading that leaves the module mutated (exit 3).
+cp tools/test-run.sh "$fixture/test-run.sh.saved"
+perl -0pi -e 's/\A(#![^\n]*\n)/$1\[ "\$\{1:-\}" = idle ] && [ -e "\$PROBE_HOME\/kill-idle" ] && { rm -f "\$PROBE_HOME\/kill-idle"; kill -TERM \$\$; }\n/' tools/test-run.sh
+grep -q 'kill-idle' tools/test-run.sh || { echo 'batch: the probe self-signal was not staged'; exit 1; }
+actual=0
+PROBE_KILL_IDLE=1 tools/mutation-run.sh --batch module.ml "$fixture/patches" @runtest-probe > "$fixture/result" 2>&1 || actual=$?
+cp "$fixture/test-run.sh.saved" tools/test-run.sh
+[ ! -e "$fixture/kill-idle" ] || { cat "$fixture/result"; echo 'batch: the probe never ran its self-signal'; exit 1; }
+[ "$actual" = 1 ] || { cat "$fixture/result"; echo "batch: a signalled lock probe ended the batch with $actual, not 1"; exit 1; }
 cmp module.ml "$fixture/pristine"
 printf 'PASS --batch runs one baseline, then each patch restored in turn, and tabulates them; a bad patch or empty directory refuses before launch; a signal stops it restored\n'
 }

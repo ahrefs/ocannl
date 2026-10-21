@@ -302,6 +302,24 @@ sub same_plain_rows {
     }
     return undef;
 }
+# A command the restoration runs, immune to INT/TERM/HUP: a batch's restoration records those
+# signals rather than ignoring them (so the batch stops after it), and a child exec'd under a
+# handler gets the default disposition back -- a signal to the process group would then kill the
+# probe, read as a held lock, and leave the module mutated. An ignored disposition survives exec.
+sub immune_system {
+    my @command = @_;
+    my $pid = fork();
+    return -1 unless defined $pid;
+    if (!$pid) {
+        $SIG{$_} = 'IGNORE' for qw(INT TERM HUP);
+        exec @command or exit 127;
+    }
+    while (1) {
+        my $got = waitpid($pid, 0);
+        next if $got < 0 && $! == EINTR;
+        return $got == $pid ? $? : -1;
+    }
+}
 system('bash', "$root/tools/test-run.sh", 'idle') == 0
     or refuse('worktree is busy or its test-run lock is unreadable; nothing mutated');
 my $scratch = tempdir('ocannl-mutation-XXXXXXXX', TMPDIR => 1, CLEANUP => 0);
@@ -445,7 +463,7 @@ sub mutate {
     if ($changed) {
         # A dead launcher is not proof that its supervisor/Dune descendants ended.
         # Their inherited worktree flock is the existing harness ownership signal.
-        if (system('bash', "$root/tools/test-run.sh", 'idle') != 0) {
+        if (immune_system('bash', "$root/tools/test-run.sh", 'idle') != 0) {
             print STDERR "mutation-run: RESTORATION DEFERRED; worktree lock held or unreadable.\n",
                 "Source may still be mutated; inspect/stop worktree runs before manual recovery from $backup\n";
             exit 3;
@@ -454,7 +472,7 @@ sub mutate {
         my ($restore_fh, $restore) = tempfile('.mutation-restore-XXXXXXXX', DIR => dirname($module), UNLINK => 0);
         close $restore_fh;
         copy($backup, $restore) && chmod($mode, $restore) && rename($restore, $module)
-                && system('cmp', '-s', $backup, $module) == 0;
+                && immune_system('cmp', '-s', $backup, $module) == 0;
         };
         unless ($restored) {
             print STDERR "mutation-run: RESTORATION FAILED; recover from $backup ($!)\n";
