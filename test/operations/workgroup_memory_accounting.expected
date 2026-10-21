@@ -1,0 +1,5 @@
+every reduction runs and returns the sum: true
+the estimate charges exactly the warp-reduce partials the emitted kernel declares: true
+past one warp the emitted kernel declares warp-reduce partials: true
+within one warp the emitted kernel declares none: true
+past one warp the gate admits the kernel at exactly its declared partials and refuses it one byte below: true

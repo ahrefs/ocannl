@@ -265,8 +265,13 @@ files.
   converted-boundary coordinate table, 256 B once per kernel however many converted `Tile_mma`
   scopes (each `Unroll`/`Partition` copy is one) read it (gh-ocannl-1255; it was per scope). The
   renderer hands the prologue the triples of the emissions it accepted, the estimate those of every
-  `Tile_mma`, so the estimate is the upper bound. A new `threadgroup` or `__shared__`
-  declaration in a backend emitter needs the same route. Metal rounds each `threadgroup` array up
+  `Tile_mma`, so the estimate is the upper bound. Renderer-inserted collectives route the same way:
+  the lane all-reduce's `lred_partials_` (`lane_all_reduce_workgroup_bytes`, gh-ocannl-1168) and
+  the multi-warp warp-shuffle reduction into a cell's `wred_partials_`
+  (`warp_reduce_workgroup_bytes` over `Low_level.warp_reduce_cell_sites`, one slot per warp at the
+  cell's accumulator residency; the renderer checks its declaration against the capability,
+  gh-ocannl-1452). A new `threadgroup` or `__shared__` declaration in a backend emitter needs the
+  same route. Metal rounds each `threadgroup` array up
   to 4 bytes (measured, M4 Max: the driver's request for two odd `half` tiles is their rounded sum),
   so the estimate charges each array rounded to
   `codegen_capabilities.workgroup_allocation_alignment` (gh-ocannl-1330), through

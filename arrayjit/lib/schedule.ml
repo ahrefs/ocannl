@@ -8992,7 +8992,18 @@ let workgroup_memory_bytes ~(capabilities : Backend_intf.codegen_capabilities)
           let p = prec site.lar_local.Low_level.tn in
           Some (max (bytes (capabilities.compute_prec p)) (bytes (capabilities.accum_prec p))))
   in
-  kernel_workgroup_bytes ~capabilities ~arrays:(staged @ partials)
+  (* gh-ocannl-1452: the per-warp partials of each warp-shuffle reduction into a cell, one
+     declaration per site, at the accumulator residency of the cell's storage precision — the
+     precision [C_syntax.try_warp_reduce] stages them at. *)
+  let warp_partials =
+    List.map
+      (Low_level.warp_reduce_cell_sites ~reassociable:Online_softmax.reassociable_local opt.llc)
+      ~f:(fun site ->
+        capabilities.Backend_intf.warp_reduce_workgroup_bytes ~extent:site.Low_level.wrc_extent
+          ~prec:(capabilities.accum_prec (prec site.wrc_cell)))
+  in
+  kernel_workgroup_bytes ~capabilities
+    ~arrays:(staged @ partials @ warp_partials)
     ~mma_triples:(List.map (mma_emission_scopes opt) ~f:(fun (d, a, b) -> (prec d, prec a, prec b)))
 
 (* gh-ocannl-1313: the per-work-item scratch the kernel declares — the function-scope arrays
@@ -9052,8 +9063,8 @@ let check_hardware_limits_classified ~name ~(limits : Backend_intf.hardware_limi
         let detail =
           [%string
             "Schedule: kernel %{name} stages %{shared_bytes#Int} bytes of workgroup-shared tiles, \
-             tile-MMA scope scratch and lane all-reduce partials, exceeding the device limit of \
-             %{max_bytes#Int} bytes"]
+             tile-MMA scope scratch, lane all-reduce and warp-reduce partials, exceeding the \
+             device limit of %{max_bytes#Int} bytes"]
         in
         raise
           (Schedule_outcome.Cause_at

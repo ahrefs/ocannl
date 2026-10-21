@@ -592,6 +592,18 @@ type codegen_capabilities = {
           barriers or shared declarations. Only the backend-level half: whether a site may stage
           partials at all is [Low_level.lane_all_reduce_sites]' structural predicate, which
           [Schedule.workgroup_memory_bytes] reads beside it. *)
+  warp_reduce_workgroup_bytes : extent:int -> prec:Ops.prec -> int;
+      (** Static workgroup-shared bytes one warp-shuffle reduction into a cell declares for its
+          per-warp partials (gh-ocannl-1452): a [Workgroup_reduce] accumulation of [extent] lanes
+          whose shuffles stage at the accumulator residency [prec], rendered across more than one
+          warp ([C_syntax.try_warp_reduce]'s [wred_partials_] array, one slot per warp). The
+          renderer checks its declaration against this same field, so the two cannot drift; 0 where
+          the reduction fits one warp, or where the multi-warp form cannot render (no shuffles,
+          barriers or shared declarations, an extent not a power-of-two count of at most warp-size
+          whole warps, a narrow residency) — the renderer refuses those loudly, so no kernel
+          declares them. Only the backend-level half: which statements are such reductions is
+          [Low_level.warp_reduce_cell_sites]' structural predicate, which
+          [Schedule.workgroup_memory_bytes] reads beside it. *)
 }
 (** Stable code-generation facts callers need before compiling. Actual rendering decisions stay on
     the compiled routine's censuses. *)
@@ -625,6 +637,7 @@ let no_codegen_capabilities =
     mma_kernel_workgroup_bytes = (fun ~triples:_ -> 0);
     workgroup_allocation_alignment = 1;
     lane_all_reduce_workgroup_bytes = (fun ~extent:_ ~prec:_ -> 0);
+    warp_reduce_workgroup_bytes = (fun ~extent:_ ~prec:_ -> 0);
   }
 
 (** A stable, exhaustive rendering of a capability record under the CURRENT numerics policy: its
@@ -645,14 +658,15 @@ let no_codegen_capabilities =
     Rendering them would add no discrimination, only re-tunes.
 
     The fields deliberately not rendered are [mma_kernel_workgroup_bytes],
-    [workgroup_allocation_alignment] and [lane_all_reduce_workgroup_bytes] (the same argument holds
-    for all three): it decides whether a schedule FITS, never what a kernel computes, and it is a
-    function of the storage triples, the numerics policy and the backend, which the key already
-    carries ([Schedule_cache.numerics_tag] and the backend identity), so rendering it would add no
-    discrimination. An emitter change that grows the scratch is caught without it: a replayed winner
-    passes the same [Schedule.check_hardware_limits_classified] gate as a fresh candidate, so one
-    that no longer fits is refused there as a typed cause, which autotune answers by re-searching
-    (gh-ocannl-572: over-keying is a defect too). *)
+    [workgroup_allocation_alignment], [lane_all_reduce_workgroup_bytes] and
+    [warp_reduce_workgroup_bytes] (the same argument holds for all four): it decides whether a
+    schedule FITS, never what a kernel computes, and it is a function of the storage triples, the
+    numerics policy and the backend, which the key already carries ([Schedule_cache.numerics_tag]
+    and the backend identity), so rendering it would add no discrimination. An emitter change that
+    grows the scratch is caught without it: a replayed winner passes the same
+    [Schedule.check_hardware_limits_classified] gate as a fresh candidate, so one that no longer
+    fits is refused there as a typed cause, which autotune answers by re-searching (gh-ocannl-572:
+    over-keying is a defect too). *)
 let codegen_capabilities_fingerprint
     {
       supports_f64;
@@ -666,6 +680,7 @@ let codegen_capabilities_fingerprint
       mma_kernel_workgroup_bytes = _;
       workgroup_allocation_alignment = _;
       lane_all_reduce_workgroup_bytes = _;
+      warp_reduce_workgroup_bytes = _;
     } =
   let p = Ops.prec_string in
   let resolution f =
