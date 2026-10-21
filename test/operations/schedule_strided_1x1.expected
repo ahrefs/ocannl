@@ -1,6 +1,6 @@
 k11s witness: the producers discriminate: a unit-stride read of A changes the result: true
 k11s witness: the unscheduled form matches the host oracle: true
-k11s witness: a matmul site whose stride-2 axes are its interior batch loops, the row read at unit stride: true
+k11s witness: a matmul site whose row is the minor output axis, read at stride 2 and strictly taller than every output axis read at unit stride: true
 k11s witness: the device's own limits seed both flavors: true
 k11s witness: every whole-routine seed runs and matches the unscheduled form: true
 k11s witness: every per-segment seed runs, scheduling the segment it was keyed on, and matches the unscheduled form: true
@@ -8,13 +8,21 @@ k11s witness: the whole-routine seeds include tensorized ones, and every one ren
 k11s witness: the per-segment seeds include tensorized ones, and every one renders tensorized per its routine's mma census: true
 downsample einsum f32: the producers discriminate: a unit-stride read of A changes the result: true
 downsample einsum f32: the unscheduled form matches the host oracle: true
-downsample einsum f32: a matmul site whose stride-2 axes are its interior batch loops, the row read at unit stride: true
+downsample einsum f32: a matmul site whose row is the minor output axis, read at stride 2 and strictly taller than every output axis read at unit stride: true
 downsample einsum f32: the device's own limits seed both flavors: true
 downsample einsum f32: every whole-routine seed runs and matches the unscheduled form: true
 downsample einsum f32: every per-segment seed runs, scheduling the segment it was keyed on, and matches the unscheduled form: true
 downsample einsum f32: the whole-routine seeds include tensorized ones, and every one renders tensorized per its routine's mma census: true
 downsample einsum f32: the per-segment seeds include tensorized ones, and every one renders tensorized per its routine's mma census: true
-resnet block: a matmul site whose stride-2 axes are its interior batch loops, the row read at unit stride: true
+downsample einsum f32, batch as tall as the row: the producers discriminate: a unit-stride read of A changes the result: true
+downsample einsum f32, batch as tall as the row: the unscheduled form matches the host oracle: true
+downsample einsum f32, batch as tall as the row: a matmul site whose stride-2 axes are its interior batch loops, the row read at unit stride and at least as tall as each of them: true
+downsample einsum f32, batch as tall as the row: the device's own limits seed both flavors: true
+downsample einsum f32, batch as tall as the row: every whole-routine seed runs and matches the unscheduled form: true
+downsample einsum f32, batch as tall as the row: every per-segment seed runs, scheduling the segment it was keyed on, and matches the unscheduled form: true
+downsample einsum f32, batch as tall as the row: the whole-routine seeds include tensorized ones, and every one renders tensorized per its routine's mma census: true
+downsample einsum f32, batch as tall as the row: the per-segment seeds include tensorized ones, and every one renders tensorized per its routine's mma census: true
+resnet block: a matmul site whose row is the minor output axis, read at stride 2 and strictly taller than every output axis read at unit stride: true
 resnet block: the device's own limits seed at least one flavor: true
 resnet block: every seed either tuner flavor proposes, applied alone, declines with a typed cause or runs and matches the form it replaces one schedule of: the unscheduled form up to f32 rounding for a whole-routine seed, its segmentation on the default preset for a per-segment one: true
 resnet block: on the C backends, which do not fission the block, every whole-routine seed runs (its operand Stage leaves the main branch's read of the input on the source) and matches the unscheduled form up to f32 rounding: true
@@ -25,7 +33,7 @@ unit-stride control: the input is read at no stride-2 axis: true
 unit-stride control: the stride predicate is false: true
 batch of one: the producers discriminate: a unit-stride read of A changes the result: true
 batch of one: the unscheduled form matches the host oracle: true
-batch of one: a matmul site whose row is the minor output axis, read at stride 2: true
+batch of one: a matmul site whose row is the minor output axis, read at stride 2 and strictly taller than every output axis read at unit stride: true
 batch of one: the device's own limits seed both flavors: true
 batch of one: every whole-routine seed runs and matches the unscheduled form: true
 batch of one: every per-segment seed runs, scheduling the segment it was keyed on, and matches the unscheduled form: true
@@ -34,7 +42,7 @@ batch of one: the per-segment seeds include tensorized ones, and every one rende
 batch of one: the input is read at no unit-stride output axis: true
 batch of one, valid 7x7: the producers discriminate: a unit-stride read of A changes the result: true
 batch of one, valid 7x7: the unscheduled form matches the host oracle: true
-batch of one, valid 7x7: a matmul site whose row is the minor output axis, read at stride 2: true
+batch of one, valid 7x7: a matmul site whose row is the minor output axis, read at stride 2 and strictly taller than every output axis read at unit stride: true
 batch of one, valid 7x7: the device's own limits seed both flavors: true
 batch of one, valid 7x7: every whole-routine seed runs and matches the unscheduled form: true
 batch of one, valid 7x7: every per-segment seed runs, scheduling the segment it was keyed on, and matches the unscheduled form: true
@@ -42,15 +50,23 @@ batch of one, valid 7x7: the whole-routine seeds include tensorized ones, and ev
 batch of one, valid 7x7: the per-segment seeds include tensorized ones, and every one renders tensorized per its routine's mma census: true
 downsample einsum f16: the producers discriminate: a unit-stride read of A changes the result: true
 downsample einsum f16: the unscheduled form matches the host oracle: true
-downsample einsum f16: a matmul site whose stride-2 axes are its interior batch loops, the row read at unit stride: true
+downsample einsum f16: a matmul site whose row is the minor output axis, read at stride 2 and strictly taller than every output axis read at unit stride: true
 downsample einsum f16: the device's own limits seed both flavors: true
 downsample einsum f16: every whole-routine seed runs and matches the unscheduled form: true
 downsample einsum f16: every per-segment seed runs, scheduling the segment it was keyed on, and matches the unscheduled form: true
 downsample einsum f16: the whole-routine seeds include tensorized ones, and every one renders tensorized per its routine's mma census: true
 downsample einsum f16: the per-segment seeds include tensorized ones, and every one renders tensorized per its routine's mma census: true
+downsample einsum f16, batch as tall as the row: the producers discriminate: a unit-stride read of A changes the result: true
+downsample einsum f16, batch as tall as the row: the unscheduled form matches the host oracle: true
+downsample einsum f16, batch as tall as the row: a matmul site whose stride-2 axes are its interior batch loops, the row read at unit stride and at least as tall as each of them: true
+downsample einsum f16, batch as tall as the row: the device's own limits seed both flavors: true
+downsample einsum f16, batch as tall as the row: every whole-routine seed runs and matches the unscheduled form: true
+downsample einsum f16, batch as tall as the row: every per-segment seed runs, scheduling the segment it was keyed on, and matches the unscheduled form: true
+downsample einsum f16, batch as tall as the row: the whole-routine seeds include tensorized ones, and every one renders tensorized per its routine's mma census: true
+downsample einsum f16, batch as tall as the row: the per-segment seeds include tensorized ones, and every one renders tensorized per its routine's mma census: true
 batch of one f16: the producers discriminate: a unit-stride read of A changes the result: true
 batch of one f16: the unscheduled form matches the host oracle: true
-batch of one f16: a matmul site whose row is the minor output axis, read at stride 2: true
+batch of one f16: a matmul site whose row is the minor output axis, read at stride 2 and strictly taller than every output axis read at unit stride: true
 batch of one f16: the device's own limits seed both flavors: true
 batch of one f16: every whole-routine seed runs and matches the unscheduled form: true
 batch of one f16: every per-segment seed runs, scheduling the segment it was keyed on, and matches the unscheduled form: true

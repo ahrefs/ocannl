@@ -61,7 +61,8 @@
   bench_min_repro
   bench_wgrad
   bench_rank_site
-  bench_pad_waste)
+  bench_pad_waste
+  bench_strided_1x1)
  (modules
   bench_mlp
   bench_conv
@@ -71,7 +72,8 @@
   bench_min_repro
   bench_wgrad
   bench_rank_site
-  bench_pad_waste)
+  bench_pad_waste
+  bench_strided_1x1)
  (libraries
   base
   bench_harness
