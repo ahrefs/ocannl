@@ -486,6 +486,9 @@ files.
   leading-axis rank drop and an unpadded, materializable parent. Host access of an alias view raises:
   read and write the parent, since `from_host` would otherwise allocate a detached buffer and break
   write-through. The alias never enters `ctx_buffers`, so finalization and pool resolution never see it.
+  For the same reason every write through a view goes through `set` and `resolve_alias`, a zero
+  `Fetch` included: a `Zero_out` of the bufferless view would drop silently (gh-ocannl-1475,
+  executed in `test/operations/test_slice_alias.ml`).
 - `Ops.promote_prec` is ordered `Uint4x32_prec` first, then the floats widest-first, then the
   integers: the RNG state precision dominates EVERYTHING (a join of uint4x32 with double is
   uint4x32, which is what keeps a threefry chain from being widened by a float consumer), and
@@ -542,9 +545,8 @@ files.
   `resolve_alias`) is never attributed: two plain stores would drop one contribution. A target whose
   init an initializing scatter elides still gets its padding-margin reset there, since the plain
   stores write only semantic cells and the record's own `padding_resets` cover the side it reads.
-  `neutral_init` never `Fetch`es a slice-alias view: the `Fetch` would lower to a `Zero_out` of the
-  bufferless view, which drops silently, so a view gets the nest, whose `set` resolves the alias. Static/runtime
-  extents, mixed slice/whole concat coordinates and proof-arithmetic overflow decline. `test/operations/affine_surjectivity.ml` checks finite images and executed
+  Static/runtime extents, mixed slice/whole concat coordinates and proof-arithmetic overflow
+  decline. `test/operations/affine_surjectivity.ml` checks finite images and executed
   scatters against explicit neutral initialization.
 
 - **The algebraic-rewrite tier over raw lowered code is `Rewrites`, applied by `Assignments.lower`
