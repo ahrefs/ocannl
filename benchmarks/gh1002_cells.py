@@ -461,9 +461,10 @@ def run(args):
 # ---------------------------------------------------------------------------------------------
 # Summaries
 
-# The kernel table's row (Bench_harness.time_shipped_kernels). `io:<read>/<written>` (bytes, by the
-# cost model; a `~` marks an upper bound, a `?` code the model cannot see) is gh-ocannl-1444's and
-# absent from older rows; the groups are named so that a field added to the row renumbers nothing.
+# The kernel table's row (Bench_harness.time_shipped_kernels). `io:<read>/<written>` (global-memory
+# bytes by the cost model; a `~` marks an upper bound, a `?` code the model cannot see) is
+# gh-ocannl-1444's and absent from older rows; the groups are named so that a field added to the row
+# renumbers nothing.
 KERNEL = re.compile(r"^bench: kernel (?P<i>\d+)/(?P<n>\d+) (?P<ms>[0-9.]+) ms "
                     r"grid=\[(?P<grid>[0-9;]+)\] block=\[(?P<block>[0-9;]+)\] "
                     r"(?:io:(?P<read>\d+)/(?P<written>\d+)(?P<io_flags>[~?]*) )?"

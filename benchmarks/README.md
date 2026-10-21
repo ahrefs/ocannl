@@ -694,8 +694,8 @@ cell is the step: cite the step cell. Each issue's cell:
   minix (unified gfx1151) rocprofv3 stamps batches of dispatches with one start, with or without
   graph capture, so every minix cell reads `STAMPS` and only its per-kernel durations stand. In
   an exclusive tuf window the in-step medians sum to 90-92% of the traced step, so gh-ocannl-1392's
-  108% does not reproduce (the agent note's HIP entry has the numbers). Each row carries the cost model's MB read/written (the kernel
-  table's `io:` field; `~` an upper bound, `?` code the model cannot see) and the in-step
+  108% does not reproduce (the agent note's HIP entry has the numbers). Each row carries the cost model's global-memory MB read/written (the
+  kernel table's `io:` field, staging tiles and scratch left out; `~` an upper bound, `?` code the model cannot see) and the in-step
   bandwidth they imply. Repeats of one build trace identical kernel names and are compared in the
   repeatability table; cells whose kernel lists differ (another treatment or revision, where every
   segment index after a change shifts) get a **kernel join** against the `base` list, keyed by the

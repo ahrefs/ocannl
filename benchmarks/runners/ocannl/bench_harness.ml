@@ -1176,14 +1176,22 @@ let segment_geometry seg =
   Printf.sprintf "grid=[%s] block=[%s]" (dims d.grid) (dims d.block)
 
 (** A segment's global-memory traffic by the cost model ({!Ir.Cost_model.analyze}, gh-ocannl-1444):
-    [io:<read>/<written>] bytes, the distinct cells each node's accesses touch times its element
-    size. A trailing [~] marks a footprint that is an upper bound (an approximate access image), a
-    trailing [?] code the model cannot see (an [opaque] kernel, whose counts may under-count). *)
+    [io:<read>/<written>] bytes, the distinct cells each GLOBAL node's accesses touch times its
+    element size -- workgroup-shared tiles and thread-private scratch ({!Ir.Cost_model.global_in}
+    false) stay on chip and are left out, so a staged kernel is not charged its staging twice. A
+    trailing [~] marks a count that is an upper bound (an approximate access image among the global
+    nodes), a trailing [?] code the model cannot see (an [opaque] kernel, whose counts may
+    under-count). *)
 let segment_io seg =
-  let s = Ir.Cost_model.analyze seg.Ir.Low_level.llc in
-  Printf.sprintf "io:%d/%d%s%s" s.Ir.Cost_model.read_bytes s.Ir.Cost_model.write_bytes
-    (if Ir.Cost_model.footprint_approximate s then "~" else "")
-    (if s.Ir.Cost_model.opaque then "?" else "")
+  let module CM = Ir.Cost_model in
+  let s = CM.analyze seg.Ir.Low_level.llc in
+  let global = List.filter s.CM.per_node ~f:(fun (tn, _) -> CM.global_in seg tn) in
+  let sum f = List.sum (module Int) global ~f:(fun (_, fp) -> f fp) in
+  Printf.sprintf "io:%d/%d%s%s"
+    (sum (fun fp -> fp.CM.fp_read_bytes))
+    (sum (fun fp -> fp.CM.fp_write_bytes))
+    (if List.exists global ~f:(fun (_, fp) -> fp.CM.fp_approx) then "~" else "")
+    (if s.CM.opaque then "?" else "")
 
 (** Diagnostic census of the segments actually compiled, including gradient zeroing, backward and
     optimizer kernels for a training step. IDs match {!time_shipped_segments}. *)
