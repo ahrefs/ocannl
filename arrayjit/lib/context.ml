@@ -315,7 +315,7 @@ let compile_outcome ?name ?lowered_transform ?prelowered ~provenance ?candidate 
                           bindings comp
                       in
                       Ir.Schedule_outcome.tag Ir.Schedule_outcome.Backend_link (fun () ->
-                          Backend.link bctx code)))
+                          Ir.Compile_cost.time_link (fun () -> Backend.link bctx code))))
             in
             match outcome with
             | Ok r ->

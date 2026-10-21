@@ -1608,14 +1608,16 @@ using namespace metal;|}
   let compile ~name bindings lowered =
     let metal_source, kparams, func_name, launch =
       Compile.compile ~name bindings lowered ~includes:metal_includes
-        ~builtins:Builtins_metal.builtins ~conditional_includes ~compile_source ()
+        ~builtins:Builtins_metal.builtins ~conditional_includes ~compiles_source:false
+        ~compile_source ()
     in
     { metal_source; func_name; kparams; bindings; launch; routine_names = [ (func_name, name) ] }
 
   let compile_batch ~names bindings lowereds =
     let metal_source, entries =
       Compile.compile_batch ~names bindings lowereds ~includes:metal_includes
-        ~builtins:Builtins_metal.builtins ~conditional_includes ~compile_source ()
+        ~builtins:Builtins_metal.builtins ~conditional_includes ~compiles_source:false
+        ~compile_source ()
     in
     let funcs = Array.map entries ~f:(fun (kparams, name, launch) -> (name, kparams, launch)) in
     let routine_names =

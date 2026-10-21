@@ -62,6 +62,8 @@
   unix
   ctypes
   ctypes.foreign
+  mtime
+  mtime.clock.os
   utils
   ppx_minidebug.runtime
   ppx_minidebug.db)
@@ -84,6 +86,7 @@
   numerics
   resource_fault_injection
   alloc_census
+  compile_cost
   ndarray
   indexing
   affine

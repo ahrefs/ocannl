@@ -3158,11 +3158,19 @@ module C_syntax (B : C_syntax_config) = struct
      collision from silent helper injection — which on CUDA could raise the architecture floor past
      the device (Codex P2 on PR #317, round 4) — into an ordinary compile error naming the
      conflict. *)
-  let filter_and_prepend_builtins ?(conditional_includes = []) ~routine_names ~includes ~builtins
-      ~proc_doc () =
+  let render_doc doc =
     let doc_buffer = Buffer.create 4096 in
-    PPrint.ToBuffer.pretty 1.0 110 doc_buffer proc_doc;
-    let doc_string = Buffer.contents doc_buffer in
+    PPrint.ToBuffer.pretty 1.0 110 doc_buffer doc;
+    Buffer.contents doc_buffer
+
+  let rec filter_and_prepend_builtins ?conditional_includes ~routine_names ~includes ~builtins
+      ~proc_doc () =
+    prepend_builtins_to_text ?conditional_includes ~routine_names ~includes ~builtins
+      ~doc_string:(render_doc proc_doc) ()
+
+  (** {!filter_and_prepend_builtins} on kernels already rendered to text. *)
+  and prepend_builtins_to_text ?(conditional_includes = []) ~routine_names ~includes ~builtins
+      ~doc_string () =
     let result_buffer = Buffer.create 4096 in
     Buffer.add_string result_buffer includes;
     Buffer.add_string result_buffer "\n";
@@ -8259,8 +8267,59 @@ module Compile_driver
        end)
       -> C_syntax_config) =
 struct
+  type 'kparams rendered = {
+    entries : ('kparams * string * Low_level.launch_dims) array;
+        (** Per kernel, in batch order: its parameters, its emitted name and its launch geometry. *)
+    assemble : int list -> string;
+        (** The source of one translation unit holding the kernels at these indices, in the given
+            order: the includes, the builtins those kernels use and their definitions, conditional
+            includes applied. [assemble] of every index in order is the batch source
+            {!compile_batch} hands its compiler; [assemble [i]] is kernel [i]'s standalone source,
+            which a kernel code cache keys on (gh-ocannl-1314). *)
+    attribute : 'a. int list -> exn -> Stdlib.Printexc.raw_backtrace -> 'a;
+        (** Re-raises a failed compile of [assemble idxs] as {!compile_batch} would: attributed to a
+            routine's name when the report points at one of those kernels' declarations. *)
+  }
+
+  (** Renders a batch without compiling it: the kernels are rendered by one syntax instance over the
+      whole batch, exactly as {!compile_batch} renders them, so a kernel's text is the same
+      whichever subset of the batch is later assembled into a translation unit. [transform_kernel]
+      rewrites each kernel's rendered definition before anything is assembled from it (HIP's
+      per-kernel renaming of loop symbols, gh-ocannl-1314); it must keep the kernel's meaning. *)
+  let render_batch ?(transform_kernel = fun ~name:_ text -> text) ~names bindings lowereds ~includes
+      ~builtins ?(conditional_includes = []) () =
+    let module Syntax = C_syntax (Config (struct
+      let procs = Array.map lowereds ~f:(fun l -> l.Low_level.llc)
+    end))
+    in
+    let given_names = names in
+    let names = Array.map names ~f:Syntax.kernel_ident in
+    let idx_params = Indexing.bound_symbols bindings in
+    let rendered =
+      Array.map2_exn names lowereds ~f:(fun name lowered ->
+          let kparams, doc, launch = Syntax.compile_proc ~name idx_params lowered in
+          ((kparams, name, launch), transform_kernel ~name (Syntax.render_doc doc)))
+    in
+    let assemble idxs =
+      (* Each kernel's document starts at column 0 after a hard line, so rendering them apart and
+         joining them with newlines gives the text of rendering them together. *)
+      let doc_string = String.concat ~sep:"\n" (List.map idxs ~f:(fun i -> snd rendered.(i))) in
+      Syntax.prepend_builtins_to_text ~conditional_includes
+        ~routine_names:(List.map idxs ~f:(fun i -> names.(i)))
+        ~includes ~builtins ~doc_string ()
+    in
+    let attribute idxs exn backtrace =
+      attribute_routine_name_failure
+        ~routine_names:(List.map idxs ~f:(fun i -> (names.(i), given_names.(i))))
+        exn backtrace
+    in
+    { entries = Array.map rendered ~f:fst; assemble; attribute }
+
+  (* [compiles_source]: whether [compile_source] runs the vendor compiler, timed as the compile's
+     [device_s] ({!Compile_cost}); false for a backend that only retains the source and compiles it
+     at link (Metal), where the link's time carries it. *)
   let drive ~batch ~names bindings lowereds ~includes ~builtins ?(conditional_includes = [])
-      ~compile_source () =
+      ?(compiles_source = true) ~compile_source () =
     let module Syntax = C_syntax (Config (struct
       let procs = Array.map lowereds ~f:(fun l -> l.Low_level.llc)
     end))
@@ -8283,25 +8342,29 @@ struct
       else names.(0)
     in
     let result =
-      try compile_source ~name source
+      try
+        if compiles_source then Compile_cost.time_device (fun () -> compile_source ~name source)
+        else compile_source ~name source
       with exn ->
         let backtrace = Stdlib.Printexc.get_raw_backtrace () in
         attribute_routine_name_failure
           ~routine_names:(Array.to_list (Array.zip_exn names given_names))
           exn backtrace
     in
+    Compile_cost.record_kernels ~rendered:(Array.length names) ~compiled:(Array.length names);
     (result, Array.map entries ~f:fst)
 
-  let compile ~name bindings lowered ~includes ~builtins ?conditional_includes ~compile_source () =
+  let compile ~name bindings lowered ~includes ~builtins ?conditional_includes ?compiles_source
+      ~compile_source () =
     let result, entries =
       drive ~batch:false ~names:[| name |] bindings [| lowered |] ~includes ~builtins
-        ?conditional_includes ~compile_source ()
+        ?conditional_includes ?compiles_source ~compile_source ()
     in
     let kparams, name, launch = entries.(0) in
     (result, kparams, name, launch)
 
   let compile_batch ~names bindings lowereds ~includes ~builtins ?conditional_includes
-      ~compile_source () =
+      ?compiles_source ~compile_source () =
     drive ~batch:true ~names bindings lowereds ~includes ~builtins ?conditional_includes
-      ~compile_source ()
+      ?compiles_source ~compile_source ()
 end
