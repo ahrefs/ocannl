@@ -19,3 +19,4 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:13b4153d0202d6c0c37807c3b9149ec9] ocannl_config
   [scanner-refusal:e457cc60db51565a141d184de6993035] ocannl_config.reference
   [scanner-refusal:e325a76c47f652bc02203717ce08c44a] checked-in debug config
+End of synthetic controls.

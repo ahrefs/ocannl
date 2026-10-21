@@ -137,11 +137,17 @@ let dynamic reason = Verdict.fail reason
   let refusing_line =
     String.substr_replace_all new_fail.Scan.format ~pattern:"%s" ~with_:"fixture.ml"
   in
+  (* The runs each claim made (gh-ocannl-1233): by default the control's runs are every refused run,
+     as when one claim asserts on one child. *)
   let standing ?(diagnostic = new_fail) ?(direct_evidence = [ (key, control ^ ": true") ])
-      ?(catalogue_only = []) ?(observed = false) ?(refused = [ refusing_line ])
+      ?(catalogue_only = []) ?(observed = false) ?(refused = [ refusing_line ]) ?claim_runs
       ?(rivals = [ new_fail.Scan.format ]) ?(passed_labels = [ control ]) () =
-    Manifest.standing ~direct_evidence ~catalogue_only ~observed ~refused ~rivals ~passed_labels
-      ~key diagnostic
+    let claim_runs = Option.value claim_runs ~default:[ (control, refused) ] in
+    let claim_lines label =
+      Option.value (List.Assoc.find claim_runs label ~equal:String.equal) ~default:[]
+    in
+    Manifest.standing ~direct_evidence ~catalogue_only ~observed ~refused ~claim_lines ~rivals
+      ~passed_labels ~key diagnostic
   in
   Verdict.p "a passed control claim and the refusal's line from a refused run exercise it"
     (Poly.equal (standing ()) Manifest.Exercised);
@@ -151,6 +157,22 @@ let dynamic reason = Verdict.fail reason
     (Poly.equal (standing ~refused:[ "an unrelated refusal" ] ()) Manifest.Unexercised);
   Verdict.p "the refusal's line alone, with the mapped claim not passed, does not"
     (Poly.equal (standing ~passed_labels:[] ()) Manifest.Unexercised);
+  Verdict.p
+    "the refusal's line from a run ANOTHER passed claim made does not, beside the mapped claim's \
+     runs"
+    (Poly.equal
+       (standing ~passed_labels:[ control; "a sibling claim" ]
+          ~claim_runs:
+            [ (control, [ "an unrelated refusal" ]); ("a sibling claim", [ refusing_line ]) ]
+          ())
+       Manifest.Unexercised);
+  Verdict.p "while the same line from the mapped claim's own run does"
+    (Poly.equal
+       (standing ~passed_labels:[ control; "a sibling claim" ]
+          ~claim_runs:
+            [ (control, [ refusing_line ]); ("a sibling claim", [ "an unrelated refusal" ]) ]
+          ())
+       Manifest.Exercised);
   Verdict.p "an observation from the caught branch exercises it with no mapping"
     (Poly.equal (standing ~direct_evidence:[] ~refused:[] ~observed:true ()) Manifest.Exercised);
   (* A line belongs to the most specific format that matches it: a general refusal does not live on

@@ -32,3 +32,4 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:fe049afe671ea46b4b4e1a97110057e0] autotune.ml
   [scanner-refusal:075df5b39397048242655a826bb84004] definition tune reaches
   [scanner-refusal:1e8a6f318af70258db127b25c3d92f71] Autotune.tune
+End of synthetic controls.
