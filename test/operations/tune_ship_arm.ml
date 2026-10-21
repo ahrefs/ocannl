@@ -65,7 +65,7 @@ let () =
     let ctx_t, routine_t =
       Train.tune_placements ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""
         ~report:(fun r -> reports := r :: !reports)
-        ~on_ship:(fun what -> shipped := Some what)
+        ~on_ship:(fun s -> shipped := Some s.Train.ship_arm)
         ?ship_arm ?inline_flips (Context.auto ()) t2 comp Ir.Indexing.Empty
     in
     let ctx_t = Context.run ctx_t routine_t in

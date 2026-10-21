@@ -409,7 +409,7 @@ let executed_chain ?fail_arm_a_at ?(cache_dir = "") comp t2 expected ~flip_scrip
                     ~placement_store:false
                     ~report:(fun r -> arm_reports := r :: !arm_reports)
                     ~flip_report:(fun r -> flip_reports := r :: !flip_reports)
-                    ~on_ship:(fun what -> shipped := what :: !shipped)
+                    ~on_ship:(fun s -> shipped := s.Train.ship_arm :: !shipped)
                     ~inline_flips:1 (Context.auto ()) t2 comp Ir.Indexing.Empty
                 in
                 let ctx = Context.run ctx routine in

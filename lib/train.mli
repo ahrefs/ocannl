@@ -414,6 +414,33 @@ val placement_arm_of_string : source:string -> string -> placement_arm
 (** Parses the [tune_ship_arm] spelling of a {!placement_arm}. [source] names what is being parsed,
     for the error message. *)
 
+type shipped = {
+  ship_arm : string;
+      (** ["A"] (the default placements), ["B"] (materialize-all) or ["flip"] (a flip-refined
+          placement vector); on a placement-store replay, the recorded decision's
+          ({!Ir.Schedule_cache.shipped_label}). *)
+  ship_replayed : bool;
+      (** The placement is the placement-decision store's recorded decision, replayed: the call ran
+          one search, from the decision's context, instead of the arms. Whether that search's
+          SCHEDULE was itself replayed is its report's [outcome] ({!Autotune.Cache_replay}). *)
+  ship_routine : string;
+      (** The returned routine's own name ([Context.routine]'s [name]), read off the routine
+          delivered. *)
+  ship_report : Autotune.report option;
+      (** The report of the search whose compile shipped -- the same value [report] or [flip_report]
+          received: its [source_digest] is the base lowering that search tuned and the digest its
+          schedule-cache entry is stored under, its [best_label] the crown it compiled. On a
+          fallback (the winner did not compile, or compiled the untuned default in its place) it is
+          the fallback's. [None] only for the last resort, the caller's own untuned compile shipping
+          as arm A after every completed result failed to compile. One case ships other code than
+          the report's crown under it: a compile that substituted the untuned default
+          ({!Autotune.shipped_substitute}) with nothing left to fall back to (a forced arm, or the
+          last completed result). *)
+}
+(** What {!tune_placements} shipped, as its [on_ship] callback receives it (gh-ocannl-1438): the
+    identity of the returned artifact, which the arm reports alone do not determine (see
+    {!tune_placements}). *)
+
 val tune_placements :
   ?name:string ->
   ?beam_width:int ->
@@ -428,7 +455,7 @@ val tune_placements :
   ?placement_store:bool ->
   ?log:bool ->
   ?progress:bool ->
-  ?on_ship:(string -> unit) ->
+  ?on_ship:(shipped -> unit) ->
   Context.t ->
   Tensor.t ->
   Ir.Assignments.comp ->
@@ -569,11 +596,11 @@ val tune_placements :
     (which walks away from the chosen arm one node at a time, so its result is neither arm), and a
     forced arm that failed propagates its failure rather than falling back to the other arm.
 
-    [on_ship] is called exactly once with ["A"], ["B"] or ["flip"] on the path that returns a
-    routine, and not at all when nothing ships. It is what a consumer should attribute the returned
-    artifact by: deriving the shipped arm from the reports' [best_ms] is only valid while nothing
-    can override the comparison, which [ship_arm] now can, and it never described a flip-refined
-    result at all.
+    [on_ship] is called exactly once with the {!shipped} record -- its [ship_arm] ["A"], ["B"] or
+    ["flip"] -- on the path that returns a routine, and not at all when nothing ships. It is what a
+    consumer should attribute the returned artifact by: deriving the shipped arm from the reports'
+    [best_ms] is only valid while nothing can override the comparison, which [ship_arm] now can, and
+    it never described a flip-refined result at all.
 
     gh-ocannl-786, the placement-decision store: what shipped -- the arm, or the flips the
     refinement accepted -- is recorded beside the schedule entries in [cache_dir]

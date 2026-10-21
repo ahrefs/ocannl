@@ -1958,7 +1958,9 @@ files.
     setting `fastMathEnabled` to false as the safe, compatible choice. `Compiler_options.metal` owns
     both ordered property sequences; `test_metal_compile_options` pins both API/debug variants
     GPU-free and
-    `benchmarks/runners/ocannl/metal_reassoc_probe.ml` is the rerunnable measurement.
+    `benchmarks/runners/ocannl/metal_reassoc_probe.ml` is the rerunnable measurement. The fast
+    functions themselves have domain gaps (`sin`/`cos`/`tanh` returning 0 or NaN), which the
+    renderer routes around: see "Metal's fast f32 `sin`/`cos`/`tanh`" below (gh-ocannl-1435).
 - **`__FAST_MATH__` audit**: negating one component of a fast-math umbrella can *unset the macro*
   while leaving the remaining optimizations on — clang defines `__FAST_MATH__` only when the whole
   bundle is in force, so HIP's `-fno-associative-math` (and `-fhonor-infinities`) turn it off. No
@@ -2076,16 +2078,30 @@ files.
   compiler), the modern split and the default. On M4 Max / macOS 26 every finite in-range result
   of both forms was within 0.5 half ulp of f64. The overloads matched the widened form bitwise
   except for `sin(-0)` (the overload returns +0) under both policies, and, under the modern policy,
-  `sin`/`cos` of ±inf and NaN, where the overload gives NaN and the fast f32 functions give 0. The
-  widening therefore moved exactly those values. A half `sin`/`cos` of a non-finite input is now 0
-  under the modern policy, as f32 already was. `half_unary_math` pins the relationship executed
-  (with those inputs; the overloads fail it) and the spelling, Metal-gated: CUDA and HIP keep the
-  native `hexp`/`hsin`/... intrinsics, which promise no such relationship.
+  `sin`/`cos` of ±inf and NaN, where the overload gives NaN and the fast f32 functions give 0.
+  `half_unary_math` pins the relationship executed (with those inputs; the overloads fail it) and
+  the spelling, Metal-gated: CUDA and HIP keep the native `hexp`/`hsin`/... intrinsics, which
+  promise no such relationship.
   `Recip_sqrt` (`rsqrt`) and `Tanh_approx` (`tanh`) keep their half overloads. `rsqrt` matched its
-  widened form bitwise under both policies. For `tanh` the fast f32 function narrowed is much worse
-  (up to 1024 half ulps near the subnormal range) while the overload stays within 0.502, and the
-  two policies' f32 `tanh` disagree on 11466 inputs, so widening it would buy policy coupling at an
-  accuracy cost.
+  widened form bitwise under both policies; the half `tanh` overload stays within 0.502 half ulps
+  and is IEEE on the special values (`unary_math_special_values` checks it).
+
+- **Metal's fast f32 `sin`/`cos`/`tanh` are wrong outside a domain, so OCANNL does not emit them
+  bare** (gh-ocannl-1435). Measured on M4 Max / macOS 26 with
+  `benchmarks/runners/ocannl/metal_f32_math_probe.ml` under the production policy: fast `sin`/`cos`
+  return 0 for ±inf, NaN and every |x| from 2^21 pi (first input 0x1.921fb8p+22, found by an
+  exhaustive scan of 2^18..2^24); below that they are within 3.4 ulps of f64, as `precise::` is
+  (92 of 1048576 sampled results differ from `precise::` bitwise). Fast `tanh` returns 0 for x
+  from about 43.7 and NaN from about 44.4 up (+inf included), +0 for -0, flushes |x| < 2^-26 to 0, and is 2050 ulps off
+  around 2^-12 and 26 around 2^-5 -- the narrowed half form's 1024 half ulps came from here. So
+  `sin`/`cos` at every float precision render through `Builtins_metal`'s `ocannl_sin`/`ocannl_cos`
+  (`fabs(x) < 0x1p22f ? sin(x) : precise::sin(x)`: NaN fails the compare), and f32/bf16 `tanh` as
+  `precise::tanh` (within 2 ulps everywhere, and bitwise the legacy policy's `tanh`, whose functions
+  are the precise ones). Cost: 1.4x (guard) and 4x (`precise::tanh`) on 1024 back-to-back
+  calls per thread, none measurable on a 16M-element load-call-store stream. A cheaper `tanh` patch
+  (pass x through below 2^-12) fixed only the flush, so it was not taken. Metal `bfloat` flushes
+  subnormals in storage (2^-130 reads back 0 through any op), which is a storage property, not
+  these functions'. `unary_math_special_values` pins the values at f32, half and bf16, Metal-gated.
 
 - A float power whose exponent is only known at run time renders on CUDA and HIP through
   `ocannl_pow_f32`/`ocannl_pow_f64` (`Builtins_cc.cuda_like_power_builtins`, gh-ocannl-1240), half

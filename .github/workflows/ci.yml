@@ -582,6 +582,25 @@ jobs:
         printf '%s\n' "$targets"
         echo "::endgroup::"
         opam exec -- dune build $targets 2>&1 | tee -a "$RUNNER_TEMP/dune-build.log"
+    # What each unit of a `main` shard cost on this runner, from the build's
+    # own dune trace (the step above ran the last dune): the seconds of dune
+    # job slot `tools/ci-shard.sh weigh` credits per unit, marked
+    # `ci-shard-weight K/N` so that `tools/ci-shard.sh merge-weights` turns one
+    # run's shard logs into the script's WEIGHTS block (gh-ocannl-1464; the
+    # script says how to fetch them). The reader decodes only its timing
+    # fields, never the environment the trace also records (gh-ocannl-1287).
+    # Informational: a red build is still weighed, and a failed read warns
+    # rather than fails the job.
+    - name: Weigh the shard's units
+      if: ${{ matrix.shard && matrix.suite == 'main' && !cancelled() }}
+      shell: bash
+      env:
+        SHARD: ${{ matrix.shard }}
+      run: |
+        echo "::group::ci-shard weigh: seconds per unit of main shard $SHARD"
+        tools/ci-shard.sh weigh _build/trace.csexp | sed "s|^|ci-shard-weight $SHARD |" ||
+          echo "::warning::tools/ci-shard.sh weigh could not read this shard's dune trace"
+        echo "::endgroup::"
     # cc_march_census writes its per-row table to a file rather than to stderr,
     # which dune truncates in the middle; the file lives in `_build` and dies
     # with the runner, so a failing leg keeps it as an artifact.

@@ -9,7 +9,9 @@
    policies, and [sin]/[cos] of inf and NaN gave NaN under the modern one, where the fast f32
    functions give 0. The inputs below include those cases, so the executed claim fails with the
    overloads on either policy, and the source claim pins the spelling that makes it hold by
-   construction.
+   construction. Since gh-ocannl-1435 the f32 [sin]/[cos] are [Builtins_metal]'s [ocannl_sin] and
+   [ocannl_cos], which return NaN there too ([unary_math_special_values] pins the values); the
+   relationship pinned here is unchanged.
 
    CUDA and HIP keep their native half intrinsics ([hexp], [hsin], ...), which promise no such
    relationship, so both claims are Metal-only; every backend still compiles and runs the
@@ -29,14 +31,15 @@ let is_metal = String.equal backend_name "metal"
 let f32 x = Int32.float_of_bits (Int32.bits_of_float x)
 let f16 x = Ops.half_to_single (Ops.single_to_half (f32 x))
 
+(* Each op with the f32 function its half form widens into. *)
 let ops : (Ops.unop * string) list =
   [
     (Exp, "exp");
     (Log, "log");
     (Exp2, "exp2");
     (Log2, "log2");
-    (Sin, "sin");
-    (Cos, "cos");
+    (Sin, "ocannl_sin");
+    (Cos, "ocannl_cos");
     (Sqrt, "sqrt");
   ]
 

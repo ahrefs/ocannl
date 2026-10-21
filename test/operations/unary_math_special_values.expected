@@ -1,0 +1,3 @@
+Metal f32 sin, cos and tanh: NaN where f64 gives NaN, the signed zero where it gives zero, otherwise within the stated ulps of f64: true
+Metal half sin, cos and tanh: NaN where f64 gives NaN, the signed zero where it gives zero, otherwise within the stated ulps of f64: true
+Metal bfloat16 sin, cos and tanh: NaN where f64 gives NaN, the signed zero where it gives zero, otherwise within the stated ulps of f64: true

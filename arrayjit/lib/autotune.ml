@@ -270,10 +270,15 @@ type report = {
   baseline_refused : bool;
       (** The baseline's own timing window was refused (gh-ocannl-1423). See the interface. *)
   declines : decline_summary list;
+  privatize_drops : decline_summary list;
+      (** The privatized presets' dropped [Privatize] proposals, by cause (gh-ocannl-1438). See the
+          interface. *)
   cache_replay_refusal : Outcome.classified_cause option;
   rounds_run : int;
   round_moves : round_moves list;
   budget_cut : bool;
+  budget_s : float option;
+      (** The wall-clock budget this call resolved (gh-ocannl-1438). See the interface. *)
   beam_width : int;
   sketch_candidates : int;
   epilogue_sketch_candidates : int;
@@ -358,10 +363,12 @@ let no_search_report ~timing =
     baseline_declined = false;
     baseline_refused = false;
     declines = [];
+    privatize_drops = [];
     cache_replay_refusal = None;
     rounds_run = 0;
     round_moves = [];
     budget_cut = false;
+    budget_s = None;
     beam_width = 0;
     sketch_candidates = 0;
     epilogue_sketch_candidates = 0;
@@ -466,7 +473,7 @@ type decline_acc = { mutable da_count : int; mutable da_details : string list }
    schedule could never run" and "it ran and the device complained". *)
 let phase_label (phase : Outcome.phase) = Sexp.to_string (Outcome.sexp_of_phase phase)
 
-let record_decline declines (classified : Outcome.classified_cause) =
+let record_decline ?(warn = true) declines (classified : Outcome.classified_cause) =
   let key = Outcome.key_of_cause classified.cause in
   let detail = Outcome.detail_of_cause classified.cause in
   let first_for_key = not (Hashtbl.mem declines key) in
@@ -478,7 +485,7 @@ let record_decline declines (classified : Outcome.classified_cause) =
           List.length acc.da_details < 3 && not (List.mem acc.da_details detail ~equal:String.equal)
         then acc.da_details <- acc.da_details @ [ detail ];
         acc);
-  if first_for_key then
+  if warn && first_for_key then
     match classified.cause with
     (* Unclassified by construction, and contained under strict classification too (gh-ocannl-564),
        so the warning below — about a compile-side failure only permissiveness absorbed — would be
@@ -1870,6 +1877,14 @@ let privatize_proposals (post : LL.optimized) : (Ir.Tnode.t * Idx.symbol) list =
 
 type privatize_drop = { pd_target : Ir.Tnode.t; pd_over : Idx.symbol; pd_cause : Outcome.cause }
 
+(* gh-ocannl-1438: called with each proposal just before {!privatize_extension} validates it, inside
+   the validation's refusal boundary, so a typed refusal raised here drops the proposal exactly as
+   the op's own would. No workload in the tuning corpus reaches a real refusal on cc
+   ([test/operations/privatize_census]), so this is how a test puts a dropped proposal through a
+   real search. Not a production seam: default no-op, and no config key selects it. *)
+let on_privatize_proposal : (target:Ir.Tnode.t -> over:Idx.symbol -> unit) Seam.t =
+  Seam.make (fun ~target:_ ~over:_ -> ())
+
 (** The preset schedule extended with a [Privatize] per detected accumulator, beside the proposals
     it dropped. Proposals are detected on the preset-scheduled segment and validated one at a time
     by re-applying the growing schedule; a proposal violating an op precondition is dropped, with
@@ -1893,7 +1908,10 @@ let privatize_extension ~accum_prec ~static_indices sched (seg : LL.optimized) :
         List.fold (privatize_proposals post) ~init:(sched, [])
           ~f:(fun (acc, drops) (target, over) ->
             let acc' = acc @ [ Sched.privatize ~accum_prec ~target ~over ] in
-            match Sched.apply_classified ~static_indices acc' (scratch ()) with
+            match
+              (Seam.get on_privatize_proposal) ~target ~over;
+              Sched.apply_classified ~static_indices acc' (scratch ())
+            with
             | (_ : LL.optimized) -> (acc', drops)
             | exception Outcome.Cause_at (_, cause) ->
                 (acc, { pd_target = target; pd_over = over; pd_cause = cause } :: drops))
@@ -3266,8 +3284,8 @@ let not_dispatched_origin = function
   | Outcome.Cache_replay -> "cache_replay"
   | Outcome.Candidate | Outcome.Advisory | Outcome.User_schedule -> "candidate"
 
-let compile_candidate_gated ?name ?label ?seen ~static_indices ~base_opt ~canon ~limits ~is_gpu
-    ~is_cpu ~provenance ctx comp bindings spec : gated_compile =
+let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> ()) ~static_indices
+    ~base_opt ~canon ~limits ~is_gpu ~is_cpu ~provenance ctx comp bindings spec : gated_compile =
   let candidate = match label with Some l -> l | None -> spec_label spec in
   let duplicate = ref None in
   let gate ~digest_after opts =
@@ -3414,7 +3432,11 @@ let compile_candidate_gated ?name ?label ?seen ~static_indices ~base_opt ~canon 
             match flavor with
             | F_preset { block_size; privatize; config_thresholds } ->
                 let sched = preset_sched ?block_size ~config_thresholds seg in
-                if privatize then extend_with_privatize ~accum_prec ~static_indices sched seg
+                if privatize then (
+                  (* gh-ocannl-1438: what the extension dropped reaches the search's report. *)
+                  let sched, drops = privatize_extension ~accum_prec ~static_indices sched seg in
+                  on_privatize_drops drops;
+                  sched)
                 else sched
             | F_saved _ | F_split_saved _ | F_seeded _ ->
                 [] (* Never consulted: a replay brings its own. *)
@@ -3497,11 +3519,11 @@ let compile_candidate_gated ?name ?label ?seen ~static_indices ~base_opt ~canon 
 
 (* The callers that do not deduplicate: a refused form arrives as the typed [Not_dispatched]
    failure, which each of them already handles as a failed or degenerate compile. *)
-let compile_candidate ?name ?label ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu
-    ~provenance ctx comp bindings spec : compiled Outcome.outcome =
+let compile_candidate ?name ?label ?on_privatize_drops ~static_indices ~base_opt ~canon ~limits
+    ~is_gpu ~is_cpu ~provenance ctx comp bindings spec : compiled Outcome.outcome =
   match
-    compile_candidate_gated ?name ?label ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu
-      ~provenance ctx comp bindings spec
+    compile_candidate_gated ?name ?label ?on_privatize_drops ~static_indices ~base_opt ~canon
+      ~limits ~is_gpu ~is_cpu ~provenance ctx comp bindings spec
   with
   | Compiled c -> Ok c
   | Failed failure -> Error failure
@@ -5736,6 +5758,9 @@ type explain = {
   ex_admitted : bool;
 }
 
+type segment_explain = { xs_segment : string; xs_candidates : (string * explain) list }
+type explanation = { x_routine : (string * explain) list; x_segments : segment_explain list }
+
 let model_explain ?name ctx comp bindings =
   let backend = Context.backend_name ctx in
   let is_gpu = Sched.backend_is_gpu backend and is_cpu = Sched.backend_is_cpu backend in
@@ -5782,12 +5807,16 @@ let model_explain ?name ctx comp bindings =
     (Option.is_none peak_flops && Option.is_none peak_memory_bandwidth)
     || not (Sched.automatic_schedule_active ~backend_name:backend)
   then
-    [
-      ( "default",
-        explain
-          (Sched.maybe_default_schedules ~backend_name:backend ~limits ~static_indices
-             (scratch_of opt)) );
-    ]
+    {
+      x_routine =
+        [
+          ( "default",
+            explain
+              (Sched.maybe_default_schedules ~backend_name:backend ~limits ~static_indices
+                 (scratch_of opt)) );
+        ];
+      x_segments = [];
+    }
   else
     (* [model_default]'s incumbent and searched program, as it derives them. *)
     let seeding = model_seeding ~backend ~limits in
@@ -5808,28 +5837,60 @@ let model_explain ?name ctx comp bindings =
           fst (seeded_split ~backend ~min_serial ~static_indices (scratch_of opt))
       | None -> opt
     in
-    let admits = model_admits ~seeding ~accum_prec base in
-    let leaves =
-      match matmul_sketch_tree ~capabilities:caps ~is_gpu ~is_cpu ~limits base with
-      | Some tree ->
-          Sspace.leaves
-            (if Lazy.force geometry_lattice_enabled then lift_geometry_lattice tree else tree)
-      | None -> sketch_seed_params ~capabilities:caps ~is_gpu ~is_cpu ~limits base
+    (* The sketch leaves [model_default]'s family search visits on [prog] (a whole routine or one
+       segment), in its visiting order. Exactly the leaves it can score: a schedule that fails to
+       apply, or whose scheduled form fails validation, is excluded from its ranking too. *)
+    let leaf_explains ~label prog =
+      let admits = model_admits ~seeding ~accum_prec prog in
+      let leaves =
+        match matmul_sketch_tree ~capabilities:caps ~is_gpu ~is_cpu ~limits prog with
+        | Some tree ->
+            Sspace.leaves
+              (if Lazy.force geometry_lattice_enabled then lift_geometry_lattice tree else tree)
+        | None -> sketch_seed_params ~capabilities:caps ~is_gpu ~is_cpu ~limits prog
+      in
+      List.filter_map leaves ~f:(fun p ->
+          match
+            validate_segments_for_model ~limits
+              [
+                Sched.apply_classified ~static_indices
+                  (sketch_schedule ~accum_prec ~p prog)
+                  (scratch_of prog);
+              ]
+          with
+          | exception Outcome.Cause_at _ -> None
+          | segs -> Some (label p, explain ~ex_admitted:(admits p) segs))
     in
-    (* Exactly the leaves [model_default] can score: a schedule that fails to apply, or whose
-       scheduled form fails validation, is excluded from its ranking too. *)
-    (incumbent_label, explain incumbent)
-    :: List.filter_map leaves ~f:(fun p ->
-        match
-          validate_segments_for_model ~limits
-            [
-              Sched.apply_classified ~static_indices
-                (sketch_schedule ~accum_prec ~p base)
-                (scratch_of base);
-            ]
-        with
-        | exception Outcome.Cause_at _ -> None
-        | segs -> Some (spec_label (Whole (W_sketch p)), explain ~ex_admitted:(admits p) segs))
+    (* gh-ocannl-1438: [model_default]'s per-segment substitution, as it derives it -- the
+       fold-zeros segmentation of the searched program, when it splits the routine or exposes a
+       changed lowering -- one entry per keyed segment: the segment's default preset, the incumbent
+       its sketches must strictly beat, then the sketch leaves it searches there. *)
+    let preset seg = if is_gpu then Sched.default_gpu ~limits seg else Sched.default_cpu seg in
+    let zero_sched tns = if is_gpu then Sched.zero_expansion ~limits tns else [] in
+    let x_segments =
+      match
+        Sched.fission_segmented ~promote_locals:is_gpu ~fold_zeros:true
+          ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
+          ~preset ~zero_sched ~static_indices (scratch_of base)
+      with
+      | exception Outcome.Cause_at _ -> []
+      | _, tuples when not (fission_exposes_sites ~static_indices base tuples) -> []
+      | plan, tuples ->
+          List.map (keyed_segments ~static_indices plan tuples) ~f:(fun (key, pre, post) ->
+              let tag = seg_key_tag key in
+              {
+                xs_segment = tag;
+                xs_candidates =
+                  ("preset", explain [ post ])
+                  :: leaf_explains ~label:(fun p -> sketch_params_label p ^ " @" ^ tag) pre;
+              })
+    in
+    {
+      x_routine =
+        (incumbent_label, explain incumbent)
+        :: leaf_explains ~label:(fun p -> spec_label (Whole (W_sketch p))) base;
+      x_segments;
+    }
 
 let untuned_compile ?name ctx comp bindings =
   if Lazy.force model_default_enabled then model_default ?name ctx comp bindings
@@ -5974,14 +6035,14 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
      a benchmark artifact, otherwise has to guess it from ambient configuration that a [?timing]
      override may not match. Which is why the objective is resolved above this line and not below
      it. *)
-  let base_report = { (no_search_report ~timing) with beam_width } in
+  let budget = budget_setting () in
+  let base_report = { (no_search_report ~timing) with beam_width; budget_s = budget } in
   let max_split_reduce_sites =
     max 0
       (Option.value_or_thunk max_split_reduce_sites ~default:(fun () ->
            Utils.registered_int ~arg_name:"autotune_split_reduce_max_sites"))
   in
   let staffed_singles = staffed_singles_setting () in
-  let budget = budget_setting () in
   let playoff_width = max 0 (Utils.registered_int ~arg_name:"autotune_composite_playoff_width") in
   (* A negative margin admits no single and so means what width 0 says; it is floored at 0 (exact
      ties only) rather than given a second spelling of off. A malformed value, NaN included, is
@@ -6064,10 +6125,11 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
       progress_line "search_done"
         (Printf.sprintf
            "outcome=%s timed=%d contended=%d timings_retried=%d unbatched=%d failed=%d rounds=%d \
-            budget_cut=%b %s best_ms=%s best=%S"
+            budget_cut=%b baseline_refused=%b privatize_dropped=%d %s best_ms=%s best=%S"
            (outcome_name r.outcome) r.candidates_timed r.timings_contended r.timings_retried
-           r.timings_unbatched r.candidates_failed r.rounds_run r.budget_cut (progress_costs ())
-           (progress_ms r.best_ms) r.best_label);
+           r.timings_unbatched r.candidates_failed r.rounds_run r.budget_cut r.baseline_refused
+           (List.sum (module Int) r.privatize_drops ~f:(fun d -> d.count))
+           (progress_costs ()) (progress_ms r.best_ms) r.best_label);
       Option.iter report ~f:(fun f -> f r))
   in
   (* [tune] reports exactly once per call, on every path (gh-ocannl-550). The failures that happen
@@ -6489,14 +6551,32 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
         (Option.value (SC.incomplete_reason canon) ~default:"no reason recorded");
     if Option.is_none key then
       logf "persistent timed cache disabled for %s: concrete device identity unavailable" backend;
+    (* gh-ocannl-1438: the privatized presets' dropped proposals, by the same aggregation, in a
+       table of their own: a drop costs a proposal inside a candidate that still compiles, so
+       counting it in [declines] would break that census's sum to [candidates_failed]. *)
+    let privatize_declines : (Outcome.rejection_key, decline_acc) Hashtbl.Poly.t =
+      Hashtbl.Poly.create ()
+    in
+    let on_privatize_drops drops =
+      List.iter drops ~f:(fun (d : privatize_drop) ->
+          logf "privatize proposal for %s over %s dropped: %s" (Ir.Tnode.debug_name d.pd_target)
+            (Idx.symbol_ident d.pd_over)
+            (Outcome.detail_of_cause d.pd_cause);
+          record_decline ~warn:false privatize_declines
+            {
+              Outcome.phase = Outcome.Transform;
+              cause = d.pd_cause;
+              execution_effect = Outcome.No_device_writes;
+            })
+    in
     let compile_spec =
-      compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu
-        ~provenance:Outcome.Candidate search_ctx comp bindings
+      compile_candidate ?name ~on_privatize_drops ~static_indices ~base_opt ~canon ~limits ~is_gpu
+        ~is_cpu ~provenance:Outcome.Candidate search_ctx comp bindings
     in
     (* The search's own candidate compiles, deduplicated against [seen] before codegen. *)
     let compile_spec_deduped ~seen =
-      compile_candidate_gated ?name ~seen ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu
-        ~provenance:Outcome.Candidate search_ctx comp bindings
+      compile_candidate_gated ?name ~seen ~on_privatize_drops ~static_indices ~base_opt ~canon
+        ~limits ~is_gpu ~is_cpu ~provenance:Outcome.Candidate search_ctx comp bindings
     in
     (* Winner (and cache-hit) compiles target the caller's context; they replay against the same
        base lowering as the search's candidates, the caller's lineage lowering to it
@@ -6549,6 +6629,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
         candidates_failed = failed_count declines;
         baseline_declined = Option.is_some baseline_decline;
         declines = decline_summaries declines;
+        privatize_drops = decline_summaries privatize_declines;
         cache_replay_refusal = !cache_replay_refusal;
       }
     in
@@ -6724,11 +6805,13 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                     (* Nothing is timed on a replay, the baseline included. *)
                     baseline_refused = false;
                     declines = decline_summaries declines;
+                    privatize_drops = [];
                     cache_replay_refusal = None;
                     rounds_run = 0;
                     round_moves = [];
                     (* A fact about the crown, like [best_ms] (gh-ocannl-1409). *)
                     budget_cut = entry.SC.budget_cut;
+                    budget_s = budget;
                     beam_width;
                     sketch_candidates = 0;
                     epilogue_sketch_candidates = 0;
@@ -7290,10 +7373,12 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
             baseline_declined = Option.is_some baseline_decline;
             baseline_refused = !baseline_contended;
             declines = summaries;
+            privatize_drops = decline_summaries privatize_declines;
             cache_replay_refusal = !cache_replay_refusal;
             rounds_run = !rounds_run;
             round_moves = List.rev !round_moves;
             budget_cut = !budget_cut;
+            budget_s = budget;
             beam_width;
             sketch_candidates = !n_sketch_candidates;
             epilogue_sketch_candidates = !n_epilogue_sketch_candidates;
@@ -8783,10 +8868,12 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
               baseline_declined = Option.is_some baseline_decline;
               baseline_refused = !baseline_contended;
               declines = decline_summaries declines;
+              privatize_drops = decline_summaries privatize_declines;
               cache_replay_refusal = !cache_replay_refusal;
               rounds_run = !rounds_run;
               round_moves = List.rev !round_moves;
               budget_cut = !budget_cut;
+              budget_s = budget;
               beam_width;
               sketch_candidates = List.length sketch_params;
               epilogue_sketch_candidates = List.count sketch_params ~f:(fun p -> p.sk_epilogue);

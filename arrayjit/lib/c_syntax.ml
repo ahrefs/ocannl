@@ -1114,6 +1114,25 @@ let codegen_capabilities (module Config : C_syntax_config) =
                && not (Utils.debug_log_from_routines ()) ->
             extent / warp * Ops.prec_in_bytes prec
         | _ -> 0);
+    (* gh-ocannl-1452: [extent / warp_size] slots of the residency precision where the warp-shuffle
+       reduction into a cell spans several whole warps and its multi-warp form renders -- a
+       power-of-two count of at most [warp_size] warps (the identity-free second phase), barriers
+       and shared declarations, an f32/f64 residency -- and none otherwise (one warp needs no
+       partials; the renderer refuses everything else). [try_warp_reduce] checks its declaration
+       against this very field; the structural half is [Low_level.warp_reduce_cell_sites]. *)
+    warp_reduce_workgroup_bytes =
+      (fun ~extent ~prec ->
+        let warp = Config.warp_size in
+        match prec with
+        | (Ops.Single_prec _ | Ops.Double_prec _)
+          when warp > 1 && extent > warp
+               && extent % warp = 0
+               && Int.is_pow2 (extent / warp)
+               && extent / warp <= warp
+               && Option.is_some Config.barrier_syntax
+               && Option.is_some Config.shared_decl_prefix ->
+            extent / warp * Ops.prec_in_bytes prec
+        | _ -> 0);
   }
 
 (** Whether [c] lies exactly halfway between two adjacent f32 values, so that narrowing it to f32 is
@@ -7228,6 +7247,18 @@ module C_syntax (B : C_syntax_config) = struct
             if num_warps = 1 then fold_total
             else
               let pname = "wred_partials_" ^ ident ^ "__" in
+              (* gh-ocannl-1452: the schedule's workgroup-memory estimate charges this declaration
+                 through the capability; a disagreement means the two have drifted apart. *)
+              (let charged =
+                 (codegen_capabilities (module B)).warp_reduce_workgroup_bytes ~extent ~prec
+               in
+               if charged <> num_warps * Ops.prec_in_bytes prec then
+                 invalid_arg
+                   (Printf.sprintf
+                      "C_syntax.pp_ll: Workgroup_reduce loop %s declares %d %s partials, but the \
+                       warp_reduce_workgroup_bytes capability the workgroup-memory estimate \
+                       charges says %d bytes"
+                      ident num_warps (Ops.prec_string prec) charged));
               let barrier = string (Option.value_exn B.barrier_syntax) in
               string
                 (Printf.sprintf "%s%s %s[%d];"

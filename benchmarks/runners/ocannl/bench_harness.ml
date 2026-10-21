@@ -556,6 +556,10 @@ let install_timing_trace () =
 type tune_arms = {
   mutable arm_reports : Autotune.report list; (* reverse order *)
   mutable shipped : string option;
+  mutable placement_replay : bool option;
+  mutable shipped_digest : string option;
+      (** The rest of [on_ship]'s record (gh-ocannl-1438): whether the placement was replayed from
+          the placement-decision store, and the shipped search's [source_digest]. *)
   mutable searches : int;
   mutable replays : int;
   mutable no_searches : int;
@@ -569,6 +573,8 @@ let tune_arms () =
   {
     arm_reports = [];
     shipped = None;
+    placement_replay = None;
+    shipped_digest = None;
     searches = 0;
     replays = 0;
     no_searches = 0;
@@ -602,7 +608,12 @@ let collect_arm t (r : Autotune.report) =
   collect_search t r;
   t.arm_reports <- r :: t.arm_reports
 
-let collect_ship t what = t.shipped <- Some what
+let collect_ship t (s : Train.shipped) =
+  t.shipped <- Some s.Train.ship_arm;
+  t.placement_replay <- Some s.Train.ship_replayed;
+  t.shipped_digest <-
+    Option.bind s.Train.ship_report ~f:(fun r ->
+        Option.some_if (not (String.is_empty r.Autotune.source_digest)) r.Autotune.source_digest)
 
 (** Census of all compiled step routines, including a host-gated optimizer before execution. Unlike
     the dominant-kernel filter, this describes compiled work, not which gates passed. *)
@@ -705,7 +716,8 @@ let tune_json t =
           ~searched ~cache_hit
           ~timing:(Autotune.timing_string r.Autotune.timing)
           ~rounds_run:r.Autotune.rounds_run ~beam_width:r.Autotune.beam_width
-          ~budget_cut:r.Autotune.budget_cut ~timings_contended:r.Autotune.timings_contended
+          ~budget_cut:r.Autotune.budget_cut ~budget_s:r.Autotune.budget_s
+          ~timings_contended:r.Autotune.timings_contended
           ~timings_unbatched:r.Autotune.timings_unbatched
           ~timing_decisions:(timing_decisions_wire r.Autotune.timing_decisions)
           ~best_ms:r.Autotune.best_ms ~best_label:r.Autotune.best_label
@@ -720,10 +732,11 @@ let tune_json t =
             (Option.map (Autotune.terminal_failure r) ~f:(fun tf -> tf.Autotune.detail))
       in
       Some
-        (Bench_json.tune_object ~shipped ~searches:t.searches ~replays:t.replays
+        (Bench_json.tune_object ~shipped ?placement_replay:t.placement_replay
+           ?shipped_digest:t.shipped_digest ~searches:t.searches ~replays:t.replays
            ~no_searches:t.no_searches
            ~shipped_mma:(Option.map t.shipped_mma ~f:mma_wire)
-           ~arms:(List.map named ~f:arm))
+           ~arms:(List.map named ~f:arm) ())
 
 let floats_of_gen g =
   let n = Array.fold (Bigarray.Genarray.dims g) ~init:1 ~f:( * ) in

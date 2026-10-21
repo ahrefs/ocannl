@@ -321,6 +321,8 @@ let () =
     let comp = named (tag ^ "_wgrad") (Train.grad_update loss) in
     let choice = ref None in
     let ctx = Context.auto () in
+    (* Before the compile, from the same context: [model_explain] lowers for decisions only. *)
+    let explained = Autotune.model_explain ctx comp Ir.Indexing.Empty in
     let _ctx, _routine =
       Autotune.model_default ~report:(fun r -> choice := Some r) ctx comp Ir.Indexing.Empty
     in
@@ -329,10 +331,14 @@ let () =
       r.Autotune.mc_label
       (Option.value_map r.Autotune.mc_rank_ms ~default:"n/a" ~f:Float.to_string)
       (Option.value_map r.Autotune.mc_model_ms ~default:"n/a" ~f:Float.to_string);
-    r
+    List.iter explained.Autotune.x_segments ~f:(fun xs ->
+        Stdio.eprintf "%s: segment %s explains %d candidates (not part of the golden)\n" tag
+          xs.Autotune.xs_segment
+          (List.length xs.Autotune.xs_candidates));
+    (r, explained)
   in
-  let large = leg ~tag:"rk_large" (16, 32, 64, 128) in
-  let small = leg ~tag:"rk_small" (4, 32, 64, 128) in
+  let large, large_explained = leg ~tag:"rk_large" (16, 32, 64, 128) in
+  let small, small_explained = leg ~tag:"rk_small" (4, 32, 64, 128) in
   p "past capacity the weight gradient's pick is a sketch, not the default"
     (not (String.equal large.Autotune.mc_label "default"));
   p "below capacity the weight gradient's pick stays the default"
@@ -340,4 +346,95 @@ let () =
   p "the pick's rank is at least its bound"
     (match (large.Autotune.mc_rank_ms, large.Autotune.mc_model_ms) with
     | Some r, Some b -> Float.(r >= b)
-    | _ -> false)
+    | _ -> false);
+  (* --- [model_explain] per segment (gh-ocannl-1438): what [model_default] saw of each segment of
+     its per-segment substitution, against what it picked. The weight-gradient steps above are
+     ranked whole (fission exposes no site there). The two-matmul chain the autotune tests search,
+     with its materialized sums cutting it into keyed matmul segments, but at 128x128: below cc's
+     default parallel threshold ([cpu_schedule_min_parallel], 16384 cells) the untuned preset maps
+     nothing and the fission [model_default] derives under it cuts nothing. --- *)
+  let chain_comp =
+    let q = 128 in
+    let mat ~label ~modulus =
+      TDSL.ndarray
+        (Array.init (q * q)
+           ~f:(Ll_test.cycle_flat ~dims:[| q; q |] ~modulus ~offset:0. ~stride:0.5))
+        ~label:[ label ] ~input_dims:[ q ] ~output_dims:[ q ] ()
+    in
+    let qa = mat ~label:"xc_a" ~modulus:11 and qb = mat ~label:"xc_b" ~modulus:7 in
+    let qc = mat ~label:"xc_c" ~modulus:5 and qf = mat ~label:"xc_f" ~modulus:9 in
+    let%op qd = qa + qb in
+    Train.set_materialized qd.Tensor.value;
+    let%op qe = qd * qc in
+    Train.set_materialized qe.Tensor.value;
+    let%op qg = qf * qe in
+    named "explain_chain" (Train.forward qg)
+  in
+  let chain_choice = ref None in
+  let chain_ctx = Context.auto () in
+  let chain_explained = Autotune.model_explain chain_ctx chain_comp Ir.Indexing.Empty in
+  let _ctx, _routine =
+    Autotune.model_default
+      ~report:(fun r -> chain_choice := Some r)
+      chain_ctx chain_comp Ir.Indexing.Empty
+  in
+  let chain = Option.value_exn ~here:[%here] !chain_choice in
+  Stdio.eprintf "explain_chain: picked %s; segments [%s] (not part of the golden)\n"
+    chain.Autotune.mc_label
+    (String.concat ~sep:"; "
+       (List.map chain_explained.Autotune.x_segments ~f:(fun xs ->
+            Printf.sprintf "%s: %d candidates" xs.Autotune.xs_segment
+              (List.length xs.Autotune.xs_candidates))));
+  p "a fissioned chain's explanation lists its matmul segments, each with sketch leaves"
+    (List.count chain_explained.Autotune.x_segments ~f:(fun xs ->
+         List.length xs.Autotune.xs_candidates > 1)
+    >= 2);
+  let legs = [ (large, large_explained); (small, small_explained); (chain, chain_explained) ] in
+  p_all "each explained segment is listed once" legs ~f:(fun (_, x) ->
+      not
+        (List.contains_dup x.Autotune.x_segments ~compare:(fun a b ->
+             String.compare a.Autotune.xs_segment b.Autotune.xs_segment)));
+  p_all "each explained segment lists its preset first, admitted" legs ~f:(fun (_, x) ->
+      List.for_all x.Autotune.x_segments ~f:(fun xs ->
+          match xs.Autotune.xs_candidates with
+          | ("preset", ex) :: _ -> ex.Autotune.ex_admitted
+          | _ -> false));
+  p_all "every explained per-segment ranking score is at least its bound" legs ~f:(fun (_, x) ->
+      List.for_all x.Autotune.x_segments ~f:(fun xs ->
+          List.for_all xs.Autotune.xs_candidates ~f:(fun (_, ex) ->
+              match (ex.Autotune.ex_rank_ms, ex.Autotune.ex_floor_ms) with
+              | Some r, Some f -> Float.(r >= f)
+              | None, None -> true
+              | _ -> false)));
+  (* The pick is a candidate the explanation lists: the incumbent or a whole-routine leaf by its
+     label, or a per-segment substitution whose every entry is a leaf listed under its own segment,
+     in segment order -- which is the per-segment explanation's whole claim to describe what
+     [model_default] ranks. *)
+  let listed_pick (r, (x : Autotune.explanation)) =
+    let label = r.Autotune.mc_label in
+    List.exists x.Autotune.x_routine ~f:(fun (l, _) -> String.equal l label)
+    ||
+    match String.chop_prefix label ~prefix:"F_sketch[" with
+    | None -> false
+    | Some rest -> (
+        match String.chop_suffix rest ~suffix:"]" with
+        | None -> false
+        | Some entries ->
+            (* Each entry is a segment's leaf label, segments in order, separated by commas; tried
+               against every remaining segment's leaves, so no label's own text is parsed. *)
+            let rec matches text = function
+              | [] -> String.is_empty text
+              | (xs : Autotune.segment_explain) :: later ->
+                  matches text later
+                  || List.exists (List.tl_exn xs.Autotune.xs_candidates) ~f:(fun (leaf, _) ->
+                      match String.chop_prefix text ~prefix:leaf with
+                      | Some "" -> true
+                      | Some after -> (
+                          match String.chop_prefix after ~prefix:"," with
+                          | Some next -> (not (String.is_empty next)) && matches next later
+                          | None -> false)
+                      | None -> false)
+            in
+            (not (String.is_empty entries)) && matches entries x.Autotune.x_segments)
+  in
+  p_all "model_default's pick is a candidate model_explain lists" legs ~f:listed_pick

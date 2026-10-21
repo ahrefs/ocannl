@@ -143,7 +143,8 @@ files.
   subtree bounded at the threshold only under a keyed best. `Autotune.model_family_search` is the
   walk `model_default` runs, exposed so `test/operations/model_load_tiebreak` drives it on cc with a
   CUDA-shaped record and capability; `Autotune.model_explain` lists what the model sees of each
-  whole-routine candidate. The swizzled staged fp8 twin beats its plain twin, but at the
+  whole-routine candidate and, since gh-ocannl-1438, of each segment of its per-segment
+  substitution (`x_segments`: the preset first, then the leaves labeled as `F_sketch` entries). The swizzled staged fp8 twin beats its plain twin, but at the
   gh-ocannl-1190 shape neither is the argmin: an unstaged tensorized leaf ranks strictly below
   every staged one (the staging copies add ops and the per-block global reads are the same; until
   gh-ocannl-1442 the shared tiles also added distinct-cell bytes at the DRAM rate). Every

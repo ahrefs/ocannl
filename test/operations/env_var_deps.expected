@@ -254,6 +254,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test tile_mma_geometry: Ir.Schedule.apply
   test/operations/dune, test tile_mma_narrow: Ir.Schedule.apply
   test/operations/dune, test vec_signed_zero: Ir.Schedule.apply
+  test/operations/dune, test workgroup_memory_accounting: Ir.Schedule.apply, Ir.Schedule.check_hardware_limits
   test/operations/dune, test zero_elision: Ir.Schedule.maybe_default_schedules
   test/training/dune, test fused_classifier: Ir.Schedule.maybe_default_schedules
 
@@ -313,6 +314,7 @@ Programs starting a search with a run that can select cc, each pinning the cc ve
   test/operations/dune, test autotune_measured_refusal (Autotune.tune): independent, by its marker
   test/operations/dune, test autotune_progress (Train.tune_placements): independent, by its marker
   test/operations/dune, test autotune_replay_refusal (Autotune.tune): independent, by its marker
+  test/operations/dune, test autotune_report_drops (Autotune.tune): independent, by its marker
   test/operations/dune, test autotune_round_expansion (Autotune.tune, Scripted_search.search): pinned: autotune_round_expansion.ml calls `Fissioned_chain.small_menu` at initialization, before any search
   test/operations/dune, test autotune_seam_domains (Autotune.tune): independent, by its marker
   test/operations/dune, test autotune_seeded_seed (Autotune.tune): independent, by its marker

@@ -16,8 +16,8 @@ non-discard use; `unimplemented` must therefore be visible to callers as an unde
   lib/demo_models.ml:lenet ?out_channels1 -- implemented
   lib/demo_models.ml:lenet ?out_channels2 -- implemented
   lib/demo_models.ml:lenet ?use_padding -- implemented
-  lib/demo_models.ml:mobile_cnn ?_width_mult -- unimplemented
   lib/demo_models.ml:mobile_cnn ?num_classes -- implemented
+  lib/demo_models.ml:mobile_cnn ?width_mult -- implemented
   lib/demo_models.ml:sokoban_cnn ?num_actions -- implemented
   lib/demo_models.ml:transformer ?epsilon -- implemented
   lib/demo_models.ml:transformer ?mask_fill -- implemented
@@ -52,6 +52,7 @@ non-discard use; `unimplemented` must therefore be visible to callers as an unde
   lib/nn_blocks.ml:conv2d ?stride -- implemented
   lib/nn_blocks.ml:conv2d ?use_padding -- implemented
   lib/nn_blocks.ml:conv_bn_relu ?kernel_size -- implemented
+  lib/nn_blocks.ml:conv_bn_relu ?out_channels -- implemented
   lib/nn_blocks.ml:conv_bn_relu ?stride -- implemented
   lib/nn_blocks.ml:cross_attention ?dropout_rate -- implemented
   lib/nn_blocks.ml:cross_attention ?temperature -- implemented
@@ -66,6 +67,7 @@ non-discard use; `unimplemented` must therefore be visible to callers as an unde
   lib/nn_blocks.ml:decoder_only_block ?mask_fill -- implemented
   lib/nn_blocks.ml:decoder_only_block ?pos_embed -- implemented
   lib/nn_blocks.ml:depthwise_separable_conv2d ?kernel_size -- implemented
+  lib/nn_blocks.ml:depthwise_separable_conv2d ?out_channels -- implemented
   lib/nn_blocks.ml:depthwise_separable_conv2d ?stride -- implemented
   lib/nn_blocks.ml:depthwise_separable_conv2d ?use_padding -- implemented
   lib/nn_blocks.ml:kaiming ?scale_sq -- implemented
