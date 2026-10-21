@@ -74,63 +74,6 @@ ok: a subdir's stanzas are the same kinds of site
 ok: a nested subdir names the path it applies to
 ok: stanzas outside the subdir keep the dune file's own directory
 ok: stanzas are reported in file order
-ok: artifact declaration -- a test whose module calls the initializer and does not declare the variable
-ok: artifact declaration -- the same test with the declaration added
-ok: artifact declaration -- the lowercase spelling declares nothing
-ok: artifact declaration -- a declaration no module of the stanza calls for
-ok: artifact declaration -- a test that neither calls nor declares is not a subject
-ok: artifact declaration -- a sibling module's call is not this stanza's
-ok: artifact declaration -- an executable whose runner declares it
-ok: artifact declaration -- an executable whose runner does not
-ok: artifact declaration -- a declaration elsewhere in the file does not answer for the runner
-ok: artifact declaration -- one of two runners declaring it is not enough
-ok: artifact declaration -- a rule declaring it and running nothing at all
-ok: artifact declaration -- a rule declaring it and running an executable with no caller
-ok: artifact declaration -- and the same rule once its executable does call the initializer
-ok: artifact declaration -- a rule running a same-named executable elsewhere does not run the local one
-ok: artifact declaration -- a rule running an executable built elsewhere is not judged
-ok: artifact declaration -- nor is one whose command this scan cannot place
-ok: artifact declaration -- an alias stanza aggregating with a declaration behind nothing
-ok: artifact declaration -- a runner naming the executable's public name is its runner
-ok: artifact declaration -- a local path spelled like the public name is not a runner of it
-ok: artifact declaration -- an executable nothing in the file runs has no deps field to answer for it
-ok: artifact declaration -- a plain library module calling the initializer is reported as such
-ok: artifact declaration -- adding inline tests does not license a library initializer
-ok: artifact declaration -- and a library that does not call it is not a subject
-ok: artifact declaration -- one of two executables in a stanza calls the initializer
-ok: artifact declaration -- and the same stanza with the declaration on the wrong rule
-ok: artifact declaration -- a shared module's call belongs to both programs
-ok: artifact declaration -- a public name answers for its own program only
-ok: artifact declaration -- a shared runner's declaration is justified by whichever program needs it
-ok: artifact declaration -- a shared runner declaring it for neither program is stale
-ok: artifact declaration -- a program sharing one runner and having a bare one of its own is not stale
-ok: artifact declaration -- a dependency-expanded runner under chdir still runs the stanza's executable
-ok: artifact declaration -- the dependency-expanded runner's missing declaration is reported
-ok: artifact declaration -- a named dependency under chdir also keeps its stanza-relative identity
-ok: artifact declaration -- an executable expansion under chdir keeps its stanza-relative identity
-ok: artifact declaration -- a chdir names the program in the directory it moves to
-ok: artifact across subdirs -- a dependency expansion in a subdir keeps that stanza's directory under chdir
-ok: artifact across subdirs -- a top-level dependency expansion under chdir runs the qualified nested executable
-ok: artifact across subdirs -- a top-level rule is the runner of a nested executable
-ok: artifact across subdirs -- and the same rule without the declaration is reported, not taken for absent
-ok: artifact across subdirs -- a rule in a sibling subdirectory is not this program's runner
-ok: artifact default modules -- a single-module test with no modules field owns its own source
-ok: artifact default modules -- and is reported when it does not declare
-ok: artifact default modules -- :standard is the same default written down
-ok: artifact default modules -- a nested ordered set is still an explicit list
-ok: artifact default modules -- a nested difference does not subtract the terms beside it
-ok: artifact default modules -- an outer term cancels a nested exclusion
-ok: artifact default modules -- an empty nested difference takes nothing out of :standard
-ok: artifact default modules -- a set difference over :standard is still the default set
-ok: artifact default modules -- a module subtracted from :standard is not the stanza's
-ok: artifact default modules -- a module another stanza names explicitly is not in the default set
-ok: artifact other reader -- a declaration behind a direct read of the key is not stale
-ok: artifact other reader -- a direct reader that does not declare is reported like any other
-ok: artifact other reader -- and the same stanza whose module reads nothing is
-ok: artifact other reader -- an inline-test library declaring it in its own field
-ok: artifact other reader -- a library's own deps are not the inline tests' deps
-ok: artifact other reader -- a library with no tests of its own is not judged for reading a key
-ok: artifact other reader -- a rule that SETS the variable is acting on it, whatever it runs
 ok: raw stanzas -- a test stanza
 ok: raw stanzas -- two of them
 ok: raw stanzas -- a plural stanza is one stanza

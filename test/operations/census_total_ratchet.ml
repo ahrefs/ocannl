@@ -97,11 +97,6 @@ let allowed =
     };
     {
       golden = Golden "test/operations/env_var_deps.expected";
-      pattern = {|the floor of [0-9]+ callers|};
-      reason = "the artifact-caller floor, a hand-written constant of the scan";
-    };
-    {
-      golden = Golden "test/operations/env_var_deps.expected";
       pattern = {|diagnostics: at least [0-9]+ (count and details on stderr)|};
       reason = "the extracted-diagnostic floor, a hand-written constant of the scan";
     };

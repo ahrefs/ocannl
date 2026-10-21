@@ -498,15 +498,8 @@
  (name hosted_constant_fill)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BACKEND))
  (modules hosted_constant_fill)
  (libraries base ocannl arrayjit.verdict ll_test)
  (preprocess
@@ -517,8 +510,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_LIMIT_CONSTANT_FILL_SIZE))
+  (env_var OCANNL_BACKEND))
  (modules broadcast_constant_init)
  (libraries base ocannl arrayjit.verdict ll_test)
  (preprocess
@@ -650,12 +642,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The fused backward's dK and dQ nests take lanes on a GPU backend per these keys
-  ; (gh-ocannl-1124, gh-ocannl-1167).
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SERIAL_LANES))
+  (env_var OCANNL_BACKEND))
  (modules online_softmax)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -1212,8 +1199,7 @@
  (package neural_nets_lib)
  (deps
   (alias runtest-env_spelling_gate)
-  ocannl_config
-  (env_var OCANNL_BUILD_FILES_PREFIX))
+  ocannl_config)
  ; One executable, one build_files/ subdirectory: the two rules' runs would empty and sweep each
  ; other's, and each run needs to know when no other process of the executable is running.
  (locks cc_kept_library)
@@ -1238,9 +1224,7 @@
  ; ocannl-backend: cc -- the kept library is the cc compile's; the command line pins the backend.
  (target cc_kept_library-debug.actual)
  (package neural_nets_lib)
- (deps
-  ocannl_config
-  (env_var OCANNL_BUILD_FILES_PREFIX))
+ (deps ocannl_config)
  ; One executable, one build_files/ subdirectory: the two rules' runs would empty and sweep each
  ; other's, and each run needs to know when no other process of the executable is running.
  (locks cc_kept_library)
@@ -2187,14 +2171,7 @@
  ; ocannl-backend: none -- hand-built IR is optimized and scheduled, never linked or executed.
  (name schedule_refusal_classification)
  (package neural_nets_lib)
- (deps
-  ocannl_config
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE))
+ (deps ocannl_config)
  (modules schedule_refusal_classification)
  (libraries base ll_test arrayjit.autotune arrayjit.verdict))
 
@@ -2505,15 +2482,8 @@
  (name scan_loop)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BACKEND))
  (modules scan_loop)
  (libraries base ocannl stdio arrayjit.verdict ll_test))
 
@@ -2537,10 +2507,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_VIRTUALIZE_MAX_INLINE_REDUCTION)
-  (env_var OCANNL_VIRTUALIZE_MAX_VISITS)
-  (env_var OCANNL_VIRTUALIZE_FOOTPRINT_MATERIALIZATION))
+  (env_var OCANNL_BACKEND))
  (modules footprint_materialization)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -2554,9 +2521,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_VIRTUALIZE_MAX_INLINE_REDUCTION)
-  (env_var OCANNL_VIRTUALIZE_FOOTPRINT_MATERIALIZATION))
+  (env_var OCANNL_BACKEND))
  (modules footprint_diagonal_einsum)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -2885,13 +2850,9 @@
  (name config_profiles)
  (package neural_nets_lib)
  ; The executable guards on an ambient `OCANNL_PROFILE`, which would abort it during module
- ; initialization -- and a guard only RUNS when dune reruns the rule, which happens only for a
- ; variable it declares (gh-ocannl-749). `env_var_deps` pairs the key the guard reads with this
- ; declaration.
- (deps
-  ocannl_config
-  config_profiles.expected
-  (env_var OCANNL_PROFILE))
+ ; initialization -- and a guard only RUNS when dune reruns the rule, which the ambient record in
+ ; `ocannl_config` makes happen whenever the variable changes (gh-ocannl-1149).
+ (deps ocannl_config config_profiles.expected)
  (modules config_profiles)
  (libraries base arrayjit.utils arrayjit.verdict stdio))
 
@@ -3071,8 +3032,7 @@
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_EXIT_STREAM_TEARDOWN_TIMEOUT))
+  (env_var OCANNL_BACKEND))
  (action
   (with-stdout-to
    %{target}
@@ -3190,22 +3150,8 @@
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
-  ; Every name below is one this rule SETS, so the deps are not what makes them arrive. What they
-  ; make the rule notice is an ambient one arriving or leaving: since gh-ocannl-629 the environment
-  ; writes to the stream this target captures, and an untracked variable would leave a stale golden
-  ; passing. `ocannl_backedn` is tracked in both casings although only one is a spelling
-  ; `Utils.env_var_name` would build: an ambient lowercase one is not read, but it IS reported, so
-  ; it writes to this stream too.
-  (env_var ocannl_backedn)
-  (env_var OCANNL_BACKEDN)
   (env_var OCANNL_TOOL_SWEEP_STATE)
-  (env_var OCANNL_LOG_LEVEL_ROW)
-  ; The synthetic keys the executable looks up by name (gh-ocannl-749). It reads them through
-  ; `Utils.read_env_var`, which no commandline flag outranks, and an ambient one draws the
-  ; unknown-key warning onto the very stream this target captures -- so the run depends on them
-  ; whether or not this rule sets them.
-  (env_var OCANNL_DEMO_KEY)
-  (env_var OCANNL_DASHED_ONLY_KEY))
+  (env_var OCANNL_LOG_LEVEL_ROW))
  (action
   ; The environment half of the same claim (gh-ocannl-629): a name that is no key, and the two
   ; reserved namespaces whose silence is the other half of the policy -- the tooling's and
@@ -3261,12 +3207,7 @@
  (target config_var_fatal_spelling.actual)
  (deps
   (alias runtest-env_spelling_gate)
-  ocannl_config
-  (env_var ocannl-log_level)
-  ; As above: the executable reads these two by name, and an ambient one writes to the stream this
-  ; target captures (gh-ocannl-749).
-  (env_var OCANNL_DEMO_KEY)
-  (env_var OCANNL_DASHED_ONLY_KEY))
+  ocannl_config)
  (action
   (setenv
    ocannl-log_level
@@ -3761,13 +3702,11 @@
  (action
   (diff env_var_deps.expected env_var_deps.actual)))
 
-; gh-ocannl-723: the negative control for the rule above that requires
-; `(env_var OCANNL_BUILD_FILES_PREFIX)` of every stanza whose modules call
-; `Test_utils.Generated.init`. Every such stanza in this repository declares it, so a control
-; written from today's corpus would encode the absence of the violating shape rather than the
-; rule's teeth. `--control` builds a synthetic tree that contains one, hands it to
-; `env_var_deps.exe` in a child process, and claims on what the child said and how it exited --
-; once without the declaration and once with it, nothing else differing.
+; The negative controls for the rules above. The repository satisfies every one of them, so a
+; control written from today's corpus would encode the absence of the violating shape rather than
+; the rule's teeth -- no stanza here declares a variable the ambient record carries (gh-ocannl-1425),
+; for one. `--control` builds synthetic trees that contain each violation, hands them to
+; `env_var_deps.exe` in a child process, and claims on what the child said and how it exited.
 
 (rule
  ; ocannl-backend: none -- it runs env_var_deps.exe over a synthetic tree of dune files and one
@@ -4446,10 +4385,7 @@
  (name test_metal_guarded_gather_codegen)
  (package neural_nets_lib)
  (modules test_metal_guarded_gather_codegen)
- (deps
-  ocannl_config
-  test_metal_guarded_gather_codegen.expected
-  (env_var OCANNL_BUILD_FILES_PREFIX))
+ (deps ocannl_config test_metal_guarded_gather_codegen.expected)
  (libraries
   base
   stdio
@@ -4472,10 +4408,7 @@
  (name test_metal_pool_slot_width)
  (package neural_nets_lib)
  (modules test_metal_pool_slot_width)
- (deps
-  ocannl_config
-  test_metal_pool_slot_width.expected
-  (env_var OCANNL_BUILD_FILES_PREFIX))
+ (deps ocannl_config test_metal_pool_slot_width.expected)
  (libraries
   base
   stdio
@@ -4515,7 +4448,6 @@
  (name test_one_hot_embedding_lookup)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules test_one_hot_embedding_lookup)
@@ -4527,7 +4459,6 @@
  (name test_one_hot_embedding_backward)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules test_one_hot_embedding_backward)
@@ -4539,7 +4470,6 @@
  (name test_bounds_folded_gather)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules test_bounds_folded_gather)
@@ -4551,7 +4481,6 @@
  (name hardware_axes_parity)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules hardware_axes_parity)
@@ -4563,7 +4492,6 @@
  (name hardware_workgroup_reduce)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules hardware_workgroup_reduce)
@@ -4575,10 +4503,7 @@
  (name hardware_warp_shuffle)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_FP16_ARITHMETIC)
-  (env_var OCANNL_BF16_ARITHMETIC)
   (env_var OCANNL_BACKEND))
  (modules hardware_warp_shuffle)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
@@ -4589,18 +4514,8 @@
  (name cpu_vectorized)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The cc vector width this test reads, which env_var_deps derives (gh-ocannl-1320).
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BACKEND))
  (modules cpu_vectorized)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -4612,9 +4527,6 @@
  (name float_literal_forms)
  (package neural_nets_lib)
  (deps
-  ; Generated.init reads build_files_prefix, so a run under a different one must not be served
-  ; from the cache of a run under the default private directory.
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules float_literal_forms)
@@ -4626,16 +4538,8 @@
  (name vec_signed_zero)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BACKEND))
  (modules vec_signed_zero)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -4656,16 +4560,8 @@
  (name narrow_storage_compute)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BACKEND))
  (modules narrow_storage_compute)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -4684,19 +4580,8 @@
  (name accum_width)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_FP16_ARITHMETIC)
-  (env_var OCANNL_BF16_ARITHMETIC)
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+  (env_var OCANNL_BACKEND))
  (modules accum_width)
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils)
  (preprocess
@@ -4707,13 +4592,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_BACKEND))
  (modules privatize_recheck)
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
 
@@ -4735,8 +4614,6 @@
  (package neural_nets_lib)
  (locks ocannl_training_test)
  (deps
-  (env_var OCANNL_BUILD_FILES_PREFIX)
-  (env_var OCANNL_CC_BACKEND_COMPILER_COMMAND)
   (env_var OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR)
   (env_var XDG_CACHE_HOME)
   (env_var HOME)
@@ -4765,28 +4642,7 @@
   narrow_storage_compute.exe
   narrow_storage_compute.expected
   tile_mma_geometry.exe
-  tile_mma_geometry.expected
-  ; The settings this test's own reading consults: the compiler command, the kernel flags it
-  ; preprocesses under (Cc_backend.kernel_compiler_flags) and the target width
-  ; (Cc_backend.auto_vector_bytes); and the fp16 arithmetic probe, which decides the children's
-  ; compute precision and so which bridges they call.
-  (env_var OCANNL_CC_BACKEND_COMPILER_COMMAND)
-  (env_var OCANNL_CC_BACKEND_OPTIMIZATION_LEVEL)
-  (env_var OCANNL_CC_BACKEND_ARCH_FLAGS)
-  (env_var OCANNL_CC_BACKEND_SIMD_FLAGS)
-  (env_var OCANNL_CC_BACKEND_FAST_MATH)
-  (env_var OCANNL_CC_BACKEND_FP_CONTRACT)
-  (env_var OCANNL_CC_PARALLEL_GRID)
-  (env_var OCANNL_CC_FP16_ARITHMETIC)
-  ; What the two children declare, less the backend and the vector width (forced) and the build-files
-  ; prefix (removed).
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_AUTOTUNE_REGISTER_TILE_RM_TWIN)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  tile_mma_geometry.expected)
  (modules bridge_arm_coverage)
  (libraries base ocannl stdio unix arrayjit.verdict))
 
@@ -4794,16 +4650,8 @@
  (name cpu_simd_reduction)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BACKEND))
  (modules cpu_simd_reduction)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -4816,16 +4664,8 @@
  (name cpu_parallel)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BACKEND))
  (modules cpu_parallel)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -4839,29 +4679,7 @@
  ; ocannl-backend: cc -- every execution context is an explicit Context.cpu ().
  (name cpu_scratch_matmul_grid)
  (package neural_nets_lib)
- (deps
-  ocannl_config
-  (env_var OCANNL_BUILD_FILES_PREFIX)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
-  (env_var OCANNL_AUTOMATIC_GPU_SCHEDULE)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SCHEDULE_FISSION)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+ (deps ocannl_config)
  (modules cpu_scratch_matmul_grid)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -4877,30 +4695,8 @@
  (package neural_nets_lib)
  (locks ocannl_training_test)
  (deps
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; Legs 5 and 6 run the default pipeline: every key it reaches, which env_var_deps derives
-  ; (gh-ocannl-1149).
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
-  (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
-  (env_var OCANNL_AUTOMATIC_GPU_SCHEDULE)
-  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_SCHEDULE_FISSION)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules gpu_serial_lanes)
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils)
  (preprocess
@@ -4911,22 +4707,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules gpu_small_leading_axis)
  (libraries base ocannl arrayjit.verdict ll_test))
 
@@ -4939,24 +4720,7 @@
  (locks ocannl_training_test)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The GPU pipeline reads every default-schedule key and, through Schedule.fission_keep_mapping,
-  ; the gate itself.
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules gpu_fission_mapping)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -4967,22 +4731,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules gpu_parallel_prefix)
  (libraries base stdio ocannl arrayjit.verdict ll_test))
 
@@ -4990,24 +4739,8 @@
  (name schedule_ops)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules schedule_ops)
  (libraries base ocannl stdio pprint arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -5019,15 +4752,8 @@
  (name autotune_smoke)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BACKEND))
  (modules autotune_smoke)
  (libraries base ocannl stdio arrayjit.verdict arrayjit.ll_builders ll_test)
  (preprocess
@@ -5053,27 +4779,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
-  (env_var OCANNL_AUTOMATIC_GPU_SCHEDULE)
-  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_SCHEDULE_FISSION)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules autotune_serial_baseline)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -5109,8 +4815,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_CC_VECTOR_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules schedule_cache_device)
  (libraries base ocannl stdio arrayjit.verdict test_utils)
  (preprocess
@@ -5172,10 +4877,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
-  ; Its pool-class children rebuild the limits record, which carries the cc vector width.
-  (env_var OCANNL_CC_VECTOR_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules cache_key_agreement)
  (action
   (run %{test} %{dep:../../arrayjit/lib/utils.ml}))
@@ -5188,27 +4890,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; Its default-pipeline mirror reads every default-schedule key and the fission merge gate.
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
-  (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
-  (env_var OCANNL_AUTOMATIC_GPU_SCHEDULE)
-  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_SCHEDULE_FISSION)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules fission_equivalence)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -5230,23 +4912,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules autotune_privatize)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -5257,24 +4923,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules privatize_census)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -5284,9 +4933,7 @@
  ; ocannl-backend: none -- pure structural recognition over synthetic IR; no compilation or execution.
  (name autotune_concat_dependencies)
  (package neural_nets_lib)
- (deps
-  ocannl_config
-  (env_var OCANNL_LEGALITY_CROSSCHECK))
+ (deps ocannl_config)
  (modules autotune_concat_dependencies)
  (libraries base ocannl arrayjit.verdict ll_test))
 
@@ -5316,15 +4963,8 @@
  (name autotune_scope_menu)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BACKEND))
  (modules autotune_scope_menu)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -5364,29 +5004,7 @@
   (alias slow-env_spelling_gate)
   autotune_fission_sketch.expected
   ocannl_config
-  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_SCHEDULE_FISSION)
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_TF32_MATMULS)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  ; The small menu's envelope, stated on the CPU backends (Fissioned_chain).
-  (env_var OCANNL_MODEL_PEAK_FLOPS)
-  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH))
+  (env_var OCANNL_BACKEND))
  ; Keep execution off @default as well as @runtest; @check still compiles the source.
  (action
   (no-infer
@@ -5410,19 +5028,10 @@
  (package neural_nets_lib)
  (locks ocannl_training_test)
  (deps
-  (env_var OCANNL_PROFILE)
   (alias slow-env_spelling_gate)
   autotune_mma_companion.expected
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_TF32_MATMULS)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+  (env_var OCANNL_BACKEND))
  ; Keep execution off @default as well as @runtest; @check still compiles the source.
  (action
   (no-infer
@@ -5449,26 +5058,7 @@
   (alias slow-env_spelling_gate)
   autotune_batched_companion.expected
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_TF32_MATMULS)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+  (env_var OCANNL_BACKEND))
  ; Keep execution off @default as well as @runtest; @check still compiles the source.
  (action
   (no-infer
@@ -5488,7 +5078,6 @@
  (name reserved_routine_names)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules reserved_routine_names)
@@ -5500,29 +5089,8 @@
  (name fission_schedule)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
-  (env_var OCANNL_AUTOMATIC_GPU_SCHEDULE)
-  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_SCHEDULE_FISSION)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules fission_schedule)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -5533,15 +5101,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules op_legality)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -5552,16 +5112,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules aligned_chains_shared_symbol)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -5572,21 +5123,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules scratch_value_variance)
  (libraries base ocannl stdio arrayjit.verdict arrayjit.ll_builders)
  (preprocess
@@ -5596,16 +5133,8 @@
  (name schedule_smem_matmul)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BACKEND))
  (modules schedule_smem_matmul)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -5615,18 +5144,8 @@
  (name schedule_batched_mma)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS)
-  ; Its seed menus follow the pad-waste economy (gh-ocannl-740).
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+  (env_var OCANNL_BACKEND))
  (modules schedule_batched_mma)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -5637,24 +5156,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
-  (env_var OCANNL_TF32_MATMULS)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+  (env_var OCANNL_BACKEND))
  (modules launch_predicate_parity)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -5665,23 +5167,7 @@
  ; hardware_limits records; nothing is compiled and no device is touched.
  (name launch_dim_gate)
  (package neural_nets_lib)
- (deps
-  ocannl_config
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+ (deps ocannl_config)
  (modules launch_dim_gate)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -5692,23 +5178,7 @@
  (package neural_nets_lib)
  (deps
   (env_var OCANNL_BACKEND)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
-  ocannl_config
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  ocannl_config)
  (modules thread_private_gate)
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils)
  (preprocess
@@ -5718,18 +5188,8 @@
  (name schedule_batch_grid)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+  (env_var OCANNL_BACKEND))
  (modules schedule_batch_grid)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -5739,29 +5199,8 @@
  (name schedule_coalesce)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
-  (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
-  (env_var OCANNL_AUTOMATIC_GPU_SCHEDULE)
-  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
-  (env_var OCANNL_SCHEDULE_FISSION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+  (env_var OCANNL_BACKEND))
  (modules schedule_coalesce)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -5788,24 +5227,11 @@
  (name schedule_mma_matmul)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ; The HIP arms branch on the ADVERTISED tile-MMA capability (gh-ocannl-1032), whose host half --
   ; the rocWMMA header tree -- reaches this rule through the host record `ocannl_config` carries
   ; (gh-ocannl-1038), so a tree appearing at a path already searched reruns it.
   ocannl_config
-  (env_var OCANNL_FP16_ARITHMETIC)
-  (env_var OCANNL_BF16_ARITHMETIC)
-  (env_var OCANNL_BACKEND)
-  ; The cc vector width this test reads, which env_var_deps derives (gh-ocannl-1320).
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+  (env_var OCANNL_BACKEND))
  (modules schedule_mma_matmul)
  (libraries
   base
@@ -5867,17 +5293,8 @@
  (name schedule_pipelined_matmul)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+  (env_var OCANNL_BACKEND))
  (modules schedule_pipelined_matmul)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -5887,16 +5304,8 @@
  (name pipelined_move_legality)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules pipelined_move_legality)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -5906,16 +5315,8 @@
  (name fragment_scope_move_legality)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules fragment_scope_move_legality)
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils)
  (preprocess
@@ -5925,16 +5326,8 @@
  (name schedule_ldmatrix_matmul)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BACKEND))
  (modules schedule_ldmatrix_matmul)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -5949,47 +5342,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  ; The model-selection keys model_family_search, model_explain and model_default read, the
-  ; sketch family's economy, and the numerics policy the mma format triples resolve under.
-  (env_var OCANNL_MODEL_DEFAULT_GEOMETRY_LATTICE)
-  (env_var OCANNL_MODEL_DEFAULT_PLACEMENTS)
-  (env_var OCANNL_MODEL_CACHE_CAPACITY)
-  (env_var OCANNL_MODEL_CACHE_BANDWIDTH)
-  (env_var OCANNL_MODEL_PEAK_FLOPS)
-  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_TF32_MATMULS)
-  (env_var OCANNL_FP16_ARITHMETIC)
-  (env_var OCANNL_BF16_ARITHMETIC)
-  (env_var OCANNL_NARROW_COMPUTE_F32)
-  ; The default pipeline model_explain and model_default score: the schedulers, their geometry,
-  ; lane and fission keys.
-  (env_var OCANNL_AUTOMATIC_GPU_SCHEDULE)
-  (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_SCHEDULE_FISSION)
-  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
-  (env_var OCANNL_GPU_ELIDE_COVERED_ZEROS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
-  ; The seeded untuned plan model_default and model_explain start from on CUDA and HIP.
-  (env_var OCANNL_GPU_DEFAULT_SKETCH_MIN_REDUCTION)
-  (env_var OCANNL_GPU_DEFAULT_SPLIT_REDUCE_MIN_SERIAL)
-  (env_var OCANNL_GPU_DEFAULT_REDUCTION_SINK))
+  (env_var OCANNL_BACKEND))
  (modules model_load_tiebreak)
  (libraries base stdio ocannl arrayjit.verdict ll_test)
  (preprocess
@@ -6002,20 +5355,8 @@
  (name mma_operand_loads)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS)
-  ; The numerics policy the arm table resolves under.
-  (env_var OCANNL_TF32_MATMULS)
-  (env_var OCANNL_FP16_ARITHMETIC)
-  (env_var OCANNL_BF16_ARITHMETIC)
-  (env_var OCANNL_NARROW_COMPUTE_F32))
+  (env_var OCANNL_BACKEND))
  (modules mma_operand_loads)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -6025,16 +5366,8 @@
  (name schedule_swizzle_matmul)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BACKEND))
  (modules schedule_swizzle_matmul)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -6044,16 +5377,8 @@
  (name schedule_register_matmul)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BACKEND))
  (modules schedule_register_matmul)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -6063,16 +5388,8 @@
  (name schedule_cpu_pack_matmul)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BACKEND))
  (modules schedule_cpu_pack_matmul)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -6082,16 +5399,8 @@
  (name schedule_pack_mma_matmul)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BACKEND))
  (modules schedule_pack_mma_matmul)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -6101,19 +5410,8 @@
  (name tile_mma_narrow)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The cc vector width this test reads, which env_var_deps derives (gh-ocannl-1320).
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  (env_var OCANNL_CC_FP16_ARITHMETIC)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BACKEND))
  (modules tile_mma_narrow)
  (libraries base ocannl stdio unix arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -6123,9 +5421,7 @@
  ; ocannl-backend: cc -- every execution context is an explicit Context.cpu (); the tile under test is the cc renderer's, pinned to 16-byte vectors in-process.
  (name tile_bf16_row_groups)
  (package neural_nets_lib)
- (deps
-  (env_var OCANNL_BUILD_FILES_PREFIX)
-  ocannl_config)
+ (deps ocannl_config)
  (modules tile_bf16_row_groups)
  (libraries base unix arrayjit.verdict test_utils ll_test))
 
@@ -6133,15 +5429,8 @@
  (name mma_tensorization_label)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BACKEND))
  (modules mma_tensorization_label)
  (libraries base ocannl arrayjit.autotune stdio arrayjit.verdict ll_test)
  (preprocess
@@ -6151,20 +5440,8 @@
  (name tile_mma_geometry)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The cc vector width this test reads, which env_var_deps derives (gh-ocannl-1320).
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  (env_var OCANNL_AUTOTUNE_REGISTER_TILE_RM_TWIN)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+  (env_var OCANNL_BACKEND))
  (modules tile_mma_geometry)
  (libraries
   base
@@ -6182,18 +5459,8 @@
  (name tile_mma_declines)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS)
-  ; Its seed menus follow the pad-waste economy (gh-ocannl-740).
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+  (env_var OCANNL_BACKEND))
  (modules tile_mma_declines)
  (libraries
   base
@@ -6211,16 +5478,8 @@
  (name schedule_packed_constants)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BACKEND))
  (modules schedule_packed_constants)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -6284,13 +5543,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BACKEND))
  (modules lowered_nest_order)
  (libraries base ocannl stdio ll_test arrayjit.verdict)
  (preprocess
@@ -6309,7 +5562,6 @@
  (name reduction_accumulator_residency)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules reduction_accumulator_residency)
@@ -6346,27 +5598,7 @@
  (locks ocannl_training_test)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; Its explicit leg runs the default pipeline, which reads every default-schedule key.
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
-  (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
-  (env_var OCANNL_AUTOMATIC_GPU_SCHEDULE)
-  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_SCHEDULE_FISSION)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules zero_elision)
  (libraries base ocannl stdio unix arrayjit.verdict ll_test)
  (preprocess
@@ -6392,10 +5624,7 @@
  (locks ocannl_training_test)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_MEMORY_BUDGET)
-  (env_var OCANNL_BUFFER_ALIASING)
-  (env_var OCANNL_MODEL_DEFAULT_SCHEDULE))
+  (env_var OCANNL_BACKEND))
  (modules memory_budget_planner)
  (libraries base ocannl stdio unix arrayjit.memory_budget arrayjit.verdict)
  (preprocess
@@ -6407,20 +5636,8 @@
  (name schedule_epilogue_fusion)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The configuration Ll_test.tensorized_capability reads beside the backend: the staged leg's
-  ; census claim is gated on the advertised f32 capability (gh-ocannl-1316).
-  (env_var OCANNL_TF32_MATMULS)
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BACKEND))
  (modules schedule_epilogue_fusion)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -6430,15 +5647,8 @@
  (name schedule_partition)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BACKEND))
  (modules schedule_partition)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -6448,17 +5658,8 @@
  (name schedule_pad)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+  (env_var OCANNL_BACKEND))
  (modules schedule_pad)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -6468,15 +5669,8 @@
  (name clamped_window_pool)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BACKEND))
  (modules clamped_window_pool)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -6488,25 +5682,8 @@
  (name schedule_conv_gemm)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
-  (env_var OCANNL_TF32_MATMULS)
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+  (env_var OCANNL_BACKEND))
  (modules schedule_conv_gemm)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -6517,50 +5694,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  ; The census claims are gated on the tensorized capability (Ll_test.tensorized_capability): on a
-  ; GPU the ADVERTISED tile-MMA formats, on the C backends the register tiling's vector file. The
-  ; numerics policy is pinned in the test instead; routine logging is declared below.
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  ; Every configuration key the two modules its seeding and segmentation run through read --
-  ; schedule.ml (default presets, zero expansion, fission) and sketch_families.ml (seeding) -- so a
-  ; changed setting re-runs the test rather than serving the previous result.
-  (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
-  (env_var OCANNL_AUTOMATIC_GPU_SCHEDULE)
-  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_SCHEDULE_FISSION)
-  (env_var OCANNL_SCHEDULE_LOG_LAUNCHES)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
-  (env_var OCANNL_AUTOTUNE_REGISTER_TILE_RM_TWIN)
-  (env_var OCANNL_CC_GRID_PRIVATE_BYTES_CAP)
-  (env_var OCANNL_CC_PARALLEL_CHUNKS)
-  (env_var OCANNL_CC_PARALLEL_GRID)
-  ; And every key low_level.ml reads: its inlining and virtualization decide whether the block's
-  ; shortcut is a materialized site at all.
-  (env_var OCANNL_ENABLE_DEVICE_ONLY)
-  (env_var OCANNL_INLINE_COMPLEX_COMPUTATIONS)
-  (env_var OCANNL_INLINE_SCALAR_CONSTEXPRS)
-  (env_var OCANNL_INLINE_SIMPLE_COMPUTATIONS)
-  (env_var OCANNL_LL_IDENT_STYLE)
-  (env_var OCANNL_OUTPUT_PREC_IN_LL_FILES)
-  (env_var OCANNL_VIRTUALIZE_FOOTPRINT_MATERIALIZATION)
-  (env_var OCANNL_VIRTUALIZE_MAX_INLINE_FANIN)
-  (env_var OCANNL_VIRTUALIZE_MAX_INLINE_REDUCTION)
-  (env_var OCANNL_VIRTUALIZE_MAX_VISITS)
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+  (env_var OCANNL_BACKEND))
  (modules schedule_strided_1x1)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -6571,23 +5705,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+  (env_var OCANNL_BACKEND))
  (modules conv_detection_boundary)
  (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
@@ -6786,9 +5904,7 @@
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_MODEL_CACHE_CAPACITY)
-  (env_var OCANNL_MODEL_CACHE_BANDWIDTH))
+  (env_var OCANNL_BACKEND))
  (action
   (with-stdout-to
    %{target}
@@ -6838,10 +5954,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_FP16_ARITHMETIC)
-  (env_var OCANNL_BF16_ARITHMETIC)
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+  (env_var OCANNL_BACKEND))
  (modules sketch_family_tree)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -7011,23 +6124,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules seeding_census)
  (libraries base ocannl stdio stderr_capture arrayjit.verdict ll_test)
  (preprocess
@@ -7042,15 +6139,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules seeded_params_capabilities)
  (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
@@ -7165,7 +6254,6 @@
  (enabled_if
   (<> %{env:OCANNL_BACKEND=cc} metal))
  (deps
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules test_uniform_virtual_lane)
@@ -7191,23 +6279,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules schedule_split_reduce)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -7220,24 +6292,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules autotune_split_reduce)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -7281,16 +6336,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_TF32_MATMULS)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+  (env_var OCANNL_BACKEND))
  (modules epilogue_fusion_mma_seeds)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -7604,9 +6650,7 @@
  ; gh-ocannl-1332: the lane-mode read it refuses goes through Ir.Schedule.gpu_serial_lanes.
  (deps
   (alias runtest-env_spelling_gate)
-  ocannl_config
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_PROFILE))
+  ocannl_config)
  (action
   (with-stdout-to
    %{target}
@@ -7758,7 +6802,6 @@
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   %{dep:generated_provenance.exe})
  (action
   (setenv
@@ -7964,25 +7007,8 @@
  (name reduction_forms)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_NARROW_COMPUTE_F32)
-  (env_var OCANNL_FP16_ARITHMETIC)
-  (env_var OCANNL_BF16_ARITHMETIC)
-  (env_var OCANNL_CC_FP16_ARITHMETIC)
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  (env_var OCANNL_CC_BACKEND_ARCH_FLAGS)
-  (env_var OCANNL_CC_BACKEND_SIMD_FLAGS)
-  (env_var OCANNL_CC_BACKEND_COMPILER_COMMAND)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_VIRTUALIZE_MAX_VISITS)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_DEFAULT_PREC))
+  (env_var OCANNL_BACKEND))
  (modules reduction_forms)
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils)
  (preprocess
@@ -7992,18 +7018,8 @@
  (name schedule_contraction_nest)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_TF32_MATMULS)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+  (env_var OCANNL_BACKEND))
  (modules schedule_contraction_nest)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -8019,15 +7035,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_TF32_MATMULS)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+  (env_var OCANNL_BACKEND))
  (modules matmul_interchange)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -8044,19 +7052,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_TF32_MATMULS)
-  (env_var OCANNL_GPU_DEFAULT_SKETCH_MIN_REDUCTION)
-  (env_var OCANNL_GPU_DEFAULT_SPLIT_REDUCE_MIN_SERIAL)
-  (env_var OCANNL_GPU_DEFAULT_REDUCTION_SINK)
-  (env_var OCANNL_MODEL_CACHE_CAPACITY)
-  (env_var OCANNL_MODEL_CACHE_BANDWIDTH)
-  (env_var OCANNL_MODEL_PEAK_FLOPS)
-  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH)
-  (env_var OCANNL_MODEL_DEFAULT_PLACEMENTS)
-  (env_var OCANNL_MODEL_DEFAULT_GEOMETRY_LATTICE))
+  (env_var OCANNL_BACKEND))
  (modules seeded_default)
  (libraries base ocannl stdio unix arrayjit.verdict ll_test)
  (preprocess
@@ -8072,10 +7068,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_TF32_MATMULS))
+  (env_var OCANNL_BACKEND))
  (modules seeded_refine_blocks)
  (libraries base ocannl stdio unix arrayjit.verdict)
  (preprocess
@@ -8090,19 +7083,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_TF32_MATMULS)
-  (env_var OCANNL_GPU_DEFAULT_SKETCH_MIN_REDUCTION)
-  (env_var OCANNL_GPU_DEFAULT_SPLIT_REDUCE_MIN_SERIAL)
-  (env_var OCANNL_GPU_DEFAULT_REDUCTION_SINK)
-  (env_var OCANNL_MODEL_CACHE_CAPACITY)
-  (env_var OCANNL_MODEL_CACHE_BANDWIDTH)
-  (env_var OCANNL_MODEL_PEAK_FLOPS)
-  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH)
-  (env_var OCANNL_MODEL_DEFAULT_PLACEMENTS)
-  (env_var OCANNL_MODEL_DEFAULT_GEOMETRY_LATTICE))
+  (env_var OCANNL_BACKEND))
  (modules seeded_split_reduce)
  (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
@@ -8119,24 +7100,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_TF32_MATMULS)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules split_reduce_pair)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -8154,10 +7118,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_TF32_MATMULS))
+  (env_var OCANNL_BACKEND))
  (modules reduction_sink)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -8228,13 +7189,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE))
+  (env_var OCANNL_BACKEND))
  (modules bench_mma_writes)
  (libraries base stdio bench_harness ocannl arrayjit.verdict ll_test)
  (preprocess
@@ -9226,19 +8181,7 @@
  (name autotune_composite_playoff)
  ; ocannl-backend: cc -- Context.cpu (); the scripted ranking is backend-independent
  (package neural_nets_lib)
- (deps
-  ocannl_config
-  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
-  (env_var OCANNL_AUTOTUNE_LOG)
-  (env_var OCANNL_AUTOTUNE_PROGRESS)
-  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_WIDTH)
-  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_MARGIN)
-  (env_var OCANNL_AUTOTUNE_KEEP_FRACTION)
-  (env_var OCANNL_MODEL_PEAK_FLOPS)
-  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH)
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  (env_var OCANNL_CC_VECTOR_REGISTERS)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+ (deps ocannl_config)
  (modules autotune_composite_playoff)
  (libraries
   base
@@ -9259,18 +8202,7 @@
  (name autotune_staffed_singles)
  ; ocannl-backend: cc -- Context.cpu (); the scripted ranking is backend-independent
  (package neural_nets_lib)
- (deps
-  ocannl_config
-  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
-  (env_var OCANNL_AUTOTUNE_LOG)
-  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_WIDTH)
-  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_MARGIN)
-  (env_var OCANNL_AUTOTUNE_KEEP_FRACTION)
-  (env_var OCANNL_MODEL_PEAK_FLOPS)
-  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH)
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  (env_var OCANNL_CC_VECTOR_REGISTERS)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+ (deps ocannl_config)
  (modules autotune_staffed_singles)
  (libraries
   base
@@ -9293,17 +8225,7 @@
  (name autotune_budget)
  ; ocannl-backend: cc -- Context.cpu (); the scripted ranking is backend-independent
  (package neural_nets_lib)
- (deps
-  ocannl_config
-  (env_var OCANNL_AUTOTUNE_BUDGET_SECONDS)
-  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
-  (env_var OCANNL_AUTOTUNE_LOG)
-  (env_var OCANNL_AUTOTUNE_KEEP_FRACTION)
-  (env_var OCANNL_MODEL_PEAK_FLOPS)
-  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH)
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  (env_var OCANNL_CC_VECTOR_REGISTERS)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+ (deps ocannl_config)
  (modules autotune_budget)
  (libraries
   base
@@ -9325,14 +8247,7 @@
  (name autotune_budget_unfloored)
  ; ocannl-backend: cc -- Context.cpu (); the scripted ranking is backend-independent
  (package neural_nets_lib)
- (deps
-  ocannl_config
-  (env_var OCANNL_AUTOTUNE_BUDGET_SECONDS)
-  (env_var OCANNL_SCHEDULE_FISSION)
-  (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
-  (env_var OCANNL_AUTOTUNE_LOG)
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  (env_var OCANNL_CC_VECTOR_REGISTERS))
+ (deps ocannl_config)
  (modules autotune_budget_unfloored)
  (libraries
   base
@@ -9354,12 +8269,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
-  (env_var OCANNL_GPU_DEFAULT_SKETCH_MIN_REDUCTION)
-  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_WIDTH)
-  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_MARGIN)
-  (env_var OCANNL_AUTOTUNE_KEEP_FRACTION))
+  (env_var OCANNL_BACKEND))
  (modules autotune_staffed_fine)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -9374,18 +8284,7 @@
  (name autotune_round_expansion)
  ; ocannl-backend: cc -- Context.cpu (); the scripted ranking is backend-independent
  (package neural_nets_lib)
- (deps
-  ocannl_config
-  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
-  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_WIDTH)
-  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_MARGIN)
-  (env_var OCANNL_AUTOTUNE_ROUND_EXPANSION)
-  (env_var OCANNL_AUTOTUNE_KEEP_FRACTION)
-  (env_var OCANNL_MODEL_PEAK_FLOPS)
-  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH)
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  (env_var OCANNL_CC_VECTOR_REGISTERS)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+ (deps ocannl_config)
  (modules autotune_round_expansion)
  (libraries
   base
@@ -9417,19 +8316,8 @@
  (name online_softmax_block)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The fused backward's dK and dQ nests take lanes on a GPU backend per these keys
-  ; (gh-ocannl-1124, gh-ocannl-1167).
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BACKEND))
  (modules online_softmax_block)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -9470,27 +8358,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BUILD_FILES_PREFIX)
-  (env_var OCANNL_BACKEND)
-  ; The cc vector width this test reads, which env_var_deps derives (gh-ocannl-1320).
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  ; Its default-pipeline mirror reads every default-schedule key and the fission merge gate.
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
-  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules online_softmax_block_mma)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -9504,25 +8372,8 @@
  (name gpu_lane_reduction)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The renderer's all-reduce declines under routine logging, which these two gate.
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LOG_LEVEL)
-  ; Leg 9 reads the configured default (auto).
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules gpu_lane_reduction)
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
 
@@ -9625,23 +8476,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_TF32_MATMULS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+  (env_var OCANNL_BACKEND))
  (modules qkv_zero_init)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -9657,22 +8492,7 @@
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_TF32_MATMULS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+  (env_var OCANNL_BACKEND))
  (action
   (with-stdout-to
    %{target}
@@ -9688,17 +8508,7 @@
  ; ocannl-backend: none -- inspects simplification directly, executes no backend.
  (name fp_licences)
  (package neural_nets_lib)
- (deps
-  ocannl_config
-  (env_var OCANNL_FP_CONTRACT)
-  (env_var OCANNL_FP_FINITE_MATH)
-  (env_var OCANNL_FP_REASSOCIATE)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE))
+ (deps ocannl_config)
  (modules fp_licences)
  (libraries base ocannl unix arrayjit.verdict ll_test))
 
@@ -9745,8 +8555,7 @@
  (modules integer_power_domain)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_BUILD_FILES_PREFIX))
+  (env_var OCANNL_BACKEND))
  (libraries
   base
   ocannl
@@ -9764,8 +8573,7 @@
  (modules half_float_power)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_BUILD_FILES_PREFIX))
+  (env_var OCANNL_BACKEND))
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
 
 ; gh-ocannl-1295: the GPU packed path's own precision gate -- half and bf16 packs, fp8's
@@ -9777,8 +8585,7 @@
  (modules gpu_packed_prec)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_BUILD_FILES_PREFIX))
+  (env_var OCANNL_BACKEND))
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
 
 ; gh-ocannl-1288: Metal half unary math builtins are the f32 builtin narrowed once.
@@ -9789,8 +8596,7 @@
  (modules half_unary_math)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_BUILD_FILES_PREFIX))
+  (env_var OCANNL_BACKEND))
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
 
 ; gh-ocannl-1240: powers with a run-time exponent keep a negative base's integral powers under the
@@ -9802,8 +8608,7 @@
  (modules runtime_integer_power)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_BUILD_FILES_PREFIX))
+  (env_var OCANNL_BACKEND))
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
 
 (test
@@ -9811,9 +8616,7 @@
  (name runtime_power_fast_math_emulation)
  (package neural_nets_lib)
  (modules runtime_power_fast_math_emulation)
- (deps
-  ocannl_config
-  (env_var OCANNL_CC_BACKEND_COMPILER_COMMAND))
+ (deps ocannl_config)
  (libraries
   arrayjit.context
   arrayjit.ir
@@ -9831,9 +8634,7 @@
  (name cuda_like_builtins_emulation)
  (package neural_nets_lib)
  (modules cuda_like_builtins_emulation)
- (deps
-  ocannl_config
-  (env_var OCANNL_CC_BACKEND_COMPILER_COMMAND))
+ (deps ocannl_config)
  (libraries
   arrayjit.context
   arrayjit.ir
@@ -9905,17 +8706,8 @@
  (name schedule_mma_scope_scratch)
  (package neural_nets_lib)
  (deps
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_FP16_ARITHMETIC)
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BACKEND))
  (modules schedule_mma_scope_scratch)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -9928,14 +8720,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE))
+  (env_var OCANNL_BACKEND))
  (modules metal_threadgroup_overflow)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -9948,25 +8733,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_BUILD_FILES_PREFIX)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules fission_replay_segmentation)
  (libraries base ocannl stdio unix arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -10098,34 +8865,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_AUTOTUNE_STAFFED_SINGLES)
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
-  ; The small menu's keys, which the test states on CPU backends (Fissioned_chain.small_menu).
-  (env_var OCANNL_AUTOTUNE_KEEP_FRACTION)
-  (env_var OCANNL_MODEL_PEAK_FLOPS)
-  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH)
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  (env_var OCANNL_CC_VECTOR_REGISTERS)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX)
-  ; Whether the GPU search also seeds tensorized singles for the chain's f32 sites.
-  (env_var OCANNL_TF32_MATMULS))
+  (env_var OCANNL_BACKEND))
  (modules autotune_sketch_placements)
  (libraries
   base
@@ -10145,23 +8885,7 @@
  ; ocannl-backend: none -- hand-built IR is optimized, scheduled and scored, never linked or executed.
  (name cost_model_reuse)
  (package neural_nets_lib)
- (deps
-  ocannl_config
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+ (deps ocannl_config)
  (modules cost_model_reuse)
  (libraries base stdio ocannl arrayjit.verdict ll_test))
 
@@ -10190,15 +8914,6 @@
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_BUFFER_ALIASING)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_DEBUG_LOG_TO_STREAM_FILES)
-  (env_var OCANNL_GPU_ELIDE_COVERED_ZEROS)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PREFER_BACKEND_UNIFORMITY)
   (glob_files_rec ../../arrayjit/lib/*.ml)
   (glob_files_rec ../../tensor/*.ml)
   (glob_files_rec ../../lib/*.ml)
@@ -10226,23 +8941,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_MODEL_CACHE_CAPACITY)
-  (env_var OCANNL_MODEL_CACHE_BANDWIDTH)
-  (env_var OCANNL_MODEL_PEAK_FLOPS)
-  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH)
-  (env_var OCANNL_AUTOMATIC_GPU_SCHEDULE)
-  (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
-  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_SCHEDULE_FISSION)
-  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_GPU_ELIDE_COVERED_ZEROS))
+  (env_var OCANNL_BACKEND))
  (modules capacity_calibration)
  (libraries base ocannl arrayjit.verdict))
 
@@ -10260,13 +8959,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_TF32_MATMULS)
-  (env_var OCANNL_GPU_DEFAULT_SKETCH_MIN_REDUCTION)
-  (env_var OCANNL_GPU_DEFAULT_SPLIT_REDUCE_MIN_SERIAL)
-  (env_var OCANNL_GPU_DEFAULT_REDUCTION_SINK))
+  (env_var OCANNL_BACKEND))
  (modules autotune_seeded_seed)
  (libraries base ocannl stdio unix arrayjit.verdict ll_test scripted_search)
  (preprocess
@@ -10297,24 +8990,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_TF32_MATMULS)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules split_reduce_block_hoist)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -10326,23 +9002,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND)
-  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
-  (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
-  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
-  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
-  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
-  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
-  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_GPU_SERIAL_LANES)
-  (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_BACKEND))
  (modules scan_companion_coverage)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess

@@ -90,12 +90,9 @@
 ; writes no golden. The startup chatter needs no guard: it goes to stderr (gh-ocannl-581) and these
 ; rules capture stdout only.
 ;
-; The guard only RUNS when dune reruns the rule, and dune reruns for a variable the rule DECLARES --
-; so every key it names is an `(env_var OCANNL_<KEY>)` below, on every rule, and
-; `test/operations/env_var_deps` pairs the guard's keys with these declarations rather than trusting
-; the two lists to agree (gh-ocannl-749). Without them dune served the previous run's golden across
-; a change of the very variable the guard exists to report -- gh-ocannl-628's hole, reached from the
-; guard side. `OCANNL_PROFILE` is not among them because each rule pins it with `setenv`, which no
+; The guard only RUNS when dune reruns the rule. Every rule here lists `ocannl_ambient`, the record
+; of the ambient OCANNL environment (gh-ocannl-1149), so a change of any variable the guard reports
+; reruns them all and the guard fires. `OCANNL_PROFILE` is pinned with `setenv` besides, which no
 ; ambient value outranks: the honest option wherever it is available, a guard being the second best.
 
 (rule
@@ -105,21 +102,7 @@
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
-  ocannl_ambient
-  (env_var OCANNL_AUTOTUNE_SEARCH)
-  (env_var OCANNL_AUTOTUNE_ROUNDS)
-  (env_var OCANNL_AUTOTUNE_BEAM_WIDTH)
-  (env_var OCANNL_MODEL_DEFAULT_SCHEDULE)
-  (env_var OCANNL_TUNE_INLINE_FLIPS)
-  (env_var OCANNL_CC_BACKEND_ARCH_FLAGS)
-  (env_var OCANNL_CC_BACKEND_SIMD_FLAGS)
-  (env_var OCANNL_CC_BACKEND_FP_CONTRACT)
-  (env_var OCANNL_CC_BACKEND_FAST_MATH)
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  (env_var OCANNL_FP16_ARITHMETIC)
-  (env_var OCANNL_TF32_MATMULS)
-  (env_var OCANNL_VIRTUALIZE_MAX_VISITS)
-  (env_var OCANNL_NO_CONFIG_FILE))
+  ocannl_ambient)
  (action
   (setenv
    OCANNL_PROFILE
@@ -141,21 +124,7 @@
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
-  ocannl_ambient
-  (env_var OCANNL_AUTOTUNE_SEARCH)
-  (env_var OCANNL_AUTOTUNE_ROUNDS)
-  (env_var OCANNL_AUTOTUNE_BEAM_WIDTH)
-  (env_var OCANNL_MODEL_DEFAULT_SCHEDULE)
-  (env_var OCANNL_TUNE_INLINE_FLIPS)
-  (env_var OCANNL_CC_BACKEND_ARCH_FLAGS)
-  (env_var OCANNL_CC_BACKEND_SIMD_FLAGS)
-  (env_var OCANNL_CC_BACKEND_FP_CONTRACT)
-  (env_var OCANNL_CC_BACKEND_FAST_MATH)
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  (env_var OCANNL_FP16_ARITHMETIC)
-  (env_var OCANNL_TF32_MATMULS)
-  (env_var OCANNL_VIRTUALIZE_MAX_VISITS)
-  (env_var OCANNL_NO_CONFIG_FILE))
+  ocannl_ambient)
  (action
   (setenv
    OCANNL_PROFILE
@@ -183,21 +152,7 @@
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
-  ocannl_ambient
-  (env_var OCANNL_AUTOTUNE_SEARCH)
-  (env_var OCANNL_AUTOTUNE_ROUNDS)
-  (env_var OCANNL_AUTOTUNE_BEAM_WIDTH)
-  (env_var OCANNL_MODEL_DEFAULT_SCHEDULE)
-  (env_var OCANNL_TUNE_INLINE_FLIPS)
-  (env_var OCANNL_CC_BACKEND_ARCH_FLAGS)
-  (env_var OCANNL_CC_BACKEND_SIMD_FLAGS)
-  (env_var OCANNL_CC_BACKEND_FP_CONTRACT)
-  (env_var OCANNL_CC_BACKEND_FAST_MATH)
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  (env_var OCANNL_FP16_ARITHMETIC)
-  (env_var OCANNL_TF32_MATMULS)
-  (env_var OCANNL_VIRTUALIZE_MAX_VISITS)
-  (env_var OCANNL_NO_CONFIG_FILE))
+  ocannl_ambient)
  (action
   (setenv
    OCANNL_PROFILE
@@ -219,21 +174,7 @@
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
-  ocannl_ambient
-  (env_var OCANNL_AUTOTUNE_SEARCH)
-  (env_var OCANNL_AUTOTUNE_ROUNDS)
-  (env_var OCANNL_AUTOTUNE_BEAM_WIDTH)
-  (env_var OCANNL_MODEL_DEFAULT_SCHEDULE)
-  (env_var OCANNL_TUNE_INLINE_FLIPS)
-  (env_var OCANNL_CC_BACKEND_ARCH_FLAGS)
-  (env_var OCANNL_CC_BACKEND_SIMD_FLAGS)
-  (env_var OCANNL_CC_BACKEND_FP_CONTRACT)
-  (env_var OCANNL_CC_BACKEND_FAST_MATH)
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  (env_var OCANNL_FP16_ARITHMETIC)
-  (env_var OCANNL_TF32_MATMULS)
-  (env_var OCANNL_VIRTUALIZE_MAX_VISITS)
-  (env_var OCANNL_NO_CONFIG_FILE))
+  ocannl_ambient)
  (action
   (setenv
    OCANNL_PROFILE
@@ -260,21 +201,7 @@
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
-  ocannl_ambient
-  (env_var OCANNL_AUTOTUNE_SEARCH)
-  (env_var OCANNL_AUTOTUNE_ROUNDS)
-  (env_var OCANNL_AUTOTUNE_BEAM_WIDTH)
-  (env_var OCANNL_MODEL_DEFAULT_SCHEDULE)
-  (env_var OCANNL_TUNE_INLINE_FLIPS)
-  (env_var OCANNL_CC_BACKEND_ARCH_FLAGS)
-  (env_var OCANNL_CC_BACKEND_SIMD_FLAGS)
-  (env_var OCANNL_CC_BACKEND_FP_CONTRACT)
-  (env_var OCANNL_CC_BACKEND_FAST_MATH)
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  (env_var OCANNL_FP16_ARITHMETIC)
-  (env_var OCANNL_TF32_MATMULS)
-  (env_var OCANNL_VIRTUALIZE_MAX_VISITS)
-  (env_var OCANNL_NO_CONFIG_FILE))
+  ocannl_ambient)
  (action
   (setenv
    OCANNL_PROFILE
@@ -299,21 +226,7 @@
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
-  ocannl_ambient
-  (env_var OCANNL_AUTOTUNE_SEARCH)
-  (env_var OCANNL_AUTOTUNE_ROUNDS)
-  (env_var OCANNL_AUTOTUNE_BEAM_WIDTH)
-  (env_var OCANNL_MODEL_DEFAULT_SCHEDULE)
-  (env_var OCANNL_TUNE_INLINE_FLIPS)
-  (env_var OCANNL_CC_BACKEND_ARCH_FLAGS)
-  (env_var OCANNL_CC_BACKEND_SIMD_FLAGS)
-  (env_var OCANNL_CC_BACKEND_FP_CONTRACT)
-  (env_var OCANNL_CC_BACKEND_FAST_MATH)
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  (env_var OCANNL_FP16_ARITHMETIC)
-  (env_var OCANNL_TF32_MATMULS)
-  (env_var OCANNL_VIRTUALIZE_MAX_VISITS)
-  (env_var OCANNL_NO_CONFIG_FILE))
+  ocannl_ambient)
  (action
   (setenv
    OCANNL_PROFILE
@@ -343,21 +256,7 @@
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
-  ocannl_ambient
-  (env_var OCANNL_AUTOTUNE_SEARCH)
-  (env_var OCANNL_AUTOTUNE_ROUNDS)
-  (env_var OCANNL_AUTOTUNE_BEAM_WIDTH)
-  (env_var OCANNL_MODEL_DEFAULT_SCHEDULE)
-  (env_var OCANNL_TUNE_INLINE_FLIPS)
-  (env_var OCANNL_CC_BACKEND_ARCH_FLAGS)
-  (env_var OCANNL_CC_BACKEND_SIMD_FLAGS)
-  (env_var OCANNL_CC_BACKEND_FP_CONTRACT)
-  (env_var OCANNL_CC_BACKEND_FAST_MATH)
-  (env_var OCANNL_CC_VECTOR_BYTES)
-  (env_var OCANNL_FP16_ARITHMETIC)
-  (env_var OCANNL_TF32_MATMULS)
-  (env_var OCANNL_VIRTUALIZE_MAX_VISITS)
-  (env_var OCANNL_NO_CONFIG_FILE))
+  ocannl_ambient)
  (action
   (setenv
    OCANNL_PROFILE

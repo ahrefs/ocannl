@@ -72,8 +72,8 @@ let guard () =
 
 let () =
   (* An OCANNL variable in the ambient environment outranks this directory's config file, so it
-     would rewrite the golden -- and dune tracks no environment variable but OCANNL_BACKEND, so a
-     stale output could be reused besides (Codex P2 on PR #291). Fail with the variable's name
+     would rewrite the golden. The rules depend on `ocannl_ambient`, so a change of one reruns this
+     guard rather than reusing a stale output (gh-ocannl-1149). Fail with the variable's name
      instead of producing a mystifying diff. `profile` is exempt: the env-picked rule sets it. *)
   guard ();
   (match Utils.active_profile with
