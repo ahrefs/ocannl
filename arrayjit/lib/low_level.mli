@@ -410,6 +410,13 @@ val code_touches_tn : Tnode.t -> t -> bool
     a [Staged_compilation] callback's accesses: pair it with {!has_staged_compilation} wherever a
     "no" has to mean "never accessed". *)
 
+val touched_tns_in_order : t -> Tnode.t list
+(** The nodes {!code_touches_tn} reports, each once, in the order the code first touches them
+    (gh-ocannl-1473). A function of the code alone, independent of node uids and of any hash-table
+    traversal, so two fresh builds of one program list corresponding nodes at the same positions --
+    the order kernel parameters and local declarations are emitted in. Equally blind to
+    [Staged_compilation]. *)
+
 val has_staged_compilation : t -> bool
 (** Whether the code holds a [Staged_compilation] anywhere, scalar positions included: a callback
     whose emitted code no analysis can inspect, so it may access any node. *)

@@ -128,10 +128,10 @@ uint16_t single_to_bfloat16(float f)
 }
 
  void d_fwd(
+    unsigned short *restrict d,
     HALF_T *restrict a,
     HALF_T *restrict b,
-    unsigned short *restrict c,
-    unsigned short *restrict d) {
+    unsigned short *restrict c) {
 
   /* Local declarations and initialization. */
 

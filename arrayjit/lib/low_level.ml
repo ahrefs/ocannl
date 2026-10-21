@@ -6253,6 +6253,70 @@ and code_touches_tn tn (llc : t) =
   | Tile_mma { d = d_tn, _; a = a_tn, _; b = b_tn, _; fallback; _ } ->
       Tn.equal tn d_tn || Tn.equal tn a_tn || Tn.equal tn b_tn || code_touches_tn tn fallback
 
+(* gh-ocannl-1473: the nodes {!code_touches_tn} reports, each once, in the order the code first
+   touches them (a write before the reads of its own right-hand side). A function of the code alone
+   -- no hash-table traversal, no node identity -- so two fresh builds of one program, whose nodes
+   carry different uids, list their counterparts at the same positions. The traversal mirrors
+   [code_touches_tn] case for case: membership here is exactly that predicate. *)
+let touched_tns_in_order (llc : t) : Tn.t list =
+  let seen = Hash_set.create (module Tn) in
+  let acc = ref [] in
+  let visit tn =
+    if not (Hash_set.mem seen tn) then (
+      Hash_set.add seen tn;
+      acc := tn :: !acc)
+  in
+  let rec scalar (llsc : scalar_t) =
+    match llsc with
+    | Get (tn, _) -> visit tn
+    | Get_merge_buffer _ -> ()
+    | Get_dynamic { tn; dyn_value = v, _; _ } ->
+        visit tn;
+        scalar v
+    | Local_scope { body; _ } -> code body
+    | Get_local _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
+    | Ternop (_, (a, _), (b, _), (c, _)) ->
+        scalar a;
+        scalar b;
+        scalar c
+    | Binop (_, (a, _), (b, _)) ->
+        scalar a;
+        scalar b
+    | Unop (_, (a, _)) -> scalar a
+  and code (llc : t) =
+    match llc with
+    | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ -> ()
+    | Seq (a, b) ->
+        code a;
+        code b
+    | For_loop { body; _ } -> code body
+    | Scan_loop { carried; body; _ } ->
+        List.iter carried ~f:(fun c -> scalar c.init);
+        code body
+    | If { cond = c, _; body } ->
+        scalar c;
+        code body
+    | Zero_out tn -> visit tn
+    | Set { tn; llsc; _ } ->
+        visit tn;
+        scalar llsc
+    | Set_dynamic { tn; dyn_value = v, _; llsc; _ } ->
+        visit tn;
+        scalar v;
+        scalar llsc
+    | Set_from_vec { tn; arg = a, _; _ } ->
+        visit tn;
+        scalar a
+    | Set_local (_, llsc) -> scalar llsc
+    | Tile_mma { d = d_tn, _; a = a_tn, _; b = b_tn, _; fallback; _ } ->
+        visit d_tn;
+        visit a_tn;
+        visit b_tn;
+        code fallback
+  in
+  code llc;
+  List.rev !acc
+
 (* gh-ocannl-639: the accumulation-update statement shape [tn[idcs] = op(tn[idcs], contrib)] (or its
    FMA form) over an associative-commutative [op], with [contrib] free of [tn]. The single source of
    truth for [C_syntax]'s widened renderings (the serial-fallback nest rewrite and its siblings) and

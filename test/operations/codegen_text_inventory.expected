@@ -181,6 +181,7 @@ test/operations/fission_schedule.ml
     "gid."
 test/operations/float_literal_forms.ml
     "(float)(" ^ ... ^ ")"
+test/operations/fresh_build_kernel_text.ml [also pins text this scan cannot name: untraced callback]
 test/operations/gpu_lane_reduction.ml [also pins text this scan cannot name: computed fragment, untraced callback]
     " " ^ ... ^ " = ("
     " " ^ ... ^ " = 0;"

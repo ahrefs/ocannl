@@ -321,3 +321,71 @@ let assert_emits ?ext ~routine ~contains claim =
     fact a missing kernel establishes. *)
 let assert_omits ?ext ~routine ~contains claim =
   Verdict.p claim (not (String.is_substring (read ?ext routine) ~substring:contains))
+
+(* An identifier spelled with a number a compile mints afresh: a loop symbol ([i<digits>],
+   [Indexing.symbol_ident]), a node identifier spelling its id ([n<digits>], optionally followed by
+   [_<label>]: [Tnode.styled_ident] for an unlabeled node or one whose label repeats in the kernel),
+   or a scope-local scalar spelling its scope id ([v<digits>_<ident>]). A type or builtin whose name
+   ends in a digit ([uint3], [float4], [__half2]) is none of these shapes and stays as written. *)
+let is_minted_ident ident =
+  let numbered ~prefix =
+    match String.chop_prefix ident ~prefix with
+    | None -> None
+    | Some rest ->
+        let num = Option.value_map (String.lsplit2 rest ~on:'_') ~default:rest ~f:fst in
+        Option.some_if ((not (String.is_empty num)) && String.for_all num ~f:Char.is_digit) rest
+  in
+  (match numbered ~prefix:"i" with
+    | Some rest -> String.for_all rest ~f:Char.is_digit
+    | None -> false)
+  || Option.is_some (numbered ~prefix:"n")
+  || match numbered ~prefix:"v" with Some rest -> String.mem rest '_' | None -> false
+
+(** [normalize_minted text] is a generated source with every identifier a compile spells with a
+    freshly minted number -- loop symbols [i<digits>], node identifiers [n<digits>[_<label>]],
+    scope-local scalars [v<digits>_<ident>] -- renamed [@0], [@1], ... by first appearance, and
+    every run of whitespace collapsed to one space (a longer identifier moves the pretty-printer's
+    line breaks). Two compiles of one program differ in nothing else -- not even across fresh builds
+    of it, which mint new node ids (gh-ocannl-1473) -- so their normalized sources are equal, and a
+    difference left is one in the code. Number literals are copied whole, so a hex float's letters
+    are not read as an identifier. *)
+let normalize_minted text =
+  let names = Hashtbl.create (module String) in
+  let out = Buffer.create (String.length text) in
+  let n = String.length text in
+  let is_ident_char c = Char.is_alphanum c || Char.equal c '_' in
+  let rec scan i =
+    if i < n then
+      let c = text.[i] in
+      if Char.is_whitespace c then (
+        let j = ref i in
+        while !j < n && Char.is_whitespace text.[!j] do
+          Int.incr j
+        done;
+        Buffer.add_char out ' ';
+        scan !j)
+      else if Char.is_alpha c || Char.equal c '_' then (
+        let j = ref i in
+        while !j < n && is_ident_char text.[!j] do
+          Int.incr j
+        done;
+        let ident = String.sub text ~pos:i ~len:(!j - i) in
+        if is_minted_ident ident then
+          let fresh = Hashtbl.length names in
+          Buffer.add_string out
+            ("@" ^ Int.to_string (Hashtbl.find_or_add names ident ~default:(fun () -> fresh)))
+        else Buffer.add_string out ident;
+        scan !j)
+      else if Char.is_digit c then (
+        let j = ref i in
+        while !j < n && (is_ident_char text.[!j] || Char.equal text.[!j] '.') do
+          Int.incr j
+        done;
+        Buffer.add_string out (String.sub text ~pos:i ~len:(!j - i));
+        scan !j)
+      else (
+        Buffer.add_char out c;
+        scan (i + 1))
+  in
+  scan 0;
+  Buffer.contents out
