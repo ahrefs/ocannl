@@ -9160,3 +9160,15 @@
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1429: tools/refusal-manifest-sync.sh's engine on a synthetic manifest and scanner --
+; a rewording's row, key and label rewritten, what it does not determine left unresolved -- and its
+; text reader held to the real manifest's compiled tables.
+
+(test
+ ; ocannl-backend: none -- links no backend: it parses embedded scanner source and the manifest's text.
+ (name refusal_manifest_sync_cases)
+ (package neural_nets_lib)
+ (deps ocannl_config ../support/refusal_control_manifest.ml)
+ (modules refusal_manifest_sync_cases)
+ (libraries base stdio test_utils arrayjit.verdict))

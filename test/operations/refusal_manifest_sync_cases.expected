@@ -1,0 +1,23 @@
+a list aligned with itself pairs, drops and inserts nothing: true
+an element replaced between two kept ones pairs with its replacement: true
+two adjacent replacements pair in order: true
+a replacement beside an insertion pairs nothing: which replaced which is not determined: true
+a replacement at either end still pairs: true
+a rewording the row pairs one for one leaves nothing unresolved: true
+the rewritten row is the new extraction, in order: true
+the reworded direct failure's evidence key follows it, its unchanged sibling's stays: true
+the reworded control claim's label follows it, an unchanged claim's stays: true
+a synced manifest plans nothing more: true
+the plan names the row, the re-key and the relabel: true
+a golden's replaced markers and reworded claim rows are rewritten, and nothing else: true
+a golden holding none of them is unchanged: true
+a key whose failure was reworded beside an insertion is unresolved, not guessed: true
+a direct failure reworded into a claim leaves its key unresolved: true
+a control claim reworded into a format with substitutions leaves its label unresolved: true
+a key that answers to no current failure and no rewording is unresolved: true
+a control file's reworded claim is paired old to new, its unchanged one is not: true
+an evidence label naming a claim reworded outside the rows follows it: true
+the text reader reads the real manifest's rows as compiled: true
+and its direct-evidence entries: true
+and its catalogue-only entries: true
+every row's marker list spans a bracketed list of the manifest text: true

@@ -8,6 +8,14 @@
  (modules api_drift)
  (libraries base stdio unix test_utils))
 
+; tools/refusal-manifest-sync.sh's engine (gh-ocannl-1429): rewrites the refusal-control manifest's
+; stale rows, keys and labels from the scanners' current diagnostics.
+
+(executable
+ (name refusal_manifest_sync)
+ (modules refusal_manifest_sync)
+ (libraries base stdio unix test_utils))
+
 (executable
  (name fit_envelope)
  (modules fit_envelope)

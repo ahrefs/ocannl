@@ -62,6 +62,7 @@
   refusal_control_scan
   refused_action_scan
   refusal_control_manifest
+  refusal_manifest_sync
   optional_arg_scan
   source_inventory
   lexical_scope

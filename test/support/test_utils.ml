@@ -37,6 +37,10 @@ module Refusal_control_manifest = Refusal_control_manifest
 (** Extracting static refusal-diagnostic fragments from repository scanners and relating them to
     permanent control goldens. *)
 
+module Refusal_manifest_sync = Refusal_manifest_sync
+(** Rewriting [Refusal_control_manifest]'s stale rows, keys and labels after a diagnostic is
+    reworded: tools/refusal-manifest-sync.sh's engine (gh-ocannl-1429). *)
+
 module Optional_arg_scan = Optional_arg_scan
 (** Classifying whether [lib/] optional arguments affect their function bodies or are deliberately
     unimplemented, in which case the caller-visible label must begin with an underscore. *)
