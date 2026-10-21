@@ -208,7 +208,6 @@ let exempt_zero_reference_exports =
     "Tnode.is_alphanum_";
     "Tnode.known_not_materialized";
     "Tnode.log_accessible_headers";
-    "Tnode.next_uid";
     "Tnode.prec_of_dalayed";
     "Tnode.scan_host_bounds";
     "Tnode.transition_memory_mode";

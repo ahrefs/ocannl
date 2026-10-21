@@ -135,6 +135,49 @@ let sym_dim_extent_exn { sym; _ } =
 let solved_dim_of_sym ({ sym = _; sym_basis; sym_proj_id } as sdim) =
   { d = sym_dim_extent_exn sdim; basis = sym_basis; proj_id = sym_proj_id }
 
+(* {2 Session bookkeeping (gh-ocannl-1301)}
+
+   [mutation_serial] counts writes that a failed construction can leave behind in the inference
+   session (constraints, solver state, delayed references, role claims, precision links, root
+   changes). [Tensor.op] and the other construction entry points compare it on exit: a construction
+   that raises after the serial moved taints the session, one that raises before it does not.
+   Substituting the current environment into a shape is neutral and does not count. *)
+let mutation_serial = ref 0
+let note_mutation () = Int.incr mutation_serial
+
+(* Static-symbol roles claimed since the last closure (gh-ocannl-1301). A role ([used_as_extent] /
+   [used_as_slice]) is a flag on a caller-retained symbol, so a construction that is later discarded
+   by [Tensor.rewind_to_last_closure] must not leave it set: claims are recorded here and committed
+   to the symbol by a successful [Shape.finish_inference] (nothing reads the flags before lowering,
+   which closes first), and dropped by a rewind. The conflict checks consult both. *)
+let pending_roles : (Ir.Indexing.static_symbol * [ `Extent | `Slice ]) list ref = ref []
+
+let pending_role sym role =
+  List.exists !pending_roles ~f:(fun (s, r) ->
+      phys_equal s sym && Poly.equal (r : [ `Extent | `Slice ]) role)
+
+let is_used_as_extent sym = sym.Ir.Indexing.used_as_extent || pending_role sym `Extent
+let is_used_as_slice sym = sym.Ir.Indexing.used_as_slice || pending_role sym `Slice
+
+let claim_symbol_role sym role =
+  let committed =
+    match role with
+    | `Extent -> sym.Ir.Indexing.used_as_extent
+    | `Slice -> sym.Ir.Indexing.used_as_slice
+  in
+  if not (committed || pending_role sym role) then (
+    note_mutation ();
+    pending_roles := (sym, role) :: !pending_roles)
+
+let commit_symbol_roles () =
+  List.iter !pending_roles ~f:(fun (sym, role) ->
+      match role with
+      | `Extent -> sym.Ir.Indexing.used_as_extent <- true
+      | `Slice -> sym.Ir.Indexing.used_as_slice <- true);
+  pending_roles := []
+
+let drop_symbol_roles () = pending_roles := []
+
 (* Mint a symbolic dimension from a static-indexing symbol: a rigid constant equal only to itself
    during shape inference. Requires a declared [static_range >= 1] (checked eagerly). *)
 let get_sym_dim ?(basis = default_basis) ?proj_id sym =
@@ -152,14 +195,14 @@ let get_sym_dim ?(basis = default_basis) ?proj_id sym =
   (* The bound value of an extent symbol is a size in [0, range] (inclusive), not an index in [0,
      range): switch the symbol's bind-time validation accordingly. A slice index validates strictly,
      so a binding cannot be used as both. *)
-  if sym.Ir.Indexing.used_as_slice then
+  if is_used_as_slice sym then
     raise
     @@ Utils.User_error
          (Printf.sprintf
             "Row: static index %s already slices a batch axis and cannot also be used as a \
              symbolic dimension extent"
             (Ir.Indexing.symbol_ident sym.Ir.Indexing.static_symbol));
-  sym.Ir.Indexing.used_as_extent <- true;
+  claim_symbol_role sym `Extent;
   Sym sdim
 
 (* The reserved tags ([default], [bcast_if_1]) carry no naming claim. *)
@@ -1517,6 +1560,10 @@ let s_dim_one_in_row_constr stage v ~value constr =
     ~get_dim_val stage constr
 
 let ineqs_from_reapply_rows_constr = ref []
+
+let reset_transient () =
+  reapply_rows_constr := false;
+  ineqs_from_reapply_rows_constr := []
 
 let s_dim_one_in_row_entry stage v ~value ~key ~data =
   assert (not !reapply_rows_constr);
@@ -4631,6 +4678,24 @@ let fresh_row_proj r =
     | Concat dims -> Concat (List.map dims ~f:fresh_dim)
   in
   { r with beg_dims = List.map r.beg_dims ~f:fresh_dim; dims = List.map r.dims ~f:fresh_dim }
+
+let equal_modulo_proj (r1 : t) (r2 : t) =
+  let rec erase = function
+    | Dim d -> Dim { d with proj_id = None }
+    | Sym s -> Sym { s with sym_proj_id = None }
+    | Var _ as d -> d
+    | Affine { stride; over; conv; stride_offset } ->
+        let conv =
+          Option.map conv ~f:(fun { dilation; kernel; use_padding } ->
+              { dilation; kernel = erase kernel; use_padding })
+        in
+        Affine { stride; over = erase over; conv; stride_offset }
+    | Concat dims -> Concat (List.map dims ~f:erase)
+  in
+  let erase_row r =
+    { r with beg_dims = List.map r.beg_dims ~f:erase; dims = List.map r.dims ~f:erase }
+  in
+  equal_row (erase_row r1) (erase_row r2)
 
 let populate_dim_proj_in_solved env =
   let rec fresh_dim = function

@@ -235,6 +235,15 @@ let fresh_uid () =
   next_uid := uid + 1;
   uid
 
+(* Session hooks installed by the tensor frontend (gh-ocannl-1301), so the context API can refuse
+   work the frontend no longer stands behind without arrayjit depending on it. [session_gate] runs
+   before every compile (it raises while the frontend's inference session is inconsistent);
+   [validity_check], when installed, raises on a node the frontend discarded, and is applied to
+   every node a compiled program references and to host transfers. Direct low-level use with no
+   frontend session sees the no-op defaults. *)
+let session_gate : (unit -> unit) ref = ref (fun () -> ())
+let validity_check : (t -> unit) option ref = ref None
+
 let num_elems tn =
   let dims = Lazy.force tn.dims in
   Array.fold dims ~init:1 ~f:( * )

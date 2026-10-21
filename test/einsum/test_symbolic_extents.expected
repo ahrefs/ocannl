@@ -20,7 +20,7 @@ set_sym_dim with a different symbol: correctly raised: Cannot set symbolic dimen
 set_sym_dim with the same symbol again: OK
 set_sym_dim on an axis already solved concrete: correctly raised: Cannot set symbolic dimension for variable reference with label s: already set to a concrete dimension
 symbolic vs concrete axis: correctly raised: dimension comparison for axis: mismatch
-two distinct symbols must not unify: correctly raised: dimension comparison for axis: mismatch
+two distinct symbols must not unify: correctly raised: solved dimensions for axis: mismatch
 set_sym_dim on a row variable: correctly raised: Cannot set symbolic dimension for variable reference with label r: it is bound to a row variable (set_sym_dim does not support row variables)
 Total_elems over a symbolic dimension: correctly raised: Total_elems constraints are not supported with symbolic dimensions
 extent after slice use: correctly raised: Row: static index i32 already slices a batch axis and cannot also be used as a symbolic dimension extent

@@ -296,6 +296,38 @@ val bump_next_id : int -> unit
 val get_next_id : unit -> int
 (** [get_next_id ()] returns the next tensor ID that will be allocated by the session. *)
 
+val rewind_to_last_closure : ?reason:string -> unit -> unit
+(** Restores a usable session after a failed construction, without discarding closed or compiled
+    work (gh-ocannl-1301). A construction that fails after mutating the inference session taints it:
+    from then on, constructions, [Shape.finish_inference] (so forcing dims or projections), code
+    handout and every [Context] compile raise, naming the first failure. Rewinding discards
+    everything opened since the last successful [Shape.finish_inference] -- the failed construction
+    and every construction since that closure, successful or not -- and clears the taint:
+
+    - the solver's open state is emptied (closed shapes carry no variables, and their committed
+      rows, paddings and neutral elements cannot have changed: a write that would change them is
+      refused);
+    - the forward and backprop root maps are restored to their state at the closure, with the
+      handout markers of the restored roots reset; code handed out to callers since then stays
+      handed out;
+    - the tensors allocated since the closure are discarded: using one as an operand, handing out or
+      compiling its code, printing it or transferring its node raises [Session_error] naming the
+      rewind's provenance ("discarded by the rewind after ..."), as do their update steps'
+      projections;
+    - the cached random seed is dropped if it was created since the closure.
+
+    Counters are never reset, so later tensors never collide with discarded ones. Contexts, routines
+    and buffers are untouched, and nothing executed is undone. Without a taint it simply discards
+    the open work ([reason] names it in the stale-handle errors). Raises when called from within an
+    [op_asn]. *)
+
+val update_operand_prec : t -> Ir.Ops.prec -> unit
+(** Sets an operand's precision ahead of an operation that requires it; refused (raises
+    [Session_error]) when it would change a closed operand's precision. *)
+
+val check_not_discarded : what:string -> t -> unit
+(** Raises [Session_error] when the tensor's value or gradient node was discarded by a rewind. *)
+
 val unsafe_reinitialize : ?namespace:string -> unit -> unit
 (** Bring global state to its initialization values. This invalidates any previously defined tensors
     and tensor nodes. Also reinitializes the modules: {!Shape}, {!Ir.Tnode}.

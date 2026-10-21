@@ -79,6 +79,28 @@ val get_sym_dim : ?basis:string -> ?proj_id:int -> Ir.Indexing.static_symbol -> 
     [static_range] (raises {!Utils.User_error} otherwise): the range is the maximum extent, used to
     size allocations and projections until launch-time extent binding lands. *)
 
+(** {2 Session bookkeeping (gh-ocannl-1301)} *)
+
+val mutation_serial : int ref
+(** Counts writes a failed construction can leave behind in the inference session; see
+    [Tensor.rewind_to_last_closure]. *)
+
+val note_mutation : unit -> unit
+
+val is_used_as_extent : Ir.Indexing.static_symbol -> bool
+(** Whether the symbol's extent role is committed or claimed since the last closure. *)
+
+val is_used_as_slice : Ir.Indexing.static_symbol -> bool
+
+val claim_symbol_role : Ir.Indexing.static_symbol -> [ `Extent | `Slice ] -> unit
+(** Records a role claim; it reaches the symbol's flag at the next successful closure. *)
+
+val commit_symbol_roles : unit -> unit
+val drop_symbol_roles : unit -> unit
+
+val reset_transient : unit -> unit
+(** Clears the solver's transient work state between solver calls. *)
+
 val sym_dim_extent_exn : sym_dim -> int
 (** The maximum extent of a symbolic dimension: the declared range of its static symbol. *)
 
@@ -288,6 +310,11 @@ type proj [@@deriving compare, equal, sexp]
 type proj_env [@@deriving sexp_of]
 
 val fresh_row_proj : t -> t
+
+val equal_modulo_proj : t -> t -> bool
+(** Row equality ignoring projection ids: they are scratch metadata each projection derivation
+    re-mints ({!fresh_row_proj}), not part of a row's committed content. *)
+
 val populate_dim_proj_in_solved : environment -> environment
 
 type proj_equation =

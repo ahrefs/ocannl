@@ -34,9 +34,17 @@ files.
   at the `%op` level, not in an `op_asn`. The rejection is a BUG REPORT, not a recovery API: shape
   inference is session-global and not transactional (gh-ocannl-903 enumerates the mutables — row
   substitutions, delayed refs, `unused_shapes`, the monotonic `Row` sets, graph roots, precision
-  links), so the session is reset, and a per-mutable rollback at this seam is NOT to be grown: the
-  review loop of lukstafi/ocannl-staging#598 tried, found another mutable every round, and was
-  reverted. An operation that knows its accumulation up-front (`Tensor.raw_accum`) creates the step
+  links), so a construction that failed after mutating taints the session and
+  `Tensor.rewind_to_last_closure` discards everything open since the last closure (gh-ocannl-1301,
+  `docs/shape_inference.md` "Session consistency"); a per-mutable rollback at this seam is NOT to be
+  grown: the review loop of lukstafi/ocannl-staging#598 tried, found another mutable every round,
+  and was reverted.
+- Rewind restores the graph-root maps WHOLESALE from the closure checkpoint and resets the restored
+  roots' handout markers — a `Taken` marker does not mean "handed to a caller": `%cd` embedding
+  calls `take_forward_code` too (gh-ocannl-1301). External handouts of closed work
+  (`consume_*_code`, `discard_backprop_code`) are recorded into the checkpoint as they happen, and
+  `with_unchanged_roots` restores the checkpoint with the maps. A new write a failed construction
+  can leave behind must call `Row.note_mutation`, or a failure after it will not taint. An operation that knows its accumulation up-front (`Tensor.raw_accum`) creates the step
   directly.
 - Per-(result, reduced-position) facts in `%cd` grad code belong in a product-space intermediate
   (`*_pspace` suffix): its shape unifies with `Shape.product_space_shape` (result rows +
