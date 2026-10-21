@@ -92,3 +92,58 @@ val fit_capacity : ?dram_rate:float -> ws_point list -> capacity_fit
     mean anything. The capacity is placed at the geometric mean of the working sets either side of
     the split — the model's decision boundary, between the shapes that demonstrably sit on each side
     of it — and the cache bandwidth is the cached points' median rate. *)
+
+(** {2 Issue-rate calibration (gh-ocannl-1442)}
+
+    The ranking score prices a kernel's scalar operations at an effective issue rate
+    ([model_issue_rate], the backends' advisory [issue_rate]): what a register-blocktiled kernel
+    achieves, its operand staging included — far below the envelope's [peak_flops], which stays the
+    bound's ceiling. It is fitted the way the capacity is, on a sweep: the seeded sketch of the
+    weight-gradient contraction over reduction extents, timed, against its scalar operation count.
+*)
+
+type issue_point = {
+  ip_k : int;  (** The contraction's reduction extent. *)
+  ip_scalar_ops : int;
+      (** The contraction kernel's scalar operations ({!Ir.Cost_model.analyze}'s [flops] less the
+          tile-MMA work the backend accepts): the count the score divides by the issue rate. *)
+  ip_mma_ops : int;
+      (** Its accepted tile-MMA operations ({!Ir.Cost_model.accepted_tile_mma_flops}): 0 for the
+          scalar sketch the sweep seeds. *)
+  ip_kernels : int;  (** The routine's shipped kernels. *)
+  ip_ms : float;  (** The routine's best synced wall time over the repeats, in milliseconds. *)
+  ip_rank_ms : float option;
+      (** The contraction kernel's ranking score under the configuration in force
+          ({!Autotune.ranking_ms}). *)
+  ip_bound_ms : float option;  (** Its distinct-cell roofline lower bound. *)
+}
+(** One point of the {!issue_sweep}. *)
+
+val issue_sweep : ?m:int -> ?n:int -> ?ks:int list -> ?repeats:int -> Context.t -> issue_point list
+(** [issue_sweep ?m ?n ?ks ?repeats ctx] times the contraction [dw[o,i] = sum_k dy[k,o] * x[k,i]] —
+    [m] rows (default 512), [n] columns (default 512: deliberately not the 256 x 1024 layer the
+    calibration's validation cells time, so that predicting those is not reading the fit back) — at
+    each reduction extent of [ks] (default [256] to [32768] in powers of two), compiled through the
+    seeded default ({!Autotune.seeded_transform}) at threshold 32 with the split and the reduction
+    sink off: the one register-blocktiled kernel whose rate the score prices, whatever gate the
+    configuration picks. Raises {!Utils.User_error} where the seeded default does not apply (a
+    backend other than CUDA or HIP, scheduling or fission off) or a point did not seed — a fallback
+    is the default's kernel, never timed under the sketch's name. Inputs, timing and the kernel's
+    selection (the shipped segment with the most operations) are {!working_set}'s. *)
+
+type issue_fit =
+  | Issue_fit of {
+      rate : float;
+          (** Scalar operations per second: the slope's reciprocal, the fitted [model_issue_rate].
+          *)
+      latency_ms : float;
+          (** The fit's intercept: time not proportional to the operations (launch, ramp-up). The
+              score does not price it; it is reported so a prediction's residual can be read against
+              it. *)
+      max_residual : float;  (** The largest relative error of the fitted line over the points. *)
+      points : int;  (** The points fitted. *)
+    }
+  | Issue_unfittable of string  (** Why no line fits: too few points, or no growth. *)
+
+val fit_issue_rate : issue_point list -> issue_fit
+(** The least-squares line [time = latency + ops / rate] over the timed points with operations. *)

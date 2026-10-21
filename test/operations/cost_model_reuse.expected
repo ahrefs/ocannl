@@ -17,3 +17,17 @@ raising the cache bandwidth never raises the score, on every plan: true
 a cache bandwidth below DRAM's is read as DRAM's: true
 a 32-thread nest launched alone keeps resident / 32 of its blocks: true
 beside a 256-thread sibling, it keeps only resident / 256 (the launch block's): true
+a rate at or above its ceiling reads as the ceiling: the score is the one without it, on every leaf: true
+raising the issue rate or the DRAM rate never raises the score, on every leaf: true
+with the score's own rates, analyze's roofline under the ceilings is at most the score, on every leaf: true
+under the ceilings, some scalar blocktile ranks strictly below the untiled plan: true
+an issue rate with the ceiling's DRAM leaves no scalar blocktile strictly below the untiled plan: true
+with both rates, some scalar blocktile ranks strictly below the untiled plan: true
+every leaf's memory leg is at least its global nodes' distinct bytes, writes included, at the DRAM rate: true
+the reuse extraction lists exactly the nodes no global placement holds: true
+a staged blocktile's tiles are off the DRAM leg: its memory leg is below the same extraction charging them: true
+an all-accepted-tile-MMA kernel's compute leg does not depend on the issue rate: true
+with no accepted tile-MMA work, the compute leg is all operations at the issue rate: true
+an accepted count above the operations reads as the operations: true
+the staffed start's gate tag tells two issue rates apart: true
+the staffed start's gate tag tells two DRAM rates apart: true

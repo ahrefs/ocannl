@@ -1726,6 +1726,16 @@ end = struct
               invented one. Mixed machines take the discrete class. *)
            cache_capacity_bytes = (if all_integrated then None else Some (2 * 1024 * 1024 * 1024));
            cache_bandwidth = Some (if all_integrated then 1.7e12 else 1.3e12);
+           (* gh-ocannl-1442: the ranking score's own rates, below the envelope's ceilings, per
+              class from benchmarks/gh1253_cells.sh (2026-10-21, 46d84231): STREAM triad and the
+              seeded register-blocktiled sketch's scalar operation rate (its 512 x 512 sweep) -- 235
+              GB/s and 2.81e12 on the unified gfx1151 (minix), 261 GB/s and 1.93e12 on the discrete
+              gfx1102 (tuf). They predicted the seeded weight gradient at b8 and b256 within
+              1.14-1.35x on both; at b1, 0.69x on minix and 0.28x on tuf, whose small kernels sit on
+              an erratic 0.1-0.4 ms floor the score does not price. Mixed machines take the discrete
+              class. Override per machine with model_dram_bandwidth / model_issue_rate. *)
+           issue_rate = Some (if all_integrated then 2.8e12 else 1.9e12);
+           dram_bandwidth = Some (if all_integrated then 2.35e11 else 2.6e11);
            max_resident_threads =
              min_over (fun (a : H.Device.attributes) ->
                  a.multiprocessor_count * a.max_threads_per_multiprocessor);

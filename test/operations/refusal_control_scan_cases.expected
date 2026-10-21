@@ -266,7 +266,7 @@ digest_completeness.ml: [scanner-refusal:5e2800ca22fd1c7629755f638e39e542] is cl
 limits_field_classes.ml has exactly the explicitly assigned refusal controls: true
 limits_field_classes.ml: [scanner-refusal:6dd30560f9e032ec9afc45a6fec9ce97] every field of (claim) is catalogued beside limits_field_classes.expected: true
 limits_field_classes.ml: [scanner-refusal:280bb27b49e792a7b0d751509c083f70] every toggle here (claim) is catalogued beside limits_field_classes.expected: true
-limits_field_classes.ml: [scanner-refusal:855cf33995fa59e0a4130e1a8303841b] score's capacity residency (claim) is catalogued beside limits_field_classes.expected: true
+limits_field_classes.ml: [scanner-refusal:c352667fa4bbd3d9dda5005e39d9c102] score's capacity residency (claim) is catalogued beside limits_field_classes.expected: true
 limits_field_classes.ml: [scanner-refusal:fdcb8ce65a493ff3ca298ab6cd096a0d] Untimed field leaves (claim) is catalogued beside limits_field_classes.expected: true
 limits_field_classes.ml: [scanner-refusal:18ba6e03ce2dfd1162c3816126efe2fe] Key projection renders (claim) is catalogued beside limits_field_classes.expected: true
 limits_field_classes.ml: [scanner-refusal:0a9177a9cf5f80388c5ecb335859d27d] the binding pattern (claim) is catalogued beside limits_field_classes.expected: true

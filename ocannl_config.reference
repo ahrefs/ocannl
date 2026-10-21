@@ -1054,6 +1054,23 @@
 # Unset/empty uses the backend's value. Same readers and cache identity as model_cache_capacity.
 #model_cache_bandwidth=
 
+# gh-ocannl-1442: overrides the backend's advisory scalar issue rate (operations/s, an FMA
+# counting two) of the ranking score: the score's compute leg prices a kernel's scalar operations
+# at this rate -- the effective rate of a register-blocktiled kernel, its operand staging
+# included -- and its tile-MMA operations at model_peak_flops, which stays the bound's ceiling. Fit
+# it with `tools/calibrate_issue_rate.exe`, a reduction-extent sweep of the seeded weight-gradient
+# sketch (the slope of time over operations). Read as at most model_peak_flops. `none`: price
+# scalar work at model_peak_flops. Unset/empty uses the backend's value. Same readers and cache
+# identity as model_cache_capacity.
+#model_issue_rate=
+
+# gh-ocannl-1442: overrides the backend's advisory achieved DRAM rate (bytes/s) of the ranking
+# score: its DRAM tier and its charge for distinct bytes, where model_peak_memory_bandwidth stays
+# the bound's class ceiling. Fit it with `tools/calibrate_bandwidth.exe` (the STREAM pass). Read as
+# at most model_peak_memory_bandwidth. `none`: price DRAM traffic at model_peak_memory_bandwidth.
+# Unset/empty uses the backend's value. Same readers and cache identity as model_cache_capacity.
+#model_dram_bandwidth=
+
 # If true, stdout capturing is disabled, so some logs meant for the ppx_minidebug log files
 # (in particular CUDA logs) remain on the stdout.
 #

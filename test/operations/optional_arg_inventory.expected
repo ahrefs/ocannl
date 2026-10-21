@@ -2,6 +2,10 @@ Optional arguments accepted by lib/ entry points. `implemented` means the bound 
 non-discard use; `unimplemented` must therefore be visible to callers as an underscore label.
 
   lib/calibrate.ml:fit_capacity ?dram_rate -- implemented
+  lib/calibrate.ml:issue_sweep ?ks -- implemented
+  lib/calibrate.ml:issue_sweep ?m -- implemented
+  lib/calibrate.ml:issue_sweep ?n -- implemented
+  lib/calibrate.ml:issue_sweep ?repeats -- implemented
   lib/calibrate.ml:stream ?elems -- implemented
   lib/calibrate.ml:stream ?repeats -- implemented
   lib/calibrate.ml:working_set ?ks -- implemented

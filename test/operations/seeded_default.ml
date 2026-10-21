@@ -147,10 +147,14 @@ let () =
   in
   let _, r32 = seeded ~min_reduction:32 in
   let (w_auto, b_auto), r_auto =
-    seeded_gated (Autotune.Ranked { capacity = Some 0; cache_rate = None })
+    seeded_gated
+      (Autotune.Ranked
+         { capacity = Some 0; cache_rate = None; scalar_rate = None; dram_rate = None })
   in
   let _, r_auto_cached =
-    seeded_gated (Autotune.Ranked { capacity = Some Int.max_value; cache_rate = None })
+    seeded_gated
+      (Autotune.Ranked
+         { capacity = Some Int.max_value; cache_rate = None; scalar_rate = None; dram_rate = None })
   in
   List.iter (census r_auto) ~f:(fun (at, label) ->
       Stdio.eprintf "auto seeded: unit %d %s (not part of the golden)\n" at label);

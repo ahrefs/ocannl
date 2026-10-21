@@ -1,6 +1,6 @@
 #!/bin/bash
 # gh-ocannl-1253 stage-2 measurement driver: does the `auto` seeding gate seed the same segments as
-# threshold 32 on gpt2_mini_train, or do better? Per fixture (b8, b256) and gate (32, auto), the
+# threshold 32 on gpt2_mini_train, or do better? Per fixture (b8, b256, b1_s128) and gate (32, auto), the
 # untuned training step of bench_gpt, in ABBA order (32, auto, auto, 32), reporting the seeding
 # census the untuned compile logs and the step time.
 #
@@ -17,7 +17,7 @@
 #              compile (the cost tune repeats on a trajectory-matched warm hit), and the census (the
 #              seeded segments and their geometries).
 #   CAP        wall cap in seconds per cell (default 1800).
-#   FIXTURE_DIR (environment) where gpt2_mini_train{,_b256}.safetensors are read from (default
+#   FIXTURE_DIR (environment) where gpt2_mini_train{,_b256,_b1_s128}.safetensors are read from (default
 #              this box's main checkout store, ~/ocannl-staging/benchmarks/fixtures: a fresh
 #              worktree holds only DIGESTS.txt).
 #
@@ -47,7 +47,9 @@ cuda | hip) ;;
 esac
 root=$(cd "$(dirname "$0")/.." && pwd)
 fixture_dir=${FIXTURE_DIR:-$HOME/ocannl-staging/benchmarks/fixtures}
-fixtures=(gpt2_mini_train gpt2_mini_train_b256)
+# gh-ocannl-1442 adds the batch-1 fixture, where the ranked gate's small contractions sit;
+# FIXTURES (environment, space-separated) narrows or reorders the set.
+read -r -a fixtures <<<"${FIXTURES:-gpt2_mini_train gpt2_mini_train_b256 gpt2_mini_train_b1_s128}"
 box_gate gh1253flip "$fixture_dir" "${fixtures[@]}"
 
 if [[ -e "$out" ]] && [[ -n "$(ls -A "$out" 2>/dev/null)" ]]; then

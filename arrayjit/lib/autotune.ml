@@ -2405,6 +2405,33 @@ let cache_bandwidth_override =
                   ("Autotune: ocannl_model_cache_bandwidth should be a positive rate in bytes/s, \
                     or none; found: " ^ raw)))
 
+(* gh-ocannl-1442: the ranking score's own rates -- config [model_issue_rate] (operations/s) and
+   [model_dram_bandwidth] (bytes/s), each [none]: priced at the envelope's ceiling -- beat the
+   backend's advisory [issue_rate] / [dram_bandwidth]. Same readers and class as the two above. *)
+let parse_rate ~key ~what raw =
+  let raw = String.strip raw in
+  match String.lowercase raw with
+  | "" -> `Advisory
+  | "none" -> `Off
+  | _ -> (
+      match Float.of_string raw with
+      | f when Float.is_finite f && Float.(f > 0.) -> `Value f
+      | _ | (exception _) ->
+          raise
+          @@ Utils.User_error
+               (Printf.sprintf "Autotune: ocannl_%s should be a positive %s, or none; found: %s" key
+                  what raw))
+
+let issue_rate_override =
+  lazy
+    (parse_rate ~key:"model_issue_rate" ~what:"rate in operations/s"
+       (Utils.get_global_arg ~arg_name:"model_issue_rate" ~default:""))
+
+let dram_bandwidth_override =
+  lazy
+    (parse_rate ~key:"model_dram_bandwidth" ~what:"rate in bytes/s"
+       (Utils.get_global_arg ~arg_name:"model_dram_bandwidth" ~default:""))
+
 let resolve override advisory =
   match Lazy.force override with `Advisory -> advisory | `Off -> None | `Value v -> Some v
 
@@ -2416,13 +2443,21 @@ let ranking_cache_bandwidth ~limits =
   let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
   resolve cache_bandwidth_override u.cache_rate
 
+let ranking_issue_rate ~limits =
+  let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
+  resolve issue_rate_override u.scalar_rate
+
+let ranking_dram_bandwidth ~limits =
+  let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
+  resolve dram_bandwidth_override u.dram_rate
+
 type kernel_legs = { kl_compute : float option; kl_memory : float option; kl_spilled : bool }
 
 (* Per kernel, the ranking score's two legs and whether its working set left the cache, beside the
    candidate's roofline lower bound ([summaries_roofline]'s). [None] exactly where
    [summaries_roofline] is. *)
-let segments_legs ?capacity ?cache_bandwidth ~peak_flops ~peak_memory_bandwidth ~limits
-    (segs : LL.optimized list) : (float * kernel_legs list) option =
+let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth ~peak_flops
+    ~peak_memory_bandwidth ~limits (segs : LL.optimized list) : (float * kernel_legs list) option =
   (* Each reading only where no explicit value replaces it: a caller's gate isolates the score from
      the configuration it overrides, a malformed override of it included. *)
   let max_resident_threads = (Ir.Backend_intf.untimed_limits limits).resident_threads in
@@ -2431,6 +2466,10 @@ let segments_legs ?capacity ?cache_bandwidth ~peak_flops ~peak_memory_bandwidth 
   in
   let cache_bandwidth =
     match cache_bandwidth with Some cb -> cb | None -> ranking_cache_bandwidth ~limits
+  in
+  let issue_rate = match issue_rate with Some r -> r | None -> ranking_issue_rate ~limits in
+  let dram_bandwidth =
+    match dram_bandwidth with Some r -> r | None -> ranking_dram_bandwidth ~limits
   in
   let summaries = List.map segs ~f:(fun o -> (o, CM.analyze o.LL.llc)) in
   match summaries_roofline ~peak_flops ~peak_memory_bandwidth (List.map summaries ~f:snd) with
@@ -2447,8 +2486,16 @@ let segments_legs ?capacity ?cache_bandwidth ~peak_flops ~peak_memory_bandwidth 
                       (CM.reuse_traffic ?max_resident_threads ~is_global:(CM.global_in o) o.LL.llc)
               in
               let kl_compute, kl_memory =
+                (* gh-ocannl-1442: tile-MMA work runs on the matrix units only where the backend's
+                   own hook accepts it; without the capabilities to ask, all of it is priced as
+                   scalar work. *)
+                let mma_flops =
+                  Option.value_map capabilities ~default:0
+                    ~f:(fun (c : Ir.Backend_intf.codegen_capabilities) ->
+                      CM.accepted_tile_mma_flops ~operand_accepts:c.mma_accepts o)
+                in
                 CM.ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes
-                  ?cache_bandwidth s reuse
+                  ?cache_bandwidth ?issue_rate ?dram_bandwidth ~mma_flops s reuse
               in
               {
                 kl_compute;
@@ -2467,17 +2514,27 @@ let kernel_rank { kl_compute; kl_memory; _ } =
    {!Ir.Cost_model.ranking_seconds_of}' contract. [None] exactly where [summaries_roofline] is. Read
    by the untimed choosers only — [model_default], [model_explain] and the [auto] seeding gate. An
    explicit [capacity] / [cache_bandwidth] (the gate's own, or a test's) overrides the readings. *)
-let segments_ranking ?capacity ?cache_bandwidth ~peak_flops ~peak_memory_bandwidth ~limits
-    (segs : LL.optimized list) : (float * float) option =
+let segments_ranking ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth
+    ~peak_flops ~peak_memory_bandwidth ~limits (segs : LL.optimized list) : (float * float) option =
   Option.map
-    (segments_legs ?capacity ?cache_bandwidth ~peak_flops ~peak_memory_bandwidth ~limits segs)
-    ~f:(fun (bound, legs) ->
+    (segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth ~peak_flops
+       ~peak_memory_bandwidth ~limits segs) ~f:(fun (bound, legs) ->
       (List.fold legs ~init:0. ~f:(fun acc l -> acc +. kernel_rank l), bound))
 
-let ranking_ms ~limits segs =
+let ranking_ms ?capabilities ~limits segs =
   let peak_flops, peak_memory_bandwidth = envelope ~limits in
-  Option.map (segments_ranking ~peak_flops ~peak_memory_bandwidth ~limits segs)
+  Option.map (segments_ranking ?capabilities ~peak_flops ~peak_memory_bandwidth ~limits segs)
     ~f:(fun (rank, bound) -> (rank *. 1e3, bound *. 1e3))
+
+let ranking_legs_ms ?capabilities ~limits segs =
+  let peak_flops, peak_memory_bandwidth = envelope ~limits in
+  Option.map (segments_legs ?capabilities ~peak_flops ~peak_memory_bandwidth ~limits segs)
+    ~f:(fun (_, legs) ->
+      let sum f =
+        List.fold legs ~init:(Some 0.) ~f:(fun acc l ->
+            Option.map2 acc (f l) ~f:(fun a b -> a +. (b *. 1e3)))
+      in
+      (sum (fun l -> l.kl_compute), sum (fun l -> l.kl_memory)))
 
 let model_score ~static_indices ~limits (opt : LL.optimized) (sched : Sched.schedule) : float option
     =
@@ -4446,7 +4503,12 @@ let seeded_default_backend backend =
 
 type seed_gate =
   | Min_reduction of int
-  | Ranked of { capacity : int option; cache_rate : float option }
+  | Ranked of {
+      capacity : int option;
+      cache_rate : float option;
+      scalar_rate : float option;
+      dram_rate : float option;
+    }
 
 (* The threshold [auto] falls back to where the device publishes no capacity (gh-ocannl-1253):
    gh-ocannl-1324's measured value. *)
@@ -4473,7 +4535,14 @@ let seeded_default_gate ~limits =
       in
       match (fst (ranking_capacity ~limits), ranking_cache_bandwidth ~limits) with
       | None, None when not explicit -> Min_reduction seed_gate_fallback
-      | capacity, cache_rate -> Ranked { capacity; cache_rate })
+      | capacity, cache_rate ->
+          Ranked
+            {
+              capacity;
+              cache_rate;
+              scalar_rate = ranking_issue_rate ~limits;
+              dram_rate = ranking_dram_bandwidth ~limits;
+            })
 
 (* The seeded geometries in preference order: the largest block tile first, for its operand reuse,
    then the 4x4 register tile at a smaller block, then the 2x2 register tiles, which put four times
@@ -4773,15 +4842,16 @@ let seeded_split ~backend ~min_serial ~static_indices (opt : LL.optimized) =
    preset's, on the segment alone, under the gate's capacity and cache bandwidth. Either failing to
    build, to apply or to score keeps the preset. Only a typed refusal fails: any other exception is
    a builder or transform bug and propagates (gh-ocannl-1390). *)
-let seeded_ranker ~limits ~accum_prec ~static_indices ~capacity ~cache_bandwidth p pre =
+let seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices ~capacity ~cache_bandwidth
+    ~issue_rate ~dram_bandwidth p pre =
   let peak_flops, peak_memory_bandwidth = envelope ~limits in
   let rank sched =
     match Sched.apply_classified ~static_indices (sched ()) (scratch_of pre) with
     | exception Outcome.Cause_at _ -> None
     | post ->
         Option.map
-          (segments_ranking ~capacity ~cache_bandwidth ~peak_flops ~peak_memory_bandwidth ~limits
-             [ post ])
+          (segments_ranking ~capabilities ~capacity ~cache_bandwidth ~issue_rate ~dram_bandwidth
+             ~peak_flops ~peak_memory_bandwidth ~limits [ post ])
           ~f:fst
   in
   match
@@ -4806,9 +4876,12 @@ let seeded_segment_judgment ~capabilities ~limits ~accum_prec ~static_indices ~g
         Error "sketch seeding is off (gpu_default_sketch_min_reduction=0)"
     | Min_reduction min_reduction ->
         seeded_params_judged ~capabilities ~limits ~accum_prec ~min_reduction pre
-    | Ranked { capacity; cache_rate } -> (
+    | Ranked { capacity; cache_rate; scalar_rate; dram_rate } -> (
         match seeded_params_judged ~capabilities ~limits ~accum_prec ~min_reduction:1 pre with
-        | Ok p when ranked_below ~capacity ~cache_bandwidth:cache_rate p pre -> Ok p
+        | Ok p
+          when ranked_below ~capacity ~cache_bandwidth:cache_rate ~issue_rate:scalar_rate
+                 ~dram_bandwidth:dram_rate p pre ->
+            Ok p
         | Ok p ->
             Error
               (sketch_params_label p
@@ -5014,7 +5087,7 @@ let seeded_plan ?min_reduction ?seed_gate ?min_serial ?reduction_sink
       (* Hermetic, prelude included: deriving the plan must leave the caller's lowering as it
          was. *)
       let opt, split = seeded_split ~backend ~min_serial ~static_indices (scratch_of opt) in
-      let ranked_below = seeded_ranker ~limits ~accum_prec ~static_indices in
+      let ranked_below = seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices in
       match
         seeded_plan_on ~capabilities ~limits ~accum_prec ~static_indices ~gate ~ranked_below
           ~sink_enabled ~split opt
@@ -5024,10 +5097,14 @@ let seeded_plan ?min_reduction ?seed_gate ?min_serial ?reduction_sink
           let gate_tag =
             match gate with
             | Min_reduction n -> Printf.sprintf "min_reduction=%d" n
-            | Ranked { capacity; cache_rate } ->
-                Printf.sprintf "ranked capacity=%s cache_rate=%s"
+            | Ranked { capacity; cache_rate; scalar_rate; dram_rate } ->
+                (* Every reading the per-segment decisions rest on (gh-ocannl-1442): the staffed
+                   start re-decides on the search's own segments, which the plan digest does not
+                   cover. *)
+                let rate = Option.value_map ~default:"none" ~f:Float.to_string in
+                Printf.sprintf "ranked capacity=%s cache_rate=%s scalar_rate=%s dram_rate=%s"
                   (Option.value_map capacity ~default:"none" ~f:Int.to_string)
-                  (Option.value_map cache_rate ~default:"none" ~f:Float.to_string)
+                  (rate cache_rate) (rate scalar_rate) (rate dram_rate)
           in
           Some
             {
@@ -5054,7 +5131,7 @@ let seeded_apply ?(on_choice = fun (_ : seeded_choice) -> ()) ~capabilities ~bac
     (seeded_plan_choice { sp_split = split; sp_segments = None; sp_refined = 0; sp_start = None });
   let plan =
     seeded_plan_on ~capabilities ~limits ~accum_prec ~static_indices ~gate
-      ~ranked_below:(seeded_ranker ~limits ~accum_prec ~static_indices)
+      ~ranked_below:(seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices)
       ~sink_enabled ~split opt
   in
   (* gh-ocannl-1253: the derivation [tune] repeats (as [seeded_plan]) on a trajectory-matched warm
@@ -5189,7 +5266,11 @@ let model_default ?name ?report ctx comp bindings =
        below stays [completion_floor]'s roofline: the ranking score is never below [analyze]'s, so
        it is never below the bound, and fathoming stays sound. *)
     let score opts =
-      match segments_ranking ~peak_flops ~peak_memory_bandwidth ~limits opts with
+      match
+        segments_ranking
+          ~capabilities:(Context.codegen_capabilities ctx)
+          ~peak_flops ~peak_memory_bandwidth ~limits opts
+      with
       | Some (rank, _bound) ->
           Int.incr n_scored;
           Some rank
@@ -5694,7 +5775,7 @@ let model_explain ?name ctx comp bindings =
     let ex_operand_loads =
       CM.combine_load_counts (List.map segs ~f:(model_operand_loads ~capabilities:caps))
     in
-    match segments_legs ~peak_flops ~peak_memory_bandwidth ~limits segs with
+    match segments_legs ~capabilities:caps ~peak_flops ~peak_memory_bandwidth ~limits segs with
     | None ->
         {
           ex_floor_ms = None;

@@ -1,0 +1,7 @@
+an exact line fits its rate and intercept: true
+points without operations are not fitted: true
+a time that does not grow with the operations fits nothing: true
+one operation count fits nothing: true
+on CUDA/HIP every swept extent is timed, seeded as one scalar kernel's contraction: true
+on CUDA/HIP the kernel's operations grow with the reduction extent: true
+where the seeded default does not apply, the sweep refuses rather than time the default: true

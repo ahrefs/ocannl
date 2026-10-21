@@ -1675,13 +1675,37 @@ val ranking_cache_bandwidth : limits:Ir.Backend_intf.hardware_limits -> float op
     turns it off) over the backend's advisory [cache_bandwidth]. An [Untimed] reading, like
     {!ranking_capacity}. *)
 
+val ranking_issue_rate : limits:Ir.Backend_intf.hardware_limits -> float option
+(** The ranking score's scalar issue rate, in operations/s (gh-ocannl-1442): config
+    [model_issue_rate] ([none]: scalar work priced at the envelope's [peak_flops]) over the
+    backend's advisory [issue_rate]. An [Untimed] reading, like {!ranking_capacity}. *)
+
+val ranking_dram_bandwidth : limits:Ir.Backend_intf.hardware_limits -> float option
+(** The ranking score's achieved DRAM rate, in bytes/s (gh-ocannl-1442): config
+    [model_dram_bandwidth] ([none]: DRAM traffic priced at the envelope's [peak_memory_bandwidth])
+    over the backend's advisory [dram_bandwidth]. An [Untimed] reading, like {!ranking_capacity}. *)
+
 val ranking_ms :
-  limits:Ir.Backend_intf.hardware_limits -> Ir.Low_level.optimized list -> (float * float) option
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  Ir.Low_level.optimized list ->
+  (float * float) option
 (** [(rank, bound)] in milliseconds for scheduled kernels run in sequence: the ranking score
     {!model_default} minimizes and {!model_score}'s roofline lower bound, under {!envelope_legs}'
-    constants and {!ranking_capacity}. [None] without model coverage. For reports
-    ([benchmarks/runners/ocannl/bench_wgrad.ml], [tools/calibrate_cache_capacity.exe]): a ranking
-    score, not a runtime prediction. *)
+    constants and {!ranking_capacity}, pricing at the matrix units' rate only the tile-MMA work
+    [capabilities]' hook accepts (none without them, gh-ocannl-1442). [None] without model coverage.
+    For reports ([benchmarks/runners/ocannl/bench_wgrad.ml], [tools/calibrate_cache_capacity.exe]):
+    a ranking score, not a runtime prediction. *)
+
+val ranking_legs_ms :
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  Ir.Low_level.optimized list ->
+  (float option * float option) option
+(** The ranking score's [(compute, memory)] legs in milliseconds, each summed over the kernels
+    ({!Ir.Cost_model.ranking_legs_of}; [None] for a leg whose envelope constant is absent), under
+    the same readings as {!ranking_ms} — the issue and DRAM rates included (gh-ocannl-1442). [None]
+    where {!ranking_ms} is. For reports. *)
 
 val model_prefilter : keep_fraction:float -> ('a * float option) list -> ('a * float option) list
 (** The order-preserving pre-filter over model-scored candidates: keeps every unscored ([None])
@@ -2178,13 +2202,20 @@ type seed_gate =
   | Min_reduction of int
       (** gh-ocannl-1324's threshold: a site whose {!site_reduction_extent} is at least this; [0]
           disables the seeding. *)
-  | Ranked of { capacity : int option; cache_rate : float option }
+  | Ranked of {
+      capacity : int option;
+      cache_rate : float option;
+      scalar_rate : float option;
+      dram_rate : float option;
+    }
       (** The [auto] gate: a segment whose {!seeded_params} sketch the ranking score
           ({!Ir.Cost_model.ranking_seconds}) puts strictly below the default preset of the same
           segment, scored alone with this cache capacity (bytes; [None]: no DRAM tier) and cache
-          bandwidth (bytes/s; [None]: re-reads within capacity uncharged) — so it seeds exactly
-          where the cross-block re-reads the sketch removes are priced. The geometry and the
-          numerics-preserving candidate set are {!seeded_params}' either way. *)
+          bandwidth (bytes/s; [None]: re-reads within capacity uncharged), and the score's own
+          scalar issue rate and DRAM rate ({!ranking_issue_rate}, {!ranking_dram_bandwidth}; [None]:
+          the envelope's ceilings, gh-ocannl-1442) — so it seeds exactly where the cross-block
+          re-reads the sketch removes are priced. The geometry and the numerics-preserving candidate
+          set are {!seeded_params}' either way. *)
 
 val seeded_default_gate : limits:Ir.Backend_intf.hardware_limits -> seed_gate
 (** Config [gpu_default_sketch_min_reduction]: an integer is [Min_reduction]; [auto] is [Ranked]

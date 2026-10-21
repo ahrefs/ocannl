@@ -86,6 +86,14 @@ let reached_unread_exemptions =
     ( "model_cache_bandwidth",
       "read by the seeded plan's auto gate, which tune seeds first; the plan it resolves to joins \
        the identity as its digest (gh-ocannl-1253)" );
+    ( "model_issue_rate",
+      "read by the seeded plan's auto gate, which tune seeds first; the plan it resolves to joins \
+       the identity as its digest, and the staffed start's gate tag carries the rate \
+       (gh-ocannl-1442)" );
+    ( "model_dram_bandwidth",
+      "read by the seeded plan's auto gate, which tune seeds first; the plan it resolves to joins \
+       the identity as its digest, and the staffed start's gate tag carries the rate \
+       (gh-ocannl-1442)" );
   ]
 
 let class_name : Utils.config_key_class -> string = function

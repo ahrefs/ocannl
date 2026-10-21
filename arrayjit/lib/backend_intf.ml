@@ -336,6 +336,23 @@ type hardware_limits = {
           ([tools/calibrate_cache_capacity.exe]). Overridable by config [model_cache_bandwidth];
           [None] where unmeasured, which leaves re-reads within capacity uncharged. Same readers and
           same cache identity as {!field-cache_capacity_bytes}. *)
+  issue_rate : float option; [@sexp.option]
+      (** [Untimed]: the effective scalar operation rate, in operations/s ([summary.flops]' units,
+          an FMA counting two), of a register-blocktiled kernel, its operand staging included — the
+          ranking score's compute leg for scalar work (gh-ocannl-1442,
+          {!Ir.Cost_model.ranking_seconds}), where {!field-peak_flops} stays the bound's ceiling and
+          keeps pricing [Tile_mma] work. The slope of [tools/calibrate_issue_rate.exe]'s sweep of
+          the seeded weight-gradient sketch. Read as at most {!field-peak_flops}. Overridable by
+          config [model_issue_rate]; [None] where unmeasured, which prices scalar work at
+          {!field-peak_flops} as before. Same readers and same cache identity as
+          {!field-cache_capacity_bytes}. *)
+  dram_bandwidth : float option; [@sexp.option]
+      (** [Untimed]: the DRAM rate kernels achieve, in bytes/s — the ranking score's DRAM tier and
+          distinct-byte charge (gh-ocannl-1442), where {!field-peak_memory_bandwidth} stays the
+          bound's class ceiling. The STREAM fit of [tools/calibrate_bandwidth.exe]. Read as at most
+          {!field-peak_memory_bandwidth}. Overridable by config [model_dram_bandwidth]; [None] where
+          unmeasured, which prices DRAM traffic at {!field-peak_memory_bandwidth} as before. Same
+          readers and same cache identity as {!field-cache_capacity_bytes}. *)
   native_fp16_arithmetic : bool;
       (** Whether 16-bit float arithmetic executes natively at twice f32's lane count
           (gh-ocannl-516: ARMv8.2-FP16, AVX512-FP16). [false] covers both "no [_Float16] on this
@@ -735,6 +752,8 @@ let no_hardware_limits =
     cache_capacity_bytes = None;
     max_resident_threads = None;
     cache_bandwidth = None;
+    issue_rate = None;
+    dram_bandwidth = None;
     native_fp16_arithmetic = false;
     simdgroup_width = None;
     lane_scalar_recompute_cheap = false;
@@ -809,6 +828,8 @@ let limits_key
        cache_capacity_bytes = _;
        max_resident_threads = _;
        cache_bandwidth = _;
+       issue_rate = _;
+       dram_bandwidth = _;
        native_fp16_arithmetic;
        simdgroup_width;
        lane_scalar_recompute_cheap;
@@ -842,6 +863,8 @@ type untimed_limits = {
   cache_capacity : int option;
   resident_threads : int option;
   cache_rate : float option;
+  scalar_rate : float option;  (** {!field-hardware_limits.issue_rate}. *)
+  dram_rate : float option;  (** {!field-hardware_limits.dram_bandwidth}. *)
 }
 (** The [Untimed] fields' readings, the one accessor their readers go through
     ([test/operations/limits_field_classes] refuses a direct read elsewhere). *)
@@ -851,6 +874,8 @@ let untimed_limits (l : hardware_limits) : untimed_limits =
     cache_capacity = l.cache_capacity_bytes;
     resident_threads = l.max_resident_threads;
     cache_rate = l.cache_bandwidth;
+    scalar_rate = l.issue_rate;
+    dram_rate = l.dram_bandwidth;
   }
 
 (** A base for [{ minimal_mma_capability with ... }] literals, so adding a field to

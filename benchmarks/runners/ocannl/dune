@@ -60,6 +60,7 @@
   bench_conv_diag
   bench_min_repro
   bench_wgrad
+  bench_rank_site
   bench_pad_waste)
  (modules
   bench_mlp
@@ -69,6 +70,7 @@
   bench_conv_diag
   bench_min_repro
   bench_wgrad
+  bench_rank_site
   bench_pad_waste)
  (libraries
   base
