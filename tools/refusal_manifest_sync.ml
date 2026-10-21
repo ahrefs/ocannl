@@ -20,7 +20,9 @@ let git args =
 
 let diagnostics_of source =
   let path = Stdlib.Filename.concat operations source in
-  Option.some_if (Stdlib.Sys.file_exists path) (Scan.diagnostics (In_channel.read_all path))
+  (* Read only when present: a row whose source is gone is the plan's UNRESOLVED item, not a
+     crash. *)
+  if Stdlib.Sys.file_exists path then Some (Scan.diagnostics (In_channel.read_all path)) else None
 
 (* The control claims reworded since [base] in the test sources the working tree changed. A source
    that does not parse on either side contributes nothing: the scans report it, not this. *)
