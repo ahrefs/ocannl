@@ -323,8 +323,8 @@ let refuse detail =
    since gh-ocannl-639: the accumulation mints of [Unroll ~materialize:true] and [Partition] wrap
    segment/inner loops in the accumulator's scope, and those loops must stay addressable by
    subsequent left-to-right schedule operations ([Schedule.partition] returns the segment symbols
-   precisely so callers can target them). Annotated loops inside scopes are still rejected
-   downstream by [validate_parallel], loudly. *)
+   precisely so callers can target them). An op that annotates such a loop with a hardware type is
+   refused by the scope grammar {!apply_opt_op} checks (gh-ocannl-1467). *)
 let rewrite_loop ~what ~sym ~(f : floop -> Low_level.t) (llc : Low_level.t) : Low_level.t =
   let open Low_level in
   let found = ref false in
@@ -2394,11 +2394,13 @@ type loop_origin =
    ([Privatize] judges its tile width there, gh-ocannl-1151), the wide tiles its [Privatize]s minted
    (re-checked after the ops), and the origin of each loop its [Split]s, [Split_reduce]s (the pass-1
    pair), [Coalesce]s and [Partition]s minted ([Unroll] and [Pad] mint no binder). A loop minted by
-   any other op has no record. *)
+   any other op has no record. [privatized] holds every [(target, tile)] its [Privatize]s minted, at
+   any width: each later op is checked against their per-thread lifetimes (gh-ocannl-1467). *)
 type application = {
   entry : Low_level.t;
   entry_loops : Affine.Loop_ranges.t Lazy.t;
   wide_tiles : (Tn.t * Tn.t) list ref;
+  privatized : (Tn.t * Tn.t) list ref;
   minted_origins : loop_origin Map.M(Indexing.Symbol).t ref;
 }
 
@@ -2407,6 +2409,7 @@ let start_application entry =
     entry;
     entry_loops = lazy (Low_level.loop_ranges entry);
     wide_tiles = ref [];
+    privatized = ref [];
     minted_origins = ref (Map.empty (module Indexing.Symbol));
   }
 
@@ -2884,6 +2887,7 @@ let apply_privatize ~app ~target ~over ~acc_prec (opt : Low_level.optimized) : L
         (Site "176:tensorize-acc-tile");
       ignore (get_node opt.traced_store tile : traced_array);
       if wide then app.wide_tiles := (target, tile) :: !(app.wide_tiles);
+      app.privatized := (target, tile) :: !(app.privatized);
       let tile_read_idcs =
         if scalar_acc then [| Indexing.Fixed_idx 0 |]
         else
@@ -4780,7 +4784,9 @@ let apply_fold_mma ~query ~lane ~block ~width (opt : Low_level.optimized) : Low_
   let llc = rewrite_loop ~what:"Schedule.Fold_mma" ~sym:outer opt.llc ~f:(fun _ -> nest) in
   { opt with llc; workgroup_shared = Set.add (Set.add opt.workgroup_shared s2) u2 }
 
-let apply_opt_op ~app (opt : Low_level.optimized) (op : optop) : Low_level.optimized =
+(* The op's own transform, unchecked: {!apply_opt_op} below adds the checks of the program it left.
+   [scope_verdict] probes through this form, to judge the program itself. *)
+let apply_opt_op_unchecked ~app (opt : Low_level.optimized) (op : optop) : Low_level.optimized =
   match op with
   | Stage
       {
@@ -4828,6 +4834,134 @@ let apply_opt_op ~app (opt : Low_level.optimized) (op : optop) : Low_level.optim
       { opt with llc }
   | (Swap _ | Retype _ | Unroll _ | Pad _ | Expand_zero _) as op ->
       { opt with llc = apply_op opt.Low_level.llc op }
+
+let optop_label = function
+  | Stage _ -> "Stage"
+  | Privatize _ -> "Privatize"
+  | Tensorize _ -> "Tensorize"
+  | Fold_mma _ -> "Fold_mma"
+  | Fuse_epilogue _ -> "Fuse_epilogue"
+  | Split_reduce _ -> "Split_reduce"
+  | Split _ -> "Split"
+  | Coalesce _ -> "Coalesce"
+  | Partition _ -> "Partition"
+  | Swap _ -> "Swap"
+  | Retype _ -> "Retype"
+  | Unroll _ -> "Unroll"
+  | Pad _ -> "Pad"
+  | Expand_zero _ -> "Expand_zero"
+
+(* gh-ocannl-1467: the scope grammar. A [Local_scope] body is hoisted out of the position it is
+   written in, so it may hold neither a hardware-annotated loop (no kernel's hardware-axis table
+   holds one: the renderer and {!Low_level.validate_parallel} refuse it) nor an effect beyond the
+   locals it owns ({!Low_level.scope_purity_violation}, gh-ocannl-584). The scope mints decline both
+   (a materializing [Unroll] or [Partition] wraps only a single-statement accumulation nest of
+   annotation-free levels), but a LATER op can put either inside the scope: a hardware [Retype] or
+   [Split] of a loop the scope holds, a [Stage] whose loads (or shared barriers) land there, a
+   [Privatize] over such a loop, a [Tensorize]'s lane loop and [Tile_mma]. Compilation refused those
+   programs only at its exit gates, untyped, naming the IR; {!apply_opt_op} refuses the op. *)
+type scope_grammar_violation =
+  | Hardware_loop_in_scope of {
+      loop : Indexing.symbol;
+      axis : Low_level.axis_type;
+      scope : Low_level.scope_id;
+    }
+  | Impure_scope_body of string
+[@@deriving sexp_of]
+
+let scope_grammar_violation (llc : Low_level.t) : scope_grammar_violation option =
+  match Low_level.scope_hardware_loop llc with
+  | Some (loop, axis, scope) -> Some (Hardware_loop_in_scope { loop; axis; scope })
+  | None -> Option.map (Low_level.scope_purity_violation llc) ~f:(fun msg -> Impure_scope_body msg)
+
+(* A violation the op ADDED: an entry program that already breaks the grammar (only hand-built IR
+   can: [Low_level.optimize] validates purity on the way in, and lowering emits no hardware loop) is
+   left to the compile gates rather than charged to whichever op runs next. The program before the
+   op is walked only when the one after it violates. *)
+let scope_grammar_added ~(before : Low_level.t) ~(after : Low_level.t) =
+  match scope_grammar_violation after with
+  | Some _ when Option.is_some (scope_grammar_violation before) -> None
+  | v -> v
+
+let scope_grammar_message ~op = function
+  | Hardware_loop_in_scope { loop; axis; scope } ->
+      "Schedule." ^ optop_label op ^ ": leaves the hardware-annotated loop "
+      ^ Indexing.symbol_ident loop ^ " ("
+      ^ Sexp.to_string (Low_level.sexp_of_axis_type axis)
+      ^ ") inside the body of local scope v"
+      ^ Int.to_string scope.Low_level.scope_id
+      ^ "_" ^ Tn.debug_name scope.Low_level.tn
+      ^ " -- a scope body is hoisted out of its position and is in no kernel's hardware-axis table \
+         (gh-ocannl-1467)"
+  | Impure_scope_body msg -> "Schedule." ^ optop_label op ^ ": leaves an impure scope body: " ^ msg
+
+(* gh-ocannl-1467: whether a hardware-typed loop lies inside a [Privatize] tile's per-thread
+   lifetime — its body writes the tile but does not hold the store-back (the statement reading the
+   tile into another node): the init-load, the privatized loop and the store-back are siblings, so
+   such a loop sits between the transfers and the accumulation. Each thread then folds only its own
+   iterations into its private tile and stores that partial back over the other threads'; where the
+   cell mentions the loop, every thread stores back the cells it never updated too.
+   [apply_privatize] refuses both shapes when it mints the tile (a hardware level the cell omits; an
+   inner index loop that is not [Serial]); this is the same judgment for the ops after it. A
+   [Tile_mma] is opaque: its lane loop distributes the tile under the intrinsic's own cooperative
+   contract. *)
+let privatized_tile_split ~tile (llc : Low_level.t) : (Indexing.symbol * Low_level.axis_type) option
+    =
+  let open Low_level in
+  let rec writes (llc : t) =
+    match llc with
+    | Seq (a, b) -> writes a || writes b
+    | For_loop { body; _ } | If { body; _ } | Scan_loop { body; _ } -> writes body
+    | Set { tn; _ } | Set_dynamic { tn; _ } | Set_from_vec { tn; _ } | Zero_out tn ->
+        Tn.equal tn tile
+    | Tile_mma _ | Set_local _ | Declare_local _ | Noop | Comment _ | Staged_compilation _
+    | Workgroup_barrier ->
+        false
+  in
+  let rec stores_back (llc : t) =
+    match llc with
+    | Seq (a, b) -> stores_back a || stores_back b
+    | For_loop { body; _ } | If { body; _ } | Scan_loop { body; _ } -> stores_back body
+    | Set { tn; llsc; _ } -> (not (Tn.equal tn tile)) && scalar_touches_tn tile llsc
+    | Set_dynamic _ | Set_from_vec _ | Zero_out _ | Tile_mma _ | Set_local _ | Declare_local _
+    | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier ->
+        false
+  in
+  let rec find (llc : t) =
+    match llc with
+    | Seq (a, b) -> Option.first_some (find a) (find b)
+    | For_loop { index; axis = (Grid | Workgroup | Workgroup_reduce) as axis; body; _ }
+      when writes body && not (stores_back body) ->
+        Some (index, axis)
+    | For_loop { body; _ } | If { body; _ } | Scan_loop { body; _ } -> find body
+    | Tile_mma _ | Set _ | Set_dynamic _ | Set_from_vec _ | Zero_out _ | Set_local _
+    | Declare_local _ | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier ->
+        None
+  in
+  find llc
+
+(* The op, then the checks of the program it left (gh-ocannl-1467): the scope grammar, and the
+   per-thread lifetime of every tile a [Privatize] of this application minted. Both refuse typed,
+   naming the op. Every path that applies an op comes through here — {!apply_typed},
+   {!schedule_legality} and the hermetic probes — so an [Op_illegal] from a probing arm carries the
+   refusal too. *)
+let apply_opt_op ~app (opt : Low_level.optimized) (op : optop) : Low_level.optimized =
+  let applied = apply_opt_op_unchecked ~app opt op in
+  let llc = applied.Low_level.llc in
+  Option.iter (scope_grammar_added ~before:opt.Low_level.llc ~after:llc) ~f:(fun v ->
+      refuse (scope_grammar_message ~op v));
+  List.iter !(app.privatized) ~f:(fun (target, tile) ->
+      Option.iter (privatized_tile_split ~tile llc) ~f:(fun (loop, axis) ->
+          refuse
+            ("Schedule." ^ optop_label op ^ ": the hardware-typed loop "
+           ^ Indexing.symbol_ident loop ^ " ("
+            ^ Sexp.to_string (Low_level.sexp_of_axis_type axis)
+            ^ ") lies inside the per-thread lifetime of the Privatize tile of "
+            ^ Tn.debug_name target
+            ^ " (between its init-load and its store-back): each thread would accumulate only its \
+               own iterations into its private tile and store that partial back over the others' \
+               (gh-ocannl-1467)")));
+  applied
 
 (* One op applied on its own, outside {!apply_typed}: the legality probes and the zero-expansion
    check. [Privatize] judges its tile width on the program the op is given, and there is no final
@@ -4945,13 +5079,16 @@ let with_transform_fault fault body =
 (* gh-ocannl-1151: whether a [Privatize] tile minted at the residency still holds an accumulation
    the shared decision widens, in the FINAL program of its [apply] — after every later op and the
    finalization passes. [apply_privatize] judged the program the schedule started from and the
-   update as it stood when the op ran; a later op of the same schedule rewrites the update again —
-   though only into a form this rejects by putting a hardware-typed loop or a tensor-node write into
-   a scope a materializing [Unroll] minted, which compilation refuses anyway (the interface gives
-   the argument; test/operations/privatize_recheck pins both). Every write of the tile must be
-   either a transfer (it does not read the tile: the init-load, or a zero) or a self-accumulating
-   update whose base {!Low_level.accum_base_widens}; a [Tile_mma] accumulates at its own precision,
-   and its scalar fallback is judged like any statement. *)
+   update as it stood when the op ran; a later op of the same schedule rewrites the update again. No
+   known op sequence leaves a form this rejects: index rewrites map the write and its self-read
+   alike, the scope mints emit the grammar the peel re-reads, and no op rewrites a contribution to
+   read the tile. The two sequences that would — a hardware-typed loop or a tensor-node write put
+   into the scope a materializing [Unroll] minted around the update — are refused at their op by the
+   scope grammar (gh-ocannl-1467, {!apply_opt_op}). So this is a backstop, and a failing tile is
+   refused rather than narrowed. Every write of the tile must be either a transfer (it does not read
+   the tile: the init-load, or a zero) or a self-accumulating update whose base
+   {!Low_level.accum_base_widens}; a [Tile_mma] accumulates at its own precision, and its scalar
+   fallback is judged like any statement. *)
 let privatized_tile_widens ~tile (llc : Low_level.t) =
   let open Low_level in
   let rec ok (llc : t) =
@@ -4972,40 +5109,14 @@ let privatized_tile_widens ~tile (llc : Low_level.t) =
   in
   ok llc
 
-(* The wide tiles whose final-program re-check failed, as (target, tile), most recent first: each
-   fell back to the target's storage precision. Per domain, like [transform_fault]. *)
-let privatize_fallbacks_key : (Tn.t * Tn.t) list ref Stdlib.Domain.DLS.key =
-  Stdlib.Domain.DLS.new_key (fun () -> ref [])
-
-let privatize_fallbacks () = !(Stdlib.Domain.DLS.get privatize_fallbacks_key)
-
-(* The re-check {!apply_typed} runs over the tiles its [Privatize]s minted wide, in two places. On
-   the program the ops left, before any finalization pass: a failing tile falls back to storage
-   precision there, while its precision is still unforced ([Low_level.simplify_llc] visits every
-   [Set] and forces its node's precision, Codex round 1 on staging#1210) — only an op that already
-   consumed it (none known) makes that a refusal. Returns the tiles left wide, which
-   {!confirm_privatized_tiles} judges again on the finalized program, where a failure can only be
-   refused. *)
-let recheck_privatized_tiles ~wide_tiles (llc : Low_level.t) =
-  List.filter (List.rev wide_tiles) ~f:(fun (target, tile) ->
-      privatized_tile_widens ~tile llc
-      || begin
-        if Lazy.is_val tile.Tn.storage_prec then
-          refuse
-            ("Schedule.Privatize: a later op left the accumulation of " ^ Tn.debug_name target
-           ^ "'s tile one the shared decision does not widen, after its precision was already \
-              consumed");
-        Tn.update_prec tile (Lazy.force target.Tn.storage_prec);
-        let log = Stdlib.Domain.DLS.get privatize_fallbacks_key in
-        log := (target, tile) :: !log;
-        false
-      end)
-
+(* The re-check {!apply_typed} runs over the tiles its [Privatize]s minted wide, on the finalized
+   program: a failure is refused typed — loudly, never by narrowing the tile, as a silent fallback
+   would change a candidate's numerics with nothing to show for it. *)
 let confirm_privatized_tiles ~wide_tiles (llc : Low_level.t) =
   List.iter wide_tiles ~f:(fun (target, tile) ->
       if not (privatized_tile_widens ~tile llc) then
         refuse
-          ("Schedule.Privatize: the finalization passes left the accumulation of "
+          ("Schedule.Privatize: the later ops or the finalization passes left the accumulation of "
          ^ Tn.debug_name target ^ "'s wide tile one the shared decision does not widen"))
 
 (* The candidate-facing application: an op precondition refusal arrives typed ({!refuse}), every
@@ -5021,7 +5132,6 @@ let apply_typed ?(static_indices = []) (sched : schedule) (opt : Low_level.optim
           Stdlib.Domain.DLS.get transform_fault op;
           apply_opt_op ~app opt op)
     in
-    let wide_tiles = recheck_privatized_tiles ~wide_tiles:!(app.wide_tiles) opt.Low_level.llc in
     let opt = elide_staged_barriers opt in
     let llc = opt.Low_level.llc in
     (* Transforms fold their own guards (schedule-ir-optops §2): the pipeline's simplify already
@@ -5035,7 +5145,7 @@ let apply_typed ?(static_indices = []) (sched : schedule) (opt : Low_level.optim
       then Low_level.hoist_cross_statement_cse @@ Low_level.eliminate_common_subexpressions llc
       else llc
     in
-    confirm_privatized_tiles ~wide_tiles llc;
+    confirm_privatized_tiles ~wide_tiles:!(app.wide_tiles) llc;
     { opt with llc }
 
 let apply ?static_indices sched opt =
@@ -5656,23 +5766,61 @@ let fragment_scope_violations (opt : Low_level.optimized) : fragment_scope_viola
               let fragment = match tile with Tile_mma { d = d, _; _ } -> d | _ -> assert false in
               Some (Tile_unbracketed { fragment }))
 
-(* Both scopes' invariants as one op verdict: [Some (Op_illegal _)] when [op], applied to [opt],
-   leaves IR that violates one. Applicability itself stays the op's own arm's question ([None] on a
-   raising apply). Only [opt]'s store-mutating ops need the hermetic copy; the loop rewrites only
-   rebuild [llc].
+(* Whether some [Local_scope] body holds a loop: the only programs in which an op can add a
+   scope-grammar violation (gh-ocannl-1467). The mints wrap only annotation-free single-statement
+   accumulation nests, and every op that could put a hardware loop or an effect into a scope body
+   acts on a loop the body holds: a [Retype]/[Split]/[Privatize]/[Tensorize] of it, a [Stage] whose
+   loads sit at its tile loops. *)
+let scope_bodies_hold_loops (llc : Low_level.t) : bool =
+  let open Low_level in
+  let rec stmt ~in_scope (llc : t) =
+    match llc with
+    | For_loop { body; _ } -> in_scope || stmt ~in_scope body
+    | Seq (a, b) -> stmt ~in_scope a || stmt ~in_scope b
+    | If { cond = c, _; body } -> scalar c || stmt ~in_scope body
+    | Scan_loop { carried; body; _ } ->
+        in_scope || List.exists carried ~f:(fun c -> scalar c.init) || stmt ~in_scope body
+    | Set { llsc; _ } | Set_local (_, llsc) -> scalar llsc
+    | Set_dynamic { dyn_value = v, _; llsc; _ } -> scalar v || scalar llsc
+    | Set_from_vec { arg = a, _; _ } -> scalar a
+    | Tile_mma { fallback; _ } -> stmt ~in_scope fallback
+    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ | Workgroup_barrier ->
+        false
+  and scalar (llsc : scalar_t) =
+    match llsc with
+    | Local_scope { body; _ } -> stmt ~in_scope:true body
+    | Get_dynamic { dyn_value = v, _; _ } -> scalar v
+    | Ternop (_, (a, _), (b, _), (c, _)) -> scalar a || scalar b || scalar c
+    | Binop (_, (a, _), (b, _)) -> scalar a || scalar b
+    | Unop (_, (a, _)) -> scalar a
+    | Get_local _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ ->
+        false
+  in
+  stmt ~in_scope:false llc
 
-   The staging scope (gh-ocannl-1231) is checked over the applied IR outright: the renderer cannot
-   render a violation at all. The fragment scope (gh-ocannl-1342) refuses an op that leaves MORE
-   uncovered fragment tiles than it found: the renderer's fallback still renders an uncovered tile,
-   so an IR that already has one (e.g. a hand-written schedule) does not make every later move
-   illegal, while a seeded chain — checked op by op from code with no fragment — is refused at the
-   very move that first leaves one. The check is backend-agnostic: on the C backends a scope and a
-   bare tile render alike (both register-tile), so the refusal costs them only the materializing
-   unrolls inside a scope, whose in-place [Unroll] twins stay admitted. *)
+(* The scopes' invariants as one op verdict: [Some (Op_illegal _)] when [op], applied to [opt],
+   leaves IR that violates one. Applicability itself stays the op's own arm's question ([None] on a
+   raising apply). The op is applied once, unchecked, and all three invariants judge that one
+   result. Only [opt]'s store-mutating ops need the hermetic copy; the loop rewrites only rebuild
+   [llc].
+
+   The scope grammar (gh-ocannl-1467) comes first, judged as {!apply_opt_op} judges it — a violation
+   the op added — so the menu gate prunes what application would refuse; the race queries below
+   would call such an op legal (a [Grid] retype of a scope-nested loop) or unknown. It is asked only
+   where {!scope_bodies_hold_loops}. The staging scope (gh-ocannl-1231) is checked over the applied
+   IR outright: the renderer cannot render a violation at all. The fragment scope (gh-ocannl-1342)
+   refuses an op that leaves MORE uncovered fragment tiles than it found: the renderer's fallback
+   still renders an uncovered tile, so an IR that already has one (e.g. a hand-written schedule)
+   does not make every later move illegal, while a seeded chain — checked op by op from code with no
+   fragment — is refused at the very move that first leaves one. The check is backend-agnostic: on
+   the C backends a scope and a bare tile render alike (both register-tile), so the refusal costs
+   them only the materializing unrolls inside a scope, whose in-place [Unroll] twins stay
+   admitted. *)
 let scope_verdict (opt : Low_level.optimized) (op : optop) : op_verdict option =
   let pipelined = not (Map.is_empty opt.Low_level.pipelined) in
   let fragmented = not (Set.is_empty opt.Low_level.simdgroup_fragments) in
-  if not (pipelined || fragmented) then None
+  let scoped = scope_bodies_hold_loops opt.Low_level.llc in
+  if not (pipelined || fragmented || scoped) then None
   else
     let before = if fragmented then fragment_scope_violations opt else [] in
     let probe =
@@ -5686,30 +5834,37 @@ let scope_verdict (opt : Low_level.optimized) (op : optop) : op_verdict option =
             optimize_ctx = Low_level.copy_optimize_ctx opt.Low_level.optimize_ctx;
           }
     in
-    match probe_opt_op probe op with
+    match apply_opt_op_unchecked ~app:(start_application opt.Low_level.llc) probe op with
     | exception Schedule_outcome.Cause_at _ -> None
     | applied -> (
-        match if pipelined then pipeline_violation applied else None with
-        | Some v -> Some (Op_illegal (pipeline_violation_message v))
-        | None ->
-            if not fragmented then None
-            else
-              let after = fragment_scope_violations applied in
-              if List.length after <= List.length before then None
-              else
-                (* The first violation the op added: [after] minus [before], as multisets of
-                   messages. *)
-                let added =
-                  List.fold before ~init:(List.map after ~f:fragment_scope_violation_message)
-                    ~f:(fun remaining v ->
-                      let msg = fragment_scope_violation_message v in
-                      let rec drop = function
-                        | [] -> []
-                        | x :: xs -> if String.equal x msg then xs else x :: drop xs
-                      in
-                      drop remaining)
-                in
-                Option.map (List.hd added) ~f:(fun msg -> Op_illegal msg))
+        let grammar =
+          if scoped then scope_grammar_added ~before:opt.Low_level.llc ~after:applied.Low_level.llc
+          else None
+        in
+        match grammar with
+        | Some v -> Some (Op_illegal (scope_grammar_message ~op v))
+        | None -> (
+            match if pipelined then pipeline_violation applied else None with
+            | Some v -> Some (Op_illegal (pipeline_violation_message v))
+            | None ->
+                if not fragmented then None
+                else
+                  let after = fragment_scope_violations applied in
+                  if List.length after <= List.length before then None
+                  else
+                    (* The first violation the op added: [after] minus [before], as multisets of
+                       messages. *)
+                    let added =
+                      List.fold before ~init:(List.map after ~f:fragment_scope_violation_message)
+                        ~f:(fun remaining v ->
+                          let msg = fragment_scope_violation_message v in
+                          let rec drop = function
+                            | [] -> []
+                            | x :: xs -> if String.equal x msg then xs else x :: drop xs
+                          in
+                          drop remaining)
+                    in
+                    Option.map (List.hd added) ~f:(fun msg -> Op_illegal msg)))
 
 let access_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
   let open Low_level in
