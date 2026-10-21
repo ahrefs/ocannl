@@ -4482,16 +4482,23 @@ let conv_family_tree ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~
              aligned-merged segment adopts the whole-segment [Grid] geometry and blocks the row
              serially for cache residency. The whole-routine zeroed graph keeps the serial and Grid
              flavors: its [Zero_out] is in the routine, so the aligned analysis bails. *)
+          (* The builder Grid-types the panel loop itself at two or fewer real statements, so
+             there the flavor's own companion demand decides ([direct]): the fused flavor, whose
+             tail the fusion relocates into the conv nest, passes where the unfused one is refuted
+             (Codex P2, round 1 on staging#1310 -- the pre-tree gate asked for the aligned
+             whole-segment geometry there, which the builder does not use, and so withheld the
+             fused panels of an unaligned conv+tail segment). With more statements the builder
+             adopts that aligned geometry, so it must exist. *)
           let row_block bm =
             if site.c_zeroed then
               Sspace.Refuted "the conv output's whole-node Zero_out is in this lowering (c_zeroed)"
-            else if not (n_real <= 1 || Lazy.force aligned) then Sspace.Refuted no_alignment
             else if blocks_of site.c_nrow bm < 2 then
               Sspace.Refuted
                 (Printf.sprintf "a %d-row panel gives fewer than two panels of the %d rows" bm
                    site.c_nrow)
             else if n_real <= 2 then direct { base with sk_bm = bm }
-            else leaf { base with sk_bm = bm }
+            else if Lazy.force aligned then leaf { base with sk_bm = bm }
+            else Sspace.Refuted no_alignment
           in
           (* The shape menu's pad waste (gh-ocannl-1393, [judge_pad_waste]): a row panel that does
              not divide the row pads it, relative to the unsplit shapes' ratio of 1. It never fires
