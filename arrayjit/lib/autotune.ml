@@ -7564,17 +7564,25 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
              model coverage (opaque code, a schedule the model cannot apply, missing envelope
              constants) is always kept, only measured — so the pre-filter never precludes a measured
              result and its outcome is independent of enumeration order. Presets, saved schedules
-             and the baseline are never pruned. *)
+             and the baseline are never pruned. A candidate its builder refuses typed
+             ([Sketch_families.refuse], gh-ocannl-1390) is dropped here as the decline its compile
+             would have been, under the same cause in the census (gh-ocannl-1437): the pre-filter
+             builds outside the candidates' failure boundary, where the refusal used to end the
+             search. An untyped raise is a builder bug and still propagates. *)
           let model_prefilter_params ~seg_opt ~family params =
             if Float.(keep_fraction >= 1.) || List.length params <= 1 then params
             else
               let scored =
-                List.map params ~f:(fun p ->
-                    let score =
-                      model_score ~static_indices ~limits seg_opt
-                        (sketch_schedule ~accum_prec ~p seg_opt)
-                    in
-                    (p, score))
+                List.filter_map params ~f:(fun p ->
+                    match sketch_schedule ~accum_prec ~p seg_opt with
+                    | exception Outcome.Cause_at (phase, cause)
+                      when not (Outcome.uncontainable phase cause) ->
+                        logf "model pre-filter (%s): %s refused by its builder, declined: %s" family
+                          (spec_label (Whole (W_sketch p))) (Outcome.detail_of_cause cause);
+                        record_decline declines
+                          { Outcome.phase; cause; execution_effect = Outcome.No_device_writes };
+                        None
+                    | sched -> Some (p, model_score ~static_indices ~limits seg_opt sched))
               in
               n_model_scored :=
                 !n_model_scored + List.count scored ~f:(fun (_, s) -> Option.is_some s);

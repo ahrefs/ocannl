@@ -1173,7 +1173,10 @@ files.
   through `compile_advisory ~on_unrecovered`, which hands it the CLASSIFIED cause alone; it used to
   catch `Invalid_argument`/`User_error` out of the whole compile, which is also what a fatal
   failure re-raises as. A probe that needs "did not apply" catches `Cause_at`, never
-  `Invalid_argument`. Seams: `Autotune.with_sketch_builder_fault`; `model_default_placements`
+  `Invalid_argument`. Any builder call `tune` makes before a candidate's failure boundary needs the
+  same catch: the `keep_fraction < 1` model pre-filter scores every sketch by building it, and an
+  uncaught refusal there ended the search (gh-ocannl-1437); it now records the refusal in the
+  decline census, as the compile would have, and drops the candidate. Seams: `Autotune.with_sketch_builder_fault`; `model_default_placements`
   locates its injected fault by a clean run's op-application count (an elementwise graph: one whose
   consumers are scalar reductions applies no default-pipeline op on cc).
 ## Placement and dispatchable baselines

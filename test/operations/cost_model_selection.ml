@@ -139,6 +139,87 @@ let () =
   p_close "tuned values correct with the pre-filter" got_cut mm_expected ~tol:approx_tol
 
 let () =
+  (* --- A builder refusal inside the seed pre-filter (gh-ocannl-1437) ---
+
+     Below [keep_fraction] 1 the pre-filter builds every sketch to score it, before any candidate's
+     failure boundary, so a typed builder refusal ([Sketch_families.refuse], gh-ocannl-1390) used to
+     escape it and end the search. Injected through the builder's fault seam: the first parameter
+     set the builder sees is refused on every build. Under [keep_fraction] 0.5 the search completes,
+     the refusal is a counted decline under the builder's own cause, and no candidate carrying the
+     refused parameters is compiled; under 1 (the control) the same parameters do reach a candidate
+     compile and are declined there -- so the label match below can find them. *)
+  let ra = TDSL.ndarray mav ~label:[ "rf_a" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
+  let rb = TDSL.ndarray mbv ~label:[ "rf_b" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
+  let%op rc = ra * rb in
+  let comp = named "prefilter_refusal_mm" (Train.forward rc) in
+  let injected = "gh-ocannl-1437: injected sketch builder refusal" in
+  let run keep_fraction =
+    let target = ref None and attempts = ref [] and report = ref None in
+    let fault p =
+      let refused =
+        match !target with
+        | Some q -> q
+        | None ->
+            target := Some p;
+            p
+      in
+      if Poly.equal p refused then
+        raise
+          (Ir.Schedule_outcome.Cause_at
+             ( Ir.Schedule_outcome.Transform,
+               Ir.Schedule_outcome.Illegal_schedule { check = "Autotune.sketch"; detail = injected }
+             ))
+    in
+    let result =
+      Autotune.Seam.with_value Autotune.on_candidate_attempt (fun label ->
+          attempts := label :: !attempts)
+      @@ fun () ->
+      Autotune.with_sketch_builder_fault fault @@ fun () ->
+      match
+        Autotune.tune ~beam_width:1 ~rounds:0 ~repeats:1 ~cache_dir:"" ~keep_fraction
+          ~report:(fun r -> report := Some r)
+          (Context.auto ()) comp Ir.Indexing.Empty
+      with
+      | ctx, routine -> Ok (Context.get_values (Context.run ctx routine) rc.Tensor.value)
+      | exception exn -> Error (Exn.to_string exn)
+    in
+    Result.iter_error result ~f:(fun e ->
+        Stdio.eprintf "keep %g: the search raised %s (not part of the golden)\n%!" keep_fraction e);
+    (result, !report, Option.map !target ~f:Autotune.sketch_params_label, List.rev !attempts)
+  in
+  let carries refused label =
+    match refused with Some s -> String.is_substring label ~substring:s | None -> false
+  in
+  let counted (r : Autotune.report option) =
+    match r with
+    | None -> []
+    | Some r ->
+        List.filter r.Autotune.declines ~f:(fun d ->
+            Ir.Schedule_outcome.equal_rejection_key d.Autotune.key
+              (Ir.Schedule_outcome.Illegal_schedule_key "Autotune.sketch")
+            && List.mem d.Autotune.sample_details injected ~equal:String.equal)
+  in
+  let cut, cut_report, cut_refused, cut_attempts = run 0.5 in
+  p "a typed builder refusal in the pre-filter does not end the search"
+    (Result.is_ok cut
+    &&
+    match cut_report with
+    | Some r -> Poly.equal r.Autotune.outcome Autotune.Searched && r.Autotune.model_scored >= 1
+    | None -> false);
+  p_exists "the pre-filter's refusal is a counted decline under the builder's cause"
+    (counted cut_report) ~f:(fun d -> d.Autotune.count >= 1);
+  p_none "no candidate carrying the refused parameters is compiled" cut_attempts
+    ~f:(carries cut_refused);
+  p_close "the search with a refused candidate computes correct values"
+    (Result.ok cut |> Option.value ~default:[||])
+    mm_expected ~tol:approx_tol;
+  let all, all_report, all_refused, all_attempts = run 1.0 in
+  p "control: without the pre-filter the same refusal is declined at candidate compile"
+    (Result.is_ok all && not (List.is_empty (counted all_report)));
+  p_exists "control: there, a candidate carrying the refused parameters is compiled" all_attempts
+    ~f:(carries all_refused)
+
+let () =
   (* --- The model-picked untuned default --- *)
   let da = TDSL.ndarray mav ~label:[ "df_a" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
   let db = TDSL.ndarray mbv ~label:[ "df_b" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
