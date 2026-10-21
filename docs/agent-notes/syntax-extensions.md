@@ -16,7 +16,11 @@ files.
   generated `open TDSL.O`, including when there is no unit parameter (gh-511). The no-unit-param
   form is not generative: `let%op f x = ...` closes over ONE shared param created at definition
   time. Use `let%op mk_f () x = ...` and apply `mk_f ()` when each model instance needs fresh
-  parameters; the `()` idiom makes that construction point explicit.
+  parameters; the `()` idiom makes that construction point explicit. Einsum dimension captures
+  (`[ "h"; "w" ]`) are bound at the same point, so a no-unit-param `let%op f x` that captures shares
+  ONE set of dimensions across all its calls; it failed only when a second call saw another size
+  (gh-ocannl-880, `global_avg_pool2d` across two demos). Bind per call with
+  `let f x = let%op r = ... in r`.
 - `%cd` composition seams verified by ppx expansion (gh-465, `Train.sgd_one`/`grad_update`): an
   OCaml variable of `Asgns.comp` type in statement position splices verbatim (so a
   programmatically built fragment can sit inside a `%cd` body); an inline declaration `{ x }`

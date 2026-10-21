@@ -119,19 +119,54 @@ let%op sokoban_cnn ~label ?(num_actions = 4) () =
 
     (action_logits, value)
 
-(** Modern CNN with depthwise separable convolutions for efficiency. Suitable for mobile/edge
-    deployment. [_width_mult] is caller-visible as unimplemented: changing it currently has no
-    effect on channel counts. *)
-let%op mobile_cnn ~label ?(num_classes = 1000) ?(_width_mult = 1.0) () =
-  (* TODO: implement channel width multiplier *)
+(** [scale_channels ~width_mult channels] is a channel width scaled by a MobileNet-style width
+    multiplier: [channels *. width_mult] rounded to the NEAREST multiple of 8, a tie (an exact odd
+    multiple of 4) rounding up, and never below 8. So [scale_channels ~width_mult:0.75 32 = 24],
+    [scale_channels ~width_mult:0.6 64 = 40] (38.4 rounds up),
+    [scale_channels ~width_mult:0.6 32 = 16] (19.2 rounds down),
+    [scale_channels ~width_mult:1.125 32 = 40] (the tie 36 rounds up), and
+    [scale_channels ~width_mult:0.1 32 = 8] (the floor). Multiples of 8 keep channel axes aligned
+    with SIMD lanes and tensor-core tiles. Unlike the MobileNet reference [_make_divisible], there
+    is no extra round-up when rounding down loses more than 10%: the nearest multiple is the whole
+    rule. Raises [Invalid_argument] unless [width_mult] is finite and positive. *)
+let scale_channels ~width_mult channels =
+  if not (Float.is_finite width_mult && Float.(width_mult > 0.)) then
+    invalid_arg
+      (Printf.sprintf "Demo_models.scale_channels: width_mult must be finite and positive, got %g"
+         width_mult);
+  let multiples = Float.iround_nearest_exn (Float.of_int channels *. width_mult /. 8.) in
+  8 * Int.max 1 multiples
+
+(** Modern CNN with depthwise separable convolutions for efficiency, after MobileNet v1's first
+    blocks. Suitable for mobile/edge deployment.
+
+    The channel widths at [width_mult = 1.0] are 32 (the initial stride-2 conv), then 64, 128, 128
+    and 256 (the four depthwise separable blocks, at strides 1, 2, 1, 2). Every one of these
+    internal widths is scaled by [width_mult] through {!scale_channels} (nearest multiple of 8, ties
+    up, at least 8), and the final batch norm and the classifier's input follow the last scaled
+    width. The external dimensions are not scaled: the input channels are whatever the input has,
+    and the output has [num_classes] logits. Raises [Invalid_argument] unless [width_mult] is finite
+    and positive. *)
+let%op mobile_cnn ~label ?(num_classes = 1000) ?(width_mult = 1.0) () =
+  let ch = scale_channels ~width_mult in
   (* Initial standard conv *)
-  let conv_init = conv_bn_relu ~label:("conv_init" :: label) ~kernel_size:3 ~stride:2 () in
+  let conv_init =
+    conv_bn_relu ~label:("conv_init" :: label) ~kernel_size:3 ~stride:2 ~out_channels:(ch 32) ()
+  in
 
   (* Depthwise separable blocks *)
-  let dw_block1 = depthwise_separable_conv2d ~label:("dw1" :: label) ~stride:1 () in
-  let dw_block2 = depthwise_separable_conv2d ~label:("dw2" :: label) ~stride:2 () in
-  let dw_block3 = depthwise_separable_conv2d ~label:("dw3" :: label) ~stride:1 () in
-  let dw_block4 = depthwise_separable_conv2d ~label:("dw4" :: label) ~stride:2 () in
+  let dw_block1 =
+    depthwise_separable_conv2d ~label:("dw1" :: label) ~stride:1 ~out_channels:(ch 64) ()
+  in
+  let dw_block2 =
+    depthwise_separable_conv2d ~label:("dw2" :: label) ~stride:2 ~out_channels:(ch 128) ()
+  in
+  let dw_block3 =
+    depthwise_separable_conv2d ~label:("dw3" :: label) ~stride:1 ~out_channels:(ch 128) ()
+  in
+  let dw_block4 =
+    depthwise_separable_conv2d ~label:("dw4" :: label) ~stride:2 ~out_channels:(ch 256) ()
+  in
 
   let bn = batch_norm2d ~label:("bn_final" :: label) () in
 

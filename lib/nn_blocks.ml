@@ -493,12 +493,15 @@ let%op conv2d ~label ?(kernel_size = 3) ?(stride = 1) ?(use_padding = true) ?out
 (** Depthwise separable convolution - more efficient for mobile/edge devices. Consists of depthwise
     conv (spatial filtering per channel) followed by pointwise conv (1x1 conv for channel mixing).
 
-    See {!conv2d} for dimension constraints when [use_padding=false]. *)
-let%op depthwise_separable_conv2d ~label ?(kernel_size = 3) ?(stride = 1) ?(use_padding = true) () x
-    =
+    See {!conv2d} for dimension constraints when [use_padding=false].
+
+    @param out_channels Optional output channels of the pointwise conv, as in {!conv2d}. *)
+let%op depthwise_separable_conv2d ~label ?(kernel_size = 3) ?(stride = 1) ?(use_padding = true)
+    ?out_channels () x =
   (* Depthwise: each input channel is convolved with its own filter *)
   Shape.set_dim kh kernel_size;
   Shape.set_dim kw kernel_size;
+  Option.iter out_channels ~f:(Shape.set_dim oc);
   let depthwise =
     x
     +* { dw_kernel }
@@ -507,7 +510,7 @@ let%op depthwise_separable_conv2d ~label ?(kernel_size = 3) ?(stride = 1) ?(use_
   in
   (* Pointwise: 1x1 conv to mix channels *)
   depthwise
-  +* { pw_kernel } "... | h, w, ..ic..; |..ic.. -> ..oc.. => ... | h, w, ..oc.."
+  +* { pw_kernel } "... | h, w, ..ic..; |..ic.. -> ..oc.. => ... | h, w, ..oc.." [ "oc" ]
   +++ { bias = 0. } "... | h, w, ..oc..; |..oc.. => ... | h, w, ..oc.."
 
 (** Max pooling for 2D spatial data - reduces spatial dimensions by taking maximum values.
@@ -607,9 +610,17 @@ let%op avg_pool2d ?(stride = 2) ?(window_size = 2) () x =
   in
   sum /. (dim wh *. dim ww)
 
-(** Global average pooling - reduces each feature map to a single value by averaging. Commonly used
-    before final classification layer. *)
-let%op global_avg_pool2d x = x ++ "... | h, w, ..c.. => ... | 0, 0, ..c.."
+(** Global average pooling - reduces each feature map to a single value by averaging, and drops the
+    two spatial axes: [... | h, w, ..c..] becomes [... | ..c..]. Commonly used before the final
+    classification layer. *)
+let global_avg_pool2d x =
+  (* The extension point sits inside the function so that the captured [h] and [w] are bound per
+     call: under [let%op global_avg_pool2d x = ...] they would be bound once, at the definition, and
+     every pooled input would have to share one spatial size. *)
+  let%op global_avg_pool2d =
+    (x ++ "... | h, w, ..c.. => ... | ..c.." [ "h"; "w" ]) /. (dim h *. dim w)
+  in
+  global_avg_pool2d
 
 (* Running statistics are non-differentiable parameters: this gives them layer-local ownership,
    materialization, initialization through Train.init_params, and persistence with the model. *)
@@ -697,9 +708,9 @@ let batch_norm1d ~label ?(epsilon = 1e-5) ?(momentum = 0.9) () =
   in
   fun ~train_step x -> normalize ~train_step ~moments x
 
-(** Conv block with conv -> batch norm -> activation pattern *)
-let%op conv_bn_relu ~label ?(kernel_size = 3) ?(stride = 1) () =
-  let conv = conv2d ~label:("conv" :: label) ~kernel_size ~stride () in
+(** Conv block with conv -> batch norm -> activation pattern; [out_channels] goes to {!conv2d}. *)
+let%op conv_bn_relu ~label ?(kernel_size = 3) ?(stride = 1) ?out_channels () =
+  let conv = conv2d ~label:("conv" :: label) ~kernel_size ~stride ?out_channels () in
   let bn = batch_norm2d ~label:("bn" :: label) () in
   fun ~train_step x -> relu (bn ~train_step (conv x))
 
