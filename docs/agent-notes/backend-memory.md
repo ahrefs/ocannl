@@ -221,6 +221,18 @@ files.
   cannot be captured (OCANNL streams are all non-default, so this only bites standalone repros).
   Fallback paths (logging on, capture rejected, config off) are plain per-segment launches —
   same-stream FIFO makes the generic event chain redundant on CUDA/HIP.
+- The instantiated graphs belong to the routine's context (gh-ocannl-1445): `sequence_segments`
+  returns a release action beside the task, `Backends.link` adds it to the child context's
+  `release_hooks`, and `Backends.finalize` runs the hooks once the pools are freed, outside the
+  retryable cleanup: a failing hook neither keeps the pools rooted nor resets the `finalized` flag
+  over freed pools. Hooks are idempotent and leave the routine able to recapture, since an upload
+  fork shares the list and can outlive the value released. Every cache still alive at exit
+  is destroyed by the backend's `at_exit` teardown, on HIP before the stream. The caches are held
+  through `Backend_impl.Weak_registry`, so a routine dropped without a release is still collected,
+  its graphs by cudajit's and hipjit's own finalizers. `live_graph_execs` in the backend's global
+  debug info (`Context.global_debug_info`) counts what the caches hold;
+  `test/operations/graph_exec_release` pins the release, `exit_stream_teardown`'s `device_graph`
+  arm the exit.
 
 - HIP scratch (private segment) is budgeted **per work-item, independent of launch geometry**, and
   a kernel over budget aborts the HSA queue instead of failing cleanly (gh-ocannl-533). The

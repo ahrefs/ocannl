@@ -495,6 +495,10 @@ val get_free_and_total_memory : t -> (int * int) option
     code, kernel local memory, instantiated graphs), and moves in allocation granules -- which is
     what makes it the instrument for memory OCANNL's pool tables do not see (gh-ocannl-1424). *)
 
+val global_debug_info : t -> Sexp.t
+(** The context's backend's process-wide debug information ([Sexp.message]-shaped, backend-specific:
+    e.g. the CUDA and HIP backends' [live_streams] and [live_graph_execs]). *)
+
 val release : t -> unit
 (** Eagerly frees the device buffers this context owns — the pools holding nodes it allocated that
     its parent does not have, and that are not per-device constants. Idempotent (a second call is a

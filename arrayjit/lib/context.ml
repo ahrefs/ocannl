@@ -1088,6 +1088,14 @@ let get_free_and_total_memory ctx =
           Backend.get_free_and_total_memory c.BI.device);
     }
 
+let global_debug_info ctx =
+  Backends.query ctx.wrapped
+    {
+      q =
+        (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) _c ->
+          Backend.get_global_debug_info ());
+    }
+
 let release ctx =
   Backends.query ctx.wrapped
     {

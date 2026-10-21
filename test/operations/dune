@@ -3061,7 +3061,8 @@
   mtime
   mtime.clock.os
   arrayjit.utils
-  arrayjit.verdict)
+  arrayjit.verdict
+  ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -7385,6 +7386,20 @@
   (env_var OCANNL_BACKEND))
  (modules autotune_device_memory)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1445: a graph-captured routine's instantiated graphs are destroyed when its context is
+; released (cuda and hip; skipped where the backend caches no graphs).
+
+(test
+ (name graph_exec_release)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules graph_exec_release)
+ (libraries base ocannl stdio arrayjit.utils arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
