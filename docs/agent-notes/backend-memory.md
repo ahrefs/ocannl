@@ -94,7 +94,10 @@ files.
   CUDA's was a `Backend_rejected` stage string nothing could reason about. A refused BASE compile
   refuses the whole search before the cache is consulted (`Pre_search_failure` at `Backend_link`):
   scheduling only adds device buffers to the base lowering (new tiles, fission's local-to-device
-  promotions), so no candidate, replay or fallback would fit either. Size such a probe on the
+  promotions), so no candidate, replay or fallback would fit either. On a GPU backend the base is
+  refused before codegen (it binds no hardware dimension, gh-ocannl-1340) and links nothing, so
+  there the FIRST search candidate to reach link is the probe, its refusal the same typed
+  `Pre_search_failure`; a warm GPU call therefore tries its replay first. Size such a probe on the
   UNSCHEDULED form: on a GPU the default compile needs more (8192 against 4096 B on the test's
   workload under CUDA), which made a half-footprint test capacity fit the baseline there. The
   same holds for a search WINNER: the unscheduled footprint bounds every shipped routine from

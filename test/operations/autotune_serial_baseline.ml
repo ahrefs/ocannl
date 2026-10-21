@@ -174,6 +174,52 @@ let () =
     | None -> r.Autotune.default_refused);
   p_close "tuned routine values correct" got mm_expected ~tol:approx_tol;
 
+  (* --- gh-ocannl-1340: the refusals and the dedup are decided before codegen. A link is where a
+     compile's codegen and device compile have certainly been paid for, so each search attempt
+     ([Autotune.on_candidate_attempt]) is charged the links ([Link_after_delta]) that follow it, and
+     the timing runs ([Autotune.on_candidate_preflight]) it entered. Deferred, so the search's
+     report arrives before the shipping compile and every link counted is the search's own. Before
+     the fix, the GPU baseline linked and was never timed, and every dedup and unparallelized
+     candidate linked and was discarded. --- *)
+  let attempts = ref [] in
+  let searching = ref true in
+  let charge f =
+    match !attempts with (_, links, runs) :: _ when !searching -> f links runs | _ -> ()
+  in
+  let deferred =
+    Autotune.Seam.with_value Autotune.on_candidate_attempt
+      (fun label -> attempts := (label, ref 0, ref 0) :: !attempts)
+      (fun () ->
+        Autotune.Seam.with_value Autotune.on_candidate_preflight
+          (fun _ -> charge (fun _ runs -> Int.incr runs))
+          (fun () ->
+            Ir.Resource_fault_injection.with_callback
+              (function
+                | Ir.Resource_fault_injection.Link_after_delta ->
+                    charge (fun links _ -> Int.incr links)
+                | _ -> ())
+              ~f:(fun () ->
+                Autotune.tune_deferred ~beam_width:1 ~rounds:1 ~repeats:1 ~cache_dir:""
+                  ~report:(fun _ -> searching := false)
+                  (Context.auto ()) tune_comp Ir.Indexing.Empty)))
+  in
+  let attempts = List.rev !attempts in
+  List.iter attempts ~f:(fun (label, links, runs) ->
+      Stdio.eprintf "attempt (not part of the golden): %s, %d link(s), %d timing run(s)\n" label
+        !links !runs);
+  p "the search's report arrived before its shipping compile" (not !searching);
+  p "the baseline reaches link exactly where it is dispatched (once on CPU, never on GPU)"
+    (match attempts with
+    | ("baseline", links, _) :: _ -> !links = if is_gpu then 0 else 1
+    | _ -> false);
+  p_all ~min:2 "every attempt that reached link entered a timing run" attempts
+    ~f:(fun (_, links, runs) -> !links = 0 || !runs > 0);
+  let ctx, routine = Autotune.compile_deferred deferred in
+  let ctx = Context.run ctx routine in
+  p_close "the deferred search's routine computes correct values"
+    (Context.get_values ctx mc.Tensor.value)
+    mm_expected ~tol:approx_tol;
+
   (* --- The same rule on the cache-replay path. A cache entry written before the rule can name the
      serial baseline as the winner: it was timed then, and it wins by default whenever every
      candidate fails to compile. Such an entry is an empty saved schedule, which replays as the
@@ -219,6 +265,20 @@ let () =
     (Bool.equal (replayed r) (not is_gpu));
   (* A replay times nothing and refuses nothing, so on GPU either counter is evidence of the
      re-search; a refused window is still a window the replay would not have opened. *)
+  (* gh-ocannl-1340: the rejection is a typed refusal in the report, decided before codegen, not
+     only a log line -- so this run does not read as a plain search. *)
+  Cache_plant.unless_unkeyed ~identity:cache_available
+    "the rejection is reported as a pre-codegen Not_dispatched refusal on GPU, and absent on CPU"
+    (match r.Autotune.cache_replay_refusal with
+    | Some
+        {
+          Ir.Schedule_outcome.phase = Ir.Schedule_outcome.Transform;
+          cause = Ir.Schedule_outcome.Not_dispatched { origin = "cache_replay"; _ };
+          _;
+        } ->
+        is_gpu
+    | Some _ -> false
+    | None -> not is_gpu);
   p "rejecting it re-searches rather than returning the serial routine"
     (if is_gpu || not cache_available then
        r.Autotune.candidates_timed >= 1 || r.Autotune.timings_contended > 0

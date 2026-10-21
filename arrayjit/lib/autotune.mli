@@ -27,14 +27,17 @@
       whose serial candidates were all refused from one whose candidate space was empty. Beam rounds
       expanding an incumbent that was never dispatched propose only the moves that can bind a
       hardware dimension ([Tensorize], placement retypes); the rest are pruned before compile and
-      counted in the same census. Separately, the baseline's compile is protected like any
-      candidate's (gh-ocannl-533): a typed rejection — a large softmax/cross-entropy head whose
-      unscheduled form exceeds the HIP scratch budget is the case in hand — declines the baseline
-      ([baseline_declined] in the report, and its own key in the census rather than a
-      [Not_dispatched] refusal, which would assert a reason that is not the one) and the search
-      proceeds on the scheduled candidates, which fission and placement promotion routinely bring
-      back within budget. Only the base lowering itself is indispensable: a failure before it is
-      captured has no search to run and propagates.
+      counted in the same census. These refusals, and the search's dedup of a candidate whose code
+      an earlier one already compiled to, are decided inside the lowered transform, before codegen
+      (gh-ocannl-1340): a refused or duplicate candidate, the GPU baseline included, costs no
+      codegen, device compile or link. Separately, the baseline's compile is protected like any
+      candidate's (gh-ocannl-533) where it reaches codegen (on CPU backends): a typed rejection — a
+      large softmax/cross-entropy head whose unscheduled form exceeds the HIP scratch budget is the
+      case in hand — declines the baseline ([baseline_declined] in the report, and its own key in
+      the census rather than a [Not_dispatched] refusal, which would assert a reason that is not the
+      one) and the search proceeds on the scheduled candidates, which fission and placement
+      promotion routinely bring back within budget. Only the base lowering itself is indispensable:
+      a failure before it is captured has no search to run and propagates.
     - {b Fissioned candidates}: the kernel-fission pipeline ({!Ir.Schedule.fission_scheduled}) with
       per-segment schedules — the same preset sweep per segment, and beam rounds that extend
       {e one segment at a time}. [`Zeros] segments keep the default zero-expansion; [`Solo] segments
@@ -1157,7 +1160,10 @@ type report = {
           the scheduled candidates alone (gh-ocannl-533): [baseline_ms] is then [infinity] and the
           rejection is in [declines] like any candidate's. The HIP scratch validator declining the
           unscheduled serial form of a large softmax/cross-entropy head at [Backend_link] is the
-          case this exists for — before it was contained, that one rejection ended the search. *)
+          case this exists for — before it was contained, that one rejection ended the search. Since
+          gh-ocannl-1340 a GPU backend's baseline never reaches codegen (it binds no hardware
+          dimension, so it is refused in the transform and counted under [Not_dispatched_key]), so
+          this is [false] there and the flag describes CPU backends. *)
   baseline_refused : bool;
       (** The dispatched serial baseline ran its timing window and the window was refused
           (gh-ocannl-1423): contention, a queued calibration that measured no batch within its
@@ -1183,10 +1189,12 @@ type report = {
           proceeds as on a miss — it searches, and the search's store overwrites the entry, or
           compiles the untuned default under [autotune_search=false] — and every report it emits
           carries the cause. [None] when no entry was found or matched its key's self-description,
-          when the found one replayed, and when the replay was rejected as an unparallelized GPU
-          routine (gh-ocannl-532, not a cause; logged). An untyped failure of the replay is not a
-          refusal: it ends the call as a [Pre_search_failure] under strict failure classification.
-      *)
+          when the found one replayed. A replay that binds no hardware dimension on a GPU backend
+          (gh-ocannl-532) is refused too, typed: [Not_dispatched { origin = "cache_replay"; _ }], at
+          phase [Transform] when the replayed schedule's forms were refused before codegen, and at
+          [Backend_codegen] when only the kernels codegen shipped bind none (gh-ocannl-1340). An
+          untyped failure of the replay is not a refusal: it ends the call as a [Pre_search_failure]
+          under strict failure classification. *)
   rounds_run : int;  (** Beam-expansion rounds actually executed (0 = seeds only). *)
   round_moves : round_moves list;
       (** Every round this call's search started, in order (gh-ocannl-1360): one record per round
