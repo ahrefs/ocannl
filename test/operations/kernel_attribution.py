@@ -287,15 +287,16 @@ with tempfile.TemporaryDirectory() as scratch:
     # Per-step sums 4.75, 4.75, 5.25, 5.25; each step's 5 kernels sit 1 us apart.
     check(abs(c["sum"] - 5.0) < 1e-9 and abs(c["busy"] - c["sum"]) < 1e-9
           and c["overlap_steps"] == 0 and abs(c["span"] - 5.004) < 1e-9, str(c))
-    check(all(abs(r["excl"] - r["med"]) < 1e-9 for r in rows) and c["queues"] == 1, str(rows))
+    check(c["queues"] == 1, str(c))
     code, text = report_text(out)
     check(code == 0 and "intervals overlap in 0 of the 4 steps (sum - busy 0.00 ms" in text
-          and "| exclusive |" not in text and "CLOCK" not in text
+          and "STAMPS" not in text and "CLOCK" not in text
           and "in-step dispatches went to 1 queue" in text, text)
     print("back-to-back kernels: the summed durations are the device's busy time, nothing overlaps: true")
 
-    # Each in-step segment after a step's first opens 0.2 ms before its predecessor ends, on a
-    # queue of its own: the sum counts those 0.2 ms twice, the union once.
+    # Each in-step segment after a step's first is stamped as opening 0.2 ms before its predecessor
+    # ends (minix's gfx1151 stamps whole batches of dispatches with one start): the sum counts those
+    # 0.2 ms twice, the union once, and segments that run one after another cannot overlap.
     stem = "hip-gpt2_mini_train-keep-kprof1"
     write_cell(out, stem, tracer="rocprofv3", model=UNIFIED, back_ns=200000,
                queue_of=lambda name: "2" if name.startswith("gate__") else "1")
@@ -304,17 +305,15 @@ with tempfile.TemporaryDirectory() as scratch:
     by = {r["i"]: r for r in rows}
     check(abs(c["sum"] - 5.0) < 1e-9 and abs(c["busy"] - 4.2) < 1e-9 and c["overlap_steps"] == 4,
           str(c))
-    check(abs(by[0]["excl"] - 1.0) < 1e-9 and abs(by[1]["excl"] - 1.8) < 1e-9
-          and abs(by[4]["excl"] - 0.05) < 1e-9, str(rows))
-    check(abs(sum(r["excl"] for r in rows) - c["busy"]) < 1e-9, str(rows))
-    print("overlapping stamps: the union is what the device was busy for, and the exclusive times"
-          " add up to it: true")
+    check(by[1]["med"] == 2.0, str(rows))
+    print("overlapping stamps: the union counts the overlap once, the durations stay each dispatch's"
+          " own: true")
     code, text = report_text(out)
     cell = text.split("### Kernel attribution: " + stem)[1].split("###")[0]
     check("intervals overlap in 4 of the 4 steps (sum - busy 0.80 ms, 16.0% of the sum)" in cell
-          and "| kernel | in-step median | exclusive |" in cell and "| 1 | 2.000 | 1.800 |" in cell
-          and "went to 2 queues (concurrent execution possible)" in cell, cell)
-    print("the report states the overlap and shows the exclusive column only where it matters: true")
+          and "- STAMPS: the stamped intervals of one step's segments overlap" in cell
+          and "| 1 | 2.000 | 2.000..2.000 |" in cell and "went to 2 queues or streams" in cell, cell)
+    print("the report calls overlapping stamps of a serial step a stamping artifact: true")
 
 with tempfile.TemporaryDirectory() as scratch:
     out = Path(scratch)

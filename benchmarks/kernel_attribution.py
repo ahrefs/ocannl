@@ -43,9 +43,10 @@ attribute. A CUDA cell states it too since gh-ocannl-1444, printed when present.
 
 How the in-step durations add up (gh-ocannl-1444): per timed step, the durations summed, the union
 of their stamped intervals (the device's busy time) and the span, against the host's step p50 and
-queued step time. Overlapping intervals make the sum exceed the busy time -- each row then also
-shows its exclusive time, which adds up to it -- and a device span longer than the host wall time
-enclosing it is flagged CLOCK. Each row carries the cost model's bytes read/written from the kernel
+queued step time. A step's segments run one after another on one stream, so stamped intervals
+that overlap do not place the kernels in time (flagged STAMPS: what rocprofv3 records on minix's
+unified gfx1151, where only each dispatch's own duration holds), and a device span longer than the
+host wall time enclosing it is flagged CLOCK. Each row carries the cost model's bytes read/written from the kernel
 table (`io:`) and the in-step bandwidth they imply.
 
 Joining cells (gh-ocannl-1444): cells of one kernel list -- repeats of one build, whose trace names
@@ -87,8 +88,9 @@ REPEAT_TOLERANCE = 1.05
 LABEL_WRITES = 3
 # A device span this much longer than the host wall time enclosing it is a time-base error.
 CLOCK_TOLERANCE = 0.01
-# Overlapping in-step intervals worth an exclusive-time column: this share of the summed durations.
-OVERLAP_SHOWN = 0.01
+# A step whose stamped intervals overlap by more than this share of its summed durations is one the
+# stamps cannot place in time (a step's segments run one after another).
+OVERLAP_TOLERANCE = 0.001
 # An amdgpu clock sample counts as the step's when the card reports itself at least this busy.
 BUSY_FLOOR = 50
 
@@ -260,24 +262,19 @@ def composition(rows, instances, timed):
     instances: instance s of every segment is step s of the window, the first `timed` steps synced
     one by one and the last `timed` queued back to back. Per step: `sum`, the kernels' durations
     added; `busy`, the union of their [start, end) intervals, which is what the device was occupied
-    for; `span`, first start to last end. sum > busy only when stamped intervals overlap: kernels
-    that ran concurrently, or stamps that open before the kernel can run (a dispatch processed while
-    its predecessor still executes). Each row gains `excl`, its median exclusive time -- what the
-    kernel adds to the union in start order, so the exclusive times of a step sum to its busy time.
-    The device spans are set beside the host's clocks: the synced half's per-step span against the
+    for; `span`, first start to last end. sum > busy only when stamped intervals overlap, which a
+    step's segments -- dependent, on one stream, a linear graph when captured -- cannot do while they
+    run: overlapping stamps say where the tracer stamped, not when the kernels ran. The device spans are set beside the host's clocks: the synced half's per-step span against the
     step p50, the queued half's span over `timed` against queued_step_ms. A device span longer than
     the host wall time that encloses it is a clock-domain error, not an attribution. None when the
     window's steps interleave (a segment that did not run once per step)."""
     window = 2 * timed
-    per_step, excl = [], {r["i"]: [] for r in rows}
+    per_step = []
     for s in range(window):
         iv = sorted((instances[i][s][0], instances[i][s][1], i) for i in instances)
         covered, busy = None, 0.0
-        for start, end, i in iv:
-            lo = start if covered is None else max(start, covered)
-            x = max(0.0, end - lo)
-            excl[i].append(x / 1e6)
-            busy += x
+        for start, end, _ in iv:
+            busy += max(0.0, end - (start if covered is None else max(start, covered)))
             covered = end if covered is None else max(covered, end)
         per_step.append({"start": iv[0][0], "end": max(e for _, e, _ in iv),
                          "last_start": iv[-1][0],
@@ -285,15 +282,14 @@ def composition(rows, instances, timed):
     for a, b in zip(per_step, per_step[1:]):
         if b["start"] < a["last_start"]:
             return None
-    for r in rows:
-        r["excl"] = statistics.median(excl[r["i"]])
     queues = {q for i in instances for _, _, q in instances[i] if q is not None}
     span = [(x["end"] - x["start"]) / 1e6 for x in per_step]
     queued = per_step[timed:]
     return {"sum": statistics.median(x["sum"] for x in per_step),
             "busy": statistics.median(x["busy"] for x in per_step),
             "span": statistics.median(span),
-            "overlap_steps": sum(1 for x in per_step if x["sum"] - x["busy"] > 1e-6),
+            "overlap_steps": sum(1 for x in per_step
+                                 if x["sum"] - x["busy"] > OVERLAP_TOLERANCE * x["sum"]),
             "synced_span": statistics.median(span[:timed]),
             "queued_span": (max(x["end"] for x in queued) - queued[0]["start"]) / 1e6 / timed,
             "queues": len(queues) if queues else None, "steps": window}
@@ -381,6 +377,12 @@ def render_composition(rec):
         "" if queued is None else "; queued %.2f ms/step, device %.2f" % (queued, c["queued_span"]))
     print("- device span against the host clock: synced steps %.2f ms against the %s" % (
         c["synced_span"], host))
+    if c["overlap_steps"]:
+        print("- STAMPS: the stamped intervals of one step's segments overlap, which segments run one"
+              " after another cannot: the trace's start/end stamps do not place the kernels in time."
+              " Each row's own duration may still hold (on minix's gfx1151 they agree with and"
+              " without graph capture); the union and span above, and anything read off positions,"
+              " do not")
     if c["synced_span"] > rec["step_ms"]["p50"] * (1 + CLOCK_TOLERANCE) or (
             queued is not None and c["queued_span"] > queued * (1 + CLOCK_TOLERANCE)):
         print("- CLOCK: the device stamps span more than the host wall time enclosing them (by"
@@ -388,7 +390,7 @@ def render_composition(rec):
               % round(CLOCK_TOLERANCE * 100))
     if c["queues"] is not None:
         print("- in-step dispatches went to %d %s" % (
-            c["queues"], "queue" if c["queues"] == 1 else "queues (concurrent execution possible)"))
+            c["queues"], "queue" if c["queues"] == 1 else "queues or streams"))
 
 
 def label(writes):
@@ -440,9 +442,6 @@ def render_cell(out, name, rec, rows):
               " (%d samples)%s"
               % (BUSY_FLOOR, clk[0], clk[2], clk[1], clk[3],
                  "" if clk[4] is None else "; power median %.1f W" % clk[4]))
-    # The exclusive column earns its place only where stamped intervals overlap (gh-ocannl-1444).
-    comp = rec["composition"]
-    exclusive = comp is not None and comp["sum"] - comp["busy"] > OVERLAP_SHOWN * comp["sum"]
     listed, shown, covered = [], 0, 0.0
     for r in sorted(rows, key=lambda r: -r["med"]):
         if covered >= SHOWN_SHARE * total or shown >= SHOWN_MAX:
@@ -450,17 +449,14 @@ def render_cell(out, name, rec, rows):
         shown += 1
         covered += r["med"]
         io, bandwidth = io_cells(r)
-        listed.append(("%d" % r["i"], "%.3f" % r["med"])
-                      + (("%.3f" % r["excl"],) if exclusive else ())
-                      + ("%.3f..%.3f" % (r["p10"], r["p90"]),
-                         "%.3f" % r["iso_min"], "%.2f" % (r["iso_min"] / r["med"]),
-                         "%.3f" % r["host_min"], io, bandwidth, " ".join(r["flags"]),
-                         label(r["writes"])))
+        listed.append(("%d" % r["i"], "%.3f" % r["med"], "%.3f..%.3f" % (r["p10"], r["p90"]),
+                       "%.3f" % r["iso_min"], "%.2f" % (r["iso_min"] / r["med"]),
+                       "%.3f" % r["host_min"], io, bandwidth, " ".join(r["flags"]),
+                       label(r["writes"])))
     print()
     print("\n".join(table_lines(
-        ["kernel", "in-step median"] + (["exclusive"] if exclusive else [])
-        + ["p10..p90", "isolated min", "iso / in-step", "table min", "MB read/written",
-           "in-step GB/s", "flags", "writes"], listed)))
+        ["kernel", "in-step median", "p10..p90", "isolated min", "iso / in-step", "table min",
+         "MB read/written", "in-step GB/s", "flags", "writes"], listed)))
     rest = sorted(rows, key=lambda r: -r["med"])[shown:]
     if rest:
         print("\n%d further kernels: %.2f ms in-step (%.1f%%), %d flagged ISO, %d SPREAD, %d OWN." % (
