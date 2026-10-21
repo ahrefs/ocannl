@@ -72,3 +72,5 @@ cva: aligned-grid conv pipeline on a merged segment matches within tolerance: tr
 cva: the aligned-grid conv pipeline's routine is labeled tensorized: true
 cva: aligned-grid conv seeded and timed on the merged fission segment: true
 cva: tuned merged conv graph matches the untuned twin within tolerance: true
+cvr: every register-tile twin renders its geometry from the schedule: true
+cvr: every register-tile twin matches its auto sibling bitwise: true

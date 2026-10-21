@@ -32,6 +32,12 @@
    1.2x) is excluded with the witness, the least-padded geometries stay, and
    [Autotune.lift_pad_waste] re-proposes exactly the excluded leaves and nothing refuted.
 
+   Register tiles (gh-ocannl-697, the matmul family's gh-ocannl-619 level): every CPU conv leaf is
+   twinned with the geometries [Ir.Register_tile.alternatives] proposes for its micro-kernel's
+   extents (the GEMM row, or the panel's rows, by the out-channel column), "auto" first. The tiled
+   leaves are exactly those alternatives, one per alternative per untiled leaf, derived here from
+   the same function the tree consults.
+
    [Autotune.model_family_search] walks the conv tree (it returned [None] for every conv site
    before, when [model_default] scanned conv seeds flat): with an unbeatable incumbent it scores
    leaves, and its pick is the exhaustive first argmin over the same leaves scored the same way;
@@ -181,7 +187,28 @@ let section ?(refused = false) name ~is_gpu ~limits opt =
         (name ^ ": the claiming family's tree is the conv tree")
         (Option.exists (Autotune.sketch_family_tree ~is_gpu ~is_cpu:(not is_gpu) ~limits opt)
            ~f:(fun t -> List.equal Poly.equal (Sspace.leaves t) seeds));
-      if refused then p (name ^ ": no leaf survives") (List.is_empty (Sspace.leaves tree))
+      (* The register-tile twins of the CPU leaves, against the alternatives at each leaf's own
+         micro-kernel extents (f32 sites: 4-byte elements). *)
+      (if not is_gpu then
+         let site = Option.value_exn (Autotune.detect_conv opt.LL.llc) in
+         let alternatives (q : Autotune.sketch_params) =
+           Ir.Register_tile.alternatives ~file:limits.Ir.Backend_intf.simd_vector ~elt_bytes:4
+             ~m:(if q.Autotune.sk_bm = 0 then site.Autotune.c_nrow else q.Autotune.sk_bm)
+             ~n:site.Autotune.c_noc
+         in
+         let leaves = Sspace.leaves tree in
+         let sorted l = List.sort l ~compare:Poly.compare in
+         p
+           (name ^ ": the register-tile twins are the alternatives at each leaf's extents")
+           (List.equal Poly.equal
+              (sorted (List.filter leaves ~f:(fun q -> Option.is_some q.Autotune.sk_tile)))
+              (sorted
+                 (List.concat_map leaves ~f:(fun q ->
+                      if Option.is_some q.Autotune.sk_tile then []
+                      else
+                        List.map (alternatives q) ~f:(fun t -> { q with Autotune.sk_tile = Some t }))))));
+      if refused then
+        p_empty (name ^ ": no leaf survives") ~over:(Sspace.refutations tree) (Sspace.leaves tree)
       else
         p_all (name ^ ": every leaf's path agrees with its parameters") (Sspace.enumerate tree)
           ~f:(fun (path, q) -> agrees path q);
@@ -209,34 +236,40 @@ let () =
   | Some tree ->
       p_exists "dividing: a pipelined depth-2 twin is a leaf" (Sspace.enumerate tree)
         ~f:(fun (path, q) -> on_path (FD.Twin (`Depth 2)) path && q.Autotune.sk_depth = 2));
+  (* 64 out-channels: a micro-kernel column of eight 8-lane vectors, where the register file affords
+     other C-tiles than the renderer's own -- the register-tile level appears. *)
+  let wide = lowering "cft_wide" (make_conv "cw" ~b:2 ~h:18 ~ic:8 ~oc:64) in
+  (match section "16x16 conv into 64 channels, CPU" ~is_gpu:false ~limits:cpu_limits wide with
+  | None -> ()
+  | Some tree ->
+      p_exists "64 channels: a register-tile twin is a leaf" (Sspace.enumerate tree)
+        ~f:(fun (path, q) ->
+          Option.is_some q.Autotune.sk_tile
+          && List.exists path ~f:(fun (_, d) ->
+              match d with FD.Register_tile (Some _) -> true | _ -> false)));
   (* With a tail: both flavors build their subtrees. *)
   let tailed = lowering "cft_tail" (make_conv ~tail:true "ct" ~b:2 ~h:11 ~ic:4 ~oc:8) in
-  let refuted_at tree ds ~sub =
-    List.exists (Sspace.refutations tree) ~f:(fun (path, w) ->
-        List.for_all ds ~f:(fun d -> on_path d path) && String.is_substring w ~substring:sub)
-  in
-  let leaf_at tree ds =
-    List.exists (Sspace.enumerate tree) ~f:(fun (path, _) ->
-        List.for_all ds ~f:(fun d -> on_path d path))
-  in
   (match section "9x9 conv + bias/relu tail, CPU" ~is_gpu:false ~limits:cpu_limits tailed with
   | None -> ()
   | Some tree ->
-      p "tail, CPU: the unfused Grid flavor is refuted on its uncovered companion"
-        (refuted_at tree
-           [ FD.Fusion `Unfused; FD.Conv_shape `Grid ]
-           ~sub:"which validate_parallel rejects");
-      p "tail, CPU: the fused Grid flavor is a leaf"
-        (leaf_at tree [ FD.Fusion `Fused; FD.Conv_shape `Grid ]));
+      p_exists "tail, CPU: the unfused Grid flavor is refuted on its uncovered companion"
+        (Sspace.refutations tree) ~f:(fun (path, w) ->
+          on_path (FD.Fusion `Unfused) path
+          && on_path (FD.Conv_shape `Grid) path
+          && String.is_substring w ~substring:"which validate_parallel rejects");
+      p_exists "tail, CPU: the fused Grid flavor is a leaf" (Sspace.enumerate tree)
+        ~f:(fun (path, _) -> on_path (FD.Fusion `Fused) path && on_path (FD.Conv_shape `Grid) path));
   (match section "9x9 conv + bias/relu tail, GPU" ~is_gpu:true ~limits:gpu_limits tailed with
   | None -> ()
   | Some tree ->
-      p "tail, GPU: the unfused flavor is refuted on companion coverage"
-        (refuted_at tree
-           [ FD.Fusion `Unfused; FD.Conv_leg `Gpu ]
-           ~sub:"GPU conv companion coverage (gh-521)"
-        && not (leaf_at tree [ FD.Fusion `Unfused ]));
-      p "tail, GPU: the fused flavor keeps its leaves" (leaf_at tree [ FD.Fusion `Fused ]));
+      p_exists "tail, GPU: the unfused flavor is refuted on companion coverage"
+        (Sspace.refutations tree) ~f:(fun (path, w) ->
+          on_path (FD.Fusion `Unfused) path && on_path (FD.Conv_leg `Gpu) path
+          && String.is_substring w ~substring:"GPU conv companion coverage (gh-521)");
+      p_exists "tail, GPU: the fused flavor keeps its leaves" (Sspace.enumerate tree)
+        ~f:(fun (path, _) -> on_path (FD.Fusion `Fused) path);
+      p_none "tail, GPU: no unfused leaf survives" (Sspace.enumerate tree) ~f:(fun (path, _) ->
+          on_path (FD.Fusion `Unfused) path));
   (* Launch caps, at the leaf: a 4-image batch over a 4-row spatial loop puts the batch on grid.y.
      At a 4-wide cap the whole-extent geometry is admitted; at 3 it is refuted with the gate's
      sentence. *)
@@ -349,13 +382,13 @@ let () =
   | Some default_tree, Some lowered ->
       Stdio.printf "== 20-row conv, GPU, pad-waste threshold 1.25 ==\n";
       print_tree ~indent:"  " lowered;
-      let excluded_at d =
-        List.exists (Sspace.exclusions lowered) ~f:(fun (path, w) ->
-            on_path d path && String.is_prefix w ~prefix:pad_waste_prefix)
-      in
-      p "pad waste: the 16-row block is excluded with the witness" (excluded_at (FD.Conv_rows 16));
-      p "pad waste: the least-padded geometries stay proposed"
-        ((not (excluded_at (FD.Conv_rows 0))) && not (excluded_at (FD.Conv_rows 8)));
+      let pad_excluded (_, w) = String.is_prefix w ~prefix:pad_waste_prefix in
+      p_exists "pad waste: the 16-row block is excluded with the witness"
+        (Sspace.exclusions lowered) ~f:(fun (path, w) ->
+          pad_excluded (path, w) && on_path (FD.Conv_rows 16) path);
+      p_none "pad waste: the least-padded geometries stay proposed" (Sspace.exclusions lowered)
+        ~f:(fun (path, w) ->
+          pad_excluded (path, w) && (on_path (FD.Conv_rows 0) path || on_path (FD.Conv_rows 8) path));
       let lifted = Autotune.lift_pad_waste lowered in
       p "pad waste: lifting re-proposes exactly the default threshold's leaves"
         (List.equal Poly.equal (Sspace.leaves lifted) (Sspace.leaves default_tree));

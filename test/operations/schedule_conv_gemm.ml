@@ -1549,3 +1549,84 @@ let () =
   | _ -> p "cva: aligned-grid conv seeded and timed on the merged fission segment" false);
   p_close "cva: tuned merged conv graph matches the untuned twin within tolerance" got_m want_m
     ~tol:(fun _ -> 1e-3)
+
+(* === The CPU conv seeds' register-tile twins (gh-ocannl-697): every CPU conv leaf whose
+   micro-kernel (the GEMM row by the out-channel column) admits other C-tiles than the renderer's
+   own is twinned with them, as the matmul family's CPU tensorized leaves are (gh-ocannl-619). Each
+   twin seeded under the machine's own limits is executed: it renders the requested geometry, named
+   in the emitted header with its provenance, and matches its "auto" sibling bitwise -- a C-tile
+   geometry reorders no element's reduction. 64 out-channels give the micro-kernel eight to sixteen
+   vector columns, where the register file affords alternatives at every width. === *)
+let () =
+  let tiled_label = "cvr: every register-tile twin renders its geometry from the schedule" in
+  let bitwise_label = "cvr: every register-tile twin matches its auto sibling bitwise" in
+  if not on_cpu then (
+    skipped tiled_label;
+    skipped bitwise_label)
+  else
+    let make tag =
+      let x =
+        NTDSL.init ~l:(tag ^ "x") ~prec:Ir.Ops.single ~b:[ 2 ] ~o:[ 18; 18; 8 ]
+          ~f:(Ll_test.weighted ~weights:[| 1; 1; 2; 3 |] ~modulus:7 ~offset:0. ~stride:1.)
+          ()
+      in
+      let kern =
+        NTDSL.init ~l:(tag ^ "k") ~prec:Ir.Ops.single ~i:[ 3; 3; 8 ] ~o:[ 64 ]
+          ~f:(Ll_test.weighted ~weights:[| 2; 1; 1; 3 |] ~modulus:5 ~offset:(-2.) ~stride:1.)
+          ()
+      in
+      let%op y =
+        x +* "...| oh<+kh, ow<+kw, ..ic..; |kh, kw, ..ic.. -> ..oc.. => ...| oh, ow, ..oc.." kern
+      in
+      y
+    in
+    let limits = Context.hardware_limits (Context.auto ()) in
+    let seeds = ref [] in
+    ignore
+      (Context.compile
+         ~lowered_transform:(fun o ->
+           seeds := Autotune.sketch_seed_params ~is_gpu:false ~is_cpu:true ~limits o;
+           [ o ])
+         (Context.auto ())
+         (named "cvr_probe" (Train.forward (make "cvr_p")))
+         Ir.Indexing.Empty);
+    let run name p_ =
+      let y = make name in
+      let ctx, routine =
+        Context.compile
+          ~lowered_transform:(fun o ->
+            [ Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:p_ o) o ])
+          (Context.auto ())
+          (named name (Train.forward y))
+          Ir.Indexing.Empty
+      in
+      let ctx = Context.run ctx routine in
+      Context.get_values ctx y.Tensor.value
+    in
+    let tiled = List.filter !seeds ~f:(fun s -> Option.is_some s.Autotune.sk_tile) in
+    Stdio.eprintf "cvr: %d CPU conv seeds, %d register-tile twins (not part of the golden)\n"
+      (List.length !seeds) (List.length tiled);
+    if List.is_empty tiled then (
+      (* A vector file affording no alternative at this micro-kernel proposes no twin. *)
+      skipped tiled_label;
+      skipped bitwise_label)
+    else
+      let results =
+        List.mapi tiled ~f:(fun i s ->
+            let t = Option.value_exn s.Autotune.sk_tile in
+            let name = Printf.sprintf "cvr_t%d" i in
+            let got = run name s in
+            let src = Generated.read name in
+            let header =
+              Printf.sprintf "Tile_mma register tiling: %dx%d C-tile of %d-lane"
+                t.Ir.Register_tile.rm t.Ir.Register_tile.rn t.Ir.Register_tile.lanes
+            in
+            let rendered =
+              String.is_substring src ~substring:header
+              && String.is_substring src ~substring:"geometry from the schedule"
+            in
+            let auto = run (Printf.sprintf "cvr_a%d" i) { s with Autotune.sk_tile = None } in
+            (rendered, Array.equal Float.equal (nonzero name got) auto))
+      in
+      p_all tiled_label results ~f:fst;
+      p_all bitwise_label results ~f:snd

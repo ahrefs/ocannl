@@ -2585,7 +2585,7 @@ let conv_split_row_current (site : conv_site) ~row_o ~row_i : Idx.symbol list =
    chunk. Both cases exclude whole-node [Zero_out] (the seeds gate accordingly). A covering per-cell
    zero companion follows the segment's aligned Grid geometry. *)
 let cpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
-    { sk_grid; sk_bm; sk_epilogue; sk_pack_prec; _ } : Sched.schedule =
+    { sk_grid; sk_bm; sk_epilogue; sk_pack_prec; sk_tile = tile; _ } : Sched.schedule =
   let stage source tile_loops =
     (* Mint the im2col/panel tiles at the site's compute precision where the source stores narrower
        (gh-ocannl-575); see [cpu_mma_pack_sketch_schedule]. *)
@@ -2637,7 +2637,7 @@ let cpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
     let target =
       List.map site.c_outer ~f:fst @ [ row_o ] @ site.c_kernel @ [ row_i; site.c_oc; site.c_red ]
     in
-    let tz, _lane = Sched.tensorize ~i:row_i ~j:site.c_oc ~k:site.c_red ~simd_width:1 () in
+    let tz, _lane = Sched.tensorize ?tile ~i:row_i ~j:site.c_oc ~k:site.c_red ~simd_width:1 () in
     row_pads @ grid_ops
     @ (sp_row :: reorder_swaps ~current ~target)
     @ [ stage site.c_a [ row_i; site.c_red ]; stage site.c_b [ site.c_red; site.c_oc ]; tz ]
@@ -2645,7 +2645,9 @@ let cpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
     let loop_syms =
       List.map site.c_outer ~f:fst @ site.c_kernel @ [ site.c_row; site.c_oc; site.c_red ]
     in
-    let tz, _lane = Sched.tensorize ~i:site.c_row ~j:site.c_oc ~k:site.c_red ~simd_width:1 () in
+    let tz, _lane =
+      Sched.tensorize ?tile ~i:site.c_row ~j:site.c_oc ~k:site.c_red ~simd_width:1 ()
+    in
     let zops, grid_ops =
       if not sk_grid then ([], [])
       else if List.length (conv_real_stmts site opt) > 2 then
@@ -4417,6 +4419,35 @@ let conv_family_tree ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~
                 (if Ir.Ops.equal_prec cprec a_prec && Ir.Ops.equal_prec cprec b_prec then None
                  else Some cprec);
             }
+          in
+          (* The register-tile level (gh-ocannl-619 for the matmul family; gh-ocannl-697 here):
+             every CPU conv leaf is twinned with the geometries {!Ir.Register_tile.alternatives}
+             proposes for ITS micro-kernel extents — the GEMM row ([c_nrow], or the panel's [sk_bm]
+             rows) by the out-channel column — at the register tiling's compute precision, "auto"
+             (the renderer's own choice) first, so a site with no alternative keeps its pre-level
+             leaf. Under [autotune_register_tile_rm_twin] the level also carries the two-row twin,
+             as in the matmul family. *)
+          let leaf =
+            let rm_twin_seeded = Utils.registered_flag ~arg_name:"autotune_register_tile_rm_twin" in
+            let file = limits.Ir.Backend_intf.simd_vector in
+            let elt_bytes = max 1 (Ir.Ops.prec_in_bytes (cpu_register_tile_prec ~limits prec)) in
+            fun (p : sketch_params) ->
+              let m = if p.sk_bm = 0 then site.c_nrow else p.sk_bm and n = site.c_noc in
+              match
+                Ir.Register_tile.alternatives ~file ~elt_bytes ~m ~n
+                @
+                if rm_twin_seeded then
+                  Option.to_list (Ir.Register_tile.rm_twin ~file ~elt_bytes ~m ~n)
+                else []
+              with
+              | [] -> leaf p
+              | alts ->
+                  subt (fun () ->
+                      decided_choice
+                        ((Family_decision.Register_tile None, leaf p)
+                        :: List.map alts ~f:(fun t ->
+                            ( Family_decision.Register_tile (Some t),
+                              leaf { p with sk_tile = Some t } ))))
           in
           let outer_ok = match site.c_outer with (_, n) :: _ -> n >= 2 | [] -> false in
           let no_alignment =

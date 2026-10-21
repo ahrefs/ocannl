@@ -1068,8 +1068,13 @@ files.
   integer (scaled by `rm`) because the float form broke those ties by rounding at rm = 3 and 1
   (gh-ocannl-947). The two-row twin `Register_tile.rm_twin` (rm = 2, the widest the budget admits)
   joins the level only under `autotune_register_tile_rm_twin`, off until a timing shows it winning.
-  Not done: the conv family (not tree-factored); whether a partial vector's masked copies deserve
-  a term of their own.
+  The CPU conv leaves carry the same level since gh-ocannl-697 (micro-kernel `m` = the GEMM row
+  or the panel's `sk_bm` rows, `n` = the out-channels; `cpu_conv_sketch_schedule` hands `sk_tile`
+  to both of its `Sched.tensorize` calls), pinned by `schedule_conv_gemm`'s `cvr` leg (every twin
+  renders its header's geometry and matches its `auto` sibling bitwise). Small-channel convs get
+  no twin: at 8 out-channels one or two vector columns leave no alternative at any width, which is
+  why the conv seed counts there did not move. Not done: whether a partial vector's masked copies
+  deserve a term of their own.
 - **C-tile traffic cannot rank `rn` at a fixed lane width** (gh-ocannl-1099).
   Full passes plus the narrower column tail move `2 * rm * ceil(n/lanes)` C vectors per row
   band, independent of `rn`; charging `2 * rm * rn / k` at full `rn` on the tail pass, or once

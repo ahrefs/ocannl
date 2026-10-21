@@ -6485,7 +6485,8 @@
 
 (test
  ; cc-vector-width: independent -- the conv family's seed counts read the width only through gates
- ; passing at 16, 32 and 64 bytes.
+ ; passing at 16, 32 and 64 bytes, and through register-tile alternatives none of its 8-channel
+ ; sites has at any width; the 64-channel cvr leg skips where the width affords no twin.
  (name schedule_conv_gemm)
  (package neural_nets_lib)
  (deps
@@ -6861,7 +6862,14 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND)
-  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX)
+  (env_var OCANNL_CC_VECTOR_BYTES)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL))
  (modules conv_family_tree)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
