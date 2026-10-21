@@ -67,7 +67,6 @@ let exempt_zero_reference_exports =
     "C_syntax.op_syntax_idents";
     "C_syntax.summarize_peel_census";
     "C_syntax.summarize_volatility_census";
-    "Lexer.buffered_token";
     "Lexer.multichar_token";
     "Lexer.single_char_token";
     "Ndarray.adjust_idx_for_padding";
