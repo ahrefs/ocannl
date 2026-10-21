@@ -3755,7 +3755,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   closure that reaches a configuration reader all the same (a tree the scan below has not judged
   yet) counts the configuration; a dependency the closure cannot follow (an alias spelled
   through a pform, an `(include …)`, a `dynamic-run`) makes any batch reaching it every backend;
-  and an unread stanza head anywhere (`include`, `cram`) makes every batch every backend. So a single `none`-marked
+  and an unread stanza head anywhere (`include`, `cram`), or a reader of a configuration the
+  runner does not resolve (the check below, run by `ocannl_slot_kind` too), makes every batch
+  every backend. So a single `none`-marked
   test outside the list counts the configuration again: under a GPU configuration it takes a GPU
   slot, the loud direction, by design; `@lifecycle` stays off the list because its probes read
   the configuration. `slot_kind_live` (in `@test/operations/scans`, reading only the files its

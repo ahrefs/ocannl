@@ -76,7 +76,7 @@ let () =
       "build @lifecycle";
       "build @test/operations/runtest-env_var_deps";
     ] ~f:(fun argv ->
-      let answer = Slot_kind.answer ~dune_files (String.split argv ~on:' ') in
+      let answer = Slot_kind.answer ~config_files ~dune_files (String.split argv ~on:' ') in
       let why =
         match answer with
         | Reaches { reads_config = Some why; _ } -> why
@@ -84,7 +84,9 @@ let () =
         | Unknown why -> "unknown: " ^ why
       in
       printf "%-45s %s\n    %s\n" argv (Slot_kind.summary answer) why);
-  let summary argv = Slot_kind.summary (Slot_kind.answer ~dune_files (String.split argv ~on:' ')) in
+  let summary argv =
+    Slot_kind.summary (Slot_kind.answer ~config_files ~dune_files (String.split argv ~on:' '))
+  in
   p "the live tree is a dune-file inventory, not an empty glob" (List.length dune_files > 10);
   p_empty "the live tree breaks no check that keeps the configuration-free answers true"
     ~over:dune_files refusals;

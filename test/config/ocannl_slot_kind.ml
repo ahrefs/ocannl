@@ -15,7 +15,8 @@ let () =
   match Test_utils.Slot_kind.dune_files ~root:"." () with
   | exception exn -> printf "unknown: the source tree is unreadable here (%s)\n" (Exn.to_string exn)
   | files -> (
-      match Test_utils.Slot_kind.answer ~dune_files:files argv with
+      let config_files = Test_utils.Slot_kind.config_files_of ~root:"." files in
+      match Test_utils.Slot_kind.answer ~config_files ~dune_files:files argv with
       | Unknown why -> printf "unknown: %s\n" why
       | Reaches { named; reads_config } ->
           List.iter named ~f:(fun (backend, why) -> printf "names %s: %s\n" backend why);

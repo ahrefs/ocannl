@@ -942,6 +942,87 @@ let dune_files ?(workspace_root = true) ~root () =
   in
   under ""
 
+(** Every stanza reading the configuration -- declaring [(env_var OCANNL_BACKEND)], or neither it
+    nor a marker -- whose nearest configuration is not one the runner resolves (gh-ocannl-1249): a
+    refusal each. Shared by {!refusals} and, failing closed, by {!answer} (Codex review round 5 on
+    staging#1318). [config_files] are the repository-relative paths of the [ocannl_config] files
+    present in the tree. *)
+let unresolved_readers ~config_files ~stanzas dune_files =
+  let paths = List.map dune_files ~f:(fun (dir, content) -> (join dir "dune", content)) in
+  let report = Config_dep_resolution.analyze ~exemption_keys:[] ~config_files paths in
+  (* Where each directory's copied configuration comes from. *)
+  let copied_from =
+    List.concat_map paths ~f:(fun (dune_file, content) ->
+        let dir = Config_dep_resolution.root_normalized (Stdlib.Filename.dirname dune_file) in
+        List.map (Scan.copy_sources content ~name:Scan.config_file) ~f:(fun (subdir, source) ->
+            let into = Config_dep_resolution.under dir subdir in
+            ( Config_dep_resolution.root_normalized into,
+              Config_dep_resolution.root_normalized
+                (Stdlib.Filename.dirname (Config_dep_resolution.under into source)) )))
+  in
+  (* The ambient copy is test/config's only while its exact producer stands, and it is the
+     producer's own output rather than a copy of anything (Codex review round 4 on staging#1318). *)
+  let ambient_trusted =
+    List.exists stanzas ~f:(fun s ->
+        Poly.equal s.role Runs && ambient_augmentation ~dir:s.dir s.sexp)
+    && not (List.exists copied_from ~f:(fun (into, _) -> String.equal into ambient_config_dir))
+  in
+  let resolved = if ambient_trusted then ambient_config_dir :: config_dirs else config_dirs in
+  (* The directories a configuration in [d] comes from, following copies of copies to where they
+     start; a cycle stops where it closes. *)
+  let rec origins ~seen d =
+    match
+      List.filter_map copied_from ~f:(fun (into, from) -> Option.some_if (String.equal into d) from)
+    with
+    | [] -> [ d ]
+    | sources ->
+        List.concat_map sources ~f:(fun from ->
+            if List.mem seen from ~equal:String.equal then [ from ]
+            else origins ~seen:(from :: seen) from)
+  in
+  (* A stanza declaring neither the variable nor a marker reads the configuration too, the widening
+     way [backend_of_rule] reads it: [env_var_deps] fails it, but that may not have run yet (Codex
+     review round 3 on staging#1318). *)
+  let undeclared =
+    List.map paths ~f:(fun (dune_file, content) ->
+        ( dune_file,
+          List.concat_map (Scan.backend_marker_contract content).Scan.contract_stanzas
+            ~f:(fun marked ->
+              match Scan.backend_rule_of marked with
+              | Scan.Names_neither -> marked.Scan.marker_stanza.Scan.marked_sites
+              | _ -> []) ))
+  in
+  List.concat_map report.Config_dep_resolution.files ~f:(fun file ->
+      let neither =
+        Option.value ~default:[]
+          (List.Assoc.find undeclared file.Config_dep_resolution.dune_file ~equal:String.equal)
+      in
+      List.filter_map file.Config_dep_resolution.sites ~f:(fun r ->
+          let site = r.Config_dep_resolution.site in
+          if not (site.Scan.declares_backend || List.mem neither site ~equal:Poly.equal) then None
+          else
+            let at = r.Config_dep_resolution.directory in
+            let at = if String.is_empty at then "." else at in
+            let who = Printf.sprintf "the configuration: %s running in %s" site.Scan.name at in
+            match (site.Scan.kind, r.Config_dep_resolution.nearest) with
+            | Scan.Unreadable_directory, _ -> Some (who ^ ", in a directory this cannot establish")
+            | _, None ->
+                Some
+                  (who
+                 ^ ", with no checked-in configuration in reach: it reads the gitignored root one, \
+                    or none")
+            | _, Some nearest -> (
+                let sources = origins ~seen:[ nearest ] nearest in
+                match
+                  List.find sources ~f:(fun d -> not (List.mem resolved d ~equal:String.equal))
+                with
+                | None -> None
+                | Some d ->
+                    Some
+                      (Printf.sprintf
+                         "%s, which reads the configuration in %s: not one the runner resolves" who
+                         (if String.is_empty d then "." else d)))))
+
 (** What a dune argv can hold. [Reaches] lists in [named] each backend a reached stanza's marker
     names, once, with the first stanza that names it, and gives in [reads_config] why the
     configuration counts -- [None] when every target is on {!config_free_aliases} or a plain
@@ -987,7 +1068,8 @@ let declares_product stanzas ~dir ~file =
   declared [ "executable"; "executables"; "test"; "tests" ] exe_products
   || declared [ "library" ] library_products
 
-let answer ?(getenv = Stdlib.Sys.getenv_opt) ?(config_free = config_free_aliases) ~dune_files argv =
+let answer ?(getenv = Stdlib.Sys.getenv_opt) ?(config_free = config_free_aliases) ?config_files
+    ~dune_files argv =
   let build_dir = Option.value (getenv "DUNE_BUILD_DIR") ~default:"" in
   (* With the build directory moved to a relative [out], [@out/default/runtest] is a context root,
      not a source directory (Codex review on PR #1027). *)
@@ -1036,6 +1118,16 @@ let answer ?(getenv = Stdlib.Sys.getenv_opt) ?(config_free = config_free_aliases
                    "the dune file in %s carries a (%s …) stanza, which this does not read"
                    (if String.is_empty s.dir then "." else s.dir)
                    (Option.value_exn (unread_head s)))
+          | Ok stanzas
+            when Option.exists config_files ~f:(fun config_files ->
+                     not (List.is_empty (unresolved_readers ~config_files ~stanzas dune_files))) ->
+              (* A reader of a configuration the runner does not resolve: what it selects is unread,
+                 so every batch is every backend until the tree is fixed -- the scan refuses it, but
+                 may not have run yet (Codex review round 5 on staging#1318). *)
+              Unknown
+                (List.hd_exn
+                   (unresolved_readers ~config_files:(Option.value_exn config_files) ~stanzas
+                      dune_files))
           | Ok stanzas -> (
               (* An alias the argv names that no stanza in its scope carries is one of dune's own,
                  and only the ones listed are modelled ([revdep-runtest] builds what depends on the
@@ -1120,6 +1212,22 @@ let answer ?(getenv = Stdlib.Sys.getenv_opt) ?(config_free = config_free_aliases
                                  (describe s)))
                   in
                   Reaches { named; reads_config })))
+
+(** The [ocannl_config] files checked into the tree [dune_files] was read from, as the run-time
+    resolver hands them to {!answer}: the one in each directory holding a dune file, or above one,
+    below [root]. A configuration only a [chdir] reaches, in a directory with no dune file at or
+    below it, is not seen, so a reader there reads as having nothing in reach: the loud direction.
+*)
+let config_files_of ~root dune_files =
+  let rec ancestors dir =
+    if String.is_empty dir then []
+    else dir :: (match String.rsplit2 dir ~on:'/' with Some (up, _) -> ancestors up | None -> [])
+  in
+  List.concat_map dune_files ~f:(fun (dir, _) -> ancestors dir)
+  |> List.dedup_and_sort ~compare:String.compare
+  |> List.filter_map ~f:(fun dir ->
+      let path = join dir Scan.config_file in
+      Option.some_if (Stdlib.Sys.file_exists (Stdlib.Filename.concat root path)) path)
 
 (** Whether [answer] can hold a GPU by name: an unknown answer can. Whether a configuration that
     counts names one is the caller's question. *)
@@ -1226,91 +1334,5 @@ let refusals ?(config_free = config_free_aliases) ~config_files dune_files =
               && not (ambient_augmentation ~dir:s.dir s.sexp))
               (Printf.sprintf "the configuration: %s, which can write an ocannl_config" (describe s)))
       in
-      let readers =
-        let paths = List.map dune_files ~f:(fun (dir, content) -> (join dir "dune", content)) in
-        let report = Config_dep_resolution.analyze ~exemption_keys:[] ~config_files paths in
-        (* Where each directory's copied configuration comes from. *)
-        let copied_from =
-          List.concat_map paths ~f:(fun (dune_file, content) ->
-              let dir = Config_dep_resolution.root_normalized (Stdlib.Filename.dirname dune_file) in
-              List.map (Scan.copy_sources content ~name:Scan.config_file)
-                ~f:(fun (subdir, source) ->
-                  let into = Config_dep_resolution.under dir subdir in
-                  ( Config_dep_resolution.root_normalized into,
-                    Config_dep_resolution.root_normalized
-                      (Stdlib.Filename.dirname (Config_dep_resolution.under into source)) )))
-        in
-        (* The ambient copy is test/config's only while its exact producer stands, and it is the
-           producer's own output rather than a copy of anything (Codex review round 4 on
-           staging#1318). *)
-        let ambient_trusted =
-          List.exists stanzas ~f:(fun s ->
-              Poly.equal s.role Runs && ambient_augmentation ~dir:s.dir s.sexp)
-          && not
-               (List.exists copied_from ~f:(fun (into, _) -> String.equal into ambient_config_dir))
-        in
-        let resolved = if ambient_trusted then ambient_config_dir :: config_dirs else config_dirs in
-        (* The directories a configuration in [d] comes from, following copies of copies to where
-           they start; a cycle stops where it closes. *)
-        let rec origins ~seen d =
-          match
-            List.filter_map copied_from ~f:(fun (into, from) ->
-                Option.some_if (String.equal into d) from)
-          with
-          | [] -> [ d ]
-          | sources ->
-              List.concat_map sources ~f:(fun from ->
-                  if List.mem seen from ~equal:String.equal then [ from ]
-                  else origins ~seen:(from :: seen) from)
-        in
-        (* A stanza declaring neither the variable nor a marker reads the configuration too, the
-           widening way [backend_of_rule] reads it: [env_var_deps] fails it, but that may not have
-           run yet (Codex review round 3 on staging#1318). *)
-        let undeclared =
-          List.map paths ~f:(fun (dune_file, content) ->
-              ( dune_file,
-                List.concat_map (Scan.backend_marker_contract content).Scan.contract_stanzas
-                  ~f:(fun marked ->
-                    match Scan.backend_rule_of marked with
-                    | Scan.Names_neither -> marked.Scan.marker_stanza.Scan.marked_sites
-                    | _ -> []) ))
-        in
-        List.concat_map report.Config_dep_resolution.files ~f:(fun file ->
-            let neither =
-              Option.value ~default:[]
-                (List.Assoc.find undeclared file.Config_dep_resolution.dune_file ~equal:String.equal)
-            in
-            List.filter_map file.Config_dep_resolution.sites ~f:(fun r ->
-                let site = r.Config_dep_resolution.site in
-                if not (site.Scan.declares_backend || List.mem neither site ~equal:Poly.equal) then
-                  None
-                else
-                  let at = r.Config_dep_resolution.directory in
-                  let at = if String.is_empty at then "." else at in
-                  let who =
-                    Printf.sprintf "the configuration: %s running in %s" site.Scan.name at
-                  in
-                  match (site.Scan.kind, r.Config_dep_resolution.nearest) with
-                  | Scan.Unreadable_directory, _ ->
-                      Some (who ^ ", in a directory this cannot establish")
-                  | _, None ->
-                      Some
-                        (who
-                       ^ ", with no checked-in configuration in reach: it reads the gitignored \
-                          root one, or none")
-                  | _, Some nearest -> (
-                      let sources = origins ~seen:[ nearest ] nearest in
-                      match
-                        List.find sources ~f:(fun d ->
-                            not (List.mem resolved d ~equal:String.equal))
-                      with
-                      | None -> None
-                      | Some d ->
-                          Some
-                            (Printf.sprintf
-                               "%s, which reads the configuration in %s: not one the runner \
-                                resolves"
-                               who
-                               (if String.is_empty d then "." else d)))))
-      in
+      let readers = unresolved_readers ~config_files ~stanzas dune_files in
       listed @ plain @ inventory @ generated @ readers

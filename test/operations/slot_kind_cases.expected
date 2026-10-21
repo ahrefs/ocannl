@@ -263,6 +263,14 @@ a cram test is refused: true
 a dynamic-run:
     the inventory: it reaches the rule on dyn in w, whose dynamic-run it cannot follow
 a dynamic-run is refused: true
+build @test/operations/scans (a foreign reader) unknown: the configuration: q_reader running in q, which reads the configuration in hipcfg: not one the runner resolves
+build @test/operations/scans (clean)     names metal
+build @test/operations/scans beside a reader of a foreign configuration is every backend: true
+build @test/operations/scans on the clean tree is no unknown: true
+runtest t (a foreign reader)             unknown: the configuration: q_reader running in q, which reads the configuration in hipcfg: not one the runner resolves
+runtest t (clean)                        names nothing + reads config
+runtest t beside a reader of a foreign configuration is every backend: true
+runtest t on the clean tree is no unknown: true
 a reader producing a data file off the list is refused nothing: true
 dirs: [] [.x] [.x/keep] [plain] [tools/.hidden] [tools/sub]
 the inventory reads where dirs stanzas send dune, and nowhere else: true

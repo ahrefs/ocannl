@@ -731,6 +731,28 @@ let () =
       let found = refused ~config_files dune_files in
       List.iter found ~f:(fun r -> printf "%s:\n    %s\n" what r);
       p_exists (Printf.sprintf "%s is refused" what) found ~f:(String.is_substring ~substring));
+  (* The run-time answer fails closed on the same reader check, whatever the argv (Codex review
+     round 5 on staging#1318): a reader of a foreign copy anywhere makes every batch every backend,
+     the listed alias's included, while the clean tree answers as ever. *)
+  let foreign =
+    replace "q"
+      {dune|(copy_files ../hipcfg/ocannl_config)
+(test (name q_reader) (deps ocannl_config (env_var OCANNL_BACKEND)))|dune}
+      base
+  in
+  List.iter [ "build @test/operations/scans"; "runtest t" ] ~f:(fun argv ->
+      let shown dune_files config_files =
+        Slot_kind.summary (Slot_kind.answer ~config_files ~dune_files (String.split argv ~on:' '))
+      in
+      let refused = shown foreign ("hipcfg/ocannl_config" :: config_files) in
+      let clean = shown base config_files in
+      printf "%-40s %s\n%-40s %s\n" (argv ^ " (a foreign reader)") refused (argv ^ " (clean)") clean;
+      p
+        (Printf.sprintf "%s beside a reader of a foreign configuration is every backend" argv)
+        (String.is_prefix refused ~prefix:"unknown: ");
+      p
+        (Printf.sprintf "%s on the clean tree is no unknown" argv)
+        (not (String.is_prefix clean ~prefix:"unknown: ")));
   (* A data file a reader produces is no plain compilation's business: nothing compiling needs
      it. *)
   let data =
