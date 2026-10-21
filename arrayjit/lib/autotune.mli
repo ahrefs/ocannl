@@ -2061,18 +2061,20 @@ val model_family_search :
   incumbent:float ->
   Ir.Low_level.optimized ->
   ((sketch_params * float) option * Ir.Schedule_space.search_stats * float option) option
-(** {!model_default}'s branch-and-bound walk over the factored matmul family ({!matmul_sketch_tree})
-    of one lowering: [(best, stats, bound)], where [best] is the first leaf whose [score] (of its
-    scheduled form) is strictly below [incumbent], the threshold tightening as leaves improve on it,
-    and [bound] the family's schedule-invariant roofline floor under the envelope. Exact ties
-    between leaves go to fewer tile-MMA operand load instructions ({!model_operand_loads} under
-    [capabilities] — {!model_default} passes the backend's; gh-ocannl-1254) between leaves that both
-    have tile-MMA sites, then to the first; a tie never displaces [incumbent]. Sketches are
-    scheduled at [capabilities]' [accum_prec]. [on_rejected] is called for each leaf whose schedule
-    fails to apply; a leaf [admit] refuses is left unscored, [on_excluded] called, before it is
-    scheduled ({!model_default}'s numerics-preserving restriction). [None] for a lowering with no
-    matmul site. Exposed so a test can drive the walk with stand-in limits and load rules on any
-    backend. *)
+(** {!model_default}'s branch-and-bound walk over the factored family of one lowering
+    ({!sketch_family_tree}: the matmul family, or since gh-ocannl-697 the conv family):
+    [(best, stats, bound)], where [best] is the first leaf whose [score] (of its scheduled form) is
+    strictly below [incumbent], the threshold tightening as leaves improve on it, and [bound] the
+    family's schedule-invariant roofline floor under the envelope. Exact ties between leaves go to
+    fewer tile-MMA operand load instructions ({!model_operand_loads} under [capabilities] —
+    {!model_default} passes the backend's; gh-ocannl-1254) between leaves that both have tile-MMA
+    sites, then to the first; a tie never displaces [incumbent]. Sketches are scheduled at
+    [capabilities]' [accum_prec]. [on_rejected] is called for each leaf whose schedule fails to
+    apply; a leaf [admit] refuses is left unscored, [on_excluded] called, before it is scheduled
+    ({!model_default}'s numerics-preserving restriction). [None] for a lowering neither family
+    claims. A conv path carries no certain-traffic increment, so its bound is the schedule-invariant
+    floor, sound for every completion. Exposed so a test can drive the walk with stand-in limits and
+    load rules on any backend. *)
 
 type seeded_choice = {
   sd_seeded : (int * sketch_params) list;

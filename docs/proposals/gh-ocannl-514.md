@@ -71,10 +71,11 @@ default's score as incumbent and the schedule-invariant `completion_floor` roofl
 uniform bound (sketch completions share the base program's semantics, so the floor bounds them
 all; it fathoms the family exactly when the incumbent already achieves it — the memory-bound
 kernels where the default preset is optimal). Selections are unchanged (goldens byte-identical);
-the not-yet-factored conv family competes through the flat path at the tightened threshold.
-The epilogue twins competed that way too until gh-613 made fusion the tree's root level, which
-put them inside the walk — under its bound and on its stats ledger — after the unfused leaves,
-preserving the seeds-then-twins order. Phase 4b (first half) implemented: bound pruning against the measured incumbent in `tune` —
+the conv family competed through a flat path at the tightened threshold until gh-697 factored it
+into its own tree under the same root, so the walk covers every site. The epilogue twins
+competed that way too until gh-613 made fusion the tree's root level, which put them inside the
+walk — under its bound and on its stats ledger — after the unfused leaves, preserving the
+seeds-then-twins order. Phase 4b (first half) implemented: bound pruning against the measured incumbent in `tune` —
 an enumerative sketch candidate (whole-routine/per-segment sketches, split-reduce seeds) whose
 schedule-invariant roofline floor meets the best measured time so far is skipped before
 compile, the admissible-direction pruning of the tuned regime; config-gated

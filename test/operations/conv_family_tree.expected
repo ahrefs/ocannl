@@ -107,3 +107,7 @@ tail: the fused flavor has leaves: true
 4x4 conv over 4 images, GPU, grid cap 3: no leaf survives: true
 cap 3: the whole-extent geometry is refuted with the gate's sentence: true
 cap 4: the whole-extent geometry is admitted: true
+model search: the walk covers the conv site: true
+model search: with an unbeatable incumbent the walk scores leaves: true
+model search: the pick is the exhaustive first argmin: true
+model search: at the floor the walk fathoms instead of scoring: true

@@ -304,7 +304,12 @@ files.
   `conv-shape` menu, the GPU `conv-staging` above `conv-rows`, so the leaves keep the flat list's
   plain-geometries-then-depth-twins order for any depth list); `sketch_family_tree` is whichever
   family claims the lowering, and its census lines are the tree's refutations, path by path,
-  where the conv legs used to keep free-text notes. **Consequence for diagnostics: since gh-577 a companion-coverage
+  where the conv legs used to keep free-text notes. `model_family_search` walks it too, so a conv
+  site gets the family bound, the stats ledger and the operand-load tie-break: where `model_default`
+  used to scan conv seeds flat (`best_flat`, first strict improvement), an exact score tie between
+  two conv leaves with tile-MMA load counts can now crown the second one. The conv traffic-floor
+  increment is 0 (sound: `completion_floor` bounds every completion); a positive staging increment
+  for conv paths needs its own derivation. **Consequence for diagnostics: since gh-577 a companion-coverage
   DECLINE CENSUS is empty, and that is not evidence the rule stopped firing** — a refuted family is
   never seeded, so it never reaches the decline log. gh-569's Part 3 read 25 coverage declines out of
   `schedule_log_declines`; the same workload on current master logs zero

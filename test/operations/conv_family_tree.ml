@@ -14,7 +14,11 @@
    with its parameters, read off the walk (fusion vs [sk_epilogue], the leg vs [sk_gpu], the shape,
    rows and depth vs [sk_grid], [sk_bm] and [sk_depth]); - a site with no fusable tail refutes the
    fused flavor with the recognizer's own reason; - the launch caps refute at the leaf with the
-   gate's sentence: at the cap the geometry is admitted, one below it refused. *)
+   gate's sentence: at the cap the geometry is admitted, one below it refused; -
+   [Autotune.model_family_search] walks the conv tree (it returned [None] for every conv site
+   before, when [model_default] scanned conv seeds flat): with an unbeatable incumbent it scores
+   leaves, and its pick is the exhaustive first argmin over the same leaves scored the same way;
+   with the incumbent at the family's floor it fathoms instead of scoring. *)
 
 open Base
 open Ocannl
@@ -24,6 +28,7 @@ module LL = Ir.Low_level
 module Sched = Ir.Schedule
 module Sspace = Ir.Schedule_space
 module FD = Autotune.Family_decision
+module CM = Ir.Cost_model
 
 let scratch (o : LL.optimized) =
   {
@@ -225,3 +230,55 @@ let () =
   | Some tree ->
       p_exists "cap 4: the whole-extent geometry is admitted" (Sspace.enumerate tree)
         ~f:(fun (path, _) -> on_path (FD.Conv_rows 0) path)
+
+(* The model search over a conv site, on the CPU leg under stand-in envelope constants: the score is
+   the ranking score [model_default] minimizes, of each leaf's scheduled form. *)
+let () =
+  let limits =
+    { cpu_limits with Ir.Backend_intf.peak_flops = Some 1e12; peak_memory_bandwidth = Some 1e11 }
+  in
+  let base = lowering "cft_model" (make_conv ~tail:true "cmd" ~b:2 ~h:11 ~ic:4 ~oc:8) in
+  let rank (o : LL.optimized) =
+    CM.ranking_seconds ?peak_flops:limits.peak_flops
+      ?peak_memory_bandwidth:limits.peak_memory_bandwidth ~is_global:(CM.global_in o) o.LL.llc
+  in
+  let score segs =
+    List.fold segs ~init:(Some 0.) ~f:(fun acc o -> Option.map2 acc (rank o) ~f:Float.( + ))
+  in
+  let search ~incumbent =
+    Autotune.model_family_search ~capabilities:Ir.Backend_intf.no_codegen_capabilities ~is_gpu:false
+      ~is_cpu:true ~limits ~static_indices:[] ~peak_flops:limits.peak_flops
+      ~peak_memory_bandwidth:limits.peak_memory_bandwidth ~score ~incumbent base
+  in
+  (* Exhaustively: every leaf scheduled and scored as the walk does; the first strict minimum (no
+     leaf has a tile-MMA load count on cc, so no tie-break key applies). *)
+  let exhaustive =
+    List.fold (Autotune.sketch_seed_params ~is_gpu:false ~is_cpu:true ~limits base) ~init:None
+      ~f:(fun best p ->
+        let sc =
+          match Sched.apply (Autotune.sketch_schedule ~accum_prec:Fn.id ~p base) (scratch base) with
+          | post -> score [ post ]
+          | exception _ -> None
+        in
+        match (sc, best) with
+        | Some s, Some (_, b) when Float.(s >= b) -> best
+        | Some s, _ -> Some (p, s)
+        | None, _ -> best)
+  in
+  match search ~incumbent:Float.infinity with
+  | None -> p "model search: the walk covers the conv site" false
+  | Some (pick, stats, bound) -> (
+      p "model search: the walk covers the conv site" true;
+      p "model search: with an unbeatable incumbent the walk scores leaves"
+        (stats.Sspace.st_scored > 0);
+      p "model search: the pick is the exhaustive first argmin"
+        (Option.equal
+           (fun (p1, s1) (p2, s2) -> Poly.equal p1 p2 && Float.equal s1 s2)
+           pick exhaustive);
+      match bound with
+      | None -> p "model search: at the floor the walk fathoms instead of scoring" false
+      | Some floor ->
+          p "model search: at the floor the walk fathoms instead of scoring"
+            (match search ~incumbent:floor with
+            | Some (None, st, _) -> st.Sspace.st_scored = 0 && st.Sspace.st_fathomed > 0
+            | _ -> false))
