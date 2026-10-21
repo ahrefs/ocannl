@@ -103,11 +103,13 @@ let () =
   let limits = Context.hardware_limits ctx in
   let capacity, resident = Autotune.ranking_capacity ~limits in
   let opt_int = Option.value_map ~default:"none" ~f:Int.to_string in
-  Stdio.printf "wgrad-model: capacity=%s resident_threads=%s cache_bandwidth=%s\n"
+  let rate = Option.value_map ~default:"none" ~f:(Printf.sprintf "%.6g") in
+  Stdio.printf
+    "wgrad-model: capacity=%s resident_threads=%s cache_bandwidth=%s issue_rate=%s dram_bandwidth=%s\n"
     (opt_int capacity) (opt_int resident)
-    (Option.value_map
-       (Autotune.ranking_cache_bandwidth ~limits)
-       ~default:"none" ~f:(Printf.sprintf "%.6g"));
+    (rate (Autotune.ranking_cache_bandwidth ~limits))
+    (rate (Autotune.ranking_issue_rate ~limits))
+    (rate (Autotune.ranking_dram_bandwidth ~limits));
   let written (o : Ir.Low_level.optimized) =
     List.filter_map (Ir.Cost_model.analyze o.Ir.Low_level.llc).Ir.Cost_model.per_node
       ~f:(fun (tn, fp) ->
@@ -128,8 +130,15 @@ let () =
         List.iter plan_routine.Context.segments ~f:(fun o ->
             match Autotune.ranking_ms ~limits [ o ] with
             | Some (rank, bound) ->
-                Stdio.printf "wgrad-model: plan=%s kernel=[%s] rank_ms=%.4f bound_ms=%.4f\n" plan
-                  (written o) rank bound
+                (* gh-ocannl-1442: the legs, so a prediction says which one it is. *)
+                let leg = Option.value_map ~default:"n/a" ~f:(Printf.sprintf "%.4f") in
+                let compute, memory =
+                  Option.value (Autotune.ranking_legs_ms ~limits [ o ]) ~default:(None, None)
+                in
+                Stdio.printf
+                  "wgrad-model: plan=%s kernel=[%s] rank_ms=%.4f bound_ms=%.4f compute_ms=%s \
+                   memory_ms=%s\n"
+                  plan (written o) rank bound (leg compute) (leg memory)
             | None -> Stdio.printf "wgrad-model: plan=%s kernel=[%s] no coverage\n" plan (written o))
   in
   predict "default"

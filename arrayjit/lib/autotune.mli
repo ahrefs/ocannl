@@ -1671,6 +1671,15 @@ val ranking_ms :
     ([benchmarks/runners/ocannl/bench_wgrad.ml], [tools/calibrate_cache_capacity.exe]): a ranking
     score, not a runtime prediction. *)
 
+val ranking_legs_ms :
+  limits:Ir.Backend_intf.hardware_limits ->
+  Ir.Low_level.optimized list ->
+  (float option * float option) option
+(** The ranking score's [(compute, memory)] legs in milliseconds, each summed over the kernels
+    ({!Ir.Cost_model.ranking_legs_of}; [None] for a leg whose envelope constant is absent), under
+    the same readings as {!ranking_ms} — the issue and DRAM rates included (gh-ocannl-1442). [None]
+    where {!ranking_ms} is. For reports. *)
+
 val model_prefilter : keep_fraction:float -> ('a * float option) list -> ('a * float option) list
 (** The order-preserving pre-filter over model-scored candidates: keeps every unscored ([None])
     candidate — the no-coverage exemption: never dropped, only measured — plus the best

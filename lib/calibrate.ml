@@ -225,3 +225,129 @@ let fit_capacity ?dram_rate (points : ws_point list) : capacity_fit =
                 monotone = cached_ws < spilled_ws;
                 cache_rate = median cached;
               })
+
+type issue_point = {
+  ip_k : int;
+  ip_scalar_ops : int;
+  ip_mma_ops : int;
+  ip_kernels : int;
+  ip_ms : float;
+  ip_rank_ms : float option;
+  ip_bound_ms : float option;
+}
+
+let issue_sweep ?(m = 512) ?(n = 512) ?(ks = [ 256; 512; 1024; 2048; 4096; 8192; 16384; 32768 ])
+    ?(repeats = 10) ctx =
+  if m <= 0 || n <= 0 || repeats <= 0 || List.exists ks ~f:(fun k -> k <= 0) then
+    raise (Utils.User_error "Calibrate.issue_sweep: extents and repeats must be positive");
+  let limits = Context.hardware_limits ctx in
+  let cyc len modulus stride =
+    Array.init len ~f:(fun c -> Float.of_int (1 + (c % modulus)) *. stride)
+  in
+  List.map ks ~f:(fun k ->
+      let tag = Printf.sprintf "ir_k%d" k in
+      let dy = NTDSL.ndarray (cyc (k * m) 7 0.25) ~label:[ tag ^ "_dy" ] ~output_dims:[ k; m ] () in
+      let x = NTDSL.ndarray (cyc (k * n) 5 0.125) ~label:[ tag ^ "_x" ] ~output_dims:[ k; n ] () in
+      let%op dw = dy +* "ko; ki => oi" x in
+      Train.set_materialized dw.Tensor.value;
+      let choice = ref None in
+      (* The seeded sketch at threshold 32, with the split and the reduction sink off: the
+         one-kernel register-blocktiled contraction whose issue rate the ranking score prices,
+         whatever gate the configuration picks. *)
+      let lowered_transform =
+        match
+          Autotune.seeded_transform ~min_reduction:32 ~min_serial:0 ~reduction_sink:false
+            ~on_choice:(fun c -> choice := Some c)
+            ctx Idx.Empty
+        with
+        | Some t -> t
+        | None ->
+            raise
+              (Utils.User_error
+                 (Printf.sprintf
+                    "Calibrate.issue_sweep: the seeded default does not apply on backend %s (CUDA \
+                     and HIP only, with automatic scheduling and fission on)"
+                    (Context.backend_name ctx)))
+      in
+      let comp = named (tag ^ "_wgrad") (Train.forward dw) in
+      let run_ctx, routine =
+        Context.compile ~name:(tag ^ "_wgrad") ~lowered_transform ctx comp Idx.Empty
+      in
+      Exn.protect
+        ~finally:(fun () -> Context.release run_ctx)
+        ~f:(fun () ->
+          (match !choice with
+          | Some c when (not (List.is_empty c.Autotune.sd_seeded)) && not c.Autotune.sd_fell_back ->
+              ()
+          | _ ->
+              raise
+                (Utils.User_error
+                   (Printf.sprintf
+                      "Calibrate.issue_sweep: k=%d did not seed the contraction (or fell back to \
+                       the default): refusing to time it as the seeded sketch"
+                      k)));
+          let summary (o : Ir.Low_level.optimized) = Ir.Cost_model.analyze o.Ir.Low_level.llc in
+          (* The contraction's kernel: the shipped segment with the most operations. *)
+          let seg =
+            List.max_elt routine.Context.segments ~compare:(fun a b ->
+                Int.compare (summary a).Ir.Cost_model.flops (summary b).Ir.Cost_model.flops)
+          in
+          let scalar, mma, scores =
+            match seg with
+            | Some o ->
+                let s = summary o in
+                ( s.Ir.Cost_model.flops - s.Ir.Cost_model.mma_flops,
+                  s.Ir.Cost_model.mma_flops,
+                  Autotune.ranking_ms ~limits [ o ] )
+            | None -> (0, 0, None)
+          in
+          let ctx' = Context.run run_ctx routine in
+          Context.sync ctx';
+          let best = ref Float.infinity in
+          for _ = 1 to repeats do
+            let t0 = Unix.gettimeofday () in
+            let ctx' = Context.run run_ctx routine in
+            Context.sync ctx';
+            best := Float.min !best ((Unix.gettimeofday () -. t0) *. 1000.)
+          done;
+          {
+            ip_k = k;
+            ip_scalar_ops = scalar;
+            ip_mma_ops = mma;
+            ip_kernels = List.length routine.Context.segments;
+            ip_ms = !best;
+            ip_rank_ms = Option.map scores ~f:fst;
+            ip_bound_ms = Option.map scores ~f:snd;
+          }))
+
+type issue_fit =
+  | Issue_fit of { rate : float; latency_ms : float; max_residual : float; points : int }
+  | Issue_unfittable of string
+
+let fit_issue_rate (points : issue_point list) : issue_fit =
+  let timed =
+    List.filter points ~f:(fun p ->
+        p.ip_scalar_ops > 0 && Float.(p.ip_ms > 0.) && Float.is_finite p.ip_ms)
+  in
+  let xs = List.map timed ~f:(fun p -> Float.of_int p.ip_scalar_ops) in
+  let ys = List.map timed ~f:(fun p -> p.ip_ms) in
+  let count = List.length timed in
+  let distinct = List.dedup_and_sort xs ~compare:Float.compare in
+  if count < 2 || List.length distinct < 2 then
+    Issue_unfittable "fewer than two timed points with distinct operation counts"
+  else
+    let nf = Float.of_int count in
+    let mean l = List.fold l ~init:0. ~f:( +. ) /. nf in
+    let mx = mean xs and my = mean ys in
+    let sxy = List.fold2_exn xs ys ~init:0. ~f:(fun acc x y -> acc +. ((x -. mx) *. (y -. my))) in
+    let sxx = List.fold xs ~init:0. ~f:(fun acc x -> acc +. ((x -. mx) *. (x -. mx))) in
+    let slope = sxy /. sxx in
+    (* ms per operation *)
+    if Float.(slope <= 0.) then Issue_unfittable "the time does not grow with the operation count"
+    else
+      let latency_ms = my -. (slope *. mx) in
+      let max_residual =
+        List.fold2_exn xs ys ~init:0. ~f:(fun acc x y ->
+            Float.max acc (Float.abs (latency_ms +. (slope *. x) -. y) /. y))
+      in
+      Issue_fit { rate = 1e3 /. slope; latency_ms; max_residual; points = count }

@@ -2500,6 +2500,15 @@ let ranking_ms ~limits segs =
   Option.map (segments_ranking ~peak_flops ~peak_memory_bandwidth ~limits segs)
     ~f:(fun (rank, bound) -> (rank *. 1e3, bound *. 1e3))
 
+let ranking_legs_ms ~limits segs =
+  let peak_flops, peak_memory_bandwidth = envelope ~limits in
+  Option.map (segments_legs ~peak_flops ~peak_memory_bandwidth ~limits segs) ~f:(fun (_, legs) ->
+      let sum f =
+        List.fold legs ~init:(Some 0.) ~f:(fun acc l ->
+            Option.map2 acc (f l) ~f:(fun a b -> a +. (b *. 1e3)))
+      in
+      (sum (fun l -> l.kl_compute), sum (fun l -> l.kl_memory)))
+
 let model_score ~static_indices ~limits (opt : LL.optimized) (sched : Sched.schedule) : float option
     =
   let peak_flops, peak_memory_bandwidth = envelope ~limits in

@@ -10315,6 +10315,19 @@
  (modules capacity_calibration)
  (libraries base ocannl arrayjit.verdict))
 
+; gh-ocannl-1442: the issue-rate calibration behind tools/calibrate_issue_rate.exe -- the fit's
+; readings on synthetic sweeps, and the sweep itself on the configured backend: a toy sweep of the
+; seeded sketch on CUDA/HIP, a refusal elsewhere.
+
+(test
+ (name issue_calibration)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules issue_calibration)
+ (libraries base ocannl arrayjit.verdict))
+
 ; gh-ocannl-1388: the autotuner seeds the seeded untuned plan first, so a search cut to its first
 ; candidate (every later window refused through the measurement seam) crowns the step the untuned
 ; compile ships: the same code, digest for digest, computing bitwise the same gradients; a refused
