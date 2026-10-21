@@ -17,6 +17,7 @@ a group larger than the capacity is not retained: true
 and evicted nothing to make room for it: true
 a lowered capacity evicts the oldest groups down to it: true
 capacity 0 disables the cache: true
+a lookup at capacity 0 releases everything retained: true
 a disabled cache finds nothing: true
 and retains nothing published while disabled: true
 symbols are renamed by first occurrence: true

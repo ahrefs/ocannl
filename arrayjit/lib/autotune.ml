@@ -6127,15 +6127,20 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
        %d of %d kernels compiled)"
       attempt verdict wall_s cost.lower_s cost.transform_s (Ir.Compile_cost.codegen_s cost) device
       cost.link_s cost.kernels_compiled cost.kernels;
-    Stdlib.Domain.DLS.get compile_observer
-      {
-        compile_routine = Lazy.force routine_name;
-        compile_stage = stage;
-        compile_attempt = attempt;
-        compile_verdict = verdict;
-        compile_wall_s = wall_s;
-        compile_cost = cost;
-      };
+    (* Trace-only: an observer that raises must not turn a compiled candidate into a failed search,
+       nor strand its context unreleased; its failure is reported and dropped. *)
+    (try
+       Stdlib.Domain.DLS.get compile_observer
+         {
+           compile_routine = Lazy.force routine_name;
+           compile_stage = stage;
+           compile_attempt = attempt;
+           compile_verdict = verdict;
+           compile_wall_s = wall_s;
+           compile_cost = cost;
+         }
+     with exn when not (process_fatal_exn exn) ->
+       Stdio.eprintf "autotune: a compile observer raised (ignored): %s\n%!" (Exn.to_string exn));
     match result with
     | Ok r -> r
     | Error (exn, backtrace) -> Stdlib.Printexc.raise_with_backtrace exn backtrace

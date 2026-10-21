@@ -62,6 +62,9 @@ let () =
     (Option.is_none (K.find c "c1") && Option.is_some (K.find c "d1"));
   capacity := 0;
   p "capacity 0 disables the cache" (not (K.enabled c));
+  ignore (K.find c "d1" : string ref option);
+  p "a lookup at capacity 0 releases everything retained"
+    ((K.stats c).n_bytes = 0 && (K.stats c).n_entries = 0);
   p "a disabled cache finds nothing" (Option.is_none (K.find c "d1"));
   K.publish c ~keys:[ "e1" ] ~bytes:1 (ref "program E");
   capacity := 250;

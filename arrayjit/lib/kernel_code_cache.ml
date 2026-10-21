@@ -58,10 +58,8 @@ let shrink_to c capacity =
 let find c k =
   locked c (fun () ->
       let capacity = c.capacity_bytes () in
-      if capacity <= 0 then None
-      else (
-        shrink_to c capacity;
-        Option.map (Hashtbl.find c.entries k) ~f:snd))
+      shrink_to c (Int.max 0 capacity);
+      if capacity <= 0 then None else Option.map (Hashtbl.find c.entries k) ~f:snd)
 
 let publish c ~keys ~bytes v =
   locked c (fun () ->
