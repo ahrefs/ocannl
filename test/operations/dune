@@ -3373,8 +3373,9 @@
 
 ; gh-ocannl-1004: what Test_utils.Slot_kind says a dune argv reaches -- the half of the fleet slot's
 ; --cpu/--gpu decision that reads the backend markers -- on fixture trees built to separate the
-; cases: per-test and aggregate aliases, @ and @@, runtest directories, path targets, and the
-; constructs whose reach is not modelled exactly.
+; cases: per-test and aggregate aliases, @ and @@, runtest directories, compilation products, the
+; configuration-free alias list, and each refusal of the checks that keep that list honest
+; (gh-ocannl-1227, gh-ocannl-1249).
 
 (test
  ; ocannl-backend: none -- links no backend: it reads dune-file text through Slot_kind.
@@ -3384,9 +3385,12 @@
  (modules slot_kind_cases)
  (libraries base stdio unix test_utils arrayjit.verdict))
 
-; The same reader on the repository's own dune files (gh-ocannl-1095): the answer for
-; `@test/operations/scans`, which holds no backend only while everything it builds is modelled
-; exactly and reads no configuration.
+; The same reader on the repository's own tree (gh-ocannl-1227): the checks that keep the
+; configuration-free alias list and the plain-compilation answer true -- no listed alias reaches a
+; configuration reader, a plain build reaches no backend, every reader reads a configuration the
+; runner resolves (gh-ocannl-1249) -- and the answers they guard. It reads exactly the files its
+; deps hand it through `%{deps}`, never a walk of the build tree, so what it reads is what dune
+; invalidates it on.
 
 (test
  ; ocannl-backend: none -- links no backend: it reads dune-file text through Slot_kind.
@@ -3394,7 +3398,11 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (glob_files_rec ../../dune))
+  ../../dune-project
+  (glob_files_rec ../../dune)
+  (glob_files_rec ../../ocannl_config))
+ (action
+  (run %{test} %{workspace_root} %{deps}))
  (modules slot_kind_live)
  (libraries base stdio test_utils arrayjit.verdict))
 
