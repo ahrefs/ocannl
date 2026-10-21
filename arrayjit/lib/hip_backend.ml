@@ -1269,6 +1269,12 @@ end = struct
   let kernel_cache : program Kernel_code_cache.t =
     Kernel_code_cache.create ~capacity_bytes:(fun () -> Lazy.force kernel_cache_capacity_bytes)
 
+  (* Held from the cache lookups to the publication of what they missed, so two domains compiling
+     the same kernels cannot both miss and both compile them: the second finds the first's code.
+     hiprtc compiles one program at a time per process anyway, so serializing here costs nothing it
+     was not already paying. *)
+  let kernel_compile_lock = Stdlib.Mutex.create ()
+
   let compile_kernels ~batch ~names bindings lowereds =
     Compile_cost.record_reuse_capable ();
     let r =
@@ -1293,6 +1299,7 @@ end = struct
     let full_source = r.assemble all in
     write_source_artifact ~name (with_conditional_includes full_source);
     let programs = Array.create ~len:n None in
+    Stdlib.Mutex.protect kernel_compile_lock @@ fun () ->
     let groups, keys =
       if not (Kernel_code_cache.enabled kernel_cache) then
         (* As before the cache: one program of every kernel. *)

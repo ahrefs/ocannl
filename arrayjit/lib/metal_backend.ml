@@ -1540,6 +1540,9 @@ module Impl = struct
         Some metal_file)
       else None
     in
+    (* The kernels this library compiles, counted where Metal's compiler runs (gh-ocannl-1314):
+       [Compile_driver] counted them as rendered only. *)
+    Compile_cost.record_kernels ~rendered:0 ~compiled:(List.length routine_names);
     try Me.Library.on_device device ~source options
     with Failure msg ->
       let options_rendered = Compiler_options.render_metal option_state in

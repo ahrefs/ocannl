@@ -8338,8 +8338,10 @@ struct
       if batch then String.(strip ~drop:(equal_char '_') @@ common_prefix (Array.to_list names))
       else names.(0)
     in
-    (* Before the call: a failed compile was still given these kernels. *)
-    Compile_cost.record_kernels ~rendered:(Array.length names) ~compiled:(Array.length names);
+    (* Before the call: a failed compile was still given these kernels. A backend that only retains
+       the source counts them where its compiler runs (Metal's link). *)
+    Compile_cost.record_kernels ~rendered:(Array.length names)
+      ~compiled:(if compiles_source then Array.length names else 0);
     let result =
       try
         if compiles_source then Compile_cost.time_device (fun () -> compile_source ~name source)

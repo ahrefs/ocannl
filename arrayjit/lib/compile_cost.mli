@@ -13,12 +13,15 @@
       search's pre-codegen gate), or the default schedules when none is given.
     - [backend_compile_s]: the backend's [compile] / [compile_batch] call as a whole: rendering the
       kernels to source, then the vendor compiler on that source.
-    - [device_s]: the vendor compiler's share of [backend_compile_s] -- gcc for [cc], nvrtc, hiprtc
-      -- timed around the call that hands it the source. [None] when no compile in the bracket timed
-      one: Metal compiles its library at link, so there [link_s] carries it.
+    - [device_s]: the share of [backend_compile_s] spent in the backend's [compile_source] callback:
+      the vendor compiler (gcc for [cc], nvrtc, hiprtc) together with what the backend does around
+      it -- writing debug artifacts, and on [cc] signing and loading the shared object. It is an
+      upper bound on the vendor compiler's time, not that time alone. [None] when no compile in the
+      bracket timed one: Metal compiles its library at link, so there [link_s] carries it.
     - [link_s]: [Backend.link] (module loading, buffer allocation, the per-kernel checks).
     - [kernels]: the kernels the compiles rendered; [kernels_compiled]: the ones the vendor compiler
-      was given. They differ only on a backend that reuses compiled kernels ([reuse_capable]).
+      was given, counted just before it runs, so a compile it refused still counts (on Metal, inside
+      link). They differ only on a backend that reuses compiled kernels ([reuse_capable]).
     - [reuse_capable]: whether a compile in the bracket went through a backend's kernel code cache
       ({!Kernel_code_cache}; HIP's), whether or not the cache was enabled: with it disabled
       ([hip_kernel_cache_mib=0]) such a compile compiles every kernel, which is what a test gated on
