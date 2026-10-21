@@ -196,7 +196,14 @@ files.
   kept apart: each GPT2 layer's q and k projections merged into one kernel with two matmul sites,
   which no sketch reaches, and the tuned CUDA step doubled. `qkv_zero_init` pins the segmentation
   as the unexpanded one with zero segments folded forward; seed validity alone did not catch it.
-  Sketch families give the folded zero the site's geometry through `companion_geometry`, and the
+  Sketch families give the folded zero the site's geometry through `companion_geometry` when the
+  target is materialized; companion coverage counts only materialized writes, so a target the
+  tensorized fused twin places in workgroup-shared storage (`epilogue_shared`, an intermediate whose
+  only consumer is the fused tail) is annotated by the pipeline itself (`shared_folded_zero`,
+  gh-ocannl-1453) — bare, it failed gh-ocannl-959's binding legality on every such twin. A test of
+  the folded path segments as the tuner does (host limits, promoted locals): `qkv_zero_init`'s
+  `fission` helper (no hardware limits) left that fold a whole-node `Zero_out`, which takes the
+  whole-node expansion and passed on the unfixed code. The
   tuner and model selector explore a singleton segment whose pre-schedule digest the fold changed,
   since whole-routine sketches see the original whole-node zero. The fold is OPT-IN
   (`fission_scheduled ~fold_zeros`): only the sketch candidates and their seeding pass it. The
@@ -265,7 +272,14 @@ files.
   on the geometry its `annotate` callback emits — only on the lowering, the site chain, the fused
   flavor's `skip` and the zeroing expansion. If you ever make the verdict consult the emitted
   geometry, the static witness goes stale and the tree will refute families whose candidates
-  would build (or vice versa) — keep the invariant, or re-derive the witness. The fused
+  would build (or vice versa) — keep the invariant, or re-derive the witness. The conv family's
+  GPU staged leg asks the same verdict (`conv_coverage_witness`, gh-ocannl-1406) where it used to
+  cap the lowering at two real statements besides the site's zero: the cap refused every
+  aligned-merged conv segment (conv + relu/bias/pool, 3-6 statements) although the pipeline
+  annotated each companion, and admitted single companions it could not cover. Not yet
+  tree-factored, the conv leg seeds when EITHER flavor is covered (its fused twins are flag-flipped
+  from every seed), so where only the fused flavor is, the unfused seeds decline at build and the
+  leg's notes say so; `conv_merged_gpu_seeds` executes every seed of the merged shape. The fused
   (`Fuse_epilogue`) flavor is judged separately: skipping the epilogue tail can empty the
   coverage demand before the alignment analysis is consulted, so twins can survive a routine the
   unfused family is refuted on (a `Local` product whose consumer shares its kernel). Until
@@ -659,9 +673,20 @@ files.
   plan reads `Untimed` fields under `auto`, so a crown searched under a different seed is a
   different trajectory and never stops this search early. Deriving it costs one detection pass over
   the pristine program, forced lazily (the search, or a trajectory-matched warm hit, forces it; the
-  `seeded untuned plan derived in` log line times it). `limits_field_classes` sanctions exactly
-  this one path to `Untimed` fields from `tune` (`seeded_plan`), and pins that a definition `tune`
-  reaches through it records the digest.
+  `seeded untuned plan derived in` log line times it). `limits_field_classes` sanctions two paths
+  to `Untimed` fields from `tune`: `seeded_plan`, pinning that a definition `tune` reaches through
+  it records the digest, and `seeded_transform`, the untuned fallback of a call that does not
+  search, which stores and replays nothing.
+- **Every untuned fallback in `tune` ships the seeded plan, not the plain default** (gh-ocannl-1441).
+  The post-search fallbacks (nothing timed, a budget cut that left the floor unmeasured, a failed
+  winner replay) replay the plan the search seeded; the paths that never search (search off, a
+  refused lineage, a deferred replay that failed) compile through `seeded_transform`, as
+  `seeded_default` does, and recompile the plain default only when that fails classified. Before,
+  those paths shipped the plain default the recipes had already beaten. A seed changes no cache
+  key, so a crown searched under seed A still replays under seed B, but its `best_steps` and an
+  abandonment recorded under A do not (`autotune_seeded_seed` runs both seeds; only the
+  `Autotune.on_seeded_plan` seam moves the seed alone, since every key that steers the plan also
+  renders in the trajectory's settings).
 - **`gpu_default_sketch_min_reduction=auto` (the default) replaces the threshold by the ranking
   score** (gh-ocannl-1253, `Autotune.Ranked`): a segment seeds when `seeded_params`' sketch ranks
   strictly below the same segment's preset, scored alone under the device's capacity and cache
@@ -1173,7 +1198,10 @@ files.
   through `compile_advisory ~on_unrecovered`, which hands it the CLASSIFIED cause alone; it used to
   catch `Invalid_argument`/`User_error` out of the whole compile, which is also what a fatal
   failure re-raises as. A probe that needs "did not apply" catches `Cause_at`, never
-  `Invalid_argument`. Seams: `Autotune.with_sketch_builder_fault`; `model_default_placements`
+  `Invalid_argument`. Any builder call `tune` makes before a candidate's failure boundary needs the
+  same catch: the `keep_fraction < 1` model pre-filter scores every sketch by building it, and an
+  uncaught refusal there ended the search (gh-ocannl-1437); it now records the refusal in the
+  decline census, as the compile would have, and drops the candidate. Seams: `Autotune.with_sketch_builder_fault`; `model_default_placements`
   locates its injected fault by a clean run's op-application count (an elementwise graph: one whose
   consumers are scalar reductions applies no default-pipeline op on cc).
 ## Placement and dispatchable baselines
@@ -1197,6 +1225,19 @@ files.
   timed the search stores no cache entry and returns the untuned default compile rather than the
   serial incumbent. On CPU backends the serial form runs at full single-core speed and is still
   timed. When timing anything else through this seam, price the serial form before dispatching it.
+- **What a search refuses or dedups costs no codegen** (gh-ocannl-1340): `compile_candidate_gated`
+  decides both verdicts inside the lowered transform, on the forms it is about to return (the
+  digest is already computed there, before codegen forces placements), and unwinds with a typed
+  `Not_dispatched` cause; the base compile does the same with origin `"baseline"`. Before, the
+  never-dispatched GPU baseline cost 303 s of hiprtc per arm on gfx1102 and `W_preset[bs=cfg]`
+  relinked the base's digest. The callers keep a post-codegen check, on the routine's SHIPPED
+  segments (`shipped_dispatchable`, `routine.segments`), since zero-only segments are elided
+  after the transform. Consequence: on GPU `baseline_declined` is always false (the gh-533 scratch
+  decline is unreachable there, `hip_scratch_tune_survives` is vacuous), and a refused replay
+  reports `cache_replay_refusal = Not_dispatched "cache_replay"`. To assert "no compile was
+  paid for and thrown away", charge each `on_candidate_attempt` the `Link_after_delta` hits and
+  `on_candidate_preflight` runs that follow it, under `tune_deferred` so the shipping compile falls
+  after the report (`autotune_serial_baseline`).
 - The base compile staying unscheduled is a settled decision, not an oversight (gh-ocannl-552): the
   default pipeline is `maybe_default_schedules` — fission then per-segment annotation, so several
   kernels in general, not one `optimized` to rebase candidates on; every candidate family assumes
@@ -1915,9 +1956,11 @@ files.
 ## Cache regimes and placement replay
 - The schedule-cache directory carries one key-regime stamp, independent of the serialized entry's
   `entry_version` (gh-ocannl-835). Bump `Schedule_cache.cache_regime_version` whenever
-  `key_components` changes: the next cache-open deletes every `.sexp` entry under an older or
-  absent stamp, then atomically publishes the current stamp; there is deliberately no migration
-  arm per historical regime. Every lookup and store takes the same permanent-file `lockf` plus an
+  `key_components` changes: the next STORE's cache-open deletes every `.sexp` entry under an
+  older or absent stamp, then atomically publishes the current stamp; there is deliberately no
+  migration arm per historical regime. A lookup never deletes (gh-ocannl-1439): it reads a
+  superseded generation as misses (not refusals) and leaves entries, stamp and staging files in
+  place, so reading another binary's cache cannot destroy it. Every lookup and store takes the same permanent-file `lockf` plus an
   in-process mutex through the entry I/O, so participating processes cannot write a current entry
   under a sweep, and a binary seeing a newer or malformed stamp refuses cache I/O without changing
   the directory. The lock file stays in place to avoid the unlink/recreate inode race and the OS
@@ -2184,13 +2227,13 @@ files.
   lowering `tune` and `model_default` seed — the whole routine and each coarse and fine fission
   segment — and once per segment of the plan the CUDA/HIP seeded default chooses. Each line names the
   family that claimed the lowering, its site and seed count, then its refusals: the matmul tree's
-  refutations grouped by witness, or each conv leg's seed count or EVERY failing gate (the
-  companion cap, no mma tile, the vector file, launch caps, workgroup memory), and the
+  refutations grouped by witness, or each conv leg's seed count or EVERY failing gate (companion
+  coverage, no mma tile, the vector file, launch caps, workgroup memory), and the
   lowering's conv nests whatever family claimed it. The conv gates record their own reasons
   (`Sketch_families.conv_seed_judgment`), so the census cannot drift from the seeder. Use it
   before citing a seeding gate as evidence: the decline census can never show a seeding refusal,
-  and on real training graphs the binding conv gates are usually the matmul family claiming the
-  whole routine first and the companion cap, not the gate an issue names.
+  and on real training graphs the binding conv gate is usually the matmul family claiming the
+  whole routine first, not the gate an issue names.
 - A test claims a tensorized seed's PRESENCE wherever the backend advertises the capability, and
   gates on that capability, never on the seed list its claims are about (gh-ocannl-1115). Gated on
   the seeds, a seeding regression — or a claim asking for a seed the seeder excludes by

@@ -9,6 +9,11 @@
    configured backend and never synced, then a normal exit. The backend's teardown reports how long
    it waited on stderr, since nothing registered in here can run after it.
 
+   [device_graph] (gh-ocannl-1445) runs a fissioned routine twice, so a CUDA or HIP backend
+   graph-captures its segments and caches the instantiated graph, prints how many graphs the backend
+   caches, and exits normally without releasing the routine: the backend's exit teardown must
+   destroy that graph too.
+
    [never_idle] and [never_idle_raise] open no device. They run [Utils.bounded_exit_teardown] from
    an [at_exit] handler over a stand-in stream that never becomes idle and whose teardown would hang
    for an hour; the second then ends on an uncaught exception, which OCaml runs [at_exit] for too.
@@ -18,6 +23,27 @@
 open Base
 open Ocannl
 open Nn_blocks.DSL_modules
+
+(* A routine that fissions into several segments: the materialized intermediates cut the chain of
+   two matmuls, so a CUDA or HIP backend graph-captures its segment launches. *)
+let fissioned_chain () =
+  let q = 32 in
+  let matrix label ~modulus =
+    TDSL.ndarray
+      (Array.init (q * q)
+         ~f:(Ll_test.cycle_flat ~dims:[| q; q |] ~modulus ~offset:(-2.) ~stride:1.))
+      ~label:[ label ] ~input_dims:[ q ] ~output_dims:[ q ] ()
+  in
+  let qa = matrix "fc_a" ~modulus:11 and qb = matrix "fc_b" ~modulus:7 in
+  let qc = matrix "fc_c" ~modulus:5 in
+  let%op qd = qa + qb in
+  Train.set_materialized qd.Tensor.value;
+  let%op qe = qd * qc in
+  Train.set_materialized qe.Tensor.value;
+  let%op qg = qc * qe in
+  Train.forward qg
+
+let keep_alive : (Context.t * Context.routine) option ref = ref None
 
 let outcome_name : Utils.exit_teardown_outcome -> string = function
   | Torn_down -> "torn_down"
@@ -96,6 +122,27 @@ let () =
       Stdio.printf "backend: %s\n%!" (Context.backend_name ctx);
       Stdio.eprintf "queued %d runs of %.4fs each without a sync (not part of the golden)\n%!" runs
         one_run
+  | Some "device_graph" ->
+      Tensor.unsafe_reinitialize ();
+      let ctx = Context.auto () in
+      let ctx, routine = Context.compile ctx (fissioned_chain ()) Ir.Indexing.Empty in
+      let ctx = Context.run ctx routine in
+      let ctx = Context.run ctx routine in
+      Context.sync ctx;
+      let cached =
+        match Context.global_debug_info ctx with
+        | Sexp.List (_ :: fields) ->
+            List.find_map fields ~f:(function
+              | Sexp.List [ Sexp.Atom "live_graph_execs"; Sexp.Atom n ] -> Some n
+              | _ -> None)
+        | _ -> None
+      in
+      (* Rooted to the end of the process: the backend's registry holds the cache weakly, and a
+         collection before its exit teardown would let the binding's finalizer destroy the graph
+         instead, which the claim would then credit to the teardown. *)
+      keep_alive := Some (ctx, routine);
+      Stdio.printf "backend: %s\n%!" (Context.backend_name ctx);
+      Stdio.printf "cached graphs at exit: %s\n%!" (Option.value cached ~default:"none")
   | Some "never_idle" -> stand_in ~idle:false ()
   | Some "two_never_idle" -> stand_in ~count:2 ~idle:false ()
   | Some "never_idle_raise" ->
@@ -105,4 +152,4 @@ let () =
   | _ ->
       failwith
         "exit_stream_teardown_child: expected \
-         device|device_busy|never_idle|two_never_idle|never_idle_raise|idle"
+         device|device_busy|device_graph|never_idle|two_never_idle|never_idle_raise|idle"

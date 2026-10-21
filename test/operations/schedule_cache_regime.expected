@@ -1,9 +1,13 @@
 an old stamped generation opens as a cache miss: true
-every old-regime entry is swept: true
-the completed sweep atomically advances the regime stamp: true
+an old stamped generation looks up as a miss the lookup decided, not a refusal: true
+a lookup leaves every old-regime entry in place: true
+a lookup changes no entry and leaves the old stamp as it was: true
 a committed store and an admitted lookup are recorded, neither as a refusal: true
+the store sweeps every old-regime entry: true
+the store's completed sweep atomically advances the regime stamp: true
 a current entry remains readable across later cache opens: true
-an unstamped legacy generation is swept and stamped current: true
+an unstamped legacy generation looks up as a miss, left whole and unstamped: true
+a store sweeps an unstamped legacy generation and stamps it current: true
 a future regime refuses an otherwise readable entry: true
 a regime-refused lookup and store are each recorded as a refusal: true
 a refused future-regime open changes no entries: true

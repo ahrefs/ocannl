@@ -2117,6 +2117,66 @@ let to_dims_impl (sh : t) : int array =
   try Array.concat_map ~f:row_to_dims [| sh.batch; sh.output; sh.input |]
   with Row.Shape_error (s, trace) -> raise @@ Row.Shape_error (s, Shape_mismatch [ sh ] :: trace)
 
+(** One tensor can be several operands of one step -- [(w, w) ++^ "s, c; s, d => s, c^d"],
+    [m +* "a, b; b, c => a, c" m] -- and then the step's logic names one shape object several times.
+    Projection ids live on the [Dim]s of a shape's rows and [fresh_proj_ids] freshens a shape IN
+    PLACE, so every occurrence would end up with the same ids: the solver would equate the axes the
+    spec keeps apart (the concatenated segments, the contracted and the free axis of a
+    self-product), collapsing them onto one iterator -- a self-product silently computed its
+    diagonal, and a self-concatenation lowered one segment twice (gh-ocannl-1476). So every
+    occurrence after the first (the result's own shape counts as the first) is replaced by a shallow
+    copy: the copy has its own rows to freshen, hence its own projection ids, and keeps [id], so
+    tnode-keyed lookups such as committed padding still find the node. Returns the de-aliased step
+    and the [(copy, original)] pairs, for {!merge_dealiased_padding}. *)
+let dealias_operands (update_step : update_step) : update_step * (t * t) list =
+  let seen = ref [ update_step.shape ] and copies = ref [] in
+  let occurrence sh =
+    if List.mem !seen sh ~equal:phys_equal then (
+      let copy = { sh with batch = sh.batch } in
+      copies := (copy, sh) :: !copies;
+      copy)
+    else (
+      seen := sh :: !seen;
+      sh)
+  in
+  let logic =
+    match update_step.logic with
+    | Terminal _ as logic -> logic
+    | Transpose (ty, sh) -> Transpose (ty, occurrence sh)
+    | Broadcast (ty, sh1, sh2) ->
+        let sh1 = occurrence sh1 in
+        let sh2 = occurrence sh2 in
+        Broadcast (ty, sh1, sh2)
+    | Broadcast_tern (ty, sh1, sh2, sh3) ->
+        let sh1 = occurrence sh1 in
+        let sh2 = occurrence sh2 in
+        let sh3 = occurrence sh3 in
+        Broadcast_tern (ty, sh1, sh2, sh3)
+    | Block { spec; delayed_vars; rhses } ->
+        Block { spec; delayed_vars; rhses = List.map rhses ~f:occurrence }
+  in
+  if List.is_empty !copies then (update_step, []) else ({ update_step with logic }, List.rev !copies)
+
+(** A copy made by {!dealias_operands} stands for its original during one derivation, so the padding
+    that derivation infers for the copy belongs to the original: merge it in, axis by axis, taking
+    the larger margin -- exactly how one shape's padding accumulates across steps. Both started from
+    the original's padding and both commit the step's one neutral element, so their [padding_elem]s
+    cannot conflict; the copy's only adds a value the original's occurrence left unknown. *)
+let merge_dealiased_padding copies =
+  let merge (a : padding) (b : padding) : padding =
+    match (a, b) with
+    | None, p | p, None -> p
+    | Some a, Some b ->
+        Some
+          (Array.map2_exn a b ~f:(fun a b ->
+               Ir.Ops.{ left = max a.left b.left; right = max a.right b.right }))
+  in
+  List.iter copies ~f:(fun (copy, orig) ->
+      orig.batch_padding <- merge orig.batch_padding copy.batch_padding;
+      orig.input_padding <- merge orig.input_padding copy.input_padding;
+      orig.output_padding <- merge orig.output_padding copy.output_padding;
+      if Option.is_none orig.padding_elem then orig.padding_elem <- copy.padding_elem)
+
 (** Computes the indexing into subtensors given the shape information of a tensor.
     [derive_projections] should only be invoked when the shapes are fully inferred already! Sets
     [unsafe_projections] as a side effect. Raises if projections were already computed. *)
@@ -2124,6 +2184,8 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
   if Option.is_some update_step.unsafe_projections then
     raise
     @@ Utils.User_error "derive_projections: projections already computed for this update_step";
+  let original_step = update_step in
+  let update_step, dealiased = dealias_operands update_step in
   let resolved_padding, _old_inferred_padding = fresh_proj_ids update_step in
   (* We will not use the old inferred padding so that we can derive precisely the padding
      contributed by this step. *)
@@ -2431,6 +2493,7 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
        element" an invariant (cf. [to_padding]). *)
     update_padding_elem lhs;
     List.iter rhs ~f:update_padding_elem;
+    merge_dealiased_padding dealiased;
     let project_lhs = indices_of_sh lhs in
     let project_rhs = Array.of_list_map ~f:indices_of_sh rhs in
     let projections =
@@ -2453,7 +2516,7 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
       with Row.Shape_error (s, trace) ->
         raise @@ Row.Shape_error (s, Shape_mismatch (lhs :: rhs) :: trace)
     in
-    update_step.unsafe_projections <- Some projections)
+    original_step.unsafe_projections <- Some projections)
 
 (** {3 Shape inference} *)
 

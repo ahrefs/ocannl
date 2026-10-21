@@ -1,0 +1,2 @@
+two runs at one binding instantiate exactly one graph: true
+releasing the routine's context destroys its graphs: true

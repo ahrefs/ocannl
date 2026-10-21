@@ -4266,16 +4266,14 @@ let try_interval_fold ~ienv ~prec (llsc : scalar_t) : scalar_t option =
    is the whole rewrite: every operand that is evaluated, conditions and gates included, stays as
    captured, and an elided operand is never evaluated, so the template computes the same value in
    the same representation wherever it replays. The routine's simplify is NOT that: it enters no
-   threefry operand ([simplify_llc]'s arm for them), its constant folds round in double, and its
-   [Embed_index (Fixed_idx _)]-to-[Constant] fold changes the source a [uint4x32] conversion is
-   keyed on ([int32_to_uint4x32] against [double_to_uint4x32]), so storing a simplified template
-   changed test_block_tensor's random stream where the template replays beneath a threefry operand.
-   What this buys is the readers of the computations table -- the merge-taint and spliced-read
-   scans, the fan-in guard, footprint eligibility, flip pricing -- not seeing reads that never
-   execute. Decisions are what hold wherever the template replays: the loops of the write index's
-   symbols ([~opaque]) do not extend the interval environment, since the inliner substitutes the
-   read site's index for them and it need not lie in the producer's extent (a kept loop keeps its
-   extent, freshened); and no bounds candidate is consulted ([node_bounds = false]). *)
+   threefry operand ([simplify_llc]'s arm for them) and its constant folds round in double, so a
+   simplified template replayed beneath a threefry operand would carry folds its consumer never
+   applies there. What this buys is the readers of the computations table -- the merge-taint and
+   spliced-read scans, the fan-in guard, footprint eligibility, flip pricing -- not seeing reads
+   that never execute. Decisions are what hold wherever the template replays: the loops of the write
+   index's symbols ([~opaque]) do not extend the interval environment, since the inliner substitutes
+   the read site's index for them and it need not lie in the producer's extent (a kept loop keeps
+   its extent, freshened); and no bounds candidate is consulted ([node_bounds = false]). *)
 let elide_unevaluated_operands static_indices ~(opaque : Indexing.symbol -> bool) (llc : t) : t =
   (* Review round 1: a test is decided only if it comes out the same at every precision it may be
      EVALUATED at. That is the precision of its slot as the renderer reads it -- a homogeneous
@@ -4645,6 +4643,15 @@ let simplify_llc static_indices llc =
           Lazy.force opts.id.tn.Tn.storage_prec )
     | Get_local id -> (llsc, Lazy.force id.tn.Tn.storage_prec)
     | Get_merge_buffer (tn, _) -> (llsc, Lazy.force tn.Tn.storage_prec)
+    (* gh-ocannl-1468: an index embedded into a [uint4x32] slot stays an index. The renderer picks
+       the conversion by its SOURCE precision -- [int32_to_uint4x32] spreads an index over four
+       words, [double_to_uint4x32] copies a double's bit pattern -- so folding it to a [Constant]
+       re-keys the conversion, and a materialized setter would draw different random bits from its
+       inlined copies, which keep the index (no threefry operand is entered below). Into a scalar
+       precision both conversions convert the index's value, so the fold stays there. *)
+    | Embed_index (Fixed_idx _ | Sub_axis)
+      when match Ops.prec_family prec with Packed_integer -> true | _ -> false ->
+        (llsc, prec)
     | Embed_index (Fixed_idx i) -> (Constant (Float.of_int i), prec)
     | Embed_index Sub_axis -> (Constant 0., prec)
     | Embed_index (Iterator _) -> (llsc, prec)

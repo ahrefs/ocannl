@@ -3022,7 +3022,8 @@
   mtime
   mtime.clock.os
   arrayjit.utils
-  arrayjit.verdict)
+  arrayjit.verdict
+  ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -6117,6 +6118,18 @@
     (diff tune_ship_arm.expected tune_ship_arm.actual)))))
 
 (test
+ ; gh-ocannl-1406: GPU conv seeds on aligned-merged lowerings, every seed executed.
+ (name conv_merged_gpu_seeds)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules conv_merged_gpu_seeds)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  ; cc-vector-width: independent -- every seeding judgment runs on synthetic limits, and the host
  ; tune has no sketch family.
  ; gh-ocannl-1407: the seeding census, on synthetic device limits, and its config key's stream.
@@ -6431,6 +6444,20 @@
   (env_var OCANNL_BACKEND))
  (modules autotune_device_memory)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1445: a graph-captured routine's instantiated graphs are destroyed when its context is
+; released (cuda and hip; skipped where the backend caches no graphs).
+
+(test
+ (name graph_exec_release)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules graph_exec_release)
+ (libraries base ocannl stdio arrayjit.utils arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -8629,6 +8656,19 @@
 ; compiler beside the C table and compared with it bitwise; the stdlib-only arrayjit.builtins_cuda
 ; and arrayjit.builtins_hip libraries are what let a test link the tables without a backend.
 
+; gh-ocannl-1434: the half and bf16 uniform draws stay below 1 -- the scalar, packed and per-lane
+; conversions executed on the selected backend from an all-ones key, each drawing exactly the
+; format's greatest value below 1.
+
+(test
+ (name narrow_uniform_bound)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules narrow_uniform_bound)
+ (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
+
 (test
  ; ocannl-backend: cc -- compiles the CUDA and HIP tables' helpers with the host C compiler, no device.
  (name cuda_like_builtins_emulation)
@@ -8961,7 +9001,15 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules autotune_seeded_seed)
- (libraries base ocannl stdio unix arrayjit.verdict ll_test scripted_search)
+ (libraries
+  base
+  ocannl
+  stdio
+  unix
+  arrayjit.verdict
+  test_utils
+  ll_test
+  scripted_search)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -9005,5 +9053,45 @@
   (env_var OCANNL_BACKEND))
  (modules scan_companion_coverage)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1468: a uint4x32 counter set from a fixed index draws the same random bits whether it is
+; inlined beneath its threefry or materialized (the simplify fold no longer re-keys the conversion on
+; a double source).
+
+(test
+ (name uint4x32_fixed_index_parity)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules uint4x32_fixed_index_parity)
+ (libraries base ocannl stdio test_utils arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
+ ; gh-ocannl-1476: an operand repeated in one step -- a self-concatenation, a self-product -- gets
+ ; projections of its own per occurrence, executed forward and backward.
+ (name self_concat)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules self_concat)
+ (libraries base ocannl arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
+ ; gh-ocannl-1474: the Rev_sides scatter establishes the margins of each padded target it writes.
+ (name rev_sides_padded_target)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules rev_sides_padded_target)
+ (libraries base ocannl arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))

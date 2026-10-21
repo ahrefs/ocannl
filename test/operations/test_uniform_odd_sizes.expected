@@ -7,7 +7,7 @@ n=5: count true, range ok true, prefix-stable true
 n=7: count true, range ok true, prefix-stable true
 n=10: count true, range ok true, prefix-stable true
 === half: 8 lanes per block ===
-reference (size 16) first values: 9.4335e-1 4.4995e-1 1.6186e-1 4.5141e-1 1.2829e-1
+reference (size 16) first values: 9.4287e-1 4.4995e-1 1.6186e-1 4.5117e-1 1.2829e-1
 n=1: count true, range ok true, prefix-stable true
 n=3: count true, range ok true, prefix-stable true
 n=9: count true, range ok true, prefix-stable true

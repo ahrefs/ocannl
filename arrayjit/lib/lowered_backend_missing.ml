@@ -66,6 +66,9 @@ struct
   let get_used_memory _device =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
+  let get_free_and_total_memory _device =
+    failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
+
   let get_global_debug_info () =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 

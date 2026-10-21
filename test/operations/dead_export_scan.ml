@@ -133,7 +133,6 @@ let exempt_zero_reference_exports =
     "Operation.not";
     "Operation.offsets";
     "Operation.outer_sum";
-    "Operation.pin_counter_spec";
     "Operation.pointdiv";
     "Operation.pointpow";
     "Operation.range_of_shape";
@@ -151,13 +150,10 @@ let exempt_zero_reference_exports =
     "Operation.stretch";
     "Operation.sub";
     "Operation.tanh";
-    "Operation.threefry4x32";
     "Operation.threefry4x32_crypto";
     "Operation.threefry4x32_light";
     "Operation.transpose_op_of_spec";
     "Operation.tropical";
-    "Operation.uint4x32_to_prec_uniform";
-    "Operation.uint4x32_to_prec_uniform1";
     "Operation.uniform1";
     "Operation.uniform_at";
     "Operation.uniform_at1";

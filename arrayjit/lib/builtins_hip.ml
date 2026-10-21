@@ -66,6 +66,20 @@ __device__ __forceinline__ double ocannl_shfl_xor(double v, int lane_mask) {
   return __uint2float_rn(x >> 8) * (1.0f / 16777216.0f);
 }|},
       [] );
+    (* The narrow draws are below 1 by construction (gh-ocannl-1434): the single draw, its f32
+       mantissa bits the narrow type lacks cleared (truncation toward zero), is representable in
+       that type, so the conversion is exact under any rounding mode and renders what the C table's
+       [uint32_to_half_uniform] / [uint32_to_bfloat16_uniform] draw, bitwise. *)
+    ( "uint32_to_half_uniform",
+      {|__device__ __forceinline__ __half uint32_to_half_uniform(unsigned int x) {
+  return __float2half(__uint_as_float(__float_as_uint(uint32_to_single_uniform(x)) & 0xFFFFE000u));
+}|},
+      [ "uint32_to_single_uniform" ] );
+    ( "uint32_to_bfloat16_uniform",
+      {|__device__ __forceinline__ __hip_bfloat16 uint32_to_bfloat16_uniform(unsigned int x) {
+  return __float2bfloat16(__uint_as_float(__float_as_uint(uint32_to_single_uniform(x)) & 0xFFFF0000u));
+}|},
+      [ "uint32_to_single_uniform" ] );
     ( "uint32_to_double_uniform",
       {|__device__ __forceinline__ double uint32_to_double_uniform(unsigned int x) {
   return __uint2double_rn(x) * (1.0 / 4294967296.0);
@@ -144,10 +158,9 @@ __device__ __forceinline__ double ocannl_shfl_xor(double v, int lane_mask) {
       [ "uint4x32_t"; "uint4x32_to_i64_uniform" ] );
     ( "uint4x32_to_bfloat16_uniform",
       {|__device__ __hip_bfloat16 uint4x32_to_bfloat16_uniform(uint4x32_t x) {
-  float f = uint32_to_single_uniform(x.v[0]);
-  return __float2bfloat16(f);
+  return uint32_to_bfloat16_uniform(x.v[0]);
 }|},
-      [ "uint4x32_t"; "uint32_to_single_uniform" ] );
+      [ "uint4x32_t"; "uint32_to_bfloat16_uniform" ] );
     ( "uint4x32_to_fp8_uniform",
       {|__device__ __hip_fp8_e5m2 uint4x32_to_fp8_uniform(uint4x32_t x) {
   /* Reinterpret uniform random bits as an FP8 E5M2 bit pattern (matching builtins.c) */
@@ -158,10 +171,9 @@ __device__ __forceinline__ double ocannl_shfl_xor(double v, int lane_mask) {
       [ "uint4x32_t" ] );
     ( "uint4x32_to_half_uniform",
       {|__device__ __half uint4x32_to_half_uniform(uint4x32_t x) {
-  float f = uint32_to_single_uniform(x.v[0]);
-  return __float2half(f);
+  return uint32_to_half_uniform(x.v[0]);
 }|},
-      [ "uint4x32_t"; "uint32_to_single_uniform" ] );
+      [ "uint4x32_t"; "uint32_to_half_uniform" ] );
     ( "uint4x32_to_single_uniform_vec",
       {|__device__ float4_t uint4x32_to_single_uniform_vec(uint4x32_t x) {
   float4_t result;
@@ -229,28 +241,25 @@ __device__ __forceinline__ double ocannl_shfl_xor(double v, int lane_mask) {
   bfloat16x8_t result;
   #pragma unroll
   for (int i = 0; i < 4; i++) {
-    // Convert each uint32 to two bfloat16 values
-    float f1 = __uint2float_rn((x.v[i] & 0xFFFF) >> 0) * (1.0f / 65536.0f);
-    float f2 = __uint2float_rn((x.v[i] >> 16) & 0xFFFF) * (1.0f / 65536.0f);
-    result.v[i*2 + 0] = __float2bfloat16(f1);
-    result.v[i*2 + 1] = __float2bfloat16(f2);
+    // Each word's low then high 16 bits, moved to the top of a word (see the C table)
+    result.v[i*2 + 0] = uint32_to_bfloat16_uniform(x.v[i] << 16);
+    result.v[i*2 + 1] = uint32_to_bfloat16_uniform(x.v[i] & 0xFFFF0000u);
   }
   return result;
 }|},
-      [ "uint4x32_t"; "bfloat16x8_t" ] );
+      [ "uint4x32_t"; "bfloat16x8_t"; "uint32_to_bfloat16_uniform" ] );
     ( "uint4x32_to_half_uniform_vec",
       {|__device__ half8_t uint4x32_to_half_uniform_vec(uint4x32_t x) {
   half8_t result;
   #pragma unroll
   for (int i = 0; i < 4; i++) {
-    float f1 = __uint2float_rn((x.v[i] & 0xFFFF) >> 0) * (1.0f / 65536.0f);
-    float f2 = __uint2float_rn((x.v[i] >> 16) & 0xFFFF) * (1.0f / 65536.0f);
-    result.v[i*2 + 0] = __float2half(f1);
-    result.v[i*2 + 1] = __float2half(f2);
+    // Each word's low then high 16 bits, moved to the top of a word (see the C table)
+    result.v[i*2 + 0] = uint32_to_half_uniform(x.v[i] << 16);
+    result.v[i*2 + 1] = uint32_to_half_uniform(x.v[i] & 0xFFFF0000u);
   }
   return result;
 }|},
-      [ "uint4x32_t"; "half8_t" ] );
+      [ "uint4x32_t"; "half8_t"; "uint32_to_half_uniform" ] );
     (* The [Uint4x32_to_prec_uniform] emission names helpers by [Ops.prec_string]
        ("uint4x32_to_int64_uniform_vec", ...), while the workhorse definitions above use short
        names; provide the emitted names as wrappers (mirroring builtins.c, which defines the long

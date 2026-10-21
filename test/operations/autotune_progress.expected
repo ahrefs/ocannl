@@ -15,3 +15,7 @@ every arm_done says whether its arm succeeded: true
 the flip surface's lowering is named before the refinement starts: true
 the flip refinement is framed by one flips_start and one flips_done: true
 flips_done's measured count equals the flip searches' arm_start lines: true
+one placements_start line, ahead of every arm: true
+placements_start reports working bytes and the driver's free and total bytes where it has them: true
+every arm line reports working bytes and the driver's free bytes where it has them: true
+every arm starts with the working bytes the call started with: true

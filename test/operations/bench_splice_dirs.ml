@@ -235,8 +235,9 @@ let () =
     && List.equal SC.equal_saved_schedule
          (schedules ~cache_dir:treatment_cache_dir "k-step")
          (List.map treatment_step ~f:(fun (s : SC.saved_segment) -> s.SC.seg_saved)));
-  (* The inputs are another binary's caches. A lookup's cache-open sweeps a directory whose regime
-     stamp is older or missing; the splice reads entry files, and must leave such a cache whole. *)
+  (* The inputs are another binary's caches. A lookup reads a directory whose regime stamp is older
+     or missing as all misses (gh-ocannl-1439); the splice reads entry files, so it still finds the
+     schedules there, and neither may delete them. *)
   let stampless_cache_dir = "autotune_cache_splice_stampless" in
   plant_control ~cache_dir:stampless_cache_dir ();
   Stdlib.Sys.remove (Stdlib.Filename.concat stampless_cache_dir SC.regime_stamp_filename);
@@ -247,8 +248,9 @@ let () =
   let p_stampless = plan ~control:stampless_cache_dir "c0ffee" in
   pf "a cache stamped by no regime is spliced from, and left whole"
     (Result.is_ok p_stampless && before = 6 && entry_files () = before);
-  ignore (SC.lookup ~dir:stampless_cache_dir ~key:(Some "k-step") : SC.entry option);
-  pf "where a lookup would have swept it" (entry_files () = 0);
+  pf "where a lookup reads the same cache as a miss, and leaves it whole too"
+    (Option.is_none (SC.lookup ~dir:stampless_cache_dir ~key:(Some "k-step"))
+    && entry_files () = before);
   refusal "writing an arm into a non-empty directory"
     (S.write_arm ~cache_dir:arm_t_cache_dir p ~arm:S.Treatment ())
     ~mentions:"absent or empty";

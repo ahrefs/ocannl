@@ -1354,13 +1354,14 @@ let reduction_sink ~(accum_prec : Ir.Ops.prec -> Ir.Ops.prec) (opt : LL.optimize
 (* The statically-decidable precondition of {!zero_geometry}, shared with the family tree's
    construction-time verdicts (gh-ocannl-577): a zeroed site whose output lacks a row axis before
    the minor axis fails every pipeline's zero expansion, whatever the tile geometry. *)
+let zero_rank_ok (site : matmul_site) =
+  let rank = Array.length (Lazy.force site.m_d.Ir.Tnode.dims) in
+  rank >= 2 && site.m_row_axis < rank - 1
+
 let zero_expansion_witness (site : matmul_site) : string option =
-  if not site.m_zeroed then None
-  else
-    let rank = Array.length (Lazy.force site.m_d.Ir.Tnode.dims) in
-    if rank < 2 || site.m_row_axis >= rank - 1 then
-      Some "zero expansion needs a row axis before the minor axis (autotune_sketch_output_rank)"
-    else None
+  if site.m_zeroed && not (zero_rank_ok site) then
+    Some "zero expansion needs a row axis before the minor axis (autotune_sketch_output_rank)"
+  else None
 
 (* {3 Where a GPU matmul pipeline binds its batch loops (gh-ocannl-643, gh-ocannl-728)}
 
@@ -1398,6 +1399,74 @@ type row_parts = { rp_block : Sched.schedule; rp_inner : Idx.symbol; rp_rest : S
 let hoist_above ~(outer : Idx.symbol) (syms : Idx.symbol list) : Sched.schedule =
   List.map syms ~f:(fun inner -> Sched.Swap { outer; inner })
 
+(* Whether a sketch's fused-epilogue twin places its target in workgroup-shared storage: the
+   [shared] knob [family_schedule] passes to [Sched.Fuse_epilogue]. *)
+let epilogue_shared (p : sketch_params) = p.sk_gpu && p.sk_mma
+
+(* The covering per-cell zero nest of [target] that a fused-epilogue twin must give the site's
+   geometry itself (gh-ocannl-1453). [Sched.Fuse_epilogue] with [shared] — the GPU tensorized
+   twins', [epilogue_shared] — places a target not already on device in workgroup-shared storage,
+   one copy per workgroup that all its threads write. [companion_geometry] covers only nests writing
+   a MATERIALIZED node (routine-local scratch is otherwise per-thread), so where the target is not
+   materialized — an intermediate whose only consumer is the fused tail — the per-cell zero a GPU
+   fission segment folds in beside the site (gh-ocannl-1175) stayed bare: every thread of the
+   workgroup stored every cell, which gh-ocannl-959's binding legality refuses at render time. The
+   whole-routine twins never hit this, because the whole-node [Zero_out] they expand always takes
+   the site's geometry ([zero_geometry], [conv_zero_geometry]); this gives the folded zero the same.
+
+   [Some (nest_order, axis_order)]: the zero nest's loop symbols in nest order and in [target]'s
+   axis order. [None] when there is nothing to annotate: no shared placement, a materialized target
+   (whose zero [companion_geometry] covers), or no folded zero of [target] in the lowering. A folded
+   zero that is not a perfect nest storing [target] at its own loop symbols, one per axis, has no
+   positional mapping onto the site's chain, and declines the candidate. *)
+let shared_folded_zero ~(p : sketch_params) ~(target : Ir.Tnode.t) (opt : LL.optimized) :
+    (Idx.symbol list * Idx.symbol list) option =
+  if
+    (not (p.sk_epilogue && epilogue_shared p))
+    || Ir.Tnode.Placements.is_materialized_peek opt.LL.optimize_ctx.LL.placements target
+  then None
+  else
+    let real llc =
+      List.filter (LL.flat_lines [ llc ]) ~f:(function
+        | LL.Noop | LL.Comment _ -> false
+        | _ -> true)
+    in
+    match
+      List.filter (real opt.LL.llc) ~f:(function
+        | LL.Zero_out _ -> false
+        | stmt -> Option.exists (LL.zero_initializer_target stmt) ~f:(Ir.Tnode.equal target))
+    with
+    | [] -> None
+    | nest :: rest -> (
+        let rec perfect loops (llc : LL.t) =
+          match (llc, real llc) with
+          | LL.For_loop { index; from_ = 0; body; _ }, _ -> perfect (index :: loops) body
+          | _, [ LL.Set { tn; idcs; _ } ] when Ir.Tnode.equal tn target -> (
+              let loops = List.rev loops in
+              let axis_order =
+                Array.to_list idcs
+                |> List.map ~f:(function Idx.Iterator s -> Some s | _ -> None)
+                |> Option.all
+              in
+              match axis_order with
+              | Some axis_order
+                when List.is_empty rest
+                     && List.length axis_order = List.length loops
+                     && List.for_all loops ~f:(List.mem axis_order ~equal:Idx.equal_symbol) ->
+                  Some (loops, axis_order)
+              | _ -> None)
+          | _ -> None
+        in
+        match perfect [] nest with
+        | Some _ as found -> found
+        | None ->
+            refuse
+              (Printf.sprintf
+                 "Autotune sketch: the fused twin places %s in workgroup-shared storage, but its \
+                  folded zero is not a single perfect nest storing it at its own loop symbols, so \
+                  the site's geometry cannot be mapped onto it (gh-ocannl-1453)"
+                 (Ir.Tnode.debug_name target)))
+
 (* Zero-geometry ops shared by the sketch pipelines: expand the whole-node [Zero_out] of the output
    and give the resulting nest a compatible parallel geometry, via [mk_zops] on its two fresh loop
    symbols and — under a [`Grid_inner] layout only — the interior batch zero loops [mk_zops] must
@@ -1405,13 +1474,18 @@ let hoist_above ~(outer : Idx.symbol) (syms : Idx.symbol list) : Sched.schedule 
    fission exposes a covering zero as an ordinary per-cell companion, and other whole-node zeros
    land in their own [`Zeros] segment — there is nothing to expand here. Companion geometry maps the
    per-cell zero with the site; [Privatize] can forward it into the accumulator tile using the
-   shared zero-seed proof. Otherwise the tile/fragment loads the initialized target. *)
-let zero_geometry ?(layout : batch_layout = `Serial) (site : matmul_site)
+   shared zero-seed proof. Otherwise the tile/fragment loads the initialized target.
+
+   [folded] (gh-ocannl-1453) is that per-cell zero where the caller, not companion geometry, owns
+   its annotation ({!shared_folded_zero}): it takes exactly the ops the expanded whole-node zero
+   would, minus the expansion. Its loops must nest in [m_d]'s axis order, as [Expand_zero] nests
+   them. *)
+let zero_geometry ?(layout : batch_layout = `Serial) ?folded (site : matmul_site)
     ~(mk_zops : zi:Idx.symbol -> zj:Idx.symbol -> interior:Idx.symbol list -> Sched.schedule) :
     Sched.schedule =
-  if not site.m_zeroed then []
+  if (not site.m_zeroed) && Option.is_none folded then []
   else (
-    if Option.is_some (zero_expansion_witness site) then
+    if not (zero_rank_ok site) then
       (* This is a known limitation of the generated sketch, not an arbitrary exception from a user
          transform. Preserve that distinction at the narrow site so strict candidate failure
          classification records a decline and continues trying the remaining seeds. *)
@@ -1423,7 +1497,18 @@ let zero_geometry ?(layout : batch_layout = `Serial) (site : matmul_site)
                  feature = "autotune_sketch_output_rank";
                  detail = "Autotune sketch: zero expansion needs a row axis before the minor axis";
                } ));
-    let ez, zsyms = Sched.expand_zero ~tn:site.m_d in
+    let ez, zsyms =
+      match folded with
+      | Some (nest_order, axis_order) when not site.m_zeroed ->
+          if not (List.equal Idx.equal_symbol nest_order axis_order) then
+            refuse
+              "Autotune sketch: the folded zero's loops do not nest in the output's axis order \
+               (gh-ocannl-1453)";
+          ([], axis_order)
+      | _ ->
+          let ez, zsyms = Sched.expand_zero ~tn:site.m_d in
+          ([ ez ], zsyms)
+    in
     (* Batched outputs (gh-ocannl-528): the row/column zero loops get the accumulation's geometry;
        the batch-axis zero loops stay [Serial], like the batch loops of the accumulation nest —
        except under the [sk_batch_grid] twins (gh-ocannl-643), where they mirror the accumulation
@@ -1452,7 +1537,7 @@ let zero_geometry ?(layout : batch_layout = `Serial) (site : matmul_site)
                 @ [ Sched.Retype { axis = zs; ty = LL.Grid } ])
     in
     let interior = match layout with `Grid_inner -> interior | `Serial | `Grid -> [] in
-    (ez :: batch_ops) @ mk_zops ~zi ~zj ~interior)
+    ez @ batch_ops @ mk_zops ~zi ~zj ~interior)
 
 (* The would-be epilogue tail's loop symbols: the first real statement after the last statement
    writing [target] — the nest [Sched.Fuse_epilogue] consumes (its perfect-Serial-nest and
@@ -2146,7 +2231,8 @@ let gpu_mma_sketch_schedule ~(opt : LL.optimized) (site : matmul_site)
     | Error why -> companion_coverage_unsupported ~tensorized:true why
   in
   let zops =
-    zero_geometry ~layout site ~mk_zops:(fun ~zi ~zj ~interior ->
+    let folded = shared_folded_zero ~p ~target:site.m_d opt in
+    zero_geometry ~layout ?folded site ~mk_zops:(fun ~zi ~zj ~interior ->
         let rp = row_parts ?extent:(if List.is_empty interior then None else Some site.m_ni) zi in
         rp.rp_block @ hoist_above ~outer:rp.rp_inner interior @ rp.rp_rest @ annotate_role `Col zj)
   in
@@ -2541,19 +2627,55 @@ let cpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
    — barrier-strength uniformity against the lane loops of [Tensorize] and the cooperative [Stage]s.
    That is exactly the geometry a GPU fission segment's folded per-cell zero companion takes
    (gh-ocannl-1175); the renderers' workgroup barrier before every accumulator load of [d] orders
-   the zero against the fragment load, as for the companions ([companion_geometry]). Empty when the
-   site is not zeroed. *)
-let conv_zero_geometry (site : conv_site) ~(site_syms : (Idx.symbol * int) list)
+   the zero against the fragment load, as for the companions ([companion_geometry]).
+
+   [folded] (gh-ocannl-1453) is that folded per-cell zero where the fused twin places a
+   non-materialized [d] in workgroup-shared storage and companion geometry therefore leaves it to
+   this pipeline ({!shared_folded_zero}): it gets the same reorder and geometry, minus the
+   expansion. Empty when the site is not zeroed and nothing is folded. *)
+let conv_zero_geometry ?folded (site : conv_site) ~(site_syms : (Idx.symbol * int) list)
     ~(annotate : (Idx.symbol * int) list -> Sched.schedule) : Sched.schedule =
-  if not site.c_zeroed then []
-  else
-    let ez, zsyms = Sched.expand_zero ~tn:site.c_d in
+  let place ~ez ~current zsyms =
     let by_axis = List.zip_exn site.c_d_syms zsyms in
     let zchain =
       List.map site_syms ~f:(fun (s, n) ->
           (List.Assoc.find_exn by_axis s ~equal:Idx.equal_symbol, n))
     in
-    (ez :: reorder_swaps ~current:zsyms ~target:(List.map zchain ~f:fst)) @ annotate zchain
+    ez @ reorder_swaps ~current ~target:(List.map zchain ~f:fst) @ annotate zchain
+  in
+  if site.c_zeroed then
+    let ez, zsyms = Sched.expand_zero ~tn:site.c_d in
+    place ~ez:[ ez ] ~current:zsyms zsyms
+  else
+    match folded with
+    | None -> []
+    | Some (nest_order, axis_order) -> place ~ez:[] ~current:nest_order axis_order
+
+(* The chain the GPU conv pipeline annotates, as [companion_geometry] wants it: the outer output
+   loops, the GEMM row, the out-channel column — the conv analog of [matmul_site_chain]. *)
+let conv_site_chain (site : conv_site) =
+  site.c_outer @ [ (site.c_row, site.c_nrow); (site.c_oc, site.c_noc) ]
+
+(* The GPU conv pipeline's companion query, one spelling for the builder and the seeding witness:
+   the fused flavor skips the epilogue tail nest [Fuse_epilogue] consumes, and a zeroed site's
+   whole-node [Zero_out] is the pipeline's own ([conv_zero_geometry]). *)
+let conv_companion_geometry ~(opt : LL.optimized) ~(fused : bool) ~annotate (site : conv_site) =
+  companion_geometry ~site_syms:(conv_site_chain site)
+    ~skip:(if fused then conv_tail_loop_syms site opt else [])
+    ~expanded_zeros:(if site.c_zeroed then [ site.c_d ] else [])
+    ~annotate opt
+
+(* The statically-decidable companion-coverage verdict of the GPU conv seeds (gh-ocannl-1406), the
+   conv analog of [matmul_coverage_witness]: [companion_geometry]'s Ok/Error never depends on the
+   geometry [annotate] emits, so one query with a trivial annotator settles buildability for every
+   flavor of the leg. It replaces a [real_stmts <= 2] count cap, which refused aligned-merged
+   segments (conv + bias/relu + pooling, 3-6 statements) whose companions the pipeline already
+   annotates, and admitted segments whose single companion it cannot. The fused demand is a subset
+   of the unfused one, so an unfused [None] implies the fused one. *)
+let conv_coverage_witness ~(opt : LL.optimized) ~(fused : bool) (site : conv_site) : string option =
+  match conv_companion_geometry ~opt ~fused ~annotate:(fun _ -> []) site with
+  | Ok _ -> None
+  | Error why -> Some (Printf.sprintf "GPU conv companion coverage (gh-521): %s" why)
 
 (* The GPU staged leg of the implicit-GEMM conv pipeline (gh-ocannl-493): the same loop
    re-association as the CPU route, with the outer output loops [Grid]-typed (one threadgroup per
@@ -2576,7 +2698,7 @@ let conv_zero_geometry (site : conv_site) ~(site_syms : (Idx.symbol * int) list)
    including the covering zero, follows the site's outer Grid coordinates, row-block split and
    tensorization lane through [companion_geometry]. *)
 let gpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
-    { sk_simd = w; sk_bm; sk_bn; sk_bk; sk_tm; sk_depth; sk_epilogue; _ } : Sched.schedule =
+    ({ sk_simd = w; sk_bm; sk_bn; sk_bk; sk_tm; sk_depth; sk_epilogue; _ } as p) : Sched.schedule =
   let stage source tile_loops =
     Sched.Stage
       {
@@ -2595,7 +2717,7 @@ let gpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
      workgroup lane but no column Grid slot: distribute companion columns over that same lane width,
      keeping any column blocks serial. Outer output coordinates and row blocks have the same Grid
      roles in every nest. *)
-  let site_syms = site.c_outer @ [ (site.c_row, site.c_nrow); (site.c_oc, site.c_noc) ] in
+  let site_syms = conv_site_chain site in
   let annotate chain =
     List.concat_mapi chain ~f:(fun pos (sym, extent) ->
         if pos < List.length site.c_outer then [ Sched.Retype { axis = sym; ty = LL.Grid } ]
@@ -2609,16 +2731,14 @@ let gpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
           [ sp ])
   in
   let companions =
-    match
-      companion_geometry ~site_syms
-        ~skip:(if sk_epilogue then conv_tail_loop_syms site opt else [])
-        ~expanded_zeros:(if site.c_zeroed then [ site.c_d ] else [])
-        ~annotate opt
-    with
+    match conv_companion_geometry ~opt ~fused:sk_epilogue ~annotate site with
     | Ok ops -> ops
     | Error why -> companion_coverage_unsupported ~tensorized:true why
   in
-  let companions = conv_zero_geometry site ~site_syms ~annotate @ companions in
+  let companions =
+    let folded = shared_folded_zero ~p ~target:site.c_d opt in
+    conv_zero_geometry ?folded site ~site_syms ~annotate @ companions
+  in
   let outer_grid =
     List.map site.c_outer ~f:(fun (s, _) -> Sched.Retype { axis = s; ty = LL.Grid })
   in
@@ -2694,7 +2814,7 @@ let family_schedule ~accum_prec ~p (opt : LL.optimized) : Sched.schedule =
     (* [shared] is the fragment-site knob: only the GPU MMA sketches store through the contracted
        fragment; the block-tiling pipeline stores through [Privatize], where [Fuse_epilogue] rejects
        [shared] outright and the twin would fail for the wrong reason. *)
-    sched @ [ Sched.Fuse_epilogue { target = d; shared = p.sk_gpu && p.sk_mma } ]
+    sched @ [ Sched.Fuse_epilogue { target = d; shared = epilogue_shared p } ]
   else sched
 
 (* {2 The coalesced layouts (gh-ocannl-1165, gh-ocannl-1279)}
@@ -3092,9 +3212,9 @@ let conv_seed_judgment ?(capabilities = Ir.Backend_intf.no_codegen_capabilities)
                 (* The site's covering zero is the pipeline's to annotate, whichever form it
                    arrives in: a GPU fission segment's folded per-cell companion, or — on a
                    whole-routine lowering ([c_zeroed]) — the whole-node [Zero_out], which
-                   [conv_zero_geometry] expands into that same nest (gh-ocannl-503).
-                   [conv_real_stmts] excludes it either way, and the pipeline gives every
-                   companion aligned Grid and lane geometry. *)
+                   [conv_zero_geometry] expands into that same nest (gh-ocannl-503). The
+                   coverage query ([conv_companion_geometry]) excludes it either way, and the
+                   pipeline gives every other companion aligned Grid and lane geometry. *)
                 (* The intrinsic-tile divisibility is now a PER-BLOCK property (gh-ocannl-500): the
                tensorized micro-kernel row is [sk_bm] (the block), not the whole [c_nrow], so a
                staged block flavor is proposable whenever [sk_bm] — a multiple of the intrinsic row
@@ -3134,19 +3254,42 @@ let conv_seed_judgment ?(capabilities = Ir.Backend_intf.no_codegen_capabilities)
                       <= cap
                   | None -> true
                 in
+                (* Companion coverage (gh-ocannl-1406): the builder's own [companion_geometry]
+                   verdict, not a statement count. The unfused flavors need it unfused; when they
+                   are refuted but the site has a fusable tail, the fused-epilogue twins
+                   ([family_seeding] flag-flips every seed) may still be covered — the tail was the
+                   failing companion — so the leg seeds and the unfused flavors decline at build,
+                   the regime conv+bias+relu segments have always had. [Error] only when neither
+                   flavor is covered. *)
+                let coverage =
+                  match conv_coverage_witness ~opt ~fused:false site with
+                  | None -> Ok None
+                  | Some unfused -> (
+                      match Sched.fuse_epilogue_witness ~target:site.c_d opt with
+                      | Some _ -> Error unfused
+                      | None -> (
+                          match conv_coverage_witness ~opt ~fused:true site with
+                          | None -> Ok (Some unfused)
+                          | Some fused -> Error (unfused ^ "; fused-epilogue twins: " ^ fused)))
+                in
                 (* Every failing conjunct named, for the census. *)
                 let failing =
                   List.filter_map
                     [
                       (offset_free, lazy conv_offset_witness);
-                      ( n_real <= 2,
-                        lazy
-                          (Printf.sprintf
-                             "companion cap: %d real statements besides the site's own zero, at \
-                              most 2 seed"
-                             n_real) );
+                      ( Result.is_ok coverage,
+                        lazy (match coverage with Error why -> why | Ok _ -> assert false) );
                     ]
                     ~f:(fun (holds, why) -> if holds then None else Some (Lazy.force why))
+                in
+                let coverage_notes =
+                  match coverage with
+                  | Ok (Some unfused) ->
+                      [
+                        "unfused flavors decline at build, only their fused-epilogue twins are \
+                         covered: " ^ unfused;
+                      ]
+                  | Ok None | Error _ -> []
                 in
                 if not (List.is_empty failing) then
                   conv_leg_refused (String.concat ~sep:"; " failing)
@@ -3270,7 +3413,8 @@ let conv_seed_judgment ?(capabilities = Ir.Backend_intf.no_codegen_capabilities)
                     Option.value ~default:0 limits.Ir.Backend_intf.max_workgroup_memory_bytes
                   in
                   let withheld_notes =
-                    List.map !withheld ~f:(fun (reason, n) ->
+                    coverage_notes
+                    @ List.map !withheld ~f:(fun (reason, n) ->
                         Printf.sprintf "%d flavors withheld: %s" n reason)
                   in
                   let mem_notes =

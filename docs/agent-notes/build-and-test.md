@@ -3755,6 +3755,21 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   -- tools/test-run.sh ...`, with no slot override: the hold exports `FLEET_MEASUREMENT_HELD`, and
   the slot then runs the batch under it, logging `EXECUTION SLOT <box>: inside measurement <id>`
   (lukstafi/ludics-lite#480), which `slot_refusal` reads as an admission like a held slot's.
+- **A GPU-box batch that resolved to cc alone is green and tested nothing on the GPU, so the
+  runner says so, and `--expect-backend B` refuses it** (gh-ocannl-1433). Two wave legs
+  (staging#1268, staging#1269) passed on rog and minix with `OCANNL_BACKEND` unset and the test
+  configuration naming cc. On a box where cuda or hip meets a width hazard (the local view above,
+  so the fleet's Linux GPU boxes and never a Mac), `run`/`start`/`fresh` print `WARNING: this box
+  has a GPU backend (<b>), but this batch holds only cc: ...` in the announcements, the run's log
+  and the digest, and `plan` prints it too; a batch holding no backend at all (the scans) is not
+  warned about. `--expect-backend B` (repeatable, before the dune arguments) states what the batch
+  must hold: one that does not hold every B, or whose backends are unread (`exec`), is refused
+  before the slot, the probe and dune -- verdict `BACKEND REFUSED`, exit 2, the digest naming what
+  it held -- and a held expectation, cc included, silences the warning. The option makes `run`
+  resolve the batch on any box, a Mac included. A GPU leg passes the backend it is for:
+  `OCANNL_BACKEND=cuda tools/test-run.sh run --expect-backend cuda build @...`. Leg 88 of
+  `tools/test-test-run.sh` pins both, and its warning stays clear of the words leg 49's
+  width-silence controls grep for (`cap`, `sdma`, `nvidia`, `dxg`).
 - **Runtime-refusal signature table.** These are the exception names `tools/sweep.sh`'s
   `ENVIRONMENT_REFUSALS` treats as the environment refusing a run rather than a test judging it;
   dune prints an uncaught binding error as `Fatal error: exception <name>:` with the status on

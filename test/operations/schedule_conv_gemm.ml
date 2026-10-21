@@ -25,12 +25,13 @@
    expands with its own geometry (gh-ocannl-503): every whole-routine GPU seed executed. - The Grid
    conv flavor on aligned-merged segments: with more than one companion nest the pipeline adopts the
    default preset's whole-segment Grid geometry ([Sched.default_cpu]'s aligned cross-nest analysis),
-   value-pinned on the C backends and seeded per fission segment. - Strided rows (gh-ocannl-502):
-   the compacting [Stage] packs a stride-2 window densely, so the strided site seeds the same
-   flavors as a unit-stride one — pinned by the seed counts, by executing {e every} proposed
-   candidate against the natural form (candidates are timed, not value-checked), and by the tuned
-   stride-2 routine on both legs. - detect_conv's pattern discipline: a plain matmul is not a conv
-   site. *)
+   value-pinned on the C backends and seeded per fission segment; on a GPU the staged leg seeds the
+   same segments (gh-ocannl-1406, executed in conv_merged_gpu_seeds). - Strided rows
+   (gh-ocannl-502): the compacting [Stage] packs a stride-2 window densely, so the strided site
+   seeds the same flavors as a unit-stride one — pinned by the seed counts, by executing {e every}
+   proposed candidate against the natural form (candidates are timed, not value-checked), and by the
+   tuned stride-2 routine on both legs. - detect_conv's pattern discipline: a plain matmul is not a
+   conv site. *)
 
 open Base
 open Ocannl
@@ -847,6 +848,124 @@ let () =
          twice";
         "cvzt: every compiling whole-routine conv+tail GPU candidate is labeled tensorized";
       ];
+  (* --- The per-segment fused twins on the folded-zero conv+tail segment (gh-ocannl-1453): the
+     segmentation the tuner's [F_sketch] candidates use ([fold_zeros], the default GPU mapping
+     probe, promoted locals) folds the conv output's per-cell zero into the conv's own segment, and
+     the conv output there is NOT materialized: the fused tail is its only consumer. The fused
+     twin's [Fuse_epilogue] places it in workgroup-shared storage, so its zero nest needs the site's
+     geometry like any companion -- which companion coverage, counting only materialized writes,
+     never gave it: every thread stored every cell, and gh-ocannl-959's binding legality refused
+     each fused twin at render time. Every seed of the segment is compiled through the fission seam
+     and executed twice against the natural form (the second run fails a zero that missed cells);
+     the unfused seeds decline at companion coverage, as on the whole routine ([cvzt]). --- *)
+  let segment_gpu_leg ~tag ~build ~want =
+    let limits = Context.hardware_limits (Context.auto ()) in
+    let fission ~preset opt =
+      Sched.fission_scheduled ~promote_locals:true ~fold_zeros:true
+        ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu:true ~limits)
+        ~preset
+        ~zero_sched:(fun tns -> Sched.zero_expansion ~limits tns)
+        ~static_indices:[] opt
+      |> List.map ~f:(fun (_, _, _, post) -> post)
+    in
+    let other seg = Sched.default_gpu ~min_parallel:1 ~limits seg in
+    let seeds = ref [] and folded_local = ref false in
+    (let y = build (tag ^ "_p") in
+     let preset (seg : LL.optimized) =
+       (match Autotune.detect_conv seg.LL.llc with
+       | Some site ->
+           let d = site.Autotune.c_d in
+           seeds := Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits seg;
+           folded_local :=
+             (not (Ir.Tnode.Placements.is_materialized_peek seg.LL.optimize_ctx.LL.placements d))
+             && List.exists (LL.flat_lines [ seg.LL.llc ]) ~f:(function
+               | LL.Zero_out _ -> false
+               | stmt -> Option.exists (LL.zero_initializer_target stmt) ~f:(Ir.Tnode.equal d))
+       | None -> ());
+       other seg
+     in
+     ignore
+       (Context.compile ~lowered_transform:(fission ~preset) (Context.auto ())
+          (named (tag ^ "_probe") (Train.forward y))
+          Ir.Indexing.Empty));
+    Stdio.eprintf "%s: %d GPU seeds on the folded conv segment (not part of the golden)\n" tag
+      (List.length !seeds);
+    let run_seed i p_ =
+      let name = Printf.sprintf "%s_%d" tag i in
+      let y = build name in
+      let preset (seg : LL.optimized) =
+        match Autotune.detect_conv seg.LL.llc with
+        | Some _ -> Autotune.sketch_schedule ~accum_prec ~p:p_ seg
+        | None -> other seg
+      in
+      let result =
+        match
+          Context.compile ~lowered_transform:(fission ~preset) (Context.auto ())
+            (named name (Train.forward y))
+            Ir.Indexing.Empty
+        with
+        | exception Invalid_argument msg
+          when String.is_substring msg ~substring:"companion coverage (gh-521)" ->
+            `Declined
+        | exception Invalid_argument msg -> `Failed msg
+        | ctx, routine ->
+            let ctx = Context.run ctx routine in
+            let ctx = Context.run ctx routine in
+            let got = Context.get_values ctx y.Tensor.value in
+            `Ran
+              ( (not (Array.is_empty got))
+                && Array.for_all2_exn got want ~f:(fun a b -> Float.(abs (a - b) < 1e-3)),
+                rendered_tensorized routine.Context.mma )
+      in
+      (match result with
+      | `Declined ->
+          Stdio.eprintf "%s: declined at companion coverage (not part of the golden)\n" name
+      | `Failed msg -> Stdio.eprintf "%s (fused=%b) failed: %s\n" name p_.Autotune.sk_epilogue msg
+      | `Ran (ok, _) -> if not ok then Stdio.eprintf "%s differs from the natural form\n" name);
+      (p_, result)
+    in
+    (!folded_local, !seeds, List.mapi !seeds ~f:run_seed)
+  in
+  if Lazy.force gpu_capable then (
+    let folded_local, seeds, results =
+      segment_gpu_leg ~tag:"cvft" ~want:want_t ~build:(fun sub ->
+          let _, _, _, y = make_tail sub in
+          y)
+    in
+    p "cvft: the conv segment folds the conv output's per-cell zero, the output not materialized"
+      folded_local;
+    p_exists "cvft: the folded conv+tail segment seeds fused-epilogue GPU twins" seeds ~f:(fun s ->
+        s.Autotune.sk_conv && s.Autotune.sk_gpu && s.Autotune.sk_epilogue);
+    let fused = List.filter results ~f:(fun (s, _) -> s.Autotune.sk_epilogue) in
+    p_all
+      "cvft: every fused-epilogue GPU twin of the folded segment compiles, and matches the natural \
+       form run twice"
+      fused ~f:(function
+      | _, `Ran (ok, _) -> ok
+      | _, (`Declined | `Failed _) -> false);
+    p_all "cvft: every compiling candidate of the folded segment matches the natural form run twice"
+      results ~f:(function
+      | _, `Ran (ok, _) -> ok
+      | _, (`Declined | `Failed _) -> true);
+    p_none "cvft: no candidate of the folded segment fails other than at companion coverage" results
+      ~f:(function
+      | _, `Failed _ -> true
+      | _, (`Ran _ | `Declined) -> false);
+    p_all "cvft: every compiling candidate of the folded segment is labeled tensorized" results
+      ~f:(function
+      | _, `Ran (_, t) -> t
+      | _, (`Declined | `Failed _) -> true))
+  else
+    List.iter ~f:skipped
+      [
+        "cvft: the conv segment folds the conv output's per-cell zero, the output not materialized";
+        "cvft: the folded conv+tail segment seeds fused-epilogue GPU twins";
+        "cvft: every fused-epilogue GPU twin of the folded segment compiles, and matches the \
+         natural form run twice";
+        "cvft: every compiling candidate of the folded segment matches the natural form run twice";
+        "cvft: no candidate of the folded segment fails other than at companion coverage";
+        "cvft: every compiling candidate of the folded segment is labeled tensorized";
+      ];
   (* --- Seeding + tuning on the conv-alone graph: the C backends seed serial + Grid per fission
      segment (and whole-routine); metal seeds the staged GPU flavor per fission segment and on the
      whole routine, whose zeroed site the pipeline expands (gh-ocannl-503). --- *)
@@ -1225,8 +1344,9 @@ let () =
      conv + materialized companions. The whole-segment Grid geometry comes from the aligned
      cross-nest analysis ([Sched.default_cpu]) and the row is blocked SERIALLY for cache residency
      within each pool chunk — so the block flavor fires on fused conv+bias/relu/pool segments, not
-     only conv-alone. Row = 16 (two 8-row panels). The GPU staged conv leg is gated off on
-     multi-companion segments, so this leg is cc-only. === *)
+     only conv-alone. Row = 16 (two 8-row panels). The hand-built pipeline here is the CPU one; the
+     GPU staged leg seeds this segment too since its companion-coverage gate (gh-ocannl-1406), and
+     conv_merged_gpu_seeds executes every such GPU seed. === *)
   let make_merged16 sub =
     let x = make_x16 sub in
     let kern = make_kern8 sub in
@@ -1311,11 +1431,12 @@ let () =
       show_counts "cvmb" r;
       (* cc merged fission segment: serial + aligned-grid + one serial row-block panel, each with
          its fused-epilogue twin (gh-ocannl-501) = 6, all compiling (the aligned twins omit the
-         preset [Retype] on the consumed tail nest — fuse-before-annotate). metal: GPU conv seeds
-         gated off on multi-companion segments. *)
+         preset [Retype] on the consumed tail nest — fuse-before-annotate). A GPU with the f32
+         capability seeds the staged flavors on the merged segment, its companions covered
+         (gh-ocannl-1406; every such seed executed in conv_merged_gpu_seeds). *)
       p "cvmb: blocked flavor seeded on the merged fission segment"
         (if on_cpu then r.Autotune.fiss_sketch_candidates = 6 && r.Autotune.fiss_sketch_timed = 6
-         else if has_uniform_f32_mma then r.Autotune.fiss_sketch_candidates = 0
+         else if Lazy.force gpu_capable then r.Autotune.fiss_sketch_candidates > 0
          else true)
   | _ -> p "cvmb: blocked flavor seeded on the merged fission segment" false);
   p_close "cvmb: tuned merged-blocked conv matches the untuned twin within tolerance" got_mb want_mb
@@ -1400,14 +1521,17 @@ let () =
       (* cc: the whole routine seeds the serial flavor and its fused twin (the routine carries the
          conv's [Zero_out], so the aligned analysis bails there and no Grid flavor is seeded); per
          fission segment serial + aligned-grid, each with its fused-epilogue twin, all four timed
-         (the aligned twin compiles by fuse-before-annotate, gh-ocannl-501). metal: the merged
-         segment has more than one companion — GPU seeds are gated. *)
+         (the aligned twin compiles by fuse-before-annotate, gh-ocannl-501). A GPU with the f32
+         capability seeds the staged flavors on the whole routine and the merged segment, whose
+         companions take the site's geometry (gh-ocannl-1406); one without seeds nothing. *)
       p "cva: aligned-grid conv seeded and timed on the merged fission segment"
         (if on_cpu then
            r.Autotune.sketch_candidates = 2
            && r.Autotune.epilogue_sketch_candidates = 1
            && r.Autotune.fiss_sketch_candidates = 4
            && r.Autotune.fiss_sketch_timed = 4
+         else if Lazy.force gpu_capable then
+           r.Autotune.sketch_candidates > 0 && r.Autotune.fiss_sketch_candidates > 0
          else r.Autotune.sketch_candidates = 0 && r.Autotune.fiss_sketch_candidates = 0)
   | _ -> p "cva: aligned-grid conv seeded and timed on the merged fission segment" false);
   p_close "cva: tuned merged conv graph matches the untuned twin within tolerance" got_m want_m

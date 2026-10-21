@@ -6,7 +6,12 @@ the search timed at least one candidate, or was refused its timings by contentio
 the winner carries a measurement exactly when a candidate was timed: true
 the untuned default pipeline is measured as the reference, or refused by contention (gh-552): true
 tuned routine values correct: true
+the search's report arrived before its shipping compile: true
+the baseline reaches link exactly where it is dispatched (once on CPU, never on GPU): true
+every attempt that reached link entered a timing run: true
+the deferred search's routine computes correct values: true
 a serial cache entry is rejected on GPU backends and honoured on CPU ones: true
+the rejection is reported as a pre-codegen Not_dispatched refusal on GPU, and absent on CPU: true
 rejecting it re-searches rather than returning the serial routine: true
 a pre-gh-552 entry reports no default measurement; a re-search measures one or is refused: true
 the routine from the poisoned-cache path computes correct values: true

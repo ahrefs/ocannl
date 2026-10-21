@@ -1864,6 +1864,19 @@ let mixed_baselines =
 (* The RNG-bearing nest's own serial rendering, at the precisions its members run at. *)
 let rng_precs = List.filter precs ~f:(fun (prec_name, _) -> not (String.equal prec_name "f32"))
 
+(* The greatest value of [prec]'s format not above [v >= 0]: {!round}, stepped one encoding down
+   when it landed above [v] -- what the narrow uniform draws' truncation toward zero gives
+   (gh-ocannl-1434), reached by another route than the conversions' mantissa mask. *)
+let round_down (prec : Ops.prec) v =
+  match prec with
+  | Ops.Bfloat16_prec _ ->
+      let r = Ops.single_to_bfloat16 v in
+      Ops.bfloat16_to_single (if Float.(Ops.bfloat16_to_single r > v) then r - 1 else r)
+  | Ops.Half_prec _ ->
+      let r = Ops.single_to_half v in
+      Ops.half_to_single (if Float.(Ops.half_to_single r > v) then r - 1 else r)
+  | _ -> v
+
 let rng_baselines =
   List.map rng_precs ~f:(fun (prec_name, prec) ->
       let prog = make ~prec ~shape:Rng_contrib () in
@@ -1886,13 +1899,15 @@ let rng_baseline prec_name = List.Assoc.find_exn rng_baselines ~equal:String.equ
    The draw is also the cross-backend pin gh-ocannl-951 asked for. A conversion picks which bits of
    the key it consumes from the precision it renders at (gh-ocannl-517) -- per PRECISION, not per
    backend -- and the scalar bf16 and half conversions both take the single draw of the first 32
-   bits, narrowed, on every backend (cc's half used to consume the low 16 bits instead, so one key
-   drew a different half on cc than on the GPUs). The draws are exact by construction (a bit
-   selection and one rounding, never a reduction), so they belong on stdout: a backend that consumed
-   other bits prints another number, and the claim that each narrow draw IS the single draw narrowed
-   by the library's own conversion fails on it. The host copy of the conversion ([Ops]'s stubs over
-   [builtins.c], compiled from the shared cc definition table -- gh-ocannl-656) is held to the same
-   draw, which is the first mechanical check that the pair has not drifted. *)
+   bits, truncated toward zero to the narrow format, on every backend (cc's half used to consume the
+   low 16 bits instead, so one key drew a different half on cc than on the GPUs; until
+   gh-ocannl-1434 the draw was rounded to nearest, which reaches exactly 1.0). The draws are exact
+   by construction (a bit selection and one exact narrowing, never a reduction), so they belong on
+   stdout: a backend that consumed other bits, or rounded instead of truncating, prints another
+   number, and the claim that each narrow draw IS the single draw truncated fails on it. The host
+   copy of the conversion ([Ops]'s stubs over [builtins.c], compiled from the shared cc definition
+   table -- gh-ocannl-656) is held to the same draw, which is the first mechanical check that the
+   pair has not drifted. *)
 let device_draw (prec_name, prec) =
   Int.incr next_id;
   let uvals =
@@ -1941,10 +1956,10 @@ let () =
       Stdio.printf "the %s draw of the RNG members' key: %s\n" prec_name (Test_utils.hex_float draw);
       p
         (Printf.sprintf
-           "the %s draw is the f32 draw narrowed to %s: the conversion consumes the same 32 bits \
-            of the key on every backend (gh-ocannl-951)"
+           "the %s draw is the f32 draw truncated to %s: the conversion consumes the same 32 bits \
+            of the key on every backend (gh-ocannl-951) and never rounds up (gh-ocannl-1434)"
            prec_name prec_name)
-        (Float.equal draw (round prec single_draw));
+        (Float.equal draw (round_down prec single_draw));
       let host_draw =
         match prec with
         | Ops.Bfloat16_prec _ ->

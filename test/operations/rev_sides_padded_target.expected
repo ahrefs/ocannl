@@ -1,0 +1,17 @@
+the concatenation's gradient scatter is emitted non-initializing: true
+x's gradient (a scatter target) is padded along the convolved axis, committing 0: true
+cat's gradient (the scatter's read side) is padded along the convolved axis, committing 0: true
+v's gradient (the other target) is unpadded: true
+non_initializing: the scatter stores constants into x's gradient (its margin resets): true
+non_initializing: the scatter writes no cell of the node it reads: true
+non-initializing: x's gradient holds 0 in its margins and sentinel + slice elsewhere: true
+non-initializing: the read side keeps its sentinel margins and its values: true
+non-initializing: v's gradient is its prior plus its slice: true
+initializing: the scatter stores constants into x's gradient (its margin resets): true
+initializing: the scatter writes no cell of the node it reads: true
+initializing: x's gradient holds 0 in its margins and its slice elsewhere: true
+initializing: the read side keeps its sentinel margins and its values: true
+training step: cat's gradient is z's input gradient: true
+training step: x's gradient sums y's input gradient and its slice of cat's: true
+training step: v's gradient is its slice of cat's: true
+training step: src's gradient is x's: true

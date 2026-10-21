@@ -147,6 +147,36 @@ let () =
   Verdict.pf "write-through: parent=%s (expect [99 99 99 4 5 6])" (arr_to_string parent_after)
     (Array.equal Float.equal parent_after [| 99.; 99.; 99.; 4.; 5.; 6. |]);
 
+  (* --- gh-ocannl-1475: a constant [Fetch] of the view writes the parent's slice, the zero fill
+     included. A zero [Fetch] used to lower to a [Zero_out] of the bufferless view, which wrote
+     nothing. No front-end path emits a [Fetch] onto a slice-alias view (zero_grads fetch gradient
+     nodes, terminal fills fetch terminals, [neutral_init]'s fetches are its own), so these are
+     hand-built. Discriminating: every parent cell is nonzero before the fill (row 0 holds 99s from
+     the write-through, row 1 its initial 4 5 6), and the fill must reach exactly one row. --- *)
+  let fill_view c =
+    Ir.Assignments.Fetch { array = bv.value; fetch_op = Constant c; dims = bv.value.Ir.Tnode.dims }
+  in
+  let zero_llc = Ir.Assignments.to_low_level (fill_view 0.) in
+  Verdict.p "zero fill of the view: 0 writes to the view itself"
+    (count_writes_to zero_llc bv.value.Ir.Tnode.id = 0);
+  Verdict.p "zero fill of the view: the parent receives the writes (>0)"
+    (count_writes_to zero_llc images.value.Ir.Tnode.id > 0);
+  let run_fill ctx ~name c ~row =
+    let ctx, froutine =
+      Train.to_routine ctx bindings (Ir.Assignments.to_comp (Block_comment (name, fill_view c)))
+    in
+    IDX.find_exn froutine.Context.bindings batch_n := row;
+    Train.run ctx froutine;
+    (ctx, Context.get_values ctx images.value)
+  in
+  let ctx, after_zero = run_fill ctx ~name:"zero_fill_view" 0. ~row:1 in
+  Verdict.pf "zero fill of row 1: parent=%s (expect [99 99 99 0 0 0])" (arr_to_string after_zero)
+    (Array.equal Float.equal after_zero [| 99.; 99.; 99.; 0.; 0.; 0. |]);
+  let _ctx, after_seven = run_fill ctx ~name:"seven_fill_view" 7. ~row:0 in
+  Verdict.pf "constant-7 fill of row 0: parent=%s (expect [7 7 7 0 0 0])"
+    (arr_to_string after_seven)
+    (Array.equal Float.equal after_seven [| 7.; 7.; 7.; 0.; 0.; 0. |]);
+
   (* --- AC1 (no copy loop): lower an eligible slice's forward and confirm its [Fetch.Slice] became
      a [Noop] -- the slice node is written ZERO times in the lowered code. Inspecting the lowered
      [Low_level.t] directly (via [Ir.Assignments.to_low_level], pre-optimization) is the non-vacuous

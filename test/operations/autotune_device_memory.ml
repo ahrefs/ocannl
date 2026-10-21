@@ -15,10 +15,11 @@
    Asserted: under room for one and a half footprints, a cold search declines nothing for memory
    (its incumbents are not resident beside a challenger) and a warm search replays its winner (the
    replay is not co-resident with the base compile); under room for half a footprint, the search is
-   refused before any candidate is compiled, with a typed [Pre_search_failure]; and, through
-   [Train.tune_placements], arm A's search leaves nothing resident when it reports, so both arms
-   search in room for one and a half footprints, and the recorded decision replays in one cached
-   search (gh-ocannl-1408). *)
+   refused before any candidate is compiled -- or, where the baseline is refused before codegen
+   (gh-ocannl-1340), at the first candidate's link -- with a typed [Pre_search_failure]; and,
+   through [Train.tune_placements], arm A's search leaves nothing resident when it reports, so both
+   arms search in room for one and a half footprints, and the recorded decision replays in one
+   cached search (gh-ocannl-1408). *)
 
 open Base
 open Ocannl
@@ -175,7 +176,8 @@ let () =
   Result.iter result ~f:(check_values "the replayed winner computes the right values");
 
   (* --- 3. Room for half the unscheduled footprint: the base compile is refused, and with it the
-     search, before any candidate is compiled. --- *)
+     search, before any candidate is compiled; where the baseline is refused before codegen, the
+     first candidate to link is refused in its place, and with it the search. --- *)
   let cache_dir3 = "autotune_cache_device_memory_refused" in
   clean_cache cache_dir3;
   let report3 = ref None in
@@ -191,7 +193,21 @@ let () =
   p "a routine that does not fit is refused, not searched" (Result.is_error result);
   p "the refusal is a typed pre-search failure at link, with the device-memory decline"
     (refused_for_memory r3);
-  p "only the base compile was attempted" (List.equal String.equal !attempts [ "baseline" ]);
+  (* gh-ocannl-1340: a baseline that binds no hardware dimension (every GPU backend's) is refused
+     before codegen and links nothing, so the first candidate's link answers in its place -- read
+     off the report's own [Not_dispatched_key "baseline"] refusal, not a backend list. The census is
+     never empty here: it holds the device-memory decline claimed above. *)
+  let refused_baseline d =
+    SO.equal_rejection_key d.Autotune.key (SO.Not_dispatched_key "baseline")
+  in
+  let attempted =
+    "only the base compile was attempted, or, with the baseline refused before codegen, it and the \
+     first candidate"
+  in
+  (match List.rev !attempts with
+  | [ "baseline" ] -> p_none attempted r3.Autotune.declines ~f:refused_baseline
+  | [ "baseline"; _first ] -> p_exists attempted r3.Autotune.declines ~f:refused_baseline
+  | _ -> p attempted false);
   p "the device refused exactly one allocation" (refused = 1);
 
   (* --- 4. Through the placement A/B (gh-ocannl-1408): arm A's searched routine is not resident

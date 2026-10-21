@@ -475,3 +475,94 @@ let () =
     (List.count outcomes ~f:(fun (_, o) -> Poly.equal o `Declined));
   p_none "no sketch of the folded single segment escapes as an unclassified exception" outcomes
     ~f:(fun (_, o) -> Poly.equal o `Escaped)
+
+(* The same matmul+tail with the product NOT materialized (gh-ocannl-1453), segmented as the tuner's
+   per-segment sketch candidates segment it (the host's limits: promoted locals, the default GPU
+   mapping probe, the zero folded and expanded per cell). The fused tail is the product's only
+   consumer, so the tensorized fused twins' [Fuse_epilogue] places it in workgroup-shared storage,
+   and the folded per-cell zero nest beside the site takes the site's geometry from the sketch
+   itself -- companion coverage counts only materialized writes, and the zero used to stay bare
+   (every thread storing every cell), which gh-ocannl-959's binding legality refused at render. (The
+   [fission] above, at no hardware limits, leaves the folded zero whole-node, which the pipelines
+   always expanded with the site's geometry.) Every GPU seed of the folded segment executes against
+   the materialized run, bitwise: every operand numerator is below 2^11 over a power-of-two
+   denominator and every partial sum is a multiple of 2^-12 below 2^8, so a correct schedule rounds
+   nowhere, tf32 included; the integral bias drives part of the output below zero, so the relu both
+   passes and clamps cells. GPU-only: the C backends fold no per-cell zero. *)
+let () =
+  let n = 32 in
+  let init ~l ~o ~f = NTDSL.init ~l ~prec:Ir.Ops.single ~o ~f () in
+  let ma =
+    init ~l:"zl_a" ~o:[ n; n ] ~f:(fun ix -> Float.of_int (1 + (3 * ix.(0)) + ix.(1)) /. 64.)
+  in
+  let mb =
+    init ~l:"zl_b" ~o:[ n; n ] ~f:(fun ix -> Float.of_int (2 + ix.(0) + (5 * ix.(1))) /. 64.)
+  in
+  let bias = init ~l:"zl_bias" ~o:[ n ] ~f:(fun ix -> Float.of_int (5 * (7 - ix.(0)))) in
+  let%op prod = ma +* "ik;kj=>ij" mb in
+  let%op out = relu (prod + bias) in
+  Train.set_materialized out.Tensor.value;
+  let opt = capture ~name:"zl_capture" out in
+  let seed = [ (out.Tensor.value, Array.create ~len:(n * n) (-999.)) ] in
+  let want =
+    List.hd_exn (Ll_test.execute ~name:"zl_materialized" opt ~seed ~read:[ out.Tensor.value ])
+  in
+  p_exists "the routine-local product's reference has positive cells" (Array.to_list want)
+    ~f:(fun v -> Float.(v > 0.));
+  p_exists "the routine-local product's reference has relu-clamped cells" (Array.to_list want)
+    ~f:(fun v -> Float.(v = 0.));
+  let structural =
+    [
+      "the tuner's segmentation folds the routine-local product's zero per cell into one segment";
+      "the product is not materialized in the folded segment";
+      "the routine-local product's folded segment seeds tensorized fused-epilogue twins";
+    ]
+  in
+  let pre =
+    if not (Sched.backend_is_gpu backend_name) then (
+      List.iter structural ~f:(Verdict.skipped ~backend:backend_name);
+      opt)
+    else
+      let limits = Context.hardware_limits (Context.auto ()) in
+      let segments =
+        Sched.fission_scheduled ~promote_locals:true ~fold_zeros:true
+          ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu:true ~limits)
+          ~preset:(Sched.default_gpu ~min_parallel:1 ~limits)
+          ~zero_sched:(fun tns -> Sched.zero_expansion ~limits tns)
+          ~static_indices:[]
+          {
+            opt with
+            LL.traced_store = Hashtbl.copy opt.LL.traced_store;
+            optimize_ctx = LL.copy_optimize_ctx opt.LL.optimize_ctx;
+          }
+      in
+      let pre = match segments with [ (`Normal, pre, _, _) ] -> Some pre | _ -> None in
+      p (List.nth_exn structural 0)
+        (Option.exists pre ~f:(fun pre ->
+             List.exists (LL.flat_lines [ pre.LL.llc ]) ~f:(function
+               | LL.Zero_out _ -> false
+               | stmt ->
+                   Option.exists (LL.zero_initializer_target stmt)
+                     ~f:(Ir.Tnode.equal prod.Tensor.value))));
+      let pre = Option.value pre ~default:opt in
+      p (List.nth_exn structural 1)
+        (not
+           (Ir.Tnode.Placements.is_materialized_peek pre.LL.optimize_ctx.LL.placements
+              prod.Tensor.value));
+      (* Gated, like [folded_seed_claims]' tensorized claim, on the tile the backend advertises for
+         the site's precisions: no f32-input tile, no tensorized seed (HIP; CUDA without tf32). *)
+      (match
+         Option.map (Autotune.detect_matmul pre.LL.llc) ~f:(fun site ->
+             Ll_test.tensorized_matmul_capability ~is_gpu:true ~is_cpu:false ~limits
+               ~a:site.Autotune.m_a ~b:site.m_b ~d:site.m_d)
+       with
+      | Some (`Withheld aggregation) ->
+          Verdict.skipped ~aggregation ~backend:backend_name (List.nth_exn structural 2)
+      | Some `Advertised | None ->
+          p_exists (List.nth_exn structural 2) (gpu_seeds ~limits pre) ~f:(fun q ->
+              q.Autotune.sk_mma && q.Autotune.sk_epilogue));
+      pre
+  in
+  (* Gated in itself: on the C backends it executes no seed and reports both claims skipped. *)
+  folded_seed_claims ~tag:"zl_seed_" ~what:"folded routine-local product with its tail" ~pre ~out
+    ~seed ~want ~matches:(Array.equal Float.equal)

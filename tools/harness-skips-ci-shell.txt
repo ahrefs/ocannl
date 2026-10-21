@@ -19,3 +19,6 @@ tools/test-test-run.sh	negative control: with the replay's inherited descriptors
 # MSYS link files and the symlink-copy mode exist only under Git Bash.
 tools/test-windows-opam-cache.sh	negative control: switch restored with system link files
 tools/test-windows-opam-cache.sh	negative control: MSYS deepcopy links
+# The fleet's own tables exist only on fleet hosts: wake-lab.sh on the anchor, FLEET_BOXES on each.
+benchmarks/test-check-box.sh	the fleet's Linux names are the native boots on wake-lab.sh's endpoint map
+benchmarks/test-check-box.sh	the fleet names are this host's FLEET_BOXES

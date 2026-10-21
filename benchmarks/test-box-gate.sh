@@ -37,6 +37,8 @@ for f in mlp_wide mlp_small lenet gpt2_mini gpt2_mini_s512 gpt2_mini_s1024 gpt2_
 done
 cat >"$tree/benchmarks/check-box.sh" <<EOF
 #!/usr/bin/env bash
+# The gates' name reading (--canonical-box) is the real script's, and test-check-box.sh's to test.
+[ "\$1" != --canonical-box ] || { printf '%s\n' "\$2"; exit 0; }
 printf '%s\n' "\$*" >>"$TMP/calls"
 printf '%s\n' "\${BENCH_VENV_PY-unset}" >>"$TMP/venv"
 case \$(cat "$TMP/verdict") in

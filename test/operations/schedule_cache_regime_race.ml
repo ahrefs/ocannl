@@ -1,8 +1,9 @@
 (* gh-ocannl-884: a regime transition and a store in different processes share the permanent record
-   lock. The transition child pauses after sweeping the old entries and staging the new stamp, but
-   before publishing that stamp; the writer child then attempts a store and reports from its
-   entry-commit hook. It must not reach that hook until the transition is released, and its entry
-   must remain after both cache opens finish.
+   lock. The transition child -- itself a store, the only cache-open that sweeps (gh-ocannl-1439) --
+   pauses after sweeping the old entries and staging the new stamp, but before publishing that
+   stamp; the writer child then attempts a store and reports from its entry-commit hook. It must not
+   reach that hook until the transition is released, and its entry must remain after both cache
+   opens finish.
 
    The rendezvous makes the interleaving deliberate rather than scheduler-dependent. Every wait is
    bounded in monotonic seconds, so a missing hook or a child that stops making progress fails
@@ -19,6 +20,7 @@ module Cache_plant = Test_utils.Cache_plant
 
 let cache_dir = "autotune_cache_regime_race"
 let old_key = "old"
+let transition_key = "transition"
 let writer_key = "concurrent-writer"
 let transition_mode = "--regime-transition-child"
 let writer_mode = "--regime-writer-child"
@@ -61,16 +63,14 @@ let child_exit code = Stdlib.exit code
 
 let transition_child () =
   let reached = ref false in
-  let opened =
-    FI.with_callback
-      (fun point ->
-        if FI.equal_point point FI.Schedule_cache_before_regime_commit then (
-          reached := true;
-          touch "stamp-ready";
-          if not (await_marker "transition-release") then child_exit 2))
-      ~f:(fun () -> SC.lookup ~dir:cache_dir ~key:(Some old_key))
-  in
-  if !reached && Option.is_none opened then (
+  FI.with_callback
+    (fun point ->
+      if FI.equal_point point FI.Schedule_cache_before_regime_commit then (
+        reached := true;
+        touch "stamp-ready";
+        if not (await_marker "transition-release") then child_exit 2))
+    ~f:(fun () -> SC.store ~dir:cache_dir ~key:(Some transition_key) (entry "transition"));
+  if !reached then (
     touch "transition-done";
     child_exit 0)
   else child_exit 3

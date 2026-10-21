@@ -3191,10 +3191,52 @@ let seeded_replay ~limits ~accum_prec ~static_indices segments (opt : LL.optimiz
    buffer the caller's placements never allocate. [tune] refuses that case up front
    ([Lineage_refused]), comparing the two lineages' lowerings taken together, so both see the same
    value bounds ([lineage_identity]); a comparison here, with a lowering taken after the timing
-   runs, could not tell drift from a lineage difference. *)
-let compile_candidate ?name ?label ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu
-    ~provenance ctx comp bindings spec : compiled Outcome.outcome =
+   runs, could not tell drift from a lineage difference.
+
+   gh-ocannl-1340: two verdicts are decided inside the transform, on the forms it is about to hand
+   to codegen, so a candidate they refuse costs no codegen, no device compile and no link — on HIP a
+   serial whole-routine form is minutes of hiprtc (303 s per arm on a gfx1102). A form [seen]
+   already holds is a [`Duplicate] (the search's dedup, which used to be decided after the compile
+   it made redundant); on a GPU backend a form that binds no hardware dimension is refused with the
+   typed [Not_dispatched] cause of {!dispatchable} (gh-ocannl-532), which every caller already
+   rejected after its compile. The order is the search's: a duplicate of a refused form dedups
+   rather than counting a second refusal, which is why a refused digest joins [seen]. The verdicts
+   read the transform's forms, not what codegen shipped (zero-only segments can be elided after the
+   transform), so the callers keep their post-codegen check, on [routine.segments]. *)
+type gated_compile = Compiled of compiled | Duplicate of string | Failed of Outcome.failure
+
+let not_dispatched_origin = function
+  | Outcome.Cache_replay -> "cache_replay"
+  | Outcome.Candidate | Outcome.Advisory | Outcome.User_schedule -> "candidate"
+
+let compile_candidate_gated ?name ?label ?seen ~static_indices ~base_opt ~canon ~limits ~is_gpu
+    ~is_cpu ~provenance ctx comp bindings spec : gated_compile =
   let candidate = match label with Some l -> l | None -> spec_label spec in
+  let duplicate = ref None in
+  let gate ~digest_after opts =
+    if Option.exists seen ~f:(fun seen -> Hash_set.mem seen digest_after) then (
+      duplicate := Some digest_after;
+      (* Unwinds out of the backend's compile before codegen; the [duplicate] cell, not this cause,
+         is what the result reports. *)
+      raise
+        (Outcome.Cause_at
+           ( Outcome.Transform,
+             Outcome.Not_dispatched { origin = "dedup"; detail = candidate ^ " is a duplicate" } )));
+    if not (dispatchable ~is_gpu opts) then (
+      Option.iter seen ~f:(fun seen -> Hash_set.add seen digest_after);
+      raise
+        (Outcome.Cause_at
+           ( Outcome.Transform,
+             Outcome.Not_dispatched
+               {
+                 origin = not_dispatched_origin provenance;
+                 detail =
+                   Printf.sprintf
+                     "%s binds no hardware dimension (gh-ocannl-532), refused before codegen \
+                      (digest %s)"
+                     candidate (dshort digest_after);
+               } )))
+  in
   let accum_prec = (Context.codegen_capabilities ctx).Ir.Backend_intf.accum_prec in
   let rebase (fresh : LL.optimized) =
     {
@@ -3237,6 +3279,7 @@ let compile_candidate ?name ?label ~static_indices ~base_opt ~canon ~limits ~is_
                 [ { u_segment = None; u_saved = saved; u_registry = registry; u_opt = opt' } ],
                 [ opt' ],
                 digest_after );
+          gate ~digest_after [ opt' ];
           [ opt' ]
         in
         Context.compile_outcome ?name ~lowered_transform:transform ~provenance ~candidate ctx comp
@@ -3369,6 +3412,7 @@ let compile_candidate ?name ?label ~static_indices ~base_opt ~canon ~limits ~is_
             else Split_saved (prelude_saved, segs)
           in
           captured := Some (form, units, posts, digest_after);
+          gate ~digest_after posts;
           posts
         in
         Context.compile_outcome ?name ~lowered_transform:transforms ~provenance ~candidate ctx comp
@@ -3378,16 +3422,44 @@ let compile_candidate ?name ?label ~static_indices ~base_opt ~canon ~limits ~is_
      [Context.compile] collects it around this candidate's kernel compiles, fissioned segments
      included, so no bracket is needed here and a candidate cannot be timed without it. *)
   match compile_ctx () with
-  | Error failure -> Error failure
+  | Error _ when Option.is_some !duplicate -> Duplicate (Option.value_exn !duplicate)
+  | Error failure -> Failed failure
   | Ok (cctx, routine) -> (
       match !captured with
       | Some (form, units, all_opts, digest_after) ->
-          Ok { form; cctx; routine; units; all_opts; digest_after }
-      | None ->
-          Outcome.protect
-            ~classify_backend:(fun _ _ -> None)
-            ~provenance ~phase:Outcome.Transform ~candidate
-            (fun () -> failwith "Autotune: the transform was not invoked"))
+          Compiled { form; cctx; routine; units; all_opts; digest_after }
+      | None -> (
+          match
+            Outcome.protect
+              ~classify_backend:(fun _ _ -> None)
+              ~provenance ~phase:Outcome.Transform ~candidate
+              (fun () -> failwith "Autotune: the transform was not invoked")
+          with
+          | Ok (_ : compiled) -> assert false
+          | Error failure -> Failed failure))
+
+(* The callers that do not deduplicate: a refused form arrives as the typed [Not_dispatched]
+   failure, which each of them already handles as a failed or degenerate compile. *)
+let compile_candidate ?name ?label ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu
+    ~provenance ctx comp bindings spec : compiled Outcome.outcome =
+  match
+    compile_candidate_gated ?name ?label ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu
+      ~provenance ctx comp bindings spec
+  with
+  | Compiled c -> Ok c
+  | Failed failure -> Error failure
+  | Duplicate _ -> assert false (* No [seen], no duplicate. *)
+
+(* The post-codegen check behind the gate: whether the kernels codegen SHIPPED ([routine.segments],
+   gh-ocannl-1006) bind a hardware dimension -- the artifact, not the transform's forms the gate
+   judged. A routine that recorded no segments is judged by its forms. *)
+let shipped_dispatchable ~is_gpu (c : compiled) =
+  dispatchable ~is_gpu (match c.routine.Context.segments with [] -> c.all_opts | segs -> segs)
+
+(* Whether a failure is the gate's pre-codegen refusal above. *)
+let is_not_dispatched = function
+  | Outcome.Classified { cause = Outcome.Not_dispatched _; _ } -> true
+  | Outcome.Classified _ | Outcome.Fatal _ -> false
 
 (** {2 The action menu} *)
 
@@ -5716,6 +5788,14 @@ let on_staffed_start :
     Seam.t =
   Seam.make (fun ~menu:_ start -> start)
 
+(* gh-ocannl-1441: the seeded untuned plan [tune] derived on its base lowering (forced lazily, at
+   most once per call), which the search then seeds first, falls back to and names in its trajectory
+   identity ([|seed=<digest>]). A test substitutes another plan -- [None] included -- to run two
+   seeds against one trajectory: no setting moves the plan alone, since the keys that steer it are
+   [Search_shaping] and render in the trajectory's settings themselves, and the [Untimed] device
+   readings its [auto] gate consults are fixed per process. Not a production seam: default the
+   identity, and no config key selects it. *)
+let on_seeded_plan : (seeded_plan option -> seeded_plan option) Seam.t = Seam.make Fn.id
 let search_setting () = Utils.registered_flag ~arg_name:"autotune_search"
 
 (* The schedule cache directory a tuning call uses, or [""] for none. Whether the directory was
@@ -6038,20 +6118,63 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
           ~detail:(Exn.to_string f.Outcome.exn) ());
     Outcome.raise_failure failure
   in
-  (* The untuned fallback of a search-less call, through the containment-aware form so a failure
-     reports the phase it carries. [Context.compile] is exactly this plus [raise_failure], which is
-     what [raise_pre_search] ends with, so the caller sees the same exception either way. *)
+  (* The untuned fallback of a call that does not search (search off, a lineage refusal, a deferred
+     cache replay that failed), through the containment-aware form so a failure reports the phase it
+     carries. It is {!seeded_default}'s compile, the recipes' untuned step, wherever
+     {!seeded_settings} admits the seeded plan (CUDA and HIP; gh-ocannl-1441) -- the plan derived
+     inside this compile's own transform, on [ctx]'s lowering -- and the plain default pipeline
+     elsewhere. As in {!seeded_default}, a classified failure of a compile that seeded, split or
+     sank something recompiles the plain default; any other failure goes to [raise_pre_search].
+     [Context.compile] is the plain form plus [raise_failure], which is what [raise_pre_search] ends
+     with, so the caller sees the same exception either way. *)
   let compile_untuned_default ?base () =
     progress_stage "untuned_default_compile";
-    match
-      Context.compile_outcome ?name ~provenance:Ir.Schedule_outcome.User_schedule ctx comp bindings
-    with
-    | Ok result -> result
-    | Error failure -> raise_pre_search ?base failure
+    let plain () =
+      match
+        Context.compile_outcome ?name ~provenance:Ir.Schedule_outcome.User_schedule ctx comp
+          bindings
+      with
+      | Ok result -> result
+      | Error failure -> raise_pre_search ?base failure
+    in
+    let choice = ref no_seeded_choice in
+    (* Before the compile, so outside its classification: on CUDA and HIP this reads the device's
+       limits (device work, as the search path's limits query is) and the seeding settings, either
+       of which can raise, and the call must still report once. *)
+    let seeded =
+      match seeded_transform ~on_choice:(fun c -> choice := c) ctx bindings with
+      | transform -> transform
+      | exception exn when not (process_fatal_exn exn) ->
+          let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+          !release_baseline_hook ();
+          let phase =
+            match exn with
+            | Utils.Invalid_config_value _ -> Outcome.Transform
+            | _ -> Outcome.Hardware_limits
+          in
+          emit_pre_search_failure ?base ~phase ~candidate:None ~detail:(Exn.to_string exn) ();
+          Stdlib.Printexc.raise_with_backtrace exn backtrace
+    in
+    match seeded with
+    | None -> plain ()
+    | Some lowered_transform -> (
+        match
+          Context.compile_outcome ?name ~lowered_transform ~provenance:Outcome.Advisory ctx comp
+            bindings
+        with
+        | Ok result -> result
+        | Error (Outcome.Classified classified)
+          when not
+                 (List.is_empty !choice.sd_seeded && List.is_empty !choice.sd_split
+                && List.is_empty !choice.sd_sunk) ->
+            logf "the seeded untuned default FAILED (%s); compiling the plain default"
+              (Outcome.detail_of_cause classified.cause);
+            plain ()
+        | Error failure -> raise_pre_search ?base failure)
   in
   (* Without a cache to replay there is nothing for a search-less [tune] to do, so it does not even
      take the base compile that computes the cache key: the caller gets the untuned default compile
-     it would have gotten from [Context.compile]. *)
+     it would have gotten from {!untuned_compile} without [model_default_schedule]. *)
   if (not search) && String.is_empty cache_dir then (
     logf
       "search disabled (autotune_search=false) and no chosen cache: compiling the untuned default";
@@ -6155,6 +6278,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
        later forces the undecided placements into the table the captured [opt] references, and the
        plan's decisions key on placement-sensitive digests. GPU only: the plan is CUDA/HIP's. *)
     let base_pristine = ref None in
+    let base_undispatched = ref false in
     progress_stage "base_compile";
     let base_outcome =
       Context.compile_outcome ?name
@@ -6167,6 +6291,22 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
           base_capture := Some (opt, SC.canonicalize ~static_indices opt);
 
           if is_gpu then base_pristine := Some (scratch_of opt);
+          (* gh-ocannl-1340: an undispatchable baseline is refused here, before codegen, like any
+             candidate ([compile_candidate_gated]): it is never timed, so its codegen, device
+             compile and link were pure cost -- minutes of hiprtc per call on HIP. *)
+          if not (dispatchable ~is_gpu [ opt ]) then (
+            base_undispatched := true;
+            raise
+              (Outcome.Cause_at
+                 ( Outcome.Transform,
+                   Outcome.Not_dispatched
+                     {
+                       origin = "baseline";
+                       detail =
+                         Printf.sprintf
+                           "the serial baseline binds no hardware dimension on %s (gh-ocannl-532)"
+                           backend;
+                     } )));
           [ opt ])
         ~provenance:Outcome.Candidate ~candidate:"baseline" search_ctx comp bindings
     in
@@ -6194,15 +6334,16 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
        derives it. *)
     let seeded_plan_value =
       lazy
-        (Option.bind !base_pristine ~f:(fun opt ->
-             let t0 = Unix.gettimeofday () in
-             let plan =
-               seeded_plan ~capabilities ~backend ~limits ~accum_prec ~static_indices opt
-             in
-             logf "seeded untuned plan derived in %.3f s: %s"
-               (Unix.gettimeofday () -. t0)
-               (Option.value_map plan ~default:"none" ~f:seeded_plan_label);
-             plan))
+        (Seam.get on_seeded_plan
+           (Option.bind !base_pristine ~f:(fun opt ->
+                let t0 = Unix.gettimeofday () in
+                let plan =
+                  seeded_plan ~capabilities ~backend ~limits ~accum_prec ~static_indices opt
+                in
+                logf "seeded untuned plan derived in %.3f s: %s"
+                  (Unix.gettimeofday () -. t0)
+                  (Option.value_map plan ~default:"none" ~f:seeded_plan_label);
+                plan)))
     in
     let search_shape =
       lazy
@@ -6223,6 +6364,9 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
     let baseline_linked, baseline_decline =
       match base_outcome with
       | Ok (bctx, broutine) -> (Some (bctx, broutine), None)
+      (* Refused before codegen, not declined: the search records the refusal where it always has,
+         as [Not_dispatched_key "baseline"], and the two accounts stay exclusive. *)
+      | Error failure when !base_undispatched && is_not_dispatched failure -> (None, None)
       | Error (Outcome.Classified classified) -> (None, Some classified)
       | Error (Outcome.Fatal _ as failure) -> raise_pre_search ~base:base_report failure
     in
@@ -6266,6 +6410,11 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
       logf "persistent timed cache disabled for %s: concrete device identity unavailable" backend;
     let compile_spec =
       compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu
+        ~provenance:Outcome.Candidate search_ctx comp bindings
+    in
+    (* The search's own candidate compiles, deduplicated against [seen] before codegen. *)
+    let compile_spec_deduped ~seen =
+      compile_candidate_gated ?name ~seen ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu
         ~provenance:Outcome.Candidate search_ctx comp bindings
     in
     (* Winner (and cache-hit) compiles target the caller's context; they replay against the same
@@ -6329,18 +6478,30 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
        doing that before its fallback compile died of the same cause), and before the cache is
        consulted, whose replay would be refused alike. A [Pre_search_failure] is no search and no
        replay, which is how {!Train.tune_placements}' other arm still ships and how a benchmark
-       harness tells this from a search. *)
-    let refuse_if_device_memory = function
-      | Some
-          ({ Outcome.cause = Outcome.Resource_exceeded { resource = Outcome.Device_memory; _ }; _ }
-           as classified) ->
-          logf
-            "baseline: REFUSED, the search cannot run: one candidate's footprint does not fit: %s"
+       harness tells this from a search.
+
+       gh-ocannl-1340: where the baseline was refused before codegen (an undispatchable GPU base),
+       it allocated nothing and answers for nothing, so the first search candidate to reach link
+       takes its place as the footprint probe ([?probe] names it). The same "about as much"
+       approximation, from the other side: scheduling only adds device buffers to the base lowering,
+       so this probe can also refuse a step where a whole-routine candidate, no larger than the
+       base, would have fit beside a first candidate that did not -- the price of not compiling a
+       routine that is never run to learn its footprint. *)
+    let is_device_memory = function
+      | { Outcome.cause = Outcome.Resource_exceeded { resource = Outcome.Device_memory; _ }; _ } ->
+          true
+      | _ -> false
+    in
+    let refuse_if_device_memory ?probe = function
+      | Some classified when is_device_memory classified ->
+          logf "%s: REFUSED, the search cannot run: one candidate's footprint does not fit: %s"
+            (Option.value probe ~default:"baseline")
             (Outcome.detail_of_cause classified.cause);
-          (* Both callers refuse on a declined baseline, the relink's included, which [census] reads
-             off the base compile alone. *)
+          (* Both baseline callers refuse on a declined baseline, the relink's included, which
+             [census] reads off the base compile alone; a probing candidate's decline is in the
+             census already. *)
           raise_pre_search
-            ~base:{ (census ()) with baseline_declined = true }
+            ~base:{ (census ()) with baseline_declined = Option.is_none probe }
             (Outcome.Classified classified)
       | Some _ | None -> ()
     in
@@ -6410,18 +6571,36 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                search if this entry turns out stale. *)
             release_baseline ();
             progress_stage "cache_replay";
+            (* An entry written before the gh-ocannl-532 rule can name the serial baseline as the
+               winner: it was timed then, and it won by default whenever every candidate failed to
+               compile — the state gh-ocannl-521 recorded for every GPU backend. Replaying it would
+               reintroduce the single-work-item dispatch through the cache, permanently and without
+               ever timing anything. Rejected like a stale entry: the fresh search below overwrites
+               it. Rejecting the replay (rather than bumping [entry_version]) keeps every sound
+               entry, on this backend and on the CPU backends, where an empty schedule is a
+               legitimate winner. The rejection is decided before codegen
+               ([compile_candidate_gated]) and arrives as the typed [Not_dispatched] failure, which
+               the [Error] arm below records in [cache_replay_refusal] like any other refused replay
+               (gh-ocannl-1340). This arm is the post-codegen check on what was shipped. *)
             match compile_spec_real Outcome.Cache_replay spec with
-            | Ok c when not (dispatchable ~is_gpu c.all_opts) ->
-                (* An entry written before the gh-ocannl-532 rule can name the serial baseline as
-                   the winner: it was timed then, and it won by default whenever every candidate
-                   failed to compile — the state gh-ocannl-521 recorded for every GPU backend.
-                   Replaying it would reintroduce the single-work-item dispatch through the cache,
-                   permanently and without ever timing anything. Rejected like a stale entry: the
-                   fresh search below overwrites it. Rejecting the replay (rather than bumping
-                   [entry_version]) keeps every sound entry, on this backend and on the CPU
-                   backends, where an empty schedule is a legitimate winner. *)
+            | Ok c when not (shipped_dispatchable ~is_gpu c) ->
                 logf "cache entry replays to an unparallelized routine, re-searching: %s"
                   (spec_label spec);
+                cache_replay_refusal :=
+                  Some
+                    {
+                      Outcome.phase = Outcome.Backend_codegen;
+                      cause =
+                        Outcome.Not_dispatched
+                          {
+                            origin = "cache_replay";
+                            detail =
+                              Printf.sprintf
+                                "%s shipped kernels binding no hardware dimension (gh-ocannl-532)"
+                                (spec_label spec);
+                          };
+                      execution_effect = Outcome.No_device_writes;
+                    };
                 (* gh-ocannl-550: rejected, so its buffers are dead — and the fresh search below is
                    about to want them. *)
                 release_quietly ~what:"a rejected cache replay" c.cctx;
@@ -6551,7 +6730,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                     (deferred_compile (fun () ->
                          progress_stage "cache_replay_compile";
                          match compile_spec_real Outcome.Cache_replay spec with
-                         | Ok c when dispatchable ~is_gpu c.all_opts -> (c.cctx, c.routine)
+                         | Ok c when shipped_dispatchable ~is_gpu c -> (c.cctx, c.routine)
                          | Ok c ->
                              release_quietly ~what:"a degenerate deferred cache replay" c.cctx;
                              substituted := true;
@@ -6643,6 +6822,10 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
     | None, None, None ->
         let seen = Hash_set.create (module String) in
         Hash_set.add seen base_digest;
+        (* Whether no compile of this call has reached link yet to answer the gh-ocannl-1326
+           footprint question ([refuse_if_device_memory]): the baseline was refused before codegen,
+           and no candidate has linked. *)
+        let footprint_probe_pending = ref !base_undispatched in
         (* Every gh-ocannl-532 refusal enters the same decline census (gh-ocannl-543). Without it a
            GPU search that timed a single candidate reports [candidates_timed = 1] with an empty
            census — the same report a computation with a one-element schedule space would give — and
@@ -6807,12 +6990,13 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                 [ base_opt ])
             else if baseline_dispatched then release_baseline ()
             else (
-              (* An undispatched baseline never enters the beam, so the exit sweep cannot own it. *)
+              (* Refused before codegen ([base_undispatched], gh-ocannl-1340), so nothing is linked;
+                 the release stays for a baseline this rule ever lets link. *)
               release_baseline ();
               (* No calibration row: the model column is only meaningful next to a measurement. *)
               logf
                 "baseline: NOT DISPATCHED, binds no hardware dimension on %s -- the whole routine \
-                 would run in one work-item (gh-ocannl-532) (digest %s)"
+                 would run in one work-item (gh-ocannl-532); refused before codegen (digest %s)"
                 backend (dshort base_digest);
               record_not_dispatched ~origin:"baseline"
                 ~detail:
@@ -7115,7 +7299,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
           | Some plan -> (
               let spec = Fiss (F_seeded plan) in
               match compile_spec_real ~label:(spec_label spec) Outcome.Candidate spec with
-              | Ok c when dispatchable ~is_gpu c.all_opts -> (c.cctx, c.routine)
+              | Ok c when shipped_dispatchable ~is_gpu c -> (c.cctx, c.routine)
               | Ok c ->
                   release_quietly ~what:"the degenerate seeded fallback" c.cctx;
                   plain_default_or_raise ()
@@ -7171,43 +7355,66 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                   ->
                     ()
               end;
-              match timed_into progress_compile_s (fun () -> compile_spec spec) with
-              | Error (Outcome.Classified classified) ->
+              (* Recorded whether or not this compile goes on to be timed: on dedup the code was (or
+                 will not be) timed under the same digest, and the [default_ms] lookup follows the
+                 digest, not the seed (gh-ocannl-552). Which seed, if any, is [default_seed_label]'s
+                 to say. *)
+              let attribute digest_after =
+                if Option.exists default_candidate_label ~f:(String.equal (spec_label spec)) then
+                  default_seed_digest := Some digest_after;
+                match spec with
+                | Fiss (F_seeded _) -> seeded_seed_digest := Some digest_after
+                | _ -> ()
+              in
+              match timed_into progress_compile_s (fun () -> compile_spec_deduped ~seen spec) with
+              | Duplicate digest_after ->
+                  (* Decided before codegen (gh-ocannl-1340): a duplicate pays for the transform
+                     only, and its identical twin, timed or refused, is the one the search reasons
+                     about. *)
+                  attribute digest_after;
+                  last_attempt := `Dedup (Hashtbl.find timed_ms_by_digest digest_after);
+                  logf "%s: dedup before codegen (digest %s)" (spec_label spec)
+                    (dshort digest_after);
+                  None
+              | Failed (Outcome.Classified classified as failure) when is_not_dispatched failure ->
+                  (* Degenerated to the serial form (gh-ocannl-532), refused before codegen; the
+                     gate recorded the digest as seen, so an equivalent later candidate dedups
+                     rather than re-deriving the same refusal. Never timed, so its seed attribution
+                     ([attribute]) would look up nothing. *)
+                  logf "%s: NOT DISPATCHED, binds no hardware dimension, refused before codegen"
+                    (spec_label spec);
                   record_decline declines classified;
+                  None
+              | Failed (Outcome.Classified classified) ->
+                  (* gh-ocannl-1340: the first candidate to reach link probes the footprint where
+                     the baseline, refused before codegen, did not. Reached only before any compile
+                     has linked, so nothing is held. *)
+                  record_decline declines classified;
+                  if !footprint_probe_pending && is_device_memory classified then (
+                    partial_emitted := true;
+                    refuse_if_device_memory ~probe:(spec_label spec) (Some classified));
                   last_attempt := `Declined;
                   logf "%s: FAILED at %s %s" (spec_label spec) (phase_label classified.phase)
                     (Outcome.detail_of_cause classified.cause);
                   None
-              | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal
-              | Ok c ->
+              | Failed (Outcome.Fatal fatal) -> emit_partial_and_raise fatal
+              | Compiled c ->
                   pending := Some c;
-                  (* Recorded whether or not this compile goes on to be timed: on dedup the code was
-                     (or will not be) timed under the same digest, and the [default_ms] lookup
-                     follows the digest, not the seed (gh-ocannl-552). Which seed, if any, is
-                     [default_seed_label]'s to say. *)
-                  if Option.exists default_candidate_label ~f:(String.equal (spec_label spec)) then
-                    default_seed_digest := Some c.digest_after;
-                  (match spec with
-                  | Fiss (F_seeded _) -> seeded_seed_digest := Some c.digest_after
-                  | _ -> ());
-                  if Hash_set.mem seen c.digest_after then (
-                    last_attempt := `Dedup (Hashtbl.find timed_ms_by_digest c.digest_after);
-                    logf "%s: dedup (digest %s)" (spec_label spec) (dshort c.digest_after);
-                    (* gh-ocannl-550: a dedup still PAID for a compile and a link, so it holds a
-                       candidate's worth of device buffers — and its identical twin, already in the
-                       beam or already released, is the one the search reasons about. This one is
-                       dead on arrival. The digest stays in [seen]. *)
-                    release_candidate c;
-                    None)
-                  else if not (dispatchable ~is_gpu c.all_opts) then (
-                    (* Degenerated to the serial form (gh-ocannl-532): recorded as seen, so an
-                       equivalent later candidate dedups rather than re-deriving the same skip. *)
+                  footprint_probe_pending := false;
+                  attribute c.digest_after;
+                  if not (shipped_dispatchable ~is_gpu c) then (
+                    (* The post-codegen check: the gate admitted the transform's forms, but the
+                       kernels codegen shipped bind no hardware dimension (zero-only segments are
+                       elided after the transform). *)
                     Hash_set.add seen c.digest_after;
-                    logf "%s: NOT DISPATCHED, binds no hardware dimension (digest %s)"
+                    logf
+                      "%s: NOT DISPATCHED, its shipped kernels bind no hardware dimension (digest \
+                       %s)"
                       (spec_label spec) (dshort c.digest_after);
                     record_not_dispatched ~origin:"candidate"
                       ~detail:
-                        (Printf.sprintf "%s degenerated to a form binding no hardware dimension"
+                        (Printf.sprintf
+                           "%s shipped kernels binding no hardware dimension (gh-ocannl-532)"
                            (spec_label spec));
                     release_candidate c;
                     None)
@@ -7564,17 +7771,25 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
              model coverage (opaque code, a schedule the model cannot apply, missing envelope
              constants) is always kept, only measured — so the pre-filter never precludes a measured
              result and its outcome is independent of enumeration order. Presets, saved schedules
-             and the baseline are never pruned. *)
+             and the baseline are never pruned. A candidate its builder refuses typed
+             ([Sketch_families.refuse], gh-ocannl-1390) is dropped here as the decline its compile
+             would have been, under the same cause in the census (gh-ocannl-1437): the pre-filter
+             builds outside the candidates' failure boundary, where the refusal used to end the
+             search. An untyped raise is a builder bug and still propagates. *)
           let model_prefilter_params ~seg_opt ~family params =
             if Float.(keep_fraction >= 1.) || List.length params <= 1 then params
             else
               let scored =
-                List.map params ~f:(fun p ->
-                    let score =
-                      model_score ~static_indices ~limits seg_opt
-                        (sketch_schedule ~accum_prec ~p seg_opt)
-                    in
-                    (p, score))
+                List.filter_map params ~f:(fun p ->
+                    match sketch_schedule ~accum_prec ~p seg_opt with
+                    | exception Outcome.Cause_at (phase, cause)
+                      when not (Outcome.uncontainable phase cause) ->
+                        logf "model pre-filter (%s): %s refused by its builder, declined: %s" family
+                          (spec_label (Whole (W_sketch p))) (Outcome.detail_of_cause cause);
+                        record_decline declines
+                          { Outcome.phase; cause; execution_effect = Outcome.No_device_writes };
+                        None
+                    | sched -> Some (p, model_score ~static_indices ~limits seg_opt sched))
               in
               n_model_scored :=
                 !n_model_scored + List.count scored ~f:(fun (_, s) -> Option.is_some s);
@@ -8574,7 +8789,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
               fun () ->
                 progress_stage "winner_compile";
                 match compile_spec_real ~label Outcome.Candidate spec with
-                | Ok c when not (dispatchable ~is_gpu c.all_opts) ->
+                | Ok c when not (shipped_dispatchable ~is_gpu c) ->
                     (* Completes the invariant rather than fixing an observed bug: the winner was
                        timed, so it was dispatchable when measured, and the replay is
                        digest-guarded. But this is the last of the three ways [tune] hands back a

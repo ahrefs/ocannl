@@ -863,8 +863,9 @@ let cache_file ~dir ~key =
 (* The key REGIME is deliberately independent of [entry_version]. The latter says whether the
    payload at a key can be decoded; this stamp says whether the directory's filenames were minted by
    the same [key_components] schema. Bump this once when that schema changes — or when an input it
-   leaves out changes what a key stands for. Cache-open then discards the superseded generation
-   wholesale, with no migration arm for each historical schema (gh-ocannl-835). A bump appends its
+   leaves out changes what a key stands for. The next store's cache-open then discards the superseded
+   generation wholesale, with no migration arm for each historical schema (gh-ocannl-835); a lookup
+   reads it as misses and leaves it in place (gh-ocannl-1439). A bump appends its
    own line to the history below, as [entry_version]'s does. *)
 (*= cache_regime_version history -- one line per value, oldest first; a bump appends one:
    1: gh-ocannl-835 -- the regime stamp itself
@@ -918,24 +919,35 @@ let write_regime_stamp dir =
     ~before_commit:(fun () -> Resource_fault_injection.hit Schedule_cache_before_regime_commit)
     ()
 
-let open_current_regime dir =
+(* What a cache-open is for (gh-ocannl-1439). Only a [Write] open sweeps: a read never deletes, so
+   reading a directory another binary wrote -- inspecting it, replaying a recorded arm -- cannot
+   destroy the entries it came to read. A [Read] open of a superseded generation admits nothing and
+   changes nothing, and its lookup is a miss; the next store sweeps the generation. *)
+type open_mode = Read | Write
+type regime_open = Current | Superseded | Refused
+
+let open_current_regime ~mode dir =
   match read_regime_stamp dir with
-  | Version version when version = cache_regime_version -> true
-  | Version version when version > cache_regime_version -> false
-  | Refuse -> false
-  | Missing | Version _ ->
-      (* Deletions precede the atomic stamp publication. A crash or refusal before publication
-         leaves the old stamp in place, so the next opener retries; a current-regime operation is
-         admitted only after every old entry is gone and the new stamp is visible. *)
-      if sweep_superseded_entries dir then (
-        write_regime_stamp dir;
-        true)
-      else false
+  | Version version when version = cache_regime_version -> Current
+  | Version version when version > cache_regime_version -> Refused
+  | Refuse -> Refused
+  | Missing | Version _ -> (
+      match mode with
+      | Read -> Superseded
+      | Write ->
+          (* Deletions precede the atomic stamp publication. A crash or refusal before publication
+             leaves the old stamp in place, so the next writer retries; a current-regime operation
+             is admitted only after every old entry is gone and the new stamp is visible. *)
+          if sweep_superseded_entries dir then (
+            write_regime_stamp dir;
+            Current)
+          else Refused)
 
 (* Why a cache-open did not admit its operation: the directory is absent (a lookup's ordinary miss
-   before the first store, a store's refusal), or the lock, the regime stamp or the sweep of a
-   superseded regime refused it. *)
-type open_refusal = Missing_dir | Refused_open of string
+   before the first store, a store's refusal), a [Read] open found a superseded generation (a
+   lookup's ordinary miss, left for the next store to sweep), or the lock, the regime stamp or the
+   sweep of a superseded regime refused it. *)
+type open_refusal = Missing_dir | Superseded_regime | Refused_open of string
 
 let unix_refusal error fn arg = Printf.sprintf "%s %s: %s" fn arg (Unix.error_message error)
 
@@ -948,7 +960,7 @@ let probe path =
   | exception Unix.Unix_error ((Unix.ENOENT | Unix.ENOTDIR), _, _) -> Ok false
   | exception Unix.Unix_error (error, fn, arg) -> Error (unix_refusal error fn arg)
 
-let open_cache ~dir f =
+let open_cache ~mode ~dir f =
   match probe dir with
   | Ok false -> Error Missing_dir
   | Error msg -> Error (Refused_open msg)
@@ -964,12 +976,14 @@ let open_cache ~dir f =
               (fun () ->
                 Resource_fault_injection.hit Schedule_cache_before_lock;
                 Unix.lockf fd Unix.F_LOCK 0;
-                if open_current_regime dir then Ok (f ())
-                else
-                  Error
-                    (Refused_open
-                       "regime refused: a newer or malformed stamp, or a superseded entry that \
-                        could not be removed"))
+                match open_current_regime ~mode dir with
+                | Current -> Ok (f ())
+                | Superseded -> Error Superseded_regime
+                | Refused ->
+                    Error
+                      (Refused_open
+                         "regime refused: a newer or malformed stamp, or a superseded entry that \
+                          could not be removed"))
           with
           | Unix.Unix_error (error, fn, arg) -> Error (Refused_open (unix_refusal error fn arg))
           | Stdlib.Sys_error msg -> Error (Refused_open msg))
@@ -1034,7 +1048,7 @@ let store_sexp ~dir ~key sexp =
       ensure_dir dir;
       let refusal =
         match
-          open_cache ~dir (fun () ->
+          open_cache ~mode:Write ~dir (fun () ->
               (* A writer killed between staging and commit leaves its staging file behind; nothing
                  else in the process would ever remove it, and a cache directory is long-lived.
                  Sweep once per process, from the writers rather than on a timer. *)
@@ -1061,6 +1075,8 @@ let store_sexp ~dir ~key sexp =
         with
         | Ok refusal -> refusal
         | Error Missing_dir -> Some (dir ^ ": the cache directory could not be created")
+        (* Unreachable: a [Write] open sweeps a superseded generation or refuses. *)
+        | Error Superseded_regime -> Some (dir ^ ": a superseded regime was left unswept")
         | Error (Refused_open msg) -> Some msg
       in
       note_io { op = Store; dir; key; refusal })
@@ -1068,8 +1084,10 @@ let store_sexp ~dir ~key sexp =
 let lookup_sexp ~dir ~key ~of_sexp ~current =
   Option.bind key ~f:(fun key ->
       let opened =
-        open_cache ~dir (fun () ->
-            Utils.Atomic_file.cleanup_stale_once dir;
+        (* A read never deletes (gh-ocannl-1439): neither a superseded generation, which a [Read]
+           open leaves for the next store to sweep, nor crash-stale staging files, which the writers
+           sweep. *)
+        open_cache ~mode:Read ~dir (fun () ->
             let file = cache_file ~dir ~key in
             match probe file with
             | Ok false -> Ok None
@@ -1091,11 +1109,12 @@ let lookup_sexp ~dir ~key ~of_sexp ~current =
                 | Stdlib.Sys_error msg -> Error msg
                 | exn when not (process_level exn) -> Ok None))
       in
-      (* A missing directory is the ordinary miss before the first store. *)
+      (* A missing directory is the ordinary miss before the first store; a superseded generation is
+         the ordinary miss after a regime bump, until a store sweeps it. *)
       let refusal =
         match opened with
         | Ok (Error msg) | Error (Refused_open msg) -> Some msg
-        | Ok (Ok _) | Error Missing_dir -> None
+        | Ok (Ok _) | Error (Missing_dir | Superseded_regime) -> None
       in
       note_io { op = Lookup; dir; key; refusal };
       match opened with Ok (Ok entry) -> entry | Ok (Error _) | Error _ -> None)
