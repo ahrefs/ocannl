@@ -37,7 +37,8 @@ cvz: every whole-routine zeroed GPU candidate compiles, and matches the natural 
 cvz: every whole-routine zeroed GPU candidate's routine is labeled tensorized: true
 cvzt: the whole-routine conv+tail site is zeroed in its lowering: true
 cvzt: the whole-routine zeroed conv+tail site seeds GPU staged conv flavors: true
-cvzt: a whole-routine zeroed conv+tail GPU candidate compiles: true
+cvzt: every whole-routine zeroed conv+tail GPU seed is a fused-epilogue twin: true
+cvzt: every whole-routine zeroed conv+tail GPU candidate compiles: true
 cvzt: every compiling whole-routine conv+tail GPU candidate matches the natural form, run twice: true
 cvzt: every compiling whole-routine conv+tail GPU candidate is labeled tensorized: true
 cvft: the conv segment folds the conv output's per-cell zero, the output not materialized: true
@@ -71,3 +72,5 @@ cva: aligned-grid conv pipeline on a merged segment matches within tolerance: tr
 cva: the aligned-grid conv pipeline's routine is labeled tensorized: true
 cva: aligned-grid conv seeded and timed on the merged fission segment: true
 cva: tuned merged conv graph matches the untuned twin within tolerance: true
+cvr: every register-tile twin renders its geometry from the schedule: true
+cvr: every register-tile twin matches its auto sibling bitwise: true

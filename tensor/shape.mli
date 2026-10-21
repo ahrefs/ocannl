@@ -96,6 +96,16 @@ type t = {
           [Some (Some v)] means all operations use neutral element [v], [Some None] means different
           operations require different neutral elements (margin must be reset before each
           operation). *)
+  mutable closed : bool; [@sexp_drop_if fun _ -> true] [@default false] [@equal.ignore]
+      (** Set by a successful [finish_inference] on every shape of the steps it commits
+          (gh-ocannl-1301): a closed shape's rows (modulo projection ids), paddings and
+          [padding_elem] no longer change -- a write that would change them raises before writing
+          anything. Not part of the shape's value: dropped from sexps, ignored by [equal]. *)
+  mutable discarded_by : string option;
+      [@sexp_drop_if fun _ -> true] [@default None] [@equal.ignore]
+      (** Set by [Tensor.rewind_to_last_closure] on every open shape it discards, to the rewind's
+          provenance: a step over a discarded shape is refused before it is registered. Not part of
+          the shape's value. *)
   id : int;  (** A node that has the same shape as this shape, or [-1]. *)
   debug_name : string;
 }
@@ -341,6 +351,43 @@ val with_construction_window : (unit -> 'a) -> 'a
     operands without them (gh-ocannl-830). *)
 
 val propagate_shapes : update_step -> unit
+(** Registers the step and solves its constraints eagerly. Refused while the session is tainted; a
+    failure after registering taints it. *)
+
+(** {3 Session consistency (gh-ocannl-1301)}
+
+    [finish_inference] is the session's only commit point: it marks every shape of the steps it
+    commits {!field:closed}. A construction that fails after mutating the inference session (see
+    [Row.mutation_serial]) taints it; while tainted, constructions, finalization and compilation
+    raise [Row.Shape_error] naming the first failure. [Tensor.rewind_to_last_closure] restores a
+    usable session. *)
+
+val check_untainted : unit -> unit
+(** Raises [Row.Shape_error] when the session is tainted. *)
+
+val taint_provenance : unit -> string option
+(** The first failure's provenance, when the session is tainted. *)
+
+val taint_session : provenance:string -> unit
+(** Records a taint; the first one is kept. *)
+
+val exn_summary : exn -> string
+(** The message of a [Row.Shape_error] or [Utils.User_error], else the printed exception. *)
+
+val with_taint_on_failure : describe:(exn -> string) -> (unit -> 'a) -> 'a
+(** Runs [f]; if it raises after the session was mutated, taints the session with [describe exn],
+    then re-raises with the original backtrace. *)
+
+val on_closure : (unit -> unit) ref
+(** Called at the end of every successful closure ([Tensor] records its checkpoint). *)
+
+val check_can_rewind : unit -> unit
+(** Raises when called within a construction window. *)
+
+val rewind_open_state : provenance:string -> unit
+(** Discards the open inference state: solver environment, active steps and constraints, pending
+    symbol roles and the solver's transient state; records the update steps registered since the
+    last closure as discarded ({!get_projections} refuses them) and clears the taint. *)
 
 val get_projections : update_step -> Ir.Indexing.projections
 (** Returns the projections for this update step, computing them if not already done. This triggers

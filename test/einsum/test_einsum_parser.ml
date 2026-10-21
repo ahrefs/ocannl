@@ -71,6 +71,9 @@ let test_mode_detection () =
   test_spec "a*b" true;
   test_spec "a^b" true;
   test_spec "a&b" true;
+  test_spec "o<+k" true;
+  test_spec "o=+k" true;
+  test_spec "a=>b" false;
   test_spec "a|b->c" false;
   test_spec "...a..b" false;
 
@@ -115,9 +118,46 @@ let test_row_variable_spellings () =
   show_labels "a|b|c";
   printf "\n"
 
+let test_whitespace_between_axes () =
+  printf "Testing whitespace between axes in multichar mode:\n";
+  let show spec =
+    match Einsum_parser.einsum_of_spec spec with
+    | rhses, result ->
+        printf "  '%s' -> %d RHSes, result output axes: %d\n" spec (List.length rhses)
+          (List.length result.given_output)
+    | exception Einsum_parser.Parse_error msg -> (
+        printf "  '%s' -> %s\n" spec msg;
+        (* The hint's suggested spelling must itself parse (gh-ocannl-1454). *)
+        match String.substr_index msg ~pattern:"write `" with
+        | None -> ()
+        | Some i -> (
+            let rest = String.drop_prefix msg (i + String.length "write `") in
+            let fixed = String.prefix rest (Option.value_exn (String.index rest '`')) in
+            match Einsum_parser.einsum_of_spec fixed with
+            | rhses, result ->
+                printf "    suggested '%s' -> %d RHSes, result output axes: %d\n" fixed
+                  (List.length rhses) (List.length result.given_output)
+            | exception Einsum_parser.Parse_error msg ->
+                printf "    suggested '%s' -> STILL FAILS: %s\n" fixed msg))
+  in
+  (* [^] switches to multichar mode, where [s a] is not two axes. *)
+  show "s a; s b => s a^b";
+  show "s, a; s, b => s, a^b";
+  (* A comma trigger, a fixed index and a placeholder take the same hint. *)
+  show "x y, z => x";
+  show "x 2, _ z => x";
+  (* Whitespace next to an ellipsis, a row variable or an operator separates nothing and is fine. *)
+  show "..b.. a, c; d ... => a^d";
+  (* A gap where a comma is no fix either takes no suggestion: inside a row variable's name. *)
+  show "..batch shard.., x; y => x^y";
+  (* In single-char mode whitespace is ignored, so [s a] is the two axes [sa]. *)
+  show "s a; s b => s a b";
+  printf "\n"
+
 let () =
   test_mode_detection ();
   test_single_char ();
   test_multichar ();
   test_row_variable_spellings ();
+  test_whitespace_between_axes ();
   printf "All tests passed!\n"

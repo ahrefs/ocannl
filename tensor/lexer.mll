@@ -2,7 +2,8 @@
 (** Lexer for einsum notation.
 
     Mode selection:
-    - Multichar mode: triggered by presence of ',', '*', '+', '^', '&'
+    - Multichar mode: triggered by presence of ',', '*', '+', '^', '&', '<', or a '=' that does
+      not begin "=>"; axes are then separated by commas, never by whitespace
     - Single-char mode: only alphanumeric, whitespace, '.', '|', '->', '=>', ';', '_'
 
     In single-char mode, COMMA is automatically inserted after each single-char identifier.
@@ -76,23 +77,22 @@ and single_char_token = parse
   | _ as c           { raise (Syntax_error ("Unexpected character in single-char mode: " ^ String.make 1 c)) }
 
 {
-(* Determine if input uses multichar mode *)
-let is_multichar spec =
-  let has_multichar_trigger = ref false in
+(* The first character that puts [spec] in multichar mode, if any: one of [, * + ^ & <], or a
+   ['='] that does not begin ["=>"]. *)
+let multichar_trigger spec =
   let len = String.length spec in
-  let i = ref 0 in
-  while !i < len do
-    let c = spec.[!i] in
-    (match c with
-    | ',' | '*' | '+' | '^' | '&' | '<' -> has_multichar_trigger := true
-    | '=' ->
-        (* Only trigger multichar if '=' is NOT followed by '>' (i.e., not part of '=>') *)
-        if !i + 1 >= len || spec.[!i + 1] <> '>' then
-          has_multichar_trigger := true
-    | _ -> ());
-    incr i
-  done;
-  !has_multichar_trigger
+  let rec go i =
+    if i >= len then None
+    else
+      match spec.[i] with
+      | (',' | '*' | '+' | '^' | '&' | '<') as c -> Some c
+      | '=' when i + 1 >= len || spec.[i + 1] <> '>' -> Some '='
+      | _ -> go (i + 1)
+  in
+  go 0
+
+(* Determine if input uses multichar mode *)
+let is_multichar spec = Option.is_some (multichar_trigger spec)
 
 (* Main entry point that switches between modes and handles buffered tokens *)
 let token multichar lexbuf =

@@ -1,0 +1,73 @@
+before any closure: a pointwise op over incompatible dims fails: true
+the failure taints the session: the next construction is refused, naming it: true
+after the rewind, an operand from the failed span is refused, naming the rewind: true
+a stale-handle refusal fails before mutating anything: the session stays usable: true
+model B computes 2b: true
+model A is closed: true
+model A's result is a forward and a backprop root: true
+the open work consumed model A's roots: true
+a pointwise op over incompatible dims fails: true
+tainted: a construction over the closed model is refused, naming the first failure: true
+tainted: finalizing inference (an open tensor's dims) is refused: true
+tainted: a closed tensor's committed dims stay readable: true
+tainted: Train.forward_once is refused: true
+tainted: compiling a program handed out earlier is refused: true
+after the rewind, model A's result is a forward and a backprop root again: true
+model B stays consumed: true
+ids are never reused: true
+discarded h: used as an operand, refused naming the rewind and the failure: true
+discarded h: compiled, refused: true
+discarded h: read through the context, refused: true
+discarded h: printed, refused: true
+discarded bh: used as an operand, refused naming the rewind and the failure: true
+discarded bh: compiled, refused: true
+discarded bh: read through the context, refused: true
+discarded bh: printed, refused: true
+discarded acc: used as an operand, refused naming the rewind and the failure: true
+discarded acc: compiled, refused: true
+discarded acc: read through the context, refused: true
+discarded acc: printed, refused: true
+discarded big: used as an operand, refused naming the rewind and the failure: true
+discarded big: compiled, refused: true
+discarded big: read through the context, refused: true
+discarded big: printed, refused: true
+a program that only writes a discarded node: compiled, refused: true
+a [%cd] assignment into a discarded tensor is refused at construction: true
+discarded [%cd] program: compiled, refused: true
+model B's context values survive the rewind: true
+a new consumer of the compiled model B runs: true
+the fresh-process reference ran: true
+construction C after the rewind: the loss equals the fresh process's: true
+construction C after the rewind: w's gradient equals the fresh process's: true
+and the fresh process computed the closed form: true
+op_asn failing after an inner construction: fails: true
+op_asn failing after an inner construction: taints the session (the next construction is refused): true
+op_asn failing after an inner construction: after the rewind, the closed tensor is usable: true
+op_asn failing before any mutation: fails: true
+op_asn failing before any mutation: does not taint the session (the next construction succeeds): true
+op_asn failing before any mutation: after the rewind, the closed tensor is usable: true
+grad_asn failing after registration: fails: true
+grad_asn failing after registration: taints the session (the next construction is refused): true
+grad_asn failing after registration: after the rewind, the closed tensor is usable: true
+a closed root is a forward root: true
+op_asn failing after a %cd embedding: fails: true
+op_asn failing after a %cd embedding: taints the session (the next construction is refused): true
+op_asn failing after a %cd embedding: after the rewind, the closed tensor is usable: true
+after the rewind, the root the failed op_asn embedded is a forward root again: true
+an empty rewind allocates nothing and leaves closed work usable: true
+a seed created in the discarded span is dropped from the cache: true
+a slice role claimed by discarded work does not stick: the symbol can be an extent: true
+a slice role committed by a closure sticks: true
+a variable reference bound by discarded work is refused, naming the rewind: true
+a two-operand precision setter over a discarded operand is refused before writing the other: true
+a parameter whose initializer returns a discarded tensor is refused: true
+a node created after the rewind with a discarded id is not stale: true
+a seed replaced since the closure is restored to the closure's: true
+a scoped seed closed inside with_saved_random_seed does not come back on a rewind: true
+a root handed out after a %cd embedding stays handed out across a rewind: true
+a spec failing after marking an open operand's row (it fails) taints the session: true
+a %cd assignment to a missing gradient is refused: true
+and leaves no step behind: the target's own shape still closes as its data says: true
+a %cd assignment reading a discarded tensor is refused, naming the rewind: true
+and the refusal taints nothing: true
+a failing parameter post-processing hook taints the session: true

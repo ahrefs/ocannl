@@ -10,10 +10,10 @@
 #define NAN __int_as_float(0x7fffffff)
 #endif
 extern "C" __global__ void where_fwd(
-    __half *__restrict__ a_then_val,
-    __nv_bfloat16 *__restrict__ b_else_val,
     float *__restrict__ where,
-    unsigned char *__restrict__ cond_condition) {
+    unsigned char *__restrict__ cond_condition,
+    __half *__restrict__ a_then_val,
+    __nv_bfloat16 *__restrict__ b_else_val) {
 
   /* Local declarations and initialization. */
 

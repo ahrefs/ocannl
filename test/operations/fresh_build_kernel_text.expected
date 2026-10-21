@@ -1,0 +1,3 @@
+the first build's two w ids share a digit count, and the second's straddle a power of ten (the second w is 8 ids after the first): true
+in every build, both w parameters reach the kernel under identifiers spelling their ids: true
+every fresh build emits the same kernel up to minted identifiers: true

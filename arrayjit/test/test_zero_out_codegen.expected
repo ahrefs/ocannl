@@ -2,8 +2,8 @@
     ) {
 
   /* Local declarations and initialization. */
-  float acc_b[2] __attribute__((aligned(32))) = {0};
   float acc_a[2] __attribute__((aligned(32))) = {0};
+  float acc_b[2] __attribute__((aligned(32))) = {0};
 
   /* Main logic. */
   acc_a[0] = (float)(7.0);

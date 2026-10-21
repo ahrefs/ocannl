@@ -36,8 +36,8 @@
   }
 }
  void vec_simd_kernel(
-    float *restrict inp,
-    float *restrict out4) {
+    float *restrict out4,
+    float *restrict inp) {
 
   /* Local declarations and initialization. */
 
@@ -61,8 +61,8 @@
   }
 }
  void vec_strided_kernel(
-    float *restrict inp2,
-    float *restrict out5) {
+    float *restrict out5,
+    float *restrict inp2) {
 
   /* Local declarations and initialization. */
 
@@ -77,9 +77,9 @@
   }
 }
  void vec_fma_kernel(
+    float *restrict out6,
     float *restrict g1,
-    float *restrict g2,
-    float *restrict out6) {
+    float *restrict g2) {
 
   /* Local declarations and initialization. */
 
@@ -114,8 +114,8 @@
   }
 }
  void vec_dot_reduce_kernel(
-    float *restrict da,
     float *restrict dacc,
+    float *restrict da,
     float *restrict db) {
 
   /* Local declarations and initialization. */
@@ -216,8 +216,8 @@
   }
 }
  void vec_max_reduce_kernel(
-    float *restrict ma,
-    float *restrict macc) {
+    float *restrict macc,
+    float *restrict ma) {
 
   /* Local declarations and initialization. */
 
@@ -257,8 +257,8 @@
   }
 }
  void vec_strided_reduce_kernel(
-    float *restrict sa,
-    float *restrict sacc) {
+    float *restrict sacc,
+    float *restrict sa) {
 
   /* Local declarations and initialization. */
 
@@ -273,9 +273,9 @@
   }
 }
  void tile_mma_reg_kernel(
+    float *restrict td,
     float *restrict ta,
-    float *restrict tb,
-    float *restrict td) {
+    float *restrict tb) {
 
   /* Local declarations and initialization. */
 
@@ -640,9 +640,9 @@
   }
 }
  void tile_mma_plain_kernel(
+    float *restrict td2,
     float *restrict ta2,
-    float *restrict tb2,
-    float *restrict td2) {
+    float *restrict tb2) {
 
   /* Local declarations and initialization. */
 

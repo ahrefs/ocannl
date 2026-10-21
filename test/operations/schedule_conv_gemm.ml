@@ -195,9 +195,12 @@ let () =
     in
     ignore (ctx, routine);
     (* The C-backend seed count: serial + Grid, each with its fused-epilogue twin (the 3x3 conv's
-       two kernel-window loops are no obstacle since the whole-window contraction, gh-ocannl-501). A
-       strided row seeds the same four (gh-ocannl-502): the compacting [Stage] packs the strided
-       window densely, so the pipeline applies exactly as on a unit-stride row. *)
+       two kernel-window loops are no obstacle since the whole-window contraction, gh-ocannl-501),
+       less the unfused Grid flavor: the block's inline bias is a materialized tail its Grid loop
+       would leave uncovered, so the conv family tree refutes it (gh-ocannl-697; it used to be
+       proposed and fail validation). A strided row seeds the same three (gh-ocannl-502): the
+       compacting [Stage] packs the strided window densely, so the pipeline applies exactly as on a
+       unit-stride row. *)
     p (tag ^ " C-backend conv seeds") (!n_seeds = want_seeds);
     match !site with
     | None -> p (tag ^ " detected") false
@@ -212,11 +215,11 @@ let () =
             && cx.Autotune.cx_nk = 3)
   in
   detect_leg "cvd_s1v" ~stride:1 ~use_padding:false ~want_stride:1 ~want_offset:0 ~want_row:9
-    ~want_seeds:4;
+    ~want_seeds:3;
   detect_leg "cvd_s2v" ~stride:2 ~use_padding:false ~want_stride:2 ~want_offset:0 ~want_row:5
-    ~want_seeds:4;
+    ~want_seeds:3;
   detect_leg "cvd_s1p" ~stride:1 ~use_padding:true ~want_stride:1 ~want_offset:0 ~want_row:11
-    ~want_seeds:4;
+    ~want_seeds:3;
 
   (* === Pattern discipline: a matmul is not a conv site === *)
   (let ma =
@@ -480,9 +483,11 @@ let () =
     skipped "cvs2: every seeded stride-2 candidate's routine is labeled tensorized");
 
   (* === Autotune seeding on conv+bias+relu: serial + Grid conv pipelines, each with its
-     fused-epilogue twin (2-D convs fuse since the whole-window contraction, gh-ocannl-501; the
-     unfused Grid candidate fails validation — the tail write is uncovered — and only its twin
-     survives); the tuned routine matches the untuned twin === *)
+     fused-epilogue twin (2-D convs fuse since the whole-window contraction, gh-ocannl-501). The
+     unfused Grid flavor would leave the tail write uncovered, so since gh-ocannl-697 the conv family
+     tree refutes it at construction (it used to be proposed and fail validation at compile); its
+     fused twin, which relocates the tail under the Grid loop, survives. The tuned routine matches
+     the untuned twin === *)
   (* A tuning report's seeding counts, on stderr (not part of the golden): what a failing count
      claim saw. *)
   let show_counts tag (r : Autotune.report) =
@@ -530,11 +535,15 @@ let () =
   (match !reports with
   | [ r ] ->
       show_counts "cvt" r;
-      (* metal: the whole-routine zeroed site's two GPU staged flavors, each with its fused-epilogue
-         twin (gh-ocannl-503); a GPU leg that cannot seed an f32 site proposes none. *)
+      (* cc: serial, its fused twin, and the fused Grid flavor (the unfused Grid one refuted on its
+         uncovered tail). metal: the whole-routine zeroed site's two GPU staged flavors, fused only
+         (gh-ocannl-503) -- their unfused flavor is refuted on companion coverage (gh-ocannl-697),
+         the [cvzt] leg below; a GPU leg that cannot seed an f32 site proposes none. *)
       p "conv sketches seeded (serial+grid, with fused-epilogue twins)"
-        (if on_cpu || has_uniform_f32_mma then
-           r.Autotune.sketch_candidates = 4 && r.Autotune.epilogue_sketch_candidates = 2
+        (if on_cpu then
+           r.Autotune.sketch_candidates = 3 && r.Autotune.epilogue_sketch_candidates = 2
+         else if has_uniform_f32_mma then
+           r.Autotune.sketch_candidates = 2 && r.Autotune.epilogue_sketch_candidates = 2
          else if Lazy.force gpu_capable then r.Autotune.sketch_candidates > 0
          else r.Autotune.sketch_candidates = 0)
   | _ -> p "conv sketches seeded (serial+grid, with fused-epilogue twins)" false);
@@ -748,10 +757,11 @@ let () =
      fission seam and executed against the natural form (candidates are timed, not value-checked, so
      an unsound seed would be crowned silently). The zero is load-bearing: the routine runs twice,
      so a zero nest that missed cells would leave the first run's sums in them. Two graphs: the conv
-     alone ([cvz]), and the conv with its bias+relu tail ([cvzt]), whose unfused seeds decline at
-     the companion-coverage gate (the tail cannot follow the accumulation nest's full chain, the
-     same verdict as on the fission segment) while the fused-epilogue twins compile. Gated on the
-     seeder's own capability judgment for an f32 site, never on the seed list. --- *)
+     alone ([cvz]), and the conv with its bias+relu tail ([cvzt]), whose unfused flavor the conv
+     family tree refutes on companion coverage (the tail cannot follow the accumulation nest's full
+     chain; gh-ocannl-697 -- these seeds used to be proposed and decline at compile), while the
+     fused-epilogue twins compile: every seed proposed is a fused one, and every one compiles. Gated
+     on the seeder's own capability judgment for an f32 site, never on the seed list. --- *)
   let whole_routine_gpu_leg ~tag ~build ~want =
     let limits = Context.hardware_limits (Context.auto ()) in
     let seeds = ref [] and zeroed = ref false in
@@ -826,7 +836,9 @@ let () =
     p "cvzt: the whole-routine conv+tail site is zeroed in its lowering" zeroed;
     p_all "cvzt: the whole-routine zeroed conv+tail site seeds GPU staged conv flavors" seeds
       ~f:(fun s -> s.Autotune.sk_conv && s.Autotune.sk_gpu);
-    p_exists "cvzt: a whole-routine zeroed conv+tail GPU candidate compiles" results ~f:ran;
+    p_all "cvzt: every whole-routine zeroed conv+tail GPU seed is a fused-epilogue twin" seeds
+      ~f:(fun s -> s.Autotune.sk_epilogue);
+    p_all "cvzt: every whole-routine zeroed conv+tail GPU candidate compiles" results ~f:ran;
     p_all
       "cvzt: every compiling whole-routine conv+tail GPU candidate matches the natural form, run \
        twice"
@@ -843,7 +855,8 @@ let () =
         "cvz: every whole-routine zeroed GPU candidate's routine is labeled tensorized";
         "cvzt: the whole-routine conv+tail site is zeroed in its lowering";
         "cvzt: the whole-routine zeroed conv+tail site seeds GPU staged conv flavors";
-        "cvzt: a whole-routine zeroed conv+tail GPU candidate compiles";
+        "cvzt: every whole-routine zeroed conv+tail GPU seed is a fused-epilogue twin";
+        "cvzt: every whole-routine zeroed conv+tail GPU candidate compiles";
         "cvzt: every compiling whole-routine conv+tail GPU candidate matches the natural form, run \
          twice";
         "cvzt: every compiling whole-routine conv+tail GPU candidate is labeled tensorized";
@@ -1536,3 +1549,84 @@ let () =
   | _ -> p "cva: aligned-grid conv seeded and timed on the merged fission segment" false);
   p_close "cva: tuned merged conv graph matches the untuned twin within tolerance" got_m want_m
     ~tol:(fun _ -> 1e-3)
+
+(* === The CPU conv seeds' register-tile twins (gh-ocannl-697): every CPU conv leaf whose
+   micro-kernel (the GEMM row by the out-channel column) admits other C-tiles than the renderer's
+   own is twinned with them, as the matmul family's CPU tensorized leaves are (gh-ocannl-619). Each
+   twin seeded under the machine's own limits is executed: it renders the requested geometry, named
+   in the emitted header with its provenance, and matches its "auto" sibling bitwise -- a C-tile
+   geometry reorders no element's reduction. 64 out-channels give the micro-kernel eight to sixteen
+   vector columns, where the register file affords alternatives at every width. === *)
+let () =
+  let tiled_label = "cvr: every register-tile twin renders its geometry from the schedule" in
+  let bitwise_label = "cvr: every register-tile twin matches its auto sibling bitwise" in
+  if not on_cpu then (
+    skipped tiled_label;
+    skipped bitwise_label)
+  else
+    let make tag =
+      let x =
+        NTDSL.init ~l:(tag ^ "x") ~prec:Ir.Ops.single ~b:[ 2 ] ~o:[ 18; 18; 8 ]
+          ~f:(Ll_test.weighted ~weights:[| 1; 1; 2; 3 |] ~modulus:7 ~offset:0. ~stride:1.)
+          ()
+      in
+      let kern =
+        NTDSL.init ~l:(tag ^ "k") ~prec:Ir.Ops.single ~i:[ 3; 3; 8 ] ~o:[ 64 ]
+          ~f:(Ll_test.weighted ~weights:[| 2; 1; 1; 3 |] ~modulus:5 ~offset:(-2.) ~stride:1.)
+          ()
+      in
+      let%op y =
+        x +* "...| oh<+kh, ow<+kw, ..ic..; |kh, kw, ..ic.. -> ..oc.. => ...| oh, ow, ..oc.." kern
+      in
+      y
+    in
+    let limits = Context.hardware_limits (Context.auto ()) in
+    let seeds = ref [] in
+    ignore
+      (Context.compile
+         ~lowered_transform:(fun o ->
+           seeds := Autotune.sketch_seed_params ~is_gpu:false ~is_cpu:true ~limits o;
+           [ o ])
+         (Context.auto ())
+         (named "cvr_probe" (Train.forward (make "cvr_p")))
+         Ir.Indexing.Empty);
+    let run name p_ =
+      let y = make name in
+      let ctx, routine =
+        Context.compile
+          ~lowered_transform:(fun o ->
+            [ Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:p_ o) o ])
+          (Context.auto ())
+          (named name (Train.forward y))
+          Ir.Indexing.Empty
+      in
+      let ctx = Context.run ctx routine in
+      Context.get_values ctx y.Tensor.value
+    in
+    let tiled = List.filter !seeds ~f:(fun s -> Option.is_some s.Autotune.sk_tile) in
+    Stdio.eprintf "cvr: %d CPU conv seeds, %d register-tile twins (not part of the golden)\n"
+      (List.length !seeds) (List.length tiled);
+    if List.is_empty tiled then (
+      (* A vector file affording no alternative at this micro-kernel proposes no twin. *)
+      skipped tiled_label;
+      skipped bitwise_label)
+    else
+      let results =
+        List.mapi tiled ~f:(fun i s ->
+            let t = Option.value_exn s.Autotune.sk_tile in
+            let name = Printf.sprintf "cvr_t%d" i in
+            let got = run name s in
+            let src = Generated.read name in
+            let header =
+              Printf.sprintf "Tile_mma register tiling: %dx%d C-tile of %d-lane"
+                t.Ir.Register_tile.rm t.Ir.Register_tile.rn t.Ir.Register_tile.lanes
+            in
+            let rendered =
+              String.is_substring src ~substring:header
+              && String.is_substring src ~substring:"geometry from the schedule"
+            in
+            let auto = run (Printf.sprintf "cvr_a%d" i) { s with Autotune.sk_tile = None } in
+            (rendered, Array.equal Float.equal (nonzero name got) auto))
+      in
+      p_all tiled_label results ~f:fst;
+      p_all bitwise_label results ~f:snd

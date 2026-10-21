@@ -181,6 +181,7 @@ test/operations/fission_schedule.ml
     "gid."
 test/operations/float_literal_forms.ml
     "(float)(" ^ ... ^ ")"
+test/operations/fresh_build_kernel_text.ml [also pins text this scan cannot name: untraced callback]
 test/operations/gpu_lane_reduction.ml [also pins text this scan cannot name: computed fragment, untraced callback]
     " " ^ ... ^ " = ("
     " " ^ ... ^ " = 0;"
@@ -296,8 +297,9 @@ test/operations/runtime_integer_power.ml
 test/operations/scan_loop.ml [renders generated text in memory]
 test/operations/schedule_batch_grid.ml [also pins text this scan cannot name: untraced callback]
 test/operations/schedule_contraction_nest.ml [also pins text this scan cannot name: computed fragment, untraced callback]
-test/operations/schedule_conv_gemm.ml
+test/operations/schedule_conv_gemm.ml [also pins text this scan cannot name: untraced callback]
     "fragment_"
+    "geometry from the schedule"
     "tile_"
 test/operations/schedule_cpu_pack_matmul.ml
     "__shared__"

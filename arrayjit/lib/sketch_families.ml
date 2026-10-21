@@ -1638,46 +1638,61 @@ let rec nest_loop_syms acc (llc : LL.t) =
    [threadgroup_barrier(mem_threadgroup | mem_device)] on Metal, [__syncthreads()] on CUDA and HIP.
    The barrier spans the whole workgroup, so the ordering holds for any lane width the renderer
    emits; [qkv_zero_init] executes every seed of a folded projection against a materialized run. *)
-let companion_geometry ~(site_syms : (Idx.symbol * int) list) ~(skip : Idx.symbol list)
-    ~(expanded_zeros : Ir.Tnode.t list) ~(annotate : (Idx.symbol * int) list -> Sched.schedule)
-    (opt : LL.optimized) : (Sched.schedule, string) Result.t =
-  let plc = opt.LL.optimize_ctx.LL.placements in
-  let rec writes_materialized (llc : LL.t) =
+(* The materialized nodes a statement writes, by debug name: what a companion witness names. *)
+let materialized_writes ~plc (stmt : LL.t) : string =
+  let acc = ref [] in
+  let rec go (llc : LL.t) =
     match llc with
     | LL.Set { tn; _ }
     | LL.Set_dynamic { tn; _ }
     | LL.Set_from_vec { tn; _ }
     | LL.Zero_out tn
     | LL.Tile_mma { d = tn, _; _ } ->
-        Ir.Tnode.Placements.is_materialized_peek plc tn
-    | LL.Seq (a, b) -> writes_materialized a || writes_materialized b
-    | LL.For_loop { body; _ } | LL.If { body; _ } | LL.Scan_loop { body; _ } ->
-        writes_materialized body
-    | _ -> false
+        if Ir.Tnode.Placements.is_materialized_peek plc tn then
+          acc := Ir.Tnode.debug_name tn :: !acc
+    | LL.Seq (a, b) ->
+        go a;
+        go b
+    | LL.For_loop { body; _ } | LL.If { body; _ } | LL.Scan_loop { body; _ } -> go body
+    | _ -> ()
   in
+  go stmt;
+  String.concat ~sep:"," (List.dedup_and_sort ~compare:String.compare !acc)
+
+(* The companion nests a parallel site geometry must cover: the top-level statements writing a
+   MATERIALIZED node — [validate_parallel]'s rule is about shared memory, and routine-local scratch
+   is per-thread by construction — other than the site's own nest (it mentions the site's loops),
+   the nests [skip] names (a fused flavor's epilogue tail) and the [expanded_zeros] the pipeline
+   expands itself. Settled at construction: the placements are read through the pure
+   [is_materialized_peek], the forcing query's own answer. The walk enters [Scan_loop] bodies, as
+   [validate_parallel]'s does (gh-ocannl-1134): a scan's row writes (the online softmax's max and
+   normalizer) are a companion's writes like any other. *)
+let companion_demand ~(site_syms : (Idx.symbol * int) list) ~(skip : Idx.symbol list)
+    ~(expanded_zeros : Ir.Tnode.t list) (opt : LL.optimized) : LL.t list =
+  let plc = opt.LL.optimize_ctx.LL.placements in
   let mentions syms stmt =
     List.exists (nest_loop_syms [] stmt) ~f:(fun s -> List.mem syms s ~equal:Idx.equal_symbol)
   in
   let site_sym_list = List.map site_syms ~f:fst in
-  (* Only nests that write a MATERIALIZED node need covering — [validate_parallel]'s rule is about
-     shared memory, and routine-local scratch is per-thread by construction. Restricting the demand
-     this way also keeps the query out of the way of the pipelines it never needed to constrain: a
-     site with nothing to cover neither consults the analysis nor can be failed by it. The walk
-     enters [Scan_loop] bodies, as [validate_parallel]'s does (gh-ocannl-1134): a scan's row writes
-     (the online softmax's max and normalizer) are a companion's writes like any other. Stopping at
-     the scan let a kernel holding one pass this verdict, and then every seed died at compile. An
-     aligned scan nest takes the site's geometry on its enclosing loops and runs serially per
-     thread; a scan over the site's own column axis trims below the site's arity and is refuted. *)
-  let needs =
-    List.filter (LL.flat_lines [ opt.LL.llc ]) ~f:(fun stmt ->
-        match stmt with
-        | LL.Noop | LL.Comment _ -> false
-        | LL.Zero_out tn when List.exists expanded_zeros ~f:(Ir.Tnode.equal tn) -> false
-        | _ ->
-            writes_materialized stmt
-            && (not (mentions site_sym_list stmt))
-            && not (mentions skip stmt))
-  in
+  List.filter (LL.flat_lines [ opt.LL.llc ]) ~f:(fun stmt ->
+      match stmt with
+      | LL.Noop | LL.Comment _ -> false
+      | LL.Zero_out tn when List.exists expanded_zeros ~f:(Ir.Tnode.equal tn) -> false
+      | _ ->
+          (not (String.is_empty (materialized_writes ~plc stmt)))
+          && (not (mentions site_sym_list stmt))
+          && not (mentions skip stmt))
+
+let companion_geometry ~(site_syms : (Idx.symbol * int) list) ~(skip : Idx.symbol list)
+    ~(expanded_zeros : Ir.Tnode.t list) ~(annotate : (Idx.symbol * int) list -> Sched.schedule)
+    (opt : LL.optimized) : (Sched.schedule, string) Result.t =
+  let plc = opt.LL.optimize_ctx.LL.placements in
+  (* Restricting the demand to materialized writes also keeps the query out of the way of the
+     pipelines it never needed to constrain: a site with nothing to cover neither consults the
+     analysis nor can be failed by it. An aligned scan nest takes the site's geometry on its
+     enclosing loops and runs serially per thread; a scan over the site's own column axis trims
+     below the site's arity and is refuted. *)
+  let needs = companion_demand ~site_syms ~skip ~expanded_zeros opt in
   if List.is_empty needs then Ok []
   else
     let shape cs = String.concat ~sep:"x" (List.map cs ~f:(fun (_, e) -> Int.to_string e)) in
@@ -1685,26 +1700,7 @@ let companion_geometry ~(site_syms : (Idx.symbol * int) list) ~(skip : Idx.symbo
       List.length cs = List.length site_syms
       && List.for_all2_exn cs site_syms ~f:(fun (_, e) (_, e') -> e = e')
     in
-    let written stmt =
-      let acc = ref [] in
-      let rec go (llc : LL.t) =
-        match llc with
-        | LL.Set { tn; _ }
-        | LL.Set_dynamic { tn; _ }
-        | LL.Set_from_vec { tn; _ }
-        | LL.Zero_out tn
-        | LL.Tile_mma { d = tn, _; _ } ->
-            if Ir.Tnode.Placements.is_materialized_peek plc tn then
-              acc := Ir.Tnode.debug_name tn :: !acc
-        | LL.Seq (a, b) ->
-            go a;
-            go b
-        | LL.For_loop { body; _ } | LL.If { body; _ } | LL.Scan_loop { body; _ } -> go body
-        | _ -> ()
-      in
-      go stmt;
-      String.concat ~sep:"," (List.dedup_and_sort ~compare:String.compare !acc)
-    in
+    let written stmt = materialized_writes ~plc stmt in
     match Sched.aligned_chains ~max_chain:(List.length site_syms) ~expanded_zeros opt with
     | None ->
         Error
@@ -2485,6 +2481,63 @@ let conv_real_stmts (site : conv_site) (opt : LL.optimized) : LL.t list =
 let conv_tail_loop_syms (site : conv_site) (opt : LL.optimized) : Idx.symbol list =
   epilogue_tail_loop_syms ~target:site.c_d opt
 
+(* The chain the GPU conv pipeline annotates, as [companion_geometry] wants it: the outer output
+   loops, the GEMM row, the out-channel column — the conv analog of [matmul_site_chain]. *)
+let conv_site_chain (site : conv_site) =
+  site.c_outer @ [ (site.c_row, site.c_nrow); (site.c_oc, site.c_noc) ]
+
+(* The GPU conv pipeline's companion query, one spelling for the builder and the seeding witness:
+   the fused flavor skips the epilogue tail nest [Fuse_epilogue] consumes, and a zeroed site's
+   whole-node [Zero_out] is the pipeline's own ([conv_zero_geometry]). *)
+let conv_companion_geometry ~(opt : LL.optimized) ~(fused : bool) ~annotate (site : conv_site) =
+  companion_geometry ~site_syms:(conv_site_chain site)
+    ~skip:(if fused then conv_tail_loop_syms site opt else [])
+    ~expanded_zeros:(if site.c_zeroed then [ site.c_d ] else [])
+    ~annotate opt
+
+(* The statically-decidable companion-coverage verdict of the GPU conv seeds (gh-ocannl-1406), the
+   conv analog of [matmul_coverage_witness]: [companion_geometry]'s Ok/Error never depends on the
+   geometry [annotate] emits, so one query with a trivial annotator settles buildability for every
+   flavor of the leg. It replaces a [real_stmts <= 2] count cap, which refused aligned-merged
+   segments (conv + bias/relu + pooling, 3-6 statements) whose companions the pipeline already
+   annotates, and admitted segments whose single companion it cannot. Flavor-indexed: the conv
+   family tree (gh-ocannl-697) judges each fusion flavor by its own verdict, before any geometry —
+   skipping the epilogue tail can empty the demand, so a fused flavor can build where the unfused
+   one is refuted. The fused demand is a subset of the unfused one, so an unfused [None] implies the
+   fused one. The builder's raise stays as the safety net for parameters replayed against another
+   lowering. *)
+let conv_coverage_witness ~(opt : LL.optimized) ~(fused : bool) (site : conv_site) : string option =
+  match conv_companion_geometry ~opt ~fused ~annotate:(fun _ -> []) site with
+  | Ok _ -> None
+  | Error why -> Some (Printf.sprintf "GPU conv companion coverage (gh-521): %s" why)
+
+(* The CPU conv pipeline's flavors that Grid-type a loop of the conv nest itself — the Grid flavor
+   and the row panels, wherever the segment holds at most one statement besides the conv (more, and
+   they adopt the preset's aligned whole-segment geometry, [conv_aligned_grid]) — leave every other
+   nest outside the only annotated loop. [validate_parallel] rejects such a nest that writes a
+   materialized node (every pool chunk would execute it), so the flavor is refuted where one
+   remains: the companion demand, with the fused flavor's tail skipped (the fusion relocates it
+   under the Grid loop) and a whole-node zero of the output excluded (the pipeline expands and
+   annotates it). Before gh-ocannl-697 the unfused Grid flavor of a conv+tail segment was proposed
+   and failed validation at every compile, its fused twin the only survivor. *)
+let conv_direct_grid_witness ~(opt : LL.optimized) ~(fused : bool) (site : conv_site) :
+    string option =
+  match
+    companion_demand ~site_syms:(conv_site_chain site)
+      ~skip:(if fused then conv_tail_loop_syms site opt else [])
+      ~expanded_zeros:(if site.c_zeroed then [ site.c_d ] else [])
+      opt
+  with
+  | [] -> None
+  | needs ->
+      let plc = opt.LL.optimize_ctx.LL.placements in
+      Some
+        (Printf.sprintf
+           "the conv nest's own Grid loop leaves %d companion nest(s) writing materialized %s \
+            outside it, which validate_parallel rejects"
+           (List.length needs)
+           (String.concat ~sep:"; " (List.map needs ~f:(materialized_writes ~plc))))
+
 (* Whole-segment Grid alignment for the conv pipeline on merged segments (gh-ocannl-493): the
    pipeline's own [Retype] covers only the conv nest, so on an aligned-merged segment (lenet's
    conv+bias/relu+pooling) the companions' materialized writes would fail [validate_parallel]. Reuse
@@ -2541,7 +2594,7 @@ let conv_split_row_current (site : conv_site) ~row_o ~row_i : Idx.symbol list =
    chunk. Both cases exclude whole-node [Zero_out] (the seeds gate accordingly). A covering per-cell
    zero companion follows the segment's aligned Grid geometry. *)
 let cpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
-    { sk_grid; sk_bm; sk_epilogue; sk_pack_prec; _ } : Sched.schedule =
+    { sk_grid; sk_bm; sk_epilogue; sk_pack_prec; sk_tile = tile; _ } : Sched.schedule =
   let stage source tile_loops =
     (* Mint the im2col/panel tiles at the site's compute precision where the source stores narrower
        (gh-ocannl-575); see [cpu_mma_pack_sketch_schedule]. *)
@@ -2593,7 +2646,7 @@ let cpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
     let target =
       List.map site.c_outer ~f:fst @ [ row_o ] @ site.c_kernel @ [ row_i; site.c_oc; site.c_red ]
     in
-    let tz, _lane = Sched.tensorize ~i:row_i ~j:site.c_oc ~k:site.c_red ~simd_width:1 () in
+    let tz, _lane = Sched.tensorize ?tile ~i:row_i ~j:site.c_oc ~k:site.c_red ~simd_width:1 () in
     row_pads @ grid_ops
     @ (sp_row :: reorder_swaps ~current ~target)
     @ [ stage site.c_a [ row_i; site.c_red ]; stage site.c_b [ site.c_red; site.c_oc ]; tz ]
@@ -2601,7 +2654,9 @@ let cpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
     let loop_syms =
       List.map site.c_outer ~f:fst @ site.c_kernel @ [ site.c_row; site.c_oc; site.c_red ]
     in
-    let tz, _lane = Sched.tensorize ~i:site.c_row ~j:site.c_oc ~k:site.c_red ~simd_width:1 () in
+    let tz, _lane =
+      Sched.tensorize ?tile ~i:site.c_row ~j:site.c_oc ~k:site.c_red ~simd_width:1 ()
+    in
     let zops, grid_ops =
       if not sk_grid then ([], [])
       else if List.length (conv_real_stmts site opt) > 2 then
@@ -2659,32 +2714,6 @@ let conv_zero_geometry ?folded (site : conv_site) ~(site_syms : (Idx.symbol * in
     match folded with
     | None -> []
     | Some (nest_order, axis_order) -> place ~ez:[] ~current:nest_order axis_order
-
-(* The chain the GPU conv pipeline annotates, as [companion_geometry] wants it: the outer output
-   loops, the GEMM row, the out-channel column — the conv analog of [matmul_site_chain]. *)
-let conv_site_chain (site : conv_site) =
-  site.c_outer @ [ (site.c_row, site.c_nrow); (site.c_oc, site.c_noc) ]
-
-(* The GPU conv pipeline's companion query, one spelling for the builder and the seeding witness:
-   the fused flavor skips the epilogue tail nest [Fuse_epilogue] consumes, and a zeroed site's
-   whole-node [Zero_out] is the pipeline's own ([conv_zero_geometry]). *)
-let conv_companion_geometry ~(opt : LL.optimized) ~(fused : bool) ~annotate (site : conv_site) =
-  companion_geometry ~site_syms:(conv_site_chain site)
-    ~skip:(if fused then conv_tail_loop_syms site opt else [])
-    ~expanded_zeros:(if site.c_zeroed then [ site.c_d ] else [])
-    ~annotate opt
-
-(* The statically-decidable companion-coverage verdict of the GPU conv seeds (gh-ocannl-1406), the
-   conv analog of [matmul_coverage_witness]: [companion_geometry]'s Ok/Error never depends on the
-   geometry [annotate] emits, so one query with a trivial annotator settles buildability for every
-   flavor of the leg. It replaces a [real_stmts <= 2] count cap, which refused aligned-merged
-   segments (conv + bias/relu + pooling, 3-6 statements) whose companions the pipeline already
-   annotates, and admitted segments whose single companion it cannot. The fused demand is a subset
-   of the unfused one, so an unfused [None] implies the fused one. *)
-let conv_coverage_witness ~(opt : LL.optimized) ~(fused : bool) (site : conv_site) : string option =
-  match conv_companion_geometry ~opt ~fused ~annotate:(fun _ -> []) site with
-  | Ok _ -> None
-  | Error why -> Some (Printf.sprintf "GPU conv companion coverage (gh-521): %s" why)
 
 (* The GPU staged leg of the implicit-GEMM conv pipeline (gh-ocannl-493): the same loop
    re-association as the CPU route, with the outer output loops [Grid]-typed (one threadgroup per
@@ -2972,530 +3001,6 @@ let sketch_schedule ~accum_prec ~p (opt : LL.optimized) : Sched.schedule =
       | None -> refuse ("Autotune sketch: no matmul site whose " ^ coalesce_layout_name layout)
       | Some (prefix, prepared) -> prefix @ family_schedule ~accum_prec ~p prepared)
 
-(* Sketch seed parameters compatible with the site's extents. Fully staged tensorized pipelines no
-   longer require dividing tiles: non-multiple extents seed [(pad, tensorize)] compositions
-   (gh-ocannl-485) whose masked edges the tuner measures against scalar alternatives — pipelines
-   that read an operand in place keep their divisibility gates. Sites without whole-node [Zero_out] are proposable too: GPU fission exposes eligible
-   zeros as per-cell companions, while a separate zero segment needs no geometry here, and a site whose kernel-mates cannot share the parallel
-   geometry merely fails its candidate compile. *)
-(* Conv seeds (gh-ocannl-493). CPU: the serial implicit-GEMM pipeline plus its Grid-parallel
-   variant, pre-filtered by the register tiling's statically decidable rules like the matmul
-   seeds (gh-ocannl-479): uniform f32/f64, fused accumulation form, and the micro-kernel column
-   extent (the out-channel count) at least one vector of lanes. Layout orientation needs no
-   pre-filter: both operands are packed, which normalizes any stored layout. GPU (backends with an
-   mma capability): the staged pipeline ([gpu_conv_sketch_schedule]), pre-filtered by the
-   intrinsic-tile divisibility of the micro-kernel extents (like the mma matmul seeds) and the
-   shared-tile footprint against the workgroup-memory limit. Strided rows (stride-2 stems and
-   downsample blocks) are seeded on both legs since the compacting [Stage] (gh-ocannl-502). *)
-(* gh-ocannl-1407: each leg's verdict is kept beside its seeds, so the seeding census
-   ({!seeding_census}) names the gate that refused from the gate itself rather than from a
-   restatement of it. [leg_refusal] is set exactly when the leg proposes no seed; [leg_notes] name
-   the flavors later gates refused. *)
-type conv_leg = {
-  leg_seeds : sketch_params list;
-  leg_refusal : string option;
-  leg_notes : string list;
-}
-
-type conv_judgment = {
-  cj_site : conv_site;
-  cj_real_stmts : int;
-  cj_cpu : conv_leg;
-  cj_gpu : conv_leg;
-}
-
-let conv_leg_refused why = { leg_seeds = []; leg_refusal = Some why; leg_notes = [] }
-
-let conv_offset_witness =
-  "a conv axis carries a nonzero padding offset, at which the packing anchor would mispack"
-
-let conv_seed_judgment ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~is_gpu ~is_cpu
-    ~(limits : Ir.Backend_intf.hardware_limits) (opt : LL.optimized) : conv_judgment option =
-  match detect_conv opt.LL.llc with
-  | None -> None
-  | Some site ->
-      let prec = Lazy.force site.c_d.Ir.Tnode.storage_prec in
-      (* Strided rows are seeded (gh-ocannl-502): the row's tile part in the input access is the
-         single term [stride*row] — the kernel-window symbol lands in the outer part, at the staging
-         anchor — so the compacting [Stage] packs the window densely (tile axis sized by the loop
-         extent, tile store/read at coefficient 1, only the load's source index and its edge guard
-         keeping the stride), which satisfies [Tensorize]'s unit-coefficient index discipline.
-         Stride-2 downsampling stems and blocks therefore reach the implicit-GEMM pipeline like
-         unit-stride convs.
-
-         Every axis must still be offset-free — which padded convs from the tensor front end are:
-         the halo is part of the physically padded buffer, buffer indices absorb the shift, and
-         [Stage]'s edge guards compare against the padded [Tn.dims], so staging padded convs is
-         sound (pinned by the cvp pipeline leg of schedule_conv_gemm). The gate is retained as
-         defense-in-depth against hand-built [Low_level] sites with genuine offsets, where the
-         packing anchor would mispack (Codex P1 on PR #168). Candidates are timed, not
-         value-checked, so unsound seeds must not be proposed at all. The gate applies to both legs:
-         the GPU pipeline packs through the same [Stage] decomposition. *)
-      let offset_free = List.for_all site.c_axes ~f:(fun cx -> cx.cx_offset = 0) in
-      let real_stmts = conv_real_stmts site opt in
-      let n_real = List.length real_stmts in
-      let base =
-        {
-          sk_gpu = false;
-          sk_mma = true;
-          sk_simd = 0;
-          sk_bm = 0;
-          sk_bn = 0;
-          sk_bk = 0;
-          sk_tm = 0;
-          sk_tn = 0;
-          sk_hoist = false;
-          sk_grid = false;
-          sk_pack_rest = false;
-          sk_conv = true;
-          sk_epilogue = false;
-          sk_swizzle = None;
-          sk_depth = 1;
-          sk_batch_grid = false;
-          sk_batch_inner = false;
-          sk_coalesce = None;
-          sk_pack_prec = None;
-          sk_tile = None;
-        }
-      in
-      let cpu =
-        if not is_cpu then conv_leg_refused "not a CPU target"
-        else
-          (* Compute-precision uniformity and vector-capability, resolved through the same
-             [Numerics.cpu_compute_prec] the emission asks (gh-ocannl-575) — see the matmul family's
-             CPU branch for the rationale. *)
-          let native_fp16 = limits.Ir.Backend_intf.native_fp16_arithmetic in
-          let comp_prec p = Ir.Numerics.cpu_compute_prec ~native_fp16_arithmetic:native_fp16 p in
-          let cprec = comp_prec prec in
-          let uniform_vec_capable =
-            (match cprec with
-              | Ir.Ops.Single_prec _ | Ir.Ops.Double_prec _ -> true
-              | Ir.Ops.Half_prec _ -> native_fp16
-              | _ -> false)
-            && Ir.Ops.equal_prec (comp_prec (Lazy.force site.c_a.Ir.Tnode.storage_prec)) cprec
-            && Ir.Ops.equal_prec (comp_prec (Lazy.force site.c_b.Ir.Tnode.storage_prec)) cprec
-            (* The C-tile accumulates at the compute precision, so a divergent accumulator residency
-               ([Fp16_wide] + [narrow_compute_f32 = false] on an f16 destination) is an emission
-               decline — mirror it here or the candidate is timed under a tensorized label
-               (gh-ocannl-680; Codex P1 round 1 on staging PR #477). *)
-            && Ir.Ops.equal_prec
-                 (Ir.Numerics.cpu_accum_prec ~native_fp16_arithmetic:native_fp16 prec)
-                 cprec
-          in
-          (* The renderer fills the widest vector the out-channel extent allows, halving where it
-             must ({!Ir.Backend_intf.simd_lanes_for}); seeding asks the same question, or it would
-             withhold candidates the renderer would in fact tile. *)
-          let lanes =
-            Ir.Backend_intf.simd_lanes_for ~vector_bytes:limits.Ir.Backend_intf.simd_vector.bytes
-              ~elt_bytes:(max 1 (Ir.Ops.prec_in_bytes cprec))
-              ~extent:site.c_noc
-          in
-          (* The seeding precondition, every failing conjunct named. *)
-          let failing =
-            List.filter_map
-              [
-                ( limits.Ir.Backend_intf.simd_vector.bytes >= 8,
-                  lazy
-                    (Printf.sprintf "the %d-byte vector file is under 8 bytes"
-                       limits.Ir.Backend_intf.simd_vector.bytes) );
-                ( Option.is_some lanes,
-                  lazy
-                    (Printf.sprintf "no SIMD lane count fits the out-channel extent %d at %s"
-                       site.c_noc (Ir.Ops.prec_string cprec)) );
-                ( uniform_vec_capable,
-                  lazy
-                    "the operands' and the accumulator's compute precisions are not one \
-                     vector-capable precision" );
-                (site.c_fma, lazy "the accumulation is not a fused multiply-add");
-                (offset_free, lazy conv_offset_witness);
-              ]
-              ~f:(fun (holds, why) -> if holds then None else Some (Lazy.force why))
-          in
-          match failing with
-          | _ :: _ -> conv_leg_refused (String.concat ~sep:"; " failing)
-          | [] ->
-              (* Grid flavors need every materialized write in the routine covered by the Grid axis
-                 ([validate_parallel]), and the conv pipeline's own [Retype] only annotates the conv
-                 nest: seed them when the conv statement is alone — or has exactly one companion
-                 statement, the would-be epilogue tail, whose fused twin ([sk_grid] with
-                 [sk_epilogue]) relocates the tail write under the Grid loop (the unfused [sk_grid]
-                 candidate then fails validation and is skipped; the twin carries the Grid flavor —
-                 multi-window convs included, since the whole-window contraction, gh-ocannl-501,
-                 lands the store-back after the full kernel window). Segments with more companions
-                 (an aligned-merged segment, e.g. lenet's conv+bias/relu+pooling) are seeded when
-                 the default preset's aligned cross-nest analysis Grid-annotates the whole segment
-                 ([conv_aligned_grid]) — the pipeline then adopts that whole-segment geometry. The
-                 fused twin of an aligned-grid seed omits the preset [Retype] on the tail nest the
-                 fusion consumes (fuse-before-annotate, gh-ocannl-501; see [conv_tail_loop_syms]),
-                 so the twin compiles on merged segments too. *)
-              let base =
-                {
-                  base with
-                  sk_pack_prec =
-                    (if
-                       Ir.Ops.equal_prec cprec (Lazy.force site.c_a.Ir.Tnode.storage_prec)
-                       && Ir.Ops.equal_prec cprec (Lazy.force site.c_b.Ir.Tnode.storage_prec)
-                     then None
-                     else Some cprec);
-                }
-              in
-              let outer_ok = match site.c_outer with (_, n) :: _ -> n >= 2 | [] -> false in
-              let grid_ok =
-                outer_ok && (n_real <= 2 || Option.is_some (conv_aligned_grid site opt))
-              in
-              (* Cache-blocked row-panel flavors (gh-ocannl-500): split the GEMM row into panels of
-                 [sk_bm] rows ([cpu_conv_sketch_schedule]'s [sk_bm] leg). Dividing blocks only — the
-                 split must stay guard-free so the reorder's [Swap]s are well-formed — and at least
-                 two panels. Proposed on any unzeroed segment: a conv-alone segment
-                 [Grid]-parallelizes the panel loop, an aligned-merged segment adopts the
-                 whole-segment [Grid] geometry ([conv_aligned_grid]) and blocks the row serially for
-                 cache residency. The whole-routine zeroed graph keeps the serial/aligned flavors
-                 above (its [Zero_out] is in the routine, so the aligned analysis bails and the
-                 block flavor is not seeded). *)
-              let block_ok =
-                (not site.c_zeroed) && (n_real <= 1 || Option.is_some (conv_aligned_grid site opt))
-              in
-              let row_blocks =
-                if not block_ok then []
-                else
-                  (* Non-dividing blocks pad the row (gh-ocannl-485, the builder emits the [Pad]);
-                     require at least two (possibly padded) panels. *)
-                  List.filter_map [ 8; 16; 32 ] ~f:(fun bm ->
-                      if blocks_of site.c_nrow bm >= 2 then Some { base with sk_bm = bm } else None)
-              in
-              (* The withheld flavors' reasons, read off the gates' own conjuncts: a failing
-                 conjunct after a passing count test is the aligned-grid analysis. *)
-              let no_alignment =
-                Printf.sprintf
-                  "%d real statements and the default preset's aligned analysis gives no \
-                   whole-segment Grid"
-                  n_real
-              in
-              let notes =
-                (if grid_ok then []
-                 else if not outer_ok then
-                   [ "Grid flavor withheld: no outer output loop of extent at least 2" ]
-                 else [ "Grid flavor withheld: " ^ no_alignment ])
-                @
-                if site.c_zeroed then
-                  [
-                    "row-block flavors withheld: the conv output's whole-node Zero_out is in this \
-                     lowering (c_zeroed)";
-                  ]
-                else if not block_ok then [ "row-block flavors withheld: " ^ no_alignment ]
-                else if List.is_empty row_blocks then
-                  [ "row-block flavors withheld: no panel of 8, 16 or 32 rows gives two panels" ]
-                else []
-              in
-              {
-                leg_seeds =
-                  (base :: (if grid_ok then [ { base with sk_grid = true } ] else [])) @ row_blocks;
-                leg_refusal = None;
-                leg_notes = notes;
-              }
-      in
-      let gpu =
-        match (is_gpu, limits.Ir.Backend_intf.mma) with
-        | false, _ -> conv_leg_refused "not a GPU target"
-        | true, None -> conv_leg_refused "the backend advertises no mma capability"
-        | true, Some ({ Ir.Backend_intf.mma_simd_width = w; _ } as mma) -> (
-            let a_prec = Lazy.force site.c_a.Ir.Tnode.storage_prec
-            and b_prec = Lazy.force site.c_b.Ir.Tnode.storage_prec
-            and d_prec = Lazy.force site.c_d.Ir.Tnode.storage_prec in
-            let scope = conv_mma_scope site in
-            match mma_tile_for_precisions_in_scope mma ~scope ~a_prec ~b_prec ~d_prec with
-            | None ->
-                conv_leg_refused
-                  (match wide_acc_withholding mma ~scope ~d_prec with
-                  | Some policy ->
-                      policy
-                      ^ " accumulator in the conv's emission scope, which the backend does not \
-                         advertise"
-                  | None ->
-                      Printf.sprintf
-                        "the backend advertises no mma tile for operands (%s, %s) with accumulator \
-                         %s"
-                        (Ir.Ops.prec_string a_prec) (Ir.Ops.prec_string b_prec)
-                        (Ir.Ops.prec_string d_prec))
-            | Some (tm_t, tn_t, tk_t) ->
-                (* The site's covering zero is the pipeline's to annotate, whichever form it
-                   arrives in: a GPU fission segment's folded per-cell companion, or — on a
-                   whole-routine lowering ([c_zeroed]) — the whole-node [Zero_out], which
-                   [conv_zero_geometry] expands into that same nest (gh-ocannl-503). The
-                   coverage query ([conv_companion_geometry]) excludes it either way, and the
-                   pipeline gives every other companion aligned Grid and lane geometry. *)
-                (* The intrinsic-tile divisibility is now a PER-BLOCK property (gh-ocannl-500): the
-               tensorized micro-kernel row is [sk_bm] (the block), not the whole [c_nrow], so a
-               staged block flavor is proposable whenever [sk_bm] — a multiple of the intrinsic row
-               tile that divides [c_nrow] — exists, and the whole-extent flavor ([sk_bm = 0]) only
-               when [c_nrow] itself is a multiple. (Column and reduction stay whole-extent tensorized,
-               so [c_noc] / [c_nred] keep their intrinsic-tile gates; blocking those would exceed the
-               three-[Grid]-slot budget on 2-D convs — a follow-up.) A dividing block that is a
-               multiple of the tile implies whole divisibility, so on ordinary shapes the block
-               flavors add [Grid] device-fill splits rather than waking new sites; genuine edge
-               peeling of the cooperative micro-kernel — a tensorized bulk beside a scalar remainder,
-               which [Stage]'s single-index-vector rule blocks in v1 — is a recorded follow-up. *)
-                (* Pad-composition seeding (gh-ocannl-485): non-multiple column/reduction/row
-                   extents no longer gate the seeds — the builder pads them to the intrinsic tile
-                   (the seed carries the multiples in [sk_bn]/[sk_bk]/[sk_tm], 0 = already a
-                   multiple) and [Tensorize] masks the edges. The shared-tile footprint is computed
-                   on the padded extents. *)
-                let noc_p = blocks_of site.c_noc tn_t * tn_t in
-                let nred_p = blocks_of site.c_nred tk_t * tk_t in
-                let pad_n = if site.c_noc % tn_t = 0 then 0 else tn_t in
-                let pad_k = if site.c_nred % tk_t = 0 then 0 else tk_t in
-                (* The gate's own charge ([Sched.kernel_workgroup_bytes]): each tile one array of
-                   [copies] rotating copies, rounded to the backend's allocation granule, plus the
-                   per-kernel tile-MMA scratch of the site's triple, which every completion's
-                   [Tile_mma] carries (gh-ocannl-1330, gh-ocannl-1255). Each tile at its own
-                   operand's storage precision, the precision [gpu_conv_sketch_schedule]'s [Stage]
-                   (no [tile_prec]) declares it at: a mixed-precision site's narrow operand tiles
-                   are not priced at its wide accumulator (gh-ocannl-1452). A flavor whose
-                   accumulator is masked ([acc_masked]: a column pad, or a row pad or row block not
-                   dividing the rows) also places its accumulator fragment, [rows x noc_p] at the
-                   output's storage precision, in workgroup-shared memory
-                   ([Sched.contract_tensorized_accumulator]'s [shared_frag]: a staged pipeline under
-                   pad masks); otherwise it stays in simdgroup fragments. A reduction pad alone
-                   masks nothing: [Tensorize] discharges its guard, the staged operands' padded
-                   slots being exact zeros. *)
-                let shared_fits ?(copies = 1) ~acc_masked rows =
-                  match limits.Ir.Backend_intf.max_workgroup_memory_bytes with
-                  | Some cap ->
-                      Sched.kernel_workgroup_bytes ~capabilities
-                        ~arrays:
-                          ([
-                             copies * rows * nred_p * Ir.Ops.prec_in_bytes a_prec;
-                             copies * nred_p * noc_p * Ir.Ops.prec_in_bytes b_prec;
-                           ]
-                          @
-                          if acc_masked then [ rows * noc_p * Ir.Ops.prec_in_bytes d_prec ] else []
-                          )
-                        ~mma_triples:[ (d_prec, a_prec, b_prec) ]
-                      <= cap
-                  | None -> true
-                in
-                (* Companion coverage (gh-ocannl-1406): the builder's own [companion_geometry]
-                   verdict, not a statement count. The unfused flavors need it unfused; when they
-                   are refuted but the site has a fusable tail, the fused-epilogue twins
-                   ([family_seeding] flag-flips every seed) may still be covered — the tail was the
-                   failing companion — so the leg seeds and the unfused flavors decline at build,
-                   the regime conv+bias+relu segments have always had. [Error] only when neither
-                   flavor is covered. *)
-                let coverage =
-                  match conv_coverage_witness ~opt ~fused:false site with
-                  | None -> Ok None
-                  | Some unfused -> (
-                      match Sched.fuse_epilogue_witness ~target:site.c_d opt with
-                      | Some _ -> Error unfused
-                      | None -> (
-                          match conv_coverage_witness ~opt ~fused:true site with
-                          | None -> Ok (Some unfused)
-                          | Some fused -> Error (unfused ^ "; fused-epilogue twins: " ^ fused)))
-                in
-                (* Every failing conjunct named, for the census. *)
-                let failing =
-                  List.filter_map
-                    [
-                      (offset_free, lazy conv_offset_witness);
-                      ( Result.is_ok coverage,
-                        lazy (match coverage with Error why -> why | Ok _ -> assert false) );
-                    ]
-                    ~f:(fun (holds, why) -> if holds then None else Some (Lazy.force why))
-                in
-                let coverage_notes =
-                  match coverage with
-                  | Ok (Some unfused) ->
-                      [
-                        "unfused flavors decline at build, only their fused-epilogue twins are \
-                         covered: " ^ unfused;
-                      ]
-                  | Ok None | Error _ -> []
-                in
-                if not (List.is_empty failing) then
-                  conv_leg_refused (String.concat ~sep:"; " failing)
-                else
-                  let rows_p = blocks_of site.c_nrow tm_t * tm_t in
-                  (* The flavors the workgroup-memory cap refuses, counted for the census. *)
-                  let mem_refused = ref 0 in
-                  (* The flavors other later gates withhold, by reason, in first-seen order. *)
-                  let withheld = ref [] in
-                  let withhold ?(count = 1) reason =
-                    withheld :=
-                      match List.Assoc.find !withheld reason ~equal:String.equal with
-                      | Some n ->
-                          List.map !withheld ~f:(fun (r, k) ->
-                              if String.equal r reason then (r, n + count) else (r, k))
-                      | None -> !withheld @ [ (reason, count) ]
-                  in
-                  (* A flavor whose [Tensorize] masks the accumulator: a column pad, or a row pad or
-                     row block that does not divide the row extent. *)
-                  let acc_masked p0 =
-                    p0.sk_bn > 0
-                    || if p0.sk_bm = 0 then p0.sk_tm > 0 else site.c_nrow % p0.sk_bm <> 0
-                  in
-                  (* A flavor with any pad: the accumulator masks, or a reduction pad. *)
-                  let masked p0 = p0.sk_bk > 0 || acc_masked p0 in
-                  let fits ?copies p0 rows =
-                    let ok = shared_fits ?copies ~acc_masked:(acc_masked p0) rows in
-                    if not ok then Int.incr mem_refused;
-                    ok
-                  in
-                  let whole =
-                    let pad_m = if site.c_nrow % tm_t = 0 then 0 else tm_t in
-                    let p0 =
-                      {
-                        base with
-                        sk_gpu = true;
-                        sk_simd = w;
-                        sk_tm = pad_m;
-                        sk_bn = pad_n;
-                        sk_bk = pad_k;
-                      }
-                    in
-                    if fits p0 rows_p then [ p0 ] else []
-                  in
-                  let blocked =
-                    List.filter_map [ 8; 16; 32 ] ~f:(fun bm ->
-                        if bm % tm_t <> 0 then (
-                          withhold
-                            (Printf.sprintf "row block not a multiple of the %d-row mma tile" tm_t);
-                          None)
-                        else if blocks_of site.c_nrow bm < 2 then (
-                          withhold
-                            (Printf.sprintf "row block gives fewer than two blocks of the %d rows"
-                               site.c_nrow);
-                          None)
-                        else
-                          let p0 =
-                            {
-                              base with
-                              sk_gpu = true;
-                              sk_simd = w;
-                              sk_bm = bm;
-                              sk_bn = pad_n;
-                              sk_bk = pad_k;
-                            }
-                          in
-                          if fits p0 bm then Some p0 else None)
-                  in
-                  (* The pipelined twins (gh-ocannl-487): every conv GPU flavor stages
-                     cooperatively, so each unmasked flavor gets a twin per advertised depth — gated
-                     on the [copies]-multiplied footprint, since the rotation allocates that many
-                     tile copies. Masked flavors ([masked]) are not twinned: their pad masks keep
-                     [Tensorize] on the barrier-bracketed per-call arm, whose leading bracket sits
-                     between the prefetch and the compute — the copy must complete there, so the
-                     twin could only pay the doubled footprint (Codex P2 on PR #303). *)
-                  (* Depth twins additionally ride the async arms' element floor (Codex P2 on PR
-                     #317, as in the matmul sketch): staged tiles of sub-4-byte elements render the
-                     portable synchronous form only, so their twin could only pay the doubled
-                     footprint. *)
-                  let async_wide =
-                    Ir.Ops.prec_in_bytes (Lazy.force site.c_a.Ir.Tnode.storage_prec) >= 4
-                    && Ir.Ops.prec_in_bytes (Lazy.force site.c_b.Ir.Tnode.storage_prec) >= 4
-                  in
-                  let depth_twins =
-                    List.concat_map (whole @ blocked) ~f:(fun p0 ->
-                        (* One twin per advertised depth is withheld. *)
-                        let count = List.length mma.Ir.Backend_intf.mma_pipeline_depths in
-                        let advertised = count > 0 in
-                        if masked p0 then (
-                          if advertised then
-                            withhold ~count
-                              "pipelined depth twin of a masked (padded) flavor, whose Tensorize \
-                               stays on the barrier-bracketed arm";
-                          [])
-                        else if not async_wide then (
-                          if advertised then
-                            withhold ~count
-                              "pipelined depth twin under sub-4-byte operands, which render only \
-                               the synchronous copy";
-                          [])
-                        else
-                          let rows = if p0.sk_bm = 0 then rows_p else p0.sk_bm in
-                          List.filter_map mma.Ir.Backend_intf.mma_pipeline_depths ~f:(fun d ->
-                              if fits ~copies:d p0 rows then Some { p0 with sk_depth = d } else None))
-                  in
-                  let flavors = whole @ blocked @ depth_twins in
-                  (* Refuse launch geometries the device gate would reject before paying for a
-                     candidate compile (gh-ocannl-739). The shared predicate is the one authority
-                     for the caps; this family contributes only its lower-bound prediction. *)
-                  let excess p =
-                    Sched.launch_geometry_excess ~limits:(seeding_limits limits)
-                      (conv_launch_geometry site p)
-                  in
-                  let fitting, exceeding =
-                    List.partition_tf flavors ~f:(fun p -> Option.is_none (excess p))
-                  in
-                  let launch_witness =
-                    lazy
-                      (match List.find_map exceeding ~f:excess with
-                      | Some e -> e.Sched.lx_phrase
-                      | None -> "")
-                  in
-                  let mem_cap =
-                    Option.value ~default:0 limits.Ir.Backend_intf.max_workgroup_memory_bytes
-                  in
-                  let withheld_notes =
-                    coverage_notes
-                    @ List.map !withheld ~f:(fun (reason, n) ->
-                        Printf.sprintf "%d flavors withheld: %s" n reason)
-                  in
-                  let mem_notes =
-                    withheld_notes
-                    @
-                    if !mem_refused = 0 then []
-                    else
-                      [
-                        Printf.sprintf
-                          "%d flavors refused by workgroup memory: staged tiles over the %d-byte \
-                           cap"
-                          !mem_refused mem_cap;
-                      ]
-                  in
-                  if List.is_empty flavors then
-                    {
-                      (conv_leg_refused
-                         (Printf.sprintf
-                            "workgroup memory: no flavor's staged tiles fit the %d-byte cap (%d \
-                             refused)"
-                            mem_cap !mem_refused))
-                      with
-                      leg_notes = withheld_notes;
-                    }
-                  else if List.is_empty fitting then
-                    {
-                      (conv_leg_refused
-                         (Printf.sprintf "launch caps: all %d flavors refused, the first %s"
-                            (List.length exceeding) (Lazy.force launch_witness)))
-                      with
-                      leg_notes = mem_notes;
-                    }
-                  else
-                    {
-                      leg_seeds = fitting;
-                      leg_refusal = None;
-                      leg_notes =
-                        (mem_notes
-                        @
-                        if List.is_empty exceeding then []
-                        else
-                          [
-                            Printf.sprintf "%d of %d flavors refused by launch caps, the first %s"
-                              (List.length exceeding) (List.length flavors)
-                              (Lazy.force launch_witness);
-                          ]);
-                    })
-      in
-      Some { cj_site = site; cj_real_stmts = n_real; cj_cpu = cpu; cj_gpu = gpu }
-
-(* The conv family's seeds, CPU leg first (gh-ocannl-493): [None] when no site is detected or
-   neither leg seeds. Fused-epilogue twins are proposed for every conv seed (gh-ocannl-501), by
-   {!sketch_seed_params}: [contract_tensorized_accumulator] contracts across the whole kernel-window
-   chain, so the fragment store-back lands after the full window unconditionally and
-   [Fuse_epilogue]'s exactly-once check passes by construction — multi-window (2-D) convs
-   included. *)
-let conv_judgment_seeds (j : conv_judgment) = j.cj_cpu.leg_seeds @ j.cj_gpu.leg_seeds
-
 (** {2 The matmul family tree's decisions}
 
     What a commitment on the matmul family tree {e is} (gh-ocannl-591). Every level's choices are
@@ -3577,6 +3082,20 @@ module Family_decision = struct
             renderer's own ranking-model choice, [Some] a schedule-carried alternative the renderer
             honours exactly. The level appears only where {!Ir.Register_tile.alternatives} offers
             one, so a site with a single affordable width keeps its pre-level leaf list. *)
+    | Conv_leg of [ `Cpu | `Gpu ]
+        (** The conv family's route (gh-ocannl-697): the CPU register-tiled implicit-GEMM pipeline
+            or the GPU staged one; the leg the backend kind does not take is refuted. *)
+    | Conv_shape of [ `Serial | `Grid | `Row_block of int ]
+        (** The CPU conv pipeline's flavor: serial, Grid-parallel, or the row split into panels of
+            that many rows (gh-ocannl-500). *)
+    | Conv_staging of [ `Plain | `Pipelined ]
+        (** The GPU conv pipeline's staging: single-copy tiles, or rotating copies whose depth the
+            [twin] level below each geometry commits (gh-ocannl-487). Above the geometry, so the
+            leaves keep the flat list's order (every plain geometry, then the depth twins). *)
+    | Conv_rows of int
+        (** The GPU conv geometry: the GEMM row blocked into Grid blocks of that many rows, [0] the
+            whole (intrinsic-tile padded) extent. Column and reduction stay whole-extent, padded to
+            the intrinsic tile — a site-wide property, not a decision. *)
 
   type path = (string * t) list
   (** The path a consumer reads: {!Ir.Schedule_space}'s [(level, decision)] vector at this label
@@ -3607,6 +3126,10 @@ module Family_decision = struct
     | Row_block _ -> "row-block"
     | Packing_shape _ -> "packing-shape"
     | Register_tile _ -> "register-tile"
+    | Conv_leg _ -> "conv-leg"
+    | Conv_shape _ -> "conv-shape"
+    | Conv_staging _ -> "conv-staging"
+    | Conv_rows _ -> "conv-rows"
 
   (** The display rendering — for logs, decline reports and goldens. Nothing reads it back. *)
   let to_label =
@@ -3647,6 +3170,15 @@ module Family_decision = struct
     | Packing_shape `Grid -> "grid"
     | Register_tile None -> "auto"
     | Register_tile (Some t) -> Ir.Register_tile.to_string t
+    | Conv_leg `Cpu -> "cpu"
+    | Conv_leg `Gpu -> "gpu"
+    | Conv_shape `Serial -> "serial"
+    | Conv_shape `Grid -> "grid"
+    | Conv_shape (`Row_block bm) -> Printf.sprintf "bm%d" bm
+    | Conv_staging `Plain -> "plain"
+    | Conv_staging `Pipelined -> "pipelined"
+    | Conv_rows 0 -> "rows-whole"
+    | Conv_rows bm -> Printf.sprintf "rows-bm%d" bm
 
   (** A decision path as ["level=label > …"], for logs and reports. *)
   let render_path (path : path) = Sspace.render_path ~label:to_label path
@@ -4742,45 +4274,540 @@ let matmul_seed_params ?coalesced ?capabilities ~is_gpu ~is_cpu
     ~(limits : Ir.Backend_intf.hardware_limits) ~opt site : sketch_params list =
   Sspace.leaves (matmul_family_tree ?coalesced ?capabilities ~is_gpu ~is_cpu ~limits ~opt site)
 
+(** {2 The convolution family tree (gh-ocannl-697)}
+
+    The conv family as a refinement tree beside {!matmul_family_tree}, on the same decision type and
+    under the same root: [fusion = unfused | fused], the fused child refuted with the fusion
+    recognizer's reason where the site's output feeds no fusable tail. Each flavor is its own
+    subtree, judged under its own preconditions, so a fused twin is no longer a flag flipped over
+    the unfused seed list: it has a verdict of its own, and a refused fused flavor leaves its
+    witness. Below the root, one level per decision the flat enumeration made implicitly:
+
+    - [conv-leg = cpu | gpu]: the implicit-GEMM pipeline's two routes (gh-ocannl-493), the one that
+      does not apply to the backend kind refuted. CPU first, the order the flat list had.
+    - CPU: [conv-shape = serial | grid | bm8 | bm16 | bm32] — the serial pipeline, its Grid-parallel
+      flavor, and the cache-blocked row panels (gh-ocannl-500).
+    - GPU: [conv-staging = plain | pipelined] above [conv-rows = whole | bm8 | bm16 | bm32], the
+      pipelined geometries then committing their [twin = depth<d>] (gh-ocannl-487). Staging sits
+      ABOVE the geometry so the leaves keep the flat list's order for any advertised depth list:
+      every plain geometry, then each geometry's depth twins in turn.
+
+    Every leaf is judged against the device's launch caps through {!launch_geometry_refutation}
+    (gh-ocannl-739), so an over-cap geometry is refuted with the gate's own sentence instead of
+    being filtered out of the list. *)
+
+let conv_offset_witness =
+  "a conv axis carries a nonzero padding offset, at which the packing anchor would mispack"
+
+(* The conv family's verdicts on one site, decided once and shared by both fusion flavors: every
+   gate below is flavor-independent, so each flavor's subtree reads the same judgments (forced on
+   first use) and only its leaves' [sk_epilogue] differs. *)
+let conv_family_tree ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~is_gpu ~is_cpu
+    ~(limits : Ir.Backend_intf.hardware_limits) ~(opt : LL.optimized) (site : conv_site) :
+    family_tree =
+  let prec = Lazy.force site.c_d.Ir.Tnode.storage_prec in
+  let a_prec = Lazy.force site.c_a.Ir.Tnode.storage_prec
+  and b_prec = Lazy.force site.c_b.Ir.Tnode.storage_prec in
+  (* Strided rows are seeded (gh-ocannl-502): the row's tile part in the input access is the single
+     term [stride*row] — the kernel-window symbol lands in the outer part, at the staging anchor —
+     so the compacting [Stage] packs the window densely, which satisfies [Tensorize]'s
+     unit-coefficient index discipline. Every axis must still be offset-free — which padded convs
+     from the tensor front end are: the halo is part of the physically padded buffer, buffer indices
+     absorb the shift, and [Stage]'s edge guards compare against the padded [Tn.dims] (pinned by the
+     cvp leg of schedule_conv_gemm). The gate is defense-in-depth against hand-built [Low_level]
+     sites with genuine offsets, where the packing anchor would mispack (Codex P1 on PR #168).
+     Candidates are timed, not value-checked, so unsound seeds must not be proposed at all; both
+     legs pack through the same [Stage] decomposition. *)
+  let offset_free = List.for_all site.c_axes ~f:(fun cx -> cx.cx_offset = 0) in
+  let n_real = List.length (conv_real_stmts site opt) in
+  let aligned = lazy (Option.is_some (conv_aligned_grid site opt)) in
+  (* The flavor-indexed builder preconditions (gh-ocannl-697): each fusion flavor judged by its own
+     companion demand. The fused demand is a subset of the unfused one (it skips the tail), so an
+     unfused pass implies the fused one and the fused query runs only where the unfused one fails,
+     as in [matmul_family_tree]. *)
+  let flavor_indexed judge =
+    let unfused = lazy (judge ~fused:false) in
+    let fused = lazy (match Lazy.force unfused with None -> None | Some _ -> judge ~fused:true) in
+    fun ~fused:f -> Lazy.force (if f then fused else unfused)
+  in
+  let gpu_coverage = flavor_indexed (fun ~fused -> conv_coverage_witness ~opt ~fused site) in
+  let direct_grid = flavor_indexed (fun ~fused -> conv_direct_grid_witness ~opt ~fused site) in
+  let leaf p =
+    match launch_geometry_refutation ~limits (conv_launch_geometry site p) with
+    | Some witness -> Sspace.Refuted witness
+    | None -> Sspace.Child (lazy (Sspace.Leaf p))
+  in
+  let subt t = Sspace.Child (lazy (t ())) in
+  (* A guard names every failing conjunct, as the census has always reported them. *)
+  let failing conds =
+    List.filter_map conds ~f:(fun (holds, why) -> if holds then None else Some (Lazy.force why))
+  in
+  let guard conds ok =
+    match failing conds with [] -> ok () | ws -> Sspace.Refuted (String.concat ~sep:"; " ws)
+  in
+  let base =
+    {
+      sk_gpu = false;
+      sk_mma = true;
+      sk_simd = 0;
+      sk_bm = 0;
+      sk_bn = 0;
+      sk_bk = 0;
+      sk_tm = 0;
+      sk_tn = 0;
+      sk_hoist = false;
+      sk_grid = false;
+      sk_pack_rest = false;
+      sk_conv = true;
+      sk_epilogue = false;
+      sk_swizzle = None;
+      sk_depth = 1;
+      sk_batch_grid = false;
+      sk_batch_inner = false;
+      sk_coalesce = None;
+      sk_pack_prec = None;
+      sk_tile = None;
+    }
+  in
+  (* The CPU leg: the register-tiled implicit-GEMM pipeline ([cpu_conv_sketch_schedule]). *)
+  let cpu_leg ~fused =
+    if not is_cpu then Sspace.Refuted "not a CPU target"
+    else
+      (* Compute-precision uniformity and vector-capability, resolved through the same
+         [Numerics.cpu_compute_prec] the emission asks (gh-ocannl-575) — see the matmul family's CPU
+         branch for the rationale. *)
+      let native_fp16 = limits.Ir.Backend_intf.native_fp16_arithmetic in
+      let comp_prec p = Ir.Numerics.cpu_compute_prec ~native_fp16_arithmetic:native_fp16 p in
+      let cprec = comp_prec prec in
+      let uniform_vec_capable =
+        (match cprec with
+          | Ir.Ops.Single_prec _ | Ir.Ops.Double_prec _ -> true
+          | Ir.Ops.Half_prec _ -> native_fp16
+          | _ -> false)
+        && Ir.Ops.equal_prec (comp_prec a_prec) cprec
+        && Ir.Ops.equal_prec (comp_prec b_prec) cprec
+        (* The C-tile accumulates at the compute precision, so a divergent accumulator residency
+           ([Fp16_wide] + [narrow_compute_f32 = false] on an f16 destination) is an emission decline
+           — mirror it here or the candidate is timed under a tensorized label (gh-ocannl-680; Codex
+           P1 round 1 on staging PR #477). *)
+        && Ir.Ops.equal_prec
+             (Ir.Numerics.cpu_accum_prec ~native_fp16_arithmetic:native_fp16 prec)
+             cprec
+      in
+      (* The renderer fills the widest vector the out-channel extent allows, halving where it must
+         ({!Ir.Backend_intf.simd_lanes_for}); seeding asks the same question, or it would withhold
+         candidates the renderer would in fact tile. *)
+      let lanes =
+        Ir.Backend_intf.simd_lanes_for ~vector_bytes:limits.Ir.Backend_intf.simd_vector.bytes
+          ~elt_bytes:(max 1 (Ir.Ops.prec_in_bytes cprec))
+          ~extent:site.c_noc
+      in
+      guard
+        [
+          ( limits.Ir.Backend_intf.simd_vector.bytes >= 8,
+            lazy
+              (Printf.sprintf "the %d-byte vector file is under 8 bytes"
+                 limits.Ir.Backend_intf.simd_vector.bytes) );
+          ( Option.is_some lanes,
+            lazy
+              (Printf.sprintf "no SIMD lane count fits the out-channel extent %d at %s" site.c_noc
+                 (Ir.Ops.prec_string cprec)) );
+          ( uniform_vec_capable,
+            lazy
+              "the operands' and the accumulator's compute precisions are not one vector-capable \
+               precision" );
+          (site.c_fma, lazy "the accumulation is not a fused multiply-add");
+          (offset_free, lazy conv_offset_witness);
+        ]
+        (fun () ->
+          let base =
+            {
+              base with
+              sk_epilogue = fused;
+              sk_pack_prec =
+                (if Ir.Ops.equal_prec cprec a_prec && Ir.Ops.equal_prec cprec b_prec then None
+                 else Some cprec);
+            }
+          in
+          (* The register-tile level (gh-ocannl-619 for the matmul family; gh-ocannl-697 here):
+             every CPU conv leaf is twinned with the geometries {!Ir.Register_tile.alternatives}
+             proposes for ITS micro-kernel extents — the GEMM row ([c_nrow], or the panel's [sk_bm]
+             rows) by the out-channel column — at the register tiling's compute precision, "auto"
+             (the renderer's own choice) first, so a site with no alternative keeps its pre-level
+             leaf. Under [autotune_register_tile_rm_twin] the level also carries the two-row twin,
+             as in the matmul family. *)
+          let leaf =
+            let rm_twin_seeded = Utils.registered_flag ~arg_name:"autotune_register_tile_rm_twin" in
+            let file = limits.Ir.Backend_intf.simd_vector in
+            let elt_bytes = max 1 (Ir.Ops.prec_in_bytes (cpu_register_tile_prec ~limits prec)) in
+            fun (p : sketch_params) ->
+              let m = if p.sk_bm = 0 then site.c_nrow else p.sk_bm and n = site.c_noc in
+              match
+                Ir.Register_tile.alternatives ~file ~elt_bytes ~m ~n
+                @
+                if rm_twin_seeded then
+                  Option.to_list (Ir.Register_tile.rm_twin ~file ~elt_bytes ~m ~n)
+                else []
+              with
+              | [] -> leaf p
+              | alts ->
+                  subt (fun () ->
+                      decided_choice
+                        ((Family_decision.Register_tile None, leaf p)
+                        :: List.map alts ~f:(fun t ->
+                            ( Family_decision.Register_tile (Some t),
+                              leaf { p with sk_tile = Some t } ))))
+          in
+          let outer_ok = match site.c_outer with (_, n) :: _ -> n >= 2 | [] -> false in
+          let no_alignment =
+            Printf.sprintf
+              "%d real statements and the default preset's aligned analysis gives no whole-segment \
+               Grid"
+              n_real
+          in
+          (* Grid flavors need every materialized write in the routine covered by the Grid axis
+             ([validate_parallel]), and the conv pipeline's own [Retype] only annotates the conv
+             nest: proposed when the conv statement is alone — or has exactly one companion
+             statement, the would-be epilogue tail, whose fused twin relocates the tail write under
+             the Grid loop. Segments with more companions (an aligned-merged segment, e.g. lenet's
+             conv+bias/relu+pooling) are proposed when the default preset's aligned cross-nest
+             analysis Grid-annotates the whole segment ([conv_aligned_grid]) — the pipeline then
+             adopts that whole-segment geometry, and its fused twin omits the preset [Retype] on the
+             tail nest the fusion consumes (fuse-before-annotate, gh-ocannl-501). *)
+          (* At most one companion statement: the builder Grid-types the conv nest's own loop, so
+             the flavor's companion demand must be empty ([conv_direct_grid_witness]). *)
+          let direct p =
+            match direct_grid ~fused with Some w -> Sspace.Refuted w | None -> leaf p
+          in
+          let grid =
+            if not outer_ok then Sspace.Refuted "no outer output loop of extent at least 2"
+            else if n_real <= 2 then direct { base with sk_grid = true }
+            else if Lazy.force aligned then leaf { base with sk_grid = true }
+            else Sspace.Refuted no_alignment
+          in
+          (* Cache-blocked row-panel flavors (gh-ocannl-500): the GEMM row split into panels of
+             [sk_bm] rows ([cpu_conv_sketch_schedule]'s [sk_bm] leg), at least two (possibly padded,
+             gh-ocannl-485) panels. A conv-alone segment [Grid]-parallelizes the panel loop, an
+             aligned-merged segment adopts the whole-segment [Grid] geometry and blocks the row
+             serially for cache residency. The whole-routine zeroed graph keeps the serial and Grid
+             flavors: its [Zero_out] is in the routine, so the aligned analysis bails. *)
+          (* The builder Grid-types the panel loop itself at two or fewer real statements, so
+             there the flavor's own companion demand decides ([direct]): the fused flavor, whose
+             tail the fusion relocates into the conv nest, passes where the unfused one is refuted
+             (Codex P2, round 1 on staging#1310 -- the pre-tree gate asked for the aligned
+             whole-segment geometry there, which the builder does not use, and so withheld the
+             fused panels of an unaligned conv+tail segment). With more statements the builder
+             adopts that aligned geometry, so it must exist. *)
+          let row_block bm =
+            if site.c_zeroed then
+              Sspace.Refuted "the conv output's whole-node Zero_out is in this lowering (c_zeroed)"
+            else if blocks_of site.c_nrow bm < 2 then
+              Sspace.Refuted
+                (Printf.sprintf "a %d-row panel gives fewer than two panels of the %d rows" bm
+                   site.c_nrow)
+            else if n_real <= 2 then direct { base with sk_bm = bm }
+            else if Lazy.force aligned then leaf { base with sk_bm = bm }
+            else Sspace.Refuted no_alignment
+          in
+          (* The shape menu's pad waste (gh-ocannl-1393, [judge_pad_waste]): a row panel that does
+             not divide the row pads it, relative to the unsplit shapes' ratio of 1. It never fires
+             at the default threshold — two or more panels keep the waste under 2x — but a lowered
+             [autotune_pad_waste_max] judges the panels like any geometry menu. *)
+          let row_axis bm = [ ("row", site.c_nrow, bm) ] in
+          subt (fun () ->
+              decided_choice
+                (judge_pad_waste
+                   ([
+                      (Family_decision.Conv_shape `Serial, row_axis 0, leaf base);
+                      (Family_decision.Conv_shape `Grid, row_axis 0, grid);
+                    ]
+                   @ List.map [ 8; 16; 32 ] ~f:(fun bm ->
+                       (Family_decision.Conv_shape (`Row_block bm), row_axis bm, row_block bm))))))
+  in
+  (* The GPU leg: the staged implicit-GEMM pipeline ([gpu_conv_sketch_schedule]). *)
+  let gpu_leg ~fused =
+    match (is_gpu, limits.Ir.Backend_intf.mma) with
+    | false, _ -> Sspace.Refuted "not a GPU target"
+    | true, None -> Sspace.Refuted "the backend advertises no mma capability"
+    | true, Some ({ Ir.Backend_intf.mma_simd_width = w; _ } as mma) -> (
+        let scope = conv_mma_scope site in
+        match mma_tile_for_precisions_in_scope mma ~scope ~a_prec ~b_prec ~d_prec:prec with
+        | None ->
+            Sspace.Refuted
+              (match wide_acc_withholding mma ~scope ~d_prec:prec with
+              | Some policy ->
+                  policy
+                  ^ " accumulator in the conv's emission scope, which the backend does not \
+                     advertise"
+              | None ->
+                  Printf.sprintf
+                    "the backend advertises no mma tile for operands (%s, %s) with accumulator %s"
+                    (Ir.Ops.prec_string a_prec) (Ir.Ops.prec_string b_prec)
+                    (Ir.Ops.prec_string prec))
+        | Some (tm_t, tn_t, tk_t) ->
+            (* The site's covering zero is the pipeline's to annotate, whichever form it arrives in:
+               a GPU fission segment's folded per-cell companion, or — on a whole-routine lowering
+               ([c_zeroed]) — the whole-node [Zero_out], which [conv_zero_geometry] expands into
+               that same nest (gh-ocannl-503). The coverage query ([conv_companion_geometry])
+               excludes it either way.
+
+               Companion coverage (gh-ocannl-1406): the builder's own [companion_geometry] verdict,
+               not a statement count, judged per fusion flavor ([gpu_coverage], gh-ocannl-697): an
+               unfused flavor whose tail cannot follow the accumulation nest's chain is refuted
+               here, while its fused flavor, whose demand skips that tail, keeps its geometries. *)
+            guard
+              [ (offset_free, lazy conv_offset_witness) ]
+              (fun () ->
+                match gpu_coverage ~fused with
+                | Some w -> Sspace.Refuted w
+                | None ->
+                    (* Pad-composition seeding (gh-ocannl-485): non-multiple column, reduction and
+                       row extents pad to the intrinsic tile (the seed carries the multiples in
+                       [sk_bn]/[sk_bk]/[sk_tm], 0 = already a multiple) and [Tensorize] masks the
+                       edges. The intrinsic-tile divisibility of the row is a PER-BLOCK property
+                       (gh-ocannl-500): a blocked flavor's micro-kernel row is [sk_bm], a multiple
+                       of the intrinsic row tile, while column and reduction stay whole-extent
+                       tensorized (blocking them would exceed the three-[Grid]-slot budget on 2-D
+                       convs). *)
+                    let noc_p = blocks_of site.c_noc tn_t * tn_t in
+                    let nred_p = blocks_of site.c_nred tk_t * tk_t in
+                    let rows_p = blocks_of site.c_nrow tm_t * tm_t in
+                    let pad_n = if site.c_noc % tn_t = 0 then 0 else tn_t in
+                    let pad_k = if site.c_nred % tk_t = 0 then 0 else tk_t in
+                    let pad_m = if site.c_nrow % tm_t = 0 then 0 else tm_t in
+                    (* The gate's own charge ([Sched.kernel_workgroup_bytes]): each tile one array
+                       of [copies] rotating copies, rounded to the backend's allocation granule,
+                       plus the per-kernel tile-MMA scratch of the site's triple, which every
+                       completion's [Tile_mma] carries (gh-ocannl-1330, gh-ocannl-1255). Each tile
+                       at its own operand's storage precision, the precision
+                       [gpu_conv_sketch_schedule]'s [Stage] (no [tile_prec]) declares it at: a
+                       mixed-precision site's narrow operand tiles are not priced at its wide
+                       accumulator (gh-ocannl-1452). A geometry whose accumulator is masked
+                       ([acc_masked]) also places its accumulator fragment, [rows x noc_p] at the
+                       output's storage precision, in workgroup-shared memory
+                       ([Sched.contract_tensorized_accumulator]'s [shared_frag]: a staged pipeline
+                       under pad masks); otherwise it stays in simdgroup fragments. A reduction pad
+                       alone masks nothing: [Tensorize] discharges its guard, the staged operands'
+                       padded slots being exact zeros. *)
+                    let memory_witness ~copies ~acc_masked rows =
+                      match limits.Ir.Backend_intf.max_workgroup_memory_bytes with
+                      | None -> None
+                      | Some cap ->
+                          let bytes =
+                            Sched.kernel_workgroup_bytes ~capabilities
+                              ~arrays:
+                                ([
+                                   copies * rows * nred_p * Ir.Ops.prec_in_bytes a_prec;
+                                   copies * nred_p * noc_p * Ir.Ops.prec_in_bytes b_prec;
+                                 ]
+                                @
+                                if acc_masked then [ rows * noc_p * Ir.Ops.prec_in_bytes prec ]
+                                else [])
+                              ~mma_triples:[ (prec, a_prec, b_prec) ]
+                          in
+                          if bytes <= cap then None
+                          else
+                            Some
+                              (Printf.sprintf
+                                 "staged tiles need %d bytes of workgroup memory%s, exceeding the \
+                                  %d-byte limit"
+                                 bytes
+                                 (if copies > 1 then Printf.sprintf " at pipeline depth %d" copies
+                                  else "")
+                                 cap)
+                    in
+                    (* A geometry whose [Tensorize] masks the accumulator: a column pad, or a row
+                       pad or row block that does not divide the row extent. *)
+                    let acc_masked p =
+                      p.sk_bn > 0 || if p.sk_bm = 0 then p.sk_tm > 0 else site.c_nrow % p.sk_bm <> 0
+                    in
+                    (* A geometry with any pad: the accumulator masks, or a reduction pad. *)
+                    let masked p = p.sk_bk > 0 || acc_masked p in
+                    (* Depth twins ride the async arms' element floor (Codex P2 on PR #317, as in
+                       the matmul sketch): staged tiles of sub-4-byte elements render the portable
+                       synchronous form only. *)
+                    let async_wide =
+                      Ir.Ops.prec_in_bytes a_prec >= 4 && Ir.Ops.prec_in_bytes b_prec >= 4
+                    in
+                    let gpu_base =
+                      {
+                        base with
+                        sk_gpu = true;
+                        sk_simd = w;
+                        sk_epilogue = fused;
+                        sk_bn = pad_n;
+                        sk_bk = pad_k;
+                      }
+                    in
+                    (* One geometry of the menu: its single-copy judgment, then — under the
+                       pipelined staging — its depth twins, each judged at its own footprint.
+                       Legality beats policy: the multiplied footprint refutes before the
+                       measured-cost exclusions apply. *)
+                    let geometry ~pipelined bm =
+                      let p0, rows =
+                        if bm = 0 then ({ gpu_base with sk_tm = pad_m }, rows_p)
+                        else ({ gpu_base with sk_bm = bm }, bm)
+                      in
+                      let single =
+                        if bm > 0 && bm % tm_t <> 0 then
+                          Some
+                            (Printf.sprintf "row block not a multiple of the %d-row mma tile" tm_t)
+                        else if bm > 0 && blocks_of site.c_nrow bm < 2 then
+                          Some
+                            (Printf.sprintf "row block gives fewer than two blocks of the %d rows"
+                               site.c_nrow)
+                        else memory_witness ~copies:1 ~acc_masked:(acc_masked p0) rows
+                      in
+                      match single with
+                      | Some w -> Sspace.Refuted w
+                      | None when not pipelined -> leaf p0
+                      | None ->
+                          subt (fun () ->
+                              decided_choice
+                                (List.map mma.Ir.Backend_intf.mma_pipeline_depths ~f:(fun d ->
+                                     ( Family_decision.Twin (`Depth d),
+                                       let twin = leaf { p0 with sk_depth = d } in
+                                       if d < 1 || d > 2 then
+                                         (* The capability list is advisory; the implemented range
+                                            is [Schedule.apply_stage]'s. *)
+                                         Sspace.Refuted
+                                           (Printf.sprintf
+                                              "pipeline depth %d is outside the implemented range \
+                                               1..2 (Schedule.apply_stage)"
+                                              d)
+                                       else
+                                         match
+                                           ( memory_witness ~copies:d ~acc_masked:(acc_masked p0)
+                                               rows,
+                                             twin )
+                                         with
+                                         | Some w, _ -> Sspace.Refuted w
+                                         | None, (Sspace.Refuted _ as refuted) -> refuted
+                                         | None, _ ->
+                                             if masked p0 then
+                                               Sspace.Excluded
+                                                 ( "pad-masked flavor: Tensorize stays on the \
+                                                    barrier-bracketed per-call arm, whose leading \
+                                                    bracket sits between the prefetch and the \
+                                                    compute, so the twin could only pay the \
+                                                    doubled footprint (Codex P2 on PR #303)",
+                                                   lazy twin )
+                                             else if not async_wide then
+                                               Sspace.Excluded
+                                                 ( "below the async arms' 4-byte element floor: \
+                                                    only the synchronous copy would render, so the \
+                                                    twin could only pay the doubled footprint \
+                                                    (Codex P2 on PR #317)",
+                                                   lazy twin )
+                                             else twin ))))
+                    in
+                    (* The geometry menu's pad waste (gh-ocannl-1393, [judge_pad_waste]): the row
+                       padded to the row block (the intrinsic row tile for the whole extent), the
+                       out-channel and reduction extents to the intrinsic tile. Those two are
+                       site-wide — every geometry pads them alike — so they cancel in the relative
+                       judgment: a small-channel site is never excluded for its channel pads, since
+                       the menu has no less-padded sibling to replace it with, and the least-padded
+                       geometry is never excluded. What the menu judges is the row: never at the
+                       default threshold (two or more row blocks keep their waste under 2x), but
+                       under a lowered [autotune_pad_waste_max]. *)
+                    let menu ~pipelined () =
+                      decided_choice
+                        (judge_pad_waste
+                           (List.map [ 0; 8; 16; 32 ] ~f:(fun bm ->
+                                ( Family_decision.Conv_rows bm,
+                                  [
+                                    ("row", site.c_nrow, if bm = 0 then tm_t else bm);
+                                    ("oc", site.c_noc, tn_t);
+                                    ("red", site.c_nred, tk_t);
+                                  ],
+                                  geometry ~pipelined bm ))))
+                    in
+                    subt (fun () ->
+                        decided_choice
+                          [
+                            (Family_decision.Conv_staging `Plain, subt (menu ~pipelined:false));
+                            ( Family_decision.Conv_staging `Pipelined,
+                              if List.is_empty mma.Ir.Backend_intf.mma_pipeline_depths then
+                                Sspace.Refuted "the backend advertises no pipelined staging depth"
+                              else subt (menu ~pipelined:true) );
+                          ])))
+  in
+  let flavor ~fused =
+    Sspace.Child
+      (lazy
+        (decided_choice
+           [
+             (Family_decision.Conv_leg `Cpu, cpu_leg ~fused);
+             (Family_decision.Conv_leg `Gpu, gpu_leg ~fused);
+           ]))
+  in
+  (* Unfused first, so the leaves keep the seeds-then-twins order the flat enumeration established
+     (candidate timing order, dedup keep-first). The fused flavor is a construction-time verdict of
+     the root, as in {!matmul_family_tree}: refuted with the fusion recognizer's own reason when the
+     base code carries no fusable tail. The whole-window accumulator contraction
+     ([contract_tensorized_accumulator], gh-ocannl-501) lands the fragment store-back after the full
+     kernel window, so [Fuse_epilogue]'s exactly-once check passes by construction on every conv
+     flavor, multi-window (2-D) convs included. *)
+  decided_choice
+    [
+      (Family_decision.Fusion `Unfused, flavor ~fused:false);
+      ( Family_decision.Fusion `Fused,
+        match Sched.fuse_epilogue_witness ~target:site.c_d opt with
+        | Some w -> Sspace.Refuted w
+        | None -> flavor ~fused:true );
+    ]
+
+let conv_sketch_tree ?capabilities ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
+    (opt : LL.optimized) : family_tree option =
+  Option.map (detect_conv opt.LL.llc) ~f:(fun site ->
+      conv_family_tree ?capabilities ~is_gpu ~is_cpu ~limits ~opt site)
+
 (** {2 The composed seed list} *)
 
 (* What one lowering's family seeding found (gh-ocannl-1407): the family that claimed it, with the
-   verdicts its seeds came from. *)
+   tree its seeds are the leaves of. *)
 type family_seeding =
   | Seeding_matmul of { site : matmul_site; tree : family_tree }
-  | Seeding_conv of { judgment : conv_judgment; fused_twins : bool; twin_refusal : string option }
+  | Seeding_conv of { site : conv_site; real_stmts : int; tree : family_tree }
   | Seeding_none
 
 (* The families composed into the seed list the search enumerates: the matmul family when a matmul
-   site is detected, else the convolution family, each with its epilogue-fusion twins. Returned
-   beside the seeds, so the seeding census reports the judgment the seeds came from. *)
-let family_seeding ?capabilities ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
-    (opt : LL.optimized) : family_seeding * sketch_params list =
-  (* Fused-epilogue variants (gh-ocannl-486): when the site's output feeds an eligible elementwise
-     tail, every seed gets a fused twin — the tuner measures fused (one kernel) vs. unfused (the
-     fissioned two-kernel form). The check runs on the base code where the plain accumulation-nest
-     fusion site applies; seeds whose scheduled form no longer admits the fusion fail their
-     candidate compile and are skipped. For the matmul family the fusion choice is the tree's root
-     level (gh-ocannl-613), so its leaves already carry the twins, each flavor under its own
-     preconditions; the conv family is not tree-factored yet and flag-flips its seeds. *)
+   site is detected, else the convolution family. Both are refinement trees rooted at the
+   epilogue-fusion level (gh-ocannl-613, gh-ocannl-697), so the seeds are the claiming tree's
+   leaves, fused twins included, each flavor under its own preconditions. Returned beside the seeds,
+   so the seeding census reports the verdicts the seeds came from. *)
+let claimed_family ?capabilities ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
+    (opt : LL.optimized) : family_seeding =
   match detect_matmul_canonical opt with
   | Some (site, _, opt) ->
-      let tree = matmul_family_tree ?capabilities ~is_gpu ~is_cpu ~limits ~opt site in
-      (Seeding_matmul { site; tree }, Sspace.leaves tree)
+      Seeding_matmul
+        { site; tree = matmul_family_tree ?capabilities ~is_gpu ~is_cpu ~limits ~opt site }
   | None -> (
-      match conv_seed_judgment ?capabilities ~is_gpu ~is_cpu ~limits opt with
-      | None -> (Seeding_none, [])
-      | Some judgment ->
-          let seeds = conv_judgment_seeds judgment in
-          (* [Sched.can_fuse_epilogue], with the recognizer's reason kept for the census. *)
-          let twin_refusal =
-            if List.is_empty seeds then None
-            else Sched.fuse_epilogue_witness ~target:judgment.cj_site.c_d opt
-          in
-          let fused_twins = (not (List.is_empty seeds)) && Option.is_none twin_refusal in
-          ( Seeding_conv { judgment; fused_twins; twin_refusal },
-            if fused_twins then seeds @ List.map seeds ~f:(fun p -> { p with sk_epilogue = true })
-            else seeds ))
+      match detect_conv opt.LL.llc with
+      | None -> Seeding_none
+      | Some site ->
+          Seeding_conv
+            {
+              site;
+              real_stmts = List.length (conv_real_stmts site opt);
+              tree = conv_family_tree ?capabilities ~is_gpu ~is_cpu ~limits ~opt site;
+            })
+
+let family_seeding ?capabilities ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
+    (opt : LL.optimized) : family_seeding * sketch_params list =
+  let family = claimed_family ?capabilities ~is_gpu ~is_cpu ~limits opt in
+  ( family,
+    match family with
+    | Seeding_matmul { tree; _ } | Seeding_conv { tree; _ } -> Sspace.leaves tree
+    | Seeding_none -> [] )
+
+(* The claiming family's tree, as {!family_seeding} chooses it, unforced below its root: the search
+   driver's entry into the family space ({!Autotune.model_family_search}). *)
+let sketch_family_tree ?capabilities ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
+    (opt : LL.optimized) : family_tree option =
+  match claimed_family ?capabilities ~is_gpu ~is_cpu ~limits opt with
+  | Seeding_matmul { tree; _ } | Seeding_conv { tree; _ } -> Some tree
+  | Seeding_none -> None
 
 let sketch_seed_params ?capabilities ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
     (opt : LL.optimized) : sketch_params list =
@@ -4888,17 +4915,18 @@ let seeding_census_prefix = "autotune-seeding:"
 let seeding_census_lines ~where (c : seeding_census) : string list =
   let line fmt = Printf.ksprintf (fun s -> seeding_census_prefix ^ " " ^ s) fmt in
   let detail fmt = Printf.ksprintf (fun s -> seeding_census_prefix ^ "   " ^ s) fmt in
+  let verdicts tree =
+    Printf.sprintf " refuted=%d excluded=%d"
+      (List.length (Sspace.refutations tree))
+      (List.length (Sspace.exclusions tree))
+  in
   let family, site, verdicts =
     match c.sc_family with
     | Seeding_none -> ("none", "", "")
     | Seeding_matmul { site; tree } ->
-        ( "matmul",
-          " site=" ^ Ir.Tnode.debug_name site.m_d,
-          Printf.sprintf " refuted=%d excluded=%d"
-            (List.length (Sspace.refutations tree))
-            (List.length (Sspace.exclusions tree)) )
-    | Seeding_conv { judgment; _ } ->
-        ("conv", " site=" ^ Ir.Tnode.debug_name judgment.cj_site.c_d, "")
+        ("matmul", " site=" ^ Ir.Tnode.debug_name site.m_d, verdicts tree)
+    | Seeding_conv { site; tree; _ } ->
+        ("conv", " site=" ^ Ir.Tnode.debug_name site.c_d, verdicts tree)
   in
   let head =
     line "where=%S stmts=%d whole_zeros=%d family=%s%s seeds=%d%s%s" where c.sc_stmts
@@ -4909,36 +4937,30 @@ let seeding_census_lines ~where (c : seeding_census) : string list =
           Printf.sprintf " coalesced_seeds=%d"
             (List.sum (module Int) vs ~f:(fun v -> List.length v.cv_seeds)))
   in
+  (* One line per distinct witness, in traversal order, with its multiplicity and the first refuted
+     commitment's path — the same rendering for both families, whose refusals are both their trees'
+     refutations (gh-ocannl-697). *)
+  let refutation_lines tree =
+    let counts = Hashtbl.create (module String) in
+    let firsts =
+      List.filter (Sspace.refutations tree) ~f:(fun (_, witness) ->
+          let seen = Hashtbl.mem counts witness in
+          Hashtbl.incr counts witness;
+          not seen)
+    in
+    List.map firsts ~f:(fun (path, witness) ->
+        detail "refuted x%d at %s: %s" (Hashtbl.find_exn counts witness)
+          (Sspace.render_path ~label:Family_decision.to_label path)
+          witness)
+  in
   let family_details =
     match c.sc_family with
     | Seeding_none -> []
-    | Seeding_matmul { tree; _ } ->
-        (* One line per distinct witness, in traversal order, with its multiplicity and the first
-           refuted commitment's path. *)
-        let counts = Hashtbl.create (module String) in
-        let firsts =
-          List.filter (Sspace.refutations tree) ~f:(fun (_, witness) ->
-              let seen = Hashtbl.mem counts witness in
-              Hashtbl.incr counts witness;
-              not seen)
-        in
-        List.map firsts ~f:(fun (path, witness) ->
-            detail "refuted x%d at %s: %s" (Hashtbl.find_exn counts witness)
-              (Sspace.render_path ~label:Family_decision.to_label path)
-              witness)
-    | Seeding_conv { judgment = j; fused_twins; twin_refusal } ->
-        let leg name (l : conv_leg) =
-          (match l.leg_refusal with
-          | Some why -> detail "%s leg: refused: %s" name why
-          | None -> detail "%s leg: %d seeds" name (List.length l.leg_seeds))
-          :: List.map l.leg_notes ~f:(fun note -> detail "%s leg: %s" name note)
-        in
-        detail "conv site %s: zeroed=%b real_stmts=%d epilogue_twins=%b"
-          (Ir.Tnode.debug_name j.cj_site.c_d)
-          j.cj_site.c_zeroed j.cj_real_stmts fused_twins
-        :: (leg "cpu" j.cj_cpu @ leg "gpu" j.cj_gpu)
-        @ Option.to_list
-            (Option.map twin_refusal ~f:(fun why -> detail "epilogue twins withheld: %s" why))
+    | Seeding_matmul { tree; _ } -> refutation_lines tree
+    | Seeding_conv { site; real_stmts; tree } ->
+        detail "conv site %s: zeroed=%b real_stmts=%d" (Ir.Tnode.debug_name site.c_d) site.c_zeroed
+          real_stmts
+        :: refutation_lines tree
   in
   let nests =
     match c.sc_conv_nests with
@@ -4963,8 +4985,8 @@ let seeding_census_lines ~where (c : seeding_census) : string list =
   in
   (head :: family_details) @ coalesced @ nests
 
-(* The exported tree view of the matmul family (site detection included); the conv family factors
-   the same way as a follow-up. *)
+(* The exported tree view of the matmul family alone (site detection included);
+   {!sketch_family_tree} is the view of whichever family claims the lowering. *)
 let matmul_sketch_tree ?capabilities ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
     (opt : LL.optimized) : family_tree option =
   Option.map (detect_matmul_canonical opt) ~f:(fun (site, _, opt) ->

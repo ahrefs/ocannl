@@ -67,6 +67,13 @@ files.
   command buffers overlap over untracked resources: back-to-back runs of the SAME routine need
   the FIFO wait, pipelined (no-sync) timing is unreliable, and `get_values`/`set_values` do FULL
   awaits by design.
+- What a kernel lists from its node store (parameters, Metal's pool-slot table, local declarations)
+  goes in `C_syntax.store_order`: first-touch order in the code (`Low_level.touched_tns_in_order`),
+  never a traversal of the uid-keyed `traced_store` hash table and never a sort by spelling — node
+  identifiers and static-index names carry minted numbers (`n9999_w`, `i12`), and a string sort of
+  those flips at a power of ten. Two fresh builds of one program therefore emit one kernel up to
+  those numbers; `Test_utils.Generated.normalize_minted` renames them away, and
+  `test/operations/fresh_build_kernel_text` (gh-ocannl-1473) pins it, ids straddling 10^4 included.
 - Query optional `MTLCompileOptions` properties on an initialized object, not through the nominal
   class's `instancesRespondToSelector:`. On macOS 26.6.2 that class-level query returned false for
   the macOS-15 math properties even though the object accepted them, silently selecting the macOS-14

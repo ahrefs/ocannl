@@ -765,9 +765,10 @@ type entry = {
    15: gh-ocannl-1414 -- two-loop reduction bands become split-reduce sites, coalesced or interchanged
    16: gh-ocannl-1388 -- the seeded untuned plan seeds the search first, a floor older crowns lack
    17: gh-ocannl-1279 -- contraction-coalesced seeds: a two-axis contraction tiled along one merged k
-   18: gh-ocannl-1397 -- a strided 1x1 conv's GEMM row is the taller of b and ow: new seeds at b 2-8
+   18: gh-ocannl-697 -- the CPU conv seeds' register-tile twins, a menu older crowns never searched
+   19: gh-ocannl-1397 -- a strided 1x1 conv's GEMM row is the taller of b and ow: new seeds at b 2-8
 *)
-let entry_version = 18
+let entry_version = 19
 
 let sanitize name =
   String.map name ~f:(fun c ->
