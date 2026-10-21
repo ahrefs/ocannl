@@ -858,6 +858,14 @@ files.
   tabulation of the record is equal, both sides populated; on CUDA the tf32 pair is where an
   arm-blind fingerprint fails it), and gh-ocannl-663's width uniformity read off the arm table
   (every uniform-storage arm accumulates at `accum_prec`; skipped where there are no arms).
+- **Each tile-MMA backend states its acceptance and its reduction loop once, in its pure module**
+  (gh-ocannl-1456): `Cuda_mma.wmma_accepts` and `Hip_mma.accepts` are the one operand predicate
+  (layouts, tile divisibility, stride multiples, addressed spaces; CUDA's floor too) every
+  statement and fragment-scope site of that backend decides by, a destination being `` `Resident ``
+  (update-only) or `` `Addressed ``; and `Cuda_mma.wmma_k_loop_lines`, `Metal_mma.k_loop_lines`
+  and `Hip_mma.k_loop_lines` are the loops both hooks render, beside the `operand_fragments` that
+  describes them. A new site calls the predicate rather than restating a conjunct; a loop change
+  is a change to that function, which `mma_format_arm_tables` counts device-free.
 - **One maintainer-approved exception to the numerics-gate rule** (the next bullet, and AGENTS.md's
   config-profiles rule): **the untuned GPU split** (gh-ocannl-1325, CUDA and HIP since gh-ocannl-1412,
   `gpu_default_split_reduce_min_serial`). It reassociates the long, narrow reductions of a training

@@ -135,8 +135,11 @@ files.
   at all and in which scope, in the renderer's order: a fragment-marked statement through its
   region (`Low_level.fragment_region`, the renderer's own recognition, finds the backing target), in the
   fragment scope where `mma_fragment_syntax` accepts the target and the update-only call, else as
-  statements against the target; an unmarked one per statement. A
-  backend that describes no arm (CPU register tiles, Metal, HIP) gets `Undescribed`, code with no
+  statements against the target; an unmarked one per statement. CUDA, Metal and HIP describe
+  every arm (Metal's and HIP's since gh-ocannl-1456: their whole-fragment loads, once per reduction
+  step, and no `ldmatrix`), pinned device-free by `mma_format_arm_tables`, which counts the loads of
+  each pure-module reduction loop against `Cost_model.statement_operand_loads`. A
+  backend that describes no arm (the CPU register tiles) gets `Undescribed`, code with no
   `Tile_mma` `No_tile_mma` (`Cost_model.load_count`), and a keyless leaf neither wins nor loses a tie: each review round of staging#1216 that restated an
   emission detail in the cost model found the next arm it got wrong. `Schedule_space.search
   ~tie_break` lets a tied keyed leaf displace a keyed best, never the incumbent, and enters a

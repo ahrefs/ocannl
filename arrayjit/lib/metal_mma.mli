@@ -27,3 +27,50 @@ val capability : Backend_intf.mma_capability
 (** The tile-MMA descriptor of an Apple7+ device. Its [mma_format_tiles] lists the STORAGE triples
     {!mma_accumulator} has an arm for; [test/operations/mma_format_arm_tables] checks the
     correspondence both ways under every numerics policy. *)
+
+(** {1 Operand loads (gh-ocannl-1456)} *)
+
+val tile : int
+(** [simdgroup_matrix]'s square extent: every arm's intrinsic tile is [tile x tile x tile]. *)
+
+val k_loop_lines :
+  a_frag:string ->
+  b_frag:string ->
+  acc:string ->
+  ta:bool ->
+  tb:bool ->
+  lda:int ->
+  ldb:int ->
+  m:int ->
+  n:int ->
+  k:int ->
+  string list
+(** The reduction loop of an accepted [m x n x k] [Tile_mma] statement, as both of the backend's
+    hooks render it: [simdgroup_load]s of the [a] and [b] tiles from [__mma_ap] / [__mma_bp] (with
+    [transpose_matrix] for transposed storage, [ta] / [tb]) and [simdgroup_multiply_accumulate] into
+    the [mt x nt] accumulator array [acc]. [a_frag] / [b_frag] are the operand fragment types. *)
+
+val operand_fragments :
+  a_prec:Ops.prec ->
+  b_prec:Ops.prec ->
+  d_prec:Ops.prec ->
+  scope:Backend_intf.mma_emission_scope ->
+  Backend_intf.mma_fragments option
+(** How {!k_loop_lines} brings the operands of a triple with an arm ({!mma_accumulator}) into
+    registers: the {!tile} cube, each fragment once per reduction step, whole. The backend's
+    [C_syntax_config.mma_operand_fragments]; [test/operations/mma_format_arm_tables] counts the
+    loads {!k_loop_lines} renders against it. *)
+
+val operand_loads :
+  a_prec:Ops.prec ->
+  b_prec:Ops.prec ->
+  d_prec:Ops.prec ->
+  scope:Backend_intf.mma_emission_scope ->
+  ta:bool ->
+  tb:bool ->
+  a:Backend_intf.mma_operand_place ->
+  b:Backend_intf.mma_operand_place ->
+  bool * bool
+(** [(false, false)]: Metal has no [ldmatrix] analogue — the hooks decline a swizzled operand, and
+    every load {!k_loop_lines} emits is a whole-fragment [simdgroup_load]. The backend's
+    [C_syntax_config.mma_operand_loads]. *)

@@ -835,6 +835,10 @@ module Impl = struct
 
     let mma_arm = Metal_mma.mma_arm
 
+    (* gh-ocannl-1456: how [Metal_mma.k_loop_lines], which both hooks render, loads its operands. *)
+    let mma_operand_loads = Metal_mma.operand_loads
+    let mma_operand_fragments = Metal_mma.operand_fragments
+
     (* MSL leaves the element-to-thread mapping unspecified, so a half/bfloat fragment cannot supply
        the coordinates of a float accumulator (gh-ocannl-1075). Load the row-major table into the
        accumulator's own type and convert scalar cells at the coordinates it names. [simdgroup_load]
@@ -939,7 +943,7 @@ module Impl = struct
              [ldmatrix] analogue, so a swizzled operand layout declines to the caller's scalar
              fallback (gh-ocannl-481 item 3, D2). *)
           let plain = function `Plain -> true | `Swizzled_b128 -> false in
-          let tile = 8 in
+          let tile = Metal_mma.tile in
           let frag_types =
             if plain d_layout && plain a_layout && plain b_layout then
               mma_fragment_types ~d_prec ~a_prec ~b_prec
@@ -950,48 +954,17 @@ module Impl = struct
             | `Shared -> Some "threadgroup"
             | `Thread | `Fragment _ -> None
           in
-          (* Tile load at role-space block (row_i, col_i): transposed storage keeps the operand's
-             own leading dimension and indexes the STORED matrix at (col_i, row_i);
-             [simdgroup_load]'s [transpose_matrix] flag transposes the 8×8 tile in flight. *)
-          let load_line frag ptr ~row_i ~col_i ld ~transpose =
-            if transpose then
-              Printf.sprintf
-                "    simdgroup_load(%s, %s + %s * %d * %d + %s * %d, (ulong)%d, ulong2(0), true);"
-                frag ptr col_i tile ld row_i tile ld
-            else
-              Printf.sprintf "    simdgroup_load(%s, %s + %s * %d * %d + %s * %d, (ulong)%d);" frag
-                ptr row_i tile ld col_i tile ld
-          in
           match (frag_types, d_space, addr_space a_space, addr_space b_space) with
           | Some (_acc_frag, a_frag, b_frag, _d_frag), `Fragment fragment, Some a_as, Some b_as
             when m % tile = 0
                  && n % tile = 0
                  && k % tile = 0
                  && Option.is_some (hardware_limits ()).Backend_intf.mma ->
-              let mt = m / tile and nt = n / tile and kt = k / tile in
               let ptr_decl name aspace elem ptr =
                 string (Printf.sprintf "%s %s *%s = " aspace elem name) ^^ ptr ^^ semi
               in
               let body_lines =
-                [
-                  Printf.sprintf "for (int __ki = 0; __ki < %d; ++__ki) {" kt;
-                  Printf.sprintf "  %s __mma_bf[%d];" b_frag nt;
-                  Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
-                  load_line "__mma_bf[__ni]" "__mma_bp" ~row_i:"__ki" ~col_i:"__ni" ldb
-                    ~transpose:tb;
-                  "  }";
-                  Printf.sprintf "  for (int __mi = 0; __mi < %d; ++__mi) {" mt;
-                  Printf.sprintf "    %s __mma_af;" a_frag;
-                  load_line "__mma_af" "__mma_ap" ~row_i:"__mi" ~col_i:"__ki" lda ~transpose:ta;
-                  Printf.sprintf "    for (int __ni = 0; __ni < %d; ++__ni) {" nt;
-                  Printf.sprintf
-                    "      simdgroup_multiply_accumulate(%s[__mi][__ni], __mma_af, __mma_bf[__ni], \
-                     %s[__mi][__ni]);"
-                    fragment fragment;
-                  "    }";
-                  "  }";
-                  "}";
-                ]
+                Metal_mma.k_loop_lines ~a_frag ~b_frag ~acc:fragment ~ta ~tb ~lda ~ldb ~m ~n ~k
               in
               let body ~a_ptr ~b_ptr =
                 ptr_decl "__mma_ap" (Printf.sprintf "const %s" a_as) (typ_of_prec a_prec) a_ptr
@@ -1015,7 +988,7 @@ module Impl = struct
                      && n % tile = 0
                      && k % tile = 0
                      && Option.is_some (hardware_limits ()).Backend_intf.mma ->
-                  let mt = m / tile and nt = n / tile and kt = k / tile in
+                  let mt = m / tile and nt = n / tile in
                   let ptr_decl name aspace elem ptr =
                     string (Printf.sprintf "%s %s *%s = " aspace elem name) ^^ ptr ^^ semi
                   in
@@ -1040,26 +1013,9 @@ module Impl = struct
                              (Printf.sprintf "__mma_dp + __mi * %d * %d + __ni * %d" tile ldd tile)
                            ~ldd)
                         ~f:(fun line -> "    " ^ line)
-                    @ [
-                        "  }";
-                        "}";
-                        Printf.sprintf "for (int __ki = 0; __ki < %d; ++__ki) {" kt;
-                        Printf.sprintf "  %s __mma_bf[%d];" b_frag nt;
-                        Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
-                        load_line "__mma_bf[__ni]" "__mma_bp" ~row_i:"__ki" ~col_i:"__ni" ldb
-                          ~transpose:tb;
-                        "  }";
-                        Printf.sprintf "  for (int __mi = 0; __mi < %d; ++__mi) {" mt;
-                        Printf.sprintf "    %s __mma_af;" a_frag;
-                        load_line "__mma_af" "__mma_ap" ~row_i:"__mi" ~col_i:"__ki" lda
-                          ~transpose:ta;
-                        Printf.sprintf "    for (int __ni = 0; __ni < %d; ++__ni) {" nt;
-                        "      simdgroup_multiply_accumulate(__mma_acc[__mi][__ni], __mma_af, \
-                         __mma_bf[__ni], __mma_acc[__mi][__ni]);";
-                        "    }";
-                        "  }";
-                        "}";
-                      ]
+                    @ [ "  }"; "}" ]
+                    @ Metal_mma.k_loop_lines ~a_frag ~b_frag ~acc:"__mma_acc" ~ta ~tb ~lda ~ldb ~m
+                        ~n ~k
                     @ [
                         Printf.sprintf "for (int __mi = 0; __mi < %d; ++__mi) {" mt;
                         Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
@@ -1113,7 +1069,7 @@ module Impl = struct
              [ldmatrix] analogue, so a swizzled operand layout declines to the caller's scalar
              fallback (gh-ocannl-481 item 3, D2). *)
           let plain = function `Plain -> true | `Swizzled_b128 -> false in
-          let tile = 8 in
+          let tile = Metal_mma.tile in
           let frag_types =
             if plain d_layout && plain a_layout && plain b_layout then
               mma_fragment_types ~d_prec ~a_prec ~b_prec
