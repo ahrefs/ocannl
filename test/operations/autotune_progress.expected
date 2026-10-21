@@ -8,6 +8,13 @@ each search printed one candidate line per attempt it reports: true
 each search names its base compile before starting it: true
 every candidate line names the attempt it starts: true
 each search's candidate compile and timing seconds fit within its elapsed time: true
+each candidate line is answered by one compiled line for the same attempt: true
+each search's base compile has its compiled line, attempt baseline: true
+some compile reached link: true
+every compiled line has a known verdict, and its phases fit within its wall: true
+a compile renders at least the kernels it compiles, and one that reached link renders some: true
+a candidate decided before codegen (dedup or refused) rendered no kernel: true
+each report's compile_cost counts the kernels of its search's compiled lines: true
 a beam round ran: true
 each phase's candidate lines count 1..N against its announced total N: true
 one arm_start and one arm_done per report: true

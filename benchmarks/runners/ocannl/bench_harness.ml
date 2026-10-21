@@ -337,13 +337,18 @@ let percentile sorted p =
 
     Each candidate the tuner attempts prints an [attempt] line with the elapsed wall, which is how
     far a killed search got; an attempt is a compile unless [autotune_bound_pruning] prunes it
-    first. Each search's [baseline] is an attempt too: it is compiled, so it fires the attempt seam,
-    but a GPU backend refuses to dispatch it (gh-ocannl-532) and [autotune_progress]'s [attempts]
-    does not count it, so this count runs one per search ahead of that log's. A tagged call that
-    raises after its pre-dispatch validation (a classified launch or synchronization failure the
-    search survives) returns no record: the trace counts it as raised -- validations started less
-    tagged records returned -- and a summary with any says INCOMPLETE, since that call's cost is in
-    no total.
+    first. Each search's [baseline] is an attempt too: it fires the attempt seam inside its
+    compile's transform, which on a GPU backend refuses it there, before codegen, since it would
+    bind no hardware dimension (gh-ocannl-532, gh-ocannl-1340), and [autotune_progress]'s [attempts]
+    does not count it, so this count runs one per search ahead of that log's. Every compile a search
+    makes -- the baseline's, each candidate's, a replay's, the winner's -- prints a [compile] line
+    as it returns ({!Autotune.install_compile_observer}, gh-ocannl-1314): its stage, label and
+    verdict, its wall and its phases (lowering, transform, codegen, the vendor compiler, link) and
+    how many of its kernels the vendor compiler was given, which is fewer than it rendered where the
+    backend reused compiled kernels. A tagged call that raises after its pre-dispatch validation (a
+    classified launch or synchronization failure the search survives) returns no record: the trace
+    counts it as raised -- validations started less tagged records returned -- and a summary with
+    any says INCOMPLETE, since that call's cost is in no total.
 
     The [decision] line carries the policy's own metadata (gh-ocannl-1199): the search phase, the
     exit that chose the depth, the fitted fixed and marginal costs and the fit's verdict, what the
@@ -461,6 +466,26 @@ let install_timing_trace () =
       Int.incr attempts;
       pr "timing-trace: attempt %d at %.1fs: %s\n" !attempts (now () -. t0) label;
       prev_attempt label );
+    let compiles = ref 0 and compile_s = ref 0. and device_s = ref 0. in
+    let kernels = ref 0 and kernels_compiled = ref 0 in
+    Autotune.install_compile_observer (fun (r : Autotune.compile_record) ->
+        let c = r.compile_cost in
+        Int.incr compiles;
+        compile_s := !compile_s +. r.compile_wall_s;
+        device_s := !device_s +. Option.value c.device_s ~default:0.;
+        kernels := !kernels + c.kernels;
+        kernels_compiled := !kernels_compiled + c.kernels_compiled;
+        pr
+          "timing-trace: compile %d at %.1fs: %s %S %s, %.3f s (lower %.3f, transform %.3f, \
+           codegen %.3f, device %s, link %.3f), %d of %d kernels compiled | totals: %d compiles, \
+           %.2f s, device %.2f s, %d of %d kernels compiled\n"
+          !compiles
+          (now () -. t0)
+          r.compile_stage r.compile_attempt r.compile_verdict r.compile_wall_s c.lower_s
+          c.transform_s (Ir.Compile_cost.codegen_s c)
+          (Option.value_map c.device_s ~default:"none" ~f:(Printf.sprintf "%.3f"))
+          c.link_s c.kernels_compiled c.kernels !compiles !compile_s !device_s !kernels_compiled
+          !kernels);
     let prev_preflight = Autotune.Seam.get Autotune.on_candidate_preflight in
     ( Autotune.Seam.set Autotune.on_candidate_preflight @@ fun name ->
       Int.incr preflights;
