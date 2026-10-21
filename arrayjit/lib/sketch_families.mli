@@ -200,8 +200,10 @@ type matmul_site = {
   m_bi : (Ir.Indexing.symbol * int) list;  (** Batch loops inside the row loop. *)
   m_row_axis : int;
   m_row_stride : int;
-      (** [m_a]'s coefficient on [m_i]: [1] wherever a unit-stride row exists, greater on a strided
-          row only a compacting [Stage] of [m_a] can tile (gh-ocannl-1148). *)
+      (** [m_a]'s coefficient on [m_i]: greater than [1] on a strided row only a compacting [Stage]
+          of [m_a] can tile (gh-ocannl-1148), which the classifier picks where no unit-stride row
+          exists or where it is strictly taller than the unit-stride one (gh-ocannl-1397); [1]
+          otherwise. *)
   m_d : Ir.Tnode.t;
   m_a : Ir.Tnode.t;
   m_b : Ir.Tnode.t;

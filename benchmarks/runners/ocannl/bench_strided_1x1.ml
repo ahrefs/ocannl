@@ -26,13 +26,23 @@ open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
 
+(* Every output cell is a sum of [ic] products of values at most 7 and 5, which f32 holds exactly up
+   to 2^24: the oracle's exactness claim is only made where every sum is in range. *)
+let max_exact = 1 lsl 24
+
 let parse_site s =
   match String.lsplit2 s ~on:'=' with
   | Some (name, dims) -> (
       match List.map (String.split dims ~on:',') ~f:Int.of_string with
-      | [ b; h; w; ic; oc ] when b >= 1 && h >= 2 && w >= 2 && ic >= 1 && oc >= 1 ->
+      | [ b; h; w; ic; oc ]
+        when b >= 1 && h >= 2 && w >= 2 && ic >= 1 && oc >= 1 && ic * 7 * 5 <= max_exact ->
           (name, b, h, w, ic, oc)
-      | _ -> failwith ("site dims must be b,h,w,ic,oc (positive, h and w at least 2): " ^ s))
+      | _ ->
+          failwith
+            (Printf.sprintf
+               "site dims must be b,h,w,ic,oc (positive, h and w at least 2, ic at most %d so \
+                every sum is an exact f32 integer): %s"
+               (max_exact / 35) s))
   | None -> failwith ("site must be name=b,h,w,ic,oc: " ^ s)
 
 (* Values 1..7 and 1..5, varying with every index (each weight a unit modulo its modulus), so a
@@ -160,7 +170,10 @@ let bench_site ~failed ~repeats ~tune ((name, b, h, w, ic, oc) as site) =
     arm "tuned" (fun ~report ctx comp ->
         Autotune.tune ~name ~search:true ~cache_dir:""
           ~report:(fun r -> report := Some r)
-          ctx comp Ir.Indexing.Empty)
+          ctx comp Ir.Indexing.Empty);
+  (* Device buffers live in backend pool tables no finalizer reclaims: each site's root context is
+     released before the next site's. *)
+  Context.release ctx
 
 let () =
   let sites =
