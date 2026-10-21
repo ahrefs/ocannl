@@ -393,11 +393,12 @@ val sketch_seed_params :
     zero-expansion row-axis rule, and the GPU sketches' companion-coverage rule per fusion flavor —
     also pre-filter here, as the family tree's construction-time refutations (gh-ocannl-577): a seed
     list never proposes a candidate that statically must fail its build. For the matmul family this
-    list {e is} {!Ir.Schedule_space.leaves} of {!matmul_sketch_tree}, epilogue twins included.
-    [capabilities] is the compiling context's [Context.codegen_capabilities]: the workgroup-memory
-    refutations charge the staged tiles by it as the gate does ([Schedule.kernel_workgroup_bytes]:
-    allocation rounding, tile-MMA scratch, gh-ocannl-1255); the default charges exact tile sizes, a
-    weaker floor. Exposed for tests. *)
+    list {e is} {!Ir.Schedule_space.leaves} of {!sketch_family_tree} — the matmul family's tree
+    where a matmul site is detected, else the convolution family's (gh-ocannl-697) — epilogue twins
+    included. [capabilities] is the compiling context's [Context.codegen_capabilities]: the
+    workgroup-memory refutations charge the staged tiles by it as the gate does
+    ([Schedule.kernel_workgroup_bytes]: allocation rounding, tile-MMA scratch, gh-ocannl-1255); the
+    default charges exact tile sizes, a weaker floor. Exposed for tests. *)
 
 val coalesce_prefix :
   layout:coalesce_layout -> Ir.Low_level.optimized -> Ir.Schedule.schedule option
@@ -499,6 +500,18 @@ module Family_decision : sig
             renderer's own ranking-model choice, [Some] a schedule-carried alternative the renderer
             honours exactly. The level appears only where {!Ir.Register_tile.alternatives} offers
             one. *)
+    | Conv_leg of [ `Cpu | `Gpu ]
+        (** The conv family's route (gh-ocannl-697): the CPU register-tiled implicit-GEMM pipeline
+            or the GPU staged one; the leg the backend kind does not take is refuted. *)
+    | Conv_shape of [ `Serial | `Grid | `Row_block of int ]
+        (** The CPU conv pipeline's flavor: serial, Grid-parallel, or row panels of that many rows
+            (gh-ocannl-500). *)
+    | Conv_staging of [ `Plain | `Pipelined ]
+        (** The GPU conv pipeline's staging: single-copy tiles, or rotating copies whose depth the
+            [twin] level below each geometry commits (gh-ocannl-487). *)
+    | Conv_rows of int
+        (** The GPU conv geometry: the GEMM row in Grid blocks of that many rows, [0] the whole
+            (intrinsic-tile padded) extent. *)
 
   type path = (string * t) list
   (** What {!Ir.Schedule_space.enumerate} and the [~path] of {!Ir.Schedule_space.search} carry at
@@ -536,8 +549,30 @@ val matmul_sketch_tree :
     construction-time verdicts are its own (gh-ocannl-577: companion coverage can pass fused where
     it fails unfused). Statically-decidable builder preconditions refute at the pipeline level —
     above the geometry menus and the tile lattice, so a family whose every completion must fail its
-    candidate build never expands (gh-ocannl-577). The conv family factors the same way as a
-    follow-up. Exposed for tests and as the phase-4 search driver's entry into the family space. *)
+    candidate build never expands (gh-ocannl-577). The conv family is its own tree under the same
+    root, {!conv_sketch_tree} (gh-ocannl-697). Exposed for tests and as the phase-4 search driver's
+    entry into the family space. *)
+
+val conv_sketch_tree :
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
+  is_gpu:bool ->
+  is_cpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  Ir.Low_level.optimized ->
+  (Family_decision.t, sketch_params) Ir.Schedule_space.tree option
+(** The convolution sketch family as a refinement tree (gh-ocannl-697): see
+    {!Sketch_families.conv_sketch_tree}. [None] when no conv site is detected. Exposed for tests. *)
+
+val sketch_family_tree :
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
+  is_gpu:bool ->
+  is_cpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  Ir.Low_level.optimized ->
+  (Family_decision.t, sketch_params) Ir.Schedule_space.tree option
+(** The tree of whichever family claims the lowering ({!matmul_sketch_tree} where a matmul site is
+    detected, else {!conv_sketch_tree}), unforced below its root: {!sketch_seed_params} is its
+    leaves, and {!model_family_search} walks it. *)
 
 (** {2 The seeding census (gh-ocannl-1407)}
 
@@ -552,25 +587,16 @@ val matmul_sketch_tree :
     numerics restriction on CUDA/HIP and its geometry-lattice lift (which re-proposes branches the
     head line counts in [excluded=N]). *)
 
-type conv_leg = {
-  leg_seeds : sketch_params list;
-  leg_refusal : string option;
-  leg_notes : string list;
-}
-
-type conv_judgment = {
-  cj_site : conv_site;
-  cj_real_stmts : int;
-  cj_cpu : conv_leg;
-  cj_gpu : conv_leg;
-}
-
 type family_seeding =
   | Seeding_matmul of {
       site : matmul_site;
       tree : (Family_decision.t, sketch_params) Ir.Schedule_space.tree;
     }
-  | Seeding_conv of { judgment : conv_judgment; fused_twins : bool; twin_refusal : string option }
+  | Seeding_conv of {
+      site : conv_site;
+      real_stmts : int;
+      tree : (Family_decision.t, sketch_params) Ir.Schedule_space.tree;
+    }
   | Seeding_none
 
 val family_seeding :
@@ -649,7 +675,10 @@ val pad_waste_max : unit -> float
     valid, never proposed by default, re-proposed exactly by {!Ir.Schedule_space.lift_excluded}. The
     least-padded geometry is never excluded, and legality refutations take precedence. Judged in the
     GPU blocktile menu, the GPU tensorized curated menu and the CPU packed menu of each packing
-    shape. Exposed so a test judges the tree against the threshold the tree was built with. *)
+    shape, and in the conv family's CPU shape menu and GPU row-geometry menus (gh-ocannl-1393),
+    where nothing is excluded at the default threshold: a row block needs two or more blocks, so its
+    waste stays under 2x, and the GPU channel pads are site-wide, so they cancel. Exposed so a test
+    judges the tree against the threshold the tree was built with. *)
 
 val lift_pad_waste :
   (Family_decision.t, sketch_params) Ir.Schedule_space.tree ->
@@ -2081,18 +2110,20 @@ val model_family_search :
   incumbent:float ->
   Ir.Low_level.optimized ->
   ((sketch_params * float) option * Ir.Schedule_space.search_stats * float option) option
-(** {!model_default}'s branch-and-bound walk over the factored matmul family ({!matmul_sketch_tree})
-    of one lowering: [(best, stats, bound)], where [best] is the first leaf whose [score] (of its
-    scheduled form) is strictly below [incumbent], the threshold tightening as leaves improve on it,
-    and [bound] the family's schedule-invariant roofline floor under the envelope. Exact ties
-    between leaves go to fewer tile-MMA operand load instructions ({!model_operand_loads} under
-    [capabilities] — {!model_default} passes the backend's; gh-ocannl-1254) between leaves that both
-    have tile-MMA sites, then to the first; a tie never displaces [incumbent]. Sketches are
-    scheduled at [capabilities]' [accum_prec]. [on_rejected] is called for each leaf whose schedule
-    fails to apply; a leaf [admit] refuses is left unscored, [on_excluded] called, before it is
-    scheduled ({!model_default}'s numerics-preserving restriction). [None] for a lowering with no
-    matmul site. Exposed so a test can drive the walk with stand-in limits and load rules on any
-    backend. *)
+(** {!model_default}'s branch-and-bound walk over the factored family of one lowering
+    ({!sketch_family_tree}: the matmul family, or since gh-ocannl-697 the conv family):
+    [(best, stats, bound)], where [best] is the first leaf whose [score] (of its scheduled form) is
+    strictly below [incumbent], the threshold tightening as leaves improve on it, and [bound] the
+    family's schedule-invariant roofline floor under the envelope. Exact ties between leaves go to
+    fewer tile-MMA operand load instructions ({!model_operand_loads} under [capabilities] —
+    {!model_default} passes the backend's; gh-ocannl-1254) between leaves that both have tile-MMA
+    sites, then to the first; a tie never displaces [incumbent]. Sketches are scheduled at
+    [capabilities]' [accum_prec]. [on_rejected] is called for each leaf whose schedule fails to
+    apply; a leaf [admit] refuses is left unscored, [on_excluded] called, before it is scheduled
+    ({!model_default}'s numerics-preserving restriction). [None] for a lowering neither family
+    claims. A conv path carries no certain-traffic increment, so its bound is the schedule-invariant
+    floor, sound for every completion. Exposed so a test can drive the walk with stand-in limits and
+    load rules on any backend. *)
 
 type seeded_choice = {
   sd_seeded : (int * sketch_params) list;

@@ -4424,13 +4424,15 @@ let model_operand_loads ~(capabilities : Ir.Backend_intf.codegen_capabilities) (
    (gh-ocannl-1254, {!model_operand_loads}): fewer load instructions win, so a staged twin that
    brings its operands in through [ldmatrix] beats its gathering twin of equal flops and bytes; a
    leaf with no tile-MMA site has no count and stays out of the comparison (its operands load by
-   paths the count does not see), and the incumbent still wins every tie. [None] = no matmul site:
-   the caller keeps the flat path (conv seeds, which factor as a follow-up). *)
+   paths the count does not see), and the incumbent still wins every tie. The walk covers whichever
+   family claims the lowering ({!sketch_family_tree}): the conv family is a tree under the same
+   fusion root since gh-ocannl-697, with no traffic increment of its own (the floor's [0] there is
+   sound — [completion_floor] bounds every completion). [None] = neither family has a site. *)
 let model_family_search ?(on_rejected = fun () -> ()) ?(admit = fun _ -> true)
     ?(on_excluded = fun () -> ()) ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices ~peak_flops
     ~peak_memory_bandwidth ~score ~incumbent (base_opt : LL.optimized) =
   let accum_prec = capabilities.Ir.Backend_intf.accum_prec in
-  match matmul_sketch_tree ~capabilities ~is_gpu ~is_cpu ~limits base_opt with
+  match sketch_family_tree ~capabilities ~is_gpu ~is_cpu ~limits base_opt with
   | None -> None
   | Some tree ->
       (* gh-ocannl-514 phase 5: the tile-size lattice beyond the curated menus enters the searched
@@ -5301,21 +5303,6 @@ let model_default ?name ?report ctx comp bindings =
        ([n_excluded]), never an error. Metal, the CPU backends and an unseeded CUDA/HIP compile keep
        the whole family. *)
     let admits base_opt = model_admits ~seeding:(Lazy.force seeding_here) ~accum_prec base_opt in
-    let score_sketch ?admit base_opt p =
-      if not ((match admit with Some admit -> admit | None -> admits base_opt) p) then (
-        Int.incr n_excluded;
-        None)
-      else
-        match
-          Sched.apply_classified ~static_indices
-            (sketch_schedule ~accum_prec ~p base_opt)
-            (scratch_of base_opt)
-        with
-        | exception Outcome.Cause_at _ ->
-            Int.incr n_rejected;
-            None
-        | post -> score_valid [ post ]
-    in
     let capabilities = Context.codegen_capabilities ctx in
     (* [model_family_search] with the default as incumbent, logging its ledger; under the
        numerics-preserving restriction, a leaf outside it is excluded before it is scheduled.
@@ -5345,16 +5332,6 @@ let model_default ?name ?report ctx comp bindings =
             (match fb with Some b -> Printf.sprintf "%.6f ms" (b *. 1e3) | None -> "n/a")
             stats.Sspace.st_refuted stats.Sspace.st_excluded;
           Some best
-    in
-    (* First leaf strictly under [threshold], in list order — the flat counterpart the
-       not-yet-factored conv family goes through. *)
-    let best_flat ~threshold base_opt ps =
-      let admit = admits base_opt in
-      List.fold ps ~init:(None, threshold) ~f:(fun (best, th) p ->
-          match score_sketch ~admit base_opt p with
-          | Some sc when Float.(sc < th) -> (Some (p, sc), sc)
-          | _ -> (best, th))
-      |> fst
     in
     let preset seg = if is_gpu then Sched.default_gpu ~limits seg else Sched.default_cpu seg in
     let zero_sched tns = if is_gpu then Sched.zero_expansion ~limits tns else [] in
@@ -5419,17 +5396,9 @@ let model_default ?name ?report ctx comp bindings =
             let capabilities = Context.codegen_capabilities ctx in
             log_seeding ~capabilities ~where:"model_default whole-routine" ~is_gpu ~is_cpu ~limits
               base;
-            let whole_best =
-              match tree_search ~incumbent:ds base with
-              | Some tree_best ->
-                  (* Matmul site: the tree's leaves, twins included, searched with the default as
-                     incumbent. *)
-                  tree_best
-              | None ->
-                  (* No matmul site: the flat path covers the conv family. *)
-                  best_flat ~threshold:ds base
-                    (sketch_seed_params ~capabilities ~is_gpu ~is_cpu ~limits base)
-            in
+            (* The claiming family's tree (matmul or conv), twins included, searched with the
+               default as incumbent. *)
+            let whole_best = Option.join (tree_search ~incumbent:ds base) in
             let contenders =
               match whole_best with
               | Some (p, sc) -> [ (spec_label (Whole (W_sketch p)), sc, `Whole p) ]
@@ -5460,15 +5429,8 @@ let model_default ?name ?report ctx comp bindings =
                               ~where:("model_default segment " ^ seg_key_tag key)
                               ~is_gpu ~is_cpu ~limits pre;
                             (* The segment's family tree searched with the segment's own
-                               default-preset score as incumbent; conv segments keep the flat
-                               path. *)
-                            let best_sketch =
-                              match tree_search ~incumbent:bs pre with
-                              | Some tree_best -> tree_best
-                              | None ->
-                                  best_flat ~threshold:bs pre
-                                    (sketch_seed_params ~capabilities ~is_gpu ~is_cpu ~limits pre)
-                            in
+                               default-preset score as incumbent. *)
+                            let best_sketch = Option.join (tree_search ~incumbent:bs pre) in
                             match best_sketch with Some (p, _s) -> Some (key, p) | None -> None))
                   in
                   if List.is_empty entries then None
@@ -5843,11 +5805,11 @@ let model_explain ?name ctx comp bindings =
     let leaf_explains ~label prog =
       let admits = model_admits ~seeding ~accum_prec prog in
       let leaves =
-        match matmul_sketch_tree ~capabilities:caps ~is_gpu ~is_cpu ~limits prog with
+        match sketch_family_tree ~capabilities:caps ~is_gpu ~is_cpu ~limits prog with
         | Some tree ->
             Sspace.leaves
               (if Lazy.force geometry_lattice_enabled then lift_geometry_lattice tree else tree)
-        | None -> sketch_seed_params ~capabilities:caps ~is_gpu ~is_cpu ~limits prog
+        | None -> []
       in
       List.filter_map leaves ~f:(fun p ->
           match

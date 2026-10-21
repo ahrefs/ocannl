@@ -6,17 +6,18 @@
    staged conv seeds declining on [c_zeroed]) could not be observed without scratch instrumentation.
    Pinned here, on synthetic device limits so the transcript is backend-independent.
 
-   The census's seeds ARE [Autotune.sketch_seed_params]' list, and the matmul family's refutations
-   are its tree's ([Autotune.matmul_sketch_tree]). Each conv leg names a refusal exactly when it
-   seeds nothing, and the named gate is the one the site's facts imply: no mma capability; no mma
-   tile for f32 operands; a vector file under 8 bytes. The whole-routine lowering's conv output is
-   zeroed in the routine, and since gh-ocannl-503 the GPU leg seeds it anyway (the pipeline expands
-   the zero with the site's geometry); on the tuner's GPU fission segments the zero folds into a
-   per-cell companion, and the GPU leg seeds there too. The GPU leg judges companion coverage, not a
-   statement count (gh-ocannl-1406): an aligned-merged conv of three real statements seeds, a
-   channel reduction of the conv output is refused naming the coverage verdict. With the key on (the
-   dune action passes it), [Autotune.log_seeding] writes exactly the rendered lines, and
-   [Autotune.tune] emits a whole-routine census line. *)
+   The census's seeds ARE [Autotune.sketch_seed_params]' list, and both families' refusals are their
+   trees' refutations ([Autotune.matmul_sketch_tree], and since gh-ocannl-697
+   [Autotune.conv_sketch_tree]). A conv leg with no leaf carries a refutation below it, and the
+   named gate is the one the site's facts imply: no mma capability; no mma tile for f32 operands; a
+   vector file under 8 bytes. The whole-routine lowering's conv output is zeroed in the routine, and
+   since gh-ocannl-503 the GPU leg seeds it anyway (the pipeline expands the zero with the site's
+   geometry); on the tuner's GPU fission segments the zero folds into a per-cell companion, and the
+   GPU leg seeds there too. The GPU leg judges companion coverage, not a statement count
+   (gh-ocannl-1406): an aligned-merged conv of three real statements seeds, a channel reduction of
+   the conv output is refused naming the coverage verdict. With the key on (the dune action passes
+   it), [Autotune.log_seeding] writes exactly the rendered lines, and [Autotune.tune] emits a
+   whole-routine census line. *)
 
 open Base
 open Ocannl
@@ -67,24 +68,48 @@ let census ~where ~is_gpu ~limits opt =
   show ~where c;
   c
 
-let conv_judgment (c : Autotune.seeding_census) =
-  match c.sc_family with Autotune.Seeding_conv { judgment; _ } -> Some judgment | _ -> None
+module Sspace = Ir.Schedule_space
+module FD = Autotune.Family_decision
+
+let conv_seeding (c : Autotune.seeding_census) =
+  match c.sc_family with Autotune.Seeding_conv { site; tree; _ } -> Some (site, tree) | _ -> None
 
 let mentions s ~sub = String.is_substring s ~substring:sub
-let refusal (l : Autotune.conv_leg) = Option.value l.leg_refusal ~default:""
+let on_path d path = List.exists path ~f:(fun (_, d') -> FD.equal d d')
+let unfused_leg leg path = on_path (FD.Fusion `Unfused) path && on_path (FD.Conv_leg leg) path
 
-(* The census reports the seeder's own list, and a leg refuses exactly when it seeds nothing. *)
+(* A leg's unfused leaves, and the witnesses refuting at or below it. *)
+let leg_seeds tree leg =
+  List.filter_map (Sspace.enumerate tree) ~f:(fun (path, p) ->
+      if unfused_leg leg path then Some p else None)
+
+let leg_refutations tree leg =
+  List.filter_map (Sspace.refutations tree) ~f:(fun (path, w) ->
+      if unfused_leg leg path then Some w else None)
+
+(* The refutation of the leg itself — its guard, before any flavor is judged. *)
+let leg_refusal tree leg =
+  List.find_map (Sspace.refutations tree) ~f:(fun (path, w) ->
+      match List.last path with
+      | Some (_, FD.Conv_leg l) when Poly.equal l leg && on_path (FD.Fusion `Unfused) path -> Some w
+      | _ -> None)
+
+let refusal tree leg = Option.value (leg_refusal tree leg) ~default:""
+
+(* The census reports the seeder's own list, and a conv leg that seeds nothing says why: some
+   refutation lies at or below it. *)
 let claim_consistent label ~is_gpu ~limits opt (c : Autotune.seeding_census) =
   let seeds = Autotune.sketch_seed_params ~is_gpu ~is_cpu:(not is_gpu) ~limits opt in
   p
     (label ^ ": the census's seeds are sketch_seed_params' list")
     (List.equal Poly.equal c.sc_seeds seeds);
-  match conv_judgment c with
+  match conv_seeding c with
   | None -> ()
-  | Some j ->
-      p_all (label ^ ": each conv leg names a refusal exactly when it seeds nothing")
-        [ j.cj_cpu; j.cj_gpu ] ~f:(fun (l : Autotune.conv_leg) ->
-          Bool.equal (Option.is_some l.leg_refusal) (List.is_empty l.leg_seeds))
+  | Some (_, tree) ->
+      p_all (label ^ ": each conv leg without a seed carries a refutation") [ `Cpu; `Gpu ]
+        ~f:(fun leg ->
+          (not (List.is_empty (leg_seeds tree leg)))
+          || not (List.is_empty (leg_refutations tree leg)))
 
 let make_conv tag =
   let x =
@@ -120,15 +145,15 @@ let () =
   let opt = lowering "census_conv" (make_conv "cc") in
   let gpu = census ~where:"conv whole-routine gpu" ~is_gpu:true ~limits:gpu_limits opt in
   claim_consistent "conv whole-routine (GPU)" ~is_gpu:true ~limits:gpu_limits opt gpu;
-  (match conv_judgment gpu with
+  (match conv_seeding gpu with
   | None -> p "conv whole-routine: the conv family claims the lowering" false
-  | Some j ->
+  | Some (site, tree) ->
       p "conv whole-routine: the conv family claims the lowering" true;
-      p "conv whole-routine: the site's output is zeroed in the lowering" j.cj_site.c_zeroed;
+      p "conv whole-routine: the site's output is zeroed in the lowering" site.c_zeroed;
       p "conv whole-routine: the GPU leg seeds the zeroed site"
-        (Option.is_none j.cj_gpu.leg_refusal && not (List.is_empty j.cj_gpu.leg_seeds));
+        (Option.is_none (leg_refusal tree `Gpu) && not (List.is_empty (leg_seeds tree `Gpu)));
       p "conv whole-routine: the CPU leg is refused as not a CPU target"
-        (String.equal (refusal j.cj_cpu) "not a CPU target"));
+        (String.equal (refusal tree `Cpu) "not a CPU target"));
   p_exists "conv whole-routine: the conv nest is listed, marked zeroed" gpu.sc_conv_nests
     ~f:(fun (_, zeroed) -> zeroed);
   let no_mma =
@@ -138,35 +163,45 @@ let () =
   claim_consistent "conv whole-routine (no mma)" ~is_gpu:true
     ~limits:Ir.Backend_intf.no_hardware_limits opt no_mma;
   p "no mma capability: the GPU leg names it"
-    (Option.exists (conv_judgment no_mma) ~f:(fun j ->
-         String.equal (refusal j.cj_gpu) "the backend advertises no mma capability"));
+    (Option.exists (conv_seeding no_mma) ~f:(fun (_, tree) ->
+         String.equal (refusal tree `Gpu) "the backend advertises no mma capability"));
   let f16_only =
     census ~where:"conv whole-routine f16-only" ~is_gpu:true ~limits:f16_only_limits opt
   in
   claim_consistent "conv whole-routine (f16-only tile)" ~is_gpu:true ~limits:f16_only_limits opt
     f16_only;
   p "no f32 tile: the GPU leg names the missing tile"
-    (Option.exists (conv_judgment f16_only) ~f:(fun j ->
-         mentions (refusal j.cj_gpu) ~sub:"advertises no mma tile for operands"));
+    (Option.exists (conv_seeding f16_only) ~f:(fun (_, tree) ->
+         mentions (refusal tree `Gpu) ~sub:"advertises no mma tile for operands"));
   let cpu = census ~where:"conv whole-routine cpu" ~is_gpu:false ~limits:cpu_limits opt in
   claim_consistent "conv whole-routine (CPU)" ~is_gpu:false ~limits:cpu_limits opt cpu;
   p "conv whole-routine: the CPU leg seeds on a 16-byte vector file"
-    (Option.exists (conv_judgment cpu) ~f:(fun j -> not (List.is_empty j.cj_cpu.leg_seeds)));
-  p "conv whole-routine: seeds without a fusable tail name the fusion recognizer's reason"
-    (match cpu.sc_family with
-    | Autotune.Seeding_conv { fused_twins = false; twin_refusal = Some _; _ } -> true
-    | _ -> false);
-  p "conv whole-routine: the zeroed site's row-block flavors are noted withheld"
-    (Option.exists (conv_judgment cpu) ~f:(fun j ->
-         List.exists j.cj_cpu.leg_notes ~f:(mentions ~sub:"row-block flavors withheld")));
+    (Option.exists (conv_seeding cpu) ~f:(fun (_, tree) ->
+         not (List.is_empty (leg_seeds tree `Cpu))));
+  (* The fused flavor's verdict is the root's own, judged whatever the unfused flavor seeds: the
+     recognizer's reason, verbatim. *)
+  p
+    "conv whole-routine: a site without a fusable tail refutes the fused flavor with the \
+     recognizer's reason"
+    (Option.exists (conv_seeding cpu) ~f:(fun (site, tree) ->
+         match Sched.fuse_epilogue_witness ~target:site.c_d opt with
+         | None -> false
+         | Some why ->
+             List.exists (Sspace.refutations tree) ~f:(fun (path, w) ->
+                 String.equal w why
+                 && List.equal Poly.equal (List.map path ~f:snd) [ FD.Fusion `Fused ])));
+  p "conv whole-routine: the zeroed site's row-block flavors are refuted on its zero"
+    (Option.exists (conv_seeding cpu) ~f:(fun (_, tree) ->
+         List.exists (Sspace.refutations tree) ~f:(fun (path, w) ->
+             on_path (FD.Conv_shape (`Row_block 8)) path && mentions w ~sub:"c_zeroed")));
   let narrow =
     census ~where:"conv whole-routine narrow-cpu" ~is_gpu:false ~limits:narrow_cpu_limits opt
   in
   claim_consistent "conv whole-routine (4-byte vectors)" ~is_gpu:false ~limits:narrow_cpu_limits opt
     narrow;
   p "a 4-byte vector file: the CPU leg names it"
-    (Option.exists (conv_judgment narrow) ~f:(fun j ->
-         mentions (refusal j.cj_cpu) ~sub:"4-byte vector file is under 8 bytes"));
+    (Option.exists (conv_seeding narrow) ~f:(fun (_, tree) ->
+         mentions (refusal tree `Cpu) ~sub:"4-byte vector file is under 8 bytes"));
   (* === The tuner's GPU fission segments (its [enum_fiss_entries] settings): the conv output's zero
      folds into a per-cell companion of the conv nest, so the site is no longer zeroed. === *)
   let segments =
@@ -182,12 +217,14 @@ let () =
     List.filter_map segments ~f:(fun seg ->
         let c = census ~where:"conv segment gpu" ~is_gpu:true ~limits:gpu_limits seg in
         claim_consistent "conv segment (GPU)" ~is_gpu:true ~limits:gpu_limits seg c;
-        conv_judgment c)
+        conv_seeding c)
   in
-  p_exists "conv segment: an unzeroed site the GPU leg seeds" conv_segments ~f:(fun j ->
-      (not j.cj_site.c_zeroed) && not (List.is_empty j.cj_gpu.leg_seeds));
-  p_exists "conv segment: row blocks too large for the 9-row site are noted withheld" conv_segments
-    ~f:(fun j -> List.exists j.cj_gpu.leg_notes ~f:(mentions ~sub:"fewer than two blocks"));
+  p_exists "conv segment: an unzeroed site the GPU leg seeds" conv_segments ~f:(fun (site, tree) ->
+      (not site.c_zeroed) && not (List.is_empty (leg_seeds tree `Gpu)));
+  p_exists "conv segment: row blocks too large for the 9-row site are refuted at their geometry"
+    conv_segments ~f:(fun (_, tree) ->
+      List.exists (Sspace.refutations tree) ~f:(fun (path, w) ->
+          on_path (FD.Conv_rows 16) path && mentions w ~sub:"fewer than two blocks"));
   (* A workgroup-memory cap between the 8-row block's charge (768 bytes: its two staged tiles, and,
      the flavor being masked, its workgroup-shared accumulator fragment, gh-ocannl-1452) and the
      whole padded row's (1280): the leg still seeds, and notes the flavor the cap refused. *)
@@ -203,11 +240,13 @@ let () =
         let c = census ~where:"conv segment gpu 1000B" ~is_gpu:true ~limits:tight_limits seg in
         claim_consistent "conv segment (1000-byte workgroup memory)" ~is_gpu:true
           ~limits:tight_limits seg c;
-        conv_judgment c)
+        conv_seeding c)
   in
-  p_exists "a partial workgroup-memory refusal is noted beside the seeds" tight ~f:(fun j ->
-      (not (List.is_empty j.cj_gpu.leg_seeds))
-      && List.exists j.cj_gpu.leg_notes ~f:(mentions ~sub:"refused by workgroup memory"));
+  p_exists "a partial workgroup-memory refusal is refuted at its geometry beside the seeds" tight
+    ~f:(fun (_, tree) ->
+      (not (List.is_empty (leg_seeds tree `Gpu)))
+      && List.exists (Sspace.refutations tree) ~f:(fun (path, w) ->
+          on_path (FD.Conv_rows 0) path && mentions w ~sub:"exceeding the 1000-byte limit"));
   (* === gh-ocannl-1406: the GPU leg judges companion coverage, not a statement count. A conv with
      two materialized elementwise companions (the convnet's conv+relu+scale shape) is an
      aligned-merged segment of three real statements, which a [real_stmts <= 2] cap refused although
@@ -227,7 +266,9 @@ let () =
         let where = where ^ if i = 0 then " whole-routine" else " segment" in
         let c = census ~where ~is_gpu:true ~limits:gpu_limits seg in
         claim_consistent where ~is_gpu:true ~limits:gpu_limits seg c;
-        conv_judgment c)
+        match c.sc_family with
+        | Autotune.Seeding_conv { real_stmts; tree; _ } -> Some (real_stmts, tree)
+        | _ -> None)
   in
   let merged tag =
     let pr = make_conv tag in
@@ -241,9 +282,9 @@ let () =
     conv_lowerings ~where:"conv merged gpu" (lowering "census_merged" (merged "cm"))
   in
   p_exists "conv merged: a lowering of three or more real statements the GPU leg seeds" merged_js
-    ~f:(fun j -> j.cj_real_stmts >= 3 && not (List.is_empty j.cj_gpu.leg_seeds));
-  p_none "conv merged: no GPU leg refuses on companion coverage" merged_js ~f:(fun j ->
-      mentions (refusal j.cj_gpu) ~sub:"companion coverage");
+    ~f:(fun (n_real, tree) -> n_real >= 3 && not (List.is_empty (leg_seeds tree `Gpu)));
+  p_none "conv merged: no GPU leg refuses on companion coverage" merged_js ~f:(fun (_, tree) ->
+      mentions (refusal tree `Gpu) ~sub:"companion coverage");
   let channel_sum tag =
     let pr = make_conv tag in
     Ir.Tnode.update_memory_mode pr.Tensor.value Ir.Tnode.On_device (Site "99:test-setup");
@@ -253,9 +294,10 @@ let () =
   let sum_js =
     conv_lowerings ~where:"conv channel-sum gpu" (lowering "census_chsum" (channel_sum "cs"))
   in
-  p_exists "conv channel-sum: the GPU leg's refusal names companion coverage" sum_js ~f:(fun j ->
-      List.is_empty j.cj_gpu.leg_seeds
-      && mentions (refusal j.cj_gpu) ~sub:"GPU conv companion coverage (gh-521)");
+  p_exists "conv channel-sum: the GPU leg's refusal names companion coverage" sum_js
+    ~f:(fun (_, tree) ->
+      List.is_empty (leg_seeds tree `Gpu)
+      && mentions (refusal tree `Gpu) ~sub:"GPU conv companion coverage (gh-521)");
   (* === A matmul: the census is the family tree's. === *)
   let a =
     TDSL.ndarray (Array.init 64 ~f:Float.of_int) ~label:[ "ma" ] ~input_dims:[ 8 ]

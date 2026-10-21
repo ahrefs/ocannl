@@ -342,6 +342,10 @@ module Family_decision : sig
     | Packing_shape of
         [ `Serial | `Hoisted | `Hoisted_grid | `Hoisted_grid_pack_rest | `Grid_pack_rest | `Grid ]
     | Register_tile of Ir.Register_tile.t option
+    | Conv_leg of [ `Cpu | `Gpu ]
+    | Conv_shape of [ `Serial | `Grid | `Row_block of int ]
+    | Conv_staging of [ `Plain | `Pipelined ]
+    | Conv_rows of int
 
   type path = (string * t) list
 
@@ -367,6 +371,31 @@ val matmul_sketch_tree :
     {!Ir.Backend_intf.no_codegen_capabilities}, charges the exact tile sizes alone — a weaker floor,
     never a wrong one (gh-ocannl-1255). *)
 
+val conv_sketch_tree :
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
+  is_gpu:bool ->
+  is_cpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  Ir.Low_level.optimized ->
+  (Family_decision.t, sketch_params) Ir.Schedule_space.tree option
+(** The lazy convolution family (gh-ocannl-697); [None] when {!detect_conv} recognizes no site. The
+    root is the same epilogue-fusion level as {!matmul_sketch_tree}'s, each flavor judged under its
+    own preconditions; below it the [conv-leg] (CPU, then GPU, the other refuted), the CPU
+    [conv-shape] menu, and the GPU [conv-staging] then [conv-rows] menus with the pipelined
+    geometries' depth [twin]s. Every leaf is judged against the launch caps
+    ({!launch_geometry_refutation}'s witness). [capabilities] as for {!matmul_sketch_tree}. *)
+
+val sketch_family_tree :
+  ?capabilities:Ir.Backend_intf.codegen_capabilities ->
+  is_gpu:bool ->
+  is_cpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  Ir.Low_level.optimized ->
+  (Family_decision.t, sketch_params) Ir.Schedule_space.tree option
+(** The tree of whichever family claims the lowering — the matmul family where a matmul site is
+    detected (directly or through the enabling interchange), else the convolution family — unforced
+    below its root; [None] when neither does. {!sketch_seed_params} is its leaves. *)
+
 val sketch_seed_params :
   ?capabilities:Ir.Backend_intf.codegen_capabilities ->
   is_gpu:bool ->
@@ -374,43 +403,24 @@ val sketch_seed_params :
   limits:Ir.Backend_intf.hardware_limits ->
   Ir.Low_level.optimized ->
   sketch_params list
-(** The composed seed list: matmul tree leaves when a matmul is detected, otherwise convolution
-    seeds followed by their eligible epilogue-fusion twins. Empty when neither site is detected.
-    [capabilities] as for {!matmul_sketch_tree}, for the convolution seeds' workgroup-memory filter
-    too. *)
+(** The composed seed list: {!Ir.Schedule_space.leaves} of {!sketch_family_tree}, fused twins
+    included. Empty when neither family detects a site. *)
 
 (** {2 The seeding census (gh-ocannl-1407)} *)
-
-type conv_leg = {
-  leg_seeds : sketch_params list;
-  leg_refusal : string option;
-      (** The failing gates, every one named, exactly when the leg proposes no seed. *)
-  leg_notes : string list;
-      (** Flavors the leg's later gates refused, each gate with its count — beside a refusal too,
-          when an earlier gate already removed some. *)
-}
-(** One leg (CPU or GPU) of the conv family's verdict on a site, decided by the gates the seeds come
-    from. *)
-
-type conv_judgment = {
-  cj_site : conv_site;
-  cj_real_stmts : int;
-      (** The lowering's real top-level statements besides the site's own covering zero
-          ([conv_real_stmts]) — the count the CPU leg's companion caps judge. The GPU leg judges
-          companion coverage instead ([companion_geometry], gh-ocannl-1406). *)
-  cj_cpu : conv_leg;
-  cj_gpu : conv_leg;
-}
 
 type family_seeding =
   | Seeding_matmul of {
       site : matmul_site;
       tree : (Family_decision.t, sketch_params) Ir.Schedule_space.tree;
     }  (** The matmul family claimed the lowering; its refusals are the tree's refutations. *)
-  | Seeding_conv of { judgment : conv_judgment; fused_twins : bool; twin_refusal : string option }
-      (** No matmul site, a conv site: both legs' verdicts, and whether its seeds got
-          epilogue-fusion twins — and when seeds got none, the fusion recognizer's reason
-          ([Schedule.fuse_epilogue_witness]). *)
+  | Seeding_conv of {
+      site : conv_site;
+      real_stmts : int;
+          (** The lowering's real top-level statements besides the site's own covering zero — the
+              count the CPU leg's companion caps judge. The GPU leg judges companion coverage
+              instead ([companion_geometry], gh-ocannl-1406). *)
+      tree : (Family_decision.t, sketch_params) Ir.Schedule_space.tree;
+    }  (** No matmul site, a conv site; its refusals are the tree's refutations (gh-ocannl-697). *)
   | Seeding_none  (** Neither family detects a site. *)
 
 val family_seeding :
@@ -420,8 +430,8 @@ val family_seeding :
   limits:Ir.Backend_intf.hardware_limits ->
   Ir.Low_level.optimized ->
   family_seeding * sketch_params list
-(** {!sketch_seed_params} with the judgment its seeds came from: the seed list is the second
-    component. *)
+(** {!sketch_seed_params} with the family tree its seeds are the leaves of: the seed list is the
+    second component. *)
 
 type coalesced_verdict = {
   cv_layout : coalesce_layout;
@@ -475,9 +485,9 @@ val seeding_census_prefix : string
 val seeding_census_lines : where:string -> seeding_census -> string list
 (** The census rendered for stderr: a head line
     [where="…" stmts=N whole_zeros=N family=matmul|conv|none [site=…] seeds=N [refuted=N
-     excluded=N]], then indented detail lines — the matmul tree's refutations grouped by witness
-    with the first refuted path, or the conv site and each leg's seed count or refusal and withheld
-    flavors — and the lowering's conv nests. *)
+     excluded=N]], then indented detail lines — the claiming tree's refutations grouped by witness
+    with the first refuted path, after a conv site's zeroing and real-statement count — and the
+    lowering's conv nests. *)
 
 val coalesce_reduction_pair :
   ?static_indices:Ir.Indexing.static_symbol list ->

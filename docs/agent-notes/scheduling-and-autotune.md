@@ -299,7 +299,17 @@ files.
   the unfused coverage verdict is shared with the fused branch because it implies it (the fused
   demand is a subset, and `aligned_chains` ignores `skip`): `aligned_chains` runs twice only
   where the unfused flavor is refuted. `sketch_seed_params` is the tree's `leaves`, twins
-  included, and `model_default` has no separate twins step. **Consequence for diagnostics: since gh-577 a companion-coverage
+  included, and `model_default` has no separate twins step. The conv family is a tree of its own
+  under the same root since gh-ocannl-697 (`conv_sketch_tree`: `conv-leg = cpu | gpu`, the CPU
+  `conv-shape` menu, the GPU `conv-staging` above `conv-rows`, so the leaves keep the flat list's
+  plain-geometries-then-depth-twins order for any depth list); `sketch_family_tree` is whichever
+  family claims the lowering, and its census lines are the tree's refutations, path by path,
+  where the conv legs used to keep free-text notes. `model_family_search` walks it too, so a conv
+  site gets the family bound, the stats ledger and the operand-load tie-break: where `model_default`
+  used to scan conv seeds flat (`best_flat`, first strict improvement), an exact score tie between
+  two conv leaves with tile-MMA load counts can now crown the second one. The conv traffic-floor
+  increment is 0 (sound: `completion_floor` bounds every completion); a positive staging increment
+  for conv paths needs its own derivation. **Consequence for diagnostics: since gh-577 a companion-coverage
   DECLINE CENSUS is empty, and that is not evidence the rule stopped firing** — a refuted family is
   never seeded, so it never reaches the decline log. gh-569's Part 3 read 25 coverage declines out of
   `schedule_log_declines`; the same workload on current master logs zero
@@ -425,8 +435,9 @@ files.
   unadvertised cap is genuinely no cap.
   The CONV family is wired too (gh-ocannl-739): `conv_launch_geometry` describes the outer output
   `Grid` loops followed by the blocked flavor's row-block loop (the innermost grid coordinate), plus
-  the tensorization lane as the sole `Workgroup` loop. `conv_seed_params` filters that lower-bound
-  prediction through the same predicate. `launch_predicate_parity` derives a real conv site behind
+  the tensorization lane as the sole `Workgroup` loop. Every conv leaf passes that lower-bound
+  prediction through the same predicate (`launch_geometry_refutation`), so since gh-ocannl-697 an
+  over-cap conv geometry is refuted at its own path with the gate's sentence instead of filtered. `launch_predicate_parity` derives a real conv site behind
   `fission_scheduled`, applies every GPU seed, and proves no predicted dimension exceeds
   `launch_dims`. Its negative controls share one conv whose outer grid loops are a 65536 batch
   and a non-row spatial 2: blocked, the row blocks bind `.x`, the spatial extent `.y`, and the
@@ -1062,8 +1073,13 @@ files.
   integer (scaled by `rm`) because the float form broke those ties by rounding at rm = 3 and 1
   (gh-ocannl-947). The two-row twin `Register_tile.rm_twin` (rm = 2, the widest the budget admits)
   joins the level only under `autotune_register_tile_rm_twin`, off until a timing shows it winning.
-  Not done: the conv family (not tree-factored); whether a partial vector's masked copies deserve
-  a term of their own.
+  The CPU conv leaves carry the same level since gh-ocannl-697 (micro-kernel `m` = the GEMM row
+  or the panel's `sk_bm` rows, `n` = the out-channels; `cpu_conv_sketch_schedule` hands `sk_tile`
+  to both of its `Sched.tensorize` calls), pinned by `schedule_conv_gemm`'s `cvr` leg (every twin
+  renders its header's geometry and matches its `auto` sibling bitwise). Small-channel convs get
+  no twin: at 8 out-channels one or two vector columns leave no alternative at any width, which is
+  why the conv seed counts there did not move. Not done: whether a partial vector's masked copies
+  deserve a term of their own.
 - **C-tile traffic cannot rank `rn` at a fixed lane width** (gh-ocannl-1099).
   Full passes plus the narrower column tail move `2 * rm * ceil(n/lanes)` C vectors per row
   band, independent of `rn`; charging `2 * rm * rn / k` at full `rn` on the tail pass, or once
@@ -1599,7 +1615,16 @@ files.
   catching a 64-row block on a 32-row site (2x, timed 34x off) needs a gate as low as 2x. Its blast
   radius is the CPU packed menu's 128/256-deep blocks, which pad every site below them — a test
   whose claims need the old menu lifts it (`Autotune.lift_pad_waste`, or `inf` as
-  `Fissioned_chain.small_menu` states it).
+  `Fissioned_chain.small_menu` states it). The conv family's menus are judged too since
+  gh-ocannl-1393 (the CPU `conv-shape` menu on the row, the GPU `conv-rows` menus on row,
+  out-channel and reduction), and exclude NOTHING at the default 2x by construction: a row block
+  needs at least two blocks, so its row waste is under 2x, and the intrinsic-tile pads of the
+  out-channel and reduction extents are site-wide (every conv geometry pads them alike), so they
+  cancel in the relative ratio. A small-channel conv (3 input channels on an 8-deep tile) is never
+  excluded for its channel pads: the menu has no less-padded sibling to replace it with, and an
+  absolute gate would empty the family. The judgment is a witness channel and a lever for a
+  lowered threshold. Trap for a test lowering the threshold: the trees are lazy and read the key
+  where a menu is built, so walk the tree while the setting is in force.
 - **The coalesced layout is a search BRANCH over another lowering, not a level of the family tree**
   (gh-ocannl-1165). The q/k/v site `d[b,s,h,e] += w[h,e,k] * x[b,s,k]` caps its column tile at one
   head; `Sched.Coalesce` merges the adjacent `(h, e)` pair into one loop whose accesses read

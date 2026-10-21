@@ -5706,7 +5706,8 @@
 
 (test
  ; cc-vector-width: independent -- the conv family's seed counts read the width only through gates
- ; passing at 16, 32 and 64 bytes.
+ ; passing at 16, 32 and 64 bytes, and through register-tile alternatives none of its 8-channel
+ ; sites has at any width; the 64-channel cvr leg skips where the width affords no twin.
  (name schedule_conv_gemm)
  (package neural_nets_lib)
  (deps
@@ -5984,6 +5985,20 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules sketch_family_tree)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-697: the conv sketch family as a refinement tree, the conv sibling of
+; sketch_family_tree -- pure in the lowering, on synthetic limits, so GPU legs need no GPU.
+
+(test
+ (name conv_family_tree)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules conv_family_tree)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))

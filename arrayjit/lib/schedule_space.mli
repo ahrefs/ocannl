@@ -13,8 +13,8 @@
     - {b Family levels}: which sketch pipeline, and its parameters — represented as a refinement
       {!tree} whose choices may depend on earlier commitments (a staging shape constrains which
       geometries remain; a twin exists only for staged geometries). The sketch families factor into
-      such trees instead of flat enumerations ([Autotune.matmul_sketch_tree] is the first); today's
-      seed lists are exactly the trees' {!leaves}.
+      such trees instead of flat enumerations ([Autotune.matmul_sketch_tree] and
+      [Autotune.conv_sketch_tree]); the seed lists are exactly the trees' {!leaves}.
 
     Phase 2 makes the tree carry {e legality over partial shapes}: each choice's children are judged
     with the same three-valued logic as [Schedule.op_legality], quantified over completions —
