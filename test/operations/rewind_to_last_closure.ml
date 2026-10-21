@@ -275,10 +275,29 @@ let symbol_roles () =
     (committed_sym.Ir.Indexing.used_as_slice
     && refused_with (fun () -> extent_use committed_sym) ~substrings:[ "already slices" ])
 
+(* Caller-retained handles beyond tensors: a variable reference the discarded work bound (and
+   inferred a dimension into), and the random-seed singleton replaced since the closure. *)
+let retained_handles () =
+  Tensor.rewind_to_last_closure ();
+  let x = leaf "rw_cap" [| 1.; 2.; 3. |] in
+  let%op _s = x ++ "a=>0" [ "a" ] in
+  Tensor.rewind_to_last_closure ~reason:"rw: discarding a capture" ();
+  p "a variable reference bound by discarded work is refused, naming the rewind"
+    (refused_with
+       (fun () -> Shape.set_dim a 3)
+       ~substrings:[ "capture it afresh"; "rw: discarding a capture" ]);
+  let seed = Tensor.get_random_seed () in
+  ignore (Shape.to_dims seed.Tensor.shape : int array);
+  Tensor.set_random_seed ~seed:5 ();
+  Tensor.rewind_to_last_closure ();
+  p "a seed replaced since the closure is restored to the closure's"
+    (phys_equal seed (Tensor.get_random_seed ()))
+
 let () =
   match Sys.get_argv () with
   | [| _; "fresh" |] -> fresh_leg ()
   | _ ->
       scenario ();
       timing ();
-      symbol_roles ()
+      symbol_roles ();
+      retained_handles ()

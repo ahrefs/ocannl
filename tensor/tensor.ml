@@ -145,12 +145,16 @@ let take_forward_code t =
     discards it: the ids from [mark] up to [next_id] go to [discarded], and every use of a discarded
     tensor or node is refused with the rewind's provenance. *)
 
+(* Global singleton for random seed, used in init_params and random number generation *)
+let random_seed : t option ref = ref None
+
 type checkpoint = {
   mutable ck_mark : int;
   mutable ck_uid_mark : int;
   mutable ck_fwd : t Map.M(Int).t;
   mutable ck_bprop : t Map.M(Int).t;
   mutable ck_count : int;  (** Closures recorded so far. *)
+  mutable ck_seed : t option;  (** The random-seed singleton at the closure. *)
 }
 
 let checkpoint =
@@ -160,6 +164,7 @@ let checkpoint =
     ck_fwd = Map.empty (module Int);
     ck_bprop = Map.empty (module Int);
     ck_count = 0;
+    ck_seed = None;
   }
 
 let record_checkpoint () =
@@ -167,7 +172,8 @@ let record_checkpoint () =
   checkpoint.ck_uid_mark <- !Tn.next_uid;
   checkpoint.ck_fwd <- session_state.forward_roots;
   checkpoint.ck_bprop <- session_state.backprop_roots;
-  checkpoint.ck_count <- checkpoint.ck_count + 1
+  checkpoint.ck_count <- checkpoint.ck_count + 1;
+  checkpoint.ck_seed <- !random_seed
 
 let () = Shape.on_closure := record_checkpoint
 
@@ -230,9 +236,6 @@ let with_unchanged_roots ~f =
 let iter_embedded ~f t =
   Set.iter ~f t.forward.embedded_nodes;
   Option.iter t.diff ~f:(fun diff -> Set.iter ~f diff.backprop.embedded_nodes)
-
-(* Global singleton for random seed, used in init_params and random number generation *)
-let random_seed : t option ref = ref None
 
 let%debug7_sexp rec init_params ?skip (t : t) : Asgns.comp =
   let more_embedded = ref @@ Set.empty (module Tn) in
@@ -308,12 +311,16 @@ let check_not_discarded ~what t =
     [Tn.update_prec] checks itself) passes. *)
 let prec_update_is_noop t prec =
   let tn = t.value in
-  Lazy.is_val tn.Tn.storage_prec
-  || match tn.Tn.delayed_prec_unsafe with Tn.Specified p -> Ir.Ops.equal_prec p prec | _ -> false
+  if Lazy.is_val tn.Tn.storage_prec then Ir.Ops.equal_prec (Lazy.force tn.Tn.storage_prec) prec
+  else
+    match tn.Tn.delayed_prec_unsafe with Tn.Specified p -> Ir.Ops.equal_prec p prec | _ -> false
 
+(* A settled precision cannot change either ([Tn.update_prec] would raise): validating it here keeps
+   a multi-operand update from writing one operand before another is refused. *)
 let check_operand_prec t prec =
   let tn = t.value in
-  if t.shape.Shape.closed && not (prec_update_is_noop t prec) then
+  if (t.shape.Shape.closed || Lazy.is_val tn.Tn.storage_prec) && not (prec_update_is_noop t prec)
+  then
     raise
     @@ Session_error
          ( [%string
@@ -1263,9 +1270,9 @@ let rewind_to_last_closure ?reason () =
   session_state.backprop_roots <- checkpoint.ck_bprop;
   Map.iter checkpoint.ck_fwd ~f:(fun t -> t.consumption.fwd <- Not_handed_out);
   Map.iter checkpoint.ck_bprop ~f:(fun t -> t.consumption.bprop <- Not_handed_out);
-  (match !random_seed with
-  | Some rs when rs.value.id >= mark -> random_seed := None
-  | Some _ | None -> ());
+  (* The seed singleton as it was at the closure: one created since is dropped, one replaced since
+     ([set_random_seed]) comes back. *)
+  random_seed := checkpoint.ck_seed;
   Shape.rewind_open_state ~provenance;
   record_checkpoint ()
 

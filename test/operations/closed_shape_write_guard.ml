@@ -129,6 +129,14 @@ let () =
   p "and its open operand's precision was not written either"
     (Option.equal Ir.Ops.equal_prec open_before
        (Ir.Tnode.get_specified_prec open_operand.Tensor.value));
+  let open2 = leaf "cg_open2" [| 1.; 2. |] in
+  let open2_before = Ir.Tnode.get_specified_prec open2.Tensor.value in
+  p "with a compiled (settled-precision) float operand too, before writing the open one"
+    (refused_with
+       (fun () -> Ocannl.Operation.threefry4x32_crypto open2 x ())
+       ~substrings:[ "uint4x32" ]
+    && Option.equal Ir.Ops.equal_prec open2_before (Ir.Tnode.get_specified_prec open2.Tensor.value)
+    );
   p "the refusal did not taint the session"
     (Result.is_ok (outcome (fun () -> Shape.to_dims (TDSL.O.relu f).Tensor.shape)));
   (* (e) Parameterizing a closed tensor is refused before any write. *)

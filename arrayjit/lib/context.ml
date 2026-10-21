@@ -293,7 +293,10 @@ let compile_outcome ?name ?lowered_transform ?prelowered ~provenance ?candidate 
       let read, written = Ir.Assignments.collect_nodes_guess_output comp.Ir.Assignments.asgns in
       Set.iter
         (Set.union_list (module Tn) [ read; written; comp.Ir.Assignments.embedded_nodes ])
-        ~f:check);
+        ~f:check;
+      (* A prelowered program replaces the comp's lowering: its nodes are the ones that run. *)
+      Option.iter prelowered ~f:(fun (p : Ir.Low_level.optimized) ->
+          Hashtbl.iter_keys p.traced_store ~f:check));
   (* Compile and link on the wrapped backend context; only backend-independent routine components
      (and, via [with_backend]'s rebuilt constructor, the updated context) escape the dispatch. *)
   let wrapped, backend_outcome =

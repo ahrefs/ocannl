@@ -55,6 +55,28 @@ type delayed_var_ref = {
 let get_variable_ref ref_label =
   { var_ref = Ir.Indexing.{ ref_label; solved_dim = None; solved_sym = None }; var = `Not_set_yet }
 
+(* Variable references are caller-retained (gh-ocannl-1301): the ones open work bound or set since
+   the last closure ([open_refs]) are, after a rewind, stale handles like the work's tensors -- a
+   reference carries what the discarded inference wrote into it (its binding, an inferred
+   [solved_dim]), so reusing it is refused rather than letting it inject a discarded dimension. *)
+let open_refs : delayed_var_ref list ref = ref []
+let discarded_refs : (delayed_var_ref * string) list ref = ref []
+
+let touch_ref (r : delayed_var_ref) =
+  Row.note_mutation ();
+  if not (List.mem !open_refs r ~equal:phys_equal) then open_refs := r :: !open_refs
+
+let check_ref_live (r : delayed_var_ref) =
+  match List.find !discarded_refs ~f:(fun (d, _) -> phys_equal d r) with
+  | None -> ()
+  | Some (_, provenance) ->
+      raise
+      @@ Row.Shape_error
+           ( [%string
+               "the variable reference %{r.var_ref.ref_label} was bound or set by work discarded \
+                by the rewind after %{provenance}; capture it afresh"],
+             [] )
+
 type compose_type =
   | Pointwise_bin
   | Compose
@@ -325,10 +347,11 @@ let add_var_used_in_pointwise row =
 let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~error_shapes
     dim_refs =
   List.filter_map dim_refs ~f:(fun delayed_ref ->
+      check_ref_live delayed_ref;
       let label = delayed_ref.var_ref.ref_label in
       match Hashtbl.find dim_var_env label with
       | Some var -> (
-          Row.note_mutation ();
+          touch_ref delayed_ref;
           delayed_ref.var <- `Dim var;
           let origin =
             [
@@ -351,7 +374,7 @@ let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~
       | None -> (
           match Hashtbl.find row_var_env label with
           | Some var ->
-              Row.note_mutation ();
+              touch_ref delayed_ref;
               delayed_ref.var <- `Row var;
               if Option.is_some delayed_ref.var_ref.solved_sym then
                 raise
@@ -1450,6 +1473,8 @@ let rewind_open_state ~provenance =
   if !update_uid > !update_mark then
     discarded_updates := (!update_mark, !update_uid, provenance) :: !discarded_updates;
   update_mark := !update_uid;
+  discarded_refs := List.map !open_refs ~f:(fun r -> (r, provenance)) @ !discarded_refs;
+  open_refs := [];
   state := Row.empty_env;
   active_update_steps := [];
   active_constraints := [];
@@ -1744,6 +1769,7 @@ let product_space_shape ~(shape : t) ~(logic : logic) : t =
 (** Sets the dimension/total-elements for a delayed variable reference. For row variables, this
     creates a [Total_elems] constraint that will be reconciled during [finish_inference]. *)
 let%track7_sexp set_dim (delayed_var_ref : delayed_var_ref) (dim : int) : unit =
+  check_ref_live delayed_var_ref;
   match delayed_var_ref with
   | { var_ref = { solved_sym = Some _; ref_label; _ }; _ } ->
       raise
@@ -1759,10 +1785,10 @@ let%track7_sexp set_dim (delayed_var_ref : delayed_var_ref) (dim : int) : unit =
              [ Row.Dim_mismatch [ Row.get_default_dim ~d:dim2 (); Row.get_default_dim ~d:dim () ] ]
            )
   | { var_ref = { solved_dim = None; _ }; var = `Not_set_yet; _ } ->
-      Row.note_mutation ();
+      touch_ref delayed_var_ref;
       delayed_var_ref.var_ref.solved_dim <- Some dim
   | { var_ref = { solved_dim = None; _ }; var = `Dim dim_var; _ } ->
-      Row.note_mutation ();
+      touch_ref delayed_var_ref;
       delayed_var_ref.var_ref.solved_dim <- Some dim;
       active_constraints :=
         Row.Dim_eq
@@ -1782,7 +1808,7 @@ let%track7_sexp set_dim (delayed_var_ref : delayed_var_ref) (dim : int) : unit =
           }
         :: !active_constraints
   | { var_ref = { solved_dim = None; _ }; var = `Row row_var; _ } ->
-      Row.note_mutation ();
+      touch_ref delayed_var_ref;
       delayed_var_ref.var_ref.solved_dim <- Some dim;
       active_constraints :=
         Row.Rows_constr
@@ -1809,6 +1835,7 @@ let%track7_sexp set_dim (delayed_var_ref : delayed_var_ref) (dim : int) : unit =
     supported (a symbolic total-elements constraint would require symbolic arithmetic). *)
 let%track7_sexp set_sym_dim (delayed_var_ref : delayed_var_ref) (sym : Ir.Indexing.static_symbol) :
     unit =
+  check_ref_live delayed_var_ref;
   (* Eagerly validate the declared range (raises [Utils.User_error] if absent or non-positive). *)
   let sym_dim = Row.get_sym_dim sym in
   let origin =
@@ -1838,10 +1865,10 @@ let%track7_sexp set_sym_dim (delayed_var_ref : delayed_var_ref) (sym : Ir.Indexi
              ^ ": already set to a concrete dimension",
              [ Row.Dim_mismatch [ Row.get_default_dim ~d:dim2 (); sym_dim ] ] )
   | { var_ref = { solved_dim = None; _ }; var = `Not_set_yet; _ } ->
-      Row.note_mutation ();
+      touch_ref delayed_var_ref;
       delayed_var_ref.var_ref.solved_sym <- Some sym
   | { var_ref = { solved_dim = None; _ }; var = `Dim dim_var; _ } ->
-      Row.note_mutation ();
+      touch_ref delayed_var_ref;
       delayed_var_ref.var_ref.solved_sym <- Some sym;
       active_constraints :=
         Row.Dim_eq { d1 = Row.Var dim_var; d2 = sym_dim; origin } :: !active_constraints
@@ -1853,6 +1880,8 @@ let%track7_sexp set_sym_dim (delayed_var_ref : delayed_var_ref) (sym : Ir.Indexi
              [] )
 
 let set_equal delayed_ref1 delayed_ref2 =
+  check_ref_live delayed_ref1;
+  check_ref_live delayed_ref2;
   (* TODO: use provenance from the row variables once we have it there. *)
   match (delayed_ref1, delayed_ref2) with
   | { var_ref = { solved_sym = Some sym1; _ }; _ }, { var_ref = { solved_sym = Some sym2; _ }; _ }
@@ -1967,6 +1996,8 @@ let set_equal delayed_ref1 delayed_ref2 =
         :: !active_constraints
 
 let set_scale ~factor delayed_ref_large delayed_ref_small =
+  check_ref_live delayed_ref_large;
+  check_ref_live delayed_ref_small;
   if factor < 1 then
     raise
     @@ Row.Shape_error ("Shape.set_scale: factor must be >= 1, got " ^ Int.to_string factor, []);
@@ -2101,6 +2132,8 @@ let unsafe_reinitialize () =
   taint := None;
   update_mark := 0;
   discarded_updates := [];
+  open_refs := [];
+  discarded_refs := [];
   Row.reset_transient ();
   Row.drop_symbol_roles ()
 
@@ -2690,8 +2723,9 @@ let update_delayed_var_refs env update_step =
             | Some d ->
                 (* If solved_dim was set by set_dim, preserve it - consistency checked in
                    finish_inference. Otherwise, update from inference. *)
-                if Option.is_none delayed_ref.var_ref.solved_dim then
-                  delayed_ref.var_ref.solved_dim <- Some d
+                if Option.is_none delayed_ref.var_ref.solved_dim then (
+                  touch_ref delayed_ref;
+                  delayed_ref.var_ref.solved_dim <- Some d)
             | None -> () (* Not yet resolved *))
         | `Row row_var -> (
             match Row.get_row_from_env env row_var with
@@ -2700,8 +2734,9 @@ let update_delayed_var_refs env update_step =
                 | Some product ->
                     (* If solved_dim was set by set_dim, preserve it - the Total_elems constraint
                        will be processed in finish_inference to reconcile. Otherwise, update. *)
-                    if Option.is_none delayed_ref.var_ref.solved_dim then
-                      delayed_ref.var_ref.solved_dim <- Some product
+                    if Option.is_none delayed_ref.var_ref.solved_dim then (
+                      touch_ref delayed_ref;
+                      delayed_ref.var_ref.solved_dim <- Some product)
                 | None -> () (* Row has unresolved dimensions *))
             | None -> () (* Row variable not yet resolved *)))
   in
@@ -2777,6 +2812,7 @@ let%debug4_sexp finish_inference_body (() : unit) : unit =
   List.iter !active_update_steps ~f:(fun update_step ->
       iter_shapes update_step ~f:(fun sh -> sh.closed <- true));
   Row.commit_symbol_roles ();
+  open_refs := [];
   update_mark := !update_uid;
   active_constraints := [];
   active_update_steps := [];

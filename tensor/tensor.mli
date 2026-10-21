@@ -93,9 +93,12 @@ val is_bprop_root : t -> bool
 val take_forward_code : t -> comp
 (** The unchecked half of {!consume_forward_code}, for a tensor the caller has established is a
     forward root ({!is_fwd_root}): removes it from the forward roots, marks its forward code as
-    taken, and returns the code. This is the handout every path that embeds a tensor's forward code
-    goes through -- {!consume_forward_code} and the [%cd] operands' embedding alike -- so that a
-    later {!consume_forward_code} on the same tensor returns the same comp. *)
+    taken, and returns the code. It is an EMBEDDING, not a handout: {!rewind_to_last_closure} treats
+    an embedding made since the last closure as discarded work and makes the tensor a root again;
+    code a caller keeps is handed out with {!consume_forward_code}. This is the handout every path
+    that embeds a tensor's forward code goes through -- {!consume_forward_code} and the [%cd]
+    operands' embedding alike -- so that a later {!consume_forward_code} on the same tensor returns
+    the same comp. *)
 
 val discard_backprop_code : t -> unit
 (** Drops [t] from the backprop roots without handing its code out, and marks it so: the
@@ -314,7 +317,9 @@ val rewind_to_last_closure : ?reason:string -> unit -> unit
       compiling its code, printing it or transferring its node raises [Session_error] naming the
       rewind's provenance ("discarded by the rewind after ..."), as do their update steps'
       projections;
-    - the cached random seed is dropped if it was created since the closure.
+    - variable references the discarded work bound or set are refused by [Shape.set_dim] and the
+      other reference setters, and by any later einsum they are passed to;
+    - the cached random seed is restored to the closure's.
 
     Counters are never reset, so later tensors never collide with discarded ones. Contexts, routines
     and buffers are untouched, and nothing executed is undone. Without a taint it simply discards
