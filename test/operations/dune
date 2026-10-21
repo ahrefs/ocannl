@@ -2104,6 +2104,28 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name mobile_cnn_width)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules mobile_cnn_width)
+ (libraries base ocannl arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
+ (name demo_models_smoke)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules demo_models_smoke)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name conv_bias_shapes)
  (package neural_nets_lib)
  (deps
@@ -4308,6 +4330,8 @@
 
 (rule
  ; ocannl-backend: none -- runs the scanner's synthetic stale-exclusion refusal branch.
+ ; The fixture library's wrapper interface is what its declared-but-unread control copies alone
+ ; into a tree of its own (gh-ocannl-1233).
  (target codegen_text_inventory_control.actual)
  (package neural_nets_lib)
  (deps
@@ -4317,7 +4341,10 @@
  (action
   (with-stdout-to
    %{target}
-   (run %{dep:codegen_text_inventory.exe} --refusal-control))))
+   (run
+    %{dep:codegen_text_inventory.exe}
+    --refusal-control
+    %{dep:.emitter_fixture.objs/byte/emitter_fixture.cmi}))))
 
 (rule
  (alias runtest-codegen_text_inventory_control)
@@ -9867,6 +9894,18 @@
   (env_var OCANNL_BUILD_FILES_PREFIX))
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
 
+; gh-ocannl-1435: Metal sin, cos and tanh are IEEE on special inputs and accurate near zero and at
+; large magnitudes, at f32, half and bfloat16, under the fast math functions.
+
+(test
+ (name unary_math_special_values)
+ (package neural_nets_lib)
+ (modules unary_math_special_values)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (libraries base ocannl stdio arrayjit.verdict ll_test))
+
 ; gh-ocannl-1240: powers with a run-time exponent keep a negative base's integral powers under the
 ; GPU backends' fast math.
 
@@ -10181,6 +10220,19 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; cc-vector-width: independent -- a row sum seeds no sketch family; the claims compare the reports
+ ; with the seams' own calls and the progress lines.
+ ; gh-ocannl-1438: a report's privatize drops and the search_done line's new fields.
+ (name autotune_report_drops)
+ ; ocannl-backend: cc -- Context.cpu (); the injected refusals are backend-independent
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules autotune_report_drops)
+ (libraries base ocannl stdio stderr_capture arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name autotune_sketch_placements)
  (package neural_nets_lib)
  (deps
@@ -10481,5 +10533,27 @@
   (env_var OCANNL_BACKEND))
  (modules rev_sides_padded_target)
  (libraries base ocannl arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
+ ; gh-ocannl-1452: the workgroup-memory estimate charges the warp-reduce partials the kernel
+ ; declares, and the conv seeding prices each staged tile at its own operand's precision.
+ (name workgroup_memory_accounting)
+ (package neural_nets_lib)
+ (deps
+  (env_var OCANNL_BUILD_FILES_PREFIX)
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+ (modules workgroup_memory_accounting)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))

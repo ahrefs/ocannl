@@ -225,19 +225,20 @@ let () =
     conv_segments ~f:(fun (_, tree) ->
       List.exists (Sspace.refutations tree) ~f:(fun (path, w) ->
           on_path (FD.Conv_rows 16) path && mentions w ~sub:"fewer than two blocks"));
-  (* A workgroup-memory cap between the 8-row block's staged tiles (512 bytes) and the whole padded
-     row's (768): the leg still seeds, and notes the flavor the cap refused. *)
+  (* A workgroup-memory cap between the 8-row block's charge (768 bytes: its two staged tiles, and,
+     the flavor being masked, its workgroup-shared accumulator fragment, gh-ocannl-1452) and the
+     whole padded row's (1280): the leg still seeds, and notes the flavor the cap refused. *)
   let tight_limits =
     {
       Ir.Backend_intf.no_hardware_limits with
       mma = gpu_limits.Ir.Backend_intf.mma;
-      max_workgroup_memory_bytes = Some 600;
+      max_workgroup_memory_bytes = Some 1000;
     }
   in
   let tight =
     List.filter_map segments ~f:(fun seg ->
-        let c = census ~where:"conv segment gpu 600B" ~is_gpu:true ~limits:tight_limits seg in
-        claim_consistent "conv segment (600-byte workgroup memory)" ~is_gpu:true
+        let c = census ~where:"conv segment gpu 1000B" ~is_gpu:true ~limits:tight_limits seg in
+        claim_consistent "conv segment (1000-byte workgroup memory)" ~is_gpu:true
           ~limits:tight_limits seg c;
         conv_seeding c)
   in
@@ -245,7 +246,7 @@ let () =
     ~f:(fun (_, tree) ->
       (not (List.is_empty (leg_seeds tree `Gpu)))
       && List.exists (Sspace.refutations tree) ~f:(fun (path, w) ->
-          on_path (FD.Conv_rows 0) path && mentions w ~sub:"exceeding the 600-byte limit"));
+          on_path (FD.Conv_rows 0) path && mentions w ~sub:"exceeding the 1000-byte limit"));
   (* === gh-ocannl-1406: the GPU leg judges companion coverage, not a statement count. A conv with
      two materialized elementwise companions (the convnet's conv+relu+scale shape) is an
      aligned-merged segment of three real statements, which a [real_stmts <= 2] cap refused although

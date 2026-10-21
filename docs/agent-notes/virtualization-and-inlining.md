@@ -450,6 +450,18 @@ files.
   also named is not dead under exact IEEE (`0 * inf` is NaN); under `fp_finite_math`, `Fp_algebra`
   folds it on the raw lowering, ahead of storage. Pinned, with executed parity against the
   materialized reading, by `test/operations/stored_template_elision.ml`.
+- **The walk itself skips the dead arm of a decided `Where`** (gh-ocannl-1469, the consumer's
+  half of the entry above): `virtual_llc`'s `Where` arm asks the injected `~decide_where`
+  (`Low_level.where_condition_decided`, the same every-precision test) and walks only the live arm,
+  the dead one becoming `Constant 0.` — so a routine's own constant-condition `Where` around an
+  inherited merge-tainted read is no longer refused for code that never runs (`Arg1`/`Arg2`
+  already collapsed this way, review round 9 of gh-610/611). Its environment is the static
+  indices plus the enclosing loops, minus the `~opaque` ones: the phase-1 capture of a `For_loop`
+  candidate makes the candidate's write-index symbols opaque, since that walk IS the stored
+  template; any other loop's symbol in stored code gets the store refused (`Non_virtual 9`/`10`),
+  so its extent decides soundly. A guard (`If`) narrows nothing here, and `And`/`Or`/`Relu_gate`
+  operands are still walked (their decision needs the operator's result precision, which the walk
+  does not track) — a merge-tainted read behind a shut gate in the consumer is still refused.
 - Big-reduction producers are forced `Never_virtual` by `virtualize_max_inline_reduction`
   (default 16) — remember it when a structural expectation assumes inlining.
 - Wide-fanin producers are forced `Never_virtual 41` by `virtualize_max_inline_fanin` (default 8,

@@ -34,3 +34,9 @@ scratch calibration: partial report retains the pinned incumbent: true
 scratch calibration: working pools return to their starting count: true
 scratch calibration: working bytes return to their starting count: true
 scratch calibration: every created context was explicitly released: true
+forced refusal direct timed: the search records its refused windows and admitted only the first: true
+forced refusal direct timed: the second-window claims' gate opens on that record: true
+forced refusal direct timed: with no second admitted window, nothing was injected: true
+forced refusal direct timed: working pools return to their starting count: true
+forced refusal direct timed: working bytes return to their starting count: true
+forced refusal direct timed: every created context was explicitly released: true

@@ -3,3 +3,4 @@ an empty lib source hand-over reaches the inventory refusal: true
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:924efa1e307f7c5a40712dd66311abe1] the inventory nothing
   [scanner-refusal:52e64fbae740ca90c4066b7840e926ae] source hand-over reaches
+End of synthetic controls.

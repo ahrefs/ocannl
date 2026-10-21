@@ -4569,15 +4569,31 @@ let conv_family_tree ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~
                     (* The gate's own charge ([Sched.kernel_workgroup_bytes]): each tile one array
                        of [copies] rotating copies, rounded to the backend's allocation granule,
                        plus the per-kernel tile-MMA scratch of the site's triple, which every
-                       completion's [Tile_mma] carries (gh-ocannl-1330, gh-ocannl-1255). *)
-                    let memory_witness ~copies rows =
+                       completion's [Tile_mma] carries (gh-ocannl-1330, gh-ocannl-1255). Each tile
+                       at its own operand's storage precision, the precision
+                       [gpu_conv_sketch_schedule]'s [Stage] (no [tile_prec]) declares it at: a
+                       mixed-precision site's narrow operand tiles are not priced at its wide
+                       accumulator (gh-ocannl-1452). A geometry whose accumulator is masked
+                       ([acc_masked]) also places its accumulator fragment, [rows x noc_p] at the
+                       output's storage precision, in workgroup-shared memory
+                       ([Sched.contract_tensorized_accumulator]'s [shared_frag]: a staged pipeline
+                       under pad masks); otherwise it stays in simdgroup fragments. A reduction pad
+                       alone masks nothing: [Tensorize] discharges its guard, the staged operands'
+                       padded slots being exact zeros. *)
+                    let memory_witness ~copies ~acc_masked rows =
                       match limits.Ir.Backend_intf.max_workgroup_memory_bytes with
                       | None -> None
                       | Some cap ->
-                          let pb = Ir.Ops.prec_in_bytes prec in
                           let bytes =
                             Sched.kernel_workgroup_bytes ~capabilities
-                              ~arrays:[ copies * rows * nred_p * pb; copies * nred_p * noc_p * pb ]
+                              ~arrays:
+                                ([
+                                   copies * rows * nred_p * Ir.Ops.prec_in_bytes a_prec;
+                                   copies * nred_p * noc_p * Ir.Ops.prec_in_bytes b_prec;
+                                 ]
+                                @
+                                if acc_masked then [ rows * noc_p * Ir.Ops.prec_in_bytes prec ]
+                                else [])
                               ~mma_triples:[ (prec, a_prec, b_prec) ]
                           in
                           if bytes <= cap then None
@@ -4591,12 +4607,13 @@ let conv_family_tree ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~
                                   else "")
                                  cap)
                     in
-                    (* A pad-masked geometry: a pad multiple set, or a row block that does not
-                       divide the row extent. *)
-                    let masked p =
-                      p.sk_bn > 0 || p.sk_bk > 0
-                      || if p.sk_bm = 0 then p.sk_tm > 0 else site.c_nrow % p.sk_bm <> 0
+                    (* A geometry whose [Tensorize] masks the accumulator: a column pad, or a row
+                       pad or row block that does not divide the row extent. *)
+                    let acc_masked p =
+                      p.sk_bn > 0 || if p.sk_bm = 0 then p.sk_tm > 0 else site.c_nrow % p.sk_bm <> 0
                     in
+                    (* A geometry with any pad: the accumulator masks, or a reduction pad. *)
+                    let masked p = p.sk_bk > 0 || acc_masked p in
                     (* Depth twins ride the async arms' element floor (Codex P2 on PR #317, as in
                        the matmul sketch): staged tiles of sub-4-byte elements render the portable
                        synchronous form only. *)
@@ -4630,7 +4647,7 @@ let conv_family_tree ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~
                           Some
                             (Printf.sprintf "row block gives fewer than two blocks of the %d rows"
                                site.c_nrow)
-                        else memory_witness ~copies:1 rows
+                        else memory_witness ~copies:1 ~acc_masked:(acc_masked p0) rows
                       in
                       match single with
                       | Some w -> Sspace.Refuted w
@@ -4650,7 +4667,11 @@ let conv_family_tree ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~
                                                1..2 (Schedule.apply_stage)"
                                               d)
                                        else
-                                         match (memory_witness ~copies:d rows, twin) with
+                                         match
+                                           ( memory_witness ~copies:d ~acc_masked:(acc_masked p0)
+                                               rows,
+                                             twin )
+                                         with
                                          | Some w, _ -> Sspace.Refuted w
                                          | None, (Sspace.Refuted _ as refuted) -> refuted
                                          | None, _ ->

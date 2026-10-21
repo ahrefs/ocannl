@@ -1,0 +1,18 @@
+every reduction runs and returns the sum: true
+the estimate charges exactly the warp-reduce partials the emitted kernel declares: true
+past one warp the emitted kernel declares warp-reduce partials: true
+within one warp the emitted kernel declares none: true
+past one warp the gate admits the kernel at exactly its declared partials and refuses it one byte below: true
+unmasked: the conv site is mixed precision, f16 operands into an f32 output: true
+unmasked: every GPU conv seed is kept at a limit of exactly its gate estimate: true
+unmasked: every GPU conv seed is refused one byte below its gate estimate: true
+unmasked: no flavor places its accumulator fragment in workgroup memory: true
+reduction-padded: the conv site is mixed precision, f16 operands into an f32 output: true
+reduction-padded: every GPU conv seed is kept at a limit of exactly its gate estimate: true
+reduction-padded: every GPU conv seed is refused one byte below its gate estimate: true
+reduction-padded: every flavor pads the reduction: true
+reduction-padded: no flavor places its accumulator fragment in workgroup memory: true
+masked: the conv site is mixed precision, f16 operands into an f32 output: true
+masked: every GPU conv seed is kept at a limit of exactly its gate estimate: true
+masked: every GPU conv seed is refused one byte below its gate estimate: true
+masked: every flavor places an f32 accumulator fragment in workgroup memory: true

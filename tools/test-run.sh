@@ -28,14 +28,17 @@
 #     machine-verify; everything else (opam, PATH, OCANNL_*) passes through.
 #
 # Usage:
-#   tools/test-run.sh run   [--cap N] [--test-cap N] [DUNE ARGS...]   # foreground; digest; dune's status (2: refused)
-#   tools/test-run.sh start [--cap N] [--test-cap N] [DUNE ARGS...]   # detached; survives the session
-#   tools/test-run.sh plan  [--cap N] [--test-cap N] [DUNE ARGS...]   # what `run` would inject and take; runs nothing
+#   tools/test-run.sh run   [--cap N] [--test-cap N] [--expect-backend B]... [DUNE ARGS...]
+#                                                      # foreground; digest; dune's status (2: refused)
+#   tools/test-run.sh start [--cap N] [--test-cap N] [--expect-backend B]... [DUNE ARGS...]
+#                                                      # detached; survives the session
+#   tools/test-run.sh plan  [--cap N] [--test-cap N] [--expect-backend B]... [DUNE ARGS...]
+#                                                      # what `run` would inject and take; runs nothing
 #   tools/test-run.sh repeat [--cap N] [--test-cap N] [--alone] N [DUNE ARGS...]
 #                                                      # compare N isolated runs
 #   tools/test-run.sh repeat [--cap N] [--test-cap N] [--alone] --direct N @DIR/KIND-NAME... [-j N]
 #                                                      # build once, replay the tests N times
-#   tools/test-run.sh fresh [--cap N] [--test-cap N] @DIR/KIND-NAME... [-j N]
+#   tools/test-run.sh fresh [--cap N] [--test-cap N] [--expect-backend B]... @DIR/KIND-NAME... [-j N]
 #                                                      # one fresh, timed run of named tests
 #   tools/test-run.sh bisect [--cap N] [--test-cap N] [--build TARGET]... [--no-first-parent]
 #                            GOOD BAD TARGET...      # the first commit that turns TARGETs red
@@ -199,6 +202,10 @@
 # device-init deadline writes before its process dies by SIGALRM
 # (gh-ocannl-1281) keeps dune's status under the verdict `WEDGED DEVICE`, and
 # the digest quotes that line: the device, not the tests, is what to read.
+# And a run whose batch does not hold a backend its `--expect-backend` names
+# exits 2 under the verdict `BACKEND REFUSED`, dune never started (see
+# plan_backend_check: a GPU box's batch that resolved to cc only says so even
+# without the option).
 #
 # Everything after the options is dune's argv, verbatim (default: `runtest`):
 #   tools/test-run.sh run runtest test/operations
@@ -209,7 +216,11 @@
 # background mode and let the harness notify on exit -- that already removes
 # every reason to write a waiter. `start`/`wait` exist only for a run that must
 # outlive the launching session. The cap defaults to $OCANNL_TOOL_TEST_CAP or 3600s;
-# `--cap 0` disables it (then supply your own bound). `--test-cap N` bounds each
+# `--cap 0` disables it (then supply your own bound). `--expect-backend B`
+# (repeatable) refuses a batch that does not hold backend B, before dune starts
+# (BACKEND REFUSED, exit 2): pass the GPU backend a GPU-box leg is for, since a
+# batch there that resolves to cc alone is green and tests nothing on the GPU
+# (plan_backend_check, gh-ocannl-1433). `--test-cap N` bounds each
 # process dune starts (each test, in a test batch) and ENDS the run when one
 # outlives it, as the run's own cap would; N (or $OCANNL_TOOL_PER_TEST_CAP)
 # applies to any batch, 0 lifts it, and by default only a GPU batch not
@@ -282,12 +293,13 @@ reject_misplaced_options() {
   for arg do
     case $arg in
       --) return 0 ;;
-      --cap | --cap=* | --alone | --alone=* | --test-cap | --test-cap=* | --direct | --direct=*)
+      --cap | --cap=* | --alone | --alone=* | --test-cap | --test-cap=* | --direct | --direct=* | \
+        --expect-backend | --expect-backend=*)
         case $sub in
           repeat) form='repeat [--cap N] [--test-cap N] [--alone] [--direct] N [DUNE ARGS...]' ;;
-          fresh) form='fresh [--cap N] [--test-cap N] @DIR/KIND-NAME... [-j N]' ;;
+          fresh) form='fresh [--cap N] [--test-cap N] [--expect-backend B]... @DIR/KIND-NAME... [-j N]' ;;
           bisect) form=$bisect_usage ;;
-          *) form="$sub [--cap N] [--test-cap N] [DUNE ARGS...]" ;;
+          *) form="$sub [--cap N] [--test-cap N] [--expect-backend B]... [DUNE ARGS...]" ;;
         esac
         die "$arg belongs before the dune arguments, not after them:
   tools/test-run.sh $form
@@ -558,6 +570,71 @@ plan_slot_kind() { # after plan_batch
 # them on any box, so the two decisions below ask this rather than whether a
 # resolution happened, or `plan` would report bounds `run` never applies.
 run_reads_batch() { [ -n "$batch_resolved" ] && { [ -n "$slot_fw" ] || batch_box_has_hazard; }; }
+
+# What the batch's backends say about the GPU it was meant to test
+# (gh-ocannl-1433). A batch on a GPU box can resolve to the CPU backends alone
+# -- OCANNL_BACKEND unset, the test configuration naming cc -- and then it is
+# green and has tested nothing on the GPU, which is how two wave legs passed
+# while proving nothing about the backend they were run for. So:
+#   - `--expect-backend B` (repeatable; a backend name, an alias canonicalized)
+#     is the caller's statement of what the batch must hold. A batch that does
+#     not hold every B, or whose backends could not be read (an unread answer
+#     is "any backend" for a width and a slot, but proves no backend held), is
+#     refused before dune starts: BACKEND REFUSED, exit 2, and the digest
+#     names what it held. The option makes `run` resolve the batch's backends
+#     on any box, where otherwise only a width hazard or a fleet slot does.
+#   - Without the option, on a GPU box -- one where cuda or hip meets a width
+#     hazard (tools/box-jobs.sh's local view: the fleet's Linux GPU boxes, a
+#     WSL guest's bridge), so never a Mac -- a batch whose resolved backends
+#     are all CPU ones says so in a WARNING line, in the announcements, the
+#     run's log and the digest. A batch holding no backend at all (the scans)
+#     claims none and is not warned about; one whose `--expect-backend` holds
+#     has said what it meant, cc included.
+expect_backends=  # canonical, space-separated; from the run's `expect-backend`
+backend_refusal=  # why the batch is refused, empty for none
+backend_warning=  # the GPU box's warning, empty for none
+box_gpu_backends() { # the GPU backends that meet a width hazard on this box
+  local b out=
+  for b in $BATCH_ALL_BACKENDS; do
+    box_jobs_gpu_backend "$b" || continue
+    [ -z "$(box_jobs_local_hazard "$b")" ] || out="$out${out:+ }$b"
+  done
+  printf '%s' "$out"
+}
+batch_holds_backend() { # <backend>; 0 iff the resolved batch holds it
+  local b rest
+  while IFS=' ' read -r b rest; do
+    [ "$b" = "$1" ] && return 0
+  done <<<"$batch_holds"
+  return 1
+}
+plan_backend_check() { # after plan_batch, and batch_resolve when expect_backends is set
+  local b missing= gpus select
+  backend_refusal= backend_warning=
+  if [ -n "$expect_backends" ]; then
+    if [ -n "$batch_unknown" ]; then
+      backend_refusal="--expect-backend $expect_backends: this batch's backends are unread ($batch_unknown), so nothing shows it holds $expect_backends"
+      return 0
+    fi
+    for b in $expect_backends; do
+      batch_holds_backend "$b" || missing="$missing${missing:+ }$b"
+    done
+    [ -z "$missing" ] ||
+      backend_refusal="--expect-backend $expect_backends: this batch holds $(batch_summary), not $missing. Select it (OCANNL_BACKEND=$(set -- $missing; printf '%s' "$1"), or a test configuration naming it), or run the batch without the option"
+    return 0
+  fi
+  [ -n "$batch_resolved" ] && [ -z "$batch_unknown" ] && [ -n "$batch_holds" ] || return 0
+  [ "$(batch_kind)" = cpu ] || return 0
+  gpus=$(box_gpu_backends)
+  [ -n "$gpus" ] || return 0
+  # A WSL guest's bridge is a hazard for cuda and hip alike, so there the box's
+  # own GPU is not known here: name the one backend only when it is the only one.
+  case $gpus in
+    *' '*) gpus="${gpus// / or }" select="OCANNL_BACKEND=<this box's GPU backend>" ;;
+    *) select="OCANNL_BACKEND=$gpus" ;;
+  esac
+  backend_warning="WARNING: this box has a GPU backend ($gpus), but this batch holds only $(batch_summary): it tests nothing on the GPU. Select it ($select) to test it here, or pass --expect-backend to refuse a batch that does not hold it (gh-ocannl-1433)."
+}
 
 # The device probe (gh-ocannl-1211; probe_perl says what it reads): every GPU
 # backend of a batch `run` resolves, through `bin/device_props` -- the query
@@ -2174,6 +2251,12 @@ digest() {
   # any other code still reports that code's verdict.
   case $rc in
     0) verdict=pass ;;
+    2)
+      if [ -s "$dir/backend-refused" ]; then
+        verdict="BACKEND REFUSED (the batch does not hold the backend --expect-backend names; nothing ran)"
+      else
+        verdict=FAIL
+      fi ;;
     1 | 4)
       if slot_refusal "$dir"; then
         verdict="SLOT REFUSED (the fleet's run-time slot was not taken; nothing ran)"
@@ -2254,6 +2337,11 @@ digest() {
       fi
     fi
   fi
+  if [ -s "$dir/backend-refused" ]; then
+    echo "backend refused: $(cat "$dir/backend-refused")"
+  elif [ -s "$dir/backend-warning" ]; then
+    cat "$dir/backend-warning"
+  fi
   if [ -s "$dir/device-probe" ]; then
     echo "device probe:"
     sed 's/^/  /' "$dir/device-probe"
@@ -2279,7 +2367,7 @@ digest() {
   # setup error, ran no batch, so a record beside one is not this verdict's.
   # `open` marks a process the run's end cut short, its seconds a lower bound.
   case $verdict in
-    INVOCATION* | SLOT* | DEVICE* | ERROR*) ;;
+    INVOCATION* | SLOT* | DEVICE* | ERROR* | BACKEND*) ;;
     *)
       if [ -s "$dir/slowest" ]; then
         echo "slowest actions (this run's dune trace, by tools/action-durations.sh):"
@@ -3145,10 +3233,26 @@ case $sub in
     shift 4
     run_dir=$OCANNL_TOOL_TESTRUN_OWN
     plan_slot
+    expect_backends=$(cat "$run_dir/expect-backend" 2>/dev/null) || expect_backends=
     if [ "$mode" = plan ]; then
       batch_resolve "$DUNE" "$run_dir/log" "$@"
     else
       plan_batch "$run_dir/log" "$@"
+      # An expectation is judged on a resolution wherever the run is.
+      [ -z "$expect_backends" ] || [ -n "$batch_resolved" ] || batch_resolve "$DUNE" "$run_dir/log" "$@"
+    fi
+    plan_backend_check
+    if [ -n "$backend_refusal" ] && [ "$mode" != plan ]; then
+      # Before the slot, the probe and dune: nothing ran, and the digest says why.
+      { printf '%s\n' "$backend_refusal" >"$run_dir/backend-refused.tmp" &&
+          mv -f "$run_dir/backend-refused.tmp" "$run_dir/backend-refused"; } ||
+        { echo "test-run: cannot record the backend refusal in $run_dir"; exit 126; }
+      printf 'test-run: BACKEND REFUSED: %s\n' "$backend_refusal"
+      exit 2
+    fi
+    if [ -n "$backend_warning" ] && [ "$mode" != plan ] && [ "$mode" != repeat ]; then
+      printf '%s\n' "$backend_warning" >"$run_dir/backend-warning" ||
+        { echo "test-run: cannot record the backend warning in $run_dir"; exit 126; }
     fi
     clamp_slot_wait
     plan_width_cap "$@"
@@ -3193,6 +3297,13 @@ case $sub in
         echo "command: dune $*"
         echo "backends: $(batch_summary)"
         sed -n 's/^test-run: batch: /  /p' "$run_dir/log"
+        if [ -n "$backend_refusal" ]; then
+          echo "expect-backend: run would refuse this batch (BACKEND REFUSED, exit 2)"
+          printf '  %s\n' "$backend_refusal"
+        elif [ -n "$expect_backends" ]; then
+          echo "expect-backend: $expect_backends, held"
+        fi
+        [ -z "$backend_warning" ] || printf '%s\n' "$backend_warning"
         if [ -n "$width_cap" ]; then
           echo "width: -j $width_cap, injected ($batch_width_hazard hazard, for $batch_width_backend)"
         elif explicit_jobs "$@"; then
@@ -3233,7 +3344,7 @@ case $sub in
     # the launcher's stderr: the cap is in the artifact triage reads rather
     # than only in the launching terminal's scrollback.
     : >"$run_dir/resolved.tmp" || { echo "test-run: cannot write in $run_dir"; exit 126; }
-    for line in "$width_announce" "$slot_announce" "$probe_announce"; do
+    for line in "$backend_warning" "$width_announce" "$slot_announce" "$probe_announce"; do
       [ -z "$line" ] || printf 'test-run: %s\n' "$line" | tee -a "$run_dir/resolved.tmp"
     done
     # Decided on the caller's argv, before the slot's words are put in front.
@@ -3377,10 +3488,20 @@ case $sub in
     # Empty is the default, which `_resolve` decides once it knows the batch
     # (plan_test_cap); a value here is explicit and applies to any batch.
     test_cap=${OCANNL_TOOL_PER_TEST_CAP:-}
+    expect=
     while [ $# -gt 0 ]; do
       case $1 in
         --cap) [ $# -ge 2 ] || die "--cap requires a value"; cap=$2; shift 2 ;;
         --test-cap) [ $# -ge 2 ] || die "--test-cap requires a value"; test_cap=$2; shift 2 ;;
+        --expect-backend)
+          [ $# -ge 2 ] || die "--expect-backend requires a backend"
+          batch_known_backend "$2" ||
+            die "--expect-backend $2: not a backend (cc, multidev_cc, cuda, hip, metal)"
+          case " $expect " in
+            *" $(batch_canonical "$2") "*) ;;
+            *) expect="$expect${expect:+ }$(batch_canonical "$2")" ;;
+          esac
+          shift 2 ;;
         --) shift; break ;;
         *) break ;;
       esac
@@ -3445,6 +3566,10 @@ case $sub in
     trap 'fwd_sig TERM' TERM
     trap 'fwd_sig HUP' HUP
     new_run "$@"
+    if [ -n "$expect" ]; then
+      printf '%s\n' "$expect" >"$run_dir/expect-backend" ||
+        { rm -rf "$run_dir"; die "cannot record the expected backends in $run_dir"; }
+    fi
     if [ "$sub" = fresh ]; then
       { printf '%s\n' fresh >"$run_dir/mode" &&
         printf '%s\n' "${fresh_aliases[@]}" >"$run_dir/fresh-aliases"; } ||

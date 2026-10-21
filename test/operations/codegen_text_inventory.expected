@@ -557,6 +557,7 @@ test/operations/vec_signed_zero.ml
     "tmma_as_0__, tmma_as_0__"
     "vector_size"
     "vunif"
+test/operations/workgroup_memory_accounting.ml [also pins text this scan cannot name: untraced callback]
 
 every scanned root meets its golden floor: true
 every scanned root meets its source-site floor: true
@@ -578,5 +579,4 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:327f5dea331c9591f8d59a6da296202d] scanned library declares
   [scanner-refusal:80b2a504ebea9c64f6fcc3c5da12164e] generated text behind
   [scanner-refusal:7b848f96a84cc15bb6e1027465d08502] Test_utils.Generated
-Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):
-  [scanner-refusal:532d3ed986dd6559fec87d780769ee1f] declares module
+End of synthetic controls.

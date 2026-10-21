@@ -3,6 +3,9 @@
 #
 #   benchmarks/check-box.sh --box BOX [--fixture NAME]... [--fixture-dir DIR] [--venv DIR]
 #                           [--digests FILE] [--box-only]
+#   benchmarks/check-box.sh --fleet-names    # the fleet names --box takes, `<name> <box>` lines
+#   benchmarks/check-box.sh --canonical-box NAME  # NAME's measurement box if NAME is a fleet
+#                                                 # name, else NAME itself (box-gate's reading)
 #
 # Every measurement session runs it first, from the checkout it will measure in; tools/sweep.sh
 # runs it once per box with --box-only against the box's fixture store. Each item prints one
@@ -18,6 +21,8 @@
 #   - BOX: a measurement box declared in the DIGESTS file's `# measurement-boxes:` header AND
 #     listed in box_profile below, which names the device torch must reach and the toolchain
 #     the box's drivers compile with. A declared box missing here is refused, not defaulted.
+#     Or the fleet's name for one (`rog-nv-linux` for rog-nv; fleet_box below, gh-ocannl-1433),
+#     which a line before the items resolves to its box; the verdict names the box.
 #   - NAME: the stem of a spec in benchmarks/workloads/*.json (`gpt2_mini_train`, not the file
 #     name). Without --fixture, every fixture DIGESTS records under BOX's origin is required.
 #   - DIR, FILE: paths; --venv defaults to ~/.venvs/ocannl-bench, the box's shared venv,
@@ -30,7 +35,9 @@
 # records), torch-device (the box's torch build round-trips one tensor through its device -- the
 # copy that segfaulted minix's rocm7.1 wheel while is_available() said yes), python-headers
 # (Python.h, which torch.compile's launcher builds against), driver-path (this checkout's drivers,
-# resolving their interpreter through bench_venv.py as they do, reach that same venv; --box-only
+# resolving their interpreter through bench_venv.py as they do, reach that same venv, and the ok
+# line names the route that resolved: BENCH_VENV_PY, benchmarks/.venv, or the shared venv a fresh
+# worktree falls back to; --box-only
 # skips it, since a sweep worktree is no measurement checkout), toolchain (nvcc, hipcc, or the
 # macOS SDK the Metal bindings build against), and one `fixture <name>` item per required fixture
 # (present, and fixture_digest.py --check MATCHes it against DIGESTS).
@@ -58,6 +65,26 @@ box_profile() {
   esac
 }
 
+# The fleet's name for a measurement box -> that box (gh-ocannl-1433). The fleet names its hosts by
+# endpoint (FLEET_BOXES and FLEET_LOCAL_BOX, lukstafi/ludics-lite's issue-wave registry: the native
+# Linux boot's ssh alias in wake-lab.sh's endpoint map, and the Mac's own name), while DIGESTS.txt
+# and the reports name the box, so a worker given a fleet box passed the fleet's name and was
+# refused. The table is here, not derived at run time from wake-lab.sh's map: the far boxes this
+# check runs on have no wake-lab.sh, the map has no row for the Mac, and its box names (`rog`) are
+# not the measurement IDs (`rog-nv`) either. benchmarks/test-check-box.sh pins it against the map,
+# and against FLEET_BOXES, wherever those can be read. Only the native boots: no box measures from
+# a WSL guest or from Windows.
+fleet_box() {
+  case $1 in
+    mac-studio) echo m4-max ;;
+    rog-nv-linux) echo rog-nv ;;
+    minix-amd-linux) echo minix ;;
+    tuf-amd-linux) echo tuf ;;
+    *) return 1 ;;
+  esac
+}
+fleet_names="mac-studio rog-nv-linux minix-amd-linux tuf-amd-linux" # fleet_box's domain
+
 box= venv=$HOME/.venvs/ocannl-bench fixture_dir=$here/fixtures digests= box_only=0
 fixtures=()
 while [ $# -gt 0 ]; do
@@ -74,6 +101,18 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     --box-only) box_only=1; shift ;;
+    --fleet-names)
+      [ $# -eq 1 ] || die "--fleet-names takes nothing else"
+      for name in $fleet_names; do printf '%s %s\n' "$name" "$(fleet_box "$name")"; done
+      exit 0
+      ;;
+    --canonical-box)
+      # The name a driver records for its run (box-gate.sh, box_gate.py): the same resolution
+      # as --box below, which judges it -- no fleet name is a declared box (test-check-box.sh).
+      [ $# -eq 2 ] && [ -n "$2" ] || die "--canonical-box takes one name and nothing else"
+      fleet_box "$2" || printf '%s\n' "$2"
+      exit 0
+      ;;
     -h | --help) usage; exit 0 ;;
     *) die "unknown argument '$1' (see --help)" ;;
   esac
@@ -89,8 +128,14 @@ command -v perl >/dev/null 2>&1 || die "no perl on PATH (the device smoke is bou
 
 declared=$(python3 "$here/fixture_digest.py" --list-declared-measurement-boxes --digests "$digests") ||
   die "cannot read the declared measurement boxes of $digests"
-printf '%s\n' "$declared" | grep -qxF -- "$box" ||
-  die "'$box' is not a measurement box declared by $digests (declared: $(printf '%s' "$declared" | tr '\n' ' '))"
+if ! printf '%s\n' "$declared" | grep -qxF -- "$box"; then
+  fleet_name=$box
+  box=$(fleet_box "$fleet_name") ||
+    die "'$fleet_name' is not a measurement box declared by $digests (declared: $(printf '%s' "$declared" | tr '\n' ' ')), nor the fleet's name for one ($fleet_names)"
+  printf '%s\n' "$declared" | grep -qxF -- "$box" ||
+    die "'$fleet_name' is the fleet's name for $box, which $digests does not declare (declared: $(printf '%s' "$declared" | tr '\n' ' '))"
+  echo "check-box: --box $fleet_name is the fleet's name for measurement box $box"
+fi
 profile=$(box_profile "$box") ||
   die "'$box' is declared but has no box_profile entry in $0: add its device and toolchain there"
 device=${profile% *} toolchain=${profile#* }
@@ -221,13 +266,22 @@ sys.exit(0 if os.path.isfile(h) else 1)' 2>&1); then
     item driver-path skip "--box-only: no measurement checkout to resolve from"
   else
     prefix='import os, sys; print(os.path.realpath(sys.prefix))'
-    if ! resolved=$(cd "$here" && python3 -c 'import bench_venv; print(bench_venv.venv_python())' 2>&1); then
+    # `<interpreter><TAB><route>`, bench_venv.py's own report of what it resolved and how.
+    # A failed run, or anything but one line with one tab, resolved nothing.
+    resolved_ok=
+    if resolved=$(cd "$here" && python3 bench_venv.py 2>&1); then
+      case $resolved in *$'\n'* | *$'\t'*$'\t'* | $'\t'* | *$'\t') ;; *$'\t'*) resolved_ok=1 ;; esac
+    fi
+    if [ -z "$resolved_ok" ]; then
       item driver-path GAP "bench_venv.py did not resolve: $(printf '%s\n' "$resolved" | tail -n 1)"
-    elif theirs=$("$resolved" -c "$prefix" 2>/dev/null) && [ "$theirs" = "$("$py" -c "$prefix")" ]; then
-      item driver-path ok "drivers here run $resolved"
     else
-      item driver-path GAP "drivers in $(dirname "$here") would run $resolved, which is not $venv" \
-        "ln -s $venv $here/.venv, or export BENCH_VENV_PY=$py"
+      route=${resolved#*$'\t'} resolved=${resolved%%$'\t'*}
+      if theirs=$("$resolved" -c "$prefix" 2>/dev/null) && [ "$theirs" = "$("$py" -c "$prefix")" ]; then
+        item driver-path ok "drivers here run $resolved (route: $route)"
+      else
+        item driver-path GAP "drivers in $(dirname "$here") would run $resolved (route: $route), which is not $venv" \
+          "ln -s $venv $here/.venv, or export BENCH_VENV_PY=$py"
+      fi
     fi
   fi
 fi

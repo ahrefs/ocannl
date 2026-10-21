@@ -27,3 +27,29 @@ live code: routine A defers pctr: true
 live code: a uint4x32 template keeps its embedded index: true
 live code: routine A defers fctr: true
 live code: a float template keeps its embedded index: true
+consumer where 1 x v: routine A defers v, its template reading the merge buffer: true
+consumer where 1 x v: routine B compiles: true
+consumer where 1 x v: routine B declares no merge buffer: true
+consumer where 1 x v: executed values are the live arm's: true
+consumer where 1 x v: the deferred reading agrees with the materialized one: true
+consumer where 0 v x: routine A defers v, its template reading the merge buffer: true
+consumer where 0 v x: routine B compiles: true
+consumer where 0 v x: routine B declares no merge buffer: true
+consumer where 0 v x: executed values are the live arm's: true
+consumer where 0 v x: the deferred reading agrees with the materialized one: true
+consumer where (i < 4) x v: routine A defers v, its template reading the merge buffer: true
+consumer where (i < 4) x v: routine B compiles: true
+consumer where (i < 4) x v: routine B declares no merge buffer: true
+consumer where (i < 4) x v: executed values are the live arm's: true
+consumer where (i < 4) x v: the deferred reading agrees with the materialized one: true
+consumer kept loop: routine A defers v, its template reading the merge buffer: true
+consumer kept loop: routine B compiles, deferring w: true
+consumer kept loop: routine B declares no merge buffer: true
+consumer kept loop: executed values are the reduction's: true
+consumer kept loop: the deferred reading agrees with the materialized one: true
+write index: w is deferred: true
+write index: its loop decides nothing in the stored template: true
+consumer where 0 x v (v live): routine A defers v, its template reading the merge buffer: true
+consumer where 0 x v (v live): routine B is refused for the cross-routine merge splice: true
+consumer where (i < 2) x v (undecided): routine A defers v, its template reading the merge buffer: true
+consumer where (i < 2) x v (undecided): routine B is refused for the cross-routine merge splice: true

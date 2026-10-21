@@ -759,10 +759,11 @@ val privatize_extension :
   Ir.Schedule.schedule ->
   Ir.Low_level.optimized ->
   Ir.Schedule.schedule * privatize_drop list
-(** {!extend_with_privatize} beside the proposals it dropped, in detection order. The drops never
-    reach a search report, so this is where a census of [Privatize]'s refusals on real segments
-    reads them (gh-ocannl-1395: [test/operations/privatize_census]). Empty when the input schedule
-    itself does not apply. *)
+(** {!extend_with_privatize} beside the proposals it dropped, in detection order. Where a search's
+    privatized presets drop proposals, they reach its report as [privatize_drops] (gh-ocannl-1438);
+    this is where a census of [Privatize]'s refusals on segments no search compiles reads them
+    (gh-ocannl-1395: [test/operations/privatize_census]). Empty when the input schedule itself does
+    not apply. *)
 
 type sr_site = {
   sr_axis : Ir.Indexing.symbol;  (** The reduction loop to split. *)
@@ -1208,7 +1209,18 @@ type report = {
   declines : decline_summary list;
       (** Candidate rejections aggregated by stable cause key. Their counts sum to
           [candidates_failed]. Cache-entry replay failures are excluded: they are
-          [cache_replay_refusal]. *)
+          [cache_replay_refusal]; so are the privatized presets' dropped proposals, which are
+          [privatize_drops]. *)
+  privatize_drops : decline_summary list;
+      (** The [Privatize] proposals the privatized preset candidates ([F_preset[... priv]]) dropped
+          because the op refused them ({!privatize_extension}'s drops, gh-ocannl-1438), aggregated
+          by cause key as [declines] is: one count per proposal per candidate compile that made it,
+          so a refusal every privatized preset meets counts once per such preset. A drop is not a
+          declined candidate -- the candidate compiles without that [Privatize] -- so these counts
+          are outside [candidates_failed]. Empty on cache replay and search-disabled calls, which
+          compile no preset. Before gh-ocannl-1438 the search discarded them, so a census of
+          [Privatize]'s refusals ([test/operations/privatize_census]) could not read them from a
+          report. *)
   cache_replay_refusal : Ir.Schedule_outcome.classified_cause option;
       (** Why the cache entry stored under this call's key did not replay, when its replay was
           refused with a typed cause (gh-ocannl-1242): a stale or corrupt entry — a reference its
@@ -1239,6 +1251,14 @@ type report = {
           [budget_cut] records -- like [best_ms], a fact about the crown rather than about this
           call. [outcome] stays {!Searched} for a cut search -- it completed and shipped its crown
           -- so this is the field telling a cut search from a full one. *)
+  budget_s : float option;
+      (** The wall-clock budget this call resolved (config [autotune_budget_seconds],
+          gh-ocannl-1409), [None] for none: what [budget_cut] was measured against, on every report
+          the call emits, a cache replay's and a search-less call's included (a fact about this
+          call, like [beam_width], where [budget_cut] on a replay is the stored crown's). The budget
+          is also the replay rule's input: only a call with a budget replays a cut crown. Recorded
+          here rather than in a benchmark result's [regime_knobs], whose keys are numerics settings
+          the orchestrator's regime gate holds to the cell's regime (gh-ocannl-1438). *)
   beam_width : int;
       (** The beam width the search resolved ([?beam_width], else config [autotune_beam_width]): how
           many of the fastest candidates each round expands, and the admitted-timing depth an
@@ -1575,7 +1595,9 @@ val no_search_report : timing:timing_mode -> report
       written before it, so a killed search is inside the step its last line names.
     - [search_done] ({!tune}, exactly once per call, with its report): [routine], [elapsed_s],
       [outcome] ({!outcome_name}), [timed], [contended], [timings_retried], [unbatched], [failed],
-      [rounds], [attempts], [compile_s], [timing_s], [best_ms], [best].
+      [rounds], [budget_cut], [baseline_refused] and [privatize_dropped] (the report's
+      [privatize_drops] counts summed; gh-ocannl-1438), [attempts], [compile_s], [timing_s],
+      [best_ms], [best].
     - [placements_start] ({!Train.tune_placements}, once, before anything is searched or replayed):
       [working_bytes], [device_free] and [device_total] (gh-ocannl-1424). The first is the
       {!Ir.Alloc_census} live working-pool bytes (process-wide, counted at the shared allocator
@@ -2376,23 +2398,43 @@ type explain = {
 }
 (** All times in ms; the score fields are [None] without envelope constants or model coverage. *)
 
+type segment_explain = {
+  xs_segment : string;
+      (** The segment's key tag ([<digest prefix>:u<first units>]), as {!tune}'s per-segment sketch
+          labels ([F_sketch[...]]) and {!model_default}'s pick name it. *)
+  xs_candidates : (string * explain) list;
+      (** ["preset"] first -- the segment under its default preset, the incumbent its sketches must
+          strictly beat -- then every sketch leaf {!model_default}'s family search visits on the
+          segment, in visiting order, each labeled [<sketch parameters> @<key tag>] as an [F_sketch]
+          label renders its entries ({!sketch_params_label}). *)
+}
+
+type explanation = {
+  x_routine : (string * explain) list;
+      (** The whole-routine candidates: the incumbent first -- ["seeded"] where {!model_default}
+          starts from the seeded plan (CUDA and HIP under the seeded settings), else ["default"],
+          the untuned default pipeline -- then every whole-routine sketch leaf of the program it
+          searches (the seeded plan's split prelude included), labeled as {!tune}'s [autotune_log]
+          labels them ([W_sketch[...]]), in the family search's visiting order. *)
+  x_segments : segment_explain list;
+      (** One entry per keyed segment of the per-segment substitution {!model_default} ranks beside
+          the whole-routine candidates (gh-ocannl-1438), in segment order: the fold-zeros fission
+          segmentation of the searched program, keyed as {!tune}'s per-segment candidates key it.
+          Empty where {!model_default} makes no per-segment substitution: fission splits nothing and
+          exposes no changed lowering, or the segmentation declines. *)
+}
+
 val model_explain :
-  ?name:string ->
-  Context.t ->
-  Ir.Assignments.comp ->
-  Ir.Indexing.unit_bindings ->
-  (string * explain) list
+  ?name:string -> Context.t -> Ir.Assignments.comp -> Ir.Indexing.unit_bindings -> explanation
 (** What {!model_default} sees of the candidates it ranks for one computation, without choosing or
-    compiling (gh-ocannl-1254, the interface gh-ocannl-1269 reads): its incumbent first — ["seeded"]
-    where it starts from the seeded plan (CUDA and HIP under the seeded settings), else ["default"],
-    the untuned default pipeline — then every whole-routine sketch leaf of the program it searches
-    (the seeded plan's split prelude included), labeled as {!tune}'s [autotune_log] labels them, in
-    the family search's visiting order, each with whether the restriction admits it. The lowering is
-    {!Context.lowered_for_decisions}', so the context is untouched. Per-fission-segment
-    substitutions and the placement pre-search are not listed. Candidates whose scheduled form fails
-    to apply or validate are omitted, as {!model_default} excludes them. Where {!model_default}
-    ranks nothing — no envelope constants, or the default annotator off — the list is the default
-    pipeline alone. *)
+    compiling (gh-ocannl-1254, the interface gh-ocannl-1269 reads): the whole-routine candidates
+    and, per segment, the per-segment ones (gh-ocannl-1438), each with whether the numerics
+    restriction admits it. The lowering is {!Context.lowered_for_decisions}', so the context is
+    untouched. The placement pre-search is not listed. Candidates whose scheduled form fails to
+    apply or validate are omitted, as {!model_default} excludes them; a segment whose preset has no
+    score is listed with its unscored entries, where {!model_default} skips it. Where
+    {!model_default} ranks nothing — no envelope constants, or the default annotator off —
+    [x_routine] is the default pipeline alone and [x_segments] is empty. *)
 
 val untuned_compile :
   ?name:string ->
@@ -2875,6 +2917,14 @@ val on_seeded_plan : (seeded_plan option -> seeded_plan option) Seam.t
     identity what it returns. It is how a test runs two seeds against one trajectory, which no
     setting does alone: the keys that steer the plan render in the trajectory's settings themselves.
     The default is the identity and no configuration selects it. *)
+
+val on_privatize_proposal : (target:Ir.Tnode.t -> over:Ir.Indexing.symbol -> unit) Seam.t
+(** Fault-injection seam (gh-ocannl-1438): called with each proposal just before
+    {!privatize_extension} validates it, inside the validation's refusal boundary, so a typed
+    refusal ([Ir.Schedule_outcome.Cause_at]) raised from it drops the proposal as the op's own
+    refusal would. No workload of the tuning corpus reaches a real refusal on cc, so this is how a
+    test puts a dropped proposal through a real search. The default is a no-op and no configuration
+    selects it. *)
 
 val on_candidate_preflight : (string -> unit) Seam.t
 (** Fault-injection seam for the pre-dispatch containment tests (gh-ocannl-564), called with a

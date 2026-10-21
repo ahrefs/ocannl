@@ -858,6 +858,21 @@ val inserted_collectives :
     narrow residency, ...) is listed too, so the list over-approximates only by statements that
     never render. *)
 
+type warp_reduce_cell_site = {
+  wrc_index : Indexing.symbol;  (** The [Workgroup_reduce] loop's symbol. *)
+  wrc_extent : int;
+  wrc_cell : Tnode.t;  (** The node whose cell the reduction accumulates into. *)
+}
+
+val warp_reduce_cell_sites : reassociable:(Tnode.t -> bool) -> t -> warp_reduce_cell_site list
+(** gh-ocannl-1452: the cell-form statements of {!inserted_collectives}, in pre-order and at every
+    extent, with the node each accumulates into: the [Workgroup_reduce] loops
+    [C_syntax.try_warp_reduce] renders as a warp-shuffle tree (a duplicated copy is its own site).
+    Past one warp each declares its per-warp partials in workgroup-shared memory, at the accumulator
+    residency of the cell's storage precision; [Schedule.workgroup_memory_bytes] charges each
+    through the backend's [warp_reduce_workgroup_bytes], which is 0 within one warp and wherever the
+    renderer refuses the site. *)
+
 val launch_dims : t -> launch_dims
 (** Per-slot maximum extents over the kernel's annotated loops; [grid.(2)] is the product of the
     per-slot maxima of grid slots [>= 2] (the [.z] fold, see the section comment). *)

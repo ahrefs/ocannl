@@ -564,6 +564,13 @@ let placement_memory_fields ?(with_total = false) ctx =
   Printf.sprintf " working_bytes=%d device_free=%s%s" working (field fst)
     (if with_total then " device_total=" ^ field snd else "")
 
+type shipped = {
+  ship_arm : string;
+  ship_replayed : bool;
+  ship_routine : string;
+  ship_report : Autotune.report option;
+}
+
 let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?report ?flip_report
     ?inline_flips ?ship_arm ?placement_store ?log ?progress ?on_ship ctx loss comp bindings =
   (* [?log] and [?progress] scope the two streams over the whole call: the arm lines below and every
@@ -964,7 +971,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                 None))
   in
   (* gh-ocannl-638: the one place that knows what shipped, on the one path that ships. *)
-  let deliver ~what ~commit compiled =
+  let deliver ?(replayed = false) ~what ~report ~commit compiled =
     (* gh-ocannl-638: the one place that knows what shipped, on the one path that ships.
 
        A raising callback is the caller's failure and propagates, like [report]'s — but it
@@ -976,7 +983,14 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
     (match on_ship with
     | None -> ()
     | Some f -> (
-        try f what
+        try
+          f
+            {
+              ship_arm = what;
+              ship_replayed = replayed;
+              ship_routine = (snd compiled).Context.name;
+              ship_report = report;
+            }
         with exn ->
           let backtrace = Stdlib.Printexc.get_raw_backtrace () in
           (try Context.release (fst compiled)
@@ -1006,7 +1020,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
      shipping the next completed result: [fallbacks], in order, each shipped under its own name and
      never recorded -- the evidence the recording would rest on includes a placement that did not
      compile. A forced arm passes none, so its failure propagates. *)
-  let rec ship ?(fallbacks = []) ?(last_resort = false) ~what ~commit = function
+  let rec ship ?(fallbacks = []) ?(last_resort = false) ?replayed ~what ~report ~commit = function
     | Ok deferred -> (
         (* A later arm can poison the lineage after this one succeeded. With a [timing_ctx] that is
            the scratch lineage and the winner — compiled from [ctx] — is unaffected. WITHOUT one the
@@ -1031,15 +1045,16 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                   "%s's compile failed (%s): shipping the untuned default of the default \
                    placements (arm A) after all, unrecorded"
                   what (Exn.to_string exn);
-                deliver ~what:"A"
+                deliver ~what:"A" ~report:None
                   ~commit:(fun () ->
                     logf "placement store: nothing recorded, no measured placement compiled")
                   (Autotune.untuned_compile ?name ctx comp bindings)
             | exception exn when (not (must_propagate exn)) && not (List.is_empty fallbacks) ->
-                let fallback_what, fallback = List.hd_exn fallbacks in
+                let fallback_what, fallback, fallback_report = List.hd_exn fallbacks in
                 logf "%s's compile failed (%s): shipping %s instead, unrecorded" what
                   (Exn.to_string exn) fallback_what;
                 ship ~fallbacks:(List.tl_exn fallbacks) ~last_resort ~what:fallback_what
+                  ~report:fallback_report
                   ~commit:(fun () ->
                     logf "placement store: nothing recorded, the measured winner did not compile")
                   fallback
@@ -1050,12 +1065,13 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                 (try Context.release (fst compiled)
                  with exn when not (must_propagate exn) ->
                    logf "release of a substituted compile failed: %s" (Exn.to_string exn));
-                let fallback_what, fallback = List.hd_exn fallbacks in
+                let fallback_what, fallback, fallback_report = List.hd_exn fallbacks in
                 logf
                   "%s's compile shipped the untuned default in place of its measured schedule: \
                    shipping %s instead, unrecorded"
                   what fallback_what;
                 ship ~fallbacks:(List.tl_exn fallbacks) ~last_resort:true ~what:fallback_what
+                  ~report:fallback_report
                   ~commit:(fun () ->
                     logf "placement store: nothing recorded, the measured winner did not compile")
                   fallback
@@ -1070,11 +1086,11 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                       what
                   else commit
                 in
-                deliver ~what ~commit compiled))
+                deliver ?replayed ~what ~report ~commit compiled))
     | Error (exn, backtrace) -> Stdlib.Printexc.raise_with_backtrace exn backtrace
   in
   (* The completed results among [candidates], as [ship]'s fallbacks. *)
-  let completed candidates = List.filter candidates ~f:(fun (_, r) -> Result.is_ok r) in
+  let completed candidates = List.filter candidates ~f:(fun (_, r, _) -> Result.is_ok r) in
   let cold () =
     let a, a_ms, a_report = tune "A (default placements)" ctx timing_ctx in
     propagate_if_poisoned "A" a;
@@ -1203,10 +1219,12 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
     (* gh-ocannl-1408: the other arm, should the winner fail to compile -- never under a forced arm,
        whose failure propagates. *)
     let winner_fallbacks =
-      if forced then [] else completed [ (if a_wins then ("B", b) else ("A", a)) ]
+      if forced then []
+      else completed [ (if a_wins then ("B", b, b_report) else ("A", a, a_report)) ]
     in
     let ship_winner () =
-      ship ~fallbacks:winner_fallbacks ~what:winner_arm ~commit:commit_winner winner
+      ship ~fallbacks:winner_fallbacks ~what:winner_arm ~report:winner_report ~commit:commit_winner
+        winner
     in
     if inline_flips <= 0 then ship_winner ()
     else
@@ -1527,8 +1545,8 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                      problem, so it is not recorded"
             in
             ship
-              ~fallbacks:(completed [ (winner_arm, winner) ] @ winner_fallbacks)
-              ~what:"flip" ~commit chain_result)
+              ~fallbacks:(completed [ (winner_arm, winner, winner_report) ] @ winner_fallbacks)
+              ~what:"flip" ~report:chain_report ~commit chain_result)
           else (
             logf "flip refinement did not improve on the A/B winner (%.4f ms vs %.4f ms)" chain_ms
               winner_ms;
@@ -1548,7 +1566,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
       let deferred = ref None in
       (* Compiled eagerly: a replayed decision that does not compile is a failed replay, which the
          arms below answer. *)
-      let r, _ms, _report =
+      let r, _ms, replay_report =
         tune ~eager:true
           ~to_report:(Some (fun r -> deferred := Some r))
           (what ^ " (replayed placement)") (apply decisions ctx)
@@ -1582,7 +1600,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                    logf "release after a failing report callback failed: %s" (Exn.to_string exn2));
                 Stdlib.Printexc.raise_with_backtrace exn backtrace)
           | _ -> ());
-          ship ~what ~commit:(fun () -> ()) r
+          ship ~replayed:true ~what ~report:replay_report ~commit:(fun () -> ()) r
       | Error (exn, _) ->
           (* A replayed search that fails without poisoning the lineage is the cold path's losing
              arm, one level up (gh-ocannl-550): a cached materialize-all decision can meet a

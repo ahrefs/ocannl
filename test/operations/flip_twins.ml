@@ -83,7 +83,7 @@ let run_chain ?(cache_dir = "") ?ctx ?timing_ctx ~budget comp loss ~flip_script 
                 ~placement_store:false
                 ~report:(fun r -> arm_reports := r :: !arm_reports)
                 ~flip_report:(fun r -> flip_reports := r :: !flip_reports)
-                ~on_ship:(fun what -> shipped := what :: !shipped)
+                ~on_ship:(fun s -> shipped := s.Train.ship_arm :: !shipped)
                 ?timing_ctx ~inline_flips:budget
                 (match ctx with Some ctx -> ctx | None -> Context.auto ())
                 loss comp Ir.Indexing.Empty

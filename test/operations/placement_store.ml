@@ -196,6 +196,13 @@ let fissioned_first_ranking ~label ~digest:_ ms =
     Int.incr whole_ranked_last;
     ms +. 1000.)
 
+(* What [on_ship] said (gh-ocannl-1438), with the two facts about it only the run can check: that
+   its routine name is the returned routine's own, and that its report is one the run delivered to
+   [report] or [flip_report] -- the very value, not an equal one. *)
+type ship = { s : Train.shipped; routine_agrees : bool; report_delivered : bool }
+
+let arm s = s.s.Train.ship_arm
+
 (* One placement tune of [graph]'s routine from [ctx] (a fresh [Context.auto ()] by default) with
    [cache_dir] as the cache directory, run and read back: the arm and flip reports in order, what
    shipped, whether the intermediate shipped materialized, the values, and what its persistence came
@@ -209,7 +216,7 @@ let tune_in ?ship_arm ?placement_store ?timing_ctx ?(rank_fissioned_first = fals
     Train.tune_placements ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir ~inline_flips:2
       ~report:(fun r -> arms := r :: !arms)
       ~flip_report:(fun r -> flips := r :: !flips)
-      ~on_ship:(fun what -> shipped := Some what)
+      ~on_ship:(fun s -> shipped := Some s)
       ?ship_arm ?placement_store ?timing_ctx ctx t2 comp Ir.Indexing.Empty
   in
   let (ctx_t, routine_t), io =
@@ -223,7 +230,17 @@ let tune_in ?ship_arm ?placement_store ?timing_ctx ?(rank_fissioned_first = fals
   let materialized =
     Tn.Placements.is_materialized_peek (Context.placements ctx_t) mc.Tensor.value
   in
-  (List.rev !arms, List.rev !flips, Option.value_exn !shipped, materialized, got, { identity; io })
+  let shipped = Option.value_exn !shipped in
+  let ship =
+    {
+      s = shipped;
+      routine_agrees = String.equal shipped.Train.ship_routine routine_t.Context.name;
+      report_delivered =
+        Option.exists shipped.Train.ship_report ~f:(fun r ->
+            List.exists (!arms @ !flips) ~f:(phys_equal r));
+    }
+  in
+  (List.rev !arms, List.rev !flips, ship, materialized, got, { identity; io })
 
 (* --- The cross-process leg's children (gh-ocannl-1021). The test re-runs this executable in a
    role, one child at a time: the recorder tunes cold into [xproc_cache_dir] after a plain compile
@@ -277,7 +294,7 @@ let child role =
   out "digest" digest;
   out "arms" (Int.to_string (List.length arms));
   out "flips" (Int.to_string (List.length flips));
-  out "shipped" shipped;
+  out "shipped" (arm shipped);
   out "materialized" (Bool.to_string materialized);
   out "clean" (Bool.to_string (clean_evidence (arms @ flips)));
   out "failed" (Bool.to_string (failed_search (arms @ flips)));
@@ -591,7 +608,7 @@ let () =
     "run 1 (not part of the golden): shipped %s, %d arm and %d flip reports, clean %b, stored %b, \
      after %d attempt(s)\n\
      %!"
-    shipped1 (List.length arms1) (List.length flips1) clean1 stored1 (List.length attempts1);
+    (arm shipped1) (List.length arms1) (List.length flips1) clean1 stored1 (List.length attempts1);
   (* Gated on the run's own context (gh-ocannl-1043): the store keys on that context's timing
      identity, so a reference context's says nothing about whether this run could record. *)
   let failed1 = failed_search (arms1 @ flips1) in
@@ -611,7 +628,7 @@ let () =
   let given_stored1 = given_recording ~recorded:stored1 ~on:unrecorded1 in
   given_stored1 [] "the recorded decision is the shipped one"
     (match keys1 with
-    | [ k ] -> String.equal (SC.shipped_label (read_entry k).SC.decision) shipped1
+    | [ k ] -> String.equal (SC.shipped_label (read_entry k).SC.decision) (arm shipped1)
     | _ -> false);
   (* gh-ocannl-1022: the guard is what was tuned. The arms tune distinct lowerings (the intermediate
      is policy-virtual in A and materialized in B), which is what keeps the equalities below from
@@ -625,15 +642,23 @@ let () =
         && not (String.equal (source_digest ra) (source_digest rb))
     | _ -> false);
   let entry1 = if stored1 then Some (read_entry (List.hd_exn keys1)) else None in
-  let shipped_searches1 =
-    match (shipped1, arms1) with "A", [ ra; _ ] -> [ ra ] | "B", [ _; rb ] -> [ rb ] | _ -> flips1
-  in
+  (* gh-ocannl-1438: what shipped, as [on_ship] names it -- the arm, the search, the routine --
+     against what the run itself shows. A cold run replays no placement; its shipped search is the
+     shipping arm's own report, in that arm's position, or one of the flips'. *)
+  p "the cold run's ship is not a placement replay" (not shipped1.s.Train.ship_replayed);
+  p "the cold run's ship names the routine it returned" shipped1.routine_agrees;
+  p "the cold run's ship carries the report of the search it shipped, in that search's position"
+    (shipped1.report_delivered
+    &&
+    match (arm shipped1, arms1, shipped1.s.Train.ship_report) with
+    | "A", [ ra; _ ], Some r -> phys_equal r ra
+    | "B", [ _; rb ], Some r -> phys_equal r rb
+    | "flip", _, Some r -> List.exists flips1 ~f:(phys_equal r)
+    | _ -> false);
   given_stored1 [] "the recorded outcome digest is the shipped search's own source digest"
-    (match entry1 with
-    | None -> false
-    | Some e ->
-        List.exists shipped_searches1 ~f:(fun r ->
-            String.equal (source_digest r) e.SC.outcome_digest));
+    (match (entry1, shipped1.s.Train.ship_report) with
+    | Some e, Some r -> String.equal (source_digest r) e.SC.outcome_digest
+    | _ -> false);
   given_stored1 []
     "a fresh lowering of the recorded decision reproduces the digest the shipped search tuned"
     (match entry1 with
@@ -653,7 +678,20 @@ let () =
     (if stored1 then List.length arms2 = 1 && List.length flips2 = 0 else List.length arms2 = 2);
   given_stored1
     [ placement_lookups persisted2 ]
-    "a replay ships the recorded label" (String.equal shipped2 shipped1);
+    "a replay ships the recorded label"
+    (String.equal (arm shipped2) (arm shipped1));
+  unless_refused
+    [ placement_lookups persisted2 ]
+    "the warm run's ship says it replayed the placement exactly when it ran the one search"
+    (Bool.equal shipped2.s.Train.ship_replayed stored1
+    && Bool.equal shipped2.s.Train.ship_replayed (List.length arms2 = 1));
+  p "the warm run's ship names the routine it returned" shipped2.routine_agrees;
+  given_stored1
+    [ placement_lookups persisted2 ]
+    "a replay's ship carries its one search's report"
+    (match (arms2, shipped2.s.Train.ship_report) with
+    | [ r ], Some sr -> phys_equal r sr
+    | _ -> false);
   given_stored1
     [ placement_lookups persisted2 ]
     "a replay ships the recorded placement of the intermediate"
@@ -714,7 +752,8 @@ let () =
   let arms3, _, shipped3, _, got3, persisted3 = run ~ship_arm:Train.Force_arm_b () in
   p_close "the forced run's routine computes the right values" got3 expected ~tol:approx_tol;
   p "a forced arm searches both arms whatever the store holds" (List.length arms3 = 2);
-  p "a forced arm ships the forced arm" (String.equal shipped3 "B");
+  p "a forced arm ships the forced arm" (String.equal (arm shipped3) "B");
+  p "a forced arm's ship is not a placement replay" (not shipped3.s.Train.ship_replayed);
   p "a forced run leaves the recorded decision untouched"
     (Option.equal Sexp.equal before (snapshot ())
     && List.length (placement_keys ()) = Option.length recorded);
@@ -841,7 +880,7 @@ let () =
     "run 6 (not part of the golden): shipped %s, clean %b, stored %b, after %d attempt(s); %d \
      whole-routine candidate timings ranked last\n\
      %!"
-    shipped6 clean6 (Option.is_some entry6) (List.length attempts6) !whole_ranked_last;
+    (arm shipped6) clean6 (Option.is_some entry6) (List.length attempts6) !whole_ranked_last;
   let failed6 = failed_search (arms6 @ flips6) in
   p_none
     "with a timing context, no compared search failed: a schedule the caller's lineage cannot take \
@@ -869,16 +908,13 @@ let () =
         (unrecorded_on ~identity:persisted6.identity ~failed:failed6 ~clean:clean6
            (placement_stores persisted6))
   in
-  let shipped_searches6 =
-    match (shipped6, arms6) with "A", [ ra; _ ] -> [ ra ] | "B", [ _; rb ] -> [ rb ] | _ -> flips6
-  in
   given_entry6 []
     "with a timing context, the recorded outcome digest is the shipped search's own source digest"
-    (match entry6 with
-    | None -> false
-    | Some e ->
-        List.exists shipped_searches6 ~f:(fun r ->
-            String.equal (source_digest r) e.SC.outcome_digest));
+    (shipped6.report_delivered
+    &&
+    match (entry6, shipped6.s.Train.ship_report) with
+    | Some e, Some r -> String.equal (source_digest r) e.SC.outcome_digest
+    | _ -> false);
   given_entry6 []
     "with a timing context, a fresh lowering of the recorded decision in the timing lineage \
      reproduces it"
@@ -902,7 +938,7 @@ let () =
             Printf.sprintf "%s contended=%d best=%.4f"
               (Autotune.outcome_name r.Autotune.outcome)
               r.Autotune.timings_contended r.Autotune.best_ms)))
-    (List.length flips6w) shipped6w
+    (List.length flips6w) (arm shipped6w)
     (Option.value_map entry6 ~default:"none" ~f:(fun e -> SC.shipped_label e.SC.decision))
     (String.concat ~sep:"; " (List.map arms6w ~f:source_digest))
     (Option.value_map entry6 ~default:"-" ~f:(fun e -> e.SC.outcome_digest));
@@ -914,7 +950,8 @@ let () =
     (match (entry6, arms6w) with
     | Some e, [ r ] ->
         List.length flips6w = 0
-        && String.equal shipped6w (SC.shipped_label e.SC.decision)
+        && String.equal (arm shipped6w) (SC.shipped_label e.SC.decision)
+        && shipped6w.s.Train.ship_replayed
         && String.equal (source_digest r) e.SC.outcome_digest
     | _ -> false);
   (* --- Every claim above that rests on a store or a lookup is waived when it was refused, which is
