@@ -368,6 +368,48 @@ let could_call_cases =
     ("does not name it at all", {ocaml|let () = print_string "hello"|ocaml}, false);
   ]
 
+(* gh-ocannl-1430: [top_level_key_reach] resolves a top-level module alias in source order, as OCaml
+   does. Each case names the value whose reach is asked; [external_keys] answers one key per module
+   path, so the key found says which module the scan took [W.v] to mean. *)
+let reach_alias_cases =
+  [
+    ("an alias expands the uses after it", "module W = Widths\nlet f () = W.v", "f", [ "k_widths" ]);
+    ( "a use before the alias names the outer module",
+      "let f () = W.v\nmodule W = Widths",
+      "f",
+      [ "k_w" ] );
+    ( "a rebound alias keeps its first meaning before the rebinding",
+      "module W = Widths\nlet f () = W.v\nmodule W = Other\nlet g () = W.v",
+      "f",
+      [ "k_widths" ] );
+    ( "a rebound alias takes its second meaning after it",
+      "module W = Widths\nlet f () = W.v\nmodule W = Other\nlet g () = W.v",
+      "g",
+      [ "k_other" ] );
+    ( "an alias of an alias written before it expands through it",
+      "module W = Widths\nmodule X = W\nlet f () = X.v",
+      "f",
+      [ "k_widths" ] );
+    ( "an alias of a module aliased only later names the outer module",
+      "module X = W\nmodule W = Widths\nlet f () = X.v",
+      "f",
+      [ "k_w" ] );
+    (* [W.Inner] is a nested alias, which the scan does not follow (its scope note): what it must
+       not do is read [W] as the alias the structure replaced. *)
+    ( "a structure rebinding an alias ends it",
+      "module W = Widths\nmodule W = struct module Inner = Foo end\nlet f () = W.Inner.v",
+      "f",
+      [ "k_unfollowed" ] );
+  ]
+
+let reach_alias_external = function
+  | [ "Widths"; "v" ] -> [ "k_widths" ]
+  | [ "W"; "v" ] -> [ "k_w" ]
+  | [ "Other"; "v" ] -> [ "k_other" ]
+  | [ "W"; "Inner"; "v" ] -> [ "k_unfollowed" ]
+  | [ "Widths"; "Inner"; "v" ] -> [ "k_stale_alias" ]
+  | _ -> []
+
 (* gh-ocannl-1207: the two scanners' own refusals, executed rather than vouched for by the lexer
    cases above, which pass on input the scanners ACCEPT. Each scanner runs as a child process over
    one synthetic tree built to trip every refusal its input can reach: two sources sharing a
@@ -493,6 +535,19 @@ let () =
       let found = Scan.could_call_generated_init source in
       if Bool.equal found expected then printf "ok: could call -- %s\n" name
       else fail "could call -- %s: expected %b, found %b" name expected found);
+  List.iter reach_alias_cases ~f:(fun (name, source, value, expected) ->
+      let found =
+        Attempt.attempted ~what:"reach" ~name ~default:[] (fun () ->
+            List.Assoc.find
+              (Scan.top_level_key_reach ~external_keys:reach_alias_external source).Scan.reach value
+              ~equal:String.equal
+            |> Option.value ~default:[] |> List.sort ~compare:String.compare)
+      in
+      if List.equal String.equal found expected then printf "ok: alias reach -- %s\n" name
+      else
+        fail "alias reach -- %s: expected [%s], found [%s]" name
+          (String.concat ~sep:"; " expected)
+          (String.concat ~sep:"; " found));
   (match Stdlib.Sys.argv with
   | [| _; digest_exe; consistency_exe |] -> scanner_refusal_controls ~digest_exe ~consistency_exe
   | _ ->

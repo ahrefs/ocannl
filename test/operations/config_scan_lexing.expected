@@ -76,6 +76,13 @@ ok: Generated.init -- both spellings in one file
 ok: could call -- names the module
 ok: could call -- names it only to alias it
 ok: could call -- does not name it at all
+ok: alias reach -- an alias expands the uses after it
+ok: alias reach -- a use before the alias names the outer module
+ok: alias reach -- a rebound alias keeps its first meaning before the rebinding
+ok: alias reach -- a rebound alias takes its second meaning after it
+ok: alias reach -- an alias of an alias written before it expands through it
+ok: alias reach -- an alias of a module aliased only later names the outer module
+ok: alias reach -- a structure rebinding an alias ends it
 digest_completeness refuses the malformed tree, exiting 1: true
 test_config_consistency refuses the malformed tree, exiting 1: true
 
