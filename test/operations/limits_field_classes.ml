@@ -295,10 +295,14 @@ let reach ?(through = []) ~root ~reader (source : string) : string list * string
 
 let reached_readers ?through ~root ~reader source = snd (reach ?through ~root ~reader source)
 
-(* The one route by which an [Untimed] reading may reach [Autotune.tune] (gh-ocannl-1253): the
-   seeded untuned plan, whose [auto] gate reads the capacity, and whose resolved content digest
-   joins the search trajectory's identity -- held below by requiring [tune] to name the digest. *)
-let sanctioned = [ "seeded_plan" ]
+(* The routes by which an [Untimed] reading may reach [Autotune.tune]. The seeded untuned plan
+   (gh-ocannl-1253), whose [auto] gate reads the capacity, and whose resolved content digest joins
+   the search trajectory's identity -- held below by requiring [tune] to name the digest. And the
+   seeded transform (gh-ocannl-1441), through which the untuned fallback of a call that does not
+   search compiles what the recipes' untuned compile ([Autotune.seeded_default]) compiles: that call
+   times, stores and replays nothing, so the reading reaches no record a search compares or a cache
+   replays. *)
+let sanctioned = [ "seeded_plan"; "seeded_transform" ]
 
 let () =
   let fields = [ "cache_capacity_bytes" ] in

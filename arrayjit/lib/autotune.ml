@@ -5716,6 +5716,14 @@ let on_staffed_start :
     Seam.t =
   Seam.make (fun ~menu:_ start -> start)
 
+(* gh-ocannl-1441: the seeded untuned plan [tune] derived on its base lowering (forced lazily, at
+   most once per call), which the search then seeds first, falls back to and names in its trajectory
+   identity ([|seed=<digest>]). A test substitutes another plan -- [None] included -- to run two
+   seeds against one trajectory: no setting moves the plan alone, since the keys that steer it are
+   [Search_shaping] and render in the trajectory's settings themselves, and the [Untimed] device
+   readings its [auto] gate consults are fixed per process. Not a production seam: default the
+   identity, and no config key selects it. *)
+let on_seeded_plan : (seeded_plan option -> seeded_plan option) Seam.t = Seam.make Fn.id
 let search_setting () = Utils.registered_flag ~arg_name:"autotune_search"
 
 (* The schedule cache directory a tuning call uses, or [""] for none. Whether the directory was
@@ -6038,20 +6046,63 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
           ~detail:(Exn.to_string f.Outcome.exn) ());
     Outcome.raise_failure failure
   in
-  (* The untuned fallback of a search-less call, through the containment-aware form so a failure
-     reports the phase it carries. [Context.compile] is exactly this plus [raise_failure], which is
-     what [raise_pre_search] ends with, so the caller sees the same exception either way. *)
+  (* The untuned fallback of a call that does not search (search off, a lineage refusal, a deferred
+     cache replay that failed), through the containment-aware form so a failure reports the phase it
+     carries. It is {!seeded_default}'s compile, the recipes' untuned step, wherever
+     {!seeded_settings} admits the seeded plan (CUDA and HIP; gh-ocannl-1441) -- the plan derived
+     inside this compile's own transform, on [ctx]'s lowering -- and the plain default pipeline
+     elsewhere. As in {!seeded_default}, a classified failure of a compile that seeded, split or
+     sank something recompiles the plain default; any other failure goes to [raise_pre_search].
+     [Context.compile] is the plain form plus [raise_failure], which is what [raise_pre_search] ends
+     with, so the caller sees the same exception either way. *)
   let compile_untuned_default ?base () =
     progress_stage "untuned_default_compile";
-    match
-      Context.compile_outcome ?name ~provenance:Ir.Schedule_outcome.User_schedule ctx comp bindings
-    with
-    | Ok result -> result
-    | Error failure -> raise_pre_search ?base failure
+    let plain () =
+      match
+        Context.compile_outcome ?name ~provenance:Ir.Schedule_outcome.User_schedule ctx comp
+          bindings
+      with
+      | Ok result -> result
+      | Error failure -> raise_pre_search ?base failure
+    in
+    let choice = ref no_seeded_choice in
+    (* Before the compile, so outside its classification: on CUDA and HIP this reads the device's
+       limits (device work, as the search path's limits query is) and the seeding settings, either
+       of which can raise, and the call must still report once. *)
+    let seeded =
+      match seeded_transform ~on_choice:(fun c -> choice := c) ctx bindings with
+      | transform -> transform
+      | exception exn when not (process_fatal_exn exn) ->
+          let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+          !release_baseline_hook ();
+          let phase =
+            match exn with
+            | Utils.Invalid_config_value _ -> Outcome.Transform
+            | _ -> Outcome.Hardware_limits
+          in
+          emit_pre_search_failure ?base ~phase ~candidate:None ~detail:(Exn.to_string exn) ();
+          Stdlib.Printexc.raise_with_backtrace exn backtrace
+    in
+    match seeded with
+    | None -> plain ()
+    | Some lowered_transform -> (
+        match
+          Context.compile_outcome ?name ~lowered_transform ~provenance:Outcome.Advisory ctx comp
+            bindings
+        with
+        | Ok result -> result
+        | Error (Outcome.Classified classified)
+          when not
+                 (List.is_empty !choice.sd_seeded && List.is_empty !choice.sd_split
+                && List.is_empty !choice.sd_sunk) ->
+            logf "the seeded untuned default FAILED (%s); compiling the plain default"
+              (Outcome.detail_of_cause classified.cause);
+            plain ()
+        | Error failure -> raise_pre_search ?base failure)
   in
   (* Without a cache to replay there is nothing for a search-less [tune] to do, so it does not even
      take the base compile that computes the cache key: the caller gets the untuned default compile
-     it would have gotten from [Context.compile]. *)
+     it would have gotten from {!untuned_compile} without [model_default_schedule]. *)
   if (not search) && String.is_empty cache_dir then (
     logf
       "search disabled (autotune_search=false) and no chosen cache: compiling the untuned default";
@@ -6194,15 +6245,16 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
        derives it. *)
     let seeded_plan_value =
       lazy
-        (Option.bind !base_pristine ~f:(fun opt ->
-             let t0 = Unix.gettimeofday () in
-             let plan =
-               seeded_plan ~capabilities ~backend ~limits ~accum_prec ~static_indices opt
-             in
-             logf "seeded untuned plan derived in %.3f s: %s"
-               (Unix.gettimeofday () -. t0)
-               (Option.value_map plan ~default:"none" ~f:seeded_plan_label);
-             plan))
+        (Seam.get on_seeded_plan
+           (Option.bind !base_pristine ~f:(fun opt ->
+                let t0 = Unix.gettimeofday () in
+                let plan =
+                  seeded_plan ~capabilities ~backend ~limits ~accum_prec ~static_indices opt
+                in
+                logf "seeded untuned plan derived in %.3f s: %s"
+                  (Unix.gettimeofday () -. t0)
+                  (Option.value_map plan ~default:"none" ~f:seeded_plan_label);
+                plan)))
     in
     let search_shape =
       lazy
@@ -7564,17 +7616,25 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
              model coverage (opaque code, a schedule the model cannot apply, missing envelope
              constants) is always kept, only measured — so the pre-filter never precludes a measured
              result and its outcome is independent of enumeration order. Presets, saved schedules
-             and the baseline are never pruned. *)
+             and the baseline are never pruned. A candidate its builder refuses typed
+             ([Sketch_families.refuse], gh-ocannl-1390) is dropped here as the decline its compile
+             would have been, under the same cause in the census (gh-ocannl-1437): the pre-filter
+             builds outside the candidates' failure boundary, where the refusal used to end the
+             search. An untyped raise is a builder bug and still propagates. *)
           let model_prefilter_params ~seg_opt ~family params =
             if Float.(keep_fraction >= 1.) || List.length params <= 1 then params
             else
               let scored =
-                List.map params ~f:(fun p ->
-                    let score =
-                      model_score ~static_indices ~limits seg_opt
-                        (sketch_schedule ~accum_prec ~p seg_opt)
-                    in
-                    (p, score))
+                List.filter_map params ~f:(fun p ->
+                    match sketch_schedule ~accum_prec ~p seg_opt with
+                    | exception Outcome.Cause_at (phase, cause)
+                      when not (Outcome.uncontainable phase cause) ->
+                        logf "model pre-filter (%s): %s refused by its builder, declined: %s" family
+                          (spec_label (Whole (W_sketch p))) (Outcome.detail_of_cause cause);
+                        record_decline declines
+                          { Outcome.phase; cause; execution_effect = Outcome.No_device_writes };
+                        None
+                    | sched -> Some (p, model_score ~static_indices ~limits seg_opt sched))
               in
               n_model_scored :=
                 !n_model_scored + List.count scored ~f:(fun (_, s) -> Option.is_some s);

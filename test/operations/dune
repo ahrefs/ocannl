@@ -10281,7 +10281,15 @@
   (env_var OCANNL_GPU_DEFAULT_SPLIT_REDUCE_MIN_SERIAL)
   (env_var OCANNL_GPU_DEFAULT_REDUCTION_SINK))
  (modules autotune_seeded_seed)
- (libraries base ocannl stdio unix arrayjit.verdict ll_test scripted_search)
+ (libraries
+  base
+  ocannl
+  stdio
+  unix
+  arrayjit.verdict
+  test_utils
+  ll_test
+  scripted_search)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
