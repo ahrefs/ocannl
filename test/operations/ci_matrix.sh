@@ -409,6 +409,60 @@ for event in ('pull_request', 'push', 'schedule'):
     assert not partitions(shards[:-1], tier) and not partitions(shards, tier | {'@@x/train-ghost'})
 print('PASS the train shards partition the tier the train aggregates define, every shard nonempty')
 
+# The main shards' weigh step prints what `tools/ci-shard.sh merge-weights` reads back from a run's
+# log (gh-ocannl-1464): run the step's own script for each shard over a fixture trace, beside the
+# real tools, and merge the two jobs' output into the WEIGHTS block it stands for.
+weigh_step = source.split("    - name: Weigh the shard's units\n", 1)
+assert len(weigh_step) == 2, 'the main shards have no weigh step'
+weigh_step = weigh_step[1].split('\n    - ', 1)[0]
+assert "      if: ${{ matrix.shard && matrix.suite == 'main' && !cancelled() }}\n" in weigh_step, \
+    'the weigh step does not run on every main shard that built'
+assert '      shell: bash\n' in weigh_step and '        SHARD: ${{ matrix.shard }}\n' in weigh_step
+# The block scalar ends at the first line indented less than its body (the next step's comments).
+weigh_script = '\n'.join(line[8:] for line in itertools.takewhile(
+    lambda line: line.startswith('        ') or not line.strip(),
+    weigh_step.split('      run: |\n', 1)[1].splitlines()))
+
+
+def csexp(x):
+    if isinstance(x, list):
+        return b'(' + b''.join(csexp(e) for e in x) + b')'
+    x = str(x).encode()
+    return str(len(x)).encode() + b':' + x
+
+
+def weigh_job(script, shard, units):
+    # The step's stdout for SHARD, its trace holding UNITS: (directory, program, seconds).
+    work = Path(sys.argv[2]) / ('weigh-' + shard.replace('/', '-'))
+    (work / '_build').mkdir(parents=True, exist_ok=True)
+    if not (work / 'tools').exists():
+        (work / 'tools').symlink_to(root / 'tools')
+    (work / '_build' / 'trace.csexp').write_bytes(b''.join(
+        csexp(['process', 'finish', ['1', str(int(s * 1e9))], ['prog', prog], ['dir', '/w/_build/default/' + d]])
+        for d, prog, s in units))
+    run = subprocess.run(['bash', '-eo', 'pipefail', '-c', script], cwd=work, capture_output=True,
+                         text=True, env=dict(os.environ, SHARD=shard))
+    assert run.returncode == 0, 'weigh step for %s: %s' % (shard, run.stderr)
+    return run.stdout
+
+
+def merged(script):
+    log = (weigh_job(script, '1/2', [('test/operations', 'heavy.exe', 100), ('lib', 'gen.exe', 300)])
+           + weigh_job(script, '2/2', [('test/operations', 'light.exe', 50), ('lib', 'gen.exe', 20)]))
+    run = subprocess.run([str(root / 'tools/ci-shard.sh'), 'merge-weights'], input=log,
+                         capture_output=True, text=True)
+    return run.returncode, run.stdout
+
+
+assert merged(weigh_script) == (0, '@rest 280\nheavy 100\nlight 50\n'), merged(weigh_script)
+marker = 'sed "s|^|ci-shard-weight $SHARD |"'
+assert weigh_script.count(marker) == 1, 'the weigh step marks its lines another way'
+for label, mutant in (('unmarked lines', weigh_script.replace(marker, 'cat')),
+                      ('lines without their shard', weigh_script.replace('$SHARD |', '|'))):
+    assert merged(mutant)[0] == 2, 'accepted mutant: ' + label
+    print('PASS rejected mutant: weigh step with', label)
+print("PASS the weigh step's output, merged over one run's main shards, is the WEIGHTS block")
+
 # Run the exact bash guard from the workflow with git reporting a fixture HEAD
 # and gh answering the compare API for the one direction the guard must ask:
 # is the intended commit behind the dispatched head?

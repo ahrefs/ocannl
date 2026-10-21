@@ -13,7 +13,8 @@
 #              prefixes are dropped). Timestamps, colour escapes, a byte-order
 #              mark and CRLF line ends are all read through. No LOG reads stdin.
 #   --github   CI mode: also emit one `::error file=...,line=...` annotation
-#              per failure, so each is listed on the run's summary page; say
+#              per failure, so each is listed on the run's summary page, its
+#              message led by the entry's `<path>:<lines>`; say
 #              so when the log holds none; and say so when LOG is missing,
 #              rather than refusing.
 #   --host FILE  print FILE (the host-capability line, gh-ocannl-1371) above
@@ -196,13 +197,16 @@ END {
   if (count > 0) {
     printf "Failed dune rules (%d), in the order dune reported them:\n", count
     for (i = 1; i <= count; i++) {
-      loc = cpath[i] ":" cfirst[i] (clast[i] != cfirst[i] ? "-" clast[i] : "")
-      printf "  %s  %s\n", loc, cwhat[i]
+      loc[i] = cpath[i] ":" cfirst[i] (clast[i] != cfirst[i] ? "-" clast[i] : "")
+      printf "  %s  %s\n", loc[i], cwhat[i]
       if (cdetail[i] != "") printf "      %s\n", trim(cdetail[i], 240)
     }
     if (github) {
       for (i = 1; i <= count; i++) {
-        msg = cwhat[i] (cdetail[i] == "" ? "" : " -- " trim(cdetail[i], 200))
+        # The message leads with the location the listing gives: the annotation
+        # list on the summary page shows the message, not `file=`, and a golden
+        # mismatch carries no detail to name it otherwise (gh-ocannl-1464).
+        msg = loc[i] "  " cwhat[i] (cdetail[i] == "" ? "" : " -- " trim(cdetail[i], 200))
         gsub(/%/, "%25", msg); gsub(/\r/, "%0D", msg); gsub(/\n/, "%0A", msg)
         printf "::error file=%s,line=%d,endLine=%d,title=Failed dune rule::%s\n", cpath[i], cfirst[i], clast[i], msg
       }
