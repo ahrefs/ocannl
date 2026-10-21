@@ -1,0 +1,12 @@
+uniform1 single n=1: 1 values drawn
+uniform1 single n=1: the materialized run stores the counter: true
+uniform1 single n=1: the virtual run inlines the counter: true
+uniform1 single n=1: inlined and materialized counters draw bitwise-equal values: true
+packed uniform single n=1: 4 values drawn
+packed uniform single n=1: the materialized run stores the counter: true
+packed uniform single n=1: the virtual run inlines the counter: true
+packed uniform single n=1: inlined and materialized counters draw bitwise-equal values: true
+packed uniform half n=1: 8 values drawn
+packed uniform half n=1: the materialized run stores the counter: true
+packed uniform half n=1: the virtual run inlines the counter: true
+packed uniform half n=1: inlined and materialized counters draw bitwise-equal values: true

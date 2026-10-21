@@ -910,9 +910,17 @@ files.
   zero contradict), read as `Low_level.Fp_licence.of_config`. The arms live in one first-match
   step function, `Low_level.fp_algebra_step`; the `Rewrites` tier member `Fp_algebra` applies it
   bottom-up per assignment, after `Online_softmax` (contraction would hide `o := o + w * v` from
-  the hoist). `simplify_llc` -- after virtualization and again after scheduling -- is exact: it
-  keeps only IEEE identities (`x * 1`, `x - (+0)`, `x + (-0)`), constant folding and, for integer
-  precisions, the unlicensed reassociation the index canonicalizer needs. So OCANNL never
+  the hoist). `simplify_llc` -- after virtualization and again after scheduling -- applies no
+  licence: it keeps only IEEE identities (`x * 1`, `x - (+0)`, `x + (-0)`), constant folding and,
+  for integer precisions, the unlicensed reassociation the index canonicalizer needs. Two things
+  it still changes. Constant folds compute in double and round once at the target, where a kernel
+  rounds each operand first: equal for operands representable at the target, not otherwise
+  (`(2^24 + 1) - 2^24` is 1 folded, 0 in f32). And a fixed embedded index folds to a `Constant`
+  only into a scalar precision: into a `uint4x32` slot it stays an index (gh-ocannl-1468), because
+  the conversion is picked by the source precision -- `int32_to_uint4x32` spreads an index over
+  four words, `double_to_uint4x32` copies a double's bits -- and simplify never enters a threefry
+  operand, so a materialized counter folded where its inlined copies did not and drew other bits
+  (`uint4x32_fixed_index_parity` pins the two placements bitwise, cc and Metal). So OCANNL never
   contracts an inlined producer with its consumer, and a placement flip cannot change a result at
   uniform f32 -- with the C compiler's own contraction off; `fp_licence_values` executes that
   claim (cc, `a = b = 1 + 2^-12`, `c = -(1 + 2^-11)`: 0 either way, `2^-24` fused). Backend
