@@ -337,7 +337,8 @@ type report = {
       (** The best-so-far as a step function of the admitted timings (gh-ocannl-1110). See the
           interface. *)
   compile_cost : Ir.Compile_cost.t;
-      (** Every compile this call made, summed by phase (gh-ocannl-1314). See the interface. *)
+      (** The compiles this call made before delivering the report, summed by phase
+          (gh-ocannl-1314). See the interface. *)
 }
 
 (** The report of a [tune] call that never searched (config [autotune_search=false], gh-ocannl-559):

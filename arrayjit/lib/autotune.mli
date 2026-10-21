@@ -1544,11 +1544,13 @@ type report = {
           this call's shape ({!Ir.Schedule_cache.trajectory}); empty when nothing was timed, for an
           entry older than the field, and for one stored under another shape. *)
   compile_cost : Ir.Compile_cost.t;
-      (** Every compile this call made -- the baseline's, each candidate attempt's, a cache
-          replay's, the winner's and any untuned fallback's -- summed by phase (gh-ocannl-1314),
-          each as one {!compile_record} reports it. Unlike the times above, it describes this call
-          even on a {!Cache_replay}. [kernels_compiled < kernels] when the backend reused compiled
-          kernels ([hip_kernel_cache_mib]). *)
+      (** The compiles this call made before delivering this report -- the baseline's, each
+          candidate attempt's, a cache replay's, the winner's and any untuned fallback's -- summed
+          by phase (gh-ocannl-1314), each as one {!compile_record} reports it. A deferred call's
+          ({!tune_deferred}) shipping compile runs after the report and is in its own
+          {!compile_record} only. Unlike the times above, it describes this call even on a
+          {!Cache_replay}. [kernels_compiled < kernels] when the backend reused compiled kernels
+          ([hip_kernel_cache_mib]). *)
 }
 
 val no_search_report : timing:timing_mode -> report
