@@ -274,6 +274,7 @@ module Impl = struct
 
   (* --- Configuration and Info --- *)
   let get_used_memory _device = Atomic.get allocated_memory
+  let get_free_and_total_memory _device = None
 
   (* [Sexp.message]-shaped device entries, like every other backend's (gh-ocannl-710): the pairs
      used to sit one nesting level deeper, wrapped in a list of their own, which is the same
@@ -1907,29 +1908,31 @@ using namespace metal;|}
      while [runner.fused] is set, [link_proc]'s work encodes into the open pass instead of
      committing its own buffer. *)
   let sequence_segments (context : context) ~name ~bindings:_ ~uses_merge_buffer:_
-      (tasks : Task.t list) : Task.t option =
+      (tasks : Task.t list) : (Task.t * (unit -> unit)) option =
     let dev = context.device in
+    (* The command buffer is built afresh every run, so nothing outlives a run to release. *)
     Some
-      (Task.Task
-         {
-           context_lifetime = tasks;
-           description = "fused segments of " ^ name ^ " on " ^ get_name dev;
-           work =
-             (fun () ->
-               let command_buffer = Me.CommandBuffer.on_queue dev.runner.queue in
-               encode_wait_for_enqueued dev command_buffer;
-               let encoder =
-                 Me.ComputeCommandEncoder.on_buffer_with_dispatch_type command_buffer
-                   Me.ComputeCommandEncoder.DispatchType.Serial
-               in
-               dev.runner.fused <- Some (command_buffer, encoder);
-               Exn.protect
-                 ~f:(fun () -> List.iter tasks ~f:Task.run)
-                 ~finally:(fun () ->
-                   dev.runner.fused <- None;
-                   Me.ComputeCommandEncoder.end_encoding encoder;
-                   Me.CommandBuffer.commit command_buffer));
-         })
+      ( Task.Task
+          {
+            context_lifetime = tasks;
+            description = "fused segments of " ^ name ^ " on " ^ get_name dev;
+            work =
+              (fun () ->
+                let command_buffer = Me.CommandBuffer.on_queue dev.runner.queue in
+                encode_wait_for_enqueued dev command_buffer;
+                let encoder =
+                  Me.ComputeCommandEncoder.on_buffer_with_dispatch_type command_buffer
+                    Me.ComputeCommandEncoder.DispatchType.Serial
+                in
+                dev.runner.fused <- Some (command_buffer, encoder);
+                Exn.protect
+                  ~f:(fun () -> List.iter tasks ~f:Task.run)
+                  ~finally:(fun () ->
+                    dev.runner.fused <- None;
+                    Me.ComputeCommandEncoder.end_encoding encoder;
+                    Me.CommandBuffer.commit command_buffer));
+          },
+        fun () -> () )
 end
 
 (* gh-ocannl-1038: the one capability this backend probes on the host rather than on a device --

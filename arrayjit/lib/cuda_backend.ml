@@ -237,6 +237,10 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
      [Context.get_used_memory] contract. *)
   let get_used_memory (device : device) = Slab.used_memory device
 
+  let get_free_and_total_memory (device : device) =
+    set_ctx device.dev.primary_context;
+    Some (Cu.Device.get_free_and_total_mem ())
+
   (* The merge buffer is the device's reserved single-tenant pool (id [merge_buffer_pool_id]); grow
      it in place when a larger node arrives ([Slab.alloc_pool] overwrites the reserved entry). *)
   let opt_alloc_merge_buffer ~size_in_bytes (device : device) : unit =
@@ -1628,6 +1632,84 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
     in
     (lowered_bindings, procs)
 
+  (* gh-ocannl-1445: a graph-captured routine's instantiated graphs, by capture key, in FIFO order
+     for eviction. Destroyed when the routine's context is released ([destroy_graphs], one of its
+     [release_hooks]) and at process exit (below), not only on eviction: a cached exec otherwise
+     lived as long as its routine's task, and to the end of the process for a routine nobody
+     dropped. *)
+  type graph_cache = {
+    graphs_device : device;
+    cache : (string, Cu.Graph.exec) Hashtbl.t;
+    order : string Queue.t;
+    lock : Stdlib.Mutex.t;
+        (** Held by every run of the routine and by [destroy_graphs]: upload forks share their
+            context's release hooks and can be released from different domains. *)
+  }
+
+  let graph_caches : graph_cache Backend_impl.Weak_registry.t = Backend_impl.Weak_registry.create ()
+
+  let live_graph_execs () =
+    List.sum
+      (module Int)
+      (Backend_impl.Weak_registry.live graph_caches)
+      ~f:(fun g -> Stdlib.Mutex.protect g.lock (fun () -> Hashtbl.length g.cache))
+
+  (* Idempotent, and the routine stays runnable: its next run captures afresh. The stream is
+     synchronized first, since a cached exec may still have a launch pending on it; the cache is
+     emptied under its lock, and every exec taken out of it is attempted, the first failure
+     re-raised. *)
+  let destroy_graphs g =
+    let execs =
+      Stdlib.Mutex.protect g.lock (fun () ->
+          if Hashtbl.is_empty g.cache then []
+          else (
+            set_ctx g.graphs_device.dev.primary_context;
+            Cu.Stream.synchronize g.graphs_device.runner;
+            let execs = Hashtbl.data g.cache in
+            Hashtbl.clear g.cache;
+            Queue.clear g.order;
+            execs))
+    in
+    Backend_impl.attempt_each (List.map execs ~f:(fun exec () -> Cu.Graph.exec_destroy exec))
+
+  (* gh-ocannl-1445: destroy every cached exec still alive at process exit, per device once its
+     stream is idle, under the one [exit_stream_teardown_timeout] bound HIP's stream teardown uses
+     ([Utils.bounded_exit_teardown]). Registered at module initialization for the same reason as
+     HIP's: [at_exit] handlers run most-recent first, so every program handler that might still run
+     a routine runs before this. The CUDA stream itself is not destroyed here (gh-ocannl-1048). *)
+  let () =
+    Stdlib.at_exit (fun () ->
+        (* Only caches holding graphs: an emptied one (a released routine still reachable, or a
+           capture that never succeeded) has nothing to wait for the stream for. *)
+        match
+          Backend_impl.Weak_registry.live graph_caches
+          |> List.filter ~f:(fun g ->
+              Stdlib.Mutex.protect g.lock (fun () -> not (Hashtbl.is_empty g.cache)))
+        with
+        | [] -> ()
+        | live ->
+            let by_device =
+              List.fold live
+                ~init:(Map.empty (module Int))
+                ~f:(fun acc g -> Map.add_multi acc ~key:g.graphs_device.ordinal ~data:g)
+            in
+            ignore
+              (Utils.bounded_exit_teardown
+                 (Map.to_alist by_device
+                 |> List.map ~f:(fun (ordinal, gs) : Utils.exit_teardown_resource ->
+                     let device = (List.hd_exn gs).graphs_device in
+                     {
+                       what = [%string "the cached CUDA graphs of device %{ordinal#Int}"];
+                       is_idle =
+                         (fun () ->
+                           set_ctx device.dev.primary_context;
+                           Cu.Stream.is_ready device.runner);
+                       teardown =
+                         (fun () ->
+                           Backend_impl.attempt_each (List.map gs ~f:(fun g () -> destroy_graphs g)));
+                     }))
+                : Utils.exit_teardown_outcome list))
+
   (* One CUDA graph for a fissioned routine's whole segment batch (gh-ocannl-488): stream-capture
      the segment launch loop once per distinct set of launch-time-varying arguments — static-index
      binding values, plus the merge-buffer position when the routine reads it — instantiate, and
@@ -1642,7 +1724,7 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
      (the log id is a fresh kernel argument every run), when disabled via [gpu_graph_capture=false],
      or permanently for this routine if the driver rejects capture. *)
   let sequence_segments (context : context) ~name ~(bindings : Indexing.lowered_bindings)
-      ~uses_merge_buffer (tasks : Task.t list) : Task.t option =
+      ~uses_merge_buffer (tasks : Task.t list) : (Task.t * (unit -> unit)) option =
     let use_capture =
       List.length tasks > 1
       && Utils.get_global_flag ~default:true ~arg_name:"gpu_graph_capture"
@@ -1652,8 +1734,16 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
     else
       let device = context.device in
       let max_cached_graphs = 128 in
-      let cache : (string, Cu.Graph.exec) Hashtbl.t = Hashtbl.create (module String) in
-      let order : string Queue.t = Queue.create () in
+      let graphs =
+        {
+          graphs_device = device;
+          cache = Hashtbl.create (module String);
+          order = Queue.create ();
+          lock = Stdlib.Mutex.create ();
+        }
+      in
+      Backend_impl.Weak_registry.register graph_caches graphs;
+      let cache = graphs.cache and order = graphs.order in
       let broken = ref false in
       let run_plain () = List.iter tasks ~f:Task.run in
       let current_key () =
@@ -1689,46 +1779,54 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
         exec
       in
       Some
-        (Task.Task
-           {
-             context_lifetime = tasks;
-             description = "graph-captured segments of " ^ name ^ " on " ^ get_name device;
-             work =
-               (fun () ->
-                 if !broken then run_plain ()
-                 else (
-                   set_ctx @@ ctx_of context;
-                   let key = current_key () in
-                   match Hashtbl.find cache key with
-                   | Some exec -> Cu.Graph.launch exec device.runner
-                   | None -> (
-                       match capture () with
-                       | exec ->
-                           if Queue.length order >= max_cached_graphs then (
-                             let victim = Queue.dequeue_exn order in
-                             (* The evicted exec may still have a pending launch on the stream. *)
-                             Cu.Stream.synchronize device.runner;
-                             Cu.Graph.exec_destroy (Hashtbl.find_exn cache victim);
-                             Hashtbl.remove cache victim);
-                           Hashtbl.set cache ~key ~data:exec;
-                           Queue.enqueue order key;
-                           Cu.Graph.launch exec device.runner
-                       | exception Cu.Cuda_error { status; message } ->
-                           (* E.g. capture unsupported on this driver: fall back to per-segment
-                              launches for this routine (same-stream FIFO supplies the segment
-                              ordering), and re-run outside capture so a genuine launch failure
-                              surfaces on the plain path. *)
-                           broken := true;
-                           Stdio.eprintf
-                             "ocannl: disabling CUDA graph capture for routine %s (%s: %s)\n%!" name
-                             message
-                             (Sexp.to_string_hum @@ Cu.sexp_of_result status);
-                           run_plain ())));
-           })
+        ( Task.Task
+            {
+              (* Holding [graphs] here keeps the registry's weak pointer alive exactly as long as
+                 the routine's schedule. *)
+              context_lifetime = (tasks, graphs);
+              description = "graph-captured segments of " ^ name ^ " on " ^ get_name device;
+              work =
+                (fun () ->
+                  if !broken then run_plain ()
+                  else
+                    Stdlib.Mutex.protect graphs.lock (fun () ->
+                        set_ctx @@ ctx_of context;
+                        let key = current_key () in
+                        match Hashtbl.find cache key with
+                        | Some exec -> Cu.Graph.launch exec device.runner
+                        | None -> (
+                            match capture () with
+                            | exec ->
+                                if Queue.length order >= max_cached_graphs then (
+                                  let victim = Queue.dequeue_exn order in
+                                  (* The evicted exec may still have a pending launch on the
+                                     stream. *)
+                                  Cu.Stream.synchronize device.runner;
+                                  Cu.Graph.exec_destroy (Hashtbl.find_exn cache victim);
+                                  Hashtbl.remove cache victim);
+                                Hashtbl.set cache ~key ~data:exec;
+                                Queue.enqueue order key;
+                                Cu.Graph.launch exec device.runner
+                            | exception Cu.Cuda_error { status; message } ->
+                                (* E.g. capture unsupported on this driver: fall back to per-segment
+                                   launches for this routine (same-stream FIFO supplies the segment
+                                   ordering), and re-run outside capture so a genuine launch failure
+                                   surfaces on the plain path. *)
+                                broken := true;
+                                Stdio.eprintf
+                                  "ocannl: disabling CUDA graph capture for routine %s (%s: %s)\n%!"
+                                  name message
+                                  (Sexp.to_string_hum @@ Cu.sexp_of_result status);
+                                run_plain ())));
+            },
+          fun () -> destroy_graphs graphs )
 
   let get_global_debug_info () =
     Sexp.message "cuda_global_debug"
-      [ ("live_streams", [%sexp_of: int] @@ Cu.Stream.get_total_live_streams ()) ]
+      [
+        ("live_streams", [%sexp_of: int] @@ Cu.Stream.get_total_live_streams ());
+        ("live_graph_execs", [%sexp_of: int] @@ live_graph_execs ());
+      ]
 
   let static_properties () =
     let device_properties =

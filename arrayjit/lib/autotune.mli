@@ -1547,11 +1547,19 @@ val no_search_report : timing:timing_mode -> report
     - [search_done] ({!tune}, exactly once per call, with its report): [routine], [elapsed_s],
       [outcome] ({!outcome_name}), [timed], [contended], [timings_retried], [unbatched], [failed],
       [rounds], [attempts], [compile_s], [timing_s], [best_ms], [best].
+    - [placements_start] ({!Train.tune_placements}, once, before anything is searched or replayed):
+      [working_bytes], [device_free] and [device_total] (gh-ocannl-1424). The first is the
+      {!Ir.Alloc_census} live working-pool bytes (process-wide, counted at the shared allocator
+      seam, so deterministic on every backend), the other two the driver's reading of the device
+      ({!Context.get_free_and_total_memory}; [none] where the backend has none).
     - [arm_start] / [arm_done] ({!Train.tune_placements}, around each arm's, flip's or replayed
       placement's search): [arm]; a flip's carry [flip=<k>/<budget>]; [arm_done] adds [result]
       ([ok], [failed] or [abandoned]), [best_ms] and [elapsed_s]. An abandoned flip's [best_ms] is
       its best at the verdict's depth, followed by that depth as [after] and the incumbent's best
-      there as [incumbent_ms] (gh-ocannl-1110).
+      there as [incumbent_ms] (gh-ocannl-1110). Both end with [working_bytes] and [device_free],
+      read as for [placements_start]: an arm that starts with more working bytes than the call did
+      started next to something an earlier search left in OCANNL's pools, and a [device_free] lower
+      than the call's at equal working bytes is device memory no pool table accounts for.
     - [flip_twin] ({!Train.tune_placements}, gh-ocannl-1274): a flip skipped without a budget slot
       as a structural twin of one that lost: [arm], and that flip's arm label as [twin_of]. No
       [arm_start] / [arm_done] frames it, since nothing is searched.

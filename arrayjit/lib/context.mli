@@ -488,6 +488,17 @@ val get_used_memory : t -> int
     the shared allocator seam and never lowered by a free, hence backend-uniform (gh-ocannl-1006).
 *)
 
+val get_free_and_total_memory : t -> (int * int) option
+(** The driver's [(free, total)] bytes of the context's device, read now, or [None] where the
+    backend has no such reading (cc, multidev_cc, metal). Unlike {!get_used_memory} it is
+    device-global: it also counts other processes, the driver's own allocations (contexts, loaded
+    code, kernel local memory, instantiated graphs), and moves in allocation granules -- which is
+    what makes it the instrument for memory OCANNL's pool tables do not see (gh-ocannl-1424). *)
+
+val global_debug_info : t -> Sexp.t
+(** The context's backend's process-wide debug information ([Sexp.message]-shaped, backend-specific:
+    e.g. the CUDA and HIP backends' [live_streams] and [live_graph_execs]). *)
+
 val release : t -> unit
 (** Eagerly frees the device buffers this context owns — the pools holding nodes it allocated that
     its parent does not have, and that are not per-device constants. Idempotent (a second call is a

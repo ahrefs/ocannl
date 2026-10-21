@@ -426,8 +426,8 @@ configuration.
   synchronizes unboundedly) only once idle, so hung devices cannot hold the process. `at_exit`
   runs on an uncaught exception too, which is why the bound, not an exit-status test, does that
   job. A reappearing 77 means the teardown was skipped: `0` in the config, or a busy stream at exit
-  (stderr says `still busy`) -- or an instantiated graph outlived the process: a routine whose
-  segments `sequence_segments` graph-captured (`gpu_graph_capture`, default true) leaves its cached
-  `hipGraphExec`s undestroyed, and `seeded_default` on minix prints the 77 with capture on and not
-  with `--ocannl_gpu_graph_capture=false` (measured for gh-ocannl-1370). CUDA stays without it: the driver reports nothing and cudajit
+  (stderr says `still busy`). An instantiated graph that outlives the process brings it back too
+  (`seeded_default` on minix printed it with `gpu_graph_capture` on and not off, gh-ocannl-1370),
+  so the same teardown first destroys the `hipGraphExec`s graph-captured routines still cache
+  (gh-ocannl-1445, backend-memory.md). CUDA stays without it: the driver reports nothing and cudajit
   (0.8.0) exposes no eager `Stream.destroy`. `test/operations/exit_stream_teardown` pins both.
