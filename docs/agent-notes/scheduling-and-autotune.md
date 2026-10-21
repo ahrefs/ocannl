@@ -299,7 +299,12 @@ files.
   the unfused coverage verdict is shared with the fused branch because it implies it (the fused
   demand is a subset, and `aligned_chains` ignores `skip`): `aligned_chains` runs twice only
   where the unfused flavor is refuted. `sketch_seed_params` is the tree's `leaves`, twins
-  included, and `model_default` has no separate twins step. **Consequence for diagnostics: since gh-577 a companion-coverage
+  included, and `model_default` has no separate twins step. The conv family is a tree of its own
+  under the same root since gh-ocannl-697 (`conv_sketch_tree`: `conv-leg = cpu | gpu`, the CPU
+  `conv-shape` menu, the GPU `conv-staging` above `conv-rows`, so the leaves keep the flat list's
+  plain-geometries-then-depth-twins order for any depth list); `sketch_family_tree` is whichever
+  family claims the lowering, and its census lines are the tree's refutations, path by path,
+  where the conv legs used to keep free-text notes. **Consequence for diagnostics: since gh-577 a companion-coverage
   DECLINE CENSUS is empty, and that is not evidence the rule stopped firing** — a refuted family is
   never seeded, so it never reaches the decline log. gh-569's Part 3 read 25 coverage declines out of
   `schedule_log_declines`; the same workload on current master logs zero
@@ -425,8 +430,9 @@ files.
   unadvertised cap is genuinely no cap.
   The CONV family is wired too (gh-ocannl-739): `conv_launch_geometry` describes the outer output
   `Grid` loops followed by the blocked flavor's row-block loop (the innermost grid coordinate), plus
-  the tensorization lane as the sole `Workgroup` loop. `conv_seed_params` filters that lower-bound
-  prediction through the same predicate. `launch_predicate_parity` derives a real conv site behind
+  the tensorization lane as the sole `Workgroup` loop. Every conv leaf passes that lower-bound
+  prediction through the same predicate (`launch_geometry_refutation`), so since gh-ocannl-697 an
+  over-cap conv geometry is refuted at its own path with the gate's sentence instead of filtered. `launch_predicate_parity` derives a real conv site behind
   `fission_scheduled`, applies every GPU seed, and proves no predicted dimension exceeds
   `launch_dims`. Its negative controls share one conv whose outer grid loops are a 65536 batch
   and a non-row spatial 2: blocked, the row blocks bind `.x`, the spatial extent `.y`, and the

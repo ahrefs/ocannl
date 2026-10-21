@@ -1,0 +1,109 @@
+== 9x9 conv, CPU ==
+  fusion = unfused
+    conv-leg = cpu
+      conv-shape = serial
+        * gpu:false simd:0 bm:0  bn:0 bk:0 tm:0 grid:false epi:false depth:1
+      conv-shape = grid
+        * gpu:false simd:0 bm:0  bn:0 bk:0 tm:0 grid:true epi:false depth:1
+      conv-shape = bm8  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
+      conv-shape = bm16  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
+      conv-shape = bm32  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
+    conv-leg = gpu  [refuted: not a GPU target]
+  fusion = fused  [refuted: Schedule.Fuse_epilogue: no statement follows the reduction over y]
+9x9 conv, CPU: the tree's leaves are the seed list: true
+9x9 conv, CPU: the claiming family's tree is the conv tree: true
+9x9 conv, CPU: every leaf's path agrees with its parameters: true
+== 9x9 conv, GPU (masked) ==
+  fusion = unfused
+    conv-leg = cpu  [refuted: not a CPU target]
+    conv-leg = gpu
+      conv-staging = plain
+        conv-rows = rows-whole
+          * gpu:true simd:32 bm:0  bn:0 bk:8 tm:8 grid:false epi:false depth:1
+        conv-rows = rows-bm8
+          * gpu:true simd:32 bm:8  bn:0 bk:8 tm:0 grid:false epi:false depth:1
+        conv-rows = rows-bm16  [refuted: row block gives fewer than two blocks of the 9 rows]
+        conv-rows = rows-bm32  [refuted: row block gives fewer than two blocks of the 9 rows]
+      conv-staging = pipelined
+        conv-rows = rows-whole
+          twin = depth2  [excluded: pad-masked flavor: Tensorize stays on the barrier-bracketed per-call arm, whose leading bracket sits between the prefetch and the compute, so the twin could only pay the doubled footprint (Codex P2 on PR #303)]
+        conv-rows = rows-bm8
+          twin = depth2  [excluded: pad-masked flavor: Tensorize stays on the barrier-bracketed per-call arm, whose leading bracket sits between the prefetch and the compute, so the twin could only pay the doubled footprint (Codex P2 on PR #303)]
+        conv-rows = rows-bm16  [refuted: row block gives fewer than two blocks of the 9 rows]
+        conv-rows = rows-bm32  [refuted: row block gives fewer than two blocks of the 9 rows]
+  fusion = fused  [refuted: Schedule.Fuse_epilogue: no statement follows the reduction over y]
+9x9 conv, GPU (masked): the tree's leaves are the seed list: true
+9x9 conv, GPU (masked): the claiming family's tree is the conv tree: true
+9x9 conv, GPU (masked): every leaf's path agrees with its parameters: true
+a site without a fusable tail refutes the fused flavor with the recognizer's reason: true
+== 16x16 conv, GPU (dividing) ==
+  fusion = unfused
+    conv-leg = cpu  [refuted: not a CPU target]
+    conv-leg = gpu
+      conv-staging = plain
+        conv-rows = rows-whole
+          * gpu:true simd:32 bm:0  bn:0 bk:0 tm:0 grid:false epi:false depth:1
+        conv-rows = rows-bm8
+          * gpu:true simd:32 bm:8  bn:0 bk:0 tm:0 grid:false epi:false depth:1
+        conv-rows = rows-bm16  [refuted: row block gives fewer than two blocks of the 16 rows]
+        conv-rows = rows-bm32  [refuted: row block gives fewer than two blocks of the 16 rows]
+      conv-staging = pipelined
+        conv-rows = rows-whole
+          twin = depth2
+            * gpu:true simd:32 bm:0  bn:0 bk:0 tm:0 grid:false epi:false depth:2
+        conv-rows = rows-bm8
+          twin = depth2
+            * gpu:true simd:32 bm:8  bn:0 bk:0 tm:0 grid:false epi:false depth:2
+        conv-rows = rows-bm16  [refuted: row block gives fewer than two blocks of the 16 rows]
+        conv-rows = rows-bm32  [refuted: row block gives fewer than two blocks of the 16 rows]
+  fusion = fused  [refuted: Schedule.Fuse_epilogue: no statement follows the reduction over y]
+16x16 conv, GPU (dividing): the tree's leaves are the seed list: true
+16x16 conv, GPU (dividing): the claiming family's tree is the conv tree: true
+16x16 conv, GPU (dividing): every leaf's path agrees with its parameters: true
+dividing: a pipelined depth-2 twin is a leaf: true
+== 9x9 conv + bias/relu tail, CPU ==
+  fusion = unfused
+    conv-leg = cpu
+      conv-shape = serial
+        * gpu:false simd:0 bm:0  bn:0 bk:0 tm:0 grid:false epi:false depth:1
+      conv-shape = grid
+        * gpu:false simd:0 bm:0  bn:0 bk:0 tm:0 grid:true epi:false depth:1
+      conv-shape = bm8  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
+      conv-shape = bm16  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
+      conv-shape = bm32  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
+    conv-leg = gpu  [refuted: not a GPU target]
+  fusion = fused
+    conv-leg = cpu
+      conv-shape = serial
+        * gpu:false simd:0 bm:0  bn:0 bk:0 tm:0 grid:false epi:true depth:1
+      conv-shape = grid
+        * gpu:false simd:0 bm:0  bn:0 bk:0 tm:0 grid:true epi:true depth:1
+      conv-shape = bm8  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
+      conv-shape = bm16  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
+      conv-shape = bm32  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
+    conv-leg = gpu  [refuted: not a GPU target]
+9x9 conv + bias/relu tail, CPU: the tree's leaves are the seed list: true
+9x9 conv + bias/relu tail, CPU: the claiming family's tree is the conv tree: true
+9x9 conv + bias/relu tail, CPU: every leaf's path agrees with its parameters: true
+tail: the fused flavor has leaves: true
+== 4x4 conv over 4 images, GPU, grid cap 3 ==
+  fusion = unfused
+    conv-leg = cpu  [refuted: not a CPU target]
+    conv-leg = gpu
+      conv-staging = plain
+        conv-rows = rows-whole  [refuted: the candidate requests a .y grid extent of 4, exceeding the device limit of 3]
+        conv-rows = rows-bm8  [refuted: row block gives fewer than two blocks of the 4 rows]
+        conv-rows = rows-bm16  [refuted: row block gives fewer than two blocks of the 4 rows]
+        conv-rows = rows-bm32  [refuted: row block gives fewer than two blocks of the 4 rows]
+      conv-staging = pipelined
+        conv-rows = rows-whole
+          twin = depth2  [refuted: the candidate requests a .y grid extent of 4, exceeding the device limit of 3]
+        conv-rows = rows-bm8  [refuted: row block gives fewer than two blocks of the 4 rows]
+        conv-rows = rows-bm16  [refuted: row block gives fewer than two blocks of the 4 rows]
+        conv-rows = rows-bm32  [refuted: row block gives fewer than two blocks of the 4 rows]
+  fusion = fused  [refuted: Schedule.Fuse_epilogue: no statement follows the reduction over y]
+4x4 conv over 4 images, GPU, grid cap 3: the tree's leaves are the seed list: true
+4x4 conv over 4 images, GPU, grid cap 3: the claiming family's tree is the conv tree: true
+4x4 conv over 4 images, GPU, grid cap 3: no leaf survives: true
+cap 3: the whole-extent geometry is refuted with the gate's sentence: true
+cap 4: the whole-extent geometry is admitted: true

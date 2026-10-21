@@ -9,8 +9,9 @@ fission slack for multi-kernel aggregate rows, floored serialization). Phase 1 i
 labelled, commitment-dependent choices) and the matmul family factored into it —
 `Autotune.matmul_seed_params` {e is} `Schedule_space.leaves` of `matmul_sketch_tree`, pinned
 list-for-list against the pre-factoring golden by test/operations/sketch_family_tree.ml; the
-epilogue-twin level factored in as the tree's root (gh-613), the conv family is the remaining
-mechanical follow-up. Phase 2
+epilogue-twin level factored in as the tree's root (gh-613), and the conv family factored the
+same way as its own tree under the same root (gh-697, `conv_sketch_tree`; `sketch_seed_params` is
+the claiming family's leaves). Phase 2
 implemented: legality over partial shapes for the factored family — tree children carry
 verdicts decided at parent construction, mirroring `op_legality`'s three values quantified
 over completions (`Refuted` with the violated constraint as witness — a decline explanation
@@ -44,8 +45,8 @@ one: the fused demand is a subset and the alignment analysis ignores the skip). 
 raise sites remain the safety net for parameters replayed
 against a different lowering (fission recombination), and genuinely build-settled analyses stay
 candidate-build declines. Recorded follow-ups: an A-orientation
-site classifier (the `m_tb` analogue for forms reading A in place), plus the conv-family
-factoring. Phase 3 implemented: the dual (floor) extraction —
+site classifier (the `m_tb` analogue for forms reading A in place); the conv-family factoring
+landed with gh-697. Phase 3 implemented: the dual (floor) extraction —
 `Cost_model.completion_floor` — with every approximation biased down, the exact mirror of
 `analyze`'s contract: guarded work counts guards-never-taken, the short-circuiting forms count
 only their certain part (`Where`'s cheaper arm, `And`/`Or`'s left operand, `Arg1`/`Arg2`'s

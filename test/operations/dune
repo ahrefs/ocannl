@@ -6852,6 +6852,21 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-697: the conv sketch family as a refinement tree, the conv sibling of
+; sketch_family_tree -- pure in the lowering, on synthetic limits, so GPU legs need no GPU.
+
+(test
+ (name conv_family_tree)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_AUTOTUNE_PAD_WASTE_MAX))
+ (modules conv_family_tree)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; Run by a rule (not a test stanza) so the backend and the model_peak_* envelope overrides are
 ; pinned on the command line: the C backends carry no advisory envelope constants, and pinning
 ; makes the roofline-scoring output deterministic across the backend test matrix.
