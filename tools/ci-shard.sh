@@ -57,7 +57,7 @@
 #   tools/ci-shard.sh targets K/N [SUITE]  # shard K's dune targets, one per line
 #   tools/ci-shard.sh plan N [SUITE]       # each shard's units and estimated load
 #   tools/ci-shard.sh aliases              # the aliases the `main` suite shards
-#   tools/ci-shard.sh weigh TRACE          # per-unit CPU seconds from a dune trace
+#   tools/ci-shard.sh weigh TRACE          # per-unit seconds from a dune trace
 #   tools/ci-shard.sh merge-weights [LOG]  # a WEIGHTS block from one CI run's log
 # SUITE is `main` (the default) or `train`.
 #
@@ -75,7 +75,7 @@
 #   dune build @default @runtest @bin-smoke --trace-file=TRACE
 # -- (dune >= 3.24's canonical-S-expression trace; a fresh build directory, or
 # cached rules record no process) and prints a replacement WEIGHTS block:
-# CPU seconds per test/operations executable, keyed by the alias of the same
+# wall-clock seconds per test/operations executable, keyed by the alias of the same
 # name, plus `@rest` for every non-compiler process elsewhere. An executable
 # run with `--ocannl_cc_backend_fast_math=true` is credited to its
 # `<name>_fast_math` twin. An executable whose alias is named differently
@@ -83,17 +83,27 @@
 # it by hand, or `plan` warns about it as a stale entry. Keep the units above a
 # few seconds; the rest weigh DEFAULT_WEIGHT anyway.
 # It decodes only the fields it needs (SECURITY, above `weigh` below).
-# CPU, not wall-clock: the ubuntu runner is CPU-bound, while a
-# workstation's wall-clock is dominated by whatever else it is doing (macOS
-# XProtect stalls on fresh executables, other sessions' suites).
+# Wall-clock -- dune's own duration of each process -- because what a unit
+# costs a shard is the dune job slot it holds: on the 4-vCPU runner at `-j 4`
+# cc_march_census held one for 806s on 474 CPU-s, and sweep_harness's driver
+# for 343s on 135 (gh-ocannl-1464), so CPU weights dealt the slowest shard the
+# longest poles. Wall-clock is only meaningful measured where the shards run,
+# under their own load (a workstation's is dominated by whatever else it is
+# doing: XProtect stalls, other sessions' suites), so measure it there.
 #
-# The runner is also the place to measure, so CI does it: each `main` shard
+# CI does it: each `main` shard
 # job weighs its own build's trace (ci.yml's "Weigh the shard's units" step)
 # and prints the table as `ci-shard-weight K/N UNIT SECONDS` lines, and
 #   gh run view RUN --repo lukstafi/ocannl-staging --log | tools/ci-shard.sh merge-weights
 # merges one run's shards into the replacement block (`merge_weights` says
-# how). Check the result with `plan 2`, and the next run's shard dune-step
-# times with `tools/ci-times.sh`.
+# how); `gh run view --log` answers only once the whole run has completed, and
+# before that each shard job's log is
+#   gh api --allow-escape-sequences repos/lukstafi/ocannl-staging/actions/jobs/JOB/logs
+# (its compiler warnings carry terminal escapes, which gh otherwise withholds).
+# Then map by hand what `plan` warns is no unit (sweep_harness_driver ->
+# sweep_harness; an inline-test runner or an executable several aliases run
+# has no one unit, and is dropped), check the deal with `plan 2`, and the next
+# run's shard dune-step times with `tools/ci-times.sh`.
 
 set -euo pipefail
 
@@ -101,40 +111,172 @@ SUITE_ALIASES="default runtest bin-smoke"
 SPLIT_DIR=test/operations
 DEFAULT_WEIGHT=1
 
-# CPU seconds, measured 2026-10-01 on an M-series Mac (DUNE_CACHE=disabled,
-# fresh build directory) with `weigh`. Units only need to be consistent with
-# each other and with DEFAULT_WEIGHT; the long tail of ~300 aliases averaged
-# ~0.6s each.
+# Seconds per unit on the ubuntu runner (gh-ocannl-1464), from staging#1303's
+# first CI run (39599006506, 2026-10-21): the larger of a unit's wall-clock and
+# CPU time where its job's wall-clock table listed it, CPU time below that
+# table's cut (under ~9s, where the two differ by seconds); the next refresh
+# reads wall-clock throughout, from `weigh`. Units under 2s weigh
+# DEFAULT_WEIGHT; the run's 250 of them averaged 0.3s.
 WEIGHTS='
-autotune_candidate_release 118
-placement_store 114
-autotune_measured_refusal 103
-@rest 50
-sweep_harness 50
-flip_abandonment 40
-autotune_smoke 40
-online_softmax_block_fast_math 39
-online_softmax_block 38
-schedule_conv_gemm 37
-schedule_cache_numerics 32
-online_softmax_fast_math 26
-online_softmax 25
-gpu_fission_mapping 17
-schedule_epilogue_fusion 17
-cost_model_selection 16
-autotune_serial_baseline 15
-autotune_split_reduce 13
-reduction_forms 13
-autotune_callback_release 13
-schedule_strided_1x1 11
-operations_tutorials 10
-accum_width 8
-online_softmax_block_mma 8
-cc_march_census 8
-env_var_deps 7
-autotune_bound_pruning 6
-dead_export_scan 6
-schedule_contraction_nest 6
+cc_march_census 806
+autotune_staffed_singles 780
+autotune_round_expansion 625
+flip_twins 423
+autotune_composite_playoff 413
+sweep_harness 347
+autotune_sketch_placements 336
+autotune_device_memory 261
+padded_conv_cache 256
+flip_abandonment 237
+schedule_conv_gemm 204
+autotune_measured_refusal 163
+autotune_split_reduce 149
+placement_store 144
+autotune_candidate_release 131
+autotune_smoke 122
+online_softmax 97
+env_var_deps 94
+@rest 91
+autotune_budget 89
+gpu_fission_mapping 83
+bridge_arm_coverage 57
+online_softmax_block_fast_math 56
+online_softmax_fast_math 56
+reduction_forms 53
+schedule_cache_numerics 52
+autotune_labels 51
+online_softmax_block 48
+fission_replay_segmentation 45
+accum_width 34
+autotune_concurrent_refusal 32
+autotune_callback_release 29
+batch_norm_running 29
+online_softmax_block_mma 27
+shipped_kernels_alone 27
+codegen_text_inventory 23
+autotune_replay_refusal 22
+broadcast_constant_init 21
+schedule_epilogue_fusion 21
+schedule_strided_1x1 19
+limits_field_classes 18
+autotune_serial_baseline 18
+autotune_seam_domains 17
+verdict_ratchet 17
+autotune_scope_menu 16
+dead_export_scan 15
+footprint_materialization 14
+cost_model_selection 14
+privatize_census 14
+symbolic_extent_launch 13
+gpu_packed_prec 13
+bench_checksum_discrimination 13
+buffer_aliasing 13
+test_block_tensor 12
+schedule_mma_matmul 12
+gpu_lane_reduction 11
+bandwidth_calibration 11
+bench_self_test 11
+test_concat_graph 10
+virtual_chain_fanin 10
+hardware_warp_shuffle 10
+zero_elision 10
+gpu_serial_lanes 9
+slot_kind_live 9
+gpu_parallel_prefix 9
+narrow_storage_compute 9
+sgd_variants 9
+test_execution_deps 8
+schedule_contraction_nest 8
+flip_bound_pruning 8
+epilogue_fusion_mma_seeds 8
+affine_surjectivity 7
+privatize_recheck 7
+agent_notes_structure 7
+autotune_progress 7
+inline_flip_tune 7
+qkv_zero_init 7
+schedule_cache_device 7
+schedule_coalesce 7
+matmul_interchange 7
+autotune_routine_name 6
+rope_test 6
+test_config_consistency 6
+memory_budget_planner 5
+provenance_tag_inventory 5
+split_reduce_pair 5
+test_uniform_odd_sizes 5
+test_uniform_virtual_lane 5
+tile_mma_declines 5
+virtual_rejection_boundary 5
+zero2hero_1of7_exec 5
+autotune_bound_pruning 4
+backend_golden_family_scan 4
+config_usage_scan 4
+digest_completeness 4
+nonoverlap_pool_grads 4
+schedule_pack_mma_matmul 4
+schedule_split_reduce 4
+virtual_shared_loop 4
+atomic_file_rename_scan 3
+bf16_builtins 3
+cache_dir_ignores 3
+cache_key_agreement 3
+cc_dlopen_cause 3
+cc_kept_library 3
+context_handle_refusals 3
+cost_model_template 3
+cpu_parallel 3
+cuda_like_builtins_emulation 3
+dynamic_axis_coverage 3
+integer_power_domain 3
+ll_test_ratchet 3
+model_load_tiebreak 3
+reduction_accumulator_residency 3
+reserved_routine_names 3
+resnet_block 3
+schedule_batch_grid 3
+seeding_census 3
+set_values_pool_coalescing 3
+shell_scripts_parse 3
+splice_semantics 3
+symbolic_extent_backward 3
+tensorized_census_ratchet 3
+test_einsum3 3
+tile_mma_geometry 3
+transformer_test 3
+api_drift_history 2
+cmple_ops 2
+conv_bias_shapes 2
+cpu_scratch_matmul_grid 2
+cpu_simd_reduction 2
+decoder_only_test 2
+digest_identity_flips 2
+fission_schedule 2
+gpu_small_leading_axis 2
+launch_predicate_parity 2
+ll_test_scan_cases 2
+narrow_rng_nesting 2
+operand_key_ratchet 2
+overlapping_window_grads 2
+rev_sides_width1_store 2
+scan_loop 2
+schedule_batched_mma 2
+schedule_ops 2
+schedule_partition 2
+scope_over_materialized 2
+seeded_default 2
+seeded_split_reduce 2
+simplify_if_narrowing 2
+sketch_family_tree 2
+stored_template_elision 2
+symbolic_extent_contract 2
+test_default_init_std 2
+test_one_hot_embedding_backward 2
+test_one_hot_embedding_lookup 2
+test_random_histograms 2
+tile_mma_narrow 2
+virtual_affine 2
+virtual_diagonal 2
 '
 
 # Wall-clock seconds of each `train` member, keyed by its unit (the target
@@ -447,11 +589,12 @@ PY
 # SECURITY (gh-ocannl-1287): a trace also records dune's environment and argv
 # and each process's arguments and captured stdout/stderr, any of which can
 # hold a credential. This reader opens only `process finish` events, and of
-# those decodes `prog` and `dir` (TEXT below) and the CPU-time pairs of
-# `rusage`, each only when all decimal digits; it tests `process_args` for the
-# one fast-math flag by comparing bytes, decoding none. Everything else -- every
-# other event kind, the time slot, every other field -- is skipped by its
-# length prefixes, and a refusal quotes byte offsets, never bytes. The boundary
+# those decodes `prog` and `dir` (TEXT below) and the duration in the time slot
+# `(start duration)`, only when both are all decimal digits; it tests
+# `process_args` for the one fast-math flag by comparing bytes, decoding none.
+# Everything else -- every other event kind, every other field, rusage included
+# -- is skipped by its length prefixes, and a refusal quotes byte offsets, never
+# bytes. The boundary
 # is tools/action-durations.sh's, and so is its limit: it assumes
 # producer-framed csexp, so a tampered length prefix can swallow a neighbouring
 # record into a decoded field; protection against that is producer-side
@@ -473,7 +616,6 @@ FINISH = (b'process', b'finish')
 # The fields decoded as text, per event kind; no other kind is opened.
 TEXT = {FINISH: {b'prog', b'dir'}}
 FAST_MATH = b'--ocannl_cc_backend_fast_math=true'
-CPU_TIMES = {b'user_cpu_time', b'system_cpu_time'}
 
 
 class Bad(Exception):
@@ -572,33 +714,21 @@ def has_fast_math(i):
         j = e
 
 
-def cpu_ns(i):
-    # The element at I is rusage's list of `(key value)` pairs: the sum of the
-    # CPU-time values, each decoded only when all decimal digits (else a
-    # refusal at its offset); every other pair is skipped.
-    if i >= n:
+def duration_ns(i):
+    # The time slot at I, `(start duration)` in nanoseconds: the duration, its
+    # atoms checked as bytes and decoded only when all decimal digits; any other
+    # shape is a refusal at its offset (a finish event dune always times).
+    if i >= n or data[i] != OPEN:
         raise Bad(i)
-    if data[i] != OPEN:
-        return 0, skip(i)
-    total, j = 0, i + 1
-    while True:
-        if j >= n:
-            raise Bad(j)
-        if data[j] == CLOSE:
-            return total, j + 1
-        if data[j] != OPEN:
-            j = skip(j)
-            continue
-        key, k = head(j + 1)
-        if key in CPU_TIMES:
-            if k >= n or data[k] in (OPEN, CLOSE):
-                raise Bad(k)
-            s, e = atom(k)
-            if not data[s:e].isdigit():
-                raise Bad(k)
-            total += int(data[s:e])
-            k = e
-        j = skip_to_close(k)
+    spans, j = [], i + 1
+    while j < n and data[j] not in (OPEN, CLOSE):
+        s, e = atom(j)
+        spans.append((s, e))
+        j = e
+    if j >= n or data[j] != CLOSE or len(spans) != 2 or not all(data[s:e].isdigit() for s, e in spans):
+        raise Bad(i)
+    s, e = spans[1]
+    return int(data[s:e]), j + 1
 
 
 def event(i):
@@ -613,8 +743,11 @@ def event(i):
         return None, skip_to_close(i)
     if data[i] == CLOSE:
         return (kind, {}), i + 1
-    i = skip(i)  # the time slot
     fields = {}
+    if kind == FINISH:
+        fields['ns'], i = duration_ns(i)
+    else:
+        i = skip(i)  # the time slot
     while True:
         if i >= n:
             raise Bad(i)
@@ -628,8 +761,6 @@ def event(i):
             fields[key.decode()], j = value(j)
         elif kind == FINISH and key == b'process_args':
             fields['fast_math'], j = has_fast_math(j)
-        elif kind == FINISH and key == b'rusage':
-            fields['cpu_ns'], j = cpu_ns(j)
         i = skip_to_close(j)
 
 
@@ -656,22 +787,22 @@ for kind, fields in events:
     prog = os.path.basename(prog) if isinstance(prog, str) else ''
     if prog.startswith('ocaml') or prog in toolchain:
         continue
-    cpu = fields.get('cpu_ns', 0) / 1e9
+    seconds = fields.get('ns', 0) / 1e9
     # The build context's root is the last `default` component: `_build/default`,
     # a sandbox's `.sandbox/<hash>/default`, or a --build-dir's `<dir>/default`.
     directory = fields.get('dir')
     directory = re.sub(r'^.*/default(?:/|$)', '', directory if isinstance(directory, str) else '') or '.'
     if directory != split_dir:
-        cost['@rest'] += cpu
+        cost['@rest'] += seconds
         continue
     name = prog.removesuffix('.exe')
     if fields.get('fast_math'):
         name += '_fast_math'
-    cost[name] += cpu
+    cost[name] += seconds
 if not seen:
     sys.exit('ci-shard.sh: no finished processes in %s (cached build?)' % path)
-for name, cpu in cost.most_common():
-    print('%s %.0f' % (name, cpu))
+for name, seconds in cost.most_common():
+    print('%s %.0f' % (name, seconds))
 PY
 }
 

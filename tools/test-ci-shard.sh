@@ -299,18 +299,19 @@ done
 refused "plan without N" 'usage' subject plan
 refused "weigh without a trace" 'usage' subject weigh "$TMP/no-such-trace"
 
-# weigh: one synthetic trace, written as canonical S-expressions. CPU is
-# rusage nanoseconds. Expected: compilers and the toolchain excluded (but not
+# weigh: one synthetic trace, written as canonical S-expressions. A unit's
+# seconds are its finish events' durations (the time slot's second atom, in
+# nanoseconds). Expected: compilers and the toolchain excluded (but not
 # cc_march_census.exe); fast-math runs credited to the _fast_math twin; a
 # sandboxed run of the split directory counted there; elsewhere -> @rest.
 #
 # The trace is also the canary fixture (gh-ocannl-1287): weigh decodes only
-# `process finish`'s prog and dir, rusage's CPU-time values, and a byte
-# comparison of process_args against the fast-math flag. Every entry of the
-# inventory below carries CANARY -- a field of a finish event, of a start
-# event (a kind weigh never opens), of config init (where dune records its
-# environment and argv), of other kinds -- as do a time slot, a process_args
-# atom beside the flag and an rusage pair beside the CPU times; and every
+# `process finish`'s prog, dir and digit-only duration, and a byte comparison
+# of process_args against the fast-math flag. Every entry of the inventory
+# below carries CANARY -- a field of a finish event (rusage among them), of a
+# start event (a kind weigh never opens), of config init (where dune records
+# its environment and argv), of other kinds -- as does a process_args atom
+# beside the flag; a time slot that is not all digits is refused; and every
 # weigh run here, refusals included, must print none of it. Each entry also
 # gets a twin that decodes it and prints what it decoded, which the canary
 # check alone must reject, so an entry the fixture forgot to seed fails its
@@ -356,12 +357,11 @@ def seeded(kind, written):
     return out
 
 
-def finish(prog, directory, cpu_s, args=(), time=('1', '2')):
-    ns = int(cpu_s * 1e9)
+def finish(prog, directory, seconds, args=(), time=None):
+    time = time or ['1', str(int(seconds * 1e9))]
     return sexp(['process', 'finish', list(time), ['process_args', list(args) + ['--token=' + canary]],
                  ['prog', prog], ['dir', directory],
-                 ['rusage', [['user_cpu_time', str(ns - ns // 4)], ['maxrss', canary],
-                             ['system_cpu_time', str(ns // 4)]]]]
+                 ['rusage', [['user_cpu_time', '7'], ['maxrss', canary], ['system_cpu_time', '3']]]]
                 + seeded('process/finish', ('process_args', 'rusage')))
 
 
@@ -378,7 +378,7 @@ events = [
     start('ocamlopt.opt'),
     finish('/opt/bin/ocamlopt.opt', b + 'lib', 50),
     finish('/usr/bin/cc', b + 'lib', 40),
-    finish('cc_march_census.exe', b + 'test/operations', 2, time=(canary, '2')),
+    finish('cc_march_census.exe', b + 'test/operations', 2),
     finish('online_softmax.exe', b + 'test/operations', 3, ['--ocannl_backend=cc', '--ocannl_cc_backend_fast_math=true']),
     finish('online_softmax.exe', '/x/_build/.sandbox/0123abcd/default/test/operations', 1),
     finish('./einsum_test.exe', b + 'test/einsum', 4),
@@ -386,10 +386,10 @@ events = [
     sexp(['action', 'write-file', ['1', '2'], ['file', canary], ['size', '3']]),
 ]
 (root / 'trace').write_bytes(b''.join(events))
-# A CPU time that is not all digits: refused by offset, quoting none of it.
-(root / 'bad-cpu-trace').write_bytes(
-    sexp(['process', 'finish', ['1', '2'], ['prog', 'x.exe'], ['dir', b + 'lib'],
-          ['rusage', [['user_cpu_time', canary]]]]))
+# A duration that is not all digits, and a time slot that is no `(start
+# duration)`: refused by offset, quoting none of either.
+(root / 'bad-time-trace').write_bytes(finish('x.exe', b + 'lib', 1, time=['1', canary]))
+(root / 'bare-time-trace').write_bytes(finish('x.exe', b + 'lib', 1, time=[canary]))
 # Cut short inside a finish event, after the canary fields began.
 (root / 'cut-trace').write_bytes(events[0] + events[3][:-20])
 PY
@@ -400,7 +400,7 @@ subject weigh "$TMP/trace" >"$TMP/weigh.out" 2>"$TMP/weigh.err"
 weigh_rc=$?
 printf '%s\n' '@rest 4' 'online_softmax_fast_math 3' 'cc_march_census 2' 'online_softmax 1' >"$TMP/weigh.expected"
 diff "$TMP/weigh.expected" "$TMP/weigh.out" >"$TMP/weigh.diff"
-report $? "weigh credits CPU per unit from a dune trace" "exit $weigh_rc; $(cat "$TMP/weigh.diff" "$TMP/weigh.err")"
+report $? "weigh credits each unit its processes' durations from a dune trace" "exit $weigh_rc; $(cat "$TMP/weigh.diff" "$TMP/weigh.err")"
 [ "$weigh_rc" = 0 ] && [ ! -s "$TMP/weigh.err" ] && canary_free "$TMP/weigh.out" "$TMP/weigh.err"
 report $? "weigh decodes none of the canary fields: exit 0, empty stderr, no canary" \
   "exit $weigh_rc; see $TMP/weigh.out $TMP/weigh.err"
@@ -410,7 +410,7 @@ report $? "weigh refuses a file that is not a dune trace" "$(cat "$TMP/weigh.log
 printf '(6:config4:init1:1)' >"$TMP/empty-trace"
 harness_rejected 1 'no finished processes' "$TMP/weigh.log" subject weigh "$TMP/empty-trace"
 report $? "weigh refuses a trace that recorded no process" "$(cat "$TMP/weigh.log")"
-for t in bad-cpu-trace cut-trace; do
+for t in bad-time-trace bare-time-trace cut-trace; do
   harness_rejected 1 'malformed or cut short at byte [0-9]+$' "$TMP/weigh.log" subject weigh "$TMP/$t" &&
     canary_free "$TMP/weigh.log"
   report $? "weigh refuses $t by offset, quoting none of its bytes" "$(cat "$TMP/weigh.log")"
@@ -431,7 +431,7 @@ text = open(src).read()
 pairs = [("TEXT = {FINISH: {b'prog', b'dir'}}\n",
           "TEXT = {FINISH: {b'prog', b'dir'}}\nTEXT.setdefault((b'%s', b'%s'), set()).add(b'%s')\n"
           % (cat, name, field)),
-         ("    print('%s %.0f' % (name, cpu))\n", "    print('%s %.0f %s' % (name, cpu, events))\n")]
+         ("    print('%s %.0f' % (name, seconds))\n", "    print('%s %.0f %s' % (name, seconds, events))\n")]
 for old, new in pairs:
     if text.count(old) != 1:
         sys.exit('twin: expected one occurrence of %r' % old)
