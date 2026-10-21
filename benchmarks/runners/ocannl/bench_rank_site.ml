@@ -62,7 +62,8 @@ let () =
   in
   let ctx = Context.auto () in
   let ms = Option.value_map ~default:"n/a" ~f:(Printf.sprintf "%.6f") in
-  List.iter (Autotune.model_explain ~name ctx comp Ir.Indexing.Empty) ~f:(fun (label, ex) ->
+  List.iter (Autotune.model_explain ~name ctx comp Ir.Indexing.Empty).Autotune.x_routine
+    ~f:(fun (label, ex) ->
       Stdio.printf
         "rank-site: explain site=%s label=%S rank_ms=%s compute_ms=%s memory_ms=%s floor_ms=%s \
          admitted=%b\n\
