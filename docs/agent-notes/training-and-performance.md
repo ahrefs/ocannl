@@ -175,6 +175,17 @@ files.
   rate for the geometry it was fitted on: an approximation, not a model of copies, barriers or
   shared gathers. The staffed start's gate tag names both rates, since its per-segment decisions
   rest on them.
+- What the rates do and do not fix, measured (`benchmarks/gh1253_cells.sh`, 2026-10-21, rog CUDA,
+  minix HIP unified, tuf HIP discrete). The seeded weight-gradient kernel is predicted within
+  0.69-1.35x at b8 and b256 on all three (3-12x too fast at the class peak), and at b1 everywhere
+  but tuf, whose small kernels sit on an erratic 0.1-0.4 ms floor; the issue-rate sweep's
+  intercept does not capture that floor, so a latency term fitted from it would not either. Two
+  orderings it does NOT fix, read off `bench_rank_site` + `benchmarks/gh1442_agreement.py`: among
+  scalar sketches of one site the compute leg ties geometries that measure up to 2x apart (an
+  occupancy effect no leg models; the argmin was a 2x-slower 16x16x8/4x4 on rog and tuf), and at
+  the gh-ocannl-1190 fp8 site every tensorized leaf ties at `peak_flops` while staged leaves ran
+  2.3x faster than unstaged and the fastest was the plain 32x32x32 twin, not a swizzled one. The
+  operand-load count orders that top pair wrongly, so pricing it is not the staging term either.
 - benchmarks/ is the cross-framework parity+timing suite (self-describing safetensors fixtures,
   one-JSON-line runners, loss-trajectory parity gate ~1e-7 fp32 vs pytorch/cpu). The gate
   doubles as a gradient oracle. tinygrad: realize the loss BEFORE `opt.step()` or it recomputes
