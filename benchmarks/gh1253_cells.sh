@@ -45,6 +45,11 @@
 #                      score of each candidate under the fitted rates and with both rates off (the
 #                      capacity and cache tier as fitted either way); benchmarks/gh1442_agreement.py
 #                      joins them into OUT/rank_<site>_agreement.txt.
+# RANK_ONLY=1 (gh-ocannl-1278) runs the agreement cells alone, under the shipped per-class
+# constants: no calibration or wgrad cell runs, and the `fitted` arm is named `shipped` (the
+# defaults, no model_* flag), beside `ceilings`. With it, SITES may name bench_rank_site's
+# gpt2_mini projection sites (qkv:b,s,h,e,k and outproj:b,s,j,h,e), whose explain lines list the
+# coalesced branch's leaves the tuner times beside the family.
 # Both wgrad arms pin BENCH_TUNE=0 and model_default_schedule=false, so an ambient profile or
 # environment cannot swap the measured plans for tuned or model-picked ones.
 # The shipped-kernel rows (`bench: kernel ... w: wg_w.grad`) are the measured side of the table.
@@ -115,43 +120,51 @@ cell() {
 # reach the later cells. Empty otherwise; the failure is already counted.
 fitted() { if $last_ok; then sed -n "s/^$1=//p" "$2" | tail -1; fi; }
 
-cell bandwidth "$bandwidth" "--ocannl_backend=$backend" \
-  "--ocannl_autotune_calibration_file=$out/calibration.tsv"
 model=()
-bw=$(fitted model_peak_memory_bandwidth "$out/bandwidth.out")
-if [[ -n "$bw" ]]; then model+=("--ocannl_model_dram_bandwidth=$bw"); fi
-echo "   model flags after bandwidth: ${model[*]:-none}"
-cell calibrate "$calibrate" --repeats=10 "--ocannl_backend=$backend" ${model[@]+"${model[@]}"}
-capacity=$(fitted model_cache_capacity "$out/calibrate.out")
-if [[ -n "$capacity" ]]; then
-  model+=("--ocannl_model_cache_capacity=$capacity")
-elif $last_ok; then
-  # The sweep never reached DRAM: the capacity is only known to exceed every swept working set,
-  # which covers the wgrad cells' (the same contraction, at most the same extent). No DRAM tier is
-  # then the reading for them -- not the backend's advisory, which the sweep contradicts.
-  model+=("--ocannl_model_cache_capacity=none")
+tiers=()
+fitted_arm=fitted
+if [[ ${RANK_ONLY:-0} == 1 ]]; then
+  fitted_arm=shipped
+  echo "   RANK_ONLY: agreement cells only, under the shipped constants"
+else
+  cell bandwidth "$bandwidth" "--ocannl_backend=$backend" \
+    "--ocannl_autotune_calibration_file=$out/calibration.tsv"
+  model=()
+  bw=$(fitted model_peak_memory_bandwidth "$out/bandwidth.out")
+  if [[ -n "$bw" ]]; then model+=("--ocannl_model_dram_bandwidth=$bw"); fi
+  echo "   model flags after bandwidth: ${model[*]:-none}"
+  cell calibrate "$calibrate" --repeats=10 "--ocannl_backend=$backend" ${model[@]+"${model[@]}"}
+  capacity=$(fitted model_cache_capacity "$out/calibrate.out")
+  if [[ -n "$capacity" ]]; then
+    model+=("--ocannl_model_cache_capacity=$capacity")
+  elif $last_ok; then
+    # The sweep never reached DRAM: the capacity is only known to exceed every swept working set,
+    # which covers the wgrad cells' (the same contraction, at most the same extent). No DRAM tier is
+    # then the reading for them -- not the backend's advisory, which the sweep contradicts.
+    model+=("--ocannl_model_cache_capacity=none")
+  fi
+  cache_bw=$(fitted model_cache_bandwidth "$out/calibrate.out")
+  if [[ -n "$cache_bw" ]]; then model+=("--ocannl_model_cache_bandwidth=$cache_bw"); fi
+  # The capacity and cache tier as fitted, without the rates: the ceilings arm of the agreement cells.
+  tiers=(${model[@]+"${model[@]}"})
+  cell issue "$issue" --repeats=10 "--ocannl_backend=$backend" ${model[@]+"${model[@]}"}
+  rate=$(fitted model_issue_rate "$out/issue.out")
+  if [[ -n "$rate" ]]; then model+=("--ocannl_model_issue_rate=$rate"); fi
+  echo "   model flags for the wgrad cells: ${model[*]:-none}"
+  for batch in 1 8 256; do
+    dims="$batch,128,256,1024"
+    cell "wgrad_b${batch}_untiled" env BENCH_TUNE=0 BENCH_WGRAD_REQUIRE_SEEDED=0 BENCH_WGRAD_DIMS="$dims" \
+      BENCH_REPEATS=20 "$wgrad" \
+      "--ocannl_backend=$backend" --ocannl_model_default_schedule=false \
+      --ocannl_gpu_default_sketch_min_reduction=0 --ocannl_gpu_default_split_reduce_min_serial=0 \
+      --ocannl_gpu_default_reduction_sink=false ${model[@]+"${model[@]}"}
+    cell "wgrad_b${batch}_seeded" env BENCH_TUNE=0 BENCH_WGRAD_REQUIRE_SEEDED=1 BENCH_WGRAD_DIMS="$dims" \
+      BENCH_REPEATS=20 "$wgrad" \
+      "--ocannl_backend=$backend" --ocannl_model_default_schedule=false \
+      --ocannl_gpu_default_sketch_min_reduction=32 --ocannl_gpu_default_split_reduce_min_serial=0 \
+      --ocannl_gpu_default_reduction_sink=false ${model[@]+"${model[@]}"}
+  done
 fi
-cache_bw=$(fitted model_cache_bandwidth "$out/calibrate.out")
-if [[ -n "$cache_bw" ]]; then model+=("--ocannl_model_cache_bandwidth=$cache_bw"); fi
-# The capacity and cache tier as fitted, without the rates: the ceilings arm of the agreement cells.
-tiers=(${model[@]+"${model[@]}"})
-cell issue "$issue" --repeats=10 "--ocannl_backend=$backend" ${model[@]+"${model[@]}"}
-rate=$(fitted model_issue_rate "$out/issue.out")
-if [[ -n "$rate" ]]; then model+=("--ocannl_model_issue_rate=$rate"); fi
-echo "   model flags for the wgrad cells: ${model[*]:-none}"
-for batch in 1 8 256; do
-  dims="$batch,128,256,1024"
-  cell "wgrad_b${batch}_untiled" env BENCH_TUNE=0 BENCH_WGRAD_REQUIRE_SEEDED=0 BENCH_WGRAD_DIMS="$dims" \
-    BENCH_REPEATS=20 "$wgrad" \
-    "--ocannl_backend=$backend" --ocannl_model_default_schedule=false \
-    --ocannl_gpu_default_sketch_min_reduction=0 --ocannl_gpu_default_split_reduce_min_serial=0 \
-    --ocannl_gpu_default_reduction_sink=false ${model[@]+"${model[@]}"}
-  cell "wgrad_b${batch}_seeded" env BENCH_TUNE=0 BENCH_WGRAD_REQUIRE_SEEDED=1 BENCH_WGRAD_DIMS="$dims" \
-    BENCH_REPEATS=20 "$wgrad" \
-    "--ocannl_backend=$backend" --ocannl_model_default_schedule=false \
-    --ocannl_gpu_default_sketch_min_reduction=32 --ocannl_gpu_default_split_reduce_min_serial=0 \
-    --ocannl_gpu_default_reduction_sink=false ${model[@]+"${model[@]}"}
-done
 
 # Ranking agreement (gh-ocannl-1442). The ceilings arm drops the DRAM rate from the tiers too.
 # Every arm pins the seeding gate at threshold 32, so the seeded incumbent -- model_explain's
@@ -170,14 +183,15 @@ for site in ${SITES:-wgrad:8,128,256,1024 wgrad:256,128,256,1024 fp8mm:8192,32,4
     --ocannl_autotune_keep_fraction=1 \
     "--ocannl_autotune_calibration_file=$out/rank_${name}.tsv" ${model[@]+"${model[@]}"}
   timed=$last_ok
-  cell "rank_${name}_fitted" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
+  cell "rank_${name}_${fitted_arm}" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
     "--ocannl_backend=$backend" --ocannl_gpu_default_sketch_min_reduction=32 \
     ${model[@]+"${model[@]}"}
   cell "rank_${name}_ceilings" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
     "--ocannl_backend=$backend" --ocannl_gpu_default_sketch_min_reduction=32 "${ceilings[@]}"
   if $timed; then
     python3 "$root/benchmarks/gh1442_agreement.py" "$out/rank_${name}.tsv" \
-      "ceilings=$out/rank_${name}_ceilings.out" "fitted=$out/rank_${name}_fitted.out" |
+      "ceilings=$out/rank_${name}_ceilings.out" \
+      "${fitted_arm}=$out/rank_${name}_${fitted_arm}.out" |
       tee "$out/rank_${name}_agreement.txt" || failed=$((failed + 1))
   fi
 done

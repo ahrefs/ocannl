@@ -16,16 +16,26 @@ A candidate measured more than once keeps its fastest time.
 
 Per score: the joined candidates; the DECIDED pairs (measured apart by more than the band); how
 many of them the score orders as measured (a score tie orders none); and the score's argmin, with
-its measured time against the fastest joined candidate. With two or more scores, also each later
+its measured time against the fastest joined candidate. The argmin breaks score ties by listing
+order, as model_default does: its incumbent comes first and wins every tie, and among sketch leaves
+the first one strictly below the threshold is kept. With two or more scores, also each later
 score against the first: decided pairs the first ordered right and the later one orders wrong
-(regressions), and the reverse (improvements). Stdout only; exit 2 on unusable input.
+(regressions), and the reverse (improvements).
+
+gh-ocannl-1278 adds, per score, the PICK SETS model_default chooses from: the candidates the
+explain line marks `admitted=true` (the numerics restriction's set), without and with the
+coalesced branch's leaves (labels carrying `coal-`; bench_rank_site marks one admitted when its
+uncoalesced form is). For each set: its argmin under the tie rule above, the fastest member, and
+the argmin's slowdown against it -- the ranking check of covering the coalesced seeds in
+model_default. Stdout only; exit 2 on unusable input.
 """
 
 import argparse
 import re
 import sys
 
-EXPLAIN = re.compile(r'rank-site: explain .*?label="((?:[^"\\]|\\.)*)" rank_ms=(\S+)')
+EXPLAIN = re.compile(r'rank-site: explain .*?label="((?:[^"\\]|\\.)*)" rank_ms=(\S+)'
+                     r'(?:.* admitted=(true|false))?')
 
 
 def measured(path):
@@ -45,12 +55,14 @@ def measured(path):
 
 
 def scores(path):
+    """Label -> (rank, listing position, admitted), in listing order."""
     out = {}
     with open(path) as f:
         for line in f:
             m = EXPLAIN.search(line)
             if m and m.group(2) != "n/a":
-                out[m.group(1).encode().decode("unicode_escape")] = float(m.group(2))
+                label = m.group(1).encode().decode("unicode_escape")
+                out[label] = (float(m.group(2)), len(out), m.group(3) != "false")
     return out
 
 
@@ -89,10 +101,15 @@ def main():
             return 2
         name, path = spec.split("=", 1)
         joined = {}
-        for label, rank in scores(path).items():
+        order = {}
+        admitted = set()
+        for label, (rank, pos, adm) in scores(path).items():
             row = row_label(label, times)
             if row is not None:
                 joined[label] = (times[row], rank)
+                order[label] = pos
+                if adm:
+                    admitted.add(label)
         if len(joined) < 2:
             print(f"gh1442_agreement: {name}: fewer than two candidates join the rows",
                   file=sys.stderr)
@@ -100,7 +117,7 @@ def main():
         pairs = list(decided_pairs(joined, args.band))
         right = {p for p in pairs if joined[p[0]][1] < joined[p[1]][1]}
         best = min(joined, key=lambda l: joined[l][0])
-        pick = min(joined, key=lambda l: (joined[l][1], l))
+        pick = min(joined, key=lambda l: (joined[l][1], order[l]))
         print(f"{name}: joined={len(joined)} decided_pairs={len(pairs)} ordered_right={len(right)}"
               f" ({100.0 * len(right) / max(1, len(pairs)):.1f}%) argmin={pick!r}"
               f" measured_ms={joined[pick][0]:.6f} fastest={best!r}"
@@ -108,7 +125,22 @@ def main():
               f" argmin_slowdown={joined[pick][0] / joined[best][0]:.3f}")
         for label in sorted(joined, key=lambda l: joined[l][0]):
             t, r = joined[label]
-            print(f"  {name}: {label!r} measured_ms={t:.6f} rank_ms={r:.6f}")
+            print(f"  {name}: {label!r} measured_ms={t:.6f} rank_ms={r:.6f}"
+                  f" admitted={str(label in admitted).lower()}")
+        for set_name, members in (
+            ("admitted", [l for l in admitted if "coal-" not in l]),
+            ("admitted+coalesced", list(admitted)),
+        ):
+            if not members:
+                print(f"{name}: pick_set={set_name} empty")
+                continue
+            set_pick = min(members, key=lambda l: (joined[l][1], order[l]))
+            set_best = min(members, key=lambda l: joined[l][0])
+            print(f"{name}: pick_set={set_name} members={len(members)} argmin={set_pick!r}"
+                  f" measured_ms={joined[set_pick][0]:.6f} rank_ms={joined[set_pick][1]:.6f}"
+                  f" fastest={set_best!r} fastest_ms={joined[set_best][0]:.6f}"
+                  f" rank_ms_of_fastest={joined[set_best][1]:.6f}"
+                  f" argmin_slowdown={joined[set_pick][0] / joined[set_best][0]:.3f}")
         results.append((name, set(pairs), right))
     if len(results) > 1:
         first, first_pairs, first_right = results[0]
