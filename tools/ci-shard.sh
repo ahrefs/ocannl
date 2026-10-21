@@ -81,6 +81,7 @@
 # (sweep_harness_driver runs for runtest-sweep_harness) keeps its own name: map
 # it by hand, or `plan` warns about it as a stale entry. Keep the units above a
 # few seconds; the rest weigh DEFAULT_WEIGHT anyway.
+# It decodes only the fields it needs (SECURITY, above `weigh` below).
 # CPU, not wall-clock: the ubuntu runner is CPU-bound, while a
 # workstation's wall-clock is dominated by whatever else it is doing (macOS
 # XProtect stalls on fresh executables, other sessions' suites).
@@ -434,6 +435,20 @@ else:
 PY
 }
 
+# SECURITY (gh-ocannl-1287): a trace also records dune's environment and argv
+# and each process's arguments and captured stdout/stderr, any of which can
+# hold a credential. This reader opens only `process finish` events, and of
+# those decodes `prog` and `dir` (TEXT below) and the CPU-time pairs of
+# `rusage`, each only when all decimal digits; it tests `process_args` for the
+# one fast-math flag by comparing bytes, decoding none. Everything else -- every
+# other event kind, the time slot, every other field -- is skipped by its
+# length prefixes, and a refusal quotes byte offsets, never bytes. The boundary
+# is tools/action-durations.sh's, and so is its limit: it assumes
+# producer-framed csexp, so a tampered length prefix can swallow a neighbouring
+# record into a decoded field; protection against that is producer-side
+# scrubbing (gh-ocannl-1280). tools/test-ci-shard.sh plants a canary in every
+# other field and kind of its inventory, and a twin per entry that decodes and
+# prints it, which the canary check alone must reject.
 weigh() {
   python3 - "$1" "$SPLIT_DIR" <<'PY'
 import collections
@@ -443,51 +458,205 @@ import sys
 
 path, split_dir = sys.argv[1:3]
 data = open(path, 'rb').read()
+n = len(data)
+OPEN, CLOSE, COLON = 40, 41, 58
+FINISH = (b'process', b'finish')
+# The fields decoded as text, per event kind; no other kind is opened.
+TEXT = {FINISH: {b'prog', b'dir'}}
+FAST_MATH = b'--ocannl_cc_backend_fast_math=true'
+CPU_TIMES = {b'user_cpu_time', b'system_cpu_time'}
 
 
-def parse(b, i):
-    # Canonical S-expressions: `(`, `)`, and length-prefixed atoms `N:bytes`.
-    out = []
-    while i < len(b):
-        c = b[i:i + 1]
-        if c == b'(':
-            sub, i = parse(b, i + 1)
-            out.append(sub)
-        elif c == b')':
-            return out, i + 1
+class Bad(Exception):
+    """Not a complete canonical-S-expression trace; carries an offset, never trace bytes."""
+
+
+def atom(i):
+    # `N:bytes` -> (start, end) of the bytes, which is also the next offset.
+    j = i
+    while j < n and 48 <= data[j] <= 57:
+        j += 1
+    if j == i or j >= n or data[j] != COLON:
+        raise Bad(i)
+    start = j + 1
+    end = start + int(data[i:j])
+    if end > n:
+        raise Bad(i)
+    return start, end
+
+
+def skip(i):
+    # Step over one element, atom or list, without decoding any of it.
+    depth = 0
+    while True:
+        if i >= n:
+            raise Bad(i)
+        if data[i] == OPEN:
+            depth += 1
+            i += 1
+        elif data[i] == CLOSE:
+            if depth == 0:
+                raise Bad(i)
+            depth -= 1
+            i += 1
         else:
-            j = b.index(b':', i)
-            size = int(b[i:j])
-            out.append(b[j + 1:j + 1 + size].decode('utf8', 'replace'))
-            i = j + 1 + size
-    return out, i
+            i = atom(i)[1]
+        if depth == 0:
+            return i
 
 
+def skip_to_close(i):
+    while True:
+        if i >= n:
+            raise Bad(i)
+        if data[i] == CLOSE:
+            return i + 1
+        i = skip(i)
+
+
+def head(i):
+    # The atom at I as bytes, or None at a list or a close; and the offset after it.
+    if i >= n:
+        raise Bad(i)
+    if data[i] in (OPEN, CLOSE):
+        return None, i
+    s, e = atom(i)
+    return data[s:e], e
+
+
+def value(i):
+    # Decode one element: an atom as str, a list as a list.
+    if i >= n:
+        raise Bad(i)
+    if data[i] != OPEN:
+        s, e = atom(i)
+        return data[s:e].decode('utf8', 'replace'), e
+    out, i = [], i + 1
+    while True:
+        if i >= n:
+            raise Bad(i)
+        if data[i] == CLOSE:
+            return out, i + 1
+        v, i = value(i)
+        out.append(v)
+
+
+def has_fast_math(i):
+    # Whether the element at I (process_args: a list of atoms) holds the
+    # fast-math flag, compared as bytes; nothing is decoded.
+    if i >= n:
+        raise Bad(i)
+    if data[i] != OPEN:
+        s, e = atom(i)
+        return data[s:e] == FAST_MATH, e
+    found, j = False, i + 1
+    while True:
+        if j >= n:
+            raise Bad(j)
+        if data[j] == CLOSE:
+            return found, j + 1
+        if data[j] == OPEN:
+            j = skip(j)
+            continue
+        s, e = atom(j)
+        found = found or data[s:e] == FAST_MATH
+        j = e
+
+
+def cpu_ns(i):
+    # The element at I is rusage's list of `(key value)` pairs: the sum of the
+    # CPU-time values, each decoded only when all decimal digits (else a
+    # refusal at its offset); every other pair is skipped.
+    if i >= n:
+        raise Bad(i)
+    if data[i] != OPEN:
+        return 0, skip(i)
+    total, j = 0, i + 1
+    while True:
+        if j >= n:
+            raise Bad(j)
+        if data[j] == CLOSE:
+            return total, j + 1
+        if data[j] != OPEN:
+            j = skip(j)
+            continue
+        key, k = head(j + 1)
+        if key in CPU_TIMES:
+            if k >= n or data[k] in (OPEN, CLOSE):
+                raise Bad(k)
+            s, e = atom(k)
+            if not data[s:e].isdigit():
+                raise Bad(k)
+            total += int(data[s:e])
+            k = e
+        j = skip_to_close(k)
+
+
+def event(i):
+    # One top-level event -> (kind, fields) for a kind in TEXT, else None.
+    if data[i] != OPEN:
+        raise Bad(i)
+    cat, i = head(i + 1)
+    name, i = head(i) if cat is not None else (None, i)
+    kind = (cat, name)
+    text = TEXT.get(kind)
+    if text is None:
+        return None, skip_to_close(i)
+    if data[i] == CLOSE:
+        return (kind, {}), i + 1
+    i = skip(i)  # the time slot
+    fields = {}
+    while True:
+        if i >= n:
+            raise Bad(i)
+        if data[i] == CLOSE:
+            return (kind, fields), i + 1
+        if data[i] != OPEN:
+            i = skip(i)
+            continue
+        key, j = head(i + 1)
+        if key in text:
+            fields[key.decode()], j = value(j)
+        elif kind == FINISH and key == b'process_args':
+            fields['fast_math'], j = has_fast_math(j)
+        elif kind == FINISH and key == b'rusage':
+            fields['cpu_ns'], j = cpu_ns(j)
+        i = skip_to_close(j)
+
+
+events, i = [], 0
 try:
-    events, _ = parse(data, 0)
-except (ValueError, IndexError):
-    sys.exit('ci-shard.sh: %s is not a canonical-S-expression dune trace (dune >= 3.24)' % path)
+    while i < n:
+        if data[i] in b' \t\r\n':
+            i += 1
+            continue
+        ev, i = event(i)
+        if ev is not None:
+            events.append(ev)
+except Bad as e:
+    sys.exit('ci-shard.sh: %s is not a canonical-S-expression dune trace (dune >= 3.24): '
+             'malformed or cut short at byte %d' % (path, e.args[0]))
 toolchain = {'ppx.exe', 'menhir', 'cc', 'gcc', 'clang', 'ar', 'as', 'ld'}
 cost = collections.Counter()
 seen = 0
-for e in events:
-    if not (isinstance(e, list) and e[:2] == ['process', 'finish']):
+for kind, fields in events:
+    if kind != FINISH:
         continue
     seen += 1
-    fields = {x[0]: x[1] for x in e[3:] if isinstance(x, list) and len(x) == 2 and isinstance(x[0], str)}
-    prog = os.path.basename(fields.get('prog', ''))
+    prog = fields.get('prog')
+    prog = os.path.basename(prog) if isinstance(prog, str) else ''
     if prog.startswith('ocaml') or prog in toolchain:
         continue
-    usage = dict(fields.get('rusage', []))
-    cpu = (int(usage.get('user_cpu_time', 0)) + int(usage.get('system_cpu_time', 0))) / 1e9
+    cpu = fields.get('cpu_ns', 0) / 1e9
     # The build context's root is the last `default` component: `_build/default`,
     # a sandbox's `.sandbox/<hash>/default`, or a --build-dir's `<dir>/default`.
-    directory = re.sub(r'^.*/default(?:/|$)', '', fields.get('dir', '')) or '.'
+    directory = fields.get('dir')
+    directory = re.sub(r'^.*/default(?:/|$)', '', directory if isinstance(directory, str) else '') or '.'
     if directory != split_dir:
         cost['@rest'] += cpu
         continue
     name = prog.removesuffix('.exe')
-    if '--ocannl_cc_backend_fast_math=true' in fields.get('process_args', []):
+    if fields.get('fast_math'):
         name += '_fast_math'
     cost[name] += cpu
 if not seen:

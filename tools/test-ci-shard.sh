@@ -21,7 +21,9 @@
 # documented longest-first one and deterministic; and every listing the
 # subject cannot trust is refused with exit 2 and a reason. `weigh` is pinned
 # on a synthetic trace, including the executable whose name begins with `cc`
-# and must not be mistaken for the C compiler. The coverage legs have
+# and must not be mistaken for the C compiler; the same trace plants a canary
+# in every field `weigh` must not decode, with one decode-and-print twin per
+# field that the canary check must reject (gh-ocannl-1287). The coverage legs have
 # fault-injected twins -- the subject with the split-directory exclusion
 # removed, and with `@rest` naming `default` (recursive in dune, so every
 # test in one shard) instead of `all` -- which the same oracle must reject.
@@ -301,8 +303,33 @@ refused "weigh without a trace" 'usage' subject weigh "$TMP/no-such-trace"
 # rusage nanoseconds. Expected: compilers and the toolchain excluded (but not
 # cc_march_census.exe); fast-math runs credited to the _fast_math twin; a
 # sandboxed run of the split directory counted there; elsewhere -> @rest.
-python3 - "$TMP/trace" <<'PY'
+#
+# The trace is also the canary fixture (gh-ocannl-1287): weigh decodes only
+# `process finish`'s prog and dir, rusage's CPU-time values, and a byte
+# comparison of process_args against the fast-math flag. Every entry of the
+# inventory below carries CANARY -- a field of a finish event, of a start
+# event (a kind weigh never opens), of config init (where dune records its
+# environment and argv), of other kinds -- as do a time slot, a process_args
+# atom beside the flag and an rusage pair beside the CPU times; and every
+# weigh run here, refusals included, must print none of it. Each entry also
+# gets a twin that decodes it and prints what it decoded, which the canary
+# check alone must reject, so an entry the fixture forgot to seed fails its
+# twin.
+CANARY=CANARY-5e1d-not-for-output
+# KIND/NAME:FIELD, the fields the fixture seeds and the twins decode.
+WEIGH_SECRET="process/finish:env process/finish:process_args process/finish:rusage
+process/finish:pid process/finish:exit process/finish:categories process/finish:queued
+process/finish:target_files process/finish:target_dirs process/finish:name
+process/finish:stdout process/finish:stderr process/finish:error
+process/start:prog process/start:dir process/start:env process/start:process_args
+config/init:env config/init:argv config/init:build_dir config/init:root
+config/init:initial_cwd config/init:version config/init:pid
+log/info:message action/write-file:file"
+python3 - "$TMP" "$CANARY" "$WEIGH_SECRET" <<'PY'
 import sys
+from pathlib import Path
+
+root, canary, secret = Path(sys.argv[1]), sys.argv[2], sys.argv[3].split()
 
 
 def atom(s):
@@ -314,36 +341,116 @@ def sexp(x):
     return b'(' + b''.join(sexp(e) if isinstance(e, list) else atom(e) for e in x) + b')'
 
 
-def finish(prog, directory, cpu_s, args=()):
+def seeded(kind, written):
+    # KIND's inventory fields, other than those the caller WRITTEN itself, each a
+    # list where dune writes a list.
+    out = []
+    for entry in secret:
+        k, field = entry.split(':')
+        if k != kind or field in written:
+            continue
+        value = {'env': ['FAKE_API_TOKEN=' + canary, 'HOME=/home/' + canary],
+                 'argv': ['dune', 'build', '--x=' + canary],
+                 'categories': [canary], 'target_files': [canary], 'target_dirs': [canary]}.get(field, canary)
+        out.append([field, value])
+    return out
+
+
+def finish(prog, directory, cpu_s, args=(), time=('1', '2')):
     ns = int(cpu_s * 1e9)
-    return sexp(['process', 'finish', ['1', '2'], ['process_args', list(args)], ['pid', '7'],
-                 ['prog', prog], ['dir', directory], ['exit', '0'],
-                 ['rusage', [['user_cpu_time', str(ns - ns // 4)], ['system_cpu_time', str(ns // 4)]]]])
+    return sexp(['process', 'finish', list(time), ['process_args', list(args) + ['--token=' + canary]],
+                 ['prog', prog], ['dir', directory],
+                 ['rusage', [['user_cpu_time', str(ns - ns // 4)], ['maxrss', canary],
+                             ['system_cpu_time', str(ns // 4)]]]]
+                + seeded('process/finish', ('process_args', 'rusage')))
+
+
+def start(prog):
+    return sexp(['process', 'start', '1', ['prog', canary + prog], ['dir', canary],
+                 ['process_args', ['--token=' + canary]]]
+                + seeded('process/start', ('prog', 'dir', 'process_args')))
 
 
 b = '/x/_build/default/'
 events = [
-    sexp(['config', 'init', '1']),
+    sexp(['config', 'init', '1', ['build_dir', '_build/' + canary]] + seeded('config/init', ('build_dir',))),
+    sexp(['log', 'info', '1', ['message', canary]]),
+    start('ocamlopt.opt'),
     finish('/opt/bin/ocamlopt.opt', b + 'lib', 50),
     finish('/usr/bin/cc', b + 'lib', 40),
-    finish('cc_march_census.exe', b + 'test/operations', 2),
+    finish('cc_march_census.exe', b + 'test/operations', 2, time=(canary, '2')),
     finish('online_softmax.exe', b + 'test/operations', 3, ['--ocannl_backend=cc', '--ocannl_cc_backend_fast_math=true']),
     finish('online_softmax.exe', '/x/_build/.sandbox/0123abcd/default/test/operations', 1),
     finish('./einsum_test.exe', b + 'test/einsum', 4),
     finish('placement_store.exe', b + 'test/operations/sub', 0.4),
+    sexp(['action', 'write-file', ['1', '2'], ['file', canary], ['size', '3']]),
 ]
-open(sys.argv[1], 'wb').write(b''.join(events))
+(root / 'trace').write_bytes(b''.join(events))
+# A CPU time that is not all digits: refused by offset, quoting none of it.
+(root / 'bad-cpu-trace').write_bytes(
+    sexp(['process', 'finish', ['1', '2'], ['prog', 'x.exe'], ['dir', b + 'lib'],
+          ['rusage', [['user_cpu_time', canary]]]]))
+# Cut short inside a finish event, after the canary fields began.
+(root / 'cut-trace').write_bytes(events[0] + events[3][:-20])
 PY
+canary_free() { # FILE...: no file carries the canary
+  ! grep -qF -- "$CANARY" "$@"
+}
 subject weigh "$TMP/trace" >"$TMP/weigh.out" 2>"$TMP/weigh.err"
+weigh_rc=$?
 printf '%s\n' '@rest 4' 'online_softmax_fast_math 3' 'cc_march_census 2' 'online_softmax 1' >"$TMP/weigh.expected"
 diff "$TMP/weigh.expected" "$TMP/weigh.out" >"$TMP/weigh.diff"
-report $? "weigh credits CPU per unit from a dune trace" "$(cat "$TMP/weigh.diff" "$TMP/weigh.err")"
+report $? "weigh credits CPU per unit from a dune trace" "exit $weigh_rc; $(cat "$TMP/weigh.diff" "$TMP/weigh.err")"
+[ "$weigh_rc" = 0 ] && [ ! -s "$TMP/weigh.err" ] && canary_free "$TMP/weigh.out" "$TMP/weigh.err"
+report $? "weigh decodes none of the canary fields: exit 0, empty stderr, no canary" \
+  "exit $weigh_rc; see $TMP/weigh.out $TMP/weigh.err"
 printf 'not a trace' >"$TMP/garbage"
 harness_rejected 1 'not a canonical-S-expression dune trace' "$TMP/weigh.log" subject weigh "$TMP/garbage"
 report $? "weigh refuses a file that is not a dune trace" "$(cat "$TMP/weigh.log")"
 printf '(6:config4:init1:1)' >"$TMP/empty-trace"
 harness_rejected 1 'no finished processes' "$TMP/weigh.log" subject weigh "$TMP/empty-trace"
 report $? "weigh refuses a trace that recorded no process" "$(cat "$TMP/weigh.log")"
+for t in bad-cpu-trace cut-trace; do
+  harness_rejected 1 'malformed or cut short at byte [0-9]+$' "$TMP/weigh.log" subject weigh "$TMP/$t" &&
+    canary_free "$TMP/weigh.log"
+  report $? "weigh refuses $t by offset, quoting none of its bytes" "$(cat "$TMP/weigh.log")"
+done
+
+# The twins: one per inventory entry, the subject with that field added to
+# what it decodes and every decoded event printed on each row. Each must
+# change the subject (else the control is vacuous) and be rejected by the
+# canary alone. They run from the fixture repository's tools/, beside the
+# credential deny-list the subject sources.
+weigh_twin() { # ENTRY -> 0 when the twin ran and leaked the canary
+  local entry=$1 kind field twin="$repo/tools/weigh-twin.sh"
+  kind=${entry%%:*} field=${entry#*:}
+  python3 - "$SRC" "$twin" "${kind%%/*}" "${kind#*/}" "$field" <<'PY' || return 3
+import sys
+src, dst, cat, name, field = sys.argv[1:6]
+text = open(src).read()
+pairs = [("TEXT = {FINISH: {b'prog', b'dir'}}\n",
+          "TEXT = {FINISH: {b'prog', b'dir'}}\nTEXT.setdefault((b'%s', b'%s'), set()).add(b'%s')\n"
+          % (cat, name, field)),
+         ("    print('%s %.0f' % (name, cpu))\n", "    print('%s %.0f %s' % (name, cpu, events))\n")]
+for old, new in pairs:
+    if text.count(old) != 1:
+        sys.exit('twin: expected one occurrence of %r' % old)
+    text = text.replace(old, new)
+open(dst, 'w').write(text)
+PY
+  bash "$twin" weigh "$TMP/trace" >"$TMP/twin.out" 2>"$TMP/twin.err" || return 4
+  ! canary_free "$TMP/twin.out" "$TMP/twin.err"
+}
+for entry in $WEIGH_SECRET; do
+  label="negative control: a weigh that decodes and prints $entry leaks the canary"
+  weigh_twin "$entry"
+  case $? in
+    0) report 0 "$label" ;;
+    1) report 1 "$label" "the canary check accepted the twin: is $entry seeded? see $TMP/twin.out" ;;
+    *) report 1 "$label" "the twin did not run; see $TMP/twin.err" ;;
+  esac
+done
+rm -f "$repo/tools/weigh-twin.sh"
 
 # The fault-injected twins. Without the split-directory exclusion, @rest would
 # carry test/operations' own runtest and all; naming `default` instead of

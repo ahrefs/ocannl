@@ -4115,7 +4115,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   protection against tampered traces is producer-side scrubbing (ahrefs/ocannl#1280), not the
   reader. `tools/test-action-durations.sh` seeds a canary in every non-read field of the schema it
   inventories, rejects one decode-and-print twin per such field by the canary alone, and pins the
-  tampered-prefix leak as the documented boundary.
+  tampered-prefix leak as the documented boundary. `tools/ci-shard.sh weigh` holds the same
+  boundary over its own fields (gh-ocannl-1287): it opens only `process finish`, decodes `prog`,
+  `dir` and rusage's digit-only CPU times, and tests `process_args` for the fast-math flag by
+  comparing bytes; `tools/test-ci-shard.sh` seeds and twins its inventory the same way. Each
+  reader keeps its own whitelist rather than share a module, since what each may decode differs
+  and each harness rewrites its own subject's whitelist line to build its twins.
 
 ### Skip coverage
 
