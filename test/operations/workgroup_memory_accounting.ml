@@ -1,5 +1,5 @@
 (* gh-ocannl-1452: the workgroup-memory estimate ([Schedule.workgroup_memory_bytes]) charges exactly
-   what the kernels declare.
+   what the kernels declare, and the conv family's seeding prediction charges exactly the estimate.
 
    1. Under: the multi-warp form of a warp-shuffle reduction into a cell
    ([C_syntax.try_warp_reduce]) declares one workgroup-shared [wred_partials_] slot per warp, which
@@ -8,12 +8,22 @@
    the bytes of the [wred_partials_] arrays the emitted kernel declares, read off the source (none
    on the C backends, which render the serial loop). On the GPU backends the two- and four-warp
    kernels declare some, and the gate admits each at exactly its estimate and refuses it one byte
-   below. Every kernel also runs and returns the sum. *)
+   below. Every kernel also runs and returns the sum.
+
+   2. Over: the conv family's GPU leg priced both staged operand tiles at the conv OUTPUT's
+   precision, so a mixed-precision conv (f16 operands, f32 output, on a stand-in f16 x f16 -> f32
+   tile) was charged double and refused seeds that fit. And under: a masked flavor (a pad multiple,
+   or a row block not dividing the rows) places its accumulator fragment in workgroup memory beside
+   the tiles, which the leg did not charge. Over an unmasked conv (every extent a tile multiple) and
+   a masked one, every GPU conv seed, built and read by the gate's own estimate, is kept at a limit
+   of exactly that estimate and refused one byte below it: the prediction is the gate's charge, each
+   tile priced at its own operand's precision. *)
 
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
 open Verdict.Claims
+module Tn = Ir.Tnode
 module LL = Ir.Low_level
 module Sched = Ir.Schedule
 module L = Ll_test
@@ -27,6 +37,13 @@ let () =
 
 let () = Generated.init ~backend_name
 let on_gpu = Sched.backend_is_gpu backend_name
+
+let scratch (o : LL.optimized) =
+  {
+    o with
+    LL.traced_store = Hashtbl.copy o.LL.traced_store;
+    LL.optimize_ctx = LL.copy_optimize_ctx o.LL.optimize_ctx;
+  }
 
 (* The workgroup-shared bytes of the [wred_partials_*] arrays a generated kernel declares. An
    element type other than float/double reads as an impossible count, so the claim fails. *)
@@ -130,3 +147,117 @@ let () =
     multi ~f:(fun leg ->
       let bytes = Sched.workgroup_memory_bytes ~capabilities leg.scheduled in
       bytes = declared leg && admits leg bytes && not (admits leg (bytes - 1)))
+
+(* === 2. The conv family's pricing. === *)
+
+(* A mixed-precision conv: f16 input and kernel, f32 output; [hw] input rows and columns, [ic] input
+   channels, 8 output channels, a 3x3 window. *)
+let make_conv tag ~hw ~ic =
+  let x =
+    NTDSL.init ~l:(tag ^ "x") ~prec:Ir.Ops.half ~b:[ 2 ] ~o:[ hw; hw; ic ]
+      ~f:(Ll_test.weighted ~weights:[| 1; 1; 2; 3 |] ~modulus:7 ~offset:0. ~stride:1.)
+      ()
+  in
+  let kern =
+    NTDSL.init ~l:(tag ^ "k") ~prec:Ir.Ops.half ~i:[ 3; 3; ic ] ~o:[ 8 ]
+      ~f:(Ll_test.weighted ~weights:[| 2; 1; 1; 3 |] ~modulus:5 ~offset:(-2.) ~stride:1.)
+      ()
+  in
+  let%op y =
+    x +* "...| oh<+kh, ow<+kw, ..ic..; |kh, kw, ..ic.. -> ..oc.. => ...| oh, ow, ..oc.." kern
+  in
+  Tn.update_prec y.Tensor.value Ir.Ops.single;
+  y
+
+(* The routine's whole lowering, captured on its way through a compile. *)
+let lowering name t =
+  let captured = ref None in
+  let ctx = Context.auto () in
+  let _ctx, _routine =
+    Context.compile ~name
+      ~lowered_transform:(fun opt ->
+        captured := Some (scratch opt);
+        [ opt ])
+      ctx (Train.forward t) Ir.Indexing.Empty
+  in
+  Option.value_exn !captured
+
+(* A device whose only tile takes f16 operands into an f32 accumulator. *)
+let f16_limits cap =
+  let f16 = Ir.Backend_intf.Mma_f16 and f32 = Ir.Backend_intf.Mma_f32 in
+  {
+    Ir.Backend_intf.no_hardware_limits with
+    max_workgroup_memory_bytes = cap;
+    mma =
+      Some
+        {
+          Ir.Backend_intf.minimal_mma_capability with
+          mma_tile = (8, 8, 8);
+          mma_format_tiles = [ ((f16, f16, f32), (8, 8, 8)) ];
+        };
+  }
+
+(* A stand-in charging Metal-like 4-byte allocation rounding, so the prediction rounds as the gate
+   does. *)
+let standin = { Ir.Backend_intf.no_codegen_capabilities with workgroup_allocation_alignment = 4 }
+
+(* Each GPU conv seed of the lowering beside the gate's estimate of its built schedule. *)
+let conv_leg ~what opt =
+  let seeds cap =
+    List.filter
+      (Autotune.sketch_seed_params ~capabilities:standin ~is_gpu:true ~is_cpu:false
+         ~limits:(f16_limits cap) (scratch opt))
+      ~f:(fun p -> p.Autotune.sk_gpu)
+  in
+  let accum_prec = (Context.codegen_capabilities (Context.auto ())).accum_prec in
+  let built p =
+    let o = scratch opt in
+    Sched.apply (Autotune.sketch_schedule ~accum_prec ~p o) o
+  in
+  let mixed =
+    match
+      Autotune.seeding_census ~capabilities:standin ~is_gpu:true ~is_cpu:false
+        ~limits:(f16_limits None) (scratch opt)
+    with
+    | { sc_family = Autotune.Seeding_conv { judgment = { cj_site = site; _ }; _ }; _ } ->
+        let prec tn = Lazy.force tn.Tn.storage_prec in
+        Ir.Ops.equal_prec (prec site.c_a) Ir.Ops.half
+        && Ir.Ops.equal_prec (prec site.c_b) Ir.Ops.half
+        && Ir.Ops.equal_prec (prec site.c_d) Ir.Ops.single
+    | _ -> false
+  in
+  p (what ^ ": the conv site is mixed precision, f16 operands into an f32 output") mixed;
+  let judged =
+    List.map (seeds None) ~f:(fun p ->
+        let o = built p in
+        (p, Sched.workgroup_memory_bytes ~capabilities:standin o, o))
+  in
+  Stdio.eprintf
+    "workgroup_memory_accounting: %s: %d GPU conv seeds, estimates %s (not part of the golden)\n%!"
+    what (List.length judged)
+    (String.concat ~sep:"," (List.map judged ~f:(fun (_, e, _) -> Int.to_string e)));
+  let kept cap p = List.mem (seeds (Some cap)) p ~equal:Poly.equal in
+  p_all (what ^ ": every GPU conv seed is kept at a limit of exactly its gate estimate") judged
+    ~f:(fun (p, est, _) -> kept est p);
+  p_all (what ^ ": every GPU conv seed is refused one byte below its gate estimate") judged
+    ~f:(fun (p, est, _) -> not (kept (est - 1) p));
+  judged
+
+let () =
+  (* 16 output rows and 8 input channels: every extent a multiple of the 8x8x8 tile, so no flavor is
+     masked and the staged operand tiles are the whole charge. *)
+  let unmasked =
+    conv_leg ~what:"unmasked" (lowering "wmem_conv_u" (make_conv "wmu" ~hw:18 ~ic:8))
+  in
+  p_all "unmasked: no flavor places its accumulator fragment in workgroup memory" unmasked
+    ~f:(fun (_, _, o) ->
+      Set.for_all o.LL.workgroup_shared ~f:(fun tn ->
+          match tn.Tn.label with "fragment" :: _ -> false | _ -> true));
+  (* 9 output rows and 4 input channels, padded to the tile: every flavor is masked, and its
+     accumulator fragment, at the f32 output precision, is workgroup-shared beside the tiles. *)
+  let masked = conv_leg ~what:"masked" (lowering "wmem_conv_m" (make_conv "wmm" ~hw:11 ~ic:4)) in
+  p_all "masked: every flavor places an f32 accumulator fragment in workgroup memory" masked
+    ~f:(fun (_, _, o) ->
+      Set.exists o.LL.workgroup_shared ~f:(fun tn ->
+          (match tn.Tn.label with "fragment" :: _ -> true | _ -> false)
+          && Ir.Ops.equal_prec (Lazy.force tn.Tn.storage_prec) Ir.Ops.single))

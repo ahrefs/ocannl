@@ -282,7 +282,13 @@ files.
   rule and every context-holding caller); its tiles are multiples of 8 elements, so Metal's
   granule changes none of its verdicts today, and
   `test/operations/seeded_params_capabilities.ml` pins the threading with a coarser stand-in
-  granule (seeded at the gate's estimate, refuted one byte below). With the gate exact, the one route to
+  granule (seeded at the gate's estimate, refuted one byte below). A prediction prices each staged
+  tile at the precision its `Stage` declares it at: the source operand's storage precision, not the
+  accumulator's (the conv family's GPU leg priced both at the output's until gh-ocannl-1452, refusing
+  mixed-precision seeds that fit), and the conv leg also charges a masked flavor's accumulator
+  fragment, which `Tensorize`'s masked contraction places in workgroup memory on a staged pipeline
+  (`test/operations/workgroup_memory_accounting.ml`: every GPU conv seed kept at its built
+  schedule's gate estimate, refused one byte below). With the gate exact, the one route to
   the link-time refusal is the test seam `Schedule.with_gate_capabilities`. Guards:
   `test/operations/schedule_mma_scope_scratch.ml` (tiles of exactly the limit compile; plus one
   converted scope they are refused at `Hardware_limits`) and
