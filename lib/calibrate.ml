@@ -137,7 +137,10 @@ let working_set ?(m = 256) ?(n = 1024)
                 ( reuse_of o,
                   Ir.Cost_model.total_bytes (Ir.Cost_model.analyze o.Ir.Low_level.llc),
                   Autotune.ranking_ms ~limits [ o ] )
-            | None -> ({ Ir.Cost_model.ru_requested = []; ru_working_set_bytes = 0 }, 0, None)
+            | None ->
+                ( { Ir.Cost_model.ru_requested = []; ru_working_set_bytes = 0; ru_scratch = [] },
+                  0,
+                  None )
           in
           let ctx' = Context.run run_ctx routine in
           Context.sync ctx';

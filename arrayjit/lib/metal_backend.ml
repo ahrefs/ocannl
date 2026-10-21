@@ -421,6 +421,9 @@ module Impl = struct
            cache_capacity_bytes = None;
            max_resident_threads = None;
            cache_bandwidth = None;
+           (* gh-ocannl-1442: the ranking score's own rates; unmeasured here. *)
+           issue_rate = None;
+           dram_bandwidth = None;
          })
     in
     fun () -> Lazy.force limits

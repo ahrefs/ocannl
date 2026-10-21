@@ -52,6 +52,10 @@ type summary = {
   read_bytes : int;  (** Sum of [fp_read_bytes] over [per_node]. *)
   write_bytes : int;  (** Sum of [fp_write_bytes] over [per_node]. *)
   flops : int;  (** Whole-kernel arithmetic-op count (loop extents times per-statement ops). *)
+  mma_flops : int;
+      (** The part of [flops] that [Tile_mma] statements contribute (their [2*m*n*k] per tile) —
+          tensor-core work, which the ranking score's scalar issue rate never prices
+          (gh-ocannl-1442). *)
   flops_approx : bool;
       (** [true] when guarded ([If]) code contributed (guards-taken bound), or a short-circuiting
           form was charged in full while executing only in part — a [Where] whose arms carry any
@@ -173,15 +177,30 @@ val roofline_seconds :
       per-block bytes times the blocks resident at once ([max_resident_threads] over the kernel's
       launch block, {!Low_level.launch_dims}, at most the blocks; all blocks when no residency is
       given), the largest over the kernel's launch nests, exceeding [cache_capacity_bytes] — the
-      requested bytes are charged at the DRAM bandwidth ([peak_memory_bandwidth]). Within it (or
-      with no capacity), they are charged at [cache_bandwidth] beside the distinct bytes at DRAM
-      bandwidth, whichever leg is longer; with no cache bandwidth either, the memory leg is
-      {!analyze}'s distinct bytes at DRAM bandwidth, exactly the roofline. A cache bandwidth below
-      the DRAM one is read as the DRAM one.
-    - Never below the bound: every memory leg is at least the distinct bytes at DRAM bandwidth, so
-      {!ranking_seconds} is at least {!roofline_seconds} over {!analyze}'s counts — and therefore at
-      least any roofline over {!completion_floor}. Monotone: raising the capacity or the cache
-      bandwidth never raises the score.
+      requested bytes are charged at the DRAM rate (below). Within it (or with no capacity), they
+      are charged at [cache_bandwidth] beside the distinct bytes at the DRAM rate, whichever leg is
+      longer; with no cache bandwidth either, the memory leg is the distinct bytes at the DRAM rate
+      — with no reuse extraction and no DRAM rate, exactly the roofline. A cache bandwidth below the
+      DRAM rate is read as the DRAM rate.
+    - Its own rates (gh-ocannl-1442). The bound divides by ceilings ([peak_flops],
+      [peak_memory_bandwidth]: class ceilings, so that no kernel beats its bound); the score divides
+      by what kernels achieve. [dram_bandwidth] (the STREAM-achieved DRAM rate) prices the DRAM tier
+      and the distinct bytes; [issue_rate] (the effective scalar operation rate of a
+      register-blocktiled kernel, its staging included) prices the scalar operations, while
+      [Tile_mma] work ([summary.mma_flops]) stays at [peak_flops]: a scalar rate never prices
+      tensor-core work. Each rate reads as at most its ceiling, and as the ceiling when not given,
+      so a device without them scores exactly as before.
+    - Memory space (gh-ocannl-1442). Under the per-block model (a reuse extraction given), the bytes
+      of the nodes the kernel touches outside global memory ({!reuse.ru_scratch}: staged workgroup
+      tiles and thread-private scratch) are off the DRAM leg. Their cost is carried by the fitted
+      issue rate — an empirical approximation that holds for the staging geometry the rate was
+      fitted on, not a model of copies, barriers or shared-memory gathers. Without a reuse
+      extraction they keep the roofline's charge.
+    - Never below the bound: the memory leg is at least the distinct bytes at the
+      [peak_memory_bandwidth] ceiling, and the compute leg at least the operations at the
+      [peak_flops] ceiling, so {!ranking_seconds} is at least {!roofline_seconds} over {!analyze}'s
+      counts — and therefore at least any roofline over {!completion_floor}. Monotone: raising the
+      capacity, the cache bandwidth, the issue rate or the DRAM rate never raises the score.
 
     Writes, op counts and the opacity flag are {!analyze}'s. *)
 
@@ -193,6 +212,10 @@ type reuse = {
   ru_working_set_bytes : int;
       (** The largest over the kernel's launch nests of per-block global read bytes times resident
           blocks. *)
+  ru_scratch : Tnode.t list;
+      (** The nodes the kernel reads or writes that are not global ([is_global] false: workgroup
+          tiles, thread-private scratch), in first-access order — the bytes the score keeps off the
+          DRAM leg. *)
 }
 [@@deriving sexp_of]
 
@@ -216,18 +239,23 @@ val ranking_seconds_of :
   ?peak_memory_bandwidth:float ->
   ?cache_capacity_bytes:int ->
   ?cache_bandwidth:float ->
+  ?issue_rate:float ->
+  ?dram_bandwidth:float ->
   summary ->
   reuse option ->
   float option
 (** The ranking score of one kernel from its extractions: the larger of the compute leg and the
     two-tier memory leg (section contract; [None] for the reuse means no per-block charge, the
-    roofline). Bandwidths in bytes/s. [None] when neither peak is given. *)
+    roofline). Bandwidths in bytes/s, the issue rate in operations/s. [None] when neither peak is
+    given. *)
 
 val ranking_legs_of :
   ?peak_flops:float ->
   ?peak_memory_bandwidth:float ->
   ?cache_capacity_bytes:int ->
   ?cache_bandwidth:float ->
+  ?issue_rate:float ->
+  ?dram_bandwidth:float ->
   summary ->
   reuse option ->
   float option * float option
@@ -240,6 +268,8 @@ val ranking_seconds :
   ?peak_memory_bandwidth:float ->
   ?cache_capacity_bytes:int ->
   ?cache_bandwidth:float ->
+  ?issue_rate:float ->
+  ?dram_bandwidth:float ->
   ?max_resident_threads:int ->
   is_global:(Tnode.t -> bool) ->
   Low_level.t ->

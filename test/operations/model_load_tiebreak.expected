@@ -11,6 +11,8 @@ under a keyless best leaf a subtree bounded at the threshold is fathomed unscore
 an undescribed kernel makes a candidate's count unknown: true
 kernels without tile-MMA sites add nothing to the counted ones: true
 a candidate with no tile-MMA site anywhere has nothing to count: true
+stand-in: every tensorized leaf carries its tile-MMA work in mma_flops: true
+stand-in: a tenfold slower issue rate slows each tensorized leaf's compute leg less than tenfold: true
 stand-in: the gh-ocannl-1190 site seeds staged fp8 twins, and each pair has equal flops: true
 stand-in: each pair has equal bytes: true
 stand-in: each pair has exactly equal ranking scores: true
@@ -26,6 +28,25 @@ stand-in: without ldmatrix the pick issues the fewest operand loads among the le
 stand-in: the tie-break moves no score: both rules' picks score exactly alike: true
 stand-in: among the staged leaves, under CUDA's rule the family search picks a swizzled twin: true
 stand-in: among the staged leaves, without ldmatrix it keeps the first-listed plain twin: true
+rated stand-in: every tensorized leaf carries its tile-MMA work in mma_flops: true
+rated stand-in: a tenfold slower issue rate slows each tensorized leaf's compute leg less than tenfold: true
+rated stand-in: the gh-ocannl-1190 site seeds staged fp8 twins, and each pair has equal flops: true
+rated stand-in: each pair has equal bytes: true
+rated stand-in: each pair has exactly equal ranking scores: true
+rated stand-in: under CUDA's load rule each swizzled twin issues fewer operand loads: true
+rated stand-in: under a rule without ldmatrix each pair issues equal operand loads: true
+rated stand-in: the arm's reloads count: a reusing arm issues fewer loads than the record's own: true
+rated stand-in: an element-swizzled twin has no count: true
+rated stand-in: a statement the hook declines has no count: true
+rated stand-in: a marked statement the hook accepts as a fragment update is counted in the fragment scope: true
+rated stand-in: a marked statement the hook declines as a fragment update is counted per statement: true
+rated stand-in: under CUDA's rule the pick issues the fewest operand loads among the leaves tied with it: true
+rated stand-in: without ldmatrix the pick issues the fewest operand loads among the leaves tied with it: true
+rated stand-in: the tie-break moves no score: both rules' picks score exactly alike: true
+rated stand-in: among the staged leaves, under CUDA's rule the family search picks a swizzled twin: true
+rated stand-in: among the staged leaves, without ldmatrix it keeps the first-listed plain twin: true
+backend record: every tensorized leaf carries its tile-MMA work in mma_flops: true
+backend record: a tenfold slower issue rate slows each tensorized leaf's compute leg less than tenfold: true
 backend record: the gh-ocannl-1190 site seeds staged fp8 twins, and each pair has equal flops: true
 backend record: each pair has equal bytes: true
 backend record: each pair has exactly equal ranking scores: true

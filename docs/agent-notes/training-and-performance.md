@@ -145,9 +145,11 @@ files.
   CUDA-shaped record and capability; `Autotune.model_explain` lists what the model sees of each
   whole-routine candidate. The swizzled staged fp8 twin beats its plain twin, but at the
   gh-ocannl-1190 shape neither is the argmin: an unstaged tensorized leaf ranks strictly below
-  every staged one (the staging copies add ops, the shared tiles add distinct-cell bytes, and the
-  per-block global reads are the same), so making `model_default` pick a staged twin needs the
-  model to price what staging buys, not a tie-break.
+  every staged one (the staging copies add ops and the per-block global reads are the same; until
+  gh-ocannl-1442 the shared tiles also added distinct-cell bytes at the DRAM rate). Every
+  tensorized leaf there is compute-bound at `peak_flops`, so the score cannot see load paths at
+  all: making `model_default` pick a staged twin needs the model to price what staging buys, not a
+  tie-break.
 - The ranking score's `cache_capacity_bytes` and `cache_bandwidth` are calibrated, not looked up
   (gh-ocannl-1253): the working set sums per-block footprints that co-resident blocks share, so
   the boundary sits above any L2. `tools/calibrate_cache_capacity.exe`
@@ -160,6 +162,19 @@ files.
   unified gfx1151 stayed at 1.7 TB/s requested to 10.8 GB, and its class constant is a separate,
   documented per-class decision. `bench_wgrad`'s `wgrad-model:` lines print each plan's per-kernel rank beside its
   distinct-cell bound; `benchmarks/gh1253_cells.sh` runs the whole calibration on one box.
+- The ranking score divides by its own rates, never the bound's ceilings (gh-ocannl-1442):
+  `issue_rate` (scalar operations, the effective rate of a register-blocktiled kernel with its
+  staging) and `dram_bandwidth` (the STREAM rate), `Untimed` fields overridden by
+  `model_issue_rate` / `model_dram_bandwidth`, each read as at most its ceiling and as the ceiling
+  when unset. Before them the two tiers were inert under default config: the DRAM tier divided by
+  the advisory class ceiling (8e12 on CUDA, 6e12 on HIP), and a cache bandwidth below it reads as
+  it. The two rates land together or not at all: an issue rate under the ceiling's DRAM makes the
+  untiled preset compute-bound and the `auto` gate stops seeding (`cost_model_reuse` pins it).
+  `Tile_mma` work (`summary.mma_flops`) stays at `peak_flops`. Under the per-block model the
+  chip-resident nodes (`ru_scratch`) leave the DRAM leg, their cost carried by the fitted issue
+  rate for the geometry it was fitted on: an approximation, not a model of copies, barriers or
+  shared gathers. The staffed start's gate tag names both rates, since its per-segment decisions
+  rest on them.
 - benchmarks/ is the cross-framework parity+timing suite (self-describing safetensors fixtures,
   one-JSON-line runners, loss-trajectory parity gate ~1e-7 fp32 vs pytorch/cpu). The gate
   doubles as a gradient oracle. tinygrad: realize the loss BEFORE `opt.step()` or it recomputes

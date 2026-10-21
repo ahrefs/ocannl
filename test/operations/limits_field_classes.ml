@@ -57,6 +57,8 @@ let full =
     cache_capacity_bytes = Some (1 lsl 30);
     max_resident_threads = Some 65536;
     cache_bandwidth = Some 2e12;
+    issue_rate = Some 3e12;
+    dram_bandwidth = Some 5e11;
     native_fp16_arithmetic = true;
     simdgroup_width = Some 32;
     lane_scalar_recompute_cheap = true;
@@ -85,6 +87,8 @@ let toggles : (string * (BI.hardware_limits -> BI.hardware_limits)) list =
     ("cache_capacity_bytes", fun l -> { l with cache_capacity_bytes = Some 1 });
     ("max_resident_threads", fun l -> { l with max_resident_threads = Some 1 });
     ("cache_bandwidth", fun l -> { l with cache_bandwidth = Some 1. });
+    ("issue_rate", fun l -> { l with issue_rate = Some 1. });
+    ("dram_bandwidth", fun l -> { l with dram_bandwidth = Some 1. });
     ("native_fp16_arithmetic", fun l -> { l with native_fp16_arithmetic = false });
     ("simdgroup_width", fun l -> { l with simdgroup_width = Some 64 });
     ("lane_scalar_recompute_cheap", fun l -> { l with lane_scalar_recompute_cheap = false });
@@ -116,10 +120,17 @@ let () =
       List.mem names f ~equal:String.equal);
   p_all ~min:1 "every toggle here names a field of the record" names ~f:(fun f ->
       List.mem all_fields f ~equal:String.equal);
-  p "the Untimed fields are the ranking score's capacity, residency and cache bandwidth"
+  (* The ranking score's capacity, residency, and its cache, issue and DRAM rates. *)
+  p "the Untimed fields are the ranking score's capacity, residency and three rates"
     (List.equal String.equal
        (List.sort untimed_fields ~compare:String.compare)
-       [ "cache_bandwidth"; "cache_capacity_bytes"; "max_resident_threads" ]);
+       [
+         "cache_bandwidth";
+         "cache_capacity_bytes";
+         "dram_bandwidth";
+         "issue_rate";
+         "max_resident_threads";
+       ]);
   let base = key_of full in
   p_all ~min:(List.length all_fields)
     "toggling a Key field changes the cache key, toggling an Untimed field leaves it unchanged"
@@ -152,6 +163,8 @@ let presets =
         cache_capacity_bytes = Some (1 lsl 30);
         max_resident_threads = Some 71680;
         cache_bandwidth = Some 3e12;
+        issue_rate = Some 3.4e12;
+        dram_bandwidth = Some 5.8e11;
         codegen_tag = Some "graph-capture/no-device-debug";
       } );
   ]
@@ -161,7 +174,14 @@ let () =
     "the Key projection renders as the full record with its Untimed fields absent, on every preset"
     presets ~f:(fun (name, l) ->
       let without =
-        { l with cache_capacity_bytes = None; max_resident_threads = None; cache_bandwidth = None }
+        {
+          l with
+          cache_capacity_bytes = None;
+          max_resident_threads = None;
+          cache_bandwidth = None;
+          issue_rate = None;
+          dram_bandwidth = None;
+        }
       in
       let ok =
         Sexp.equal (BI.Limits_key.sexp_of_t (BI.limits_key l)) (BI.sexp_of_hardware_limits without)

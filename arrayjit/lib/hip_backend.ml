@@ -1726,6 +1726,10 @@ end = struct
               invented one. Mixed machines take the discrete class. *)
            cache_capacity_bytes = (if all_integrated then None else Some (2 * 1024 * 1024 * 1024));
            cache_bandwidth = Some (if all_integrated then 1.7e12 else 1.3e12);
+           (* gh-ocannl-1442: the ranking score's own rates, below the envelope's ceilings. Filled
+              from benchmarks/gh1253_cells.sh measurements. *)
+           issue_rate = None;
+           dram_bandwidth = None;
            max_resident_threads =
              min_over (fun (a : H.Device.attributes) ->
                  a.multiprocessor_count * a.max_threads_per_multiprocessor);

@@ -62,10 +62,16 @@ let () =
         p.Cal.wp_working_set p.Cal.wp_requested p.Cal.wp_distinct p.Cal.wp_ms
         (gbps p.Cal.wp_requested) (gbps p.Cal.wp_distinct) (ms p.Cal.wp_rank_ms)
         (ms p.Cal.wp_bound_ms));
-  (* The DRAM reference the fit splits against: the envelope's memory leg, as configured (pass the
-     STREAM-calibrated [--ocannl_model_peak_memory_bandwidth]; the backends' advisory value is a
-     class ceiling, far above any one device's DRAM). *)
-  let dram_rate = Option.map (snd (Autotune.envelope_legs ~limits)) ~f:fst in
+  (* The DRAM reference the fit splits against: the ranking score's own DRAM rate where one is in
+     force (gh-ocannl-1442: config [model_dram_bandwidth] or the backend's advisory, which the
+     score's DRAM tier divides by), else the envelope's memory leg as configured (pass the
+     STREAM-calibrated [--ocannl_model_dram_bandwidth]; the envelope's advisory value is a class
+     ceiling, far above any one device's DRAM). *)
+  let dram_rate =
+    match Autotune.ranking_dram_bandwidth ~limits with
+    | Some r -> Some r
+    | None -> Option.map (snd (Autotune.envelope_legs ~limits)) ~f:fst
+  in
   Stdio.printf "# DRAM reference: %s bytes/s\n"
     (Option.value_map dram_rate ~default:"none (splitting on the sweep's own contrast)"
        ~f:(Printf.sprintf "%.6g"));

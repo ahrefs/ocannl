@@ -19,6 +19,7 @@ type summary = {
   read_bytes : int;
   write_bytes : int;
   flops : int;
+  mma_flops : int;
   flops_approx : bool;
   opaque : bool;
 }
@@ -299,7 +300,7 @@ let footprints ~read_uncertain ~any_uncertain (accesses : Tn.t Affine.access lis
         } ))
 
 let analyze (code : Low_level.t) : summary =
-  let flops_approx = ref false and opaque = ref false in
+  let flops_approx = ref false and opaque = ref false and mma_flops = ref 0 in
   (* [scale] is the product of enclosing loop extents, [env] their (symbol, extent) bindings —
      needed by [Tile_mma], whose 2*m*n*k multiply-adds are cooperative across its [lane] loop, not
      repeated per lane. *)
@@ -330,7 +331,9 @@ let analyze (code : Low_level.t) : summary =
         let lane_extent =
           List.Assoc.find env lane ~equal:Idx.equal_symbol |> Option.value ~default:1
         in
-        scale / max 1 lane_extent * (2 * m * n * k)
+        let ops = scale / max 1 lane_extent * (2 * m * n * k) in
+        mma_flops := !mma_flops + ops;
+        ops
   and sc_flops (sc : Low_level.scalar_t) : int =
     let inline, hoisted = sc_split sc in
     inline + hoisted
@@ -401,6 +404,7 @@ let analyze (code : Low_level.t) : summary =
     read_bytes = List.fold per_node ~init:0 ~f:(fun acc (_, fp) -> acc + fp.fp_read_bytes);
     write_bytes = List.fold per_node ~init:0 ~f:(fun acc (_, fp) -> acc + fp.fp_write_bytes);
     flops;
+    mma_flops = !mma_flops;
     flops_approx = !flops_approx;
     opaque = !opaque;
   }
@@ -594,9 +598,19 @@ let roofline_seconds ?peak_flops ?peak_memory_bandwidth ~flops ~bytes () : float
    and what makes every untiled contraction score at its roofline floor. The ranking score charges
    what a plan requests once its reused data cannot stay cached: per block, the cells the block
    touches (its [Grid] loops standing still), times the blocks. The reuse factor of a tiling falls
-   out of the per-block footprint; nothing here knows what a matmul is. *)
+   out of the per-block footprint; nothing here knows what a matmul is.
 
-type reuse = { ru_requested : (Tn.t * int) list; ru_working_set_bytes : int } [@@deriving sexp_of]
+   gh-ocannl-1442: the score's rates are its own, not the bound's ceilings — an effective scalar
+   issue rate and an achieved DRAM rate, each read as at most its ceiling — and under the per-block
+   model the bytes of nodes that never leave the chip (workgroup tiles, thread-private scratch) are
+   off the DRAM leg: the fitted issue rate carries their cost for the geometry it was fitted on. *)
+
+type reuse = {
+  ru_requested : (Tn.t * int) list;
+  ru_working_set_bytes : int;
+  ru_scratch : Tn.t list;
+}
+[@@deriving sexp_of]
 
 let global_in (opt : Low_level.optimized) (tn : Tn.t) =
   not
@@ -637,7 +651,11 @@ let reuse_traffic ?max_resident_threads ~is_global (code : Low_level.t) : reuse 
   let threads = max 1 (Array.fold (Low_level.launch_dims code).Low_level.block ~init:1 ~f:( * )) in
   let requested = Hashtbl.create (module Tn) and order = ref [] in
   let nests = Hashtbl.create (module String) in
+  let scratch = Hashtbl.create (module Tn) and scratch_order = ref [] in
   List.iter (Low_level.affine_accesses code) ~f:(fun (a : Tn.t Affine.access) ->
+      if (not (is_global a.a_tn)) && not (Hashtbl.mem scratch a.a_tn) then (
+        Hashtbl.set scratch ~key:a.a_tn ~data:();
+        scratch_order := a.a_tn :: !scratch_order);
       if (not a.a_write) && is_global a.a_tn then (
         let grid = List.filter a.a_loops ~f:(fun (s, _) -> is_grid s) in
         let blocks = List.fold grid ~init:1 ~f:(fun acc (_, r) -> acc * width r) in
@@ -664,6 +682,7 @@ let reuse_traffic ?max_resident_threads ~is_global (code : Low_level.t) : reuse 
   {
     ru_requested = List.rev_map !order ~f:(fun tn -> (tn, !(Hashtbl.find_exn requested tn)));
     ru_working_set_bytes = working_set;
+    ru_scratch = List.rev !scratch_order;
   }
 
 let requested_bytes (s : summary) (r : reuse) =
@@ -681,43 +700,76 @@ let spills ?cache_capacity_bytes (r : reuse) =
   | Some capacity -> r.ru_working_set_bytes > capacity
   | None -> false
 
+(* A ranking rate is at most its ceiling — the envelope constant the bound divides by — so every leg
+   priced at it is at least the bound's leg over the same counts; unset, it is the ceiling. *)
+let ranking_rate ~ceiling rate = match rate with None -> ceiling | Some r -> Float.min r ceiling
+
+let scratch_bytes (s : summary) (r : reuse) =
+  List.sum
+    (module Int)
+    r.ru_scratch
+    ~f:(fun tn ->
+      List.Assoc.find s.per_node tn ~equal:Tn.equal
+      |> Option.value_map ~default:0 ~f:(fun fp -> fp.fp_read_bytes + fp.fp_write_bytes))
+
 let ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
-    (s : summary) (r : reuse option) : float option * float option =
+    ?issue_rate ?dram_bandwidth (s : summary) (r : reuse option) : float option * float option =
   let total = Float.of_int (total_bytes s) in
   let memory =
-    Option.map peak_memory_bandwidth ~f:(fun dram ->
-        match r with
-        | None -> total /. dram
-        | Some r -> (
-            let requested = Float.of_int (requested_bytes s r) in
-            if spills ?cache_capacity_bytes r then requested /. dram
-            else
-              match cache_bandwidth with
-              | None -> total /. dram
-              | Some cache ->
-                  (* A cache slower than DRAM would make raising the capacity raise the score. *)
-                  Float.max (total /. dram) (requested /. Float.max cache dram)))
+    Option.map peak_memory_bandwidth ~f:(fun ceiling ->
+        let dram = ranking_rate ~ceiling dram_bandwidth in
+        let priced =
+          match r with
+          | None -> total /. dram
+          | Some r -> (
+              (* Under the per-block model, the chip-resident nodes' bytes leave the DRAM leg. *)
+              let scratch = Float.of_int (scratch_bytes s r) in
+              let global = Float.max 0. (total -. scratch) in
+              let requested = Float.max 0. (Float.of_int (requested_bytes s r) -. scratch) in
+              if spills ?cache_capacity_bytes r then requested /. dram
+              else
+                match cache_bandwidth with
+                | None -> global /. dram
+                | Some cache ->
+                    (* A cache slower than DRAM would make raising the capacity raise the score. *)
+                    Float.max (global /. dram) (requested /. Float.max cache dram))
+        in
+        (* Never below the bound's memory leg: all the distinct bytes at the ceiling. *)
+        Float.max priced (total /. ceiling))
   in
-  (Option.map peak_flops ~f:(fun p -> Float.of_int s.flops /. p), memory)
+  let compute =
+    Option.map peak_flops ~f:(fun ceiling ->
+        let issue = ranking_rate ~ceiling issue_rate in
+        (* At the ceiling, the bound's own quotient: exact ties between candidates stay exact. *)
+        if Float.(issue >= ceiling) then Float.of_int s.flops /. ceiling
+        else
+          let mma = Float.of_int s.mma_flops in
+          let scalar = Float.max 0. (Float.of_int s.flops -. mma) in
+          (scalar /. issue) +. (mma /. ceiling))
+  in
+  (compute, memory)
 
 let ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
-    (s : summary) (r : reuse option) : float option =
+    ?issue_rate ?dram_bandwidth (s : summary) (r : reuse option) : float option =
   let compute, memory =
-    ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth s r
+    ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
+      ?issue_rate ?dram_bandwidth s r
   in
   match List.filter_opt [ compute; memory ] with
   | [] -> None
   | l -> Some (List.reduce_exn l ~f:Float.max)
 
 let ranking_seconds ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
-    ?max_resident_threads ~is_global (code : Low_level.t) : float option =
+    ?issue_rate ?dram_bandwidth ?max_resident_threads ~is_global (code : Low_level.t) : float option
+    =
   let s = analyze code in
   let r =
     match (cache_capacity_bytes, cache_bandwidth) with
     | None, None -> None
     | _ -> Some (reuse_traffic ?max_resident_threads ~is_global code)
   in
-  ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth s r
+  ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
+    ?issue_rate ?dram_bandwidth s r
 
 (* {2 Tile-MMA operand loads — gh-ocannl-1254}
 

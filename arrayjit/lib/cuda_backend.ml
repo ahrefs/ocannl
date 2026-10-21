@@ -1982,6 +1982,10 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
               split threshold); the fit put the capacity near 13 GB. *)
            cache_capacity_bytes = Some (12 * 1024 * 1024 * 1024);
            cache_bandwidth = Some 1.8e12;
+           (* gh-ocannl-1442: the ranking score's own rates, below the envelope's ceilings. Filled
+              from benchmarks/gh1253_cells.sh measurements. *)
+           issue_rate = None;
+           dram_bandwidth = None;
            max_resident_threads =
              min_over (fun (a : Cu.Device.attributes) ->
                  a.multiprocessor_count * a.max_threads_per_multiprocessor);
