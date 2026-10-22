@@ -165,6 +165,12 @@ for f in t2/gen-v1.expected t2/scenario_x.expected t2/scan.expected t3/neg.expec
   t2/needs_pkg.expected \
   lib/stubbed_c.c t3/cexe_c.c docs/notes.md; do : >"$repo/$f"; done
 printf '{ }\nrule token = parse eof { () }\n' >"$repo/lib/lx.mll"
+# What the link-only ranking reads: t_core names Helper and its `used`; core re-exports Helper as
+# H, which gen names; nothing else names either.
+printf 'let used = 1\nlet unused = 2\n' >"$repo/lib/helper.ml"
+printf 'module H = Helper\n' >"$repo/lib/core.ml"
+printf 'let () = () (* uses Helper.used *)\n' >"$repo/t1/t_core.ml"
+printf 'let () = () (* H *)\n' >"$repo/t2/gen.ml"
 git_q() { git -C "$repo" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
 git_q init -q && git_q add -A && git_q commit -qm fixture || exit 2
 
@@ -173,11 +179,13 @@ affected() { # ARGS... -> $out, $err, $rc
   rc=0
   (cd "$TMP" && "$repo/tools/affected-tests.sh" "$@") >"$out" 2>"$err" || rc=$?
 }
-expect() { # LABEL RC ALIAS... : the exact sorted list and the exit status
+expect() { # LABEL RC ALIAS... : the exact list, in any order, and the exit status
   local label=$1 want_rc=$2
   shift 2
   printf '%s\n' "$@" | sed '/^$/d' | sort >"$TMP/want"
-  if [ "$rc" = "$want_rc" ] && cmp -s "$TMP/want" "$out"; then
+  # The printed order is ranked (link-only last); the 'link-only' leg pins it.
+  sort "$out" >"$TMP/got"
+  if [ "$rc" = "$want_rc" ] && cmp -s "$TMP/want" "$TMP/got"; then
     report 0 "$label"
   else
     report 1 "$label" "exit $rc (want $want_rc); got [$(tr '\n' ' ' <"$out")] want [$(tr '\n' ' ' <"$TMP/want")]; stderr: $(tr '\n' '|' <"$err")"
@@ -436,6 +444,50 @@ if harness_leg 'unmapped'; then
   else report 1 'an .ml no stanza owns and no rule reads is UNMAPPED, exit 3' "exit $rc; $(cat "$out" "$err")"; fi
 fi
 
+if harness_leg 'link-only'; then
+  # Ranked, not dropped (gh-ocannl-1431): what names the changed module is printed first,
+  # what only links its library last, and both are printed unless --referenced-only.
+  ordered() { # LABEL ALIAS... : stdout exactly, in this order
+    local label=$1
+    shift
+    printf '%s\n' "$@" >"$TMP/want"
+    if [ "$rc" = 0 ] && cmp -s "$TMP/want" "$out"; then report 0 "$label"
+    else report 1 "$label" "exit $rc; got [$(tr '\n' ' ' <"$out")] want [$*]; stderr: $(tr '\n' '|' <"$err")"; fi
+  }
+  affected --files lib/helper.ml
+  ordered 'a module names its tests first (by name or a re-export), the link-only ones last' \
+    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
+  grep -qx 'affected: link-only: @t5/slow-usesh' "$err" && grep -q '1 LINK-ONLY alias(es), printed LAST' "$err" ||
+    report 1 'the link-only aliases are named on stderr' "$(cat "$err")"
+  affected --referenced-only --files lib/helper.ml
+  ordered '--referenced-only leaves the link-only ones off' \
+    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen
+  printf 'let used = 1\nlet unused = 3\n' >"$repo/lib/helper.ml"
+  affected HEAD
+  ordered 'a change to one definition ranks first only what names it' \
+    @t2/runtest-scan @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
+  printf 'let used = 2\nlet unused = 2\n' >"$repo/lib/helper.ml"
+  affected HEAD
+  ordered '... and t_core names `used`' \
+    @t1/runtest-t_core @t2/runtest-scan @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
+  mutant=$repo/tools/affected-mutant.sh
+  if FROM='return 0 if !$defs || grep { $tok->{$_} } keys %$defs;' TO='return 0;' \
+      perl -0pe '$n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
+      "$repo/tools/affected-tests.sh" >"$mutant"; then
+    printf 'let used = 1\nlet unused = 3\n' >"$repo/lib/helper.ml"
+    rc=0
+    (cd "$TMP" && bash "$mutant" --referenced-only HEAD) >"$out" 2>"$err" || rc=$?
+    if [ "$rc" = 0 ] && grep -qx @t2/runtest-gen-v1 "$out"; then
+      report 0 'negative control: the changed definitions are what rank a test naming only the module'
+    else report 1 'negative control: the changed definitions are what rank a test naming only the module' "exit $rc; $(cat "$out")"; fi
+  else
+    report 1 'negative control: the changed definitions are what rank a test naming only the module' \
+      "the mutation anchor does not occur exactly once"
+  fi
+  rm -f "$mutant"
+  git_q checkout -q -- lib/helper.ml || exit 2
+fi
+
 if harness_leg 'dune stanza scope'; then
   # With both sides of a dune file at hand (the git forms), its edit reaches only
   # the stanzas whose text changed (gh-ocannl-1431); --files keeps the whole
@@ -624,7 +676,8 @@ control() { # LABEL FROM TO ARGS... -- WANT...
   rc=0
   (cd "$TMP" && bash "$mutant" "${args[@]}") >"$out" 2>"$err" || rc=$?
   printf '%s\n' "$@" | sort >"$TMP/want"
-  if [ "$rc" = 0 ] && cmp -s "$TMP/want" "$out"; then
+  sort "$out" >"$TMP/got"
+  if [ "$rc" = 0 ] && cmp -s "$TMP/want" "$TMP/got"; then
     report 1 "negative control: $label" "the mutant printed the shipping list"
   else
     report 0 "negative control: $label"
@@ -673,12 +726,19 @@ if harness_leg 'negative controls'; then
     'if ($where eq "In_build_dir" and my @o = compiled_owners("$path/")) { $r{$_} = 1 for @o; next }' '' \
     --files t4/inert.ml -- @t4/runtest-objs
   control 'the alias fixpoint is what lists an alias needing a listed one' \
-    'next unless grep { my $t = $_; grep { $out{$_} && !$guess{$_} } keys %{$adeps{$t} // {}} } @{$a->{own}};' 'next;' \
+    'next unless $best > $now;' 'next;' \
     --files t4/gate.cfg -- @t4/runtest-gated @t4/runtest-t_gate $opaque_all
   # shellcheck disable=SC2086
   control 'an alias listed only blind is what keeps one needing it off the list' \
-    'grep { $out{$_} && !$guess{$_} }' 'grep { $out{$_} }' \
+    'my %rank = (main => 2, link => 1);' 'my %rank = (main => 2, link => 1, guess => 2);' \
     --files docs/other.md -- $opaque_all
+  # shellcheck disable=SC2086
+  control 'the ranking is what leaves a link-only alias off --referenced-only' \
+    'return 0 unless $rank_links;' 'return 0;' \
+    --referenced-only --files lib/helper.ml -- @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen
+  control 'a re-export is what ranks a test naming only the re-exported name' \
+    '$as{$2}{$1} = 1 if $1 ne $2' '1' \
+    --referenced-only --files lib/helper.ml -- @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen
   # shellcheck disable=SC2086
   control 'reading an alias rule'"'"'s own (deps) is what reaches it' \
     '$reads{$k} = { %{$acc->{files}} };' '$reads{$k} = {};' \

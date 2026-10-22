@@ -2583,6 +2583,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     `@arrayjit/test/runtest-test_vectorized_codegen`, `Schedule` (staging#1040)
     `@test/training/runtest-fused_classifier`. A narrower "tests that name the module" cut is no
     substitute: `test_vectorized_codegen.ml` never names `Register_tile`.
+  - So that cut ranks, never drops (gh-ocannl-1431): an alias reached only by linking, none of
+    whose owners' own code (its sources, a project ppx's, the private libraries' modules it names)
+    names the changed module or a re-export of it -- nor, when git's hunks place every changed line
+    in top-level definitions, one of those definitions -- is LINK-ONLY: printed last, named on
+    stderr, left off by `--referenced-only`. On `low_level.ml` (598 reached): the whole module 322
+    referenced; one function changed, 19 (`optimize_proc`, which every compile runs and no test
+    names: the reason the default keeps them) to 220 (`input_and_output_nodes`). Iterate on the
+    referenced tier, run the whole list before pushing.
   - A test or note edit gets a short, exact list: `test/operations/cost_model_template.ml` reaches
     its own alias plus the scans that read it (17 aliases in all);
     `docs/agent-notes/build-and-test.md` only the 11 scans that read it.

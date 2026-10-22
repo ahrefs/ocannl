@@ -5,9 +5,9 @@
 # and then runs this script. It prints aliases and runs none of them.
 #
 # Usage:
-#   tools/test-run.sh affected --since BASE [-- PATHSPEC...]
-#   tools/test-run.sh affected REV | REV..REV | REV...REV [-- PATHSPEC...]
-#   tools/test-run.sh affected --files PATH...
+#   tools/test-run.sh affected [--referenced-only] --since BASE [-- PATHSPEC...]
+#   tools/test-run.sh affected [--referenced-only] REV | REV..REV | REV...REV [-- PATHSPEC...]
+#   tools/test-run.sh affected [--referenced-only] --files PATH...
 #
 # The changed paths come from `git diff --name-only` with the given revision
 # argument, in git's own forms: one REV compares it with the working tree, so
@@ -19,10 +19,12 @@
 # There is no default base: remote names are not the contract here.
 # `--files` names repository-relative paths directly, without git.
 #
-# stdout: one alias per line, `@DIR/FAMILY-NAME[-VARIANT]`, sorted, ready for
-# `tools/test-run.sh run build ...` or `tools/test-run.sh fresh ...`. stderr:
-# what each changed path reached, a per-directory count, and what this script
-# could not place. The graph is always the CURRENT worktree's, whatever
+# stdout: one alias per line, `@DIR/FAMILY-NAME[-VARIANT]`, ready for
+# `tools/test-run.sh run build ...` or `tools/test-run.sh fresh ...`: sorted,
+# then the link-only ones, sorted (the ranking is described below);
+# `--referenced-only` leaves those off. stderr: what each changed path reached,
+# a per-directory count, the link-only aliases, and what this script could
+# not place. The graph is always the CURRENT worktree's, whatever
 # revisions were named.
 #
 # What dune is asked (each answer is checked against the forms listed below,
@@ -149,7 +151,11 @@ command -v perl >/dev/null 2>&1 || die "perl not found"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/affected.XXXXXX") || die "cannot create a temporary directory"
 trap 'rm -rf "${tmp:?}"' EXIT
 
-usage="usage: affected --since BASE | REV | REV..REV | REV...REV [-- PATHSPEC...] | affected --files PATH..."
+usage="usage: affected [--referenced-only] --since BASE | REV | REV..REV | REV...REV [-- PATHSPEC...] | affected [--referenced-only] --files PATH..."
+# Link-only aliases (see the Perl below) are printed last, and named on stderr;
+# --referenced-only leaves them off stdout.
+referenced_only=0
+if [ "${1:-}" = --referenced-only ]; then referenced_only=1; shift; fi
 mode=git
 revs=()
 paths=()
@@ -208,9 +214,10 @@ else
     *) git ls-files --others --exclude-standard -- ${paths[@]+"${paths[@]}"} >>"$tmp/changed" ||
          die "git ls-files failed" ;;
   esac
-  # Both sides of each changed `dune` file, so that its edit reaches only the
-  # stanzas whose text changed: OLD from the revision compared with, NEW from
-  # the right-hand revision of a range, else the worktree (read in place).
+  # Both sides of each changed `dune`, `.ml` and `.mli` file: a dune edit then
+  # reaches only the stanzas whose text changed, and a module edit is ranked by
+  # the definitions it touched (the hunks, below). OLD is the revision compared
+  # with; NEW the right-hand revision of a range, else the worktree.
   old_rev= new_rev=
   case ${revs[0]} in
     *...*) new_rev=${revs[0]#*...}; old_rev=$(git merge-base "${revs[0]%%...*}" "${new_rev:-HEAD}") ||
@@ -219,16 +226,18 @@ else
     *) old_rev=${revs[0]} ;;
   esac
   while IFS= read -r f; do
-    case $f in dune | */dune) ;; *) continue ;; esac
-    mkdir -p "$tmp/dune-old/$(dirname -- "$f")" "$tmp/dune-new/$(dirname -- "$f")" || die "cannot create $tmp/dune-old"
-    # A file the old side does not have is new: it gets no stanza scoping.
-    git show "$old_rev:$f" >"$tmp/dune-old/$f" 2>/dev/null || rm -f "$tmp/dune-old/$f"
+    case $f in dune | */dune | *.ml | *.mli) ;; *) continue ;; esac
+    mkdir -p "$tmp/old/$(dirname -- "$f")" "$tmp/new/$(dirname -- "$f")" || die "cannot create $tmp/old"
+    # A file the old side does not have is new: it gets no scoping.
+    git show "$old_rev:$f" >"$tmp/old/$f" 2>/dev/null || rm -f "$tmp/old/$f"
     if [ -n "$new_rev" ]; then
-      git show "$new_rev:$f" >"$tmp/dune-new/$f" 2>/dev/null || rm -f "$tmp/dune-new/$f"
+      git show "$new_rev:$f" >"$tmp/new/$f" 2>/dev/null || rm -f "$tmp/new/$f"
     elif [ -f "$f" ]; then
-      cp -- "$f" "$tmp/dune-new/$f" || die "cannot copy $f"
+      cp -- "$f" "$tmp/new/$f" || die "cannot copy $f"
     fi
   done <"$tmp/changed"
+  git diff -U0 --no-color --no-renames --no-ext-diff "${revs[0]}" -- '*.ml' '*.mli' >"$tmp/ml-diff" ||
+    die "git diff ${revs[0]} failed"
 fi
 
 dune describe workspace --root . --with-pps >"$tmp/workspace" 2>"$tmp/err" ||
@@ -257,9 +266,9 @@ for what in aliases targets; do
 $(cat "$tmp/$what")"
 done
 
-perl - "$tmp" <<'PERL'
+perl - "$tmp" "$referenced_only" <<'PERL'
 use strict; use warnings;
-my ($tmp) = @ARGV;
+my ($tmp, $referenced_only) = @ARGV;
 # While a dune answer is being read, a refusal keeps a copy of it (see keep_raw).
 our ($raw_text, $raw_what);
 sub fail {
@@ -304,6 +313,7 @@ sub items { my $v = $_[0]; defined $v && ref $v ? @$v : () }
 sub atom { my ($v, $what) = @_; defined $v && !ref $v or fail("expected an atom in $what"); $v }
 sub pair { my ($e, $what) = @_; ref $e && @$e == 2 && !ref $e->[0] or fail("unexpected entry in $what"); @$e }
 sub dir_of { $_[0] =~ m{^(.*)/([^/]+)$} ? ($1, $2) : (".", $_[0]) }
+sub nsort { sort { $a <=> $b } @_ }   # numeric; outside any lexical $a or $b
 
 # Libraries and executables: ((root R) (build_context C) (KIND FIELDS)...).
 my $ws = parse_sexp(slurp("$tmp/workspace"), "dune describe workspace");
@@ -353,6 +363,7 @@ for my $e (@{$ws->[0]}) {
         # A module file with no source of that name is generated (ocamllex,
         # menhir, a (select) copy, a rule's output): its rule says from what.
         push @{$generated{$rel}}, $i unless -e $rel;
+        push @{$st[$i]{mods}{$name}}, $rel if -e $rel;   # its sources, for the link-only ranking
         my $k = "$d\0$name";
         push @{$by_modkey{$k}}, $i unless grep { $_ == $i } @{$by_modkey{$k} // []};
       }
@@ -967,7 +978,7 @@ for my $o (grep { /\.o$/ } @stub_targets) {
 my %dune_alias;   # per-test aliases a changed stanza declares
 sub dune_side {
   my ($which, $p) = @_;
-  my $f = "$tmp/dune-$which/$p";
+  my $f = "$tmp/$which/$p";
   return undef unless -f $f;
   my $items = eval { parse_dune(slurp($f), "the $which side of $p") } or return undef;
   return [dune_stanzas((dir_of($p))[0], $items)];
@@ -1040,6 +1051,9 @@ sub dune_scope {
 
 # Changed paths -> stanzas, and the aliases whose own targets read them.
 my (%hit, %dune_dirs, %data_dirs, %read_by, @unmapped, @unread);
+# How a stanza was hit: by changed modules it owns (NAME => 1), or as a whole
+# (a generated module, a stub, a changed stanza, a tests directory's modules).
+my (%mod_hit, %whole_hit, %mod_paths);
 my $any_data = 0;
 sub label { my $s = $st[$_[0]]; "$s->{kind} @{$s->{names}} ($s->{dir})" }
 # A glob entry is [DIR, matcher over a file name, recursive?]; a recursive one
@@ -1055,18 +1069,18 @@ for my $p (@changed) {
     for my $t (@{$a->{own}}) { if (reads($t, $p, $d, $b)) { $read_by{$p}{$a->{name}} = 1; last } }
   }
   my $n_read = keys %{$read_by{$p} // {}};
-  my (@ix, @parts, $unmapped);
+  my (@ix, @parts, $unmapped, $by_module);
   my @gen = grep { reads($_, $p, $d, $b) } sort keys %generated;
   if (@gen) {
     my %seen_g;
     my @g = grep { !$seen_g{$_}++ } map { @{$generated{$_}} } @gen;
-    $hit{$_} = 1 for @g;
+    $hit{$_} = $whole_hit{$_} = 1 for @g;
     push @parts, "the rule generating " . join(", ", @gen) . " reads it: " . join(", ", map { label($_) } @g);
   }
   for my $o (grep { /\.o$/ && reads($_, $p, $d, $b) } @stub_targets) {
     my @libs = sort keys %{$obj_libs{$o} // {}};
     my @o = obj_owners($o);
-    $hit{$_} = 1 for @o;
+    $hit{$_} = $whole_hit{$_} = 1 for @o;
     push @parts, "compiled into $o, " . (@libs ? "bundled by " . join(", ", map { label($_) } @libs)
       : "which no stub archive bundles, so every executable and test stanza of its directory (" . scalar(@o) . ")");
   }
@@ -1076,14 +1090,14 @@ for my $p (@changed) {
     my %al_of = map { $_->{name} => $_ } @al;
     my @named = grep { $al_of{$_} } sort keys %{$scoped->{aliases}};
     $dune_alias{$_} = 1 for @named;
-    @ix = sort { $a <=> $b } keys %{$scoped->{stanzas}};
+    @ix = nsort(keys %{$scoped->{stanzas}});
     my @made = sort keys %{$scoped->{targets}};
     # A file a changed rule makes: an alias whose own targets' rules read it, or
     # are it, and a stanza whose generated module it is.
     my $n_made = 0;
     for my $m (@made) {
       my ($md, $mb) = dir_of($m);
-      $hit{$_} = 1 for @{$generated{$m} // []};
+      $hit{$_} = $whole_hit{$_} = 1 for @{$generated{$m} // []};
       for my $a (@al) {
         next unless grep { $_ eq $m || reads($_, $m, $md, $mb) } @{$a->{own}};
         $read_by{$p}{$a->{name}}++ or $n_made++;
@@ -1114,6 +1128,7 @@ for my $p (@changed) {
     my $mod = ucfirst $1;
     my $how = "module $mod of";
     @ix = @{$by_modkey{"$d\0$mod"} // []};
+    $by_module = $mod if @ix;
     unless (@ix) {
       my @tests = grep { $st[$_]{kind} eq "tests" && $st[$_]{dir} eq $d } 0 .. $#st;
       my @named = grep { $st[$_]{units}{lcfirst $mod} } @tests;
@@ -1131,6 +1146,7 @@ for my $p (@changed) {
     push @parts, "$how " . (@ix > 3 ? scalar(@ix) . " stanzas" : join(", ", map { label($_) } @ix)) if @ix;
   }
   $hit{$_} = 1 for @ix;
+  if (defined $by_module) { $mod_hit{$_}{$by_module} = 1 for @ix; $mod_paths{$by_module}{$p} = 1 } else { $whole_hit{$_} = 1 for @ix }
   push @parts, "read by the rules of $n_read alias(es)" if $n_read;
   print STDERR "affected: $p: " . join("; ", @parts) . "\n" if @parts;
   # Any path but a module source a stanza owns may be an input of an alias
@@ -1152,6 +1168,220 @@ for (my $grew = 1; $grew;) {
   }
 }
 
+# The link-only ranking (gh-ocannl-1431). Link reach is sound and blunt: an
+# edit to one module of arrayjit reaches every test linking arrayjit, ~600
+# aliases. A reached alias is ranked "link-only" when no reached owner of it
+# links a library hit as a whole (by a stub, a generated module, a stanza
+# edit: no name says what changed there), and none names the changed part of
+# a changed module in its own code. Its own code: its stanza's sources,
+# the sources of a project ppx rewriter it is preprocessed with, and the
+# modules of the private (unpublished) libraries it links that that code names,
+# to a fixpoint. Names the changed part: mentions the module, or a name
+# re-exporting it (`module A = ...M` with A not M, or an `include ...M`), and,
+# when the git hunks place every changed line in a top-level definition, one of
+# those definitions too (see %path_defs). Mentions are tokens, comments and
+# strings included, so a name only ever errs towards "names it". What this does
+# NOT see: what the owner reaches through other library code (every compile
+# goes through Low_level.optimize_proc, which no test names; gh-ocannl-1235's
+# Register_tile miss was of this kind). So link-only aliases stay printed, LAST,
+# and named on stderr; `--referenced-only` leaves them off stdout.
+my %tok_cache;
+sub tokens_of {
+  my ($f) = @_;
+  return $tok_cache{$f} //= do {
+    my %t;
+    if (open my $fh, "<", $f) { local $/; my $s = <$fh> // ""; $t{$1} = 1 while $s =~ /\b([A-Za-z_][A-Za-z0-9_']*)/g }
+    \%t;
+  };
+}
+sub dnames { my ($s) = @_; map { ref $_ ? () : $_ } map { @{dfield($s->{x}, $_) // []} } qw(name names public_name public_names) }
+sub static_of {   # the dune stanza an @st entry was read from, or undef
+  my ($i) = @_;
+  my $s = $st[$i];
+  return $s->{static} if exists $s->{static};
+  my %n = map { $_ => 1 } @{$s->{names}};
+  my $lib = $s->{kind} eq "library";
+  my @m = grep {
+    $_->{dir} eq $s->{dir} && $_->{kind} =~ /^(?:library|executables?|tests?)$/
+      && ($_->{kind} eq "library") == $lib && grep { $n{$_} } dnames($_)
+  } @dstanzas;
+  return $s->{static} = @m == 1 ? $m[0] : undef;
+}
+sub stanza_sources {   # an @st entry's source files, or undef when they are not known
+  my ($i) = @_;
+  my $s = $st[$i];
+  return [map { @$_ } values %{$s->{mods}}] if $s->{mods};
+  my $ds = static_of($i) // return undef;
+  my $mods = dfield($ds->{x}, "modules");
+  my @names;
+  if ($mods) {
+    return undef if grep { ref $_ || !/^[A-Za-z_][A-Za-z0-9_']*$/ } @$mods;   # :standard, \, (:include ...)
+    @names = map { lcfirst } @$mods;
+  } else {   # every module of the directory no other stanza there claims
+    my %claimed;
+    for my $o (grep { $_ != $ds && $_->{dir} eq $s->{dir} } @dstanzas) {
+      my $om = dfield($o->{x}, "modules") // next;
+      $claimed{lcfirst $_} = 1 for grep { !ref } @$om;
+    }
+    opendir my $dh, $s->{dir} or return undef;
+    @names = grep { !$claimed{$_} } map { /^([A-Za-z_][A-Za-z0-9_']*)\.mli?$/ ? lcfirst $1 : () } readdir $dh;
+  }
+  return [grep { -f } map { my $n = $_; map { in_dir($s->{dir}, "$n.$_") } "ml", "mli" } @names];
+}
+sub is_private { my $ds = static_of($_[0]); $ds && !grep { defined dfield($ds->{x}, $_) } qw(public_name public_names) }
+sub own_tokens {   # the names an owner's own code mentions, or undef when its code is not known
+  my ($i) = @_;
+  return $st[$i]{own_tokens} if exists $st[$i]{own_tokens};
+  my $files = stanza_sources($i);
+  my %tok;
+  if ($files) {
+    my @more = @$files;
+    if (my $ds = static_of($i)) {
+      my $pp = dfield($ds->{x}, "preprocess");
+      if ($pp && @$pp) {
+        # (pps NAME... -- flags): the project rewriters' own sources count.
+        if (ref $pp->[0] && ($pp->[0][0] // "") eq "pps" && @$pp == 1) {
+          for my $n (map { ref $_ ? () : $_ } @{$pp->[0]}[1 .. $#{$pp->[0]}]) {
+            last if $n eq "--";
+            next unless defined $lib_by_name{$n};
+            push @more, @{stanza_sources($lib_by_name{$n}) // ($files = undef, [])};
+          }
+        } elsif (!(!ref $pp->[0] && $pp->[0] eq "no_preprocessing")) { $files = undef }   # per_module, action: not read
+      }
+    }
+    if ($files) {
+      $tok{$_} = 1 for map { keys %{tokens_of($_)} } @more;
+      my (%priv, %seen);
+      my @q = @{$st[$i]{to}};
+      while (defined(my $j = shift @q)) {
+        # A changed library is not the owner's own code, even when private: its modules
+        # name their own definitions.
+        next if $seen{$j}++ || $st[$j]{kind} ne "library" || !is_private($j) || $mod_hit{$j};
+        $priv{$j} = 1;
+        push @q, @{$st[$j]{to}};
+      }
+      my %done;
+      for (my $grew = 1; $grew;) {
+        $grew = 0;
+        for my $j (sort keys %priv) {
+          for my $m (sort keys %{$st[$j]{mods} // {}}) {
+            next if $done{"$j\0$m"} || !$tok{$m};
+            $done{"$j\0$m"} = $grew = 1;
+            $tok{$_} = 1 for map { keys %{tokens_of($_)} } @{$st[$j]{mods}{$m}};
+          }
+        }
+      }
+    }
+  }
+  return $st[$i]{own_tokens} = $files ? \%tok : undef;
+}
+# Which top-level definitions a changed `.ml`/`.mli` touched, from the git
+# hunks and both sides of the file: each changed line belongs to the nearest
+# definition starting at column 0 above it (`let`, `and`, `type`, `val`,
+# `module`, `external`, `exception`, `class`), on the side the line is on. A
+# line under `open`, `include`, a `let () =`/`let _ =` effect or a pattern
+# binding, or above every definition, touches the module as a whole; so does
+# any file without hunks (`--files`, a new file).
+my %path_defs;   # path -> {NAME => 1}, or undef: the whole module
+sub enclosing_def {
+  my ($lines, $n) = @_;   # 1-based line number
+  for (my $k = $n; $k >= 1; $k--) {
+    my $l = $lines->[$k - 1] // next;
+    next if $l =~ /^\s/ || $l eq "" || $l =~ /^(?:\(\*|\[\@|\)|;;|\||end\b|\})/;
+    return $1 if $l =~ /^(?:let|and)\s+(?:rec\s+)?(?:%\w+\s+)?([a-z_][\w']*)\b(?!\s*,)/ && $1 ne "_";
+    return $1 if $l =~ /^(?:let|and)\s+(?:rec\s+)?\(\s*([^\s()]+)\s*\)/;   # an operator
+    return $1 if $l =~ /^(?:type|and)\s+(?:nonrec\s+)?(?:(?:'\w+|\([^)]*\)|_)\s+)?([a-z_][\w']*)/;
+    return $1 if $l =~ /^(?:val|external)\s+([a-z_][\w']*)/ || $l =~ /^val\s+\(\s*([^\s()]+)\s*\)/;
+    return $1 if $l =~ /^(?:module|class|exception)\s+(?:rec\s+|type\s+)?([A-Za-z_][\w']*)/;
+    return undef;   # open, include, let () =, a pattern: the whole module
+  }
+  return undef;
+}
+if (-f "$tmp/ml-diff") {
+  my (%hunks, $cur, $gone);
+  for (split /\n/, slurp("$tmp/ml-diff")) {
+    if (/^diff /) { $cur = $gone = undef; next }
+    if (/^--- (?:a\/(.*)|\/dev\/null)$/) { $gone = $1; next }
+    if (/^\+\+\+ (?:b\/(.*)|\/dev\/null)$/) { $cur = $1 // $gone; next }
+    if (/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/ && defined $cur) {
+      push @{$hunks{$cur}}, [old => $1, $2 // 1], [new => $3, $4 // 1];
+    }
+  }
+  for my $p (keys %hunks) {
+    my %defs;
+    my %side = map { my $f = "$tmp/$_/$p"; ($_ => [-f $f ? split(/\n/, slurp($f), -1) : ()]) } qw(old new);
+    for my $h (@{$hunks{$p}}) {
+      my ($which, $start, $count) = @$h;
+      next unless $count;
+      @{$side{$which}} or do { %defs = ("\0whole" => 1); last };
+      for my $n ($start .. $start + $count - 1) {
+        my $name = enclosing_def($side{$which}, $n);
+        if (!defined $name) { %defs = (); $defs{"\0whole"} = 1; last }
+        $defs{$name} = 1;
+      }
+      last if $defs{"\0whole"};
+    }
+    $path_defs{$p} = %defs && !$defs{"\0whole"} ? \%defs : undef;
+  }
+}
+# The names a changed module answers to: its own, and those re-exporting it.
+# A stanza reached from one hit as a whole is never link-only: no name says
+# what changed there.
+my %reached_whole = %whole_hit;
+for (my $grew = 1; $grew;) {
+  $grew = 0;
+  for my $i (0 .. $#st) {
+    next if $reached_whole{$i} || !grep { $reached_whole{$_} } @{$st[$i]{to}};
+    $reached_whole{$i} = $grew = 1;
+  }
+}
+my $rank_links = 1;
+my %changed_names;   # NAME -> {changed module it answers for}
+my %mod_defs;        # changed module -> {definition => 1}, or undef: the whole module
+if ($rank_links) {
+  for my $m (map { keys %{$mod_hit{$_}} } grep { $st[$_]{kind} eq "library" } keys %mod_hit) {
+    $changed_names{$m}{$m} = 1;
+    my @p = keys %{$mod_paths{$m}};
+    $mod_defs{$m} = (grep { !$path_defs{$_} } @p) ? undef : { map { %{$path_defs{$_}} } @p };
+  }
+  $rank_links = 0 unless %changed_names;
+}
+if ($rank_links) {
+  my %as;   # M -> names under which some library module re-exports M
+  for my $j (grep { $st[$_]{kind} eq "library" } 0 .. $#st) {
+    for my $x (keys %{$st[$j]{mods} // {}}) {
+      for my $f (@{$st[$j]{mods}{$x}}) {
+        open my $fh, "<", $f or next;
+        my $s = do { local $/; <$fh> // "" };
+        while ($s =~ /\bmodule\s+([A-Z][\w']*)\s*=\s*(?:[A-Z][\w']*\.)*([A-Z][\w']*)/g) { $as{$2}{$1} = 1 if $1 ne $2 }
+        while ($s =~ /\binclude\s+(?:[A-Z][\w']*\.)*([A-Z][\w']*)/g) { $as{$1}{$x} = 1 if $1 ne $x }
+      }
+    }
+  }
+  my @q = keys %changed_names;
+  while (defined(my $m = shift @q)) {
+    for my $n (keys %{$as{$m} // {}}) {
+      my $had = keys %{$changed_names{$n} // {}};
+      $changed_names{$n}{$_} = 1 for keys %{$changed_names{$m}};
+      push @q, $n if keys %{$changed_names{$n}} > $had;
+    }
+  }
+}
+sub link_only {   # reached owners -> true when none of them names a changed module's changed part
+  return 0 unless $rank_links;
+  for my $o (@_) {
+    return 0 if $hit{$o} || $reached_whole{$o};
+    my $tok = own_tokens($o) // return 0;
+    for my $n (grep { $tok->{$_} } keys %changed_names) {
+      for my $m (keys %{$changed_names{$n}}) {
+        my $defs = $mod_defs{$m};
+        return 0 if !$defs || grep { $tok->{$_} } keys %$defs;
+      }
+    }
+  }
+  return 1;
+}
+
 # What an alias's own action reads, dune does not dump. A golden alias's
 # action is a diff of two of its own targets (`NAME.expected` and the output
 # beside it), whose rules are read above; any other alias's action is opaque
@@ -1165,8 +1395,12 @@ for (my $grew = 1; $grew;) {
 # reached stanza included, since not even its executable is known.
 my %touched = map { $st[$_]{dir} => 1 } keys %reached;
 $touched{(dir_of($_))[0]} = 1 for @changed;
-my (%out, %guess, %unattributed, %opaque_hit, %total, %listed, %aliased);
+my (%out, %unattributed, %opaque_hit, %total, %listed, %linked, %aliased);
 my %read_any = map { %{$read_by{$_}} } keys %read_by;
+# The tier of each listed alias: "main"; "link", reached only by linking a
+# library a changed module belongs to, never naming that module (see
+# link_only); "guess", listed only because its action is unknown.
+my %tier;
 for my $a (@al) {
   my %owners = (%{$a->{owners}}, map { %{$runs{$_} // {}} } @{$a->{own}});
   $aliased{$_} = 1 for keys %owners;
@@ -1177,33 +1411,48 @@ for my $a (@al) {
   $unattributed{$a->{name}} = 1 if $unknown && $touched{$a->{dir}};
   my $opaque_listed = $opaque && ($any_data || $data_dirs{$a->{dir}});
   $opaque_hit{$a->{dir}}++ if $opaque_listed;
-  my $concrete = $dune_dirs{$a->{dir}} || $dune_alias{$a->{name}} || $read_any{$a->{name}} || grep({ $reached{$_} } keys %owners);
-  if ($concrete || $unattributed{$a->{name}} || $opaque_listed) {
-    $out{$a->{name}} = 1;
-    $guess{$a->{name}} = 1 unless $concrete;
-    $listed{$a->{dir}}++;
-  }
+  my @by_owner = grep { $reached{$_} } nsort(keys %owners);
+  if ($dune_dirs{$a->{dir}} || $dune_alias{$a->{name}} || $read_any{$a->{name}}) { $tier{$a->{name}} = "main" }
+  elsif (@by_owner) { $tier{$a->{name}} = link_only(@by_owner) ? "link" : "main" }
+  elsif ($unattributed{$a->{name}} || $opaque_listed) { $tier{$a->{name}} = "guess" }
 }
 # An alias whose own rules need a listed alias (an ambient gate such as
-# `runtest-env_spelling_gate`) is listed too, to a fixpoint -- unless that one
-# is listed only because its undumped action might read a changed path: the
-# needing alias reads nothing from it (an alias makes no file), so what that
-# action reads changes only whether it, the needed one, passes.
-my $by_alias = 0;
+# `runtest-env_spelling_gate`) is listed too, in that alias's tier, to a
+# fixpoint -- unless that one is listed only because its undumped action might
+# read a changed path: the needing alias reads nothing from it (an alias makes
+# no file), so what that action reads changes only whether it, the needed one,
+# passes.
+my %rank = (main => 2, link => 1);
+my %by_alias;
 for (my $grew = 1; $grew;) {
   $grew = 0;
-  for my $a (grep { !$out{$_->{name}} } @al) {
-    next unless grep { my $t = $_; grep { $out{$_} && !$guess{$_} } keys %{$adeps{$t} // {}} } @{$a->{own}};
-    $out{$a->{name}} = 1;
-    $listed{$a->{dir}}++;
-    $by_alias++;
+  for my $a (@al) {
+    my $now = $rank{$tier{$a->{name}} // ""} // 0;
+    next if $now == 2;
+    my $best = 0;
+    for my $t (@{$a->{own}}) {
+      for my $n (keys %{$adeps{$t} // {}}) { my $r = $rank{$tier{$n} // ""} // 0; $best = $r if $r > $best }
+    }
+    next unless $best > $now;
+    $tier{$a->{name}} = $best == 2 ? "main" : "link";
+    $by_alias{$a->{name}} = 1;
     $grew = 1;
   }
 }
+for my $n (keys %tier) {
+  my ($d) = $n =~ m{^\@(?:(.*)/)?[^/]+$};
+  if ($tier{$n} eq "link") { $linked{$d // "."}++; next }
+  $out{$n} = 1;
+  $listed{$d // "."}++;
+}
+my @link_only = sort grep { $tier{$_} eq "link" } keys %tier;
 
 print "$_\n" for sort keys %out;
-printf STDERR "affected: %d alias(es) listed because their rules need a listed alias\n", $by_alias if $by_alias;
-printf STDERR "affected: %s: %d of its %d per-test aliases\n", $_, $listed{$_}, $total{$_} for sort keys %listed;
+print "$_\n" for $referenced_only ? () : @link_only;
+my $n_by_alias = grep { $out{$_} } keys %by_alias;
+printf STDERR "affected: %d alias(es) listed because their rules need a listed alias\n", $n_by_alias if $n_by_alias;
+printf STDERR "affected: %s: %d of its %d per-test aliases%s\n", $_, $listed{$_} // 0, $total{$_},
+  ($linked{$_} ? " (and $linked{$_} link-only)" : "") for sort keys %{{ %listed, %linked }};
 my %bare;
 $bare{$st[$_]{dir}}++ for grep { !$aliased{$_} && $st[$_]{kind} ne "library" } keys %reached;
 printf STDERR "affected: %s: %d reached executable stanza(s) no per-test alias runs\n", $_, $bare{$_} for sort keys %bare;
@@ -1216,7 +1465,19 @@ print STDERR "affected: listed as unattributed: $_ (no stanza of its directory h
 printf STDERR "affected: %s: %d per-test alias(es) whose actions dune does not dump, listed for the changed paths there\n", $_, $opaque_hit{$_} for sort keys %opaque_hit;
 print STDERR "affected: unread: $_ (no stanza owns it and no rule dune shows reads it; only aliases whose actions dune does not dump are listed for it)\n" for @unread;
 print STDERR "affected: UNMAPPED: $_ (no stanza of this build owns this module)\n" for @unmapped;
-printf STDERR "affected: %d alias(es) from %d changed path(s)%s\n", scalar(keys %out), scalar(@changed),
+if (@link_only) {
+  my $what = join("; ", map { $_ . ($mod_defs{$_} ? " (" . join(", ", sort keys %{$mod_defs{$_}}) . ")" : "") }
+                        sort keys %mod_defs);
+  printf STDERR "affected: %d LINK-ONLY alias(es), %s: each links the library of a changed module, %s, but no code of"
+    . " its own names the changed part, so it is reached only through other library code. A change in what that"
+    . " code does for its callers still breaks them (gh-ocannl-1235: Register_tile); run them before pushing such a"
+    . " change. %s\n",
+    scalar(@link_only), $referenced_only ? "NOT printed (--referenced-only)" : "printed LAST, after the others",
+    $what, $referenced_only ? "They are:" : "--referenced-only leaves them off. They are:";
+  print STDERR "affected: link-only: $_\n" for @link_only;
+}
+printf STDERR "affected: %d alias(es) from %d changed path(s)%s%s\n", scalar(keys %out) + ($referenced_only ? 0 : @link_only),
+  scalar(@changed), (@link_only ? sprintf(", %d of them link-only%s", scalar(@link_only), $referenced_only ? " and left off" : "") : ""),
   @unmapped ? "; INCOMPLETE, see UNMAPPED above" : "";
 exit(@unmapped ? 3 : 0);
 PERL
