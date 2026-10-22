@@ -2585,10 +2585,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     whose owners' own code (its sources, a project ppx's, the private libraries' modules it names)
     names the changed module or a re-export of it -- nor, when git's hunks place every changed line
     in top-level definitions, one of those definitions -- is LINK-ONLY: printed last, named on
-    stderr, left off by `--referenced-only`. On `low_level.ml` (592 reached): the whole module 349
-    referenced; one function changed, 37 (`optimize_proc`, which every compile runs and no test
-    names: the reason the default keeps them) to 248 (`simplify_llc`, which `Ll_test` calls).
-    Iterate on the referenced tier, run the whole list before pushing.
+    stderr, left off by `--referenced-only`. On `low_level.ml` (592 reached): the whole module 340
+    referenced; one function changed, 27 (`optimize_proc`, which every compile runs and no test
+    names: the reason the default keeps them) to 239 (`simplify_llc`, which `Ll_test` calls).
+    The contract: LINK-ONLY is a heuristic ranking, and `--referenced-only` a deliberate trade
+    (faster, with a possible miss) for iterating mid-change, never for the pre-push run, which
+    takes the full default list.
   - A test or note edit gets a short, exact list: `test/operations/cost_model_template.ml` reaches
     its own alias plus the scans that read it (17 aliases in all);
     `docs/agent-notes/build-and-test.md` the 11 scans that read it plus the ~68 aliases listed blind

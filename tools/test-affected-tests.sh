@@ -74,7 +74,7 @@ cat >"$repo/t1/dune" <<'DUNE'
 (test (name t_mid) (modules t_mid) (libraries mid))
 ; The same executable under an unknown action: blind, so never ranked link-only.
 (rule (alias runtest-t_mid-blind) (deps (package fx)) (action (run %{exe:t_mid.exe})))
-(test (name t_leaf) (modules t_leaf) (libraries leaf))
+(test (name t_leaf) (modules t_leaf) (libraries leaf) (flags (:standard -open Leaf)))
 (tests (names ta tb) (modules ta tb shared) (libraries leaf))
 (library (name tlib) (modules m_one m_two) (preprocess (pps myppx)))
 (rule (alias runtest-m_one) (action (progn)))
@@ -252,6 +252,9 @@ if harness_leg 'sibling library'; then
   affected --files lib/leaf.ml
   expect 'a sibling library reaches only its own users (and the scan reading it)' 0 \
     @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb @t2/runtest-scan
+  # t_leaf is compiled with -open Leaf, so its code can use Leaf's names bare; ta and tb name nothing.
+  affected --referenced-only --files lib/leaf.ml
+  expect 'a stanza compiled with -open is never ranked link-only' 0 @t1/runtest-t_leaf @t2/runtest-scan
 fi
 
 if harness_leg 'select choice'; then
@@ -274,6 +277,9 @@ if harness_leg 'ppx rewriter'; then
   affected --files lib/myppx.ml
   expect 'a ppx rewriter reaches a library it preprocesses (an edge dune describe workspace omits)' 0 \
     @t1/runtest-m_one @t2/runtest-scan
+  # tlib's code never names Myppx, but the rewriter that changed rewrites it: never link-only.
+  affected --referenced-only --files lib/myppx.ml
+  expect 'code a changed rewriter preprocesses is never ranked link-only' 0 @t1/runtest-m_one @t2/runtest-scan
 fi
 
 if harness_leg 'generated module'; then
@@ -515,6 +521,14 @@ if harness_leg 'link-only'; then
   ordered 'a changed type definition counts as the whole module (its constructors are what users name)' \
     @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh @t1/runtest-t_mid @t1/runtest-t_mid-blind
   git_q checkout -q -- lib/helper.ml || exit 2
+  # A new interface can hide any member: the whole module changed, whatever its hunks show.
+  printf 'val used : int\n' >"$repo/lib/helper.mli"
+  git_q add lib/helper.mli && git_q commit -qm helper-mli || exit 2
+  affected --referenced-only HEAD~1..HEAD
+  if [ "$rc" = 0 ] && grep -qx @t2/runtest-gen-v1 "$out"; then
+    report 0 'a file new on one side changes its module as a whole'
+  else report 1 'a file new on one side changes its module as a whole' "exit $rc; $(cat "$out")"; fi
+  git_q reset -q --hard HEAD~1 || exit 2
 fi
 
 if harness_leg 'dune fragment'; then

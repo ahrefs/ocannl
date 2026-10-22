@@ -24,7 +24,10 @@
 # then the link-only ones, sorted (the ranking is described below);
 # `--referenced-only` leaves those off. stderr: what each changed path reached,
 # a per-directory count, the link-only aliases, and what this script could
-# not place. The graph is always the CURRENT worktree's, whatever
+# not place. The contract: LINK-ONLY is a heuristic ranking, never a
+# verdict that an alias cannot break. `--referenced-only` is a deliberate
+# trade, faster with a possible miss, for iterating mid-change; the run before
+# a push takes the full default list (AGENTS.md). The graph is always the CURRENT worktree's, whatever
 # revisions were named.
 #
 # What dune is asked (each answer is checked against the forms listed below,
@@ -353,8 +356,11 @@ for my $e (@{$ws->[0]}) {
         # A module file with no source of that name is generated (ocamllex,
         # menhir, a (select) copy, a rule's output): its rule says from what.
         push @{$generated{$rel}}, $i unless -e $rel;
-        push @{$st[$i]{mods}{$name}}, $rel if -e $rel;   # its sources, for the link-only ranking
-        $st[$i]{gen_mod} = 1 unless -e $rel;   # ... which are then not all known
+        # Its sources, for the link-only ranking: a preprocessed `X.pp.ml` stands for
+        # `X.ml`; any other file with no source makes its code not all known.
+        my $src = -e $rel ? $rel : $rel =~ s/\.pp(\.mli?)$/$1/r;
+        # (A wrapped library's alias module, `NAME.ml-gen`, is dune's and names only its modules.)
+        if (-e $src) { push @{$st[$i]{mods}{$name}}, $src } elsif ($rel !~ /\.ml-gen$/) { $st[$i]{gen_mod} = 1 }
         my $k = "$d\0$name";
         push @{$by_modkey{$k}}, $i unless grep { $_ == $i } @{$by_modkey{$k} // []};
       }
@@ -978,10 +984,17 @@ sub own_tokens {   # the names an owner's own code mentions, or undef when its c
           for my $n (map { ref $_ ? () : $_ } @{$pp->[0]}[1 .. $#{$pp->[0]}]) {
             last if $n eq "--";
             next unless defined $lib_by_name{$n};
+            # A rewriter that changed (or links what changed) rewrites this code
+            # under no name it shows: unknown.
+            $files = undef if $reached{$lib_by_name{$n}};
             push @more, @{stanza_sources($lib_by_name{$n}) // ($files = undef, [])};
           }
         } elsif (!(!ref $pp->[0] && $pp->[0] eq "no_preprocessing")) { $files = undef }   # per_module, action: not read
       }
+      # `-open M` in its flags, or in an `env` stanza above it, lets its code use M's
+      # names bare: unknown.
+      $files = undef if grep { canon($_) =~ /"-open"/ } grep { defined } map { dfield($ds->{x}, $_) } qw(flags ocamlc_flags ocamlopt_flags);
+      $files = undef if grep { $_->{kind} eq "env" && under($ds->{dir}, $_->{dir}) && canon($_->{x}) =~ /"-open"/ } @dstanzas;
     }
     if ($files) {
       $tok{$_} = 1 for map { keys %{tokens_of($_)} } @more;
@@ -1047,6 +1060,9 @@ if (-f "$tmp/ml-diff") {
   for my $p (keys %hunks) {
     my %defs;
     my %side = map { my $f = "$tmp/$_/$p"; ($_ => [-f $f ? split(/\n/, slurp($f), -1) : ()]) } qw(old new);
+    # A file new on this side (an `.mli` added beside its `.ml`, say) or gone from
+    # it can hide or expose any member: the whole module.
+    if (!-f "$tmp/old/$p" || !-f "$tmp/new/$p") { $path_defs{$p} = undef; next }
     for my $h (@{$hunks{$p}}) {
       my ($which, $start, $count) = @$h;
       next unless $count;
