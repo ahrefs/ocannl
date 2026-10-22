@@ -4675,9 +4675,10 @@
  ; itself never creates a context, so there is nothing here for an ambient backend to select.
  ; The configured compiler command may name mutable @response/spec files that dune cannot discover;
  ; rerun the action unconditionally and let the census's persistent listing cache serve warm work.
+ ; No `ocannl_training_test` lock: that lock keeps OpenMP pools from overlapping, and the census
+ ; runs no kernel -- its children only link one, then exit -- so it starts no pool (gh-ocannl-1502).
  (name cc_march_census)
  (package neural_nets_lib)
- (locks ocannl_training_test)
  (deps
   (env_var OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR)
   (env_var XDG_CACHE_HOME)
