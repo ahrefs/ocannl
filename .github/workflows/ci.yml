@@ -637,8 +637,9 @@ jobs:
           echo "::warning::tools/ci-shard.sh weigh could not read this shard's dune trace"
         echo "::endgroup::"
     # cc_march_census writes its per-row table to a file rather than to stderr,
-    # which dune truncates in the middle; the file lives in `_build` and dies
-    # with the runner, so a failing leg keeps it as an artifact.
+    # which dune truncates in the middle -- one per piece, in the piece's own
+    # directory; the files live in `_build` and die with the runner, so a
+    # failing leg keeps them as an artifact.
     - name: Keep the cc census table
       if: ${{ failure() }}
       uses: actions/upload-artifact@v4
@@ -646,7 +647,7 @@ jobs:
         # `strategy.job-index`, not the shard: `K/N` holds a `/`, which an
         # artifact name may not, and the shards share every other key here.
         name: cc-march-census-rows-${{ matrix.os }}-${{ matrix.ocaml-compiler }}-${{ matrix.suite }}-job${{ strategy.job-index }}-attempt${{ github.run_attempt }}
-        path: _build/default/test/operations/cc_march_census_kernels/rows.txt
+        path: _build/default/test/operations/cc_march_census_kernels/*/rows.txt
         if-no-files-found: ignore
     # `tools/test-run.sh` carries branches that ONLY execute under MSYS: it
     # sources `tools/opam-env.sh` unconditionally and fatally (a dune on PATH

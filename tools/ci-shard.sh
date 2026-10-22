@@ -116,9 +116,18 @@ DEFAULT_WEIGHT=1
 # alone is noisy: flip_abandonment read 162s and 518s): 39604055166, wall-clock
 # throughout from `weigh`, and 39599006506, its wall-clock table's top rows and
 # CPU time below them. Units under 2s weigh DEFAULT_WEIGHT; the 250 of them in
-# the first run averaged 0.3s.
+# the first run averaged 0.3s. The cc_march_census pieces (gh-ocannl-1502)
+# split that test's 945s: their executable runs under seven aliases, which
+# `weigh` credits to no one unit, so they come from the pieces' own
+# `cc census piece <name>: <N>s` stderr lines on a cold-cache run.
 WEIGHTS='
-cc_march_census 945
+cc_march_census-w16_host 160
+cc_march_census-w16_foreign 160
+cc_march_census-w32_host 160
+cc_march_census-w32_foreign 160
+cc_march_census-w64_host 160
+cc_march_census-w64_foreign 160
+cc_march_census-emission 30
 autotune_staffed_singles 638
 autotune_round_expansion 492
 autotune_composite_playoff 478

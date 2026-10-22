@@ -40,7 +40,7 @@ Per-module tracing gates, and the library whose preprocessor_deps declares each:
   OCANNL_LOG_LEVEL_UTILS         arrayjit/lib/dune, library utils (arrayjit/lib/utils.ml)
 
 Ambient variables a module reads by name at run time, and the stanza that declares each:
-  OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR test/operations/dune, test cc_march_census (test/operations/cc_march_census.ml)
+  OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR test/operations/dune, executable cc_march_census (test/operations/cc_march_census.ml)
   OCANNL_TOOL_TEST_RESTRICT_MASK test/operations/dune, test test_cpu_topology (test/operations/test_cpu_topology.ml)
 
 Run-time reads exempted from declaration, each for the reason `exempt_reads` gives:
@@ -149,6 +149,13 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-cc_dlopen_cause_dll
   test/operations/dune                     @runtest-cc_kept_library
   test/operations/dune                     @runtest-cc_kept_library-debug
+  test/operations/dune                     @runtest-cc_march_census-emission
+  test/operations/dune                     @runtest-cc_march_census-w16_foreign
+  test/operations/dune                     @runtest-cc_march_census-w16_host
+  test/operations/dune                     @runtest-cc_march_census-w32_foreign
+  test/operations/dune                     @runtest-cc_march_census-w32_host
+  test/operations/dune                     @runtest-cc_march_census-w64_foreign
+  test/operations/dune                     @runtest-cc_march_census-w64_host
   test/operations/dune                     @runtest-cc_post_compile_cause-artifact_missing
   test/operations/dune                     @runtest-cc_post_compile_cause-artifact_missing_debug
   test/operations/dune                     @runtest-cc_post_compile_cause-artifact_missing_dll
