@@ -27,7 +27,7 @@ unset DUNE_BUILD_DIR DUNE_ROOT
 export OCANNL_TOOL_FLEET_WORKER=none OCANNL_TOOL_TEST_RUNS=$TMP/runs
 
 repo=$TMP/proj
-mkdir -p "$repo/tools" "$repo/lib" "$repo/mid" "$repo/t1" "$repo/t2" "$repo/t3" "$repo/t4/sub" "$repo/t5" "$repo/t6" \
+mkdir -p "$repo/tools" "$repo/lib" "$repo/mid" "$repo/t1" "$repo/t2" "$repo/t3" "$repo/t4/sub" "$repo/t5" "$repo/t6/sub" \
   "$repo/opt" "$repo/cfg" "$repo/docs" || exit 2
 cp "$HERE/affected-tests.sh" "$HERE/test-run.sh" "$repo/tools/" || exit 2
 # Whatever test-run.sh sources, derived from it rather than listed here.
@@ -52,6 +52,8 @@ cat >"$repo/t6/dune" <<'DUNE'
 (rule (target word.txt) (action (progn (system "echo noise-from-an-action >&2") (with-stdout-to %{target} (echo dyn)))))
 (rule (target dyn.actual) (action (with-stdout-to %{target} (echo %{read:word.txt}))))
 (rule (alias runtest-dyn) (action (diff dyn.expected dyn.actual)))
+; A chdir inside a chdir: not modeled, so the alias is read blind.
+(rule (alias runtest-nest) (action (chdir ../t4 (chdir sub (cat nest.cfg)))))
 DUNE
 cat >"$repo/lib/dune" <<'DUNE'
 (library (name core) (modules core helper lx))
@@ -144,6 +146,8 @@ cat >"$repo/t4/dune" <<'DUNE'
 (executable (name pre) (modules pre))
 (rule (target t_gate_actual.ml) (action (with-stdout-to %{target} (run %{exe:pre.exe}))))
 (rule (alias runtest-t_gate-pre) (action (diff t_gate_expected.ml t_gate_actual.ml)))
+; A (subdir ...): a dune edit here is not scoped by stanza.
+(subdir sub2 (rule (target x2.txt) (action (with-stdout-to %{target} (echo x)))))
 DUNE
 printf '(test (name t_sub) (modules t_sub))\n' >"$repo/t4/sub/dune"
 cat >"$repo/t5/dune" <<'DUNE'
@@ -167,7 +171,7 @@ for f in lib/core.ml lib/helper.ml lib/leaf.ml lib/myppx.ml lib/optlib.ml lib/st
 done
 for f in t2/gen-v1.expected t2/scenario_x.expected t2/scan.expected t3/neg.expected t3/plain.cfg \
   t3/cfgread.expected t3/esc.expected t3/uses.expected t3/py.expected cfg/base.cfg cfg/extra.py docs/{x}one.md \
-  t2/needs_pkg.expected cfg/helper.cfg \
+  t2/needs_pkg.expected cfg/helper.cfg t4/sub/nest.cfg t6/sub/nest.cfg \
   lib/stubbed_c.c t3/cexe_c.c docs/notes.md; do : >"$repo/$f"; done
 printf '{ }\nrule token = parse eof { () }\n' >"$repo/lib/lx.mll"
 # What the link-only ranking reads: t_core names Helper and its `used`; core re-exports Helper as
@@ -201,7 +205,7 @@ reached_by_core='@t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runt
 # Every alias whose action dune does not dump and whose stanzas this reader
 # cannot read in full (no golden among its own targets): listed for any changed
 # data file. runtest-needs_pkg needs it, and is not listed for that reason.
-opaque_all='@t2/runtest-pkg'
+opaque_all='@t2/runtest-pkg @t6/runtest-nest'
 
 if harness_leg 'cold build'; then
   # On a build directory that has never built t6/word.txt, `dune rules` builds
@@ -294,7 +298,7 @@ if harness_leg 'dune-project'; then
     @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan \
     @t2/runtest-scenario_x @t2/slow-gen @t3/runtest-cfgread @t3/runtest-esc @t3/runtest-neg @t3/runtest-py @t3/runtest-t_plain @t3/runtest-t_stub \
     @t3/runtest-uses @t3/runtest-viahelper @t4/runtest-gated @t4/runtest-objs @t4/runtest-t_gate @t4/runtest-t_gate-pre \
-    @t4/sub/runtest-t_sub @t5/slow-usesh @t6/runtest-dyn
+    @t4/sub/runtest-t_sub @t5/slow-usesh @t6/runtest-dyn @t6/runtest-nest
 fi
 
 if harness_leg 'dune file elsewhere'; then
@@ -381,6 +385,11 @@ if harness_leg 'declared deps'; then
   affected --files cfg/helper.cfg
   # shellcheck disable=SC2086
   expect 'a per-test alias needing a helper alias reaches what the helper needs' 0 @t3/runtest-viahelper $opaque_all
+  # runtest-nest reads t4/sub/nest.cfg; resolving its inner chdir from t6 would read
+  # t6/sub/nest.cfg. Not modeled, it is listed blind.
+  affected --files t4/sub/nest.cfg
+  # shellcheck disable=SC2086
+  expect 'a nested chdir is not modeled: its alias is listed blind' 0 $opaque_all
   # runtest-py runs and diffs in its own action; its golden made it look like a
   # diff of its own targets, and its (deps) were never read (gh-ocannl-1431).
   affected --files cfg/extra.py
@@ -499,6 +508,10 @@ if harness_leg 'link-only'; then
   affected HEAD
   ordered 'a changed operator definition counts as the whole module (tokens hold identifiers)' \
     @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
+  printf 'let used = 1\nlet unused = 2\ntype t = A | B\n' >"$repo/lib/helper.ml"
+  affected HEAD
+  ordered 'a changed type definition counts as the whole module (its constructors are what users name)' \
+    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
   git_q checkout -q -- lib/helper.ml || exit 2
 fi
 
@@ -542,10 +555,19 @@ if harness_leg 'dune stanza scope'; then
   affected HEAD
   expect 'an edited rule reaches the executable whose stub compiles the header it makes' 0 @t5/slow-usesh
   git_q checkout -q -- t5/dune || exit 2
+  # The fallback rule: a dune edit is scoped only where every form is modeled.
+  perl -0pi -e 's/\(echo objs\)/(echo objs2)/' "$repo/t4/dune"
+  affected HEAD
+  expect 'a dune file holding a (subdir ...) falls back to its whole directory' 0 \
+    @t4/runtest-gated @t4/runtest-objs @t4/runtest-t_gate @t4/runtest-t_gate-pre @t4/sub/runtest-t_sub
+  git_q checkout -q -- t4/dune || exit 2
+  perl -0pi -e 's/\(rule \(alias helper\) \(deps \.\.\/cfg\/helper\.cfg\)/(rule (alias helper) (deps ..\/cfg\/helper.cfg ..\/cfg\/base.cfg)/' "$repo/t3/dune"
+  affected HEAD
+  expect 'an edited helper alias reaches the per-test aliases needing it' 0 @t3/runtest-viahelper
+  git_q checkout -q -- t3/dune || exit 2
   perl -0pi -e 's/\(echo x\)/(echo y)/' "$repo/t2/dune"
   affected HEAD
-  # shellcheck disable=SC2086
-  expect 'an edited rule reaches a compiled stanza naming the file it makes in any field (link_deps)' 0 @t2/runtest-scan $opaque_all
+  expect 'an edited rule reaches a compiled stanza naming the file it makes in any field (link_deps)' 0 @t2/runtest-scan @t2/runtest-pkg
   git_q checkout -q -- t2/dune || exit 2
   perl -0pi -e 's/\(echo made\)/(echo made again)/' "$repo/t1/dune"
   affected HEAD

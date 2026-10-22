@@ -98,8 +98,10 @@
 #     stanzas whose text changed, comments and layout aside (gh-ocannl-1431): a
 #     rule the aliases it declares and the files it makes, through what reads
 #     them; a test the aliases it declares and its stanza; a library or
-#     executables its stanza; an `(alias)` the per-test aliases it names. A
-#     changed stanza of any other kind (`env`, `dirs`, `copy_files`, ...), a
+#     executables its stanza; an `(alias)` the per-test aliases it names, and
+#     a helper alias every per-test alias needing it. Only forms modeled in
+#     full are scoped: a changed stanza of any other kind (`env`, `dirs`,
+#     `copy_files`, ...), a file holding a `(subdir ...)`, a block string, a
 #     new file, `--files`, and a changed `dune-project` or `dune-workspace`
 #     file reach every stanza and every per-test alias of the directories
 #     beneath it (an `env` stanza applies there too), and every alias
@@ -760,6 +762,8 @@ sub decl_action {
   if ($h eq "no-infer") { decl_action($acc, $dir, $cwd, $_, 0) for @args }
   elsif ($h eq "chdir" && @args == 2 && !ref $args[0]) {
     my $to = decl_root($dir, $args[0]);
+    # A chdir inside a chdir is not modeled: unknown, so its alias stays blind.
+    if (!defined $cwd || $cwd ne $dir) { push @{$acc->{unknown}}, "a nested chdir"; return }
     decl_action($acc, $dir, $to =~ /%\{/ ? undef : rpath($dir, $to), $args[1], $infer);
   } elsif ($action_walk{$h}) { decl_action($acc, $dir, $cwd, $_, $infer) for @args }
   elsif ($h =~ /^(?:with-(?:stdout|stderr|outputs)-to|write-file|with-accepted-exit-codes|setenv)$/) {
@@ -836,6 +840,7 @@ sub alias_acc {
     for my $ad (keys %{$one->{adeps}}) {
       if ($is_per_test{$ad}) { $acc->{adeps}{$ad} = 1; next }
       my ($hd, $hn) = $ad =~ m{^\@(?:(.*)/)?([^/]+)$};
+      $acc->{helpers}{$ad} = 1;
       merge_acc($acc, alias_acc($hd // ".", $hn, $seen));
     }
     for my $r (keys %{$one->{adeps_rec} // {}}) {
@@ -854,7 +859,7 @@ sub alias_acc {
 }
 sub merge_acc {
   my ($into, $from) = @_;
-  for my $k (qw(files runs adeps adeps_rec gen)) { $into->{$k}{$_} = 1 for keys %{$from->{$k} // {}} }
+  for my $k (qw(files runs adeps adeps_rec gen helpers)) { $into->{$k}{$_} = 1 for keys %{$from->{$k} // {}} }
   push @{$into->{globs}}, @{$from->{globs}};
   push @{$into->{unknown}}, @{$from->{unknown}};
 }
@@ -891,6 +896,7 @@ sub compiled_owners {
 }
 my (%runs, %reads, %globs, %via, %adeps);
 my %blind_target;   # a target whose rule needs a helper alias this reader cannot read
+my %target_helpers; # target -> {helper alias its rule needs, inlined}
 my %queried;
 my @queue = (@own_targets, @declared_generated);
 while (@queue) {
@@ -899,7 +905,7 @@ while (@queue) {
   for my $rule (dune_rules(@queue)) {
     my $tg = field($rule, "targets");
     my @files = map { atom($_, "targets") } items(field($tg // [], "files"));
-    my (%r, %p, @g, %v, %ad, $blind_rule);
+    my (%r, %p, @g, %v, %ad, %hl, $blind_rule);
     for my $dep (items(field($rule, "deps"))) {
       next if !ref $dep && $dep eq "Universe";   # always reruns; reads nothing in particular
       ref $dep && @$dep && !ref $dep->[0] or fail("unexpected dependency in dune rules output");
@@ -936,6 +942,8 @@ while (@queue) {
         if ($is_per_test{$full}) { $ad{$full} = 1; next }
         # A helper alias: what it needs, this rule needs (its stanzas read as text).
         my $h = alias_acc($ad, $an);
+        $hl{$full} = 1;
+        $hl{$_} = 1 for keys %{$h->{helpers} // {}};
         $p{$_} = 1 for keys %{$h->{files}};
         $v{$_} = 1 for keys %{$h->{gen} // {}};
         $r{$_} = 1 for keys %{$h->{runs}};
@@ -950,6 +958,7 @@ while (@queue) {
       my $t = strip_ctx($f) // next;
       $runs{$t} = \%r; $reads{$t} = \%p; $globs{$t} = \@g; $via{$t} = [sort keys %v]; $adeps{$t} = \%ad;
       $blind_target{$t} = 1 if $blind_rule;
+      $target_helpers{$t} = \%hl;
     }
     $next{$_} = 1 for grep { !$queried{$_} } keys %v;
   }
@@ -978,6 +987,7 @@ for my $t (sort keys %queried) {
       $globs{$t} = [@{$globs{$t}}, @{$globs{$u}}];
       $adeps{$t} = { %{$adeps{$t}}, %{$adeps{$u}} };
       $blind_target{$t} = 1 if $blind_target{$u};
+      $target_helpers{$t} = { %{$target_helpers{$t} // {}}, %{$target_helpers{$u} // {}} };
     }
   }
   fold($_) for sort keys %queried;
@@ -1084,6 +1094,9 @@ sub dune_scope {
   my ($p) = @_;
   my ($old, $new) = (dune_side("old", $p), dune_side("new", $p));
   return undef unless $old && $new;
+  # Only forms modeled in full are scoped; a `(subdir ...)` on either side is not.
+  my ($pd) = dir_of($p);
+  return undef if grep { $_->{dir} ne $pd } @$old, @$new;
   my %count;
   $count{$_->{text}}++ for @$old;
   my @diff;
@@ -1178,6 +1191,15 @@ for my $p (@changed) {
     # Only the stanzas whose text changed (either side of the edit) reach anything.
     my %al_of = map { $_->{name} => $_ } @al;
     my @named = grep { $al_of{$_} } sort keys %{$scoped->{aliases}};
+    # A changed helper alias (no per-test name): every per-test alias needing it,
+    # through its own stanzas or a rule dune dumps.
+    for my $h (grep { !$al_of{$_} } keys %{$scoped->{aliases}}) {
+      for my $a (@al) {
+        push @named, $a->{name}
+          if ($a->{decl} && $a->{decl}{helpers}{$h}) || grep { $target_helpers{$_}{$h} } @{$a->{own}};
+      }
+    }
+    @named = sort keys %{{ map { $_ => 1 } @named }};
     $dune_alias{$_} = 1 for @named;
     @ix = nsort(keys %{$scoped->{stanzas}});
     my @made = sort keys %{$scoped->{targets}};
@@ -1393,9 +1415,12 @@ sub enclosing_def {
   for (my $k = $n; $k >= 1; $k--) {
     my $l = $lines->[$k - 1] // next;
     next if $l =~ /^\s/ || $l eq "" || $l =~ /^(?:\(\*|\[\@|\)|;;|\||end\b|\})/;
-    return $1 if $l =~ /^(?:let|and)\s+(?:rec\s+)?(?:%\w+\s+)?([a-z_][\w']*)\b(?!\s*,)/ && $1 ne "_";
-    return $1 if $l =~ /^(?:let|and)\s+(?:rec\s+)?\(\s*([^\s()]+)\s*\)/;   # an operator
-    return $1 if $l =~ /^(?:type|and)\s+(?:nonrec\s+)?(?:(?:'\w+|\([^)]*\)|_)\s+)?([a-z_][\w']*)/;
+    # Whitelisted forms only: a `let` value, a `val`/`external`, a module, class
+    # or exception name. A `type` (its constructors and fields are what users
+    # name) and an `and` (of a type or of a value) touch the whole module.
+    return undef if $l =~ /^(?:type|and)\b/;
+    return $1 if $l =~ /^let\s+(?:rec\s+)?(?:%\w+\s+)?([a-z_][\w']*)\b(?!\s*,)/ && $1 ne "_";
+    return $1 if $l =~ /^let\s+(?:rec\s+)?\(\s*([^\s()]+)\s*\)/;   # an operator
     return $1 if $l =~ /^(?:val|external)\s+([a-z_][\w']*)/ || $l =~ /^val\s+\(\s*([^\s()]+)\s*\)/;
     return $1 if $l =~ /^(?:module|class|exception)\s+(?:rec\s+|type\s+)?([A-Za-z_][\w']*)/;
     return undef;   # open, include, let () =, a pattern: the whole module
