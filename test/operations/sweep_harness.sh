@@ -3777,6 +3777,7 @@ cancel_sweep() { # pid|group
   while IFS= read -r pid; do
     if kill -0 "$pid" 2>/dev/null; then
       printf 'sweep_harness: unit process %s outlived the cancelled sweep\n' "$pid" >&2
+      ps -o pid=,ppid=,pgid=,stat=,etime=,command= -p "$pid" >&2 || true
       return 1
     fi
   done < <(cat "$prefix.opam-pids" "$prefix.ssh-pids")
