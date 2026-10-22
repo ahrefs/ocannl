@@ -2559,11 +2559,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   doc, script or golden edit lists those ~49 too. Its header states the boundary as an
   allowlist; what falls outside is reported on stderr, and a changed `.ml`/`.mli` no stanza of
   this build owns (a deleted module, a CUDA-only one on a box without cudajit) exits 3. Two
-  portability points (gh-ocannl-1389): only `dune rules`' stdout is the answer, since on a cold
-  `_build` printing a rule builds the `%{read:…}` file it depends on (`ocannl_backend_extension.txt`)
-  and that action's chatter lands on dune's stderr; and a library edge between two stanzas this
-  build does not compile is skipped, since `external-lib-deps` gives public names while such a
-  stanza may use a local one (on Linux, `metal_backend` requiring `metal_math_api_runtime`).
+  portability points (gh-ocannl-1389): only the file `dune rules -o` writes is the answer, since on
+  a cold `_build` printing a rule builds the `%{read:…}` file it depends on
+  (`ocannl_backend_extension.txt`) and that action's chatter lands on dune's own streams (a refusal
+  names the atom and keeps the whole answer in `$TMPDIR/affected-dune-rules.PID.txt`; the one
+  sighting reported after that fix ran a branch cut before it, gh-ocannl-1431); and a library edge
+  between two stanzas this build does not compile is skipped, since `external-lib-deps` gives
+  public names while such a stanza may use a local one (on Linux, `metal_backend` requiring `metal_math_api_runtime`).
   `tools/test-affected-tests.sh` pins it on a fixture project, a negative control per reach path.
   - Reach is link-level: a module reaches its whole library, and every stanza requiring it.
     So a change in `arrayjit/lib`, `tensor/` or a widely linked `test/support` library reaches 380

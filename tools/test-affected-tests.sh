@@ -14,6 +14,9 @@
 # real repository's three commits are the PR's reproduction, since reading its
 # graph needs the full opam switch, which this harness's CI job does not install.
 set -u
+# The expected lists are sorted with `sort` and compared with the helper's
+# bytewise order: one collation, whatever the caller's locale (gh-ocannl-1431).
+export LC_ALL=C
 . "$(cd "$(dirname "$0")/../scripts" && pwd)/harness-support.sh"
 harness_args "$@"
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -179,7 +182,8 @@ opaque_all='@t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-
 if harness_leg 'cold build'; then
   # On a build directory that has never built t6/word.txt, `dune rules` builds
   # it to print dyn.actual's rule, and its action's stderr line must not be
-  # read as part of the answer (gh-ocannl-1389: "unexpected atom").
+  # read as part of the answer (gh-ocannl-1389: "unexpected atom"). Only the
+  # file `dune rules -o` writes is the answer; dune's own streams are kept apart.
   rm -rf "$repo/_build"
   rc=0
   (cd "$TMP" && DUNE_CACHE=disabled "$repo/tools/affected-tests.sh" --files t6/dyn.expected) >"$out" 2>"$err" || rc=$?
@@ -187,17 +191,20 @@ if harness_leg 'cold build'; then
   expect 'a cold build directory: what an action prints while dune rules builds an input is not read as rules' 0 \
     @t6/runtest-dyn $opaque_all
   mutant=$repo/tools/affected-mutant.sh
-  if FROM='open STDERR, ">", "$tmp/rules-err" or exit 126;' TO='open STDERR, ">&", \*STDOUT;' \
+  mkdir -p "$TMP/kept" || exit 2
+  if FROM='my $text = slurp("$tmp/rules-out");' TO='my $text = slurp("$tmp/rules-log") . slurp("$tmp/rules-out");' \
       perl -0pe '$n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
       "$repo/tools/affected-tests.sh" >"$mutant"; then
     rm -rf "$repo/_build"
     rc=0
-    (cd "$TMP" && DUNE_CACHE=disabled bash "$mutant" --files t6/dyn.expected) >"$out" 2>"$err" || rc=$?
-    if [ "$rc" = 2 ] && grep -q 'unexpected atom in dune rules output' "$err"; then
-      report 0 'negative control: reading dune rules'"'"' stderr as its answer fails on the cold build'
-    else report 1 'negative control: reading dune rules'"'"' stderr as its answer fails on the cold build' "exit $rc; $(cat "$err")"; fi
+    (cd "$TMP" && TMPDIR=$TMP/kept DUNE_CACHE=disabled bash "$mutant" --files t6/dyn.expected) >"$out" 2>"$err" || rc=$?
+    # The refusal names the atom and keeps the answer it refused (gh-ocannl-1431).
+    if [ "$rc" = 2 ] && grep -q 'unexpected atom in dune rules output: "noise-from-an-action" at byte 0' "$err" &&
+       grep -q noise-from-an-action "$TMP"/kept/affected-dune-rules.*.txt; then
+      report 0 'negative control: reading dune rules'"'"' streams as its answer fails on the cold build, naming the atom'
+    else report 1 'negative control: reading dune rules'"'"' streams as its answer fails on the cold build, naming the atom' "exit $rc; $(cat "$err")"; fi
   else
-    report 1 'negative control: reading dune rules'"'"' stderr as its answer fails on the cold build' \
+    report 1 'negative control: reading dune rules'"'"' streams as its answer fails on the cold build, naming the atom' \
       "the mutation anchor does not occur exactly once"
   fi
   rm -f "$mutant"

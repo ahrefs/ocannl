@@ -55,9 +55,11 @@
 #     own text. A compiled artifact a rule reads
 #     (a stanza's `.NAME.objs` files, an installed library's) makes that
 #     stanza one of the rule's owners, like an executable the rule runs; an
-#     alias a rule needs (`(deps (alias ...))`) is recorded as well. Only its
-#     stdout is read: printing a rule can build what its dependencies are
-#     computed from, and those actions' output goes to dune's stderr.
+#     alias a rule needs (`(deps (alias ...))`) is recorded as well. Only the
+#     file `-o` names is read: printing a rule can build what its dependencies
+#     are computed from, and those actions' output goes to dune's own streams.
+#     An answer of another form is kept in $TMPDIR/affected-dune-rules.PID.txt,
+#     and the refusal names the offending atom and its byte offset.
 #
 # Boundary, as an allowlist. Whatever it does not cover is reported on stderr,
 # never silently dropped:
@@ -122,6 +124,9 @@
 # nothing printed.
 set -u
 die() { echo "affected: $*" >&2; exit 2; }
+# One collation everywhere: `sort` and Perl's `sort` then agree bytewise, so
+# the printed order never depends on the caller's locale (gh-ocannl-1431).
+export LC_ALL=C
 
 CDPATH= cd -P "$(dirname "$0")/.." || die "cannot cd to the repository root"
 command -v dune >/dev/null 2>&1 || . tools/opam-env.sh
@@ -221,19 +226,29 @@ done
 perl - "$tmp" <<'PERL'
 use strict; use warnings;
 my ($tmp) = @ARGV;
-sub fail { print STDERR "affected: $_[0]\n"; exit 2 }
+# While a dune answer is being read, a refusal keeps a copy of it (see keep_raw).
+our ($raw_text, $raw_what);
+sub fail {
+  my $m = $_[0];
+  $m .= " (the whole answer is kept in " . keep_raw($raw_text, $raw_what) . ")" if defined $raw_text;
+  print STDERR "affected: $m\n"; exit 2;
+}
 sub slurp { local $/; open my $fh, "<", $_[0] or fail("cannot read $_[0]"); my $s = <$fh>; $s }
 
-# A reader for the sexps dune prints: lists, atoms, quoted strings.
+# A reader for the sexps dune prints: lists, atoms, quoted strings. $at, when
+# given, collects the byte offset of each top-level item; a failure names the
+# offset and the text around it.
+sub around { my ($s, $p) = @_; my $from = $p > 60 ? $p - 60 : 0; (substr($s, $from, 120) =~ s/\n/\\n/gr) }
 sub parse_sexp {
-  my ($s, $what) = @_;
+  my ($s, $what, $at) = @_;
   my @stack = ([]);
   pos($s) = 0;
   while (pos($s) < length $s) {
     if ($s =~ /\G\s+/gc) { next }
+    push @$at, pos($s) if $at && @stack == 1;
     if ($s =~ /\G\(/gc) { push @stack, []; next }
     if ($s =~ /\G\)/gc) {
-      @stack > 1 or fail("unbalanced output from $what");
+      @stack > 1 or fail("unbalanced output from $what at byte " . (pos($s) - 1) . ": ..." . around($s, pos($s) - 1) . "...");
       my $l = pop @stack; push @{$stack[-1]}, $l; next;
     }
     if ($s =~ /\G"((?:[^"\\]|\\.)*)"/gcs) {
@@ -241,9 +256,9 @@ sub parse_sexp {
       push @{$stack[-1]}, $a; next;
     }
     if ($s =~ /\G([^\s()"]+)/gc) { push @{$stack[-1]}, $1; next }
-    fail("unreadable output from $what at byte " . pos($s));
+    fail("unreadable output from $what at byte " . pos($s) . ": ..." . around($s, pos($s)) . "...");
   }
-  @stack == 1 or fail("unbalanced output from $what");
+  @stack == 1 or fail("unbalanced output from $what (" . (@stack - 1) . " list(s) left open)");
   return $stack[0];
 }
 sub field { # a value from a list of (key value) pairs
@@ -483,21 +498,42 @@ sub dune_rules {
   while (@todo) {
     my ($len, @batch) = (0);
     while (@todo && (!@batch || $len + length($todo[0]) + 3 < $arg_budget)) { $len += length($todo[0]) + 3; push @batch, shift @todo }
-    # Only stdout is the answer. To print a rule, dune builds what the rule's
-    # dependencies are computed from (a `%{read:...}` file, say), and what those
-    # actions print reaches dune's stderr: on a cold build directory that was
-    # `Wrote value of 'backend_extension' to ocannl_backend_extension.txt` in the
-    # middle of the sexps (gh-ocannl-1389). stderr is kept for the failure message.
-    my $pid = open(my $fh, "-|") // fail("cannot fork for dune rules");
+    # Only the file `-o` names is the answer. To print a rule, dune builds what
+    # the rule's dependencies are computed from (a `%{read:...}` file, say), and
+    # what those actions print reaches dune's own streams: on a cold build
+    # directory that was `Wrote value of 'backend_extension' to
+    # ocannl_backend_extension.txt` in the middle of the sexps (gh-ocannl-1389).
+    # Both streams are kept for the failure message, never parsed.
+    unlink "$tmp/rules-out";
+    my $pid = fork // fail("cannot fork for dune rules");
     if (!$pid) {
-      open STDERR, ">", "$tmp/rules-err" or exit 126;
-      exec "dune", "rules", "--root", ".", @batch; exit 127;
+      open STDOUT, ">", "$tmp/rules-log" or exit 126;
+      open STDERR, ">&", \*STDOUT or exit 126;
+      exec "dune", "rules", "--root", ".", "-o", "$tmp/rules-out", @batch; exit 127;
     }
-    my $text = do { local $/; <$fh> };
-    close $fh or fail("dune rules failed:\n" . slurp("$tmp/rules-err") . $text);
-    push @rules, @{parse_sexp($text, "dune rules")};
+    waitpid($pid, 0) == $pid && $? == 0 or fail("dune rules failed:\n" . slurp("$tmp/rules-log"));
+    my $text = slurp("$tmp/rules-out");
+    # A refusal from here on keeps what dune wrote, so its cause can be read
+    # rather than guessed.
+    local ($raw_text, $raw_what) = ($text, "dune-rules");
+    my @at;
+    my @got = @{parse_sexp($text, "dune rules", \@at)};
+    for my $k (0 .. $#got) {
+      ref $got[$k] or fail("unexpected atom in dune rules output: \"$got[$k]\" at byte $at[$k]: ..." . around($text, $at[$k]) . "...");
+    }
+    push @rules, @got;
   }
   return @rules;
+}
+# A copy of an answer this reader refused, outside the temporary directory the
+# exit trap removes.
+sub keep_raw {
+  my ($text, $what) = @_;
+  my $dir = $ENV{TMPDIR} // "/tmp";
+  my $f = "$dir/affected-$what.$$.txt";
+  open my $o, ">", $f or return "(could not write $f)";
+  print $o $text; close $o;
+  return $f;
 }
 # Each queried target's rule: the executables it runs, the files and globs it
 # reads, and the generated files it reads (`via`), whose rules are queried in
@@ -526,7 +562,6 @@ while (@queue) {
   $queried{$_} = 1 for @queue;
   my %next;
   for my $rule (dune_rules(@queue)) {
-    ref $rule or fail("unexpected atom in dune rules output: $rule");
     my $tg = field($rule, "targets");
     my @files = map { atom($_, "targets") } items(field($tg // [], "files"));
     my (%r, %p, @g, %v, %ad);
