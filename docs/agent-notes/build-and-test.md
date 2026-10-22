@@ -2552,23 +2552,27 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   rules` for each alias's own targets and each generated module file. Those dependencies are how
   a scan that READS a changed file (an `.ml`, an agent note, a script) is found without linking
   it, and how a generated module (`.mll`, `.mly`, a `(select)` choice, a generator's header) or a
-  C stub is traced to its stanza. dune does not dump an alias rule itself, so the helper also reads the
-  dune files as text: the stanzas declaring each alias and what they need (`(deps)`, the `%{dep:}`
-  family, what dune infers from `diff`/`cat`/`copy`), a generated input queried like an own target
-  (gh-ocannl-1431: `runtest-kernel_attribution` runs and diffs in one action, owns a golden, and
-  was taken for a golden pair, so an edit to the `benchmarks/gh1002_cells.py` its `(deps)` name
-  missed it). Only an alias whose stanzas use a form outside that reader (`(package …)`, say; none
-  in this repository today) is still listed blind, for any changed path in its directory but an
-  owned module source and for a changed non-build input anywhere. Its header states the boundary as an
-  allowlist; what falls outside is reported on stderr, and a changed `.ml`/`.mli` no stanza of
-  this build owns (a deleted module, a CUDA-only one on a box without cudajit) exits 3. Two
-  portability points (gh-ocannl-1389): only the file `dune rules -o` writes is the answer, since on
-  a cold `_build` printing a rule builds the `%{read:…}` file it depends on
-  (`ocannl_backend_extension.txt`) and that action's chatter lands on dune's own streams (a refusal
-  names the atom and keeps the whole answer in `$TMPDIR/affected-dune-rules.PID.txt`; the one
-  sighting reported after that fix ran a branch cut before it, gh-ocannl-1431); and a library edge
-  between two stanzas this build does not compile is skipped, since `external-lib-deps` gives
-  public names while such a stanza may use a local one (on Linux, `metal_backend` requiring `metal_math_api_runtime`).
+  C stub is traced to its stanza. dune does not dump an alias rule itself, so the helper also
+  reads the dune files as text: the stanzas declaring each alias and what they need (`(deps)`,
+  the `%{dep:}` family, what dune infers from `diff`/`cat`/`copy`), a generated input queried
+  like an own target (gh-ocannl-1431: `runtest-kernel_attribution` runs and diffs in one action,
+  owns a golden, and was taken for a golden pair, so an edit to the `benchmarks/gh1002_cells.py`
+  its `(deps)` name missed it). Only an alias whose stanzas use a form outside that reader
+  (`(package …)`, say; none in this repository today) is still listed blind, for any changed path
+  in its directory but an owned module source and for a changed non-build input anywhere. The
+  same reader scopes a `dune` file edit, in the revision forms, to the stanzas whose text changed
+  (comments and layout aside); a stanza kind outside rule, test, library, executables and alias
+  (`env`, `copy_files`, ...), a new dune file and `--files` still reach the whole directory
+  beneath it. Its header states the boundary as an allowlist; what falls outside is reported on
+  stderr, and a changed `.ml`/`.mli` no stanza of this build owns (a deleted module, a CUDA-only
+  one on a box without cudajit) exits 3. Two portability points (gh-ocannl-1389): only the file
+  `dune rules -o` writes is the answer, since on a cold `_build` printing a rule builds the
+  `%{read:…}` file it depends on (`ocannl_backend_extension.txt`) and that action's chatter lands
+  on dune's own streams (a refusal names the atom and keeps the whole answer in
+  `$TMPDIR/affected-dune-rules.PID.txt`; the one sighting reported after that fix ran a branch cut
+  before it, gh-ocannl-1431); and a library edge between two stanzas this build does not compile
+  is skipped, since `external-lib-deps` gives public names while such a stanza may use a local one
+  (on Linux, `metal_backend` requiring `metal_math_api_runtime`).
   `tools/test-affected-tests.sh` pins it on a fixture project, a negative control per reach path.
   - Reach is link-level: a module reaches its whole library, and every stanza requiring it.
     So a change in `arrayjit/lib`, `tensor/` or a widely linked `test/support` library reaches 380
@@ -2580,8 +2584,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     `@test/training/runtest-fused_classifier`. A narrower "tests that name the module" cut is no
     substitute: `test_vectorized_codegen.ml` never names `Register_tile`.
   - A test or note edit gets a short, exact list: `test/operations/cost_model_template.ml` reaches
-    its own alias plus the scans that read it (17 aliases in all); `docs/agent-notes/build-and-test.md`
-    only the 11 scans that read it.
+    its own alias plus the scans that read it (17 aliases in all);
+    `docs/agent-notes/build-and-test.md` only the 11 scans that read it.
 
 ## OCaml and dune traps
 

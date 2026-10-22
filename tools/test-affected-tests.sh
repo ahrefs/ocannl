@@ -436,6 +436,48 @@ if harness_leg 'unmapped'; then
   else report 1 'an .ml no stanza owns and no rule reads is UNMAPPED, exit 3' "exit $rc; $(cat "$out" "$err")"; fi
 fi
 
+if harness_leg 'dune stanza scope'; then
+  # With both sides of a dune file at hand (the git forms), its edit reaches only
+  # the stanzas whose text changed (gh-ocannl-1431); --files keeps the whole
+  # directory (the 'dune file' leg).
+  printf '\n; a comment, and a blank line\n\n' >>"$repo/t3/dune"
+  affected HEAD
+  expect 'a comment-only dune edit reaches no stanza' 0
+  git_q checkout -q -- t3/dune || exit 2
+  perl -0pi -e 's/\(deps plain.cfg base.cfg\)/(deps plain.cfg base.cfg t_plain.ml)/' "$repo/t3/dune"
+  affected HEAD
+  expect 'an edited test stanza reaches its own alias' 0 @t3/runtest-t_plain
+  mutant=$repo/tools/affected-mutant.sh
+  if FROM='my $scoped = $b eq "dune" ? dune_scope($p) : undef;' TO='my $scoped;' \
+      perl -0pe '$n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
+      "$repo/tools/affected-tests.sh" >"$mutant"; then
+    rc=0
+    (cd "$TMP" && bash "$mutant" HEAD) >"$out" 2>"$err" || rc=$?
+    if [ "$rc" = 0 ] && [ "$(wc -l <"$out")" -gt 1 ] && grep -qx @t3/runtest-t_plain "$out"; then
+      report 0 'negative control: stanza scoping is what keeps the rest of the directory off the list'
+    else report 1 'negative control: stanza scoping is what keeps the rest of the directory off the list' "exit $rc; $(cat "$out" "$err")"; fi
+  else
+    report 1 'negative control: stanza scoping is what keeps the rest of the directory off the list' \
+      "the mutation anchor does not occur exactly once"
+  fi
+  rm -f "$mutant"
+  git_q checkout -q -- t3/dune || exit 2
+  perl -0pi -e 's/\(target neg.actual\)/(target neg.actual) (locks neg)/' "$repo/t3/dune"
+  affected HEAD
+  expect 'an edited rule reaches the alias whose own target it makes' 0 @t3/runtest-neg
+  git_q checkout -q -- t3/dune || exit 2
+  perl -0pi -e 's/\(echo made\)/(echo made again)/' "$repo/t1/dune"
+  affected HEAD
+  expect 'an edited rule reaches the alias elsewhere reading the file it makes' 0 @t3/runtest-uses
+  git_q checkout -q -- t1/dune || exit 2
+  perl -0pi -e 's/\(copy_files \.\.\/cfg\/base.cfg\)/(copy_files (files ..\/cfg\/base.cfg))/' "$repo/t3/dune"
+  affected HEAD
+  expect 'a stanza kind outside the scoping (copy_files) reaches its whole directory' 0 \
+    @t3/runtest-cfgread @t3/runtest-esc @t3/runtest-neg @t3/runtest-py @t3/runtest-t_plain @t3/runtest-t_stub \
+    @t3/runtest-uses
+  git_q checkout -q -- t3/dune || exit 2
+fi
+
 if harness_leg 'git forms'; then
   printf 'let x = 1\n' >"$repo/lib/leaf.ml"
   affected HEAD
