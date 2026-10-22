@@ -20,8 +20,10 @@
 # suite alias, and only those, in every other directory; the dealing is the
 # documented longest-first one and deterministic; and every listing the
 # subject cannot trust is refused with exit 2 and a reason. `weigh` is pinned
-# on a synthetic trace, including the executable whose name begins with `cc`
-# and must not be mistaken for the C compiler; the same trace plants a canary
+# on a synthetic trace -- each process credited to the unit its TARGET names,
+# not to its executable (gh-ocannl-1503), with a twin keyed by executable that
+# the same oracle must reject -- including the executable whose name begins
+# with `cc` and must not be mistaken for the C compiler; the same trace plants a canary
 # in every field `weigh` must not decode, with one decode-and-print twin per
 # field that the canary check must reject (gh-ocannl-1287). The coverage legs have
 # fault-injected twins -- the subject with the split-directory exclusion
@@ -100,13 +102,18 @@ fixture_train_weights='
 test/training/train-heavy 10
 test/training/train-ghost 5
 '
+# Wall-clock: `a`, light by CPU, is shard 2/2's critical path.
+fixture_wall_weights='
+heavy 30
+a 50
+'
 install_subject() { # SOURCE
-  python3 - "$1" "$repo/tools/ci-shard.sh" "$fixture_weights" "$fixture_train_weights" <<'PY'
+  python3 - "$1" "$repo/tools/ci-shard.sh" "$fixture_weights" "$fixture_train_weights" "$fixture_wall_weights" <<'PY'
 import re
 import sys
-source, target, weights, train_weights = sys.argv[1:5]
+source, target, weights, train_weights, wall_weights = sys.argv[1:6]
 text = open(source).read()
-for name, table in (('WEIGHTS', weights), ('TRAIN_WEIGHTS', train_weights)):
+for name, table in (('WEIGHTS', weights), ('TRAIN_WEIGHTS', train_weights), ('WALL_WEIGHTS', wall_weights)):
     text, count = re.subn(r"^" + name + r"='\n.*?^'\n", lambda m: name + "='" + table + "'\n", text, flags=re.M | re.S)
     assert count == 1, name + ' block not found exactly once'
 open(target, 'w').write(text)
@@ -245,14 +252,17 @@ ok=0
 [ "$(printf '%s\n' "$shard2" | head -1)" = "@@all" ] || ok=1
 [ "$(printf '%s\n' "$shard2" | tail -3 | tr '\n' ' ')" = "@@$ops/runtest-a @@$ops/runtest-b @@$ops/runtest-c " ] || ok=1
 report $ok "the rest go to the lighter shard, @rest first, equal weights by name" "got: $shard2"
-grep -q 'weight for ghost, which is no unit any more' "$TMP/deal.err"
-report $? "a weight naming no unit warns on stderr" "see $TMP/deal.err"
+grep -q 'WEIGHT NAMES NO UNIT: ghost 5' "$TMP/deal.err"
+report $? "a weight naming no unit is reported loudly on stderr" "see $TMP/deal.err"
 ok=0
 [ "$(subject targets 2/2 2>/dev/null)" = "$shard2" ] || ok=1
 [ "$(subject plan 2 2>/dev/null)" = "$(subject plan 2 2>/dev/null)" ] || ok=1
 report $ok "targets and plan are deterministic"
-subject plan 2 2>/dev/null | grep -q '^shard 1/2: 1 units, load 10 '
-report $? "plan reports each shard's units and load"
+subject plan 2 2>/dev/null >"$TMP/plan.out"
+grep -q '^shard 1/2: 1 units, load 10 ([0-9]*%), longest by wall-clock heavy 30s$' "$TMP/plan.out" &&
+  grep -q '^shard 2/2: .*, longest by wall-clock a 50s$' "$TMP/plan.out"
+report $? "plan reports each shard's units, load and longest unit by WALL-clock, not by CPU" \
+  "$(cat "$TMP/plan.out")"
 [ "$(subject aliases)" = "default
 runtest
 bin-smoke" ]
@@ -300,18 +310,27 @@ refused "plan without N" 'usage' subject plan
 refused "weigh without a trace" 'usage' subject weigh "$TMP/no-such-trace"
 
 # weigh: one synthetic trace, written as canonical S-expressions. A unit's
-# seconds are its finish events' durations (the time slot's second atom, in
-# nanoseconds). Expected: compilers and the toolchain excluded (but not
-# cc_march_census.exe); fast-math runs credited to the _fast_math twin; a
-# sandboxed run of the split directory counted there; elsewhere -> @rest.
+# seconds are its finish events' CPU times (rusage's user_cpu_time plus
+# system_cpu_time, in nanoseconds; never the wall-clock duration), credited
+# by the process's first target (gh-ocannl-1503): an
+# alias action of the split directory's runtest-<name> -> <name>, its other
+# aliases (bin-smoke) -> @rest; a file <name>.<ext...> there -> <name>;
+# anything elsewhere -> @rest. Expected: compilers and the toolchain excluded
+# (but not cc_march_census.exe); online_softmax.exe credited to each of the
+# three tests it runs -- its own (`.exe.output`), the fast-math and the
+# fp-licences twins (`.actual`, the flag on its command line read by nobody);
+# sweep_harness_driver.exe and inline-test-runner.exe to the aliases whose
+# actions they are; the cc_temp_ownership-success variant to itself; a
+# sandboxed run of the split directory counted there; a process with no target
+# by its directory and program; elsewhere -> @rest.
 #
 # The trace is also the canary fixture (gh-ocannl-1287): weigh decodes only
-# `process finish`'s prog, dir and digit-only duration, and a byte comparison
-# of process_args against the fast-math flag. Every entry of the inventory
-# below carries CANARY -- a field of a finish event (rusage among them), of a
-# start event (a kind weigh never opens), of config init (where dune records
-# its environment and argv), of other kinds -- as does a process_args atom
-# beside the flag; a time slot that is not all digits is refused; and every
+# `process finish`'s prog, dir, target_files, digit-only duration and its
+# rusage's digit-only CPU times. Every entry of the inventory below carries
+# CANARY -- a field of a finish event (process_args among them, and maxrss
+# beside the CPU times inside rusage), of a start event (a kind weigh never
+# opens), of config init (where dune records its environment and argv), of
+# other kinds; a time slot that is not all digits is refused; and every
 # weigh run here, refusals included, must print none of it. Each entry also
 # gets a twin that decodes it and prints what it decoded, which the canary
 # check alone must reject, so an entry the fixture forgot to seed fails its
@@ -320,7 +339,7 @@ CANARY=CANARY-5e1d-not-for-output
 # KIND/NAME:FIELD, the fields the fixture seeds and the twins decode.
 WEIGH_SECRET="process/finish:env process/finish:process_args process/finish:rusage
 process/finish:pid process/finish:exit process/finish:categories process/finish:queued
-process/finish:target_files process/finish:target_dirs process/finish:name
+process/finish:target_dirs process/finish:name
 process/finish:stdout process/finish:stderr process/finish:error
 process/start:prog process/start:dir process/start:env process/start:process_args
 config/init:env config/init:argv config/init:build_dir config/init:root
@@ -357,12 +376,19 @@ def seeded(kind, written):
     return out
 
 
-def finish(prog, directory, seconds, args=(), time=None):
-    time = time or ['1', str(int(seconds * 1e9))]
+def finish(prog, directory, seconds, targets=None, args=(), time=None, cpu=None, rusage=True):
+    # SECONDS of CPU, user and system together, in the rusage beside a canary
+    # maxrss; the wall-clock duration is three times that, as on a loaded
+    # runner, so a weigh crediting wall-clock reads every unit 3x. TARGETS
+    # None: a process the trace records no target_files for.
+    time = time or ['1', str(int(seconds * 3e9))]
+    cpu = cpu or [str(int(seconds * 0.75e9)), str(int(seconds * 0.25e9))]
+    own = [] if targets is None else [['target_files', list(targets)]]
+    if rusage:
+        own.append(['rusage', [['user_cpu_time', cpu[0]], ['maxrss', canary], ['system_cpu_time', cpu[1]]]])
     return sexp(['process', 'finish', list(time), ['process_args', list(args) + ['--token=' + canary]],
-                 ['prog', prog], ['dir', directory],
-                 ['rusage', [['user_cpu_time', '7'], ['maxrss', canary], ['system_cpu_time', '3']]]]
-                + seeded('process/finish', ('process_args', 'rusage')))
+                 ['prog', prog], ['dir', directory]] + own
+                + seeded('process/finish', ('process_args', 'rusage', 'target_files')))
 
 
 def start(prog):
@@ -372,17 +398,36 @@ def start(prog):
 
 
 b = '/x/_build/default/'
+ops = '_build/default/test/operations/'
+
+
+def act(alias, d='test/operations'):
+    # An alias action's target, as dune names it.
+    return '_build/.actions/default/%s/%s-0123456789abcdef0123456789abcdef' % (d, alias)
+
+
 events = [
     sexp(['config', 'init', '1', ['build_dir', '_build/' + canary]] + seeded('config/init', ('build_dir',))),
     sexp(['log', 'info', '1', ['message', canary]]),
     start('ocamlopt.opt'),
-    finish('/opt/bin/ocamlopt.opt', b + 'lib', 50),
-    finish('/usr/bin/cc', b + 'lib', 40),
-    finish('cc_march_census.exe', b + 'test/operations', 2),
-    finish('online_softmax.exe', b + 'test/operations', 3, ['--ocannl_backend=cc', '--ocannl_cc_backend_fast_math=true']),
-    finish('online_softmax.exe', '/x/_build/.sandbox/0123abcd/default/test/operations', 1),
-    finish('./einsum_test.exe', b + 'test/einsum', 4),
-    finish('placement_store.exe', b + 'test/operations/sub', 0.4),
+    finish('/opt/bin/ocamlopt.opt', b + 'lib', 50, ['_build/default/lib/a.cmx', '_build/default/lib/a.o']),
+    finish('/usr/bin/cc', b + 'lib', 40, ['_build/default/lib/a_stubs.o']),
+    finish('cc_march_census.exe', b + 'test/operations', 6, [ops + 'cc_march_census.exe.output']),
+    finish('./online_softmax.exe', b + 'test/operations', 7, [ops + 'online_softmax.exe.output']),
+    finish('./online_softmax.exe', b + 'test/operations', 3, [ops + 'online_softmax_fast_math.actual'],
+           ['--ocannl_backend=cc', '--ocannl_cc_backend_fast_math=true']),
+    finish('./online_softmax.exe', '/x/_build/.sandbox/0123abcd/default/test/operations', 5,
+           [ops + 'online_softmax_fp_licences.actual']),
+    finish('./sweep_harness_driver.exe', b + 'test/operations', 9, [act('runtest-sweep_components')]),
+    finish('.tut.inline-tests/inline-test-runner.exe', '/x/_build/.sandbox/4567cdef/default/test/operations', 4,
+           [act('runtest-operations_tutorials')]),
+    finish('.tut.inline-tests/inline-test-runner.exe', b + 'test/operations', 4, [act('runtest-operations_tutorials')]),
+    finish('./cc_temp_ownership.exe', b + 'test/operations', 2, [ops + 'cc_temp_ownership-success.actual']),
+    finish('./smoke.exe', b + 'test/operations', 1, [act('bin-smoke')]),
+    finish('./helper.exe', b + 'test/operations', 1, ['_build/default/test/config/generated']),
+    finish('./untargeted.exe', b + 'test/operations', 1),
+    finish('./einsum_test.exe', b + 'test/einsum', 4, ['_build/default/test/einsum/einsum_test.exe.output']),
+    finish('placement_store.exe', b + 'test/operations/sub', 0.4, [act('runtest-placement_store', 'test/operations/sub')]),
     sexp(['action', 'write-file', ['1', '2'], ['file', canary], ['size', '3']]),
 ]
 (root / 'trace').write_bytes(b''.join(events))
@@ -390,6 +435,12 @@ events = [
 # duration)`: refused by offset, quoting none of either.
 (root / 'bad-time-trace').write_bytes(finish('x.exe', b + 'lib', 1, time=['1', canary]))
 (root / 'bare-time-trace').write_bytes(finish('x.exe', b + 'lib', 1, time=[canary]))
+# A CPU time that is not all digits: refused the same way.
+(root / 'bad-cpu-trace').write_bytes(finish('x.exe', b + 'lib', 1, cpu=['1', canary]))
+# A process with no rusage weighs nothing, and says so.
+(root / 'no-rusage-trace').write_bytes(finish('x.exe', b + 'test/operations', 5, [ops + 'x.exe.output'])
+                                       + finish('y.exe', b + 'test/operations', 2, [ops + 'y.exe.output'],
+                                                rusage=False))
 # Cut short inside a finish event, after the canary fields began.
 (root / 'cut-trace').write_bytes(events[0] + events[3][:-20])
 PY
@@ -398,9 +449,25 @@ canary_free() { # FILE...: no file carries the canary
 }
 subject weigh "$TMP/trace" >"$TMP/weigh.out" 2>"$TMP/weigh.err"
 weigh_rc=$?
-printf '%s\n' '@rest 4' 'online_softmax_fast_math 3' 'cc_march_census 2' 'online_softmax 1' >"$TMP/weigh.expected"
+printf '%s\n' 'sweep_components 9' 'operations_tutorials 8' 'online_softmax 7' '@rest 6' 'cc_march_census 6' \
+  'online_softmax_fp_licences 5' 'online_softmax_fast_math 3' 'cc_temp_ownership-success 2' 'untargeted 1' \
+  >"$TMP/weigh.expected"
 diff "$TMP/weigh.expected" "$TMP/weigh.out" >"$TMP/weigh.diff"
-report $? "weigh credits each unit its processes' durations from a dune trace" "exit $weigh_rc; $(cat "$TMP/weigh.diff" "$TMP/weigh.err")"
+report $? "weigh credits each unit the CPU seconds of the processes its targets name" \
+  "exit $weigh_rc; $(cat "$TMP/weigh.diff" "$TMP/weigh.err")"
+subject weigh --wall "$TMP/trace" >"$TMP/weigh-wall.out" 2>"$TMP/weigh-wall.err"
+printf '%s\n' 'sweep_components 27' 'operations_tutorials 24' 'online_softmax 21' '@rest 19' 'cc_march_census 18' \
+  'online_softmax_fp_licences 15' 'online_softmax_fast_math 9' 'cc_temp_ownership-success 6' 'untargeted 3' \
+  >"$TMP/weigh-wall.expected"
+diff "$TMP/weigh-wall.expected" "$TMP/weigh-wall.out" >"$TMP/weigh-wall.diff" && [ ! -s "$TMP/weigh-wall.err" ] &&
+  canary_free "$TMP/weigh-wall.out"
+report $? "weigh --wall credits the same units their wall-clock durations" \
+  "$(cat "$TMP/weigh-wall.diff" "$TMP/weigh-wall.err")"
+subject weigh "$TMP/no-rusage-trace" >"$TMP/no-rusage.out" 2>"$TMP/no-rusage.err"
+[ "$?" = 0 ] && [ "$(cat "$TMP/no-rusage.out")" = 'x 5
+y 0' ] && grep -q '1 finished processes carry no rusage; each weighs 0' "$TMP/no-rusage.err"
+report $? "weigh credits a process without rusage nothing, with a warning" \
+  "$(cat "$TMP/no-rusage.out" "$TMP/no-rusage.err")"
 [ "$weigh_rc" = 0 ] && [ ! -s "$TMP/weigh.err" ] && canary_free "$TMP/weigh.out" "$TMP/weigh.err"
 report $? "weigh decodes none of the canary fields: exit 0, empty stderr, no canary" \
   "exit $weigh_rc; see $TMP/weigh.out $TMP/weigh.err"
@@ -410,7 +477,7 @@ report $? "weigh refuses a file that is not a dune trace" "$(cat "$TMP/weigh.log
 printf '(6:config4:init1:1)' >"$TMP/empty-trace"
 harness_rejected 1 'no finished processes' "$TMP/weigh.log" subject weigh "$TMP/empty-trace"
 report $? "weigh refuses a trace that recorded no process" "$(cat "$TMP/weigh.log")"
-for t in bad-time-trace bare-time-trace cut-trace; do
+for t in bad-time-trace bare-time-trace bad-cpu-trace cut-trace; do
   harness_rejected 1 'malformed or cut short at byte [0-9]+$' "$TMP/weigh.log" subject weigh "$TMP/$t" &&
     canary_free "$TMP/weigh.log"
   report $? "weigh refuses $t by offset, quoting none of its bytes" "$(cat "$TMP/weigh.log")"
@@ -428,8 +495,8 @@ weigh_twin() { # ENTRY -> 0 when the twin ran and leaked the canary
 import sys
 src, dst, cat, name, field = sys.argv[1:6]
 text = open(src).read()
-pairs = [("TEXT = {FINISH: {b'prog', b'dir'}}\n",
-          "TEXT = {FINISH: {b'prog', b'dir'}}\nTEXT.setdefault((b'%s', b'%s'), set()).add(b'%s')\n"
+pairs = [("TEXT = {FINISH: {b'prog', b'dir', b'target_files'}}\n",
+          "TEXT = {FINISH: {b'prog', b'dir', b'target_files'}}\nTEXT.setdefault((b'%s', b'%s'), set()).add(b'%s')\n"
           % (cat, name, field)),
          ("    print('%s %.0f' % (name, seconds))\n", "    print('%s %.0f %s' % (name, seconds, events))\n")]
 for old, new in pairs:
@@ -452,11 +519,44 @@ for entry in $WEIGH_SECRET; do
 done
 rm -f "$repo/tools/weigh-twin.sh"
 
-# merge-weights: one run's per-shard weigh lines -> the WEIGHTS block. The
+# The twin crediting wall-clock, the unit gh-ocannl-1503 replaced: the
+# fixture's durations are three times its CPU, so every unit reads 3x.
+path=$(mutant weigh-wall-clock "/fields.get\\('cpu_ns', 0\\)/ { sub(/fields.get\\('cpu_ns', 0\\)/, \"fields.get('ns', 0)\") } { print }")
+if [ -z "$path" ] || cmp -s "$path" "$SRC"; then
+  report 1 "negative control: weigh crediting wall-clock" "could not build the mutant"
+else
+  cp "$path" "$repo/tools/weigh-wall.sh"
+  bash "$repo/tools/weigh-wall.sh" weigh "$TMP/trace" >"$TMP/wall.out" 2>"$TMP/wall.err"
+  rm -f "$repo/tools/weigh-wall.sh"
+  ! diff -q "$TMP/weigh.expected" "$TMP/wall.out" >/dev/null && grep -qx 'sweep_components 27' "$TMP/wall.out"
+  report $? "negative control: weigh crediting wall-clock" "see $TMP/wall.out $TMP/wall.err"
+fi
+
+# The twin keyed by executable, the scheme gh-ocannl-1503 replaced: the same
+# trace and oracle must reject it (online_softmax.exe's three tests in one
+# unit, the driver and the inline-test runner under their own names).
+path=$(mutant weigh-by-executable \
+  '/cost\[unit_of\(fields, prog\)\]/ { sub(/unit_of\(fields, prog\)/, "(\"@rest\" if in_context(fields.get(\"dir\") or \"\") != split_dir else prog.removesuffix(\".exe\"))") } { print }')
+if [ -z "$path" ] || cmp -s "$path" "$SRC"; then
+  report 1 "negative control: weigh keyed by executable" "could not build the mutant"
+else
+  # Beside the credential deny-list the subject sources, as the canary twins run.
+  cp "$path" "$repo/tools/weigh-by-exe.sh"
+  bash "$repo/tools/weigh-by-exe.sh" weigh "$TMP/trace" >"$TMP/by-exe.out" 2>"$TMP/by-exe.err"
+  rm -f "$repo/tools/weigh-by-exe.sh"
+  ! diff -q "$TMP/weigh.expected" "$TMP/by-exe.out" >/dev/null &&
+    grep -qx 'online_softmax 15' "$TMP/by-exe.out"
+  report $? "negative control: weigh keyed by executable" "see $TMP/by-exe.out $TMP/by-exe.err"
+fi
+
+# merge-weights: CI runs' per-shard weigh lines -> the WEIGHTS block. The
 # lines sit wherever `gh run view --log` puts them (job and step columns, a
-# timestamp); a unit's shards are summed; @rest is the largest shard's beyond
-# the others' mean (their @rest is the overhead every shard pays); units
-# under 2 s are left to the default, counted on stderr.
+# timestamp); a unit in several shards -- a shared dependency, which moving its
+# alias does not move -- is left out of the table, in every run once any run
+# saw it shared; @rest is the largest shard's beyond the others' mean (their
+# @rest is the overhead every shard pays); runs are averaged per unit over
+# the runs that measured it; units under 2 s are left to the default, counted
+# on stderr.
 {
   printf 'Build (ubuntu, main, 1/2)\tWeigh\t2026-10-21T10:00:00.1234567Z ci-shard-weight 1/3 heavy 100\n'
   printf '2026-10-21T10:00:00.2Z ci-shard-weight 1/3 @rest 30\n'
@@ -474,14 +574,44 @@ ok=0
 [ "$merge_rc" = 0 ] || ok=1
 [ "$(cat "$TMP/merge.out")" = '@rest 310
 heavy 100
-light 50
-driver 7' ] || ok=1
-grep -q 'warning: driver ran in more than one shard' "$TMP/merge.err" || ok=1
-grep -q '3 shards; @rest overhead per shard 20s; 1 units under 2s, mean 1.0s' "$TMP/merge.err" || ok=1
-report $ok "merge-weights sums each unit's shards and nets @rest of the per-shard overhead" \
+light 50' ] || ok=1
+grep -q 'driver ran in 2 shards, a shared dependency: fixed overhead of up to 4s in each, left out of the table' \
+  "$TMP/merge.err" || ok=1
+grep -q '3 shards; @rest overhead per shard 20s$' "$TMP/merge.err" || ok=1
+grep -q '1 run(s); 1 units under 2s, mean 1.0s' "$TMP/merge.err" || ok=1
+report $ok "merge-weights leaves a shared dependency out and nets @rest of the per-shard overhead" \
   "exit $merge_rc; $(cat "$TMP/merge.out" "$TMP/merge.err")"
 [ "$(subject merge-weights <"$TMP/run.log" 2>/dev/null)" = "$(cat "$TMP/merge.out")" ]
 report $? "merge-weights reads stdin without a LOG"
+# A second run, of another deal and N: heavy and light measured again, a
+# newcomer measured only here, and driver alone in one shard -- still left
+# out, since the first run saw it shared.
+{
+  printf 'ci-shard-weight 1/2 heavy 140\n'
+  printf 'ci-shard-weight 1/2 @rest 50\n'
+  printf 'ci-shard-weight 2/2 light 30\n'
+  printf 'ci-shard-weight 2/2 newcomer 12\n'
+  printf 'ci-shard-weight 2/2 driver 9\n'
+  printf 'ci-shard-weight 2/2 @rest 10\n'
+} >"$TMP/run2.log"
+subject merge-weights "$TMP/run.log" - <"$TMP/run2.log" >"$TMP/merge2.out" 2>"$TMP/merge2.err"
+merge_rc=$?
+ok=0
+[ "$merge_rc" = 0 ] || ok=1
+[ "$(cat "$TMP/merge2.out")" = '@rest 175
+heavy 120
+light 40
+newcomer 12' ] || ok=1
+grep -q 'run 1: 3 shards; @rest overhead per shard 20s$' "$TMP/merge2.err" || ok=1
+grep -q 'run 2: 2 shards; @rest overhead per shard 10s$' "$TMP/merge2.err" || ok=1
+grep -q 'run 1: driver ran in 2 shards, a shared dependency' "$TMP/merge2.err" || ok=1
+grep -q '2 run(s); 1 units under 2s' "$TMP/merge2.err" || ok=1
+report $ok "merge-weights averages runs per unit, over the runs that measured it" \
+  "exit $merge_rc; $(cat "$TMP/merge2.out" "$TMP/merge2.err")"
+refused "merge-weights: stdin named twice" 'stdin named twice' subject merge-weights - - <"$TMP/run.log"
+grep -v '^ci-shard-weight 2/2' "$TMP/run2.log" >"$TMP/run2-missing.log"
+refused "merge-weights: a later run missing a shard" 'run 2: no lines for shard\(s\) 2/2 of 2' \
+  subject merge-weights "$TMP/run.log" "$TMP/run2-missing.log"
 grep -v '^ci-shard-weight 3/3' "$TMP/run.log" >"$TMP/run-missing.log"
 refused "merge-weights: a shard missing from the run" 'no lines for shard\(s\) 3/3 of 3' \
   subject merge-weights "$TMP/run-missing.log"
@@ -492,6 +622,27 @@ refused "merge-weights: a unit twice in one shard" 'names light twice' subject m
 printf 'no weights here\n' >"$TMP/run-none.log"
 refused "merge-weights: a log with no weigh lines" 'no ci-shard-weight lines' subject merge-weights "$TMP/run-none.log"
 refused "merge-weights: a missing log" 'usage' subject merge-weights "$TMP/no-such-log"
+refused "merge-weights: a missing second log" 'usage' subject merge-weights "$TMP/run.log" "$TMP/no-such-log"
+# merge-weights --wall reads the ci-shard-wall lines, and only those.
+{ printf 'ci-shard-wall 1/2 heavy 300\n'; printf 'ci-shard-wall 2/2 light 80\n'; cat "$TMP/run.log"; } >"$TMP/wall.log"
+[ "$(subject merge-weights --wall "$TMP/wall.log" 2>/dev/null)" = 'heavy 300
+light 80' ]
+report $? "merge-weights --wall merges the ci-shard-wall lines"
+refused "merge-weights --wall: a log without wall lines" 'no ci-shard-wall lines' subject merge-weights --wall "$TMP/run.log"
+# A rule output named after no unit (as backend-0-0.log.actual is for
+# runtest-micrograd_demo_logging) goes to the one unit whose stanza in the
+# split directory's dune file names it; a key with no unit and no owner is
+# reported loudly and kept.
+printf '%s\n' '(rule (target "out-0.log.actual") (action (with-stdout-to %{target} (run ./a.exe))))' \
+  '(rule (alias runtest-a) (action (diff a.expected "out-0.log.actual")))' >"$repo/$ops/dune"
+printf 'ci-shard-weight 1/1 out-0 7\nci-shard-weight 1/1 a 2\nci-shard-weight 1/1 phantom 5\n' >"$TMP/fold.log"
+subject merge-weights "$TMP/fold.log" >"$TMP/fold.out" 2>"$TMP/fold.err"
+[ "$(cat "$TMP/fold.out")" = 'a 9
+phantom 5' ] && grep -q 'out-0 is a target of a; its weight goes there' "$TMP/fold.err" &&
+  grep -q 'WEIGHT NAMES NO UNIT: phantom 5' "$TMP/fold.err"
+report $? "merge-weights credits a rule output to the unit that owns it, and flags a key with no unit" \
+  "$(cat "$TMP/fold.out" "$TMP/fold.err")"
+: >"$repo/$ops/dune"
 
 # The fault-injected twins. Without the split-directory exclusion, @rest would
 # carry test/operations' own runtest and all; naming `default` instead of

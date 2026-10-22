@@ -3029,13 +3029,26 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   build directories under `--trace-file` and comparing their executed commands with an unsharded
   run's; repeat that check after adding an `all`-only target to `test/operations`. The units are
   dealt longest-first by the script's `WEIGHTS` table (the costs are heavy-tailed, so an
-  unweighted deal measured 63/37). Its unit is wall-clock seconds of dune job slot ON THE RUNNER
-  (gh-ocannl-1464): a Mac-measured CPU table had drifted to a 26/12-minute split, because a test
-  holds its slot for its wall time (`cc_march_census`: 806 s on 474 CPU-s at `-j 4`) and heavy
-  newcomers were missing from it, each dealt at the default weight. Every `main` shard job weighs
-  its own build's trace, and `tools/ci-shard.sh merge-weights` turns one run's shard logs into
-  the replacement table (the script's header has the fetch recipe); refresh it when
-  `tools/ci-times.sh` shows the shards drifting apart. `dune show aliases`, which
+  unweighted deal measured 63/37). Its unit is CPU seconds (rusage user + system, a test's
+  compiler children included) ON THE RUNNER (gh-ocannl-1503), because they add up: a shard's
+  tests keep the 4-vCPU runner's cores busy at `-j 4`, so its dune step lasts about a quarter
+  of its CPU. Wall-clock seconds of job slot (gh-ocannl-1464's unit) do not add up: a test's wall-clock is
+  its CPU stretched by its neighbours, worst (likely) between tests running OpenMP kernels, whose
+  libgomp barrier spin is sized for their own threads, not the runner's; so a deal balanced on wall-clock
+  weights measured under the previous deal predicted 60.5/60.5 minutes of slot and ran 80.6 on one
+  shard while the other hit the job's 45-minute timeout. A Mac-measured table drifts as badly
+  (gh-ocannl-1464 saw 26/12): measure on the runner. A single unit whose own wall-clock outlasts
+  the rest of its shard is the one cost CPU hides, so CI also prints `ci-shard-wall` lines and
+  `plan` names each shard's longest unit by the script's `WALL_WEIGHTS` (`merge-weights --wall`). Every
+  `main` shard job weighs its own build's trace, crediting each process to the unit its TARGET
+  names -- an alias action's `runtest-<name>`, a rule's `<name>.<ext>` file -- never to its
+  executable, which several tests share (`online_softmax.exe` runs three,
+  `inline-test-runner.exe` a family) -- and a rule output named after no unit to the unit whose
+  stanza names it, any key left unplaced reported loudly; and `tools/ci-shard.sh merge-weights` turns runs' shard
+  logs, one file per run, into the replacement table, averaged over the runs (the script's header
+  has the fetch recipe). Refresh it from runs of the CURRENT code when `tools/ci-times.sh` shows
+  the shards drifting apart: `plan` balancing a table to the second while CI's shards ran 32 and
+  14 minutes was a table measured before gh-ocannl-1340 made the autotune tests 2-3x faster. `dune show aliases`, which
   the script reads, prints on STDERR and exits 0 for a directory it does not know (and `dune
   rules` prints nothing for an action-only alias, so it cannot answer coverage questions either):
   the script validates the listing and refuses (exit 2) rather than shard a partial one.
@@ -4105,9 +4118,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   reader. `tools/test-action-durations.sh` seeds a canary in every non-read field of the schema it
   inventories, rejects one decode-and-print twin per such field by the canary alone, and pins the
   tampered-prefix leak as the documented boundary. `tools/ci-shard.sh weigh` holds the same
-  boundary over its own fields (gh-ocannl-1287): it opens only `process finish`, decodes `prog`,
-  `dir` and the time slot's digit-only duration, and tests `process_args` for the fast-math flag
-  by comparing bytes; `tools/test-ci-shard.sh` seeds and twins its inventory the same way. Each
+  boundary over its own fields (gh-ocannl-1287): it opens only `process finish` and decodes `prog`,
+  `dir`, `target_files`, the time slot's digit-only duration and, of `rusage`, only the digit-only
+  `user_cpu_time` and `system_cpu_time`; `tools/test-ci-shard.sh` seeds and twins its inventory
+  the same way. Each
   reader keeps its own whitelist rather than share a module, since what each may decode differs
   and each harness rewrites its own subject's whitelist line to build its twins.
 

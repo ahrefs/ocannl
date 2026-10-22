@@ -432,13 +432,14 @@ def csexp(x):
 
 
 def weigh_job(script, shard, units):
-    # The step's stdout for SHARD, its trace holding UNITS: (directory, program, seconds).
+    # The step's stdout for SHARD, its trace holding UNITS: (directory, program, CPU seconds).
     work = Path(sys.argv[2]) / ('weigh-' + shard.replace('/', '-'))
     (work / '_build').mkdir(parents=True, exist_ok=True)
     if not (work / 'tools').exists():
         (work / 'tools').symlink_to(root / 'tools')
     (work / '_build' / 'trace.csexp').write_bytes(b''.join(
-        csexp(['process', 'finish', ['1', str(int(s * 1e9))], ['prog', prog], ['dir', '/w/_build/default/' + d]])
+        csexp(['process', 'finish', ['1', str(int(s * 1e9))], ['prog', prog], ['dir', '/w/_build/default/' + d],
+               ['rusage', [['user_cpu_time', str(int(s * 1e9))], ['system_cpu_time', '0']]]])
         for d, prog, s in units))
     run = subprocess.run(['bash', '-eo', 'pipefail', '-c', script], cwd=work, capture_output=True,
                          text=True, env=dict(os.environ, SHARD=shard))

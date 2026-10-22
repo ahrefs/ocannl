@@ -57,8 +57,9 @@
 #   tools/ci-shard.sh targets K/N [SUITE]  # shard K's dune targets, one per line
 #   tools/ci-shard.sh plan N [SUITE]       # each shard's units and estimated load
 #   tools/ci-shard.sh aliases              # the aliases the `main` suite shards
-#   tools/ci-shard.sh weigh TRACE          # per-unit seconds from a dune trace
-#   tools/ci-shard.sh merge-weights [LOG]  # a WEIGHTS block from one CI run's log
+#   tools/ci-shard.sh weigh [--wall] TRACE # per-unit CPU (wall-clock) seconds from a dune trace
+#   tools/ci-shard.sh merge-weights [--wall] [LOG...]
+#                                          # a WEIGHTS (WALL_WEIGHTS) block from CI runs' logs, one per run
 # SUITE is `main` (the default) or `train`.
 #
 # For `main`, `targets` and `plan` run `dune show aliases` and `dune show targets` (as
@@ -75,35 +76,64 @@
 #   dune build @default @runtest @bin-smoke --trace-file=TRACE
 # -- (dune >= 3.24's canonical-S-expression trace; a fresh build directory, or
 # cached rules record no process) and prints a replacement WEIGHTS block:
-# wall-clock seconds per test/operations executable, keyed by the alias of the same
-# name, plus `@rest` for every non-compiler process elsewhere. An executable
-# run with `--ocannl_cc_backend_fast_math=true` is credited to its
-# `<name>_fast_math` twin. An executable whose alias is named differently
-# (sweep_harness_driver runs for runtest-sweep_harness) keeps its own name: map
-# it by hand, or `plan` warns about it as a stale entry. Keep the units above a
-# few seconds; the rest weigh DEFAULT_WEIGHT anyway.
+# CPU seconds per unit, plus `@rest` for every non-compiler process
+# elsewhere. A process is credited by what dune ran it FOR -- its target, not
+# its executable (gh-ocannl-1503): an alias action's target names its alias
+# (`runtest-<name>` -> unit `<name>`), a rule's target file names its test
+# (`<name>.exe.output`, `<name>.actual`, ... -> `<name>`). Keyed by executable,
+# one program several aliases run was credited to one of them or to none
+# (online_softmax.exe ran online_softmax_fp_licences for 143 s that its
+# namesake was dealt; inline-test-runner and the cc_temp_ownership-<variant>
+# family were dropped; sweep_harness_driver needed a hand mapping), so the
+# deal balanced weights that were not the shards' work. A process the trace
+# records no target for is placed by its directory and keeps its program's
+# name. A rule output named after no unit (`backend-0-0.log.actual`, which
+# runtest-micrograd_demo_logging diffs) keeps its stem here; `merge-weights`
+# and `plan` credit it to the unit whose stanza in the split directory's dune
+# file names it, and report loudly a key they cannot place. Keep the units
+# above a few seconds; the rest weigh DEFAULT_WEIGHT anyway.
 # It decodes only the fields it needs (SECURITY, above `weigh` below).
-# Wall-clock -- dune's own duration of each process -- because what a unit
-# costs a shard is the dune job slot it holds: on the 4-vCPU runner at `-j 4`
-# cc_march_census held one for 806s on 474 CPU-s, and sweep_harness's driver
-# for 343s on 135 (gh-ocannl-1464), so CPU weights dealt the slowest shard the
-# longest poles. Wall-clock is only meaningful measured where the shards run,
-# under their own load (a workstation's is dominated by whatever else it is
-# doing: XProtect stalls, other sessions' suites), so measure it there.
+# CPU seconds -- the user and system time dune's rusage records for each
+# process, its waited-for children (the C compiler a test runs) included --
+# because they ADD UP: a shard runs at `-j 4` on a 4-vCPU runner whose cores
+# its tests keep busy, so its dune step lasts about its units' CPU over 4.
+# Wall-clock does not add up. A test's wall-clock is its CPU stretched by
+# whatever shares the runner with it -- likely the most between tests running
+# OpenMP kernels, whose libgomp barrier spin is sized for their own threads,
+# not the runner's. Dealt by wall-clock weights
+# measured under one deal (gh-ocannl-1464's choice), the next deal predicted
+# 60.5/60.5 min of slot time and ran 80.6 min on one shard while the other
+# outlived the job's 45-minute timeout -- padded_conv_cache read 160 s by its
+# weight and 394 s beside its new neighbours (gh-ocannl-1503). CPU moves too
+# (spinning OpenMP threads burn it), but less, and within a run it adds up:
+# master's deal measured 89.0 and 44.4 CPU-minutes over dune steps of 27.5 and
+# 14.8 min. Check each new deal's run against `plan` all the same, and refresh
+# from it: averaging runs of different deals averages out the neighbours.
+# The one thing CPU hides is a single unit whose own wall-clock outlasts the
+# rest of its shard, so `weigh --wall` measures wall-clock too, CI prints it
+# as `ci-shard-wall` lines, and `plan` names each shard's longest unit by the
+# WALL_WEIGHTS table they refresh. CPU is only meaningful measured on the
+# runner's own processor, so measure it in CI.
 #
 # CI does it: each `main` shard
 # job weighs its own build's trace (ci.yml's "Weigh the shard's units" step)
 # and prints the table as `ci-shard-weight K/N UNIT SECONDS` lines, and
-#   gh run view RUN --repo lukstafi/ocannl-staging --log | tools/ci-shard.sh merge-weights
-# merges one run's shards into the replacement block (`merge_weights` says
-# how); `gh run view --log` answers only once the whole run has completed, and
-# before that each shard job's log is
+#   gh run view RUN --repo lukstafi/ocannl-staging --log >RUN.log
+#   tools/ci-shard.sh merge-weights RUN1.log RUN2.log ...
+# merges each run's shards, then averages the runs, into the replacement block
+# (`merge_weights` says how). Average two runs or more when you have them:
+# even CPU moves somewhat with the runner's load. `gh run view --log` answers only once
+# the whole run has completed, and before that each shard job's log is
 #   gh api --allow-escape-sequences repos/lukstafi/ocannl-staging/actions/jobs/JOB/logs
-# (its compiler warnings carry terminal escapes, which gh otherwise withholds).
-# Then map by hand what `plan` warns is no unit (sweep_harness_driver ->
-# sweep_harness; an inline-test runner or an executable several aliases run
-# has no one unit, and is dropped), check the deal with `plan 2`, and the next
-# run's shard dune-step times with `tools/ci-times.sh`.
+# (its compiler warnings carry terminal escapes, which gh otherwise withholds);
+# concatenate one run's shard jobs into one LOG. Check the deal with `plan 2`
+# (it warns about a weight that names no unit), and the next run's shard
+# dune-step times with `tools/ci-times.sh`. Weigh only runs of the CURRENT
+# code, and only runs whose `weigh` printed CPU seconds (before gh-ocannl-1503
+# it printed wall-clock): a test's speed-up leaves its old weight dealing a
+# phantom load (the autotune tests ran 2-3x faster after gh-ocannl-1340, and
+# the table measured before it dealt one shard 2.3x the other's work while
+# predicting them equal).
 
 set -euo pipefail
 
@@ -111,256 +141,288 @@ SUITE_ALIASES="default runtest bin-smoke"
 SPLIT_DIR=test/operations
 DEFAULT_WEIGHT=1
 
-# Seconds of dune job slot per unit on the ubuntu runner (gh-ocannl-1464),
-# the mean of staging#1303's two CI runs where both measured a unit (one run
-# alone is noisy: flip_abandonment read 162s and 518s): 39604055166, wall-clock
-# throughout from `weigh`, and 39599006506, its wall-clock table's top rows and
-# CPU time below them. Units under 2s weigh DEFAULT_WEIGHT; the 250 of them in
-# the first run averaged 0.3s. The cc_march_census pieces (gh-ocannl-1502)
-# replace that test's 945s: their executable runs under thirteen aliases,
-# which `weigh` credits to no one unit, so they come from the pieces' own
-# `cc census piece <name>: <N>s` stderr lines on a cold-cache run (staging#1334's
-# first, per (width, family), split 65/35 between the native and wide children).
+# CPU seconds per unit on the ubuntu runner (gh-ocannl-1503): `merge-weights`
+# over PR runs 39779782938 (master's deal) and 39785508628 (the deal this
+# table's predecessor made), the first two whose `weigh` credited CPU by
+# target -- two deals, so a unit's neighbours average out. The first ran
+# cc_march_census whole, a key that names no unit since staging#1334 split it
+# (merge-weights says so) and is left out; the second measured all thirteen
+# pieces. Shared dependencies are left out. Units under 2s weigh
+# DEFAULT_WEIGHT; the 266 of them averaged 0.4s.
 WEIGHTS='
-cc_march_census-w64_native_host 240
-cc_march_census-w64_native_foreign 160
-cc_march_census-w64_wide_host 130
-cc_march_census-w16_native_host 92
-cc_march_census-w64_wide_foreign 86
-cc_march_census-w32_native_host 66
+autotune_composite_playoff 908
+autotune_staffed_singles 633
+autotune_round_expansion 582
+autotune_sketch_placements 500
+flip_abandonment 408
+flip_twins 382
+padded_conv_cache 290
+autotune_device_memory 256
+schedule_conv_gemm 250
+cc_march_census-w64_native_host 226
+sweep_harness 160
+autotune_candidate_release 146
+autotune_split_reduce 144
+autotune_budget 125
+slot_kind_live 122
+autotune_smoke 116
+tune_call_budget 108
+@rest 100
+bridge_arm_coverage 87
+autotune_measured_refusal 84
+cc_march_census-w64_wide_host 82
+online_softmax_block_fast_math 78
+placement_store 75
+cc_march_census-w64_native_foreign 73
+cc_march_census-w16_native_host 68
+online_softmax 68
+autotune_labels 67
 cc_march_census-w32_native_foreign 66
-cc_march_census-w16_native_foreign 66
-cc_march_census-w16_wide_host 50
-cc_march_census-emission 41
-cc_march_census-w32_wide_host 36
-cc_march_census-w32_wide_foreign 36
-cc_march_census-w16_wide_foreign 35
-autotune_staffed_singles 638
-autotune_round_expansion 492
-autotune_composite_playoff 478
-sweep_harness 400
-flip_abandonment 378
-padded_conv_cache 366
-flip_twins 328
-autotune_device_memory 292
-autotune_sketch_placements 280
-@rest 196
-schedule_conv_gemm 196
-placement_store 196
-online_softmax 155
-autotune_smoke 154
-autotune_measured_refusal 146
-autotune_candidate_release 143
-env_var_deps 132
-autotune_split_reduce 116
-online_softmax_block_fast_math 93
-gpu_fission_mapping 90
-online_softmax_fast_math 81
-online_softmax_block 76
-autotune_budget 68
-reduction_forms 64
-bridge_arm_coverage 60
-autotune_labels 55
-schedule_cache_numerics 48
-fission_replay_segmentation 46
-accum_width 38
-batch_norm_running 35
-autotune_concurrent_refusal 34
-shipped_kernels_alone 34
-autotune_callback_release 33
-online_softmax_block_mma 30
-codegen_text_inventory 28
-autotune_replay_refusal 25
-schedule_strided_1x1 25
-broadcast_constant_init 23
-limits_field_classes 22
-symbolic_extent_launch 22
-verdict_ratchet 22
-cost_model_selection 22
-dead_export_scan 22
-schedule_epilogue_fusion 22
-device_init_deadline 21
-autotune_seam_domains 20
-autotune_serial_baseline 20
-autotune_scope_menu 18
-bench_self_test 18
-schedule_mma_matmul 18
-footprint_materialization 17
-gpu_packed_prec 16
-test_block_tensor 16
-bandwidth_calibration 15
-privatize_census 15
+online_softmax_block 66
+online_softmax_fp_licences 62
+cc_march_census-w64_wide_foreign 54
+gpu_fission_mapping 49
+online_softmax_fast_math 44
+accum_width 43
+cost_model_selection 42
+cc_march_census-emission 39
+shipped_kernels_alone 38
+fission_replay_segmentation 36
+hip_kernel_cache 36
+autotune_callback_release 32
+cc_march_census-w32_native_host 32
+online_softmax_block_mma 32
+schedule_cache_numerics 32
+cc_march_census-w16_wide_foreign 30
+env_var_deps 30
+autotune_serial_baseline 28
+cc_march_census-w16_wide_host 27
+autotune_concurrent_refusal 26
+cc_march_census-w16_native_foreign 26
+codegen_text_inventory 26
+reduction_forms 25
+broadcast_constant_init 24
+schedule_mma_matmul 22
+schedule_epilogue_fusion 21
+dead_export_scan 20
+limits_field_classes 19
+operations_tutorials 19
+autotune_seam_domains 18
+gpu_packed_prec 18
+symbolic_extent_launch 18
+memory_budget_planner 17
+batch_norm_running 16
+demo_models_smoke 16
+mobile_cnn_width 16
+schedule_strided_1x1 16
+test_concat_graph 16
+verdict_ratchet 15
+autotune_progress 14
+autotune_replay_refusal 14
+footprint_materialization 14
 gpu_lane_reduction 14
 hardware_warp_shuffle 14
-test_concat_graph 14
-virtual_chain_fanin 14
-test_execution_deps 12
-autotune_progress 12
-gpu_parallel_prefix 12
-qkv_zero_init 12
-bench_checksum_discrimination 11
-buffer_aliasing 11
-narrow_storage_compute 11
-slot_kind_live 11
-schedule_contraction_nest 10
-epilogue_fusion_mma_seeds 10
-schedule_coalesce 10
-sgd_variants 10
-zero2hero_1of7_exec 10
-agent_notes_structure 9
-gpu_serial_lanes 9
-inline_flip_tune 9
-rope_test 9
-test_uniform_odd_sizes 9
-virtual_rejection_boundary 9
-autotune_routine_name 8
+virtual_rejection_boundary 14
+test_block_tensor 13
+virtual_chain_fanin 13
+buffer_aliasing 12
+deferred_hit_compiles 12
+privatize_census 12
+zero2hero_1of7_exec 12
+cc_march_census-w32_wide_host 11
+inline_flip_tune 11
+autotune_bound_pruning 10
+autotune_routine_name 10
+cache_key_agreement 10
+cc_toolchain_attribution-codegen 10
+primitive_ops 10
+test_execution_deps 10
+test_uniform_odd_sizes 10
+autotune_report_drops 9
+autotune_scope_menu 9
+cc_march_census-w32_wide_foreign 9
+gpu_parallel_prefix 9
+provenance_tag_inventory 9
+schedule_contraction_nest 9
+schedule_split_reduce 9
+zero2hero_1of7 9
+bandwidth_calibration 8
+bench_self_test 8
 flip_bound_pruning 8
-matmul_interchange 8
-test_uniform_virtual_lane 8
-affine_surjectivity 8
-privatize_recheck 8
-provenance_tag_inventory 8
-zero_elision 8
-tile_mma_declines 8
-cache_key_agreement 6
-schedule_split_reduce 6
-split_reduce_pair 6
-test_config_consistency 6
-tile_mma_geometry 6
+gpu_serial_lanes 8
+rope_test 8
+schedule_coalesce 8
+sgd_variants 8
+virtual_shared_loop 8
+qkv_zero_init 7
+split_reduce_pair 7
+tile_mma_geometry 7
+agent_notes_structure 6
+cc_temp_ownership-compiler_debug 6
 cuda_like_builtins_emulation 6
-exit_stream_teardown 6
-memory_budget_planner 6
-nonoverlap_pool_grads 6
-schedule_cache_device 6
-bf16_builtins 6
-cc_dlopen_cause 6
-schedule_pack_mma_matmul 6
-virtual_shared_loop 6
-backend_golden_family_scan 5
-cost_model_template 5
-dynamic_axis_coverage 5
+dynamic_axis_coverage 6
+hello_world_op 6
+matmul_interchange 6
+narrow_storage_compute 6
+qkv_zero_init-approximate 6
+schedule_batch_grid 6
+seeding_census 6
+stored_template_elision 6
+test_config_consistency 6
+test_einsum3 6
+tile_mma_declines 6
+zero_elision 6
+bench_checksum_discrimination 5
+bf16_builtins 5
+cc_temp_ownership-compiler_dll 5
+config_usage_scan 5
+digest_completeness 5
+overlapping_window_grads 5
 resnet_block 5
-test_einsum3 5
-autotune_bound_pruning 4
-cc_kept_library 4
-config_usage_scan 4
-context_handle_refusals 4
-integer_power_domain 4
+schedule_cache_device 5
+symbolic_extent_contract 5
+test_uniform_virtual_lane 5
+affine_surjectivity 4
+backend_golden_family_scan 4
+cost_model_template 4
+cpu_parallel 4
+cpu_scratch_matmul_grid 4
+decoder_only_test 4
+env_var_deps_control 4
+epilogue_fusion_mma_seeds 4
+gpu_small_leading_axis 4
+ll_test_ratchet 4
+narrow_uniform_bound 4
+nonoverlap_pool_grads 4
+one_element_reshape 4
+privatize_recheck 4
 reduction_accumulator_residency 4
 reserved_routine_names 4
-schedule_batch_grid 4
-set_values_pool_coalescing 4
-splice_semantics 4
-tensorized_census_ratchet 4
-virtual_diagonal 4
-autotune_budget_unfloored 4
-clamped_window_pool 4
-cpu_parallel 4
-digest_completeness 4
-digest_identity_flips 4
-fp_licence_values 4
-lowered_nest_order 4
-observable_grads 4
-runtime_integer_power 4
-seeded_default 4
-seeding_census 4
-sketch_family_tree 4
-stored_template_elision 4
-symbolic_extent_backward 4
-tile_mma_narrow 4
-transformer_test 4
-virtual_uncaptured_loop 4
-atomic_file_rename_scan 4
-cache_dir_ignores 4
-decoder_only_test 4
-ll_test_ratchet 4
-model_load_tiebreak 4
-overlapping_window_grads 4
 rev_sides_width1_store 4
-scan_loop 4
 schedule_batched_mma 4
+schedule_pack_mma_matmul 4
+schedule_packed_constants 4
 schedule_partition 4
-symbolic_extent_contract 4
+scope_over_materialized 4
+shell_scripts_parse 4
+sketch_family_tree 4
+sweep_components 4
+tensorized_census_ratchet 4
+test_default_init_std 4
 test_one_hot_embedding_lookup 4
-affine_lowering 3
-api_drift_history 3
-cc_temp_library_sweep 3
+transformer_test 4
+virtual_affine 4
+atomic_file_rename_scan 3
+autotune_budget_unfloored 3
+cache_dir_ignores 3
+cc_temp_ownership-compiler 3
+closed_shape_write_guard 3
 cmple_ops 3
-consume_code_replay 3
-context_copy 3
-cpu_scratch_matmul_grid 3
 cpu_simd_reduction 3
-fission_equivalence 3
 fission_schedule 3
-gpu_small_leading_axis 3
-half_float_power 3
+fresh_build_kernel_text 3
 launch_predicate_parity 3
-narrow_rng_nesting 3
-one_element_reshape 3
-padding_lifecycle 3
-peel_census 3
-read_before_write_flip 3
-resource_fault_injection_domains 3
-schedule_ops 3
-schedule_packed_constants 3
-scope_over_materialized 3
-shell_scripts_parse 3
-simplify_if_narrowing 3
+layer_norm_divided_mean 3
+model_load_tiebreak 3
+observable_grads 3
+seeded_split_reduce 3
 stretch_resolution 3
-test_default_init_std 3
-test_fp8_codec_parity 3
 test_one_hot_embedding_backward 3
-test_random_histograms 3
-test_uniform1 3
-top_down_prec 3
-vec_signed_zero 3
-virtual_affine 3
-virtual_guarded_setter 3
-wrap_prec_convert 3
-conv_bias_shapes 2
-ll_test_scan_cases 2
-operand_key_ratchet 2
-seeded_split_reduce 2
-accum_max_one_extent 2
-affine_view_executed 2
-attention_test 2
+uint4x32_fixed_index_parity 3
+workgroup_memory_accounting 3
+api_drift_history 2
 autotune_privatize 2
 autotune_seeded_seed 2
-bf16_ops 2
-capacity_calibration 2
+cc_dlopen_cause_debug 2
+cc_kept_library-debug 2
+context_copy 2
+context_handle_refusals 2
 context_host_access 2
-cpu_vectorized 2
-half_softmax 2
-hardware_axes_parity 2
-hosted_constant_fill 2
-layer_norm_divided_mean 2
-layer_norm_numeric 2
+conv_family_tree 2
+digest_identity_flips 2
+exit_stream_teardown 2
+fission_equivalence 2
+fp_licence_values 2
+half_float_power 2
+integer_power_domain 2
 layer_norm_test 2
+ll_test_scan_cases 2
 local_host_access 2
-micrograd_demo_logging 2
 mixed_prec_twin_shape 2
-mma_tensorization_label 2
-model_default_fallback 2
-model_default_placements 2
-precision_policy_parity 2
-prelowered_seam 2
-reduction_inline_guard 2
+narrow_rng_nesting 2
+operand_key_ratchet 2
+peel_census 2
 reduction_sink 2
-resource_fault_injection 2
+runtime_integer_power 2
 scan_companion_coverage 2
-schedule_pad 2
-simplify_const_left_sub 2
+scan_loop 2
+schedule_ops 2
+seeded_default 2
+set_values_pool_coalescing 2
+splice_semantics 2
 split_reduce_block_hoist 2
-test_bounds_folded_gather 2
-test_buffer_loc 2
-test_fp8_roundtrip 2
-test_param_shape_error 2
-test_slice_alias 2
-test_uniform_vec_prec 2
-test_where_precision 2
+symbolic_extent_backward 2
+test_random_histograms 2
+test_threefry4x32 2
+test_uniform1 2
 test_where_simple 2
-threefry4x32_demo 2
-zero_out_local_decl 2
+tile_mma_narrow 2
+unary_math_special_values 2
+virtual_diagonal 2
+virtual_guarded_setter 2
+virtual_uncaptured_loop 2
+'
+
+# Wall-clock seconds of the units whose own run is long, on the ubuntu
+# runner: not dealt by, only `plan`'s critical-path check (the longest unit
+# per shard, which a CPU load hides). From `merge-weights --wall` over the CI
+# shards' `ci-shard-wall` lines; units under 30s are left out. The rows here
+# are the mean of PR runs 39682838404 and 39758399208 (master's deal),
+# executable-keyed then re-keyed by hand through that deal, and the
+# cc_march_census pieces' own seconds from staging#1334's final run -- until a
+# run's `ci-shard-wall` lines replace them. Wall-clock moves with a unit's
+# neighbours (gh-ocannl-1503), so read the check as a rough one.
+WALL_WEIGHTS='
+autotune_composite_playoff 693
+sweep_harness 397
+autotune_sketch_placements 322
+schedule_conv_gemm 310
+flip_abandonment 292
+autotune_staffed_singles 249
+cc_march_census-w64_native_host 240
+flip_twins 234
+autotune_round_expansion 213
+@rest 171
+autotune_smoke 164
+padded_conv_cache 160
+autotune_candidate_release 155
+autotune_split_reduce 146
+online_softmax_block 144
+cc_march_census-w64_native_foreign 137
+online_softmax_fp_licences 114
+slot_kind_live 101
+cc_march_census-w64_wide_host 89
+autotune_device_memory 82
+autotune_budget 81
+cc_march_census-w16_native_host 73
+online_softmax_block_fast_math 72
+placement_store 70
+autotune_labels 69
+cost_model_selection 54
+tune_call_budget 54
+codegen_text_inventory 46
+online_softmax_fast_math 44
+cc_march_census-w16_native_foreign 42
+schedule_cache_numerics 42
+cc_march_census-emission 41
+accum_width 38
+online_softmax 38
+shipped_kernels_alone 38
+autotune_measured_refusal 36
+autotune_serial_baseline 36
+bridge_arm_coverage 30
+gpu_fission_mapping 30
+limits_field_classes 30
 '
 
 # Wall-clock seconds of each `train` member, keyed by its unit (the target
@@ -434,11 +496,14 @@ alias_listing() {
 # alias_listing's output for `main` or the directory list for `train`. (The
 # listing is an argument because the heredoc below is python's stdin.)
 shard() {
-  python3 - "$@" "$SUITE_ALIASES" "$SPLIT_DIR" "$DEFAULT_WEIGHT" "$WEIGHTS" "$TRAIN_WEIGHTS" "$root" <<'PY'
+  python3 - "$@" "$SUITE_ALIASES" "$SPLIT_DIR" "$DEFAULT_WEIGHT" "$WEIGHTS" "$TRAIN_WEIGHTS" "$root" \
+    "$WALL_WEIGHTS" "$MIN_WEIGHT" <<'PY'
+import os
 import re
 import sys
 
-mode, k, n, kind, text, suite, split_dir, default_weight, table, train_table, root = sys.argv[1:12]
+mode, k, n, kind, text, suite, split_dir, default_weight, table, train_table, root, wall_table, min_weight \
+    = sys.argv[1:14]
 k, n, default_weight = int(k), int(n), float(default_weight)
 suite = suite.split()
 
@@ -636,15 +701,105 @@ def train_units():
     return units
 
 
+def parse(block):
+    out = {}
+    for line in block.splitlines():
+        if line.strip():
+            name, value = line.split()
+            out[name] = float(value)
+    return out
+
+
+def own_fields(stanza, names):
+    return [f for f in stanza[1:] if isinstance(f, list) and f and f[0] in names]
+
+
+def strings(x):
+    if isinstance(x, str):
+        yield x
+    else:
+        for y in x:
+            yield from strings(y)
+
+
+def own_aliases(stanza):
+    # The runtest-<name> units a stanza of the split directory defines: its
+    # own alias/aliases field, an alias stanza's name, a test's implicit alias.
+    out = {a[len('runtest-'):] for f in own_fields(stanza, ('alias', 'aliases')) for a in f[1:]
+           if isinstance(a, str) and a.startswith('runtest-')}
+    if stanza[0] == 'alias':
+        out |= {a[len('runtest-'):] for f in own_fields(stanza, ('name',)) for a in f[1:]
+                if isinstance(a, str) and a.startswith('runtest-')}
+    if stanza[0] in ('test', 'tests'):
+        out |= {a for f in own_fields(stanza, ('name', 'names')) for a in f[1:] if isinstance(a, str)}
+    if stanza[0] == 'library' and own_fields(stanza, ('inline_tests',)):
+        out |= {a for f in own_fields(stanza, ('name',)) for a in f[1:] if isinstance(a, str)}
+    return out
+
+
+def split_stanzas():
+    path = dune_file(split_dir)
+    if not os.path.exists(path):
+        return []
+    return [s for s in sexps(path) if isinstance(s, list) and s and isinstance(s[0], str)]
+
+
+def fold(weights, units, label):
+    # `weigh` keys a file target by its stem; a rule whose output is named
+    # after no unit (`backend-0-0.log.actual`, which runtest-micrograd_demo_logging
+    # diffs) is credited to the one unit whose stanza in the split directory's
+    # dune file names that target. A key that names no unit and no single
+    # owner is reported loudly and kept, so the mismatch is seen, not dealt.
+    stanzas = split_stanzas()
+    targets = {os.path.basename(a) for s in stanzas for f in own_fields(s, ('target', 'targets'))
+               for a in strings(f[1:])}
+    owners = {}
+    for s in stanzas:
+        own = own_aliases(s)
+        for a in strings(s[1:]) if own else ():
+            b = os.path.basename(a)
+            if b in targets and b.split('.', 1)[0] not in units:
+                owners.setdefault(b.split('.', 1)[0], set()).update(own)
+    out = {}
+    for name, value in weights.items():
+        if name in units:
+            out[name] = out.get(name, 0.0) + value
+        elif len(owners.get(name, ())) == 1:
+            unit, = owners[name]
+            print('ci-shard.sh: %s: %s is a target of %s; its weight goes there' % (label, name, unit),
+                  file=sys.stderr)
+            out[unit] = out.get(unit, 0.0) + value
+        else:
+            print('ci-shard.sh: %s: WEIGHT NAMES NO UNIT: %s %g -- a renamed or removed test, or a rule '
+                  'output this script cannot trace to its alias; fix the key' % (label, name, value),
+                  file=sys.stderr)
+            out[name] = value
+    return out
+
+
+if mode == 'resolve':
+    # merge-weights' table, folded over the units the split directory's dune
+    # file defines (read from the file: merge-weights runs where dune need not).
+    units = set().union(*(own_aliases(s) for s in split_stanzas())) | {'@rest'}
+    if len(units) == 1:
+        print('ci-shard.sh: merge-weights: no %s to check the keys against' % dune_file(split_dir),
+              file=sys.stderr)
+        units = set(parse(text))
+    folded = fold(parse(text), units, 'merge-weights')
+    for name, value in sorted(folded.items(), key=lambda x: (-x[1], x[0])):
+        if value >= float(min_weight):
+            print('%s %.0f' % (name, value))
+    sys.exit(0)
+
 units = train_units() if kind == 'train' else main_units()
-weights = {}
-for line in (train_table if kind == 'train' else table).splitlines():
-    if line.strip():
-        name, value = line.split()
-        weights[name] = float(value)
-for name in sorted(set(weights) - set(units)):
-    print('ci-shard.sh: warning: weight for %s, which is no unit any more; '
-          'refresh the weights' % name, file=sys.stderr)
+if kind == 'train':
+    weights = parse(train_table)
+    for name in sorted(set(weights) - set(units)):
+        print('ci-shard.sh: warning: weight for %s, which is no unit any more; '
+              'refresh the weights' % name, file=sys.stderr)
+else:
+    weights = fold(parse(table), set(units), 'warning')
+walls = {} if kind == 'train' else parse(wall_table)
 
 def weight(u):
     return weights.get(u, default_weight)
@@ -664,7 +819,15 @@ if mode == 'targets':
 else:
     total = sum(loads)
     for i, m in enumerate(members):
-        print('shard %d/%d: %d units, load %.0f (%.0f%%)' % (i + 1, n, len(m), loads[i], 100 * loads[i] / total))
+        # The critical-path check: the unit whose own wall-clock is longest
+        # (WALL_WEIGHTS), which no CPU load shows. The train suite's weights
+        # are wall-clock already.
+        clock = walls if walls else {u: weight(u) for u in m}
+        timed = [u for u in m if u in clock]
+        longest = max(timed, key=lambda u: (clock[u], u)) if timed else None
+        print('shard %d/%d: %d units, load %.0f (%.0f%%), longest by wall-clock %s'
+              % (i + 1, n, len(m), loads[i], 100 * loads[i] / total,
+                 '%s %gs' % (longest, clock[longest]) if longest else 'unknown'))
         for u in m:
             print('  %-40s %g' % (u, weight(u)))
 PY
@@ -673,9 +836,10 @@ PY
 # SECURITY (gh-ocannl-1287): a trace also records dune's environment and argv
 # and each process's arguments and captured stdout/stderr, any of which can
 # hold a credential. This reader opens only `process finish` events, and of
-# those decodes `prog` and `dir` (TEXT below) and the duration in the time slot
-# `(start duration)`, only when both are all decimal digits; it tests
-# `process_args` for the one fast-math flag by comparing bytes, decoding none.
+# those decodes `prog`, `dir` and `target_files` (TEXT below) -- paths dune
+# derives from the dune files -- the duration in the time slot `(start
+# duration)`, only when both are all decimal digits, and of `rusage` only its
+# `user_cpu_time` and `system_cpu_time`, each only when all decimal digits.
 # Everything else -- every other event kind, every other field, rusage included
 # -- is skipped by its length prefixes, and a refusal quotes byte offsets, never
 # bytes. The boundary
@@ -685,21 +849,20 @@ PY
 # scrubbing (gh-ocannl-1280). tools/test-ci-shard.sh plants a canary in every
 # other field and kind of its inventory, and a twin per entry that decodes and
 # prints it, which the canary check alone must reject.
-weigh() {
-  python3 - "$1" "$SPLIT_DIR" <<'PY'
+weigh() { # TRACE [cpu|wall]
+  python3 - "$1" "$SPLIT_DIR" "${2:-cpu}" <<'PY'
 import collections
 import os
 import re
 import sys
 
-path, split_dir = sys.argv[1:3]
+path, split_dir, measure = sys.argv[1:4]
 data = open(path, 'rb').read()
 n = len(data)
 OPEN, CLOSE, COLON = 40, 41, 58
 FINISH = (b'process', b'finish')
 # The fields decoded as text, per event kind; no other kind is opened.
-TEXT = {FINISH: {b'prog', b'dir'}}
-FAST_MATH = b'--ocannl_cc_backend_fast_math=true'
+TEXT = {FINISH: {b'prog', b'dir', b'target_files'}}
 
 
 class Bad(Exception):
@@ -776,28 +939,6 @@ def value(i):
         out.append(v)
 
 
-def has_fast_math(i):
-    # Whether the element at I (process_args: a list of atoms) holds the
-    # fast-math flag, compared as bytes; nothing is decoded.
-    if i >= n:
-        raise Bad(i)
-    if data[i] != OPEN:
-        s, e = atom(i)
-        return data[s:e] == FAST_MATH, e
-    found, j = False, i + 1
-    while True:
-        if j >= n:
-            raise Bad(j)
-        if data[j] == CLOSE:
-            return found, j + 1
-        if data[j] == OPEN:
-            j = skip(j)
-            continue
-        s, e = atom(j)
-        found = found or data[s:e] == FAST_MATH
-        j = e
-
-
 def duration_ns(i):
     # The time slot at I, `(start duration)` in nanoseconds: the duration, its
     # atoms checked as bytes and decoded only when all decimal digits; any other
@@ -813,6 +954,36 @@ def duration_ns(i):
         raise Bad(i)
     s, e = spans[1]
     return int(data[s:e]), j + 1
+
+
+CPU = (b'user_cpu_time', b'system_cpu_time')
+
+
+def cpu_ns(i):
+    # The rusage at I, `((KEY VALUE) ...)`: the sum of its user and system CPU
+    # times in nanoseconds, each checked as bytes and decoded only when all
+    # decimal digits; every other entry (maxrss, faults, ...) is skipped by its
+    # length prefixes, never decoded.
+    if i >= n or data[i] != OPEN:
+        raise Bad(i)
+    total, j = 0, i + 1
+    while True:
+        if j >= n:
+            raise Bad(j)
+        if data[j] == CLOSE:
+            return total, j + 1
+        if data[j] != OPEN:
+            raise Bad(j)
+        key, k = head(j + 1)
+        if key in CPU:
+            if k >= n or data[k] in (OPEN, CLOSE):
+                raise Bad(k)
+            s, e = atom(k)
+            if not data[s:e].isdigit():
+                raise Bad(k)
+            total += int(data[s:e])
+            k = e
+        j = skip_to_close(k)
 
 
 def event(i):
@@ -843,8 +1014,8 @@ def event(i):
         key, j = head(i + 1)
         if key in text:
             fields[key.decode()], j = value(j)
-        elif kind == FINISH and key == b'process_args':
-            fields['fast_math'], j = has_fast_math(j)
+        elif kind == FINISH and key == b'rusage':
+            fields['cpu_ns'], j = cpu_ns(j)
         i = skip_to_close(j)
 
 
@@ -861,8 +1032,42 @@ except Bad as e:
     sys.exit('ci-shard.sh: %s is not a canonical-S-expression dune trace (dune >= 3.24): '
              'malformed or cut short at byte %d' % (path, e.args[0]))
 toolchain = {'ppx.exe', 'menhir', 'cc', 'gcc', 'clang', 'ar', 'as', 'ld'}
+# An alias action's target: `<build>/.actions/<context>/<dir>/<alias>-<digest>`.
+ACTION = re.compile(r'(?:^|/)\.actions/[^/]+/(?:(.*)/)?([^/]+)-[0-9a-f]{32}$')
+
+
+def in_context(path):
+    # A path relative to the build context, whose root is the last `default`
+    # component: `_build/default`, a sandbox's `.sandbox/<hash>/default`, or a
+    # --build-dir's `<dir>/default`.
+    return re.sub(r'^(?:.*/)?default(?:/|$)', '', path) or '.'
+
+
+def unit_of(fields, prog):
+    # The unit a process ran for, from its first target: an alias action of the
+    # split directory's `runtest-<name>` is unit <name>, any other of its
+    # aliases (bin-smoke) belongs to @rest; a file target <name>.<ext...> there
+    # is unit <name>; anything elsewhere is @rest. A process without a target
+    # is placed by its directory and named after its program.
+    targets = fields.get('target_files')
+    for t in targets if isinstance(targets, list) else []:
+        if not isinstance(t, str):
+            continue
+        m = ACTION.search(t)
+        if m:
+            if (m.group(1) or '.') != split_dir or not m.group(2).startswith('runtest-'):
+                return '@rest'
+            return m.group(2)[len('runtest-'):]
+        directory, base = os.path.split(in_context(t))
+        return base.split('.', 1)[0] if (directory or '.') == split_dir else '@rest'
+    directory = fields.get('dir')
+    if in_context(directory if isinstance(directory, str) else '') != split_dir:
+        return '@rest'
+    return prog.removesuffix('.exe')
+
+
 cost = collections.Counter()
-seen = 0
+seen = untimed = 0
 for kind, fields in events:
     if kind != FINISH:
         continue
@@ -871,47 +1076,64 @@ for kind, fields in events:
     prog = os.path.basename(prog) if isinstance(prog, str) else ''
     if prog.startswith('ocaml') or prog in toolchain:
         continue
-    seconds = fields.get('ns', 0) / 1e9
-    # The build context's root is the last `default` component: `_build/default`,
-    # a sandbox's `.sandbox/<hash>/default`, or a --build-dir's `<dir>/default`.
-    directory = fields.get('dir')
-    directory = re.sub(r'^.*/default(?:/|$)', '', directory if isinstance(directory, str) else '') or '.'
-    if directory != split_dir:
-        cost['@rest'] += seconds
+    if measure == 'wall':
+        cost[unit_of(fields, prog)] += fields.get('ns', 0) / 1e9
         continue
-    name = prog.removesuffix('.exe')
-    if fields.get('fast_math'):
-        name += '_fast_math'
-    cost[name] += seconds
+    if 'cpu_ns' not in fields:
+        untimed += 1
+    cost[unit_of(fields, prog)] += fields.get('cpu_ns', 0) / 1e9
 if not seen:
     sys.exit('ci-shard.sh: no finished processes in %s (cached build?)' % path)
+if untimed:
+    print('ci-shard.sh: warning: %d finished processes carry no rusage; each weighs 0' % untimed,
+          file=sys.stderr)
 for name, seconds in cost.most_common():
     print('%s %.0f' % (name, seconds))
 PY
 }
 
-# One CI run's per-shard `weigh` tables -> a WEIGHTS block. Each `main` shard
-# job prints its own trace's table as `ci-shard-weight K/N UNIT SECONDS` lines
-# (ci.yml's "Weigh the shard's units" step), read here from LOG or stdin
-# wherever on a line they sit: `gh run view RUN --log` prefixes each with its
-# job and a timestamp. A unit's weight is its seconds summed over the shards,
-# except `@rest`: every shard runs some processes outside test/operations
-# (whatever its tests depend on there), so the shards without the `@rest` unit
-# measure that overhead, and `@rest` weighs what the shard holding it -- the
-# largest -- spent beyond their mean. Units under MIN_WEIGHT seconds are left
-# to DEFAULT_WEIGHT; their count and mean go to stderr, to check that default
-# against. Refuses (exit 2) a log missing a shard of its N, mixing Ns, or
-# naming one unit twice for one shard (two runs, or a rerun's attempts).
+# CI runs' per-shard `weigh` tables -> a WEIGHTS block. Each `main` shard job
+# prints its own trace's table as `ci-shard-weight K/N UNIT SECONDS` lines
+# (ci.yml's "Weigh the shard's units" step), read here from each LOG -- one
+# run's shard jobs, `-` for stdin, stdin when none is named -- wherever on a
+# line they sit: `gh run view RUN --log` prefixes each with its job and a
+# timestamp. Within a run, a unit weighs what its shard spent on it. A unit
+# that ran in more than one shard is a shared dependency: every shard holding
+# one of its consumers builds it, wherever the deal puts its own alias, so its
+# cost is fixed overhead of those shards that moving the unit does not move.
+# It is left out of the table (dealt at DEFAULT_WEIGHT, so not counted as
+# movable load) -- in every run, if any run saw it shared -- and its longest
+# copy goes to stderr as overhead. (A dependency whose consumers all sit in
+# its own shard looks movable; it is, together with them.) `@rest` is the exception: every
+# shard runs some processes outside test/operations (whatever its tests depend
+# on there), so the shards without the `@rest` unit measure that overhead, and
+# `@rest` weighs what the shard holding it -- the largest -- spent beyond their
+# mean. Across runs, a unit weighs its mean over the runs that measured it.
+# Units under MIN_WEIGHT seconds are left to DEFAULT_WEIGHT; their count and
+# mean go to stderr, to check that default against. Refuses (exit 2) a run
+# missing a shard of its N, mixing Ns, or naming one unit twice for one shard
+# (two runs in one LOG, or a rerun's attempts).
 MIN_WEIGHT=2
-merge_weights() { # LOG|-
-  local lines
-  # Only the marked lines reach python, as an argument: the heredoc is its stdin.
-  lines=$(grep -aoE 'ci-shard-weight [0-9]+/[0-9]+ [^ ]+ [0-9]+(\.[0-9]+)?' -- "$1") || die "no ci-shard-weight lines in ${1/#-/stdin}"
-  python3 - "$lines" "$MIN_WEIGHT" <<'PY'
+merge_weights() { # cpu|wall LOG...|-
+  local runs=() log stdin=0 one marker=ci-shard-weight table
+  [ "$1" = wall ] && marker=ci-shard-wall
+  shift
+  [ $# -gt 0 ] || set -- -
+  # Only the marked lines reach python, as arguments: the heredoc is its stdin.
+  for log in "$@"; do
+    if [ "$log" = - ]; then
+      [ "$stdin" = 0 ] || die "merge-weights: stdin named twice"
+      stdin=1
+    fi
+    one=$(grep -aoE "$marker [0-9]+/[0-9]+ [^ ]+ [0-9]+(\\.[0-9]+)?" -- "$log") ||
+      die "no $marker lines in ${log/#-/stdin}"
+    runs+=("$one")
+  done
+  table=$(python3 - "$MIN_WEIGHT" "${runs[@]}" <<'PY'
 import collections
 import sys
 
-text, min_weight = sys.argv[1], float(sys.argv[2])
+min_weight, texts = float(sys.argv[1]), sys.argv[2:]
 
 
 def die(message):
@@ -919,42 +1141,64 @@ def die(message):
     sys.exit(2)
 
 
-rows = [line.split()[1:] for line in text.splitlines()]
-ns = {int(shard.split('/')[1]) for shard, _, _ in rows}
-if len(ns) != 1:
-    die('the lines mix shard counts %s' % sorted(ns))
-n = ns.pop()
-shards = collections.defaultdict(dict)
-for shard, unit, seconds in rows:
-    k = int(shard.split('/')[0])
-    if unit in shards[k]:
-        die('shard %s names %s twice: one run, one attempt, at a time' % (shard, unit))
-    shards[k][unit] = float(seconds)
-missing = [k for k in range(1, n + 1) if k not in shards]
-if missing or len(shards) != n:
-    die('no lines for shard(s) %s of %d: a job that failed before weighing, or another run'
-        % (', '.join('%d/%d' % (k, n) for k in missing) or '?', n))
-rest = sorted((shards[k].get('@rest', 0.0), k) for k in shards)
-holder = rest[-1][1]
-others = [s for s, k in rest[:-1]]
-overhead = sum(others) / len(others) if others else 0.0
-weights = collections.Counter()
-for k, table in shards.items():
-    for unit, seconds in table.items():
-        if unit != '@rest':
-            weights[unit] += seconds
-weights['@rest'] = max(0.0, shards[holder].get('@rest', 0.0) - overhead)
-shared = sorted(u for u in weights if u != '@rest' and sum(u in t for t in shards.values()) > 1)
-for u in shared:
-    print('ci-shard.sh: merge-weights: warning: %s ran in more than one shard; its weight sums them' % u,
+def merge_run(r, text):
+    # One run's shards -> {unit: seconds}.
+    where = 'run %d: ' % r if len(texts) > 1 else ''
+    rows = [line.split()[1:] for line in text.splitlines()]
+    ns = {int(shard.split('/')[1]) for shard, _, _ in rows}
+    if len(ns) != 1:
+        die('%sthe lines mix shard counts %s' % (where, sorted(ns)))
+    n = ns.pop()
+    shards = collections.defaultdict(dict)
+    for shard, unit, seconds in rows:
+        k = int(shard.split('/')[0])
+        if unit in shards[k]:
+            die('%sshard %s names %s twice: one run, one attempt, at a time' % (where, shard, unit))
+        shards[k][unit] = float(seconds)
+    missing = [k for k in range(1, n + 1) if k not in shards]
+    if missing or len(shards) != n:
+        die('%sno lines for shard(s) %s of %d: a job that failed before weighing, or another run'
+            % (where, ', '.join('%d/%d' % (k, n) for k in missing) or '?', n))
+    rest = sorted((shards[k].get('@rest', 0.0), k) for k in shards)
+    holder = rest[-1][1]
+    others = [s for s, k in rest[:-1]]
+    overhead = sum(others) / len(others) if others else 0.0
+    weights, shared = {}, set()
+    for table in shards.values():
+        for unit, seconds in table.items():
+            if unit == '@rest':
+                continue
+            if unit in weights:
+                shared.add(unit)
+            weights[unit] = max(weights.get(unit, 0.0), seconds)
+    weights['@rest'] = max(0.0, shards[holder].get('@rest', 0.0) - overhead)
+    for u in sorted(shared):
+        print('ci-shard.sh: merge-weights: %s%s ran in %d shards, a shared dependency: fixed overhead '
+              'of up to %.0fs in each, left out of the table'
+              % (where, u, sum(u in t for t in shards.values()), weights[u]), file=sys.stderr)
+    print('ci-shard.sh: merge-weights: %s%d shards; @rest overhead per shard %.0fs' % (where, n, overhead),
           file=sys.stderr)
+    return weights, shared
+
+
+merged = [merge_run(r, text) for r, text in enumerate(texts, 1)]
+runs = [w for w, _ in merged]
+shared = set().union(*(s for _, s in merged))
+weights = {}
+for u in set().union(*runs) - shared:
+    measured = [w[u] for w in runs if u in w]
+    weights[u] = sum(measured) / len(measured)
 kept = sorted(((w, u) for u, w in weights.items() if w >= min_weight), key=lambda x: (-x[0], x[1]))
 small = [w for u, w in weights.items() if w < min_weight]
 for w, u in kept:
     print('%s %.0f' % (u, w))
-print('ci-shard.sh: merge-weights: %d shards; @rest overhead per shard %.0fs; %d units under %gs, mean %.1fs'
-      % (n, overhead, len(small), min_weight, sum(small) / len(small) if small else 0.0), file=sys.stderr)
+print('ci-shard.sh: merge-weights: %d run(s); %d units under %gs, mean %.1fs'
+      % (len(runs), len(small), min_weight, sum(small) / len(small) if small else 0.0), file=sys.stderr)
 PY
+) || exit $?
+  # Each key credited to the unit that owns it, read from the dune file (see
+  # `fold` in the sharding): a key naming no unit is loud, never dropped.
+  shard resolve 1 1 main "$table"
 }
 
 # The suite argument: `main` when absent, and nothing but the two suites.
@@ -995,13 +1239,25 @@ case ${1-} in
     printf '%s\n' $SUITE_ALIASES
     ;;
   weigh)
-    [ $# -eq 2 ] && [ -f "$2" ] || die "usage: tools/ci-shard.sh weigh TRACE"
-    weigh "$2"
+    if [ "${2-}" = --wall ]; then
+      [ $# -eq 3 ] && [ -f "$3" ] || die "usage: tools/ci-shard.sh weigh [--wall] TRACE"
+      weigh "$3" wall
+    else
+      [ $# -eq 2 ] && [ -f "$2" ] || die "usage: tools/ci-shard.sh weigh [--wall] TRACE"
+      weigh "$2"
+    fi
     ;;
   merge-weights)
-    { [ $# -eq 1 ] || { [ $# -eq 2 ] && { [ "$2" = - ] || [ -f "$2" ]; }; }; } ||
-      die "usage: tools/ci-shard.sh merge-weights [LOG]"
-    merge_weights "${2:--}"
+    shift
+    measure=cpu
+    if [ "${1-}" = --wall ]; then
+      measure=wall
+      shift
+    fi
+    for log in "$@"; do
+      [ "$log" = - ] || [ -f "$log" ] || die "usage: tools/ci-shard.sh merge-weights [--wall] [LOG...]"
+    done
+    merge_weights "$measure" "$@"
     ;;
   -h | --help)
     usage
