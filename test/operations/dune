@@ -4683,16 +4683,34 @@
  (modules asm_census_cases)
  (libraries base arrayjit.verdict test_utils))
 
-(test
+; gh-ocannl-650 and its successors: the cc backend's emitted C compiled under foreign -march
+; targets, with an instruction census of the accumulator loops. One executable run as one action per
+; PIECE (gh-ocannl-1502): `emission` holds the cache probes and the claims about what was emitted,
+; and each `w<bytes>_<fp16>_<family>` compiles one emit child's kernels under one family of columns
+; (the header of cc_march_census.ml has the partition, derived from its column table, widths and fp16
+; settings). The matrix took one CI job slot 16-21 minutes; a piece takes at most a few, so the
+; sharder can deal them apart. The emission piece holds the rules below to that derived list.
+
+(executable
+ (name cc_march_census)
+ (modules cc_march_census)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test test_utils)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
  ; ocannl-backend: cc -- censuses the cc backend's C emission and compiles it under foreign
  ; -march flags; the emit children are spawned with OCANNL_BACKEND=cc forced, and the driver
  ; itself never creates a context, so there is nothing here for an ambient backend to select.
  ; The configured compiler command may name mutable @response/spec files that dune cannot discover;
  ; rerun the action unconditionally and let the census's persistent listing cache serve warm work.
- (name cc_march_census)
+ ; No `ocannl_training_test` lock: that lock keeps OpenMP pools from overlapping, and the census
+ ; runs no kernel -- its children only link one, then exit -- so it starts no pool. A shared lock
+ ; would also run the pieces one at a time, which is what splitting them undoes (gh-ocannl-1502).
+ (target cc_march_census-emission.actual)
  (package neural_nets_lib)
- (locks ocannl_training_test)
  (deps
+  (alias runtest-env_spelling_gate)
   (env_var OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR)
   (env_var XDG_CACHE_HOME)
   (env_var HOME)
@@ -4706,10 +4724,417 @@
   (env_var X86_CLANG)
   (universe)
   ocannl_config)
- (modules cc_march_census)
- (libraries base ocannl stdio unix arrayjit.verdict ll_test test_utils)
- (preprocess
-  (pps ppx_here ppx_ocannl)))
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:cc_march_census.exe} emission %{dep:dune}))))
+
+(rule
+ (alias runtest-cc_march_census-emission)
+ (package neural_nets_lib)
+ (action
+  (diff cc_march_census-emission.expected cc_march_census-emission.actual)))
+
+(rule
+ ; ocannl-backend: cc -- as the emission piece above: the children force OCANNL_BACKEND=cc.
+ (target cc_march_census-w16_native_host.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  (env_var OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR)
+  (env_var XDG_CACHE_HOME)
+  (env_var HOME)
+  (env_var SDKROOT)
+  (env_var MACOSX_DEPLOYMENT_TARGET)
+  (env_var CPATH)
+  (env_var C_INCLUDE_PATH)
+  (env_var COMPILER_PATH)
+  (env_var GCC_EXEC_PREFIX)
+  (env_var AARCH64_CROSS_GCC)
+  (env_var X86_CLANG)
+  (universe)
+  ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:cc_march_census.exe} w16_native_host))))
+
+(rule
+ (alias runtest-cc_march_census-w16_native_host)
+ (package neural_nets_lib)
+ (action
+  (diff
+   cc_march_census-w16_native_host.expected
+   cc_march_census-w16_native_host.actual)))
+
+(rule
+ ; ocannl-backend: cc -- as the emission piece above: the children force OCANNL_BACKEND=cc.
+ (target cc_march_census-w16_native_foreign.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  (env_var OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR)
+  (env_var XDG_CACHE_HOME)
+  (env_var HOME)
+  (env_var SDKROOT)
+  (env_var MACOSX_DEPLOYMENT_TARGET)
+  (env_var CPATH)
+  (env_var C_INCLUDE_PATH)
+  (env_var COMPILER_PATH)
+  (env_var GCC_EXEC_PREFIX)
+  (env_var AARCH64_CROSS_GCC)
+  (env_var X86_CLANG)
+  (universe)
+  ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:cc_march_census.exe} w16_native_foreign))))
+
+(rule
+ (alias runtest-cc_march_census-w16_native_foreign)
+ (package neural_nets_lib)
+ (action
+  (diff
+   cc_march_census-w16_native_foreign.expected
+   cc_march_census-w16_native_foreign.actual)))
+
+(rule
+ ; ocannl-backend: cc -- as the emission piece above: the children force OCANNL_BACKEND=cc.
+ (target cc_march_census-w16_wide_host.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  (env_var OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR)
+  (env_var XDG_CACHE_HOME)
+  (env_var HOME)
+  (env_var SDKROOT)
+  (env_var MACOSX_DEPLOYMENT_TARGET)
+  (env_var CPATH)
+  (env_var C_INCLUDE_PATH)
+  (env_var COMPILER_PATH)
+  (env_var GCC_EXEC_PREFIX)
+  (env_var AARCH64_CROSS_GCC)
+  (env_var X86_CLANG)
+  (universe)
+  ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:cc_march_census.exe} w16_wide_host))))
+
+(rule
+ (alias runtest-cc_march_census-w16_wide_host)
+ (package neural_nets_lib)
+ (action
+  (diff
+   cc_march_census-w16_wide_host.expected
+   cc_march_census-w16_wide_host.actual)))
+
+(rule
+ ; ocannl-backend: cc -- as the emission piece above: the children force OCANNL_BACKEND=cc.
+ (target cc_march_census-w16_wide_foreign.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  (env_var OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR)
+  (env_var XDG_CACHE_HOME)
+  (env_var HOME)
+  (env_var SDKROOT)
+  (env_var MACOSX_DEPLOYMENT_TARGET)
+  (env_var CPATH)
+  (env_var C_INCLUDE_PATH)
+  (env_var COMPILER_PATH)
+  (env_var GCC_EXEC_PREFIX)
+  (env_var AARCH64_CROSS_GCC)
+  (env_var X86_CLANG)
+  (universe)
+  ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:cc_march_census.exe} w16_wide_foreign))))
+
+(rule
+ (alias runtest-cc_march_census-w16_wide_foreign)
+ (package neural_nets_lib)
+ (action
+  (diff
+   cc_march_census-w16_wide_foreign.expected
+   cc_march_census-w16_wide_foreign.actual)))
+
+(rule
+ ; ocannl-backend: cc -- as the emission piece above: the children force OCANNL_BACKEND=cc.
+ (target cc_march_census-w32_native_host.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  (env_var OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR)
+  (env_var XDG_CACHE_HOME)
+  (env_var HOME)
+  (env_var SDKROOT)
+  (env_var MACOSX_DEPLOYMENT_TARGET)
+  (env_var CPATH)
+  (env_var C_INCLUDE_PATH)
+  (env_var COMPILER_PATH)
+  (env_var GCC_EXEC_PREFIX)
+  (env_var AARCH64_CROSS_GCC)
+  (env_var X86_CLANG)
+  (universe)
+  ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:cc_march_census.exe} w32_native_host))))
+
+(rule
+ (alias runtest-cc_march_census-w32_native_host)
+ (package neural_nets_lib)
+ (action
+  (diff
+   cc_march_census-w32_native_host.expected
+   cc_march_census-w32_native_host.actual)))
+
+(rule
+ ; ocannl-backend: cc -- as the emission piece above: the children force OCANNL_BACKEND=cc.
+ (target cc_march_census-w32_native_foreign.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  (env_var OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR)
+  (env_var XDG_CACHE_HOME)
+  (env_var HOME)
+  (env_var SDKROOT)
+  (env_var MACOSX_DEPLOYMENT_TARGET)
+  (env_var CPATH)
+  (env_var C_INCLUDE_PATH)
+  (env_var COMPILER_PATH)
+  (env_var GCC_EXEC_PREFIX)
+  (env_var AARCH64_CROSS_GCC)
+  (env_var X86_CLANG)
+  (universe)
+  ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:cc_march_census.exe} w32_native_foreign))))
+
+(rule
+ (alias runtest-cc_march_census-w32_native_foreign)
+ (package neural_nets_lib)
+ (action
+  (diff
+   cc_march_census-w32_native_foreign.expected
+   cc_march_census-w32_native_foreign.actual)))
+
+(rule
+ ; ocannl-backend: cc -- as the emission piece above: the children force OCANNL_BACKEND=cc.
+ (target cc_march_census-w32_wide_host.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  (env_var OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR)
+  (env_var XDG_CACHE_HOME)
+  (env_var HOME)
+  (env_var SDKROOT)
+  (env_var MACOSX_DEPLOYMENT_TARGET)
+  (env_var CPATH)
+  (env_var C_INCLUDE_PATH)
+  (env_var COMPILER_PATH)
+  (env_var GCC_EXEC_PREFIX)
+  (env_var AARCH64_CROSS_GCC)
+  (env_var X86_CLANG)
+  (universe)
+  ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:cc_march_census.exe} w32_wide_host))))
+
+(rule
+ (alias runtest-cc_march_census-w32_wide_host)
+ (package neural_nets_lib)
+ (action
+  (diff
+   cc_march_census-w32_wide_host.expected
+   cc_march_census-w32_wide_host.actual)))
+
+(rule
+ ; ocannl-backend: cc -- as the emission piece above: the children force OCANNL_BACKEND=cc.
+ (target cc_march_census-w32_wide_foreign.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  (env_var OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR)
+  (env_var XDG_CACHE_HOME)
+  (env_var HOME)
+  (env_var SDKROOT)
+  (env_var MACOSX_DEPLOYMENT_TARGET)
+  (env_var CPATH)
+  (env_var C_INCLUDE_PATH)
+  (env_var COMPILER_PATH)
+  (env_var GCC_EXEC_PREFIX)
+  (env_var AARCH64_CROSS_GCC)
+  (env_var X86_CLANG)
+  (universe)
+  ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:cc_march_census.exe} w32_wide_foreign))))
+
+(rule
+ (alias runtest-cc_march_census-w32_wide_foreign)
+ (package neural_nets_lib)
+ (action
+  (diff
+   cc_march_census-w32_wide_foreign.expected
+   cc_march_census-w32_wide_foreign.actual)))
+
+(rule
+ ; ocannl-backend: cc -- as the emission piece above: the children force OCANNL_BACKEND=cc.
+ (target cc_march_census-w64_native_host.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  (env_var OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR)
+  (env_var XDG_CACHE_HOME)
+  (env_var HOME)
+  (env_var SDKROOT)
+  (env_var MACOSX_DEPLOYMENT_TARGET)
+  (env_var CPATH)
+  (env_var C_INCLUDE_PATH)
+  (env_var COMPILER_PATH)
+  (env_var GCC_EXEC_PREFIX)
+  (env_var AARCH64_CROSS_GCC)
+  (env_var X86_CLANG)
+  (universe)
+  ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:cc_march_census.exe} w64_native_host))))
+
+(rule
+ (alias runtest-cc_march_census-w64_native_host)
+ (package neural_nets_lib)
+ (action
+  (diff
+   cc_march_census-w64_native_host.expected
+   cc_march_census-w64_native_host.actual)))
+
+(rule
+ ; ocannl-backend: cc -- as the emission piece above: the children force OCANNL_BACKEND=cc.
+ (target cc_march_census-w64_native_foreign.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  (env_var OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR)
+  (env_var XDG_CACHE_HOME)
+  (env_var HOME)
+  (env_var SDKROOT)
+  (env_var MACOSX_DEPLOYMENT_TARGET)
+  (env_var CPATH)
+  (env_var C_INCLUDE_PATH)
+  (env_var COMPILER_PATH)
+  (env_var GCC_EXEC_PREFIX)
+  (env_var AARCH64_CROSS_GCC)
+  (env_var X86_CLANG)
+  (universe)
+  ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:cc_march_census.exe} w64_native_foreign))))
+
+(rule
+ (alias runtest-cc_march_census-w64_native_foreign)
+ (package neural_nets_lib)
+ (action
+  (diff
+   cc_march_census-w64_native_foreign.expected
+   cc_march_census-w64_native_foreign.actual)))
+
+(rule
+ ; ocannl-backend: cc -- as the emission piece above: the children force OCANNL_BACKEND=cc.
+ (target cc_march_census-w64_wide_host.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  (env_var OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR)
+  (env_var XDG_CACHE_HOME)
+  (env_var HOME)
+  (env_var SDKROOT)
+  (env_var MACOSX_DEPLOYMENT_TARGET)
+  (env_var CPATH)
+  (env_var C_INCLUDE_PATH)
+  (env_var COMPILER_PATH)
+  (env_var GCC_EXEC_PREFIX)
+  (env_var AARCH64_CROSS_GCC)
+  (env_var X86_CLANG)
+  (universe)
+  ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:cc_march_census.exe} w64_wide_host))))
+
+(rule
+ (alias runtest-cc_march_census-w64_wide_host)
+ (package neural_nets_lib)
+ (action
+  (diff
+   cc_march_census-w64_wide_host.expected
+   cc_march_census-w64_wide_host.actual)))
+
+(rule
+ ; ocannl-backend: cc -- as the emission piece above: the children force OCANNL_BACKEND=cc.
+ (target cc_march_census-w64_wide_foreign.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  (env_var OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR)
+  (env_var XDG_CACHE_HOME)
+  (env_var HOME)
+  (env_var SDKROOT)
+  (env_var MACOSX_DEPLOYMENT_TARGET)
+  (env_var CPATH)
+  (env_var C_INCLUDE_PATH)
+  (env_var COMPILER_PATH)
+  (env_var GCC_EXEC_PREFIX)
+  (env_var AARCH64_CROSS_GCC)
+  (env_var X86_CLANG)
+  (universe)
+  ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:cc_march_census.exe} w64_wide_foreign))))
+
+(rule
+ (alias runtest-cc_march_census-w64_wide_foreign)
+ (package neural_nets_lib)
+ (action
+  (diff
+   cc_march_census-w64_wide_foreign.expected
+   cc_march_census-w64_wide_foreign.actual)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias runtest-cc_march_census-emission)
+  (alias runtest-cc_march_census-w16_native_host)
+  (alias runtest-cc_march_census-w16_native_foreign)
+  (alias runtest-cc_march_census-w16_wide_host)
+  (alias runtest-cc_march_census-w16_wide_foreign)
+  (alias runtest-cc_march_census-w32_native_host)
+  (alias runtest-cc_march_census-w32_native_foreign)
+  (alias runtest-cc_march_census-w32_wide_host)
+  (alias runtest-cc_march_census-w32_wide_foreign)
+  (alias runtest-cc_march_census-w64_native_host)
+  (alias runtest-cc_march_census-w64_native_foreign)
+  (alias runtest-cc_march_census-w64_wide_host)
+  (alias runtest-cc_march_census-w64_wide_foreign)))
 
 (test
  ; ocannl-backend: cc -- re-executes narrow_storage_compute and tile_mma_geometry with OCANNL_BACKEND=cc

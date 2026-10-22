@@ -1,0 +1,14 @@
+profile and coverage generation bypass listing memoization: true
+ordinary compiler coverage metadata permits listing memoization: true
+output-name-sensitive profiling bypasses listing memoization: true
+a fresh process reuses an identical-source census listing: true
+a source change invalidates the census listing cache: true
+every requested vector width emitted a kernel: true
+every fp16 numerics setting emitted a kernel: true
+every whole-vector storage bridge the cc builtins define reaches a kernel: true
+every narrow-storage loop's kernel spells both directions of its conversion: true
+no two censused loops of a kernel share an anchor line: true
+every vector width censuses a register-tile geometry the sketch seeding proposes beside the default: true
+every vector width censuses a register-tile pass whose column tail ends in a partial vector: true
+every censused register tile rendered the geometry its row names: true
+the dune rules run every census piece exactly once: true

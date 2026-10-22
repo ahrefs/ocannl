@@ -153,7 +153,7 @@ test/operations/canonical_render.ml [renders generated text in memory; also pins
     "}set <cr_d>[?,]"
     "}set <cr_d>[b0,]"
     "}set <cr_d>[s0,]"
-test/operations/cc_march_census.ml [also pins text this scan cannot name: untraced callback, opaque aggregate component, unvalidated haystack]
+test/operations/cc_march_census.ml [also pins text this scan cannot name: untraced callback, forwarded parameter, opaque aggregate component, unvalidated haystack]
 test/operations/concat_loop_symbols.ml [renders generated text in memory]
 test/operations/cost_model_floor.ml [renders generated text in memory]
 test/operations/cpu_parallel.ml

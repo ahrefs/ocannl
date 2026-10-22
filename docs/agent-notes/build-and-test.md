@@ -2960,7 +2960,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   arm64 cross headers, derives `LD_LIBRARY_PATH` from the unpacked `libLLVM.so.21`, and sets
   `AARCH64_CROSS_GCC` to a second logging wrapper using `--target=aarch64-linux-gnu` and Apple's
   NEON assembly dialect, with the Debian cross-header directory passed explicitly through
-  `-isystem`; today `cc_march_census` is the test that consumes that hook. The real
+  `-isystem`; today `cc_march_census`'s `foreign` pieces
+  (`runtest-cc_march_census-w16_native_foreign` and its siblings) are the tests that consume that
+  hook. The real
   download is deliberately x86_64 Linux/Debian-family-only, since its cc kernels execute on the
   host; `--dry-run` validates and prints the complete staging plan on macOS and other hosts. This is compiler/codegen evidence, not an OS emulator: the
   GCC patch release is whichever candidate the configured apt indexes serve (the exact version and
@@ -4147,8 +4149,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   The stderr copy of each record stays in the log for humans. Only the action's own process
   writes: Verdict empties the variable in its own environment once it has read it, so no child —
   however spawned — writes into, or truncates, the action's file (a child is the parent's
-  fixture, and `cc_march_census` relaunches itself with the very arguments, directory and hence
-  key of its parent). A process that is not Verdict-linked must unset it before running a
+  fixture, and `cc_march_census`'s emit children relaunch its executable from the directory of
+  the action that spawned them). A process that is not Verdict-linked must unset it before running a
   Verdict-linked fixture (`sweep_harness.sh`, beside its `OCANNL_BACKEND` neutralization). A record kind the
   aggregator does not judge (`OCANNL_TOOL_VERDICT_<KIND>`, the room left for gh-ocannl-996's bypass
   record) passes through it.
