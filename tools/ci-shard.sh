@@ -58,7 +58,7 @@
 #   tools/ci-shard.sh plan N [SUITE]       # each shard's units and estimated load
 #   tools/ci-shard.sh aliases              # the aliases the `main` suite shards
 #   tools/ci-shard.sh weigh TRACE          # per-unit seconds from a dune trace
-#   tools/ci-shard.sh merge-weights [LOG]  # a WEIGHTS block from one CI run's log
+#   tools/ci-shard.sh merge-weights [LOG...]  # a WEIGHTS block from CI runs' logs, one per run
 # SUITE is `main` (the default) or `train`.
 #
 # For `main`, `targets` and `plan` run `dune show aliases` and `dune show targets` (as
@@ -75,13 +75,18 @@
 #   dune build @default @runtest @bin-smoke --trace-file=TRACE
 # -- (dune >= 3.24's canonical-S-expression trace; a fresh build directory, or
 # cached rules record no process) and prints a replacement WEIGHTS block:
-# wall-clock seconds per test/operations executable, keyed by the alias of the same
-# name, plus `@rest` for every non-compiler process elsewhere. An executable
-# run with `--ocannl_cc_backend_fast_math=true` is credited to its
-# `<name>_fast_math` twin. An executable whose alias is named differently
-# (sweep_harness_driver runs for runtest-sweep_harness) keeps its own name: map
-# it by hand, or `plan` warns about it as a stale entry. Keep the units above a
-# few seconds; the rest weigh DEFAULT_WEIGHT anyway.
+# wall-clock seconds per unit, plus `@rest` for every non-compiler process
+# elsewhere. A process is credited by what dune ran it FOR -- its target, not
+# its executable (gh-ocannl-1503): an alias action's target names its alias
+# (`runtest-<name>` -> unit `<name>`), a rule's target file names its test
+# (`<name>.exe.output`, `<name>.actual`, ... -> `<name>`). Keyed by executable,
+# one program several aliases run was credited to one of them or to none
+# (online_softmax.exe ran online_softmax_fp_licences for 143 s that its
+# namesake was dealt; inline-test-runner and the cc_temp_ownership-<variant>
+# family were dropped; sweep_harness_driver needed a hand mapping), so the
+# deal balanced weights that were not the shards' work. A process the trace
+# records no target for is placed by its directory and keeps its program's
+# name. Keep the units above a few seconds; the rest weigh DEFAULT_WEIGHT anyway.
 # It decodes only the fields it needs (SECURITY, above `weigh` below).
 # Wall-clock -- dune's own duration of each process -- because what a unit
 # costs a shard is the dune job slot it holds: on the 4-vCPU runner at `-j 4`
@@ -94,16 +99,22 @@
 # CI does it: each `main` shard
 # job weighs its own build's trace (ci.yml's "Weigh the shard's units" step)
 # and prints the table as `ci-shard-weight K/N UNIT SECONDS` lines, and
-#   gh run view RUN --repo lukstafi/ocannl-staging --log | tools/ci-shard.sh merge-weights
-# merges one run's shards into the replacement block (`merge_weights` says
-# how); `gh run view --log` answers only once the whole run has completed, and
-# before that each shard job's log is
+#   gh run view RUN --repo lukstafi/ocannl-staging --log >RUN.log
+#   tools/ci-shard.sh merge-weights RUN1.log RUN2.log ...
+# merges each run's shards, then averages the runs, into the replacement block
+# (`merge_weights` says how). Average two runs or more: a unit's wall-clock
+# moves with what shares the runner with it (online_softmax_block read 102 s
+# and 187 s in two runs of one deal). `gh run view --log` answers only once
+# the whole run has completed, and before that each shard job's log is
 #   gh api --allow-escape-sequences repos/lukstafi/ocannl-staging/actions/jobs/JOB/logs
-# (its compiler warnings carry terminal escapes, which gh otherwise withholds).
-# Then map by hand what `plan` warns is no unit (sweep_harness_driver ->
-# sweep_harness; an inline-test runner or an executable several aliases run
-# has no one unit, and is dropped), check the deal with `plan 2`, and the next
-# run's shard dune-step times with `tools/ci-times.sh`.
+# (its compiler warnings carry terminal escapes, which gh otherwise withholds);
+# concatenate one run's shard jobs into one LOG. Check the deal with `plan 2`
+# (it warns about a weight that names no unit), and the next run's shard
+# dune-step times with `tools/ci-times.sh`. Weigh only runs of the CURRENT
+# code: a test's speed-up leaves its old weight dealing a phantom load (the
+# autotune tests ran 2-3x faster after gh-ocannl-1340, and the table measured
+# before it dealt one shard 2.3x the other's work while predicting them equal,
+# gh-ocannl-1503).
 
 set -euo pipefail
 
@@ -657,9 +668,9 @@ PY
 # SECURITY (gh-ocannl-1287): a trace also records dune's environment and argv
 # and each process's arguments and captured stdout/stderr, any of which can
 # hold a credential. This reader opens only `process finish` events, and of
-# those decodes `prog` and `dir` (TEXT below) and the duration in the time slot
-# `(start duration)`, only when both are all decimal digits; it tests
-# `process_args` for the one fast-math flag by comparing bytes, decoding none.
+# those decodes `prog`, `dir` and `target_files` (TEXT below) -- paths dune
+# derives from the dune files -- and the duration in the time slot
+# `(start duration)`, only when both are all decimal digits.
 # Everything else -- every other event kind, every other field, rusage included
 # -- is skipped by its length prefixes, and a refusal quotes byte offsets, never
 # bytes. The boundary
@@ -682,8 +693,7 @@ n = len(data)
 OPEN, CLOSE, COLON = 40, 41, 58
 FINISH = (b'process', b'finish')
 # The fields decoded as text, per event kind; no other kind is opened.
-TEXT = {FINISH: {b'prog', b'dir'}}
-FAST_MATH = b'--ocannl_cc_backend_fast_math=true'
+TEXT = {FINISH: {b'prog', b'dir', b'target_files'}}
 
 
 class Bad(Exception):
@@ -760,28 +770,6 @@ def value(i):
         out.append(v)
 
 
-def has_fast_math(i):
-    # Whether the element at I (process_args: a list of atoms) holds the
-    # fast-math flag, compared as bytes; nothing is decoded.
-    if i >= n:
-        raise Bad(i)
-    if data[i] != OPEN:
-        s, e = atom(i)
-        return data[s:e] == FAST_MATH, e
-    found, j = False, i + 1
-    while True:
-        if j >= n:
-            raise Bad(j)
-        if data[j] == CLOSE:
-            return found, j + 1
-        if data[j] == OPEN:
-            j = skip(j)
-            continue
-        s, e = atom(j)
-        found = found or data[s:e] == FAST_MATH
-        j = e
-
-
 def duration_ns(i):
     # The time slot at I, `(start duration)` in nanoseconds: the duration, its
     # atoms checked as bytes and decoded only when all decimal digits; any other
@@ -827,8 +815,6 @@ def event(i):
         key, j = head(i + 1)
         if key in text:
             fields[key.decode()], j = value(j)
-        elif kind == FINISH and key == b'process_args':
-            fields['fast_math'], j = has_fast_math(j)
         i = skip_to_close(j)
 
 
@@ -845,6 +831,40 @@ except Bad as e:
     sys.exit('ci-shard.sh: %s is not a canonical-S-expression dune trace (dune >= 3.24): '
              'malformed or cut short at byte %d' % (path, e.args[0]))
 toolchain = {'ppx.exe', 'menhir', 'cc', 'gcc', 'clang', 'ar', 'as', 'ld'}
+# An alias action's target: `<build>/.actions/<context>/<dir>/<alias>-<digest>`.
+ACTION = re.compile(r'(?:^|/)\.actions/[^/]+/(?:(.*)/)?([^/]+)-[0-9a-f]{32}$')
+
+
+def in_context(path):
+    # A path relative to the build context, whose root is the last `default`
+    # component: `_build/default`, a sandbox's `.sandbox/<hash>/default`, or a
+    # --build-dir's `<dir>/default`.
+    return re.sub(r'^(?:.*/)?default(?:/|$)', '', path) or '.'
+
+
+def unit_of(fields, prog):
+    # The unit a process ran for, from its first target: an alias action of the
+    # split directory's `runtest-<name>` is unit <name>, any other of its
+    # aliases (bin-smoke) belongs to @rest; a file target <name>.<ext...> there
+    # is unit <name>; anything elsewhere is @rest. A process without a target
+    # is placed by its directory and named after its program.
+    targets = fields.get('target_files')
+    for t in targets if isinstance(targets, list) else []:
+        if not isinstance(t, str):
+            continue
+        m = ACTION.search(t)
+        if m:
+            if (m.group(1) or '.') != split_dir or not m.group(2).startswith('runtest-'):
+                return '@rest'
+            return m.group(2)[len('runtest-'):]
+        directory, base = os.path.split(in_context(t))
+        return base.split('.', 1)[0] if (directory or '.') == split_dir else '@rest'
+    directory = fields.get('dir')
+    if in_context(directory if isinstance(directory, str) else '') != split_dir:
+        return '@rest'
+    return prog.removesuffix('.exe')
+
+
 cost = collections.Counter()
 seen = 0
 for kind, fields in events:
@@ -855,18 +875,7 @@ for kind, fields in events:
     prog = os.path.basename(prog) if isinstance(prog, str) else ''
     if prog.startswith('ocaml') or prog in toolchain:
         continue
-    seconds = fields.get('ns', 0) / 1e9
-    # The build context's root is the last `default` component: `_build/default`,
-    # a sandbox's `.sandbox/<hash>/default`, or a --build-dir's `<dir>/default`.
-    directory = fields.get('dir')
-    directory = re.sub(r'^.*/default(?:/|$)', '', directory if isinstance(directory, str) else '') or '.'
-    if directory != split_dir:
-        cost['@rest'] += seconds
-        continue
-    name = prog.removesuffix('.exe')
-    if fields.get('fast_math'):
-        name += '_fast_math'
-    cost[name] += seconds
+    cost[unit_of(fields, prog)] += fields.get('ns', 0) / 1e9
 if not seen:
     sys.exit('ci-shard.sh: no finished processes in %s (cached build?)' % path)
 for name, seconds in cost.most_common():
@@ -874,28 +883,42 @@ for name, seconds in cost.most_common():
 PY
 }
 
-# One CI run's per-shard `weigh` tables -> a WEIGHTS block. Each `main` shard
-# job prints its own trace's table as `ci-shard-weight K/N UNIT SECONDS` lines
-# (ci.yml's "Weigh the shard's units" step), read here from LOG or stdin
-# wherever on a line they sit: `gh run view RUN --log` prefixes each with its
-# job and a timestamp. A unit's weight is its seconds summed over the shards,
-# except `@rest`: every shard runs some processes outside test/operations
-# (whatever its tests depend on there), so the shards without the `@rest` unit
-# measure that overhead, and `@rest` weighs what the shard holding it -- the
-# largest -- spent beyond their mean. Units under MIN_WEIGHT seconds are left
-# to DEFAULT_WEIGHT; their count and mean go to stderr, to check that default
-# against. Refuses (exit 2) a log missing a shard of its N, mixing Ns, or
-# naming one unit twice for one shard (two runs, or a rerun's attempts).
+# CI runs' per-shard `weigh` tables -> a WEIGHTS block. Each `main` shard job
+# prints its own trace's table as `ci-shard-weight K/N UNIT SECONDS` lines
+# (ci.yml's "Weigh the shard's units" step), read here from each LOG -- one
+# run's shard jobs, `-` for stdin, stdin when none is named -- wherever on a
+# line they sit: `gh run view RUN --log` prefixes each with its job and a
+# timestamp. Within a run, a unit weighs what its shard spent on it. A unit
+# that ran in more than one shard is another shard's dependency (every shard
+# that needs it builds it), so it weighs its longest run, not their sum: the
+# deal cannot move the copies, only the unit. `@rest` is the exception: every
+# shard runs some processes outside test/operations (whatever its tests depend
+# on there), so the shards without the `@rest` unit measure that overhead, and
+# `@rest` weighs what the shard holding it -- the largest -- spent beyond their
+# mean. Across runs, a unit weighs its mean over the runs that measured it.
+# Units under MIN_WEIGHT seconds are left to DEFAULT_WEIGHT; their count and
+# mean go to stderr, to check that default against. Refuses (exit 2) a run
+# missing a shard of its N, mixing Ns, or naming one unit twice for one shard
+# (two runs in one LOG, or a rerun's attempts).
 MIN_WEIGHT=2
-merge_weights() { # LOG|-
-  local lines
-  # Only the marked lines reach python, as an argument: the heredoc is its stdin.
-  lines=$(grep -aoE 'ci-shard-weight [0-9]+/[0-9]+ [^ ]+ [0-9]+(\.[0-9]+)?' -- "$1") || die "no ci-shard-weight lines in ${1/#-/stdin}"
-  python3 - "$lines" "$MIN_WEIGHT" <<'PY'
+merge_weights() { # LOG...|-
+  local runs=() log stdin=0 one
+  [ $# -gt 0 ] || set -- -
+  # Only the marked lines reach python, as arguments: the heredoc is its stdin.
+  for log in "$@"; do
+    if [ "$log" = - ]; then
+      [ "$stdin" = 0 ] || die "merge-weights: stdin named twice"
+      stdin=1
+    fi
+    one=$(grep -aoE 'ci-shard-weight [0-9]+/[0-9]+ [^ ]+ [0-9]+(\.[0-9]+)?' -- "$log") ||
+      die "no ci-shard-weight lines in ${log/#-/stdin}"
+    runs+=("$one")
+  done
+  python3 - "$MIN_WEIGHT" "${runs[@]}" <<'PY'
 import collections
 import sys
 
-text, min_weight = sys.argv[1], float(sys.argv[2])
+min_weight, texts = float(sys.argv[1]), sys.argv[2:]
 
 
 def die(message):
@@ -903,41 +926,53 @@ def die(message):
     sys.exit(2)
 
 
-rows = [line.split()[1:] for line in text.splitlines()]
-ns = {int(shard.split('/')[1]) for shard, _, _ in rows}
-if len(ns) != 1:
-    die('the lines mix shard counts %s' % sorted(ns))
-n = ns.pop()
-shards = collections.defaultdict(dict)
-for shard, unit, seconds in rows:
-    k = int(shard.split('/')[0])
-    if unit in shards[k]:
-        die('shard %s names %s twice: one run, one attempt, at a time' % (shard, unit))
-    shards[k][unit] = float(seconds)
-missing = [k for k in range(1, n + 1) if k not in shards]
-if missing or len(shards) != n:
-    die('no lines for shard(s) %s of %d: a job that failed before weighing, or another run'
-        % (', '.join('%d/%d' % (k, n) for k in missing) or '?', n))
-rest = sorted((shards[k].get('@rest', 0.0), k) for k in shards)
-holder = rest[-1][1]
-others = [s for s, k in rest[:-1]]
-overhead = sum(others) / len(others) if others else 0.0
-weights = collections.Counter()
-for k, table in shards.items():
-    for unit, seconds in table.items():
-        if unit != '@rest':
-            weights[unit] += seconds
-weights['@rest'] = max(0.0, shards[holder].get('@rest', 0.0) - overhead)
-shared = sorted(u for u in weights if u != '@rest' and sum(u in t for t in shards.values()) > 1)
-for u in shared:
-    print('ci-shard.sh: merge-weights: warning: %s ran in more than one shard; its weight sums them' % u,
+def merge_run(r, text):
+    # One run's shards -> {unit: seconds}.
+    where = 'run %d: ' % r if len(texts) > 1 else ''
+    rows = [line.split()[1:] for line in text.splitlines()]
+    ns = {int(shard.split('/')[1]) for shard, _, _ in rows}
+    if len(ns) != 1:
+        die('%sthe lines mix shard counts %s' % (where, sorted(ns)))
+    n = ns.pop()
+    shards = collections.defaultdict(dict)
+    for shard, unit, seconds in rows:
+        k = int(shard.split('/')[0])
+        if unit in shards[k]:
+            die('%sshard %s names %s twice: one run, one attempt, at a time' % (where, shard, unit))
+        shards[k][unit] = float(seconds)
+    missing = [k for k in range(1, n + 1) if k not in shards]
+    if missing or len(shards) != n:
+        die('%sno lines for shard(s) %s of %d: a job that failed before weighing, or another run'
+            % (where, ', '.join('%d/%d' % (k, n) for k in missing) or '?', n))
+    rest = sorted((shards[k].get('@rest', 0.0), k) for k in shards)
+    holder = rest[-1][1]
+    others = [s for s, k in rest[:-1]]
+    overhead = sum(others) / len(others) if others else 0.0
+    weights = {}
+    for table in shards.values():
+        for unit, seconds in table.items():
+            if unit != '@rest':
+                weights[unit] = max(weights.get(unit, 0.0), seconds)
+    weights['@rest'] = max(0.0, shards[holder].get('@rest', 0.0) - overhead)
+    for u in sorted(u for u in weights if u != '@rest' and sum(u in t for t in shards.values()) > 1):
+        print('ci-shard.sh: merge-weights: warning: %s%s ran in more than one shard; it weighs its longest'
+              % (where, u), file=sys.stderr)
+    print('ci-shard.sh: merge-weights: %s%d shards; @rest overhead per shard %.0fs' % (where, n, overhead),
           file=sys.stderr)
+    return weights
+
+
+runs = [merge_run(r, text) for r, text in enumerate(texts, 1)]
+weights = {}
+for u in set().union(*runs):
+    measured = [w[u] for w in runs if u in w]
+    weights[u] = sum(measured) / len(measured)
 kept = sorted(((w, u) for u, w in weights.items() if w >= min_weight), key=lambda x: (-x[0], x[1]))
 small = [w for u, w in weights.items() if w < min_weight]
 for w, u in kept:
     print('%s %.0f' % (u, w))
-print('ci-shard.sh: merge-weights: %d shards; @rest overhead per shard %.0fs; %d units under %gs, mean %.1fs'
-      % (n, overhead, len(small), min_weight, sum(small) / len(small) if small else 0.0), file=sys.stderr)
+print('ci-shard.sh: merge-weights: %d run(s); %d units under %gs, mean %.1fs'
+      % (len(runs), len(small), min_weight, sum(small) / len(small) if small else 0.0), file=sys.stderr)
 PY
 }
 
@@ -983,9 +1018,11 @@ case ${1-} in
     weigh "$2"
     ;;
   merge-weights)
-    { [ $# -eq 1 ] || { [ $# -eq 2 ] && { [ "$2" = - ] || [ -f "$2" ]; }; }; } ||
-      die "usage: tools/ci-shard.sh merge-weights [LOG]"
-    merge_weights "${2:--}"
+    shift
+    for log in "$@"; do
+      [ "$log" = - ] || [ -f "$log" ] || die "usage: tools/ci-shard.sh merge-weights [LOG...]"
+    done
+    merge_weights "$@"
     ;;
   -h | --help)
     usage

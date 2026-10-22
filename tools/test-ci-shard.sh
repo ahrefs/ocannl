@@ -20,8 +20,10 @@
 # suite alias, and only those, in every other directory; the dealing is the
 # documented longest-first one and deterministic; and every listing the
 # subject cannot trust is refused with exit 2 and a reason. `weigh` is pinned
-# on a synthetic trace, including the executable whose name begins with `cc`
-# and must not be mistaken for the C compiler; the same trace plants a canary
+# on a synthetic trace -- each process credited to the unit its TARGET names,
+# not to its executable (gh-ocannl-1503), with a twin keyed by executable that
+# the same oracle must reject -- including the executable whose name begins
+# with `cc` and must not be mistaken for the C compiler; the same trace plants a canary
 # in every field `weigh` must not decode, with one decode-and-print twin per
 # field that the canary check must reject (gh-ocannl-1287). The coverage legs have
 # fault-injected twins -- the subject with the split-directory exclusion
@@ -301,17 +303,24 @@ refused "weigh without a trace" 'usage' subject weigh "$TMP/no-such-trace"
 
 # weigh: one synthetic trace, written as canonical S-expressions. A unit's
 # seconds are its finish events' durations (the time slot's second atom, in
-# nanoseconds). Expected: compilers and the toolchain excluded (but not
-# cc_march_census.exe); fast-math runs credited to the _fast_math twin; a
-# sandboxed run of the split directory counted there; elsewhere -> @rest.
+# nanoseconds), credited by the process's first target (gh-ocannl-1503): an
+# alias action of the split directory's runtest-<name> -> <name>, its other
+# aliases (bin-smoke) -> @rest; a file <name>.<ext...> there -> <name>;
+# anything elsewhere -> @rest. Expected: compilers and the toolchain excluded
+# (but not cc_march_census.exe); online_softmax.exe credited to each of the
+# three tests it runs -- its own (`.exe.output`), the fast-math and the
+# fp-licences twins (`.actual`, the flag on its command line read by nobody);
+# sweep_harness_driver.exe and inline-test-runner.exe to the aliases whose
+# actions they are; the cc_temp_ownership-success variant to itself; a
+# sandboxed run of the split directory counted there; a process with no target
+# by its directory and program; elsewhere -> @rest.
 #
 # The trace is also the canary fixture (gh-ocannl-1287): weigh decodes only
-# `process finish`'s prog, dir and digit-only duration, and a byte comparison
-# of process_args against the fast-math flag. Every entry of the inventory
-# below carries CANARY -- a field of a finish event (rusage among them), of a
-# start event (a kind weigh never opens), of config init (where dune records
-# its environment and argv), of other kinds -- as does a process_args atom
-# beside the flag; a time slot that is not all digits is refused; and every
+# `process finish`'s prog, dir, target_files and digit-only duration. Every
+# entry of the inventory below carries CANARY -- a field of a finish event
+# (rusage and process_args among them), of a start event (a kind weigh never
+# opens), of config init (where dune records its environment and argv), of
+# other kinds; a time slot that is not all digits is refused; and every
 # weigh run here, refusals included, must print none of it. Each entry also
 # gets a twin that decodes it and prints what it decoded, which the canary
 # check alone must reject, so an entry the fixture forgot to seed fails its
@@ -320,7 +329,7 @@ CANARY=CANARY-5e1d-not-for-output
 # KIND/NAME:FIELD, the fields the fixture seeds and the twins decode.
 WEIGH_SECRET="process/finish:env process/finish:process_args process/finish:rusage
 process/finish:pid process/finish:exit process/finish:categories process/finish:queued
-process/finish:target_files process/finish:target_dirs process/finish:name
+process/finish:target_dirs process/finish:name
 process/finish:stdout process/finish:stderr process/finish:error
 process/start:prog process/start:dir process/start:env process/start:process_args
 config/init:env config/init:argv config/init:build_dir config/init:root
@@ -357,12 +366,14 @@ def seeded(kind, written):
     return out
 
 
-def finish(prog, directory, seconds, args=(), time=None):
+def finish(prog, directory, seconds, targets=None, args=(), time=None):
+    # TARGETS None: a process the trace records no target_files for.
     time = time or ['1', str(int(seconds * 1e9))]
+    own = [] if targets is None else [['target_files', list(targets)]]
     return sexp(['process', 'finish', list(time), ['process_args', list(args) + ['--token=' + canary]],
-                 ['prog', prog], ['dir', directory],
-                 ['rusage', [['user_cpu_time', '7'], ['maxrss', canary], ['system_cpu_time', '3']]]]
-                + seeded('process/finish', ('process_args', 'rusage')))
+                 ['prog', prog], ['dir', directory]] + own
+                + [['rusage', [['user_cpu_time', '7'], ['maxrss', canary], ['system_cpu_time', '3']]]]
+                + seeded('process/finish', ('process_args', 'rusage', 'target_files')))
 
 
 def start(prog):
@@ -372,17 +383,36 @@ def start(prog):
 
 
 b = '/x/_build/default/'
+ops = '_build/default/test/operations/'
+
+
+def act(alias, d='test/operations'):
+    # An alias action's target, as dune names it.
+    return '_build/.actions/default/%s/%s-0123456789abcdef0123456789abcdef' % (d, alias)
+
+
 events = [
     sexp(['config', 'init', '1', ['build_dir', '_build/' + canary]] + seeded('config/init', ('build_dir',))),
     sexp(['log', 'info', '1', ['message', canary]]),
     start('ocamlopt.opt'),
-    finish('/opt/bin/ocamlopt.opt', b + 'lib', 50),
-    finish('/usr/bin/cc', b + 'lib', 40),
-    finish('cc_march_census.exe', b + 'test/operations', 2),
-    finish('online_softmax.exe', b + 'test/operations', 3, ['--ocannl_backend=cc', '--ocannl_cc_backend_fast_math=true']),
-    finish('online_softmax.exe', '/x/_build/.sandbox/0123abcd/default/test/operations', 1),
-    finish('./einsum_test.exe', b + 'test/einsum', 4),
-    finish('placement_store.exe', b + 'test/operations/sub', 0.4),
+    finish('/opt/bin/ocamlopt.opt', b + 'lib', 50, ['_build/default/lib/a.cmx', '_build/default/lib/a.o']),
+    finish('/usr/bin/cc', b + 'lib', 40, ['_build/default/lib/a_stubs.o']),
+    finish('cc_march_census.exe', b + 'test/operations', 6, [ops + 'cc_march_census.exe.output']),
+    finish('./online_softmax.exe', b + 'test/operations', 7, [ops + 'online_softmax.exe.output']),
+    finish('./online_softmax.exe', b + 'test/operations', 3, [ops + 'online_softmax_fast_math.actual'],
+           ['--ocannl_backend=cc', '--ocannl_cc_backend_fast_math=true']),
+    finish('./online_softmax.exe', '/x/_build/.sandbox/0123abcd/default/test/operations', 5,
+           [ops + 'online_softmax_fp_licences.actual']),
+    finish('./sweep_harness_driver.exe', b + 'test/operations', 9, [act('runtest-sweep_components')]),
+    finish('.tut.inline-tests/inline-test-runner.exe', '/x/_build/.sandbox/4567cdef/default/test/operations', 4,
+           [act('runtest-operations_tutorials')]),
+    finish('.tut.inline-tests/inline-test-runner.exe', b + 'test/operations', 4, [act('runtest-operations_tutorials')]),
+    finish('./cc_temp_ownership.exe', b + 'test/operations', 2, [ops + 'cc_temp_ownership-success.actual']),
+    finish('./smoke.exe', b + 'test/operations', 1, [act('bin-smoke')]),
+    finish('./helper.exe', b + 'test/operations', 1, ['_build/default/test/config/generated']),
+    finish('./untargeted.exe', b + 'test/operations', 1),
+    finish('./einsum_test.exe', b + 'test/einsum', 4, ['_build/default/test/einsum/einsum_test.exe.output']),
+    finish('placement_store.exe', b + 'test/operations/sub', 0.4, [act('runtest-placement_store', 'test/operations/sub')]),
     sexp(['action', 'write-file', ['1', '2'], ['file', canary], ['size', '3']]),
 ]
 (root / 'trace').write_bytes(b''.join(events))
@@ -398,9 +428,12 @@ canary_free() { # FILE...: no file carries the canary
 }
 subject weigh "$TMP/trace" >"$TMP/weigh.out" 2>"$TMP/weigh.err"
 weigh_rc=$?
-printf '%s\n' '@rest 4' 'online_softmax_fast_math 3' 'cc_march_census 2' 'online_softmax 1' >"$TMP/weigh.expected"
+printf '%s\n' 'sweep_components 9' 'operations_tutorials 8' 'online_softmax 7' '@rest 6' 'cc_march_census 6' \
+  'online_softmax_fp_licences 5' 'online_softmax_fast_math 3' 'cc_temp_ownership-success 2' 'untargeted 1' \
+  >"$TMP/weigh.expected"
 diff "$TMP/weigh.expected" "$TMP/weigh.out" >"$TMP/weigh.diff"
-report $? "weigh credits each unit its processes' durations from a dune trace" "exit $weigh_rc; $(cat "$TMP/weigh.diff" "$TMP/weigh.err")"
+report $? "weigh credits each unit the processes its targets name, not its executable's" \
+  "exit $weigh_rc; $(cat "$TMP/weigh.diff" "$TMP/weigh.err")"
 [ "$weigh_rc" = 0 ] && [ ! -s "$TMP/weigh.err" ] && canary_free "$TMP/weigh.out" "$TMP/weigh.err"
 report $? "weigh decodes none of the canary fields: exit 0, empty stderr, no canary" \
   "exit $weigh_rc; see $TMP/weigh.out $TMP/weigh.err"
@@ -428,8 +461,8 @@ weigh_twin() { # ENTRY -> 0 when the twin ran and leaked the canary
 import sys
 src, dst, cat, name, field = sys.argv[1:6]
 text = open(src).read()
-pairs = [("TEXT = {FINISH: {b'prog', b'dir'}}\n",
-          "TEXT = {FINISH: {b'prog', b'dir'}}\nTEXT.setdefault((b'%s', b'%s'), set()).add(b'%s')\n"
+pairs = [("TEXT = {FINISH: {b'prog', b'dir', b'target_files'}}\n",
+          "TEXT = {FINISH: {b'prog', b'dir', b'target_files'}}\nTEXT.setdefault((b'%s', b'%s'), set()).add(b'%s')\n"
           % (cat, name, field)),
          ("    print('%s %.0f' % (name, seconds))\n", "    print('%s %.0f %s' % (name, seconds, events))\n")]
 for old, new in pairs:
@@ -452,11 +485,30 @@ for entry in $WEIGH_SECRET; do
 done
 rm -f "$repo/tools/weigh-twin.sh"
 
-# merge-weights: one run's per-shard weigh lines -> the WEIGHTS block. The
+# The twin keyed by executable, the scheme gh-ocannl-1503 replaced: the same
+# trace and oracle must reject it (online_softmax.exe's three tests in one
+# unit, the driver and the inline-test runner under their own names).
+path=$(mutant weigh-by-executable \
+  '/cost\[unit_of\(fields, prog\)\]/ { sub(/unit_of\(fields, prog\)/, "(\"@rest\" if in_context(fields.get(\"dir\") or \"\") != split_dir else prog.removesuffix(\".exe\"))") } { print }')
+if [ -z "$path" ] || cmp -s "$path" "$SRC"; then
+  report 1 "negative control: weigh keyed by executable" "could not build the mutant"
+else
+  # Beside the credential deny-list the subject sources, as the canary twins run.
+  cp "$path" "$repo/tools/weigh-by-exe.sh"
+  bash "$repo/tools/weigh-by-exe.sh" weigh "$TMP/trace" >"$TMP/by-exe.out" 2>"$TMP/by-exe.err"
+  rm -f "$repo/tools/weigh-by-exe.sh"
+  ! diff -q "$TMP/weigh.expected" "$TMP/by-exe.out" >/dev/null &&
+    grep -qx 'online_softmax 15' "$TMP/by-exe.out"
+  report $? "negative control: weigh keyed by executable" "see $TMP/by-exe.out $TMP/by-exe.err"
+fi
+
+# merge-weights: CI runs' per-shard weigh lines -> the WEIGHTS block. The
 # lines sit wherever `gh run view --log` puts them (job and step columns, a
-# timestamp); a unit's shards are summed; @rest is the largest shard's beyond
-# the others' mean (their @rest is the overhead every shard pays); units
-# under 2 s are left to the default, counted on stderr.
+# timestamp); a unit in several shards -- another shard's dependency -- weighs
+# its longest; @rest is the largest shard's beyond the others' mean (their
+# @rest is the overhead every shard pays); runs are averaged per unit over
+# the runs that measured it; units under 2 s are left to the default, counted
+# on stderr.
 {
   printf 'Build (ubuntu, main, 1/2)\tWeigh\t2026-10-21T10:00:00.1234567Z ci-shard-weight 1/3 heavy 100\n'
   printf '2026-10-21T10:00:00.2Z ci-shard-weight 1/3 @rest 30\n'
@@ -475,13 +527,42 @@ ok=0
 [ "$(cat "$TMP/merge.out")" = '@rest 310
 heavy 100
 light 50
-driver 7' ] || ok=1
-grep -q 'warning: driver ran in more than one shard' "$TMP/merge.err" || ok=1
-grep -q '3 shards; @rest overhead per shard 20s; 1 units under 2s, mean 1.0s' "$TMP/merge.err" || ok=1
-report $ok "merge-weights sums each unit's shards and nets @rest of the per-shard overhead" \
+driver 4' ] || ok=1
+grep -q 'warning: driver ran in more than one shard; it weighs its longest' "$TMP/merge.err" || ok=1
+grep -q '3 shards; @rest overhead per shard 20s$' "$TMP/merge.err" || ok=1
+grep -q '1 run(s); 1 units under 2s, mean 1.0s' "$TMP/merge.err" || ok=1
+report $ok "merge-weights weighs a unit its longest shard and nets @rest of the per-shard overhead" \
   "exit $merge_rc; $(cat "$TMP/merge.out" "$TMP/merge.err")"
 [ "$(subject merge-weights <"$TMP/run.log" 2>/dev/null)" = "$(cat "$TMP/merge.out")" ]
 report $? "merge-weights reads stdin without a LOG"
+# A second run, of another deal and N: heavy and light measured again, driver
+# not (its mean is the first run's alone), a newcomer measured only here.
+{
+  printf 'ci-shard-weight 1/2 heavy 140\n'
+  printf 'ci-shard-weight 1/2 @rest 50\n'
+  printf 'ci-shard-weight 2/2 light 30\n'
+  printf 'ci-shard-weight 2/2 newcomer 12\n'
+  printf 'ci-shard-weight 2/2 @rest 10\n'
+} >"$TMP/run2.log"
+subject merge-weights "$TMP/run.log" - <"$TMP/run2.log" >"$TMP/merge2.out" 2>"$TMP/merge2.err"
+merge_rc=$?
+ok=0
+[ "$merge_rc" = 0 ] || ok=1
+[ "$(cat "$TMP/merge2.out")" = '@rest 175
+heavy 120
+light 40
+newcomer 12
+driver 4' ] || ok=1
+grep -q 'run 1: 3 shards; @rest overhead per shard 20s$' "$TMP/merge2.err" || ok=1
+grep -q 'run 2: 2 shards; @rest overhead per shard 10s$' "$TMP/merge2.err" || ok=1
+grep -q 'warning: run 1: driver ran in more than one shard' "$TMP/merge2.err" || ok=1
+grep -q '2 run(s); 1 units under 2s' "$TMP/merge2.err" || ok=1
+report $ok "merge-weights averages runs per unit, over the runs that measured it" \
+  "exit $merge_rc; $(cat "$TMP/merge2.out" "$TMP/merge2.err")"
+refused "merge-weights: stdin named twice" 'stdin named twice' subject merge-weights - - <"$TMP/run.log"
+grep -v '^ci-shard-weight 2/2' "$TMP/run2.log" >"$TMP/run2-missing.log"
+refused "merge-weights: a later run missing a shard" 'run 2: no lines for shard\(s\) 2/2 of 2' \
+  subject merge-weights "$TMP/run.log" "$TMP/run2-missing.log"
 grep -v '^ci-shard-weight 3/3' "$TMP/run.log" >"$TMP/run-missing.log"
 refused "merge-weights: a shard missing from the run" 'no lines for shard\(s\) 3/3 of 3' \
   subject merge-weights "$TMP/run-missing.log"
@@ -492,6 +573,7 @@ refused "merge-weights: a unit twice in one shard" 'names light twice' subject m
 printf 'no weights here\n' >"$TMP/run-none.log"
 refused "merge-weights: a log with no weigh lines" 'no ci-shard-weight lines' subject merge-weights "$TMP/run-none.log"
 refused "merge-weights: a missing log" 'usage' subject merge-weights "$TMP/no-such-log"
+refused "merge-weights: a missing second log" 'usage' subject merge-weights "$TMP/run.log" "$TMP/no-such-log"
 
 # The fault-injected twins. Without the split-directory exclusion, @rest would
 # carry test/operations' own runtest and all; naming `default` instead of
