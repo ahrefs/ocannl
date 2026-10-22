@@ -585,8 +585,11 @@ sub keep_raw {
 # edit changed. A reader for dune's syntax: `;` and `#| |#` comments, `#;`
 # datum comments, quoted and block strings, atoms. It dies on text it cannot
 # read; the caller decides whether that stops the run.
+# With $quoted, a quoted or block string comes back NUL-prefixed: what the
+# stanza comparison reads, since `"%{deps}"` is one argument and `%{deps}` many.
 sub parse_dune {
-  my ($s, $what) = @_;
+  my ($s, $what, $quoted) = @_;
+  my $q = $quoted ? "\0" : "";
   my @stack = ([]);
   my @drop = (0);   # per open list: datums a `#;` still discards
   my $put = sub { if ($drop[-1]) { $drop[-1]--; return } push @{$stack[-1]}, $_[0] };
@@ -602,13 +605,13 @@ sub parse_dune {
     if ($s =~ /\G"\\[|>]([^\n]*)/gc) {   # block string: consecutive "\| lines
       my $str = $1;
       $str .= "\n$1" while $s =~ /\G\n[ \t]*"\\[|>]([^\n]*)/gc;
-      $put->($str); next;
+      $put->($q . $str); next;
     }
     if ($s =~ /\G"((?:[^"\\]|\\.)*)"/gcs) {
       my $a = $1 =~ s/\\\n[ \t]*//gr;
       $a =~ s/\\(x[0-9A-Fa-f]{2}|[0-9]{3}|.)/length $1 > 1 ? ($1 =~ m{^x} ? chr hex substr($1, 1) : chr $1)
                                             : $1 eq "n" ? "\n" : $1 eq "t" ? "\t" : $1 eq "r" ? "\r" : $1/gse;
-      $put->($a); next;
+      $put->($q . $a); next;
     }
     if ($s =~ /\G([^\s()";]+)/gc) { $put->($1); next }
     die "unreadable text in $what at byte " . pos($s) . "\n";
@@ -616,23 +619,31 @@ sub parse_dune {
   @stack == 1 or die "unbalanced parentheses in $what\n";
   return $stack[0];
 }
-sub canon { my ($x) = @_; ref $x ? "(" . join(" ", map { canon($_) } @$x) . ")" : "\"" . ($x =~ s/(["\\])/\\$1/gr =~ s/\n/\\n/gr) . "\"" }
+sub canon {   # a quoted string (NUL-prefixed) and an atom of the same text stay apart
+  my ($x) = @_;
+  return "(" . join(" ", map { canon($_) } @$x) . ")" if ref $x;
+  my $quoted = $x =~ s/^\0//;
+  return ($quoted ? "q" : "a") . "\"" . ($x =~ s/(["\\])/\\$1/gr =~ s/\n/\\n/gr) . "\"";
+}
 sub dfield {   # the arguments of a stanza's first (NAME ...) field
   my ($x, $name) = @_;
   for my $f (@$x[1 .. $#$x]) { return [@$f[1 .. $#$f]] if ref $f && @$f && !ref $f->[0] && $f->[0] eq $name }
   return undef;
 }
 # Stanzas of DIR, `(subdir ...)` flattened into the directory it names.
+# QITEMS is the same text read with quotation kept (parse_dune's $quoted): the
+# canonical text compared across a dune-file edit.
 sub dune_stanzas {
-  my ($dir, $items) = @_;
+  my ($dir, $items, $qitems) = @_;
   my @out;
-  for my $x (@$items) {
+  for my $k (0 .. $#$items) {
+    my ($x, $qx) = ($items->[$k], $qitems->[$k]);
     next unless ref $x && @$x && !ref $x->[0];
     if ($x->[0] eq "subdir" && @$x >= 2 && !ref $x->[1]) {
       my $sub = rpath($dir, $x->[1]);
-      if (defined $sub) { push @out, dune_stanzas($sub, [@$x[2 .. $#$x]]); next }
+      if (defined $sub) { push @out, dune_stanzas($sub, [@$x[2 .. $#$x]], [@$qx[2 .. $#$qx]]); next }
     }
-    push @out, { dir => $dir, kind => $x->[0], x => $x, text => canon($x) };
+    push @out, { dir => $dir, kind => $x->[0], x => $x, text => canon($qx) };
   }
   return @out;
 }
@@ -652,7 +663,7 @@ for my $f (grep { $_ ne "" } split /\n/, slurp("$tmp/dune-files")) {
   next unless -f $f;
   $dune_text{$f} = slurp($f);
   my $items = eval { parse_dune($dune_text{$f}, $f) } or fail($@ =~ s/\n$//r);
-  push @dstanzas, dune_stanzas((dir_of($f))[0], $items);
+  push @dstanzas, dune_stanzas((dir_of($f))[0], $items, parse_dune($dune_text{$f}, $f, 1));
 }
 # Public executables, for `%{bin:NAME}`.
 my %public_exe;
@@ -980,8 +991,9 @@ sub dune_side {
   my ($which, $p) = @_;
   my $f = "$tmp/$which/$p";
   return undef unless -f $f;
-  my $items = eval { parse_dune(slurp($f), "the $which side of $p") } or return undef;
-  return [dune_stanzas((dir_of($p))[0], $items)];
+  my $text = slurp($f);
+  my $items = eval { parse_dune($text, "the $which side of $p") } or return undef;
+  return [dune_stanzas((dir_of($p))[0], $items, parse_dune($text, $p, 1))];
 }
 sub stanza_index {   # the @st entries a stanza of KIND and NAMES in DIR is
   my ($kind, $dir, @names) = @_;
@@ -1093,11 +1105,18 @@ for my $p (@changed) {
     @ix = nsort(keys %{$scoped->{stanzas}});
     my @made = sort keys %{$scoped->{targets}};
     # A file a changed rule makes: an alias whose own targets' rules read it, or
-    # are it, and a stanza whose generated module it is.
+    # are it; a stanza whose generated module it is, or whose generated
+    # module's rule reads it; the owners of a stub object compiled from it (a
+    # generated header), as for a changed path.
     my $n_made = 0;
     for my $m (@made) {
       my ($md, $mb) = dir_of($m);
-      $hit{$_} = $whole_hit{$_} = 1 for @{$generated{$m} // []};
+      for my $g (grep { $_ eq $m || reads($_, $m, $md, $mb) } sort keys %generated) {
+        $hit{$_} = $whole_hit{$_} = 1 for @{$generated{$g}};
+      }
+      for my $o (grep { /\.o$/ && ($_ eq $m || reads($_, $m, $md, $mb)) } @stub_targets) {
+        $hit{$_} = $whole_hit{$_} = 1 for obj_owners($o);
+      }
       for my $a (@al) {
         next unless grep { $_ eq $m || reads($_, $m, $md, $mb) } @{$a->{own}};
         $read_by{$p}{$a->{name}}++ or $n_made++;

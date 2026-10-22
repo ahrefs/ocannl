@@ -518,6 +518,16 @@ if harness_leg 'dune stanza scope'; then
   affected HEAD
   expect 'an edited rule reaches the alias whose own target it makes' 0 @t3/runtest-neg
   git_q checkout -q -- t3/dune || exit 2
+  # Quotation is meaning, not layout: `"%{deps}"` is one argument where `%{deps}` is many.
+  perl -0pi -e 's/\(deps plain.cfg base.cfg\)/(deps "plain.cfg" base.cfg)/' "$repo/t3/dune"
+  affected HEAD
+  expect 'a quotation-only edit is a change' 0 @t3/runtest-t_plain
+  git_q checkout -q -- t3/dune || exit 2
+  # gen.h is a header usesh's stub object compiles from: the rule making it reaches usesh.
+  perl -0pi -e 's/\(target gen.h\)/(target gen.h) (locks genh)/' "$repo/t5/dune"
+  affected HEAD
+  expect 'an edited rule reaches the executable whose stub compiles the header it makes' 0 @t5/slow-usesh
+  git_q checkout -q -- t5/dune || exit 2
   perl -0pi -e 's/\(echo made\)/(echo made again)/' "$repo/t1/dune"
   affected HEAD
   expect 'an edited rule reaches the alias elsewhere reading the file it makes' 0 @t3/runtest-uses
