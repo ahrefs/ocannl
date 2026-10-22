@@ -75,7 +75,7 @@
 #   dune build @default @runtest @bin-smoke --trace-file=TRACE
 # -- (dune >= 3.24's canonical-S-expression trace; a fresh build directory, or
 # cached rules record no process) and prints a replacement WEIGHTS block:
-# wall-clock seconds per unit, plus `@rest` for every non-compiler process
+# CPU seconds per unit, plus `@rest` for every non-compiler process
 # elsewhere. A process is credited by what dune ran it FOR -- its target, not
 # its executable (gh-ocannl-1503): an alias action's target names its alias
 # (`runtest-<name>` -> unit `<name>`), a rule's target file names its test
@@ -88,13 +88,22 @@
 # records no target for is placed by its directory and keeps its program's
 # name. Keep the units above a few seconds; the rest weigh DEFAULT_WEIGHT anyway.
 # It decodes only the fields it needs (SECURITY, above `weigh` below).
-# Wall-clock -- dune's own duration of each process -- because what a unit
-# costs a shard is the dune job slot it holds: on the 4-vCPU runner at `-j 4`
-# cc_march_census held one for 806s on 474 CPU-s, and sweep_harness's driver
-# for 343s on 135 (gh-ocannl-1464), so CPU weights dealt the slowest shard the
-# longest poles. Wall-clock is only meaningful measured where the shards run,
-# under their own load (a workstation's is dominated by whatever else it is
-# doing: XProtect stalls, other sessions' suites), so measure it there.
+# CPU seconds -- the user and system time dune's rusage records for each
+# process, its waited-for children (the C compiler a test runs) included --
+# because they ADD UP: a shard runs at `-j 4` on a 4-vCPU runner whose cores
+# its tests keep busy, so its dune step lasts about its units' CPU over 4.
+# Wall-clock does not add up. A test's wall-clock is its CPU stretched by
+# whatever shares the runner with it -- likely the most between tests running
+# OpenMP kernels, whose libgomp barrier spin is sized for their own threads,
+# not the runner's. Dealt by wall-clock weights
+# measured under one deal (gh-ocannl-1464's choice), the next deal predicted
+# 60.5/60.5 min of slot time and ran 80.6 min on one shard while the other
+# outlived the job's 45-minute timeout -- padded_conv_cache read 160 s by its
+# weight and 394 s beside its new neighbours (gh-ocannl-1503). A unit's CPU
+# moves far less with its neighbours. The one thing CPU hides is a single unit
+# whose own wall-clock outlasts the rest of its shard; `plan` prints each
+# shard's longest unit for that. CPU is only meaningful measured on the
+# runner's own processor, so measure it in CI.
 #
 # CI does it: each `main` shard
 # job weighs its own build's trace (ci.yml's "Weigh the shard's units" step)
@@ -102,19 +111,19 @@
 #   gh run view RUN --repo lukstafi/ocannl-staging --log >RUN.log
 #   tools/ci-shard.sh merge-weights RUN1.log RUN2.log ...
 # merges each run's shards, then averages the runs, into the replacement block
-# (`merge_weights` says how). Average two runs or more: a unit's wall-clock
-# moves with what shares the runner with it (online_softmax_block read 102 s
-# and 187 s in two runs of one deal). `gh run view --log` answers only once
+# (`merge_weights` says how). Average two runs or more when you have them:
+# even CPU moves somewhat with the runner's load. `gh run view --log` answers only once
 # the whole run has completed, and before that each shard job's log is
 #   gh api --allow-escape-sequences repos/lukstafi/ocannl-staging/actions/jobs/JOB/logs
 # (its compiler warnings carry terminal escapes, which gh otherwise withholds);
 # concatenate one run's shard jobs into one LOG. Check the deal with `plan 2`
 # (it warns about a weight that names no unit), and the next run's shard
 # dune-step times with `tools/ci-times.sh`. Weigh only runs of the CURRENT
-# code: a test's speed-up leaves its old weight dealing a phantom load (the
-# autotune tests ran 2-3x faster after gh-ocannl-1340, and the table measured
-# before it dealt one shard 2.3x the other's work while predicting them equal,
-# gh-ocannl-1503).
+# code, and only runs whose `weigh` printed CPU seconds (before gh-ocannl-1503
+# it printed wall-clock): a test's speed-up leaves its old weight dealing a
+# phantom load (the autotune tests ran 2-3x faster after gh-ocannl-1340, and
+# the table measured before it dealt one shard 2.3x the other's work while
+# predicting them equal).
 
 set -euo pipefail
 
@@ -122,7 +131,8 @@ SUITE_ALIASES="default runtest bin-smoke"
 SPLIT_DIR=test/operations
 DEFAULT_WEIGHT=1
 
-# Seconds of dune job slot per unit on the ubuntu runner (gh-ocannl-1464),
+# STILL WALL-CLOCK, pending a run that weighs CPU (gh-ocannl-1503): seconds of
+# dune job slot per unit on the ubuntu runner (gh-ocannl-1464),
 # the mean of staging#1303's two CI runs where both measured a unit (one run
 # alone is noisy: flip_abandonment read 162s and 518s): 39604055166, wall-clock
 # throughout from `weigh`, and 39599006506, its wall-clock table's top rows and
@@ -659,7 +669,9 @@ if mode == 'targets':
 else:
     total = sum(loads)
     for i, m in enumerate(members):
-        print('shard %d/%d: %d units, load %.0f (%.0f%%)' % (i + 1, n, len(m), loads[i], 100 * loads[i] / total))
+        longest = max(m, key=lambda u: (weight(u), u)) if m else '-'
+        print('shard %d/%d: %d units, load %.0f (%.0f%%), longest %s %g'
+              % (i + 1, n, len(m), loads[i], 100 * loads[i] / total, longest, weight(longest)))
         for u in m:
             print('  %-40s %g' % (u, weight(u)))
 PY
@@ -669,8 +681,9 @@ PY
 # and each process's arguments and captured stdout/stderr, any of which can
 # hold a credential. This reader opens only `process finish` events, and of
 # those decodes `prog`, `dir` and `target_files` (TEXT below) -- paths dune
-# derives from the dune files -- and the duration in the time slot
-# `(start duration)`, only when both are all decimal digits.
+# derives from the dune files -- the duration in the time slot `(start
+# duration)`, only when both are all decimal digits, and of `rusage` only its
+# `user_cpu_time` and `system_cpu_time`, each only when all decimal digits.
 # Everything else -- every other event kind, every other field, rusage included
 # -- is skipped by its length prefixes, and a refusal quotes byte offsets, never
 # bytes. The boundary
@@ -787,6 +800,36 @@ def duration_ns(i):
     return int(data[s:e]), j + 1
 
 
+CPU = (b'user_cpu_time', b'system_cpu_time')
+
+
+def cpu_ns(i):
+    # The rusage at I, `((KEY VALUE) ...)`: the sum of its user and system CPU
+    # times in nanoseconds, each checked as bytes and decoded only when all
+    # decimal digits; every other entry (maxrss, faults, ...) is skipped by its
+    # length prefixes, never decoded.
+    if i >= n or data[i] != OPEN:
+        raise Bad(i)
+    total, j = 0, i + 1
+    while True:
+        if j >= n:
+            raise Bad(j)
+        if data[j] == CLOSE:
+            return total, j + 1
+        if data[j] != OPEN:
+            raise Bad(j)
+        key, k = head(j + 1)
+        if key in CPU:
+            if k >= n or data[k] in (OPEN, CLOSE):
+                raise Bad(k)
+            s, e = atom(k)
+            if not data[s:e].isdigit():
+                raise Bad(k)
+            total += int(data[s:e])
+            k = e
+        j = skip_to_close(k)
+
+
 def event(i):
     # One top-level event -> (kind, fields) for a kind in TEXT, else None.
     if data[i] != OPEN:
@@ -815,6 +858,8 @@ def event(i):
         key, j = head(i + 1)
         if key in text:
             fields[key.decode()], j = value(j)
+        elif kind == FINISH and key == b'rusage':
+            fields['cpu_ns'], j = cpu_ns(j)
         i = skip_to_close(j)
 
 
@@ -866,7 +911,7 @@ def unit_of(fields, prog):
 
 
 cost = collections.Counter()
-seen = 0
+seen = untimed = 0
 for kind, fields in events:
     if kind != FINISH:
         continue
@@ -875,9 +920,14 @@ for kind, fields in events:
     prog = os.path.basename(prog) if isinstance(prog, str) else ''
     if prog.startswith('ocaml') or prog in toolchain:
         continue
-    cost[unit_of(fields, prog)] += fields.get('ns', 0) / 1e9
+    if 'cpu_ns' not in fields:
+        untimed += 1
+    cost[unit_of(fields, prog)] += fields.get('cpu_ns', 0) / 1e9
 if not seen:
     sys.exit('ci-shard.sh: no finished processes in %s (cached build?)' % path)
+if untimed:
+    print('ci-shard.sh: warning: %d finished processes carry no rusage; each weighs 0' % untimed,
+          file=sys.stderr)
 for name, seconds in cost.most_common():
     print('%s %.0f' % (name, seconds))
 PY

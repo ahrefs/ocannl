@@ -583,9 +583,9 @@ jobs:
         echo "::endgroup::"
         opam exec -- dune build $targets 2>&1 | tee -a "$RUNNER_TEMP/dune-build.log"
     # What each unit of a `main` shard cost on this runner, from the build's
-    # own dune trace (the step above ran the last dune): the seconds of dune
-    # job slot `tools/ci-shard.sh weigh` credits per unit -- the unit each
-    # process's target names (gh-ocannl-1503) -- marked `ci-shard-weight K/N`
+    # own dune trace (the step above ran the last dune): the CPU seconds
+    # `tools/ci-shard.sh weigh` credits per unit -- the unit each process's
+    # target names (gh-ocannl-1503) -- marked `ci-shard-weight K/N`
     # so that `tools/ci-shard.sh merge-weights` turns runs' shard logs into the
     # script's WEIGHTS block (gh-ocannl-1464; the script says how to fetch
     # them). The reader decodes only the fields that name and time a process,

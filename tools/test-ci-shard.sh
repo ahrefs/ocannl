@@ -253,8 +253,8 @@ ok=0
 [ "$(subject targets 2/2 2>/dev/null)" = "$shard2" ] || ok=1
 [ "$(subject plan 2 2>/dev/null)" = "$(subject plan 2 2>/dev/null)" ] || ok=1
 report $ok "targets and plan are deterministic"
-subject plan 2 2>/dev/null | grep -q '^shard 1/2: 1 units, load 10 '
-report $? "plan reports each shard's units and load"
+subject plan 2 2>/dev/null | grep -q '^shard 1/2: 1 units, load 10 ([0-9]*%), longest heavy 10$'
+report $? "plan reports each shard's units, load and longest unit"
 [ "$(subject aliases)" = "default
 runtest
 bin-smoke" ]
@@ -302,8 +302,9 @@ refused "plan without N" 'usage' subject plan
 refused "weigh without a trace" 'usage' subject weigh "$TMP/no-such-trace"
 
 # weigh: one synthetic trace, written as canonical S-expressions. A unit's
-# seconds are its finish events' durations (the time slot's second atom, in
-# nanoseconds), credited by the process's first target (gh-ocannl-1503): an
+# seconds are its finish events' CPU times (rusage's user_cpu_time plus
+# system_cpu_time, in nanoseconds; never the wall-clock duration), credited
+# by the process's first target (gh-ocannl-1503): an
 # alias action of the split directory's runtest-<name> -> <name>, its other
 # aliases (bin-smoke) -> @rest; a file <name>.<ext...> there -> <name>;
 # anything elsewhere -> @rest. Expected: compilers and the toolchain excluded
@@ -316,9 +317,10 @@ refused "weigh without a trace" 'usage' subject weigh "$TMP/no-such-trace"
 # by its directory and program; elsewhere -> @rest.
 #
 # The trace is also the canary fixture (gh-ocannl-1287): weigh decodes only
-# `process finish`'s prog, dir, target_files and digit-only duration. Every
-# entry of the inventory below carries CANARY -- a field of a finish event
-# (rusage and process_args among them), of a start event (a kind weigh never
+# `process finish`'s prog, dir, target_files, digit-only duration and its
+# rusage's digit-only CPU times. Every entry of the inventory below carries
+# CANARY -- a field of a finish event (process_args among them, and maxrss
+# beside the CPU times inside rusage), of a start event (a kind weigh never
 # opens), of config init (where dune records its environment and argv), of
 # other kinds; a time slot that is not all digits is refused; and every
 # weigh run here, refusals included, must print none of it. Each entry also
@@ -366,13 +368,18 @@ def seeded(kind, written):
     return out
 
 
-def finish(prog, directory, seconds, targets=None, args=(), time=None):
-    # TARGETS None: a process the trace records no target_files for.
-    time = time or ['1', str(int(seconds * 1e9))]
+def finish(prog, directory, seconds, targets=None, args=(), time=None, cpu=None, rusage=True):
+    # SECONDS of CPU, user and system together, in the rusage beside a canary
+    # maxrss; the wall-clock duration is three times that, as on a loaded
+    # runner, so a weigh crediting wall-clock reads every unit 3x. TARGETS
+    # None: a process the trace records no target_files for.
+    time = time or ['1', str(int(seconds * 3e9))]
+    cpu = cpu or [str(int(seconds * 0.75e9)), str(int(seconds * 0.25e9))]
     own = [] if targets is None else [['target_files', list(targets)]]
+    if rusage:
+        own.append(['rusage', [['user_cpu_time', cpu[0]], ['maxrss', canary], ['system_cpu_time', cpu[1]]]])
     return sexp(['process', 'finish', list(time), ['process_args', list(args) + ['--token=' + canary]],
                  ['prog', prog], ['dir', directory]] + own
-                + [['rusage', [['user_cpu_time', '7'], ['maxrss', canary], ['system_cpu_time', '3']]]]
                 + seeded('process/finish', ('process_args', 'rusage', 'target_files')))
 
 
@@ -420,6 +427,12 @@ events = [
 # duration)`: refused by offset, quoting none of either.
 (root / 'bad-time-trace').write_bytes(finish('x.exe', b + 'lib', 1, time=['1', canary]))
 (root / 'bare-time-trace').write_bytes(finish('x.exe', b + 'lib', 1, time=[canary]))
+# A CPU time that is not all digits: refused the same way.
+(root / 'bad-cpu-trace').write_bytes(finish('x.exe', b + 'lib', 1, cpu=['1', canary]))
+# A process with no rusage weighs nothing, and says so.
+(root / 'no-rusage-trace').write_bytes(finish('x.exe', b + 'test/operations', 5, [ops + 'x.exe.output'])
+                                       + finish('y.exe', b + 'test/operations', 2, [ops + 'y.exe.output'],
+                                                rusage=False))
 # Cut short inside a finish event, after the canary fields began.
 (root / 'cut-trace').write_bytes(events[0] + events[3][:-20])
 PY
@@ -432,8 +445,13 @@ printf '%s\n' 'sweep_components 9' 'operations_tutorials 8' 'online_softmax 7' '
   'online_softmax_fp_licences 5' 'online_softmax_fast_math 3' 'cc_temp_ownership-success 2' 'untargeted 1' \
   >"$TMP/weigh.expected"
 diff "$TMP/weigh.expected" "$TMP/weigh.out" >"$TMP/weigh.diff"
-report $? "weigh credits each unit the processes its targets name, not its executable's" \
+report $? "weigh credits each unit the CPU seconds of the processes its targets name" \
   "exit $weigh_rc; $(cat "$TMP/weigh.diff" "$TMP/weigh.err")"
+subject weigh "$TMP/no-rusage-trace" >"$TMP/no-rusage.out" 2>"$TMP/no-rusage.err"
+[ "$?" = 0 ] && [ "$(cat "$TMP/no-rusage.out")" = 'x 5
+y 0' ] && grep -q '1 finished processes carry no rusage; each weighs 0' "$TMP/no-rusage.err"
+report $? "weigh credits a process without rusage nothing, with a warning" \
+  "$(cat "$TMP/no-rusage.out" "$TMP/no-rusage.err")"
 [ "$weigh_rc" = 0 ] && [ ! -s "$TMP/weigh.err" ] && canary_free "$TMP/weigh.out" "$TMP/weigh.err"
 report $? "weigh decodes none of the canary fields: exit 0, empty stderr, no canary" \
   "exit $weigh_rc; see $TMP/weigh.out $TMP/weigh.err"
@@ -443,7 +461,7 @@ report $? "weigh refuses a file that is not a dune trace" "$(cat "$TMP/weigh.log
 printf '(6:config4:init1:1)' >"$TMP/empty-trace"
 harness_rejected 1 'no finished processes' "$TMP/weigh.log" subject weigh "$TMP/empty-trace"
 report $? "weigh refuses a trace that recorded no process" "$(cat "$TMP/weigh.log")"
-for t in bad-time-trace bare-time-trace cut-trace; do
+for t in bad-time-trace bare-time-trace bad-cpu-trace cut-trace; do
   harness_rejected 1 'malformed or cut short at byte [0-9]+$' "$TMP/weigh.log" subject weigh "$TMP/$t" &&
     canary_free "$TMP/weigh.log"
   report $? "weigh refuses $t by offset, quoting none of its bytes" "$(cat "$TMP/weigh.log")"
@@ -484,6 +502,19 @@ for entry in $WEIGH_SECRET; do
   esac
 done
 rm -f "$repo/tools/weigh-twin.sh"
+
+# The twin crediting wall-clock, the unit gh-ocannl-1503 replaced: the
+# fixture's durations are three times its CPU, so every unit reads 3x.
+path=$(mutant weigh-wall-clock "/fields.get\\('cpu_ns', 0\\)/ { sub(/fields.get\\('cpu_ns', 0\\)/, \"fields.get('ns', 0)\") } { print }")
+if [ -z "$path" ] || cmp -s "$path" "$SRC"; then
+  report 1 "negative control: weigh crediting wall-clock" "could not build the mutant"
+else
+  cp "$path" "$repo/tools/weigh-wall.sh"
+  bash "$repo/tools/weigh-wall.sh" weigh "$TMP/trace" >"$TMP/wall.out" 2>"$TMP/wall.err"
+  rm -f "$repo/tools/weigh-wall.sh"
+  ! diff -q "$TMP/weigh.expected" "$TMP/wall.out" >/dev/null && grep -qx 'sweep_components 27' "$TMP/wall.out"
+  report $? "negative control: weigh crediting wall-clock" "see $TMP/wall.out $TMP/wall.err"
+fi
 
 # The twin keyed by executable, the scheme gh-ocannl-1503 replaced: the same
 # trace and oracle must reject it (online_softmax.exe's three tests in one
