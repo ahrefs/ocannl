@@ -2552,22 +2552,18 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   rules` for each alias's own targets and each generated module file. Those dependencies are how
   a scan that READS a changed file (an `.ml`, an agent note, a script) is found without linking
   it, and how a generated module (`.mll`, `.mly`, a `(select)` choice, a generator's header) or a
-  C stub is traced to its stanza. dune does not dump an alias rule itself, so the helper also
-  reads the dune files as text: the stanzas declaring each alias and what they need (`(deps)`,
-  the `%{dep:}` family, what dune infers from `diff`/`cat`/`copy`), a generated input queried
-  like an own target (gh-ocannl-1431: `runtest-kernel_attribution` runs and diffs in one action,
-  owns a golden, and was taken for a golden pair, so an edit to the `benchmarks/gh1002_cells.py`
-  its `(deps)` name missed it). Only an alias whose stanzas use a form outside that reader
-  (`(package …)`, say; none in this repository today) is still listed blind, for any changed path
-  in its directory but an owned module source and for a changed non-build input anywhere. The
-  reader is a whitelist: a form it does not model (a block string, a nested `chdir`, a helper alias
-  no stanza declares, a directory with an `(include ...)` fragment) leaves the alias blind. A
-  `dune` file edit still reaches its whole directory: scoping it per stanza with a hand parser did
-  not converge in review (three rounds of missed forms), and is deferred to gh-ocannl-1541,
-  which reads Dune's own description instead. Its header states the boundary as an allowlist; what
-  falls outside is reported on stderr, and a changed `.ml`/`.mli` no stanza of this build owns (a
-  deleted module, a CUDA-only one on a box without cudajit) exits 3. Two portability points
-  (gh-ocannl-1389): only the file
+  C stub is traced to its stanza. dune does not dump an alias rule itself, so an alias
+  whose action is not a golden diff -- a `(test)` with no golden, or a rule that runs and diffs in
+  one action (gh-ocannl-1431: `runtest-kernel_attribution` owns a golden, was taken for a golden
+  pair, and missed an edit to the `benchmarks/gh1002_cells.py` its `(deps)` name; a golden now also
+  needs a rule-made output beside it) -- is listed for any changed path in its directory but an
+  owned module source, and for a changed non-build input anywhere, but no alias needing it is listed
+  for that. A `dune` file edit reaches its whole directory. Reading alias `(deps)` and scoping a
+  dune edit per stanza with a hand parser did not converge in review (five rounds of missed
+  forms); both are gh-ocannl-1541's, which reads Dune's own description instead. Its header
+  states the boundary as an allowlist; what falls outside is reported on stderr, and a changed
+  `.ml`/`.mli` no stanza of this build owns (a deleted module, a CUDA-only one on a box without
+  cudajit) exits 3. Two portability points (gh-ocannl-1389): only the file
   `dune rules -o` writes is the answer, since on a cold `_build` printing a rule builds the
   `%{read:…}` file it depends on (`ocannl_backend_extension.txt`) and that action's chatter lands
   on dune's own streams (a refusal names the atom and keeps the whole answer in
@@ -2589,13 +2585,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     whose owners' own code (its sources, a project ppx's, the private libraries' modules it names)
     names the changed module or a re-export of it -- nor, when git's hunks place every changed line
     in top-level definitions, one of those definitions -- is LINK-ONLY: printed last, named on
-    stderr, left off by `--referenced-only`. On `low_level.ml` (610 reached): the whole module 349
+    stderr, left off by `--referenced-only`. On `low_level.ml` (592 reached): the whole module 349
     referenced; one function changed, 37 (`optimize_proc`, which every compile runs and no test
-    names: the reason the default keeps them) to 248 (`simplify_llc`, which `Ll_test` calls). Iterate on the
-    referenced tier, run the whole list before pushing.
+    names: the reason the default keeps them) to 248 (`simplify_llc`, which `Ll_test` calls).
+    Iterate on the referenced tier, run the whole list before pushing.
   - A test or note edit gets a short, exact list: `test/operations/cost_model_template.ml` reaches
     its own alias plus the scans that read it (17 aliases in all);
-    `docs/agent-notes/build-and-test.md` only the 11 scans that read it.
+    `docs/agent-notes/build-and-test.md` the 11 scans that read it plus the ~68 aliases listed blind
+    for any doc edit, until gh-ocannl-1541 reads their `(deps)`.
 
 ## OCaml and dune traps
 
