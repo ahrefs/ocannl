@@ -997,8 +997,11 @@ let probe_function_asm ~name asm =
    and unusual hosts. The implicit per-user directory and its files are made owner-only; an explicit
    override is treated as a caller-chosen sharing policy. If neither the override nor a per-user
    XDG/HOME root exists, persistent caching is disabled rather than using a predictable shared
-   temporary directory. Entries older than 30 days are expired and the remaining newest entries are
-   capped at 512 MiB, so source/toolchain generations cannot accumulate indefinitely. A missing,
+   temporary directory. Entries unused for 30 days are expired and the remaining most recently used
+   entries are capped at 512 MiB, so source/toolchain generations cannot accumulate indefinitely. CI
+   keeps the directory between runs with [actions/cache] (gh-ocannl-1502), which is sound for the
+   same reason the tuple is: nothing restored can stand in for a listing of a different kernel or
+   compiler. A missing,
    insecure, unwritable or malformed cache is only a cache miss: the census still compiles and
    measures the same listing it did before this memoization existed.
 
@@ -1368,6 +1371,13 @@ let compile_cached (t : Census.toolchain) ~opt_level ~source ~src_path ~asm_path
           match cached with
           | Some asm ->
               Int.incr cache_hits;
+              (* A hit refreshes the entry's mtime, which is what both bounds read: the age limit
+                 then expires an entry 30 days after its LAST use rather than its creation, and the
+                 size cap evicts the least recently used first. Without it a cache that is restored
+                 into a fresh directory every run (CI's, gh-ocannl-1502) would evict exactly the
+                 listings it keeps hitting, the oldest-written ones, ahead of a codegen change's
+                 dead generation. Best effort, like every other write here. *)
+              (try Unix.utimes path 0. 0. with _ -> ());
               Stdio.Out_channel.write_all asm_path ~data:asm;
               Ok ()
           | None -> (

@@ -515,6 +515,41 @@ jobs:
       run: |
         gcc=$(tools/ci-aarch64-cross.sh "$RUNNER_TEMP/aarch64-cross")
         echo "AARCH64_CROSS_GCC=$gcc" >> "$GITHUB_ENV"
+    # cc_march_census's listing cache, kept between runs (gh-ocannl-1502). The
+    # census compiles every emitted kernel under every -march column at -O2
+    # and -O3, about 700 compiles, and with the cache under the runner's home
+    # every run started empty: `0 hit(s), 696 miss(es)`. This is not the dune
+    # shared cache the job rules out above, and that reasoning does not apply
+    # to it: a dune cache entry stands in for an ACTION whose output depends on
+    # runner state dune does not see, while a census entry is one compiler
+    # listing keyed by everything that determines it -- the generated source's
+    # bytes, the compiler's probed identity (its -v answer, its preprocessed
+    # headers, its effective compilation plan, the resolved executable's
+    # fingerprint), -march and -O (cc_march_census.ml, "Persistent compile
+    # cache"). Every test still runs, and every claim is still read from a
+    # listing of exactly this kernel by exactly this compiler, so a restored
+    # entry can only be the listing this runner would have produced: a
+    # codegen change or a runner-image compiler update misses, correctly. That
+    # is why the key below decides only WHICH snapshot is restored, never
+    # whether an entry is valid: per shard, so a shard restores the listings
+    # its own share compiled last time, then any of this OS's, all from a
+    # unique key per run, since an actions/cache entry is immutable and the
+    # census adds to the directory every run. The census bounds the directory
+    # itself (30 days since an entry's last use, 512 MiB). A miss is still
+    # the cold run a codegen-changing PR pays, which the census's pieces keep
+    # within the job ceiling on their own.
+    - name: Name the cc census listing cache
+      if: runner.os == 'Linux' && matrix.suite == 'main'
+      run: echo "OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR=$RUNNER_TEMP/cc-march-census" >> "$GITHUB_ENV"
+    - name: Keep the cc census listings between runs
+      if: runner.os == 'Linux' && matrix.suite == 'main'
+      uses: actions/cache@v6
+      with:
+        path: ${{ env.OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR }}
+        key: cc-march-census-v1-${{ matrix.os }}-${{ matrix.shard && format('shard{0}', matrix.shard) || 'whole' }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          cc-march-census-v1-${{ matrix.os }}-${{ matrix.shard && format('shard{0}', matrix.shard) || 'whole' }}-
+          cc-march-census-v1-${{ matrix.os }}-
     # One walk, not `dune build` then `dune runtest`: as two commands, the
     # `(test)` stanzas and inline-test runners only start after every file
     # target -- including the golden-rule test executions `@default` carries and
