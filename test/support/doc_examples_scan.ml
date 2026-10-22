@@ -309,11 +309,18 @@ let check_provenance ~read blocks =
       | Some (Adapted source) ->
           Option.some_if
             (Option.is_none (read source))
-            (Printf.sprintf "%s: doc-adapted=%s names no file in the repository" at source)
+            (Printf.sprintf
+               "%s: doc-adapted=%s names no file in the repository (or one the doc_examples rule \
+                in test/operations/dune does not declare)"
+               at source)
       | Some (Excerpt source) -> (
           match read source with
           | None ->
-              Some (Printf.sprintf "%s: doc-excerpt=%s names no file in the repository" at source)
+              Some
+                (Printf.sprintf
+                   "%s: doc-excerpt=%s names no file in the repository (or one the doc_examples \
+                    rule in test/operations/dune does not declare)"
+                   at source)
           | Some text ->
               let excerpt = normalize block.code in
               let original = normalize text in

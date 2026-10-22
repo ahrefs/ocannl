@@ -2552,18 +2552,26 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   rules` for each alias's own targets and each generated module file. Those dependencies are how
   a scan that READS a changed file (an `.ml`, an agent note, a script) is found without linking
   it, and how a generated module (`.mll`, `.mly`, a `(select)` choice, a generator's header) or a
-  C stub is traced to its stanza. dune does not dump an alias rule itself, so an alias whose
-  action is not a golden diff of its own targets (a `(test)` with no golden, run under its
-  `(deps)`; `runtest-sweep_harness`, which names `tools/sweep.sh`) is listed for any changed path
-  in its directory but an owned module source, and for a changed non-build input anywhere: a
-  doc, script or golden edit lists those ~49 too. Its header states the boundary as an
-  allowlist; what falls outside is reported on stderr, and a changed `.ml`/`.mli` no stanza of
-  this build owns (a deleted module, a CUDA-only one on a box without cudajit) exits 3. Two
-  portability points (gh-ocannl-1389): only `dune rules`' stdout is the answer, since on a cold
-  `_build` printing a rule builds the `%{read:…}` file it depends on (`ocannl_backend_extension.txt`)
-  and that action's chatter lands on dune's stderr; and a library edge between two stanzas this
-  build does not compile is skipped, since `external-lib-deps` gives public names while such a
-  stanza may use a local one (on Linux, `metal_backend` requiring `metal_math_api_runtime`).
+  C stub is traced to its stanza. dune does not dump an alias rule itself, so an alias
+  whose action is not a golden diff -- a `(test)` with no golden, or a rule that runs and diffs in
+  one action (gh-ocannl-1431: `runtest-kernel_attribution` owns a golden, was taken for a golden
+  pair, and missed an edit to the `benchmarks/gh1002_cells.py` its `(deps)` name; a golden now also
+  needs a rule-made output beside it) -- is listed for any changed path in its directory but an
+  owned module source, and for a changed non-build input anywhere, with every alias needing it (a
+  broken needed alias breaks their build). A `dune` file edit reaches its whole directory.
+  Reading alias `(deps)` and scoping a dune edit per stanza with a hand parser did not converge in
+  review (five rounds of missed forms); both are gh-ocannl-1541's, which reads Dune's own
+  description instead. Its header states the boundary as an allowlist; what falls outside is
+  reported on stderr, and a changed
+  `.ml`/`.mli` no stanza of this build owns (a deleted module, a CUDA-only one on a box without
+  cudajit) exits 3. Two portability points (gh-ocannl-1389): only the file
+  `dune rules -o` writes is the answer, since on a cold `_build` printing a rule builds the
+  `%{read:…}` file it depends on (`ocannl_backend_extension.txt`) and that action's chatter lands
+  on dune's own streams (a refusal names the atom and keeps the whole answer in
+  `$TMPDIR/affected-dune-rules.PID.txt`; the one sighting reported after that fix ran a branch cut
+  before it, gh-ocannl-1431); and a library edge between two stanzas this build does not compile
+  is skipped, since `external-lib-deps` gives public names while such a stanza may use a local one
+  (on Linux, `metal_backend` requiring `metal_math_api_runtime`).
   `tools/test-affected-tests.sh` pins it on a fixture project, a negative control per reach path.
   - Reach is link-level: a module reaches its whole library, and every stanza requiring it.
     So a change in `arrayjit/lib`, `tensor/` or a widely linked `test/support` library reaches 380
@@ -2574,9 +2582,20 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     `@arrayjit/test/runtest-test_vectorized_codegen`, `Schedule` (staging#1040)
     `@test/training/runtest-fused_classifier`. A narrower "tests that name the module" cut is no
     substitute: `test_vectorized_codegen.ml` never names `Register_tile`.
+  - So that cut ranks, never drops (gh-ocannl-1431): an alias reached only by linking, none of
+    whose owners' own code (its sources, a project ppx's, the private libraries' modules it names)
+    names the changed module or a re-export of it -- nor, when git's hunks place every changed line
+    in top-level definitions, one of those definitions -- is LINK-ONLY: printed last, named on
+    stderr, left off by `--referenced-only`. On `low_level.ml` (592 reached): the whole module 340
+    referenced; one function changed, 27 (`optimize_proc`, which every compile runs and no test
+    names: the reason the default keeps them) to 239 (`simplify_llc`, which `Ll_test` calls).
+    The contract: LINK-ONLY is a heuristic ranking, and `--referenced-only` a deliberate trade
+    (faster, with a possible miss) for iterating mid-change, never for the pre-push run, which
+    takes the full default list.
   - A test or note edit gets a short, exact list: `test/operations/cost_model_template.ml` reaches
-    its own alias plus the 14 scans that read it; `docs/agent-notes/build-and-test.md` its ten scans
-    and the ~49 aliases above.
+    its own alias plus the scans that read it (17 aliases in all);
+    `docs/agent-notes/build-and-test.md` the 11 scans that read it plus the ~68 aliases listed blind
+    for any doc edit, until gh-ocannl-1541 reads their `(deps)`.
 
 ## OCaml and dune traps
 

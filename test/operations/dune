@@ -3323,6 +3323,14 @@
  (modules doc_examples_extract)
  (libraries base stdio test_utils))
 
+; Its corpus is the extractor's own selection -- every `.md` under docs/ (a leading `*` skips dot
+; files, hence the second glob), AGENTS.md and README.md --
+; plus each file a `doc-excerpt=`/`doc-adapted=` fence names, which the extractor holds the fence
+; to. Declared one by one rather than as the whole source tree (gh-ocannl-1431): with
+; `(source_tree ../..)` every change anywhere reached this rule, and through it the checked
+; examples, in `tools/test-run.sh affected`. A fence naming an undeclared file fails here as
+; naming no file, until its file is added below.
+
 (rule
  ; ocannl-backend: none -- extracts Markdown as text; no snippet or backend executes.
  (targets doc_examples.ml doc_examples.coverage doc_examples.inventory)
@@ -3331,7 +3339,13 @@
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
-  (source_tree ../..)
+  (glob_files_rec ../../docs/*.md)
+  (glob_files_rec ../../docs/.*.md)
+  ../../AGENTS.md
+  ../../README.md
+  ../../lib/nn_blocks.ml
+  ../../lib/train.ml
+  layer_norm_test.ml
   (sandbox always))
  (action
   (run %{dep:doc_examples_extract.exe} %{workspace_root})))
