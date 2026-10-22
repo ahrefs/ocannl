@@ -102,13 +102,18 @@ fixture_train_weights='
 test/training/train-heavy 10
 test/training/train-ghost 5
 '
+# Wall-clock: `a`, light by CPU, is shard 2/2's critical path.
+fixture_wall_weights='
+heavy 30
+a 50
+'
 install_subject() { # SOURCE
-  python3 - "$1" "$repo/tools/ci-shard.sh" "$fixture_weights" "$fixture_train_weights" <<'PY'
+  python3 - "$1" "$repo/tools/ci-shard.sh" "$fixture_weights" "$fixture_train_weights" "$fixture_wall_weights" <<'PY'
 import re
 import sys
-source, target, weights, train_weights = sys.argv[1:5]
+source, target, weights, train_weights, wall_weights = sys.argv[1:6]
 text = open(source).read()
-for name, table in (('WEIGHTS', weights), ('TRAIN_WEIGHTS', train_weights)):
+for name, table in (('WEIGHTS', weights), ('TRAIN_WEIGHTS', train_weights), ('WALL_WEIGHTS', wall_weights)):
     text, count = re.subn(r"^" + name + r"='\n.*?^'\n", lambda m: name + "='" + table + "'\n", text, flags=re.M | re.S)
     assert count == 1, name + ' block not found exactly once'
 open(target, 'w').write(text)
@@ -247,14 +252,17 @@ ok=0
 [ "$(printf '%s\n' "$shard2" | head -1)" = "@@all" ] || ok=1
 [ "$(printf '%s\n' "$shard2" | tail -3 | tr '\n' ' ')" = "@@$ops/runtest-a @@$ops/runtest-b @@$ops/runtest-c " ] || ok=1
 report $ok "the rest go to the lighter shard, @rest first, equal weights by name" "got: $shard2"
-grep -q 'weight for ghost, which is no unit any more' "$TMP/deal.err"
-report $? "a weight naming no unit warns on stderr" "see $TMP/deal.err"
+grep -q 'WEIGHT NAMES NO UNIT: ghost 5' "$TMP/deal.err"
+report $? "a weight naming no unit is reported loudly on stderr" "see $TMP/deal.err"
 ok=0
 [ "$(subject targets 2/2 2>/dev/null)" = "$shard2" ] || ok=1
 [ "$(subject plan 2 2>/dev/null)" = "$(subject plan 2 2>/dev/null)" ] || ok=1
 report $ok "targets and plan are deterministic"
-subject plan 2 2>/dev/null | grep -q '^shard 1/2: 1 units, load 10 ([0-9]*%), longest heavy 10$'
-report $? "plan reports each shard's units, load and longest unit"
+subject plan 2 2>/dev/null >"$TMP/plan.out"
+grep -q '^shard 1/2: 1 units, load 10 ([0-9]*%), longest by wall-clock heavy 30s$' "$TMP/plan.out" &&
+  grep -q '^shard 2/2: .*, longest by wall-clock a 50s$' "$TMP/plan.out"
+report $? "plan reports each shard's units, load and longest unit by WALL-clock, not by CPU" \
+  "$(cat "$TMP/plan.out")"
 [ "$(subject aliases)" = "default
 runtest
 bin-smoke" ]
@@ -447,6 +455,14 @@ printf '%s\n' 'sweep_components 9' 'operations_tutorials 8' 'online_softmax 7' '
 diff "$TMP/weigh.expected" "$TMP/weigh.out" >"$TMP/weigh.diff"
 report $? "weigh credits each unit the CPU seconds of the processes its targets name" \
   "exit $weigh_rc; $(cat "$TMP/weigh.diff" "$TMP/weigh.err")"
+subject weigh --wall "$TMP/trace" >"$TMP/weigh-wall.out" 2>"$TMP/weigh-wall.err"
+printf '%s\n' 'sweep_components 27' 'operations_tutorials 24' 'online_softmax 21' '@rest 19' 'cc_march_census 18' \
+  'online_softmax_fp_licences 15' 'online_softmax_fast_math 9' 'cc_temp_ownership-success 6' 'untargeted 3' \
+  >"$TMP/weigh-wall.expected"
+diff "$TMP/weigh-wall.expected" "$TMP/weigh-wall.out" >"$TMP/weigh-wall.diff" && [ ! -s "$TMP/weigh-wall.err" ] &&
+  canary_free "$TMP/weigh-wall.out"
+report $? "weigh --wall credits the same units their wall-clock durations" \
+  "$(cat "$TMP/weigh-wall.diff" "$TMP/weigh-wall.err")"
 subject weigh "$TMP/no-rusage-trace" >"$TMP/no-rusage.out" 2>"$TMP/no-rusage.err"
 [ "$?" = 0 ] && [ "$(cat "$TMP/no-rusage.out")" = 'x 5
 y 0' ] && grep -q '1 finished processes carry no rusage; each weighs 0' "$TMP/no-rusage.err"
@@ -607,6 +623,26 @@ printf 'no weights here\n' >"$TMP/run-none.log"
 refused "merge-weights: a log with no weigh lines" 'no ci-shard-weight lines' subject merge-weights "$TMP/run-none.log"
 refused "merge-weights: a missing log" 'usage' subject merge-weights "$TMP/no-such-log"
 refused "merge-weights: a missing second log" 'usage' subject merge-weights "$TMP/run.log" "$TMP/no-such-log"
+# merge-weights --wall reads the ci-shard-wall lines, and only those.
+{ printf 'ci-shard-wall 1/2 heavy 300\n'; printf 'ci-shard-wall 2/2 light 80\n'; cat "$TMP/run.log"; } >"$TMP/wall.log"
+[ "$(subject merge-weights --wall "$TMP/wall.log" 2>/dev/null)" = 'heavy 300
+light 80' ]
+report $? "merge-weights --wall merges the ci-shard-wall lines"
+refused "merge-weights --wall: a log without wall lines" 'no ci-shard-wall lines' subject merge-weights --wall "$TMP/run.log"
+# A rule output named after no unit (as backend-0-0.log.actual is for
+# runtest-micrograd_demo_logging) goes to the one unit whose stanza in the
+# split directory's dune file names it; a key with no unit and no owner is
+# reported loudly and kept.
+printf '%s\n' '(rule (target "out-0.log.actual") (action (with-stdout-to %{target} (run ./a.exe))))' \
+  '(rule (alias runtest-a) (action (diff a.expected "out-0.log.actual")))' >"$repo/$ops/dune"
+printf 'ci-shard-weight 1/1 out-0 7\nci-shard-weight 1/1 a 2\nci-shard-weight 1/1 phantom 5\n' >"$TMP/fold.log"
+subject merge-weights "$TMP/fold.log" >"$TMP/fold.out" 2>"$TMP/fold.err"
+[ "$(cat "$TMP/fold.out")" = 'a 9
+phantom 5' ] && grep -q 'out-0 is a target of a; its weight goes there' "$TMP/fold.err" &&
+  grep -q 'WEIGHT NAMES NO UNIT: phantom 5' "$TMP/fold.err"
+report $? "merge-weights credits a rule output to the unit that owns it, and flags a key with no unit" \
+  "$(cat "$TMP/fold.out" "$TMP/fold.err")"
+: >"$repo/$ops/dune"
 
 # The fault-injected twins. Without the split-directory exclusion, @rest would
 # carry test/operations' own runtest and all; naming `default` instead of

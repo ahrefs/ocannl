@@ -3038,11 +3038,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   weights measured under the previous deal predicted 60.5/60.5 minutes of slot and ran 80.6 on one
   shard while the other hit the job's 45-minute timeout. A Mac-measured table drifts as badly
   (gh-ocannl-1464 saw 26/12): measure on the runner. A single unit whose own wall-clock outlasts
-  the rest of its shard is the one cost CPU hides; `plan` prints each shard's longest unit. Every
+  the rest of its shard is the one cost CPU hides, so CI also prints `ci-shard-wall` lines and
+  `plan` names each shard's longest unit by the script's `WALL_WEIGHTS` (`merge-weights --wall`). Every
   `main` shard job weighs its own build's trace, crediting each process to the unit its TARGET
   names -- an alias action's `runtest-<name>`, a rule's `<name>.<ext>` file -- never to its
   executable, which several tests share (`online_softmax.exe` runs three,
-  `inline-test-runner.exe` a family); and `tools/ci-shard.sh merge-weights` turns runs' shard
+  `inline-test-runner.exe` a family) -- and a rule output named after no unit to the unit whose
+  stanza names it, any key left unplaced reported loudly; and `tools/ci-shard.sh merge-weights` turns runs' shard
   logs, one file per run, into the replacement table, averaged over the runs (the script's header
   has the fetch recipe). Refresh it from runs of the CURRENT code when `tools/ci-times.sh` shows
   the shards drifting apart: `plan` balancing a table to the second while CI's shards ran 32 and
