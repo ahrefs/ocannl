@@ -708,14 +708,19 @@ if (!$pid) {
     die $!;
 }
 my $ready = 0;
-for (1..200) { if (-e "$dir/ready") { $ready = 1; last } select undef, undef, undef, .05; }
+# Both waits end as soon as their condition holds, so their bounds are paid only by a failing run
+# and are sized for a loaded box (gh-ocannl-1504: this leg timed out under test-harnesses.sh on
+# mac-studio when they were ten and fifteen seconds). The signal's stays under the fake test's 60-second sleep, so a
+# signal the runner ignored still reads as a timeout, never as a late clean exit.
+for (1..1200) { if (-e "$dir/ready") { $ready = 1; last } select undef, undef, undef, .05; }
 kill($signal, $pid);
 local $SIG{ALRM} = sub { kill 'KILL', $pid; die "signal case timed out\n" };
-alarm 15;
+alarm 45;
 waitpid($pid, 0);
 my $got = $? >> 8;
 alarm 0;
-die "not ready or wrong signal status: $got\n" unless $ready && $got == $rc{$signal};
+die "never ready within 60s (then exit $got)\n" unless $ready;
+die "wrong signal status: $got\n" unless $got == $rc{$signal};
 PERL
   cmp module.ml "$fixture/pristine"
   case $signal_case in
@@ -863,7 +868,7 @@ if (!$pid) {
     die $!;
 }
 my $ready = 0;
-for (1..200) { if (-e "$dir/ready") { $ready = 1; last } select undef, undef, undef, .05; }
+for (1..1200) { if (-e "$dir/ready") { $ready = 1; last } select undef, undef, undef, .05; }
 die "survivor fixture never became ready\n" unless $ready;
 my @owners = glob "$dir/runs/owner-*";
 @owners == 1 or die "ambiguous fixture owner\n";
@@ -878,7 +883,7 @@ if ($victim eq 'launcher') {
 $target =~ /^\d+$/ && $target > 1 or die "invalid victim\n";
 kill('KILL', $target) == 1 or die "kill victim: $!";
 local $SIG{ALRM} = sub { kill 'KILL', $pid; die "survivor fixture timed out\n" };
-alarm 15;
+alarm 45;
 waitpid($pid, 0);
 my $got = $? >> 8;
 alarm 0;
@@ -1059,11 +1064,12 @@ my $ready = 0;
 for (1..1200) { if (-e "$dir/ready") { $ready = 1; last } select undef, undef, undef, .05; }
 kill('TERM', $pid);
 local $SIG{ALRM} = sub { kill 'KILL', $pid; die "batch signal case timed out\n" };
-alarm 15;
+alarm 45;
 waitpid($pid, 0);
 my $got = $? >> 8;
 alarm 0;
-die "not ready or wrong signal status: $got\n" unless $ready && $got == 143;
+die "never ready within 60s (then exit $got)\n" unless $ready;
+die "wrong signal status: $got\n" unless $got == 143;
 PERL
 cmp module.ml "$fixture/pristine"
 grep -q '^  NOT RUN      3-survived.patch$' "$fixture/result" || { cat "$fixture/result"; echo 'batch: signal did not stop the batch'; exit 1; }
