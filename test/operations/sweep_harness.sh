@@ -1622,7 +1622,7 @@ grep -q 'journalctl -k' "$unhealthy_log"
 grep -q '/test/config --ocannl_backend=metal$' "$probe_calls"
 absent '@runtest' < <(tail -n "+$((calls_before + 1))" "$calls")
 probe_query=$(cat "$probe_calls.pid")
-if kill -0 "$probe_query" 2>/dev/null; then
+if pid_alive "$probe_query"; then
   kill -KILL "$probe_query" 2>/dev/null || true
   printf 'sweep_harness: the wedged query (pid %s) outlived its bound\n' "$probe_query" >&2
   exit 1
@@ -2247,7 +2247,7 @@ grep -q '^  m4-max/metal: serial rerun: unjudged (exit 69): @test/runtest-pre-di
 absent -- '-j 1' < <(tail -n "+$((calls_before + 1))" "$calls")
 [ "$(awk 'END { print NR }' "$probe_calls")" = 2 ]
 probe_query=$(cat "$probe_calls.pid")
-if kill -0 "$probe_query" 2>/dev/null; then
+if pid_alive "$probe_query"; then
   kill -KILL "$probe_query" 2>/dev/null || true
   printf 'sweep_harness: the serial rerun'\''s wedged query (pid %s) outlived its bound\n' "$probe_query" >&2
   exit 1
@@ -3652,12 +3652,12 @@ grep -q '^sweep-hold: sleep:idle block inhibitor held for: ocannl sweep S tuf/hi
 [ "$(cat "$tmp/inhibit.args")" = \
   '--what=sleep:idle --mode=block --who=ocannl-sweep --why=ocannl sweep S tuf/hip suite -- sh -c echo HELD; exec cat >/dev/null' ]
 guard_waited=0
-while kill -0 "$(cat "$tmp/inhibit.pid")" 2>/dev/null; do
+while pid_alive "$(cat "$tmp/inhibit.pid")"; do
   [ "$guard_waited" -lt "$wait_ticks" ] || break
   sleep 0.05
   guard_waited=$((guard_waited + 1))
 done
-if kill -0 "$(cat "$tmp/inhibit.pid")" 2>/dev/null; then
+if pid_alive "$(cat "$tmp/inhibit.pid")"; then
   printf 'sweep_harness: the sleep inhibitor outlived its unit\n' >&2
   exit 1
 fi
@@ -3702,12 +3702,12 @@ grep -q '^unit-ran$' <<<"$guard_stalled"
 grep -q '^sweep-hold: WARNING: running WITHOUT a sleep guard, .* -- .*/systemd-inhibit refused: no answer after 1s$'   <<<"$guard_stalled"
 [ -s "$tmp/inhibit.pid" ]
 guard_waited=0
-while kill -0 "$(cat "$tmp/inhibit.pid")" 2>/dev/null; do
+while pid_alive "$(cat "$tmp/inhibit.pid")"; do
   [ "$guard_waited" -lt "$wait_ticks" ] || break
   sleep 0.05
   guard_waited=$((guard_waited + 1))
 done
-if kill -0 "$(cat "$tmp/inhibit.pid")" 2>/dev/null; then
+if pid_alive "$(cat "$tmp/inhibit.pid")"; then
   printf 'sweep_harness: a stalled inhibitor helper outlived its give-up
 ' >&2
   exit 1
@@ -3775,7 +3775,7 @@ cancel_sweep() { # pid|group
     return 1
   fi
   while IFS= read -r pid; do
-    if kill -0 "$pid" 2>/dev/null; then
+    if pid_alive "$pid"; then
       printf 'sweep_harness: unit process %s outlived the cancelled sweep\n' "$pid" >&2
       ps -o pid=,ppid=,pgid=,stat=,etime=,command= -p "$pid" >&2 || true
       return 1
