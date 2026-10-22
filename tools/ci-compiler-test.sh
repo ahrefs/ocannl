@@ -14,7 +14,7 @@
 #                     every fetch/extract/test step without fetching or running.
 #   --keep            Keep the scratch directory even on success (a failing
 #                     run always keeps it, so the build tree's diagnostics --
-#                     e.g. cc_march_census_kernels/rows.txt -- survive it;
+#                     e.g. cc_march_census_kernels/<piece>/rows.txt -- survive it;
 #                     otherwise cleanup precedes the exit sentinel).
 #   --cap SECONDS     Named-test wall-clock cap; 0 disables it (default: 3600).
 #   -j, --jobs N      Dune concurrency, 1..4 (default: 4).
@@ -22,9 +22,9 @@
 # Examples:
 #   tools/ci-compiler-test.sh @test/operations/runtest-cpu_simd_reduction
 #   tools/ci-compiler-test.sh --aarch64-clang \
-#     @test/operations/runtest-cc_march_census
+#     @test/operations/runtest-cc_march_census-w16_native_foreign
 #   tools/ci-compiler-test.sh --dry-run --aarch64-clang \
-#     @test/operations/runtest-cc_march_census
+#     @test/operations/runtest-cc_march_census-w16_native_foreign
 #
 # The real fetch is Linux/Debian-family only: it deliberately uses the
 # no-root recipe established by gh-ocannl-752, `apt-get download` followed by
