@@ -218,7 +218,9 @@ if harness_leg 'cold build'; then
     rc=0
     (cd "$TMP" && TMPDIR=$TMP/kept DUNE_CACHE=disabled bash "$mutant" --files t6/dyn.expected) >"$out" 2>"$err" || rc=$?
     # The refusal names the atom and keeps the answer it refused (gh-ocannl-1431).
-    if [ "$rc" = 2 ] && grep -q 'unexpected atom in dune rules output: "noise-from-an-action" at byte 0' "$err" &&
+    # Which atom comes first is dune's: 3.24 prints the noise line alone, the 3.20
+    # floor echoes the command first, wrapped in ANSI dim codes.
+    if [ "$rc" = 2 ] && grep -Eq 'unexpected atom in dune rules output: ".+" at byte [0-9]+: ' "$err" &&
        grep -q noise-from-an-action "$TMP"/kept/affected-dune-rules.*.txt; then
       report 0 'negative control: reading dune rules'"'"' streams as its answer fails on the cold build, naming the atom'
     else report 1 'negative control: reading dune rules'"'"' streams as its answer fails on the cold build, naming the atom' "exit $rc; $(cat "$err")"; fi
