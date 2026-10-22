@@ -535,8 +535,9 @@ fi
 
 # merge-weights: CI runs' per-shard weigh lines -> the WEIGHTS block. The
 # lines sit wherever `gh run view --log` puts them (job and step columns, a
-# timestamp); a unit in several shards -- another shard's dependency -- weighs
-# its longest; @rest is the largest shard's beyond the others' mean (their
+# timestamp); a unit in several shards -- a shared dependency, which moving its
+# alias does not move -- is left out of the table, in every run once any run
+# saw it shared; @rest is the largest shard's beyond the others' mean (their
 # @rest is the overhead every shard pays); runs are averaged per unit over
 # the runs that measured it; units under 2 s are left to the default, counted
 # on stderr.
@@ -557,22 +558,24 @@ ok=0
 [ "$merge_rc" = 0 ] || ok=1
 [ "$(cat "$TMP/merge.out")" = '@rest 310
 heavy 100
-light 50
-driver 4' ] || ok=1
-grep -q 'warning: driver ran in more than one shard; it weighs its longest' "$TMP/merge.err" || ok=1
+light 50' ] || ok=1
+grep -q 'driver ran in 2 shards, a shared dependency: fixed overhead of up to 4s in each, left out of the table' \
+  "$TMP/merge.err" || ok=1
 grep -q '3 shards; @rest overhead per shard 20s$' "$TMP/merge.err" || ok=1
 grep -q '1 run(s); 1 units under 2s, mean 1.0s' "$TMP/merge.err" || ok=1
-report $ok "merge-weights weighs a unit its longest shard and nets @rest of the per-shard overhead" \
+report $ok "merge-weights leaves a shared dependency out and nets @rest of the per-shard overhead" \
   "exit $merge_rc; $(cat "$TMP/merge.out" "$TMP/merge.err")"
 [ "$(subject merge-weights <"$TMP/run.log" 2>/dev/null)" = "$(cat "$TMP/merge.out")" ]
 report $? "merge-weights reads stdin without a LOG"
-# A second run, of another deal and N: heavy and light measured again, driver
-# not (its mean is the first run's alone), a newcomer measured only here.
+# A second run, of another deal and N: heavy and light measured again, a
+# newcomer measured only here, and driver alone in one shard -- still left
+# out, since the first run saw it shared.
 {
   printf 'ci-shard-weight 1/2 heavy 140\n'
   printf 'ci-shard-weight 1/2 @rest 50\n'
   printf 'ci-shard-weight 2/2 light 30\n'
   printf 'ci-shard-weight 2/2 newcomer 12\n'
+  printf 'ci-shard-weight 2/2 driver 9\n'
   printf 'ci-shard-weight 2/2 @rest 10\n'
 } >"$TMP/run2.log"
 subject merge-weights "$TMP/run.log" - <"$TMP/run2.log" >"$TMP/merge2.out" 2>"$TMP/merge2.err"
@@ -582,11 +585,10 @@ ok=0
 [ "$(cat "$TMP/merge2.out")" = '@rest 175
 heavy 120
 light 40
-newcomer 12
-driver 4' ] || ok=1
+newcomer 12' ] || ok=1
 grep -q 'run 1: 3 shards; @rest overhead per shard 20s$' "$TMP/merge2.err" || ok=1
 grep -q 'run 2: 2 shards; @rest overhead per shard 10s$' "$TMP/merge2.err" || ok=1
-grep -q 'warning: run 1: driver ran in more than one shard' "$TMP/merge2.err" || ok=1
+grep -q 'run 1: driver ran in 2 shards, a shared dependency' "$TMP/merge2.err" || ok=1
 grep -q '2 run(s); 1 units under 2s' "$TMP/merge2.err" || ok=1
 report $ok "merge-weights averages runs per unit, over the runs that measured it" \
   "exit $merge_rc; $(cat "$TMP/merge2.out" "$TMP/merge2.err")"

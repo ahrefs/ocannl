@@ -939,9 +939,13 @@ PY
 # run's shard jobs, `-` for stdin, stdin when none is named -- wherever on a
 # line they sit: `gh run view RUN --log` prefixes each with its job and a
 # timestamp. Within a run, a unit weighs what its shard spent on it. A unit
-# that ran in more than one shard is another shard's dependency (every shard
-# that needs it builds it), so it weighs its longest run, not their sum: the
-# deal cannot move the copies, only the unit. `@rest` is the exception: every
+# that ran in more than one shard is a shared dependency: every shard holding
+# one of its consumers builds it, wherever the deal puts its own alias, so its
+# cost is fixed overhead of those shards that moving the unit does not move.
+# It is left out of the table (dealt at DEFAULT_WEIGHT, so not counted as
+# movable load) -- in every run, if any run saw it shared -- and its longest
+# copy goes to stderr as overhead. (A dependency whose consumers all sit in
+# its own shard looks movable; it is, together with them.) `@rest` is the exception: every
 # shard runs some processes outside test/operations (whatever its tests depend
 # on there), so the shards without the `@rest` unit measure that overhead, and
 # `@rest` weighs what the shard holding it -- the largest -- spent beyond their
@@ -998,23 +1002,29 @@ def merge_run(r, text):
     holder = rest[-1][1]
     others = [s for s, k in rest[:-1]]
     overhead = sum(others) / len(others) if others else 0.0
-    weights = {}
+    weights, shared = {}, set()
     for table in shards.values():
         for unit, seconds in table.items():
-            if unit != '@rest':
-                weights[unit] = max(weights.get(unit, 0.0), seconds)
+            if unit == '@rest':
+                continue
+            if unit in weights:
+                shared.add(unit)
+            weights[unit] = max(weights.get(unit, 0.0), seconds)
     weights['@rest'] = max(0.0, shards[holder].get('@rest', 0.0) - overhead)
-    for u in sorted(u for u in weights if u != '@rest' and sum(u in t for t in shards.values()) > 1):
-        print('ci-shard.sh: merge-weights: warning: %s%s ran in more than one shard; it weighs its longest'
-              % (where, u), file=sys.stderr)
+    for u in sorted(shared):
+        print('ci-shard.sh: merge-weights: %s%s ran in %d shards, a shared dependency: fixed overhead '
+              'of up to %.0fs in each, left out of the table'
+              % (where, u, sum(u in t for t in shards.values()), weights[u]), file=sys.stderr)
     print('ci-shard.sh: merge-weights: %s%d shards; @rest overhead per shard %.0fs' % (where, n, overhead),
           file=sys.stderr)
-    return weights
+    return weights, shared
 
 
-runs = [merge_run(r, text) for r, text in enumerate(texts, 1)]
+merged = [merge_run(r, text) for r, text in enumerate(texts, 1)]
+runs = [w for w, _ in merged]
+shared = set().union(*(s for _, s in merged))
 weights = {}
-for u in set().union(*runs):
+for u in set().union(*runs) - shared:
     measured = [w[u] for w in runs if u in w]
     weights[u] = sum(measured) / len(measured)
 kept = sorted(((w, u) for u, w in weights.items() if w >= min_weight), key=lambda x: (-x[0], x[1]))
