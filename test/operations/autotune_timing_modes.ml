@@ -1362,7 +1362,30 @@ let () =
   let que2 = measure Autotune.Queued in
   let iso2 = measure Autotune.Isolated in
   let after = ref_round_trip () in
-  let floor_ms = Float.min before (Float.min between after) in
+  (* The low side of the [Isolated] claim below, as a predicate on the anchor so the anchor can be
+     resampled against it. *)
+  let iso_admitted floor_ms = iso.contended || Float.(iso.ms >= floor_ms / 3.) in
+  (* The anchor is a minimum, so it is contended exactly when EVERY one of its samples is: GPU
+     time-slicing against a sibling CUDA process in a -j 8 suite holds a launch-plus-sync at 2-5 ms
+     for a whole 16-sample window, while the isolated window between them still caught a majority of
+     its batches at the idle 6 us (the 2026-10-22 rog-nv cuda sweep: anchors 3.23/1.88/4.77 ms
+     around an isolated reading of 0.006 ms, against 0.0056 ms for all three anchors on the same
+     commit alone). When the reading falls under the anchor, the anchor is resampled, under a bound,
+     before the claim is judged. Sound in one direction only, which is the one the claim needs: a
+     minimum over more samples can only move DOWN toward the true round trip and never below it, so
+     a reading the claim would refuse against an uncontended anchor is still refused. *)
+  let anchor_resample_windows = 32 and anchor_resample_wall_ms = 2000. in
+  let floor_ms, resampled =
+    let c0 = Mtime_clock.counter () in
+    let rec resample floor_ms n =
+      if
+        iso_admitted floor_ms || n >= anchor_resample_windows
+        || Float.(Mtime.Span.to_float_ns (Mtime_clock.count c0) / 1e6 >= anchor_resample_wall_ms)
+      then (floor_ms, n)
+      else resample (Float.min floor_ms (ref_round_trip ())) (n + 1)
+    in
+    resample (Float.min before (Float.min between after)) 0
+  in
   (* [contended] is reported here because it is the escape hatch every executed claim below is
      written around: a reading that took it is outside the envelope those claims calibrate, so a
      calibration run has to be able to tell the two apart. *)
@@ -1370,11 +1393,12 @@ let () =
   Stdio.eprintf
     "  (not part of the golden) isolated %.6f ms%s over %d dispatches in %.1f ms wall; queued %.6f \
      ms%s over %d dispatches (batch depth %d) in %.1f ms wall; second round isolated %.6f ms%s, \
-     queued %.6f ms%s (batch depth %d); round trip %.6f ms (%.6f/%.6f/%.6f); queued/round-trip %.4f\n\
+     queued %.6f ms%s (batch depth %d); round trip %.6f ms (%.6f/%.6f/%.6f, %d more windows); \
+     queued/round-trip %.4f\n\
      %!"
     iso.ms (contention iso) iso.dispatches iso.wall_ms que.ms (contention que) que.dispatches
     que.depth que.wall_ms iso2.ms (contention iso2) que2.ms (contention que2) que2.depth floor_ms
-    before between after (que.ms /. floor_ms);
+    before between after resampled (que.ms /. floor_ms);
   let finite r = Float.is_finite r.ms && Float.is_positive r.ms in
   p "both modes returned a positive finite per-launch time or reported contention"
     ((finite iso || iso.contended) && (finite que || que.contended));
@@ -1469,8 +1493,7 @@ let () =
      minimized, is refused on the injected clock above, where it needs no device and no second
      window. *)
   Verdict.pass_fail "isolated reading is a per-launch time or reports contention"
-    (iso.contended || Float.(iso.ms >= floor_ms / 3.))
-    ~detail:(fun () ->
+    (iso_admitted floor_ms) ~detail:(fun () ->
       Printf.sprintf "%.6f ms vs round trip %.6f ms (median batch %.6f ms)" iso.ms floor_ms
         (median_per_launch iso));
   (* The depth from which either side of the queued envelope discriminates, derived rather than
