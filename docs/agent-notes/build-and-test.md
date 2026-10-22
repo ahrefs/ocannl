@@ -2560,12 +2560,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   its `(deps)` name missed it). Only an alias whose stanzas use a form outside that reader
   (`(package …)`, say; none in this repository today) is still listed blind, for any changed path
   in its directory but an owned module source and for a changed non-build input anywhere. The
-  same reader scopes a `dune` file edit, in the revision forms, to the stanzas whose text changed
-  (comments and layout aside); a stanza kind outside rule, test, library, executables and alias
-  (`env`, `copy_files`, ...), a new dune file and `--files` still reach the whole directory
-  beneath it. Its header states the boundary as an allowlist; what falls outside is reported on
-  stderr, and a changed `.ml`/`.mli` no stanza of this build owns (a deleted module, a CUDA-only
-  one on a box without cudajit) exits 3. Two portability points (gh-ocannl-1389): only the file
+  reader is a whitelist: a form it does not model (a block string, a nested `chdir`, a helper alias
+  no stanza declares, a directory with an `(include ...)` fragment) leaves the alias blind. A
+  `dune` file edit still reaches its whole directory: scoping it per stanza with a hand parser did
+  not converge in review (three rounds of missed forms), and is deferred to gh-ocannl-1541,
+  which reads Dune's own description instead. Its header states the boundary as an allowlist; what
+  falls outside is reported on stderr, and a changed `.ml`/`.mli` no stanza of this build owns (a
+  deleted module, a CUDA-only one on a box without cudajit) exits 3. Two portability points
+  (gh-ocannl-1389): only the file
   `dune rules -o` writes is the answer, since on a cold `_build` printing a rule builds the
   `%{read:…}` file it depends on (`ocannl_backend_extension.txt`) and that action's chatter lands
   on dune's own streams (a refusal names the atom and keeps the whole answer in

@@ -93,22 +93,14 @@
 #     that object, or else every executable and `tests` stanza of its
 #     directory, since which one links it dune does not say without computing
 #     link rules; so does a reached executable the object's rule runs (a
-#     generator writing a header it includes). A changed `dune` file whose
-#     two sides the revision forms give (not `--files`) reaches only the
-#     stanzas whose text changed, comments and layout aside (gh-ocannl-1431): a
-#     rule the aliases it declares and the files it makes, through what reads
-#     them; a test the aliases it declares and its stanza; a library or
-#     executables its stanza; an `(alias)` the per-test aliases it names, and
-#     a helper alias every per-test alias needing it. Only forms modeled in
-#     full are scoped: a changed stanza of any other kind (`env`, `dirs`,
-#     `copy_files`, ...), a file holding a `(subdir ...)`, a block string, a
-#     new file, `--files`, and a changed `dune-project` or `dune-workspace`
-#     file reach every stanza and every per-test alias of the directories
-#     beneath it (an `env` stanza applies there too), and every alias
-#     elsewhere whose own targets' rules read a file or glob of those
+#     generator writing a header it includes). A changed `dune`,
+#     `dune-project` or `dune-workspace` file, or a fragment a dune file
+#     `(include ...)`s, reaches every stanza and every per-test alias of the
+#     directories beneath it (an `env` stanza applies there too), and every
+#     alias elsewhere whose own targets' rules read a file or glob of those
 #     directories (a file their rules make). Reach then spreads to each stanza
 #     requiring a reached library, to a fixpoint.
-#   - An alias is printed when a changed dune stanza reaches it, when an
+#   - An alias is printed when its directory's `dune` file changed, when an
 #     owner is reached, or when a rule of its own targets reads a changed path
 #     (a file, or a glob over source files): the repository scans are found
 #     this way, and so is a golden, whose copy into the build is one of the
@@ -216,8 +208,7 @@ else
     *) git ls-files --others --exclude-standard -- ${paths[@]+"${paths[@]}"} >>"$tmp/changed" ||
          die "git ls-files failed" ;;
   esac
-  # Both sides of each changed `dune`, `.ml` and `.mli` file: a dune edit then
-  # reaches only the stanzas whose text changed, and a module edit is ranked by
+  # Both sides of each changed `.ml` and `.mli` file: a module edit is ranked by
   # the definitions it touched (the hunks, below). OLD is the revision compared
   # with; NEW the right-hand revision of a range, else the worktree.
   old_rev= new_rev=
@@ -228,7 +219,7 @@ else
     *) old_rev=${revs[0]} ;;
   esac
   while IFS= read -r f; do
-    case $f in dune | */dune | *.ml | *.mli) ;; *) continue ;; esac
+    case $f in *.ml | *.mli) ;; *) continue ;; esac
     mkdir -p "$tmp/old/$(dirname -- "$f")" "$tmp/new/$(dirname -- "$f")" || die "cannot create $tmp/old"
     # A file the old side does not have is new: it gets no scoping.
     git show "$old_rev:$f" >"$tmp/old/$f" 2>/dev/null || rm -f "$tmp/old/$f"
@@ -590,12 +581,8 @@ sub keep_raw {
 # read; the caller decides whether that stops the run. A block string comes
 # back OPAQUE (\x01-prefixed: its escapes and its leading space are not
 # decoded), which every reader of a stanza's needs takes as unknown.
-# With $quoted, a quoted or block string comes back NUL-prefixed instead: what
-# the stanza comparison reads, since `"%{deps}"` is one argument and `%{deps}`
-# many.
 sub parse_dune {
-  my ($s, $what, $quoted) = @_;
-  my $q = $quoted ? "\0" : "";
+  my ($s, $what) = @_;
   my @stack = ([]);
   my $put = sub { push @{$stack[-1]}, $_[0] };
   pos($s) = 0;
@@ -609,13 +596,13 @@ sub parse_dune {
     if ($s =~ /\G"\\[|>]([^\n]*)/gc) {   # block string: consecutive "\| lines
       my $str = $1;
       $str .= "\n$1" while $s =~ /\G\n[ \t]*"\\[|>]([^\n]*)/gc;
-      $put->(($quoted ? "\0" : "\x01") . $str); next;
+      $put->("\x01" . $str); next;
     }
     if ($s =~ /\G"((?:[^"\\]|\\.)*)"/gcs) {
       my $a = $1 =~ s/\\\n[ \t]*//gr;
       $a =~ s/\\(x[0-9A-Fa-f]{2}|[0-9]{3}|.)/length $1 > 1 ? ($1 =~ m{^x} ? chr hex substr($1, 1) : chr $1)
                                             : $1 eq "n" ? "\n" : $1 eq "t" ? "\t" : $1 eq "r" ? "\r" : $1/gse;
-      $put->($q . $a); next;
+      $put->($a); next;
     }
     if ($s =~ /\G([^\s()";]+)/gc) { $put->($1); next }
     die "unreadable text in $what at byte " . pos($s) . "\n";
@@ -624,11 +611,10 @@ sub parse_dune {
   return $stack[0];
 }
 sub has_opaque { my ($x) = @_; ref $x ? scalar(grep { has_opaque($_) } @$x) : $x =~ /^\x01/ }
-sub canon {   # a quoted string (NUL-prefixed) and an atom of the same text stay apart
+sub canon {   # a stanza or form as text, for messages
   my ($x) = @_;
   return "(" . join(" ", map { canon($_) } @$x) . ")" if ref $x;
-  my $quoted = $x =~ s/^\0//;
-  return ($quoted ? "q" : "a") . "\"" . ($x =~ s/(["\\])/\\$1/gr =~ s/\n/\\n/gr) . "\"";
+  return "\"" . ($x =~ s/(["\\])/\\$1/gr =~ s/\n/\\n/gr) . "\"";
 }
 sub dfield {   # the arguments of a stanza's first (NAME ...) field
   my ($x, $name) = @_;
@@ -636,19 +622,16 @@ sub dfield {   # the arguments of a stanza's first (NAME ...) field
   return undef;
 }
 # Stanzas of DIR, `(subdir ...)` flattened into the directory it names.
-# QITEMS is the same text read with quotation kept (parse_dune's $quoted): the
-# canonical text compared across a dune-file edit.
 sub dune_stanzas {
-  my ($dir, $items, $qitems) = @_;
+  my ($dir, $items) = @_;
   my @out;
-  for my $k (0 .. $#$items) {
-    my ($x, $qx) = ($items->[$k], $qitems->[$k]);
+  for my $x (@$items) {
     next unless ref $x && @$x && !ref $x->[0];
     if ($x->[0] eq "subdir" && @$x >= 2 && !ref $x->[1]) {
       my $sub = rpath($dir, $x->[1]);
-      if (defined $sub) { push @out, dune_stanzas($sub, [@$x[2 .. $#$x]], [@$qx[2 .. $#$qx]]); next }
+      if (defined $sub) { push @out, dune_stanzas($sub, [@$x[2 .. $#$x]]); next }
     }
-    push @out, { dir => $dir, kind => $x->[0], x => $x, text => canon($qx) };
+    push @out, { dir => $dir, kind => $x->[0], x => $x };
   }
   return @out;
 }
@@ -668,7 +651,7 @@ for my $f (grep { $_ ne "" } split /\n/, slurp("$tmp/dune-files")) {
   next unless -f $f;
   $dune_text{$f} = slurp($f);
   my $items = eval { parse_dune($dune_text{$f}, $f) } or fail($@ =~ s/\n$//r);
-  push @dstanzas, dune_stanzas((dir_of($f))[0], $items, parse_dune($dune_text{$f}, $f, 1));
+  push @dstanzas, dune_stanzas((dir_of($f))[0], $items);
 }
 # Public executables, for `%{bin:NAME}`.
 my %public_exe;
@@ -816,6 +799,16 @@ for my $s (@dstanzas) {
   elsif ($s->{kind} eq "library" && dfield($s->{x}, "inline_tests")) { @names = map { ref $_ ? () : "runtest-$_" } @{dfield($s->{x}, "name") // []} }
   push @{$declared_by{"$s->{dir}\0$_"}}, $s for @names;
 }
+# A directory whose stanzas come partly from an `(include FILE)` or
+# `(dynamic_include FILE)` fragment is not read in full: its aliases stay blind,
+# and an edit to the fragment reaches like an edit to the dune file.
+my (%partial_dir, %fragment_dir);
+for my $s (grep { $_->{kind} =~ /^(?:dynamic_)?include$/ } @dstanzas) {
+  $partial_dir{$s->{dir}} = 1;
+  my $frag = $s->{x}[1];
+  my $p = !ref $frag && $frag !~ /%\{/ ? rpath($s->{dir}, $frag) : undef;
+  $fragment_dir{$p} = $s->{dir} if defined $p;
+}
 my %is_per_test = map { $_->{name} => 1 } @al;
 # What a declared alias needs, its own stanzas merged. An alias it needs that is
 # no per-test alias (a helper: `(alias helper)` in its deps) is inlined, to a
@@ -832,6 +825,7 @@ sub alias_acc {
   return $acc if $seen->{$key}++;
   my @by = @{$declared_by{$key} // []};
   push @{$acc->{unknown}}, "alias \@" . in_dir($dir, $name) . ", which no stanza declares" unless @by;
+  push @{$acc->{unknown}}, "$dir includes a dune fragment this reader does not read" if $partial_dir{$dir};
   for my $one (map { decl_stanza($_) } @by) {
     $acc->{files}{$_} = 1 for keys %{$one->{files}};
     $acc->{runs}{$_} = 1 for keys %{$one->{runs}};
@@ -1023,7 +1017,7 @@ for my $t (grep { /(?:^|\/)lib.+_stubs\.a$/ } @stub_targets) {
 # A generated module's stanza is reached through what its rule reads (a
 # `.mll`, a `.mly`, a (select) choice) and through the executable it runs.
 for my $g (keys %generated) {
-  for my $o (@{$generated{$g}}) { push @{$st[$o]{to}}, keys %{$runs{$g}} }
+  for my $o (@{$generated{$g}}) { push @{$st[$o]{to}}, keys %{$runs{$g}}; push @{$st[$o]{gen_to}}, keys %{$runs{$g}} }
 }
 # A stub object's owners: the library whose stub archive bundles it, or else
 # every executable and `tests` stanza of its directory. They are reached
@@ -1036,122 +1030,9 @@ sub obj_owners {
   return @libs ? @libs : grep { $st[$_]{kind} ne "library" && $st[$_]{dir} eq $od } 0 .. $#st;
 }
 for my $o (grep { /\.o$/ } @stub_targets) {
-  for my $w (obj_owners($o)) { push @{$st[$w]{to}}, keys %{$runs{$o}} }
+  for my $w (obj_owners($o)) { push @{$st[$w]{to}}, keys %{$runs{$o}}; push @{$st[$w]{gen_to}}, keys %{$runs{$o}} }
 }
 
-# A changed `dune` file, scoped to the stanzas whose text changed (comments and
-# layout aside), compared as a multiset between its two sides. Each changed
-# stanza, old or new version, reaches: the aliases it declares; the stanza it
-# is (a library, executables, a test), whose reach then spreads by linking; and
-# the files a rule makes (its targets, or what its action writes), through
-# whatever reads them. Any other kind of stanza (`env`, `dirs`, `copy_files`,
-# `ocamllex`, ...), a side this reader cannot read, a new file and `--files`
-# mode return undef: the whole directory and those beneath it, as before.
-my %dune_alias;   # per-test aliases a changed stanza declares
-sub dune_side {
-  my ($which, $p) = @_;
-  my $f = "$tmp/$which/$p";
-  return undef unless -f $f;
-  my $text = slurp($f);
-  my $items = eval { parse_dune($text, "the $which side of $p") } or return undef;
-  return [dune_stanzas((dir_of($p))[0], $items, parse_dune($text, $p, 1))];
-}
-sub stanza_index {   # the @st entries a stanza of KIND and NAMES in DIR is
-  my ($kind, $dir, @names) = @_;
-  my %n = map { $_ => 1 } @names;
-  return grep {
-    my $s = $st[$_];
-    $s->{dir} eq $dir && ($kind eq "library" ? $s->{kind} eq "library" : $s->{kind} ne "library")
-      && grep({ $n{$_} } @{$s->{names}}, $kind eq "library" ? keys %{$s->{units}} : ())
-  } 0 .. $#st;
-}
-sub stanza_mentions {   # does any text of stanza S name the repository path M (a file, a %{...:M}, a glob)?
-  my ($s, $m) = @_;
-  my ($md, $mb) = dir_of($m);
-  my @todo = ($s->{x});
-  while (defined(my $y = shift @todo)) {
-    if (ref $y) {
-      if (@$y == 2 && !ref $y->[0] && $y->[0] =~ /^(glob_files(?:_rec)?|source_tree)$/ && !ref $y->[1]) {
-        my $form = $y->[0];
-        my $g = decl_root($s->{dir}, $y->[1]);
-        if ($form eq "source_tree") { my $t = rpath($s->{dir}, $g); return 1 if defined $t && under($m, $t); next }
-        my ($gd, $pat) = $g =~ m{^(.*)/([^/]*)$} ? ($1, $2) : (".", $g);
-        my $t = rpath($s->{dir}, $gd) // next;
-        return 1 if ($form eq "glob_files" ? $md eq $t : under($md, $t)) && predicate($pat)->($mb);
-        next;
-      }
-      push @todo, @$y;
-      next;
-    }
-    for my $c ($y, map { s/^[^:]*://r } $y =~ /%\{([^}]*)\}/g) {
-      my $r = rpath($s->{dir}, decl_root($s->{dir}, $c));
-      return 1 if defined $r && $r eq $m;
-    }
-  }
-  return 0;
-}
-sub dune_scope {
-  my ($p) = @_;
-  my ($old, $new) = (dune_side("old", $p), dune_side("new", $p));
-  return undef unless $old && $new;
-  # Only forms modeled in full are scoped; a `(subdir ...)` on either side is not.
-  my ($pd) = dir_of($p);
-  return undef if grep { $_->{dir} ne $pd } @$old, @$new;
-  my %count;
-  $count{$_->{text}}++ for @$old;
-  my @diff;
-  for my $s (@$new) { if ($count{$s->{text}}) { $count{$s->{text}}-- } else { push @diff, $s } }
-  my %left;
-  $left{$_->{text}}++ for @$new;
-  for my $s (@$old) { if ($left{$s->{text}}) { $left{$s->{text}}-- } else { push @diff, $s } }
-  my $r = { aliases => {}, stanzas => {}, targets => {}, changed => [] };
-  my $atoms = sub { map { ref $_ ? () : $_ } @{$_[0] // []} };
-  for my $s (@diff) {
-    my ($k, $x, $dir) = ($s->{kind}, $s->{x}, $s->{dir});
-    return undef if has_opaque($x);   # a block string: not read, so the whole directory
-    my @names = ($atoms->(dfield($x, "name")), $atoms->(dfield($x, "names")));
-    my $alias = sub { $r->{aliases}{"\@" . in_dir($dir, $_[0])} = 1 };
-    my $label = "$k" . (@names ? " @names" : "") . ($dir eq (dir_of($p))[0] ? "" : " in $dir");
-    push @{$r->{changed}}, $label unless grep { $_ eq $label } @{$r->{changed}};
-    if ($k eq "rule") {
-      my @declares = ($atoms->(dfield($x, "alias")), $atoms->(dfield($x, "aliases")));
-      $alias->($_) for @declares;
-      my @t = ($atoms->(dfield($x, "target")), $atoms->(dfield($x, "targets")));
-      unless (@t) {   # targets dune infers from the action
-        my @todo = @{dfield($x, "action") // [grep { ref } @$x[1 .. $#$x]]};
-        while (defined(my $y = shift @todo)) {
-          next unless ref $y && @$y && !ref $y->[0];
-          my ($h, @args) = @$y;
-          push @t, $args[0] if $h =~ /^(?:with-(?:stdout|stderr|outputs)-to|write-file)$/ && @args && !ref $args[0];
-          push @t, $args[1] if $h =~ /^copy#?$/ && @args > 1 && !ref $args[1];
-          push @todo, grep { ref } @args unless $h eq "no-infer";
-        }
-      }
-      @t || @declares or return undef;
-      for my $t (@t) {
-        return undef if $t =~ /%\{(?!target)/;   # a target name this reader cannot expand
-        my $rel = rpath($dir, $t) // return undef;
-        $r->{targets}{$rel} = 1 unless $t =~ /%\{/;
-      }
-    } elsif ($k =~ /^tests?$/) {
-      $alias->("runtest-$_") for @names;
-      $r->{stanzas}{$_} = 1 for stanza_index("tests", $dir, @names);
-    } elsif ($k =~ /^executables?$/) {
-      my @i = stanza_index("executables", $dir, @names) or return undef;
-      $r->{stanzas}{$_} = 1 for @i;
-    } elsif ($k eq "library") {
-      my @i = stanza_index("library", $dir, @names) or return undef;
-      $r->{stanzas}{$_} = 1 for @i;
-      $alias->("runtest-$_") for dfield($x, "inline_tests") ? @names : ();
-    } elsif ($k eq "alias") {
-      $alias->($_) for @names;
-      $alias->($_) for map { ref $_ && @$_ == 2 && !ref $_->[1] && ($_->[0] // "") eq "alias" ? $_->[1] : () } @{dfield($x, "deps") // []};
-    } else { return undef }
-  }
-  return $r;
-}
-
-# Changed paths -> stanzas, and the aliases whose own targets read them.
 my (%hit, %dune_dirs, %data_dirs, %read_by, @unmapped, @unread);
 # How a stanza was hit: by changed modules it owns (NAME => 1), or as a whole
 # (a generated module, a stub, a changed stanza, a tests directory's modules).
@@ -1186,55 +1067,9 @@ for my $p (@changed) {
     push @parts, "compiled into $o, " . (@libs ? "bundled by " . join(", ", map { label($_) } @libs)
       : "which no stub archive bundles, so every executable and test stanza of its directory (" . scalar(@o) . ")");
   }
-  my $scoped = $b eq "dune" ? dune_scope($p) : undef;
-  if ($scoped) {
-    # Only the stanzas whose text changed (either side of the edit) reach anything.
-    my %al_of = map { $_->{name} => $_ } @al;
-    my @named = grep { $al_of{$_} } sort keys %{$scoped->{aliases}};
-    # A changed helper alias (no per-test name): every per-test alias needing it,
-    # through its own stanzas or a rule dune dumps.
-    for my $h (grep { !$al_of{$_} } keys %{$scoped->{aliases}}) {
-      for my $a (@al) {
-        push @named, $a->{name}
-          if ($a->{decl} && $a->{decl}{helpers}{$h}) || grep { $target_helpers{$_}{$h} } @{$a->{own}};
-      }
-    }
-    @named = sort keys %{{ map { $_ => 1 } @named }};
-    $dune_alias{$_} = 1 for @named;
-    @ix = nsort(keys %{$scoped->{stanzas}});
-    my @made = sort keys %{$scoped->{targets}};
-    # A file a changed rule makes: an alias whose own targets' rules read it, or
-    # are it; a stanza whose generated module it is, or whose generated
-    # module's rule reads it; the owners of a stub object compiled from it (a
-    # generated header), as for a changed path.
-    my $n_made = 0;
-    for my $m (@made) {
-      my ($md, $mb) = dir_of($m);
-      for my $g (grep { $_ eq $m || reads($_, $m, $md, $mb) } sort keys %generated) {
-        $hit{$_} = $whole_hit{$_} = 1 for @{$generated{$g}};
-      }
-      for my $o (grep { /\.o$/ && ($_ eq $m || reads($_, $m, $md, $mb)) } @stub_targets) {
-        $hit{$_} = $whole_hit{$_} = 1 for obj_owners($o);
-      }
-      # A compiled stanza naming it anywhere in its text (`preprocessor_deps`,
-      # `embed`, a `(deps)` of its own, ...): which field means a dependency is
-      # not decided here, so any mention reaches the stanza; one this build
-      # does not list reaches its whole directory.
-      for my $s (grep { $_->{kind} =~ /^(?:library|executables?|tests?)$/ && stanza_mentions($_, $m) } @dstanzas) {
-        my @i = stanza_index($s->{kind} eq "library" ? "library" : "executables", $s->{dir}, dnames($s));
-        if (@i) { $hit{$_} = $whole_hit{$_} = 1 for @i }
-        else { $dune_dirs{$_} = 1 for grep { under($_, $s->{dir}) } $s->{dir}, keys %$aliases }
-      }
-      for my $a (@al) {
-        next unless grep { $_ eq $m || reads($_, $m, $md, $mb) } @{$a->{own}};
-        $read_by{$p}{$a->{name}}++ or $n_made++;
-      }
-    }
-    push @parts, scalar(@{$scoped->{changed}}) . " changed stanza(s)"
-      . (@{$scoped->{changed}} ? " (" . join(", ", @{$scoped->{changed}}) . ")" : ", comments or layout only")
-      . (@named ? "; naming " . scalar(@named) . " alias(es)" : "")
-      . (@made ? "; making " . scalar(@made) . " file(s), read by the rules of $n_made alias(es)" : "");
-  } elsif ($b eq "dune" || $b eq "dune-project" || $b eq "dune-workspace") {
+  my $frag_of = $fragment_dir{$p};
+  $d = $frag_of if defined $frag_of;   # an included fragment counts as its dune file
+  if ($b eq "dune" || $b eq "dune-project" || $b eq "dune-workspace" || defined $frag_of) {
     # A `dune` file's settings (`env`, `(dirs)`, ...) apply beneath it as well,
     # as `dune-project`'s language and extensions do: every directory under it.
     $dune_dirs{$_} = 1 for grep { under($_, $d) } $d, keys %$aliases;
@@ -1460,7 +1295,10 @@ if (-f "$tmp/ml-diff") {
 # The names a changed module answers to: its own, and those re-exporting it.
 # A stanza reached from one hit as a whole is never link-only: no name says
 # what changed there.
+# So is one whose generated module or stub a reached generator writes: what the
+# generator changed is code the stanza compiles, under no name it would show.
 my %reached_whole = %whole_hit;
+$reached_whole{$_} = 1 for grep { my $i = $_; grep { $reached{$_} } @{$st[$i]{gen_to} // []} } 0 .. $#st;
 for (my $grew = 1; $grew;) {
   $grew = 0;
   for my $i (0 .. $#st) {
@@ -1486,18 +1324,23 @@ if ($rank_links) {
       for my $f (@{$st[$j]{mods}{$x}}) {
         open my $fh, "<", $f or next;
         my $s = do { local $/; <$fh> // "" };
-        # Every module name in the head of a `module NAME ...` or `include ...` --
-        # up to the first `struct`, `sig`, `end`, `let`, `val`, blank or unindented line,
-        # `module type of` read through -- may be what it re-exports: `module G : module type of M = M`,
-        # `include (M : S)`, a functor application. Over-reading only ranks more
-        # aliases as naming the change.
-        while ($s =~ /\b(module|include)\b/g) {
+        # What a top-level `module NAME ... = PATH` or `include PATH` re-exports: the
+        # module PATH names (its last component), read up to the first `struct`,
+        # `sig`, `end`, `let`, `val`, blank or unindented line. A signature
+        # constraint is read past (`module G : module type of M = M`, `include (M :
+        # S)`). A functor application makes a new module whose code calls its
+        # arguments: reached through other code, like any caller, so not read.
+        while ($s =~ /^(module|include)\b/mg) {
           my ($kw, $at) = ($1, pos($s));
           my $head = substr($s, $at, 400);
           $head =~ s/(?:\b(?:struct|sig|end|let|val)\b|\n[ \t]*\n|\n(?=\S)).*\z//s;
-          my @names = $head =~ /\b([A-Z][\w']*)/g;
-          next if $kw eq "module" && (!@names || $head !~ /^\s*(?:rec\s+)?\Q$names[0]\E\b/);
-          my $as_name = $kw eq "module" ? shift @names : $x;
+          my ($as_name, $rhs);
+          if ($kw eq "module") {
+            next unless $head =~ /^\s*(?:rec\s+)?([A-Z][\w']*)/;
+            $as_name = $1;
+            ($rhs) = $head =~ /=([^=]*)\z/s or next;   # a declaration: no right-hand side
+          } else { ($as_name, $rhs) = ($x, $head =~ s/:.*\z//sr) }
+          my @names = $rhs =~ /^\s*\(?\s*(?:[A-Z][\w']*\.)*([A-Z][\w']*)\s*(?:[:)]|\z)/s ? ($1) : ();
           $as{$_}{$as_name} = 1 for grep { $_ ne $as_name } @names;
         }
       }
@@ -1557,7 +1400,7 @@ for my $a (@al) {
   my $opaque_listed = $opaque && ($any_data || $data_dirs{$a->{dir}});
   $opaque_hit{$a->{dir}}++ if $opaque_listed;
   my @by_owner = grep { $reached{$_} } nsort(keys %owners);
-  if ($dune_dirs{$a->{dir}} || $dune_alias{$a->{name}} || $read_any{$a->{name}}) { $tier{$a->{name}} = "main" }
+  if ($dune_dirs{$a->{dir}} || $read_any{$a->{name}}) { $tier{$a->{name}} = "main" }
   elsif (@by_owner) { $tier{$a->{name}} = link_only(@by_owner) ? "link" : "main" }
   elsif ($unattributed{$a->{name}} || $opaque_listed) { $tier{$a->{name}} = "guess" }
 }

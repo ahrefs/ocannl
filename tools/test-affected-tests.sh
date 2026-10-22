@@ -54,6 +54,7 @@ cat >"$repo/t6/dune" <<'DUNE'
 (rule (alias runtest-dyn) (action (diff dyn.expected dyn.actual)))
 ; A chdir inside a chdir: not modeled, so the alias is read blind.
 (rule (alias runtest-nest) (action (chdir ../t4 (chdir sub (cat nest.cfg)))))
+(include extra.inc)
 DUNE
 cat >"$repo/lib/dune" <<'DUNE'
 (library (name core) (modules core helper lx))
@@ -71,6 +72,8 @@ cat >"$repo/mid/dune" <<'DUNE'
 DUNE
 cat >"$repo/t1/dune" <<'DUNE'
 (test (name t_core) (modules t_core) (libraries mid))
+; Links core through mid and names nothing of it: link-only for a core edit.
+(test (name t_mid) (modules t_mid) (libraries mid))
 (test (name t_leaf) (modules t_leaf) (libraries leaf))
 (tests (names ta tb) (modules ta tb shared) (libraries leaf))
 (library (name tlib) (modules m_one m_two) (preprocess (pps myppx)))
@@ -79,9 +82,7 @@ cat >"$repo/t1/dune" <<'DUNE'
 DUNE
 cat >"$repo/t2/dune" <<'DUNE'
 (executable (name gen) (modules gen) (libraries core))
-(executable (name scan) (modules scan) (link_deps pp.sexp))
-; A file a rule makes and a compiled stanza needs through a field no rule shows (link_deps).
-(rule (target pp.sexp) (action (with-stdout-to %{target} (echo x))))
+(executable (name scan) (modules scan))
 (rule (target gen-v1.actual) (action (with-stdout-to %{target} (run %{exe:gen.exe} v1))))
 (rule (alias runtest-gen-v1) (action (diff gen-v1.expected gen-v1.actual)))
 (rule (alias slow-gen) (action (run %{exe:gen.exe} slow)))
@@ -146,8 +147,6 @@ cat >"$repo/t4/dune" <<'DUNE'
 (executable (name pre) (modules pre))
 (rule (target t_gate_actual.ml) (action (with-stdout-to %{target} (run %{exe:pre.exe}))))
 (rule (alias runtest-t_gate-pre) (action (diff t_gate_expected.ml t_gate_actual.ml)))
-; A (subdir ...): a dune edit here is not scoped by stanza.
-(subdir sub2 (rule (target x2.txt) (action (with-stdout-to %{target} (echo x)))))
 DUNE
 printf '(test (name t_sub) (modules t_sub))\n' >"$repo/t4/sub/dune"
 cat >"$repo/t5/dune" <<'DUNE'
@@ -179,6 +178,8 @@ printf '{ }\nrule token = parse eof { () }\n' >"$repo/lib/lx.mll"
 printf 'let used = 1\nlet unused = 2\n' >"$repo/lib/helper.ml"
 printf 'module H = Helper\n' >"$repo/lib/core.ml"
 printf 'let () = () (* uses Helper.used *)\n' >"$repo/t1/t_core.ml"
+printf 'let () = ()\n' >"$repo/t1/t_mid.ml"
+printf '(rule (alias runtest-inc) (action (progn)))\n' >"$repo/t6/extra.inc"
 printf 'let () = () (* H *)\n' >"$repo/t2/gen.ml"
 git_q() { git -C "$repo" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
 git_q init -q && git_q add -A && git_q commit -qm fixture || exit 2
@@ -200,12 +201,12 @@ expect() { # LABEL RC ALIAS... : the exact list, in any order, and the exit stat
     report 1 "$label" "exit $rc (want $want_rc); got [$(tr '\n' ' ' <"$out")] want [$(tr '\n' ' ' <"$TMP/want")]; stderr: $(tr '\n' '|' <"$err")"
   fi
 }
-reached_by_core='@t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen
+reached_by_core='@t1/runtest-t_core @t1/runtest-t_mid @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen
   @t5/slow-usesh'
 # Every alias whose action dune does not dump and whose stanzas this reader
 # cannot read in full (no golden among its own targets): listed for any changed
 # data file. runtest-needs_pkg needs it, and is not listed for that reason.
-opaque_all='@t2/runtest-pkg @t6/runtest-nest'
+opaque_all='@t2/runtest-pkg @t6/runtest-inc @t6/runtest-nest'
 
 if harness_leg 'cold build'; then
   # On a build directory that has never built t6/word.txt, `dune rules` builds
@@ -256,13 +257,13 @@ fi
 
 if harness_leg 'select choice'; then
   affected --files mid/choice.core.ml
-  expect 'a (select) choice maps to its module' 0 @t1/runtest-t_core
+  expect 'a (select) choice maps to its module' 0 @t1/runtest-t_core @t1/runtest-t_mid
 fi
 
 if harness_leg 'tests helper module'; then
   affected --files t1/shared.ml
   expect 'a module of a tests stanza (undescribed) reaches every tests stanza of its directory' 0 \
-    @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb
+    @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-t_mid @t1/runtest-ta @t1/runtest-tb
 fi
 
 if harness_leg 'library module alias'; then
@@ -279,7 +280,7 @@ fi
 if harness_leg 'generated module'; then
   affected --files lib/lx.mll
   expect 'an .mll reaches the stanza of the module its rule generates' 0 \
-    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
+    @t1/runtest-t_core @t1/runtest-t_mid @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
 fi
 
 if harness_leg 'golden'; then
@@ -294,18 +295,18 @@ fi
 if harness_leg 'dune-project'; then
   affected --files dune-project
   expect 'dune-project reaches every per-test alias beneath it' 0 \
-    @t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb \
+    @t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-t_mid @t1/runtest-ta @t1/runtest-tb \
     @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan \
     @t2/runtest-scenario_x @t2/slow-gen @t3/runtest-cfgread @t3/runtest-esc @t3/runtest-neg @t3/runtest-py @t3/runtest-t_plain @t3/runtest-t_stub \
     @t3/runtest-uses @t3/runtest-viahelper @t4/runtest-gated @t4/runtest-objs @t4/runtest-t_gate @t4/runtest-t_gate-pre \
-    @t4/sub/runtest-t_sub @t5/slow-usesh @t6/runtest-dyn @t6/runtest-nest
+    @t4/sub/runtest-t_sub @t5/slow-usesh @t6/runtest-dyn @t6/runtest-inc @t6/runtest-nest
 fi
 
 if harness_leg 'dune file elsewhere'; then
   # t1/dune makes made.txt, which a t3 rule reads.
   affected --files t1/dune
   expect 'a dune file reaches the rules elsewhere that read the files it makes' 0 \
-    @t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb @t3/runtest-uses
+    @t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-t_mid @t1/runtest-ta @t1/runtest-tb @t3/runtest-uses
 fi
 
 if harness_leg 'test with no libraries'; then
@@ -335,7 +336,7 @@ fi
 if harness_leg 'negated glob'; then
   affected --files mid/mid.ml
   expect 'a [!set] glob matches outside its set (the select-choice leg pins the inside)' 0 \
-    @t1/runtest-t_core @t3/runtest-neg
+    @t1/runtest-t_core @t1/runtest-t_mid @t3/runtest-neg
 fi
 
 if harness_leg 'escaped glob'; then
@@ -466,6 +467,8 @@ fi
 if harness_leg 'link-only'; then
   # Ranked, not dropped (gh-ocannl-1431): what names the changed module is printed first,
   # what only links its library last, and both are printed unless --referenced-only.
+  # slow-usesh is ranked first through its generator: genh links core and writes the
+  # header its stub compiles, so a core edit is code it builds under no name it shows.
   ordered() { # LABEL ALIAS... : stdout exactly, in this order
     local label=$1
     shift
@@ -475,20 +478,20 @@ if harness_leg 'link-only'; then
   }
   affected --files lib/helper.ml
   ordered 'a module names its tests first (by name or a re-export), the link-only ones last' \
-    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
-  grep -qx 'affected: link-only: @t5/slow-usesh' "$err" && grep -q '1 LINK-ONLY alias(es), printed LAST' "$err" ||
+    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh @t1/runtest-t_mid
+  grep -qx 'affected: link-only: @t1/runtest-t_mid' "$err" && grep -q '1 LINK-ONLY alias(es), printed LAST' "$err" ||
     report 1 'the link-only aliases are named on stderr' "$(cat "$err")"
   affected --referenced-only --files lib/helper.ml
   ordered '--referenced-only leaves the link-only ones off' \
-    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen
+    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
   printf 'let used = 1\nlet unused = 3\n' >"$repo/lib/helper.ml"
   affected HEAD
   ordered 'a change to one definition ranks first only what names it' \
-    @t2/runtest-scan @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
+    @t2/runtest-scan @t5/slow-usesh @t1/runtest-t_core @t1/runtest-t_mid @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen
   printf 'let used = 2\nlet unused = 2\n' >"$repo/lib/helper.ml"
   affected HEAD
   ordered '... and t_core names `used`' \
-    @t1/runtest-t_core @t2/runtest-scan @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
+    @t1/runtest-t_core @t2/runtest-scan @t5/slow-usesh @t1/runtest-t_mid @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen
   mutant=$repo/tools/affected-mutant.sh
   if FROM='return 0 if !$defs || grep { $tok->{$_} } keys %$defs;' TO='return 0;' \
       perl -0pe '$n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
@@ -507,78 +510,21 @@ if harness_leg 'link-only'; then
   printf 'let used = 1\nlet unused = 2\nlet ( +! ) a b = a + b\n' >"$repo/lib/helper.ml"
   affected HEAD
   ordered 'a changed operator definition counts as the whole module (tokens hold identifiers)' \
-    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
+    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh @t1/runtest-t_mid
   printf 'let used = 1\nlet unused = 2\ntype t = A | B\n' >"$repo/lib/helper.ml"
   affected HEAD
   ordered 'a changed type definition counts as the whole module (its constructors are what users name)' \
-    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
+    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh @t1/runtest-t_mid
   git_q checkout -q -- lib/helper.ml || exit 2
 fi
 
-if harness_leg 'dune stanza scope'; then
-  # With both sides of a dune file at hand (the git forms), its edit reaches only
-  # the stanzas whose text changed (gh-ocannl-1431); --files keeps the whole
-  # directory (the 'dune file' leg).
-  printf '\n; a comment, and a blank line\n\n' >>"$repo/t3/dune"
-  affected HEAD
-  expect 'a comment-only dune edit reaches no stanza' 0
-  git_q checkout -q -- t3/dune || exit 2
-  perl -0pi -e 's/\(deps plain.cfg base.cfg\)/(deps plain.cfg base.cfg t_plain.ml)/' "$repo/t3/dune"
-  affected HEAD
-  expect 'an edited test stanza reaches its own alias' 0 @t3/runtest-t_plain
-  mutant=$repo/tools/affected-mutant.sh
-  if FROM='my $scoped = $b eq "dune" ? dune_scope($p) : undef;' TO='my $scoped;' \
-      perl -0pe '$n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
-      "$repo/tools/affected-tests.sh" >"$mutant"; then
-    rc=0
-    (cd "$TMP" && bash "$mutant" HEAD) >"$out" 2>"$err" || rc=$?
-    if [ "$rc" = 0 ] && [ "$(wc -l <"$out")" -gt 1 ] && grep -qx @t3/runtest-t_plain "$out"; then
-      report 0 'negative control: stanza scoping is what keeps the rest of the directory off the list'
-    else report 1 'negative control: stanza scoping is what keeps the rest of the directory off the list' "exit $rc; $(cat "$out" "$err")"; fi
-  else
-    report 1 'negative control: stanza scoping is what keeps the rest of the directory off the list' \
-      "the mutation anchor does not occur exactly once"
-  fi
-  rm -f "$mutant"
-  git_q checkout -q -- t3/dune || exit 2
-  perl -0pi -e 's/\(target neg.actual\)/(target neg.actual) (locks neg)/' "$repo/t3/dune"
-  affected HEAD
-  expect 'an edited rule reaches the alias whose own target it makes' 0 @t3/runtest-neg
-  git_q checkout -q -- t3/dune || exit 2
-  # Quotation is meaning, not layout: `"%{deps}"` is one argument where `%{deps}` is many.
-  perl -0pi -e 's/\(deps plain.cfg base.cfg\)/(deps "plain.cfg" base.cfg)/' "$repo/t3/dune"
-  affected HEAD
-  expect 'a quotation-only edit is a change' 0 @t3/runtest-t_plain
-  git_q checkout -q -- t3/dune || exit 2
-  # gen.h is a header usesh's stub object compiles from: the rule making it reaches usesh.
-  perl -0pi -e 's/\(target gen.h\)/(target gen.h) (locks genh)/' "$repo/t5/dune"
-  affected HEAD
-  expect 'an edited rule reaches the executable whose stub compiles the header it makes' 0 @t5/slow-usesh
-  git_q checkout -q -- t5/dune || exit 2
-  # The fallback rule: a dune edit is scoped only where every form is modeled.
-  perl -0pi -e 's/\(echo objs\)/(echo objs2)/' "$repo/t4/dune"
-  affected HEAD
-  expect 'a dune file holding a (subdir ...) falls back to its whole directory' 0 \
-    @t4/runtest-gated @t4/runtest-objs @t4/runtest-t_gate @t4/runtest-t_gate-pre @t4/sub/runtest-t_sub
-  git_q checkout -q -- t4/dune || exit 2
-  perl -0pi -e 's/\(rule \(alias helper\) \(deps \.\.\/cfg\/helper\.cfg\)/(rule (alias helper) (deps ..\/cfg\/helper.cfg ..\/cfg\/base.cfg)/' "$repo/t3/dune"
-  affected HEAD
-  expect 'an edited helper alias reaches the per-test aliases needing it' 0 @t3/runtest-viahelper
-  git_q checkout -q -- t3/dune || exit 2
-  perl -0pi -e 's/\(echo x\)/(echo y)/' "$repo/t2/dune"
-  affected HEAD
-  expect 'an edited rule reaches a compiled stanza naming the file it makes in any field (link_deps)' 0 @t2/runtest-scan @t2/runtest-pkg
-  git_q checkout -q -- t2/dune || exit 2
-  perl -0pi -e 's/\(echo made\)/(echo made again)/' "$repo/t1/dune"
-  affected HEAD
-  expect 'an edited rule reaches the alias elsewhere reading the file it makes' 0 @t3/runtest-uses
-  git_q checkout -q -- t1/dune || exit 2
-  perl -0pi -e 's/\(copy_files \.\.\/cfg\/base.cfg\)/(copy_files (files ..\/cfg\/base.cfg))/' "$repo/t3/dune"
-  affected HEAD
-  expect 'a stanza kind outside the scoping (copy_files) reaches its whole directory' 0 \
-    @t3/runtest-cfgread @t3/runtest-esc @t3/runtest-neg @t3/runtest-py @t3/runtest-t_plain @t3/runtest-t_stub \
-    @t3/runtest-uses @t3/runtest-viahelper
-  git_q checkout -q -- t3/dune || exit 2
+if harness_leg 'dune fragment'; then
+  # t6 includes extra.inc: its stanzas are not read here, so the directory's
+  # aliases stay blind, and an edit to the fragment reaches like one to t6/dune.
+  affected --files t6/extra.inc
+  # shellcheck disable=SC2086
+  expect 'an included dune fragment reaches its directory, as its dune file would' 0 \
+    @t6/runtest-dyn $opaque_all
 fi
 
 if harness_leg 'git forms'; then
@@ -595,7 +541,7 @@ if harness_leg 'git forms'; then
     @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb @t2/runtest-scan
   affected HEAD -- t1
   expect 'the working-tree form takes in an untracked file, limited by a pathspec' 0 \
-    @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb
+    @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-t_mid @t1/runtest-ta @t1/runtest-tb
   rm -f "$repo/t1/new_helper.ml" && git_q checkout -q -- lib/core.ml || exit 2
   affected
   if [ "$rc" = 2 ] && grep -q 'name the base' "$err" && [ ! -s "$out" ]; then
@@ -768,7 +714,7 @@ if harness_leg 'negative controls'; then
     --files t1/dune -- @t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb @t3/runtest-uses
   # shellcheck disable=SC2086
   control 'a generator run by a stub object'"'"'s inputs is what reaches the executable linking it' \
-    'for my $w (obj_owners($o)) { push @{$st[$w]{to}}, keys %{$runs{$o}} }' '' \
+    'for my $w (obj_owners($o)) { push @{$st[$w]{to}}, keys %{$runs{$o}}; push @{$st[$w]{gen_to}}, keys %{$runs{$o}} }' '' \
     --files lib/helper.ml -- $reached_by_core
   control 'UNIT_ targets are what tie an alias to the executable making them' \
     'my @near = grep { $_ !~ $artifact && index($_, "${unit}_") == 0 } @{$targets->{$d} // []};' 'my @near;' \
@@ -786,10 +732,10 @@ if harness_leg 'negative controls'; then
   # shellcheck disable=SC2086
   control 'the ranking is what leaves a link-only alias off --referenced-only' \
     'return 0 unless $rank_links;' 'return 0;' \
-    --referenced-only --files lib/helper.ml -- @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen
+    --referenced-only --files lib/helper.ml -- @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
   control 'a re-export is what ranks a test naming only the re-exported name' \
     '$as{$_}{$as_name} = 1 for grep { $_ ne $as_name } @names;' '1;' \
-    --referenced-only --files lib/helper.ml -- @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen
+    --referenced-only --files lib/helper.ml -- @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
   # shellcheck disable=SC2086
   control 'reading an alias rule'"'"'s own (deps) is what reaches it' \
     '$reads{$k} = { %{$acc->{files}} };' '$reads{$k} = {};' \
