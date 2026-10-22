@@ -43,9 +43,9 @@
    {1 What the claims are, and what they are not}
 
    Census counts are host-toolchain facts -- they move with the compiler version and the [-march] --
-   so the table goes to [cc_march_census_kernels/rows.txt] (stderr carries its path and a row count
-   per column) and NOT into the golden. What the golden holds are inequalities that a misclassified
-   move instruction cannot flip:
+   so the table goes to [cc_march_census_kernels/<piece>/rows.txt] (stderr carries its path and a
+   row count per column) and NOT into the golden. What the goldens hold are inequalities that a
+   misclassified move instruction cannot flip:
 
    - every kernel compiles clean under every accepted target at [-O2] and at [-O3]; - every loop is
    FOUND: a census that answers "no loop carried the anchor" is a failure, because scoring only the
@@ -350,6 +350,13 @@ let rec rm_rf path =
 let build (emit_dir : string) =
   Utils.settings.output_debug_files_in_build_directory <- true;
   let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc") in
+  (* Into the emit directory before the first artifact: [build_files/<exe>/] is relative to the
+     working directory, and the census's pieces run concurrently (gh-ocannl-1502), so in the dune
+     action's own directory every child of every piece would share one artifact directory --
+     [Generated.init] emptying it under a sibling's compile, and same-named routines overwriting
+     each other between a compile and its read. The emit directory is this child's alone. The
+     configuration was found at startup, from the action's directory. *)
+  Stdlib.Sys.chdir emit_dir;
   Generated.init ~backend_name;
   (* The vector file this child's renderer reads, width and register count, which is what its
      register-tile geometries are ranked and fit against: the seeds below are computed from the same
@@ -718,7 +725,13 @@ let aarch64_columns cross =
       "ARMv8.2-FP16: the NEON fp16 vector rows, typed in __fp16";
   ]
 
-let toolchains () =
+(* The columns, in two FAMILIES: the host compiler's ([native] and its named x86 targets), and the
+   compilers named beside it (clang on x86, the aarch64 cross gcc). The census runs as one piece per
+   (vector width, family) -- see {!pieces} -- and a family is the column seam that keeps each
+   piece's populations as full as the whole matrix's: both families carry named targets with an FMA,
+   packed fp16 conversion and 64-byte vectors on a provisioned x86 host, so no claim is left
+   structurally empty in a piece, and each holds about half of the columns. *)
+let toolchain_families () =
   let host = Cc_backend.compiler_command () in
   let cross = Option.value (aarch64_cross_override ()) ~default:"aarch64-linux-gnu-gcc" in
   (* clang beside the host compiler on the x86 targets whose rows the claims below hold strictly
@@ -738,25 +751,31 @@ let toolchains () =
   in
   let t = column in
   [
-    (* The host's own default target, with no [-march] at all: the one column every toolchain
-       accepts, and therefore the one that keeps the matrix from being VACUOUS. Without it, a run on
-       a host whose compiler accepts none of the named targets -- Apple clang on Apple Silicon
-       rejects every x86 [-march] here, which is what CI's macos-latest is -- produces no rows, and
-       the aggregate claims fail on emptiness having tested nothing. That failure is honest (the
-       non-emptiness guards did their job) but useless: the fix is to give that host a column it can
-       actually compile, not to let the claims pass empty. *)
-    t "native" host "" "the host's own default target: the column that cannot be skipped";
-    t "x86-64" host "x86-64" "SSE2 baseline: no FMA arm, no AVX";
-    t "x86-64-v2" host "x86-64-v2" "SSE4.2: packed compares, still no FMA arm";
-    t "x86-64-v3" host "x86-64-v3" "AVX2 + FMA: the shipped, hardware-measured x86 rows";
-    t "x86-64-v4" host "x86-64-v4" "AVX-512F/VL/BW/DQ: the masked 512-bit FMA builtins";
-    t "sapphirerapids" host "sapphirerapids"
-      "AVX512-FP16: the only x86 target with native 16-bit arithmetic";
-    t "clang/x86-64-v3" clang "x86-64-v3" "clang, AVX2 + FMA";
-    t "clang/x86-64-v4" clang "x86-64-v4" "clang, AVX-512 under a 256-bit vector preference";
-    t "clang/sapphirerapids" clang "sapphirerapids" "clang, AVX512-FP16";
+    ( "host",
+      [
+        (* The host's own default target, with no [-march] at all: the one column every toolchain
+           accepts, and therefore the one that keeps the matrix from being VACUOUS. Without it, a
+           run on a host whose compiler accepts none of the named targets -- Apple clang on Apple
+           Silicon rejects every x86 [-march] here, which is what CI's macos-latest is -- produces
+           no rows, and the aggregate claims fail on emptiness having tested nothing. That failure
+           is honest (the non-emptiness guards did their job) but useless: the fix is to give that
+           host a column it can actually compile, not to let the claims pass empty. *)
+        t "native" host "" "the host's own default target: the column that cannot be skipped";
+        t "x86-64" host "x86-64" "SSE2 baseline: no FMA arm, no AVX";
+        t "x86-64-v2" host "x86-64-v2" "SSE4.2: packed compares, still no FMA arm";
+        t "x86-64-v3" host "x86-64-v3" "AVX2 + FMA: the shipped, hardware-measured x86 rows";
+        t "x86-64-v4" host "x86-64-v4" "AVX-512F/VL/BW/DQ: the masked 512-bit FMA builtins";
+        t "sapphirerapids" host "sapphirerapids"
+          "AVX512-FP16: the only x86 target with native 16-bit arithmetic";
+      ] );
+    ( "foreign",
+      [
+        t "clang/x86-64-v3" clang "x86-64-v3" "clang, AVX2 + FMA";
+        t "clang/x86-64-v4" clang "x86-64-v4" "clang, AVX-512 under a 256-bit vector preference";
+        t "clang/sapphirerapids" clang "sapphirerapids" "clang, AVX512-FP16";
+      ]
+      @ aarch64_columns cross );
   ]
-  @ aarch64_columns cross
 
 (* The two numerics settings a child can emit under, named by what they resolve fp16 to. Only
    [fp16_arithmetic] differs: [native] keeps fp16 arithmetic 16-bit (so
@@ -997,10 +1016,12 @@ let probe_function_asm ~name asm =
    and unusual hosts. The implicit per-user directory and its files are made owner-only; an explicit
    override is treated as a caller-chosen sharing policy. If neither the override nor a per-user
    XDG/HOME root exists, persistent caching is disabled rather than using a predictable shared
-   temporary directory. Entries older than 30 days are expired and the remaining newest entries are
-   capped at 512 MiB, so source/toolchain generations cannot accumulate indefinitely. A missing,
-   insecure, unwritable or malformed cache is only a cache miss: the census still compiles and
-   measures the same listing it did before this memoization existed.
+   temporary directory. Entries unused for 30 days are expired and the remaining most recently used
+   entries are capped at 512 MiB, so source/toolchain generations cannot accumulate indefinitely. CI
+   keeps the directory between runs with [actions/cache] (gh-ocannl-1502), which is sound for the
+   same reason the tuple is: nothing restored can stand in for a listing of a different kernel or
+   compiler. A missing, insecure, unwritable or malformed cache is only a cache miss: the census
+   still compiles and measures the same listing it did before this memoization existed.
 
    Several dune processes can miss the same entry together. They may all compile it; publication is
    through [Utils.Atomic_file], so a reader sees one whole listing and never a mixture. The
@@ -1368,6 +1389,13 @@ let compile_cached (t : Census.toolchain) ~opt_level ~source ~src_path ~asm_path
           match cached with
           | Some asm ->
               Int.incr cache_hits;
+              (* A hit refreshes the entry's mtime, which is what both bounds read: the age limit
+                 then expires an entry 30 days after its LAST use rather than its creation, and the
+                 size cap evicts the least recently used first. Without it a cache that is restored
+                 into a fresh directory every run (CI's, gh-ocannl-1502) would evict exactly the
+                 listings it keeps hitting, the oldest-written ones, ahead of a codegen change's
+                 dead generation. Best effort, like every other write here. *)
+              (try Unix.utimes path 0. 0. with _ -> ());
               Stdio.Out_channel.write_all asm_path ~data:asm;
               Ok ()
           | None -> (
@@ -1591,8 +1619,8 @@ let kernel_label (e : emitted) =
   | Some geometry -> setting ^ "-" ^ geometry
   | None -> setting
 
-let emit_all ~exe ~root =
-  List.cartesian_product widths fp16_settings
+let emit_all ?(settings = fp16_settings) ~exe ~root ~widths () =
+  List.cartesian_product widths settings
   |> List.concat_map ~f:(fun (width, (fp16_tag, fp16)) ->
       let describe = Printf.sprintf "width %d, fp16 %s" width fp16_tag in
       let dir = Stdlib.Filename.concat root (Printf.sprintf "w%d-%s" width fp16_tag) in
@@ -1678,440 +1706,516 @@ let emit_all ~exe ~root =
    emission being wrong: [cc_vector_bytes] is auto-probed from the host when unset, and the widths
    here are forced precisely so that every arm of the builtin table gets compiled. *)
 
-let () =
-  match (Array.to_list Stdlib.Sys.argv, Stdlib.Sys.getenv_opt "CC_MARCH_CENSUS_EMIT") with
-  | [ _; "--cache-probe"; src; asm; report ], _ -> cache_probe_child ~src ~asm ~report
-  | _, Some dir -> build dir
-  | _, None ->
-      let exe = Stdlib.Sys.executable_name in
-      let root = Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) "cc_march_census_kernels" in
-      rm_rf root;
-      mkdir_p root;
-      cache_format_probes ();
-      cache_policy_probes ();
-      cache_reuse_probe ~exe ~root;
-      let emitted = emit_all ~exe ~root in
-      Verdict.p_all "every requested vector width emitted a kernel" widths ~f:(fun w ->
-          List.exists emitted ~f:(fun e -> e.width = w));
-      (* The (fp16, f32) bridge pair and the native-fp16 builtin rows live in different children, so
-         a child that silently emitted the other one's loop set would leave one of the two groups in
-         no source at all -- and every claim below would still pass, over the surviving group.
+(* {2 The pieces (gh-ocannl-1502)}
 
-         Asked of what each child RESOLVED, not of the tag the driver asked for: the tag is this
-         process's own string and a kernel is tagged with it whatever the child did, so a numerics
-         regression that made the [true] child compute fp16 in f32 as well would leave both tags
-         present and the AVX512-FP16 / ARMv8.2-FP16 builtin rows in no source at all. The child
-         records each loop's resolved compute precision in the manifest (it asks
-         {!Ir.Numerics.cpu_compute_prec}, the same resolution the emission used), so the two
-         policies are told apart by the only thing that distinguishes them: what a half-storage loop
-         computes in. Asked of each child's MAIN kernel, one per width: the wide child's fp16
-         geometry twins are more half-storage kernels computing in f32. *)
-      let half_rows_computing_in p =
-        List.filter emitted ~f:(fun e ->
-            String.equal e.kernel routine
-            && List.exists e.loops ~f:(fun l -> String.equal l.store half && String.equal l.comp p))
-      in
-      Verdict.p_all "every fp16 numerics setting emitted a kernel"
-        [ ("native", half); ("wide", Ir.Ops.prec_string Ir.Ops.single) ]
-        ~f:(fun (tag, p) ->
-          let kernels = half_rows_computing_in p in
-          List.exists kernels ~f:(fun e -> String.equal e.fp16 tag)
-          && List.length kernels = List.length widths);
-      (* {2 That the narrow-storage rows are really narrow}
+   The whole matrix in one action took 16 to 21 minutes of one CI job slot, compiling one listing at
+   a time, so it set its shard's length by itself. It runs instead as one action per PIECE, each
+   with its own golden and its own [runtest-cc_march_census-<piece>] alias that the CI sharder
+   places independently:
 
-         Every claim below this point is about how well gcc rendered a loop, and a loop that stopped
-         being a NARROW-storage one -- a numerics default flipped, a [vec_bridge] arm lost, a
-         storage precision the emission silently computed at -- passes all of them. It is still a
-         [Vectorized] fold over an array called [maxs_bf16]; it is just no longer the thing
-         gh-ocannl-752 added it for, and nothing in a golden of inequalities would say so. So the
-         COVERAGE is claimed too, from the emitted source rather than from the row names:
+   - [emission]: the cache probes and every claim about what the children EMITTED -- the claims that
+   span widths and fp16 settings, so they need every child, and none of which compiles for a foreign
+   target. Emission is cheap (seconds: one host compile per kernel), so this piece emits everything
+   again rather than sharing it; - one piece per (emit child, column family)
+   ({!toolchain_families}): one (vector width, fp16 setting) child's kernels, compiled under that
+   family's columns at [-O2] and [-O3] and held to every row claim. A row is a (column, kernel,
+   level) triple and a kernel comes from one child, so the rows of the twelve pieces partition the
+   whole matrix's, and a claim "every row satisfies P" is the conjunction of the pieces' claims. The
+   fp16 narrowing probe is a (column, width, level) reading, so it goes with its width, in the one
+   child of that width whose kernels carry the bridge it probes (see {!census}). Each claim is named
+   with its piece, since the pieces share one executable and a skip record is keyed by executable
+   and claim.
 
-         - the whole-vector bridges, which are the discriminating half. [OCANNL_VEC_WIDEN_BFLOAT16]
-         and its siblings are emitted by {!C_syntax.vec_bridge}'s narrow arms and by nothing else,
-         and {!Cc_backend} prepends a builtin only where the kernel calls it (or something it calls
-         does), so a kernel carrying the name is a kernel that bridged. The set comes from
-         {!Context.Builtins_cc.builtins}: a bridge added for a fourth format fails this claim until
-         the fixture emits a loop that reaches it. - the scalar codecs, which is where fp8 lives.
-         {!C_syntax.vec_bridge} has no vector arm for it and converts per lane through
-         [Ops.c_convert_precision] instead, so no [OCANNL_VEC_*] name attests to an fp8 bridge and
-         the codec's own spelling is what does. Asked of every loop whose storage and compute
-         precisions differ, in BOTH directions -- the load's widening and the accumulator store's
-         narrowing are separate entries of that table, and a rendering that reached only one of them
-         is a rendering this fixture was meant to catch. *)
-      let vec_bridges =
-        List.filter_map Context.Builtins_cc.builtins ~f:(fun (key, _, _) ->
-            if
-              String.is_prefix key ~prefix:"OCANNL_VEC_WIDEN_"
-              || String.is_prefix key ~prefix:"OCANNL_VEC_NARROW_"
-            then Some key
-            else None)
-      in
-      Verdict.p_all "every whole-vector storage bridge the cc builtins define reaches a kernel"
-        vec_bridges ~f:(fun key ->
-          List.exists emitted ~f:(fun e -> String.is_substring e.source ~substring:key));
-      let narrow_rows =
-        List.concat_map emitted ~f:(fun e ->
-            List.filter_map e.loops ~f:(fun l ->
-                if String.equal l.store l.comp then None else Some (e, l)))
-      in
-      Verdict.p_all "every narrow-storage loop's kernel spells both directions of its conversion"
-        narrow_rows ~f:(fun (e, l) ->
-          (not (String.is_empty l.widen))
-          && (not (String.is_empty l.narrow))
-          && String.is_substring e.source ~substring:l.widen
-          && String.is_substring e.source ~substring:l.narrow);
-      (* {2 That each row's anchor names its own loop and no other}
+   Per child rather than per width because the first CI run of per-width pieces (cold cache) read
+   [w64_host] at 368 s, against the about-5-minute ceiling a piece is held to; the 64-byte kernels
+   are the expensive ones, and the native-fp16 child carries most of the kernels.
 
-         The census selects the SMALLEST-span loop carrying an anchor line, so two loops of one
-         kernel whose anchors overlap do not report a conflict -- one of them silently answers for
-         the other, at whichever profile is smaller. That is invisible in every claim below: the row
-         is found, it compiles, it counts something. Only this says the anchors still partition the
-         kernel's loops, which is what lets a claim be attributed to the loop it names. It matters
-         most for the [Tile_mma] rows, whose anchors are now two patterns each rather than one, and
-         for the narrow reduction groups, whose tags are substrings of one another's ([f16] of
-         [f16w]) whenever a future setting emits both from the same child. *)
-      Verdict.p_all "no two censused loops of a kernel share an anchor line"
-        (List.concat_map emitted ~f:(fun e ->
-             List.map e.loops ~f:(fun l -> (e, l, loop_anchor_range e l))))
-        ~f:(fun (e, l, mine) ->
-          (not (Set.is_empty mine))
-          && List.for_all e.loops ~f:(fun other ->
-              String.equal other.what l.what
-              || Set.is_empty (Set.inter mine (loop_anchor_range e other))));
-      (* {2 That the geometry rows cover what they were added for, and are what they say}
+   The list is derived, never kept: the children ({!widths} times {!fp16_settings}) times the
+   families' names. What the dune file runs is held to it by the emission piece. *)
+type piece = Emission | Columns of { width : int; fp16 : string * string; family : string }
 
-         Every claim about a register-tile row below is quantified over the rows the children
-         emitted, so a seeding change that stopped proposing alternatives at these sites -- or a
-         coverage change that stopped leaving a partial vector at [n = 99] -- would shrink the
-         population to the default tiles and leave every claim passing over less than it names. So
-         the coverage is claimed per width, asked of the rows' own recorded geometries (which the
-         child took from {!Ir.Register_tile}), not of the site table.
+let piece_name = function
+  | Emission -> "emission"
+  | Columns { width; fp16 = tag, _; family } -> Printf.sprintf "w%d_%s_%s" width tag family
 
-         And a row's geometry is the child's REQUEST; what was measured is what the renderer made of
-         it. [C_syntax.try_register_tile] honours a requested geometry exactly or declines it (and a
-         decline is already a "no loop carried the anchor" failure), but the default rows are
-         requested as [None], and there the geometry the row names is the child's own call of
-         {!Ir.Register_tile.default}: the rendered header is the only evidence that the renderer,
-         reading its own vector width, picked the same one. *)
-      let geometry_loops =
-        List.concat_map emitted ~f:(fun e ->
-            List.filter_map e.loops ~f:(fun l -> Option.map l.geometry ~f:(fun g -> (e, g))))
-      in
-      Verdict.p_all
-        "every vector width censuses a register-tile geometry the sketch seeding proposes beside \
-         the default"
-        widths ~f:(fun w -> List.exists geometry_loops ~f:(fun (e, g) -> e.width = w && g.seeded));
-      Verdict.p_all
-        "every vector width censuses a register-tile pass whose column tail ends in a partial \
-         vector"
-        widths ~f:(fun w -> List.exists geometry_loops ~f:(fun (e, g) -> e.width = w && g.partial));
-      Verdict.p_all "every censused register tile rendered the geometry its row names"
-        geometry_loops ~f:(fun (e, g) ->
-          String.is_substring e.source ~substring:(tile_header g.tile));
-      let all = toolchains () in
-      (* Why a column is not censused, per column that is not. A toolchain that rejects the target
-         is the usual reason. The other is a toolchain that accepts it but writes no line table this
-         census reads: one targeting MSVC -- the clang on a Windows PATH, by default -- emits
-         CodeView's [.cv_file]/[.cv_loc] rather than [.file]/[.loc], and every row of its column
-         would report no loop. *)
-      let skip_reasons =
-        List.filter_map all ~f:(fun t ->
-            if not (Census.accepts t) then Some (t, t.Census.label ^ ", " ^ t.Census.note)
-            else if Set.mem (Census.defines t) "_MSC_VER" then
-              Some
-                ( t,
-                  t.Census.label
-                  ^ ", whose compiler targets MSVC: CodeView line tables, which this census does \
-                     not read" )
-            else None)
-      in
-      let available =
-        List.filter all ~f:(fun t -> not (List.Assoc.mem skip_reasons t ~equal:phys_equal))
-      in
-      (* The per-row table goes to a file beside the kernels it describes, not to stderr: dune cuts
-         a long stderr down to its head and tail with [...TRUNCATED BY DUNE...], and the rows it
-         cuts are whichever happen to sit in the middle -- which hid rows during the staging#865
-         triage. Stderr keeps the table's path, a row count per column, and the violator lists
-         below. Each row is flushed as it is censused, so a run killed or raising partway through
-         the matrix still leaves every row it finished -- which is where such a run stopped. *)
-      let table_path = Stdlib.Filename.concat root "rows.txt" in
-      let table = Stdio.Out_channel.create table_path in
-      let row fmt =
-        Printf.ksprintf
-          (fun line ->
-            Stdio.Out_channel.output_string table line;
-            Stdio.Out_channel.flush table)
-          fmt
-      in
-      row "=== cc kernel census ===\n";
-      row "host toolchain: %s\n" (Cc_backend.compiler_command ());
-      let failed_compiles = ref [] in
-      let edges = ref [] in
-      (* Once per toolchain, not once per row: [caps_of] launches a compiler process, and the rows
-         below map over every loop x kernel x optimization level, so computing it there cost
-         hundreds of redundant `cc -dM -E` invocations per run. *)
-      let columns = List.map available ~f:(fun t -> (t, caps_of t)) in
-      let rows =
-        List.concat_map columns ~f:(fun (t, caps) ->
-            List.concat_map emitted ~f:(fun e ->
-                List.concat_map [ 2; 3 ] ~f:(fun opt ->
-                    let kernel = kernel_label e in
-                    let asm_path =
-                      Stdlib.Filename.concat root
-                        (Printf.sprintf "%s-%s-O%d.s"
-                           (String.map t.Census.label ~f:(fun c ->
-                                if Char.is_alphanum c then c else '_'))
-                           kernel opt)
-                    in
-                    match
-                      compile_cached t ~opt_level:opt ~source:e.source ~src_path:e.src_path
-                        ~asm_path ~validate:(fun asm ->
-                          String.is_substring asm ~substring:(e.kernel ^ ".c"))
-                    with
-                    | Error out ->
-                        failed_compiles :=
-                          Printf.sprintf "%s -O%d %s" t.Census.label opt kernel :: !failed_compiles;
-                        Verdict.fail
-                          (Printf.sprintf "%s -O%d, %s: the emitted kernel does not compile:\n%s"
-                             t.Census.label opt kernel out);
-                        []
-                    | Ok () ->
-                        (* Parsed once per compiled file, then asked about each of its loops: the
-                           line classification, the loop edges and the DWARF file numbers are
-                           properties of the listing, and a listing runs to tens of thousands of
-                           lines. *)
-                        let parsed =
-                          Census.parse
-                            ~asm:(Stdio.In_channel.read_all asm_path)
-                            ~source_basename:(e.kernel ^ ".c")
-                        in
-                        (* Recorded before any anchor is looked for: an ISA whose branch spelling
-                           {!Census.is_branch} does not know reports every anchor missing at once,
-                           which is a defect in the census and not a finding about the kernel. *)
-                        edges :=
-                          ( Printf.sprintf "%s %s -O%d" t.Census.label kernel opt,
-                            Census.edge_count parsed )
-                          :: !edges;
-                        List.map e.loops ~f:(fun loop ->
-                            let c = census_loop parsed e loop in
-                            let edge_profile =
-                              if List.is_empty loop.edge then None
-                              else
-                                Some
-                                  (Census.attributed_in parsed Census.Fma
-                                     ~anchor:
-                                       (Census.anchor_lines ~source:e.source ~patterns:loop.edge))
-                            in
-                            let edge_line =
-                              match edge_profile with
-                              | Some p ->
-                                  Printf.sprintf " edge: insns=%d stack=%d writes=%d"
-                                    p.Census.instructions p.Census.stack_refs p.Census.stack_writes
-                              | None -> ""
-                            in
-                            (match c with
-                            | Some c ->
-                                row "  %-24s %-11s -O%d %-11s %s%s\n" t.Census.label kernel opt
-                                  loop.what (Census.to_line c) edge_line
-                            | None ->
-                                row "  %-24s %-11s -O%d %-11s NO LOOP CARRIED THE ANCHOR%s\n"
-                                  t.Census.label kernel opt loop.what edge_line);
-                            {
-                              toolchain = t.Census.label;
-                              caps;
-                              width = e.width;
-                              opt;
-                              loop;
-                              bridge_packed =
-                                (if
-                                   String.equal loop.store half && not (String.equal loop.comp half)
-                                 then packed_half_widen t ~width:e.width ~opt_level:opt
-                                 else true);
-                              profile = c;
-                              edge_profile;
-                            }))))
-      in
-      (* The fp16 narrowing probe, per (column, width, level) that the narrowing claim below is held
-         over (its population is argued there), read here so its table lines sit beside the rows. *)
-      let narrow_population =
-        List.concat_map columns ~f:(fun (t, caps) ->
-            if not (caps.named && caps.fp16_convert) then []
-            else
-              List.concat_map widths ~f:(fun width ->
-                  if width > caps.vector_bytes then []
-                  else
-                    List.map [ 2; 3 ] ~f:(fun opt ->
-                        ( Printf.sprintf "%s w%d -O%d" t.Census.label width opt,
-                          half_narrow_conversions t ~width ~opt_level:opt ))))
-      in
-      List.iter narrow_population ~f:(fun (what, reading) ->
-          row "  %-40s narrow-half probe: %s\n" what
-            (match reading with
-            | Some (conversions, scalar) ->
-                Printf.sprintf "conversions=%d scalar_fp=%d" conversions scalar
-            | None -> "DOES NOT COMPILE"));
-      row "=== end census ===\n";
-      Stdio.Out_channel.close table;
-      Stdio.eprintf "\n=== cc kernel census (not part of the golden) ===\n";
-      Stdio.eprintf "host toolchain: %s\n" (Cc_backend.compiler_command ());
-      Stdio.eprintf "per-row table: %s\n" table_path;
-      List.iter available ~f:(fun t ->
-          let mine = List.filter rows ~f:(fun r -> String.equal r.toolchain t.Census.label) in
-          Stdio.eprintf "  %-24s %d row(s), %d with no loop carrying the anchor\n" t.Census.label
-            (List.length mine)
-            (List.count mine ~f:(fun r -> Option.is_none r.profile)));
-      Stdio.eprintf "=== end census ===\n\n";
-      if !cache_active then
-        Option.iter (Lazy.force cache_dir) ~f:(fun cache -> prune_cache cache.path);
-      Stdio.eprintf
-        "cc census cache: %d hit(s), %d miss(es), %d bypass(es)%s (not part of the golden)\n\n"
-        !cache_hits !cache_misses !cache_bypasses
-        (match Lazy.force cache_dir with
-        | Some cache -> " in " ^ cache.path
-        | None -> " (disabled: no per-user cache root)");
-      let describe r = Printf.sprintf "%s w%d -O%d %s" r.toolchain r.width r.opt r.loop.what in
-      (* One line per COLUMN, always -- printed by {!Verdict.skipped} where the toolchain is absent,
-         which prints exactly the line the verified case prints. Without this the golden would have
-         a line count that depended on whether the box has a cross gcc: [skipped] emits a stdout
-         line of its own, so reporting only the absent columns would make a machine WITH the cross
-         compiler and a machine without disagree about the expected output. Here the count is fixed
-         at one per toolchain and it is the run's stderr that says which were really evaluated. *)
-      List.iter all ~f:(fun t ->
-          let name =
-            Printf.sprintf "%s: the -march column compiles clean and its loops are censused"
+let pieces () =
+  Emission
+  :: List.concat_map (List.cartesian_product widths fp16_settings) ~f:(fun (width, fp16) ->
+      List.map (toolchain_families ()) ~f:(fun (family, _) -> Columns { width; fp16; family }))
+
+(* The piece each rule of a dune file runs: the argument that follows each mention of this
+   executable as a rule dependency. *)
+let dune_pieces dune_text =
+  let needle = "%{dep:cc_march_census.exe}" in
+  String.substr_index_all dune_text ~may_overlap:false ~pattern:needle
+  |> List.map ~f:(fun i ->
+      let rest = String.lstrip (String.drop_prefix dune_text (i + String.length needle)) in
+      let ends c = Char.is_whitespace c || Char.equal c ')' in
+      String.prefix rest
+        (Option.value (String.lfindi rest ~f:(fun _ c -> ends c)) ~default:(String.length rest)))
+
+let emission ~exe ~root ~dune_file =
+  cache_format_probes ();
+  cache_policy_probes ();
+  cache_reuse_probe ~exe ~root;
+  let emitted = emit_all ~exe ~root ~widths () in
+  Verdict.p_all "every requested vector width emitted a kernel" widths ~f:(fun w ->
+      List.exists emitted ~f:(fun e -> e.width = w));
+  (* The (fp16, f32) bridge pair and the native-fp16 builtin rows live in different children, so a
+     child that silently emitted the other one's loop set would leave one of the two groups in no
+     source at all -- and every claim below would still pass, over the surviving group.
+
+     Asked of what each child RESOLVED, not of the tag the driver asked for: the tag is this
+     process's own string and a kernel is tagged with it whatever the child did, so a numerics
+     regression that made the [true] child compute fp16 in f32 as well would leave both tags present
+     and the AVX512-FP16 / ARMv8.2-FP16 builtin rows in no source at all. The child records each
+     loop's resolved compute precision in the manifest (it asks {!Ir.Numerics.cpu_compute_prec}, the
+     same resolution the emission used), so the two policies are told apart by the only thing that
+     distinguishes them: what a half-storage loop computes in. Asked of each child's MAIN kernel,
+     one per width: the wide child's fp16 geometry twins are more half-storage kernels computing in
+     f32. *)
+  let half_rows_computing_in p =
+    List.filter emitted ~f:(fun e ->
+        String.equal e.kernel routine
+        && List.exists e.loops ~f:(fun l -> String.equal l.store half && String.equal l.comp p))
+  in
+  Verdict.p_all "every fp16 numerics setting emitted a kernel"
+    [ ("native", half); ("wide", Ir.Ops.prec_string Ir.Ops.single) ]
+    ~f:(fun (tag, p) ->
+      let kernels = half_rows_computing_in p in
+      List.exists kernels ~f:(fun e -> String.equal e.fp16 tag)
+      && List.length kernels = List.length widths);
+  (* {2 That the narrow-storage rows are really narrow}
+
+     Every claim below this point is about how well gcc rendered a loop, and a loop that stopped
+     being a NARROW-storage one -- a numerics default flipped, a [vec_bridge] arm lost, a storage
+     precision the emission silently computed at -- passes all of them. It is still a [Vectorized]
+     fold over an array called [maxs_bf16]; it is just no longer the thing gh-ocannl-752 added it
+     for, and nothing in a golden of inequalities would say so. So the COVERAGE is claimed too, from
+     the emitted source rather than from the row names:
+
+     - the whole-vector bridges, which are the discriminating half. [OCANNL_VEC_WIDEN_BFLOAT16] and
+     its siblings are emitted by {!C_syntax.vec_bridge}'s narrow arms and by nothing else, and
+     {!Cc_backend} prepends a builtin only where the kernel calls it (or something it calls does),
+     so a kernel carrying the name is a kernel that bridged. The set comes from
+     {!Context.Builtins_cc.builtins}: a bridge added for a fourth format fails this claim until the
+     fixture emits a loop that reaches it. - the scalar codecs, which is where fp8 lives.
+     {!C_syntax.vec_bridge} has no vector arm for it and converts per lane through
+     [Ops.c_convert_precision] instead, so no [OCANNL_VEC_*] name attests to an fp8 bridge and the
+     codec's own spelling is what does. Asked of every loop whose storage and compute precisions
+     differ, in BOTH directions -- the load's widening and the accumulator store's narrowing are
+     separate entries of that table, and a rendering that reached only one of them is a rendering
+     this fixture was meant to catch. *)
+  let vec_bridges =
+    List.filter_map Context.Builtins_cc.builtins ~f:(fun (key, _, _) ->
+        if
+          String.is_prefix key ~prefix:"OCANNL_VEC_WIDEN_"
+          || String.is_prefix key ~prefix:"OCANNL_VEC_NARROW_"
+        then Some key
+        else None)
+  in
+  Verdict.p_all "every whole-vector storage bridge the cc builtins define reaches a kernel"
+    vec_bridges ~f:(fun key ->
+      List.exists emitted ~f:(fun e -> String.is_substring e.source ~substring:key));
+  let narrow_rows =
+    List.concat_map emitted ~f:(fun e ->
+        List.filter_map e.loops ~f:(fun l ->
+            if String.equal l.store l.comp then None else Some (e, l)))
+  in
+  Verdict.p_all "every narrow-storage loop's kernel spells both directions of its conversion"
+    narrow_rows ~f:(fun (e, l) ->
+      (not (String.is_empty l.widen))
+      && (not (String.is_empty l.narrow))
+      && String.is_substring e.source ~substring:l.widen
+      && String.is_substring e.source ~substring:l.narrow);
+  (* {2 That each row's anchor names its own loop and no other}
+
+     The census selects the SMALLEST-span loop carrying an anchor line, so two loops of one kernel
+     whose anchors overlap do not report a conflict -- one of them silently answers for the other,
+     at whichever profile is smaller. That is invisible in every claim below: the row is found, it
+     compiles, it counts something. Only this says the anchors still partition the kernel's loops,
+     which is what lets a claim be attributed to the loop it names. It matters most for the
+     [Tile_mma] rows, whose anchors are now two patterns each rather than one, and for the narrow
+     reduction groups, whose tags are substrings of one another's ([f16] of [f16w]) whenever a
+     future setting emits both from the same child. *)
+  Verdict.p_all "no two censused loops of a kernel share an anchor line"
+    (List.concat_map emitted ~f:(fun e ->
+         List.map e.loops ~f:(fun l -> (e, l, loop_anchor_range e l))))
+    ~f:(fun (e, l, mine) ->
+      (not (Set.is_empty mine))
+      && List.for_all e.loops ~f:(fun other ->
+          String.equal other.what l.what
+          || Set.is_empty (Set.inter mine (loop_anchor_range e other))));
+  (* {2 That the geometry rows cover what they were added for, and are what they say}
+
+     Every claim about a register-tile row below is quantified over the rows the children emitted,
+     so a seeding change that stopped proposing alternatives at these sites -- or a coverage change
+     that stopped leaving a partial vector at [n = 99] -- would shrink the population to the default
+     tiles and leave every claim passing over less than it names. So the coverage is claimed per
+     width, asked of the rows' own recorded geometries (which the child took from
+     {!Ir.Register_tile}), not of the site table.
+
+     And a row's geometry is the child's REQUEST; what was measured is what the renderer made of it.
+     [C_syntax.try_register_tile] honours a requested geometry exactly or declines it (and a decline
+     is already a "no loop carried the anchor" failure), but the default rows are requested as
+     [None], and there the geometry the row names is the child's own call of
+     {!Ir.Register_tile.default}: the rendered header is the only evidence that the renderer,
+     reading its own vector width, picked the same one. *)
+  let geometry_loops =
+    List.concat_map emitted ~f:(fun e ->
+        List.filter_map e.loops ~f:(fun l -> Option.map l.geometry ~f:(fun g -> (e, g))))
+  in
+  Verdict.p_all
+    "every vector width censuses a register-tile geometry the sketch seeding proposes beside the \
+     default"
+    widths ~f:(fun w -> List.exists geometry_loops ~f:(fun (e, g) -> e.width = w && g.seeded));
+  Verdict.p_all
+    "every vector width censuses a register-tile pass whose column tail ends in a partial vector"
+    widths ~f:(fun w -> List.exists geometry_loops ~f:(fun (e, g) -> e.width = w && g.partial));
+  Verdict.p_all "every censused register tile rendered the geometry its row names" geometry_loops
+    ~f:(fun (e, g) -> String.is_substring e.source ~substring:(tile_header g.tile));
+  (* {2 That the dune rules run the whole matrix}
+
+     The pieces are derived from the column table and the width list ({!pieces}), so the matrix they
+     cover is the whole one by construction; what is NOT derived is which pieces dune runs. A rule
+     dropped from [test/operations/dune], or one passing a misspelled piece, would leave a slice of
+     the matrix censused by nothing while every golden stayed green. So the rules are read back
+     here, from the dune file this action depends on, and held to the derived list: every piece run
+     exactly once. *)
+  let declared = dune_pieces (Stdio.In_channel.read_all dune_file) in
+  let derived = List.map (pieces ()) ~f:piece_name in
+  let sorted = List.sort ~compare:String.compare in
+  let partition_holds = List.equal String.equal (sorted declared) (sorted derived) in
+  if not partition_holds then
+    Stdio.eprintf
+      "  the dune rules run census pieces [%s]; the column table and widths derive [%s] (not part \
+       of the golden)\n"
+      (String.concat ~sep:"; " (sorted declared))
+      (String.concat ~sep:"; " (sorted derived));
+  Verdict.p "the dune rules run every census piece exactly once" partition_holds
+
+let census ~exe ~root ~piece ~width ~fp16 ~columns =
+  let in_piece claim = Printf.sprintf "[%s] %s" (piece_name piece) claim in
+  let emitted = emit_all ~exe ~root ~widths:[ width ] ~settings:[ fp16 ] () in
+  let all = columns in
+  (* Why a column is not censused, per column that is not. A toolchain that rejects the target is
+     the usual reason. The other is a toolchain that accepts it but writes no line table this census
+     reads: one targeting MSVC -- the clang on a Windows PATH, by default -- emits CodeView's
+     [.cv_file]/[.cv_loc] rather than [.file]/[.loc], and every row of its column would report no
+     loop. *)
+  let skip_reasons =
+    List.filter_map all ~f:(fun t ->
+        if not (Census.accepts t) then Some (t, t.Census.label ^ ", " ^ t.Census.note)
+        else if Set.mem (Census.defines t) "_MSC_VER" then
+          Some
+            ( t,
               t.Census.label
-          in
-          if List.mem available t ~equal:phys_equal then
-            let mine = List.filter rows ~f:(fun r -> String.equal r.toolchain t.Census.label) in
-            Verdict.p name
-              ((not (List.is_empty mine))
-              && List.for_all mine ~f:(fun r -> Option.is_some r.profile))
-          else if
-            Option.exists (aarch64_cross_override ()) ~f:(fun cross ->
-                List.mem (aarch64_columns cross) t ~equal:Poly.equal)
-          then (
-            Stdio.eprintf
-              "  %s: AARCH64_CROSS_GCC names %s, which does not accept -march=%s (not part of the \
-               golden)\n"
-              t.Census.label t.Census.command t.Census.march;
-            Verdict.p name false)
-          else
-            Verdict.skipped ~aggregation:`Environment
-              ~backend:(List.Assoc.find_exn skip_reasons t ~equal:phys_equal)
-              name);
-      Verdict.p_empty
-        "every emitted kernel compiles clean at -O2 and -O3 under every accepted -march" ~over:rows
-        !failed_compiles;
-      Verdict.p_all "every compiled kernel has recognizable loop edges" !edges ~f:(fun (_, n) ->
-          n > 0);
-      Verdict.p_all "every accumulator loop is found by the census" rows ~f:(fun r ->
-          Option.is_some r.profile);
-      let counts r = Option.map r.profile ~f:(fun p -> p.Census.counts) in
-      let libm r = match counts r with Some c -> c.Census.libm_calls > 0 | None -> false in
-      let scalarized r =
-        match counts r with
-        | Some c -> c.Census.scalar_fp_ops > 0 || c.Census.vector_ops = 0
-        | None -> false
+              ^ ", whose compiler targets MSVC: CodeView line tables, which this census does not \
+                 read" )
+        else None)
+  in
+  let available =
+    List.filter all ~f:(fun t -> not (List.Assoc.mem skip_reasons t ~equal:phys_equal))
+  in
+  (* The per-row table goes to a file beside the kernels it describes, not to stderr: dune cuts a
+     long stderr down to its head and tail with [...TRUNCATED BY DUNE...], and the rows it cuts are
+     whichever happen to sit in the middle -- which hid rows during the staging#865 triage. Stderr
+     keeps the table's path, a row count per column, and the violator lists below. Each row is
+     flushed as it is censused, so a run killed or raising partway through the matrix still leaves
+     every row it finished -- which is where such a run stopped. *)
+  let table_path = Stdlib.Filename.concat root "rows.txt" in
+  let table = Stdio.Out_channel.create table_path in
+  let row fmt =
+    Printf.ksprintf
+      (fun line ->
+        Stdio.Out_channel.output_string table line;
+        Stdio.Out_channel.flush table)
+      fmt
+  in
+  row "=== cc kernel census ===\n";
+  row "host toolchain: %s\n" (Cc_backend.compiler_command ());
+  let failed_compiles = ref [] in
+  let edges = ref [] in
+  (* Once per toolchain, not once per row: [caps_of] launches a compiler process, and the rows below
+     map over every loop x kernel x optimization level, so computing it there cost hundreds of
+     redundant `cc -dM -E` invocations per run. *)
+  let columns = List.map available ~f:(fun t -> (t, caps_of t)) in
+  let rows =
+    List.concat_map columns ~f:(fun (t, caps) ->
+        List.concat_map emitted ~f:(fun e ->
+            List.concat_map [ 2; 3 ] ~f:(fun opt ->
+                let kernel = kernel_label e in
+                let asm_path =
+                  Stdlib.Filename.concat root
+                    (Printf.sprintf "%s-%s-O%d.s"
+                       (String.map t.Census.label ~f:(fun c ->
+                            if Char.is_alphanum c then c else '_'))
+                       kernel opt)
+                in
+                match
+                  compile_cached t ~opt_level:opt ~source:e.source ~src_path:e.src_path ~asm_path
+                    ~validate:(fun asm -> String.is_substring asm ~substring:(e.kernel ^ ".c"))
+                with
+                | Error out ->
+                    failed_compiles :=
+                      Printf.sprintf "%s -O%d %s" t.Census.label opt kernel :: !failed_compiles;
+                    Verdict.fail
+                      (Printf.sprintf "%s -O%d, %s: the emitted kernel does not compile:\n%s"
+                         t.Census.label opt kernel out);
+                    []
+                | Ok () ->
+                    (* Parsed once per compiled file, then asked about each of its loops: the line
+                       classification, the loop edges and the DWARF file numbers are properties of
+                       the listing, and a listing runs to tens of thousands of lines. *)
+                    let parsed =
+                      Census.parse
+                        ~asm:(Stdio.In_channel.read_all asm_path)
+                        ~source_basename:(e.kernel ^ ".c")
+                    in
+                    (* Recorded before any anchor is looked for: an ISA whose branch spelling
+                       {!Census.is_branch} does not know reports every anchor missing at once, which
+                       is a defect in the census and not a finding about the kernel. *)
+                    edges :=
+                      ( Printf.sprintf "%s %s -O%d" t.Census.label kernel opt,
+                        Census.edge_count parsed )
+                      :: !edges;
+                    List.map e.loops ~f:(fun loop ->
+                        let c = census_loop parsed e loop in
+                        let edge_profile =
+                          if List.is_empty loop.edge then None
+                          else
+                            Some
+                              (Census.attributed_in parsed Census.Fma
+                                 ~anchor:(Census.anchor_lines ~source:e.source ~patterns:loop.edge))
+                        in
+                        let edge_line =
+                          match edge_profile with
+                          | Some p ->
+                              Printf.sprintf " edge: insns=%d stack=%d writes=%d"
+                                p.Census.instructions p.Census.stack_refs p.Census.stack_writes
+                          | None -> ""
+                        in
+                        (match c with
+                        | Some c ->
+                            row "  %-24s %-11s -O%d %-11s %s%s\n" t.Census.label kernel opt
+                              loop.what (Census.to_line c) edge_line
+                        | None ->
+                            row "  %-24s %-11s -O%d %-11s NO LOOP CARRIED THE ANCHOR%s\n"
+                              t.Census.label kernel opt loop.what edge_line);
+                        {
+                          toolchain = t.Census.label;
+                          caps;
+                          width = e.width;
+                          opt;
+                          loop;
+                          bridge_packed =
+                            (if String.equal loop.store half && not (String.equal loop.comp half)
+                             then packed_half_widen t ~width:e.width ~opt_level:opt
+                             else true);
+                          profile = c;
+                          edge_profile;
+                        }))))
+  in
+  (* The fp16 narrowing probe, per (column, width, level) that the narrowing claim below is held
+     over (its population is argued there), read here so its table lines sit beside the rows. A
+     probe of the width, not of a kernel, so one of the width's two pieces per family holds it: the
+     one whose kernels narrow f32 to fp16 storage, which is asked of what the child EMITTED -- an
+     fp16-storage loop computing wider -- rather than of its tag. *)
+  let narrows_half =
+    List.exists emitted ~f:(fun e ->
+        List.exists e.loops ~f:(fun l ->
+            String.equal l.store half && not (String.equal l.comp half)))
+  in
+  let narrow_population =
+    List.concat_map columns ~f:(fun (t, caps) ->
+        if not (narrows_half && caps.named && caps.fp16_convert) then []
+        else
+          List.concat_map [ width ] ~f:(fun width ->
+              if width > caps.vector_bytes then []
+              else
+                List.map [ 2; 3 ] ~f:(fun opt ->
+                    ( Printf.sprintf "%s w%d -O%d" t.Census.label width opt,
+                      half_narrow_conversions t ~width ~opt_level:opt ))))
+  in
+  List.iter narrow_population ~f:(fun (what, reading) ->
+      row "  %-40s narrow-half probe: %s\n" what
+        (match reading with
+        | Some (conversions, scalar) ->
+            Printf.sprintf "conversions=%d scalar_fp=%d" conversions scalar
+        | None -> "DOES NOT COMPILE"));
+  row "=== end census ===\n";
+  Stdio.Out_channel.close table;
+  Stdio.eprintf "\n=== cc kernel census (not part of the golden) ===\n";
+  Stdio.eprintf "host toolchain: %s\n" (Cc_backend.compiler_command ());
+  Stdio.eprintf "per-row table: %s\n" table_path;
+  List.iter available ~f:(fun t ->
+      let mine = List.filter rows ~f:(fun r -> String.equal r.toolchain t.Census.label) in
+      Stdio.eprintf "  %-24s %d row(s), %d with no loop carrying the anchor\n" t.Census.label
+        (List.length mine)
+        (List.count mine ~f:(fun r -> Option.is_none r.profile)));
+  Stdio.eprintf "=== end census ===\n\n";
+  if !cache_active then Option.iter (Lazy.force cache_dir) ~f:(fun cache -> prune_cache cache.path);
+  Stdio.eprintf
+    "cc census cache: %d hit(s), %d miss(es), %d bypass(es)%s (not part of the golden)\n\n"
+    !cache_hits !cache_misses !cache_bypasses
+    (match Lazy.force cache_dir with
+    | Some cache -> " in " ^ cache.path
+    | None -> " (disabled: no per-user cache root)");
+  let describe r = Printf.sprintf "%s w%d -O%d %s" r.toolchain r.width r.opt r.loop.what in
+  (* One line per COLUMN, always -- printed by {!Verdict.skipped} where the toolchain is absent,
+     which prints exactly the line the verified case prints. Without this the golden would have a
+     line count that depended on whether the box has a cross gcc: [skipped] emits a stdout line of
+     its own, so reporting only the absent columns would make a machine WITH the cross compiler and
+     a machine without disagree about the expected output. Here the count is fixed at one per
+     toolchain and it is the run's stderr that says which were really evaluated. *)
+  List.iter all ~f:(fun t ->
+      let name =
+        Printf.sprintf "%s: the -march column compiles clean and its loops are censused"
+          t.Census.label
+        |> in_piece
       in
-      (* Each claim's population is named once and used twice: for the claim, and for the report of
-         what violated it. Only a claim's OWN population is reported -- the populations exclude
-         configurations the target cannot serve, and printing those too buries the handful of real
-         offenders in a page of expected ones. *)
-      let report label population ~f =
-        let bad = List.filter population ~f in
-        if not (List.is_empty bad) then (
-          Stdio.eprintf "  %d row(s) violating %S (not part of the golden):\n" (List.length bad)
-            label;
-          List.iter bad ~f:(fun r ->
-              Stdio.eprintf "    %s -> %s\n" (describe r)
-                (match r.profile with Some p -> Census.to_line p | None -> "no loop")))
-      in
-      let claim_none label population ~f =
-        Verdict.p_none label population ~f;
-        report label population ~f
-      in
-      let claim_all label population ~f =
-        Verdict.p_all label population ~f;
-        report label population ~f:(fun r -> not (f r))
-      in
-      (* The scalarization claim is held only over columns whose [-march] this test named -- it is a
-         claim about how gcc vectorizes a known target, and the [native] column is whatever compiler
-         the run landed on (Apple clang on macOS CI), whose vectorizer this test does not model. The
-         other two claims DO cover it: "compiles clean" and "no libm call in a Max/Min loop" hold by
-         construction of the emission, whatever the host compiler does with it, which is what keeps
-         a macOS run from verifying nothing. *)
-      let served =
-        List.filter rows ~f:(fun r -> isa_has ~caps:r.caps ~loop:r.loop ~width:r.width)
-      in
-      let served_named = List.filter served ~f:(fun r -> r.caps.named) in
-      (* Every reduction profile now names the accumulator loop. fp8 is the exceptional shape: its
+      if List.mem available t ~equal:phys_equal then
+        let mine = List.filter rows ~f:(fun r -> String.equal r.toolchain t.Census.label) in
+        Verdict.p name
+          ((not (List.is_empty mine)) && List.for_all mine ~f:(fun r -> Option.is_some r.profile))
+      else if
+        Option.exists (aarch64_cross_override ()) ~f:(fun cross ->
+            List.mem (aarch64_columns cross) t ~equal:Poly.equal)
+      then (
+        Stdio.eprintf
+          "  %s: AARCH64_CROSS_GCC names %s, which does not accept -march=%s (not part of the \
+           golden)\n"
+          t.Census.label t.Census.command t.Census.march;
+        Verdict.p name false)
+      else
+        Verdict.skipped ~aggregation:`Environment
+          ~backend:(List.Assoc.find_exn skip_reasons t ~equal:phys_equal)
+          name);
+  (* A piece whose every column this host's toolchains skip has no rows at all -- the [foreign]
+     family on a host without clang's x86 targets or an aarch64 cross gcc, which is every macOS run
+     -- and that is the environment's doing, reported as such. Gated on the columns rather than on
+     the rows: a piece whose every compile FAILED has no rows either, and that must fail the first
+     claim, not skip it. *)
+  let over_rows label claim =
+    if List.is_empty available then
+      Verdict.skipped ~aggregation:`Environment
+        ~backend:"no column of this piece accepted by this host's toolchains" label
+    else claim label
+  in
+  over_rows
+    (in_piece "every emitted kernel compiles clean at -O2 and -O3 under every accepted -march")
+    (fun label -> Verdict.p_empty label ~over:rows !failed_compiles);
+  over_rows (in_piece "every compiled kernel has recognizable loop edges") (fun label ->
+      Verdict.p_all label !edges ~f:(fun (_, n) -> n > 0));
+  over_rows (in_piece "every accumulator loop is found by the census") (fun label ->
+      Verdict.p_all label rows ~f:(fun r -> Option.is_some r.profile));
+  let counts r = Option.map r.profile ~f:(fun p -> p.Census.counts) in
+  let libm r = match counts r with Some c -> c.Census.libm_calls > 0 | None -> false in
+  let scalarized r =
+    match counts r with
+    | Some c -> c.Census.scalar_fp_ops > 0 || c.Census.vector_ops = 0
+    | None -> false
+  in
+  (* Each claim's population is named once and used twice: for the claim, and for the report of what
+     violated it. Only a claim's OWN population is reported -- the populations exclude
+     configurations the target cannot serve, and printing those too buries the handful of real
+     offenders in a page of expected ones. *)
+  let report label population ~f =
+    let bad = List.filter population ~f in
+    if not (List.is_empty bad) then (
+      Stdio.eprintf "  %d row(s) violating %S (not part of the golden):\n" (List.length bad) label;
+      List.iter bad ~f:(fun r ->
+          Stdio.eprintf "    %s -> %s\n" (describe r)
+            (match r.profile with Some p -> Census.to_line p | None -> "no loop")))
+  in
+  let claim_none label population ~f =
+    Verdict.p_none label population ~f;
+    report label population ~f
+  in
+  let claim_all label population ~f =
+    Verdict.p_all label population ~f;
+    report label population ~f:(fun r -> not (f r))
+  in
+  (* The scalarization claim is held only over columns whose [-march] this test named -- it is a
+     claim about how gcc vectorizes a known target, and the [native] column is whatever compiler the
+     run landed on (Apple clang on macOS CI), whose vectorizer this test does not model. The other
+     two claims DO cover it: "compiles clean" and "no libm call in a Max/Min loop" hold by
+     construction of the emission, whatever the host compiler does with it, which is what keeps a
+     macOS run from verifying nothing. *)
+  let served = List.filter rows ~f:(fun r -> isa_has ~caps:r.caps ~loop:r.loop ~width:r.width) in
+  let served_named = List.filter served ~f:(fun r -> r.caps.named) in
+  (* Every reduction profile now names the accumulator loop. fp8 is the exceptional shape: its
          per-lane codec is nested inside that loop and carries the same anchor range, so
          [loop_selection] selects the smallest anchor carrier that contains a nested carrier. The
          synthetic control in [asm_census_cases.ml] proves that a libm call outside the codec but inside
          the combine makes the predicate below fail. *)
-      (* The gh-ocannl-649 claim proper. Unconditional across the matrix, unlike the two below:
+  (* The gh-ocannl-649 claim proper. Unconditional across the matrix, unlike the two below:
          [Max]/[Min] have a whole-vector spelling on every target here at every width -- an emulated
          wide vector still compiles to packed compares and selects, just more of them -- so a libm
          call in one of these loops is a defect wherever it appears. *)
-      claim_none "no Max/Min accumulator loop calls libm"
-        (List.filter rows ~f:(fun r -> not (is_fma_row r)))
-        ~f:libm;
-      claim_none "no FMA accumulator loop calls libm where the ISA has a fused multiply-add"
-        (List.filter served ~f:is_fma_row)
-        ~f:libm;
-      let scalarization_claim =
-        "no accumulator loop is scalarized where a named target's ISA has the operation"
-      in
-      (* {b Which rows the scalarization claim can be held over.} "Scalarized" means [scalar_fp_ops
-         > 0 || vector_ops = 0], and that reading is only a defect where the emission set out to
-         render the whole loop as vector operations. Two groups of rows it did not, both by
-         construction and both documented at their emission site, so a row of theirs is excluded
-         here rather than left to fail:
+  over_rows (in_piece "no Max/Min accumulator loop calls libm") (fun label ->
+      claim_none label (List.filter rows ~f:(fun r -> not (is_fma_row r))) ~f:libm);
+  (* Served rows can be absent where columns are not: a host whose only accepted column is its own
+     16-byte aarch64 target serves no 32- or 64-byte row, so the wider pieces have no population
+     here on macOS. The whole matrix had one through its 16-byte rows; a piece has one width. *)
+  let fma_libm_claim =
+    in_piece "no FMA accumulator loop calls libm where the ISA has a fused multiply-add"
+  in
+  let fma_served = List.filter served ~f:is_fma_row in
+  if List.is_empty fma_served then
+    Verdict.skipped ~aggregation:`Environment
+      ~backend:"no accepted target serves an FMA row at this width" fma_libm_claim
+  else claim_none fma_libm_claim fma_served ~f:libm;
+  let scalarization_claim =
+    in_piece "no accumulator loop is scalarized where a named target's ISA has the operation"
+  in
+  (* {b Which rows the scalarization claim can be held over.} "Scalarized" means [scalar_fp_ops > 0
+     || vector_ops = 0], and that reading is only a defect where the emission set out to render the
+     whole loop as vector operations. Two groups of rows it did not, both by construction and both
+     documented at their emission site, so a row of theirs is excluded here rather than left to
+     fail:
 
-         - {b the [Tile_mma] k-loop}. A GEBP grid's A feeds are scalar element loads by design --
-         [rm] of them per k step, each splat across a vector -- so [scalar_fp_ops] is [rm] in a
-         perfectly rendered tile (measured: exactly 4 at every x86 column with FMA). What pins these
-         rows instead is the anchor itself: [tmma_as_0__] is a name only
-         {!C_syntax.try_register_tile}'s full-block body emits, so a tiling that DECLINED and
-         rendered the lane-0 scalar fallback carries it nowhere and the row reports "no loop carried
-         the anchor" -- which "every accumulator loop is found by the census" above already treats
-         as a failure. Declines being silent is exactly the gh-ocannl-479 failure mode, and this is
-         the census's version of the check. The vector-majority claim below is what the rows say
-         positively. - {b fp8 operands}. {!C_syntax.vec_bridge} has no vector codec for fp8 and says
-         so: it converts one lane at a time through the scalar path's own [convert_precision], with
-         the arithmetic around it staying vectorized. The census deliberately selects the
-         accumulator loop outside that codec, so its scalar counts include the codec's designed
-         per-lane work. Excluding fp8 from a claim about wholly-vector rendering is therefore still
-         necessary even though its profile now genuinely covers the combine and its libm claim. *)
-      let whole_vector_rendering r =
-        match r.loop.kind with
-        | Tile -> false
-        | Reduce -> not (String.equal r.loop.store (Ir.Ops.prec_string Ir.Ops.fp8))
-      in
-      (* On a host whose compiler accepts none of the named [-march] targets -- Apple clang on Apple
-         Silicon, which is CI's macos-latest -- only the [native] column survives, and this claim's
-         population is empty. Reported as SKIPPED rather than left to fail on emptiness: the claim
-         genuinely was not evaluated there, and [Verdict.skipped] is the channel that says so while
-         keeping the golden one line per claim on every host. The two claims above still cover that
-         run. *)
-      let whole_vector_population = List.filter served_named ~f:whole_vector_rendering in
-      (* {b The half of the reading that is not a compiler-version fact.} "Wholly scalar" --
-         [vector_ops = 0] -- is the gh-ocannl-621 class: an arm gcc accepted and then rendered
-         element by element, which is the outcome the census exists to catch and which no gcc since
-         has disagreed about on any row here. It is held over EVERY row of the population, including
-         the ones the strict claim below has to let go of, so that dropping a row from that claim
-         never leaves it unclaimed. *)
-      let wholly_scalar r =
-        match counts r with Some c -> c.Census.vector_ops = 0 | None -> false
-      in
-      let wholly_scalar_claim =
-        "no accumulator loop is rendered wholly scalar where a named target's ISA has the operation"
-      in
-      if List.is_empty whole_vector_population then
-        Verdict.skipped ~aggregation:`Environment
-          ~backend:"no named -march target accepted by this host's toolchain" wholly_scalar_claim
-      else claim_none wholly_scalar_claim whole_vector_population ~f:wholly_scalar;
-      (* {b And the half that is.} [scalar_fp_ops = 0] additionally asks that the loop's storage
+     - {b the [Tile_mma] k-loop}. A GEBP grid's A feeds are scalar element loads by design -- [rm]
+     of them per k step, each splat across a vector -- so [scalar_fp_ops] is [rm] in a perfectly
+     rendered tile (measured: exactly 4 at every x86 column with FMA). What pins these rows instead
+     is the anchor itself: [tmma_as_0__] is a name only {!C_syntax.try_register_tile}'s full-block
+     body emits, so a tiling that DECLINED and rendered the lane-0 scalar fallback carries it
+     nowhere and the row reports "no loop carried the anchor" -- which "every accumulator loop is
+     found by the census" above already treats as a failure. Declines being silent is exactly the
+     gh-ocannl-479 failure mode, and this is the census's version of the check. The vector-majority
+     claim below is what the rows say positively. - {b fp8 operands}. {!C_syntax.vec_bridge} has no
+     vector codec for fp8 and says so: it converts one lane at a time through the scalar path's own
+     [convert_precision], with the arithmetic around it staying vectorized. The census deliberately
+     selects the accumulator loop outside that codec, so its scalar counts include the codec's
+     designed per-lane work. Excluding fp8 from a claim about wholly-vector rendering is therefore
+     still necessary even though its profile now genuinely covers the combine and its libm claim. *)
+  let whole_vector_rendering r =
+    match r.loop.kind with
+    | Tile -> false
+    | Reduce -> not (String.equal r.loop.store (Ir.Ops.prec_string Ir.Ops.fp8))
+  in
+  (* On a host whose compiler accepts none of the named [-march] targets -- Apple clang on Apple
+     Silicon, which is CI's macos-latest -- only the [native] column survives, and this claim's
+     population is empty. Reported as SKIPPED rather than left to fail on emptiness: the claim
+     genuinely was not evaluated there, and [Verdict.skipped] is the channel that says so while
+     keeping the golden one line per claim on every host. The two claims above still cover that
+     run. *)
+  let whole_vector_population = List.filter served_named ~f:whole_vector_rendering in
+  (* {b The half of the reading that is not a compiler-version fact.} "Wholly scalar" -- [vector_ops
+     = 0] -- is the gh-ocannl-621 class: an arm gcc accepted and then rendered element by element,
+     which is the outcome the census exists to catch and which no gcc since has disagreed about on
+     any row here. It is held over EVERY row of the population, including the ones the strict claim
+     below has to let go of, so that dropping a row from that claim never leaves it unclaimed. *)
+  let wholly_scalar r = match counts r with Some c -> c.Census.vector_ops = 0 | None -> false in
+  let wholly_scalar_claim =
+    in_piece
+      "no accumulator loop is rendered wholly scalar where a named target's ISA has the operation"
+  in
+  if List.is_empty whole_vector_population then
+    Verdict.skipped ~aggregation:`Environment
+      ~backend:"no named -march target accepted by this host's toolchain" wholly_scalar_claim
+  else claim_none wholly_scalar_claim whole_vector_population ~f:wholly_scalar;
+  (* {b And the half that is.} [scalar_fp_ops = 0] additionally asks that the loop's storage
          BRIDGE compiled whole-vector, and for (fp16 storage, f32 compute) that can be the
          compiler's choice rather than the target's -- gcc 13.4 lowers the portable
          [__builtin_convertvector] per lane on [-march=sapphirerapids] where gcc 15.2 lowers it
@@ -2123,269 +2227,305 @@ let () =
          either gcc -- the strict claim still covers them. The excluded rows are named on stderr;
          they keep the wholly-scalar claim above, and their bridge is still pinned by the
          codec-coverage claims, which are about the source and so are compiler-independent. *)
-      (* gh-ocannl-1157: the f32 blend tests NaN through integer magnitude bits, keeping
+  (* gh-ocannl-1157: the f32 blend tests NaN through integer magnitude bits, keeping
          clang 18's widened-fp16 Max/Min rows under this same strict claim. *)
-      let scalarization_population =
-        List.filter whole_vector_population ~f:(fun r -> r.bridge_packed)
-      in
-      let bridge_excluded = List.filter whole_vector_population ~f:(fun r -> not r.bridge_packed) in
-      if not (List.is_empty bridge_excluded) then (
-        Stdio.eprintf
-          "  %d row(s) outside %S: this toolchain lowers their fp16 widening bridge per lane (not \
-           part of the golden):\n"
-          (List.length bridge_excluded) scalarization_claim;
-        List.iter bridge_excluded ~f:(fun r -> Stdio.eprintf "    %s\n" (describe r)));
-      if List.is_empty scalarization_population then
-        Verdict.skipped ~aggregation:`Environment
-          ~backend:
-            "no named -march target whose toolchain lowers these loops' storage bridges \
-             whole-vector"
-          scalarization_claim
-      else claim_none scalarization_claim scalarization_population ~f:scalarized;
-      (* {b The narrowing store, one conversion per vector} (gh-ocannl-1101). The fp16 narrowing
-         bridge writes the register tile's C-tile and every vectorized fp16-storage store, after the
-         loop the rows above census, so it is asked of the probe {!half_narrow_conversions} compiles
-         -- the macro the emission calls, at each width, at each level. Held where the target
-         converts fp16 packed at all ([fp16_convert]: F16C, AVX512-FP16, aarch64's baseline) and the
-         width is one of its registers: a wider vector is emulated in pieces, which is the
-         configuration being wrong for the machine, as for the rows above. Named columns only, like
-         the scalarization claim: the [native] column's compiler is whatever the run landed on. The
-         reading is exact -- one conversion instruction, no scalar FP: the lane-by-lane lowering gcc
-         gives the portable spelling on [x86-64-v3] and [x86-64-v4] is 4, 8 or 16 [vcvtps2ph], and
-         their count tells it from the one packed instruction wherever the lanes come from. *)
-      let narrow_claim =
-        "the emitted fp16 narrowing bridge is one packed conversion per vector where a named \
-         target converts fp16 packed"
-      in
-      let one_conversion (_, reading) =
-        match reading with Some (1, 0) -> true | Some _ | None -> false
-      in
-      if List.is_empty narrow_population then
-        Verdict.skipped ~aggregation:`Environment
-          ~backend:"no named -march target that converts fp16 packed accepted by this toolchain"
-          narrow_claim
-      else (
-        Verdict.p_all narrow_claim narrow_population ~f:one_conversion;
-        List.iter narrow_population ~f:(fun ((what, _) as probe) ->
-            if not (one_conversion probe) then
-              Stdio.eprintf "  %s violates %S (not part of the golden)\n" what narrow_claim));
-      (* The [Tile_mma] rows' own claim, in the shape gh-ocannl-614 measured the GEBP kernel in: the
-         k-loop's work is vector work. An inequality between the two counts rather than a threshold
-         on either, so a misclassified move cannot flip it, and it is two-sided in the way that
-         matters -- it fails both when the vector body collapses to per-lane arithmetic and when the
-         bridges stop being whole-vector loads (a per-lane [vec_bridge] arm inside the k-loop would
-         put [lanes] scalar conversions against the same [rm * rn] fused updates). Held where the
-         ISA has a fused multiply-add, since without one the tile's updates are [fmaf] calls per
-         lane and the row is about that instead (the "calls libm" claim above covers it there).
+  let scalarization_population =
+    List.filter whole_vector_population ~f:(fun r -> r.bridge_packed)
+  in
+  let bridge_excluded = List.filter whole_vector_population ~f:(fun r -> not r.bridge_packed) in
+  if not (List.is_empty bridge_excluded) then (
+    Stdio.eprintf
+      "  %d row(s) outside %S: this toolchain lowers their fp16 widening bridge per lane (not part \
+       of the golden):\n"
+      (List.length bridge_excluded) scalarization_claim;
+    List.iter bridge_excluded ~f:(fun r -> Stdio.eprintf "    %s\n" (describe r)));
+  if List.is_empty scalarization_population then
+    Verdict.skipped ~aggregation:`Environment
+      ~backend:
+        "no named -march target whose toolchain lowers these loops' storage bridges whole-vector"
+      scalarization_claim
+  else claim_none scalarization_claim scalarization_population ~f:scalarized;
+  (* {b The narrowing store, one conversion per vector} (gh-ocannl-1101). The fp16 narrowing bridge
+     writes the register tile's C-tile and every vectorized fp16-storage store, after the loop the
+     rows above census, so it is asked of the probe {!half_narrow_conversions} compiles -- the macro
+     the emission calls, at each width, at each level. Held where the target converts fp16 packed at
+     all ([fp16_convert]: F16C, AVX512-FP16, aarch64's baseline) and the width is one of its
+     registers: a wider vector is emulated in pieces, which is the configuration being wrong for the
+     machine, as for the rows above. Named columns only, like the scalarization claim: the [native]
+     column's compiler is whatever the run landed on. The reading is exact -- one conversion
+     instruction, no scalar FP: the lane-by-lane lowering gcc gives the portable spelling on
+     [x86-64-v3] and [x86-64-v4] is 4, 8 or 16 [vcvtps2ph], and their count tells it from the one
+     packed instruction wherever the lanes come from. *)
+  let narrow_claim =
+    in_piece
+      "the emitted fp16 narrowing bridge is one packed conversion per vector where a named target \
+       converts fp16 packed"
+  in
+  let one_conversion (_, reading) =
+    match reading with Some (1, 0) -> true | Some _ | None -> false
+  in
+  if not narrows_half then ()
+  else if List.is_empty narrow_population then
+    Verdict.skipped ~aggregation:`Environment
+      ~backend:"no named -march target that converts fp16 packed accepted by this toolchain"
+      narrow_claim
+  else (
+    Verdict.p_all narrow_claim narrow_population ~f:one_conversion;
+    List.iter narrow_population ~f:(fun ((what, _) as probe) ->
+        if not (one_conversion probe) then
+          Stdio.eprintf "  %s violates %S (not part of the golden)\n" what narrow_claim));
+  (* The [Tile_mma] rows' own claim, in the shape gh-ocannl-614 measured the GEBP kernel in: the
+     k-loop's work is vector work. An inequality between the two counts rather than a threshold on
+     either, so a misclassified move cannot flip it, and it is two-sided in the way that matters --
+     it fails both when the vector body collapses to per-lane arithmetic and when the bridges stop
+     being whole-vector loads (a per-lane [vec_bridge] arm inside the k-loop would put [lanes]
+     scalar conversions against the same [rm * rn] fused updates). Held where the ISA has a fused
+     multiply-add, since without one the tile's updates are [fmaf] calls per lane and the row is
+     about that instead (the "calls libm" claim above covers it there).
 
-         Held over the FULL passes only. A column-tail pass's grid can be one vector wide, which
-         puts its [rm] A splats -- scalar-classified on x86, where [vbroadcastss] is a scalar-single
-         mnemonic -- against as few as [rm] fused updates, and a zeroed partial load adds scalar
-         moves of its own: the inequality stops measuring the rendering there (clang at [x86-64-v3]
-         reads [vector=10 scalar_fp=10] on a 4x1 tail it rendered perfectly). The per-geometry FMA
-         claim below is what covers the tail passes. *)
-      let tile_rows =
-        List.filter served ~f:(fun r -> match r.loop.kind with Tile -> true | Reduce -> false)
-      in
-      let full_pass_rows =
-        List.filter tile_rows ~f:(fun r ->
-            match r.loop.geometry with Some { pass = Tail; _ } -> false | _ -> true)
-      in
-      let tile_claim =
-        "every register-tiled Tile_mma k-loop does more vector than scalar work where the ISA has \
-         a fused multiply-add"
-      in
-      if List.is_empty full_pass_rows then
-        Verdict.skipped ~aggregation:`Environment
-          ~backend:"no accepted target serves the Tile_mma rows" tile_claim
-      else
-        claim_all tile_claim full_pass_rows ~f:(fun r ->
-            match counts r with
-            | Some c -> c.Census.vector_ops > c.Census.scalar_fp_ops
-            | None -> false);
-      (* {2 Per geometry: one vector FMA per C-tile register per k step, and a resident C-tile}
+     Held over the FULL passes only. A column-tail pass's grid can be one vector wide, which puts
+     its [rm] A splats -- scalar-classified on x86, where [vbroadcastss] is a scalar-single mnemonic
+     -- against as few as [rm] fused updates, and a zeroed partial load adds scalar moves of its
+     own: the inequality stops measuring the rendering there (clang at [x86-64-v3] reads [vector=10
+     scalar_fp=10] on a 4x1 tail it rendered perfectly). The per-geometry FMA claim below is what
+     covers the tail passes. *)
+  let tile_rows =
+    List.filter served ~f:(fun r -> match r.loop.kind with Tile -> true | Reduce -> false)
+  in
+  let full_pass_rows =
+    List.filter tile_rows ~f:(fun r ->
+        match r.loop.geometry with Some { pass = Tail; _ } -> false | _ -> true)
+  in
+  let tile_claim =
+    in_piece
+      "every register-tiled Tile_mma k-loop does more vector than scalar work where the ISA has a \
+       fused multiply-add"
+  in
+  if List.is_empty full_pass_rows then
+    Verdict.skipped ~aggregation:`Environment ~backend:"no accepted target serves the Tile_mma rows"
+      tile_claim
+  else
+    claim_all tile_claim full_pass_rows ~f:(fun r ->
+        match counts r with Some c -> c.Census.vector_ops > c.Census.scalar_fp_ops | None -> false);
+  (* {2 Per geometry: one vector FMA per C-tile register per k step, and a resident C-tile}
 
-         The two claims gh-ocannl-614's measurement was an asm read of, held over every
-         register-tile row -- the default tiles, every seeded alternative, and every column-tail
-         pass -- in every column whose ISA serves it (the population of the claim above).
+     The two claims gh-ocannl-614's measurement was an asm read of, held over every register-tile
+     row -- the default tiles, every seeded alternative, and every column-tail pass -- in every
+     column whose ISA serves it (the population of the claim above).
 
-         {b One whole-width vector FMA per update.} A k-step of a [rows x cols] pass issues [rows *
-         cols] fused updates, one per C-tile register, and a rendering that kept each one ONE vector
-         operation issues exactly that many vector FMAs per k-step, each at the row's vector width.
-         The loop may be unrolled, so the count is a positive multiple of the grid rather than equal
-         to it; a per-lane rendering of the update issues no vector FMA at all; and an update the
-         compiler SPLIT issues a count an unroll by two would also give, at half the width -- which
-         the summed register widths ({!Census.counts.vector_fma_bytes}) tell apart. That last one is
-         not hypothetical: clang on [-march=x86-64-v4] and [sapphirerapids] prefers 256-bit vectors
-         and legalized the 64-byte tile as [ymm] halves, doubling the grid's register demand into a
-         spill, until the emission stated the width it meant ([OCANNL_WIDE_VECTOR_KERNEL],
-         gh-ocannl-1103) -- the clang columns hold it to that. The vector-majority claim above sees
-         none of the three as long as the loads around them stay packed. *)
-      let geometry_rows =
-        List.filter_map tile_rows ~f:(fun r -> Option.map r.loop.geometry ~f:(fun g -> (r, g)))
-      in
-      let fma_claim =
-        "every register-tile accumulator update is one whole-width vector FMA per k step where the \
-         ISA has a fused multiply-add"
-      in
-      let one_whole_fma (r, g) =
-        match counts r with
-        | Some c ->
-            c.Census.vector_fma_ops > 0
-            && c.Census.vector_fma_ops % (g.rows * g.cols) = 0
-            && c.Census.vector_fma_bytes = c.Census.vector_fma_ops * r.width
-        | None -> false
-      in
-      if List.is_empty geometry_rows then
-        Verdict.skipped ~aggregation:`Environment
-          ~backend:"no accepted target serves the register-tile rows" fma_claim
-      else (
-        Verdict.p_all fma_claim geometry_rows ~f:one_whole_fma;
-        report fma_claim (List.map geometry_rows ~f:fst) ~f:(fun r ->
-            match r.loop.geometry with Some g -> not (one_whole_fma (r, g)) | None -> true));
-      (* {b A resident C-tile.} gh-ocannl-614's spill -- 73 stack references in a k-loop that holds
-         none when the tile fits -- is the finding this matrix exists to report rather than an asm
-         read to rediscover. Claimed where the pass CAN be resident: its accumulator grid, the
-         smaller of its two operand sets (the [cols] B rows reused down the rows, or the [rows] A
-         splats reused across the columns) and one register for the other operand fit the target's
-         vector registers -- {!Ir.Register_tile.resident_floor}, the count
-         {!Ir.Register_tile.rn_cap} fits the default tile to (gh-ocannl-1285). That is the least any
-         allocation keeping every operand in a register needs, so a stack reference there is the
-         allocator's (or the emission's) doing, not the geometry's. Held against each COLUMN's
-         register count rather than the one the emitting child fitted its geometries to
-         ({!census_registers}), because one kernel is compiled for several targets: the 16-byte
-         kernels are fitted to NEON's 32 registers and also compiled for the x86 columns' 16 -- the
-         rows that fall outside are listed on stderr, where a geometry the target cannot hold is
-         visible without failing a golden that is about the emission. *)
-      let resident_floor (g : tile_geometry) =
-        Ir.Register_tile.resident_floor { rm = g.rows; rn = g.cols; lanes = 1 }
-      in
-      let fits (r, g) = resident_floor g <= r.caps.vector_registers in
-      let resident_rows = List.filter geometry_rows ~f:fits in
-      let crowded = List.filter geometry_rows ~f:(fun rg -> not (fits rg)) in
-      if not (List.is_empty crowded) then (
-        Stdio.eprintf
-          "  %d register-tile row(s) whose pass needs more vector registers than the target has \
-           (not part of the golden):\n"
-          (List.length crowded);
-        List.iter crowded ~f:(fun (r, g) ->
-            Stdio.eprintf "    %s needs %d of %d -> %s\n" (describe r) (resident_floor g)
-              r.caps.vector_registers
-              (match r.profile with Some p -> Census.to_line p | None -> "no loop")));
-      (* {b No known defects.} The first gcc run of these rows (gh-ocannl-948) found two constructs
-         whose k-loop touches the stack although the pass fits, on every x86 column with an FMA --
-         defects in the EMISSION, which this claim pinned as CLASSES (a predicate over rows, asked
-         of the column's compiler as well as its target) rather than as a list of rows, since which
-         widths and targets show them is a fact about the gcc version as much as about the emission
-         (gh-ocannl-752's lesson), and a row list would pin CI's compiler. A second claim held that
-         each class still reproduced somewhere, so that a fix failed the golden and the class had to
-         leave the list: it could only shrink, and it is empty now.
+     {b One whole-width vector FMA per update.} A k-step of a [rows x cols] pass issues [rows *
+     cols] fused updates, one per C-tile register, and a rendering that kept each one ONE vector
+     operation issues exactly that many vector FMAs per k-step, each at the row's vector width. The
+     loop may be unrolled, so the count is a positive multiple of the grid rather than equal to it;
+     a per-lane rendering of the update issues no vector FMA at all; and an update the compiler
+     SPLIT issues a count an unroll by two would also give, at half the width -- which the summed
+     register widths ({!Census.counts.vector_fma_bytes}) tell apart. That last one is not
+     hypothetical: clang on [-march=x86-64-v4] and [sapphirerapids] prefers 256-bit vectors and
+     legalized the 64-byte tile as [ymm] halves, doubling the grid's register demand into a spill,
+     until the emission stated the width it meant ([OCANNL_WIDE_VECTOR_KERNEL], gh-ocannl-1103) --
+     the clang columns hold it to that. The vector-majority claim above sees none of the three as
+     long as the loads around them stay packed. *)
+  let geometry_rows =
+    List.filter_map tile_rows ~f:(fun r -> Option.map r.loop.geometry ~f:(fun g -> (r, g)))
+  in
+  let fma_claim =
+    in_piece
+      "every register-tile accumulator update is one whole-width vector FMA per k step where the \
+       ISA has a fused multiply-add"
+  in
+  let one_whole_fma (r, g) =
+    match counts r with
+    | Some c ->
+        c.Census.vector_fma_ops > 0
+        && c.Census.vector_fma_ops % (g.rows * g.cols) = 0
+        && c.Census.vector_fma_bytes = c.Census.vector_fma_ops * r.width
+    | None -> false
+  in
+  if List.is_empty geometry_rows then
+    Verdict.skipped ~aggregation:`Environment
+      ~backend:"no accepted target serves the register-tile rows" fma_claim
+  else (
+    Verdict.p_all fma_claim geometry_rows ~f:one_whole_fma;
+    report fma_claim (List.map geometry_rows ~f:fst) ~f:(fun r ->
+        match r.loop.geometry with Some g -> not (one_whole_fma (r, g)) | None -> true));
+  (* {b A resident C-tile.} gh-ocannl-614's spill -- 73 stack references in a k-loop that holds none
+     when the tile fits -- is the finding this matrix exists to report rather than an asm read to
+     rediscover. Claimed where the pass CAN be resident: its accumulator grid, the smaller of its
+     two operand sets (the [cols] B rows reused down the rows, or the [rows] A splats reused across
+     the columns) and one register for the other operand fit the target's vector registers --
+     {!Ir.Register_tile.resident_floor}, the count {!Ir.Register_tile.rn_cap} fits the default tile
+     to (gh-ocannl-1285). That is the least any allocation keeping every operand in a register
+     needs, so a stack reference there is the allocator's (or the emission's) doing, not the
+     geometry's. Held against each COLUMN's register count rather than the one the emitting child
+     fitted its geometries to ({!census_registers}), because one kernel is compiled for several
+     targets: the 16-byte kernels are fitted to NEON's 32 registers and also compiled for the x86
+     columns' 16 -- the rows that fall outside are listed on stderr, where a geometry the target
+     cannot hold is visible without failing a golden that is about the emission. *)
+  let resident_floor (g : tile_geometry) =
+    Ir.Register_tile.resident_floor { rm = g.rows; rn = g.cols; lanes = 1 }
+  in
+  let fits (r, g) = resident_floor g <= r.caps.vector_registers in
+  let resident_rows = List.filter geometry_rows ~f:fits in
+  let crowded = List.filter geometry_rows ~f:(fun rg -> not (fits rg)) in
+  if not (List.is_empty crowded) then (
+    Stdio.eprintf
+      "  %d register-tile row(s) whose pass needs more vector registers than the target has (not \
+       part of the golden):\n"
+      (List.length crowded);
+    List.iter crowded ~f:(fun (r, g) ->
+        Stdio.eprintf "    %s needs %d of %d -> %s\n" (describe r) (resident_floor g)
+          r.caps.vector_registers
+          (match r.profile with Some p -> Census.to_line p | None -> "no loop")));
+  (* {b No known defects.} The first gcc run of these rows (gh-ocannl-948) found two constructs
+     whose k-loop touches the stack although the pass fits, on every x86 column with an FMA --
+     defects in the EMISSION, which this claim pinned as CLASSES (a predicate over rows, asked of
+     the column's compiler as well as its target) rather than as a list of rows, since which widths
+     and targets show them is a fact about the gcc version as much as about the emission
+     (gh-ocannl-752's lesson), and a row list would pin CI's compiler. A second claim held that each
+     class still reproduced somewhere, so that a fix failed the golden and the class had to leave
+     the list: it could only shrink, and it is empty now.
 
-         - The partial-vector column tail, [vtyp x = {0}; __builtin_memcpy(&x, p, <width>)], went
-         through a stack slot on every k step (6 to 8 references in a one-column tail).
-         gh-ocannl-1071 fixed it in the emission: a partial vector crosses lane by lane. - The
-         narrow-storage widening bridges ([vec_bridge]'s arms for a storage precision narrower than
-         the compute one) went through general-purpose registers ([movq]/[shrq]) and the stack: the
-         (fp16, f32) tile at 12 to 35 references on gcc 15, where [__builtin_convertvector] from
-         [_Float16] has no packed lowering without AVX512-FP16, and on CI's gcc 13 the bf16 tile at
-         [-march=sapphirerapids] (2 references), where the zero-extension of an 8-byte vector
-         lowered as a split whose temporaries spilled a 31-register tile. gh-ocannl-1072 fixed it in
-         the emission: a bridge at an x86 register's width calls one packed instruction
-         ([Builtins_cc]'s [OCANNL_VEC_WIDEN_*_X<lanes>]).
+     - The partial-vector column tail, [vtyp x = {0}; __builtin_memcpy(&x, p, <width>)], went
+     through a stack slot on every k step (6 to 8 references in a one-column tail). gh-ocannl-1071
+     fixed it in the emission: a partial vector crosses lane by lane. - The narrow-storage widening
+     bridges ([vec_bridge]'s arms for a storage precision narrower than the compute one) went
+     through general-purpose registers ([movq]/[shrq]) and the stack: the (fp16, f32) tile at 12 to
+     35 references on gcc 15, where [__builtin_convertvector] from [_Float16] has no packed lowering
+     without AVX512-FP16, and on CI's gcc 13 the bf16 tile at [-march=sapphirerapids] (2
+     references), where the zero-extension of an 8-byte vector lowered as a split whose temporaries
+     spilled a 31-register tile. gh-ocannl-1072 fixed it in the emission: a bridge at an x86
+     register's width calls one packed instruction ([Builtins_cc]'s [OCANNL_VEC_WIDEN_*_X<lanes>]).
 
-         The first run that compiled the aarch64 columns found a third construct, which no class had
-         covered because none had been compiled: the bf16 tile at 16 bytes and [-O3], 4 references
-         on both aarch64 targets. The widening itself was vector; gcc's pre-RA scheduler, on at
-         [-O3] only on aarch64, hoisted the four rows' scalar A widenings ([ldrh]/[fmov]/[shl])
-         above the FMAs, and 24 accumulators + 6 B vectors + 4 A registers are 34 of 32, so two
-         accumulators went to the stack. The emission now widens the A column four rows at a time
-         there ({!Ir.C_syntax.vec_widen_rows_macros}): one register, which NEON's by-lane [fmla]
-         reads each row from.
+     The first run that compiled the aarch64 columns found a third construct, which no class had
+     covered because none had been compiled: the bf16 tile at 16 bytes and [-O3], 4 references on
+     both aarch64 targets. The widening itself was vector; gcc's pre-RA scheduler, on at [-O3] only
+     on aarch64, hoisted the four rows' scalar A widenings ([ldrh]/[fmov]/[shl]) above the FMAs, and
+     24 accumulators + 6 B vectors + 4 A registers are 34 of 32, so two accumulators went to the
+     stack. The emission now widens the A column four rows at a time there
+     ({!Ir.C_syntax.vec_widen_rows_macros}): one register, which NEON's by-lane [fmla] reads each
+     row from.
 
-         The narrow-storage twins of the partial-tail rows (gh-ocannl-1102) found a fourth, the
-         first class's narrow sibling: [vec_bridge]'s bf16 and fp16 arms still crossed a partial
-         vector with a width-counted [__builtin_memcpy] against a zeroed one, inside the bridge
-         macros, so the column tail's B-row load built its vector in a stack slot on every k step (2
-         to 4 references) on every x86 column with an FMA and on both aarch64 targets, and the store
-         after the k-loop round-tripped through one too. The emission now stages the partial
-         column's storage bits lane by lane in a whole vector the bridge converts, and the claim
-         below reads the load and the store as well as the k-loop.
+     The narrow-storage twins of the partial-tail rows (gh-ocannl-1102) found a fourth, the first
+     class's narrow sibling: [vec_bridge]'s bf16 and fp16 arms still crossed a partial vector with a
+     width-counted [__builtin_memcpy] against a zeroed one, inside the bridge macros, so the column
+     tail's B-row load built its vector in a stack slot on every k step (2 to 4 references) on every
+     x86 column with an FMA and on both aarch64 targets, and the store after the k-loop
+     round-tripped through one too. The emission now stages the partial column's storage bits lane
+     by lane in a whole vector the bridge converts, and the claim below reads the load and the store
+     as well as the k-loop.
 
-         The clang x86 columns (gh-ocannl-1103) arrived red on 42 resident rows and on the FMA and
-         narrowing claims -- and, once the probes read, on the scalarization claim -- and none of it
-         was clang's codegen. Three were this census's READER: clang allocates [%rbp] as a data
-         pointer (a tile's B row, [vmovups -460(%rbp), %ymm14]), whose loads read as spills -- a
-         memory operand through [%rbp] is now a stack reference only in a function that made it the
-         frame pointer; clang loads four fp16 lanes with [vmovsd] where gcc writes [vmovq], which
-         read as scalar FP -- a scalar move from memory is now a load; and clang annotates a
-         function label ([name: # @name]), so the fp16 bridge probes found no function and reported
-         every bridge per lane. The fourth was the EMISSION: under clang's 256-bit preference at
-         [x86-64-v4] and [sapphirerapids] a 64-byte vector the kernel declares is legalized as [ymm]
-         halves, 24 accumulators became 48 and spilled (22 to 74 references per k step), and nothing
-         in the kernel said that the width was meant. A kernel with a vector wider than 32 bytes now
-         carries [OCANNL_WIDE_VECTOR_KERNEL] ([min_vector_width(512)] where the compiler has it),
-         and every clang row reads 0.
+     The clang x86 columns (gh-ocannl-1103) arrived red on 42 resident rows and on the FMA and
+     narrowing claims -- and, once the probes read, on the scalarization claim -- and none of it was
+     clang's codegen. Three were this census's READER: clang allocates [%rbp] as a data pointer (a
+     tile's B row, [vmovups -460(%rbp), %ymm14]), whose loads read as spills -- a memory operand
+     through [%rbp] is now a stack reference only in a function that made it the frame pointer;
+     clang loads four fp16 lanes with [vmovsd] where gcc writes [vmovq], which read as scalar FP --
+     a scalar move from memory is now a load; and clang annotates a function label ([name: #
+     @name]), so the fp16 bridge probes found no function and reported every bridge per lane. The
+     fourth was the EMISSION: under clang's 256-bit preference at [x86-64-v4] and [sapphirerapids] a
+     64-byte vector the kernel declares is legalized as [ymm] halves, 24 accumulators became 48 and
+     spilled (22 to 74 references per k step), and nothing in the kernel said that the width was
+     meant. A kernel with a vector wider than 32 bytes now carries [OCANNL_WIDE_VECTOR_KERNEL]
+     ([min_vector_width(512)] where the compiler has it), and every clang row reads 0.
 
-         The aarch64 columns under gcc 13 and 14 (gh-ocannl-1158) arrived red on five claims gcc 15
-         passes, from two constructs gcc 15 lowers well and its predecessors do not. The bridges:
-         [__builtin_convertvector] at NEON's 4-lane width -- the bf16 zero-extension and the fp16
-         widening and narrowing -- went lane by lane through general-purpose registers or a scalar
-         [fcvt] each, so the bf16 reductions scalarized, the (fp16, f32) tile did more scalar than
-         vector work, and the bf16 and fp16 tiles and their column tails spilled. The X4 bridges now
-         call [<arm_neon.h>]'s builtins as gcc spells them there, one [shll], [fcvtl] or [fcvtn]
-         each. And the schedule: gcc 13's pre-RA scheduler hoisted all four rows' A elements to the
-         top of the f32 4x6 tile's k step, 34 of 32 registers, and interleaved the bf16 C-tile's
-         narrowing stores until accumulators spilled. A scheduling fence ([OCANNL_TILE_FENCE], gcc
-         on aarch64 only) now separates the k step's rows and the narrowing stores. gcc 15's 16-byte
-         rows read exactly as before, and over the 72 16-byte tile rows the three majors now read
-         the same totals: 80 scalar FP instructions, no stack reference.
+     The aarch64 columns under gcc 13 and 14 (gh-ocannl-1158) arrived red on five claims gcc 15
+     passes, from two constructs gcc 15 lowers well and its predecessors do not. The bridges:
+     [__builtin_convertvector] at NEON's 4-lane width -- the bf16 zero-extension and the fp16
+     widening and narrowing -- went lane by lane through general-purpose registers or a scalar
+     [fcvt] each, so the bf16 reductions scalarized, the (fp16, f32) tile did more scalar than
+     vector work, and the bf16 and fp16 tiles and their column tails spilled. The X4 bridges now
+     call [<arm_neon.h>]'s builtins as gcc spells them there, one [shll], [fcvtl] or [fcvtn] each.
+     And the schedule: gcc 13's pre-RA scheduler hoisted all four rows' A elements to the top of the
+     f32 4x6 tile's k step, 34 of 32 registers, and interleaved the bf16 C-tile's narrowing stores
+     until accumulators spilled. A scheduling fence ([OCANNL_TILE_FENCE], gcc on aarch64 only) now
+     separates the k step's rows and the narrowing stores. gcc 15's 16-byte rows read exactly as
+     before, and over the 72 16-byte tile rows the three majors now read the same totals: 80 scalar
+     FP instructions, no stack reference.
 
-         A defect found here again is a failure of this claim, which is the point: fix it, or
-         reinstate the class list and its reproduction claim with the defect named -- asked of the
-         column's compiler ([__clang__] in its predefined macros) where it is one compiler's. *)
-      let spills r = match counts r with Some c -> c.Census.stack_refs > 0 | None -> true in
-      let resident_claim =
-        "no register-tile k-loop references the stack where its pass fits the target's vector \
-         registers"
+     A defect found here again is a failure of this claim, which is the point: fix it, or reinstate
+     the class list and its reproduction claim with the defect named -- asked of the column's
+     compiler ([__clang__] in its predefined macros) where it is one compiler's. *)
+  let spills r = match counts r with Some c -> c.Census.stack_refs > 0 | None -> true in
+  let resident_claim =
+    in_piece
+      "no register-tile k-loop references the stack where its pass fits the target's vector \
+       registers"
+  in
+  if List.is_empty resident_rows then
+    Verdict.skipped ~aggregation:`Environment
+      ~backend:"no accepted target holds a register-tile pass in its vector registers"
+      resident_claim
+  else claim_none resident_claim (List.map resident_rows ~f:fst) ~f:spills;
+  (* {b A resident partial column at its edges too} (gh-ocannl-1102). The claim above reads the
+     k-loop; a column tail's partial vector also crosses memory once before it, as the C-tile load,
+     and once after it, as the store -- straight-line code no loop of its own carries, so it is read
+     by line attribution instead ({!Census.attributed_in}): every instruction the listing attributes
+     to a line that moves the partial column ({!field-kernel_loop.edge}), the staging blocks' casts
+     and bridge calls included. A value round-tripping through a stack slot begins with a STORE to
+     it, which is what the width-counted [__builtin_memcpy] of the storage bridges did at every
+     narrow tail's store (found at gh-ocannl-1101): [vmovdqa %xmm0, (%rsp)] then [movzwl 4(%rsp)]
+     for a three-lane fp16 store, 5 to 16 stack writes on these lines per row before the fix. So the
+     reading is stack WRITES, not references: the bf16 narrowing's rounding constants are loop
+     invariants the enclosing pass hoists, and where its registers run out gcc reloads them at the
+     bridge call -- a read of a slot written once, outside, which reads 1 to 3 references on the
+     fixed rows at [x86-64-v3], [x86-64-v4] and [sapphirerapids]. A row whose lines carry no
+     instruction at all fails too: the reading would be vacuous. *)
+  let edge_claim =
+    in_piece
+      "no register-tile column tail stores its partial vector to the stack where its pass fits the \
+       target's vector registers"
+  in
+  let edge_rows =
+    List.filter_map resident_rows ~f:(fun (r, _) -> Option.map r.edge_profile ~f:(fun p -> (r, p)))
+  in
+  let edge_spills (_, (p : Census.counts)) = p.instructions = 0 || p.stack_writes > 0 in
+  if List.is_empty edge_rows then
+    Verdict.skipped ~aggregation:`Environment
+      ~backend:"no accepted target holds a register-tile column tail in its vector registers"
+      edge_claim
+  else (
+    Verdict.p_none edge_claim edge_rows ~f:edge_spills;
+    List.iter edge_rows ~f:(fun ((r, p) as row) ->
+        if edge_spills row then
+          Stdio.eprintf
+            "  %s violates %S: edge insns=%d stack=%d writes=%d (not part of the golden)\n"
+            (describe r) edge_claim p.Census.instructions p.Census.stack_refs p.Census.stack_writes))
+
+let () =
+  match (Array.to_list Stdlib.Sys.argv, Stdlib.Sys.getenv_opt "CC_MARCH_CENSUS_EMIT") with
+  | [ _; "--cache-probe"; src; asm; report ], _ -> cache_probe_child ~src ~asm ~report
+  | _, Some dir -> build dir
+  | args, None ->
+      let exe = Stdlib.Sys.executable_name in
+      let usage () =
+        failwith
+          (Printf.sprintf "usage: %s emission DUNE_FILE | %s PIECE, where PIECE is one of: %s" exe
+             exe
+             (String.concat ~sep:", " (List.map (pieces ()) ~f:piece_name)))
       in
-      if List.is_empty resident_rows then
-        Verdict.skipped ~aggregation:`Environment
-          ~backend:"no accepted target holds a register-tile pass in its vector registers"
-          resident_claim
-      else claim_none resident_claim (List.map resident_rows ~f:fst) ~f:spills;
-      (* {b A resident partial column at its edges too} (gh-ocannl-1102). The claim above reads the
-         k-loop; a column tail's partial vector also crosses memory once before it, as the C-tile
-         load, and once after it, as the store -- straight-line code no loop of its own carries, so
-         it is read by line attribution instead ({!Census.attributed_in}): every instruction the
-         listing attributes to a line that moves the partial column ({!field-kernel_loop.edge}), the
-         staging blocks' casts and bridge calls included. A value round-tripping through a stack
-         slot begins with a STORE to it, which is what the width-counted [__builtin_memcpy] of the
-         storage bridges did at every narrow tail's store (found at gh-ocannl-1101): [vmovdqa %xmm0,
-         (%rsp)] then [movzwl 4(%rsp)] for a three-lane fp16 store, 5 to 16 stack writes on these
-         lines per row before the fix. So the reading is stack WRITES, not references: the bf16
-         narrowing's rounding constants are loop invariants the enclosing pass hoists, and where its
-         registers run out gcc reloads them at the bridge call -- a read of a slot written once,
-         outside, which reads 1 to 3 references on the fixed rows at [x86-64-v3], [x86-64-v4] and
-         [sapphirerapids]. A row whose lines carry no instruction at all fails too: the reading
-         would be vacuous. *)
-      let edge_claim =
-        "no register-tile column tail stores its partial vector to the stack where its pass fits \
-         the target's vector registers"
+      let piece, run =
+        match args with
+        | [ _; "emission"; dune_file ] -> (Emission, fun ~root -> emission ~exe ~root ~dune_file)
+        | [ _; name ] -> (
+            match List.find (pieces ()) ~f:(fun p -> String.equal (piece_name p) name) with
+            | Some (Columns { width; fp16; family } as piece) ->
+                let columns =
+                  List.Assoc.find_exn (toolchain_families ()) family ~equal:String.equal
+                in
+                (piece, fun ~root -> census ~exe ~root ~piece ~width ~fp16 ~columns)
+            | Some Emission | None -> usage ())
+        | _ -> usage ()
       in
-      let edge_rows =
-        List.filter_map resident_rows ~f:(fun (r, _) ->
-            Option.map r.edge_profile ~f:(fun p -> (r, p)))
+      (* Each piece in a directory of its own: the pieces run concurrently, in one dune action
+         directory, and each empties its directory first. *)
+      let root =
+        Stdlib.Filename.concat
+          (Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) "cc_march_census_kernels")
+          (piece_name piece)
       in
-      let edge_spills (_, (p : Census.counts)) = p.instructions = 0 || p.stack_writes > 0 in
-      if List.is_empty edge_rows then
-        Verdict.skipped ~aggregation:`Environment
-          ~backend:"no accepted target holds a register-tile column tail in its vector registers"
-          edge_claim
-      else (
-        Verdict.p_none edge_claim edge_rows ~f:edge_spills;
-        List.iter edge_rows ~f:(fun ((r, p) as row) ->
-            if edge_spills row then
-              Stdio.eprintf
-                "  %s violates %S: edge insns=%d stack=%d writes=%d (not part of the golden)\n"
-                (describe r) edge_claim p.Census.instructions p.Census.stack_refs
-                p.Census.stack_writes))
+      rm_rf root;
+      mkdir_p root;
+      let start = Unix.gettimeofday () in
+      run ~root;
+      Stdio.eprintf "cc census piece %s: %.0fs (not part of the golden)\n" (piece_name piece)
+        (Unix.gettimeofday () -. start)
