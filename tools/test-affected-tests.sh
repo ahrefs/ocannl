@@ -58,6 +58,7 @@ cat >"$repo/lib/dune" <<'DUNE'
 (library (name core) (modules core helper lx))
 (ocamllex lx)
 (library (name leaf) (modules leaf))
+(library (name plain_core) (modules plain_core) (libraries core))
 (library (name myppx) (kind ppx_rewriter) (modules myppx))
 (library (name optlib) (modules optlib) (optional) (libraries not_installed_anywhere))
 (library (name stubbed) (modules stubbed) (foreign_stubs (language c) (names stubbed_c)))
@@ -70,8 +71,9 @@ cat >"$repo/mid/dune" <<'DUNE'
 DUNE
 cat >"$repo/t1/dune" <<'DUNE'
 (test (name t_core) (modules t_core) (libraries mid))
-; Links core through mid and names nothing of it: link-only for a core edit.
-(test (name t_mid) (modules t_mid) (libraries mid))
+; Links core through a private helper library and names nothing of it: link-only for a core
+; edit. (Through mid it would not be: mid's (select) module is code not all known.)
+(test (name t_mid) (modules t_mid) (libraries plain_core))
 ; The same executable under an unknown action: blind, so never ranked link-only.
 (rule (alias runtest-t_mid-blind) (deps (package fx)) (action (run %{exe:t_mid.exe})))
 (test (name t_leaf) (modules t_leaf) (libraries leaf) (flags (:standard -open Leaf)))
@@ -176,6 +178,7 @@ printf 'let used = 1\nlet unused = 2\n' >"$repo/lib/helper.ml"
 printf 'module H = Helper\n' >"$repo/lib/core.ml"
 printf 'let () = () (* uses Helper.used *)\n' >"$repo/t1/t_core.ml"
 printf 'let () = ()\n' >"$repo/t1/t_mid.ml"
+printf 'let () = ()\n' >"$repo/lib/plain_core.ml"
 printf '(rule (alias runtest-inc) (action (progn)))\n' >"$repo/t6/extra.inc"
 printf 'let () = () (* H *)\n' >"$repo/t2/gen.ml"
 git_q() { git -C "$repo" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
@@ -259,7 +262,7 @@ fi
 
 if harness_leg 'select choice'; then
   affected --files mid/choice.core.ml
-  expect 'a (select) choice maps to its module' 0 @t1/runtest-t_core @t1/runtest-t_mid @t1/runtest-t_mid-blind
+  expect 'a (select) choice maps to its module' 0 @t1/runtest-t_core
 fi
 
 if harness_leg 'tests helper module'; then
@@ -341,7 +344,7 @@ fi
 if harness_leg 'negated glob'; then
   affected --files mid/mid.ml
   expect 'a [!set] glob matches outside its set (the select-choice leg pins the inside)' 0 \
-    @t1/runtest-t_core @t1/runtest-t_mid @t1/runtest-t_mid-blind @t3/runtest-neg
+    @t1/runtest-t_core @t3/runtest-neg
 fi
 
 if harness_leg 'escaped glob'; then
@@ -491,8 +494,9 @@ if harness_leg 'link-only'; then
   else report 1 'an alias whose unknown action might read a changed path is never ranked link-only' "exit $rc; $(cat "$out")"; fi
   printf 'let used = 1\nlet unused = 3\n' >"$repo/lib/helper.ml"
   affected HEAD
+  # t_core links mid, whose (select) module is code not all known: never link-only.
   ordered 'a change to one definition ranks first only what names it' \
-    @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t5/slow-usesh @t1/runtest-t_core @t1/runtest-t_mid @t1/runtest-t_mid-blind @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen
+    @t1/runtest-t_core @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t5/slow-usesh @t1/runtest-t_mid @t1/runtest-t_mid-blind @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen
   printf 'let used = 2\nlet unused = 2\n' >"$repo/lib/helper.ml"
   affected HEAD
   ordered '... and t_core names `used`' \

@@ -946,6 +946,8 @@ sub stanza_sources {   # an @st entry's source files, or undef when they are not
   return undef if $s->{gen_mod};   # a generated module (a select, a rule's output): unknown, not empty
   return [map { @$_ } values %{$s->{mods}}] if $s->{mods};
   my $ds = static_of($i) // return undef;
+  # Under `(include_subdirs ...)` its sources extend into subdirectories: unknown.
+  return undef if grep { $_->{kind} eq "include_subdirs" && under($s->{dir}, $_->{dir}) } @dstanzas;
   my $mods = dfield($ds->{x}, "modules");
   my @names;
   if ($mods) {
@@ -1004,6 +1006,9 @@ sub own_tokens {   # the names an owner's own code mentions, or undef when its c
         # A changed library is not the owner's own code, even when private: its modules
         # name their own definitions.
         next if $seen{$j}++ || $st[$j]{kind} ne "library" || !is_private($j) || $mod_hit{$j};
+        # The same uncertainty checks as the owner's own stanza: a helper whose code
+        # is not all known leaves the owner's unknown too.
+        defined own_tokens($j) or return $st[$i]{own_tokens} = undef;
         $priv{$j} = 1;
         push @q, @{$st[$j]{to}};
       }
