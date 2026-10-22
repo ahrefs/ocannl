@@ -2022,7 +2022,14 @@ files.
   1 a window-anchored upper side is a theorem, and a round-trip one compares two separately sampled
   windows, which a uniformly delayed window does not report as contended. The error it would have
   refused — a window summed instead of minimized — belongs on the injected clock, where it needs no
-  device and no second window.
+  device and no second window. The round trip is the side that gets contended in a suite: under
+  `-j 8` sibling CUDA processes time-slice the GPU and hold a WHOLE 16-sample anchor window at 2-5
+  ms against an idle 5.6 us, so all three anchors can read ms while the isolated window between
+  them still has a fast majority (2026-10-22 rog-nv cuda sweep: 0.006 ms against 1.88 ms). A
+  reading under `floor/3` therefore resamples the anchor first (bounded: 32 windows or 2 s) — a
+  minimum over more samples only falls toward the true round trip, never below it, so no reading a
+  clean anchor refuses is admitted. Such a failure is not evidence that the instrument skipped its
+  sync: compare the isolated reading against a solo run's round trip before bisecting.
   The dispersion argument that rejected the mean for `Isolated` (a stall-cut 6-dispatch call read
   22x its own minimum, gh-ocannl-851) does not transfer to `Queued`: a stall lands inside one batch
   of `depth` dispatches among `samples` batches, so it moves the mean by a fraction of itself.
