@@ -666,11 +666,11 @@ for my $f (grep { $_ ne "" } split /\n/, slurp("$tmp/dune-files")) {
 }
 # An edit to a fragment a dune file `(include ...)`s (or `dynamic_include`s)
 # reaches like an edit to that dune file.
-my %fragment_dir;
+my %fragment_dirs;   # fragment -> every directory whose dune file includes it
 for my $s (grep { $_->{kind} =~ /^(?:dynamic_)?include$/ } @dstanzas) {
   my $frag = $s->{x}[1];
   my $p = !ref $frag && $frag !~ /%\{/ ? rpath($s->{dir}, $frag) : undef;
-  $fragment_dir{$p} = $s->{dir} if defined $p;
+  push @{$fragment_dirs{$p}}, $s->{dir} if defined $p;
 }
 
 # Each queried target's rule: the executables it runs, the files and globs it
@@ -838,25 +838,29 @@ for my $p (@changed) {
     push @parts, "compiled into $o, " . (@libs ? "bundled by " . join(", ", map { label($_) } @libs)
       : "which no stub archive bundles, so every executable and test stanza of its directory (" . scalar(@o) . ")");
   }
-  my $frag_of = $fragment_dir{$p};
-  $d = $frag_of if defined $frag_of;   # an included fragment counts as its dune file
-  if ($b eq "dune" || $b eq "dune-project" || $b eq "dune-workspace" || defined $frag_of) {
-    # A `dune` file's settings (`env`, `(dirs)`, ...) apply beneath it as well,
-    # as `dune-project`'s language and extensions do: every directory under it.
-    $dune_dirs{$_} = 1 for grep { under($_, $d) } $d, keys %$aliases;
-    @ix = grep { under($st[$_]{dir}, $d) } 0 .. $#st;
-    # Its rules make the files there: a rule elsewhere reading one of them (a
-    # fixture's generated sources) reads the change.
-    my $n_made = 0;
-    for my $a (grep { !under($_->{dir}, $d) } @al) {
-      for my $t (@{$a->{own}}) {
-        next unless grep({ under((dir_of($_))[0], $d) } keys %{$reads{$t}}) || grep { under($_->[0], $d) } @{$globs{$t}};
-        $n_made++ unless $read_by{$p}{$a->{name}}++;
-        last;
+  # An included fragment counts as the dune file of every directory including it.
+  my @frag_of = @{$fragment_dirs{$p} // []};
+  if ($b eq "dune" || $b eq "dune-project" || $b eq "dune-workspace" || @frag_of) {
+    for my $root (@frag_of ? @frag_of : ($d)) {
+      $data_dirs{$root} = 1;
+      # A `dune` file's settings (`env`, `(dirs)`, ...) apply beneath it as well,
+      # as `dune-project`'s language and extensions do: every directory under it.
+      $dune_dirs{$_} = 1 for grep { under($_, $root) } $root, keys %$aliases;
+      my @here = grep { under($st[$_]{dir}, $root) } 0 .. $#st;
+      push @ix, @here;
+      # Its rules make the files there: a rule elsewhere reading one of them (a
+      # fixture's generated sources) reads the change.
+      my $n_made = 0;
+      for my $a (grep { !under($_->{dir}, $root) } @al) {
+        for my $t (@{$a->{own}}) {
+          next unless grep({ under((dir_of($_))[0], $root) } keys %{$reads{$t}}) || grep { under($_->[0], $root) } @{$globs{$t}};
+          $n_made++ unless $read_by{$p}{$a->{name}}++;
+          last;
+        }
       }
+      push @parts, "every per-test alias and all " . scalar(@here) . " stanza(s) " . ($root eq "." ? "of the project" : "under $root")
+        . ($n_made ? "; files its rules make are read by the rules of $n_made alias(es) elsewhere" : "");
     }
-    push @parts, "every per-test alias and all " . scalar(@ix) . " stanza(s) " . ($d eq "." ? "of the project" : "under $d")
-      . ($n_made ? "; files its rules make are read by the rules of $n_made alias(es) elsewhere" : "");
   } elsif ($b =~ /^([^.]+)(?:\.[^.]+)*\.mli?$/) {
     my $mod = ucfirst $1;
     my $how = "module $mod of";
@@ -1134,11 +1138,11 @@ if ($rank_links) {
             ($rhs) = $head =~ /=([^=]*)\z/s or next;   # a declaration: no right-hand side
           } else { ($as_name, $rhs) = ($x, $head =~ s/:.*\z//sr) }
           $rhs =~ s/\(\*.*?\*\)//gs;   # comments
-          my @names = $rhs =~ /^\s*\(?\s*(?:[A-Z][\w']*\.)*([A-Z][\w']*)\s*(?:[:)]|\z)/s ? ($1) : ();
-          # A right-hand side not read as one path (a functor application, a
-          # first-class module, anything else): uncertain, so every module name in
-          # it counts as re-exported, and the wrapper's users are never link-only
-          # on its account.
+          my @names = $rhs =~ /^\s*\(?\s*([A-Z][\w']*)\s*(?:[:)]|\z)/s ? ($1) : ();
+          # A right-hand side not read as one plain module name (a qualified path,
+          # a functor application, anything else): uncertain, so every module name
+          # in it counts as re-exported, and the wrapper's users are never
+          # link-only on its account.
           @names = $rhs =~ /\b([A-Z][\w']*)/g if !@names && $rhs =~ /\S/;
           $as{$_}{$as_name} = 1 for grep { $_ ne $as_name } @names;
         }

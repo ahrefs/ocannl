@@ -27,7 +27,7 @@ unset DUNE_BUILD_DIR DUNE_ROOT
 export OCANNL_TOOL_FLEET_WORKER=none OCANNL_TOOL_TEST_RUNS=$TMP/runs
 
 repo=$TMP/proj
-mkdir -p "$repo/tools" "$repo/lib" "$repo/mid" "$repo/t1" "$repo/t2" "$repo/t3" "$repo/t4/sub" "$repo/t5" "$repo/t6" \
+mkdir -p "$repo/tools" "$repo/lib" "$repo/mid" "$repo/t1" "$repo/t2" "$repo/t3" "$repo/t4/sub" "$repo/t5" "$repo/t6" "$repo/t7" \
   "$repo/opt" "$repo/cfg" "$repo/docs" || exit 2
 cp "$HERE/affected-tests.sh" "$HERE/test-run.sh" "$repo/tools/" || exit 2
 # Whatever test-run.sh sources, derived from it rather than listed here.
@@ -48,6 +48,13 @@ cat >"$repo/opt/dune" <<'DUNE'
 DUNE
 # A rule whose action reads a generated file: `dune rules` builds that file to
 # print the rule, and what its action prints reaches dune's stderr.
+# t7 includes t6's fragment too, beside a golden pair only its dune file reaches.
+cat >"$repo/t7/dune" <<'DUNE'
+(include ../t6/extra.inc)
+(rule (target g7.actual) (action (with-stdout-to %{target} (echo g))))
+(rule (alias runtest-g7) (action (diff g7.expected g7.actual)))
+DUNE
+: >"$repo/t7/g7.expected"
 cat >"$repo/t6/dune" <<'DUNE'
 (rule (target word.txt) (action (progn (system "echo noise-from-an-action >&2") (with-stdout-to %{target} (echo dyn)))))
 (rule (target dyn.actual) (action (with-stdout-to %{target} (echo %{read:word.txt}))))
@@ -208,7 +215,8 @@ reached_by_core='@t1/runtest-t_core @t1/runtest-t_mid @t1/runtest-t_mid-blind @t
 # need one of them, and are not listed for that reason.
 opaque_all='@t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-t_mid @t1/runtest-t_mid-blind
   @t1/runtest-ta @t1/runtest-tb @t2/runtest-orphan @t2/runtest-pkg @t2/slow-gen @t3/runtest-py @t3/runtest-t_plain
-  @t3/runtest-t_stub @t4/runtest-t_gate @t4/runtest-t_gate-pre @t4/sub/runtest-t_sub @t5/slow-usesh @t6/runtest-inc'
+  @t3/runtest-t_stub @t4/runtest-t_gate @t4/runtest-t_gate-pre @t4/sub/runtest-t_sub @t5/slow-usesh @t6/runtest-inc
+  @t7/runtest-inc'
 
 if harness_leg 'cold build'; then
   # On a build directory that has never built t6/word.txt, `dune rules` builds
@@ -307,7 +315,7 @@ if harness_leg 'dune-project'; then
     @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan \
     @t2/runtest-scenario_x @t2/slow-gen @t3/runtest-cfgread @t3/runtest-esc @t3/runtest-neg @t3/runtest-py @t3/runtest-t_plain @t3/runtest-t_stub \
     @t3/runtest-uses @t4/runtest-gated @t4/runtest-objs @t4/runtest-t_gate @t4/runtest-t_gate-pre \
-    @t4/sub/runtest-t_sub @t5/slow-usesh @t6/runtest-dyn @t6/runtest-inc
+    @t4/sub/runtest-t_sub @t5/slow-usesh @t6/runtest-dyn @t6/runtest-inc @t7/runtest-g7 @t7/runtest-inc
 fi
 
 if harness_leg 'dune file elsewhere'; then
@@ -540,8 +548,8 @@ if harness_leg 'dune fragment'; then
   # aliases stay blind, and an edit to the fragment reaches like one to t6/dune.
   affected --files t6/extra.inc
   # shellcheck disable=SC2086
-  expect 'an included dune fragment reaches its directory, as its dune file would' 0 \
-    @t6/runtest-dyn $opaque_all
+  expect 'an included dune fragment reaches every directory including it, as their dune files would' 0 \
+    @t6/runtest-dyn @t7/runtest-g7 $opaque_all
 fi
 
 if harness_leg 'git forms'; then
