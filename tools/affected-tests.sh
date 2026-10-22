@@ -125,8 +125,9 @@
 #     from the dune files is gh-ocannl-1541's.
 #     An alias whose rules need a printed alias is printed too, to a fixpoint:
 #     a golden pair's output rule carries the ambient
-#     `runtest-env_spelling_gate` for this reason (gh-ocannl-1378) -- but not
-#     for one printed only blind: the needing alias reads no file of it.
+#     `runtest-env_spelling_gate` for this reason (gh-ocannl-1378) -- in the
+#     needed alias's tier, one printed only blind included: a broken needed
+#     alias breaks the needing one's build.
 #
 # Exit: 0 every changed `.ml`/`.mli` was mapped; 3 the list is printed, but a
 # changed `.ml`/`.mli` is UNMAPPED (see stderr); 2 usage, git or dune failure,
@@ -975,6 +976,9 @@ sub stanza_sources {   # an @st entry's source files, or undef when they are not
   return \@files;
 }
 sub is_private { my $ds = static_of($_[0]); $ds && !grep { defined dfield($ds->{x}, $_) } qw(public_name public_names) }
+sub flag_atoms {   # every atom of some flags fields, undef for a part not read as atoms
+  map { !defined $_ ? () : ref $_ ? (@$_ && !ref $_->[0] && $_->[0] =~ /^:include$/ ? (undef) : flag_atoms(@$_)) : $_ } @_;
+}
 sub own_tokens {   # the names an owner's own code mentions, or undef when its code is not known
   my ($i) = @_;
   return $st[$i]{own_tokens} if exists $st[$i]{own_tokens};
@@ -999,7 +1003,9 @@ sub own_tokens {   # the names an owner's own code mentions, or undef when its c
       }
       # `-open M` in its flags, or in an `env` stanza above it, lets its code use M's
       # names bare: unknown.
-      $files = undef if grep { canon($_) =~ /"-open"/ } grep { defined } map { dfield($ds->{x}, $_) } qw(flags ocamlc_flags ocamlopt_flags);
+      # Flags with an `(:include ...)` or any other non-literal element are not
+      # known either.
+      $files = undef if grep { !defined || $_ eq "-open" || /^:(?!standard$)/ || /%\{/ } flag_atoms(map { dfield($ds->{x}, $_) } qw(flags ocamlc_flags ocamlopt_flags));
       $files = undef if grep { $_->{kind} eq "env" && under($ds->{dir}, $_->{dir}) && canon($_->{x}) =~ /"-open"/ } @dstanzas;
     }
     if ($files) {
@@ -1211,23 +1217,23 @@ for my $a (@al) {
 }
 # An alias whose own rules need a listed alias (an ambient gate such as
 # `runtest-env_spelling_gate`) is listed too, in that alias's tier, to a
-# fixpoint -- unless that one is listed only because its undumped action might
-# read a changed path: the needing alias reads nothing from it (an alias makes
-# no file), so what that action reads changes only whether it, the needed one,
-# passes.
-my %rank = (main => 2, link => 1);
+# fixpoint: if the needed alias breaks, building the needing one fails. That
+# holds for one listed only blind as well (gh-ocannl-1431 review), so a blind
+# alias carries its dependents in its own tier.
+my %rank = (main => 3, guess => 2, link => 1);
+my %tier_of_rank = reverse %rank;
 my %by_alias;
 for (my $grew = 1; $grew;) {
   $grew = 0;
   for my $a (@al) {
     my $now = $rank{$tier{$a->{name}} // ""} // 0;
-    next if $now == 2;
+    next if $now == 3;
     my $best = 0;
     for my $t (@{$a->{own}}) {
       for my $n (keys %{$adeps{$t} // {}}) { my $r = $rank{$tier{$n} // ""} // 0; $best = $r if $r > $best }
     }
     next unless $best > $now;
-    $tier{$a->{name}} = $best == 2 ? "main" : "link";
+    $tier{$a->{name}} = $tier_of_rank{$best};
     $by_alias{$a->{name}} = 1;
     $grew = 1;
   }

@@ -208,14 +208,14 @@ expect() { # LABEL RC ALIAS... : the exact list, in any order, and the exit stat
     report 1 "$label" "exit $rc (want $want_rc); got [$(tr '\n' ' ' <"$out")] want [$(tr '\n' ' ' <"$TMP/want")]; stderr: $(tr '\n' '|' <"$err")"
   fi
 }
-reached_by_core='@t1/runtest-t_core @t1/runtest-t_mid @t1/runtest-t_mid-blind @t2/runtest-gen-v1 @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen
+reached_by_core='@t1/runtest-t_core @t1/runtest-t_mid @t1/runtest-t_mid-blind @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen
   @t5/slow-usesh'
 # Every alias whose action dune does not dump (no golden pair among its own
-# targets): listed for any changed data file. runtest-needs_pkg and t4's gated
-# need one of them, and are not listed for that reason.
+# targets): listed for any changed data file, with what needs one of them
+# (runtest-needs_pkg, t4's gated): a broken needed alias breaks their build.
 opaque_all='@t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-t_mid @t1/runtest-t_mid-blind
-  @t1/runtest-ta @t1/runtest-tb @t2/runtest-orphan @t2/runtest-pkg @t2/slow-gen @t3/runtest-py @t3/runtest-t_plain
-  @t3/runtest-t_stub @t4/runtest-t_gate @t4/runtest-t_gate-pre @t4/sub/runtest-t_sub @t5/slow-usesh @t6/runtest-inc
+  @t1/runtest-ta @t1/runtest-tb @t2/runtest-orphan @t2/runtest-needs_pkg @t2/runtest-pkg @t2/slow-gen @t3/runtest-py @t3/runtest-t_plain
+  @t3/runtest-t_stub @t4/runtest-gated @t4/runtest-t_gate @t4/runtest-t_gate-pre @t4/sub/runtest-t_sub @t5/slow-usesh @t6/runtest-inc
   @t7/runtest-inc'
 
 if harness_leg 'cold build'; then
@@ -296,7 +296,7 @@ fi
 if harness_leg 'generated module'; then
   affected --files lib/lx.mll
   expect 'an .mll reaches the stanza of the module its rule generates' 0 \
-    @t1/runtest-t_core @t1/runtest-t_mid @t1/runtest-t_mid-blind @t2/runtest-gen-v1 @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
+    @t1/runtest-t_core @t1/runtest-t_mid @t1/runtest-t_mid-blind @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
 fi
 
 if harness_leg 'golden'; then
@@ -392,10 +392,10 @@ if harness_leg 'alias dependency'; then
   affected --files t4/t_gate.ml
   expect 'an alias whose rules need a listed alias is listed too' 0 @t4/runtest-gated @t4/runtest-t_gate @t4/runtest-t_gate-pre
   # runtest-pkg and runtest-t_gate are listed only because their actions are unknown;
-  # needs_pkg and gated read nothing from them.
+  # what needs them is listed with them, in their tier (gh-ocannl-1431 review).
   affected --files docs/other.md
   # shellcheck disable=SC2086
-  expect 'an alias needing one listed only blind is not listed for that' 0 $opaque_all
+  expect 'an alias needing one listed only blind is listed with it' 0 $opaque_all
 fi
 
 if harness_leg 'run-and-diff golden'; then
@@ -488,12 +488,12 @@ if harness_leg 'link-only'; then
   }
   affected --files lib/helper.ml
   ordered 'a module names its tests first (by name or a re-export), the link-only ones last' \
-    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh @t1/runtest-t_mid @t1/runtest-t_mid-blind
+    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh @t1/runtest-t_mid @t1/runtest-t_mid-blind
   grep -qx 'affected: link-only: @t1/runtest-t_mid' "$err" && grep -q '2 LINK-ONLY alias(es), printed LAST' "$err" ||
     report 1 'the link-only aliases are named on stderr' "$(cat "$err")"
   affected --referenced-only --files lib/helper.ml
   ordered '--referenced-only leaves the link-only ones off' \
-    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
+    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
   # Uncertainty ranks first: t_mid-blind runs t_mid under an unknown action, so with a data
   # file changed too it is never link-only.
   affected --referenced-only --files lib/helper.ml docs/other.md
@@ -504,11 +504,11 @@ if harness_leg 'link-only'; then
   affected HEAD
   # t_core links mid, whose (select) module is code not all known: never link-only.
   ordered 'a change to one definition ranks first only what names it' \
-    @t1/runtest-t_core @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t5/slow-usesh @t1/runtest-t_mid @t1/runtest-t_mid-blind @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen
+    @t1/runtest-t_core @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t5/slow-usesh @t1/runtest-t_mid @t1/runtest-t_mid-blind @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen
   printf 'let used = 2\nlet unused = 2\n' >"$repo/lib/helper.ml"
   affected HEAD
   ordered '... and t_core names `used`' \
-    @t1/runtest-t_core @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t5/slow-usesh @t1/runtest-t_mid @t1/runtest-t_mid-blind @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen
+    @t1/runtest-t_core @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t5/slow-usesh @t1/runtest-t_mid @t1/runtest-t_mid-blind @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen
   mutant=$repo/tools/affected-mutant.sh
   if FROM='return 0 if !$defs || grep { $tok->{$_} } keys %$defs;' TO='return 0;' \
       perl -0pe '$n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
@@ -527,11 +527,11 @@ if harness_leg 'link-only'; then
   printf 'let used = 1\nlet unused = 2\nlet ( +! ) a b = a + b\n' >"$repo/lib/helper.ml"
   affected HEAD
   ordered 'a changed operator definition counts as the whole module (tokens hold identifiers)' \
-    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh @t1/runtest-t_mid @t1/runtest-t_mid-blind
+    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh @t1/runtest-t_mid @t1/runtest-t_mid-blind
   printf 'let used = 1\nlet unused = 2\ntype t = A | B\n' >"$repo/lib/helper.ml"
   affected HEAD
   ordered 'a changed type definition counts as the whole module (its constructors are what users name)' \
-    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh @t1/runtest-t_mid @t1/runtest-t_mid-blind
+    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh @t1/runtest-t_mid @t1/runtest-t_mid-blind
   git_q checkout -q -- lib/helper.ml || exit 2
   # A new interface can hide any member: the whole module changed, whatever its hunks show.
   printf 'val used : int\n' >"$repo/lib/helper.mli"
@@ -751,16 +751,16 @@ if harness_leg 'negative controls'; then
     'next unless $best > $now;' 'next;' \
     --files t4/t_gate.ml -- @t4/runtest-gated @t4/runtest-t_gate @t4/runtest-t_gate-pre
   # shellcheck disable=SC2086
-  control 'an alias listed only blind is what keeps one needing it off the list' \
-    'my %rank = (main => 2, link => 1);' 'my %rank = (main => 2, link => 1, guess => 2);' \
+  control 'the guess tier'"'"'s rank is what lists an alias needing one listed blind' \
+    'my %rank = (main => 3, guess => 2, link => 1);' 'my %rank = (main => 3, link => 1);' \
     --files docs/other.md -- $opaque_all
   # shellcheck disable=SC2086
   control 'the ranking is what leaves a link-only alias off --referenced-only' \
     'return 0 unless $rank_links;' 'return 0;' \
-    --referenced-only --files lib/helper.ml -- @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
+    --referenced-only --files lib/helper.ml -- @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
   control 'a re-export is what ranks a test naming only the re-exported name' \
     '$as{$_}{$as_name} = 1 for grep { $_ ne $as_name } @names;' '1;' \
-    --referenced-only --files lib/helper.ml -- @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
+    --referenced-only --files lib/helper.ml -- @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
   # shellcheck disable=SC2086
   control 'a rule-made target beside a golden is what makes a golden pair' \
     'grep { !/\.expected$/ && !-e in_dir($d, $_) } @mine, @near' '1' \

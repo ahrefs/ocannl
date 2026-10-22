@@ -2557,11 +2557,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   one action (gh-ocannl-1431: `runtest-kernel_attribution` owns a golden, was taken for a golden
   pair, and missed an edit to the `benchmarks/gh1002_cells.py` its `(deps)` name; a golden now also
   needs a rule-made output beside it) -- is listed for any changed path in its directory but an
-  owned module source, and for a changed non-build input anywhere, but no alias needing it is listed
-  for that. A `dune` file edit reaches its whole directory. Reading alias `(deps)` and scoping a
-  dune edit per stanza with a hand parser did not converge in review (five rounds of missed
-  forms); both are gh-ocannl-1541's, which reads Dune's own description instead. Its header
-  states the boundary as an allowlist; what falls outside is reported on stderr, and a changed
+  owned module source, and for a changed non-build input anywhere, with every alias needing it (a
+  broken needed alias breaks their build). A `dune` file edit reaches its whole directory.
+  Reading alias `(deps)` and scoping a dune edit per stanza with a hand parser did not converge in
+  review (five rounds of missed forms); both are gh-ocannl-1541's, which reads Dune's own
+  description instead. Its header states the boundary as an allowlist; what falls outside is
+  reported on stderr, and a changed
   `.ml`/`.mli` no stanza of this build owns (a deleted module, a CUDA-only one on a box without
   cudajit) exits 3. Two portability points (gh-ocannl-1389): only the file
   `dune rules -o` writes is the answer, since on a cold `_build` printing a rule builds the
