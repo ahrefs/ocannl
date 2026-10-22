@@ -89,6 +89,11 @@ cat >"$repo/t2/dune" <<'DUNE'
  (action (with-stdout-to %{target} (run %{exe:scan.exe}))))
 (rule (alias runtest-scan) (action (diff scan.expected scan.actual)))
 (rule (alias runtest-orphan) (action (progn)))
+; A rule this reader cannot read in full (a package dependency): its action stays undumped, and
+; an alias needing it is not listed when it is listed only for that reason.
+(rule (alias runtest-pkg) (deps (package fx)) (action (progn)))
+(rule (target needs_pkg.actual) (deps (alias runtest-pkg)) (action (with-stdout-to %{target} (echo y))))
+(rule (alias runtest-needs_pkg) (action (diff needs_pkg.expected needs_pkg.actual)))
 (rule (alias scans) (deps (alias runtest-scan)) (action (progn)))
 DUNE
 cat >"$repo/t3/dune" <<'DUNE'
@@ -114,6 +119,12 @@ cat >"$repo/t3/dune" <<'DUNE'
  (deps %{project_root}/t1/made.txt)
  (action (with-stdout-to %{target} (run %{exe:lister.exe}))))
 (rule (alias runtest-uses) (action (diff uses.expected uses.actual)))
+; Runs and diffs in one action (the slow-/train- shape), with a dependency outside its directory: a
+; golden among its own targets, yet what its rule needs is only in its own (deps) (gh-ocannl-1431).
+(rule
+ (alias runtest-py)
+ (deps py.expected ../cfg/extra.py (sandbox always))
+ (action (no-infer (progn (with-stdout-to py.actual (echo x)) (diff py.expected py.actual)))))
 DUNE
 cat >"$repo/t4/dune" <<'DUNE'
 (library (name inert) (modules inert))
@@ -150,7 +161,8 @@ for f in lib/core.ml lib/helper.ml lib/leaf.ml lib/myppx.ml lib/optlib.ml lib/st
   printf 'let () = ()\n' >"$repo/$f"
 done
 for f in t2/gen-v1.expected t2/scenario_x.expected t2/scan.expected t3/neg.expected t3/plain.cfg \
-  t3/cfgread.expected t3/esc.expected t3/uses.expected cfg/base.cfg docs/{x}one.md \
+  t3/cfgread.expected t3/esc.expected t3/uses.expected t3/py.expected cfg/base.cfg cfg/extra.py docs/{x}one.md \
+  t2/needs_pkg.expected \
   lib/stubbed_c.c t3/cexe_c.c docs/notes.md; do : >"$repo/$f"; done
 printf '{ }\nrule token = parse eof { () }\n' >"$repo/lib/lx.mll"
 git_q() { git -C "$repo" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
@@ -171,13 +183,12 @@ expect() { # LABEL RC ALIAS... : the exact sorted list and the exit status
     report 1 "$label" "exit $rc (want $want_rc); got [$(tr '\n' ' ' <"$out")] want [$(tr '\n' ' ' <"$TMP/want")]; stderr: $(tr '\n' '|' <"$err")"
   fi
 }
-reached_by_core='@t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-orphan @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen
+reached_by_core='@t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen
   @t5/slow-usesh'
-# Every alias whose action dune does not dump (no golden among its own targets,
-# and t4's gated, which needs one of them): listed for any changed data file.
-opaque_all='@t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb
-  @t2/runtest-orphan @t2/slow-gen @t3/runtest-t_plain @t3/runtest-t_stub
-  @t4/runtest-gated @t4/runtest-t_gate @t4/runtest-t_gate-pre @t4/sub/runtest-t_sub @t5/slow-usesh'
+# Every alias whose action dune does not dump and whose stanzas this reader
+# cannot read in full (no golden among its own targets): listed for any changed
+# data file. runtest-needs_pkg needs it, and is not listed for that reason.
+opaque_all='@t2/runtest-pkg'
 
 if harness_leg 'cold build'; then
   # On a build directory that has never built t6/word.txt, `dune rules` builds
@@ -249,7 +260,7 @@ fi
 if harness_leg 'generated module'; then
   affected --files lib/lx.mll
   expect 'an .mll reaches the stanza of the module its rule generates' 0 \
-    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-orphan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
+    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
 fi
 
 if harness_leg 'golden'; then
@@ -265,8 +276,8 @@ if harness_leg 'dune-project'; then
   affected --files dune-project
   expect 'dune-project reaches every per-test alias beneath it' 0 \
     @t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb \
-    @t2/runtest-gen-v1 @t2/runtest-orphan @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen \
-    @t3/runtest-cfgread @t3/runtest-esc @t3/runtest-neg @t3/runtest-t_plain @t3/runtest-t_stub \
+    @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan \
+    @t2/runtest-scenario_x @t2/slow-gen @t3/runtest-cfgread @t3/runtest-esc @t3/runtest-neg @t3/runtest-py @t3/runtest-t_plain @t3/runtest-t_stub \
     @t3/runtest-uses @t4/runtest-gated @t4/runtest-objs @t4/runtest-t_gate @t4/runtest-t_gate-pre \
     @t4/sub/runtest-t_sub @t5/slow-usesh @t6/runtest-dyn
 fi
@@ -286,10 +297,11 @@ fi
 
 if harness_leg 'opaque action'; then
   # t_plain has no golden: dune runs it as the alias's own action under the
-  # stanza's (deps), which `dune rules` does not show.
+  # stanza's (deps), which `dune rules` does not show; this reader reads them
+  # in t3/dune. Only an alias whose stanzas it cannot read is listed blind.
   affected --files t3/plain.cfg
   # shellcheck disable=SC2086
-  expect 'a data file lists every alias whose action dune does not dump' 0 $opaque_all
+  expect 'a data file lists the test declaring it, and every alias whose action is unknown' 0 @t3/runtest-t_plain $opaque_all
 fi
 
 if harness_leg 'foreign stubs'; then
@@ -319,7 +331,7 @@ if harness_leg 'copied file'; then
   # reads the copy, and t_plain's (deps) name it.
   affected --files cfg/base.cfg
   # shellcheck disable=SC2086
-  expect 'a file copied into a directory reaches the rules reading the copy' 0 @t3/runtest-cfgread $opaque_all
+  expect 'a file copied into a directory reaches the rules reading the copy' 0 @t3/runtest-cfgread @t3/runtest-t_plain $opaque_all
 fi
 
 if harness_leg 'batched query'; then
@@ -343,7 +355,19 @@ if harness_leg 'alias dependency'; then
   # gated.actual needs the alias runtest-t_gate, listed for its changed config.
   affected --files t4/gate.cfg
   # shellcheck disable=SC2086
-  expect 'an alias whose rules need a listed alias is listed too' 0 $opaque_all
+  expect 'an alias whose rules need a listed alias is listed too' 0 @t4/runtest-gated @t4/runtest-t_gate $opaque_all
+  # runtest-pkg is listed only because its action is unknown; needs_pkg reads nothing from it.
+  affected --files docs/other.md
+  # shellcheck disable=SC2086
+  expect 'an alias needing one listed only blind is not listed for that' 0 $opaque_all
+fi
+
+if harness_leg 'declared deps'; then
+  # runtest-py runs and diffs in its own action; its golden made it look like a
+  # diff of its own targets, and its (deps) were never read (gh-ocannl-1431).
+  affected --files cfg/extra.py
+  # shellcheck disable=SC2086
+  expect 'an alias rule'"'"'s own (deps) reach it, outside its directory too' 0 @t3/runtest-py $opaque_all
 fi
 
 if harness_leg 'dune subtree'; then
@@ -391,7 +415,7 @@ fi
 if harness_leg 'dune file'; then
   affected --files t2/dune
   expect 'a changed dune file lists every per-test alias of its directory, never an aggregate' 0 \
-    @t2/runtest-gen-v1 @t2/runtest-orphan @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen
+    @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen
 fi
 
 if harness_leg 'data read'; then
@@ -582,17 +606,17 @@ if harness_leg 'negative controls'; then
     --files lib/myppx.ml -- @t1/runtest-m_one @t2/runtest-scan
   control 'a generated module file is what carries an .mll to its stanza' \
     'push @{$generated{$rel}}, $i unless -e $rel;' '' \
-    --files lib/lx.mll -- @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-orphan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
+    --files lib/lx.mll -- @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
   # shellcheck disable=SC2086
   control 'an opaque action is what lists the aliases for a changed config' \
     ' || $opaque_listed) {' ') {' \
-    --files t3/plain.cfg -- $opaque_all
+    --files t3/plain.cfg -- @t3/runtest-t_plain $opaque_all
   control 'a stub archive is what carries a C stub to its library' \
     '$obj_libs{$o}{$_} = 1 for @libs' '1' \
     --files lib/stubbed_c.c -- @t3/runtest-t_stub
   control 'following generated inputs is what reaches a copied file' \
     '$v{$rel} = 1 if !-e $rel' '$v{$rel} = 1 if 0 && !-e $rel' \
-    --files cfg/base.cfg -- @t3/runtest-cfgread $opaque_all
+    --files cfg/base.cfg -- @t3/runtest-cfgread @t3/runtest-t_plain $opaque_all
   control 'reading the files a changed dune file makes is what reaches a consumer elsewhere' \
     '$n_made++ unless $read_by{$p}{$a->{name}}++;' '' \
     --files t1/dune -- @t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb @t3/runtest-uses
@@ -607,8 +631,16 @@ if harness_leg 'negative controls'; then
     'if ($where eq "In_build_dir" and my @o = compiled_owners("$path/")) { $r{$_} = 1 for @o; next }' '' \
     --files t4/inert.ml -- @t4/runtest-objs
   control 'the alias fixpoint is what lists an alias needing a listed one' \
-    'next unless grep { my $t = $_; grep { $out{$_} } keys %{$adeps{$t} // {}} } @{$a->{own}};' 'next;' \
-    --files t4/gate.cfg -- $opaque_all
+    'next unless grep { my $t = $_; grep { $out{$_} && !$guess{$_} } keys %{$adeps{$t} // {}} } @{$a->{own}};' 'next;' \
+    --files t4/gate.cfg -- @t4/runtest-gated @t4/runtest-t_gate $opaque_all
+  # shellcheck disable=SC2086
+  control 'an alias listed only blind is what keeps one needing it off the list' \
+    'grep { $out{$_} && !$guess{$_} }' 'grep { $out{$_} }' \
+    --files docs/other.md -- $opaque_all
+  # shellcheck disable=SC2086
+  control 'reading an alias rule'"'"'s own (deps) is what reaches it' \
+    '$reads{$k} = { %{$acc->{files}} };' '$reads{$k} = {};' \
+    --files cfg/extra.py -- @t3/runtest-py $opaque_all
   # shellcheck disable=SC2086
   control 'skipping an off-build stanza'"'"'s unresolved edge is what lets the run finish' \
     'elsif ($st[$i]{undescribed}) {' 'elsif (0) {' \

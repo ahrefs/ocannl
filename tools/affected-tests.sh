@@ -103,21 +103,27 @@
 #     this way, and so is a golden, whose copy into the build is one of the
 #     own targets of the alias that diffs it. A changed path reaching nothing
 #     else is listed as unread.
-#   - An alias's own action is not in `dune rules` output. A golden alias's
-#     action diffs two of its own targets, whose rules are read; any other
-#     alias's action is opaque (a `tests` stanza with no golden runs its
-#     executable under the stanza's `(deps)`), so such an alias is also
-#     printed whenever a changed path other than an owned module source lies
-#     in its directory or is copied there, and whenever any changed path is no
-#     build input (a script, a config, a golden: what an alias rule's own
-#     `(deps)` name, as `runtest-sweep_harness` names `tools/sweep.sh`).
-#     An alias whose own targets' rules need a printed alias is printed too,
-#     to a fixpoint: a golden pair's output rule carries the ambient
-#     `runtest-env_spelling_gate` for this reason (gh-ocannl-1378). Not seen:
-#     what an opaque action reads outside its directory otherwise, and an
-#     alias an alias rule's own `(deps)` name (a run-and-diff rule's gate),
-#     which `dune rules` does not dump in any form it accepts (`@DIR/NAME`,
-#     `@@DIR/NAME`).
+#   - An alias's own action is not in `dune rules` output, so the dune files
+#     are read as text too: the stanzas declaring each alias (a rule's `(alias
+#     ...)`, an `(alias (name ...))`, the `runtest-NAME` of a `(test)`/`(tests)`
+#     name or of a library's `(inline_tests)`), and what they need: `(deps)`
+#     files, globs, `source_tree`s and aliases, the `%{dep:}`/`%{exe:}`/
+#     `%{read:}`/`%{lib:}`/`%{bin:}` forms, and what dune infers from `diff`,
+#     `cmp`, `cat`, `copy`, `with-stdin-from` and a `run` of a path, outside
+#     `no-infer` and relative to a `chdir`. A generated file among them is
+#     queried like an own target. An alias whose stanzas are read in full is
+#     printed only for what they need (gh-ocannl-1431: a run-and-diff rule
+#     owning a golden was taken for a golden pair, its `(deps)` never read).
+#     Any other alias -- no stanza declares it, or one uses a form outside
+#     that list, such as `(package ...)` -- keeps the blind treatment: a golden
+#     alias's action diffs two of its own targets, whose rules are read; any
+#     other is opaque, printed whenever a changed path other than an owned
+#     module source lies in its directory or is copied there, and whenever any
+#     changed path is no build input (a script, a config, a golden).
+#     An alias whose rules need a printed alias is printed too, to a fixpoint:
+#     a golden pair's output rule carries the ambient
+#     `runtest-env_spelling_gate` for this reason (gh-ocannl-1378) -- but not
+#     for one printed only blind: the needing alias reads no file of it.
 #
 # Exit: 0 every changed `.ml`/`.mli` was mapped; 3 the list is printed, but a
 # changed `.ml`/`.mli` is UNMAPPED (see stderr); 2 usage, git or dune failure,
@@ -535,6 +541,244 @@ sub keep_raw {
   print $o $text; close $o;
   return $f;
 }
+# The dune files themselves, read as text: what an alias's own rule needs, which
+# `dune rules` never dumps (it accepts no alias), and which stanzas a dune-file
+# edit changed. A reader for dune's syntax: `;` and `#| |#` comments, `#;`
+# datum comments, quoted and block strings, atoms.
+sub parse_dune {
+  my ($s, $what) = @_;
+  my @stack = ([]);
+  my @drop = (0);   # per open list: datums a `#;` still discards
+  my $put = sub { if ($drop[-1]) { $drop[-1]--; return } push @{$stack[-1]}, $_[0] };
+  pos($s) = 0;
+  while (pos($s) < length $s) {
+    next if $s =~ /\G\s+/gc || $s =~ /\G;[^\n]*/gc || $s =~ /\G#\|.*?\|#/gcs;
+    if ($s =~ /\G#;/gc) { $drop[-1]++; next }
+    if ($s =~ /\G\(/gc) { push @stack, []; push @drop, 0; next }
+    if ($s =~ /\G\)/gc) {
+      @stack > 1 or fail("unbalanced parentheses in $what at byte " . (pos($s) - 1));
+      pop @drop; my $l = pop @stack; $put->($l); next;
+    }
+    if ($s =~ /\G"\\[|>]([^\n]*)/gc) {   # block string: consecutive "\| lines
+      my $str = $1;
+      $str .= "\n$1" while $s =~ /\G\n[ \t]*"\\[|>]([^\n]*)/gc;
+      $put->($str); next;
+    }
+    if ($s =~ /\G"((?:[^"\\]|\\.)*)"/gcs) {
+      my $a = $1 =~ s/\\\n[ \t]*//gr;
+      $a =~ s/\\(x[0-9A-Fa-f]{2}|[0-9]{3}|.)/length $1 > 1 ? ($1 =~ m{^x} ? chr hex substr($1, 1) : chr $1)
+                                            : $1 eq "n" ? "\n" : $1 eq "t" ? "\t" : $1 eq "r" ? "\r" : $1/gse;
+      $put->($a); next;
+    }
+    if ($s =~ /\G([^\s()";]+)/gc) { $put->($1); next }
+    fail("unreadable text in $what at byte " . pos($s));
+  }
+  @stack == 1 or fail("unbalanced parentheses in $what");
+  return $stack[0];
+}
+sub canon { my ($x) = @_; ref $x ? "(" . join(" ", map { canon($_) } @$x) . ")" : "\"" . ($x =~ s/(["\\])/\\$1/gr =~ s/\n/\\n/gr) . "\"" }
+sub dfield {   # the arguments of a stanza's first (NAME ...) field
+  my ($x, $name) = @_;
+  for my $f (@$x[1 .. $#$x]) { return [@$f[1 .. $#$f]] if ref $f && @$f && !ref $f->[0] && $f->[0] eq $name }
+  return undef;
+}
+# Stanzas of DIR, `(subdir ...)` flattened into the directory it names.
+sub dune_stanzas {
+  my ($dir, $items) = @_;
+  my @out;
+  for my $x (@$items) {
+    next unless ref $x && @$x && !ref $x->[0];
+    if ($x->[0] eq "subdir" && @$x >= 2 && !ref $x->[1]) {
+      my $sub = rpath($dir, $x->[1]);
+      if (defined $sub) { push @out, dune_stanzas($sub, [@$x[2 .. $#$x]]); next }
+    }
+    push @out, { dir => $dir, kind => $x->[0], x => $x, text => canon($x) };
+  }
+  return @out;
+}
+sub rpath {   # BASE/P normalized, repository-relative; undef when it leaves the repository
+  my ($base, $p) = @_;
+  return undef if $p =~ m{^/};
+  my @parts = $base eq "." ? () : split m{/}, $base;
+  for my $c (split m{/}, $p) {
+    next if $c eq "" || $c eq ".";
+    if ($c eq "..") { @parts or return undef; pop @parts } else { push @parts, $c }
+  }
+  return @parts ? join("/", @parts) : ".";
+}
+my @dstanzas;   # every stanza of every dune file, as read from the worktree
+my %dune_text;  # dune file -> its text
+for my $f (grep { $_ ne "" } split /\n/, slurp("$tmp/dune-files")) {
+  next unless -f $f;
+  $dune_text{$f} = slurp($f);
+  push @dstanzas, dune_stanzas((dir_of($f))[0], parse_dune($dune_text{$f}, $f));
+}
+# Public executables, for `%{bin:NAME}`.
+my %public_exe;
+for my $s (grep { $_->{kind} =~ /^(?:executables?|tests?)$/ } @dstanzas) {
+  my @names = map { ref $_ ? () : $_ } @{dfield($s->{x}, "names") // dfield($s->{x}, "name") // []};
+  my @pub = map { ref $_ ? () : $_ } @{dfield($s->{x}, "public_names") // dfield($s->{x}, "public_name") // []};
+  for my $k (0 .. $#pub) {
+    my $n = $names[$k] // next;
+    $public_exe{$pub[$k]} = $exe{"$s->{dir}\0$n"} if $pub[$k] ne "-" && $exe{"$s->{dir}\0$n"};
+  }
+}
+# What a stanza attached to an alias needs, declared: files, globs, executables,
+# other aliases. Anything this reader does not know marks the stanza unknown,
+# and its alias then keeps the treatment of an undumped action (below).
+my %targets_of = map { my $d = $_; ($d => { map { $_ => 1 } @{$targets->{$d}} }) } keys %$targets;
+sub decl_new { return { files => {}, globs => [], runs => {}, adeps => {}, adeps_rec => {}, via => [], unknown => [] } }
+sub decl_file {
+  my ($acc, $p) = @_;
+  return unless defined $p;   # outside the repository: an external file
+  # The runner dune builds for a library's inline tests links that library.
+  if ($p =~ m{^(?:(.*)/)?\.([^/]+)\.inline-tests/[^/]+$}) {
+    my ($ld, $ln) = ($1 // ".", $2);
+    $acc->{runs}{$_} = 1 for grep { $st[$_]{kind} eq "library" && $st[$_]{dir} eq $ld && $st[$_]{units}{$ln} } 0 .. $#st;
+    return;
+  }
+  if ($p =~ m{^(?:(.*)/)?([^/]+)\.(?:exe|bc)$}) { $acc->{runs}{$_} = 1 for @{$exe{($1 // ".") . "\0$2"} // []}; return }
+  if (my @o = compiled_owners("$ctx/$p")) { $acc->{runs}{$_} = 1 for @o; return }
+  $acc->{files}{$p} = 1;
+}
+sub decl_root {   # a %{project_root}/%{workspace_root} prefix, as a path from DIR
+  my ($dir, $s) = @_;
+  $s =~ s{^%\{(?:project_root|workspace_root)\}(?=/|$)}{$dir eq "." ? "." : join "/", map { ".." } split m{/}, $dir}e;
+  return $s;
+}
+sub decl_vars {   # the %{...} forms in a string, relative to the stanza's DIR
+  my ($acc, $dir, $s) = @_;
+  while ($s =~ /%\{([^}]*)\}/g) {
+    my $v = $1;
+    my ($k, $arg) = $v =~ /^([^:]+):(.*)$/ or next;   # no argument: %{target}, %{deps}, %{test}, ...
+    if ($k =~ /^(?:dep|exe|read|read-lines|read-strings)$/) { decl_file($acc, rpath($dir, decl_root($dir, $arg))) }
+    elsif ($k =~ /^lib(?:-private)?$/) {
+      my ($lib) = split /:/, $arg;
+      if (defined $lib_by_name{$lib}) { $acc->{runs}{$lib_by_name{$lib}} = 1 } else { push @{$acc->{unknown}}, "%{$v}" }
+    } elsif ($k eq "bin") {
+      if ($public_exe{$arg}) { $acc->{runs}{$_} = 1 for @{$public_exe{$arg}} } else { push @{$acc->{unknown}}, "%{$v}" }
+    } elsif ($k !~ /^(?:env|ocaml-config|lib-available|bin-available|version|coq)$/) { push @{$acc->{unknown}}, "%{$v}" }
+  }
+}
+sub decl_deps {
+  my ($acc, $dir, $items) = @_;
+  for my $d (@$items) {
+    if (!ref $d) {
+      next if $d =~ /^:/;   # a (:name ...) binding's name
+      my $r = decl_root($dir, $d);
+      if ($r =~ /^%\{[^}]*\}$/) { decl_vars($acc, $dir, $r) }
+      elsif ($r =~ /%\{/) { push @{$acc->{unknown}}, $d }
+      else { decl_file($acc, rpath($dir, $r)) }
+      next;
+    }
+    my ($h, @args) = @$d;
+    if (!defined $h || ref $h) { push @{$acc->{unknown}}, canon($d); next }
+    if ($h =~ /^:/) { decl_deps($acc, $dir, \@args) }
+    elsif ($h eq "file") { decl_deps($acc, $dir, \@args) }
+    elsif ($h =~ /^(glob_files(?:_rec)?|source_tree)$/ && @args == 1 && !ref $args[0]) {
+      my $g = decl_root($dir, $args[0]);
+      if ($g =~ /%\{/) { push @{$acc->{unknown}}, canon($d); next }
+      my $rec = $h ne "glob_files";
+      if ($h eq "source_tree") { my $t = rpath($dir, $g); push @{$acc->{globs}}, [$t, sub { 1 }, 1] if defined $t; next }
+      my ($gd, $pat) = $g =~ m{^(.*)/([^/]*)$} ? ($1, $2) : (".", $g);
+      my $t = rpath($dir, $gd);
+      push @{$acc->{globs}}, [$t, predicate($pat), $rec] if defined $t;
+    } elsif ($h =~ /^alias(?:_rec)?$/ && @args == 1 && !ref $args[0]) {
+      my $is_rec = $h eq "alias_rec";
+      my ($ad, $an) = dir_of($args[0]);
+      my $t = rpath($dir, $ad) // next;
+      $acc->{adeps}{"\@" . in_dir($t, $an)} = 1;
+      $acc->{adeps_rec}{"$t\0$an"} = 1 if $is_rec;
+    } elsif ($h !~ /^(?:env_var|universe|sandbox)$/) { push @{$acc->{unknown}}, canon($d) }
+  }
+}
+my %action_walk = map { $_ => 1 } qw(progn concurrent ignore-stdout ignore-stderr ignore-outputs pipe-stdout pipe-stderr
+  pipe-outputs);
+sub decl_action {
+  my ($acc, $dir, $cwd, $x, $infer) = @_;
+  if (!ref $x) { decl_vars($acc, $dir, $x); return }
+  my ($h, @args) = @$x;
+  if (!defined $h || ref $h) { push @{$acc->{unknown}}, canon($x); return }
+  decl_vars($acc, $dir, $_) for grep { !ref } @args;
+  my $here = sub { defined $cwd ? rpath($cwd, decl_root($cwd, $_[0])) : undef };
+  my $plain = sub { !ref $_[0] && $_[0] !~ /%\{/ };
+  if ($h eq "no-infer") { decl_action($acc, $dir, $cwd, $_, 0) for @args }
+  elsif ($h eq "chdir" && @args == 2 && !ref $args[0]) {
+    my $to = decl_root($dir, $args[0]);
+    decl_action($acc, $dir, $to =~ /%\{/ ? undef : rpath($dir, $to), $args[1], $infer);
+  } elsif ($action_walk{$h}) { decl_action($acc, $dir, $cwd, $_, $infer) for @args }
+  elsif ($h =~ /^(?:with-(?:stdout|stderr|outputs)-to|write-file|with-accepted-exit-codes|setenv)$/) {
+    decl_action($acc, $dir, $cwd, $_, $infer) for grep { ref } @args;
+  } elsif ($h eq "with-stdin-from") {
+    decl_file($acc, $here->($args[0])) if $infer && $plain->($args[0]);
+    decl_action($acc, $dir, $cwd, $_, $infer) for grep { ref } @args;
+  } elsif ($h eq "run") {
+    decl_file($acc, $here->($args[0])) if $infer && @args && $plain->($args[0]) && $args[0] =~ m{/};
+  } elsif ($h =~ /^(?:diff|cmp|cat)$/) {
+    $infer && $plain->($_) and decl_file($acc, $here->($_)) for @args;
+  } elsif ($h eq "diff?") {   # the second file is one the action itself may have written
+    decl_file($acc, $here->($args[0])) if $infer && @args && $plain->($args[0]);
+  } elsif ($h =~ /^copy#?$/) {
+    decl_file($acc, $here->($args[0])) if $infer && @args && $plain->($args[0]);
+  } elsif ($h !~ /^(?:echo|system|bash)$/) { push @{$acc->{unknown}}, "($h ...)" }
+}
+my %rule_fields = map { $_ => 1 } qw(targets target deps action mode fallback locks alias aliases package enabled_if);
+sub decl_stanza {   # what an alias-attached stanza needs
+  my ($s) = @_;
+  my $acc = decl_new();
+  my $x = $s->{x};
+  if ($s->{kind} eq "library") {   # runtest-NAME of its (inline_tests (deps ...)): the runner links the library
+    my $it = dfield($x, "inline_tests") // [];
+    decl_deps($acc, $s->{dir}, dfield(["inline_tests", @$it], "deps") // []);
+    return $acc;
+  }
+  decl_deps($acc, $s->{dir}, dfield($x, "deps") // []);
+  my $act = dfield($x, "action");
+  decl_action($acc, $s->{dir}, $s->{dir}, $_, 1) for @{$act // []};
+  if ($s->{kind} eq "rule") {
+    for my $f (@$x[1 .. $#$x]) {
+      next if ref $f && @$f && !ref $f->[0] && $rule_fields{$f->[0]};
+      if (!$act && ref $f) { decl_action($acc, $s->{dir}, $s->{dir}, $f, 1) }   # (rule <action>), the short form
+      else { push @{$acc->{unknown}}, canon($f) }
+    }
+  }
+  return $acc;
+}
+# Which stanzas declare each alias: a rule's (alias ...) field, an (alias (name
+# ...)) stanza, and the `runtest-NAME` dune generates for a (test)/(tests) name
+# and for a library with (inline_tests).
+my %declared_by;   # "DIR\0ALIAS" -> [stanza...]
+for my $s (@dstanzas) {
+  my @names;
+  if ($s->{kind} eq "rule") { @names = map { ref $_ ? () : $_ } @{dfield($s->{x}, "alias") // []}, @{dfield($s->{x}, "aliases") // []} }
+  elsif ($s->{kind} eq "alias") { @names = grep { !ref } @{dfield($s->{x}, "name") // []} }
+  elsif ($s->{kind} =~ /^tests?$/) { @names = map { ref $_ ? () : "runtest-$_" } @{dfield($s->{x}, "names") // dfield($s->{x}, "name") // []} }
+  elsif ($s->{kind} eq "library" && dfield($s->{x}, "inline_tests")) { @names = map { ref $_ ? () : "runtest-$_" } @{dfield($s->{x}, "name") // []} }
+  push @{$declared_by{"$s->{dir}\0$_"}}, $s for @names;
+}
+my @declared_generated;   # generated files a declared stanza needs: their rules are queried too
+for my $a (@al) {
+  my ($an) = $a->{name} =~ m{([^/]+)$};
+  my @by = @{$declared_by{"$a->{dir}\0$an"} // []} or next;
+  my $acc = decl_new();
+  for my $one (map { decl_stanza($_) } @by) {
+    $acc->{files}{$_} = 1 for keys %{$one->{files}};
+    $acc->{runs}{$_} = 1 for keys %{$one->{runs}};
+    $acc->{adeps}{$_} = 1 for keys %{$one->{adeps}};
+    $acc->{adeps_rec}{$_} = 1 for keys %{$one->{adeps_rec} // {}};
+    push @{$acc->{globs}}, @{$one->{globs}};
+    push @{$acc->{unknown}}, @{$one->{unknown}};
+  }
+  for my $f (sort keys %{$acc->{files}}) {
+    next if -e $f;
+    my ($fd, $fb) = dir_of($f);
+    if ($targets_of{$fd}{$fb}) { push @{$acc->{via}}, $f; push @declared_generated, $f }
+    else { push @{$acc->{unknown}}, "$f (neither a source file nor a target dune shows)" }
+  }
+  $a->{decl} = $acc;
+}
+@declared_generated = sort keys %{{ map { $_ => 1 } @declared_generated }};
+
 # Each queried target's rule: the executables it runs, the files and globs it
 # reads, and the generated files it reads (`via`), whose rules are queried in
 # turn -- a `copy_files` copy, a file list -- so what a rule reaches through
@@ -557,7 +801,7 @@ sub compiled_owners {
 }
 my (%runs, %reads, %globs, %via, %adeps);
 my %queried;
-my @queue = @own_targets;
+my @queue = (@own_targets, @declared_generated);
 while (@queue) {
   $queried{$_} = 1 for @queue;
   my %next;
@@ -634,6 +878,22 @@ for my $t (sort keys %queried) {
     }
   }
   fold($_) for sort keys %queried;
+  # A declared alias: what its own stanzas need, as one more own target of the
+  # alias, read like a rule dune dumped (its generated inputs folded in).
+  for my $a (grep { $_->{decl} } @al) {
+    my $acc = $a->{decl};
+    my $k = "$a->{name}\0declared";
+    my %ad = %{$acc->{adeps}};
+    for my $r (keys %{$acc->{adeps_rec}}) {
+      my ($rd, $rn) = split /\0/, $r;
+      $ad{$_->{name}} = 1 for grep { under($_->{dir}, $rd) && $_->{name} =~ m{/\Q$rn\E$} } @al;
+    }
+    $runs{$k} = { %{$acc->{runs}} }; $reads{$k} = { %{$acc->{files}} }; $globs{$k} = [@{$acc->{globs}}];
+    $via{$k} = [@{$acc->{via}}]; $adeps{$k} = \%ad;
+    fold($k);
+    push @{$a->{own}}, $k;
+    $a->{declared} = !@{$acc->{unknown}};
+  }
 }
 
 # A stub object belongs to the library whose stub archive (`libNAME_stubs.a`,
@@ -670,7 +930,12 @@ for my $o (grep { /\.o$/ } @stub_targets) {
 my (%hit, %dune_dirs, %data_dirs, %read_by, @unmapped, @unread);
 my $any_data = 0;
 sub label { my $s = $st[$_[0]]; "$s->{kind} @{$s->{names}} ($s->{dir})" }
-sub reads { my ($t, $p, $d, $b) = @_; $reads{$t}{$p} || grep { $_->[0] eq $d && $_->[1]->($b) } @{$globs{$t}} }
+# A glob entry is [DIR, matcher over a file name, recursive?]; a recursive one
+# (glob_files_rec, source_tree) matches in DIR and beneath it.
+sub reads {
+  my ($t, $p, $d, $b) = @_;
+  $reads{$t}{$p} || grep { ($_->[2] ? under($d, $_->[0]) : $_->[0] eq $d) && $_->[1]->($b) } @{$globs{$t}};
+}
 sub under { my ($x, $root) = @_; $root eq "." || $x eq $root || index($x, "$root/") == 0 }
 for my $p (@changed) {
   my ($d, $b) = dir_of($p);
@@ -765,30 +1030,35 @@ for (my $grew = 1; $grew;) {
 # reached stanza included, since not even its executable is known.
 my %touched = map { $st[$_]{dir} => 1 } keys %reached;
 $touched{(dir_of($_))[0]} = 1 for @changed;
-my (%out, %unattributed, %opaque_hit, %total, %listed, %aliased);
+my (%out, %guess, %unattributed, %opaque_hit, %total, %listed, %aliased);
 my %read_any = map { %{$read_by{$_}} } keys %read_by;
 for my $a (@al) {
   my %owners = (%{$a->{owners}}, map { %{$runs{$_} // {}} } @{$a->{own}});
   $aliased{$_} = 1 for keys %owners;
   $total{$a->{dir}}++;
   my $unknown = !%owners && !@{$a->{own}};
-  my $opaque = !$a->{golden};
+  # A declared alias (its stanzas read in full above) is no longer opaque.
+  my $opaque = !$a->{golden} && !$a->{declared};
   $unattributed{$a->{name}} = 1 if $unknown && $touched{$a->{dir}};
   my $opaque_listed = $opaque && ($any_data || $data_dirs{$a->{dir}});
   $opaque_hit{$a->{dir}}++ if $opaque_listed;
-  if ($dune_dirs{$a->{dir}} || $read_any{$a->{name}} || grep({ $reached{$_} } keys %owners)
-      || $unattributed{$a->{name}} || $opaque_listed) {
+  my $concrete = $dune_dirs{$a->{dir}} || $read_any{$a->{name}} || grep({ $reached{$_} } keys %owners);
+  if ($concrete || $unattributed{$a->{name}} || $opaque_listed) {
     $out{$a->{name}} = 1;
+    $guess{$a->{name}} = 1 unless $concrete;
     $listed{$a->{dir}}++;
   }
 }
-# An alias whose own targets' rules need a listed alias (an ambient gate such
-# as `runtest-env_spelling_gate`) is listed too, to a fixpoint.
+# An alias whose own rules need a listed alias (an ambient gate such as
+# `runtest-env_spelling_gate`) is listed too, to a fixpoint -- unless that one
+# is listed only because its undumped action might read a changed path: the
+# needing alias reads nothing from it (an alias makes no file), so what that
+# action reads changes only whether it, the needed one, passes.
 my $by_alias = 0;
 for (my $grew = 1; $grew;) {
   $grew = 0;
   for my $a (grep { !$out{$_->{name}} } @al) {
-    next unless grep { my $t = $_; grep { $out{$_} } keys %{$adeps{$t} // {}} } @{$a->{own}};
+    next unless grep { my $t = $_; grep { $out{$_} && !$guess{$_} } keys %{$adeps{$t} // {}} } @{$a->{own}};
     $out{$a->{name}} = 1;
     $listed{$a->{dir}}++;
     $by_alias++;

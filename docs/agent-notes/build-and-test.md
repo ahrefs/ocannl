@@ -2552,11 +2552,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   rules` for each alias's own targets and each generated module file. Those dependencies are how
   a scan that READS a changed file (an `.ml`, an agent note, a script) is found without linking
   it, and how a generated module (`.mll`, `.mly`, a `(select)` choice, a generator's header) or a
-  C stub is traced to its stanza. dune does not dump an alias rule itself, so an alias whose
-  action is not a golden diff of its own targets (a `(test)` with no golden, run under its
-  `(deps)`; `runtest-sweep_harness`, which names `tools/sweep.sh`) is listed for any changed path
-  in its directory but an owned module source, and for a changed non-build input anywhere: a
-  doc, script or golden edit lists those ~49 too. Its header states the boundary as an
+  C stub is traced to its stanza. dune does not dump an alias rule itself, so the helper also reads the
+  dune files as text: the stanzas declaring each alias and what they need (`(deps)`, the `%{dep:}`
+  family, what dune infers from `diff`/`cat`/`copy`), a generated input queried like an own target
+  (gh-ocannl-1431: `runtest-kernel_attribution` runs and diffs in one action, owns a golden, and
+  was taken for a golden pair, so an edit to the `benchmarks/gh1002_cells.py` its `(deps)` name
+  missed it). Only an alias whose stanzas use a form outside that reader (`(package …)`, say; none
+  in this repository today) is still listed blind, for any changed path in its directory but an
+  owned module source and for a changed non-build input anywhere. Its header states the boundary as an
   allowlist; what falls outside is reported on stderr, and a changed `.ml`/`.mli` no stanza of
   this build owns (a deleted module, a CUDA-only one on a box without cudajit) exits 3. Two
   portability points (gh-ocannl-1389): only the file `dune rules -o` writes is the answer, since on
@@ -2577,8 +2580,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     `@test/training/runtest-fused_classifier`. A narrower "tests that name the module" cut is no
     substitute: `test_vectorized_codegen.ml` never names `Register_tile`.
   - A test or note edit gets a short, exact list: `test/operations/cost_model_template.ml` reaches
-    its own alias plus the 14 scans that read it; `docs/agent-notes/build-and-test.md` its ten scans
-    and the ~49 aliases above.
+    its own alias plus the scans that read it (17 aliases in all); `docs/agent-notes/build-and-test.md`
+    only the 11 scans that read it.
 
 ## OCaml and dune traps
 
