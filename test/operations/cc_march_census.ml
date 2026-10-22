@@ -1619,8 +1619,8 @@ let kernel_label (e : emitted) =
   | Some geometry -> setting ^ "-" ^ geometry
   | None -> setting
 
-let emit_all ~exe ~root ~widths =
-  List.cartesian_product widths fp16_settings
+let emit_all ?(settings = fp16_settings) ~exe ~root ~widths () =
+  List.cartesian_product widths settings
   |> List.concat_map ~f:(fun (width, (fp16_tag, fp16)) ->
       let describe = Printf.sprintf "width %d, fp16 %s" width fp16_tag in
       let dir = Stdlib.Filename.concat root (Printf.sprintf "w%d-%s" width fp16_tag) in
@@ -1716,26 +1716,32 @@ let emit_all ~exe ~root ~widths =
    - [emission]: the cache probes and every claim about what the children EMITTED -- the claims that
    span widths and fp16 settings, so they need every child, and none of which compiles for a foreign
    target. Emission is cheap (seconds: one host compile per kernel), so this piece emits everything
-   again rather than sharing it; - one piece per (vector width, column family)
-   ({!toolchain_families}): that width's two children, compiled under that family's columns at [-O2]
-   and [-O3] and held to every row claim. A row is a (column, kernel, level) triple and a kernel has
-   one width, so the rows of the six pieces partition the whole matrix's, and a claim "every row
-   satisfies P" is the conjunction of the pieces' claims. The fp16 narrowing probe is a (column,
-   width, level) reading, so it goes with its width too. Each claim is named with its piece, since
-   the pieces share one executable and a skip record is keyed by executable and claim.
+   again rather than sharing it; - one piece per (emit child, column family)
+   ({!toolchain_families}): one (vector width, fp16 setting) child's kernels, compiled under that
+   family's columns at [-O2] and [-O3] and held to every row claim. A row is a (column, kernel,
+   level) triple and a kernel comes from one child, so the rows of the twelve pieces partition the
+   whole matrix's, and a claim "every row satisfies P" is the conjunction of the pieces' claims. The
+   fp16 narrowing probe is a (column, width, level) reading, so it goes with its width, in the one
+   child of that width whose kernels carry the bridge it probes (see {!census}). Each claim is named
+   with its piece, since the pieces share one executable and a skip record is keyed by executable
+   and claim.
 
-   The list is derived, never kept: the widths times the families' names. What the dune file runs is
-   held to it by the emission piece. *)
-type piece = Emission | Columns of { width : int; family : string }
+   Per child rather than per width because the first CI run of per-width pieces (cold cache) read
+   [w64_host] at 368 s, against the about-5-minute ceiling a piece is held to; the 64-byte kernels
+   are the expensive ones, and the native-fp16 child carries most of the kernels.
+
+   The list is derived, never kept: the children ({!widths} times {!fp16_settings}) times the
+   families' names. What the dune file runs is held to it by the emission piece. *)
+type piece = Emission | Columns of { width : int; fp16 : string * string; family : string }
 
 let piece_name = function
   | Emission -> "emission"
-  | Columns { width; family } -> Printf.sprintf "w%d_%s" width family
+  | Columns { width; fp16 = tag, _; family } -> Printf.sprintf "w%d_%s_%s" width tag family
 
 let pieces () =
   Emission
-  :: List.concat_map widths ~f:(fun width ->
-      List.map (toolchain_families ()) ~f:(fun (family, _) -> Columns { width; family }))
+  :: List.concat_map (List.cartesian_product widths fp16_settings) ~f:(fun (width, fp16) ->
+      List.map (toolchain_families ()) ~f:(fun (family, _) -> Columns { width; fp16; family }))
 
 (* The piece each rule of a dune file runs: the argument that follows each mention of this
    executable as a rule dependency. *)
@@ -1752,7 +1758,7 @@ let emission ~exe ~root ~dune_file =
   cache_format_probes ();
   cache_policy_probes ();
   cache_reuse_probe ~exe ~root;
-  let emitted = emit_all ~exe ~root ~widths in
+  let emitted = emit_all ~exe ~root ~widths () in
   Verdict.p_all "every requested vector width emitted a kernel" widths ~f:(fun w ->
       List.exists emitted ~f:(fun e -> e.width = w));
   (* The (fp16, f32) bridge pair and the native-fp16 builtin rows live in different children, so a
@@ -1888,9 +1894,9 @@ let emission ~exe ~root ~dune_file =
       (String.concat ~sep:"; " (sorted derived));
   Verdict.p "the dune rules run every census piece exactly once" partition_holds
 
-let census ~exe ~root ~piece ~width ~columns =
+let census ~exe ~root ~piece ~width ~fp16 ~columns =
   let in_piece claim = Printf.sprintf "[%s] %s" (piece_name piece) claim in
-  let emitted = emit_all ~exe ~root ~widths:[ width ] in
+  let emitted = emit_all ~exe ~root ~widths:[ width ] ~settings:[ fp16 ] () in
   let all = columns in
   (* Why a column is not censused, per column that is not. A toolchain that rejects the target is
      the usual reason. The other is a toolchain that accepts it but writes no line table this census
@@ -2011,10 +2017,18 @@ let census ~exe ~root ~piece ~width ~columns =
                         }))))
   in
   (* The fp16 narrowing probe, per (column, width, level) that the narrowing claim below is held
-     over (its population is argued there), read here so its table lines sit beside the rows. *)
+     over (its population is argued there), read here so its table lines sit beside the rows. A
+     probe of the width, not of a kernel, so one of the width's two pieces per family holds it: the
+     one whose kernels narrow f32 to fp16 storage, which is asked of what the child EMITTED -- an
+     fp16-storage loop computing wider -- rather than of its tag. *)
+  let narrows_half =
+    List.exists emitted ~f:(fun e ->
+        List.exists e.loops ~f:(fun l ->
+            String.equal l.store half && not (String.equal l.comp half)))
+  in
   let narrow_population =
     List.concat_map columns ~f:(fun (t, caps) ->
-        if not (caps.named && caps.fp16_convert) then []
+        if not (narrows_half && caps.named && caps.fp16_convert) then []
         else
           List.concat_map [ width ] ~f:(fun width ->
               if width > caps.vector_bytes then []
@@ -2250,7 +2264,8 @@ let census ~exe ~root ~piece ~width ~columns =
   let one_conversion (_, reading) =
     match reading with Some (1, 0) -> true | Some _ | None -> false
   in
-  if List.is_empty narrow_population then
+  if not narrows_half then ()
+  else if List.is_empty narrow_population then
     Verdict.skipped ~aggregation:`Environment
       ~backend:"no named -march target that converts fp16 packed accepted by this toolchain"
       narrow_claim
@@ -2493,11 +2508,11 @@ let () =
         | [ _; "emission"; dune_file ] -> (Emission, fun ~root -> emission ~exe ~root ~dune_file)
         | [ _; name ] -> (
             match List.find (pieces ()) ~f:(fun p -> String.equal (piece_name p) name) with
-            | Some (Columns { width; family } as piece) ->
+            | Some (Columns { width; fp16; family } as piece) ->
                 let columns =
                   List.Assoc.find_exn (toolchain_families ()) family ~equal:String.equal
                 in
-                (piece, fun ~root -> census ~exe ~root ~piece ~width ~columns)
+                (piece, fun ~root -> census ~exe ~root ~piece ~width ~fp16 ~columns)
             | Some Emission | None -> usage ())
         | _ -> usage ()
       in

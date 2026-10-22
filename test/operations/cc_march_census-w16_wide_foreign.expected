@@ -1,0 +1,17 @@
+[w16_wide_foreign] clang/x86-64-v3: the -march column compiles clean and its loops are censused: true
+[w16_wide_foreign] clang/x86-64-v4: the -march column compiles clean and its loops are censused: true
+[w16_wide_foreign] clang/sapphirerapids: the -march column compiles clean and its loops are censused: true
+[w16_wide_foreign] aarch64/armv8-a: the -march column compiles clean and its loops are censused: true
+[w16_wide_foreign] aarch64/armv8.2-a+fp16: the -march column compiles clean and its loops are censused: true
+[w16_wide_foreign] every emitted kernel compiles clean at -O2 and -O3 under every accepted -march: true
+[w16_wide_foreign] every compiled kernel has recognizable loop edges: true
+[w16_wide_foreign] every accumulator loop is found by the census: true
+[w16_wide_foreign] no Max/Min accumulator loop calls libm: true
+[w16_wide_foreign] no FMA accumulator loop calls libm where the ISA has a fused multiply-add: true
+[w16_wide_foreign] no accumulator loop is rendered wholly scalar where a named target's ISA has the operation: true
+[w16_wide_foreign] no accumulator loop is scalarized where a named target's ISA has the operation: true
+[w16_wide_foreign] the emitted fp16 narrowing bridge is one packed conversion per vector where a named target converts fp16 packed: true
+[w16_wide_foreign] every register-tiled Tile_mma k-loop does more vector than scalar work where the ISA has a fused multiply-add: true
+[w16_wide_foreign] every register-tile accumulator update is one whole-width vector FMA per k step where the ISA has a fused multiply-add: true
+[w16_wide_foreign] no register-tile k-loop references the stack where its pass fits the target's vector registers: true
+[w16_wide_foreign] no register-tile column tail stores its partial vector to the stack where its pass fits the target's vector registers: true

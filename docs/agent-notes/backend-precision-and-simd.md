@@ -1391,9 +1391,10 @@ files.
   `test/operations/cc_march_census` compiles the emitted kernel under seven `-march` targets at two
   optimization levels and three vector widths, and censuses the loop carrying each accumulator
   update. The generated `.c` includes only libc headers, so the whole matrix needs a
-  toolchain and nothing else. It runs as seven actions (gh-ocannl-1502): `emission`, for the claims
-  about what was emitted, and one per (vector width, column family) -- `w16_host` to `w64_foreign`,
-  the host compiler's columns or clang's and the aarch64 cross's -- each with its own golden and
+  toolchain and nothing else. It runs as thirteen actions (gh-ocannl-1502): `emission`, for the
+  claims about what was emitted, and one per (emit child, column family) -- `w16_native_host` to
+  `w64_wide_foreign`: a (vector width, fp16 setting) child under the host compiler's columns or
+  under clang's and the aarch64 cross's -- each with its own golden and
   `runtest-cc_march_census-<piece>` alias, and its per-row table in
   `cc_march_census_kernels/<piece>/rows.txt`; rerun the piece a failing claim names. The ARM columns need a cross gcc, pointed at by `AARCH64_CROSS_GCC`
   and reported through `Verdict.skipped` when absent, so the golden does not depend on the box
