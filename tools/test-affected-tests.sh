@@ -74,6 +74,8 @@ cat >"$repo/t1/dune" <<'DUNE'
 (test (name t_core) (modules t_core) (libraries mid))
 ; Links core through mid and names nothing of it: link-only for a core edit.
 (test (name t_mid) (modules t_mid) (libraries mid))
+; The same executable under an unknown action: blind, so never ranked link-only.
+(rule (alias runtest-t_mid-blind) (deps (package fx)) (action (run %{exe:t_mid.exe})))
 (test (name t_leaf) (modules t_leaf) (libraries leaf))
 (tests (names ta tb) (modules ta tb shared) (libraries leaf))
 (library (name tlib) (modules m_one m_two) (preprocess (pps myppx)))
@@ -97,6 +99,8 @@ cat >"$repo/t2/dune" <<'DUNE'
 ; A rule this reader cannot read in full (a package dependency): its action stays undumped, and
 ; an alias needing it is not listed when it is listed only for that reason.
 (rule (alias runtest-pkg) (deps (package fx)) (action (progn)))
+; An action path under a root prefix: not positively read, so the alias is blind (gh-ocannl-1431).
+(rule (alias runtest-rooted) (action (cat %{workspace_root}/cfg/rooted.cfg)))
 (rule (target needs_pkg.actual) (deps (alias runtest-pkg)) (action (with-stdout-to %{target} (echo y))))
 (rule (alias runtest-needs_pkg) (action (diff needs_pkg.expected needs_pkg.actual)))
 (rule (alias scans) (deps (alias runtest-scan)) (action (progn)))
@@ -170,7 +174,7 @@ for f in lib/core.ml lib/helper.ml lib/leaf.ml lib/myppx.ml lib/optlib.ml lib/st
 done
 for f in t2/gen-v1.expected t2/scenario_x.expected t2/scan.expected t3/neg.expected t3/plain.cfg \
   t3/cfgread.expected t3/esc.expected t3/uses.expected t3/py.expected cfg/base.cfg cfg/extra.py docs/{x}one.md \
-  t2/needs_pkg.expected cfg/helper.cfg t4/sub/nest.cfg t6/sub/nest.cfg \
+  t2/needs_pkg.expected cfg/helper.cfg cfg/rooted.cfg t4/sub/nest.cfg t6/sub/nest.cfg \
   lib/stubbed_c.c t3/cexe_c.c docs/notes.md; do : >"$repo/$f"; done
 printf '{ }\nrule token = parse eof { () }\n' >"$repo/lib/lx.mll"
 # What the link-only ranking reads: t_core names Helper and its `used`; core re-exports Helper as
@@ -201,12 +205,12 @@ expect() { # LABEL RC ALIAS... : the exact list, in any order, and the exit stat
     report 1 "$label" "exit $rc (want $want_rc); got [$(tr '\n' ' ' <"$out")] want [$(tr '\n' ' ' <"$TMP/want")]; stderr: $(tr '\n' '|' <"$err")"
   fi
 }
-reached_by_core='@t1/runtest-t_core @t1/runtest-t_mid @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen
+reached_by_core='@t1/runtest-t_core @t1/runtest-t_mid @t1/runtest-t_mid-blind @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen
   @t5/slow-usesh'
 # Every alias whose action dune does not dump and whose stanzas this reader
 # cannot read in full (no golden among its own targets): listed for any changed
 # data file. runtest-needs_pkg needs it, and is not listed for that reason.
-opaque_all='@t2/runtest-pkg @t6/runtest-inc @t6/runtest-nest'
+opaque_all='@t1/runtest-t_mid-blind @t2/runtest-pkg @t2/runtest-rooted @t6/runtest-inc @t6/runtest-nest'
 
 if harness_leg 'cold build'; then
   # On a build directory that has never built t6/word.txt, `dune rules` builds
@@ -257,13 +261,13 @@ fi
 
 if harness_leg 'select choice'; then
   affected --files mid/choice.core.ml
-  expect 'a (select) choice maps to its module' 0 @t1/runtest-t_core @t1/runtest-t_mid
+  expect 'a (select) choice maps to its module' 0 @t1/runtest-t_core @t1/runtest-t_mid @t1/runtest-t_mid-blind
 fi
 
 if harness_leg 'tests helper module'; then
   affected --files t1/shared.ml
   expect 'a module of a tests stanza (undescribed) reaches every tests stanza of its directory' 0 \
-    @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-t_mid @t1/runtest-ta @t1/runtest-tb
+    @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-t_mid @t1/runtest-t_mid-blind @t1/runtest-ta @t1/runtest-tb
 fi
 
 if harness_leg 'library module alias'; then
@@ -280,7 +284,7 @@ fi
 if harness_leg 'generated module'; then
   affected --files lib/lx.mll
   expect 'an .mll reaches the stanza of the module its rule generates' 0 \
-    @t1/runtest-t_core @t1/runtest-t_mid @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
+    @t1/runtest-t_core @t1/runtest-t_mid @t1/runtest-t_mid-blind @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
 fi
 
 if harness_leg 'golden'; then
@@ -295,8 +299,8 @@ fi
 if harness_leg 'dune-project'; then
   affected --files dune-project
   expect 'dune-project reaches every per-test alias beneath it' 0 \
-    @t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-t_mid @t1/runtest-ta @t1/runtest-tb \
-    @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan \
+    @t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-t_mid @t1/runtest-t_mid-blind @t1/runtest-ta @t1/runtest-tb \
+    @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-rooted @t2/runtest-scan \
     @t2/runtest-scenario_x @t2/slow-gen @t3/runtest-cfgread @t3/runtest-esc @t3/runtest-neg @t3/runtest-py @t3/runtest-t_plain @t3/runtest-t_stub \
     @t3/runtest-uses @t3/runtest-viahelper @t4/runtest-gated @t4/runtest-objs @t4/runtest-t_gate @t4/runtest-t_gate-pre \
     @t4/sub/runtest-t_sub @t5/slow-usesh @t6/runtest-dyn @t6/runtest-inc @t6/runtest-nest
@@ -306,7 +310,7 @@ if harness_leg 'dune file elsewhere'; then
   # t1/dune makes made.txt, which a t3 rule reads.
   affected --files t1/dune
   expect 'a dune file reaches the rules elsewhere that read the files it makes' 0 \
-    @t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-t_mid @t1/runtest-ta @t1/runtest-tb @t3/runtest-uses
+    @t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-t_mid @t1/runtest-t_mid-blind @t1/runtest-ta @t1/runtest-tb @t3/runtest-uses
 fi
 
 if harness_leg 'test with no libraries'; then
@@ -336,7 +340,7 @@ fi
 if harness_leg 'negated glob'; then
   affected --files mid/mid.ml
   expect 'a [!set] glob matches outside its set (the select-choice leg pins the inside)' 0 \
-    @t1/runtest-t_core @t1/runtest-t_mid @t3/runtest-neg
+    @t1/runtest-t_core @t1/runtest-t_mid @t1/runtest-t_mid-blind @t3/runtest-neg
 fi
 
 if harness_leg 'escaped glob'; then
@@ -383,6 +387,11 @@ if harness_leg 'alias dependency'; then
 fi
 
 if harness_leg 'declared deps'; then
+  # runtest-rooted reads %{workspace_root}/cfg/rooted.cfg: a template the reader does not
+  # resolve, so the action is unknown and the alias blind, never declared without it.
+  affected --files cfg/rooted.cfg
+  # shellcheck disable=SC2086
+  expect 'an action path under an unresolved %{...} leaves its alias blind' 0 $opaque_all
   affected --files cfg/helper.cfg
   # shellcheck disable=SC2086
   expect 'a per-test alias needing a helper alias reaches what the helper needs' 0 @t3/runtest-viahelper $opaque_all
@@ -443,7 +452,7 @@ fi
 if harness_leg 'dune file'; then
   affected --files t2/dune
   expect 'a changed dune file lists every per-test alias of its directory, never an aggregate' 0 \
-    @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen
+    @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-rooted @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen
 fi
 
 if harness_leg 'data read'; then
@@ -478,20 +487,26 @@ if harness_leg 'link-only'; then
   }
   affected --files lib/helper.ml
   ordered 'a module names its tests first (by name or a re-export), the link-only ones last' \
-    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh @t1/runtest-t_mid
-  grep -qx 'affected: link-only: @t1/runtest-t_mid' "$err" && grep -q '1 LINK-ONLY alias(es), printed LAST' "$err" ||
+    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh @t1/runtest-t_mid @t1/runtest-t_mid-blind
+  grep -qx 'affected: link-only: @t1/runtest-t_mid' "$err" && grep -q '2 LINK-ONLY alias(es), printed LAST' "$err" ||
     report 1 'the link-only aliases are named on stderr' "$(cat "$err")"
   affected --referenced-only --files lib/helper.ml
   ordered '--referenced-only leaves the link-only ones off' \
     @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
+  # Uncertainty ranks first: t_mid-blind runs t_mid under an unknown action, so with a data
+  # file changed too it is never link-only, while t_mid still is.
+  affected --referenced-only --files lib/helper.ml docs/other.md
+  if [ "$rc" = 0 ] && grep -qx @t1/runtest-t_mid-blind "$out" && ! grep -qx @t1/runtest-t_mid "$out"; then
+    report 0 'an alias whose unknown action might read a changed path is never ranked link-only'
+  else report 1 'an alias whose unknown action might read a changed path is never ranked link-only' "exit $rc; $(cat "$out")"; fi
   printf 'let used = 1\nlet unused = 3\n' >"$repo/lib/helper.ml"
   affected HEAD
   ordered 'a change to one definition ranks first only what names it' \
-    @t2/runtest-scan @t5/slow-usesh @t1/runtest-t_core @t1/runtest-t_mid @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen
+    @t2/runtest-scan @t5/slow-usesh @t1/runtest-t_core @t1/runtest-t_mid @t1/runtest-t_mid-blind @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen
   printf 'let used = 2\nlet unused = 2\n' >"$repo/lib/helper.ml"
   affected HEAD
   ordered '... and t_core names `used`' \
-    @t1/runtest-t_core @t2/runtest-scan @t5/slow-usesh @t1/runtest-t_mid @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen
+    @t1/runtest-t_core @t2/runtest-scan @t5/slow-usesh @t1/runtest-t_mid @t1/runtest-t_mid-blind @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen
   mutant=$repo/tools/affected-mutant.sh
   if FROM='return 0 if !$defs || grep { $tok->{$_} } keys %$defs;' TO='return 0;' \
       perl -0pe '$n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
@@ -510,11 +525,11 @@ if harness_leg 'link-only'; then
   printf 'let used = 1\nlet unused = 2\nlet ( +! ) a b = a + b\n' >"$repo/lib/helper.ml"
   affected HEAD
   ordered 'a changed operator definition counts as the whole module (tokens hold identifiers)' \
-    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh @t1/runtest-t_mid
+    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh @t1/runtest-t_mid @t1/runtest-t_mid-blind
   printf 'let used = 1\nlet unused = 2\ntype t = A | B\n' >"$repo/lib/helper.ml"
   affected HEAD
   ordered 'a changed type definition counts as the whole module (its constructors are what users name)' \
-    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh @t1/runtest-t_mid
+    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh @t1/runtest-t_mid @t1/runtest-t_mid-blind
   git_q checkout -q -- lib/helper.ml || exit 2
 fi
 
@@ -541,7 +556,7 @@ if harness_leg 'git forms'; then
     @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb @t2/runtest-scan
   affected HEAD -- t1
   expect 'the working-tree form takes in an untracked file, limited by a pathspec' 0 \
-    @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-t_mid @t1/runtest-ta @t1/runtest-tb
+    @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-t_mid @t1/runtest-t_mid-blind @t1/runtest-ta @t1/runtest-tb
   rm -f "$repo/t1/new_helper.ml" && git_q checkout -q -- lib/core.ml || exit 2
   affected
   if [ "$rc" = 2 ] && grep -q 'name the base' "$err" && [ ! -s "$out" ]; then
@@ -701,7 +716,7 @@ if harness_leg 'negative controls'; then
     --files lib/lx.mll -- @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
   # shellcheck disable=SC2086
   control 'an opaque action is what lists the aliases for a changed config' \
-    ' || $opaque_listed) {' ') {' \
+    'my $blind = $unattributed{$a->{name}} || $opaque_listed;' 'my $blind = $unattributed{$a->{name}};' \
     --files t3/plain.cfg -- @t3/runtest-t_plain $opaque_all
   control 'a stub archive is what carries a C stub to its library' \
     '$obj_libs{$o}{$_} = 1 for @libs' '1' \

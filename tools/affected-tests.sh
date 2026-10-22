@@ -357,6 +357,7 @@ for my $e (@{$ws->[0]}) {
         # menhir, a (select) copy, a rule's output): its rule says from what.
         push @{$generated{$rel}}, $i unless -e $rel;
         push @{$st[$i]{mods}{$name}}, $rel if -e $rel;   # its sources, for the link-only ranking
+        $st[$i]{gen_mod} = 1 unless -e $rel;   # ... which are then not all known
         my $k = "$d\0$name";
         push @{$by_modkey{$k}}, $i unless grep { $_ == $i } @{$by_modkey{$k} // []};
       }
@@ -686,11 +687,20 @@ sub decl_root {   # a %{project_root}/%{workspace_root} prefix, as a path from D
   $s =~ s{^%\{(?:project_root|workspace_root)\}(?=/|$)}{$dir eq "." ? "." : join "/", map { ".." } split m{/}, $dir}e;
   return $s;
 }
+# Argument-less variables that name no input file (a root prefix is resolved
+# where a path is read; see decl_action).
+my %plain_var = map { $_ => 1 } qw(target targets deps test workspace_root project_root null ocaml ocamlc ocamlopt
+  ocaml_bin ocaml_version ocaml_where profile context_name ext_obj ext_exe ext_lib ext_dll ext_asm arch_sixtyfour
+  os_type architecture system model cc cxx make first_dep library-name ignoring_promoted_rules);
 sub decl_vars {   # the %{...} forms in a string, relative to the stanza's DIR
   my ($acc, $dir, $s) = @_;
   while ($s =~ /%\{([^}]*)\}/g) {
     my $v = $1;
-    my ($k, $arg) = $v =~ /^([^:]+):(.*)$/ or next;   # no argument: %{target}, %{deps}, %{test}, ...
+    my ($k, $arg) = $v =~ /^([^:]+):(.*)$/;
+    if (!defined $k) {   # no argument: only the variables known to name no input
+      push @{$acc->{unknown}}, "%{$v}" unless $plain_var{$v};
+      next;
+    }
     if ($k =~ /^(?:dep|exe|read|read-lines|read-strings)$/) { decl_file($acc, rpath($dir, decl_root($dir, $arg))) }
     elsif ($k =~ /^lib(?:-private)?$/) {
       my ($lib) = split /:/, $arg;
@@ -741,7 +751,16 @@ sub decl_action {
   if (!defined $h || ref $h) { push @{$acc->{unknown}}, canon($x); return }
   decl_vars($acc, $dir, $_) for grep { !ref } @args;
   my $here = sub { defined $cwd ? rpath($cwd, decl_root($cwd, $_[0])) : undef };
-  my $plain = sub { !ref $_[0] && $_[0] !~ /%\{/ };
+  # A path dune infers as an input: a plain path is read; a lone %{dep:...}-family
+  # form was read by decl_vars; any other %{...} (a root prefix included) is not
+  # positively read, so the stanza is unknown.
+  my $infer_file = sub {
+    my ($p) = @_;
+    if (ref $p) { push @{$acc->{unknown}}, canon($p); return }
+    if ($p !~ /%\{/) { decl_file($acc, $here->($p)); return }
+    return if $p =~ /^%\{(?:dep|exe|read|read-lines|read-strings|bin|lib|lib-private):[^}]*\}$/;
+    push @{$acc->{unknown}}, $p;
+  };
   if ($h eq "no-infer") { decl_action($acc, $dir, $cwd, $_, 0) for @args }
   elsif ($h eq "chdir" && @args == 2 && !ref $args[0]) {
     my $to = decl_root($dir, $args[0]);
@@ -752,16 +771,17 @@ sub decl_action {
   elsif ($h =~ /^(?:with-(?:stdout|stderr|outputs)-to|write-file|with-accepted-exit-codes|setenv)$/) {
     decl_action($acc, $dir, $cwd, $_, $infer) for grep { ref } @args;
   } elsif ($h eq "with-stdin-from") {
-    decl_file($acc, $here->($args[0])) if $infer && $plain->($args[0]);
-    decl_action($acc, $dir, $cwd, $_, $infer) for grep { ref } @args;
+    $infer_file->($args[0]) if $infer;
+    decl_action($acc, $dir, $cwd, $_, $infer) for grep { ref } @args[1 .. $#args];
   } elsif ($h eq "run") {
-    decl_file($acc, $here->($args[0])) if $infer && @args && $plain->($args[0]) && $args[0] =~ m{/};
+    # A bare program name is looked up on PATH, not read from the tree.
+    $infer_file->($args[0]) if $infer && @args && (ref $args[0] || $args[0] =~ m{/|%\{});
   } elsif ($h =~ /^(?:diff|cmp|cat)$/) {
-    $infer && $plain->($_) and decl_file($acc, $here->($_)) for @args;
+    if ($infer) { $infer_file->($_) for @args }
   } elsif ($h eq "diff?") {   # the second file is one the action itself may have written
-    decl_file($acc, $here->($args[0])) if $infer && @args && $plain->($args[0]);
+    $infer_file->($args[0]) if $infer && @args;
   } elsif ($h =~ /^copy#?$/) {
-    decl_file($acc, $here->($args[0])) if $infer && @args && $plain->($args[0]);
+    $infer_file->($args[0]) if $infer && @args;
   } elsif ($h !~ /^(?:echo|system|bash)$/) { push @{$acc->{unknown}}, "($h ...)" }
 }
 my %rule_fields = map { $_ => 1 } qw(targets target deps action mode fallback locks alias aliases package enabled_if);
@@ -1172,6 +1192,7 @@ sub static_of {   # the dune stanza an @st entry was read from, or undef
 sub stanza_sources {   # an @st entry's source files, or undef when they are not known
   my ($i) = @_;
   my $s = $st[$i];
+  return undef if $s->{gen_mod};   # a generated module (a select, a rule's output): unknown, not empty
   return [map { @$_ } values %{$s->{mods}}] if $s->{mods};
   my $ds = static_of($i) // return undef;
   my $mods = dfield($ds->{x}, "modules");
@@ -1188,7 +1209,13 @@ sub stanza_sources {   # an @st entry's source files, or undef when they are not
     opendir my $dh, $s->{dir} or return undef;
     @names = grep { !$claimed{$_} } map { /^([A-Za-z_][A-Za-z0-9_']*)\.mli?$/ ? lcfirst $1 : () } readdir $dh;
   }
-  return [grep { -f } map { my $n = $_; map { in_dir($s->{dir}, "$n.$_") } "ml", "mli" } @names];
+  my @files;
+  for my $n (@names) {
+    my @f = grep { -f } map { in_dir($s->{dir}, "$n.$_") } "ml", "mli";
+    @f or return undef;   # a module with no source here: generated, so unknown
+    push @files, @f;
+  }
+  return \@files;
 }
 sub is_private { my $ds = static_of($_[0]); $ds && !grep { defined dfield($ds->{x}, $_) } qw(public_name public_names) }
 sub own_tokens {   # the names an owner's own code mentions, or undef when its code is not known
@@ -1400,9 +1427,12 @@ for my $a (@al) {
   my $opaque_listed = $opaque && ($any_data || $data_dirs{$a->{dir}});
   $opaque_hit{$a->{dir}}++ if $opaque_listed;
   my @by_owner = grep { $reached{$_} } nsort(keys %owners);
+  # Uncertainty ranks first: an alias whose action is unknown and might read a
+  # changed path is never link-only, whatever its owners name.
+  my $blind = $unattributed{$a->{name}} || $opaque_listed;
   if ($dune_dirs{$a->{dir}} || $read_any{$a->{name}}) { $tier{$a->{name}} = "main" }
+  elsif ($blind) { $tier{$a->{name}} = @by_owner ? "main" : "guess" }
   elsif (@by_owner) { $tier{$a->{name}} = link_only(@by_owner) ? "link" : "main" }
-  elsif ($unattributed{$a->{name}} || $opaque_listed) { $tier{$a->{name}} = "guess" }
 }
 # An alias whose own rules need a listed alias (an ambient gate such as
 # `runtest-env_spelling_gate`) is listed too, in that alias's tier, to a
