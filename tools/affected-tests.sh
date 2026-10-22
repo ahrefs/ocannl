@@ -582,30 +582,32 @@ sub keep_raw {
 }
 # The dune files themselves, read as text: what an alias's own rule needs, which
 # `dune rules` never dumps (it accepts no alias), and which stanzas a dune-file
-# edit changed. A reader for dune's syntax: `;` and `#| |#` comments, `#;`
-# datum comments, quoted and block strings, atoms. It dies on text it cannot
-# read; the caller decides whether that stops the run.
-# With $quoted, a quoted or block string comes back NUL-prefixed: what the
-# stanza comparison reads, since `"%{deps}"` is one argument and `%{deps}` many.
+# edit changed. A reader for dune's syntax, as its lexer has it
+# (src/dune_sexp/lexer.mll): `;` end-of-line comments only (`#|` and `#;` are
+# atom text), quoted strings, block strings, atoms. It dies on text it cannot
+# read; the caller decides whether that stops the run. A block string comes
+# back OPAQUE (\x01-prefixed: its escapes and its leading space are not
+# decoded), which every reader of a stanza's needs takes as unknown.
+# With $quoted, a quoted or block string comes back NUL-prefixed instead: what
+# the stanza comparison reads, since `"%{deps}"` is one argument and `%{deps}`
+# many.
 sub parse_dune {
   my ($s, $what, $quoted) = @_;
   my $q = $quoted ? "\0" : "";
   my @stack = ([]);
-  my @drop = (0);   # per open list: datums a `#;` still discards
-  my $put = sub { if ($drop[-1]) { $drop[-1]--; return } push @{$stack[-1]}, $_[0] };
+  my $put = sub { push @{$stack[-1]}, $_[0] };
   pos($s) = 0;
   while (pos($s) < length $s) {
-    next if $s =~ /\G\s+/gc || $s =~ /\G;[^\n]*/gc || $s =~ /\G#\|.*?\|#/gcs;
-    if ($s =~ /\G#;/gc) { $drop[-1]++; next }
-    if ($s =~ /\G\(/gc) { push @stack, []; push @drop, 0; next }
+    next if $s =~ /\G\s+/gc || $s =~ /\G;[^\n]*/gc;
+    if ($s =~ /\G\(/gc) { push @stack, []; next }
     if ($s =~ /\G\)/gc) {
       @stack > 1 or die "unbalanced parentheses in $what at byte " . (pos($s) - 1) . "\n";
-      pop @drop; my $l = pop @stack; $put->($l); next;
+      my $l = pop @stack; $put->($l); next;
     }
     if ($s =~ /\G"\\[|>]([^\n]*)/gc) {   # block string: consecutive "\| lines
       my $str = $1;
       $str .= "\n$1" while $s =~ /\G\n[ \t]*"\\[|>]([^\n]*)/gc;
-      $put->($q . $str); next;
+      $put->(($quoted ? "\0" : "\x01") . $str); next;
     }
     if ($s =~ /\G"((?:[^"\\]|\\.)*)"/gcs) {
       my $a = $1 =~ s/\\\n[ \t]*//gr;
@@ -619,6 +621,7 @@ sub parse_dune {
   @stack == 1 or die "unbalanced parentheses in $what\n";
   return $stack[0];
 }
+sub has_opaque { my ($x) = @_; ref $x ? scalar(grep { has_opaque($_) } @$x) : $x =~ /^\x01/ }
 sub canon {   # a quoted string (NUL-prefixed) and an atom of the same text stay apart
   my ($x) = @_;
   return "(" . join(" ", map { canon($_) } @$x) . ")" if ref $x;
@@ -779,6 +782,7 @@ sub decl_stanza {   # what an alias-attached stanza needs
   my ($s) = @_;
   my $acc = decl_new();
   my $x = $s->{x};
+  push @{$acc->{unknown}}, "a block string" if has_opaque($x);
   if ($s->{kind} eq "library") {   # runtest-NAME of its (inline_tests (deps ...)): the runner links the library
     my $it = dfield($x, "inline_tests") // [];
     decl_deps($acc, $s->{dir}, dfield(["inline_tests", @$it], "deps") // []);
@@ -808,25 +812,59 @@ for my $s (@dstanzas) {
   elsif ($s->{kind} eq "library" && dfield($s->{x}, "inline_tests")) { @names = map { ref $_ ? () : "runtest-$_" } @{dfield($s->{x}, "name") // []} }
   push @{$declared_by{"$s->{dir}\0$_"}}, $s for @names;
 }
-my @declared_generated;   # generated files a declared stanza needs: their rules are queried too
-for my $a (@al) {
-  my ($an) = $a->{name} =~ m{([^/]+)$};
-  my @by = @{$declared_by{"$a->{dir}\0$an"} // []} or next;
+my %is_per_test = map { $_->{name} => 1 } @al;
+# What a declared alias needs, its own stanzas merged. An alias it needs that is
+# no per-test alias (a helper: `(alias helper)` in its deps) is inlined, to a
+# fixpoint: what the helper reads, the needing alias reads (gh-ocannl-1431
+# review). A helper no stanza declares, or an `(alias_rec ...)` of one, is
+# unknown: the needing alias keeps the blind treatment.
+my %alias_acc;
+sub alias_acc {
+  my ($dir, $name, $seen) = @_;
+  my $key = "$dir\0$name";
+  return $alias_acc{$key} if $alias_acc{$key};
   my $acc = decl_new();
+  $seen //= {};
+  return $acc if $seen->{$key}++;
+  my @by = @{$declared_by{$key} // []};
+  push @{$acc->{unknown}}, "alias \@" . in_dir($dir, $name) . ", which no stanza declares" unless @by;
   for my $one (map { decl_stanza($_) } @by) {
     $acc->{files}{$_} = 1 for keys %{$one->{files}};
     $acc->{runs}{$_} = 1 for keys %{$one->{runs}};
-    $acc->{adeps}{$_} = 1 for keys %{$one->{adeps}};
-    $acc->{adeps_rec}{$_} = 1 for keys %{$one->{adeps_rec} // {}};
     push @{$acc->{globs}}, @{$one->{globs}};
     push @{$acc->{unknown}}, @{$one->{unknown}};
+    for my $ad (keys %{$one->{adeps}}) {
+      if ($is_per_test{$ad}) { $acc->{adeps}{$ad} = 1; next }
+      my ($hd, $hn) = $ad =~ m{^\@(?:(.*)/)?([^/]+)$};
+      merge_acc($acc, alias_acc($hd // ".", $hn, $seen));
+    }
+    for my $r (keys %{$one->{adeps_rec} // {}}) {
+      my ($rd, $rn) = split /\0/, $r;
+      if ($rn =~ /^(?:runtest|train|slow)-/) { $acc->{adeps_rec}{$r} = 1 }
+      else { push @{$acc->{unknown}}, "(alias_rec $rn)" }
+    }
   }
   for my $f (sort keys %{$acc->{files}}) {
     next if -e $f;
     my ($fd, $fb) = dir_of($f);
-    if ($targets_of{$fd}{$fb}) { push @{$acc->{via}}, $f; push @declared_generated, $f }
+    if ($targets_of{$fd}{$fb}) { $acc->{gen}{$f} = 1 }
     else { push @{$acc->{unknown}}, "$f (neither a source file nor a target dune shows)" }
   }
+  return $alias_acc{$key} = $acc;
+}
+sub merge_acc {
+  my ($into, $from) = @_;
+  for my $k (qw(files runs adeps adeps_rec gen)) { $into->{$k}{$_} = 1 for keys %{$from->{$k} // {}} }
+  push @{$into->{globs}}, @{$from->{globs}};
+  push @{$into->{unknown}}, @{$from->{unknown}};
+}
+my @declared_generated;   # generated files a declared stanza needs: their rules are queried too
+for my $a (@al) {
+  my ($an) = $a->{name} =~ m{([^/]+)$};
+  @{$declared_by{"$a->{dir}\0$an"} // []} or next;
+  my $acc = alias_acc($a->{dir}, $an);
+  $acc->{via} = [sort keys %{$acc->{gen} // {}}];
+  push @declared_generated, @{$acc->{via}};
   $a->{decl} = $acc;
 }
 @declared_generated = sort keys %{{ map { $_ => 1 } @declared_generated }};
@@ -852,6 +890,7 @@ sub compiled_owners {
                 && $st[$_]{units}{$x} } 0 .. $#st;
 }
 my (%runs, %reads, %globs, %via, %adeps);
+my %blind_target;   # a target whose rule needs a helper alias this reader cannot read
 my %queried;
 my @queue = (@own_targets, @declared_generated);
 while (@queue) {
@@ -860,7 +899,7 @@ while (@queue) {
   for my $rule (dune_rules(@queue)) {
     my $tg = field($rule, "targets");
     my @files = map { atom($_, "targets") } items(field($tg // [], "files"));
-    my (%r, %p, @g, %v, %ad);
+    my (%r, %p, @g, %v, %ad, $blind_rule);
     for my $dep (items(field($rule, "deps"))) {
       next if !ref $dep && $dep eq "Universe";   # always reruns; reads nothing in particular
       ref $dep && @$dep && !ref $dep->[0] or fail("unexpected dependency in dune rules output");
@@ -892,7 +931,17 @@ while (@queue) {
         my ($where, $path) = pair(field($spec, "dir"), "an Alias dependency");
         my $ad = $where eq "In_build_dir" ? strip_ctx($path) : $path;
         defined $ad or ($path eq $ctx and $ad = ".") or next;
-        $ad{"\@" . in_dir($ad, atom(field($spec, "name"), "alias name"))} = 1;
+        my $an = atom(field($spec, "name"), "alias name");
+        my $full = "\@" . in_dir($ad, $an);
+        if ($is_per_test{$full}) { $ad{$full} = 1; next }
+        # A helper alias: what it needs, this rule needs (its stanzas read as text).
+        my $h = alias_acc($ad, $an);
+        $p{$_} = 1 for keys %{$h->{files}};
+        $v{$_} = 1 for keys %{$h->{gen} // {}};
+        $r{$_} = 1 for keys %{$h->{runs}};
+        $ad{$_} = 1 for keys %{$h->{adeps}};
+        push @g, @{$h->{globs}};
+        $blind_rule = 1 if @{$h->{unknown}} || %{$h->{adeps_rec}};
       } elsif ($k !~ /^(?:Env|Universe|Sandbox_config)$/) {
         fail("a dependency \"$k\" in dune rules output is outside this helper's boundary");
       }
@@ -900,6 +949,7 @@ while (@queue) {
     for my $f (@files) {
       my $t = strip_ctx($f) // next;
       $runs{$t} = \%r; $reads{$t} = \%p; $globs{$t} = \@g; $via{$t} = [sort keys %v]; $adeps{$t} = \%ad;
+      $blind_target{$t} = 1 if $blind_rule;
     }
     $next{$_} = 1 for grep { !$queried{$_} } keys %v;
   }
@@ -927,6 +977,7 @@ for my $t (sort keys %queried) {
       $reads{$t} = { %{$reads{$t}}, %{$reads{$u}} };
       $globs{$t} = [@{$globs{$t}}, @{$globs{$u}}];
       $adeps{$t} = { %{$adeps{$t}}, %{$adeps{$u}} };
+      $blind_target{$t} = 1 if $blind_target{$u};
     }
   }
   fold($_) for sort keys %queried;
@@ -1004,6 +1055,31 @@ sub stanza_index {   # the @st entries a stanza of KIND and NAMES in DIR is
       && grep({ $n{$_} } @{$s->{names}}, $kind eq "library" ? keys %{$s->{units}} : ())
   } 0 .. $#st;
 }
+sub stanza_mentions {   # does any text of stanza S name the repository path M (a file, a %{...:M}, a glob)?
+  my ($s, $m) = @_;
+  my ($md, $mb) = dir_of($m);
+  my @todo = ($s->{x});
+  while (defined(my $y = shift @todo)) {
+    if (ref $y) {
+      if (@$y == 2 && !ref $y->[0] && $y->[0] =~ /^(glob_files(?:_rec)?|source_tree)$/ && !ref $y->[1]) {
+        my $form = $y->[0];
+        my $g = decl_root($s->{dir}, $y->[1]);
+        if ($form eq "source_tree") { my $t = rpath($s->{dir}, $g); return 1 if defined $t && under($m, $t); next }
+        my ($gd, $pat) = $g =~ m{^(.*)/([^/]*)$} ? ($1, $2) : (".", $g);
+        my $t = rpath($s->{dir}, $gd) // next;
+        return 1 if ($form eq "glob_files" ? $md eq $t : under($md, $t)) && predicate($pat)->($mb);
+        next;
+      }
+      push @todo, @$y;
+      next;
+    }
+    for my $c ($y, map { s/^[^:]*://r } $y =~ /%\{([^}]*)\}/g) {
+      my $r = rpath($s->{dir}, decl_root($s->{dir}, $c));
+      return 1 if defined $r && $r eq $m;
+    }
+  }
+  return 0;
+}
 sub dune_scope {
   my ($p) = @_;
   my ($old, $new) = (dune_side("old", $p), dune_side("new", $p));
@@ -1019,6 +1095,7 @@ sub dune_scope {
   my $atoms = sub { map { ref $_ ? () : $_ } @{$_[0] // []} };
   for my $s (@diff) {
     my ($k, $x, $dir) = ($s->{kind}, $s->{x}, $s->{dir});
+    return undef if has_opaque($x);   # a block string: not read, so the whole directory
     my @names = ($atoms->(dfield($x, "name")), $atoms->(dfield($x, "names")));
     my $alias = sub { $r->{aliases}{"\@" . in_dir($dir, $_[0])} = 1 };
     my $label = "$k" . (@names ? " @names" : "") . ($dir eq (dir_of($p))[0] ? "" : " in $dir");
@@ -1116,6 +1193,15 @@ for my $p (@changed) {
       }
       for my $o (grep { /\.o$/ && ($_ eq $m || reads($_, $m, $md, $mb)) } @stub_targets) {
         $hit{$_} = $whole_hit{$_} = 1 for obj_owners($o);
+      }
+      # A compiled stanza naming it anywhere in its text (`preprocessor_deps`,
+      # `embed`, a `(deps)` of its own, ...): which field means a dependency is
+      # not decided here, so any mention reaches the stanza; one this build
+      # does not list reaches its whole directory.
+      for my $s (grep { $_->{kind} =~ /^(?:library|executables?|tests?)$/ && stanza_mentions($_, $m) } @dstanzas) {
+        my @i = stanza_index($s->{kind} eq "library" ? "library" : "executables", $s->{dir}, dnames($s));
+        if (@i) { $hit{$_} = $whole_hit{$_} = 1 for @i }
+        else { $dune_dirs{$_} = 1 for grep { under($_, $s->{dir}) } $s->{dir}, keys %$aliases }
       }
       for my $a (@al) {
         next unless grep { $_ eq $m || reads($_, $m, $md, $mb) } @{$a->{own}};
@@ -1336,6 +1422,9 @@ if (-f "$tmp/ml-diff") {
       for my $n ($start .. $start + $count - 1) {
         my $name = enclosing_def($side{$which}, $n);
         if (!defined $name) { %defs = (); $defs{"\0whole"} = 1; last }
+        # An operator or other non-identifier: tokens hold identifiers only, so the
+        # whole module counts.
+        if ($name !~ /^[A-Za-z_][\w']*$/) { %defs = ("\0whole" => 1); last }
         $defs{$name} = 1;
       }
       last if $defs{"\0whole"};
@@ -1372,8 +1461,20 @@ if ($rank_links) {
       for my $f (@{$st[$j]{mods}{$x}}) {
         open my $fh, "<", $f or next;
         my $s = do { local $/; <$fh> // "" };
-        while ($s =~ /\bmodule\s+([A-Z][\w']*)\s*=\s*(?:[A-Z][\w']*\.)*([A-Z][\w']*)/g) { $as{$2}{$1} = 1 if $1 ne $2 }
-        while ($s =~ /\binclude\s+(?:[A-Z][\w']*\.)*([A-Z][\w']*)/g) { $as{$1}{$x} = 1 if $1 ne $x }
+        # Every module name in the head of a `module NAME ...` or `include ...` --
+        # up to the first `struct`, `sig`, `end`, `let`, `val`, blank or unindented line,
+        # `module type of` read through -- may be what it re-exports: `module G : module type of M = M`,
+        # `include (M : S)`, a functor application. Over-reading only ranks more
+        # aliases as naming the change.
+        while ($s =~ /\b(module|include)\b/g) {
+          my ($kw, $at) = ($1, pos($s));
+          my $head = substr($s, $at, 400);
+          $head =~ s/(?:\b(?:struct|sig|end|let|val)\b|\n[ \t]*\n|\n(?=\S)).*\z//s;
+          my @names = $head =~ /\b([A-Z][\w']*)/g;
+          next if $kw eq "module" && (!@names || $head !~ /^\s*(?:rec\s+)?\Q$names[0]\E\b/);
+          my $as_name = $kw eq "module" ? shift @names : $x;
+          $as{$_}{$as_name} = 1 for grep { $_ ne $as_name } @names;
+        }
       }
     }
   }
@@ -1426,7 +1527,7 @@ for my $a (@al) {
   $total{$a->{dir}}++;
   my $unknown = !%owners && !@{$a->{own}};
   # A declared alias (its stanzas read in full above) is no longer opaque.
-  my $opaque = !$a->{golden} && !$a->{declared};
+  my $opaque = (!$a->{golden} && !$a->{declared}) || grep { $blind_target{$_} } @{$a->{own}};
   $unattributed{$a->{name}} = 1 if $unknown && $touched{$a->{dir}};
   my $opaque_listed = $opaque && ($any_data || $data_dirs{$a->{dir}});
   $opaque_hit{$a->{dir}}++ if $opaque_listed;

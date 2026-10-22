@@ -77,7 +77,9 @@ cat >"$repo/t1/dune" <<'DUNE'
 DUNE
 cat >"$repo/t2/dune" <<'DUNE'
 (executable (name gen) (modules gen) (libraries core))
-(executable (name scan) (modules scan))
+(executable (name scan) (modules scan) (link_deps pp.sexp))
+; A file a rule makes and a compiled stanza needs through a field no rule shows (link_deps).
+(rule (target pp.sexp) (action (with-stdout-to %{target} (echo x))))
 (rule (target gen-v1.actual) (action (with-stdout-to %{target} (run %{exe:gen.exe} v1))))
 (rule (alias runtest-gen-v1) (action (diff gen-v1.expected gen-v1.actual)))
 (rule (alias slow-gen) (action (run %{exe:gen.exe} slow)))
@@ -119,6 +121,9 @@ cat >"$repo/t3/dune" <<'DUNE'
  (deps %{project_root}/t1/made.txt)
  (action (with-stdout-to %{target} (run %{exe:lister.exe}))))
 (rule (alias runtest-uses) (action (diff uses.expected uses.actual)))
+; A per-test alias reaching a changed file only through a helper alias (no per-test name).
+(rule (alias helper) (deps ../cfg/helper.cfg) (action (progn)))
+(rule (alias runtest-viahelper) (deps (alias helper)) (action (progn)))
 ; Runs and diffs in one action (the slow-/train- shape), with a dependency outside its directory: a
 ; golden among its own targets, yet what its rule needs is only in its own (deps) (gh-ocannl-1431).
 (rule
@@ -162,7 +167,7 @@ for f in lib/core.ml lib/helper.ml lib/leaf.ml lib/myppx.ml lib/optlib.ml lib/st
 done
 for f in t2/gen-v1.expected t2/scenario_x.expected t2/scan.expected t3/neg.expected t3/plain.cfg \
   t3/cfgread.expected t3/esc.expected t3/uses.expected t3/py.expected cfg/base.cfg cfg/extra.py docs/{x}one.md \
-  t2/needs_pkg.expected \
+  t2/needs_pkg.expected cfg/helper.cfg \
   lib/stubbed_c.c t3/cexe_c.c docs/notes.md; do : >"$repo/$f"; done
 printf '{ }\nrule token = parse eof { () }\n' >"$repo/lib/lx.mll"
 # What the link-only ranking reads: t_core names Helper and its `used`; core re-exports Helper as
@@ -288,7 +293,7 @@ if harness_leg 'dune-project'; then
     @t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb \
     @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan \
     @t2/runtest-scenario_x @t2/slow-gen @t3/runtest-cfgread @t3/runtest-esc @t3/runtest-neg @t3/runtest-py @t3/runtest-t_plain @t3/runtest-t_stub \
-    @t3/runtest-uses @t4/runtest-gated @t4/runtest-objs @t4/runtest-t_gate @t4/runtest-t_gate-pre \
+    @t3/runtest-uses @t3/runtest-viahelper @t4/runtest-gated @t4/runtest-objs @t4/runtest-t_gate @t4/runtest-t_gate-pre \
     @t4/sub/runtest-t_sub @t5/slow-usesh @t6/runtest-dyn
 fi
 
@@ -373,6 +378,9 @@ if harness_leg 'alias dependency'; then
 fi
 
 if harness_leg 'declared deps'; then
+  affected --files cfg/helper.cfg
+  # shellcheck disable=SC2086
+  expect 'a per-test alias needing a helper alias reaches what the helper needs' 0 @t3/runtest-viahelper $opaque_all
   # runtest-py runs and diffs in its own action; its golden made it look like a
   # diff of its own targets, and its (deps) were never read (gh-ocannl-1431).
   affected --files cfg/extra.py
@@ -487,6 +495,10 @@ if harness_leg 'link-only'; then
       "the mutation anchor does not occur exactly once"
   fi
   rm -f "$mutant"
+  printf 'let used = 1\nlet unused = 2\nlet ( +! ) a b = a + b\n' >"$repo/lib/helper.ml"
+  affected HEAD
+  ordered 'a changed operator definition counts as the whole module (tokens hold identifiers)' \
+    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
   git_q checkout -q -- lib/helper.ml || exit 2
 fi
 
@@ -530,6 +542,11 @@ if harness_leg 'dune stanza scope'; then
   affected HEAD
   expect 'an edited rule reaches the executable whose stub compiles the header it makes' 0 @t5/slow-usesh
   git_q checkout -q -- t5/dune || exit 2
+  perl -0pi -e 's/\(echo x\)/(echo y)/' "$repo/t2/dune"
+  affected HEAD
+  # shellcheck disable=SC2086
+  expect 'an edited rule reaches a compiled stanza naming the file it makes in any field (link_deps)' 0 @t2/runtest-scan $opaque_all
+  git_q checkout -q -- t2/dune || exit 2
   perl -0pi -e 's/\(echo made\)/(echo made again)/' "$repo/t1/dune"
   affected HEAD
   expect 'an edited rule reaches the alias elsewhere reading the file it makes' 0 @t3/runtest-uses
@@ -538,7 +555,7 @@ if harness_leg 'dune stanza scope'; then
   affected HEAD
   expect 'a stanza kind outside the scoping (copy_files) reaches its whole directory' 0 \
     @t3/runtest-cfgread @t3/runtest-esc @t3/runtest-neg @t3/runtest-py @t3/runtest-t_plain @t3/runtest-t_stub \
-    @t3/runtest-uses
+    @t3/runtest-uses @t3/runtest-viahelper
   git_q checkout -q -- t3/dune || exit 2
 fi
 
@@ -749,7 +766,7 @@ if harness_leg 'negative controls'; then
     'return 0 unless $rank_links;' 'return 0;' \
     --referenced-only --files lib/helper.ml -- @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen
   control 'a re-export is what ranks a test naming only the re-exported name' \
-    '$as{$2}{$1} = 1 if $1 ne $2' '1' \
+    '$as{$_}{$as_name} = 1 for grep { $_ ne $as_name } @names;' '1;' \
     --referenced-only --files lib/helper.ml -- @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen
   # shellcheck disable=SC2086
   control 'reading an alias rule'"'"'s own (deps) is what reaches it' \
