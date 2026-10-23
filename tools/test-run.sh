@@ -795,7 +795,9 @@ alias_listing() { # <listing file> dir...; 0 with the parsed listing in it, 1 in
 # `#;` datum comments, quoted atoms -- that walks every stanza, nested
 # `subdir`s included. Input: dune file paths; output: their directories and
 # the logical ones below them. Exit 3 where a file does not read (an
-# unbalanced or unexpected form), and the caller then cannot list them all.
+# unbalanced or unexpected form) or takes stanzas from another file (an
+# `include` or `dynamic_include`, at any depth, Codex review round 3), and the
+# caller then cannot list them all.
 alias_dirs_perl='
   my $bad = 0;
   for my $f (@ARGV) {
@@ -837,6 +839,9 @@ alias_dirs_perl='
     $walk = sub {
       my ($at, $forms) = @_;
       for my $s (@$forms) {
+        # Stanzas read from another file -- `(include FILE)`, a generated
+        # `(dynamic_include ...)` -- may hold subdirs this reader never sees.
+        if (ref $s && @$s && !ref $s->[0] && $s->[0] =~ /^(?:include|dynamic_include)$/) { $bad = 1; next }
         next unless ref $s && @$s >= 2 && !ref $s->[0] && $s->[0] eq "subdir";
         my $name = $s->[1];
         if (ref $name || $name !~ m{^[A-Za-z0-9_.+-]+(?:/[A-Za-z0-9_.+-]+)*$} || $name =~ m{(?:^|/)\.\.?(?:/|$)}) {

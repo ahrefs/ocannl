@@ -7376,16 +7376,24 @@ if [ -z "$alias_detail" ]; then
     grep -qF "ALIAS REFUSED: @al/runtest-no_such" <<<"$repeat_out"; } ||
     alias_detail="repeat: exit $repeat_rc (want 2); dune calls: $(cat "$TMP/alias-repeat.calls"); output: $repeat_out"
 fi
-# A dune file the reader cannot read leaves a recursive miss to dune: the
-# directories below may then not all be listed.
-if [ -z "$alias_detail" ]; then
+# A dune file the reader cannot read, or one taking stanzas from another file
+# (`include`, `dynamic_include`, inside a subdir too), leaves a recursive miss
+# to dune: the directories below may then not all be listed. A miss in the
+# operand's own directory under @@ is still refused.
+for probe in "unread|(rule (alias odd)" "include|(include rules.inc)" \
+             "dynamic|(subdir x (dynamic_include gen/rules.inc))"; do
+  [ -z "$alias_detail" ] || break
   mkdir -p "$repeat_root/al/odd"
-  printf '(rule (alias odd)\n' >"$repeat_root/al/odd/dune"
-  alias_probe alias-unread run build @al/runtest-no_such
+  printf '%s\n' "${probe#*|}" >"$repeat_root/al/odd/dune"
+  alias_probe "alias-${probe%%|*}" run build @al/runtest-no_such
   { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build @al/runtest-no_such" ]; } ||
-    alias_detail="an unreadable dune file below: exit $argv_rc (want 0); dune calls: ${argv_calls:-<none>}; digest: $argv_out"
+    alias_detail="${probe%%|*} below: exit $argv_rc (want 0); dune calls: ${argv_calls:-<none>}; digest: $argv_out"
+  if [ -z "$alias_detail" ]; then
+    alias_probe "alias-${probe%%|*}-own" run build @@al/runtest-no_such
+    [ "$argv_rc" = 2 ] || alias_detail="${probe%%|*} below, @@: exit $argv_rc (want 2): $argv_out"
+  fi
   rm -rf "$repeat_root/al/odd"
-fi
+done
 if [ -z "$alias_detail" ]; then report 0 "$alias_label"; else report 1 "$alias_label" "$alias_detail"; fi
 # The fixture dune with no table prints nothing for the listing: not dune's
 # answer, so the check decides nothing and dune runs the batch.
