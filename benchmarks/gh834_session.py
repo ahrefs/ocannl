@@ -24,6 +24,9 @@ import strict_json  # noqa: E402
 # The two placement arms a tuned gpt2_mini session runs (Train.tune_placements).
 REQUIRED_ARMS = ("A", "B")
 
+# An arm's refused-window counts: every refusal, then the two causes named apart from contention.
+REFUSAL_COUNTS = ("timings_contended", "timings_unbatched", "timings_unreadable")
+
 
 def is_count(v):
     return isinstance(v, int) and not isinstance(v, bool) and v >= 0
@@ -64,27 +67,34 @@ def problems(path):
     # The remaining checks span every arm on the line, not only the required two.
     for arm in arms:
         name = arm.get("arm", "?")
-        for field in ("terminal_failure", "timings_contended", "timings_unbatched"):
+        for field in ("terminal_failure",) + REFUSAL_COUNTS:
             if field not in arm:
                 out.append("INCOMPLETE SESSION: arm %s carries no %s" % (name, field))
-        bad = [f for f in ("timings_contended", "timings_unbatched") if f in arm and not is_count(arm[f])]
+        bad = [f for f in REFUSAL_COUNTS if f in arm and not is_count(arm[f])]
         for field in bad:
             out.append("INCOMPLETE SESSION: arm %s has a non-count %s" % (name, field))
     # Whatever shape a terminal failure takes, it is not null.
     if any(a.get("terminal_failure") is not None for a in arms if "terminal_failure" in a):
         out.append("INCOMPLETE SESSION: an arm carries a terminal failure")
-    # Per arm, timings_contended counts every refused window and timings_unbatched the ones refused
-    # because queued calibration measured no batch within its target (gh-ocannl-1098). Either leaves
-    # the session incomplete; they are named apart because the readings behind a no-batch refusal
-    # cannot tell a queue threshold from a stall on every probe: one that repeats on an idle rerun is
-    # the threshold.
-    counted = [a for a in arms if is_count(a.get("timings_contended")) and is_count(a.get("timings_unbatched"))]
-    if any(a["timings_contended"] > a["timings_unbatched"] for a in counted):
+    # Per arm, timings_contended counts every refused window, timings_unbatched the ones refused
+    # because queued calibration measured no batch within its target (gh-ocannl-1098), and
+    # timings_unreadable the ones refused for a degenerate clock reading (gh-ocannl-1517); the two
+    # are disjoint, and the rest is contention. Each leaves the session incomplete; they are named
+    # apart because they call for different follow-ups: the readings behind a no-batch refusal
+    # cannot tell a queue threshold from a stall on every probe (one that repeats on an idle rerun
+    # is the threshold), and a clock that resolved nothing is not host load at all.
+    counted = [a for a in arms if all(is_count(a.get(f)) for f in REFUSAL_COUNTS)]
+    if any(a["timings_contended"] > a["timings_unbatched"] + a["timings_unreadable"] for a in counted):
         out.append("CONTENDED SESSION: timing windows were refused for host contention")
     if any(a["timings_unbatched"] > 0 for a in counted):
         out.append(
             "UNBATCHED SESSION: queued calibration measured no batch within the target"
             " (a queue threshold if it repeats on an idle rerun, else a stall)"
+        )
+    if any(a["timings_unreadable"] > 0 for a in counted):
+        out.append(
+            "UNREADABLE SESSION: timing windows were refused for a degenerate clock reading"
+            " (a clock that resolved nothing, not host load)"
         )
     return out
 

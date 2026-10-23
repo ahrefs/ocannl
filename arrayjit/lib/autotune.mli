@@ -1087,7 +1087,9 @@ val timing_admission : timing_result -> batch_admission
     which every positive sample reads as a stall: such a window is usually [contended] as well, and
     named so it put a clock that resolved nothing down to a loaded host. What the search counts per
     cause in {!report}, what its [NOT TIMED] log lines name, and the [admission] of each
-    {!timing_call} all come from here. *)
+    {!timing_call} all come from here -- the last applied to the PHYSICAL reading, as calibration
+    took it, before the test scopes and {!on_candidate_measured} act on admission (see
+    {!with_contended_test_windows}). *)
 
 val batch_settle_name : batch_settle -> string
 (** The settle's spelling in the benchmarks' timing trace and result line: [isolated],
@@ -1190,7 +1192,9 @@ type report = {
           lets a sweep compare calibration behaviour across boxes without scraping a trace. Counted
           per call through {!time_routine}'s [on_call], so neither another observer nor a search in
           another domain moves it. Empty on cache replay and search-disabled calls, which time
-          nothing; excludes diagnostic control timing, like [timings_retried]. *)
+          nothing; excludes diagnostic control timing, like [timings_retried]. Its admissions are
+          the physical readings', so under a test scope or a scripted measurement they can differ
+          from the refusal counts above ({!with_contended_test_windows}). *)
   candidates_contended : int;
       (** Distinct candidate digests whose timing window was refused and which no later equivalent
           seed managed to time — the population [timings_contended] over-counts (Codex P2 on PR
@@ -3475,7 +3479,12 @@ val with_contended_test_windows : (unit -> 'a) -> 'a
     {!on_candidate_measured} drives the degenerate-reading one. Only the flag: a window that is
     unbatched or unreadable keeps that cause, which {!timing_admission} names first. The innermost
     of it and {!with_uncontended_test_windows} applies; restoration, nesting and per-domain scope as
-    there. *)
+    there. Like that scope and a scripted {!on_candidate_measured} reading, it acts downstream of
+    the timing call: each {!timing_call}'s [admission] and the report's [timing_decisions] keep
+    recording the physical reading (a forced window there reads as admitted, as a cleared one reads
+    as contended), while the report's refusal counts and [baseline_refusal] follow the scoped
+    verdict. A test reading the two side by side relies on that split, as
+    [autotune_measured_refusal] does to tell the host's refusals from the seam's. *)
 
 val apply_measurement_seam : label:string -> digest:string -> timing_result -> timing_result
 (** Candidate-window admission and scripted measurement, shared by real searches and deterministic
