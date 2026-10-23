@@ -23,11 +23,17 @@ let () =
   | "fail" -> Stdlib.exit 1
   | "silent" -> ()
   | "twice" ->
-      Bench_out.result ~variant:"probe" ~seconds:0.001;
-      Bench_out.result ~variant:"probe" ~seconds:0.002
+      Bench_out.result ~variant:"probe" ~check:Bench_out.Passed ~seconds:0.001;
+      Bench_out.result ~variant:"probe" ~check:Bench_out.Passed ~seconds:0.002
+  | "wrong" ->
+      Bench_out.result ~variant:"probe" ~check:(Bench_out.Failed "differs from the oracle")
+        ~seconds:0.001
+  | "unchecked" ->
+      Bench_out.result ~variant:"probe" ~check:(Bench_out.Unchecked "no oracle for this one")
+        ~seconds:0.001
   | "sleep" -> Unix.sleepf 120.
-  | "nonfinite" -> Bench_out.result ~variant:"probe" ~seconds:Float.nan
+  | "nonfinite" -> Bench_out.result ~variant:"probe" ~check:Bench_out.Passed ~seconds:Float.nan
   | s ->
       let seconds = Float.of_string s in
-      Bench_out.result ~variant:"probe" ~seconds;
-      Bench_out.result ~variant:"probe_half" ~seconds:(seconds /. 2.)
+      Bench_out.result ~variant:"probe" ~check:Bench_out.Passed ~seconds;
+      Bench_out.result ~variant:"probe_half" ~check:Bench_out.Passed ~seconds:(seconds /. 2.)

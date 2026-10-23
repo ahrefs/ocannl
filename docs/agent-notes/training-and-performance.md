@@ -679,8 +679,10 @@ files.
   read, value and source), failing a cell with any environment or config-file source and a run whose
   arm resolved a key two ways -- the knobs a bench has no parameter for (bound pruning, the
   roofline constants, `gpu_graph_capture`) are then recorded rather than merely unpinned. A bench
-  reports to it through `Bench_out.result` (`bench-result:` lines); the human table can change
-  freely. Its arms are whole processes in `Bench_design`'s order, paired round by round.
+  reports to it through `Bench_out.result` (`bench-result:` lines), each stating its output check
+  -- a timing of a kernel that failed its check is no measurement, so the cell fails, and an
+  unchecked variant (`narrow_storage_bench` has no oracle) is listed as such; the human table can
+  change freely. Its arms are whole processes in `Bench_design`'s order, paired round by round.
 - **Interleaved timing visits arms in `Bench_design`'s spread mirrored rotation** (`bin/bench_design.ml`,
   gh-ocannl-743). Mirroring each batch cancels LINEAR drift (every pair exchanged, equal mean
   positions); it does not equalize each arm's position histogram, which is what a nonlinear effect

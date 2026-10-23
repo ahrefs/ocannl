@@ -14,8 +14,10 @@ bench so that the command line IS the treatment, and records what the process ac
   directory of its own under DIR, so neither an exported variable nor any `ocannl_config` on any
   path can reach it. What is left is the command line -- the driver's three pins first, then the
   bench's common arguments (after `--`), then the arm's -- over the defaults of the commit the
-  bench was built from. Device selection (CUDA/HIP/ROCR_VISIBLE_DEVICES) is the box's, not a
-  treatment's: kept and recorded.
+  bench was built from. Device and loader runtime controls (CUDA_*, HIP_*, HSA_*, MTL_*, DYLD_*,
+  LD_*, ... -- `RUNTIME_PREFIXES`) are the box's: some boxes cannot run without them, so they pass
+  through, and each one present is recorded with its value beside the numbers; every other variable
+  that passes is recorded by name.
 - The resolved configuration is echoed, not assumed. Each cell runs under
   `--ocannl_log_config_sourcing=true`, and the driver reads that trace back: every setting the
   process read, with its value and where it came from. A cell fails when any setting came from the
@@ -81,7 +83,13 @@ BACKENDS = ("cc", "multidev_cc", "cuda", "hip", "metal")
 # modes, and the OpenMP runtime's controls (team size and placement shape the cc backend's Grid
 # kernels).
 CLEARED_PREFIXES = ("OCANNL_", "BENCH_", "OMP_", "GOMP_", "KMP_")
-DEVICE_SELECTION = ("CUDA_VISIBLE_DEVICES", "HIP_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES")
+# The environment families that steer a device or loader runtime without being OCANNL configuration
+# (`CUDA_LAUNCH_BLOCKING`, `HSA_OVERRIDE_GFX_VERSION`, `MTL_DEBUG_LAYER`, a preloaded library, ...).
+# Clearing them could leave a box unable to run at all (some AMD boxes need their HSA override), so
+# they pass through, and every one present is RECORDED with its value as part of the treatment.
+# Every other variable that passes is recorded by name.
+RUNTIME_PREFIXES = ("CUDA_", "NVIDIA_", "CUBLAS", "HIP_", "ROCR_", "HSA_", "AMD_", "GPU_", "MTL_",
+                    "METAL_", "OBJC_", "DYLD_", "LD_", "MALLOC")
 RESULT_PREFIX = "bench-result: "
 CELL_TIMEOUT_S = 1800
 BUILD_TIMEOUT_S = 3600
@@ -242,19 +250,25 @@ def consistency_problems(records):
     return problems
 
 
+CHECKS = ("passed", "failed", "unchecked")
+
+
 def parse_results(text):
-    """The cell's `bench-result:` records: [(variant, seconds)], refusing a malformed or
-    non-finite one with ValueError."""
+    """The cell's `bench-result:` records: [(variant, seconds, check, note)], refusing with
+    ValueError a malformed one, a non-finite or non-positive time, or one that does not state its
+    output check (`Bench_out.check`)."""
     results = []
     for line in text.splitlines():
         if not line.startswith(RESULT_PREFIX):
             continue
         record = strict_json.loads(line[len(RESULT_PREFIX):])
         variant, seconds = record.get("variant"), record.get("seconds")
+        check, note = record.get("check"), record.get("check_note")
         if not isinstance(variant, str) or isinstance(seconds, bool) or not isinstance(
-                seconds, (int, float)) or not math.isfinite(seconds) or seconds <= 0:
+                seconds, (int, float)) or not math.isfinite(seconds) or seconds <= 0 \
+                or check not in CHECKS or not isinstance(note, str):
             raise ValueError(f"unusable result line: {line}")
-        results.append((variant, float(seconds)))
+        results.append((variant, float(seconds), check, note))
     return results
 
 
@@ -287,8 +301,9 @@ def render_report(manifest, records, problems):
     lines.append("")
     for key in ("commit", "executable_sha256", "host", "system", "cpu"):
         lines.append(log_line(f"- {key}: {display_value(str(manifest.get(key)))}"))
-    for name, value in sorted(manifest["device_selection"].items()):
-        lines.append(log_line(f"- {name}={display_value(value)}"))
+    lines.append(log_line("- device and loader runtime controls passed through: " + (
+        ", ".join(f"{k}={display_value(v)}" for k, v in manifest["runtime_controls"].items())
+        or "none")))
     lines.append(log_line("- cleared from the environment: " + (
         ", ".join(display_value(v) for v in manifest["cleared"]) or "nothing")))
     lines += ["", "## Arms", ""]
@@ -302,10 +317,12 @@ def render_report(manifest, records, problems):
         f"(exact at multiples of {exact_batches(len(arms))} rounds); edge visits per arm {lo}-{hi}"))
 
     ok = [r for r in records if r["ok"]]
-    by = {}
+    by, unchecked = {}, {}
     for r in ok:
-        for variant, seconds in r["results"]:
+        for variant, seconds, check, note in r["results"]:
             by.setdefault((variant, r["arm"]), {})[r["round"]] = seconds
+            if check == "unchecked":
+                unchecked.setdefault((variant, note), set()).add(r["arm"])
     variants = sorted({v for v, _ in by})
     lines += ["", "## Times per run (ms)", ""]
     if variants:
@@ -317,6 +334,12 @@ def render_report(manifest, records, problems):
                              ms(statistics.median(xs)) if xs else "-", ms(xs[0]) if xs else "-",
                              ms(xs[-1]) if xs else "-"))
         lines += table_lines(("variant", "arm", "n", "median", "min", "max"), rows, "llrrrr")
+        if unchecked:
+            lines += ["", "Variants whose output was NOT checked (their times are not evidence of a "
+                      "correct kernel):", ""]
+            lines += [log_line(f"- {display_value(v)} ({', '.join(display_value(a) for a in arms if a in on)})"
+                               f": {note}")  # the bench's own words; log_line refuses a line break
+                      for (v, note), on in sorted(unchecked.items())]
     else:
         lines.append("No cell reported a `bench-result:` line.")
     if len(arms) > 1 and variants:
@@ -498,7 +521,10 @@ def main(argv=None):
         commit = tree_commit()
         out.mkdir(parents=True, exist_ok=True)
         with open(out / "build.log", "wb") as log:
-            status = run_in_group(["dune", "build", f"bin/{bench}.exe"], ROOT, None,
+            # --root: dune otherwise picks the OUTERMOST project root, so a nested worktree without
+            # its dune-workspace would build the parent checkout while the executable read below
+            # (and the commit recorded above) are this one's (AGENTS.md, Worktrees).
+            status = run_in_group(["dune", "build", "--root", str(ROOT), f"bin/{bench}.exe"], ROOT, None,
                                   BUILD_TIMEOUT_S, log, subprocess.STDOUT)
         exe = ROOT / "_build/default/bin" / f"{bench}.exe"
         if status != 0 or not exe.is_file():
@@ -512,7 +538,8 @@ def main(argv=None):
         "bench": bench, "backend": args.backend, "rounds": args.rounds, "commit": commit,
         "executable": str(exe), "executable_sha256": sha256(exe), **host_identity(),
         "common_args": common, "arms": arms, "pins": pins, "cleared": cleared,
-        "device_selection": {k: env[k] for k in DEVICE_SELECTION if k in env},
+        "runtime_controls": {k: env[k] for k in sorted(env) if k.startswith(RUNTIME_PREFIXES)},
+        "passed_names": sorted(env),
         "cell_timeout_s": args.cell_timeout, "orders": orders,
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
@@ -550,7 +577,9 @@ def main(argv=None):
                     # was skipped. Exiting 0 over an empty table would publish nothing as clean.
                     if not results:
                         problems.append("reported no bench-result line")
-                    names = [v for v, _ in results]
+                    problems += [f"{v} failed its output check: {note}"
+                                 for v, _, check, note in results if check == "failed"]
+                    names = [v for v, *_ in results]
                     if len(set(names)) != len(names):
                         problems.append("a variant reported twice: "
                                         + ", ".join(sorted({v for v in names if names.count(v) > 1})))

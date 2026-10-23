@@ -772,7 +772,11 @@ cell is the step: cite the step cell. Each issue's cell:
   (`--arm rn6=--rn=6`), visited as whole processes round by round in `Bench_design`'s spread
   mirrored rotation, each cell a supervised process group under `--cell-timeout`; the report pairs
   each arm with the first one round by round (median ratio, range, rounds faster, exact sign-test
-  p) off the benches' `bench-result:` lines. Example, the gh-ocannl-755 geometry A/B:
+  p) off the benches' `bench-result:` lines. Each such line states the variant's output check
+  (`passed`/`failed`/`unchecked`, `Bench_out.check`): a failed check fails the cell, an unchecked
+  variant is listed as such. Device and loader runtime controls (`CUDA_*`, `HSA_*`, `MTL_*`,
+  `DYLD_*`, ...) pass through and are recorded with their values, and the build is pinned to the
+  checkout with `dune build --root`. Example, the gh-ocannl-755 geometry A/B:
   `python3 benchmarks/bin_cells.py --bench narrow_gebp_bench --backend cc --out ~/cells-rn
   --rounds 12 --arm rn4=--rn=4 --arm rn6=--rn=6 -- f16 512 20`. Its control is
   `test/operations/bin_cells.py`, against a stand-in bench that prints the library's own trace.

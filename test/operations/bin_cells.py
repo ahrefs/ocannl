@@ -99,10 +99,18 @@ claim("two cells of one arm resolving a setting differently are reported",
           {"arm": "b", "cell": 1, "config": {"k": {"value": "2"}}},
           {"arm": "a", "cell": 2, "config": {"k": {"value": "3"}}}])
       == ["arm a: ocannl_k resolved to '1' in cell 0 and to '3' in cell 2"])
+CHK = ',"check":"passed","check_note":""}'
+claim("a well-formed result line is read with its check",
+      bc.parse_results('bench-result: {"variant":"v","seconds":0.5' + CHK)
+      == [("v", 0.5, "passed", "")])
 claim("a non-finite or non-positive result is refused",
-      refused(lambda: bc.parse_results('bench-result: {"variant":"v","seconds":null}'))
-      and refused(lambda: bc.parse_results('bench-result: {"variant":"v","seconds":0}'))
-      and refused(lambda: bc.parse_results('bench-result: {"variant":"v","seconds":NaN}')))
+      refused(lambda: bc.parse_results('bench-result: {"variant":"v","seconds":null' + CHK))
+      and refused(lambda: bc.parse_results('bench-result: {"variant":"v","seconds":0' + CHK))
+      and refused(lambda: bc.parse_results('bench-result: {"variant":"v","seconds":NaN' + CHK)))
+claim("a result that does not state its output check is refused",
+      refused(lambda: bc.parse_results('bench-result: {"variant":"v","seconds":0.5}'))
+      and refused(lambda: bc.parse_results(
+          'bench-result: {"variant":"v","seconds":0.5,"check":"maybe","check_note":""}')))
 claim("the sign test is exact", (bc.sign_test_p(12, 12), bc.sign_test_p(6, 12),
                                   round(bc.sign_test_p(10, 12), 6)) == (2 / 4096, 1.0, 0.038574))
 
@@ -111,7 +119,7 @@ with tempfile.TemporaryDirectory() as scratch:
     scratch = Path(scratch)
     (scratch / "ocannl_config").write_text("autotune_bound_pruning=true\nbackend=metal\n")
     env = {**os.environ, "OCANNL_AUTOTUNE_BOUND_PRUNING": "true", "OCANNL_AUTOTUNE_TIMING": "x",
-           "BENCH_TUNE": "1", "OMP_NUM_THREADS": "3"}
+           "BENCH_TUNE": "1", "OMP_NUM_THREADS": "3", "CUDA_LAUNCH_BLOCKING": "1"}
 
     def drive(out, *argv):
         return subprocess.run([sys.executable, str(driver_path), "--exe", str(probe), "--backend",
@@ -130,6 +138,9 @@ with tempfile.TemporaryDirectory() as scratch:
     claim("the planted variables are cleared, by name",
           {"OCANNL_AUTOTUNE_BOUND_PRUNING", "OCANNL_AUTOTUNE_TIMING", "BENCH_TUNE",
            "OMP_NUM_THREADS"} <= set(manifest["cleared"]))
+    claim("a device runtime control passes through and is recorded with its value",
+          manifest["runtime_controls"].get("CUDA_LAUNCH_BLOCKING") == "1"
+          and "CUDA_LAUNCH_BLOCKING=1" in run.stdout)
     claim("no cell resolved a setting from the environment or a config file",
           all(e["source"] in ("commandline", "default")
               for r in records for e in r["config"].values()))
@@ -160,6 +171,14 @@ with tempfile.TemporaryDirectory() as scratch:
     silent = drive("silent", "--rounds", "2", "--arm", "quiet=silent")
     claim("a cell reporting no result fails the run",
           silent.returncode == 1 and "reported no bench-result line" in silent.stdout)
+    wrong = drive("wrong", "--rounds", "2", "--arm", "w=wrong")
+    claim("a variant that failed its output check fails the run",
+          wrong.returncode == 1
+          and "probe failed its output check: differs from the oracle" in wrong.stdout)
+    unchecked = drive("unchecked", "--rounds", "2", "--arm", "u=unchecked")
+    claim("an unchecked variant is measured, and reported as unchecked with its reason",
+          unchecked.returncode == 0
+          and "- probe (u): no oracle for this one" in unchecked.stdout)
     twice = drive("twice", "--rounds", "2", "--arm", "dup=twice")
     claim("a cell reporting one variant twice fails the run",
           twice.returncode == 1 and "a variant reported twice: probe" in twice.stdout)

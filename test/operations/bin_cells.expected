@@ -11,11 +11,14 @@ a backend other than the pinned one fails the treatment: true
 a profile picked outside the command line fails the treatment: true
 an empty trace fails the treatment: true
 two cells of one arm resolving a setting differently are reported: true
+a well-formed result line is read with its check: true
 a non-finite or non-positive result is refused: true
+a result that does not state its output check is refused: true
 the sign test is exact: true
 a clean run exits 0: true
 every round runs every arm, in the design's order: true
 the planted variables are cleared, by name: true
+a device runtime control passes through and is recorded with its value: true
 no cell resolved a setting from the environment or a config file: true
 the planted settings resolved to their defaults: true
 each cell kept its streams in a directory of its own under the output directory: true
@@ -70,10 +73,12 @@ a failing cell fails the run: true
 ## Verdict
 
 - cell 1 (fails): exited 1; reported no bench-result line
-- cell 2 (nonfinite): unusable result line: bench-result: {"variant":"probe","seconds":null}
-- cell 3 (nonfinite): unusable result line: bench-result: {"variant":"probe","seconds":null}
+- cell 2 (nonfinite): unusable result line: bench-result: {"variant":"probe","seconds":null,"check":"passed","check_note":""}
+- cell 3 (nonfinite): unusable result line: bench-result: {"variant":"probe","seconds":null,"check":"passed","check_note":""}
 - cell 4 (fails): exited 1; reported no bench-result line
 a cell reporting no result fails the run: true
+a variant that failed its output check fails the run: true
+an unchecked variant is measured, and reported as unchecked with its reason: true
 a cell reporting one variant twice fails the run: true
 a cell past its cap is recorded as timed out and fails the run: true
 a non-empty output directory is refused: true
