@@ -14,7 +14,11 @@
    miss, a missing directory and an undecodable entry included) are not refusals; a regime refusal,
    a refused lock, a refused read of an existing entry and a filesystem refusal in the
    staged-but-uncommitted window -- where a Windows commit that outlives its bounded retry fails --
-   are, each with its reason. *)
+   are, each with its reason.
+
+   gh-ocannl-1492: a lookup creates and writes nothing, the lock file included, so a cache directory
+   it cannot write -- here an actual mode-0555 directory, with and without its lock file -- replays
+   its entries instead of refusing the cache-open. *)
 
 open Base
 module SC = Ir.Schedule_cache
@@ -45,6 +49,32 @@ let write_entry ~cache_dir key value =
     ~data:(Sexp.to_string_hum (SC.sexp_of_entry value))
 
 let read path = Stdio.In_channel.read_all path
+let lock_file dir = Stdlib.Filename.concat dir SC.regime_lock_filename
+
+(* Every file of [dir], then [dir] itself, back to writable: the cleanup of a read-only cache, and
+   the recovery from a run that died before its cleanup. The directory goes first, though a file's
+   mode does not need it: on Windows a read-only file cannot be removed. *)
+let restore_writable dir =
+  if Stdlib.Sys.file_exists dir && Stdlib.Sys.is_directory dir then (
+    Unix.chmod dir 0o755;
+    Array.iter (Stdlib.Sys.readdir dir) ~f:(fun name ->
+        Unix.chmod (Stdlib.Filename.concat dir name) 0o644))
+
+let make_read_only dir =
+  Array.iter (Stdlib.Sys.readdir dir) ~f:(fun name ->
+      Unix.chmod (Stdlib.Filename.concat dir name) 0o444);
+  Unix.chmod dir 0o555
+
+(* Whether the filesystem refuses this process a new file in [dir]: false as root, and on Windows,
+   where a directory's mode does not deny creation. A property of the host, never of the lookup. *)
+let denies_creation dir =
+  let probe = Stdlib.Filename.concat dir "gh1492-write-probe" in
+  match Unix.openfile probe [ Unix.O_CREAT; Unix.O_EXCL; Unix.O_WRONLY ] 0o644 with
+  | fd ->
+      Unix.close fd;
+      Stdlib.Sys.remove probe;
+      false
+  | exception Unix.Unix_error ((Unix.EACCES | Unix.EPERM | Unix.EROFS), _, _) -> true
 
 module FI = Ir.Resource_fault_injection
 
@@ -58,13 +88,11 @@ let equal_op a b = Poly.equal (a : SC.cache_op) b
 let equal_record =
   List.equal (fun (o, k, r) (o', k', r') -> equal_op o o' && String.equal k k' && Bool.equal r r')
 
-(* Every entry and the stamp, by name and contents: what a read must leave as it found it. The lock
-   file is left out -- a lookup takes the record lock, creating the permanent lock file, but never
-   writes to it. *)
+(* Every file in the directory -- entries, the stamp, the lock file -- by name and contents: what a
+   read must leave as it found it. A lookup creates nothing, the lock file included
+   (gh-ocannl-1492). *)
 let snapshot dir =
-  Stdlib.Sys.readdir dir |> Array.to_list
-  |> List.filter ~f:(fun name -> not (String.equal name SC.regime_lock_filename))
-  |> List.sort ~compare:String.compare
+  Stdlib.Sys.readdir dir |> Array.to_list |> List.sort ~compare:String.compare
   |> List.map ~f:(fun name -> (name, read (Stdlib.Filename.concat dir name)))
 
 let equal_snapshot = List.equal (fun (n, c) (n', c') -> String.equal n n' && String.equal c c')
@@ -217,7 +245,84 @@ let () =
     (List.equal String.equal
        (List.map outer ~f:(fun (r : SC.cache_io) -> r.SC.key))
        [ "inner"; "outer" ]);
+  (* gh-ocannl-1492. A store creates the lock file; a lookup never does, and reads a missing one as
+     unlocked -- every writer creates it before touching the stamp or an entry. *)
+  let shipped = "shipped" in
+  let hits_shipped ((found : SC.entry option), io) =
+    (match found with Some value -> String.equal value.SC.backend shipped | None -> false)
+    && equal_record
+         (List.map io ~f:(fun (r : SC.cache_io) -> (r.SC.op, r.SC.key, Option.is_some r.SC.refusal)))
+         [ (SC.Lookup, shipped, false) ]
+  in
+  let lookup_shipped ~cache_dir =
+    SC.recording_cache_io (fun () -> SC.lookup ~dir:cache_dir ~key:(Some shipped))
+  in
+  (* A current cache directory holding [shipped]'s entry, its lock file removed unless [keep_lock]:
+     the directory a lookup reaches before any store of this binary's did. *)
+  let plant ~cache_dir ~keep_lock =
+    restore_writable cache_dir;
+    clean_dir cache_dir;
+    SC.store ~dir:cache_dir ~key:(Some shipped) (entry shipped);
+    if not keep_lock then Stdlib.Sys.remove (lock_file cache_dir)
+  in
+  let unlocked_cache_dir = "autotune_cache_regime_unlocked" in
+  plant ~cache_dir:unlocked_cache_dir ~keep_lock:false;
+  let unlocked_before = snapshot unlocked_cache_dir in
+  let unlocked = lookup_shipped ~cache_dir:unlocked_cache_dir in
+  p "a lookup in a directory without a lock file hits, admitted rather than refused"
+    (hits_shipped unlocked);
+  p "a lookup in a directory without a lock file creates nothing, the lock file included"
+    (equal_snapshot unlocked_before (snapshot unlocked_cache_dir)
+    && not (Stdlib.Sys.file_exists (lock_file unlocked_cache_dir)));
+  (* The first writer into a populated directory without a lock file can arrive while a lookup reads
+     it unlocked. Here it lands between the lookup's regime check and its read of the entry: it
+     creates the lock file and advances the stamp past this binary's regime. The entry the lookup
+     then reads belongs to a regime it must refuse, so the unlocked read is discarded and repeated
+     under the lock, which sees the newer stamp. *)
+  let straddled_cache_dir = "autotune_cache_regime_straddled" in
+  plant ~cache_dir:straddled_cache_dir ~keep_lock:false;
+  let writer_arrived = ref false in
+  let straddled =
+    FI.with_callback
+      (fun point ->
+        if FI.equal_point point FI.Schedule_cache_before_replay && not !writer_arrived then (
+          writer_arrived := true;
+          Stdio.Out_channel.write_all (lock_file straddled_cache_dir) ~data:"";
+          write_stamp straddled_cache_dir (SC.cache_regime_version + 1)))
+      ~f:(fun () -> lookup_shipped ~cache_dir:straddled_cache_dir)
+  in
+  p "a writer arriving during an unlocked lookup sends the lookup back under the lock"
+    (!writer_arrived
+    &&
+    match straddled with
+    | None, [ { SC.op = SC.Lookup; key; refusal = Some _; _ } ] -> String.equal key shipped
+    | _ -> false);
+  (* An actual read-only directory, whose every file is read-only too: once without its lock file,
+     once with it -- a read-only lock file a lookup opening it for writing was refused. *)
+  let read_only_lookup ~cache_dir ~keep_lock =
+    plant ~cache_dir ~keep_lock;
+    make_read_only cache_dir;
+    Exn.protect
+      ~finally:(fun () -> restore_writable cache_dir)
+      ~f:(fun () -> (denies_creation cache_dir, lookup_shipped ~cache_dir))
+  in
+  let host = "a host that lets this process create files in a mode-0555 directory" in
+  let read_only_cache_dir = "autotune_cache_regime_read_only" in
+  let enforced, found = read_only_lookup ~cache_dir:read_only_cache_dir ~keep_lock:false in
+  Verdict.gated ~aggregation:`Environment ~when_:enforced ~on:host
+    "a lookup in a read-only directory without a lock file hits, admitted rather than refused"
+    (hits_shipped found);
+  let read_only_locked_cache_dir = "autotune_cache_regime_read_only_locked" in
+  let enforced, found = read_only_lookup ~cache_dir:read_only_locked_cache_dir ~keep_lock:true in
+  Verdict.gated ~aggregation:`Environment ~when_:enforced ~on:host
+    "a lookup in a read-only directory with a read-only lock file hits, admitted rather than \
+     refused"
+    (hits_shipped found);
   clean_dir old_cache_dir;
   clean_dir legacy_cache_dir;
   clean_dir future_cache_dir;
-  clean_dir io_cache_dir
+  clean_dir io_cache_dir;
+  clean_dir unlocked_cache_dir;
+  clean_dir straddled_cache_dir;
+  clean_dir read_only_cache_dir;
+  clean_dir read_only_locked_cache_dir

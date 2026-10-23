@@ -963,6 +963,41 @@ let probe path =
   | exception Unix.Unix_error ((Unix.ENOENT | Unix.ENOTDIR), _, _) -> Ok false
   | exception Unix.Unix_error (error, fn, arg) -> Error (unix_refusal error fn arg)
 
+(* The record lock a cache-open holds through its operation (gh-ocannl-1492). A [Write] open creates
+   the permanent lock file and takes it exclusively. A [Read] open creates and writes nothing: it
+   opens an existing lock file read-only and takes it shared -- readers exclude writers, not each
+   other -- and a missing lock file reads as unlocked, since every writer creates it before it
+   touches the stamp or an entry. So a lookup in a directory it cannot write -- a read-only mount, a
+   cache another account owns -- reads its entries rather than refusing to create the lock.
+
+   An unlocked read is checked after the fact: a writer that arrived during it -- the first store
+   into a populated directory that came without its lock file -- created the lock file before it
+   could sweep or advance the stamp, so a lock file present once the read is done means the read may
+   have straddled a regime transition, and it is discarded and repeated under the lock. One absent
+   before and after spanned no writer. Only a [Read] open's [f] runs unlocked, and it changes
+   nothing, so repeating it is safe. *)
+let rec with_regime_lock ~mode dir f =
+  let lock_file = regime_lock_file dir in
+  let fd =
+    match mode with
+    | Write -> Some (Unix.openfile lock_file [ Unix.O_CREAT; Unix.O_RDWR ] 0o666)
+    | Read -> (
+        match Unix.openfile lock_file [ Unix.O_RDONLY ] 0 with
+        | fd -> Some fd
+        | exception Unix.Unix_error (Unix.ENOENT, _, _) -> None)
+  in
+  match fd with
+  | None ->
+      let result = f () in
+      if Stdlib.Sys.file_exists lock_file then with_regime_lock ~mode dir f else result
+  | Some fd ->
+      Stdlib.Fun.protect
+        ~finally:(fun () -> Unix.close fd)
+        (fun () ->
+          Resource_fault_injection.hit Schedule_cache_before_lock;
+          Unix.lockf fd (match mode with Read -> Unix.F_RLOCK | Write -> Unix.F_LOCK) 0;
+          f ())
+
 let open_cache ~mode ~dir f =
   match probe dir with
   | Ok false -> Error Missing_dir
@@ -973,12 +1008,7 @@ let open_cache ~mode ~dir f =
         ~finally:(fun () -> Stdlib.Mutex.unlock cache_open_mutex)
         (fun () ->
           try
-            let fd = Unix.openfile (regime_lock_file dir) [ Unix.O_CREAT; Unix.O_RDWR ] 0o666 in
-            Stdlib.Fun.protect
-              ~finally:(fun () -> Unix.close fd)
-              (fun () ->
-                Resource_fault_injection.hit Schedule_cache_before_lock;
-                Unix.lockf fd Unix.F_LOCK 0;
+            with_regime_lock ~mode dir (fun () ->
                 match open_current_regime ~mode dir with
                 | Current -> Ok (f ())
                 | Superseded -> Error Superseded_regime

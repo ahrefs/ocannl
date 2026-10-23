@@ -442,9 +442,9 @@ val regime_stamp_filename : string
     live cache's stamp. *)
 
 val regime_lock_filename : string
-(** The permanent record-lock file shared by cache-opening processes. Exposed as part of the on-disk
-    cache format for synthetic cache-directory tests; callers must never unlink a live cache's lock
-    file. *)
+(** The permanent record-lock file shared by cache-opening processes, created by the first {!store}
+    (a {!lookup} never creates it, gh-ocannl-1492). Exposed as part of the on-disk cache format for
+    synthetic cache-directory tests; callers must never unlink a live cache's lock file. *)
 
 val cache_file : dir:string -> key:string -> string
 (** The path of [key]'s entry in [dir]: a fixed-length digest of the key plus [.sexp], whatever the
@@ -487,21 +487,24 @@ val lookup : dir:string -> key:string option -> entry option
     stamp is older or absent reads as a miss for every key -- not a refusal -- and keeps its entries
     and its stamp until the next {!store} sweeps them, so reading a cache another binary wrote
     cannot destroy what it came to read. Nor does a lookup sweep staging files; the writers do. A
-    newer or malformed stamp refuses the lookup, as it refuses a store. Every participating reader
-    and writer holds the lock through its entry I/O, so same-version processes race benignly and an
-    older participating binary refuses after a newer one advances the stamp. The OS releases the
-    record lock on process death; the lock file is never unlinked, avoiding an inode-replacement
-    race. A binary predating this protocol does not participate and must not share a live directory
-    during an upgrade. *)
+    newer or malformed stamp refuses the lookup, as it refuses a store. Every participating writer
+    holds the lock exclusively, and every reader shared, through its entry I/O, so same-version
+    processes race benignly and an older participating binary refuses after a newer one advances the
+    stamp. A lookup creates and writes nothing, the lock file included (gh-ocannl-1492): it opens an
+    existing lock file read-only, and a missing one reads as unlocked -- every writer creates it
+    before touching the stamp or an entry -- so a lookup in a directory it cannot write (a read-only
+    mount, a cache another account owns) still hits. The OS releases the record lock on process
+    death; the lock file is never unlinked, avoiding an inode-replacement race. A binary predating
+    this protocol does not participate and must not share a live directory during an upgrade. *)
 
 val read_entry_file : string -> (string * Sexp.t) option
 (** The key and undecoded payload stored in one entry file of a cache directory (any kind: a
     schedule {!entry}, or one under the ["placements-"] or ["abandonment-"] prefix), [None] when the
-    file is not a readable entry of this format. Unlike {!lookup} it creates and locks nothing, and
-    it applies neither the regime check -- {!lookup} reads a directory whose regime stamp is older
-    as all misses -- nor a version check: what a tool reading a cache another binary wrote needs
-    (the splice-segments A/B, gh-ocannl-1277, [benchmarks/runners/ocannl/bench_splice.ml]).
-    Best-effort like {!entry_keys}: run it over a cache no process is writing. *)
+    file is not a readable entry of this format. Unlike {!lookup} it takes no lock, and it applies
+    neither the regime check -- {!lookup} reads a directory whose regime stamp is older as all
+    misses -- nor a version check: what a tool reading a cache another binary wrote needs (the
+    splice-segments A/B, gh-ocannl-1277, [benchmarks/runners/ocannl/bench_splice.ml]). Best-effort
+    like {!entry_keys}: run it over a cache no process is writing. *)
 
 (** {2 The cache-I/O record}
 

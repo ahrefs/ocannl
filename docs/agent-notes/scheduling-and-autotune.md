@@ -2046,10 +2046,13 @@ files.
   migration arm per historical regime. A lookup never deletes (gh-ocannl-1439): it reads a
   superseded generation as misses (not refusals) and leaves entries, stamp and staging files in
   place, so reading another binary's cache cannot destroy it. Every lookup and store takes the same permanent-file `lockf` plus an
-  in-process mutex through the entry I/O, so participating processes cannot write a current entry
-  under a sweep, and a binary seeing a newer or malformed stamp refuses cache I/O without changing
+  in-process mutex through the entry I/O -- a store exclusive, a lookup shared -- so participating
+  processes cannot write a current entry under a sweep, and a binary seeing a newer or malformed stamp refuses cache I/O without changing
   the directory. The lock file stays in place to avoid the unlink/recreate inode race and the OS
-  releases its record lock on process death. A process killed before stamp publication leaves the
+  releases its record lock on process death. Only a store creates the lock file (gh-ocannl-1492): a
+  lookup opens it read-only and reads a missing one as unlocked (no writer exists that has not
+  created it), so a read-only cache directory replays rather than refusing; a lookup creating the
+  file read every directory it could not write as a refusal. A process killed before stamp publication leaves the
   old stamp and the next opener retries; power-loss durability is the filesystem's, not an fsync
   guarantee. Pre-gh-835 binaries do not take the lock and must not share a live cache directory
   during an upgrade.
