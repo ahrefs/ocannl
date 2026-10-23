@@ -12,6 +12,7 @@ tools/test-test-run.sh	queries: existing Windows drive spelling matches the laun
 # A real dune: this job installs no toolchain; the fmt job runs a dune.
 tools/test-test-run.sh	a manual dune running beside a managed run keeps its live trace (real dune)
 tools/test-test-run.sh	credentials: the run's real dune trace names neither GH_TOKEN nor FOO_API_KEY, and does name the plain variable
+tools/test-test-run.sh	against a real dune: an unknown alias is refused, known ones run
 tools/test-test-run.sh	negative control: with the scrub cut out, the real trace names both credentials
 tools/test-test-run.sh	repeat --direct: one build, then each test's own rules replayed as dune ran them (real dune)
 tools/test-test-run.sh	negative control: with the replay cut out, dune's --force alone runs no target-producing test again (real dune)
