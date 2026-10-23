@@ -5,13 +5,13 @@ CUDA: every probed conversion helper returns the C one's bytes, for every draw a
 CUDA: a copy whose __hiloint2double swaps its words differs from the C table somewhere: true
 HIP: every probed conversion helper returns the C one's bytes, for every draw and lane: true
 HIP: a copy whose __hiloint2double swaps its words differs from the C table somewhere: true
-every half and bf16 draw the C table defines is probed in the C and both vendor copies: true
-C: every half and bf16 uniform form draws, at every probed input and lane, the greatest value of its format not above the f32 draw of the same bits: true
-C: at the all-ones input every half and bf16 uniform form draws below 1 in every lane: true
-CUDA: every half and bf16 uniform form draws, at every probed input and lane, the greatest value of its format not above the f32 draw of the same bits: true
-CUDA: at the all-ones input every half and bf16 uniform form draws below 1 in every lane: true
-HIP: every half and bf16 uniform form draws, at every probed input and lane, the greatest value of its format not above the f32 draw of the same bits: true
-HIP: at the all-ones input every half and bf16 uniform form draws below 1 in every lane: true
+every half, bf16 and fp8 draw the C table defines is probed in the C and both vendor copies: true
+C: every half, bf16 and fp8 uniform form draws, at every probed input and lane, the greatest value of its format not above the f32 draw of the same bits: true
+C: at the all-ones input every half, bf16 and fp8 uniform form draws below 1 in every lane: true
+CUDA: every half, bf16 and fp8 uniform form draws, at every probed input and lane, the greatest value of its format not above the f32 draw of the same bits: true
+CUDA: at the all-ones input every half, bf16 and fp8 uniform form draws below 1 in every lane: true
+HIP: every half, bf16 and fp8 uniform form draws, at every probed input and lane, the greatest value of its format not above the f32 draw of the same bits: true
+HIP: at the all-ones input every half, bf16 and fp8 uniform form draws below 1 in every lane: true
 HIP: the f32 fp8 guard over a correct cast is the C codec, bitwise: true
 HIP: the f64 fp8 guard over a correct cast is the C codec, bitwise: true
 HIP: an f32 guard whose zero drops its sign differs from the C codec: true

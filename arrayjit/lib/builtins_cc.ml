@@ -681,6 +681,28 @@ uint16_t uint32_to_bfloat16_uniform(uint32_t x) {
 }
 |},
       [ "uint32_to_single_uniform" ] );
+    ( "uint32_to_fp8_uniform",
+      {|
+/* A 32-bit word to an fp8 (e5m2) byte in [0, 1), below 1 by construction (gh-ocannl-1486): the
+   single draw of the word truncated toward zero to e5m2, as half and bfloat16 truncate theirs
+   (uint32_to_half_uniform). It used to be the word's raw low byte, an arbitrary e5m2 bit pattern --
+   negative values, magnitudes up to 57344, infinities and NaNs. From 2^-14 (e5m2's smallest normal)
+   up, the byte is the draw's exponent and top 2 mantissa bits, read off its f32 bits: the f32 field
+   (bits >> 21) rebiased from 127 to 15 (448 = 112 << 2). Below 2^-14 -- words under 2^18 -- the
+   draw (x >> 8) * 2^-24 floors to e5m2's subnormal step 2^-16 as x >> 16, the subnormal code
+   itself. Integer and bitcast only: no rounding mode or fast-math setting reaches it, so one word
+   draws the same byte on every backend. The largest draw is 0.875 (1 - 2^-3). The scalar form
+   takes the key's first word; the _vec/_lane forms move each byte to the word's top (the byte's
+   value scaled by 2^-8), as the 16-bit forms move their lanes. */
+uint8_t uint32_to_fp8_uniform(uint32_t x) {
+    if (x < 0x40000u) return (uint8_t)(x >> 16);
+    float f = uint32_to_single_uniform(x);
+    uint32_t bits;
+    memcpy(&bits, &f, sizeof(bits));
+    return (uint8_t)((bits >> 21) - 448u);
+}
+|},
+      [ "uint32_to_single_uniform" ] );
     ( "uint4x32_to_half_uniform",
       {|
 /* Uint4x32 to float16 uniform - the single draw of the first 32 bits, truncated to half (see
@@ -1583,12 +1605,13 @@ uint16_t uint4x32_to_bfloat16_uniform(uint4x32_t x) {
       [ "uint4x32_t"; "uint32_to_bfloat16_uniform" ] );
     ( "uint4x32_to_fp8_uniform",
       {|
-/* Uint4x32 to fp8 uniform - uses first 8 bits */
+/* Uint4x32 to fp8 uniform - the single draw of the first 32 bits, truncated to e5m2 (see
+   uint32_to_fp8_uniform), as the scalar half and bfloat16 draws are. */
 uint8_t uint4x32_to_fp8_uniform(uint4x32_t x) {
-    return (uint8_t)(x.v[0] & 0xFF);
+    return uint32_to_fp8_uniform(x.v[0]);
 }
 |},
-      [ "uint4x32_t" ] );
+      [ "uint4x32_t"; "uint32_to_fp8_uniform" ] );
     (* Vectorized conversion functions *)
     ( "uint4x32_to_single_uniform_vec",
       {|
@@ -1683,21 +1706,21 @@ uint16x8_t uint4x32_to_bfloat16_uniform_vec(uint4x32_t x) {
       [ "uint4x32_t"; "uint16x8_t"; "uint32_to_bfloat16_uniform" ] );
     ( "uint4x32_to_fp8_uniform_vec",
       {|
-/* Convert uint4x32 to 16 fp8s uniform (raw bit patterns). Returns int8x16_t to match
-   [Ops.c_vec_typ_of_prec], which maps both byte and fp8 to int8x16_t; the casts preserve
-   the bit patterns. */
+/* Convert uint4x32 to 16 fp8s in [0, 1): each word's bytes, lowest first, moved to the top of a
+   word for uint32_to_fp8_uniform. Returns int8x16_t to match [Ops.c_vec_typ_of_prec], which maps
+   both byte and fp8 to int8x16_t; the casts preserve the e5m2 bit patterns. */
 int8x16_t uint4x32_to_fp8_uniform_vec(uint4x32_t x) {
     int8x16_t result;
     for (int i = 0; i < 4; i++) {
-        result.v[i*4 + 0] = (int8_t)(x.v[i] & 0xFF);
-        result.v[i*4 + 1] = (int8_t)((x.v[i] >> 8) & 0xFF);
-        result.v[i*4 + 2] = (int8_t)((x.v[i] >> 16) & 0xFF);
-        result.v[i*4 + 3] = (int8_t)((x.v[i] >> 24) & 0xFF);
+        result.v[i*4 + 0] = (int8_t)uint32_to_fp8_uniform(x.v[i] << 24);
+        result.v[i*4 + 1] = (int8_t)uint32_to_fp8_uniform((x.v[i] << 16) & 0xFF000000u);
+        result.v[i*4 + 2] = (int8_t)uint32_to_fp8_uniform((x.v[i] << 8) & 0xFF000000u);
+        result.v[i*4 + 3] = (int8_t)uint32_to_fp8_uniform(x.v[i] & 0xFF000000u);
     }
     return result;
 }
 |},
-      [ "uint4x32_t"; "int8x16_t" ] );
+      [ "uint4x32_t"; "int8x16_t"; "uint32_to_fp8_uniform" ] );
     ( "uint4x32_to_uint32_uniform_vec",
       {|
 /* Convert uint4x32 to 4 uint32s - full range */
@@ -1790,7 +1813,7 @@ HALF_T uint4x32_to_half_uniform_lane(uint4x32_t x, int32_t lane) {
       [ "uint4x32_t"; "HALF_T"; "uint4x32_to_half_uniform_vec" ] );
     ( "uint4x32_to_fp8_uniform_lane",
       {|
-/* Lane of the packed fp8 uniform conversion (raw bit pattern as int8). */
+/* Lane of the packed fp8 uniform conversion (its e5m2 bit pattern as int8). */
 int8_t uint4x32_to_fp8_uniform_lane(uint4x32_t x, int32_t lane) {
     return uint4x32_to_fp8_uniform_vec(x).v[lane];
 }

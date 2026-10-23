@@ -5,11 +5,12 @@ open Ocannl.Nn_blocks.DSL_modules
 (* gh-509 task 4: virtual packed [uniform] results are inlined per cell via the lane-extract form
    [vec_convert(counter[flat / lanes]).v[flat mod lanes]], and must match materialized runs bitwise.
    For each precision and shape we run the same program twice -- once with the uniform tensor forced
-   materialized, once left to virtualize -- and compare the consumer's values bit-for-bit (NaN-safe:
-   fp8 random bit patterns can be NaN). The generated source is also checked structurally: the
-   materialized run stores via the vectorized builtin, the virtual run reads via the lane builtin
-   and emits no vectorized store. (Test disabled on Metal because of the double section — Metal has
-   no f64; the lane path itself is backend-generic, fp8 included.) *)
+   materialized, once left to virtualize -- and compare the consumer's values bit-for-bit (NaN-safe,
+   though since gh-ocannl-1486 no precision draws a NaN: fp8 used to draw raw bit patterns). The
+   generated source is also checked structurally: the materialized run stores via the vectorized
+   builtin, the virtual run reads via the lane builtin and emits no vectorized store. (Test disabled
+   on Metal because of the double section — Metal has no f64; the lane path itself is
+   backend-generic, fp8 included.) *)
 
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
@@ -96,6 +97,5 @@ let () =
      missing vector block entry -- the same compile-time refusal the bfloat16 case guards above. *)
   check ~name:"uint64 n=3" ~prec:Ir.Ops.uint64 [ 3 ];
   check ~name:"double n=3" ~prec:Ir.Ops.double [ 3 ];
-  (* fp8 is the stress case: 16 lanes per block, and random bit patterns include NaNs (compared by
-     bits, not value). *)
+  (* fp8 is the stress case: 16 lanes per block. *)
   check ~name:"fp8 n=17" ~prec:Ir.Ops.fp8 [ 17 ]
