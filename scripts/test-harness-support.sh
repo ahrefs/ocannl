@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Exercise shared harness lifecycle, counted skips (and a strict run's list of
 # expected ones), the --only leg filter with its coverage account, function
-# leg bodies that abandon themselves, and reason-specific rejection.
+# leg bodies that abandon themselves or are abandoned at a failed errexit
+# check, and reason-specific rejection.
 # Usage: scripts/test-harness-support.sh [--keep] [--help]
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -41,6 +42,33 @@ case $MODE in
     harness_leg_run 'delta leg #odd' delta
     harness_leg_run 'epsilon leg #even' epsilon
     [ -z "${ZETA:-}" ] || harness_leg_run 'zeta leg #odd' zeta ;;
+  errexit_legs)
+    # Bodies checked under errexit (harness_leg_run_errexit), in a harness that
+    # itself runs under errexit: a check failing in a nested function, a body
+    # that passes and leaves state behind in its own shell, an exit (after a
+    # command that failed harmlessly inside a substitution), an unbound
+    # variable, a report 1, a skip, a harness_abandon -- and a call inside a
+    # condition.
+    set -e
+    check() { grep -q never-there "$RECORD"; }
+    eta() { echo eta >>"$RECORD.ran"; check; echo late >>"$RECORD.ran"; }
+    theta() { echo theta >>"$RECORD.ran"; report 0 'theta body'; export THETA_LEAK=1; cd /; }
+    iota() {
+      echo "iota ${THETA_LEAK:-unset} $([ "$PWD" = "$PROBE_DIR" ] && echo home)" >>"$RECORD.ran"
+      harmless=$(false; echo fine)
+      exit 9
+    }
+    kappa() { echo kappa >>"$RECORD.ran"; set -u; : "$kappa_unbound"; echo late >>"$RECORD.ran"; }
+    lambda() { echo lambda >>"$RECORD.ran"; report 1 'lambda label' 'lambda detail'; echo late >>"$RECORD.ran"; }
+    mu() { echo mu >>"$RECORD.ran"; skip 'mu check' 'no mu host'; echo late >>"$RECORD.ran"; }
+    nu() { echo nu >>"$RECORD.ran"; harness_abandon 'nu gave up'; echo late >>"$RECORD.ran"; }
+    xi() { echo xi >>"$RECORD.ran"; false; echo late >>"$RECORD.ran"; }
+    harness_leg_restore() { echo restore >>"$RECORD.ran"; [ -z "${RESTORE_FAILS:-}" ]; }
+    PROBE_DIR=$PWD
+    harness_leg_run_errexit 'eta leg #odd' eta
+    harness_leg_run_errexit 'theta leg #even' theta
+    for leg in iota kappa lambda mu nu; do harness_leg_run_errexit "$leg leg" "$leg"; done
+    if harness_leg_run_errexit 'xi leg' xi; then :; fi ;;
 esac
 finish
 PROBE
@@ -244,6 +272,48 @@ if [ "$rc" = 9 ] && grep -qx 'aborted before finish (rc=9) inside leg: zeta leg 
    && ! grep -q 'legs passed\|leg(s) failed' "$TMP/out"; then
   report 0 'an exit inside a leg body still aborts, naming the leg'
 else report 1 'an exit inside a leg body still aborts, naming the leg' "exit $rc; $(cat "$TMP/out")"; fi
+# A body checked under errexit (gh-ocannl-1539): each failing shape abandons
+# its leg alone, named with why -- the failed command and the function it ran
+# in, the exit status, the report/skip/abandon text -- and every later leg runs;
+# no `late` line means no body went on past its failure; restoration runs after
+# each abandoned leg that ran, not after the passing one nor the one called
+# inside a condition, which never runs; the passing body's export and `cd` stay
+# its own. A restoration that fails is a FAIL of its own.
+errexit_probe() { # expected bodies run, then probe arguments
+  local want=$1 rc=0
+  shift
+  rm -f "$RECORD.ran"
+  MODE=errexit_legs probe "$@" || rc=$?
+  ran=
+  [ ! -f "$RECORD.ran" ] || ran=$(tr '\n' '|' <"$RECORD.ran" | sed 's/|$//')
+  [ "$ran" = "$want" ] || { printf 'bodies run: "%s", wanted "%s"\n' "$ran" "$want" >>"$TMP/out"; rc=99; }
+  return "$rc"
+}
+errexit_probe 'eta|restore|theta|iota unset home|restore|kappa|restore|lambda|restore|mu|restore|nu|restore'; rc=$?
+abandoned() { grep -qx "FAIL  $1 leg: abandoned, its later checks did not run" "$TMP/out" && grep -qxF "      $2" "$TMP/out"; }
+if [ "$rc" = 1 ] && grep -qx 'FAIL  eta leg #odd: abandoned, its later checks did not run' "$TMP/out" \
+   && grep -qxF '      a check failed in check: grep -q never-there "$RECORD"' "$TMP/out" \
+   && grep -qx 'PASS  theta body' "$TMP/out" \
+   && abandoned iota 'it ended with status 9 before its end: an exit, or an unbound variable under set -u (the lines above say which)' \
+   && grep -qx 'FAIL  kappa leg: abandoned, its later checks did not run' "$TMP/out" \
+   && grep -q 'kappa_unbound' "$TMP/out" \
+   && abandoned lambda 'report 1 inside the body: lambda label -- lambda detail' \
+   && abandoned mu 'skip inside the body: mu check -- no mu host' \
+   && abandoned nu 'nu gave up' \
+   && abandoned xi 'it was not run: called inside a condition (if, &&, || or !), where bash ignores errexit in the whole body, no check of it could fail' \
+   && grep -qx '7 leg(s) failed (0 skipped)' "$TMP/out" && ! grep -q 'aborted before finish\|^SKIP' "$TMP/out"; then
+  report 0 'an errexit body abandons its leg alone at its first failed check, named, and is restored after'
+else report 1 'an errexit body abandons its leg alone at its first failed check, named, and is restored after' "exit $rc; $(cat "$TMP/out")"; fi
+RESTORE_FAILS=1 errexit_probe 'eta|restore|theta|iota unset home|restore|kappa|restore|lambda|restore|mu|restore|nu|restore'; rc=$?
+if [ "$rc" = 1 ] && grep -q '^FAIL  eta leg #odd: the shared state it left was not restored; a later leg may fail for it$' "$TMP/out" \
+   && grep -qxF '      a check failed in harness_leg_restore: [ -z "${RESTORE_FAILS:-}" ]' "$TMP/out" \
+   && grep -qx '13 leg(s) failed (0 skipped)' "$TMP/out"; then
+  report 0 'a restoration that fails is a FAIL of its own'
+else report 1 'a restoration that fails is a FAIL of its own' "exit $rc; $(cat "$TMP/out")"; fi
+errexit_probe 'theta' --only '#even'; rc=$?
+if [ "$rc" = 0 ] && grep -qx 'FILTERED  eta leg #odd' "$TMP/out" && grep -qx '  RAN   theta leg #even' "$TMP/out"; then
+  report 0 'harness_leg_run_errexit gates a body as harness_leg does'
+else report 1 'harness_leg_run_errexit gates a body as harness_leg does' "exit $rc; $(cat "$TMP/out")"; fi
 # Leg naming (gh-ocannl-1367), on a probe whose header declares its groups:
 # #odd lists legs 1, 3 and 5, #even 2 and 4, #free none. Each case gates the
 # legs LEGS names, one per line; every gate is checked, selected or not.

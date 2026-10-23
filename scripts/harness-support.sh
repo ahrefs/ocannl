@@ -186,6 +186,87 @@ harness_leg_run() { # NAME FUNCTION
 harness_abandon() { # DETAIL -- inside a harness_leg_run body, then `return`
   report 1 "${harness_leg_running:-a leg}: abandoned, its later checks did not run" "$1"
 }
+# Run one leg whose body checks under errexit: `harness_leg_run_errexit 'NAME'
+# leg_fn`, gated as harness_leg gates (gh-ocannl-1539). The body runs in a
+# subshell of its own with errexit on and the ERR trap inherited by its
+# functions, so a check that fails -- a command errexit weighs, an `exit`, an
+# unbound variable under `set -u` -- ends the subshell and with it the leg,
+# never the harness: the leg is abandoned (harness_abandon), naming the
+# command that failed or the status the body ended with, and every later leg
+# still runs. A body passes only by reaching its end. Call it as a statement
+# of its own: inside an `if`, `&&`, `||` or `!` bash ignores errexit in the
+# whole body, so no check there could fail, and the leg is abandoned instead.
+# Being a subshell, the body's variables, exports, traps and `cd` stay its
+# own, and so would its counts: `report 0` prints as usual, while `report 1`,
+# `skip` and `harness_abandon` end the body as an abandoned leg, with their
+# text. What the body changes on disk does outlive it: a harness whose legs
+# leave shared state behind defines harness_leg_restore, which runs, contained
+# the same way, after every abandoned leg that ran (a FAIL of its own if it
+# fails).
+harness_leg_run_errexit() { # NAME FUNCTION
+  harness_leg "$1" || return 0
+  harness_leg_running=$1
+  harness_errexit_body "$2"
+  if [ -n "$harness_errexit_detail" ]; then
+    harness_abandon "$harness_errexit_detail"
+    if [ "$harness_errexit_ran" = 1 ] && declare -F harness_leg_restore >/dev/null; then
+      harness_errexit_body harness_leg_restore
+      [ -z "$harness_errexit_detail" ] ||
+        report 1 "$1: the shared state it left was not restored; a later leg may fail for it" "$harness_errexit_detail"
+    fi
+  fi
+  harness_leg_running=
+  return 0
+}
+# harness_leg_run_errexit's containment: run FUNCTION in an errexit subshell,
+# then set harness_errexit_detail to why it did not reach its end (empty when
+# it did), and harness_errexit_ran to 0 when it was not run at all. It returns
+# 0 whatever the body did: the subshell exits 0 through its own EXIT trap, so
+# the caller's errexit never sees the body's status, and the call never sits
+# in a condition that would turn errexit off inside it.
+harness_errexit_body() { # FUNCTION
+  local mark rc
+  mark=$TMP/.harness-errexit
+  rm -f "$mark.rc" "$mark.done" "$mark.failed" "$mark.ignored"
+  harness_errexit_subshell "$1" "$mark"
+  harness_errexit_detail= harness_errexit_ran=1
+  [ ! -e "$mark.done" ] || return 0
+  if [ -e "$mark.ignored" ]; then
+    harness_errexit_ran=0
+    harness_errexit_detail="it was not run: called inside a condition (if, &&, || or !), where bash ignores errexit in the whole body, no check of it could fail"
+  elif [ -s "$mark.failed" ]; then
+    harness_errexit_detail=$(cat "$mark.failed")
+  else
+    rc=$(cat "$mark.rc" 2>/dev/null) || rc='unknown (it was killed)'
+    harness_errexit_detail="it ended with status $rc before its end: an exit, or an unbound variable under set -u (the lines above say which)"
+  fi
+  return 0
+}
+# The subshell itself, a function whose body is one, so its `set -e` is its
+# own: MARK.done when FUNCTION reached its end, MARK.failed naming why it did
+# not, MARK.rc the status it ended with, MARK.ignored when errexit could not
+# take effect at all.
+harness_errexit_subshell() ( # FUNCTION MARK
+  harness_errexit_mark=$2
+  trap 'printf "%s\n" "$?" >"$harness_errexit_mark.rc"; exit 0' EXIT
+  # Whether errexit can take effect here at all: under a condition bash
+  # ignores it, even when set again inside, so the probe would reach exit 3.
+  set +e
+  (set -e; false; exit 3)
+  [ "$?" != 3 ] || { : >"$harness_errexit_mark.ignored"; exit 1; }
+  report() { # RC LABEL [DETAIL]
+    [ "$1" -ne 0 ] || { printf 'PASS  %s\n' "$2"; return 0; }
+    harness_abandon "report $1 inside the body: $2${3:+ -- $3}"
+  }
+  skip() { harness_abandon "skip inside the body: $1 -- $2"; }
+  harness_abandon() { printf '%s\n' "$1" >"$harness_errexit_mark.failed"; exit 1; }
+  set -eE
+  # Commands inside a command substitution report at a deeper level; only the
+  # body's own level names the check that ended it.
+  trap '[ "$BASH_SUBSHELL" != '"$BASH_SUBSHELL"' ] || printf "a check failed in %s: %s\n" "${FUNCNAME[0]:-the body}" "$BASH_COMMAND" >"$harness_errexit_mark.failed"' ERR
+  "$1"
+  : >"$harness_errexit_mark.done"
+)
 report() { # RC LABEL [DETAIL]
   if [ "$1" -eq 0 ]; then
     printf 'PASS  %s\n' "$2"
