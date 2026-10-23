@@ -432,11 +432,10 @@ files.
   (`computation_reads_merge`) and spliced-read (`record_spliced_reads`) scans at a later routine's
   entry, the fan-in guard, footprint eligibility, flip pricing — then sees only reads that execute,
   so such a read neither taints nor registers provenance. The issue proposed storing the
-  `simplify_llc` residual instead; that was built and refuted: a template can replay beneath a
-  threefry operand, which the consumer's simplify never enters, so a simplified template would carry
-  there folds that change values (constant folds round in double; what simplify changes is in
-  backend-precision-and-simd.md, the floating-point licences entry). Elision changes no evaluated
-  expression, so it is
+  `simplify_llc` residual instead, which would carry interval decisions taken under the
+  producer's loop extents and bounds candidates, and those need not hold at the replay site; the
+  consumer's own simplify runs where the template replays, threefry operands included
+  (gh-ocannl-1498). Elision changes no evaluated expression, so it is
   exact wherever the template replays; the consumer's simplify still folds the decided `Where` in
   every ordinary position. Decisions must hold wherever the template replays: the loops of the write
   index's symbols do not extend the interval environment (the inliner substitutes the read site's
