@@ -154,8 +154,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   finds a form it misses: staging#1366's process-lifetime census widened `top_level_key_reach`
   (recursive modules, extension payloads, cross-library reach) and took seven rounds, the last
   deferring three forms (`open struct`, a module alias, `module L = Lazy`) no censused source
-  contains. The list in the notes is what the small issue owes; a scan that needs a new model is a
-  follow-up issue sized as one.
+  contains. The list in the notes is what the small issue owes. Where the list restates a set the
+  code owns, it is the restatement Pinning the relationship warns against: the D1 files
+  the pin as a follow-up issue, sized for the new model it needs, rather than leaving the list
+  unpinned or building that model inside the small issue.
 
 ### Bringing the base in
 
