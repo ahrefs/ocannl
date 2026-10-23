@@ -407,7 +407,13 @@ files.
   flips does not accumulate them); (c) the scratch's traced entry and its
   `Never_virtual 153` placement are minted in the virtualizer, ahead of `reconcile_traced_store`,
   which would otherwise read the scratch's write-then-read as a fresh node's read-before-write and
-  demand it from a prior context; (d) `flip_candidates` is ONE record per node (gh-ocannl-1017):
+  demand it from a prior context — and that placement is the node's declared INTENT
+  (`Tn.update_memory_mode`), not a lineage-table entry (gh-ocannl-1481): every autotune candidate
+  compiles the base lowering's code over its own compile's fresh `optimize_ctx`
+  (`Autotune.compile_candidate_gated`'s `rebase`), whose lowering minted a different scratch, so a
+  table entry left the base's scratch with no placement there and `is_materialized_peek` asserted.
+  Any node a lowering mints for its own code takes its placement as intent for the same reason
+  (`Online_softmax` does); (d) `flip_candidates` is ONE record per node (gh-ocannl-1017):
   `fc_default` (the reading the policy chose) and `fc_alternatives` (the mutually exclusive
   readings a search may take — `` `Materialize``/`` `Inline`` for a footprint-scoped node, only
   `` `Inline`` for an inherited one, `` `Inline``/`` `Footprint`` for a cap-materialized node with

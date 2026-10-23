@@ -3023,8 +3023,17 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
                resolves it to [Local] (or [On_device] above the stack threshold, and across a
                fission boundary). The traced entry is minted now, ahead of [reconcile_traced_store],
                which would otherwise read the scratch's write-then-read as a fresh node's
-               read-before-write and demand its contents from a prior context. *)
-            Tn.Placements.update plc scratch Never_virtual (Site "153:footprint-scratch");
+               read-before-write and demand its contents from a prior context.
+
+               The [Never_virtual] is the node's declared intent, not an entry in this lineage's
+               table (gh-ocannl-1481): the scratch is a fresh node only this lowering's code
+               mentions, and that code may be compiled under ANOTHER compile's fork of the lineage —
+               every autotune candidate rebases the one base lowering's code onto its own fresh
+               [optimize_ctx], whose lowering minted a scratch of its own. A table entry stayed
+               behind in the base's fork, and the candidate's placement queries met a node with no
+               placement at all. Intent travels with the node; finalization still settles it per
+               fork. *)
+            Tn.update_memory_mode scratch Never_virtual (Site "153:footprint-scratch");
             let st = get_node traced_store scratch in
             st.has_assignment <- true;
             st.read_by_other <- true;

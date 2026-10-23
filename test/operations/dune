@@ -9974,3 +9974,19 @@
  (libraries base ocannl arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1481: Train.tune_placements on a routine with a footprint-scoped node searches without
+; asserting and ships the untuned values; with it, gh-ocannl-1440's rule that a flip group cut by the
+; call budget commits nothing, on the product's two-alternative group.
+
+(test
+ ; cc-vector-width: independent -- its claims are the shipped arm under a scripted ranking and
+ ; outputs exact in single precision, which every width computes alike.
+ (name tune_footprint_default)
+ ; ocannl-backend: cc -- Context.cpu (); the scripted ranking is backend-independent
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules tune_footprint_default)
+ (libraries base ocannl stdio arrayjit.verdict ll_test scripted_search)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))

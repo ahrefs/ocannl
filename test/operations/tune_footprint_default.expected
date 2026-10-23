@@ -1,0 +1,12 @@
+premise: the default lowering reads the product through a footprint scratch: true
+premise: the surface's only flip group is the footprint-scoped product's, with two alternatives: true
+the search completes and ships values bit-identical to the untuned compile: true
+both arms report, in position: true
+arm A timed a rebased candidate beside its baseline: true
+no candidate of arm A failed: true
+control: both alternatives of the flip group are measured: true
+control: the group commits and a flip ships: true
+cut: exactly one alternative of the group is measured: true
+cut: the group commits nothing -- arm A ships though the flip beat it: true
+cut: the shipped values are bit-identical to the untuned compile: true
+tune_footprint_default: done
