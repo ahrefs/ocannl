@@ -1,0 +1,28 @@
+iter: the hand-built scoped form has three scopes beneath its threefries: true
+iter: simplify collapses the uint4x32 scopes beneath the threefries: true
+iter: simplify never folds a threefry: true
+iter: 6 cells drawn 3 ways
+iter: every draw lies in [0, 1): true
+iter: inlined scopes and materialized nodes draw bitwise-equal values: true
+iter: direct leaves and materialized nodes draw bitwise-equal values: true
+iter: the draws differ from cell to cell: true
+fixed: the hand-built scoped form has three scopes beneath its threefries: true
+fixed: simplify collapses the uint4x32 scopes beneath the threefries: true
+fixed: simplify never folds a threefry: true
+fixed: the fixed counter stays an embedded index beneath the threefry, in both forms: true
+fixed: no constant replaces it: true
+fixed: behind the wrappers, beneath a threefry, the fixed counter stays an index: true
+fixed: behind the wrappers, in a uint4x32 setter, the fixed counter stays an index: true
+fixed: 6 cells drawn 5 ways
+fixed: every draw lies in [0, 1): true
+fixed: inlined scopes and materialized nodes draw bitwise-equal values: true
+fixed: direct leaves and materialized nodes draw bitwise-equal values: true
+fixed: every draw differs from the double-converted counter's (the control): true
+fixed: the wrapped counter beneath the threefry draws bitwise-equal values: true
+fixed: the wrapped counter materialized draws bitwise-equal values: true
+foreign scope: a single-precision scope beneath a threefry is not collapsed: true
+two packed draws: no scope is left in either block argument: true
+two packed draws: every draw lies in [0, 1): true
+two packed draws in one scope compile and draw bitwise-equal values: true
+lane: the lane operand folds to the constant 2: true
+lane: the counter beneath the threefry stays the iterator: true

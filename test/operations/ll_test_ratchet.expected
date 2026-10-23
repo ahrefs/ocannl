@@ -47,6 +47,7 @@ test/operations/scope_over_materialized.ml -- records=3 traversals=0
 test/operations/self_concat.ml -- records=0 traversals=1
 test/operations/set_vec_extent_guard.ml -- records=0 traversals=2
 test/operations/simplify_if_narrowing.ml -- records=1 traversals=0
+test/operations/simplify_rng_operands.ml -- records=1 traversals=0
 test/operations/splice_semantics.ml -- records=1 traversals=0
 test/operations/symbolic_extent_backward.ml -- records=0 traversals=1
 test/operations/symbolic_extent_contract.ml -- records=0 traversals=1

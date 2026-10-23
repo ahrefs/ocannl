@@ -5235,9 +5235,15 @@ module C_syntax (B : C_syntax_config) = struct
               local_defs ^^ hardline ^^ vec_decl ^^ hardline ^^ log_docs ^^ hardline ^^ assignments
           in
           lbrace ^^ nest 2 (hardline ^^ block_content) ^^ hardline ^^ rbrace
-        else if PPrint.is_empty local_defs then vec_decl ^^ hardline ^^ assignments
         else
-          let block_content = local_defs ^^ hardline ^^ vec_decl ^^ hardline ^^ assignments in
+          (* Always a block of its own: every [Set_from_vec] names its temporary [vec_result], so
+             two in one C scope would redeclare it -- and an argument with no local definitions (key
+             and counter collapsed into the threefry, gh-ocannl-1498, or read from materialized
+             nodes) leaves nothing else to open one. *)
+          let block_content =
+            if PPrint.is_empty local_defs then vec_decl ^^ hardline ^^ assignments
+            else local_defs ^^ hardline ^^ vec_decl ^^ hardline ^^ assignments
+          in
           lbrace ^^ nest 2 (hardline ^^ block_content) ^^ hardline ^^ rbrace
     | Set_local (({ tn = { storage_prec = _; _ }; _ } as id), value) ->
         (* A scope-local scalar is declared at [scope_prec_of] its node (see [Declare_local] and

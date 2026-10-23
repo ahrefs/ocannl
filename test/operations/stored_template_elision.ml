@@ -28,9 +28,9 @@
    for it, which need not lie in the producer's extent.
 
    Live code: everything that evaluates stays as captured -- a fixed embedded index is not folded to
-   a constant, on a [uint4x32] node or a float one. A template can replay beneath a threefry
-   operand, which the consumer's simplify never enters, and there the routine simplify's folds
-   change values (an index and a constant convert to [uint4x32] through different builtins).
+   a constant, on a [uint4x32] node or a float one. Folds are the consumer's simplify's to make
+   where the template replays (threefry operands included, gh-ocannl-1498), at the slot it replays
+   into: an index and a constant convert to [uint4x32] through different builtins.
 
    Consumer (gh-ocannl-1469): the same reading on the CONSUMER's side. B's own [Where] with a
    decided condition around a merge-tainted inherited read compiles and computes the live arm --

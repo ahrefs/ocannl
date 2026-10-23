@@ -4379,12 +4379,11 @@ let try_interval_fold ~ienv ~prec (llsc : scalar_t) : scalar_t option =
    decides the gate shut -- each replaced by the constant [0.] at the operand's own precision. That
    is the whole rewrite: every operand that is evaluated, conditions and gates included, stays as
    captured, and an elided operand is never evaluated, so the template computes the same value in
-   the same representation wherever it replays. The routine's simplify is NOT that: it enters no
-   threefry operand ([simplify_llc]'s arm for them) and its constant folds round in double, so a
-   simplified template replayed beneath a threefry operand would carry folds its consumer never
-   applies there. What this buys is the readers of the computations table -- the merge-taint and
-   spliced-read scans, the fan-in guard, footprint eligibility, flip pricing -- not seeing reads
-   that never execute. Decisions are what hold wherever the template replays: the loops of the write
+   the same representation wherever it replays. The routine's simplify is NOT that: its interval
+   decisions rest on the producer's loop extents and bounds candidates, which need not hold where
+   the template replays (below); the consumer's own simplify runs at every replay site, threefry
+   operands included (gh-ocannl-1498). What this buys is the readers of the computations table -- the merge-taint and spliced-read scans,
+   the fan-in guard, footprint eligibility, flip pricing -- not seeing reads that never execute. Decisions are what hold wherever the template replays: the loops of the write
    index's symbols ([~opaque]) do not extend the interval environment, since the inliner substitutes
    the read site's index for them and it need not lie in the producer's extent (a kept loop keeps
    its extent, freshened); and no bounds candidate is consulted ([node_bounds = false]). *)
@@ -4731,6 +4730,20 @@ let simplify_llc static_indices llc =
   and loop_scalar ~ienv ((llsc, prec) : scalar_t * Ops.prec) : scalar_t * Ops.prec =
     let loop_scalar = loop_scalar ~ienv in
     let loop_proc = loop_proc ~ienv in
+    (* gh-ocannl-1498: in a [uint4x32] slot the SOURCE precision of what renders there picks the
+       conversion, so a rewrite that hands a child the wrapper's place -- a projection, an
+       [Identity], a decided [Where], a unit or signed-zero identity, a [Where] branch or a
+       homogeneous operand -- simplifies the child at the slot, where the renderer reads it, not at
+       the child's own annotation ([mk_binop] annotates an embedded index at the index precision).
+       Arithmetic at [uint4x32] has no rendering, so its folds are out of this rule's scope. *)
+    let packed = match Ops.prec_family prec with Packed_integer -> true | _ -> false in
+    let at_slot ((v, p) : scalar_arg) : scalar_arg = if packed then (v, prec) else (v, p) in
+    (* A scope converts its value into its own precision before the slot converts it again; in a
+       [uint4x32] slot, collapsing a scope of another precision would drop that step and re-key the
+       conversion. *)
+    let collapsible (id : scope_id) =
+      (not packed) || Ops.equal_prec (Lazy.force id.tn.Tn.storage_prec) prec
+    in
     let local_scope_body, llsc' =
       match llsc with
       | Local_scope opts ->
@@ -4759,11 +4772,12 @@ let simplify_llc static_indices llc =
        to in-expression reads, i.e. moves them relative to any sibling scope body's effects. That is
        unconditionally sound under scope purity (gh-ocannl-584, {!validate_scope_bodies}): sibling
        bodies touch only their own locals, so no read can observe where it was placed. *)
-    | Local_scope { id; body = Set_local (id2, v); _ } when equal_scope_id id id2 ->
+    | Local_scope { id; body = Set_local (id2, v); _ } when equal_scope_id id id2 && collapsible id
+      ->
         ignore (Lazy.force id.tn.Tn.dims);
         loop_scalar (v, Lazy.force id.tn.Tn.storage_prec)
     | Local_scope { id; body = Seq (Set_local (id1, v1), Set_local (id2, v2)); _ }
-      when equal_scope_id id id1 && equal_scope_id id id2 ->
+      when equal_scope_id id id1 && equal_scope_id id id2 && collapsible id ->
         ignore (Lazy.force id.tn.Tn.dims);
         let result = substitute_float ~var:(Get_local id) ~value:v1 v2 in
         loop_scalar (result, Lazy.force id.tn.Tn.storage_prec)
@@ -4775,9 +4789,10 @@ let simplify_llc static_indices llc =
     (* gh-ocannl-1468: an index embedded into a [uint4x32] slot stays an index. The renderer picks
        the conversion by its SOURCE precision -- [int32_to_uint4x32] spreads an index over four
        words, [double_to_uint4x32] copies a double's bit pattern -- so folding it to a [Constant]
-       re-keys the conversion, and a materialized setter would draw different random bits from its
-       inlined copies, which keep the index (no threefry operand is entered below). Into a scalar
-       precision both conversions convert the index's value, so the fold stays there. *)
+       re-keys the conversion and changes the random bits drawn from it. Inlined beneath a threefry
+       or materialized, a counter reaches this arm at its [uint4x32] slot (gh-ocannl-1498), so both
+       placements keep the [int32] conversion every default random stream was drawn with. Into a
+       scalar precision both conversions convert the index's value, so the fold stays there. *)
     | Embed_index (Fixed_idx _ | Sub_axis)
       when match Ops.prec_family prec with Packed_integer -> true | _ -> false ->
         (llsc, prec)
@@ -4786,10 +4801,21 @@ let simplify_llc static_indices llc =
     | Embed_index (Iterator _) -> (llsc, prec)
     | Embed_index (Affine _) -> (llsc, prec) (* Cannot simplify affine expressions to constants *)
     | Embed_index (Concat _) -> (llsc, prec) (* Cannot simplify concat to constants *)
-    | Binop (Arg1, (llv1, prec1), _) -> loop_scalar (llv1, prec1)
-    | Binop (Arg2, _, (llv2, prec2)) -> loop_scalar (llv2, prec2)
-    | Binop ((Threefry4x32_crypto | Threefry4x32_light | Uint4x32_to_prec_uniform_lane), _, _) ->
-        (llsc, prec)
+    | Binop (Arg1, llv1, _) -> loop_scalar (at_slot llv1)
+    | Binop (Arg2, _, llv2) -> loop_scalar (at_slot llv2)
+    (* gh-ocannl-1498: an RNG binop is never folded itself ([Ops.interpret_binop] has no reading of
+       it on doubles), but its operands are simplified like any others. So a producer inlined
+       beneath a threefry goes through the same rewrites as its materialized setter, whose
+       right-hand side the [Set] arm simplifies at the node's own precision. Each operand is
+       simplified into the slot the renderer converts it to: a threefry renders both operands at its
+       own [uint4x32] precision ([Ops.is_homogeneous_prec_binop]), the lane conversion each operand
+       at the operand's own. *)
+    | Binop
+        ( ((Threefry4x32_crypto | Threefry4x32_light | Uint4x32_to_prec_uniform_lane) as op),
+          (v1, prec1),
+          (v2, prec2) ) ->
+        let slot operand_prec = if Ops.is_homogeneous_prec_binop op then prec else operand_prec in
+        (Binop (op, loop_scalar (v1, slot prec1), loop_scalar (v2, slot prec2)), prec)
     | Binop (ToPowOf, (Constant _, prec1), (Constant exponent, prec2))
       when Ops.is_float (Ops.promote_prec prec1 prec2)
            && Float.is_finite exponent && Float.is_integer exponent ->
@@ -4807,14 +4833,15 @@ let simplify_llc static_indices llc =
     | Binop (Mul, (llsc, prec1), (Constant 1., _))
     | Binop (Div, (llsc, prec1), (Constant 1., _))
     | Binop (Mul, (Constant 1., _), (llsc, prec1)) ->
-        loop_scalar (llsc, prec1)
+        loop_scalar (at_slot (llsc, prec1))
     (* The zero identities that hold in IEEE arithmetic: [x - (+0) = x] and [x + (-0) = x] for every
        [x], signed zeros, infinities and NaNs included. [x + (+0)] is not one ([-0 + 0 = +0]): it is
        [fp_finite_math]'s. *)
-    | Binop (Sub, (llsc, prec1), (Constant c, _)) when positive_zero c -> loop_scalar (llsc, prec1)
+    | Binop (Sub, (llsc, prec1), (Constant c, _)) when positive_zero c ->
+        loop_scalar (at_slot (llsc, prec1))
     | (Binop (Add, (llsc, prec1), (Constant c, _)) | Binop (Add, (Constant c, _), (llsc, prec1)))
       when negative_zero c ->
-        loop_scalar (llsc, prec1)
+        loop_scalar (at_slot (llsc, prec1))
     | Binop (ToPowOf, llv1, llv2) -> (
         let v1 = loop_scalar llv1 in
         let v2 = loop_scalar llv2 in
@@ -4845,8 +4872,11 @@ let simplify_llc static_indices llc =
       when Indexing.equal_axis_index a b ->
         (* gh-133 Stage A: a repeated-symbol equality guard whose two embedded indices are
            syntactically identical is always taken; fold it to its then-branch. *)
-        loop_scalar then_
+        loop_scalar (at_slot then_)
     | Ternop (op, llv1, llv2, llv3) ->
+        (* A [Where]'s branches, and every operand of a homogeneous ternop, render at its slot. *)
+        let llv1 = if Ops.is_homogeneous_prec_ternop op then at_slot llv1 else llv1 in
+        let llv2 = at_slot llv2 and llv3 = at_slot llv3 in
         let v1 = loop_scalar llv1 in
         let v2 = loop_scalar llv2 in
         let v3 = loop_scalar llv3 in
@@ -4866,7 +4896,7 @@ let simplify_llc static_indices llc =
               else result
           | _ -> result
         else loop_scalar result
-    | Unop (Identity, llsc) -> loop_scalar llsc
+    | Unop (Identity, llsc) -> loop_scalar (at_slot llsc)
     | Unop (op, (Constant c, _)) -> (Constant (Ops.interpret_unop op c), prec)
     | Unop (op, llsc) ->
         let v = loop_scalar llsc in

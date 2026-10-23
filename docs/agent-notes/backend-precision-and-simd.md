@@ -945,9 +945,19 @@ files.
   (`(2^24 + 1) - 2^24` is 1 folded, 0 in f32). And a fixed embedded index folds to a `Constant`
   only into a scalar precision: into a `uint4x32` slot it stays an index (gh-ocannl-1468), because
   the conversion is picked by the source precision -- `int32_to_uint4x32` spreads an index over
-  four words, `double_to_uint4x32` copies a double's bits -- and simplify never enters a threefry
-  operand, so a materialized counter folded where its inlined copies did not and drew other bits
-  (`uint4x32_fixed_index_parity` pins the two placements bitwise, cc and Metal). So OCANNL never
+  four words, `double_to_uint4x32` copies a double's bits -- so the fold would re-key a counter's
+  random bits (`uint4x32_fixed_index_parity` pins a counter's two placements bitwise, cc and
+  Metal). Simplify enters the operands of the RNG binops like any others, folding only the RNG
+  binop itself never (gh-ocannl-1498), so an inlined producer beneath a threefry gets exactly its
+  materialized setter's rewrites. In a `uint4x32` slot every operand the renderer reads at the
+  slot is simplified AT the slot, whatever its annotation says (`mk_binop` annotates an
+  `Embed_index` at the index precision): a threefry's operands, and the child a transparent
+  rewrite hands the wrapper's place to (`Identity`, `Arg1`/`Arg2`, a decided `Where`, the unit and
+  signed-zero identities, a `Where`'s branches); keyed on the annotation, a fixed counter behind
+  any of them folds and draws other bits, in a materialized setter too (`simplify_rng_operands`
+  fails that way). A scope of another precision in that slot is not collapsed, since its own
+  conversion is part of the value. The lane conversion's operands keep their own precisions; and
+  arithmetic at `uint4x32` has no rendering, so its folds are out of scope. So OCANNL never
   contracts an inlined producer with its consumer, and a placement flip cannot change a result at
   uniform f32 -- with the C compiler's own contraction off; `fp_licence_values` executes that
   claim (cc, `a = b = 1 + 2^-12`, `c = -(1 + 2^-11)`: 0 either way, `2^-24` fused). Backend

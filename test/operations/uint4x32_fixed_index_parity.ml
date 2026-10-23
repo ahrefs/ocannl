@@ -6,10 +6,11 @@ open Verdict.Claims
 (* gh-ocannl-1468: a [uint4x32] counter set from a fixed index ([Range_over_offsets] over an
    all-unit shape lowers to [Embed_index (Fixed_idx 0)]) must convert to its four words the same way
    whether it is inlined beneath the threefry that reads it or materialized and read back. The
-   inlined copy renders the index through [int32_to_uint4x32] (simplify does not enter threefry
-   operands); the materialized store went through the routine's simplify, whose fold [Embed_index
-   (Fixed_idx i)] -> [Constant i] re-keyed the conversion on a double source ([double_to_uint4x32]:
-   {0,0,0,0} for index 0, against {0, 0x9E3779B9, 0x6C078965, 0}).
+   inlined copy renders the index through [int32_to_uint4x32]; a fold [Embed_index (Fixed_idx i)] ->
+   [Constant i] in the materialized store's simplify re-keyed the conversion on a double source
+   ([double_to_uint4x32]: {0,0,0,0} for index 0, against {0, 0x9E3779B9, 0x6C078965, 0}). Simplify
+   now reaches both placements at the counter's [uint4x32] slot (gh-ocannl-1498), and keeps the
+   index there.
 
    Each case builds the packed [uniform] chain by hand, with the counter a tensor of its own, and
    runs it twice: the counter forced [Virtual], then forced materialized. The draws must agree bit

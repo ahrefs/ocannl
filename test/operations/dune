@@ -5821,6 +5821,15 @@
  (libraries base ocannl arrayjit.verdict ll_test))
 
 (test
+ (name simplify_rng_operands)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules simplify_rng_operands)
+ (libraries base ocannl stdio arrayjit.verdict ll_test))
+
+(test
  ; ocannl-backend: none -- inspects precision witnesses and renderer enumeration, executes no backend.
  (name precision_families)
  (package neural_nets_lib)
