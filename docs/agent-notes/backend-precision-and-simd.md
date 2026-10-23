@@ -217,8 +217,8 @@ files.
   mantissa. The rule when touching `c_syntax.ml`: a **declaration**, a kernel parameter or a buffer
   element type takes the storage precision; a **rendered expression** takes `comp_prec` of it. Two
   exceptions are load-bearing. The RNG lane conversions (`uint4x32_to_<prec>_uniform*`) pick both
-  their result type and which random bits they consume from the precision they render at — the fp8
-  generator is not a rounding of the f32 one — so they stay at storage precision, and the
+  their result type and which random bits they consume from the precision they render at — the
+  fp8 generator returns its storage byte, not an f32 value narrowed — so they stay at storage precision, and the
   scope-locals they write are excluded by a whole-proc scan (`rng_scope_local_uids`), because a
   `Declare_local` carries no value to test. And a `Set` whose value contains no operator renders at
   storage precision, so a copy loop stays a copy instead of a round-trip through f32.
@@ -240,6 +240,15 @@ files.
   C, CUDA and HIP tables against an independent floor oracle (the host codec's round-to-nearest,
   stepped down) over every 16-bit lane value and a sampled set of words; `narrow_uniform_bound`
   executes the scalar, packed and lane forms on the selected backend from the all-ones key.
+- **fp8 draws in [0, 1) like the rest** (gh-ocannl-1486): it used to return the key's raw bits as
+  an e5m2 pattern (negatives, magnitudes to 57344, Inf, NaN). `uint32_to_fp8_uniform` is the f32
+  draw truncated to e5m2, built in integers and bit casts so no rounding mode or Metal fast math
+  reaches it: from 2^-14 up the f32 bits' `(bits >> 21) - 448` (exponent rebiased 127 -> 15, top
+  two mantissa bits); below, words under 2^18, the subnormal code `x >> 16`. The largest draw is
+  0.875; a packed lane draws from one byte moved to the word's top, so its draws are multiples of
+  2^-8 (coarse, but those are the bits a lane has). A raw-bits generator, if anyone needs one,
+  belongs under its own name. `test_uniform_odd_sizes` claims the executed fp8 stream in [0, 1)
+  and not one repeated value.
 - `reduction_forms` prints the f32, bf16 and f16 draws of one fixed key on stdout — exact by
   construction, so they are golden lines — and claims each narrow draw is the f32 draw truncated,
   and that the host stubs over `builtins.c`

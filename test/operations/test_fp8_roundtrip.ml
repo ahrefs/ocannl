@@ -2,11 +2,13 @@ open Base
 open Ocannl
 
 (* Regression test for fp8 tensors on the configured backend (gh: fp8 kernels failed NVRTC
-   compilation on CUDA). Exercises the scalar and vectorized uniform builtins, which must produce
-   raw fp8 bit patterns (not numeric conversions of the random byte), and fp8 arithmetic, which
-   bridges through float on every backend. Values are printed in hex float notation to stay
-   platform-independent; the arithmetic part uses only exactly-representable fp8 values so all
-   backends agree bit-for-bit. *)
+   compilation on CUDA). Exercises the scalar and vectorized uniform builtins, which draw in [0, 1)
+   as every precision does (gh-ocannl-1486; they used to return the random byte as a raw e5m2
+   pattern) by assembling the e5m2 byte themselves -- a numeric conversion of that byte to the
+   vendor's fp8 type would print values of 1 and above -- and fp8 arithmetic, which bridges through
+   float on every backend. Values are printed in hex float notation to stay platform-independent;
+   the arithmetic part uses only exactly-representable fp8 values so all backends agree
+   bit-for-bit. *)
 
 let print_values header values =
   Stdio.printf "%s (%d values):\n" header (Array.length values);
@@ -17,7 +19,7 @@ let () =
   let ctx = Context.auto () in
   let open Nn_blocks.DSL_modules in
   let module O = TDSL.O in
-  (* Random fp8 bit patterns through the scalar uniform builtin. *)
+  (* Random fp8 draws through the scalar uniform builtin. *)
   let counter1 = TDSL.range 4 in
   let fp8_bits1 = O.threefry4x32 (O.embed_self_id ()) counter1 |> O.uint4x32_to_prec_uniform1 in
   Ir.Tnode.update_prec fp8_bits1.value Ir.Ops.fp8;
@@ -25,7 +27,7 @@ let () =
   let ctx = Train.forward_once ctx fp8_bits1 in
   print_values "fp8 uniform1" (Context.get_values ctx fp8_bits1.value);
 
-  (* Random fp8 bit patterns through the vectorized uniform builtin (16 fp8s per uint4x32). *)
+  (* Random fp8 draws through the vectorized uniform builtin (16 fp8s per uint4x32). *)
   let counter2 = TDSL.range 4 in
   let fp8_bits_vec = O.threefry4x32 (O.embed_self_id ()) counter2 |> O.uint4x32_to_prec_uniform in
   Ir.Tnode.update_prec fp8_bits_vec.value Ir.Ops.fp8;

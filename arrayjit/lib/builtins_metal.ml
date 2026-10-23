@@ -215,6 +215,15 @@ using namespace metal;|}, []);
     return bfloat(as_type<float>(as_type<uint32_t>(uint32_to_single_uniform(x)) & 0xFFFF0000u));
 }|},
       [ "uint32_to_single_uniform" ] );
+    (* The fp8 draw truncates too (gh-ocannl-1486), in integers and bit casts -- immune to Metal's
+       default fast math -- exactly as the C table's [uint32_to_fp8_uniform] (which explains the
+       construction). fp8 is a stored byte here. *)
+    ( "uint32_to_fp8_uniform",
+      {|inline uint8_t uint32_to_fp8_uniform(uint32_t x) {
+    return x < 0x40000u ? uint8_t(x >> 16)
+                        : uint8_t((as_type<uint32_t>(uint32_to_single_uniform(x)) >> 21) - 448u);
+}|},
+      [ "uint32_to_single_uniform" ] );
     ( "uint4x32_to_single_uniform",
       {|float uint4x32_to_single_uniform(uint4 x) {
     return uint32_to_single_uniform(x.x);
@@ -270,9 +279,9 @@ using namespace metal;|}, []);
       [ "uint32_to_half_uniform" ] );
     ( "uint4x32_to_fp8_uniform",
       {|uint8_t uint4x32_to_fp8_uniform(uint4 x) {
-    return uint8_t(x.x & 0xFF);
+    return uint32_to_fp8_uniform(x.x);
 }|},
-      [] );
+      [ "uint32_to_fp8_uniform" ] );
     ( "uint4x32_to_single_uniform_vec",
       {|float4_t uint4x32_to_single_uniform_vec(uint4 x) {
     float4_t result;
@@ -382,14 +391,15 @@ using namespace metal;|}, []);
     uint4 v = x;
     for (int i = 0; i < 4; i++) {
         uint32_t val = v[i];
-        result.v[i*4 + 0] = int8_t(val & 0xFF);
-        result.v[i*4 + 1] = int8_t((val >> 8) & 0xFF);
-        result.v[i*4 + 2] = int8_t((val >> 16) & 0xFF);
-        result.v[i*4 + 3] = int8_t((val >> 24) & 0xFF);
+        // The word's bytes, lowest first, moved to the top of a word (see the C table)
+        result.v[i*4 + 0] = int8_t(uint32_to_fp8_uniform(val << 24));
+        result.v[i*4 + 1] = int8_t(uint32_to_fp8_uniform((val << 16) & 0xFF000000u));
+        result.v[i*4 + 2] = int8_t(uint32_to_fp8_uniform((val << 8) & 0xFF000000u));
+        result.v[i*4 + 3] = int8_t(uint32_to_fp8_uniform(val & 0xFF000000u));
     }
     return result;
 }|},
-      [ "int8x16_t" ] );
+      [ "int8x16_t"; "uint32_to_fp8_uniform" ] );
     (* Lane extraction from the packed uniform conversion (gh-509 task 4): minted by the virtualizer
        to inline packed-uniform results per cell. Implemented via the _vec builtins so the value
        stream is bitwise-identical to the vectorized stores by construction. *)

@@ -110,6 +110,18 @@ __device__ __forceinline__ double ocannl_shfl_xor(double v, int lane_mask) {
   return __float2bfloat16(__uint_as_float(__float_as_uint(uint32_to_single_uniform(x)) & 0xFFFF0000u));
 }|},
       [ "uint32_to_single_uniform" ] );
+    (* The fp8 draw truncates too (gh-ocannl-1486), in integers and bit casts, exactly as the C
+       table's [uint32_to_fp8_uniform] (which explains the construction). Assign through the storage
+       member: constructing __nv_fp8_e5m2 from the byte would be a numeric conversion, not a bit
+       reinterpretation. *)
+    ( "uint32_to_fp8_uniform",
+      {|__device__ __forceinline__ __nv_fp8_e5m2 uint32_to_fp8_uniform(unsigned int x) {
+  __nv_fp8_e5m2 result;
+  result.__x = (__nv_fp8_storage_t)(x < 0x40000u ? x >> 16
+                    : (__float_as_uint(uint32_to_single_uniform(x)) >> 21) - 448u);
+  return result;
+}|},
+      [ "uint32_to_single_uniform" ] );
     ( "uint32_to_double_uniform",
       {|__device__ __forceinline__ double uint32_to_double_uniform(unsigned int x) {
   return __uint2double_rn(x) * (1.0 / 4294967296.0);
@@ -193,14 +205,9 @@ __device__ __forceinline__ double ocannl_shfl_xor(double v, int lane_mask) {
       [ "uint4x32_t"; "uint32_to_bfloat16_uniform" ] );
     ( "uint4x32_to_fp8_uniform",
       {|__device__ __nv_fp8_e5m2 uint4x32_to_fp8_uniform(uint4x32_t x) {
-  /* Random FP8 E5M2 bit pattern from the low 8 bits (matches the CC backend, which stores fp8
-     as a raw byte). Assign through the storage member: constructing __nv_fp8_e5m2 from the
-     byte would be a numeric conversion, not a bit reinterpretation. */
-  __nv_fp8_e5m2 result;
-  result.__x = (__nv_fp8_storage_t)(x.v[0] & 0xFF);
-  return result;
+  return uint32_to_fp8_uniform(x.v[0]);
 }|},
-      [ "uint4x32_t" ] );
+      [ "uint4x32_t"; "uint32_to_fp8_uniform" ] );
     ( "uint4x32_to_half_uniform",
       {|__device__ __half uint4x32_to_half_uniform(uint4x32_t x) {
   return uint32_to_half_uniform(x.v[0]);
@@ -327,18 +334,18 @@ __device__ __forceinline__ double ocannl_shfl_xor(double v, int lane_mask) {
       [ "uint4x32_t"; "uint8x16_t" ] );
     ( "uint4x32_to_fp8_uniform_vec",
       {|__device__ fp8x16_t uint4x32_to_fp8_uniform_vec(uint4x32_t x) {
-  /* 16 random FP8 E5M2 bit patterns; see uint4x32_to_fp8_uniform for the __x rationale. */
+  /* Each word's bytes, lowest first, moved to the top of a word (see the C table) */
   fp8x16_t result;
   #pragma unroll
   for (int i = 0; i < 4; i++) {
-    result.v[i*4 + 0].__x = (__nv_fp8_storage_t)(x.v[i] & 0xFF);
-    result.v[i*4 + 1].__x = (__nv_fp8_storage_t)((x.v[i] >> 8) & 0xFF);
-    result.v[i*4 + 2].__x = (__nv_fp8_storage_t)((x.v[i] >> 16) & 0xFF);
-    result.v[i*4 + 3].__x = (__nv_fp8_storage_t)((x.v[i] >> 24) & 0xFF);
+    result.v[i*4 + 0] = uint32_to_fp8_uniform(x.v[i] << 24);
+    result.v[i*4 + 1] = uint32_to_fp8_uniform((x.v[i] << 16) & 0xFF000000u);
+    result.v[i*4 + 2] = uint32_to_fp8_uniform((x.v[i] << 8) & 0xFF000000u);
+    result.v[i*4 + 3] = uint32_to_fp8_uniform(x.v[i] & 0xFF000000u);
   }
   return result;
 }|},
-      [ "uint4x32_t"; "fp8x16_t" ] );
+      [ "uint4x32_t"; "fp8x16_t"; "uint32_to_fp8_uniform" ] );
     ( "uint4x32_to_uint32_uniform_vec",
       {|__device__ uint32x4_t uint4x32_to_uint32_uniform_vec(uint4x32_t x) {
   uint32x4_t result;

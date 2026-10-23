@@ -1,10 +1,13 @@
-(* The half and bf16 uniform draws stay below 1 on the backend that runs this (gh-ocannl-1434).
+(* The half, bf16 and fp8 uniform draws stay below 1 on the backend that runs this (gh-ocannl-1434,
+   gh-ocannl-1486).
 
    A narrow draw used to be the f32 draw of its bits ROUNDED to the narrow format, which is exactly
    1.0 for every f32 draw within half a narrow ulp of 1 -- one half draw in 4096 and one bf16 draw
    in 512 -- breaking every consumer that relies on [u < 1] (a keep mask [u < p] at [p = 1], [log (1
    - u)]). Each is now the f32 draw truncated toward zero, so the largest draw is the format's
-   greatest value below 1.
+   greatest value below 1. The fp8 (e5m2) draw was not a draw at all: the key's raw bits as an e5m2
+   pattern, negatives, infinities and NaNs included; it is now the f32 draw truncated to e5m2 as
+   well, so its greatest value is 0.875.
 
    Sampling would meet the boundary only by luck, so the conversions are fed the worst-case bits
    directly: the key [Constant_bits (-1)], whose [uint4x32] widening is two all-ones words and two
@@ -26,9 +29,9 @@ let () = Stdio.eprintf "(not part of the golden) narrow_uniform_bound: backend=%
 let key = LL.Constant_bits (-1L)
 let key_lanes = Ops.int64_to_uint4x32 (-1L)
 
-(* The packed forms' lanes: 8 at a 16-bit format, lane [j] drawing from 16 bits of word [j / 2]; 4
-   at f32, one word each. Either way the first half come from the all-ones words and the second half
-   from the zero words. *)
+(* The packed forms' lanes: 16 at fp8, lane [j] drawing from byte [j mod 4] of word [j / 4]; 8 at a
+   16-bit format, lane [j] drawing from 16 bits of word [j / 2]; 4 at f32, one word each. Either way
+   the first half come from the all-ones words and the second half from the zero words. *)
 let lanes prec = Ops.vec_unop_lanes prec
 
 (* The greatest value below 1, read off the host codec: 1.0's encoding, one step down. *)
@@ -36,12 +39,14 @@ let below_one (prec : Ops.prec) =
   match prec with
   | Ops.Bfloat16_prec _ -> Ops.bfloat16_to_single (Ops.single_to_bfloat16 1.0 - 1)
   | Ops.Half_prec _ -> Ops.half_to_single (Ops.single_to_half 1.0 - 1)
+  | Ops.Fp8_prec _ -> Ops.fp8_to_single (Ops.single_to_fp8 1.0 - 1)
   | _ -> 1.0 -. 0x1p-24
 
 let host_scalar_draw (prec : Ops.prec) =
   match prec with
   | Ops.Bfloat16_prec _ -> Ops.bfloat16_to_single (Ops.uint4x32_to_bfloat16_uniform key_lanes)
   | Ops.Half_prec _ -> Ops.half_to_single (Ops.uint4x32_to_half_uniform key_lanes)
+  | Ops.Fp8_prec _ -> Ops.fp8_to_single (Ops.uint4x32_to_fp8_uniform key_lanes)
   | _ -> Ops.uint4x32_to_single_uniform key_lanes
 
 let next_id = ref 3400
@@ -94,7 +99,7 @@ let per_lane prec prec_name =
 
 let () =
   List.iter
-    [ ("f32", Ops.single); ("bf16", Ops.bfloat16); ("f16", Ops.half) ]
+    [ ("f32", Ops.single); ("bf16", Ops.bfloat16); ("f16", Ops.half); ("fp8", Ops.fp8) ]
     ~f:(fun (prec_name, prec) ->
       let top = below_one prec in
       let s = scalar prec prec_name and v = packed prec prec_name and l = per_lane prec prec_name in
