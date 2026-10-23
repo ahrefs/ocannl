@@ -1067,6 +1067,16 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
       object (self)
         inherit Ast_traverse.iter as super
 
+        (* An object's method runs when it is called, like a function body; its [val] initializers
+           run when the object is built (round 5 of PR #1366). *)
+        method! class_field field =
+          match field.pcf_desc with
+          | Pcf_method _ ->
+              Int.incr under_function;
+              super#class_field field;
+              Int.decr under_function
+          | _ -> super#class_field field
+
         method! expression expr =
           match expr.pexp_desc with
           | Pexp_function _ ->
@@ -1210,13 +1220,21 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
         | Pstr_extension ((_, PStr items), _) -> walk ~scope env items
         (* A recursive module's body is walked as a nested structure's, like [module M = struct …
            end] (round 3 of PR #1366); its name is no alias. The group is walked twice, the first
-           time silently, so a member's lazy sees every member's values (round 4). *)
+           time silently, so a member's lazy sees every member's values (round 4) -- its siblings'
+           only: the replay of a member starts without what the silent pass bound inside it, so its
+           own body is resolved in source order again (round 5). *)
         | Pstr_recmodule bindings ->
-            let walk_group env =
+            let walk_group ~replay env =
               List.fold bindings ~init:env ~f:(fun env binding ->
                   match binding.pmb_name.txt with
                   | None -> env
                   | Some name -> (
+                      let env =
+                        if not replay then env
+                        else
+                          let own = dotted (scope @ [ name ]) ^ "." in
+                          Map.filter_keys env ~f:(fun key -> not (String.is_prefix key ~prefix:own))
+                      in
                       let module_expr = unwrap binding.pmb_expr in
                       match module_expr.pmod_desc with
                       | Pmod_structure inner -> walk ~scope:(scope @ [ name ]) env inner
@@ -1228,9 +1246,9 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
             in
             let outer = !reporting in
             reporting := false;
-            let seeded = walk_group env in
+            let seeded = walk_group ~replay:false env in
             reporting := outer;
-            walk_group seeded
+            walk_group ~replay:true seeded
         | Pstr_include { pincl_mod; _ } -> (
             match (unwrap pincl_mod).pmod_desc with
             | Pmod_structure inner -> walk ~scope env inner

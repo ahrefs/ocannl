@@ -545,6 +545,26 @@ end = struct
   let helper () = get ~arg_name:"rec_sibling" ~default:""
 end|ocaml},
       [ "rec_sibling" ] );
+    ( "a recursive member's own later binding is not in scope at its lazy",
+      [],
+      {ocaml|let helper () = get ~arg_name:"outer_helper" ~default:""
+
+module rec A : sig
+  val held : string Lazy.t
+  val helper : unit -> string
+end = struct
+  let held = lazy (helper ())
+  let helper () = get ~arg_name:"later_member_helper" ~default:""
+end|ocaml},
+      [ "outer_helper" ] );
+    ( "an object's method creates its lazy per call; its val once",
+      [],
+      {ocaml|let o =
+  object
+    val v = lazy (get ~arg_name:"object_val" ~default:"")
+    method m = lazy (get ~arg_name:"object_method" ~default:"")
+  end|ocaml},
+      [ "object_val" ] );
     ( "an enclosing module included in a functor body",
       [],
       {ocaml|module Helpers = struct
