@@ -45,6 +45,7 @@ Profile "reproducible" sets:
   online_softmax=false
   online_softmax_backward=false
   online_softmax_block=0
+  winograd_conv=false
   gpu_default_split_reduce_min_serial=0
 
 Profile "performance" sets:
@@ -69,6 +70,7 @@ Profile "approximate" sets:
   online_softmax=true
   online_softmax_backward=true
   online_softmax_block=auto
+  winograd_conv=true
   cc_backend_fast_math=true
   cc_backend_fp_contract=fast
   fp_contract=true

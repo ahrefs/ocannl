@@ -7,35 +7,32 @@
    Every executed leg compares the rewritten conv against the SAME conv in the direct form (the gate
    off), with the session reinitialized before each build so both mint the same nodes.
 
-   Legs:
-   1. Exact parity on bounded integer fixtures, per shape: padded and valid convs, odd output
-      extents (the remainder strips), a non-square image, a batch of one (a fixed index, which
-      [Autotune.detect_conv] refuses and this rewrite carries through), and two chained conv sites.
-      The inputs lie in [-4, 4] and the kernel in [-3, 3], varying with every axis (batch, both
-      spatial axes, channel; each kernel tap and both channels), so a transposed kernel, a shifted
-      tile or a wrong sign changes some cell. Exactness is argued, not assumed: every coefficient of
-      the transforms is dyadic, the kernel transform scales by at most 1/4, and every partial sum
-      of either form is a multiple of 1/4 below 2^20 in magnitude (the second chained conv's inputs
-      are the first's outputs, at most 9 * 5 * 12 = 540), so both forms compute their sums exactly
-      in f32 and must agree BITWISE. Structurally per shape: with the gate off, the direct nest
-      covers every output cell and [Autotune.detect_conv] reports the 3x3 stride-1 site (except at
-      batch one, its documented singleton refusal); rewritten, the direct form covers only the
-      remainder strips, the three transformed buffers are written, no full conv site is left, and
-      the contraction is a matmul site writing the product buffer. The pass is idempotent.
-   2. Tolerance parity on non-dyadic inputs: two-sided per cell, at an explicitly looser tier than
-      the conv sketches' reassociation (the transformed-domain arithmetic rounds differently, not
-      just in another order); the digits go to stderr.
-   3. The kernel transform is recomputed every call: one compiled routine, run, the kernel's values
-      replaced through [Context.set_values], run again -- a transform computed once (or cached
-      across calls) would serve the old kernel.
-   4. Training: a two-conv padded network's parameter gradients, gate on against gate off, within
-      tolerance (the backward stays direct; the forward it reads is rewritten).
-   5. The tuned path: [Autotune.tune] over a rewritten conv seeds matmul sketches for the
-      contractions, and the tuned routine matches the direct form within tolerance.
-   6. Declines: 5x5, stride 2, dilation 2, a 3x1 window and an f16 conv keep their direct nest and
-      mint nothing; on hand-built raw lowerings, a conv whose batch axis also reads the window
-      symbol (not separable) is left alone, and an accumulation into a destination holding nonzero
-      values keeps them (the rewrite accumulates, it does not overwrite). *)
+   Legs: 1. Exact parity on bounded integer fixtures, per shape: padded and valid convs, odd output
+   extents (the remainder strips), a non-square image, a batch of one (a fixed index, which
+   [Autotune.detect_conv] refuses and this rewrite carries through), and two chained conv sites. The
+   inputs lie in [-4, 4] and the kernel in [-3, 3], varying with every axis (batch, both spatial
+   axes, channel; each kernel tap and both channels), so a transposed kernel, a shifted tile or a
+   wrong sign changes some cell. Exactness is argued, not assumed: every coefficient of the
+   transforms is dyadic, the kernel transform scales by at most 1/4, and every partial sum of either
+   form is a multiple of 1/4 below 2^20 in magnitude (the second chained conv's inputs are the
+   first's outputs, at most 9 * 5 * 12 = 540), so both forms compute their sums exactly in f32 and
+   must agree BITWISE. Structurally per shape: with the gate off, the direct nest covers every
+   output cell and [Autotune.detect_conv] reports the 3x3 stride-1 site (except at batch one, its
+   documented singleton refusal); rewritten, the direct form covers only the remainder strips, the
+   three transformed buffers are written, no full conv site is left, and the contraction is a matmul
+   site writing the product buffer. The pass is idempotent. 2. Tolerance parity on non-dyadic
+   inputs: two-sided per cell, at an explicitly looser tier than the conv sketches' reassociation
+   (the transformed-domain arithmetic rounds differently, not just in another order); the digits go
+   to stderr. 3. The kernel transform is recomputed every call: one compiled routine, run, the
+   kernel's values replaced through [Context.set_values], run again -- a transform computed once (or
+   cached across calls) would serve the old kernel. 4. Training: a two-conv padded network's
+   parameter gradients, gate on against gate off, within tolerance (the backward stays direct; the
+   forward it reads is rewritten). 5. The tuned path: [Autotune.tune] over a rewritten conv seeds
+   matmul sketches for the contractions, and the tuned routine matches the direct form within
+   tolerance. 6. Declines: 5x5, stride 2, dilation 2, a 3x1 window and an f16 conv keep their direct
+   nest and mint nothing; on hand-built raw lowerings, a conv whose batch axis also reads the window
+   symbol (not separable) is left alone, and an accumulation into a destination holding nonzero
+   values keeps them (the rewrite accumulates, it does not overwrite). *)
 
 open Base
 open Stdio
@@ -56,12 +53,11 @@ let named name (comp : Ir.Assignments.comp) : Ir.Assignments.comp =
 
 (* Bounded integers varying with every axis: [(sum_i w_i * idx_i) mod m - off]. *)
 let ints ~weights ~m ~off idcs =
-  Float.of_int ((Array.foldi idcs ~init:0 ~f:(fun i acc v -> acc + (weights.(i) * v)) % m) - off)
+  Ll_test.weighted ~weights ~modulus:m ~offset:(Float.of_int (-off)) ~stride:1. idcs
 
-(* Non-dyadic values in about [-0.7, 0.7]. *)
+(* Non-dyadic values in about [-0.7, 0.7]: [((sum_i w_i * idx_i) mod 11 - 4.9) / 7]. *)
 let reals ~weights idcs =
-  (Float.of_int (Array.foldi idcs ~init:0 ~f:(fun i acc v -> acc + (weights.(i) * v)) % 11) /. 7.)
-  -. 0.7
+  Ll_test.weighted ~weights ~modulus:11 ~offset:(-4.9) ~stride:(1. /. 7.) idcs
 
 let image ~tag ~b ~h ~w ~ic ~f =
   let dims = Array.of_list (b @ [ h; w; ic ]) in
@@ -78,8 +74,8 @@ let spec ~padded ~stride ~dilation =
   let m = if padded then "=+" else "<+" in
   let d = if dilation = 1 then "" else Int.to_string dilation ^ "*" in
   Printf.sprintf
-    "...| %d*oh%s%skh, %d*ow%s%skw, ..ic..; |kh, kw, ..ic.. -> ..oc.. => ...| oh, ow, ..oc.."
-    stride m d stride m d
+    "...| %d*oh%s%skh, %d*ow%s%skw, ..ic..; |kh, kw, ..ic.. -> ..oc.. => ...| oh, ow, ..oc.." stride
+    m d stride m d
 
 let conv ?(stride = 1) ?(dilation = 1) ~padded ~label x k =
   NTDSL.O.einsum ~label:[ label ] (spec ~padded ~stride ~dilation) x k
@@ -113,8 +109,7 @@ let written (llc : LL.t) =
   |> List.filter_map ~f:(fun (a : Tn.t Ir.Affine.access) -> Option.some_if a.a_write a.a_tn)
 
 let roles_written llc =
-  List.filter_map (written llc) ~f:Winograd.minted_role
-  |> List.dedup_and_sort ~compare:Poly.compare
+  List.filter_map (written llc) ~f:Winograd.minted_role |> List.dedup_and_sort ~compare:Poly.compare
 
 let all_roles = List.dedup_and_sort ~compare:Poly.compare [ `Kernel; `Input; `Product ]
 
@@ -157,8 +152,9 @@ let report label (got : float array) =
   eprintf "%s: %s (not part of the golden)\n%!" label
     (String.concat ~sep:" "
        (Array.to_list
-          (Array.map (Array.sub got ~pos:0 ~len:(Int.min 8 (Array.length got))) ~f:(fun v ->
-               Printf.sprintf "%.9g" v))))
+          (Array.map
+             (Array.sub got ~pos:0 ~len:(Int.min 8 (Array.length got)))
+             ~f:(fun v -> Printf.sprintf "%.9g" v))))
 
 (* {1 Leg 1: exact parity and structure, per shape} *)
 
@@ -200,25 +196,27 @@ let leg1 (s : shape) =
   let even_cells = batch * (oh / 2 * 2) * (ow / 2 * 2) * s.oc in
   let reduction = 9 * s.ic in
   let rewritten = Winograd.rewrite direct.raw in
-  p (s.name ^ ": the direct nest covers every output cell")
+  p
+    (s.name ^ ": the direct nest covers every output cell")
     (direct_cells direct.raw ~d:direct.d ~kern:direct.kern ~reduction = cells);
   p
     (s.name ^ ": rewritten, the direct form covers only the odd-extent remainder")
     (direct_cells rewritten ~d:direct.d ~kern:direct.kern ~reduction = cells - even_cells);
   p (s.name ^ ": the pass changes the raw lowering") (not (LL.equal rewritten direct.raw));
   p (s.name ^ ": the pass is idempotent") (LL.equal (Winograd.rewrite rewritten) rewritten);
-  p (s.name ^ ": the gate off mints nothing") (List.is_empty (roles_written direct.opt.LL.llc));
+  p_none (s.name ^ ": the gate off mints nothing") (written direct.opt.LL.llc) ~f:(fun tn ->
+      Option.is_some (Winograd.minted_role tn));
   p
     (s.name ^ ": the gate on writes the kernel, input and product transforms")
     (List.equal Poly.equal (roles_written wino.opt.LL.llc) all_roles);
-  (if List.mem s.b 1 ~equal:Int.equal then
-     p
-       (s.name ^ ": Autotune.detect_conv refuses the singleton batch, which the rewrite carries")
-       (Option.is_none (Autotune.detect_conv direct.opt.LL.llc))
-   else
-     p
-       (s.name ^ ": Autotune.detect_conv reports the 3x3 stride-1 site the rewrite claims")
-       (Option.is_some (eligible_conv direct.opt.LL.llc)));
+  if List.mem s.b 1 ~equal:Int.equal then
+    p
+      (s.name ^ ": Autotune.detect_conv refuses the singleton batch, which the rewrite carries")
+      (Option.is_none (Autotune.detect_conv direct.opt.LL.llc))
+  else
+    p
+      (s.name ^ ": Autotune.detect_conv reports the 3x3 stride-1 site the rewrite claims")
+      (Option.is_some (eligible_conv direct.opt.LL.llc));
   if oh % 2 = 0 && ow % 2 = 0 then
     p
       (s.name ^ ": rewritten, no conv site is left")
@@ -228,8 +226,9 @@ let leg1 (s : shape) =
     (match Autotune.detect_matmul wino.opt.LL.llc with
     | Some m -> Option.is_some (Winograd.minted_role m.Autotune.m_d)
     | None -> false);
-  p_all2 (s.name ^ ": Winograd matches the direct form bitwise") wino.values direct.values
-    ~f:Float.equal
+  p_all2
+    (s.name ^ ": Winograd matches the direct form bitwise")
+    wino.values direct.values ~f:Float.equal
 
 let shapes =
   [
@@ -262,8 +261,7 @@ let () =
           (List.filter (written wino.opt.LL.llc) ~f:(fun tn ->
                Option.is_some (Winograd.minted_role tn))))
     = 6);
-  p_all2 "wchain: Winograd matches the direct form bitwise" wino.values direct.values
-    ~f:Float.equal
+  p_all2 "wchain: Winograd matches the direct form bitwise" wino.values direct.values ~f:Float.equal
 
 (* {1 Leg 2: tolerance parity on non-dyadic values} *)
 
@@ -302,8 +300,11 @@ let () =
     let ctx, routine = Context.compile ctx (named "wino_stale" (Train.forward y)) Idx.Empty in
     let ctx = Context.run ctx routine in
     let first = Context.get_values ctx y.Tensor.value in
+    let dims = [| 3; 3; 3; 2 |] in
     let k2 =
-      Array.init (3 * 3 * 3 * 2) ~f:(fun i -> Float.of_int ((i * 5 % 7) - 3) *. -1.)
+      Array.init
+        (3 * 3 * 3 * 2)
+        ~f:(Ll_test.cycle_flat ~radix:3 ~dims ~modulus:7 ~offset:(-3.) ~stride:(-1.))
     in
     let ctx = Context.set_values ctx k.Tensor.value k2 in
     let ctx = Context.run ctx routine in
@@ -418,9 +419,11 @@ let () =
   printf "--- leg 6: declines ---\n";
   let declined ~what build =
     let r = forward ~on:true build in
-    p (what ^ ": left in the direct form, nothing minted") (List.is_empty (roles_written r.opt.LL.llc))
+    p_none (what ^ ": left in the direct form, nothing minted") (written r.opt.LL.llc) ~f:(fun tn ->
+        Option.is_some (Winograd.minted_role tn))
   in
-  let mk ?(kh = 3) ?(kw = 3) ?(stride = 1) ?(dilation = 1) ?(prec = Ir.Ops.single) ~tag ~h ~w () () =
+  let mk ?(kh = 3) ?(kw = 3) ?(stride = 1) ?(dilation = 1) ?(prec = Ir.Ops.single) ~tag ~h ~w () ()
+      =
     let x = image ~tag ~b:[ 2 ] ~h ~w ~ic:2 ~f:x_ints in
     let k = kernel ~kh ~kw ~prec ~tag ~ic:2 ~oc:3 ~f:k_ints () in
     let y = conv ~stride ~dilation ~padded:false ~label:(tag ^ "y") x k in
@@ -477,25 +480,37 @@ let () =
   and d = node 50602 [| n_b; n_o; n_o; n_oc |] "wad"
   and x5 = node 50603 [| n_b; n_o + 2; n_o + 2; n_ic; 3 |] "wax5" in
   List.iter [ x; k; d; x5 ] ~f:B.materialize;
-  (* Separability: the same conv, its input read at one more axis indexed by the window symbol.
-     The tile transform has no value for that axis, so the nest must be left alone. *)
+  (* Separability: the same conv, its input read at one more axis indexed by the window symbol. The
+     tile transform has no value for that axis, so the nest must be left alone. *)
   let entangled = conv_nest ~x:x5 ~k ~d ~extra:(fun ~kh -> [| B.iter kh |]) in
   p "a conv whose input also reads the window symbol at another axis is left alone"
     (LL.equal (Winograd.rewrite entangled) entangled);
   (* Accumulation: a destination holding nonzero values keeps them. *)
   let llc = conv_nest ~x ~k ~d ~extra:(fun ~kh:_ -> [||]) in
   let rewritten = Winograd.rewrite llc in
-  p "the control, the same conv without the extra read, is rewritten"
-    (not (LL.equal rewritten llc));
+  p "the control, the same conv without the extra read, is rewritten" (not (LL.equal rewritten llc));
   let n_x = n_b * (n_o + 2) * (n_o + 2) * n_ic
   and n_k = n_oc * 9 * n_ic
   and n_d = n_b * n_o * n_o * n_oc in
   let seed =
     [
-      (x, Array.init n_x ~f:(fun i -> Float.of_int ((i * 7 % 9) - 4)));
-      (k, Array.init n_k ~f:(fun i -> Float.of_int ((i * 5 % 7) - 3)));
+      ( x,
+        Array.init n_x
+          ~f:
+            (Ll_test.cycle_flat ~radix:2
+               ~dims:[| n_b; n_o + 2; n_o + 2; n_ic |]
+               ~modulus:9 ~offset:(-4.) ~stride:1.) );
+      ( k,
+        Array.init n_k
+          ~f:
+            (Ll_test.cycle_flat ~radix:3 ~dims:[| n_oc; 3; 3; n_ic |] ~modulus:7 ~offset:(-3.)
+               ~stride:1.) );
       (* The destination's prior contents: nonzero and varying, so an overwrite shows. *)
-      (d, Array.init n_d ~f:(fun i -> Float.of_int ((i % 5) + 10)));
+      ( d,
+        Array.init n_d
+          ~f:
+            (Ll_test.cycle_flat ~radix:2 ~dims:[| n_b; n_o; n_o; n_oc |] ~modulus:5 ~offset:10.
+               ~stride:1.) );
     ]
   in
   let run name llc =

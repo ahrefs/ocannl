@@ -1,6 +1,6 @@
 (** The Winograd F(2x2, 3x3) convolution rewrite (gh-ocannl-505): a member of the algebraic-rewrite
-    tier over lowered code ({!Rewrites}), gated by the config key [winograd_conv] (default off, on in
-    the [approximate] profile, pinned off in [reproducible]).
+    tier over lowered code ({!Rewrites}), gated by the config key [winograd_conv] (default off, on
+    in the [approximate] profile, pinned off in [reproducible]).
 
     A 2-D 3x3 stride-1 convolution lowers to one nest
     [d[.., oh, ow, oc] += a[.., oh + kh, ow + kw, ic] * b[oc, kh, kw, ic]] (the input physically
@@ -10,11 +10,12 @@
     - the kernel transform [U = G b G^T], per output and reduction channel, recomputed every call
       (so a trained kernel's update is always seen);
     - the input transform [V = B^T a B], per 4x4 input tile read at [(2 th, 2 tw)];
-    - sixteen per-position contractions [M[xi, nu, .., th, tw, oc] += V[xi, nu, ..] * U[xi, nu, oc,
-      ic]] behind a zeroing of [M] -- the write loops in [d]'s axis order and the reduction
-      innermost, the lowered shape of a product, which the matmul sketches then schedule;
-    - the inverse transform [A^T M A] into each 2x2 output tile, ACCUMULATED into [d], so the zeroing
-      ahead of the original nest (or any prior contents) keeps its meaning.
+    - sixteen per-position contractions
+      [M[xi, nu, .., th, tw, oc] += V[xi, nu, ..] * U[xi, nu, oc, ic]] behind a zeroing of [M] --
+      the write loops in [d]'s axis order and the reduction innermost, the lowered shape of a
+      product, which the matmul sketches then schedule;
+    - the inverse transform [A^T M A] into each 2x2 output tile, ACCUMULATED into [d], so the
+      zeroing ahead of the original nest (or any prior contents) keeps its meaning.
 
     An odd output extent is covered by Winograd on its even prefix and by the original statement,
     over fresh symbols, on the last row and the last column (disjoint strips). For an even covered
@@ -38,9 +39,9 @@
     its weight gradient's "window" is the feature map, so both keep the direct form.
 
     The transformed-domain arithmetic changes rounding beyond reassociation (the kernel transform
-    scales by halves and quarters, the tile transforms add and subtract), so results move within
-    the [approximate] tier's tolerance; on inputs whose every partial sum is exactly representable
-    the two forms agree bitwise, since every coefficient is dyadic. The rewrite is idempotent, as the
+    scales by halves and quarters, the tile transforms add and subtract), so results move within the
+    [approximate] tier's tolerance; on inputs whose every partial sum is exactly representable the
+    two forms agree bitwise, since every coefficient is dyadic. The rewrite is idempotent, as the
     tier's fixpoint requires: transformed reads index [2 t + i], the contractions have no window,
     and a remainder strip's output loop does not start at 0. *)
 

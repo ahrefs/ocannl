@@ -1,4 +1,5 @@
-(* The Winograd F(2x2, 3x3) convolution rewrite (gh-ocannl-505); the contract is in the interface. *)
+(* The Winograd F(2x2, 3x3) convolution rewrite (gh-ocannl-505); the contract is in the
+   interface. *)
 
 open Base
 module LL = Low_level
@@ -15,14 +16,12 @@ let enabled () =
 
 (* {1 The transform matrices}
 
-   Lavin and Gray's F(2, 3), in the correlation orientation OCANNL's convolutions lower to
-   ([y.(o) = sum_k x.(o + k) * w.(k)]): [y = a_t ((g w) * (b_t x))] elementwise in the middle. Every
+   Lavin and Gray's F(2, 3), in the correlation orientation OCANNL's convolutions lower to ([y.(o) =
+   sum_k x.(o + k) * w.(k)]): [y = a_t ((g w) * (b_t x))] elementwise in the middle. Every
    coefficient is dyadic, so the kernel transform scales exactly. *)
 
 let b_t =
-  [|
-    [| 1.; 0.; -1.; 0. |]; [| 0.; 1.; 1.; 0. |]; [| 0.; -1.; 1.; 0. |]; [| 0.; 1.; 0.; -1. |];
-  |]
+  [| [| 1.; 0.; -1.; 0. |]; [| 0.; 1.; 1.; 0. |]; [| 0.; -1.; 1.; 0. |]; [| 0.; 1.; 0.; -1. |] |]
 
 let g = [| [| 1.; 0.; 0. |]; [| 0.5; 0.5; 0.5 |]; [| 0.5; -0.5; 0.5 |]; [| 0.; 0.; 1. |] |]
 let a_t = [| [| 1.; 1.; 1.; 0. |]; [| 0.; 1.; -1.; -1. |] |]
@@ -59,8 +58,12 @@ let roles : (int, [ `Kernel | `Input | `Product ]) Hashtbl.t = Hashtbl.create (m
 let minted_role (tn : Tn.t) = Hashtbl.find roles tn.Tn.uid
 
 let mint ~site_key ~role ~(like : Tn.t) prec dims =
-  let role_label = match role with `Kernel -> "wino_u" | `Input -> "wino_v" | `Product -> "wino_m" in
-  Hashtbl.find_or_add minted (role_label ^ "|" ^ site_key) ~default:(fun () ->
+  let role_label =
+    match role with `Kernel -> "wino_u" | `Input -> "wino_v" | `Product -> "wino_m"
+  in
+  Hashtbl.find_or_add minted
+    (role_label ^ "|" ^ site_key)
+    ~default:(fun () ->
       let tn =
         Tn.create ~namespace (Tn.Specified prec) ~id:(fresh_id ())
           ~label:(role_label :: like.Tn.label)
@@ -74,10 +77,10 @@ let mint ~site_key ~role ~(like : Tn.t) prec dims =
 
 (* {1 Recognition}
 
-   Every [Accum_op] lowers to one top-level nest: serial loops from the outside in and a single [Set]
-   at the bottom. The conv's nest is [d[..] := d[..] + a[..] * b[..]] (either operand order, or the
-   [FMA] form), where [a] reads the input at two axes [o + k] -- an output iterator plus a window
-   iterator -- and [b] reads the kernel at the window iterators. *)
+   Every [Accum_op] lowers to one top-level nest: serial loops from the outside in and a single
+   [Set] at the bottom. The conv's nest is [d[..] := d[..] + a[..] * b[..]] (either operand order,
+   or the [FMA] form), where [a] reads the input at two axes [o + k] -- an output iterator plus a
+   window iterator -- and [b] reads the kernel at the window iterators. *)
 
 type loop = { index : Idx.symbol; from_ : int; to_ : int }
 
@@ -90,8 +93,8 @@ let nest_of (stmt : LL.t) =
   in
   go [] stmt
 
-(* One spatial axis of the conv: the output iterator [o] (extent [n_o]), the window iterator [k] (which
-   the kernel reads plainly), and the axis of [a] reading [o + k]. *)
+(* One spatial axis of the conv: the output iterator [o] (extent [n_o]), the window iterator [k]
+   (which the kernel reads plainly), and the axis of [a] reading [o + k]. *)
 type conv_axis = { o : Idx.symbol; n_o : int; k : Idx.symbol; a_axis : int }
 
 type site = {
@@ -107,8 +110,8 @@ type site = {
   w : conv_axis;
   ic : Idx.symbol;
   rebuild : (Idx.axis_index array -> Idx.axis_index array) -> LL.scalar_t;
-      (** The statement's right-hand side with every index map passed through the substitution:
-          the direct form, for the remainder strips. *)
+      (** The statement's right-hand side with every index map passed through the substitution: the
+          direct form, for the remainder strips. *)
   key : string;
 }
 
@@ -151,7 +154,8 @@ let mentions s (idcs : Idx.axis_index array) =
 
 let plain_at s (idcs : Idx.axis_index array) =
   Array.find_mapi idcs ~f:(fun i -> function
-    | Idx.Iterator s' when Idx.equal_symbol s s' -> Some i | _ -> None)
+    | Idx.Iterator s' when Idx.equal_symbol s s' -> Some i
+    | _ -> None)
 
 let find_site (stmt : LL.t) : site option =
   let* loops, d, di, llsc = nest_of stmt in
@@ -180,7 +184,9 @@ let find_site (stmt : LL.t) : site option =
       | Idx.Iterator _ | Idx.Fixed_idx _ -> true
       | _ -> List.mem except i ~equal:Int.equal)
   in
-  let d_iters = Array.to_list di |> List.filter_map ~f:(function Idx.Iterator s -> Some s | _ -> None) in
+  let d_iters =
+    Array.to_list di |> List.filter_map ~f:(function Idx.Iterator s -> Some s | _ -> None)
+  in
   let is_out s = List.mem d_iters s ~equal:Idx.equal_symbol in
   let axis_of (i, s1, s2) =
     (* Which of the pair is the output iterator: the one [d] reads. *)
@@ -212,8 +218,11 @@ let find_site (stmt : LL.t) : site option =
     List.for_all [ h; w ] ~f:(fun cx ->
         mentions cx.o di = 1
         && Option.is_some (plain_at cx.o di)
-        && mentions cx.o ai = 1 && mentions cx.o bi = 0 && mentions cx.k di = 0
-        && mentions cx.k ai = 1 && mentions cx.k bi = 1)
+        && mentions cx.o ai = 1
+        && mentions cx.o bi = 0
+        && mentions cx.k di = 0
+        && mentions cx.k ai = 1
+        && mentions cx.k bi = 1)
     && (not (Idx.equal_symbol h.o w.o))
     && not (Idx.equal_symbol h.k w.k)
   in
@@ -226,12 +235,11 @@ let find_site (stmt : LL.t) : site option =
   let mem l s = List.mem l s ~equal:Idx.equal_symbol in
   let loops_ok = List.for_all loops ~f:(fun l -> l.from_ = 0) in
   let roles_ok () =
-    (* Every nest loop other than the specials is the output channel (in [d] and [b]), the
-       reduction channel (in [a] and [b]) or a batch axis (in [d] and [a]); every symbol occurs at
-       most once per map; and a symbol not bound by the nest (a static index) never enters [b]. *)
+    (* Every nest loop other than the specials is the output channel (in [d] and [b]), the reduction
+       channel (in [a] and [b]) or a batch axis (in [d] and [a]); every symbol occurs at most once
+       per map; and a symbol not bound by the nest (a static index) never enters [b]. *)
     let no_dups l = not (List.contains_dup l ~compare:Idx.compare_symbol) in
-    no_dups d_o && no_dups a_o && no_dups b_o
-    && List.for_all b_o ~f:is_loop
+    no_dups d_o && no_dups a_o && no_dups b_o && List.for_all b_o ~f:is_loop
     && List.for_all loop_syms ~f:(fun s ->
         is_special s
         || (mem d_o s && mem b_o s && not (mem a_o s))
@@ -241,15 +249,15 @@ let find_site (stmt : LL.t) : site option =
   let channel ~in1 ~in2 ~out =
     List.filter loop_syms ~f:(fun s -> mem in1 s && mem in2 s && not (mem out s))
   in
-  let* ic =
-    match channel ~in1:a_o ~in2:b_o ~out:d_o with [ ic ] -> Some ic | _ -> None
-  in
+  let* ic = match channel ~in1:a_o ~in2:b_o ~out:d_o with [ ic ] -> Some ic | _ -> None in
   let one_oc = List.length (channel ~in1:d_o ~in2:b_o ~out:a_o) = 1 in
   let all_mentioned = List.for_all loop_syms ~f:(fun s -> is_special s || mem d_o s || mem a_o s) in
   let f32 (tn : Tn.t) = Ops.equal_prec (Lazy.force tn.Tn.storage_prec) Ops.single in
   if
-    (not (Tn.equal a d)) && (not (Tn.equal b d)) && (not (Tn.equal a b)) && loops_ok && separable
-    && all_plain di ~except:[] && all_plain bi ~except:[]
+    (not (Tn.equal a d))
+    && (not (Tn.equal b d))
+    && (not (Tn.equal a b))
+    && loops_ok && separable && all_plain di ~except:[] && all_plain bi ~except:[]
     && all_plain ai ~except:[ h.a_axis; w.a_axis ]
     && roles_ok () && one_oc && all_mentioned && f32 d && f32 a && f32 b
   then
@@ -264,13 +272,7 @@ let find_site (stmt : LL.t) : site option =
            * int
            * Idx.axis_index array
            * (Idx.symbol * int) list]
-           ( d.Tn.uid,
-             di,
-             a.Tn.uid,
-             ai,
-             b.Tn.uid,
-             bi,
-             List.map loops ~f:(fun l -> (l.index, l.to_)) ))
+           (d.Tn.uid, di, a.Tn.uid, ai, b.Tn.uid, bi, List.map loops ~f:(fun l -> (l.index, l.to_))))
     in
     Some { loops; d; di; a; ai; b; bi; prec; h; w; ic; rebuild; key }
   else None
@@ -287,7 +289,9 @@ let subst_idx (m : (Idx.symbol * Idx.axis_index) list) (idcs : Idx.axis_index ar
    chain of additions and subtractions at the site's precision. *)
 let lin_comb prec (terms : (float * LL.scalar_t) list) : LL.scalar_t =
   let terms = List.filter terms ~f:(fun (c, _) -> not (Float.equal c 0.)) in
-  let scaled c x = if Float.equal c 1. then x else LL.Binop (Ops.Mul, (LL.Constant c, prec), (x, prec)) in
+  let scaled c x =
+    if Float.equal c 1. then x else LL.Binop (Ops.Mul, (LL.Constant c, prec), (x, prec))
+  in
   (* Lead with a positive term where there is one, so no negation is emitted. *)
   let terms =
     match List.partition_tf terms ~f:(fun (c, _) -> Float.(c > 0.)) with
@@ -311,7 +315,8 @@ let nest_around (loops : (Idx.symbol * int) list) body =
 let rewrite_site (s : site) : LL.t =
   let p = s.prec in
   let ext sym =
-    List.find_map_exn s.loops ~f:(fun l -> if Idx.equal_symbol l.index sym then Some (l.to_ + 1) else None)
+    List.find_map_exn s.loops ~f:(fun l ->
+        if Idx.equal_symbol l.index sym then Some (l.to_ + 1) else None)
   in
   let nth = s.h.n_o / 2 and ntw = s.w.n_o / 2 in
   let is_o sym = Idx.equal_symbol sym s.h.o || Idx.equal_symbol sym s.w.o in
@@ -351,7 +356,10 @@ let rewrite_site (s : site) : LL.t =
     List.filter_map s.loops ~f:(fun l ->
         if List.mem axes l.index ~equal:Idx.equal_symbol then Some l.index else None)
   in
-  let loops_of fm axes = List.map axes ~f:(fun sym -> (List.Assoc.find_exn fm sym ~equal:Idx.equal_symbol, tiled_ext sym)) in
+  let loops_of fm axes =
+    List.map axes ~f:(fun sym ->
+        (List.Assoc.find_exn fm sym ~equal:Idx.equal_symbol, tiled_ext sym))
+  in
   let fix i = Idx.Fixed_idx i in
   let set tn idcs llsc = LL.Set { tn; idcs; llsc; debug = "" } in
   let get tn idcs = LL.Get (tn, idcs) in
@@ -375,7 +383,9 @@ let rewrite_site (s : site) : LL.t =
   (* 2. The input transform [V = B^T x B], per 4x4 tile at [(2 th, 2 tw)]. *)
   let input =
     let fm = fresh v_axes in
-    let sub = List.filter_map fm ~f:(fun (o, n) -> if is_o o then None else Some (o, Idx.Iterator n)) in
+    let sub =
+      List.filter_map fm ~f:(fun (o, n) -> if is_o o then None else Some (o, Idx.Iterator n))
+    in
     let tile cx i =
       Idx.affine ~symbols:[ (2, List.Assoc.find_exn fm cx.o ~equal:Idx.equal_symbol) ] ~offset:i
     in
@@ -415,27 +425,30 @@ let rewrite_site (s : site) : LL.t =
     seq_of
       [
         LL.Zero_out m;
-        nest_around
-          ((xi, 4) :: (nu, 4) :: loops_of fm (m_axes @ [ s.ic ]))
-          (set m mi rhs);
+        nest_around ((xi, 4) :: (nu, 4) :: loops_of fm (m_axes @ [ s.ic ])) (set m mi rhs);
       ]
   in
   (* 4. The inverse transform [Y = A^T M A] into each 2x2 output tile, accumulated into [d] so its
      prior contents (the zeroing ahead of the nest, or anything else) keep their meaning. *)
   let output =
     let fm = fresh m_axes in
-    let sub = List.filter_map fm ~f:(fun (o, n) -> if is_o o then None else Some (o, Idx.Iterator n)) in
+    let sub =
+      List.filter_map fm ~f:(fun (o, n) -> if is_o o then None else Some (o, Idx.Iterator n))
+    in
     let body =
       List.concat_map (List.range 0 2) ~f:(fun al ->
           List.map (List.range 0 2) ~f:(fun be ->
               let at cx off =
-                Idx.affine ~symbols:[ (2, List.Assoc.find_exn fm cx.o ~equal:Idx.equal_symbol) ] ~offset:off
+                Idx.affine
+                  ~symbols:[ (2, List.Assoc.find_exn fm cx.o ~equal:Idx.equal_symbol) ]
+                  ~offset:off
               in
               let di = subst_idx ((s.h.o, at s.h al) :: (s.w.o, at s.w be) :: sub) s.di in
               let terms =
                 List.concat_map (List.range 0 4) ~f:(fun xi ->
                     List.map (List.range 0 4) ~f:(fun nu ->
-                        (a_t.(al).(xi) *. a_t.(be).(nu), get m (node_idx fm ~xi:(fix xi) ~nu:(fix nu) m_axes))))
+                        ( a_t.(al).(xi) *. a_t.(be).(nu),
+                          get m (node_idx fm ~xi:(fix xi) ~nu:(fix nu) m_axes) )))
               in
               set s.d di (LL.Binop (Ops.Add, (get s.d di, p), (lin_comb p terms, p)))))
     in
@@ -470,7 +483,8 @@ let rewrite_site (s : site) : LL.t =
     (if s.h.n_o % 2 = 1 then [ strip ~h_range:(s.h.n_o - 1, s.h.n_o - 1) ~w_range:(0, s.w.n_o - 1) ]
      else [])
     @
-    if s.w.n_o % 2 = 1 then [ strip ~h_range:(0, (2 * nth) - 1) ~w_range:(s.w.n_o - 1, s.w.n_o - 1) ]
+    if s.w.n_o % 2 = 1 then
+      [ strip ~h_range:(0, (2 * nth) - 1) ~w_range:(s.w.n_o - 1, s.w.n_o - 1) ]
     else []
   in
   seq_of ([ kernel; input; product; output ] @ strips)

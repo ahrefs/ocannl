@@ -55,6 +55,7 @@ test/operations/tile_bf16_row_groups.ml -- records=3 traversals=0
 test/operations/vec_signed_zero.ml -- records=0 traversals=1
 test/operations/virtual_chain_fanin.ml -- records=9 traversals=0
 test/operations/virtual_shared_loop.ml -- records=1 traversals=0
+test/operations/winograd_conv.ml -- records=0 traversals=2
 test/support/ll_test.ml -- records=0 traversals=3
 test/operations/affine_lowering.ml -- records<=0 traversals<=3: existing migration debt; adopt ll_test when touched
 test/operations/buffer_aliasing.ml -- records<=1 traversals<=0: links ll_test for operand helpers only; still hand-builds Low_level

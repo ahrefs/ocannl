@@ -22,6 +22,7 @@ code-borne (digest) -- an optimizer decision: it changes the code that comes out
   virtualize_max_inline_fanin
   virtualize_max_inline_reduction
   virtualize_max_visits
+  winograd_conv
 
 code-borne (digest) -- a licence of the floating-point algebra, applied once by the rewrite tier on the raw lowering (gh-ocannl-998): the rewritten code carries it, and the post-scheduling simplification is exact, so no transform consults it
   fp_contract
