@@ -970,6 +970,8 @@ if harness_leg 'probe dune edits'; then
     report 0 'a dune file kept whole for an undescribed rule says why'
   else report 1 'a dune file kept whole for an undescribed rule says why' "$(cat "$err")"; fi
   probe_restore
+  probe_edit 's/\(rule \(alias runtest-two\) \(targets two2\.txt\)/(rule (alias runtest-dirt3) (targets two2.txt)/' &&
+    probe_leg 'a target rule moved from one alias to another lists both' "@p3/runtest-dirt3 @p3/runtest-two $p3_scan"
   # What dune cannot answer keeps the whole directory.
   probe_edit 's/\z/(env (_ (env-vars (P3 x))))\n/' &&
     probe_leg 'a changed (env) stanza keeps the reach of its whole directory' "$p3_all $p3_scan"
@@ -1079,6 +1081,11 @@ if harness_leg 'probe controls'; then
     control 'a changed twin of a helper alias is what lists the alias needing it' \
       '$direct_here{in_dir($td, $_)} = "a rule of it changed" for @{$twin_of{$t} // []};' '' \
       HEAD -- @p3/runtest-needh3 $p3_scan
+  probe_restore
+  probe_edit 's/\(rule \(alias runtest-two\) \(targets two2\.txt\)/(rule (alias runtest-dirt3) (targets two2.txt)/' &&
+    control 'the aliases a changed form attaches to are what list a moved target rule'"'"'s aliases' \
+      '$direct_here{$x} //= "the stanzas attached to it changed"' 'my $unused = 1' \
+      HEAD -- @p3/runtest-dirt3 @p3/runtest-two $p3_scan
   probe_restore
   probe_edit 's/\(rule \(alias runtest-two\) \(targets two2\.txt\)[^\n]*\n//' &&
     control 'the old side'"'"'s owners are what list the alias of a removed target' \

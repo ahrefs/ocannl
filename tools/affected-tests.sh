@@ -407,7 +407,9 @@ sub convert {   # DIR FILE FORMS TOP -> the rewritten forms
     my $canon = text($f);
     if ($top) {
       my @names = grep { name_lit($_) } map { named($_, "name") || named($_, "names") ? @$_[1 .. $#$_] : () } @fl;
+      my @attached = grep { name_lit($_) } map { named($_, "alias") || named($_, "aliases") ? @$_[1 .. $#$_] : () } @fl;
       $record = [$file, $dir, $h, join(",", @names), (grep { named($_, "action") } @fl) ? 1 : 0];
+      push @$record, join(",", @attached);
       push @$record, $canon;
     }
     if ($h eq "subdir") {
@@ -483,7 +485,7 @@ sub convert {   # DIR FILE FORMS TOP -> the rewritten forms
     note("source", $dir, $_) for @al;
     push @out, $f;
   } continue {
-    if ($record) { my $canon = pop @$record; print $fo join("\t", @$record, $unvouched == $before ? 1 : 0, $canon), "\n" }
+    if ($record) { my ($attached, $canon) = splice @$record, -2; print $fo join("\t", @$record, $unvouched == $before ? 1 : 0, $attached, $canon), "\n" }
   }
   return @out;
 }
@@ -1351,9 +1353,10 @@ if (@scoped) {
   my %forms;   # side -> file -> [form records]
   for my $side ("new", "old") {
     for (split /\n/, slurp($side eq "new" ? "$tmp/forms" : "$tmp/forms-old")) {
-      my ($file, $d, $head, $names, $act, $vouched, $canon) = split /\t/, $_, 7;
+      my ($file, $d, $head, $names, $act, $vouched, $attached, $canon) = split /\t/, $_, 8;
       push @{$forms{$side}{$file}}, { dir => $d, head => $head, names => [grep { $_ ne "" } split /,/, $names],
-                                      action => $act, vouched => $vouched, canon => $canon };
+                                      action => $act, vouched => $vouched, canon => $canon,
+                                      attached => [grep { $_ ne "" } split /,/, $attached] };
     }
   }
   # The `(alias)` stanzas of this side, by directory and name: what an alias a
@@ -1391,6 +1394,7 @@ if (@scoped) {
     my ($d) = dir_of($f);
     my (@why, @parts, %whole, %direct_here, @paths);
     # The changed forms: each side's canonical forms not matched on the other.
+    my %attached;
     my (%count, @changed_forms);
     $count{$_->{canon}}++ for @{$forms{new}{$f} // []};
     $count{$_->{canon}}-- for @{$forms{old}{$f} // []};
@@ -1404,6 +1408,10 @@ if (@scoped) {
       # (alias) with an action, a stanza outside its allowlist): what changed
       # there no rule this reader compares may show.
       unless ($r->{vouched}) { push @why, "a changed ($h) the probe does not describe"; next }
+      # The aliases the changed forms attach to (their `alias`/`aliases` fields),
+      # counted per side: an alias depends on a rule's targets, not the other
+      # way, so moving a rule between aliases changes no rule dune prints.
+      $attached{$r->{side}}{in_dir($r->{dir}, $_)}++ for @{$r->{attached}};
       next if $rules_shown{$h};
       if ($h eq "alias" && !$r->{action}) {
         # The alias itself, per-test or a helper (whose entry carries the change to
@@ -1434,6 +1442,10 @@ if (@scoped) {
         next;
       }
       push @why, $h eq "alias" ? "a changed (alias) with an action" : "a changed ($h) stanza";
+    }
+    for my $x (sort keys %{{ %{$attached{old} // {}}, %{$attached{new} // {}} }}) {
+      $direct_here{$x} //= "the stanzas attached to it changed"
+        if ($attached{old}{$x} // 0) != ($attached{new}{$x} // 0);
     }
     unless (@why) {
       # The rules of every target of the directory, on both sides.
