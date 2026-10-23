@@ -140,8 +140,8 @@ let take_forward_code t =
 (** {2 Closure checkpoint and rewind (gh-ocannl-1301)}
 
     [checkpoint] is recorded at the end of every successful [Shape.finish_inference] (through
-    [Shape.on_closure]): the id mark, and the two root maps (persistent values, so a pointer copy).
-    The nodes the frontend allocated since the closure are recorded exactly, by uid, in
+    [Shape.set_on_closure]): the id mark, and the two root maps (persistent values, so a pointer
+    copy). The nodes the frontend allocated since the closure are recorded exactly, by uid, in
     [open_node_uids]: they are the open work's nodes. [rewind_to_last_closure] discards them into
     [discarded_nodes], and every use of a discarded tensor or node is refused with the rewind's
     provenance. Exact rather than an id/uid range (gh-ocannl-1505): a node created in the window by
@@ -182,7 +182,7 @@ let record_checkpoint () =
   checkpoint.ck_count <- checkpoint.ck_count + 1;
   checkpoint.ck_seed <- !random_seed
 
-let () = Shape.on_closure := record_checkpoint
+let () = Shape.set_on_closure record_checkpoint
 
 (* An external handout of closed work (code given to a caller, or a backprop root dropped by a
    forward-only run) is a closed-world act: record it in the checkpoint too, so a rewind never

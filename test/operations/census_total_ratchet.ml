@@ -96,6 +96,12 @@ let allowed =
          moving only with that fixture";
     };
     {
+      golden = Golden "test/operations/mutation_serial_scan_control.expected";
+      pattern = {|^FAIL: tensor/[a-z]+\.ml:[0-9]+:|};
+      reason =
+        "the line of the committed fixture tree a refusal names, moving only with that fixture";
+    };
+    {
       golden = Golden "test/operations/env_var_deps.expected";
       pattern = {|diagnostics: at least [0-9]+ (count and details on stderr)|};
       reason = "the extracted-diagnostic floor, a hand-written constant of the scan";

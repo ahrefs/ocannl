@@ -1,0 +1,15 @@
+(* A planted inference-session module for the mutation_serial_scan control: the shipping scanner
+   must refuse exactly the two marked sites. *)
+let note_mutation () = ()
+let seen = Hash_set.create (module Int)
+
+(* Refused: a write with no note_mutation () in its definition. *)
+let add v = Hash_set.add seen v
+let add_noted v =
+  note_mutation ();
+  Hash_set.add seen v
+
+let count () = Hash_set.length seen
+
+(* Refused: the table escapes to a caller the scan does not read. *)
+let leak () = seen

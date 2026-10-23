@@ -1,0 +1,6 @@
+(* The clean half of the control: a noted write through Row. *)
+let unused = Hash_set.create (module Int)
+
+let mark id =
+  Row.note_mutation ();
+  Hash_set.add unused id

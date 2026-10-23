@@ -19,34 +19,162 @@ include Einsum_parser
 
 type padding = Row.axis_padding array option [@@deriving sexp, equal]
 
-type t = {
-  mutable batch : Row.t;
-  mutable input : Row.t;
-  mutable output : Row.t;
-  mutable batch_padding : padding;
-  mutable input_padding : padding;
-  mutable output_padding : padding;
-  mutable padding_elem : float option option;
-      (** The padding element for this shape's tensors. [None] means "unknown" (not yet determined),
-          [Some (Some v)] means all operations use neutral element [v], [Some None] means different
-          operations require different neutral elements (margin must be reset before each
-          operation). *)
-  mutable closed : bool; [@sexp_drop_if fun _ -> true] [@default false] [@equal.ignore]
-      (** Set by a successful [finish_inference] on every shape of the steps it commits
-          (gh-ocannl-1301): a closed shape's rows (modulo projection ids), paddings and
-          [padding_elem] no longer change -- a write that would change them raises before writing
-          anything. Not part of the shape's value: dropped from sexps, ignored by [equal]. *)
-  mutable discarded_by : string option;
-      [@sexp_drop_if fun _ -> true] [@default None] [@equal.ignore]
-      (** Set by [Tensor.rewind_to_last_closure] on every open shape it discards, to the rewind's
-          provenance: a step over a discarded shape is refused before it is registered. Not part of
-          the shape's value. *)
-  id : int;  (** A node that has the same shape as this shape. *)
-  debug_name : string;
-}
-[@@deriving equal, fields, sexp]
+(** The shape record and its only writers (gh-ocannl-1506). The record is [private] outside this
+    submodule -- here in [shape.ml] as much as in every other module -- so a field assignment, a
+    record literal or a [{ sh with … }] copy anywhere else is a compile error, and every write goes
+    through a setter that enforces the closed-shape guard (gh-ocannl-1301): a closed shape's rows
+    (modulo projection ids), paddings and [padding_elem] no longer change, and a write that would
+    change them raises before writing anything. The privacy is shallow: a padding array read off a
+    shape is still an array. None of the setters counts as a session mutation ([Row.note_mutation]):
+    substituting the environment into a shape is neutral, and paddings are written only by
+    [finish_inference], whose failure taints the session anyway. *)
+module Shape_record : sig
+  type t = private {
+    mutable batch : Row.t;
+    mutable input : Row.t;
+    mutable output : Row.t;
+    mutable batch_padding : padding;
+    mutable input_padding : padding;
+    mutable output_padding : padding;
+    mutable padding_elem : float option option;
+        (** The padding element for this shape's tensors. [None] means "unknown" (not yet
+            determined), [Some (Some v)] means all operations use neutral element [v], [Some None]
+            means different operations require different neutral elements (margin must be reset
+            before each operation). *)
+    mutable closed : bool; [@sexp_drop_if fun _ -> true] [@default false] [@equal.ignore]
+        (** Set by a successful [finish_inference] on every shape of the steps it commits
+            (gh-ocannl-1301). Not part of the shape's value: dropped from sexps, ignored by [equal].
+        *)
+    mutable discarded_by : string option;
+        [@sexp_drop_if fun _ -> true] [@default None] [@equal.ignore]
+        (** Set by [Tensor.rewind_to_last_closure] on every open shape it discards, to the rewind's
+            provenance: a step over a discarded shape is refused before it is registered. Not part
+            of the shape's value. *)
+    id : int;  (** A node that has the same shape as this shape. *)
+    debug_name : string;
+  }
+  [@@deriving equal, sexp_of]
 
-let row_of_kind = function `Batch -> batch | `Input -> input | `Output -> output
+  type Row.error_trace += Shape_mismatch of t list
+
+  val of_rows : batch:Row.t -> input:Row.t -> output:Row.t -> id:int -> debug_name:string -> t
+  (** A fresh open shape with unknown paddings and neutral element. *)
+
+  val copy : t -> t
+  (** A shallow copy with its own row slots: same [id], [closed] and content ({!dealias_operands}).
+  *)
+
+  val set_rows : t -> batch:Row.t -> input:Row.t -> output:Row.t -> unit
+  (** Guarded: on a closed shape, all three rows are checked equal modulo projection ids before any
+      is written. *)
+
+  val set_paddings : t -> batch:padding -> input:padding -> output:padding -> unit
+  (** Guarded: on a closed shape, all three paddings are checked equal before any is written. *)
+
+  val set_padding_elem : t -> float option option -> unit
+  (** Guarded like the other setters. *)
+
+  val close : t -> unit
+  (** The commit of a successful [finish_inference]. *)
+
+  val mark_discarded : t -> provenance:string -> unit
+  (** Marks an open shape discarded by a rewind; a closed shape is left alone. *)
+end = struct
+  type t = {
+    mutable batch : Row.t;
+    mutable input : Row.t;
+    mutable output : Row.t;
+    mutable batch_padding : padding;
+    mutable input_padding : padding;
+    mutable output_padding : padding;
+    mutable padding_elem : float option option;
+    mutable closed : bool; [@sexp_drop_if fun _ -> true] [@default false] [@equal.ignore]
+    mutable discarded_by : string option;
+        [@sexp_drop_if fun _ -> true] [@default None] [@equal.ignore]
+    id : int;
+    debug_name : string;
+  }
+  [@@deriving equal, sexp_of]
+
+  type Row.error_trace += Shape_mismatch of t list
+
+  let of_rows ~batch ~input ~output ~id ~debug_name =
+    {
+      batch;
+      input;
+      output;
+      batch_padding = None;
+      input_padding = None;
+      output_padding = None;
+      padding_elem = None;
+      closed = false;
+      discarded_by = None;
+      id;
+      debug_name;
+    }
+
+  let copy sh = { sh with batch = sh.batch }
+
+  let closed_write_error (sh : t) ~field ~old_s ~new_s =
+    raise
+    @@ Row.Shape_error
+         ( [%string
+             "Shape of #%{sh.id#Int} %{sh.debug_name} is closed (committed by an earlier \
+              finish_inference), but a later operation would change its %{field} from %{old_s} to \
+              %{new_s}. A closed tensor's shape is committed: build such a consumer before closing \
+              the tensor (before compiling it, Shape.to_dims or printing it), or consume a \
+              materialized copy of it"],
+           [ Shape_mismatch [ sh ] ] )
+
+  let row_string r = Sexp.to_string_hum ([%sexp_of: Row.t] r)
+  let padding_string p = Sexp.to_string_hum ([%sexp_of: padding] p)
+  let padding_elem_string e = Sexp.to_string_hum ([%sexp_of: float option option] e)
+
+  let set_rows (sh : t) ~batch ~input ~output =
+    if sh.closed then
+      List.iter
+        [
+          ("batch row", sh.batch, batch);
+          ("input row", sh.input, input);
+          ("output row", sh.output, output);
+        ]
+        ~f:(fun (field, old_r, new_r) ->
+          if not (Row.equal_modulo_proj old_r new_r) then
+            closed_write_error sh ~field ~old_s:(row_string old_r) ~new_s:(row_string new_r));
+    sh.batch <- batch;
+    sh.input <- input;
+    sh.output <- output
+
+  let set_paddings (sh : t) ~batch ~input ~output =
+    if sh.closed then
+      List.iter
+        [
+          ("batch padding", sh.batch_padding, batch);
+          ("input padding", sh.input_padding, input);
+          ("output padding", sh.output_padding, output);
+        ]
+        ~f:(fun (field, old_p, new_p) ->
+          if not (equal_padding old_p new_p) then
+            closed_write_error sh ~field ~old_s:(padding_string old_p) ~new_s:(padding_string new_p));
+    sh.batch_padding <- batch;
+    sh.input_padding <- input;
+    sh.output_padding <- output
+
+  let set_padding_elem (sh : t) v =
+    if sh.closed && not ([%equal: float option option] sh.padding_elem v) then
+      closed_write_error sh ~field:"padding neutral element"
+        ~old_s:(padding_elem_string sh.padding_elem)
+        ~new_s:(padding_elem_string v);
+    sh.padding_elem <- v
+
+  let close sh = sh.closed <- true
+  let mark_discarded sh ~provenance = if not sh.closed then sh.discarded_by <- Some provenance
+end
+
+include Shape_record
+
+let row_of_kind kind (sh : t) =
+  match kind with `Batch -> sh.batch | `Input -> sh.input | `Output -> sh.output
 
 type deduce_within_shape = Not_constrained | Input_equals_output
 [@@deriving compare, sexp, variants]
@@ -153,6 +281,8 @@ end
 type update_id = Update_id.t [@@deriving equal, compare, hash, sexp]
 
 let update_uid = ref 0
+[@@mutation_serial.exempt
+  "a fresh-id counter: ids are never reused, so a rewind need not restore it"]
 
 let get_update_id () =
   Int.incr update_uid;
@@ -177,8 +307,6 @@ type update_step = {
     time. In OCANNL, this is achieved by performing updates both as the tensors are constructed, and
     via lazy callbacks as the corresponding [Ir.Indexing] dimensions and projections are first
     accessed. *)
-
-type Row.error_trace += Shape_mismatch of t list
 
 let with_error_trace = ref true
 
@@ -1388,7 +1516,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
       in
       (proj_env, dim_var_set_empty, inequalities)
 
-let state = ref Row.empty_env
+let state = ref Row.empty_env [@@mutation_serial.fingerprinted]
 
 (* Depth of tensor-operation constructions in progress: [Tensor.op] raises it around its [op_asn]
    (see [with_construction_window]). While it is positive, finalizing inference is refused at the
@@ -1396,8 +1524,10 @@ let state = ref Row.empty_env
    yet, so a [finish_inference] here would close its operands without them and commit that to the
    shapes, which no later step can undo (gh-ocannl-830). *)
 let construction_depth = ref 0
-let active_update_steps = ref []
-let active_constraints = ref []
+[@@mutation_serial.exempt "the construction window's depth, restored by the window's own finally"]
+
+let active_update_steps = ref [] [@@mutation_serial.fingerprinted]
+let active_constraints = ref [] [@@mutation_serial.fingerprinted]
 
 (** {3 Session consistency (gh-ocannl-1301)}
 
@@ -1421,6 +1551,7 @@ let iter_shapes update_step ~f =
   | Block { rhses; _ } -> List.iter rhses ~f
 
 let taint : string option ref = ref None
+[@@mutation_serial.exempt "the taint itself: a record of the first failure, not inference state"]
 
 let tainted_message provenance =
   [%string
@@ -1446,14 +1577,14 @@ type fingerprint = {
 
 let fingerprint () =
   {
-    fp_serial = !Row.mutation_serial;
+    fp_serial = Row.mutation_serial ();
     fp_state = !state;
     fp_steps = !active_update_steps;
     fp_constraints = !active_constraints;
   }
 
 let mutated_since fp =
-  fp.fp_serial <> !Row.mutation_serial
+  fp.fp_serial <> Row.mutation_serial ()
   || (not (phys_equal fp.fp_state !state))
   || (not (phys_equal fp.fp_steps !active_update_steps))
   || not (phys_equal fp.fp_constraints !active_constraints)
@@ -1479,6 +1610,10 @@ let discarded_updates : (int * int * string) list ref = ref []
 
 (* Called after every successful closure; [Tensor] records its checkpoint here. *)
 let on_closure : (unit -> unit) ref = ref (fun () -> ())
+[@@mutation_serial.exempt
+  "a hook Tensor installs once at module initialization, not inference state"]
+
+let set_on_closure f = on_closure := f
 
 let check_step_live (step : update_step) =
   let (Update_id.Update_id n) = step.id in
@@ -1503,8 +1638,7 @@ let rewind_open_state ~provenance =
   check_can_rewind ();
   (* Every open shape is in some active step (each construction registers one): mark them, so a
      retained handle cannot bring one back into inference. *)
-  List.iter !active_update_steps ~f:(fun step ->
-      iter_shapes step ~f:(fun sh -> if not sh.closed then sh.discarded_by <- Some provenance));
+  List.iter !active_update_steps ~f:(fun step -> iter_shapes step ~f:(mark_discarded ~provenance));
   if !update_uid > !update_mark then
     discarded_updates := (!update_mark, !update_uid, provenance) :: !discarded_updates;
   update_mark := !update_uid;
@@ -1516,50 +1650,7 @@ let rewind_open_state ~provenance =
   Row.reset_transient ();
   Row.drop_symbol_roles ();
   taint := None
-
-(* The closed-shape write guard: a closed shape's committed content does not change. Checked at
-   every write site before anything is written; equal writes stay allowed (re-applying the
-   environment to a closed operand, re-minting projection ids). *)
-let closed_write_error (sh : t) ~field ~old_s ~new_s =
-  raise
-  @@ Row.Shape_error
-       ( [%string
-           "Shape of #%{sh.id#Int} %{sh.debug_name} is closed (committed by an earlier \
-            finish_inference), but a later operation would change its %{field} from %{old_s} to \
-            %{new_s}. A closed tensor's shape is committed: build such a consumer before closing \
-            the tensor (before compiling it, Shape.to_dims or printing it), or consume a \
-            materialized copy of it"],
-         [ Shape_mismatch [ sh ] ] )
-
-let row_string r = Sexp.to_string_hum ([%sexp_of: Row.t] r)
-
-let check_closed_rows (sh : t) ~batch ~input ~output =
-  if sh.closed then
-    List.iter
-      [
-        ("batch row", sh.batch, batch);
-        ("input row", sh.input, input);
-        ("output row", sh.output, output);
-      ]
-      ~f:(fun (field, old_r, new_r) ->
-        if not (Row.equal_modulo_proj old_r new_r) then
-          closed_write_error sh ~field ~old_s:(row_string old_r) ~new_s:(row_string new_r))
-
-let set_rows (sh : t) ~batch ~input ~output =
-  check_closed_rows sh ~batch ~input ~output;
-  sh.batch <- batch;
-  sh.input <- input;
-  sh.output <- output
-
-let padding_string p = Sexp.to_string_hum ([%sexp_of: padding] p)
-let padding_elem_string e = Sexp.to_string_hum ([%sexp_of: float option option] e)
-
-let set_padding_elem (sh : t) v =
-  if sh.closed && not ([%equal: float option option] sh.padding_elem v) then
-    closed_write_error sh ~field:"padding neutral element"
-      ~old_s:(padding_elem_string sh.padding_elem)
-      ~new_s:(padding_elem_string v);
-  sh.padding_elem <- v
+[@@mutation_serial.boundary "the rewind: it discards all open state and clears the taint"]
 
 let infer_equal (sh1 : t) (sh2 : t) =
   unmark_unused sh1.id;
@@ -1788,19 +1879,8 @@ let product_space_shape ~(shape : t) ~(logic : logic) : t =
                  (and the reduced axes cannot go into the result's output row instead)")
     | Some (_, `Dim _) -> assert false
   in
-  {
-    batch = b_lhs;
-    output = output_row;
-    input = input_row;
-    batch_padding = None;
-    input_padding = None;
-    output_padding = None;
-    padding_elem = None;
-    closed = false;
-    discarded_by = None;
-    id = cur_sh.id;
-    debug_name = "pspace:" ^ cur_sh.debug_name;
-  }
+  of_rows ~batch:b_lhs ~output:output_row ~input:input_row ~id:cur_sh.id
+    ~debug_name:("pspace:" ^ cur_sh.debug_name)
 
 (** Sets the dimension/total-elements for a delayed variable reference. For row variables, this
     creates a [Total_elems] constraint that will be reconciled during [finish_inference]. *)
@@ -2172,6 +2252,7 @@ let unsafe_reinitialize () =
   discarded_refs := [];
   Row.reset_transient ();
   Row.drop_symbol_roles ()
+[@@mutation_serial.boundary "the session reset: it discards all state and clears the taint"]
 
 let all_rows_w_origin update_step =
   let get_origin sh kind =
@@ -2350,7 +2431,7 @@ let dealias_operands (update_step : update_step) : update_step * (t * t) list =
   let seen = ref [ update_step.shape ] and copies = ref [] in
   let occurrence sh =
     if List.mem !seen sh ~equal:phys_equal then (
-      let copy = { sh with batch = sh.batch } in
+      let copy = copy sh in
       copies := (copy, sh) :: !copies;
       copy)
     else (
@@ -2394,20 +2475,9 @@ let merge_dealiased_padding copies =
       let input = merge orig.input_padding copy.input_padding in
       let output = merge orig.output_padding copy.output_padding in
       (* The closed-shape guard (gh-ocannl-1301): the copy carries [closed] and was guarded itself,
-         so on a closed original these merges are equal; checked anyway, before writing. *)
-      List.iter
-        [
-          ("batch padding", orig.batch_padding, batch);
-          ("input padding", orig.input_padding, input);
-          ("output padding", orig.output_padding, output);
-        ]
-        ~f:(fun (field, old_p, new_p) ->
-          if orig.closed && not (equal_padding old_p new_p) then
-            closed_write_error orig ~field ~old_s:(padding_string old_p)
-              ~new_s:(padding_string new_p));
-      orig.batch_padding <- batch;
-      orig.input_padding <- input;
-      orig.output_padding <- output;
+         so on a closed original these merges are equal; the setter checks anyway, before
+         writing. *)
+      set_paddings orig ~batch ~input ~output;
       if Option.is_none orig.padding_elem then set_padding_elem orig copy.padding_elem)
 
 (** Computes the indexing into subtensors given the shape information of a tensor.
@@ -2679,22 +2749,12 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
     let batch = padding_of_row sh.batch_padding sh.batch in
     let output = padding_of_row sh.output_padding sh.output in
     let input = padding_of_row sh.input_padding sh.input in
-    (* Validate all three before writing any (gh-ocannl-1301). *)
-    List.iter
-      [
-        ("batch padding", sh.batch_padding, batch);
-        ("output padding", sh.output_padding, output);
-        ("input padding", sh.input_padding, input);
-      ]
-      ~f:(fun (field, old_p, new_p) ->
-        match new_p with
-        | Some p when sh.closed && not (equal_padding old_p (Some p)) ->
-            closed_write_error sh ~field ~old_s:(padding_string old_p)
-              ~new_s:(padding_string (Some p))
-        | _ -> ());
-    Option.iter batch ~f:(fun p -> sh.batch_padding <- Some p);
-    Option.iter output ~f:(fun p -> sh.output_padding <- Some p);
-    Option.iter input ~f:(fun p -> sh.input_padding <- Some p)
+    (* An axis-free result keeps the padding already there; the setter validates all three before
+       writing any (gh-ocannl-1301). *)
+    set_paddings sh
+      ~batch:(Option.first_some batch sh.batch_padding)
+      ~input:(Option.first_some input sh.input_padding)
+      ~output:(Option.first_some output sh.output_padding)
   in
   (* Whether THIS step demands nonzero padding on [sh] — i.e. actually reads (rhs) or writes (lhs)
      the margins. [Row.get_dim_padding] only reports the current operation's inferred padding. *)
@@ -2922,8 +2982,7 @@ let%debug4_sexp finish_inference_body (() : unit) : unit =
       if Option.is_none update_step.unsafe_projections then derive_projections update_step);
   (* The commit: every shape of the applied steps is closed, and the role claims of the open work
      reach their symbols. *)
-  List.iter !active_update_steps ~f:(fun update_step ->
-      iter_shapes update_step ~f:(fun sh -> sh.closed <- true));
+  List.iter !active_update_steps ~f:(fun update_step -> iter_shapes update_step ~f:close);
   Row.commit_symbol_roles ();
   open_refs := [];
   update_mark := !update_uid;
@@ -2932,6 +2991,8 @@ let%debug4_sexp finish_inference_body (() : unit) : unit =
   (* There should not be any shape variables remaining in any inference-undergoing update steps. *)
   state := Row.empty_env;
   !on_closure ()
+[@@mutation_serial.boundary
+  "the commit point: finish_inference taints the session on any failure of this body"]
 
 let finish_inference (() : unit) : unit =
   if !construction_depth > 0 then
@@ -3093,21 +3154,7 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
     | None, None -> make_unknown `Output
     | Some _, Some _ -> invalid_arg "Shape.make: do not provide both output_dims, output_axes"
   in
-  let result =
-    {
-      input;
-      output;
-      batch;
-      id;
-      debug_name;
-      batch_padding = None;
-      input_padding = None;
-      output_padding = None;
-      padding_elem = None;
-      closed = false;
-      discarded_by = None;
-    }
-  in
+  let result = of_rows ~batch ~input ~output ~id ~debug_name in
   (match deduced with
   | Not_constrained -> ()
   | Input_equals_output -> (
@@ -3196,21 +3243,7 @@ let shape_spec_to_dims_bio ~spec ~sh_id labels =
 
 let of_spec ?(deduced = Not_constrained) ~debug_name ~id spec =
   let batch, input, output = shape_spec_to_dims_bio ~spec ~sh_id:id @@ axis_labels_of_spec spec in
-  let result =
-    {
-      input;
-      output;
-      batch;
-      id;
-      debug_name;
-      batch_padding = None;
-      input_padding = None;
-      output_padding = None;
-      padding_elem = None;
-      closed = false;
-      discarded_by = None;
-    }
-  in
+  let result = of_rows ~batch ~input ~output ~id ~debug_name in
   (match deduced with
   | Not_constrained -> ()
   | Input_equals_output -> (

@@ -1,0 +1,883 @@
+(** The reader behind [test/operations/mutation_serial_scan] (gh-ocannl-1506): every write to a
+    module-level mutable binding of the inference-session modules ([tensor/row.ml],
+    [tensor/shape.ml]) advances [Row.mutation_serial], or is classified in place as not needing to.
+
+    The serial is how a failed construction is told apart from one that failed before touching the
+    session (gh-ocannl-1301): a write it does not count is a construction that fails after mutating
+    the session without tainting it. Checkpoint rollback (gh-ocannl-903) leans on the same
+    obligation for the session's module-level state. Until this scan it was documentation only.
+
+    {1 What it reads}
+
+    The parse tree (ppxlib's), with names resolved lexically through {!Lexical_scope}, so a
+    parameter or local binding spelled like a table is not the table.
+
+    - {b Tracked binding}: a [let x = e] of the file's own top-level structure whose [e], under type
+      constraints, is an allocation: [ref _] (also [Stdlib.ref], [Base.ref]), or [M.create _] /
+      [M.make _] for [M] one of [Hashtbl], [Hashtbl.Poly], [Hash_set], [Hash_set.Poly], [Queue],
+      [Stack], [Array].
+    - {b Occurrences} of a tracked name are classified by the application they are the first
+      positional argument of, from closed lists ({!ref_reads}, {!ref_writes}, {!family_functions}):
+      [!x] reads a ref; [x := _], [incr x], [decr x], [Int.incr x], [Int.decr x] write it; a
+      container is read or written by the listed functions of its own family ([Hashtbl.find_or_add]
+      is a write, [Hash_set.mem] a read; [a.(i) <- v] is [Array.set]). A [Stdlib.] or [Base.]
+      qualifier is dropped first. The function must be the library's: a name or head module the file
+      binds in scope (a local [module Hash_set], a [let ( := )]) classifies nothing, so the
+      occurrence is refused as unclassified. A write must be saturated -- at least its listed arity
+      in arguments -- since a partial application is a closure that writes later.
+    - {b Accounting}: a write is accounted for when its nearest enclosing let-bound function (any
+      [let f … = fun …] at any depth; the top-level definition when none encloses it) contains a
+      call [note_mutation ()] in its own body, callbacks included -- a function literal passed as an
+      argument is assumed to run during the call, so the [~default] closure of a [find_or_add]
+      counts -- but not inside a nested let-bound function or an escaping closure (one returned,
+      stored or bound rather than passed), each a frame of its own. The call must reach the real
+      one: [Row.note_mutation] with no module named [Row] bound in scope (a local module, functor
+      parameter or unpack), or -- in the serial's own module alone ([~serial_owner], [row.ml]) --
+      its top-level [note_mutation], not a shadowing local. An [open] that brings a [Row] in is not
+      modelled.
+    - {b In-place classification}, as attributes with a closed grammar; a reason is a string literal
+      of more than one word:
+    - [[@@mutation_serial.exempt "<reason>"]] on a tracked binding: its writes need no note
+      (fresh-id counters, the serial itself, a solver pass's transient flags). Also the only way to
+      admit state the scan cannot read (below).
+    - [[@@mutation_serial.fingerprinted]] on a tracked [ref] that [Shape.fingerprint] compares
+      physically: held to the relationship, not to a reason -- the file's top-level [fingerprint]
+      must capture [!x] as a field of the record it returns ([{ f = !x }] as its result), and its
+      top-level [mutated_since] must hand that field and [!x] to the library's [phys_equal]
+      ([phys_equal fp.f !x]) as an operand of its returned boolean, through [||], [&&] and [not].
+    - [[@@mutation_serial.boundary "<reason>"]] on a let-bound function that is a session boundary
+      (the commit, a rewind, a reset): its own writes need no note.
+
+    {1 What it refuses}
+
+    Each of these is a finding, never a silent pass:
+
+    - a write not accounted for; a write at module initialization, under no function;
+    - any other use of a tracked name: passed to a helper, aliased, a container function outside the
+      lists, a ref given to a container function;
+    - an allocation at a binding head outside the list above ([Foo.create], [Foo.make] for any other
+      [Foo]) -- unread, so name it or extend the list;
+    - module-level state the scan does not resolve: an allocation bound by a non-variable pattern,
+      one evaluated at module initialization but hidden under a local [let] of a top-level value
+      ([let fresh = let uid = ref 0 in fun () -> …]) or in the body of a function the initializer
+      invokes on the spot ([(fun () -> …) ()]) or binds locally ([let make () = … in make ()],
+      conservatively whether or not it calls it) -- an unlisted constructor there too -- one inside
+      a nested module, an [include]d structure, a functor argument or a [let%ext] payload -- unless
+      that binding is [exempt];
+    - a tracked binding the sibling [.mli] exports as a [val], at top level or through an
+      [include sig … end], since its writers outside the file are not read ([Row.mutation_serial] is
+      exported as a function for that reason); an interface [include] of any other module type,
+      which the scan cannot read;
+    - an attribute nothing consumes, a malformed one, two on one binding, a stale [exempt] (no write
+      of the binding would be a finding without it), a stale [boundary] (no write in the function
+      would be), a [fingerprinted] binding [mutated_since] does not compare.
+
+    {1 What it deliberately does not read}
+
+    - Branch dominance: a function that notes on one path and writes on another passes. The rule is
+      "the definition counts the session's writes", not a control-flow proof.
+    - Values whose mutability comes from their type with no allocation call at the head: record
+      literals with mutable fields, array literals, objects, a mutable value some function returns.
+      Mutable record fields in general ([Shape.t] is private behind guarded setters, gh-ocannl-1506;
+      [update_step.unsafe_projections] and delayed references are gh-ocannl-903's field-type
+      snapshot).
+    - Modules other than the two named: [tensor.ml]'s session records, notably.
+    - [Obj] and other escapes from the type system. *)
+
+open Base
+open Ppxlib
+
+type kind = Ref | Container of string
+
+type binding_class =
+  | Plain
+  | Exempt of string
+  | Fingerprinted  (** A tracked binding, with its in-place classification. *)
+
+type binding = {
+  key : int;  (** The binding's source offset: its identity, apart from same-named ones. *)
+  name : string;
+  line : int;
+  kind : kind;
+  cls : binding_class;
+}
+
+type report = {
+  inventory : string list;  (** What the scan classified, without positions: one line each. *)
+  findings : string list;  (** Each refusal, as [file:line: message]. *)
+}
+
+let container_modules =
+  [
+    [ "Hashtbl" ];
+    [ "Hashtbl"; "Poly" ];
+    [ "Hash_set" ];
+    [ "Hash_set"; "Poly" ];
+    [ "Queue" ];
+    [ "Stack" ];
+    [ "Array" ];
+  ]
+
+let ref_reads = [ [ "!" ] ]
+
+(* A write's arity is the number of arguments a saturated call passes (labelled ones included,
+   optional ones not): a call with fewer is a partial application -- a closure that writes later,
+   where no occurrence is left to judge -- and is refused. *)
+let ref_writes =
+  [
+    ([ ":=" ], 2); ([ "incr" ], 1); ([ "decr" ], 1); ([ "Int"; "incr" ], 1); ([ "Int"; "decr" ], 1);
+  ]
+
+(** Per container family (the first component of its creation module): the functions that only read
+    it, and the functions that write it with their arity. *)
+let family_functions =
+  [
+    ( "Hashtbl",
+      ( [
+          "mem";
+          "find";
+          "find_exn";
+          "find_multi";
+          "find_and_call";
+          "length";
+          "is_empty";
+          "data";
+          "keys";
+          "to_alist";
+          "iter";
+          "iteri";
+          "iter_keys";
+          "fold";
+          "exists";
+          "existsi";
+          "for_all";
+          "for_alli";
+          "count";
+          "counti";
+        ],
+        [
+          ("set", 3);
+          ("add", 3);
+          ("add_exn", 3);
+          ("add_multi", 3);
+          ("remove", 2);
+          ("remove_multi", 2);
+          ("change", 3);
+          ("update", 3);
+          ("update_and_return", 3);
+          ("find_or_add", 3);
+          ("findi_or_add", 3);
+          ("find_and_remove", 2);
+          ("clear", 1);
+          ("filter_inplace", 2);
+          ("filteri_inplace", 2);
+          ("filter_keys_inplace", 2);
+          ("map_inplace", 2);
+          ("mapi_inplace", 2);
+          ("filter_map_inplace", 2);
+          ("filter_mapi_inplace", 2);
+          ("incr", 2);
+          ("decr", 2);
+          ("replace", 3);
+        ] ) );
+    ( "Hash_set",
+      ( [
+          "mem";
+          "length";
+          "is_empty";
+          "to_list";
+          "to_array";
+          "iter";
+          "fold";
+          "exists";
+          "for_all";
+          "count";
+          "find";
+        ],
+        [
+          ("add", 2);
+          ("strict_add", 2);
+          ("strict_add_exn", 2);
+          ("remove", 2);
+          ("strict_remove", 2);
+          ("strict_remove_exn", 2);
+          ("clear", 1);
+          ("filter_inplace", 2);
+        ] ) );
+    ( "Queue",
+      ( [
+          "length";
+          "is_empty";
+          "peek";
+          "peek_exn";
+          "top";
+          "iter";
+          "fold";
+          "to_list";
+          "exists";
+          "for_all";
+        ],
+        [
+          ("enqueue", 2);
+          ("dequeue", 1);
+          ("dequeue_exn", 1);
+          ("add", 2);
+          ("push", 2);
+          ("take", 1);
+          ("pop", 1);
+          ("clear", 1);
+        ] ) );
+    ( "Stack",
+      ( [ "length"; "is_empty"; "top"; "top_exn"; "iter"; "fold"; "to_list" ],
+        [ ("push", 2); ("pop", 1); ("pop_exn", 1); ("clear", 1) ] ) );
+    ( "Array",
+      ( [ "get"; "unsafe_get"; "length"; "iter"; "iteri"; "fold"; "exists"; "for_all"; "to_list" ],
+        [ ("set", 3); ("unsafe_set", 3); ("fill", 4); ("blit", 5); ("sort", 2); ("swap", 3) ] ) );
+  ]
+
+let kind_name = function Ref -> "ref" | Container m -> m
+
+let rec flatten = function
+  | Longident.Lident s -> Some [ s ]
+  | Ldot (p, s) -> Option.map (flatten p) ~f:(fun p -> p @ [ s ])
+  | Lapply _ -> None
+
+(* A [Stdlib.]/[Base.] qualifier says nothing about which function it is. *)
+let unqualified = function ("Stdlib" | "Base") :: (_ :: _ as rest) -> rest | path -> path
+
+let rec strip (e : expression) =
+  match e.pexp_desc with Pexp_constraint (e, _) | Pexp_coerce (e, _, _) -> strip e | _ -> e
+
+let allocation (e : expression) =
+  match (strip e).pexp_desc with
+  | Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; _ }, _) -> (
+      match Option.map (flatten txt) ~f:unqualified with
+      | Some [ "ref" ] -> `Alloc Ref
+      | Some path -> (
+          match List.rev path with
+          | ("create" | "make") :: (_ :: _ as rev_module) ->
+              let m = List.rev rev_module in
+              if List.mem container_modules m ~equal:(List.equal String.equal) then
+                `Alloc (Container (List.hd_exn m))
+              else `Unknown (String.concat ~sep:"." path)
+          | _ -> `No)
+      | None -> `No)
+  | _ -> `No
+
+(* The body of a function literal, under constraints, coercions and locally abstract types. *)
+let rec invoked_body (e : expression) =
+  match e.pexp_desc with
+  | Pexp_function (_, _, body) -> Some body
+  | Pexp_constraint (e, _) | Pexp_coerce (e, _, _) | Pexp_newtype (_, e) -> invoked_body e
+  | _ -> None
+
+(* Through constraints, coercions and locally abstract types. *)
+let rec strip_all (e : expression) =
+  match e.pexp_desc with
+  | Pexp_constraint (e, _) | Pexp_coerce (e, _, _) | Pexp_newtype (_, e) -> strip_all e
+  | _ -> e
+
+(* The expression a function's call returns: through its parameters, [let]s, sequences, local opens
+   and modules, constraints. *)
+let rec result_tail (e : expression) =
+  match e.pexp_desc with
+  | Pexp_function (_, _, Pfunction_body body) -> result_tail body
+  | Pexp_let (_, _, body)
+  | Pexp_sequence (_, body)
+  | Pexp_open (_, body)
+  | Pexp_letmodule (_, _, body)
+  | Pexp_constraint (body, _)
+  | Pexp_coerce (body, _, _)
+  | Pexp_newtype (_, body) ->
+      result_tail body
+  | _ -> e
+
+(* The operands a boolean result is made of, through [||], [&&] and [not]. *)
+let rec boolean_operands (e : expression) =
+  match (strip e).pexp_desc with
+  | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident ("||" | "&&"); _ }; _ }, [ (_, a); (_, b) ])
+    ->
+      boolean_operands a @ boolean_operands b
+  | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident "not"; _ }; _ }, [ (_, a) ]) ->
+      boolean_operands a
+  | _ -> [ strip e ]
+
+let rec is_function (e : expression) =
+  match e.pexp_desc with
+  | Pexp_function _ -> true
+  | Pexp_constraint (e, _) | Pexp_coerce (e, _, _) | Pexp_newtype (_, e) -> is_function e
+  | _ -> false
+
+let binding_name (vb : value_binding) =
+  match vb.pvb_pat.ppat_desc with
+  | Ppat_var { txt; _ } | Ppat_constraint ({ ppat_desc = Ppat_var { txt; _ }; _ }, _) -> Some txt
+  | _ -> None
+
+let line_of (loc : Location.t) = loc.loc_start.pos_lnum
+let is_ours (a : attribute) = String.is_prefix a.attr_name.txt ~prefix:"mutation_serial"
+
+type attr = A_exempt of string | A_fingerprinted | A_boundary of string
+
+let word_count s =
+  List.length
+    (String.split_on_chars s ~on:[ ' '; '\t'; '\n' ] |> List.filter ~f:(Fn.non String.is_empty))
+
+(* [Ok attr], or the reason the attribute is malformed. *)
+let parse_attr (a : attribute) =
+  let reason () =
+    match a.attr_payload with
+    | PStr
+        [
+          {
+            pstr_desc = Pstr_eval ({ pexp_desc = Pexp_constant (Pconst_string (s, _, _)); _ }, _);
+            _;
+          };
+        ]
+      when word_count s > 1 ->
+        Ok s
+    | _ -> Error "its payload must be one string literal giving a reason of more than one word"
+  in
+  match a.attr_name.txt with
+  | "mutation_serial.exempt" -> Result.map (reason ()) ~f:(fun s -> A_exempt s)
+  | "mutation_serial.boundary" -> Result.map (reason ()) ~f:(fun s -> A_boundary s)
+  | "mutation_serial.fingerprinted" -> (
+      match a.attr_payload with
+      | PStr [] -> Ok A_fingerprinted
+      | _ -> Error "it takes no payload: the relationship to mutated_since is its reason")
+  | other ->
+      Error
+        (Printf.sprintf
+           "%s is not one of mutation_serial.exempt, mutation_serial.fingerprinted, \
+            mutation_serial.boundary"
+           other)
+
+type denotation = [ `Tracked of binding | `Note | `Local ]
+
+type frame = {
+  fname : string;
+  root : string;
+  root_expr : expression;  (** The top-level definition's expression. *)
+  boundary : (string * Location.t) option;
+  mutable noted : bool;
+  mutable writes : (binding * int) list;
+}
+
+let scan ~file ?(serial_owner = false) ?interface source =
+  let findings = ref [] in
+  let finding line fmt =
+    Printf.ksprintf
+      (fun msg -> findings := Printf.sprintf "%s:%d: %s" file line msg :: !findings)
+      fmt
+  in
+  let lexbuf = Lexing.from_string source in
+  Lexing.set_filename lexbuf file;
+  let structure = Parse.implementation lexbuf in
+  (* Every attribute of ours, by location; consumption is recorded against it. *)
+  let ours = Hashtbl.create (module Int) in
+  let collector =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! attribute a =
+        if is_ours a then Hashtbl.set ours ~key:a.attr_loc.loc_start.pos_cnum ~data:(a, ref false);
+        super#attribute a
+    end
+  in
+  collector#structure structure;
+  let consume (a : attribute) =
+    Option.iter (Hashtbl.find ours a.attr_loc.loc_start.pos_cnum) ~f:(fun (_, used) -> used := true)
+  in
+  (* The one classification of a binding or function, consumed; [None] when it has none. *)
+  let classification_of attrs =
+    match List.filter attrs ~f:is_ours with
+    | [] -> None
+    | [ a ] -> (
+        match parse_attr a with
+        | Ok parsed -> Some (parsed, a)
+        | Error why ->
+            consume a;
+            finding (line_of a.attr_loc) "malformed attribute [@@%s]: %s" a.attr_name.txt why;
+            None)
+    | a :: _ as several ->
+        List.iter several ~f:consume;
+        finding (line_of a.attr_loc) "%d mutation_serial attributes on one binding: give it one"
+          (List.length several);
+        None
+  in
+  (* {2 Discovery} *)
+  let tracked = Hashtbl.create (module Int) in
+  let note_binding = ref None in
+  let exempt_used = Hash_set.create (module Int) in
+  let bindings = ref [] in
+  (* Exempt state the scan does not resolve: hidden, nested, or bound by a pattern. *)
+  let unread_exempt = ref [] in
+  let hidden_allocations (vb : value_binding) =
+    let found = ref [] in
+    let walker =
+      object (self)
+        inherit Ast_traverse.iter as super
+
+        method! expression e =
+          match e.pexp_desc with
+          | Pexp_function _ -> ()
+          | Pexp_apply (callee, args) when Option.is_some (invoked_body callee) ->
+              (* An immediately invoked function -- under constraints, coercions or locally abstract
+                 types too -- runs at module initialization: its body's allocations are as
+                 module-level as the initializer's own. *)
+              (match invoked_body callee with
+              | Some (Pfunction_body body) -> self#expression body
+              | Some (Pfunction_cases (cases, _, _)) ->
+                  List.iter cases ~f:(fun c -> self#expression c.pc_rhs)
+              | None -> ());
+              List.iter args ~f:(fun (_, a) -> self#expression a)
+          | Pexp_let (_, vbs, body) ->
+              (* A function bound locally in a module-level initializer may be invoked by it on the
+                 spot ([let make () = … in make ()]): its body is read as initialization too,
+                 conservatively, whether or not the initializer calls it. *)
+              List.iter vbs ~f:(fun local ->
+                  match invoked_body local.pvb_expr with
+                  | Some (Pfunction_body body) -> self#expression body
+                  | Some (Pfunction_cases (cases, _, _)) ->
+                      List.iter cases ~f:(fun c -> self#expression c.pc_rhs)
+                  | None -> self#expression local.pvb_expr);
+              self#expression body
+          | _ ->
+              (if not (phys_equal (strip e) (strip vb.pvb_expr)) then
+                 match allocation e with
+                 | `Alloc _ | `Unknown _ -> found := line_of e.pexp_loc :: !found
+                 | `No -> ());
+              super#expression e
+      end
+    in
+    walker#expression vb.pvb_expr;
+    !found
+  in
+  let rec discover ~nested items =
+    List.iter items ~f:(fun item ->
+        match item.pstr_desc with
+        | Pstr_value (_, vbs) -> List.iter vbs ~f:(discover_binding ~nested)
+        | Pstr_extension ((_, PStr items), _) -> discover ~nested:true items
+        | Pstr_module { pmb_expr; _ } -> discover_module pmb_expr
+        | Pstr_recmodule mbs -> List.iter mbs ~f:(fun mb -> discover_module mb.pmb_expr)
+        | Pstr_include { pincl_mod; _ } -> discover_module pincl_mod
+        | _ -> ())
+  and discover_module me =
+    match me.pmod_desc with
+    | Pmod_structure items -> discover ~nested:true items
+    | Pmod_constraint (me, _) | Pmod_functor (_, me) -> discover_module me
+    | Pmod_apply (f, arg) ->
+        discover_module f;
+        discover_module arg
+    | _ -> ()
+  and discover_binding ~nested vb =
+    let line = line_of vb.pvb_loc in
+    let name = binding_name vb in
+    let head = allocation vb.pvb_expr in
+    let hidden = hidden_allocations vb in
+    let cls = classification_of vb.pvb_attributes in
+    let exempt = match cls with Some (A_exempt _, a) -> Some a | _ -> None in
+    let consume_exempt () = Option.iter exempt ~f:consume in
+    (match (name, nested) with
+    | Some "note_mutation", false when serial_owner ->
+        note_binding := Some vb.pvb_loc.loc_start.pos_cnum
+    | _ -> ());
+    (match head with
+    | `Unknown path ->
+        finding line
+          "%s is not a constructor the scan reads (the closed list: ref, and create/make of \
+           Hashtbl, Hashtbl.Poly, Hash_set, Hash_set.Poly, Queue, Stack, Array); extend the list \
+           or bind something it reads"
+          path
+    | `No -> ()
+    | `Alloc kind -> (
+        match (name, nested) with
+        | Some name, false ->
+            let bcls =
+              match cls with
+              | Some (A_exempt reason, a) ->
+                  consume a;
+                  Exempt reason
+              | Some (A_fingerprinted, a) ->
+                  consume a;
+                  (match kind with
+                  | Ref -> ()
+                  | Container _ -> finding line "%s: only a ref can be fingerprinted" name);
+                  Fingerprinted
+              | Some (A_boundary _, _) | None -> Plain
+            in
+            let b = { key = vb.pvb_loc.loc_start.pos_cnum; name; line; kind; cls = bcls } in
+            Hashtbl.set tracked ~key:vb.pvb_loc.loc_start.pos_cnum ~data:b;
+            bindings := b :: !bindings
+        | _ when Option.is_some exempt ->
+            consume_exempt ();
+            unread_exempt := Option.value name ~default:"<pattern>" :: !unread_exempt
+        | None, _ -> finding line "a mutable allocation bound by a pattern: bind it to a name"
+        | Some name, true ->
+            finding line
+              "%s: module-level state inside a nested module, an included structure, a functor \
+               argument or an extension payload is not read; hoist it to the top level or exempt \
+               it"
+              name));
+    if not (List.is_empty hidden) then
+      if Option.is_some exempt then (
+        consume_exempt ();
+        unread_exempt := Option.value name ~default:"<pattern>" :: !unread_exempt)
+      else
+        match name with
+        | None -> finding line "a mutable allocation bound by a pattern: bind it to a name"
+        | Some name ->
+            finding line
+              "%s: module-level state hidden under a local let of a module-level value is not \
+               read; bind it at the top level or exempt the enclosing binding"
+              name
+  in
+  discover ~nested:false structure;
+  (* {2 Resolution} *)
+  let classified = Hash_set.create (module Int) in
+  (* (binding key, field) pairs: what [fingerprint] captures as [{ f = !x }], and what
+     [mutated_since] compares as [phys_equal fp.f !x]. A fingerprinted ref is covered by a pair in
+     both. *)
+  let captured = Hash_set.Poly.create () in
+  let compared = Hash_set.Poly.create () in
+  let frames : frame list ref = ref [] in
+  (* Function literals that own a frame (a let-bound function's own expression), and those passed as
+     arguments, by source offset. *)
+  let frame_functions = Hash_set.create (module Int) in
+  let callbacks = Hash_set.create (module Int) in
+  let fun_depth = ref 0 in
+  let boundaries = ref [] in
+  let judge (frame : frame) =
+    let boundary_used = ref false in
+    Option.iter frame.boundary ~f:(fun (reason, _) ->
+        boundaries := Printf.sprintf "%s: boundary %s -- %s" file frame.fname reason :: !boundaries);
+    List.iter (List.rev frame.writes) ~f:(fun (b, line) ->
+        match b.cls with
+        | Fingerprinted -> ()
+        | _ when frame.noted -> ()
+        | Exempt _ -> Hash_set.add exempt_used b.key
+        | Plain when Option.is_some frame.boundary -> boundary_used := true
+        | Plain ->
+            finding line "%s writes %s without note_mutation () (nor a classification)" frame.fname
+              b.name);
+    match frame.boundary with
+    | Some (_, loc) when not !boundary_used ->
+        finding (line_of loc)
+          "stale boundary on %s: none of its writes would need it -- remove the attribute"
+          frame.fname
+    | _ -> ()
+  in
+  let scanner =
+    object (self)
+      inherit [denotation, [ `Local ]] Lexical_scope.scoped as super
+      method local = `Local
+
+      (* Every module binding the file makes is local: a [Row] bound anywhere in scope -- a module,
+         a functor parameter, an unpack -- is not the library's. *)
+      method module_path _ _ = Some `Local
+      method! shadowed = Some `Local
+
+      method! binding_denotes _ vb =
+        let key = vb.pvb_loc.loc_start.pos_cnum in
+        match Hashtbl.find tracked key with
+        | Some b -> `Tracked b
+        | None -> if Option.equal Int.equal !note_binding (Some key) then `Note else `Local
+
+      method tracked env (e : expression) =
+        match e.pexp_desc with
+        | Pexp_ident { txt = Lident x; loc } -> (
+            match Lexical_scope.lookup env x with Some (`Tracked b) -> Some (b, loc) | _ -> None)
+        | _ -> None
+
+      method is_note env (e : expression) =
+        match e.pexp_desc with
+        | Pexp_ident { txt = Ldot (Lident "Row", "note_mutation"); _ } ->
+            not (Map.mem env.Lexical_scope.modules "Row")
+        | Pexp_ident { txt = Lident "note_mutation"; _ } -> (
+            match Lexical_scope.lookup env "note_mutation" with Some `Note -> true | _ -> false)
+        | _ -> false
+
+      (* Whether a function path reaches the library's own definition: an unqualified name the file
+         binds nowhere in scope, or a qualified one whose head module the file does not bind. The
+         read/write lists describe the library's functions, so a shadowing [Hash_set], [Int] or
+         [(:=)] is not classified by them. *)
+      method library env (fn : Longident.t) =
+        match fn with
+        | Lident x -> Option.is_none (Lexical_scope.lookup env x)
+        | Ldot _ -> not (Map.mem env.Lexical_scope.modules (Lexical_scope.head fn))
+        | Lapply _ -> false
+
+      method record_write b loc =
+        match !frames with
+        | frame :: _ when !fun_depth > 0 -> frame.writes <- (b, line_of loc) :: frame.writes
+        | _ ->
+            finding (line_of loc)
+              "writes %s at module initialization, under no function: not a session write the scan \
+               can account for"
+              b.name
+
+      method! expression env e =
+        (* The fingerprint relationship: [fingerprint] captures [!x] into a field, and
+           [mutated_since] hands that field and [!x] to the library's [phys_equal]. *)
+        let root, root_expr =
+          match List.last !frames with
+          | Some frame -> (frame.root, Some frame.root_expr)
+          | None -> ("", None)
+        in
+        let returned e' =
+          Option.exists root_expr ~f:(fun r -> phys_equal (strip (result_tail r)) e')
+        in
+        let contributes e' =
+          Option.exists root_expr ~f:(fun r ->
+              List.exists (boolean_operands (result_tail r)) ~f:(fun o -> phys_equal o e'))
+        in
+        let deref_of (arg : expression) =
+          match arg.pexp_desc with
+          | Pexp_apply
+              ({ pexp_desc = Pexp_ident { txt = Lident "!" as deref; _ }; _ }, [ (Nolabel, x) ])
+            when self#library env deref ->
+              Option.map (self#tracked env x) ~f:fst
+          | _ -> None
+        in
+        (match e.pexp_desc with
+        | Pexp_record (fields, _) when String.equal root "fingerprint" && returned e ->
+            List.iter fields ~f:(fun ({ txt = label; _ }, value) ->
+                Option.iter (deref_of value) ~f:(fun b ->
+                    Hash_set.add captured (b.key, Longident.last_exn label)))
+        | Pexp_apply
+            ( { pexp_desc = Pexp_ident { txt = Lident "phys_equal" as fn; _ }; _ },
+              [ (Nolabel, a1); (Nolabel, a2) ] )
+          when self#library env fn && String.equal root "mutated_since" && contributes e ->
+            List.iter
+              [ (a1, a2); (a2, a1) ]
+              ~f:(fun (field, value) ->
+                match (field.pexp_desc, deref_of value) with
+                | Pexp_field (_, { txt = label; _ }), Some b ->
+                    Hash_set.add compared (b.key, Longident.last_exn label)
+                | _ -> ())
+        | _ -> ());
+        (match e.pexp_desc with
+        | Pexp_apply
+            (fn, [ (Nolabel, { pexp_desc = Pexp_construct ({ txt = Lident "()"; _ }, None); _ }) ])
+          when self#is_note env fn ->
+            (* The innermost let-bound function only: a nested helper that notes does not account
+               for its enclosing function's writes. Anonymous closures share their frame. *)
+            Option.iter (List.hd !frames) ~f:(fun frame -> frame.noted <- true)
+        | Pexp_apply ({ pexp_desc = Pexp_ident { txt = fn; _ }; _ }, args) -> (
+            match List.find args ~f:(fun (label, _) -> Poly.equal label Nolabel) with
+            | None -> ()
+            | Some (_, arg) -> (
+                match self#tracked env arg with
+                | None -> ()
+                | Some (b, loc) -> (
+                    let path =
+                      if self#library env fn then
+                        Option.value_map (flatten fn) ~f:unqualified ~default:[]
+                      else []
+                    in
+                    let verdict =
+                      match b.kind with
+                      | Ref -> (
+                          if List.mem ref_reads path ~equal:(List.equal String.equal) then `Read
+                          else
+                            match
+                              List.Assoc.find ref_writes path ~equal:(List.equal String.equal)
+                            with
+                            | Some arity -> `Write arity
+                            | None -> `Unlisted)
+                      | Container family -> (
+                          match
+                            (path, List.Assoc.find family_functions family ~equal:String.equal)
+                          with
+                          | head :: (_ :: _ as rest), Some (reads, writes)
+                            when String.equal head family -> (
+                              let fname = List.last_exn rest in
+                              if List.mem reads fname ~equal:String.equal then `Read
+                              else
+                                match List.Assoc.find writes fname ~equal:String.equal with
+                                | Some arity -> `Write arity
+                                | None -> `Unlisted)
+                          | _ -> `Unlisted)
+                    in
+                    match verdict with
+                    | `Read -> Hash_set.add classified loc.loc_start.pos_cnum
+                    | `Write arity when List.length args >= arity ->
+                        Hash_set.add classified loc.loc_start.pos_cnum;
+                        self#record_write b loc
+                    | `Write _ ->
+                        Hash_set.add classified loc.loc_start.pos_cnum;
+                        finding (line_of loc)
+                          "%s: a partial application of a mutator is a closure that writes later, \
+                           where the scan cannot judge it; apply it in full"
+                          b.name
+                    | `Unlisted -> ())))
+        | _ -> ());
+        (* A function literal passed as an argument is a callback, assumed to run during the call
+           (the [~default] of [find_or_add], the [~f] of [List.iter]): it shares the caller's frame.
+           Any other anonymous function -- returned, stored, bound to a non-function -- escapes, and
+           is a frame of its own. *)
+        (match e.pexp_desc with
+        | Pexp_apply (_, args) ->
+            List.iter args ~f:(fun (_, a) ->
+                if is_function a then
+                  Hash_set.add callbacks (strip_all a).pexp_loc.loc_start.pos_cnum)
+        | _ -> ());
+        match e.pexp_desc with
+        | Pexp_function _ ->
+            let key = e.pexp_loc.loc_start.pos_cnum in
+            let escaping =
+              (not (Hash_set.mem frame_functions key))
+              && (not (Hash_set.mem callbacks key))
+              && not (List.is_empty !frames)
+            in
+            let frame =
+              if escaping then (
+                let enclosing = List.hd_exn !frames in
+                let frame =
+                  {
+                    fname = "a closure escaping " ^ enclosing.fname;
+                    root = enclosing.root;
+                    root_expr = enclosing.root_expr;
+                    boundary = None;
+                    noted = false;
+                    writes = [];
+                  }
+                in
+                frames := frame :: !frames;
+                Some frame)
+              else None
+            in
+            Int.incr fun_depth;
+            let result = super#expression env e in
+            Int.decr fun_depth;
+            Option.iter frame ~f:(fun frame ->
+                frames := List.tl_exn !frames;
+                judge frame);
+            result
+        | _ -> super#expression env e
+
+      method! ident env { txt; loc } =
+        match txt with
+        | Lident x -> (
+            match Lexical_scope.lookup env x with
+            | Some (`Tracked b) when not (Hash_set.mem classified loc.loc_start.pos_cnum) ->
+                finding (line_of loc)
+                  "%s (%s) is used in a form the scan does not classify: only the listed reads and \
+                   writes of its own kind, with the binding as the first positional argument"
+                  b.name (kind_name b.kind)
+            | _ -> ())
+        | _ -> ()
+
+      method! value_binding env vb =
+        if is_function vb.pvb_expr || List.is_empty !frames then (
+          let fname = Option.value (binding_name vb) ~default:"<pattern>" in
+          let boundary =
+            if Hashtbl.mem tracked vb.pvb_loc.loc_start.pos_cnum then None
+            else
+              match List.filter vb.pvb_attributes ~f:is_ours with
+              | [ ({ attr_name = { txt = "mutation_serial.boundary"; _ }; _ } as a) ] -> (
+                  match parse_attr a with
+                  | Ok (A_boundary reason) ->
+                      consume a;
+                      if is_function vb.pvb_expr then Some (reason, a.attr_loc) else None
+                  | _ -> None)
+              | _ -> None
+          in
+          let root, root_expr =
+            match List.last !frames with
+            | Some f -> (f.root, f.root_expr)
+            | None -> (fname, vb.pvb_expr)
+          in
+          let frame = { fname; root; root_expr; boundary; noted = false; writes = [] } in
+          frames := frame :: !frames;
+          Hash_set.add frame_functions (strip_all vb.pvb_expr).pexp_loc.loc_start.pos_cnum;
+          let result = super#value_binding env vb in
+          frames := List.tl_exn !frames;
+          judge frame;
+          result)
+        else super#value_binding env vb
+    end
+  in
+  ignore
+    (scanner#structure { Lexical_scope.frames = []; modules = Map.empty (module String) } structure
+      : structure);
+  (* Boundary attributes are parsed again at their function; a malformed one reports once here. *)
+  Hashtbl.iter ours ~f:(fun (a, used) ->
+      if not !used then
+        match parse_attr a with
+        | Error why ->
+            finding (line_of a.attr_loc) "malformed attribute [@@%s]: %s" a.attr_name.txt why
+        | Ok _ ->
+            finding (line_of a.attr_loc)
+              "[@@%s] is attached to nothing it classifies: exempt and fingerprinted belong on a \
+               tracked binding, boundary on a let-bound function"
+              a.attr_name.txt);
+  let bindings = List.rev !bindings in
+  List.iter bindings ~f:(fun b ->
+      match b.cls with
+      | Fingerprinted
+        when not
+               (Hash_set.exists compared ~f:(fun (key, field) ->
+                    key = b.key && Hash_set.mem captured (key, field))) ->
+          finding b.line
+            "%s is fingerprinted, but mutated_since does not compare !%s through phys_equal" b.name
+            b.name
+      | _ -> ());
+  (* An exempt tracked binding whose writes would all be accounted for anyway is stale. *)
+  Hashtbl.iter tracked ~f:(fun b ->
+      match b.cls with
+      | Exempt _ when not (Hash_set.mem exempt_used b.key) ->
+          finding b.line "stale exemption on %s: none of its writes would need it" b.name
+      | _ -> ());
+  Option.iter interface ~f:(fun interface ->
+      let lexbuf = Lexing.from_string interface in
+      Lexing.set_filename lexbuf (file ^ "i");
+      (* The values the interface exports at top level, through [include sig … end] too. An include
+         of any other module type is refused: what it exports is not read here. *)
+      let rec exported_of items =
+        List.concat_map items ~f:(fun item ->
+            match item.psig_desc with
+            | Psig_value vd -> [ vd.pval_name.txt ]
+            | Psig_include { pincl_mod; _ } -> (
+                let rec signature_of mty =
+                  match mty.pmty_desc with
+                  | Pmty_signature items -> Some items
+                  | Pmty_with (mty, _) -> signature_of mty
+                  | _ -> None
+                in
+                match signature_of pincl_mod with
+                | Some items -> exported_of items
+                | None ->
+                    finding (line_of item.psig_loc)
+                      "the interface includes a module type the scan does not read: it cannot tell \
+                       whether a tracked binding is exported";
+                    [])
+            | _ -> [])
+      in
+      let exported = exported_of (Parse.interface lexbuf) in
+      Hashtbl.iter tracked ~f:(fun b ->
+          if List.mem exported b.name ~equal:String.equal then
+            finding b.line
+              "%s is exported by the interface: its writers outside this file are not read; export \
+               a function instead"
+              b.name));
+  let inventory =
+    List.map bindings ~f:(fun b ->
+        Printf.sprintf "%s: %s (%s) -- %s" file b.name (kind_name b.kind)
+          (match b.cls with
+          | Plain -> "accounted: every write noted or at a boundary"
+          | Exempt reason -> "exempt: " ^ reason
+          | Fingerprinted -> "fingerprinted by mutated_since"))
+    @ List.map (List.rev !unread_exempt) ~f:(fun name ->
+        Printf.sprintf "%s: %s (unread state) -- exempt" file name)
+    @ List.rev !boundaries
+  in
+  {
+    inventory;
+    findings =
+      List.rev !findings
+      |> List.dedup_and_sort ~compare:(fun a b ->
+          let line s =
+            Option.value_map (List.nth (String.split s ~on:':') 1) ~f:Int.of_string ~default:0
+          in
+          match Int.compare (line a) (line b) with 0 -> String.compare a b | c -> c);
+  }

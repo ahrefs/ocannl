@@ -81,9 +81,9 @@ val get_sym_dim : ?basis:string -> ?proj_id:int -> Ir.Indexing.static_symbol -> 
 
 (** {2 Session bookkeeping (gh-ocannl-1301)} *)
 
-val mutation_serial : int ref
+val mutation_serial : unit -> int
 (** Counts writes a failed construction can leave behind in the inference session; see
-    [Tensor.rewind_to_last_closure]. *)
+    [Tensor.rewind_to_last_closure]. Only {!note_mutation} advances it. *)
 
 val note_mutation : unit -> unit
 

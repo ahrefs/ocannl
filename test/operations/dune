@@ -135,6 +135,7 @@
   (alias runtest-doc_examples)
   (alias runtest-doc_examples_scan_cases)
   (alias runtest-doc_examples_compile_control)
+  (alias runtest-shape_private_compile_control)
   (alias runtest-changelog_unreleased_scan)
   (alias runtest-agents_md_size)
   (alias runtest-cache_version_history)
@@ -149,6 +150,9 @@
   (alias runtest-tensorized_census_ratchet)
   (alias runtest-tensorized_census_scan_cases)
   (alias runtest-operand_key_scan_cases)
+  (alias runtest-mutation_serial_scan)
+  (alias runtest-mutation_serial_scan_control)
+  (alias runtest-mutation_serial_scan_cases)
   (alias runtest-census_total_ratchet)
   (alias runtest-workflow_job_timeouts)
   (alias runtest-shell_scripts_parse)
@@ -320,6 +324,8 @@
   (alias runtest-ocamlformat_ignore_scan)
   (alias runtest-ll_test_ratchet)
   (alias runtest-operand_key_ratchet)
+  (alias runtest-mutation_serial_scan)
+  (alias runtest-mutation_serial_scan_control)
   (alias runtest-tensorized_census_ratchet)
   (alias runtest-provenance_tag_inventory)
   (alias runtest-census_total_ratchet)
@@ -3415,6 +3421,28 @@
  (libraries base stdio unix test_utils arrayjit.verdict)
  (action
   (run %{test} %{ocamlc} %{lib:arrayjit.context:context.cmi})))
+
+; gh-ocannl-1506: Shape.t is a private record behind the closed-shape guard's setters. Real ocamlc
+; programs against the built interface: reads compile, every write and construction is rejected.
+
+(test
+ ; ocannl-backend: none -- invokes ocamlc on snippets against the built Shape interface; it executes no backend.
+ (name shape_private_compile_control)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  %{lib:neural_nets_lib.tensor:ocannl_tensor.cmi}
+  %{lib:neural_nets_lib.tensor:ocannl_tensor__Row.cmi}
+  %{lib:neural_nets_lib.tensor:ocannl_tensor__Shape.cmi}
+  %{lib:base:base.cmi})
+ (modules shape_private_compile_control)
+ (libraries base stdio unix arrayjit.verdict)
+ (action
+  (run
+   %{test}
+   %{ocamlc}
+   %{lib:neural_nets_lib.tensor:ocannl_tensor__Shape.cmi}
+   %{lib:base:base.cmi})))
 
 ; How both consistency scanners read a source file, exercised on hostile input rather than only
 ; on whatever the library sources happen to contain today.
@@ -8701,6 +8729,76 @@
  (package neural_nets_lib)
  (action
   (diff operand_key_ratchet.expected operand_key_ratchet.actual)))
+
+; gh-ocannl-1506: every write to a module-level mutable binding of tensor/row.ml and tensor/shape.ml
+; advances Row.mutation_serial, or is classified in place by a [@@mutation_serial.*] attribute. The
+; reader states its closed lists in test/support/mutation_serial_scan.ml. The corpus is the two
+; inference-session modules and their interfaces, named as dependencies: a policy, not a census.
+
+(executable
+ (name mutation_serial_scan)
+ (modules mutation_serial_scan)
+ (libraries base stdio test_utils arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- parses two library sources without running a backend.
+ (target mutation_serial_scan.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  ../../tensor/row.ml
+  ../../tensor/row.mli
+  ../../tensor/shape.ml
+  ../../tensor/shape.mli)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:mutation_serial_scan.exe} %{workspace_root}))))
+
+(rule
+ (alias runtest-mutation_serial_scan)
+ (package neural_nets_lib)
+ (action
+  (diff mutation_serial_scan.expected mutation_serial_scan.actual)))
+
+; The shipping scanner on a committed tree with a planted unaccounted table: it must refuse, and its
+; golden is the refusal, so a scanner that stopped reading the corpus cannot pass.
+
+(rule
+ ; ocannl-backend: none -- parses a committed fixture tree without running a backend.
+ (target mutation_serial_scan_control.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (source_tree mutation_serial_scan_fixture))
+ (action
+  (with-stdout-to
+   %{target}
+   (ignore-stderr
+    (with-accepted-exit-codes
+     1
+     (run
+      %{dep:mutation_serial_scan.exe}
+      --fixture
+      mutation_serial_scan_fixture))))))
+
+(rule
+ (alias runtest-mutation_serial_scan_control)
+ (package neural_nets_lib)
+ (action
+  (diff
+   mutation_serial_scan_control.expected
+   mutation_serial_scan_control.actual)))
+
+(test
+ ; ocannl-backend: none -- parses synthetic OCaml sources through ppxlib and links no backend.
+ (name mutation_serial_scan_cases)
+ (package neural_nets_lib)
+ (modules mutation_serial_scan_cases)
+ (libraries base stdio test_utils arrayjit.verdict)
+ (deps ocannl_config))
 
 ; gh-ocannl-1309: an executed claim about a tensorized routine whose item judges no mma census --
 ; parity alone also passes for a Tile_mma that declined to the scalar fallback (gh-ocannl-1283).
