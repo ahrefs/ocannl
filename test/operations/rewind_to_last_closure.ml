@@ -390,6 +390,84 @@ let retained_handles () =
     | Ok () -> false);
   Tensor.rewind_to_last_closure ()
 
+(* gh-ocannl-1505: every [Context] entry point that forces a node's dims runs the stale check first.
+   The discarded tensor here leaves its dims to the closure (an inferred-shape draw), so forcing
+   them after the rewind fails as a shape error that names neither the node nor the rewind. *)
+let context_entry_points () =
+  Tensor.rewind_to_last_closure ();
+  let ctx = Context.auto () in
+  let live = leaf "rw_live" [| 1.; 2. |] in
+  let ctx = Train.forward_once ctx live in
+  let open_draw = TDSL.uniform () () in
+  let%cd open_code = live =: open_draw in
+  Tensor.rewind_to_last_closure ~reason:"rw: discarding an open draw" ();
+  let tn = open_draw.Tensor.value in
+  let stale = [ discarded; "rw: discarding an open draw"; Ir.Tnode.debug_name tn ] in
+  p "the discarded draw's dims were never forced" (not (Lazy.is_val tn.Ir.Tnode.dims));
+  p "Context.set_values on a discarded node is refused, naming the rewind"
+    (refused_with (fun () -> Context.set_values ctx tn [| 1. |]) ~substrings:stale);
+  p "Context.copy of a discarded node is refused, naming the rewind"
+    (refused_with (fun () -> Context.copy ~src:ctx ~dst:ctx tn) ~substrings:stale);
+  (* Any of the program's discarded nodes may be the one named: the draw embeds its own. *)
+  p "Context.decision_surface over a discarded program is refused, naming the rewind"
+    (refused_with
+       (fun () -> Context.decision_surface ctx open_code Ir.Indexing.Empty)
+       ~substrings:[ discarded; "rw: discarding an open draw" ]);
+  p "no refusal computed the discarded node's dims" (not (Lazy.is_val tn.dims));
+  (* The analyze-only lowering takes the session gate like a compile: a closed program, lowerable
+     before the failure, is refused while the session is tainted. *)
+  let lower () =
+    ignore
+      (Context.lowered_for_decisions ~name:"rw_decisions" ctx live.Tensor.forward Ir.Indexing.Empty
+        : Ir.Low_level.optimized)
+  in
+  p "Context.lowered_for_decisions lowers a closed program" (Result.is_ok (outcome lower));
+  let bad = outcome (fun () -> TDSL.O.( + ) live (leaf "rw_bad3" [| 1.; 2.; 3. |])) in
+  let msg = match bad with Error msg -> msg | Ok () -> "" in
+  p "tainted: Context.lowered_for_decisions over the closed program is refused, naming the failure"
+    (Result.is_error bad && refused_with lower ~substrings:[ tainted; msg ]);
+  Tensor.rewind_to_last_closure ()
+
+(* gh-ocannl-1505: a rewind discards exactly the nodes the frontend allocated since the closure. A
+   node created in the open window by anyone else -- here a hand-made one, as an arrayjit client or
+   [Persistence.load] makes them -- in the session namespace with an id inside the window's id range
+   is not open work: an id/uid-range record of the window refused it. *)
+let exact_allocated_nodes () =
+  Tensor.rewind_to_last_closure ();
+  let ctx = Context.auto () in
+  let open_t = leaf "rw_open" [| 1.; 2. |] in
+  let%op open_u = open_t *. 2. in
+  let hand_made =
+    Ir.Tnode.create (Ir.Tnode.Default Ir.Ops.single) ~id:open_t.Tensor.value.Ir.Tnode.id
+      ~label:[ "rw_hand_made" ]
+      ~unpadded_dims:(lazy [| 2 |])
+      ~padding:(lazy None)
+      ()
+  in
+  p "the hand-made node shares an open tensor's id and namespace"
+    (hand_made.Ir.Tnode.id = open_t.value.id
+    && String.equal hand_made.namespace open_t.value.namespace);
+  Tensor.rewind_to_last_closure ~reason:"rw: discarding beside a hand-made node" ();
+  p "the open tensors' nodes are discarded"
+    (refused_with
+       (fun () -> Context.get_values ctx open_u.Tensor.value)
+       ~substrings:[ discarded; "rw: discarding beside a hand-made node" ]
+    && refused_with (fun () -> Context.get_values ctx open_t.Tensor.value) ~substrings:[ discarded ]
+    );
+  let read_back = ref [||] in
+  let written =
+    outcome (fun () ->
+        let ctx = Context.set_values ctx hand_made [| 0.5; -2. |] in
+        read_back := Context.get_values ctx hand_made)
+  in
+  p "the hand-made node created in the window is not: it is written through the context"
+    (match written with
+    | Ok () -> true
+    | Error msg ->
+        Stdio.eprintf "(not part of the golden) hand-made node refused: %s\n%!" msg;
+        false);
+  p_all2 "and its values read back" !read_back [| 0.5; -2. |] ~f:Float.equal
+
 let () =
   match Sys.get_argv () with
   | [| _; "fresh" |] -> fresh_leg ()
@@ -397,4 +475,6 @@ let () =
       scenario ();
       timing ();
       symbol_roles ();
-      retained_handles ()
+      retained_handles ();
+      context_entry_points ();
+      exact_allocated_nodes ()

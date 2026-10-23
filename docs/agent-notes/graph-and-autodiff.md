@@ -43,7 +43,12 @@ files.
   roots' handout markers — a `Taken` marker does not mean "handed to a caller": `%cd` embedding
   calls `take_forward_code` too (gh-ocannl-1301). External handouts of closed work
   (`consume_*_code`, `discard_backprop_code`) are recorded into the checkpoint as they happen, and
-  `with_unchanged_roots` restores the checkpoint with the maps. A new write a failed construction
+  `with_unchanged_roots` restores the checkpoint with the maps. A rewind discards exactly the nodes
+  the frontend allocated since the closure, by uid (gh-ocannl-1505): a new `Tn.create` site in
+  `tensor.ml` must call `note_open_node`, or its node outlives the rewind as a live handle (an id or
+  uid range would refuse nodes other code created in the window). A new `Context` entry point over a
+  node runs `check_node_valid` (or, over a program, `frontend_gate`) before it forces anything: a
+  discarded node's dims otherwise fail as an unrelated shape error. A new write a failed construction
   can leave behind must call `Row.note_mutation`, or a failure after it will not taint. An operation that knows its accumulation up-front (`Tensor.raw_accum`) creates the step
   directly.
 - Per-(result, reduced-position) facts in `%cd` grad code belong in a product-space intermediate

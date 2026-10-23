@@ -251,7 +251,10 @@ val lowered_for_decisions :
     untouched). Sibling calls for the same routine share the underlying analysis via the analysis
     cache, so each costs only the specialization replay. Used by [Autotune.placement_surface] to
     read the all-materialized specialization of the decision surface, the form
-    {!Ir.Cost_model.completion_floor} bounds partial placement vectors on. *)
+    {!Ir.Cost_model.completion_floor} bounds partial placement vectors on. It passes the compile's
+    frontend gate first, as does {!decision_surface}: a tainted session or a program over a node the
+    frontend discarded is refused before lowering forces any dims (gh-ocannl-1301, gh-ocannl-1505).
+*)
 
 val decision_surface :
   ?name:string ->
@@ -461,7 +464,9 @@ val to_host : t -> Ir.Tnode.t -> Ir.Ndarray.t
     lineage placed the node [Local] -- routine-scoped scratch, whose buffer no routine writes (see
     the on-demand host access section above). Refuses a {!release}d context with
     {!Ir.Utils.User_error}, as do {!from_host}, {!copy} (either side) and the accessors built on
-    them. *)
+    them; and, before forcing anything of the node, a node the frontend discarded (a
+    [Tensor.rewind_to_last_closure] stale handle; gh-ocannl-1301, gh-ocannl-1505), as do the same
+    entry points. *)
 
 val from_host : t -> Ir.Tnode.t -> Ir.Ndarray.t -> t
 (** Uploads the host buffer into the node's device buffer (allocating it if needed) and returns a

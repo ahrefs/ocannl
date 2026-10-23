@@ -313,10 +313,11 @@ val rewind_to_last_closure : ?reason:string -> unit -> unit
     - the forward and backprop root maps are restored to their state at the closure, with the
       handout markers of the restored roots reset; code handed out to callers since then stays
       handed out;
-    - the tensors allocated since the closure are discarded: using one as an operand, handing out or
-      compiling its code, printing it or transferring its node raises [Session_error] naming the
-      rewind's provenance ("discarded by the rewind after ..."), as do their update steps'
-      projections;
+    - the tensors allocated since the closure are discarded (exactly the nodes the frontend
+      allocated, by uid: a node created in that window outside the frontend is not): using one as an
+      operand, handing out or compiling its code, printing it or transferring its node raises
+      [Session_error] naming the rewind's provenance ("discarded by the rewind after ..."), as do
+      their update steps' projections;
     - variable references the discarded work bound or set are refused by [Shape.set_dim] and the
       other reference setters, and by any later einsum they are passed to;
     - the cached random seed is restored to the closure's.
