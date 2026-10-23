@@ -338,26 +338,38 @@ let sanctioned = [ "seeded_plan" ]
    such as [seeded_default] -- is a reference like any other, and reaches the accessor
    (gh-ocannl-1491).
 
-   The fallback is read off the code, not named, by these forms and no others:
+   The fallback is read off the code, not named, by these forms and no others. Every name a form
+   reads resolves through [Test_utils.Lexical_scope] at the point it is spelled; a local [open] or
+   [include] of a module the scan does not read hides every name beneath it, and a hidden name
+   satisfies no form (review round 4). The file's top-level opens are libraries, taken to bind
+   nothing the forms read.
 
-   - THE FLAG is a parameter labelled [~search] or [?search] (a claim below holds that [tune] takes
-   [?search]), or a [let] binding the name [search] whose right-hand side names the flag ([let
-   search = Option.value_or_thunk search ~default:...]); names resolve through
-   [Test_utils.Lexical_scope], so any other binding named [search] is not the flag (review round 3).
-   - A SEARCH-LESS BRANCH, in the top-level definitions [tune] reaches (the seeded plan's cut
+   THE FLAG is a parameter labelled [~search] or [?search] of a top-level function -- not of a
+   nested helper, whose flag is whatever its caller passes (review round 4) -- or a [let] binding
+   the name [search] whose right-hand side names the flag ([let search = Option.value_or_thunk
+   search ~default:...]). Any other binding named [search] is not the flag (review round 3). A claim
+   below holds that [tune] takes [?search].
+
+   A SEARCH-LESS BRANCH, in the top-level definitions [tune] reaches (the seeded plan's cut
    applied), is the [then] branch of an [if] whose [&&] chain has [not <the flag>] as a conjunct, or
-   the right-hand side of a [match], [function] or [try] case whose guard has it so. Nothing else:
-   [if search then ... else e], a [||], the flag passed on all leave [e] an ordinary branch. - A
-   branch CALLS a binding when it applies the binding's bare name, resolved in scope, as the head of
-   an application -- a reference passed on or ignored is not a call (review round 2) -- outside any
-   function the branch itself let-binds, which runs only if called (review round 3). A call inside
-   an anonymous function passed as an argument counts: that is the thunk [finish] runs. - THE
-   SEARCH-LESS FALLBACK is every local function binding -- a [let] nested in another binding (never
-   a top-level or module definition, which other paths share) whose right-hand side is a [fun] or
-   [function] under any type constraint, so that what it calls runs only when it is called (review
-   round 1) -- that EVERY search-less branch calls. - A CALL of [seeded_transform] by its bare name
-   inside a fallback's right-hand side is dropped from the reach graph. Every other spelling of the
-   route counts, a non-call inside the fallback included (review round 3).
+   the right-hand side of a [match], [function] or [try] case whose guard has it so -- [not] and
+   [&&] unbound by the source, so the library's (review round 4). Nothing else: [if search then ...
+   else e], a [||], the flag passed on all leave [e] an ordinary branch.
+
+   A branch CALLS a binding when it applies the binding's bare name as the head of an application --
+   a reference passed on or ignored is not a call (review round 2) -- outside any function the
+   branch itself let-binds, which runs only if called (review round 3). A call inside an anonymous
+   function passed as an argument counts: that is the thunk [finish] runs.
+
+   THE SEARCH-LESS FALLBACK is every local function binding that EVERY search-less branch calls: a
+   [let] nested in another binding (never a top-level or module definition, which other paths
+   share), whose right-hand side is a [fun] or [function] under any type constraint, so that what it
+   calls runs only when it is called (review round 1).
+
+   A CALL of [seeded_transform] by its bare name inside a fallback's right-hand side, resolving to
+   the top-level route rather than a local of that name (review round 4), is dropped from the reach
+   graph. Every other spelling of the route counts, a non-call inside the fallback included (review
+   round 3).
 
    The boundary: the scan reads syntax and models no evaluation. It pins WHERE the route is called,
    not where the fallback is called from or where its result flows: the fallback may also be called
@@ -371,30 +383,45 @@ let sanctioned = [ "seeded_plan" ]
 let search_flag = "search"
 let seeded_route = "seeded_transform"
 
-let rec conjuncts (e : expression) =
+let rec conjuncts ~is_free (e : expression) =
   match e.pexp_desc with
   | Pexp_apply
-      ({ pexp_desc = Pexp_ident { txt = Lident "&&"; _ }; _ }, [ (Nolabel, a); (Nolabel, b) ]) ->
-      conjuncts a @ conjuncts b
+      ({ pexp_desc = Pexp_ident { txt = Lident "&&"; _ }; _ }, [ (Nolabel, a); (Nolabel, b) ])
+    when is_free "&&" ->
+      conjuncts ~is_free a @ conjuncts ~is_free b
   | _ -> [ e ]
 
 (* Whether a condition holds only with the search off: [not search] is one of its conjuncts, the
    name resolving ([is_flag]) to the flag itself (review round 3: a decoy binding named [search] is
    not the flag). *)
-let searchless_condition ~is_flag e =
-  List.exists (conjuncts e) ~f:(fun (c : expression) ->
+let searchless_condition ~is_free ~is_flag e =
+  List.exists (conjuncts ~is_free e) ~f:(fun (c : expression) ->
       match c.pexp_desc with
       | Pexp_apply
           ( { pexp_desc = Pexp_ident { txt = Lident "not"; _ }; _ },
             [ (Nolabel, { pexp_desc = Pexp_ident { txt = Lident flag; _ }; _ }) ] ) ->
-          String.equal flag search_flag && is_flag flag
+          is_free "not" && String.equal flag search_flag && is_flag flag
       | _ -> false)
 
 (* What a bare name resolves to: the value binding that binds it (by its start offset; [None] for a
    parameter, a case's pattern), and whether it is the search flag -- a parameter labelled [~search]
-   or [?search], or a [let] whose right-hand side names the flag by its own name ([let search =
-   Option.value_or_thunk search ~default:...]). *)
+   or [?search] of a top-level function, or a [let] whose right-hand side names the flag by its own
+   name ([let search = Option.value_or_thunk search ~default:...]). *)
 type binding = { at : int option; flag : bool }
+
+(* How a bare name resolves: to a binding of the source, through a local [open] or [include] of a
+   module the scan does not read (whose exports may bind it: review round 4), or to nothing the
+   source binds -- the library's, through the file's top-level opens. *)
+type resolution = Resolved of binding | Opaque | Free
+
+(* The frame a local [open] or [include] pushes: no identifier can spell it. *)
+let opaque_frame = "<opaque>"
+
+let resolve (env : (binding, unit) Test_utils.Lexical_scope.env) name =
+  List.find_map env.frames ~f:(fun frame ->
+      if Map.mem frame opaque_frame then Some Opaque
+      else Option.map (Map.find frame name) ~f:(fun b -> Resolved b))
+  |> Option.value ~default:Free
 
 type fallback_walk = {
   branches : (int * Set.M(Int).t) list;
@@ -403,9 +430,10 @@ type fallback_walk = {
           2), nor is a call inside a function the branch itself let-binds, which runs only if that
           function is called (review round 3). A call inside an anonymous function passed as an
           argument does count: that is the thunk [finish] runs. *)
-  sites : (int * int list) list;
-      (** Each call of the route by a bare name, with the bindings enclosing it, innermost first. A
-          spelling that is not a call is not a site (review round 3), and so stays a reference. *)
+  sites : (int * int list * int option) list;
+      (** Each call of the route by a bare name, with the bindings enclosing it, innermost first,
+          and the binding the name resolves to. A spelling that is not a call is not a site (review
+          round 3), and so stays a reference. *)
   locals : Set.M(Int).t;
       (** The function bindings nested in another value binding: a [fun] or [function] right-hand
           side, under any type constraint. *)
@@ -425,17 +453,32 @@ let walk_fallback (source : string) : fallback_walk =
   let structure = Ppxlib.Parse.implementation (Lexing.from_string source) in
   let branches = ref [] and sites = ref [] and locals = ref (Set.empty (module Int)) in
   (* Each open branch's calls, and how many function bindings of its own body enclose the walk. *)
-  let enclosing = ref [] and open_branches = ref [] in
-  let lookup env name = Test_utils.Lexical_scope.lookup env name in
-  let is_flag env name = match lookup env name with Some { flag; _ } -> flag | None -> false in
+  let enclosing = ref [] and open_branches = ref [] and fun_depth = ref 0 in
+  let is_flag env name =
+    match resolve env name with Resolved { flag; _ } -> flag | Opaque | Free -> false
+  in
+  let is_free env name =
+    match resolve env name with Free -> true | Resolved _ | Opaque -> false
+  in
   let iter =
     object (self)
       inherit [binding, unit] Test_utils.Lexical_scope.scoped as super
       method local = { at = None; flag = false }
       method module_path _ _ = None
 
+      (* A local [open] or [include] of a module the scan does not read hides every name beneath it
+         (review round 4); the file's top-level opens are libraries, taken to bind nothing the forms
+         read. *)
+      method! opened ~top ~include_:_ env _ =
+        if top then env
+        else
+          Test_utils.Lexical_scope.push_frame env
+            (Map.singleton (module String) opaque_frame self#local)
+
+      (* Only a top-level function's own parameter is the flag: a nested helper's [~search] is
+         whatever its caller passes (review round 4). *)
       method! bind_parameter env label pattern =
-        if names_flag_label label then
+        if names_flag_label label && !fun_depth = 1 && List.length !enclosing = 1 then
           Test_utils.Lexical_scope.bind_values env
             (Test_utils.Lexical_scope.pattern_vars [ pattern ])
             { at = None; flag = true }
@@ -484,26 +527,34 @@ let walk_fallback (source : string) : fallback_walk =
 
       method! expression env e =
         match e.pexp_desc with
-        | Pexp_ifthenelse (cond, then_, else_) when searchless_condition ~is_flag:(is_flag env) cond
-          ->
+        | Pexp_function _ ->
+            Int.incr fun_depth;
+            let e = super#expression env e in
+            Int.decr fun_depth;
+            e
+        | Pexp_ifthenelse (cond, then_, else_)
+          when searchless_condition ~is_free:(is_free env) ~is_flag:(is_flag env) cond ->
             ignore (self#expression env cond : expression);
             self#branch then_ (self#expression env);
             Option.iter else_ ~f:(fun e -> ignore (self#expression env e : expression));
             e
         | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident name; loc }; _ }, _) ->
-            if String.equal name seeded_route then sites := (offset loc, !enclosing) :: !sites;
-            (match lookup env name with
-            | Some { at = Some at; _ } ->
+            let resolved =
+              match resolve env name with Resolved { at; _ } -> at | Opaque | Free -> None
+            in
+            if String.equal name seeded_route then
+              sites := (offset loc, !enclosing, resolved) :: !sites;
+            Option.iter resolved ~f:(fun at ->
                 List.iter !open_branches ~f:(fun (calls, muted) ->
-                    if !muted = 0 then calls := Set.add !calls at)
-            | Some { at = None; _ } | None -> ());
+                    if !muted = 0 then calls := Set.add !calls at));
             super#expression env e
         | _ -> super#expression env e
 
       method! case env c =
         let inner = self#bind_patterns env [ c.pc_lhs ] in
         match c.pc_guard with
-        | Some guard when searchless_condition ~is_flag:(is_flag inner) guard ->
+        | Some guard
+          when searchless_condition ~is_free:(is_free inner) ~is_flag:(is_flag inner) guard ->
             ignore (self#pattern env c.pc_lhs : pattern);
             ignore (self#expression inner guard : expression);
             self#branch c.pc_rhs (self#expression inner);
@@ -561,8 +612,17 @@ let searchless_fallback ~root (source : string) : fallback =
     searchless_branches = List.length branches;
     fallbacks = Set.to_list fallbacks;
     sanctioned_sites =
-      List.filter_map walk.sites ~f:(fun (at, enclosing) ->
-          Option.some_if (List.exists enclosing ~f:(Set.mem fallbacks)) at);
+      (* A call resolving to the top-level route, not to a local of that name (review round 4). *)
+      (let route =
+         List.find_map spans ~f:(fun (name, start, _) ->
+             Option.some_if (String.equal name seeded_route) start)
+       in
+       List.filter_map walk.sites ~f:(fun (at, enclosing, resolved) ->
+           Option.some_if
+             (Option.is_some route
+             && Option.equal Int.equal resolved route
+             && List.exists enclosing ~f:(Set.mem fallbacks))
+             at));
   }
 
 (* The reach of [root] past the seeded plan and its search-less fallback's spellings of the
@@ -685,6 +745,29 @@ let () =
         "let tune ?(search = true) x =\n\
         \  let fallback () = seeded_transform () in\n\
         \  if not search then (let unused () = fallback () in ignore unused; x) else x",
+        flagged );
+      ( "a shadowed negation",
+        "let tune ?(search = true) x =\n\
+        \  let not b = b in\n\
+        \  let fallback () = seeded_transform () in\n\
+        \  if not search then fallback () else x",
+        flagged );
+      ( "a local of the route's name",
+        "let tune ?(search = true) x =\n\
+        \  let fallback () = let seeded_transform () = x in seeded_transform () in\n\
+        \  if not search then fallback () else x",
+        flagged );
+      ( "a nested helper's flag",
+        "let tune ?(search = true) x =\n\
+        \  let fallback () = seeded_transform () in\n\
+        \  let helper ~search = if not search then fallback () else x in\n\
+        \  if search then helper ~search:false else x",
+        flagged );
+      ( "a call under a local open",
+        "module M = struct let fallback () = 0 end\n\
+         let tune ?(search = true) x =\n\
+        \  let fallback () = seeded_transform () in\n\
+        \  if not search then M.(fallback ()) else x",
         flagged );
       ( "a top-level fallback",
         "let fallback () = seeded_transform ()\n\
