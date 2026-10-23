@@ -15,11 +15,14 @@
    Asserted: under room for one and a half footprints, a cold search declines nothing for memory
    (its incumbents are not resident beside a challenger) and a warm search replays its winner (the
    replay is not co-resident with the base compile); under room for half a footprint, the search is
-   refused before any candidate is compiled -- or, where the baseline is refused before codegen
-   (gh-ocannl-1340), at the first candidate's link -- with a typed [Pre_search_failure]; and,
-   through [Train.tune_placements], arm A's search leaves nothing resident when it reports, so both
-   arms search in room for one and a half footprints, and the recorded decision replays in one
-   cached search (gh-ocannl-1408). *)
+   refused before any candidate is compiled, with a typed [Pre_search_failure] -- where the baseline
+   is refused before codegen (gh-ocannl-1340), by the link-free probe of its footprint
+   (gh-ocannl-1493), which allocates exactly what the base link would; under room for the
+   unscheduled footprint but not the default compile's, with the first candidate to reach link
+   refused, the search runs, a refused candidate being only its own decline (gh-ocannl-1493: the
+   first candidate to reach link used to refuse the step); and, through [Train.tune_placements], arm
+   A's search leaves nothing resident when it reports, so both arms search in room for one and a
+   half footprints, and the recorded decision replays in one cached search (gh-ocannl-1408). *)
 
 open Base
 open Ocannl
@@ -177,11 +180,13 @@ let () =
 
   (* --- 3. Room for half the unscheduled footprint: the base compile is refused, and with it the
      search, before any candidate is compiled; where the baseline is refused before codegen, the
-     first candidate to link is refused in its place, and with it the search. --- *)
+     probe of its footprint is refused in its place (gh-ocannl-1493), before any candidate too.
+     --- *)
   let cache_dir3 = "autotune_cache_device_memory_refused" in
   clean_cache cache_dir3;
   let report3 = ref None in
   let attempts = ref [] in
+  let start3 = live_working () in
   let result, refused =
     Autotune.Seam.with_value Autotune.on_candidate_attempt
       (fun label -> attempts := label :: !attempts)
@@ -193,22 +198,73 @@ let () =
   p "a routine that does not fit is refused, not searched" (Result.is_error result);
   p "the refusal is a typed pre-search failure at link, with the device-memory decline"
     (refused_for_memory r3);
-  (* gh-ocannl-1340: a baseline that binds no hardware dimension (every GPU backend's) is refused
-     before codegen and links nothing, so the first candidate's link answers in its place -- read
-     off the report's own [Not_dispatched_key "baseline"] refusal, not a backend list. The census is
-     never empty here: it holds the device-memory decline claimed above. *)
+  (* gh-ocannl-1340: a baseline that binds no hardware dimension (every GPU backend's -- the
+     predicate [Autotune] derives [is_gpu] from) is refused before codegen and links nothing, so the
+     link-free probe answers in its place (gh-ocannl-1493), and the census says the baseline was
+     refused there. The census is never empty here: it holds the device-memory decline claimed
+     above. *)
   let refused_baseline d =
     SO.equal_rejection_key d.Autotune.key (SO.Not_dispatched_key "baseline")
   in
-  let attempted =
-    "only the base compile was attempted, or, with the baseline refused before codegen, it and the \
-     first candidate"
+  let gpu = Ir.Schedule.backend_is_gpu (Context.backend_name ctx_ref) in
+  p "only the base compile was attempted"
+    (List.equal String.equal (List.rev !attempts) [ "baseline" ]);
+  if gpu then
+    p_exists "the census names the baseline refused before codegen exactly on a GPU backend"
+      r3.Autotune.declines ~f:refused_baseline
+  else
+    p_none "the census names the baseline refused before codegen exactly on a GPU backend"
+      r3.Autotune.declines ~f:refused_baseline;
+  p "the device refused exactly one allocation, and nothing stayed live"
+    (refused = 1 && live_working () <= start3);
+
+  (* --- 3b. gh-ocannl-1493: room for the unscheduled footprint and half the default compile's
+     extra, and the FIRST candidate to reach link refused outright (as a candidate larger than the
+     room is: on a GPU backend the default compile's fission promotes locals to device buffers,
+     above). The base fits, so the search runs: that refusal, and any candidate's that needs more
+     than the room, is the candidate's own decline, not the step's refusal -- the first candidate to
+     reach link used to answer for the base where the baseline is refused before codegen. --- *)
+  let cache_dir3b = "autotune_cache_device_memory_room_for_base" in
+  clean_cache cache_dir3b;
+  let report3b = ref None in
+  let capacity = live_working () + fp_base + ((fp - fp_base) / 2) in
+  let candidate_attempted = ref false and first_link_refused = ref 0 and refused = ref 0 in
+  let refuse point =
+    let simulated detail requested =
+      Int.incr refused;
+      raise (SO.Device_memory_exhausted { backend = "simulated"; requested; free = Some 0; detail })
+    in
+    match point with
+    | FI.Delta_pool_allocated when !candidate_attempted && !first_link_refused = 0 ->
+        Int.incr first_link_refused;
+        simulated "gh-ocannl-1493 simulated refusal of the first candidate's link" 1
+    | FI.Delta_pool_allocated | FI.Transfer_pool_allocated ->
+        let live = live_working () in
+        if live > capacity then simulated "gh-ocannl-1493 simulated capacity" (live - capacity)
+    | _ -> ()
   in
-  (match List.rev !attempts with
-  | [ "baseline" ] -> p_none attempted r3.Autotune.declines ~f:refused_baseline
-  | [ "baseline"; _first ] -> p_exists attempted r3.Autotune.declines ~f:refused_baseline
-  | _ -> p attempted false);
-  p "the device refused exactly one allocation" (refused = 1);
+  let result =
+    Autotune.Seam.with_value Autotune.on_candidate_attempt
+      (fun label -> if not (String.equal label "baseline") then candidate_attempted := true)
+      (fun () ->
+        Result.try_with (fun () ->
+            FI.with_callback refuse ~f:(fun () ->
+                tune ~cache_dir:cache_dir3b ~report:(fun r -> report3b := Some r))))
+  in
+  Stdio.eprintf
+    "room for the base (not part of the golden): outcome %s, timed %d, declined for memory %d, %d \
+     refused\n\
+     %!"
+    (Option.value_map !report3b ~default:"-" ~f:(fun r -> Autotune.outcome_name r.Autotune.outcome))
+    (Option.value_map !report3b ~default:0 ~f:(fun r -> r.Autotune.candidates_timed))
+    (Option.value_map !report3b ~default:0 ~f:memory_declines)
+    !refused;
+  p "the first candidate to reach link was refused" (!first_link_refused = 1);
+  p "a step whose unscheduled form fits is searched, not refused"
+    (Result.is_ok result
+    && Option.exists !report3b ~f:(fun r -> searched r && r.Autotune.candidates_timed >= 1));
+  Result.iter result
+    ~f:(check_values "the step searched in room for its base computes the right values");
 
   (* --- 4. Through the placement A/B (gh-ocannl-1408): arm A's searched routine is not resident
      while arm B searches. Arm A's search hands back a deferred compile and releases everything it

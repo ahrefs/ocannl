@@ -3234,7 +3234,13 @@ val tune :
     A device that refuses the base compile's allocation ({!Ir.Schedule_outcome.Device_memory}) has
     refused one candidate's working set, which every candidate, a replay and the untuned fallback
     need about as much of: the call reports {!Pre_search_failure} at [Backend_link] with that
-    decline in its census, and raises, instead of declining every candidate in turn.
+    decline in its census, and raises, instead of declining every candidate in turn. Where the
+    baseline is refused before codegen (every GPU backend, gh-ocannl-1340) the device is asked
+    without a link: {!Context.probe_link_delta} allocates and frees exactly the pools linking the
+    base lowering would (gh-ocannl-1493), before the cache is consulted, and its refusal is the same
+    [Pre_search_failure], with the baseline's [Not_dispatched] refusal beside the decline. A device
+    that admits the base delta answers nothing about a larger candidate, which is declined on its
+    own at link.
 
     The bound is on working pools, and that qualifier is load-bearing: {!Context.release} cannot
     free per-device constants, and a hoisted [Stage] candidate mints a fresh packed constant per

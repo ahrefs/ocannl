@@ -110,9 +110,18 @@ files.
   scheduling only adds device buffers to the base lowering (new tiles, fission's local-to-device
   promotions), so no candidate, replay or fallback would fit either. On a GPU backend the base is
   refused before codegen (it binds no hardware dimension, gh-ocannl-1340) and links nothing, so
-  there the FIRST search candidate to reach link is the probe, its refusal the same typed
-  `Pre_search_failure`; a warm GPU call therefore tries its replay first. Size such a probe on the
-  UNSCHEDULED form: on a GPU the default compile needs more (8192 against 4096 B on the test's
+  there `Context.probe_link_delta` asks the device the base link's question without the link
+  (gh-ocannl-1493): `Backends.link_delta` runs the post-transform layout steps of `compile` and the
+  very plan `allocate_delta` runs (`plan_delta`), allocates exactly those pools through the same
+  seam (`allocate_group_pools`: census, `Delta_pool_allocated`, the gh-ocannl-1424 detail) and frees
+  them on every path. A trial allocation rather than a comparison with
+  `Context.get_free_and_total_memory`: only the allocator's verdict is exact on a unified-memory
+  part, and Metal has no free reading at all. Its refusal is the same typed `Pre_search_failure`,
+  before the cache; until then the first search candidate to reach link stood in, and a
+  fission-promoted first candidate could refuse a step a smaller one would fit.
+  `Context.link_delta` is the allocation-free half (the plan's bytes), and
+  `test/operations/link_delta_parity` pins it to the census delta of a real compile. Size a
+  capacity meant to refuse the base on the UNSCHEDULED form: on a GPU the default compile needs more (8192 against 4096 B on the test's
   workload under CUDA), which made a half-footprint test capacity fit the baseline there. The
   same holds for a search WINNER: the unscheduled footprint bounds every shipped routine from
   below, but the default compile's does not, since a winner such as an epilogue-fused sketch need
