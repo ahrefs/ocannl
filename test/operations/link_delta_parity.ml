@@ -32,6 +32,7 @@ let delta_between (a : AC.t) (b : AC.t) : Context.link_delta =
     ld_constant_bytes = b.live_constant_bytes - a.live_constant_bytes;
     ld_pools =
       b.live_working_pools + b.live_constant_pools - a.live_working_pools - a.live_constant_pools;
+    ld_liveness_planned = false (* Not the census's to say: compared apart. *);
   }
 
 let show (d : Context.link_delta) =
@@ -121,7 +122,9 @@ let compile_and_estimate ?(probe = false) ~what ~form ctx comp =
   let estimate = Option.value_exn !estimate in
   Stdio.eprintf "%s (not part of the golden): estimated %s, linked %s\n%!" what (show estimate)
     (show measured);
-  p (what ^ ": the estimate is the link's allocation") (Context.equal_link_delta estimate measured);
+  p
+    (what ^ ": the estimate is the link's allocation")
+    (Context.equal_link_delta { estimate with ld_liveness_planned = false } measured);
   (ctx', routine, estimate)
 
 let scenario ~aliasing =
@@ -187,6 +190,10 @@ let scenario ~aliasing =
         (form, d))
   in
   Context.release with_params;
+  (* The flag [Autotune.tune]'s probe abstains on: the training step has nodes the liveness planner
+     may overlap, in either form, exactly when the planner is on. *)
+  p_all (tag "training step: the plan says it is liveness-planned exactly under buffer_aliasing")
+    step_deltas ~f:(fun (_, (d : Context.link_delta)) -> Bool.equal d.ld_liveness_planned aliasing);
   List.Assoc.find_exn step_deltas ~equal:Poly.equal Default
 
 let () =

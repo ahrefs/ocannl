@@ -1407,6 +1407,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
         ld_working_bytes = Option.value_map plan.dp_working ~default:0 ~f:bytes;
         ld_constant_bytes = Option.value_map plan.dp_new_constants ~default:0 ~f:bytes;
         ld_pools = List.sum (module Int) groups ~f:(fun gl -> List.length gl.gl_pools);
+        ld_liveness_planned = Option.is_some alias_spans;
       }
     in
     (if probe then

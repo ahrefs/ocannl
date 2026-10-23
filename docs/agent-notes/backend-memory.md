@@ -118,7 +118,11 @@ files.
   `Context.get_free_and_total_memory`: only the allocator's verdict is exact on a unified-memory
   part, and Metal has no free reading at all. Its refusal is the same typed `Pre_search_failure`,
   before the cache; until then the first search candidate to reach link stood in, and a
-  fission-promoted first candidate could refuse a step a smaller one would fit.
+  fission-promoted first candidate could refuse a step a smaller one would fit. The probe abstains
+  under `buffer_aliasing` (`ld_liveness_planned`): "scheduling only adds device buffers" fails
+  there, since the GPU liveness planner's position is the segment, so the one-kernel base overlaps
+  nothing a fissioned candidate overlaps (954 KB against 791 KB for `link_delta_parity`'s training
+  step on Metal).
   `Context.link_delta` is the allocation-free half (the plan's bytes), and
   `test/operations/link_delta_parity` pins it to the census delta of a real compile. Size a
   capacity meant to refuse the base on the UNSCHEDULED form: on a GPU the default compile needs more (8192 against 4096 B on the test's

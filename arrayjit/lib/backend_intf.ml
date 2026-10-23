@@ -1404,6 +1404,11 @@ type link_delta = {
   ld_working_bytes : int;  (** Bytes of the context-owned working pools. *)
   ld_constant_bytes : int;  (** Bytes of the new per-device constant pools. *)
   ld_pools : int;  (** How many pools, working and constant. *)
+  ld_liveness_planned : bool;
+      (** Whether the liveness planner ([buffer_aliasing], gh-ocannl-489) found nodes it may
+          overlap. The delta then depends on the kernel sequence, not only on the node set: a
+          segment is the GPU planner's position, so one kernel overlaps nothing that a fissioned
+          schedule of the same lowering can. *)
 }
 [@@deriving sexp_of]
 (** gh-ocannl-1493: the device allocation linking a routine would make on a context — its delta, not

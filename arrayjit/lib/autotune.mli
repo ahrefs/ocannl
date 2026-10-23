@@ -3240,7 +3240,9 @@ val tune :
     base lowering would (gh-ocannl-1493), before the cache is consulted, and its refusal is the same
     [Pre_search_failure], with the baseline's [Not_dispatched] refusal beside the decline. A device
     that admits the base delta answers nothing about a larger candidate, which is declined on its
-    own at link.
+    own at link. Under the liveness planner (config [buffer_aliasing]) the probe abstains: the
+    serial base is one kernel, which on a GPU overlaps no buffers, while a fissioned candidate can,
+    so its delta bounds no candidate's from below ({!Context.link_delta}'s [ld_liveness_planned]).
 
     The bound is on working pools, and that qualifier is load-bearing: {!Context.release} cannot
     free per-device constants, and a hoisted [Stage] candidate mints a fresh packed constant per

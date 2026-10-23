@@ -7000,16 +7000,30 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
        baseline was refused before codegen. Same place, same refusal: after the lineage check (a
        refused timing lineage says nothing of the caller's routine) and before the cache, whose
        replay would be refused alike. A device that admits the base delta has answered nothing about
-       a larger candidate, which is that candidate's own decline at link. *)
+       a larger candidate, which is that candidate's own decline at link. Not under the liveness
+       planner, where the base delta is no lower bound (below). *)
     if Option.is_none lineage_refusal && !base_undispatched then (
       progress_stage "footprint_probe";
       let probe = "baseline footprint probe" in
       match
         Outcome.protect ~classify_backend:(Context.failure_classifier search_ctx)
           ~provenance:Outcome.Candidate ~phase:Outcome.Backend_link ~candidate:probe (fun () ->
-            Context.probe_link_delta ?name search_ctx base_opt [ base_opt ])
+            (* The base delta bounds every candidate's from below only while it does not depend on
+               the kernel sequence. Under the liveness planner it does: the serial base is one
+               kernel, one GPU planner position, so it overlaps nothing, while a fissioned candidate
+               of the same lowering can overlap what its segments separate (the materialized chains
+               of [buffer_aliasing]). There the probe has no answer, and the candidates are declined
+               one by one, as a base that never linked leaves them. *)
+            let planned = Context.link_delta ?name search_ctx base_opt [ base_opt ] in
+            if planned.ld_liveness_planned then None
+            else Some (Context.probe_link_delta ?name search_ctx base_opt [ base_opt ]))
       with
-      | Ok (d : Context.link_delta) ->
+      | Ok None ->
+          logf
+            "%s: no answer -- under the liveness planner (buffer_aliasing) the base lowering's \
+             delta depends on the kernel sequence, so it bounds no candidate's from below"
+            probe
+      | Ok (Some (d : Context.link_delta)) ->
           logf
             "%s: the base lowering's link delta fits: %d working + %d constant bytes in %d pool(s)"
             probe d.ld_working_bytes d.ld_constant_bytes d.ld_pools

@@ -1192,6 +1192,7 @@ type link_delta = Ir.Backend_intf.link_delta = {
   ld_working_bytes : int;
   ld_constant_bytes : int;
   ld_pools : int;
+  ld_liveness_planned : bool;
 }
 [@@deriving sexp_of, equal]
 
