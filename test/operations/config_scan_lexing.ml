@@ -523,6 +523,33 @@ let held = lazy (Alias.helper ())|ocaml},
       [],
       {ocaml|let held = lazy Utils.settings.large_models|ocaml},
       [ "big_models"; "large_models" ] );
+    ( "a recursive module's body",
+      [],
+      {ocaml|module rec M : sig
+  val held : string Lazy.t
+end = struct
+  let held = lazy (get ~arg_name:"rec_module" ~default:"")
+end|ocaml},
+      [ "rec_module" ] );
+    ( "an enclosing module included in a functor body",
+      [],
+      {ocaml|module Helpers = struct
+  let helper () = get ~arg_name:"enclosing_include" ~default:""
+end
+module Make (X : sig end) = struct
+  include Helpers
+  let held = lazy (helper ())
+end|ocaml},
+      [ "enclosing_include" ] );
+    ( "a helper defined in an extension's structure payload",
+      [],
+      {ocaml|let%debug_sexp helper () = get ~arg_name:"extension_payload" ~default:""
+let held = lazy (helper ())|ocaml},
+      [ "extension_payload" ] );
+    ( "a lazy in an extension's structure payload",
+      [],
+      {ocaml|let%debug_sexp held = lazy (get ~arg_name:"extension_lazy" ~default:"")|ocaml},
+      [ "extension_lazy" ] );
     ( "opaque plumbing is not followed",
       [ "lookup" ],
       {ocaml|let lookup ~arg_name = resolve ~arg_name ~bootstrap:(get ~arg_name:"plumbing" ~default:"")

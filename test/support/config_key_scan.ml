@@ -1202,6 +1202,24 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
         (* An [include struct … end] exports its values into the enclosing scope, so they are walked
            there (gh-ocannl-1320, Codex P2 round 6). An included functor application is not: what
            its values read depends on its argument, as for a functor's body. *)
+        (* An extension's structure payload ([let%debug_sexp f … = …], ppx_minidebug's) is the
+           code its expansion keeps, so its items are walked in place (round 3 of PR #1366). *)
+        | Pstr_extension ((_, PStr items), _) -> walk ~scope env items
+        (* A recursive module's body is walked as a nested structure's, like [module M = struct …
+           end] (round 3 of PR #1366); its name is no alias. *)
+        | Pstr_recmodule bindings ->
+            List.fold bindings ~init:env ~f:(fun env binding ->
+                match binding.pmb_name.txt with
+                | None -> env
+                | Some name -> (
+                    let module_expr = unwrap binding.pmb_expr in
+                    match module_expr.pmod_desc with
+                    | Pmod_structure inner -> walk ~scope:(scope @ [ name ]) env inner
+                    | Pmod_functor _ when functor_bodies -> (
+                        match functor_body module_expr with
+                        | Some inner -> walk ~scope:(scope @ [ name ]) env inner
+                        | None -> env)
+                    | _ -> env))
         | Pstr_include { pincl_mod; _ } -> (
             match (unwrap pincl_mod).pmod_desc with
             | Pmod_structure inner -> walk ~scope env inner
@@ -1212,7 +1230,19 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
                 match Option.map (flatten_module_path txt) ~f:expand with
                 | Some path ->
                     if List.is_empty scope then included := path :: !included;
-                    let prefix = dotted (scope @ path) ^ "." in
+                    (* The module named, resolved innermost scope first: inside [Make]'s body,
+                       [include Helpers] names an enclosing [Helpers] as surely as a sibling one
+                       (round 3 of PR #1366). *)
+                    let named depth = dotted (List.take scope depth @ path) ^ "." in
+                    let rec resolve_from depth =
+                      if depth <= 0 then named 0
+                      else if
+                        Map.existsi env ~f:(fun ~key ~data:_ ->
+                            String.is_prefix key ~prefix:(named depth))
+                      then named depth
+                      else resolve_from (depth - 1)
+                    in
+                    let prefix = resolve_from (List.length scope) in
                     Map.fold env ~init:env ~f:(fun ~key ~data acc ->
                         (* Every descendant, nested submodules' values included (Codex P2, round
                            8). *)

@@ -103,6 +103,10 @@ ok: process-lifetime -- Lazy.from_fun applied through @@
 ok: process-lifetime -- Lazy.from_fun applied through |>
 ok: process-lifetime -- a call into another module, through that module's reach
 ok: process-lifetime -- a settings field stands for every key its initializer reads
+ok: process-lifetime -- a recursive module's body
+ok: process-lifetime -- an enclosing module included in a functor body
+ok: process-lifetime -- a helper defined in an extension's structure payload
+ok: process-lifetime -- a lazy in an extension's structure payload
 ok: process-lifetime -- opaque plumbing is not followed
 ok: process-lifetime -- a lazy created per call is not held
 ok: process-lifetime -- a read beside a module-level lazy is fresh
