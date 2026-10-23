@@ -320,6 +320,12 @@ jobs:
           fi
         fi
         echo "Dispatch checkout: $(git rev-parse HEAD) (dispatched at $GITHUB_SHA)"
+    # setup-ocaml's own apt packages, from a cache: their fetch from the
+    # runner's mirror was the whole of the action's 1-11 minute spread
+    # (gh-ocannl-1544; the action says how).
+    - name: Pre-install setup-ocaml's apt packages (Linux)
+      if: runner.os == 'Linux'
+      uses: ./.github/actions/setup-ocaml-debs
     - uses: ocaml/setup-ocaml@v3
       with:
         ocaml-compiler: ${{ matrix.ocaml-compiler }}
@@ -800,6 +806,8 @@ jobs:
     - uses: actions/checkout@v7
       with:
         ref: ${{ inputs.expected_sha }}
+    - name: Pre-install setup-ocaml's apt packages
+      uses: ./.github/actions/setup-ocaml-debs
     - uses: ocaml/setup-ocaml@v3
       with:
         ocaml-compiler: 5.5.x
@@ -858,6 +866,8 @@ jobs:
     - uses: actions/checkout@v7
       with:
         ref: ${{ inputs.expected_sha }}
+    - name: Pre-install setup-ocaml's apt packages
+      uses: ./.github/actions/setup-ocaml-debs
     - uses: ocaml/setup-ocaml@v3
       with:
         ocaml-compiler: 5.3.x
@@ -936,6 +946,8 @@ jobs:
     - uses: actions/checkout@v7
       with:
         ref: ${{ inputs.expected_sha }}
+    - name: Pre-install setup-ocaml's apt packages
+      uses: ./.github/actions/setup-ocaml-debs
     - uses: ocaml/setup-ocaml@v3
       with:
         ocaml-compiler: 5.5.x

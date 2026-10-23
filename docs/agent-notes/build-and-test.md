@@ -3165,6 +3165,25 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   Our own `_opam` key deliberately does NOT carry the opam version: a switch built by 2.5.2
   restores and runs green under 2.6.0 (the 2026-09-17 master runs hit that cache), so keying on it
   would buy nothing and cost a ~180-package rebuild per platform at every bump.
+- **A slow ubuntu setup-ocaml step is apt, not opam** (gh-ocannl-1544). The step's spread (55s to
+  11min on one day, 2026-10-22, on jobs whose opam caches all hit) is the `apt-get install` inside
+  its `Initialising opam state` group: `bubblewrap musl-tools rsync` plus the optional
+  `g++-multilib gcc-multilib` (setup-ocaml's `src/system-packages.ts`), 29 packages, 23.6 MB,
+  nearly all of it gcc-multilib's lib32/libx32 halves, fetched from the runner's
+  `azure.archive.ubuntu.com` at 39-46 kB/s on a slow runner (`Fetched 23.6 MB in 10min 2s`) and in
+  1s on a fast one -- while the same runner's other apt fetches minutes apart, from the same or
+  another mirror, ran at MB/s. Read the `Fetched ... in` line of that group before blaming a cache.
+  It hit the Formatting and Dune-floor jobs as hard as the build shards, and once put a main shard
+  at 37.5 minutes. `.github/actions/setup-ocaml-debs` now pre-installs that list from `.deb` files
+  in actions/cache, keyed by apt's own `--print-uris` (file names, sizes, hashes), before every
+  ubuntu setup-ocaml step in `ci.yml`, so the action's install finds nothing to fetch; the list
+  restates setup-ocaml's, so a change there costs only the speed back, and every step of it is
+  best-effort. The one-off `Failed to find any opam release that matches the specified version
+  constraint` (2026-10-22 15:06-15:24Z, several jobs within seconds, green on rerun) is a different
+  lookup: the action lists `ocaml/opam`'s releases through the GitHub API at every run and found
+  no stable one in that answer. setup-ocaml v3.9.0 has no input that pins the opam version or
+  skips the lookup, so there is nothing to pin here short of replacing the action; a re-run is the
+  remedy, and a deterministic form of the same message is gh-ocannl-1543's.
 - Where this repository PARSES opam's output, it freezes the format with `--cli=2.1` rather than
   tracking opam — `.github/actions/pin-revisions/resolve.sh` does it for both `opam show --raw
   --sort` and `opam pin list`. Re-verified against a real opam 2.6.0 (2026-09-17): the definition

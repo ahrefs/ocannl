@@ -467,7 +467,8 @@ print("PASS the weigh step's output, merged over one run's main shards, is the W
 # Run the exact bash guard from the workflow with git reporting a fixture HEAD
 # and gh answering the compare API for the one direction the guard must ask:
 # is the intended commit behind the dispatched head?
-step = source.split('    - name: Verify dispatch commit\n', 1)[1].split('    - uses: ', 1)[0]
+# The step ends at the next line indented as a step or a comment between steps.
+step = re.split(r'\n    (?=\S)', source.split('    - name: Verify dispatch commit\n', 1)[1], maxsplit=1)[0]
 assert "if: github.event_name == 'workflow_dispatch'" in step
 script = step.split('      run: |\n', 1)[1]
 script = '\n'.join(line[8:] for line in script.splitlines())
