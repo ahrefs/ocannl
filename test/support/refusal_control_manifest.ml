@@ -1079,18 +1079,30 @@ let standing ~direct_evidence ~catalogue_only ~observed ~refused ~claim_lines ~r
     no claim behind it). Only a failure is named: a run prints a subset of the row's markers, the
     rest exercised in another control golden, so "did not run" is every passing run's normal state
     and is left for the reader of a golden diff to infer. Taking the table as an argument, as
-    {!standing} does, lets the rule be pinned on tables the repository does not have to hold. *)
+    {!standing} does, lets the rule be pinned on tables the repository does not have to hold.
+
+    Answers the reason with the failed checks left for the markers after this one. A claim's marker
+    consumes the failure it names, as {!claim_exercises} consumes a passing execution: two identical
+    claim formats are two claims, and one failure stands behind one of them, the other's claim not
+    having run. A direct failure's marker consumes nothing: one control claim answers for several
+    refusals, and its failure stands behind each. *)
 let why_not_printed ~direct_evidence ~failed ~key diagnostic =
   let format = diagnostic.Refusal_control_scan.format in
   match diagnostic.Refusal_control_scan.kind with
   | Refusal_control_scan.Claim ->
-      List.find failed ~f:(Refusal_control_scan.format_matches ~format)
-      |> Option.map ~f:(Printf.sprintf "its claim failed: \"%s\"")
+      let rec take before = function
+        | [] -> None
+        | name :: after when Refusal_control_scan.format_matches ~format name ->
+            Some (Printf.sprintf "its claim failed: \"%s\"" name, List.rev_append before after)
+        | name :: after -> take (name :: before) after
+      in
+      take [] failed
   | Refusal_control_scan.Fail ->
       List.Assoc.find direct_evidence key ~equal:String.equal
       |> Option.map ~f:evidence_label
       |> Option.filter ~f:(List.mem failed ~equal:String.equal)
-      |> Option.map ~f:(Printf.sprintf "the claim answering for it failed: \"%s\"")
+      |> Option.map ~f:(fun label ->
+          (Printf.sprintf "the claim answering for it failed: \"%s\"" label, failed))
 
 (** The [raw_entries] row for [source] (its key without the [test/operations/] prefix) listing
     [diagnostics]' markers in extraction order, ready to paste. *)
@@ -1238,11 +1250,14 @@ let print_section ~source ~expected diagnostics =
   let not_printed marker reason =
     eprintf "%s%s -- %s\n" not_printed_head marker (Verdict.one_line reason)
   in
+  let failed = ref (Verdict.failed_checks ()) in
   let why marker diagnostic =
-    why_not_printed ~direct_evidence ~failed:(Verdict.failed_checks ())
+    why_not_printed ~direct_evidence ~failed:!failed
       ~key:(failure_key ~source ~identity:diagnostic.Refusal_control_scan.identity)
       diagnostic
-    |> Option.iter ~f:(not_printed marker)
+    |> Option.iter ~f:(fun (reason, remaining) ->
+        failed := remaining;
+        not_printed marker reason)
   in
   let catalogued = ref [] in
   let rivals =
