@@ -6,25 +6,37 @@ on:
     paths:
       - "docs/**"
       - ".github/workflows/gh-pages-docs.yml"
+      - ".github/actions/apt-debs-cache/**"
   push:
     branches:
       - master  # Set a branch name to trigger deployment
     paths:
       - "docs/**"
       - ".github/workflows/gh-pages-docs.yml"
+      - ".github/actions/apt-debs-cache/**"
 
-# Only publishing pushes share the deployment queue. Pull-request and manual
-# builds get run-specific groups so validation never waits behind a publish.
+# Pushes queue per workflow (gh-ocannl-1546): one run at a time, and a newer
+# push replaces a pending one -- each run builds the whole of docs/ at its
+# commit, so the newer one publishes a superset and an intermediate deploy is
+# never wanted. Only the short `publish` job joins `gh-pages-deploy`, the queue
+# shared with gh-pages-api.yml, which keeps every publish (queue: max) so the
+# two workflows' pushes to the gh-pages branch never race (gh-ocannl-825) and
+# neither drops the other's. A shared queue for the whole run, as before, held
+# every api deploy behind a docs build's slow texlive fetch.
+# Pull-request and manual builds get run-specific groups so validation never
+# waits behind a publish.
 concurrency:
-  group: ${{ github.event_name == 'push' && 'gh-pages-deploy' || format('gh-pages-build-{0}', github.run_id) }}
+  group: ${{ github.event_name == 'push' && 'gh-pages-docs-build' || format('gh-pages-build-{0}', github.run_id) }}
   cancel-in-progress: false
-  queue: max
 
 jobs:
-  deploy:
+  build:
     # Avoid Ubuntu 24.04, see: https://github.com/ocaml/opam/issues/5968
     runs-on: ubuntu-22.04
-    timeout-minutes: 30 # ~1min normally; a ceiling only a hang can reach
+    timeout-minutes: 30 # ~2min normally; a ceiling only a hang can reach
+    env:
+      # Installed twice below: from the cache, then plainly as the fallback.
+      LATEX_PACKAGES: latexmk lmodern texlive-fonts-recommended texlive-latex-extra texlive-latex-recommended texlive-xetex
     steps:
       - uses: actions/checkout@v7
 
@@ -75,10 +87,21 @@ jobs:
       - name: Blog contexts and compilation
         run: pandoc --from=markdown+tex_math_dollars+tex_math_single_backslash --to=html5 --section-divs --katex --toc -s --embed-resources --css=docs/html/style.css docs/blog/a-tensor-is-not-its-storage.md -o docs/html/a-tensor-is-not-its-storage.html
 
+      - name: Update apt package index
+        run: sudo apt-get update
+
+      # texlive is 180 MB from the runner's mirror, which on a slow run serves
+      # it at tens of kB/s and outlives the job's ceiling (gh-ocannl-1546); the
+      # action keeps the .deb files in actions/cache and says how.
+      - name: Pre-install LaTeX from a cache
+        uses: ./.github/actions/apt-debs-cache
+        with:
+          packages: ${{ env.LATEX_PACKAGES }}
+          key: texlive-debs-v1
+
+      # A no-op after a successful pre-install; otherwise the plain install.
       - name: Install LaTeX
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y latexmk lmodern texlive-fonts-recommended texlive-latex-extra texlive-latex-recommended texlive-xetex
+        run: sudo apt-get install -y $LATEX_PACKAGES
 
       - name: Formal core technical report PDF
         run: |
@@ -89,8 +112,33 @@ jobs:
           cp /tmp/ocannl-formal-core-latex-build/ocannl-formal-core-technical-report.pdf \
             docs/html/pdfs/ocannl-formal-core-technical-report.pdf
 
-      - name: Deploy
+      - name: Hand the site to the publish job
         if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-html
+          path: docs/html/
+          include-hidden-files: true
+          retention-days: 1
+
+  publish:
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    # Shared with gh-pages-api.yml's publish; see the comment on the
+    # workflow's concurrency above.
+    concurrency:
+      group: gh-pages-deploy
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: docs-html
+          path: docs/html/
+
+      - name: Deploy
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
