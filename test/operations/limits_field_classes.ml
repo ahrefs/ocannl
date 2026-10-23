@@ -348,11 +348,12 @@ let sanctioned = [ "seeded_plan" ]
    binding (a [let] nested in another binding: never a top-level or module definition, which other
    paths share; and its right-hand side a [fun] or [function], under any type constraint, so what it
    spells runs only when it is called -- a [let fallback = seeded_transform ... in] would read the
-   fields on every path, the search's included: review round 1) that EVERY search-less branch
-   references by a bare name, resolved through [Test_utils.Lexical_scope] to the binding in scope at
-   the reference -- so a same-named binding elsewhere, or one shadowing it later, is not the
-   fallback. A spelling of [seeded_transform] anywhere inside such a binding's right-hand side is
-   dropped from the reach graph; every other one counts.
+   fields on every path, the search's included: review round 1) that EVERY search-less branch calls
+   -- applies, by a bare name, as the head of an application: a bare reference passed on or ignored
+   is not a call (review round 2) -- resolved through [Test_utils.Lexical_scope] to the binding in
+   scope at the reference -- so a same-named binding elsewhere, or one shadowing it later, is not
+   the fallback. A spelling of [seeded_transform] anywhere inside such a binding's right-hand side
+   is dropped from the reach graph; every other one counts.
 
    The boundary: this pins WHERE the route is spelled, not where the fallback's result flows. The
    fallback may also be called from paths that test no flag (a refused lineage, a failed deferred
@@ -386,7 +387,9 @@ type binding = Bound of int | Unbound
 
 type fallback_walk = {
   branches : (int * Set.M(Int).t) list;
-      (** Each search-less branch's start offset, with the bindings it references. *)
+      (** Each search-less branch's start offset, with the bindings it calls: a bare name applied to
+          arguments, wherever in the branch -- a reference that is not a call (passed on, ignored)
+          is not one (review round 2). *)
   sites : (int * int list) list;
       (** Each bare spelling of the route, with the bindings enclosing it, innermost first. *)
   locals : Set.M(Int).t;
@@ -420,12 +423,9 @@ let walk_fallback (source : string) : fallback_walk =
         enclosing := List.tl_exn !enclosing;
         vb
 
-      method! ident env { txt; loc } =
+      method! ident _ { txt; loc } =
         match txt with
         | Lident name ->
-            (match Test_utils.Lexical_scope.lookup env name with
-            | Some (Bound at) -> List.iter !open_branches ~f:(fun refs -> refs := Set.add !refs at)
-            | Some Unbound | None -> ());
             if String.equal name seeded_route then sites := (offset loc, !enclosing) :: !sites
         | Ldot _ | Lapply _ -> ()
 
@@ -443,6 +443,12 @@ let walk_fallback (source : string) : fallback_walk =
             self#branch then_ (self#expression env);
             Option.iter else_ ~f:(fun e -> ignore (self#expression env e : expression));
             e
+        | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }, _) ->
+            (match Test_utils.Lexical_scope.lookup env name with
+            | Some (Bound at) ->
+                List.iter !open_branches ~f:(fun calls -> calls := Set.add !calls at)
+            | Some Unbound | None -> ());
+            super#expression env e
         | _ -> super#expression env e
 
       method! case env c =
@@ -605,6 +611,13 @@ let () =
         "let tune ?(search = true) ~cache_dir x =\n\
         \  let fallback = seeded_transform () in\n\
         \  if (not search) && String.equal cache_dir \"\" then fallback else x",
+        flagged );
+      ( "a search-less branch that only names the fallback",
+        "let tune ?(search = true) x =\n\
+        \  let fallback () = seeded_transform () in\n\
+        \  match x with\n\
+        \  | 0 when not search -> ignore fallback; x\n\
+        \  | _ -> if not search then fallback () else x",
         flagged );
       ( "a top-level fallback",
         "let fallback () = seeded_transform ()\n\
