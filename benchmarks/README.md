@@ -761,7 +761,7 @@ cell is the step: cite the step cell. Each issue's cell:
   comes up all-`ok` means the defect is gone and the workaround can be retired.
 - `bin_cells.py` — the driver for the `bin/` microbenchmarks (`schedule_bench`,
   `narrow_gebp_bench`, `narrow_storage_bench`, `cpu_vectorization_bench`,
-  `projection_shape_bench`, ...) when a number from one is meant to be published or reproduced
+  `projection_shape_bench`: the ones reporting through `Bench_out.result`) when a number from one is meant to be published or reproduced
   (gh-ocannl-743). Those executables read the ambient `OCANNL_*` environment and the nearest
   `ocannl_config`, so the same command line could measure different treatments; the driver clears
   `OCANNL_*`/`BENCH_*`/`OMP_*`/`GOMP_*`/`KMP_*`, runs each cell with

@@ -69,10 +69,12 @@ What the arms differ by, as resolved:
 a failing cell fails the run: true
 ## Verdict
 
-- cell 1 (fails): exited 1
+- cell 1 (fails): exited 1; reported no bench-result line
 - cell 2 (nonfinite): unusable result line: bench-result: {"variant":"probe","seconds":null}
 - cell 3 (nonfinite): unusable result line: bench-result: {"variant":"probe","seconds":null}
-- cell 4 (fails): exited 1
+- cell 4 (fails): exited 1; reported no bench-result line
+a cell reporting no result fails the run: true
+a cell reporting one variant twice fails the run: true
 a cell past its cap is recorded as timed out and fails the run: true
 a non-empty output directory is refused: true
 an output directory inside the checkout is refused: true

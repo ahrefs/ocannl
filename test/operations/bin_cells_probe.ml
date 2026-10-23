@@ -6,8 +6,9 @@
    result lines are [Bench_out.result]'s, the printer every bin/ timing bench uses.
 
    Its one positional is the treatment: a time in seconds to report (as [probe], and half of it as
-   [probe_half]), or a misbehaviour -- [fail] exits 1, [sleep] outlives any cap the control sets,
-   [nonfinite] reports a time JSON cannot carry. No backend is linked: nothing is compiled. *)
+   [probe_half]), or a misbehaviour -- [fail] exits 1, [silent] reports nothing, [twice] reports one
+   variant twice, [sleep] outlives any cap the control sets, [nonfinite] reports a time JSON cannot
+   carry. No backend is linked: nothing is compiled. *)
 
 open Base
 
@@ -20,6 +21,10 @@ let () =
   let _backend : string = Utils.get_global_arg ~arg_name:"backend" ~default:"cc" in
   match mode with
   | "fail" -> Stdlib.exit 1
+  | "silent" -> ()
+  | "twice" ->
+      Bench_out.result ~variant:"probe" ~seconds:0.001;
+      Bench_out.result ~variant:"probe" ~seconds:0.002
   | "sleep" -> Unix.sleepf 120.
   | "nonfinite" -> Bench_out.result ~variant:"probe" ~seconds:Float.nan
   | s ->

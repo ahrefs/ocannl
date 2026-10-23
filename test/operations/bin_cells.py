@@ -157,6 +157,13 @@ with tempfile.TemporaryDirectory() as scratch:
     claim("a failing cell fails the run", bad.returncode == 1)
     print(bad.stdout[bad.stdout.index("## Verdict"):], end="")
 
+    silent = drive("silent", "--rounds", "2", "--arm", "quiet=silent")
+    claim("a cell reporting no result fails the run",
+          silent.returncode == 1 and "reported no bench-result line" in silent.stdout)
+    twice = drive("twice", "--rounds", "2", "--arm", "dup=twice")
+    claim("a cell reporting one variant twice fails the run",
+          twice.returncode == 1 and "a variant reported twice: probe" in twice.stdout)
+
     hung = drive("hung", "--rounds", "2", "--cell-timeout", "2", "--arm", "sleeps=sleep")
     hung_records = [json.loads(l) for l in (scratch / "hung/cells.jsonl").read_text().splitlines()]
     claim("a cell past its cap is recorded as timed out and fails the run",

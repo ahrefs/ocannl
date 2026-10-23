@@ -766,6 +766,9 @@ let () =
       ((worst -. best) /. best *. 100.)
       lv.lv_launch
       (if String.is_prefix lv.lv_mma ~prefix:"not-requested" then "" else "  mma " ^ lv.lv_mma);
+    (* The line benchmarks/bin_cells.py reads (gh-ocannl-743): the arm's median batch, per
+       dispatch. *)
+    Bench_out.result ~variant:(lv.lv_tag ^ " / " ^ lv.lv_label) ~seconds:median;
     (* The finalists round re-times arms under a [FINAL] label; they stay out of the gh-755 ranking,
        whose population is one tuning round's seeds. *)
     if not (String.is_prefix lv.lv_label ~prefix:final_prefix) then

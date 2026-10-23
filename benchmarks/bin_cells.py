@@ -34,7 +34,8 @@ bench so that the command line IS the treatment, and records what the process ac
   and every arm's position histogram is equal once the round count reaches the arm count (twice it
   for an odd one).
 - Paired. A bench reports a timed variant through `Bench_out.result`'s `bench-result:` line on
-  stdout (seconds per run). The report gives each arm's median/min/max per variant, and for each
+  stdout (seconds per run); a cell reporting none, or one variant twice, fails -- an executable
+  that does not report (`device_props`, `compilation_speed`) is not something this driver measures. The report gives each arm's median/min/max per variant, and for each
   non-reference arm the PAIRED ratio against the first arm, round by round -- the median ratio, its
   range, in how many rounds the arm was faster, and the exact two-sided sign-test p. Twelve paired
   rounds can resolve a 5% effect that overlapping intervals of single runs read as parity
@@ -543,6 +544,16 @@ def main(argv=None):
                     results = parse_results(stdout)
                 except ValueError as e:
                     problems.append(str(e))
+                else:
+                    # A cell that measured nothing the driver can read is no measurement: either
+                    # the executable does not report through Bench_out.result, or every variant
+                    # was skipped. Exiting 0 over an empty table would publish nothing as clean.
+                    if not results:
+                        problems.append("reported no bench-result line")
+                    names = [v for v, _ in results]
+                    if len(set(names)) != len(names):
+                        problems.append("a variant reported twice: "
+                                        + ", ".join(sorted({v for v in names if names.count(v) > 1})))
                 rec = {"cell": cell, "round": rnd, "position": pos, "arm": arm["label"],
                        "argv": cmd, "status": status, "wall_s": round(wall, 3),
                        "results": results, "config": config, "problems": problems,
