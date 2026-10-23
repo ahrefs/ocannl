@@ -17,6 +17,10 @@ find_or_add with the note in its ~default closure is accounted for: true
 find_or_add with no note is refused: true
 a write inside an anonymous closure of a noting function is accounted for: true
 a write inside a nested let-bound function is judged by that function: true
+a note inside an uncalled nested helper does not account for the enclosing write: true
+a partial application of a mutator is refused: true
+an annotated binding head is tracked, not refused as hidden state: true
+a type-constrained function invoked on the spot is entered too: true
 a write under let%ext is judged like any other: true
 := on an unnoted path is refused: true
 incr, Int.incr and Stdlib.incr are writes: true
@@ -44,6 +48,8 @@ an exemption no write needs is stale: true
 a fingerprinted ref mutated_since compares physically needs no note: true
 a fingerprinted ref that mutated_since does not read is refused: true
 a fingerprinted ref that mutated_since reads but does not compare is refused: true
+a fingerprinted ref compared with itself is refused: true
+a fingerprinted ref compared with a field fingerprint does not capture is refused: true
 a fingerprinted ref compared through a shadowing phys_equal is refused: true
 only a ref can be fingerprinted: true
 a boundary function's writes are admitted: true

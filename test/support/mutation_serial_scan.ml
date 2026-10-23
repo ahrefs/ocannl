@@ -23,23 +23,26 @@
       is a write, [Hash_set.mem] a read; [a.(i) <- v] is [Array.set]). A [Stdlib.] or [Base.]
       qualifier is dropped first. The function must be the library's: a name or head module the file
       binds in scope (a local [module Hash_set], a [let ( := )]) classifies nothing, so the
-      occurrence is refused as unclassified.
+      occurrence is refused as unclassified. A write must be saturated -- at least its listed arity
+      in arguments -- since a partial application is a closure that writes later.
     - {b Accounting}: a write is accounted for when its nearest enclosing let-bound function (any
       [let f … = fun …] at any depth; the top-level definition when none encloses it) contains a
-      call [note_mutation ()] anywhere in its body, nested closures included -- so the [~default]
-      closure of a [find_or_add] counts. The call must reach the real one: [Row.note_mutation] with
-      no module named [Row] bound in scope (a local module, functor parameter or unpack), or -- in
-      the serial's own module alone ([~serial_owner], [row.ml]) -- its top-level [note_mutation],
-      not a shadowing local. An [open] that brings a [Row] in is not modelled.
+      call [note_mutation ()] in its own body, anonymous closures included -- so the [~default]
+      closure of a [find_or_add] counts -- but not inside a nested let-bound function, which is a
+      frame of its own. The call must reach the real one: [Row.note_mutation] with no module named
+      [Row] bound in scope (a local module, functor parameter or unpack), or -- in the serial's own
+      module alone ([~serial_owner], [row.ml]) -- its top-level [note_mutation], not a shadowing
+      local. An [open] that brings a [Row] in is not modelled.
     - {b In-place classification}, as attributes with a closed grammar; a reason is a string literal
       of more than one word:
     - [[@@mutation_serial.exempt "<reason>"]] on a tracked binding: its writes need no note
       (fresh-id counters, the serial itself, a solver pass's transient flags). Also the only way to
       admit state the scan cannot read (below).
     - [[@@mutation_serial.fingerprinted]] on a tracked [ref] that [Shape.fingerprint] compares
-      physically: held to the relationship, not to a reason -- the file's top-level [mutated_since]
-      must hand [!x] directly to the library's [phys_equal]. What becomes of that comparison's
-      result is not read.
+      physically: held to the relationship, not to a reason -- the file's top-level [fingerprint]
+      must capture [!x] as a record field [{ f = !x }], and its top-level [mutated_since] must hand
+      that field and [!x] to the library's [phys_equal] ([phys_equal fp.f !x]). What becomes of that
+      comparison's result is not read.
     - [[@@mutation_serial.boundary "<reason>"]] on a let-bound function that is a session boundary
       (the commit, a rewind, a reset): its own writes need no note.
 
@@ -113,10 +116,17 @@ let container_modules =
   ]
 
 let ref_reads = [ [ "!" ] ]
-let ref_writes = [ [ ":=" ]; [ "incr" ]; [ "decr" ]; [ "Int"; "incr" ]; [ "Int"; "decr" ] ]
+
+(* A write's arity is the number of arguments a saturated call passes (labelled ones included,
+   optional ones not): a call with fewer is a partial application -- a closure that writes later,
+   where no occurrence is left to judge -- and is refused. *)
+let ref_writes =
+  [
+    ([ ":=" ], 2); ([ "incr" ], 1); ([ "decr" ], 1); ([ "Int"; "incr" ], 1); ([ "Int"; "decr" ], 1);
+  ]
 
 (** Per container family (the first component of its creation module): the functions that only read
-    it, and the functions that write it. *)
+    it, and the functions that write it with their arity. *)
 let family_functions =
   [
     ( "Hashtbl",
@@ -143,29 +153,29 @@ let family_functions =
           "counti";
         ],
         [
-          "set";
-          "add";
-          "add_exn";
-          "add_multi";
-          "remove";
-          "remove_multi";
-          "change";
-          "update";
-          "update_and_return";
-          "find_or_add";
-          "findi_or_add";
-          "find_and_remove";
-          "clear";
-          "filter_inplace";
-          "filteri_inplace";
-          "filter_keys_inplace";
-          "map_inplace";
-          "mapi_inplace";
-          "filter_map_inplace";
-          "filter_mapi_inplace";
-          "incr";
-          "decr";
-          "replace";
+          ("set", 3);
+          ("add", 3);
+          ("add_exn", 3);
+          ("add_multi", 3);
+          ("remove", 2);
+          ("remove_multi", 2);
+          ("change", 3);
+          ("update", 3);
+          ("update_and_return", 3);
+          ("find_or_add", 3);
+          ("findi_or_add", 3);
+          ("find_and_remove", 2);
+          ("clear", 1);
+          ("filter_inplace", 2);
+          ("filteri_inplace", 2);
+          ("filter_keys_inplace", 2);
+          ("map_inplace", 2);
+          ("mapi_inplace", 2);
+          ("filter_map_inplace", 2);
+          ("filter_mapi_inplace", 2);
+          ("incr", 2);
+          ("decr", 2);
+          ("replace", 3);
         ] ) );
     ( "Hash_set",
       ( [
@@ -182,14 +192,14 @@ let family_functions =
           "find";
         ],
         [
-          "add";
-          "strict_add";
-          "strict_add_exn";
-          "remove";
-          "strict_remove";
-          "strict_remove_exn";
-          "clear";
-          "filter_inplace";
+          ("add", 2);
+          ("strict_add", 2);
+          ("strict_add_exn", 2);
+          ("remove", 2);
+          ("strict_remove", 2);
+          ("strict_remove_exn", 2);
+          ("clear", 1);
+          ("filter_inplace", 2);
         ] ) );
     ( "Queue",
       ( [
@@ -204,13 +214,22 @@ let family_functions =
           "exists";
           "for_all";
         ],
-        [ "enqueue"; "dequeue"; "dequeue_exn"; "add"; "push"; "take"; "pop"; "clear" ] ) );
+        [
+          ("enqueue", 2);
+          ("dequeue", 1);
+          ("dequeue_exn", 1);
+          ("add", 2);
+          ("push", 2);
+          ("take", 1);
+          ("pop", 1);
+          ("clear", 1);
+        ] ) );
     ( "Stack",
       ( [ "length"; "is_empty"; "top"; "top_exn"; "iter"; "fold"; "to_list" ],
-        [ "push"; "pop"; "pop_exn"; "clear" ] ) );
+        [ ("push", 2); ("pop", 1); ("pop_exn", 1); ("clear", 1) ] ) );
     ( "Array",
       ( [ "get"; "unsafe_get"; "length"; "iter"; "iteri"; "fold"; "exists"; "for_all"; "to_list" ],
-        [ "set"; "unsafe_set"; "fill"; "blit"; "sort"; "swap" ] ) );
+        [ ("set", 3); ("unsafe_set", 3); ("fill", 4); ("blit", 5); ("sort", 2); ("swap", 3) ] ) );
   ]
 
 let kind_name = function Ref -> "ref" | Container m -> m
@@ -241,6 +260,13 @@ let allocation (e : expression) =
           | _ -> `No)
       | None -> `No)
   | _ -> `No
+
+(* The body of a function literal, under constraints, coercions and locally abstract types. *)
+let rec invoked_body (e : expression) =
+  match e.pexp_desc with
+  | Pexp_function (_, _, body) -> Some body
+  | Pexp_constraint (e, _) | Pexp_coerce (e, _, _) | Pexp_newtype (_, e) -> invoked_body e
+  | _ -> None
 
 let rec is_function (e : expression) =
   match e.pexp_desc with
@@ -359,16 +385,18 @@ let scan ~file ?(serial_owner = false) ?interface source =
         method! expression e =
           match e.pexp_desc with
           | Pexp_function _ -> ()
-          | Pexp_apply ({ pexp_desc = Pexp_function (_, _, body); _ }, args) ->
-              (* An immediately invoked function runs at module initialization: its body's
-                 allocations are as module-level as the initializer's own. *)
-              (match body with
-              | Pfunction_body body -> self#expression body
-              | Pfunction_cases (cases, _, _) ->
-                  List.iter cases ~f:(fun c -> self#expression c.pc_rhs));
+          | Pexp_apply (callee, args) when Option.is_some (invoked_body callee) ->
+              (* An immediately invoked function -- under constraints, coercions or locally abstract
+                 types too -- runs at module initialization: its body's allocations are as
+                 module-level as the initializer's own. *)
+              (match invoked_body callee with
+              | Some (Pfunction_body body) -> self#expression body
+              | Some (Pfunction_cases (cases, _, _)) ->
+                  List.iter cases ~f:(fun c -> self#expression c.pc_rhs)
+              | None -> ());
               List.iter args ~f:(fun (_, a) -> self#expression a)
           | _ ->
-              (if not (phys_equal e (strip vb.pvb_expr)) then
+              (if not (phys_equal (strip e) (strip vb.pvb_expr)) then
                  match allocation e with
                  | `Alloc _ | `Unknown _ -> found := line_of e.pexp_loc :: !found
                  | `No -> ());
@@ -460,7 +488,11 @@ let scan ~file ?(serial_owner = false) ?interface source =
   discover ~nested:false structure;
   (* {2 Resolution} *)
   let classified = Hash_set.create (module Int) in
-  let fingerprint_reads = Hash_set.create (module Int) in
+  (* (binding key, field) pairs: what [fingerprint] captures as [{ f = !x }], and what
+     [mutated_since] compares as [phys_equal fp.f !x]. A fingerprinted ref is covered by a pair in
+     both. *)
+  let captured = Hash_set.Poly.create () in
+  let compared = Hash_set.Poly.create () in
   let frames : frame list ref = ref [] in
   let fun_depth = ref 0 in
   let boundaries = ref [] in
@@ -534,31 +566,41 @@ let scan ~file ?(serial_owner = false) ?interface source =
               b.name
 
       method! expression env e =
-        (* A fingerprinted ref is compared when [mutated_since] hands [!x] straight to the library's
-           [phys_equal] -- the physical comparison against the captured fingerprint. *)
+        (* The fingerprint relationship: [fingerprint] captures [!x] into a field, and
+           [mutated_since] hands that field and [!x] to the library's [phys_equal]. *)
+        let root = match List.last !frames with Some frame -> frame.root | None -> "" in
+        let deref_of (arg : expression) =
+          match arg.pexp_desc with
+          | Pexp_apply
+              ({ pexp_desc = Pexp_ident { txt = Lident "!" as deref; _ }; _ }, [ (Nolabel, x) ])
+            when self#library env deref ->
+              Option.map (self#tracked env x) ~f:fst
+          | _ -> None
+        in
         (match e.pexp_desc with
-        | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident "phys_equal" as fn; _ }; _ }, args)
-          when self#library env fn
-               &&
-               match !frames with
-               | frame :: _ -> String.equal frame.root "mutated_since"
-               | [] -> false ->
-            List.iter args ~f:(fun (_, arg) ->
-                match arg.pexp_desc with
-                | Pexp_apply
-                    ( { pexp_desc = Pexp_ident { txt = Lident "!" as deref; _ }; _ },
-                      [ (Nolabel, x) ] )
-                  when self#library env deref -> (
-                    match self#tracked env x with
-                    | Some (b, _) -> Hash_set.add fingerprint_reads b.key
-                    | None -> ())
+        | Pexp_record (fields, _) when String.equal root "fingerprint" ->
+            List.iter fields ~f:(fun ({ txt = label; _ }, value) ->
+                Option.iter (deref_of value) ~f:(fun b ->
+                    Hash_set.add captured (b.key, Longident.last_exn label)))
+        | Pexp_apply
+            ( { pexp_desc = Pexp_ident { txt = Lident "phys_equal" as fn; _ }; _ },
+              [ (Nolabel, a1); (Nolabel, a2) ] )
+          when self#library env fn && String.equal root "mutated_since" ->
+            List.iter
+              [ (a1, a2); (a2, a1) ]
+              ~f:(fun (field, value) ->
+                match (field.pexp_desc, deref_of value) with
+                | Pexp_field (_, { txt = label; _ }), Some b ->
+                    Hash_set.add compared (b.key, Longident.last_exn label)
                 | _ -> ())
         | _ -> ());
         (match e.pexp_desc with
         | Pexp_apply
             (fn, [ (Nolabel, { pexp_desc = Pexp_construct ({ txt = Lident "()"; _ }, None); _ }) ])
           when self#is_note env fn ->
-            List.iter !frames ~f:(fun frame -> frame.noted <- true)
+            (* The innermost let-bound function only: a nested helper that notes does not account
+               for its enclosing function's writes. Anonymous closures share their frame. *)
+            Option.iter (List.hd !frames) ~f:(fun frame -> frame.noted <- true)
         | Pexp_apply ({ pexp_desc = Pexp_ident { txt = fn; _ }; _ }, args) -> (
             match List.find args ~f:(fun (label, _) -> Poly.equal label Nolabel) with
             | None -> ()
@@ -573,28 +615,39 @@ let scan ~file ?(serial_owner = false) ?interface source =
                     in
                     let verdict =
                       match b.kind with
-                      | Ref ->
+                      | Ref -> (
                           if List.mem ref_reads path ~equal:(List.equal String.equal) then `Read
-                          else if List.mem ref_writes path ~equal:(List.equal String.equal) then
-                            `Write
-                          else `Unlisted
+                          else
+                            match
+                              List.Assoc.find ref_writes path ~equal:(List.equal String.equal)
+                            with
+                            | Some arity -> `Write arity
+                            | None -> `Unlisted)
                       | Container family -> (
                           match
                             (path, List.Assoc.find family_functions family ~equal:String.equal)
                           with
                           | head :: (_ :: _ as rest), Some (reads, writes)
-                            when String.equal head family ->
+                            when String.equal head family -> (
                               let fname = List.last_exn rest in
                               if List.mem reads fname ~equal:String.equal then `Read
-                              else if List.mem writes fname ~equal:String.equal then `Write
-                              else `Unlisted
+                              else
+                                match List.Assoc.find writes fname ~equal:String.equal with
+                                | Some arity -> `Write arity
+                                | None -> `Unlisted)
                           | _ -> `Unlisted)
                     in
                     match verdict with
                     | `Read -> Hash_set.add classified loc.loc_start.pos_cnum
-                    | `Write ->
+                    | `Write arity when List.length args >= arity ->
                         Hash_set.add classified loc.loc_start.pos_cnum;
                         self#record_write b loc
+                    | `Write _ ->
+                        Hash_set.add classified loc.loc_start.pos_cnum;
+                        finding (line_of loc)
+                          "%s: a partial application of a mutator is a closure that writes later, \
+                           where the scan cannot judge it; apply it in full"
+                          b.name
                     | `Unlisted -> ())))
         | _ -> ());
         match e.pexp_desc with
@@ -659,7 +712,10 @@ let scan ~file ?(serial_owner = false) ?interface source =
   let bindings = List.rev !bindings in
   List.iter bindings ~f:(fun b ->
       match b.cls with
-      | Fingerprinted when not (Hash_set.mem fingerprint_reads b.key) ->
+      | Fingerprinted
+        when not
+               (Hash_set.exists compared ~f:(fun (key, field) ->
+                    key = b.key && Hash_set.mem captured (key, field))) ->
           finding b.line
             "%s is fingerprinted, but mutated_since does not compare !%s through phys_equal" b.name
             b.name

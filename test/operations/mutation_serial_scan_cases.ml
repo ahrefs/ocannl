@@ -87,7 +87,8 @@ let () =
        "let state = ref 0 [@@mutation_serial.fingerprinted]\n\
         let set_early v = state := v\n\
         let state = ref 1 [@@mutation_serial.fingerprinted]\n\
-        let mutated_since fp = not (phys_equal fp !state)"
+        let fingerprint () = { fp_state = !state }\n\
+        let mutated_since fp = not (phys_equal fp.fp_state !state)"
        "mutated_since does not compare !state");
   p "a bare note_mutation () that resolves to nothing in this file is not the real one"
     (count
@@ -121,6 +122,23 @@ let () =
         \  let add v = Hash_set.add seen v in\n\
         \  List.iter vs ~f:add")
     = 1);
+  p "a note inside an uncalled nested helper does not account for the enclosing write"
+    (count
+       (table
+      ^ "let outer () =\n\
+        \  let note_only () = note_mutation () in\n\
+        \  ignore note_only;\n\
+        \  Hash_set.add seen 1")
+    = 1);
+  p "a partial application of a mutator is refused"
+    (says
+       (table ^ "let make_adder () =\n  note_mutation ();\n  Hash_set.add seen")
+       "partial application of a mutator");
+  p "an annotated binding head is tracked, not refused as hidden state"
+    (count "let hits : int ref = ref 0\nlet get () = !hits" = 0);
+  p "a type-constrained function invoked on the spot is entered too"
+    (says "let next = ((fun () -> let c = ref 0 in fun () -> incr c) : unit -> unit -> unit) ()"
+       "hidden under a local let");
   p "a write under let%ext is judged like any other"
     (count (table ^ "let%debug_sexp add (v : int) : unit = Hash_set.add seen v") = 1);
   (* Refs. *)
@@ -199,17 +217,24 @@ let () =
   let fingerprinted read =
     "let state = ref 0 [@@mutation_serial.fingerprinted]\n\
      let set v = state := v\n\
+     let fingerprint () = { fp_state = !state }\n\
      let mutated_since fp = " ^ read
   in
   p "a fingerprinted ref mutated_since compares physically needs no note"
-    (count (fingerprinted "not (phys_equal fp !state)") = 0);
+    (count (fingerprinted "not (phys_equal fp.fp_state !state)") = 0);
   p "a fingerprinted ref that mutated_since does not read is refused"
     (says (fingerprinted "fp <> 0") "mutated_since does not compare !state");
   p "a fingerprinted ref that mutated_since reads but does not compare is refused"
     (says (fingerprinted "ignore !state; fp <> 0") "mutated_since does not compare !state");
+  p "a fingerprinted ref compared with itself is refused"
+    (says (fingerprinted "not (phys_equal !state !state)") "mutated_since does not compare !state");
+  p "a fingerprinted ref compared with a field fingerprint does not capture is refused"
+    (says
+       (fingerprinted "not (phys_equal fp.fp_other !state)")
+       "mutated_since does not compare !state");
   p "a fingerprinted ref compared through a shadowing phys_equal is refused"
     (says
-       ("let phys_equal _ _ = true\n" ^ fingerprinted "not (phys_equal fp !state)")
+       ("let phys_equal _ _ = true\n" ^ fingerprinted "not (phys_equal fp.fp_state !state)")
        "mutated_since does not compare !state");
   p "only a ref can be fingerprinted"
     (says
