@@ -649,6 +649,22 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; The Winograd F(2x2, 3x3) conv rewrite (gh-ocannl-505): exact and tolerance parity against the
+; direct form, structure, declines. Picks its backend from the environment.
+
+(test
+ ; cc-vector-width: independent -- the search's claims are that some sketch is seeded and that the
+ ; tuned routine matches the direct form within tolerance.
+ (name winograd_conv)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules winograd_conv)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; The same executable on cc under `cc_backend_fast_math` (gh-ocannl-483 review round 5): the
 ; `approximate` profile turns on both this rewrite and the C compiler's fast-math licence, whose
 ; finite-math assumption would fold -inf arithmetic (which is why the flag takes it back). The

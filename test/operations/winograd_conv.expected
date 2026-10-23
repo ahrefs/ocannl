@@ -1,0 +1,91 @@
+--- leg 1 wpad: padded 6x6, batch 2, 3 -> 4 channels ---
+wpad: the direct nest covers every output cell: true
+wpad: rewritten, the direct form covers only the odd-extent remainder: true
+wpad: the pass changes the raw lowering: true
+wpad: the pass is idempotent: true
+wpad: the gate off mints nothing: true
+wpad: the gate on writes the kernel, input and product transforms: true
+wpad: Autotune.detect_conv reports the 3x3 stride-1 site the rewrite claims: true
+wpad: rewritten, no conv site is left: true
+wpad: the contraction is a matmul site accumulating the product buffer: true
+wpad: Winograd matches the direct form bitwise: true
+--- leg 1 wval: valid 8x10, batch 2, 2 -> 3 channels ---
+wval: the direct nest covers every output cell: true
+wval: rewritten, the direct form covers only the odd-extent remainder: true
+wval: the pass changes the raw lowering: true
+wval: the pass is idempotent: true
+wval: the gate off mints nothing: true
+wval: the gate on writes the kernel, input and product transforms: true
+wval: Autotune.detect_conv reports the 3x3 stride-1 site the rewrite claims: true
+wval: rewritten, no conv site is left: true
+wval: the contraction is a matmul site accumulating the product buffer: true
+wval: Winograd matches the direct form bitwise: true
+--- leg 1 wodd: valid 7x9, batch 2, 3 -> 2 channels ---
+wodd: the direct nest covers every output cell: true
+wodd: rewritten, the direct form covers only the odd-extent remainder: true
+wodd: the pass changes the raw lowering: true
+wodd: the pass is idempotent: true
+wodd: the gate off mints nothing: true
+wodd: the gate on writes the kernel, input and product transforms: true
+wodd: Autotune.detect_conv reports the 3x3 stride-1 site the rewrite claims: true
+wodd: the contraction is a matmul site accumulating the product buffer: true
+wodd: Winograd matches the direct form bitwise: true
+--- leg 1 wrect: padded 5x8, batch 3, 5 -> 2 channels ---
+wrect: the direct nest covers every output cell: true
+wrect: rewritten, the direct form covers only the odd-extent remainder: true
+wrect: the pass changes the raw lowering: true
+wrect: the pass is idempotent: true
+wrect: the gate off mints nothing: true
+wrect: the gate on writes the kernel, input and product transforms: true
+wrect: Autotune.detect_conv reports the 3x3 stride-1 site the rewrite claims: true
+wrect: the contraction is a matmul site accumulating the product buffer: true
+wrect: Winograd matches the direct form bitwise: true
+--- leg 1 wb1: padded 6x4, batch 1, 2 -> 3 channels ---
+wb1: the direct nest covers every output cell: true
+wb1: rewritten, the direct form covers only the odd-extent remainder: true
+wb1: the pass changes the raw lowering: true
+wb1: the pass is idempotent: true
+wb1: the gate off mints nothing: true
+wb1: the gate on writes the kernel, input and product transforms: true
+wb1: Autotune.detect_conv refuses the singleton batch, which the rewrite carries: true
+wb1: rewritten, no conv site is left: true
+wb1: the contraction is a matmul site accumulating the product buffer: true
+wb1: Winograd matches the direct form bitwise: true
+--- leg 1 wchain: two chained conv sites ---
+wchain: no conv site is left: true
+wchain: two sites' worth of transforms are written (6 distinct minted buffers): true
+wchain: Winograd matches the direct form bitwise: true
+--- leg 2: non-dyadic inputs, within 1e-4 relative ---
+wreal: the rewrite fired: true
+wreal: Winograd matches the direct form within 1e-4 relative: true
+--- leg 3: a changed kernel is seen by the next call ---
+the replaced kernel changes the direct output: true
+first call: Winograd matches the direct form bitwise: true
+second call, new kernel: Winograd matches the direct form bitwise: true
+--- leg 4: training -- parameter gradients agree with the direct form ---
+the direct step's forward mints nothing: true
+the rewritten step's forward writes both convs' transforms (6 minted buffers): true
+the loss agrees within 1e-4 relative: true
+parameters with gradients: 4
+the same parameters carry gradients in both runs: true
+kernel_wtr1.grad agrees within 1e-4 relative: true
+kernel_wtr1.grad is not identically zero: true
+bias_wtr1.grad agrees within 1e-4 relative: true
+bias_wtr1.grad is not identically zero: true
+kernel_wtr2.grad agrees within 1e-4 relative: true
+kernel_wtr2.grad is not identically zero: true
+bias_wtr2.grad agrees within 1e-4 relative: true
+bias_wtr2.grad is not identically zero: true
+--- leg 5: the tuner schedules the contractions ---
+the search seeded sketches for the contractions: true
+the tuned Winograd conv matches the direct form within 1e-4 relative: true
+--- leg 6: declines ---
+5x5 window: left in the direct form, nothing minted: true
+stride 2: left in the direct form, nothing minted: true
+dilation 2: left in the direct form, nothing minted: true
+3x1 window: left in the direct form, nothing minted: true
+f16 kernel: left in the direct form, nothing minted: true
+--- leg 6b: hand-built nests ---
+a conv whose input also reads the window symbol at another axis is left alone: true
+the control, the same conv without the extra read, is rewritten: true
+the rewritten conv adds onto the destination's prior contents, bitwise: true

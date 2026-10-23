@@ -33,9 +33,10 @@ type rewrite = {
 }
 
 val tier : rewrite list
-(** The members, in application order: {!Online_softmax} (gh-ocannl-483), then {!Fp_algebra}
-    (gh-ocannl-998) -- the recognizers first, the normalizing algebra last, since contraction would
-    hide the value reduction the softmax hoist matches. *)
+(** The members, in application order: {!Online_softmax} (gh-ocannl-483), {!Winograd}
+    (gh-ocannl-505), then {!Fp_algebra} (gh-ocannl-998) -- the recognizers first, the normalizing
+    algebra last, since contraction would hide the value reduction the softmax hoist matches and the
+    [d + a * b] accumulation the Winograd recognizer matches. *)
 
 val max_rounds : int
 

@@ -215,6 +215,7 @@ let known_config_keys =
       "online_softmax";
       "online_softmax_backward";
       "online_softmax_block";
+      "winograd_conv";
       (* Identifiers and other *)
       "ll_ident_style";
       "cd_ident_style";
@@ -292,6 +293,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "online_softmax";
         "online_softmax_backward";
         "online_softmax_block";
+        "winograd_conv";
       ] );
     ( Code_borne,
       "a licence of the floating-point algebra, applied once by the rewrite tier on the raw \
@@ -1438,6 +1440,7 @@ narrow_compute_f32=true
 online_softmax=false
 online_softmax_backward=false
 online_softmax_block=0
+winograd_conv=false
 # The untuned GPU default's split reductions (gh-ocannl-1325) likewise: deterministic and chosen
 # from the routine alone, but they reassociate long sums into a tree over blocks, which this
 # profile keeps serial.
@@ -1511,6 +1514,9 @@ online_softmax_backward=true
 # Metal and CPU, and the two-pass rewrite on CUDA, HIP and unmeasured targets: the block fold
 # loses on the measured CUDA and HIP devices (gh-ocannl-1194 and gh-ocannl-1171).
 online_softmax_block=auto
+# The Winograd F(2x2, 3x3) convolution rewrite (gh-ocannl-505): a 3x3 stride-1 convolution is
+# computed in a transformed domain, through 16 channel contractions per 4x4 input tile.
+winograd_conv=true
 # The C compiler's licence to reassociate (fast-math) and to contract a*b+c into one rounding
 # across statements (fp-contract=fast). Both change results per compiler and target, which is
 # why `reproducible` pins them off and `performance` leaves them at their defaults.

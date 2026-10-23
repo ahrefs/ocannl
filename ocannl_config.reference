@@ -1734,6 +1734,19 @@
 # Programmatic override: `Ir.Online_softmax.set_block`.
 #online_softmax_block=0
 
+# The Winograd F(2x2, 3x3) convolution rewrite (gh-ocannl-505), over the raw lowered code. A 2-D
+# 3x3 stride-1 convolution at single precision (offset-free, so padded convs qualify: they read a
+# physically padded input) is computed as a kernel transform G w G^T, an input transform B^T x B
+# per 4x4 tile, 16 per-position contractions over the input channels -- ordinary products the
+# matmul sketches schedule -- and an inverse transform A^T M A into each 2x2 output tile: 2.25x
+# fewer multiplies, plus the transforms and three stored intermediates (about 4x the input and
+# 4x the output). An odd output extent keeps its last row and column in the direct form. The
+# transformed-domain arithmetic changes rounding beyond reassociation, so it is a numerics gate:
+# off by default, on in the `approximate` profile, pinned off in `reproducible`. Only the
+# forward convolution is rewritten; its gradients keep the direct form.
+# Programmatic override: `Ir.Winograd.set_enabled`.
+#winograd_conv=false
+
 # Whether the cc backend's target has native _Float16 arithmetic. "auto" (the default) probes the
 # configured compiler once per process: "none" if _Float16 is missing, "native" if the target
 # defines __ARM_FEATURE_FP16_VECTOR_ARITHMETIC or __AVX512FP16__, "promoted" if the type exists
@@ -1842,6 +1855,7 @@
 # online_softmax=false
 # online_softmax_backward=false
 # online_softmax_block=0
+# winograd_conv=false
 # # The untuned GPU default's split reductions (gh-ocannl-1325) likewise: deterministic and chosen
 # # from the routine alone, but they reassociate long sums into a tree over blocks, which this
 # # profile keeps serial.
@@ -1915,6 +1929,9 @@
 # # Metal and CPU, and the two-pass rewrite on CUDA, HIP and unmeasured targets: the block fold
 # # loses on the measured CUDA and HIP devices (gh-ocannl-1194 and gh-ocannl-1171).
 # online_softmax_block=auto
+# # The Winograd F(2x2, 3x3) convolution rewrite (gh-ocannl-505): a 3x3 stride-1 convolution is
+# # computed in a transformed domain, through 16 channel contractions per 4x4 input tile.
+# winograd_conv=true
 # # The C compiler's licence to reassociate (fast-math) and to contract a*b+c into one rounding
 # # across statements (fp-contract=fast). Both change results per compiler and target, which is
 # # why `reproducible` pins them off and `performance` leaves them at their defaults.
