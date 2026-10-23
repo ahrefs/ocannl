@@ -25,6 +25,9 @@ subject="$script_dir/typecheck-scan-cases.sh"
 . "$script_dir/../scripts/harness-support.sh"
 harness_args "$@"
 harness_scratch typecheck-scan-cases
+# A CI step does not carry setup-ocaml's switch on its PATH: load it as the other toolchain
+# harnesses do, leaving a host with no opam to the counted skips below.
+command -v dune >/dev/null 2>&1 || . "$script_dir/opam-env.sh" 2>/dev/null
 harness_require dune ocamlc
 
 out="$TMP/out" err="$TMP/err"
