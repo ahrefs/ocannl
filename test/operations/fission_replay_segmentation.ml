@@ -22,7 +22,9 @@
    segment's kind and schedule) keep their own saved schedules through a replay. 6. A folded segment
    (gh-ocannl-1175: a reduction's zero expanded into its kernel) replays after the zero policy stops
    proposing that fold, with or without search: the recorded fold is rebuilt from its proven target,
-   never re-asked of the current policy. *)
+   never re-asked of the current policy. 7. The unfissioned routine's single segment records whether
+   its head zero stayed whole ([`Unfolded], gh-ocannl-1480), and a replay rebuilds exactly the
+   segment it recorded; a [`Normal] record of it still replays folded. *)
 
 open Base
 open Ocannl
@@ -231,7 +233,7 @@ let () =
   (* --- 1. The stored segmentation is one the policy would not derive. --- *)
   p "the stored segmentation fissions the routine" (List.length saved >= 2);
   p_exists "the stored segmentation carries a zeros segment" saved ~f:(fun s ->
-      match s.SC.seg_kind with `Zeros -> true | `Normal | `Solo -> false);
+      match s.SC.seg_kind with `Zeros -> true | `Normal | `Solo | `Unfolded -> false);
   let key_before = cache_key rut in
   store saved;
 
@@ -265,7 +267,7 @@ let () =
      configuration, saved against the segment as the stored schedule is. *)
   let rederived_zeros_differ (s, (_, pre, _, _)) =
     match s.SC.seg_kind with
-    | `Normal | `Solo -> false
+    | `Normal | `Solo | `Unfolded -> false
     | `Zeros ->
         let tns =
           List.filter_map (LL.flat_lines [ pre.LL.llc ]) ~f:(function
@@ -489,3 +491,63 @@ let () =
         (match source_a with
         | Some a -> String.equal (alpha_normalize a) (alpha_normalize (Generated.read source))
         | None -> false))
+
+(* --- 7. The unfissioned routine's one segment replays with its head zero as recorded
+   (gh-ocannl-1480). A reduction into a scalar is one kernel, opened by its target's whole-node
+   zero, which a fold could expand. Recorded as a plain [`Normal] segment, a replay read that zero
+   as folded and rebuilt it expanded -- code the recording compile never ran -- so the autotuner's
+   digest guard refused every such winner. --- *)
+let () =
+  Unix.putenv "OCANNL_GPU_SCHEDULE_MIN_PARALLEL" "1";
+  let n = 8 in
+  let xv =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:7 ~offset:(-3.) ~stride:0.5)
+  in
+  let x7 = TDSL.ndarray xv ~label:[ "fx7" ] ~output_dims:[ n; n ] () in
+  let%op r7 = relu (x7 *. x7) ++ "ij => 0" in
+  let rut = lower (Train.forward r7) in
+  let head (pre : LL.optimized) =
+    List.find (LL.flat_lines [ pre.LL.llc ]) ~f:(function
+      | LL.Comment _ | LL.Noop -> false
+      | _ -> true)
+  in
+  let zero_headed pre = match head pre with Some (LL.Zero_out _) -> true | _ -> false in
+  let pre_digests tuples =
+    List.map tuples ~f:(fun (_, pre, _, _) ->
+        SC.digest (SC.canonicalize ~with_placements:false pre))
+  in
+  let derived =
+    List.map [ false; true ] ~f:(fun fold_zeros -> (fold_zeros, fission rut ~fold_zeros ()))
+  in
+  (* One kernel arises where the zero's segment schedules nothing and coalesces with the
+     reduction's: on the C backends, whose [zero_sched] is empty. A GPU expands the zero into its
+     own kernel, so the shape claims are the C backends'; the replay claims hold everywhere. *)
+  let single_kernel = not is_gpu in
+  gated_all ~when_:single_kernel ~on:backend_name
+    "7: the scalar reduction derives one segment, with or without the zero fold" derived
+    ~f:(fun (_, (segmentation, _)) -> List.length segmentation = 1);
+  gated_all ~when_:single_kernel ~on:backend_name
+    "7: that segment records [`Unfolded] exactly when its head is the target's whole-node zero"
+    derived ~f:(fun (_, (segmentation, tuples)) ->
+      match (segmentation, tuples) with
+      | [ (kind, _) ], [ (_, pre, _, _) ] ->
+          Bool.equal (Sched.equal_segment_kind kind `Unfolded) (zero_headed pre)
+      | _ -> false);
+  gated_exists ~when_:single_kernel ~on:backend_name "7: some derivation leaves the head zero whole"
+    derived ~f:(fun (_, (segmentation, _)) ->
+      match segmentation with [ (`Unfolded, _) ] -> true | _ -> false);
+  p_all "7: replaying the recorded segmentation rebuilds the very segment it recorded" derived
+    ~f:(fun (_, (segmentation, tuples)) ->
+      let replayed, rtuples = fission rut ~segmentation () in
+      Sched.equal_segmentation replayed segmentation
+      && List.equal String.equal (pre_digests rtuples) (pre_digests tuples));
+  (* Entries written before [`Unfolded] keep their meaning: a [`Normal] single segment opening with
+     a foldable zero replays folded, as it always did. *)
+  p_all "7: a [`Normal] record of that segment still replays with the zero expanded" derived
+    ~f:(fun (_, (segmentation, _)) ->
+      match segmentation with
+      | [ (`Unfolded, units) ] -> (
+          match fission rut ~segmentation:[ (`Normal, units) ] () with
+          | _, [ (_, pre, _, _) ] -> not (zero_headed pre)
+          | _ -> false)
+      | _ -> true)

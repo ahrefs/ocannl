@@ -7118,6 +7118,29 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1480: arm A's crowned schedule ships as it was timed after arm B has searched -- cold,
+; warm, placement store bypassed, forced, with a timing_ctx, and through Autotune.tune_deferred.
+
+(test
+ ; cc-vector-width: independent -- its claims are ship outcomes on scripted timings, and outputs over
+ ; dyadic inputs, which every width computes alike.
+ (name tune_arm_a_replay)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules tune_arm_a_replay)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  ll_test
+  scripted_search
+  test_utils)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-1445: a graph-captured routine's instantiated graphs are destroyed when its context is
 ; released (cuda and hip; skipped where the backend caches no graphs).
 

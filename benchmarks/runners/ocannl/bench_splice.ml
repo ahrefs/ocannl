@@ -170,7 +170,13 @@ type plan = {
 }
 
 let entry_id (e : SC.entry) = String.prefix e.SC.source_digest 12
-let kind_name = function `Normal -> "normal" | `Zeros -> "zeros" | `Solo -> "solo"
+
+let kind_name = function
+  | `Normal -> "normal"
+  | `Zeros -> "zeros"
+  | `Solo -> "solo"
+  | `Unfolded -> "unfolded"
+
 let fissioned (e : SC.entry) = Option.is_some e.SC.segments
 let digest_matches prefix (s : SC.saved_segment) = String.is_prefix s.SC.seg_digest ~prefix
 

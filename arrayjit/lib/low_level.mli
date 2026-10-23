@@ -1521,6 +1521,14 @@ val simplify_llc : Indexing.static_symbol list -> t -> t
     member [Fp_algebra] (gh-ocannl-998), so neither this pass nor the schedule transforms that rerun
     it can contract or reassociate across an inlining boundary. *)
 
+val without_node_bounds : (unit -> 'a) -> 'a
+(** Runs the thunk with interval folding ({!simplify_llc} and the transforms' trailing
+    simplification) blind to tensor nodes' bounds candidates, on the calling domain: a fold then
+    rests on precisions, loop ranges and static indices alone, so the result is a function of the
+    code (gh-ocannl-1480). A bounds candidate is process state that grows as routines link, and the
+    autotuner's replay of a saved schedule must rebuild the very code it was saved against. Less
+    folding is always sound: a guard left in place is only checked at run time. *)
+
 val rewrite_one_hot_reductions : ?static_indices:Indexing.static_symbol list -> t -> t
 (** gh-343: rewrites the narrow one-hot embedding pattern -- an [Add] reduction over a loop variable
     [k] whose body selects an embedding-table row via [k == index_expr] (a logical one-hot) -- into

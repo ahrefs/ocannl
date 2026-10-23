@@ -32,6 +32,7 @@ Sources naming a schedule cache directory, all with the `autotune_cache` prefix 
   test/operations/schedule_conv_gemm.ml
   test/operations/schedule_epilogue_fusion.ml
   test/operations/symbolic_extent_launch.ml
+  test/operations/tune_arm_a_replay.ml
   test/operations/tune_call_budget.ml
 
 OK: every source listed names one; the ignore list needs no entry per directory.

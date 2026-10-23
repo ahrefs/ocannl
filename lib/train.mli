@@ -445,6 +445,11 @@ type shipped = {
           ({!Context.relink_outcome}). One compile's count for a searched winner, recompiled from
           its saved form in the caller's lineage (1, or 2 on Metal, whose device compile is counted
           at link). *)
+  ship_substituted : bool;
+      (** No measured schedule shipped: the shipping compile substituted the untuned default for the
+          crown [ship_report] names ({!Autotune.shipped_substitute}) with nothing left to fall back
+          to, or the last resort shipped the caller's own untuned compile (gh-ocannl-1480). [false]
+          whenever the routine is the compile of a schedule some search measured. *)
 }
 (** What {!tune_placements} shipped, as its [on_ship] callback receives it (gh-ocannl-1438): the
     identity of the returned artifact, which the arm reports alone do not determine (see

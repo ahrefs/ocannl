@@ -570,6 +570,7 @@ type shipped = {
   ship_routine : string;
   ship_report : Autotune.report option;
   ship_compiles : int;
+  ship_substituted : bool;
 }
 
 let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?report ?flip_report
@@ -1015,7 +1016,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                 None))
   in
   (* gh-ocannl-638: the one place that knows what shipped, on the one path that ships. *)
-  let deliver ?(replayed = false) ~what ~report ~commit compiled =
+  let deliver ?(replayed = false) ?(substituted = false) ~what ~report ~commit compiled =
     (* gh-ocannl-638: the one place that knows what shipped, on the one path that ships.
 
        A raising callback is the caller's failure and propagates, like [report]'s — but it
@@ -1035,6 +1036,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
               ship_routine = (snd compiled).Context.name;
               ship_report = report;
               ship_compiles = !shipping_compiles;
+              ship_substituted = substituted;
             }
         with exn ->
           let backtrace = Stdlib.Printexc.get_raw_backtrace () in
@@ -1090,7 +1092,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                   "%s's compile failed (%s): shipping the untuned default of the default \
                    placements (arm A) after all, unrecorded"
                   what (Exn.to_string exn);
-                deliver ~what:"A" ~report:None
+                deliver ~substituted:true ~what:"A" ~report:None
                   ~commit:(fun () ->
                     logf "placement store: nothing recorded, no measured placement compiled")
                   (counted (fun () -> Autotune.untuned_compile ?name ctx comp bindings))
@@ -1131,7 +1133,9 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                       what
                   else commit
                 in
-                deliver ?replayed ~what ~report ~commit compiled))
+                deliver ?replayed
+                  ~substituted:(Autotune.shipped_substitute deferred)
+                  ~what ~report ~commit compiled))
     | Error (exn, backtrace) -> Stdlib.Printexc.raise_with_backtrace exn backtrace
   in
   (* The completed results among [candidates], as [ship]'s fallbacks. *)

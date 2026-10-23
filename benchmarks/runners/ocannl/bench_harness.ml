@@ -1820,7 +1820,7 @@ let print_site_census ~limits ~static_indices opt =
         List.iteri (List.zip_exn plan tuples) ~f:(fun i ((kind, n), (_, pre, _, _)) ->
             let start = !at in
             at := !at + n;
-            match kind with
+            match Ir.Schedule.segment_class kind with
             | `Zeros | `Solo -> ()
             | `Normal -> (
                 match products pre with

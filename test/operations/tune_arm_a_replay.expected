@@ -1,0 +1,25 @@
+cold: not every schedule-cache store was refused: true
+cold: both arms searched, arm B after arm A, and arm A's crown shipped unsubstituted: true
+cold: the shipped report is arm A's: true
+cold: on cc, arm A's crown is a fissioned form: true
+warm: the recorded decision replayed arm A's schedule from the cache, unsubstituted: true
+bypass: both arms replayed their cached schedules, and arm A shipped unsubstituted: true
+every shipped routine computes the untuned output bit for bit: true
+cold: not every schedule-cache store was refused (timing_ctx): true
+cold: both arms searched, arm B after arm A, and arm A's crown shipped unsubstituted (timing_ctx): true
+cold: the shipped report is arm A's (timing_ctx): true
+cold: on cc, arm A's crown is a fissioned form (timing_ctx): true
+warm: the recorded decision replayed arm A's schedule from the cache, unsubstituted (timing_ctx): true
+bypass: both arms replayed their cached schedules, and arm A shipped unsubstituted (timing_ctx): true
+every shipped routine computes the untuned output bit for bit (timing_ctx): true
+forced: arm B measured faster, both arms searched, and arm A's crown shipped unsubstituted: true
+forced: the shipped routine computes the untuned output bit for bit: true
+deferred: both searches searched, arm B's after arm A's: true
+deferred: arm A's compile after arm B's search ships its crown, no substitute: true
+deferred: a second compile_deferred returns the same routine: true
+deferred: it computes the untuned output bit for bit: true
+prelude fold: the lowering taken before any upload keeps the gather guard: true
+prelude fold: the upload proposed the ids' bounds: true
+prelude fold: blind to node bounds, re-simplifying the earlier lowering keeps every guard: true
+prelude fold: reading the proposed bounds, the same re-simplification folds the guard: true
+tune_arm_a_replay: done

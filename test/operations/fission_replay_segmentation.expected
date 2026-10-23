@@ -30,3 +30,8 @@ under the raised threshold the folded replay emits identical code, with search: 
 under the raised threshold the folded winner replays from the cache, with search disabled: true
 under the raised threshold the folded replay computes the right values, with search disabled: true
 under the raised threshold the folded replay emits identical code, with search disabled: true
+7: the scalar reduction derives one segment, with or without the zero fold: true
+7: that segment records [`Unfolded] exactly when its head is the target's whole-node zero: true
+7: some derivation leaves the head zero whole: true
+7: replaying the recorded segmentation rebuilds the very segment it recorded: true
+7: a [`Normal] record of that segment still replays with the zero expanded: true
