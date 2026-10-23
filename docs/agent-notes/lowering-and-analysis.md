@@ -487,7 +487,11 @@ files.
   write-through. The alias never enters `ctx_buffers`, so finalization and pool resolution never see it.
   For the same reason every write through a view goes through `set` and `resolve_alias`, a zero
   `Fetch` included: a `Zero_out` of the bufferless view would drop silently (gh-ocannl-1475,
-  executed in `test/operations/test_slice_alias.ml`).
+  executed in `test/operations/test_slice_alias.ml`). `Low_level.validate_no_slice_aliases` holds
+  that invariant at three gates (gh-ocannl-1485): per assignment in `to_low_level` (naming the
+  assignment), at `optimize_proc` entry, and in `C_syntax.compile_proc` (schedule output, a
+  `?prelowered` routine). A new access path that forgets `resolve_alias` fails there, loudly; a
+  merge-buffer read of a view is refused outright, since there is no buffer to transfer.
 - `Ops.promote_prec` is ordered `Uint4x32_prec` first, then the floats widest-first, then the
   integers: the RNG state precision dominates EVERYTHING (a join of uint4x32 with double is
   uint4x32, which is what keeps a threefry chain from being widened by a float consumer), and
