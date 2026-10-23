@@ -16,8 +16,10 @@ bench so that the command line IS the treatment, and records what the process ac
   bench's common arguments (after `--`), then the arm's -- over the defaults of the commit the
   bench was built from. Device and loader runtime controls (CUDA_*, HIP_*, HSA_*, MTL_*, DYLD_*,
   LD_*, ... -- `RUNTIME_PREFIXES`) are the box's: some boxes cannot run without them, so they pass
-  through, and each one present is recorded with its value beside the numbers; every other variable
-  that passes is recorded by name.
+  through, and each one present is recorded with its value beside the numbers (OCAMLRUNPARAM, the
+  OCaml runtime's, among them); every other variable that passes is recorded by name. The build,
+  when the driver does it, runs with DUNE_* and OCAMLPARAM cleared and the root and build directory
+  named, so the executable measured is the one built from this checkout.
 - The resolved configuration is echoed, not assumed. Each cell runs under
   `--ocannl_log_config_sourcing=true`, and the driver reads that trace back: every setting the
   process read, with its value and where it came from. A cell fails when any setting came from the
@@ -89,7 +91,9 @@ CLEARED_PREFIXES = ("OCANNL_", "BENCH_", "OMP_", "GOMP_", "KMP_")
 # they pass through, and every one present is RECORDED with its value as part of the treatment.
 # Every other variable that passes is recorded by name.
 RUNTIME_PREFIXES = ("CUDA_", "NVIDIA_", "CUBLAS", "HIP_", "ROCR_", "HSA_", "AMD_", "GPU_", "MTL_",
-                    "METAL_", "OBJC_", "DYLD_", "LD_", "MALLOC")
+                    "METAL_", "OBJC_", "DYLD_", "LD_", "MALLOC", "OCAMLRUNPARAM")
+# What the build must not inherit: Dune's own environment and the compiler's flag override.
+BUILD_CLEARED_PREFIXES = ("DUNE_", "OCAMLPARAM")
 RESULT_PREFIX = "bench-result: "
 CELL_TIMEOUT_S = 1800
 BUILD_TIMEOUT_S = 3600
@@ -301,7 +305,7 @@ def render_report(manifest, records, problems):
     lines.append("")
     for key in ("commit", "executable_sha256", "host", "system", "cpu"):
         lines.append(log_line(f"- {key}: {display_value(str(manifest.get(key)))}"))
-    lines.append(log_line("- device and loader runtime controls passed through: " + (
+    lines.append(log_line("- runtime controls passed through (device, loader, OCaml runtime): " + (
         ", ".join(f"{k}={display_value(v)}" for k, v in manifest["runtime_controls"].items())
         or "none")))
     lines.append(log_line("- cleared from the environment: " + (
@@ -520,13 +524,21 @@ def main(argv=None):
             sys.exit(f"bin_cells: not a dune executable name: {bench!r}")
         commit = tree_commit()
         out.mkdir(parents=True, exist_ok=True)
+        build_dir = ROOT / "_build"
+        # The build is hermetic in the same sense as the cells: Dune's own environment
+        # (DUNE_BUILD_DIR moves the artifacts, DUNE_PROFILE changes the flags, ...) and OCAMLPARAM
+        # (compiler flags) are cleared, and the build directory is named, so the executable read
+        # below is the one this command built from this checkout.
+        build_env = {k: v for k, v in os.environ.items()
+                     if not k.startswith(BUILD_CLEARED_PREFIXES)}
         with open(out / "build.log", "wb") as log:
             # --root: dune otherwise picks the OUTERMOST project root, so a nested worktree without
             # its dune-workspace would build the parent checkout while the executable read below
             # (and the commit recorded above) are this one's (AGENTS.md, Worktrees).
-            status = run_in_group(["dune", "build", "--root", str(ROOT), f"bin/{bench}.exe"], ROOT, None,
+            status = run_in_group(["dune", "build", "--root", str(ROOT), "--build-dir",
+                                   str(build_dir), f"bin/{bench}.exe"], ROOT, build_env,
                                   BUILD_TIMEOUT_S, log, subprocess.STDOUT)
-        exe = ROOT / "_build/default/bin" / f"{bench}.exe"
+        exe = build_dir / "default/bin" / f"{bench}.exe"
         if status != 0 or not exe.is_file():
             sys.exit(f"bin_cells: building bin/{bench}.exe failed ({status}); see {out}/build.log")
     out.mkdir(parents=True, exist_ok=True)
