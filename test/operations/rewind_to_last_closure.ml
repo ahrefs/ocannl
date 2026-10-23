@@ -390,6 +390,46 @@ let retained_handles () =
     | Ok () -> false);
   Tensor.rewind_to_last_closure ()
 
+(* gh-ocannl-1505: a rewind discards exactly the nodes the frontend allocated since the closure. A
+   node created in the open window by anyone else -- here a hand-made one, as an arrayjit client or
+   [Persistence.load] makes them -- in the session namespace with an id inside the window's id range
+   is not open work: an id/uid-range record of the window refused it. *)
+let exact_allocated_nodes () =
+  Tensor.rewind_to_last_closure ();
+  let ctx = Context.auto () in
+  let open_t = leaf "rw_open" [| 1.; 2. |] in
+  let%op open_u = open_t *. 2. in
+  let hand_made =
+    Ir.Tnode.create (Ir.Tnode.Default Ir.Ops.single) ~id:open_t.Tensor.value.Ir.Tnode.id
+      ~label:[ "rw_hand_made" ]
+      ~unpadded_dims:(lazy [| 2 |])
+      ~padding:(lazy None)
+      ()
+  in
+  p "the hand-made node shares an open tensor's id and namespace"
+    (hand_made.Ir.Tnode.id = open_t.value.id
+    && String.equal hand_made.namespace open_t.value.namespace);
+  Tensor.rewind_to_last_closure ~reason:"rw: discarding beside a hand-made node" ();
+  p "the open tensors' nodes are discarded"
+    (refused_with
+       (fun () -> Context.get_values ctx open_u.Tensor.value)
+       ~substrings:[ discarded; "rw: discarding beside a hand-made node" ]
+    && refused_with (fun () -> Context.get_values ctx open_t.Tensor.value) ~substrings:[ discarded ]
+    );
+  let read_back = ref [||] in
+  let written =
+    outcome (fun () ->
+        let ctx = Context.set_values ctx hand_made [| 0.5; -2. |] in
+        read_back := Context.get_values ctx hand_made)
+  in
+  p "the hand-made node created in the window is not: it is written through the context"
+    (match written with
+    | Ok () -> true
+    | Error msg ->
+        Stdio.eprintf "(not part of the golden) hand-made node refused: %s\n%!" msg;
+        false);
+  p_all2 "and its values read back" !read_back [| 0.5; -2. |] ~f:Float.equal
+
 let () =
   match Sys.get_argv () with
   | [| _; "fresh" |] -> fresh_leg ()
@@ -397,4 +437,5 @@ let () =
       scenario ();
       timing ();
       symbol_roles ();
-      retained_handles ()
+      retained_handles ();
+      exact_allocated_nodes ()

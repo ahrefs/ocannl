@@ -140,17 +140,19 @@ let take_forward_code t =
 (** {2 Closure checkpoint and rewind (gh-ocannl-1301)}
 
     [checkpoint] is recorded at the end of every successful [Shape.finish_inference] (through
-    [Shape.on_closure]): the id and uid marks, and the two root maps (persistent values, so a
-    pointer copy). Everything allocated since the mark is open work. [rewind_to_last_closure]
-    discards it: the ids from [mark] up to [next_id] go to [discarded], and every use of a discarded
-    tensor or node is refused with the rewind's provenance. *)
+    [Shape.on_closure]): the id mark, and the two root maps (persistent values, so a pointer copy).
+    The nodes the frontend allocated since the closure are recorded exactly, by uid, in
+    [open_node_uids]: they are the open work's nodes. [rewind_to_last_closure] discards them into
+    [discarded_nodes], and every use of a discarded tensor or node is refused with the rewind's
+    provenance. Exact rather than an id/uid range (gh-ocannl-1505): a node created in the window by
+    anyone else -- a hand-made [Tn.create], a [Persistence.load] -- may carry an id inside the
+    window's range, and is not open inference work. *)
 
 (* Global singleton for random seed, used in init_params and random number generation *)
 let random_seed : t option ref = ref None
 
 type checkpoint = {
   mutable ck_mark : int;
-  mutable ck_uid_mark : int;
   mutable ck_fwd : t Map.M(Int).t;
   mutable ck_bprop : t Map.M(Int).t;
   mutable ck_count : int;  (** Closures recorded so far. *)
@@ -160,16 +162,21 @@ type checkpoint = {
 let checkpoint =
   {
     ck_mark = 0;
-    ck_uid_mark = !Tn.next_uid;
     ck_fwd = Map.empty (module Int);
     ck_bprop = Map.empty (module Int);
     ck_count = 0;
     ck_seed = None;
   }
 
+(* The uids of the nodes the frontend allocated since the last closure, exactly ([note_open_node] at
+   every frontend [Tn.create]). A closure closes every shape of the open work, so it empties
+   this. *)
+let open_node_uids : int list ref = ref []
+let note_open_node (tn : Tn.t) = open_node_uids := tn.uid :: !open_node_uids
+
 let record_checkpoint () =
   checkpoint.ck_mark <- session_state.next_id;
-  checkpoint.ck_uid_mark <- !Tn.next_uid;
+  open_node_uids := [];
   checkpoint.ck_fwd <- session_state.forward_roots;
   checkpoint.ck_bprop <- session_state.backprop_roots;
   checkpoint.ck_count <- checkpoint.ck_count + 1;
@@ -186,21 +193,10 @@ let record_handout_in_checkpoint ~fwd t =
     if fwd then checkpoint.ck_fwd <- Map.remove checkpoint.ck_fwd t.value.id
     else checkpoint.ck_bprop <- Map.remove checkpoint.ck_bprop t.value.id
 
-type discarded_range = {
-  lo : int;
-  hi : int;
-  uid_lo : int;
-  uid_hi : int;  (** Exclusive: nodes created after the rewind are never in the range. *)
-  in_namespace : string;
-  provenance : string;
-}
-
-let discarded : discarded_range list ref = ref []
-
-let discarded_by (tn : Tn.t) =
-  List.find !discarded ~f:(fun r ->
-      tn.id >= r.lo && tn.id < r.hi && tn.uid >= r.uid_lo && tn.uid < r.uid_hi
-      && String.equal tn.Tn.namespace r.in_namespace)
+(* The nodes discarded by rewinds, by uid (never reused, across namespaces and reinitializations
+   alike), with the provenance of the rewind that discarded each. *)
+let discarded_nodes : (int, string) Hashtbl.t = Hashtbl.create (module Int)
+let discarded_by (tn : Tn.t) = Hashtbl.find discarded_nodes tn.uid
 
 (* Marks only what it removes: a backprop code handed out before the forward-only run stays [Taken],
    so later consumption can still return the code rather than reject a discard that dropped
@@ -293,9 +289,9 @@ let session_error_printer = function
 
 let () = Stdlib.Printexc.register_printer session_error_printer
 
-let discarded_message (tn : Tn.t) r =
+let discarded_message (tn : Tn.t) provenance =
   [%string
-    "tensor node %{Tn.debug_name tn} was discarded by the rewind after %{r.provenance}; re-run its \
+    "tensor node %{Tn.debug_name tn} was discarded by the rewind after %{provenance}; re-run its \
      definition"]
 
 (** Raises [Session_error] when [t] (its value or gradient node) was discarded by a rewind. Shared
@@ -303,8 +299,8 @@ let discarded_message (tn : Tn.t) r =
 let check_not_discarded ~what t =
   let nodes = t.value :: Option.value_map t.diff ~default:[] ~f:(fun d -> [ d.grad ]) in
   List.iter nodes ~f:(fun tn ->
-      Option.iter (discarded_by tn) ~f:(fun r ->
-          raise @@ Session_error (what ^ ": " ^ discarded_message tn r, Some t)))
+      Option.iter (discarded_by tn) ~f:(fun provenance ->
+          raise @@ Session_error (what ^ ": " ^ discarded_message tn provenance, Some t)))
 
 (** Sets an operand's precision ahead of an operation that requires it (e.g. [uint4x32] bits). A
     closed operand's precision is part of its committed state (gh-ocannl-1301): an update that would
@@ -608,6 +604,7 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
         tn
     | Some (Shape.Fetch _) | None -> Tn.create delayed_prec ~id ~label ~unpadded_dims ~padding ()
   in
+  note_open_node v;
   let update_infer_prec ti tn prec =
     (* Instead of just checking prec, we cross-check with dims (needed for code generation), to
        catch prec forcing bugs. A closed operand takes no new links either (gh-ocannl-1301): its
@@ -752,6 +749,7 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
         ~padding:(lazy (Shape.to_padding shape))
         ()
     in
+    note_open_node g;
     (* Apply delayed top-down precision updates to parameter gradient subtensors *)
     List.iter top_down_ts ~f:(fun ti ->
         Option.iter ti.diff ~f:(fun d -> update_infer_prec ti d.grad g.Tn.storage_prec));
@@ -1038,6 +1036,7 @@ let force_param_diff t =
       ~padding:(lazy (Shape.to_padding t.shape))
       ()
   in
+  note_open_node g;
   let diff =
     {
       grad = g;
@@ -1265,12 +1264,12 @@ let with_saved_random_seed f =
 
 let install_validity_check () =
   Tn.validity_check :=
-    if List.is_empty !discarded then None
+    if Hashtbl.is_empty discarded_nodes then None
     else
       Some
         (fun tn ->
-          Option.iter (discarded_by tn) ~f:(fun r ->
-              raise @@ Session_error (discarded_message tn r, None)))
+          Option.iter (discarded_by tn) ~f:(fun provenance ->
+              raise @@ Session_error (discarded_message tn provenance, None)))
 
 let rewind_to_last_closure ?reason () =
   Shape.check_can_rewind ();
@@ -1279,18 +1278,8 @@ let rewind_to_last_closure ?reason () =
     | Some provenance -> provenance
     | None -> Option.value reason ~default:"an explicit Tensor.rewind_to_last_closure"
   in
-  let mark = checkpoint.ck_mark in
-  if session_state.next_id > mark then (
-    discarded :=
-      {
-        lo = mark;
-        hi = session_state.next_id;
-        uid_lo = checkpoint.ck_uid_mark;
-        uid_hi = !Tn.next_uid;
-        in_namespace = Tn.get_current_namespace ();
-        provenance;
-      }
-      :: !discarded;
+  if not (List.is_empty !open_node_uids) then (
+    List.iter !open_node_uids ~f:(fun uid -> Hashtbl.set discarded_nodes ~key:uid ~data:provenance);
     install_validity_check ());
   (* The closure's roots, wholesale: a root a discarded construction embedded (via [Tensor.op] or
      [%cd]'s [take_forward_code]) is a root again, with its handout marker reset; external handouts
@@ -1310,7 +1299,7 @@ let%track5_sexp unsafe_reinitialize ?(namespace = Tn.default_namespace) () : uni
   session_state.next_id <- 0;
   session_state.forward_roots <- Map.empty (module Int);
   session_state.backprop_roots <- Map.empty (module Int);
-  discarded := [];
+  Hashtbl.clear discarded_nodes;
   install_validity_check ();
   param_postprocess := Fn.id;
   random_seed := None;

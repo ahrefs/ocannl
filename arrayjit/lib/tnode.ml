@@ -228,12 +228,12 @@ type t = {
 let compare a1 a2 = compare_int a1.uid a2.uid
 
 (* The [uid] counter deliberately lives outside any reinitializable session state. *)
-let next_uid = ref 0
-
-let fresh_uid () =
-  let uid = !next_uid in
-  next_uid := uid + 1;
-  uid
+let fresh_uid =
+  let next_uid = ref 0 in
+  fun () ->
+    let uid = !next_uid in
+    next_uid := uid + 1;
+    uid
 
 (* Session hooks installed by the tensor frontend (gh-ocannl-1301), so the context API can refuse
    work the frontend no longer stands behind without arrayjit depending on it. [session_gate] runs
