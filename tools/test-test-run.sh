@@ -6938,7 +6938,10 @@ case " \$* " in
       start=4242
       [ -z "\${TOK_ADVANCE:-}" ] || start=\$((100000 + n))
       mkdir -p "\$TOK_PROC/\$pid"
-      printf '%s (sleep) S 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 %s 0 0\n' "\$pid" "\$start" >"\$TOK_PROC/\$pid/stat.tmp"
+      # The name holds ") " and numbers, as a native name may: only the LAST
+      # ") " ends it, and a reader stopping at the first one reads a
+      # constant field as the token.
+      printf '%s (sl) 9 9) S 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 %s 0 0\n' "\$pid" "\$start" >"\$TOK_PROC/\$pid/stat.tmp"
       mv -f "\$TOK_PROC/\$pid/stat.tmp" "\$TOK_PROC/\$pid/stat"
       printf '%s %s\n' "\$pid" "\$start" >>"\$TOK_SERVED"
     fi ;;
@@ -7357,7 +7360,7 @@ done
 for probe in "@al/runtest-yes" "@@al/runtest-yes" "@al/deep" "@deep" "@al/sub/deep @@al/sub/deep" "@al/./deep" \
              "@./al/runtest-yes" "@al/runtest-yes -- @not/asked" \
              "--profile release @al/runtest-no_such" "@_build/default/al/runtest-no_such" \
-             "@al/vdeep" "@vinner" "@al/altname"; do
+             "@al/vdeep" "@vinner" "@al/altname" "--build-dir=out @out/default/al/runtest-no_such"; do
   [ -z "$alias_detail" ] || break
   # shellcheck disable=SC2086 # the probe's operands, split on purpose
   alias_probe alias-known run build $probe

@@ -130,7 +130,8 @@ test_cap_watch='
       for my $root (@procs) {
         my $s;
         if (open my $sf, "<", "$root/$p/stat") { $s = <$sf>; close $sf }
-        next unless defined $s && $s =~ /\)\s+(.*)$/;
+        # The LAST ") " ends the name, which may hold both (Codex review round 7).
+        next unless defined $s && $s =~ /^(?s:.*)\)\s+(.*)$/;
         my @f = split /\s+/, $1;
         $tok{$p} = "t$f[19]" if defined $f[19] && $f[19] =~ /^\d+$/;
         last;

@@ -898,10 +898,10 @@ plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal
     if [ -n "$value" ]; then value=; continue; fi
     case $arg in
       --) break ;;
-      -j | --cache | --display | --diff-command | --trace-file | --error-reporting | --sandbox | --build-dir)
+      -j | --cache | --display | --diff-command | --trace-file | --error-reporting | --sandbox)
         value=1; continue ;;
       -j[0-9]* | --cache=* | --display=* | --diff-command=* | --trace-file=* | --error-reporting=* | \
-        --sandbox=* | --build-dir=* | --force | -f | --auto-promote | --no-buffer | --stop-on-first-error | \
+        --sandbox=* | --force | -f | --auto-promote | --no-buffer | --stop-on-first-error | \
         --action-stdout-on-success=* | --action-stderr-on-success=*)
         continue ;;
       -*) return 0 ;;
@@ -1311,7 +1311,7 @@ supervisor_perl='
     my $tok = "";
     if (open my $sf, "<", "/proc/self/stat") {
       my $s = <$sf>;
-      if ($s =~ /\)\s+(.*)$/) {
+      if ($s =~ /^(?s:.*)\)\s+(.*)$/) {
         my @f = split /\s+/, $1;
         $tok = defined $f[19] ? $f[19] : "";
       }
@@ -2258,7 +2258,7 @@ ps_token() {
     perl -e '
       open my $fh, "<", "/proc/$ARGV[0]/stat" or exit 0;
       my $s = <$fh>;
-      $s =~ /\)\s+(.*)$/ or exit 0;   # comm may contain spaces/parens
+      $s =~ /^(?s:.*)\)\s+(.*)$/ or exit 0;   # comm may contain spaces/parens: the LAST ") " ends it
       my @f = split /\s+/, $1;        # $f[0] is field 3 (state)
       print defined $f[19] ? $f[19] : "";
     ' "$1" 2>/dev/null
