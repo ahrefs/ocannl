@@ -469,6 +469,38 @@ let helper () = get ~arg_name:"rebound" ~default:""|ocaml},
       {ocaml|let v = lazy (helper ())
 let helper () = get ~arg_name:"later" ~default:""|ocaml},
       [] );
+    ( "a helper inside the same functor body",
+      [],
+      {ocaml|module Make (X : sig end) = struct
+  let helper () = get ~arg_name:"functor_helper" ~default:""
+  let held = lazy (helper ())
+end|ocaml},
+      [ "functor_helper" ] );
+    ( "a member of the lazy's own recursive group",
+      [],
+      {ocaml|let rec helper () = get ~arg_name:"rec_helper" ~default:""
+and held = lazy (helper ())|ocaml},
+      [ "rec_helper" ] );
+    ( "the include in scope at the lazy, not a later one",
+      [],
+      {ocaml|module A = struct
+  let helper () = get ~arg_name:"first_include" ~default:""
+end
+module B = struct
+  let helper () = get ~arg_name:"second_include" ~default:""
+end
+include A
+let held = lazy (helper ())
+include B|ocaml},
+      [ "first_include" ] );
+    ( "a helper reached through a module alias",
+      [],
+      {ocaml|module Real = struct
+  let helper () = get ~arg_name:"aliased" ~default:""
+end
+module Alias = Real
+let held = lazy (Alias.helper ())|ocaml},
+      [ "aliased" ] );
     ( "opaque plumbing is not followed",
       [ "lookup" ],
       {ocaml|let lookup ~arg_name = resolve ~arg_name ~bootstrap:(get ~arg_name:"plumbing" ~default:"")
