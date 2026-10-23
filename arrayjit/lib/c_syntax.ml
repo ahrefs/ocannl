@@ -7904,10 +7904,12 @@ module C_syntax (B : C_syntax_config) = struct
       List.filter_map candidates ~f:(fun (tn, is_param) ->
           if not is_param then None
           else (
-            (* Assignments lowering rewrites every alias-view access to a parent access, so alias
-               tnodes never reach this parameter list — but hand-built [Low_level.t] (schedule
-               layer, tests) could mint one, and with [restrict_keyword] an aliased parameter pair
-               is a miscompile rather than a redundant pointer. Fail loudly (gh-ocannl-164). *)
+            (* Assignments lowering rewrites every alias-view access to a parent access, and the
+               slice-alias gate above refuses any access of a view the code still makes
+               (gh-ocannl-1485), so what can reach here is a view the code does not touch: an
+               untouched store entry, which a staged-compilation routine keeps as a parameter. With
+               [restrict_keyword] an aliased parameter pair is a miscompile rather than a redundant
+               pointer. Fail loudly (gh-ocannl-164). *)
             if Tn.is_alias tn then
               invalid_arg
                 ("C_syntax.compile_proc: alias view " ^ Tn.debug_name tn
@@ -8013,6 +8015,11 @@ module C_syntax (B : C_syntax_config) = struct
        around it would only hide the defect. *)
     Low_level.validate_scope_bodies llc;
     Low_level.validate_scan_loops optimize_ctx.Low_level.placements llc;
+    (* gh-ocannl-1485: the exit gate of the slice-alias invariant ([optimize_proc] holds the entry
+       one), for what a schedule transform constructs and for a [?prelowered] routine that never
+       went through [optimize]. Covers every access, not only the kernel parameters below, which
+       noticed a [Zero_out] of a view only where the view became a parameter (gh-ocannl-1475). *)
+    Low_level.validate_no_slice_aliases ~site:"C_syntax.compile_proc" llc;
     (* gh-ocannl-1238: with this backend's shuffle width, so the validator sees the barriers the
        warp-shuffle and lane all-reduce renderings insert, not only the IR's own. *)
     Low_level.validate_parallel_classified ~warp_size:B.warp_size

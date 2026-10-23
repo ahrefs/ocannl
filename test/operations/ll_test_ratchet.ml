@@ -50,9 +50,6 @@ let exemptions =
     ( "test/operations/test_one_hot_embedding_lookup.ml",
       Scan.Migration { records = 0; traversals = 6 },
       "existing migration debt; adopt ll_test when touched" );
-    ( "test/operations/test_slice_alias.ml",
-      Scan.Migration { records = 0; traversals = 2 },
-      "existing migration debt; adopt ll_test when touched" );
     ( "test/support/ll_builders.ml",
       Scan.Permanent,
       "canonical pure IR builders shared by both packages" );

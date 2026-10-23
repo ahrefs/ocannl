@@ -795,4 +795,6 @@ acc__ = __builtin_elementwise_fma(lhs__, rhs__, acc__);
 #else
 for (int ocannl_l__ = 0; ocannl_l__ < 32; ++ocannl_l__) acc__[ocannl_l__] = fma(lhs__[ocannl_l__], rhs__[ocannl_l__], acc__[ocannl_l__]);
 #endif
-alias parameter rejected: true
+a write of an alias view is refused at codegen: true
+a Zero_out of an alias view is refused at codegen: true
+an untouched alias view as a kernel parameter is refused: true

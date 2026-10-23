@@ -10279,6 +10279,83 @@ let validate_loop_binders static_indices (llc : t) : unit =
   Option.iter (loop_binder_violation static_indices llc) ~f:(fun msg ->
       invalid_arg ("Low_level.validate_loop_binders: " ^ msg))
 
+(* gh-ocannl-1485: a slice-alias view ([Tnode.alias_of], gh-ocannl-293 293a) owns no buffer, so
+   lowering redirects every access of one to its parent through [Assignments.resolve_alias]. A path
+   that forgets the redirect fails silently or far from the cause: a [Zero_out] of a view wrote
+   nothing and left the parent's cells as they were (gh-ocannl-1475), and the one check that could
+   notice, [C_syntax.compile_proc]'s kernel-parameter refusal, fires only where the view becomes a
+   parameter -- loud on the cc path, silent on the [?prelowered] one. This walk covers every
+   construct that addresses a node's buffer instead. Scope ids ([Set_local], [Get_local],
+   [Declare_local], a [Local_scope]'s or a scan's carried id) are not checked: a local is a
+   register, and addresses no buffer. *)
+let slice_alias_violation (root : t) : string option =
+  let exception Malformed of string in
+  let check ~what tn =
+    match Tn.alias_of tn with
+    | None -> ()
+    | Some (parent, _) ->
+        raise
+          (Malformed
+             (Printf.sprintf
+                "%s names the slice-alias view %s, which owns no buffer: every access of a view \
+                 must be rewritten to its parent %s (Assignments.resolve_alias)"
+                what (Tn.debug_name tn) (Tn.debug_name parent)))
+  in
+  let rec proc (llc : t) =
+    match llc with
+    | Noop | Comment _ | Staged_compilation _ | Declare_local _ | Workgroup_barrier -> ()
+    | Seq (a, b) ->
+        proc a;
+        proc b
+    | For_loop { body; _ } -> proc body
+    | Scan_loop { carried; body; _ } ->
+        List.iter carried ~f:(fun c -> scalar c.init);
+        proc body
+    | Zero_out tn -> check ~what:"a Zero_out" tn
+    | Set { tn; llsc; _ } ->
+        check ~what:"a Set" tn;
+        scalar llsc
+    | Set_dynamic { tn; dyn_value = v, _; llsc; _ } ->
+        check ~what:"a Set_dynamic" tn;
+        scalar v;
+        scalar llsc
+    | Set_from_vec { tn; arg = v, _; _ } ->
+        check ~what:"a Set_from_vec" tn;
+        scalar v
+    | Set_local (_, llsc) -> scalar llsc
+    | If { cond = c, _; body } ->
+        scalar c;
+        proc body
+    | Tile_mma { d = d_tn, _; a = a_tn, _; b = b_tn, _; fallback; _ } ->
+        check ~what:"a Tile_mma's accumulator" d_tn;
+        check ~what:"a Tile_mma's left operand" a_tn;
+        check ~what:"a Tile_mma's right operand" b_tn;
+        proc fallback
+  and scalar (llsc : scalar_t) =
+    match llsc with
+    | Local_scope { body; _ } -> proc body
+    | Get (tn, _) -> check ~what:"a Get" tn
+    (* A merge buffer is a transfer of the source node's buffer, which a view does not have:
+       [Assignments.to_low_level] deliberately leaves [Merge_buffer] unredirected. *)
+    | Get_merge_buffer (tn, _) -> check ~what:"a Get_merge_buffer" tn
+    | Get_dynamic { tn; dyn_value = v, _; _ } ->
+        check ~what:"a Get_dynamic" tn;
+        scalar v
+    | Ternop (_, (a, _), (b, _), (c, _)) ->
+        scalar a;
+        scalar b;
+        scalar c
+    | Binop (_, (a, _), (b, _)) ->
+        scalar a;
+        scalar b
+    | Unop (_, (a, _)) -> scalar a
+    | Get_local _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
+  in
+  match proc root with () -> None | exception Malformed msg -> Some msg
+
+let validate_no_slice_aliases ?(site = "Low_level.validate_no_slice_aliases") (llc : t) : unit =
+  Option.iter (slice_alias_violation llc) ~f:(fun msg -> invalid_arg (site ^ ": " ^ msg))
+
 let optimize_proc (input_ctx : optimize_ctx) static_indices llc =
   (* gh-ocannl-584: the pipeline's entry gate for scope purity, ahead of the analysis cache so a
      digest hit cannot skip it. Codegen's gate alone would not do: [hoist_cross_statement_cse] lifts
@@ -10291,6 +10368,9 @@ let optimize_proc (input_ctx : optimize_ctx) static_indices llc =
   (* gh-ocannl-1402: one binder per loop symbol, no free symbol -- a lowering generator's defect,
      refused where it is still the generator's shape rather than misread downstream. *)
   validate_loop_binders static_indices llc;
+  (* gh-ocannl-1485: no access of a bufferless slice-alias view, whoever built the code -- the
+     assignments lowering, the rewrite tier, or a hand-built routine. *)
+  validate_no_slice_aliases ~site:"Low_level.optimize_proc" llc;
   specialize_proc input_ctx (cached_analyze_proc static_indices llc)
 
 let code_hum_margin = ref 100

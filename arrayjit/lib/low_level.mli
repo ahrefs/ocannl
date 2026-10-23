@@ -940,6 +940,23 @@ val validate_loop_binders : Indexing.static_symbol list -> t -> unit
     emit sibling nests that share symbols (the staging transfer nests), and the renderer and the
     post-optimize analyses accept that shape. *)
 
+val slice_alias_violation : t -> string option
+(** gh-ocannl-1485: the predicate form of {!validate_no_slice_aliases} — [None] when no storage
+    access in the code names a slice-alias view ({!Tnode.is_alias}), else a description of the first
+    one, naming the construct, the view and its parent. *)
+
+val validate_no_slice_aliases : ?site:string -> t -> unit
+(** gh-ocannl-1485: a slice-alias view owns no buffer, so every access of one must be rewritten to
+    its parent ([Assignments.resolve_alias]); a path that forgets the rewrite reads or writes
+    nothing, silently (gh-ocannl-1475). Raises [Invalid_argument], prefixed with [site], when any
+    construct that addresses a node's buffer names a view: [Zero_out], [Set], [Set_dynamic],
+    [Set_from_vec], [Get], [Get_dynamic], [Get_merge_buffer] (a view has no buffer to transfer) or
+    any of a [Tile_mma]'s three nodes, at any depth. Scope ids name registers and are not checked.
+    Applied at three points: per assignment in [Assignments.to_low_level] (naming the assignment
+    whose lowering produced the access), by {!optimize} on the way in (covering the rewrite tier and
+    hand-built IR), and in [C_syntax.compile_proc] on the way out (covering schedule transforms and
+    a [?prelowered] routine that skipped {!optimize}). *)
+
 val validate_parallel :
   ?warp_size:int -> ?reassociable:(Tnode.t -> bool) -> Tnode.Placements.t -> t -> unit
 (** Backend-independent well-formedness of hardware annotations (axis-types proposal §2); a no-op

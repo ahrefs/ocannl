@@ -253,4 +253,47 @@ let () =
   Verdict.p "fresh-slice host get_values rejected" fresh_get_raises;
   Verdict.p "fresh slice never allocated (absent from ctx_buffers)"
     (not (Context.mem fresh_ctx fresh_s.value));
+
+  (* --- gh-ocannl-1485: no lowered statement may name a slice-alias view. [bv] is a view (marked by
+     the forward lowering above). The refusal must name the gate, the construct and the view; each
+     leg returns the message, or [None] when nothing was refused. --- *)
+  let refusal f = match f () with () -> None | exception Invalid_argument msg -> Some msg in
+  let names_view ~gate ~construct msg =
+    String.is_substring msg ~substring:gate
+    && String.is_substring msg
+         ~substring:(construct ^ " names the slice-alias view " ^ Ir.Tnode.debug_name bv.value)
+  in
+  (* The assignments-level gate. A merge-buffer read is the one access [to_low_level] does not
+     redirect (a view has no buffer to transfer), so it is the leg that reaches this gate without a
+     defect in the lowering, and the refusal names the assignment it came from. *)
+  let%cd merge_read = { merged } =: bv.merge in
+  let merge_refusal =
+    refusal (fun () ->
+        ignore (Ir.Assignments.to_low_level merge_read.Ir.Assignments.asgns : Ir.Low_level.t))
+  in
+  Verdict.p "to_low_level refuses a merge-buffer read of the view, naming the assignment"
+    (Option.exists merge_refusal ~f:(fun msg ->
+         names_view ~gate:"Assignments.to_low_level: in the lowering of Accum_op"
+           ~construct:"a Get_merge_buffer" msg));
+  (* The optimizer's entry gate, on hand-built code: the gh-ocannl-1475 shape (a [Zero_out] of the
+     view, which wrote nothing) and a read of the view. *)
+  let optimize_refusal ~name llc =
+    refusal (fun () ->
+        ignore
+          (Ir.Low_level.optimize
+             (Ir.Low_level.empty_optimize_ctx ())
+             ~unoptim_ll_source:None ~ll_source:None ~name [] llc
+            : Ir.Low_level.optimized))
+  in
+  Verdict.p "optimize refuses a Zero_out of the view"
+    (Option.exists
+       (optimize_refusal ~name:"zero_view_ll" (Ll_builders.zero bv.value))
+       ~f:(names_view ~gate:"Low_level.optimize_proc" ~construct:"a Zero_out"));
+  let read_view =
+    Ll_builders.(set images.value [| fixed 0; fixed 0 |] (get bv.value [| fixed 0 |]))
+  in
+  Verdict.p "optimize refuses a Get of the view"
+    (Option.exists
+       (optimize_refusal ~name:"read_view_ll" read_view)
+       ~f:(names_view ~gate:"Low_level.optimize_proc" ~construct:"a Get"));
   ()

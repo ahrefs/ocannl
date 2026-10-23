@@ -233,6 +233,36 @@ let collect_neutral_elem (asgns : t) : float option =
   in
   match folded with None -> None | Some v -> v
 
+(* The assignment named by [to_low_level]'s slice-alias refusal (gh-ocannl-1485). *)
+let describe_leaf : t -> string = function
+  | Accum_op { lhs; rhs; _ } ->
+      let form =
+        match rhs with
+        | Ternop _ -> "Ternop"
+        | Binop _ -> "Binop"
+        | Unop _ -> "Unop"
+        | Block _ -> "Block"
+        | Rev_sides _ -> "Rev_sides"
+      in
+      "Accum_op (" ^ form ^ ") with lhs " ^ Tn.debug_name lhs
+  | Set_vec_unop { lhs; _ } -> "Set_vec_unop into " ^ Tn.debug_name lhs
+  | Fetch { array; fetch_op; _ } ->
+      let op =
+        match fetch_op with
+        | Constant c -> "Constant " ^ Float.to_string c
+        | Constant_bits _ -> "Constant_bits"
+        | Constant_fill _ -> "Constant_fill"
+        | Range_over_offsets -> "Range_over_offsets"
+        | Slice _ -> "Slice"
+        | Embed_symbol _ -> "Embed_symbol"
+        | Embed_self_id -> "Embed_self_id"
+        | Embed_dim _ -> "Embed_dim"
+      in
+      "Fetch (" ^ op ^ ") into " ^ Tn.debug_name array
+  | Noop -> "Noop"
+  | Seq _ -> "Seq"
+  | Block_comment (s, _) -> "Block_comment " ^ s
+
 let%track4_sexp to_low_level ?(static_indices = []) code =
   let open Indexing in
   (* gh-490 symbolic extents: wrap a loop body in [index < value] when the loop iterates a
@@ -972,6 +1002,19 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
     if List.is_empty init_ops then for_loops_with_resets
     else Low_level.unflat_lines (init_ops @ [ for_loops_with_resets ])
   and loop (code : t) : Low_level.t =
+    let llc = lower_code code in
+    (* gh-ocannl-1485: each assignment's lowering is held to the slice-alias invariant where it is
+       produced, so a write or read path that forgets [resolve_alias] is refused naming the
+       assignment, rather than lowering to an access of a bufferless view (gh-ocannl-1475).
+       [Low_level.optimize_proc] repeats the check on the whole routine for code built elsewhere. *)
+    (match code with
+    | Accum_op _ | Set_vec_unop _ | Fetch _ ->
+        Option.iter (Low_level.slice_alias_violation llc) ~f:(fun msg ->
+            invalid_arg
+              ("Assignments.to_low_level: in the lowering of " ^ describe_leaf code ^ ", " ^ msg))
+    | Noop | Seq _ | Block_comment _ -> ());
+    llc
+  and lower_code (code : t) : Low_level.t =
     match code with
     | Accum_op { initialize_neutral; accum; lhs; rhs; projections; _ } -> (
         let op, rhses =
