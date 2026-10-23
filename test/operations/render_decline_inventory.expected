@@ -19,7 +19,7 @@ control: a phase held in a variable in the renderer finds [opaque-phase]: true
 control: a phase held in a variable outside the renderer finds [opaque-phase]: true
 control: a constrained phase outside the renderer finds [opaque-phase]: true
 control: Cause_at rebound under another name, at top level finds [rebinds-cause-at]: true
-control: Cause_at rebound under another name, as a let exception finds [rebinds-cause-at]: true
+control: Cause_at rebound under another name, in a local module finds [rebinds-cause-at]: true
 control: a local module shadowing the oracle finds [shadows-oracle]: true
 control: the oracle's name bound by let module, a functor, a declaration and an unpacked module finds [shadows-oracle; shadows-oracle; shadows-oracle; shadows-oracle]: true
 control: an aliased oracle module finds [unreadable]: true
