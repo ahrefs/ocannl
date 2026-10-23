@@ -572,6 +572,11 @@ files.
   `loop_accum_rev`. Forward result-side padded windows (`=> o=+k`) would be the other writer, but
   do not reach lowering (their projections are not inferred). Executed:
   `test/operations/padded_window_margin_writes.ml`.
+- **A reachability audit of a lowering shape counts user `%cd` readers, not only the library's
+  ops** (gh-ocannl-1496). The gh-ocannl-1474 audit enumerated forward operations and concluded that
+  nothing reads a gradient through a window; the previous bullet records the user `%cd` reader it
+  missed. Before calling a shape unreachable, ask what a `%cd` program (an optimizer, a
+  regularizer) may legally read or write on the same nodes, gradients included.
 
 - **The algebraic-rewrite tier over raw lowered code is `Rewrites`, applied by `Assignments.lower`
   between `to_low_level` and `Low_level.optimize`** (gh-ocannl-483; members `Online_softmax`, then
