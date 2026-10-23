@@ -3866,6 +3866,20 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `OCANNL_BACKEND=cuda tools/test-run.sh run --expect-backend cuda build @...`. Leg 88 of
   `tools/test-test-run.sh` pins both, and its warning stays clear of the words leg 49's
   width-silence controls grep for (`cap`, `sdma`, `nvidia`, `dxg`).
+- **`.github/fleet-leg` makes the fleet's `execution leg` refuse a GPU leg whose command names no
+  backend** (gh-ocannl-1542; lukstafi/ludics-lite#766, lukstafi/ludics-lite#773). The runner's
+  warning above reaches only someone who reads the log; four wave legs (for gh-ocannl-1340, 1452,
+  1432, 1456) set no backend and reported green anyway. The leg reads the file on the box at the
+  commit under test and, for any leg not declaring `--cpu`, requires the runner's argv to hold
+  `--expect-backend B` (before any `--`) or to lead with `env OCANNL_BACKEND=B`, else `EXECUTION LEG
+  REFUSED ... pins no backend`, nothing run. So a GPU leg is `-- env OCANNL_BACKEND=cuda
+  tools/test-run.sh run --expect-backend cuda build @...` (the `env` pin is what admits `bisect` and
+  `repeat`, which take no `--expect-backend`); a cc leg declares `--cpu` or names cc. The pin proves
+  only that a backend was NAMED: `--expect-backend` is the runner-side proof it was held. Only argv
+  words count (not a `sh -c` string, not the caller's exported environment, which does not travel),
+  and a line outside the grammar (`#` comments, blanks, `pin-flag <option>`, `pin-env <NAME>`)
+  refuses every leg, `--cpu` ones included -- edit the file only with the grammar in ludics-lite's
+  `issue-wave/references/executions.md`, *A leg on another box*, at hand.
 - **Runtime-refusal signature table.** These are the exception names `tools/sweep.sh`'s
   `ENVIRONMENT_REFUSALS` treats as the environment refusing a run rather than a test judging it;
   dune prints an uncaught binding error as `Fatal error: exception <name>:` with the status on

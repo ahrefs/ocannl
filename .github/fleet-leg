@@ -1,0 +1,22 @@
+# How a runner command pins its backend, read by the fleet's `fleet-worker.sh execution leg`
+# (lukstafi/ludics-lite#766 and #773; grammar in ludics-lite's issue-wave/references/executions.md,
+# *A leg on another box*). The leg reads this file on the box AT THE COMMIT under test, before the
+# worktree moves. A leg that may hold the GPU -- any leg not declaring `--cpu`, a measurement's
+# included -- whose runner satisfies none of the pins below is refused before anything runs
+# (gh-ocannl-1542). Four wave legs meant for CUDA or HIP set no backend, resolved to cc, and
+# reported green (wave-20261021, for gh-ocannl-1340, 1452, 1432 and 1456).
+#
+# A pin shows only that the command NAMES a backend, never that the run held it: that check is
+# `tools/test-run.sh`'s own `--expect-backend` (gh-ocannl-1433), so a GPU leg passes both:
+#   -- env OCANNL_BACKEND=cuda tools/test-run.sh run --expect-backend cuda build @<dir>/runtest-<name>
+# (the runner takes the spaced `--expect-backend B` only; it refuses `--expect-backend=B`, which
+# the pin would admit, as a misplaced option, so that spelling fails loudly rather than passing).
+# `bisect` and `repeat` take no `--expect-backend`; the `env` pin covers them. A cc-only leg either
+# declares `--cpu` or names cc (`env OCANNL_BACKEND=cc`). Only argv words count: a pin inside a
+# `sh -c` string, or an environment the caller exported, does not.
+#
+# The grammar is a fail-closed allowlist: `# comment` lines, blank lines, `pin-flag <option>` and
+# `pin-env <NAME>`. Any other line refuses EVERY leg, `--cpu` ones included.
+
+pin-flag --expect-backend
+pin-env OCANNL_BACKEND
