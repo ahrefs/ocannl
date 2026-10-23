@@ -2064,14 +2064,14 @@ let backend_rule_of marked =
     unread, never passes, every position where a backend could be fixed and whose expansion it does
     not see. The genre is "an expansion this reader cannot see": a text-valued pform, a path that
     begins with a dash (every backend spelling does), a launcher's argument, an include.
-    - [(setenv <name> <value> …)] whose [<name>] the runtime reads as the backend key, in any case
-      ([Utils.classify_env_var ~case_insensitive:true], since Windows folds it): a literal, nonempty
-      [<value>] pins that backend for every run it wraps that fixes none on its own command line,
-      the command line outranking the environment. A value carrying a pform, an empty one (which
-      unsets it and hands the run back to the configuration), a dashed name (which the startup check
-      aborts on), or a name carrying a pform is unread, and stays unread under a command-line
-      setting. A [setenv] wrapping only PATH tools handed nothing of ours pins nothing the walk
-      places.
+    - [(setenv <name> <value> …)] whose [<name>] is exactly [OCANNL_BACKEND] ([Utils.env_var_name]),
+      the one spelling every platform reads: a literal, nonempty [<value>] pins that backend for
+      every run it wraps that fixes none on its own command line, the command line outranking the
+      environment. A value carrying a pform, an empty one (which unsets it and hands the run back to
+      the configuration), any other name addressing the key (case folded or dashed, which the
+      startup check aborts on outside native Windows), or a name carrying a pform is unread, and
+      stays unread under a command-line setting. A [setenv] wrapping only PATH tools handed nothing
+      of ours pins nothing the walk places.
     - an argument of a [(run …)]/[(dynamic-run …)] that the runtime's own reader takes as the
       backend ([Utils.cmdline_arg_value "backend"], so every spelling and separator OCANNL accepts):
       a literal, nonempty value handed to a program of this workspace (a {!Runs}, {!Runs_dependency}
@@ -2114,12 +2114,10 @@ let addresses_backend name =
   | Utils.Env_config_key "backend" | Utils.Env_unread_spelling "backend" -> true
   | _ -> false
 
-(** Whether that name is one the runtime READS as the backend on some platform: case-folded on
-    Windows, but never a dashed spelling, which every platform's startup check aborts on. *)
-let reads_as_backend name =
-  match Utils.classify_env_var ~case_insensitive:true name with
-  | Utils.Env_config_key "backend" -> true
-  | _ -> false
+(** Whether that name is the one the runtime READS as the backend on every platform: the exact
+    uppercase spelling. A lowercase one is read only on native Windows and aborts the startup check
+    everywhere else, and a dashed one aborts it everywhere (Codex P2, rounds 1 and 5). *)
+let reads_as_backend name = String.equal name (Utils.env_var_name "backend")
 
 let backend_of_argument = Utils.cmdline_arg_value "backend"
 
@@ -2142,7 +2140,9 @@ let backend_pins stanza =
      walk places a site for without naming it; [`Tool] a PATH tool handed nothing of ours, which the
      walk drops. *)
   let command_kind ~path_rewritten ~elsewhere cmd args =
-    if path_rewritten && is_path_lookup_token cmd then `Site
+    (* An absolute path is something the system provides, whatever its suffix (Codex P1, round
+       5). *)
+    if is_absolute cmd || (path_rewritten && is_path_lookup_token cmd) then `Site
     else if elsewhere then
       (* Under a `chdir` this scan cannot resolve, nothing but a PATH tool keeps its name: the site
          walk reads it as `Unknown_directory` (Codex P1, round 4). *)

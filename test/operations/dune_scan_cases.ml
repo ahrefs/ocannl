@@ -1162,12 +1162,13 @@ let backend_pin_cases =
       {dune|(rule (deps (env_var OCANNL_BACKEND))
  (action (setenv OCANNL_BACKEND hip (run %{dep:probe.exe}))))|dune},
       [ "rule: unnamed hip (no marker)" ] );
-    (* Windows folds the name, so the lowercase spelling pins there. *)
-    ( "a lowercase setenv name pins too",
+    (* Windows folds the name and every other host aborts on it, so no marker can be held to it
+       (review round 5). *)
+    ( "a lowercase setenv name is unread: only native Windows reads it",
       {dune|(rule
  ; ocannl-backend: cuda -- the action pins cuda
  (action (setenv ocannl_backend cuda (run %{dep:probe.exe}))))|dune},
-      [ "rule: clean" ] );
+      [ "rule: unread (setenv ocannl_backend cuda …)" ] );
     ( "a command-line pin its marker names",
       {dune|(rule
  ; ocannl-backend: cc -- the command line pins cc
@@ -1369,6 +1370,12 @@ let backend_pin_cases =
       {dune|(rule
  ; ocannl-backend: cuda -- says cuda
  (action (chdir %{env:DIR=/tmp} (run ./launcher.exe --backend=cuda))))|dune},
+      [ "rule: unread --backend=cuda" ] );
+    (* Review round 5: an absolute path is the system's, whatever its suffix. *)
+    ( "a flag handed to an absolute executable",
+      {dune|(rule
+ ; ocannl-backend: cuda -- says cuda
+ (action (run /tmp/launcher.exe --backend=cuda)))|dune},
       [ "rule: unread --backend=cuda" ] );
     (* The command line outranks the environment: a flag on the run shadows the setenv around it,
        for that run and no other. *)

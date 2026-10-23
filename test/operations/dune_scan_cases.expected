@@ -230,7 +230,7 @@ ok: backend rule -- a launcher pointed at a sibling directory keeps its floor
 ok: backend pins -- a setenv pin its marker names
 ok: backend pins -- a setenv pin its marker leaves out
 ok: backend pins -- a setenv pin under a declaration instead of a marker
-ok: backend pins -- a lowercase setenv name pins too
+ok: backend pins -- a lowercase setenv name is unread: only native Windows reads it
 ok: backend pins -- a command-line pin its marker names
 ok: backend pins -- a command-line pin under a `none` marker
 ok: backend pins -- the prefix-free and dashed spellings are pins as well
@@ -265,6 +265,7 @@ ok: backend pins -- a setenv whose name carries a pform
 ok: backend pins -- an included inline-test flag set
 ok: backend pins -- ordinary inline-test flags pin nothing
 ok: backend pins -- a literal path under an unresolvable chdir
+ok: backend pins -- a flag handed to an absolute executable
 ok: backend pins -- a command-line pin shadows the setenv around its run
 ok: backend pins -- but not around a sibling run that sets none
 ok: backend pins -- a pin on a stanza declaring neither is the XOR's to report
