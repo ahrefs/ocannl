@@ -2215,6 +2215,22 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   a range guard's bound is a float `Constant` at index precision, so gh-ocannl-623 turned
   `(int)(33)` into `(int)(33.0)`, a context nobody would think to grep for. Grep the inventory for
   the spelling you are moving, re-run what it names, and promote its own golden last.
+- **It names the aliases too, read from the dune files** (gh-ocannl-1533): each member line ends
+  with the aliases that re-run it, and the golden closes on their union, one per line, ready for
+  `tools/test-run.sh run build`. A file is not yet a command — a test's own `runtest-<name>` diffs
+  only its own `.expected`, while its kernel snapshots `<name>.<ext>.expected` are compared by the
+  hand-written `runtest-<name>-extension` rule, so running a codegen test by its name leaves every
+  snapshot unchecked (staging#1326). `Test_utils.Rerun_aliases` derives them: a golden from the
+  rule whose `(diff …)` names it as the EXPECTED side, matching each `%{…}` against a substituted
+  file name and printing the substitution (`when %{read:../config/ocannl_backend_extension.txt} is
+  cu` — that snapshot is checked only by a CUDA run), or from the `(test)` stanza beside it; a
+  source from the stanza owning its module (`(modules …)` listed, else `:standard`, a `(select)`
+  arm by its target), then the test's alias, the alias of each rule running its executable — or,
+  for a rule that only writes targets, of the rules reading them — or an inline-test module's
+  runner rule. A member none of that reaches fails the run rather than leaving the list short:
+  give it a per-test alias. The derivation reads the rule shapes this repository spells; it is a
+  point-in-time reading of the dune files, not of `dune rules`, and `tools/test-run.sh affected`
+  stays the reach-by-linking answer.
 - **A test reaches generated text three ways, and the inventory tags which.** Through
   `Test_utils.Generated` (the freshness-checked artifact reader); by opening `build_files/` itself,
   which two tests predating that module still do; or **in memory**, calling an emitter and

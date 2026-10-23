@@ -44,7 +44,17 @@
     scan finding no emitters and reporting a smaller census cheerfully. What closes that is the
     relationship this test pins -- the modules a library's wrapper interface DECLARES against the
     ones whose interfaces were actually read. Neither side is written down here; they are compared,
-    and a difference fails the run with both lists on stderr. *)
+    and a difference fails the run with both lists on stderr.
+
+    {1 The aliases that re-run them}
+
+    A file is not yet a command: the kernel snapshots beside [top_down_prec] are diffed by
+    [runtest-top_down_prec-extension], not by the test's own alias, and which of them it diffs
+    depends on the backend the build resolves (gh-ocannl-1533). So each member is printed with the
+    aliases that re-run it -- read from the dune files of the same roots by
+    {!Test_utils.Rerun_aliases}, with the pform substitution a golden's rule makes -- and the golden
+    closes on their union, ready to hand to [tools/test-run.sh run build]. A member no alias can be
+    found for fails the run: the list is only worth reading if it is the whole of what to run. *)
 
 open Base
 open Stdio
@@ -56,6 +66,7 @@ let argv = Test_utils.Scan_argv.expand Stdlib.Sys.argv
 module Scan = Test_utils.Codegen_text_scan
 module Floors = Test_utils.Scan_floors
 module Attempt = Test_utils.Scan_attempt
+module Rerun = Test_utils.Rerun_aliases
 
 (** Lower bounds per scanned root, well below the census of the day they were written. See
     {!Test_utils.Scan_floors}: a glob that breaks goes to zero, a member added moves nothing. *)
@@ -111,6 +122,16 @@ let refuse_raised ~fail raised =
            "the scan raised %s on %s -- a defect in the scanner rather than in the file, which \
             parses, so the census is short by whatever the file pins"
            exn path))
+
+(* gh-ocannl-1533: a member nothing re-runs by name is a hole in the list of what to run. *)
+let refuse_unplaced ~fail unplaced =
+  List.iter unplaced ~f:(fun path ->
+      fail
+        (Printf.sprintf
+           "%s pins generated text, and no stanza of the dune files handed over re-runs it by an \
+            alias -- no rule diffs it and no rule or test runs its module -- so a codegen change \
+            cannot name what to run for it; give it a per-test alias (gh-ocannl-1533)"
+           path))
 
 (* gh-ocannl-1294: a test that opens build_files/ itself reads whatever is there -- a previous run's
    artifact, a same-named routine's -- and, where nothing is, passes over zero files. *)
@@ -216,6 +237,29 @@ let refusal_control ~wrapper =
     (Option.to_list
        (Scan.classify_source ~emitters:[] ~path:"test/direct.ml" ~contents:direct_fixture));
   Verdict.p "a test reading build_files/ itself reaches the direct-read refusal" !direct_refused;
+  (* gh-ocannl-1533: a golden beside a dune file that diffs something else is a member nothing
+     re-runs, through the same reader the census uses. *)
+  let unplaced_refused = ref false in
+  let fail _message =
+    unplaced_refused := true;
+    Test_utils.Refusal_control_manifest.observe_failure ~source
+      ~format:
+        "%s pins generated text, and no stanza of the dune files handed over re-runs it by an \
+         alias -- no rule diffs it and no rule or test runs its module -- so a codegen change \
+         cannot name what to run for it; give it a per-test alias (gh-ocannl-1533)"
+  in
+  let stanzas =
+    Rerun.stanzas_of
+      [
+        ( "t",
+          "(test (name kept))\n\
+           (rule (alias runtest-kept-c) (action (diff kept.c.expected kept.c.actual)))\n" );
+      ]
+  in
+  let path = "t/lost.c.expected" in
+  refuse_unplaced ~fail (if List.is_empty (Rerun.for_golden stanzas ~path) then [ path ] else []);
+  Verdict.p "a golden no rule of its directory diffs reaches the unplaced-member refusal"
+    !unplaced_refused;
   Test_utils.Refusal_control_manifest.print source
 
 let () =
@@ -240,6 +284,14 @@ let () =
   in
   let golden_files = of_suffix ".expected" in
   let all_ml = of_suffix ".ml" in
+  (* The dune files of the scanned roots, whose rules say which alias re-runs each member. *)
+  let stanzas =
+    List.filter arguments ~f:(fun (name, _) ->
+        String.equal name "dune" || String.is_suffix name ~suffix:"/dune")
+    |> List.map ~f:(fun (name, on_disk) ->
+        (Option.value (String.chop_suffix name ~suffix:"/dune") ~default:"", read on_disk))
+    |> Rerun.stanzas_of
+  in
   (* The emitter frontier, derived from the interfaces dune handed over rather than listed here. See
      the header: the derivation is what keeps a renderer added to a library from silently widening
      the blind spot, and the module-coverage claim below is what keeps the derivation from failing
@@ -333,6 +385,24 @@ let () =
   List.iter (List.sort !rejected ~compare:String.compare) ~f:Verdict.fail;
   refuse_direct_reads ~fail:Verdict.fail sites;
   let golden_paths = List.map goldens ~f:(fun g -> g.Scan.path) in
+  let golden_routes =
+    Map.of_alist_exn
+      (module String)
+      (List.map golden_paths ~f:(fun path -> (path, Rerun.for_golden stanzas ~path)))
+  in
+  let site_routes =
+    Map.of_alist_exn
+      (module String)
+      (List.map sites ~f:(fun s ->
+           (s.Scan.site_path, Rerun.for_source stanzas ~path:s.Scan.site_path)))
+  in
+  let routes_of routes path = Option.value (Map.find routes path) ~default:[] in
+  let unplaced =
+    List.filter_map
+      (Map.to_alist golden_routes @ Map.to_alist site_routes)
+      ~f:(fun (path, routes) -> if List.is_empty routes then Some path else None)
+  in
+  refuse_unplaced ~fail:Verdict.fail unplaced;
   let site_paths = List.map sites ~f:(fun s -> s.Scan.site_path) in
   Floors.report ~floors:golden_floors ~noun:"golden" ~what:"Goldens holding emitted text"
     golden_paths;
@@ -376,9 +446,14 @@ let () =
         @ (match g.Scan.tags with [] -> [] | tags -> [ "markers " ^ String.concat ~sep:" " tags ])
         @ match g.Scan.beside with Some source -> [ "beside " ^ source ] | None -> []
       in
+      let rerun =
+        match routes_of golden_routes g.Scan.path with
+        | [] -> []
+        | routes -> [ "re-run by " ^ String.concat ~sep:", " (List.map routes ~f:Rerun.render) ]
+      in
       printf "%s [%s] %s\n" g.Scan.path
         (String.concat ~sep:" " g.Scan.families)
-        (String.concat ~sep:"; " origin));
+        (String.concat ~sep:"; " (origin @ rerun)));
   printf "\n== test sources pinning emitted text ==\n";
   printf "roots scanned: %s\n"
     (String.concat ~sep:", " (Floors.roots ~floors:source_floors site_paths));
@@ -388,6 +463,9 @@ let () =
       let flags =
         (if s.Scan.direct then [ "reads build_files/ directly" ] else [])
         @ (if s.Scan.rendered then [ "renders generated text in memory" ] else [])
+        @ (match routes_of site_routes s.Scan.site_path with
+          | [] -> []
+          | routes -> [ "run by " ^ String.concat ~sep:", " (List.map routes ~f:Rerun.render) ])
         @
         match s.Scan.partial with
         | [] -> []
@@ -400,6 +478,16 @@ let () =
       printf "%s%s\n" s.Scan.site_path
         (match flags with [] -> "" | flags -> " [" ^ String.concat ~sep:"; " flags ^ "]");
       List.iter s.Scan.pins ~f:(fun pin -> printf "    %s\n" pin));
+  printf
+    "\n\
+     == the aliases a codegen change runs ==\n\
+     Every alias named above, once. Hand them to `tools/test-run.sh run build`; an alias re-running\n\
+     a golden only when a pform reads some value covers that golden on the backend that makes it\n\
+     so, and the goldens' families say which backends a change has to be run on.\n";
+  Map.data golden_routes @ Map.data site_routes
+  |> List.concat_map ~f:(List.map ~f:(fun (r : Rerun.route) -> r.Rerun.alias))
+  |> List.dedup_and_sort ~compare:String.compare
+  |> List.iter ~f:print_endline;
   printf "\n";
   let golden_violations =
     Floors.violations ~floors:golden_floors ~noun:"golden"
@@ -440,6 +528,9 @@ let () =
   Verdict.p_empty "every scanned root meets its source-site floor" ~over:site_paths
     source_violations;
   Verdict.p_empty "every source handed over parsed as OCaml" ~over:source_files !unparsed;
+  Verdict.p_empty "every member has an alias that re-runs it"
+    ~over:(golden_paths @ List.map sites ~f:(fun s -> s.Scan.site_path))
+    unplaced;
   Verdict.p_empty "the scan raised on no source handed over" ~over:source_files !raised;
   Verdict.p_empty "every exclusion still names a file the globs hand over" ~over:handed_over stale;
   Verdict.p "every module the scanned library interfaces declare was read"

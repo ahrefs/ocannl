@@ -82,6 +82,10 @@ module Source_inventory = Source_inventory
 (** A source-only repository inventory derived from a clean Dune sandbox. Repository scans select
     their corpus from this shared set instead of maintaining recursive source-root lists. *)
 
+module Rerun_aliases = Rerun_aliases
+(** Which aliases re-run a file that pins the text of generated code: read from the dune files, the
+    rule diffing a golden or the stanza running a source (gh-ocannl-1533). *)
+
 module Scan_argv = Scan_argv
 (** Response-file expansion for the repository-wide scans: a [@<path>] argument stands for the words
     in that file. What a scan reads is handed to it on the command line, and Windows caps a command

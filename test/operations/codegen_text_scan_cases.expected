@@ -200,6 +200,22 @@ ok: boundary -- a haystack read back out of an array cell is a mutation
 ok: boundary -- a source parameter rebound to other text
 ok: boundary -- a source-taking helper handed ordinary text is unvalidated
 every partial-itemisation boundary has a case meeting it alone: true
+ok: rerun -- a test stanza's own golden
+ok: rerun -- a pform in the golden path is a substitution, reported
+ok: rerun -- the shortest backend extension substitutes as well
+ok: rerun -- a pform substitutes a file name, never a path
+ok: rerun -- the produced side of a diff is not re-run by it
+ok: rerun -- a golden of the same name in another directory is not
+ok: rerun -- a (subdir) rule diffs the golden of that directory
+ok: rerun -- a test's module runs under the test and every rule running its executable
+ok: rerun -- an executable reaches the alias reading what its rule writes, however many rules on
+ok: rerun -- a select arm is the module its target names
+ok: rerun -- an inline-test module with its own runner rule runs under it
+ok: rerun -- an inline-test module without one runs under the library's alias
+ok: rerun -- a module only :standard takes runs under the stanza taking it
+ok: rerun -- a module another stanza lists is not :standard's
+ok: rerun -- a module an exclusion names is not :standard's
+ok: rerun -- a module in a directory of rules alone is run by nothing
 ok: attempt -- a syntax error is the file's, with where the parser stopped
 ok: attempt -- a lexical error is the file's, with where the lexer stopped
 ok: attempt -- a source that parses is scanned

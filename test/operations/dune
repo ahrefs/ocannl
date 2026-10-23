@@ -4256,7 +4256,9 @@
 ; are Verdict claims. gh-ocannl-623 missed one of each and went red in CI. The globs are recursive
 ; over the test directories of both packages, so a directory added is covered the day it appears,
 ; and `%{deps}` hands the whole dependency set to the exe, which keeps the goldens and the sources
-; among them.
+; among them. The same roots' `dune` files come too: each member is printed with the aliases that
+; re-run it, read from the rule that diffs a golden or the stanza that runs a source, because a
+; snapshot's alias is not its test's (`runtest-top_down_prec-extension`, gh-ocannl-1533).
 
 (executable
  (name codegen_text_inventory)
@@ -4313,7 +4315,9 @@
   (glob_files_rec ../../test/*.expected)
   (glob_files_rec ../../test/*.ml)
   (glob_files_rec ../../arrayjit/test/*.expected)
-  (glob_files_rec ../../arrayjit/test/*.ml))
+  (glob_files_rec ../../arrayjit/test/*.ml)
+  (glob_files_rec ../../test/dune)
+  (glob_files_rec ../../arrayjit/test/dune))
  (action
   (progn
    (with-stdout-to
