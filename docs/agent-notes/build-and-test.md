@@ -1341,7 +1341,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `OCANNL_TOOL_SLOT_WAIT` (600 s), and reuses an enclosing slot. The check reruns itself under
   `execution slot` and reports back through a file, so a slot that never ran it is `fmt-check:
   FAILED (exit 75): SLOT REFUSED`, nothing built, while a check the slot ran keeps its own
-  verdict line as the last. A command given as arguments takes no slot (the harness's form;
+  verdict line as the last and its recorded status as the exit status, whatever the wrapper's. A command given as arguments takes no slot (the harness's form;
   wrap a caller's own formatter yourself), and `OCANNL_TOOL_FLEET_WORKER=none` turns it off as
   for the runner; `tools/test-fmt-check.sh` drives the slot through a fake fleet-worker.sh.
   Two files a formatter cannot handle are refused at the site rather than

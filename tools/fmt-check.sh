@@ -112,7 +112,8 @@ take_fleet_slot() {
   fi
   wait=${OCANNL_TOOL_SLOT_WAIT:-600}
   case $wait in '' | *[!0-9]*) wait=600 ;; esac
-  self=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+  # CDPATH cleared: a `cd` it resolves prints the directory, which would join the path.
+  self=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/$(basename -- "$0") || verdict 2 "cannot resolve $0"
   echo "fmt-check: taking one of $box's $slots fleet correctness slots for both builds, as --cpu (gh-ocannl-1519); waiting at most ${wait}s, an enclosing slot reused"
   OCANNL_TOOL_FMT_CHECK_IN_SLOT=$slot_dir/record "$fw" execution slot --wait "$wait" --cpu -- \
     "${BASH:-bash}" "$self"
@@ -121,12 +122,16 @@ take_fleet_slot() {
     verdict 75 "SLOT REFUSED: fleet-worker.sh exited $status without running the check; nothing ran"
   recorded=
   read -r recorded <"$slot_dir/record"
-  if [ -z "$recorded" ]; then
-    [ "$status" -ne 0 ] || status=1
-    verdict "$status" "the check under the fleet slot ended without a verdict"
-  fi
-  # The check's own verdict line was its last; nothing is printed after it.
-  exit "$status"
+  case $recorded in
+    '' | *[!0-9]*)
+      [ "$status" -ne 0 ] || status=1
+      verdict "$status" "the check under the fleet slot ended without a verdict"
+      ;;
+  esac
+  # The check's own verdict line was its last, so its status is the exit status, whatever
+  # fleet-worker.sh's own (a failure of its supervision after the check is not the check's);
+  # nothing is printed after it.
+  exit "$recorded"
 }
 
 case ${1-} in

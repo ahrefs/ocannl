@@ -243,6 +243,8 @@ shift
 case ${FAKE_FW_MODE:-} in
   refuse) echo "EXECUTION SLOT REFUSED fakebox: all 4 slots busy after 0s"; exit 1 ;;
   unreachable) echo "EXECUTION SLOT UNREACHABLE anchor: registry unread, no slot taken"; exit 4 ;;
+  # The check runs, and then the wrapper's own supervision fails.
+  wrapfail) FAKE_SLOT_HELD=1 "$@"; exit 9 ;;
 esac
 echo "EXECUTION SLOT fakebox: slot 1 of 4 held for: $*" >&2
 FAKE_SLOT_HELD=1 exec "$@"
@@ -306,10 +308,28 @@ slot_leg "a check killed in the slot still ends in a verdict" \
   137 "fmt@slot " "execution slot --wait 600 --cpu" \
   "fmt-check: FAILED (exit 137): the check under the fleet slot ended without a verdict" \
   FAKE_DUNE_KILL_CHECK=1
+slot_leg "the check's recorded status wins over the wrapper's own failure after it" \
+  0 "fmt@slot scans@slot " "execution slot --wait 600 --cpu" "fmt-check: PASSED" FAKE_FW_MODE=wrapfail
 slot_leg "a fleet-worker.sh that does not answer the probe runs the builds directly" \
   0 "fmt scans " - "fmt-check: PASSED" FAKE_FW_MODE=noprobe
 slot_leg "a command given as arguments takes no slot" \
   0 "fmt " none "fmt-check: PASSED" -- dune build @fmt --force
+
+# Invoked by its relative path under an exported CDPATH that resolves the script's directory,
+# whose `cd` then prints that directory: the path the slot reruns must still be the script alone.
+got=0
+: >"$fixture_dir/dune-steps.log"
+: >"$fixture_dir/fw-calls.log"
+(cd "$script_dir/.." && env OCANNL_TOOL_FMT_CHECK_SCANS=1 CDPATH="$script_dir/.." FMT_CHECK_PLAIN=kept \
+  PATH="$fake_switch:$PATH" OCANNL_TOOL_FLEET_WORKER="$fake_fw" FAKE_FW_CALLS="$fixture_dir/fw-calls.log" \
+  FAKE_DUNE_LOG="$fixture_dir/dune-steps.log" "${BASH:-bash}" "tools/$(basename "$subject")") \
+  >"$fixture_dir/cdpath.log" 2>&1 || got=$?
+if [ "$got" -eq 0 ] && [ "$(tr '\n' ' ' <"$fixture_dir/dune-steps.log")" = "fmt@slot scans@slot " ]; then
+  report 0 "a relative invocation under an exported CDPATH reruns the script in the slot"
+else
+  report 1 "a relative invocation under an exported CDPATH reruns the script in the slot" \
+    "exited $got; see $fixture_dir/cdpath.log"
+fi
 
 # The script takes no options: `-j 4` used to run `-j` as the formatter command (exit 127).
 slot_leg "an option is refused with the usage, before any probe or build" \
