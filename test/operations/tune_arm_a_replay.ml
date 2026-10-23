@@ -207,4 +207,48 @@ let () =
   Context.release ctx;
   p "deferred: it computes the untuned output bit for bit" (Array.equal Float.equal output expected)
 
+(* --- The replayed prelude's fold is a function of the code (gh-ocannl-1480, the CUDA shape). ---
+
+   A split-reduce prelude applies whole-routine before fission, and [Schedule.apply]'s trailing
+   simplification interval-folds guards. A gather guard folds against its index tensor's bounds
+   candidate, which a [Host_inits] upload proposes when a routine first links -- so on CUDA and HIP,
+   where the search's first candidate (the seeded plan, prelude included) compiles before anything
+   has linked, the winner's replay folded a guard the timed compile kept, cut a different segment,
+   and the untuned default shipped (gpt2_mini_train: 25 guards before the prelude, 25 after it in
+   the search, 24 after it in the replay). The prelude now applies under
+   [Low_level.without_node_bounds]. The end-to-end reproduction needs gpt2_mini_train on a seeded
+   backend; here the primitive: one lowering, simplified before and after its index tensor's bounds
+   are proposed. *)
+let () =
+  let vocab = 8 and embed = 4 in
+  let ids = Nn_blocks.class_ids_of_int_list ~label:"gather_ids" [ 1; 3; 0; 5; 7; 2 ] in
+  let table =
+    TDSL.ndarray
+      (Array.init (embed * vocab)
+         ~f:(Ll_test.cycle_flat ~dims:[| embed; vocab |] ~modulus:7 ~offset:0. ~stride:1.))
+      ~label:[ "gather_table" ] ~input_dims:[ vocab ] ~output_dims:[ embed ] ()
+  in
+  let%op emb = table * Nn_blocks.one_hot_of_ids ~num_classes:vocab ids in
+  let guards (llc : Ir.Low_level.t) =
+    let txt = Sexp.to_string (Ir.Low_level.sexp_of_t llc) in
+    List.length (String.substr_index_all txt ~may_overlap:false ~pattern:"Ternop Where")
+  in
+  (* Lowered before anything has uploaded [ids]: the gather keeps its in-range guard. *)
+  let lowered =
+    Context.lowered_for_decisions (Context.cpu ()) (Train.forward emb) Ir.Indexing.Empty
+  in
+  let before = guards lowered.Ir.Low_level.llc in
+  p "prelude fold: the lowering taken before any upload keeps the gather guard" (before >= 1);
+  (* A link uploads [ids] and proposes its scanned bounds. *)
+  let ctx = Train.forward_once (Context.cpu ()) emb in
+  Context.release ctx;
+  p "prelude fold: the upload proposed the ids' bounds"
+    (Option.is_some (Ir.Tnode.bounds_candidate ids.Tensor.value));
+  p "prelude fold: blind to node bounds, re-simplifying the earlier lowering keeps every guard"
+    (guards (Ir.Low_level.without_node_bounds (fun () -> Ir.Low_level.simplify_llc [] lowered.llc))
+    = before);
+  (* What a bounds-reading re-simplification does to the same code now: the hazard itself. *)
+  p "prelude fold: reading the proposed bounds, the same re-simplification folds the guard"
+    (guards (Ir.Low_level.simplify_llc [] lowered.llc) < before)
+
 let () = Stdio.printf "tune_arm_a_replay: done\n"

@@ -2142,6 +2142,16 @@ files.
   extend. A searched winner whose replay fails now warns on stderr unconditionally, and
   `Train.shipped.ship_substituted` says when no measured schedule shipped
   (`test/operations/tune_arm_a_replay`).
+- **What a replay rebuilds must not read process state that a link changes** (gh-ocannl-1480, the
+  CUDA shape). A split-reduce prelude applies whole-routine before fission, and `Schedule.apply`'s
+  trailing `simplify_llc` folds gather guards against each node's bounds candidate, which a
+  `Host_inits` upload proposes at link. On CUDA and HIP the search's first candidate (the seeded
+  plan) compiles before anything has linked, so its prelude kept a guard the winner's replay then
+  folded: gpt2_mini_train's arm A crown (295 segments) refused at segment 1 and shipped the untuned
+  default. The search's and the seeded plan's preludes now apply under
+  `Low_level.without_node_bounds`; per-segment schedules still fold against the live bounds,
+  since only the pre-schedule segments are digest-checked. A new whole-routine transform ahead of
+  fission gets the same scope. Less folding is always sound.
 - **What a cache entry says is input, so its refusals are typed** (gh-ocannl-1242). The rule above
   holds for every raise a replay can reach: `SC.of_saved`'s dangling symbol reference and
   `SC.tn_of_ref`'s out-of-range node index raise `Cause_at (Transform, Illegal_schedule

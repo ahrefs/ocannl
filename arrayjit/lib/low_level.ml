@@ -3949,7 +3949,22 @@ let interval_of_symbol ienv s =
 let interval_of_loop_range ~from_ ~to_ =
   if from_ <= to_ then Interval.of_int_range from_ to_ else Interval.of_int from_
 
-let ienv_of_static_indices ?(node_bounds = true) (static_indices : Indexing.static_symbol list) =
+(* gh-ocannl-1480: set while a transform must be a function of its input code alone. A tensor node's
+   bounds candidate is process state that grows as routines link (a [Host_inits] upload proposes its
+   scanned range), so a fold that reads it makes the same transform of the same code come out
+   differently before and after an unrelated link -- which a replay digest-checked against the code
+   its schedule was saved for reads as "no longer applies". *)
+let suppress_node_bounds = Stdlib.Domain.DLS.new_key (fun () -> false)
+
+let without_node_bounds f =
+  let prior = Stdlib.Domain.DLS.get suppress_node_bounds in
+  Stdlib.Domain.DLS.set suppress_node_bounds true;
+  Exn.protect ~f ~finally:(fun () -> Stdlib.Domain.DLS.set suppress_node_bounds prior)
+
+let ienv_of_static_indices ?node_bounds (static_indices : Indexing.static_symbol list) =
+  let node_bounds =
+    match node_bounds with Some b -> b | None -> not (Stdlib.Domain.DLS.get suppress_node_bounds)
+  in
   let sym_env =
     List.fold static_indices
       ~init:(Map.empty (module Indexing.Symbol))

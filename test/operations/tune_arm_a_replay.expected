@@ -18,4 +18,8 @@ deferred: both searches searched, arm B's after arm A's: true
 deferred: arm A's compile after arm B's search ships its crown, no substitute: true
 deferred: a second compile_deferred returns the same routine: true
 deferred: it computes the untuned output bit for bit: true
+prelude fold: the lowering taken before any upload keeps the gather guard: true
+prelude fold: the upload proposed the ids' bounds: true
+prelude fold: blind to node bounds, re-simplifying the earlier lowering keeps every guard: true
+prelude fold: reading the proposed bounds, the same re-simplification folds the guard: true
 tune_arm_a_replay: done

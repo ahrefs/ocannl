@@ -3428,9 +3428,17 @@ let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> (
                 let sched, _ = SC.of_saved canon psaved in
                 (sched, psaved)
           in
+          (* gh-ocannl-1480: blind to node bounds candidates, so the prelude's trailing fold is a
+             function of the base lowering alone. The segments fission cuts from its result are what
+             a replay's digests check, and a bounds candidate proposed by a link between the
+             candidate's compile and the winner's replay (on GPU the search's first candidate
+             compiles before anything has linked) used to fold a gather guard in the replay only:
+             the saved segmentation "no longer applied" and the untuned default shipped. The
+             per-segment schedules still fold against the bounds as they stand. *)
           let opt =
             if List.is_empty prelude then opt
-            else Sched.apply_classified ~static_indices prelude opt
+            else
+              LL.without_node_bounds (fun () -> Sched.apply_classified ~static_indices prelude opt)
           in
           let zero_sched tns = if is_gpu then Sched.zero_expansion ~limits tns else [] in
           (* A replay cuts where its saved segments say and gives the [i]th segment the [i]th saved
@@ -4888,8 +4896,11 @@ let seeded_split ~backend ~min_serial ~static_indices (opt : LL.optimized) =
   | [] -> (opt, [])
   | sites -> (
       match
-        Sched.apply_classified ~static_indices (split_reduce_prelude sites)
-          { opt with LL.traced_store = Hashtbl.copy opt.LL.traced_store }
+        (* Blind to node bounds, as the search's prelude is (gh-ocannl-1480): the plan's seeded
+           digests are taken on these segments, and an [F_seeded] candidate replays the prelude. *)
+        LL.without_node_bounds (fun () ->
+            Sched.apply_classified ~static_indices (split_reduce_prelude sites)
+              { opt with LL.traced_store = Hashtbl.copy opt.LL.traced_store })
       with
       | split_opt ->
           logf "seeded_default: %d reduction(s) split: %s" (List.length sites)
