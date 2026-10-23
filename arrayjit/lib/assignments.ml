@@ -321,9 +321,13 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
   in
   (* Range-guard conditions for the axes of an access at (semantic, pre-padding-shift) [idcs] that
      can escape the operand's valid region [0, N) — unless the escape is covered by committed
-     margins holding this accumulation's neutral element (the physical-halo mechanism: covered
-     reads/writes of the margins are intentional). *)
-  let clamp_conds ~accum ~sizes (tn : Tn.t) (idcs : Indexing.axis_index array) :
+     margins holding this accumulation's neutral element (the physical-halo mechanism). A covered
+     READ is exact: the margins hold the neutral element, so the escaped positions contribute the
+     identity. A covered WRITE (a padded window's transpose: a padded convolution's input gradient)
+     stores the padding positions' contributions into the margins; it stays unguarded so the hot
+     loop carries no per-element test, and sets [covered_write], whose writer re-establishes the
+     committed value after its loop nest (gh-ocannl-1496, [margin_restores]). *)
+  let clamp_conds ?covered_write ~accum ~sizes (tn : Tn.t) (idcs : Indexing.axis_index array) :
       Low_level.scalar_arg list =
     let padding = Tn.get_padding tn in
     let sem_dims = Tn.dims_without_padding tn in
@@ -363,7 +367,9 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
                       && hi < n + pads.(i).Ops.right
                   | None -> false
                 in
-                if covered then None
+                if covered then (
+                  Option.iter covered_write ~f:(fun r -> r := true);
+                  None)
                 else
                   (* One canonical shape per role: a lower bound is a direct [0 <= idx], an upper
                      bound the strict [idx < n]. *)
@@ -430,8 +436,8 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
     | Node tn -> Low_level.Get (tn, idcs)
     | Merge_buffer tn -> Low_level.Get_merge_buffer (tn, idcs)
   in
-  let set ?clamp (tn : Tn.t) (idcs : Indexing.axis_index array) (llsc : Low_level.scalar_t) :
-      Low_level.t =
+  let set ?clamp ?margin_writes (tn : Tn.t) (idcs : Indexing.axis_index array)
+      (llsc : Low_level.scalar_t) : Low_level.t =
     (* Write-through a slice-alias view goes to the parent buffer (gh-ocannl-293 293a). *)
     let tn, idcs = resolve_alias tn idcs in
     let idcs =
@@ -448,7 +454,11 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
                vs. %{idcs}"]
     in
     Option.iter clamp ~f:(fun (accum, sizes, conds) ->
-        conds := clamp_conds ~accum ~sizes tn idcs @ !conds);
+        let covered_write = ref false in
+        conds := clamp_conds ~covered_write ~accum ~sizes tn idcs @ !conds;
+        if !covered_write then
+          Option.iter margin_writes ~f:(fun r ->
+              if not (List.mem !r tn ~equal:Tn.equal) then r := tn :: !r));
     let idcs = if is_padded tn then apply_padding_offset tn idcs else idcs in
     Low_level.Set { tn; idcs; llsc; debug = "" }
   in
@@ -470,6 +480,20 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
                      debug = Tn.debug_name tn ^ " padding := " ^ Float.to_string neutral_value;
                    });
            ]
+  in
+  (* gh-ocannl-1496: the margins a writer stored into through a covered (unguarded) window write --
+     the padding positions' contributions of a padded window's transpose -- are restored to the
+     committed value right after its loop nest, so that the contract the leading resets serve holds
+     after the writer too: a padded node's margins hold its padding value whenever no writer is
+     running. Without it a reader of the node through the same padded window (a [%cd] assignment
+     reading a gradient through a padded convolution) read the contributions as data. Each node is
+     restored once, with fresh loop symbols (a second [reset_padding_regions] call, never the
+     leading resets' statements again: a binder shared by sibling loops is misread,
+     gh-ocannl-1384). *)
+  let margin_restores (margin_writes : Tn.t list ref) : Low_level.t list =
+    List.dedup_and_sort !margin_writes ~compare:Tn.compare
+    |> List.concat_map ~f:(fun tn ->
+        match Tn.get_padding tn with Some (_, v) -> reset_padding_regions tn v | None -> [])
   in
   let default_padding_before array llc =
     let padding_loops =
@@ -667,6 +691,7 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
   let rec loop_accum ~initialize_neutral ~accum ~(op : Ops.op) ~lhs ~rhses projections : Low_level.t
       =
     let projections : Indexing.projections = Lazy.force projections in
+    let margin_writes = ref [] in
     let for_loops =
       with_product_loops ~projections ~lhs ~arity:(Array.length rhses) ~role:"Block"
         ~f:(fun ~subst_index ~fresh_sizes ~is_allowed ->
@@ -705,8 +730,10 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
           let clamp = (accum, fresh_sizes, lhs_conds) in
           let stmt =
             if initialize_neutral && can_skip_accumulation ~projections then
-              set ~clamp lhs lhs_idcs rhs2
-            else set ~clamp lhs lhs_idcs @@ apply_op (Ops.Binop accum) [| lhs_ll; rhs2 |]
+              set ~clamp ~margin_writes lhs lhs_idcs rhs2
+            else
+              set ~clamp ~margin_writes lhs lhs_idcs
+              @@ apply_op (Ops.Binop accum) [| lhs_ll; rhs2 |]
           in
           (* An out-of-range write target (the transposed clamp of a backward scatter) skips the
              whole statement. *)
@@ -727,14 +754,17 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
        time, and valid-window readers never see the margins), so operands need no resets here.
        Establish the committed neutral element in the lhs margins: only hosted / host-initialized
        buffers are creation-filled, device buffers are allocated raw — so the (idempotent) fill
-       accompanies every writer of a padded node. *)
+       accompanies every writer of a padded node. A writer whose unguarded window write lands in the
+       margins (a padded convolution's input gradient) fills them again after its loop nest
+       ([margin_restores], gh-ocannl-1496). *)
     let neutral_value = Ops.neutral_elem accum in
     let padding_resets =
       match Lazy.force lhs.padding with Some (_, v) -> reset_padding_regions lhs v | None -> []
     in
+    let restores = margin_restores margin_writes in
     let for_loops_with_resets =
-      if List.is_empty padding_resets then for_loops
-      else Low_level.unflat_lines (padding_resets @ [ for_loops ])
+      if List.is_empty padding_resets && List.is_empty restores then for_loops
+      else Low_level.unflat_lines (padding_resets @ [ for_loops ] @ restores)
     in
     if needs_init then
       let init = neutral_init ~projections lhs neutral_value in
@@ -879,6 +909,7 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
     in
     (* Same walker as [loop_accum], the roles swapped: the assignment's [lhs] is read at
        [project_lhs] and the [lhses] are written at their [project_rhs]. *)
+    let margin_writes = ref [] in
     let for_loops =
       with_product_loops ~projections ~lhs ~arity:(Array.length lhses) ~role:"Rev_sides"
         ~f:(fun ~subst_index ~fresh_sizes ~is_allowed ->
@@ -914,9 +945,10 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
           let target_tn = target_tn_exn target_buf in
           let clamp = (accum, fresh_sizes, lhs_conds) in
           let stmt =
-            if initialize_neutral && target_can_skip.(i) then set ~clamp target_tn lhs_idcs rhs2
+            if initialize_neutral && target_can_skip.(i) then
+              set ~clamp ~margin_writes target_tn lhs_idcs rhs2
             else
-              set ~clamp target_tn lhs_idcs
+              set ~clamp ~margin_writes target_tn lhs_idcs
               @@ apply_op (Ops.Binop accum) [| get target_buf lhs_idcs; rhs2 |]
           in
           match !lhs_conds with
@@ -940,9 +972,10 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
       |> List.concat_map ~f:(fun tn ->
           match Tn.get_padding tn with Some (_, v) -> reset_padding_regions tn v | None -> [])
     in
+    let restores = margin_restores margin_writes in
     let for_loops_with_resets =
-      if List.is_empty padding_resets then for_loops
-      else Low_level.unflat_lines (padding_resets @ [ for_loops ])
+      if List.is_empty padding_resets && List.is_empty restores then for_loops
+      else Low_level.unflat_lines (padding_resets @ [ for_loops ] @ restores)
     in
     let init_ops =
       Array.filter_mapi lhses ~f:(fun i buf ->

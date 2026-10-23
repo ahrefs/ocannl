@@ -9802,3 +9802,16 @@
  (deps ocannl_config ../support/refusal_control_manifest.ml)
  (modules refusal_manifest_sync_cases)
  (libraries base stdio test_utils arrayjit.verdict))
+
+(test
+ ; gh-ocannl-1496: a padded window's transpose restores its gradient's margins, which a
+ ; padded window reading the gradient then sees as the padding value.
+ (name padded_window_margin_writes)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules padded_window_margin_writes)
+ (libraries base ocannl arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))

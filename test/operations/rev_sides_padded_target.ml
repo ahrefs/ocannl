@@ -25,11 +25,10 @@
    padding value, semantic cells the slice. - A whole training step: every gradient's semantic cells
    equal the oracle computed here from the definitions of both convolutions and the concatenation.
 
-   Not claimed: what a gradient's margins hold after a whole backward pass. A padded window's
+   Not claimed here: what a gradient's margins hold after a whole backward pass. A padded window's
    transpose -- here [y]'s and [z]'s backward -- writes the contributions of the padding positions
-   into the operand gradient's margins, after its own resets, so those margins hold that data, not
-   the padding value, whatever the scatter does; nothing reads a gradient through a window
-   (docs/agent-notes/lowering-and-analysis.md). *)
+   into the operand gradient's margins and restores them after its loop nest (gh-ocannl-1496);
+   test/operations/padded_window_margin_writes.ml pins that. *)
 
 open Base
 open Ocannl
