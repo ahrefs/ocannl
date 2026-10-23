@@ -350,14 +350,41 @@ let () =
      of forms; the lookup plumbing exempted above is not followed into, since it reads the key it is
      handed. *)
   let note_suffix = "docs/agent-notes/build-and-test.md" in
+  let opaque_in base =
+    Option.value (Map.find forwarding_sites base) ~default:(Set.empty (module String))
+  in
+  (* A lazy's call into another module of the libraries is followed, through that module's own
+     reach, and a field of [Utils.settings] stands for every key [restore_settings] initializes it
+     from (round 2 of PR #1366). *)
+  let in_library path =
+    List.mem
+      [ "arrayjit/lib"; "tensor"; "lib" ]
+      (Test_utils.Scan_floors.directory_of path)
+      ~equal:String.equal
+  in
+  let library_modules =
+    List.filter_map source_files ~f:(fun path ->
+        if in_library path then
+          Some
+            ( String.capitalize (Stdlib.Filename.remove_extension (Stdlib.Filename.basename path)),
+              path )
+        else None)
+  in
+  let { Config_key_scan.external_keys; settings_field_keys } =
+    Config_key_scan.library_reach
+      ~wrappers:[ "Ir"; "Ocannl_tensor"; "Ocannl" ]
+      ~library_modules
+      ~opaque:(fun module_name -> opaque_in (String.uncapitalize module_name ^ ".ml"))
+      ()
+  in
+  (* The libraries' sources only: a test links the libraries, never an executable under [bin/],
+     [tools/] or a benchmark runner, whose lazies hold their keys for that program alone. *)
   let held =
-    List.concat_map source_files ~f:(fun fname ->
+    List.concat_map (List.filter source_files ~f:in_library) ~f:(fun fname ->
         let base = Stdlib.Filename.basename fname in
-        let opaque =
-          Option.value (Map.find forwarding_sites base) ~default:(Set.empty (module String))
-        in
         List.map
-          (Config_key_scan.process_lifetime_reads ~opaque (In_channel.read_all fname))
+          (Config_key_scan.process_lifetime_reads ~opaque:(opaque_in base) ~external_keys
+             ~settings_field_keys (In_channel.read_all fname))
           ~f:(fun read -> (base, read)))
   in
   List.iter held ~f:(fun (base, read) ->

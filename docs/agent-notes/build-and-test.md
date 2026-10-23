@@ -4748,13 +4748,16 @@ box.
   snapshots behind `Utils.settings` (`Utils.restore_settings`), `Low_level.virtualize_settings` and
   `Tensor.default_value_prec`. Most of them land in a mutable handle a test sets directly instead.
 - What counts as a process-lifetime read is `Config_key_scan.process_lifetime_reads`' closed list
-  of forms: a `lazy e` or `Lazy.from_fun e` no `fun` encloses (a nested module's or a functor
-  body's included), and in its body every literal `~arg_name` read, lambdas included, plus the
-  keys a top-level value of the same source that it names reaches. It errs long on names (one only
-  mentioned is credited), so a cc probe lists the probe cache's whole key. It does not follow a
-  call into another module, a memo built from a `ref` or a table, or an eager read. Each entry
-  below is one bullet, `- <source>.ml: <key>, <key>.` with every name in a code span; any other
-  bullet in this section is prose.
+  of forms, over the libraries' sources (`arrayjit/lib`, `tensor`, `lib`): a `lazy e` or
+  `Lazy.from_fun e` no `fun` encloses (a nested module's or a functor body's included), and the
+  keys `top_level_key_reach` credits its body in the scope it sees -- every literal `~arg_name`
+  read, lambdas included, and the reach of every value it names, in its own source or, through
+  `library_reach`, in another library module (a `Utils.settings` field standing for every key its
+  initializer reads). It errs long on names (one only mentioned is credited), so a cc probe lists
+  the probe cache's whole key, and `schedulers.ml` lists what `Cc_backend`'s pool policy reads. It
+  does not see a memo built from a `ref` or a table, or an eager read. Each entry below is one
+  bullet, `- <source>.ml: <key>, <key>.` with every name in a code span; any other bullet in this
+  section is prose.
 - `affine.ml`: `legality_crosscheck`.
 - `autotune.ml`: `autotune_bound_pruning`, `autotune_calibration_file`, `autotune_log`,
   `autotune_log_seeding`, `autotune_progress`, `model_cache_bandwidth`, `model_cache_capacity`,
@@ -4768,7 +4771,9 @@ box.
 - `schedule.ml`: `automatic_cpu_schedule`, `automatic_gpu_schedule`, `gpu_fission_keep_mapping`,
   `schedule_fission`, `schedule_log_launches`.
 - `schedule_outcome.ml`: `strict_failure_classification`.
-- `schedulers.ml`: `multidev_num_devices`.
+- `schedulers.ml`: `cc_backend_arch_flags`, `cc_backend_compiler_command`,
+  `cc_backend_probe_cache`, `cc_backend_simd_flags`, `cc_parallel_grid`, `cc_pool_core_class`,
+  `multidev_num_devices`.
 - `sketch_families.ml`: `cc_parallel_chunks`, `cc_parallel_grid`.
 - `tnode.ml`: `default_prec`, read eagerly and wrapped by a lazy.
 - `utils.ml`: `collapse_foreign_stderr_noise`.

@@ -501,6 +501,28 @@ end
 module Alias = Real
 let held = lazy (Alias.helper ())|ocaml},
       [ "aliased" ] );
+    ( "a helper local to the initializer",
+      [],
+      {ocaml|let held =
+  let helper () = get ~arg_name:"local_helper" ~default:"" in
+  lazy (helper ())|ocaml},
+      [ "local_helper" ] );
+    ( "Lazy.from_fun applied through @@",
+      [],
+      {ocaml|let held = Lazy.from_fun @@ fun () -> get ~arg_name:"at_at" ~default:""|ocaml},
+      [ "at_at" ] );
+    ( "Lazy.from_fun applied through |>",
+      [],
+      {ocaml|let held = (fun () -> get ~arg_name:"pipe" ~default:"") |> Lazy.from_fun|ocaml},
+      [ "pipe" ] );
+    ( "a call into another module, through that module's reach",
+      [],
+      {ocaml|let held = lazy (Other.fetch ())|ocaml},
+      [ "other_module" ] );
+    ( "a settings field stands for every key its initializer reads",
+      [],
+      {ocaml|let held = lazy Utils.settings.large_models|ocaml},
+      [ "big_models"; "large_models" ] );
     ( "opaque plumbing is not followed",
       [ "lookup" ],
       {ocaml|let lookup ~arg_name = resolve ~arg_name ~bootstrap:(get ~arg_name:"plumbing" ~default:"")
@@ -525,6 +547,14 @@ let v = lazy (lookup ~arg_name:"handed")|ocaml},
       {ocaml|let v = lazy (Other.helper ())|ocaml},
       [] );
   ]
+
+(* What the cases' other modules reach, standing in for a [library_reach]: [Other.fetch] reads one
+   key, anything else nothing; [large_models] is initialized from two keys, as in [Utils]. *)
+let process_lifetime_external = function [ "Other"; "fetch" ] -> [ "other_module" ] | _ -> []
+
+let process_lifetime_field = function
+  | "large_models" -> [ "large_models"; "big_models" ]
+  | field -> [ field ]
 
 (* gh-ocannl-1207: the two scanners' own refusals, executed rather than vouched for by the lexer
    cases above, which pass on input the scanners ACCEPT. Each scanner runs as a child process over
@@ -667,7 +697,10 @@ let () =
   List.iter process_lifetime_cases ~f:(fun (name, opaque, source, expected) ->
       let found =
         Attempt.attempted ~what:"process-lifetime reads" ~name ~default:[] (fun () ->
-            Scan.process_lifetime_reads ~opaque:(Set.of_list (module String) opaque) source
+            Scan.process_lifetime_reads
+              ~opaque:(Set.of_list (module String) opaque)
+              ~external_keys:process_lifetime_external ~settings_field_keys:process_lifetime_field
+              source
             |> List.map ~f:(fun read -> read.Scan.held_key)
             |> List.dedup_and_sort ~compare:String.compare)
       in

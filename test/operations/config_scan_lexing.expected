@@ -98,6 +98,11 @@ ok: process-lifetime -- a helper inside the same functor body
 ok: process-lifetime -- a member of the lazy's own recursive group
 ok: process-lifetime -- the include in scope at the lazy, not a later one
 ok: process-lifetime -- a helper reached through a module alias
+ok: process-lifetime -- a helper local to the initializer
+ok: process-lifetime -- Lazy.from_fun applied through @@
+ok: process-lifetime -- Lazy.from_fun applied through |>
+ok: process-lifetime -- a call into another module, through that module's reach
+ok: process-lifetime -- a settings field stands for every key its initializer reads
 ok: process-lifetime -- opaque plumbing is not followed
 ok: process-lifetime -- a lazy created per call is not held
 ok: process-lifetime -- a read beside a module-level lazy is fresh
