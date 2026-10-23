@@ -8,8 +8,13 @@ nothing was refused for device memory in the warm call: true
 the replayed winner computes the right values: true
 a routine that does not fit is refused, not searched: true
 the refusal is a typed pre-search failure at link, with the device-memory decline: true
-only the base compile was attempted, or, with the baseline refused before codegen, it and the first candidate: true
-the device refused exactly one allocation: true
+only the base compile was attempted: true
+the census holds no refusal of the baseline beside its device-memory decline: true
+the baseline is declined, once: one failed candidate: true
+the device refused exactly one allocation, and nothing stayed live: true
+the first candidate to reach link was refused: true
+a step whose unscheduled form fits is searched, not refused: true
+the step searched in room for its base computes the right values: true
 nothing of arm A is resident when arm B's base compile starts: true
 both arms reported, in position: true
 arm A searched without a device-memory decline: true

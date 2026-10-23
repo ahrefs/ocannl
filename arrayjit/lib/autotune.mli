@@ -1196,7 +1196,9 @@ type report = {
           case this exists for — before it was contained, that one rejection ended the search. Since
           gh-ocannl-1340 a GPU backend's baseline never reaches codegen (it binds no hardware
           dimension, so it is refused in the transform and counted under [Not_dispatched_key]), so
-          this is [false] there and the flag describes CPU backends. *)
+          this is [false] there and the flag describes CPU backends -- save where the link-free
+          probe of its footprint, which stands for its link (gh-ocannl-1493), is refused for device
+          memory: that refusal is its one account, as a refused base link's is. *)
   baseline_refused : bool;
       (** The dispatched serial baseline ran its timing window and the window was refused
           (gh-ocannl-1423): contention, a queued calibration that measured no batch within its
@@ -3234,7 +3236,15 @@ val tune :
     A device that refuses the base compile's allocation ({!Ir.Schedule_outcome.Device_memory}) has
     refused one candidate's working set, which every candidate, a replay and the untuned fallback
     need about as much of: the call reports {!Pre_search_failure} at [Backend_link] with that
-    decline in its census, and raises, instead of declining every candidate in turn.
+    decline in its census, and raises, instead of declining every candidate in turn. Where the
+    baseline is refused before codegen (every GPU backend, gh-ocannl-1340) the device is asked
+    without a link: {!Context.probe_link_delta} allocates and frees exactly the pools linking the
+    base lowering would (gh-ocannl-1493), before the cache is consulted, and its refusal is the same
+    [Pre_search_failure], with [baseline_declined] and the decline as the baseline's one account. A
+    device that admits the base delta answers nothing about a larger candidate, which is declined on
+    its own at link. Under the liveness planner (config [buffer_aliasing]) the probe abstains: the
+    serial base is one kernel, which on a GPU overlaps no buffers, while a fissioned candidate can,
+    so its delta bounds no candidate's from below ({!Context.link_delta}'s [ld_liveness_planned]).
 
     The bound is on working pools, and that qualifier is load-bearing: {!Context.release} cannot
     free per-device constants, and a hoisted [Stage] candidate mints a fresh packed constant per

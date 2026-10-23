@@ -11,7 +11,10 @@
 
     - Pools: both shared allocation sites — [Backends.allocate_delta] (a compile's in-context delta)
       and the [allocate] used when a [from_host] or [copy] destination is not in the context yet —
-      against the context [finalize] that frees either. A device's reserved merge-buffer pool is NOT
+      against the context [finalize] that frees either. The link-free probe
+      ([Backends.link_delta ~probe], gh-ocannl-1493) allocates through the first site's pool loop
+      and frees what it allocated before returning, so it counts as allocated and freed pools and
+      can raise the peak, but never leaves a pool live. A device's reserved merge-buffer pool is NOT
       counted: it is one entry per device that grows in place, so it cannot be a growth class at
       all, and its allocation site is inside each backend rather than at the shared seam. Read the
       device's [merge_buffer_capacity] for that one.

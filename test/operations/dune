@@ -208,6 +208,7 @@
   (alias runtest-autotune_candidate_release)
   (alias runtest-autotune_callback_release)
   (alias runtest-autotune_device_memory)
+  (alias runtest-link_delta_parity)
   (alias runtest-deferred_hit_compiles)
   (alias runtest-set_values_pool_coalescing)))
 
@@ -7051,6 +7052,21 @@
   (env_var OCANNL_BACKEND))
  (modules autotune_device_memory)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1493: the link-free plan of a compile's device allocation, against the census delta of
+; the real compile, and the trial-allocation probe built on it.
+
+(test
+ ; ocannl-lifecycle: link_delta_parity -- checks allocation and cleanup across resource seams
+ (name link_delta_parity)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules link_delta_parity)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

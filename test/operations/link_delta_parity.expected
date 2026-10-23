@@ -1,0 +1,55 @@
+[aliasing off] forward, fresh context, unscheduled: the estimate allocates nothing and reaches no allocation seam: true
+[aliasing off] forward, fresh context, unscheduled: the probe plans what the estimate plans: true
+[aliasing off] forward, fresh context, unscheduled: the probe allocates exactly the planned pools, and frees them all: true
+[aliasing off] forward, fresh context, unscheduled: a device refusing the probe's allocation refuses the probe, typed: true
+[aliasing off] forward, fresh context, unscheduled: the refused probe leaves nothing live: true
+[aliasing off] forward, fresh context, unscheduled: the estimate is the link's allocation: true
+[aliasing off] forward, fresh context, unscheduled: the delta holds working bytes: true
+[aliasing off] forward, fresh context, default schedules: the estimate allocates nothing and reaches no allocation seam: true
+[aliasing off] forward, fresh context, default schedules: the probe plans what the estimate plans: true
+[aliasing off] forward, fresh context, default schedules: the probe allocates exactly the planned pools, and frees them all: true
+[aliasing off] forward, fresh context, default schedules: a device refusing the probe's allocation refuses the probe, typed: true
+[aliasing off] forward, fresh context, default schedules: the refused probe leaves nothing live: true
+[aliasing off] forward, fresh context, default schedules: the estimate is the link's allocation: true
+[aliasing off] forward, fresh context, default schedules: the delta holds working bytes: true
+[aliasing off] training step, parameters held, unscheduled: the estimate allocates nothing and reaches no allocation seam: true
+[aliasing off] training step, parameters held, unscheduled: the probe plans what the estimate plans: true
+[aliasing off] training step, parameters held, unscheduled: the probe allocates exactly the planned pools, and frees them all: true
+[aliasing off] training step, parameters held, unscheduled: a device refusing the probe's allocation refuses the probe, typed: true
+[aliasing off] training step, parameters held, unscheduled: the refused probe leaves nothing live: true
+[aliasing off] training step, parameters held, unscheduled: the estimate is the link's allocation: true
+[aliasing off] training step, parameters held, default schedules: the estimate allocates nothing and reaches no allocation seam: true
+[aliasing off] training step, parameters held, default schedules: the probe plans what the estimate plans: true
+[aliasing off] training step, parameters held, default schedules: the probe allocates exactly the planned pools, and frees them all: true
+[aliasing off] training step, parameters held, default schedules: a device refusing the probe's allocation refuses the probe, typed: true
+[aliasing off] training step, parameters held, default schedules: the refused probe leaves nothing live: true
+[aliasing off] training step, parameters held, default schedules: the estimate is the link's allocation: true
+[aliasing off] training step: the plan says it is liveness-planned exactly under buffer_aliasing: true
+[aliasing on] forward, fresh context, unscheduled: the estimate allocates nothing and reaches no allocation seam: true
+[aliasing on] forward, fresh context, unscheduled: the probe plans what the estimate plans: true
+[aliasing on] forward, fresh context, unscheduled: the probe allocates exactly the planned pools, and frees them all: true
+[aliasing on] forward, fresh context, unscheduled: a device refusing the probe's allocation refuses the probe, typed: true
+[aliasing on] forward, fresh context, unscheduled: the refused probe leaves nothing live: true
+[aliasing on] forward, fresh context, unscheduled: the estimate is the link's allocation: true
+[aliasing on] forward, fresh context, unscheduled: the delta holds working bytes: true
+[aliasing on] forward, fresh context, default schedules: the estimate allocates nothing and reaches no allocation seam: true
+[aliasing on] forward, fresh context, default schedules: the probe plans what the estimate plans: true
+[aliasing on] forward, fresh context, default schedules: the probe allocates exactly the planned pools, and frees them all: true
+[aliasing on] forward, fresh context, default schedules: a device refusing the probe's allocation refuses the probe, typed: true
+[aliasing on] forward, fresh context, default schedules: the refused probe leaves nothing live: true
+[aliasing on] forward, fresh context, default schedules: the estimate is the link's allocation: true
+[aliasing on] forward, fresh context, default schedules: the delta holds working bytes: true
+[aliasing on] training step, parameters held, unscheduled: the estimate allocates nothing and reaches no allocation seam: true
+[aliasing on] training step, parameters held, unscheduled: the probe plans what the estimate plans: true
+[aliasing on] training step, parameters held, unscheduled: the probe allocates exactly the planned pools, and frees them all: true
+[aliasing on] training step, parameters held, unscheduled: a device refusing the probe's allocation refuses the probe, typed: true
+[aliasing on] training step, parameters held, unscheduled: the refused probe leaves nothing live: true
+[aliasing on] training step, parameters held, unscheduled: the estimate is the link's allocation: true
+[aliasing on] training step, parameters held, default schedules: the estimate allocates nothing and reaches no allocation seam: true
+[aliasing on] training step, parameters held, default schedules: the probe plans what the estimate plans: true
+[aliasing on] training step, parameters held, default schedules: the probe allocates exactly the planned pools, and frees them all: true
+[aliasing on] training step, parameters held, default schedules: a device refusing the probe's allocation refuses the probe, typed: true
+[aliasing on] training step, parameters held, default schedules: the refused probe leaves nothing live: true
+[aliasing on] training step, parameters held, default schedules: the estimate is the link's allocation: true
+[aliasing on] training step: the plan says it is liveness-planned exactly under buffer_aliasing: true
+the training step's delta is a liveness-planned arena under buffer_aliasing: true
