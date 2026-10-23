@@ -1,0 +1,25 @@
+scanner: reports exactly the synthetic sites, and none of their nearest non-sites: true
+every binary AST the corpus globs matched is a preprocessed source the corpus parses: true
+the corpus holds the library's tensor-code sources: true
+Library self-operand sites:
+  lib/nn_blocks.ml: batch_norm1d: centered *. centered
+  lib/nn_blocks.ml: batch_norm2d: centered *. centered
+  lib/nn_blocks.ml: gelu: x *. x
+  lib/nn_blocks.ml: layer_norm: centered *. centered
+  lib/train.ml: grad_l2_norm: p.grad * p.grad
+every self-operand site in the library has an executed case here: true
+every executed case names a self-operand site the library still has: true
+lib/nn_blocks.ml: gelu: x *. x: the forward matches the host oracle: true
+lib/nn_blocks.ml: gelu: x *. x: the input gradient matches the host oracle: true
+lib/nn_blocks.ml: layer_norm: centered *. centered: the forward matches the host oracle: true
+lib/nn_blocks.ml: layer_norm: centered *. centered: the input gradient matches the host oracle: true
+lib/nn_blocks.ml: batch_norm1d: centered *. centered: the forward matches the host oracle: true
+lib/nn_blocks.ml: batch_norm1d: centered *. centered: the input gradient matches the host oracle: true
+lib/nn_blocks.ml: batch_norm2d: centered *. centered: the forward matches the host oracle: true
+lib/nn_blocks.ml: batch_norm2d: centered *. centered: the input gradient matches the host oracle: true
+lib/train.ml: grad_l2_norm: p.grad * p.grad: each parameter's gradient is its upstream constant: true
+lib/train.ml: grad_l2_norm: p.grad * p.grad: the norm is the square root of every gradient cell's square, summed: true
+m * m: one matrix as both operands computes the full product, not its diagonal: true
+m +* "a, b; b, c => a, c" m: one matrix as both operands computes the full product, not its diagonal: true
+m @^+ "a, b; b, c => a, c" m: one matrix as both operands computes the full product, not its diagonal: true
+m +++ "a, b; b, c => a, c" m: one matrix as both operands computes the full product, not its diagonal: true

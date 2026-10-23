@@ -112,7 +112,12 @@ files.
   `Shape.dealias_operands` gives each repeated occurrence a shallow copy (same `id`, own rows) and
   `merge_dealiased_padding` folds the copy's inferred padding back. Pointwise self-operands are
   unaffected: their equations unify the copies' ids again. Executed parity:
-  `test/operations/self_concat.ml`.
+  `test/operations/self_concat.ml`, and library-wide `test/operations/self_operand_sites.ml`
+  (gh-ocannl-1497): it derives the library's own self-operand sites from the ppxlib parse of
+  `lib/` and `tensor/` (all pointwise or same-spec today, so none depends on the de-aliasing) and
+  runs each against a host oracle, and runs `*` plus every binary einsum operator `Einsum_parser`
+  generates specs for on one matrix twice -- the cases that fail with `dealias_operands` reverted.
+  A new self-operand site in `%op`/`%cd` library code fails that test until it gets a case.
 - Closed shapes are write-guarded (gh-ocannl-1301): `Shape.t.closed` is set by a SUCCESSFUL
   `finish_inference` (after every derivation), and every write site of rows, paddings and
   `padding_elem` (`set_rows`, `set_padding`, `set_padding_elem` in `shape.ml`) checks equality first
