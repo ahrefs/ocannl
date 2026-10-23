@@ -519,15 +519,22 @@ let () =
   let derived =
     List.map [ false; true ] ~f:(fun fold_zeros -> (fold_zeros, fission rut ~fold_zeros ()))
   in
-  p_all "7: the scalar reduction derives one segment, with or without the zero fold" derived
+  (* One kernel arises where the zero's segment schedules nothing and coalesces with the
+     reduction's: on the C backends, whose [zero_sched] is empty. A GPU expands the zero into its
+     own kernel, so the shape claims are the C backends'; the replay claims hold everywhere. *)
+  let single_kernel = not is_gpu in
+  gated_all ~when_:single_kernel ~on:backend_name
+    "7: the scalar reduction derives one segment, with or without the zero fold" derived
     ~f:(fun (_, (segmentation, _)) -> List.length segmentation = 1);
-  p_all "7: that segment records [`Unfolded] exactly when its head is the target's whole-node zero"
+  gated_all ~when_:single_kernel ~on:backend_name
+    "7: that segment records [`Unfolded] exactly when its head is the target's whole-node zero"
     derived ~f:(fun (_, (segmentation, tuples)) ->
       match (segmentation, tuples) with
       | [ (kind, _) ], [ (_, pre, _, _) ] ->
           Bool.equal (Sched.equal_segment_kind kind `Unfolded) (zero_headed pre)
       | _ -> false);
-  p_exists "7: some derivation leaves the head zero whole" derived ~f:(fun (_, (segmentation, _)) ->
+  gated_exists ~when_:single_kernel ~on:backend_name "7: some derivation leaves the head zero whole"
+    derived ~f:(fun (_, (segmentation, _)) ->
       match segmentation with [ (`Unfolded, _) ] -> true | _ -> false);
   p_all "7: replaying the recorded segmentation rebuilds the very segment it recorded" derived
     ~f:(fun (_, (segmentation, tuples)) ->
