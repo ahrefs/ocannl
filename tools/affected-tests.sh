@@ -1315,6 +1315,29 @@ if (@scoped) {
                                       action => $act, canon => $canon };
     }
   }
+  # The `(alias)` stanzas of this side, by directory and name: what an alias a
+  # stanza makes depend on files may need is read off its stanzas' tokens, to a
+  # fixpoint (a mention errs towards "needs it"; a template means anything).
+  my (%alias_forms, %alias_dirs);
+  for my $file (sort keys %{$forms{new} // {}}) {
+    for my $r (grep { $_->{head} eq "alias" } @{$forms{new}{$file}}) {
+      for my $n (@{$r->{names}}) { push @{$alias_forms{"$r->{dir}\0$n"}}, $r->{canon}; $alias_dirs{$n}{$r->{dir}} = 1 }
+    }
+  }
+  sub mentions {   # DIR X H SEEN: may an (alias) stanza of X in DIR need the alias H?
+    my ($sd, $x, $h, $seen) = @_;
+    return 0 if $seen->{"$sd\0$x"}++;
+    my @texts = @{$alias_forms{"$sd\0$x"} // []};
+    # No (alias) stanza: its dependencies come from rules, whose needs dune prints.
+    return 0 unless @texts;
+    my @tok = grep { $_ ne "" } map { split /[\s()]+/ } @texts;
+    return 1 if grep { /%\{/ || $_ eq $h || m{/\Q$h\E$} } @tok;
+    for my $t (@tok) {
+      my ($b) = $t =~ m{([^/]+)$} or next;
+      for my $od (sort keys %{$alias_dirs{$b} // {}}) { return 1 if mentions($od, $b, $h, $seen) }
+    }
+    return 0;
+  }
   my %rules_shown = map { $_ => 1 } "rule", "copy_files", "copy_files#", "ocamllex", "ocamlyacc", "menhir";
   my %kind_of = (test => "tests", tests => "tests", executable => "executables", executables => "executables", library => "library");
   my $per_test = qr/^(?:runtest|train|slow)-/;
@@ -1337,7 +1360,18 @@ if (@scoped) {
       my $h = $r->{head};
       next if $rules_shown{$h};
       if ($h eq "alias" && !$r->{action}) {
-        for my $x (@{$r->{names}}) { $direct_here{in_dir($d, $x)} = "its (alias) stanza changed" if $x =~ $per_test }
+        # The alias itself, per-test or a helper (whose entry carries the change to
+        # the aliases whose rules need it); and, since `dune rules @ALIAS` folds a
+        # helper's dependencies into an alias some stanza makes depend on files
+        # without saying which came through it, every such alias too.
+        for my $x (@{$r->{names}}) {
+          $direct_here{in_dir($d, $x)} = "its (alias) stanza changed";
+          next if $x =~ $per_test;
+          for my $sd (sort keys %sources) {
+            $direct_here{in_dir($sd, $_)} = "it may depend on the changed (alias) $x"
+              for grep { $_ =~ $per_test && mentions($sd, $_, $x, {}) } keys %{$sources{$sd}};
+          }
+        }
         next;
       }
       if (my $kind = $kind_of{$h}) {

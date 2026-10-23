@@ -837,11 +837,16 @@ cat >"$repo/p3/dune" <<'DUNE'
 (rule (alias runtest-dirt3) (targets (dir gd3)) (action (system "mkdir -p gd3")))
 (rule (alias h3) (action (echo h)))
 (rule (alias runtest-needh3) (deps (alias h3)) (action (progn)))
+(alias (name h4) (deps h4.txt))
+(rule (alias runtest-needh4) (deps (alias h4)) (action (progn)))
+(alias (name runtest-viah4) (deps (alias h4)))
 (subdir s1 (rule (alias runtest-sx) (action (echo x))))
 DUNE
 printf '; nothing here but the subdir stanzas of p3/dune\n' >"$repo/p3/s1/dune"
 printf '; nothing here but the subdir stanzas of p3/dune\n' >"$repo/p3/s2/dune"
 for m in pa pb lk; do printf 'let () = ()\n' >"$repo/p3/$m.ml"; done
+: >"$repo/p3/h4.txt"
+: >"$repo/p3/h4b.txt"
 : >"$repo/p3/pa.expected"
 : >"$repo/p3/pb.expected"
 # A scan reading p3's dune file, and a sibling test it does not concern.
@@ -855,8 +860,8 @@ printf 's\n' >"$repo/p4/dscan.expected"
 : >"$repo/p4/p4t.expected"
 git_q add -A && git_q commit -qm probe-fixture || exit 2
 probe_blind='@p2/runtest-p2blind @p1/runtest-incdeps'
-p3_all='@p3/runtest-act3 @p3/runtest-blk3 @p3/runtest-dirt3 @p3/runtest-lk @p3/runtest-needh3 @p3/runtest-pa @p3/runtest-pb
-  @p3/runtest-reads3 @p3/s1/runtest-sx'
+p3_all='@p3/runtest-act3 @p3/runtest-blk3 @p3/runtest-dirt3 @p3/runtest-lk @p3/runtest-needh3 @p3/runtest-needh4 @p3/runtest-pa
+  @p3/runtest-pb @p3/runtest-reads3 @p3/runtest-viah4 @p3/s1/runtest-sx'
 probe_restore() { git_q reset -q --hard && git_q clean -qfd -- p1 p2 p3 p4; }
 
 if harness_leg 'probe alias actions'; then
@@ -938,6 +943,9 @@ if harness_leg 'probe dune edits'; then
     probe_leg 'a rule with an alias and a directory target lists its alias' "@p3/runtest-dirt3 $p3_scan"
   probe_edit 's/\(echo h\)/(echo g)/' &&
     probe_leg 'an edit to a helper alias lists the per-test aliases needing it' "@p3/runtest-needh3 $p3_scan"
+  probe_edit 's/\(deps h4\.txt\)/(deps h4b.txt)/' &&
+    probe_leg 'a dependency edit to a helper (alias) stanza lists the aliases needing it, by a rule and by an (alias) stanza' \
+      "@p3/runtest-needh4 @p3/runtest-viah4 $p3_scan"
   probe_edit 's/\(echo m\)/(echo n)/ + s/\(echo a\)\)\)/(echo b)))/' &&
     probe_leg 'a visible rule edit beside an alias-action edit lists both' "@p3/runtest-act3 @p3/runtest-reads3 @p3/runtest-lk $p3_scan"
   probe_edit 's/\(test \(name pb\) \(modules pb\)\)/(test (name pd) (modules pd))/' && git_q mv p3/pb.ml p3/pd.ml &&
@@ -1001,6 +1009,11 @@ if harness_leg 'probe controls'; then
     control 'a changed form outside the allowlist is what keeps the whole directory' \
       'push @why, $h eq "alias" ? "a changed (alias) with an action" : "a changed ($h) stanza";' '' \
       HEAD -- $p3_all $p3_scan
+  probe_restore
+  probe_edit 's/\(deps h4\.txt\)/(deps h4b.txt)/' &&
+    control 'a changed helper (alias) stanza is what lists the aliases needing it' \
+      '$direct_here{in_dir($d, $x)} = "its (alias) stanza changed";' '' \
+      HEAD -- @p3/runtest-needh4 @p3/runtest-viah4 $p3_scan
   probe_restore
   probe_edit 's/\(echo h\)/(echo g)/' &&
     control 'a changed twin of a helper alias is what lists the alias needing it' \
