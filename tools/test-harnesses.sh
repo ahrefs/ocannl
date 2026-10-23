@@ -3,7 +3,8 @@
 # Usage: tools/test-harnesses.sh [--shell|--toolchain|--promotion] [--list]
 #                               [--expected-skips FILE]
 # With no group, run all three. --shell needs no OCaml toolchain; --toolchain
-# runs the formatter controls and --promotion the controls of tools that read
+# runs the formatter controls and the scan-case type check (which links
+# ppxlib) and --promotion the controls of tools that read
 # Dune's own output (promotion, affected tests, the failed-rule listing), whose
 # missing-toolchain legs report counted skips. CI runs both after installing
 # its toolchain, and --promotion again at the declared Dune floor.
@@ -67,6 +68,7 @@ shell benchmarks/test-gh834-cells.sh
 shell benchmarks/test-check-box.sh
 shell benchmarks/test-box-gate.sh
 toolchain tools/test-fmt-check.sh
+toolchain tools/test-typecheck-scan-cases.sh
 promotion tools/test-promote.sh
 promotion tools/test-promotion-record.sh
 promotion tools/test-affected-tests.sh

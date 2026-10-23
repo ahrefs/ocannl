@@ -730,17 +730,27 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
 - Type-check every OCaml snippet a scan's cases feed it before trusting the arm. The parser
   accepts programs the type checker rejects — a duplicate top-level `module` parses cleanly — and
   an arm over such a snippet pins the scanner's reading of code no compiler would build, so its
-  verdict says nothing about the tree the scan polices. A plain-OCaml snippet goes to a scratch
-  file and `ocamlc -stop-after typing -c arm.ml` (`ocamlfind ocamlc -package base …` when it opens
-  a library). Snippets that call stand-in names (`key`, `Autotune.tune`) check against a stub
-  module compiled first and OPENED at each arm's top, not pasted in: an arm may rebind a stub's
-  name (`module Autotune = Other`), legal over an open and a duplicate definition beside a
-  paste. An unreadable signature `S` an arm constrains by is declared in that arm. Doing this
-  for `cache_dir_scan_cases` (gh-ocannl-1248) found five arms no compiler accepts, one of which
-  pinned a mis-modelled `module X :=` (a local substitution, not a removal). A snippet in project syntax (`let%op`, `[%cd …]`, a `[@@deriving …]` whose generated
-  names it references) needs the owning stanza's preprocessors, libraries and DSL scope, which bare
-  `ocamlc` lacks — it reports the uninterpreted extension instead of checking the expanded program —
-  so check it as a module of a scratch stanza copied from the owning one (`dune build @check`).
+  verdict says nothing about the tree the scan polices. `tools/typecheck-scan-cases.sh <table>.ml`
+  does it: each `{ocaml|…|ocaml}` snippet of the table (the case-table shape; an ordinary `"…"`
+  literal is not read) becomes its own unit under `ocamlc -stop-after typing`, reported by case
+  name and table line. Stand-in names (`key`, `Autotune.tune`) come from the table's companion
+  stub, `test/operations/scan_case_stubs/<table>.mli`, compiled first and OPENED at each arm's
+  top, not pasted in: an arm may rebind a stub's name (`module Autotune = Other`), legal over an
+  open and a duplicate definition beside a paste. A name an arm uses unbound — a `Cache` after the
+  local alias's scope ends — is a stub entry too, saying what a compiling program binds there. An
+  arm that feeds a non-program on purpose (what the parser makes of `F(X).x`), or one whose fix is
+  a follow-up, is listed in the stub as `[@@@known_rejection ("case", "error text")]` and must stay
+  rejected with that text; a library a snippet opens is `-I` its directory of `.cmi` files.
+  `--stubbed` runs every table with a stub, and `tools/test-typecheck-scan-cases.sh` (a toolchain
+  harness) holds them clean, so a new arm on a stubbed table is checked by the harness tier. Doing
+  this for `cache_dir_scan_cases` (gh-ocannl-1248) found five arms no compiler accepts, one of
+  which pinned a mis-modelled `module X :=` (a local substitution, not a removal); the script's
+  first run found two in `config_scan_lexing`: a partial application destructured as a pair
+  (fixed), and an optional argument applied to a bare literal (`?l:"k"`, which never types;
+  listed). A snippet in project syntax (`let%op`, `[%cd …]`, a `[@@deriving …]` whose generated
+  names it references) is REFUSED by name: it needs the owning stanza's preprocessors,
+  libraries and DSL scope, which bare `ocamlc` lacks, so check it as a module of a scratch stanza
+  copied from the owning one (`dune build @check`).
 - A scan that MODELS library or language semantics (which calls are wrappers, which arguments of a
   library function carry a collection, which bindings a gate reads) states its CLOSED LIST OF
   RECOGNISED FORMS in its reader's header and in the PR body FROM THE FIRST REVIEW ROUND, not once

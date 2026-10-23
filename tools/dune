@@ -16,6 +16,14 @@
  (modules refusal_manifest_sync)
  (libraries base stdio unix test_utils))
 
+; tools/typecheck-scan-cases.sh's engine: type-checks the {ocaml|...|ocaml} snippets of a scan's
+; cases module, each as its own unit, against an optional stub module.
+
+(executable
+ (name scan_case_snippets)
+ (modules scan_case_snippets)
+ (libraries ppxlib))
+
 (executable
  (name fit_envelope)
  (modules fit_envelope)

@@ -2,13 +2,13 @@
 # The credential variables no runner hands to dune (gh-ocannl-1280). Dune writes the environment of
 # every process it spawns into `_build/trace.csexp`, inside the checkout -- a tree agents grep, mine
 # and quote -- so a token a session exports would land there on every build. The runners remove
-# these from dune's environment on the side where dune runs, after any opam environment is
-# applied: tools/test-run.sh for everything it launches, tools/sweep.sh inside every `opam exec` of
-# a unit leg's shell text (local, or sent to a remote box, whose own environment holds its own
-# token), tools/machine-verify-far.sh inside every `opam exec` on the verified machine, and the
-# other tools/ wrappers that start dune themselves (fmt-check.sh, promote.sh, dune-quiet.sh,
-# api-drift.sh, ci-shard.sh). That is the boundary: a bare `dune`, or a one-off driver outside
-# tools/, records whatever the session exports (gh-ocannl-1280 leaves it to the fleet not to
+# these from dune's environment on the side where dune runs, after any opam environment is applied:
+# tools/test-run.sh for everything it launches, tools/sweep.sh inside every `opam exec` of a unit
+# leg's shell text (local, or sent to a remote box, whose own environment holds its own token),
+# tools/machine-verify-far.sh inside every `opam exec` on the verified machine, and the other tools/
+# wrappers that start dune themselves (fmt-check.sh, promote.sh, dune-quiet.sh, api-drift.sh,
+# ci-shard.sh, typecheck-scan-cases.sh). That is the boundary: a bare `dune`, or a one-off driver
+# outside tools/, records whatever the session exports (gh-ocannl-1280 leaves it to the fleet not to
 # export the token everywhere). `test/operations/env_var_deps` reads `credential_env_patterns` below
 # and refuses a dune stanza that declares a match as an `(env_var ...)` dependency or reads one
 # through `%{env:NAME=...}`, and a test source that reads one by name, so no test can need one.

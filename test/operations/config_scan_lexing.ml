@@ -161,7 +161,7 @@ let () = ignore (get ~arg_name:name)|ocaml},
       Some "<anonymous function> (nested)" );
     ( "a nameless local binding is transparent, so its host keeps the use",
       {ocaml|let get_global_arg x =
-  let a, b = get ~arg_name:x in
+  let a, b = (get ~arg_name:x ~default:"", x) in
   (a, b)|ocaml},
       Some "get_global_arg" );
     ( "a binding inside a module is qualified, so it cannot borrow an exemption",
