@@ -253,6 +253,12 @@ ok: backend pins -- a read-lines argument could carry the flag
 ok: backend pins -- path-valued pforms and named dependencies are arguments, not pins
 ok: backend pins -- a text-valued pform that could complete a backend flag
 ok: backend pins -- only the first backend flag of a run is read
+ok: backend pins -- an expansion after the first backend flag decides nothing
+ok: backend pins -- an expansion before it is still unread
+ok: backend pins -- a command that is a text-valued pform
+ok: backend pins -- a shell line holding a text-valued pform
+ok: backend pins -- a shell line holding only path-valued pforms
+ok: backend pins -- an unread setenv survives a command-line pin
 ok: backend pins -- a command-line pin shadows the setenv around its run
 ok: backend pins -- but not around a sibling run that sets none
 ok: backend pins -- a pin on a stanza declaring neither is the XOR's to report

@@ -1299,6 +1299,40 @@ let backend_pin_cases =
  ; ocannl-backend: cc -- the first flag says cc
  (action (run %{dep:probe.exe} --backend=cc --backend=cuda --ocannl_backend=%{read:x})))|dune},
       [ "rule: clean" ] );
+    (* Review round 3: what follows the first setting is not read at all... *)
+    ( "an expansion after the first backend flag decides nothing",
+      {dune|(rule
+ ; ocannl-backend: cc -- the first flag says cc
+ (action (run %{dep:probe.exe} --backend=cc %{read-lines:extra.args})))|dune},
+      [ "rule: clean" ] );
+    (* ...while one before it still could be the setting. *)
+    ( "an expansion before it is still unread",
+      {dune|(rule
+ ; ocannl-backend: cc -- says cc
+ (action (run %{dep:probe.exe} %{read-lines:extra.args} --backend=cc)))|dune},
+      [ "rule: unread %{read-lines:extra.args}" ] );
+    ( "a command that is a text-valued pform",
+      {dune|(rule
+ ; ocannl-backend: none -- claims no backend
+ (action (run %{read-lines:command.txt})))|dune},
+      [ "rule: unread %{read-lines:command.txt}" ] );
+    ( "a shell line holding a text-valued pform",
+      {dune|(rule
+ ; ocannl-backend: none -- claims no backend
+ (action (bash "%{read:backend.sh}")))|dune},
+      [ "rule: unread %{read:backend.sh}" ] );
+    ( "a shell line holding only path-valued pforms",
+      {dune|(rule
+ ; ocannl-backend: none -- claims no backend
+ (action (bash "%{dep:probe.exe} %{deps} > %{target}")))|dune},
+      [ "rule: clean" ] );
+    (* A dashed setenv aborts the run at startup whatever the command line says, so a flag on the
+       run does not shadow it. *)
+    ( "an unread setenv survives a command-line pin",
+      {dune|(rule
+ ; ocannl-backend: cc -- the command line says cc
+ (action (setenv OCANNL-BACKEND hip (run %{dep:probe.exe} --backend=cc))))|dune},
+      [ "rule: unread (setenv OCANNL-BACKEND hip …)" ] );
     (* The command line outranks the environment: a flag on the run shadows the setenv around it,
        for that run and no other. *)
     ( "a command-line pin shadows the setenv around its run",

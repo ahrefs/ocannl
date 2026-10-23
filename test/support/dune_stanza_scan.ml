@@ -2063,10 +2063,11 @@ let backend_rule_of marked =
     - [(setenv <name> <value> …)] whose [<name>] the runtime reads as the backend key, in any case
       ([Utils.classify_env_var ~case_insensitive:true], since Windows folds it): a literal, nonempty
       [<value>] pins that backend for every run it wraps that fixes none on its own command line,
-      the command line outranking the environment. A value carrying a pform, an empty one (which
-      unsets it and hands the run back to the configuration), or a dashed name (which the startup
-      check aborts on) is unread. A [setenv] wrapping only PATH tools handed nothing of ours pins
-      nothing the walk places.
+      the command line outranking the environment. An unread [setenv] (below) stays unread under a
+      command-line setting. A value carrying a pform, an empty one (which unsets it and hands the
+      run back to the configuration), or a dashed name (which the startup check aborts on) is
+      unread. A [setenv] wrapping only PATH tools handed nothing of ours pins nothing the walk
+      places.
     - an argument of a [(run …)]/[(dynamic-run …)] that the runtime's own reader takes as the
       backend ([Utils.cmdline_arg_value "backend"], so every spelling and separator OCANNL accepts):
       a literal, nonempty value handed to a program of this workspace (a {!Runs}, {!Runs_dependency}
@@ -2077,13 +2078,15 @@ let backend_rule_of marked =
       paths ([%{read-lines:…}], [%{read:…}], [%{env:…}] -- anything but
       {!path_valued_pform_prefixes}, {!path_valued_pforms} and the stanza's named dependencies)
       where the literal text before it is compatible with a backend spelling: unread, since its
-      expansion could be the setting. Only the FIRST argument the runtime reads as the backend is
-      read; it ignores the rest.
+      expansion could be the setting. Only the arguments up to the FIRST one the runtime reads as
+      the backend are read: it takes that one, and nothing after it changes the backend.
+    - a command that is itself a text-valued pform ([(run %{read-lines:cmd.txt})]): unread, since it
+      can expand to a program and its flag.
     - an argument assigning a variable that addresses the backend key ([OCANNL_BACKEND=cuda], what
       an [env] launcher takes): unread -- spell it as [setenv].
-    - a [(bash …)]/[(system …)] line naming the key ([ocannl_backend] or [ocannl-backend], any case)
-      or carrying a word the runtime reader takes as the backend: unread, since no reader here
-      parses shell.
+    - a [(bash …)]/[(system …)] line naming the key ([ocannl_backend] or [ocannl-backend], any
+      case), carrying a word the runtime reader takes as the backend, or holding a text-valued
+      pform: unread, since no reader here parses shell.
     - an atom of a library's [(inline_tests …)] field the runtime reader takes as the backend:
       unread -- pin it on a rule running the runner instead.
 
@@ -2198,18 +2201,23 @@ let backend_pins stanza =
      [Array.find_map]), so later ones decide nothing (Codex P2, round 2). *)
   let arguments_pins ~ours ~reads_opaque arguments =
     let flag_seen = ref false in
-    List.filter_map arguments ~f:(fun argument ->
-        match backend_of_argument argument with
-        | Some _ when !flag_seen -> None
-        | Some value ->
-            flag_seen := true;
-            if ours && literal value then
-              Some (Pinned_backend { pin_backend = value; pin_form = argument })
-            else Some (Unread_pin argument)
-        | None ->
-            if assigns_backend argument || (reads_opaque && opaque_argument argument) then
-              Some (Unread_pin argument)
-            else None)
+    let pins =
+      List.filter_map arguments ~f:(fun argument ->
+          match backend_of_argument argument with
+          (* Once the runtime has its setting, nothing after it changes the backend: no later flag,
+             assignment or expansion (Codex P2, round 3). *)
+          | _ when !flag_seen -> None
+          | Some value ->
+              flag_seen := true;
+              if ours && literal value then
+                Some (Pinned_backend { pin_backend = value; pin_form = argument })
+              else Some (Unread_pin argument)
+          | None ->
+              if assigns_backend argument || (reads_opaque && opaque_argument argument) then
+                Some (Unread_pin argument)
+              else None)
+    in
+    (pins, !flag_seen)
   in
   let names_key line =
     let lower = String.lowercase line in
@@ -2239,22 +2247,35 @@ let backend_pins stanza =
     | Sexp.List (Sexp.Atom "setenv" :: Sexp.Atom name :: _ :: rest)
       when String.equal (String.uppercase name) "PATH" ->
         List.concat_map rest ~f:(walk ~path_rewritten:true ~env_pin)
-    | Sexp.List (Sexp.Atom ("run" | "dynamic-run") :: Sexp.Atom cmd :: args) -> (
+    | Sexp.List (Sexp.Atom ("run" | "dynamic-run") :: Sexp.Atom cmd :: args) ->
         let arguments = List.filter_map args ~f:(function Sexp.Atom a -> Some a | _ -> None) in
         let kind = command_kind ~path_rewritten cmd arguments in
         let ours = match kind with `Ours -> true | `Site | `Tool -> false in
         let reads_opaque = match kind with `Ours | `Site -> true | `Tool -> false in
-        let from_arguments = arguments_pins ~ours ~reads_opaque arguments in
-        match (from_arguments, kind) with
-        | _ :: _, _ -> from_arguments
-        (* A PATH tool handed nothing of ours runs nothing the walk places: the walk drops it, and
-           so does this reader. *)
-        | [], `Tool -> []
-        | [], (`Ours | `Site) -> Option.to_list env_pin)
+        let from_arguments, flag_set = arguments_pins ~ours ~reads_opaque arguments in
+        (* A command that is itself a text-valued pform expands to a command line this reader does
+           not see -- `%{read-lines:cmd.txt}` can be a program and its flag (Codex P1, round 3). *)
+        let from_command =
+          if List.exists (pieces cmd) ~f:text_valued then [ Unread_pin cmd ] else []
+        in
+        (* What the environment contributes: nothing for a PATH tool handed nothing of ours, which
+           the walk drops; a canonical pin only where no command-line setting outranks it; and an
+           UNREAD form always, since a dashed name aborts the run at startup whatever the command
+           line says (Codex P2, round 3). *)
+        let from_environment =
+          match (kind, env_pin) with
+          | `Tool, _ | _, None -> []
+          | _, Some (Pinned_backend _) when flag_set -> []
+          | _, Some pin -> [ pin ]
+        in
+        from_command @ from_arguments @ from_environment
     | Sexp.List (Sexp.Atom ("bash" | "system") :: args) ->
+        (* A text-valued pform in the line expands to shell text this reader does not see (Codex P1,
+           round 3). *)
         let lines =
           List.filter_map args ~f:(function
-            | Sexp.Atom line when names_key line -> Some (Unread_pin line)
+            | Sexp.Atom line when names_key line || List.exists (pieces line) ~f:text_valued ->
+                Some (Unread_pin line)
             | _ -> None)
         in
         if List.is_empty lines then Option.to_list env_pin else lines
