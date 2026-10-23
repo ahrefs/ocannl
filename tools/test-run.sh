@@ -791,17 +791,18 @@ alias_listing() { # <listing file> dir...; 0 with the parsed listing in it, 1 in
 }
 # The directories a dune file's `(subdir NAME ...)` stanzas give rules to, which
 # hold no dune file of their own (gh-ocannl-1448, Codex review round 2): a
-# reader of dune's s-expressions -- `;` line comments, `#|...|#` block and
-# `#;` datum comments, quoted atoms -- that walks every stanza, nested
-# `subdir`s included. Input: dune file paths; output: their directories and
-# the logical ones below them. Exit 3 where a file does not read (an
-# unbalanced or unexpected form) or takes stanzas from another file (an
-# `include` or `dynamic_include`, at any depth, Codex review round 3), and the
-# caller then cannot list them all.
+# reader of dune's s-expressions -- `;` line comments, quoted and plain atoms,
+# and nothing else -- that walks every stanza, nested `subdir`s included.
+# Input: dune file paths (`dune`, or `dune-file` where a project accepts that
+# name); output: their directories and the logical ones below them. It is
+# fail-closed on what it does not model: exit 3 where a file does not read (an
+# unbalanced form, a `#|` or `#;`, which dune versions read differently) or
+# takes stanzas from another file (an `include` or `dynamic_include`, at any
+# depth, Codex review round 3), and the caller then cannot list them all.
 alias_dirs_perl='
   my $bad = 0;
   for my $f (@ARGV) {
-    my $dir = $f eq "dune" ? "." : ($f =~ m{^(.*)/dune$} ? $1 : next);
+    my $dir = $f =~ m{^dune(?:-file)?$} ? "." : ($f =~ m{^(.*)/dune(?:-file)?$} ? $1 : next);
     print "$dir\n";
     open my $fh, "<", $f or do { $bad = 1; next };
     local $/;
@@ -812,8 +813,9 @@ alias_dirs_perl='
       pos($t) = 0;
       while (pos($t) < length $t) {
         if ($t =~ /\G\s+/gc || $t =~ /\G;[^\n]*/gc) { next }
-        if ($t =~ /\G#\|/gc) { $t =~ /\G.*?\|#/gcs or die; next }
-        if ($t =~ /\G#;/gc) { push @tok, ["#;"]; next }
+        # `#|` and `#;` are where dune readings differ (comments in some
+        # versions, atom text in others): a file holding one is not read.
+        die if $t =~ /\G#[|;]/gc;
         if ($t =~ /\G([()])/gc) { push @tok, [$1]; next }
         if ($t =~ /\G"((?:[^"\\]|\\.)*)"/gcs) { push @tok, ["a", $1]; next }
         if ($t =~ /\G([^\s();"]+)/gc) { push @tok, ["a", $1]; next }
@@ -822,16 +824,13 @@ alias_dirs_perl='
       1;
     };
     unless ($ok) { $bad = 1; next }
-    # Into nested lists; a `#;` drops the datum after it.
+    # Into nested lists.
     my @stack = ([]);
-    my $drop = 0;
     for my $k (@tok) {
-      if ($k->[0] eq "#;") { $drop++; next }
       if ($k->[0] eq "(") { push @stack, []; next }
       my $x;
       if ($k->[0] eq ")") { @stack > 1 or do { $bad = 1; last }; $x = pop @stack }
       else { $x = $k->[1] }
-      if ($drop) { $drop--; next }
       push @{ $stack[-1] }, $x;
     }
     if (@stack != 1) { $bad = 1; next }
@@ -865,18 +864,28 @@ alias_dune_dirs() { # the directories holding a dune file or a subdir's rules, `
     # shellcheck disable=SC2046 # a list of variable names, split on purpose
     unset $(git rev-parse --local-env-vars 2>/dev/null)
     if [ "$(git rev-parse --is-inside-work-tree --show-prefix 2>/dev/null)" = true ]; then
-      git ls-files --cached --others --exclude-standard -- dune '*/dune' 2>/dev/null
+      git ls-files --cached --others --exclude-standard -- dune '*/dune' dune-file '*/dune-file' 2>/dev/null
     else
-      find . \( -name _build -o -name .git \) -prune -o -name dune -type f -print 2>/dev/null | sed 's|^\./||'
+      find . \( -name _build -o -name .git \) -prune -o \( -name dune -o -name dune-file \) -type f -print 2>/dev/null |
+        sed 's|^\./||'
     fi
   ) || return 1
   [ -n "$files" ] || return 1
   local list=()
   while IFS= read -r f; do [ -f "$f" ] && list+=("$f"); done <<<"$files"
   [ ${#list[@]} -gt 0 ] || return 1
+  # Kept for alias_dynamic_include, whatever the reader says of them.
+  printf '%s\n' "${list[@]}" >"$run_dir/aliases.files" || return 1
   perl -e "$alias_dirs_perl" "${list[@]}" >"$run_dir/aliases.dirs" || return 1
   sort -u "$run_dir/aliases.dirs"
   rm -f "$run_dir/aliases.dirs"
+}
+alias_dynamic_include() { # 0 iff a dune file alias_dune_dirs listed names `dynamic_include`
+  local f
+  while IFS= read -r f; do
+    grep -qF dynamic_include "$f" 2>/dev/null && return 0
+  done <"$run_dir/aliases.files"
+  return 1
 }
 plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal
   local arg spec rec d name i n all= unlisted=
@@ -924,17 +933,22 @@ plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal
   for d in "${spec_dirs[@]}"; do
     alias_member "$d" ${first[@]+"${first[@]}"} || first+=("$d")
   done
+  # A generated `(dynamic_include ...)` anywhere in the tree is built by any
+  # dune query that loads its directory's rules -- this one too, outside the
+  # slot (Codex review round 4): such a tree leaves the batch to dune.
+  rm -f "$run_dir/aliases.files"
+  all=$(alias_dune_dirs) || { all=- unlisted=1; }
+  if [ ! -s "$run_dir/aliases.files" ] || alias_dynamic_include; then
+    rm -f "$run_dir/aliases.files"
+    return 0
+  fi
+  rm -f "$run_dir/aliases.files"
   alias_listing "$run_dir/aliases.1" "${first[@]}" || return 0
   i=0
   while [ "$i" -lt "$n" ]; do
     d=${spec_dirs[$i]}
-    if [ "${recs[$i]}" = 1 ] && alias_listed + "$d" "" "$run_dir/aliases.1" &&
+    if [ -z "$unlisted" ] && [ "${recs[$i]}" = 1 ] && alias_listed + "$d" "" "$run_dir/aliases.1" &&
        ! alias_listed = "$d" "${names[$i]}" "$run_dir/aliases.1"; then
-      if [ -z "$all" ]; then
-        # A tree whose directories cannot all be listed leaves the recursive
-        # misses to dune: only what the first answer decided refuses.
-        all=$(alias_dune_dirs) || { all=- unlisted=1; }
-      fi
       while IFS= read -r arg; do
         [ -n "$arg" ] && [ "$arg" != "$d" ] || continue
         [ "$d" = . ] || case $arg in "$d"/*) ;; *) continue ;; esac

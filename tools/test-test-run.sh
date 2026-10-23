@@ -7301,15 +7301,18 @@ alias_detail=
 alias_table=$TMP/alias-table
 mkdir -p "$repeat_root/al/sub"
 # `al/virt` has no dune file: a `(subdir ...)` stanza of al's, nested in
-# another and behind a comment and a quoted atom, gives it its rules.
+# another, behind a comment and through a quoted atom, gives it its rules;
+# `al/alt` has a `dune-file`, the name a project may accept instead.
+mkdir -p "$repeat_root/al/alt"
 cat >"$repeat_root/al/dune" <<'DUNE'
 ; (subdir commented (rule (alias not_this)))
 (rule (alias runtest-yes) (action (progn)))
-(subdir "virt" #;(subdir dropped) (subdir inner (rule (alias vinner) (action (progn))))
+(subdir "virt" (subdir inner (rule (alias vinner) (action (progn))))
  (rule (alias vdeep) (action (progn))))
 DUNE
 printf '(rule (alias deep) (action (progn)))\n' >"$repeat_root/al/sub/dune"
-printf '%s\n' . 'al runtest-yes' 'al/sub deep' 'al/virt vdeep' 'al/virt/inner vinner' >"$alias_table"
+printf '(rule (alias altname) (action (progn)))\n' >"$repeat_root/al/alt/dune-file"
+printf '%s\n' . 'al runtest-yes' 'al/alt altname' 'al/sub deep' 'al/virt vdeep' 'al/virt/inner vinner' >"$alias_table"
 alias_probe() { # tag argv...: a run under a GPU slot, with the table answering
   REPEAT_TEST_ALIASES=$alias_table REPEAT_TEST_SHOW_CALLS=$TMP/$1.show slot_probe "$1" hold cuda cc "${@:2}"
   alias_reach=$(cat "$TMP/$1.reach")
@@ -7327,7 +7330,7 @@ fi
 # It asked for `al` first, then for the directories below it, the subdir
 # stanzas' included.
 [ -n "$alias_detail" ] || [ "$(cat "$TMP/alias-unknown.show")" = "al
-al/sub al/virt al/virt/inner" ] || alias_detail="unknown: the listings asked for: $(tr '\n' '|' <"$TMP/alias-unknown.show")"
+al/alt al/sub al/virt al/virt/inner" ] || alias_detail="unknown: the listings asked for: $(tr '\n' '|' <"$TMP/alias-unknown.show")"
 # Refused: one under @@ that only a subdirectory defines, one whose directory
 # dune does not know (beside a known one: dune then answers with nothing but
 # the error, and the known one is asked again), and a root one nothing defines.
@@ -7354,7 +7357,7 @@ done
 for probe in "@al/runtest-yes" "@@al/runtest-yes" "@al/deep" "@deep" "@al/sub/deep @@al/sub/deep" "@al/./deep" \
              "@./al/runtest-yes" "@al/runtest-yes -- @not/asked" \
              "--profile release @al/runtest-no_such" "@_build/default/al/runtest-no_such" \
-             "@al/vdeep" "@vinner"; do
+             "@al/vdeep" "@vinner" "@al/altname"; do
   [ -z "$alias_detail" ] || break
   # shellcheck disable=SC2086 # the probe's operands, split on purpose
   alias_probe alias-known run build $probe
@@ -7376,12 +7379,14 @@ if [ -z "$alias_detail" ]; then
     grep -qF "ALIAS REFUSED: @al/runtest-no_such" <<<"$repeat_out"; } ||
     alias_detail="repeat: exit $repeat_rc (want 2); dune calls: $(cat "$TMP/alias-repeat.calls"); output: $repeat_out"
 fi
-# A dune file the reader cannot read, or one taking stanzas from another file
-# (`include`, `dynamic_include`, inside a subdir too), leaves a recursive miss
-# to dune: the directories below may then not all be listed. A miss in the
-# operand's own directory under @@ is still refused.
-for probe in "unread|(rule (alias odd)" "include|(include rules.inc)" \
-             "dynamic|(subdir x (dynamic_include gen/rules.inc))"; do
+# A dune file the reader cannot read -- unbalanced, or holding a `#|` or `#;`,
+# which dune versions read differently -- or one taking stanzas from another
+# file (`include`, inside a subdir too) leaves a recursive miss to dune: the
+# directories below may then not all be listed. A miss in the operand's own
+# directory under @@ is still refused. A `dynamic_include` anywhere leaves the
+# whole batch to dune, before any query: loading its directory would build it.
+for probe in "unread|(rule (alias odd)" "block|(rule (action (run echo #|x)))" \
+             "include|(subdir x (include rules.inc))" "dynamic|(subdir x (dynamic_include gen/rules.inc))"; do
   [ -z "$alias_detail" ] || break
   mkdir -p "$repeat_root/al/odd"
   printf '%s\n' "${probe#*|}" >"$repeat_root/al/odd/dune"
@@ -7389,8 +7394,13 @@ for probe in "unread|(rule (alias odd)" "include|(include rules.inc)" \
   { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build @al/runtest-no_such" ]; } ||
     alias_detail="${probe%%|*} below: exit $argv_rc (want 0); dune calls: ${argv_calls:-<none>}; digest: $argv_out"
   if [ -z "$alias_detail" ]; then
+    alias_want=2
+    [ "${probe%%|*}" != dynamic ] || alias_want=0
+    : >"$TMP/alias-${probe%%|*}-own.show"
     alias_probe "alias-${probe%%|*}-own" run build @@al/runtest-no_such
-    [ "$argv_rc" = 2 ] || alias_detail="${probe%%|*} below, @@: exit $argv_rc (want 2): $argv_out"
+    [ "$argv_rc" = "$alias_want" ] || alias_detail="${probe%%|*} below, @@: exit $argv_rc (want $alias_want): $argv_out"
+    [ -n "$alias_detail" ] || [ "$alias_want" = 2 ] || [ ! -s "$TMP/alias-${probe%%|*}-own.show" ] ||
+      alias_detail="${probe%%|*} below: dune was asked for a listing: $(cat "$TMP/alias-${probe%%|*}-own.show")"
   fi
   rm -rf "$repeat_root/al/odd"
 done

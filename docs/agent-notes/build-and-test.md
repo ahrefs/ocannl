@@ -967,7 +967,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   it). It refuses only on an answer that reads as dune's (every known directory lists the standard
   `default`), and only for an argv whose options are all on its allow-list of ones that cannot
   change what aliases dune defines (`--profile`, `--workspace`, `-p` and the like leave the batch
-  to dune, as does a context-qualified `@_build/CONTEXT/...`), so a fixture dune with no `show` branch leaves the aliases to dune; a fixture that
+  to dune, as does a context-qualified `@_build/CONTEXT/...`). The directories below an operand's
+  are those holding a `dune` (or `dune-file`) and those its `(subdir ...)` stanzas give rules to,
+  read by a deliberately small s-expression reader that is fail-closed on what it does not model
+  (`#|`, `#;`, `include`): a tree it cannot list leaves recursive misses to dune, and a
+  `dynamic_include` anywhere leaves the whole batch to dune, since loading that directory's rules
+  would build it outside the slot. So a fixture dune with no `show` branch leaves the aliases to dune; a fixture that
   records its calls must answer `show` without recording it. Leg 89 pins it against a table-driven
   fixture listing and, where a dune is at hand, a real one.
   `repeat [--alone] N` is the supported flake diagnostic (`--direct` for per-test aliases: one
