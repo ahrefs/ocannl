@@ -24,3 +24,6 @@ fresh slice has no alias_of yet (pre-lowering): true
 fresh-slice host set_values rejected (no detached buffer): true
 fresh-slice host get_values rejected: true
 fresh slice never allocated (absent from ctx_buffers): true
+to_low_level refuses a merge-buffer read of the view, naming the assignment: true
+optimize refuses a Zero_out of the view: true
+optimize refuses a Get of the view: true

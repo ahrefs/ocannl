@@ -50,6 +50,7 @@ test/operations/simplify_if_narrowing.ml -- records=1 traversals=0
 test/operations/splice_semantics.ml -- records=1 traversals=0
 test/operations/symbolic_extent_backward.ml -- records=0 traversals=1
 test/operations/symbolic_extent_contract.ml -- records=0 traversals=1
+test/operations/test_slice_alias.ml -- records=0 traversals=2
 test/operations/tile_bf16_row_groups.ml -- records=3 traversals=0
 test/operations/vec_signed_zero.ml -- records=0 traversals=1
 test/operations/virtual_chain_fanin.ml -- records=9 traversals=0
@@ -68,5 +69,4 @@ test/operations/schedule_split_reduce.ml -- records<=0 traversals<=7: links ll_t
 test/operations/test_bounds_folded_gather.ml -- records<=0 traversals<=2: existing migration debt; adopt ll_test when touched
 test/operations/test_one_hot_embedding_backward.ml -- records<=0 traversals<=4: existing migration debt; adopt ll_test when touched
 test/operations/test_one_hot_embedding_lookup.ml -- records<=0 traversals<=6: existing migration debt; adopt ll_test when touched
-test/operations/test_slice_alias.ml -- records<=0 traversals<=2: existing migration debt; adopt ll_test when touched
 test/support/ll_builders.ml -- permanent: canonical pure IR builders shared by both packages

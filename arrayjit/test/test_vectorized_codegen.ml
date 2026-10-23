@@ -358,15 +358,36 @@ let () =
         used_as_extent = false;
         used_as_slice = false;
       };
-  (match
-     try
-       ignore
-         (compile_with_pure_config ~name:"alias_kernel"
-            (make_optimized (vec_loop ~axis:LL.Serial view) [ view ])
-           : PPrint.document);
-       None
-     with Invalid_argument msg -> Some msg
-   with
-  | Some msg -> Verdict.p "alias parameter rejected" (String.is_substring msg ~substring:"restrict")
-  | None -> Stdio.printf "alias parameter rejected: false\n");
+  (* The refusal message of compiling [optimized], or [""] when nothing was refused. *)
+  let refusal ~name optimized =
+    try
+      ignore (compile_with_pure_config ~name optimized : PPrint.document);
+      ""
+    with Invalid_argument msg -> msg
+  in
+  (* gh-ocannl-1485: codegen's exit gate refuses any access of a view, a write and the
+     gh-ocannl-1475 [Zero_out] alike, ahead of the parameter list. These records never went through
+     [Low_level.optimize] (as a [?prelowered] routine need not), so the exit gate is the one that
+     sees them. *)
+  let write_msg =
+    refusal ~name:"alias_kernel" (make_optimized (vec_loop ~axis:LL.Serial view) [ view ])
+  in
+  Verdict.p "a write of an alias view is refused at codegen"
+    (String.is_substring write_msg
+       ~substring:"C_syntax.compile_proc: a Set names the slice-alias view view,");
+  let zero_msg = refusal ~name:"alias_zero_kernel" (make_optimized (LL.Zero_out view) [ view ]) in
+  Verdict.p "a Zero_out of an alias view is refused at codegen"
+    (String.is_substring zero_msg
+       ~substring:"C_syntax.compile_proc: a Zero_out names the slice-alias view view,");
+  (* What the access gate cannot see: a view the code never touches, which a staged-compilation
+     routine still keeps as a kernel parameter. With [restrict] an aliased parameter pair would be a
+     miscompile, so the parameter list refuses it (gh-ocannl-164). *)
+  let param_msg =
+    refusal ~name:"alias_param_kernel"
+      (make_optimized
+         (LL.Seq (LL.Staged_compilation (fun () -> PPrint.empty), vec_loop ~axis:LL.Serial parent))
+         [ parent; view ])
+  in
+  Verdict.p "an untouched alias view as a kernel parameter is refused"
+    (String.is_substring param_msg ~substring:"alias view view as a kernel parameter");
   Stdio.printf "%!"
