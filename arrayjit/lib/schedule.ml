@@ -359,6 +359,35 @@ let rewrite_loop ~what ~sym ~(f : floop -> Low_level.t) (llc : Low_level.t) : Lo
     refuse (what ^ ": no For_loop with index " ^ Indexing.symbol_ident sym ^ " in this routine");
   result
 
+(* Rewrites, with [f], every STATEMENT-LEVEL node holding a [For_loop] whose index is [sym]: the
+   loop itself where it sits among statements, or the statement whose [Local_scope] bodies bind it
+   (gh-ocannl-1534). A scope body is hoisted out of its position, so code that must run ahead of
+   such a loop without becoming part of the scope -- a shared [Stage]'s load nest and barriers --
+   goes around the statement holding the scope. Covers every copy, like {!rewrite_loop}. *)
+let rewrite_loop_holder ~what ~sym ~(f : Low_level.t -> Low_level.t) (llc : Low_level.t) :
+    Low_level.t =
+  let open Low_level in
+  let found = ref false in
+  let hit llc =
+    found := true;
+    f llc
+  in
+  let rec go llc =
+    match llc with
+    | For_loop { index; _ } when Indexing.equal_symbol index sym -> hit llc
+    | For_loop fc -> For_loop { fc with body = go fc.body }
+    | Seq (a, b) -> Seq (go a, go b)
+    | If { cond; body } -> If { cond; body = go body }
+    | (Set _ | Set_dynamic _ | Set_local _ | Set_from_vec _) when Option.is_some (find_loop sym llc)
+      ->
+        hit llc
+    | other -> other
+  in
+  let result = go llc in
+  if not !found then
+    refuse (what ^ ": no For_loop with index " ^ Indexing.symbol_ident sym ^ " in this routine");
+  result
+
 (* Fresh scope ids for scalar locals declared within [llc] (binders: [Declare_local],
    [Local_scope]). Materializing [Unroll] duplicates its body: without refreshing, sibling copies
    would declare the same scope id — rendered as duplicate declarations in one C block — and confuse
@@ -1324,12 +1353,16 @@ let add_symbol (idx : Indexing.axis_index) (s : Indexing.symbol) : Indexing.axis
   | Flattened | Concatenated -> None
   | Terms (terms, offset) -> Some (normalize_affine ~terms:((1, s) :: terms) ~offset)
 
-(* All reads [Get (source, idcs)] with their enclosing statement-level loop stacks (outermost-first;
-   [floop.body] is dummied out). Writes to [source] are rejected. *)
+(* All reads [Get (source, idcs)] with their enclosing loop stacks (outermost-first; [floop.body] is
+   dummied out) and the outermost [Local_scope] the read sits in: [Some (d, id)] when it is in the
+   body of scope [id], whose enclosing statement is under the first [d] loops of the stack — so the
+   loops from depth [d] on are bound inside that scope body (gh-ocannl-1534). Writes to [source] are
+   rejected. *)
 let collect_source_accesses ~source (llc : Low_level.t) :
-    (Indexing.axis_index array * floop list) list =
+    (Indexing.axis_index array * floop list * (int * Low_level.scope_id) option) list =
   let open Low_level in
   let acc = ref [] in
+  let scope_at = ref None in
   let reject_write tn =
     if Tn.equal tn source then
       refuse ("Schedule.Stage: source " ^ Tn.debug_name source ^ " is written in the routine")
@@ -1373,9 +1406,13 @@ let collect_source_accesses ~source (llc : Low_level.t) :
         code stack body
   and scalar stack (llsc : scalar_t) =
     match llsc with
-    | Local_scope { body; _ } -> code stack body
+    | Local_scope { id; body; _ } ->
+        let outer = !scope_at in
+        if Option.is_none outer then scope_at := Some (List.length stack, id);
+        code stack body;
+        scope_at := outer
     | Get_local _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
-    | Get (tn, idcs) -> if Tn.equal tn source then acc := (idcs, List.rev stack) :: !acc
+    | Get (tn, idcs) -> if Tn.equal tn source then acc := (idcs, List.rev stack, !scope_at) :: !acc
     | Get_dynamic { tn; dyn_value = v, _; _ } ->
         if Tn.equal tn source then
           refuse "Schedule.Stage: dynamically indexed source reads are unsupported";
@@ -1628,15 +1665,15 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
      With no staged read at all, the first read stands in, so the tile-loop occurrence check below
      names the missing loop. *)
   let staged =
-    List.filter accesses ~f:(fun (idcs, _) ->
+    List.filter accesses ~f:(fun (idcs, _, _) ->
         Array.exists idcs ~f:(Indexing.axis_index_mentions_any tile_loops))
   in
-  let idcs0, stack0 =
+  let idcs0, stack0, scope0 =
     match (staged, accesses) with
     | [], [] -> refuse ("Schedule.Stage: no reads of " ^ Tn.debug_name source ^ " in the routine")
     | hd :: _, _ | [], hd :: _ -> hd
   in
-  List.iter staged ~f:(fun (idcs, _) ->
+  List.iter staged ~f:(fun (idcs, _, _) ->
       if not (Array.equal Indexing.equal_axis_index idcs idcs0) then
         refuse
           ("Schedule.Stage: v1 requires all reads of " ^ Tn.debug_name source
@@ -1900,6 +1937,44 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
     in
     let reused_depths = List.map reused ~f:(fun s -> fst (Option.value_exn (depth_of s))) in
     let lstar_depth = List.max_elt (outer_sym_depths @ reused_depths) ~compare:Int.compare in
+    (* gh-ocannl-1534: an anchor bound inside a [Local_scope] body. The tile holds the source cells
+       for ONE value of the anchor (and of every outer-part loop), so the loads must run once per
+       anchor iteration -- inside the scope body, which may write no tensor node (gh-ocannl-1467:
+       the body is hoisted out of its position). Hoisting them ahead of the statement holding the
+       scope is unsound at this tile shape: the anchor is unbound there, and one slice of the source
+       would stand in for all of them. Staging the scope's whole footprint ahead of it is a LARGER
+       tile -- the same op with the scope-bound loops of the staged index added to [tile_loops] --
+       which the caller can ask for; this op never grows the tile on its own (the tile is sized by
+       [tile_loops], and shared-memory budgets and the cost model read it off the op). Refused here,
+       named for the decline census and before any tile is minted, on every staged read's path
+       (copies of a materializing mint share their binders). *)
+    Option.iter lstar_depth ~f:(fun ld ->
+        let anchor = stack0.(ld).index in
+        List.iter staged ~f:(fun (_, stack, scope) ->
+            match scope with
+            | None -> ()
+            | Some (d, id) -> (
+                match List.findi stack ~f:(fun _ fl -> Indexing.equal_symbol fl.index anchor) with
+                | Some (depth, _) when depth >= d ->
+                    let bound_inside =
+                      List.drop stack d
+                      |> List.filter ~f:(fun fl ->
+                          Array.exists decomp ~f:(fun (_, op_, _) ->
+                              List.exists op_ ~f:(fun (_, s) -> Indexing.equal_symbol s fl.index)))
+                      |> List.map ~f:(fun fl -> Indexing.symbol_ident fl.index)
+                    in
+                    refuse
+                      ("Schedule.Stage: the staging anchor " ^ Indexing.symbol_ident anchor
+                     ^ " (the deepest loop the staged index of " ^ Tn.debug_name source
+                     ^ " varies with outside tile_loops) is bound inside the body of local scope v"
+                      ^ Int.to_string id.Low_level.scope_id
+                      ^ "_" ^ Tn.debug_name id.Low_level.tn
+                      ^ ": the loads would land in a scope body, which writes no tensor node, and \
+                         hoisted ahead of the scope they could not see the anchor (gh-ocannl-1534) \
+                         -- add "
+                      ^ String.concat ~sep:", " bound_inside
+                      ^ " to tile_loops to stage the scope's whole footprint ahead of it")
+                | _ -> ())));
     (* Serial tile loops may sit above or below L*: the load nest iterates them under fresh symbols,
      so only outer-part symbols and reused workgroup axes pin the staging point. *)
     (* Mint the tile. *)
@@ -2078,19 +2153,31 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
        broadcast vector indexed only by serial tile loops) must NOT go to the routine root: every
        hardware thread executes top-level statements, and no workgroup index symbol is bound there
        to restrict the loads — so wrap the outermost tile loop instead, where the workgroup axes
-       enclosing the consumer also enclose (and can guard) the loads (PR #90 review). Packing
-       (shared = false) writes per-thread scratch, so the root is fine. *)
+       enclosing the consumer also enclose (and can guard) the loads (PR #90 review). Where that
+       loop is bound inside a [Local_scope] body (gh-ocannl-1534), the loads and barriers wrap the
+       statement holding the scope instead ({!rewrite_loop_holder}): the body is hoisted out of its
+       position and may hold neither, and with no anchor the tile depends on no loop between that
+       statement and the tile loop, so loading it there copies the same cells -- once per execution
+       of the statement rather than once per execution of the tile loop. Packing (shared = false)
+       writes per-thread scratch, so the root is fine. *)
     let outermost_tile_depth =
       List.map tile_loops ~f:(fun s -> fst (Option.value_exn (depth_of s)))
       |> List.min_elt ~compare:Int.compare |> Option.value_exn
     in
     let wrap_outermost_tile = shared && Option.is_none lstar_depth in
-    (* Loops enclosing the staging point, outermost-first. *)
+    (* Loops enclosing the staging point, outermost-first: for the wrap above, the loops outside the
+       scope that may hold the outermost tile loop, so a [w == 0] restriction below never names a
+       loop the scope binds. *)
     let in_scope =
       match lstar_depth with
       | Some ld -> Array.to_list (Array.sub stack0 ~pos:0 ~len:(ld + 1))
       | None when wrap_outermost_tile ->
-          Array.to_list (Array.sub stack0 ~pos:0 ~len:outermost_tile_depth)
+          let len =
+            match scope0 with
+            | Some (d, _) -> Int.min d outermost_tile_depth
+            | None -> outermost_tile_depth
+          in
+          Array.to_list (Array.sub stack0 ~pos:0 ~len)
       | None -> []
     in
     (* Every workgroup slot active in the kernel's launch must be either reused by this tile's
@@ -2319,8 +2406,8 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
           rewrite_loop ~what:"Schedule.Stage" ~sym:stack0.(ld).index opt.llc ~f:(fun fc ->
               for_loop { fc with body = build ~group:true fc.body })
       | None, _ when wrap_outermost_tile ->
-          rewrite_loop ~what:"Schedule.Stage" ~sym:stack0.(outermost_tile_depth).index opt.llc
-            ~f:(fun fc -> build (for_loop fc))
+          rewrite_loop_holder ~what:"Schedule.Stage" ~sym:stack0.(outermost_tile_depth).index
+            opt.llc ~f:build
       | None, _ -> build opt.llc
     in
     {
@@ -4857,9 +4944,12 @@ let optop_label = function
    locals it owns ({!Low_level.scope_purity_violation}, gh-ocannl-584). The scope mints decline both
    (a materializing [Unroll] or [Partition] wraps only a single-statement accumulation nest of
    annotation-free levels), but a LATER op can put either inside the scope: a hardware [Retype] or
-   [Split] of a loop the scope holds, a [Stage] whose loads (or shared barriers) land there, a
-   [Privatize] over such a loop, a [Tensorize]'s lane loop and [Tile_mma]. Compilation refused those
-   programs only at its exit gates, untyped, naming the IR; {!apply_opt_op} refuses the op. *)
+   [Split] of a loop the scope holds, a [Privatize] over such a loop, a [Tensorize]'s lane loop and
+   [Tile_mma]. Compilation refused those programs only at its exit gates, untyped, naming the IR;
+   {!apply_opt_op} refuses the op. A [Stage] keeps its own loads and barriers out of scope bodies
+   (gh-ocannl-1534: [apply_stage] refuses an anchor a scope binds, by name, and wraps the statement
+   holding the scope where it would have wrapped a scope-nested tile loop), so for it this check is
+   the backstop. *)
 type scope_grammar_violation =
   | Hardware_loop_in_scope of {
       loop : Indexing.symbol;

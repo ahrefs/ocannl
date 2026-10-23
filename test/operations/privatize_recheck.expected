@@ -1,5 +1,5 @@
 a Workgroup_reduce or Grid Retype of a loop inside the scope a materializing Unroll minted around a privatized tile's update is refused at the Retype, typed, naming the hardware loop in the scope: true
-a Stage whose loads land inside that scope is refused at the Stage, typed, naming the tensor-node write in the scope: true
+a Stage whose anchor that scope binds is refused at the Stage, typed, naming the anchor bound inside the scope: true
 the same three schedules without Privatize are refused the same way: the rule is the scope's: true
 op_legality asked of the program the Privatize and the Unroll left calls all three ops illegal, with the refusal apply raises, and probing the Stage leaves that program's traced store as it was: true
 a Vectorized retype or an in-place Unroll of that scope-nested loop, and the same Stage applied ahead of the Unroll (its loads then keep the nest from minting a scope), are admitted by apply and not called illegal by op_legality: true

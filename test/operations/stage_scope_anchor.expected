@@ -1,0 +1,6 @@
+a Stage whose anchor is bound inside the scope a materializing Unroll minted -- over the loop outside the scope (the issue's shape) or over a loop inside it -- is refused at the Stage, typed, naming the anchor and the scope, before any tile is minted: the caller's traced store is left as it was: true
+op_legality asked of the program the Unroll left calls both Stages illegal with the same refusal, and the probe leaves that program's traced store as it was: true
+the widened Stage the refusal names (the scope-bound loops of the staged index added to tile_loops, anchored outside the scope or unanchored) is admitted, leaves no tile write in a scope body, and executes to the unscheduled program's value: true
+a shared, unanchored Stage whose outermost tile loop is inside the scope is admitted, on one copy of that loop and on two copies sharing the scope: nothing it adds is in a scope body, and its load nest and barrier precede the statement holding the scope: true
+op_legality does not call that Stage illegal, and probing it leaves the program's traced store as it was: true
+that Stage executes to the unscheduled program's value, on both copy counts (a backend with workgroup-shared memory): true
