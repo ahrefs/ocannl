@@ -13,6 +13,6 @@ the routine re-searched past the refused prelude computes the right values: true
 a device that refuses the relinked baseline refuses the search: true
 the refusal carries the device-memory decline: true
 no candidate is compiled after the refused relink: true
-a refused baseline window is recorded as the baseline's refusal: true
+a refused baseline window is recorded as the baseline's refusal, by a degenerate clock reading: true
 a refused baseline window leaves the baseline untimed: true
 not every planted entry's store was refused: true

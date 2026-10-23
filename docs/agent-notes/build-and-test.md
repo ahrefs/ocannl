@@ -4591,7 +4591,8 @@ box.
   timed — the term that composes with `candidates_timed` and the `Not_dispatched_key` declines into
   "how many distinct candidates did this search reach" — `default_refused`, which separates a
   contention-refused untuned-default reference from the gh-ocannl-552 regression of never proposing
-  or attributing that seed, and `baseline_refused` (gh-ocannl-1423), the baseline's own window.
+  or attributing that seed, and `baseline_refusal` (gh-ocannl-1423), the baseline's own window and,
+  since gh-ocannl-1517, the cause it was refused for.
   `autotune_replay_refusal`'s "the re-search times the baseline the replay released" gates on that
   one, after re-running the re-search up to three times: a `timings_contended` gate would let any
   candidate's refusal excuse it, and a `baseline_ms` gate reads the value under test, so a baseline

@@ -79,7 +79,10 @@ let string s =
     queued calibration measured no batch within its target, even at its rescue probe. That is what
     was measured, not a diagnosis: a queue threshold and host load stalling every batched probe read
     the same, and either leaves the measurement set incomplete. A count that persists across idle
-    reruns is the threshold's signature.
+    reruns is the threshold's signature. [timings_unreadable] is another part, disjoint from it
+    (gh-ocannl-1517): windows refused for a degenerate clock reading, a minimum that is not finite
+    and positive -- a clock that resolved nothing, not host load. What is left of
+    [timings_contended] after both ({!Autotune.contention_refusals}) is the contention.
 
     [timing_decisions] is the arm's settle-by-admission matrix (gh-ocannl-1263): one
     [(settle, admission, calls)] per pair its baseline and candidate timing calls produced, from
@@ -123,16 +126,17 @@ let decision_counts_object counts =
   ^ "}"
 
 let tune_arm ~name ~state ~searched ~cache_hit ~timing ~rounds_run ~beam_width ~budget_cut ~budget_s
-    ~call_budget_s ~call_share_s ~timings_contended ~timings_unbatched ~timing_decisions ~best_ms
-    ~best_label ~tensorized ~tensorization ~mma_statements ~mma_scalar_fallbacks ~mma_seeded
-    ~mma_timed ~mma_best_ms ~terminal_failure =
+    ~call_budget_s ~call_share_s ~timings_contended ~timings_unbatched ~timings_unreadable
+    ~timing_decisions ~best_ms ~best_label ~tensorized ~tensorization ~mma_statements
+    ~mma_scalar_fallbacks ~mma_seeded ~mma_timed ~mma_best_ms ~terminal_failure =
   Printf.sprintf
-    {|{"arm":"%s","state":"%s","searched":%b,"cache_hit":%b,"timing":"%s","rounds_run":%d,"beam_width":%d,"budget_cut":%b,"budget_s":%s,"call_budget_s":%s,"call_share_s":%s,"timings_contended":%d,"timings_unbatched":%d,"best_ms":%s,"best_label":"%s","tensorized":%b,"tensorization":%s,"mma_statements":%d,"mma_scalar_fallbacks":%d,"mma_seeded":%d,"mma_timed":%d,"mma_best_ms":%s,"terminal_failure":%s,"timing_decisions":%s}|}
+    {|{"arm":"%s","state":"%s","searched":%b,"cache_hit":%b,"timing":"%s","rounds_run":%d,"beam_width":%d,"budget_cut":%b,"budget_s":%s,"call_budget_s":%s,"call_share_s":%s,"timings_contended":%d,"timings_unbatched":%d,"timings_unreadable":%d,"best_ms":%s,"best_label":"%s","tensorized":%b,"tensorization":%s,"mma_statements":%d,"mma_scalar_fallbacks":%d,"mma_seeded":%d,"mma_timed":%d,"mma_best_ms":%s,"terminal_failure":%s,"timing_decisions":%s}|}
     (string name) (string state) searched cache_hit (string timing) rounds_run beam_width budget_cut
     (Option.value_map budget_s ~default:"null" ~f:(fun b -> num b))
     (Option.value_map call_budget_s ~default:"null" ~f:(fun b -> num b))
     (Option.value_map call_share_s ~default:"null" ~f:(fun b -> num b))
-    timings_contended timings_unbatched (num best_ms) (string best_label) tensorized
+    timings_contended timings_unbatched timings_unreadable (num best_ms) (string best_label)
+    tensorized
     (Option.value_map tensorization ~default:"null" ~f:(fun t -> Printf.sprintf {|"%s"|} (string t)))
     mma_statements mma_scalar_fallbacks mma_seeded mma_timed (num mma_best_ms)
     (Option.value_map terminal_failure ~default:"null" ~f:(fun detail ->

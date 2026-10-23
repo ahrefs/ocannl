@@ -64,9 +64,9 @@ let tune =
                construct any report, so every arm on the line carries one. *)
           ~timing:"queued" ~rounds_run:0 ~beam_width:4 ~budget_cut:false ~budget_s:None
           ~call_budget_s:None ~call_share_s:None ~timings_contended:0 ~timings_unbatched:0
-          ~timing_decisions:[] ~best_ms:Float.infinity ~best_label:"tile 32x32" ~tensorized:false
-          ~tensorization:None ~mma_statements:0 ~mma_scalar_fallbacks:0 ~mma_seeded:4 ~mma_timed:0
-          ~mma_best_ms:Float.infinity
+          ~timings_unreadable:0 ~timing_decisions:[] ~best_ms:Float.infinity
+          ~best_label:"tile 32x32" ~tensorized:false ~tensorization:None ~mma_statements:0
+          ~mma_scalar_fallbacks:0 ~mma_seeded:4 ~mma_timed:0 ~mma_best_ms:Float.infinity
           ~terminal_failure:
             (Some
                (Printf.sprintf "compile failed: \"kernel\" \\ path%c%c ESC" (Char.of_int_exn 0)
@@ -75,21 +75,22 @@ let tune =
         Bench_json.tune_arm ~name:"B" ~state:"cache-replay" ~searched:false ~cache_hit:true
           ~timing:"queued" ~rounds_run:0 ~beam_width:4 ~budget_cut:true ~budget_s:(Some 900.)
           ~call_budget_s:(Some 3600.) ~call_share_s:(Some 1200.) ~timings_contended:0
-          ~timings_unbatched:0 ~timing_decisions:[] ~best_ms:0.75 ~best_label:"grid 128"
-          ~tensorized:true ~tensorization:(Some "scalar-fallback") ~mma_statements:2
-          ~mma_scalar_fallbacks:2 ~mma_seeded:6 ~mma_timed:3 ~mma_best_ms:0.8 ~terminal_failure:None;
+          ~timings_unbatched:0 ~timings_unreadable:0 ~timing_decisions:[] ~best_ms:0.75
+          ~best_label:"grid 128" ~tensorized:true ~tensorization:(Some "scalar-fallback")
+          ~mma_statements:2 ~mma_scalar_fallbacks:2 ~mma_seeded:6 ~mma_timed:3 ~mma_best_ms:0.8
+          ~terminal_failure:None;
         (* Neither searched nor replayed: every counter zero, no winner to name. *)
         Bench_json.tune_arm ~name:"C" ~state:"search-disabled" ~searched:false ~cache_hit:false
           ~timing:"queued" ~rounds_run:0 ~beam_width:2 ~budget_cut:false ~budget_s:None
           ~call_budget_s:None ~call_share_s:None ~timings_contended:0 ~timings_unbatched:0
-          ~timing_decisions:[] ~best_ms:Float.infinity ~best_label:"" ~tensorized:false
-          ~tensorization:None ~mma_statements:0 ~mma_scalar_fallbacks:0 ~mma_seeded:0 ~mma_timed:0
-          ~mma_best_ms:Float.infinity ~terminal_failure:None;
+          ~timings_unreadable:0 ~timing_decisions:[] ~best_ms:Float.infinity ~best_label:""
+          ~tensorized:false ~tensorization:None ~mma_statements:0 ~mma_scalar_fallbacks:0
+          ~mma_seeded:0 ~mma_timed:0 ~mma_best_ms:Float.infinity ~terminal_failure:None;
         (* An honestly tensorized winner, and an ordinary one that never asked. *)
         Bench_json.tune_arm ~name:"D" ~state:"searched" ~searched:true ~cache_hit:false
           ~timing:"queued" ~rounds_run:1 ~beam_width:4 ~budget_cut:false ~budget_s:None
-          ~call_budget_s:None ~call_share_s:None ~timings_contended:2
-          ~timings_unbatched:1
+          ~call_budget_s:None ~call_share_s:None ~timings_contended:2 ~timings_unbatched:1
+          ~timings_unreadable:0
             (* gh-ocannl-1263: the settle-by-admission matrix behind those two refusals, in the
                order a report lists it -- one settle carrying two admissions. *)
           ~timing_decisions:
@@ -106,8 +107,11 @@ let tune =
           ~cache_hit:false
             (* The other objective, so the golden shows both spellings on one line. *)
           ~timing:"isolated" ~rounds_run:0 ~beam_width:2 ~budget_cut:false ~budget_s:None
-          ~call_budget_s:None ~call_share_s:None ~timings_contended:0 ~timings_unbatched:0
-          ~timing_decisions:[ ("isolated", "admitted", 3) ]
+          ~call_budget_s:None ~call_share_s:None ~timings_contended:1
+          ~timings_unbatched:0
+            (* gh-ocannl-1517: its one refusal a degenerate clock reading, not contention. *)
+          ~timings_unreadable:1
+          ~timing_decisions:[ ("isolated", "admitted", 3); ("isolated", "refused_unreadable", 1) ]
           ~best_ms:1.25 ~best_label:"grid 64" ~tensorized:false
           ~tensorization:(Some "not-requested") ~mma_statements:0 ~mma_scalar_fallbacks:0
           ~mma_seeded:0 ~mma_timed:0 ~mma_best_ms:Float.infinity ~terminal_failure:None;
@@ -274,6 +278,10 @@ let () =
      target, which a queue threshold repeats on every rerun and a stall does not. *)
   p "an arm's no-batch refusals reach the wire apart from its contention count"
     (Yojson.Safe.equal (member "timings_unbatched" (arm "D")) (`Int 1));
+  (* gh-ocannl-1517: and the ones refused for a degenerate clock reading, which is not host load. *)
+  p "an arm's degenerate-clock refusals reach the wire apart from its contention count"
+    (Yojson.Safe.equal (member "timings_unreadable" (arm "E")) (`Int 1)
+    && Yojson.Safe.equal (member "timings_unreadable" (arm "D")) (`Int 0));
   (* gh-ocannl-1263: per arm, how its timing calls settled and were admitted, keyed by settle and
      then by admission, so a sweep reads one cell without scraping the trace. *)
   let decisions name = member "timing_decisions" (arm name) in

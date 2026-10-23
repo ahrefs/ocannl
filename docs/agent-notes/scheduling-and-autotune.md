@@ -878,7 +878,8 @@ files.
   `matmul_seed_params` proposes `sk_hoist` from its `is_cpu` branch — so any test precondition about
   packed-constant pools is false on GPU backends and has to be stated as an equivalence.
 - The search's test seams (`on_candidate_attempt`, `_preflight`, `_timed`, `_measured`,
-  `_callback`, and the `with_uncontended_test_windows` scope) are `Autotune.Seam.t` values, one per
+  `_callback`, and the `with_uncontended_test_windows`/`with_contended_test_windows` scopes, one
+  seam) are `Autotune.Seam.t` values, one per
   DOMAIN: scope one with `Seam.with_value` (restores on exit, nests), set one for the domain's life
   with `Seam.set`, read it with `Seam.get`. A search reaches only its own domain's values, and a
   freshly spawned domain starts with the defaults — so a fixture that searches from a spawned domain
@@ -904,6 +905,21 @@ files.
   clears candidate contention only; calibration, invalid readings and unresolved batching keep
   their admission rules. `flip_abandonment` pins production refusal, nesting and failure restoration
   with a majority-stalled window, then asserts search, placement and cache branches without skips.
+- **A refused window names one cause** (gh-ocannl-1517): `Autotune.timing_admission` is the one
+  classifier (the gate, the `NOT TIMED` lines, the report's counts and each timing call's
+  `admission` all read it), in the order unbatched, unreadable reading, contention. The reading
+  precedes contention because a zero minimum is also the dispersion floor, against which every
+  positive sample reads as a stall: before the split, a clock that resolved nothing was counted
+  and logged as a loaded host. `report.timings_contended` still counts EVERY refusal (every cache
+  and completeness gate reads it unchanged); `timings_unbatched` and `timings_unreadable` are its
+  named subsets and `Autotune.contention_refusals` the rest, and `baseline_refusal` names the
+  baseline's cause. A skip or retry excused by a refused window gates on the cause it expects —
+  under `with_uncontended_test_windows` that is `timings_unreadable`, the one refusal an `Isolated`
+  search has left (`autotune_callback_release`) — and its reason names the cause it met
+  (`autotune_replay_refusal`). Drive each cause on any host: a degenerate reading by
+  `on_candidate_measured` returning NaN inside the uncontended scope (outside it, a host contention
+  refusal can pre-empt the scripted one), contention by `with_contended_test_windows`; both are
+  pinned in `autotune_refusal_causes`.
 - A new scripted-ranking test takes the harness in `test/support/scripted_search.ml` (library
   `scripted_search`) rather than hand-rolling it: `Scripted_search.scripted` is the scope (the
   measurement script with each window's ordinal, label, digest and reading; the uncontended windows;
@@ -1815,7 +1831,8 @@ files.
   `autotune.ml`; any cost whose per-launch average does not fall with depth reads within the
   target there, so a genuine queue threshold below the provisional depth is timed and cacheable),
   and is REFUSED only if that also reads over — as `unbatched`, not `contended`, counted in
-  `report.timings_unbatched` (a subset of `timings_contended`, so every cache and completeness
+  `report.timings_unbatched` (a subset of `timings_contended`, like `timings_unreadable`, so every
+  cache and completeness
   gate is unchanged), because its depth-1 reading would be the isolated objective. `unbatched`
   names what was measured, not a cause: host load stalling every batched probe reads the same, so
   consumers (the benchmark JSON's per-arm `timings_unbatched`, `gh834_cells.sh`) keep treating it

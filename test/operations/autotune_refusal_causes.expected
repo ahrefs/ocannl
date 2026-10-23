@@ -1,0 +1,22 @@
+each window's admission names its cause, the reading before contention: true
+the admission gate admits exactly the windows the classifier admits: true
+outside the scopes a window keeps its own contention flag: true
+the contended scope refuses a positive reading for contention: true
+the contended scope leaves a degenerate reading its own cause: true
+the innermost scope applies: true
+leaving the scopes restores the window's own flag: true
+degenerate clock: the search refused windows and timed none: true
+degenerate clock: every refused window is counted under that cause: true
+degenerate clock: the named causes are subsets of the refused windows: true
+degenerate clock: the baseline's refusal names that cause: true
+degenerate clock: its search_done line carries the report's counts: true
+degenerate clock: one log line per refused window: true
+degenerate clock: every refused window's log line names that cause and not the other: true
+contention: the search refused windows and timed none: true
+contention: every refused window is counted under that cause: true
+contention: the named causes are subsets of the refused windows: true
+contention: the baseline's refusal names that cause: true
+contention: its search_done line carries the report's counts: true
+contention: one log line per refused window: true
+contention: every refused window's log line names that cause and not the other: true
+contention: no refused window reached the measurement seam: true

@@ -37,7 +37,7 @@ import json, sys
 name, *overrides = sys.argv[1:]
 a = {"arm": name, "state": "searched", "searched": True, "cache_hit": False, "timing": "queued",
      "timing_decisions": {"measured_batch": {"admitted": 12, "refused_contended": 0}},
-     "terminal_failure": None, "timings_contended": 0, "timings_unbatched": 0,
+     "terminal_failure": None, "timings_contended": 0, "timings_unbatched": 0, "timings_unreadable": 0,
      "best_ms": 1.25, "best_label": "grid 64", "mma_best_ms": None}
 for o in overrides:
     k, v = o.split("=", 1)
@@ -123,9 +123,17 @@ only_unbatched() {
     'UNBATCHED SESSION' && ! grep -q 'CONTENDED SESSION' "$TMP/runs/unbatched/stdout"
 }
 leg 'refusals that are all unbatched are not counted as contention' only_unbatched
+only_unreadable() {
+  rejects unreadable "$(line "$A" "$(arm B timings_contended=1 timings_unreadable=1)")" \
+    'UNREADABLE SESSION' && ! grep -q 'CONTENDED SESSION' "$TMP/runs/unreadable/stdout"
+}
+leg 'refusals that are all degenerate clock readings are not counted as contention' only_unreadable
 leg 'a dropped refusal count is not a pass' \
   rejects dropped "$(line "$A" "$(arm B timings_unbatched=-)")" \
   'INCOMPLETE SESSION: arm B carries no timings_unbatched'
+leg 'a dropped degenerate-reading count is not a pass' \
+  rejects dropped_unreadable "$(line "$A" "$(arm B timings_unreadable=-)")" \
+  'INCOMPLETE SESSION: arm B carries no timings_unreadable'
 leg 'a truncated result line is incomplete' \
   rejects truncated "${complete%???}" 'INCOMPLETE SESSION: the result line is not JSON'
 
@@ -164,6 +172,10 @@ checker_rejects_untimed() {
 }
 checker_splits_contention() {
   check "$SRC" "$1" "$2" "$(line "$A" "$(arm B timings_contended=1 timings_unbatched=1)")"
+  ! grep -q 'CONTENDED SESSION' "$TMP/runs/$2/stdout"
+}
+checker_splits_unreadable() {
+  check "$SRC" "$1" "$2" "$(line "$A" "$(arm B timings_contended=1 timings_unreadable=1)")"
   ! grep -q 'CONTENDED SESSION' "$TMP/runs/$2/stdout"
 }
 # The driver as it was: best_ms read by a scan from the arm's name to its first closing brace.
@@ -205,4 +217,8 @@ expect_rejected 'an untimed arm reads as complete' "$untimed" checker_rejects_un
 merged=$(py_mutant merged '{ sub(/\["timings_contended"\] > a\["timings_unbatched"\]/, "[\"timings_contended\"] > 0"); print }') || exit 2
 expect_rejected 'unbatched refusals counted as contention' "$merged" checker_splits_contention \
   'CONTENDED SESSION'
+# A checker that counts degenerate clock readings as contention (gh-ocannl-1517).
+unreadable_merged=$(py_mutant unreadable_merged '{ sub(/ \+ a\["timings_unreadable"\]/, ""); print }') || exit 2
+expect_rejected 'degenerate clock readings counted as contention' "$unreadable_merged" \
+  checker_splits_unreadable 'CONTENDED SESSION'
 finish

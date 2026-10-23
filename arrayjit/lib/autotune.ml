@@ -183,17 +183,6 @@ let progress_stopwatch () =
   let c = Mtime_clock.counter () in
   fun () -> seconds_since c
 
-(* The one admission gate for a timing verdict, for the consumers that RANK: candidate selection,
-   the calibration rows, the roofline consistency check, cache attribution. Keeping it next to the
-   result type prevents such a caller from proving only one half of usability (usually [not
-   contended]) and accidentally feeding an unresolved zero/NaN clock reading to ranking.
-
-   Deliberately not the gate for [queued_batch_depth] (gh-ocannl-888): a batch depth is a scale
-   estimate, not a measurement, and both of its error directions are bounded. *)
-let admitted_timing_ms { ms; contended; unbatched; samples = _ } =
-  if contended || unbatched || (not (Float.is_finite ms)) || not (Float.is_positive ms) then None
-  else Some ms
-
 let timing_string = function Isolated -> "isolated" | Queued -> "queued"
 
 let timing_of_setting s =
@@ -237,6 +226,39 @@ let batch_admission_name = function
   | Refused_contended -> "refused_contended"
   | Refused_unreadable -> "refused_unreadable"
 
+(* The one admission verdict for a timing window, naming the cause of a refusal (gh-ocannl-1517). An
+   unreadable reading is named before contention: a non-positive minimum is also the dispersion
+   check's floor, against which every positive sample reads as a stall, so a clock that resolved
+   nothing used to be counted as a contended host. [unbatched] comes first because it is set on the
+   depth-1 reading calibration fell back to, whose own minimum and dispersion are beside the
+   point. *)
+let timing_admission { ms; contended; unbatched; samples = _ } =
+  if unbatched then Refused_unbatched
+  else if (not (Float.is_finite ms)) || not (Float.is_positive ms) then Refused_unreadable
+  else if contended then Refused_contended
+  else Admitted
+
+(* The one admission gate for a timing verdict, for the consumers that RANK: candidate selection,
+   the calibration rows, the roofline consistency check, cache attribution. Keeping it next to the
+   result type prevents such a caller from proving only one half of usability (usually [not
+   contended]) and accidentally feeding an unresolved zero/NaN clock reading to ranking.
+
+   Deliberately not the gate for [queued_batch_depth] (gh-ocannl-888): a batch depth is a scale
+   estimate, not a measurement, and both of its error directions are bounded. *)
+let admitted_timing_ms result =
+  match timing_admission result with
+  | Admitted -> Some result.ms
+  | Refused_unbatched | Refused_unreadable | Refused_contended -> None
+
+(* What a refused window's log line says about it; one phrase per cause, so the line names it. *)
+let refusal_reason = function
+  | Refused_unbatched -> "queued calibration measured no batch within the target"
+  | Refused_unreadable ->
+      "a degenerate clock reading (a non-positive or non-finite minimum) made the sample window \
+       unusable"
+  | Refused_contended -> "host contention made the sample window unusable"
+  | Admitted -> "admitted"
+
 (* gh-ocannl-1360: what each beam-expansion round offered, per beam entry and per unit. See the
    interface. *)
 type round_unit_moves = { unit_segment : int option; unit_expanded : bool; unit_moves : int }
@@ -260,6 +282,9 @@ type report = {
   timings_contended : int;
   timings_retried : int;
   timings_unbatched : int;
+  timings_unreadable : int;
+      (** Of [timings_contended], the windows refused for a degenerate clock reading
+          (gh-ocannl-1517). See the interface. *)
   timing_decisions : (batch_settle * batch_admission * int) list;
       (** How this call's search timing calls settled and were admitted (gh-ocannl-1263). See the
           interface. *)
@@ -267,8 +292,9 @@ type report = {
   default_refused : bool;
   candidates_failed : int;
   baseline_declined : bool;
-  baseline_refused : bool;
-      (** The baseline's own timing window was refused (gh-ocannl-1423). See the interface. *)
+  baseline_refusal : batch_admission option;
+      (** Why the baseline's own timing window was refused, if it was (gh-ocannl-1423,
+          gh-ocannl-1517). See the interface. *)
   declines : decline_summary list;
   privatize_drops : decline_summary list;
       (** The privatized presets' dropped [Privatize] proposals, by cause (gh-ocannl-1438). See the
@@ -352,6 +378,10 @@ type report = {
           (gh-ocannl-1314). See the interface. *)
 }
 
+(* The refused windows the report puts down to host contention alone: what [timings_contended]
+   counts minus its two named subsets (gh-ocannl-1517). See the interface. *)
+let contention_refusals r = r.timings_contended - r.timings_unbatched - r.timings_unreadable
+
 (** The report of a [tune] call that never searched (config [autotune_search=false], gh-ocannl-559):
     every counter zero and every time [infinity], like a search whose candidates all failed. The
     caller gets the untuned default compile; [outcome] says why. Also the base that the [census]
@@ -370,12 +400,13 @@ let no_search_report ~timing =
     timings_contended = 0;
     timings_retried = 0;
     timings_unbatched = 0;
+    timings_unreadable = 0;
     timing_decisions = [];
     candidates_contended = 0;
     default_refused = false;
     candidates_failed = 0;
     baseline_declined = false;
-    baseline_refused = false;
+    baseline_refusal = None;
     declines = [];
     privatize_drops = [];
     cache_replay_refusal = None;
@@ -1093,13 +1124,21 @@ let on_candidate_measured : (label:string -> digest:string -> float -> float) Se
   Seam.make (fun ~label:_ ~digest:_ ms -> ms)
 
 (* Explicit test-only admission seam (gh-ocannl-1156). Scripted candidate measurements need their
-   branches to run even when the host stalls every physical window. This scope clears ONLY the
-   contention flag before candidate admission; calibration, dispatch, invalid clock readings and
+   branches to run even when the host stalls every physical window. The [Cleared] scope clears ONLY
+   the contention flag before candidate admission; calibration, dispatch, invalid clock readings and
    unresolved queued batching retain their ordinary rules. No configuration selects it. Production
    callers of [on_candidate_measured] still see only admitted windows. Restore the prior mode even
-   on an injected failure, including when test scopes nest. *)
-let test_windows_uncontended : bool Seam.t = Seam.make false
-let with_uncontended_test_windows f = Seam.with_value test_windows_uncontended true f
+   on an injected failure, including when test scopes nest.
+
+   [Forced] is the opposite scope (gh-ocannl-1517): it sets the contention flag on every window, so
+   a test can drive the contention refusal's own accounting on any host, as [on_candidate_measured]
+   drives the degenerate-reading one. Only the flag: a reading that is unreadable or unbatched keeps
+   that cause, which [timing_admission] names first. *)
+type test_window_contention = Physical | Cleared | Forced
+
+let test_window_contention : test_window_contention Seam.t = Seam.make Physical
+let with_uncontended_test_windows f = Seam.with_value test_window_contention Cleared f
+let with_contended_test_windows f = Seam.with_value test_window_contention Forced f
 
 (* Unless the test-only scope above is active, only an admitted window reaches the seam; its result
    then passes the same [admitted_timing_ms] gate as a real reading, so a value that gate refuses
@@ -1108,8 +1147,10 @@ let with_uncontended_test_windows f = Seam.with_value test_windows_uncontended t
    boundaries. *)
 let apply_measurement_seam ~label ~digest timing_result =
   let timing_result =
-    if Seam.get test_windows_uncontended then { timing_result with contended = false }
-    else timing_result
+    match Seam.get test_window_contention with
+    | Physical -> timing_result
+    | Cleared -> { timing_result with contended = false }
+    | Forced -> { timing_result with contended = true }
   in
   match admitted_timing_ms timing_result with
   | None -> timing_result
@@ -1718,11 +1759,7 @@ let calibrate_and_time_from ~started ~tagged ~on_retry ~on_call ~phase ~retry_co
       probes = !probes_started;
       probe_wall_ms = !probe_wall_ms;
       budget_spent = probe_budget_spent ();
-      admission =
-        (if result.unbatched then Refused_unbatched
-         else if result.contended then Refused_contended
-         else if Option.is_none (admitted_timing_ms result) then Refused_unreadable
-         else Admitted);
+      admission = timing_admission result;
       retried;
     }
   in
@@ -6423,10 +6460,12 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
     if not !sealed then (
       progress_line "search_done"
         (Printf.sprintf
-           "outcome=%s timed=%d contended=%d timings_retried=%d unbatched=%d failed=%d rounds=%d \
-            budget_cut=%b baseline_refused=%b privatize_dropped=%d %s best_ms=%s best=%S"
+           "outcome=%s timed=%d contended=%d timings_retried=%d unbatched=%d unreadable=%d \
+            failed=%d rounds=%d budget_cut=%b baseline_refused=%b privatize_dropped=%d %s \
+            best_ms=%s best=%S"
            (outcome_name r.outcome) r.candidates_timed r.timings_contended r.timings_retried
-           r.timings_unbatched r.candidates_failed r.rounds_run r.budget_cut r.baseline_refused
+           r.timings_unbatched r.timings_unreadable r.candidates_failed r.rounds_run r.budget_cut
+           (Option.is_some r.baseline_refusal)
            (List.sum (module Int) r.privatize_drops ~f:(fun d -> d.count))
            (progress_costs ()) (progress_ms r.best_ms) r.best_label);
       Option.iter report ~f:(fun f -> f r))
@@ -7159,6 +7198,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                     timings_contended = 0;
                     timings_retried = 0;
                     timings_unbatched = 0;
+                    timings_unreadable = 0;
                     timing_decisions = timing_decisions ();
                     candidates_contended = 0;
                     default_refused = false;
@@ -7166,7 +7206,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                     candidates_failed = failed_count declines;
                     baseline_declined = Option.is_some baseline_decline;
                     (* Nothing is timed on a replay, the baseline included. *)
-                    baseline_refused = false;
+                    baseline_refusal = None;
                     declines = decline_summaries declines;
                     privatize_drops = [];
                     cache_replay_refusal = None;
@@ -7422,7 +7462,9 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
            its rank, so every timed candidate beats it and the search never returns it (see the
            fallback at the end), and a declined baseline ranks the same way. *)
         let baseline_dispatched = Option.is_some baseline && dispatchable ~is_gpu [ base_opt ] in
-        let baseline_contended = ref false and baseline_unbatched = ref false in
+        (* The baseline's refused window, by its cause (gh-ocannl-1517); [None] when it was
+           admitted, or never ran one. *)
+        let baseline_refusal = ref None in
         let baseline_timing_result = ref None in
         let baseline_ms =
           match baseline with
@@ -7476,16 +7518,9 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                       baseline_timing_result := Some timing_result;
                       ms
                   | None ->
-                      baseline_contended := true;
-                      baseline_unbatched := timing_result.unbatched;
-                      if timing_result.unbatched then
-                        logf
-                          "baseline timing refused: queued calibration measured no batch within \
-                           the target"
-                      else
-                        logf
-                          "baseline timing refused: contention or a degenerate clock reading made \
-                           the sample window unusable";
+                      let refusal = timing_admission timing_result in
+                      baseline_refusal := Some refusal;
+                      logf "baseline timing refused: %s" (refusal_reason refusal);
                       Float.infinity)
               | exception Outcome.Raised_at (phase, exn, backtrace) ->
                   condemn phase exn;
@@ -7509,7 +7544,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
         (* A contended timing established nothing about this digest. Let an identical seed retry it
            later in the search; successful timing and every definitive structural refusal keep the
            ordinary dedup ownership. *)
-        if !baseline_contended then Hash_set.remove seen base_digest;
+        if Option.is_some !baseline_refusal then Hash_set.remove seen base_digest;
         (match baseline_decline with
         | Some classified ->
             logf "baseline: DECLINED at %s %s" (phase_label classified.phase)
@@ -7543,11 +7578,24 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
         if baseline_timed then
           Option.iter baseline ~f:(fun b ->
               Seam.get on_candidate_timed b.routine.Context.name ~timed_so_far:!n_timed);
-        let n_timings_contended = ref (if !baseline_contended then 1 else 0) in
+        let n_timings_contended = ref 0 in
         (* The subset of those windows refused because queued calibration measured no batch within
            its target (gh-ocannl-1098). Not a diagnosis (a stall on every probe reads the same), but
            a count that persists across idle reruns is a queue threshold's signature. *)
-        let n_timings_unbatched = ref (if !baseline_unbatched then 1 else 0) in
+        let n_timings_unbatched = ref 0 in
+        (* The subset refused for a degenerate clock reading (gh-ocannl-1517): a clock that resolved
+           nothing is not a loaded host, and a skip excused by one names that cause. *)
+        let n_timings_unreadable = ref 0 in
+        (* Every refused window is counted here, by its cause, so the per-cause counts stay subsets
+           of [n_timings_contended] by construction. *)
+        let count_refusal refusal =
+          Int.incr n_timings_contended;
+          match refusal with
+          | Refused_unbatched -> Int.incr n_timings_unbatched
+          | Refused_unreadable -> Int.incr n_timings_unreadable
+          | Refused_contended | Admitted -> ()
+        in
+        Option.iter !baseline_refusal ~f:count_refusal;
         (* [n_timings_contended] counts WINDOWS, which is the right shape for "was this search's
            measurement set complete?" but the wrong one for any claim about WHICH candidate went
            unmeasured (Codex P2 on PR #608): a refused digest is dropped from [seen] so an
@@ -7557,7 +7605,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
            seed was the refused one, which is what separates a contention-refused reference from the
            gh-ocannl-552 regression of never proposing or attributing it. *)
         let contended_digests = Hash_set.create (module String) in
-        if !baseline_contended then Hash_set.add contended_digests base_digest;
+        if Option.is_some !baseline_refusal then Hash_set.add contended_digests base_digest;
         (* Live search state for an honest partial report. Each counter starts at the amount of work
            completed so far and is updated at its ordinary accounting site below. [best_so_far] is
            updated after every successful timing, including midway through seed enumeration. *)
@@ -7737,12 +7785,13 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
             timings_contended = !n_timings_contended;
             timings_retried = !n_timings_retried;
             timings_unbatched = !n_timings_unbatched;
+            timings_unreadable = !n_timings_unreadable;
             timing_decisions = timing_decisions ();
             candidates_contended = candidates_contended ();
             default_refused = default_refused ();
             candidates_failed = failed_count declines;
             baseline_declined = Option.is_some baseline_decline;
-            baseline_refused = !baseline_contended;
+            baseline_refusal = !baseline_refusal;
             declines = summaries;
             privatize_drops = decline_summaries privatize_declines;
             cache_replay_refusal = !cache_replay_refusal;
@@ -8029,22 +8078,15 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                               sr_composite_timed := true
                         | _ -> ());
                         if spec_expects_mma spec then Int.incr n_mma_timed;
-                        Int.incr n_timings_contended;
-                        if timing_result.unbatched then Int.incr n_timings_unbatched;
+                        let refusal = timing_admission timing_result in
+                        count_refusal refusal;
                         Hash_set.add contended_digests c.digest_after;
-                        (* Unlike a launch/compile decline, contention is not a property of this
-                           schedule. An equivalent later seed is a useful retry, not a dedup. *)
+                        (* Unlike a launch/compile decline, a refused window (contention, a
+                           degenerate reading) is not a property of this schedule. An equivalent
+                           later seed is a useful retry, not a dedup. *)
                         Hash_set.remove seen c.digest_after;
-                        if timing_result.unbatched then
-                          logf
-                            "%s: NOT TIMED, queued calibration measured no batch within the target \
-                             (digest %s)"
-                            (spec_label spec) (dshort c.digest_after)
-                        else
-                          logf
-                            "%s: NOT TIMED, contention or a degenerate clock reading made the \
-                             sample window unusable (digest %s)"
-                            (spec_label spec) (dshort c.digest_after);
+                        logf "%s: NOT TIMED, %s (digest %s)" (spec_label spec)
+                          (refusal_reason refusal) (dshort c.digest_after);
                         release_candidate c;
                         None
                     | Ok timing_result ->
@@ -9222,9 +9264,8 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                      match admitted_timing_ms timing_result with
                      | Some ms -> logf "untuned-default in-process control: %.4f ms" ms
                      | None ->
-                         logf
-                           "untuned-default in-process control: refused (contention or degenerate \
-                            clock reading)")
+                         logf "untuned-default in-process control: refused (%s)"
+                           (refusal_reason (timing_admission timing_result)))
                  | exception exn ->
                      logf "untuned-default control run failed: %s" (Exn.to_string exn));
                  (* A diagnostic's artifacts are dead the moment it has printed its number
@@ -9245,12 +9286,13 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
               timings_contended = !n_timings_contended;
               timings_retried = !n_timings_retried;
               timings_unbatched = !n_timings_unbatched;
+              timings_unreadable = !n_timings_unreadable;
               timing_decisions = timing_decisions ();
               candidates_contended = candidates_contended ();
               default_refused = default_refused ();
               candidates_failed = failed_count declines;
               baseline_declined = Option.is_some baseline_decline;
-              baseline_refused = !baseline_contended;
+              baseline_refusal = !baseline_refusal;
               declines = decline_summaries declines;
               privatize_drops = decline_summaries privatize_declines;
               cache_replay_refusal = !cache_replay_refusal;

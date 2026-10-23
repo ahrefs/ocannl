@@ -126,12 +126,15 @@ let () =
   let is_gpu = Sched.backend_is_gpu backend in
   let baseline_measured = Float.is_finite r.Autotune.baseline_ms in
   (* The baseline's own window (gh-ocannl-1423), not [timings_contended], which a refused candidate
-     window grows too. *)
-  let baseline_contention_refused =
-    (not is_gpu) && (not baseline_measured) && r.Autotune.baseline_refused
+     window grows too. Any refusal excuses it, and the cause is printed (gh-ocannl-1517). *)
+  let baseline_window_refused =
+    (not is_gpu) && (not baseline_measured) && Option.is_some r.Autotune.baseline_refusal
   in
-  p "the serial baseline is measured or contention-refused on CPU, and not dispatched on GPU"
-    (if is_gpu then not baseline_measured else baseline_measured || baseline_contention_refused);
+  Option.iter r.Autotune.baseline_refusal ~f:(fun cause ->
+      Stdio.eprintf "the baseline's window was refused (not part of the golden): %s\n%!"
+        (Autotune.batch_admission_name cause));
+  p "the serial baseline is measured or its window refused on CPU, and not dispatched on GPU"
+    (if is_gpu then not baseline_measured else baseline_measured || baseline_window_refused);
   (* gh-ocannl-543: the refusal is a decline like any other. Without a census entry a GPU search
      that refused most of its candidate space reports exactly what an empty candidate space reports,
      and the difference was only visible in the [autotune_log] stderr stream. *)

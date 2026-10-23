@@ -745,6 +745,7 @@ let tune_json t =
           ~call_budget_s:r.Autotune.call_budget_s ~call_share_s:r.Autotune.call_share_s
           ~timings_contended:r.Autotune.timings_contended
           ~timings_unbatched:r.Autotune.timings_unbatched
+          ~timings_unreadable:r.Autotune.timings_unreadable
           ~timing_decisions:(timing_decisions_wire r.Autotune.timing_decisions)
           ~best_ms:r.Autotune.best_ms ~best_label:r.Autotune.best_label
           ~tensorized:r.Autotune.best_tensorized
