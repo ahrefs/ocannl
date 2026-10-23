@@ -27,12 +27,14 @@
       in arguments -- since a partial application is a closure that writes later.
     - {b Accounting}: a write is accounted for when its nearest enclosing let-bound function (any
       [let f … = fun …] at any depth; the top-level definition when none encloses it) contains a
-      call [note_mutation ()] in its own body, anonymous closures included -- so the [~default]
-      closure of a [find_or_add] counts -- but not inside a nested let-bound function, which is a
-      frame of its own. The call must reach the real one: [Row.note_mutation] with no module named
-      [Row] bound in scope (a local module, functor parameter or unpack), or -- in the serial's own
-      module alone ([~serial_owner], [row.ml]) -- its top-level [note_mutation], not a shadowing
-      local. An [open] that brings a [Row] in is not modelled.
+      call [note_mutation ()] in its own body, callbacks included -- a function literal passed as an
+      argument is assumed to run during the call, so the [~default] closure of a [find_or_add]
+      counts -- but not inside a nested let-bound function or an escaping closure (one returned,
+      stored or bound rather than passed), each a frame of its own. The call must reach the real
+      one: [Row.note_mutation] with no module named [Row] bound in scope (a local module, functor
+      parameter or unpack), or -- in the serial's own module alone ([~serial_owner], [row.ml]) --
+      its top-level [note_mutation], not a shadowing local. An [open] that brings a [Row] in is not
+      modelled.
     - {b In-place classification}, as attributes with a closed grammar; a reason is a string literal
       of more than one word:
     - [[@@mutation_serial.exempt "<reason>"]] on a tracked binding: its writes need no note
@@ -40,9 +42,9 @@
       admit state the scan cannot read (below).
     - [[@@mutation_serial.fingerprinted]] on a tracked [ref] that [Shape.fingerprint] compares
       physically: held to the relationship, not to a reason -- the file's top-level [fingerprint]
-      must capture [!x] as a record field [{ f = !x }], and its top-level [mutated_since] must hand
-      that field and [!x] to the library's [phys_equal] ([phys_equal fp.f !x]). What becomes of that
-      comparison's result is not read.
+      must capture [!x] as a field of the record it returns ([{ f = !x }] as its result), and its
+      top-level [mutated_since] must hand that field and [!x] to the library's [phys_equal]
+      ([phys_equal fp.f !x]) as an operand of its returned boolean, through [||], [&&] and [not].
     - [[@@mutation_serial.boundary "<reason>"]] on a let-bound function that is a session boundary
       (the commit, a rewind, a reset): its own writes need no note.
 
@@ -58,8 +60,9 @@
     - module-level state the scan does not resolve: an allocation bound by a non-variable pattern,
       one evaluated at module initialization but hidden under a local [let] of a top-level value
       ([let fresh = let uid = ref 0 in fun () -> …]) or in the body of a function the initializer
-      invokes on the spot ([(fun () -> …) ()]) -- an unlisted constructor there too -- one inside a
-      nested module, an [include]d structure, a functor argument or a [let%ext] payload -- unless
+      invokes on the spot ([(fun () -> …) ()]) or binds locally ([let make () = … in make ()],
+      conservatively whether or not it calls it) -- an unlisted constructor there too -- one inside
+      a nested module, an [include]d structure, a functor argument or a [let%ext] payload -- unless
       that binding is [exempt];
     - a tracked binding the sibling [.mli] exports as a [val], at top level or through an
       [include sig … end], since its writers outside the file are not read ([Row.mutation_serial] is
@@ -268,6 +271,37 @@ let rec invoked_body (e : expression) =
   | Pexp_constraint (e, _) | Pexp_coerce (e, _, _) | Pexp_newtype (_, e) -> invoked_body e
   | _ -> None
 
+(* Through constraints, coercions and locally abstract types. *)
+let rec strip_all (e : expression) =
+  match e.pexp_desc with
+  | Pexp_constraint (e, _) | Pexp_coerce (e, _, _) | Pexp_newtype (_, e) -> strip_all e
+  | _ -> e
+
+(* The expression a function's call returns: through its parameters, [let]s, sequences, local opens
+   and modules, constraints. *)
+let rec result_tail (e : expression) =
+  match e.pexp_desc with
+  | Pexp_function (_, _, Pfunction_body body) -> result_tail body
+  | Pexp_let (_, _, body)
+  | Pexp_sequence (_, body)
+  | Pexp_open (_, body)
+  | Pexp_letmodule (_, _, body)
+  | Pexp_constraint (body, _)
+  | Pexp_coerce (body, _, _)
+  | Pexp_newtype (_, body) ->
+      result_tail body
+  | _ -> e
+
+(* The operands a boolean result is made of, through [||], [&&] and [not]. *)
+let rec boolean_operands (e : expression) =
+  match (strip e).pexp_desc with
+  | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident ("||" | "&&"); _ }; _ }, [ (_, a); (_, b) ])
+    ->
+      boolean_operands a @ boolean_operands b
+  | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident "not"; _ }; _ }, [ (_, a) ]) ->
+      boolean_operands a
+  | _ -> [ strip e ]
+
 let rec is_function (e : expression) =
   match e.pexp_desc with
   | Pexp_function _ -> true
@@ -322,6 +356,7 @@ type denotation = [ `Tracked of binding | `Note | `Local ]
 type frame = {
   fname : string;
   root : string;
+  root_expr : expression;  (** The top-level definition's expression. *)
   boundary : (string * Location.t) option;
   mutable noted : bool;
   mutable writes : (binding * int) list;
@@ -395,6 +430,17 @@ let scan ~file ?(serial_owner = false) ?interface source =
                   List.iter cases ~f:(fun c -> self#expression c.pc_rhs)
               | None -> ());
               List.iter args ~f:(fun (_, a) -> self#expression a)
+          | Pexp_let (_, vbs, body) ->
+              (* A function bound locally in a module-level initializer may be invoked by it on the
+                 spot ([let make () = … in make ()]): its body is read as initialization too,
+                 conservatively, whether or not the initializer calls it. *)
+              List.iter vbs ~f:(fun local ->
+                  match invoked_body local.pvb_expr with
+                  | Some (Pfunction_body body) -> self#expression body
+                  | Some (Pfunction_cases (cases, _, _)) ->
+                      List.iter cases ~f:(fun c -> self#expression c.pc_rhs)
+                  | None -> self#expression local.pvb_expr);
+              self#expression body
           | _ ->
               (if not (phys_equal (strip e) (strip vb.pvb_expr)) then
                  match allocation e with
@@ -494,6 +540,10 @@ let scan ~file ?(serial_owner = false) ?interface source =
   let captured = Hash_set.Poly.create () in
   let compared = Hash_set.Poly.create () in
   let frames : frame list ref = ref [] in
+  (* Function literals that own a frame (a let-bound function's own expression), and those passed as
+     arguments, by source offset. *)
+  let frame_functions = Hash_set.create (module Int) in
+  let callbacks = Hash_set.create (module Int) in
   let fun_depth = ref 0 in
   let boundaries = ref [] in
   let judge (frame : frame) =
@@ -568,7 +618,18 @@ let scan ~file ?(serial_owner = false) ?interface source =
       method! expression env e =
         (* The fingerprint relationship: [fingerprint] captures [!x] into a field, and
            [mutated_since] hands that field and [!x] to the library's [phys_equal]. *)
-        let root = match List.last !frames with Some frame -> frame.root | None -> "" in
+        let root, root_expr =
+          match List.last !frames with
+          | Some frame -> (frame.root, Some frame.root_expr)
+          | None -> ("", None)
+        in
+        let returned e' =
+          Option.exists root_expr ~f:(fun r -> phys_equal (strip (result_tail r)) e')
+        in
+        let contributes e' =
+          Option.exists root_expr ~f:(fun r ->
+              List.exists (boolean_operands (result_tail r)) ~f:(fun o -> phys_equal o e'))
+        in
         let deref_of (arg : expression) =
           match arg.pexp_desc with
           | Pexp_apply
@@ -578,14 +639,14 @@ let scan ~file ?(serial_owner = false) ?interface source =
           | _ -> None
         in
         (match e.pexp_desc with
-        | Pexp_record (fields, _) when String.equal root "fingerprint" ->
+        | Pexp_record (fields, _) when String.equal root "fingerprint" && returned e ->
             List.iter fields ~f:(fun ({ txt = label; _ }, value) ->
                 Option.iter (deref_of value) ~f:(fun b ->
                     Hash_set.add captured (b.key, Longident.last_exn label)))
         | Pexp_apply
             ( { pexp_desc = Pexp_ident { txt = Lident "phys_equal" as fn; _ }; _ },
               [ (Nolabel, a1); (Nolabel, a2) ] )
-          when self#library env fn && String.equal root "mutated_since" ->
+          when self#library env fn && String.equal root "mutated_since" && contributes e ->
             List.iter
               [ (a1, a2); (a2, a1) ]
               ~f:(fun (field, value) ->
@@ -650,11 +711,47 @@ let scan ~file ?(serial_owner = false) ?interface source =
                           b.name
                     | `Unlisted -> ())))
         | _ -> ());
+        (* A function literal passed as an argument is a callback, assumed to run during the call
+           (the [~default] of [find_or_add], the [~f] of [List.iter]): it shares the caller's frame.
+           Any other anonymous function -- returned, stored, bound to a non-function -- escapes, and
+           is a frame of its own. *)
+        (match e.pexp_desc with
+        | Pexp_apply (_, args) ->
+            List.iter args ~f:(fun (_, a) ->
+                if is_function a then
+                  Hash_set.add callbacks (strip_all a).pexp_loc.loc_start.pos_cnum)
+        | _ -> ());
         match e.pexp_desc with
         | Pexp_function _ ->
+            let key = e.pexp_loc.loc_start.pos_cnum in
+            let escaping =
+              (not (Hash_set.mem frame_functions key))
+              && (not (Hash_set.mem callbacks key))
+              && not (List.is_empty !frames)
+            in
+            let frame =
+              if escaping then (
+                let enclosing = List.hd_exn !frames in
+                let frame =
+                  {
+                    fname = "a closure escaping " ^ enclosing.fname;
+                    root = enclosing.root;
+                    root_expr = enclosing.root_expr;
+                    boundary = None;
+                    noted = false;
+                    writes = [];
+                  }
+                in
+                frames := frame :: !frames;
+                Some frame)
+              else None
+            in
             Int.incr fun_depth;
             let result = super#expression env e in
             Int.decr fun_depth;
+            Option.iter frame ~f:(fun frame ->
+                frames := List.tl_exn !frames;
+                judge frame);
             result
         | _ -> super#expression env e
 
@@ -685,9 +782,14 @@ let scan ~file ?(serial_owner = false) ?interface source =
                   | _ -> None)
               | _ -> None
           in
-          let root = match List.last !frames with Some f -> f.root | None -> fname in
-          let frame = { fname; root; boundary; noted = false; writes = [] } in
+          let root, root_expr =
+            match List.last !frames with
+            | Some f -> (f.root, f.root_expr)
+            | None -> (fname, vb.pvb_expr)
+          in
+          let frame = { fname; root; root_expr; boundary; noted = false; writes = [] } in
           frames := frame :: !frames;
+          Hash_set.add frame_functions (strip_all vb.pvb_expr).pexp_loc.loc_start.pos_cnum;
           let result = super#value_binding env vb in
           frames := List.tl_exn !frames;
           judge frame;

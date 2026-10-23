@@ -139,6 +139,19 @@ let () =
   p "a type-constrained function invoked on the spot is entered too"
     (says "let next = ((fun () -> let c = ref 0 in fun () -> incr c) : unit -> unit -> unit) ()"
        "hidden under a local let");
+  p "a closure that escapes a noting function is judged on its own"
+    (says
+       (table ^ "let make_writer () =\n  note_mutation ();\n  fun v -> Hash_set.add seen v")
+       "a closure escaping make_writer writes seen");
+  p "state a module-level initializer creates through a local helper is refused"
+    (says
+       "let next =\n\
+       \  let make () =\n\
+       \    let c = ref 0 in\n\
+       \    fun () -> Int.incr c\n\
+       \  in\n\
+       \  make ()"
+       "hidden under a local let");
   p "a write under let%ext is judged like any other"
     (count (table ^ "let%debug_sexp add (v : int) : unit = Hash_set.add seen v") = 1);
   (* Refs. *)
@@ -232,6 +245,21 @@ let () =
     (says
        (fingerprinted "not (phys_equal fp.fp_other !state)")
        "mutated_since does not compare !state");
+  p "a capture that is not the record fingerprint returns does not count"
+    (says
+       "let state = ref 0 [@@mutation_serial.fingerprinted]\n\
+        let set v = state := v\n\
+        let fingerprint () =\n\
+       \  ignore { fp_state = !state };\n\
+       \  { fp_state = 0 }\n\
+        let mutated_since fp = not (phys_equal fp.fp_state !state)"
+       "mutated_since does not compare !state");
+  p "a comparison that does not reach mutated_since's result does not count"
+    (says
+       (fingerprinted "ignore (phys_equal fp.fp_state !state);\n  false")
+       "mutated_since does not compare !state");
+  p "a comparison inside a disjunction of the result counts"
+    (count (fingerprinted "fp.serial <> 0 || not (phys_equal fp.fp_state !state)") = 0);
   p "a fingerprinted ref compared through a shadowing phys_equal is refused"
     (says
        ("let phys_equal _ _ = true\n" ^ fingerprinted "not (phys_equal fp.fp_state !state)")
