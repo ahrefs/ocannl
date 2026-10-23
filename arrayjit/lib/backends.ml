@@ -1105,31 +1105,168 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       alias_spans;
     }
 
-  (* gh-ocannl-344 Phase B/C: allocate a context's delta -- the in-context tnodes not already
-     present in [context.ctx_buffers]. Working (non-constant) and constant/read-only nodes are EACH
-     packed into pools sized to their group and bump-assigned increasing byte offsets, replacing the
-     one-pool-per-tnode policy. Working pools belong to the context (freed at its [finalize]);
-     constant pools are deduped per-device via [constant_buffer_cache] and outlive the context
-     (freed at device teardown). Enumeration follows [traced_store] order so pool ids and offsets
-     stay deterministic across runs. The per-pool 4 GB cap (uint32 offsets unless large_models) is
+  (* gh-ocannl-1493: one layout group of a context's delta, laid out as the allocator lays it out --
+     the pools it asks the device for, in allocation order, and where each node lands. The plan is
+     pure (no pool id minted, no device touched), so the link ([allocate_delta]) and the link-free
+     probe ([link_delta]) run the SAME plan: the probe asks the device for exactly the pools the
+     link would, in the same order, sized and aligned alike. *)
+  type group_layout = {
+    gl_group : (Tn.t * Low_level.traced_array) list;  (** Canonical (uid) order. *)
+    gl_constant : bool;
+    gl_pools : (int * int) list;  (** [(size_in_bytes, alignment)] per pool, in allocation order. *)
+    gl_places : (int * int) list;
+        (** Per node of [gl_group]: the index of its pool in [gl_pools], and its byte offset. *)
+    gl_arena : bool;
+        (** Laid out by the liveness planner (gh-ocannl-489) rather than bump-packed. *)
+  }
+
+  type delta_plan = {
+    dp_working : group_layout option;
+    dp_cached_constants : (Tn.t * buffer_loc) list;
+        (** Constants a [constant_buffer_cache] hit already resolves on this device. *)
+    dp_new_constants : group_layout option;
+  }
+
+  (* Lay a group out into pools. With a liveness plan (the working group under [buffer_aliasing]),
+     the group is one arena where liveness-disjoint same-precision nodes overlap; it falls back to
+     bump packing when the arena would exceed the per-pool cap. Bump packing segments at the cap,
+     each segment's slab aligned to the largest element precision it holds. *)
+  let plan_group ?arena ~cap ~constant (group : (Tn.t * Low_level.traced_array) list) :
+      group_layout option =
+    if List.is_empty group then None
+    else
+      let arena_layout =
+        Option.bind arena ~f:(fun spans -> plan_arena_offsets ~cap (arena_items ~spans group))
+      in
+      match arena_layout with
+      | Some (offsets, total) ->
+          let alignment =
+            List.fold group ~init:1 ~f:(fun a (key, _) ->
+                max a (Ops.prec_in_bytes (Lazy.force key.Tn.storage_prec)))
+          in
+          Some
+            {
+              gl_group = group;
+              gl_constant = constant;
+              gl_pools = [ (total, alignment) ];
+              gl_places = List.map offsets ~f:(fun offset -> (0, offset));
+              gl_arena = true;
+            }
+      | None ->
+          let assignments, segment_sizes =
+            plan_pool_segments ~cap ~what:"Backends.allocate_delta"
+              ~debug_name:(fun i -> Tn.debug_name (fst (List.nth_exn group i)))
+              (layout_items group)
+          in
+          let seg_align = Array.of_list_map segment_sizes ~f:(fun _ -> 1) in
+          List.iter2_exn group assignments ~f:(fun (key, _) (seg, _) ->
+              seg_align.(seg) <-
+                max seg_align.(seg) (Ops.prec_in_bytes (Lazy.force key.Tn.storage_prec)));
+          Some
+            {
+              gl_group = group;
+              gl_constant = constant;
+              gl_pools = List.mapi segment_sizes ~f:(fun i size -> (size, seg_align.(i)));
+              gl_places = assignments;
+              gl_arena = false;
+            }
+
+  (* gh-ocannl-344 Phase B/C: plan a context's delta -- the in-context tnodes not already present in
+     [context.ctx_buffers]. Working (non-constant) and constant/read-only nodes are EACH packed into
+     pools sized to their group, replacing the one-pool-per-tnode policy. Only the working group is
+     liveness-planned (gh-ocannl-489): constants are deduped per-device and outlive the context, so
+     their lifetimes are not routine intervals. Constants already allocated on this device (a hit in
+     [constant_buffer_cache], possibly from another context tree) resolve directly and are excluded
+     from the new slab, so a fresh constant pool holds exactly this device's genuinely-new constants
+     -- no wasted holes. Groups arrive in canonical (uid) order from [partition_layout_groups] --
+     the order [score_footprint] scores, which the order-sensitive planners must see identically
+     (gh-ocannl-498). *)
+  let plan_delta (context : context) ~alias_spans (lowered : Low_level.optimized) : delta_plan =
+    let cap = pool_cap () in
+    let working, constants =
+      partition_layout_groups ~plc:lowered.Low_level.optimize_ctx.placements
+        ~skip:(Map.mem context.ctx_buffers) lowered.Low_level.traced_store
+    in
+    let cached, fresh =
+      List.partition_map constants ~f:(fun (key, node) ->
+          match Hashtbl.find context.device.constant_buffer_cache key with
+          | Some data -> First (key, data)
+          | None -> Second (key, node))
+    in
+    {
+      dp_working = plan_group ?arena:alias_spans ~cap ~constant:false working;
+      dp_cached_constants = cached;
+      dp_new_constants = plan_group ~cap ~constant:true fresh;
+    }
+
+  (* The pool allocations of one delta, counted at the shared seam: what [allocate_delta] and the
+     link-free probe both run, so the device sees the same requests from either. [minted] is what
+     this transaction allocated, so a failure part way through can give it back; [held] the bytes
+     those pools hold.
+
+     gh-ocannl-1424: a group past the per-pool cap is several pools allocated one after another, so
+     a refusal can come part way through, and the driver's free bytes in the refusal are then read
+     with this same transaction's earlier pools still allocated. Read bare, that reading looks like
+     memory something else left resident -- which is how a 28 GB materialize-all delta on a 12 GiB
+     card, refused at its third 4 GiB pool, was reported as 8.6 GB "still resident after arm A". So
+     the refusal says so. *)
+  type pool_tx = { tx_name : string; minted : int list ref; held : int ref }
+
+  let new_pool_tx ~name = { tx_name = name; minted = ref []; held = ref 0 }
+
+  (* Mints a pool id per planned pool up front, then allocates each; returns the ids in [gl_pools]
+     order. *)
+  let allocate_group_pools tx device (gl : group_layout) : int array =
+    let pool_ids =
+      Array.of_list_map gl.gl_pools ~f:(fun _ ->
+          let pool_id = device.next_pool_id in
+          device.next_pool_id <- pool_id + 1;
+          pool_id)
+    in
+    let count = Array.length pool_ids in
+    let group_bytes = List.sum (module Int) gl.gl_pools ~f:fst in
+    List.iteri gl.gl_pools ~f:(fun index (size_in_bytes, alignment) ->
+        let pool_id = pool_ids.(index) in
+        (try alloc_pool device ~pool_id ~size_in_bytes ~alignment
+         with Schedule_outcome.Device_memory_exhausted r when count > 1 || !(tx.held) > 0 ->
+           let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+           Stdlib.Printexc.raise_with_backtrace
+             (Schedule_outcome.Device_memory_exhausted
+                {
+                  r with
+                  detail =
+                    Printf.sprintf
+                      "%s; it was pool %d of %d of %s's %s delta of %d bytes, and this compile's \
+                       %d earlier pool(s), %d bytes, were still allocated when the free bytes were \
+                       read"
+                      r.detail (index + 1) count tx.tx_name
+                      (if gl.gl_constant then "constant" else "working")
+                      group_bytes (List.length !(tx.minted)) !(tx.held);
+                })
+             backtrace);
+        tx.held := !(tx.held) + size_in_bytes;
+        tx.minted := pool_id :: !(tx.minted);
+        (* gh-ocannl-550: the shared seam is where a pool's byte size is known, so it is where the
+           per-class census records it. [~constant] separates the two groups, whose lifetimes
+           differ: a working pool belongs to the context and dies with it, a constant pool is
+           deduped per device and outlives it. *)
+        Alloc_census.record_pool ~device_id:device.device_id ~pool_id ~constant:gl.gl_constant
+          ~size_in_bytes;
+        Resource_fault_injection.hit Delta_pool_allocated);
+    pool_ids
+
+  (* gh-ocannl-344 Phase B/C: allocate a context's delta ([plan_delta]). Working pools belong to the
+     context (freed at its [finalize]); constant pools are deduped per-device via
+     [constant_buffer_cache] and outlive the context (freed at device teardown). Pool ids and
+     offsets are deterministic across runs: the plan is in canonical order and ids are minted per
+     pool before any placement. The per-pool 4 GB cap (uint32 offsets unless large_models) is
      enforced by {!Backend_utils.plan_pool_segments}. *)
   let%track3_sexp allocate_delta (context : context) ~name
       ~(alias_spans : (Tn.t, int * int) Base.Hashtbl.t option) (lowered : Low_level.optimized) :
       ctx_buffers =
-    let traced_store = lowered.Low_level.traced_store in
     let device = context.device in
-    let cap = pool_cap () in
-    (* Pass 1: partition the delta into the canonical layout groups (the shared layout head),
-       excluding nodes the prior context already holds. *)
-    let working, constants =
-      partition_layout_groups ~plc:lowered.Low_level.optimize_ctx.placements
-        ~skip:(Map.mem context.ctx_buffers) traced_store
-    in
+    let plan = plan_delta context ~alias_spans lowered in
     let ctx_buffers = ref context.ctx_buffers in
-    (* Pack a group of (key, node) into one or more pools, segmenting at the cap. [register] decides
-       how the resulting [buffer_loc] is recorded (directly into [ctx_buffers] for working nodes, or
-       deduped through [constant_buffer_cache] for constants). [base_pool_id] of each segment is a
-       freshly minted [next_pool_id]; offsets and pool sizes come from the pure planner. *)
     let place (key, node) ~pool_id ~offset ~register =
       let size_in_bytes = size_in_bytes_of key in
       let alloc () : buffer_loc =
@@ -1150,47 +1287,13 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       in
       register key ~alloc
     in
-    (* gh-ocannl-550: the shared seam is where a pool's byte size is known, so it is where the
-       per-class census records it. [~constant] separates the two groups below, whose lifetimes
-       differ: a working pool belongs to the context and dies with it, a constant pool is deduped
-       per device and outlives it. *)
     (* What THIS call minted, so a failure part way through can give it back (gh-ocannl-550,
        round-four review). [with_delta] in [link] covers failures after the delta is returned; it
-       cannot cover a failure inside this function, where the caller never receives [ctx_buffers] and
-       the slabs already allocated are rooted with nothing to reach them. Pool ids are fresh from
-       [device.next_pool_id], so every id here is unambiguously this call's. *)
-    let minted = ref [] in
+       cannot cover a failure inside this function, where the caller never receives [ctx_buffers]
+       and the slabs already allocated are rooted with nothing to reach them. Pool ids are fresh
+       from [device.next_pool_id], so every id here is unambiguously this call's. *)
+    let tx = new_pool_tx ~name in
     let cache_inserts = ref [] in
-    (* gh-ocannl-1424: the bytes this call's pools already hold. A group past the per-pool cap is
-       several pools allocated one after another, so a refusal can come part way through, and the
-       driver's free bytes in the refusal are then read with this same compile's earlier pools still
-       allocated. Read bare, that reading looks like memory something else left resident -- which is
-       how a 28 GB materialize-all delta on a 12 GiB card, refused at its third 4 GiB pool, was
-       reported as 8.6 GB "still resident after arm A". So the refusal says so. *)
-    let held = ref 0 in
-    let alloc_pool_counted ~constant ~segment:(index, count, group_bytes) device ~pool_id
-        ~size_in_bytes ~alignment =
-      (try alloc_pool device ~pool_id ~size_in_bytes ~alignment
-       with Schedule_outcome.Device_memory_exhausted r when count > 1 || !held > 0 ->
-         let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-         Stdlib.Printexc.raise_with_backtrace
-           (Schedule_outcome.Device_memory_exhausted
-              {
-                r with
-                detail =
-                  Printf.sprintf
-                    "%s; it was pool %d of %d of %s's %s delta of %d bytes, and this compile's %d \
-                     earlier pool(s), %d bytes, were still allocated when the free bytes were read"
-                    r.detail (index + 1) count name
-                    (if constant then "constant" else "working")
-                    group_bytes (List.length !minted) !held;
-              })
-           backtrace);
-      held := !held + size_in_bytes;
-      minted := pool_id :: !minted;
-      Alloc_census.record_pool ~device_id:device.device_id ~pool_id ~constant ~size_in_bytes;
-      Resource_fault_injection.hit Delta_pool_allocated
-    in
     let unwind_partial_delta () =
       (* The uploads scheduled above are asynchronous, so the pools must not be freed under them. *)
       (try Device.await device with _ -> ());
@@ -1199,110 +1302,52 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
          there belong to earlier compiles and are untouched. *)
       List.iter !cache_inserts ~f:(Hashtbl.remove device.constant_buffer_cache);
       Option.iter free_pool ~f:(fun free_pool ->
-          List.dedup_and_sort !minted ~compare:Int.compare
+          List.dedup_and_sort !(tx.minted) ~compare:Int.compare
           |> List.iter ~f:(free_and_forget_pool device ~free_pool))
     in
-    let pack ?arena ~constant (group : (Tn.t * Low_level.traced_array) list)
-        ~(register : Tn.t -> alloc:(unit -> buffer_loc) -> unit) : unit =
-      if not (List.is_empty group) then begin
-        (* [group] arrives in canonical (uid) order from [partition_layout_groups] -- the order
-           [score_footprint] scores, which the order-sensitive planners must see identically
-           (gh-ocannl-498; the rationale lives on the shared layout head). Pool ids are minted per
-           segment before any placement, and registration is order-independent. *)
-        let items = layout_items group in
-        (* gh-ocannl-489: with a liveness plan (the working group under [buffer_aliasing]), lay the
-           group out as one arena where liveness-disjoint same-precision nodes overlap. Falls back
-           to bump packing when the arena would exceed the per-pool cap. *)
-        let arena_layout =
-          Option.bind arena ~f:(fun spans -> plan_arena_offsets ~cap (arena_items ~spans group))
+    let pack (gl : group_layout) ~(register : Tn.t -> alloc:(unit -> buffer_loc) -> unit) : unit =
+      let pool_ids = allocate_group_pools tx device gl in
+      List.iter2_exn gl.gl_group gl.gl_places ~f:(fun entry (index, offset) ->
+          place entry ~pool_id:pool_ids.(index) ~offset ~register);
+      if gl.gl_arena && log_buffer_aliasing () then
+        let _, bump_sizes =
+          plan_pool_segments ~cap:(pool_cap ()) ~what:"Backends.allocate_delta"
+            ~debug_name:(fun i -> Tn.debug_name (fst (List.nth_exn gl.gl_group i)))
+            (layout_items gl.gl_group)
         in
-        match arena_layout with
-        | Some (offsets, total) ->
-            let pool_id = device.next_pool_id in
-            device.next_pool_id <- pool_id + 1;
-            let alignment =
-              List.fold group ~init:1 ~f:(fun a (key, _) ->
-                  max a (Ops.prec_in_bytes (Lazy.force key.Tn.storage_prec)))
-            in
-            alloc_pool_counted ~constant ~segment:(0, 1, total) device ~pool_id ~size_in_bytes:total
-              ~alignment;
-            List.iter2_exn group offsets ~f:(fun entry offset ->
-                place entry ~pool_id ~offset ~register);
-            if log_buffer_aliasing () then
-              let _, bump_sizes =
-                plan_pool_segments ~cap ~what:"Backends.allocate_delta"
-                  ~debug_name:(fun i -> Tn.debug_name (fst (List.nth_exn group i)))
-                  items
-              in
-              let dedicated = List.fold bump_sizes ~init:0 ~f:( + ) in
-              let planned =
-                Option.value_map arena ~default:0 ~f:(fun spans ->
-                    List.count group ~f:(fun (key, _) -> Hashtbl.mem spans key))
-              in
-              Stdlib.Printf.eprintf
-                "buffer aliasing: %s: working pool %d bytes, dedicated packing %d bytes (%.1f%% \
-                 saved; %d/%d nodes liveness-planned)\n\
-                 %!"
-                name total dedicated
-                (100. *. Float.of_int (dedicated - total) /. Float.of_int (max 1 dedicated))
-                planned (List.length group)
-        | None ->
-            let assignments, segment_sizes =
-              plan_pool_segments ~cap ~what:"Backends.allocate_delta"
-                ~debug_name:(fun i -> Tn.debug_name (fst (List.nth_exn group i)))
-                items
-            in
-            (* Mint a pool id per segment up front, sized from the planner. *)
-            let seg_pool_ids =
-              List.map segment_sizes ~f:(fun size_in_bytes ->
-                  let pool_id = device.next_pool_id in
-                  device.next_pool_id <- pool_id + 1;
-                  (pool_id, size_in_bytes))
-              |> Array.of_list
-            in
-            (* Allocate each segment's slab, padding alignment to the max element precision it
-               holds. *)
-            let seg_align = Array.map seg_pool_ids ~f:(fun _ -> ref 1) in
-            List.iter2_exn group assignments ~f:(fun (key, _) (seg, _) ->
-                let a = Ops.prec_in_bytes (Lazy.force key.Tn.storage_prec) in
-                if a > !(seg_align.(seg)) then seg_align.(seg) := a);
-            let group_bytes = List.fold segment_sizes ~init:0 ~f:( + ) in
-            Array.iteri seg_pool_ids ~f:(fun seg (pool_id, size_in_bytes) ->
-                alloc_pool_counted ~constant
-                  ~segment:(seg, Array.length seg_pool_ids, group_bytes)
-                  device ~pool_id ~size_in_bytes
-                  ~alignment:!(seg_align.(seg)));
-            (* Place each node at its planned (segment, offset). *)
-            List.iter2_exn group assignments ~f:(fun entry (seg, offset) ->
-                let pool_id, _ = seg_pool_ids.(seg) in
-                place entry ~pool_id ~offset ~register)
-      end
+        let dedicated = List.fold bump_sizes ~init:0 ~f:( + ) in
+        let total = List.sum (module Int) gl.gl_pools ~f:fst in
+        let planned =
+          Option.value_map alias_spans ~default:0 ~f:(fun spans ->
+              List.count gl.gl_group ~f:(fun (key, _) -> Hashtbl.mem spans key))
+        in
+        Stdlib.Printf.eprintf
+          "buffer aliasing: %s: working pool %d bytes, dedicated packing %d bytes (%.1f%% saved; \
+           %d/%d nodes liveness-planned)\n\
+           %!"
+          name total dedicated
+          (100. *. Float.of_int (dedicated - total) /. Float.of_int (max 1 dedicated))
+          planned (List.length gl.gl_group)
     in
-    (* Pass 2a: working delta -> context-owned pool(s), recorded directly. Only this group is
-       liveness-planned (gh-ocannl-489): constants are deduped per-device and outlive the context,
-       so their lifetimes are not routine intervals. *)
     let passes () =
-      pack ?arena:alias_spans ~constant:false working ~register:(fun key ~alloc ->
-          ctx_buffers := Map.add_exn !ctx_buffers ~key ~data:(alloc ()));
-      (* Pass 2b: constants / read-only -> per-device constant pool(s). Constants already allocated
-         on this device (a hit in [constant_buffer_cache], possibly from another context tree)
-         resolve directly and are excluded from the new slab, so the freshly-minted constant pool
-         holds exactly this device's genuinely-new constants -- no wasted holes. The remaining new
-         constants pack into one constant pool (or more, past the cap), deduped into the cache.
-         Constant pools outlive the context and are skipped by context [finalize] (freed at device
-         teardown). *)
-      let new_constants = ref [] in
-      List.iter constants ~f:(fun (key, node) ->
-          match Hashtbl.find device.constant_buffer_cache key with
-          | Some data -> ctx_buffers := Map.add_exn !ctx_buffers ~key ~data
-          | None -> new_constants := (key, node) :: !new_constants);
-      pack ~constant:true (List.rev !new_constants) ~register:(fun key ~alloc ->
-          let data =
-            Hashtbl.find_or_add device.constant_buffer_cache key ~default:(fun () ->
-                cache_inserts := key :: !cache_inserts;
-                alloc ())
-          in
-          ctx_buffers := Map.add_exn !ctx_buffers ~key ~data)
+      (* Pass 2a: working delta -> context-owned pool(s), recorded directly. *)
+      Option.iter plan.dp_working ~f:(fun gl ->
+          pack gl ~register:(fun key ~alloc ->
+              ctx_buffers := Map.add_exn !ctx_buffers ~key ~data:(alloc ())));
+      (* Pass 2b: constants / read-only -> per-device constant pool(s): the cache hits resolve
+         directly, the remaining new constants pack into one constant pool (or more, past the cap),
+         deduped into the cache. Constant pools outlive the context and are skipped by context
+         [finalize] (freed at device teardown). *)
+      List.iter plan.dp_cached_constants ~f:(fun (key, data) ->
+          ctx_buffers := Map.add_exn !ctx_buffers ~key ~data);
+      Option.iter plan.dp_new_constants ~f:(fun gl ->
+          pack gl ~register:(fun key ~alloc ->
+              let data =
+                Hashtbl.find_or_add device.constant_buffer_cache key ~default:(fun () ->
+                    cache_inserts := key :: !cache_inserts;
+                    alloc ())
+              in
+              ctx_buffers := Map.add_exn !ctx_buffers ~key ~data))
     in
     (match passes () with
     | () -> ()
@@ -1313,6 +1358,72 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
         (try unwind_partial_delta () with _ -> ());
         Stdlib.Printexc.raise_with_backtrace exn backtrace);
     !ctx_buffers
+
+  (* gh-ocannl-1493: what linking, on [context], a compile whose [lowered_transform] received
+     [lowered] and returned [segments] would allocate -- planned without codegen or link, by the
+     post-transform layout steps [compile] runs (the GPU covering-zero elision, the liveness spans)
+     and the plan [allocate_delta] runs. Hermetic: it works on copies, since forcing the open
+     placements and folding the segment stores back both mutate.
+
+     With [~probe], the planned pools are also allocated, through the seam the link allocates
+     through, and freed again before returning, on every path: the device answers the question the
+     link would put to it -- [Schedule_outcome.Device_memory_exhausted] where the link would be
+     refused -- without memset, uploads, constant-cache inserts, codegen or link. *)
+  let link_delta (context : context) ?(name = "link_delta") ~probe (lowered : Low_level.optimized)
+      (segments : Low_level.optimized list) : link_delta =
+    let ctx' = Low_level.copy_optimize_ctx lowered.Low_level.optimize_ctx in
+    let store' = Hashtbl.copy lowered.Low_level.traced_store in
+    let copy (o : Low_level.optimized) =
+      {
+        o with
+        Low_level.traced_store =
+          (if phys_equal o.Low_level.traced_store lowered.Low_level.traced_store then store'
+           else Hashtbl.copy o.Low_level.traced_store);
+        optimize_ctx =
+          (if phys_equal o.Low_level.optimize_ctx lowered.Low_level.optimize_ctx then ctx'
+           else Low_level.copy_optimize_ctx o.Low_level.optimize_ctx);
+      }
+    in
+    let lowered = copy lowered in
+    let segments = maybe_elide_zeros ~backend_name:Device.name (List.map segments ~f:copy) in
+    if List.is_empty segments then invalid_arg "Backends.link_delta: no segments";
+    let alias_spans =
+      plan_alias_spans ~name ~limits:(Device.hardware_limits ()) ~lowered ~segments
+    in
+    (* As in [compile]: a single kernel allocates from its own segment, a fissioned routine from the
+       whole-routine code with the segment-added store entries folded back. *)
+    let lowered =
+      match segments with
+      | [ single ] -> single
+      | segments ->
+          fold_segment_stores ~into:lowered.Low_level.traced_store segments;
+          lowered
+    in
+    let plan = plan_delta context ~alias_spans lowered in
+    let groups = List.filter_opt [ plan.dp_working; plan.dp_new_constants ] in
+    let bytes gl = List.sum (module Int) gl.gl_pools ~f:fst in
+    let summary =
+      {
+        ld_working_bytes = Option.value_map plan.dp_working ~default:0 ~f:bytes;
+        ld_constant_bytes = Option.value_map plan.dp_new_constants ~default:0 ~f:bytes;
+        ld_pools = List.sum (module Int) groups ~f:(fun gl -> List.length gl.gl_pools);
+      }
+    in
+    (if probe then
+       match free_pool with
+       | None -> invalid_arg ("Backends.link_delta: " ^ Device.name ^ " cannot free a probe's pools")
+       | Some free_pool ->
+           let device = context.device in
+           let tx = new_pool_tx ~name in
+           let give_back () = List.iter !(tx.minted) ~f:(free_and_forget_pool device ~free_pool) in
+           (match List.iter groups ~f:(fun gl -> ignore (allocate_group_pools tx device gl)) with
+           | () -> ()
+           | exception exn ->
+               let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+               (try give_back () with _ -> ());
+               Stdlib.Printexc.raise_with_backtrace exn backtrace);
+           give_back ());
+    summary
 
   (* gh-ocannl-550: [allocate_delta] runs BEFORE the backend link, and the pool table roots whatever
      it allocated — so a link that raises (HIP's scratch-budget validator, a driver refusal, an

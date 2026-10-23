@@ -528,6 +528,39 @@ val get_free_and_total_memory : t -> (int * int) option
     code, kernel local memory, instantiated graphs), and moves in allocation granules -- which is
     what makes it the instrument for memory OCANNL's pool tables do not see (gh-ocannl-1424). *)
 
+type link_delta = Ir.Backend_intf.link_delta = {
+  ld_working_bytes : int;
+  ld_constant_bytes : int;
+  ld_pools : int;
+}
+[@@deriving sexp_of, equal]
+
+val link_delta :
+  ?name:string -> t -> Ir.Low_level.optimized -> Ir.Low_level.optimized list -> link_delta
+(** gh-ocannl-1493: [link_delta ctx lowered segments] is the device allocation linking a {!compile}
+    from [ctx] would make, where the compile's [lowered_transform] received [lowered] and returned
+    [segments] -- [lowered] is the lowering as a transform receives it (zeros already sunk),
+    [segments] the kernel list (pass [[ lowered ]] for the unscheduled form). The delta, not the
+    routine's footprint: nodes [ctx] already holds and constants the device already caches are left
+    out, exactly as the link's own allocator leaves them out, by the same plan. Link-free and
+    hermetic: no codegen, no allocation, no pool id minted, and no effect on [lowered], [segments]
+    or [ctx] (placement forcing and store fold-back run on copies).
+
+    It predicts the bytes the link REQUESTS, pool by pool; the driver's page rounding, and memory
+    the driver allocates for itself (loaded code, kernel local memory), come on top. Contrast
+    [Memory_budget.footprint], the whole routine's default-schedule footprint, context-free. *)
+
+val probe_link_delta :
+  ?name:string -> t -> Ir.Low_level.optimized -> Ir.Low_level.optimized list -> link_delta
+(** gh-ocannl-1493: {!link_delta}, then a trial allocation of exactly the pools it planned, in the
+    order and through the seam the link allocates them (the {!Ir.Alloc_census} records them and
+    [Resource_fault_injection.Delta_pool_allocated] fires per pool), all freed again before
+    returning, on every path. No memset, upload, constant-cache insert, codegen or link. A device
+    that would refuse the link's allocation refuses this one alike, raising
+    {!Ir.Schedule_outcome.Device_memory_exhausted} -- the driver's own verdict, which no comparison
+    with {!get_free_and_total_memory} reproduces on a unified-memory part. Raises [Invalid_argument]
+    on a backend that cannot free a pool. *)
+
 val global_debug_info : t -> Sexp.t
 (** The context's backend's process-wide debug information ([Sexp.message]-shaped, backend-specific:
     e.g. the CUDA and HIP backends' [live_streams] and [live_graph_execs]). *)

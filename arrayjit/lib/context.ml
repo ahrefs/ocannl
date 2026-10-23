@@ -1188,6 +1188,28 @@ let get_free_and_total_memory ctx =
           Backend.get_free_and_total_memory c.BI.device);
     }
 
+type link_delta = Ir.Backend_intf.link_delta = {
+  ld_working_bytes : int;
+  ld_constant_bytes : int;
+  ld_pools : int;
+}
+[@@deriving sexp_of, equal]
+
+let link_delta_impl ~fn ~probe ?name ctx lowered segments =
+  check_live ~fn ctx;
+  Backends.query ctx.wrapped
+    {
+      q =
+        (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) c ->
+          Backend.link_delta c ?name ~probe lowered segments);
+    }
+
+let link_delta ?name ctx lowered segments =
+  link_delta_impl ~fn:"link_delta" ~probe:false ?name ctx lowered segments
+
+let probe_link_delta ?name ctx lowered segments =
+  link_delta_impl ~fn:"probe_link_delta" ~probe:true ?name ctx lowered segments
+
 let global_debug_info ctx =
   Backends.query ctx.wrapped
     {

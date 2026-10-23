@@ -1400,6 +1400,16 @@ module type With_buffer_retrieval_and_syncing = sig
   (** Synchronizes all the streams on a device, and cleans up (removes) all associated events. *)
 end
 
+type link_delta = {
+  ld_working_bytes : int;  (** Bytes of the context-owned working pools. *)
+  ld_constant_bytes : int;  (** Bytes of the new per-device constant pools. *)
+  ld_pools : int;  (** How many pools, working and constant. *)
+}
+[@@deriving sexp_of]
+(** gh-ocannl-1493: the device allocation linking a routine would make on a context — its delta, not
+    the routine's whole footprint: nodes the context already holds and constants the device already
+    caches are not in it. *)
+
 module type Backend = sig
   type code [@@deriving sexp_of]
 
@@ -1443,6 +1453,22 @@ module type Backend = sig
   val link : context -> code -> context routine
   (** Returns the routine for the code's procedure, in a new context derived from the given context.
   *)
+
+  val link_delta :
+    context ->
+    ?name:string ->
+    probe:bool ->
+    Low_level.optimized ->
+    Low_level.optimized list ->
+    link_delta
+  (** gh-ocannl-1493: [link_delta context ~probe lowered segments] is what {!link}ing, on [context],
+      a {!compile} whose [lowered_transform] received [lowered] and returned [segments] would
+      allocate on the device: the pools of the same allocation plan, planned without codegen or link
+      and without effect on [lowered], [segments] or [context]. With [~probe:true] those pools are
+      also allocated, in the order the link would allocate them and through the same seam, and freed
+      before returning on every path; a device that would refuse the link refuses the probe with
+      {!Schedule_outcome.Device_memory_exhausted}. Raises [Invalid_argument] for a probe on a
+      backend that cannot free a pool. *)
 
   include
     With_buffer_retrieval_and_syncing
