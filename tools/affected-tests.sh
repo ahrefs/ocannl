@@ -72,7 +72,7 @@
 #     each dune file is dune's own canonical text (`dune format-dune-file`),
 #     each rule attached to an alias that declares no targets is a TWIN -- the
 #     same rule writing a file of its own, its aliases kept defined by an
-#     `(alias (name X) (deps TWIN))` -- and each test `dune show tests` lists
+#     `(alias (name X) (deps TWIN))` -- and each `(test)` or `(tests)` name
 #     has a golden (an empty one where it has none), so dune makes its output
 #     rule. The twin's rule is what the action reads, as dune evaluates it.
 #     An alias some stanza makes depend on files (a rule with targets, an
@@ -145,8 +145,8 @@
 #     test's golden diff (dune's documented `(test)` action: its output rule,
 #     made in the probe, shows the stanza's `(deps)` and `(action)`): its own
 #     targets then include its twins, and it is printed only for what their
-#     rules read. It stays BLIND -- an inline-test or cram alias (`dune show
-#     tests` names an alias as its target), an alias a rule the converter
+#     rules read. It stays BLIND -- an inline-test library's alias (`runtest-LIB`),
+#     a directory with a (cram) stanza, an alias a rule the converter
 #     does not rewrite attaches to (one with an `(:include)` or a `dynamic-run`,
 #     whose dependencies `dune rules` does not print), every alias of a
 #     directory holding a form outside the allowlist -- and is printed as
@@ -388,7 +388,7 @@ sub note { print $man join("\t", @_), "\n" }
 # Heads of stanzas that attach no action to an alias. One with an `(alias ...)`
 # field (copy_files has one) makes the alias depend on what it makes: a
 # `source`, whose rules `dune rules @ALIAS` prints. Tests are read from
-# `dune show tests` (their goldens), inline tests and cram there too.
+# their names (their goldens are placed after), an inline-test library by its name.
 my %plain = map { $_ => 1 } "executable", "executables", "library", "test", "tests", "copy_files", "copy_files#",
   "ocamllex", "ocamlyacc", "menhir", "install", "env", "dirs", "data_only_dirs", "vendored_dirs", "include_subdirs",
   "documentation", "generate_sites_module", "foreign_library";
@@ -464,6 +464,16 @@ sub convert {   # DIR FILE FORMS TOP -> the rewritten forms
       push @out, $f; next;
     }
     unless ($plain{$h}) { note("blind", $dir, "$file has a ($h) stanza, which this reader does not model"); push @out, $f; next }
+    # A test's alias action is dune's documented one: its output rule (a golden
+    # is placed below where it has none) diffed against its golden. An inline-test
+    # library's runner action is not described.
+    if ($h eq "test" || $h eq "tests" || ($h eq "library" && grep { named($_, "inline_tests") } @fl)) {
+      my @nf = grep { named($_, "name") || named($_, "names") } @fl;
+      my @n = map { @$_[1 .. $#$_] } @nf;
+      if (!@n || grep { !name_lit($_) } @n) { note("blind", $dir, "$file has a ($h) whose names are not literal"); push @out, $f; next }
+      if ($h eq "library") { note("undescribed", $dir, "runtest-$n[0]", "dune runs it as an inline-test action") }
+      else { note("test", $dir, $_) for @n }
+    }
     note("source", $dir, $_) for @al;
     push @out, $f;
   }
@@ -481,41 +491,21 @@ for my $file (@files) {
   close $o;
 }
 CONVERT
-# Tests, as dune lists them: one with an executable gets an empty golden where
-# it has none (and no rule makes one), so dune makes its output rule; one dune
-# runs as an alias (inline tests, cram) stays undescribed.
+# Tests, as the converter read them (their literal names): one with no golden,
+# where no rule makes one, gets an empty golden, so dune makes its output rule.
 cat >"$tmp/tests.pl" <<'TESTS'
 use strict; use warnings;
-my ($root, $tests, $targets, $manifest) = @ARGV;
-open my $man, ">>", $manifest or die "cannot write $manifest\n";
-local $/; open my $fh, "<", $tests or die; my $s = <$fh>;
-open my $th, "<", $targets or die; my $tl = <$th>;
+my ($root, $targets, $manifest) = @ARGV;
+open my $th, "<", $targets or die "cannot read $targets\n";
 my (%made, $cur);
-for (split /\n/, $tl) { if (/^(.*):$/) { $cur = $1; next } $made{$cur eq "." ? $_ : "$cur/$_"} = 1 if defined $cur }
-# ((RECORD) ...), each RECORD a list of (KEY VALUE) pairs.
-my @stack = ([]);
-pos($s) = 0;
-while (pos($s) < length $s) {
-  next if $s =~ /\G\s+/gc;
-  if ($s =~ /\G\(/gc) { push @stack, []; next }
-  if ($s =~ /\G\)/gc) { @stack > 1 or die "unbalanced dune show tests\n"; my $l = pop @stack; push @{$stack[-1]}, $l; next }
-  if ($s =~ /\G"((?:[^"\\]|\\.)*)"/gcs) { push @{$stack[-1]}, $1 =~ s/\\(.)/$1/gr; next }
-  if ($s =~ /\G([^\s()"]+)/gc) { push @{$stack[-1]}, $1; next }
-  die "unreadable dune show tests at byte " . pos($s) . "\n";
-}
-@stack == 1 && @{$stack[0]} == 1 && ref $stack[0][0] or die "dune show tests printed no list of tests\n";
-for my $rec (@{$stack[0][0]}) {
-  my %f;
-  ref $rec or die "dune show tests printed an atom where a test was expected\n";
-  for (@$rec) { ref $_ && @$_ == 2 && !ref $_->[0] or die "unexpected field in dune show tests\n"; $f{$_->[0]} = $_->[1] }
-  my ($name, $dir, $target) = @f{qw(name source_dir target)};
-  defined $name && defined $dir && defined $target && !ref $name && !ref $dir && !ref $target
-    or die "a dune show tests record without a name, source_dir and target\n";
-  if ($target =~ m{^\@(?:(.*)/)?([^/]+)$}) { print $man join("\t", "undescribed", $1 // ".", $2, "dune runs it as an inline-test or cram action"), "\n"; next }
-  $target =~ m{^_build/[^/]+/(?:\Q$dir\E/)?\Q$name\E\.(?:exe|bc)$} or die "unexpected test target $target\n";
-  print $man join("\t", "test", $dir, $name), "\n";
+while (<$th>) { chomp; if (/^(.*):$/) { $cur = $1; next } $made{$cur eq "." ? $_ : "$cur/$_"} = 1 if defined $cur }
+open my $mh, "<", $manifest or die "cannot read $manifest\n";
+while (<$mh>) {
+  chomp;
+  my ($k, $dir, $name) = split /\t/;
+  next unless $k eq "test";
   my $golden = ($dir eq "." ? "" : "$dir/") . "$name.expected";
-  next if -e "$root/$golden" || $made{$golden};
+  next if -e "$root/$golden" || $made{$golden} || !-d "$root/$dir";
   open my $o, ">", "$root/$golden" or die "cannot write $root/$golden\n"; close $o;
 }
 TESTS
@@ -535,9 +525,8 @@ make_tree() { # PROBE: a scratch copy of the sources, converted (dune not run th
 }
 finish_probe() { # PROBE SUFFIX: its tests' goldens, and its listings
   local p=$1 s=$2
-  probe_dune "$p" show tests >"$tmp/tests$s" 2>"$tmp/err" || return 1
   probe_dune "$p" show targets "${dirs[@]}" >"$tmp/probe-targets$s" 2>&1 || return 1
-  perl "$tmp/tests.pl" "$p" "$tmp/tests$s" "$tmp/probe-targets$s" "$tmp/manifest$s" 2>>"$tmp/err" || return 1
+  perl "$tmp/tests.pl" "$p" "$tmp/probe-targets$s" "$tmp/manifest$s" 2>>"$tmp/err" || return 1
 }
 # A changed dune file is compared across revisions (the old probe below) when
 # both sides have it and the worktree's copy is the right-hand side's; any other

@@ -2672,8 +2672,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   converter is a strict allowlist (heads, alias/targets/action fields, literal names and paths);
   an alias it does not vouch for stays BLIND and is listed as before -- for any changed path in its
   directory but an owned module source, and for a changed non-build input anywhere, with every
-  alias needing it. What stays blind here: the inline-test library aliases (`dune show tests` names
-  an alias as their target), and anything with an `(:include)` or `dynamic-run`, whose
+  alias needing it. What stays blind here: the inline-test library aliases (`runtest-LIB`; dune 3.20 has no
+  `dune show tests`, so tests are read from their stanzas' literal names), and anything with an
+  `(:include)` or `dynamic-run`, whose
   dependencies `dune rules` does not print (it prints the included file alone). A `(package PKG)`
   dependency is dune's `.PKG-files` alias, read through `dune rules @.PKG-files`. Before the probe,
   `runtest-kernel_attribution` (a run-and-diff rule, gh-ocannl-1431) and every `(test)` without a
