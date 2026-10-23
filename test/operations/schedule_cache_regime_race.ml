@@ -8,7 +8,7 @@
    The rendezvous makes the interleaving deliberate rather than scheduler-dependent. Every wait is
    bounded in monotonic seconds, so a missing hook or a child that stops making progress fails
    instead of hanging the test. The lock's negative control is the production defect this exists to
-   catch: removing [Unix.lockf fd Unix.F_LOCK 0] from [Schedule_cache.open_cache] makes the parent's
+   catch: removing the [Unix.lockf] call from [Schedule_cache.with_regime_lock] makes the parent's
    direct lock-state probe report no exclusion at the writer's attempt boundary, and this test exits
    1. *)
 
