@@ -1643,6 +1643,13 @@ files.
   search, so the gate stays, and it still renders the gh-ocannl-683 k-extent label that
   `schedule_contraction_nest` reads.
   Revisit only if the family starts winning where it divides.
+- A hand-written packed GEBP at extents its blocking does not divide pads BEFORE it splits, as the
+  tuner's builders do (gh-ocannl-627): `bin/bench_gebp.ml` is the bench's builder, executed by
+  `gebp_padded_parity` and, as the shipped bench, by `narrow_gebp_bench_padded`. Only a ROW
+  remainder needs the pad — `Split`'s guard on `i_i`'s body stops the `Swap` that sinks `k_o`; a
+  k remainder's guard lands inside `k_i`, where `Tensorize` reads it as a mask. On cc a row mask
+  sends the serial flavor's accumulator through a storage-precision fragment round-trip per row
+  block and k block, which costs traffic but moves no narrowing point.
 - What a pad MAY do is not what it SHOULD: `Sketch_families.judge_pad_waste` (gh-ocannl-740)
   excludes, per geometry menu, a geometry whose padded work is at least `autotune_pad_waste_max`
   (2) times that of the menu's least-padded PROPOSED geometry, witness naming both ratios. Relative
