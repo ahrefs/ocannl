@@ -4813,3 +4813,63 @@ box.
   The regular suite retains `autotune_smoke`, `inline_flip_tune`, `autotune_candidate_release`
   and the focused scheduling/cache tests. Run the affected slow integrations before pushing
   changes to their search, placement, fission or failure-containment paths.
+
+### Process-lifetime settings
+
+- A configuration key read inside a `lazy` that a module creates at initialization is read ONCE
+  per process (gh-ocannl-1535): the first force resolves it, and that value -- or the exception a
+  refused value raised (`Utils.Invalid_config_value`, a `User_error`), which OCaml re-raises on
+  every later force -- answers for the rest of the process. A test that states such a key in
+  process, by `Hashtbl.set Utils.config_file_args`, therefore changes nothing once anything has
+  forced the lazy, and an earlier test case, a compile that reached the key at its default, or a
+  library call made while building the fixture all count. The failure is silent: the run goes on
+  under the first value. The keys are listed below, per source file, and `test_config_consistency`
+  holds the list to the code in both directions.
+- State a process-lifetime key from outside the process. For one value per executable, give the
+  test its own configuration: a directory with an `ocannl_config` of its own, as
+  `test/operations/profiles` has (its rules then list `ocannl_ambient` too, as
+  `config_dep_completeness` requires), or a `setenv` around the rule's `run`. For several values in one test, run a child per value: `Fresh_process.run`
+  re-executes the test's own executable with `--ocannl_<key>=<value>`, which outranks every other
+  source, and the child reports what it saw on stdout -- `cache_key_agreement` states
+  `cc_grid_private_bytes_cap` and `cc_pool_core_class` that way. An in-process statement is sound
+  only as the first thing the executable does, before anything can force the lazy, and the site
+  says so (`placement_surface` states `gpu_fission_keep_mapping` that way, gh-ocannl-1430). There
+  is no reset hook, by decision: add one beside a lazy only when a test needs two values of it in
+  one process and a child cannot serve.
+- Values computed EAGERLY at initialization are a different class, outside the list: they are read
+  when the module is linked in, before any test code runs, so no in-process statement reaches
+  them at all -- the bootstrap keys and the profile pick, the debug runtime's settings, and the
+  snapshots behind `Utils.settings` (`Utils.restore_settings`), `Low_level.virtualize_settings` and
+  `Tensor.default_value_prec`. Most of them land in a mutable handle a test sets directly instead.
+- What counts as a process-lifetime read is `Config_key_scan.process_lifetime_reads`' closed list
+  of forms, over the libraries' sources (`arrayjit/lib`, `tensor`, `lib`): a `lazy e` or
+  `Lazy.from_fun e` no `fun` encloses (a nested module's or a functor body's included), and the
+  keys `top_level_key_reach` credits its body in the scope it sees -- every literal `~arg_name`
+  read, lambdas included, and the reach of every value it names, in its own source or, through
+  `library_reach`, in another library module (a `Utils.settings` field standing for every key its
+  initializer reads). It errs long on names (one only mentioned is credited), so a cc probe lists
+  the probe cache's whole key, and `schedulers.ml` lists what `Cc_backend`'s pool policy reads. It
+  does not see a memo built from a `ref` or a table, or an eager read. Each entry below is one
+  bullet, `- <source>.ml: <key>, <key>.` with every name in a code span; any other bullet in this
+  section is prose.
+- `affine.ml`: `legality_crosscheck`.
+- `autotune.ml`: `autotune_bound_pruning`, `autotune_calibration_file`, `autotune_log`,
+  `autotune_log_seeding`, `autotune_progress`, `model_cache_bandwidth`, `model_cache_capacity`,
+  `model_default_geometry_lattice`, `model_default_schedule`, `model_dram_bandwidth`,
+  `model_issue_rate`, `model_peak_flops`, `model_peak_memory_bandwidth`.
+- `c_syntax.ml`: `cc_grid_private_bytes_cap`, `schedule_log_declines`.
+- `cc_backend.ml`: `cc_backend_arch_flags`, `cc_backend_compiler_command`,
+  `cc_backend_probe_cache`, `cc_backend_simd_flags`, `cc_parallel_grid`, `cc_pool_core_class`.
+- `cuda_backend.ml`: `cuda_printf_fifo_size`, `debug_log_from_routines`, `log_level`.
+- `hip_backend.ml`: `collapse_foreign_stderr_noise`, `debug_log_from_routines`,
+  `hip_kernel_cache_mib`, `hip_printf_fifo_size`, `hip_scratch_validation`, `log_level`.
+- `persistence.ml`: `checkpoint_load_mmap`.
+- `schedule.ml`: `automatic_cpu_schedule`, `automatic_gpu_schedule`, `gpu_fission_keep_mapping`,
+  `schedule_fission`, `schedule_log_launches`.
+- `schedule_outcome.ml`: `strict_failure_classification`.
+- `schedulers.ml`: `cc_backend_arch_flags`, `cc_backend_compiler_command`,
+  `cc_backend_probe_cache`, `cc_backend_simd_flags`, `cc_parallel_grid`, `cc_pool_core_class`,
+  `multidev_num_devices`.
+- `sketch_families.ml`: `cc_parallel_chunks`, `cc_parallel_grid`.
+- `tnode.ml`: `default_prec`, read eagerly and wrapped by a lazy.
+- `utils.ml`: `collapse_foreign_stderr_noise`.

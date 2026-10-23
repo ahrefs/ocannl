@@ -84,6 +84,37 @@ ok: alias reach -- an alias of an alias written before it expands through it
 ok: alias reach -- an alias of a module aliased only later names the outer module
 ok: alias reach -- a structure rebinding an alias ends it
 ok: alias reach -- the body of a structure rebinding an alias still sees the alias
+ok: process-lifetime -- a top-level lazy
+ok: process-lifetime -- a lazy in a closure's environment
+ok: process-lifetime -- a lazy argument at module level
+ok: process-lifetime -- Lazy.from_fun at module level
+ok: process-lifetime -- a functor body's lazy
+ok: process-lifetime -- a lambda inside the lazy runs on its force
+ok: process-lifetime -- a same-source top-level value the lazy names
+ok: process-lifetime -- a nested module's own value before the outer one
+ok: process-lifetime -- the binding in scope at the lazy, not a later rebinding
+ok: process-lifetime -- a binding after the lazy names nothing it reads
+ok: process-lifetime -- a helper inside the same functor body
+ok: process-lifetime -- a member of the lazy's own recursive group
+ok: process-lifetime -- the include in scope at the lazy, not a later one
+ok: process-lifetime -- a helper reached through a module alias
+ok: process-lifetime -- a helper local to the initializer
+ok: process-lifetime -- Lazy.from_fun applied through @@
+ok: process-lifetime -- Lazy.from_fun applied through |>
+ok: process-lifetime -- a call into another module, through that module's reach
+ok: process-lifetime -- a settings field stands for every key its initializer reads
+ok: process-lifetime -- a recursive module's body
+ok: process-lifetime -- a sibling of the same recursive module group
+ok: process-lifetime -- a recursive member's own later binding is not in scope at its lazy
+ok: process-lifetime -- an object's method creates its lazy per call; its val once
+ok: process-lifetime -- an enclosing module included in a functor body
+ok: process-lifetime -- a helper defined in an extension's structure payload
+ok: process-lifetime -- a lazy in an extension's structure payload
+ok: process-lifetime -- opaque plumbing is not followed
+ok: process-lifetime -- a lazy created per call is not held
+ok: process-lifetime -- a read beside a module-level lazy is fresh
+ok: process-lifetime -- an eager read at initialization is another class
+ok: process-lifetime -- a value of another module is not followed
 digest_completeness refuses the malformed tree, exiting 1: true
 test_config_consistency refuses the malformed tree, exiting 1: true
 

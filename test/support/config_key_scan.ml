@@ -903,9 +903,19 @@ type key_reach = {
     [let module X = Y in] or a [module X = Y] inside a nested structure, a first-class module, and a
     functor's body or application. Unlike the shadowing above, an unfollowed form errs SHORT: a key
     reached only through one is missing from the reach every caller reads ([env_var_deps]' search
-    wrappers, [digest_completeness]' search-shaping reach). *)
+    wrappers, [digest_completeness]' search-shaping reach).
+
+    {b Lazies} (gh-ocannl-1535). [on_lazy] is called for every [lazy e] or [Lazy.from_fun e] (also
+    as [Lazy.from_fun @@ f] and [f |> Lazy.from_fun]) that no function encloses in the right-hand
+    side of a value binding or a top-level expression of a walked structure, with the holder (the
+    binding's name, qualified by its nested modules) and the keys its body reaches in the scope it
+    sees: the environment at that point of the walk -- the group's own for a [let rec] -- plus the
+    initializer's local [let] bindings around it. [functor_bodies] walks a functor's body as a
+    nested structure too, its parameters naming nothing local. [opaque] names values whose own reads
+    are not credited to them. *)
 let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
-    ?(settings_field_keys = fun field -> [ field ]) content =
+    ?(settings_field_keys = fun field -> [ field ]) ?(opaque = Set.empty (module String))
+    ?(functor_bodies = false) ?(on_lazy = fun ~holder:_ ~at:_ (_ : string list) -> ()) content =
   (* The names a binding is credited under: its simple name. *)
   let names_of pattern = Option.to_list (pattern_name pattern) in
   let structure = structure_of content in
@@ -1001,8 +1011,131 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
       ~init:(Set.of_list (module String) keys)
       ~f:(fun acc path -> Set.union acc (resolve ~env ~scope path))
   in
+  (* gh-ocannl-1535: the lazies [expr] creates when it is evaluated once -- every [lazy e] or
+     [Lazy.from_fun e] no function of [expr] encloses -- each handed to [on_lazy] with the keys its
+     body reaches in [env]. *)
+  (* Off while a recursive module group is walked to seed its members (below). *)
+  let reporting = ref true in
+  let report_lazies ~env ~scope ~holder expr =
+    let under_function = ref 0 in
+    (* The initializer's own local bindings in scope, innermost first, each with what it reaches: a
+       lazy naming one is credited with it (round 2 of PR #1366). A local that shadows a top-level
+       name credits both, the long direction. *)
+    let locals = ref [] in
+    let reach_here (keys, names) =
+      List.fold names
+        ~init:(reach_of ~env ~scope (keys, names))
+        ~f:(fun acc path ->
+          match path with
+          | [ name ] -> (
+              match List.Assoc.find !locals name ~equal:String.equal with
+              | Some local -> Set.union acc local
+              | None -> acc)
+          | _ -> acc)
+    in
+    let is_from_fun fn =
+      match longident_of fn with
+      | Some path -> (
+          match List.drop path (List.length path - 2) with
+          | [ "Lazy"; "from_fun" ] -> true
+          | _ -> false)
+      | None -> false
+    in
+    let is_operator name fn =
+      match longident_of fn with
+      | Some [ op ] | Some [ "Stdlib"; op ] -> String.equal op name
+      | _ -> false
+    in
+    (* The body [Lazy.from_fun] is applied to, however the application is spelled: directly, or
+       through the standard application operators [@@] and [|>]. *)
+    let from_fun_body expr =
+      match expr.pexp_desc with
+      | Pexp_apply (fn, [ (Asttypes.Nolabel, body) ]) when is_from_fun fn -> Some body
+      | Pexp_apply (op, [ (Asttypes.Nolabel, fn); (Asttypes.Nolabel, body) ])
+        when is_operator "@@" op && is_from_fun fn ->
+          Some body
+      | Pexp_apply (op, [ (Asttypes.Nolabel, body); (Asttypes.Nolabel, fn) ])
+        when is_operator "|>" op && is_from_fun fn ->
+          Some body
+      | _ -> None
+    in
+    let report body (loc : Location.t) =
+      if !reporting then
+        on_lazy ~holder ~at:loc.loc_start.pos_cnum (Set.to_list (reach_here (direct_of body)))
+    in
+    let finder =
+      object (self)
+        inherit Ast_traverse.iter as super
+
+        (* An object's method runs when it is called, like a function body; its [val] initializers
+           run when the object is built (round 5 of PR #1366). *)
+        method! class_field field =
+          match field.pcf_desc with
+          | Pcf_method _ ->
+              Int.incr under_function;
+              super#class_field field;
+              Int.decr under_function
+          | _ -> super#class_field field
+
+        method! expression expr =
+          match expr.pexp_desc with
+          | Pexp_function _ ->
+              Int.incr under_function;
+              super#expression expr;
+              Int.decr under_function
+          | Pexp_lazy body when !under_function = 0 ->
+              report body expr.pexp_loc;
+              super#expression expr
+          | Pexp_let (rec_flag, bindings, body) ->
+              let saved = !locals in
+              let bind () =
+                List.iter bindings ~f:(fun binding ->
+                    Option.iter (pattern_name binding.pvb_pat) ~f:(fun name ->
+                        locals := (name, reach_here (direct_of binding.pvb_expr)) :: !locals))
+              in
+              (match rec_flag with
+              | Recursive ->
+                  (* The group closed to its fixpoint, each member in scope in every body. *)
+                  let members =
+                    List.filter_map bindings ~f:(fun binding ->
+                        Option.map (pattern_name binding.pvb_pat) ~f:(fun name ->
+                            (name, binding.pvb_expr)))
+                  in
+                  let rec close current =
+                    locals := current @ saved;
+                    let next =
+                      List.map members ~f:(fun (name, rhs) -> (name, reach_here (direct_of rhs)))
+                    in
+                    if not (List.equal (fun (_, a) (_, b) -> Set.equal a b) next current) then
+                      close next
+                  in
+                  close (List.map members ~f:(fun (name, _) -> (name, Set.empty (module String))));
+                  List.iter bindings ~f:(fun binding -> self#expression binding.pvb_expr)
+              | Nonrecursive ->
+                  List.iter bindings ~f:(fun binding -> self#expression binding.pvb_expr);
+                  bind ());
+              self#expression body;
+              locals := saved
+          | _ -> (
+              match from_fun_body expr with
+              | Some body when !under_function = 0 ->
+                  report body expr.pexp_loc;
+                  super#expression expr
+              | _ -> super#expression expr)
+      end
+    in
+    finder#expression expr
+  in
   let rec unwrap module_expr =
     match module_expr.pmod_desc with Pmod_constraint (inner, _) -> unwrap inner | _ -> module_expr
+  in
+  (* A functor's body, walked only under [functor_bodies]: its parameters' values are another
+     module's, so a key reached through one is not found. *)
+  let rec functor_body module_expr =
+    match (unwrap module_expr).pmod_desc with
+    | Pmod_functor (_, body) -> functor_body body
+    | Pmod_structure items -> Some items
+    | _ -> None
   in
   let rec walk ~scope env items =
     List.fold items ~init:env ~f:(fun env item ->
@@ -1015,7 +1148,9 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
                   | [] -> []
                   | names ->
                       let direct = direct_of binding.pvb_expr in
-                      List.map names ~f:(fun name -> (dotted (scope @ [ name ]), direct)))
+                      List.map names ~f:(fun name ->
+                          let name = dotted (scope @ [ name ]) in
+                          (name, if Set.mem opaque name then ([], []) else direct)))
             in
             let rec close env =
               let env' =
@@ -1034,9 +1169,22 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
                   List.fold group ~init:env ~f:(fun acc (name, direct) ->
                       Map.set acc ~key:name ~data:(reach_of ~env ~scope direct))
             in
+            (* gh-ocannl-1535: the lazies this item creates at initialization, each resolved in the
+               scope its body sees -- the group itself when it is recursive, what came before it
+               otherwise. *)
+            let lazy_env = match rec_flag with Recursive -> env' | Nonrecursive -> env in
+            List.iter bindings ~f:(fun binding ->
+                let holder =
+                  Option.map (pattern_name binding.pvb_pat) ~f:(fun n -> dotted (scope @ [ n ]))
+                in
+                report_lazies ~env:lazy_env ~scope ~holder binding.pvb_expr);
             env'
+        | Pstr_eval (expr, _) ->
+            report_lazies ~env ~scope ~holder:None expr;
+            env
         (* A nested structure's values are reached as [M.v], from inside it and from after it. A
-           functor's body is not walked: what its values read depends on its argument. *)
+           functor's body is not walked, unless [functor_bodies] asks: what its values read depends
+           on its argument. *)
         | Pstr_module { pmb_name = { txt = Some name; _ }; pmb_expr; _ } ->
             (* Whatever the module is, from here on [name] means it and not an earlier alias: a new
                alias's target, expanded through the aliases before it ([module W = W] keeps an
@@ -1047,6 +1195,10 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
             let env =
               match module_expr.pmod_desc with
               | Pmod_structure inner -> walk ~scope:(scope @ [ name ]) env inner
+              | Pmod_functor _ when functor_bodies -> (
+                  match functor_body module_expr with
+                  | Some inner -> walk ~scope:(scope @ [ name ]) env inner
+                  | None -> env)
               | _ -> env
             in
             (if List.is_empty scope then
@@ -1063,6 +1215,40 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
         (* An [include struct … end] exports its values into the enclosing scope, so they are walked
            there (gh-ocannl-1320, Codex P2 round 6). An included functor application is not: what
            its values read depends on its argument, as for a functor's body. *)
+        (* An extension's structure payload ([let%debug_sexp f … = …], ppx_minidebug's) is the
+           code its expansion keeps, so its items are walked in place (round 3 of PR #1366). *)
+        | Pstr_extension ((_, PStr items), _) -> walk ~scope env items
+        (* A recursive module's body is walked as a nested structure's, like [module M = struct …
+           end] (round 3 of PR #1366); its name is no alias. The group is walked twice, the first
+           time silently, so a member's lazy sees every member's values (round 4) -- its siblings'
+           only: the replay of a member starts without what the silent pass bound inside it, so its
+           own body is resolved in source order again (round 5). *)
+        | Pstr_recmodule bindings ->
+            let walk_group ~replay env =
+              List.fold bindings ~init:env ~f:(fun env binding ->
+                  match binding.pmb_name.txt with
+                  | None -> env
+                  | Some name -> (
+                      let env =
+                        if not replay then env
+                        else
+                          let own = dotted (scope @ [ name ]) ^ "." in
+                          Map.filter_keys env ~f:(fun key -> not (String.is_prefix key ~prefix:own))
+                      in
+                      let module_expr = unwrap binding.pmb_expr in
+                      match module_expr.pmod_desc with
+                      | Pmod_structure inner -> walk ~scope:(scope @ [ name ]) env inner
+                      | Pmod_functor _ when functor_bodies -> (
+                          match functor_body module_expr with
+                          | Some inner -> walk ~scope:(scope @ [ name ]) env inner
+                          | None -> env)
+                      | _ -> env))
+            in
+            let outer = !reporting in
+            reporting := false;
+            let seeded = walk_group ~replay:false env in
+            reporting := outer;
+            walk_group ~replay:true seeded
         | Pstr_include { pincl_mod; _ } -> (
             match (unwrap pincl_mod).pmod_desc with
             | Pmod_structure inner -> walk ~scope env inner
@@ -1073,7 +1259,19 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
                 match Option.map (flatten_module_path txt) ~f:expand with
                 | Some path ->
                     if List.is_empty scope then included := path :: !included;
-                    let prefix = dotted (scope @ path) ^ "." in
+                    (* The module named, resolved innermost scope first: inside [Make]'s body,
+                       [include Helpers] names an enclosing [Helpers] as surely as a sibling one
+                       (round 3 of PR #1366). *)
+                    let named depth = dotted (List.take scope depth @ path) ^ "." in
+                    let rec resolve_from depth =
+                      if depth <= 0 then named 0
+                      else if
+                        Map.existsi env ~f:(fun ~key ~data:_ ->
+                            String.is_prefix key ~prefix:(named depth))
+                      then named depth
+                      else resolve_from (depth - 1)
+                    in
+                    let prefix = resolve_from (List.length scope) in
                     Map.fold env ~init:env ~f:(fun ~key ~data acc ->
                         (* Every descendant, nested submodules' values included (Codex P2, round
                            8). *)
@@ -1093,6 +1291,92 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
     reach = Map.to_alist env |> List.map ~f:(fun (name, keys) -> (name, Set.to_list keys));
     unplaced;
   }
+
+type held_read = { held_key : string; holder : string; held_at : int }
+(** A configuration key a module holds for the process's lifetime: [holder] is the module-level
+    binding the lazy sits in ([Multidev.num_devices] inside a nested module or functor, ["_"] where
+    no binding names it), [held_at] the offset of the lazy. *)
+
+(** The configuration keys whose FIRST resolved value the process keeps (gh-ocannl-1535): the keys
+    read when a [lazy] created at module initialization is forced. Such a lazy is forced once, and
+    its value -- or the exception its first force raised, which OCaml re-raises on every later force
+    -- answers for the rest of the process, so a setting a test states in-process after the first
+    force ([Hashtbl.set Utils.config_file_args]) never reaches it.
+
+    {b Recognised forms}, a closed list:
+    - a lazy is [lazy e], or [Lazy.from_fun e] under any receiver path ending in [Lazy.from_fun];
+    - it is created at module initialization when no [fun]/[function] encloses it inside the
+      right-hand side of a value binding or a top-level expression of a structure
+      {!top_level_key_reach} walks -- the file's, a nested [module M = struct … end]'s, an included
+      structure's, and here a functor body's too (a functor is applied once per backend, and
+      backends are process-wide singletons): a binding's right-hand side, a closure's environment
+      ([let f = let v = lazy … in fun () -> …]), an argument at module level
+      ([stream_switch (lazy …)]), and the body of an enclosing module-level lazy;
+    - the keys it reads are what {!top_level_key_reach} credits to its body, resolved in the scope
+      the body sees: every literal [~arg_name] read, lambdas included, a field of [Utils.settings],
+      and the reach of each same-source value it names, as bound at that point of the walk (the
+      group itself for a [let rec]), through the walk's module aliases, includes and nested scopes.
+      [opaque] names values not followed: the lookup plumbing, which reads the key it is handed
+      rather than one of its own.
+
+    [external_keys] and [settings_field_keys] are {!top_level_key_reach}'s: with a
+    {!library_reach}'s, a call into another module of the library is followed through that module's
+    own reach (a lazy in [Schedulers] calling [Cc_backend.effective_pool_width]), and a field of
+    [Utils.settings] stands for every key its initializer reads.
+
+    Where it errs, it errs as {!top_level_key_reach} does: long where a local binding shadows a
+    top-level name and where a value is only mentioned, short where that model names what it does
+    not follow -- an [open], a [let module], a first-class module, a functor's parameter, a module
+    outside [external_keys]. In an object expression, a [val] initializer is module-level code and a
+    method body is a function's. Beyond that it does not see a lazy in a class declaration, a memo
+    built some other way (a [ref] cell, a table), or a value computed EAGERLY at initialization,
+    which is a different class: it is read before any test code runs. *)
+let process_lifetime_reads ?opaque ?external_keys ?settings_field_keys content =
+  let found = ref [] in
+  let on_lazy ~holder ~at keys =
+    List.iter keys ~f:(fun held_key ->
+        if not (String.is_empty held_key) then
+          found := { held_key; holder = Option.value holder ~default:"_"; held_at = at } :: !found)
+  in
+  ignore
+    (top_level_key_reach ?external_keys ?settings_field_keys ?opaque ~functor_bodies:true ~on_lazy
+       content
+      : key_reach);
+  List.rev !found
+
+(** The heading of the agent-note section listing the process-lifetime reads. *)
+let process_lifetime_heading = "### Process-lifetime settings"
+
+(** The entries of that section in [lines] (a note's text): each bullet whose text opens with a code
+    span naming an [.ml] file -- [- `schedule.ml`: `key`, `key`] -- paired with the code spans after
+    it, a bullet running on over its indented continuation lines. The section runs from its heading
+    to the next heading; any other bullet in it is prose. No section, no entries. *)
+let process_lifetime_entries lines =
+  let rec section = function
+    | [] -> []
+    | line :: rest when String.equal (String.rstrip line) process_lifetime_heading ->
+        List.take_while rest ~f:(fun l -> not (String.is_prefix l ~prefix:"#"))
+    | _ :: rest -> section rest
+  in
+  let code_spans text = String.split text ~on:'`' |> List.filteri ~f:(fun i _ -> i % 2 = 1) in
+  let rec bullets acc = function
+    | [] -> List.rev acc
+    | line :: rest when String.is_prefix line ~prefix:"- " ->
+        let continuation, rest =
+          List.split_while rest ~f:(fun l ->
+              String.is_prefix l ~prefix:" " && not (String.is_empty (String.strip l)))
+        in
+        bullets (String.concat ~sep:" " (line :: continuation) :: acc) rest
+    | _ :: rest -> bullets acc rest
+  in
+  List.filter_map
+    (bullets [] (section lines))
+    ~f:(fun bullet ->
+      if not (String.is_prefix bullet ~prefix:"- `") then None
+      else
+        match code_spans bullet with
+        | file :: keys when String.is_suffix file ~suffix:".ml" -> Some (file, keys)
+        | _ -> None)
 
 (** Every configuration key that initializes each field of a record called [settings]: the literal
     [~arg_name] reads in the value of each [settings.field <- …] assignment, so that a field a
@@ -1631,8 +1915,11 @@ type library_reach = {
 (** The key reach of a library given as [(module name, file on disk)] pairs, each module read once
     and only when a path reaches it (gh-ocannl-1149; shared with gh-ocannl-1331's check that the
     search-shaping keys are read within [Autotune.tune]'s reach). OCaml admits no cycle between a
-    library's modules, so the in-progress guard only keeps a malformed tree from looping. *)
-let library_reach ?(wrappers = []) ~library_modules () =
+    library's modules, so the in-progress guard only keeps a malformed tree from looping. [opaque]
+    names, per module, the values not followed (gh-ocannl-1535: the lookup plumbing, which reads the
+    key it is handed). *)
+let library_reach ?(wrappers = []) ?(opaque = fun (_ : string) -> Set.empty (module String))
+    ~library_modules () =
   let settings_initializers =
     match List.Assoc.find library_modules "Utils" ~equal:String.equal with
     | Some on_disk -> settings_field_initializers (Stdio.In_channel.read_all on_disk)
@@ -1667,7 +1954,7 @@ let library_reach ?(wrappers = []) ~library_modules () =
           ~f:(fun on_disk ->
             Hashtbl.set module_reaches ~key:module_name ~data:(Some []);
             let reach =
-              (top_level_key_reach ~external_keys ~settings_field_keys
+              (top_level_key_reach ~external_keys ~settings_field_keys ~opaque:(opaque module_name)
                  (Stdio.In_channel.read_all on_disk))
                 .reach
             in

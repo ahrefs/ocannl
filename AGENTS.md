@@ -179,7 +179,7 @@ alias family, slow test or golden format.
 **Testing with Different Configurations**:
 
 - **Warning**: `dune test --force` does NOT re-run expect tests (only rules with alias fields)
-- For a one-off configuration change, set `OCANNL_<KEY>` on the run (the ambient record reruns every reader, inline `%expect` tests included) or edit `test/config/ocannl_config`
+- For a one-off configuration change, set `OCANNL_<KEY>` on the run (the ambient record reruns every reader, inline `%expect` tests included) or edit `test/config/ocannl_config`. A key a module-level lazy holds keeps its first value: state it outside the process (build-and-test.md#process-lifetime-settings)
 
 **Important Debug Settings**:
 - `output_debug_files_in_build_directory=true` - enables `build_files/` generation; files go to `build_files/<exe-name>/` (override with `build_files_prefix`; `build_files_prefix=.` for a flat layout)

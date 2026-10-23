@@ -415,6 +415,208 @@ let reach_alias_external = function
   | [ "Widths"; "Inner"; "v" ] -> [ "k_stale_alias" ]
   | _ -> []
 
+(* gh-ocannl-1535: [process_lifetime_reads], one case per member of its closed list of forms and per
+   boundary it states. Each case names the plumbing it leaves opaque, and the keys a process keeps
+   from their first read. *)
+let process_lifetime_cases =
+  [
+    ("a top-level lazy", [], {ocaml|let v = lazy (get ~arg_name:"top" ~default:"")|ocaml}, [ "top" ]);
+    ( "a lazy in a closure's environment",
+      [],
+      {ocaml|let f =
+  let v = lazy (get ~arg_name:"closure" ~default:"") in
+  fun () -> Lazy.force v|ocaml},
+      [ "closure" ] );
+    ( "a lazy argument at module level",
+      [],
+      {ocaml|let s = switch (lazy (get ~arg_name:"argument" ~default:""))|ocaml},
+      [ "argument" ] );
+    ( "Lazy.from_fun at module level",
+      [],
+      {ocaml|let v = Stdlib.Lazy.from_fun (fun () -> get ~arg_name:"from_fun" ~default:"")|ocaml},
+      [ "from_fun" ] );
+    ( "a functor body's lazy",
+      [],
+      {ocaml|module Make (X : sig end) = struct
+  let v = lazy (get ~arg_name:"functor" ~default:"")
+end|ocaml},
+      [ "functor" ] );
+    ( "a lambda inside the lazy runs on its force",
+      [],
+      {ocaml|let v = lazy (probe ~compute:(fun () -> get ~arg_name:"lambda" ~default:""))|ocaml},
+      [ "lambda" ] );
+    ( "a same-source top-level value the lazy names",
+      [],
+      {ocaml|let helper () = get ~arg_name:"helper" ~default:""
+let v = lazy (helper ())|ocaml},
+      [ "helper" ] );
+    ( "a nested module's own value before the outer one",
+      [],
+      {ocaml|let helper () = get ~arg_name:"outer" ~default:""
+module M = struct
+  let helper () = get ~arg_name:"inner" ~default:""
+  let v = lazy (helper ())
+end|ocaml},
+      [ "inner" ] );
+    ( "the binding in scope at the lazy, not a later rebinding",
+      [],
+      {ocaml|let helper () = get ~arg_name:"captured" ~default:""
+let v = lazy (helper ())
+let helper () = get ~arg_name:"rebound" ~default:""|ocaml},
+      [ "captured" ] );
+    ( "a binding after the lazy names nothing it reads",
+      [],
+      {ocaml|let v = lazy (helper ())
+let helper () = get ~arg_name:"later" ~default:""|ocaml},
+      [] );
+    ( "a helper inside the same functor body",
+      [],
+      {ocaml|module Make (X : sig end) = struct
+  let helper () = get ~arg_name:"functor_helper" ~default:""
+  let held = lazy (helper ())
+end|ocaml},
+      [ "functor_helper" ] );
+    ( "a member of the lazy's own recursive group",
+      [],
+      {ocaml|let rec helper () = get ~arg_name:"rec_helper" ~default:""
+and held = lazy (helper ())|ocaml},
+      [ "rec_helper" ] );
+    ( "the include in scope at the lazy, not a later one",
+      [],
+      {ocaml|module A = struct
+  let helper () = get ~arg_name:"first_include" ~default:""
+end
+module B = struct
+  let helper () = get ~arg_name:"second_include" ~default:""
+end
+include A
+let held = lazy (helper ())
+include B|ocaml},
+      [ "first_include" ] );
+    ( "a helper reached through a module alias",
+      [],
+      {ocaml|module Real = struct
+  let helper () = get ~arg_name:"aliased" ~default:""
+end
+module Alias = Real
+let held = lazy (Alias.helper ())|ocaml},
+      [ "aliased" ] );
+    ( "a helper local to the initializer",
+      [],
+      {ocaml|let held =
+  let helper () = get ~arg_name:"local_helper" ~default:"" in
+  lazy (helper ())|ocaml},
+      [ "local_helper" ] );
+    ( "Lazy.from_fun applied through @@",
+      [],
+      {ocaml|let held = Lazy.from_fun @@ fun () -> get ~arg_name:"at_at" ~default:""|ocaml},
+      [ "at_at" ] );
+    ( "Lazy.from_fun applied through |>",
+      [],
+      {ocaml|let held = (fun () -> get ~arg_name:"pipe" ~default:"") |> Lazy.from_fun|ocaml},
+      [ "pipe" ] );
+    ( "a call into another module, through that module's reach",
+      [],
+      {ocaml|let held = lazy (Other.fetch ())|ocaml},
+      [ "other_module" ] );
+    ( "a settings field stands for every key its initializer reads",
+      [],
+      {ocaml|let held = lazy Utils.settings.large_models|ocaml},
+      [ "big_models"; "large_models" ] );
+    ( "a recursive module's body",
+      [],
+      {ocaml|module rec M : sig
+  val held : string Lazy.t
+end = struct
+  let held = lazy (get ~arg_name:"rec_module" ~default:"")
+end|ocaml},
+      [ "rec_module" ] );
+    ( "a sibling of the same recursive module group",
+      [],
+      {ocaml|module rec A : sig
+  val held : string Lazy.t
+end = struct
+  let held = lazy (B.helper ())
+end
+
+and B : sig
+  val helper : unit -> string
+end = struct
+  let helper () = get ~arg_name:"rec_sibling" ~default:""
+end|ocaml},
+      [ "rec_sibling" ] );
+    ( "a recursive member's own later binding is not in scope at its lazy",
+      [],
+      {ocaml|let helper () = get ~arg_name:"outer_helper" ~default:""
+
+module rec A : sig
+  val held : string Lazy.t
+  val helper : unit -> string
+end = struct
+  let held = lazy (helper ())
+  let helper () = get ~arg_name:"later_member_helper" ~default:""
+end|ocaml},
+      [ "outer_helper" ] );
+    ( "an object's method creates its lazy per call; its val once",
+      [],
+      {ocaml|let o =
+  object
+    val v = lazy (get ~arg_name:"object_val" ~default:"")
+    method m = lazy (get ~arg_name:"object_method" ~default:"")
+  end|ocaml},
+      [ "object_val" ] );
+    ( "an enclosing module included in a functor body",
+      [],
+      {ocaml|module Helpers = struct
+  let helper () = get ~arg_name:"enclosing_include" ~default:""
+end
+module Make (X : sig end) = struct
+  include Helpers
+  let held = lazy (helper ())
+end|ocaml},
+      [ "enclosing_include" ] );
+    ( "a helper defined in an extension's structure payload",
+      [],
+      {ocaml|let%debug_sexp helper () = get ~arg_name:"extension_payload" ~default:""
+let held = lazy (helper ())|ocaml},
+      [ "extension_payload" ] );
+    ( "a lazy in an extension's structure payload",
+      [],
+      {ocaml|let%debug_sexp held = lazy (get ~arg_name:"extension_lazy" ~default:"")|ocaml},
+      [ "extension_lazy" ] );
+    ( "opaque plumbing is not followed",
+      [ "lookup" ],
+      {ocaml|let lookup ~arg_name = resolve ~arg_name ~bootstrap:(get ~arg_name:"plumbing" ~default:"")
+let v = lazy (lookup ~arg_name:"handed")|ocaml},
+      [ "handed" ] );
+    ( "a lazy created per call is not held",
+      [],
+      {ocaml|let f () = lazy (get ~arg_name:"per_call" ~default:"")|ocaml},
+      [] );
+    ( "a read beside a module-level lazy is fresh",
+      [],
+      {ocaml|let f =
+  let v = lazy 1 in
+  fun () -> Lazy.force v + String.length (get ~arg_name:"fresh" ~default:"")|ocaml},
+      [] );
+    ( "an eager read at initialization is another class",
+      [],
+      {ocaml|let v = get ~arg_name:"eager" ~default:""|ocaml},
+      [] );
+    ( "a value of another module is not followed",
+      [],
+      {ocaml|let v = lazy (Other.helper ())|ocaml},
+      [] );
+  ]
+
+(* What the cases' other modules reach, standing in for a [library_reach]: [Other.fetch] reads one
+   key, anything else nothing; [large_models] is initialized from two keys, as in [Utils]. *)
+let process_lifetime_external = function [ "Other"; "fetch" ] -> [ "other_module" ] | _ -> []
+
+let process_lifetime_field = function
+  | "large_models" -> [ "large_models"; "big_models" ]
+  | field -> [ field ]
+
 (* gh-ocannl-1207: the two scanners' own refusals, executed rather than vouched for by the lexer
    cases above, which pass on input the scanners ACCEPT. Each scanner runs as a child process over
    one synthetic tree built to trip every refusal its input can reach: two sources sharing a
@@ -551,6 +753,21 @@ let () =
       if List.equal String.equal found expected then printf "ok: alias reach -- %s\n" name
       else
         fail "alias reach -- %s: expected [%s], found [%s]" name
+          (String.concat ~sep:"; " expected)
+          (String.concat ~sep:"; " found));
+  List.iter process_lifetime_cases ~f:(fun (name, opaque, source, expected) ->
+      let found =
+        Attempt.attempted ~what:"process-lifetime reads" ~name ~default:[] (fun () ->
+            Scan.process_lifetime_reads
+              ~opaque:(Set.of_list (module String) opaque)
+              ~external_keys:process_lifetime_external ~settings_field_keys:process_lifetime_field
+              source
+            |> List.map ~f:(fun read -> read.Scan.held_key)
+            |> List.dedup_and_sort ~compare:String.compare)
+      in
+      if List.equal String.equal found expected then printf "ok: process-lifetime -- %s\n" name
+      else
+        fail "process-lifetime -- %s: expected [%s], found [%s]" name
           (String.concat ~sep:"; " expected)
           (String.concat ~sep:"; " found));
   (match Stdlib.Sys.argv with
