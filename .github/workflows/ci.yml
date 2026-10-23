@@ -802,9 +802,10 @@ jobs:
 
   # Formatting is a gate here, and a job of its own rather than a step of the
   # build: `dune build @fmt` compiles nothing, so this switch holds only the
-  # compiler and ocamlformat and answers in minutes while the build matrix is
-  # still queued -- a formatting red should be the FIRST thing a PR hears, not
-  # something found after twenty minutes of compilation. The install reads the
+  # compiler, ocamlformat and ppxlib (for one toolchain harness) and answers in
+  # minutes while the build matrix is still queued -- a formatting red should
+  # be the FIRST thing a PR hears, not something found after twenty minutes of
+  # compilation. The install reads the
   # ocamlformat release from `.ocamlformat`, the same pin `dune-project`'s
   # with-dev-setup dependency installs locally, so the two cannot disagree about
   # what "formatted" means. `fmt-check.sh` additionally rejects invalid odoc
@@ -837,9 +838,15 @@ jobs:
         ocamlformat_version=$(printf '%s\n' "$ocamlformat_versions" | sed -n '1p')
         test -n "$ocamlformat_version"
         test "$ocamlformat_versions" = "$ocamlformat_version"
-        opam install dune "ocamlformat=$ocamlformat_version"
+        # The scan-case engine matches ppxlib's AST directly, so it takes the
+        # opam files' upper bound on ppxlib, read from them rather than restated.
+        ppxlib_below=$(sed -n 's/^ *"ppxlib" {.*< *"\([^"]*\)".*}$/\1/p' arrayjit.opam)
+        test -n "$ppxlib_below"
+        opam install dune "ocamlformat=$ocamlformat_version" "ppxlib<$ppxlib_below"
     # After the install: formatter cache controls need dune and ocamlformat,
-    # and promotion fixtures need dune. The same manifest runs locally. Strict:
+    # the scan-case type check (tools/test-typecheck-scan-cases.sh) builds an
+    # engine linking ppxlib, and promotion fixtures need dune. The same
+    # manifest runs locally. Strict:
     # this job installed the toolchain, so a leg the harness cannot decide is a
     # defect, not a host capability -- a fixture that fails to find the
     # installed dune would otherwise pass as a counted skip behind a green
