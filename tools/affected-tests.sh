@@ -65,9 +65,39 @@
 #     are computed from, and those actions' output goes to dune's own streams.
 #     An answer of another form is kept in $TMPDIR/affected-dune-rules.PID.txt,
 #     and the refusal names the offending atom and its byte offset.
+#   - The probe (gh-ocannl-1541): `dune rules @ALIAS` evaluates an alias's
+#     actions lazily, which records no dependency, so what an alias rule's own
+#     action reads dune never prints. The listings and `dune rules` are
+#     therefore asked of a scratch copy of the sources (the probe) in which
+#     each dune file is dune's own canonical text (`dune format-dune-file`),
+#     each rule attached to an alias that declares no targets is a TWIN -- the
+#     same rule writing a file of its own, its aliases kept defined by an
+#     `(alias (name X) (deps TWIN))` -- and each test `dune show tests` lists
+#     has a golden (an empty one where it has none), so dune makes its output
+#     rule. The twin's rule is what the action reads, as dune evaluates it.
+#     An alias some stanza makes depend on files (a rule with targets, an
+#     `(alias)` stanza) is also asked as `dune rules @ALIAS`, which expands
+#     dependencies, helper aliases included. On this repository the probe
+#     costs about 10 s a run (its build directory starts cold; the dune cache
+#     serves the compiles), and a compared dune edit about 30 s in all.
+#     OCANNL_TOOL_AFFECTED_PROBE=0 skips it, at the price of every alias
+#     action read blind (and the reach only a twin shows, such as an
+#     executable of another name a run-and-diff rule runs); a probe dune does
+#     not load falls back the same way, and says so.
+#   - For a changed `dune` file, the old probe: the probe with that file at
+#     the old revision. Both answer `dune show aliases`/`targets` and `dune
+#     rules` for every target of its directory, and their forms (dune's
+#     canonical text) are compared too.
 #
 # Boundary, as an allowlist. Whatever it does not cover is reported on stderr,
-# never silently dropped:
+# never silently dropped. THE CONVERTER IS A STRICT ALLOWLIST: it reads dune's
+# canonical text only as top-level forms, their heads, the `alias`/`aliases`/
+# `targets`/`target`/`action` fields, literal `name`/`names`, and literal
+# `include`/`subdir` paths; everything else passes to dune verbatim. It
+# rewrites only a rule with literal alias names, no declared targets and one
+# action field. Any form it neither rewrites nor knows to attach no action to
+# an alias falls back to the reach without the probe for the aliases it can
+# affect (the alias, or every alias of its directory), named on stderr.
 #   - A per-test alias is `@DIR/FAMILY-NAME` or `@DIR/FAMILY-NAME-VARIANT`
 #     that `dune show aliases` lists, FAMILY one of runtest, train, slow. Other
 #     families (`@scans`, `@lifecycle`, `@bin-smoke`, ...) are aggregates and
@@ -96,8 +126,9 @@
 #     that object, or else every executable and `tests` stanza of its
 #     directory, since which one links it dune does not say without computing
 #     link rules; so does a reached executable the object's rule runs (a
-#     generator writing a header it includes). A changed `dune`,
-#     `dune-project` or `dune-workspace` file, or a fragment a dune file
+#     generator writing a header it includes). A changed `dune` file not
+#     compared across revisions (below), a `dune-project` or `dune-workspace`
+#     file, or a fragment a dune file
 #     `(include ...)`s, reaches every stanza and every per-test alias of the
 #     directories beneath it (an `env` stanza applies there too), and every
 #     alias elsewhere whose own targets' rules read a file or glob of those
@@ -109,25 +140,52 @@
 #     this way, and so is a golden, whose copy into the build is one of the
 #     own targets of the alias that diffs it. A changed path reaching nothing
 #     else is listed as unread.
-#   - An alias's own action is not in `dune rules` output. A golden alias's
-#     action diffs its golden against an output a rule makes, both its own
-#     targets, whose rules are read: an alias is golden when its own targets
-#     hold a `.expected` and a rule-made file beside it. Any other alias's
-#     action is opaque -- a `tests` stanza with no golden runs its executable
-#     under the stanza's `(deps)`; a rule that runs and diffs in one action owns
-#     a golden but no rule-made output (gh-ocannl-1431: taken for a golden pair,
+#   - An alias's own action is not in `dune rules` output. With the probe an
+#     alias is DESCRIBED when every action attached to it is a twin or a
+#     test's golden diff (dune's documented `(test)` action: its output rule,
+#     made in the probe, shows the stanza's `(deps)` and `(action)`): its own
+#     targets then include its twins, and it is printed only for what their
+#     rules read. It stays BLIND -- an inline-test or cram alias (`dune show
+#     tests` names an alias as its target), an alias a rule the converter
+#     does not rewrite attaches to (one with an `(:include)` or a `dynamic-run`,
+#     whose dependencies `dune rules` does not print), every alias of a
+#     directory holding a form outside the allowlist -- and is printed as
+#     without the probe. Without the probe, a golden alias's action diffs its
+#     golden against an output a rule makes, both its own targets, whose rules
+#     are read: an alias is golden when its own targets hold a `.expected` and a
+#     rule-made file beside it. Any other alias's action is opaque -- a `tests`
+#     stanza with no golden runs its executable under the stanza's `(deps)`; a
+#     rule that runs and diffs in one action owns a golden but no rule-made
+#     output (gh-ocannl-1431: taken for a golden pair,
 #     `runtest-kernel_attribution` was never listed for the benchmarks file its
-#     `(deps)` name) -- so such an alias is also printed whenever a changed path
+#     `(deps)` name). A blind or opaque alias is printed whenever a changed path
 #     other than an owned module source lies in its directory or is copied
 #     there, and whenever any changed path is no build input (a script, a
-#     config, a golden: what an alias rule's own `(deps)` name, as
-#     `runtest-sweep_harness` names `tools/sweep.sh`). Reading those `(deps)`
-#     from the dune files is gh-ocannl-1541's.
+#     config, a golden).
 #     An alias whose rules need a printed alias is printed too, to a fixpoint:
 #     a golden pair's output rule carries the ambient
 #     `runtest-env_spelling_gate` for this reason (gh-ocannl-1378) -- in the
 #     needed alias's tier, one printed only blind included: a broken needed
-#     alias breaks the needing one's build.
+#     alias breaks the needing one's build. A needed alias that is no per-test
+#     alias (a helper) is an entry of its own, never printed, read as a
+#     per-test one; one dune makes itself (`.PKG-files`, what `(package PKG)`
+#     needs) is read through `dune rules @ALIAS`, its installed files followed
+#     to the build's.
+#   - A changed `dune` file compared across revisions (git forms only; both
+#     sides have it; the worktree's copy is the right-hand side's; both probes
+#     load) reaches what dune says changed: a rule of its directory that differs
+#     between the probes -- a changed twin lists its aliases; a changed `.exe`,
+#     `.pp.ml`, object or archive rule reaches its stanza as a whole; any other
+#     changed target is read like a changed path, by the aliases' rules, a
+#     generated module's, a stub's, and the link and preprocessing rules of
+#     every stanza (`link_deps`, `preprocessor_deps`) -- plus a per-test alias
+#     new on this side, plus, from the forms that differ, a changed library,
+#     executables or tests stanza (compile flags live in rules not asked) by its
+#     literal names as dune lists them here, and a changed `(alias)` stanza's
+#     per-test alias. A changed form of any other kind (`env`, `subdir`,
+#     `include`, `dirs`, an unknown head, an `(alias)` with an action), a
+#     changed rule this reader cannot map to an owner, or a failed comparison
+#     keeps the reach below for that file, and says why.
 #
 # Exit: 0 every changed `.ml`/`.mli` was mapped; 3 the list is printed, but a
 # changed `.ml`/`.mli` is UNMAPPED (see stderr); 2 usage, git or dune failure,
@@ -144,7 +202,9 @@ command -v dune >/dev/null 2>&1 || die "dune not found (opam environment not set
 command -v perl >/dev/null 2>&1 || die "perl not found"
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/affected.XXXXXX") || die "cannot create a temporary directory"
+tmp=$(cd "$tmp" && pwd -P) || die "cannot resolve $tmp"
 trap 'rm -rf "${tmp:?}"' EXIT
+trap "exit 130" INT TERM
 
 usage="usage: affected [--referenced-only] --since BASE | REV | REV..REV | REV...REV [-- PATHSPEC...] | affected [--referenced-only] --files PATH..."
 # Link-only aliases (see the Perl below) are printed last, and named on stderr;
@@ -152,6 +212,7 @@ usage="usage: affected [--referenced-only] --since BASE | REV | REV..REV | REV..
 referenced_only=0
 if [ "${1:-}" = --referenced-only ]; then referenced_only=1; shift; fi
 mode=git
+old_rev= new_rev=
 revs=()
 paths=()
 since=
@@ -251,18 +312,300 @@ while IFS= read -r f; do dirname -- "$f"; done <"$tmp/dune-files" | sort -u >"$t
 [ -s "$tmp/dirs" ] || die "no dune files found"
 dirs=()
 while IFS= read -r d; do dirs+=("$d"); done <"$tmp/dirs"
+
+# The probe (gh-ocannl-1541). What an alias rule's own action reads, dune
+# never prints: `dune rules @ALIAS` evaluates an alias's actions lazily, which
+# records no dependency. So the rules are handed to dune in a form it does
+# print, in a scratch copy of the sources: each dune file is replaced by
+# dune's own canonical text (`dune format-dune-file`: dune's lexer, so `#|`,
+# block strings and escapes are its), and each rule attached to an alias that
+# declares no targets becomes a TWIN, the same rule writing a file of its own
+# (`__affected_probe_<hash>`) with an `(alias (name X) (deps <twin>))` keeping
+# its aliases defined. `dune rules` on a twin is what the action reads, as dune
+# evaluates it: `%{dep:}`, what `diff` infers, `(:include)`, `chdir`, globs,
+# needed aliases. A test without a golden gets an empty one, so dune makes its
+# output rule (which shows the test's `(deps)` and `(action)`). The converter
+# is an allowlist (convert.pl below); what it does not rewrite is named in the
+# manifest and stays as blind as before. No probe (it failed, or
+# OCANNL_TOOL_AFFECTED_PROBE=0) means every alias action is read as before.
+# Dune here never sees the caller's build directory.
+probe_dune() { # DIR ARGS...: dune run at the root of a probe tree
+  local d=$1
+  shift
+  (cd "$d" && env -u DUNE_BUILD_DIR -u DUNE_ROOT dune "$@" --root .)
+}
+cat >"$tmp/convert.pl" <<'CONVERT'
+# convert.pl ROOT MANIFEST FORMS RECURSE LIST: rewrite each dune file LIST names in the
+# probe ROOT into dune's canonical text with alias rules turned into twins;
+# append to MANIFEST what was rewritten and what was not, to FORMS each
+# top-level form of FILE (for a dune-file edit's comparison). RECURSE=0 leaves
+# `(include ...)`d fragments alone (they are converted already).
+use strict; use warnings; use Digest::MD5 qw(md5_hex); use File::Spec;
+my ($root, $manifest, $forms_out, $recurse, $list) = @ARGV;
+open my $lh, "<", $list or die "cannot read $list\n";
+my @files = grep { $_ ne "" } map { s/\r?\n\z//r } <$lh>;
+open my $man, ">>", $manifest or die "cannot write $manifest\n";
+open my $fo, ">>", $forms_out or die "cannot write $forms_out\n";
+sub canonical {   # dune's own text of a dune file, or undef
+  my ($path) = @_;
+  my $pid = open(my $fh, "-|") // die "cannot fork\n";
+  if (!$pid) { open STDERR, ">", File::Spec->devnull; exec "dune", "format-dune-file", $path; exit 127 }
+  local $/; my $s = <$fh> // ""; close $fh;
+  return $? == 0 ? $s : undef;
+}
+# dune's printed text read as lists of raw tokens: atoms and quoted strings kept
+# as printed (re-emitted verbatim), comments dropped. Anything else (a raw
+# newline in a string, say, which dune's printer escapes): undef.
+sub forms_of {
+  my ($s) = @_;
+  my @stack = ([]);
+  pos($s) = 0;
+  while (pos($s) < length $s) {
+    next if $s =~ /\G\s+/gc || $s =~ /\G;[^\n]*/gc;
+    if ($s =~ /\G\(/gc) { push @stack, []; next }
+    if ($s =~ /\G\)/gc) { @stack > 1 or return undef; my $l = pop @stack; push @{$stack[-1]}, $l; next }
+    if ($s =~ /\G("(?:[^"\\\n]|\\.)*")/gc) { push @{$stack[-1]}, $1; next }
+    if ($s =~ /\G([^\s()";]+)/gc) { push @{$stack[-1]}, $1; next }
+    return undef;
+  }
+  return @stack == 1 ? $stack[0] : undef;
+}
+sub text { my ($x) = @_; ref $x ? "(" . join(" ", map { text($_) } @$x) . ")" : $x }
+sub named { my ($x, $n) = @_; ref $x && @$x && !ref $x->[0] && $x->[0] eq $n }
+sub is_field { my ($x) = @_; ref $x && @$x && !ref $x->[0] }
+sub name_lit { my ($x) = @_; !ref $x && $x =~ /^[A-Za-z0-9_.+-]+$/ }
+sub path_in {   # DIR/P normalized, for a literal relative P staying in the tree, else undef
+  my ($dir, $p) = @_;
+  return undef if ref $p || $p !~ m{^[A-Za-z0-9_.+-]+(?:/[A-Za-z0-9_.+-]+)*$};
+  my @parts = $dir eq "." ? () : split m{/}, $dir;
+  for my $c (split m{/}, $p) {
+    next if $c eq ".";
+    if ($c eq "..") { @parts or return undef; pop @parts } else { push @parts, $c }
+  }
+  return @parts ? join("/", @parts) : ".";
+}
+sub note { print $man join("\t", @_), "\n" }
+# Heads of stanzas that attach no action to an alias. One with an `(alias ...)`
+# field (copy_files has one) makes the alias depend on what it makes: a
+# `source`, whose rules `dune rules @ALIAS` prints. Tests are read from
+# `dune show tests` (their goldens), inline tests and cram there too.
+my %plain = map { $_ => 1 } "executable", "executables", "library", "test", "tests", "copy_files", "copy_files#",
+  "ocamllex", "ocamlyacc", "menhir", "install", "env", "dirs", "data_only_dirs", "vendored_dirs", "include_subdirs",
+  "documentation", "generate_sites_module", "foreign_library";
+my %written;
+sub convert {   # DIR FILE FORMS TOP -> the rewritten forms
+  my ($dir, $file, $forms, $top) = @_;
+  my (@out, %occ);
+  for my $f (@$forms) {
+    unless (is_field($f)) { note("blind", $dir, "$file holds a top-level form with no stanza name"); push @out, $f; next }
+    my ($h, @fl) = @$f;
+    my $canon = text($f);
+    if ($top) {
+      my @names = grep { name_lit($_) } map { named($_, "name") || named($_, "names") ? @$_[1 .. $#$_] : () } @fl;
+      print $fo join("\t", $file, $dir, $h, join(",", @names), (grep { named($_, "action") } @fl) ? 1 : 0, $canon), "\n";
+    }
+    if ($h eq "subdir") {
+      my $sub = @fl ? path_in($dir, $fl[0]) : undef;
+      if (defined $sub) { push @out, [$h, $fl[0], convert($sub, $file, [@fl[1 .. $#fl]], 0)]; next }
+      note("blindtree", $dir, "$file has a (subdir) whose directory is not a literal path below it"); push @out, $f; next;
+    }
+    if ($h eq "include") {
+      my $frag = @fl == 1 && $top ? path_in($dir, $fl[0]) : undef;
+      unless (defined $frag && -f "$root/$frag") { note("blind", $dir, "$file has an (include) this reader cannot follow"); push @out, $f; next }
+      if ($recurse) {
+        my $t = canonical("$root/$frag");
+        my $ff = defined $t ? forms_of($t) : undef;
+        unless ($ff) { note("blind", $dir, "dune's text of $frag is not readable here"); push @out, $f; next }
+        my @c = convert($dir, $frag, $ff, 0);
+        unless ($written{$frag}++) {
+          open my $o, ">", "$root/$frag" or die "cannot write $root/$frag\n";
+          print $o text($_), "\n\n" for @c;
+          close $o;
+        }
+      }
+      push @out, $f; next;
+    }
+    my @af = grep { named($_, "alias") || named($_, "aliases") } @fl;
+    my @al = map { @$_[1 .. $#$_] } @af;
+    if (grep { !name_lit($_) } @al) { note("blind", $dir, "$file has a $h whose alias name is not literal"); push @out, $f; next }
+    # Dependencies found while the rule runs -- what an `(:include FILE)` adds,
+    # read from FILE, or what a `dynamic-run` reports -- `dune rules` does not
+    # print: a form with one is not vouched for, as an alias action or as the
+    # rules of its directory.
+    if ($canon =~ /(?:^|[\s(])(:include|dynamic-run)[\s)]/) {
+      my $what = $1;
+      if ($h eq "rule" && @al) { note("undescribed", $dir, $_, "a rule of $file with a $what, whose dependencies dune rules does not print") for @al }
+      else { note("blind", $dir, "$file has a ($h) with a $what, whose dependencies dune rules does not print") }
+      push @out, $f; next;
+    }
+    if ($h eq "rule") {
+      unless (@al) { push @out, $f; next }
+      if (grep { named($_, "targets") || named($_, "target") } @fl) { note("source", $dir, $_) for @al; push @out, $f; next }
+      my @act = grep { named($_, "action") } @fl;
+      if (@act != 1 || @{$act[0]} != 2 || grep { !is_field($_) } @fl) {
+        note("undescribed", $dir, $_, "a rule of $file with no single action field") for @al;
+        push @out, $f; next;
+      }
+      # Named by the file, the aliases and the rule's rank among theirs, never by
+      # its text: an edit dune reads the same (quoting, layout) changes no rule.
+      my $key = join(" ", @al);
+      my $twin = "__affected_probe_" . substr(md5_hex(join("\0", $file, $key, ++$occ{$key})), 0, 12);
+      push @out, ["rule", map { named($_, "action") ? ["action", ["progn", ["write-file", $twin, '""'], $_->[1]]] : $_ }
+                          grep { !named($_, "alias") && !named($_, "aliases") } @fl];
+      push @out, ["alias", ["name", $_], ["deps", $twin]] for @al;
+      note("twin", $dir, $twin, @al);
+      next;
+    }
+    if ($h eq "alias") {
+      my @n = map { @$_[1 .. $#$_] } grep { named($_, "name") } @fl;
+      if (@n != 1 || !name_lit($n[0])) { note("blind", $dir, "$file has an (alias) whose name is not literal"); push @out, $f; next }
+      if (grep { named($_, "action") } @fl) { note("undescribed", $dir, $n[0], "an (alias) of $file with an action") }
+      else { note("source", $dir, $n[0]) }
+      push @out, $f; next;
+    }
+    unless ($plain{$h}) { note("blind", $dir, "$file has a ($h) stanza, which this reader does not model"); push @out, $f; next }
+    note("source", $dir, $_) for @al;
+    push @out, $f;
+  }
+  return @out;
+}
+for my $file (@files) {
+  next unless -f "$root/$file";
+  my ($dir) = $file =~ m{^(.*)/[^/]+$} ? ($1) : (".");
+  my $t = canonical("$root/$file");
+  my $forms = defined $t ? forms_of($t) : undef;
+  unless ($forms) { note("blind", $dir, "dune's text of $file is not readable here"); next }
+  my @c = convert($dir, $file, $forms, 1);
+  open my $o, ">", "$root/$file" or die "cannot write $root/$file\n";
+  print $o text($_), "\n\n" for @c;
+  close $o;
+}
+CONVERT
+# Tests, as dune lists them: one with an executable gets an empty golden where
+# it has none (and no rule makes one), so dune makes its output rule; one dune
+# runs as an alias (inline tests, cram) stays undescribed.
+cat >"$tmp/tests.pl" <<'TESTS'
+use strict; use warnings;
+my ($root, $tests, $targets, $manifest) = @ARGV;
+open my $man, ">>", $manifest or die "cannot write $manifest\n";
+local $/; open my $fh, "<", $tests or die; my $s = <$fh>;
+open my $th, "<", $targets or die; my $tl = <$th>;
+my (%made, $cur);
+for (split /\n/, $tl) { if (/^(.*):$/) { $cur = $1; next } $made{$cur eq "." ? $_ : "$cur/$_"} = 1 if defined $cur }
+# ((RECORD) ...), each RECORD a list of (KEY VALUE) pairs.
+my @stack = ([]);
+pos($s) = 0;
+while (pos($s) < length $s) {
+  next if $s =~ /\G\s+/gc;
+  if ($s =~ /\G\(/gc) { push @stack, []; next }
+  if ($s =~ /\G\)/gc) { @stack > 1 or die "unbalanced dune show tests\n"; my $l = pop @stack; push @{$stack[-1]}, $l; next }
+  if ($s =~ /\G"((?:[^"\\]|\\.)*)"/gcs) { push @{$stack[-1]}, $1 =~ s/\\(.)/$1/gr; next }
+  if ($s =~ /\G([^\s()"]+)/gc) { push @{$stack[-1]}, $1; next }
+  die "unreadable dune show tests at byte " . pos($s) . "\n";
+}
+@stack == 1 && @{$stack[0]} == 1 && ref $stack[0][0] or die "dune show tests printed no list of tests\n";
+for my $rec (@{$stack[0][0]}) {
+  my %f;
+  ref $rec or die "dune show tests printed an atom where a test was expected\n";
+  for (@$rec) { ref $_ && @$_ == 2 && !ref $_->[0] or die "unexpected field in dune show tests\n"; $f{$_->[0]} = $_->[1] }
+  my ($name, $dir, $target) = @f{qw(name source_dir target)};
+  defined $name && defined $dir && defined $target && !ref $name && !ref $dir && !ref $target
+    or die "a dune show tests record without a name, source_dir and target\n";
+  if ($target =~ m{^\@(?:(.*)/)?([^/]+)$}) { print $man join("\t", "undescribed", $1 // ".", $2, "dune runs it as an inline-test or cram action"), "\n"; next }
+  $target =~ m{^_build/[^/]+/(?:\Q$dir\E/)?\Q$name\E\.(?:exe|bc)$} or die "unexpected test target $target\n";
+  print $man join("\t", "test", $dir, $name), "\n";
+  my $golden = ($dir eq "." ? "" : "$dir/") . "$name.expected";
+  next if -e "$root/$golden" || $made{$golden};
+  open my $o, ">", "$root/$golden" or die "cannot write $root/$golden\n"; close $o;
+}
+TESTS
+make_tree() { # PROBE: a scratch copy of the sources, converted (dune not run there yet)
+  local p=$1
+  mkdir -p "$p" || return 1
+  if [ "$in_git" = 1 ]; then
+    { git ls-files -z --cached --others --exclude-standard &&
+      git ls-files -z --others --ignored --exclude-standard -- ocannl_config '*/ocannl_config'; } >"$tmp/probe-files" || return 1
+  else
+    find . -name _build -prune -o \( -type f -o -type l \) -print0 >"$tmp/probe-files" || return 1
+  fi
+  # A path git still indexes but the worktree deleted is not copied.
+  perl -0ne 'chomp; print "$_\0" if -e $_ || -l $_' "$tmp/probe-files" >"$tmp/probe-list" || return 1
+  tar --null -T "$tmp/probe-list" -cf - | (cd "$p" && tar -xf -) || return 1
+  perl "$tmp/convert.pl" "$p" "$tmp/manifest" "$tmp/forms" 1 "$tmp/dune-files" || return 1
+}
+finish_probe() { # PROBE SUFFIX: its tests' goldens, and its listings
+  local p=$1 s=$2
+  probe_dune "$p" show tests >"$tmp/tests$s" 2>"$tmp/err" || return 1
+  probe_dune "$p" show targets "${dirs[@]}" >"$tmp/probe-targets$s" 2>&1 || return 1
+  perl "$tmp/tests.pl" "$p" "$tmp/tests$s" "$tmp/probe-targets$s" "$tmp/manifest$s" 2>>"$tmp/err" || return 1
+}
+# A changed dune file is compared across revisions (the old probe below) when
+# both sides have it and the worktree's copy is the right-hand side's; any other
+# keeps the reach of its whole directory, and says why.
+scoped=()
+: >"$tmp/unscoped"
+while IFS= read -r f; do
+  case $f in dune | */dune) ;; *) continue ;; esac
+  why=
+  if [ "$mode" = files ]; then why="--files names no revision to compare it with"
+  elif [ "${OCANNL_TOOL_AFFECTED_PROBE:-1}" = 0 ]; then why="no probe"
+  elif [ ! -f "$f" ]; then why="it is deleted"
+  elif ! git cat-file -e "$old_rev:$f" 2>/dev/null; then why="$old_rev has no such file"
+  elif [ -n "$new_rev" ] && ! git show "$new_rev:$f" 2>/dev/null | cmp -s - "$f"; then
+    why="the worktree's copy is not $new_rev's"
+  fi
+  if [ -n "$why" ]; then printf '%s\t%s\n' "$f" "$why" >>"$tmp/unscoped"; else scoped+=("$f"); fi
+done <"$tmp/changed"
+qroot=.
+probe_ok=0
+old_ok=0
+for x in manifest forms manifest-old forms-old old-targets old-aliases scoped; do : >"$tmp/$x"; done
+if [ "${OCANNL_TOOL_AFFECTED_PROBE:-1}" = 0 ]; then
+  echo "affected: OCANNL_TOOL_AFFECTED_PROBE=0: no probe, so every alias action dune does not dump stays blind" >&2
+elif make_tree "$tmp/probe"; then
+  # The old probe: this one with each compared dune file at the old revision.
+  if [ ${#scoped[@]} -gt 0 ]; then
+    if cp -R "$tmp/probe" "$tmp/probe-old" && printf '%s\n' "${scoped[@]}" >"$tmp/scoped" &&
+       while IFS= read -r f; do git show "$old_rev:$f" >"$tmp/probe-old/$f" || exit 1; done <"$tmp/scoped" &&
+       perl "$tmp/convert.pl" "$tmp/probe-old" "$tmp/manifest-old" "$tmp/forms-old" 0 "$tmp/scoped" &&
+       finish_probe "$tmp/probe-old" -old; then
+      old_dirs=()
+      while IFS= read -r f; do old_dirs+=("$(dirname -- "$f")"); done <"$tmp/scoped"
+      if probe_dune "$tmp/probe-old" show targets "${old_dirs[@]}" >"$tmp/old-targets" 2>&1 &&
+         probe_dune "$tmp/probe-old" show aliases "${old_dirs[@]}" >"$tmp/old-aliases" 2>&1; then
+        old_ok=1
+      fi
+    fi
+    if [ "$old_ok" = 0 ]; then
+      while IFS= read -r f; do printf '%s\t%s\n' "$f" "the old probe failed: $(tail -1 "$tmp/err" 2>/dev/null)" >>"$tmp/unscoped"; done <"$tmp/scoped"
+      : >"$tmp/scoped"
+    fi
+  fi
+  if finish_probe "$tmp/probe" ""; then
+    probe_ok=1
+    qroot=$tmp/probe
+  fi
+fi
+if [ "${OCANNL_TOOL_AFFECTED_PROBE:-1}" != 0 ] && [ "$probe_ok" = 0 ]; then
+  echo "affected: the probe failed, so every alias action dune does not dump stays blind: $(tail -5 "$tmp/err" 2>/dev/null)" >&2
+  if [ -s "$tmp/scoped" ]; then
+    while IFS= read -r f; do printf '%s\t%s\n' "$f" "the probe failed" >>"$tmp/unscoped"; done <"$tmp/scoped"
+  fi
+  for x in manifest forms manifest-old forms-old scoped; do : >"$tmp/$x"; done
+fi
+
 # Dune 3.24 prints these listings on stderr, and exits 0 even after an error,
 # so both streams are read together, and every line must have one of the forms
 # the reader below accepts.
 for what in aliases targets; do
-  dune show "$what" --root . "${dirs[@]}" >"$tmp/$what" 2>&1 ||
+  probe_dune "$qroot" show "$what" "${dirs[@]}" >"$tmp/$what" 2>&1 ||
     die "dune show $what failed:
 $(cat "$tmp/$what")"
 done
 
-perl - "$tmp" "$referenced_only" <<'PERL'
+perl - "$tmp" "$referenced_only" "$probe_ok" "$qroot" "$tmp/probe-old" <<'PERL'
 use strict; use warnings;
-my ($tmp, $referenced_only) = @ARGV;
+my ($tmp, $referenced_only, $probe_ok, $qroot, $old_root) = @ARGV;
 # While a dune answer is being read, a refusal keeps a copy of it (see keep_raw).
 our ($raw_text, $raw_what);
 sub fail {
@@ -424,16 +767,19 @@ for my $edge (@edges) {
 # Per-directory listings: "DIR:" headers, one name per line.
 my @dir_list = grep { $_ ne "" } split /\n/, slurp("$tmp/dirs");
 my %is_dir = map { $_ => 1 } @dir_list;
-sub listing {
-  my ($what) = @_;
+our $listing_soft = 0;   # an unexpected line returns undef instead of stopping the run
+sub listing {   # FILE [DIR...]: the listing of the directories asked (all, by default)
+  my ($what, @asked) = @_;
+  @asked = @dir_list unless @asked;
   my (%by, $cur);
-  $cur = $dir_list[0] if @dir_list == 1;
+  $cur = $asked[0] if @asked == 1;
   for my $l (split /\n/, slurp("$tmp/$what")) {
     next if $l eq "";
     # A directory dune does not build (a data-only one, say) defines nothing.
     if ($l =~ /^Error: Directory (.*) does not exist\.$/ && $is_dir{$1}) { $cur = undef; next }
     if ($l =~ /^(.*):$/ && $is_dir{$1}) { $cur = $1; next }
-    $l =~ /^[A-Za-z0-9_.+-]+$/ or fail("unexpected line from dune show $what: $l");
+    # A directory target is listed with a trailing slash.
+    unless ($l =~ s{^([^\s/]+)/?$}{$1}) { return undef if $listing_soft; fail("unexpected line from dune show $what: $l") }
     defined $cur or fail("dune show $what printed $l outside any directory");
     push @{$by{$cur}}, $l;
   }
@@ -452,11 +798,35 @@ for my $d (sort keys %$targets) {
   }
 }
 
+# What the probe's converter rewrote and what it did not (see convert.pl): per
+# directory, the twins of each alias, the aliases with a stanza that makes them
+# depend on files (`source`), and what stays blind.
+my (%twins, %sources, %undescribed, %blind, %blindtree, %tested);
+for (split /\n/, slurp("$tmp/manifest")) {
+  my ($k, $d, @r) = split /\t/;
+  if ($k eq "twin") { my $t = shift @r; push @{$twins{$d}{$_}}, in_dir($d, $t) for @r }
+  elsif ($k eq "source") { $sources{$d}{$r[0]} = 1 }
+  elsif ($k eq "undescribed") { $undescribed{$d}{$r[0]} //= $r[1] }
+  elsif ($k eq "blind") { $blind{$d} //= $r[0] }
+  elsif ($k eq "blindtree") { $blindtree{$d} //= $r[0] }
+  elsif ($k eq "test") { $tested{$d}{"runtest-$r[0]"} = 1 }
+  else { fail("unexpected manifest line from the probe: $_") }
+}
+sub blind_reason {   # why an alias of DIR named NAME is not described, or undef
+  my ($d, $name) = @_;
+  return $blind{$d} if defined $blind{$d};
+  for my $r (sort keys %blindtree) { return $blindtree{$r} if under($d, $r) }
+  return $undescribed{$d}{$name} if defined $undescribed{$d}{$name};
+  return undef if $twins{$d}{$name} || $sources{$d}{$name} || $tested{$d}{$name};
+  return "no stanza this reader read attaches it";
+}
+
 # Per-test aliases, their name owners and their own targets.
 my @al;   # { name, dir, owners => {index => 1}, own => [target...] }
 my $artifact = qr/\.(?:exe|bc|bc-for-jsoo|js|cmi|cmo|cmx|cmt|cmti|cma|cmxa|cmxs|a|o|so|dll|pp\.ml|pp\.mli|ml-gen|d)$/;
 for my $d (sort keys %$aliases) {
   my @in = grep { $st[$_]{dir} eq $d } 0 .. $#st;
+  my %listed = map { $_ => 1 } @{$targets->{$d} // []};
   for my $a (@{$aliases->{$d}}) {
     my ($rest) = $a =~ /^(?:runtest|train|slow)-(.+)$/ or next;
     my ($unit, @variant) = split /-/, $rest;
@@ -473,7 +843,16 @@ for my $d (sort keys %$aliases) {
     # (gh-ocannl-1431: an edit to the benchmarks/gh1002_cells.py such a rule
     # names in its `(deps)` missed it).
     my $golden = grep({ /\.expected$/ } @mine) && grep { !/\.expected$/ && !-e in_dir($d, $_) } @mine, @near;
-    push @al, { name => "\@" . in_dir($d, $a), dir => $d, golden => $golden ? 1 : 0,
+    # With the probe, an alias's actions are its twins (a disabled rule makes
+    # none) and its tests' golden diffs: described, unless the converter said
+    # otherwise. Without it, a golden pair is the one action known.
+    my $why;
+    if ($probe_ok) {
+      $why = blind_reason($d, $a);
+      $own{$_} = 1 for grep { $listed{(dir_of($_))[1]} } @{$twins{$d}{$a} // []};
+    }
+    push @al, { name => "\@" . in_dir($d, $a), dir => $d, alias => $a,
+                described => $probe_ok ? !defined $why : $golden ? 1 : 0, blind_why => $why,
                 owners => { map { $_ => 1 } grep { $st[$_]{units}{$unit} } @in }, own => [sort keys %own] };
   }
 }
@@ -542,6 +921,9 @@ sub strip_ctx { my ($p) = @_; $p =~ s{^\Q$ctx\E/}{} ? $p : undef }
 # OCANNL_TOOL_AFFECTED_ARGS overrides the 16000-character budget, for tests.
 my $arg_budget = $ENV{OCANNL_TOOL_AFFECTED_ARGS} // 16000;
 $arg_budget =~ /^[1-9][0-9]*$/ or fail("OCANNL_TOOL_AFFECTED_ARGS must be a positive integer");
+# The tree queried is $rules_root: the probe when there is one.
+our $rules_root = $qroot;
+our $rules_soft = 0;   # a failure returns undef instead of stopping the run
 sub dune_rules {
   my @todo = @_;
   my @rules;
@@ -559,9 +941,14 @@ sub dune_rules {
     if (!$pid) {
       open STDOUT, ">", "$tmp/rules-log" or exit 126;
       open STDERR, ">&", \*STDOUT or exit 126;
+      chdir $rules_root or exit 126;
+      delete @ENV{qw(DUNE_BUILD_DIR DUNE_ROOT)};
       exec "dune", "rules", "--root", ".", "-o", "$tmp/rules-out", @batch; exit 127;
     }
-    waitpid($pid, 0) == $pid && $? == 0 or fail("dune rules failed:\n" . slurp("$tmp/rules-log"));
+    unless (waitpid($pid, 0) == $pid && $? == 0) {
+      return undef if $rules_soft;
+      fail("dune rules failed:\n" . slurp("$tmp/rules-log"));
+    }
     my $text = slurp("$tmp/rules-out");
     # A refusal from here on keeps what dune wrote, so its cause can be read
     # rather than guessed.
@@ -696,13 +1083,54 @@ sub compiled_owners {
 }
 my (%runs, %reads, %globs, %via, %adeps);
 my %queried;
-my @queue = @own_targets;
+# An alias some stanza makes depend on files (a rule with targets, an
+# `(alias)` stanza, `copy_files`): `dune rules @ALIAS` expands those
+# dependencies (not actions), helper aliases included, so what it prints is
+# the alias's own too. One query per alias, since one answer for several does
+# not say whose each rule is.
+sub source_query {   # ALIAS [FORCE]: FORCE asks dune whatever the manifest says
+  my ($a, $force) = @_;
+  return unless $probe_ok && $a->{described} && ($force || $sources{$a->{dir}}{$a->{alias}});
+  local $rules_soft = 1;
+  my @got = dune_rules($a->{name});
+  if (grep { !defined } @got) {
+    $a->{described} = 0;
+    $a->{blind_why} = "dune rules $a->{name} failed";
+    return;
+  }
+  my %own = map { $_ => 1 } @{$a->{own}};
+  for my $rule (@got) {
+    my $tg = field($rule, "targets");
+    my @t = map { atom($_, "targets") } map { items(field($tg // [], $_)) } "files", "directories";
+    if (my @rel = grep { defined } map { strip_ctx($_) } @t) { $own{$_} = 1 for @rel; next }
+    # An installed file (what `(package PKG)` needs) is a link to a file of the
+    # build: that file is the alias's own, or a library's compiled artifact.
+    for my $dep (items(field($rule, "deps"))) {
+      my ($k, $v) = ref $dep ? @$dep : ($dep);
+      next if $k =~ /^(?:Env|Universe|Sandbox_config)$/;
+      my ($where, $path) = $k eq "File" ? pair($v, "a File dependency") : ("", "");
+      if ($where eq "In_build_dir" && (my @o = compiled_owners($path))) { $a->{owners}{$_} = 1 for @o }
+      elsif ($where eq "In_build_dir" && defined(my $rel = strip_ctx($path))) { $own{$rel} = 1 }
+      elsif ($where ne "External") {
+        $a->{described} = 0;
+        $a->{blind_why} = "$a->{name} needs @t, whose rule this reader does not follow";
+      }
+    }
+  }
+  $a->{own} = [sort keys %own];
+}
+source_query($_) for @al;
+@own_targets = sort { $a cmp $b } keys %{{ map { $_ => 1 } @own_targets, map { @{$_->{own}} } @al }};
+sub query_rules {   # TARGET...: 1, or 0 when dune could not print them (under $rules_soft)
+my @queue = @_;
 while (@queue) {
+  my @got = dune_rules(@queue);
+  return 0 if grep { !defined } @got;
   $queried{$_} = 1 for @queue;
   my %next;
-  for my $rule (dune_rules(@queue)) {
+  for my $rule (@got) {
     my $tg = field($rule, "targets");
-    my @files = map { atom($_, "targets") } items(field($tg // [], "files"));
+    my @files = map { atom($_, "targets") } map { items(field($tg // [], $_)) } "files", "directories";
     my (%r, %p, @g, %v, %ad);
     for my $dep (items(field($rule, "deps"))) {
       next if !ref $dep && $dep eq "Universe";   # always reruns; reads nothing in particular
@@ -748,6 +1176,38 @@ while (@queue) {
   }
   exists $runs{$_} or fail("dune rules printed no rule for $_") for @queue;
   @queue = sort keys %next;
+}
+return 1;
+}
+query_rules(@own_targets);
+# A helper alias a queried rule needs (`(deps (alias NAME))`, NAME no per-test
+# alias) is an entry of its own, never printed: its twins are queried and read
+# like a per-test alias's, and an alias needing it is listed when it would be
+# (see the tiers below), to a fixpoint.
+{
+  my %is_al = map { $_->{name} => 1 } @al;
+  for (my $grew = 1; $grew;) {
+    $grew = 0;
+    my %need = map { %{$adeps{$_} // {}} } sort keys %queried;
+    for my $n (sort grep { !$is_al{$_} } keys %need) {
+      $is_al{$n} = 1;
+      my ($d, $x) = $n =~ m{^\@(?:(.*)/)?([^/]+)$} or next;
+      $d //= ".";
+      my %listed = map { $_ => 1 } @{$targets->{$d} // []};
+      # One dune makes itself (`.PKG-files`, what `(package PKG)` needs) is
+      # dependencies only, which `dune rules @ALIAS` expands; one dune does not
+      # list otherwise is not known.
+      my $internal = $x =~ /^\./;
+      my $why = !$probe_ok ? "no probe" : $internal ? undef
+              : grep({ $_ eq $x } @{$aliases->{$d} // []}) ? blind_reason($d, $x) : "dune does not list it";
+      my $h = { name => $n, dir => $d, alias => $x, hidden => 1, described => !defined $why, blind_why => $why,
+                owners => {}, own => [grep { $listed{(dir_of($_))[1]} } @{$twins{$d}{$x} // []}] };
+      push @al, $h;
+      source_query($h, $internal);
+      query_rules(grep { !$queried{$_} } @{$h->{own}});
+      $grew = 1;
+    }
+  }
 }
 # A rule-made file with the name of a file it reads, in another directory, is
 # a copy of it (`copy_files`): an opaque action there may read the copy.
@@ -818,6 +1278,146 @@ sub reads {
   $reads{$t}{$p} || grep { ($_->[2] ? under($d, $_->[0]) : $_->[0] eq $d) && $_->[1]->($b) } @{$globs{$t}};
 }
 sub under { my ($x, $root) = @_; $root eq "." || $x eq $root || index($x, "$root/") == 0 }
+
+# A changed dune file compared across revisions (gh-ocannl-1541): the old
+# probe is this one with the file at the old revision. What it changed is
+# what dune says changed -- the rules of its directory's targets, twins
+# included, that differ between the probes -- plus, from dune's canonical text
+# of both sides, the stanzas whose compilation the rules shown do not cover
+# (flags live in the object rules): a changed library, executables or tests
+# stanza, named by its literal names as dune lists them here. Any other
+# changed form (`env`, `subdir`, `include`, `dirs`, an unknown head, an
+# `(alias)` with an action), or a changed rule this reader cannot map to an
+# owner, keeps the reach of the whole directory beneath the file, and says why.
+my (%covered, %direct, %delta_paths);
+my %unscoped = map { my ($f, $w) = split /\t/; ($f => $w) } grep { $_ ne "" } split /\n/, slurp("$tmp/unscoped");
+my @scoped = grep { $_ ne "" } split /\n/, slurp("$tmp/scoped");
+if (@scoped) {
+  my @sdirs = map { (dir_of($_))[0] } @scoped;
+  my ($old_aliases, $old_targets);
+  { local $listing_soft = 1; $old_aliases = listing("old-aliases", @sdirs); $old_targets = listing("old-targets", @sdirs) }
+  unless ($old_aliases && $old_targets) {
+    $unscoped{$_} = "dune does not load the old revision's dune file beside these sources (see dune show in the old probe)" for @scoped;
+    @scoped = ();
+  }
+  my %twin_of;   # twin path -> [aliases], either side
+  for my $m ("manifest", "manifest-old") {
+    for (split /\n/, slurp("$tmp/$m")) {
+      my ($k, $d, $t, @a) = split /\t/;
+      push @{$twin_of{in_dir($d, $t)}}, @a if $k eq "twin";
+    }
+  }
+  my %forms;   # side -> file -> [form records]
+  for my $side ("new", "old") {
+    for (split /\n/, slurp($side eq "new" ? "$tmp/forms" : "$tmp/forms-old")) {
+      my ($file, $d, $head, $names, $act, $canon) = split /\t/, $_, 6;
+      push @{$forms{$side}{$file}}, { dir => $d, head => $head, names => [grep { $_ ne "" } split /,/, $names],
+                                      action => $act, canon => $canon };
+    }
+  }
+  my %rules_shown = map { $_ => 1 } "rule", "copy_files", "copy_files#", "ocamllex", "ocamlyacc", "menhir";
+  my %kind_of = (test => "tests", tests => "tests", executable => "executables", executables => "executables", library => "library");
+  my $per_test = qr/^(?:runtest|train|slow)-/;
+  # A rule as text, the probe roots made one.
+  my @roots = map { quotemeta } grep { defined && $_ ne "." } $qroot, $old_root;
+  my $roots = @roots ? qr/(?:@{[join "|", @roots]})/ : undef;
+  sub rule_text { my ($x) = @_; ref $x ? "(" . join(" ", map { rule_text($_) } @$x) . ")" : $x }
+  FILE: for my $f (@scoped) {
+    my ($d) = dir_of($f);
+    my (@why, @parts, %whole, %direct_here, @paths);
+    # The changed forms: each side's canonical forms not matched on the other.
+    my (%count, @changed_forms);
+    $count{$_->{canon}}++ for @{$forms{new}{$f} // []};
+    $count{$_->{canon}}-- for @{$forms{old}{$f} // []};
+    for my $side ("new", "old") {
+      my %left = map { $_ => ($side eq "new" ? $count{$_} : -$count{$_}) } keys %count;
+      for my $r (@{$forms{$side}{$f} // []}) { push @changed_forms, { %$r, side => $side } if $left{$r->{canon}}-- > 0 }
+    }
+    for my $r (@changed_forms) {
+      my $h = $r->{head};
+      next if $rules_shown{$h};
+      if ($h eq "alias" && !$r->{action}) {
+        for my $x (@{$r->{names}}) { $direct_here{in_dir($d, $x)} = "its (alias) stanza changed" if $x =~ $per_test }
+        next;
+      }
+      if (my $kind = $kind_of{$h}) {
+        unless (@{$r->{names}}) { push @why, "a changed ($h) with no literal name"; next }
+        for my $n (@{$r->{names}}) {
+          my @ix = grep { $st[$_]{dir} eq $d && $st[$_]{kind} eq $kind
+                          && ($kind eq "library" ? $st[$_]{units}{$n} : grep { $_ eq $n } @{$st[$_]{names}}) } 0 .. $#st;
+          if (@ix) { $whole{$_} = 1 for @ix; next }
+          # Gone from this side: nothing of it is left to run.
+          my $gone = $r->{side} eq "old" && !grep({ $_ eq "$n.exe" } @{$targets->{$d} // []})
+                     && !grep { $_ eq "runtest-$n" } @{$aliases->{$d} // []};
+          push @why, "a changed ($h) named $n, which dune does not list here" unless $gone;
+        }
+        next;
+      }
+      push @why, $h eq "alias" ? "a changed (alias) with an action" : "a changed ($h) stanza";
+    }
+    unless (@why) {
+      # The rules of every target of the directory, on both sides.
+      my %text;
+      for my $side ("old", "new") {
+        my @t = map { in_dir($d, $_) } @{($side eq "old" ? $old_targets : $targets)->{$d} // []};
+        local $rules_root = $side eq "old" ? $old_root : $qroot;
+        local $rules_soft = 1;
+        my @got = @t ? dune_rules(@t) : ();
+        if (grep { !defined } @got) { push @why, "dune rules failed on the $side side"; last }
+        for my $rule (@got) {
+          my $s = rule_text($rule);
+          $s =~ s/$roots/<probe>/g if $roots;
+          my $tg = field($rule, "targets");
+          $text{$side}{$_} = $s for grep { defined } map { strip_ctx(atom($_, "targets")) } map { items(field($tg // [], $_)) } "files", "directories";
+        }
+      }
+      my @delta = grep { ($text{old}{$_} // "") ne ($text{new}{$_} // "") } sort keys %{{ %{$text{old} // {}}, %{$text{new} // {}} }};
+      for my $t (@why ? () : @delta) {
+        my ($td, $tb) = dir_of($t);
+        my $new_side = exists $text{new}{$t};
+        if ($tb =~ /^__affected_probe_/) {
+          $direct_here{in_dir($td, $_)} = "a rule of it changed" for @{$twin_of{$t} // []};
+        } elsif ($tb =~ /^(.+)\.(?:exe|bc)$/) {
+          my @ix = @{$exe{"$td\0$1"} // []};
+          $whole{$_} = 1 for @ix;
+          push @why, "a changed rule for $t, which no stanza here builds" if !@ix && $new_side;
+        } elsif ($tb =~ /^([^.]+)\.pp\.mli?$/) {
+          my @ix = @{$by_modkey{"$td\0" . ucfirst $1} // []};
+          $whole{$_} = 1 for @ix;
+          push @why, "a changed rule for $t, whose module no stanza here owns" if !@ix && $new_side;
+        } elsif ($tb =~ /\.o$/) {
+          $whole{$_} = 1 for obj_owners($t);
+        } elsif ($tb =~ /^(?:lib(.+)_stubs\.a|(.+)\.(?:cmxa|cma|cmxs|a))$/) {
+          my $n = $1 // $2;
+          my @ix = grep { $st[$_]{kind} eq "library" && $st[$_]{dir} eq $td && $st[$_]{units}{$n} } 0 .. $#st;
+          $whole{$_} = 1 for @ix;
+          push @why, "a changed rule for $t, which no library here makes" if !@ix && $new_side;
+        } elsif ($tb =~ $artifact) {
+          push @why, "a changed rule for $t, an artifact this reader does not map" if $new_side;
+        } else {
+          push @paths, $t;
+        }
+      }
+      # A per-test alias new on this side is listed: it never ran.
+      my %was = map { $_ => 1 } @{$old_aliases->{$d} // []};
+      $direct_here{in_dir($d, $_)} = "it is new" for grep { $_ =~ $per_test && !$was{$_} } @{$aliases->{$d} // []};
+      push @parts, scalar(@delta) . " changed rule(s)";
+    }
+    if (@why) {
+      $unscoped{$f} = join("; ", @why);
+      next FILE;
+    }
+    $covered{$f} = 1;
+    $hit{$_} = $whole_hit{$_} = 1 for keys %whole;
+    $direct{"\@$_"} //= $direct_here{$_} for keys %direct_here;
+    $delta_paths{$_} = 1 for @paths;
+    push @parts, scalar(keys %whole) . " stanza(s) changed as a whole" if %whole;
+    push @parts, scalar(keys %direct_here) . " alias(es) whose own rules changed" if %direct_here;
+    print STDERR "affected: $f: compared with the old revision: " . join(", ", @parts) . "\n";
+  }
+}
+print STDERR "affected: $_: its whole directory, because $unscoped{$_}\n" for sort keys %unscoped;
+
 for my $p (@changed) {
   my ($d, $b) = dir_of($p);
   for my $a (@al) {
@@ -841,7 +1441,9 @@ for my $p (@changed) {
   }
   # An included fragment counts as the dune file of every directory including it.
   my @frag_of = @{$fragment_dirs{$p} // []};
-  if ($b eq "dune" || $b eq "dune-project" || $b eq "dune-workspace" || @frag_of) {
+  if ($covered{$p}) {
+    push @parts, "compared with the old revision (above)";
+  } elsif ($b eq "dune" || $b eq "dune-project" || $b eq "dune-workspace" || @frag_of) {
     for my $root (@frag_of ? @frag_of : ($d)) {
       $data_dirs{$root} = 1;
       # A `dune` file's settings (`env`, `(dirs)`, ...) apply beneath it as well,
@@ -894,6 +1496,48 @@ for my $p (@changed) {
   # golden, a note) may be any opaque action's `(deps)`, wherever it lies.
   $any_data = 1 unless $b =~ /\.(?:mli?|mll|mly|c|h|cc|cpp|cxx|hh|hpp)$/ || $b =~ /^dune(?:-project|-workspace)?$/;
   if ($unmapped) { push @unmapped, $p } elsif (!@parts) { push @unread, $p }
+}
+# The files whose rules a compared dune edit changed (above), as the build has
+# them: what reads one is reached as by a changed path -- an alias's own rules,
+# a generated module's rule, a stub object's, a copy elsewhere -- and so is a
+# stanza whose link or preprocessing rule reads one (`link_deps`,
+# `preprocessor_deps`), which those rules are asked for here.
+if (%delta_paths) {
+  my %stanza_rule;   # .exe or .pp.ml(i) target -> stanza indices
+  for my $d (sort keys %$targets) {
+    for my $t (@{$targets->{$d}}) {
+      my @ix = $t =~ /^(.+)\.(?:exe|bc)$/ ? @{$exe{"$d\0$1"} // []}
+             : $t =~ /^([^.]+)\.pp\.mli?$/ ? @{$by_modkey{"$d\0" . ucfirst $1} // []} : ();
+      $stanza_rule{in_dir($d, $_)} = [@ix] for @ix ? ($t) : ();
+    }
+  }
+  # One dune cannot print (a rewriter it cannot drive, say) is one dune cannot
+  # build either: its stanza has nothing to run, which is said.
+  {
+    local $rules_soft = 1;
+    my @todo = grep { !$queried{$_} } sort keys %stanza_rule;
+    unless (query_rules(@todo)) {
+      for my $t (@todo) {
+        next if $queried{$t} || query_rules($t);
+        print STDERR "affected: dune rules $t failed (dune cannot build it either), so what it reads is not known\n";
+      }
+    }
+  }
+  fold($_) for sort keys %queried;
+  for my $p (sort keys %delta_paths) {
+    my ($d, $b) = dir_of($p);
+    for my $a (@al) {
+      for my $t (@{$a->{own}}) { if ($t eq $p || reads($t, $p, $d, $b)) { $read_by{$p}{$a->{name}} = 1; last } }
+    }
+    for my $g (grep { reads($_, $p, $d, $b) } sort keys %generated) { $hit{$_} = $whole_hit{$_} = 1 for @{$generated{$g}} }
+    for my $o (grep { /\.o$/ && reads($_, $p, $d, $b) } @stub_targets) { $hit{$_} = $whole_hit{$_} = 1 for obj_owners($o) }
+    # A stanza's own module sources are its modules, not inputs of this kind.
+    for my $t (grep { reads($_, $p, $d, $b) } sort keys %stanza_rule) {
+      next if $b =~ /\.mli?$/ && grep { $_ eq $p } map { @$_ } values %{$st[$stanza_rule{$t}[0]]{mods} // {}};
+      $hit{$_} = $whole_hit{$_} = 1 for @{$stanza_rule{$t}};
+    }
+    $data_dirs{$_} = 1 for @{$copies{$p} // []};
+  }
 }
 
 # Reach, to a fixpoint: a stanza requiring a reached library is reached.
@@ -1192,7 +1836,8 @@ sub link_only {   # reached owners -> true when none of them names a changed mod
 # reached stanza included, since not even its executable is known.
 my %touched = map { $st[$_]{dir} => 1 } keys %reached;
 $touched{(dir_of($_))[0]} = 1 for @changed;
-my (%out, %unattributed, %opaque_hit, %total, %listed, %linked, %aliased);
+my (%out, %unattributed, %opaque_hit, %total, %listed, %linked, %aliased, %blind_why);
+my %hidden = map { $_->{name} => 1 } grep { $_->{hidden} } @al;
 my %read_any = map { %{$read_by{$_}} } keys %read_by;
 # The tier of each listed alias: "main"; "link", reached only by linking a
 # library a changed module belongs to, never naming that module (see
@@ -1201,17 +1846,18 @@ my %tier;
 for my $a (@al) {
   my %owners = (%{$a->{owners}}, map { %{$runs{$_} // {}} } @{$a->{own}});
   $aliased{$_} = 1 for keys %owners;
-  $total{$a->{dir}}++;
+  $total{$a->{dir}}++ unless $a->{hidden};
   my $unknown = !%owners && !@{$a->{own}};
-  my $opaque = !$a->{golden};
-  $unattributed{$a->{name}} = 1 if $unknown && $touched{$a->{dir}};
+  my $opaque = !$a->{described};
+  my $unknown_touched = $unknown && $touched{$a->{dir}};
+  $unattributed{$a->{name}} = 1 if $unknown_touched && !$a->{hidden};
   my $opaque_listed = $opaque && ($any_data || $data_dirs{$a->{dir}});
-  $opaque_hit{$a->{dir}}++ if $opaque_listed;
+  if ($opaque_listed && !$a->{hidden}) { $opaque_hit{$a->{dir}}++; $blind_why{$a->{blind_why} // "dune does not dump its action"}++ }
   my @by_owner = grep { $reached{$_} } nsort(keys %owners);
   # Uncertainty ranks first: an alias whose action is unknown and might read a
   # changed path is never link-only, whatever its owners name.
-  my $blind = $unattributed{$a->{name}} || $opaque_listed;
-  if ($dune_dirs{$a->{dir}} || $read_any{$a->{name}}) { $tier{$a->{name}} = "main" }
+  my $blind = $unknown_touched || $opaque_listed;
+  if ($dune_dirs{$a->{dir}} || $read_any{$a->{name}} || $direct{$a->{name}}) { $tier{$a->{name}} = "main" }
   elsif ($blind) { $tier{$a->{name}} = @by_owner ? "main" : "guess" }
   elsif (@by_owner) { $tier{$a->{name}} = link_only(@by_owner) ? "link" : "main" }
 }
@@ -1238,13 +1884,13 @@ for (my $grew = 1; $grew;) {
     $grew = 1;
   }
 }
-for my $n (keys %tier) {
+for my $n (grep { !$hidden{$_} } keys %tier) {
   my ($d) = $n =~ m{^\@(?:(.*)/)?[^/]+$};
   if ($tier{$n} eq "link") { $linked{$d // "."}++; next }
   $out{$n} = 1;
   $listed{$d // "."}++;
 }
-my @link_only = sort grep { $tier{$_} eq "link" } keys %tier;
+my @link_only = sort grep { $tier{$_} eq "link" && !$hidden{$_} } keys %tier;
 
 print "$_\n" for sort keys %out;
 print "$_\n" for $referenced_only ? () : @link_only;
@@ -1261,8 +1907,9 @@ if (@unmapped) {
   print STDERR "affected: library $_ is not in this build, nor is the stanza requiring it; edge skipped\n" for sort keys %skipped_off_build;
 }
 print STDERR "affected: listed as unattributed: $_ (no stanza of its directory has that name, no targets of its own; its directory is touched)\n" for sort keys %unattributed;
-printf STDERR "affected: %s: %d per-test alias(es) whose actions dune does not dump, listed for the changed paths there\n", $_, $opaque_hit{$_} for sort keys %opaque_hit;
-print STDERR "affected: unread: $_ (no stanza owns it and no rule dune shows reads it; only aliases whose actions dune does not dump are listed for it)\n" for @unread;
+printf STDERR "affected: %s: %d blind per-test alias(es) (actions not described here), listed for the changed paths there\n", $_, $opaque_hit{$_} for sort keys %opaque_hit;
+printf STDERR "affected: %d of them blind because %s\n", $blind_why{$_}, $_ for sort keys %blind_why;
+print STDERR "affected: unread: $_ (no stanza owns it and no rule dune shows reads it; only blind aliases are listed for it)\n" for @unread;
 print STDERR "affected: UNMAPPED: $_ (no stanza of this build owns this module)\n" for @unmapped;
 if (@link_only) {
   my $what = join("; ", map { $_ . ($mod_defs{$_} ? " (" . join(", ", sort keys %{$mod_defs{$_}}) . ")" : "") }

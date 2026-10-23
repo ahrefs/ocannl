@@ -2661,16 +2661,35 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   rules` for each alias's own targets and each generated module file. Those dependencies are how
   a scan that READS a changed file (an `.ml`, an agent note, a script) is found without linking
   it, and how a generated module (`.mll`, `.mly`, a `(select)` choice, a generator's header) or a
-  C stub is traced to its stanza. dune does not dump an alias rule itself, so an alias
-  whose action is not a golden diff -- a `(test)` with no golden, or a rule that runs and diffs in
-  one action (gh-ocannl-1431: `runtest-kernel_attribution` owns a golden, was taken for a golden
-  pair, and missed an edit to the `benchmarks/gh1002_cells.py` its `(deps)` name; a golden now also
-  needs a rule-made output beside it) -- is listed for any changed path in its directory but an
-  owned module source, and for a changed non-build input anywhere, with every alias needing it (a
-  broken needed alias breaks their build). A `dune` file edit reaches its whole directory.
-  Reading alias `(deps)` and scoping a dune edit per stanza with a hand parser did not converge in
-  review (five rounds of missed forms); both are gh-ocannl-1541's, which reads Dune's own
-  description instead. Its header states the boundary as an allowlist; what falls outside is
+  C stub is traced to its stanza. dune does not dump an alias rule itself (`dune rules @ALIAS`
+  evaluates alias actions lazily, recording no dependency), so `affected` hands it each one in a
+  form it does print (gh-ocannl-1541): a scratch copy of the sources, the PROBE, whose dune files are
+  dune's own canonical text (`dune format-dune-file`) with every alias rule that declares no targets
+  rewritten into a TWIN -- the same rule writing a file of its own, its aliases kept defined by an
+  `(alias (name X) (deps TWIN))` -- and every test given a golden, so dune makes its output rule.
+  `dune rules` on a twin is what the action reads, dune's own evaluation of `%{dep:}`, `diff`
+  inference, nested or templated `chdir`, `%{workspace_root}` paths, globs and needed aliases. The
+  converter is a strict allowlist (heads, alias/targets/action fields, literal names and paths);
+  an alias it does not vouch for stays BLIND and is listed as before -- for any changed path in its
+  directory but an owned module source, and for a changed non-build input anywhere, with every
+  alias needing it. What stays blind here: the inline-test library aliases (`dune show tests` names
+  an alias as their target), and anything with an `(:include)` or `dynamic-run`, whose
+  dependencies `dune rules` does not print (it prints the included file alone). A `(package PKG)`
+  dependency is dune's `.PKG-files` alias, read through `dune rules @.PKG-files`. Before the probe,
+  `runtest-kernel_attribution` (a run-and-diff rule, gh-ocannl-1431) and every `(test)` without a
+  golden were blind, and every golden pair needing the blind `runtest-env_spelling_gate` came with
+  them: 184 aliases for a docs edit. A `dune` file edit is compared across revisions in an OLD
+  probe (that file at the old revision): the rules of its directory's targets that differ, twins
+  included, plus the library/executables/tests stanzas whose canonical form changed (flags live in
+  object rules not asked), by literal names dune lists; a changed form of another kind (`env`,
+  `subdir`, `include`, ...), a renamed module the old file cannot describe, or `--files` (no
+  revision) keeps the whole directory, and says why. A hand parser of `(deps)` and stanzas
+  (staging#1336) did not converge in review: five rounds of missed forms, each an under-reach; the
+  twins leave every dependency form to dune. The probe costs about 10 s a run (cold build
+  directory, compiles served by the dune cache) and a compared dune edit about 30 s;
+  `OCANNL_TOOL_AFFECTED_PROBE=0` skips it, reading every alias action blind -- and missing what
+  only a twin shows (an executable of another name a run-and-diff rule runs: 19 aliases on a
+  `low_level.ml` edit), so the default keeps it. The header states the boundary; what falls outside is
   reported on stderr, and a changed
   `.ml`/`.mli` no stanza of this build owns (a deleted module, a CUDA-only one on a box without
   cudajit) exits 3. Two portability points (gh-ocannl-1389): only the file
@@ -2703,8 +2722,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     takes the full default list.
   - A test or note edit gets a short, exact list: `test/operations/cost_model_template.ml` reaches
     its own alias plus the scans that read it (17 aliases in all);
-    `docs/agent-notes/build-and-test.md` the 11 scans that read it plus the ~68 aliases listed blind
-    for any doc edit, until gh-ocannl-1541 reads their `(deps)`.
+    `docs/agent-notes/build-and-test.md` the 11 scans and the `doc_examples` aliases that read it, plus
+    the two blind inline-test aliases: 13 (184 without the probe). One new `(test)` stanza with its
+    golden in `test/operations/dune` lists that test and the scans reading the dune file, the module
+    and the golden: 24 (572 without the probe).
 
 ## OCaml and dune traps
 
