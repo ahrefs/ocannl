@@ -36,7 +36,15 @@
    decided condition around a merge-tainted inherited read compiles and computes the live arm --
    decided by a constant, by B's own loop extent, or (for a virtual consumer stored as a template)
    by a reduction loop the template keeps -- while a template's write-index loop decides nothing,
-   and a live or undecided arm is still refused. *)
+   and a live or undecided arm is still refused.
+
+   Capture refusal (gh-ocannl-1514): a VIRTUAL consumer whose dead arm only its own write-index loop
+   decides. The walk capturing its template cannot decide the arm, so it leaves the merge-tainted
+   read un-inlined and refuses that store ([154:capture-reads-merge]): the consumer materializes,
+   and the emit walk, holding the loop's extent, skips the arm. Only the store whose own code holds
+   the read is refused -- not a sibling's in a shared loop, not an earlier or later candidate of the
+   same loop -- and a consumer that cannot materialize (declared virtual) or whose arm is live where
+   it runs is still refused with the merge-splice message. *)
 
 open Base
 open Ll_test
@@ -484,6 +492,172 @@ let case_consumer_write_index_opaque () =
   p "write index: its loop decides nothing in the stored template"
     (Option.equal Int.equal (template_count ctx w ~f:(read_of y)) (Some 1))
 
+(* gh-ocannl-1514: the capture refusal. Each case builds routine B twice from [build ~sfx ~v]: on
+   the tainted lineage, and in a fresh one where [v] is a materialized node holding junk the live
+   arm never reads -- the reading the refusal must agree with. [build] returns B's code, its seeds,
+   the nodes read back with their expected values, and the placement claims about B. *)
+let capture_reads_merge = Tn.Site "154:capture-reads-merge"
+let junk = Array.init dim ~f:(fun i -> 9000. +. Float.of_int i)
+let x1_vals = Array.map x_vals ~f:(fun x -> x +. 1.)
+
+let refused_by_capture o tn =
+  Option.equal Tn.equal_provenance (rejection_code o tn) (Some capture_reads_merge)
+
+let case_capture ~label ~tag build =
+  let ctx, v = tainted_lineage ~label ~tag in
+  let llc, seed, reads, placement_claims = build ~sfx:"" ~v in
+  match consume ctx ~name:("sts_" ^ tag ^ "_b") llc with
+  | Error msg -> p (label ^ ": routine B compiles (refused: " ^ msg ^ ")") false
+  | Ok o_b ->
+      p (label ^ ": routine B compiles") true;
+      p
+        (label ^ ": routine B declares no merge buffer and does not read v")
+        (Option.is_none o_b.LL.merge_node && not (Set.mem (inputs o_b) v));
+      List.iter placement_claims ~f:(fun (claim, holds) -> p (label ^ ": " ^ claim) (holds o_b));
+      let got = execute ~name:("sts_" ^ tag ^ "_b") o_b ~seed ~read:(List.map reads ~f:fst) in
+      List.iter2_exn got reads ~f:(fun got (tn, expected) ->
+          p_all2
+            (label ^ ": " ^ Tn.debug_name tn ^ " executes to the live arm's values")
+            got expected ~f:Float.equal);
+      let v_m = mk (tag ^ "vm") in
+      materialize v_m;
+      let llc_m, seed_m, reads_m, _ = build ~sfx:"m" ~v:v_m in
+      let o_m = optimize ~name:("sts_" ^ tag ^ "_m") llc_m in
+      let got_m =
+        execute
+          ~name:("sts_" ^ tag ^ "_m")
+          o_m ~seed:((v_m, junk) :: seed_m) ~read:(List.map reads_m ~f:fst)
+      in
+      p_all2
+        (label ^ ": the deferred reading agrees with the materialized one")
+        (Array.concat got) (Array.concat got_m) ~f:Float.equal
+
+(* [w[i] := shape i x[i] v[i]] for [i < 4], then [out[i] := w[i]]; [w] is a virtual candidate. *)
+let own_loop_consumer ~tag shape ~sfx ~v =
+  let x = mk (tag ^ "x" ^ sfx) and w = mk (tag ^ "w" ^ sfx) and out = mk (tag ^ "out" ^ sfx) in
+  List.iter [ x; out ] ~f:materialize;
+  let s = sym () and s2 = sym () in
+  let llc =
+    seq
+      (loop_n s dim (set w [| iter s |] (shape s ~x:(get x [| iter s |]) ~v:(get v [| iter s |]))))
+      (loop_n s2 dim (set out [| iter s2 |] (get w [| iter s2 |])))
+  in
+  ( llc,
+    [ (x, x_vals); (out, blank dim) ],
+    [ (out, x_vals) ],
+    [ ("w is refused by its capture and materializes", fun o -> refused_by_capture o w) ] )
+
+(* A materialized sibling [o2] of the shared loop holds the read: [w]'s template drops it at
+   consumption, so [w] stays virtual. *)
+let sibling_consumer ~sfx ~v =
+  let tag = "cs" in
+  let x = mk (tag ^ "x" ^ sfx) and w = mk (tag ^ "w" ^ sfx) and o2 = mk (tag ^ "o2" ^ sfx) in
+  let out = mk (tag ^ "out" ^ sfx) in
+  List.iter [ x; o2; out ] ~f:materialize;
+  let s = sym () and s2 = sym () in
+  let llc =
+    seq
+      (loop_n s dim
+         (seq
+            (set w [| iter s |] (add (get x [| iter s |]) (c 1.)))
+            (set o2
+               [| iter s |]
+               (where_ (lt (embed s) (ic dim)) (get x [| iter s |]) (get v [| iter s |])))))
+      (loop_n s2 dim (set out [| iter s2 |] (get w [| iter s2 |])))
+  in
+  ( llc,
+    [ (x, x_vals); (o2, blank dim); (out, blank dim) ],
+    [ (o2, x_vals); (out, x1_vals) ],
+    [ ("w, whose own code does not read v, stays virtual", fun o -> known_virtual o w) ] )
+
+(* Phase-1 ordering around a refused candidate: an earlier stored provider [p] and a later candidate
+   [r] reading the refused [w], all three captured at one loop. *)
+let ordered_consumers ~sfx ~v =
+  let tag = "co" in
+  let x = mk (tag ^ "x" ^ sfx) and pp = mk (tag ^ "p" ^ sfx) and w = mk (tag ^ "w" ^ sfx) in
+  let r = mk (tag ^ "r" ^ sfx) and out = mk (tag ^ "out" ^ sfx) in
+  List.iter [ x; out ] ~f:materialize;
+  let s = sym () and s2 = sym () in
+  let llc =
+    seq
+      (loop_n s dim
+         (List.reduce_exn ~f:seq
+            [
+              set pp [| iter s |] (mul (get x [| iter s |]) (c 2.));
+              set w
+                [| iter s |]
+                (where_ (lt (embed s) (ic dim)) (get pp [| iter s |]) (get v [| iter s |]));
+              set r [| iter s |] (add (get w [| iter s |]) (c 1.));
+            ]))
+      (loop_n s2 dim (set out [| iter s2 |] (get r [| iter s2 |])))
+  in
+  ( llc,
+    [ (x, x_vals); (out, blank dim) ],
+    [ (out, Array.map x_vals ~f:(fun x -> (2. *. x) +. 1.)) ],
+    [
+      ("the earlier provider p stays virtual", fun o -> known_virtual o pp);
+      ("w is refused by its capture and materializes", fun o -> refused_by_capture o w);
+      ("the later reader r stays virtual", fun o -> known_virtual o r);
+    ] )
+
+(* A candidate with an earlier stored component: [zero w] is stored on its own before the loop's
+   capture refuses [w]; the materialized [w] keeps the whole computation. *)
+let zeroed_consumer ~sfx ~v =
+  let tag = "cz" in
+  let x2 = mk ~dims:[| dim; kdim |] (tag ^ "x2" ^ sfx) and w = mk (tag ^ "w" ^ sfx) in
+  let out = mk (tag ^ "out" ^ sfx) in
+  List.iter [ x2; out ] ~f:materialize;
+  let s = sym () and k = sym () and s2 = sym () in
+  let llc =
+    List.reduce_exn ~f:seq
+      [
+        zero w;
+        loop_n s dim
+          (loop_n k kdim
+             (set w
+                [| iter s |]
+                (add
+                   (get w [| iter s |])
+                   (where_
+                      (lt (embed s) (ic dim))
+                      (get x2 [| iter s; iter k |])
+                      (get v [| iter s |])))));
+        loop_n s2 dim (set out [| iter s2 |] (get w [| iter s2 |]));
+      ]
+  in
+  let x2_vals =
+    Array.init (dim * kdim) ~f:(fun j ->
+        (100. *. Float.of_int (j / kdim)) +. Float.of_int (j % kdim) +. 1.)
+  in
+  let expected =
+    Array.init dim ~f:(fun i ->
+        Array.fold (Array.sub x2_vals ~pos:(i * kdim) ~len:kdim) ~init:0. ~f:( +. ))
+  in
+  ( llc,
+    [ (x2, x2_vals); (out, blank dim) ],
+    [ (out, expected) ],
+    [ ("w is refused by its capture and materializes", fun o -> refused_by_capture o w) ] )
+
+(* Still refused: a consumer that cannot materialize (declared virtual), and one whose arm is live
+   where it runs (the emit walk raises). *)
+let case_capture_refused ~label ~tag ~declare_virtual shape =
+  let ctx, v = tainted_lineage ~label ~tag in
+  let x = mk (tag ^ "x") and w = mk (tag ^ "w") and out = mk (tag ^ "out") in
+  List.iter [ x; out ] ~f:materialize;
+  if declare_virtual then virtualize w;
+  let s = sym () and s2 = sym () in
+  let llc =
+    seq
+      (loop_n s dim (set w [| iter s |] (shape s ~x:(get x [| iter s |]) ~v:(get v [| iter s |]))))
+      (loop_n s2 dim (set out [| iter s2 |] (get w [| iter s2 |])))
+  in
+  match consume ctx ~name:("sts_" ^ tag ^ "_b") llc with
+  | Ok _ -> p (label ^ ": routine B is refused (it compiled)") false
+  | Error msg ->
+      p
+        (label ^ ": routine B is refused for the cross-routine merge splice")
+        (String.is_substring msg ~substring:"reads a merge buffer")
+
 let () =
   case_merge ();
   case_provenance ();
@@ -500,4 +674,15 @@ let () =
   case_consumer_refused ~label:"consumer where 0 x v (v live)" ~tag:"cl" (fun _ ~x ~v ->
       where_ (ic 0) x v);
   case_consumer_refused ~label:"consumer where (i < 2) x v (undecided)" ~tag:"cu" (fun s ~x ~v ->
-      where_ (lt (embed s) (ic 2)) x v)
+      where_ (lt (embed s) (ic 2)) x v);
+  case_capture ~label:"virtual consumer where (i < 4) x v" ~tag:"vc4"
+    (own_loop_consumer ~tag:"vc4" (fun s ~x ~v -> where_ (lt (embed s) (ic dim)) x v));
+  case_capture ~label:"virtual consumer where (i < 0) v x" ~tag:"vc0"
+    (own_loop_consumer ~tag:"vc0" (fun s ~x ~v -> where_ (lt (embed s) (ic 0)) v x));
+  case_capture ~label:"sibling holds the read" ~tag:"cs" sibling_consumer;
+  case_capture ~label:"ordered candidates" ~tag:"co" ordered_consumers;
+  case_capture ~label:"earlier zero component" ~tag:"cz" zeroed_consumer;
+  case_capture_refused ~label:"virtual consumer where (i < 2) x v (live where it runs)" ~tag:"vcu"
+    ~declare_virtual:false (fun s ~x ~v -> where_ (lt (embed s) (ic 2)) x v);
+  case_capture_refused ~label:"declared-virtual consumer where (i < 4) x v" ~tag:"vcd"
+    ~declare_virtual:true (fun s ~x ~v -> where_ (lt (embed s) (ic dim)) x v)

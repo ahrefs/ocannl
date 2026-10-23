@@ -53,3 +53,40 @@ consumer where 0 x v (v live): routine A defers v, its template reading the merg
 consumer where 0 x v (v live): routine B is refused for the cross-routine merge splice: true
 consumer where (i < 2) x v (undecided): routine A defers v, its template reading the merge buffer: true
 consumer where (i < 2) x v (undecided): routine B is refused for the cross-routine merge splice: true
+virtual consumer where (i < 4) x v: routine A defers v, its template reading the merge buffer: true
+virtual consumer where (i < 4) x v: routine B compiles: true
+virtual consumer where (i < 4) x v: routine B declares no merge buffer and does not read v: true
+virtual consumer where (i < 4) x v: w is refused by its capture and materializes: true
+virtual consumer where (i < 4) x v: vc4out executes to the live arm's values: true
+virtual consumer where (i < 4) x v: the deferred reading agrees with the materialized one: true
+virtual consumer where (i < 0) v x: routine A defers v, its template reading the merge buffer: true
+virtual consumer where (i < 0) v x: routine B compiles: true
+virtual consumer where (i < 0) v x: routine B declares no merge buffer and does not read v: true
+virtual consumer where (i < 0) v x: w is refused by its capture and materializes: true
+virtual consumer where (i < 0) v x: vc0out executes to the live arm's values: true
+virtual consumer where (i < 0) v x: the deferred reading agrees with the materialized one: true
+sibling holds the read: routine A defers v, its template reading the merge buffer: true
+sibling holds the read: routine B compiles: true
+sibling holds the read: routine B declares no merge buffer and does not read v: true
+sibling holds the read: w, whose own code does not read v, stays virtual: true
+sibling holds the read: cso2 executes to the live arm's values: true
+sibling holds the read: csout executes to the live arm's values: true
+sibling holds the read: the deferred reading agrees with the materialized one: true
+ordered candidates: routine A defers v, its template reading the merge buffer: true
+ordered candidates: routine B compiles: true
+ordered candidates: routine B declares no merge buffer and does not read v: true
+ordered candidates: the earlier provider p stays virtual: true
+ordered candidates: w is refused by its capture and materializes: true
+ordered candidates: the later reader r stays virtual: true
+ordered candidates: coout executes to the live arm's values: true
+ordered candidates: the deferred reading agrees with the materialized one: true
+earlier zero component: routine A defers v, its template reading the merge buffer: true
+earlier zero component: routine B compiles: true
+earlier zero component: routine B declares no merge buffer and does not read v: true
+earlier zero component: w is refused by its capture and materializes: true
+earlier zero component: czout executes to the live arm's values: true
+earlier zero component: the deferred reading agrees with the materialized one: true
+virtual consumer where (i < 2) x v (live where it runs): routine A defers v, its template reading the merge buffer: true
+virtual consumer where (i < 2) x v (live where it runs): routine B is refused for the cross-routine merge splice: true
+declared-virtual consumer where (i < 4) x v: routine A defers v, its template reading the merge buffer: true
+declared-virtual consumer where (i < 4) x v: routine B is refused for the cross-routine merge splice: true

@@ -351,6 +351,9 @@ order, which is what decides whether a code can fire. The exit codes:
 - `148:scan-recurrence` — A `Scan_loop` encloses, or is contained in, the captured computation.
 - `149:scan-at-inline` — A `Scan_loop` met while inlining a stored computation: the
   consumption-time backstop behind 148, unreachable while storage refuses a scan first.
+- `154:capture-reads-merge` — The walk capturing the candidate met a merge-tainted inherited read
+  in the candidate's own code, in an arm its write-index loops would decide but the template
+  cannot (gh-ocannl-1514): the candidate materializes, and the emit walk decides the arm.
 
 `Non_virtual 19` was a defensive arm and is one no longer. The reasoning that made it defensive
 still holds *within* the pipeline: `hoist_cross_statement_cse` is the only phase here that produces
