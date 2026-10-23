@@ -1071,6 +1071,39 @@ let standing ~direct_evidence ~catalogue_only ~observed ~refused ~claim_lines ~r
   | false, _ when observed || answered -> Exercised
   | false, _ -> Unexercised
 
+(** The failed claim behind the marker of [diagnostic], one its source's row lists, in a run whose
+    checks that failed are [failed] ({!Verdict.failed_checks}), as the reason the marker did not
+    print -- [None] when no failed check stands behind it, so that its claim or refusal did not run
+    (gh-ocannl-1499). A claim's marker stands for the claim its format matches; a direct failure's
+    for the [direct_evidence] claim answering for it under [key] (one its caught branch records has
+    no claim behind it). Only a failure is named: a run prints a subset of the row's markers, the
+    rest exercised in another control golden, so "did not run" is every passing run's normal state
+    and is left for the reader of a golden diff to infer. Taking the table as an argument, as
+    {!standing} does, lets the rule be pinned on tables the repository does not have to hold.
+
+    Answers the reason with the failed checks left for the markers after this one. A claim's marker
+    consumes the failure it names, as {!claim_exercises} consumes a passing execution: two identical
+    claim formats are two claims, and one failure stands behind one of them, the other's claim not
+    having run. A direct failure's marker consumes nothing: one control claim answers for several
+    refusals, and its failure stands behind each. *)
+let why_not_printed ~direct_evidence ~failed ~key diagnostic =
+  let format = diagnostic.Refusal_control_scan.format in
+  match diagnostic.Refusal_control_scan.kind with
+  | Refusal_control_scan.Claim ->
+      let rec take before = function
+        | [] -> None
+        | name :: after when Refusal_control_scan.format_matches ~format name ->
+            Some (Printf.sprintf "its claim failed: \"%s\"" name, List.rev_append before after)
+        | name :: after -> take (name :: before) after
+      in
+      take [] failed
+  | Refusal_control_scan.Fail ->
+      List.Assoc.find direct_evidence key ~equal:String.equal
+      |> Option.map ~f:evidence_label
+      |> Option.filter ~f:(List.mem failed ~equal:String.equal)
+      |> Option.map ~f:(fun label ->
+          (Printf.sprintf "the claim answering for it failed: \"%s\"" label, failed))
+
 (** The [raw_entries] row for [source] (its key without the [test/operations/] prefix) listing
     [diagnostics]' markers in extraction order, ready to paste. *)
 let row ~source diagnostics =
@@ -1183,6 +1216,15 @@ let doubly_classified =
     this source: a golden ending on it is complete exactly when a run's stdout ends on it. *)
 let closing_row = "End of synthetic controls."
 
+(** The head of the stderr line {!print_section} writes for a marker of the row that it does not
+    print because a claim behind it failed, followed by the marker, [" -- "] and
+    {!why_not_printed}'s reason -- or because its diagnostic is gone from the source.
+    [tools/mutation-run.sh] lists each marker a run omitted with the reason this line gives, and one
+    with no such line as one whose claim or refusal did not run (gh-ocannl-1499), reading the line,
+    as it reads {!closing_row}, from [verdict_teardown]'s transcripts rather than from this source.
+*)
+let not_printed_head = "Refusal marker not printed (not part of the golden): "
+
 (** The section [print] ends a scan's golden with: its heading, then the marker of each of
     [diagnostics] that [expected] (the source's registered row) lists and this run exercised -- a
     claim's once Verdict recorded it passing, a direct failure's once its refusal ran -- and the
@@ -1196,9 +1238,27 @@ let closing_row = "End of synthetic controls."
     gh-ocannl-1318): every golden that prints a section pins it, so a run that printed it decided
     every marker above it. Without it a run cut inside the markers read the same as a complete run
     whose claim failed, and a run whose only shortfall was one silenced refusal -- every claim
-    passing, so no teardown line -- read as cut short. *)
+    passing, so no teardown line -- read as cut short.
+
+    A marker of [expected] it does not print because a claim behind it failed ({!why_not_printed}),
+    or because [diagnostics] no longer holds its diagnostic, gets a {!not_printed_head} line on
+    stderr saying so; any other marker it does not print had nothing behind it run. So a golden diff
+    short of a marker reads as a failed claim or as a refusal that never ran (gh-ocannl-1499), and a
+    run with no failed check writes no such line. *)
 let print_section ~source ~expected diagnostics =
   let passed_labels = ref (Verdict.passed_labels ()) in
+  let not_printed marker reason =
+    eprintf "%s%s -- %s\n" not_printed_head marker (Verdict.one_line reason)
+  in
+  let failed = ref (Verdict.failed_checks ()) in
+  let why marker diagnostic =
+    why_not_printed ~direct_evidence ~failed:!failed
+      ~key:(failure_key ~source ~identity:diagnostic.Refusal_control_scan.identity)
+      diagnostic
+    |> Option.iter ~f:(fun (reason, remaining) ->
+        failed := remaining;
+        not_printed marker reason)
+  in
   let catalogued = ref [] in
   let rivals =
     List.filter_map diagnostics ~f:(fun d ->
@@ -1214,7 +1274,7 @@ let print_section ~source ~expected diagnostics =
         match diagnostic.Refusal_control_scan.kind with
         | Refusal_control_scan.Claim -> (
             match claim_exercises !passed_labels diagnostic with
-            | None -> ()
+            | None -> why marker diagnostic
             | Some remaining ->
                 passed_labels := remaining;
                 printf "  %s\n" marker)
@@ -1236,7 +1296,10 @@ let print_section ~source ~expected diagnostics =
                      "%s is listed in `raw_catalogue_only`, yet this run executed it -- move its \
                       key to `raw_direct_evidence`, or drop it if the control observes it itself"
                      key)
-            | Unexercised -> ()));
+            | Unexercised -> why marker diagnostic));
+  List.iter
+    (minus expected (List.map diagnostics ~f:Refusal_control_scan.marker))
+    ~f:(fun marker -> not_printed marker "its diagnostic is no longer in the source");
   if not (List.is_empty !catalogued) then (
     printf
       "Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):\n";

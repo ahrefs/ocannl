@@ -26,6 +26,13 @@ and the specific sibling owns the line both formats match: true
 a catalogue-only refusal nothing executes stays catalogue-only: true
 a catalogue-only refusal a refused child run prints is reported as executed: true
 and so is one its caught branch observes: true
+a claim's marker whose claim failed names that claim: true
+a claim's marker whose claim is not among the failed checks names none: true
+a direct failure's marker whose control claim failed names that claim: true
+a direct failure's marker whose control claim did not fail, or with no control claim, names none: true
+a claim's marker consumes the failure it names, so a second identical claim's marker names none: true
+while two identical claims' markers both name a failure when both claims failed: true
+a direct failure's marker leaves its control claim's failure for the next refusal: true
 a manifest source missing from the argument list is named as uncatalogued: true
 an argument-list source outside the manifest is named as extra: true
 a source catalogued twice is a mismatch, not a match: true

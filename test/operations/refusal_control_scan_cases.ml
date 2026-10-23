@@ -209,6 +209,50 @@ let dynamic reason = Verdict.fail reason
     (Poly.equal
        (standing ~direct_evidence:[] ~catalogue_only ~refused:[] ~observed:true ())
        Manifest.Executed_yet_catalogue_only);
+  (* gh-ocannl-1499: the failed claim behind a marker that did not print, or none -- its claim or
+     refusal did not run. A claim's marker stands for the claim its format matches, a direct
+     failure's for the control claim mapped to it; one its caught branch records has none. *)
+  let answer ?(diagnostic = new_fail) ?(direct_evidence = [ (key, control ^ ": true") ]) failed =
+    Manifest.why_not_printed ~direct_evidence ~failed ~key diagnostic
+  in
+  let why ?diagnostic ?direct_evidence failed =
+    Option.map (answer ?diagnostic ?direct_evidence failed) ~f:fst
+  in
+  let claim_label = new_claim.Scan.format in
+  Verdict.p "a claim's marker whose claim failed names that claim"
+    (Option.equal String.equal
+       (why ~diagnostic:new_claim [ "a sibling claim"; claim_label ])
+       (Some (Printf.sprintf "its claim failed: \"%s\"" claim_label)));
+  Verdict.p "a claim's marker whose claim is not among the failed checks names none"
+    (Option.is_none (why ~diagnostic:new_claim [ "a sibling claim"; control ]));
+  Verdict.p "a direct failure's marker whose control claim failed names that claim"
+    (Option.equal String.equal
+       (why [ "a sibling claim"; control ])
+       (Some (Printf.sprintf "the claim answering for it failed: \"%s\"" control)));
+  Verdict.p
+    "a direct failure's marker whose control claim did not fail, or with no control claim, names \
+     none"
+    (Option.is_none (why [ "a sibling claim"; claim_label ])
+    && Option.is_none (why ~direct_evidence:[] [ control; claim_label ]));
+  (* Consumed as a multiset, as passing executions are: one failure stands behind one claim marker
+     of two identical formats, while a control claim's failure stands behind every refusal it
+     answers for. *)
+  Verdict.p
+    "a claim's marker consumes the failure it names, so a second identical claim's marker names \
+     none"
+    (match answer ~diagnostic:new_claim [ claim_label; "a sibling claim" ] with
+    | Some (_, remaining) ->
+        List.equal String.equal remaining [ "a sibling claim" ]
+        && Option.is_none (why ~diagnostic:new_claim remaining)
+    | None -> false);
+  Verdict.p "while two identical claims' markers both name a failure when both claims failed"
+    (match answer ~diagnostic:new_claim [ claim_label; claim_label ] with
+    | Some (_, remaining) -> Option.is_some (why ~diagnostic:new_claim remaining)
+    | None -> false);
+  Verdict.p "a direct failure's marker leaves its control claim's failure for the next refusal"
+    (match answer [ control ] with
+    | Some (_, remaining) -> List.equal String.equal remaining [ control ]
+    | None -> false);
   let manifest = [ "b.ml"; "a.ml"; "c.ml" ] in
   Verdict.p "a manifest source missing from the argument list is named as uncatalogued"
     (Poly.equal (catalogue_mismatch ~manifest ~catalogued:[ "c.ml"; "a.ml" ]) ([ "b.ml" ], [], []));

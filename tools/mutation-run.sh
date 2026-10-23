@@ -39,6 +39,10 @@
 # claim of it may read false), and Verdict's teardown ended the process (gh-ocannl-1216).
 # The same holds for a golden's success trailer, its `OK: ` rows (and the blank row
 # before them), which a scan prints only when no claim failed.
+# Each marker a run omitted is listed with why it did not print (gh-ocannl-1499): the claim behind
+# it failed, named as that section's printer said on stderr -- its own claim, or for a direct
+# failure the control claim answering for it -- or, with no such line, no failed check is behind
+# it, so its claim or refusal did not run.
 # A golden ending on a marker section's closing row (`End of synthetic controls.`, printed
 # after every marker whatever came before it, gh-ocannl-1251/1318) needs neither: a run whose
 # stdout ends on the golden's LAST closing row (as many of them as the golden has) printed
@@ -190,6 +194,11 @@ my $marker_row = qr/^  \[scanner-refusal:[0-9a-f]{32}\] /;
 # gh-ocannl-1318); pinned, like the marker shape, on the printer's output that
 # tools/test-mutation-run.sh replays.
 my $closing_row = qr/^End of synthetic controls\.$/;
+# The stderr line that printer writes for a marker of its row it did not print because a claim
+# behind it failed (or its diagnostic left the source): this head, the marker, ` -- ` and why. A
+# marker with no such line had nothing behind it run (gh-ocannl-1499). Pinned the same way, on
+# verdict_teardown's transcripts.
+my $not_printed_head = 'Refusal marker not printed (not part of the golden): ';
 # A `FAIL: ` row is Verdict.fail's (every line of a multi-line message carries the prefix): the
 # run's own report of what went wrong, no row the golden has -- unless the golden has some, as a
 # golden capturing a refusing child's diagnostics does (config_usage_scan_script_hint's is nothing
@@ -213,7 +222,7 @@ sub read_rows {
         push @lines, $line;
     }
     my %r = (rows => 0, own_fail => 0, last => '', raises => 0, markers => 0, closings => 0, plain => [],
-        fail_rows => {});
+        marker_rows => [], fail_rows => {});
     # The golden `FAIL: ` rows the run matches by text; the remainder is the budget for others.
     my %exact = %golden_fail;
     my $budget = $golden_fails;
@@ -237,7 +246,7 @@ sub read_rows {
         $r{rows}++;
         $r{raises}++ if $line =~ $case_raise;
         $r{closings}++ if $line =~ $closing_row;
-        if ($line =~ $marker_row) { $r{markers}++ } else { push @{$r{plain}}, $line }
+        if ($line =~ $marker_row) { $r{markers}++; push @{$r{marker_rows}}, $line } else { push @{$r{plain}}, $line }
     }
     close $f or refuse("close $path: $!");
     return \%r;
@@ -262,6 +271,29 @@ my $golden_read = read_rows("$root/$golden", 0);
 my ($golden_rows, $golden_last, $golden_markers, $golden_closings, @golden_plain) =
     ($golden_read->{rows}, $golden_read->{last}, $golden_read->{markers}, $golden_read->{closings},
      @{$golden_read->{plain}});
+my @golden_marker_rows = @{$golden_read->{marker_rows}};
+# The golden's marker rows a run's stdout lacks, as a multiset: none, or [$header] with their number
+# and then each with the reason its [@$reasons] (the run's not-printed lines, head removed) gives,
+# each reason used once.
+sub list_omitted_markers {
+    my ($header, $run, $reasons) = @_;
+    my %printed;
+    $printed{$_}++ for @{$run->{marker_rows}};
+    my @missing = grep { $printed{$_} ? !$printed{$_}-- : 1 } @golden_marker_rows;
+    return unless @missing;
+    printf "$header\n", scalar @missing;
+    my @unused = @$reasons;
+    for my $row (@missing) {
+        (my $marker = $row) =~ s/^ +//;
+        my $why = 'no failed check of this run is behind it: its claim or refusal did not run';
+        for my $i (0 .. $#unused) {
+            next unless index($unused[$i], "$marker -- ") == 0;
+            $why = substr(splice(@unused, $i, 1), length("$marker -- "));
+            last;
+        }
+        print "  $marker -- $why\n";
+    }
+}
 # A scan's success trailer: its `OK: ` rows, which it prints only once no claim failed
 # (Verdict.success_trailer, whose output tools/test-mutation-run.sh replays),
 # so a complete failing run lacks them -- and the blank row a trailer's leading `\n` puts before
@@ -519,12 +551,17 @@ sub mutate {
             my $claim_line = qr/^(FAIL: .*: (?:false|FAIL(?: \(.*\))?))\r?\n?$/;
             $run_name = basename(dirname($log));
             print "run: $run_name\nfalse claims:\n";
-            my ($found, $stopped, $teardown) = (0, '', 0);
+            my ($found, $stopped, $teardown, @not_printed) = (0, '', 0);
             log_pass($log, $run && $run->{fail_rows}, sub {
                 my ($line, $message) = @_;
                 if (!$message && $line =~ $claim_line) {
                     print "$1\n";
                     $found = 1;
+                }
+                # Why a marker of a refusal-control section did not print, as its printer says.
+                if (index($line, $not_printed_head) == 0) {
+                    (my $rest = substr($line, length $not_printed_head)) =~ s/\r?\n?$//;
+                    push @not_printed, $rest;
                 }
                 # Verdict's uncaught-exception handler (gh-ocannl-1067).
                 # Which ending: an escaping exception, or an exit inside a Verdict.case
@@ -587,10 +624,8 @@ sub mutate {
                         print "cases raised: $raised (the rows short of the golden are theirs; "
                             . "the run reached its last case)\n";
                     } elsif (defined $trailer && ($trailer || $markers < $golden_markers)) {
-                        my $omitted = $golden_markers - $markers;
-                        print "refusal markers omitted: $omitted (no marker prints for a failed claim or for a "
-                            . "refusal that did not run; every other row did, so the run reached its last row)\n"
-                            if $omitted;
+                        list_omitted_markers('refusal markers omitted: %d (every other row printed, so the run '
+                            . 'reached its last row); each, with why it did not print:', $run, \@not_printed);
                         print "success trailer omitted: $trailer row" . ($trailer == 1 ? '' : 's')
                             . " (`OK: ` rows print only when no claim failed; every other row did, so the "
                             . "run reached its last row)\n" if $trailer;
@@ -598,6 +633,8 @@ sub mutate {
                         print "rows short of the golden: " . ($golden_rows - $printed) . " (the run ended on "
                             . "the golden's last section-closing row, so none was cut; the run reached its "
                             . "last row)\n";
+                        list_omitted_markers('refusal markers among them: %d; each, with why it did not print:',
+                            $run, \@not_printed);
                     } else {
                         $verdict = "STOPPED EARLY: the mutated run printed $printed of the golden's $golden_rows rows";
                     }
