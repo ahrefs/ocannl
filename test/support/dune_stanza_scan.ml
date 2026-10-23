@@ -2073,10 +2073,12 @@ let backend_rule_of marked =
       or {!Runs_public} command, read in its action's context: under a [(setenv PATH …)] a bare name
       is not one) pins it; handed to anything else -- a PATH tool such as [env] launching ours, a
       command this scan cannot place -- or with a pform in its value, it is unread.
-    - an argument of such a program that is one pform standing alone and expanding to text rather
-      than to paths ([%{read-lines:…}], [%{read:…}], [%{env:…}] -- anything but
-      {!path_valued_pform_prefixes}, {!path_valued_pforms} and the stanza's named dependencies):
-      unread, since its expansion could carry the flag.
+    - an argument, of a command the walk places, holding a pform that expands to text rather than to
+      paths ([%{read-lines:…}], [%{read:…}], [%{env:…}] -- anything but
+      {!path_valued_pform_prefixes}, {!path_valued_pforms} and the stanza's named dependencies)
+      where the literal text before it is compatible with a backend spelling: unread, since its
+      expansion could be the setting. Only the FIRST argument the runtime reads as the backend is
+      read; it ignores the rest.
     - an argument assigning a variable that addresses the backend key ([OCANNL_BACKEND=cuda], what
       an [env] launcher takes): unread -- spell it as [setenv].
     - a [(bash …)]/[(system …)] line naming the key ([ocannl_backend] or [ocannl-backend], any case)
@@ -2085,11 +2087,11 @@ let backend_rule_of marked =
     - an atom of a library's [(inline_tests …)] field the runtime reader takes as the backend:
       unread -- pin it on a rule running the runner instead.
 
-    The named exclusions, each a decision rather than an end of the walk: an argument mixing text
-    with a pform is read by its text, since a single-valued expansion inside it cannot start an
-    argument of its own; and the backend in the configuration file a run finds, which
-    [config_dep_completeness] owns. A directory-wide [(env … (env-vars …))] binding is refused
-    outright, by {!backend_env_vars_scopes}. *)
+    The named exclusions, each a decision rather than an end of the walk: an argument whose text
+    before its first text-valued pform cannot begin a backend spelling (a path, a word) is read by
+    that text, since no expansion after it can make the argument a setting; and the backend in the
+    configuration file a run finds, which [config_dep_completeness] owns. A directory-wide
+    [(env … (env-vars …))] binding is refused outright, by {!backend_env_vars_scopes}. *)
 
 type backend_pin =
   | Pinned_backend of { pin_backend : string; pin_form : string }
@@ -2154,26 +2156,60 @@ let backend_pins stanza =
     | Some (name, _) -> addresses_backend name
     | None -> false
   in
-  let opaque_argument argument =
-    match pieces argument with
-    | [ Pform pform ] -> (
+  (* Whether an argument's expansion could BE a backend setting this reader does not see: a pform
+     expanding to text (not one of the path-valued ones) whose literal text before it is compatible
+     with a spelling the runtime reads -- a prefix of one, or one of them a prefix of it. Every
+     command-line spelling begins with a dash ([Utils.cmdline_var_prefixes], asked rather than
+     restated), so `log/%{read:b.txt}.log` cannot become one while `%{env:P=--backend=}cuda` can
+     (Codex P1, rounds 1 and 2). A path-valued pform before it starts the argument with a path. *)
+  let text_valued = function
+    | Pform pform -> (
         match String.lsplit2 pform ~on:':' with
         | Some (prefix, _) -> not (List.mem path_valued_pform_prefixes prefix ~equal:String.equal)
         | None ->
             not
               (List.mem path_valued_pforms pform ~equal:String.equal
               || List.Assoc.mem named_deps pform ~equal:String.equal))
-    | _ -> false
+    | Literal _ -> false
   in
-  let argument_pin ~ours argument =
-    match backend_of_argument argument with
-    | Some value when ours && literal value ->
-        Some (Pinned_backend { pin_backend = value; pin_form = argument })
-    | Some _ -> Some (Unread_pin argument)
-    | None ->
-        if assigns_backend argument || (ours && opaque_argument argument) then
-          Some (Unread_pin argument)
-        else None
+  let spellings =
+    Utils.cmdline_var_prefixes "backend"
+    @ List.map
+        [ Utils.env_var_name "backend"; String.lowercase (Utils.env_var_name "backend") ]
+        ~f:(fun name -> name ^ "=")
+  in
+  let opaque_argument argument =
+    let before, rest =
+      List.split_while (pieces argument) ~f:(fun piece -> not (text_valued piece))
+    in
+    match rest with
+    | [] -> false
+    | _ :: _ -> (
+        match
+          Option.all (List.map before ~f:(function Literal text -> Some text | Pform _ -> None))
+        with
+        | None -> false
+        | Some texts ->
+            let prefix = String.concat texts in
+            List.exists spellings ~f:(fun spelling ->
+                String.is_prefix spelling ~prefix || String.is_prefix prefix ~prefix:spelling))
+  in
+  (* The runtime takes the FIRST argument it reads as the backend ([Utils.read_cmdline_var]'s
+     [Array.find_map]), so later ones decide nothing (Codex P2, round 2). *)
+  let arguments_pins ~ours ~reads_opaque arguments =
+    let flag_seen = ref false in
+    List.filter_map arguments ~f:(fun argument ->
+        match backend_of_argument argument with
+        | Some _ when !flag_seen -> None
+        | Some value ->
+            flag_seen := true;
+            if ours && literal value then
+              Some (Pinned_backend { pin_backend = value; pin_form = argument })
+            else Some (Unread_pin argument)
+        | None ->
+            if assigns_backend argument || (reads_opaque && opaque_argument argument) then
+              Some (Unread_pin argument)
+            else None)
   in
   let names_key line =
     let lower = String.lowercase line in
@@ -2207,7 +2243,8 @@ let backend_pins stanza =
         let arguments = List.filter_map args ~f:(function Sexp.Atom a -> Some a | _ -> None) in
         let kind = command_kind ~path_rewritten cmd arguments in
         let ours = match kind with `Ours -> true | `Site | `Tool -> false in
-        let from_arguments = List.filter_map arguments ~f:(argument_pin ~ours) in
+        let reads_opaque = match kind with `Ours | `Site -> true | `Tool -> false in
+        let from_arguments = arguments_pins ~ours ~reads_opaque arguments in
         match (from_arguments, kind) with
         | _ :: _, _ -> from_arguments
         (* A PATH tool handed nothing of ours runs nothing the walk places: the walk drops it, and

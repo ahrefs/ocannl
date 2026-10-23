@@ -251,6 +251,8 @@ ok: backend pins -- a flag handed to a bare name under a rewritten PATH
 ok: backend pins -- the same flag handed to a dependency expansion there is a pin
 ok: backend pins -- a read-lines argument could carry the flag
 ok: backend pins -- path-valued pforms and named dependencies are arguments, not pins
+ok: backend pins -- a text-valued pform that could complete a backend flag
+ok: backend pins -- only the first backend flag of a run is read
 ok: backend pins -- a command-line pin shadows the setenv around its run
 ok: backend pins -- but not around a sibling run that sets none
 ok: backend pins -- a pin on a stanza declaring neither is the XOR's to report

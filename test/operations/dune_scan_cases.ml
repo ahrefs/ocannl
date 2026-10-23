@@ -1282,6 +1282,23 @@ let backend_pin_cases =
  (deps (:inputs a.txt b.txt))
  (action (run %{dep:probe.exe} %{deps} %{inputs} %{target} %{ocamlc} %{lib:l:l.cmi} @%{read:x.txt})))|dune},
       [ "rule: clean" ] );
+    (* Review round 2: text before a text-valued pform that could begin a spelling makes the
+       argument unread; text that cannot (a path) leaves it an argument. *)
+    ( "a text-valued pform that could complete a backend flag",
+      {dune|(rule
+ ; ocannl-backend: none -- claims no backend
+ (action
+  (progn
+   (run %{dep:probe.exe} %{env:P=--backend=}cuda)
+   (run %{dep:probe.exe} --ocannl_%{read:k.txt})
+   (run %{dep:probe.exe} "log/%{read:../config/ocannl_backend.txt}-0-0.log"))))|dune},
+      [ "rule: unread %{env:P=--backend=}cuda; unread --ocannl_%{read:k.txt}" ] );
+    (* The runtime reads the first setting and ignores the rest. *)
+    ( "only the first backend flag of a run is read",
+      {dune|(rule
+ ; ocannl-backend: cc -- the first flag says cc
+ (action (run %{dep:probe.exe} --backend=cc --backend=cuda --ocannl_backend=%{read:x})))|dune},
+      [ "rule: clean" ] );
     (* The command line outranks the environment: a flag on the run shadows the setenv around it,
        for that run and no other. *)
     ( "a command-line pin shadows the setenv around its run",
