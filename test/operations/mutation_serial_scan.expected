@@ -1,0 +1,34 @@
+tensor/row.ml: uid (ref) -- exempt: a fresh-id counter: ids are never reused, so a rewind need not restore it
+tensor/row.ml: serial (ref) -- exempt: the serial itself: note_mutation is its writer
+tensor/row.ml: pending_roles (ref) -- accounted: every write noted or at a boundary
+tensor/row.ml: reapply_rows_constr (ref) -- exempt: a transient flag of one constraint substitution, cleared before it returns or raises
+tensor/row.ml: ineqs_from_reapply_rows_constr (ref) -- exempt: a transient carrier within one solver pass, drained by unify_dim; reset_transient clears it at a rewind
+tensor/row.ml: resolve_at_use_dim (Hash_set) -- accounted: every write noted or at a boundary
+tensor/row.ml: safe_to_guess (Hash_set) -- accounted: every write noted or at a boundary
+tensor/row.ml: used_in_spec_or_compose (Hash_set) -- accounted: every write noted or at a boundary
+tensor/row.ml: used_in_pointwise (Hash_set) -- accounted: every write noted or at a boundary
+tensor/row.ml: resolve_at_use (Hash_set) -- accounted: every write noted or at a boundary
+tensor/row.ml: global_rank_edges (Hashtbl) -- accounted: every write noted or at a boundary
+tensor/row.ml: global_template_cache (Hashtbl) -- accounted: every write noted or at a boundary
+tensor/row.ml: fresh (unread state) -- exempt
+tensor/row.ml: boundary commit_symbol_roles -- part of the commit: only a successful finish_inference calls it
+tensor/row.ml: boundary drop_symbol_roles -- part of a rewind or session reset, which clears the taint
+tensor/shape.ml: open_refs (ref) -- accounted: every write noted or at a boundary
+tensor/shape.ml: discarded_refs (ref) -- accounted: every write noted or at a boundary
+tensor/shape.ml: update_uid (ref) -- exempt: a fresh-id counter: ids are never reused, so a rewind need not restore it
+tensor/shape.ml: with_error_trace (ref) -- accounted: every write noted or at a boundary
+tensor/shape.ml: unused_shapes (Hash_set) -- accounted: every write noted or at a boundary
+tensor/shape.ml: state (ref) -- fingerprinted by mutated_since
+tensor/shape.ml: construction_depth (ref) -- exempt: the construction window's depth, restored by the window's own finally
+tensor/shape.ml: active_update_steps (ref) -- fingerprinted by mutated_since
+tensor/shape.ml: active_constraints (ref) -- fingerprinted by mutated_since
+tensor/shape.ml: taint (ref) -- exempt: the taint itself: a record of the first failure, not inference state
+tensor/shape.ml: update_mark (ref) -- accounted: every write noted or at a boundary
+tensor/shape.ml: discarded_updates (ref) -- accounted: every write noted or at a boundary
+tensor/shape.ml: on_closure (ref) -- exempt: a hook Tensor installs once at module initialization, not inference state
+tensor/shape.ml: boundary rewind_open_state -- the rewind: it discards all open state and clears the taint
+tensor/shape.ml: boundary unsafe_reinitialize -- the session reset: it discards all state and clears the taint
+tensor/shape.ml: boundary finish_inference_body -- the commit point: finish_inference taints the session on any failure of this body
+the scan tracks a noted table (row.ml's safe_to_guess): true
+the scan tracks an exempt counter (row.ml's uid): true
+the scan tracks a fingerprinted ref (shape.ml's state): true

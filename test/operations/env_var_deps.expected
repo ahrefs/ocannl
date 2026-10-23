@@ -223,6 +223,8 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-micrograd_demo_logging
   test/operations/dune                     @runtest-model_default_fallback
   test/operations/dune                     @runtest-model_default_placements
+  test/operations/dune                     @runtest-mutation_serial_scan
+  test/operations/dune                     @runtest-mutation_serial_scan_control
   test/operations/dune                     @runtest-n3_fwd_with_prec-unoptimized
   test/operations/dune                     @runtest-narrow_gebp_bench_padded
   test/operations/dune                     @runtest-ocamlformat_ignore_scan

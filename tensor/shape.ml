@@ -281,6 +281,8 @@ end
 type update_id = Update_id.t [@@deriving equal, compare, hash, sexp]
 
 let update_uid = ref 0
+[@@mutation_serial.exempt
+  "a fresh-id counter: ids are never reused, so a rewind need not restore it"]
 
 let get_update_id () =
   Int.incr update_uid;
@@ -1514,7 +1516,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
       in
       (proj_env, dim_var_set_empty, inequalities)
 
-let state = ref Row.empty_env
+let state = ref Row.empty_env [@@mutation_serial.fingerprinted]
 
 (* Depth of tensor-operation constructions in progress: [Tensor.op] raises it around its [op_asn]
    (see [with_construction_window]). While it is positive, finalizing inference is refused at the
@@ -1522,8 +1524,10 @@ let state = ref Row.empty_env
    yet, so a [finish_inference] here would close its operands without them and commit that to the
    shapes, which no later step can undo (gh-ocannl-830). *)
 let construction_depth = ref 0
-let active_update_steps = ref []
-let active_constraints = ref []
+[@@mutation_serial.exempt "the construction window's depth, restored by the window's own finally"]
+
+let active_update_steps = ref [] [@@mutation_serial.fingerprinted]
+let active_constraints = ref [] [@@mutation_serial.fingerprinted]
 
 (** {3 Session consistency (gh-ocannl-1301)}
 
@@ -1547,6 +1551,7 @@ let iter_shapes update_step ~f =
   | Block { rhses; _ } -> List.iter rhses ~f
 
 let taint : string option ref = ref None
+[@@mutation_serial.exempt "the taint itself: a record of the first failure, not inference state"]
 
 let tainted_message provenance =
   [%string
@@ -1572,14 +1577,14 @@ type fingerprint = {
 
 let fingerprint () =
   {
-    fp_serial = !Row.mutation_serial;
+    fp_serial = Row.mutation_serial ();
     fp_state = !state;
     fp_steps = !active_update_steps;
     fp_constraints = !active_constraints;
   }
 
 let mutated_since fp =
-  fp.fp_serial <> !Row.mutation_serial
+  fp.fp_serial <> Row.mutation_serial ()
   || (not (phys_equal fp.fp_state !state))
   || (not (phys_equal fp.fp_steps !active_update_steps))
   || not (phys_equal fp.fp_constraints !active_constraints)
@@ -1605,6 +1610,9 @@ let discarded_updates : (int * int * string) list ref = ref []
 
 (* Called after every successful closure; [Tensor] records its checkpoint here. *)
 let on_closure : (unit -> unit) ref = ref (fun () -> ())
+[@@mutation_serial.exempt
+  "a hook Tensor installs once at module initialization, not inference state"]
+
 let set_on_closure f = on_closure := f
 
 let check_step_live (step : update_step) =
@@ -1642,6 +1650,7 @@ let rewind_open_state ~provenance =
   Row.reset_transient ();
   Row.drop_symbol_roles ();
   taint := None
+[@@mutation_serial.boundary "the rewind: it discards all open state and clears the taint"]
 
 let infer_equal (sh1 : t) (sh2 : t) =
   unmark_unused sh1.id;
@@ -2243,6 +2252,7 @@ let unsafe_reinitialize () =
   discarded_refs := [];
   Row.reset_transient ();
   Row.drop_symbol_roles ()
+[@@mutation_serial.boundary "the session reset: it discards all state and clears the taint"]
 
 let all_rows_w_origin update_step =
   let get_origin sh kind =
@@ -2981,6 +2991,8 @@ let%debug4_sexp finish_inference_body (() : unit) : unit =
   (* There should not be any shape variables remaining in any inference-undergoing update steps. *)
   state := Row.empty_env;
   !on_closure ()
+[@@mutation_serial.boundary
+  "the commit point: finish_inference taints the session on any failure of this body"]
 
 let finish_inference (() : unit) : unit =
   if !construction_depth > 0 then

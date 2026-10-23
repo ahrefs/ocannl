@@ -1,0 +1,5 @@
+val note_mutation : unit -> unit
+val add : int -> unit
+val add_noted : int -> unit
+val count : unit -> int
+val leak : unit -> (int, unit) Base.Hashtbl.t

@@ -41,6 +41,8 @@ module Proj_id = struct
     fun () ->
       Int.incr uid;
       Proj_id !uid
+  [@@mutation_serial.exempt
+    "a fresh-id counter: ids are never reused, so a rewind need not restore it"]
 
   include Comparator.Make (struct
     type nonrec t = t
@@ -95,6 +97,8 @@ let equal_dim d1 d2 =
   | _ -> equal_dim d1 d2
 
 let uid = ref 0
+[@@mutation_serial.exempt
+  "a fresh-id counter: ids are never reused, so a rewind need not restore it"]
 
 let get_var ?name () : dim_var =
   Int.incr uid;
@@ -141,9 +145,13 @@ let solved_dim_of_sym ({ sym = _; sym_basis; sym_proj_id } as sdim) =
    session (constraints, solver state, delayed references, role claims, precision links, root
    changes). [Tensor.op] and the other construction entry points compare it on exit: a construction
    that raises after the serial moved taints the session, one that raises before it does not.
-   Substituting the current environment into a shape is neutral and does not count. *)
-let mutation_serial = ref 0
-let note_mutation () = Int.incr mutation_serial
+   Substituting the current environment into a shape is neutral and does not count. A write to any
+   module-level mutable binding here or in [Shape] calls [note_mutation] or is classified in place
+   by a [@@mutation_serial.*] attribute; test/operations/mutation_serial_scan enforces it
+   (gh-ocannl-1506). *)
+let serial = ref 0 [@@mutation_serial.exempt "the serial itself: note_mutation is its writer"]
+let note_mutation () = Int.incr serial
+let mutation_serial () = !serial
 
 (* Static-symbol roles claimed since the last closure (gh-ocannl-1301). A role ([used_as_extent] /
    [used_as_slice]) is a flag on a caller-retained symbol, so a construction that is later discarded
@@ -175,8 +183,10 @@ let commit_symbol_roles () =
       | `Extent -> sym.Ir.Indexing.used_as_extent <- true
       | `Slice -> sym.Ir.Indexing.used_as_slice <- true);
   pending_roles := []
+[@@mutation_serial.boundary "part of the commit: only a successful finish_inference calls it"]
 
 let drop_symbol_roles () = pending_roles := []
+[@@mutation_serial.boundary "part of a rewind or session reset, which clears the taint"]
 
 (* Mint a symbolic dimension from a static-indexing symbol: a rigid constant equal only to itself
    during shape inference. Requires a declared [static_range >= 1] (checked eagerly). *)
@@ -1456,6 +1466,8 @@ let s_dim_one_in_row v ~value in_ =
   }
 
 let reapply_rows_constr = ref false
+[@@mutation_serial.exempt
+  "a transient flag of one constraint substitution, cleared before it returns or raises"]
 
 let subst_row_constraint_unprotected ~subst_in_dim ~get_dim_val stage constr =
   let subst_total_elems_divided_by numerator divided_by ~keep_axis =
@@ -1560,6 +1572,9 @@ let s_dim_one_in_row_constr stage v ~value constr =
     ~get_dim_val stage constr
 
 let ineqs_from_reapply_rows_constr = ref []
+[@@mutation_serial.exempt
+  "a transient carrier within one solver pass, drained by unify_dim; reset_transient clears it at \
+   a rewind"]
 
 let reset_transient () =
   reapply_rows_constr := false;

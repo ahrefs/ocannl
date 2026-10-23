@@ -1,0 +1,44 @@
+an unnoted write to a module-level table is refused: true
+the same write after note_mutation () is accounted for: true
+a second, unnoted writer beside a noted one is refused: true
+a note in an unrelated function does not account for the write: true
+a shadowing local note_mutation is not the real one: true
+Row.note_mutation () is the real one from another module: true
+a bare note_mutation () that resolves to nothing in this file is not the real one: true
+find_or_add with the note in its ~default closure is accounted for: true
+find_or_add with no note is refused: true
+a write inside an anonymous closure of a noting function is accounted for: true
+a write inside a nested let-bound function is judged by that function: true
+a write under let%ext is judged like any other: true
+:= on an unnoted path is refused: true
+incr, Int.incr and Stdlib.incr are writes: true
+reading a ref is not a write: true
+a ref given to a helper is a use the scan does not classify: true
+an array element assignment is Array.set, a write: true
+a function-local table is not module-level state: true
+a parameter spelled like the table is not the table: true
+comments and string literals are not code: true
+a container function outside the lists is refused: true
+the table escaping to a caller is refused: true
+a write at module initialization is refused: true
+state hidden under a local let of a module-level value is refused: true
+hidden state on an exempt binding is admitted: true
+state inside a nested module is refused: true
+an allocation by a constructor outside the closed list is refused: true
+a mutable allocation bound by a pattern is refused: true
+a table the interface exports is refused: true
+an interface exporting only functions is fine: true
+an exempt binding's unnoted writes are admitted: true
+an exemption no write needs is stale: true
+a fingerprinted ref that mutated_since reads needs no note: true
+a fingerprinted ref that mutated_since does not read is refused: true
+only a ref can be fingerprinted: true
+a boundary function's writes are admitted: true
+a boundary whose function needs none is stale: true
+a boundary only excuses its own function: true
+a one-word reason is malformed: true
+an unknown attribute name is malformed: true
+fingerprinted takes no payload: true
+an attribute on something it does not classify is refused: true
+two classifications on one binding are refused: true
+a source that does not parse is the input's fault, not the scanner's: true

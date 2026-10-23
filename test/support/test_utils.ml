@@ -139,6 +139,10 @@ module Operand_key_scan = Operand_key_scan
 (** Finding operand fixtures that mint values from a hand-rolled modulus of a multi-axis key instead
     of going through [Ll_test.cycle]'s blind-axis guard (gh-ocannl-1018). *)
 
+module Mutation_serial_scan = Mutation_serial_scan
+(** Holding every write to the inference session's module-level mutable state to
+    [Row.note_mutation], or to an in-place classification (gh-ocannl-1506). *)
+
 module Tensorized_census_scan = Tensorized_census_scan
 (** Finding executed claims about a tensorized routine whose item judges no mma census, which parity
     alone cannot replace (gh-ocannl-1309). *)

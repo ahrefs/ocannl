@@ -114,10 +114,14 @@ files.
   unaffected: their equations unify the copies' ids again. Executed parity:
   `test/operations/self_concat.ml`.
 - Closed shapes are write-guarded (gh-ocannl-1301): `Shape.t.closed` is set by a SUCCESSFUL
-  `finish_inference` (after every derivation), and every write site of rows, paddings and
-  `padding_elem` (`set_rows`, `set_padding`, `set_padding_elem` in `shape.ml`) checks equality first
-  — rows modulo projection ids (`Row.equal_modulo_proj`; `fresh_shape` re-mints them per
-  derivation). A new write site on a shape must go through those helpers. Reads of committed state
+  `finish_inference` (after every derivation), and every write of rows, paddings and `padding_elem`
+  checks equality first — rows modulo projection ids (`Row.equal_modulo_proj`; `fresh_shape`
+  re-mints them per derivation). Since gh-ocannl-1506 the compiler enforces the routing: `Shape.t`
+  is a `private` record, inside `shape.ml` too, whose only writers are the sealed `Shape_record`
+  submodule's guarded setters (`set_rows`, `set_paddings`, `set_padding_elem`, plus `of_rows`,
+  `copy`, `close`, `mark_discarded`); `shape_private_compile_control` holds the interface to it. A
+  new kind of write is a new setter there. The privacy is shallow: a padding array read off a shape
+  is still mutable. Reads of committed state
   (`to_dims`/`to_padding` of a closed shape, `get_projections` of a committed step) skip
   `finish_inference`: a failed closure of OTHER work would otherwise poison a closed tensor's lazies
   (OCaml lazies re-raise their first exception). Tests that deliberately continue after an
@@ -125,3 +129,15 @@ files.
   set (`test_symbolic_extents.ml`), and a test that closes an operand to inspect it (e.g. via
   `Shape.to_padding`) can no longer then give it a padded consumer — read the fields instead
   (`neutral_elem_guard.ml`).
+- Every write to a module-level mutable binding of `row.ml` or `shape.ml` (a `ref`, `Hashtbl`,
+  `Hash_set`, ...) must count as a session mutation — the definition writing it calls
+  `note_mutation ()`, usually as `if not (mem ...) then (note_mutation (); add ...)` so a no-op write
+  does not taint — or carry an in-place classification: `[@@mutation_serial.exempt "<reason>"]` on
+  the binding (fresh-id counters, the serial itself, a solver pass's transient flags),
+  `[@@mutation_serial.fingerprinted]` on a ref `Shape.mutated_since` compares physically, or
+  `[@@mutation_serial.boundary "<reason>"]` on a commit, rewind or reset function.
+  `mutation_serial_scan` (gh-ocannl-1506) enforces it; its header in
+  `test/support/mutation_serial_scan.ml` lists the forms it reads and what it refuses, including a
+  table passed to a helper or exported by the `.mli` (export a function instead, as
+  `Row.mutation_serial` and `Shape.set_on_closure` do). It does not check branch dominance: a
+  definition that notes on one path is credited for all its writes.
