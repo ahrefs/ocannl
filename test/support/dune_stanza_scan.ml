@@ -2060,16 +2060,23 @@ let backend_rule_of marked =
 
     It reads a CLOSED list of forms, anywhere in the stanza (the same reach as {!commands_in}), and
     refuses as unread -- never passes -- anything else in a position where a backend could be fixed:
-    - [(setenv <name> <value> …)] whose [<name>] addresses the backend key, in any case
+    - [(setenv <name> <value> …)] whose [<name>] the runtime reads as the backend key, in any case
       ([Utils.classify_env_var ~case_insensitive:true], since Windows folds it): a literal, nonempty
-      [<value>] pins that backend; a value carrying a pform, or an empty one (which unsets it and
-      hands the run back to the configuration), is unread.
+      [<value>] pins that backend for every run it wraps that fixes none on its own command line,
+      the command line outranking the environment. A value carrying a pform, an empty one (which
+      unsets it and hands the run back to the configuration), or a dashed name (which the startup
+      check aborts on) is unread. A [setenv] wrapping only PATH tools handed nothing of ours pins
+      nothing the walk places.
     - an argument of a [(run …)]/[(dynamic-run …)] that the runtime's own reader takes as the
       backend ([Utils.cmdline_arg_value "backend"], so every spelling and separator OCANNL accepts):
       a literal, nonempty value handed to a program of this workspace (a {!Runs}, {!Runs_dependency}
-      or {!Runs_public} command) pins it; handed to anything else -- a PATH tool such as [env]
-      launching ours, a command this scan cannot place -- or with a pform in its value, it is
-      unread.
+      or {!Runs_public} command, read in its action's context: under a [(setenv PATH …)] a bare name
+      is not one) pins it; handed to anything else -- a PATH tool such as [env] launching ours, a
+      command this scan cannot place -- or with a pform in its value, it is unread.
+    - an argument of such a program that is one pform standing alone and expanding to text rather
+      than to paths ([%{read-lines:…}], [%{read:…}], [%{env:…}] -- anything but
+      {!path_valued_pform_prefixes}, {!path_valued_pforms} and the stanza's named dependencies):
+      unread, since its expansion could carry the flag.
     - an argument assigning a variable that addresses the backend key ([OCANNL_BACKEND=cuda], what
       an [env] launcher takes): unread -- spell it as [setenv].
     - a [(bash …)]/[(system …)] line naming the key ([ocannl_backend] or [ocannl-backend], any case)
@@ -2078,12 +2085,11 @@ let backend_rule_of marked =
     - an atom of a library's [(inline_tests …)] field the runtime reader takes as the backend:
       unread -- pin it on a rule running the runner instead.
 
-    The named exclusions, each a decision rather than an end of the walk: an argument the runtime
-    reader does not take as the backend is not read further, so a pform expanding to arguments
-    ([%{deps}], a [@<file>] response file) is taken for the files it names -- its every use in this
-    tree, and refusing it would refuse the scans that read their inputs that way; and the backend in
-    the configuration file a run finds, which [config_dep_completeness] owns. A directory-wide
-    [(env … (env-vars …))] binding is refused outright, by {!backend_env_vars_scopes}. *)
+    The named exclusions, each a decision rather than an end of the walk: an argument mixing text
+    with a pform is read by its text, since a single-valued expansion inside it cannot start an
+    argument of its own; and the backend in the configuration file a run finds, which
+    [config_dep_completeness] owns. A directory-wide [(env … (env-vars …))] binding is refused
+    outright, by {!backend_env_vars_scopes}. *)
 
 type backend_pin =
   | Pinned_backend of { pin_backend : string; pin_form : string }
@@ -2097,14 +2103,48 @@ let addresses_backend name =
   | Utils.Env_config_key "backend" | Utils.Env_unread_spelling "backend" -> true
   | _ -> false
 
+(** Whether that name is one the runtime READS as the backend on some platform: case-folded on
+    Windows, but never a dashed spelling, which every platform's startup check aborts on. *)
+let reads_as_backend name =
+  match Utils.classify_env_var ~case_insensitive:true name with
+  | Utils.Env_config_key "backend" -> true
+  | _ -> false
+
 let backend_of_argument = Utils.cmdline_arg_value "backend"
+
+(** The pforms that, standing as a whole argument, expand to PATHS (or to nothing): a dependency, an
+    executable, a target, the test binary, a root, a toolchain program. Any other pform standing as
+    a whole argument -- [%{read-lines:…}], [%{read:…}], [%{env:…}] -- expands to text this reader
+    does not see, which could carry a backend flag (Codex P1, round 1). *)
+let path_valued_pform_prefixes = path_pforms @ [ binary_pform; "lib"; "libexec" ]
+
+let path_valued_pforms =
+  [ "deps"; "target"; "targets"; "test"; "workspace_root"; "project_root"; "null" ]
+  @ toolchain_pforms
 
 let backend_pins stanza =
   let named_deps = named_deps_of stanza in
-  let ours cmd =
-    match classify_command ~named_deps cmd with
-    | Runs _ | Runs_dependency _ | Runs_public _ -> true
-    | External | Unrecognized _ | Unknown_directory _ | Path_rewritten _ -> false
+  (* What a run's command is, in the context of the action around it: under a rewritten PATH a bare
+     name no longer says what it names (as in
+     {!classified_command_sites_with_pins_preserving_multiplicity}), so a flag handed to it is not a
+     pin of ours (Codex P1, round 1). [`Ours] a program of this workspace; [`Site] something the
+     walk places a site for without naming it; [`Tool] a PATH tool handed nothing of ours, which the
+     walk drops. *)
+  let command_kind ~path_rewritten cmd args =
+    if path_rewritten && is_path_lookup_token cmd then `Site
+    else
+      match classify_command ~named_deps cmd with
+      | Runs _ | Runs_dependency _ | Runs_public _ -> `Ours
+      | Unrecognized _ | Unknown_directory _ | Path_rewritten _ -> `Site
+      | External ->
+          if
+            path_rewritten
+            || List.exists args ~f:(fun arg ->
+                match classify_command ~named_deps arg with
+                | Runs _ | Runs_dependency _ | Runs_public _ | Unrecognized _ -> true
+                | External | Unknown_directory _ | Path_rewritten _ -> false)
+          then `Site
+          else `Tool
   in
   let literal value =
     (not (String.is_empty value)) && not (String.is_substring value ~substring:"%{")
@@ -2114,12 +2154,26 @@ let backend_pins stanza =
     | Some (name, _) -> addresses_backend name
     | None -> false
   in
+  let opaque_argument argument =
+    match pieces argument with
+    | [ Pform pform ] -> (
+        match String.lsplit2 pform ~on:':' with
+        | Some (prefix, _) -> not (List.mem path_valued_pform_prefixes prefix ~equal:String.equal)
+        | None ->
+            not
+              (List.mem path_valued_pforms pform ~equal:String.equal
+              || List.Assoc.mem named_deps pform ~equal:String.equal))
+    | _ -> false
+  in
   let argument_pin ~ours argument =
     match backend_of_argument argument with
     | Some value when ours && literal value ->
         Some (Pinned_backend { pin_backend = value; pin_form = argument })
     | Some _ -> Some (Unread_pin argument)
-    | None -> if assigns_backend argument then Some (Unread_pin argument) else None
+    | None ->
+        if assigns_backend argument || (ours && opaque_argument argument) then
+          Some (Unread_pin argument)
+        else None
   in
   let names_key line =
     let lower = String.lowercase line in
@@ -2129,7 +2183,11 @@ let backend_pins stanza =
          (String.split_on_chars line ~on:[ ' '; '\t'; '\n'; ';'; '&'; '|'; '"'; '\'' ])
          ~f:(fun word -> Option.is_some (backend_of_argument word) || assigns_backend word)
   in
-  let rec walk sexp =
+  (* [env_pin] is the innermost backend `setenv` around the node, as a pin of the runs it wraps:
+     emitted per RUN, and only where nothing on that run's command line outranks it -- the runtime
+     takes a command-line setting over the environment, so `(setenv OCANNL_BACKEND hip (run
+     %{dep:p.exe} --ocannl_backend=cc))` runs cc (Codex P2, round 1). *)
+  let rec walk ~path_rewritten ~env_pin sexp =
     match sexp with
     | Sexp.Atom _ -> []
     | Sexp.List (Sexp.Atom "setenv" :: Sexp.Atom name :: value :: rest) when addresses_backend name
@@ -2137,26 +2195,43 @@ let backend_pins stanza =
         let form = Printf.sprintf "(setenv %s %s …)" name (Sexp.to_string value) in
         let pin =
           match value with
-          | Sexp.Atom v when literal v -> Pinned_backend { pin_backend = v; pin_form = form }
+          | Sexp.Atom v when literal v && reads_as_backend name ->
+              Pinned_backend { pin_backend = v; pin_form = form }
           | _ -> Unread_pin form
         in
-        pin :: List.concat_map rest ~f:walk
-    | Sexp.List (Sexp.Atom ("run" | "dynamic-run") :: Sexp.Atom cmd :: args) ->
-        let ours = ours cmd in
-        List.concat_map args ~f:(function
-          | Sexp.Atom argument -> Option.to_list (argument_pin ~ours argument)
-          | Sexp.List _ as nested -> walk nested)
+        List.concat_map rest ~f:(walk ~path_rewritten ~env_pin:(Some pin))
+    | Sexp.List (Sexp.Atom "setenv" :: Sexp.Atom name :: _ :: rest)
+      when String.equal (String.uppercase name) "PATH" ->
+        List.concat_map rest ~f:(walk ~path_rewritten:true ~env_pin)
+    | Sexp.List (Sexp.Atom ("run" | "dynamic-run") :: Sexp.Atom cmd :: args) -> (
+        let arguments = List.filter_map args ~f:(function Sexp.Atom a -> Some a | _ -> None) in
+        let kind = command_kind ~path_rewritten cmd arguments in
+        let ours = match kind with `Ours -> true | `Site | `Tool -> false in
+        let from_arguments = List.filter_map arguments ~f:(argument_pin ~ours) in
+        match (from_arguments, kind) with
+        | _ :: _, _ -> from_arguments
+        (* A PATH tool handed nothing of ours runs nothing the walk places: the walk drops it, and
+           so does this reader. *)
+        | [], `Tool -> []
+        | [], (`Ours | `Site) -> Option.to_list env_pin)
     | Sexp.List (Sexp.Atom ("bash" | "system") :: args) ->
-        List.filter_map args ~f:(function
-          | Sexp.Atom line when names_key line -> Some (Unread_pin line)
-          | _ -> None)
+        let lines =
+          List.filter_map args ~f:(function
+            | Sexp.Atom line when names_key line -> Some (Unread_pin line)
+            | _ -> None)
+        in
+        if List.is_empty lines then Option.to_list env_pin else lines
     | Sexp.List (Sexp.Atom "inline_tests" :: fields) ->
         List.concat_map fields ~f:atoms
         |> List.filter_map ~f:(fun atom ->
             if Option.is_some (backend_of_argument atom) then Some (Unread_pin atom) else None)
-    | Sexp.List l -> List.concat_map l ~f:walk
+    | Sexp.List l -> List.concat_map l ~f:(walk ~path_rewritten ~env_pin)
   in
-  walk stanza
+  (* One pin per distinct form: a `setenv` around two runs is one pin. *)
+  walk ~path_rewritten:false ~env_pin:None stanza
+  |> List.fold ~init:[] ~f:(fun seen pin ->
+      if List.mem seen pin ~equal:Poly.equal then seen else pin :: seen)
+  |> List.rev
 
 (** What is wrong with a stanza's pins, given how the backend rule reads it. *)
 type pin_issue =

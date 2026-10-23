@@ -1250,6 +1250,52 @@ let backend_pin_cases =
  ; ocannl-backend: cc -- says cc
  (inline_tests (deps ocannl_config) (flags --ocannl_backend=cc)))|dune},
       [ "library: unread --ocannl_backend=cc" ] );
+    (* Review round 1. A dashed name is no spelling the runtime reads: its startup check aborts on
+       it, so it pins nothing and is unread. *)
+    ( "a dashed setenv name is unread, not a pin",
+      {dune|(rule
+ ; ocannl-backend: hip -- says hip
+ (action (setenv OCANNL-BACKEND hip (run %{dep:probe.exe}))))|dune},
+      [ "rule: unread (setenv OCANNL-BACKEND hip …)" ] );
+    (* Under a rewritten PATH a bare name may be anybody's launcher, so its flag is not ours... *)
+    ( "a flag handed to a bare name under a rewritten PATH",
+      {dune|(rule
+ ; ocannl-backend: cuda -- says cuda
+ (action (setenv PATH /tmp (run launcher.exe --backend=cuda))))|dune},
+      [ "rule: unread --backend=cuda" ] );
+    (* ...while a dependency expansion still names the workspace's program. *)
+    ( "the same flag handed to a dependency expansion there is a pin",
+      {dune|(rule
+ ; ocannl-backend: cuda -- says cuda
+ (action (setenv PATH /tmp (run %{dep:probe.exe} --backend=cuda))))|dune},
+      [ "rule: clean" ] );
+    (* A pform standing as a whole argument expands to arguments this reader does not see... *)
+    ( "a read-lines argument could carry the flag",
+      {dune|(rule
+ ; ocannl-backend: none -- claims no backend
+ (action (run %{dep:probe.exe} %{read-lines:backend.args})))|dune},
+      [ "rule: unread %{read-lines:backend.args}" ] );
+    (* ...unless it expands to paths. *)
+    ( "path-valued pforms and named dependencies are arguments, not pins",
+      {dune|(rule
+ ; ocannl-backend: none -- claims no backend
+ (deps (:inputs a.txt b.txt))
+ (action (run %{dep:probe.exe} %{deps} %{inputs} %{target} %{ocamlc} %{lib:l:l.cmi} @%{read:x.txt})))|dune},
+      [ "rule: clean" ] );
+    (* The command line outranks the environment: a flag on the run shadows the setenv around it,
+       for that run and no other. *)
+    ( "a command-line pin shadows the setenv around its run",
+      {dune|(rule
+ ; ocannl-backend: cc -- the command line says cc
+ (action (setenv OCANNL_BACKEND hip (run %{dep:probe.exe} --backend=cc))))|dune},
+      [ "rule: clean" ] );
+    ( "but not around a sibling run that sets none",
+      {dune|(rule
+ ; ocannl-backend: cc -- the command line says cc
+ (action
+  (setenv OCANNL_BACKEND hip
+   (progn (run %{dep:probe.exe} --backend=cc) (run %{dep:probe.exe})))))|dune},
+      [ "rule: unnamed hip (marker: cc)" ] );
     (* A stanza the XOR already refuses is not also told its pin is unnamed... *)
     ( "a pin on a stanza declaring neither is the XOR's to report",
       {dune|(rule (action (setenv OCANNL_BACKEND hip (run %{dep:probe.exe}))))|dune},

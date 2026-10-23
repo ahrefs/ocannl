@@ -246,6 +246,13 @@ ok: backend pins -- a command-line value read from a pform
 ok: backend pins -- a shell line naming the key
 ok: backend pins -- a shell line carrying a backend flag
 ok: backend pins -- an inline-test runner's flag
+ok: backend pins -- a dashed setenv name is unread, not a pin
+ok: backend pins -- a flag handed to a bare name under a rewritten PATH
+ok: backend pins -- the same flag handed to a dependency expansion there is a pin
+ok: backend pins -- a read-lines argument could carry the flag
+ok: backend pins -- path-valued pforms and named dependencies are arguments, not pins
+ok: backend pins -- a command-line pin shadows the setenv around its run
+ok: backend pins -- but not around a sibling run that sets none
 ok: backend pins -- a pin on a stanza declaring neither is the XOR's to report
 ok: backend pins -- an unread form on such a stanza is still reported
 ok: backend pins -- a declaration, an enabled_if and a path read from the configuration pin nothing
