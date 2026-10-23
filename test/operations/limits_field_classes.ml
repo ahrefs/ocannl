@@ -344,13 +344,15 @@ let sanctioned = [ "seeded_plan" ]
    side of a [match], [function] or [try] case whose guard has it so. [search] is the flag [tune]
    takes as [?search] -- a claim below holds that it does -- matched by name; nothing else is read
    as search-less: [if search then ... else e], a [||], a negation bound to another name or a flag
-   passed on all leave [e] an ordinary branch. THE SEARCH-LESS FALLBACK is every local binding (a
-   [let] nested in another binding: never a top-level or module definition, which other paths share)
-   that EVERY search-less branch references by a bare name, resolved through
-   [Test_utils.Lexical_scope] to the binding in scope at the reference -- so a same-named binding
-   elsewhere, or one shadowing it later, is not the fallback. A spelling of [seeded_transform]
-   anywhere inside such a binding's right-hand side is dropped from the reach graph; every other one
-   counts.
+   passed on all leave [e] an ordinary branch. THE SEARCH-LESS FALLBACK is every local function
+   binding (a [let] nested in another binding: never a top-level or module definition, which other
+   paths share; and its right-hand side a [fun] or [function], under any type constraint, so what it
+   spells runs only when it is called -- a [let fallback = seeded_transform ... in] would read the
+   fields on every path, the search's included: review round 1) that EVERY search-less branch
+   references by a bare name, resolved through [Test_utils.Lexical_scope] to the binding in scope at
+   the reference -- so a same-named binding elsewhere, or one shadowing it later, is not the
+   fallback. A spelling of [seeded_transform] anywhere inside such a binding's right-hand side is
+   dropped from the reach graph; every other one counts.
 
    The boundary: this pins WHERE the route is spelled, not where the fallback's result flows. The
    fallback may also be called from paths that test no flag (a refused lineage, a failed deferred
@@ -387,8 +389,16 @@ type fallback_walk = {
       (** Each search-less branch's start offset, with the bindings it references. *)
   sites : (int * int list) list;
       (** Each bare spelling of the route, with the bindings enclosing it, innermost first. *)
-  locals : Set.M(Int).t;  (** The bindings nested in another value binding. *)
+  locals : Set.M(Int).t;
+      (** The function bindings nested in another value binding: a [fun] or [function] right-hand
+          side, under any type constraint. *)
 }
+
+let rec is_function (e : expression) =
+  match e.pexp_desc with
+  | Pexp_function _ -> true
+  | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> is_function inner
+  | _ -> false
 
 let walk_fallback (source : string) : fallback_walk =
   let structure = Ppxlib.Parse.implementation (Lexing.from_string source) in
@@ -403,7 +413,8 @@ let walk_fallback (source : string) : fallback_walk =
 
       method! value_binding env vb =
         let at = offset vb.pvb_loc in
-        if not (List.is_empty !enclosing) then locals := Set.add !locals at;
+        if (not (List.is_empty !enclosing)) && is_function vb.pvb_expr then
+          locals := Set.add !locals at;
         enclosing := at :: !enclosing;
         let vb = super#value_binding env vb in
         enclosing := List.tl_exn !enclosing;
@@ -589,6 +600,11 @@ let () =
         "let tune ?(search = true) x =\n\
         \  let fallback () = seeded_transform () in\n\
         \  match x with 0 when not search -> x | _ -> if not search then fallback () else x",
+        flagged );
+      ( "an eagerly evaluated fallback",
+        "let tune ?(search = true) ~cache_dir x =\n\
+        \  let fallback = seeded_transform () in\n\
+        \  if (not search) && String.equal cache_dir \"\" then fallback else x",
         flagged );
       ( "a top-level fallback",
         "let fallback () = seeded_transform ()\n\
