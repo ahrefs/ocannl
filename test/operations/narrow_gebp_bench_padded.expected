@@ -1,0 +1,15 @@
+f32 n=76 at the default 64x256 blocking: the bench exits 0: true
+f32 n=76 at the default 64x256 blocking: no packed variant is skipped: true
+f32 n=76 at the default 64x256 blocking: packmma ran, matched naive, and is register-tiled: true
+f32 n=76 at the default 64x256 blocking: packmma_par ran, matched packmma, and is register-tiled: true
+f32 n=76 at the default 64x256 blocking: the header states the padded extents: true
+bf16 n=77 at 16x32: the bench exits 0: true
+bf16 n=77 at 16x32: no packed variant is skipped: true
+bf16 n=77 at 16x32: packmma ran, matched naive, and is register-tiled: true
+bf16 n=77 at 16x32: packmma_par ran, matched packmma, and is register-tiled: true
+bf16 n=77 at 16x32: the header states the padded extents: true
+f32 n=76 at 16x32 with --rn=2: the bench exits 0: true
+f32 n=76 at 16x32 with --rn=2: no packed variant is skipped: true
+f32 n=76 at 16x32 with --rn=2: packmma ran, matched naive, and is register-tiled: true
+f32 n=76 at 16x32 with --rn=2: packmma_par ran, matched packmma, and is register-tiled: true
+f32 n=76 at 16x32 with --rn=2: the header states the padded extents: true

@@ -73,6 +73,16 @@
  (modules bench_tile)
  (libraries base arrayjit.ir bench_args))
 
+; The packed GEBP schedule `narrow_gebp_bench` times, padded at extents its blocking does not
+; divide (gh-ocannl-627), with the bench's operand producers. A library so that the parity test in
+; test/operations runs the bench's own builder rather than a copy that could drift from it.
+
+(library
+ (name bench_gebp)
+ (package neural_nets_lib)
+ (modules bench_gebp)
+ (libraries base arrayjit.ir bench_checksum))
+
 (executable
  (package neural_nets_lib)
  (public_name compilation_speed_benchmark)
@@ -173,6 +183,7 @@
   time_now
   bench_args
   bench_checksum
+  bench_gebp
   bench_out
   bench_tile)
  (preprocess

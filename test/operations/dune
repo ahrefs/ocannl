@@ -271,6 +271,7 @@
   (alias runtest-foreign_c_stderr)
   (alias runtest-foreign_c_stderr_noise)
   (alias runtest-device_init_deadline)
+  (alias runtest-narrow_gebp_bench_padded)
   (alias runtest-exit_stream_teardown)
   (alias runtest-config_var_warnings)
   (alias runtest-config_var_fatal_spelling)
@@ -6199,6 +6200,52 @@
   (env_var OCANNL_BACKEND))
  (modules schedule_pad)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-627: the packed GEBP schedule bin/narrow_gebp_bench times, built by the bench's own
+; builder (`bench_gebp`, linked rather than copied), executed at extents its blocking does not
+; divide -- cell-by-cell bitwise against the unscheduled kernel, register-tiled per the census, at
+; f32 and at bf16 storage widened into f32 panels -- plus the before-pin: without its pads the
+; composition is refused at a Swap.
+
+;; gh-ocannl-627: bin/narrow_gebp_bench itself, run as the shipped executable at extents its
+;; blocking does not divide: the packed rows must run, agree, and report the register tiling, and
+;; the header must state the padding. Every packed-row claim fails on the base, where the gate
+;; skipped both packed variants. Timings go to stderr; the golden holds only the claims.
+
+(executable
+ (name narrow_gebp_bench_padded)
+ (modules narrow_gebp_bench_padded)
+ (libraries base stdio unix fresh_process bench_gebp arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: cc -- the child bench is pinned to cc on its commandline; the parent links none.
+ (target narrow_gebp_bench_padded.actual)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:narrow_gebp_bench_padded.exe}
+    %{dep:../../bin/narrow_gebp_bench.exe}))))
+
+(rule
+ (alias runtest-narrow_gebp_bench_padded)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff narrow_gebp_bench_padded.expected narrow_gebp_bench_padded.actual)))
+
+(test
+ (name gebp_padded_parity)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules gebp_padded_parity)
+ (libraries base ocannl stdio arrayjit.verdict ll_test bench_gebp)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
