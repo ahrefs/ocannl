@@ -203,9 +203,14 @@ jobs:
     # designed ~15min: ubuntu has run 29-31min and macOS ~20min on a miss, so
     # 45min means the job hung. Windows is the honest exception: its cold switch
     # and the serialized train tier have run 47-175min on the scheduled matrix,
-    # so it gets a ceiling that only a genuine hang can reach. `tools/ci-durations.sh`
-    # prints the per-job distribution these have to clear; re-read it before moving them.
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 240 || 45 }}
+    # so it gets a ceiling that only a genuine hang can reach. The scheduled OCaml
+    # floor job is the other exception (gh-ocannl-1588): it runs the whole `main`
+    # suite unsharded, so it has to clear the SUM of the two 5.5 `main` shards
+    # (up to ~60min by 2026-10, its own green runs 27-40min). At 45min it was
+    # cancelled mid-suite on every scheduled run from 2026-10-20, so 90.
+    # `tools/ci-durations.sh` prints the per-job distribution these have to
+    # clear; re-read it before moving them.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 240 || matrix.ocaml-compiler == '5.3.x' && 90 || 45 }}
     # No dune shared cache in CI, and explicitly so. Two things rule it out.
     # Dune's `enabled-except-user-rules` mode -- its default, and what this job
     # used to set -- excludes OCaml compilation from the shared cache by
