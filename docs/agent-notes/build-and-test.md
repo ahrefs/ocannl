@@ -970,10 +970,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   to dune, as does a context-qualified `@_build/CONTEXT/...`). The directories below an operand's
   are those holding a `dune` (or `dune-file`) and those its `(subdir ...)` stanzas give rules to,
   read by a deliberately small s-expression reader that is fail-closed on what it does not model
-  (`#|`, `#;`): a tree it cannot list leaves recursive misses to dune, and a dune file importing
-  another file anywhere (`include`, which can import a subdir or a `dynamic_include`; a
-  `dynamic_include`, which loading that directory's rules would build outside the slot) leaves
-  the whole batch to dune before any query. So a fixture dune with no `show` branch leaves the aliases to dune; a fixture that
+  (`#|`, `#;`). The census runs before any query, and a tree it cannot list completely -- a file
+  it cannot read, or one importing another file anywhere (`include`, which can import a subdir or
+  a `dynamic_include`; a `dynamic_include`, which loading that directory's rules would build
+  outside the slot), decided on its tokens -- leaves the whole batch to dune. So a fixture dune with no `show` branch leaves the aliases to dune; a fixture that
   records its calls must answer `show` without recording it. Leg 89 pins it against a table-driven
   fixture listing and, where a dune is at hand, a real one.
   `repeat [--alone] N` is the supported flake diagnostic (`--direct` for per-test aliases: one
@@ -1231,7 +1231,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   delimiter recognition; quoted bodies retain those newlines. Its header names the supported
   delimiter grammar and its explicit refusals (gh-ocannl-907).
 - macOS's bash 3.2 cannot parse a comment holding an apostrophe inside a process substitution
-  (`< <( # this tree's ...`): the error ("bad substitution: no closing `)'") comes only when the
+  (`< <( # this tree's ...`): the error (a "bad substitution", no closing parenthesis) comes only when the
   line RUNS, never from `bash -n`, and a fail-open caller then reads it as an empty answer
   (gh-ocannl-1448's census did, and only leg 89 noticed). Put such a body in a function and
   substitute the call.

@@ -798,7 +798,7 @@ alias_listing() { # <listing file> dir...; 0 with the parsed listing in it, 1 in
 # fail-closed on what it does not model: exit 3 where a file does not read (an
 # unbalanced form, a `#|` or `#;`, which dune versions read differently) or
 # takes stanzas from another file (an `include` or `dynamic_include`, at any
-# depth, Codex review round 3), and the caller then cannot list them all.
+# depth, Codex review round 3), and the caller then leaves the batch to dune.
 alias_dirs_perl='
   my $bad = 0;
   for my $f (@ARGV) {
@@ -878,21 +878,12 @@ alias_dune_dirs() { # the directories holding a dune file or a subdir's rules, `
   done < <(alias_dune_files)
   [ ${#list[@]} -gt 0 ] || return 1
   list=("${list[@]#./}")
-  # Kept for alias_dynamic_include, whatever the reader says of them.
-  printf '%s\0' "${list[@]}" >"$run_dir/aliases.files" || return 1
   perl -e "$alias_dirs_perl" "${list[@]}" >"$run_dir/aliases.dirs" || return 1
   sort -u "$run_dir/aliases.dirs"
   rm -f "$run_dir/aliases.dirs"
 }
-alias_imports() { # 0 iff a dune file alias_dune_dirs listed imports another file
-  local f
-  while IFS= read -r -d '' f; do
-    perl -0777 -ne 'exit(/\(\s*(?:dynamic_)?include\s/ ? 0 : 1)' -- "$f" 2>/dev/null && return 0
-  done <"$run_dir/aliases.files"
-  return 1
-}
 plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal
-  local arg spec rec d name i n all= unlisted=
+  local arg spec rec d name i n all=
   local specs=() recs=() spec_dirs=() names=() first=() rest=()
   alias_refusal=
   [ "${1:-}" = build ] || return 0
@@ -937,23 +928,19 @@ plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal
   for d in "${spec_dirs[@]}"; do
     alias_member "$d" ${first[@]+"${first[@]}"} || first+=("$d")
   done
-  # A generated `(dynamic_include ...)` is built by any dune query that loads
-  # its directory's rules -- this one too, outside the slot (Codex review round
-  # 4) -- and a static `(include FILE)` can import one, or a subdir, the census
-  # does not read (round 5): a tree whose dune files import another file
-  # anywhere leaves the batch to dune, before any query.
-  rm -f "$run_dir/aliases.files"
-  all=$(alias_dune_dirs) || { all=- unlisted=1; }
-  if [ ! -s "$run_dir/aliases.files" ] || alias_imports; then
-    rm -f "$run_dir/aliases.files"
-    return 0
-  fi
-  rm -f "$run_dir/aliases.files"
+  # The census comes first, and a tree it cannot list completely leaves the
+  # whole batch to dune before any query (Codex review rounds 4-6): among what
+  # makes it incomplete, a generated `(dynamic_include ...)` -- built by any
+  # dune query that loads its directory's rules, this one too, outside the
+  # slot -- and a static `(include FILE)`, which can import one, or a subdir,
+  # the census does not read. The reader decides both on its tokens, so a
+  # comment or a quoted head does not hide them.
+  all=$(alias_dune_dirs) || return 0
   alias_listing "$run_dir/aliases.1" "${first[@]}" || return 0
   i=0
   while [ "$i" -lt "$n" ]; do
     d=${spec_dirs[$i]}
-    if [ -z "$unlisted" ] && [ "${recs[$i]}" = 1 ] && alias_listed + "$d" "" "$run_dir/aliases.1" &&
+    if [ "${recs[$i]}" = 1 ] && alias_listed + "$d" "" "$run_dir/aliases.1" &&
        ! alias_listed = "$d" "${names[$i]}" "$run_dir/aliases.1"; then
       while IFS= read -r arg; do
         [ -n "$arg" ] && [ "$arg" != "$d" ] || continue
@@ -968,7 +955,6 @@ plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal
   # dune: only what the first answer decided refuses.
   [ ${#rest[@]} -eq 0 ] || alias_listing "$run_dir/aliases.2" "${rest[@]}" ||
     printf '?\n' >"$run_dir/aliases.2"
-  [ -z "$unlisted" ] || printf '?\n' >"$run_dir/aliases.2"
   i=0
   while [ "$i" -lt "$n" ]; do
     d=${spec_dirs[$i]} name=${names[$i]}

@@ -7379,15 +7379,16 @@ if [ -z "$alias_detail" ]; then
     grep -qF "ALIAS REFUSED: @al/runtest-no_such" <<<"$repeat_out"; } ||
     alias_detail="repeat: exit $repeat_rc (want 2); dune calls: $(cat "$TMP/alias-repeat.calls"); output: $repeat_out"
 fi
-# A dune file the reader cannot read -- unbalanced, or holding a `#|` or `#;`,
-# which dune versions read differently -- leaves a recursive miss to dune: the
-# directories below may then not all be listed. A miss in the operand's own
-# directory under @@ is still refused. A dune file importing another file
-# anywhere -- a `dynamic_include`, which loading its directory would build, or
-# a static `include`, which can import one -- leaves the whole batch to dune,
-# before any query.
+# A tree the census cannot list completely leaves the whole batch to dune
+# before any query, even an @@ miss in the operand's own directory: a dune file
+# the reader cannot read (unbalanced, or holding a `#|` or `#;`, which dune
+# versions read differently), or one importing another file anywhere -- a
+# `dynamic_include`, which loading its directory would build, or a static
+# `include`, which can import one -- also behind a comment or as a quoted head.
 for probe in "unread|(rule (alias odd)" "block|(rule (action (run echo #|x)))" \
-             "include|(subdir x (include rules.inc))" "dynamic|(subdir x (dynamic_include gen/rules.inc))"; do
+             "include|(subdir x (include rules.inc))" "dynamic|(subdir x (dynamic_include gen/rules.inc))" \
+             "commented|(; a comment
+ dynamic_include gen/rules.inc)" "quoted|(\"include\" rules.inc)"; do
   [ -z "$alias_detail" ] || break
   mkdir -p "$repeat_root/al/odd"
   printf '%s\n' "${probe#*|}" >"$repeat_root/al/odd/dune"
@@ -7395,12 +7396,11 @@ for probe in "unread|(rule (alias odd)" "block|(rule (action (run echo #|x)))" \
   { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build @al/runtest-no_such" ]; } ||
     alias_detail="${probe%%|*} below: exit $argv_rc (want 0); dune calls: ${argv_calls:-<none>}; digest: $argv_out"
   if [ -z "$alias_detail" ]; then
-    alias_want=2
-    case ${probe%%|*} in dynamic | include) alias_want=0 ;; esac
+    alias_want=0
     : >"$TMP/alias-${probe%%|*}-own.show"
     alias_probe "alias-${probe%%|*}-own" run build @@al/runtest-no_such
     [ "$argv_rc" = "$alias_want" ] || alias_detail="${probe%%|*} below, @@: exit $argv_rc (want $alias_want): $argv_out"
-    [ -n "$alias_detail" ] || [ "$alias_want" = 2 ] || [ ! -s "$TMP/alias-${probe%%|*}-own.show" ] ||
+    [ -n "$alias_detail" ] || [ ! -s "$TMP/alias-${probe%%|*}-own.show" ] ||
       alias_detail="${probe%%|*} below: dune was asked for a listing: $(cat "$TMP/alias-${probe%%|*}-own.show")"
   fi
   rm -rf "$repeat_root/al/odd"
