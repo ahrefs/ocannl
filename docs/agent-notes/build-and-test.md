@@ -1330,7 +1330,20 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   says so in the verdict line; CI's `fmt` job sets it, since its switch holds no project
   dependency and the build matrix runs the scans anyway. A command given as arguments runs alone,
   which is the form `tools/test-fmt-check.sh` drives with a fake switch: the scans build after a
-  clean formatter run only, their failure is the verdict, and any other setting is refused.
+  clean formatter run only, their failure is the verdict, and any other setting is refused. The
+  script takes no options: an argument starting with `-` is refused with the usage (exit 2),
+  where `fmt-check.sh -j 4` once ran `-j` as the command and exited 127. On a fleet box the
+  default command takes one of the box's run-time correctness slots for both builds itself,
+  as `tools/test-run.sh` does and through the same probe and candidates (gh-ocannl-1519): before
+  that, a worker ran it outside any slot while a measurement held the box, because the format
+  rule's last step reads as formatting, not as a build. It asks for `--cpu`
+  (`@test/operations/scans` is on `Slot_kind.config_free_aliases`, `@fmt` links nothing), waits
+  `OCANNL_TOOL_SLOT_WAIT` (600 s), and reuses an enclosing slot. The check reruns itself under
+  `execution slot` and reports back through a file, so a slot that never ran it is `fmt-check:
+  FAILED (exit 75): SLOT REFUSED`, nothing built, while a check the slot ran keeps its own
+  verdict line as the last and its recorded status as the exit status, whatever the wrapper's. A command given as arguments takes no slot (the harness's form;
+  wrap a caller's own formatter yourself), and `OCANNL_TOOL_FLEET_WORKER=none` turns it off as
+  for the runner; `tools/test-fmt-check.sh` drives the slot through a fake fleet-worker.sh.
   Two files a formatter cannot handle are refused at the site rather than
   discovered in CI:
   a misplaced doc comment (ocamlformat declines the whole file) is a compile error under the root

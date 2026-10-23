@@ -3,7 +3,9 @@
 # formatter failure must remain three different outcomes, each ending in a
 # verdict line. With opam, dune and ocamlformat available, a real project
 # leg checks the default command after `dune fmt` already ran: the cached
-# `@fmt` action must not hide the warning (gh-ocannl-1155).
+# `@fmt` action must not hide the warning (gh-ocannl-1155). A fake
+# fleet-worker.sh drives the default command's run-time slot (gh-ocannl-1519),
+# and an option is refused with the usage rather than run as the command.
 
 set -u
 
@@ -13,6 +15,9 @@ subject="$script_dir/fmt-check.sh"
 harness_args "$@"
 harness_scratch fmt-check
 fixture_dir=$TMP
+# No leg reaches this host's fleet: the default command's slot (gh-ocannl-1519) is driven by
+# the fake fleet-worker.sh below, and every other leg runs with the fleet turned off.
+export OCANNL_TOOL_FLEET_WORKER=none
 
 fixture="$fixture_dir/formatter"
 cat >"$fixture" <<'EOF'
@@ -87,6 +92,7 @@ set +e
 export GH_TOKEN=fixture-not-a-token FOO_API_KEY=fixture-not-a-key FMT_CHECK_PLAIN=kept
 check 0 "a formatter run with credentials exported, which must not see them," credentials
 cp "$script_dir/credential-env.sh" "$fixture_dir/credential-env.sh"
+cp "$script_dir/fleet-worker-candidates.sh" "$fixture_dir/fleet-worker-candidates.sh"
 awk '/^eval "\$\(credential_env_scrub_text\)" \|\| \{$/ { skip = 1 } skip { if ($0 == "}") skip = 0; next } { print }' \
   "$subject" >"$fixture_dir/fmt-check.sh"
 chmod +x "$fixture_dir/fmt-check.sh"
@@ -116,7 +122,9 @@ export GH_TOKEN=fixture-switch-token FOO_API_KEY=fixture-switch-key
 exec "$@"
 EOF
 # The default command's two dune builds, the formatter and the repository scans (gh-ocannl-1321),
-# each recorded in FAKE_DUNE_LOG; FAKE_FMT_EXIT and FAKE_SCANS_EXIT make either one fail.
+# each recorded in FAKE_DUNE_LOG (with `@slot` when it ran inside the fake fleet slot below);
+# FAKE_FMT_EXIT and FAKE_SCANS_EXIT make either one fail, and FAKE_DUNE_KILL_CHECK kills the
+# fmt-check that started it, which is dune's parent.
 cat >"$fake_switch/dune" <<'EOF'
 #!/usr/bin/env bash
 case "$*" in
@@ -126,7 +134,8 @@ case "$*" in
 esac
 [ -z "${GH_TOKEN+x}${FOO_API_KEY+x}" ] || { echo "credentials reached dune" >&2; exit 3; }
 [ "${FMT_CHECK_PLAIN:-}" = kept ] || { echo "the plain variable did not reach dune" >&2; exit 4; }
-[ -z "${FAKE_DUNE_LOG:-}" ] || echo "$step" >>"$FAKE_DUNE_LOG"
+[ -z "${FAKE_DUNE_LOG:-}" ] || echo "$step${FAKE_SLOT_HELD:+@slot}" >>"$FAKE_DUNE_LOG"
+[ -z "${FAKE_DUNE_KILL_CHECK:-}" ] || kill -KILL "$PPID"
 exit "$status"
 EOF
 chmod +x "$fake_switch/opam" "$fake_switch/dune"
@@ -211,6 +220,124 @@ if [ "$got" -eq 0 ] && [ "$(tr '\n' ' ' <"$fixture_dir/dune-steps.log")" = "fmt 
 else
   report 1 "a command given as arguments runs alone, without the scans" \
     "exited $got; see $fixture_dir/explicit.log"
+fi
+
+# The fleet's run-time correctness slot (gh-ocannl-1519): on a box whose fleet-worker.sh answers
+# the probe, the default command runs both builds inside one `execution slot --cpu`, as
+# tools/test-run.sh runs its batches; a refused slot is SLOT REFUSED (exit 75) with nothing run, a
+# check the slot ran keeps its own verdict, and a command given as arguments, or a fleet-worker.sh
+# that does not answer the probe, takes none. The fake records its calls in FAKE_FW_CALLS and, in
+# the slot, marks the command's environment (FAKE_SLOT_HELD) for the fake dune to record.
+fake_fw="$fixture_dir/fake-fleet-worker.sh"
+cat >"$fake_fw" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_FW_CALLS"
+if [ "$1 $2 $3" = "execution slot --probe" ]; then
+  [ "${FAKE_FW_MODE:-}" = noprobe ] && { echo "fleet-worker.sh: execution slot [--wait <seconds>] ..." >&2; exit 2; }
+  echo "EXECUTION SLOT PROBE fakebox 4 2"
+  exit 0
+fi
+shift 2
+while [ "$1" != -- ]; do shift; done
+shift
+case ${FAKE_FW_MODE:-} in
+  refuse) echo "EXECUTION SLOT REFUSED fakebox: all 4 slots busy after 0s"; exit 1 ;;
+  unreachable) echo "EXECUTION SLOT UNREACHABLE anchor: registry unread, no slot taken"; exit 4 ;;
+  # The check runs, and then the wrapper's own supervision fails.
+  wrapfail) FAKE_SLOT_HELD=1 "$@"; exit 9 ;;
+esac
+echo "EXECUTION SLOT fakebox: slot 1 of 4 held for: $*" >&2
+FAKE_SLOT_HELD=1 exec "$@"
+EOF
+chmod +x "$fake_fw"
+slot_leg() { # LABEL WANT_RC WANT_STEPS WANT_SLOT VERDICT_PREFIX [env ARG...] [-- SUBJECT_ARG...]
+  # WANT_SLOT: the slot call's words before `--`, `-` for a probe and no slot call, or `none`
+  # for no fleet-worker.sh call at all.
+  local label=$1 want=$2 steps=$3 want_slot=$4 prefix=$5 got=0 ran last calls slot_call env_args=()
+  shift 5
+  while [ "$#" -gt 0 ] && [ "$1" != -- ]; do env_args+=("$1"); shift; done
+  [ "$#" -eq 0 ] || shift
+  : >"$fixture_dir/dune-steps.log"
+  : >"$fixture_dir/fw-calls.log"
+  env OCANNL_TOOL_FMT_CHECK_SCANS=1 ${env_args[@]+"${env_args[@]}"} FMT_CHECK_PLAIN=kept PATH="$fake_switch:$PATH" \
+    OCANNL_TOOL_FLEET_WORKER="$fake_fw" FAKE_FW_CALLS="$fixture_dir/fw-calls.log" \
+    FAKE_DUNE_LOG="$fixture_dir/dune-steps.log" "$subject" "$@" >"$fixture_dir/slot-leg.log" 2>&1 \
+    || got=$?
+  ran=$(tr '\n' ' ' <"$fixture_dir/dune-steps.log")
+  last=$(sed -n '$p' "$fixture_dir/slot-leg.log")
+  calls=$(tr '\n' '|' <"$fixture_dir/fw-calls.log")
+  slot_call=$(grep -v -- '--probe' "$fixture_dir/fw-calls.log" | sed 's/ -- .*//')
+  case $want_slot in
+    none) [ -z "$calls" ] || { report 1 "$label" "fleet-worker.sh was called: $calls"; return; } ;;
+    -) [ "$calls" = "execution slot --probe|" ] ||
+         { report 1 "$label" "want only the probe, got: $calls"; return; } ;;
+    *) [ "$slot_call" = "$want_slot" ] ||
+         { report 1 "$label" "slot call [$slot_call], want [$want_slot]; calls: $calls"; return; } ;;
+  esac
+  if [ "$got" -eq "$want" ] && [ "$ran" = "$steps" ]; then
+    case $last in
+      "$prefix"*) report 0 "$label" ;;
+      *) report 1 "$label" "last line: $last" ;;
+    esac
+  else
+    report 1 "$label" \
+      "exited $got (want $want), dune ran [$ran] (want [$steps]); see $fixture_dir/slot-leg.log"
+  fi
+}
+slot_leg "on a fleet box the default command runs both builds in one --cpu slot, and passes" \
+  0 "fmt@slot scans@slot " "execution slot --wait 600 --cpu" "fmt-check: PASSED"
+if grep -Fq "fmt-check: taking one of fakebox's 4 fleet correctness slots" "$fixture_dir/slot-leg.log"; then
+  report 0 "the slot is announced before it is waited for"
+else
+  report 1 "the slot is announced before it is waited for" "see $fixture_dir/slot-leg.log"
+fi
+slot_leg "OCANNL_TOOL_SLOT_WAIT bounds the slot's wait" \
+  0 "fmt@slot scans@slot " "execution slot --wait 7 --cpu" "fmt-check: PASSED" OCANNL_TOOL_SLOT_WAIT=7
+slot_leg "with the scans skipped, the formatter build still runs in the slot" \
+  0 "fmt@slot " "execution slot --wait 600 --cpu" "fmt-check: PASSED (repository scans skipped" \
+  OCANNL_TOOL_FMT_CHECK_SCANS=0
+slot_leg "a scan failure in the slot keeps its own verdict and status" \
+  1 "fmt@slot scans@slot " "execution slot --wait 600 --cpu" \
+  "fmt-check: FAILED (exit 1): the repository scans failed" FAKE_SCANS_EXIT=1
+slot_leg "a refused slot is SLOT REFUSED (exit 75), and nothing ran" \
+  75 "" "execution slot --wait 600 --cpu" "fmt-check: FAILED (exit 75): SLOT REFUSED" FAKE_FW_MODE=refuse
+slot_leg "an unreachable registry is SLOT REFUSED (exit 75), and nothing ran" \
+  75 "" "execution slot --wait 600 --cpu" "fmt-check: FAILED (exit 75): SLOT REFUSED" \
+  FAKE_FW_MODE=unreachable
+slot_leg "a check killed in the slot still ends in a verdict" \
+  137 "fmt@slot " "execution slot --wait 600 --cpu" \
+  "fmt-check: FAILED (exit 137): the check under the fleet slot ended without a verdict" \
+  FAKE_DUNE_KILL_CHECK=1
+slot_leg "the check's recorded status wins over the wrapper's own failure after it" \
+  0 "fmt@slot scans@slot " "execution slot --wait 600 --cpu" "fmt-check: PASSED" FAKE_FW_MODE=wrapfail
+slot_leg "a fleet-worker.sh that does not answer the probe runs the builds directly" \
+  0 "fmt scans " - "fmt-check: PASSED" FAKE_FW_MODE=noprobe
+slot_leg "a command given as arguments takes no slot" \
+  0 "fmt " none "fmt-check: PASSED" -- dune build @fmt --force
+
+# Invoked by its relative path under an exported CDPATH that resolves the script's directory,
+# whose `cd` then prints that directory: the path the slot reruns must still be the script alone.
+got=0
+: >"$fixture_dir/dune-steps.log"
+: >"$fixture_dir/fw-calls.log"
+(cd "$script_dir/.." && env OCANNL_TOOL_FMT_CHECK_SCANS=1 CDPATH="$script_dir/.." FMT_CHECK_PLAIN=kept \
+  PATH="$fake_switch:$PATH" OCANNL_TOOL_FLEET_WORKER="$fake_fw" FAKE_FW_CALLS="$fixture_dir/fw-calls.log" \
+  FAKE_DUNE_LOG="$fixture_dir/dune-steps.log" "${BASH:-bash}" "tools/$(basename "$subject")") \
+  >"$fixture_dir/cdpath.log" 2>&1 || got=$?
+if [ "$got" -eq 0 ] && [ "$(tr '\n' ' ' <"$fixture_dir/dune-steps.log")" = "fmt@slot scans@slot " ]; then
+  report 0 "a relative invocation under an exported CDPATH reruns the script in the slot"
+else
+  report 1 "a relative invocation under an exported CDPATH reruns the script in the slot" \
+    "exited $got; see $fixture_dir/cdpath.log"
+fi
+
+# The script takes no options: `-j 4` used to run `-j` as the formatter command (exit 127).
+slot_leg "an option is refused with the usage, before any probe or build" \
+  2 "" none "fmt-check: FAILED (exit 2): '-j' is not an option" -- -j 4
+if grep -Fq "usage: tools/fmt-check.sh" "$fixture_dir/slot-leg.log"; then
+  report 0 "the refusal prints the usage"
+else
+  report 1 "the refusal prints the usage" "see $fixture_dir/slot-leg.log"
 fi
 
 # A real project whose only fault is an invalid doc comment in otherwise
