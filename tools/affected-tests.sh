@@ -384,7 +384,8 @@ sub path_in {   # DIR/P normalized, for a literal relative P staying in the tree
   }
   return @parts ? join("/", @parts) : ".";
 }
-sub note { print $man join("\t", @_), "\n" }
+my $unvouched = 0;   # notes saying a form is not described, so far
+sub note { $unvouched++ if $_[0] =~ /^(?:blind|blindtree|undescribed)$/; print $man join("\t", @_), "\n" }
 # Heads of stanzas that attach no action to an alias. One with an `(alias ...)`
 # field (copy_files has one) makes the alias depend on what it makes: a
 # `source`, whose rules `dune rules @ALIAS` prints. Tests are read from
@@ -396,13 +397,18 @@ my %written;
 sub convert {   # DIR FILE FORMS TOP -> the rewritten forms
   my ($dir, $file, $forms, $top) = @_;
   my (@out, %occ);
+  # Each top-level form is recorded once it is processed (the continue block),
+  # with whether the converter vouched for it: no note said otherwise.
+  my ($record, $before);
   for my $f (@$forms) {
+    ($record, $before) = (undef, $unvouched);
     unless (is_field($f)) { note("blind", $dir, "$file holds a top-level form with no stanza name"); push @out, $f; next }
     my ($h, @fl) = @$f;
     my $canon = text($f);
     if ($top) {
       my @names = grep { name_lit($_) } map { named($_, "name") || named($_, "names") ? @$_[1 .. $#$_] : () } @fl;
-      print $fo join("\t", $file, $dir, $h, join(",", @names), (grep { named($_, "action") } @fl) ? 1 : 0, $canon), "\n";
+      $record = [$file, $dir, $h, join(",", @names), (grep { named($_, "action") } @fl) ? 1 : 0];
+      push @$record, $canon;
     }
     if ($h eq "subdir") {
       my $sub = @fl ? path_in($dir, $fl[0]) : undef;
@@ -476,6 +482,8 @@ sub convert {   # DIR FILE FORMS TOP -> the rewritten forms
     }
     note("source", $dir, $_) for @al;
     push @out, $f;
+  } continue {
+    if ($record) { my $canon = pop @$record; print $fo join("\t", @$record, $unvouched == $before ? 1 : 0, $canon), "\n" }
   }
   return @out;
 }
@@ -512,9 +520,13 @@ TESTS
 make_tree() { # PROBE: a scratch copy of the sources, converted (dune not run there yet)
   local p=$1
   mkdir -p "$p" || return 1
+  # Ignored files are copied too (a local config, a fixture a rule reads), but
+  # not ignored directories (`_build`, logs): a rule needing one fails in the
+  # probe, and the reading falls back.
   if [ "$in_git" = 1 ]; then
     { git ls-files -z --cached --others --exclude-standard &&
-      git ls-files -z --others --ignored --exclude-standard -- ocannl_config '*/ocannl_config'; } >"$tmp/probe-files" || return 1
+      git ls-files -z --others --ignored --exclude-standard --directory |
+        perl -0ne 'print unless m{/\0?\z}'; } >"$tmp/probe-files" || return 1
   else
     find . -name _build -prune -o \( -type f -o -type l \) -print0 >"$tmp/probe-files" || return 1
   fi
@@ -526,6 +538,7 @@ make_tree() { # PROBE: a scratch copy of the sources, converted (dune not run th
 finish_probe() { # PROBE SUFFIX: its tests' goldens, and its listings
   local p=$1 s=$2
   probe_dune "$p" show targets "${dirs[@]}" >"$tmp/probe-targets$s" 2>&1 || return 1
+  probe_dune "$p" show aliases "${dirs[@]}" >"$tmp/probe-aliases$s" 2>&1 || return 1
   perl "$tmp/tests.pl" "$p" "$tmp/probe-targets$s" "$tmp/manifest$s" 2>>"$tmp/err" || return 1
 }
 # A changed dune file is compared across revisions (the old probe below) when
@@ -570,9 +583,17 @@ elif make_tree "$tmp/probe"; then
       : >"$tmp/scoped"
     fi
   fi
+  # The probe answers for the worktree only if it lists the same aliases: dune
+  # exits 0 after an error in these listings, so a probe it does not load (an
+  # (include) of a file the copy lacks, say) is caught here and read without.
   if finish_probe "$tmp/probe" ""; then
-    probe_ok=1
-    qroot=$tmp/probe
+    if probe_dune . show aliases "${dirs[@]}" >"$tmp/worktree-aliases" 2>&1 &&
+       cmp -s "$tmp/worktree-aliases" "$tmp/probe-aliases"; then
+      probe_ok=1
+      qroot=$tmp/probe
+    else
+      echo "the probe does not define the aliases the worktree does: $(diff "$tmp/worktree-aliases" "$tmp/probe-aliases" | head -3 | tr '\n' ' ')" >>"$tmp/err"
+    fi
   fi
 fi
 if [ "${OCANNL_TOOL_AFFECTED_PROBE:-1}" != 0 ] && [ "$probe_ok" = 0 ]; then
@@ -583,16 +604,18 @@ if [ "${OCANNL_TOOL_AFFECTED_PROBE:-1}" != 0 ] && [ "$probe_ok" = 0 ]; then
   for x in manifest forms manifest-old forms-old scoped; do : >"$tmp/$x"; done
 fi
 
-# Dune 3.24 prints these listings on stderr, and exits 0 even after an error,
-# so both streams are read together, and every line must have one of the forms
-# the reader below accepts.
-for what in aliases targets; do
-  probe_dune "$qroot" show "$what" "${dirs[@]}" >"$tmp/$what" 2>&1 ||
-    die "dune show $what failed:
+listings() { # Dune 3.24 prints these listings on stderr, and exits 0 even after an
+  # error, so both streams are read together, and every line must have one of
+  # the forms the reader below accepts.
+  for what in aliases targets; do
+    probe_dune "$qroot" show "$what" "${dirs[@]}" >"$tmp/$what" 2>&1 ||
+      die "dune show $what failed:
 $(cat "$tmp/$what")"
-done
+  done
+}
+listings
 
-perl - "$tmp" "$referenced_only" "$probe_ok" "$qroot" "$tmp/probe-old" <<'PERL'
+cat >"$tmp/main.pl" <<'PERL'
 use strict; use warnings;
 my ($tmp, $referenced_only, $probe_ok, $qroot, $old_root) = @ARGV;
 # While a dune answer is being read, a refusal keeps a copy of it (see keep_raw).
@@ -1163,12 +1186,20 @@ while (@queue) {
     }
     $next{$_} = 1 for grep { !$queried{$_} } keys %v;
   }
-  exists $runs{$_} or fail("dune rules printed no rule for $_") for @queue;
+  for (@queue) { exists $runs{$_} or $rules_soft ? return 0 : fail("dune rules printed no rule for $_") }
   @queue = sort keys %next;
 }
 return 1;
 }
-query_rules(@own_targets);
+# Under the probe, a rule dune cannot print there (an input its copy lacks, say)
+# sends the whole reading back to the shell, which reads again without it.
+sub probe_query {
+  local $rules_soft = $probe_ok;
+  return if query_rules(@_);
+  print STDERR "affected: dune could not print a rule in the probe (an input its copy lacks?); reading again without it\n";
+  exit 4;
+}
+probe_query(@own_targets);
 # A helper alias a queried rule needs (`(deps (alias NAME))`, NAME no per-test
 # alias) is an entry of its own, never printed: its twins are queried and read
 # like a per-test alias's, and an alias needing it is listed when it would be
@@ -1193,7 +1224,7 @@ query_rules(@own_targets);
                 owners => {}, own => [grep { $listed{(dir_of($_))[1]} } @{$twins{$d}{$x} // []}] };
       push @al, $h;
       source_query($h, $internal);
-      query_rules(grep { !$queried{$_} } @{$h->{own}});
+      probe_query(grep { !$queried{$_} } @{$h->{own}});
       $grew = 1;
     }
   }
@@ -1290,18 +1321,39 @@ if (@scoped) {
     @scoped = ();
   }
   my %twin_of;   # twin path -> [aliases], either side
+  my %old_sources;   # DIR -> {alias some stanza of the old side made depend on files}
+  my %old_exp;
+  sub old_expansion {   # DIR ALIAS: {target => 1} that `dune rules @ALIAS` gives in the old probe
+    my ($d, $x) = @_;
+    return $old_exp{"$d\0$x"} //= do {
+      local $rules_root = $old_root;
+      local $rules_soft = 1;
+      my @got = dune_rules("\@" . in_dir($d, $x));
+      # Unanswered: every target counts as its own.
+      if (grep { !defined } @got) { +{ "\0all" => 1 } }
+      else {
+        my %t;
+        for my $rule (@got) {
+          my $tg = field($rule, "targets");
+          $t{$_} = 1 for grep { defined } map { strip_ctx(atom($_, "targets")) } map { items(field($tg // [], $_)) } "files", "directories";
+        }
+        \%t;
+      }
+    };
+  }
   for my $m ("manifest", "manifest-old") {
     for (split /\n/, slurp("$tmp/$m")) {
       my ($k, $d, $t, @a) = split /\t/;
       push @{$twin_of{in_dir($d, $t)}}, @a if $k eq "twin";
+      $old_sources{$d}{$t} = 1 if $k eq "source" && $m eq "manifest-old";
     }
   }
   my %forms;   # side -> file -> [form records]
   for my $side ("new", "old") {
     for (split /\n/, slurp($side eq "new" ? "$tmp/forms" : "$tmp/forms-old")) {
-      my ($file, $d, $head, $names, $act, $canon) = split /\t/, $_, 6;
+      my ($file, $d, $head, $names, $act, $vouched, $canon) = split /\t/, $_, 7;
       push @{$forms{$side}{$file}}, { dir => $d, head => $head, names => [grep { $_ ne "" } split /,/, $names],
-                                      action => $act, canon => $canon };
+                                      action => $act, vouched => $vouched, canon => $canon };
     }
   }
   # The `(alias)` stanzas of this side, by directory and name: what an alias a
@@ -1348,6 +1400,10 @@ if (@scoped) {
     }
     for my $r (@changed_forms) {
       my $h = $r->{head};
+      # A form the converter did not vouch for (an alias rule it left alone, an
+      # (alias) with an action, a stanza outside its allowlist): what changed
+      # there no rule this reader compares may show.
+      unless ($r->{vouched}) { push @why, "a changed ($h) the probe does not describe"; next }
       next if $rules_shown{$h};
       if ($h eq "alias" && !$r->{action}) {
         # The alias itself, per-test or a helper (whose entry carries the change to
@@ -1420,6 +1476,18 @@ if (@scoped) {
           push @why, "a changed rule for $t, an artifact this reader does not map" if $new_side;
         } else {
           push @paths, $t;
+          # A target only the old side makes is read nowhere in this side's graph:
+          # the aliases that may have owned it there (named after it, or made to
+          # depend on files by an old stanza) are listed.
+          unless ($new_side) {
+            for my $a (grep { $_->{dir} eq $td && !$_->{hidden} } @al) {
+              my ($rest) = $a->{alias} =~ /^(?:runtest|train|slow)-(.+)$/ or next;
+              my ($unit, @var) = split /-/, $rest;
+              next unless grep({ index($tb, $_) == 0 } "$rest.", "${unit}_", join(".", $unit, @var) . ".")
+                || ($old_sources{$td}{$a->{alias}} && grep { $_ } @{old_expansion($td, $a->{alias})}{$t, "\0all"});
+              $direct_here{in_dir($td, $a->{alias})} = "a target it may have owned is gone";
+            }
+          }
         }
       }
       # A per-test alias new on this side is listed: it never ran.
@@ -1951,3 +2019,20 @@ printf STDERR "affected: %d alias(es) from %d changed path(s)%s%s\n", scalar(key
   @unmapped ? "; INCOMPLETE, see UNMAPPED above" : "";
 exit(@unmapped ? 3 : 0);
 PERL
+rc=0
+perl "$tmp/main.pl" "$tmp" "$referenced_only" "$probe_ok" "$qroot" "$tmp/probe-old" || rc=$?
+# 4: the probe loaded, but dune could not print a rule there (an input the copy
+# lacks, say): the whole reading again, without the probe.
+if [ "$rc" = 4 ] && [ "$probe_ok" = 1 ]; then
+  probe_ok=0
+  qroot=.
+  for x in manifest forms manifest-old forms-old; do : >"$tmp/$x"; done
+  if [ -s "$tmp/scoped" ]; then
+    while IFS= read -r f; do printf '%s\t%s\n' "$f" "the probe failed" >>"$tmp/unscoped"; done <"$tmp/scoped"
+    : >"$tmp/scoped"
+  fi
+  listings
+  rc=0
+  perl "$tmp/main.pl" "$tmp" "$referenced_only" "$probe_ok" "$qroot" "$tmp/probe-old" || rc=$?
+fi
+exit "$rc"

@@ -793,7 +793,7 @@ fi
 # revisions. The fixtures below hold one shape per form the hand readers of
 # staging#1336 misread; each leg asks for the exact list.
 unset OCANNL_TOOL_AFFECTED_PROBE
-mkdir -p "$repo/p1" "$repo/p2" "$repo/p3/s1" "$repo/p3/s2" "$repo/p4" || exit 2
+mkdir -p "$repo/p1" "$repo/p2" "$repo/p5" "$repo/p3/s1" "$repo/p3/s2" "$repo/p4" || exit 2
 printf '(lang dune 3.20)\n(using directory-targets 0.1)\n' >"$repo/dune-project"
 for f in cfg/ws.txt p1/inc.txt p1/chd.txt p1/tch.txt p1/blk.txt 'p1/#' p1/hs.txt p1/hb.txt p1/hl.txt p2/p2in.txt; do
   : >"$repo/$f" || exit 2
@@ -840,6 +840,8 @@ cat >"$repo/p3/dune" <<'DUNE'
 (alias (name h4) (deps h4.txt))
 (rule (alias runtest-needh4) (deps (alias h4)) (action (progn)))
 (alias (name runtest-viah4) (deps (alias h4)))
+(rule (alias runtest-two) (targets two1.txt) (action (with-stdout-to two1.txt (echo 1))))
+(rule (alias runtest-two) (targets two2.txt) (action (with-stdout-to two2.txt (echo 2))))
 (subdir s1 (rule (alias runtest-sx) (action (echo x))))
 DUNE
 printf '; nothing here but the subdir stanzas of p3/dune\n' >"$repo/p3/s1/dune"
@@ -849,6 +851,12 @@ for m in pa pb lk; do printf 'let () = ()\n' >"$repo/p3/$m.ml"; done
 : >"$repo/p3/h4b.txt"
 : >"$repo/p3/pa.expected"
 : >"$repo/p3/pb.expected"
+# An alias rule the converter does not rewrite (an (:include)), beside one it does.
+cat >"$repo/p5/dune" <<'DUNE'
+(rule (alias runtest-inc5) (deps (:include inc5.sexp)) (action (progn)))
+(rule (alias runtest-p5ok) (action (echo ok)))
+DUNE
+printf '()\n' >"$repo/p5/inc5.sexp"
 # A scan reading p3's dune file, and a sibling test it does not concern.
 cat >"$repo/p4/dune" <<'DUNE'
 (rule (target dscan.actual) (deps %{project_root}/p3/dune) (action (with-stdout-to %{target} (echo s))))
@@ -859,10 +867,10 @@ printf 'let () = ()\n' >"$repo/p4/p4t.ml"
 printf 's\n' >"$repo/p4/dscan.expected"
 : >"$repo/p4/p4t.expected"
 git_q add -A && git_q commit -qm probe-fixture || exit 2
-probe_blind='@p2/runtest-p2blind @p1/runtest-incdeps'
+probe_blind='@p2/runtest-p2blind @p1/runtest-incdeps @p5/runtest-inc5'
 p3_all='@p3/runtest-act3 @p3/runtest-blk3 @p3/runtest-dirt3 @p3/runtest-lk @p3/runtest-needh3 @p3/runtest-needh4 @p3/runtest-pa
-  @p3/runtest-pb @p3/runtest-reads3 @p3/runtest-viah4 @p3/s1/runtest-sx'
-probe_restore() { git_q reset -q --hard && git_q clean -qfd -- p1 p2 p3 p4; }
+  @p3/runtest-pb @p3/runtest-reads3 @p3/runtest-two @p3/runtest-viah4 @p3/s1/runtest-sx'
+probe_restore() { git_q reset -q --hard && git_q clean -qfdx -- p1 p2 p3 p4 p5 p6; }
 
 if harness_leg 'probe alias actions'; then
   for pair in cfg/ws.txt:runtest-wsroot p1/chd.txt:runtest-chdir p1/tch.txt:runtest-tchdir p1/blk.txt:runtest-block \
@@ -952,6 +960,16 @@ if harness_leg 'probe dune edits'; then
     git_q mv p3/pb.expected p3/pd.expected &&
     probe_leg 'a renamed test, which the old dune file cannot describe beside the new sources, keeps the whole directory' \
       "$(echo "$p3_all" | sed 's|@p3/runtest-pb|@p3/runtest-pd|') $p3_scan $probe_blind"
+  probe_edit 's/\(rule \(alias runtest-two\) \(targets two2\.txt\)[^\n]*\n//' &&
+    probe_leg 'a removed target rule lists the alias that owned it on the old side' "@p3/runtest-two $p3_scan"
+  perl -0pi -e 's/\(echo ok\)/(echo okay)/; s/\(action \(progn\)\)\)/(action (echo i)))/' "$repo/p5/dune"
+  affected HEAD
+  # shellcheck disable=SC2086
+  expect 'a changed rule the probe does not describe keeps the whole directory' 0 @p5/runtest-inc5 @p5/runtest-p5ok
+  if grep -q 'p5/dune: its whole directory, because a changed (rule) the probe does not describe' "$err"; then
+    report 0 'a dune file kept whole for an undescribed rule says why'
+  else report 1 'a dune file kept whole for an undescribed rule says why' "$(cat "$err")"; fi
+  probe_restore
   # What dune cannot answer keeps the whole directory.
   probe_edit 's/\z/(env (_ (env-vars (P3 x))))\n/' &&
     probe_leg 'a changed (env) stanza keeps the reach of its whole directory' "$p3_all $p3_scan"
@@ -966,6 +984,48 @@ if harness_leg 'probe dune edits'; then
   if grep -q 'its whole directory, because --files names no revision' "$err"; then report 0 'a dune file kept whole says why'
   else report 1 'a dune file kept whole says why' "$(cat "$err")"; fi
   probe_restore
+fi
+# Probes that do not answer: an input the copy lacks (an ignored directory),
+# and a dune file including one. Each reads the change without the probe.
+probe_p6() { # DUNE-TEXT [FRAGMENT-TEXT]
+  mkdir -p "$repo/p6/gen" && printf 'gen/\n' >"$repo/p6/.gitignore" && printf '%s\n' "$1" >"$repo/p6/dune" &&
+    : >"$repo/p6/gen/dep.txt" && : >"$repo/p6/p6.txt" || return 1
+  [ -z "${2:-}" ] || printf '%s\n' "$2" >"$repo/p6/gen/x.inc"
+}
+if harness_leg 'probe fallback'; then
+  probe_p6 '(rule (alias runtest-ign) (deps gen/dep.txt) (action (progn)))' || exit 2
+  # dune prints what a rule reads whether or not the file is there: the copy
+  # lacks the ignored input, and the probe still reads it right.
+  affected --files p6/p6.txt
+  # shellcheck disable=SC2086
+  expect 'a rule whose input the probe copy lacks reads only that input (here: not p6.txt)' 0 $probe_blind
+  affected --files p6/gen/dep.txt
+  # shellcheck disable=SC2086
+  expect 'a rule whose input the probe copy lacks is listed for that input' 0 @p6/runtest-ign $probe_blind
+  probe_restore
+  probe_p6 '(include gen/x.inc)
+(rule (alias runtest-p6) (action (progn)))' '(rule (alias runtest-inc6) (action (progn)))' || exit 2
+  affected --files p6/p6.txt
+  if [ "$rc" = 0 ] && grep -q 'the probe failed' "$err" && grep -qx @p6/runtest-p6 "$out"; then
+    report 0 'a probe dune does not load reads the change without the probe'
+  else report 1 'a probe dune does not load reads the change without the probe' "exit $rc; $(cat "$out" "$err")"; fi
+  probe_restore
+  # A probe that loads but whose rules dune will not print (a shim refusing
+  # `dune rules` inside it): the whole reading again without the probe, so the
+  # list is the one without it.
+  mkdir -p "$TMP/shim4" || exit 2
+  cat >"$TMP/shim4/dune" <<SHIM
+#!/usr/bin/env bash
+case "\${1:-}:\$PWD" in rules:*/probe) echo 'Error: refused by the harness shim' >&2; exit 1 ;; esac
+exec "$REAL_DUNE" "\$@"
+SHIM
+  chmod +x "$TMP/shim4/dune" || exit 2
+  rc=0
+  (cd "$TMP" && PATH="$TMP/shim4:$PATH" "$repo/tools/affected-tests.sh" --files lib/helper.ml) >"$out" 2>"$err" || rc=$?
+  if grep -q 'reading again without it' "$err"; then
+    # shellcheck disable=SC2086
+    expect 'a probe whose rules dune will not print reads the change again without it' 0 $reached_by_core
+  else report 1 'a probe whose rules dune will not print reads the change again without it' "exit $rc; $(cat "$err")"; fi
 fi
 if harness_leg 'probe controls'; then
   # shellcheck disable=SC2086
@@ -1019,6 +1079,32 @@ if harness_leg 'probe controls'; then
     control 'a changed twin of a helper alias is what lists the alias needing it' \
       '$direct_here{in_dir($td, $_)} = "a rule of it changed" for @{$twin_of{$t} // []};' '' \
       HEAD -- @p3/runtest-needh3 $p3_scan
+  probe_restore
+  probe_edit 's/\(rule \(alias runtest-two\) \(targets two2\.txt\)[^\n]*\n//' &&
+    control 'the old side'"'"'s owners are what list the alias of a removed target' \
+      '$direct_here{in_dir($td, $a->{alias})} = "a target it may have owned is gone";' '' \
+      HEAD -- @p3/runtest-two $p3_scan
+  probe_restore
+  perl -0pi -e 's/\(action \(progn\)\)\)/(action (echo i)))/' "$repo/p5/dune"
+  control 'the converter'"'"'s verdict is what keeps a changed undescribed rule'"'"'s directory whole' \
+    'unless ($r->{vouched}) { push @why, "a changed ($h) the probe does not describe"; next }' '' \
+    HEAD -- @p5/runtest-inc5 @p5/runtest-p5ok
+  probe_restore
+  probe_p6 '(include gen/x.inc)
+(rule (alias runtest-p6) (action (progn)))' '(rule (alias runtest-inc6) (action (progn)))' || exit 2
+  # The shipping reader exits 0 here (the 'probe fallback' leg); without the
+  # alias comparison it accepts the probe, and its listing stops the run.
+  if FROM='cmp -s "$tmp/worktree-aliases" "$tmp/probe-aliases"' TO='true' \
+       perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
+       "$repo/tools/affected-tests.sh" >"$repo/tools/affected-mutant.sh"; then
+    rc=0
+    (cd "$TMP" && bash "$repo/tools/affected-mutant.sh" --files p6/p6.txt) >"$out" 2>"$err" || rc=$?
+    if [ "$rc" = 2 ]; then report 0 'negative control: comparing the probe'"'"'s aliases with the worktree'"'"'s is what keeps a probe dune does not load from stopping the run'
+    else report 1 'negative control: comparing the probe'"'"'s aliases with the worktree'"'"'s is what keeps a probe dune does not load from stopping the run' "mutant exit $rc"; fi
+  else
+    report 1 'negative control: comparing the probe'"'"'s aliases with the worktree'"'"'s is what keeps a probe dune does not load from stopping the run' 'the mutation anchor does not occur exactly once'
+  fi
+  rm -f "$repo/tools/affected-mutant.sh"
   probe_restore
 fi
 
