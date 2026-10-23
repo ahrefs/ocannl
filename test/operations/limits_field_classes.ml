@@ -470,7 +470,11 @@ let walk_fallback (source : string) : fallback_walk =
     object (self)
       inherit [binding, unit] Test_utils.Lexical_scope.scoped as super
       method local = { at = None; flag = false }
-      method module_path _ _ = None
+
+      (* Every module path and binding is recorded as some module, so [Option] bound by the source
+         shows in the scope's modules. *)
+      method module_path _ _ = Some ()
+      method! shadowed = Some ()
 
       (* A local [open] or [include] of a module the scan does not read hides every name beneath it
          (review round 4); the file's top-level opens are libraries, taken to bind nothing the forms
@@ -490,39 +494,47 @@ let walk_fallback (source : string) : fallback_walk =
             { at = None; flag = true }
         else super#bind_parameter env label pattern
 
-      (* The right-hand side is read without its own scope, so one that binds the name [search]
-         anywhere -- [let search = let search = false in search] -- is not the flag (review round
-         5): refused rather than resolved. *)
+      (* A flag alias preserves the flag's value, in one of a closed list of forms (review round 6):
+         the flag itself, [Option.value <flag> ~default:_] or [Option.value_or_thunk <flag>
+         ~default:_] -- [Option] the library's, bound by no module of the source and under no local
+         open -- and its pattern is the bare name [search]. Any other right-hand side, a negation or
+         a [let search = let search = false in search] included (review round 5), makes no flag:
+         refused rather than resolved. *)
       method! binding_denotes env vb =
-        let names_flag = ref false and rebinds = ref false in
-        let names =
-          object
-            inherit Ast_traverse.iter as super
-
-            method! expression e =
-              (match e.pexp_desc with
-              | Pexp_ident { txt = Lident name; _ }
-                when String.equal name search_flag && is_flag env name ->
-                  names_flag := true
-              | _ -> ());
-              super#expression e
-
-            method! pattern p =
-              (match p.ppat_desc with
-              | (Ppat_var { txt; _ } | Ppat_alias (_, { txt; _ })) when String.equal txt search_flag
-                ->
-                  rebinds := true
-              | _ -> ());
-              super#pattern p
-          end
+        let rec strip (e : expression) =
+          match e.pexp_desc with Pexp_constraint (inner, _) -> strip inner | _ -> e
         in
-        names#expression vb.pvb_expr;
-        let binds_flag =
-          List.mem
-            (Test_utils.Lexical_scope.pattern_vars [ vb.pvb_pat ])
-            search_flag ~equal:String.equal
+        let names_flag (e : expression) =
+          match (strip e).pexp_desc with
+          | Pexp_ident { txt = Lident name; _ } -> String.equal name search_flag && is_flag env name
+          | _ -> false
         in
-        { at = Some (offset vb.pvb_loc); flag = binds_flag && !names_flag && not !rebinds }
+        let library_option =
+          (not (Map.mem env.Test_utils.Lexical_scope.modules "Option"))
+          && not (List.exists env.frames ~f:(fun frame -> Map.mem frame opaque_frame))
+        in
+        let preserves =
+          names_flag vb.pvb_expr
+          ||
+          match (strip vb.pvb_expr).pexp_desc with
+          | Pexp_apply
+              ( {
+                  pexp_desc =
+                    Pexp_ident { txt = Ldot (Lident "Option", ("value" | "value_or_thunk")); _ };
+                  _;
+                },
+                ( [ (Nolabel, flag); (Labelled "default", _) ]
+                | [ (Labelled "default", _); (Nolabel, flag) ] ) ) ->
+              library_option && names_flag flag
+          | _ -> false
+        in
+        let bare_name =
+          match vb.pvb_pat.ppat_desc with
+          | Ppat_var { txt; _ } | Ppat_constraint ({ ppat_desc = Ppat_var { txt; _ }; _ }, _) ->
+              String.equal txt search_flag
+          | _ -> false
+        in
+        { at = Some (offset vb.pvb_loc); flag = bare_name && preserves }
 
       method! value_binding env vb =
         let at = offset vb.pvb_loc in
@@ -790,6 +802,19 @@ let () =
         "let tune ?(search = true) x =\n\
         \  let fallback () = seeded_transform () in\n\
         \  let search = let search = false in search in\n\
+        \  if not search then fallback () else x",
+        flagged );
+      ( "a negating flag alias",
+        "let tune ?search x =\n\
+        \  let fallback () = seeded_transform () in\n\
+        \  let search = not (Option.value search ~default:true) in\n\
+        \  if not search then fallback () else x",
+        flagged );
+      ( "a flag alias through a local Option",
+        "module Option = struct let value o ~default = not (Stdlib.Option.value o ~default) end\n\
+         let tune ?search x =\n\
+        \  let fallback () = seeded_transform () in\n\
+        \  let search = Option.value search ~default:true in\n\
         \  if not search then fallback () else x",
         flagged );
       ( "a top-level fallback",
