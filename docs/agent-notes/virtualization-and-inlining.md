@@ -462,6 +462,15 @@ files.
   so its extent decides soundly. A guard (`If`) narrows nothing here, and `And`/`Or`/`Relu_gate`
   operands are still walked (their decision needs the operator's result precision, which the walk
   does not track) — a merge-tainted read behind a shut gate in the consumer is still refused.
+  The capture walk's opacity can still meet such a read in an arm only the candidate's own
+  write-index loop decides (gh-ocannl-1514): there the walk does not inline it but records a hit
+  against the code's OWNER (the setter whose right-hand side holds it, else the candidate), and a
+  store whose own node has a hit is refused as `154:capture-reads-merge` — the candidate
+  materializes, and the emit walk, holding the loop's extent, skips the arm or raises the
+  merge-splice error if it is live. A sibling setter's hit refuses nothing (consumption drops
+  sibling setters), and a node already committed virtual keeps the merge-splice message. Recording
+  instead of raising is the point: an aborted walk would strand `spliced_reads` and placement
+  side effects that nothing rolls back (`stored_template_elision.ml`, the capture cases).
 - Big-reduction producers are forced `Never_virtual` by `virtualize_max_inline_reduction`
   (default 16) — remember it when a structural expectation assumes inlining.
 - Wide-fanin producers are forced `Never_virtual 41` by `virtualize_max_inline_fanin` (default 8,
