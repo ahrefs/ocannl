@@ -18,25 +18,27 @@
    [rn] against the wider tail-bearing one, where the ranking model and the tuner can disagree. A
    geometry the renderer cannot honour is declined rather than approximated, so it reads as
    [Mma_scalar_fallback] in the census bracket below and in the warning at the end of the run. The
-   packed variants schedule [Sched.split]s of factor [bm] over the i axis and [bk] over the k axis,
-   so they need [n mod bm = 0] and [n mod bk = 0] (and an n big enough to leave a loop nest at all);
-   an unschedulable n runs the unblocked naive variant alone, so an arbitrary extent still has
-   something to compare against. Each line carries a position-weighted checksum of the whole output,
-   which is what makes a mishandled edge region visible — the register-tiled micro-kernel peels row
-   and column edges whenever its block shape does not cover the extent, and a single interior cell
-   sees none of that. Since gh-ocannl-639 every leg (the naive serial fallback included) accumulates
-   at compute precision, so with this bench's exact-by-design partial sums the checksums are
-   comparable across the board even in a narrow-storage run. Each packed line carries its
-   [C_syntax.mma_census] rendering, because a [Tile_mma] whose preconditions fail (a column extent
-   below the compute vector width is one of several ways in) renders the scalar fallback while still
-   reporting as "packmma" — read the bracket, not the variant name, when deciding what a timing
-   measured. Readbacks stay outside the timed region (the [Context.get_values] trap,
+   packed variants schedule [Sched.split]s of factor [bm] over the i axis and [bk] over the k axis
+   ([Bench_gebp], shared with the parity test). An extent a block does not divide is PADDED to the
+   block first (gh-ocannl-627), as the autotuner's packed builder does: the requested blocking is
+   kept, never substituted, and the header states the padded extents and how much more arithmetic
+   the padded schedule does than the logical n^3, since a packed timing at such a blocking measures
+   that work. Only an n too small to leave a loop nest at all (n < 2) runs the naive variant alone.
+   Each line carries a position-weighted checksum of the whole output, which is what makes a
+   mishandled edge region visible — the padded row block, the zero k slots and the register-tiled
+   micro-kernel's own column and row tails all sit at the edges, and a single interior cell sees
+   none of that. Since gh-ocannl-639 every leg (the naive serial fallback included) accumulates at
+   compute precision, so with this bench's exact-by-design partial sums the checksums are comparable
+   across the board even in a narrow-storage run. Each packed line carries its [C_syntax.mma_census]
+   rendering, because a [Tile_mma] whose preconditions fail (a column extent below the compute
+   vector width is one of several ways in) renders the scalar fallback while still reporting as
+   "packmma" — read the bracket, not the variant name, when deciding what a timing measured.
+   Readbacks stay outside the timed region (the [Context.get_values] trap,
    docs/agent-notes/backend-precision-and-simd.md). *)
 
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
-module LL = Ir.Low_level
 module Sched = Ir.Schedule
 module Asgns = Ir.Assignments
 module Numerics = Ir.Numerics
@@ -45,22 +47,8 @@ module Numerics = Ir.Numerics
    process exits, which on a slow leg reads as a hang. *)
 let p fmt = Bench_out.p fmt
 
-let nest_paths (llc : LL.t) : Ir.Indexing.symbol list list =
-  let strip stmts = List.filter stmts ~f:(function LL.Noop | LL.Comment _ -> false | _ -> true) in
-  let rec path (llc : LL.t) : Ir.Indexing.symbol list =
-    match llc with
-    | LL.For_loop { index; body; _ } ->
-        index :: (match strip (LL.flat_lines [ body ]) with [ single ] -> path single | _ -> [])
-    | LL.If { body; _ } -> path body
-    | _ -> []
-  in
-  List.filter_map (LL.flat_lines [ llc ]) ~f:(fun stmt ->
-      match path stmt with [] -> None | p -> Some p)
-
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
-
-let sink sym below = List.map below ~f:(fun inner -> Sched.Swap { outer = sym; inner })
 
 (* The aperiodic mix used to mint the operand values below, and the whole-output checksum further
    down, both come from [Bench_checksum] (gh-ocannl-711) — shared with [schedule_bench], which had
@@ -105,19 +93,14 @@ let () =
     Bench_tile.of_args args ~machine:(fun () ->
         (limits.Ir.Backend_intf.simd_vector, Ir.Ops.prec_in_bytes cprec))
   in
-  (* What the packed variants require of n, in one place: an i/j/k nest to address (extent-1 loops
-     are simplified away before the transform runs, leaving nothing to schedule), and extents
-     divisible by the [Sched.split] factors. The naive variant has no blocking at all, so it runs
-     for any n. *)
+  (* What the packed variants require of n: an i/j/k nest to address (extent-1 loops are simplified
+     away before the transform runs, leaving nothing to schedule). Divisibility by the blocking is
+     NOT required — [Bench_gebp] pads a non-dividing axis to its block (gh-ocannl-627). The naive
+     variant has no blocking at all, so it runs for any n. *)
   let unschedulable =
-    (if n < 2 then [ Printf.sprintf "n = %d leaves no i/j/k loop nest to schedule" n ] else [])
-    @ List.filter_map
-        [ ("bm", bm); ("bk", bk) ]
-        ~f:(fun (name, f) ->
-          if n % f = 0 then None
-          else
-            Some (Printf.sprintf "%s = %d does not divide n = %d (remainder %d)" name f n (n % f)))
+    if n < 2 then [ Printf.sprintf "n = %d leaves no i/j/k loop nest to schedule" n ] else []
   in
+  let pads = Bench_gebp.pads ~bm ~bk ~ni:n ~nk:n in
   let flops = 2.0 *. Float.of_int n *. Float.of_int n *. Float.of_int n in
   (* Operand values that vary with EVERY index at every n, drawn through [Bench_checksum.mix] so
      that no shift of any index is a symmetry, and exactly representable at every storage precision
@@ -141,62 +124,17 @@ let () =
      pairing produced. *)
   let ma =
     NTDSL.init ~l:"ma" ~prec ~i:[ n ] ~o:[ n ]
-      ~f:(fun idcs ->
-        Float.of_int (1 + (Bench_checksum.mix ~salt:0x5A17 idcs.(0) idcs.(1) % 3)) *. 0.25)
+      ~f:(fun idcs -> Bench_gebp.a_value idcs.(0) idcs.(1))
       ()
   in
   let mb =
     NTDSL.init ~l:"mb" ~prec ~i:[ n ] ~o:[ n ]
-      ~f:(fun idcs ->
-        Float.of_int ((Bench_checksum.mix ~salt:0x3C6E idcs.(0) idcs.(1) % 5) - 2) *. 0.5)
+      ~f:(fun idcs -> Bench_gebp.b_value idcs.(0) idcs.(1))
       ()
   in
-  let packed_schedule ~grid ~tile_prec ~tile ~mc (opt : LL.optimized) : Sched.schedule =
-    let paths = nest_paths opt.LL.llc in
-    let i, j, k =
-      (* The i/j/k nest is what the packed schedule addresses. Extent-1 loops are simplified away
-         before the transform runs, so a degenerate n leaves no 3-deep nest to schedule — report
-         that rather than raising [Not_found_s] out of a [find_exn]. *)
-      match List.find paths ~f:(fun p -> List.length p = 3) with
-      | Some [ i; j; k ] -> (i, j, k)
-      | _ ->
-          failwith
-            (Printf.sprintf
-               "narrow_gebp_bench: no 3-deep i/j/k loop nest to schedule at n = %d (deepest nest \
-                found: %d loops) — the packed variants need a non-degenerate extent"
-               n
-               (List.fold paths ~init:0 ~f:(fun acc p -> Int.max acc (List.length p))))
-    in
-    let outer_i = if grid then LL.Grid else LL.Serial in
-    let sp_i, i_o, i_i = Sched.split ~axis:i ~factor:bm ~outer:outer_i ~inner:LL.Serial in
-    let sp_k, k_o, k_i = Sched.split ~axis:k ~factor:bk ~outer:LL.Serial ~inner:LL.Serial in
-    let stage source tile_loops =
-      Sched.Stage
-        {
-          source;
-          tile_loops;
-          shared = false;
-          cooperative = None;
-          hoisted = false;
-          swizzle = None;
-          pad_stride = None;
-          pipeline_depth = 1;
-          tile_prec;
-        }
-    in
-    let zops =
-      if not grid then []
-      else
-        let ez, zsyms = Sched.expand_zero ~tn:mc in
-        let zi = List.hd_exn zsyms in
-        let sp_zi, _, _ = Sched.split ~axis:zi ~factor:bm ~outer:LL.Grid ~inner:LL.Serial in
-        [ ez; sp_zi ]
-    in
-    let tz, _lane = Sched.tensorize ?tile ~i:i_i ~j ~k:k_i ~simd_width:1 () in
-    zops @ [ sp_i; sp_k ] @ sink j [ k_o ] @ sink i_i [ k_o ]
-    @ (if grid then [] else sink i_o [ k_o ])
-    @ [ stage mb.Tensor.value [ k_i; j ]; stage ma.Tensor.value [ i_i; k_i ] ]
-    @ [ tz ]
+  let packed_schedule ~grid ~tile_prec ~tile ~mc opt =
+    Bench_gebp.packed_schedule ~grid ~tile_prec ?tile ~bm ~bk ~a:ma.Tensor.value ~b:mb.Tensor.value
+      ~c:mc opt
   in
   (* Every variant is compared against another one CELL BY CELL, and each call site says which and
      whether the equality is required (gh-ocannl-711 review). The checksum cannot carry this: it is
@@ -252,21 +190,19 @@ let () =
        the whole output is checksummed too: every correct variant prints the identical value, a
        tail-mishandling one does not.
 
-       Which remainder, precisely — the obvious answer is the wrong one. A [Sched.split] whose
-       factor does not divide its extent is NOT the case covered here: [unschedulable] rejects
-       exactly those factors, so at a non-dividing [bm]/[bk] the packed variants never run and the
-       naive line has nothing to be compared against. What IS covered is the register-tiled
-       micro-kernel's own edge peel, which needs no split remainder: the [Tile_mma] covers full
-       blocks only, and n is free of any width constraint because j is never split. At n = 77 with
-       bm = 7, bk = 11 the emitted kernel carries two scalar peel loops — a column peel over j in
-       [76, 77) and a row peel over i in [4, 7) — that the same kernel at n = 76 does not have, and
-       all three variants agree on the checksum across it. So the tail this check guards is the
-       micro-kernel peel and the packing [Stage] edges, not the block remainder. Position-weighted
-       for a different reason than schedule_bench's: with the per-axis residues above there is no
-       divisibility class on which a plain sum vanishes (unlike the flattened form, whose collapse
-       also zeroed it). What an unweighted sum cannot see is a PERMUTATION — a tail written with the
-       right values at the wrong offsets leaves the multiset intact, and the multiset is all a plain
-       sum reads — and a misplaced edge is exactly what the peel risks.
+       Which edges, precisely: three kinds sit at the borders of the output, and an interior cell
+       sees none of them. At an n that [bm] or [bk] does not divide, the packed schedule pads
+       (gh-ocannl-627): the last row block's rows past n are computed against zero-filled A~ slots
+       and masked at the store-back, and the last k block's slots past n read zeros in both packed
+       panels. The register-tiled micro-kernel has edges of its own inside every block, which need
+       no blocking remainder at all: a column tail of whole vectors plus one partial vector wherever
+       its width does not cover n (j is never split, so never padded), and a row band wherever its
+       [rm] does not divide [bm] (gh-ocannl-620). Position-weighted for a different reason than
+       schedule_bench's: with the per-axis residues above there is no divisibility class on which a
+       plain sum vanishes (unlike the flattened form, whose collapse also zeroed it). What an
+       unweighted sum cannot see is a PERMUTATION — a tail written with the right values at the
+       wrong offsets leaves the multiset intact, and the multiset is all a plain sum reads — and a
+       misplaced edge is exactly what a tail or a mask risks.
 
        [Bench_checksum.whole_output] runs the weight through the same mix on the (row, column) pair
        for the same reason the operands do, and the flat-offset form is the trap it avoids: a weight
@@ -287,11 +223,16 @@ let () =
        from the packed legs at bf16 n = 320 and forced the run to announce the non-comparability
        outright), while the packed variants narrow once per k block (the C-tile stores back at [bk]
        boundaries — the narrowing points remain a property of the schedule's reduction structure;
-       only the accumulator's WIDTH is policy). The near-mean-zero mb keeps partial sums
-       random-walking (max 31 at n = 512, multiples of 1/8 — bf16-exact), so every rounding any
-       variant performs is exact and the checksums agree bitwise; well beyond that extent an inexact
-       block-boundary partial could split naive from packed again, far more rarely than the per-step
-       narrowing did. Both checks are outside the timed region. *)
+       only the accumulator's WIDTH is policy). A padded blocking moves none of those points
+       (gh-ocannl-627, read off the cc emission): the row mask forces the accumulator through a
+       contraction fragment, but the fragment is minted at STORAGE precision, so the C-tile still
+       narrows into it once per k block, and the masked store-back is a copy — what the pad adds to
+       the serial flavor is that copy's traffic per row block and k block, not a rounding. The
+       near-mean-zero mb keeps partial sums random-walking (max 31 at n = 512, multiples of 1/8 —
+       bf16-exact), so every rounding any variant performs is exact and the checksums agree bitwise;
+       well beyond that extent an inexact block-boundary partial could split naive from packed
+       again, far more rarely than the per-step narrowing did. Both checks are outside the timed
+       region. *)
     let checksum = Bench_checksum.whole_output ~row_stride:n values in
     let agreement =
       match against with
@@ -318,6 +259,15 @@ let () =
      panels %s\n"
     n repeats bm bk (Bench_tile.describe tile) (Ir.Ops.prec_string prec) (Ir.Ops.prec_string cprec)
     (Option.value_map tile_prec ~default:"(storage)" ~f:Ir.Ops.prec_string);
+  (* The padding the packed variants schedule at this blocking, from the same function the builder
+     consults — so the work a packed timing measured is stated, not inferred. The GFLOP/s column
+     stays on the logical 2n^3: it is the rate at which the requested product was delivered. *)
+  if (not (List.is_empty pads)) && List.is_empty unschedulable then
+    p "padded: %s — the packed variants do %.2fx the logical multiply-adds (gh-ocannl-627)\n"
+      (String.concat ~sep:", "
+         (List.map pads ~f:(fun (axis, extent, padded) ->
+              Printf.sprintf "%s %d to %d" axis extent padded)))
+      (Bench_gebp.work_ratio pads);
   (* Say it at runtime rather than only in a comment: since gh-ocannl-639 every variant accumulates
      at compute precision (naive narrows once per cell, packed once per k block). Whether the
      checksums are comparable depends on the extent: every rounding any variant performs is exact as
@@ -350,9 +300,8 @@ let () =
   let statements = ref 0 in
   (match unschedulable with
   | _ :: _ ->
-      p "skipping the packed variants — this n is not schedulable with this blocking:\n";
-      List.iter unschedulable ~f:(fun reason -> p "  %s\n" reason);
-      if n >= 2 then p "pass a compatible blocking, e.g. --bm=<f> --bk=<f> with f dividing %d.\n" n
+      p "skipping the packed variants — this n is not schedulable:\n";
+      List.iter unschedulable ~f:(fun reason -> p "  %s\n" reason)
   | [] ->
       let t_pack, r_pack, v_pack =
         bench ~variant:"packmma"

@@ -6202,6 +6202,23 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-627: the packed GEBP schedule bin/narrow_gebp_bench times, built by the bench's own
+; builder (`bench_gebp`, linked rather than copied), executed at extents its blocking does not
+; divide -- cell-by-cell bitwise against the unscheduled kernel, register-tiled per the census, at
+; f32 and at bf16 storage widened into f32 panels -- plus the before-pin: without its pads the
+; composition is refused at a Swap.
+
+(test
+ (name gebp_padded_parity)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules gebp_padded_parity)
+ (libraries base ocannl stdio arrayjit.verdict ll_test bench_gebp)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  (name clamped_window_pool)
  (package neural_nets_lib)
