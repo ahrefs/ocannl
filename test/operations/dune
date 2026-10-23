@@ -9904,6 +9904,30 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; gh-ocannl-1497: every library site naming one tensor twice as an operation's operands -- read
+ ; off the ppxlib parse of the globbed lib/ and tensor/ sources -- has an executed case against a
+ ; host oracle, and so does every operator family where the de-aliasing is load-bearing.
+ (name self_operand_sites)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (glob_files ../../lib/*.ml)
+  (glob_files ../../tensor/*.ml))
+ (action
+  (run %{test} %{deps}))
+ (modules self_operand_sites)
+ (libraries
+  base
+  stdio
+  ppxlib
+  ocannl
+  neural_nets_lib.einsum_parser
+  arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  ; gh-ocannl-1474: the Rev_sides scatter establishes the margins of each padded target it writes.
  (name rev_sides_padded_target)
  (package neural_nets_lib)
