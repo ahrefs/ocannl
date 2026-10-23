@@ -84,6 +84,20 @@ let default_bias_param_1d () =
     ()
   with Row.Shape_error (msg, _) -> Stdio.printf "Got expected error: %s\n" msg
 
+(* gh-ocannl-1508: a parameter whose input axes are a fixed-index result of an einsum -- the shape
+   [Nn_blocks.global_avg_pool2d] had before gh-ocannl-880 -- is not a forgotten hidden dimension: a
+   fixed index only bounds the axis from below. The error names the spec instead. *)
+let fixed_index_into_param () =
+  Stdio.printf "Testing fixed-index axes consumed by a parameter\n";
+  Tensor.unsafe_reinitialize ();
+  try
+    let x = TDSL.range_of_shape ~batch_dims:[ 2 ] ~output_dims:[ 3; 3; 4 ] () in
+    let%op pooled = x ++ "... | h, w, ..c.. => ... | 0, 0, ..c.." in
+    let%op logits = ({ w } * pooled) + { b = 0.; o = [ 5 ] } in
+    let _ctx : Context.t = Train.init_params (Context.auto ()) Train.IDX.empty logits in
+    Verdict.fail "should have raised an exception"
+  with Row.Shape_error (msg, _) -> Stdio.printf "Got expected error: %s\n" msg
+
 let () =
   default_lone_param ();
   lone_param_1d ();
@@ -91,4 +105,5 @@ let () =
   default_affine_op_propagated ();
   default_affine_op_unknown_input ();
   default_bias_param ();
-  default_bias_param_1d ()
+  default_bias_param_1d ();
+  fixed_index_into_param ()

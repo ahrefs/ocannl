@@ -94,7 +94,11 @@ files.
   dump `unsolved` (`[%sexp_of: Row.environment]`) after each stage of `finish_inference` and find the
   stage where the variable's `Shape_row` vanishes. The same orphaning surfaces instead as "You forgot
   to specify the hidden dimension(s)" when the var `is_in_param` — which is also the correct message
-  for a genuinely underdetermined param dim, so the message does not tell you which you have.
+  for a genuinely underdetermined param dim, so the message does not tell you which you have. One
+  cause is told apart (gh-ocannl-1508): a param dim held open only by a fixed-index lower bound
+  (`At_least_dim`, minted solely for fixed-index spec axes) reports "Unresolved parameter dimension"
+  naming the spec, via `unresolved_param_dim_error` (`tensor/row.ml`) at the stage-7
+  `process_shape_row` arm; a new raise site for an open param dim should go through it.
 - `unify_dim` and `solve_dim_ineq` end in CATCH-ALL arms, so adding a `Row.dim` constructor does not
   break the build. The equal-constructor arm in `unify_dim`, the inequality's final mismatch arm, and
   `join_dim` in `solve_row_ineq`'s GLB merge (whose wildcards keep a side instead of demoting to the
