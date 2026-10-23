@@ -22,6 +22,7 @@
 open Base
 module Scan = Test_utils.Codegen_text_scan
 module Attempt = Test_utils.Scan_attempt
+module Rerun = Test_utils.Rerun_aliases
 
 let printf = Stdio.printf
 let fail fmt = Printf.ksprintf Verdict.fail fmt
@@ -1424,6 +1425,91 @@ let attempt_cases =
       "raised Invalid_argument(\"Codegen_text_scan: an uncertain provenance names no boundary\")" );
   ]
 
+(** Which aliases re-run a member (gh-ocannl-1533), on dune files built to hold every shape
+    {!Rerun.for_golden} and {!Rerun.for_source} read -- and beside each, the nearest file that names
+    the member without re-running it: the produced side of a diff, a same-named golden in another
+    directory, a module only an exclusion names. *)
+let rerun_tree =
+  Rerun.stanzas_of
+    [
+      ( "t",
+        {|(test (name plain) (modules plain))
+(test (name kernel) (modules kernel))
+(rule
+ (targets kernel.extension.actual)
+ (action (run %{dep:kernel.exe} --emit)))
+(rule
+ (alias runtest-kernel-extension)
+ (action
+  (diff
+   "kernel.%{read:../config/ocannl_backend_extension.txt}.expected"
+   "kernel.extension.actual")))
+(rule
+ (alias runtest-backwards)
+ (action (diff produced.actual reversed.expected)))
+(executable (name tool) (modules tool))
+(rule (target tool.actual) (action (with-stdout-to %{target} (run ./tool.exe))))
+(rule (target tool.sorted) (deps tool.actual) (action (copy tool.actual %{target})))
+(rule (alias runtest-tool) (action (diff tool.expected tool.sorted)))
+(test
+ (name gated)
+ (modules gated)
+ (libraries (select gated.ml from (metal -> gated.real.ml) (-> gated.missing.ml))))
+(library (name tutorials) (modules (:standard \ excluded)) (inline_tests))
+(library (name lessons) (modules lesson_a lesson_b) (inline_tests))
+(rule
+ (alias runtest-lesson_a)
+ (action
+  (run %{dep:.lessons.inline-tests/inline-test-runner.exe} inline-test-runner lessons
+   -only-test lesson_a.ml)))
+(subdir nested (rule (alias runtest-deep) (action (diff deep.expected deep.actual))))
+|}
+      );
+      ("u", {|(rule (alias runtest-remote) (action (run %{dep:../t/tool.exe})))|});
+    ]
+
+let rerun_cases =
+  let golden path () = Rerun.for_golden rerun_tree ~path in
+  let source path () = Rerun.for_source rerun_tree ~path in
+  [
+    ("a test stanza's own golden", golden "t/plain.expected", "@t/runtest-plain");
+    ( "a pform in the golden path is a substitution, reported",
+      golden "t/kernel.cu.expected",
+      "@t/runtest-kernel-extension when %{read:../config/ocannl_backend_extension.txt} is cu" );
+    ( "the shortest backend extension substitutes as well",
+      golden "t/kernel.c.expected",
+      "@t/runtest-kernel-extension when %{read:../config/ocannl_backend_extension.txt} is c" );
+    ("a pform substitutes a file name, never a path", golden "t/kernel.sub/cu.expected", "none");
+    ("the produced side of a diff is not re-run by it", golden "t/reversed.expected", "none");
+    ("a golden of the same name in another directory is not", golden "u/plain.expected", "none");
+    ( "a (subdir) rule diffs the golden of that directory",
+      golden "t/nested/deep.expected",
+      "@t/nested/runtest-deep" );
+    ( "a test's module runs under the test and every rule running its executable",
+      source "t/kernel.ml",
+      "@t/runtest-kernel; @t/runtest-kernel-extension" );
+    ( "an executable reaches the alias reading what its rule writes, however many rules on",
+      source "t/tool.ml",
+      "@t/runtest-tool; @u/runtest-remote" );
+    ("a select arm is the module its target names", source "t/gated.real.ml", "@t/runtest-gated");
+    ( "an inline-test module with its own runner rule runs under it",
+      source "t/lesson_a.ml",
+      "@t/runtest-lesson_a" );
+    ( "an inline-test module without one runs under the library's alias",
+      source "t/lesson_b.ml",
+      "@t/runtest-lessons" );
+    ( "a module only :standard takes runs under the stanza taking it",
+      source "t/stray.ml",
+      "@t/runtest-tutorials" );
+    ("a module another stanza lists is not :standard's", source "t/plain.ml", "@t/runtest-plain");
+    ("a module an exclusion names is not :standard's", source "t/excluded.ml", "none");
+    ("a module in a directory of rules alone is run by nothing", source "u/stray.ml", "none");
+  ]
+
+let render_routes = function
+  | [] -> "none"
+  | routes -> String.concat ~sep:"; " (List.map routes ~f:Rerun.render)
+
 let render_attempt = function
   | Attempt.Scanned () -> "scanned"
   | Attempt.Unparsed where -> "unparsed at " ^ where
@@ -1476,6 +1562,10 @@ let () =
   Verdict.p_all "every partial-itemisation boundary has a case meeting it alone"
     Scan.all_of_boundary ~f:(fun boundary ->
       List.exists boundary_cases ~f:(fun (b, _, _, _) -> Poly.equal b boundary));
+  List.iter rerun_cases ~f:(fun (name, f, expected) ->
+      let found = render_routes (f ()) in
+      if String.equal found expected then printf "ok: rerun -- %s\n" name
+      else fail "rerun -- %s: expected [%s], found [%s]" name expected found);
   List.iter attempt_cases ~f:(fun (name, f, expected) ->
       let found = render_attempt (Attempt.run f) in
       if String.equal found expected then printf "ok: attempt -- %s\n" name

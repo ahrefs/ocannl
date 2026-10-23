@@ -79,59 +79,59 @@ wrap_conversion [Ir.C_syntax.C_syntax.wrap_conversion]
 
 == goldens holding emitted kernel or IR text ==
 roots scanned: arrayjit/test, test
-arrayjit/test/test_cross_cse.expected [c ll] markers c-for c-prec-cast ll-assign ll-loop
-arrayjit/test/test_local_scope_init.expected [c] markers c-for c-prec-cast
-arrayjit/test/test_vectorized_codegen.expected [c] markers c-align-attr c-decl-banner c-for c-logic-banner c-prec-cast c-restrict
-arrayjit/test/test_zero_out_codegen.expected [c] markers c-align-attr c-decl-banner c-for c-logic-banner c-prec-cast
-test/einsum/inline_permuted_view-c_fwd.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end ll-loop
-test/einsum/test_cse-cse_d_fwd.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end ll-loop
-test/operations/cache_key_agreement.expected [derived] beside test/operations/cache_key_agreement.ml
-test/operations/canonical_render.expected [ll] markers ll-assign
-test/operations/concat_loop_symbols.expected [derived] beside test/operations/concat_loop_symbols.ml
-test/operations/cost_model_floor.expected [derived] beside test/operations/cost_model_floor.ml
-test/operations/gpu_lane_reduction.expected [derived] beside test/operations/gpu_lane_reduction.ml
-test/operations/gpu_serial_lanes.expected [derived] beside test/operations/gpu_serial_lanes.ml
-test/operations/ll_printer_constants.expected [derived] beside test/operations/ll_printer_constants.ml
-test/operations/log_index_width_narrow.c.expected [c] extension .c.expected; markers c-decl-banner c-for c-logic-banner c-prec-cast c-restrict ll-assign routine-log
-test/operations/log_index_width_wide.c.expected [c] extension .c.expected; markers c-decl-banner c-for c-logic-banner c-prec-cast c-restrict ll-assign routine-log
-test/operations/micrograd_demo_logging-cc-0-0.log.expected [c ll routine-log] markers c-prec-cast c-restrict ll-assign routine-log
-test/operations/micrograd_demo_logging-hip-0-0.log.expected [c ll routine-log] markers c-prec-cast ll-assign routine-log
-test/operations/micrograd_demo_logging-multidev_cc-0-0.log.expected [c ll routine-log] markers c-prec-cast c-restrict ll-assign routine-log
-test/operations/n3_fwd_with_prec-unoptimized.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end ll-loop
-test/operations/online_softmax_block_mma.expected [derived] beside test/operations/online_softmax_block_mma.ml
-test/operations/reduction_forms.expected [derived] beside test/operations/reduction_forms.ml
-test/operations/scan_loop.expected [ll] markers ll-assign
-test/operations/test_log_stmt_format.c.expected [c] extension .c.expected; markers c-decl-banner c-logic-banner c-prec-cast c-restrict ll-assign routine-log
-test/operations/test_uniform_virtual_lane.expected [derived] beside test/operations/test_uniform_virtual_lane.ml
-test/operations/test_where_precision-unoptimized.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end
-test/operations/test_where_precision.c.expected [c] extension .c.expected; markers c-decl-banner c-logic-banner c-prec-cast c-restrict ll-end
-test/operations/test_where_precision.cu.expected [cuda] extension .cu.expected; markers c-decl-banner c-logic-banner c-prec-cast cuda-kernel ll-end
-test/operations/test_where_precision.hip.expected [hip] extension .hip.expected; markers c-decl-banner c-logic-banner c-prec-cast cuda-kernel ll-end
-test/operations/test_where_precision.metal.expected [metal] extension .metal.expected; markers c-decl-banner c-logic-banner c-prec-cast ll-end metal-kernel
-test/operations/thread_private_gate.expected [derived] beside test/operations/thread_private_gate.ml
-test/operations/tile_mma_declines.expected [derived] beside test/operations/tile_mma_declines.ml
-test/operations/tile_mma_geometry.expected [derived] beside test/operations/tile_mma_geometry.ml
-test/operations/top_down_prec-unoptimized.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end
-test/operations/top_down_prec.c.expected [c] extension .c.expected; markers c-decl-banner c-logic-banner c-prec-cast c-restrict ll-end
-test/operations/top_down_prec.cu.expected [cuda] extension .cu.expected; markers c-decl-banner c-logic-banner cuda-kernel ll-end
-test/operations/top_down_prec.hip.expected [hip] extension .hip.expected; markers c-decl-banner c-logic-banner cuda-kernel ll-end
-test/operations/top_down_prec.metal.expected [metal] extension .metal.expected; markers c-decl-banner c-logic-banner ll-end metal-kernel
-test/operations/uint4x32_fixed_index_parity.expected [derived] beside test/operations/uint4x32_fixed_index_parity.ml
-test/operations/zero_out_local_decl-unoptimized.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end ll-loop
-test/operations/zero_out_local_decl.c.expected [c] extension .c.expected; markers c-align-attr c-decl-banner c-for c-logic-banner c-prec-cast c-restrict ll-end
-test/operations/zero_out_local_decl.cu.expected [cuda] extension .cu.expected; markers c-decl-banner c-logic-banner c-prec-cast cuda-kernel ll-end
-test/operations/zero_out_local_decl.hip.expected [hip] extension .hip.expected; markers c-decl-banner c-logic-banner c-prec-cast cuda-kernel ll-end
-test/operations/zero_out_local_decl.metal.expected [metal] extension .metal.expected; markers c-decl-banner c-for c-logic-banner c-prec-cast ll-end metal-kernel
+arrayjit/test/test_cross_cse.expected [c ll] markers c-for c-prec-cast ll-assign ll-loop; re-run by @arrayjit/test/runtest-test_cross_cse
+arrayjit/test/test_local_scope_init.expected [c] markers c-for c-prec-cast; re-run by @arrayjit/test/runtest-test_local_scope_init
+arrayjit/test/test_vectorized_codegen.expected [c] markers c-align-attr c-decl-banner c-for c-logic-banner c-prec-cast c-restrict; re-run by @arrayjit/test/runtest-test_vectorized_codegen
+arrayjit/test/test_zero_out_codegen.expected [c] markers c-align-attr c-decl-banner c-for c-logic-banner c-prec-cast; re-run by @arrayjit/test/runtest-test_zero_out_codegen
+test/einsum/inline_permuted_view-c_fwd.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end ll-loop; re-run by @test/einsum/runtest-inline_permuted_view-c_fwd
+test/einsum/test_cse-cse_d_fwd.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end ll-loop; re-run by @test/einsum/runtest-test_cse-cse_d_fwd
+test/operations/cache_key_agreement.expected [derived] beside test/operations/cache_key_agreement.ml; re-run by @test/operations/runtest-cache_key_agreement
+test/operations/canonical_render.expected [ll] markers ll-assign; re-run by @test/operations/runtest-canonical_render
+test/operations/concat_loop_symbols.expected [derived] beside test/operations/concat_loop_symbols.ml; re-run by @test/operations/runtest-concat_loop_symbols
+test/operations/cost_model_floor.expected [derived] beside test/operations/cost_model_floor.ml; re-run by @test/operations/runtest-cost_model_floor
+test/operations/gpu_lane_reduction.expected [derived] beside test/operations/gpu_lane_reduction.ml; re-run by @test/operations/runtest-gpu_lane_reduction
+test/operations/gpu_serial_lanes.expected [derived] beside test/operations/gpu_serial_lanes.ml; re-run by @test/operations/runtest-gpu_serial_lanes
+test/operations/ll_printer_constants.expected [derived] beside test/operations/ll_printer_constants.ml; re-run by @test/operations/runtest-ll_printer_constants
+test/operations/log_index_width_narrow.c.expected [c] extension .c.expected; markers c-decl-banner c-for c-logic-banner c-prec-cast c-restrict ll-assign routine-log; re-run by @test/operations/runtest-log_index_width_narrow
+test/operations/log_index_width_wide.c.expected [c] extension .c.expected; markers c-decl-banner c-for c-logic-banner c-prec-cast c-restrict ll-assign routine-log; re-run by @test/operations/runtest-log_index_width_wide
+test/operations/micrograd_demo_logging-cc-0-0.log.expected [c ll routine-log] markers c-prec-cast c-restrict ll-assign routine-log; re-run by @test/operations/runtest-micrograd_demo_logging when %{read:../config/ocannl_backend.txt} is cc
+test/operations/micrograd_demo_logging-hip-0-0.log.expected [c ll routine-log] markers c-prec-cast ll-assign routine-log; re-run by @test/operations/runtest-micrograd_demo_logging when %{read:../config/ocannl_backend.txt} is hip
+test/operations/micrograd_demo_logging-multidev_cc-0-0.log.expected [c ll routine-log] markers c-prec-cast c-restrict ll-assign routine-log; re-run by @test/operations/runtest-micrograd_demo_logging when %{read:../config/ocannl_backend.txt} is multidev_cc
+test/operations/n3_fwd_with_prec-unoptimized.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end ll-loop; re-run by @test/operations/runtest-n3_fwd_with_prec-unoptimized
+test/operations/online_softmax_block_mma.expected [derived] beside test/operations/online_softmax_block_mma.ml; re-run by @test/operations/runtest-online_softmax_block_mma
+test/operations/reduction_forms.expected [derived] beside test/operations/reduction_forms.ml; re-run by @test/operations/runtest-reduction_forms
+test/operations/scan_loop.expected [ll] markers ll-assign; re-run by @test/operations/runtest-scan_loop
+test/operations/test_log_stmt_format.c.expected [c] extension .c.expected; markers c-decl-banner c-logic-banner c-prec-cast c-restrict ll-assign routine-log; re-run by @test/operations/runtest-test_log_stmt_format
+test/operations/test_uniform_virtual_lane.expected [derived] beside test/operations/test_uniform_virtual_lane.ml; re-run by @test/operations/runtest-test_uniform_virtual_lane
+test/operations/test_where_precision-unoptimized.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end; re-run by @test/operations/runtest-test_where_precision-unoptimized
+test/operations/test_where_precision.c.expected [c] extension .c.expected; markers c-decl-banner c-logic-banner c-prec-cast c-restrict ll-end; re-run by @test/operations/runtest-test_where_precision-extension when %{read:../config/ocannl_backend_extension.txt} is c
+test/operations/test_where_precision.cu.expected [cuda] extension .cu.expected; markers c-decl-banner c-logic-banner c-prec-cast cuda-kernel ll-end; re-run by @test/operations/runtest-test_where_precision-extension when %{read:../config/ocannl_backend_extension.txt} is cu
+test/operations/test_where_precision.hip.expected [hip] extension .hip.expected; markers c-decl-banner c-logic-banner c-prec-cast cuda-kernel ll-end; re-run by @test/operations/runtest-test_where_precision-extension when %{read:../config/ocannl_backend_extension.txt} is hip
+test/operations/test_where_precision.metal.expected [metal] extension .metal.expected; markers c-decl-banner c-logic-banner c-prec-cast ll-end metal-kernel; re-run by @test/operations/runtest-test_where_precision-extension when %{read:../config/ocannl_backend_extension.txt} is metal
+test/operations/thread_private_gate.expected [derived] beside test/operations/thread_private_gate.ml; re-run by @test/operations/runtest-thread_private_gate
+test/operations/tile_mma_declines.expected [derived] beside test/operations/tile_mma_declines.ml; re-run by @test/operations/runtest-tile_mma_declines
+test/operations/tile_mma_geometry.expected [derived] beside test/operations/tile_mma_geometry.ml; re-run by @test/operations/runtest-tile_mma_geometry
+test/operations/top_down_prec-unoptimized.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end; re-run by @test/operations/runtest-top_down_prec-unoptimized
+test/operations/top_down_prec.c.expected [c] extension .c.expected; markers c-decl-banner c-logic-banner c-prec-cast c-restrict ll-end; re-run by @test/operations/runtest-top_down_prec-extension when %{read:../config/ocannl_backend_extension.txt} is c
+test/operations/top_down_prec.cu.expected [cuda] extension .cu.expected; markers c-decl-banner c-logic-banner cuda-kernel ll-end; re-run by @test/operations/runtest-top_down_prec-extension when %{read:../config/ocannl_backend_extension.txt} is cu
+test/operations/top_down_prec.hip.expected [hip] extension .hip.expected; markers c-decl-banner c-logic-banner cuda-kernel ll-end; re-run by @test/operations/runtest-top_down_prec-extension when %{read:../config/ocannl_backend_extension.txt} is hip
+test/operations/top_down_prec.metal.expected [metal] extension .metal.expected; markers c-decl-banner c-logic-banner ll-end metal-kernel; re-run by @test/operations/runtest-top_down_prec-extension when %{read:../config/ocannl_backend_extension.txt} is metal
+test/operations/uint4x32_fixed_index_parity.expected [derived] beside test/operations/uint4x32_fixed_index_parity.ml; re-run by @test/operations/runtest-uint4x32_fixed_index_parity
+test/operations/zero_out_local_decl-unoptimized.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end ll-loop; re-run by @test/operations/runtest-zero_out_local_decl-unoptimized
+test/operations/zero_out_local_decl.c.expected [c] extension .c.expected; markers c-align-attr c-decl-banner c-for c-logic-banner c-prec-cast c-restrict ll-end; re-run by @test/operations/runtest-zero_out_local_decl-extension when %{read:../config/ocannl_backend_extension.txt} is c
+test/operations/zero_out_local_decl.cu.expected [cuda] extension .cu.expected; markers c-decl-banner c-logic-banner c-prec-cast cuda-kernel ll-end; re-run by @test/operations/runtest-zero_out_local_decl-extension when %{read:../config/ocannl_backend_extension.txt} is cu
+test/operations/zero_out_local_decl.hip.expected [hip] extension .hip.expected; markers c-decl-banner c-logic-banner c-prec-cast cuda-kernel ll-end; re-run by @test/operations/runtest-zero_out_local_decl-extension when %{read:../config/ocannl_backend_extension.txt} is hip
+test/operations/zero_out_local_decl.metal.expected [metal] extension .metal.expected; markers c-decl-banner c-for c-logic-banner c-prec-cast ll-end metal-kernel; re-run by @test/operations/runtest-zero_out_local_decl-extension when %{read:../config/ocannl_backend_extension.txt} is metal
 
 == test sources pinning emitted text ==
 roots scanned: arrayjit/test, test
-arrayjit/test/test_cross_cse.ml [renders generated text in memory]
-arrayjit/test/test_cuda_like_config.ml [renders generated text in memory]
-arrayjit/test/test_local_scope_init.ml [renders generated text in memory]
-arrayjit/test/test_render_context.ml [renders generated text in memory; also pins text this scan cannot name: untraced callback, opaque aggregate component]
+arrayjit/test/test_cross_cse.ml [renders generated text in memory; run by @arrayjit/test/runtest-test_cross_cse]
+arrayjit/test/test_cuda_like_config.ml [renders generated text in memory; run by @arrayjit/test/runtest-test_cuda_like_config]
+arrayjit/test/test_local_scope_init.ml [renders generated text in memory; run by @arrayjit/test/runtest-test_local_scope_init]
+arrayjit/test/test_render_context.ml [renders generated text in memory; run by @arrayjit/test/runtest-test_render_context; also pins text this scan cannot name: untraced callback, opaque aggregate component]
     "] = (float)(0.0)"
     "reentrant_scratch["
-arrayjit/test/test_stage_b_where_debug.ml [renders generated text in memory; also pins text this scan cannot name: opaque aggregate component, mutation or unseen buffer write]
+arrayjit/test/test_stage_b_where_debug.ml [renders generated text in memory; run by @arrayjit/test/runtest-test_stage_b_where_debug; also pins text this scan cannot name: opaque aggregate component, mutation or unseen buffer write]
     "(!("
     "? athen2["
     "? belse2["
@@ -139,54 +139,54 @@ arrayjit/test/test_stage_b_where_debug.ml [renders generated text in memory; als
     "? producer["
     "init_local{=%g}"
     "producer[%d]{=%g}"
-arrayjit/test/test_vectorized_codegen.ml [renders generated text in memory]
-arrayjit/test/test_zero_out_codegen.ml [renders generated text in memory]
-test/operations/accum_width.ml
+arrayjit/test/test_vectorized_codegen.ml [renders generated text in memory; run by @arrayjit/test/runtest-test_vectorized_codegen]
+arrayjit/test/test_zero_out_codegen.ml [renders generated text in memory; run by @arrayjit/test/runtest-test_zero_out_codegen]
+test/operations/accum_width.ml [run by @test/operations/runtest-accum_width]
     "= single_to_bfloat16(v"
     "Vectorized reduction rendering"
     "single_to_bfloat16((bfloat16_to_single("
-test/operations/cache_key_agreement.ml
-test/operations/canonical_render.ml [renders generated text in memory; also pins text this scan cannot name: opaque aggregate component, mutation or unseen buffer write]
+test/operations/cache_key_agreement.ml [run by @test/operations/runtest-cache_key_agreement]
+test/operations/canonical_render.ml [renders generated text in memory; run by @test/operations/runtest-canonical_render; also pins text this scan cannot name: opaque aggregate component, mutation or unseen buffer write]
     "?"
     "[b0,]:=0.;}"
     "s0"
     "}set <cr_d>[?,]"
     "}set <cr_d>[b0,]"
     "}set <cr_d>[s0,]"
-test/operations/cc_march_census.ml [also pins text this scan cannot name: untraced callback, forwarded parameter, opaque aggregate component, unvalidated haystack]
-test/operations/concat_loop_symbols.ml [renders generated text in memory]
-test/operations/cost_model_floor.ml [renders generated text in memory]
-test/operations/cpu_parallel.ml
+test/operations/cc_march_census.ml [run by @test/operations/runtest-cc_march_census-emission, @test/operations/runtest-cc_march_census-w16_native_foreign, @test/operations/runtest-cc_march_census-w16_native_host, @test/operations/runtest-cc_march_census-w16_wide_foreign, @test/operations/runtest-cc_march_census-w16_wide_host, @test/operations/runtest-cc_march_census-w32_native_foreign, @test/operations/runtest-cc_march_census-w32_native_host, @test/operations/runtest-cc_march_census-w32_wide_foreign, @test/operations/runtest-cc_march_census-w32_wide_host, @test/operations/runtest-cc_march_census-w64_native_foreign, @test/operations/runtest-cc_march_census-w64_native_host, @test/operations/runtest-cc_march_census-w64_wide_foreign, @test/operations/runtest-cc_march_census-w64_wide_host; also pins text this scan cannot name: untraced callback, forwarded parameter, opaque aggregate component, unvalidated haystack]
+test/operations/concat_loop_symbols.ml [renders generated text in memory; run by @test/operations/runtest-concat_loop_symbols]
+test/operations/cost_model_floor.ml [renders generated text in memory; run by @test/operations/runtest-cost_model_floor]
+test/operations/cpu_parallel.ml [run by @test/operations/runtest-cpu_parallel]
     "#pragma omp parallel for"
     "Pool-backed Grid rendering"
     "dispatch_apply"
-test/operations/cpu_scratch_matmul_grid.ml [also pins text this scan cannot name: opaque aggregate component]
+test/operations/cpu_scratch_matmul_grid.ml [run by @test/operations/runtest-cpu_scratch_matmul_grid; also pins text this scan cannot name: opaque aggregate component]
     "Pool-backed Grid rendering"
-test/operations/cpu_simd_reduction.ml
+test/operations/cpu_simd_reduction.ml [run by @test/operations/runtest-cpu_simd_reduction]
     "#pragma"
     "Vectorized reduction rendering"
     "vector_size"
-test/operations/cpu_vectorized.ml
+test/operations/cpu_vectorized.ml [run by @test/operations/runtest-cpu_vectorized]
     "#pragma"
     "__builtin_memcpy"
     "float4_t"
     "reinterpret_cast"
     "vector_size"
-test/operations/fission_replay_segmentation.ml
-test/operations/fission_schedule.ml
+test/operations/fission_replay_segmentation.ml [run by @test/operations/runtest-fission_replay_segmentation]
+test/operations/fission_schedule.ml [run by @test/operations/runtest-fission_schedule]
     "#pragma omp parallel for"
     "__seg0"
     "blockIdx."
     "dispatch_apply"
     "gid."
-test/operations/float_literal_forms.ml
+test/operations/float_literal_forms.ml [run by @test/operations/runtest-float_literal_forms]
     "(float)(" ^ ... ^ ")"
-test/operations/fresh_build_kernel_text.ml [also pins text this scan cannot name: untraced callback]
-test/operations/gpu_lane_reduction.ml [also pins text this scan cannot name: computed fragment, untraced callback]
+test/operations/fresh_build_kernel_text.ml [run by @test/operations/runtest-fresh_build_kernel_text; also pins text this scan cannot name: untraced callback]
+test/operations/gpu_lane_reduction.ml [run by @test/operations/runtest-gpu_lane_reduction; also pins text this scan cannot name: computed fragment, untraced callback]
     " " ^ ... ^ " = ("
     " " ^ ... ^ " = 0;"
     "lane all-reduce into a scope local"
-test/operations/gpu_packed_prec.ml [also pins text this scan cannot name: untraced callback, forwarded parameter, opaque aggregate component, mutation or unseen buffer write]
+test/operations/gpu_packed_prec.ml [run by @test/operations/runtest-gpu_packed_prec; also pins text this scan cannot name: untraced callback, forwarded parameter, opaque aggregate component, mutation or unseen buffer write]
     "(half)exp((float)("
     "exp"
     "reinterpret_cast"
@@ -194,9 +194,9 @@ test/operations/gpu_packed_prec.ml [also pins text this scan cannot name: untrac
     ... ^ "("
     sprintf " %s*>(&"
     sprintf "const %s*>(&"
-test/operations/gpu_serial_lanes.ml [also pins text this scan cannot name: computed fragment, untraced callback]
+test/operations/gpu_serial_lanes.ml [run by @test/operations/runtest-gpu_serial_lanes; also pins text this scan cannot name: computed fragment, untraced callback]
     "for ("
-test/operations/half_float_power.ml
+test/operations/half_float_power.ml [run by @test/operations/runtest-half_float_power]
     " half8_t*>(&"
     "(half)pow((float)("
     "__float2half(ocannl_pow_f32(__half2float("
@@ -204,9 +204,9 @@ test/operations/half_float_power.ml
     "hexp2("
     "ocannl_powi_"
     "pow("
-test/operations/half_unary_math.ml
+test/operations/half_unary_math.ml [run by @test/operations/runtest-half_unary_math]
     "(half)" ^ ... ^ "((float)("
-test/operations/hardware_axes_parity.ml
+test/operations/hardware_axes_parity.ml [run by @test/operations/runtest-hardware_axes_parity]
     " = 0;"
     " = 7;"
     "blockIdx"
@@ -217,7 +217,7 @@ test/operations/hardware_axes_parity.ml
     "if ("
     "lid.x"
     "threadIdx.x"
-test/operations/hardware_warp_shuffle.ml [also pins text this scan cannot name: untraced callback, opaque aggregate component, mutation or unseen buffer write]
+test/operations/hardware_warp_shuffle.ml [run by @test/operations/runtest-hardware_warp_shuffle; also pins text this scan cannot name: untraced callback, opaque aggregate component, mutation or unseen buffer write]
     "__nv_bfloat16 wred_partials_"
     "__nv_bfloat16 wred_v_"
     "float wred_partials_"
@@ -226,24 +226,24 @@ test/operations/hardware_warp_shuffle.ml [also pins text this scan cannot name: 
     "half wred_v_"
     "ocannl_shfl_xor"
     "wred_partials_"
-test/operations/hardware_workgroup_reduce.ml
+test/operations/hardware_workgroup_reduce.ml [run by @test/operations/runtest-hardware_workgroup_reduce]
     "__shared__ float partial_sums[64]"
     "__syncthreads()"
     "threadgroup float partial_sums[64]"
     "threadgroup_barrier"
-test/operations/integer_power_domain.ml
+test/operations/integer_power_domain.ml [run by @test/operations/runtest-integer_power_domain]
     ")["
     "ipow_once_input["
     "ocannl_powi_"
     "ocannl_powi_f32("
     "pow("
     "powf("
-test/operations/ll_printer_constants.ml [renders generated text in memory; also pins text this scan cannot name: mutation or unseen buffer write]
+test/operations/ll_printer_constants.ml [renders generated text in memory; run by @test/operations/runtest-ll_printer_constants; also pins text this scan cannot name: mutation or unseen buffer write]
     " := "
-test/operations/mma_operand_loads.ml
+test/operations/mma_operand_loads.ml [run by @test/operations/runtest-mma_operand_loads]
     "ldmatrix.sync.aligned.m8n8.x2"
     "ldmatrix.sync.aligned.m8n8.x4"
-test/operations/narrow_storage_compute.ml
+test/operations/narrow_storage_compute.ml [run by @test/operations/runtest-narrow_storage_compute]
     "0x7f800000"
     "0x7fffffff"
     "HALF_T ocannl_vec"
@@ -260,9 +260,9 @@ test/operations/narrow_storage_compute.ml
     "fmaf("
     "fmaf((float)(a)"
     "vector_size"
-test/operations/online_softmax_block_mma.ml
+test/operations/online_softmax_block_mma.ml [run by @test/operations/runtest-online_softmax_block_mma]
     "simdgroup_multiply_accumulate"
-test/operations/reduction_accumulator_residency.ml [also pins text this scan cannot name: untraced callback]
+test/operations/reduction_accumulator_residency.ml [run by @test/operations/runtest-reduction_accumulator_residency; also pins text this scan cannot name: untraced callback]
     " " ^ ...
     "["
     "] = " ^ ...
@@ -271,7 +271,7 @@ test/operations/reduction_accumulator_residency.ml [also pins text this scan can
     "volatile float*)res_guard_mask"
     "volatile"
     ... ^ " = "
-test/operations/reduction_forms.ml [also pins text this scan cannot name: untraced callback, forwarded parameter, unsupplied application, mutation or unseen buffer write]
+test/operations/reduction_forms.ml [run by @test/operations/runtest-reduction_forms; also pins text this scan cannot name: untraced callback, forwarded parameter, unsupplied application, mutation or unseen buffer write]
     " = "
     "*)"
     "Vectorized reduction rendering"
@@ -279,7 +279,7 @@ test/operations/reduction_forms.ml [also pins text this scan cannot name: untrac
     "ocannl_shfl_xor"
     "volatile "
     ... ^ "["
-test/operations/reserved_routine_names.ml [also pins text this scan cannot name: untraced callback, opaque aggregate component, unvalidated haystack]
+test/operations/reserved_routine_names.ml [run by @test/operations/runtest-reserved_routine_names; also pins text this scan cannot name: untraced callback, opaque aggregate component, unvalidated haystack]
     "arrayjit_threefry4x32__"
     "asm__"
     "exp__"
@@ -290,29 +290,29 @@ test/operations/reserved_routine_names.ml [also pins text this scan cannot name:
     "printf__"
     "void " ^ "gh686_ordinary_name" ^ "("
     "void " ^ ... ^ "("
-test/operations/runtime_integer_power.ml
+test/operations/runtime_integer_power.ml [run by @test/operations/runtest-runtime_integer_power]
     "__float2half(ocannl_pow_f32(__half2float("
     "ocannl_pow_f32("
     "ocannl_powi_"
-test/operations/scan_loop.ml [renders generated text in memory]
-test/operations/schedule_batch_grid.ml [also pins text this scan cannot name: untraced callback]
-test/operations/schedule_contraction_nest.ml [also pins text this scan cannot name: computed fragment, untraced callback]
-test/operations/schedule_conv_gemm.ml [also pins text this scan cannot name: untraced callback]
+test/operations/scan_loop.ml [renders generated text in memory; run by @test/operations/runtest-scan_loop]
+test/operations/schedule_batch_grid.ml [run by @test/operations/runtest-schedule_batch_grid; also pins text this scan cannot name: untraced callback]
+test/operations/schedule_contraction_nest.ml [run by @test/operations/runtest-schedule_contraction_nest; also pins text this scan cannot name: computed fragment, untraced callback]
+test/operations/schedule_conv_gemm.ml [run by @test/operations/runtest-schedule_conv_gemm; also pins text this scan cannot name: untraced callback]
     "fragment_"
     "geometry from the schedule"
     "tile_"
-test/operations/schedule_cpu_pack_matmul.ml
+test/operations/schedule_cpu_pack_matmul.ml [run by @test/operations/runtest-schedule_cpu_pack_matmul]
     "__shared__"
     "acc_mc1"
     "barrier"
     "float tile_"
     "if ("
     "threadgroup float tile_"
-test/operations/schedule_epilogue_fusion.ml
+test/operations/schedule_epilogue_fusion.ml [run by @test/operations/runtest-schedule_epilogue_fusion]
     "relu_mc["
     "simdgroup_store(__mma_fragment_"
     "threadgroup float"
-test/operations/schedule_ldmatrix_matmul.ml [also pins text this scan cannot name: computed fragment]
+test/operations/schedule_ldmatrix_matmul.ml [run by @test/operations/runtest-schedule_ldmatrix_matmul; also pins text this scan cannot name: computed fragment]
     "__bfloat16_as_ushort"
     "__mma_g) >> 4) ^ "
     "ldmatrix"
@@ -326,7 +326,7 @@ test/operations/schedule_ldmatrix_matmul.ml [also pins text this scan cannot nam
     ... ^ " e5m2 ldmatrix a"
     ... ^ " e5m2 ldmatrix b"
     ... ^ " ldmatrix a,b"
-test/operations/schedule_mma_matmul.ml [also pins text this scan cannot name: computed fragment, untraced callback, opaque aggregate component, unsupplied application, mutation or unseen buffer write]
+test/operations/schedule_mma_matmul.ml [run by @test/operations/runtest-schedule_mma_matmul; also pins text this scan cannot name: computed fragment, untraced callback, opaque aggregate component, unsupplied application, mutation or unseen buffer write]
     "#elif "
     "/* mma.sync fragment reduction body begins */"
     "/* mma.sync fragment reduction body ends */"
@@ -421,11 +421,11 @@ test/operations/schedule_mma_matmul.ml [also pins text this scan cannot name: co
     ... ^ " __mma_fragment_"
     ... ^ " ldmatrix a,b"
     sprintf "%s; column tail %d in %d vector%s; row tail %d)"
-test/operations/schedule_mma_scope_scratch.ml
+test/operations/schedule_mma_scope_scratch.ml [run by @test/operations/runtest-schedule_mma_scope_scratch]
     "ocannl_mma_rc8"
     "threadgroup float ocannl_mma_rc8["
     "{ /* simdgroup fragment "
-test/operations/schedule_ops.ml [renders generated text in memory; also pins text this scan cannot name: mutation or unseen buffer write]
+test/operations/schedule_ops.ml [renders generated text in memory; run by @test/operations/runtest-schedule_ops; also pins text this scan cannot name: mutation or unseen buffer write]
     "#pragma"
     "<= 3"
     "<= 7"
@@ -437,7 +437,7 @@ test/operations/schedule_ops.ml [renders generated text in memory; also pins tex
     "if "
     "if ("
     "vector_size"
-test/operations/schedule_pack_mma_matmul.ml
+test/operations/schedule_pack_mma_matmul.ml [run by @test/operations/runtest-schedule_pack_mma_matmul]
     "#pragma omp parallel for"
     "Pool-backed Grid rendering"
     "Tile_mma register tiling: 0x0"
@@ -448,24 +448,24 @@ test/operations/schedule_pack_mma_matmul.ml
     "packed_gb"
     "packed_mgb"
     "threadgroup float tile_"
-test/operations/schedule_packed_constants.ml
+test/operations/schedule_packed_constants.ml [run by @test/operations/runtest-schedule_packed_constants]
     "__shared__"
     "barrier("
     "float tile_"
     "packed_ma"
     "packed_mb"
     "threadgroup float"
-test/operations/schedule_pad.ml
+test/operations/schedule_pad.ml [run by @test/operations/runtest-schedule_pad]
     "!= 0.0 ? "
     "(float)(0.0)"
     sprintf "< (int)(%d.0))) {"
-test/operations/schedule_pipelined_matmul.ml [also pins text this scan cannot name: computed fragment, untraced callback, opaque aggregate component]
+test/operations/schedule_pipelined_matmul.ml [run by @test/operations/runtest-schedule_pipelined_matmul; also pins text this scan cannot name: computed fragment, untraced callback, opaque aggregate component]
     "% 2"
     "[" ^ ... ^ "]"
     "ocannl_cp_async"
     "ocannl_cp_async4(&"
     "ocannl_cp_async_wait_all();"
-test/operations/schedule_register_matmul.ml
+test/operations/schedule_register_matmul.ml [run by @test/operations/runtest-schedule_register_matmul]
     "(acc_mc1["
     "__shared__ float tile_"
     "acc_mc1"
@@ -473,14 +473,14 @@ test/operations/schedule_register_matmul.ml
     "fmaf("
     "if ("
     "threadgroup float tile_"
-test/operations/schedule_smem_matmul.ml
+test/operations/schedule_smem_matmul.ml [run by @test/operations/runtest-schedule_smem_matmul]
     "__shared__ float tile_"
     "__syncthreads()"
     "acc_mc1"
     "if ("
     "threadgroup float tile_"
     "threadgroup_barrier"
-test/operations/schedule_swizzle_matmul.ml [also pins text this scan cannot name: computed fragment]
+test/operations/schedule_swizzle_matmul.ml [run by @test/operations/runtest-schedule_swizzle_matmul; also pins text this scan cannot name: computed fragment]
     " & 1)"
     " & 15)"
     " & 3)"
@@ -496,42 +496,42 @@ test/operations/schedule_swizzle_matmul.ml [also pins text this scan cannot name
     "__syncthreads()"
     "threadgroup float tile_"
     "threadgroup_barrier"
-test/operations/test_bounds_folded_gather.ml
+test/operations/test_bounds_folded_gather.ml [run by @test/operations/runtest-test_bounds_folded_gather]
     "!= 0 ?"
     "!= 0.0 ?"
-test/operations/test_metal_guarded_gather_codegen.real.ml
+test/operations/test_metal_guarded_gather_codegen.real.ml [run by @test/operations/runtest-test_metal_guarded_gather_codegen]
     "(float)(ids["
     ": (float)(0.0))"
     "? C["
     "double"
-test/operations/test_metal_pool_slot_width.real.ml
+test/operations/test_metal_pool_slot_width.real.ml [run by @test/operations/runtest-test_metal_pool_slot_width]
     "uint* __pool_slots"
     "ulong* __pool_slots"
-test/operations/test_one_hot_embedding_backward.ml
+test/operations/test_one_hot_embedding_backward.ml [run by @test/operations/runtest-test_one_hot_embedding_backward]
     "((int)("
     "((long long)("
     "<= 4"
-test/operations/test_one_hot_embedding_lookup.ml
+test/operations/test_one_hot_embedding_lookup.ml [run by @test/operations/runtest-test_one_hot_embedding_lookup]
     "((int)("
     "((long long)("
     "<= 3"
     "?"
     "double *restrict ids_wide"
-test/operations/test_uniform_virtual_lane.ml [also pins text this scan cannot name: opaque aggregate component]
+test/operations/test_uniform_virtual_lane.ml [run by @test/operations/runtest-test_uniform_virtual_lane; also pins text this scan cannot name: opaque aggregate component]
     "Main logic"
     "_uniform_lane("
     "_uniform_vec("
-test/operations/thread_private_gate.ml [also pins text this scan cannot name: untraced callback, unvalidated haystack]
+test/operations/thread_private_gate.ml [run by @test/operations/runtest-thread_private_gate; also pins text this scan cannot name: untraced callback, unvalidated haystack]
     "Local declarations and initialization"
-test/operations/tile_bf16_row_groups.ml
+test/operations/tile_bf16_row_groups.ml [run by @test/operations/runtest-tile_bf16_row_groups]
     "4-lane float"
     "row tail 3"
     ... ^ "("
-test/operations/tile_mma_declines.ml
+test/operations/tile_mma_declines.ml [run by @test/operations/runtest-tile_mma_declines]
     "#pragma omp parallel for"
     "dispatch_apply"
     "tile_"
-test/operations/tile_mma_geometry.ml [also pins text this scan cannot name: computed fragment, untraced callback]
+test/operations/tile_mma_geometry.ml [run by @test/operations/runtest-tile_mma_geometry; also pins text this scan cannot name: computed fragment, untraced callback]
     "geometry from the schedule"
     "ocannl_pv__ = {" ^ ...
     "tmma_acc__"
@@ -540,7 +540,7 @@ test/operations/tile_mma_geometry.ml [also pins text this scan cannot name: comp
     ... ^ " = {" ^ ...
     ... ^ "};"
     sprintf "%d, %s, (const %s *)&%s);"
-test/operations/tile_mma_narrow.ml [also pins text this scan cannot name: computed fragment]
+test/operations/tile_mma_narrow.ml [run by @test/operations/runtest-tile_mma_narrow; also pins text this scan cannot name: computed fragment]
     "HALF_T tile_"
     "OCANNL_VEC_NARROW_BFLOAT16"
     "OCANNL_VEC_NARROW_HALF"
@@ -551,21 +551,121 @@ test/operations/tile_mma_narrow.ml [also pins text this scan cannot name: comput
     "narrow storage bridged"
     "narrow storage bridged: d:bfloat16."
     "narrow storage bridged: d:half."
-test/operations/uint4x32_fixed_index_parity.ml [also pins text this scan cannot name: untraced callback, opaque aggregate component]
+test/operations/uint4x32_fixed_index_parity.ml [run by @test/operations/runtest-uint4x32_fixed_index_parity; also pins text this scan cannot name: untraced callback, opaque aggregate component]
     "Main logic"
     ... ^ "["
-test/operations/vec_signed_zero.ml
+test/operations/vec_signed_zero.ml [run by @test/operations/runtest-vec_signed_zero]
     " - (ocannl_vec"
     "){0} + "
     "full blocks 4x16 of 4x16"
     "tmma_as_0__, tmma_as_0__"
     "vector_size"
     "vunif"
-test/operations/workgroup_memory_accounting.ml [also pins text this scan cannot name: untraced callback]
+test/operations/workgroup_memory_accounting.ml [run by @test/operations/runtest-workgroup_memory_accounting; also pins text this scan cannot name: untraced callback]
+
+== the aliases a codegen change runs ==
+Every alias named above, once. Hand them to `tools/test-run.sh run build`; an alias re-running
+a golden only when a pform reads some value covers that golden on the backend that makes it
+so, and the goldens' families say which backends a change has to be run on.
+@arrayjit/test/runtest-test_cross_cse
+@arrayjit/test/runtest-test_cuda_like_config
+@arrayjit/test/runtest-test_local_scope_init
+@arrayjit/test/runtest-test_render_context
+@arrayjit/test/runtest-test_stage_b_where_debug
+@arrayjit/test/runtest-test_vectorized_codegen
+@arrayjit/test/runtest-test_zero_out_codegen
+@test/einsum/runtest-inline_permuted_view-c_fwd
+@test/einsum/runtest-test_cse-cse_d_fwd
+@test/operations/runtest-accum_width
+@test/operations/runtest-cache_key_agreement
+@test/operations/runtest-canonical_render
+@test/operations/runtest-cc_march_census-emission
+@test/operations/runtest-cc_march_census-w16_native_foreign
+@test/operations/runtest-cc_march_census-w16_native_host
+@test/operations/runtest-cc_march_census-w16_wide_foreign
+@test/operations/runtest-cc_march_census-w16_wide_host
+@test/operations/runtest-cc_march_census-w32_native_foreign
+@test/operations/runtest-cc_march_census-w32_native_host
+@test/operations/runtest-cc_march_census-w32_wide_foreign
+@test/operations/runtest-cc_march_census-w32_wide_host
+@test/operations/runtest-cc_march_census-w64_native_foreign
+@test/operations/runtest-cc_march_census-w64_native_host
+@test/operations/runtest-cc_march_census-w64_wide_foreign
+@test/operations/runtest-cc_march_census-w64_wide_host
+@test/operations/runtest-concat_loop_symbols
+@test/operations/runtest-cost_model_floor
+@test/operations/runtest-cpu_parallel
+@test/operations/runtest-cpu_scratch_matmul_grid
+@test/operations/runtest-cpu_simd_reduction
+@test/operations/runtest-cpu_vectorized
+@test/operations/runtest-fission_replay_segmentation
+@test/operations/runtest-fission_schedule
+@test/operations/runtest-float_literal_forms
+@test/operations/runtest-fresh_build_kernel_text
+@test/operations/runtest-gpu_lane_reduction
+@test/operations/runtest-gpu_packed_prec
+@test/operations/runtest-gpu_serial_lanes
+@test/operations/runtest-half_float_power
+@test/operations/runtest-half_unary_math
+@test/operations/runtest-hardware_axes_parity
+@test/operations/runtest-hardware_warp_shuffle
+@test/operations/runtest-hardware_workgroup_reduce
+@test/operations/runtest-integer_power_domain
+@test/operations/runtest-ll_printer_constants
+@test/operations/runtest-log_index_width_narrow
+@test/operations/runtest-log_index_width_wide
+@test/operations/runtest-micrograd_demo_logging
+@test/operations/runtest-mma_operand_loads
+@test/operations/runtest-n3_fwd_with_prec-unoptimized
+@test/operations/runtest-narrow_storage_compute
+@test/operations/runtest-online_softmax_block_mma
+@test/operations/runtest-reduction_accumulator_residency
+@test/operations/runtest-reduction_forms
+@test/operations/runtest-reserved_routine_names
+@test/operations/runtest-runtime_integer_power
+@test/operations/runtest-scan_loop
+@test/operations/runtest-schedule_batch_grid
+@test/operations/runtest-schedule_contraction_nest
+@test/operations/runtest-schedule_conv_gemm
+@test/operations/runtest-schedule_cpu_pack_matmul
+@test/operations/runtest-schedule_epilogue_fusion
+@test/operations/runtest-schedule_ldmatrix_matmul
+@test/operations/runtest-schedule_mma_matmul
+@test/operations/runtest-schedule_mma_scope_scratch
+@test/operations/runtest-schedule_ops
+@test/operations/runtest-schedule_pack_mma_matmul
+@test/operations/runtest-schedule_packed_constants
+@test/operations/runtest-schedule_pad
+@test/operations/runtest-schedule_pipelined_matmul
+@test/operations/runtest-schedule_register_matmul
+@test/operations/runtest-schedule_smem_matmul
+@test/operations/runtest-schedule_swizzle_matmul
+@test/operations/runtest-test_bounds_folded_gather
+@test/operations/runtest-test_log_stmt_format
+@test/operations/runtest-test_metal_guarded_gather_codegen
+@test/operations/runtest-test_metal_pool_slot_width
+@test/operations/runtest-test_one_hot_embedding_backward
+@test/operations/runtest-test_one_hot_embedding_lookup
+@test/operations/runtest-test_uniform_virtual_lane
+@test/operations/runtest-test_where_precision-extension
+@test/operations/runtest-test_where_precision-unoptimized
+@test/operations/runtest-thread_private_gate
+@test/operations/runtest-tile_bf16_row_groups
+@test/operations/runtest-tile_mma_declines
+@test/operations/runtest-tile_mma_geometry
+@test/operations/runtest-tile_mma_narrow
+@test/operations/runtest-top_down_prec-extension
+@test/operations/runtest-top_down_prec-unoptimized
+@test/operations/runtest-uint4x32_fixed_index_parity
+@test/operations/runtest-vec_signed_zero
+@test/operations/runtest-workgroup_memory_accounting
+@test/operations/runtest-zero_out_local_decl-extension
+@test/operations/runtest-zero_out_local_decl-unoptimized
 
 every scanned root meets its golden floor: true
 every scanned root meets its source-site floor: true
 every source handed over parsed as OCaml: true
+every member has an alias that re-runs it: true
 the scan raised on no source handed over: true
 every exclusion still names a file the globs hand over: true
 every module the scanned library interfaces declare was read: true
@@ -577,6 +677,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:a59159ac0fd0f431da9519f8016e6762] every scanned root
   [scanner-refusal:c995ea0a058a228bf654449befcccb4b] meets its source-site
   [scanner-refusal:d246f03ca5c483db40b94796658cf426] every source handed
+  [scanner-refusal:73a439e337c34309cf51b52176da80ad] alias that re-runs
   [scanner-refusal:8879574435d6aa60f13f262f594c3d45] source handed over
   [scanner-refusal:ebeeadb92d10e201894cb4b9fb9021bb] every exclusion still
   [scanner-refusal:545694a8ea6e371db823bcc7d2639f85] scanned library interfaces

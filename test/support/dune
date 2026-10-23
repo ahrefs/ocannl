@@ -56,6 +56,7 @@
   dead_export_scan
   api_drift
   codegen_text_scan
+  rerun_aliases
   scan_attempt
   config_key_scan
   cache_dir_scan
