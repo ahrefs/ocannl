@@ -775,8 +775,9 @@ cell is the step: cite the step cell. Each issue's cell:
   p) off the benches' `bench-result:` lines. Each such line states the variant's output check
   (`passed`/`failed`/`unchecked`, `Bench_out.check`): a failed check fails the cell, an unchecked
   variant is listed as such. Device and loader runtime controls (`CUDA_*`, `HSA_*`, `MTL_*`,
-  `DYLD_*`, ...) pass through and are recorded with their values, and the build is pinned to the
-  checkout with `dune build --root`. Example, the gh-ocannl-755 geometry A/B:
+  `DYLD_*`, ...) and the toolchain variables pass through and are recorded with their values (every
+  other variable by name only), the kernel compiler a cc cell runs is fingerprinted per arm, and
+  the build is pinned to the checkout with `dune build --root --build-dir`. Example, the gh-ocannl-755 geometry A/B:
   `python3 benchmarks/bin_cells.py --bench narrow_gebp_bench --backend cc --out ~/cells-rn
   --rounds 12 --arm rn4=--rn=4 --arm rn6=--rn=6 -- f16 512 20`. Its control is
   `test/operations/bin_cells.py`, against a stand-in bench that prints the library's own trace.

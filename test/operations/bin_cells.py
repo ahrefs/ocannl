@@ -137,7 +137,7 @@ with tempfile.TemporaryDirectory() as scratch:
     (scratch / "ocannl_config").write_text("autotune_bound_pruning=true\nbackend=metal\n")
     env = {**os.environ, "OCANNL_AUTOTUNE_BOUND_PRUNING": "true", "OCANNL_AUTOTUNE_TIMING": "x",
            "BENCH_TUNE": "1", "OMP_NUM_THREADS": "3", "CUDA_LAUNCH_BLOCKING": "1",
-           "FAKE_API_TOKEN": "s3cret"}
+           "DATABASE_URL": "postgres://u:s3cret@h/db"}
 
     def drive(out, *argv):
         return subprocess.run([sys.executable, str(driver_path), "--exe", str(probe), "--backend",
@@ -159,14 +159,15 @@ with tempfile.TemporaryDirectory() as scratch:
     claim("a device runtime control passes through and is recorded with its value",
           manifest["runtime_controls"].get("CUDA_LAUNCH_BLOCKING") == "1"
           and "CUDA_LAUNCH_BLOCKING=1" in run.stdout)
-    claim("every variable the cells received is recorded with its value, a credential withheld",
-          manifest["environment"].get("PATH") == os.environ.get("PATH")
-          and manifest["environment"].get("FAKE_API_TOKEN") == bc.WITHHELD
+    claim("toolchain variables are recorded by value, every other variable by name only",
+          manifest["environment_values"].get("PATH") == os.environ.get("PATH")
+          and "DATABASE_URL" in manifest["environment_names"]
+          and "DATABASE_URL" not in manifest["environment_values"]
           and "s3cret" not in (scratch / "ab/manifest.json").read_text())
-    claim("the toolchain the cells' PATH resolves is recorded by content",
-          manifest["toolchain"]  # a build environment has at least ocamlc on its PATH
-          and all(len(t["sha256"]) == 64 for t in manifest["toolchain"].values())
-          and set(manifest["toolchain"]) <= set(bc.TOOLCHAIN))
+    claim("each arm's kernel compiler is resolved from ocamlc -config and fingerprinted",
+          set(manifest["kernel_compilers"]) == {"slow", "fast"}
+          and all(len(c.get("sha256", "")) == 64 and os.path.isfile(c["resolved"])
+                  for c in manifest["kernel_compilers"].values()))
     claim("no cell resolved a setting from the environment or a config file",
           all(e["source"] in ("commandline", "default")
               for r in records for e in r["config"].values()))

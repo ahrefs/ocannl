@@ -23,8 +23,8 @@ a clean run exits 0: true
 every round runs every arm, in the design's order: true
 the planted variables are cleared, by name: true
 a device runtime control passes through and is recorded with its value: true
-every variable the cells received is recorded with its value, a credential withheld: true
-the toolchain the cells' PATH resolves is recorded by content: true
+toolchain variables are recorded by value, every other variable by name only: true
+each arm's kernel compiler is resolved from ocamlc -config and fingerprinted: true
 no cell resolved a setting from the environment or a config file: true
 the planted settings resolved to their defaults: true
 each cell kept its streams in a directory of its own under the output directory: true

@@ -17,9 +17,11 @@ bench so that the command line IS the treatment, and records what the process ac
   bench was built from. Device and loader runtime controls (CUDA_*, HIP_*, HSA_*, MTL_*, DYLD_*,
   LD_*, ... -- `RUNTIME_PREFIXES`) are the box's: some boxes cannot run without them, so they pass
   through, and each one present is recorded with its value beside the numbers (OCAMLRUNPARAM, the
-  OCaml runtime's, among them). Every variable a cell receives is recorded WITH its value in the
-  manifest (PATH chooses the C compiler the cc backend compiles kernels with), a credential-looking
-  name withheld, and the report names the compilers the cells' PATH resolves, with their sha256. The build,
+  OCaml runtime's, among them), as are the toolchain variables (PATH, TMPDIR, SDKROOT, ...); every
+  other variable is recorded by name only, since an inherited environment carries credentials no
+  name pattern recognizes. On the C backends the compiler the kernels are compiled with -- the
+  resolved `cc_backend_compiler_command`, else `ocamlc -config`'s `c_compiler` -- is resolved on
+  the cells' PATH and fingerprinted per arm. The build,
   when the driver does it, runs with DUNE_* and OCAMLPARAM cleared and the root and build directory
   named, so the executable measured is the one built from this checkout.
 - The resolved configuration is echoed, not assumed. Each cell runs under
@@ -341,10 +343,11 @@ def render_report(manifest, records, problems):
     lines.append(log_line("- runtime controls passed through (device, loader, OCaml runtime): " + (
         ", ".join(f"{k}={display_value(v)}" for k, v in manifest["runtime_controls"].items())
         or "none")))
-    lines.append(log_line("- toolchain on the cells' PATH: " + (", ".join(
-        f"{k}={display_value(v['resolved'])} ({v['sha256'][:12]})"
-        for k, v in manifest["toolchain"].items()) or "none found")))
-    lines.append("- every variable the cells received, with its value: manifest.json")
+    for arm, c in manifest.get("kernel_compilers", {}).items():
+        lines.append(log_line(f"- kernel compiler ({display_value(arm)}): " + (
+            f"{display_value(c['resolved'])} ({c['sha256'][:12]}), command "
+            + code_span(c["command"]) if "error" not in c else "UNKNOWN: " + c["error"])))
+    lines.append("- toolchain variables and every variable's name: manifest.json")
     lines.append(log_line("- cleared from the environment: " + (
         ", ".join(display_value(v) for v in manifest["cleared"]) or "nothing")))
     lines += ["", "## Arms", ""]
@@ -474,27 +477,50 @@ def sha256(path):
         return hashlib.file_digest(f, "sha256").hexdigest()
 
 
-# Every variable a cell receives is recorded WITH its value in the manifest -- PATH picks the C
-# compiler the cc backend compiles every kernel with (`Cc_backend.resolve_executable`), and any
-# other variable a toolchain consults (TMPDIR, SDKROOT, CPATH, ...) is the same kind of fact -- save
-# a name that looks like a credential, which is recorded as withheld.
-CREDENTIAL_RE = re.compile(r"TOKEN|SECRET|PASSW|CREDENTIAL|AUTH|COOKIE|SESSION|_KEY\b|^KEY", re.I)
-WITHHELD = "<withheld: the name looks like a credential>"
-# The executables a cc cell's kernels are compiled through, resolved on the cells' PATH: the C
-# compiler is `ocamlc -config`'s unless `cc_backend_compiler_command` names one, and that is cc,
-# clang or gcc on every box here.
-TOOLCHAIN = ("ocamlc", "cc", "clang", "gcc")
+# The variables a C toolchain consults, recorded with their values beside `RUNTIME_PREFIXES`'s.
+# Every other variable a cell receives is recorded by NAME only: an inherited environment carries
+# credentials under names no pattern can recognize (a token inside DATABASE_URL), and the manifest
+# travels with published numbers. What the cc backend actually compiles kernels with is
+# fingerprinted directly instead (`kernel_compiler`), so a toolchain fact does not rest on this
+# list being complete.
+TOOLCHAIN_VARS = ("PATH", "TMPDIR", "SDKROOT", "DEVELOPER_DIR", "MACOSX_DEPLOYMENT_TARGET", "CPATH",
+                  "C_INCLUDE_PATH", "LIBRARY_PATH", "CC", "CFLAGS", "CPPFLAGS", "LDFLAGS",
+                  "OCAMLFIND_TOOLCHAIN")
 
 
-def toolchain(env):
-    """{name: {"path", "sha256"}} for each `TOOLCHAIN` executable `env`'s PATH resolves."""
-    found = {}
-    for name in TOOLCHAIN:
-        path = shutil.which(name, path=env.get("PATH", ""))
-        if path is not None:
-            real = os.path.realpath(path)
-            found[name] = {"path": path, "resolved": real, "sha256": sha256(real)}
-    return found
+def recorded_values(env):
+    """The variables of `env` recorded with their values: runtime controls and toolchain ones."""
+    return {k: env[k] for k in sorted(env)
+            if k.startswith(RUNTIME_PREFIXES) or k in TOOLCHAIN_VARS}
+
+
+def kernel_compiler(command, env, out):
+    """The executable the cc backend compiles kernels with, fingerprinted: the first word of the
+    resolved `cc_backend_compiler_command` (`command`), or of `ocamlc -config`'s `c_compiler` when
+    that is empty -- `Cc_backend.compiler_command`'s rule -- resolved on the cells' PATH as
+    `Cc_backend.resolve_executable` resolves it. {"command", "resolved", "sha256"}, or an
+    {"error"} naming what could not be resolved."""
+    path = env.get("PATH", "")
+    if not command.strip():
+        ocamlc = shutil.which("ocamlc", path=path)
+        if ocamlc is None:
+            return {"error": "no ocamlc on the cells' PATH to ask for its c_compiler"}
+        with open(out, "wb") as f:
+            status = run_in_group([ocamlc, "-config"], out.parent, env, 120, f, subprocess.STDOUT)
+        lines = out.read_text(errors="replace").splitlines() if status == 0 else []
+        command = next((l.split(":", 1)[1].strip() for l in lines if l.startswith("c_compiler:")),
+                       "")
+        if not command:
+            return {"error": f"ocamlc -config named no c_compiler (status {status})"}
+    try:
+        first = shlex.split(command)[0]
+    except (ValueError, IndexError):
+        return {"command": command, "error": "the compiler command does not split into words"}
+    found = first if os.sep in first else shutil.which(first, path=path)
+    if found is None or not os.path.isfile(found):
+        return {"command": command, "error": f"{first} resolves to no executable"}
+    real = os.path.realpath(found)
+    return {"command": command, "resolved": real, "sha256": sha256(real)}
 
 
 def tree_commit():
@@ -611,8 +637,8 @@ def main(argv=None):
         "executable": str(exe), "executable_sha256": sha256(exe), **host_identity(),
         "common_args": common, "arms": arms, "pins": pins, "cleared": cleared,
         "runtime_controls": {k: env[k] for k in sorted(env) if k.startswith(RUNTIME_PREFIXES)},
-        "environment": {k: WITHHELD if CREDENTIAL_RE.search(k) else env[k] for k in sorted(env)},
-        "toolchain": toolchain(env),
+        "environment_values": recorded_values(env),
+        "environment_names": sorted(env),
         "cell_timeout_s": args.cell_timeout, "orders": orders,
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
@@ -669,8 +695,20 @@ def main(argv=None):
                     + ("" if not problems else " -- " + display_value("; ".join(problems)))),
                     file=sys.stderr, flush=True)
 
+    if args.backend in ("cc", "multidev_cc"):
+        compilers = {}
+        for arm in arms:
+            config = next((r["config"] for r in records
+                           if r["arm"] == arm["label"] and r["config"]), {})
+            command = config.get("cc_backend_compiler_command", {}).get("value", "")
+            compilers[arm["label"]] = kernel_compiler(command, env,
+                                                      out / f"ocamlc-config-{arm['label']}.txt")
+        manifest["kernel_compilers"] = compilers
+        (out / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
     problems = [f"cell {r['cell']} ({r['arm']}): {'; '.join(r['problems'])}"
                 for r in records if not r["ok"]]
+    problems += [f"arm {arm}: the kernel compiler could not be identified: {c['error']}"
+                 for arm, c in manifest.get("kernel_compilers", {}).items() if "error" in c]
     problems += consistency_problems([r for r in records if r["ok"]])
     report = render_report(manifest, records, problems)
     (out / "report.md").write_text(report)
