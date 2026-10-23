@@ -233,6 +233,23 @@ jobs:
     # keep the cache disabled.
     env:
       DUNE_CACHE: disabled
+      # Idle OpenMP workers sleep instead of spinning (gh-ocannl-1544). The
+      # cc backend renders parallel Grid loops with OpenMP where it finds no
+      # libdispatch and the compiler links -fopenmp (ubuntu's `host` line
+      # says parallel_grid=openmp; macOS takes libdispatch, which reads no
+      # OpenMP variable), and libgomp's default spin is sized for a process
+      # that has the cores to itself: on a 4-vCPU runner building at -j 4,
+      # four tests' worker teams spun against each other. Measured on three
+      # dispatch runs building both main shards with and without it side by
+      # side (39932047808, 39932050243, 39932052982), all green either way:
+      # the suite went from 125 to 79 CPU-minutes, main 1/2's dune step on
+      # the same CPU model (EPYC 7763) from 22.0/21.6 to 13.2/13.6 minutes,
+      # main 2/2's from 21.6 to 17.9, autotune_sketch_placements from 328 to
+      # 50 seconds. Job-wide, so every step that runs a test runs it the way
+      # the shards' tables (tools/ci-shard.sh's WEIGHTS and WALL_WEIGHTS)
+      # were measured. The wait policy is one of the cc codegen tag's
+      # runtime controls, so the host line's codegen_tag moves with it.
+      OMP_WAIT_POLICY: passive
       # Which dune targets an unsharded job builds: one spelling, which the
       # bash and the PowerShell build steps below both read (a sharded job
       # asks tools/ci-shard.sh for its share instead).
@@ -320,6 +337,12 @@ jobs:
           fi
         fi
         echo "Dispatch checkout: $(git rev-parse HEAD) (dispatched at $GITHUB_SHA)"
+    # setup-ocaml's own apt packages, from a cache: their fetch from the
+    # runner's mirror was the whole of the action's 1-11 minute spread
+    # (gh-ocannl-1544; the action says how).
+    - name: Pre-install setup-ocaml's apt packages (Linux)
+      if: runner.os == 'Linux'
+      uses: ./.github/actions/setup-ocaml-debs
     - uses: ocaml/setup-ocaml@v3
       with:
         ocaml-compiler: ${{ matrix.ocaml-compiler }}
@@ -800,6 +823,8 @@ jobs:
     - uses: actions/checkout@v7
       with:
         ref: ${{ inputs.expected_sha }}
+    - name: Pre-install setup-ocaml's apt packages
+      uses: ./.github/actions/setup-ocaml-debs
     - uses: ocaml/setup-ocaml@v3
       with:
         ocaml-compiler: 5.5.x
@@ -858,6 +883,8 @@ jobs:
     - uses: actions/checkout@v7
       with:
         ref: ${{ inputs.expected_sha }}
+    - name: Pre-install setup-ocaml's apt packages
+      uses: ./.github/actions/setup-ocaml-debs
     - uses: ocaml/setup-ocaml@v3
       with:
         ocaml-compiler: 5.3.x
@@ -936,6 +963,8 @@ jobs:
     - uses: actions/checkout@v7
       with:
         ref: ${{ inputs.expected_sha }}
+    - name: Pre-install setup-ocaml's apt packages
+      uses: ./.github/actions/setup-ocaml-debs
     - uses: ocaml/setup-ocaml@v3
       with:
         ocaml-compiler: 5.5.x

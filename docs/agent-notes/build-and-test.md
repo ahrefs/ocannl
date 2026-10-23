@@ -3055,8 +3055,16 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   compiler children included) ON THE RUNNER (gh-ocannl-1503), because they add up: a shard's
   tests keep the 4-vCPU runner's cores busy at `-j 4`, so its dune step lasts about a quarter
   of its CPU. Wall-clock seconds of job slot (gh-ocannl-1464's unit) do not add up: a test's wall-clock is
-  its CPU stretched by its neighbours, worst (likely) between tests running OpenMP kernels, whose
-  libgomp barrier spin is sized for their own threads, not the runner's; so a deal balanced on wall-clock
+  its CPU stretched by its neighbours, worst between tests running OpenMP kernels, whose libgomp
+  barrier spin is sized for their own threads, not the runner's. **The build jobs run with
+  `OMP_WAIT_POLICY=passive`** for that reason (gh-ocannl-1544): built side by side with and without
+  it in three dispatch runs, the suite went from 125 to 79 CPU-minutes and main 1/2's dune step on
+  one CPU model from ~22 to ~13.5 minutes, every golden unchanged; the autotune tests, which repeat
+  small parallel kernels, moved most (autotune_sketch_placements 328 -> 50 s). An A/B of a CI
+  setting runs as such a pair: a throwaway branch whose `ci.yml` lists only the jobs under test,
+  each twice by an extra matrix key, dispatched with `expected_sha`, so both arms draw runners at the
+  same time -- and compare jobs on the same CPU model (the `host` line's `cpu=`), which moves a
+  shard's time by half (EPYC 7763 against 9V45). A deal balanced on wall-clock
   weights measured under the previous deal predicted 60.5/60.5 minutes of slot and ran 80.6 on one
   shard while the other hit the job's 45-minute timeout. A Mac-measured table drifts as badly
   (gh-ocannl-1464 saw 26/12): measure on the runner. A single unit whose own wall-clock outlasts
@@ -3165,6 +3173,25 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   Our own `_opam` key deliberately does NOT carry the opam version: a switch built by 2.5.2
   restores and runs green under 2.6.0 (the 2026-09-17 master runs hit that cache), so keying on it
   would buy nothing and cost a ~180-package rebuild per platform at every bump.
+- **A slow ubuntu setup-ocaml step is apt, not opam** (gh-ocannl-1544). The step's spread (55s to
+  11min on one day, 2026-10-22, on jobs whose opam caches all hit) is the `apt-get install` inside
+  its `Initialising opam state` group: `bubblewrap musl-tools rsync` plus the optional
+  `g++-multilib gcc-multilib` (setup-ocaml's `src/system-packages.ts`), 29 packages, 23.6 MB,
+  nearly all of it gcc-multilib's lib32/libx32 halves, fetched from the runner's
+  `azure.archive.ubuntu.com` at 39-46 kB/s on a slow runner (`Fetched 23.6 MB in 10min 2s`) and in
+  1s on a fast one -- while the same runner's other apt fetches minutes apart, from the same or
+  another mirror, ran at MB/s. Read the `Fetched ... in` line of that group before blaming a cache.
+  It hit the Formatting and Dune-floor jobs as hard as the build shards, and once put a main shard
+  at 37.5 minutes. `.github/actions/setup-ocaml-debs` now pre-installs that list from `.deb` files
+  in actions/cache, keyed by apt's own `--print-uris` (file names, sizes, hashes), before every
+  ubuntu setup-ocaml step in `ci.yml`, so the action's install finds nothing to fetch; the list
+  restates setup-ocaml's, so a change there costs only the speed back, and every step of it is
+  best-effort. The one-off `Failed to find any opam release that matches the specified version
+  constraint` (2026-10-22 15:06-15:24Z, several jobs within seconds, green on rerun) is a different
+  lookup: the action lists `ocaml/opam`'s releases through the GitHub API at every run and found
+  no stable one in that answer. setup-ocaml v3.9.0 has no input that pins the opam version or
+  skips the lookup, so there is nothing to pin here short of replacing the action; a re-run is the
+  remedy, and a deterministic form of the same message is gh-ocannl-1543's.
 - Where this repository PARSES opam's output, it freezes the format with `--cli=2.1` rather than
   tracking opam — `.github/actions/pin-revisions/resolve.sh` does it for both `opam show --raw
   --sort` and `opam pin list`. Re-verified against a real opam 2.6.0 (2026-09-17): the definition

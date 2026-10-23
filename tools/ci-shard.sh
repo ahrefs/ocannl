@@ -98,14 +98,17 @@
 # because they ADD UP: a shard runs at `-j 4` on a 4-vCPU runner whose cores
 # its tests keep busy, so its dune step lasts about its units' CPU over 4.
 # Wall-clock does not add up. A test's wall-clock is its CPU stretched by
-# whatever shares the runner with it -- likely the most between tests running
-# OpenMP kernels, whose libgomp barrier spin is sized for their own threads,
-# not the runner's. Dealt by wall-clock weights
+# whatever shares the runner with it -- most between tests running OpenMP
+# kernels, whose libgomp barrier spin is sized for their own threads, not the
+# runner's (which is why ci.yml's build jobs now run with
+# OMP_WAIT_POLICY=passive: gh-ocannl-1544 measured the spin at a third of
+# the suite's CPU and up to 40% of a main shard's dune step). Dealt by
+# wall-clock weights
 # measured under one deal (gh-ocannl-1464's choice), the next deal predicted
 # 60.5/60.5 min of slot time and ran 80.6 min on one shard while the other
 # outlived the job's 45-minute timeout -- padded_conv_cache read 160 s by its
 # weight and 394 s beside its new neighbours (gh-ocannl-1503). CPU moves too
-# (spinning OpenMP threads burn it), but less, and within a run it adds up:
+# (spinning OpenMP threads burned it), but less, and within a run it adds up:
 # master's deal measured 89.0 and 44.4 CPU-minutes over dune steps of 27.5 and
 # 14.8 min. Check each new deal's run against `plan` all the same, and refresh
 # from it: averaging runs of different deals averages out the neighbours.
@@ -141,288 +144,276 @@ SUITE_ALIASES="default runtest bin-smoke"
 SPLIT_DIR=test/operations
 DEFAULT_WEIGHT=1
 
-# CPU seconds per unit on the ubuntu runner (gh-ocannl-1503): `merge-weights`
-# over PR runs 39779782938 (master's deal) and 39785508628 (the deal this
-# table's predecessor made), the first two whose `weigh` credited CPU by
-# target -- two deals, so a unit's neighbours average out. The first ran
-# cc_march_census whole, a key that names no unit since staging#1334 split it
-# (merge-weights says so) and is left out; the second measured all thirteen
-# pieces. Shared dependencies are left out. Units under 2s weigh
-# DEFAULT_WEIGHT; the 266 of them averaged 0.4s.
+# CPU seconds per unit on the ubuntu runner (gh-ocannl-1503), under
+# OMP_WAIT_POLICY=passive (gh-ocannl-1544): `merge-weights` over the passive
+# arm of dispatch runs 39932047808, 39932050243 and 39932052982, which built
+# both main shards with and without the setting side by side. Against those
+# runs' default arm, passive took the suite from 125 to 79 CPU-minutes, the
+# autotune family's units to a third or less (autotune_composite_playoff 931
+# -> 262, autotune_sketch_placements 453 -> 49), so the table measured under
+# libgomp's default spin dealt one shard 37 CPU-minutes and the other 44.
+# Shared dependencies are left out. Units under 2s weigh DEFAULT_WEIGHT; the
+# 272 of them averaged 0.4s.
 WEIGHTS='
-autotune_composite_playoff 908
-autotune_staffed_singles 633
-autotune_round_expansion 582
-autotune_sketch_placements 500
-flip_abandonment 408
-flip_twins 382
-padded_conv_cache 290
-autotune_device_memory 256
-schedule_conv_gemm 250
-cc_march_census-w64_native_host 226
-sweep_harness 160
-autotune_candidate_release 146
-autotune_split_reduce 144
-autotune_budget 125
-slot_kind_live 122
-autotune_smoke 116
-tune_call_budget 108
-@rest 100
-bridge_arm_coverage 87
-autotune_measured_refusal 84
-cc_march_census-w64_wide_host 82
-online_softmax_block_fast_math 78
-placement_store 75
-cc_march_census-w64_native_foreign 73
-cc_march_census-w16_native_host 68
-online_softmax 68
-autotune_labels 67
-cc_march_census-w32_native_foreign 66
-online_softmax_block 66
-online_softmax_fp_licences 62
-cc_march_census-w64_wide_foreign 54
-gpu_fission_mapping 49
-online_softmax_fast_math 44
-accum_width 43
-cost_model_selection 42
-cc_march_census-emission 39
-shipped_kernels_alone 38
-fission_replay_segmentation 36
-hip_kernel_cache 36
-autotune_callback_release 32
-cc_march_census-w32_native_host 32
-online_softmax_block_mma 32
-schedule_cache_numerics 32
-cc_march_census-w16_wide_foreign 30
-env_var_deps 30
-autotune_serial_baseline 28
-cc_march_census-w16_wide_host 27
+autotune_staffed_singles 312
+flip_abandonment 269
+autotune_composite_playoff 262
+padded_conv_cache 202
+sweep_harness 186
+autotune_round_expansion 165
+@rest 161
+flip_twins 133
+autotune_device_memory 125
+slot_kind_live 124
+autotune_candidate_release 121
+bridge_arm_coverage 92
+autotune_smoke 87
+schedule_conv_gemm 82
+online_softmax_block_fast_math 81
+online_softmax 74
+placement_store 74
+online_softmax_fp_licences 73
+online_softmax_block 72
+autotune_measured_refusal 67
+online_softmax_fast_math 65
+shipped_kernels_alone 65
+autotune_split_reduce 50
+autotune_sketch_placements 49
+gpu_fission_mapping 46
+tune_call_budget 42
+reduction_forms 41
+autotune_labels 37
+accum_width 34
+schedule_cache_numerics 34
+schedule_strided_1x1 32
+autotune_budget 30
+cc_march_census-emission 30
+operations_tutorials 30
+autotune_serial_baseline 29
+env_var_deps 28
+fission_replay_segmentation 27
+autotune_callback_release 26
 autotune_concurrent_refusal 26
-cc_march_census-w16_native_foreign 26
 codegen_text_inventory 26
-reduction_forms 25
-broadcast_constant_init 24
-schedule_mma_matmul 22
-schedule_epilogue_fusion 21
+cost_model_selection 26
+batch_norm_running 25
+online_softmax_block_mma 23
+cc_march_census-w16_native_foreign 22
+cc_march_census-w64_native_foreign 22
+hip_kernel_cache 22
+cc_march_census-w64_native_host 21
+limits_field_classes 21
 dead_export_scan 20
-limits_field_classes 19
-operations_tutorials 19
-autotune_seam_domains 18
-gpu_packed_prec 18
-symbolic_extent_launch 18
-memory_budget_planner 17
-batch_norm_running 16
-demo_models_smoke 16
-mobile_cnn_width 16
-schedule_strided_1x1 16
-test_concat_graph 16
-verdict_ratchet 15
-autotune_progress 14
-autotune_replay_refusal 14
-footprint_materialization 14
-gpu_lane_reduction 14
+demo_models_smoke 19
+verdict_ratchet 19
+autotune_replay_refusal 17
+autotune_seam_domains 17
+broadcast_constant_init 17
+schedule_epilogue_fusion 17
+schedule_mma_matmul 17
+autotune_scope_menu 15
+footprint_materialization 15
+cc_march_census-w16_wide_foreign 14
 hardware_warp_shuffle 14
-virtual_rejection_boundary 14
-test_block_tensor 13
-virtual_chain_fanin 13
-buffer_aliasing 12
-deferred_hit_compiles 12
-privatize_census 12
-zero2hero_1of7_exec 12
-cc_march_census-w32_wide_host 11
-inline_flip_tune 11
-autotune_bound_pruning 10
-autotune_routine_name 10
-cache_key_agreement 10
-cc_toolchain_attribution-codegen 10
-primitive_ops 10
+privatize_census 14
+schedule_coalesce 14
+test_block_tensor 14
+deferred_hit_compiles 13
+mobile_cnn_width 13
+symbolic_extent_launch 13
+cc_march_census-w16_native_host 12
+cc_march_census-w32_native_foreign 12
+gpu_lane_reduction 12
+gpu_packed_prec 12
+primitive_ops 11
+virtual_chain_fanin 11
+autotune_progress 10
+bench_checksum_discrimination 10
+hello_world_op 10
+test_concat_graph 10
 test_execution_deps 10
 test_uniform_odd_sizes 10
-autotune_report_drops 9
-autotune_scope_menu 9
-cc_march_census-w32_wide_foreign 9
+agent_notes_structure 9
+bench_self_test 9
+cc_march_census-w32_native_host 9
+cc_toolchain_attribution-codegen 9
 gpu_parallel_prefix 9
+gpu_serial_lanes 9
 provenance_tag_inventory 9
+rope_test 9
 schedule_contraction_nest 9
-schedule_split_reduce 9
-zero2hero_1of7 9
+sgd_variants 9
+test_uniform_virtual_lane 9
+virtual_rejection_boundary 9
 bandwidth_calibration 8
-bench_self_test 8
-flip_bound_pruning 8
-gpu_serial_lanes 8
-rope_test 8
-schedule_coalesce 8
-sgd_variants 8
-virtual_shared_loop 8
-qkv_zero_init 7
-split_reduce_pair 7
+narrow_storage_compute 8
+zero2hero_1of7 8
+zero2hero_1of7_exec 8
+zero_elision 8
+cache_key_agreement 7
+cc_march_census-w16_wide_host 7
+cc_march_census-w64_wide_foreign 7
+cc_march_census-w64_wide_host 7
+cuda_like_builtins_emulation 7
+epilogue_fusion_mma_seeds 7
+matmul_interchange 7
+memory_budget_planner 7
+test_config_consistency 7
+tile_mma_declines 7
 tile_mma_geometry 7
-agent_notes_structure 6
-cc_temp_ownership-compiler_debug 6
-cuda_like_builtins_emulation 6
+affine_surjectivity 6
+autotune_report_drops 6
+bf16_builtins 6
+cc_march_census-w32_wide_foreign 6
+cost_model_template 6
 dynamic_axis_coverage 6
-hello_world_op 6
-matmul_interchange 6
-narrow_storage_compute 6
+nonoverlap_pool_grads 6
+privatize_recheck 6
+qkv_zero_init 6
 qkv_zero_init-approximate 6
-schedule_batch_grid 6
-seeding_census 6
+schedule_split_reduce 6
+split_reduce_pair 6
 stored_template_elision 6
-test_config_consistency 6
-test_einsum3 6
-tile_mma_declines 6
-zero_elision 6
-bench_checksum_discrimination 5
-bf16_builtins 5
-cc_temp_ownership-compiler_dll 5
-config_usage_scan 5
-digest_completeness 5
-overlapping_window_grads 5
+virtual_diagonal 6
+virtual_shared_loop 6
+autotune_bound_pruning 5
+buffer_aliasing 5
+capture_per_call 5
+cc_march_census-w32_wide_host 5
+cc_temp_ownership-compiler_debug 5
+context_handle_refusals 5
+integer_power_domain 5
+reduction_accumulator_residency 5
 resnet_block 5
-schedule_cache_device 5
-symbolic_extent_contract 5
-test_uniform_virtual_lane 5
-affine_surjectivity 4
+schedule_pack_mma_matmul 5
+tensorized_census_ratchet 5
+test_einsum3 5
 backend_golden_family_scan 4
-cost_model_template 4
+cc_temp_ownership-compiler 4
+cc_temp_ownership-compiler_dll 4
+config_usage_scan 4
 cpu_parallel 4
-cpu_scratch_matmul_grid 4
 decoder_only_test 4
-env_var_deps_control 4
-epilogue_fusion_mma_seeds 4
-gpu_small_leading_axis 4
+digest_completeness 4
+digest_identity_flips 4
+flip_bound_pruning 4
+inline_flip_tune 4
 ll_test_ratchet 4
-narrow_uniform_bound 4
-nonoverlap_pool_grads 4
-one_element_reshape 4
-privatize_recheck 4
-reduction_accumulator_residency 4
+overlapping_window_grads 4
 reserved_routine_names 4
 rev_sides_width1_store 4
-schedule_batched_mma 4
-schedule_pack_mma_matmul 4
-schedule_packed_constants 4
+schedule_batch_grid 4
 schedule_partition 4
-scope_over_materialized 4
-shell_scripts_parse 4
+seeded_default 4
+seeding_census 4
+set_values_pool_coalescing 4
 sketch_family_tree 4
 sweep_components 4
-tensorized_census_ratchet 4
-test_default_init_std 4
-test_one_hot_embedding_lookup 4
+tile_mma_narrow 4
 transformer_test 4
-virtual_affine 4
 atomic_file_rename_scan 3
-autotune_budget_unfloored 3
+autotune_routine_name 3
 cache_dir_ignores 3
-cc_temp_ownership-compiler 3
-closed_shape_write_guard 3
+clamped_window_pool 3
 cmple_ops 3
-cpu_simd_reduction 3
+conv_family_tree 3
+cpu_scratch_matmul_grid 3
+env_var_deps_control 3
 fission_schedule 3
-fresh_build_kernel_text 3
+gpu_small_leading_axis 3
 launch_predicate_parity 3
-layer_norm_divided_mean 3
+ll_test_scan_cases 3
 model_load_tiebreak 3
+narrow_rng_nesting 3
+narrow_uniform_bound 3
 observable_grads 3
-seeded_split_reduce 3
-stretch_resolution 3
+operand_key_ratchet 3
+scan_loop 3
+schedule_batched_mma 3
+schedule_ops 3
+scope_over_materialized 3
+shell_scripts_parse 3
+simplify_if_narrowing 3
+splice_semantics 3
+symbolic_extent_backward 3
+symbolic_extent_contract 3
+test_default_init_std 3
 test_one_hot_embedding_backward 3
-uint4x32_fixed_index_parity 3
-workgroup_memory_accounting 3
+test_one_hot_embedding_lookup 3
+test_random_histograms 3
+virtual_affine 3
+virtual_uncaptured_loop 3
 api_drift_history 2
-autotune_privatize 2
+autotune_budget_unfloored 2
 autotune_seeded_seed 2
-cc_dlopen_cause_debug 2
-cc_kept_library-debug 2
+cc_kept_library 2
+closed_shape_write_guard 2
+consume_code_replay 2
 context_copy 2
-context_handle_refusals 2
-context_host_access 2
-conv_family_tree 2
-digest_identity_flips 2
+conv_bias_shapes 2
+cpu_simd_reduction 2
 exit_stream_teardown 2
 fission_equivalence 2
 fp_licence_values 2
-half_float_power 2
-integer_power_domain 2
-layer_norm_test 2
-ll_test_scan_cases 2
-local_host_access 2
-mixed_prec_twin_shape 2
-narrow_rng_nesting 2
-operand_key_ratchet 2
-peel_census 2
-reduction_sink 2
+fresh_build_kernel_text 2
+lowered_nest_order 2
+one_element_reshape 2
+padding_lifecycle 2
+read_before_write_flip 2
 runtime_integer_power 2
-scan_companion_coverage 2
-scan_loop 2
-schedule_ops 2
-seeded_default 2
-set_values_pool_coalescing 2
-splice_semantics 2
-split_reduce_block_hoist 2
-symbolic_extent_backward 2
-test_random_histograms 2
-test_threefry4x32 2
+schedule_cache_device 2
+schedule_packed_constants 2
+seeded_split_reduce 2
+stretch_resolution 2
+test_fp8_codec_parity 2
 test_uniform1 2
-test_where_simple 2
-tile_mma_narrow 2
-unary_math_special_values 2
-virtual_diagonal 2
+uint4x32_fixed_index_parity 2
 virtual_guarded_setter 2
-virtual_uncaptured_loop 2
+workgroup_memory_accounting 2
 '
 
 # Wall-clock seconds of the units whose own run is long, on the ubuntu
 # runner: not dealt by, only `plan`'s critical-path check (the longest unit
 # per shard, which a CPU load hides). From `merge-weights --wall` over the CI
-# shards' `ci-shard-wall` lines; units under 30s are left out. The rows here
-# are the mean of PR runs 39682838404 and 39758399208 (master's deal),
-# executable-keyed then re-keyed by hand through that deal, and the
-# cc_march_census pieces' own seconds from staging#1334's final run -- until a
-# run's `ci-shard-wall` lines replace them. Wall-clock moves with a unit's
-# neighbours (gh-ocannl-1503), so read the check as a rough one.
+# shards' `ci-shard-wall` lines -- the same three passive-arm runs as WEIGHTS
+# (gh-ocannl-1544), under the deal the table before them made -- with units
+# under 30s left out. Wall-clock moves with a unit's neighbours
+# (gh-ocannl-1503), so read the check as a rough one.
 WALL_WEIGHTS='
-autotune_composite_playoff 693
-sweep_harness 397
-autotune_sketch_placements 322
-schedule_conv_gemm 310
-flip_abandonment 292
-autotune_staffed_singles 249
-cc_march_census-w64_native_host 240
-flip_twins 234
-autotune_round_expansion 213
-@rest 171
-autotune_smoke 164
-padded_conv_cache 160
-autotune_candidate_release 155
-autotune_split_reduce 146
-online_softmax_block 144
-cc_march_census-w64_native_foreign 137
-online_softmax_fp_licences 114
-slot_kind_live 101
-cc_march_census-w64_wide_host 89
-autotune_device_memory 82
-autotune_budget 81
-cc_march_census-w16_native_host 73
-online_softmax_block_fast_math 72
-placement_store 70
-autotune_labels 69
-cost_model_selection 54
-tune_call_budget 54
-codegen_text_inventory 46
-online_softmax_fast_math 44
-cc_march_census-w16_native_foreign 42
-schedule_cache_numerics 42
-cc_march_census-emission 41
-accum_width 38
-online_softmax 38
-shipped_kernels_alone 38
-autotune_measured_refusal 36
-autotune_serial_baseline 36
-bridge_arm_coverage 30
-gpu_fission_mapping 30
-limits_field_classes 30
+sweep_harness 411
+autotune_staffed_singles 285
+autotune_composite_playoff 266
+flip_abandonment 265
+padded_conv_cache 210
+@rest 202
+autotune_round_expansion 165
+flip_twins 136
+autotune_device_memory 129
+slot_kind_live 126
+autotune_candidate_release 124
+autotune_smoke 89
+schedule_conv_gemm 84
+online_softmax_block_fast_math 82
+placement_store 77
+online_softmax 76
+online_softmax_fp_licences 74
+online_softmax_block 73
+autotune_measured_refusal 68
+online_softmax_fast_math 66
+shipped_kernels_alone 66
+bridge_arm_coverage 51
+autotune_sketch_placements 50
+autotune_split_reduce 48
+gpu_fission_mapping 46
+autotune_labels 42
+tune_call_budget 42
+reduction_forms 41
+schedule_cache_numerics 35
+accum_width 34
+schedule_strided_1x1 33
+autotune_budget 31
+cc_march_census-emission 30
+operations_tutorials 30
 '
 
 # Wall-clock seconds of each `train` member, keyed by its unit (the target
