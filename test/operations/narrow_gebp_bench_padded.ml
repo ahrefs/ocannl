@@ -61,8 +61,8 @@ let check ~label ~prec ~n ?blocking ?(extra = []) () =
   let pads = Bench_gebp.pads ~bm ~bk ~ni:n ~nk:n in
   p_exists (lbl "the header states the padded extents") lines ~f:(fun l ->
       String.is_prefix l ~prefix:"padded: "
-      && List.for_all pads ~f:(fun (axis, extent, padded) ->
-          has l (Printf.sprintf "%s %d to %d" axis extent padded)))
+      && List.for_all pads ~f:(fun { Bench_gebp.axis; extent; padded; _ } ->
+          has l (Printf.sprintf "%s %d to %d" (Bench_gebp.axis_name axis) extent padded)))
 
 let () =
   check ~label:"f32 n=76 at the default 64x256 blocking" ~prec:"f32" ~n:76 ();

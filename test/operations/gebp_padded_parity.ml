@@ -114,19 +114,22 @@ let k_tail_contribution s ~row ~col =
     (List.range first s.k)
     ~f:(fun kk -> Bench_gebp.a_value row kk *. Bench_gebp.b_value kk col)
 
-let check_site ~prec s =
+let check_site ~idx ~prec s =
   let tag = Ir.Ops.prec_string prec in
+  (* One routine name per case: [Context.compile ?name] names the build artifacts, and a name shared
+     by every case would leave only the last case's code behind for diagnosing an earlier one. *)
+  let name leg = Printf.sprintf "gpp_%d_%s_%s" idx tag leg in
   let lbl what = Printf.sprintf "%s, %s storage: %s" s.label tag what in
   let cprec = compute_prec prec in
   let tile_prec = if Ir.Ops.equal_prec cprec prec then None else Some cprec in
   let ma, mb = operands ~prec s in
-  let want, _, _ = run ~prec ~name:"gpp_ref" ~ma ~mb ~schedule:None in
+  let want, _, _ = run ~prec ~name:(name "ref") ~ma ~mb ~schedule:None in
   let ser, ser_census, ser_site =
-    run ~prec ~name:"gpp_serial" ~ma ~mb
+    run ~prec ~name:(name "serial") ~ma ~mb
       ~schedule:(Some (packed ~grid:false ~tile_prec ~bm:s.bm ~bk:s.bk ~ma ~mb))
   in
   let par, par_census, _ =
-    run ~prec ~name:"gpp_grid" ~ma ~mb
+    run ~prec ~name:(name "grid") ~ma ~mb
       ~schedule:(Some (packed ~grid:true ~tile_prec ~bm:s.bm ~bk:s.bk ~ma ~mb))
   in
   p
@@ -168,7 +171,7 @@ let edge_content s =
         List.exists (List.range 0 s.n) ~f:(fun col -> Float.(k_tail_contribution s ~row ~col <> 0.)))
 
 let () =
-  List.iter sites ~f:(fun s ->
+  List.iteri sites ~f:(fun idx s ->
       edge_content s;
       List.iter [ Ir.Ops.single; Ir.Ops.bfloat16 ] ~f:(fun prec ->
           let labels =
@@ -188,7 +191,7 @@ let () =
           if on_cpu then
             Verdict.case
               (Printf.sprintf "%s, %s storage" s.label (Ir.Ops.prec_string prec))
-              (fun () -> check_site ~prec s)
+              (fun () -> check_site ~idx ~prec s)
           else List.iter labels ~f:(fun l -> Verdict.skipped ~backend:backend_name l)))
 
 (* The before-pin: the builder's composition with its pads removed, at a non-dividing extent. The

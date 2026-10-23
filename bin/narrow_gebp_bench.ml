@@ -265,8 +265,8 @@ let () =
   if (not (List.is_empty pads)) && List.is_empty unschedulable then
     p "padded: %s — the packed variants do %.2fx the logical multiply-adds (gh-ocannl-627)\n"
       (String.concat ~sep:", "
-         (List.map pads ~f:(fun (axis, extent, padded) ->
-              Printf.sprintf "%s %d to %d" axis extent padded)))
+         (List.map pads ~f:(fun { Bench_gebp.axis; extent; padded; _ } ->
+              Printf.sprintf "%s %d to %d" (Bench_gebp.axis_name axis) extent padded)))
       (Bench_gebp.work_ratio pads);
   (* Say it at runtime rather than only in a comment: since gh-ocannl-639 every variant accumulates
      at compute precision (naive narrows once per cell, packed once per k block). Whether the

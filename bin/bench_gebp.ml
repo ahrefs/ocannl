@@ -55,31 +55,35 @@ let find_site (opt : LL.optimized) : site =
             packed variants need a non-degenerate extent"
            (List.fold paths ~init:0 ~f:(fun acc p -> Int.max acc (List.length p))))
 
-(* The axes the composition pads at this blocking, as [(name, extent, padded extent)]; empty when
-   both blocks divide. One function, used by the builder AND by the bench's report, so what the run
-   says it padded is what it scheduled. *)
+(* One pad the composition schedules: the row axis [`I] or the reduction axis [`K], its extent, the
+   block it pads to, and the padded extent. *)
+type pad = { axis : [ `I | `K ]; extent : int; block : int; padded : int }
+
+let axis_name = function `I -> "i" | `K -> "k"
+
+(* The pads the composition schedules at this blocking; empty when both blocks divide. The ONE
+   descriptor: [packed_schedule] derives its [Sched.Pad]s from it and the bench's report renders it,
+   so what a run says it padded is what it scheduled. *)
 let pads ~bm ~bk ~ni ~nk =
   List.filter_map
-    [ ("i", ni, bm); ("k", nk, bk) ]
-    ~f:(fun (name, extent, block) ->
-      let p = padded ~extent ~block in
-      if p = extent then None else Some (name, extent, p))
+    [ (`I, ni, bm); (`K, nk, bk) ]
+    ~f:(fun (axis, extent, block) ->
+      let padded = padded ~extent ~block in
+      if padded = extent then None else Some { axis; extent; block; padded })
 
 (* How much more multiply-add work the padded schedule does than the logical [ni x nj x nk]: the
    product of [padded / extent] over the padded axes. The masked rows and the zero k slots are
    computed and discarded, so a timing at a padded blocking measures this much arithmetic. *)
 let work_ratio pads =
-  List.fold pads ~init:1. ~f:(fun acc (_, extent, p) ->
-      acc *. Float.of_int p /. Float.of_int extent)
+  List.fold pads ~init:1. ~f:(fun acc { extent; padded; _ } ->
+      acc *. Float.of_int padded /. Float.of_int extent)
 
 let packed_schedule ~grid ~tile_prec ?tile ~bm ~bk ~(a : Ir.Tnode.t) ~(b : Ir.Tnode.t)
     ~(c : Ir.Tnode.t) (opt : LL.optimized) : Sched.schedule =
   let { i; j; k; ni; nk; _ } = find_site opt in
   let pad_ops =
-    List.filter_map
-      [ (i, ni, bm); (k, nk, bk) ]
-      ~f:(fun (axis, extent, block) ->
-        if extent % block = 0 then None else Some (Sched.Pad { axis; to_multiple_of = block }))
+    List.map (pads ~bm ~bk ~ni ~nk) ~f:(fun { axis; block; _ } ->
+        Sched.Pad { axis = (match axis with `I -> i | `K -> k); to_multiple_of = block })
   in
   let outer_i = if grid then LL.Grid else LL.Serial in
   let sp_i, i_o, i_i = Sched.split ~axis:i ~factor:bm ~outer:outer_i ~inner:LL.Serial in
