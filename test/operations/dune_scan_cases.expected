@@ -227,6 +227,67 @@ ok: backend rule -- an external command handed a workspace file is reported, wit
 ok: backend rule -- and passes with a marker, still floored
 ok: backend rule -- the same tool handed nothing of ours is counted by neither reader
 ok: backend rule -- a launcher pointed at a sibling directory keeps its floor
+ok: backend pins -- a setenv pin its marker names
+ok: backend pins -- a setenv pin its marker leaves out
+ok: backend pins -- a setenv pin under a declaration instead of a marker
+ok: backend pins -- a lowercase setenv name is unread: only native Windows reads it
+ok: backend pins -- a command-line pin its marker names
+ok: backend pins -- a command-line pin under a `none` marker
+ok: backend pins -- the prefix-free and dashed spellings are pins as well
+ok: backend pins -- a marker naming several backends answers for each pinned one
+ok: backend pins -- a pin around one run of a progn is the stanza's
+ok: backend pins -- a deprecated alias is no name a marker can carry
+ok: backend pins -- nor is `none`
+ok: backend pins -- a backend flag handed to a PATH tool
+ok: backend pins -- an env launcher's assignment
+ok: backend pins -- a setenv value read from a pform
+ok: backend pins -- an emptied variable, which hands the run back to the configuration
+ok: backend pins -- a command-line value read from a pform
+ok: backend pins -- a shell line naming the key
+ok: backend pins -- a shell line carrying a backend flag
+ok: backend pins -- an inline-test runner's flag
+ok: backend pins -- a dashed setenv name is unread, not a pin
+ok: backend pins -- a flag handed to a bare name under a rewritten PATH
+ok: backend pins -- the same flag handed to a dependency expansion there is a pin
+ok: backend pins -- a read-lines argument could carry the flag
+ok: backend pins -- path-valued pforms and named dependencies are arguments, not pins
+ok: backend pins -- a text-valued pform that could complete a backend flag
+ok: backend pins -- only the first backend flag of a run is read
+ok: backend pins -- an expansion after the first backend flag decides nothing
+ok: backend pins -- an expansion before it is still unread
+ok: backend pins -- a command that is a text-valued pform
+ok: backend pins -- a shell line holding a text-valued pform
+ok: backend pins -- a shell line holding only path-valued pforms
+ok: backend pins -- an unread setenv survives a command-line pin
+ok: backend pins -- a command string handed to a launcher through run
+ok: backend pins -- a dependency named like a backend flag
+ok: backend pins -- a setenv whose name carries a pform
+ok: backend pins -- an included inline-test flag set
+ok: backend pins -- ordinary inline-test flags pin nothing
+ok: backend pins -- a literal path under an unresolvable chdir
+ok: backend pins -- a flag handed to an absolute executable
+ok: backend pins -- a command-line pin shadows the setenv around its run
+ok: backend pins -- but not around a sibling run that sets none
+ok: backend pins -- a pin on a stanza declaring neither is the XOR's to report
+ok: backend pins -- an unread form on such a stanza is still reported
+ok: backend pins -- a declaration, an enabled_if and a path read from the configuration pin nothing
+ok: backend pins -- another variable set around the run pins nothing
+ok: backend env-vars -- an env stanza binding the backend
+ok: backend env-vars -- and one inside a subdir, in any case
+ok: backend env-vars -- an env stanza binding something else, or setting the backend's NAME as a value
+ok: program runners -- a dependency expansion runs the local executable
+ok: program runners -- a same-named executable elsewhere is not the local one
+ok: program runners -- a runner naming the public name is a runner
+ok: program runners -- a local path spelled like the public name is not
+ok: program runners -- each name of an executables stanza has its own runners
+ok: program runners -- one rule running both names is a runner of each
+ok: program runners -- a dependency expansion under chdir keeps the stanza's identity
+ok: program runners -- a literal path under chdir names the program it moves to
+ok: program runners -- a top-level rule runs a nested executable by its qualified path
+ok: program runners -- a nested dependency expansion under chdir keeps its subdirectory
+ok: program runners -- a rule in a sibling subdirectory is not this program's runner
+ok: program runners -- a shell line is no named runner
+ok: program runners -- the variables pinned around every run of the program
 ok: backend marker sentinel -- in a comment
 ok: backend marker sentinel -- inside a quoted argument, where it declares nothing
 ok: backend marker sentinel -- in a comment above every stanza, which encloses it in none

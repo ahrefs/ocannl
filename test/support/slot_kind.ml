@@ -137,7 +137,9 @@ let join dir sub = match (dir, sub) with "", s -> s | d, "" -> d | d, s -> d ^ "
       program links which library is not read, so all of them are. A directory target, and a rule
       naming neither a target nor an alias whose action writes no file this reads, are taken as
       producing every file. A backend fixed past the configuration -- a [setenv], an [env-vars], a
-      [--ocannl_backend] flag -- is the marker's to name: the stanzas that pin one name it. *)
+      [--ocannl_backend] flag -- is the marker's to name: [env_var_deps] fails a stanza whose action
+      pins a backend its marker does not name, a pin it cannot read, and an [env-vars] binding of
+      the backend (gh-ocannl-1518, [Dune_stanza_scan.backend_pins]). *)
 
 let basename p = match String.rsplit2 p ~on:'/' with Some (_, b) -> b | None -> p
 
@@ -1252,7 +1254,8 @@ let summary = function
     What [slot_kind_live] checks of the repository's tree, so that the two configuration-free
     answers above stay true (gh-ocannl-1227, gh-ocannl-1249). Each refusal names what failed and
     where; an empty list is a tree the answers hold for. The checks read markers over closures and
-    never analyse an action: a backend an action fixes is its marker's to name.
+    never analyse an action: a backend an action fixes is its marker's to name, which [env_var_deps]
+    enforces (gh-ocannl-1518).
 
     - Each listed alias's closure holds no stanza reading the configuration, and no alias dependency
       whose path the closure cannot follow -- a missing alias is refused too.

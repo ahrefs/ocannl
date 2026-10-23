@@ -324,16 +324,22 @@ let raw_entries =
         "[scanner-refusal:08ac167f3e68d870e2cfb7f7c85accc3] control marker occurrence";
         "[scanner-refusal:e68d9277c8a3a5c061164578baf2f632] the population equality";
         "[scanner-refusal:87659b49df04eee3fc19350b0be6629a] repo-relative scanner paths";
+        "[scanner-refusal:0e5ddf66a7ff3f9265d5d35a729daec5] by-name environment reads";
+        "[scanner-refusal:d7d902ac3600e16a27e9a62229789cb2] tracing-gate walk raised";
         "[scanner-refusal:8dbf084aae3ed7d3e4ce33fb0d06e710] the credential deny-list";
         "[scanner-refusal:490ac5e3405d328c2953c38df4f0974b] arguments the rule's";
         "[scanner-refusal:2dc2479687a000324b3f828912a7f4a8] search derivation lost";
         "[scanner-refusal:a81eacf691e2faeada3ee2b79d5fd7a6] support values whose";
+        "[scanner-refusal:50ad2bbac7aab894b82d2525afd2aaf8] that stanza's marker";
         "[scanner-refusal:9de3b3fd1cd96a8d87e76bfa31534244] comment that does";
         "[scanner-refusal:e96ac262e859176f6f0ec05d6f2f30cb] the wrong stanza";
         "[scanner-refusal:0a10ab654cc394b5f797d88ea889d086] inside the parentheses";
         "[scanner-refusal:be4bb5e070f7c1653c2f7236cb2e6a18] times and only";
         "[scanner-refusal:034280d144ee4338406ff5f6a1cf287d] comment that does";
         "[scanner-refusal:30c88c1631600d7969a9aefd4de74162] carries a backend";
+        "[scanner-refusal:60a17b773827a71dd5c724af51013878] its action through";
+        "[scanner-refusal:bd8470207f6c45ce4020275b78402293] fixes its backend";
+        "[scanner-refusal:78e6a1f5c4350e90995d5b6e874d7e3b] pins the backend";
         "[scanner-refusal:f2633aa4ebd6f2c33fd21e4d69cc9786] one backend marker";
         "[scanner-refusal:2803edcc7de84ea6d928343b9d8c8ad2] env_var";
         "[scanner-refusal:533fc9999ad0841992e0c1734d9c1f5d] env_var";
@@ -731,6 +737,14 @@ let raw_direct_evidence =
       "a module reading `Sys.getenv_opt \"GH_TOKEN\"`, under the passing tree, is refused by name: \
        true" );
     ( "env_var_deps.ml:034280d144ee4338406ff5f6a1cf287d",
+      "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
+    ( "env_var_deps.ml:50ad2bbac7aab894b82d2525afd2aaf8",
+      "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
+    ( "env_var_deps.ml:60a17b773827a71dd5c724af51013878",
+      "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
+    ( "env_var_deps.ml:bd8470207f6c45ce4020275b78402293",
+      "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
+    ( "env_var_deps.ml:78e6a1f5c4350e90995d5b6e874d7e3b",
       "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "env_var_deps.ml:30c88c1631600d7969a9aefd4de74162",
       "a dune file built to trip the marker grammar and the declaration checks is refused: true" );

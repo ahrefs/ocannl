@@ -114,8 +114,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
 
 - Ambient gates in `env_var_deps` (gh-ocannl-920) are uncached actions running a program that
   directly declares `arrayjit.utils` and an effective `(link_flags -linkall)`, resolved through
-  `Dune_stanza_scan.program_runners` plus
-  Dune's self-running test actions. The force-link flag is required because OCaml can omit an
+  `Dune_stanza_scan.program_runners` (its identity rules pinned directly by `dune_scan_cases`'
+  program-runners table, gh-ocannl-1501) plus Dune's self-running test actions. The force-link flag is required because OCaml can omit an
   unused archive and its startup reader. Grouping and subtraction are evaluated; unresolved
   flag includes, expansions and subtraction of `:standard` are refused explicitly. `(universe)`
   in the action's `deps` prevents caching; preprocessing dependencies do not. It alone identifies
@@ -645,6 +645,19 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   positions: `Dune_stanza_scan.read_raw` returns forms with their byte ranges plus every `;`
   comment, and its tree is compared SHAPE FOR SHAPE against sexplib's, which is strictly stronger
   than the flat form count it replaced and is what keeps a hand-written lexer honest.
+- A marker is only as true as the action beside it (gh-ocannl-1518). Every consumer of the backend
+  markers -- `Slot_kind`'s width and fleet slot above all -- reads the backends a stanza holds off
+  its marker and never analyses its action, so a `cc`-marked rule running `(setenv OCANNL_BACKEND
+  hip …)` would take a CPU slot and run HIP at the CPU width. `env_var_deps` therefore asks each
+  pinned backend of its stanza's one marker. `Dune_stanza_scan.backend_pins` reads a CLOSED list of
+  forms (its header enumerates them): a literal `setenv` of a name addressing the backend, and a
+  command-line argument the runtime's own `Utils.cmdline_arg_value "backend"` takes as the backend,
+  handed to a program of this workspace -- so no spelling list is restated, and a prefix-free or
+  dashed spelling is a pin exactly when OCANNL reads it as one. Anything else in a position where a backend could be fixed
+  (an `env` launcher's assignment, a flag handed to a PATH tool, a pform value, a shell line naming
+  the key) is refused as unread rather than passed, and an `(env … (env-vars …))` binding is
+  refused outright, since it pins stanzas in other dune files no one marker speaks for. The
+  decision is `Dune_stanza_scan.backend_pin_issues`, put to synthetic stanzas by `dune_scan_cases`.
 - A ratchet whose corpus is the repository's own test sources will scan its OWN fixture, and a
   fixture that pins a shape has to spell that shape out to pin it — so the fixture matches, every
   time, by construction (gh-ocannl-668). Exempt the FILE rather than its matches one at a time: the
@@ -684,7 +697,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   case file's per-snippet catch-all is `attempted ~what ~name ~default`, which reports either as a
   `Verdict.fail`. Each repository scan's two refusals are separate formats, the reader an argument
   of its `*_or_refusal` function so the refusal control can plant a raise and claim that exactly the
-  defect message fired (`routed_case`, gh-ocannl-1292). Not yet routed: the dune-file readers,
+  defect message fired (`routed_case`, gh-ocannl-1292); `env_var_deps`' tracing-gate walk reads each
+  module of an explicit `(modules …)` that way (`module_reads_or_refusal`, gh-ocannl-1500), where an
+  unparsable one used to raise out of the whole check. Not yet routed: the dune-file readers,
   whose parse errors are sexplib's or `Dune_stanza_scan`'s rather than located ppxlib ones.
 - Type-check every OCaml snippet a scan's cases feed it before trusting the arm. The parser
   accepts programs the type checker rejects — a duplicate top-level `module` parses cleanly — and

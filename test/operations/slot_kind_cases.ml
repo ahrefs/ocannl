@@ -360,6 +360,24 @@ let () =
   printf "%-40s %s\n" "runtest d (two markers)" twice;
   p "a stanza carrying two markers makes the tree unreadable, never names nothing"
     (String.is_prefix twice ~prefix:"unknown: the dune file in d is unreadable");
+  (* A backend the action fixes reaches the batch through the marker, which `env_var_deps` requires
+     to name it (gh-ocannl-1518): this resolver never reads the action. *)
+  let _, pinned =
+    judge
+      ~dune_files:
+        [
+          ( "d",
+            {dune|(rule
+ ; ocannl-backend: hip -- the action pins hip in this fixture.
+ (alias se) (deps ocannl_config)
+ (action (setenv OCANNL_BACKEND hip (run %{dep:d.exe}))))|dune}
+          );
+        ]
+      "build @d/se"
+  in
+  printf "%-40s %s\n" "build @d/se (a pin its marker names)" pinned;
+  p "a backend the action pins holds the batch through its marker"
+    (String.is_prefix pinned ~prefix:"names hip");
   (* gh-ocannl-1227's residual shapes, and its neighbours, as policy cases: no argv outside the list
      is ever proven unread, so each counts the configuration (or is every backend) however the
      stanza is written -- none of them is read, and none needs to be. *)
