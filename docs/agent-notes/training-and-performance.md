@@ -671,6 +671,26 @@ files.
   `Utils.config_file_args`' `find_up` takes the NEAREST `ocannl_config`, so running from
   `benchmarks/` shadows a personal root config — a feature to rely on, and a trap when reproducing
   someone else's numbers from a different cwd.
+- For the `bin/` benches that shape is built once: `benchmarks/bin_cells.py` (gh-ocannl-743). Two
+  things it does that a hand-rolled driver tends not to. It pins the config FILE away rather than
+  relying on cwd (`--ocannl_no_config_file=true`), so no `ocannl_config` on any path reaches a
+  cell. And it verifies hermeticity instead of asserting it: every cell runs under
+  `--ocannl_log_config_sourcing=true` and the driver parses the trace back (every key the process
+  read, value and source), failing a cell with any environment or config-file source and a run whose
+  arm resolved a key two ways -- the knobs a bench has no parameter for (bound pruning, the
+  roofline constants, `gpu_graph_capture`) are then recorded rather than merely unpinned. A bench
+  reports to it through `Bench_out.result` (`bench-result:` lines); the human table can change
+  freely. Its arms are whole processes in `Bench_design`'s order, paired round by round.
+- **Interleaved timing visits arms in `Bench_design`'s spread mirrored rotation** (`bin/bench_design.ml`,
+  gh-ocannl-743). Mirroring each batch cancels LINEAR drift (every pair exchanged, equal mean
+  positions); it does not equalize each arm's position histogram, which is what a nonlinear effect
+  (first-launch warm-up, a round's edges) needs. Spreading the pairs' rotations over the arm count
+  equalizes it at `n` batches for an even arm count (`2n` for odd), the least any design can, where
+  rotating by one per pair needed `2n` everywhere; below that, no arm of an even count visits one
+  position class (a position and its mirror) in two different pairs. No design balances every
+  histogram below `n` batches, so read the bench's design line before trusting a small nonlinear
+  position effect. A seeded random order is unbiased only in expectation and balances nothing
+  exactly; it was not taken.
 - Cleanup, release and decline paths are acceptance-tested by fault INJECTION, not by the happy path:
   of the review findings on the gh-ocannl-550 release work, 14 of 14 lived on error paths
   (decline / raise / abort / cache-hit / callback-failure), where a flattened memory curve over three

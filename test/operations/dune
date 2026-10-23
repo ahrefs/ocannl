@@ -229,6 +229,7 @@
   (alias runtest-gh1133_summary)
   (alias runtest-kernel_attribution)
   (alias runtest-gh1002_kernels)
+  (alias runtest-bin_cells)
   (alias runtest-online_softmax_fast_math)
   (alias runtest-online_softmax_fp_licences)
   (alias runtest-online_softmax_block_fast_math)
@@ -9132,6 +9133,47 @@
       %{dep:gh1002_kernels.py}
       %{dep:../../benchmarks/gh1002_cells.py}))
     (diff gh1002_kernels.expected gh1002_kernels.optimized.actual)))))
+
+; gh-ocannl-743: the hermetic bin/ bench driver, benchmarks/bin_cells.py, end to end against a
+; stand-in bench whose configuration trace and result lines are the library's own (see
+; bin_cells_probe.ml), with the ambient sources it clears planted around it; plus its trace parser,
+; treatment checks and statistics on synthetic input, and its visiting order held to the ORDERS table
+; of the bench_design golden. The probe is a test executable, not a public bin/ one, so this is no
+; second runtime path of `@bin-smoke`'s census.
+
+(executable
+ (name bin_cells_probe)
+ (modules bin_cells_probe)
+ (libraries base unix arrayjit.utils bench_args bench_out))
+
+(rule
+ ; ocannl-backend: none -- the probe links arrayjit.utils and bench_out alone and compiles nothing.
+ (alias runtest-bin_cells)
+ (deps
+  ocannl_config
+  (alias runtest-env_spelling_gate)
+  bin_cells.py
+  bin_cells.expected
+  bench_design.expected
+  bin_cells_probe.exe
+  ../../benchmarks/bin_cells.py
+  ../../benchmarks/cell_group.py
+  ../../benchmarks/strict_json.py
+  ../../benchmarks/display_safe.py
+  (sandbox always preserve_file_kind))
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     bin_cells.actual
+     (run
+      python3
+      -O
+      %{dep:bin_cells.py}
+      %{dep:../../benchmarks/bin_cells.py}
+      %{dep:bin_cells_probe.exe}
+      %{dep:bench_design.expected}))
+    (diff bin_cells.expected bin_cells.actual)))))
 
 (test
  (name qkv_zero_init)

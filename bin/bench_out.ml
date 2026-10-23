@@ -31,3 +31,27 @@ let p fmt =
       Stdio.print_string s;
       flush ())
     fmt
+
+(** The machine-readable result line a driver reads (gh-ocannl-743):
+    [bench-result: {"variant": "<label>", "seconds": <s>}], one per timed variant, printed beside
+    the human-readable row that says the same thing. [seconds] is the time of ONE run of the variant
+    -- the quantity each tool's own table divides its work by. [benchmarks/bin_cells.py] takes a
+    cell's numbers from these lines and nothing else, so a tool's table can be reworded freely; a
+    non-finite time prints as JSON [null] (JSON has no spelling for it, gh-ocannl-676) and the
+    driver refuses it by name. *)
+let result ~variant ~seconds =
+  let buf = Buffer.create (String.length variant + 8) in
+  String.iter
+    (fun c ->
+      match c with
+      | '"' -> Buffer.add_string buf "\\\""
+      | '\\' -> Buffer.add_string buf "\\\\"
+      | c when Char.code c < 0x20 -> Buffer.add_string buf (Printf.sprintf "\\u%04x" (Char.code c))
+      | c -> Buffer.add_char buf c)
+    variant;
+  let seconds =
+    match Float.classify_float seconds with
+    | FP_normal | FP_subnormal | FP_zero -> Printf.sprintf "%.17g" seconds
+    | FP_infinite | FP_nan -> "null"
+  in
+  p "bench-result: {\"variant\":\"%s\",\"seconds\":%s}\n" (Buffer.contents buf) seconds

@@ -114,7 +114,8 @@
 
 ; Runtime canary for every user-facing executable in this directory (gh-ocannl-858). This checks
 ; only that each tool starts and completes: the workloads are intentionally too small to support
-; any claim about the measurements, whose hermeticity and validity belong to gh-ocannl-743. One
+; any claim about the measurements: a measurement is taken through benchmarks/bin_cells.py, the
+; hermetic driver (gh-ocannl-743), and test/operations/bin_cells controls that driver. One
 ; sequential action keeps CPU and linker pressure bounded on shared and CI machines. The alias is
 ; included in the main CI Dune walk; keeping it outside `runtest` also makes the policy and its cost
 ; visible at the call site as `dune build @bin-smoke`. The gh-ocannl-874 scans-family check derives

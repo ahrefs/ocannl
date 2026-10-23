@@ -751,6 +751,7 @@ let () =
       (flops /. secs /. 1e9)
       spot values.(spot) (Bench_checksum.render checksum) agreement
       (Ir.C_syntax.mma_summary_string mma);
+    Bench_out.result ~variant ~seconds:secs;
     (secs, mma)
   in
   (* A static gate cannot enumerate every way a schedule can be rejected at a given size —

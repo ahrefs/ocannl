@@ -87,7 +87,8 @@ let () =
     let secs = Float.of_int63 Int63.(stop - start) /. 1e9 /. Float.of_int repeats in
     p "%-12s %10.3f us  %8.2f %s  correct: %b\n" variant (secs *. 1e6)
       (work_per_run /. secs /. 1e9)
-      unit_label ok
+      unit_label ok;
+    Bench_out.result ~variant ~seconds:secs
   in
   p "cpu vectorization bench: n = %d, %d repeats, backend from config/OCANNL_BACKEND\n" n repeats;
   let approx x y = Float.(abs (x - y) <= 1e-3 *. (1. +. abs y)) in
