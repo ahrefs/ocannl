@@ -882,7 +882,7 @@ done
 # would pin every machine to a stale commit and record green coverage for a tree
 # nobody asked about -- the exact silent non-coverage this script exists to make
 # impossible.
-git -C "$MAIN" fetch -q origin master || die "cannot fetch origin master in $MAIN"
+git -C "$MAIN" -c maintenance.auto=false fetch -q origin master || die "cannot fetch origin master in $MAIN"
 full_sha=$(git -C "$MAIN" rev-parse "$REF" 2>/dev/null) ||
   die "cannot resolve $REF in $MAIN"
 run_sha=$(git -C "$MAIN" rev-parse --short "$full_sha")
@@ -1548,11 +1548,21 @@ CURRENT_UNIT=
 #
 # Emitted as shell text, and used by BOTH paths, so local and remote preparation
 # cannot drift apart.
+#
+# A `git worktree prune` running beside the `worktree add` deletes the entry the
+# add has just created and not yet locked, and the add dies on `could not open
+# '.git/worktrees/<name>/locked'` (gh-ocannl-1532). Under git 2.55 (not 2.53)
+# every fetch starts a detached `git maintenance run --auto` whose worktree-prune
+# task runs whenever a stale entry exists, as a reused worktree's history leaves
+# one: so both of this script's fetches pass `maintenance.auto=false`, and the
+# add is tried once more after a prune for the pruners it does not start --
+# another session's fetch in the same clone.
 prep_cmd() {
-  local repo=$1 wt=$2
+  local repo=$1 wt=$2 add
+  add=$(printf 'git -C "%s" worktree add -q --detach "%s" %s' "$repo" "$wt" "$full_sha")
   printf 'git -C "%s" worktree prune && ' "$repo"
   printf '{ git -C "%s" rev-parse --git-dir >/dev/null 2>&1 || ' "$wt"
-  printf 'git -C "%s" worktree add -q --detach "%s" %s; } && ' "$repo" "$wt" "$full_sha"
+  printf '%s || { git -C "%s" worktree prune && %s; }; } && ' "$add" "$repo" "$add"
   printf 'git -C "%s" checkout -q --detach %s && ' "$wt" "$full_sha"
   printf 'git -C "%s" reset -q --hard %s && ' "$wt" "$full_sha"
   printf 'git -C "%s" clean -qfd && ' "$wt"
@@ -2303,7 +2313,7 @@ run_unit() { # machine backend host
     # written down as a FAILING SUITE, which is the opposite of the truth: a
     # remote that never got as far as dune tested nothing at all.
     remote_repo="$remote_home/ocannl-staging"
-    remote_prep="git -C \"$remote_repo\" fetch -q origin master && $(prep_cmd "$remote_repo" "$wt")"
+    remote_prep="git -C \"$remote_repo\" -c maintenance.auto=false fetch -q origin master && $(prep_cmd "$remote_repo" "$wt")"
     # Bounded on BOTH sides, for the reason the test leg documents below: an
     # outer bound only kills the local ssh, and a wedged `git fetch` left running
     # on the far side can finish later and reset the shared remote worktree --

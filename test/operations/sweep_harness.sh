@@ -63,7 +63,7 @@ on_error() {
     tuf_unguarded tuf_unguarded_prep tuf_unguarded_box tuf_unguarded_wsl tuf_self_refusal tuf_cancelled \
     guard_held guard_refused guard_stalled \
     guard_absent \
-    after_cancel local_remote local_replaced local_busy local_prep_error local_control \
+    after_cancel prune_raced local_remote local_replaced local_busy local_prep_error local_control \
     box_gap box_ready box_broken; do
     [ -n "${!name:-}" ] || continue
     printf -- '--- %s ---\n%s\n' "$name" "${!name}" >&2
@@ -1622,7 +1622,7 @@ grep -q 'journalctl -k' "$unhealthy_log"
 grep -q '/test/config --ocannl_backend=metal$' "$probe_calls"
 absent '@runtest' < <(tail -n "+$((calls_before + 1))" "$calls")
 probe_query=$(cat "$probe_calls.pid")
-if kill -0 "$probe_query" 2>/dev/null; then
+if pid_alive "$probe_query"; then
   kill -KILL "$probe_query" 2>/dev/null || true
   printf 'sweep_harness: the wedged query (pid %s) outlived its bound\n' "$probe_query" >&2
   exit 1
@@ -2247,7 +2247,7 @@ grep -q '^  m4-max/metal: serial rerun: unjudged (exit 69): @test/runtest-pre-di
 absent -- '-j 1' < <(tail -n "+$((calls_before + 1))" "$calls")
 [ "$(awk 'END { print NR }' "$probe_calls")" = 2 ]
 probe_query=$(cat "$probe_calls.pid")
-if kill -0 "$probe_query" 2>/dev/null; then
+if pid_alive "$probe_query"; then
   kill -KILL "$probe_query" 2>/dev/null || true
   printf 'sweep_harness: the serial rerun'\''s wedged query (pid %s) outlived its bound\n' "$probe_query" >&2
   exit 1
@@ -3652,12 +3652,12 @@ grep -q '^sweep-hold: sleep:idle block inhibitor held for: ocannl sweep S tuf/hi
 [ "$(cat "$tmp/inhibit.args")" = \
   '--what=sleep:idle --mode=block --who=ocannl-sweep --why=ocannl sweep S tuf/hip suite -- sh -c echo HELD; exec cat >/dev/null' ]
 guard_waited=0
-while kill -0 "$(cat "$tmp/inhibit.pid")" 2>/dev/null; do
+while pid_alive "$(cat "$tmp/inhibit.pid")"; do
   [ "$guard_waited" -lt "$wait_ticks" ] || break
   sleep 0.05
   guard_waited=$((guard_waited + 1))
 done
-if kill -0 "$(cat "$tmp/inhibit.pid")" 2>/dev/null; then
+if pid_alive "$(cat "$tmp/inhibit.pid")"; then
   printf 'sweep_harness: the sleep inhibitor outlived its unit\n' >&2
   exit 1
 fi
@@ -3702,12 +3702,12 @@ grep -q '^unit-ran$' <<<"$guard_stalled"
 grep -q '^sweep-hold: WARNING: running WITHOUT a sleep guard, .* -- .*/systemd-inhibit refused: no answer after 1s$'   <<<"$guard_stalled"
 [ -s "$tmp/inhibit.pid" ]
 guard_waited=0
-while kill -0 "$(cat "$tmp/inhibit.pid")" 2>/dev/null; do
+while pid_alive "$(cat "$tmp/inhibit.pid")"; do
   [ "$guard_waited" -lt "$wait_ticks" ] || break
   sleep 0.05
   guard_waited=$((guard_waited + 1))
 done
-if kill -0 "$(cat "$tmp/inhibit.pid")" 2>/dev/null; then
+if pid_alive "$(cat "$tmp/inhibit.pid")"; then
   printf 'sweep_harness: a stalled inhibitor helper outlived its give-up
 ' >&2
   exit 1
@@ -3775,8 +3775,9 @@ cancel_sweep() { # pid|group
     return 1
   fi
   while IFS= read -r pid; do
-    if kill -0 "$pid" 2>/dev/null; then
+    if pid_alive "$pid"; then
       printf 'sweep_harness: unit process %s outlived the cancelled sweep\n' "$pid" >&2
+      ps -o pid=,ppid=,pgid=,stat=,etime=,command= -p "$pid" >&2 || true
       return 1
     fi
   done < <(cat "$prefix.opam-pids" "$prefix.ssh-pids")
@@ -3796,6 +3797,32 @@ cancel_sweep pid
 cancel_sweep group
 after_cancel=$(run_sweep_args --target cancel-probe)
 grep -q '^  m4-max/cc: incremental-pass ' <<<"$after_cancel"
+
+# A pruner beside the worktree add (gh-ocannl-1532): another session's fetch in the same clone
+# starts git's auto maintenance, whose `worktree prune` deletes the entry an add has just created
+# and not yet locked, and the add dies on git's own message. The shim fails the first add exactly
+# so, on a worktree the preparation must create; the unit still pins and passes.
+prune_shim=$tmp/prune-shim
+mkdir -p "$prune_shim"
+real_git=$(command -v git)
+cat >"$prune_shim/git" <<EOF
+#!/bin/sh
+case " \$* " in
+  *" worktree add "*)
+    if [ ! -e "$prune_shim/raced" ]; then
+      : >"$prune_shim/raced"
+      echo "fatal: could not open '.git/worktrees/sweep/locked' for writing: No such file or directory" >&2
+      exit 128
+    fi
+    ;;
+esac
+exec "$real_git" "\$@"
+EOF
+chmod +x "$prune_shim/git"
+rm -rf "$tmp/home/ocannl-staging-worktrees/sweep"
+prune_raced=$(PATH=$prune_shim:$PATH run_sweep_args --target cancel-probe)
+[ -e "$prune_shim/raced" ]
+grep -q '^  m4-max/cc: incremental-pass ' <<<"$prune_raced"
 
 # Credentials never reach a local unit's dune (gh-ocannl-1280): the forced clean and the suite run
 # from the unit's own shell text, which scrubs the deny-list of tools/credential-env.sh inside

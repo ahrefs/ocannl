@@ -311,9 +311,11 @@ echo "PATH prefix:   /usr/local/cuda/bin:/usr/lib/wsl/lib"
 echo "credential variables: removed inside every opam exec (tools/credential-env.sh)"
 
 # Fetch the named pushed branch explicitly. Resolving an already-present remote
-# tracking ref after a failed fetch would certify stale source.
+# tracking ref after a failed fetch would certify stale source. Without auto
+# maintenance: its worktree prune would race the `worktree add` below (sweep.sh's
+# prep_cmd, gh-ocannl-1532).
 if [ "$ref_kind" = branch ]; then
-  capped git -C "$repo" fetch -q --no-write-fetch-head "$staging_remote" \
+  capped git -C "$repo" -c maintenance.auto=false fetch -q --no-write-fetch-head "$staging_remote" \
     "+refs/heads/$branch:refs/remotes/$staging_remote/$branch" ||
     fail "cannot fetch pushed branch $staging_remote/$branch"
   full_sha=$(git -C "$repo" rev-parse --verify "refs/remotes/$staging_remote/$branch^{commit}") ||
@@ -324,7 +326,7 @@ else
   # it is a branch head fetched NOW that contains it.
   heads_ns=refs/machine-verify/heads-$$
   drop_heads || fail "cannot clear leftover refs under $heads_ns"
-  capped git -C "$repo" fetch -q --no-write-fetch-head --no-tags "$staging_remote" \
+  capped git -C "$repo" -c maintenance.auto=false fetch -q --no-write-fetch-head --no-tags "$staging_remote" \
     "+refs/heads/*:$heads_ns/*" ||
     fail "cannot fetch the branch heads of $staging_remote"
   containing=

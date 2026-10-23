@@ -1000,9 +1000,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   when working out why a worktree lock will not clear (gh-ocannl-742). `group_alive` is ONE shared
   definition, `scripts/process-group.sh`, sourced by both `tools/test-run.sh` and
   `scripts/setup-ocaml-env.sh` for the identical misreading (staging#621 replaced the two
-  synchronized copies): `/proc` where there is
-  one (fork-free, through the shell's `read`), `ps -A -o pgid=,stat=` on the BSDs and macOS,
-  degrading to the bare signal only where neither answers; the signal probe stays FIRST as a
+  synchronized copies), with `pid_alive` beside it for one process (gh-ocannl-1383: a cancelled
+  sweep unit, orphaned in a group of its own that the sweep's group check never sees, read as a
+  survivor while it waited for its reaper; `sweep_harness` asks every "outlived" question through
+  it, and a failure prints the survivor's `ps` row, where `Z` names the misreading): `/proc` where
+  there is one (fork-free, through the shell's `read`), `ps -A -o pgid=,stat=` on the BSDs and
+  macOS, degrading to the bare signal only where neither answers; the signal probe stays FIRST as a
   necessary condition, which makes the predicate a strict narrowing of the `kill -0` it replaced —
   it can turn a phantom alive into dead and never the reverse. A state read is still a CENSUS, and a
   census is a SNAPSHOT — a child forked while the glob is being read is not in it, and a leader that
@@ -4222,6 +4225,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
 
 ### Sweep units and verdicts
 
+- A `git fetch` under git 2.55 (CI's ubuntu-latest, mac-studio; not the fleet's 2.53) starts a
+  detached `git maintenance run --auto` whose worktree-prune task runs whenever a stale worktree
+  entry exists, and a prune beside a `git worktree add` deletes the entry the add has created and
+  not yet locked: the add dies on `could not open '.git/worktrees/<name>/locked'`
+  (gh-ocannl-1532, which surfaced as a sweep_harness control flaking under CI load). A script that
+  fetches and then adds a worktree passes `-c maintenance.auto=false` to the fetch, as
+  `tools/sweep.sh` and `tools/machine-verify-far.sh` do; the sweep's `prep_cmd` also retries the
+  add once after a prune, for a pruner it did not start (another session's fetch in a shared clone).
 - Every test action a sweep unit runs inherits `OCANNL_BACKEND=<that unit's backend>`. The unit is
   spelled `OCANNL_BACKEND=<backend> opam exec -- dune build @runtest @train`, and Dune hands its own
   environment to the actions it runs whether or not a stanza declares the variable — `(env_var …)`
