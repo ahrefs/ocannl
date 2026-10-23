@@ -3055,8 +3055,16 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   compiler children included) ON THE RUNNER (gh-ocannl-1503), because they add up: a shard's
   tests keep the 4-vCPU runner's cores busy at `-j 4`, so its dune step lasts about a quarter
   of its CPU. Wall-clock seconds of job slot (gh-ocannl-1464's unit) do not add up: a test's wall-clock is
-  its CPU stretched by its neighbours, worst (likely) between tests running OpenMP kernels, whose
-  libgomp barrier spin is sized for their own threads, not the runner's; so a deal balanced on wall-clock
+  its CPU stretched by its neighbours, worst between tests running OpenMP kernels, whose libgomp
+  barrier spin is sized for their own threads, not the runner's. **The build jobs run with
+  `OMP_WAIT_POLICY=passive`** for that reason (gh-ocannl-1544): built side by side with and without
+  it in three dispatch runs, the suite went from 125 to 79 CPU-minutes and main 1/2's dune step on
+  one CPU model from ~22 to ~13.5 minutes, every golden unchanged; the autotune tests, which repeat
+  small parallel kernels, moved most (autotune_sketch_placements 328 -> 50 s). An A/B of a CI
+  setting runs as such a pair: a throwaway branch whose `ci.yml` lists only the jobs under test,
+  each twice by an extra matrix key, dispatched with `expected_sha`, so both arms draw runners at the
+  same time -- and compare jobs on the same CPU model (the `host` line's `cpu=`), which moves a
+  shard's time by half (EPYC 7763 against 9V45). A deal balanced on wall-clock
   weights measured under the previous deal predicted 60.5/60.5 minutes of slot and ran 80.6 on one
   shard while the other hit the job's 45-minute timeout. A Mac-measured table drifts as badly
   (gh-ocannl-1464 saw 26/12): measure on the runner. A single unit whose own wall-clock outlasts
