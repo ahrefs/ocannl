@@ -557,13 +557,21 @@ files.
   not write -- and its targets' margins were set only by an elided init on the initializing path;
   the non-initializing backprop `=+` leaned on `zero_grads`' whole-buffer `Fetch`. Now every padded
   target (deduplicated by node) is reset on both paths, matching `loop_accum`'s rule that every
-  writer carries the fill, and `neutral_init` has no margin flag. What the scatter cannot promise: a
-  padded window's transpose (a padded conv's input gradient) stores the padding positions'
-  contributions INTO the operand gradient's margins, after its own resets, so after a whole
-  backward pass a gradient's margins hold data, not the padding value. Nothing reads a gradient
-  through a window, so no value is affected; a reader that did would need those writes clamped.
+  writer carries the fill, and `neutral_init` has no margin flag.
   `test/operations/rev_sides_padded_target.ml` runs the front-end scatter over sentinel-seeded
   physical buffers on both paths, and a training step against the convolutions' definitions.
+- **A covered window WRITE is followed by a margin restore** (gh-ocannl-1496). `clamp_conds` leaves
+  an escaping access unguarded when the margins it lands in hold the accumulation's neutral
+  element: exact for a read, but a padded window's transpose (a padded conv's input gradient)
+  thereby stores the padding positions' contributions INTO the gradient's margins, after the
+  writer's leading reset. A user program saw them: a `%cd` assignment reading a gradient through the
+  same padded window (a custom optimizer smoothing gradients) passes shape inference, reads the
+  margins unguarded, and got the contributions added at both edges. The write stays unguarded (no
+  per-element test in the hot loop); `set ~margin_writes` records the node and `margin_restores`
+  re-emits its margin reset after the loop nest, with fresh loop symbols, in both `loop_accum` and
+  `loop_accum_rev`. Forward result-side padded windows (`=> o=+k`) would be the other writer, but
+  do not reach lowering (their projections are not inferred). Executed:
+  `test/operations/padded_window_margin_writes.ml`.
 
 - **The algebraic-rewrite tier over raw lowered code is `Rewrites`, applied by `Assignments.lower`
   between `to_low_level` and `Low_level.optimize`** (gh-ocannl-483; members `Online_softmax`, then

@@ -1,0 +1,6 @@
+x's gradient is padded along the convolved axis only, committing 0: true
+a padding position of x's gradient receives a nonzero contribution: true
+x's gradient holds the transposed convolution of w: true
+x's gradient's physical buffer is its margins plus its extent: true
+x's gradient's margins hold the padding value after the backward pass: true
+a padded window reading x's gradient sees the zero-padded gradient: true
