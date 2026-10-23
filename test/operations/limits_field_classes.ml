@@ -371,14 +371,20 @@ let sanctioned = [ "seeded_plan" ]
    graph. Every other spelling of the route counts, a non-call inside the fallback included (review
    round 3).
 
-   The boundary: the scan reads syntax and models no evaluation. It pins WHERE the route is called,
-   not where the fallback is called from or where its result flows: the fallback may also be called
-   from paths that test no flag (a refused lineage, a failed deferred replay: they do not search
-   either), and a search path that called the fallback and timed what it returns would pass (review
-   round 2, deferred). Nor does it ask whether a callee runs the thunk a branch hands it, or whether
-   a branch is reachable at all. Outside the forms above it refuses rather than passes: a
-   search-less branch that does not call the fallback empties it, and then every call of the route
-   counts. *)
+   WHAT THIS PINS, and the boundary. The rule is a safety pin with one direction: no call of the
+   route in [tune]'s reach lies outside the fallback the search-less branches call. The other
+   direction -- whether the fallback really runs the route, on every subpath of every search-less
+   branch, rather than an uninvoked local or a conditional around it -- is not pinned (review round
+   5): a dropped site that never runs reads nothing, and a search-less call that ships the plain
+   default instead reads nothing either. The claim below that the fallback calls the route is a
+   staleness check, so a sanction with no site to cover fails, not an execution claim. The scan
+   reads syntax and models no evaluation: it does not ask where the fallback is called from or where
+   its result flows -- the fallback may also be called from paths that test no flag (a refused
+   lineage, a failed deferred replay: they do not search either), and a search path that called the
+   fallback and timed what it returns would pass (review round 2, deferred) -- nor whether a callee
+   runs the thunk a branch hands it, nor whether a branch is reachable at all. Outside the forms
+   above it refuses rather than passes: a search-less branch that does not call the fallback empties
+   it, and then every call of the route counts. *)
 
 let search_flag = "search"
 let seeded_route = "seeded_transform"
@@ -484,8 +490,11 @@ let walk_fallback (source : string) : fallback_walk =
             { at = None; flag = true }
         else super#bind_parameter env label pattern
 
+      (* The right-hand side is read without its own scope, so one that binds the name [search]
+         anywhere -- [let search = let search = false in search] -- is not the flag (review round
+         5): refused rather than resolved. *)
       method! binding_denotes env vb =
-        let names_flag = ref false in
+        let names_flag = ref false and rebinds = ref false in
         let names =
           object
             inherit Ast_traverse.iter as super
@@ -497,6 +506,14 @@ let walk_fallback (source : string) : fallback_walk =
                   names_flag := true
               | _ -> ());
               super#expression e
+
+            method! pattern p =
+              (match p.ppat_desc with
+              | (Ppat_var { txt; _ } | Ppat_alias (_, { txt; _ })) when String.equal txt search_flag
+                ->
+                  rebinds := true
+              | _ -> ());
+              super#pattern p
           end
         in
         names#expression vb.pvb_expr;
@@ -505,7 +522,7 @@ let walk_fallback (source : string) : fallback_walk =
             (Test_utils.Lexical_scope.pattern_vars [ vb.pvb_pat ])
             search_flag ~equal:String.equal
         in
-        { at = Some (offset vb.pvb_loc); flag = binds_flag && !names_flag }
+        { at = Some (offset vb.pvb_loc); flag = binds_flag && !names_flag && not !rebinds }
 
       method! value_binding env vb =
         let at = offset vb.pvb_loc in
@@ -768,6 +785,12 @@ let () =
          let tune ?(search = true) x =\n\
         \  let fallback () = seeded_transform () in\n\
         \  if not search then M.(fallback ()) else x",
+        flagged );
+      ( "a flag alias rebinding the name",
+        "let tune ?(search = true) x =\n\
+        \  let fallback () = seeded_transform () in\n\
+        \  let search = let search = false in search in\n\
+        \  if not search then fallback () else x",
         flagged );
       ( "a top-level fallback",
         "let fallback () = seeded_transform ()\n\
