@@ -21,6 +21,8 @@ a failing run omits the success trailer it prints only when no claim failed: tru
 a failed pass_fail claim's stderr line is its stdout row behind FAIL:, bare or detailed: true
 a failing scan's ending omits the failed claim's marker and the success trailer, and only those: true
 a scan whose refusal no longer runs, every claim holding, exits 0 and omits that refusal's marker and only it, still ending on the section's closing row: true
+a failing scan's stderr names the failed claim behind its omitted marker, and only that: true
+a scan with no failed check writes no not-printed line: true
 a case that returns prints only what its claims print: true
 
 Transcripts tools/test-mutation-run.sh replays through tools/mutation-run.sh:
@@ -72,6 +74,7 @@ Transcripts tools/test-mutation-run.sh replays through tools/mutation-run.sh:
   manifest_failed stdout | End of synthetic controls.
   manifest_failed stderr | FAIL: the first manifest claim: false
   manifest_failed stderr | Manifest diagnostics: 3 (not part of the golden)
+  manifest_failed stderr | Refusal marker not printed (not part of the golden): [scanner-refusal:67ae40e5caabe9be983f0eae2d7ca80a] first manifest claim -- its claim failed: "the first manifest claim"
   manifest_failed stderr | FAILED: 1 check did not hold: "the first manifest claim".
   manifest_silenced stdout | the first manifest claim: true
   manifest_silenced stdout | the last manifest claim: true

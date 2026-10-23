@@ -209,6 +209,28 @@ let dynamic reason = Verdict.fail reason
     (Poly.equal
        (standing ~direct_evidence:[] ~catalogue_only ~refused:[] ~observed:true ())
        Manifest.Executed_yet_catalogue_only);
+  (* gh-ocannl-1499: the failed claim behind a marker that did not print, or none -- its claim or
+     refusal did not run. A claim's marker stands for the claim its format matches, a direct
+     failure's for the control claim mapped to it; one its caught branch records has none. *)
+  let why ?(diagnostic = new_fail) ?(direct_evidence = [ (key, control ^ ": true") ]) failed =
+    Manifest.why_not_printed ~direct_evidence ~failed ~key diagnostic
+  in
+  let claim_label = new_claim.Scan.format in
+  Verdict.p "a claim's marker whose claim failed names that claim"
+    (Option.equal String.equal
+       (why ~diagnostic:new_claim [ "a sibling claim"; claim_label ])
+       (Some (Printf.sprintf "its claim failed: \"%s\"" claim_label)));
+  Verdict.p "a claim's marker whose claim is not among the failed checks names none"
+    (Option.is_none (why ~diagnostic:new_claim [ "a sibling claim"; control ]));
+  Verdict.p "a direct failure's marker whose control claim failed names that claim"
+    (Option.equal String.equal
+       (why [ "a sibling claim"; control ])
+       (Some (Printf.sprintf "the claim answering for it failed: \"%s\"" control)));
+  Verdict.p
+    "a direct failure's marker whose control claim did not fail, or with no control claim, names \
+     none"
+    (Option.is_none (why [ "a sibling claim"; claim_label ])
+    && Option.is_none (why ~direct_evidence:[] [ control; claim_label ]));
   let manifest = [ "b.ml"; "a.ml"; "c.ml" ] in
   Verdict.p "a manifest source missing from the argument list is named as uncatalogued"
     (Poly.equal (catalogue_mismatch ~manifest ~catalogued:[ "c.ml"; "a.ml" ]) ([ "b.ml" ], [], []));

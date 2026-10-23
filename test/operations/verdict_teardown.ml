@@ -264,6 +264,27 @@ let () =
           && List.length derived = List.length held - 1
           && List.equal String.equal (String.split_lines out) derived
           && String.equal (List.last_exn held) Test_utils.Refusal_control_manifest.closing_row);
+      (* Why an omitted marker did not print, on stderr, where tools/mutation-run.sh reads it
+         (gh-ocannl-1499): the failing child's claim behind its marker failed, named in one line for
+         that marker; the silenced child, its refusal never run, writes no such line, nor does the
+         passing child -- a marker with none had nothing behind it run. *)
+      let not_printed (_, _, err) =
+        List.filter (String.split_lines err)
+          ~f:(String.is_prefix ~prefix:Test_utils.Refusal_control_manifest.not_printed_head)
+      in
+      let stderr_lines (_, _, err) = String.split_lines err in
+      let first_marker =
+        Test_utils.Refusal_control_scan.(marker (List.hd_exn (diagnostics manifest_source)))
+      in
+      p "a failing scan's stderr names the failed claim behind its omitted marker, and only that"
+        (List.equal String.equal (not_printed manifest_failed)
+           [
+             Test_utils.Refusal_control_manifest.not_printed_head ^ first_marker
+             ^ " -- its claim failed: \"the first manifest claim\"";
+           ]);
+      Verdict.p_empty "a scan with no failed check writes no not-printed line"
+        ~over:(stderr_lines manifest_held @ stderr_lines manifest_silenced)
+        (not_printed manifest_held @ not_printed manifest_silenced);
       let pass_status, pass_out, _ = run_child "pass" in
       let case_status, case_out, _ = run_child "case_pass" in
       p "a case that returns prints only what its claims print"

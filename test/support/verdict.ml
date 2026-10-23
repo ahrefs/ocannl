@@ -45,6 +45,11 @@ let passed_labels () = List.rev !passed_label_history
 
 let record_pass label = passed_label_history := label :: !passed_label_history
 
+(** The names of the checks that failed so far, in order: a claim's label, or the first line of a
+    {!fail} message. [Refusal_control_manifest.print_section] reads them to say why a marker did not
+    print -- its claim among them, or nothing behind it run (gh-ocannl-1499). *)
+let failed_checks () = List.rev !failed_names
+
 (* [text] on one physical line: every control character a space. A claim is one row on each channel
    it prints to: [tools/mutation-run.sh] reads a run's [FAIL: …: false] lines off its log and counts
    its stdout rows against the golden's, and a label carrying a line break split its claim into a

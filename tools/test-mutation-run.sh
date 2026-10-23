@@ -79,6 +79,7 @@ m1='  [scanner-refusal:00000000000000000000000000000001] first refusal\n'
 m2='  [scanner-refusal:00000000000000000000000000000002] last refusal\n'
 section='\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n'
 closing='End of synthetic controls.\n'
+why='Refusal marker not printed (not part of the golden): '
 case "$PROBE_MODE" in
   fail)
     # Two Verdict.fail messages ending like claims, on both streams as Verdict.fail prints them.
@@ -143,8 +144,13 @@ case "$PROBE_MODE" in
   both) rows 'first: false\nnested: label: true\nlast: true\n'
     cp "$out/$name.exe.output" "$out/$name.actual"; printf 'FAIL: first: false\n'; exit 1 ;;
   # A failed claim's refusal marker is not printed (gh-ocannl-1216): a row short of
-  # the golden, every other row printed -- the failed claim the first or the last.
+  # the golden, every other row printed -- the failed claim the first or the last. The first
+  # names its failed claim on stderr, as print_section does (gh-ocannl-1499), beside a reason
+  # for a marker the run did print, which lists nothing; the last names none, so nothing
+  # failed behind it.
   omitted) rows "first: false\n$section$m2"'last: true\n'
+    printf '%s%s -- its claim failed: "first"\n' "$why" "${m1:2:${#m1}-4}"
+    printf '%s%s -- a reason for a printed marker\n' "$why" "${m2:2:${#m2}-4}"
     printf 'FAIL: first: false\nFAILED: 1 check did not hold: "first".\n'; exit 1 ;;
   omittedlast) rows "first: true\n$section$m1"'last: false\n'
     printf 'FAIL: last: false\nFAILED: 1 check did not hold: "last".\n'; exit 1 ;;
@@ -367,12 +373,24 @@ reset_module 'prefix\r\nANCHOR\r\nsuffix without newline' 'ANCHOR@@@MUTATED'
 # Rows short only by refusal-manifest markers, the run having printed every other
 # row and ended through Verdict's teardown, reached its last row (gh-ocannl-1216);
 # the same shortfall with the last row missing, or with no teardown, did not.
+# Each omitted marker is listed with the failed claim the run's stderr names behind it
+# (gh-ocannl-1499), or, named none, as one whose claim or refusal did not run; a line for a marker
+# the run printed lists nothing.
 for mode in omitted omittedlast; do
   export PROBE_MODE=$mode
   PROBE_ALIAS=@runtest-manifest run_case 1
   grep -q '^rows: 5 printed of 6 in manifest.expected$' "$fixture/result"
-  grep -q "^refusal markers omitted: 1 (no marker prints for a failed claim or for a refusal that did not run; every other row did, so the run reached its last row)$" \
+  grep -q "^refusal markers omitted: 1 (every other row printed, so the run reached its last row); each, with why it did not print:$" \
     "$fixture/result" || { cat "$fixture/result"; echo "$mode: no omitted-markers line"; exit 1; }
+  case $mode in
+    omitted) listed='  [scanner-refusal:00000000000000000000000000000001] first refusal -- its claim failed: "first"' ;;
+    omittedlast) listed="  [scanner-refusal:00000000000000000000000000000002] last refusal -- no failed check of this run is behind it: its claim or refusal did not run" ;;
+  esac
+  grep -A1 '^refusal markers omitted: ' "$fixture/result" | tail -n 1 > "$fixture/listed"
+  printf '%s\n' "$listed" | cmp -s - "$fixture/listed" ||
+    { cat "$fixture/result"; echo "$mode: the omitted marker is not listed with its reason"; exit 1; }
+  [ "$(grep -cE '^  \[scanner-refusal:[0-9]{32}\] ' "$fixture/result")" = 1 ] ||
+    { cat "$fixture/result"; echo "$mode: a printed marker was listed as omitted"; exit 1; }
   reached
 done
 for mode in omittedcut omittedkilled omittedswap; do
@@ -397,12 +415,21 @@ for mode in tailsilenced tailfailed; do
   grep -q '^rows: 5 printed of 6 in tail.expected$' "$fixture/result"
   grep -q '^refusal markers omitted: 1 ' "$fixture/result" ||
     { cat "$fixture/result"; echo "$mode: no omitted-markers line"; exit 1; }
+  case $mode in
+    tailsilenced) listed='  [scanner-refusal:00000000000000000000000000000002] last refusal -- no failed check of this run is behind it: its claim or refusal did not run' ;;
+    tailfailed) listed="  [scanner-refusal:00000000000000000000000000000001] first refusal -- no failed check of this run is behind it: its claim or refusal did not run" ;;
+  esac
+  grep -qxF -- "$listed" "$fixture/result" ||
+    { cat "$fixture/result"; echo "$mode: the omitted marker is not listed with its reason"; exit 1; }
   reached
 done
 export PROBE_MODE=tailswap
 PROBE_ALIAS=@runtest-tail run_case 1
 grep -q "^rows short of the golden: 1 (the run ended on the golden's last section-closing row, so none was cut; the run reached its last row)$" \
   "$fixture/result" || { cat "$fixture/result"; echo 'tailswap: no closed-run line'; exit 1; }
+grep -A1 '^refusal markers among them: 1; each, with why it did not print:$' "$fixture/result" |
+  grep -qxF "  [scanner-refusal:00000000000000000000000000000002] last refusal -- no failed check of this run is behind it: its claim or refusal did not run" ||
+  { cat "$fixture/result"; echo 'tailswap: the marker among the rows short is not listed'; exit 1; }
 reached
 export PROBE_MODE=tailafter
 PROBE_ALIAS=@runtest-tail run_case 4
@@ -526,9 +553,22 @@ reached
 # Verdict.success_trailer print, and the golden is the same ending with every claim held. What the
 # runner skips is thereby theirs: a marker or trailer printed differently fails here once
 # verdict_teardown's golden is promoted, where a refactor that prints the same rows changes nothing.
+# The marker a replayed child omitted: the passing child's marker rows its stdout lacks, derived
+# from the transcripts rather than restated here.
+omitted_marker() {
+  grep -E '^  \[scanner-refusal:[0-9a-f]{32}\] ' replay.expected | grep -vxF -f "$fixture/replay.stdout"
+}
 replay manifest_failed @manifest_held 1
 grep -q '^refusal markers omitted: 1 ' "$fixture/result" ||
   { cat "$fixture/result"; echo 'manifest_failed: the omitted marker was not read as one'; exit 1; }
+# Why it did not print, as print_section said on the child's stderr (gh-ocannl-1499): its claim failed,
+# and the claim it names is one the runner listed as false.
+marker=$(omitted_marker)
+[ "$(printf '%s\n' "$marker" | wc -l)" -eq 1 ] && [ -n "$marker" ] ||
+  { echo "manifest_failed: not one omitted marker: $marker"; exit 1; }
+named=$(grep -F -- "$marker -- its claim failed: " "$fixture/result" | sed -n 's/.* -- its claim failed: "\(.*\)"$/\1/p')
+[ -n "$named" ] && claims | grep -qxF "FAIL: $named: false" ||
+  { cat "$fixture/result"; echo 'manifest_failed: the omitted marker is not listed as a failed claim the run names'; exit 1; }
 grep -q '^success trailer omitted: 2 rows ' "$fixture/result" ||
   { cat "$fixture/result"; echo 'manifest_failed: the omitted success trailer was not read as one'; exit 1; }
 reached
@@ -548,6 +588,12 @@ if grep -q '^FAILED: ' "$fixture/replay.stderr"; then
 fi
 grep -q '^refusal markers omitted: 1 ' "$fixture/result" ||
   { cat "$fixture/result"; echo 'manifest_silenced: the silenced refusal was not read as caught'; exit 1; }
+# Nothing failed behind its omitted marker, so the child named no claim: the refusal did not run.
+marker=$(omitted_marker)
+[ "$(printf '%s\n' "$marker" | wc -l)" -eq 1 ] && [ -n "$marker" ] ||
+  { echo "manifest_silenced: not one omitted marker: $marker"; exit 1; }
+grep -qxF -- "$marker -- no failed check of this run is behind it: its claim or refusal did not run" "$fixture/result" ||
+  { cat "$fixture/result"; echo 'manifest_silenced: the omitted marker is not listed as a refusal that did not run'; exit 1; }
 reached
 printf 'PASS real Verdict runs, from verdict_teardown'"'"'s golden: a raising case is caught, an exit inside a case exits 4, a trailer-short run with a multi-line failure is caught, failed pass_fail claims are listed, a scan ending short by a failed claim'"'"'s marker and its trailer is caught, and so is one short only by a silenced refusal'"'"'s marker\n'
 }

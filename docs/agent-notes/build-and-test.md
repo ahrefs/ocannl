@@ -436,7 +436,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `--refusal-control`; env_var_deps' `malformed_tree_control` builds its tree beside the shared
   `control_context` through `run_checker`). Every section ends on the unconditional closing row
   `End of synthetic controls.` (`Refusal_control_manifest.closing_row`; gh-ocannl-1251,
-  gh-ocannl-1318), which is how `tools/mutation-run.sh` tells a complete run from a cut one.
+  gh-ocannl-1318), which is how `tools/mutation-run.sh` tells a complete run from a cut one;
+  a marker of the row a run leaves out because a claim behind it failed gets a stderr line naming
+  that claim, which the runner lists beside it, and one with none did not run (gh-ocannl-1499).
   Claim markers are consumed as a multiset, so two
   identical claim formats require two executions; refused lines are not consumed, so two sites of
   one direct-failure format would share one line. A new manifest row therefore
@@ -1962,7 +1964,18 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   row is the golden's, row for row (a claim of it may read false; the run's own `FAIL:` rows are
   skipped -- `Verdict.fail` prefixes EVERY line of a multi-line message, so an "expected/got"
   continuation is skipped too rather than read as a row the golden lacks), and Verdict's teardown ended the process; a run missing or swapping a row, or with no
-  teardown, still exits 4. A golden's success trailer is read the same way (`success trailer
+  teardown, still exits 4. Each omitted marker is listed with why it did not print (gh-ocannl-1499):
+  the failed claim behind it, as `print_section` named it on stderr in a `Refusal marker not
+  printed (not part of the golden): <marker> -- <reason>` line (`not_printed_head`) -- `its claim
+  failed: "<label>"`, or for a direct failure `the claim answering for it failed: "<label>"`, its
+  `raw_direct_evidence` claim -- or, with no such line, `no failed check of this run is behind it:
+  its claim or refusal did not run` (a reworded diagnostic gets `its diagnostic is no longer in the
+  source`). The printer names only failures: a run prints a subset of its row (the rest belong to
+  another control golden), so "did not run" is every passing run's normal state, and writing it
+  would put hundreds of lines on every green scan's stderr. And the printer decides, not the
+  runner: only it holds the format a claim's label must match and the evidence table, where a
+  marker's fragment would only guess; `why_not_printed` takes the table as an argument and
+  `refusal_control_scan_cases` pins each arm. A golden's success trailer is read the same way (`success trailer
   omitted: K rows`): the scans print their `OK: ` rows through `Verdict.success_trailer`, which
   prints them only while no check has failed, most of them behind a blank row of the trailer's own
   (`~blank_line:true`), so every complete
@@ -1997,7 +2010,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `Refusal_control_manifest.print_section`, and the failing child's run, replayed against the
   passing child's stdout, must read as caught with one marker and the trailer omitted, and the
   silenced child's run, with no teardown, as caught with one marker omitted -- no source grep of
-  either printer, nor of a scan (gh-ocannl-1364).
+  either printer, nor of a scan (gh-ocannl-1364). The replay also reads each omitted marker's
+  reason: the failing child's names a claim the runner listed as false, and the silenced child's,
+  named nothing, reads as did not run (gh-ocannl-1499).
 - The guarded pairwise claim has the same two label dialects as the scalar claim (gh-ocannl-816):
   `pf_all2` formats a computed label before taking the two arrays, and `pass_fail_all2` preserves
   `pass_fail`'s lazy failure detail while adding the structural empty, floor-shortfall, or
