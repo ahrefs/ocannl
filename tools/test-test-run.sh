@@ -7380,11 +7380,12 @@ if [ -z "$alias_detail" ]; then
     alias_detail="repeat: exit $repeat_rc (want 2); dune calls: $(cat "$TMP/alias-repeat.calls"); output: $repeat_out"
 fi
 # A dune file the reader cannot read -- unbalanced, or holding a `#|` or `#;`,
-# which dune versions read differently -- or one taking stanzas from another
-# file (`include`, inside a subdir too) leaves a recursive miss to dune: the
+# which dune versions read differently -- leaves a recursive miss to dune: the
 # directories below may then not all be listed. A miss in the operand's own
-# directory under @@ is still refused. A `dynamic_include` anywhere leaves the
-# whole batch to dune, before any query: loading its directory would build it.
+# directory under @@ is still refused. A dune file importing another file
+# anywhere -- a `dynamic_include`, which loading its directory would build, or
+# a static `include`, which can import one -- leaves the whole batch to dune,
+# before any query.
 for probe in "unread|(rule (alias odd)" "block|(rule (action (run echo #|x)))" \
              "include|(subdir x (include rules.inc))" "dynamic|(subdir x (dynamic_include gen/rules.inc))"; do
   [ -z "$alias_detail" ] || break
@@ -7395,7 +7396,7 @@ for probe in "unread|(rule (alias odd)" "block|(rule (action (run echo #|x)))" \
     alias_detail="${probe%%|*} below: exit $argv_rc (want 0); dune calls: ${argv_calls:-<none>}; digest: $argv_out"
   if [ -z "$alias_detail" ]; then
     alias_want=2
-    [ "${probe%%|*}" != dynamic ] || alias_want=0
+    case ${probe%%|*} in dynamic | include) alias_want=0 ;; esac
     : >"$TMP/alias-${probe%%|*}-own.show"
     alias_probe "alias-${probe%%|*}-own" run build @@al/runtest-no_such
     [ "$argv_rc" = "$alias_want" ] || alias_detail="${probe%%|*} below, @@: exit $argv_rc (want $alias_want): $argv_out"
@@ -7431,6 +7432,11 @@ else
     printf '(rule (alias runtest-yes) (action (progn)))\n(subdir virt (rule (alias vdeep) (action (progn))))\n' \
       >"$alias_root/al/dune"
     printf '(rule (alias deep) (action (progn)))\n' >"$alias_root/al/sub/dune"
+    # A checkout, so the directories come from git's listing, one of them under
+    # a name git quotes unless asked for it verbatim (Codex review round 5).
+    mkdir -p "$alias_root/al/café"
+    printf '(rule (alias cafealias) (action (progn)))\n' >"$alias_root/al/café/dune"
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$alias_root" init -q
     alias_real_detail=
     alias_real_run() { # tag argv...
       local rc=0
@@ -7441,7 +7447,7 @@ else
     for probe in "2|build @al/runtest-no_such @al/deep|alias refused: @al/runtest-no_such: neither al" \
                  "2|build @@al/deep|alias refused: @@al/deep: al defines no alias deep" \
                  "2|build @nowhere/x @al/runtest-yes|alias refused: @nowhere/x: dune knows no directory nowhere" \
-                 "0|build @al/deep @@al/runtest-yes @deep @al/vdeep @vdeep|verdict: pass"; do
+                 "0|build @al/deep @@al/runtest-yes @deep @al/vdeep @vdeep @al/cafealias|verdict: pass"; do
       IFS='|' read -r want args text <<<"$probe"
       # shellcheck disable=SC2086 # the probe's operands, split on purpose
       alias_real_run alias-real $args

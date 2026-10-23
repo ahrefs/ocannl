@@ -856,34 +856,38 @@ alias_dirs_perl='
   }
   exit($bad ? 3 : 0);
 '
-alias_dune_dirs() { # the directories holding a dune file or a subdir's rules, `.` for the top; 1 incomplete
-  local files
-  files=$(
+alias_dune_files() { # the dune files of this tree, NUL-terminated
+  (
     # This tree's own listing, whatever repository an inherited GIT_DIR names
     # (as record_checkout).
     # shellcheck disable=SC2046 # a list of variable names, split on purpose
     unset $(git rev-parse --local-env-vars 2>/dev/null)
     if [ "$(git rev-parse --is-inside-work-tree --show-prefix 2>/dev/null)" = true ]; then
-      git ls-files --cached --others --exclude-standard -- dune '*/dune' dune-file '*/dune-file' 2>/dev/null
+      git ls-files -z --cached --others --exclude-standard -- dune '*/dune' dune-file '*/dune-file' 2>/dev/null
     else
-      find . \( -name _build -o -name .git \) -prune -o \( -name dune -o -name dune-file \) -type f -print 2>/dev/null |
-        sed 's|^\./||'
+      find . \( -name _build -o -name .git \) -prune -o \( -name dune -o -name dune-file \) -type f -print0 2>/dev/null
     fi
-  ) || return 1
-  [ -n "$files" ] || return 1
-  local list=()
-  while IFS= read -r f; do [ -f "$f" ] && list+=("$f"); done <<<"$files"
+  )
+}
+alias_dune_dirs() { # the directories holding a dune file or a subdir's rules, `.` for the top; 1 incomplete
+  local list=() f
+  # NUL-delimited, so a path git would quote (a non-ASCII name) is read as
+  # itself (Codex review round 5).
+  while IFS= read -r -d '' f; do
+    [ ! -f "$f" ] || list+=("$f")
+  done < <(alias_dune_files)
   [ ${#list[@]} -gt 0 ] || return 1
+  list=("${list[@]#./}")
   # Kept for alias_dynamic_include, whatever the reader says of them.
-  printf '%s\n' "${list[@]}" >"$run_dir/aliases.files" || return 1
+  printf '%s\0' "${list[@]}" >"$run_dir/aliases.files" || return 1
   perl -e "$alias_dirs_perl" "${list[@]}" >"$run_dir/aliases.dirs" || return 1
   sort -u "$run_dir/aliases.dirs"
   rm -f "$run_dir/aliases.dirs"
 }
-alias_dynamic_include() { # 0 iff a dune file alias_dune_dirs listed names `dynamic_include`
+alias_imports() { # 0 iff a dune file alias_dune_dirs listed imports another file
   local f
-  while IFS= read -r f; do
-    grep -qF dynamic_include "$f" 2>/dev/null && return 0
+  while IFS= read -r -d '' f; do
+    perl -0777 -ne 'exit(/\(\s*(?:dynamic_)?include\s/ ? 0 : 1)' -- "$f" 2>/dev/null && return 0
   done <"$run_dir/aliases.files"
   return 1
 }
@@ -933,12 +937,14 @@ plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal
   for d in "${spec_dirs[@]}"; do
     alias_member "$d" ${first[@]+"${first[@]}"} || first+=("$d")
   done
-  # A generated `(dynamic_include ...)` anywhere in the tree is built by any
-  # dune query that loads its directory's rules -- this one too, outside the
-  # slot (Codex review round 4): such a tree leaves the batch to dune.
+  # A generated `(dynamic_include ...)` is built by any dune query that loads
+  # its directory's rules -- this one too, outside the slot (Codex review round
+  # 4) -- and a static `(include FILE)` can import one, or a subdir, the census
+  # does not read (round 5): a tree whose dune files import another file
+  # anywhere leaves the batch to dune, before any query.
   rm -f "$run_dir/aliases.files"
   all=$(alias_dune_dirs) || { all=- unlisted=1; }
-  if [ ! -s "$run_dir/aliases.files" ] || alias_dynamic_include; then
+  if [ ! -s "$run_dir/aliases.files" ] || alias_imports; then
     rm -f "$run_dir/aliases.files"
     return 0
   fi
