@@ -103,7 +103,8 @@ let snippets_of ~path source =
         (match e.pexp_desc with
         | Pexp_constant (Pconst_string (text, loc, Some "ocaml")) ->
             let key = loc.loc_start.pos_cnum in
-            let column = loc.loc_start.pos_cnum - loc.loc_start.pos_bol + String.length "{ocaml|" in
+            (* The constant's location spans its content, without the delimiters. *)
+            let column = loc.loc_start.pos_cnum - loc.loc_start.pos_bol in
             order := (key, { line = loc.loc_start.pos_lnum; column; text; name = None }) :: !order
         | Pexp_tuple elements -> name_siblings elements
         | Pexp_apply (_, args) ->
@@ -181,6 +182,13 @@ let known_rejection path =
                non-empty text the compiler's rejection must contain"
               path attr.attr_loc.loc_start.pos_lnum)
     floating
+  |> fun listed ->
+  List.iter
+    (fun (name, _) ->
+      if List.length (List.filter (fun (n, _) -> n = name) listed) > 1 then
+        die "%s: [@@@known_rejection] lists %S more than once" path name)
+    listed;
+  listed
 
 let run_quiet ~log command = Sys.command (command ^ " >" ^ Filename.quote log ^ " 2>&1") = 0
 
@@ -206,11 +214,16 @@ let () =
   if cases = [] then die "no cases module given\n%s" usage;
   let dir = Filename.temp_dir "typecheck-scan-cases" "" in
   at_exit (fun () -> ignore (Sys.command ("rm -rf " ^ Filename.quote dir)));
+  (* The stub is compiled in a directory of its own, and each arm in another, so an arm sees the
+     stub's interface and nothing a neighbouring arm left behind. *)
+  let stub_dir = Filename.concat dir "stub" in
+  Sys.mkdir stub_dir 0o755;
   let flags =
-    String.concat " " (List.map (fun d -> "-I " ^ Filename.quote d) (dir :: List.rev !includes))
+    String.concat " "
+      (List.map (fun d -> "-I " ^ Filename.quote d) (stub_dir :: List.rev !includes))
   in
-  let ocamlc ~log args =
-    run_quiet ~log (Printf.sprintf "cd %s && ocamlc -w -a %s %s" (Filename.quote dir) flags args)
+  let ocamlc ~cwd ~log args =
+    run_quiet ~log (Printf.sprintf "cd %s && ocamlc -w -a %s %s" (Filename.quote cwd) flags args)
   in
   let opener =
     match !stub with
@@ -219,13 +232,15 @@ let () =
         let ext = Filename.extension path in
         if ext <> ".ml" && ext <> ".mli" then die "--stub %s: expected a .ml or .mli file" path;
         let target = "scan_case_stub" ^ ext in
-        write_file (Filename.concat dir target) (read_file path);
+        write_file (Filename.concat stub_dir target) (read_file path);
         let log = Filename.concat dir "stub.log" in
-        if not (ocamlc ~log ("-c " ^ target)) then
+        if not (ocamlc ~cwd:stub_dir ~log ("-c " ^ target)) then
           die "the stub %s does not compile:\n%s" path (read_file log);
         "open! Scan_case_stub\n"
   in
-  let compile ~log source = ocamlc ~log ("-stop-after typing -c " ^ Filename.quote source) in
+  let compile ~cwd ~log source =
+    ocamlc ~cwd ~log ("-stop-after typing -c " ^ Filename.quote source)
+  in
   let known = match !stub with Some path -> known_rejection path | None -> [] in
   let contains ~sub s =
     let n = String.length sub and m = String.length s in
@@ -259,14 +274,16 @@ let () =
               incr counter;
               incr checked_here;
               let unit = Printf.sprintf "arm_%d" !counter in
-              let source = unit ^ ".ml" in
+              let arm_dir = Filename.concat dir unit in
+              Sys.mkdir arm_dir 0o755;
+              let source = "arm.ml" in
               (* The directive puts the snippet at its own line of the cases module, and the padding
                  at its own column, so a rejection points at the arm's text. *)
-              write_file (Filename.concat dir source)
+              write_file (Filename.concat arm_dir source)
                 (Printf.sprintf "%s# %d %S\n%s%s\n" opener s.line path (String.make s.column ' ')
                    s.text);
               let log = Filename.concat dir (unit ^ ".log") in
-              let ok = compile ~log source in
+              let ok = compile ~cwd:arm_dir ~log source in
               let output = read_file log in
               let listing = match s.name with Some n -> List.assoc_opt n known | None -> None in
               if Option.is_some listing then matched := name :: !matched;

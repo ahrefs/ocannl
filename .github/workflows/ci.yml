@@ -977,8 +977,13 @@ jobs:
         ocaml-compiler: 5.5.x
         allow-prerelease-opam: false
         opam-pin: false
-    - name: Install Dune
-      run: opam install dune
+    # ppxlib for tools/test-typecheck-scan-cases.sh's engine, bounded as the
+    # fmt job bounds it (the opam files' upper bound, read from them).
+    - name: Install Dune and ppxlib
+      run: |
+        ppxlib_below=$(sed -n 's/^ *"ppxlib" {.*< *"\([^"]*\)".*}$/\1/p' arrayjit.opam)
+        test -n "$ppxlib_below"
+        opam install dune "ppxlib<$ppxlib_below"
     - name: Run every gated leg and group alone
       run: tools/harness-legs-alone.sh
 

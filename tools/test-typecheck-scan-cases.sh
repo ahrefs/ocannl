@@ -11,8 +11,9 @@
 # parses; the type checker rejects it) are REJECTED by name while their well-typed neighbours, an arm
 # rebinding a stub name over the open and both case-table shapes are not; project syntax is REFUSED
 # by name; the companion stub is found beside its table; a known rejection holds only while the
-# compiler still rejects that arm with its listed text; and a run that checked nothing, a stub that
-# does not compile and a usage error each exit 2.
+# compiler still rejects that arm with its listed text; a run that checked nothing, a stub that
+# does not compile or lists a malformed or repeated rejection, and a usage error each exit 2; the
+# engine is found under a moved DUNE_BUILD_DIR; and no arm sees a neighbouring arm's compiled unit.
 #
 # It needs dune and ocamlc (the subject builds its engine, which links ppxlib, and compiles each
 # snippet); without them every leg is a counted skip.
@@ -91,7 +92,7 @@ leg2() {
   run --verbose "$table"
   expect_rc "a table with a planted ill-typed arm" 1
   has "the ill-typed arm is rejected by name" "REJECTED  $table:4: an ill-typed arm"
-  has "at its own line of the table" "File \"$table\", line 4"
+  has "at its own line and column of the table" "File \"$table\", line 4, characters 44-49"
   has "the duplicate module is rejected by name" \
     "REJECTED  $table:6: a duplicate module parses but does not type"
   has "the well-typed arm, over the stub's name, is accepted" "ok        $table:3: a well-typed arm"
@@ -173,6 +174,12 @@ leg6() {
   { cat "$stub"; printf '%s\n' '[@@@known_rejection ("an ill-typed arm", "")]'; } >"$malformed"
   run --stub "$malformed" "$table"
   expect_rc "a known rejection whose error text is empty, which every rejection contains" 2
+  { cat "$stub"
+    printf '%s\n' '[@@@known_rejection ("an ill-typed arm", "but an expression was expected of type")]'
+    printf '%s\n' '[@@@known_rejection ("an ill-typed arm", "Unbound module")]'
+  } >"$malformed"
+  run --stub "$malformed" "$table"
+  expect_rc "a case listed twice, whose second text would go unread" 2
 }
 harness_leg_run '6: a stub that does not compile or lists malformed rejections exits 2' leg6
 
@@ -182,6 +189,20 @@ leg8() {
   DUNE_BUILD_DIR=$moved "$subject" --no-stub "$TMP/t/planted_scan_cases.ml" >"$out" 2>"$err" || rc=$?
   expect_rc "a run with DUNE_BUILD_DIR moved" 1
   has "still runs the engine dune built there" "REJECTED  $table:4: an ill-typed arm"
+}
+leg9() {
+  local isolated="$TMP/t/isolated_cases.ml"
+  cat >"$isolated" <<'CASES'
+let cases =
+  [
+    ("a first arm", {ocaml|let v = 1|ocaml});
+    ("a later arm naming the first one's unit", {ocaml|let w = Arm_1.v|ocaml});
+  ]
+CASES
+  run --no-stub "$isolated"
+  expect_rc "an arm naming a neighbouring arm's unit" 1
+  has "is rejected: no arm sees another's compiled unit" \
+    "REJECTED  $isolated:4: a later arm naming the first one's unit"
 }
 leg7() {
   run
@@ -193,5 +214,6 @@ leg7() {
 }
 harness_leg_run '7: usage errors exit 2' leg7
 harness_leg_run '8: the engine is run from the build directory dune was told to use' leg8
+harness_leg_run '9: each arm is compiled apart from the others' leg9
 
 finish
