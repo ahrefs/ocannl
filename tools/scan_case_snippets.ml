@@ -30,8 +30,9 @@
    settled. The stub lists each such case by name in a floating attribute, [[@@@known_rejection
    ("case name", "text of the error")]], with its reason in a comment beside it, and every run
    prints it. Those snippets are compiled like the rest and must be rejected with output containing
-   that text: rejected for another reason is a rejection like any other, and accepted, or a listed
-   name that matches no checked snippet, is a stale listing; both fail the run.
+   that text, which must not be empty (every rejection contains the empty text): rejected for
+   another reason is a rejection like any other, and accepted, or a listed name that matches no
+   checked snippet, is a stale listing; both fail the run.
 
    PROJECT SYNTAX IS REFUSED, BY NAME. A snippet carrying an extension node ([let%op], [[%cd ...]],
    any [%name]) or a [[@@deriving ...]] attribute needs the owning stanza's preprocessors, which
@@ -172,12 +173,12 @@ let known_rejection path =
         in
         match attr.attr_payload with
         | PStr [ { pstr_desc = Pstr_eval ({ pexp_desc = Pexp_tuple [ name; error ]; _ }, _); _ } ]
-          when Option.is_some (string name) && Option.is_some (string error) ->
+          when Option.is_some (string name) && not (List.mem (string error) [ None; Some "" ]) ->
             Some (Option.get (string name), Option.get (string error))
         | _ ->
             die
-              "%s, line %d: [@@@known_rejection] takes a pair of strings: the case's name, and \
-               text the compiler's rejection must contain"
+              "%s, line %d: [@@@known_rejection] takes a pair of strings: the case's name, and the \
+               non-empty text the compiler's rejection must contain"
               path attr.attr_loc.loc_start.pos_lnum)
     floating
 

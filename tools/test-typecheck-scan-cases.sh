@@ -170,9 +170,19 @@ leg6() {
   { cat "$stub"; printf '%s\n' '[@@@known_rejection "an ill-typed arm"]'; } >"$malformed"
   run --stub "$malformed" "$table"
   expect_rc "a known rejection without its error text" 2
+  { cat "$stub"; printf '%s\n' '[@@@known_rejection ("an ill-typed arm", "")]'; } >"$malformed"
+  run --stub "$malformed" "$table"
+  expect_rc "a known rejection whose error text is empty, which every rejection contains" 2
 }
 harness_leg_run '6: a stub that does not compile or lists malformed rejections exits 2' leg6
 
+leg8() {
+  local moved="$TMP/moved-build"
+  rc=0
+  DUNE_BUILD_DIR=$moved "$subject" --no-stub "$TMP/t/planted_scan_cases.ml" >"$out" 2>"$err" || rc=$?
+  expect_rc "a run with DUNE_BUILD_DIR moved" 1
+  has "still runs the engine dune built there" "REJECTED  $table:4: an ill-typed arm"
+}
 leg7() {
   run
   expect_rc "no table" 2
@@ -182,5 +192,6 @@ leg7() {
   expect_rc "--stubbed with a table" 2
 }
 harness_leg_run '7: usage errors exit 2' leg7
+harness_leg_run '8: the engine is run from the build directory dune was told to use' leg8
 
 finish

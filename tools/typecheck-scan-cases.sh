@@ -74,7 +74,11 @@ if ! dune build --root "$root" tools/scan_case_snippets.exe >"$build_log" 2>&1; 
   echo "typecheck-scan-cases: the engine did not build" >&2
   exit 2
 fi
-engine=$root/_build/default/tools/scan_case_snippets.exe
+# Where dune just put it: DUNE_BUILD_DIR moves the build tree (as tools/batch-backends.sh reads it),
+# a relative one from the workspace root.
+build_dir=${DUNE_BUILD_DIR:-_build}
+case $build_dir in /*) ;; *) build_dir=$root/$build_dir ;; esac
+engine=$build_dir/default/tools/scan_case_snippets.exe
 
 worst=0
 for table in "${tables[@]}"; do
