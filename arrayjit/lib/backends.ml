@@ -1369,8 +1369,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
      through, and freed again before returning, on every path: the device answers the question the
      link would put to it -- [Schedule_outcome.Device_memory_exhausted] where the link would be
      refused -- without memset, uploads, constant-cache inserts, codegen or link. *)
-  let link_delta (context : context) ?(name = "link_delta") ~probe (lowered : Low_level.optimized)
-      (segments : Low_level.optimized list) : link_delta =
+  let link_delta (context : context) ?(name = "link_delta") ?(prelowered = false) ~probe
+      (lowered : Low_level.optimized) (segments : Low_level.optimized list) : link_delta =
     let ctx' = Low_level.copy_optimize_ctx lowered.Low_level.optimize_ctx in
     let store' = Hashtbl.copy lowered.Low_level.traced_store in
     let copy (o : Low_level.optimized) =
@@ -1385,7 +1385,11 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       }
     in
     let lowered = copy lowered in
-    let segments = maybe_elide_zeros ~backend_name:Device.name (List.map segments ~f:copy) in
+    let segments = List.map segments ~f:copy in
+    (* As in [compile]: a [?prelowered] routine's zeros are compiled as written. *)
+    let segments =
+      if prelowered then segments else maybe_elide_zeros ~backend_name:Device.name segments
+    in
     if List.is_empty segments then invalid_arg "Backends.link_delta: no segments";
     let alias_spans =
       plan_alias_spans ~name ~limits:(Device.hardware_limits ()) ~lowered ~segments
@@ -1416,7 +1420,19 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
        | Some free_pool ->
            let device = context.device in
            let tx = new_pool_tx ~name in
-           let give_back () = List.iter !(tx.minted) ~f:(free_and_forget_pool device ~free_pool) in
+           (* Every pool is attempted, so one free the driver refuses strands no other; the first
+              refusal is re-raised once all were tried. *)
+           let give_back () =
+             let first_failure =
+               List.fold !(tx.minted) ~init:None ~f:(fun failure pool_id ->
+                   match free_and_forget_pool device ~free_pool pool_id with
+                   | () -> failure
+                   | exception exn ->
+                       Option.first_some failure (Some (exn, Stdlib.Printexc.get_raw_backtrace ())))
+             in
+             Option.iter first_failure ~f:(fun (exn, backtrace) ->
+                 Stdlib.Printexc.raise_with_backtrace exn backtrace)
+           in
            (match List.iter groups ~f:(fun gl -> ignore (allocate_group_pools tx device gl)) with
            | () -> ()
            | exception exn ->

@@ -6953,11 +6953,12 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
           logf "%s: REFUSED, the search cannot run: one candidate's footprint does not fit: %s"
             (Option.value probe ~default:"baseline")
             (Outcome.detail_of_cause classified.cause);
-          (* Both baseline callers refuse on a declined baseline, the relink's included, which
-             [census] reads off the base compile alone; the probe's decline is in the census
-             already, beside the baseline's refusal before codegen. *)
+          (* Every caller refuses on a declined baseline -- the base compile's, the relink's, or the
+             footprint probe's that stands for the base link -- which [census] reads off the base
+             compile alone; the probe's decline is in the census already, as the baseline's one
+             account. *)
           raise_pre_search
-            ~base:{ (census ()) with baseline_declined = Option.is_none probe }
+            ~base:{ (census ()) with baseline_declined = true }
             (Outcome.Classified classified)
       | Some _ | None -> ()
     in
@@ -7028,22 +7029,11 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
             "%s: the base lowering's link delta fits: %d working + %d constant bytes in %d pool(s)"
             probe d.ld_working_bytes d.ld_constant_bytes d.ld_pools
       | Error (Outcome.Classified classified) when is_device_memory classified ->
-          (* The census says what happened to the baseline: refused before codegen, as the search
-             would record it, and its footprint refused by the device. *)
-          record_decline declines
-            {
-              Outcome.phase = Outcome.Transform;
-              cause =
-                Outcome.Not_dispatched
-                  {
-                    origin = "baseline";
-                    detail =
-                      Printf.sprintf
-                        "the serial baseline binds no hardware dimension on %s (gh-ocannl-532)"
-                        backend;
-                  };
-              execution_effect = Outcome.No_device_writes;
-            };
+          (* The baseline's one account in the census, as a refused base link's was before
+             gh-ocannl-1340: declined at [Backend_link] for device memory. Not beside its
+             [Not_dispatched] refusal as well, which the search records only once it runs: the two
+             are exclusive accounts of one baseline, and both would count it as two failed
+             candidates. *)
           record_decline declines classified;
           refuse_if_device_memory ~probe (Some classified)
       | Error (Outcome.Classified classified) ->

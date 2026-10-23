@@ -537,7 +537,12 @@ type link_delta = Ir.Backend_intf.link_delta = {
 [@@deriving sexp_of, equal]
 
 val link_delta :
-  ?name:string -> t -> Ir.Low_level.optimized -> Ir.Low_level.optimized list -> link_delta
+  ?name:string ->
+  ?prelowered:bool ->
+  t ->
+  Ir.Low_level.optimized ->
+  Ir.Low_level.optimized list ->
+  link_delta
 (** gh-ocannl-1493: [link_delta ctx lowered segments] is the device allocation linking a {!compile}
     from [ctx] would make, where the compile's [lowered_transform] received [lowered] and returned
     [segments] -- [lowered] is the lowering as a transform receives it (zeros already sunk),
@@ -545,14 +550,20 @@ val link_delta :
     routine's footprint: nodes [ctx] already holds and constants the device already caches are left
     out, exactly as the link's own allocator leaves them out, by the same plan. Link-free and
     hermetic: no codegen, no allocation, no pool id minted, and no effect on [lowered], [segments]
-    or [ctx] (placement forcing and store fold-back run on copies).
+    or [ctx] (placement forcing and store fold-back run on copies). Pass [~prelowered:true] for a
+    compile given [?prelowered], whose zeros are compiled as written.
 
     It predicts the bytes the link REQUESTS, pool by pool; the driver's page rounding, and memory
     the driver allocates for itself (loaded code, kernel local memory), come on top. Contrast
     [Memory_budget.footprint], the whole routine's default-schedule footprint, context-free. *)
 
 val probe_link_delta :
-  ?name:string -> t -> Ir.Low_level.optimized -> Ir.Low_level.optimized list -> link_delta
+  ?name:string ->
+  ?prelowered:bool ->
+  t ->
+  Ir.Low_level.optimized ->
+  Ir.Low_level.optimized list ->
+  link_delta
 (** gh-ocannl-1493: {!link_delta}, then a trial allocation of exactly the pools it planned, in the
     order and through the seam the link allocates them (the {!Ir.Alloc_census} records them and
     [Resource_fault_injection.Delta_pool_allocated] fires per pool), all freed again before

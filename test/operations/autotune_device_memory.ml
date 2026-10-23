@@ -198,23 +198,20 @@ let () =
   p "a routine that does not fit is refused, not searched" (Result.is_error result);
   p "the refusal is a typed pre-search failure at link, with the device-memory decline"
     (refused_for_memory r3);
-  (* gh-ocannl-1340: a baseline that binds no hardware dimension (every GPU backend's -- the
-     predicate [Autotune] derives [is_gpu] from) is refused before codegen and links nothing, so the
-     link-free probe answers in its place (gh-ocannl-1493), and the census says the baseline was
-     refused there. The census is never empty here: it holds the device-memory decline claimed
-     above. *)
+  (* gh-ocannl-1340: a baseline that binds no hardware dimension (every GPU backend's) is refused
+     before codegen and links nothing, so the link-free probe of its footprint answers in its place
+     (gh-ocannl-1493). Either way the baseline has ONE account in the census, its device-memory
+     decline -- not that and a refusal before codegen besides, which would count it as two failed
+     candidates. The census is never empty here: it holds the decline claimed above. *)
   let refused_baseline d =
     SO.equal_rejection_key d.Autotune.key (SO.Not_dispatched_key "baseline")
   in
-  let gpu = Ir.Schedule.backend_is_gpu (Context.backend_name ctx_ref) in
   p "only the base compile was attempted"
     (List.equal String.equal (List.rev !attempts) [ "baseline" ]);
-  if gpu then
-    p_exists "the census names the baseline refused before codegen exactly on a GPU backend"
-      r3.Autotune.declines ~f:refused_baseline
-  else
-    p_none "the census names the baseline refused before codegen exactly on a GPU backend"
-      r3.Autotune.declines ~f:refused_baseline;
+  p_none "the census holds no refusal of the baseline beside its device-memory decline"
+    r3.Autotune.declines ~f:refused_baseline;
+  p "the baseline is declined, once: one failed candidate"
+    (r3.Autotune.baseline_declined && r3.Autotune.candidates_failed = 1);
   p "the device refused exactly one allocation, and nothing stayed live"
     (refused = 1 && live_working () <= start3);
 

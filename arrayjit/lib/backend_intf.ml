@@ -1462,6 +1462,7 @@ module type Backend = sig
   val link_delta :
     context ->
     ?name:string ->
+    ?prelowered:bool ->
     probe:bool ->
     Low_level.optimized ->
     Low_level.optimized list ->
@@ -1473,7 +1474,8 @@ module type Backend = sig
       also allocated, in the order the link would allocate them and through the same seam, and freed
       before returning on every path; a device that would refuse the link refuses the probe with
       {!Schedule_outcome.Device_memory_exhausted}. Raises [Invalid_argument] for a probe on a
-      backend that cannot free a pool. *)
+      backend that cannot free a pool. [~prelowered:true] stands for a {!compile} given
+      [?prelowered], whose zeros are compiled as written (no covering-zero elision). *)
 
   include
     With_buffer_retrieval_and_syncing
