@@ -4412,6 +4412,39 @@ let%debug5_sexp eliminate_dim_entry stage origin env v ~glb constr =
   | None, _ when is_stage7 stage -> Some (Dim_eq { d1 = Var v; d2 = guess_dim (); origin })
   | _ -> None
 
+(* gh-ocannl-1508: a parameter dimension still open at the final stage. When what kept it open is a
+   fixed-index lower bound -- [At_least_dim] is minted only for the fixed-index axes of einsum specs
+   ([Shape.einsum_slot_spec_to_dims_bio]) -- the generic "hidden dimension" message points nowhere
+   near the cause, so name the spec(s) the bound came from. The spec is found among the variable's
+   retained origins, which [merge_origins] caps; past the cap the message names no spec. *)
+let unresolved_param_dim_error env v trace =
+  match find_dim env.dim_env v with
+  | Some (Bounds_dim { constr = At_least_dim d_min; origin; _ }) ->
+      let kind_name = function `Batch -> "batch" | `Input -> "input" | `Output -> "output" in
+      let specs =
+        List.filter_map origin ~f:(fun o ->
+            match o.operation with
+            | Some "At_least_dim" ->
+                Some
+                  [%string
+                    "a fixed-index %{kind_name o.lhs_kind} axis of einsum spec \"%{o.lhs_name}\""]
+            | _ -> None)
+        |> List.dedup_and_sort ~compare:String.compare
+      in
+      let where =
+        match specs with
+        | [] -> "a fixed-index axis of an einsum spec"
+        | _ -> String.concat ~sep:"; " specs
+      in
+      Shape_error
+        ( [%string
+            "Unresolved parameter dimension: a parameter axis is sized only by %{where}. A fixed \
+             index bounds an axis from below (here: at least %{d_min#Int}) but does not determine \
+             its size; reduce the axis away instead of fixing an index, or specify the parameter's \
+             dimension explicitly"],
+          Dim_mismatch [ Var v ] :: trace )
+  | _ -> Shape_error ("You forgot to specify the hidden dimension(s) 5", trace)
+
 let%track5_sexp process_shape_row ~(stage : stage) origin env
     ({ beg_dims; dims; bcast; prov } as r : row) : constraint_ list * _ =
   let final = is_stage7 stage in
@@ -4428,9 +4461,7 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env
         in
         match find_dim env.dim_env v with
         | Some (Bounds_dim { is_in_param = true; _ }) when final ->
-            raise
-            @@ Shape_error
-                 ("You forgot to specify the hidden dimension(s) 5", [ Row_mismatch [ r ] ])
+            raise @@ unresolved_param_dim_error env v [ Row_mismatch [ r ] ]
         | Some (Bounds_dim { glb; constr; has_uniq_constr_unless; _ })
           when is_stage4_up stage && can_guess_dim_to_one env has_uniq_constr_unless ->
             Option.to_list @@ eliminate_dim_entry stage origin env v ~glb constr

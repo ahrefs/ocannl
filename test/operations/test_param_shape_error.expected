@@ -40,3 +40,5 @@ Testing default bias parameter
 Got expected error: You forgot to specify the hidden dimension(s) 1
 Testing bias parameter 1D
 Got expected error: You forgot to specify the hidden dimension(s) 4
+Testing fixed-index axes consumed by a parameter
+Got expected error: Unresolved parameter dimension: a parameter axis is sized only by a fixed-index output axis of einsum spec "...|h, w, ..c.. => ...|0, 0, ..c..". A fixed index bounds an axis from below (here: at least 1) but does not determine its size; reduce the axis away instead of fixing an index, or specify the parameter's dimension explicitly
