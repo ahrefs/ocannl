@@ -1014,6 +1014,8 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
   (* gh-ocannl-1535: the lazies [expr] creates when it is evaluated once -- every [lazy e] or
      [Lazy.from_fun e] no function of [expr] encloses -- each handed to [on_lazy] with the keys its
      body reaches in [env]. *)
+  (* Off while a recursive module group is walked to seed its members (below). *)
+  let reporting = ref true in
   let report_lazies ~env ~scope ~holder expr =
     let under_function = ref 0 in
     (* The initializer's own local bindings in scope, innermost first, each with what it reaches: a
@@ -1058,7 +1060,8 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
       | _ -> None
     in
     let report body (loc : Location.t) =
-      on_lazy ~holder ~at:loc.loc_start.pos_cnum (Set.to_list (reach_here (direct_of body)))
+      if !reporting then
+        on_lazy ~holder ~at:loc.loc_start.pos_cnum (Set.to_list (reach_here (direct_of body)))
     in
     let finder =
       object (self)
@@ -1206,20 +1209,28 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
            code its expansion keeps, so its items are walked in place (round 3 of PR #1366). *)
         | Pstr_extension ((_, PStr items), _) -> walk ~scope env items
         (* A recursive module's body is walked as a nested structure's, like [module M = struct …
-           end] (round 3 of PR #1366); its name is no alias. *)
+           end] (round 3 of PR #1366); its name is no alias. The group is walked twice, the first
+           time silently, so a member's lazy sees every member's values (round 4). *)
         | Pstr_recmodule bindings ->
-            List.fold bindings ~init:env ~f:(fun env binding ->
-                match binding.pmb_name.txt with
-                | None -> env
-                | Some name -> (
-                    let module_expr = unwrap binding.pmb_expr in
-                    match module_expr.pmod_desc with
-                    | Pmod_structure inner -> walk ~scope:(scope @ [ name ]) env inner
-                    | Pmod_functor _ when functor_bodies -> (
-                        match functor_body module_expr with
-                        | Some inner -> walk ~scope:(scope @ [ name ]) env inner
-                        | None -> env)
-                    | _ -> env))
+            let walk_group env =
+              List.fold bindings ~init:env ~f:(fun env binding ->
+                  match binding.pmb_name.txt with
+                  | None -> env
+                  | Some name -> (
+                      let module_expr = unwrap binding.pmb_expr in
+                      match module_expr.pmod_desc with
+                      | Pmod_structure inner -> walk ~scope:(scope @ [ name ]) env inner
+                      | Pmod_functor _ when functor_bodies -> (
+                          match functor_body module_expr with
+                          | Some inner -> walk ~scope:(scope @ [ name ]) env inner
+                          | None -> env)
+                      | _ -> env))
+            in
+            let outer = !reporting in
+            reporting := false;
+            let seeded = walk_group env in
+            reporting := outer;
+            walk_group seeded
         | Pstr_include { pincl_mod; _ } -> (
             match (unwrap pincl_mod).pmod_desc with
             | Pmod_structure inner -> walk ~scope env inner

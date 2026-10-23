@@ -531,6 +531,20 @@ end = struct
   let held = lazy (get ~arg_name:"rec_module" ~default:"")
 end|ocaml},
       [ "rec_module" ] );
+    ( "a sibling of the same recursive module group",
+      [],
+      {ocaml|module rec A : sig
+  val held : string Lazy.t
+end = struct
+  let held = lazy (B.helper ())
+end
+
+and B : sig
+  val helper : unit -> string
+end = struct
+  let helper () = get ~arg_name:"rec_sibling" ~default:""
+end|ocaml},
+      [ "rec_sibling" ] );
     ( "an enclosing module included in a functor body",
       [],
       {ocaml|module Helpers = struct
