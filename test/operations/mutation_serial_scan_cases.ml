@@ -5,16 +5,19 @@ open Base
 open Verdict.Claims
 module Scan = Test_utils.Mutation_serial_scan
 
-let findings ?interface source =
+(* Most cases stand in for row.ml, the serial's own module, whose bare [note_mutation] is the real
+   one; [~serial_owner:false] stands in for any other. *)
+let findings ?(serial_owner = true) ?interface source =
   Test_utils.Scan_attempt.attempted ~what:"mutation-serial cases" ~name:(String.prefix source 60)
     ~default:[ "<the scan failed>" ] (fun () ->
-      (Scan.scan ~file:"x.ml" ?interface ("open Base\n" ^ source)).findings)
+      (Scan.scan ~file:"x.ml" ~serial_owner ?interface ("open Base\n" ^ source)).findings)
 
-let count ?interface source = List.length (findings ?interface source)
+let count ?serial_owner ?interface source = List.length (findings ?serial_owner ?interface source)
 
 (* The finding's message, without its [file:line: ] prefix. *)
-let says ?interface source fragment =
-  List.exists (findings ?interface source) ~f:(fun f -> String.is_substring f ~substring:fragment)
+let says ?serial_owner ?interface source fragment =
+  List.exists (findings ?serial_owner ?interface source) ~f:(fun f ->
+      String.is_substring f ~substring:fragment)
 
 let table = "let note_mutation () = ()\nlet seen = Hash_set.create (module Int)\n"
 
@@ -60,6 +63,32 @@ let () =
        \  Row.note_mutation ();\n\
        \  Hash_set.add seen v"
     = 1);
+  p "outside the serial's own module, a top-level note_mutation is not the real one"
+    (count ~serial_owner:false (table ^ "let add v =\n  note_mutation ();\n  Hash_set.add seen v")
+    = 1);
+  p "a container function through a locally bound Hash_set is not classified"
+    (says
+       (table
+      ^ "let probe v =\n\
+        \  let module Hash_set = struct let mem t v = Base.Hash_set.add t v; true end in\n\
+        \  Hash_set.mem seen v")
+       "does not classify");
+  p "an assignment through a shadowing ( := ) is not classified"
+    (says "let hits = ref 0\nlet ( := ) r v = ignore (r, v)\nlet reset () = hits := 0"
+       "does not classify");
+  p "state in an included structure is refused"
+    (says "include struct\n  let cache = ref 0\nend\nlet bump () = incr cache"
+       "an included structure");
+  p "an unlisted constructor hidden under a local let is refused"
+    (says "let next =\n  let w = Weak.create 4 in\n  fun () -> Weak.length w"
+       "hidden under a local let");
+  p "two same-named fingerprinted refs are judged apart"
+    (says
+       "let state = ref 0 [@@mutation_serial.fingerprinted]\n\
+        let set_early v = state := v\n\
+        let state = ref 1 [@@mutation_serial.fingerprinted]\n\
+        let mutated_since fp = fp <> !state"
+       "mutated_since does not read !state");
   p "a bare note_mutation () that resolves to nothing in this file is not the real one"
     (count
        "let seen = Hash_set.create (module Int)\n\

@@ -26,7 +26,10 @@ let scan_file ~root ~suffix file =
       None
   | Some source -> (
       let interface = read (file ^ "i") in
-      match Test_utils.Scan_attempt.run (fun () -> Scan.scan ~file ?interface source) with
+      match
+        Test_utils.Scan_attempt.run (fun () ->
+            Scan.scan ~file ~serial_owner:(String.is_suffix file ~suffix:"row.ml") ?interface source)
+      with
       | Scanned report -> Some report
       | Unparsed why ->
           Verdict.fail (Printf.sprintf "%s does not parse: %s" file why);

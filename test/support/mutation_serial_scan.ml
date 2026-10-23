@@ -21,14 +21,16 @@
       [!x] reads a ref; [x := _], [incr x], [decr x], [Int.incr x], [Int.decr x] write it; a
       container is read or written by the listed functions of its own family ([Hashtbl.find_or_add]
       is a write, [Hash_set.mem] a read; [a.(i) <- v] is [Array.set]). A [Stdlib.] or [Base.]
-      qualifier is dropped first.
+      qualifier is dropped first. The function must be the library's: a name or head module the file
+      binds in scope (a local [module Hash_set], a [let ( := )]) classifies nothing, so the
+      occurrence is refused as unclassified.
     - {b Accounting}: a write is accounted for when its nearest enclosing let-bound function (any
       [let f … = fun …] at any depth; the top-level definition when none encloses it) contains a
       call [note_mutation ()] anywhere in its body, nested closures included -- so the [~default]
       closure of a [find_or_add] counts. The call must reach the real one: [Row.note_mutation] with
-      no module named [Row] bound in scope (a local module, functor parameter or unpack), or in
-      [row.ml] the top-level [note_mutation] itself, not a shadowing local. An [open] that brings a
-      [Row] in is not modelled.
+      no module named [Row] bound in scope (a local module, functor parameter or unpack), or -- in
+      the serial's own module alone ([~serial_owner], [row.ml]) -- its top-level [note_mutation],
+      not a shadowing local. An [open] that brings a [Row] in is not modelled.
     - {b In-place classification}, as attributes with a closed grammar; a reason is a string literal
       of more than one word:
     - [[@@mutation_serial.exempt "<reason>"]] on a tracked binding: its writes need no note
@@ -51,8 +53,9 @@
       [Foo]) -- unread, so name it or extend the list;
     - module-level state the scan does not resolve: an allocation bound by a non-variable pattern,
       one evaluated at module initialization but hidden under a local [let] of a top-level value
-      ([let fresh = let uid = ref 0 in fun () -> …]), one inside a nested module or a [let%ext]
-      payload -- unless that binding is [exempt];
+      ([let fresh = let uid = ref 0 in fun () -> …]) -- an unlisted constructor there too -- one
+      inside a nested module, an [include]d structure, a functor argument or a [let%ext] payload --
+      unless that binding is [exempt];
     - a tracked binding the sibling [.mli] exports as a [val], since its writers outside the file
       are not read ([Row.mutation_serial] is exported as a function for that reason);
     - an attribute nothing consumes, a malformed one, two on one binding, a stale [exempt] (no write
@@ -81,7 +84,13 @@ type binding_class =
   | Exempt of string
   | Fingerprinted  (** A tracked binding, with its in-place classification. *)
 
-type binding = { name : string; line : int; kind : kind; cls : binding_class }
+type binding = {
+  key : int;  (** The binding's source offset: its identity, apart from same-named ones. *)
+  name : string;
+  line : int;
+  kind : kind;
+  cls : binding_class;
+}
 
 type report = {
   inventory : string list;  (** What the scan classified, without positions: one line each. *)
@@ -288,7 +297,7 @@ type frame = {
   mutable writes : (binding * int) list;
 }
 
-let scan ~file ?interface source =
+let scan ~file ?(serial_owner = false) ?interface source =
   let findings = ref [] in
   let finding line fmt =
     Printf.ksprintf
@@ -333,7 +342,7 @@ let scan ~file ?interface source =
   (* {2 Discovery} *)
   let tracked = Hashtbl.create (module Int) in
   let note_binding = ref None in
-  let exempt_used = Hash_set.create (module String) in
+  let exempt_used = Hash_set.create (module Int) in
   let bindings = ref [] in
   (* Exempt state the scan does not resolve: hidden, nested, or bound by a pattern. *)
   let unread_exempt = ref [] in
@@ -349,8 +358,8 @@ let scan ~file ?interface source =
           | _ ->
               (if not (phys_equal e (strip vb.pvb_expr)) then
                  match allocation e with
-                 | `Alloc _ -> found := line_of e.pexp_loc :: !found
-                 | _ -> ());
+                 | `Alloc _ | `Unknown _ -> found := line_of e.pexp_loc :: !found
+                 | `No -> ());
               super#expression e
       end
     in
@@ -364,11 +373,15 @@ let scan ~file ?interface source =
         | Pstr_extension ((_, PStr items), _) -> discover ~nested:true items
         | Pstr_module { pmb_expr; _ } -> discover_module pmb_expr
         | Pstr_recmodule mbs -> List.iter mbs ~f:(fun mb -> discover_module mb.pmb_expr)
+        | Pstr_include { pincl_mod; _ } -> discover_module pincl_mod
         | _ -> ())
   and discover_module me =
     match me.pmod_desc with
     | Pmod_structure items -> discover ~nested:true items
     | Pmod_constraint (me, _) | Pmod_functor (_, me) -> discover_module me
+    | Pmod_apply (f, arg) ->
+        discover_module f;
+        discover_module arg
     | _ -> ()
   and discover_binding ~nested vb =
     let line = line_of vb.pvb_loc in
@@ -379,7 +392,8 @@ let scan ~file ?interface source =
     let exempt = match cls with Some (A_exempt _, a) -> Some a | _ -> None in
     let consume_exempt () = Option.iter exempt ~f:consume in
     (match (name, nested) with
-    | Some "note_mutation", false -> note_binding := Some vb.pvb_loc.loc_start.pos_cnum
+    | Some "note_mutation", false when serial_owner ->
+        note_binding := Some vb.pvb_loc.loc_start.pos_cnum
     | _ -> ());
     (match head with
     | `Unknown path ->
@@ -405,7 +419,7 @@ let scan ~file ?interface source =
                   Fingerprinted
               | Some (A_boundary _, _) | None -> Plain
             in
-            let b = { name; line; kind; cls = bcls } in
+            let b = { key = vb.pvb_loc.loc_start.pos_cnum; name; line; kind; cls = bcls } in
             Hashtbl.set tracked ~key:vb.pvb_loc.loc_start.pos_cnum ~data:b;
             bindings := b :: !bindings
         | _ when Option.is_some exempt ->
@@ -414,8 +428,9 @@ let scan ~file ?interface source =
         | None, _ -> finding line "a mutable allocation bound by a pattern: bind it to a name"
         | Some name, true ->
             finding line
-              "%s: module-level state inside a nested module or extension payload is not read; \
-               hoist it to the top level or exempt it"
+              "%s: module-level state inside a nested module, an included structure, a functor \
+               argument or an extension payload is not read; hoist it to the top level or exempt \
+               it"
               name));
     if not (List.is_empty hidden) then
       if Option.is_some exempt then (
@@ -433,7 +448,7 @@ let scan ~file ?interface source =
   discover ~nested:false structure;
   (* {2 Resolution} *)
   let classified = Hash_set.create (module Int) in
-  let fingerprint_reads = Hash_set.create (module String) in
+  let fingerprint_reads = Hash_set.create (module Int) in
   let frames : frame list ref = ref [] in
   let fun_depth = ref 0 in
   let boundaries = ref [] in
@@ -445,7 +460,7 @@ let scan ~file ?interface source =
         match b.cls with
         | Fingerprinted -> ()
         | _ when frame.noted -> ()
-        | Exempt _ -> Hash_set.add exempt_used b.name
+        | Exempt _ -> Hash_set.add exempt_used b.key
         | Plain when Option.is_some frame.boundary -> boundary_used := true
         | Plain ->
             finding line "%s writes %s without note_mutation () (nor a classification)" frame.fname
@@ -487,6 +502,16 @@ let scan ~file ?interface source =
             match Lexical_scope.lookup env "note_mutation" with Some `Note -> true | _ -> false)
         | _ -> false
 
+      (* Whether a function path reaches the library's own definition: an unqualified name the file
+         binds nowhere in scope, or a qualified one whose head module the file does not bind. The
+         read/write lists describe the library's functions, so a shadowing [Hash_set], [Int] or
+         [(:=)] is not classified by them. *)
+      method library env (fn : Longident.t) =
+        match fn with
+        | Lident x -> Option.is_none (Lexical_scope.lookup env x)
+        | Ldot _ -> not (Map.mem env.Lexical_scope.modules (Lexical_scope.head fn))
+        | Lapply _ -> false
+
       method record_write b loc =
         match !frames with
         | frame :: _ when !fun_depth > 0 -> frame.writes <- (b, line_of loc) :: frame.writes
@@ -509,7 +534,11 @@ let scan ~file ?interface source =
                 match self#tracked env arg with
                 | None -> ()
                 | Some (b, loc) -> (
-                    let path = Option.value_map (flatten fn) ~f:unqualified ~default:[] in
+                    let path =
+                      if self#library env fn then
+                        Option.value_map (flatten fn) ~f:unqualified ~default:[]
+                      else []
+                    in
                     let verdict =
                       match b.kind with
                       | Ref ->
@@ -534,7 +563,7 @@ let scan ~file ?interface source =
                         Hash_set.add classified loc.loc_start.pos_cnum;
                         match !frames with
                         | frame :: _ when String.equal frame.root "mutated_since" ->
-                            Hash_set.add fingerprint_reads b.name
+                            Hash_set.add fingerprint_reads b.key
                         | _ -> ())
                     | `Write ->
                         Hash_set.add classified loc.loc_start.pos_cnum;
@@ -603,13 +632,13 @@ let scan ~file ?interface source =
   let bindings = List.rev !bindings in
   List.iter bindings ~f:(fun b ->
       match b.cls with
-      | Fingerprinted when not (Hash_set.mem fingerprint_reads b.name) ->
+      | Fingerprinted when not (Hash_set.mem fingerprint_reads b.key) ->
           finding b.line "%s is fingerprinted, but mutated_since does not read !%s" b.name b.name
       | _ -> ());
   (* An exempt tracked binding whose writes would all be accounted for anyway is stale. *)
   Hashtbl.iter tracked ~f:(fun b ->
       match b.cls with
-      | Exempt _ when not (Hash_set.mem exempt_used b.name) ->
+      | Exempt _ when not (Hash_set.mem exempt_used b.key) ->
           finding b.line "stale exemption on %s: none of its writes would need it" b.name
       | _ -> ());
   Option.iter interface ~f:(fun interface ->
