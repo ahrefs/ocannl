@@ -3517,7 +3517,7 @@ let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> (
           let units =
             List.filter_mapi (List.zip_exn saved_with_registries posts)
               ~f:(fun i ((s, registry), post) ->
-                match s.SC.seg_kind with
+                match Sched.segment_class s.SC.seg_kind with
                 | `Zeros | `Solo -> None
                 | `Normal ->
                     Some
@@ -5078,7 +5078,9 @@ let seeded_decisions ~capabilities ~limits ~accum_prec ~static_indices ~gate ~ra
         refine_segments ~coarse
           ~fine:(lazy (derive ~arity_cuts:true))
           ~seed:(fun k pre ->
-            Option.map (seed_of k pre) ~f:(fun p -> (p, digest ~with_placements:false pre)))
+            Option.map
+              (seed_of (Sched.segment_class k) pre)
+              ~f:(fun p -> (p, digest ~with_placements:false pre)))
       in
       census_plan hybrid;
       (* The segments no sketch takes, one decision per distinct segment code like the seeds. *)
@@ -5092,7 +5094,7 @@ let seeded_decisions ~capabilities ~limits ~accum_prec ~static_indices ~gate ~ra
                 match
                   Hashtbl.find_or_add sink_decided
                     (d ^ "|" ^ digest ~with_placements:true pre)
-                    ~default:(fun () -> sink_of k pre)
+                    ~default:(fun () -> sink_of (Sched.segment_class k) pre)
                 with
                 | Some swaps -> Seeded_sunk { digest = d; swaps }
                 | None -> Seeded_preset))
@@ -9316,6 +9318,16 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                     (c.cctx, c.routine)
                 | Error (Outcome.Classified classified) ->
                     logf "winner replay FAILED (%s), falling back to the default compile: %s" label
+                      (Outcome.detail_of_cause classified.cause);
+                    (* gh-ocannl-1480: unconditional, not [logf]. The saved form of a candidate this
+                       very search timed must replay; when it does not, the search's work is
+                       discarded and the untuned default ships, which a caller otherwise learns only
+                       from [Train.shipped.ship_substituted] or an [autotune_log] trace. *)
+                    Stdio.eprintf
+                      "autotune: WARNING: routine %S: the searched winner %s did not replay (%s); \
+                       shipping the untuned default in its place\n\
+                       %!"
+                      (Lazy.force routine_name) label
                       (Outcome.detail_of_cause classified.cause);
                     substituted := true;
                     untuned_default_or_raise ()

@@ -2122,6 +2122,26 @@ files.
   declining the candidate (a cache replay into a re-search). Two compiles of one schedule in one
   process differ in the process-wide `i<n>`/`v<n>_` counters, so a same-process comparison of
   emitted code renumbers those stems first (the test's `alpha_normalize`).
+- **A replay rebuilds what its recording compile ran: the head zero's fold is recorded, never
+  inferred** (gh-ocannl-1480). `segments_of_plan` expands a `` `Normal `` segment's head
+  whole-node zero when a fold is provable, since only `group_units`' fold puts a `Zeros` unit at a
+  `Normal` segment's head. `fission_segmented`'s single-segment fallback (the routine collapsed to
+  one kernel: one group, or everything coalesced) used to record `` `Normal `` whatever its head
+  was, so a single kernel opening with an unfolded zero (every preset, which never folds; a sketch
+  whose fold was declined) replayed as code the search never timed, and the replay's digest guard
+  refused it: a searched winner shipped the untuned default, its cache entry re-searched on every
+  warm call, and an `F_sketch` single segment silently fell to its preset. It now records
+  `` `Unfolded `` there (`Schedule.segment_kind`; `segment_class` maps it to `Normal` for every
+  consumer that classifies segments). No version bump: a `Normal` entry keeps its meaning, and the
+  broken ones already refused and re-search once. It looked like "arm A's crown stops replaying
+  once arm B has searched" only because `tune_placements` compiles what ships after every search
+  (gh-ocannl-1408); the warm call's cache replay failed before any arm B ran. Rule: a new
+  segmentation shape a replay must reconstruct gets its own recorded spelling -- if `fallback` or
+  `group_units` can produce a segment the plan's `(kind, units)` reads back differently,
+  `fission_replay_segmentation` section 7's derive-then-replay digest equality is the check to
+  extend. A searched winner whose replay fails now warns on stderr unconditionally, and
+  `Train.shipped.ship_substituted` says when no measured schedule shipped
+  (`test/operations/tune_arm_a_replay`).
 - **What a cache entry says is input, so its refusals are typed** (gh-ocannl-1242). The rule above
   holds for every raise a replay can reach: `SC.of_saved`'s dangling symbol reference and
   `SC.tn_of_ref`'s out-of-range node index raise `Cause_at (Transform, Illegal_schedule

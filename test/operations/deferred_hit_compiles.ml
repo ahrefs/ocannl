@@ -52,10 +52,8 @@ let () = Scripted_search.clear_cache_dir cache_dir
 
 (* Arm B (materialize-all) faster than arm A, so the measured winner and the recorded decision are
    B's. The searches are told apart by how many reports have been delivered when a window is
-   admitted. B rather than A: on cc this fixture's arm-A crown does not replay into the caller's
-   lineage once arm B has searched ("the saved segmentation no longer applies"), so arm A's winner
-   ships substituted and its warm entry re-searches -- a drift of the lineage, not of this test's
-   subject, which a B winner keeps out of the claims. *)
+   admitted. An arm-A winner on this fixture is [tune_arm_a_replay]'s subject (gh-ocannl-1480: its
+   single-kernel crown did not replay, which had looked like a drift caused by arm B's search). *)
 let delivered = ref 0
 
 let measure (w : Scripted_search.window) =

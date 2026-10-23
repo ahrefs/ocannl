@@ -276,7 +276,7 @@ type trajectory = {
 (** A search's timed record (gh-ocannl-1110), as a cache entry keeps it. *)
 
 type saved_segment = {
-  seg_kind : [ `Normal | `Zeros | `Solo ];
+  seg_kind : Schedule.segment_kind;
   seg_units : int;  (** The segment's length in units ({!Schedule.segmentation}). *)
   seg_digest : string;
       (** The {e pre-schedule} segment's structural canonical digest ([with_placements:false]): what

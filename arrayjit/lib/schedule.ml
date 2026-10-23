@@ -8857,7 +8857,16 @@ let reduction_zero_fold ~zero_sched (opt : Low_level.optimized) (zero : Low_leve
       Some (expand, proposed)
   | _ -> None
 
-type segmentation = ([ `Normal | `Zeros | `Solo ] * int) list [@@deriving sexp, equal]
+(* gh-ocannl-1480: [`Unfolded] is the unfissioned routine (a one-segment segmentation) whose head is
+   a whole-node zero left as it is although its fold is provable. Without it a replay could not tell
+   that segment from a folded one -- a [`Normal] segment opening with a [`Zeros] unit, which it
+   rebuilds expanded -- and replayed every such single-kernel winner as code it was not timed as. *)
+type segment_kind = [ `Normal | `Zeros | `Solo | `Unfolded ] [@@deriving sexp, equal]
+type segmentation = (segment_kind * int) list [@@deriving sexp, equal]
+
+let segment_class : segment_kind -> [ `Normal | `Zeros | `Solo ] = function
+  | `Unfolded -> `Normal
+  | (`Normal | `Zeros | `Solo) as k -> k
 
 let misfit_segmentation what =
   raise
@@ -8874,12 +8883,15 @@ let segments_of_plan (units : funit list) (plan : segmentation) : segment list =
       match List.split_n rest n with
       | u :: us, rest when n > 0 ->
           (* A [`Normal] segment opening with a whole-node zero is a folded one ({!group_units}):
-             only the fold puts a [`Zeros] unit at a [`Normal] segment's head. *)
+             only the fold puts a [`Zeros] unit at a [`Normal] segment's head -- the unfissioned
+             routine's one segment included, which {!fission_segmented}'s fallback records as
+             [`Unfolded] when its head zero stayed whole (gh-ocannl-1480). *)
           let u =
             match (kind, u) with
             | `Normal, { f_kind = `Zeros; f_fold = Some expand; _ } -> expand ()
             | _ -> u
           in
+          let kind = segment_class kind in
           ( rest,
             {
               (List.fold us ~init:(seg_of_unit u) ~f:(fun seg u ->
@@ -8941,11 +8953,19 @@ let fission_segmented ?(promote_locals = false) ?(arity_cuts = false) ?(fold_zer
         }
     in
     let sched = schedule_of 0 None opt in
+    (* gh-ocannl-1480: the single segment's record says whether its head zero was folded. A head
+       zero left whole although provably foldable is [`Unfolded]; [`Normal] would replay it expanded
+       ({!segments_of_plan}), as code the recording compile never ran. *)
+    let kind =
+      match seg_units with
+      | { f_kind = `Zeros; f_fold = Some _; _ } :: _ -> `Unfolded
+      | _ -> `Normal
+    in
     (* Classified like every segment's application below: the single kernel's schedule can be a
        caller's sketch -- the autotuner's per-segment substitution reaches here when a folded zero
        collapses the routine to one segment (gh-ocannl-1175) -- and a transform precondition it
        violates is a declined candidate, never an uncaught [Invalid_argument]. *)
-    ( [ (`Normal, List.length units) ],
+    ( [ (kind, List.length units) ],
       [ (`Normal, opt, sched, apply_classified ~static_indices sched opt) ] )
   in
   let resolved () =
@@ -9031,7 +9051,8 @@ let fission_segmented ?(promote_locals = false) ?(arity_cuts = false) ?(fold_zer
           let final_swr = List.map coalesced ~f:(fun (seg, replicas, _) -> (seg, replicas)) in
           undo_promotions
             (List.filter !promoted ~f:(fun (tn, _) -> not (crosses_segments final_swr tn)));
-          ( List.map coalesced ~f:(fun (seg, _, _) -> (seg.g_kind, List.length seg.g_units)),
+          ( List.map coalesced ~f:(fun (seg, _, _) ->
+                ((seg.g_kind :> segment_kind), List.length seg.g_units)),
             List.map coalesced ~f:(fun (seg, replicas, sched) ->
                 let pre = segment_optimized opt (seg_llc replicas seg) in
                 (seg.g_kind, pre, sched, apply_classified ~static_indices sched pre)) )

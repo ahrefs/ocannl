@@ -1170,13 +1170,23 @@ val fission_scheduled :
     coalescing) are restored. {!maybe_default_schedules} passes [true] on GPU backends, where a
     serial nest costs orders of magnitude more than on CPU. *)
 
-type segmentation = ([ `Normal | `Zeros | `Solo ] * int) list [@@deriving sexp, equal]
+type segment_kind = [ `Normal | `Zeros | `Solo | `Unfolded ] [@@deriving sexp, equal]
+(** A recorded segment's kind: a derived segment's ([`Normal], [`Zeros], [`Solo]), or [`Unfolded]
+    (gh-ocannl-1480) -- the unfissioned routine's one segment whose head is a whole-node zero left
+    whole although its fold is provable. A [`Normal] segment opening with such a zero is a folded
+    one and replays with the zero expanded; an [`Unfolded] one replays as a [`Normal] segment with
+    the zero as it stands, so a replay rebuilds exactly the code its recording compile ran. *)
+
+type segmentation = (segment_kind * int) list [@@deriving sexp, equal]
 (** A fission segmentation as data (gh-ocannl-1164): the kind and the length, in units, of each
     segment in order — a unit being one top-level statement with the comments before it, with each
     maximal run of whole-node zeros stably sorted by the zeroed node's shape, so the units are a
     function of the code alone. One segment over every unit is the unfissioned routine. The schedule
     cache persists it with a fissioned winner, so a replay cuts where the winner was cut instead of
     re-deriving the cuts under the current policy. *)
+
+val segment_class : segment_kind -> [ `Normal | `Zeros | `Solo ]
+(** The kind a recorded segment is replayed as: [`Unfolded] is a [`Normal] segment. *)
 
 val fission_segmented :
   ?promote_locals:bool ->
