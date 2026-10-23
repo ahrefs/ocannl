@@ -7,15 +7,16 @@
 
    1. The scope grammar and the tile's lifetime, refused at the op (gh-ocannl-1467). A [Local_scope]
    body is hoisted out of its position, so a later op that puts into the scope a materializing
-   [Unroll] minted around the tile's update a hardware-typed loop ([Retype] of a loop inside it) or
-   a tensor-node write ([Stage]'s loads landing inside it) is refused at that op, typed, naming it
-   -- through [Schedule.apply_classified], and through [Schedule.op_legality] asked of the program
-   the ops before it left (the race queries alone call the [Grid] retype and the [Stage] legal) --
-   and so is each one's twin without [Privatize]: the rule is the scope's, not the tile's. These
-   were the only triggers of the final re-check ([Schedule.privatized_tile_widens]); compilation
-   refused them at its exit gates, untyped. A hardware-typed loop inside the tile's per-thread
-   lifetime (between its init-load and its store-back) is refused at the later op too, wide tile or
-   not, whether the cell omits the loop or mentions it, and for the privatized loop itself: through
+   [Unroll] minted around the tile's update a hardware-typed loop ([Retype] of a loop inside it) is
+   refused at that op, typed, naming it -- through [Schedule.apply_classified], and through
+   [Schedule.op_legality] asked of the program the ops before it left (the race queries alone call
+   the [Grid] retype legal) -- and so is each one's twin without [Privatize]: the rule is the
+   scope's, not the tile's. A [Stage] whose anchor the scope binds would put its loads there; it
+   refuses itself, naming the anchor (gh-ocannl-1534, pinned in [stage_scope_anchor]). These were
+   the only triggers of the final re-check ([Schedule.privatized_tile_widens]); compilation refused
+   them at its exit gates, untyped. A hardware-typed loop inside the tile's per-thread lifetime
+   (between its init-load and its store-back) is refused at the later op too, wide tile or not,
+   whether the cell omits the loop or mentions it, and for the privatized loop itself: through
    [apply_classified] and [schedule_legality], which apply the chain; a single op judged by
    [op_legality] has no record of the tile ([Op_unknown] -- the tile is routine-local scratch the
    race queries exempt). The neighbours stay admitted: a [Vectorized] retype or an in-place [Unroll]
@@ -94,8 +95,8 @@ let claim_scope_hw =
    the scope"
 
 let claim_scope_stage =
-  "a Stage whose loads land inside that scope is refused at the Stage, typed, naming the \
-   tensor-node write in the scope"
+  "a Stage whose anchor that scope binds is refused at the Stage, typed, naming the anchor bound \
+   inside the scope"
 
 let claim_scope_twins =
   "the same three schedules without Privatize are refused the same way: the rule is the scope's"
@@ -182,8 +183,8 @@ let build_rst name =
   (Ll_test.optimize ~materialized:[ acc; x ] ~name raw, acc, x, r, s, t)
 
 (* [r { s { u { t { acc[0] += x[r, s, u, t] } } } }] with [s] of extent 1: the materializing
-   [Unroll] of [s] leaves the [u] loop inside the minted scope, and a [Stage] of [x] over [t] puts
-   its loads in [u]'s body. *)
+   [Unroll] of [s] leaves the [u] loop inside the minted scope, and a [Stage] of [x] over [t] is
+   anchored at [u], so its loads would go in [u]'s body. *)
 let build_rsut name =
   let acc = node (name ^ "_acc") and x = node ~dims:[| 2; 1; 2; 2 |] (name ^ "_x") in
   Ll_test.materialize acc;
@@ -269,7 +270,7 @@ let not_illegal = function
   | Sched.Op_legal | Sched.Op_unknown _ -> true
 
 let in_scope = "hardware-annotated loop"
-and scope_write = "writes the tensor node"
+and scope_anchor = "is bound inside the body of local scope"
 
 let lifetime = "per-thread lifetime of the Privatize tile"
 
@@ -282,7 +283,7 @@ let scope_legs () =
   let stage name ~privatize =
     let o, acc, x, r, s, t = build_rsut name in
     let pre = if privatize then [ pz ~target:acc ~over:r ] else [] in
-    refused ~name ~op:"Stage" ~what:scope_write (pre @ [ unroll s; stage_over x t ]) o
+    refused ~name ~op:"Stage" ~what:scope_anchor (pre @ [ unroll s; stage_over x t ]) o
   in
   p claim_scope_hw
     (hw LL.Workgroup_reduce "prc_wgr" ~privatize:true && hw LL.Grid "prc_grid" ~privatize:true);
@@ -308,7 +309,7 @@ let scope_legs () =
    p claim_scope_oracle
      (illegal_with ~what:in_scope (Sched.op_legality pre (retype t LL.Workgroup_reduce))
      && illegal_with ~what:in_scope (Sched.op_legality pre (retype t LL.Grid))
-     && illegal_with ~what:scope_write stage_v
+     && illegal_with ~what:scope_anchor stage_v
      && List.equal Tn.equal (keys st) store));
   (let pre, t = rst_prefix "prc_adm_vec" in
    let pre_u, t_u = rst_prefix "prc_adm_unroll" in

@@ -4687,6 +4687,15 @@
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
 
 (test
+ (name stage_scope_anchor)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules stage_scope_anchor)
+ (libraries base ocannl stdio arrayjit.verdict ll_test))
+
+(test
  ; ocannl-backend: none -- pure assembly parsing; no emission, runtime context or toolchain.
  (name asm_census_cases)
  (package neural_nets_lib)

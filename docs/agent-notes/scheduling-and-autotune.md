@@ -846,8 +846,14 @@ files.
   hardware-annotated loop (`Low_level.scope_hardware_loop`, the predicate `validate_parallel` gates
   on) and no effect beyond its own locals (`Low_level.scope_purity_violation`). The mints never
   break it, but a LATER op can: a hardware `Retype`/`Split` of a loop the scope a materializing
-  `Unroll`/`Partition` minted holds, a `Stage` whose loads land there (even over a tile loop
-  OUTSIDE the scope, when the staged read sits inside it), a `Privatize` over such a loop.
+  `Unroll`/`Partition` minted holds, a `Privatize` over such a loop. A `Stage` keeps itself out
+  (gh-ocannl-1534): its loads go at its anchor (the deepest loop an outer-part index varies with),
+  so an anchor the scope binds is refused by name before a tile is minted, even for a tile loop
+  OUTSIDE the scope. Hoisting those loads ahead of the scope is unsound at that tile shape (the
+  anchor is unbound there); the scope's whole footprint is the larger stage with the scope-bound
+  loops added to `tile_loops`, which the op never infers, since budgets read the tile size off
+  `tile_loops`. An unanchored shared stage wraps the statement holding the scope instead of the
+  scope-nested tile loop (`rewrite_loop_holder` in `schedule.ml`). `stage_scope_anchor`.
   `Schedule.apply_opt_op` checks the program every op leaves and refuses, typed and naming the op,
   a violation the op ADDED (a malformed entry is the compile gates' to refuse, not the next op's);
   the race queries alone called the `Grid` retype and the `Stage` legal. `scope_verdict` asks the
