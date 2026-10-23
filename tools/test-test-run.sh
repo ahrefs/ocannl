@@ -13,10 +13,10 @@
 # #group' leg_N` (scripts/harness-support.sh), its name led by the leg numbers
 # below and closed by the one group it belongs to (gh-ocannl-1202):
 # #group-alive (1-5), #stop (6-8, 67), #queries (39), #repeat (9-25, 38, 83-85),
-# #options (26-28, 37), #width (29-34, 48-52, 64, 70), #digest (35-36,
+# #options (26-28, 37, 89), #width (29-34, 48-52, 64, 70), #digest (35-36,
 # 68-69, 71-73, 80, 87), #fresh (81), #lifecycle (40-47, 65, 74: the run/start
 # lifecycle with its signal legs, and both fork-window negative controls),
-# #source (59-63, 66), #slot (53-58, 78, 88), #device (75-77), #credentials (79),
+# #source (59-63, 66), #slot (53-58, 78, 88), #device (75-77, 91), #credentials (79, 90),
 # #bisect (82), #harness (86). A body that cannot go on (an extraction that
 # matched nothing, a fixture that is not what its checks assume) ends with
 # `harness_abandon DETAIL; return`, failing that leg alone: never `exit`,
@@ -183,7 +183,12 @@
 #      build tree's reuse, and non-alias operands refused; a mutant without
 #      the replay shows dune alone does not re-run a target-producing test,
 #      and one closing the replay's inherited descriptors that the escaped
-#      child then goes unseen.
+#      child then goes unseen. Its tests see no step directory either: the
+#      environment it compares leaves out none of the runner's own variables.
+#  91 sits after leg 84: the per-test cap keys a test on its start token too
+#      (gh-ocannl-1448) -- a stub ps and the watcher's /proc seam advance a 7 s
+#      test's starttime at every listing, and it is never capped under 4 s;
+#      held steady, the same test is capped.
 #  85 sits after leg 83 (Linux only): under a stand-in for a PID 1 that reaps
 #      no orphans -- a child subreaper that waits for its own child only --
 #      the zombie-only groups `repeat` and `run` leave are read as gone, not
@@ -240,6 +245,16 @@
 #      tools/dune-quiet.sh, run directly, scrubs on its own. The scrub text
 #      itself fails closed, under sh, bash and dash where installed: an
 #      unrunnable env and a deny-listed non-identifier refuse.
+#  89-90 sit after leg 79 (gh-ocannl-1448).
+#  89. a `dune build` naming an alias dune does not know is ALIAS REFUSED
+#      (exit 2) before the backends' resolution, the slot and dune's build --
+#      under @ and @@, in its own directory or below it, at the root, and a
+#      directory dune does not know beside a known one; known ones run, and
+#      nothing past dune's `--` is asked about; `plan` says run would refuse
+#      it and `repeat` runs no iteration; a listing that is not dune's leaves
+#      the aliases to dune; and where a real dune is at hand, its own listing.
+#  90. the runner's own OCANNL_TOOL_TESTRUN_BG, _RD and _OWN reach no dune: a
+#      run, a probed GPU run under a slot, a probed repeat's iterations.
 #  59-63 sit after leg 47: the source a run tested, recorded at launch
 #      (gh-ocannl-992), against a committed fixture checkout.
 #  59. a clean checkout records its HEAD as `head` and an empty `dirty`.
@@ -2014,6 +2029,35 @@ if [ "${1:-}" = promotion ]; then
   esac
   exit 0
 fi
+# The alias check's listing (gh-ocannl-1448), asked before the batch resolves:
+# neither counted nor recorded among the calls every leg pins. Where
+# REPEAT_TEST_ALIASES names a file of `DIR NAME` lines (`DIR` alone: a
+# directory with no alias of its own) it answers as dune 3.24 does, on stderr
+# -- each known directory's aliases with the standard `default`, `DIR:` headers
+# for more than one, and nothing but `Error: Directory DIR does not exist.`
+# lines once one is unknown; unset, it prints nothing, which is not dune's
+# answer, so the check leaves every alias to dune. The directories each query
+# named go to REPEAT_TEST_SHOW_CALLS when that is set.
+if [ "${1:-}" = show ]; then
+  [ -n "${REPEAT_TEST_ALIASES:-}" ] || exit 0
+  shift 2
+  show_dirs=()
+  for arg do case $arg in -*) ;; *) show_dirs+=("$arg") ;; esac; done
+  [ -z "${REPEAT_TEST_SHOW_CALLS:-}" ] ||
+    printf '%s\n' "${show_dirs[*]-}" >>"$REPEAT_TEST_SHOW_CALLS"
+  show_missing=
+  for d in ${show_dirs[@]+"${show_dirs[@]}"}; do
+    awk -v d="$d" '$1 == d { f = 1 } END { exit !f }' "$REPEAT_TEST_ALIASES" ||
+      { echo "Error: Directory $d does not exist." >&2; show_missing=1; }
+  done
+  [ -z "$show_missing" ] || exit 0
+  for d in ${show_dirs[@]+"${show_dirs[@]}"}; do
+    [ "${#show_dirs[@]}" = 1 ] || echo "$d:" >&2
+    { echo default; awk -v d="$d" '$1 == d && NF > 1 { print $2 }' "$REPEAT_TEST_ALIASES"; } | sort >&2
+    [ "${#show_dirs[@]}" = 1 ] || echo >&2
+  done
+  exit 0
+fi
 # Repeat establishes a fresh context with `dune clean` before each measured
 # invocation. The fixture keeps setup out of the iteration count and streams.
 if [ "${1:-}" = clean ]; then
@@ -2043,8 +2087,17 @@ for arg in "$@"; do
         printf '%s %s %s\n' "$pos" "$side" "${arg#--trace-file=}" >>"$REPEAT_TEST_TRACE_ARGS" ;;
   esac
 done
-if [ -n "${OCANNL_TOOL_TESTRUN_OWN:-}" ] && [ $# -ge 2 ] &&
-   [ "$2" = "--trace-file=$OCANNL_TOOL_TESTRUN_OWN/trace.csexp" ]; then
+# The runner's own is told by where it points: the trace of a directory holding
+# a run's metadata (`wt`, `cap`, `log`), which nothing hands dune any longer
+# through the environment (gh-ocannl-1448).
+own_trace() { # <word>; 0 iff it is --trace-file=<a run directory>/trace.csexp
+  local d
+  case $1 in --trace-file=*/trace.csexp) ;; *) return 1 ;; esac
+  d=${1#--trace-file=}
+  d=${d%/trace.csexp}
+  [ -f "$d/wt" ] && [ -f "$d/cap" ] && [ -f "$d/log" ]
+}
+if [ $# -ge 2 ] && own_trace "$2"; then
   trace_to=${2#--trace-file=}
   trace_sub=$1
   shift 2
@@ -2226,6 +2279,11 @@ case $REPEAT_TEST_MODE in
       waitpid($c, 0); print "action done\n"; exit 0' \
       "$REPEAT_TEST_ACTION_PID" "${REPEAT_TEST_ACTION_SECS:-60}"
     ;;
+  # The names of the environment dune runs in -- and every test it starts
+  # inherits -- appended to REPEAT_TEST_ENV_NAMES (leg 90, gh-ocannl-1448).
+  env_names)
+    env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' >>"$REPEAT_TEST_ENV_NAMES"
+    printf 'stable stdout\n'; printf 'stable stderr\n' >&2 ;;
   # A dune that is itself slow, starting no action: dune is not a test.
   slow_dune)
     exec perl -e '$0 = "dune"; select undef, undef, undef, $ARGV[0]; print "slow dune done\n"' \
@@ -5367,12 +5425,19 @@ cat >"$slot_fake" <<'FAKE'
 #!/usr/bin/env bash
 # The runner's own trace option (leg 80) is kept out of the slot calls these
 # legs pin, by the fixture dune's rule: exactly `--trace-file=<the run's
-# directory>/trace.csexp`, once, right after the subcommand that follows the
-# dune it runs. Every other word stays verbatim.
+# directory>/trace.csexp` (a directory holding a run's `wt`, `cap` and `log`),
+# once, right after the subcommand that follows the dune it runs. Every other
+# word stays verbatim.
+own_trace() { # <word>; 0 iff it is --trace-file=<a run directory>/trace.csexp
+  local d
+  case $1 in --trace-file=*/trace.csexp) ;; *) return 1 ;; esac
+  d=${1#--trace-file=}
+  d=${d%/trace.csexp}
+  [ -f "$d/wt" ] && [ -f "$d/cap" ] && [ -f "$d/log" ]
+}
 shown=() prev2= prev1= dropped=
 for arg in "$@"; do
-  if [ -z "$dropped" ] && [ -n "${OCANNL_TOOL_TESTRUN_OWN:-}" ] &&
-     [ "$arg" = "--trace-file=$OCANNL_TOOL_TESTRUN_OWN/trace.csexp" ] && [ "${prev2##*/}" = dune ]; then
+  if [ -z "$dropped" ] && own_trace "$arg" && [ "${prev2##*/}" = dune ]; then
     case $prev1 in build | runtest | test | exec) dropped=1; prev2=$prev1 prev1=$arg; continue ;; esac
   fi
   shown+=("$arg")
@@ -6652,9 +6717,10 @@ let () =
   | [| _ |] -> ignore (count "det"); print_endline "det"
   | [| _; "env" |] ->
     ignore (count "env");
-    (* Each step's supervisor names its own directory, and dune gives each action a TMPDIR and
-       a trace directory of its own: everything else is what the replay owes. *)
-    let mine k = List.mem k [ "TMPDIR"; "DUNE_ACTION_TRACE_DIR"; "OCANNL_TOOL_TESTRUN_RD" ] in
+    (* Dune gives each action a TMPDIR and a trace directory of its own: everything else is what
+       the replay owes -- and a step's own directory (OCANNL_TOOL_TESTRUN_RD), which differs
+       between the build phase and every replay, reaches neither (gh-ocannl-1448). *)
+    let mine k = List.mem k [ "TMPDIR"; "DUNE_ACTION_TRACE_DIR" ] in
     Unix.environment () |> Array.to_list
     |> List.filter (fun kv -> not (mine (List.hd (String.split_on_char '=' kv))))
     |> List.sort compare |> List.iter print_endline;
@@ -6832,6 +6898,88 @@ ML
 fi
 }
 harness_leg_run '84: repeat --direct builds once and replays the rules #repeat' leg_84
+
+# ---------------------------------------------------------------------------
+# Leg 91: the per-test cap tells a test from a process that took its pid (gh-ocannl-1448)
+# ---------------------------------------------------------------------------
+# The watcher keyed a test on its pid and its parent, so a process the system
+# gave the same pid under the same dune within one poll inherited the first
+# one's age and could be capped early (the residual staging#1254 left). It now
+# also keys on the start token: /proc/<pid>/stat's starttime on Linux, ps's
+# lstart elsewhere. A recycled pid cannot be arranged on demand, so a stub ps
+# serves the watcher's listing unchanged and, through the watcher's seam
+# (OCANNL_TOOL_TEST_CAP_PROC, a directory read ahead of /proc), a stat for the
+# test whose starttime it advances on every listing: a 7 s test under a 4 s cap
+# is then a new process at every poll and is never capped (on the base, which
+# reads no token, it is). The control serves one starttime throughout, and the
+# same test is capped: the seam's token is read, not ignored, and a token that
+# stays the same keeps the test's age -- as the real readers' must, or leg 75's
+# hung test would never be capped.
+leg_91() {
+tok_label="per-test cap: a test whose start token changes is a new process (never capped); one whose token stays is capped"
+renamed_dune_readable
+if [ -z "${test_cap_named_ok:-}" ]; then
+  skip "$tok_label" "a process renamed through \$0 does not read back as dune in ps here"
+  return
+fi
+tok_bin=$TMP/test-cap-token-bin
+tok_proc=$TMP/test-cap-token-proc
+mkdir -p "$tok_bin"
+cat >"$tok_bin/ps" <<EOF
+#!/usr/bin/env bash
+# The real ps; on the watcher's listing (an etime column), a stat for the test
+# under TOK_PROC first, its starttime the listing's number when TOK_ADVANCE is
+# set and 4242 otherwise. Each one served is logged to TOK_SERVED.
+case " \$* " in
+  *" etime= "*)
+    pid=\$(cat "\$REPEAT_TEST_ACTION_PID" 2>/dev/null)
+    if [ -n "\$pid" ]; then
+      n=\$(( \$(wc -l <"\$TOK_SERVED" 2>/dev/null || echo 0) + 1 ))
+      start=4242
+      [ -z "\${TOK_ADVANCE:-}" ] || start=\$((100000 + n))
+      mkdir -p "\$TOK_PROC/\$pid"
+      # The name holds ") " and numbers, as a native name may: only the LAST
+      # ") " ends it, and a reader stopping at the first one reads a
+      # constant field as the token.
+      printf '%s (sl) 9 9) S 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 %s 0 0\n' "\$pid" "\$start" >"\$TOK_PROC/\$pid/stat.tmp"
+      mv -f "\$TOK_PROC/\$pid/stat.tmp" "\$TOK_PROC/\$pid/stat"
+      printf '%s %s\n' "\$pid" "\$start" >>"\$TOK_SERVED"
+    fi ;;
+esac
+exec "$(command -v ps)" "\$@"
+EOF
+chmod +x "$tok_bin/ps"
+tok_detail=
+for probe in "advance:1:0" "stable::142"; do
+  IFS=: read -r tag advance want <<<"$probe"
+  rm -rf "$tok_proc"
+  : >"$TMP/test-cap-token-$tag.served"
+  REPEAT_TEST_ACTION_PID=$TMP/test-cap-token-$tag.pid
+  rm -f "$REPEAT_TEST_ACTION_PID"
+  PATH=$tok_bin:$PATH TOK_PROC=$tok_proc TOK_ADVANCE=$advance TOK_SERVED=$TMP/test-cap-token-$tag.served \
+    OCANNL_TOOL_TEST_CAP_PROC=$tok_proc REPEAT_TEST_ACTION_PID=$REPEAT_TEST_ACTION_PID \
+    REPEAT_TEST_ACTION_SECS=7 argv_mode=action argv_probe "test-cap-token-$tag" run --test-cap 4 build @cheap
+  tok_action=$(cat "$REPEAT_TEST_ACTION_PID" 2>/dev/null)
+  tok_served=$(grep -c "^$tok_action " "$TMP/test-cap-token-$tag.served" 2>/dev/null)
+  if [ "$argv_rc" != "$want" ]; then
+    tok_detail="$tag: exit $argv_rc (want $want): $argv_out $(cat "$argv_dir/log")"
+  elif [ -z "$tok_action" ] || [ "${tok_served:-0}" -lt 3 ]; then
+    tok_detail="$tag: the stub served the test's stat ${tok_served:-0} time(s) (want 3 or more; test pid ${tok_action:-unknown})"
+  elif [ "$want" = 0 ] && [ -e "$argv_dir/test-cap" ]; then
+    tok_detail="$tag: a passing run left a test-cap record"
+  elif [ "$want" = 142 ] && ! grep -q "^test-run: per-test cap: pid $tok_action has run" "$argv_dir/log"; then
+    tok_detail="$tag: the log does not name the test: $(cat "$argv_dir/log")"
+  fi
+  case ${tok_action:+$(pstate "$tok_action")} in
+    '' | Z) ;;
+    *) kill -KILL "$tok_action" 2>/dev/null ;;
+  esac
+  [ -z "$tok_detail" ] || break
+done
+unset REPEAT_TEST_ACTION_PID
+if [ -z "$tok_detail" ]; then report 0 "$tok_label"; else report 1 "$tok_label" "$tok_detail"; fi
+}
+harness_leg_run '91: the per-test cap tells a test from a process that took its pid #device' leg_91
 
 # ---------------------------------------------------------------------------
 # Leg 79: credentials never reach dune (gh-ocannl-1280)
@@ -7137,6 +7285,234 @@ fi
 harness_leg_run '79: credentials never reach dune #credentials' leg_79
 
 # ---------------------------------------------------------------------------
+# Leg 89: an alias dune does not know is refused before the slot (gh-ocannl-1448)
+# ---------------------------------------------------------------------------
+# A misspelled per-test alias used to be found by dune itself, after the
+# launch had resolved the batch's backends, taken the fleet's slot and probed
+# the device. The fixture dune answers `dune show aliases` from a table, as
+# dune 3.24 does (see its `show` branch), for a directory `al` with an alias of
+# its own and a subdirectory `al/sub` with another; each probe runs under a
+# GPU slot, so a check that came too late would show in the slot's calls, the
+# reachability tool's (the backends' resolution) and dune's. The table empty
+# -- an answer that is not dune's -- leaves every alias to dune. Where a real
+# dune is at hand, the same refusals and acceptances against its own listing.
+leg_89() {
+alias_label="an alias dune does not know is ALIAS REFUSED (exit 2) before the backends, the slot and dune's build; known ones, recursive or not, run"
+alias_open_label="an answer that is not dune's leaves the aliases to dune"
+alias_real_label="against a real dune: an unknown alias is refused, known ones run"
+alias_detail=
+alias_table=$TMP/alias-table
+mkdir -p "$repeat_root/al/sub"
+# `al/virt` has no dune file: a `(subdir ...)` stanza of al's, nested in
+# another, behind a comment and through a quoted atom, gives it its rules;
+# `al/alt` has a `dune-file`, the name a project may accept instead.
+mkdir -p "$repeat_root/al/alt"
+cat >"$repeat_root/al/dune" <<'DUNE'
+; (subdir commented (rule (alias not_this)))
+(rule (alias runtest-yes) (action (progn)))
+(subdir "virt" (subdir inner (rule (alias vinner) (action (progn))))
+ (rule (alias vdeep) (action (progn))))
+DUNE
+printf '(rule (alias deep) (action (progn)))\n' >"$repeat_root/al/sub/dune"
+printf '(rule (alias altname) (action (progn)))\n' >"$repeat_root/al/alt/dune-file"
+printf '%s\n' . 'al runtest-yes' 'al/alt altname' 'al/sub deep' 'al/virt vdeep' 'al/virt/inner vinner' >"$alias_table"
+alias_probe() { # tag argv...: a run under a GPU slot, with the table answering
+  REPEAT_TEST_ALIASES=$alias_table REPEAT_TEST_SHOW_CALLS=$TMP/$1.show slot_probe "$1" hold cuda cc "${@:2}"
+  alias_reach=$(cat "$TMP/$1.reach")
+}
+: >"$TMP/alias-unknown.show"
+alias_probe alias-unknown run build @al/runtest-no_such
+{ [ "$argv_rc" = 2 ] && [ -z "$argv_calls" ] && [ -z "$slot_calls" ] && [ -z "$alias_reach" ]; } ||
+  alias_detail="unknown: exit $argv_rc (want 2); dune calls: ${argv_calls:-<none>}; slot calls: ${slot_calls:-<none>}; reach calls: ${alias_reach:-<none>}"
+if [ -z "$alias_detail" ]; then
+  case $argv_out in
+    *"verdict: ALIAS REFUSED (dune knows no such alias; nothing ran) (exit 2)"*"alias refused: @al/runtest-no_such: neither al nor any directory below it defines an alias runtest-no_such"*) ;;
+    *) alias_detail="unknown: digest: $argv_out" ;;
+  esac
+fi
+# It asked for `al` first, then for the directories below it, the subdir
+# stanzas' included.
+[ -n "$alias_detail" ] || [ "$(cat "$TMP/alias-unknown.show")" = "al
+al/alt al/sub al/virt al/virt/inner" ] || alias_detail="unknown: the listings asked for: $(tr '\n' '|' <"$TMP/alias-unknown.show")"
+# Refused: one under @@ that only a subdirectory defines, one whose directory
+# dune does not know (beside a known one: dune then answers with nothing but
+# the error, and the known one is asked again), and a root one nothing defines.
+for probe in "@@al/deep|al defines no alias deep" \
+             "-j 2 --force @al/runtest-no_such|neither al nor any directory below it" \
+             "@nowhere/x @al/runtest-yes|@nowhere/x: dune knows no directory nowhere" \
+             "@./al//runtest-no_such|neither al nor any directory below it" \
+             "@runtest-no_such|neither . nor any directory below it defines an alias runtest-no_such"; do
+  [ -z "$alias_detail" ] || break
+  alias_args=${probe%%|*} alias_want=${probe#*|}
+  # shellcheck disable=SC2086 # the probe's operands, split on purpose
+  alias_probe alias-refused run build $alias_args
+  { [ "$argv_rc" = 2 ] && [ -z "$argv_calls" ] && [ -z "$slot_calls" ] &&
+    grep -qF -- "alias refused: " <<<"$argv_out" && grep -qF -- "$alias_want" <<<"$argv_out"; } ||
+    alias_detail="$alias_args: exit $argv_rc (want 2); dune calls: ${argv_calls:-<none>}; slot calls: ${slot_calls:-<none>}; digest: $argv_out"
+  if [ -z "$alias_detail" ] && grep -q 'runtest-yes' <<<"$(grep 'alias refused' <<<"$argv_out")"; then
+    alias_detail="$alias_args: a known alias was refused too: $argv_out"
+  fi
+done
+# Known: in its own directory, under @@ and @, below it, at the root, and
+# past dune's own `--` nothing is asked about; nor where an option the check
+# does not know may change dune's alias set (a profile), or the operand names
+# a build context (`@_build/default/...`): those are dune's to judge.
+for probe in "@al/runtest-yes" "@@al/runtest-yes" "@al/deep" "@deep" "@al/sub/deep @@al/sub/deep" "@al/./deep" \
+             "@./al/runtest-yes" "@al/runtest-yes -- @not/asked" \
+             "--profile release @al/runtest-no_such" "@_build/default/al/runtest-no_such" \
+             "@al/vdeep" "@vinner" "@al/altname" "--build-dir=out @out/default/al/runtest-no_such"; do
+  [ -z "$alias_detail" ] || break
+  # shellcheck disable=SC2086 # the probe's operands, split on purpose
+  alias_probe alias-known run build $probe
+  { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build $probe" ] &&
+    [ "$(grep -c '' <<<"$slot_calls")" = 1 ]; } ||
+    alias_detail="$probe: exit $argv_rc (want 0); dune calls: ${argv_calls:-<none>}; slot calls: ${slot_calls:-<none>}; digest: $argv_out"
+done
+# `plan` says run would refuse, and a `repeat` runs no iteration.
+if [ -z "$alias_detail" ]; then
+  alias_probe alias-plan plan build @al/runtest-no_such
+  case $argv_out in
+    *"aliases: run would refuse this batch (ALIAS REFUSED, exit 2)"*"@al/runtest-no_such: neither al"*) ;;
+    *) alias_detail="plan: exit $argv_rc; output: $argv_out" ;;
+  esac
+fi
+if [ -z "$alias_detail" ]; then
+  REPEAT_TEST_ALIASES=$alias_table repeat_probe alias-repeat stable 2 build @al/runtest-no_such
+  { [ "$repeat_rc" = 2 ] && [ -z "$(cat "$TMP/alias-repeat.calls")" ] &&
+    grep -qF "ALIAS REFUSED: @al/runtest-no_such" <<<"$repeat_out"; } ||
+    alias_detail="repeat: exit $repeat_rc (want 2); dune calls: $(cat "$TMP/alias-repeat.calls"); output: $repeat_out"
+fi
+# A tree the census cannot list completely leaves the whole batch to dune
+# before any query, even an @@ miss in the operand's own directory: a dune file
+# the reader cannot read (unbalanced, or holding a `#|` or `#;`, which dune
+# versions read differently), or one importing another file anywhere -- a
+# `dynamic_include`, which loading its directory would build, or a static
+# `include`, which can import one -- also behind a comment or as a quoted head.
+for probe in "unread|(rule (alias odd)" "block|(rule (action (run echo #|x)))" \
+             "include|(subdir x (include rules.inc))" "dynamic|(subdir x (dynamic_include gen/rules.inc))" \
+             "commented|(; a comment
+ dynamic_include gen/rules.inc)" "quoted|(\"include\" rules.inc)"; do
+  [ -z "$alias_detail" ] || break
+  mkdir -p "$repeat_root/al/odd"
+  printf '%s\n' "${probe#*|}" >"$repeat_root/al/odd/dune"
+  alias_probe "alias-${probe%%|*}" run build @al/runtest-no_such
+  { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build @al/runtest-no_such" ]; } ||
+    alias_detail="${probe%%|*} below: exit $argv_rc (want 0); dune calls: ${argv_calls:-<none>}; digest: $argv_out"
+  if [ -z "$alias_detail" ]; then
+    alias_want=0
+    : >"$TMP/alias-${probe%%|*}-own.show"
+    alias_probe "alias-${probe%%|*}-own" run build @@al/runtest-no_such
+    [ "$argv_rc" = "$alias_want" ] || alias_detail="${probe%%|*} below, @@: exit $argv_rc (want $alias_want): $argv_out"
+    [ -n "$alias_detail" ] || [ ! -s "$TMP/alias-${probe%%|*}-own.show" ] ||
+      alias_detail="${probe%%|*} below: dune was asked for a listing: $(cat "$TMP/alias-${probe%%|*}-own.show")"
+  fi
+  rm -rf "$repeat_root/al/odd"
+done
+if [ -z "$alias_detail" ]; then report 0 "$alias_label"; else report 1 "$alias_label" "$alias_detail"; fi
+# The fixture dune with no table prints nothing for the listing: not dune's
+# answer, so the check decides nothing and dune runs the batch.
+slot_probe alias-open hold cuda cc run build @al/runtest-no_such
+if [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build @al/runtest-no_such" ]; then
+  report 0 "$alias_open_label"
+else
+  report 1 "$alias_open_label" "exit $argv_rc (want 0); dune calls: ${argv_calls:-<none>}; digest: $argv_out"
+fi
+rm -rf "$repeat_root/al"
+# A real dune's listing, in a project of its own: the format the check reads
+# is dune's, not only the fixture's.
+alias_real=$( (command -v dune >/dev/null 2>&1 || . "$HERE/opam-env.sh" >/dev/null 2>&1
+  command -v dune) 2>/dev/null) || alias_real=
+if [ -z "$alias_real" ]; then
+  skip "$alias_real_label" "no dune on PATH, nor through tools/opam-env.sh"
+else
+  alias_root=$TMP/alias-real
+  mkdir -p "$alias_root/tools" "$alias_root/scripts" "$alias_root/al/sub"
+  cp "$SRC" "$alias_root/tools/test-run.sh"
+  if ! stage_sourced "$alias_root"; then
+    report 1 "$alias_real_label" "cannot stage what test-run.sh sources: $stage_error"
+  else
+    printf '(lang dune 3.20)\n' >"$alias_root/dune-project"
+    printf '(rule (alias runtest-yes) (action (progn)))\n(subdir virt (rule (alias vdeep) (action (progn))))\n' \
+      >"$alias_root/al/dune"
+    printf '(rule (alias deep) (action (progn)))\n' >"$alias_root/al/sub/dune"
+    # A checkout, so the directories come from git's listing, one of them under
+    # a name git quotes unless asked for it verbatim (Codex review round 5).
+    mkdir -p "$alias_root/al/café"
+    printf '(rule (alias cafealias) (action (progn)))\n' >"$alias_root/al/café/dune"
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$alias_root" init -q
+    alias_real_detail=
+    alias_real_run() { # tag argv...
+      local rc=0
+      (cd "$alias_root" && PATH=$(dirname "$alias_real"):$PATH OCANNL_TOOL_TEST_RUNS=$TMP/$1-runs \
+        tools/test-run.sh run "${@:2}") >"$TMP/$1.out" 2>&1 || rc=$?
+      alias_real_rc=$rc
+    }
+    for probe in "2|build @al/runtest-no_such @al/deep|alias refused: @al/runtest-no_such: neither al" \
+                 "2|build @@al/deep|alias refused: @@al/deep: al defines no alias deep" \
+                 "2|build @nowhere/x @al/runtest-yes|alias refused: @nowhere/x: dune knows no directory nowhere" \
+                 "0|build @al/deep @@al/runtest-yes @deep @al/vdeep @vdeep @al/cafealias|verdict: pass"; do
+      IFS='|' read -r want args text <<<"$probe"
+      # shellcheck disable=SC2086 # the probe's operands, split on purpose
+      alias_real_run alias-real $args
+      { [ "$alias_real_rc" = "$want" ] && grep -qF -- "$text" "$TMP/alias-real.out"; } ||
+        { alias_real_detail="$args: exit $alias_real_rc (want $want): $(cat "$TMP/alias-real.out")"; break; }
+      [ "$want" = 0 ] || [ "$(grep -c '^alias refused: ' "$TMP/alias-real.out")" = 1 ] ||
+        { alias_real_detail="$args: not exactly one refusal: $(cat "$TMP/alias-real.out")"; break; }
+    done
+    if [ -z "$alias_real_detail" ]; then report 0 "$alias_real_label"; else report 1 "$alias_real_label" "$alias_real_detail"; fi
+  fi
+fi
+}
+harness_leg_run '89: an alias dune does not know is refused before the slot #options' leg_89
+
+# ---------------------------------------------------------------------------
+# Leg 90: the runner's own variables never reach dune (gh-ocannl-1448)
+# ---------------------------------------------------------------------------
+# The supervisor and the run's phases are handed their directories through
+# OCANNL_TOOL_TESTRUN_BG, _RD and _OWN; dune, and every test it starts, used to
+# inherit all three (only _RUNNER was taken out). A fixture dune records the
+# names of its environment on every path a batch's dune is started from: a
+# plain run, a GPU run whose device probe execs dune inside the slot, and the
+# iterations of a repeat with that probe. A planted plain variable must still
+# pass, or the observer proves nothing.
+leg_90() {
+env_label="the runner's own variables (OCANNL_TOOL_TESTRUN_*) reach no dune: a run, a probed GPU run under a slot, a probed repeat"
+env_detail=
+env_names=$TMP/env-names
+env_check() { # what: the names recorded since the last call, judged
+  if [ ! -s "$env_names" ]; then
+    env_detail="$1: the fixture dune recorded no environment"
+  elif grep -q '^OCANNL_TOOL_TESTRUN_' "$env_names"; then
+    env_detail="$1: dune saw $(grep '^OCANNL_TOOL_TESTRUN_' "$env_names" | sort -u | tr '\n' ' ')"
+  elif ! grep -qx ENV_TEST_PLAIN "$env_names"; then
+    env_detail="$1: dune did not see ENV_TEST_PLAIN"
+  fi
+  : >"$env_names"
+}
+: >"$env_names"
+ENV_TEST_PLAIN=kept REPEAT_TEST_ENV_NAMES=$env_names argv_mode=env_names argv_probe env-run run build @cheap
+[ "$argv_rc" = 0 ] || env_detail="run: exit $argv_rc: $argv_out"
+[ -n "$env_detail" ] || env_check run
+if [ -z "$env_detail" ]; then
+  ENV_TEST_PLAIN=kept REPEAT_TEST_ENV_NAMES=$env_names argv_mode=env_names \
+    probe_run env-probe hip cc "" "" run build @cheap
+  { [ "$argv_rc" = 0 ] && [ "$probe_calls" = "$(cd "$repeat_root" && pwd -P)/test/config --ocannl_backend=hip" ]; } ||
+    env_detail="probed run: exit $argv_rc; probes: ${probe_calls:-<none>}; digest: $argv_out"
+  [ -n "$env_detail" ] || env_check "probed run"
+fi
+if [ -z "$env_detail" ]; then
+  ENV_TEST_PLAIN=kept REPEAT_TEST_ENV_NAMES=$env_names argv_mode=env_names \
+    probe_run env-repeat hip cc "" "" repeat 2 build @cheap
+  [ "$argv_rc" = 0 ] || env_detail="probed repeat: exit $argv_rc: $argv_out"
+  [ -n "$env_detail" ] || [ "$(grep -c '' <<<"$probe_calls")" = 2 ] ||
+    env_detail="probed repeat: the device was not probed before each iteration: ${probe_calls:-<none>}"
+  [ -n "$env_detail" ] || env_check "probed repeat"
+fi
+if [ -z "$env_detail" ]; then report 0 "$env_label"; else report 1 "$env_label" "$env_detail"; fi
+}
+harness_leg_run '90: the runner'\''s own variables reach no dune #credentials' leg_90
+
+# ---------------------------------------------------------------------------
 # Leg 82: bisect (gh-ocannl-1225)
 # ---------------------------------------------------------------------------
 # A fixture repository whose commits each carry a STATE the fixture dune
@@ -7158,6 +7534,9 @@ else
   mkdir -p "$bi_bin"
   cat >"$bi_bin/dune" <<'EOF'
 #!/usr/bin/env bash
+# The alias check's listing (gh-ocannl-1448) is no call of the bisect's: an
+# empty answer, which leaves every alias to dune.
+[ "${1:-}" != show ] || exit 0
 st=$(cat STATE 2>/dev/null)
 printf '%s %s tree=%s runner=%s :: %s\n' "$st" "${OCANNL_BACKEND:-<unset>}" \
   "${OCANNL_TOOL_TESTRUN_TREE-<unset>}" "${OCANNL_TOOL_TESTRUN_RUNNER-<unset>}" "$*" >>"$BISECT_CALLS"

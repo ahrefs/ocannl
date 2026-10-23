@@ -989,6 +989,25 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   deadline is 124, and `status` exits 0 published / 3 running / 1 died without a verdict — it
   reports publication, never the verdict. `tools/test-test-run.sh` legs 29–32 pin all of this
   against a fixture dune that emits dune's exact refusal stderr, with the red-run and guard controls.
+  One refusal is asked of dune BEFORE the batch (gh-ocannl-1448): a `dune build` alias operand dune
+  does not know (`@test/operations/runtest-misspelt`) used to surface only after the launch had
+  resolved the backends, waited for and taken the fleet slot and probed the device. `_resolve`
+  now first asks `dune show aliases DIR...` (a listing that builds nothing; dune 3.24 prints it on
+  stderr and exits 0 even for an unknown directory, answering a query that names one with
+  nothing but the error), and an alias absent from its directory -- and, under `@`, from every
+  dune directory below it -- is `ALIAS REFUSED` (exit 2, nothing ran; `plan` says run would refuse
+  it). It refuses only on an answer that reads as dune's (every known directory lists the standard
+  `default`), and only for an argv whose options are all on its allow-list of ones that cannot
+  change what aliases dune defines (`--profile`, `--workspace`, `-p` and the like leave the batch
+  to dune, as does a context-qualified `@_build/CONTEXT/...`). The directories below an operand's
+  are those holding a `dune` (or `dune-file`) and those its `(subdir ...)` stanzas give rules to,
+  read by a deliberately small s-expression reader that is fail-closed on what it does not model
+  (`#|`, `#;`). The census runs before any query, and a tree it cannot list completely -- a file
+  it cannot read, or one importing another file anywhere (`include`, which can import a subdir or
+  a `dynamic_include`; a `dynamic_include`, which loading that directory's rules would build
+  outside the slot), decided on its tokens -- leaves the whole batch to dune. So a fixture dune with no `show` branch leaves the aliases to dune; a fixture that
+  records its calls must answer `show` without recording it. Leg 89 pins it against a table-driven
+  fixture listing and, where a dune is at hand, a real one.
   `repeat [--alone] N` is the supported flake diagnostic (`--direct` for per-test aliases: one
   build, then replays; see Dune mechanics below): it holds that same worktree lock once,
   gives every Dune invocation a freshly cleaned cache-disabled build context, retains each
@@ -1243,6 +1262,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   Continued unquoted heredoc bodies are refused because removing their escaped newlines can change
   delimiter recognition; quoted bodies retain those newlines. Its header names the supported
   delimiter grammar and its explicit refusals (gh-ocannl-907).
+- macOS's bash 3.2 cannot parse a comment holding an apostrophe inside a process substitution
+  (`< <( # this tree's ...`): the error (a "bad substitution", no closing parenthesis) comes only when the
+  line RUNS, never from `bash -n`, and a fail-open caller then reads it as an empty answer
+  (gh-ocannl-1448's census did, and only leg 89 noticed). Put such a body in a function and
+  substitute the call.
 - The third inert shape, which no scan refuses: an assertion INSIDE `$(…)`. Outside POSIX mode
   bash clears `-e` in a command substitution (unless `shopt -s inherit_errexit`, which macOS's bash
   3.2 lacks), so `out=$(check_a; check_b)` runs on past a failing `check_a`; only the last command's
@@ -1275,6 +1299,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   scopes it; the fleet-side fix for that is not exporting the token into every session.
   `env_var_deps` reads the same line and refuses a stanza declaring a match as `(env_var ...)` or
   reading one through `%{env:NAME=...}`, and a test source reading one by name (`Sys.getenv`).
+  Nor do the runner's own variables reach dune (gh-ocannl-1448): the supervisor deletes
+  `OCANNL_TOOL_TESTRUN_BG`, `_RD`, `_OWN` and `_RUNNER` from its environment before it forks, and
+  a phase of the run that needs its directory (`_resolve`, `_probe`, `_direct_plan`) is handed it
+  as `env NAME=VALUE` on its own command line and unsets it on entry. A fixture that must tell the
+  runner's own `--trace-file` apart therefore recognises it by where it points -- a directory
+  holding a run's `wt`, `cap` and `log` -- not by an environment variable naming the run (leg 90
+  of `tools/test-test-run.sh`; leg 84's replay compares an environment with no exemption for
+  them).
   Pinned by leg 79 of `tools/test-test-run.sh` (a fixture dune's environment, the opam environment
   `select_dune` sources, `tools/dune-quiet.sh` run directly, and a real dune's trace where one is on
   PATH), `credential_free` in the sweep harness (local and remote legs, the remote one with
@@ -4185,10 +4217,16 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   the boot time, which the resume skewed), and the cap ended the run. A test is born where the
   watcher first lists it, less its etime clamped to the time since the previous listing (which
   did not show it), so a skewed etime moves a birth by at most one poll, and an exec that renames
-  it (a wrapper handing over) does not restart its age, only a new pid or parent does; the clock stops while
+  it (a wrapper handing over) does not restart its age, only a new pid, parent or start token does
+  (gh-ocannl-1448: a process given the test's pid under the same dune within one poll would
+  otherwise inherit its age); the clock stops while
   the host sleeps (`CLOCK_UPTIME_RAW` on macOS, `CLOCK_MONOTONIC` on Linux), so a suspend never
-  counts against a test either. Leg 75 serves the watcher a stub `ps` with that etime, and
-  times a test that execs itself under ten names. (2) **The
+  counts against a test either. The start token is `/proc/<pid>/stat`'s starttime on Linux (field
+  22, kernel clock ticks since boot, not procps's boot-time-derived wall time, which the same
+  resume skews) and `ps -o lstart=` elsewhere; an unreadable one decides nothing. Leg 75 serves the
+  watcher a stub `ps` with that etime, and times a test that execs itself under ten names; leg 91
+  advances a test's starttime through the watcher's `/proc` seam (`OCANNL_TOOL_TEST_CAP_PROC`) and
+  it is never capped, while a steady one is. (2) **The
   device probe**: a batch `run` resolves to hold a GPU backend queries each such backend once,
   through `bin/device_props --ocannl_backend=<b>` from `test/config`. Build and query both run
   inside the fleet slot, as the slot's command (`_probe`, which then execs dune): a measurement

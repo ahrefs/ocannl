@@ -206,7 +206,10 @@
 # And a run whose batch does not hold a backend its `--expect-backend` names
 # exits 2 under the verdict `BACKEND REFUSED`, dune never started (see
 # plan_backend_check: a GPU box's batch that resolved to cc only says so even
-# without the option).
+# without the option). A `dune build` naming an alias dune does not know
+# (`@test/operations/runtest-misspelt`) exits 2 under the verdict `ALIAS
+# REFUSED`, asked of dune before the batch's backends, the slot or the device
+# probe, and dune's build never started (see plan_aliases).
 #
 # Everything after the options is dune's argv, verbatim (default: `runtest`):
 #   tools/test-run.sh run runtest test/operations
@@ -705,6 +708,288 @@ plan_test_cap() { # <requested, empty for the default> dune-argv
   test_cap=$TEST_CAP_DEFAULT test_cap_why="the default for a GPU batch"
 }
 
+# An alias dune does not know (gh-ocannl-1448). A misspelled `@DIR/runtest-NAME`
+# used to be found by dune itself, after the launch had resolved the batch's
+# backends (a build of the readers), taken the fleet's slot and probed the
+# device: on a GPU box the slot's wait, at worst a full one, bought nothing but
+# dune's "Alias ... is empty". So `_resolve` asks dune first, before any of
+# those: `dune show aliases DIR...`, a listing that loads the directories' rules
+# and builds nothing, for every `@` and `@@` operand of a `dune build` before
+# dune's own `--`. An alias is known as dune resolves one on its command line:
+# `@@DIR/NAME` where DIR's listing holds NAME, `@DIR/NAME` where DIR's or that of
+# any directory below it does (the directories holding a dune file, as the
+# tracked tree lists them, or as `find` does outside a checkout's top level); a
+# DIR dune does not know ("Directory DIR does not exist") is no alias at all.
+# Every unknown one refuses the batch: ALIAS REFUSED, exit 2, nothing ran.
+#
+# The check refuses only on dune's own, conclusive answer, and is otherwise
+# silent and lets dune decide, as before: a listing that does not read as dune
+# 3.20-3.24's (the listing on either stream, `DIR:` headers when it names more
+# than one directory, one alias name per line, `Error: Directory DIR does not
+# exist.`), a directory whose listing lacks dune's standard `default` alias, a
+# failed or timed-out query, an argv carrying any dune option not known to
+# leave the alias set alone (`--profile`, `--root`, `--workspace`, `-p`, ... --
+# plan_aliases holds the allow-list), and an operand that is not a plain
+# relative `DIR/NAME` (an absolute path, a `..` or an inner `.` segment, or a
+# `_`-led directory such as a context's `_build/CONTEXT/`). The directories
+# below an operand's are those holding a dune file and those its `(subdir ...)`
+# stanzas give rules to (alias_dirs_perl); a dune file that does not read
+# leaves the recursive misses to dune. The query's trace goes to a file of the
+# run's, so the shared `_build/trace.csexp` is not rewritten.
+alias_refusal=  # why the batch is refused, one unknown alias per line; empty for none
+alias_listing_perl='
+  # <raw listing> <dir>...: the listing of these directories, as "+ DIR" (dune
+  # knows it), "- DIR" (it does not) and "= DIR NAME", tab-separated. Exit 3
+  # where the listing does not read as dune; exit 4, with only the "- DIR"
+  # lines, where it names directories dune does not know and lists nothing,
+  # which is how dune answers a query naming one: ask again without them.
+  my ($raw, @dirs) = @ARGV;
+  my %dir = map { $_ => 1 } @dirs;
+  open my $fh, "<", $raw or exit 3;
+  my ($cur, %names, %absent, $listed);
+  $cur = $dirs[0] if @dirs == 1;
+  while (my $l = <$fh>) {
+    $l =~ s/\r?\n\z//;
+    next if $l eq "";
+    if ($l =~ /^Error: Directory (.*) does not exist\.$/ && $dir{$1}) { $absent{$1} = 1; next }
+    $listed = 1;
+    if (@dirs > 1 && $l =~ /^(.*):$/ && $dir{$1}) { $cur = $1; $names{$cur} ||= []; next }
+    exit 3 unless $l =~ /^[A-Za-z0-9_.+-]+$/ && defined $cur;
+    push @{ $names{$cur} }, $l;
+  }
+  if (%absent && !$listed) {
+    print "-\t$_\n" for grep { $absent{$_} } @dirs;
+    exit 4;
+  }
+  for my $d (@dirs) {
+    if ($absent{$d}) { print "-\t$d\n"; next }
+    exit 3 unless grep { $_ eq "default" } @{ $names{$d} || [] };
+    print "+\t$d\n";
+    print "=\t$d\t$_\n" for @{ $names{$d} };
+  }
+'
+alias_listing() { # <listing file> dir...; 0 with the parsed listing in it, 1 inconclusive
+  local out=$1 rc d left
+  shift
+  : >"$out" || return 1
+  while :; do
+    rc=0
+    promotion_bounded "$DUNE" show aliases --trace-file="$run_dir/aliases.trace" "$@" >"$out.raw" 2>&1 ||
+      rc=1
+    [ "$rc" != 0 ] || perl -e "$alias_listing_perl" "$out.raw" "$@" >>"$out" || rc=$?
+    rm -f "$out.raw" "$run_dir/aliases.trace"
+    [ "$rc" = 4 ] || break
+    # Every directory the answer named is out; the others are asked again, and
+    # each round asks for fewer.
+    left=()
+    for d do alias_listed - "$d" "" "$out" || left+=("$d"); done
+    [ ${#left[@]} -gt 0 ] || { rc=0; break; }
+    [ ${#left[@]} -lt $# ] || { rc=1; break; }
+    set -- "${left[@]}"
+  done
+  [ "$rc" = 0 ]
+}
+# The directories a dune file's `(subdir NAME ...)` stanzas give rules to, which
+# hold no dune file of their own (gh-ocannl-1448, Codex review round 2): a
+# reader of dune's s-expressions -- `;` line comments, quoted and plain atoms,
+# and nothing else -- that walks every stanza, nested `subdir`s included.
+# Input: dune file paths (`dune`, or `dune-file` where a project accepts that
+# name); output: their directories and the logical ones below them. It is
+# fail-closed on what it does not model: exit 3 where a file does not read (an
+# unbalanced form, a `#|` or `#;`, which dune versions read differently) or
+# takes stanzas from another file (an `include` or `dynamic_include`, at any
+# depth, Codex review round 3), and the caller then leaves the batch to dune.
+alias_dirs_perl='
+  my $bad = 0;
+  for my $f (@ARGV) {
+    my $dir = $f =~ m{^dune(?:-file)?$} ? "." : ($f =~ m{^(.*)/dune(?:-file)?$} ? $1 : next);
+    print "$dir\n";
+    open my $fh, "<", $f or do { $bad = 1; next };
+    local $/;
+    my $t = <$fh>;
+    close $fh;
+    my (@tok, $ok);
+    $ok = eval {
+      pos($t) = 0;
+      while (pos($t) < length $t) {
+        if ($t =~ /\G\s+/gc || $t =~ /\G;[^\n]*/gc) { next }
+        # `#|` and `#;` are where dune readings differ (comments in some
+        # versions, atom text in others): a file holding one is not read.
+        die if $t =~ /\G#[|;]/gc;
+        if ($t =~ /\G([()])/gc) { push @tok, [$1]; next }
+        if ($t =~ /\G"((?:[^"\\]|\\.)*)"/gcs) { push @tok, ["a", $1]; next }
+        if ($t =~ /\G([^\s();"]+)/gc) { push @tok, ["a", $1]; next }
+        die;
+      }
+      1;
+    };
+    unless ($ok) { $bad = 1; next }
+    # Into nested lists.
+    my @stack = ([]);
+    for my $k (@tok) {
+      if ($k->[0] eq "(") { push @stack, []; next }
+      my $x;
+      if ($k->[0] eq ")") { @stack > 1 or do { $bad = 1; last }; $x = pop @stack }
+      else { $x = $k->[1] }
+      push @{ $stack[-1] }, $x;
+    }
+    if (@stack != 1) { $bad = 1; next }
+    my $walk;
+    $walk = sub {
+      my ($at, $forms) = @_;
+      for my $s (@$forms) {
+        # Stanzas read from another file -- `(include FILE)`, a generated
+        # `(dynamic_include ...)` -- may hold subdirs this reader never sees.
+        if (ref $s && @$s && !ref $s->[0] && $s->[0] =~ /^(?:include|dynamic_include)$/) { $bad = 1; next }
+        next unless ref $s && @$s >= 2 && !ref $s->[0] && $s->[0] eq "subdir";
+        my $name = $s->[1];
+        if (ref $name || $name !~ m{^[A-Za-z0-9_.+-]+(?:/[A-Za-z0-9_.+-]+)*$} || $name =~ m{(?:^|/)\.\.?(?:/|$)}) {
+          $bad = 1;
+          next;
+        }
+        my $sub = $at eq "." ? $name : "$at/$name";
+        print "$sub\n";
+        $walk->($sub, [ @$s[2 .. $#$s] ]);
+      }
+    };
+    $walk->($dir, $stack[0]);
+  }
+  exit($bad ? 3 : 0);
+'
+alias_dune_files() { # the dune files of this tree, NUL-terminated
+  (
+    # This tree's own listing, whatever repository an inherited GIT_DIR names
+    # (as record_checkout).
+    # shellcheck disable=SC2046 # a list of variable names, split on purpose
+    unset $(git rev-parse --local-env-vars 2>/dev/null)
+    if [ "$(git rev-parse --is-inside-work-tree --show-prefix 2>/dev/null)" = true ]; then
+      git ls-files -z --cached --others --exclude-standard -- dune '*/dune' dune-file '*/dune-file' 2>/dev/null
+    else
+      find . \( -name _build -o -name .git \) -prune -o \( -name dune -o -name dune-file \) -type f -print0 2>/dev/null
+    fi
+  )
+}
+alias_dune_dirs() { # the directories holding a dune file or a subdir's rules, `.` for the top; 1 incomplete
+  local list=() f
+  # NUL-delimited, so a path git would quote (a non-ASCII name) is read as
+  # itself (Codex review round 5).
+  while IFS= read -r -d '' f; do
+    [ ! -f "$f" ] || list+=("$f")
+  done < <(alias_dune_files)
+  [ ${#list[@]} -gt 0 ] || return 1
+  list=("${list[@]#./}")
+  perl -e "$alias_dirs_perl" "${list[@]}" >"$run_dir/aliases.dirs" || return 1
+  sort -u "$run_dir/aliases.dirs"
+  rm -f "$run_dir/aliases.dirs"
+}
+plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal
+  local arg spec rec d name i n all=
+  local specs=() recs=() spec_dirs=() names=() first=() rest=()
+  alias_refusal=
+  [ "${1:-}" = build ] || return 0
+  shift
+  # Every option before dune's `--` must be one known to leave the set of
+  # aliases as `show aliases` sees it: a profile, a workspace, a root, a
+  # package selection, a context -- anything else -- can change what dune
+  # defines, so its presence leaves the whole batch to dune (an allow-list, so
+  # an option dune adds later fails open). A separate value is skipped with it.
+  local value=
+  for arg do
+    if [ -n "$value" ]; then value=; continue; fi
+    case $arg in
+      --) break ;;
+      -j | --cache | --display | --diff-command | --trace-file | --error-reporting | --sandbox)
+        value=1; continue ;;
+      -j[0-9]* | --cache=* | --display=* | --diff-command=* | --trace-file=* | --error-reporting=* | \
+        --sandbox=* | --force | -f | --auto-promote | --no-buffer | --stop-on-first-error | \
+        --action-stdout-on-success=* | --action-stderr-on-success=*)
+        continue ;;
+      -*) return 0 ;;
+      @*) ;;
+      *) continue ;;
+    esac
+    spec=${arg#@} rec=1
+    case $spec in @*) spec=${spec#@} rec=0 ;; esac
+    case $spec in */*) d=${spec%/*} name=${spec##*/} ;; *) d=. name=$spec ;; esac
+    while :; do case $d in ./*) d=${d#./} ;; */) d=${d%/} ;; *) break ;; esac; done
+    [ -n "$d" ] || d=.
+    case $name in '' | *[!A-Za-z0-9_.+-]*) continue ;; esac
+    case /$d/ in //* | */../* | *//* | *$'\n'* | *$'\t'*) continue ;; esac
+    # A `.` segment inside the path (`test/./NAME`) is dune's to resolve, and so
+    # is a path through a directory dune keeps out of the source tree by
+    # default, `_build/CONTEXT/...` (a context-qualified alias) among them.
+    [ "$d" = . ] || case /$d/ in */./* | /_*) continue ;; esac
+    specs+=("$arg") recs+=("$rec") spec_dirs+=("$d") names+=("$name")
+  done
+  n=${#specs[@]}
+  [ "$n" -gt 0 ] || return 0
+  # First each operand's own directory; then, only for a recursive one not
+  # found there, every dune directory below it, in one more query.
+  for d in "${spec_dirs[@]}"; do
+    alias_member "$d" ${first[@]+"${first[@]}"} || first+=("$d")
+  done
+  # The census comes first, and a tree it cannot list completely leaves the
+  # whole batch to dune before any query (Codex review rounds 4-6): among what
+  # makes it incomplete, a generated `(dynamic_include ...)` -- built by any
+  # dune query that loads its directory's rules, this one too, outside the
+  # slot -- and a static `(include FILE)`, which can import one, or a subdir,
+  # the census does not read. The reader decides both on its tokens, so a
+  # comment or a quoted head does not hide them.
+  all=$(alias_dune_dirs) || return 0
+  alias_listing "$run_dir/aliases.1" "${first[@]}" || return 0
+  i=0
+  while [ "$i" -lt "$n" ]; do
+    d=${spec_dirs[$i]}
+    if [ "${recs[$i]}" = 1 ] && alias_listed + "$d" "" "$run_dir/aliases.1" &&
+       ! alias_listed = "$d" "${names[$i]}" "$run_dir/aliases.1"; then
+      while IFS= read -r arg; do
+        [ -n "$arg" ] && [ "$arg" != "$d" ] || continue
+        [ "$d" = . ] || case $arg in "$d"/*) ;; *) continue ;; esac
+        alias_member "$arg" ${first[@]+"${first[@]}"} ${rest[@]+"${rest[@]}"} || rest+=("$arg")
+      done <<<"$all"
+    fi
+    i=$((i + 1))
+  done
+  : >"$run_dir/aliases.2"
+  # An inconclusive second answer leaves the recursive operands it was for to
+  # dune: only what the first answer decided refuses.
+  [ ${#rest[@]} -eq 0 ] || alias_listing "$run_dir/aliases.2" "${rest[@]}" ||
+    printf '?\n' >"$run_dir/aliases.2"
+  i=0
+  while [ "$i" -lt "$n" ]; do
+    d=${spec_dirs[$i]} name=${names[$i]}
+    if alias_listed - "$d" "" "$run_dir/aliases.1"; then
+      alias_refusal="$alias_refusal${alias_refusal:+$'\n'}${specs[$i]}: dune knows no directory $d"
+    elif alias_listed = "$d" "$name" "$run_dir/aliases.1"; then
+      :
+    elif [ "${recs[$i]}" = 0 ]; then
+      alias_refusal="$alias_refusal${alias_refusal:+$'\n'}${specs[$i]}: $d defines no alias $name"
+    elif grep -qxF -e '?' "$run_dir/aliases.2"; then
+      :
+    elif ! awk -F '\t' -v d="$d" -v name="$name" \
+           '$1 == "=" && $3 == name && (d == "." || index($2, d "/") == 1) { f = 1 } END { exit !f }' \
+           "$run_dir/aliases.1" "$run_dir/aliases.2"; then
+      alias_refusal="$alias_refusal${alias_refusal:+$'\n'}${specs[$i]}: neither $d nor any directory below it defines an alias $name"
+    fi
+    i=$((i + 1))
+  done
+  rm -f "$run_dir/aliases.1" "$run_dir/aliases.2"
+}
+alias_member() { # word word...; 0 iff the first is among the rest
+  local w=$1 x
+  shift
+  for x do [ "$x" != "$w" ] || return 0; done
+  return 1
+}
+alias_listed() { # kind dir name listing-file; 0 iff the parsed listing has that line
+  local pat
+  case $1 in
+    =) pat=$(printf '=\t%s\t%s' "$2" "$3") ;;
+    *) pat=$(printf '%s\t%s' "$1" "$2") ;;
+  esac
+  grep -qxF -e "$pat" "$4"
+}
+
 select_dune() {
   # On Windows the environment rewrite is required even if dune is already on
   # PATH: opam's native output otherwise leaves an MSYS shell half-configured.
@@ -815,12 +1100,23 @@ perl -e 'use Fcntl ":flock"; exit 0' 2>/dev/null || die "perl with Fcntl not fou
 # here: dune and the tests never see it, so a test that drives this script
 # (tools/test-test-run.sh) is not redirected. A run's own phases work in the
 # tree their run recorded (`wt`, written before the supervisor exists).
+#
+# The same goes for the variables a run's own phases are handed (gh-ocannl-1448):
+# OCANNL_TOOL_TESTRUN_OWN, the run directory `_resolve` and `_probe` own, and
+# OCANNL_TOOL_TESTRUN_RD, the step directory `_direct_plan` writes into, are
+# read into shell variables here and unset, so dune and every test it starts
+# see neither. The supervisor deletes them, with the rest of its own
+# (OCANNL_TOOL_TESTRUN_BG, _RUNNER), before it forks anything (supervisor_perl),
+# and a phase gets its variable back only on its own command line, as `env
+# NAME=VALUE` ahead of the phase -- `_resolve` hands `_probe` its run that way.
+testrun_own=${OCANNL_TOOL_TESTRUN_OWN:-} testrun_rd=${OCANNL_TOOL_TESTRUN_RD:-}
+unset OCANNL_TOOL_TESTRUN_OWN OCANNL_TOOL_TESTRUN_RD
 case ${1:-} in
   _resolve | _probe)
     # Without a run to own, the phase's own check below refuses it.
-    if [ -n "${OCANNL_TOOL_TESTRUN_OWN:-}" ]; then
-      testrun_tree=$(cat "$OCANNL_TOOL_TESTRUN_OWN/wt" 2>/dev/null) && [ -n "$testrun_tree" ] ||
-        die "cannot read the tree under test from $OCANNL_TOOL_TESTRUN_OWN/wt"
+    if [ -n "$testrun_own" ]; then
+      testrun_tree=$(cat "$testrun_own/wt" 2>/dev/null) && [ -n "$testrun_tree" ] ||
+        die "cannot read the tree under test from $testrun_own/wt"
       cd -P "$testrun_tree" || die "cannot cd to the tree under test: $testrun_tree"
     fi ;;
   run | plan)
@@ -997,9 +1293,13 @@ supervisor_perl='
   # The root of the runner, where the slowest-actions reader lives -- not
   # necessarily the tree under test (a bisect step tests another) -- taken out
   # of the environment before anything is forked: nothing the run starts sees it.
+  # Nor any other variable addressed to this process (gh-ocannl-1448): a phase
+  # of the run that needs its directory is handed it on its own command line
+  # (`env OCANNL_TOOL_TESTRUN_OWN=...`), and consumes it there.
   my $runner = delete $ENV{OCANNL_TOOL_TESTRUN_RUNNER};
-  my $rd = $ENV{OCANNL_TOOL_TESTRUN_RD};
-  my $own = $ENV{OCANNL_TOOL_TESTRUN_OWN};
+  my $rd = delete $ENV{OCANNL_TOOL_TESTRUN_RD};
+  my $own = delete $ENV{OCANNL_TOOL_TESTRUN_OWN};
+  my $bg = delete $ENV{OCANNL_TOOL_TESTRUN_BG};
   my ($pid, $finishing);
   my $code_of = sub { my $st = shift; ($st & 127) ? 128 + ($st & 127) : $st >> 8 };
   # The start token of THIS process, in the rendering ps_token recomputes for
@@ -1011,7 +1311,7 @@ supervisor_perl='
     my $tok = "";
     if (open my $sf, "<", "/proc/self/stat") {
       my $s = <$sf>;
-      if ($s =~ /\)\s+(.*)$/) {
+      if ($s =~ /^(?s:.*)\)\s+(.*)$/) {
         my @f = split /\s+/, $1;
         $tok = defined $f[19] ? $f[19] : "";
       }
@@ -1203,7 +1503,7 @@ supervisor_perl='
   $SIG{ALRM} = sub { $reap->(142) };
   $SIG{INT} = sub { $reap->(130) };
   $SIG{TERM} = sub { $reap->(143) };
-  $SIG{HUP} = $ENV{OCANNL_TOOL_TESTRUN_BG} ? "IGNORE" : sub { $reap->(129) };
+  $SIG{HUP} = $bg ? "IGNORE" : sub { $reap->(129) };
   if ($own) {
     # STDOUT is the run log, shared with dune: unbuffered, so the sentinel
     # lands before the verdict file appears.
@@ -1958,7 +2258,7 @@ ps_token() {
     perl -e '
       open my $fh, "<", "/proc/$ARGV[0]/stat" or exit 0;
       my $s = <$fh>;
-      $s =~ /\)\s+(.*)$/ or exit 0;   # comm may contain spaces/parens
+      $s =~ /^(?s:.*)\)\s+(.*)$/ or exit 0;   # comm may contain spaces/parens: the LAST ") " ends it
       my @f = split /\s+/, $1;        # $f[0] is field 3 (state)
       print defined $f[19] ? $f[19] : "";
     ' "$1" 2>/dev/null
@@ -2253,7 +2553,9 @@ digest() {
   case $rc in
     0) verdict=pass ;;
     2)
-      if [ -s "$dir/backend-refused" ]; then
+      if [ -s "$dir/alias-refused" ]; then
+        verdict="ALIAS REFUSED (dune knows no such alias; nothing ran)"
+      elif [ -s "$dir/backend-refused" ]; then
         verdict="BACKEND REFUSED (the batch does not hold the backend --expect-backend names; nothing ran)"
       else
         verdict=FAIL
@@ -2338,6 +2640,7 @@ digest() {
       fi
     fi
   fi
+  [ ! -s "$dir/alias-refused" ] || sed 's/^/alias refused: /' "$dir/alias-refused"
   if [ -s "$dir/backend-refused" ]; then
     echo "backend refused: $(cat "$dir/backend-refused")"
   elif [ -s "$dir/backend-warning" ]; then
@@ -2368,7 +2671,7 @@ digest() {
   # setup error, ran no batch, so a record beside one is not this verdict's.
   # `open` marks a process the run's end cut short, its seconds a lower bound.
   case $verdict in
-    INVOCATION* | SLOT* | DEVICE* | ERROR* | BACKEND*) ;;
+    INVOCATION* | SLOT* | DEVICE* | ERROR* | BACKEND* | ALIAS*) ;;
     *)
       if [ -s "$dir/slowest" ]; then
         echo "slowest actions (this run's dune trace, by tools/action-durations.sh):"
@@ -2394,6 +2697,13 @@ digest() {
         [ ! -e "$dir/build" ] ||
           echo "the fresh build directory survived its run (remove it): $dir/build"
       fi ;;
+  esac
+  case $verdict in
+    ALIAS*)
+      # The refusal lines above say what dune does not know; no rule ran.
+      echo "fix the alias and run again -- \`dune show aliases DIR\` lists a directory's;" \
+           "nothing was built or judged"
+      return 0 ;;
   esac
   local refused_invocation=
   case $verdict in INVOCATION*) refused_invocation=1 ;; esac
@@ -2780,7 +3090,10 @@ case $sub in
       # A resolution its supervisor ended -- its cap (142), a kill -- ran no iteration, and the set
       # exits with that status, as a run whose resolution was cut short does (repeat_exit records
       # it); a resolution that finished without its bounds is this script's own failure.
-      if [ "$resolve_rc" != 0 ]; then
+      if [ "$resolve_rc" != 0 ] && [ -s "$run_dir/alias-refused" ]; then
+        sed 's/^/test-run: repeat: ALIAS REFUSED: /; $s/$/; no iteration ran/' "$run_dir/alias-refused"
+        exit "$resolve_rc"
+      elif [ "$resolve_rc" != 0 ]; then
         printf 'test-run: repeat: the bounds were not resolved (exit %s; see %s/log), so no iteration ran\n' \
           "$resolve_rc" "$run_dir" | tee -a "$run_dir/log"
         exit "$resolve_rc"
@@ -2982,7 +3295,8 @@ case $sub in
       elif [ -z "$repeat_cancelled" ]; then
         pdir=$run_dir/plan
         mkdir "$pdir" || die "cannot create $pdir"
-        step_cmd=("${BASH:-bash}" "$runner_root/tools/test-run.sh" _direct_plan "$run_dir" "$DUNE")
+        step_cmd=(env "OCANNL_TOOL_TESTRUN_RD=$pdir" "${BASH:-bash}" "$runner_root/tools/test-run.sh" _direct_plan
+          "$run_dir" "$DUNE")
         { printf '%q ' "${step_cmd[@]}"; echo; } >"$pdir/cmd" || die "cannot record the plan's command"
         repeat_launch "$pdir" "the replay plan"
         plan_rc=$step_rc
@@ -3228,11 +3542,21 @@ case $sub in
     # this box is, writes the report to `plan` and exits. A GPU batch's device
     # probe runs inside the slot, ahead of dune (plan_device_probe, `_probe`),
     # and the per-test cap's watcher beside dune (test_cap_watch).
-    [ $# -ge 4 ] && [ -n "${OCANNL_TOOL_TESTRUN_OWN:-}" ] ||
+    [ $# -ge 4 ] && [ -n "$testrun_own" ] ||
       die "_resolve is the supervisor's first phase, not a command"
     mode=$1 cap=$2 test_cap=$3 DUNE=$4
     shift 4
-    run_dir=$OCANNL_TOOL_TESTRUN_OWN
+    run_dir=$testrun_own
+    # An alias dune does not know is refused first (plan_aliases): before the
+    # backends' resolution builds anything, and before the slot and the probe.
+    plan_aliases "$@"
+    if [ -n "$alias_refusal" ] && [ "$mode" != plan ]; then
+      { printf '%s\n' "$alias_refusal" >"$run_dir/alias-refused.tmp" &&
+          mv -f "$run_dir/alias-refused.tmp" "$run_dir/alias-refused"; } ||
+        { echo "test-run: cannot record the alias refusal in $run_dir"; exit 126; }
+      printf '%s\n' "$alias_refusal" | sed 's/^/test-run: ALIAS REFUSED: /'
+      exit 2
+    fi
     plan_slot
     expect_backends=$(cat "$run_dir/expect-backend" 2>/dev/null) || expect_backends=
     if [ "$mode" = plan ]; then
@@ -3298,6 +3622,10 @@ case $sub in
         echo "command: dune $*"
         echo "backends: $(batch_summary)"
         sed -n 's/^test-run: batch: /  /p' "$run_dir/log"
+        if [ -n "$alias_refusal" ]; then
+          echo "aliases: run would refuse this batch (ALIAS REFUSED, exit 2)"
+          printf '%s\n' "$alias_refusal" | sed 's/^/  /'
+        fi
         if [ -n "$backend_refusal" ]; then
           echo "expect-backend: run would refuse this batch (BACKEND REFUSED, exit 2)"
           printf '  %s\n' "$backend_refusal"
@@ -3374,7 +3702,8 @@ case $sub in
     set -- "$DUNE" "$@"
     if [ -n "$probe_backends" ]; then
       # shellcheck disable=SC2086  # the backend list is word-split on purpose
-      set -- "${BASH:-bash}" "$runner_root/tools/test-run.sh" _probe "$DUNE" "$probe_prog" "$probe_cap" \
+      set -- env "OCANNL_TOOL_TESTRUN_OWN=$run_dir" "${BASH:-bash}" "$runner_root/tools/test-run.sh" _probe \
+        "$DUNE" "$probe_prog" "$probe_cap" \
         $probe_backends -- "$@"
     fi
     if [ -n "$slot_fw" ]; then
@@ -3418,10 +3747,10 @@ case $sub in
     # the rule `fresh` times a test by (attribution_awk, rows mode), and has
     # tools/replay-rules.sh ask dune for their rules (`plan.json`; its exit 3/4/5 refusals pass
     # through) and snapshot their targets as dune's own run left them (`build-phase/outputs`).
-    [ $# -eq 2 ] && [ -n "${OCANNL_TOOL_TESTRUN_RD:-}" ] ||
+    [ $# -eq 2 ] && [ -n "$testrun_rd" ] ||
       die "_direct_plan is a step of repeat --direct, not a command"
     run_dir=$1 DUNE=$2
-    pdir=$OCANNL_TOOL_TESTRUN_RD
+    pdir=$testrun_rd
     if ! bash "$runner_root/tools/action-durations.sh" --tsv --dirs -n 0 "$run_dir/build-phase/trace.csexp" \
          >"$pdir/rows-dirs.tsv" 2>"$pdir/rows.err"; then
       grep -q '^action-durations.sh: no process in ' "$pdir/rows.err" ||
@@ -3449,9 +3778,9 @@ case $sub in
     # when it refuses -- the log's first line after the prelude must stay
     # dune's (dune_refusal). Asked from test/config, so the query reads the
     # configuration the tests read, with the backend pinned on its command line.
-    [ $# -ge 6 ] && [ -n "${OCANNL_TOOL_TESTRUN_OWN:-}" ] ||
+    [ $# -ge 6 ] && [ -n "$testrun_own" ] ||
       die "_probe is a run's own phase, not a command"
-    run_dir=$OCANNL_TOOL_TESTRUN_OWN
+    run_dir=$testrun_own
     DUNE=$1 probe_prog=$2 probe_cap=$3
     shift 3
     probe_backends=
@@ -3609,7 +3938,7 @@ case $sub in
     # wait and digest.
     OCANNL_TOOL_TESTRUN_BG=1 OCANNL_TOOL_TESTRUN_RD=$run_dir OCANNL_TOOL_TESTRUN_OWN=$run_dir \
       OCANNL_TOOL_TESTRUN_RUNNER=$runner_root perl -e "$supervisor_perl" -- "$cap" \
-        "${BASH:-bash}" "$runner_root/tools/test-run.sh" _resolve "$sub" "$cap" "$test_cap" "$DUNE" "$@" \
+        env "OCANNL_TOOL_TESTRUN_OWN=$run_dir" "${BASH:-bash}" "$runner_root/tools/test-run.sh" _resolve "$sub" "$cap" "$test_cap" "$DUNE" "$@" \
         </dev/null >>"$run_dir/log" 2>&1 &
     sup=$!
     # The launcher's own fd 9 copy served its purpose the moment the

@@ -106,9 +106,49 @@ test_cap_watch='
   # Each test is born where the watcher first sees it, less its ps etime but
   # never more than the time since the previous listing, which did not show it:
   # a skewed etime moves a birth by at most one poll. A pid is the same test
-  # while its parent stays and it is in every listing -- not its name, which an
-  # exec (a wrapper handing over to the test) changes, and which must not
-  # restart the test\x27s age.
+  # while its parent and its start token stay and it is in every listing -- not
+  # its name, which an exec (a wrapper handing over to the test) changes, and
+  # which must not restart the test\x27s age; an exec keeps the start token.
+  #
+  # The start token (gh-ocannl-1448) tells a test from another process the
+  # system gave its pid within one poll, under the same dune, which would
+  # otherwise inherit the first one\x27s age and be capped early: on Linux the
+  # starttime of /proc/<pid>/stat (field 22, clock ticks since boot, as the
+  # kernel keeps it -- not a wall time derived from the boot time, as procps
+  # derives etime and lstart), elsewhere ps\x27s lstart, which the kernel keeps
+  # there as a start time. A token that cannot be read (the process is gone, or
+  # neither reader answers) decides nothing: the parent alone does, as before.
+  # OCANNL_TOOL_TEST_CAP_PROC names a directory read ahead of /proc, a seam for
+  # tools/test-test-run.sh: a pid it holds a stat for is read there.
+  my @procs = ("/proc");
+  unshift @procs, $ENV{OCANNL_TOOL_TEST_CAP_PROC}
+    if defined $ENV{OCANNL_TOOL_TEST_CAP_PROC} && $ENV{OCANNL_TOOL_TEST_CAP_PROC} ne "";
+  my $procfs = -d "/proc/self";
+  my $tokens = sub { # pids -> { pid => token }
+    my (%tok, @rest);
+    for my $p (@_) {
+      for my $root (@procs) {
+        my $s;
+        if (open my $sf, "<", "$root/$p/stat") { $s = <$sf>; close $sf }
+        # The LAST ") " ends the name, which may hold both (Codex review round 7).
+        next unless defined $s && $s =~ /^(?s:.*)\)\s+(.*)$/;
+        my @f = split /\s+/, $1;
+        $tok{$p} = "t$f[19]" if defined $f[19] && $f[19] =~ /^\d+$/;
+        last;
+      }
+      push @rest, $p unless exists $tok{$p} || $procfs;
+    }
+    if (@rest) {
+      local $ENV{TZ} = "UTC";
+      my $list = join ",", @rest;
+      for (qx{ps -o pid= -o lstart= -p $list 2>/dev/null}) {
+        next unless /^\s*(\d+)\s+(\S.*?)\s*$/;
+        (my $l = $2) =~ s/\s+/ /g;
+        $tok{$1} = "l$l";
+      }
+    }
+    \%tok;
+  };
   my %born;
   my $last = $now->();
   while (getppid() == $resolver) {
@@ -145,17 +185,20 @@ test_cap_watch='
       }
     }
     my %seen;
-    for my $p (sort { $a <=> $b } keys %ppid) {
-      next unless $dune{ $ppid{$p} };
+    my @tests = sort { $a <=> $b } grep { $dune{ $ppid{$_} } } keys %ppid;
+    my $tok = @tests ? $tokens->(@tests) : {};
+    for my $p (@tests) {
       my $id = $ppid{$p};
-      if ($born{$p} && $born{$p}[0] eq $id) {
-        $seen{$p} = $born{$p};
+      my $token = defined $tok->{$p} ? $tok->{$p} : "";
+      if ($born{$p} && $born{$p}[0] eq $id
+          && ($token eq "" || $born{$p}[2] eq "" || $born{$p}[2] eq $token)) {
+        $seen{$p} = [$id, $born{$p}[1], $born{$p}[2] ne "" ? $born{$p}[2] : $token];
       } else {
         my $hint = $etime{$p} =~ /^(?:\d+-)?(?:\d+:){1,2}\d+$/ ? $seconds->($etime{$p}) : 0;
         my $gap = $t - $last;
         $hint = $gap if $hint > $gap;
         $hint = 0 if $hint < 0;
-        $seen{$p} = [$id, $t - $hint];
+        $seen{$p} = [$id, $t - $hint, $token];
       }
       my $e = int($t - $seen{$p}[1]);
       next if $e < $cap;
