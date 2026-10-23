@@ -1,0 +1,13 @@
+reading and pattern-matching a shape's fields compiles: true
+assigning the batch field is rejected as a private-type write: true
+assigning the input field is rejected as a private-type write: true
+assigning the output field is rejected as a private-type write: true
+assigning the batch_padding field is rejected as a private-type write: true
+assigning the input_padding field is rejected as a private-type write: true
+assigning the output_padding field is rejected as a private-type write: true
+assigning the padding_elem field is rejected as a private-type write: true
+assigning the closed field is rejected as a private-type write: true
+assigning the discarded_by field is rejected as a private-type write: true
+a record update of a shape is rejected as a private-type construction: true
+a record literal of a shape is rejected as a private-type construction: true
+deserializing a shape is no longer offered: true

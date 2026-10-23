@@ -135,6 +135,7 @@
   (alias runtest-doc_examples)
   (alias runtest-doc_examples_scan_cases)
   (alias runtest-doc_examples_compile_control)
+  (alias runtest-shape_private_compile_control)
   (alias runtest-changelog_unreleased_scan)
   (alias runtest-agents_md_size)
   (alias runtest-cache_version_history)
@@ -3415,6 +3416,28 @@
  (libraries base stdio unix test_utils arrayjit.verdict)
  (action
   (run %{test} %{ocamlc} %{lib:arrayjit.context:context.cmi})))
+
+; gh-ocannl-1506: Shape.t is a private record behind the closed-shape guard's setters. Real ocamlc
+; programs against the built interface: reads compile, every write and construction is rejected.
+
+(test
+ ; ocannl-backend: none -- invokes ocamlc on snippets against the built Shape interface; it executes no backend.
+ (name shape_private_compile_control)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  %{lib:neural_nets_lib.tensor:ocannl_tensor.cmi}
+  %{lib:neural_nets_lib.tensor:ocannl_tensor__Row.cmi}
+  %{lib:neural_nets_lib.tensor:ocannl_tensor__Shape.cmi}
+  %{lib:base:base.cmi})
+ (modules shape_private_compile_control)
+ (libraries base stdio unix arrayjit.verdict)
+ (action
+  (run
+   %{test}
+   %{ocamlc}
+   %{lib:neural_nets_lib.tensor:ocannl_tensor__Shape.cmi}
+   %{lib:base:base.cmi})))
 
 ; How both consistency scanners read a source file, exercised on hostile input rather than only
 ; on whatever the library sources happen to contain today.

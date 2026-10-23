@@ -84,7 +84,7 @@ open Base
 
 type padding = Row.axis_padding array option [@@deriving sexp, equal]
 
-type t = {
+type t = private {
   mutable batch : Row.t;
   mutable input : Row.t;
   mutable output : Row.t;
@@ -109,7 +109,10 @@ type t = {
   id : int;  (** A node that has the same shape as this shape, or [-1]. *)
   debug_name : string;
 }
-[@@deriving equal, sexp]
+[@@deriving equal, sexp_of]
+(** Private (gh-ocannl-1506): fields are read and matched freely, but only [Shape]'s guarded setters
+    write them and only [Shape] constructs a shape, so the closed-shape guard cannot be bypassed.
+    The privacy is shallow: a padding array read off a shape is still a mutable array. *)
 
 type deduce_within_shape = Not_constrained | Input_equals_output [@@deriving compare, sexp]
 
@@ -378,8 +381,9 @@ val with_taint_on_failure : describe:(exn -> string) -> (unit -> 'a) -> 'a
 (** Runs [f]; if it raises after the session was mutated, taints the session with [describe exn],
     then re-raises with the original backtrace. *)
 
-val on_closure : (unit -> unit) ref
-(** Called at the end of every successful closure ([Tensor] records its checkpoint). *)
+val set_on_closure : (unit -> unit) -> unit
+(** Installs the hook called at the end of every successful closure ([Tensor] records its checkpoint
+    there). *)
 
 val check_can_rewind : unit -> unit
 (** Raises when called within a construction window. *)
