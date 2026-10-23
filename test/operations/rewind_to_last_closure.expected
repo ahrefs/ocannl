@@ -71,6 +71,13 @@ and leaves no step behind: the target's own shape still closes as its data says:
 a %cd assignment reading a discarded tensor is refused, naming the rewind: true
 and the refusal taints nothing: true
 a failing parameter post-processing hook taints the session: true
+the discarded draw's dims were never forced: true
+Context.set_values on a discarded node is refused, naming the rewind: true
+Context.copy of a discarded node is refused, naming the rewind: true
+Context.decision_surface over a discarded program is refused, naming the rewind: true
+no refusal computed the discarded node's dims: true
+Context.lowered_for_decisions lowers a closed program: true
+tainted: Context.lowered_for_decisions over the closed program is refused, naming the failure: true
 the hand-made node shares an open tensor's id and namespace: true
 the open tensors' nodes are discarded: true
 the hand-made node created in the window is not: it is written through the context: true

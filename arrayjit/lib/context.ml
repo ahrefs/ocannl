@@ -443,25 +443,31 @@ let payload_of (r : _ BI.routine) =
     lp_outputs = r.BI.outputs;
   }
 
+(* The frontend's session gate and stale-node check (gh-ocannl-1301), run by every entry point that
+   lowers a program: a tainted inference session lowers nothing, and no program is lowered over a
+   node the frontend discarded -- lowering forces the nodes' dims, which for a discarded node would
+   fail as an unrelated shape error rather than name the rewind (gh-ocannl-1505). *)
+let frontend_gate ?prelowered comp =
+  !Tn.session_gate ();
+  Option.iter !Tn.validity_check ~f:(fun check ->
+      let read, written = Ir.Assignments.collect_nodes_guess_output comp.Ir.Assignments.asgns in
+      Set.iter
+        (Set.union_list (module Tn) [ read; written; comp.Ir.Assignments.embedded_nodes ])
+        ~f:check;
+      (* A prelowered program replaces the comp's lowering: its nodes are the ones that run. *)
+      Option.iter prelowered ~f:(fun (p : Ir.Low_level.optimized) ->
+          Hashtbl.iter_keys p.traced_store ~f:check))
+
+(* The stale-node check alone, for the entry points over one node (host transfers, copies): run
+   before anything of [tn] is forced, for the same reason (gh-ocannl-1505). *)
+let check_node_valid tn = Option.iter !Tn.validity_check ~f:(fun check -> check tn)
+
 let compile_outcome ?name ?lowered_transform ?prelowered ~provenance ?candidate ?retain ctx comp
     bindings =
   (* Raised, not returned as an outcome: a dead handle is the caller's error, not a property of any
      candidate, and no search over it can succeed. *)
   check_live ~fn:"compile" ctx;
-  (* The frontend's session gate and stale-node check (gh-ocannl-1301): a tainted inference session
-     compiles nothing, and no program reaches the backend over a node the frontend discarded. *)
-  let frontend_gate () =
-    !Tn.session_gate ();
-    Option.iter !Tn.validity_check ~f:(fun check ->
-        let read, written = Ir.Assignments.collect_nodes_guess_output comp.Ir.Assignments.asgns in
-        Set.iter
-          (Set.union_list (module Tn) [ read; written; comp.Ir.Assignments.embedded_nodes ])
-          ~f:check;
-        (* A prelowered program replaces the comp's lowering: its nodes are the ones that run. *)
-        Option.iter prelowered ~f:(fun (p : Ir.Low_level.optimized) ->
-            Hashtbl.iter_keys p.traced_store ~f:check))
-  in
-  frontend_gate ();
+  frontend_gate ?prelowered comp;
   (* Compile and link on the backend context; only backend-independent routine components (and the
      rewrapped context) escape the dispatch. Unwrapped rather than through [Backends.with_backend]
      so that a [retain]ed link (gh-ocannl-1440) can rewrap the context it links later. *)
@@ -522,7 +528,7 @@ let compile_outcome ?name ?lowered_transform ?prelowered ~provenance ?candidate 
                       (fun () ->
                         Ir.Schedule_outcome.protect ~classify_backend:Backend.classify_failure
                           ~provenance ~phase:Ir.Schedule_outcome.Backend_link ?candidate (link code));
-                    rt_gate = frontend_gate;
+                    rt_gate = (fun () -> frontend_gate ?prelowered comp);
                     rt_relinked = Atomic.make false;
                   }
               with exn ->
@@ -868,7 +874,7 @@ let copy_nd (src : Nd.t) : Nd.t =
     not present in the context (and has no host-init data or for-print proxy). *)
 let to_host ctx (tn : Tn.t) : Nd.t =
   check_live ~fn:"to_host" ctx;
-  Option.iter !Tn.validity_check ~f:(fun check -> check tn);
+  check_node_valid tn;
   check_not_poisoned ctx;
   (* An [\@|] slice view is addressed through its parent (gh-ocannl-293 293a): an eligible slice
      owns no buffer, and an ineligible (copy) slice's value is recomputed from the parent each run.
@@ -937,7 +943,7 @@ let to_host ctx (tn : Tn.t) : Nd.t =
     context in which [tn] is marked initialized (so a subsequent {!run} reading [tn] succeeds). *)
 let from_host ctx (tn : Tn.t) (nd : Nd.t) : t =
   check_live ~fn:"from_host" ctx;
-  Option.iter !Tn.validity_check ~f:(fun check -> check tn);
+  check_node_valid tn;
   check_not_poisoned ctx;
   (* Reject direct host writes to an [\@|] slice view (gh-ocannl-293 293a). Critically, [slice_of]
      is set eagerly at construction, so this fires even when the slice has not been lowered yet and
@@ -994,6 +1000,9 @@ let copy ?(into_merge_buffer = BI.No) ~src ~dst tn =
      both refused. *)
   check_live ~fn:"copy (source)" src;
   check_live ~fn:"copy (destination)" dst;
+  (* Up front: the same-backend path never reaches [to_host]/[from_host]'s check
+     (gh-ocannl-1505). *)
+  check_node_valid tn;
   check_not_poisoned src;
   check_not_poisoned dst;
   (* The fallback also serves nodes with no device buffer in [src]: [to_host] reads host-init
@@ -1124,6 +1133,9 @@ let get_values ctx (tn : Tn.t) : float array =
   Nd.retrieve_flat_values ?padding nd
 
 let set_values ctx (tn : Tn.t) (values : float array) : t =
+  (* Before [host_buffer] forces the node's dims: [from_host] checks only after (gh-ocannl-1505). *)
+  check_live ~fn:"set_values" ctx;
+  check_node_valid tn;
   let nd = host_buffer tn in
   let padding = Option.map ~f:fst (Lazy.force tn.Tn.padding) in
   Nd.set_flat_values ?padding nd values;
@@ -1218,6 +1230,8 @@ let release ctx =
    the [specialize_proc] replay here. *)
 let lowered_for_decisions ?name ?(materialized = []) ?(inline = []) ?(footprint = []) ctx comp
     bindings =
+  (* Lowering forces dims like a compile does: the same gate first. *)
+  frontend_gate comp;
   let optim_ctx = Backends.query ctx.wrapped { q = (fun _ c -> c.BI.optimize_ctx) } in
   let optim_ctx = Ir.Low_level.copy_optimize_ctx optim_ctx in
   (* The same decision recording as [decide_materialized] / [decide_inline] / [decide_footprint]
