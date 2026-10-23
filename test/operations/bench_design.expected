@@ -1,0 +1,75 @@
+every batch visits every arm exactly once: true
+every pair of arms is visited in both orders equally often, at every even batch count: true
+position histograms are equal at every multiple of the exact batch count: true
+and at no batch count below the first multiple: true
+an even arm count: no arm visits a position class twice below the arm count's batches: true
+the advanced-by-one rotation balances no histogram the spread design leaves unbalanced: true
+nor gives any arm more edge visits than the advanced-by-one rotation's worst arm: true
+and an arm count where the spread design is exact at half the batches: true
+
+The gh-ocannl-743 case, 20 arms:
+   8 batches: spread: histograms equal false, edge visits 0-2, most visits to one class 2
+              advanced-by-one: histograms equal false, edge visits 0-4, most visits to one class 4
+  20 batches: spread: histograms equal true, edge visits 2-2, most visits to one class 2
+              advanced-by-one: histograms equal false, edge visits 0-4, most visits to one class 4
+  40 batches: spread: histograms equal true, edge visits 4-4, most visits to one class 4
+              advanced-by-one: histograms equal true, edge visits 4-4, most visits to one class 4
+
+visiting order: spread mirrored rotation, 20 arm(s) x 8 batches -- every pair exchanged: true; position histograms equal: false (exact at multiples of 20 batches); edge visits per arm 0-2
+visiting order: spread mirrored rotation, 3 arm(s) x 6 batches -- every pair exchanged: true; position histograms equal: true (exact at multiples of 6 batches); edge visits per arm 4-4
+an odd batch count is refused: true
+a zero batch count is refused: true
+no arms is refused: true
+
+ORDERS
+1 2 0: 0
+1 2 1: 0
+2 2 0: 0 1
+2 2 1: 1 0
+2 6 0: 0 1
+2 6 1: 1 0
+2 6 2: 0 1
+2 6 3: 1 0
+2 6 4: 0 1
+2 6 5: 1 0
+3 2 0: 0 1 2
+3 2 1: 2 1 0
+3 4 0: 0 1 2
+3 4 1: 2 1 0
+3 4 2: 1 2 0
+3 4 3: 0 2 1
+3 6 0: 0 1 2
+3 6 1: 2 1 0
+3 6 2: 1 2 0
+3 6 3: 0 2 1
+3 6 4: 2 0 1
+3 6 5: 1 0 2
+4 2 0: 0 1 2 3
+4 2 1: 3 2 1 0
+4 6 0: 0 1 2 3
+4 6 1: 3 2 1 0
+4 6 2: 0 1 2 3
+4 6 3: 3 2 1 0
+4 6 4: 2 3 0 1
+4 6 5: 1 0 3 2
+5 6 0: 0 1 2 3 4
+5 6 1: 4 3 2 1 0
+5 6 2: 1 2 3 4 0
+5 6 3: 0 4 3 2 1
+5 6 4: 3 4 0 1 2
+5 6 5: 2 1 0 4 3
+6 4 0: 0 1 2 3 4 5
+6 4 1: 5 4 3 2 1 0
+6 4 2: 2 3 4 5 0 1
+6 4 3: 1 0 5 4 3 2
+7 10 0: 0 1 2 3 4 5 6
+7 10 1: 6 5 4 3 2 1 0
+7 10 2: 1 2 3 4 5 6 0
+7 10 3: 0 6 5 4 3 2 1
+7 10 4: 2 3 4 5 6 0 1
+7 10 5: 1 0 6 5 4 3 2
+7 10 6: 4 5 6 0 1 2 3
+7 10 7: 3 2 1 0 6 5 4
+7 10 8: 5 6 0 1 2 3 4
+7 10 9: 4 3 2 1 0 6 5
+END ORDERS

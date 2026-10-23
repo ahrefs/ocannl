@@ -7376,6 +7376,19 @@
  (modules bench_checksum_discrimination)
  (libraries base stdio bench_checksum arrayjit.verdict))
 
+; gh-ocannl-743: the balanced visiting order interleaved timing shares (`Bench_design`, used by
+; bin/projection_shape_bench in-process and mirrored by benchmarks/bin_cells.py across processes).
+; Its golden's ORDERS table is the relationship the driver's Python design is held to, by the
+; `bin_cells` control below.
+
+(test
+ ; ocannl-backend: none -- links bench_design alone and computes visiting orders.
+ (name bench_design)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules bench_design)
+ (libraries base stdio bench_design arrayjit.verdict))
+
 ; gh-ocannl-655: the provenance guarantees of Test_utils.Generated, which ~30 tests' structural
 ; assertions now rest on. Every one of those guarantees fires only when something has already gone
 ; wrong, so none of them is exercised by the tests that depend on them -- the code that decides a

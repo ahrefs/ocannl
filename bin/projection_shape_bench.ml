@@ -48,21 +48,22 @@
    rounds) and its default, and times them again, interleaved with every other site's finalists and
    with the searches' crowned routines: the cross-geometry question "which candidate is best" is
    then answered inside one round rather than across rounds' drift, by numbers that are not the
-   selection's own optimistic draw. The visiting order uses ONE rotation per adjacent PAIR of
-   batches, mirrored on the odd member, so each such pair exchanges the positions of every pair of
-   arms exactly -- the run-by-run A/B alternation, for all pairs at once and with no RNG. (A
-   rotation that advances every batch does not do this: rotate-then-reverse leaves each arm at the
-   same position in both halves.) An even batch count balances the pairs exactly, which is why the
-   default is even. Timing one site to completion before the next puts the drift straight into the
-   difference under test, and reversing the site order only moves that bias. Three statistics per
-   arm: [repeats] dispatches queued back-to-back with one sync -- the sync only, never a
-   device-to-host readback, which would put a transfer and a host allocation inside the timed region
-   (what a kernel sustains inside a step, and the summary's statistic, taken at the MEDIAN batch),
-   and [Autotune.time_routine] in each of its two modes ([Isolated], one dispatch and one sync,
-   which reads up to 2.6x higher; and [Queued], its gh-ocannl-755 companion), minimized over the
-   same interleaved passes. The last two are the TUNER'S instrument rather than a re-derivation of
-   it, which is what makes the closing gh-ocannl-755 table a comparison of the ranking a search
-   would produce against the ranking steady-state throughput produces, and not of two lookalikes.
+   selection's own optimistic draw. The visiting order is [Bench_design]'s (gh-ocannl-743): ONE
+   rotation per adjacent PAIR of batches, mirrored on the odd member, so each such pair exchanges
+   the positions of every pair of arms exactly -- the run-by-run A/B alternation, for all pairs at
+   once and with no RNG -- with the pairs' rotations spread over the arm count, so every arm's
+   position histogram is equal once the batch count reaches the arm count (twice it, for an odd
+   one), and each round's header line says whether this run's count does. Timing one site to
+   completion before the next puts the drift straight into the difference under test, and reversing
+   the site order only moves that bias. Three statistics per arm: [repeats] dispatches queued
+   back-to-back with one sync -- the sync only, never a device-to-host readback, which would put a
+   transfer and a host allocation inside the timed region (what a kernel sustains inside a step, and
+   the summary's statistic, taken at the MEDIAN batch), and [Autotune.time_routine] in each of its
+   two modes ([Isolated], one dispatch and one sync, which reads up to 2.6x higher; and [Queued],
+   its gh-ocannl-755 companion), minimized over the same interleaved passes. The last two are the
+   TUNER'S instrument rather than a re-derivation of it, which is what makes the closing
+   gh-ocannl-755 table a comparison of the ranking a search would produce against the ranking
+   steady-state throughput produces, and not of two lookalikes.
 
    Which of the numbers on a line to believe depends on what the noise is. The median is the right
    summary when the noise is symmetric, which is why it is the summary. On a CONTENDED box it is
@@ -95,7 +96,9 @@
    ../_build/default/bin/projection_shape_bench.exe 200 8 abde fwd seeds
 
    and gh-ocannl-728's Move 0 is benchmarks/gh728_cells.sh, which drives group [qkv] beside the real
-   gpt2_mini kernels.
+   gpt2_mini kernels. A number meant to be reproduced by someone else is taken through
+   benchmarks/bin_cells.py (gh-ocannl-743), which runs this bench with no ambient configuration and
+   records the resolved settings beside it.
 
    Group [smoke] is deliberately outside that measurement vocabulary: its one 2x2 matmul exists only
    so [@bin-smoke] can start and complete every phase cheaply on the cc backend. Its output is not
@@ -635,19 +638,15 @@ let () =
      A whole-site loop cannot do that -- reversing the site order only moves the bias, it does not
      cancel it (docs/agent-notes/training-and-performance.md's A/B protocol: alternate the arms RUN
      BY RUN). Each arm's own batch is [repeats] dispatches queued back-to-back with one sync. *)
-  (* The order arms are visited in for batch [b]: ONE rotation per ADJACENT PAIR of batches
-     ([b / 2]), mirrored on the odd member. Advancing the rotation between the forward and the
-     reversed batch would leave every arm at the same position in both -- rotate-by-b then reverse
-     maps arm 0 to position 0 at every even b and back to position 0 at every odd b -- so the
-     mirror has to be of the SAME order the forward batch used. Then each pair of batches
-     exchanges the positions of every pair of arms exactly, which is the run-by-run A/B
-     alternation, for all pairs simultaneously and with no RNG; an even [nbatches] balances them
-     exactly, which is why the default is even. *)
-  let visit_order n b =
-    let idx = Array.init n ~f:(fun i -> (i + (b / 2)) % n) in
-    if b % 2 = 1 then Array.rev_inplace idx;
-    idx
-  in
+  (* The order arms are visited in for batch [b]: [Bench_design]'s spread mirrored rotation. The
+     mirror has to be of the SAME order the forward batch used -- advancing the rotation between
+     the forward and the reversed batch would leave every arm at the same position in both -- and
+     then each pair of batches exchanges the positions of every pair of arms exactly, which is the
+     run-by-run A/B alternation, for all pairs simultaneously and with no RNG; an even [nbatches]
+     balances them exactly, which is why the default is even. The pairs' rotations are spread over
+     the arm count rather than advanced by one, which is what equalizes every arm's position
+     histogram at the least batch count any design can (gh-ocannl-743). *)
+  let visit_order n b = Bench_design.order ~arms:n ~batches:nbatches b in
   (* gh-ocannl-755's deliverable: per site, each arm's batched median beside the tuner's own two
      metrics, in seconds, so the closing table can rank the same population three ways. Filled by
      [report], which is the one place that has already decided an arm was measured. *)
@@ -682,6 +681,7 @@ let () =
         | Error (Outcome.Fatal fl) -> Outcome.raise_failure (Outcome.Fatal fl)
     in
     if n > 0 then begin
+      p "   %s\n" (Bench_design.describe ~arms:n ~batches:nbatches);
       for b = 0 to nbatches - 1 do
         let ord = visit_order n b in
         for i = 0 to n - 1 do
@@ -924,7 +924,9 @@ let () =
          that have no parameter -- the bound-pruning gate and the two roofline constants it prices
          candidates against -- so two identical invocations can publish differently pruned searches
          under one label. They cannot be pinned from here, so they are REPORTED, and a tune run is
-         reproducible only against the line below. *)
+         reproducible only against the line below -- or run through benchmarks/bin_cells.py
+         (gh-ocannl-743), which clears the ambient sources and records every key the process
+         resolved, these included, beside the numbers. *)
       let shown = Option.value_map ~default:"(unset)" ~f:Float.to_string in
       p
         "\n\

@@ -60,6 +60,17 @@
  (modules bench_checksum)
  (libraries base))
 
+; The balanced visiting order interleaved timing shares (gh-ocannl-743): which arm a batch times at
+; which position, so a position effect lands on every arm alike. Its own library for the reason the
+; ones above are; depends on base alone, so its property test links no backend.
+; benchmarks/bin_cells.py visits whole bench processes in the same order.
+
+(library
+ (name bench_design)
+ (package neural_nets_lib)
+ (modules bench_design)
+ (libraries base))
+
 ; The register-tile geometry request the two C-backend GEBP benches share (gh-ocannl-620
 ; follow-up): `--tile=rm,rn,lanes` / `--rn=N` parsed once, so `narrow_gebp_bench` and
 ; `schedule_bench` cannot disagree about the spelling or about what `--rn=` derives. Its own
@@ -203,7 +214,14 @@
  (public_name projection_shape_bench)
  (name projection_shape_bench)
  (modules projection_shape_bench)
- (libraries ocannl base stdio mtime.clock.os bench_args bench_out)
+ (libraries
+  ocannl
+  base
+  stdio
+  mtime.clock.os
+  bench_args
+  bench_design
+  bench_out)
  (preprocess
   (pps ppx_here ppx_ocannl))
  (modes exe))
