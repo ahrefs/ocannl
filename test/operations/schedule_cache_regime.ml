@@ -274,6 +274,29 @@ let () =
   p "a lookup in a directory without a lock file creates nothing, the lock file included"
     (equal_snapshot unlocked_before (snapshot unlocked_cache_dir)
     && not (Stdlib.Sys.file_exists (lock_file unlocked_cache_dir)));
+  (* The first writer into a populated directory without a lock file can arrive while a lookup reads
+     it unlocked. Here it lands between the lookup's regime check and its read of the entry: it
+     creates the lock file and advances the stamp past this binary's regime. The entry the lookup
+     then reads belongs to a regime it must refuse, so the unlocked read is discarded and repeated
+     under the lock, which sees the newer stamp. *)
+  let straddled_cache_dir = "autotune_cache_regime_straddled" in
+  plant ~cache_dir:straddled_cache_dir ~keep_lock:false;
+  let writer_arrived = ref false in
+  let straddled =
+    FI.with_callback
+      (fun point ->
+        if FI.equal_point point FI.Schedule_cache_before_replay && not !writer_arrived then (
+          writer_arrived := true;
+          Stdio.Out_channel.write_all (lock_file straddled_cache_dir) ~data:"";
+          write_stamp straddled_cache_dir (SC.cache_regime_version + 1)))
+      ~f:(fun () -> lookup_shipped ~cache_dir:straddled_cache_dir)
+  in
+  p "a writer arriving during an unlocked lookup sends the lookup back under the lock"
+    (!writer_arrived
+    &&
+    match straddled with
+    | None, [ { SC.op = SC.Lookup; key; refusal = Some _; _ } ] -> String.equal key shipped
+    | _ -> false);
   (* An actual read-only directory, whose every file is read-only too: once without its lock file,
      once with it -- a read-only lock file a lookup opening it for writing was refused. *)
   let read_only_lookup ~cache_dir ~keep_lock =
@@ -300,5 +323,6 @@ let () =
   clean_dir future_cache_dir;
   clean_dir io_cache_dir;
   clean_dir unlocked_cache_dir;
+  clean_dir straddled_cache_dir;
   clean_dir read_only_cache_dir;
   clean_dir read_only_locked_cache_dir

@@ -23,5 +23,6 @@ recordings nest: the inner one sees its own I/O: true
 recordings nest: the outer one sees the inner one's I/O too: true
 a lookup in a directory without a lock file hits, admitted rather than refused: true
 a lookup in a directory without a lock file creates nothing, the lock file included: true
+a writer arriving during an unlocked lookup sends the lookup back under the lock: true
 a lookup in a read-only directory without a lock file hits, admitted rather than refused: true
 a lookup in a read-only directory with a read-only lock file hits, admitted rather than refused: true

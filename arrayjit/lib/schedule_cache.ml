@@ -968,10 +968,15 @@ let probe path =
    opens an existing lock file read-only and takes it shared -- readers exclude writers, not each
    other -- and a missing lock file reads as unlocked, since every writer creates it before it
    touches the stamp or an entry. So a lookup in a directory it cannot write -- a read-only mount, a
-   cache another account owns -- reads its entries rather than refusing to create the lock. A lookup
-   proceeding unlocked can overlap a writer only where the lock file was removed from a directory a
-   writer still uses, which the on-disk format forbids. *)
-let with_regime_lock ~mode dir f =
+   cache another account owns -- reads its entries rather than refusing to create the lock.
+
+   An unlocked read is checked after the fact: a writer that arrived during it -- the first store
+   into a populated directory that came without its lock file -- created the lock file before it
+   could sweep or advance the stamp, so a lock file present once the read is done means the read may
+   have straddled a regime transition, and it is discarded and repeated under the lock. One absent
+   before and after spanned no writer. Only a [Read] open's [f] runs unlocked, and it changes
+   nothing, so repeating it is safe. *)
+let rec with_regime_lock ~mode dir f =
   let lock_file = regime_lock_file dir in
   let fd =
     match mode with
@@ -982,7 +987,9 @@ let with_regime_lock ~mode dir f =
         | exception Unix.Unix_error (Unix.ENOENT, _, _) -> None)
   in
   match fd with
-  | None -> f ()
+  | None ->
+      let result = f () in
+      if Stdlib.Sys.file_exists lock_file then with_regime_lock ~mode dir f else result
   | Some fd ->
       Stdlib.Fun.protect
         ~finally:(fun () -> Unix.close fd)
