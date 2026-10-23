@@ -601,8 +601,9 @@ include (
        or the definition. A dimension capture names a variable of one einsum application's shape, so
        it lives as long as one call: it is tagged [ocannl.capture] and bound at the top of its
        innermost enclosing function body by [bind_captures]. In its place, the lifted list carries
-       an [ocannl.bound_capture] marker, which [let_opt] never emits but checks name clashes
-       against. *)
+       an [ocannl.bound_capture] marker, which [let_opt] never emits but checks the lifted
+       declarations against. Captures shadow one another lexically, as any binding does: each one
+       names its own call's dimension, so only a capture that hides a declaration is a clash. *)
     let capture_attr = "ocannl.capture"
     let bound_capture_attr = "ocannl.bound_capture"
 
@@ -634,21 +635,26 @@ include (
       let captured = Hash_set.of_list (module String) (List.map markers ~f:vb_name) in
       let seen = Hashtbl.create (module String) in
       List.fold_right vbs ~init:expr ~f:(fun vb acc ->
+          let hides_capture = Hash_set.mem captured (vb_name vb) && not (is_capture_vb vb) in
           let vb = { vb with pvb_attributes = [] } in
           let name = vb_name vb in
           match Hashtbl.add seen ~key:name ~data:() with
-          | `Ok when not (Hash_set.mem captured name) ->
-              Ast_helper.Exp.let_ ~loc Nonrecursive [ vb ] acc
+          | `Ok when not hides_capture -> Ast_helper.Exp.let_ ~loc Nonrecursive [ vb ] acc
           | `Ok | `Duplicate -> Ast_helper.Exp.let_ ~loc Nonrecursive [ clash_error vb ] acc)
 
     (** Binds the captures among [vbs] at the top of [body], a function body, and returns the
         bindings still to be lifted together with a marker per bound capture. A capture named like a
-        binding still to be lifted is a clash: it would shadow that binding. *)
+        declaration still to be lifted is a clash: it would shadow that declaration. *)
     let bind_captures ~loc vbs body =
       let captures, lifted = List.partition_tf vbs ~f:is_capture_vb in
       if List.is_empty captures then (vbs, body)
       else
-        let lifted_names = Hash_set.of_list (module String) (List.map lifted ~f:vb_name) in
+        let lifted_names =
+          Hash_set.of_list
+            (module String)
+            (List.filter_map lifted ~f:(fun vb ->
+                 if has_attr bound_capture_attr vb then None else Some (vb_name vb)))
+        in
         let clashes vb = Hash_set.mem lifted_names (vb_name vb) in
         let markers =
           List.filter_map captures ~f:(fun vb ->

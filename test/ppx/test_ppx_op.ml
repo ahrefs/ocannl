@@ -63,3 +63,14 @@ let%op _capture_siblings =
   let f x = x ++ "ab => a" [ "b" ] in
   let g x = x ++ "ab => b" [ "b" ] in
   fun x -> f x + g x
+
+(* A nested function's capture shadows the enclosing one of the same name, as any binding does; that
+   is not a clash (each names its own call's dimension). Both forms: under a function, and at the
+   extension point. *)
+let%op _capture_nested x =
+  let g y = y ++ "ab => a" [ "b" ] in
+  x ++ "ab => a" [ "b" ] + g x
+
+let%op _capture_nested_toplevel =
+  let g y = y ++ "ab => a" [ "b" ] in
+  g ({ cn } ++ "abc => ab" [ "b" ])

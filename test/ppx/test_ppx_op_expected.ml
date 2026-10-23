@@ -226,3 +226,24 @@ let _capture_siblings =
       let b = Shape.get_variable_ref "b" in
       einsum1 ?label:(Some ["g"]) ~capture_dims:[b] "a, b => b" x in
     fun x -> (+) ?label:(Some ["_capture_siblings"]) (f x) (g x)
+let _capture_nested =
+  let open! TDSL.O in
+    fun x ->
+      let b = Shape.get_variable_ref "b" in
+      let g y =
+        let b = Shape.get_variable_ref "b" in
+        einsum1 ?label:(Some ["g"]) ~capture_dims:[b] "a, b => a" y in
+      (+) ?label:(Some
+                    (List.concat
+                       [["_capture_nested"]; (x.Tensor.value).Ir.Tnode.label]))
+        (einsum1 ?label:None ~capture_dims:[b] "a, b => a" x) (g x)
+let _capture_nested_toplevel =
+  let open! TDSL.O in
+    let cn =
+      (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+         "cn") () in
+    let b = Shape.get_variable_ref "b" in
+    let g y =
+      let b = Shape.get_variable_ref "b" in
+      einsum1 ?label:(Some ["g"]) ~capture_dims:[b] "a, b => a" y in
+    g (einsum1 ?label:None ~capture_dims:[b] "a, b, c => a, b" cn)
