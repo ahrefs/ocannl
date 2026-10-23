@@ -67,7 +67,7 @@ let search ~tag () =
     tag
     (Autotune.outcome_name report.Autotune.outcome)
     report.Autotune.candidates_timed report.Autotune.candidates_failed
-    report.Autotune.baseline_refused
+    (Option.is_some report.Autotune.baseline_refusal)
     (String.concat ~sep:"; "
        (List.map report.Autotune.privatize_drops ~f:(fun d ->
             Printf.sprintf "%s x%d"
@@ -88,7 +88,7 @@ let line_agrees (o : observed) =
   | [ line ] ->
       Option.equal String.equal
         (Progress.field line "baseline_refused")
-        (Some (Bool.to_string o.report.Autotune.baseline_refused))
+        (Some (Bool.to_string (Option.is_some o.report.Autotune.baseline_refusal)))
       && Option.equal Int.equal
            (Progress.int_field line "privatize_dropped")
            (Some (drop_total o.report))
@@ -152,5 +152,5 @@ let baseline_refused =
 
 let () =
   p "refused baseline: the report records the baseline's refused window"
-    baseline_refused.report.Autotune.baseline_refused;
+    (Option.is_some baseline_refused.report.Autotune.baseline_refusal);
   p "refused baseline: its search_done line says so too" (line_agrees baseline_refused)

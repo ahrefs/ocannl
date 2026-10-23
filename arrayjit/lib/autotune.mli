@@ -1075,8 +1075,19 @@ type batch_settle =
       (** The probe wall or count budget ended the calibration unresolved, at the depth in hand. *)
 
 (** The call's admission verdict, in {!admitted_timing_ms}'s terms; a refusal names the first of
-    [unbatched], [contended], an unreadable reading that holds. *)
+    [unbatched], an unreadable reading, [contended] that holds ({!timing_admission}). *)
 type batch_admission = Admitted | Refused_unbatched | Refused_contended | Refused_unreadable
+
+val timing_admission : timing_result -> batch_admission
+(** The admission verdict of one timing window, naming the cause of a refusal (gh-ocannl-1517):
+    [Admitted] exactly when {!admitted_timing_ms} is [Some]. A refusal names the first cause that
+    holds of [unbatched] ({!field-unbatched}), an unreadable reading (a minimum that is not finite
+    and positive: a clock that resolved nothing) and [contended] ({!field-contended}). The reading
+    precedes contention because a non-positive minimum is also the dispersion check's floor, against
+    which every positive sample reads as a stall: such a window is usually [contended] as well, and
+    named so it put a clock that resolved nothing down to a loaded host. What the search counts per
+    cause in {!report}, what its [NOT TIMED] log lines name, and the [admission] of each
+    {!timing_call} all come from here. *)
 
 val batch_settle_name : batch_settle -> string
 (** The settle's spelling in the benchmarks' timing trace and result line: [isolated],
@@ -1147,8 +1158,10 @@ type report = {
           retry when appropriate. Counts WINDOWS: a refused digest is dropped from the dedup set so
           an equivalent seed can retry it, so one candidate refused twice contributes two. Sound
           evidence for "was this search's measurement set complete?", and for nothing narrower — see
-          [candidates_contended] and [default_refused] for the per-candidate facts. Includes the
-          [timings_unbatched] windows. *)
+          [candidates_contended] and [default_refused] for the per-candidate facts. Despite the
+          name, it counts refusals for EVERY cause: it includes the [timings_unbatched] and
+          [timings_unreadable] windows, and {!contention_refusals} is the part left to contention
+          alone. *)
   timings_retried : int;
       (** Baseline and candidate timing calls that started a fresh contention retry (Metal queued
           timing only). Counts each discarded first window once, whether its retry was admitted,
@@ -1161,6 +1174,15 @@ type report = {
           queue threshold the rescue probe could not get under -- but a count that persists across
           idle reruns is the threshold's signature, which the contention count alone hides. Every
           refusal still makes the measurement set incomplete. *)
+  timings_unreadable : int;
+      (** Of [timings_contended], the windows refused for a degenerate clock reading: a minimum that
+          is not finite and positive, a clock that resolved nothing (gh-ocannl-888), whether the
+          device's or one a test scripted through {!on_candidate_measured} (gh-ocannl-1517). Kept
+          apart from contention because the two call for different follow-ups: a skip or a retry
+          excused by a loaded host is not excused by a clock that cannot resolve the kernel, and a
+          count mixed into the contention verdict hid which one a run met. Disjoint from
+          [timings_unbatched] ({!timing_admission} names one cause per window). Zero wherever
+          [timings_contended] is. *)
   timing_decisions : (batch_settle * batch_admission * int) list;
       (** How this call's baseline and candidate timing calls settled their depth and were admitted
           (gh-ocannl-1263): one [(settle, admission, calls)] per pair that occurred, in constructor
@@ -1199,17 +1221,20 @@ type report = {
           this is [false] there and the flag describes CPU backends -- save where the link-free
           probe of its footprint, which stands for its link (gh-ocannl-1493), is refused for device
           memory: that refusal is its one account, as a refused base link's is. *)
-  baseline_refused : bool;
-      (** The dispatched serial baseline ran its timing window and the window was refused
-          (gh-ocannl-1423): contention, a queued calibration that measured no batch within its
-          target, or a degenerate clock reading. [baseline_ms] is then [infinity] although the
-          baseline ran, and the window counts in [timings_contended]. This is the baseline's own
+  baseline_refusal : batch_admission option;
+      (** [Some cause] when the dispatched serial baseline ran its timing window and the window was
+          refused (gh-ocannl-1423), naming the cause as {!timing_admission} does (gh-ocannl-1517):
+          [Refused_contended], [Refused_unbatched] (a queued calibration that measured no batch
+          within its target) or [Refused_unreadable] (a degenerate clock reading); never
+          [Some Admitted]. [baseline_ms] is then [infinity] although the baseline ran, and the
+          window counts in [timings_contended] and in its cause's subset. This is the baseline's own
           record, where [timings_contended] counts every refused window: a claim about the
-          baseline's measurement gates on it, so a loaded host reads as a skip and every other
-          [infinity] (a baseline never relinked, never dispatched, declined) still fails the claim.
-          An identical seed may time the same code later, which [default_ms] attributes by digest;
-          [baseline_ms] stays the baseline's own reading. [false] on cache replay and
-          search-disabled calls, which time nothing, and on a declined or undispatched baseline. *)
+          baseline's measurement gates on it, so a loaded host reads as a skip that names its cause,
+          and every other [infinity] (a baseline never relinked, never dispatched, declined) still
+          fails the claim. An identical seed may time the same code later, which [default_ms]
+          attributes by digest; [baseline_ms] stays the baseline's own reading. [None] on cache
+          replay and search-disabled calls, which time nothing, and on a declined or undispatched
+          baseline. *)
   declines : decline_summary list;
       (** Candidate rejections aggregated by stable cause key. Their counts sum to
           [candidates_failed]. Cache-entry replay failures are excluded: they are
@@ -1413,7 +1438,8 @@ type report = {
       (** The unscheduled serial baseline's measured time, or [infinity] when it was not dispatched:
           on a GPU backend an unparallelized candidate is never run (gh-ocannl-532 — the whole
           routine in one work-item, unbounded in cost and uninterruptible), so it has no measurement
-          and cannot win. Also [infinity] when [baseline_declined] or [baseline_refused]. *)
+          and cannot win. Also [infinity] when [baseline_declined] or [baseline_refusal] is
+          [Some _]. *)
   default_ms : float option;
       (** The untuned default pipeline's measured time (gh-ocannl-552): the [config_thresholds]
           fissioned-preset seed reproduces {!Ir.Schedule.maybe_default_schedules} exactly, so this
@@ -1581,6 +1607,12 @@ type report = {
           ([hip_kernel_cache_mib]). *)
 }
 
+val contention_refusals : report -> int
+(** The refused windows a report puts down to host contention alone (gh-ocannl-1517):
+    [timings_contended] minus its [timings_unbatched] and [timings_unreadable] subsets, so the three
+    causes {!timing_admission} names partition the report's refusals. A skip or a retry excused by a
+    loaded host reads this, not [timings_contended], which a degenerate clock reading also grows. *)
+
 val no_search_report : timing:timing_mode -> report
 (** The report of a {!tune} call that never searched (config [autotune_search=false], gh-ocannl-559,
     and no cache entry to replay): [outcome = Search_disabled], every counter zero, every time
@@ -1638,8 +1670,9 @@ val no_search_report : timing:timing_mode -> report
       and [arm_start] this is the rule the stream keeps: every step that can block is named by a
       line written before it, so a killed search is inside the step its last line names.
     - [search_done] ({!tune}, exactly once per call, with its report): [routine], [elapsed_s],
-      [outcome] ({!outcome_name}), [timed], [contended], [timings_retried], [unbatched], [failed],
-      [rounds], [budget_cut], [baseline_refused] and [privatize_dropped] (the report's
+      [outcome] ({!outcome_name}), [timed], [contended], [timings_retried], [unbatched],
+      [unreadable] ([timings_unreadable]), [failed], [rounds], [budget_cut], [baseline_refused]
+      (whether [baseline_refusal] is [Some _]) and [privatize_dropped] (the report's
       [privatize_drops] counts summed; gh-ocannl-1438), [attempts], [compile_s], [timing_s],
       [best_ms], [best].
     - [placements_start] ({!Train.tune_placements}, once, before anything is searched or replayed):
@@ -3420,11 +3453,11 @@ val on_candidate_measured : (label:string -> digest:string -> float -> float) Se
     the schedule cache's stored times. A refused window (contended, or a degenerate clock reading)
     never reaches it unless the test explicitly opts into {!with_uncontended_test_windows};
     degenerate readings still never reach it. A returned time that is not finite and positive
-    refuses the window the way a degenerate reading does. It must return rather than raise: it runs
-    outside the search's containment boundaries. It exists so a test about the nonwinner paths can
-    pin the ranking — make the first admitted window the fastest and every later one slower —
-    instead of depending on the machine's timings. The default is the identity and no configuration
-    selects it. *)
+    refuses the window the way a degenerate reading does, and is counted as one
+    ([timings_unreadable]). It must return rather than raise: it runs outside the search's
+    containment boundaries. It exists so a test about the nonwinner paths can pin the ranking — make
+    the first admitted window the fastest and every later one slower — instead of depending on the
+    machine's timings. The default is the identity and no configuration selects it. *)
 
 val with_uncontended_test_windows : (unit -> 'a) -> 'a
 (** Explicit test-only scope (gh-ocannl-1156) for scripted measurements: clear the physical window's
@@ -3435,10 +3468,20 @@ val with_uncontended_test_windows : (unit -> 'a) -> 'a
     the {!Seam} test hooks it is per domain: it covers the searches the calling domain runs, and
     neither reaches nor disturbs a search in another domain. *)
 
+val with_contended_test_windows : (unit -> 'a) -> 'a
+(** The opposite test-only scope (gh-ocannl-1517): SET every window's contention flag before
+    candidate admission, the baseline's included, so a test can drive the contention refusal's
+    accounting ([contention_refusals], [baseline_refusal], the [NOT TIMED] lines) on any host, as
+    {!on_candidate_measured} drives the degenerate-reading one. Only the flag: a window that is
+    unbatched or unreadable keeps that cause, which {!timing_admission} names first. The innermost
+    of it and {!with_uncontended_test_windows} applies; restoration, nesting and per-domain scope as
+    there. *)
+
 val apply_measurement_seam : label:string -> digest:string -> timing_result -> timing_result
 (** Candidate-window admission and scripted measurement, shared by real searches and deterministic
     opposing controls. Production refuses contended windows before calling {!on_candidate_measured};
-    {!with_uncontended_test_windows} explicitly opts a scripted fixture out of that refusal only. *)
+    {!with_uncontended_test_windows} explicitly opts a scripted fixture out of that refusal only,
+    and {!with_contended_test_windows} into it for every window. *)
 
 val staffed_singles_setting : unit -> bool
 (** Config [autotune_staffed_singles] as {!tune} resolves it (gh-ocannl-1138, default [false]):

@@ -4,6 +4,7 @@ default_refused: true
 every started retry is retained in the search report: true
 at least one window was refused: true
 every refused window is one the seam or the host refused: true
+every window the seam refused counts as a degenerate clock reading, the host's by cause: true
 the unmeasured candidates are the default and at most the host's refusals: true
 exactly one distinct candidate stayed unmeasured: true
 the default has no reference time: true

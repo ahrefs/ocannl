@@ -1,6 +1,6 @@
 the tuner's base lowering binds no hardware dimension: true
 the untuned default compile of the same code does: true
-the serial baseline is measured or contention-refused on CPU, and not dispatched on GPU: true
+the serial baseline is measured or its window refused on CPU, and not dispatched on GPU: true
 the refusal is recorded in the decline census, on GPU backends only: true
 the search timed at least one candidate, or was refused its timings by contention: true
 the winner carries a measurement exactly when a candidate was timed: true

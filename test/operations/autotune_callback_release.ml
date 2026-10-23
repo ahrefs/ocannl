@@ -15,12 +15,14 @@
    Every reading here is scripted, so the windows are opted out of host contention
    ([with_uncontended_test_windows], gh-ocannl-1156), as the other scripted-measurement searches do.
    The admission gate's other refusals (a degenerate clock reading) remain, and the search records
-   them: a leg whose search recorded a refused window and admitted fewer than two is re-run a
-   bounded number of times, and only then are the claims that need the second window an environment
-   skip -- gated on the search's own refusal record, never on the admitted count alone, so a search
-   that simply stops producing a second candidate still fails. The cleanup claims are never gated.
-   The last leg forces the refusal on every host and pins that the gate opens on it and that the
-   claim it gates would have failed. *)
+   them under their own count, [timings_unreadable] (gh-ocannl-1517): a leg whose search recorded
+   such a refusal and admitted fewer than two is re-run a bounded number of times, and only then are
+   the claims that need the second window an environment skip naming that cause -- gated on the
+   search's own refusal record, never on the admitted count alone, so a search that simply stops
+   producing a second candidate still fails, and so does one whose windows were refused for a cause
+   the uncontended scope should have cleared. The cleanup claims are never gated. The last leg
+   forces the refusal on every host and pins that the gate opens on it and that the claim it gates
+   would have failed. *)
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
@@ -31,12 +33,13 @@ exception Callback_failure
 (* How many times a leg whose second admitted window was refused is run before the claims needing
    that window are skipped, and the skip's reason. *)
 let attempts = 3
-let starved_on = "timing windows refused before a second was admitted"
+let starved_on = "degenerate clock readings refused timing windows before a second was admitted"
 
 (* The claims needing the second admitted window are skipped exactly when this holds: fewer than two
-   windows admitted, AND the search's own record says a window was refused. *)
+   windows admitted, AND the search's own record says a window was refused for a degenerate clock
+   reading -- the one refusal the uncontended scope leaves an [Isolated] search. *)
 let starved ~admitted (report : Autotune.report option) =
-  List.length admitted < 2 && Option.exists report ~f:(fun r -> r.Autotune.timings_contended > 0)
+  List.length admitted < 2 && Option.exists report ~f:(fun r -> r.Autotune.timings_unreadable > 0)
 
 let () =
   let n = 16 in
@@ -133,7 +136,9 @@ let () =
         "%s attempt %d: admitted windows: [%s]; refused windows: %s; injected at: %s\n%!" name k
         (String.concat ~sep:"; " admitted)
         (Option.value_map report ~default:"no report" ~f:(fun r ->
-             Int.to_string r.Autotune.timings_contended))
+             Printf.sprintf "%d (degenerate clock %d, unbatched %d, contention %d)"
+               r.Autotune.timings_contended r.Autotune.timings_unreadable
+               r.Autotune.timings_unbatched (Autotune.contention_refusals r)))
         (Option.value injected_at ~default:"-");
       if starved ~admitted report && k < attempts then (
         Stdio.eprintf
@@ -174,6 +179,10 @@ let () =
           (name ^ ": the search records its refused windows and admitted only the first")
           (List.length admitted = 1
           && Option.exists report ~f:(fun r -> r.Autotune.timings_contended > 0));
+        p
+          (name ^ ": every refused window is counted as a degenerate clock reading")
+          (Option.exists report ~f:(fun r ->
+               r.Autotune.timings_unreadable = r.Autotune.timings_contended));
         p (name ^ ": the second-window claims' gate opens on that record") starved;
         p
           (name ^ ": with no second admitted window, nothing was injected")

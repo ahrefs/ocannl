@@ -25,11 +25,13 @@
 
    A loaded host refuses timing windows too (gh-ocannl-1423), so the claim that the re-search times
    the baseline it relinked reads the search's own record of the baseline's window,
-   [baseline_refused]: the re-search is retried a bounded number of times while that window is
+   [baseline_refusal]: the re-search is retried a bounded number of times while that window is
    refused, and the claim is an environment skip only when every attempt's was, must-pass whenever
-   one was admitted. A control (leg 4) refuses the window through [Autotune.on_candidate_measured]
-   and pins that the record says so and that the claim it gates would have failed -- a skip, not a
-   pass.
+   one was admitted. The skip names the refusal's cause (gh-ocannl-1517): contention, a queued
+   calibration with no batch, or a degenerate clock reading. A control (leg 4) refuses the window
+   through [Autotune.on_candidate_measured], with host contention cleared so the scripted reading is
+   the one refused, and pins that the record names that cause and that the claim it gates would have
+   failed -- a skip, not a pass.
 
    Pinned to cc ([Context.cpu]): the refusal is backend-independent, and cc is always available. It
    is also a backend whose baseline is timed, which is what makes the re-search's relink of the
@@ -165,18 +167,28 @@ let baseline_timed (r : Autotune.report) =
   (not r.Autotune.baseline_declined) && Float.is_finite r.Autotune.baseline_ms
 
 (* gh-ocannl-1423: how many times a re-search whose baseline window the host refused is re-run
-   before the claim on that window is skipped, and the skip's reason. *)
+   before the claim on that window is skipped. *)
 let baseline_attempts = 3
-let baseline_refused_on = "baseline timing refused under contention"
+
+(* The skip's reason, naming the refusal's cause (gh-ocannl-1517). *)
+let baseline_refused_on (cause : Autotune.batch_admission) =
+  "baseline timing "
+  ^
+  match cause with
+  | Autotune.Refused_contended -> "refused under contention"
+  | Refused_unbatched -> "refused: queued calibration measured no batch"
+  | Refused_unreadable -> "refused: a degenerate clock reading"
+  | Admitted -> "admitted"
 
 (* A claim on the baseline's timing: skipped where the search recorded the baseline's own window as
    refused, otherwise a replay claim like the others. The gate is the record of the window, never
    [baseline_ms]: a baseline the re-search never relinked or never timed has no refused window, and
    fails. *)
 let baseline_claim (r : Autotune.report) ios label b =
-  if r.Autotune.baseline_refused then
-    Verdict.skipped ~aggregation:`Environment ~backend:baseline_refused_on label
-  else replay_claim ios label b
+  match r.Autotune.baseline_refusal with
+  | Some cause ->
+      Verdict.skipped ~aggregation:`Environment ~backend:(baseline_refused_on cause) label
+  | None -> replay_claim ios label b
 
 let () =
   (* --- 1. A whole-routine winner with a dangling minted-symbol reference. --- *)
@@ -194,12 +206,13 @@ let () =
   let rec re_search attempt =
     let planted_io = plant ~saved:dangling ~segments:None in
     let values, r, lookups = tune ~search:true in
-    if r.Autotune.baseline_refused && attempt < baseline_attempts then (
+    if Option.is_some r.Autotune.baseline_refusal && attempt < baseline_attempts then (
       Stdio.eprintf
         "re-search attempt %d of %d (not part of the golden): the baseline's timing window was \
-         refused; retrying\n\
+         refused (%s); retrying\n\
          %!"
-        attempt baseline_attempts;
+        attempt baseline_attempts
+        (Option.value_map r.Autotune.baseline_refusal ~default:"-" ~f:Autotune.batch_admission_name);
       re_search (attempt + 1))
     else (planted_io @ lookups, values, r)
   in
@@ -286,11 +299,12 @@ let () =
   let _values, r, lookups =
     Autotune.Seam.with_value Autotune.on_candidate_measured
       (fun ~label ~digest:_ ms -> if String.equal label "baseline" then Float.nan else ms)
-      (fun () -> tune ~search:true)
+      (fun () -> Autotune.with_uncontended_test_windows (fun () -> tune ~search:true))
   in
   let ios = planted_io @ lookups in
-  replay_claim ios "a refused baseline window is recorded as the baseline's refusal"
-    r.Autotune.baseline_refused;
+  replay_claim ios
+    "a refused baseline window is recorded as the baseline's refusal, by a degenerate clock reading"
+    (Option.equal Poly.equal r.Autotune.baseline_refusal (Some Autotune.Refused_unreadable));
   replay_claim ios "a refused baseline window leaves the baseline untimed" (not (baseline_timed r));
   (* A keyed plant always attempts its store. *)
   Cache_plant.not_every_store_refused ~expected:cache_available

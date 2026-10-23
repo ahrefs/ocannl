@@ -1,8 +1,9 @@
 (* gh-ocannl-1027's reject path: a value [Autotune.on_candidate_measured] returns passes the same
    admission gate as a real clock reading, so one the gate refuses (not finite and positive) refuses
-   that window the way a degenerate reading would -- counted as contended, never ranked. The seam
-   here refuses the untuned-default seed's window and leaves every other reading unchanged, so the
-   refusal lands on the one candidate the report singles out by name: [default_refused].
+   that window the way a degenerate reading would -- never ranked, and counted as a degenerate clock
+   reading ([timings_unreadable]), not as contention (gh-ocannl-1517). The seam here refuses the
+   untuned-default seed's window and leaves every other reading unchanged, so the refusal lands on
+   the one candidate the report singles out by name: [default_refused].
 
    The seed is recognized by its label, and its digest is then refused on every window: a refused
    digest is dropped from the dedup set so an equivalent later seed can retry it (on both cc and
@@ -13,9 +14,10 @@
    The host can refuse windows too, and on a loaded Metal device it routinely does: those never
    reach the seam, so the test counts them itself -- every timing call reports its record through
    [Autotune.with_timing_call_observer], named by the [Autotune.on_candidate_attempt] before it, and
-   one the seam does not follow was refused by contention. The report's refusal count must equal the
-   two sources together on every run; the claims only a quiet host can decide are gated on there
-   having been no such refusal. *)
+   one the seam does not follow was refused by the host, for the cause its record's [admission]
+   names. The report's refusal count must equal the two sources together on every run, and so must
+   each cause's count; the claims only a quiet host can decide are gated on there having been no
+   such refusal. *)
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
@@ -48,8 +50,8 @@ let () =
     Option.value (Autotune.default_seed_label ~backend_name) ~default:"<no default seed>"
   in
   let default_digest = ref None and seam_refused = ref 0 and report = ref None in
-  (* The label of the latest attempt, the label of a timed window the seam has not yet followed, and
-     the labels of the windows the host refused. *)
+  (* The label of the latest attempt, the label and admission of a timed window the seam has not yet
+     followed, and the labels and causes of the windows the host refused. *)
   let attempt = ref "" and unfollowed = ref None and host_refused = ref [] in
   let retried = ref [] in
   let settle_window () =
@@ -73,7 +75,7 @@ let () =
             "  (not part of the golden) %s: depth %d, samples %d, median batch wall %.4f ms\n%!"
             !attempt depth c.window.samples c.window.median_wall_ms;
           settle_window ();
-          unfollowed := Some !attempt)
+          unfollowed := Some (!attempt, c.decision.admission))
       @@ fun () ->
       (Autotune.Seam.set Autotune.on_candidate_attempt @@ fun label -> attempt := label);
       ( Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label ~digest ms ->
@@ -92,10 +94,16 @@ let () =
       in
       Context.release (Context.run ctx routine));
   settle_window ();
-  let host_refused = List.rev !host_refused in
+  let host_causes = List.rev !host_refused in
+  let host_refused = List.map host_causes ~f:fst in
+  let host_refused_for cause =
+    List.count host_causes ~f:(fun (_, admission) -> Poly.equal admission cause)
+  in
   Stdio.eprintf "refused by the seam: %d; by the host: %d [%s]\n%!" !seam_refused
     (List.length host_refused)
-    (String.concat ~sep:"; " host_refused);
+    (String.concat ~sep:"; "
+       (List.map host_causes ~f:(fun (label, admission) ->
+            label ^ " " ^ Autotune.batch_admission_name admission)));
   Stdio.eprintf "windows retried after host contention: %d [%s]\n%!" (List.length !retried)
     (String.concat ~sep:"; " (List.rev !retried));
   let quiet_host = List.is_empty host_refused in
@@ -106,8 +114,12 @@ let () =
   match !report with
   | None -> p "the search reported" false
   | Some r ->
-      Stdio.eprintf "timings_contended=%d candidates_contended=%d candidates_timed=%d\n%!"
-        r.Autotune.timings_contended r.candidates_contended r.candidates_timed;
+      Stdio.eprintf
+        "timings_contended=%d (unreadable %d, unbatched %d, contention %d) candidates_contended=%d \
+         candidates_timed=%d\n\
+         %!"
+        r.Autotune.timings_contended r.timings_unreadable r.timings_unbatched
+        (Autotune.contention_refusals r) r.candidates_contended r.candidates_timed;
       p "the search completed" (match r.outcome with Autotune.Searched -> true | _ -> false);
       p "default_refused" r.default_refused;
       p "every started retry is retained in the search report"
@@ -115,6 +127,12 @@ let () =
       p "at least one window was refused" (r.timings_contended >= 1);
       p "every refused window is one the seam or the host refused"
         (r.timings_contended = !seam_refused + List.length host_refused);
+      (* The seam's refusals are degenerate readings; the host's are counted under the cause its own
+         timing call named. *)
+      p "every window the seam refused counts as a degenerate clock reading, the host's by cause"
+        (r.timings_unreadable = !seam_refused + host_refused_for Autotune.Refused_unreadable
+        && r.timings_unbatched = host_refused_for Autotune.Refused_unbatched
+        && Autotune.contention_refusals r = host_refused_for Autotune.Refused_contended);
       (* Where the host refused the default's own window first, the seam never learned its digest,
          and an equivalent later seed it admitted measured the default after all. *)
       p "the unmeasured candidates are the default and at most the host's refusals"
