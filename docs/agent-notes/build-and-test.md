@@ -895,6 +895,21 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   harness (leg 79 abandoned, leg 70 after it still reporting) against that copy with the check
   spelled as an `exit`; `scripts/test-harness-support.sh` pins the primitives. `set -u`'s
   unbound-variable abort is not containable this way and still ends the run.
+- **A harness whose checks are bare commands under errexit runs each leg contained**
+  (gh-ocannl-1539): `harness_leg_run_errexit 'NAME' leg_N` runs the body in a subshell of its own
+  (`harness_errexit_subshell`, a function whose body is a `( )`, so its `set -eE` is its own and
+  the errexit scan reads the file precisely), so a failed check, an `exit` or a `set -u` abort ends
+  that leg alone, abandoned with the failed command and the function it ran in, and a body passes
+  only by reaching its end. The subshell exits 0 through its own EXIT trap and hands its verdict
+  back in marker files: wrapping it in `|| rc=$?` would not do, since bash ignores errexit in the
+  whole body under a condition, even a `set -e` inside it -- a call there is caught by a probe and
+  abandoned as never run. Being a subshell, a body's exports and `cd` stay its own, and so would
+  its counts: `report 1`, `skip` and `harness_abandon` inside it end it, abandoned with their
+  text. What it changed on disk outlives it: the harness defines `harness_leg_restore`, run
+  contained after every abandoned leg (`tools/test-mutation-run.sh`'s puts back the stand-in
+  `cmp`, a moved lock, a live run; its leg 22 pins it on copies of the harness, uncontained and
+  unrestored controls included). Under bash 3.2 a `set -u` abort reaches the EXIT trap as status
+  0, which is why completion, not status, is the verdict.
 - Strict skips: the toolchain-installing jobs set `OCANNL_TOOL_HARNESS_STRICT=1` (every skip is a
   FAIL); the toolchain-free `harnesses` job runs `tools/test-harnesses.sh --shell --expected-skips
   tools/harness-skips-ci-shell.txt`, strict except for the `HARNESS<TAB>LABEL` lines listed

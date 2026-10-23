@@ -2,11 +2,16 @@
 # Exercise the shipping mutation runner and real test-run supervisor in an
 # isolated repository fixture, with a deterministic fake dune on PATH.
 # Usage: tools/test-mutation-run.sh [--keep] [--only REGEX] [--list-legs]
-# Each leg is a function run by `harness_leg_run 'N: ...' leg_N`
+# Each leg is a function run by `harness_leg_run_errexit 'N: ...' leg_N`
 # (scripts/harness-support.sh) that starts from its own module, patch and
 # probe mode, so any one passes run alone (tools/harness-legs-alone.sh); the
-# fixture repository, the fake dune and the goldens are shared. A failed check
-# still ends the harness (`set -e`), naming the leg it was in.
+# fixture repository, the fake dune and the goldens are shared. A leg's checks
+# are its commands under errexit, run in a subshell of the leg's own: a check
+# that fails -- a bare command, or a `{ ...; exit 1; }` -- ends that leg alone,
+# abandoned and named with the check, and every later leg still runs
+# (gh-ocannl-1539); harness_leg_restore then puts back what the leg left in the
+# shared fixture. Only a subject that cannot be staged at all (the runner
+# scripts, what test-run.sh sources) still ends the harness.
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 . "$root/scripts/harness-support.sh"
@@ -21,14 +26,17 @@ cp "$root/tools/mutation-run.sh" "$root/tools/test-run.sh" "$fixture/repo/tools/
 # the failure surfaces as this harness's own exit 2 where a 1 was expected --
 # which is how gh-ocannl-983's `. tools/box-jobs.sh` reddened CI. The floor
 # makes a regex that stopped matching fail loudly instead of staging nothing.
-staged=0
-while IFS= read -r rel; do
-  mkdir -p "$fixture/repo/$(dirname "$rel")"
-  cp "$root/$rel" "$fixture/repo/$rel"
-  staged=$((staged + 1))
-done < <(sed -n 's/^\. \([A-Za-z0-9_./-]*\)$/\1/p' "$root/tools/test-run.sh")
-[ "$staged" -ge 2 ] ||
-  { echo "only $staged sourced file(s) found in tools/test-run.sh; the scan is broken" >&2; exit 2; }
+stage_sources() { # DEST-ROOT: what the shipping test-run.sh sources, under DEST-ROOT
+  local rel staged=0
+  while IFS= read -r rel; do
+    mkdir -p "$1/$(dirname "$rel")"
+    cp "$root/$rel" "$1/$rel"
+    staged=$((staged + 1))
+  done < <(sed -n 's/^\. \([A-Za-z0-9_./-]*\)$/\1/p' "$root/tools/test-run.sh")
+  [ "$staged" -ge 2 ] ||
+    { echo "only $staged sourced file(s) found in tools/test-run.sh; the scan is broken" >&2; exit 2; }
+}
+stage_sources "$fixture/repo"
 cat > "$fixture/bin/dune" <<'DUNE'
 #!/usr/bin/env bash
 set -eu
@@ -253,6 +261,29 @@ reset_module() { # MODULE-TEXT PATCH-TEXT, each a printf format
   printf "$2" > patch
 }
 : > "$fixture/invocations"
+# What a leg abandoned partway can leave in the shared fixture for the legs after it: a stand-in
+# cmp (leg 15), a directory in place of the module (leg 16) or a second link to it (leg 8), the
+# runner scripts edited in place (leg 21), the worktree lock moved aside (leg 18) or a legacy one
+# (leg 19), and a live run still holding the lock (leg 17's survivor, any sleeping fake test).
+# harness_leg_run_errexit runs this after every abandoned leg (gh-ocannl-1539); leg 22 pins it.
+harness_leg_restore() {
+  local saved owner run
+  rm -f "$fixture/bin/cmp" peer.ml .test-run.lock
+  [ ! -d module.ml ] || rm -rf module.ml
+  cp "$root/tools/mutation-run.sh" "$root/tools/test-run.sh" tools/
+  for saved in "$fixture"/runs/lock-*.saved; do
+    [ -e "$saved" ] || continue
+    rm -rf "${saved%.saved}"
+    mv "$saved" "${saved%.saved}"
+  done
+  for owner in "$fixture"/runs/owner-*; do
+    [ -e "$owner" ] || continue
+    run=$(cat "$owner")
+    tools/test-run.sh stop "$run" > /dev/null 2>&1 || :
+    tools/test-run.sh wait "$run" --timeout 10 > /dev/null 2>&1 || :
+  done
+  tools/test-run.sh idle
+}
 run_case() {
   expected=$1
   shift
@@ -300,7 +331,7 @@ reached
 grep -q '^restored: byte-identical (cmp)$' "$fixture/result"
 printf 'PASS exact claims and red verdict, CRLF/no-final-newline restoration\n'
 }
-harness_leg_run '1: exact claims and red verdict, CRLF and no-final-newline restoration' leg_1
+harness_leg_run_errexit '1: exact claims and red verdict, CRLF and no-final-newline restoration' leg_1
 leg_2() {
 reset_module 'prefix\r\nANCHOR\r\nsuffix without newline' 'ANCHOR@@@MUTATED'
 for mode in raise short failpad stopped casecrash caseexit casecut casefailmsg stale reused both; do
@@ -367,7 +398,7 @@ grep -q '^rows: 1 printed of 3 in probe.expected$' "$fixture/result"
 unset DUNE_BUILD_DIR
 printf 'PASS stopped early, never ran and unattributable runs exit 4 and say why; a raising Verdict.case that reached its last case is caught\n'
 }
-harness_leg_run '2: stopped early, never ran and unattributable runs exit 4' leg_2
+harness_leg_run_errexit '2: stopped early, never ran and unattributable runs exit 4' leg_2
 leg_3() {
 reset_module 'prefix\r\nANCHOR\r\nsuffix without newline' 'ANCHOR@@@MUTATED'
 # Rows short only by refusal-manifest markers, the run having printed every other
@@ -439,7 +470,7 @@ PROBE_ALIAS=@runtest-sections run_case 4
 flagged "STOPPED EARLY: the mutated run printed 5 of the golden's 9 rows"
 printf 'PASS rows short only by a refusal marker are caught; cut, killed or row-swapped runs with the same shortfall exit 4; a golden ending on its closing row tells a silenced refusal from a cut\n'
 }
-harness_leg_run '3: rows short only by a failed claim'\''s refusal marker' leg_3
+harness_leg_run_errexit '3: rows short only by a failed claim'\''s refusal marker' leg_3
 leg_4() {
 reset_module 'prefix\r\nANCHOR\r\nsuffix without newline' 'ANCHOR@@@MUTATED'
 # A failing run of a scan lacks its success trailer, the `OK: ` rows printed only when no claim
@@ -483,7 +514,7 @@ PROBE_ALIAS=@runtest-trailer run_case 4
 flagged "STOPPED EARLY: the mutated run printed 6 of the golden's 8 rows"
 printf 'PASS a multi-line failure, every row prefixed, is caught on a trailer-short run; an unprefixed continuation row exits 4\n'
 }
-harness_leg_run '4: a failing run short by its success trailer' leg_4
+harness_leg_run_errexit '4: a failing run short by its success trailer' leg_4
 leg_5() {
 reset_module 'prefix\r\nANCHOR\r\nsuffix without newline' 'ANCHOR@@@MUTATED'
 # The text above is this fixture's own; what the runner reads is Verdict's. So the runner also reads
@@ -597,7 +628,7 @@ grep -qxF -- "$marker -- no failed check of this run is behind it: its claim or 
 reached
 printf 'PASS real Verdict runs, from verdict_teardown'"'"'s golden: a raising case is caught, an exit inside a case exits 4, a trailer-short run with a multi-line failure is caught, failed pass_fail claims are listed, a scan ending short by a failed claim'"'"'s marker and its trailer is caught, and so is one short only by a silenced refusal'"'"'s marker\n'
 }
-harness_leg_run '5: real Verdict runs, from verdict_teardown'\''s golden' leg_5
+harness_leg_run_errexit '5: real Verdict runs, from verdict_teardown'\''s golden' leg_5
 leg_6() {
 reset_module 'prefix\r\nANCHOR\r\nsuffix without newline' 'ANCHOR@@@MUTATED'
 for mode in pass compile refused; do
@@ -608,7 +639,7 @@ for mode in pass compile refused; do
 done
 printf 'PASS surviving mutation, compile failure (never ran), invocation refusal\n'
 }
-harness_leg_run '6: surviving mutation, compile failure, invocation refusal' leg_6
+harness_leg_run_errexit '6: surviving mutation, compile failure, invocation refusal' leg_6
 leg_6b() {
 reset_module 'prefix\r\nANCHOR\r\nsuffix without newline' 'ANCHOR@@@MUTATED'
 # The baseline (gh-ocannl-1364): the unmutated test runs first, and a red one refuses before
@@ -633,7 +664,7 @@ PROBE_BASELINE=rewrote run_case 4
 flagged 'NEVER RAN: this run wrote no stdout of probe (a build failure, or an executable the mutation left unchanged, so dune reused its result)'
 printf 'PASS a red baseline refuses before mutating; the baseline'"'"'s own stdout never counts as the mutant'"'"'s\n'
 }
-harness_leg_run '6b: a red baseline refuses before mutating' leg_6b
+harness_leg_run_errexit '6b: a red baseline refuses before mutating' leg_6b
 leg_7() {
 # A launch this leg must not make would pass under a refusing mode.
 export PROBE_MODE=pass
@@ -665,7 +696,7 @@ run_case 2
 [ "$(wc -l < "$fixture/invocations")" = "$count" ]
 printf 'PASS missing, ambiguous, overlapping, malformed and unchanged anchors, and aliases without a golden, refuse before launch\n'
 }
-harness_leg_run '7: malformed anchors and aliases without a golden refuse before launch' leg_7
+harness_leg_run_errexit '7: malformed anchors and aliases without a golden refuse before launch' leg_7
 leg_8() {
 # A launch this leg must not make would pass under a refusing mode.
 export PROBE_MODE=pass
@@ -677,7 +708,7 @@ cmp peer.ml "$fixture/pristine"
 rm peer.ml
 printf 'PASS multiply linked module refuses without mutating either path\n'
 }
-harness_leg_run '8: a multiply linked module refuses without mutating either path' leg_8
+harness_leg_run_errexit '8: a multiply linked module refuses without mutating either path' leg_8
 leg_9() {
 # A launch this leg must not make would pass under a refusing mode.
 export PROBE_MODE=pass
@@ -704,7 +735,7 @@ cmp module.ml "$fixture/pristine"
 if grep -q '^restored:' "$fixture/result"; then echo 'failed open replaced source'; exit 1; fi
 printf 'PASS failed write-open leaves the original inode and bytes untouched\n'
 }
-harness_leg_run '9: a failed write-open leaves the original inode and bytes untouched' leg_9
+harness_leg_run_errexit '9: a failed write-open leaves the original inode and bytes untouched' leg_9
 leg_10() {
 reset_module 'ANCHOR' 'ANCHOR@@@MUTATED'
 # Hold the fork child before resetting inherited handlers, deterministically.
@@ -780,7 +811,7 @@ done
 unset PROBE_BASELINE
 printf 'PASS INT TERM HUP cancel in the baseline, the fork window and during test-run, restoring what was mutated\n'
 }
-harness_leg_run '10: INT TERM HUP cancel in the baseline, the fork window and during test-run, then restore' leg_10
+harness_leg_run_errexit '10: INT TERM HUP cancel in the baseline, the fork window and during test-run, then restore' leg_10
 leg_10b() {
 reset_module 'ANCHOR' 'ANCHOR@@@MUTATED'
 # A signal landing after the baseline was judged, before the mutation's own handlers: injected into a
@@ -812,7 +843,7 @@ cmp module.ml "$fixture/pristine"
 done
 printf 'PASS a signal between the baseline and the mutation cancels before mutating\n'
 }
-harness_leg_run '10b: a signal between the baseline and the mutation cancels before mutating' leg_10b
+harness_leg_run_errexit '10b: a signal between the baseline and the mutation cancels before mutating' leg_10b
 leg_11() {
 reset_module 'ANCHOR' 'ANCHOR@@@MUTATED'
 export PROBE_MODE=sleep OCANNL_TOOL_TEST_CAP=1
@@ -820,7 +851,7 @@ run_case 142
 unset OCANNL_TOOL_TEST_CAP
 printf 'PASS test-run cap expiry preserves status and restores\n'
 }
-harness_leg_run '11: test-run cap expiry preserves status and restores' leg_11
+harness_leg_run_errexit '11: test-run cap expiry preserves status and restores' leg_11
 leg_12() {
 export PROBE_MODE=sleep
 reset_module 'ANCHOR' 'ANCHOR@@@MUTATED'
@@ -835,7 +866,7 @@ unset OCANNL_TOOL_TEST_CAP
 cmp module.ml "$fixture/pristine"
 printf 'PASS closed output pipe cannot interrupt restoration\n'
 }
-harness_leg_run '12: a closed output pipe cannot interrupt restoration' leg_12
+harness_leg_run_errexit '12: a closed output pipe cannot interrupt restoration' leg_12
 leg_13() {
 export PROBE_MODE=pass
 reset_module 'MUTATED\r\nANCHOR\r\nend' 'ANCHOR\r\n@@@'
@@ -844,7 +875,7 @@ printf 'MUTATED\r\nend' > "$fixture/expected"
 cmp "$fixture/observed" "$fixture/expected"
 printf 'PASS multiline anchor and empty replacement use literal bytes\n'
 }
-harness_leg_run '13: a multiline anchor and an empty replacement use literal bytes' leg_13
+harness_leg_run_errexit '13: a multiline anchor and an empty replacement use literal bytes' leg_13
 leg_14() {
 export PROBE_MODE=pass
 reset_module 'ANCHOR' 'ANCHOR@@@MUTATED'
@@ -857,7 +888,7 @@ cmp module.ml "$fixture/pristine"
 grep -q '^restored: byte-identical (cmp)$' "$fixture/result"
 printf 'PASS failed child exec cannot unwind into parent restoration\n'
 }
-harness_leg_run '14: a failed child exec cannot unwind into parent restoration' leg_14
+harness_leg_run_errexit '14: a failed child exec cannot unwind into parent restoration' leg_14
 leg_15() {
 reset_module 'ANCHOR' 'ANCHOR@@@MUTATED'
 # A failing independent comparison must never print a restoration confirmation.
@@ -878,7 +909,7 @@ cmp "$backup" "$fixture/pristine"
 cmp module.ml "$fixture/pristine"
 printf 'PASS failed comparison retains byte-identical recovery copy and exits 3\n'
 }
-harness_leg_run '15: a failed comparison retains a recovery copy and exits 3' leg_15
+harness_leg_run_errexit '15: a failed comparison retains a recovery copy and exits 3' leg_15
 leg_16() {
 reset_module 'ANCHOR' 'ANCHOR@@@MUTATED'
 # Failure to publish the restoration also leaves the recovery bytes available.
@@ -893,7 +924,7 @@ rmdir module.ml
 cp "$fixture/pristine" module.ml
 printf 'PASS failed restoration rename retains recovery copy and exits 3\n'
 }
-harness_leg_run '16: a failed restoration rename retains a recovery copy and exits 3' leg_16
+harness_leg_run_errexit '16: a failed restoration rename retains a recovery copy and exits 3' leg_16
 leg_17() {
 reset_module 'ANCHOR' 'ANCHOR@@@MUTATED'
 # A killed launcher/supervisor can leave a live Dune holder of the same flock.
@@ -962,7 +993,7 @@ PERL
 done
 printf 'PASS independently killed launcher/supervisor retain source until survivor is stopped\n'
 }
-harness_leg_run '17: a killed launcher or supervisor retains the source until the survivor is stopped' leg_17
+harness_leg_run_errexit '17: a killed launcher or supervisor retains the source until the survivor is stopped' leg_17
 leg_18() {
 reset_module 'ANCHOR' 'ANCHOR@@@MUTATED'
 # A finished run leaves the worktree lock behind; this leg reads it.
@@ -983,7 +1014,7 @@ mv "$lock.saved" "$lock"
 tools/test-run.sh idle
 printf 'PASS idle returns 0/3/2 without creating or replacing lock state\n'
 }
-harness_leg_run '18: idle returns 0/3/2 without creating or replacing lock state' leg_18
+harness_leg_run_errexit '18: idle returns 0/3/2 without creating or replacing lock state' leg_18
 leg_19() {
 perl -e '
   use Fcntl ":flock";
@@ -998,7 +1029,7 @@ tools/test-run.sh idle
 rm .test-run.lock
 printf 'PASS idle observes the legacy lock without removing it\n'
 }
-harness_leg_run '19: idle observes the legacy lock without removing it' leg_19
+harness_leg_run_errexit '19: idle observes the legacy lock without removing it' leg_19
 leg_20() {
 # A patch written before `dune fmt` applies after it, and the reverse (gh-ocannl-1429): OLD matches
 # modulo whitespace -- each run of it, an OCaml string's `\`-newline continuation included, and the
@@ -1043,7 +1074,7 @@ done
 [ "$(wc -l < "$fixture/invocations")" = "$count" ]
 printf 'PASS a patch written before or after an ocamlformat rewrap applies modulo whitespace, exactly once; byte-for-byte wins; ambiguous, non-whitespace and no-op matches refuse before launch\n'
 }
-harness_leg_run '20: anchors modulo whitespace survive an ocamlformat rewrap' leg_20
+harness_leg_run_errexit '20: anchors modulo whitespace survive an ocamlformat rewrap' leg_20
 leg_21() {
 # --batch (gh-ocannl-1429): one baseline, then each patch of the directory in name order, each
 # restored before the next, and a table; every patch checked before anything runs.
@@ -1177,6 +1208,67 @@ cp "$fixture/test-run.sh.saved" tools/test-run.sh
 cmp module.ml "$fixture/pristine"
 printf 'PASS --batch runs one baseline, then each patch restored in turn, and tabulates them; a bad patch or empty directory refuses before launch; a signal stops it restored\n'
 }
-harness_leg_run '21: --batch runs one baseline and tabulates every patch' leg_21
+harness_leg_run_errexit '21: --batch runs one baseline and tabulates every patch' leg_21
+leg_22() {
+# An abandoned leg fails alone, and what it left behind is put back (gh-ocannl-1539): a copy of this
+# harness whose leg 15 fails a check while its stand-in cmp is in place, run on legs 15 and 18. Leg
+# 15 is abandoned, naming the check, and leg 18, whose run_case compares through cmp, still passes
+# after it. Two negative controls, each a further copy: one whose legs run in the harness's own
+# shell, as before gh-ocannl-1539, where the failed check ends the harness and leg 18 never reports;
+# and one with no harness_leg_restore, where leg 18 is abandoned on the stand-in cmp.
+self=$fixture/self
+rm -rf "$self"
+mkdir -p "$self/tools" "$self/scripts"
+cp "$root/scripts/harness-support.sh" "$self/scripts/"
+cp "$root/tools/mutation-run.sh" "$root/tools/test-run.sh" "$self/tools/"
+stage_sources "$self"
+self_copy() { # FROM TO [FROM TO]...: the harness, each FROM replaced by its TO, exactly once
+  perl -e '
+    local $/; open my $f, "<", shift or die $!; my $s = <$f>;
+    while (my ($from, $to) = splice @ARGV, 0, 2) {
+      my $n = () = $s =~ /\Q$from\E/g;
+      die "the seam \"$from\" is in the harness $n times, not once\n" unless $n == 1;
+      substr($s, index($s, $from), length($from), $to);
+    }
+    print $s;
+  ' "$root/tools/test-mutation-run.sh" "$@" > "$self/tools/test-mutation-run.sh"
+}
+self_run() {
+  actual=0
+  bash "$self/tools/test-mutation-run.sh" --only '^(15|18):' > "$fixture/self-result" 2>&1 || actual=$?
+}
+broken=($'\n[ -f "$backup" ]\n' $'\n[ -f "$backup.never-there" ]\n')
+self_copy "${broken[@]}"
+self_run
+[ "$actual" = 1 ] || { cat "$fixture/self-result"; echo "self: exit $actual, not 1"; exit 1; }
+grep -qx 'FAIL  15: a failed comparison retains a recovery copy and exits 3: abandoned, its later checks did not run' \
+  "$fixture/self-result" || { cat "$fixture/self-result"; echo 'self: leg 15 was not abandoned'; exit 1; }
+grep -qxF '      a check failed in leg_15: [ -f "$backup.never-there" ]' "$fixture/self-result" ||
+  { cat "$fixture/self-result"; echo 'self: the abandoned leg does not name its check'; exit 1; }
+grep -qx 'PASS idle returns 0/3/2 without creating or replacing lock state' "$fixture/self-result" ||
+  { cat "$fixture/self-result"; echo 'self: leg 18 did not pass after the abandoned leg'; exit 1; }
+grep -q "^1 leg(s) failed (0 skipped); FILTERED RUN: 2 leg(s) selected" "$fixture/self-result" ||
+  { cat "$fixture/self-result"; echo 'self: not one failure among two legs'; exit 1; }
+if grep -q 'aborted before finish' "$fixture/self-result"; then
+  cat "$fixture/self-result"; echo 'self: the abandoned leg ended the harness'; exit 1
+fi
+# The legs run in the harness's own shell (the copy's support library runs each body as
+# harness_leg_run does): the failed check ends the harness, and leg 18 never reports.
+printf 'harness_leg_run_errexit() { harness_leg_run "$@"; }\n' >> "$self/scripts/harness-support.sh"
+self_run
+cp "$root/scripts/harness-support.sh" "$self/scripts/"
+[ "$actual" != 0 ] && grep -q '^aborted before finish (rc=1) inside leg: 15: ' "$fixture/self-result" ||
+  { cat "$fixture/self-result"; echo "self, negative control: the uncontained copy did not end at leg 15 (exit $actual)"; exit 1; }
+if grep -q '^PASS idle returns' "$fixture/self-result"; then
+  cat "$fixture/self-result"; echo 'self, negative control: leg 18 ran after an uncontained failure'; exit 1
+fi
+# No restoration: leg 18 is abandoned on the stand-in cmp leg 15 left.
+self_copy "${broken[@]}" $'\nharness_leg_restore() {\n' $'\nharness_leg_restore_disabled() {\n'
+self_run
+grep -q '^FAIL  18: idle returns 0/3/2 without creating or replacing lock state: abandoned' "$fixture/self-result" ||
+  { cat "$fixture/self-result"; echo 'self, negative control: leg 18 passed with the stand-in cmp left in place'; exit 1; }
+printf 'PASS an abandoned leg fails alone, naming its check, and the leg after it passes on the restored fixture; uncontained or unrestored, it does not\n'
+}
+harness_leg_run_errexit '22: an abandoned leg fails alone, and the fixture it left is restored' leg_22
 
 finish
