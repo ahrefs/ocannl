@@ -338,28 +338,34 @@ let sanctioned = [ "seeded_plan" ]
    such as [seeded_default] -- is a reference like any other, and reaches the accessor
    (gh-ocannl-1491).
 
-   The fallback is read off the code, not named. A SEARCH-LESS BRANCH is, in the top-level
-   definitions [tune] reaches (the seeded plan's cut applied): - the [then] branch of an [if] whose
-   condition has [not search] as a conjunct of its [&&] chain (parentheses aside); - the right-hand
-   side of a [match], [function] or [try] case whose guard has it so. [search] is the flag [tune]
-   takes as [?search] -- a claim below holds that it does -- matched by name; nothing else is read
-   as search-less: [if search then ... else e], a [||], a negation bound to another name or a flag
-   passed on all leave [e] an ordinary branch. THE SEARCH-LESS FALLBACK is every local function
-   binding (a [let] nested in another binding: never a top-level or module definition, which other
-   paths share; and its right-hand side a [fun] or [function], under any type constraint, so what it
-   spells runs only when it is called -- a [let fallback = seeded_transform ... in] would read the
-   fields on every path, the search's included: review round 1) that EVERY search-less branch calls
-   -- applies, by a bare name, as the head of an application: a bare reference passed on or ignored
-   is not a call (review round 2) -- resolved through [Test_utils.Lexical_scope] to the binding in
-   scope at the reference -- so a same-named binding elsewhere, or one shadowing it later, is not
-   the fallback. A spelling of [seeded_transform] anywhere inside such a binding's right-hand side
-   is dropped from the reach graph; every other one counts.
+   The fallback is read off the code, not named, by these forms and no others:
 
-   The boundary: this pins WHERE the route is spelled, not where the fallback's result flows. The
-   fallback may also be called from paths that test no flag (a refused lineage, a failed deferred
-   replay: they do not search either), and a search path that called the fallback and timed what it
-   returns would pass. Outside the forms above the rule refuses rather than passes: a search-less
-   branch that does not call the fallback empties it, and then every spelling of the route
+   - THE FLAG is a parameter labelled [~search] or [?search] (a claim below holds that [tune] takes
+   [?search]), or a [let] binding the name [search] whose right-hand side names the flag ([let
+   search = Option.value_or_thunk search ~default:...]); names resolve through
+   [Test_utils.Lexical_scope], so any other binding named [search] is not the flag (review round 3).
+   - A SEARCH-LESS BRANCH, in the top-level definitions [tune] reaches (the seeded plan's cut
+   applied), is the [then] branch of an [if] whose [&&] chain has [not <the flag>] as a conjunct, or
+   the right-hand side of a [match], [function] or [try] case whose guard has it so. Nothing else:
+   [if search then ... else e], a [||], the flag passed on all leave [e] an ordinary branch. - A
+   branch CALLS a binding when it applies the binding's bare name, resolved in scope, as the head of
+   an application -- a reference passed on or ignored is not a call (review round 2) -- outside any
+   function the branch itself let-binds, which runs only if called (review round 3). A call inside
+   an anonymous function passed as an argument counts: that is the thunk [finish] runs. - THE
+   SEARCH-LESS FALLBACK is every local function binding -- a [let] nested in another binding (never
+   a top-level or module definition, which other paths share) whose right-hand side is a [fun] or
+   [function] under any type constraint, so that what it calls runs only when it is called (review
+   round 1) -- that EVERY search-less branch calls. - A CALL of [seeded_transform] by its bare name
+   inside a fallback's right-hand side is dropped from the reach graph. Every other spelling of the
+   route counts, a non-call inside the fallback included (review round 3).
+
+   The boundary: the scan reads syntax and models no evaluation. It pins WHERE the route is called,
+   not where the fallback is called from or where its result flows: the fallback may also be called
+   from paths that test no flag (a refused lineage, a failed deferred replay: they do not search
+   either), and a search path that called the fallback and timed what it returns would pass (review
+   round 2, deferred). Nor does it ask whether a callee runs the thunk a branch hands it, or whether
+   a branch is reachable at all. Outside the forms above it refuses rather than passes: a
+   search-less branch that does not call the fallback empties it, and then every call of the route
    counts. *)
 
 let search_flag = "search"
@@ -372,26 +378,34 @@ let rec conjuncts (e : expression) =
       conjuncts a @ conjuncts b
   | _ -> [ e ]
 
-let searchless_condition e =
+(* Whether a condition holds only with the search off: [not search] is one of its conjuncts, the
+   name resolving ([is_flag]) to the flag itself (review round 3: a decoy binding named [search] is
+   not the flag). *)
+let searchless_condition ~is_flag e =
   List.exists (conjuncts e) ~f:(fun (c : expression) ->
       match c.pexp_desc with
       | Pexp_apply
           ( { pexp_desc = Pexp_ident { txt = Lident "not"; _ }; _ },
             [ (Nolabel, { pexp_desc = Pexp_ident { txt = Lident flag; _ }; _ }) ] ) ->
-          String.equal flag search_flag
+          String.equal flag search_flag && is_flag flag
       | _ -> false)
 
-(* What a bare name resolves to: the value binding (by its start offset) that binds it, or a
-   parameter, a case's pattern, or a name the source does not bind. *)
-type binding = Bound of int | Unbound
+(* What a bare name resolves to: the value binding that binds it (by its start offset; [None] for a
+   parameter, a case's pattern), and whether it is the search flag -- a parameter labelled [~search]
+   or [?search], or a [let] whose right-hand side names the flag by its own name ([let search =
+   Option.value_or_thunk search ~default:...]). *)
+type binding = { at : int option; flag : bool }
 
 type fallback_walk = {
   branches : (int * Set.M(Int).t) list;
       (** Each search-less branch's start offset, with the bindings it calls: a bare name applied to
-          arguments, wherever in the branch -- a reference that is not a call (passed on, ignored)
-          is not one (review round 2). *)
+          arguments -- a reference that is not a call (passed on, ignored) is not one (review round
+          2), nor is a call inside a function the branch itself let-binds, which runs only if that
+          function is called (review round 3). A call inside an anonymous function passed as an
+          argument does count: that is the thunk [finish] runs. *)
   sites : (int * int list) list;
-      (** Each bare spelling of the route, with the bindings enclosing it, innermost first. *)
+      (** Each call of the route by a bare name, with the bindings enclosing it, innermost first. A
+          spelling that is not a call is not a site (review round 3), and so stays a reference. *)
   locals : Set.M(Int).t;
       (** The function bindings nested in another value binding: a [fun] or [function] right-hand
           side, under any type constraint. *)
@@ -403,58 +417,93 @@ let rec is_function (e : expression) =
   | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> is_function inner
   | _ -> false
 
+let names_flag_label : Ppxlib.arg_label -> bool = function
+  | Labelled label | Optional label -> String.equal label search_flag
+  | Nolabel -> false
+
 let walk_fallback (source : string) : fallback_walk =
   let structure = Ppxlib.Parse.implementation (Lexing.from_string source) in
   let branches = ref [] and sites = ref [] and locals = ref (Set.empty (module Int)) in
+  (* Each open branch's calls, and how many function bindings of its own body enclose the walk. *)
   let enclosing = ref [] and open_branches = ref [] in
+  let lookup env name = Test_utils.Lexical_scope.lookup env name in
+  let is_flag env name = match lookup env name with Some { flag; _ } -> flag | None -> false in
   let iter =
     object (self)
       inherit [binding, unit] Test_utils.Lexical_scope.scoped as super
-      method local = Unbound
+      method local = { at = None; flag = false }
       method module_path _ _ = None
-      method! let_denotes vb = Bound (offset vb.pvb_loc)
+
+      method! bind_parameter env label pattern =
+        if names_flag_label label then
+          Test_utils.Lexical_scope.bind_values env
+            (Test_utils.Lexical_scope.pattern_vars [ pattern ])
+            { at = None; flag = true }
+        else super#bind_parameter env label pattern
+
+      method! binding_denotes env vb =
+        let names_flag = ref false in
+        let names =
+          object
+            inherit Ast_traverse.iter as super
+
+            method! expression e =
+              (match e.pexp_desc with
+              | Pexp_ident { txt = Lident name; _ }
+                when String.equal name search_flag && is_flag env name ->
+                  names_flag := true
+              | _ -> ());
+              super#expression e
+          end
+        in
+        names#expression vb.pvb_expr;
+        let binds_flag =
+          List.mem
+            (Test_utils.Lexical_scope.pattern_vars [ vb.pvb_pat ])
+            search_flag ~equal:String.equal
+        in
+        { at = Some (offset vb.pvb_loc); flag = binds_flag && !names_flag }
 
       method! value_binding env vb =
         let at = offset vb.pvb_loc in
-        if (not (List.is_empty !enclosing)) && is_function vb.pvb_expr then
-          locals := Set.add !locals at;
+        let deferred = is_function vb.pvb_expr in
+        if (not (List.is_empty !enclosing)) && deferred then locals := Set.add !locals at;
         enclosing := at :: !enclosing;
+        if deferred then List.iter !open_branches ~f:(fun (_, muted) -> Int.incr muted);
         let vb = super#value_binding env vb in
+        if deferred then List.iter !open_branches ~f:(fun (_, muted) -> Int.decr muted);
         enclosing := List.tl_exn !enclosing;
         vb
 
-      method! ident _ { txt; loc } =
-        match txt with
-        | Lident name ->
-            if String.equal name seeded_route then sites := (offset loc, !enclosing) :: !sites
-        | Ldot _ | Lapply _ -> ()
-
       method private branch (body : expression) walk =
-        let refs = ref (Set.empty (module Int)) in
-        open_branches := refs :: !open_branches;
+        let calls = ref (Set.empty (module Int)) in
+        open_branches := (calls, ref 0) :: !open_branches;
         ignore (walk body : expression);
         open_branches := List.tl_exn !open_branches;
-        branches := (offset body.pexp_loc, !refs) :: !branches
+        branches := (offset body.pexp_loc, !calls) :: !branches
 
       method! expression env e =
         match e.pexp_desc with
-        | Pexp_ifthenelse (cond, then_, else_) when searchless_condition cond ->
+        | Pexp_ifthenelse (cond, then_, else_) when searchless_condition ~is_flag:(is_flag env) cond
+          ->
             ignore (self#expression env cond : expression);
             self#branch then_ (self#expression env);
             Option.iter else_ ~f:(fun e -> ignore (self#expression env e : expression));
             e
-        | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }, _) ->
-            (match Test_utils.Lexical_scope.lookup env name with
-            | Some (Bound at) ->
-                List.iter !open_branches ~f:(fun calls -> calls := Set.add !calls at)
-            | Some Unbound | None -> ());
+        | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident name; loc }; _ }, _) ->
+            if String.equal name seeded_route then sites := (offset loc, !enclosing) :: !sites;
+            (match lookup env name with
+            | Some { at = Some at; _ } ->
+                List.iter !open_branches ~f:(fun (calls, muted) ->
+                    if !muted = 0 then calls := Set.add !calls at)
+            | Some { at = None; _ } | None -> ());
             super#expression env e
         | _ -> super#expression env e
 
       method! case env c =
+        let inner = self#bind_patterns env [ c.pc_lhs ] in
         match c.pc_guard with
-        | Some guard when searchless_condition guard ->
-            let inner = self#bind_patterns env [ c.pc_lhs ] in
+        | Some guard when searchless_condition ~is_flag:(is_flag inner) guard ->
             ignore (self#pattern env c.pc_lhs : pattern);
             ignore (self#expression inner guard : expression);
             self#branch c.pc_rhs (self#expression inner);
@@ -571,10 +620,12 @@ let () =
     [
       ( "the fallback every search-less branch calls",
         "let unrelated ?(search = true) x = if not search then x else x\n\
-         let tune ?(search = true) ~cache_dir x =\n\
+         let tune ?search ~cache_dir x =\n\
+        \  let search = Option.value search ~default:true in\n\
         \  let fallback () = seeded_transform () in\n\
+        \  let finish ship = ship () in\n\
         \  let candidate () = x in\n\
-        \  if (not search) && String.equal cache_dir \"\" then fallback ()\n\
+        \  if (not search) && String.equal cache_dir \"\" then finish (fun () -> fallback ())\n\
         \  else if x = 0 then fallback ()\n\
         \  else match x with 1 when x > 0 && not search -> fallback () | _ -> candidate ()",
         [] );
@@ -618,6 +669,22 @@ let () =
         \  match x with\n\
         \  | 0 when not search -> ignore fallback; x\n\
         \  | _ -> if not search then fallback () else x",
+        flagged );
+      ( "a fallback that only names the seeded transform",
+        "let tune ?(search = true) x =\n\
+        \  let fallback () = ignore seeded_transform; x in\n\
+        \  if not search then fallback () else x",
+        flagged );
+      ( "a decoy flag",
+        "let tune ?(search = true) x =\n\
+        \  let fallback () = seeded_transform () in\n\
+        \  let decoy = let search = true in if not search then fallback () else x in\n\
+        \  if search then x + decoy else x",
+        flagged );
+      ( "a search-less branch that only defines a call of the fallback",
+        "let tune ?(search = true) x =\n\
+        \  let fallback () = seeded_transform () in\n\
+        \  if not search then (let unused () = fallback () in ignore unused; x) else x",
         flagged );
       ( "a top-level fallback",
         "let fallback () = seeded_transform ()\n\
@@ -700,7 +767,7 @@ let () =
         eprintf "tune: %d search-less branches, %d fallback bindings, %d sanctioned sites\n"
           fallback.searchless_branches (List.length fallback.fallbacks)
           (List.length fallback.sanctioned_sites);
-      p "the local fallback every search-less branch tune reaches calls spells the seeded transform"
+      p "the local fallback every search-less branch tune reaches calls calls the seeded transform"
         found;
       let reached, readers = reach_past_fallback ~root:"tune" source in
       let refs_of n =
