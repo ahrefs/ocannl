@@ -1327,7 +1327,8 @@ type held_read = { held_key : string; holder : string; held_at : int }
     Where it errs, it errs as {!top_level_key_reach} does: long where a local binding shadows a
     top-level name and where a value is only mentioned, short where that model names what it does
     not follow -- an [open], a [let module], a first-class module, a functor's parameter, a module
-    outside [external_keys]. Beyond that it does not see a lazy in a class or object body, a memo
+    outside [external_keys]. In an object expression, a [val] initializer is module-level code and a
+    method body is a function's. Beyond that it does not see a lazy in a class declaration, a memo
     built some other way (a [ref] cell, a table), or a value computed EAGERLY at initialization,
     which is a different class: it is read before any test code runs. *)
 let process_lifetime_reads ?opaque ?external_keys ?settings_field_keys content =
