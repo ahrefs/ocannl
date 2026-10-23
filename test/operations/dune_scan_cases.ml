@@ -1117,6 +1117,306 @@ let backend_rule_cases =
       [ "rule REPORTED: declares neither +floor" ] );
   ]
 
+(* gh-ocannl-1518: a backend the action fixes is the marker's to name. [Scan.backend_pins] reads the
+   forms its header lists and [Scan.backend_pin_issues] decides; each stanza renders as "<head>:"
+   and its issues, "clean" when it has none. Every violating arm sits beside the nearest legitimate
+   one, and the forms that merely MENTION the backend -- a declaration, an `enabled_if`, a path read
+   out of the configuration -- are pinned as no pin at all. *)
+let render_pin_issue = function
+  | Scan.Pin_unread form -> "unread " ^ form
+  | Scan.Pin_off_vocabulary { off_backend; _ } -> "off the vocabulary: " ^ off_backend
+  | Scan.Pin_unnamed { unnamed_backend; named; _ } ->
+      Printf.sprintf "unnamed %s (%s)" unnamed_backend
+        (match named with
+        | None -> "no marker"
+        | Some words -> "marker: " ^ String.concat ~sep:"," words)
+
+let render_pins source =
+  let contract = Scan.backend_marker_contract source in
+  List.map contract.Scan.contract_stanzas ~f:(fun marked ->
+      let stanza = marked.Scan.marker_stanza in
+      let issues =
+        Scan.backend_pin_issues (Scan.backend_rule_of marked)
+          (Scan.backend_pins stanza.Scan.marked_sexp)
+      in
+      stanza.Scan.marked_head ^ ": "
+      ^
+      match issues with
+      | [] -> "clean"
+      | issues -> String.concat ~sep:"; " (List.map issues ~f:render_pin_issue))
+
+let backend_pin_cases =
+  [
+    ( "a setenv pin its marker names",
+      {dune|(rule
+ ; ocannl-backend: hip -- the action pins hip
+ (action (setenv OCANNL_BACKEND hip (run %{dep:probe.exe}))))|dune},
+      [ "rule: clean" ] );
+    (* The shape staging#1318's round 1 found: `Slot_kind` would read cc and run hip. *)
+    ( "a setenv pin its marker leaves out",
+      {dune|(rule
+ ; ocannl-backend: cc -- says cc
+ (action (setenv OCANNL_BACKEND hip (run %{dep:probe.exe}))))|dune},
+      [ "rule: unnamed hip (marker: cc)" ] );
+    ( "a setenv pin under a declaration instead of a marker",
+      {dune|(rule (deps (env_var OCANNL_BACKEND))
+ (action (setenv OCANNL_BACKEND hip (run %{dep:probe.exe}))))|dune},
+      [ "rule: unnamed hip (no marker)" ] );
+    (* Windows folds the name, so the lowercase spelling pins there. *)
+    ( "a lowercase setenv name pins too",
+      {dune|(rule
+ ; ocannl-backend: cuda -- the action pins cuda
+ (action (setenv ocannl_backend cuda (run %{dep:probe.exe}))))|dune},
+      [ "rule: clean" ] );
+    ( "a command-line pin its marker names",
+      {dune|(rule
+ ; ocannl-backend: cc -- the command line pins cc
+ (action (run %{dep:probe.exe} --ocannl_backend=cc)))|dune},
+      [ "rule: clean" ] );
+    ( "a command-line pin under a `none` marker",
+      {dune|(rule
+ ; ocannl-backend: none -- claims no backend
+ (action (run %{dep:probe.exe} --ocannl_backend=cc)))|dune},
+      [ "rule: unnamed cc (marker: none)" ] );
+    (* The runtime's own reader decides what is a pin, so every spelling it accepts is one. *)
+    ( "the prefix-free and dashed spellings are pins as well",
+      {dune|(rule
+ ; ocannl-backend: cc -- says cc
+ (action (progn (run %{dep:probe.exe} --backend=cuda) (run %{dep:probe.exe} -OCANNL-BACKEND=metal))))|dune},
+      [ "rule: unnamed cuda (marker: cc); unnamed metal (marker: cc)" ] );
+    ( "a marker naming several backends answers for each pinned one",
+      {dune|(rule
+ ; ocannl-backend: cc,multidev_cc -- runs the model on both
+ (action
+  (progn
+   (run %{dep:probe.exe} --ocannl_backend=cc)
+   (setenv OCANNL_BACKEND multidev_cc (run %{dep:probe.exe})))))|dune},
+      [ "rule: clean" ] );
+    (* Per stanza, not per run: a pin around a helper fixes the backend the stanza holds too. *)
+    ( "a pin around one run of a progn is the stanza's",
+      {dune|(rule
+ ; ocannl-backend: cc -- says cc
+ (action (progn (run %{dep:probe.exe}) (setenv OCANNL_BACKEND hip (run %{dep:helper.exe})))))|dune},
+      [ "rule: unnamed hip (marker: cc)" ] );
+    ( "a deprecated alias is no name a marker can carry",
+      {dune|(rule
+ ; ocannl-backend: cc -- says cc
+ (action (run %{dep:probe.exe} --ocannl_backend=sync_cc)))|dune},
+      [ "rule: off the vocabulary: sync_cc" ] );
+    ( "nor is `none`",
+      {dune|(rule
+ ; ocannl-backend: none -- claims no backend
+ (action (setenv OCANNL_BACKEND none (run %{dep:probe.exe}))))|dune},
+      [ "rule: off the vocabulary: none" ] );
+    (* The unread forms: each is a position where a backend could be fixed, in a spelling this
+       reader does not resolve. *)
+    ( "a backend flag handed to a PATH tool",
+      {dune|(rule
+ ; ocannl-backend: none -- hands a script to python3
+ (action (run python3 %{dep:driver.py} --ocannl_backend=cuda)))|dune},
+      [ "rule: unread --ocannl_backend=cuda" ] );
+    ( "an env launcher's assignment",
+      {dune|(rule
+ ; ocannl-backend: cuda -- launched under cuda
+ (action (run env OCANNL_BACKEND=cuda %{dep:probe.exe})))|dune},
+      [ "rule: unread OCANNL_BACKEND=cuda" ] );
+    ( "a setenv value read from a pform",
+      {dune|(rule
+ ; ocannl-backend: cc -- says cc
+ (action (setenv OCANNL_BACKEND %{env:B=cc} (run %{dep:probe.exe}))))|dune},
+      [ "rule: unread (setenv OCANNL_BACKEND %{env:B=cc} …)" ] );
+    ( "an emptied variable, which hands the run back to the configuration",
+      {dune|(rule
+ ; ocannl-backend: cc -- says cc
+ (action (setenv OCANNL_BACKEND "" (run %{dep:probe.exe}))))|dune},
+      [ "rule: unread (setenv OCANNL_BACKEND \"\" …)" ] );
+    ( "a command-line value read from a pform",
+      {dune|(rule
+ ; ocannl-backend: cc -- says cc
+ (action (run %{dep:probe.exe} --ocannl_backend=%{read:b.txt})))|dune},
+      [ "rule: unread --ocannl_backend=%{read:b.txt}" ] );
+    ( "a shell line naming the key",
+      {dune|(rule
+ ; ocannl-backend: cuda -- launched under cuda
+ (action (bash "OCANNL_BACKEND=cuda ./probe.exe")))|dune},
+      [ "rule: unread OCANNL_BACKEND=cuda ./probe.exe" ] );
+    ( "a shell line carrying a backend flag",
+      {dune|(rule
+ ; ocannl-backend: cuda -- launched under cuda
+ (action (system "./probe.exe --backend=cuda")))|dune},
+      [ "rule: unread ./probe.exe --backend=cuda" ] );
+    ( "an inline-test runner's flag",
+      {dune|(library (name l)
+ ; ocannl-backend: cc -- says cc
+ (inline_tests (deps ocannl_config) (flags --ocannl_backend=cc)))|dune},
+      [ "library: unread --ocannl_backend=cc" ] );
+    (* A stanza the XOR already refuses is not also told its pin is unnamed... *)
+    ( "a pin on a stanza declaring neither is the XOR's to report",
+      {dune|(rule (action (setenv OCANNL_BACKEND hip (run %{dep:probe.exe}))))|dune},
+      [ "rule: clean" ] );
+    (* ...but an unread form is reported whatever the XOR says. *)
+    ( "an unread form on such a stanza is still reported",
+      {dune|(rule (action (run env OCANNL_BACKEND=hip %{dep:probe.exe})))|dune},
+      [ "rule: unread OCANNL_BACKEND=hip" ] );
+    (* The nearest honest neighbours: mentions of the backend that fix nothing. *)
+    ( "a declaration, an enabled_if and a path read from the configuration pin nothing",
+      {dune|(rule (deps ocannl_config (env_var OCANNL_BACKEND))
+ (enabled_if (<> %{env:OCANNL_BACKEND=cc} metal))
+ (action
+  (progn
+   (run %{dep:probe.exe})
+   (run %{dep:minised.exe} "log/%{read:../config/ocannl_backend.txt}-0-0.log" %{target}))))|dune},
+      [ "rule: clean" ] );
+    ( "another variable set around the run pins nothing",
+      {dune|(rule (deps (env_var OCANNL_BACKEND))
+ (action (setenv OCANNL_TOOL_PROBE 1 (run %{dep:probe.exe} --ocannl_log_level=1))))|dune},
+      [ "rule: clean" ] );
+  ]
+
+(* The directory-wide binding, refused outright: the [(subdir …)] scope of each `env` stanza binding
+   the backend in `env-vars`, "." for the dune file's own. *)
+let backend_env_vars_cases =
+  [
+    ( "an env stanza binding the backend",
+      {dune|(env (_ (env-vars (OCANNL_BACKEND cuda))))|dune},
+      [ "." ] );
+    ( "and one inside a subdir, in any case",
+      {dune|(subdir gen (env (dev (env-vars (FOO 1) (ocannl_backend hip)))))|dune},
+      [ "gen" ] );
+    ( "an env stanza binding something else, or setting the backend's NAME as a value",
+      {dune|(env (_ (env-vars (FOO OCANNL_BACKEND)) (flags (:standard -w +50))))|dune},
+      [] );
+  ]
+
+(* gh-ocannl-1501: [Scan.program_runners] alone, put to dune files this repository does not contain.
+   It is the identity rule the ambient gate, the cc search's width pin and the refused-action scan
+   all match runners with, and its cases went with the artifact rule that once carried them
+   (gh-ocannl-1425); the family and search controls in `env_var_deps --control` still reach it, but
+   only through verdicts that a different identity rule could also produce.
+
+   Each case names the subdirectory the executables sit in and renders every program the stanzas
+   there declare as "<name> <- <runners>", each runner by the alias it sits on and the variables
+   pinned around every run of THAT program, or "<name> unrun". Runners are taken from the whole file
+   with their own subdirectories, as the callers pass them. *)
+let render_runners ~program_subdir source =
+  let placed = Scan.walk "" (Scan.stanzas source) ~f:(fun subdir stanza -> [ (subdir, stanza) ]) in
+  let group =
+    List.filter_map placed ~f:(fun (subdir, stanza) ->
+        Option.some_if (String.equal subdir program_subdir) stanza)
+  in
+  List.concat_map group ~f:(fun stanza ->
+      match Scan.head stanza with
+      | Some ("executable" | "executables") ->
+          Scan.program_runners ~subdir:program_subdir ~runner_stanzas:placed group stanza
+          |> List.map ~f:(fun (name, runners) ->
+              match runners with
+              | [] -> name ^ " unrun"
+              | runners ->
+                  name ^ " <- "
+                  ^ String.concat ~sep:", "
+                      (List.map runners ~f:(fun (runner, pinned) ->
+                           String.concat ~sep:"+" (Scan.aliases_of runner)
+                           ^
+                           if Set.is_empty pinned then ""
+                           else " [" ^ String.concat ~sep:" " (Set.to_list pinned) ^ "]")))
+      | _ -> [])
+
+let program_runners_cases =
+  [
+    (* The baseline: a dependency expansion names the stanza's own executable. *)
+    ( "a dependency expansion runs the local executable",
+      "",
+      {dune|(executable (name probe) (modules probe))
+(rule (alias a) (action (run %{dep:probe.exe})))|dune},
+      [ "probe <- a" ] );
+    (* The path AS WRITTEN is the identity: a basename rule made `../support/probe.exe` the runner
+       of a local `probe` (Codex P2, round 2 of PR #457). *)
+    ( "a same-named executable elsewhere is not the local one",
+      "",
+      {dune|(executable (name probe) (modules probe))
+(rule (alias a) (action (run ../support/probe.exe)))|dune},
+      [ "probe unrun" ] );
+    (* A public name is a name, resolved from anywhere (gh-ocannl-783)... *)
+    ( "a runner naming the public name is a runner",
+      "",
+      {dune|(executable (name probe) (public_name pkg.probe) (modules probe))
+(rule (alias a) (action (run %{bin:pkg.probe})))|dune},
+      [ "probe <- a" ] );
+    (* ...and a path spelled like it is a path (Codex P2, round 10 of PR #457). *)
+    ( "a local path spelled like the public name is not",
+      "",
+      {dune|(executable (name probe) (public_name pkg.probe) (modules probe))
+(rule (alias a) (action (run ./pkg.probe)))|dune},
+      [ "probe unrun" ] );
+    (* gh-ocannl-747: one program per name, and `(public_names …)` pairs positionally, `-` being the
+       placeholder for a name that is not installed. *)
+    ( "each name of an executables stanza has its own runners",
+      "",
+      {dune|(executables (names a b) (public_names - pkg.b) (modules a b))
+(rule (alias ra) (action (run %{dep:a.exe})))
+(rule (alias rb) (action (run %{bin:pkg.b})))|dune},
+      [ "a <- ra"; "b <- rb" ] );
+    ( "one rule running both names is a runner of each",
+      "",
+      {dune|(executables (names a b) (modules a b))
+(rule (alias both) (action (progn (run %{dep:a.exe}) (run %{dep:b.exe}))))|dune},
+      [ "a <- both"; "b <- both" ] );
+    (* gh-ocannl-982: a dependency expansion resolves from the stanza, whatever `chdir` says, in
+       each of its spellings. *)
+    ( "a dependency expansion under chdir keeps the stanza's identity",
+      "",
+      {dune|(executable (name probe) (modules probe))
+(rule (alias dep) (action (chdir nested (run %{dep:probe.exe}))))
+(rule (deps (:runner probe.exe)) (alias named) (action (chdir nested (run %{runner}))))
+(rule (alias exe) (action (chdir nested (run %{exe:./probe.exe}))))|dune},
+      [ "probe <- dep, named, exe" ] );
+    (* A literal path follows `chdir`: this rule runs `a`'s program, not `b`'s (Codex P2, round 4 of
+       PR #484). *)
+    ( "a literal path under chdir names the program it moves to",
+      "b",
+      {dune|(subdir b (executable (name probe) (modules probe))
+ (rule (alias moved) (action (chdir ../a (run probe.exe)))))|dune},
+      [ "probe unrun" ] );
+    (* Across `(subdir …)`: a rule outside the wrapper runs the nested executable under the
+       qualified path, and a rule in a sibling subdirectory runs a different program (Codex P2,
+       rounds 3-4 of PR #484). *)
+    ( "a top-level rule runs a nested executable by its qualified path",
+      "gen",
+      {dune|(subdir gen (executable (name probe) (modules probe)))
+(rule (alias literal) (action (run gen/probe.exe)))
+(rule (alias dep) (action (chdir elsewhere (run %{dep:gen/../gen/probe.exe}))))|dune},
+      [ "probe <- literal, dep" ] );
+    ( "a nested dependency expansion under chdir keeps its subdirectory",
+      "gen",
+      {dune|(subdir gen (executable (name probe) (modules probe))
+ (rule (alias inner) (action (chdir ../other (run %{dep:probe.exe})))))|dune},
+      [ "probe <- inner" ] );
+    ( "a rule in a sibling subdirectory is not this program's runner",
+      "a",
+      {dune|(subdir a (executable (name probe) (modules probe)))
+(subdir b (rule (alias sibling) (action (run probe.exe))))|dune},
+      [ "probe unrun" ] );
+    (* A shell line names no program the identity rule can match: it is a site of its own kind
+       (`Unknown_directory`), and no runner of anything here. *)
+    ( "a shell line is no named runner",
+      "",
+      {dune|(executable (name probe) (modules probe))
+(rule (alias sh) (action (bash "./probe.exe")))|dune},
+      [ "probe unrun" ] );
+    (* The pins: a variable counts where it is in force at EVERY run of the program, so an unpinned
+       second run takes it back (gh-ocannl-749, Codex P1 round 1), a pin around a helper says
+       nothing of the subject (Codex P2, round 4), and a value reading the variable back pins
+       nothing (gh-ocannl-1320). *)
+    ( "the variables pinned around every run of the program",
+      "",
+      {dune|(executables (names probe helper) (modules probe helper))
+(rule (alias pinned) (action (setenv FOO 1 (setenv BAR 2 (run %{dep:probe.exe})))))
+(rule (alias half) (action (progn (setenv FOO 1 (run %{dep:probe.exe})) (run %{dep:probe.exe}))))
+(rule (alias helper) (action (progn (setenv FOO 1 (run %{dep:helper.exe})) (run %{dep:probe.exe}))))
+(rule (alias echo) (action (setenv FOO %{env:FOO=1} (run %{dep:probe.exe}))))|dune},
+      [ "probe <- pinned [BAR FOO], half, helper, echo"; "helper <- helper [FOO]" ] );
+  ]
+
 (* The dumb reading against the placed one, in the contract's own three counts: the whole text, the
    comments the lexer finds, and the comments a stanza's parentheses contain. A marker written where
    the comment lexer does not look -- into a quoted argument, into a field -- shows up as the first
@@ -1690,6 +1990,26 @@ let () =
           []
       in
       check ("backend rule -- " ^ name) expected found);
+  List.iter backend_pin_cases ~f:(fun (name, source, expected) ->
+      let found =
+        try render_pins source
+        with exn ->
+          fail "backend pins -- %s: the scan raised: %s" name (Exn.to_string exn);
+          []
+      in
+      check ("backend pins -- " ^ name) expected found);
+  List.iter backend_env_vars_cases ~f:(fun (name, source, expected) ->
+      check ("backend env-vars -- " ^ name) expected
+        (List.map (Scan.backend_env_vars_scopes source) ~f:(fun dir ->
+             if String.is_empty dir then "." else dir)));
+  List.iter program_runners_cases ~f:(fun (name, program_subdir, source, expected) ->
+      let found =
+        try render_runners ~program_subdir source
+        with exn ->
+          fail "program runners -- %s: the scan raised: %s" name (Exn.to_string exn);
+          []
+      in
+      check ("program runners -- " ^ name) expected found);
   List.iter sentinel_counting_cases ~f:(fun (name, source, (in_text, in_comments, in_stanzas)) ->
       let contract = Scan.backend_marker_contract source in
       let render text comments stanzas =

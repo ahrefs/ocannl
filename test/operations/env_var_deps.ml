@@ -80,6 +80,12 @@
    skip. What the marker costs instead is a sentence of classification per stanza, written where the
    next author will copy it from.
 
+   And the marker has to be true of the action (gh-ocannl-1518): every consumer of the markers reads
+   a stanza's backends off its marker and never analyses what it runs, so a backend the action fixes
+   -- a `setenv`, a command-line flag -- must be one the marker names. `Scan.backend_pins` reads the
+   pins from a closed list of forms, refusing anything else in a pinning position as unread, and a
+   directory-wide `env-vars` binding of the backend is refused outright.
+
    {1 What decides "addressed to the configuration"}
 
    `Utils.classify_env_var`, the same function the startup check uses (gh-ocannl-629), so a name a
@@ -1105,6 +1111,36 @@ let refuse name =
        = 1);
   printf "\n"
 
+(* What one module of a stanza's explicit `(modules …)` reads: the tracing gates its preprocessor
+   consults and the variables it reads by name at run time, or [None] after a refusal
+   (gh-ocannl-1500). A module that does not parse is the module's to fix and is named with the
+   parser's own located report; any other exception is this scan's own defect, and calling it a
+   parse failure would send the reader to a file that is fine (gh-ocannl-1292). Either way the walk
+   goes on to the next module rather than taking the whole check down with an uncaught exception,
+   which used to leave every later dune file unchecked. [read] is the reader, a parameter so the
+   refusal control can plant the defect. *)
+let module_reads_or_refusal
+    ?(read =
+      fun content ->
+        (Sources.tracing_gates_in_source content, Sources.env_var_reads_in_source content)) ~fail
+    ~source content =
+  match Test_utils.Scan_attempt.run (fun () -> read content) with
+  | Scanned reads -> Some reads
+  | Unparsed where ->
+      fail
+        (Printf.sprintf
+           "%s does not parse as OCaml, so the tracing gates and by-name environment reads of its \
+            stanza cannot be established: %s"
+           source where);
+      None
+  | Raised exn ->
+      fail
+        (Printf.sprintf
+           "the tracing-gate walk raised %s on %s, which parses -- a defect in this scan rather \
+            than in the source, so its gates and environment reads went unchecked"
+           exn source);
+      None
+
 let main () =
   if Array.length argv < 2 then (
     eprintf "Usage: %s <workspace_root> <dune file or .ml source...>\n" argv.(0);
@@ -1487,6 +1523,19 @@ let main () =
       let marked =
         List.map marker_contract.Scan.contract_stanzas ~f:(fun m -> m.Scan.marker_stanza)
       in
+      (* gh-ocannl-1518: a directory-wide pin reaches stanzas in other dune files, whose markers
+         this one cannot speak for. *)
+      List.iter (Scan.backend_env_vars_scopes content) ~f:(fun subdir ->
+          Int.incr xor_violations;
+          fail
+            (Printf.sprintf
+               "%s%s binds %s in an `(env … (env-vars …))` stanza, which fixes the backend of \
+                every stanza below it, in other dune files too -- no stanza's marker can name a \
+                pin made there. Pin it in the action of each stanza that needs it, and name it in \
+                that stanza's marker"
+               dune_file
+               (if String.is_empty subdir then "" else Printf.sprintf " in `(subdir %s …)`" subdir)
+               Scan.backend_env_var));
       (* gh-ocannl-1368: whether a run can select cc, by the backend rule's own reading of the
          stanza running it. *)
       let runs_cc runner =
@@ -1610,7 +1659,50 @@ let main () =
           (* The rule itself is [Scan.backend_rule_of]: this check owns the wording of the
              diagnostics and the tallies, and the DECISION lives with the scan so that it can be put
              to a stanza the repository does not contain (gh-ocannl-690). *)
-          match Scan.backend_rule_of marked_stanza with
+          let rule = Scan.backend_rule_of marked_stanza in
+          (* gh-ocannl-1518: a backend the action fixes is the marker's to name, since every
+             consumer of the markers -- `Slot_kind`'s width and slot above all -- reads the backends
+             a stanza holds off its marker and never analyses its action. The decision is
+             [Scan.backend_pin_issues]; the forms it reads are listed with [Scan.backend_pins]. *)
+          List.iter
+            (Scan.backend_pin_issues rule (Scan.backend_pins stanza.Scan.marked_sexp))
+            ~f:(fun issue ->
+              Int.incr xor_violations;
+              match issue with
+              | Scan.Pin_unread form ->
+                  fail
+                    (Printf.sprintf
+                       "%s may fix its backend in its action through `%s`, a form this check does \
+                        not read -- so no marker can be held to it. Pin the backend with `(setenv \
+                        %s <backend> …)` around the run, or with `--ocannl_backend=<backend>` on a \
+                        program of this workspace, and name it in the marker (gh-ocannl-1518)"
+                       where form Scan.backend_env_var)
+              | Scan.Pin_off_vocabulary { off_backend; off_form } ->
+                  fail
+                    (Printf.sprintf
+                       "%s fixes its backend to `%s` through `%s`, which is none of the backends a \
+                        marker can name (%s) -- pin it by its canonical name"
+                       where off_backend off_form
+                       (String.concat ~sep:", "
+                          (List.filter Scan.marker_backends ~f:(fun b ->
+                               not (String.equal b "none")))))
+              | Scan.Pin_unnamed { unnamed_backend; unnamed_form; named } ->
+                  fail
+                    (Printf.sprintf
+                       "%s pins the backend %s through `%s`, and %s -- every consumer of the \
+                        markers reads a stanza's backends off its marker alone, so a batch \
+                        reaching it would run %s without its slot or width. Name it: `; %s %s -- \
+                        <reason>`"
+                       where unnamed_backend unnamed_form
+                       (match named with
+                       | None -> "carries no backend marker naming it"
+                       | Some words -> "its marker names " ^ String.concat ~sep:"," words)
+                       unnamed_backend Scan.marker_sentinel
+                       (match named with
+                       | Some words when not (List.mem words "none" ~equal:String.equal) ->
+                           String.concat ~sep:"," (words @ [ unnamed_backend ])
+                       | _ -> unnamed_backend)));
+          match rule with
           | Scan.Runs_nothing -> ()
           | Scan.Names_twice line ->
               Int.incr xor_violations;
@@ -2278,10 +2370,17 @@ let main () =
                               (module_name ^ ".ml", In_channel.read_all on_disk))
                       | _ -> None)
                   in
+                  (* Each module read once, through its refusal (gh-ocannl-1500): an unparsable
+                     module used to raise out of the whole check here. *)
+                  let module_reads =
+                    List.filter_map sources ~f:(fun (source, content) ->
+                        Option.map
+                          (module_reads_or_refusal ~fail ~source:(Scan.in_subdir dir source) content)
+                          ~f:(fun (gates, env_reads) -> (source, gates, env_reads)))
+                  in
                   let read_gates =
-                    List.concat_map sources ~f:(fun (source, content) ->
-                        Sources.tracing_gates_in_source content
-                        |> List.map ~f:(fun gate -> (gate, source)))
+                    List.concat_map module_reads ~f:(fun (source, gates, _) ->
+                        List.map gates ~f:(fun gate -> (gate, source)))
                   in
                   if (not (List.is_empty declared_gates)) && not (Set.mem scanned_dirs dir) then
                     fail
@@ -2325,8 +2424,8 @@ let main () =
                     | Some _ -> env_vars_of "deps"
                     | None -> declared
                   in
-                  List.iter sources ~f:(fun (source, content) ->
-                      Sources.env_var_reads_in_source content
+                  List.iter module_reads ~f:(fun (source, _, env_reads) ->
+                      env_reads
                       |> List.iter ~f:(fun read ->
                           let exempt_key = dir ^ "/" ^ source ^ ":" ^ read in
                           (* A credential read by name is refused before the classification, which
@@ -4943,12 +5042,14 @@ let ambient_gate_control () =
    nothing, two on one stanza, one contradicting an `(env_var OCANNL_BACKEND)`, the marker's text
    outside a comment, a declaration of a variable the ambient record carries, one alias diffing two
    goldens, an undeclared tracing gate, an undeclared by-name read of a reserved tooling variable, a
-   test naming a module no source was handed for, the initializer called from a library module and a
-   library source naming it that does not parse -- beside a second dune file declaring a gate over a
-   directory the checker was handed no source from, and a third putting its descendants' modules
-   into its stanzas with `(include_subdirs …)`. A second run hands the checker nothing at all. The
-   claims are gates -- incidental refusals would keep the child at exit 1 on their own -- and each
-   refusal's own `FAIL:` line is the evidence `raw_direct_evidence` attributes to them. *)
+   test naming a module no source was handed for, the initializer called from a library module, a
+   library source naming it that does not parse, a library listing a module that does not parse in
+   its own `(modules …)`, and the backend pins of gh-ocannl-1518 -- beside a second dune file
+   declaring a gate over a directory the checker was handed no source from, and a third putting its
+   descendants' modules into its stanzas with `(include_subdirs …)`. A second run hands the checker
+   nothing at all. The claims are gates -- incidental refusals would keep the child at exit 1 on
+   their own -- and each refusal's own `FAIL:` line is the evidence `raw_direct_evidence` attributes
+   to them. *)
 let malformed_tree_subject =
   {dune|; ocannl-backend: none -- between stanzas, about none of them.
 (rule
@@ -4987,8 +5088,34 @@ let malformed_tree_subject =
 (test (name envread) (modules envread))
 (test (name ghost) (modules ghost))
 ; dune's default module set: initlib and broken, which no other stanza claims (the tracing walk
-; reads only an explicit `(modules …)`, and would stop on the unparsable one).
+; reads only an explicit `(modules …)`).
 (library (name initlib))
+; An explicit `(modules …)` naming a module that does not parse: the tracing walk refuses it by name
+; and goes on, where it used to raise out of the whole check (gh-ocannl-1500).
+(library (name torn) (modules torn))
+
+; gh-ocannl-1518: backends the actions fix, against what the markers name -- a pin the marker
+; leaves out, a pin by a name no marker can carry, a pin through a launcher this check does not
+; read, and a directory-wide binding.
+(rule
+ ; ocannl-backend: cc -- names cc around a run the action pins to hip.
+ (target e.actual)
+ (deps ocannl_config)
+ (action (with-stdout-to %{target} (setenv OCANNL_BACKEND hip (run ./noop.exe)))))
+
+(rule
+ ; ocannl-backend: cc -- the command line names the backend by a deprecated alias.
+ (target f.actual)
+ (deps ocannl_config)
+ (action (with-stdout-to %{target} (run ./noop.exe --ocannl_backend=sync_cc))))
+
+(rule
+ ; ocannl-backend: none -- an env launcher sets a backend this check does not read.
+ (target g.actual)
+ (deps ocannl_config)
+ (action (with-stdout-to %{target} (run env OCANNL_BACKEND=cuda ./noop.exe))))
+
+(env (_ (env-vars (OCANNL_BACKEND cuda))))
 |dune}
 
 let malformed_tree_sources =
@@ -4998,6 +5125,7 @@ let malformed_tree_sources =
     ("t/envread.ml", "let _ = Sys.getenv_opt \"OCANNL_TOOL_PROBE_MASK\"\n");
     ("t/initlib.ml", "let () = Test_utils.Generated.init ~backend_name:\"cc\"\n");
     ("t/broken.ml", "let = Test_utils.Generated.init\n");
+    ("t/torn.ml", "let torn =\n");
     ( "far/dune",
       "(library (name far) (modules far) (preprocessor_deps (env_var OCANNL_LOG_LEVEL_PROBE)))\n" );
     ("inc/dune", "(include_subdirs unqualified)\n");
@@ -5336,6 +5464,43 @@ let search_control () =
     (ok "lapsed" && ok "unblessed");
   try remove_tree root with Unix.Unix_error _ -> ()
 
+(* gh-ocannl-1500: the tracing walk's two ways of failing on one module, each reaching its own
+   refusal and only that one (the `routed_case` pattern of gh-ocannl-1292). The observation is
+   recorded only for the message the format names, so a parse failure reported as a scanner defect,
+   or the reverse, records nothing. The malformed tree above puts the parse refusal to a child run
+   too, where the uncaught exception it replaced exited 2. *)
+let module_reads_control () =
+  let source = "test/operations/env_var_deps.ml" in
+  let routed_case label ~format ~fragment run =
+    let messages = ref [] in
+    run (fun message -> messages := message :: !messages);
+    let routed =
+      match !messages with [ m ] -> String.is_substring m ~substring:fragment | _ -> false
+    in
+    if routed then Refusal_manifest.observe_failure ~source ~format;
+    Verdict.p label routed
+  in
+  printf
+    "The tracing walk is handed one module that does not parse, and one that parses with a planted\n\
+     defect in its reader.\n\n";
+  routed_case "a module of an explicit `(modules …)` that does not parse reaches the parse refusal"
+    ~format:
+      "%s does not parse as OCaml, so the tracing gates and by-name environment reads of its \
+       stanza cannot be established: %s" ~fragment:"t/torn.ml does not parse as OCaml" (fun fail ->
+      ignore (module_reads_or_refusal ~fail ~source:"t/torn.ml" "let torn =\n"));
+  routed_case
+    "a reader exception on a module that parses reaches the scanner-defect refusal, not the parse \
+     one"
+    ~format:
+      "the tracing-gate walk raised %s on %s, which parses -- a defect in this scan rather than in \
+       the source, so its gates and environment reads went unchecked"
+    ~fragment:"raised Invalid_argument(\"planted\") on t/good.ml, which parses" (fun fail ->
+      ignore
+        (module_reads_or_refusal
+           ~read:(fun _ -> invalid_arg "planted")
+           ~fail ~source:"t/good.ml" "let good = 1\n"));
+  printf "\n"
+
 let malformed_tree_control () =
   let exe =
     let name = Stdlib.Sys.executable_name in
@@ -5381,6 +5546,7 @@ let () =
       ambient_gate_control ();
       repository_inventory_control ();
       gateless_scope_control ();
+      module_reads_control ();
       malformed_tree_control ();
       (* Dune's repository-wide rule hands the same source to [main] as [./env_var_deps.ml] after a
          full build has materialized the local build-tree copy. Exercise that spelling here too: the

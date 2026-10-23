@@ -154,6 +154,8 @@ runtest d (no declaration)               names nothing + reads config
 a stanza declaring neither reads the configuration: true
 runtest d (two markers)                  unknown: the dune file in d is unreadable here ((Failure "a stanza carrying two backend markers"))
 a stanza carrying two markers makes the tree unreadable, never names nothing: true
+build @d/se (a pin its marker names)     names hip + reads config
+a backend the action pins holds the batch through its marker: true
 build @d/runtest-t (a compiler response file) names nothing + reads config
 a compiler response file off the list counts the configuration: true
 build @d/rd (a read pform in a command position) names nothing + reads config
