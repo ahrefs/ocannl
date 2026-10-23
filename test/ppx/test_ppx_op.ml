@@ -49,3 +49,17 @@ let%op _three_layer_perceptron ~label ~dim1 ~dim2 ~dim3 () =
   let l2 = mlp_layer ~label:(label @ [ "L2" ]) ~hid_dim:dim2 () in
   let l3 = mlp_layer ~label:(label @ [ "L3" ]) ~hid_dim:dim3 () in
   fun x -> l3 ~x:(l2 ~x:(l1 ~x))
+
+(* Dimension captures are bound per call, at the top of their innermost enclosing function, while
+   inline declarations keep their lifting to the unit parameter or the definition
+   (gh-ocannl-1507). *)
+let%op _capture_no_unit x = x ++ "ab => a" [ "b" ]
+
+let%op _capture_with_unit () x =
+  let y = { cw } * x in
+  (y ++ "ab => a" [ "b" ]) /. dim b
+
+let%op _capture_siblings =
+  let f x = x ++ "ab => a" [ "b" ] in
+  let g x = x ++ "ab => b" [ "b" ] in
+  fun x -> f x + g x

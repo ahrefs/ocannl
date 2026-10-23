@@ -14,3 +14,8 @@ let%op test_variable_capture x =
 let%op test_mixed x =
   Shape.set_equal a b;
   x +* { b } "ab;bc=>ac" [ "a"; "b" ]
+
+(* The capture is bound inside [fun x], the parameter after the unit: it would shadow [c]. *)
+let%op test_capture_shadows_outer_param () =
+  let p = { c } in
+  fun x -> p + (x ++ "ab=>a" [ "c" ])

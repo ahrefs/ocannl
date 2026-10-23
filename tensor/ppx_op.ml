@@ -521,7 +521,9 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ~opt_l
       in
       match find_unit [] args with
       | Some (before_unit, unit_param, after_unit) ->
-          (* With a unit parameter, always bind the collected inline definitions. *)
+          (* With a unit parameter, always bind the collected inline definitions. Captures directly
+             in this body are bound here too, since the unit function is their innermost function;
+             those under the parameters after the unit are already bound per call. *)
           let opt_label = find_label_param before_unit in
           let vbs, inner_body =
             let body =
@@ -569,12 +571,14 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ~opt_l
             match body with
             | Pfunction_body body ->
                 let vbs, body = loop ~label body in
+                let vbs, body = bind_captures ~loc vbs body in
                 (vbs, Pfunction_body body)
             | Pfunction_cases (cases, loc, attrs) ->
                 let vbs, cases =
                   List.unzip
                   @@ List.map cases ~f:(fun ({ pc_rhs; _ } as c) ->
                       let vbs, pc_rhs = loop ~label pc_rhs in
+                      let vbs, pc_rhs = bind_captures ~loc vbs pc_rhs in
                       (vbs, { c with pc_rhs }))
                 in
                 (List.concat vbs, Pfunction_cases (cases, loc, attrs))
@@ -585,12 +589,14 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ~opt_l
         match body with
         | Pfunction_body body ->
             let vbs, body = loop ?label body in
+            let vbs, body = bind_captures ~loc vbs body in
             (vbs, Pfunction_body body)
         | Pfunction_cases (cases, loc, attrs) ->
             let vbs, cases =
               List.unzip
               @@ List.map cases ~f:(fun ({ pc_rhs; _ } as c) ->
                   let vbs, pc_rhs = loop ?label pc_rhs in
+                  let vbs, pc_rhs = bind_captures ~loc vbs pc_rhs in
                   (vbs, { c with pc_rhs }))
             in
             (List.concat vbs, Pfunction_cases (cases, loc, attrs))

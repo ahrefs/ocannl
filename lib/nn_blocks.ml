@@ -613,14 +613,8 @@ let%op avg_pool2d ?(stride = 2) ?(window_size = 2) () x =
 (** Global average pooling - reduces each feature map to a single value by averaging, and drops the
     two spatial axes: [... | h, w, ..c..] becomes [... | ..c..]. Commonly used before the final
     classification layer. *)
-let global_avg_pool2d x =
-  (* The extension point sits inside the function so that the captured [h] and [w] are bound per
-     call: under [let%op global_avg_pool2d x = ...] they would be bound once, at the definition, and
-     every pooled input would have to share one spatial size. *)
-  let%op global_avg_pool2d =
-    (x ++ "... | h, w, ..c.. => ... | ..c.." [ "h"; "w" ]) /. (dim h *. dim w)
-  in
-  global_avg_pool2d
+let%op global_avg_pool2d x =
+  (x ++ "... | h, w, ..c.. => ... | ..c.." [ "h"; "w" ]) /. (dim h *. dim w)
 
 (* Running statistics are non-differentiable parameters: this gives them layer-local ownership,
    materialization, initialization through Train.init_params, and persistence with the model. *)

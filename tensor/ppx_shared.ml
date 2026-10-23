@@ -594,23 +594,121 @@ let einsum_unary_ops =
 let is_primitive_op op_ident =
   List.exists ~f:(Fn.flip Hashtbl.mem op_ident) [ ternary_ops; unary_ops; binary_ops ]
 
-let let_opt ~loc vbs expr =
-  (* Check for duplicates and create nested let bindings preserving definition order *)
-  let seen = Hashtbl.create (module String) in
-  List.fold_right vbs ~init:expr ~f:(fun vb acc ->
-      let name = match vb.pvb_pat.ppat_desc with Ppat_var { txt; _ } -> txt | _ -> "_" in
-      match Hashtbl.add seen ~key:name ~data:() with
-      | `Ok -> Ast_helper.Exp.let_ ~loc Nonrecursive [ vb ] acc
-      | `Duplicate ->
-          let loc = vb.pvb_loc in
-          let error_expr =
-            Ast_builder.Default.pexp_extension ~loc
-            @@ Location.error_extensionf ~loc
-                 "ppx_ocannl: name clash for inline definition or variable capture '%s' - the name \
-                  is already defined"
-                 name
-          in
-          Ast_helper.Exp.let_ ~loc Nonrecursive [ { vb with pvb_expr = error_expr } ] acc)
+include (
+  struct
+    (* The collected bindings ([vbs]) are of two kinds with different lifetimes (gh-ocannl-1507). An
+       inline declaration lives as long as the model instance, so it is lifted to the unit parameter
+       or the definition. A dimension capture names a variable of one einsum application's shape, so
+       it lives as long as one call: it is tagged [ocannl.capture] and bound at the top of its
+       innermost enclosing function body by [bind_captures]. In its place, the lifted list carries
+       an [ocannl.bound_capture] marker, which [let_opt] never emits but checks name clashes
+       against. *)
+    let capture_attr = "ocannl.capture"
+    let bound_capture_attr = "ocannl.bound_capture"
+
+    let has_attr name vb =
+      List.exists vb.pvb_attributes ~f:(fun a -> String.equal a.attr_name.txt name)
+
+    let with_attr ~name vb =
+      let loc = vb.pvb_loc in
+      let attr = Ast_builder.Default.attribute ~loc ~name:{ txt = name; loc } ~payload:(PStr []) in
+      { vb with pvb_attributes = [ attr ] }
+
+    let is_capture_vb = has_attr capture_attr
+    let vb_name vb = match vb.pvb_pat.ppat_desc with Ppat_var { txt; _ } -> txt | _ -> "_"
+
+    let clash_error vb =
+      let loc = vb.pvb_loc in
+      let error_expr =
+        Ast_builder.Default.pexp_extension ~loc
+        @@ Location.error_extensionf ~loc
+             "ppx_ocannl: name clash for inline definition or variable capture '%s' - the name is \
+              already defined"
+             (vb_name vb)
+      in
+      { vb with pvb_expr = error_expr }
+
+    let let_opt ~loc vbs expr =
+      (* Check for duplicates and create nested let bindings preserving definition order *)
+      let markers, vbs = List.partition_tf vbs ~f:(has_attr bound_capture_attr) in
+      let captured = Hash_set.of_list (module String) (List.map markers ~f:vb_name) in
+      let seen = Hashtbl.create (module String) in
+      List.fold_right vbs ~init:expr ~f:(fun vb acc ->
+          let vb = { vb with pvb_attributes = [] } in
+          let name = vb_name vb in
+          match Hashtbl.add seen ~key:name ~data:() with
+          | `Ok when not (Hash_set.mem captured name) ->
+              Ast_helper.Exp.let_ ~loc Nonrecursive [ vb ] acc
+          | `Ok | `Duplicate -> Ast_helper.Exp.let_ ~loc Nonrecursive [ clash_error vb ] acc)
+
+    (** Binds the captures among [vbs] at the top of [body], a function body, and returns the
+        bindings still to be lifted together with a marker per bound capture. A capture named like a
+        binding still to be lifted is a clash: it would shadow that binding. *)
+    let bind_captures ~loc vbs body =
+      let captures, lifted = List.partition_tf vbs ~f:is_capture_vb in
+      if List.is_empty captures then (vbs, body)
+      else
+        let lifted_names = Hash_set.of_list (module String) (List.map lifted ~f:vb_name) in
+        let clashes vb = Hash_set.mem lifted_names (vb_name vb) in
+        let markers =
+          List.filter_map captures ~f:(fun vb ->
+              if clashes vb then None else Some (with_attr ~name:bound_capture_attr vb))
+        in
+        let captures = List.map captures ~f:(fun vb -> if clashes vb then clash_error vb else vb) in
+        (lifted @ markers, let_opt ~loc captures body)
+
+    let collect_capture_labels ~loc head rest =
+      let capture_labels = head :: collect_list [] rest in
+      let capture_labels, errors =
+        List.partition_map capture_labels ~f:(fun expr ->
+            match string_literal expr with
+            | Some label -> Either.First (expr.pexp_loc, label)
+            | None ->
+                Either.Second
+                  (Ast_builder.Default.pexp_extension ~loc:expr.pexp_loc
+                  @@ Location.error_extensionf ~loc:expr.pexp_loc
+                       "ppx_ocannl %%op: expected a string literal"))
+      in
+      let capture_labels, more_errors =
+        List.fold_left capture_labels ~init:([], [])
+          ~f:(fun (labels, errors) ((loc, label) as arg) ->
+            if List.mem labels arg ~equal:(fun (_, a) (_, b) -> String.equal a b) then
+              ( labels,
+                (Ast_builder.Default.pexp_extension ~loc
+                @@ Location.error_extensionf ~loc "ppx_ocannl %%op: repeated variable capture '%s'"
+                     label)
+                :: errors )
+            else (arg :: labels, errors))
+      in
+      let capture_refs, capture_bindings =
+        List.map capture_labels ~f:(fun (loc, label) ->
+            let ref_expr =
+              [%expr Shape.get_variable_ref [%e Ast_builder.Default.estring ~loc label]]
+            in
+            let binding =
+              with_attr ~name:capture_attr
+              @@ Ast_builder.Default.value_binding ~loc
+                   ~pat:(Ast_builder.Default.pvar ~loc label)
+                   ~expr:ref_expr
+            in
+            (Ast_builder.Default.evar ~loc label, (label, binding)))
+        |> List.unzip
+      in
+      let capture_dims_expr =
+        Ast_builder.Default.elist ~loc (more_errors @ errors @ capture_refs)
+      in
+      let capture_vbs = List.map capture_bindings ~f:snd in
+      (capture_vbs, capture_dims_expr)
+  end :
+    sig
+      val let_opt : loc:location -> value_binding list -> expression -> expression
+
+      val bind_captures :
+        loc:location -> value_binding list -> expression -> value_binding list * expression
+
+      val collect_capture_labels :
+        loc:location -> expression -> expression -> value_binding list * expression
+    end)
 
 let no_vbs = []
 let reduce_vbss vbss = List.concat vbss
@@ -694,43 +792,6 @@ let ndarray_op ?axis_labels ?label ~ndarray_fn expr =
       axes_or_dims_arg ~loc ~kind:"output" output;
       (Nolabel, [%expr ()]);
     ]
-
-let collect_capture_labels ~loc head rest =
-  let capture_labels = head :: collect_list [] rest in
-  let capture_labels, errors =
-    List.partition_map capture_labels ~f:(fun expr ->
-        match string_literal expr with
-        | Some label -> Either.First (expr.pexp_loc, label)
-        | None ->
-            Either.Second
-              (Ast_builder.Default.pexp_extension ~loc:expr.pexp_loc
-              @@ Location.error_extensionf ~loc:expr.pexp_loc
-                   "ppx_ocannl %%op: expected a string literal"))
-  in
-  let capture_labels, more_errors =
-    List.fold_left capture_labels ~init:([], []) ~f:(fun (labels, errors) ((loc, label) as arg) ->
-        if List.mem labels arg ~equal:(fun (_, a) (_, b) -> String.equal a b) then
-          ( labels,
-            (Ast_builder.Default.pexp_extension ~loc
-            @@ Location.error_extensionf ~loc "ppx_ocannl %%op: repeated variable capture '%s'"
-                 label)
-            :: errors )
-        else (arg :: labels, errors))
-  in
-  let capture_refs, capture_bindings =
-    List.map capture_labels ~f:(fun (loc, label) ->
-        let ref_expr = [%expr Shape.get_variable_ref [%e Ast_builder.Default.estring ~loc label]] in
-        let binding =
-          Ast_builder.Default.value_binding ~loc
-            ~pat:(Ast_builder.Default.pvar ~loc label)
-            ~expr:ref_expr
-        in
-        (Ast_builder.Default.evar ~loc label, (label, binding)))
-    |> List.unzip
-  in
-  let capture_dims_expr = Ast_builder.Default.elist ~loc (more_errors @ errors @ capture_refs) in
-  let capture_vbs = List.map capture_bindings ~f:snd in
-  (capture_vbs, capture_dims_expr)
 
 let operators =
   (* TODO: Auto-generate this list from Operation.Make_DSL.O. *)

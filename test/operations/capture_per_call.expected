@@ -1,0 +1,9 @@
+unit-less, sequential: the width-3 call averages over its own width: true
+unit-less, sequential: the width-5 call averages over its own width: true
+unit-less, built together: the width-3 call averages over its own width: true
+unit-less, built together: the width-5 call averages over its own width: true
+unit-parameter instance: the width-3 call averages over its own width: true
+unit-parameter instance: the width-5 call averages over its own width: true
+unit-parameter instance: both calls use the instance's one parameter: true
+batch_norm1d: the batch-2 call normalizes with its own batch size: true
+batch_norm1d: the batch-4 call normalizes with its own batch size: true
