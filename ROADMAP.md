@@ -1,6 +1,6 @@
 # OCANNL Roadmap
 
-**v1.1.1 released October 15, 2026: consolidation after the transformer work, released as a bounded set against its release gate. Next: performance beyond transformers (v1.1.2, October 27), the training experience (v1.1.3, October 31) and reusable tensor programs (v1.2, November 15, 2026).**
+**v1.1.2 released October 27, 2026: performance beyond transformers, measured on a reduced ResNet-style leg, and a much faster untuned GPU training step. Next: the training experience (v1.1.3, October 31) and reusable tensor programs (v1.2, November 15, 2026).**
 
 This roadmap outlines the development plan for OCANNL through version 1.0 and beyond. Dates indicate **end of period** targets. Through v1.0 the schedule was pinned to conference deadlines; it is now project-internal, and the dates below are aspirational rather than external commitments.
 
@@ -453,23 +453,33 @@ documented trigger.
 
 ---
 
-## v1.1.2 — October 27, 2026
+## v1.1.2 — October 27, 2026 (released)
 **Theme: Performance beyond transformers**
 
-Created in the September 29 split. Each compiler improvement should close with a before/after
-benchmark cell; a measured null result is useful evidence too. The reduced ResNet-style leg comes
-first, since it is the cell the rest is measured on.
+Created in the September 29 split. Each compiler improvement closed with a before/after benchmark
+cell, and several of those cells are measured nulls. All of the milestone's issues closed except
+per-site flip-chain profitability (#717), which moved to v1.2.2 to wait for a workload whose
+tensorization sites disagree. The release went through the CI gate: scheduled Windows (#1411) and
+OCaml-floor (#1588) runs green, and a cross-machine `@slow` sweep. 223 issues closed between the
+v1.1.1 tag and this one.
 
-- **Reduced ResNet-style benchmark** (#1161): padded 3×3 convolution, residual adds, strided
-  1×1 shortcuts and batch-1 latency, with batch-1 strided 1×1 seeds (#1148) and second-reader
-  staging (#1147).
-- **Convolution compiler work**: flavor-indexed convolution family search (#697), Winograd
-  F(2×2, 3×3) (#505) and zero-nest workgroup geometry (#503). The last two have moved between
-  milestones since v1.0; if they are not moving by about October 22 they go to v1.3 rather than
-  hold the release.
-- **CPU kernel and sketch economy**: non-dividing packed GEBP (#627), pad profitability (#740),
-  blocktile/packed-scalar padding (#741), per-site flip-chain profitability (#717), and hermetic
-  `bin/` benchmark drivers (#743).
+- **Reduced ResNet-style benchmark** (#1161): `cifar_resnet` at batch 64 and 1, with padded 3×3
+  convolution, residual adds and strided 1×1 shortcuts. Second-reader staging (#1147) puts the tuned
+  cc step at 67.4 ms against torch CPU eager's 99.4 ms on an M4 Max. On GPUs, untuned, torch is
+  22–141× faster; tuned GPU cells remain to be taken.
+- **Convolution compiler work**: Winograd F(2×2, 3×3) (#505) makes the untuned cc step 2.22×
+  faster under `approximate`, at about twice the peak memory, and is neutral on Metal. The conv
+  family tree (#697), zeroed-site seeds (#503) and batch-1 strided 1×1 seeds (#1148) widened
+  coverage and measured neutral.
+- **CPU kernel and sketch economy**: non-dividing packed GEBP (#627), pad-waste pruning (#740)
+  cutting conv search time by 17–45%, and hermetic `bin/` benchmark drivers (#743). CPU blocktile
+  padding (#741) was measured as sound but never winning, and was not landed.
+- **Beyond the milestone**: the untuned GPU training default now seeds a register-tiled plan and
+  splits narrow reductions (#1324, #1325, #1412, #1413, #1414). This takes the untuned CUDA
+  `gpt2_mini_train` batch-256 step from 1720.6 to about 313 ms. Tuned search gained wall-clock
+  budgets (#1409, #1440), refuses arms that cannot fit before codegen (#1487, #1493), and ships the
+  crown it timed (#1480). Rounding-changing float algebra became opt-in (#998), and a self-operand
+  bug that computed only the diagonal of `m * m` was fixed (#1476).
 
 ---
 
@@ -547,7 +557,7 @@ consolidation and consumer work deferred from v1.1.1 and v1.1.3.
 | **1.0.2** | Sep 16, 2026 | **released** | **Robustness pulled forward, plus compiler elegance through shared structure**: the landed robustness fixes and eight compiler-structure/coverage issues |
 | **1.1** | Oct 4, 2026 | **released** | **Fused attention and better transformer scheduling**; tuned f32 inference improves over the same-night August anchor, while approximate performance remains workload-dependent |
 | **1.1.1** | Oct 15, 2026 | **released** (bounded set) | **Consolidation after the transformer work**: the release gate met (CI green, three soundness fixes, the full-step training comparison), backward-contraction sketches for training, and broad search and diagnostics follow-through |
-| 1.1.2  | Oct 27, 2026 | planned | Performance beyond transformers: reduced ResNet-style convs and CPU kernel/sketch economy |
+| **1.1.2** | Oct 27, 2026 | **released** | **Performance beyond transformers**: a reduced ResNet-style leg, Winograd under `approximate`, CPU sketch economy, and a 5× faster untuned GPU training step at batch 256 |
 | 1.1.3  | Oct 31, 2026 | planned | The training experience: checkpoints, tracking, plots, `lib/` interfaces, REPL/notebook recovery |
 | 1.2    | Nov 15, 2026 | planned | Reusable tensor programs: shape schemes with checkpoint rollback, beside an end-to-end newcomer path; standalone ArrayJIT optional |
 | 1.2.1 / 1.2.2 | undated | overflow | Consolidation deferred from v1.1.1 / models, reproductions and explorations deferred from v1.1.3 |

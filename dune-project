@@ -16,7 +16,7 @@
 
 (name ocannl)
 
-(version 1.1.1)
+(version 1.1.2)
 
 (generate_opam_files true)
 

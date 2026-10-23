@@ -7,6 +7,226 @@ commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue 
 
 ## [Unreleased]
 
+## [1.1.2] -- 2026-10-27
+
+> Performance beyond transformers, plus a much faster untuned GPU training step. A reduced
+> ResNet-style benchmark (`cifar_resnet`, batch 64 and 1) gives convolutions a measured cell. On
+> it, Winograd F(2×2, 3×3) under the `approximate` profile makes the untuned cc step 2.22× faster,
+> and the tuned cc step (67.4 ms) beats torch CPU eager (99.4 ms) on an M4 Max. On GPUs, torch
+> runs that leg's untuned step 22–141× faster. Most of the conv search work measured neutral. A
+> seeded register-tiled default, split reductions on CUDA and HIP, and more recognized matmul
+> sites take the untuned CUDA `gpt2_mini_train` batch-256 step from 1720.6 to about 313 ms. Tuned
+> search gets wall-clock budgets, refuses an arm that cannot fit before codegen, and always ships
+> something at least as fast as the untuned plan. Rounding-changing float algebra is now opt-in.
+> A self-operand bug that silently computed only the diagonal of `m * m` is fixed.
+
+### Added
+
+- `cifar_resnet` and `cifar_resnet_b1` benchmark workloads: reduced ResNet-style classifiers
+  with padded 3×3 convs, residual adds and strided 1×1 shortcuts. They have OCANNL, PyTorch and
+  tinygrad runners and per-site attribution (gh-ocannl-1161).
+- `winograd_conv` rewrites eligible 2-D 3×3 stride-1 f32 convolutions with Winograd F(2×2, 3×3),
+  with the 16 per-position contractions tuned as matmuls. It is off by default, on under
+  `approximate` and pinned off under `reproducible`. It covers the forward pass only
+  (gh-ocannl-505).
+- `fp_contract`, `fp_reassociate` and `fp_finite_math` license rounding-changing float algebra. All
+  three are off by default, on under `approximate` and pinned off under `reproducible`. They
+  replace the retired `simplify_fp_algebra` key (gh-ocannl-998).
+- Wall-clock budgets for tuning:
+  - `autotune_budget_seconds` bounds one `Autotune.tune` search; a budget-cut crown is stored as
+    such and replayed (gh-ocannl-1409).
+  - `tune_call_budget_seconds` (per call: `?call_budget`) bounds a whole
+    `Train.tune_placements` call, dividing what is left among the searches still planned
+    (gh-ocannl-1440).
+- `Tensor.rewind_to_last_closure` discards everything opened since the last successful
+  `finish_inference`. A construction that fails after changing solver state taints the session:
+  later constructions and compiles raise with the first failure's provenance instead of silently
+  building on it (gh-ocannl-1301, gh-ocannl-1505).
+- `Context.link_delta` and `Context.probe_link_delta` plan and trial-allocate a compile's device
+  memory without codegen. `Context.get_free_and_total_memory` reports device memory, and tuning
+  progress lines show each arm's working bytes and free device memory (gh-ocannl-1493,
+  gh-ocannl-1487, gh-ocannl-1424).
+- `device_init_deadline` (default 120 s, `0` disables; not on Windows): GPU device discovery and
+  opening on CUDA, HIP and Metal run under a watchdog. A wedged driver ends the process with a
+  named line instead of hanging it (gh-ocannl-1281).
+- HIP keeps a per-process kernel code cache (`hip_kernel_cache_mib`, default 256), so a search
+  candidate recompiles only kernels no earlier compile produced. Every autotune compile reports
+  its cost (gh-ocannl-1314).
+- `autotune_pad_waste_max` (default `2`) drops sketch geometries whose padded work is that many
+  times the least-padded geometry's in the same menu (gh-ocannl-740, gh-ocannl-1393).
+- `model_cache_capacity`/`model_cache_bandwidth` and `model_issue_rate`/`model_dram_bandwidth`
+  calibrate the ranking score behind `model_default` and seeding, with per-class advisories for
+  CUDA and HIP. `tools/calibrate_cache_capacity.exe` and `tools/calibrate_issue_rate.exe` fit
+  them on a box (gh-ocannl-1253, gh-ocannl-1442).
+- `autotune_staffed_singles` (default `false`) times each per-segment single against the running
+  composite instead of untuned presets (gh-ocannl-1138, `lukstafi/ocannl-staging` PR #1215).
+- Diagnostics:
+  - `autotune_log_seeding` prints which sketch family claimed each lowering and which gates
+    refused it (gh-ocannl-1407).
+  - `Train.tune_placements ?on_ship` receives a `Train.shipped` record that says what shipped,
+    whether it was replayed and whether an untuned plan was substituted (gh-ocannl-1438,
+    gh-ocannl-1513).
+  - `Autotune.report` gains budget, privatize-drop, per-round move and compile-cost fields, and
+    tells a degenerate clock from contention (gh-ocannl-1423, gh-ocannl-1360, gh-ocannl-1517).
+- `?out_channels` on `Nn_blocks.conv_bn_relu` and `depthwise_separable_conv2d`, and a
+  `?width_mult` for `Demo_models.mobile_cnn` (gh-ocannl-880).
+- Benchmark drivers: hermetic `bin/` cells with paired whole-process arms and a sign test
+  (`benchmarks/bin_cells.py`, gh-ocannl-743). `kprof` per-kernel attribution from traces of the
+  step itself works on CUDA and HIP, with per-kernel memory traffic (gh-ocannl-1347,
+  gh-ocannl-1392, gh-ocannl-1444).
+
+### Changed
+
+- Untuned CUDA and HIP compiles behind `Train.to_routine` and `Train.run_once` seed a
+  register-blocktiled matmul plan, ranked by the cost model
+  (`gpu_default_sketch_min_reduction=auto`). They also recognize more matmul sites: tied
+  `lm_head` and attention's `v.grad` gradients, and QKᵀ score products. Losses stay bitwise
+  identical. Metal is excluded (gh-ocannl-1324, gh-ocannl-1253, gh-ocannl-1413).
+- The untuned default splits long, narrow reductions on CUDA and HIP, such as bias and layer-norm
+  parameter gradients and the loss sum (`gpu_default_split_reduce_min_serial`, default 1024;
+  `reproducible` pins 0). The split reassociates those sums, by up to 2.4e-6 relative. Reduction
+  loops sink below write loops so accumulators stay in registers (`gpu_default_reduction_sink`)
+  (gh-ocannl-1325, gh-ocannl-1412, gh-ocannl-1414, gh-ocannl-1348).
+- Tuned search on CUDA and HIP starts from the seeded untuned plan, so a tuned step is not slower
+  than the untuned one even when the search is cut short. Search-less paths compile that plan as
+  well. `model_default` keeps it under `performance` and `approximate`, where it used to pick a
+  scalar leaf 2.6–35× slower (gh-ocannl-1388, gh-ocannl-1441, gh-ocannl-1477).
+- Whole-step tuning fits on smaller devices:
+  - `Autotune.tune` releases each candidate after its timing window.
+  - `Train.tune_placements` compiles only the placement that ships.
+  - A placement arm whose allocation cannot fit is refused before codegen, and the other arm
+    ships.
+  - Device-memory exhaustion is a typed decline.
+  
+  (gh-ocannl-1326, gh-ocannl-1408, gh-ocannl-1487, gh-ocannl-1493)
+- A warm schedule-cache hit relinks its validated code instead of compiling twice, and a lookup
+  works in a read-only cache directory without deleting other regimes' entries (gh-ocannl-1440,
+  gh-ocannl-1492, gh-ocannl-1439).
+- Convolution search:
+  - The conv sketch family is a refinement tree.
+  - Staged conv seeds cover zeroed whole-routine sites and merged conv+relu segments.
+  - Matmul sketches run when the staged operand has a second reader.
+  - Strided 1×1 convs are seeded matmul sites at small batch.
+
+  Stored schedules re-tune once (gh-ocannl-697, gh-ocannl-503, gh-ocannl-1406, gh-ocannl-1147,
+  gh-ocannl-1148, gh-ocannl-1397).
+- A backend compiler's rejection of a generated kernel is a typed decline on every backend, so a
+  search continues past it. A schedule transform's unexpected exception is fatal under
+  `strict_failure_classification` instead of being read as a declined candidate
+  (gh-ocannl-1387, gh-ocannl-1390, gh-ocannl-1323).
+- Typed refusals of misuse, each with a `Utils.User_error` or typed exception:
+  - a released `Context`;
+  - `Context.run` on an input never written;
+  - a write to a closed shape;
+  - an unparsable config value (`Utils.Invalid_config_value`, where `autotune_rounds=two` used to
+    run as 2);
+  - a second domain starting a search (`Autotune.Concurrent_search`);
+  - a cc toolchain misconfiguration, naming the command or flag.
+
+  (gh-ocannl-1329, gh-ocannl-1339, gh-ocannl-1301, gh-ocannl-1332, gh-ocannl-1352, gh-ocannl-1350)
+- `%op` and `%cd` bind a dimension capture once per call. In a `let%op` function without a unit
+  parameter, every call used to share one binding (gh-ocannl-1507).
+- An einsum spec that separates multichar axes with whitespace fails with a hint giving the comma
+  spelling (gh-ocannl-1454).
+- Half and bf16 vectorized loops use 128-bit packed loads and stores on Metal, CUDA and HIP. On
+  Metal, half transcendentals compute in f32 and narrow once (gh-ocannl-1295, gh-ocannl-1288).
+- Generated kernels list parameters and locals in first-touch order, so fresh builds of one
+  program emit identical kernel text (gh-ocannl-1473).
+- `lib/` has declared interfaces (`Train`, `Parallel`, `Calibrate`, `Mixed_prec`,
+  `Precision_policy`), which hide their helpers. The complete demo architectures move from
+  `Nn_blocks` to a new `Demo_models`, re-exported from `Ocannl` (gh-ocannl-1010).
+- Retired API:
+  - the `simplify_fp_algebra` key (gh-ocannl-998);
+  - `Shape.t_of_sexp`; `Shape.t` is a private record and `Shape.on_closure` becomes
+    `Shape.set_on_closure` (gh-ocannl-1506);
+  - `Low_level.loop_bounds` becomes `loop_ranges`, and `Affine.bounds_range` is gone
+    (gh-ocannl-1305);
+  - `Cc_backend.vector_registers_setting` becomes `vector_file_setting` (gh-ocannl-1399);
+  - unused derived `sexp`, `compare`, `equal` and hash functions (gh-ocannl-915, gh-ocannl-913).
+
+### Fixed
+
+- One tensor used twice as an operand gets distinct projections. `m * m` used to compute only the
+  diagonal, and self-concatenation failed with "Ambiguous indices" (gh-ocannl-1476).
+- Gradient margins keep the padding value after backward, through concatenation scatters and
+  padded windows (gh-ocannl-1474, gh-ocannl-1496).
+- A zero fill of a slice-alias view writes the view's slice of its parent; it used to write
+  nothing. Statements that address a view's buffer directly are refused (gh-ocannl-1475,
+  gh-ocannl-1485).
+- Random draws no longer depend on placement:
+  - a materialized RNG counter draws the same bits as an inlined one (gh-ocannl-1468,
+    gh-ocannl-1498);
+  - fp8 `uniform` draws lie in [0, 1) instead of returning raw bit patterns (gh-ocannl-1486);
+  - half and bf16 draws stay below 1.0 (gh-ocannl-1434).
+- Metal fast math returns IEEE special values and accurate results for `sin`, `cos` and `tanh`.
+  Fast `tanh` used to return 0, then NaN, from x ≈ 43.7 (gh-ocannl-1435).
+- Warp-shuffle and lane all-reduce forms check warp uniformity under divergent control. This
+  fixes wrong values on Metal. The Metal packed path no longer stores `float4` packs into fp8
+  buffers (gh-ocannl-1334, gh-ocannl-1295).
+- `batch_norm1d`/`batch_norm2d` accept any batch size on one instance (gh-ocannl-1507).
+  `Nn_blocks.global_avg_pool2d` averages instead of summing and drops the spatial axes, so
+  `mobile_cnn` and `sokoban_cnn` run (gh-ocannl-880).
+- A parameter axis sized only by a fixed-index einsum output fails with "Unresolved parameter
+  dimension", naming the spec (gh-ocannl-1508).
+- Tuning shipped what it timed:
+  - Arm A's crown replays after arm B searches; it used to ship the untuned default and re-search
+    on every warm call (gh-ocannl-1480).
+  - A winner is not compiled into a context that lowers differently (gh-ocannl-1421).
+  - Padded convolutions key the schedule cache, so their winners replay (gh-ocannl-1384).
+  - Searches with a footprint-default node, or with a model pre-filter that hits a builder
+    refusal, no longer abort (gh-ocannl-1481, gh-ocannl-1437).
+- Merge-buffer reads under a routine's own constant `Where`, and capture walks meeting a
+  merge-reading inherited value, compile (gh-ocannl-1469, gh-ocannl-1514).
+- GPU shared-memory accounting charges what kernels declare. Kernels with fragment scopes, fused
+  conv and MMA twins, and `Scan_loop` beside a matmul compile (gh-ocannl-1452, gh-ocannl-1255,
+  gh-ocannl-1330, gh-ocannl-1342, gh-ocannl-1453, gh-ocannl-1134).
+- cc kernels:
+  - A scratch-product matmul is parallelized (gh-ocannl-1343).
+  - Register tiles survive wider vectors and derive from the target's register file, so SSE no
+    longer spills (gh-ocannl-1317, gh-ocannl-1285).
+  - aarch64 gcc 13/14 no longer spills or scalarizes (gh-ocannl-1158).
+  - Long routine names and concurrent processes no longer break build artifacts
+    (gh-ocannl-1335).
+- CUDA and HIP graph execs are destroyed at context finalization and exit (gh-ocannl-1445). A
+  use-after-free on releasing a forked context that shares an upload arena is fixed
+  (gh-ocannl-1328). ROCr's repeated time-stamp warnings are collapsed into one line plus a count
+  (`collapse_foreign_stderr_noise`, gh-ocannl-1370).
+- Under `gpu_serial_lanes=admitted`, fission no longer costs a lane nest its lanes
+  (gh-ocannl-1239). Every shipped kernel compiles in isolation again (gh-ocannl-1391).
+
+### Measured performance and limitations
+
+**Convolutions** (`cifar_resnet`, M4 Max unless noted):
+- Winograd under `approximate` takes the untuned cc step from 407.4 to **183.2 ms (2.22×)**.
+  - Peak memory rises from 102 to 228 MiB.
+  - It is neutral on Metal, where backward kernels the rewrite leaves direct dominate.
+- Second-reader staging puts the tuned cc step at **67.4 ms**, against torch CPU eager's 99.4 ms.
+- The other conv search changes measured neutral or null: the family tree, strided 1×1 seeds at
+  batch 1, and CPU blocktile padding (gh-ocannl-741, measured and not landed).
+- Untuned, the leg is far behind torch. When it was added, torch's step was 106× faster on CUDA,
+  141× on Metal and 22× on HIP. On the x86 RTX box it was 47× faster than untuned cc (520.7 vs
+  11.2 ms). Tuned GPU cells are not yet taken.
+- Pad-waste pruning cuts conv search wall time by 45% on cc and 17–42% on Metal, with the same
+  crowns.
+
+**Untuned GPU training.** For `gpt2_mini_train` on an RTX 5070 Ti, the seeded default takes the
+untuned step from 48.30 to 15.41 ms at batch 8, and from 1720.6 to 562.6 ms at batch 256. Split
+reductions take batch 256 further, to **313.4 ms**; torch CUDA eager ran 186.67 ms. The HIP
+discrete box goes from 4067.0 to 587.4 ms at batch 256. These numbers come from successive PRs
+measured in separate windows.
+
+**Tuned GPU training.**
+- A tuned batch-256 step now runs on a 12 GiB card, at 530.5 ms (gh-ocannl-1326).
+- Under a 900 s budget, the replayed crown is 311.4 ms against an untuned 314.6 ms: the search
+  now finds little beyond the seeded default.
+- The two-arm A/B is still impossible at batch 256, because materialize-all needs 28.2 GB; that
+  arm is now refused in 0.3 s.
+
+**Model.** The ranking score orders only 25–40% of measured-apart pairs correctly, so the
+fastest leaves still beat the seeded plan by 7–42% at the cells where `model_default` was
+measured. Per-site flip-chain profitability (gh-ocannl-717) moved to v1.2.2 pending a workload
+with mixed sites.
+
 ## [1.1.1] -- 2026-10-15
 
 > Consolidation after the transformer work, released as a bounded set against a release gate:
