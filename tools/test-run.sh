@@ -815,12 +815,23 @@ perl -e 'use Fcntl ":flock"; exit 0' 2>/dev/null || die "perl with Fcntl not fou
 # here: dune and the tests never see it, so a test that drives this script
 # (tools/test-test-run.sh) is not redirected. A run's own phases work in the
 # tree their run recorded (`wt`, written before the supervisor exists).
+#
+# The same goes for the variables a run's own phases are handed (gh-ocannl-1448):
+# OCANNL_TOOL_TESTRUN_OWN, the run directory `_resolve` and `_probe` own, and
+# OCANNL_TOOL_TESTRUN_RD, the step directory `_direct_plan` writes into, are
+# read into shell variables here and unset, so dune and every test it starts
+# see neither. The supervisor deletes them, with the rest of its own
+# (OCANNL_TOOL_TESTRUN_BG, _RUNNER), before it forks anything (supervisor_perl),
+# and a phase gets its variable back only on its own command line, as `env
+# NAME=VALUE` ahead of the phase -- `_resolve` hands `_probe` its run that way.
+testrun_own=${OCANNL_TOOL_TESTRUN_OWN:-} testrun_rd=${OCANNL_TOOL_TESTRUN_RD:-}
+unset OCANNL_TOOL_TESTRUN_OWN OCANNL_TOOL_TESTRUN_RD
 case ${1:-} in
   _resolve | _probe)
     # Without a run to own, the phase's own check below refuses it.
-    if [ -n "${OCANNL_TOOL_TESTRUN_OWN:-}" ]; then
-      testrun_tree=$(cat "$OCANNL_TOOL_TESTRUN_OWN/wt" 2>/dev/null) && [ -n "$testrun_tree" ] ||
-        die "cannot read the tree under test from $OCANNL_TOOL_TESTRUN_OWN/wt"
+    if [ -n "$testrun_own" ]; then
+      testrun_tree=$(cat "$testrun_own/wt" 2>/dev/null) && [ -n "$testrun_tree" ] ||
+        die "cannot read the tree under test from $testrun_own/wt"
       cd -P "$testrun_tree" || die "cannot cd to the tree under test: $testrun_tree"
     fi ;;
   run | plan)
@@ -997,9 +1008,13 @@ supervisor_perl='
   # The root of the runner, where the slowest-actions reader lives -- not
   # necessarily the tree under test (a bisect step tests another) -- taken out
   # of the environment before anything is forked: nothing the run starts sees it.
+  # Nor any other variable addressed to this process (gh-ocannl-1448): a phase
+  # of the run that needs its directory is handed it on its own command line
+  # (`env OCANNL_TOOL_TESTRUN_OWN=...`), and consumes it there.
   my $runner = delete $ENV{OCANNL_TOOL_TESTRUN_RUNNER};
-  my $rd = $ENV{OCANNL_TOOL_TESTRUN_RD};
-  my $own = $ENV{OCANNL_TOOL_TESTRUN_OWN};
+  my $rd = delete $ENV{OCANNL_TOOL_TESTRUN_RD};
+  my $own = delete $ENV{OCANNL_TOOL_TESTRUN_OWN};
+  my $bg = delete $ENV{OCANNL_TOOL_TESTRUN_BG};
   my ($pid, $finishing);
   my $code_of = sub { my $st = shift; ($st & 127) ? 128 + ($st & 127) : $st >> 8 };
   # The start token of THIS process, in the rendering ps_token recomputes for
@@ -1203,7 +1218,7 @@ supervisor_perl='
   $SIG{ALRM} = sub { $reap->(142) };
   $SIG{INT} = sub { $reap->(130) };
   $SIG{TERM} = sub { $reap->(143) };
-  $SIG{HUP} = $ENV{OCANNL_TOOL_TESTRUN_BG} ? "IGNORE" : sub { $reap->(129) };
+  $SIG{HUP} = $bg ? "IGNORE" : sub { $reap->(129) };
   if ($own) {
     # STDOUT is the run log, shared with dune: unbuffered, so the sentinel
     # lands before the verdict file appears.
@@ -2982,7 +2997,8 @@ case $sub in
       elif [ -z "$repeat_cancelled" ]; then
         pdir=$run_dir/plan
         mkdir "$pdir" || die "cannot create $pdir"
-        step_cmd=("${BASH:-bash}" "$runner_root/tools/test-run.sh" _direct_plan "$run_dir" "$DUNE")
+        step_cmd=(env "OCANNL_TOOL_TESTRUN_RD=$pdir" "${BASH:-bash}" "$runner_root/tools/test-run.sh" _direct_plan
+          "$run_dir" "$DUNE")
         { printf '%q ' "${step_cmd[@]}"; echo; } >"$pdir/cmd" || die "cannot record the plan's command"
         repeat_launch "$pdir" "the replay plan"
         plan_rc=$step_rc
@@ -3228,11 +3244,11 @@ case $sub in
     # this box is, writes the report to `plan` and exits. A GPU batch's device
     # probe runs inside the slot, ahead of dune (plan_device_probe, `_probe`),
     # and the per-test cap's watcher beside dune (test_cap_watch).
-    [ $# -ge 4 ] && [ -n "${OCANNL_TOOL_TESTRUN_OWN:-}" ] ||
+    [ $# -ge 4 ] && [ -n "$testrun_own" ] ||
       die "_resolve is the supervisor's first phase, not a command"
     mode=$1 cap=$2 test_cap=$3 DUNE=$4
     shift 4
-    run_dir=$OCANNL_TOOL_TESTRUN_OWN
+    run_dir=$testrun_own
     plan_slot
     expect_backends=$(cat "$run_dir/expect-backend" 2>/dev/null) || expect_backends=
     if [ "$mode" = plan ]; then
@@ -3374,7 +3390,8 @@ case $sub in
     set -- "$DUNE" "$@"
     if [ -n "$probe_backends" ]; then
       # shellcheck disable=SC2086  # the backend list is word-split on purpose
-      set -- "${BASH:-bash}" "$runner_root/tools/test-run.sh" _probe "$DUNE" "$probe_prog" "$probe_cap" \
+      set -- env "OCANNL_TOOL_TESTRUN_OWN=$run_dir" "${BASH:-bash}" "$runner_root/tools/test-run.sh" _probe \
+        "$DUNE" "$probe_prog" "$probe_cap" \
         $probe_backends -- "$@"
     fi
     if [ -n "$slot_fw" ]; then
@@ -3418,10 +3435,10 @@ case $sub in
     # the rule `fresh` times a test by (attribution_awk, rows mode), and has
     # tools/replay-rules.sh ask dune for their rules (`plan.json`; its exit 3/4/5 refusals pass
     # through) and snapshot their targets as dune's own run left them (`build-phase/outputs`).
-    [ $# -eq 2 ] && [ -n "${OCANNL_TOOL_TESTRUN_RD:-}" ] ||
+    [ $# -eq 2 ] && [ -n "$testrun_rd" ] ||
       die "_direct_plan is a step of repeat --direct, not a command"
     run_dir=$1 DUNE=$2
-    pdir=$OCANNL_TOOL_TESTRUN_RD
+    pdir=$testrun_rd
     if ! bash "$runner_root/tools/action-durations.sh" --tsv --dirs -n 0 "$run_dir/build-phase/trace.csexp" \
          >"$pdir/rows-dirs.tsv" 2>"$pdir/rows.err"; then
       grep -q '^action-durations.sh: no process in ' "$pdir/rows.err" ||
@@ -3449,9 +3466,9 @@ case $sub in
     # when it refuses -- the log's first line after the prelude must stay
     # dune's (dune_refusal). Asked from test/config, so the query reads the
     # configuration the tests read, with the backend pinned on its command line.
-    [ $# -ge 6 ] && [ -n "${OCANNL_TOOL_TESTRUN_OWN:-}" ] ||
+    [ $# -ge 6 ] && [ -n "$testrun_own" ] ||
       die "_probe is a run's own phase, not a command"
-    run_dir=$OCANNL_TOOL_TESTRUN_OWN
+    run_dir=$testrun_own
     DUNE=$1 probe_prog=$2 probe_cap=$3
     shift 3
     probe_backends=
@@ -3609,7 +3626,7 @@ case $sub in
     # wait and digest.
     OCANNL_TOOL_TESTRUN_BG=1 OCANNL_TOOL_TESTRUN_RD=$run_dir OCANNL_TOOL_TESTRUN_OWN=$run_dir \
       OCANNL_TOOL_TESTRUN_RUNNER=$runner_root perl -e "$supervisor_perl" -- "$cap" \
-        "${BASH:-bash}" "$runner_root/tools/test-run.sh" _resolve "$sub" "$cap" "$test_cap" "$DUNE" "$@" \
+        env "OCANNL_TOOL_TESTRUN_OWN=$run_dir" "${BASH:-bash}" "$runner_root/tools/test-run.sh" _resolve "$sub" "$cap" "$test_cap" "$DUNE" "$@" \
         </dev/null >>"$run_dir/log" 2>&1 &
     sup=$!
     # The launcher's own fd 9 copy served its purpose the moment the

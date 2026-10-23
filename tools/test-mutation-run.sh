@@ -33,10 +33,17 @@ cat > "$fixture/bin/dune" <<'DUNE'
 #!/usr/bin/env bash
 set -eu
 # test-run.sh hands the batch a trace file of the run's own, as the second
-# word; that one word, and only it, is not part of the command this fixture
-# recognises (a second copy, or one anywhere else, still fails the match).
-if [ -n "${OCANNL_TOOL_TESTRUN_OWN:-}" ] && [ $# -ge 2 ] &&
-   [ "$2" = "--trace-file=$OCANNL_TOOL_TESTRUN_OWN/trace.csexp" ]; then
+# word -- a directory holding the run's `wt`, `cap` and `log` -- and that one
+# word, and only it, is not part of the command this fixture recognises (a
+# second copy, or one anywhere else, still fails the match).
+own_trace() { # <word>; 0 iff it is --trace-file=<a run directory>/trace.csexp
+  local d
+  case $1 in --trace-file=*/trace.csexp) ;; *) return 1 ;; esac
+  d=${1#--trace-file=}
+  d=${d%/trace.csexp}
+  [ -f "$d/wt" ] && [ -f "$d/cap" ] && [ -f "$d/log" ]
+}
+if [ $# -ge 2 ] && own_trace "$2"; then
   sub=$1
   shift 2
   set -- "$sub" "$@"

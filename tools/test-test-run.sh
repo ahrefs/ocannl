@@ -16,7 +16,7 @@
 # #options (26-28, 37), #width (29-34, 48-52, 64, 70), #digest (35-36,
 # 68-69, 71-73, 80, 87), #fresh (81), #lifecycle (40-47, 65, 74: the run/start
 # lifecycle with its signal legs, and both fork-window negative controls),
-# #source (59-63, 66), #slot (53-58, 78, 88), #device (75-77), #credentials (79),
+# #source (59-63, 66), #slot (53-58, 78, 88), #device (75-77), #credentials (79, 90),
 # #bisect (82), #harness (86). A body that cannot go on (an extraction that
 # matched nothing, a fixture that is not what its checks assume) ends with
 # `harness_abandon DETAIL; return`, failing that leg alone: never `exit`,
@@ -183,7 +183,8 @@
 #      build tree's reuse, and non-alias operands refused; a mutant without
 #      the replay shows dune alone does not re-run a target-producing test,
 #      and one closing the replay's inherited descriptors that the escaped
-#      child then goes unseen.
+#      child then goes unseen. Its tests see no step directory either: the
+#      environment it compares leaves out none of the runner's own variables.
 #  85 sits after leg 83 (Linux only): under a stand-in for a PID 1 that reaps
 #      no orphans -- a child subreaper that waits for its own child only --
 #      the zombie-only groups `repeat` and `run` leave are read as gone, not
@@ -240,6 +241,8 @@
 #      tools/dune-quiet.sh, run directly, scrubs on its own. The scrub text
 #      itself fails closed, under sh, bash and dash where installed: an
 #      unrunnable env and a deny-listed non-identifier refuse.
+#  90 sits after leg 79: the runner's own OCANNL_TOOL_TESTRUN_BG, _RD and _OWN reach no dune: a
+#      run, a probed GPU run under a slot, a probed repeat's iterations.
 #  59-63 sit after leg 47: the source a run tested, recorded at launch
 #      (gh-ocannl-992), against a committed fixture checkout.
 #  59. a clean checkout records its HEAD as `head` and an empty `dirty`.
@@ -2043,8 +2046,17 @@ for arg in "$@"; do
         printf '%s %s %s\n' "$pos" "$side" "${arg#--trace-file=}" >>"$REPEAT_TEST_TRACE_ARGS" ;;
   esac
 done
-if [ -n "${OCANNL_TOOL_TESTRUN_OWN:-}" ] && [ $# -ge 2 ] &&
-   [ "$2" = "--trace-file=$OCANNL_TOOL_TESTRUN_OWN/trace.csexp" ]; then
+# The runner's own is told by where it points: the trace of a directory holding
+# a run's metadata (`wt`, `cap`, `log`), which nothing hands dune any longer
+# through the environment (gh-ocannl-1448).
+own_trace() { # <word>; 0 iff it is --trace-file=<a run directory>/trace.csexp
+  local d
+  case $1 in --trace-file=*/trace.csexp) ;; *) return 1 ;; esac
+  d=${1#--trace-file=}
+  d=${d%/trace.csexp}
+  [ -f "$d/wt" ] && [ -f "$d/cap" ] && [ -f "$d/log" ]
+}
+if [ $# -ge 2 ] && own_trace "$2"; then
   trace_to=${2#--trace-file=}
   trace_sub=$1
   shift 2
@@ -2226,6 +2238,11 @@ case $REPEAT_TEST_MODE in
       waitpid($c, 0); print "action done\n"; exit 0' \
       "$REPEAT_TEST_ACTION_PID" "${REPEAT_TEST_ACTION_SECS:-60}"
     ;;
+  # The names of the environment dune runs in -- and every test it starts
+  # inherits -- appended to REPEAT_TEST_ENV_NAMES (leg 90, gh-ocannl-1448).
+  env_names)
+    env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' >>"$REPEAT_TEST_ENV_NAMES"
+    printf 'stable stdout\n'; printf 'stable stderr\n' >&2 ;;
   # A dune that is itself slow, starting no action: dune is not a test.
   slow_dune)
     exec perl -e '$0 = "dune"; select undef, undef, undef, $ARGV[0]; print "slow dune done\n"' \
@@ -5367,12 +5384,19 @@ cat >"$slot_fake" <<'FAKE'
 #!/usr/bin/env bash
 # The runner's own trace option (leg 80) is kept out of the slot calls these
 # legs pin, by the fixture dune's rule: exactly `--trace-file=<the run's
-# directory>/trace.csexp`, once, right after the subcommand that follows the
-# dune it runs. Every other word stays verbatim.
+# directory>/trace.csexp` (a directory holding a run's `wt`, `cap` and `log`),
+# once, right after the subcommand that follows the dune it runs. Every other
+# word stays verbatim.
+own_trace() { # <word>; 0 iff it is --trace-file=<a run directory>/trace.csexp
+  local d
+  case $1 in --trace-file=*/trace.csexp) ;; *) return 1 ;; esac
+  d=${1#--trace-file=}
+  d=${d%/trace.csexp}
+  [ -f "$d/wt" ] && [ -f "$d/cap" ] && [ -f "$d/log" ]
+}
 shown=() prev2= prev1= dropped=
 for arg in "$@"; do
-  if [ -z "$dropped" ] && [ -n "${OCANNL_TOOL_TESTRUN_OWN:-}" ] &&
-     [ "$arg" = "--trace-file=$OCANNL_TOOL_TESTRUN_OWN/trace.csexp" ] && [ "${prev2##*/}" = dune ]; then
+  if [ -z "$dropped" ] && own_trace "$arg" && [ "${prev2##*/}" = dune ]; then
     case $prev1 in build | runtest | test | exec) dropped=1; prev2=$prev1 prev1=$arg; continue ;; esac
   fi
   shown+=("$arg")
@@ -6652,9 +6676,10 @@ let () =
   | [| _ |] -> ignore (count "det"); print_endline "det"
   | [| _; "env" |] ->
     ignore (count "env");
-    (* Each step's supervisor names its own directory, and dune gives each action a TMPDIR and
-       a trace directory of its own: everything else is what the replay owes. *)
-    let mine k = List.mem k [ "TMPDIR"; "DUNE_ACTION_TRACE_DIR"; "OCANNL_TOOL_TESTRUN_RD" ] in
+    (* Dune gives each action a TMPDIR and a trace directory of its own: everything else is what
+       the replay owes -- and a step's own directory (OCANNL_TOOL_TESTRUN_RD), which differs
+       between the build phase and every replay, reaches neither (gh-ocannl-1448). *)
+    let mine k = List.mem k [ "TMPDIR"; "DUNE_ACTION_TRACE_DIR" ] in
     Unix.environment () |> Array.to_list
     |> List.filter (fun kv -> not (mine (List.hd (String.split_on_char '=' kv))))
     |> List.sort compare |> List.iter print_endline;
@@ -7135,6 +7160,53 @@ else
 fi
 }
 harness_leg_run '79: credentials never reach dune #credentials' leg_79
+
+# ---------------------------------------------------------------------------
+# Leg 90: the runner's own variables never reach dune (gh-ocannl-1448)
+# ---------------------------------------------------------------------------
+# The supervisor and the run's phases are handed their directories through
+# OCANNL_TOOL_TESTRUN_BG, _RD and _OWN; dune, and every test it starts, used to
+# inherit all three (only _RUNNER was taken out). A fixture dune records the
+# names of its environment on every path a batch's dune is started from: a
+# plain run, a GPU run whose device probe execs dune inside the slot, and the
+# iterations of a repeat with that probe. A planted plain variable must still
+# pass, or the observer proves nothing.
+leg_90() {
+env_label="the runner's own variables (OCANNL_TOOL_TESTRUN_*) reach no dune: a run, a probed GPU run under a slot, a probed repeat"
+env_detail=
+env_names=$TMP/env-names
+env_check() { # what: the names recorded since the last call, judged
+  if [ ! -s "$env_names" ]; then
+    env_detail="$1: the fixture dune recorded no environment"
+  elif grep -q '^OCANNL_TOOL_TESTRUN_' "$env_names"; then
+    env_detail="$1: dune saw $(grep '^OCANNL_TOOL_TESTRUN_' "$env_names" | sort -u | tr '\n' ' ')"
+  elif ! grep -qx ENV_TEST_PLAIN "$env_names"; then
+    env_detail="$1: dune did not see ENV_TEST_PLAIN"
+  fi
+  : >"$env_names"
+}
+: >"$env_names"
+ENV_TEST_PLAIN=kept REPEAT_TEST_ENV_NAMES=$env_names argv_mode=env_names argv_probe env-run run build @cheap
+[ "$argv_rc" = 0 ] || env_detail="run: exit $argv_rc: $argv_out"
+[ -n "$env_detail" ] || env_check run
+if [ -z "$env_detail" ]; then
+  ENV_TEST_PLAIN=kept REPEAT_TEST_ENV_NAMES=$env_names argv_mode=env_names \
+    probe_run env-probe hip cc "" "" run build @cheap
+  { [ "$argv_rc" = 0 ] && [ "$probe_calls" = "$(cd "$repeat_root" && pwd -P)/test/config --ocannl_backend=hip" ]; } ||
+    env_detail="probed run: exit $argv_rc; probes: ${probe_calls:-<none>}; digest: $argv_out"
+  [ -n "$env_detail" ] || env_check "probed run"
+fi
+if [ -z "$env_detail" ]; then
+  ENV_TEST_PLAIN=kept REPEAT_TEST_ENV_NAMES=$env_names argv_mode=env_names \
+    probe_run env-repeat hip cc "" "" repeat 2 build @cheap
+  [ "$argv_rc" = 0 ] || env_detail="probed repeat: exit $argv_rc: $argv_out"
+  [ -n "$env_detail" ] || [ "$(grep -c '' <<<"$probe_calls")" = 2 ] ||
+    env_detail="probed repeat: the device was not probed before each iteration: ${probe_calls:-<none>}"
+  [ -n "$env_detail" ] || env_check "probed repeat"
+fi
+if [ -z "$env_detail" ]; then report 0 "$env_label"; else report 1 "$env_label" "$env_detail"; fi
+}
+harness_leg_run '90: the runner'\''s own variables reach no dune #credentials' leg_90
 
 # ---------------------------------------------------------------------------
 # Leg 82: bisect (gh-ocannl-1225)

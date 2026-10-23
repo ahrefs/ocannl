@@ -1243,6 +1243,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   scopes it; the fleet-side fix for that is not exporting the token into every session.
   `env_var_deps` reads the same line and refuses a stanza declaring a match as `(env_var ...)` or
   reading one through `%{env:NAME=...}`, and a test source reading one by name (`Sys.getenv`).
+  Nor do the runner's own variables reach dune (gh-ocannl-1448): the supervisor deletes
+  `OCANNL_TOOL_TESTRUN_BG`, `_RD`, `_OWN` and `_RUNNER` from its environment before it forks, and
+  a phase of the run that needs its directory (`_resolve`, `_probe`, `_direct_plan`) is handed it
+  as `env NAME=VALUE` on its own command line and unsets it on entry. A fixture that must tell the
+  runner's own `--trace-file` apart therefore recognises it by where it points -- a directory
+  holding a run's `wt`, `cap` and `log` -- not by an environment variable naming the run (leg 90
+  of `tools/test-test-run.sh`; leg 84's replay compares an environment with no exemption for
+  them).
   Pinned by leg 79 of `tools/test-test-run.sh` (a fixture dune's environment, the opam environment
   `select_dune` sources, `tools/dune-quiet.sh` run directly, and a real dune's trace where one is on
   PATH), `credential_free` in the sweep harness (local and remote legs, the remote one with
