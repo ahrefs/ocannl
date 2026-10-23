@@ -59,6 +59,9 @@ let () =
     | "" -> Context.cpu ~threads:1 ()
     | _ -> Context.auto ()
   in
+  (* A variant whose output check failed makes the run fail, after every variant has reported: an
+     automated run must not keep the timing of a kernel already known to be wrong. *)
+  let failed = ref 0 in
   let bench ~variant ~(t : Tensor.t) ~check ~work_per_run ~unit_label =
     let comp = named variant (Train.forward t) in
     let ctx = make_ctx () in
@@ -87,7 +90,10 @@ let () =
     let secs = Float.of_int63 Int63.(stop - start) /. 1e9 /. Float.of_int repeats in
     p "%-12s %10.3f us  %8.2f %s  correct: %b\n" variant (secs *. 1e6)
       (work_per_run /. secs /. 1e9)
-      unit_label ok
+      unit_label ok;
+    if not ok then Int.incr failed;
+    Bench_out.result ~variant ~seconds:secs
+      ~check:(if ok then Bench_out.Passed else Bench_out.Failed "output check failed")
   in
   p "cpu vectorization bench: n = %d, %d repeats, backend from config/OCANNL_BACKEND\n" n repeats;
   let approx x y = Float.(abs (x - y) <= 1e-3 *. (1. +. abs y)) in
@@ -128,4 +134,8 @@ let () =
       Array.length got = 1 && Float.(abs (got.(0) - dot_ref) <= 1e-2 *. (1. +. abs dot_ref)))
       (* multiply + add per element. *)
     ~work_per_run:(Float.of_int (2 * n))
-    ~unit_label:"GFLOP/s"
+    ~unit_label:"GFLOP/s";
+  if !failed > 0 then begin
+    p "%d variant(s) failed their output check -- see the lines above.\n" !failed;
+    Stdlib.exit 1
+  end

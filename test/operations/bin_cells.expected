@@ -1,0 +1,94 @@
+the design golden carries an ORDERS table: true
+design_orders reproduces every row of Bench_design's ORDERS table: true
+an odd round count is refused: true
+no arms is refused: true
+every source shape is read with its value: true
+a request never answered is refused: true
+two requests in a row are refused: true
+one key resolved to two values is refused: true
+a commandline value holding the separator is split at the argument, not inside it: true
+a commandline source naming no argument of the cell is refused: true
+the environment and config-file sources each fail the treatment: true
+a backend other than the pinned one fails the treatment: true
+a profile picked outside the command line fails the treatment: true
+an empty trace fails the treatment: true
+two cells of one arm resolving a setting differently are reported: true
+a setting read in some cells of an arm and not in others is reported: true
+a well-formed result line is read with its check: true
+a non-finite or non-positive result is refused: true
+a result line that is JSON but not an object is refused as unusable: true
+a result that does not state its output check is refused: true
+the sign test is exact: true
+a clean run exits 0: true
+every round runs every arm, in the design's order: true
+the planted variables are cleared, by name: true
+a device runtime control passes through and is recorded with its value: true
+toolchain variables are recorded by value, every other variable by name only: true
+each arm's kernel compiler is resolved from ocamlc -config and fingerprinted: true
+no cell resolved a setting from the environment or a config file: true
+the planted settings resolved to their defaults: true
+each cell kept its streams in a directory of its own under the output directory: true
+each cell's command line is the driver's pins, then the arm's arguments: true
+report.md is what was printed: true
+## Arms
+
+- common arguments: (none)
+- slow: `0.004`
+- fast: `0.002` `--ocannl_autotune_timing=isolated`
+- design: spread mirrored rotation, 2 arm(s) x 4 rounds; every pair exchanged: true; position histograms equal: true (exact at multiples of 2 rounds); edge visits per arm 4-4
+
+## Times per run (ms)
+
+| variant | arm | n | median | min | max |
+|---|---|---:|---:|---:|---:|
+| probe | slow | 4 | 4 | 4 | 4 |
+| probe | fast | 4 | 2 | 2 | 2 |
+| probe_half | slow | 4 | 2 | 2 | 2 |
+| probe_half | fast | 4 | 1 | 1 | 1 |
+
+## Paired against slow (ratio = arm / reference, per round)
+
+| variant | arm | pairs | median ratio | range | faster in | sign-test p |
+|---|---|---:|---:|---:|---:|---:|
+| probe | fast | 4 | 0.500 | 0.500-0.500 | 4 of 4 | 0.125 |
+| probe_half | fast | 4 | 0.500 | 0.500-0.500 | 4 of 4 | 0.125 |
+
+What the arms differ by, as resolved:
+
+| setting | slow | fast |
+|---|---|---|
+| `ocannl_autotune_timing` | queued (default) | isolated (commandline) |
+
+## Cells
+
+| cell | round | position | arm | exit | results | verdict |
+|---:|---:|---:|---|---:|---:|---|
+| 0 | 0 | 0 | slow | 0 | 2 | ok |
+| 1 | 0 | 1 | fast | 0 | 2 | ok |
+| 2 | 1 | 0 | fast | 0 | 2 | ok |
+| 3 | 1 | 1 | slow | 0 | 2 | ok |
+| 4 | 2 | 0 | slow | 0 | 2 | ok |
+| 5 | 2 | 1 | fast | 0 | 2 | ok |
+| 6 | 3 | 0 | fast | 0 | 2 | ok |
+| 7 | 3 | 1 | slow | 0 | 2 | ok |
+
+## Verdict
+
+- every cell clean
+a failing cell fails the run: true
+## Verdict
+
+- cell 1 (fails): exited 1; reported no bench-result line
+- cell 2 (nonfinite): unusable result line: bench-result: {"variant":"probe","seconds":null,"check":"passed","check_note":""}
+- cell 3 (nonfinite): unusable result line: bench-result: {"variant":"probe","seconds":null,"check":"passed","check_note":""}
+- cell 4 (fails): exited 1; reported no bench-result line
+a cell reporting no result fails the run: true
+a variant that failed its output check fails the run: true
+an unchecked variant is measured, and reported as unchecked with its reason: true
+a cell reporting one variant twice fails the run: true
+a cell past its cap is recorded as timed out and fails the run: true
+a non-empty output directory is refused: true
+an output directory inside the checkout is refused: true
+duplicate arm labels are refused: true
+a malformed arm is refused: true
+an odd round count is refused before any cell runs: true

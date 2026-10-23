@@ -759,6 +759,28 @@ cell is the step: cite the step cell. Each issue's cell:
   is the measurement behind
   keeping the predicate wide (gh-ocannl-782). Run it whenever the toolchain moves: a matrix that
   comes up all-`ok` means the defect is gone and the workaround can be retired.
+- `bin_cells.py` — the driver for the `bin/` microbenchmarks (`schedule_bench`,
+  `narrow_gebp_bench`, `narrow_storage_bench`, `cpu_vectorization_bench`,
+  `projection_shape_bench`: the ones reporting through `Bench_out.result`) when a number from one is meant to be published or reproduced
+  (gh-ocannl-743). Those executables read the ambient `OCANNL_*` environment and the nearest
+  `ocannl_config`, so the same command line could measure different treatments; the driver clears
+  `OCANNL_*`/`BENCH_*`/`OMP_*`/`GOMP_*`/`KMP_*`, runs each cell with
+  `--ocannl_no_config_file=true` from a directory of its own, and reads back the
+  `log_config_sourcing` trace: a cell fails if any setting came from the environment or a config
+  file, the run fails if two cells of one arm resolved a setting differently, and the report lists
+  every resolved setting and what the arms differ by. Arms are named argument sets
+  (`--arm rn6=--rn=6`), visited as whole processes round by round in `Bench_design`'s spread
+  mirrored rotation, each cell a supervised process group under `--cell-timeout`; the report pairs
+  each arm with the first one round by round (median ratio, range, rounds faster, exact sign-test
+  p) off the benches' `bench-result:` lines. Each such line states the variant's output check
+  (`passed`/`failed`/`unchecked`, `Bench_out.check`): a failed check fails the cell, an unchecked
+  variant is listed as such. Device and loader runtime controls (`CUDA_*`, `HSA_*`, `MTL_*`,
+  `DYLD_*`, ...) and the toolchain variables pass through and are recorded with their values (every
+  other variable by name only), the kernel compiler a cc cell runs is fingerprinted per arm, and
+  the build is pinned to the checkout with `dune build --root --build-dir`. Example, the gh-ocannl-755 geometry A/B:
+  `python3 benchmarks/bin_cells.py --bench narrow_gebp_bench --backend cc --out ~/cells-rn
+  --rounds 12 --arm rn4=--rn=4 --arm rn6=--rn=6 -- f16 512 20`. Its control is
+  `test/operations/bin_cells.py`, against a stand-in bench that prints the library's own trace.
 
 ## Historical Metal fixture provenance
 

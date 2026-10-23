@@ -86,6 +86,13 @@ let exempt_sites =
        %{dep:../../benchmarks/kernel_attribution.py}",
       "the kprof attribution controls (gh-ocannl-1347) import only Python modules and join \
        synthetic traces; they launch no OCANNL executable and read no OCANNL configuration" );
+    ( "test/operations:python3, handed %{dep:bin_cells.py}, %{dep:../../benchmarks/bin_cells.py}, \
+       %{dep:bin_cells_probe.exe}, %{dep:bench_design.expected}",
+      "the hermetic bench driver's control (gh-ocannl-743) does launch an OCANNL-linked probe, but \
+       only through the driver, which passes `--ocannl_no_config_file=true` on every cell's \
+       command line -- disabling the config-file search outright -- and the control fails a cell \
+       that resolved any setting from a config file, so no `ocannl_config` reaches what it checks"
+    );
     ( "arrayjit/lib:gen_builtins/generate.exe",
       "the builtin header generator links only the OCaml stdlib and a pure C definition table; it \
        reads no OCANNL configuration" );

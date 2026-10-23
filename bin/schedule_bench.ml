@@ -716,9 +716,10 @@ let () =
     (* The unscheduled leg, when it runs, IS the oracle — same kernel, so re-running it would only
        burn time. Any other variant is compared against it. *)
     if Option.is_none schedule && Option.is_none !reference then reference := Some values;
-    let agreement =
+    let agreement, check =
       let r = reference_output () in
-      if phys_equal r values then "reference"
+      if phys_equal r values then
+        ("reference", Bench_out.Unchecked "the oracle the other variants are compared against")
       else begin
         let d = Bench_checksum.first_difference ~reference:r values in
         match d with
@@ -733,14 +734,17 @@ let () =
                 if Float.(d > 0.) then Int.incr differing;
                 max_diff := Float.max !max_diff d;
                 magnitude := Float.max !magnitude (Float.abs r.(t)));
-            Printf.sprintf
-              "%s — %s rounding expected: %d of %d cells, max |diff| %.4g (%.2g of max |ref|)"
-              (Bench_checksum.render_agreement ~name:"reference" d)
-              (Ir.Ops.prec_string operand_prec) !differing (Array.length values) !max_diff
-              (if Float.(!magnitude > 0.) then !max_diff /. !magnitude else Float.nan)
+            ( Printf.sprintf
+                "%s — %s rounding expected: %d of %d cells, max |diff| %.4g (%.2g of max |ref|)"
+                (Bench_checksum.render_agreement ~name:"reference" d)
+                (Ir.Ops.prec_string operand_prec) !differing (Array.length values) !max_diff
+                (if Float.(!magnitude > 0.) then !max_diff /. !magnitude else Float.nan),
+              Bench_out.Unchecked "differs from the oracle, where rounding is expected" )
         | _ ->
             if Option.is_some d then Int.incr disagreements;
-            Bench_checksum.render_agreement ~name:"reference" d
+            ( Bench_checksum.render_agreement ~name:"reference" d,
+              if Option.is_some d then Bench_out.Failed "differs from the oracle"
+              else Bench_out.Passed )
       end
     in
     let spot = Int.min (n + 1) (Array.length values - 1) in
@@ -751,6 +755,7 @@ let () =
       (flops /. secs /. 1e9)
       spot values.(spot) (Bench_checksum.render checksum) agreement
       (Ir.C_syntax.mma_summary_string mma);
+    Bench_out.result ~variant ~check ~seconds:secs;
     (secs, mma)
   in
   (* A static gate cannot enumerate every way a schedule can be rejected at a given size —

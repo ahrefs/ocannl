@@ -234,14 +234,20 @@ let () =
        again, far more rarely than the per-step narrowing did. Both checks are outside the timed
        region. *)
     let checksum = Bench_checksum.whole_output ~row_stride:n values in
-    let agreement =
+    let agreement, check =
       match against with
-      | None -> "reference"
-      | Some (name, r, required) ->
+      | None ->
+          ("reference", Bench_out.Unchecked "the oracle the other variants are compared against")
+      | Some (name, r, required) -> (
           let d = Bench_checksum.first_difference ~reference:r values in
           if Option.is_some d then
             Int.incr (if required then disagreements else expected_differences);
-          Bench_checksum.render_agreement ~name d
+          ( Bench_checksum.render_agreement ~name d,
+            match d with
+            | None -> Bench_out.Passed
+            | Some _ when required -> Bench_out.Failed ("differs from " ^ name)
+            | Some _ -> Bench_out.Unchecked ("differs from " ^ name ^ ", where rounding may differ")
+          ))
     in
     let spot = Int.min (n + 1) (Array.length values - 1) in
     let secs = Float.of_int63 Int63.(stop - start) /. 1e9 /. Float.of_int repeats in
@@ -252,6 +258,7 @@ let () =
       (flops /. secs /. 1e9)
       spot values.(spot) (Bench_checksum.render checksum) agreement
       (Ir.C_syntax.mma_summary_string mma);
+    Bench_out.result ~variant ~check ~seconds:secs;
     (secs, mma, values)
   in
   p

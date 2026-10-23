@@ -197,4 +197,7 @@ let () =
                 | Some base -> base /. secs
               in
               p "%-11s %-11s %-6s %10.1f %10.2f %8.2fx  %g\n" name rname pname (secs *. 1e6) gbs
-                ratio first)))
+                ratio first;
+              Bench_out.result ~variant:label ~seconds:secs
+                ~check:
+                  (Bench_out.Unchecked "no output check: the first value is printed for inspection"))))
