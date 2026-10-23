@@ -25,6 +25,11 @@ harness_require dune perl git
 harness_scratch test-affected-tests
 unset DUNE_BUILD_DIR DUNE_ROOT
 export OCANNL_TOOL_FLEET_WORKER=none OCANNL_TOOL_TEST_RUNS=$TMP/runs
+# The legs down to the probe section pin the reader without its probe
+# (gh-ocannl-1541): what it falls back to when the probe fails or is turned
+# off, every alias action dune does not dump read blind. The probe section
+# below turns it back on.
+export OCANNL_TOOL_AFFECTED_PROBE=0
 
 repo=$TMP/proj
 mkdir -p "$repo/tools" "$repo/lib" "$repo/mid" "$repo/t1" "$repo/t2" "$repo/t3" "$repo/t4/sub" "$repo/t5" "$repo/t6" "$repo/t7" \
@@ -726,7 +731,7 @@ if harness_leg 'negative controls'; then
     --files lib/lx.mll -- @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
   # shellcheck disable=SC2086
   control 'an opaque action is what lists the aliases for a changed config' \
-    'my $blind = $unattributed{$a->{name}} || $opaque_listed;' 'my $blind = $unattributed{$a->{name}};' \
+    'my $blind = $unknown_touched || $opaque_listed;' 'my $blind = $unknown_touched;' \
     --files t3/plain.cfg -- @t3/runtest-t_plain $opaque_all
   control 'a stub archive is what carries a C stub to its library' \
     '$obj_libs{$o}{$_} = 1 for @libs' '1' \
@@ -780,6 +785,334 @@ if harness_leg 'negative controls'; then
   control 'an executable target is what finds a test stanza naming no library' \
     'push @st, { kind => "tests", dir => $d, names => [$x]' 'next; push @st, { kind => "tests", dir => $d, names => [$x]' \
     --files t3/t_plain.ml -- @t3/runtest-t_plain
+fi
+
+# The probe (gh-ocannl-1541): dune is handed each alias rule as a target rule
+# of its own (a twin) in a scratch copy, so what an alias action reads is
+# dune's answer, and a dune-file edit is compared rule by rule across
+# revisions. The fixtures below hold one shape per form the hand readers of
+# staging#1336 misread; each leg asks for the exact list.
+unset OCANNL_TOOL_AFFECTED_PROBE
+mkdir -p "$repo/p1" "$repo/p2" "$repo/p5" "$repo/p3/s1" "$repo/p3/s2" "$repo/p4" || exit 2
+printf '(lang dune 3.20)\n(using directory-targets 0.1)\n' >"$repo/dune-project"
+for f in cfg/ws.txt p1/inc.txt p1/chd.txt p1/tch.txt p1/blk.txt 'p1/#' p1/hs.txt p1/hb.txt p1/hl.txt p2/p2in.txt; do
+  : >"$repo/$f" || exit 2
+done
+printf '(inc.txt)\n' >"$repo/p1/deps.sexp"
+# Alias actions dune evaluates for the twins: a root-prefixed path, an
+# (:include)d dependency list (whose additions `dune rules` does not print:
+# blind), nested and templated chdir, a block string, Dune's own reading of
+# `#;` (an atom `#`, then a comment), a directory target beside an alias, and
+# a helper alias between a per-test alias and its input, by a rule and by an
+# (alias) stanza.
+cat >"$repo/p1/dune" <<'DUNE'
+(rule (alias runtest-wsroot) (deps %{workspace_root}/cfg/ws.txt) (action (progn)))
+(rule (alias runtest-incdeps) (deps (:include deps.sexp)) (action (progn)))
+(rule (alias runtest-chdir) (action (chdir %{workspace_root} (chdir p1 (run cat %{dep:chd.txt})))))
+(rule (alias runtest-tchdir) (action (chdir %{env:P1_DIR=.} (run cat %{dep:tch.txt}))))
+(rule (alias runtest-block) (action (system "\| cat %{dep:blk.txt}
+  )))
+(rule (alias runtest-hashsemi) (deps hs.txt #;hb.txt
+ ) (action (progn)))
+(rule (alias runtest-dirt) (targets (dir gendir)) (action (system "mkdir -p gendir && cat %{dep:hb.txt} > gendir/x")))
+(rule (alias helper) (deps hl.txt) (action (progn)))
+(rule (alias runtest-viahelper) (deps (alias helper)) (action (progn)))
+(alias (name runtest-viastanza) (deps (alias helper)))
+DUNE
+# A directory holding a stanza the converter does not model: its aliases stay blind.
+cat >"$repo/p2/dune" <<'DUNE'
+(cram)
+(rule (alias runtest-p2blind) (deps p2in.txt) (action (progn)))
+DUNE
+cat >"$repo/p3/dune" <<'DUNE'
+(test (name pa) (modules pa))
+(test (name pb) (modules pb))
+(rule (target made3.txt) (action (with-stdout-to %{target} (echo m))))
+(rule (alias runtest-reads3) (action (cat %{dep:made3.txt})))
+(rule (alias runtest-act3) (action (echo a)))
+(rule (alias runtest-blk3) (action (system "\| echo a
+  )))
+(executable (name lk) (modules lk) (link_deps made3.txt))
+(rule (alias runtest-lk) (action (run %{exe:lk.exe})))
+(rule (alias runtest-dirt3) (targets (dir gd3)) (action (system "mkdir -p gd3")))
+(rule (alias h3) (action (echo h)))
+(rule (alias runtest-needh3) (deps (alias h3)) (action (progn)))
+(alias (name h4) (deps h4.txt))
+(rule (alias runtest-needh4) (deps (alias h4)) (action (progn)))
+(alias (name runtest-viah4) (deps (alias h4)))
+(rule (alias runtest-two) (targets two1.txt) (action (with-stdout-to two1.txt (echo 1))))
+(rule (alias runtest-two) (targets two2.txt) (action (with-stdout-to two2.txt (echo 2))))
+(subdir s1 (rule (alias runtest-sx) (action (echo x))))
+DUNE
+printf '; nothing here but the subdir stanzas of p3/dune\n' >"$repo/p3/s1/dune"
+printf '; nothing here but the subdir stanzas of p3/dune\n' >"$repo/p3/s2/dune"
+for m in pa pb lk; do printf 'let () = ()\n' >"$repo/p3/$m.ml"; done
+: >"$repo/p3/h4.txt"
+: >"$repo/p3/h4b.txt"
+: >"$repo/p3/pa.expected"
+: >"$repo/p3/pb.expected"
+# An alias rule the converter does not rewrite (an (:include)), beside one it does.
+cat >"$repo/p5/dune" <<'DUNE'
+(rule (alias runtest-inc5) (deps (:include inc5.sexp)) (action (progn)))
+(rule (alias runtest-p5ok) (action (echo ok)))
+DUNE
+printf '()\n' >"$repo/p5/inc5.sexp"
+# A scan reading p3's dune file, and a sibling test it does not concern.
+cat >"$repo/p4/dune" <<'DUNE'
+(rule (target dscan.actual) (deps %{project_root}/p3/dune) (action (with-stdout-to %{target} (echo s))))
+(rule (alias runtest-dscan) (action (diff dscan.expected dscan.actual)))
+(test (name p4t) (modules p4t))
+DUNE
+printf 'let () = ()\n' >"$repo/p4/p4t.ml"
+printf 's\n' >"$repo/p4/dscan.expected"
+: >"$repo/p4/p4t.expected"
+git_q add -A && git_q commit -qm probe-fixture || exit 2
+probe_blind='@p2/runtest-p2blind @p1/runtest-incdeps @p5/runtest-inc5'
+p3_all='@p3/runtest-act3 @p3/runtest-blk3 @p3/runtest-dirt3 @p3/runtest-lk @p3/runtest-needh3 @p3/runtest-needh4 @p3/runtest-pa
+  @p3/runtest-pb @p3/runtest-reads3 @p3/runtest-two @p3/runtest-viah4 @p3/s1/runtest-sx'
+probe_restore() { git_q reset -q --hard && git_q clean -qfdx -- p1 p2 p3 p4 p5 p6; }
+
+if harness_leg 'probe alias actions'; then
+  for pair in cfg/ws.txt:runtest-wsroot p1/chd.txt:runtest-chdir p1/tch.txt:runtest-tchdir p1/blk.txt:runtest-block \
+              'p1/#:runtest-hashsemi' p1/hs.txt:runtest-hashsemi p1/hb.txt:runtest-dirt; do
+    affected --files "${pair%%:*}"
+    # A non-build input reaches the blind ones as well.
+    # shellcheck disable=SC2086
+    expect "an alias action reading ${pair%%:*} as dune evaluates it lists @p1/${pair#*:}" 0 "@p1/${pair#*:}" $probe_blind
+  done
+  # A blind alias still reads what dune does print: the list it includes.
+  affected --files p1/deps.sexp
+  # shellcheck disable=SC2086
+  expect 'an alias action reading p1/deps.sexp lists @p1/runtest-incdeps, blind or not' 0 $probe_blind
+  affected --files p1/hl.txt
+  # shellcheck disable=SC2086
+  expect 'a helper alias between per-test aliases and their input lists them, by a rule and by an (alias) stanza' 0 \
+    @p1/runtest-viahelper @p1/runtest-viastanza $probe_blind
+  affected --files p1/inc.txt
+  # shellcheck disable=SC2086
+  expect 'what an (:include) adds, which dune rules does not print, leaves its alias blind' 0 $probe_blind
+  if grep -q 'blind because a rule of p1/dune with a :include' "$err"; then report 0 'a blind alias says why on stderr'
+  else report 1 'a blind alias says why on stderr' "$(cat "$err")"; fi
+fi
+if harness_leg 'probe library and data'; then
+  affected --files lib/helper.ml
+  expect 'with the probe, a library module reaches what reads or links it, and no alias whose action reads nothing' 0 \
+    @t1/runtest-t_core @t1/runtest-t_mid @t1/runtest-t_mid-blind @t2/runtest-gen-v1 @t2/runtest-scan @t2/runtest-scenario_x \
+    @t2/slow-gen @t5/slow-usesh
+  affected --files fx.opam
+  # shellcheck disable=SC2086
+  expect 'a (package) dependency is read through the alias dune makes for it' 0 \
+    @t1/runtest-t_mid-blind @t2/runtest-needs_pkg @t2/runtest-pkg $probe_blind
+  affected --files docs/other.md
+  # shellcheck disable=SC2086
+  expect 'with the probe, a file no rule reads lists only the blind aliases' 0 $probe_blind
+  affected --files p2/p2in.txt
+  # shellcheck disable=SC2086
+  expect 'a directory with a stanza the converter does not model keeps its aliases blind' 0 $probe_blind
+  affected --files t6/extra.inc
+  # shellcheck disable=SC2086
+  expect 'an included fragment, rewritten in the probe, still reaches every directory including it' 0 \
+    @t6/runtest-dyn @t6/runtest-inc @t7/runtest-g7 @t7/runtest-inc $probe_blind
+fi
+probe_edit() { # PERL-SUBSTITUTION: edit p3/dune in place, uncommitted
+  EDIT=$1 perl -0pi -e 'BEGIN { $n = 0 } $n += eval $ENV{EDIT}; END { exit($n ? 0 : 1) }' "$repo/p3/dune" ||
+    { report 1 "probe fixture edit did not apply: $1"; return 1; }
+}
+p3_scan=@p4/runtest-dscan
+probe_leg() { # LABEL EXPECTED-WORDS: run `affected HEAD` on the edited tree, then restore it
+  local label=$1 want=$2
+  affected HEAD
+  # shellcheck disable=SC2086
+  expect "$label" 0 $want
+  probe_restore
+}
+if harness_leg 'probe dune edits'; then
+  # One new test stanza: without the probe its whole directory (and those
+  # beneath it); with it, the test and the scan reading the dune file.
+  printf '(test (name pc) (modules pc))\n' >>"$repo/p3/dune"
+  printf 'let () = ()\n' >"$repo/p3/pc.ml"
+  OCANNL_TOOL_AFFECTED_PROBE=0 affected HEAD
+  # shellcheck disable=SC2086
+  expect 'without the probe, one new test stanza lists its whole directory' 0 $p3_all @p3/runtest-pc $p3_scan
+  probe_leg 'with the probe, one new test stanza lists that test and the scan reading the dune file' "@p3/runtest-pc $p3_scan"
+  probe_edit 's/\(echo a\)\)\)/(echo b)))/' &&
+    probe_leg 'an action-only edit lists the alias whose action it is' "@p3/runtest-act3 $p3_scan"
+  probe_edit 's/\(echo m\)/(echo n)/' &&
+    probe_leg 'an edit to a rule'"'"'s action lists what reads its target, through link_deps too' "@p3/runtest-reads3 @p3/runtest-lk $p3_scan"
+  probe_edit 's/\(test \(name pa\) \(modules pa\)\)/(test (name pa) (modules pa) (flags (:standard -w -a)))/' &&
+    probe_leg 'a flags edit lists the stanza'"'"'s own alias' "@p3/runtest-pa $p3_scan"
+  probe_edit 's/"\\\| echo a\n/"\\| echo \\\\a\n/' &&
+    probe_leg 'an edit inside a block string lists the alias whose action it is' "@p3/runtest-blk3 $p3_scan"
+  probe_edit 's/\(echo a\)\)\)/(echo "a")))/' &&
+    probe_leg 'a quotation-only edit dune reads the same lists only the scan reading the file' "$p3_scan"
+  probe_edit 's/\A/; a comment\n/' &&
+    probe_leg 'a comment-only edit lists only the scan reading the file (the two probe roots compare equal)' "$p3_scan"
+  probe_edit 's/\(system "mkdir -p gd3"\)/(system "mkdir -p gd3 && :")/' &&
+    probe_leg 'a rule with an alias and a directory target lists its alias' "@p3/runtest-dirt3 $p3_scan"
+  probe_edit 's/\(echo h\)/(echo g)/' &&
+    probe_leg 'an edit to a helper alias lists the per-test aliases needing it' "@p3/runtest-needh3 $p3_scan"
+  probe_edit 's/\(deps h4\.txt\)/(deps h4b.txt)/' &&
+    probe_leg 'a dependency edit to a helper (alias) stanza lists the aliases needing it, by a rule and by an (alias) stanza' \
+      "@p3/runtest-needh4 @p3/runtest-viah4 $p3_scan"
+  probe_edit 's/\(echo m\)/(echo n)/ + s/\(echo a\)\)\)/(echo b)))/' &&
+    probe_leg 'a visible rule edit beside an alias-action edit lists both' "@p3/runtest-act3 @p3/runtest-reads3 @p3/runtest-lk $p3_scan"
+  probe_edit 's/\(test \(name pb\) \(modules pb\)\)/(test (name pd) (modules pd))/' && git_q mv p3/pb.ml p3/pd.ml &&
+    git_q mv p3/pb.expected p3/pd.expected &&
+    probe_leg 'a renamed test, which the old dune file cannot describe beside the new sources, keeps the whole directory' \
+      "$(echo "$p3_all" | sed 's|@p3/runtest-pb|@p3/runtest-pd|') $p3_scan $probe_blind"
+  probe_edit 's/\(rule \(alias runtest-two\) \(targets two2\.txt\)[^\n]*\n//' &&
+    probe_leg 'a removed target rule lists the alias that owned it on the old side' "@p3/runtest-two $p3_scan"
+  perl -0pi -e 's/\(echo ok\)/(echo okay)/; s/\(action \(progn\)\)\)/(action (echo i)))/' "$repo/p5/dune"
+  affected HEAD
+  # shellcheck disable=SC2086
+  expect 'a changed rule the probe does not describe keeps the whole directory' 0 @p5/runtest-inc5 @p5/runtest-p5ok
+  if grep -q 'p5/dune: its whole directory, because a changed (rule) the probe does not describe' "$err"; then
+    report 0 'a dune file kept whole for an undescribed rule says why'
+  else report 1 'a dune file kept whole for an undescribed rule says why' "$(cat "$err")"; fi
+  probe_restore
+  probe_edit 's/\(rule \(alias runtest-two\) \(targets two2\.txt\)/(rule (alias runtest-dirt3) (targets two2.txt)/' &&
+    probe_leg 'a target rule moved from one alias to another lists both' "@p3/runtest-dirt3 @p3/runtest-two $p3_scan"
+  # What dune cannot answer keeps the whole directory.
+  probe_edit 's/\z/(env (_ (env-vars (P3 x))))\n/' &&
+    probe_leg 'a changed (env) stanza keeps the reach of its whole directory' "$p3_all $p3_scan"
+  probe_edit 's/\(subdir s1 /(subdir s2 /' &&
+    probe_leg 'a stanza moved between (subdir) wrappers keeps the reach of the whole directory' \
+      "$(echo "$p3_all" | sed 's|@p3/s1/runtest-sx|@p3/s2/runtest-sx|') $p3_scan"
+  printf '(test (name pc) (modules pc))\n' >>"$repo/p3/dune"
+  printf 'let () = ()\n' >"$repo/p3/pc.ml"
+  affected --files p3/dune
+  # shellcheck disable=SC2086
+  expect '--files names no revision, so a dune file keeps its whole directory' 0 $p3_all @p3/runtest-pc $p3_scan
+  if grep -q 'its whole directory, because --files names no revision' "$err"; then report 0 'a dune file kept whole says why'
+  else report 1 'a dune file kept whole says why' "$(cat "$err")"; fi
+  probe_restore
+fi
+# Probes that do not answer: an input the copy lacks (an ignored directory),
+# and a dune file including one. Each reads the change without the probe.
+probe_p6() { # DUNE-TEXT [FRAGMENT-TEXT]
+  mkdir -p "$repo/p6/gen" && printf 'gen/\n' >"$repo/p6/.gitignore" && printf '%s\n' "$1" >"$repo/p6/dune" &&
+    : >"$repo/p6/gen/dep.txt" && : >"$repo/p6/p6.txt" || return 1
+  [ -z "${2:-}" ] || printf '%s\n' "$2" >"$repo/p6/gen/x.inc"
+}
+if harness_leg 'probe fallback'; then
+  probe_p6 '(rule (alias runtest-ign) (deps gen/dep.txt) (action (progn)))' || exit 2
+  # dune prints what a rule reads whether or not the file is there: the copy
+  # lacks the ignored input, and the probe still reads it right.
+  affected --files p6/p6.txt
+  # shellcheck disable=SC2086
+  expect 'a rule whose input the probe copy lacks reads only that input (here: not p6.txt)' 0 $probe_blind
+  affected --files p6/gen/dep.txt
+  # shellcheck disable=SC2086
+  expect 'a rule whose input the probe copy lacks is listed for that input' 0 @p6/runtest-ign $probe_blind
+  probe_restore
+  probe_p6 '(include gen/x.inc)
+(rule (alias runtest-p6) (action (progn)))' '(rule (alias runtest-inc6) (action (progn)))' || exit 2
+  affected --files p6/p6.txt
+  if [ "$rc" = 0 ] && grep -q 'the probe failed' "$err" && grep -qx @p6/runtest-p6 "$out"; then
+    report 0 'a probe dune does not load reads the change without the probe'
+  else report 1 'a probe dune does not load reads the change without the probe' "exit $rc; $(cat "$out" "$err")"; fi
+  probe_restore
+  # A probe that loads but whose rules dune will not print (a shim refusing
+  # `dune rules` inside it): the whole reading again without the probe, so the
+  # list is the one without it.
+  mkdir -p "$TMP/shim4" || exit 2
+  cat >"$TMP/shim4/dune" <<SHIM
+#!/usr/bin/env bash
+case "\${1:-}:\$PWD" in rules:*/probe) echo 'Error: refused by the harness shim' >&2; exit 1 ;; esac
+exec "$REAL_DUNE" "\$@"
+SHIM
+  chmod +x "$TMP/shim4/dune" || exit 2
+  rc=0
+  (cd "$TMP" && PATH="$TMP/shim4:$PATH" "$repo/tools/affected-tests.sh" --files lib/helper.ml) >"$out" 2>"$err" || rc=$?
+  if grep -q 'reading again without it' "$err"; then
+    # shellcheck disable=SC2086
+    expect 'a probe whose rules dune will not print reads the change again without it' 0 $reached_by_core
+  else report 1 'a probe whose rules dune will not print reads the change again without it' "exit $rc; $(cat "$err")"; fi
+fi
+if harness_leg 'probe controls'; then
+  # shellcheck disable=SC2086
+  control 'a twin is what makes an alias action dune'"'"'s answer' \
+    'my @act = grep { named($_, "action") } @fl;' 'my @act;' \
+    --files p1/chd.txt -- @p1/runtest-chdir $probe_blind
+  # shellcheck disable=SC2086
+  control 'an (:include) is what leaves its alias blind' \
+    'if ($canon =~ /(?:^|[\s(])(:include|dynamic-run)[\s)]/) {' 'if (0) {' \
+    --files p1/inc.txt -- $probe_blind
+  # shellcheck disable=SC2086
+  control 'a helper alias'"'"'s own entry is what lists the per-test alias needing it' \
+    'push @al, $h;' '' \
+    --files p1/hl.txt -- @p1/runtest-viahelper @p1/runtest-viastanza $probe_blind
+  # shellcheck disable=SC2086
+  control 'asking dune for an (alias) stanza'"'"'s dependencies is what lists it' \
+    'source_query($_) for @al;' '' \
+    --files p1/hl.txt -- @p1/runtest-viahelper @p1/runtest-viastanza $probe_blind
+  printf '(test (name pc) (modules pc))\n' >>"$repo/p3/dune"
+  printf 'let () = ()\n' >"$repo/p3/pc.ml"
+  control 'comparing the dune file across revisions is what scopes a new test stanza (the base reach)' \
+    'else scoped+=("$f"); fi' 'fi' \
+    HEAD -- @p3/runtest-pc $p3_scan
+  probe_restore
+  probe_edit 's/\(echo a\)\)\)/(echo b)))/' &&
+    control 'comparing rules across the probes is what finds an action-only edit' \
+      'my @delta = grep {' 'my @delta = (); 0 && grep {' \
+      HEAD -- @p3/runtest-act3 $p3_scan
+  probe_restore
+  probe_edit 's/\(echo m\)/(echo n)/' &&
+    control 'a stanza'"'"'s link rule is what reaches a link_deps consumer' \
+      '$hit{$_} = $whole_hit{$_} = 1 for @{$stanza_rule{$t}};' '' \
+      HEAD -- @p3/runtest-reads3 @p3/runtest-lk $p3_scan
+  probe_restore
+  probe_edit 's/\(test \(name pa\) \(modules pa\)\)/(test (name pa) (modules pa) (flags (:standard -w -a)))/' &&
+    control 'a changed stanza named as dune lists it is what reaches a flags edit' \
+      'if (@ix) { $whole{$_} = 1 for @ix; next }' 'if (@ix) { next }' \
+      HEAD -- @p3/runtest-pa $p3_scan
+  probe_restore
+  probe_edit 's/\z/(env (_ (env-vars (P3 x))))\n/' &&
+    control 'a changed form outside the allowlist is what keeps the whole directory' \
+      'push @why, $h eq "alias" ? "a changed (alias) with an action" : "a changed ($h) stanza";' '' \
+      HEAD -- $p3_all $p3_scan
+  probe_restore
+  probe_edit 's/\(deps h4\.txt\)/(deps h4b.txt)/' &&
+    control 'a changed helper (alias) stanza is what lists the aliases needing it' \
+      '$direct_here{in_dir($d, $x)} = "its (alias) stanza changed";' '' \
+      HEAD -- @p3/runtest-needh4 @p3/runtest-viah4 $p3_scan
+  probe_restore
+  probe_edit 's/\(echo h\)/(echo g)/' &&
+    control 'a changed twin of a helper alias is what lists the alias needing it' \
+      '$direct_here{in_dir($td, $_)} = "a rule of it changed" for @{$twin_of{$t} // []};' '' \
+      HEAD -- @p3/runtest-needh3 $p3_scan
+  probe_restore
+  probe_edit 's/\(rule \(alias runtest-two\) \(targets two2\.txt\)/(rule (alias runtest-dirt3) (targets two2.txt)/' &&
+    control 'the aliases a changed form attaches to are what list a moved target rule'"'"'s aliases' \
+      '$direct_here{$x} //= "the stanzas attached to it changed"' 'my $unused = 1' \
+      HEAD -- @p3/runtest-dirt3 @p3/runtest-two $p3_scan
+  probe_restore
+  probe_edit 's/\(rule \(alias runtest-two\) \(targets two2\.txt\)[^\n]*\n//' &&
+    control 'the old side'"'"'s owners are what list the alias of a removed target' \
+      '$direct_here{in_dir($td, $a->{alias})} = "a target it may have owned is gone";' '' \
+      HEAD -- @p3/runtest-two $p3_scan
+  probe_restore
+  perl -0pi -e 's/\(action \(progn\)\)\)/(action (echo i)))/' "$repo/p5/dune"
+  control 'the converter'"'"'s verdict is what keeps a changed undescribed rule'"'"'s directory whole' \
+    'unless ($r->{vouched}) { push @why, "a changed ($h) the probe does not describe"; next }' '' \
+    HEAD -- @p5/runtest-inc5 @p5/runtest-p5ok
+  probe_restore
+  probe_p6 '(include gen/x.inc)
+(rule (alias runtest-p6) (action (progn)))' '(rule (alias runtest-inc6) (action (progn)))' || exit 2
+  # The shipping reader exits 0 here (the 'probe fallback' leg); without the
+  # alias comparison it accepts the probe, and its listing stops the run.
+  if FROM='cmp -s "$tmp/worktree-aliases" "$tmp/probe-aliases"' TO='true' \
+       perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
+       "$repo/tools/affected-tests.sh" >"$repo/tools/affected-mutant.sh"; then
+    rc=0
+    (cd "$TMP" && bash "$repo/tools/affected-mutant.sh" --files p6/p6.txt) >"$out" 2>"$err" || rc=$?
+    if [ "$rc" = 2 ]; then report 0 'negative control: comparing the probe'"'"'s aliases with the worktree'"'"'s is what keeps a probe dune does not load from stopping the run'
+    else report 1 'negative control: comparing the probe'"'"'s aliases with the worktree'"'"'s is what keeps a probe dune does not load from stopping the run' "mutant exit $rc"; fi
+  else
+    report 1 'negative control: comparing the probe'"'"'s aliases with the worktree'"'"'s is what keeps a probe dune does not load from stopping the run' 'the mutation anchor does not occur exactly once'
+  fi
+  rm -f "$repo/tools/affected-mutant.sh"
+  probe_restore
 fi
 
 finish
