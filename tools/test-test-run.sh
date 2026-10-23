@@ -16,7 +16,7 @@
 # #options (26-28, 37, 89), #width (29-34, 48-52, 64, 70), #digest (35-36,
 # 68-69, 71-73, 80, 87), #fresh (81), #lifecycle (40-47, 65, 74: the run/start
 # lifecycle with its signal legs, and both fork-window negative controls),
-# #source (59-63, 66), #slot (53-58, 78, 88), #device (75-77), #credentials (79, 90),
+# #source (59-63, 66), #slot (53-58, 78, 88), #device (75-77, 91), #credentials (79, 90),
 # #bisect (82), #harness (86). A body that cannot go on (an extraction that
 # matched nothing, a fixture that is not what its checks assume) ends with
 # `harness_abandon DETAIL; return`, failing that leg alone: never `exit`,
@@ -185,6 +185,10 @@
 #      and one closing the replay's inherited descriptors that the escaped
 #      child then goes unseen. Its tests see no step directory either: the
 #      environment it compares leaves out none of the runner's own variables.
+#  91 sits after leg 84: the per-test cap keys a test on its start token too
+#      (gh-ocannl-1448) -- a stub ps and the watcher's /proc seam advance a 7 s
+#      test's starttime at every listing, and it is never capped under 4 s;
+#      held steady, the same test is capped.
 #  85 sits after leg 83 (Linux only): under a stand-in for a PID 1 that reaps
 #      no orphans -- a child subreaper that waits for its own child only --
 #      the zombie-only groups `repeat` and `run` leave are read as gone, not
@@ -6894,6 +6898,85 @@ ML
 fi
 }
 harness_leg_run '84: repeat --direct builds once and replays the rules #repeat' leg_84
+
+# ---------------------------------------------------------------------------
+# Leg 91: the per-test cap tells a test from a process that took its pid (gh-ocannl-1448)
+# ---------------------------------------------------------------------------
+# The watcher keyed a test on its pid and its parent, so a process the system
+# gave the same pid under the same dune within one poll inherited the first
+# one's age and could be capped early (the residual staging#1254 left). It now
+# also keys on the start token: /proc/<pid>/stat's starttime on Linux, ps's
+# lstart elsewhere. A recycled pid cannot be arranged on demand, so a stub ps
+# serves the watcher's listing unchanged and, through the watcher's seam
+# (OCANNL_TOOL_TEST_CAP_PROC, a directory read ahead of /proc), a stat for the
+# test whose starttime it advances on every listing: a 7 s test under a 4 s cap
+# is then a new process at every poll and is never capped (on the base, which
+# reads no token, it is). The control serves one starttime throughout, and the
+# same test is capped: the seam's token is read, not ignored, and a token that
+# stays the same keeps the test's age -- as the real readers' must, or leg 75's
+# hung test would never be capped.
+leg_91() {
+tok_label="per-test cap: a test whose start token changes is a new process (never capped); one whose token stays is capped"
+renamed_dune_readable
+if [ -z "${test_cap_named_ok:-}" ]; then
+  skip "$tok_label" "a process renamed through \$0 does not read back as dune in ps here"
+  return
+fi
+tok_bin=$TMP/test-cap-token-bin
+tok_proc=$TMP/test-cap-token-proc
+mkdir -p "$tok_bin"
+cat >"$tok_bin/ps" <<EOF
+#!/usr/bin/env bash
+# The real ps; on the watcher's listing (an etime column), a stat for the test
+# under TOK_PROC first, its starttime the listing's number when TOK_ADVANCE is
+# set and 4242 otherwise. Each one served is logged to TOK_SERVED.
+case " \$* " in
+  *" etime= "*)
+    pid=\$(cat "\$REPEAT_TEST_ACTION_PID" 2>/dev/null)
+    if [ -n "\$pid" ]; then
+      n=\$(( \$(wc -l <"\$TOK_SERVED" 2>/dev/null || echo 0) + 1 ))
+      start=4242
+      [ -z "\${TOK_ADVANCE:-}" ] || start=\$((100000 + n))
+      mkdir -p "\$TOK_PROC/\$pid"
+      printf '%s (sleep) S 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 %s 0 0\n' "\$pid" "\$start" >"\$TOK_PROC/\$pid/stat.tmp"
+      mv -f "\$TOK_PROC/\$pid/stat.tmp" "\$TOK_PROC/\$pid/stat"
+      printf '%s %s\n' "\$pid" "\$start" >>"\$TOK_SERVED"
+    fi ;;
+esac
+exec "$(command -v ps)" "\$@"
+EOF
+chmod +x "$tok_bin/ps"
+tok_detail=
+for probe in "advance:1:0" "stable::142"; do
+  IFS=: read -r tag advance want <<<"$probe"
+  rm -rf "$tok_proc"
+  : >"$TMP/test-cap-token-$tag.served"
+  REPEAT_TEST_ACTION_PID=$TMP/test-cap-token-$tag.pid
+  rm -f "$REPEAT_TEST_ACTION_PID"
+  PATH=$tok_bin:$PATH TOK_PROC=$tok_proc TOK_ADVANCE=$advance TOK_SERVED=$TMP/test-cap-token-$tag.served \
+    OCANNL_TOOL_TEST_CAP_PROC=$tok_proc REPEAT_TEST_ACTION_PID=$REPEAT_TEST_ACTION_PID \
+    REPEAT_TEST_ACTION_SECS=7 argv_mode=action argv_probe "test-cap-token-$tag" run --test-cap 4 build @cheap
+  tok_action=$(cat "$REPEAT_TEST_ACTION_PID" 2>/dev/null)
+  tok_served=$(grep -c "^$tok_action " "$TMP/test-cap-token-$tag.served" 2>/dev/null)
+  if [ "$argv_rc" != "$want" ]; then
+    tok_detail="$tag: exit $argv_rc (want $want): $argv_out $(cat "$argv_dir/log")"
+  elif [ -z "$tok_action" ] || [ "${tok_served:-0}" -lt 3 ]; then
+    tok_detail="$tag: the stub served the test's stat ${tok_served:-0} time(s) (want 3 or more; test pid ${tok_action:-unknown})"
+  elif [ "$want" = 0 ] && [ -e "$argv_dir/test-cap" ]; then
+    tok_detail="$tag: a passing run left a test-cap record"
+  elif [ "$want" = 142 ] && ! grep -q "^test-run: per-test cap: pid $tok_action has run" "$argv_dir/log"; then
+    tok_detail="$tag: the log does not name the test: $(cat "$argv_dir/log")"
+  fi
+  case ${tok_action:+$(pstate "$tok_action")} in
+    '' | Z) ;;
+    *) kill -KILL "$tok_action" 2>/dev/null ;;
+  esac
+  [ -z "$tok_detail" ] || break
+done
+unset REPEAT_TEST_ACTION_PID
+if [ -z "$tok_detail" ]; then report 0 "$tok_label"; else report 1 "$tok_label" "$tok_detail"; fi
+}
+harness_leg_run '91: the per-test cap tells a test from a process that took its pid #device' leg_91
 
 # ---------------------------------------------------------------------------
 # Leg 79: credentials never reach dune (gh-ocannl-1280)
