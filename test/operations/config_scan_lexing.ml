@@ -458,6 +458,17 @@ module M = struct
   let v = lazy (helper ())
 end|ocaml},
       [ "inner" ] );
+    ( "the binding in scope at the lazy, not a later rebinding",
+      [],
+      {ocaml|let helper () = get ~arg_name:"captured" ~default:""
+let v = lazy (helper ())
+let helper () = get ~arg_name:"rebound" ~default:""|ocaml},
+      [ "captured" ] );
+    ( "a binding after the lazy names nothing it reads",
+      [],
+      {ocaml|let v = lazy (helper ())
+let helper () = get ~arg_name:"later" ~default:""|ocaml},
+      [] );
     ( "opaque plumbing is not followed",
       [ "lookup" ],
       {ocaml|let lookup ~arg_name = resolve ~arg_name ~bootstrap:(get ~arg_name:"plumbing" ~default:"")

@@ -871,6 +871,11 @@ type key_reach = {
       (** Keys read outside every NAMED top-level value binding -- in a nested module, or under
           [let () = …] -- which no entry is credited with, and which a caller has to refuse rather
           than lose. *)
+  bindings : (string * int * string list) list;
+      (** Every value binding [reach] was folded from, in source order, with the offset its
+          structure item ends at: where a later binding of the same name shadows it, [reach] keeps
+          only the last, and a reader resolving a name at one position needs the one in scope there
+          (gh-ocannl-1535). *)
 }
 
 (** The configuration keys each top-level value of a module reaches: the literal [~arg_name:"k"]
@@ -923,6 +928,7 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
     | [] -> path
   in
   let placed = ref (Set.empty (module Int)) in
+  let bound = ref [] in
   (* What a binding's body reads itself, and every value path it names -- resolved later, against
      the scope the binding sits in. *)
   let direct_of expr =
@@ -1034,6 +1040,9 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
                   List.fold group ~init:env ~f:(fun acc (name, direct) ->
                       Map.set acc ~key:name ~data:(reach_of ~env ~scope direct))
             in
+            List.iter group ~f:(fun (name, _) ->
+                Option.iter (Map.find env' name) ~f:(fun keys ->
+                    bound := (name, item.pstr_loc.loc_end.pos_cnum, Set.to_list keys) :: !bound));
             env'
         (* A nested structure's values are reached as [M.v], from inside it and from after it. A
            functor's body is not walked: what its values read depends on its argument. *)
@@ -1085,6 +1094,7 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
         | _ -> env)
   in
   let env = walk ~scope:[] (Map.empty (module String)) structure in
+  let bindings = List.rev !bound in
   let unplaced =
     List.filter_map (label_uses content) ~f:(fun use ->
         if Set.mem !placed use.offset then None else use.key)
@@ -1092,6 +1102,7 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
   {
     reach = Map.to_alist env |> List.map ~f:(fun (name, keys) -> (name, Set.to_list keys));
     unplaced;
+    bindings;
   }
 
 type held_read = { held_key : string; holder : string; held_at : int }
@@ -1126,19 +1137,33 @@ type held_read = { held_key : string; holder : string; held_at : int }
     source -- a memo built some other way (a [ref] cell, a table), and a value computed EAGERLY at
     initialization, which is a different class: it is read before any test code runs. *)
 let process_lifetime_reads ?(opaque = Set.empty (module String)) content =
+  let { reach; bindings; _ } = top_level_key_reach content in
+  let followed (name, _) = not (Set.mem opaque name) in
   let reach =
-    List.filter (top_level_key_reach content).reach ~f:(fun (name, _) -> not (Set.mem opaque name))
+    List.filter reach ~f:followed
     |> Map.of_alist_reduce
          (module String)
          ~f:(fun a b -> List.dedup_and_sort (a @ b) ~compare:String.compare)
   in
-  let resolve ~scope path =
+  let bindings = List.filter bindings ~f:(fun (name, _, _) -> followed (name, ())) in
+  (* The binding of [name] in scope at [offset]: the last one whose item ends before it, or none
+     when every binding of the name comes later. A name only an [include] brings in has no binding
+     of its own here, and is read from [reach]. *)
+  let in_scope ~offset name =
+    match List.filter bindings ~f:(fun (bound, _, _) -> String.equal bound name) with
+    | [] -> Option.map (Map.find reach name) ~f:(fun keys -> `Bound keys)
+    | of_name ->
+        Some
+          (List.fold of_name ~init:`Later ~f:(fun found (_, ends, keys) ->
+               if ends <= offset then `Bound keys else found))
+  in
+  let resolve ~scope ~offset path =
     let rec at depth =
       if depth < 0 then []
       else
-        match Map.find reach (String.concat ~sep:"." (List.take scope depth @ path)) with
-        | Some keys -> keys
-        | None -> at (depth - 1)
+        match in_scope ~offset (String.concat ~sep:"." (List.take scope depth @ path)) with
+        | Some (`Bound keys) -> keys
+        | Some `Later | None -> at (depth - 1)
     in
     at (List.length scope)
   in
@@ -1150,9 +1175,9 @@ let process_lifetime_reads ?(opaque = Set.empty (module String)) content =
 
         method! expression expr =
           (match expr.pexp_desc with
-          | Pexp_ident { txt; _ } ->
+          | Pexp_ident { txt; loc } ->
               Option.iter (flatten_module_path txt) ~f:(fun path ->
-                  keys := resolve ~scope path @ !keys)
+                  keys := resolve ~scope ~offset:loc.loc_start.pos_cnum path @ !keys)
           | Pexp_apply (_, args) ->
               List.iter args ~f:(fun (lbl, arg) ->
                   if is_our_label lbl then

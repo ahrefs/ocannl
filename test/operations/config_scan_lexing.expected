@@ -92,6 +92,8 @@ ok: process-lifetime -- a functor body's lazy
 ok: process-lifetime -- a lambda inside the lazy runs on its force
 ok: process-lifetime -- a same-source top-level value the lazy names
 ok: process-lifetime -- a nested module's own value before the outer one
+ok: process-lifetime -- the binding in scope at the lazy, not a later rebinding
+ok: process-lifetime -- a binding after the lazy names nothing it reads
 ok: process-lifetime -- opaque plumbing is not followed
 ok: process-lifetime -- a lazy created per call is not held
 ok: process-lifetime -- a read beside a module-level lazy is fresh
