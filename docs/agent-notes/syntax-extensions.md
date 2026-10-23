@@ -17,10 +17,11 @@ files.
   form is not generative: `let%op f x = ...` closes over ONE shared param created at definition
   time. Use `let%op mk_f () x = ...` and apply `mk_f ()` when each model instance needs fresh
   parameters; the `()` idiom makes that construction point explicit. Einsum dimension captures
-  (`[ "h"; "w" ]`) are bound at the same point, so a no-unit-param `let%op f x` that captures shares
-  ONE set of dimensions across all its calls; it failed only when a second call saw another size
-  (gh-ocannl-880, `global_avg_pool2d` across two demos). Bind per call with
-  `let f x = let%op r = ... in r`.
+  (`[ "h"; "w" ]`) are NOT lifted with them: tagged `ocannl.capture` in `Ppx_shared`, they are
+  bound by `bind_captures` at the top of the innermost enclosing function body, in `%op` and `%cd`
+  alike, because a shared `delayed_var_ref` pins the first call's solution and a second size then
+  fails inference (gh-ocannl-1507). A lifted initializer cannot name one; a capture that would
+  shadow a lifted name is a clash, found through the `ocannl.bound_capture` marker `let_opt` checks.
 - `%cd` composition seams verified by ppx expansion (gh-465, `Train.sgd_one`/`grad_update`): an
   OCaml variable of `Asgns.comp` type in statement position splices verbatim (so a
   programmatically built fragment can sit inside a `%cd` body); an inline declaration `{ x }`

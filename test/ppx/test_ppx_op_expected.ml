@@ -197,3 +197,53 @@ let _three_layer_perceptron =
       let l2 = mlp_layer ~label:(label @ ["L2"]) ~hid_dim:dim2 () in
       let l3 = mlp_layer ~label:(label @ ["L3"]) ~hid_dim:dim3 () in
       fun x -> l3 ~x:(l2 ~x:(l1 ~x))
+let _capture_no_unit =
+  let open! TDSL.O in
+    fun x ->
+      let b = Shape.get_variable_ref "b" in
+      einsum1
+        ?label:(Some
+                  (List.concat
+                     [["_capture_no_unit"]; (x.Tensor.value).Ir.Tnode.label]))
+        ~capture_dims:[b] "a, b => a" x
+let _capture_with_unit =
+  let open! TDSL.O in
+    fun () ->
+      let cw =
+        (TDSL.param ?more_label:None ?value:None ?values:None
+           ?param_init:None "cw") () in
+      fun x ->
+        let b = Shape.get_variable_ref "b" in
+        let y = ( * ) ?label:(Some ["y"]) cw x in
+        (/.) ?label:(Some ["_capture_with_unit"])
+          (einsum1 ?label:None ~capture_dims:[b] "a, b => a" y) (dim b)
+let _capture_siblings =
+  let open! TDSL.O in
+    let f x =
+      let b = Shape.get_variable_ref "b" in
+      einsum1 ?label:(Some ["f"]) ~capture_dims:[b] "a, b => a" x in
+    let g x =
+      let b = Shape.get_variable_ref "b" in
+      einsum1 ?label:(Some ["g"]) ~capture_dims:[b] "a, b => b" x in
+    fun x -> (+) ?label:(Some ["_capture_siblings"]) (f x) (g x)
+let _capture_nested =
+  let open! TDSL.O in
+    fun x ->
+      let b = Shape.get_variable_ref "b" in
+      let g y =
+        let b = Shape.get_variable_ref "b" in
+        einsum1 ?label:(Some ["g"]) ~capture_dims:[b] "a, b => a" y in
+      (+) ?label:(Some
+                    (List.concat
+                       [["_capture_nested"]; (x.Tensor.value).Ir.Tnode.label]))
+        (einsum1 ?label:None ~capture_dims:[b] "a, b => a" x) (g x)
+let _capture_nested_toplevel =
+  let open! TDSL.O in
+    let cn =
+      (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+         "cn") () in
+    let b = Shape.get_variable_ref "b" in
+    let g y =
+      let b = Shape.get_variable_ref "b" in
+      einsum1 ?label:(Some ["g"]) ~capture_dims:[b] "a, b => a" y in
+    g (einsum1 ?label:None ~capture_dims:[b] "a, b, c => a, b" cn)

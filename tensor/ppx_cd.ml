@@ -1763,10 +1763,16 @@ let translate ?ident_label (expr : expression) : result =
                  | Pparam_val (_, _, pat) -> collect_pat_idents pat
                  | _ -> Set.empty (module String))
         in
+        (* Dimension captures are bound per call, at the top of the body (gh-ocannl-1507). *)
+        let transl_bind_captures ~bad_pun_hints ~proj_in_scope body =
+          let res = transl ~bad_pun_hints ~proj_in_scope body in
+          let vbs, expr = bind_captures ~loc res.vbs res.expr in
+          { res with vbs; expr }
+        in
         let result =
           match body with
           | Pfunction_body body ->
-              let res = transl ~bad_pun_hints ~proj_in_scope body in
+              let res = transl_bind_captures ~bad_pun_hints ~proj_in_scope body in
               {
                 res with
                 typ = Function;
@@ -1775,9 +1781,7 @@ let translate ?ident_label (expr : expression) : result =
               }
           | Pfunction_cases (cases, loc, attrs) ->
               let transformed_cases, cases_result =
-                handle_cases ~bad_pun_hints ~proj_in_scope
-                  (fun ~bad_pun_hints ~proj_in_scope -> transl ~bad_pun_hints ~proj_in_scope)
-                  cases
+                handle_cases ~bad_pun_hints ~proj_in_scope transl_bind_captures cases
               in
               {
                 cases_result with

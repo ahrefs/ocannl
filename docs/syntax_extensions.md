@@ -644,8 +644,9 @@ The einsum operators (`+*`, `@^+`, `+++`, `++`, `@^^`) and the concatenation ope
 accept an optional list of strings argument after the specification string. When passed, the
 strings should be some of the identifiers used in the specification. Both dimension variable and
 row variable labels are supported. This will introduce bindings for `Indexing.variable_ref`
-objects at the same point as the inline parameter definition bindings, and will pass these
-objects with the `~capture_dims` argument to `einsum`, `einsum1`, resp. `concat`. The bound
+objects per call: at the top of the innermost function body enclosing the operation, or, outside
+of any function, at the same point as the inline parameter definition bindings. The ppx passes
+these objects with the `~capture_dims` argument to `einsum`, `einsum1`, resp. `concat`. The bound
 objects can be used to add shape constraints via `Shape.set_dim` and `Shape.set_equal`, or with
 `Operation.embed_dim` or its alias `Operation.TDSL.O.dim` to embed the solved dimension of the
 corresponding variable (as a number) into a tensor expression. For a row variable, the number
@@ -693,12 +694,14 @@ Recurring stumbling points, each verified against the sources:
   the construction point explicit with `let%op mk_f () x = ...` and apply `mk_f ()` once per
   instance. Initializers may use labeled arguments, for example
   `kaiming ~scale_sq:2.0 normal1 ()`.
-- **Dimension captures follow the same rule.** Their bindings sit where inline declarations do, so
-  in `let%op f x = x ++ "... | h, w, ..c.. => ... | ..c.." ["h"; "w"]` the captured `h` and `w`
-  are bound once, when `f` is defined, and every application of `f` unifies with the same two
-  dimensions: a second input of a different spatial size fails shape inference. A stateless
-  function that captures puts the extension point inside its body instead,
-  `let f x = let%op r = ... in r`, as `Nn_blocks.global_avg_pool2d` does (gh-ocannl-880).
+- **Dimension captures do not follow that rule: they are bound per call** (gh-ocannl-1507). A
+  capture names a dimension of one application's shape, so its binding sits at the top of the
+  innermost function body enclosing the operation. In
+  `let%op mk () x = { proj } * (x ++ "... | h, w, ..c.. => ... | ..c.." ["h"; "w"])`, `proj` is
+  created once per `mk ()` while `h` and `w` are fresh for every input, so one instance pools
+  inputs of any spatial size. A capture is therefore not in scope outside its function, nor in an inline
+  declaration's initializer that is lifted out of it; naming a capture like an inline declaration
+  it would shadow is a name-clash error.
 
 ## Further features of the syntax extension %cd
 
