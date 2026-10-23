@@ -3,6 +3,7 @@ wpad: the direct nest covers every output cell: true
 wpad: rewritten, the direct form covers only the odd-extent remainder: true
 wpad: the pass changes the raw lowering: true
 wpad: the pass is idempotent: true
+wpad: a second lowering mints the same nodes: true
 wpad: the gate off mints nothing: true
 wpad: the gate on writes the kernel, input and product transforms: true
 wpad: Autotune.detect_conv reports the 3x3 stride-1 site the rewrite claims: true
@@ -14,6 +15,7 @@ wval: the direct nest covers every output cell: true
 wval: rewritten, the direct form covers only the odd-extent remainder: true
 wval: the pass changes the raw lowering: true
 wval: the pass is idempotent: true
+wval: a second lowering mints the same nodes: true
 wval: the gate off mints nothing: true
 wval: the gate on writes the kernel, input and product transforms: true
 wval: Autotune.detect_conv reports the 3x3 stride-1 site the rewrite claims: true
@@ -25,6 +27,7 @@ wodd: the direct nest covers every output cell: true
 wodd: rewritten, the direct form covers only the odd-extent remainder: true
 wodd: the pass changes the raw lowering: true
 wodd: the pass is idempotent: true
+wodd: a second lowering mints the same nodes: true
 wodd: the gate off mints nothing: true
 wodd: the gate on writes the kernel, input and product transforms: true
 wodd: Autotune.detect_conv reports the 3x3 stride-1 site the rewrite claims: true
@@ -35,6 +38,7 @@ wrect: the direct nest covers every output cell: true
 wrect: rewritten, the direct form covers only the odd-extent remainder: true
 wrect: the pass changes the raw lowering: true
 wrect: the pass is idempotent: true
+wrect: a second lowering mints the same nodes: true
 wrect: the gate off mints nothing: true
 wrect: the gate on writes the kernel, input and product transforms: true
 wrect: Autotune.detect_conv reports the 3x3 stride-1 site the rewrite claims: true
@@ -45,6 +49,7 @@ wb1: the direct nest covers every output cell: true
 wb1: rewritten, the direct form covers only the odd-extent remainder: true
 wb1: the pass changes the raw lowering: true
 wb1: the pass is idempotent: true
+wb1: a second lowering mints the same nodes: true
 wb1: the gate off mints nothing: true
 wb1: the gate on writes the kernel, input and product transforms: true
 wb1: Autotune.detect_conv refuses the singleton batch, which the rewrite carries: true

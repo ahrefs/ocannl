@@ -133,7 +133,15 @@ type run = {
   opt : LL.optimized;
   d : Tn.t;
   kern : Tn.t;
+  minted_again : bool;
+      (** Whether a second lowering of the same program writes exactly the same minted nodes: the
+          memo the analysis cache relies on, keyed by the site with its loop symbols
+          alpha-normalized (every lowering mints fresh ones). *)
 }
+
+let minted_of (o : LL.optimized) =
+  List.filter (written o.LL.llc) ~f:(fun tn -> Option.is_some (Winograd.minted_role tn))
+  |> List.dedup_and_sort ~compare:Tn.compare
 
 (* Build [build ()] (returning the output, the conv node checked structurally, and that conv's
    kernel) and run its forward with the rewrite [on] or off. *)
@@ -145,8 +153,9 @@ let forward ~on build =
   let values = Context.get_values ctx y.Tensor.value in
   let raw = Ir.Assignments.to_low_level y.Tensor.forward.Ir.Assignments.asgns in
   let opt = optimized_of y in
+  let minted_again = List.equal Tn.equal (minted_of opt) (minted_of (optimized_of y)) in
   Winograd.set_enabled None;
-  { values; raw; opt; d = d.Tensor.value; kern = kern.Tensor.value }
+  { values; raw; opt; d = d.Tensor.value; kern = kern.Tensor.value; minted_again }
 
 let report label (got : float array) =
   eprintf "%s: %s (not part of the golden)\n%!" label
@@ -204,6 +213,7 @@ let leg1 (s : shape) =
     (direct_cells rewritten ~d:direct.d ~kern:direct.kern ~reduction = cells - even_cells);
   p (s.name ^ ": the pass changes the raw lowering") (not (LL.equal rewritten direct.raw));
   p (s.name ^ ": the pass is idempotent") (LL.equal (Winograd.rewrite rewritten) rewritten);
+  p (s.name ^ ": a second lowering mints the same nodes") wino.minted_again;
   p_none (s.name ^ ": the gate off mints nothing") (written direct.opt.LL.llc) ~f:(fun tn ->
       Option.is_some (Winograd.minted_role tn));
   p

@@ -33,7 +33,9 @@ let a_t = [| [| 1.; 1.; 1.; 0. |]; [| 0.; 1.; -1.; -1. |] |]
    [Never_virtual]: inlined, [V] would be re-transformed once per output channel and [M] once per
    inverse-transform term. Whether a node is routine scratch or a buffer is the placements' call. *)
 
-let namespace = "rewrite"
+(* Its own namespace, apart from [Online_softmax]'s ["rewrite"]: each module numbers its nodes from
+   0, and [Tnode.find_namespaced] and the name-only identifiers key on the (namespace, id) pair. *)
+let namespace = "winograd"
 let provenance = Tn.Site "505:winograd-transform"
 
 let fresh_id =
@@ -45,9 +47,10 @@ let fresh_id =
 (* Sibling lowerings of one program (placement arms, autotune candidates) must mint the SAME nodes,
    or the analysis cache, which keys nodes by identity, misses on every one of them. The key is the
    whole site -- the matched statement's nodes and index maps, its loop domains -- plus the role, so
-   two statements that differ in any of those never share a buffer. Cleared with the other
-   node-retaining caches: ahead of an accessibility snapshot, and at a session reset through the
-   tier's [Rewrites.reset]. *)
+   two statements that differ in any of those never share a buffer; the nest's loop symbols, which
+   every lowering mints afresh, enter it by their position in the nest (alpha-normalized). Cleared
+   with the other node-retaining caches: ahead of an accessibility snapshot, and at a session reset
+   through the tier's [Rewrites.reset]. *)
 let minted : (string, Tn.t) Hashtbl.t = Hashtbl.create (module String)
 let reset () = Hashtbl.clear minted
 let () = Tn.before_accessibility_snapshot := reset :: !Tn.before_accessibility_snapshot
@@ -263,6 +266,20 @@ let find_site (stmt : LL.t) : site option =
   then
     let prec = Ops.single in
     let key =
+      (* Loop symbol [i] of the nest becomes [Symbol (-1 - i)], which no lowering mints; a symbol
+         the nest does not bind (a static index) stays itself, as it is stable across lowerings. *)
+      let canon sym =
+        match List.findi loop_syms ~f:(fun _ s -> Idx.equal_symbol s sym) with
+        | Some (i, _) -> Idx.Symbol (-1 - i)
+        | None -> sym
+      in
+      let canon_idx (idcs : Idx.axis_index array) =
+        Array.map idcs ~f:(function
+          | Idx.Iterator sym -> Idx.Iterator (canon sym)
+          | Idx.Affine { symbols; offset } ->
+              Idx.affine ~offset ~symbols:(List.map symbols ~f:(fun (c, sym) -> (c, canon sym)))
+          | idx -> idx)
+      in
       Sexp.to_string
         ([%sexp_of:
            int
@@ -271,8 +288,14 @@ let find_site (stmt : LL.t) : site option =
            * Idx.axis_index array
            * int
            * Idx.axis_index array
-           * (Idx.symbol * int) list]
-           (d.Tn.uid, di, a.Tn.uid, ai, b.Tn.uid, bi, List.map loops ~f:(fun l -> (l.index, l.to_))))
+           * int list]
+           ( d.Tn.uid,
+             canon_idx di,
+             a.Tn.uid,
+             canon_idx ai,
+             b.Tn.uid,
+             canon_idx bi,
+             List.map loops ~f:(fun l -> l.to_) ))
     in
     Some { loops; d; di; a; ai; b; bi; prec; h; w; ic; rebuild; key }
   else None
