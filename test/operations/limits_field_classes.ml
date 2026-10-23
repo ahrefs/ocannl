@@ -22,11 +22,13 @@
    No [Untimed] field is read outside [backend_intf.ml] (record literals SET them; a field access or
    a binding record pattern READS), the accessor [Backend_intf.untimed_limits] is referenced only
    from [autotune.ml], and inside [autotune.ml] no top-level definition [Autotune.tune] reaches
-   references one that (transitively) reaches the accessor. The codegen-stage modules are thereby
-   covered by the first rule. The reach is a call graph over [autotune.ml]'s top-level bindings and
-   modules by name, which over-approximates (a local shadowing a top-level name adds an edge), so it
-   can refuse wrongly but not pass wrongly within the file; other modules cannot reach the fields at
-   all.
+   references one that (transitively) reaches the accessor -- past two sanctions: the seeded plan,
+   wherever [tune] calls it, and the seeded transform only where the search-less fallback spells it
+   (gh-ocannl-1491; its section below states the forms it reads). The codegen-stage modules are
+   thereby covered by the first rule. The reach is a call graph over [autotune.ml]'s top-level
+   bindings and modules by name, which over-approximates (a local shadowing a top-level name adds an
+   edge), so it can refuse wrongly but not pass wrongly within the file; other modules cannot reach
+   the fields at all.
 
    The scan rules are pure functions over source text, run on synthetic violations and their nearest
    honest neighbours before the repository. *)
@@ -242,11 +244,14 @@ let references ~name (source : string) : bool =
   iter#structure (Ppxlib.Parse.implementation (Lexing.from_string source));
   !found
 
+let offset (loc : Ppxlib.Location.t) = loc.loc_start.pos_cnum
+
 (* The top-level definitions of a source -- value bindings and modules, by name -- each with the
    names it references: bare identifiers, a qualified identifier's head module and its last
    component. A qualified [Other.f] thereby also counts as a reference to a top-level [f], one more
-   way the reach over-approximates. *)
-let top_level_graph (source : string) : (string * string list) list =
+   way the reach over-approximates. [drop] lists the start offsets of bare identifiers that are not
+   references: the sanctioned spellings of {!searchless_fallback}, and nothing else. *)
+let top_level_graph ?(drop = []) (source : string) : (string * string list) list =
   let structure = Ppxlib.Parse.implementation (Lexing.from_string source) in
   let refs_of visit =
     let acc = ref [] in
@@ -256,6 +261,8 @@ let top_level_graph (source : string) : (string * string list) list =
 
         method! expression e =
           (match e.pexp_desc with
+          | Pexp_ident { txt = Lident _; loc } when List.mem drop (offset loc) ~equal:Int.equal ->
+              ()
           | Pexp_ident { txt = Lident s; _ } -> acc := s :: !acc
           | Pexp_ident { txt = Ldot (Lident m, s); _ } -> acc := m :: s :: !acc
           | Pexp_ident { txt = Ldot (_, s); _ } -> acc := s :: !acc
@@ -284,8 +291,8 @@ let top_level_graph (source : string) : (string * string list) list =
 
 (* The top-level definitions of [source] that [root] reaches (itself included), and those of them
    that (transitively) reach a definition referencing [reader]. *)
-let reach ?(through = []) ~root ~reader (source : string) : string list * string list =
-  let graph = top_level_graph source in
+let reach ?(through = []) ?drop ~root ~reader (source : string) : string list * string list =
+  let graph = top_level_graph ?drop source in
   let edges name =
     List.concat_map graph ~f:(fun (n, refs) -> if String.equal n name then refs else [])
     |> List.filter ~f:(fun r -> List.Assoc.mem graph r ~equal:String.equal)
@@ -315,14 +322,188 @@ let reach ?(through = []) ~root ~reader (source : string) : string list * string
 
 let reached_readers ?through ~root ~reader source = snd (reach ?through ~root ~reader source)
 
-(* The routes by which an [Untimed] reading may reach [Autotune.tune]. The seeded untuned plan
-   (gh-ocannl-1253), whose [auto] gate reads the capacity, and whose resolved content digest joins
-   the search trajectory's identity -- held below by requiring [tune] to name the digest. And the
-   seeded transform (gh-ocannl-1441), through which the untuned fallback of a call that does not
-   search compiles what the recipes' untuned compile ([Autotune.seeded_default]) compiles: that call
-   times, stores and replays nothing, so the reading reaches no record a search compares or a cache
-   replays. *)
-let sanctioned = [ "seeded_plan"; "seeded_transform" ]
+(* The route by which an [Untimed] reading may reach [Autotune.tune] wherever [tune] calls it: the
+   seeded untuned plan (gh-ocannl-1253), whose [auto] gate reads the capacity, and whose resolved
+   content digest joins the search trajectory's identity -- held below by requiring [tune] to name
+   the digest. *)
+let sanctioned = [ "seeded_plan" ]
+
+(* {2 The search-less fallback}
+
+   The seeded transform (gh-ocannl-1441) is sanctioned at fewer sites than the seeded plan: only
+   inside the search-less fallback, through which a call that does not search compiles what the
+   recipes' untuned compile ([Autotune.seeded_default]) compiles. Such a call times, stores and
+   replays nothing, so the reading reaches no record a search compares or a cache replays. Any other
+   spelling of the route in [tune]'s reach -- a search path calling it, or calling a wrapper of it
+   such as [seeded_default] -- is a reference like any other, and reaches the accessor
+   (gh-ocannl-1491).
+
+   The fallback is read off the code, not named. A SEARCH-LESS BRANCH is, in the top-level
+   definitions [tune] reaches (the seeded plan's cut applied): - the [then] branch of an [if] whose
+   condition has [not search] as a conjunct of its [&&] chain (parentheses aside); - the right-hand
+   side of a [match], [function] or [try] case whose guard has it so. [search] is the flag [tune]
+   takes as [?search] -- a claim below holds that it does -- matched by name; nothing else is read
+   as search-less: [if search then ... else e], a [||], a negation bound to another name or a flag
+   passed on all leave [e] an ordinary branch. THE SEARCH-LESS FALLBACK is every local binding (a
+   [let] nested in another binding: never a top-level or module definition, which other paths share)
+   that EVERY search-less branch references by a bare name, resolved through
+   [Test_utils.Lexical_scope] to the binding in scope at the reference -- so a same-named binding
+   elsewhere, or one shadowing it later, is not the fallback. A spelling of [seeded_transform]
+   anywhere inside such a binding's right-hand side is dropped from the reach graph; every other one
+   counts.
+
+   The boundary: this pins WHERE the route is spelled, not where the fallback's result flows. The
+   fallback may also be called from paths that test no flag (a refused lineage, a failed deferred
+   replay: they do not search either), and a search path that called the fallback and timed what it
+   returns would pass. Outside the forms above the rule refuses rather than passes: a search-less
+   branch that does not call the fallback empties it, and then every spelling of the route
+   counts. *)
+
+let search_flag = "search"
+let seeded_route = "seeded_transform"
+
+let rec conjuncts (e : expression) =
+  match e.pexp_desc with
+  | Pexp_apply
+      ({ pexp_desc = Pexp_ident { txt = Lident "&&"; _ }; _ }, [ (Nolabel, a); (Nolabel, b) ]) ->
+      conjuncts a @ conjuncts b
+  | _ -> [ e ]
+
+let searchless_condition e =
+  List.exists (conjuncts e) ~f:(fun (c : expression) ->
+      match c.pexp_desc with
+      | Pexp_apply
+          ( { pexp_desc = Pexp_ident { txt = Lident "not"; _ }; _ },
+            [ (Nolabel, { pexp_desc = Pexp_ident { txt = Lident flag; _ }; _ }) ] ) ->
+          String.equal flag search_flag
+      | _ -> false)
+
+(* What a bare name resolves to: the value binding (by its start offset) that binds it, or a
+   parameter, a case's pattern, or a name the source does not bind. *)
+type binding = Bound of int | Unbound
+
+type fallback_walk = {
+  branches : (int * Set.M(Int).t) list;
+      (** Each search-less branch's start offset, with the bindings it references. *)
+  sites : (int * int list) list;
+      (** Each bare spelling of the route, with the bindings enclosing it, innermost first. *)
+  locals : Set.M(Int).t;  (** The bindings nested in another value binding. *)
+}
+
+let walk_fallback (source : string) : fallback_walk =
+  let structure = Ppxlib.Parse.implementation (Lexing.from_string source) in
+  let branches = ref [] and sites = ref [] and locals = ref (Set.empty (module Int)) in
+  let enclosing = ref [] and open_branches = ref [] in
+  let iter =
+    object (self)
+      inherit [binding, unit] Test_utils.Lexical_scope.scoped as super
+      method local = Unbound
+      method module_path _ _ = None
+      method! let_denotes vb = Bound (offset vb.pvb_loc)
+
+      method! value_binding env vb =
+        let at = offset vb.pvb_loc in
+        if not (List.is_empty !enclosing) then locals := Set.add !locals at;
+        enclosing := at :: !enclosing;
+        let vb = super#value_binding env vb in
+        enclosing := List.tl_exn !enclosing;
+        vb
+
+      method! ident env { txt; loc } =
+        match txt with
+        | Lident name ->
+            (match Test_utils.Lexical_scope.lookup env name with
+            | Some (Bound at) -> List.iter !open_branches ~f:(fun refs -> refs := Set.add !refs at)
+            | Some Unbound | None -> ());
+            if String.equal name seeded_route then sites := (offset loc, !enclosing) :: !sites
+        | Ldot _ | Lapply _ -> ()
+
+      method private branch (body : expression) walk =
+        let refs = ref (Set.empty (module Int)) in
+        open_branches := refs :: !open_branches;
+        ignore (walk body : expression);
+        open_branches := List.tl_exn !open_branches;
+        branches := (offset body.pexp_loc, !refs) :: !branches
+
+      method! expression env e =
+        match e.pexp_desc with
+        | Pexp_ifthenelse (cond, then_, else_) when searchless_condition cond ->
+            ignore (self#expression env cond : expression);
+            self#branch then_ (self#expression env);
+            Option.iter else_ ~f:(fun e -> ignore (self#expression env e : expression));
+            e
+        | _ -> super#expression env e
+
+      method! case env c =
+        match c.pc_guard with
+        | Some guard when searchless_condition guard ->
+            let inner = self#bind_patterns env [ c.pc_lhs ] in
+            ignore (self#pattern env c.pc_lhs : pattern);
+            ignore (self#expression inner guard : expression);
+            self#branch c.pc_rhs (self#expression inner);
+            c
+        | None | Some _ -> super#case env c
+    end
+  in
+  ignore
+    (iter#structure
+       { Test_utils.Lexical_scope.frames = []; modules = Map.empty (module String) }
+       structure
+      : structure);
+  { branches = !branches; sites = !sites; locals = !locals }
+
+(* The top-level definitions of a source with their source spans, as {!top_level_graph} names
+   them. *)
+let top_level_spans (source : string) : (string * int * int) list =
+  let span name (loc : Ppxlib.Location.t) = (name, offset loc, loc.loc_end.pos_cnum) in
+  List.concat_map
+    (Ppxlib.Parse.implementation (Lexing.from_string source))
+    ~f:(fun item ->
+      match item.pstr_desc with
+      | Pstr_value (_, bindings) ->
+          List.filter_map bindings ~f:(fun vb ->
+              match vb.pvb_pat.ppat_desc with
+              | Ppat_var { txt; _ } | Ppat_constraint ({ ppat_desc = Ppat_var { txt; _ }; _ }, _) ->
+                  Some (span txt vb.pvb_loc)
+              | _ -> None)
+      | Pstr_module { pmb_name = { txt = Some name; _ }; _ } -> [ span name item.pstr_loc ]
+      | _ -> [])
+
+type fallback = {
+  searchless_branches : int;  (** In the definitions [root] reaches. *)
+  fallbacks : int list;  (** The local bindings every one of them references. *)
+  sanctioned_sites : int list;  (** The route's spellings inside a fallback. *)
+}
+
+let searchless_fallback ~root (source : string) : fallback =
+  let walk = walk_fallback source in
+  let reached, _ = reach ~through:sanctioned ~root ~reader:accessor source in
+  let spans = top_level_spans source in
+  let in_reach at =
+    List.exists spans ~f:(fun (name, start, stop) ->
+        start <= at && at < stop && List.mem reached name ~equal:String.equal)
+  in
+  let branches = List.filter walk.branches ~f:(fun (at, _) -> in_reach at) in
+  let fallbacks =
+    match branches with
+    | [] -> Set.empty (module Int)
+    | (_, first) :: rest ->
+        Set.inter walk.locals
+          (List.fold rest ~init:first ~f:(fun acc (_, refs) -> Set.inter acc refs))
+  in
+  {
+    searchless_branches = List.length branches;
+    fallbacks = Set.to_list fallbacks;
+    sanctioned_sites =
+      List.filter_map walk.sites ~f:(fun (at, enclosing) ->
+          Option.some_if (List.exists enclosing ~f:(Set.mem fallbacks)) at);
+  }
+
+(* The reach of [root] past the seeded plan and its search-less fallback's spellings of the
+   route. *)
+let reach_past_fallback ~root source =
+  reach ~through:sanctioned ~drop:(searchless_fallback ~root source).sanctioned_sites ~root
+    ~reader:accessor source
 
 let () =
   let fields = [ "cache_capacity_bytes" ] in
@@ -359,7 +540,70 @@ let () =
          []
     && List.equal String.equal
          (reached_readers ~through:[ "helper" ] ~root:"via_module" ~reader:accessor synthetic)
-         [ "M"; "via_module" ])
+         [ "M"; "via_module" ]);
+  (* The search-less fallback: each source is the route and a wrapper of it, then one [tune]. The
+     honest one calls the fallback from both recognised forms and from a path that tests no flag,
+     beside a search-less branch [tune] does not reach; each other one is its nearest violation. *)
+  let route =
+    "let ranking () = Backend_intf.untimed_limits ()\n\
+     let seeded_transform () = ranking ()\n\
+     let seeded_default () = seeded_transform ()\n"
+  in
+  let flagged = [ "ranking"; "seeded_transform"; "tune" ] in
+  let cases =
+    [
+      ( "the fallback every search-less branch calls",
+        "let unrelated ?(search = true) x = if not search then x else x\n\
+         let tune ?(search = true) ~cache_dir x =\n\
+        \  let fallback () = seeded_transform () in\n\
+        \  let candidate () = x in\n\
+        \  if (not search) && String.equal cache_dir \"\" then fallback ()\n\
+        \  else if x = 0 then fallback ()\n\
+        \  else match x with 1 when x > 0 && not search -> fallback () | _ -> candidate ()",
+        [] );
+      ( "a second site on the search path",
+        "let tune ?(search = true) ~cache_dir x =\n\
+        \  let fallback () = seeded_transform () in\n\
+        \  let candidate () = seeded_transform () + x in\n\
+        \  if (not search) && String.equal cache_dir \"\" then fallback () else candidate ()",
+        flagged );
+      ( "the search path calling a wrapper",
+        "let tune ?(search = true) ~cache_dir x =\n\
+        \  let fallback () = seeded_transform () in\n\
+        \  let candidate () = seeded_default () + x in\n\
+        \  if (not search) && String.equal cache_dir \"\" then fallback () else candidate ()",
+        "seeded_default" :: flagged );
+      ( "a disjunction",
+        "let tune ?(search = true) ~cache_dir x =\n\
+        \  let fallback () = seeded_transform () in\n\
+        \  if (not search) || String.equal cache_dir \"\" then fallback () else x",
+        flagged );
+      ( "a binding shadowing the fallback",
+        "let tune ?(search = true) x =\n\
+        \  let fallback () = x in\n\
+        \  let shipped = if not search then fallback () else x in\n\
+        \  let fallback () = seeded_transform () in\n\
+        \  shipped + fallback ()",
+        flagged );
+      ( "a search-less branch that does not call the fallback",
+        "let tune ?(search = true) x =\n\
+        \  let fallback () = seeded_transform () in\n\
+        \  match x with 0 when not search -> x | _ -> if not search then fallback () else x",
+        flagged );
+      ( "a top-level fallback",
+        "let fallback () = seeded_transform ()\n\
+         let tune ?(search = true) x = if not search then fallback () else x",
+        "fallback" :: flagged );
+    ]
+  in
+  p_all ~min:(List.length cases)
+    "the seeded transform is sanctioned only inside the local fallback every search-less branch \
+     calls"
+    cases ~f:(fun (label, tune, expected) ->
+      let readers = snd (reach_past_fallback ~root:"tune" (route ^ tune)) in
+      let ok = List.equal String.equal readers (List.sort expected ~compare:String.compare) in
+      if not ok then eprintf "case %s: tune reaches %s\n" label (String.concat ~sep:", " readers);
+      ok)
 
 let () =
   let sources =
@@ -398,7 +642,38 @@ let () =
            "model_default" ~equal:String.equal);
       p "tune is a top-level definition of autotune.ml"
         (List.Assoc.mem (top_level_graph source) "tune" ~equal:String.equal);
-      let reached, readers = reach ~through:sanctioned ~root:"tune" ~reader:accessor source in
+      p "tune takes the ?search flag its search-less branches test"
+        (List.exists
+           (Ppxlib.Parse.implementation (Lexing.from_string source))
+           ~f:(fun item ->
+             match item.pstr_desc with
+             | Pstr_value (_, bindings) ->
+                 List.exists bindings ~f:(fun vb ->
+                     match (vb.pvb_pat.ppat_desc, vb.pvb_expr.pexp_desc) with
+                     | Ppat_var { txt = "tune"; _ }, Pexp_function (params, _, _) ->
+                         List.exists params ~f:(fun param ->
+                             match param.pparam_desc with
+                             | Pparam_val (Optional label, _, _) -> String.equal label search_flag
+                             | Pparam_val _ | Pparam_newtype _ -> false)
+                     | _ -> false)
+             | _ -> false));
+      p "the seeded transform reaches the Untimed accessor (its sanction is not stale)"
+        (List.mem
+           (reached_readers ~root:seeded_route ~reader:accessor source)
+           seeded_route ~equal:String.equal);
+      let fallback = searchless_fallback ~root:"tune" source in
+      let found =
+        fallback.searchless_branches > 0
+        && (not (List.is_empty fallback.fallbacks))
+        && not (List.is_empty fallback.sanctioned_sites)
+      in
+      if not found then
+        eprintf "tune: %d search-less branches, %d fallback bindings, %d sanctioned sites\n"
+          fallback.searchless_branches (List.length fallback.fallbacks)
+          (List.length fallback.sanctioned_sites);
+      p "the local fallback every search-less branch tune reaches calls spells the seeded transform"
+        found;
+      let reached, readers = reach_past_fallback ~root:"tune" source in
       let refs_of n =
         List.concat_map (top_level_graph source) ~f:(fun (m, refs) ->
             if String.equal m n then refs else [])
@@ -410,6 +685,8 @@ let () =
         reached ~f:(fun n -> names "seeded_plan" n && names "seeded_plan_digest" n);
       if not (List.is_empty readers) then
         eprintf "tune reaches: %s\n" (String.concat ~sep:", " readers);
-      p_empty ~min:10 "nothing Autotune.tune reaches outside the seeded plan reads an Untimed field"
+      p_empty ~min:10
+        "nothing Autotune.tune reaches past the seeded plan and the search-less fallback reads an \
+         Untimed field"
         ~over:reached readers);
   Test_utils.Refusal_control_manifest.print "limits_field_classes.ml"
