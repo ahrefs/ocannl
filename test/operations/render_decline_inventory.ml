@@ -607,12 +607,14 @@ let control_cases =
       ],
       note "",
       [ "rebinds-cause-at" ] );
-    ( "Cause_at rebound under another name, as a let exception",
+    (* A local rebinding, in the form OCaml 5.3 parses: [let exception D = Cause_at in] is 5.5
+       syntax, which no source can use while 5.3 is the floor (gh-ocannl-1588). *)
+    ( "Cause_at rebound under another name, in a local module",
       [
         ( "a.ml",
           "let f () =\n\
-          \  let exception D = Cause_at in\n\
-          \  raise (D (Backend_codegen, Illegal_schedule { check = \"t\"; detail = \"\" }))" );
+          \  let module L = struct exception D = Cause_at end in\n\
+          \  raise (L.D (Backend_codegen, Illegal_schedule { check = \"t\"; detail = \"\" }))" );
       ],
       note "",
       [ "rebinds-cause-at" ] );
