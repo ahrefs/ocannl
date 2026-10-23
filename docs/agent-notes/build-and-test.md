@@ -957,6 +957,17 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   deadline is 124, and `status` exits 0 published / 3 running / 1 died without a verdict — it
   reports publication, never the verdict. `tools/test-test-run.sh` legs 29–32 pin all of this
   against a fixture dune that emits dune's exact refusal stderr, with the red-run and guard controls.
+  One refusal is asked of dune BEFORE the batch (gh-ocannl-1448): a `dune build` alias operand dune
+  does not know (`@test/operations/runtest-misspelt`) used to surface only after the launch had
+  resolved the backends, waited for and taken the fleet slot and probed the device. `_resolve`
+  now first asks `dune show aliases DIR...` (a listing that builds nothing; dune 3.24 prints it on
+  stderr and exits 0 even for an unknown directory, answering a query that names one with
+  nothing but the error), and an alias absent from its directory -- and, under `@`, from every
+  dune directory below it -- is `ALIAS REFUSED` (exit 2, nothing ran; `plan` says run would refuse
+  it). It refuses only on an answer that reads as dune's (every known directory lists the standard
+  `default`), so a fixture dune with no `show` branch leaves the aliases to dune; a fixture that
+  records its calls must answer `show` without recording it. Leg 89 pins it against a table-driven
+  fixture listing and, where a dune is at hand, a real one.
   `repeat [--alone] N` is the supported flake diagnostic (`--direct` for per-test aliases: one
   build, then replays; see Dune mechanics below): it holds that same worktree lock once,
   gives every Dune invocation a freshly cleaned cache-disabled build context, retains each
