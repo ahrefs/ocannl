@@ -567,6 +567,7 @@ let raw_entries =
         "[scanner-refusal:e583c416783b3632963a66636f20f65e] string literal in";
         "[scanner-refusal:b4c59d5ad7a9c4e591998fccf8f039aa] exempted functions that";
         "[scanner-refusal:4e4d383baae3810309379fe0b2c3e9ef] registered default goes";
+        "[scanner-refusal:e72f69460ef84de5e85f6c2bbe7bef5b] docs/agent-notes/build-and-test.md";
         "[scanner-refusal:55743888dd2a4a2234ee1d3f031ea47e] meets its source-count";
         "[scanner-refusal:2314f0c5d2762ecb0069dfb64d5c8a54] known_config_keys";
       ] );

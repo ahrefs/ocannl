@@ -1,4 +1,5 @@
 every read of a key with a registered default goes through its kind's typed getter, with no ~default: true
+every config key a module-level lazy reads is listed under its source file in the process-lifetime section of docs/agent-notes/build-and-test.md, and every entry there is one: true
 every scanned root meets its source-count floor: true
 every config key a call site reads is documented in the reference file and registered in known_config_keys, and the registry and the reference file name the same keys: true
 OK: profile payloads, documented and quoted verbatim: reproducible, performance, approximate.
@@ -7,6 +8,7 @@ OK: scanned arrayjit/lib, benchmarks/runners/ocannl, bin, lib, tensor, tools.
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:4e4d383baae3810309379fe0b2c3e9ef] registered default goes
+  [scanner-refusal:e72f69460ef84de5e85f6c2bbe7bef5b] docs/agent-notes/build-and-test.md
   [scanner-refusal:55743888dd2a4a2234ee1d3f031ea47e] meets its source-count
   [scanner-refusal:2314f0c5d2762ecb0069dfb64d5c8a54] known_config_keys
 Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):

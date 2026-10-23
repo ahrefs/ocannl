@@ -3302,14 +3302,17 @@
 ; file that falls off it, and three did -- each staying green because the same keys were read from
 ; a file still on the list. The globs are the library directories; `%{deps}` hands the whole
 ; dependency set to the exe, which keeps the .ml files among them (Config_key_scan.sources_among).
+; The agent note is there for its list of process-lifetime settings (gh-ocannl-1535), which the exe
+; finds among the arguments by its path.
 
 (rule
- ; ocannl-backend: none -- links no backend: it reads ocannl_config.reference and the globbed sources as text.
+ ; ocannl-backend: none -- links no backend: it reads ocannl_config.reference, the globbed sources and an agent note as text.
  (target test_config_consistency.actual)
  (package neural_nets_lib)
  (deps
   (alias runtest-env_spelling_gate)
   ocannl_config
+  ../../docs/agent-notes/build-and-test.md
   (glob_files_rec ../../arrayjit/lib/*.ml)
   (glob_files_rec ../../tensor/*.ml)
   (glob_files_rec ../../lib/*.ml)

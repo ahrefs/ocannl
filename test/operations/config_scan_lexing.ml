@@ -415,6 +415,74 @@ let reach_alias_external = function
   | [ "Widths"; "Inner"; "v" ] -> [ "k_stale_alias" ]
   | _ -> []
 
+(* gh-ocannl-1535: [process_lifetime_reads], one case per member of its closed list of forms and per
+   boundary it states. Each case names the plumbing it leaves opaque, and the keys a process keeps
+   from their first read. *)
+let process_lifetime_cases =
+  [
+    ("a top-level lazy", [], {ocaml|let v = lazy (get ~arg_name:"top" ~default:"")|ocaml}, [ "top" ]);
+    ( "a lazy in a closure's environment",
+      [],
+      {ocaml|let f =
+  let v = lazy (get ~arg_name:"closure" ~default:"") in
+  fun () -> Lazy.force v|ocaml},
+      [ "closure" ] );
+    ( "a lazy argument at module level",
+      [],
+      {ocaml|let s = switch (lazy (get ~arg_name:"argument" ~default:""))|ocaml},
+      [ "argument" ] );
+    ( "Lazy.from_fun at module level",
+      [],
+      {ocaml|let v = Stdlib.Lazy.from_fun (fun () -> get ~arg_name:"from_fun" ~default:"")|ocaml},
+      [ "from_fun" ] );
+    ( "a functor body's lazy",
+      [],
+      {ocaml|module Make (X : sig end) = struct
+  let v = lazy (get ~arg_name:"functor" ~default:"")
+end|ocaml},
+      [ "functor" ] );
+    ( "a lambda inside the lazy runs on its force",
+      [],
+      {ocaml|let v = lazy (probe ~compute:(fun () -> get ~arg_name:"lambda" ~default:""))|ocaml},
+      [ "lambda" ] );
+    ( "a same-source top-level value the lazy names",
+      [],
+      {ocaml|let helper () = get ~arg_name:"helper" ~default:""
+let v = lazy (helper ())|ocaml},
+      [ "helper" ] );
+    ( "a nested module's own value before the outer one",
+      [],
+      {ocaml|let helper () = get ~arg_name:"outer" ~default:""
+module M = struct
+  let helper () = get ~arg_name:"inner" ~default:""
+  let v = lazy (helper ())
+end|ocaml},
+      [ "inner" ] );
+    ( "opaque plumbing is not followed",
+      [ "lookup" ],
+      {ocaml|let lookup ~arg_name = resolve ~arg_name ~bootstrap:(get ~arg_name:"plumbing" ~default:"")
+let v = lazy (lookup ~arg_name:"handed")|ocaml},
+      [ "handed" ] );
+    ( "a lazy created per call is not held",
+      [],
+      {ocaml|let f () = lazy (get ~arg_name:"per_call" ~default:"")|ocaml},
+      [] );
+    ( "a read beside a module-level lazy is fresh",
+      [],
+      {ocaml|let f =
+  let v = lazy 1 in
+  fun () -> Lazy.force v + String.length (get ~arg_name:"fresh" ~default:"")|ocaml},
+      [] );
+    ( "an eager read at initialization is another class",
+      [],
+      {ocaml|let v = get ~arg_name:"eager" ~default:""|ocaml},
+      [] );
+    ( "a value of another module is not followed",
+      [],
+      {ocaml|let v = lazy (Other.helper ())|ocaml},
+      [] );
+  ]
+
 (* gh-ocannl-1207: the two scanners' own refusals, executed rather than vouched for by the lexer
    cases above, which pass on input the scanners ACCEPT. Each scanner runs as a child process over
    one synthetic tree built to trip every refusal its input can reach: two sources sharing a
@@ -551,6 +619,18 @@ let () =
       if List.equal String.equal found expected then printf "ok: alias reach -- %s\n" name
       else
         fail "alias reach -- %s: expected [%s], found [%s]" name
+          (String.concat ~sep:"; " expected)
+          (String.concat ~sep:"; " found));
+  List.iter process_lifetime_cases ~f:(fun (name, opaque, source, expected) ->
+      let found =
+        Attempt.attempted ~what:"process-lifetime reads" ~name ~default:[] (fun () ->
+            Scan.process_lifetime_reads ~opaque:(Set.of_list (module String) opaque) source
+            |> List.map ~f:(fun read -> read.Scan.held_key)
+            |> List.dedup_and_sort ~compare:String.compare)
+      in
+      if List.equal String.equal found expected then printf "ok: process-lifetime -- %s\n" name
+      else
+        fail "process-lifetime -- %s: expected [%s], found [%s]" name
           (String.concat ~sep:"; " expected)
           (String.concat ~sep:"; " found));
   (match Stdlib.Sys.argv with

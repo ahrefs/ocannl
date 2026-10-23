@@ -84,6 +84,19 @@ ok: alias reach -- an alias of an alias written before it expands through it
 ok: alias reach -- an alias of a module aliased only later names the outer module
 ok: alias reach -- a structure rebinding an alias ends it
 ok: alias reach -- the body of a structure rebinding an alias still sees the alias
+ok: process-lifetime -- a top-level lazy
+ok: process-lifetime -- a lazy in a closure's environment
+ok: process-lifetime -- a lazy argument at module level
+ok: process-lifetime -- Lazy.from_fun at module level
+ok: process-lifetime -- a functor body's lazy
+ok: process-lifetime -- a lambda inside the lazy runs on its force
+ok: process-lifetime -- a same-source top-level value the lazy names
+ok: process-lifetime -- a nested module's own value before the outer one
+ok: process-lifetime -- opaque plumbing is not followed
+ok: process-lifetime -- a lazy created per call is not held
+ok: process-lifetime -- a read beside a module-level lazy is fresh
+ok: process-lifetime -- an eager read at initialization is another class
+ok: process-lifetime -- a value of another module is not followed
 digest_completeness refuses the malformed tree, exiting 1: true
 test_config_consistency refuses the malformed tree, exiting 1: true
 

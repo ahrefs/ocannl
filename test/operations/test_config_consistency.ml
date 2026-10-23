@@ -341,6 +341,51 @@ let () =
         eprintf "%s reads the registered key %s other than through Utils.%s ~arg_name:%S: %s\n" base
           read.Config_key_scan.read_key getter read.read_key (line_at original read.at);
       ok);
+  (* 8. gh-ocannl-1535: the settings a process keeps from their first read. A lazy created at module
+     initialization is forced once, and its value -- or the exception a refused value raised, which
+     every later force re-raises -- answers for the rest of the process, so a test that states one
+     of these keys in-process after anything forced it states nothing. The agent note lists them per
+     source file, where a test author looks one up; this holds the list to the code in both
+     directions. What counts as such a read is [Config_key_scan.process_lifetime_reads]' closed list
+     of forms; the lookup plumbing exempted above is not followed into, since it reads the key it is
+     handed. *)
+  let note_suffix = "docs/agent-notes/build-and-test.md" in
+  let held =
+    List.concat_map source_files ~f:(fun fname ->
+        let base = Stdlib.Filename.basename fname in
+        let opaque =
+          Option.value (Map.find forwarding_sites base) ~default:(Set.empty (module String))
+        in
+        List.map
+          (Config_key_scan.process_lifetime_reads ~opaque (In_channel.read_all fname))
+          ~f:(fun read -> (base, read)))
+  in
+  List.iter held ~f:(fun (base, read) ->
+      eprintf "Process-lifetime read (not part of the golden): %s, held by %s:%s\n"
+        read.Config_key_scan.held_key base read.holder);
+  let entry base key = base ^ ": " ^ key in
+  let derived =
+    Set.of_list
+      (module String)
+      (List.map held ~f:(fun (base, read) -> entry base read.Config_key_scan.held_key))
+  in
+  let listed =
+    match List.find (Array.to_list Stdlib.Sys.argv) ~f:(String.is_suffix ~suffix:note_suffix) with
+    | None -> Set.empty (module String)
+    | Some note ->
+        Config_key_scan.process_lifetime_entries (In_channel.read_lines note)
+        |> List.concat_map ~f:(fun (base, keys) -> List.map keys ~f:(entry base))
+        |> Set.of_list (module String)
+  in
+  p_all ~min:20
+    "every config key a module-level lazy reads is listed under its source file in the \
+     process-lifetime section of docs/agent-notes/build-and-test.md, and every entry there is one"
+    (Set.to_list (Set.union derived listed))
+    ~f:(fun e ->
+      let in_code = Set.mem derived e and in_note = Set.mem listed e in
+      if not in_note then eprintf "process-lifetime read missing from %s: %s\n" note_suffix e;
+      if not in_code then eprintf "%s lists %s, which no module-level lazy reads\n" note_suffix e;
+      in_code && in_note);
   (* What the census covers, as a floor per scan root rather than as an exact count: the count was a
      tally of the repository, and every correct addition anywhere under the globbed directories owed
      a promote round for it (gh-ocannl-701). A floor keeps what the count was for -- a glob that

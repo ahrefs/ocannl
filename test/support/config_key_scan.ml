@@ -1094,6 +1094,169 @@ let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
     unplaced;
   }
 
+type held_read = { held_key : string; holder : string; held_at : int }
+(** A configuration key a module holds for the process's lifetime: [holder] is the module-level
+    binding the lazy sits in ([Multidev.num_devices] inside a nested module or functor, ["_"] where
+    no binding names it), [held_at] the offset of the lazy. *)
+
+(** The configuration keys whose FIRST resolved value the process keeps (gh-ocannl-1535): the keys
+    read when a [lazy] created at module initialization is forced. Such a lazy is forced once, and
+    its value -- or the exception its first force raised, which OCaml re-raises on every later force
+    -- answers for the rest of the process, so a setting a test states in-process after the first
+    force ([Hashtbl.set Utils.config_file_args]) never reaches it.
+
+    {b Recognised forms}, a closed list:
+    - a lazy is [lazy e], or [Lazy.from_fun e] under any receiver path ending in [Lazy.from_fun];
+    - it is created at module initialization when no [fun]/[function] of the source encloses it: a
+      top-level binding's right-hand side, a closure's environment
+      ([let f = let v = lazy … in fun () -> …]), an argument at module level
+      ([stream_switch (lazy …)]), the items of a nested module or of a functor body (a functor is
+      applied once per backend, and backends are process-wide singletons), and the body of an
+      enclosing module-level lazy;
+    - a key it reads is a string literal under [~arg_name]/[?arg_name] anywhere in its body, lambdas
+      included, or a key {!top_level_key_reach} credits to a top-level value of the same source that
+      the body names ([compiler_command]'s probe reaching [cached_probe]'s read), resolved innermost
+      nested module first. [opaque] names top-level values not followed: the lookup plumbing, which
+      reads the key it is handed rather than one of its own.
+
+    Where it errs, it errs long: a lazy in a class or object body counts as module-level, and a name
+    is credited whether the body calls it or only mentions it. What it does not follow, and so errs
+    short: a value of ANOTHER module the body calls (a key [Cc_backend.effective_pool_width] reads
+    freshly, held by a lazy in [Schedulers]) -- each such callee's own lazies are found in its own
+    source -- a memo built some other way (a [ref] cell, a table), and a value computed EAGERLY at
+    initialization, which is a different class: it is read before any test code runs. *)
+let process_lifetime_reads ?(opaque = Set.empty (module String)) content =
+  let reach =
+    List.filter (top_level_key_reach content).reach ~f:(fun (name, _) -> not (Set.mem opaque name))
+    |> Map.of_alist_reduce
+         (module String)
+         ~f:(fun a b -> List.dedup_and_sort (a @ b) ~compare:String.compare)
+  in
+  let resolve ~scope path =
+    let rec at depth =
+      if depth < 0 then []
+      else
+        match Map.find reach (String.concat ~sep:"." (List.take scope depth @ path)) with
+        | Some keys -> keys
+        | None -> at (depth - 1)
+    in
+    at (List.length scope)
+  in
+  let keys_of ~scope body =
+    let keys = ref [] in
+    let iterator =
+      object
+        inherit Ast_traverse.iter as super
+
+        method! expression expr =
+          (match expr.pexp_desc with
+          | Pexp_ident { txt; _ } ->
+              Option.iter (flatten_module_path txt) ~f:(fun path ->
+                  keys := resolve ~scope path @ !keys)
+          | Pexp_apply (_, args) ->
+              List.iter args ~f:(fun (lbl, arg) ->
+                  if is_our_label lbl then
+                    Option.iter (string_literal arg) ~f:(fun key -> keys := key :: !keys))
+          | _ -> ());
+          super#expression expr
+      end
+    in
+    iterator#expression body;
+    List.dedup_and_sort !keys ~compare:String.compare
+    |> List.filter ~f:(fun key -> not (String.is_empty key))
+  in
+  let found = ref [] in
+  let scope = ref [] and holder = ref None and under_function = ref 0 in
+  let record body (loc : Location.t) =
+    let holder =
+      Option.value_map !holder ~default:"_" ~f:(fun name ->
+          String.concat ~sep:"." (List.rev (name :: !scope)))
+    in
+    List.iter
+      (keys_of ~scope:(List.rev !scope) body)
+      ~f:(fun held_key -> found := { held_key; holder; held_at = loc.loc_start.pos_cnum } :: !found)
+  in
+  let is_from_fun fn =
+    match longident_of fn with
+    | Some path -> (
+        match List.drop path (List.length path - 2) with
+        | [ "Lazy"; "from_fun" ] -> true
+        | _ -> false)
+    | None -> false
+  in
+  let iterator =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! module_binding binding =
+        let saved = !scope in
+        scope := Option.value binding.pmb_name.txt ~default:"_" :: saved;
+        super#module_binding binding;
+        scope := saved
+
+      method! value_binding binding =
+        if !under_function > 0 then super#value_binding binding
+        else
+          let saved = !holder in
+          (* The outermost module-level binding names the holder; a [let v = lazy … in] inside it
+             does not rename it. *)
+          if Option.is_none saved then holder := pattern_name binding.pvb_pat;
+          super#value_binding binding;
+          holder := saved
+
+      method! expression expr =
+        match expr.pexp_desc with
+        | Pexp_function _ ->
+            Int.incr under_function;
+            super#expression expr;
+            Int.decr under_function
+        | Pexp_lazy body when !under_function = 0 ->
+            record body expr.pexp_loc;
+            super#expression expr
+        | Pexp_apply (fn, [ (Asttypes.Nolabel, body) ]) when !under_function = 0 && is_from_fun fn
+          ->
+            record body expr.pexp_loc;
+            super#expression expr
+        | _ -> super#expression expr
+    end
+  in
+  iterator#structure (structure_of content);
+  List.rev !found
+
+(** The heading of the agent-note section listing the process-lifetime reads. *)
+let process_lifetime_heading = "### Process-lifetime settings"
+
+(** The entries of that section in [lines] (a note's text): each bullet whose text opens with a code
+    span naming an [.ml] file -- [- `schedule.ml`: `key`, `key`] -- paired with the code spans after
+    it, a bullet running on over its indented continuation lines. The section runs from its heading
+    to the next heading; any other bullet in it is prose. No section, no entries. *)
+let process_lifetime_entries lines =
+  let rec section = function
+    | [] -> []
+    | line :: rest when String.equal (String.rstrip line) process_lifetime_heading ->
+        List.take_while rest ~f:(fun l -> not (String.is_prefix l ~prefix:"#"))
+    | _ :: rest -> section rest
+  in
+  let code_spans text = String.split text ~on:'`' |> List.filteri ~f:(fun i _ -> i % 2 = 1) in
+  let rec bullets acc = function
+    | [] -> List.rev acc
+    | line :: rest when String.is_prefix line ~prefix:"- " ->
+        let continuation, rest =
+          List.split_while rest ~f:(fun l ->
+              String.is_prefix l ~prefix:" " && not (String.is_empty (String.strip l)))
+        in
+        bullets (String.concat ~sep:" " (line :: continuation) :: acc) rest
+    | _ :: rest -> bullets acc rest
+  in
+  List.filter_map
+    (bullets [] (section lines))
+    ~f:(fun bullet ->
+      if not (String.is_prefix bullet ~prefix:"- `") then None
+      else
+        match code_spans bullet with
+        | file :: keys when String.is_suffix file ~suffix:".ml" -> Some (file, keys)
+        | _ -> None)
+
 (** Every configuration key that initializes each field of a record called [settings]: the literal
     [~arg_name] reads in the value of each [settings.field <- …] assignment, so that a field a
     compatibility alias can also set ([large_models], from [big_models]) is answered for by both
