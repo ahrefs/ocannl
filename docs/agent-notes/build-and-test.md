@@ -132,6 +132,30 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   rule in its header before its first review (gh-ocannl-1140). File-wide literal tables and module
   alias sets cannot distinguish a parameter or nested binding from a same-named earlier value;
   controls must exercise shadowing and separate scopes, alongside the nearest honest use.
+- **A scan resolves every name its classification TRUSTS, not only the bindings it tracks**
+  (gh-ocannl-1506). `mutation_serial_scan` resolved its tracked tables through `Lexical_scope` but
+  first credited `note_mutation` by spelling, classified `Hash_set.add` by its path and keyed
+  fingerprinted refs by string name, so a local `let note_mutation () = ()`, a local `module
+  Hash_set` or two shadowing refs passed; every one of staging#1367's four review rounds found more
+  of that one class. Before the first push, list every function, module, operator (a shadowed
+  `not` or `&&`, gh-ocannl-1491) and record field the verdict rests on, and resolve each the way a
+  tracked variable is resolved.
+- **A scan that DROPS edges to sanction something can pass wrongly** (gh-ocannl-1491). A reach
+  check whose edges only accumulate errs toward refusal: what it misreads, it refuses. A sanction
+  that cuts an edge errs the other way, so every spelling its recognizer misreads is a silent pass,
+  and review keeps finding another. `limits_field_classes` cut `tune`'s reach at
+  `seeded_transform`; narrowing the cut to the search-less fallback took seven rounds
+  (staging#1362: a wrapper, a bare reference read as a call, a decoy flag, a buried call, a
+  shadowed `not`, a rebinding alias). Prefer pins that only add edges or refusals; where a cut is
+  unavoidable, state in the first push the one direction it pins and keep its recognizer a closed
+  list (Parsing sources in a scan).
+- **For a D1 issue, document the list; add a scan only if it reuses an existing model UNCHANGED**
+  (gh-ocannl-1535). A new reader of OCaml name resolution is open-ended, and each review round
+  finds a form it misses: staging#1366's process-lifetime census widened `top_level_key_reach`
+  (recursive modules, extension payloads, cross-library reach) and took seven rounds, the last
+  deferring three forms (`open struct`, a module alias, `module L = Lazy`) no censused source
+  contains. The list in the notes is what the small issue owes; a scan that needs a new model is a
+  follow-up issue sized as one.
 
 ### Bringing the base in
 
@@ -1776,6 +1800,16 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   which claims to look at. To read a long per-row table, run the executable yourself inside
   `_build/default/<dir>`, where the rule left `ocannl_config`, under the fleet's `execution slot`
   when on a fleet box.
+- **Three dune introspection answers say less than they look** (dune 3.24.2, gh-ocannl-1541).
+  `dune show aliases` and `dune show targets` print their listing on STDERR and exit 0 after a
+  load error (a dune file that does not parse, verified; an `(include)` of a missing file), the
+  error on the same stream: read both streams and check every line's form, or compare against a
+  listing known good, as `tools/affected-tests.sh` does. `dune rules` prints an `(:include)`
+  dependency as the included file alone, never what the file adds (`dynamic-run` likewise). And
+  `dune rules @ALIAS` expands the alias's DEPENDENCIES, helper aliases included, never its
+  actions: dune evaluates an alias action lazily and records no dependency for it, so what an
+  alias rule reads shows in no `dune rules` query. `affected` therefore rewrites each such rule
+  into a file-writing twin (the `affected` bullet under Aliases and goldens).
 
 ## Verdict claims
 
@@ -2661,8 +2695,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   rules` for each alias's own targets and each generated module file. Those dependencies are how
   a scan that READS a changed file (an `.ml`, an agent note, a script) is found without linking
   it, and how a generated module (`.mll`, `.mly`, a `(select)` choice, a generator's header) or a
-  C stub is traced to its stanza. dune does not dump an alias rule itself (`dune rules @ALIAS`
-  evaluates alias actions lazily, recording no dependency), so `affected` hands it each one in a
+  C stub is traced to its stanza. dune does not dump an alias rule itself (Dune
+  mechanics, the introspection bullet), so `affected` hands it each one in a
   form it does print (gh-ocannl-1541): a scratch copy of the sources, the PROBE, whose dune files are
   dune's own canonical text (`dune format-dune-file`) with every alias rule that declares no targets
   rewritten into a TWIN -- the same rule writing a file of its own, its aliases kept defined by an
@@ -2675,7 +2709,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   alias needing it. What stays blind here: the inline-test library aliases (`runtest-LIB`; dune 3.20 has no
   `dune show tests`, so tests are read from their stanzas' literal names), and anything with an
   `(:include)` or `dynamic-run`, whose
-  dependencies `dune rules` does not print (it prints the included file alone). A `(package PKG)`
+  dependencies `dune rules` does not print (Dune mechanics, same bullet). A `(package PKG)`
   dependency is dune's `.PKG-files` alias, read through `dune rules @.PKG-files`. Before the probe,
   `runtest-kernel_attribution` (a run-and-diff rule, gh-ocannl-1431) and every `(test)` without a
   golden were blind, and every golden pair needing the blind `runtest-env_spelling_gate` came with
