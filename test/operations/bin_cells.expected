@@ -6,19 +6,25 @@ every source shape is read with its value: true
 a request never answered is refused: true
 two requests in a row are refused: true
 one key resolved to two values is refused: true
+a commandline value holding the separator is split at the argument, not inside it: true
+a commandline source naming no argument of the cell is refused: true
 the environment and config-file sources each fail the treatment: true
 a backend other than the pinned one fails the treatment: true
 a profile picked outside the command line fails the treatment: true
 an empty trace fails the treatment: true
 two cells of one arm resolving a setting differently are reported: true
+a setting read in some cells of an arm and not in others is reported: true
 a well-formed result line is read with its check: true
 a non-finite or non-positive result is refused: true
+a result line that is JSON but not an object is refused as unusable: true
 a result that does not state its output check is refused: true
 the sign test is exact: true
 a clean run exits 0: true
 every round runs every arm, in the design's order: true
 the planted variables are cleared, by name: true
 a device runtime control passes through and is recorded with its value: true
+every variable the cells received is recorded with its value, a credential withheld: true
+the toolchain the cells' PATH resolves is recorded by content: true
 no cell resolved a setting from the environment or a config file: true
 the planted settings resolved to their defaults: true
 each cell kept its streams in a directory of its own under the output directory: true

@@ -17,7 +17,9 @@ bench so that the command line IS the treatment, and records what the process ac
   bench was built from. Device and loader runtime controls (CUDA_*, HIP_*, HSA_*, MTL_*, DYLD_*,
   LD_*, ... -- `RUNTIME_PREFIXES`) are the box's: some boxes cannot run without them, so they pass
   through, and each one present is recorded with its value beside the numbers (OCAMLRUNPARAM, the
-  OCaml runtime's, among them); every other variable that passes is recorded by name. The build,
+  OCaml runtime's, among them). Every variable a cell receives is recorded WITH its value in the
+  manifest (PATH chooses the C compiler the cc backend compiles kernels with), a credential-looking
+  name withheld, and the report names the compilers the cells' PATH resolves, with their sha256. The build,
   when the driver does it, runs with DUNE_* and OCAMLPARAM cleared and the root and build directory
   named, so the executable measured is the one built from this checkout.
 - The resolved configuration is echoed, not assumed. Each cell runs under
@@ -68,6 +70,7 @@ import os
 import platform
 import re
 import shlex
+import shutil
 import statistics
 import subprocess
 import sys
@@ -165,10 +168,13 @@ class TraceError(ValueError):
 
 
 _RETRIEVING = re.compile(r"Retrieving commandline, environment, or config file variable ocannl_(\S+)")
-# `Utils.describe_config_source`'s five shapes; the value is greedy up to the LAST separator, since
-# the source part (an argv element, a variable name) carries no such separator itself.
+# `Utils.describe_config_source`'s five shapes. Four end in a part that cannot hold their own
+# separator (a variable name, fixed words, a quoted profile name and a fixed level), so the value is
+# greedy up to the LAST separator. The commandline shape ends in the argv element, which repeats
+# the value and so can hold `, commandline ` itself: it is matched against the cell's own argv
+# instead (`_commandline_entry`), and never by this list.
+_COMMANDLINE = "commandline"
 _SOURCES = [
-    (re.compile(r"Found (.*), commandline (.*)"), "commandline"),
     (re.compile(r"Found (.*), environment (\S+)"), "environment"),
     (re.compile(r"Found (.*), in the config file"), "config file"),
     (re.compile(r'Found (.*), in the profile "(.*)" picked via (.*)'), "profile"),
@@ -176,8 +182,25 @@ _SOURCES = [
 ]
 
 
-def parse_config_trace(text):
-    """{key: {"value", "source", "detail"}} from the `log_config_sourcing` trace in `text`.
+def _commandline_entry(line, argv):
+    """The entry of a `Found <value>, commandline <arg>` line, `arg` being one of `argv` -- the
+    longest that fits, so an argument that is a suffix of another cannot steal its line -- or None
+    when the line is not of that shape. A commandline-shaped line naming no argv element is
+    refused: the cell's command line is known exactly."""
+    if not line.startswith("Found ") or ", commandline " not in line:
+        return None
+    for arg in sorted(set(argv), key=len, reverse=True):
+        tail = ", commandline " + arg
+        if line.endswith(tail) and len(line) >= len("Found ") + len(tail):
+            return {"value": line[len("Found "):-len(tail)], "source": _COMMANDLINE, "detail": arg}
+    if any(pattern.fullmatch(line) for pattern, _ in _SOURCES):
+        return None  # another source's line whose value happens to hold the separator
+    raise TraceError(f"a commandline source naming no argument of the cell: {line!r}")
+
+
+def parse_config_trace(text, argv):
+    """{key: {"value", "source", "detail"}} from the `log_config_sourcing` trace in `text`, for a
+    cell run with the command line `argv`.
 
     The trace prints a `Retrieving ... ocannl_<key>` line and then where the value came from; other
     stderr may sit between the two, but a second request before the first is answered, a request
@@ -193,7 +216,8 @@ def parse_config_trace(text):
             continue
         if pending is None:
             continue
-        for pattern, source in _SOURCES:
+        entry = _commandline_entry(line, argv)
+        for pattern, source in [] if entry is not None else _SOURCES:
             m = pattern.fullmatch(line)
             if not m:
                 continue
@@ -206,13 +230,14 @@ def parse_config_trace(text):
                 entry = {"value": m.group(1), "source": source, "detail": ""}
             else:
                 entry = {"value": m.group(1), "source": source, "detail": m.group(2)}
+            break
+        if entry is not None:
             known = config.get(pending)
             if known is not None and known["value"] != entry["value"]:
                 raise TraceError(
                     f"ocannl_{pending} resolved to both {known['value']!r} and {entry['value']!r}")
             config.setdefault(pending, entry)
             pending = None
-            break
     if pending is not None:
         raise TraceError(f"ocannl_{pending} was requested and never resolved")
     return config
@@ -224,11 +249,11 @@ def treatment_problems(config, backend):
         return ["no configuration trace: the bench resolved no setting the driver could read"]
     problems = []
     b = config.get("backend")
-    if b is None or b["value"] != backend or b["source"] != "commandline":
+    if b is None or b["value"] != backend or b["source"] != _COMMANDLINE:
         problems.append(f"the backend resolved to {b and b['value']!r} from "
                         f"{b and b['source']}, not to the pinned {backend!r}")
     nc = config.get("no_config_file")
-    if nc is None or nc["value"] != "true":
+    if nc is None or nc["value"] != "true" or nc["source"] != _COMMANDLINE:
         problems.append("the config file was not disabled")
     for key, entry in sorted(config.items()):
         if entry["source"] in ("environment", "config file"):
@@ -239,18 +264,24 @@ def treatment_problems(config, backend):
 
 
 def consistency_problems(records):
-    """Settings two successful cells of one arm resolved differently."""
+    """Settings the successful cells of one arm did not resolve identically: to two values, or read
+    in some cells and not in others (a cell that took a path reading one more setting ran a
+    treatment its siblings did not)."""
     problems = []
-    seen = {}
+    arms = {}
     for rec in records:
-        if rec["config"] is None:
-            continue
-        for key, entry in rec["config"].items():
-            first = seen.setdefault((rec["arm"], key), (entry["value"], rec["cell"]))
-            if first[0] != entry["value"]:
-                problems.append(
-                    f"arm {rec['arm']}: ocannl_{key} resolved to {first[0]!r} in cell {first[1]} "
-                    f"and to {entry['value']!r} in cell {rec['cell']}")
+        if rec["config"] is not None:
+            arms.setdefault(rec["arm"], []).append(rec)
+    for arm, recs in arms.items():
+        for key in sorted({k for r in recs for k in r["config"]}):
+            values = {}
+            for r in recs:
+                entry = r["config"].get(key)
+                values.setdefault(None if entry is None else entry["value"], []).append(r["cell"])
+            if len(values) > 1:
+                problems.append(f"arm {arm}: ocannl_{key} resolved differently -- " + "; ".join(
+                    ("not read" if v is None else repr(v)) + " in cell(s) "
+                    + ", ".join(map(str, cells)) for v, cells in values.items()))
     return problems
 
 
@@ -266,6 +297,8 @@ def parse_results(text):
         if not line.startswith(RESULT_PREFIX):
             continue
         record = strict_json.loads(line[len(RESULT_PREFIX):])
+        if not isinstance(record, dict):
+            raise ValueError(f"unusable result line (not a JSON object): {line}")
         variant, seconds = record.get("variant"), record.get("seconds")
         check, note = record.get("check"), record.get("check_note")
         if not isinstance(variant, str) or isinstance(seconds, bool) or not isinstance(
@@ -308,6 +341,10 @@ def render_report(manifest, records, problems):
     lines.append(log_line("- runtime controls passed through (device, loader, OCaml runtime): " + (
         ", ".join(f"{k}={display_value(v)}" for k, v in manifest["runtime_controls"].items())
         or "none")))
+    lines.append(log_line("- toolchain on the cells' PATH: " + (", ".join(
+        f"{k}={display_value(v['resolved'])} ({v['sha256'][:12]})"
+        for k, v in manifest["toolchain"].items()) or "none found")))
+    lines.append("- every variable the cells received, with its value: manifest.json")
     lines.append(log_line("- cleared from the environment: " + (
         ", ".join(display_value(v) for v in manifest["cleared"]) or "nothing")))
     lines += ["", "## Arms", ""]
@@ -437,6 +474,29 @@ def sha256(path):
         return hashlib.file_digest(f, "sha256").hexdigest()
 
 
+# Every variable a cell receives is recorded WITH its value in the manifest -- PATH picks the C
+# compiler the cc backend compiles every kernel with (`Cc_backend.resolve_executable`), and any
+# other variable a toolchain consults (TMPDIR, SDKROOT, CPATH, ...) is the same kind of fact -- save
+# a name that looks like a credential, which is recorded as withheld.
+CREDENTIAL_RE = re.compile(r"TOKEN|SECRET|PASSW|CREDENTIAL|AUTH|COOKIE|SESSION|_KEY\b|^KEY", re.I)
+WITHHELD = "<withheld: the name looks like a credential>"
+# The executables a cc cell's kernels are compiled through, resolved on the cells' PATH: the C
+# compiler is `ocamlc -config`'s unless `cc_backend_compiler_command` names one, and that is cc,
+# clang or gcc on every box here.
+TOOLCHAIN = ("ocamlc", "cc", "clang", "gcc")
+
+
+def toolchain(env):
+    """{name: {"path", "sha256"}} for each `TOOLCHAIN` executable `env`'s PATH resolves."""
+    found = {}
+    for name in TOOLCHAIN:
+        path = shutil.which(name, path=env.get("PATH", ""))
+        if path is not None:
+            real = os.path.realpath(path)
+            found[name] = {"path": path, "resolved": real, "sha256": sha256(real)}
+    return found
+
+
 def tree_commit():
     """HEAD, marked when the tree carries anything that commit does not (read before the build)."""
     head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True)
@@ -551,7 +611,8 @@ def main(argv=None):
         "executable": str(exe), "executable_sha256": sha256(exe), **host_identity(),
         "common_args": common, "arms": arms, "pins": pins, "cleared": cleared,
         "runtime_controls": {k: env[k] for k in sorted(env) if k.startswith(RUNTIME_PREFIXES)},
-        "passed_names": sorted(env),
+        "environment": {k: WITHHELD if CREDENTIAL_RE.search(k) else env[k] for k in sorted(env)},
+        "toolchain": toolchain(env),
         "cell_timeout_s": args.cell_timeout, "orders": orders,
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
@@ -575,7 +636,7 @@ def main(argv=None):
                 if status != 0:
                     problems.append("timed out" if status == "timeout" else f"exited {status}")
                 try:
-                    config = parse_config_trace(stderr)
+                    config = parse_config_trace(stderr, cmd)
                     problems += treatment_problems(config, args.backend)
                 except TraceError as e:
                     problems.append(f"unreadable configuration trace: {e}")

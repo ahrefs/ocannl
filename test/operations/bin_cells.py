@@ -66,20 +66,30 @@ trace = "\n".join([
     R + "log_level", "Found 0, in the config file",
     R + "debug_highlight_pcre", "Found a, b, commandline --ocannl_debug_highlight_pcre=a, b",
 ])
-parsed = bc.parse_config_trace(trace)
+ARGV = ["bench.exe", "--ocannl_backend=cc", "--ocannl_debug_highlight_pcre=a, b", "--k=2"]
+parsed = bc.parse_config_trace(trace, ARGV)
 claim("every source shape is read with its value", [(k, parsed[k]["value"], parsed[k]["source"])
       for k in sorted(parsed)] == [
     ("autotune_rounds", "2", "default"), ("backend", "cc", "commandline"),
     ("debug_highlight_pcre", "a, b", "commandline"), ("fp_contract", "true", "environment"),
     ("log_level", "0", "config file"), ("tf32_matmuls", "true", "profile")])
 claim("a request never answered is refused",
-      refused(lambda: bc.parse_config_trace(R + "backend\nnothing\n"), bc.TraceError))
+      refused(lambda: bc.parse_config_trace(R + "backend\nnothing\n", ARGV), bc.TraceError))
 claim("two requests in a row are refused",
-      refused(lambda: bc.parse_config_trace(R + "a\n" + R + "b\nNot found, using default 1"),
+      refused(lambda: bc.parse_config_trace(R + "a\n" + R + "b\nNot found, using default 1", ARGV),
               bc.TraceError))
 claim("one key resolved to two values is refused", refused(lambda: bc.parse_config_trace(
-    "\n".join([R + "k", "Not found, using default 1", R + "k", "Found 2, commandline --k=2"])),
+    "\n".join([R + "k", "Not found, using default 1", R + "k", "Found 2, commandline --k=2"]),
+    ARGV),
     bc.TraceError))
+TRICKY = "--ocannl_debug_highlight_pcre=x, commandline y"
+claim("a commandline value holding the separator is split at the argument, not inside it",
+      bc.parse_config_trace(R + "debug_highlight_pcre\nFound x, commandline y, commandline " + TRICKY,
+                            ["bench.exe", TRICKY])["debug_highlight_pcre"]
+      == {"value": "x, commandline y", "source": "commandline", "detail": TRICKY})
+claim("a commandline source naming no argument of the cell is refused",
+      refused(lambda: bc.parse_config_trace(R + "backend\nFound cc, commandline --backend=cc",
+                                            ["bench.exe"]), bc.TraceError))
 problems = bc.treatment_problems({**parsed, "no_config_file": {
     "value": "true", "source": "commandline", "detail": ""}}, "cc")
 claim("the environment and config-file sources each fail the treatment",
@@ -98,7 +108,12 @@ claim("two cells of one arm resolving a setting differently are reported",
           {"arm": "a", "cell": 0, "config": {"k": {"value": "1"}}},
           {"arm": "b", "cell": 1, "config": {"k": {"value": "2"}}},
           {"arm": "a", "cell": 2, "config": {"k": {"value": "3"}}}])
-      == ["arm a: ocannl_k resolved to '1' in cell 0 and to '3' in cell 2"])
+      == ["arm a: ocannl_k resolved differently -- '1' in cell(s) 0; '3' in cell(s) 2"])
+claim("a setting read in some cells of an arm and not in others is reported",
+      bc.consistency_problems([
+          {"arm": "a", "cell": 0, "config": {"k": {"value": "1"}}},
+          {"arm": "a", "cell": 1, "config": {"k": {"value": "1"}, "late": {"value": "x"}}}])
+      == ["arm a: ocannl_late resolved differently -- not read in cell(s) 0; 'x' in cell(s) 1"])
 CHK = ',"check":"passed","check_note":""}'
 claim("a well-formed result line is read with its check",
       bc.parse_results('bench-result: {"variant":"v","seconds":0.5' + CHK)
@@ -107,6 +122,8 @@ claim("a non-finite or non-positive result is refused",
       refused(lambda: bc.parse_results('bench-result: {"variant":"v","seconds":null' + CHK))
       and refused(lambda: bc.parse_results('bench-result: {"variant":"v","seconds":0' + CHK))
       and refused(lambda: bc.parse_results('bench-result: {"variant":"v","seconds":NaN' + CHK)))
+claim("a result line that is JSON but not an object is refused as unusable",
+      refused(lambda: bc.parse_results("bench-result: []")))
 claim("a result that does not state its output check is refused",
       refused(lambda: bc.parse_results('bench-result: {"variant":"v","seconds":0.5}'))
       and refused(lambda: bc.parse_results(
@@ -119,7 +136,8 @@ with tempfile.TemporaryDirectory() as scratch:
     scratch = Path(scratch)
     (scratch / "ocannl_config").write_text("autotune_bound_pruning=true\nbackend=metal\n")
     env = {**os.environ, "OCANNL_AUTOTUNE_BOUND_PRUNING": "true", "OCANNL_AUTOTUNE_TIMING": "x",
-           "BENCH_TUNE": "1", "OMP_NUM_THREADS": "3", "CUDA_LAUNCH_BLOCKING": "1"}
+           "BENCH_TUNE": "1", "OMP_NUM_THREADS": "3", "CUDA_LAUNCH_BLOCKING": "1",
+           "FAKE_API_TOKEN": "s3cret"}
 
     def drive(out, *argv):
         return subprocess.run([sys.executable, str(driver_path), "--exe", str(probe), "--backend",
@@ -141,6 +159,14 @@ with tempfile.TemporaryDirectory() as scratch:
     claim("a device runtime control passes through and is recorded with its value",
           manifest["runtime_controls"].get("CUDA_LAUNCH_BLOCKING") == "1"
           and "CUDA_LAUNCH_BLOCKING=1" in run.stdout)
+    claim("every variable the cells received is recorded with its value, a credential withheld",
+          manifest["environment"].get("PATH") == os.environ.get("PATH")
+          and manifest["environment"].get("FAKE_API_TOKEN") == bc.WITHHELD
+          and "s3cret" not in (scratch / "ab/manifest.json").read_text())
+    claim("the toolchain the cells' PATH resolves is recorded by content",
+          manifest["toolchain"]  # a build environment has at least ocamlc on its PATH
+          and all(len(t["sha256"]) == 64 for t in manifest["toolchain"].values())
+          and set(manifest["toolchain"]) <= set(bc.TOOLCHAIN))
     claim("no cell resolved a setting from the environment or a config file",
           all(e["source"] in ("commandline", "default")
               for r in records for e in r["config"].values()))
