@@ -965,7 +965,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   nothing but the error), and an alias absent from its directory -- and, under `@`, from every
   dune directory below it -- is `ALIAS REFUSED` (exit 2, nothing ran; `plan` says run would refuse
   it). It refuses only on an answer that reads as dune's (every known directory lists the standard
-  `default`), so a fixture dune with no `show` branch leaves the aliases to dune; a fixture that
+  `default`), and only for an argv whose options are all on its allow-list of ones that cannot
+  change what aliases dune defines (`--profile`, `--workspace`, `-p` and the like leave the batch
+  to dune, as does a context-qualified `@_build/CONTEXT/...`), so a fixture dune with no `show` branch leaves the aliases to dune; a fixture that
   records its calls must answer `show` without recording it. Leg 89 pins it against a table-driven
   fixture listing and, where a dune is at hand, a real one.
   `repeat [--alone] N` is the supported flake diagnostic (`--direct` for per-test aliases: one

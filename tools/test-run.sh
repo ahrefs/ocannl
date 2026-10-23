@@ -727,9 +727,11 @@ plan_test_cap() { # <requested, empty for the default> dune-argv
 # 3.20-3.24's (the listing on either stream, `DIR:` headers when it names more
 # than one directory, one alias name per line, `Error: Directory DIR does not
 # exist.`), a directory whose listing lacks dune's standard `default` alias, a
-# failed or timed-out query, an argv naming another `--root`, and an operand
-# that is not a plain relative `DIR/NAME` (an absolute path, a `..` or an inner
-# `.` segment). What it
+# failed or timed-out query, an argv carrying any dune option not known to
+# leave the alias set alone (`--profile`, `--root`, `--workspace`, `-p`, ... --
+# plan_aliases holds the allow-list), and an operand that is not a plain
+# relative `DIR/NAME` (an absolute path, a `..` or an inner `.` segment, or a
+# `_`-led directory such as a context's `_build/CONTEXT/`). What it
 # does not see, and so can refuse wrongly: an alias defined only in a
 # directory with no dune file of its own -- one a `(subdir ...)` stanza makes
 # -- named recursively from above it. The query's trace goes to a file of the
@@ -808,10 +810,23 @@ plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal
   alias_refusal=
   [ "${1:-}" = build ] || return 0
   shift
+  # Every option before dune's `--` must be one known to leave the set of
+  # aliases as `show aliases` sees it: a profile, a workspace, a root, a
+  # package selection, a context -- anything else -- can change what dune
+  # defines, so its presence leaves the whole batch to dune (an allow-list, so
+  # an option dune adds later fails open). A separate value is skipped with it.
+  local value=
   for arg do
+    if [ -n "$value" ]; then value=; continue; fi
     case $arg in
       --) break ;;
-      --ro*) return 0 ;;
+      -j | --cache | --display | --diff-command | --trace-file | --error-reporting | --sandbox | --build-dir)
+        value=1; continue ;;
+      -j[0-9]* | --cache=* | --display=* | --diff-command=* | --trace-file=* | --error-reporting=* | \
+        --sandbox=* | --build-dir=* | --force | -f | --auto-promote | --no-buffer | --stop-on-first-error | \
+        --action-stdout-on-success=* | --action-stderr-on-success=*)
+        continue ;;
+      -*) return 0 ;;
       @*) ;;
       *) continue ;;
     esac
@@ -822,8 +837,10 @@ plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal
     [ -n "$d" ] || d=.
     case $name in '' | *[!A-Za-z0-9_.+-]*) continue ;; esac
     case /$d/ in //* | */../* | *//* | *$'\n'* | *$'\t'*) continue ;; esac
-    # A `.` segment inside the path (`test/./NAME`) is dune's to resolve.
-    [ "$d" = . ] || case /$d/ in */./*) continue ;; esac
+    # A `.` segment inside the path (`test/./NAME`) is dune's to resolve, and so
+    # is a path through a directory dune keeps out of the source tree by
+    # default, `_build/CONTEXT/...` (a context-qualified alias) among them.
+    [ "$d" = . ] || case /$d/ in */./* | /_*) continue ;; esac
     specs+=("$arg") recs+=("$rec") spec_dirs+=("$d") names+=("$name")
   done
   n=${#specs[@]}

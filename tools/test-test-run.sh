@@ -7324,6 +7324,7 @@ al/sub" ] || alias_detail="unknown: the listings asked for: $(tr '\n' '|' <"$TMP
 # dune does not know (beside a known one: dune then answers with nothing but
 # the error, and the known one is asked again), and a root one nothing defines.
 for probe in "@@al/deep|al defines no alias deep" \
+             "-j 2 --force @al/runtest-no_such|neither al nor any directory below it" \
              "@nowhere/x @al/runtest-yes|@nowhere/x: dune knows no directory nowhere" \
              "@./al//runtest-no_such|neither al nor any directory below it" \
              "@runtest-no_such|neither . nor any directory below it defines an alias runtest-no_such"; do
@@ -7339,9 +7340,12 @@ for probe in "@@al/deep|al defines no alias deep" \
   fi
 done
 # Known: in its own directory, under @@ and @, below it, at the root, and
-# past dune's own `--` nothing is asked about.
+# past dune's own `--` nothing is asked about; nor where an option the check
+# does not know may change dune's alias set (a profile), or the operand names
+# a build context (`@_build/default/...`): those are dune's to judge.
 for probe in "@al/runtest-yes" "@@al/runtest-yes" "@al/deep" "@deep" "@al/sub/deep @@al/sub/deep" "@al/./deep" \
-             "@./al/runtest-yes" "@al/runtest-yes -- @not/asked"; do
+             "@./al/runtest-yes" "@al/runtest-yes -- @not/asked" \
+             "--profile release @al/runtest-no_such" "@_build/default/al/runtest-no_such"; do
   [ -z "$alias_detail" ] || break
   # shellcheck disable=SC2086 # the probe's operands, split on purpose
   alias_probe alias-known run build $probe
