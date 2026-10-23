@@ -1333,6 +1333,43 @@ let backend_pin_cases =
  ; ocannl-backend: cc -- the command line says cc
  (action (setenv OCANNL-BACKEND hip (run %{dep:probe.exe} --backend=cc))))|dune},
       [ "rule: unread (setenv OCANNL-BACKEND hip …)" ] );
+    (* Review round 4, the genre "an expansion this reader cannot see". A launcher's arguments... *)
+    ( "a command string handed to a launcher through run",
+      {dune|(rule
+ ; ocannl-backend: none -- claims no backend
+ (action (run sh -c "./probe.exe --backend=cuda")))|dune},
+      [ "rule: unread ./probe.exe --backend=cuda" ] );
+    (* ...a path whose file begins with a dash, as every spelling does... *)
+    ( "a dependency named like a backend flag",
+      {dune|(rule
+ ; ocannl-backend: none -- claims no backend
+ (deps (:flag --backend=cuda))
+ (action (progn (run %{dep:probe.exe} %{dep:--backend=cuda}) (run %{dep:probe.exe} %{flag}))))|dune},
+      [ "rule: unread %{dep:--backend=cuda}; unread %{flag}" ] );
+    (* ...a variable name built from a pform... *)
+    ( "a setenv whose name carries a pform",
+      {dune|(rule
+ ; ocannl-backend: none -- claims no backend
+ (action (setenv %{env:KEY=OCANNL_BACKEND} cuda (run %{dep:probe.exe}))))|dune},
+      [ "rule: unread (setenv %{env:KEY=OCANNL_BACKEND} cuda …)" ] );
+    (* ...an include in the inline-test runner's flags, beside an ordinary flag there... *)
+    ( "an included inline-test flag set",
+      {dune|(library (name l)
+ ; ocannl-backend: none -- claims no backend
+ (inline_tests (deps ocannl_config) (flags (:standard (:include backend-flags.sexp)) -verbose)))|dune},
+      [ "library: unread :include" ] );
+    ( "ordinary inline-test flags pin nothing",
+      {dune|(library (name l)
+ ; ocannl-backend: none -- claims no backend
+ (inline_tests (deps ocannl_config) (flags (:standard -verbose))))|dune},
+      [ "library: clean" ] );
+    (* ...and a program under a chdir this scan cannot resolve, which the site walk places without
+       naming. *)
+    ( "a literal path under an unresolvable chdir",
+      {dune|(rule
+ ; ocannl-backend: cuda -- says cuda
+ (action (chdir %{env:DIR=/tmp} (run ./launcher.exe --backend=cuda))))|dune},
+      [ "rule: unread --backend=cuda" ] );
     (* The command line outranks the environment: a flag on the run shadows the setenv around it,
        for that run and no other. *)
     ( "a command-line pin shadows the setenv around its run",

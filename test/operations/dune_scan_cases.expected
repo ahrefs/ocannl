@@ -259,6 +259,12 @@ ok: backend pins -- a command that is a text-valued pform
 ok: backend pins -- a shell line holding a text-valued pform
 ok: backend pins -- a shell line holding only path-valued pforms
 ok: backend pins -- an unread setenv survives a command-line pin
+ok: backend pins -- a command string handed to a launcher through run
+ok: backend pins -- a dependency named like a backend flag
+ok: backend pins -- a setenv whose name carries a pform
+ok: backend pins -- an included inline-test flag set
+ok: backend pins -- ordinary inline-test flags pin nothing
+ok: backend pins -- a literal path under an unresolvable chdir
 ok: backend pins -- a command-line pin shadows the setenv around its run
 ok: backend pins -- but not around a sibling run that sets none
 ok: backend pins -- a pin on a stanza declaring neither is the XOR's to report
