@@ -44,6 +44,22 @@ let () =
        \  Row.note_mutation ();\n\
        \  Hash_set.add seen v"
     = 0);
+  p "Row.note_mutation () through a locally bound Row is not the real one"
+    (count
+       "let seen = Hash_set.create (module Int)\n\
+        let add v =\n\
+       \  let module Row = struct let note_mutation () = () end in\n\
+       \  Row.note_mutation ();\n\
+       \  Hash_set.add seen v"
+    = 1);
+  p "Row.note_mutation () under a module Row the file binds is not the real one"
+    (count
+       "module Row = struct let note_mutation () = () end\n\
+        let seen = Hash_set.create (module Int)\n\
+        let add v =\n\
+       \  Row.note_mutation ();\n\
+       \  Hash_set.add seen v"
+    = 1);
   p "a bare note_mutation () that resolves to nothing in this file is not the real one"
     (count
        "let seen = Hash_set.create (module Int)\n\

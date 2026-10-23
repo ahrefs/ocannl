@@ -25,8 +25,10 @@
     - {b Accounting}: a write is accounted for when its nearest enclosing let-bound function (any
       [let f … = fun …] at any depth; the top-level definition when none encloses it) contains a
       call [note_mutation ()] anywhere in its body, nested closures included -- so the [~default]
-      closure of a [find_or_add] counts. The call must reach the real one: [Row.note_mutation], or
-      in [row.ml] the top-level [note_mutation] itself, not a shadowing local.
+      closure of a [find_or_add] counts. The call must reach the real one: [Row.note_mutation] with
+      no module named [Row] bound in scope (a local module, functor parameter or unpack), or in
+      [row.ml] the top-level [note_mutation] itself, not a shadowing local. An [open] that brings a
+      [Row] in is not modelled.
     - {b In-place classification}, as attributes with a closed grammar; a reason is a string literal
       of more than one word:
     - [[@@mutation_serial.exempt "<reason>"]] on a tracked binding: its writes need no note
@@ -457,9 +459,13 @@ let scan ~file ?interface source =
   in
   let scanner =
     object (self)
-      inherit [denotation, unit] Lexical_scope.scoped as super
+      inherit [denotation, [ `Local ]] Lexical_scope.scoped as super
       method local = `Local
-      method module_path _ _ = None
+
+      (* Every module binding the file makes is local: a [Row] bound anywhere in scope -- a module,
+         a functor parameter, an unpack -- is not the library's. *)
+      method module_path _ _ = Some `Local
+      method! shadowed = Some `Local
 
       method! binding_denotes _ vb =
         let key = vb.pvb_loc.loc_start.pos_cnum in
@@ -475,7 +481,8 @@ let scan ~file ?interface source =
 
       method is_note env (e : expression) =
         match e.pexp_desc with
-        | Pexp_ident { txt = Ldot (Lident "Row", "note_mutation"); _ } -> true
+        | Pexp_ident { txt = Ldot (Lident "Row", "note_mutation"); _ } ->
+            not (Map.mem env.Lexical_scope.modules "Row")
         | Pexp_ident { txt = Lident "note_mutation"; _ } -> (
             match Lexical_scope.lookup env "note_mutation" with Some `Note -> true | _ -> false)
         | _ -> false
