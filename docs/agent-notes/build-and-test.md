@@ -3232,7 +3232,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   in actions/cache, keyed by apt's own `--print-uris` (file names, sizes, hashes), before every
   ubuntu setup-ocaml step in `ci.yml`, so the action's install finds nothing to fetch; the list
   restates setup-ocaml's, so a change there costs only the speed back, and every step of it is
-  best-effort. The one-off `Failed to find any opam release that matches the specified version
+  best-effort. The mechanics live in `.github/actions/apt-debs-cache` (gh-ocannl-1546), which
+  `gh-pages-docs.yml` uses for its 180 MB of texlive, the same slow mirror having held that job at
+  its 30-minute ceiling: the key carries the runner image (`ImageOS`) and a prefix restore of the
+  previous digest's files, so a changed dependency refetches only itself; the caller refreshes the
+  apt index first if it needs a current one, and keeps its own plain install of the same list
+  after the action as the fallback. The one-off `Failed to find any opam release that matches the specified version
   constraint` (2026-10-22 15:06-15:24Z, several jobs within seconds, green on rerun) is a different
   lookup: the action lists `ocaml/opam`'s releases through the GitHub API at every run and found
   no stable one in that answer. setup-ocaml v3.9.0 has no input that pins the opam version or
@@ -3335,9 +3340,15 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   with the serialized training chain. That design is gh-ocannl-901.
 - `gh-pages-api.yml` runs for pull requests and `workflow_dispatch` as well as pushes to master, but
   only a push deploys; validation runs receive their own concurrency group and exercise the build
-  and cache topology without publishing. Publishing pushes share `gh-pages-deploy` with the other
-  Pages workflow, so the two deploys cannot race over the same branch (gh-ocannl-808,
-  gh-ocannl-825).
+  and cache topology without publishing. Both Pages workflows split a push run into `build` and
+  `publish` (the site passes as an artifact). Only `publish` joins the shared `gh-pages-deploy`
+  group with `queue: max`, so the two never race over the gh-pages branch and neither evicts the
+  other's pending publication (gh-ocannl-808, gh-ocannl-825). Each workflow's run sits in a group
+  of its own (`gh-pages-docs-build`, `gh-pages-api-build`) with GitHub's default queue -- one
+  running, the newest pending -- because a newer push of the SAME workflow rebuilds a superset,
+  while a newer push of the other one would not (the path filters differ). The whole run
+  in the shared queue, as before, put one docs build's 30-minute texlive fetch ahead of twelve
+  later push runs, the base gate's `github pages api` verdict at the tip among them (gh-ocannl-1546).
 
 ### Windows CI
 

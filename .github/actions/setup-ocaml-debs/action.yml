@@ -18,61 +18,18 @@ description: >-
 # and on 2026-10-22 it put one main shard at 37.5 minutes. The opam caches
 # were hits throughout; opam played no part.
 #
-# Kept here, the files come from GitHub's cache at tens of MB/s. The key is a
-# digest of the exact files apt would fetch (`--print-uris`: names, sizes,
-# hashes), so an exact hit needs no save, and an updated package -- or a new
-# runner image that already ships them -- changes the key rather than serving a
-# file apt would refuse anyway (apt checks every file in the archive directory
-# against the index before using it, and fetches whatever does not match).
-#
-# The package list restates setup-ocaml's. If the action's list changes, the
-# pre-install covers less, setup-ocaml installs the rest itself, and only the
-# time comes back: a stale list costs speed, never correctness. Likewise every
-# step here is best-effort -- a failure warns and leaves setup-ocaml to do what
-# it always did.
+# The cache mechanics are `apt-debs-cache`'s, which says how the key works.
+# setup-ocaml itself is the fallback: its own install of the same list runs
+# next and fetches whatever this left. The package list restates
+# setup-ocaml's. If the action's list changes, the pre-install covers less,
+# setup-ocaml installs the rest itself, and only the time comes back: a stale
+# list costs speed, never correctness.
 
 runs:
   using: composite
   steps:
-    - id: plan
-      shell: bash
-      run: |
-        dir=$RUNNER_TEMP/setup-ocaml-debs
-        mkdir -p "$dir/partial"
-        echo "dir=$dir" >>"$GITHUB_OUTPUT"
-        # setup-ocaml's optional packages: the ones the index knows.
-        optional=$(apt-cache show --no-all-versions darcs g++-multilib gcc-multilib mercurial 2>/dev/null |
-          sed -n 's/^Package: //p' | sort -u | tr '\n' ' ') || true
-        packages="bubblewrap musl-tools rsync $optional"
-        echo "packages=$packages" >>"$GITHUB_OUTPUT"
-        if ! uris=$(sudo apt-get --yes -qq --print-uris install $packages); then
-          echo "::warning::could not plan setup-ocaml's apt packages; setup-ocaml installs them itself"
-          exit 0
-        fi
-        printf '%s\n' "$uris"
-        if [ -z "$uris" ]; then
-          echo "setup-ocaml's apt packages are already installed: $packages"
-          exit 0
-        fi
-        echo "digest=$(printf '%s\n' "$uris" | sort | sha256sum | cut -c1-16)" >>"$GITHUB_OUTPUT"
-    - if: steps.plan.outputs.digest != ''
-      uses: actions/cache@v6
+    - uses: ./.github/actions/apt-debs-cache
       with:
-        path: ${{ steps.plan.outputs.dir }}
-        key: setup-ocaml-debs-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.plan.outputs.digest }}
-    - if: steps.plan.outputs.digest != ''
-      shell: bash
-      env:
-        DEBS: ${{ steps.plan.outputs.dir }}
-        PACKAGES: ${{ steps.plan.outputs.packages }}
-      run: |
-        # setup-ocaml's own command, reading (and on a miss filling) the cache
-        # directory. Root downloads unsandboxed: the `_apt` user cannot reach
-        # a directory under the runner's home.
-        sudo apt-get --yes -o Dir::Cache::Archives="$DEBS" -o APT::Keep-Downloaded-Packages=true \
-          -o APT::Sandbox::User=root install $PACKAGES ||
-          echo "::warning::pre-installing setup-ocaml's apt packages failed; setup-ocaml installs them itself"
-        # actions/cache's post step saves as the runner user.
-        sudo rm -rf "$DEBS/partial" "$DEBS/lock"
-        sudo chown -R "$(id -u):$(id -g)" "$DEBS"
-        ls -l "$DEBS"
+        packages: bubblewrap musl-tools rsync
+        optional-packages: darcs g++-multilib gcc-multilib mercurial
+        key: setup-ocaml-debs-v1

@@ -1,0 +1,113 @@
+name: Pre-install apt packages from a cache
+description: >-
+  Install a list of Ubuntu packages from .deb files kept in actions/cache, so
+  the caller's own `apt-get install` of the same list afterwards finds nothing
+  left to fetch. Linux only; best-effort.
+
+# Why (gh-ocannl-1544, gh-ocannl-1546): the runner's default Ubuntu mirror
+# (azure.archive.ubuntu.com) serves package files at MB/s on most runs and at
+# 39-46 kB/s on some, while the same runner's other apt fetches, minutes apart,
+# run at MB/s. On a slow run setup-ocaml's 23.6 MB took 10 minutes, and the
+# docs workflow's 180 MB of texlive outlived its job's 30-minute ceiling. Kept
+# here, the files come from GitHub's cache at tens of MB/s.
+#
+# The key is a digest of the exact files apt would fetch (`--print-uris`:
+# names, sizes, hashes), so an exact hit needs no save, and an updated package
+# -- or a new runner image that already ships it -- changes the key rather than
+# serving a file apt would refuse anyway: apt checks every file in the archive
+# directory against the index before using it, and fetches whatever does not
+# match. That check is also what makes the prefix restore safe: on a changed
+# digest the newest entry for the same image is restored, apt takes the files
+# that still match and fetches only the rest, files the plan no longer names
+# are dropped, and the post step saves the result under the new key. The image
+# (the runner's `ImageOS`) is in the key, so ubuntu-22.04 and ubuntu-24.04 never restore
+# each other's files.
+#
+# This action does not refresh the apt index; a caller whose packages need a
+# current one (a stale image index 404s on superseded versions, gh-ocannl-698)
+# runs `apt-get update` first. Every step is best-effort -- a failure warns,
+# and the caller's own install does what it always did. So the caller keeps
+# its plain `apt-get install` of the same list after this action: on success
+# it is a no-op, otherwise it is the fallback.
+
+inputs:
+  packages:
+    description: Space-separated packages to install.
+    required: true
+  optional-packages:
+    description: >-
+      Space-separated packages installed only when the apt index knows them.
+    required: false
+    default: ''
+  key:
+    description: >-
+      Cache key prefix naming this package set, versioned (e.g. `texlive-debs-v1`).
+      Also names the archive directory under $RUNNER_TEMP.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - id: plan
+      shell: bash
+      env:
+        KEY: ${{ inputs.key }}
+        REQUIRED: ${{ inputs.packages }}
+        OPTIONAL: ${{ inputs.optional-packages }}
+      run: |
+        dir=$RUNNER_TEMP/$KEY
+        mkdir -p "$dir/partial"
+        echo "dir=$dir" >>"$GITHUB_OUTPUT"
+        # The hosted runner's image name (ubuntu22, ubuntu24): a process
+        # variable, so not in the expression `env` context the key reads.
+        echo "image=${ImageOS:-unknown}" >>"$GITHUB_OUTPUT"
+        optional=
+        if [ -n "$OPTIONAL" ]; then
+          # The optional packages the index knows.
+          optional=$(apt-cache show --no-all-versions $OPTIONAL 2>/dev/null |
+            sed -n 's/^Package: //p' | sort -u | tr '\n' ' ') || true
+        fi
+        packages="$REQUIRED $optional"
+        echo "packages=$packages" >>"$GITHUB_OUTPUT"
+        if ! uris=$(sudo apt-get --yes -qq --print-uris install $packages); then
+          echo "::warning::could not plan the apt packages ($packages); the caller installs them itself"
+          exit 0
+        fi
+        printf '%s\n' "$uris"
+        if [ -z "$uris" ]; then
+          echo "The apt packages are already installed: $packages"
+          exit 0
+        fi
+        # The archive file names apt will look for, read by the prune below.
+        printf '%s\n' "$uris" | awk '{print $2}' >"$dir.files"
+        echo "files=$dir.files" >>"$GITHUB_OUTPUT"
+        echo "digest=$(printf '%s\n' "$uris" | sort | sha256sum | cut -c1-16)" >>"$GITHUB_OUTPUT"
+    - if: steps.plan.outputs.digest != ''
+      uses: actions/cache@v6
+      with:
+        path: ${{ steps.plan.outputs.dir }}
+        key: ${{ inputs.key }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.plan.outputs.image }}-${{ steps.plan.outputs.digest }}
+        restore-keys: ${{ inputs.key }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.plan.outputs.image }}-
+    - if: steps.plan.outputs.digest != ''
+      shell: bash
+      env:
+        DEBS: ${{ steps.plan.outputs.dir }}
+        FILES: ${{ steps.plan.outputs.files }}
+        PACKAGES: ${{ steps.plan.outputs.packages }}
+      run: |
+        # The caller's own command, reading (and on a miss filling) the cache
+        # directory. Root downloads unsandboxed: the `_apt` user cannot reach
+        # a directory under the runner's home.
+        sudo apt-get --yes -o Dir::Cache::Archives="$DEBS" -o APT::Keep-Downloaded-Packages=true \
+          -o APT::Sandbox::User=root install $PACKAGES ||
+          echo "::warning::pre-installing the apt packages from the cache failed; the caller installs them itself"
+        # actions/cache's post step saves as the runner user.
+        sudo rm -rf "$DEBS/partial" "$DEBS/lock"
+        sudo chown -R "$(id -u):$(id -g)" "$DEBS"
+        # Drop what a prefix restore brought that this plan no longer names,
+        # so a saved entry holds one package set rather than the union of all.
+        for f in "$DEBS"/*.deb; do
+          [ -e "$f" ] || continue
+          grep -qxF -- "${f##*/}" "$FILES" || { echo "dropping stale ${f##*/}"; rm -f -- "$f"; }
+        done
+        ls -l "$DEBS"

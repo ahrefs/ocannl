@@ -13,18 +13,23 @@ on:
       - "docs/**"
       - "test/**"
 
-# Only publishing pushes share the deployment queue. Pull-request and manual
-# builds get run-specific groups so validation never waits behind a publish.
+# Pushes queue per workflow (gh-ocannl-1546): one run at a time, and a newer
+# push replaces a pending one -- each run builds the whole API at its commit,
+# so the newer one publishes a superset. Only the short `publish` job joins
+# `gh-pages-deploy`, the queue shared with gh-pages-docs.yml, which keeps
+# every publish so the two workflows' pushes to the gh-pages branch never race
+# (gh-ocannl-825) and neither drops the other's; gh-pages-docs.yml says more.
+# Pull-request and manual builds get run-specific groups so validation never
+# waits behind a publish.
 concurrency:
-  group: ${{ github.event_name == 'push' && 'gh-pages-deploy' || format('gh-pages-build-{0}', github.run_id) }}
+  group: ${{ github.event_name == 'push' && 'gh-pages-api-build' || format('gh-pages-build-{0}', github.run_id) }}
   cancel-in-progress: false
-  queue: max
 
 env:
   OCAML_COMPILER: '5.5.0'
 
 jobs:
-  deploy:
+  build:
     # Avoid Ubuntu 24.04, see: https://github.com/ocaml/opam/issues/5968
     runs-on: ubuntu-22.04
     timeout-minutes: 30 # ~1min normally; a ceiling only a hang can reach
@@ -98,11 +103,35 @@ jobs:
       - name: Build
         run: opam exec -- dune build @doc
 
-      - name: Deploy
+      - name: Hand the site to the publish job
         if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-html
+          path: _build/default/_doc/_html/
+          include-hidden-files: true
+          retention-days: 1
+
+  publish:
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    # Shared with gh-pages-docs.yml's publish; see the workflow's concurrency.
+    concurrency:
+      group: gh-pages-deploy
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: api-html
+          path: api-html/
+
+      - name: Deploy
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./_build/default/_doc/_html/
+          publish_dir: ./api-html/
           destination_dir: dev
           enable_jekyll: true
