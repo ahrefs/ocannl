@@ -625,4 +625,18 @@ files.
   scan, inside the row loop: that is what cc's pool-parallel `Grid` can privatize (its first-access
   rule wants a standalone covering write), and it keeps the row loop on the GPU annotator's
   single-child chain.
+- **`Winograd` is the tier's conv member** (gh-ocannl-505, key `winograd_conv`): a 3x3 stride-1
+  f32 conv nest becomes four nests over three minted `Never_virtual` buffers (kernel transform,
+  input tiles, products) plus direct-form remainder strips for odd extents. Traps: (a) the tier
+  cannot call `Autotune.detect_conv` -- `autotune` is a library above `ir` -- so the member has its
+  own strict predicate, and `test/operations/winograd_conv` pins the two to agree on eligible sites;
+  (b) the predicate must prove separability (each output and window symbol only at its designated
+  axes), since an extra input axis reading the window symbol leaves the tile transform an unbound
+  index; (c) memoize minted buffers by the whole matched site (nodes, index maps, loop domains),
+  never by the nodes alone, or two statements over the same nodes share a mis-shaped buffer; (d)
+  on a GPU the whole-routine matmul seeds of a rewritten routine are refuted at companion coverage
+  (the transform nests beside the contraction), so the contraction is tuned from its own fission
+  segment (`fiss_sketch_candidates`, not `sketch_candidates`); (e) on bounded small-integer inputs
+  the two forms agree BITWISE (every coefficient is dyadic and every partial sum representable),
+  so the parity leg needs no tolerance to argue about; bound the fixture's magnitudes in the test.
 

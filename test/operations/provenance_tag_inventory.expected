@@ -92,6 +92,8 @@ Site -- arrayjit/lib/schedule.ml, promote_statement_crossing_locals:
   178:fission-live-range-crossing
 Site -- arrayjit/lib/tnode.ml, tn:
   49:ndarray-backed
+Site -- arrayjit/lib/winograd.ml, provenance:
+  505:winograd-transform
 Site -- lib/train.ml, set_materialized:
   28:set-materialized
 Site -- lib/train.ml, set_virtual:
@@ -162,6 +164,8 @@ arrayjit/lib/online_softmax.ml -- 148 483 1002
 arrayjit/lib/online_softmax.mli -- 148 483 1002
 arrayjit/lib/schedule.ml -- 175 176 177 178 184 486 1003
 arrayjit/lib/tnode.ml -- 1 13 16 17 36 39 41 49 432
+arrayjit/lib/winograd.ml -- 505
+arrayjit/lib/winograd.mli -- 505
 benchmarks/report-gh612-hip.md -- 41
 docs/agent-notes/virtualization-and-inlining.md -- 1 8 9 13 19 39 41 52 141 142 143 144 147 148 149 154 432
 docs/lowering_and_inlining.md -- 4 5 7 8 9 10 11 12 13 14 16 18 19 39 41 51 52 140 141 142 143 144 145 146 147 148 149 151 152 154 432

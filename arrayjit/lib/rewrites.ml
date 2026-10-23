@@ -22,6 +22,12 @@ let tier : rewrite list =
       reset = Online_softmax.reset;
     };
     {
+      name = "winograd_conv";
+      enabled = Winograd.enabled;
+      apply = (fun _target -> Winograd.rewrite);
+      reset = Winograd.reset;
+    };
+    {
       name = "fp_contract, fp_reassociate, fp_finite_math";
       enabled = Fp_algebra.enabled;
       apply = (fun _target -> Fp_algebra.rewrite (Low_level.Fp_licence.of_config ()));

@@ -98,6 +98,7 @@
   register_tile
   low_level
   online_softmax
+  winograd
   fp_algebra
   rewrites
   cost_model
