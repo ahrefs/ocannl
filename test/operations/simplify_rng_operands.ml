@@ -234,6 +234,37 @@ let check_foreign_scope ~first_id =
   p "foreign scope: a single-precision scope beneath a threefry is not collapsed"
     (scopes (LL.simplify_llc [] llc) = 1)
 
+(* Two packed draws in one C scope, straight-line, whose block arguments carry no scope once
+   simplified: each [Set_from_vec] declares its [vec_result] temporary, so each must be a block of
+   its own (the renderer used to open one only around local definitions, and the routine failed to
+   compile once the key and counter collapsed). The same key draws the same four values twice. *)
+let check_two_packed_draws ~first_id =
+  let mk = Ll_test.node_factory ~first_id ~dims:[| 4 |] () in
+  let a = mk "packed_a" and b = mk "packed_b" in
+  List.iter [ a; b ] ~f:Ll_test.materialize;
+  let block () =
+    ( threefry
+        (threefry (LL.Constant_bits self_bits, u4) (LL.Constant_bits seed_bits, u4), u4)
+        (LL.Embed_index (Idx.Fixed_idx 0), iprec),
+      u4 )
+  in
+  let draw tn =
+    Ll_test.set_from_vec ~length:4 ~vec_unop:Ops.Uint4x32_to_prec_uniform tn [| Idx.Fixed_idx 0 |]
+      (block ())
+  in
+  let llc = Ll_test.seq (draw a) (draw b) in
+  p "two packed draws: no scope is left in either block argument"
+    (scopes (LL.simplify_llc [] llc) = 0);
+  let name = "rngop_two_packed" in
+  let optimized = Ll_test.optimize ~materialized:[ a; b ] ~name llc in
+  match Ll_test.execute ~name optimized ~seed:[] ~read:[ a; b ] with
+  | [ va; vb ] ->
+      p_all "two packed draws: every draw lies in [0, 1)" (Array.to_list va) ~f:(fun x ->
+          Float.(0. <= x && x < 1.));
+      p_all2 "two packed draws in one scope compile and draw bitwise-equal values" va vb
+        ~f:bits_equal
+  | _ -> assert false
+
 (* The lane conversion: the block operand is the threefry's, the lane operand an index-precision
    scalar the renderer reads at its own precision, so it folds like one. *)
 let check_lane ~first_id =
@@ -266,4 +297,5 @@ let () =
   check ~first_id:1498000 ~name:"iter" ~counter:Ll_test.iter ~fixed:None;
   check ~first_id:1498100 ~name:"fixed" ~counter:(fun _ -> Idx.Fixed_idx 3) ~fixed:(Some 3);
   check_foreign_scope ~first_id:1498300;
+  check_two_packed_draws ~first_id:1498400;
   check_lane ~first_id:1498200

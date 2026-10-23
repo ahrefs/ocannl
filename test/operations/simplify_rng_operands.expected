@@ -21,5 +21,8 @@ fixed: every draw differs from the double-converted counter's (the control): tru
 fixed: the wrapped counter beneath the threefry draws bitwise-equal values: true
 fixed: the wrapped counter materialized draws bitwise-equal values: true
 foreign scope: a single-precision scope beneath a threefry is not collapsed: true
+two packed draws: no scope is left in either block argument: true
+two packed draws: every draw lies in [0, 1): true
+two packed draws in one scope compile and draw bitwise-equal values: true
 lane: the lane operand folds to the constant 2: true
 lane: the counter beneath the threefry stays the iterator: true
