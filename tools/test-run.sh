@@ -731,10 +731,10 @@ plan_test_cap() { # <requested, empty for the default> dune-argv
 # leave the alias set alone (`--profile`, `--root`, `--workspace`, `-p`, ... --
 # plan_aliases holds the allow-list), and an operand that is not a plain
 # relative `DIR/NAME` (an absolute path, a `..` or an inner `.` segment, or a
-# `_`-led directory such as a context's `_build/CONTEXT/`). What it
-# does not see, and so can refuse wrongly: an alias defined only in a
-# directory with no dune file of its own -- one a `(subdir ...)` stanza makes
-# -- named recursively from above it. The query's trace goes to a file of the
+# `_`-led directory such as a context's `_build/CONTEXT/`). The directories
+# below an operand's are those holding a dune file and those its `(subdir ...)`
+# stanzas give rules to (alias_dirs_perl); a dune file that does not read
+# leaves the recursive misses to dune. The query's trace goes to a file of the
 # run's, so the shared `_build/trace.csexp` is not rewritten.
 alias_refusal=  # why the batch is refused, one unknown alias per line; empty for none
 alias_listing_perl='
@@ -789,8 +789,72 @@ alias_listing() { # <listing file> dir...; 0 with the parsed listing in it, 1 in
   done
   [ "$rc" = 0 ]
 }
-alias_dune_dirs() { # the directories holding a dune file, `.` for the top, one per line
-  (
+# The directories a dune file's `(subdir NAME ...)` stanzas give rules to, which
+# hold no dune file of their own (gh-ocannl-1448, Codex review round 2): a
+# reader of dune's s-expressions -- `;` line comments, `#|...|#` block and
+# `#;` datum comments, quoted atoms -- that walks every stanza, nested
+# `subdir`s included. Input: dune file paths; output: their directories and
+# the logical ones below them. Exit 3 where a file does not read (an
+# unbalanced or unexpected form), and the caller then cannot list them all.
+alias_dirs_perl='
+  my $bad = 0;
+  for my $f (@ARGV) {
+    my $dir = $f eq "dune" ? "." : ($f =~ m{^(.*)/dune$} ? $1 : next);
+    print "$dir\n";
+    open my $fh, "<", $f or do { $bad = 1; next };
+    local $/;
+    my $t = <$fh>;
+    close $fh;
+    my (@tok, $ok);
+    $ok = eval {
+      pos($t) = 0;
+      while (pos($t) < length $t) {
+        if ($t =~ /\G\s+/gc || $t =~ /\G;[^\n]*/gc) { next }
+        if ($t =~ /\G#\|/gc) { $t =~ /\G.*?\|#/gcs or die; next }
+        if ($t =~ /\G#;/gc) { push @tok, ["#;"]; next }
+        if ($t =~ /\G([()])/gc) { push @tok, [$1]; next }
+        if ($t =~ /\G"((?:[^"\\]|\\.)*)"/gcs) { push @tok, ["a", $1]; next }
+        if ($t =~ /\G([^\s();"]+)/gc) { push @tok, ["a", $1]; next }
+        die;
+      }
+      1;
+    };
+    unless ($ok) { $bad = 1; next }
+    # Into nested lists; a `#;` drops the datum after it.
+    my @stack = ([]);
+    my $drop = 0;
+    for my $k (@tok) {
+      if ($k->[0] eq "#;") { $drop++; next }
+      if ($k->[0] eq "(") { push @stack, []; next }
+      my $x;
+      if ($k->[0] eq ")") { @stack > 1 or do { $bad = 1; last }; $x = pop @stack }
+      else { $x = $k->[1] }
+      if ($drop) { $drop--; next }
+      push @{ $stack[-1] }, $x;
+    }
+    if (@stack != 1) { $bad = 1; next }
+    my $walk;
+    $walk = sub {
+      my ($at, $forms) = @_;
+      for my $s (@$forms) {
+        next unless ref $s && @$s >= 2 && !ref $s->[0] && $s->[0] eq "subdir";
+        my $name = $s->[1];
+        if (ref $name || $name !~ m{^[A-Za-z0-9_.+-]+(?:/[A-Za-z0-9_.+-]+)*$} || $name =~ m{(?:^|/)\.\.?(?:/|$)}) {
+          $bad = 1;
+          next;
+        }
+        my $sub = $at eq "." ? $name : "$at/$name";
+        print "$sub\n";
+        $walk->($sub, [ @$s[2 .. $#$s] ]);
+      }
+    };
+    $walk->($dir, $stack[0]);
+  }
+  exit($bad ? 3 : 0);
+'
+alias_dune_dirs() { # the directories holding a dune file or a subdir's rules, `.` for the top; 1 incomplete
+  local files
+  files=$(
     # This tree's own listing, whatever repository an inherited GIT_DIR names
     # (as record_checkout).
     # shellcheck disable=SC2046 # a list of variable names, split on purpose
@@ -800,12 +864,17 @@ alias_dune_dirs() { # the directories holding a dune file, `.` for the top, one 
     else
       find . \( -name _build -o -name .git \) -prune -o -name dune -type f -print 2>/dev/null | sed 's|^\./||'
     fi
-  ) | while IFS= read -r f; do
-    case $f in */dune) printf '%s\n' "${f%/dune}" ;; dune) echo . ;; esac
-  done | sort -u
+  ) || return 1
+  [ -n "$files" ] || return 1
+  local list=()
+  while IFS= read -r f; do [ -f "$f" ] && list+=("$f"); done <<<"$files"
+  [ ${#list[@]} -gt 0 ] || return 1
+  perl -e "$alias_dirs_perl" "${list[@]}" >"$run_dir/aliases.dirs" || return 1
+  sort -u "$run_dir/aliases.dirs"
+  rm -f "$run_dir/aliases.dirs"
 }
 plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal
-  local arg spec rec d name i n all=
+  local arg spec rec d name i n all= unlisted=
   local specs=() recs=() spec_dirs=() names=() first=() rest=()
   alias_refusal=
   [ "${1:-}" = build ] || return 0
@@ -856,7 +925,11 @@ plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal
     d=${spec_dirs[$i]}
     if [ "${recs[$i]}" = 1 ] && alias_listed + "$d" "" "$run_dir/aliases.1" &&
        ! alias_listed = "$d" "${names[$i]}" "$run_dir/aliases.1"; then
-      [ -n "$all" ] || all=$(alias_dune_dirs)
+      if [ -z "$all" ]; then
+        # A tree whose directories cannot all be listed leaves the recursive
+        # misses to dune: only what the first answer decided refuses.
+        all=$(alias_dune_dirs) || { all=- unlisted=1; }
+      fi
       while IFS= read -r arg; do
         [ -n "$arg" ] && [ "$arg" != "$d" ] || continue
         [ "$d" = . ] || case $arg in "$d"/*) ;; *) continue ;; esac
@@ -870,6 +943,7 @@ plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal
   # dune: only what the first answer decided refuses.
   [ ${#rest[@]} -eq 0 ] || alias_listing "$run_dir/aliases.2" "${rest[@]}" ||
     printf '?\n' >"$run_dir/aliases.2"
+  [ -z "$unlisted" ] || printf '?\n' >"$run_dir/aliases.2"
   i=0
   while [ "$i" -lt "$n" ]; do
     d=${spec_dirs[$i]} name=${names[$i]}

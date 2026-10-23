@@ -7300,9 +7300,16 @@ alias_real_label="against a real dune: an unknown alias is refused, known ones r
 alias_detail=
 alias_table=$TMP/alias-table
 mkdir -p "$repeat_root/al/sub"
-printf '(rule (alias runtest-yes) (action (progn)))\n' >"$repeat_root/al/dune"
+# `al/virt` has no dune file: a `(subdir ...)` stanza of al's, nested in
+# another and behind a comment and a quoted atom, gives it its rules.
+cat >"$repeat_root/al/dune" <<'DUNE'
+; (subdir commented (rule (alias not_this)))
+(rule (alias runtest-yes) (action (progn)))
+(subdir "virt" #;(subdir dropped) (subdir inner (rule (alias vinner) (action (progn))))
+ (rule (alias vdeep) (action (progn))))
+DUNE
 printf '(rule (alias deep) (action (progn)))\n' >"$repeat_root/al/sub/dune"
-printf '%s\n' . 'al runtest-yes' 'al/sub deep' >"$alias_table"
+printf '%s\n' . 'al runtest-yes' 'al/sub deep' 'al/virt vdeep' 'al/virt/inner vinner' >"$alias_table"
 alias_probe() { # tag argv...: a run under a GPU slot, with the table answering
   REPEAT_TEST_ALIASES=$alias_table REPEAT_TEST_SHOW_CALLS=$TMP/$1.show slot_probe "$1" hold cuda cc "${@:2}"
   alias_reach=$(cat "$TMP/$1.reach")
@@ -7317,9 +7324,10 @@ if [ -z "$alias_detail" ]; then
     *) alias_detail="unknown: digest: $argv_out" ;;
   esac
 fi
-# It asked for `al` first, then for the directories below it.
+# It asked for `al` first, then for the directories below it, the subdir
+# stanzas' included.
 [ -n "$alias_detail" ] || [ "$(cat "$TMP/alias-unknown.show")" = "al
-al/sub" ] || alias_detail="unknown: the listings asked for: $(tr '\n' '|' <"$TMP/alias-unknown.show")"
+al/sub al/virt al/virt/inner" ] || alias_detail="unknown: the listings asked for: $(tr '\n' '|' <"$TMP/alias-unknown.show")"
 # Refused: one under @@ that only a subdirectory defines, one whose directory
 # dune does not know (beside a known one: dune then answers with nothing but
 # the error, and the known one is asked again), and a root one nothing defines.
@@ -7345,7 +7353,8 @@ done
 # a build context (`@_build/default/...`): those are dune's to judge.
 for probe in "@al/runtest-yes" "@@al/runtest-yes" "@al/deep" "@deep" "@al/sub/deep @@al/sub/deep" "@al/./deep" \
              "@./al/runtest-yes" "@al/runtest-yes -- @not/asked" \
-             "--profile release @al/runtest-no_such" "@_build/default/al/runtest-no_such"; do
+             "--profile release @al/runtest-no_such" "@_build/default/al/runtest-no_such" \
+             "@al/vdeep" "@vinner"; do
   [ -z "$alias_detail" ] || break
   # shellcheck disable=SC2086 # the probe's operands, split on purpose
   alias_probe alias-known run build $probe
@@ -7366,6 +7375,16 @@ if [ -z "$alias_detail" ]; then
   { [ "$repeat_rc" = 2 ] && [ -z "$(cat "$TMP/alias-repeat.calls")" ] &&
     grep -qF "ALIAS REFUSED: @al/runtest-no_such" <<<"$repeat_out"; } ||
     alias_detail="repeat: exit $repeat_rc (want 2); dune calls: $(cat "$TMP/alias-repeat.calls"); output: $repeat_out"
+fi
+# A dune file the reader cannot read leaves a recursive miss to dune: the
+# directories below may then not all be listed.
+if [ -z "$alias_detail" ]; then
+  mkdir -p "$repeat_root/al/odd"
+  printf '(rule (alias odd)\n' >"$repeat_root/al/odd/dune"
+  alias_probe alias-unread run build @al/runtest-no_such
+  { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build @al/runtest-no_such" ]; } ||
+    alias_detail="an unreadable dune file below: exit $argv_rc (want 0); dune calls: ${argv_calls:-<none>}; digest: $argv_out"
+  rm -rf "$repeat_root/al/odd"
 fi
 if [ -z "$alias_detail" ]; then report 0 "$alias_label"; else report 1 "$alias_label" "$alias_detail"; fi
 # The fixture dune with no table prints nothing for the listing: not dune's
@@ -7391,7 +7410,8 @@ else
     report 1 "$alias_real_label" "cannot stage what test-run.sh sources: $stage_error"
   else
     printf '(lang dune 3.20)\n' >"$alias_root/dune-project"
-    printf '(rule (alias runtest-yes) (action (progn)))\n' >"$alias_root/al/dune"
+    printf '(rule (alias runtest-yes) (action (progn)))\n(subdir virt (rule (alias vdeep) (action (progn))))\n' \
+      >"$alias_root/al/dune"
     printf '(rule (alias deep) (action (progn)))\n' >"$alias_root/al/sub/dune"
     alias_real_detail=
     alias_real_run() { # tag argv...
@@ -7403,7 +7423,7 @@ else
     for probe in "2|build @al/runtest-no_such @al/deep|alias refused: @al/runtest-no_such: neither al" \
                  "2|build @@al/deep|alias refused: @@al/deep: al defines no alias deep" \
                  "2|build @nowhere/x @al/runtest-yes|alias refused: @nowhere/x: dune knows no directory nowhere" \
-                 "0|build @al/deep @@al/runtest-yes @deep|verdict: pass"; do
+                 "0|build @al/deep @@al/runtest-yes @deep @al/vdeep @vdeep|verdict: pass"; do
       IFS='|' read -r want args text <<<"$probe"
       # shellcheck disable=SC2086 # the probe's operands, split on purpose
       alias_real_run alias-real $args
