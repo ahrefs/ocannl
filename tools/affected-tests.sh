@@ -1330,9 +1330,10 @@ if (@scoped) {
   my %rules_shown = map { $_ => 1 } "rule", "copy_files", "copy_files#", "ocamllex", "ocamlyacc", "menhir";
   my %kind_of = (test => "tests", tests => "tests", executable => "executables", executables => "executables", library => "library");
   my $per_test = qr/^(?:runtest|train|slow)-/;
-  # A rule as text, the probe roots made one.
-  my @roots = map { quotemeta } grep { defined && $_ ne "." } $qroot, $old_root;
-  my $roots = @roots ? qr/(?:@{[join "|", @roots]})/ : undef;
+  # A rule as text, each side's own probe root made one placeholder: the old
+  # root extends the new one (`.../probe-old`), so one pattern over both would
+  # leave `<probe>-old` on the old side (review round 1).
+  my %root_re = (old => qr/\Q$old_root\E/, new => qr/\Q$qroot\E/);
   sub rule_text { my ($x) = @_; ref $x ? "(" . join(" ", map { rule_text($_) } @$x) . ")" : $x }
   FILE: for my $f (@scoped) {
     my ($d) = dir_of($f);
@@ -1389,7 +1390,7 @@ if (@scoped) {
         if (grep { !defined } @got) { push @why, "dune rules failed on the $side side"; last }
         for my $rule (@got) {
           my $s = rule_text($rule);
-          $s =~ s/$roots/<probe>/g if $roots;
+          $s =~ s/$root_re{$side}/<probe>/g;
           my $tg = field($rule, "targets");
           $text{$side}{$_} = $s for grep { defined } map { strip_ctx(atom($_, "targets")) } map { items(field($tg // [], $_)) } "files", "directories";
         }
