@@ -87,8 +87,8 @@ let () =
        "let state = ref 0 [@@mutation_serial.fingerprinted]\n\
         let set_early v = state := v\n\
         let state = ref 1 [@@mutation_serial.fingerprinted]\n\
-        let mutated_since fp = fp <> !state"
-       "mutated_since does not read !state");
+        let mutated_since fp = not (phys_equal fp !state)"
+       "mutated_since does not compare !state");
   p "a bare note_mutation () that resolves to nothing in this file is not the real one"
     (count
        "let seen = Hash_set.create (module Int)\n\
@@ -170,6 +170,14 @@ let () =
     (says "let a, b = (ref 0, ref 1)" "bound by a pattern");
   p "a table the interface exports is refused"
     (says ~interface:"val seen : int Base.Hash_set.t" table "exported by the interface");
+  p "a table exported through an included signature is refused"
+    (says ~interface:"include sig\n  val seen : int Base.Hash_set.t\nend" table
+       "exported by the interface");
+  p "an interface include of a module type the scan cannot read is refused"
+    (says ~interface:"include Some_sig" table "does not read");
+  p "state an initializer creates in a function it invokes on the spot is refused"
+    (says "let next = (fun () -> let c = ref 0 in fun () -> incr c; !c) ()"
+       "hidden under a local let");
   p "an interface exporting only functions is fine"
     (count ~interface:"val add : int -> unit"
        (table ^ "let add v =\n  note_mutation ();\n  Hash_set.add seen v")
@@ -193,14 +201,20 @@ let () =
      let set v = state := v\n\
      let mutated_since fp = " ^ read
   in
-  p "a fingerprinted ref that mutated_since reads needs no note"
-    (count (fingerprinted "fp <> !state") = 0);
+  p "a fingerprinted ref mutated_since compares physically needs no note"
+    (count (fingerprinted "not (phys_equal fp !state)") = 0);
   p "a fingerprinted ref that mutated_since does not read is refused"
-    (says (fingerprinted "fp <> 0") "mutated_since does not read !state");
+    (says (fingerprinted "fp <> 0") "mutated_since does not compare !state");
+  p "a fingerprinted ref that mutated_since reads but does not compare is refused"
+    (says (fingerprinted "ignore !state; fp <> 0") "mutated_since does not compare !state");
+  p "a fingerprinted ref compared through a shadowing phys_equal is refused"
+    (says
+       ("let phys_equal _ _ = true\n" ^ fingerprinted "not (phys_equal fp !state)")
+       "mutated_since does not compare !state");
   p "only a ref can be fingerprinted"
     (says
        "let t = Hash_set.create (module Int) [@@mutation_serial.fingerprinted]\n\
-        let mutated_since () = Hash_set.length t"
+        let mutated_since () = phys_equal t t"
        "only a ref can be fingerprinted");
   p "a boundary function's writes are admitted"
     (count
@@ -232,7 +246,7 @@ let () =
   p "fingerprinted takes no payload"
     (says
        "let s = ref 0 [@@mutation_serial.fingerprinted \"physically compared\"]\n\
-        let mutated_since () = !s"
+        let mutated_since () = phys_equal 0 !s"
        "takes no payload");
   p "an attribute on something it does not classify is refused"
     (says "let f x = x [@@mutation_serial.exempt \"a fresh counter\"]" "attached to nothing");

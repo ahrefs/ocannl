@@ -35,11 +35,16 @@ state inside a nested module is refused: true
 an allocation by a constructor outside the closed list is refused: true
 a mutable allocation bound by a pattern is refused: true
 a table the interface exports is refused: true
+a table exported through an included signature is refused: true
+an interface include of a module type the scan cannot read is refused: true
+state an initializer creates in a function it invokes on the spot is refused: true
 an interface exporting only functions is fine: true
 an exempt binding's unnoted writes are admitted: true
 an exemption no write needs is stale: true
-a fingerprinted ref that mutated_since reads needs no note: true
+a fingerprinted ref mutated_since compares physically needs no note: true
 a fingerprinted ref that mutated_since does not read is refused: true
+a fingerprinted ref that mutated_since reads but does not compare is refused: true
+a fingerprinted ref compared through a shadowing phys_equal is refused: true
 only a ref can be fingerprinted: true
 a boundary function's writes are admitted: true
 a boundary whose function needs none is stale: true

@@ -38,7 +38,8 @@
       admit state the scan cannot read (below).
     - [[@@mutation_serial.fingerprinted]] on a tracked [ref] that [Shape.fingerprint] compares
       physically: held to the relationship, not to a reason -- the file's top-level [mutated_since]
-      must read [!x].
+      must hand [!x] directly to the library's [phys_equal]. What becomes of that comparison's
+      result is not read.
     - [[@@mutation_serial.boundary "<reason>"]] on a let-bound function that is a session boundary
       (the commit, a rewind, a reset): its own writes need no note.
 
@@ -53,14 +54,17 @@
       [Foo]) -- unread, so name it or extend the list;
     - module-level state the scan does not resolve: an allocation bound by a non-variable pattern,
       one evaluated at module initialization but hidden under a local [let] of a top-level value
-      ([let fresh = let uid = ref 0 in fun () -> …]) -- an unlisted constructor there too -- one
-      inside a nested module, an [include]d structure, a functor argument or a [let%ext] payload --
-      unless that binding is [exempt];
-    - a tracked binding the sibling [.mli] exports as a [val], since its writers outside the file
-      are not read ([Row.mutation_serial] is exported as a function for that reason);
+      ([let fresh = let uid = ref 0 in fun () -> …]) or in the body of a function the initializer
+      invokes on the spot ([(fun () -> …) ()]) -- an unlisted constructor there too -- one inside a
+      nested module, an [include]d structure, a functor argument or a [let%ext] payload -- unless
+      that binding is [exempt];
+    - a tracked binding the sibling [.mli] exports as a [val], at top level or through an
+      [include sig … end], since its writers outside the file are not read ([Row.mutation_serial] is
+      exported as a function for that reason); an interface [include] of any other module type,
+      which the scan cannot read;
     - an attribute nothing consumes, a malformed one, two on one binding, a stale [exempt] (no write
       of the binding would be a finding without it), a stale [boundary] (no write in the function
-      would be), a [fingerprinted] binding [mutated_since] does not read.
+      would be), a [fingerprinted] binding [mutated_since] does not compare.
 
     {1 What it deliberately does not read}
 
@@ -349,12 +353,20 @@ let scan ~file ?(serial_owner = false) ?interface source =
   let hidden_allocations (vb : value_binding) =
     let found = ref [] in
     let walker =
-      object
+      object (self)
         inherit Ast_traverse.iter as super
 
         method! expression e =
           match e.pexp_desc with
           | Pexp_function _ -> ()
+          | Pexp_apply ({ pexp_desc = Pexp_function (_, _, body); _ }, args) ->
+              (* An immediately invoked function runs at module initialization: its body's
+                 allocations are as module-level as the initializer's own. *)
+              (match body with
+              | Pfunction_body body -> self#expression body
+              | Pfunction_cases (cases, _, _) ->
+                  List.iter cases ~f:(fun c -> self#expression c.pc_rhs));
+              List.iter args ~f:(fun (_, a) -> self#expression a)
           | _ ->
               (if not (phys_equal e (strip vb.pvb_expr)) then
                  match allocation e with
@@ -522,6 +534,26 @@ let scan ~file ?(serial_owner = false) ?interface source =
               b.name
 
       method! expression env e =
+        (* A fingerprinted ref is compared when [mutated_since] hands [!x] straight to the library's
+           [phys_equal] -- the physical comparison against the captured fingerprint. *)
+        (match e.pexp_desc with
+        | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident "phys_equal" as fn; _ }; _ }, args)
+          when self#library env fn
+               &&
+               match !frames with
+               | frame :: _ -> String.equal frame.root "mutated_since"
+               | [] -> false ->
+            List.iter args ~f:(fun (_, arg) ->
+                match arg.pexp_desc with
+                | Pexp_apply
+                    ( { pexp_desc = Pexp_ident { txt = Lident "!" as deref; _ }; _ },
+                      [ (Nolabel, x) ] )
+                  when self#library env deref -> (
+                    match self#tracked env x with
+                    | Some (b, _) -> Hash_set.add fingerprint_reads b.key
+                    | None -> ())
+                | _ -> ())
+        | _ -> ());
         (match e.pexp_desc with
         | Pexp_apply
             (fn, [ (Nolabel, { pexp_desc = Pexp_construct ({ txt = Lident "()"; _ }, None); _ }) ])
@@ -559,12 +591,7 @@ let scan ~file ?(serial_owner = false) ?interface source =
                           | _ -> `Unlisted)
                     in
                     match verdict with
-                    | `Read -> (
-                        Hash_set.add classified loc.loc_start.pos_cnum;
-                        match !frames with
-                        | frame :: _ when String.equal frame.root "mutated_since" ->
-                            Hash_set.add fingerprint_reads b.key
-                        | _ -> ())
+                    | `Read -> Hash_set.add classified loc.loc_start.pos_cnum
                     | `Write ->
                         Hash_set.add classified loc.loc_start.pos_cnum;
                         self#record_write b loc
@@ -633,7 +660,9 @@ let scan ~file ?(serial_owner = false) ?interface source =
   List.iter bindings ~f:(fun b ->
       match b.cls with
       | Fingerprinted when not (Hash_set.mem fingerprint_reads b.key) ->
-          finding b.line "%s is fingerprinted, but mutated_since does not read !%s" b.name b.name
+          finding b.line
+            "%s is fingerprinted, but mutated_since does not compare !%s through phys_equal" b.name
+            b.name
       | _ -> ());
   (* An exempt tracked binding whose writes would all be accounted for anyway is stale. *)
   Hashtbl.iter tracked ~f:(fun b ->
@@ -644,10 +673,29 @@ let scan ~file ?(serial_owner = false) ?interface source =
   Option.iter interface ~f:(fun interface ->
       let lexbuf = Lexing.from_string interface in
       Lexing.set_filename lexbuf (file ^ "i");
-      let exported =
-        List.filter_map (Parse.interface lexbuf) ~f:(fun item ->
-            match item.psig_desc with Psig_value vd -> Some vd.pval_name.txt | _ -> None)
+      (* The values the interface exports at top level, through [include sig … end] too. An include
+         of any other module type is refused: what it exports is not read here. *)
+      let rec exported_of items =
+        List.concat_map items ~f:(fun item ->
+            match item.psig_desc with
+            | Psig_value vd -> [ vd.pval_name.txt ]
+            | Psig_include { pincl_mod; _ } -> (
+                let rec signature_of mty =
+                  match mty.pmty_desc with
+                  | Pmty_signature items -> Some items
+                  | Pmty_with (mty, _) -> signature_of mty
+                  | _ -> None
+                in
+                match signature_of pincl_mod with
+                | Some items -> exported_of items
+                | None ->
+                    finding (line_of item.psig_loc)
+                      "the interface includes a module type the scan does not read: it cannot tell \
+                       whether a tracked binding is exported";
+                    [])
+            | _ -> [])
       in
+      let exported = exported_of (Parse.interface lexbuf) in
       Hashtbl.iter tracked ~f:(fun b ->
           if List.mem exported b.name ~equal:String.equal then
             finding b.line
