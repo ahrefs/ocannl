@@ -281,6 +281,7 @@ limits_field_classes.ml: [scanner-refusal:fdcb8ce65a493ff3ca298ab6cd096a0d] Unti
 limits_field_classes.ml: [scanner-refusal:18ba6e03ce2dfd1162c3816126efe2fe] Key projection renders (claim) is catalogued beside limits_field_classes.expected: true
 limits_field_classes.ml: [scanner-refusal:0a9177a9cf5f80388c5ecb335859d27d] the binding pattern (claim) is catalogued beside limits_field_classes.expected: true
 limits_field_classes.ml: [scanner-refusal:129a692bf5913667539ef35c0825728a] reaching the accessor (claim) is catalogued beside limits_field_classes.expected: true
+limits_field_classes.ml: [scanner-refusal:d0b7ad6bef7cbd6ac64556bbf88c64d5] fallback every search-less (claim) is catalogued beside limits_field_classes.expected: true
 limits_field_classes.ml: [scanner-refusal:5de8818597d1f7b0e33446b61b0cf363] backend_intf.ml (claim) is catalogued beside limits_field_classes.expected: true
 limits_field_classes.ml: [scanner-refusal:8f9176198240323dbd1fb605e9c46ba6] backend_intf.ml (claim) is catalogued beside limits_field_classes.expected: true
 limits_field_classes.ml: [scanner-refusal:ef99980e8fef8e93f88e9ada52db5875] autotune.ml (claim) is catalogued beside limits_field_classes.expected: true
@@ -288,8 +289,11 @@ limits_field_classes.ml: [scanner-refusal:190f5d5f9cf7b1a188c423cc9c9159e6] arra
 limits_field_classes.ml: [scanner-refusal:887690bba79db7186f007c0ee3bc4d55] autotune.ml (claim) is catalogued beside limits_field_classes.expected: true
 limits_field_classes.ml: [scanner-refusal:02907ae08467c5deca8ec391bc107c00] model_default (claim) is catalogued beside limits_field_classes.expected: true
 limits_field_classes.ml: [scanner-refusal:fe049afe671ea46b4b4e1a97110057e0] autotune.ml (claim) is catalogued beside limits_field_classes.expected: true
+limits_field_classes.ml: [scanner-refusal:83edca568007fee6d08310746a95bf8c] search-less branches test (claim) is catalogued beside limits_field_classes.expected: true
+limits_field_classes.ml: [scanner-refusal:59dec6ead5ca6a8266b3739f62424e79] seeded transform reaches (claim) is catalogued beside limits_field_classes.expected: true
+limits_field_classes.ml: [scanner-refusal:fca7b1c5180357d7ba51bda9f129d30a] fallback every search-less (claim) is catalogued beside limits_field_classes.expected: true
 limits_field_classes.ml: [scanner-refusal:075df5b39397048242655a826bb84004] definition tune reaches (claim) is catalogued beside limits_field_classes.expected: true
-limits_field_classes.ml: [scanner-refusal:1e8a6f318af70258db127b25c3d92f71] Autotune.tune (claim) is catalogued beside limits_field_classes.expected: true
+limits_field_classes.ml: [scanner-refusal:2c95f25304a68db188b11a98b9b6df51] Autotune.tune (claim) is catalogued beside limits_field_classes.expected: true
 env_var_deps.ml has exactly the explicitly assigned refusal controls: true
 env_var_deps.ml: [scanner-refusal:2b65edf20e36d983c1a016b72c2aadd1] plugged-in check receives (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:35bab4283cd8b87d51ca3476cb0e971e] source_tree (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true

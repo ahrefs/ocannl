@@ -291,6 +291,7 @@ let raw_entries =
         "[scanner-refusal:18ba6e03ce2dfd1162c3816126efe2fe] Key projection renders";
         "[scanner-refusal:0a9177a9cf5f80388c5ecb335859d27d] the binding pattern";
         "[scanner-refusal:129a692bf5913667539ef35c0825728a] reaching the accessor";
+        "[scanner-refusal:d0b7ad6bef7cbd6ac64556bbf88c64d5] fallback every search-less";
         "[scanner-refusal:5de8818597d1f7b0e33446b61b0cf363] backend_intf.ml";
         "[scanner-refusal:8f9176198240323dbd1fb605e9c46ba6] backend_intf.ml";
         "[scanner-refusal:ef99980e8fef8e93f88e9ada52db5875] autotune.ml";
@@ -298,8 +299,11 @@ let raw_entries =
         "[scanner-refusal:887690bba79db7186f007c0ee3bc4d55] autotune.ml";
         "[scanner-refusal:02907ae08467c5deca8ec391bc107c00] model_default";
         "[scanner-refusal:fe049afe671ea46b4b4e1a97110057e0] autotune.ml";
+        "[scanner-refusal:83edca568007fee6d08310746a95bf8c] search-less branches test";
+        "[scanner-refusal:59dec6ead5ca6a8266b3739f62424e79] seeded transform reaches";
+        "[scanner-refusal:fca7b1c5180357d7ba51bda9f129d30a] fallback every search-less";
         "[scanner-refusal:075df5b39397048242655a826bb84004] definition tune reaches";
-        "[scanner-refusal:1e8a6f318af70258db127b25c3d92f71] Autotune.tune";
+        "[scanner-refusal:2c95f25304a68db188b11a98b9b6df51] Autotune.tune";
       ] );
     ( "digest_completeness.ml",
       [

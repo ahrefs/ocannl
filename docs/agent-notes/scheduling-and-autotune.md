@@ -695,8 +695,11 @@ files.
   the pristine program, forced lazily (the search, or a trajectory-matched warm hit, forces it; the
   `seeded untuned plan derived in` log line times it). `limits_field_classes` sanctions two paths
   to `Untimed` fields from `tune`: `seeded_plan`, pinning that a definition `tune` reaches through
-  it records the digest, and `seeded_transform`, the untuned fallback of a call that does not
-  search, which stores and replays nothing.
+  it records the digest, and `seeded_transform`, but only where the search-less fallback spells it
+  (gh-ocannl-1491): the local binding every `not search` branch of `tune` calls, found by the scan
+  rather than named, so a search path calling `seeded_transform` or a wrapper of it (`seeded_default`)
+  fails the scan. A new search-less branch must call that same fallback, or the sanction empties
+  and the scan refuses; one that legitimately ships something else extends the scan's forms.
 - **Every untuned fallback in `tune` ships the seeded plan, not the plain default** (gh-ocannl-1441).
   The post-search fallbacks (nothing timed, a budget cut that left the floor unmeasured, a failed
   winner replay) replay the plan the search seeded; the paths that never search (search off, a
