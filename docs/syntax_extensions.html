@@ -1563,17 +1563,18 @@ concatenation operator <code>++^</code> accept an optional list of
 strings argument after the specification string. When passed, the
 strings should be some of the identifiers used in the specification.
 Both dimension variable and row variable labels are supported. This will
-introduce bindings for <code>Indexing.variable_ref</code> objects at the
-same point as the inline parameter definition bindings, and will pass
-these objects with the <code>~capture_dims</code> argument to
-<code>einsum</code>, <code>einsum1</code>, resp. <code>concat</code>.
-The bound objects can be used to add shape constraints via
-<code>Shape.set_dim</code> and <code>Shape.set_equal</code>, or with
-<code>Operation.embed_dim</code> or its alias
-<code>Operation.TDSL.O.dim</code> to embed the solved dimension of the
-corresponding variable (as a number) into a tensor expression. For a row
-variable, the number will be the product of the dimensions it resolved
-into.</p>
+introduce bindings for <code>Indexing.variable_ref</code> objects per
+call: at the top of the innermost function body enclosing the operation,
+or, outside of any function, at the same point as the inline parameter
+definition bindings. The ppx passes these objects with the
+<code>~capture_dims</code> argument to <code>einsum</code>,
+<code>einsum1</code>, resp. <code>concat</code>. The bound objects can
+be used to add shape constraints via <code>Shape.set_dim</code> and
+<code>Shape.set_equal</code>, or with <code>Operation.embed_dim</code>
+or its alias <code>Operation.TDSL.O.dim</code> to embed the solved
+dimension of the corresponding variable (as a number) into a tensor
+expression. For a row variable, the number will be the product of the
+dimensions it resolved into.</p>
 <p>Capturing requires the specification to be a <strong>literal
 string</strong>: every capture pattern in <code>tensor/ppx_op.ml</code>
 and <code>tensor/ppx_cd.ml</code> matches on a string constant, so
@@ -1639,16 +1640,17 @@ each model instance, make the construction point explicit with
 <code>let%op mk_f () x = ...</code> and apply <code>mk_f ()</code> once
 per instance. Initializers may use labeled arguments, for example
 <code>kaiming ~scale_sq:2.0 normal1 ()</code>.</li>
-<li><strong>Dimension captures follow the same rule.</strong> Their
-bindings sit where inline declarations do, so in
-<code>let%op f x = x ++ &quot;... | h, w, ..c.. =&gt; ... | ..c..&quot; [&quot;h&quot;; &quot;w&quot;]</code>
-the captured <code>h</code> and <code>w</code> are bound once, when
-<code>f</code> is defined, and every application of <code>f</code>
-unifies with the same two dimensions: a second input of a different
-spatial size fails shape inference. A stateless function that captures
-puts the extension point inside its body instead,
-<code>let f x = let%op r = ... in r</code>, as
-<code>Nn_blocks.global_avg_pool2d</code> does (gh-ocannl-880).</li>
+<li><strong>Dimension captures do not follow that rule: they are bound
+per call</strong> (gh-ocannl-1507). A capture names a dimension of one
+application’s shape, so its binding sits at the top of the innermost
+function body enclosing the operation. In
+<code>let%op mk () x = { proj } * (x ++ &quot;... | h, w, ..c.. =&gt; ... | ..c..&quot; [&quot;h&quot;; &quot;w&quot;])</code>,
+<code>proj</code> is created once per <code>mk ()</code> while
+<code>h</code> and <code>w</code> are fresh for every input, so one
+instance pools inputs of any spatial size. A capture is therefore not in
+scope outside its function, nor in an inline declaration’s initializer
+that is lifted out of it; naming a capture like an inline declaration it
+would shadow is a name-clash error.</li>
 </ul>
 <h2 id="further-features-of-the-syntax-extension-cd">Further features of
 the syntax extension %cd</h2>
