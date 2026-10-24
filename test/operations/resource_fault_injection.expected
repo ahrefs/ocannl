@@ -5,6 +5,11 @@ post-allocation link injection fired: true
 link failure freed the unowned delta exactly once: true
 link control runs and computes the reference: true
 link control releases its committed pool exactly once: true
+two-pool unwind: the caller sees the allocation failure, not the refused free: true
+two-pool unwind: both pools were allocated, and a free was attempted for each: true
+two-pool unwind: the pool after the refused free was still freed: true
+two-pool unwind control allocates one working and one constant pool: true
+two-pool unwind control computes the reference: true
 transfer-allocation injection fired: true
 failed transfer freed its fresh destination pool exactly once: true
 transfer control copies the requested values: true

@@ -2,6 +2,7 @@ open Base
 
 type point =
   | Delta_pool_allocated
+  | Delta_unwind_before_free
   | Link_after_delta
   | Transfer_pool_allocated
   | From_host_before_copy

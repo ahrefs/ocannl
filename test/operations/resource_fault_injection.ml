@@ -115,6 +115,57 @@ let () =
     && pools_freed after_run after_release = 1
     && live_working_delta before after_release = 0);
 
+  (* gh-ocannl-1555: a refused free part way through [allocate_delta]'s unwind strands no other
+     pool. A fresh constant (its own label, so no earlier compile cached it) gives the delta two
+     pools: the working one first, then the constant one. The second pool's allocation raises, and
+     then so does the unwind's first free -- before [free_pool] runs, so that working pool stays
+     live by construction. The unwind must still free the constant pool, and the caller must see the
+     allocation failure, not the refused free. The two-pool shape is checked by the control below,
+     which is uninjected. *)
+  let ux = TDSL.ndarray values ~label:[ "rfi_unwind_x" ] ~output_dims:[ 4 ] () in
+  let%op uy = relu ux in
+  let unwind_comp = Train.forward uy in
+  let before = AC.snapshot () in
+  let alloc_hits = ref 0 and free_hits = ref 0 in
+  let raised =
+    match
+      FI.with_callback
+        (fun point ->
+          match point with
+          | FI.Delta_pool_allocated ->
+              Int.incr alloc_hits;
+              if !alloc_hits = 2 then failwith "gh1555 injected allocation failure"
+          | FI.Delta_unwind_before_free ->
+              Int.incr free_hits;
+              if !free_hits = 1 then failwith "gh1555 injected free failure"
+          | _ -> ())
+        ~f:(fun () -> Context.compile (Context.cpu ()) unwind_comp Ir.Indexing.Empty)
+    with
+    | _ -> None
+    | exception Failure msg -> Some msg
+  in
+  let after = AC.snapshot () in
+  p "two-pool unwind: the caller sees the allocation failure, not the refused free"
+    (Option.equal String.equal raised (Some "gh1555 injected allocation failure"));
+  p "two-pool unwind: both pools were allocated, and a free was attempted for each"
+    (!alloc_hits = 2 && !free_hits = 2);
+  p "two-pool unwind: the pool after the refused free was still freed"
+    (working_allocated before after = 1
+    && after.AC.constant_pools_allocated - before.AC.constant_pools_allocated = 1
+    && pools_freed before after = 1
+    && after.AC.live_constant_pools - before.AC.live_constant_pools = 0
+    && live_working_delta before after = 1);
+  let before = AC.snapshot () in
+  let unwind_ctx, unwind_routine = Context.compile (Context.cpu ()) unwind_comp Ir.Indexing.Empty in
+  let unwind_ctx = Context.run unwind_ctx unwind_routine in
+  let after_run = AC.snapshot () in
+  p "two-pool unwind control allocates one working and one constant pool"
+    (working_allocated before after_run = 1
+    && after_run.AC.constant_pools_allocated - before.AC.constant_pools_allocated = 1);
+  p "two-pool unwind control computes the reference"
+    (approx_array (Context.get_values unwind_ctx uy.Tensor.value) expected);
+  Context.release unwind_ctx;
+
   (* A fresh host-transfer destination is the second shared allocation site. Failure after allocate
      but before copy must not leave the pool-table entry rooted. *)
   let nd =
