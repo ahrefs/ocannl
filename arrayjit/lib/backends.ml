@@ -1696,6 +1696,9 @@ struct
   include Backend_device
 end
 
+let debug_check_upload_arenas =
+  lazy (Utils.get_global_flag ~default:false ~arg_name:"debug_check_upload_arenas")
+
 let finalize (type dev runner event)
     (module Backend : Backend with type dev = dev and type runner = runner and type event = event)
     (ctx : Backend.context) : unit =
@@ -1748,11 +1751,26 @@ let finalize (type dev runner event)
      destroyed with its routine, by the bindings' own finalizers, or at exit. Every hook is
      attempted, and the first failure is re-raised. *)
   let run_release_hooks () = Backend_impl.attempt_each !(ctx.release_hooks) in
+  (* gh-ocannl-1462: the debug self-check of the lineage's arena ownership, after a successful
+     cleanup -- a point of committed ownership -- and outside it: the pools ARE freed, so a failed
+     check must not reset the flag, and the release hooks still run before it raises. *)
+  let arena_violations () =
+    if Lazy.force debug_check_upload_arenas then
+      Stdlib.Mutex.protect ctx.upload_arenas.owners_mutex (fun () ->
+          upload_arena_violations ctx.upload_arenas)
+    else []
+  in
   if Atomic.compare_and_set ctx.finalized false true then
     match cleanup () with
     | () ->
         Alloc_census.count_context_released ();
-        run_release_hooks ()
+        let violations = arena_violations () in
+        run_release_hooks ();
+        if not (List.is_empty violations) then
+          failwith
+            ("Backends.finalize (debug_check_upload_arenas): upload-arena ownership invariant \
+              violated after a release: "
+            ^ String.concat ~sep:"; " violations)
     | exception exn ->
         Atomic.set ctx.finalized false;
         raise exn

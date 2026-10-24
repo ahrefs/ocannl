@@ -144,9 +144,30 @@ let upload_lineage wrapped = Backends.query wrapped { q = (fun _ c -> c.BI.uploa
    refuses it here, by its own release flag, rather than reaching a freed pool or pointer. The flag
    is shared exactly by the values that share pools (a linear upload chain), so a still-live sibling
    (a compile sibling, an upload fork) keeps its own flag and keeps working. One atomic read per
-   call, at entry points only: nothing below them re-checks. What this cannot see is a released
-   ANCESTOR: a descendant has a flag of its own, so releasing an interior node stays the documented,
-   unchecked precondition of {!release}. *)
+   call, at entry points only: nothing below them re-checks.
+
+   gh-ocannl-1462: a released ANCESTOR is refused too. A descendant has a flag of its own, but it
+   inherits its ancestors' buffer locations, so releasing an interior node frees pools the
+   descendant still binds. The backend context already records the lifecycle chain
+   ([BI.context.parent], set by [make_child]) with each node's flag, so the walk below reads it
+   rather than keeping a second registry: one atomic read per lifecycle ancestor. An upload fork
+   keeps its source's PARENT, not the source, so a fork outliving the chain it forked from is not
+   refused. [release] itself does not check: a descendant must still be able to free its own
+   pools. *)
+let released_ancestor_depth wrapped =
+  Backends.query wrapped
+    {
+      q =
+        (fun _ c ->
+          let rec walk depth p =
+            match p with
+            | None -> None
+            | Some p when Atomic.get p.BI.finalized -> Some depth
+            | Some p -> walk (depth + 1) p.BI.parent
+          in
+          walk 1 c.BI.parent);
+    }
+
 let check_live ~fn ctx =
   if Atomic.get (release_flag ctx.wrapped) then
     raise
@@ -155,7 +176,17 @@ let check_live ~fn ctx =
             "Context.%s: context %d (backend %s, device %d) was released by Context.release and is \
              a dead handle: its device buffers are freed. Use a live context -- e.g. a sibling, or \
              recompile from a live ancestor."
-            fn ctx.context_id (backend_name ctx) ctx.ordinal)
+            fn ctx.context_id (backend_name ctx) ctx.ordinal);
+  Option.iter (released_ancestor_depth ctx.wrapped) ~f:(fun depth ->
+      raise
+      @@ Utils.User_error
+           (Printf.sprintf
+              "Context.%s: context %d (backend %s, device %d) descends from a context released by \
+               Context.release (its lifecycle ancestor %d level%s up): the device buffers it \
+               inherits from that ancestor are freed. Release leaves before their ancestors, or \
+               recompile from a live ancestor."
+              fn ctx.context_id (backend_name ctx) ctx.ordinal depth
+              (if depth = 1 then "" else "s")))
 
 (* The one constructor for a derived logical context — the result of any operation that makes a
    child (compiling, transfers that touch the wrapped context, decision recording). [context_id]
@@ -629,25 +660,23 @@ let check_lineage_runnable ctx routine =
      declaration is an embedded node, excluded from [inputs] at compile ([Train.sgd_one]'s momentum
      is the pattern) -- or is seeded explicitly.
 
-     A READ-ONLY input is accepted once it is allocated in the running context's device buffers
-     ([in_backend]): such inputs are either user-set via [set_values]/[from_host] (which write the
-     allocated buffer in place) or zero-initialized at allocation, which is the correct identity for
-     read-only accumulators (e.g. gradients). NOTE (Codex P1): this does not distinguish a forgotten
-     non-zero data input from a zero-valid accumulator — both are read-only buffers allocated with
-     [~zero_init:true] — so a forgotten data input reads zeros rather than failing. Catching that
-     precisely needs per-node "needs-nonzero-init" metadata OCANNL does not currently carry; a
-     stricter check produces false positives on read-only accumulator gradients (zero2hero_1of7,
-     primitive_ops). *)
-  let ctx_buffers = Backends.query ctx.wrapped { q = (fun _ c -> c.BI.ctx_buffers) } in
-  let in_backend tn = Map.mem ctx_buffers tn in
-  let written tn =
-    Option.exists (buffer_key routine.context tn) ~f:(Set.mem ctx.ledger.written_buffers)
+     A READ-ONLY input must have been written the same way, unless allocation-time zero is declared
+     a correct value of it ([Tn.is_zero_valid], gh-ocannl-1462): every gradient is marked at
+     creation, being an accumulator, and [Tn.mark_zero_valid] marks any other. Before, a read-only
+     input was accepted once merely allocated, and since [compile] allocates every input the check
+     accepted nearly anything, so a forgotten data input read zeros. Neither the running context's
+     allocation nor its node-level [initialized_nodes] vouches for the buffer either: a compile
+     sibling that seeded its own buffer for the node says nothing about this one. The mark excuses
+     only the read-only class: a read-before-write input is state the routine overwrites, and its
+     entry value is the caller's to give. *)
+  let accepted tn =
+    match buffer_key routine.context tn with
+    | None -> false
+    | Some key ->
+        Set.mem ctx.ledger.written_buffers key
+        || ((not (Set.mem routine.outputs tn)) && Tn.is_zero_valid tn)
   in
-  let missing_inputs =
-    Set.filter routine.inputs ~f:(fun tn ->
-        if Set.mem routine.outputs tn then not (written tn)
-        else not (Set.mem ctx.initialized_nodes tn || in_backend tn))
-  in
+  let missing_inputs = Set.filter routine.inputs ~f:(fun tn -> not (accepted tn)) in
   (if not (Set.is_empty missing_inputs) then
      let missing_names =
        Set.to_list missing_inputs
@@ -659,7 +688,9 @@ let check_lineage_runnable ctx routine =
      @@ Utils.User_error
           (Printf.sprintf
              "Context.run: routine %s: required input nodes not initialized: %s. Seed them (e.g. \
-              Context.set_values, or a routine writing them run first) before running."
+              Context.set_values, or a routine writing them run first) before running; a read-only \
+              input whose allocation-time zeros are its correct value can instead be declared so \
+              with Ir.Tnode.mark_zero_valid."
              routine.name missing_names));
 
   (* Check execution dependencies *)
@@ -1117,9 +1148,20 @@ let copy ?(into_merge_buffer = BI.No) ~src ~dst tn =
           record_external_writes
             (derive dst (rewrap (Backend.init_from_device tn ~dst:dctx ~src:sctx)))
             (Set.singleton (module Tn) tn)
-        else
-          (* The source and destination buffers are physically the same: nothing to transfer. *)
-          mark_initialized dst (Set.singleton (module Tn) tn)
+        else (
+          (* The source and destination buffers are physically the same: nothing to transfer. Two
+             independently rooted contexts can share it (a cached constant buffer) while keeping
+             separate ledgers, so the destination's ledger learns the buffer holds a value -- the
+             one [check_lineage_runnable] asks of a read-only input (gh-ocannl-1462) -- when the
+             source's ledger, or the source context, says it was written. Nothing was written now,
+             so the access history stays as it is. *)
+          if
+            Set.mem src.initialized_nodes tn
+            || Option.exists (buffer_key src tn) ~f:(Set.mem src.ledger.written_buffers)
+          then
+            Option.iter (buffer_key dst tn) ~f:(fun key ->
+                dst.ledger.written_buffers <- Set.add dst.ledger.written_buffers key);
+          mark_initialized dst (Set.singleton (module Tn) tn))
   in
   match Backends.pair_contexts src.wrapped dst.wrapped with
   | Backends.Same_backend (impl, s, d) -> same impl s d

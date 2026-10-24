@@ -53,6 +53,27 @@ CAMLprim value ocannl_os_process_id(value unit) {
 #endif
 }
 
+/* The OS id of a process holding a lock on [v_fd]'s file that would block an exclusive one
+   (gh-ocannl-1462): 0 when none does, -1 when this cannot tell. [fcntl(F_GETLK)] reports one
+   conflicting lock, so with several shared holders it names one of them. OCaml's [Unix.lockf] is
+   built on the same fcntl record locks on POSIX. Windows has no such query. */
+CAMLprim value ocannl_lock_holder_pid(value v_fd) {
+#if defined(_WIN32)
+  (void)v_fd;
+  return Val_long(-1);
+#else
+  struct flock fl;
+  memset(&fl, 0, sizeof fl);
+  fl.l_type = F_WRLCK;
+  fl.l_whence = SEEK_SET;
+  fl.l_start = 0;
+  fl.l_len = 0;
+  if (fcntl(Int_val(v_fd), F_GETLK, &fl) == -1) return Val_long(-1);
+  if (fl.l_type == F_UNLCK) return Val_long(0);
+  return Val_long((long)fl.l_pid);
+#endif
+}
+
 /* Whether a process with the OS id [pid] is running now. A process that exists but that this one
    may not signal or open still counts as running: the answer protects its files from deletion. */
 CAMLprim value ocannl_process_alive(value v_pid) {

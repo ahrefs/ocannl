@@ -207,6 +207,13 @@ type t = {
           [Site "49:ndarray-backed"]), so the memory-mode lattice has no room left for the constant
           marking. Consumed by [Schedule.Stage]'s hoisted packing (gh-ocannl-470) to justify
           materializing a repacked copy once per device. *)
+  mutable zero_valid : (bool[@sexp_drop_if not]);
+      (** Declared accumulator semantics: allocation-time zero is a correct value for this node, so
+          [Context.run] may bind it as a READ-ONLY input that nothing has written (gh-ocannl-1462).
+          Set at creation of every gradient node (by [Tensor]) and by {!mark_zero_valid}, never
+          cleared. It is permission to consume the zeros a fresh buffer holds, not evidence that a
+          buffer was written: it does not excuse an unwritten read-before-write input, nor any other
+          node aliasing or slicing this one. *)
   mutable alias_of : ((t * Indexing.static_symbol) option[@sexp.opaque]);
       (** When [Some (parent, batch_idx)], this node is a zero-copy slice-alias *view* of [parent]:
           it owns no buffer of its own, and every read/write of it is redirected (during lowering)
@@ -406,6 +413,13 @@ let set_context_owned tn = tn.context_owned <- true
 (** Declares that [tn]'s values are fixed at construction (host-init-backed literal). Monotone: set,
     never cleared. *)
 let set_host_constant tn = tn.host_constant <- true
+
+(** Declares that allocation-time zero is a correct value of [tn] (see {!field-zero_valid}): a
+    routine may then read it, read-only, before anything writes it. Gradients are marked at
+    creation; mark any other read-only accumulator the same way. *)
+let mark_zero_valid tn = tn.zero_valid <- true
+
+let is_zero_valid tn = tn.zero_valid
 
 let known_non_virtual tn =
   match tn.memory_mode_intent with
@@ -1023,6 +1037,7 @@ let create ?namespace delayed_prec ~id ~label ~unpadded_dims ~padding () =
       observable = false;
       context_owned = false;
       host_constant = false;
+      zero_valid = false;
       alias_of = None;
       slice_of = None;
       backend_info = Sexp.List [];
@@ -1068,6 +1083,7 @@ let create_from_padded ?namespace ~id ~label ~ndarray ~padding () =
       observable = false;
       context_owned = false;
       host_constant = false;
+      zero_valid = false;
       alias_of = None;
       slice_of = None;
       backend_info = Sexp.List [];
@@ -1152,6 +1168,7 @@ let create_with_reshape ~id ~label ~base_ndarray ~unpadded_dims ~padding ~from_p
       observable = false;
       context_owned = false;
       host_constant = false;
+      zero_valid = false;
       alias_of = None;
       slice_of = None;
       backend_info = Sexp.List [];
@@ -1181,6 +1198,7 @@ let find_namespaced =
       observable = false;
       context_owned = false;
       host_constant = false;
+      zero_valid = false;
       alias_of = None;
       slice_of = None;
       backend_info = Sexp.List [];

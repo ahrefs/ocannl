@@ -1558,10 +1558,33 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
+ ; gh-ocannl-1462: every release in these scenarios also runs finalize's arena ownership check.
+ (action
+  (run %{test} --ocannl_debug_check_upload_arenas=true))
  (modules set_values_pool_coalescing)
  (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1462: Utils.Artifacts_lock across fork and chdir, and the forced startup cleanup.
+
+(test
+ ; ocannl-backend: none -- exercises artifact-directory locks and starts no backend.
+ (name artifacts_lock_lifecycle)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules artifacts_lock_lifecycle)
+ (libraries base stdio unix arrayjit.utils arrayjit.verdict))
+
+; gh-ocannl-1462: the upload-arena ownership checker on hand-built lineage state.
+
+(test
+ ; ocannl-backend: none -- builds Backend_intf records by hand and opens no backend.
+ (name upload_arena_self_check)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules upload_arena_self_check)
+ (libraries base arrayjit.ir arrayjit.verdict ll_test))
 
 (test
  ; ocannl-backend: cc -- `Context.cpu ()`, which names cc (multidev_cc only above one thread).

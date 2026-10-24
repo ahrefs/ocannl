@@ -162,6 +162,7 @@ execution-neutral -- debug artifacts and where they go: the files are written be
   build_files_prefix
   clean_up_build_files_on_startup
   clean_up_log_files_on_startup
+  force_clean_up_artifacts_on_startup
   log_buffer_aliasing
   log_memory_budget
   output_dlls_in_build_directory [read at codegen]
@@ -197,6 +198,7 @@ execution-neutral -- a check that can refuse or report, but never changes what i
   cc_backend_post_compile_timeout [read at codegen]
   cc_backend_verify_codesign [read at codegen]
   check_half_prec_constants_cutoff
+  debug_check_upload_arenas
   device_init_deadline
   hip_scratch_validation [read at codegen]
   legality_crosscheck

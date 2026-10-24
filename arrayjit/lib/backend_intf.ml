@@ -67,6 +67,31 @@ type upload_arenas = {
 let fresh_upload_arenas () =
   { arenas = []; owners_mutex = Stdlib.Mutex.create (); pool_owners = Hashtbl.create (module Int) }
 
+(** gh-ocannl-1462: the ownership invariant of a lineage's upload arenas, as violations (empty when
+    it holds). Every tenant a retained arena still lists must be held, at its own location
+    ({!holds_tenant}), by a registered owner of the arena's pool; a retained arena with no tenant,
+    or with no owner list, is a violation too. Why every tenant and not only the newest: only
+    [upload_slot] appends, and only from a value holding the arena's last tenant; [ctx_buffers] maps
+    only grow, so a holder of a tenant holds every tenant below it; and retirement trims from the
+    newest end down to a tenant a surviving owner holds. The caller holds [owners_mutex] and asks at
+    a point of committed ownership (after a release), never with an upload in flight: an arena
+    appended by a transfer that has not registered its owner yet is not a violation. *)
+let upload_arena_violations (u : upload_arenas) : string list =
+  List.concat_map u.arenas ~f:(fun a ->
+      match (a.tenants, Hashtbl.find u.pool_owners a.arena_pool_id) with
+      | [], _ -> [ Printf.sprintf "arena pool %d retains no tenant" a.arena_pool_id ]
+      | _, None -> [ Printf.sprintf "arena pool %d has no registered owner" a.arena_pool_id ]
+      | tenants, Some owners ->
+          List.filter_map tenants ~f:(fun t ->
+              if List.exists owners ~f:(fun owner -> holds_tenant !owner a t) then None
+              else
+                Some
+                  (Printf.sprintf
+                     "tenant %s at pool %d offset %d is held there by none of the pool's %d \
+                      owner(s)"
+                     (Tnode.debug_name t.tenant) a.arena_pool_id t.tenant_offset
+                     (List.length owners))))
+
 exception Backend_unavailable of { backend : string; detail : string }
 (** Device discovery established that this backend cannot be used on this machine: its library is
     not linked in, or the driver reports no devices. This is deliberately narrow — it is the only

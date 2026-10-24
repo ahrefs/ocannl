@@ -1,11 +1,12 @@
-(* Two refusals at the Context API's entry points.
+(* Refusals at the Context API's entry points.
 
    gh-ocannl-1329: a context [Context.release] freed is a dead handle. Compile, run (on the released
    value, or on a live value outside its upload lineage with a routine compiled into it), sync, the
    transfers and the decision recorders all refuse it with a typed [Utils.User_error] naming the
    release, rather than reaching a freed pool. The release flag is shared exactly by the values that
    share pools: an earlier value of the same linear upload chain is refused too, while a compile
-   sibling, the parent and an upload fork keep working.
+   sibling, the parent and an upload fork keep working. gh-ocannl-1462: so is a context one of whose
+   lifecycle ancestors was released, while a child of a surviving upload fork keeps working.
 
    gh-ocannl-1339: [Context.run] refuses a READ-BEFORE-WRITE input that nothing ever wrote. The
    issue's case is a counter a routine reads and then overwrites, run with the counter never seeded:
@@ -121,6 +122,70 @@ let () =
     && Poly.equal (Context.get_values fork y) shifted);
   Context.release fork
 
+(* gh-ocannl-1462: a released ANCESTOR. [c2] is compiled from [c1] and binds [c1]'s buffer of [out1]
+   (its source), and [c3] is compiled from [c2]; releasing the interior [c1] frees that buffer under
+   both descendants. Every buffer-touching entry point refuses them, naming how far up the released
+   ancestor is, before reaching the freed pool -- and a live context of another lineage running
+   [c2]'s routine is refused too, by the routine's compile context. The descendants can still
+   release their own pools. *)
+let ancestor = "descends from a context released by Context.release"
+
+let () =
+  Verdict.case "chr_released_ancestor" @@ fun () ->
+  let base = Context.auto () in
+  let x1 = node "chr_ax1" and out1 = node "chr_aout1" in
+  let out2 = node "chr_aout2" and out3 = node "chr_aout3" in
+  let c1, r1 = link_shift ~ctx:base ~name:"chr_anc1" ~src:x1 ~dst:out1 () in
+  let c1 = Context.run (Context.set_values c1 x1 seed) r1 in
+  let c2, r2 = link_shift ~ctx:c1 ~name:"chr_anc2" ~src:out1 ~dst:out2 () in
+  let c3, _r3 = link_shift ~ctx:c2 ~name:"chr_anc3" ~src:out2 ~dst:out3 () in
+  let c2 = Context.run c2 r2 in
+  pf "chr_released_ancestor: the descendant ran from its ancestor's buffer before the release"
+    (Poly.equal (Context.get_values c2 out2) [| 12.; 24.; 36.; 48. |]);
+  Context.release c1;
+  let refused_here what f =
+    pf "chr_released_ancestor: %s is refused" what (refused ~needle:ancestor f)
+  in
+  refused_here "compile from the child" (fun () ->
+      link_shift ~ctx:c2 ~name:"chr_anc4" ~src:out2 ~dst:out3 ());
+  refused_here "run on the child" (fun () -> Context.run c2 r2);
+  refused_here "run on a live context of another lineage with the child's routine" (fun () ->
+      Context.run base r2);
+  refused_here "sync" (fun () -> Context.sync c2);
+  refused_here "get_values" (fun () -> Context.get_values c2 out1);
+  refused_here "set_values" (fun () -> Context.set_values c2 out1 seed);
+  refused_here "decide_materialized" (fun () -> Context.decide_materialized c2 [ out2 ]);
+  pf "chr_released_ancestor: the refusal names the entry point and the distance"
+    (refused ~needle:"Context.sync: context" (fun () -> Context.sync c2)
+    && refused ~needle:"ancestor 1 level up" (fun () -> Context.sync c2)
+    && refused ~needle:"ancestor 2 levels up" (fun () -> Context.sync c3));
+  p "chr_released_ancestor: the descendants still release their own pools"
+    (match
+       Context.release c3;
+       Context.release c2
+     with
+    | () -> true
+    | exception _ -> false)
+
+(* An upload fork's lifecycle ancestors are those of the value it forked, not that value: a child
+   compiled from a fork survives the release of the chain the fork came from. *)
+let () =
+  Verdict.case "chr_fork_child" @@ fun () ->
+  let base = Context.auto () in
+  let x = node "chr_fcx" and out = node "chr_fcout" and y = node "chr_fcy" in
+  let out2 = node "chr_fcout2" in
+  Ll_test.materialize y;
+  let c, _r = link_shift ~ctx:base ~name:"chr_fc" ~src:x ~dst:out () in
+  let chain = Context.set_values c y seed in
+  let fork = Context.set_values c y shifted in
+  let child, r_child = link_shift ~ctx:fork ~name:"chr_fc_child" ~src:y ~dst:out2 () in
+  Context.release chain;
+  let child = Context.run child r_child in
+  pf "chr_fork_child: a child of the surviving fork still runs and reads back"
+    (Poly.equal (Context.get_values child out2) [| 12.; 24.; 36.; 48. |]);
+  Context.release child;
+  Context.release fork
+
 (* [ctr[i] := ctr[i] + 1 + i]: the counter is read before it is written. *)
 let bump ctr = shift ~src:ctr ~dst:ctr
 
@@ -212,6 +277,11 @@ let () =
     (refused ~needle:"chr_ctr_rb (read before written)" (fun () -> Context.run c_bump r_bump));
   Context.release c_bump
 
+(* gh-ocannl-1462: a READ-ONLY input must be written too, unless allocation-time zero is declared
+   its correct value. Before, it was accepted once allocated -- and [compile] allocates every input
+   -- so a forgotten data input read zeros. *)
+let ro_refused name f = refused ~needle:("not initialized: " ^ name) f
+
 let () =
   Verdict.case "chr_read_only" @@ fun () ->
   let base = Context.auto () in
@@ -219,8 +289,97 @@ let () =
   let c, r = link_shift ~ctx:base ~name:"chr_ro" ~src:x ~dst:out () in
   pf "chr_read_only: the source is a read-only input"
     (Set.mem r.Context.inputs x && not (Set.mem r.Context.outputs x));
-  (* Deliberate: a read-only input is accepted on its allocation-time zeros. *)
-  let c = Context.run c r in
-  pf "chr_read_only: an allocated, never-written read-only input runs from zero"
-    (Poly.equal (Context.get_values c out) [| 1.; 2.; 3.; 4. |]);
+  pf "chr_read_only: an allocated, never-written, unmarked read-only input is refused"
+    (ro_refused "chr_ro_x." (fun () -> Context.run c r));
+  let c = Context.run (Context.set_values c x seed) r in
+  pf "chr_read_only: seeded, it runs from the seed" (Poly.equal (Context.get_values c out) shifted);
   Context.release c
+
+let () =
+  Verdict.case "chr_zero_valid" @@ fun () ->
+  let base = Context.auto () in
+  let x = node "chr_zv_x" and out = node "chr_zv_out" in
+  Ir.Tnode.mark_zero_valid x;
+  let c, r = link_shift ~ctx:base ~name:"chr_zv" ~src:x ~dst:out () in
+  let c = Context.run c r in
+  pf "chr_zero_valid: a read-only input marked zero-valid runs from its allocation-time zeros"
+    (Poly.equal (Context.get_values c out) [| 1.; 2.; 3.; 4. |]);
+  Context.release c;
+  (* The mark does not excuse state the routine overwrites. *)
+  let ctr = node "chr_zv_ctr" in
+  Ll_test.materialize ctr;
+  Ir.Tnode.mark_zero_valid ctr;
+  let o = Ll_test.optimize ~materialized:[ ctr ] ~name:"chr_zv_bump" (bump ctr) in
+  let c, r = Ll_test.link ~ctx:base ~name:"chr_zv_bump" o in
+  pf "chr_zero_valid: a zero-valid read-before-write input is still refused until seeded"
+    (refused ~needle:"chr_zv_ctr (read before written)" (fun () -> Context.run c r));
+  Context.release c
+
+(* What vouches for a read-only input is the buffer the routine binds, as for read-before-write
+   state: a compile sibling's seeded buffer for the same node does not, and neither does a producer
+   whose run was rolled back. *)
+let () =
+  Verdict.case "chr_read_only_buffer" @@ fun () ->
+  let base = Context.auto () in
+  let x = node "chr_rob_x" and out = node "chr_rob_out" in
+  (* Context-owned, so each sibling binds working storage of its own: a node every routine only
+     reads may otherwise live in one device-wide constant pool, which the siblings share. *)
+  Ir.Tnode.set_context_owned x;
+  let c_a, _r_a = link_shift ~ctx:base ~name:"chr_rob_a" ~src:x ~dst:out () in
+  let c_b, r_b = link_shift ~ctx:base ~name:"chr_rob_b" ~src:x ~dst:out () in
+  let c_a = Context.set_values c_a x seed in
+  pf "chr_read_only_buffer: a sibling seeding its own buffer does not let the other's routine run"
+    (ro_refused "chr_rob_x." (fun () -> Context.run c_a r_b));
+  Context.release c_a;
+  Context.release c_b;
+  let src = node "chr_rob_src" in
+  Ll_test.materialize src;
+  let lctx = LL.empty_optimize_ctx () in
+  let o_fill = Ll_test.optimize_in lctx ~materialized:[ src ] ~name:"chr_rob_fill" (fill src) in
+  let c_fill, r_fill = Ll_test.link ~ctx:base ~name:"chr_rob_fill" o_fill in
+  let c_use, r_use =
+    link_shift ~lctx ~ctx:c_fill ~name:"chr_rob_use" ~src ~dst:(node "chr_rob_use_out") ()
+  in
+  pf "chr_read_only_buffer: the consumer reads the producer's output read-only"
+    (Set.mem r_use.Context.inputs src && not (Set.mem r_use.Context.outputs src));
+  ignore (Context.run c_fill r_fill : Context.t);
+  Context.sync c_fill;
+  Context.rollback_execution c_fill r_fill.Context.routine_id;
+  pf "chr_read_only_buffer: after the producer's run is rolled back, the input is unwritten again"
+    (ro_refused "chr_rob_src." (fun () -> Context.run c_use r_use));
+  Context.release c_use
+
+(* Two independently rooted contexts -- separate ledgers -- can share one buffer for a node every
+   routine only reads (a device-wide constant pool). Copying it between them moves nothing, and must
+   still tell the destination's ledger that the buffer holds the source's value. *)
+let () =
+  Verdict.case "chr_shared_copy" @@ fun () ->
+  let x = node "chr_sc_x" in
+  let c_a, _r_a =
+    link_shift ~ctx:(Context.auto ()) ~name:"chr_sc_a" ~src:x ~dst:(node "chr_sc_out_a") ()
+  in
+  let out_b = node "chr_sc_out_b" in
+  let c_b, r_b = link_shift ~ctx:(Context.auto ()) ~name:"chr_sc_b" ~src:x ~dst:out_b () in
+  pf "chr_shared_copy: unseeded, the other root's consumer is refused"
+    (ro_refused "chr_sc_x." (fun () -> Context.run c_b r_b));
+  let c_a = Context.set_values c_a x seed in
+  let c_b = Context.copy ~src:c_a ~dst:c_b x in
+  let c_b = Context.run c_b r_b in
+  pf "chr_shared_copy: after the copy, the other root's consumer runs from the copied value"
+    (Poly.equal (Context.get_values c_b out_b) shifted);
+  Context.release c_a;
+  Context.release c_b
+
+(* Both gradient creation sites mark the gradient zero-valid: a tensor's own ([Tensor.op]) and a
+   parameter's ([Tensor.param], which replaces it). *)
+let () =
+  Verdict.case "chr_grad_zero_valid" @@ fun () ->
+  let open Ocannl.Operation.DSL_modules in
+  let grad_marked (t : Tensor.t) =
+    Option.exists t.Tensor.diff ~f:(fun d -> Ir.Tnode.is_zero_valid d.Tensor.grad)
+  in
+  let t = Tensor.term_init [| 1.; 2. |] ~grad_spec:Tensor.Require_grad () in
+  let w = TDSL.param "chr_w" () in
+  pf "chr_grad_zero_valid: a tensor's gradient is zero-valid" (grad_marked t);
+  pf "chr_grad_zero_valid: a parameter's gradient is zero-valid" (grad_marked w);
+  pf "chr_grad_zero_valid: the value nodes are not" (not (Ir.Tnode.is_zero_valid w.Tensor.value))

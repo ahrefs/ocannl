@@ -4954,6 +4954,7 @@ box.
   bullet, `- <source>.ml: <key>, <key>.` with every name in a code span; any other bullet in this
   section is prose.
 - `affine.ml`: `legality_crosscheck`.
+- `backends.ml`: `debug_check_upload_arenas`.
 - `autotune.ml`: `autotune_bound_pruning`, `autotune_calibration_file`, `autotune_log`,
   `autotune_log_seeding`, `autotune_progress`, `model_cache_bandwidth`, `model_cache_capacity`,
   `model_default_geometry_lattice`, `model_default_schedule`, `model_dram_bandwidth`,

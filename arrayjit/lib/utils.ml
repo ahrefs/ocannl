@@ -75,6 +75,7 @@ let known_config_keys =
       (* Cleanup / startup *)
       "build_files_prefix";
       "clean_up_build_files_on_startup";
+      "force_clean_up_artifacts_on_startup";
       "clean_up_log_files_on_startup";
       "never_capture_stdout";
       "detach_c_stderr";
@@ -158,6 +159,7 @@ let known_config_keys =
       "schedule_log_launches";
       "schedule_log_declines";
       "legality_crosscheck";
+      "debug_check_upload_arenas";
       "cc_parallel_grid";
       "cc_parallel_chunks";
       "cc_pool_core_class";
@@ -511,6 +513,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "output_dlls_in_build_directory";
         "build_files_prefix";
         "clean_up_build_files_on_startup";
+        "force_clean_up_artifacts_on_startup";
         "clean_up_log_files_on_startup";
         "output_prec_in_ll_files";
         "autotune_cache_dir";
@@ -553,6 +556,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "check_half_prec_constants_cutoff";
         "legality_crosscheck";
         "autotune_strict_replay";
+        "debug_check_upload_arenas";
         "hip_scratch_validation";
         "cc_backend_verify_codesign";
         "cc_backend_post_compile_timeout";
@@ -2010,6 +2014,11 @@ let build_file fname =
 (** The file extension of a dynamically loaded library on this platform. *)
 let dynamic_library_extension = if Sys.win32 then ".dll" else ".so"
 
+external lock_holder_pid : Unix.file_descr -> int = "ocannl_lock_holder_pid"
+(** The OS id of a process holding a lock on the descriptor's file that would block an exclusive
+    one, by [fcntl(F_GETLK)]: [0] when none does, [-1] when it cannot tell (Windows, or an error).
+    With several shared holders it names one of them. *)
+
 external process_alive : int -> bool = "ocannl_process_alive"
 (** Whether a process with the given OS id is running now; one that exists but cannot be queried
     counts as running. *)
@@ -2245,6 +2254,14 @@ let () =
      stale ones go at the next startup that finds no sibling. A lock that cannot be taken at all --
      no lock file can be created, or the file system has no locks -- leaves the cleanup as it was
      before: owner-named artifacts of running owners stay, everything else goes. *)
+  (* gh-ocannl-1462: [force_clean_up_artifacts_on_startup] empties a held directory anyway -- for a
+     long-running process that would otherwise hold every later cleanup back -- and names a holder
+     on stderr. It overrides the lock's gate only: the lock file stays (removing it would let later
+     processes lock different files), and so do the owner-named artifacts of running owners, as in
+     an unlocked cleanup. *)
+  let force_clean_up =
+    get_global_flag ~default:false ~arg_name:"force_clean_up_artifacts_on_startup"
+  in
   let remove_root ~base root =
     (* Tried whenever [base] is a directory, [root] or not: a root absent now may be created, and
        written into under its lock, by a sibling before the removal below reads it. *)
@@ -2258,14 +2275,15 @@ let () =
           | exception Unix.Unix_error ((Unix.EACCES | Unix.EPERM), _, _) ->
               (* A lock file another account created, which this one cannot open for writing:
                  whoever shares the directory may hold it, so take it as held. *)
-              `Held
+              `Held (-1)
           | exception Unix.Unix_error _ -> `Unlockable
           | fd -> (
               match Unix.lockf fd Unix.F_TLOCK 0 with
               | () -> `Exclusive fd
               | exception Unix.Unix_error ((Unix.EAGAIN | Unix.EACCES | Unix.EWOULDBLOCK), _, _) ->
+                  let holder = if force_clean_up then lock_holder_pid fd else -1 in
                   Unix.close fd;
-                  `Held
+                  `Held holder
               | exception Unix.Unix_error _ ->
                   Unix.close fd;
                   `Unlockable))
@@ -2274,12 +2292,22 @@ let () =
     Exn.protect
       ~f:(fun () ->
         match lock with
-        | `Held | `Absent -> ()
+        | `Held holder when force_clean_up ->
+            Stdio.eprintf
+              "OCANNL: force_clean_up_artifacts_on_startup: emptying %s although a running process \
+               holds its lock %s (%s); that process's artifacts there are removed.\n\
+               %!"
+              root (Artifacts_lock.path base)
+              (if holder > 0 then
+                 Printf.sprintf "held by pid %d, one of possibly several holders" holder
+               else "holder pid unknown");
+            ignore (remove_dir_if_exists ~keep_root:true root : bool)
+        | `Held _ | `Absent -> ()
         | `Exclusive _ | `Unlockable -> ignore (remove_dir_if_exists ~keep_root:true root : bool))
       ~finally:(fun () ->
         match lock with
         | `Exclusive fd -> ( try Unix.close fd with Unix.Unix_error _ -> ())
-        | `Held | `Absent | `Unlockable -> ())
+        | `Held _ | `Absent | `Unlockable -> ())
   in
   (* Cleanup is scoped to this process's own subdirectory (see [artifacts_subdir]), so a starting
      test cannot delete the in-flight artifacts of a concurrently running one. If the artifact root

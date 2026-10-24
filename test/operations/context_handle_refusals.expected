@@ -18,6 +18,17 @@ chr_released: the compile sibling still runs and reads back: true
 chr_released: the live parent still compiles and runs: true
 chr_fork: the compile context, sharing the released chain's flag, is refused: true
 chr_fork: the live fork still runs the routine and reads back: true
+chr_released_ancestor: the descendant ran from its ancestor's buffer before the release: true
+chr_released_ancestor: compile from the child is refused: true
+chr_released_ancestor: run on the child is refused: true
+chr_released_ancestor: run on a live context of another lineage with the child's routine is refused: true
+chr_released_ancestor: sync is refused: true
+chr_released_ancestor: get_values is refused: true
+chr_released_ancestor: set_values is refused: true
+chr_released_ancestor: decide_materialized is refused: true
+chr_released_ancestor: the refusal names the entry point and the distance: true
+chr_released_ancestor: the descendants still release their own pools: true
+chr_fork_child: a child of the surviving fork still runs and reads back: true
 chr_unseeded: the counter is read before written: true
 chr_unseeded: the counter is both an input and an output of the routine: true
 chr_unseeded: the counter has a buffer, which is not a value: true
@@ -30,4 +41,15 @@ chr_sibling_seed: the seeded sibling's context names the counter initialized: tr
 chr_sibling_seed: the other sibling's routine is refused even run in that context: true
 chr_rollback: after the writer's run is rolled back, the counter is unwritten again: true
 chr_read_only: the source is a read-only input: true
-chr_read_only: an allocated, never-written read-only input runs from zero: true
+chr_read_only: an allocated, never-written, unmarked read-only input is refused: true
+chr_read_only: seeded, it runs from the seed: true
+chr_zero_valid: a read-only input marked zero-valid runs from its allocation-time zeros: true
+chr_zero_valid: a zero-valid read-before-write input is still refused until seeded: true
+chr_read_only_buffer: a sibling seeding its own buffer does not let the other's routine run: true
+chr_read_only_buffer: the consumer reads the producer's output read-only: true
+chr_read_only_buffer: after the producer's run is rolled back, the input is unwritten again: true
+chr_shared_copy: unseeded, the other root's consumer is refused: true
+chr_shared_copy: after the copy, the other root's consumer runs from the copied value: true
+chr_grad_zero_valid: a tensor's gradient is zero-valid: true
+chr_grad_zero_valid: a parameter's gradient is zero-valid: true
+chr_grad_zero_valid: the value nodes are not: true

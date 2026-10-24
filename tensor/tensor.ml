@@ -769,6 +769,9 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
         ~padding:(lazy (Shape.to_padding shape))
         ()
     in
+    (* A gradient is an accumulator: zero is its correct entry value, so a separately compiled
+       routine may read it before any backprop wrote it (gh-ocannl-1462). *)
+    Tn.mark_zero_valid g;
     note_open_node g;
     (* Apply delayed top-down precision updates to parameter gradient subtensors *)
     List.iter top_down_ts ~f:(fun ti ->
@@ -1058,6 +1061,7 @@ let force_param_diff t =
       ~padding:(lazy (Shape.to_padding t.shape))
       ()
   in
+  Tn.mark_zero_valid g;
   note_open_node g;
   let diff =
     {
