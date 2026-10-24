@@ -3096,9 +3096,9 @@
  (action
   (diff device_init_deadline.expected device_init_deadline.actual)))
 
-;; gh-ocannl-1036: device streams torn down at process exit, observed from a parent process --
-;; the ROCm runtime reports a leaked stream on the exiting child's stderr, which nothing inside the
-;; child can read. The child's modes are listed in its header; the marker module is what both link.
+; gh-ocannl-1036: device streams torn down at process exit, observed from a parent process --
+; the ROCm runtime reports a leaked stream on the exiting child's stderr, which nothing inside the
+; child can read. The child's modes are listed in its header; the marker module is what both link.
 
 (executables
  (names exit_stream_teardown exit_stream_teardown_child)
@@ -5920,6 +5920,71 @@
  (modules simplify_rng_operands)
  (libraries base ocannl stdio arrayjit.verdict ll_test))
 
+; gh-ocannl-1553: every statement family that declares a fixed-name C temporary, two of each as
+; siblings in one scope, compiled and executed. Two runs of one executable: the vectorized loops and
+; the register tile render only without routine logging, the logging arms only with it.
+
+(executable
+ (name fixed_name_temporaries)
+ (modules fixed_name_temporaries)
+ (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
+
+(rule
+ (target fixed_name_temporaries-plain.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:fixed_name_temporaries.exe}))))
+
+(rule
+ (alias runtest-fixed_name_temporaries-plain)
+ (package neural_nets_lib)
+ (action
+  (diff
+   fixed_name_temporaries-plain.expected
+   fixed_name_temporaries-plain.actual)))
+
+(rule
+ ; The logged run keeps its routine logs in stream files, off stdout, and takes a build-files prefix
+ ; of its own: it reads no generated code, and the plain run's artifact directory is not its to
+ ; clean.
+ (target fixed_name_temporaries-logged.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:fixed_name_temporaries.exe}
+    "--ocannl_debug_log_from_routines=true"
+    "--ocannl_log_level=2"
+    "--ocannl_debug_log_to_stream_files=true"
+    "--ocannl_log_main_domain_to_stdout=false"
+    "--ocannl_log_file_stem=fixed_name_temporaries_logged"
+    "--ocannl_build_files_prefix=fixed_name_temporaries_logged"))))
+
+(rule
+ (alias runtest-fixed_name_temporaries-logged)
+ (package neural_nets_lib)
+ (action
+  (diff
+   fixed_name_temporaries-logged.expected
+   fixed_name_temporaries-logged.actual)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias runtest-fixed_name_temporaries-plain)
+  (alias runtest-fixed_name_temporaries-logged)))
+
 (test
  ; ocannl-backend: none -- inspects precision witnesses and renderer enumeration, executes no backend.
  (name precision_families)
@@ -6319,10 +6384,10 @@
 ; f32 and at bf16 storage widened into f32 panels -- plus the before-pin: without its pads the
 ; composition is refused at a Swap.
 
-;; gh-ocannl-627: bin/narrow_gebp_bench itself, run as the shipped executable at extents its
-;; blocking does not divide: the packed rows must run, agree, and report the register tiling, and
-;; the header must state the padding. Every packed-row claim fails on the base, where the gate
-;; skipped both packed variants. Timings go to stderr; the golden holds only the claims.
+; gh-ocannl-627: bin/narrow_gebp_bench itself, run as the shipped executable at extents its
+; blocking does not divide: the packed rows must run, agree, and report the register tiling, and
+; the header must state the padding. Every packed-row claim fails on the base, where the gate
+; skipped both packed variants. Timings go to stderr; the golden holds only the claims.
 
 (executable
  (name narrow_gebp_bench_padded)
@@ -7878,10 +7943,10 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-;; gh-ocannl-1183: backward contractions (weight and data gradients, whose contraction loops
-;; backprop lowers outermost or interleaved) become matmul sites through an enabling Swap prefix;
-;; detection, seeding, replay from a fresh lowering, and executed bitwise parity on the backend's
-;; own sketch families. Declares OCANNL_BACKEND: the executed families depend on it.
+; gh-ocannl-1183: backward contractions (weight and data gradients, whose contraction loops
+; backprop lowers outermost or interleaved) become matmul sites through an enabling Swap prefix;
+; detection, seeding, replay from a fresh lowering, and executed bitwise parity on the backend's
+; own sketch families. Declares OCANNL_BACKEND: the executed families depend on it.
 
 (test
  (name matmul_interchange)

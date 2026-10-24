@@ -1,0 +1,14 @@
+two logged Sets are siblings in one block of the compiled routine: true
+logged Sets: the routine compiles with them in one scope: true
+logged Sets: both stores write their values: true
+two logged Set_dynamics are siblings in one block of the compiled routine: true
+a logged Set is a sibling of the logged Set_dynamics: true
+logged Set_dynamics and a Set: the routine compiles with them in one scope: true
+logged Set_dynamics and a Set: all three write their values: true
+two logged Set_locals are siblings in one block of the compiled routine: true
+logged Set_locals: the routine compiles with them in one scope: true
+logged Set_locals: both carry their values: true
+two packed draws are siblings in one block of the compiled routine: true
+packed draws: the routine compiles with them in one scope: true
+packed draws: every draw lies in [0, 1): true
+packed draws: both draw bitwise-equal values: true

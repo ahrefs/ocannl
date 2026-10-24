@@ -184,6 +184,17 @@ files.
   the routine record, the `.cd`/`.ll` sources, calibration rows — deliberately keeps the caller's
   spelling; only the C-family artifacts carry the mangled one. Guard:
   `test/operations/reserved_routine_names.ml` (executes each colliding routine, not just parses it).
+- A third identifier class is the renderers' own fixed-name temporaries (`vec_result`,
+  `new_set_v`, `new_set_local_v`, the register tile's `tmma_*`, the GPU arms' `__mma_*`, the
+  vectorized loops' counter-named `vset1__`...). Two statements that declare one, rendered side by
+  side in one C scope, redeclare it, and the kernel fails to compile. The rule: the statement that
+  declares a fixed name braces itself on EVERY path, or the name is declared once per kernel (a
+  parameter, the pool or log prologue). Bracing "only when there are local definitions" is the trap:
+  `Set_from_vec` did that until a simplification left two packed draws with none (gh-ocannl-1498).
+  The gh-ocannl-1553 audit found no other open site. The register tile sits inside a second scope,
+  the `lane0_guarded` `if (lane == 0) { }`, so removing its literal brace alone shows nothing. Guard:
+  `test/operations/fixed_name_temporaries.ml`, which builds two of each family as siblings,
+  compiles and executes them, with and without routine logging.
 - Beyond the C floor (gh-ocannl-707), a routine name meets the vendor headers, and only some of
   their names collide with a kernel DEFINITION: global types, macros, dialect keywords and
   C-linkage functions do; ordinary C++ functions do not, since overloading lets a kernel coexist

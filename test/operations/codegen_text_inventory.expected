@@ -179,6 +179,9 @@ test/operations/fission_schedule.ml [run by @test/operations/runtest-fission_sch
     "blockIdx."
     "dispatch_apply"
     "gid."
+test/operations/fixed_name_temporaries.ml [run by @test/operations/runtest-fixed_name_temporaries-logged, @test/operations/runtest-fixed_name_temporaries-plain]
+    "{ /* Vectorized reduction rendering:"
+    "{ /* Vectorized rendering:"
 test/operations/float_literal_forms.ml [run by @test/operations/runtest-float_literal_forms]
     "(float)(" ^ ... ^ ")"
 test/operations/fresh_build_kernel_text.ml [run by @test/operations/runtest-fresh_build_kernel_text; also pins text this scan cannot name: untraced callback]
@@ -600,6 +603,8 @@ so, and the goldens' families say which backends a change has to be run on.
 @test/operations/runtest-cpu_vectorized
 @test/operations/runtest-fission_replay_segmentation
 @test/operations/runtest-fission_schedule
+@test/operations/runtest-fixed_name_temporaries-logged
+@test/operations/runtest-fixed_name_temporaries-plain
 @test/operations/runtest-float_literal_forms
 @test/operations/runtest-fresh_build_kernel_text
 @test/operations/runtest-gpu_lane_reduction
