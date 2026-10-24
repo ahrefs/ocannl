@@ -1506,7 +1506,7 @@ end = struct
     prior_context.device.dev.set_builtins_in run_module;
     let idx_params = Indexing.bound_symbols code.bindings in
     let lowered_bindings : Indexing.lowered_bindings =
-      List.map idx_params ~f:(fun s -> (s, ref 0))
+      List.map idx_params ~f:(fun s -> (s, Indexing.fresh_launch_param ()))
     in
     let task =
       link_proc ~prior_context ~name:code.name ~kparams:code.kparams ~launch:code.launch
@@ -1517,7 +1517,7 @@ end = struct
   let%track3_sexp link_batch prior_context (code_batch : code_batch) ctx_buffers =
     let idx_params = Indexing.bound_symbols code_batch.bindings in
     let lowered_bindings : Indexing.lowered_bindings =
-      List.map idx_params ~f:(fun s -> (s, ref 0))
+      List.map idx_params ~f:(fun s -> (s, Indexing.fresh_launch_param ()))
     in
     let ctx = ctx_of prior_context in
     set_ctx ctx;

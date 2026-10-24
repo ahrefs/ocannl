@@ -898,7 +898,8 @@ struct
        the same static-index refs, or setting a binding through the routine would reach only one of
        them. *)
     let kernel_bindings : Indexing.lowered_bindings =
-      List.map (Indexing.bound_symbols code_batch.bindings) ~f:(fun s -> (s, ref 0))
+      List.map (Indexing.bound_symbols code_batch.bindings) ~f:(fun s ->
+          (s, Indexing.fresh_launch_param ()))
     in
     (* One caller-side assoc for the whole batch too, and one snapshot closure: the segments of a
        fissioned routine are dispatched by a single [Context.run], so they all carry the same

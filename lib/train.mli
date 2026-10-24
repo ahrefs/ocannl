@@ -343,7 +343,8 @@ val init_params :
   ?reinit_all:bool -> Context.t -> Ir.Indexing.unit_bindings -> Tensor.t -> Context.t
 (** [init_params] initializes the parameters of [t], via running their forward code or copying from
     the host as appropriate. If [reinit_all] is true, all parameters are reinitialized, otherwise
-    only the parameters that are not in [ctx.ctx_buffers] are initialized. *)
+    only the parameters that are not in [ctx.ctx_buffers] are initialized. The initialization
+    routine runs once, with every launch parameter of the bindings at 0. *)
 
 val run_once :
   ?output_cd_file:bool ->
@@ -360,7 +361,9 @@ val run_once :
 (** [run_once] is a wrapper around {!init_params} that additionally runs code of [f t] and returns
     the context. If [skip_init] is true (false by default), no initialization is performmed. If
     [reinit_all] is true (false by default), all parameters are reinitialized, otherwise only the
-    parameters that are not in [ctx.ctx_buffers] are initialized.
+    parameters that are not in [ctx.ctx_buffers] are initialized. The routine of [f t] runs once,
+    with every launch parameter of [bindings] at 0; to run it at other values, compile it with
+    {!to_routine} and assign them through [Context.bindings] (gh-ocannl-940).
 
     If [output_cd_file] is true, the global setting [output_debug_files_in_build_directory] must be
     true, and the update code is output to a file before shape inference potentially crashes at

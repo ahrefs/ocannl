@@ -89,4 +89,6 @@ val data_parallel :
     Per-shard RNG streams diverge by default: shard i's graph is built after
     [set_random_seed ~seed:(base_seed + i)], so randomized ops (dropout, [uniform_at]) draw
     differently per shard while the data slices are themselves distinct. The seed mutation is scoped
-    by [Tensor.with_saved_random_seed], so the caller's global random seed is restored on return. *)
+    by [Tensor.with_saved_random_seed], so the caller's global random seed is restored on return.
+
+    No routine is handed back, so every launch parameter of [bindings] runs at 0 (gh-ocannl-940). *)

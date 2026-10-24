@@ -1686,7 +1686,11 @@ let%track3_sexp link_compiled ?lowered_bindings ~merge_buffer ~resolve ~runner_l
   (* When [lowered_bindings] is given (batch linking, e.g. fissioned segments of one routine), the
      static-index refs are shared: looked up by the [Static_idx] param's symbol rather than freshly
      minted, so one bindings assoc drives every procedure of the batch. *)
-  let idx_ref s = match lowered_bindings with Some lb -> Indexing.find_exn lb s | None -> ref 0 in
+  let idx_ref s =
+    match lowered_bindings with
+    | Some lb -> Indexing.find_exn lb s
+    | None -> Indexing.fresh_launch_param ()
+  in
   let run_variadic =
     [%log_level
       0;
@@ -1733,16 +1737,22 @@ let%track3_sexp link_compiled ?lowered_bindings ~merge_buffer ~resolve ~runner_l
       let kparams = List.rev_map code.kparams ~f:(fun (_, p) -> p) in
       link code.bindings kparams Ctypes.(void @-> returning void)]
   in
+  let bindings =
+    match lowered_bindings with
+    | Some lb -> lb
+    | None -> Indexing.lowered_bindings code.bindings run_variadic
+  in
   let%diagn_sexp work () : unit =
     [%log_result _name];
-    (* Stdio.printf "launching %s\n" name; *)
+    (* Launch-side validation of the values the kernel is about to read, mirroring the GPU backends'
+       [Static_idx] checks: a task scheduled without [Context.run]'s pre-dispatch check must not
+       launch on an unassigned parameter (gh-ocannl-940). *)
+    Indexing.validate_lowered_bindings ~width64:Utils.settings.large_models bindings;
     Indexing.apply run_variadic ();
     if Utils.debug_log_from_routines () then
       Utils.log_debug_routine_file ~log_file_name ~stream_name:runner_label
   in
-  ( (match lowered_bindings with
-    | Some lb -> lb
-    | None -> Indexing.lowered_bindings code.bindings run_variadic),
+  ( bindings,
     Task.Task
       {
         (* In particular, keep code alive so it doesn't get unloaded. *)

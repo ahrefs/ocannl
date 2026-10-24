@@ -708,11 +708,12 @@ let check_lineage_runnable ctx routine =
          routine.routine_id dep_names)
 
 (* The PER-CANDIDATE half: bind-time validation of launch parameters
-   (docs/proposals/signed-index-precision.md) — each bound value must be non-negative, within its
-   declared static range, and within the index width. Unlike the lineage checks above this reads the
-   bindings the caller just wrote for THIS routine, and candidates differ in their static ranges, so
-   one candidate can fail it while its siblings time cleanly. That makes it the half a search should
-   contain as a decline (gh-ocannl-564). *)
+   (docs/proposals/signed-index-precision.md) — each one must have been assigned (gh-ocannl-940:
+   linking leaves them unassigned, so a forgotten one is refused rather than run at 0), and each
+   bound value must be non-negative, within its declared static range, and within the index width.
+   Unlike the lineage checks above this reads the bindings the caller just wrote for THIS routine,
+   and candidates differ in their static ranges, so one candidate can fail it while its siblings
+   time cleanly. That makes it the half a search should contain as a decline (gh-ocannl-564). *)
 let check_launch_bindings routine =
   Idx.validate_lowered_bindings ~width64:Utils.settings.large_models routine.bindings
 

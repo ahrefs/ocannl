@@ -466,13 +466,12 @@ let run_linked (ctx, routine) ~(seed : (Tn.t * float array) list) =
 
 (** Refuses a [launch] list that does not give EXACTLY ONE value to EACH bound symbol of [bindings].
     That invariant, not a list of the ways to break it, is what the check tests: it counts, so no
-    entry can be silently absorbed. Backend linking initializes every launch parameter to [ref 0],
-    so an uncovered symbol would launch at a zero the test never chose and could not distinguish in
-    the result from one it did; a repeated symbol would launch at whichever value the assignment
-    loop wrote last; a stray entry is a value that reaches no launch at all. All three are the
-    wrong-value class the executed legs exist to catch, so all three raise rather than default, and
-    they raise BEFORE the routine is compiled: a misuse costs no codegen, and a test can pin the
-    refusal for the price of the check. *)
+    entry can be silently absorbed. An uncovered symbol would be left unassigned, which
+    [Context.run] refuses too (gh-ocannl-940), but only after a compile; a repeated symbol would
+    launch at whichever value the assignment loop wrote last; a stray entry is a value that reaches
+    no launch at all. All three are the wrong-value class the executed legs exist to catch, so all
+    three raise rather than default, and they raise BEFORE the routine is compiled: a misuse costs
+    no codegen, and a test can pin the refusal for the price of the check. *)
 let check_launch ~bindings ~launch =
   let bound = Idx.bound_symbols bindings in
   let ident (sym : Idx.static_symbol) = Idx.symbol_ident sym.Idx.static_symbol in

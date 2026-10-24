@@ -181,6 +181,7 @@ let () =
   let ctx, sgd_step = Train.to_routine ctx bindings (Asgns.sequence [ update; sgd ]) in
   let open Operation.At in
   let step_ref = IDX.find_exn sgd_step.Context.bindings step_n in
+  step_ref := 0;
   Train.set_materialized batch_loss.value;
 
   let ctx_buf = Array.create ~len:(batch_size * block_size) 0. in

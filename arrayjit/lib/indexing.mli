@@ -56,8 +56,23 @@ val apply : ('r, 'idcs, 'p1, 'p2) variadic -> 'r
 val lowered_bindings : 'a bindings -> ('b, 'a, 'p1, 'p2) variadic -> lowered_bindings
 val find_exn : lowered_bindings -> static_symbol -> int ref
 val get_static_symbol : ?static_range:int -> (int -> 'a) bindings -> static_symbol * 'a bindings
+val fresh_launch_param : unit -> int ref
+(** A launch parameter's cell as backend linking mints it: UNASSIGNED (gh-ocannl-940), holding a
+    value outside every legal one, which {!validate_bound_value} refuses naming the parameter. A
+    caller assigns it through [find_exn bindings sym := v]; a caller that means 0 writes 0. *)
+
+val launch_param_assigned : int ref -> bool
+(** Whether the cell holds a value someone assigned, rather than the one {!fresh_launch_param} left
+    there. *)
+
 val validate_bound_value : ?width64:bool -> static_symbol -> int -> unit
+(** Bind-time validation of one launch-parameter value: refuses an unassigned one (gh-ocannl-940), a
+    negative one, one outside the declared range ([[0, range)] for an index, [[0, range]] for a
+    symbolic extent) and, unless [width64], one past the int32 index width. *)
+
 val validate_lowered_bindings : ?width64:bool -> lowered_bindings -> unit
+(** {!validate_bound_value} over every parameter, reporting all the unassigned ones in one message
+    first. *)
 val dims_to_string : ?with_axis_numbers:bool -> int array -> string
 
 type affine_index = private { symbols : (int * symbol) list; offset : int }

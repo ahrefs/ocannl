@@ -26,8 +26,9 @@ let plot_unop ?(x_min = -5.) ?(x_max = 5.) ~f () =
   let ctx = Train.init_params ctx IDX.empty fx in
   let update = Train.grad_update fx in
   let ctx, fx_routine = Train.to_routine ctx bindings update in
-  let ctx = Context.run ctx fx_routine in
   let step_ref = IDX.find_exn fx_routine.Context.bindings step_sym in
+  step_ref := 0;
+  let ctx = Context.run ctx fx_routine in
   let ys, dys =
     Array.unzip
     @@ Array.mapi xs ~f:(fun i _ ->

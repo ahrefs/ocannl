@@ -86,6 +86,7 @@ let () =
         Array.exists (LL.launch_dims seg.LL.llc).grid ~f:(fun g -> g > 1))
   in
   let step_ref = IDX.find_exn sgd_step.Context.bindings step_n in
+  step_ref := 0;
   let run () =
     Train.run ctx sgd_step;
     Int.incr step_ref
