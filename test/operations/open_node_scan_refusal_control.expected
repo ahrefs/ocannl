@@ -1,0 +1,11 @@
+an invalid OCaml source reaches the parse refusal: true
+a reader exception on a source that parses reaches the scanner-defect refusal, not the parse one: true
+a run without tnode.ml reaches the missing-derivation refusal: true
+a run without tensor/ sources reaches the empty-corpus refusal: true
+
+Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:d7ba33c928dde8cf6b59d769ad3a0b85] does not parse
+  [scanner-refusal:53596805b743d859cfe3bcff6c3f4cef] open-node reader raised
+  [scanner-refusal:734ae927ae65fe211d322172ca5b596c] among the sources
+  [scanner-refusal:ba81e42164f42036a795a1c48ab2f6c2] tree matches nothing
+End of synthetic controls.

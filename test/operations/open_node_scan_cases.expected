@@ -1,0 +1,28 @@
+the creators are the values reaching fresh_uid, transitively: true
+the derivation of the stand-in refuses nothing: true
+a tnode.ml with no top-level fresh_uid is refused: true
+a local fresh_uid shadowing the top-level one mints nothing: true
+a uid minted inside a nested module is refused, not ignored: true
+a creation bound and noted is accepted: true
+a creation bound and never noted is refused: true
+a pair-returning creator bound by a tuple pattern and noted is accepted: true
+a creation flowing through match arms into a noted variable is accepted, every arm: true
+the same flow with no note refuses both creations: true
+noting a different variable of the same name does not count: true
+a creation bound to no variable is refused: true
+a creation in argument position is refused as unfollowed: true
+a creation returned from a function body is refused as unfollowed: true
+a creator referenced without being applied is refused: true
+a call of a value that mints no uid is not a creation: true
+a shadowing local note_open_node is not the real one: true
+outside tensor.ml, a top-level note_open_node is not the real one: true
+a note_open_node defined in a nested module is not the real one: true
+a second top-level note_open_node is refused: true
+Ir.Tnode.create, spelled out, is a creation: true
+Tnode.create after open Ir is a creation: true
+a bare create under a local open of Tn is a creation: true
+the same under the open, noted, is accepted: true
+a name the open of Tn brings in shadows a local binding of it: true
+a locally bound module Tn is not Ir.Tnode: true
+a locally bound module Ir is not the library: true
+a source that does not parse is the input's fault, not the scanner's: true

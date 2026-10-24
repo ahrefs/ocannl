@@ -1,0 +1,17 @@
+creator: Tnode.create
+creator: Tnode.create_from_padded
+creator: Tnode.create_with_reshape
+tensor/tensor.ml: in op, Tnode.create -> tn: noted
+tensor/tensor.ml: in op, Tnode.create_with_reshape -> tn, init: noted
+tensor/tensor.ml: in op, Tnode.create_from_padded -> tn, init: noted
+tensor/tensor.ml: in op, Tnode.create_from_padded -> tn, init: noted
+tensor/tensor.ml: in op, Tnode.create -> v: noted
+tensor/tensor.ml: in op, Tnode.create -> g: noted
+tensor/tensor.ml: in force_param_diff, Tnode.create -> g: noted
+the scan derives Tnode.create as a creator: true
+the scan follows a pair-returning creation into a noted variable of tensor.ml: true
+
+Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:69cf046689c576d9dca494c4b411d591] Tnode.create
+  [scanner-refusal:aad2a5fc0b2e347174ab90714113a6f6] tensor.ml
+End of synthetic controls.

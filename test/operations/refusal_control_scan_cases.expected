@@ -486,6 +486,13 @@ tensorized_census_ratchet.ml has exactly the explicitly assigned refusal control
 tensorized_census_ratchet.ml: [scanner-refusal:e553a74d077e12582953b27756595d9e] executed tensorized parity (claim) is catalogued beside tensorized_census_ratchet.expected, tensorized_census_scan_cases.expected: true
 tensorized_census_ratchet.ml: [scanner-refusal:acf79e9d5f580995dafd055521de641f] Context.run (claim) is catalogued beside tensorized_census_ratchet.expected, tensorized_census_scan_cases.expected: true
 provenance_tag_inventory.ml has exactly the explicitly assigned refusal controls: true
+open_node_scan.ml has exactly the explicitly assigned refusal controls: true
+open_node_scan.ml: [scanner-refusal:d7ba33c928dde8cf6b59d769ad3a0b85] does not parse (direct failure) is catalogued beside open_node_scan.expected, open_node_scan_control.expected, open_node_scan_refusal_control.expected, open_node_scan_cases.expected: true
+open_node_scan.ml: [scanner-refusal:53596805b743d859cfe3bcff6c3f4cef] open-node reader raised (direct failure) is catalogued beside open_node_scan.expected, open_node_scan_control.expected, open_node_scan_refusal_control.expected, open_node_scan_cases.expected: true
+open_node_scan.ml: [scanner-refusal:734ae927ae65fe211d322172ca5b596c] among the sources (direct failure) is catalogued beside open_node_scan.expected, open_node_scan_control.expected, open_node_scan_refusal_control.expected, open_node_scan_cases.expected: true
+open_node_scan.ml: [scanner-refusal:ba81e42164f42036a795a1c48ab2f6c2] tree matches nothing (direct failure) is catalogued beside open_node_scan.expected, open_node_scan_control.expected, open_node_scan_refusal_control.expected, open_node_scan_cases.expected: true
+open_node_scan.ml: [scanner-refusal:69cf046689c576d9dca494c4b411d591] Tnode.create (claim) is catalogued beside open_node_scan.expected, open_node_scan_control.expected, open_node_scan_refusal_control.expected, open_node_scan_cases.expected: true
+open_node_scan.ml: [scanner-refusal:aad2a5fc0b2e347174ab90714113a6f6] tensor.ml (claim) is catalogued beside open_node_scan.expected, open_node_scan_control.expected, open_node_scan_refusal_control.expected, open_node_scan_cases.expected: true
 render_decline_inventory.ml has exactly the explicitly assigned refusal controls: true
 render_decline_inventory.ml: [scanner-refusal:d5f512590dad4114be7fccd7fcad252d] control (claim) is catalogued beside render_decline_inventory.expected: true
 render_decline_inventory.ml: [scanner-refusal:93267baf53efdf52a09d9a689b122ee2] render-time typed declines (claim) is catalogued beside render_decline_inventory.expected: true

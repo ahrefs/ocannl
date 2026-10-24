@@ -26,6 +26,15 @@ let raw_entries =
         "[scanner-refusal:acf79e9d5f580995dafd055521de641f] Context.run";
       ] );
     ("provenance_tag_inventory.ml", []);
+    ( "open_node_scan.ml",
+      [
+        "[scanner-refusal:d7ba33c928dde8cf6b59d769ad3a0b85] does not parse";
+        "[scanner-refusal:53596805b743d859cfe3bcff6c3f4cef] open-node reader raised";
+        "[scanner-refusal:734ae927ae65fe211d322172ca5b596c] among the sources";
+        "[scanner-refusal:ba81e42164f42036a795a1c48ab2f6c2] tree matches nothing";
+        "[scanner-refusal:69cf046689c576d9dca494c4b411d591] Tnode.create";
+        "[scanner-refusal:aad2a5fc0b2e347174ab90714113a6f6] tensor.ml";
+      ] );
     ( "render_decline_inventory.ml",
       [
         "[scanner-refusal:d5f512590dad4114be7fccd7fcad252d] control";

@@ -1,0 +1,6 @@
+module Tn = Ir.Tnode
+let note_open_node _ = ()
+let noted ~id = let tn = Tn.create ~id in note_open_node tn; tn
+let found ~id = Tn.find ~id
+(* Refused: a creator only by derivation, its node never noted. *)
+let unnoted ~id = let tn = Tn.wrap ~id in tn
