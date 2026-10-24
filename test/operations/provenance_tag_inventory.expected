@@ -20,10 +20,10 @@ Site -- arrayjit/lib/assignments.ml, mark_aliases:
   27:slice-alias-parent
 Site -- arrayjit/lib/assignments.ml, one:
   34:context-nodes
+Site -- arrayjit/lib/backends.ml, alias_eligible:
+  45:export-span
 Site -- arrayjit/lib/backends.ml, partition_layout_groups:
   43:layout-group
-Site -- arrayjit/lib/backends.ml, plan_alias_spans:
-  45:export-span
 Site -- arrayjit/lib/backends.ml, verify_prior_context:
   42:prior-context-check
 Site -- arrayjit/lib/c_syntax.ml, async_copy_doc:

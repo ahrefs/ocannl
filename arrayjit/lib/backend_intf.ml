@@ -1415,6 +1415,28 @@ type link_delta = {
     the routine's whole footprint: nodes the context already holds and constants the device already
     caches are not in it. *)
 
+type link_floor = {
+  lf_working_bytes : int;  (** The floor's working bytes. *)
+  lf_constant_bytes : int;  (** The floor's new-constant bytes. *)
+  lf_pools : int;  (** How many pools the probe requests: each group's bytes cut at the pool cap. *)
+  lf_off_device_bytes : int;
+      (** Working bytes left out because some schedule can keep the node off the device
+          ([Schedule.may_keep_off_device]: the shared epilogue placement). *)
+  lf_replaceable_bytes : int;
+      (** New-constant bytes left out because a hoisted [Stage] can replace the node by a packed
+          tile ([Schedule.may_replace_by_packed_tile]). *)
+  lf_overlap_bytes : int;
+      (** Under [buffer_aliasing]: bytes of overlap-eligible nodes past the largest of each
+          precision class, which some kernel sequence may overlap. *)
+}
+[@@deriving sexp_of]
+(** gh-ocannl-1554: a floor under the device allocation of every schedule of a lowering a compile
+    can ship on a context — what the device must admit for any of them to link. The bytes are raw
+    node sizes (no layout padding), over the nodes of the lowering's delta its code touches, less
+    what some schedule can keep off the device or replace, and under the liveness planner counting
+    only nodes no kernel sequence can overlap plus the largest overlap-eligible one per precision
+    class (these conflict pairwise in every plan). *)
+
 module type Backend = sig
   type code [@@deriving sexp_of]
 
@@ -1476,6 +1498,18 @@ module type Backend = sig
       {!Schedule_outcome.Device_memory_exhausted}. Raises [Invalid_argument] for a probe on a
       backend that cannot free a pool. [~prelowered:true] stands for a {!compile} given
       [?prelowered], whose zeros are compiled as written (no covering-zero elision). *)
+
+  val link_floor :
+    context -> ?name:string -> ?prelowered:bool -> probe:bool -> Low_level.optimized -> link_floor
+  (** gh-ocannl-1554: [link_floor context ~probe lowered] is {!type-link_floor} for the lowering a
+      [lowered_transform] receives, planned without codegen or link and without effect on [lowered]
+      or [context]. With [~probe:true] the floor's pools — each group's bytes in one request, cut
+      only at the pool cap — are also allocated through {!link}'s seam and freed before returning on
+      every path; a refusal is {!Schedule_outcome.Device_memory_exhausted}. That refusal answers for
+      every schedule under a page-granular allocator that admits by the total of page-rounded
+      requests (the floor's rounded total is never above a candidate's); a contiguous- block or
+      fragmentation limit is outside it. Raises [Invalid_argument] for a probe on a backend that
+      cannot free a pool. *)
 
   include
     With_buffer_retrieval_and_syncing

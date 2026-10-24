@@ -244,52 +244,71 @@ let () =
   p_close "the routine re-searched past the refused prelude computes the right values" values
     expected ~tol:approx_tol;
   (* --- 3. gh-ocannl-1326: the baseline a replay released is relinked when the replay is refused,
-     and a device that refuses that relink for memory refuses the search, exactly as it refuses a
-     base compile -- rather than declining every candidate in turn. The device is simulated: the
-     first working-pool allocation after the cache lookup (the stale replay is refused at its
-     transform, before it allocates) is the relink's, and it is refused. --- *)
-  let planted_io = plant ~saved:dangling ~segments:None in
-  let report = ref None and attempts = ref [] in
-  let looked_up = ref false and refused = ref 0 in
-  let refuse_relink (point : Ir.Resource_fault_injection.point) =
-    match point with
-    | Schedule_cache_before_replay -> looked_up := true
-    | Delta_pool_allocated when !looked_up && !refused = 0 ->
-        Int.incr refused;
-        raise
-          (Outcome.Device_memory_exhausted
-             { backend = "simulated"; requested = 1; free = Some 0; detail = "gh-ocannl-1326" })
-    | _ -> ()
+     and a device that refuses that relink for memory is asked the floor every schedule must
+     allocate (gh-ocannl-1554) -- the relink's delta bounds no candidate from below. 3a: the device
+     refuses the relink alone and admits the floor, so the relink's decline is the baseline's
+     account and the search runs on its candidates. 3b: it refuses the floor as well, so the search
+     is refused, exactly as a refused base compile refuses it -- rather than declining every
+     candidate in turn. The device is simulated: the first working-pool allocation after the cache
+     lookup (the stale replay is refused at its transform, before it allocates) is the relink's, the
+     next one the floor's. --- *)
+  let relink_leg ~refusals =
+    let planted_io = plant ~saved:dangling ~segments:None in
+    let report = ref None and attempts = ref [] in
+    let looked_up = ref false and refused = ref 0 in
+    let refuse_relink (point : Ir.Resource_fault_injection.point) =
+      match point with
+      | Schedule_cache_before_replay -> looked_up := true
+      | Delta_pool_allocated when !looked_up && !refused < refusals ->
+          Int.incr refused;
+          raise
+            (Outcome.Device_memory_exhausted
+               { backend = "simulated"; requested = 1; free = Some 0; detail = "gh-ocannl-1326" })
+      | _ -> ()
+    in
+    let raised, ios =
+      SC.recording_cache_io (fun () ->
+          match
+            Autotune.Seam.with_value Autotune.on_candidate_attempt
+              (fun label -> attempts := label :: !attempts)
+              (fun () ->
+                Ir.Resource_fault_injection.with_callback refuse_relink ~f:(fun () ->
+                    Autotune.tune ~search:true ~name:"replay_refusal" ~beam_width:1 ~rounds:0
+                      ~repeats:1 ~cache_dir ~log:false ~progress:false
+                      ~report:(fun r -> report := Some r)
+                      (Context.cpu ()) comp Ir.Indexing.Empty))
+          with
+          | _ -> false
+          | exception Utils.User_error _ -> true)
+    in
+    let lookups =
+      List.filter ios ~f:(fun (io : SC.cache_io) ->
+          match io.SC.op with SC.Lookup -> true | SC.Store -> false)
+    in
+    ( planted_io @ lookups,
+      raised,
+      !refused,
+      Option.value_exn ~here:[%here] !report,
+      List.rev !attempts )
   in
-  let raised, ios =
-    SC.recording_cache_io (fun () ->
-        match
-          Autotune.Seam.with_value Autotune.on_candidate_attempt
-            (fun label -> attempts := label :: !attempts)
-            (fun () ->
-              Ir.Resource_fault_injection.with_callback refuse_relink ~f:(fun () ->
-                  Autotune.tune ~search:true ~name:"replay_refusal" ~beam_width:1 ~rounds:0
-                    ~repeats:1 ~cache_dir ~log:false ~progress:false
-                    ~report:(fun r -> report := Some r)
-                    (Context.cpu ()) comp Ir.Indexing.Empty))
-        with
-        | _ -> false
-        | exception Utils.User_error _ -> true)
+  let memory_decline (r : Autotune.report) =
+    List.exists r.Autotune.declines ~f:(fun d ->
+        Outcome.equal_rejection_key d.Autotune.key
+          (Outcome.Resource_exceeded_key Outcome.Device_memory))
   in
-  let lookups =
-    List.filter ios ~f:(fun (io : SC.cache_io) ->
-        match io.SC.op with SC.Lookup -> true | SC.Store -> false)
-  in
-  let ios = planted_io @ lookups in
-  let r = Option.value_exn ~here:[%here] !report in
-  replay_claim ios "a device that refuses the relinked baseline refuses the search"
-    (raised && !refused = 1 && outcome_is "pre-search-failure" r && r.Autotune.baseline_declined);
-  replay_claim ios "the refusal carries the device-memory decline"
-    (List.exists r.Autotune.declines ~f:(fun d ->
-         Outcome.equal_rejection_key d.Autotune.key
-           (Outcome.Resource_exceeded_key Outcome.Device_memory)));
-  replay_claim ios "no candidate is compiled after the refused relink"
-    (List.equal String.equal !attempts [ "baseline" ]);
+  let ios, raised, refused, r, attempts = relink_leg ~refusals:1 in
+  replay_claim ios
+    "a device that refuses the relinked baseline alone, admitting the floor, still searches"
+    (refused = 1 && (not raised) && outcome_is "searched" r && r.Autotune.baseline_declined);
+  replay_claim ios "the refused relink is the baseline's device-memory decline" (memory_decline r);
+  replay_claim ios "candidates are compiled after the refused relink"
+    (List.exists attempts ~f:(fun l -> not (String.equal l "baseline")));
+  let ios, raised, refused, r, attempts = relink_leg ~refusals:2 in
+  replay_claim ios "a device that refuses the relinked baseline and the floor refuses the search"
+    (raised && refused = 2 && outcome_is "pre-search-failure" r && r.Autotune.baseline_declined);
+  replay_claim ios "the refusal carries the device-memory decline" (memory_decline r);
+  replay_claim ios "no candidate is compiled after the refused floor"
+    (List.equal String.equal attempts [ "baseline" ]);
   (* --- 4. gh-ocannl-1423's control: the relinked baseline's window refused at admission, as a
      loaded host refuses it, here on every host. The record names the baseline's refusal, and the
      claim that record gates would have failed, so leg 1 skips it rather than passing it. Waived

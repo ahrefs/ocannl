@@ -1211,6 +1211,31 @@ let link_delta ?name ?prelowered ctx lowered segments =
 let probe_link_delta ?name ?prelowered ctx lowered segments =
   link_delta_impl ~fn:"probe_link_delta" ~probe:true ?name ?prelowered ctx lowered segments
 
+type link_floor = Ir.Backend_intf.link_floor = {
+  lf_working_bytes : int;
+  lf_constant_bytes : int;
+  lf_pools : int;
+  lf_off_device_bytes : int;
+  lf_replaceable_bytes : int;
+  lf_overlap_bytes : int;
+}
+[@@deriving sexp_of, equal]
+
+let link_floor_impl ~fn ~probe ?name ?prelowered ctx lowered =
+  check_live ~fn ctx;
+  Backends.query ctx.wrapped
+    {
+      q =
+        (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) c ->
+          Backend.link_floor c ?name ?prelowered ~probe lowered);
+    }
+
+let link_floor ?name ?prelowered ctx lowered =
+  link_floor_impl ~fn:"link_floor" ~probe:false ?name ?prelowered ctx lowered
+
+let probe_link_floor ?name ?prelowered ctx lowered =
+  link_floor_impl ~fn:"probe_link_floor" ~probe:true ?name ?prelowered ctx lowered
+
 let global_debug_info ctx =
   Backends.query ctx.wrapped
     {

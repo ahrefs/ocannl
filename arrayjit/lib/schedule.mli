@@ -626,6 +626,21 @@ val hoistable_constant : Tn.t -> bool
     autotune sketch and by [Schedule_cache.canonicalize], which renders it per tensor node so that
     same-shape programs differing in operand constancy do not share cached schedules. *)
 
+val hoist_known_constant : Tn.Placements.t -> Tn.t -> bool
+(** The constancy half of a [hoisted] {!constructor-Stage}'s source preconditions:
+    [Tnode.known_host_constant], or a [known_constant] placement in the lineage. *)
+
+val may_replace_by_packed_tile : Tn.Placements.t -> Tn.t -> bool
+(** gh-ocannl-1554: whether some schedule can take every read of the node off it — a [hoisted]
+    {!constructor-Stage} reads a host-packed tile instead and emits no load nest, so a candidate
+    whose store is filtered to its code footprint holds the tile, sized by the staged accesses, and
+    not the node. Exactly the hoisted-source preconditions {!apply} checks on the node itself
+    (registered host-init data and {!hoist_known_constant}). *)
+
+val settled_on_device : Tn.Placements.t -> Tn.t -> bool
+(** Whether the node's placement is settled [On_device] in this lineage: the one placement the
+    shared epilogue placement of {!constructor-Fuse_epilogue} leaves alone. *)
+
 val apply :
   ?static_indices:Indexing.static_symbol list ->
   schedule ->
@@ -997,6 +1012,26 @@ val backend_is_gpu : string -> bool
 val backend_is_cpu : string -> bool
 (** Whether the named backend renders [Grid] loops on the CPU pool (currently: name contains
     ["cc"]). *)
+
+val code_footprint : Low_level.t -> Set.M(Tn).t * bool
+(** All tensor nodes the code references (scope ids' backing nodes included) — the set a fission
+    segment's traced store is filtered to — and whether it reads the merge buffer. *)
+
+val may_keep_off_device :
+  backend_name:string ->
+  limits:Backend_intf.hardware_limits ->
+  Tn.Placements.t ->
+  Tn.t ->
+  Low_level.traced_array ->
+  bool
+(** gh-ocannl-1554: whether some schedule can keep this existing node off the device, the premise on
+    which the device-memory floor ([Backends.link_floor]) leaves it out. The one schedule op that
+    turns an existing node [Local] is {!constructor-Fuse_epilogue}'s shared placement, of a fusion
+    target (written, read by the fused tail) not {!settled_on_device}; it exists only on GPU
+    backends, and charges the node's whole size to the workgroup memory that
+    {!check_hardware_limits_classified} holds to [max_workgroup_memory_bytes] for every kernel a
+    compile emits, so a node larger than that limit cannot leave the device. [None] as the limit
+    bounds nothing. *)
 
 val search_shaping_key_read : backend_name:string -> string -> bool
 (** Whether a search on [backend_name] can read the default pipeline's configuration key [key]

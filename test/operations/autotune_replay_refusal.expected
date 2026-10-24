@@ -10,9 +10,12 @@ the routine numbers fewer than 100 tensor nodes: true
 the corrupt split-reduce prelude's replay is refused with a typed cause: true
 the refused prelude re-searches: true
 the routine re-searched past the refused prelude computes the right values: true
-a device that refuses the relinked baseline refuses the search: true
+a device that refuses the relinked baseline alone, admitting the floor, still searches: true
+the refused relink is the baseline's device-memory decline: true
+candidates are compiled after the refused relink: true
+a device that refuses the relinked baseline and the floor refuses the search: true
 the refusal carries the device-memory decline: true
-no candidate is compiled after the refused relink: true
+no candidate is compiled after the refused floor: true
 a refused baseline window is recorded as the baseline's refusal, by a degenerate clock reading: true
 a refused baseline window leaves the baseline untimed: true
 not every planted entry's store was refused: true
