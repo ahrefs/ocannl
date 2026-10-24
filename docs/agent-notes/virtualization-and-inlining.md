@@ -476,6 +476,13 @@ files.
   sibling setters), and a node already committed virtual keeps the merge-splice message. Recording
   instead of raising is the point: an aborted walk would strand `spliced_reads` and placement
   side effects that nothing rolls back (`stored_template_elision.ml`, the capture cases).
+  gh-ocannl-1551 generalized the hit (`capture_hit`) to the two other inherited reads that refuse a
+  routine where they execute: routine-local scratch (`155:capture-reads-local`) and a template that
+  cannot be instantiated at the read's indices (`156:capture-read-uninlinable`, reported through
+  `inline_computation ?on_inherited_unservable`, which commits nothing). A routine that only READS
+  an inherited `Local` node never reaches the walk: `decide_placements`' read-only-input rule
+  refuses it on the raw read, dead arm or not — the walk's `Local` refusal is met only by a node
+  the routine also writes.
 - Big-reduction producers are forced `Never_virtual` by `virtualize_max_inline_reduction`
   (default 16) — remember it when a structural expectation assumes inlining.
 - Wide-fanin producers are forced `Never_virtual 41` by `virtualize_max_inline_fanin` (default 8,
