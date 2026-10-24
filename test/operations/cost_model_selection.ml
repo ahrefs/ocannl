@@ -250,7 +250,14 @@ let () =
      drop out and the argmin is taken over what can actually be built.
 
      A 128x128 matmul is the smallest square size at which the C backend's packed mma sketches both
-     get seeded and beat the default under this rule's bandwidth-dominant envelope. *)
+     get seeded and beat the default under this rule's bandwidth-dominant envelope.
+
+     The dead candidates here were the CPU tensorized flavors binding a hardware dimension (the
+     whole-triple form's [Workgroup] lane, the packed Grid shapes' row-block loop) beside the relu
+     tail, a companion they left uncovered. Since gh-ocannl-1561 the family tree refutes them at
+     seeding, so the filter's population on this routine is empty: the claim is now that the search
+     never meets an unbuildable candidate here, and the argmin claim below is the property the
+     filter existed for. *)
   let m = 128 in
   let av =
     Array.init (m * m) ~f:(Ll_test.cycle_flat ~dims:[| m; m |] ~modulus:7 ~offset:0. ~stride:0.5)
@@ -279,7 +286,8 @@ let () =
   let ctx = Context.run ctx routine in
   let got = Context.get_values ctx vc.Tensor.value in
   let r = Option.value_exn ~here:[%here] !choice in
-  p "some candidates are excluded as unbuildable" (r.Autotune.mc_rejected >= 1);
+  p "no candidate is unbuildable: the seeding refutes the flavors the relu tail would fail"
+    (r.Autotune.mc_rejected = 0);
   p "the surviving argmin is a schedule, not the default fallback"
     (not (String.equal r.Autotune.mc_label "default"));
   p_close "the picked schedule computes correct values" got expected ~tol:(fun _ -> 1e-2)

@@ -281,18 +281,21 @@ let () =
   let tctx = Context.run tctx troutine in
   let got_t = Context.get_values tctx mct.Tensor.value in
   (* The two flavors are independently judged trees (gh-ocannl-577), so their leaf counts need not
-     match. On the C backends both enumerate and the twins double the seed list. On a
-     hardware-parallel backend the UNFUSED flavor is refuted whole at tree construction — the
-     companion-coverage rule (gh-ocannl-521) reports that the accumulation nest's aligned chain was
-     trimmed below its geometry, i.e. exactly this file's header: the two-kernel form is not
-     expressible as one kernel here, and fusion is what makes whole-routine sketches apply — so
-     every seed is a twin (gh-ocannl-632). *)
-  let flavors = if on_gpu then 1 else 2 in
+     match -- but the fused flavor's companion demand is the unfused one's minus the tail its fusion
+     relocates, so the unfused flavor never seeds more. On a hardware-parallel backend the UNFUSED
+     flavor is refuted whole at tree construction — the companion-coverage rule (gh-ocannl-521)
+     reports that the accumulation nest's aligned chain was trimmed below its geometry, i.e. exactly
+     this file's header: the two-kernel form is not expressible as one kernel here, and fusion is
+     what makes whole-routine sketches apply — so every seed is a twin (gh-ocannl-632). On the C
+     backends both flavors enumerate; the unfused one loses only the CPU tensorized shapes binding a
+     hardware dimension, which the tail would leave uncovered (gh-ocannl-1561), and keeps the
+     all-serial ones. *)
   (match !reports with
   | [ r ] ->
+      let fused = r.Autotune.epilogue_sketch_candidates in
+      let unfused = r.Autotune.sketch_candidates - fused in
       p "fused-epilogue sketch twins seeded"
-        (r.Autotune.epilogue_sketch_candidates > 0
-        && r.Autotune.epilogue_sketch_candidates * flavors = r.Autotune.sketch_candidates)
+        (fused > 0 && if on_gpu then unfused = 0 else unfused > 0 && unfused <= fused)
   | _ -> p "fused-epilogue sketch twins seeded" false);
   p_close "tuned matmul+tail matches two-kernel" got_t want ~tol:(fun _ -> 1e-2);
 

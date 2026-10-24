@@ -314,6 +314,18 @@ files.
   never seeded, so it never reaches the decline log. gh-569's Part 3 read 25 coverage declines out of
   `schedule_log_declines`; the same workload on current master logs zero
   (`report-gh612-hip.md`). Ask the emitted source and the launch geometry instead.
+- **The same rule binds the CPU tensorized flavors that bind a hardware dimension** (gh-ocannl-1561):
+  the whole-triple `Tile_mma` form's `Workgroup` lane (its zeroing's column loop at the full column
+  extent, so always active; plus a `Grid` row split at `sk_bm > 0`) and the packed Grid shapes'
+  row-block loop. No CPU builder gives a companion geometry, so the tree refutes those flavors
+  wherever the companion demand (`companion_demand`, fused tail skipped) is non-empty
+  (`cpu_mma_companion_writes`), and the all-serial shapes -- packed Serial/Hoisted, the scalar
+  pipeline -- carry the search there. A label's `0x0x0` is the whole-triple form (unsplit row), not
+  a zero-size tile: it builds wherever fission leaves the matmul alone (`F_sketch`), and failed
+  only in whole-routine searches beside a materialized companion (tune_footprint_default's
+  materialize-all arm). Untried alternatives that would keep the form: aligned companion geometry
+  as on GPU, or a unit lane (`simd_width:1`, as the packed and conv forms use) for `bm = 0`.
+  `test/operations/cpu_mma_companion_coverage`.
 ## Family decisions and launch geometry
 - **The family tree's decisions are DATA, and reading one back means matching on it — never
   re-parsing a label** (gh-ocannl-591). `Ir.Schedule_space` is parameterized over the decision type
