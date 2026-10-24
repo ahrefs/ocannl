@@ -1056,19 +1056,27 @@ let ptr_to_string_hum (type elem) (ptr : elem Ctypes.ptr) prec =
 
 type axis_padding = { left : int; right : int } [@@deriving sexp, equal]
 
-external bfloat16_to_single : int -> float = "arrayjit_bfloat16_to_single"
-(** Original conversion functions *)
+(* The host-side conversions are unboxed in native code, so a per-cell host write or read allocates
+   nothing (narrowings gh-ocannl-1258, widenings gh-ocannl-1333). The bytecode stubs box as
+   usual. *)
+external bfloat16_to_single : (int[@untagged]) -> (float[@unboxed])
+  = "arrayjit_bfloat16_to_single" "arrayjit_bfloat16_to_single_unboxed"
+[@@noalloc]
 
-(* The host-side narrowings are unboxed in native code, so a per-cell host write allocates nothing
-   (gh-ocannl-1258). *)
 external single_to_bfloat16 : (float[@unboxed]) -> (int[@untagged])
   = "arrayjit_single_to_bfloat16" "arrayjit_single_to_bfloat16_unboxed"
 [@@noalloc]
 
 external half_to_single : int -> float = "arrayjit_half_to_single"
 external single_to_half : float -> int = "arrayjit_single_to_half"
-external fp8_to_single : int -> float = "arrayjit_fp8_to_single"
-external single_to_fp8 : float -> int = "arrayjit_single_to_fp8"
+
+external fp8_to_single : (int[@untagged]) -> (float[@unboxed])
+  = "arrayjit_fp8_to_single" "arrayjit_fp8_to_single_unboxed"
+[@@noalloc]
+
+external single_to_fp8 : (float[@unboxed]) -> (int[@untagged])
+  = "arrayjit_single_to_fp8" "arrayjit_single_to_fp8_unboxed"
+[@@noalloc]
 
 external double_to_fp8 : (float[@unboxed]) -> (int[@untagged])
   = "arrayjit_double_to_fp8" "arrayjit_double_to_fp8_unboxed"
