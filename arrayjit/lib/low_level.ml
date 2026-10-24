@@ -1551,16 +1551,52 @@ let cross_routine_merge_splice_rejection (tn : Tn.t) : string =
      %{Tn.debug_name tn} as materialized (e.g. via Train.set_materialized) in the routine that \
      computes it."]
 
+(* gh-ocannl-1551: the refusal of a read of an INHERITED node that an earlier routine of the lineage
+   placed as routine-local ([Local]) scratch, shared by [virtual_llc]'s read arm and the store a
+   capture walk's hit of it refuses on a node that cannot fall back to materialization. *)
+let inherited_local_read_rejection (tn : Tn.t) : string =
+  [%string
+    "the node %{Tn.debug_name tn} was computed as routine-local scratch by an earlier routine of \
+     this compilation lineage: its buffer does not persist, so a later routine cannot read it. \
+     Mark %{Tn.debug_name tn} as materialized (e.g. via Train.set_materialized) in the routine \
+     that computes it."]
+
+(* gh-ocannl-1551: the refusal of an INHERITED computation that cannot be instantiated at a read
+   site ([code] is [instantiate_computations]' rejection), shared like the one above. *)
+let inherited_uninlinable_rejection (tn : Tn.t) ~(code : string) : string =
+  [%string
+    "the deferred computation of %{Tn.debug_name tn}, stored by an earlier routine of this \
+     compilation lineage, could not be inlined at a read site of this routine (rejection %{code}: \
+     unsupported indexing or vector form for inlining): no routine writes the node's buffer, so \
+     the read cannot fall back to a materialized access. Mark %{Tn.debug_name tn} as materialized \
+     (e.g. via Train.set_materialized) in the routine that computes it."]
+
+(* gh-ocannl-1514, gh-ocannl-1551: an inherited read a capture walk (see [virtual_llc]'s [capture])
+   met and left un-inlined, because the read would refuse the routine where it executes -- a
+   merge-tainted computation, routine-local scratch, or a computation that cannot be instantiated at
+   the read's indices -- and the walk cannot tell whether it executes. *)
+type capture_hit =
+  | Capture_reads_merge of Tn.t
+  | Capture_reads_local of Tn.t
+  | Capture_read_uninlinable of Tn.t * string
+[@@deriving sexp_of]
+
+(* The refusal the hit's read raises where it executes. *)
+let capture_hit_rejection = function
+  | Capture_reads_merge tn -> cross_routine_merge_splice_rejection tn
+  | Capture_reads_local tn -> inherited_local_read_rejection tn
+  | Capture_read_uninlinable (tn, code) -> inherited_uninlinable_rejection tn ~code
+
 (* [elide_stored] is {!elide_unevaluated_operands} (defined below the interval machinery it needs),
    applied to what is stored once the candidate is accepted (gh-ocannl-625). The legality walk
    judges the computation as captured: the elision changes what the table's readers see, not which
    candidates are accepted.
 
-   [tainted_read] (gh-ocannl-1514) is a merge-tainted inherited node that the capture walk producing
-   [top_llc] met in the candidate's own code and left un-inlined (see [virtual_llc]'s [capture]):
-   such a capture is never stored. *)
+   [capture_hit] (gh-ocannl-1514, gh-ocannl-1551) is an inherited read that the capture walk
+   producing [top_llc] met in the candidate's own code and left un-inlined (see [virtual_llc]'s
+   [capture]): such a capture is never stored. *)
 let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx)
-    ~(elide_stored : opaque:(Indexing.symbol -> bool) -> t -> t) ~(tainted_read : Tn.t option)
+    ~(elide_stored : opaque:(Indexing.symbol -> bool) -> t -> t) ~(capture_hit : capture_hit option)
     ~guarded ~in_scan ~enclosing traced static_indices top_llc =
   let exception Non_virtual of string in
   let static_indices =
@@ -1763,16 +1799,19 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx)
   try
     if Tn.Placements.known_non_virtual optim_ctx.placements traced.tn then
       raise @@ Non_virtual "11:already-non-virtual";
-    (* gh-ocannl-1514: the capture met a merge-tainted inherited read in the candidate's own code,
-       in an arm the template cannot decide (its write-index loops are opaque to the capture). The
-       candidate materializes instead, and the emit walk -- which holds those loops' extents --
-       decides the arm: a dead one is skipped there, a live one raises the cross-routine
-       merge-splice rejection as before. A node already committed virtual has no such fallback, so
-       it keeps that rejection rather than a provenance collision. *)
-    Option.iter tainted_read ~f:(fun src ->
+    (* gh-ocannl-1514, gh-ocannl-1551: the capture met, in the candidate's own code, an inherited
+       read that refuses the routine where it executes, in an arm the template cannot decide (its
+       write-index loops are opaque to the capture). The candidate materializes instead, and the
+       emit walk -- which holds those loops' extents -- decides the arm: a dead one is skipped
+       there, a live one raises the read's own rejection as before. A node already committed virtual
+       has no such fallback, so it keeps that rejection rather than a provenance collision. *)
+    Option.iter capture_hit ~f:(fun hit ->
         if Tn.Placements.known_virtual optim_ctx.placements traced.tn then
-          raise @@ Utils.User_error (cross_routine_merge_splice_rejection src);
-        raise @@ Non_virtual "154:capture-reads-merge");
+          raise @@ Utils.User_error (capture_hit_rejection hit);
+        match hit with
+        | Capture_reads_merge _ -> raise @@ Non_virtual "154:capture-reads-merge"
+        | Capture_reads_local _ -> raise @@ Non_virtual "155:capture-reads-local"
+        | Capture_read_uninlinable _ -> raise @@ Non_virtual "156:capture-read-uninlinable");
     (* gh-651: the candidate's whole nest sits inside an enclosing [If], which is NOT part of
        [top_llc] — the walk below would never see it, and the stored computation would replay
        unguarded at every read site. Same verdict as the interior-guard arm, decided here because
@@ -2712,8 +2751,8 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
           Ok (unflat_lines body)
   with Non_virtual i -> Error i
 
-let%track7_sexp inline_computation ?(fresh_symbol = Indexing.get_symbol) ~id
-    ~inherited_merge_tainted ~inherited_tns (optim_ctx : optimize_ctx) (traced : traced_array)
+let%track7_sexp inline_computation ?(fresh_symbol = Indexing.get_symbol) ?on_inherited_unservable
+    ~id ~inherited_merge_tainted ~inherited_tns (optim_ctx : optimize_ctx) (traced : traced_array)
     (static_indices : Indexing.static_symbol list) (call_args : Indexing.axis_index array) :
     t option =
   let computations =
@@ -2744,19 +2783,18 @@ let%track7_sexp inline_computation ?(fresh_symbol = Indexing.get_symbol) ~id
          routine already dropped the setters from its schedule, so committing [Never_virtual] here
          would either conflict with the lineage's [Virtual] commitment (a cryptic
          provenance-collision error) or commit the consumer to a buffer no routine writes. Fail
-         actionably instead. *)
-      if Hash_set.mem inherited_tns traced.tn then
-        raise
-          (Utils.User_error
-             [%string
-               "the deferred computation of %{Tn.debug_name traced.tn}, stored by an earlier \
-                routine of this compilation lineage, could not be inlined at a read site of this \
-                routine (rejection %{i}: unsupported indexing or vector form for inlining): no \
-                routine writes the node's buffer, so the read cannot fall back to a materialized \
-                access. Mark %{Tn.debug_name traced.tn} as materialized (e.g. via \
-                Train.set_materialized) in the routine that computes it."]);
-      Tn.Placements.update optim_ctx.placements traced.tn Never_virtual (Site i);
-      None
+         actionably instead. gh-ocannl-1551: a capture walk, which cannot tell whether the read
+         executes, passes [on_inherited_unservable] to record the refusal instead; the read then
+         stays a buffer read and nothing is committed. *)
+      if Hash_set.mem inherited_tns traced.tn then (
+        match on_inherited_unservable with
+        | None -> raise (Utils.User_error (inherited_uninlinable_rejection traced.tn ~code:i))
+        | Some record ->
+            record i;
+            None)
+      else (
+        Tn.Placements.update optim_ctx.placements traced.tn Never_virtual (Site i);
+        None)
 
 let optimize_integer_pow = ref true
 
@@ -2895,21 +2933,27 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
           Hash_set.add tainted key);
     tainted
   in
-  (* gh-ocannl-1514: a capture walk (phase 1 below) decides no [Where] with its candidate's
-     write-index loops, so it can meet a merge-tainted inherited read in an arm the emitted code
-     never evaluates. Inlining it there would refuse the routine for dead code; instead the read is
-     left un-inlined and recorded as a HIT against the OWNER of the code being walked -- the setter
-     whose right-hand side holds it, or the capture candidate for code outside every setter (a
-     [Set_local], which the inline filter keeps). A store whose own node has a hit is refused
-     ([check_and_store_virtual ~tainted_read], [154:capture-reads-merge]), so no stored template
-     carries such a read in a setter of its own node; the candidate materializes and the emit walk
-     decides the arm with the real loop extents, raising the merge-splice rejection if the read is
-     live there. A hit owned by a SIBLING setter of a shared loop refuses nothing: consumption drops
-     sibling setters ([instantiate_computations], [computation_reads_merge]). The walk is never
-     aborted, so it leaves no state a completed capture would not. [Some (owner, hits)] exactly
-     during a capture walk; [hits] maps an owner to the first tainted node it read. *)
-  let capture : (Tn.t * (Tn.t, Tn.t) Hashtbl.t) option ref = ref None in
-  let capture_hit tn = Option.bind !capture ~f:(fun (_, hits) -> Hashtbl.find hits tn) in
+  (* gh-ocannl-1514, gh-ocannl-1551: a capture walk (phase 1 below) decides no [Where] with its
+     candidate's write-index loops, so it can meet, in an arm the emitted code never evaluates, an
+     inherited read that refuses the routine where it executes: a merge-tainted computation, a node
+     an earlier routine placed as routine-local scratch, or a computation that cannot be
+     instantiated at the read's indices. Inlining it there would refuse the routine for dead code;
+     instead the read is left un-inlined and recorded as a HIT ([capture_hit]) against the OWNER of
+     the code being walked -- the setter whose right-hand side holds it, or the capture candidate
+     for code outside every setter (a [Set_local], which the inline filter keeps). A store whose own
+     node has a hit is refused ([check_and_store_virtual ~capture_hit], [154]/[155]/[156]), so no
+     stored template carries such a read in a setter of its own node; the candidate materializes and
+     the emit walk decides the arm with the real loop extents, raising the read's own rejection if
+     it is live there. A hit owned by a SIBLING setter of a shared loop refuses nothing: consumption
+     drops sibling setters ([instantiate_computations], [computation_reads_merge]). The walk is
+     never aborted, so it leaves no state a completed capture would not. [Some (owner, hits)]
+     exactly during a capture walk; [hits] maps an owner to the first hit it met. *)
+  let capture : (Tn.t * (Tn.t, capture_hit) Hashtbl.t) option ref = ref None in
+  let record_hit hit =
+    Option.iter !capture ~f:(fun (owner, hits) ->
+        ignore (Hashtbl.add hits ~key:owner ~data:hit : [ `Ok | `Duplicate ]))
+  in
+  let owner_hit tn = Option.bind !capture ~f:(fun (_, hits) -> Hashtbl.find hits tn) in
   (* Walks a setter's right-hand side with the setter as the owner of any hit in it. *)
   let owning_rhs tn f =
     match !capture with
@@ -2920,16 +2964,60 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
         capture := Some (outer, hits);
         result
   in
+  (* gh-ocannl-1551, the capture walk's side effects on code its template drops. [capturing] is the
+     candidate whose template the current walk produces ([None] outside phase 1 below).
+
+     A statement of another node stored on its own inside the walk (the per-statement store of the
+     [Set]/[Zero_out]/[Set_from_vec] arms: a node no enclosing captured loop owns, which the walk
+     reaches only when every loop its index omits has width 1 -- a wider one refuses it as [147]) is
+     PROVISIONAL: it exists so that a later setter of the same walk can inline the node, and it is
+     restored away when the walk ends ([provisional] holds each such node with its prior entry). The
+     emit walk below stores the node again, with every candidate of the loop stored, and that store
+     is the one kept; before, both stayed, and [check_and_store_virtual] prepends, so a
+     non-idempotent component (an accumulation) replayed once per walk.
+
+     A setter the walk will not store and that is not the candidate's -- a sibling of the shared
+     loop, which [instantiate_computations] drops from the template -- never replays at a read site,
+     so its right-hand side decides [Where] with every enclosing loop's extent, as the emit walk
+     does ([decision_loops]). Holding the candidate's write-index loops opaque there walked arms the
+     emitted code never evaluates, and inlining in them committed producers [Never_virtual] and
+     registered spliced reads for reads that never execute. *)
+  let capturing : Tn.t option ref = ref None in
+  let provisional : (Tn.t * (Indexing.axis_index array option * t) list option) list ref = ref [] in
+  let store_statement ~capture_hit ~guarded ~in_scan ~enclosing traced llc =
+    if Option.is_some !capturing then
+      provisional := (traced.tn, Hashtbl.find optim_ctx.computations traced.tn) :: !provisional;
+    check_and_store_virtual optim_ctx ~elide_stored ~capture_hit ~guarded ~in_scan ~enclosing traced
+      static_indices llc
+  in
+  let restore_provisional () =
+    (* Newest first, so a node stored twice ends at its entry from before the walk. *)
+    List.iter !provisional ~f:(fun (tn, prior) ->
+        match prior with
+        | None -> Hashtbl.remove optim_ctx.computations tn
+        | Some comps -> Hashtbl.set optim_ctx.computations ~key:tn ~data:comps);
+    provisional := []
+  in
+  let rhs_opaque ~opaque ~will_store tn =
+    match !capturing with
+    | Some candidate when (not (Tn.equal candidate tn)) && not will_store -> fun _ -> false
+    | _ -> opaque
+  in
   (* The ordinary inlining of a read: the node's stored template instantiated at the read's indices,
      as a scope local. [None] from [inline_computation] means the read site could not be served and
      the node was committed [Never_virtual] there; the read then stays a buffer read. *)
   let inline_get (traced : traced_array) indices : scalar_t =
     let tn = traced.tn in
     let id = fresh_scope tn in
+    (* gh-ocannl-1551: during a capture walk, an inherited computation that cannot be instantiated
+       here is a hit (see [capture]), not a refusal. *)
+    let on_inherited_unservable =
+      Option.map !capture ~f:(fun _ code -> record_hit (Capture_read_uninlinable (tn, code)))
+    in
     Option.value ~default:(Get (tn, indices))
     @@ Option.map
-         (inline_computation ~fresh_symbol ~id ~inherited_merge_tainted ~inherited_tns optim_ctx
-            traced static_indices indices) ~f:(fun body ->
+         (inline_computation ~fresh_symbol ?on_inherited_unservable ~id ~inherited_merge_tainted
+            ~inherited_tns optim_ctx traced static_indices indices) ~f:(fun body ->
            if Hash_set.mem inherited_tns tn then record_spliced_reads body;
            Local_scope { id; body; orig_indices = indices; mint = Inlined_computation })
   in
@@ -3214,6 +3302,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
                        setter (see [capture]). *)
                     let hits = Hashtbl.create (module Tnode) in
                     capture := Some (tn, hits);
+                    capturing := Some tn;
                     let stored =
                       (* gh-509 task 4: vector-store producers are stored raw, see
                          [proc_contains_set_from_vec]. *)
@@ -3234,10 +3323,12 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
                           }
                     in
                     capture := None;
+                    capturing := None;
+                    restore_provisional ();
                     (* The stored subtree is rooted AT this loop, so [enclosing] (not [enclosing'])
                        is what it fails to contain. *)
                     check_and_store_virtual optim_ctx ~elide_stored
-                      ~tainted_read:(Hashtbl.find hits tn) ~guarded ~in_scan ~enclosing node
+                      ~capture_hit:(Hashtbl.find hits tn) ~guarded ~in_scan ~enclosing node
                       static_indices stored));
               (* Phase 2 -- emit. Candidates are NOT in [process_for], so surviving readers
                  (materialized siblings, and later virtual siblings, all now stored) inline the
@@ -3258,9 +3349,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
           && (not @@ Set.mem owned tn)
           && (not @@ Tn.Placements.known_non_virtual plc traced.tn)
           && stores tn
-        then
-          check_and_store_virtual optim_ctx ~elide_stored ~tainted_read:None ~guarded ~in_scan
-            ~enclosing traced static_indices llc;
+        then store_statement ~capture_hit:None ~guarded ~in_scan ~enclosing traced llc;
         llc
     | Set { tn; idcs; llsc; debug } ->
         let traced : traced_array = get_node traced_store tn in
@@ -3275,6 +3364,9 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
           known && (not in_storage_pass) && (not guarded) && (not in_scan)
           && Set.equal !current_writers (Set.singleton (module Tnode) tn)
         in
+        let will_store =
+          (not @@ Set.mem process_for tn) && (not @@ Set.mem owned tn) && (not known) && stores tn
+        in
         let result =
           Set
             {
@@ -3282,8 +3374,10 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
               idcs;
               llsc =
                 owning_rhs tn (fun () ->
-                    loop_scalar ~opaque ~process_for:next ~owned ~in_storage_pass ~guarded ~in_scan
-                      ~enclosing ~footprint_ok llsc);
+                    loop_scalar
+                      ~opaque:(rhs_opaque ~opaque ~will_store tn)
+                      ~process_for:next ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
+                      ~footprint_ok llsc);
               debug;
             }
         in
@@ -3295,8 +3389,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
         then
           (* gh-ocannl-1514: a store made inside a capture walk stores [result], so a hit in this
              node's own code refuses it like the capture's. *)
-          check_and_store_virtual optim_ctx ~elide_stored ~tainted_read:(capture_hit tn) ~guarded
-            ~in_scan ~enclosing traced static_indices result;
+          store_statement ~capture_hit:(owner_hit tn) ~guarded ~in_scan ~enclosing traced result;
         result
     | Set_from_vec { tn; idcs; length; vec_unop; arg = arg_scalar, arg_prec; debug } ->
         let traced : traced_array = get_node traced_store tn in
@@ -3305,6 +3398,9 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
         let footprint_ok =
           known && (not in_storage_pass) && (not guarded) && (not in_scan)
           && Set.equal !current_writers (Set.singleton (module Tnode) tn)
+        in
+        let will_store =
+          (not @@ Set.mem process_for tn) && (not @@ Set.mem owned tn) && (not known) && stores tn
         in
         let result =
           Set_from_vec
@@ -3315,8 +3411,10 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
               vec_unop;
               arg =
                 ( owning_rhs tn (fun () ->
-                      loop_scalar ~opaque ~process_for:next ~owned ~in_storage_pass ~guarded
-                        ~in_scan ~enclosing ~footprint_ok arg_scalar),
+                      loop_scalar
+                        ~opaque:(rhs_opaque ~opaque ~will_store tn)
+                        ~process_for:next ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
+                        ~footprint_ok arg_scalar),
                   arg_prec );
               debug;
             }
@@ -3330,8 +3428,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
           (* gh-509 task 4: store the raw statement (argument not rewritten), see
              [proc_contains_set_from_vec]. The emitted statement remains [result]. The raw statement
              inlines nothing, so a capture's hit cannot reach it. *)
-          check_and_store_virtual optim_ctx ~elide_stored ~tainted_read:None ~guarded ~in_scan
-            ~enclosing traced static_indices llc;
+          store_statement ~capture_hit:None ~guarded ~in_scan ~enclosing traced llc;
         result
     | Set_local (id, llsc) ->
         Set_local
@@ -3384,20 +3481,16 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
              inherited node the earlier routine materialized as routine-local scratch has no buffer
              a later routine can read. Only persistent placements may pass through. *)
           if Hash_set.mem inherited_tns tn && Tn.Placements.known_not_materialized plc tn then
-            raise
-              (Utils.User_error
-                 [%string
-                   "the node %{Tn.debug_name tn} was computed as routine-local scratch by an \
-                    earlier routine of this compilation lineage: its buffer does not persist, so a \
-                    later routine cannot read it. Mark %{Tn.debug_name tn} as materialized (e.g. \
-                    via Train.set_materialized) in the routine that computes it."]);
+            (* gh-ocannl-1551: during a capture walk, a hit (see [capture]). *)
+            if Option.is_some !capture then record_hit (Capture_reads_local tn)
+            else raise (Utils.User_error (inherited_local_read_rejection tn));
           llsc)
         else
           match !capture with
-          | Some (owner, hits) when Hash_set.mem inherited_merge_tainted tn ->
+          | Some _ when Hash_set.mem inherited_merge_tainted tn ->
               (* gh-ocannl-1514: a hit, see [capture]. Ahead of the footprint arm too, which in a
                  capture walk retracts an inherited node to [inline_get]. *)
-              ignore (Hashtbl.add hits ~key:owner ~data:tn : [ `Ok | `Duplicate ]);
+              record_hit (Capture_reads_merge tn);
               llsc
           | _ ->
               if Hashtbl.mem footprint_scoped tn then

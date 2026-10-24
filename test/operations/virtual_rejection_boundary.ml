@@ -50,9 +50,9 @@
    [146:lane-extract-counter] belong to the vector-store (packed-uniform) consumption path,
    exercised through the uniform tests rather than by hand. - [149:scan-at-inline] is the
    consumption-time backstop behind [148:scan-recurrence], unreachable while storage refuses a scan
-   first. - [154:capture-reads-merge] needs a merge-reading template stored by an EARLIER routine of
-   the lineage, which a single-routine row cannot build; test/operations/stored_template_elision.ml
-   pins it with executed parity.
+   first. - [154:capture-reads-merge], [155:capture-reads-local] and [156:capture-read-uninlinable]
+   need a template or a placement left by an EARLIER routine of the lineage, which a single-routine
+   row cannot build; test/operations/stored_template_elision.ml pins them with executed parity.
 
    [19:declare-local] was in that list and is not: gh-ocannl-483 put the algebraic rewrite tier
    AHEAD of [Low_level.optimize], and [Online_softmax.hoist] declares its cached probability cell as

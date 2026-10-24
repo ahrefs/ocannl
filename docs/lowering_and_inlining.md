@@ -354,6 +354,10 @@ order, which is what decides whether a code can fire. The exit codes:
 - `154:capture-reads-merge` — The walk capturing the candidate met a merge-tainted inherited read
   in the candidate's own code, in an arm its write-index loops would decide but the template
   cannot (gh-ocannl-1514): the candidate materializes, and the emit walk decides the arm.
+- `155:capture-reads-local`, `156:capture-read-uninlinable` — The same refusal for the two other
+  inherited reads that refuse a routine where they execute (gh-ocannl-1551): a node an earlier
+  routine placed as routine-local (`Local`) scratch, and a stored computation that cannot be
+  instantiated at the read's indices.
 
 `Non_virtual 19` was a defensive arm and is one no longer. The reasoning that made it defensive
 still holds *within* the pipeline: `hoist_cross_statement_cse` is the only phase here that produces

@@ -87,6 +87,80 @@ earlier zero component: w is refused by its capture and materializes: true
 earlier zero component: czout executes to the live arm's values: true
 earlier zero component: the deferred reading agrees with the materialized one: true
 virtual consumer where (i < 2) x v (live where it runs): routine A defers v, its template reading the merge buffer: true
-virtual consumer where (i < 2) x v (live where it runs): routine B is refused for the cross-routine merge splice: true
+virtual consumer where (i < 2) x v (live where it runs): routine B is refused with the read's own message: true
 declared-virtual consumer where (i < 4) x v: routine A defers v, its template reading the merge buffer: true
-declared-virtual consumer where (i < 4) x v: routine B is refused for the cross-routine merge splice: true
+declared-virtual consumer where (i < 4) x v: routine B is refused with the read's own message: true
+local: virtual consumer where (i < 4) x v: routine A placed v as routine-local scratch, its computation in the table: true
+local: virtual consumer where (i < 4) x v: routine B compiles: true
+local: virtual consumer where (i < 4) x v: routine B declares no merge buffer and does not read v: true
+local: virtual consumer where (i < 4) x v: w is refused by its capture and materializes: true
+local: virtual consumer where (i < 4) x v: localvc4out executes to the live arm's values: true
+local: virtual consumer where (i < 4) x v: the deferred reading agrees with the materialized one: true
+local: virtual consumer where (i < 0) v x: routine A placed v as routine-local scratch, its computation in the table: true
+local: virtual consumer where (i < 0) v x: routine B compiles: true
+local: virtual consumer where (i < 0) v x: routine B declares no merge buffer and does not read v: true
+local: virtual consumer where (i < 0) v x: w is refused by its capture and materializes: true
+local: virtual consumer where (i < 0) v x: localvc0out executes to the live arm's values: true
+local: virtual consumer where (i < 0) v x: the deferred reading agrees with the materialized one: true
+local: sibling holds the read: routine A placed v as routine-local scratch, its computation in the table: true
+local: sibling holds the read: routine B compiles: true
+local: sibling holds the read: routine B declares no merge buffer and does not read v: true
+local: sibling holds the read: w, whose own code does not read v, stays virtual: true
+local: sibling holds the read: localcso2 executes to the live arm's values: true
+local: sibling holds the read: localcsout executes to the live arm's values: true
+local: sibling holds the read: the deferred reading agrees with the materialized one: true
+local: ordered candidates: routine A placed v as routine-local scratch, its computation in the table: true
+local: ordered candidates: routine B compiles: true
+local: ordered candidates: routine B declares no merge buffer and does not read v: true
+local: ordered candidates: the earlier provider p stays virtual: true
+local: ordered candidates: w is refused by its capture and materializes: true
+local: ordered candidates: the later reader r stays virtual: true
+local: ordered candidates: localcoout executes to the live arm's values: true
+local: ordered candidates: the deferred reading agrees with the materialized one: true
+local: earlier zero component: routine A placed v as routine-local scratch, its computation in the table: true
+local: earlier zero component: routine B compiles: true
+local: earlier zero component: routine B declares no merge buffer and does not read v: true
+local: earlier zero component: w is refused by its capture and materializes: true
+local: earlier zero component: localczout executes to the live arm's values: true
+local: earlier zero component: the deferred reading agrees with the materialized one: true
+local: virtual consumer where (i < 2) x v (live where it runs): routine A placed v as routine-local scratch, its computation in the table: true
+local: virtual consumer where (i < 2) x v (live where it runs): routine B is refused with the read's own message: true
+local: declared-virtual consumer where (i < 4) x v: routine A placed v as routine-local scratch, its computation in the table: true
+local: declared-virtual consumer where (i < 4) x v: routine B is refused with the read's own message: true
+uninlinable: virtual consumer where (i < 4) x v: routine A defers the fixed-cell v: true
+uninlinable: virtual consumer where (i < 4) x v: routine B compiles: true
+uninlinable: virtual consumer where (i < 4) x v: routine B declares no merge buffer and does not read v: true
+uninlinable: virtual consumer where (i < 4) x v: w is refused by its capture and materializes: true
+uninlinable: virtual consumer where (i < 4) x v: uninlinablevc4out executes to the live arm's values: true
+uninlinable: virtual consumer where (i < 4) x v: the deferred reading agrees with the materialized one: true
+uninlinable: virtual consumer where (i < 0) v x: routine A defers the fixed-cell v: true
+uninlinable: virtual consumer where (i < 0) v x: routine B compiles: true
+uninlinable: virtual consumer where (i < 0) v x: routine B declares no merge buffer and does not read v: true
+uninlinable: virtual consumer where (i < 0) v x: w is refused by its capture and materializes: true
+uninlinable: virtual consumer where (i < 0) v x: uninlinablevc0out executes to the live arm's values: true
+uninlinable: virtual consumer where (i < 0) v x: the deferred reading agrees with the materialized one: true
+uninlinable: sibling holds the read: routine A defers the fixed-cell v: true
+uninlinable: sibling holds the read: routine B compiles: true
+uninlinable: sibling holds the read: routine B declares no merge buffer and does not read v: true
+uninlinable: sibling holds the read: w, whose own code does not read v, stays virtual: true
+uninlinable: sibling holds the read: uninlinablecso2 executes to the live arm's values: true
+uninlinable: sibling holds the read: uninlinablecsout executes to the live arm's values: true
+uninlinable: sibling holds the read: the deferred reading agrees with the materialized one: true
+uninlinable: ordered candidates: routine A defers the fixed-cell v: true
+uninlinable: ordered candidates: routine B compiles: true
+uninlinable: ordered candidates: routine B declares no merge buffer and does not read v: true
+uninlinable: ordered candidates: the earlier provider p stays virtual: true
+uninlinable: ordered candidates: w is refused by its capture and materializes: true
+uninlinable: ordered candidates: the later reader r stays virtual: true
+uninlinable: ordered candidates: uninlinablecoout executes to the live arm's values: true
+uninlinable: ordered candidates: the deferred reading agrees with the materialized one: true
+uninlinable: earlier zero component: routine A defers the fixed-cell v: true
+uninlinable: earlier zero component: routine B compiles: true
+uninlinable: earlier zero component: routine B declares no merge buffer and does not read v: true
+uninlinable: earlier zero component: w is refused by its capture and materializes: true
+uninlinable: earlier zero component: uninlinableczout executes to the live arm's values: true
+uninlinable: earlier zero component: the deferred reading agrees with the materialized one: true
+uninlinable: virtual consumer where (i < 2) x v (live where it runs): routine A defers the fixed-cell v: true
+uninlinable: virtual consumer where (i < 2) x v (live where it runs): routine B is refused with the read's own message: true
+uninlinable: declared-virtual consumer where (i < 4) x v: routine A defers the fixed-cell v: true
+uninlinable: declared-virtual consumer where (i < 4) x v: routine B is refused with the read's own message: true
