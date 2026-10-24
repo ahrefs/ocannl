@@ -173,6 +173,7 @@ docs/agent-notes/virtualization-and-inlining.md -- 1 8 9 13 19 39 41 52 141 142 
 docs/lowering_and_inlining.md -- 4 5 7 8 9 10 11 12 13 14 16 18 19 39 41 51 52 140 141 142 143 144 145 146 147 148 149 151 152 154 155 156 432
 lib/train.ml -- 28 29
 tensor/tensor.ml -- 24 49 241
+test/operations/capture_pass_side_effects.ml -- 13
 test/operations/cost_model_template.expected -- 9 13
 test/operations/cost_model_template.ml -- 13
 test/operations/footprint_materialization.ml -- 13

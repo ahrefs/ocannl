@@ -1,0 +1,21 @@
+duplicate store, one candidate: y is deferred: true
+duplicate store, one candidate: y holds exactly one accumulating component: true
+duplicate store, one candidate: y executes to k, accumulated once: true
+duplicate store, one candidate: the deferred reading agrees with the materialized one: true
+duplicate store, three candidates: y is deferred: true
+duplicate store, three candidates: y holds exactly one accumulating component: true
+duplicate store, three candidates: y executes to k, accumulated once: true
+duplicate store, three candidates: the deferred reading agrees with the materialized one: true
+duplicate store, later reader: y is deferred: true
+duplicate store, later reader: y holds exactly one accumulating component: true
+duplicate store, later reader: y executes to k, accumulated once: true
+duplicate store, later reader: the deferred reading agrees with the materialized one: true
+dead sibling arm, local producer: the candidate w stays virtual: true
+dead sibling arm, local producer: r, read only where the sibling's arm is dead, is not materialized for it: true
+dead sibling arm, local producer: the sibling executes to its live arm: true
+dead sibling arm, local producer: the reading agrees with the materialized one: true
+dead sibling arm, inherited template: routine A defers v: true
+dead sibling arm, inherited template: the candidate w stays virtual: true
+dead sibling arm, inherited template: extra keeps its raw guards-taken verdict (not spliced, not an input): true
+dead sibling arm, inherited template: the sibling executes to its live arm: true
+dead sibling arm, inherited template: the reading agrees with the materialized one: true

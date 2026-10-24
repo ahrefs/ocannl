@@ -2964,6 +2964,45 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
         capture := Some (outer, hits);
         result
   in
+  (* gh-ocannl-1551, the capture walk's side effects on code its template drops. [capturing] is the
+     candidate whose template the current walk produces ([None] outside phase 1 below).
+
+     A statement of another node stored on its own inside the walk (the per-statement store of the
+     [Set]/[Zero_out]/[Set_from_vec] arms: a node no enclosing captured loop owns, which the walk
+     reaches only when every loop its index omits has width 1 -- a wider one refuses it as [147]) is
+     PROVISIONAL: it exists so that a later setter of the same walk can inline the node, and it is
+     restored away when the walk ends ([provisional] holds each such node with its prior entry). The
+     emit walk below stores the node again, with every candidate of the loop stored, and that store
+     is the one kept; before, both stayed, and [check_and_store_virtual] prepends, so a
+     non-idempotent component (an accumulation) replayed once per walk.
+
+     A setter the walk will not store and that is not the candidate's -- a sibling of the shared
+     loop, which [instantiate_computations] drops from the template -- never replays at a read site,
+     so its right-hand side decides [Where] with every enclosing loop's extent, as the emit walk
+     does ([decision_loops]). Holding the candidate's write-index loops opaque there walked arms the
+     emitted code never evaluates, and inlining in them committed producers [Never_virtual] and
+     registered spliced reads for reads that never execute. *)
+  let capturing : Tn.t option ref = ref None in
+  let provisional : (Tn.t * (Indexing.axis_index array option * t) list option) list ref = ref [] in
+  let store_statement ~capture_hit ~guarded ~in_scan ~enclosing traced llc =
+    if Option.is_some !capturing then
+      provisional := (traced.tn, Hashtbl.find optim_ctx.computations traced.tn) :: !provisional;
+    check_and_store_virtual optim_ctx ~elide_stored ~capture_hit ~guarded ~in_scan ~enclosing traced
+      static_indices llc
+  in
+  let restore_provisional () =
+    (* Newest first, so a node stored twice ends at its entry from before the walk. *)
+    List.iter !provisional ~f:(fun (tn, prior) ->
+        match prior with
+        | None -> Hashtbl.remove optim_ctx.computations tn
+        | Some comps -> Hashtbl.set optim_ctx.computations ~key:tn ~data:comps);
+    provisional := []
+  in
+  let rhs_opaque ~opaque ~will_store tn =
+    match !capturing with
+    | Some candidate when (not (Tn.equal candidate tn)) && not will_store -> fun _ -> false
+    | _ -> opaque
+  in
   (* The ordinary inlining of a read: the node's stored template instantiated at the read's indices,
      as a scope local. [None] from [inline_computation] means the read site could not be served and
      the node was committed [Never_virtual] there; the read then stays a buffer read. *)
@@ -3263,6 +3302,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
                        setter (see [capture]). *)
                     let hits = Hashtbl.create (module Tnode) in
                     capture := Some (tn, hits);
+                    capturing := Some tn;
                     let stored =
                       (* gh-509 task 4: vector-store producers are stored raw, see
                          [proc_contains_set_from_vec]. *)
@@ -3283,6 +3323,8 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
                           }
                     in
                     capture := None;
+                    capturing := None;
+                    restore_provisional ();
                     (* The stored subtree is rooted AT this loop, so [enclosing] (not [enclosing'])
                        is what it fails to contain. *)
                     check_and_store_virtual optim_ctx ~elide_stored
@@ -3307,9 +3349,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
           && (not @@ Set.mem owned tn)
           && (not @@ Tn.Placements.known_non_virtual plc traced.tn)
           && stores tn
-        then
-          check_and_store_virtual optim_ctx ~elide_stored ~capture_hit:None ~guarded ~in_scan
-            ~enclosing traced static_indices llc;
+        then store_statement ~capture_hit:None ~guarded ~in_scan ~enclosing traced llc;
         llc
     | Set { tn; idcs; llsc; debug } ->
         let traced : traced_array = get_node traced_store tn in
@@ -3324,6 +3364,9 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
           known && (not in_storage_pass) && (not guarded) && (not in_scan)
           && Set.equal !current_writers (Set.singleton (module Tnode) tn)
         in
+        let will_store =
+          (not @@ Set.mem process_for tn) && (not @@ Set.mem owned tn) && (not known) && stores tn
+        in
         let result =
           Set
             {
@@ -3331,8 +3374,10 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
               idcs;
               llsc =
                 owning_rhs tn (fun () ->
-                    loop_scalar ~opaque ~process_for:next ~owned ~in_storage_pass ~guarded ~in_scan
-                      ~enclosing ~footprint_ok llsc);
+                    loop_scalar
+                      ~opaque:(rhs_opaque ~opaque ~will_store tn)
+                      ~process_for:next ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
+                      ~footprint_ok llsc);
               debug;
             }
         in
@@ -3344,8 +3389,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
         then
           (* gh-ocannl-1514: a store made inside a capture walk stores [result], so a hit in this
              node's own code refuses it like the capture's. *)
-          check_and_store_virtual optim_ctx ~elide_stored ~capture_hit:(owner_hit tn) ~guarded
-            ~in_scan ~enclosing traced static_indices result;
+          store_statement ~capture_hit:(owner_hit tn) ~guarded ~in_scan ~enclosing traced result;
         result
     | Set_from_vec { tn; idcs; length; vec_unop; arg = arg_scalar, arg_prec; debug } ->
         let traced : traced_array = get_node traced_store tn in
@@ -3354,6 +3398,9 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
         let footprint_ok =
           known && (not in_storage_pass) && (not guarded) && (not in_scan)
           && Set.equal !current_writers (Set.singleton (module Tnode) tn)
+        in
+        let will_store =
+          (not @@ Set.mem process_for tn) && (not @@ Set.mem owned tn) && (not known) && stores tn
         in
         let result =
           Set_from_vec
@@ -3364,8 +3411,10 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
               vec_unop;
               arg =
                 ( owning_rhs tn (fun () ->
-                      loop_scalar ~opaque ~process_for:next ~owned ~in_storage_pass ~guarded
-                        ~in_scan ~enclosing ~footprint_ok arg_scalar),
+                      loop_scalar
+                        ~opaque:(rhs_opaque ~opaque ~will_store tn)
+                        ~process_for:next ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
+                        ~footprint_ok arg_scalar),
                   arg_prec );
               debug;
             }
@@ -3379,8 +3428,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
           (* gh-509 task 4: store the raw statement (argument not rewritten), see
              [proc_contains_set_from_vec]. The emitted statement remains [result]. The raw statement
              inlines nothing, so a capture's hit cannot reach it. *)
-          check_and_store_virtual optim_ctx ~elide_stored ~capture_hit:None ~guarded ~in_scan
-            ~enclosing traced static_indices llc;
+          store_statement ~capture_hit:None ~guarded ~in_scan ~enclosing traced llc;
         result
     | Set_local (id, llsc) ->
         Set_local

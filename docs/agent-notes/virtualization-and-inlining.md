@@ -483,6 +483,21 @@ files.
   an inherited `Local` node never reaches the walk: `decide_placements`' read-only-input rule
   refuses it on the raw read, dead arm or not — the walk's `Local` refusal is met only by a node
   the routine also writes.
+- **What a capture walk does to code its template drops** (gh-ocannl-1551). Phase 1 of a shared
+  loop walks every setter of the body, though the stored template keeps only the candidate's. Two
+  divergences from the emit walk were real (`capture_pass_side_effects.ml`): (1) a statement of
+  another node stored on its own inside the walk (only under width-1 enclosing loops, else `147`)
+  was stored once per phase-1 walk and again by the emit walk — duplicated components, so an
+  accumulation replayed twice; such stores are now provisional, restored away when the walk ends
+  (a later setter of the same walk still inlines them, so they cannot be skipped); (2) a sibling
+  setter's right-hand side was walked with the CANDIDATE's write-index loops opaque, entering arms
+  the emitted code never evaluates — committing an unservable local producer `Never_virtual` and
+  marking an inherited template's operands spliced; a setter the walk will not store, not the
+  candidate's, now decides `Where` with every loop's extent, as the emit walk does. Still open: a
+  node whose own loop nests inside a width-1 capture gets the walk's per-statement store, which a
+  loop-varying operand refuses (`9`), where the emit walk alone would have captured it at its loop.
+  Shared loops are hand-built IR (`Ll_test`); `Assignments` lowering gives each assignment its own
+  nest.
 - Big-reduction producers are forced `Never_virtual` by `virtualize_max_inline_reduction`
   (default 16) — remember it when a structural expectation assumes inlining.
 - Wide-fanin producers are forced `Never_virtual 41` by `virtualize_max_inline_fanin` (default 8,
