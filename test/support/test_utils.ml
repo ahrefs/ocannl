@@ -147,6 +147,10 @@ module Mutation_serial_scan = Mutation_serial_scan
 (** Holding every write to the inference session's module-level mutable state to
     [Row.note_mutation], or to an in-place classification (gh-ocannl-1506). *)
 
+module Open_node_scan = Open_node_scan
+(** Holding every tensor node a module of [tensor/] creates to [Tensor.note_open_node], the uid list
+    a rewind discards by (gh-ocannl-1579). *)
+
 module Tensorized_census_scan = Tensorized_census_scan
 (** Finding executed claims about a tensorized routine whose item judges no mma census, which parity
     alone cannot replace (gh-ocannl-1309). *)

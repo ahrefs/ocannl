@@ -1,0 +1,10 @@
+(* A planted tnode.ml for the open_node_scan control: [wrap] mints a uid only through [create]. *)
+let fresh_uid =
+  let next = ref 0 in
+  fun () ->
+    Int.incr next;
+    !next
+
+let create ~id = (id, fresh_uid ())
+let wrap ~id = create ~id
+let find ~id = (id, -1)

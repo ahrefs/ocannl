@@ -46,7 +46,11 @@ files.
   `with_unchanged_roots` restores the checkpoint with the maps. A rewind discards exactly the nodes
   the frontend allocated since the closure, by uid (gh-ocannl-1505): a new `Tn.create` site in
   `tensor.ml` must call `note_open_node`, or its node outlives the rewind as a live handle (an id or
-  uid range would refuse nodes other code created in the window). A new `Context` entry point over a
+  uid range would refuse nodes other code created in the window). `open_node_scan` (gh-ocannl-1579)
+  enforces it over every `tensor/` module: the creators are derived from `tnode.ml` (the values
+  minting a `fresh_uid`), and a creation's node must flow, through result positions of `let`
+  bindings, into a variable passed to `note_open_node`; its header in
+  `test/support/open_node_scan.ml` lists the forms it follows and what it refuses. A new `Context` entry point over a
   node runs `check_node_valid` (or, over a program, `frontend_gate`) before it forces anything: a
   discarded node's dims otherwise fail as an unrelated shape error. A new write a failed construction
   can leave behind must call `Row.note_mutation`, or a failure after it will not taint. An operation that knows its accumulation up-front (`Tensor.raw_accum`) creates the step

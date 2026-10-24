@@ -236,6 +236,9 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-online_softmax_block_fast_math
   test/operations/dune                     @runtest-online_softmax_fast_math
   test/operations/dune                     @runtest-online_softmax_fp_licences
+  test/operations/dune                     @runtest-open_node_scan
+  test/operations/dune                     @runtest-open_node_scan_control
+  test/operations/dune                     @runtest-open_node_scan_refusal_control
   test/operations/dune                     @runtest-operand_key_ratchet
   test/operations/dune                     @runtest-optional_arg_inventory
   test/operations/dune                     @runtest-optional_arg_inventory_control

@@ -1,0 +1,2 @@
+FAIL: tensor/operation.ml:4: in elsewhere, Tnode.create's node (bound to tn) never reaches note_open_node -- only tensor/tensor.ml's own top-level one notes it
+FAIL: tensor/tensor.ml:6: in unnoted, Tnode.wrap's node (bound to tn) never reaches note_open_node

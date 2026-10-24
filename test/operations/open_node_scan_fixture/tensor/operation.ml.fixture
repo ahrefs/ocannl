@@ -1,0 +1,4 @@
+module Tn = Ir.Tnode
+let note_open_node _ = ()
+(* Refused: only tensor.ml's own top-level note_open_node notes a node. *)
+let elsewhere ~id = let tn = Tn.create ~id in note_open_node tn; tn

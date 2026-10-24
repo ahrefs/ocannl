@@ -153,6 +153,10 @@
   (alias runtest-mutation_serial_scan)
   (alias runtest-mutation_serial_scan_control)
   (alias runtest-mutation_serial_scan_cases)
+  (alias runtest-open_node_scan)
+  (alias runtest-open_node_scan_control)
+  (alias runtest-open_node_scan_refusal_control)
+  (alias runtest-open_node_scan_cases)
   (alias runtest-census_total_ratchet)
   (alias runtest-workflow_job_timeouts)
   (alias runtest-shell_scripts_parse)
@@ -326,6 +330,9 @@
   (alias runtest-operand_key_ratchet)
   (alias runtest-mutation_serial_scan)
   (alias runtest-mutation_serial_scan_control)
+  (alias runtest-open_node_scan)
+  (alias runtest-open_node_scan_control)
+  (alias runtest-open_node_scan_refusal_control)
   (alias runtest-tensorized_census_ratchet)
   (alias runtest-provenance_tag_inventory)
   (alias runtest-census_total_ratchet)
@@ -3641,6 +3648,11 @@
   provenance_tag_inventory.ml
   provenance_tag_inventory.expected
   provenance_tag_scan_cases.expected
+  open_node_scan.ml
+  open_node_scan.expected
+  open_node_scan_control.expected
+  open_node_scan_refusal_control.expected
+  open_node_scan_cases.expected
   render_decline_inventory.ml
   render_decline_inventory.expected
   ocamlformat_ignore_scan.ml
@@ -3702,6 +3714,8 @@
    tensorized_census_ratchet.expected,tensorized_census_scan_cases.expected
    provenance_tag_inventory.ml
    provenance_tag_inventory.expected,provenance_tag_scan_cases.expected
+   open_node_scan.ml
+   open_node_scan.expected,open_node_scan_control.expected,open_node_scan_refusal_control.expected,open_node_scan_cases.expected
    render_decline_inventory.ml
    render_decline_inventory.expected
    ocamlformat_ignore_scan.ml
@@ -8850,6 +8864,100 @@
  (name mutation_serial_scan_cases)
  (package neural_nets_lib)
  (modules mutation_serial_scan_cases)
+ (libraries base stdio test_utils arrayjit.verdict)
+ (deps ocannl_config))
+
+; gh-ocannl-1579: every tensor node a module of tensor/ creates reaches Tensor.note_open_node, the
+; uid list a rewind discards by (gh-ocannl-1505). The creators are derived from arrayjit/lib/tnode.ml
+; (its top-level values minting a uid), not listed; the reader states its closed lists of recognised
+; forms in test/support/open_node_scan.ml. The corpus is tensor/ as a source tree holds it.
+
+(executable
+ (name open_node_scan)
+ (modules open_node_scan)
+ (libraries base stdio test_utils arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- parses library sources without running a backend.
+ (target open_node_scan.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (sandbox always)
+  (source_tree ../../tensor)
+  ../../arrayjit/lib/tnode.ml
+  open_node_scan.ml)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:open_node_scan.exe}
+    %{workspace_root}
+    %{dep:open_node_scan.exe}
+    %{target}
+    %{dep:ocannl_config}))))
+
+(rule
+ (alias runtest-open_node_scan)
+ (package neural_nets_lib)
+ (action
+  (diff open_node_scan.expected open_node_scan.actual)))
+
+; The shipping scanner on a committed tree: a tnode.ml whose wrapper is a creator only by
+; derivation, an unnoted creation through it, and a creation noted by another file's look-alike.
+; It must refuse both, and its golden is the refusals, so a scanner that stopped reading cannot pass.
+
+(rule
+ ; ocannl-backend: none -- parses a committed fixture tree without running a backend.
+ (target open_node_scan_control.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (source_tree open_node_scan_fixture))
+ (action
+  (with-stdout-to
+   %{target}
+   (ignore-stderr
+    (with-accepted-exit-codes
+     1
+     (run %{dep:open_node_scan.exe} --fixture open_node_scan_fixture))))))
+
+(rule
+ (alias runtest-open_node_scan_control)
+ (package neural_nets_lib)
+ (action
+  (diff open_node_scan_control.expected open_node_scan_control.actual)))
+
+; Each of the scanner's own refusals, reached through a synthetic input (gh-ocannl-800).
+
+(rule
+ ; ocannl-backend: none -- feeds synthetic sources to the scanner without running a backend.
+ (target open_node_scan_refusal_control.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  open_node_scan.ml)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:open_node_scan.exe} --refusal-control))))
+
+(rule
+ (alias runtest-open_node_scan_refusal_control)
+ (package neural_nets_lib)
+ (action
+  (diff
+   open_node_scan_refusal_control.expected
+   open_node_scan_refusal_control.actual)))
+
+(test
+ ; ocannl-backend: none -- parses synthetic OCaml sources through ppxlib and links no backend.
+ (name open_node_scan_cases)
+ (package neural_nets_lib)
+ (modules open_node_scan_cases)
  (libraries base stdio test_utils arrayjit.verdict)
  (deps ocannl_config))
 
