@@ -823,6 +823,25 @@ let inject ctx st loss mapping =
             ("bench: param " ^ dn ^ " matches multiple fixture entries: "
             ^ String.concat ~sep:", " (List.map ms ~f:fst)))
 
+(** The scratch lineage a tuned cell's search compiles and times its candidates on: a fresh root
+    context, so the search's training-step executions never touch the cell's own weights, holding
+    the FIXTURE's weights — the ones the timed steps train — rather than the init draw
+    [Train.init_params] leaves there (gh-ocannl-1557). A crown is a time on the timing context's
+    values. On cifar_resnet/cc the default-placements arm inlines the ReLU and max-pool backward
+    selects into its consumer nests, where they compile to data-dependent branches, and its shipped
+    routine ran 23% slower on the fixture weights than on the init draw it had been crowned on; the
+    materialize-all arm, which evaluates each select once per element, moved by 3%. The search's own
+    training steps still drift the scratch weights (one fixed batch, thousands of steps), so on such
+    code a crown stays a few percent optimistic. [BENCH_TUNE_SCRATCH_WEIGHTS=init] keeps the init
+    draw, the pre-gh-1557 search, so the A/B stays reproducible from one build
+    ([benchmarks/gh1557_cells.sh]). *)
+let tuning_scratch st loss mapping bindings =
+  let scratch = Train.init_params (Context.auto ()) bindings loss in
+  match Stdlib.Sys.getenv_opt "BENCH_TUNE_SCRATCH_WEIGHTS" with
+  | None | Some ("" | "fixture") -> inject scratch st loss mapping
+  | Some "init" -> scratch
+  | Some other -> failwith ("BENCH_TUNE_SCRATCH_WEIGHTS must be fixture or init; found: " ^ other)
+
 let dump_params loss =
   Set.iter loss.Tensor.params ~f:(fun p ->
       let tn = p.Tensor.value in

@@ -1231,6 +1231,30 @@ files.
   next search begins (`Autotune.on_candidate_attempt`'s second `"baseline"`), not at the previous
   search's report: a deferred report precedes the compile, so report time cannot tell the two
   orders apart (`test/operations/autotune_device_memory` scenario 4).
+- **A crown is a time on the timing context's VALUES** (gh-ocannl-1557). The default-placements
+  arm inlines the ReLU and max-pool backward selects (`(max_pool == relu(..)) != 0 ? grad : 0`)
+  into the nests that consume them, where clang compiles them to `fcmp` + conditional branches, so
+  that arm's step time follows the activation sparsity; the materialize-all arm evaluates each
+  select once per element and barely moves. On cifar_resnet/cc (M4 Max) the same arm-A routine ran
+  min 88–96 ms on the `Train.init_params` draw (78k exactly-zero parameter-grad entries of 220k)
+  and 109–119 ms on the fixture's weights (50k), interleaved in one process; arm B moved 3%
+  (88.7 vs 91.1). Scaling the weights by 4 restored the zeros and the speed, and dividing the init
+  draw by 4 removed both, so it is the sparsity rather than the draw; no parameter or grad was
+  subnormal. That was most of the "arm A ships 18–28% above its crown" gap: the benchmark runners
+  searched on an init-draw scratch lineage and stepped on fixture weights. They now seed the scratch
+  with the fixture (`Bench_harness.tuning_scratch`; `BENCH_TUNE_SCRATCH_WEIGHTS=init` restores the
+  old search, `benchmarks/gh1557_cells.sh` runs the A/B), which took arm A from +28% to +9% (p10
+  over crown) and left arm B at +2.5%. The rest is the search's own drift: every timed run is a
+  training step on the scratch lineage at one fixed batch, so after a 200 s search its weights had
+  61k zero grad entries against the fixture's 50k, and the shipped routine ran 100 ms on them
+  against 112 ms on the fixture. Late candidates are therefore timed at a sparser state than early
+  ones. Nothing restores the timing lineage between candidates; the library cannot seed it for the
+  caller either (a `?timing_ctx` is the caller's lineage, and a training run's weights keep
+  moving), so on data-dependent code a crown is exact only for the sparsity it was timed at. The
+  init draw also mis-ranks the arms: arm A crowned 87.5 ms against B's 84.9 on it, and 102–104
+  against 86 on the fixture. To attribute a crown/step gap, time the shipped routine under several
+  weight sets interleaved in one process (`Context.get_values`/`set_values` on the params; the
+  issue's comments hold the diagnostic).
 ## Failure phases and lineage containment
 - A timing failure's *phase* decides whether the lineage is condemned, so pre-dispatch validation
   needs its own. `Context.run` validates (poisoned lineage, uninitialized inputs, unsatisfied

@@ -349,6 +349,14 @@ cell is the step: cite the step cell. Each issue's cell:
   stopped once T is spent. Each arm then carries `call_budget_s` (T) and `call_share_s` (its share)
   beside `budget_s`; the overrun is each search's own, plus arm B's floors when arm A spent T, plus
   the shipped routine's compile.
+  A tuned cell searches on a scratch lineage holding the fixture's weights (conv and gpt, through
+  `Bench_harness.tuning_scratch`; mlp's parameters are built from the fixture), so each arm's
+  `best_ms` is a time on the data its timed steps train (gh-ocannl-1557).
+  `BENCH_TUNE_SCRATCH_WEIGHTS=init` (conv, gpt) searches on the `Train.init_params` draw instead,
+  which is how the runners searched before: the default-placements arm's code branches on its
+  activations, and on cifar_resnet/cc its shipped step then ran 18–28% above its crown, against
+  about 5% for the materialize-all arm; on the fixture the gap was 9% (the rest is the search's
+  own training steps drifting the scratch weights). `benchmarks/gh1557_cells.sh` runs that A/B.
   `BENCH_TIMING_TRACE=1` (all three runners) splits a searching process's wall between candidate
   timing and the rest (gh-ocannl-834). Every `Autotune.time_routine` call reports one record as it
   returns (gh-ocannl-1263), printed as its calibration probes, one call line (the batch depth it
