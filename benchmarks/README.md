@@ -1127,7 +1127,16 @@ rog-nv's and minix's `raw-v1` rows, on no box's disk. minix and tuf compare diff
 - A tuned OCANNL cell's result line carries a `tune` object (gh-ocannl-546): `shipped` names the
   arm whose artifact was kept, `placement_replay` whether that placement was the placement store's
   recorded decision, and `shipped_digest` the `source_digest` of the search whose compile shipped --
-  the schedule-cache entry a splice A/B matches (gh-ocannl-1438) -- and each arm reports its crowned candidate's label, whether that
+  the schedule-cache entry a splice A/B matches (gh-ocannl-1438). `ship_substituted` says no
+  measured schedule shipped (gh-ocannl-1559): the shipping compile substituted the untuned default
+  for the crown with nothing left to fall back to, or the last resort shipped the caller's own
+  untuned compile. Every other field still names the search whose crown was discarded, so this one
+  is the only record that the row's step times are untuned; `substituted_from` names the discarded
+  crown (`null` on the last resort, which discards none), and both are `null` when the harness
+  recorded no ship. `orchestrate.py` marks such a row's variant **`SHIPPED UNTUNED`** and prints a
+  `SUBSTITUTION NOTICE` naming the cells -- a notice rather than a gate, like the tensorization one
+  below: the tuner substitutes deliberately when its winner cannot ship as measured, and the defect
+  is quoting the row as a tuned number. Each arm reports its crowned candidate's label, whether that
   schedule tensorizes, how many of its `Tile_mma` statements were emitted and how many of those
   rendered as the lane-0 scalar fallback, the seeded/timed tensorized counts, and the best *timed*
   tensorized candidate's time.

@@ -585,6 +585,11 @@ type tune_arms = {
   mutable shipped_digest : string option;
       (** The rest of [on_ship]'s record (gh-ocannl-1438): whether the placement was replayed from
           the placement-decision store, and the shipped search's [source_digest]. *)
+  mutable ship_substituted : bool option;
+  mutable substituted_from : string option;
+      (** Whether no measured schedule shipped ([Train.shipped]'s [ship_substituted],
+          gh-ocannl-1559), and the [best_label] of the crown the substitute replaced -- [None] when
+          nothing was substituted, or on the last resort, which replaced no search's crown. *)
   mutable searches : int;
   mutable replays : int;
   mutable no_searches : int;
@@ -600,6 +605,8 @@ let tune_arms () =
     shipped = None;
     placement_replay = None;
     shipped_digest = None;
+    ship_substituted = None;
+    substituted_from = None;
     searches = 0;
     replays = 0;
     no_searches = 0;
@@ -638,7 +645,13 @@ let collect_ship t (s : Train.shipped) =
   t.placement_replay <- Some s.Train.ship_replayed;
   t.shipped_digest <-
     Option.bind s.Train.ship_report ~f:(fun r ->
-        Option.some_if (not (String.is_empty r.Autotune.source_digest)) r.Autotune.source_digest)
+        Option.some_if (not (String.is_empty r.Autotune.source_digest)) r.Autotune.source_digest);
+  t.ship_substituted <- Some s.Train.ship_substituted;
+  t.substituted_from <-
+    (if s.Train.ship_substituted then
+       Option.bind s.Train.ship_report ~f:(fun r ->
+           Option.some_if (not (String.is_empty r.Autotune.best_label)) r.Autotune.best_label)
+     else None)
 
 (** Census of all compiled step routines, including a host-gated optimizer before execution. Unlike
     the dominant-kernel filter, this describes compiled work, not which gates passed. *)
@@ -760,7 +773,8 @@ let tune_json t =
       in
       Some
         (Bench_json.tune_object ~shipped ?placement_replay:t.placement_replay
-           ?shipped_digest:t.shipped_digest ~searches:t.searches ~replays:t.replays
+           ?shipped_digest:t.shipped_digest ?ship_substituted:t.ship_substituted
+           ?substituted_from:t.substituted_from ~searches:t.searches ~replays:t.replays
            ~no_searches:t.no_searches
            ~shipped_mma:(Option.map t.shipped_mma ~f:mma_wire)
            ~arms:(List.map named ~f:arm) ())

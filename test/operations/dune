@@ -4485,6 +4485,15 @@
  (libraries base stdio yojson bench_json arrayjit.verdict))
 
 (test
+ ; ocannl-backend: none -- links no backend: it feeds the benchmark harness's tune collector
+ ; fabricated search reports and ships, with no context and no compile.
+ (name bench_ship_substituted)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules bench_ship_substituted)
+ (libraries base yojson ocannl bench_harness arrayjit.verdict))
+
+(test
  ; ocannl-backend: none -- links no backend: it resolves directory names out of embedded OCaml snippets.
  (name cache_dir_scan_cases)
  (package neural_nets_lib)

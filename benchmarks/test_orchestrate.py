@@ -1675,6 +1675,62 @@ class TensorizationTest(unittest.TestCase):
         self.assertIn("tensorized", table)
 
 
+class SubstitutionTest(unittest.TestCase):
+    """gh-ocannl-1559: a tuned cell whose timed process shipped the untuned default is flagged.
+
+    Its arms, `shipped` and `shipped_digest` still name the search whose crown was discarded, so
+    `tune.ship_substituted` is the only record that the row's step times are untuned.
+    """
+
+    def cell(self, ship_substituted=..., substituted_from=None):
+        r = TensorizationTest.cell(self, [TensorizationTest.arm(self, "A", False, "not-requested")])
+        if ship_substituted is not ...:
+            r["tune"]["ship_substituted"] = ship_substituted
+            r["tune"]["substituted_from"] = substituted_from
+        return r
+
+    def test_only_a_true_record_is_a_substitution(self):
+        # false is a measured ship; null and an absent key are unknown, never a substitution.
+        unflagged = [self.cell(False), self.cell(None), self.cell()]
+        flagged = self.cell(True, "grid 128")
+        self.assertEqual(orchestrate.substitution_check(unflagged + [flagged]), [flagged])
+        self.assertTrue(flagged["ship_substituted"])
+        for r in unflagged:
+            self.assertNotIn("ship_substituted", r)
+
+    def test_the_notice_names_the_discarded_crown_or_the_last_resort(self):
+        crowned, last_resort = self.cell(True, "grid 128"), self.cell(True, None)
+        notice = orchestrate.substitution_notice(
+            orchestrate.substitution_check([crowned, last_resort])
+        )
+        self.assertIn("2 tuned cell(s)", notice)
+        self.assertIn("(discarded grid 128)", notice)
+        self.assertIn("(last resort)", notice)
+
+    def test_the_substitution_is_visible_in_the_rendered_table(self):
+        cells = [self.cell(True, "grid 128"), self.cell(False)]
+        orchestrate.substitution_check(cells)
+        out = Path(tempfile.mkdtemp())
+        orchestrate.report(cells, out)
+        table = (out / "report.md").read_text()
+        self.assertEqual(table.count("tuned" + orchestrate.SUBSTITUTED_MARK + " |"), 1, table)
+        self.assertIn("`substituted_from`", table)
+
+    def test_the_runners_own_spelling_is_what_is_read(self):
+        # On the line the OCaml emitter built (the bench_result_line golden): its tuned line carries
+        # a measured ship, read as unflagged; the same line with the emitter's key set to true is a
+        # substitution. A renamed key on either side fails here.
+        golden = [strict_loads(line) for line in OcannlResultLineTest.lines(OcannlResultLineTest)]
+        tuned = [r for r in golden if r.get("tune")]
+        self.assertTrue(tuned, "no golden line carries a tune object")
+        for r in tuned:
+            self.assertIs(r["tune"]["ship_substituted"], False)
+            self.assertIn("substituted_from", r["tune"])
+        self.assertEqual(orchestrate.substitution_check(tuned), [])
+        flipped = [dict(r, tune=dict(r["tune"], ship_substituted=True)) for r in tuned]
+        self.assertEqual(orchestrate.substitution_check(flipped), flipped)
+
+
 class PeakMemoryTest(unittest.TestCase):
     """gh-ocannl-1006: the report's peak-device-memory column, and the probes behind it.
 

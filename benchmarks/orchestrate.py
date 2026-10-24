@@ -2213,6 +2213,49 @@ def tensorization_notice(mismatches):
     )
 
 
+def substitution_check(results):
+    """Annotate each cell whose timed process shipped the untuned default; return those cells.
+
+    `Train.tune_placements` ships a measured schedule unless its shipping compile substituted the
+    untuned default for the crown, with nothing left to fall back to, or its last resort shipped the
+    caller's own untuned compile. The runner records which in `tune.ship_substituted`
+    (gh-ocannl-1559), with the discarded crown's label in `tune.substituted_from`. A substituted
+    cell's step times are the untuned default's under a tuned variant, and nothing else in the
+    record says so: its arms, `shipped` and `shipped_digest` all still name the search whose crown
+    was discarded. The row is the timed process's (a two-pass cell's is pass 2's), so this reads
+    the process that produced the numbers.
+
+    Only `true` counts: `false` is a measured ship, and an absent key or `null` is a runner
+    predating the field or a harness that recorded no ship -- unknown, not a substitution.
+    """
+    substituted = []
+    for r in results:
+        tune = r.get("tune")
+        if isinstance(tune, dict) and tune.get("ship_substituted") is True:
+            r["ship_substituted"] = True
+            r["substituted_from"] = tune.get("substituted_from")
+            substituted.append(r)
+    return substituted
+
+
+# The report's mark on a substituted cell's variant: its numbers are not the variant's.
+SUBSTITUTED_MARK = " **SHIPPED UNTUNED**"
+
+
+def substitution_notice(substituted):
+    """Name the cells whose timed artifact is the untuned default substituted for their tuning."""
+    labels = ", ".join(
+        f"{gate_label(r)} (discarded {r['substituted_from']})"
+        if r.get("substituted_from")
+        else f"{gate_label(r)} (last resort)"
+        for r in substituted
+    )
+    return (
+        f"SUBSTITUTION NOTICE: {len(substituted)} tuned cell(s) shipped the untuned default in "
+        f"place of their measured schedule, so their step times are untuned: {labels}"
+    )
+
+
 # How a two-pass cell's own verdict maps to the report's `pass` column: only a searching process
 # is a protocol violation, and only a genuine replay may call the carried-over compile cost cached.
 TWO_PASS_VERDICT = {
@@ -2808,6 +2851,15 @@ def report(
                 "rest. `\u2014` is a cell that did not run the instrument: the Python frameworks "
                 "expose no per-kernel counts to score.\n"
             )
+        # gh-ocannl-1559: the legend appears only in a section that has a substituted row.
+        if any(r.get("ship_substituted") for r in rows):
+            lines.append(
+                "**`SHIPPED UNTUNED`** after a variant says the process that produced the row's "
+                "step times shipped the untuned default in place of the schedule its search "
+                "measured (the shipping compile substituted it, or every measured result failed "
+                "to compile), so the row times untuned code under a tuned name. The `tune` record "
+                "in `results.jsonl` names the discarded crown (`substituted_from`).\n"
+            )
         # gh-ocannl-626: only cells that tuned something have an emission census to report.
         with_tensorization = any(r.get("tensorization") for r in rows)
         if with_tensorization:
@@ -2861,7 +2913,8 @@ def report(
                     f"**PRECISION MISMATCH** (dispatched {precision}; ran "
                     f"{r['precision_mismatch']})"
                 )
-            cells = [r["framework"], r["backend"], rendered_variant(r), precision]
+            variant = rendered_variant(r) + (SUBSTITUTED_MARK if r.get("ship_substituted") else "")
+            cells = [r["framework"], r["backend"], variant, precision]
             if with_regime:
                 mismatch = r.get("regime_mismatch")
                 cells.append(
@@ -3459,6 +3512,7 @@ def main():
     parity_check(results)
     provenance_violations = provenance_check(results)
     tensorization_mismatches = tensorization_check(results)
+    substituted = substitution_check(results)
     regime_mismatches = regime_check(results)
     shadowing_mismatched = shadowing_check(results)
     precision_mismatches = precision_check(results)
@@ -3522,6 +3576,12 @@ def main():
         # about a scalar kernel, and the row's variant name says otherwise (gh-ocannl-626) — the
         # failure mode is a reader quoting it as a tensor-core measurement.
         print(log_line(tensorization_notice(tensorization_mismatches)), flush=True)
+    if substituted:
+        # Not a gate, like the tensorization notice: the substitute computes the right thing, and
+        # the tuner substitutes deliberately when its winner cannot ship as measured. It is
+        # announced because the row is honest only about untuned code under a tuned variant, and
+        # before gh-ocannl-1559 a stderr warning a successful cell discards was the only trace.
+        print(log_line(substitution_notice(substituted)), flush=True)
     if regime_mismatches:
         # A row labelled with a regime its process did not run in is worse than a missing row:
         # its number would be quoted as the other regime's (gh-ocannl-719).

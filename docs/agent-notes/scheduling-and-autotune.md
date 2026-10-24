@@ -2161,7 +2161,9 @@ files.
   `fission_replay_segmentation` section 7's derive-then-replay digest equality is the check to
   extend. A searched winner whose replay fails now warns on stderr unconditionally, and
   `Train.shipped.ship_substituted` says when no measured schedule shipped
-  (`test/operations/tune_arm_a_replay`).
+  (`test/operations/tune_arm_a_replay`); the benchmark harness carries it into the result line's
+  `tune.ship_substituted` / `substituted_from`, and `orchestrate.py` marks such a row
+  `SHIPPED UNTUNED` (gh-ocannl-1559, `test/operations/bench_ship_substituted`).
 - **What a replay rebuilds must not read process state that a link changes** (gh-ocannl-1480, the
   CUDA shape). A split-reduce prelude applies whole-routine before fission, and `Schedule.apply`'s
   trailing `simplify_llc` folds gather guards against each node's bounds candidate, which a

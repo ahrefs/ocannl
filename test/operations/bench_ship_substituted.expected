@@ -1,0 +1,6 @@
+a substituted ship is on the tune object: true
+it names the crown the substitute replaced: true
+the rest of the ship's identity still names the discarded crown's search: true
+a last-resort ship is substituted and names no crown: true
+a measured ship says false and names no crown: true
+without an on_ship record the substitution is unknown (null), not false: true
