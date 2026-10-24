@@ -79,6 +79,8 @@ MLP step, batch 2 x seq 128: the shape-sorted zeros take at most one kernel per 
 MLP step, batch 2 x seq 128: the gradients are not identically zero: true
 MLP step, batch 2 x seq 128: the gradients agree with the legality-only segmentation's: true
 MLP step, batch 2 x seq 128: the updated parameters agree with the legality-only segmentation's: true
+MLP step, batch 2 x seq 128: the gradients agree with the unfissioned original order's: true
+MLP step, batch 2 x seq 128: the updated parameters agree with the unfissioned original order's: true
 MLP step, batch 4 x seq 128: the step zeros nodes of several shapes: true
 MLP step, batch 4 x seq 128: both pipelines zero the same nodes: true
 MLP step, batch 4 x seq 128: some zeroed node carries a parallel chain alone: true
@@ -88,3 +90,5 @@ MLP step, batch 4 x seq 128: the shape-sorted zeros take at most one kernel per 
 MLP step, batch 4 x seq 128: the gradients are not identically zero: true
 MLP step, batch 4 x seq 128: the gradients agree with the legality-only segmentation's: true
 MLP step, batch 4 x seq 128: the updated parameters agree with the legality-only segmentation's: true
+MLP step, batch 4 x seq 128: the gradients agree with the unfissioned original order's: true
+MLP step, batch 4 x seq 128: the updated parameters agree with the unfissioned original order's: true

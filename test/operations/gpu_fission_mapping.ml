@@ -21,9 +21,10 @@
    Per case, structurally on the GPU pipeline (the schedule every hardware loop of the statement
    ITSELF carries, so hardware loops elsewhere in its kernel cannot satisfy the claim): the affected
    statement gets its standalone mapping, and the legality-only segmentation gives it less -- the
-   negative control that makes the claim discriminating. Then executed: the step (gradients and the
-   SGD update) under the schedule-aware segmentation agrees with the legality-only one, at batch 1
-   and 2. *)
+   negative control that makes the claim discriminating. Then executed, from prefilled gradients:
+   the step (gradients and the SGD update) under the schedule-aware segmentation agrees with the
+   legality-only one, at batch 1 and 2; case 4's also with the unfissioned routine, which never
+   meets the zero-run sort both segmentations share. *)
 
 open Base
 open Stdio
@@ -167,7 +168,9 @@ let check_mapping ~what ~target ?(lanes = false) ?(control = true) ?preamble_red
 
 (* One training step (gradients, then the SGD update) of [build ()]'s loss, compiled with
    [transform] on the run's backend and (unless [run] is false) run once: the lowering (a copy taken
-   before the transform) and every trainable parameter's gradient and updated value. *)
+   before the transform) and every trainable parameter's gradient and updated value. Every gradient
+   is prefilled with nonzero values before the run (gh-ocannl-1250): fresh buffers are already zero,
+   so without it a gradient zero that never runs is invisible. *)
 let step ?(run = true) ~name ~build ~transform () =
   Tensor.unsafe_reinitialize ();
   let loss = build () in
@@ -191,7 +194,12 @@ let step ?(run = true) ~name ~build ~transform () =
       (Ir.Assignments.sequence [ update; sgd ])
       Ir.Indexing.Empty
   in
-  let ctx = if run then Context.run ctx routine else ctx in
+  let prefill ctx p =
+    let grad = (Option.value_exn p.Tensor.diff).Tensor.grad in
+    let n = Array.fold (Lazy.force grad.Ir.Tnode.dims) ~init:1 ~f:( * ) in
+    Context.set_values ctx grad (Array.init n ~f:(fun k -> Float.of_int (7 + (k % 5))))
+  in
+  let ctx = if run then Context.run (List.fold params ~init:ctx ~f:prefill) routine else ctx in
   let read f = Array.concat (List.map params ~f:(fun p -> Context.get_values ctx (f p))) in
   let grads = read (fun p -> (Option.value_exn p.Tensor.diff).Tensor.grad)
   and values = read (fun p -> p.Tensor.value) in
@@ -211,8 +219,10 @@ let lowering ~name ~build =
 let pipeline ~keep o = List.map (segments ~in_place:true ~keep o) ~f:snd
 
 (* Executed parity of the schedule-aware step with the legality-only one: the same gradients and the
-   same updated parameters. *)
-let check_parity ~what ~name ~build =
+   same updated parameters. Both segmentations share fission's zero-run sort (gh-ocannl-1169), so
+   with [~reference] the step is also compared with the unfissioned routine, in the original
+   statement order (gh-ocannl-1250; [zero_run_reorder] checks the sort on hand-built runs). *)
+let check_parity ~reference ~what ~name ~build =
   let _, g_keep, v_keep = step ~name:(name ^ "_keep") ~build ~transform:(pipeline ~keep:true) () in
   let _, g_legacy, v_legacy =
     step ~name:(name ^ "_legacy") ~build ~transform:(pipeline ~keep:false) ()
@@ -226,7 +236,15 @@ let check_parity ~what ~name ~build =
     g_keep g_legacy ~tol:close_tol;
   p_close
     (what ^ ": the updated parameters agree with the legality-only segmentation's")
-    v_keep v_legacy ~tol:close_tol
+    v_keep v_legacy ~tol:close_tol;
+  if reference then (
+    let _, g_ref, v_ref = step ~name:(name ^ "_ref") ~build ~transform:(fun o -> [ o ]) () in
+    p_close
+      (what ^ ": the gradients agree with the unfissioned original order's")
+      g_keep g_ref ~tol:close_tol;
+    p_close
+      (what ^ ": the updated parameters agree with the unfissioned original order's")
+      v_keep v_ref ~tol:close_tol)
 
 (* The attention block of gpu_serial_lanes leg 6, at [heads] heads of width [width]. The caller
    picks the forward and backward forms through [Online_softmax]. *)
@@ -360,7 +378,7 @@ let () =
           (* At batch 2 the legality-only merge keeps [v.grad]'s mapping too: the issue's collapse
              is specific to batch 1, where the chain's leading batch loop has extent 1. *)
           check_mapping ~what ~target:v_grad ~control:(batch = 1) (lowering ~name ~build);
-          check_parity ~what ~name ~build));
+          check_parity ~reference:false ~what ~name ~build));
   printf "--- case 2: the fused backward's dV lanes against dK (gh-ocannl-1124) ---\n";
   (* The case needs dK to be no lane nest: since gh-ocannl-1124 it is one by default (its [dp]
      preamble reduction is admitted), so the merge the legality rules take no longer costs dV its
@@ -376,7 +394,7 @@ let () =
           let name = Printf.sprintf "gfm_fused_b%d" batch in
           let build = attention ~batch ~seq:128 ~heads:8 ~width:32 in
           check_mapping ~what ~target:v_grad ~lanes:true ~preamble_reduction (lowering ~name ~build);
-          check_parity ~what ~name ~build);
+          check_parity ~reference:false ~what ~name ~build);
       (* The configured default: dK on lanes too, so even the legality-only segmentation keeps every
          dV and dK statement on its lanes. *)
       let o =
@@ -402,7 +420,7 @@ let () =
       let name = Printf.sprintf "gfm_lm_b%d" batch in
       let build = lm_head ~batch ~seq:128 ~d:64 ~vocab:512 in
       check_mapping ~what ~target:logits (lowering ~name ~build);
-      check_parity ~what ~name ~build);
+      check_parity ~reference:false ~what ~name ~build);
   printf "--- case 4: a training step's gradient zeros of mixed shapes (gh-ocannl-1169) ---\n";
   (* Batch 2 and up: at batch 1 the activations' singleton batch axis leaves them rank-2 plans that
      share the weights' topology, and the zeros sharing a run keep their mappings merged anyway. *)
@@ -411,4 +429,4 @@ let () =
       let name = Printf.sprintf "gfm_zeros_b%d" batch in
       let build = mlp ~batch ~seq:128 ~d:64 ~hid:256 in
       check_zeros ~what (lowering ~name ~build);
-      check_parity ~what ~name ~build)
+      check_parity ~reference:true ~what ~name ~build)
