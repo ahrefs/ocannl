@@ -21,7 +21,7 @@
 #   BUDGET   autotune_budget_seconds for every search (each arm is its own search).
 #   WEIGHTS  init and/or fixture (default: both, init first).
 #
-# Exit: 0 every cell produced a result line; 1 a cell failed; 2 usage.
+# Exit: 0 every cell produced a crown/step pair; 1 a cell failed or has none; 2 usage.
 # Hermetic: every OCANNL_* and BENCH_* variable is unset and the backend is on argv
 # (--ocannl_backend=cc), and so is every OpenMP runtime control (OMP_*, GOMP_*, KMP_*).
 set -u
@@ -60,11 +60,12 @@ for w in "${weights[@]}"; do
       --ocannl_autotune_budget_seconds="$budget" >"$out/$w-$arm.out" 2>"$out/$w-$arm.err" || rc=1
   done
 done
-python3 - "$root/benchmarks" "$out" "${weights[@]}" <<'EOF' | tee "$out/summary.txt"
-import os, sys
+python3 - "$root/benchmarks" "$out" "${weights[@]}" >"$out/summary.txt" <<'EOF' || rc=1
+import math, os, sys
 sys.path.insert(0, sys.argv[1])
 import strict_json
 out = sys.argv[2]
+bad = 0
 for w in sys.argv[3:]:
     for arm in "ab":
         path = os.path.join(out, f"{w}-{arm}.out")
@@ -72,16 +73,26 @@ for w in sys.argv[3:]:
             d = strict_json.last_result(open(path).read())
         except (OSError, ValueError) as e:
             print(f"weights={w} arm={arm.upper()}: no result line ({e})")
+            bad += 1
             continue
-        if d is None:
-            print(f"weights={w} arm={arm.upper()}: no result line")
+        try:
+            shipped = d["tune"]["shipped"]
+            a = {x["arm"]: x for x in d["tune"]["arms"]}[shipped]
+            s = d["step_ms"]
+            crown = float(a["best_ms"])
+            float(s["p10"]), float(s["p50"])
+            if not (math.isfinite(crown) and crown > 0):
+                raise ValueError(f"crown {crown}")
+        except (AttributeError, KeyError, TypeError, ValueError) as e:
+            # No result line (None), or a search that crowned nothing (best_ms null): no pair.
+            print(f"weights={w} arm={arm.upper()}: no crown/step pair ({e!r})")
+            bad += 1
             continue
-        shipped = d["tune"]["shipped"]
-        a = {x["arm"]: x for x in d["tune"]["arms"]}[shipped]
-        s = d["step_ms"]
         print(f"weights={w} shipped={shipped} state={a['state']} crown={a['best_ms']:.2f} "
               f"p10={s['p10']:.2f} p50={s['p50']:.2f} p10/crown={s['p10'] / a['best_ms']:.3f} "
               f"p50/crown={s['p50'] / a['best_ms']:.3f} contended={a['timings_contended']} "
               f"label={a['best_label']}")
+sys.exit(1 if bad else 0)
 EOF
+cat "$out/summary.txt"
 exit $rc
