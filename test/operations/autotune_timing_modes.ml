@@ -401,7 +401,7 @@ let synthetic_call ?(repeats = 3) ?(retry_contended = false) ?walls ~timing ~cap
   let record c = records := c :: !records in
   let reading =
     if retry_contended then
-      Autotune.calibrate_and_time_with_retry_observer
+      Autotune.calibrate_and_time_with_retry_observer ~hopeless_against:None
         ~on_retry:(fun () -> Int.incr retries_started)
         ~on_call:record ~phase:None ~retry_contended ~dispersion:Autotune.Refuse_dispersed ~timing
         ~repeats ~queue_depth_cap:cap ~batch

@@ -303,6 +303,8 @@ type report = {
           (gh-ocannl-1517). See the interface. *)
   timings_dispersed : int;
       (** Admitted windows that were dispersed (gh-ocannl-1558). See the interface. *)
+  timings_hopeless : int;
+      (** Windows cut as hopeless, their candidates unranked (gh-ocannl-1527). See the interface. *)
   timing_decisions : (batch_settle * batch_admission * int) list;
       (** How this call's search timing calls settled and were admitted (gh-ocannl-1263). See the
           interface. *)
@@ -422,6 +424,7 @@ let no_search_report ~timing =
     timings_unbatched = 0;
     timings_unreadable = 0;
     timings_dispersed = 0;
+    timings_hopeless = 0;
     timing_decisions = [];
     candidates_contended = 0;
     default_refused = false;
@@ -696,8 +699,16 @@ let contention_ratio = 2.
    stops exactly where one uninterrupted window over the same samples would. The timed loop resumes
    the queued calibration's synchronized singles this way when the depth settles at 1, where they
    are samples of the very quantity it would otherwise time again. Returns the whole window, oldest
-   first. *)
-let sample_window ?(prior = []) ~repeats ~sample () =
+   first.
+
+   [hopeless] (gh-ocannl-1527, default never) is asked after every sample with the window so far,
+   oldest first; when it answers, the loop raises {!Timing_hopeless} at once, so a window that
+   already proves its candidate out of the running stops taking samples. *)
+type hopeless = { hopeless_ms : float; hopeless_threshold_ms : float; hopeless_samples : int }
+
+exception Timing_hopeless of hopeless
+
+let sample_window ?(prior = []) ?(hopeless = fun _ -> None) ~repeats ~sample () =
   let samples = ref (List.rev prior) in
   let total = ref (List.fold prior ~init:0. ~f:(fun total s -> total +. s.per_launch_ms)) in
   let count = ref (List.length prior) in
@@ -708,7 +719,8 @@ let sample_window ?(prior = []) ~repeats ~sample () =
     let ({ per_launch_ms; _ } as timing_sample) = sample () in
     samples := timing_sample :: !samples;
     total := !total +. per_launch_ms;
-    Int.incr count
+    Int.incr count;
+    Option.iter (hopeless (List.rev !samples)) ~f:(fun h -> raise (Timing_hopeless h))
   done;
   List.rev !samples
 
@@ -742,6 +754,54 @@ let window_result samples =
   { ms; contended = dispersed; unbatched = false; samples = count; dispersed; spread }
 
 let sample_min ~repeats ~sample = window_result (sample_window ~repeats ~sample ())
+
+(* gh-ocannl-1527: when a timing window may end before its sample floor because its candidate is out
+   of the running. A caller that knows what the reading will be ranked against passes it as the
+   window's [reference]; the window is HOPELESS once its first [hopeless_min_samples] or more
+   samples have a minimum over [hopeless_ratio] times that reference AND are not dispersed by the
+   window's own 2x-majority rule ([window_result]).
+
+   Why that cannot flip a ranking within the noise the timing rules already bound. Noise only adds
+   time, so a window's minimum only falls as it grows: the full window could rank below the
+   reference only if a later sample undercut every sample so far by more than [hopeless_ratio], i.e.
+   only if every sample so far were inflated beyond twice the [contention_ratio] at which the
+   admission rule calls a sample a stall. A stall that leaves some samples clean leaves the minimum
+   clean; one that inflates most of them but not all disperses the prefix, which therefore never
+   cuts -- the same composition as the admission rule itself, which trusts a non-dispersed window
+   and refuses (or, on a CPU backend, attributes: gh-ocannl-1558) a dispersed one. Three samples is
+   the depth at which the calibration's batch probes already refuse a single stall
+   ([queue_batch_probe_min_runs]). The boundary, stated: a co-tenant that delays every one of the
+   first samples uniformly by more than [hopeless_ratio] and then leaves is not detected -- exactly
+   the uniform delay the admission rule already accepts as a valid reading of a whole window.
+
+   [at_least_ms] gates the calibration's synchronized singles, which are the reading only when the
+   depth settles at 1: on cc and Metal that is exactly when their minimum reaches the batch target
+   ({!queued_batch_ms}), and a minimum only falls, so a cut there is a cut of the reading itself. On
+   CUDA/HIP a depth-2 probe follows and could, in principle, settle deeper on a fixed-dominated
+   pair; the per-launch reading at any depth is at least the single's marginal part, so a single of
+   at least the target over [hopeless_ratio] times the reference is out of the running unless the
+   fixed per-batch synchronization term exceeds three quarters of it -- 7.5 ms at the target, two
+   orders of magnitude above the ~60 us round trip the batching amortizes. *)
+let hopeless_ratio = 4.
+let hopeless_min_samples = 3
+
+let hopeless_window ?(at_least_ms = 0.) ~reference_ms samples =
+  if
+    List.length samples < hopeless_min_samples
+    || (not (Float.is_finite reference_ms))
+    || Float.(reference_ms <= 0.)
+  then None
+  else
+    let threshold_ms = hopeless_ratio *. reference_ms in
+    let r = window_result samples in
+    if
+      (not r.dispersed) && Float.is_finite r.ms
+      && Float.(r.ms > threshold_ms)
+      && Float.(r.ms >= at_least_ms)
+    then
+      Some
+        { hopeless_ms = r.ms; hopeless_threshold_ms = threshold_ms; hopeless_samples = r.samples }
+    else None
 
 (* How a timing call turns a dispersed window into a verdict (gh-ocannl-1558). [Refuse_dispersed] is
    the dispersion-only rule, kept on GPU backends: host CPU accounting cannot see a device
@@ -1176,8 +1236,15 @@ let on_candidate_callback :
    admitted timing window -- the dispatched baseline's and each candidate's -- by
    [apply_measurement_seam] below, before the admission gate that everything ranking or recording
    the time goes through. Default the identity; no configuration selects it. *)
+let physical_measurement ~label:_ ~digest:_ ms = ms
+
 let on_candidate_measured : (label:string -> digest:string -> float -> float) Seam.t =
-  Seam.make (fun ~label:_ ~digest:_ ms -> ms)
+  Seam.make physical_measurement
+
+(* gh-ocannl-1527: whether an admitted window's reading is the window's own. A scripted measurement
+   decides what a candidate measured after its window, so the window's physical samples say nothing
+   about how it will rank, and a hopeless cut on them would drop candidates the script ranks. *)
+let measurement_is_physical () = phys_equal (Seam.get on_candidate_measured) physical_measurement
 
 (* Explicit test-only admission seam (gh-ocannl-1156). Scripted candidate measurements need their
    branches to run even when the host stalls every physical window. The [Cleared] scope clears ONLY
@@ -1362,8 +1429,13 @@ let install_compile_observer f =
    returns the wall in milliseconds. Separated from [time_routine] so a test can drive the whole
    policy -- which depth a call settles on, which window it times, how many launches each costs --
    on an injected clock, with no device and no machine-dependent routine (gh-ocannl-1074). *)
-let calibrate_and_time_from ~started ~tagged ~on_retry ~on_call ~phase ~retry_contended ~dispersion
-    ~timing ~repeats ~queue_depth_cap ~batch =
+let calibrate_and_time_from ~hopeless_against ~started ~tagged ~on_retry ~on_call ~phase
+    ~retry_contended ~dispersion ~timing ~repeats ~queue_depth_cap ~batch =
+  (* gh-ocannl-1527: the cut of a hopeless window, against the reading the caller ranks it by. *)
+  let hopeless ?at_least_ms () =
+    Option.map hopeless_against ~f:(fun reference_ms samples ->
+        hopeless_window ?at_least_ms ~reference_ms samples)
+  in
   (* The host-load reading the window's attribution starts from (gh-ocannl-1558): the span covers
      exactly the window's samples. Taken here, before the calibration's first single, for a depth-1
      window that resumes those singles; retaken just before a fresh window's first batch (below), so
@@ -1446,6 +1518,7 @@ let calibrate_and_time_from ~started ~tagged ~on_retry ~on_call ~phase ~retry_co
     | Queued ->
         let singles =
           sample_window ~repeats:queue_calibration_runs
+            ?hopeless:(hopeless ~at_least_ms:queued_batch_ms ())
             ~sample:(fun () ->
               let wall = batch 1 in
               { per_launch_ms = wall; contention_ms = wall })
@@ -1787,7 +1860,7 @@ let calibrate_and_time_from ~started ~tagged ~on_retry ~on_call ~phase ~retry_co
     and timed_walls = ref (List.rev_map reused ~f:(fun s -> s.contention_ms)) in
     let result =
       window_result
-      @@ sample_window ~prior:reused ~repeats
+      @@ sample_window ~prior:reused ?hopeless:(hopeless ()) ~repeats
            ~sample:(fun () ->
              let wall = batch depth in
              timed_wall_ms := !timed_wall_ms +. wall;
@@ -1923,15 +1996,15 @@ let calibrate_and_time_from ~started ~tagged ~on_retry ~on_call ~phase ~retry_co
 
 (* Exposed for tests with an injected clock: the per-call observers [time_routine] gives a search,
    timed from this call's own start, and the dispersion policy it picks by backend. *)
-let calibrate_and_time_with_retry_observer ~on_retry ~on_call ~phase ~retry_contended ~dispersion
-    ~timing ~repeats ~queue_depth_cap ~batch =
-  calibrate_and_time_from ~started:(Mtime_clock.counter ()) ~tagged:false ~on_retry ~on_call ~phase
-    ~retry_contended ~dispersion ~timing ~repeats ~queue_depth_cap ~batch
+let calibrate_and_time_with_retry_observer ~hopeless_against ~on_retry ~on_call ~phase
+    ~retry_contended ~dispersion ~timing ~repeats ~queue_depth_cap ~batch =
+  calibrate_and_time_from ~hopeless_against ~started:(Mtime_clock.counter ()) ~tagged:false
+    ~on_retry ~on_call ~phase ~retry_contended ~dispersion ~timing ~repeats ~queue_depth_cap ~batch
 
 (* Preserve the original all-labelled helper's source interface: an optional observer would not
    erase without adding a positional argument. *)
 let calibrate_and_time ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch =
-  calibrate_and_time_with_retry_observer
+  calibrate_and_time_with_retry_observer ~hopeless_against:None
     ~on_retry:(fun () -> ())
     ~on_call:(fun _ -> ())
     ~phase:None ~retry_contended ~dispersion:Refuse_dispersed ~timing ~repeats ~queue_depth_cap
@@ -1945,7 +2018,7 @@ exception Timing_stopped
 (* [routine.bindings] exposes the routine's live binding refs — restore them after timing (Codex P2
    on PR #103), or the returned winner would stay bound to the tuner's midpoint test values. *)
 let time_routine ?(on_retry = fun () -> ()) ?(on_call = fun _ -> ()) ?(tag_failures = false) ?phase
-    ?(stop = fun () -> false) ~timing ~repeats cctx routine =
+    ?(stop = fun () -> false) ?hopeless_against ~timing ~repeats cctx routine =
   let check_stop () = if stop () then raise Timing_stopped in
   (* The call's [setup_ms] runs from here: the pre-dispatch validation, the warmup and the
      calibration. *)
@@ -1994,8 +2067,8 @@ let time_routine ?(on_retry = fun () -> ()) ?(on_call = fun _ -> ()) ?(tag_failu
         Int.incr ordinal;
         wall
       in
-      calibrate_and_time_from ~started ~tagged:tag_failures ~on_retry ~on_call ~phase ~timing
-        ~repeats
+      calibrate_and_time_from ~hopeless_against ~started ~tagged:tag_failures ~on_retry ~on_call
+        ~phase ~timing ~repeats
         ~retry_contended:(retry_contended_window_for_backend (Context.backend_name cctx))
         ~dispersion:(dispersion_policy_for_backend (Context.backend_name cctx))
         ~queue_depth_cap:(queue_depth_cap_for_backend (Context.backend_name cctx))
@@ -6700,11 +6773,11 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
       progress_line "search_done"
         (Printf.sprintf
            "outcome=%s timed=%d contended=%d timings_retried=%d unbatched=%d unreadable=%d \
-            dispersed=%d failed=%d rounds=%d budget_cut=%b baseline_refused=%b \
+            dispersed=%d hopeless=%d failed=%d rounds=%d budget_cut=%b baseline_refused=%b \
             privatize_dropped=%d %s best_ms=%s best=%S"
            (outcome_name r.outcome) r.candidates_timed r.timings_contended r.timings_retried
-           r.timings_unbatched r.timings_unreadable r.timings_dispersed r.candidates_failed
-           r.rounds_run r.budget_cut
+           r.timings_unbatched r.timings_unreadable r.timings_dispersed r.timings_hopeless
+           r.candidates_failed r.rounds_run r.budget_cut
            (Option.is_some r.baseline_refusal)
            (List.sum (module Int) r.privatize_drops ~f:(fun d -> d.count))
            (progress_costs ()) (progress_ms r.best_ms) r.best_label);
@@ -7438,6 +7511,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                     timings_unbatched = 0;
                     timings_unreadable = 0;
                     timings_dispersed = 0;
+                    timings_hopeless = 0;
                     timing_decisions = timing_decisions ();
                     candidates_contended = 0;
                     default_refused = false;
@@ -7866,6 +7940,8 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
            admitted windows were dispersed -- a CPU routine's own variance on a quiet host, which
            the dispersion rule alone would have refused. *)
         let spread_by_digest = Hashtbl.create (module String) and n_timings_dispersed = ref 0 in
+        (* gh-ocannl-1527: the windows cut as hopeless, their candidates unranked. *)
+        let n_timings_hopeless = ref 0 in
         let note_admitted_window ~digest (r : timing_result) =
           Hashtbl.set spread_by_digest ~key:digest ~data:r.spread;
           if r.dispersed then Int.incr n_timings_dispersed
@@ -8041,6 +8117,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
             timings_unbatched = !n_timings_unbatched;
             timings_unreadable = !n_timings_unreadable;
             timings_dispersed = !n_timings_dispersed;
+            timings_hopeless = !n_timings_hopeless;
             timing_decisions = timing_decisions ();
             candidates_contended = candidates_contended ();
             default_refused = default_refused ();
@@ -8256,7 +8333,10 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                    true)
             | Some _ | None -> fun () -> false
           in
-          let try_spec spec =
+          (* [hopeless_against] (gh-ocannl-1527) is what the caller ranks this candidate's reading
+             against, asked as its timing starts: [Some ms] lets the window end as soon as it is
+             hopeless against [ms] ({!hopeless_window}); [None], the default, times it in full. *)
+          let try_spec ?(hopeless_against = fun () -> None) spec =
             last_attempt := `Other;
             Seam.get on_candidate_attempt (spec_label spec);
             let pruned_by_bound =
@@ -8385,24 +8465,47 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                         ~provenance:Outcome.Candidate ~phase:Outcome.Launch
                         ~candidate:(spec_label spec) (fun () ->
                           timed_into progress_timing_s (fun () ->
-                              (* gh-ocannl-1556: [None] is a timing the budget stopped -- not a
-                                 failure of the candidate, so caught inside the boundary. *)
+                              (* gh-ocannl-1556: [`Stopped] is a timing the budget stopped, and
+                                 gh-ocannl-1527: [`Hopeless] a window cut as out of the running --
+                                 neither a failure of the candidate, so caught inside the
+                                 boundary. *)
                               match
                                 time_routine ~on_retry ~on_call ~tag_failures:true
-                                  ~phase:!progress_phase ~stop:(budget_stop spec) ~timing ~repeats
-                                  c.cctx c.routine
+                                  ~phase:!progress_phase ~stop:(budget_stop spec)
+                                  ?hopeless_against:
+                                    (if measurement_is_physical () then hopeless_against ()
+                                     else None)
+                                  ~timing ~repeats c.cctx c.routine
                               with
-                              | timing_result -> Some timing_result
-                              | exception Timing_stopped -> None))
+                              | timing_result -> `Timed timing_result
+                              | exception Timing_stopped -> `Stopped
+                              | exception Timing_hopeless h -> `Hopeless h))
                       (* Outside the boundary: the seam is not a candidate failure to classify. *)
-                      |> Result.map
-                           ~f:
-                             (Option.map
-                                ~f:
-                                  (apply_measurement_seam ~label:(spec_label spec)
-                                     ~digest:c.digest_after))
+                      |> Result.map ~f:(function
+                        | `Timed timing_result ->
+                            `Timed
+                              (apply_measurement_seam ~label:(spec_label spec)
+                                 ~digest:c.digest_after timing_result)
+                        | (`Stopped | `Hopeless _) as other -> other)
                     with
-                    | Ok None ->
+                    | Ok (`Hopeless h) ->
+                        (* gh-ocannl-1527: not ranked, and not a refusal -- the window proved the
+                           candidate out of the running against what its caller ranks it by, so the
+                           search stays cacheable. Its digest leaves [seen] as a refused one's does:
+                           the reference can move, so an equivalent later proposal is timed against
+                           its own. *)
+                        Int.incr n_timings_hopeless;
+                        if spec_expects_mma spec then Int.incr n_mma_timed;
+                        Hash_set.remove seen c.digest_after;
+                        logf
+                          "%s: NOT RANKED, hopeless: its first %d samples read %.4f ms, over \
+                           the                            %.4f ms (%gx what it would have to beat) \
+                           that ends the window (digest                            %s)"
+                          (spec_label spec) h.hopeless_samples h.hopeless_ms h.hopeless_threshold_ms
+                          hopeless_ratio (dshort c.digest_after);
+                        release_candidate c;
+                        None
+                    | Ok `Stopped ->
                         (* The budget passed during this candidate's timing: it is not ranked, and a
                            later floor of the same digest must compile and time afresh rather than
                            dedup against a timing that never finished. *)
@@ -8411,8 +8514,8 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                           (spec_label spec) (dshort c.digest_after);
                         release_candidate c;
                         None
-                    | Ok (Some timing_result) when Option.is_none (admitted_timing_ms timing_result)
-                      ->
+                    | Ok (`Timed timing_result)
+                      when Option.is_none (admitted_timing_ms timing_result) ->
                         (* The family counters answer whether a candidate compiled and reached a
                            timing window, independently of whether that window yielded a usable
                            verdict. Keep that accounting stable under refusal; the historical
@@ -8444,7 +8547,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                           (refusal_reason refusal) (dshort c.digest_after);
                         release_candidate c;
                         None
-                    | Ok (Some timing_result) ->
+                    | Ok (`Timed timing_result) ->
                         (* gh-ocannl-1326: the timing is all a candidate is for, the incumbent-to-be
                            included, so its buffers go before anything else happens: the next
                            compile must not find this one's working set still resident. A winner is
@@ -8590,8 +8693,8 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
              accounting, which the census does not replace: it covers pools the shared seam does not
              allocate (the merge buffer) and, on [cc], counts host allocations whose GC finalizer
              has not yet run. *)
-          let try_spec spec =
-            let result = try_spec spec in
+          let try_spec ?hopeless_against spec =
+            let result = try_spec ?hopeless_against spec in
             (* Gated explicitly, not just by [logf]: [logf]'s arguments are evaluated whether or not
                the flag is on, and both readings here fold a hashtable. *)
             if log_enabled () then
@@ -8647,7 +8750,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
              leaves the candidate it was in, and the costs of everything before it. Counted before
              the attempt too, so a fatal candidate -- which writes [search_done] from inside itself
              and raises -- is in the closing record's [attempts]. *)
-          let try_spec spec =
+          let try_spec ?hopeless_against spec =
             check_abandon ();
             if not (budget_allows ~what:(spec_label spec) ~floor:(budget_floor spec)) then (
               last_attempt := `Other;
@@ -8660,7 +8763,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
               if progress_enabled () then
                 progress_line "candidate"
                   (Printf.sprintf "%s attempt=%S" (progress_where ()) (spec_label spec));
-              try_spec spec)
+              try_spec ?hopeless_against spec)
           in
           (* The search's seeds for one lowering: the family seeds, then the coalesced layout's
              branch beside them (gh-ocannl-1165) — prepared hermetically from the same lowering, its
@@ -8900,8 +9003,29 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                (List.length pre_sweep_specs
                + (if staffed then 0 else List.length coarse_single_specs)
                + List.length post_sweep_specs));
+          (* gh-ocannl-1527: what a seed's reading is ranked against, for its window's hopeless cut.
+             A whole-routine seed -- a preset, or a sketch applied to the whole routine -- feeds
+             only the beam: with rounds to run every one of its [beam_width] entries is expanded, so
+             once it is full its slowest entry is the reference (a reading over it enters nothing);
+             with none to run, only its head is ever read. A per-segment single feeds its key's
+             ranking instead -- the recombination's per-key minimum and the playoff's near-ties, at
+             the playoff margin -- timed around a backdrop that can be ten times the composite it
+             joins (gh-ocannl-1166), so against the search's best every single would look hopeless
+             while its rank among its key's singles is the very thing it measures: singles,
+             composites and the floors are timed in full. *)
+          let seed_hopeless_against spec () =
+            match spec with
+            | (Whole (W_preset _ | W_sketch _) | Fiss (F_preset _)) when not (budget_floor spec) ->
+                if rounds = 0 then Option.map (List.hd !beam) ~f:snd
+                else if List.length !beam >= beam_width then Option.map (List.last !beam) ~f:snd
+                else None
+            | Whole (W_preset _ | W_sketch _ | W_saved _)
+            | Fiss (F_preset _ | F_saved _ | F_sketch _ | F_split _ | F_split_saved _ | F_seeded _)
+              ->
+                None
+          in
           let run_seed spec =
-            let result = try_spec spec in
+            let result = try_spec ~hopeless_against:(seed_hopeless_against spec) spec in
             (match (spec, result) with
             | Fiss (F_sketch { entries = [ (key, p) ]; fine; _ }), Some (_, ms) ->
                 fiss_single_results := (key, fine, (p, ms)) :: !fiss_single_results
@@ -9492,7 +9616,15 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
               round := kept
             in
             progress_phase_begin (Printf.sprintf "round%d" !rounds_run) (Some (List.length cands));
-            List.iter cands ~f:(fun spec -> Option.iter (try_spec spec) ~f:round_admit);
+            (* gh-ocannl-1527: a round candidate feeds only the round's own accumulator, which keeps
+               its [beam_width] fastest; once that is full, a reading over its slowest enters
+               nothing, so that is its window's hopeless reference. *)
+            let round_hopeless_against () =
+              if List.length !round >= beam_width then Option.map (List.last !round) ~f:snd
+              else None
+            in
+            List.iter cands ~f:(fun spec ->
+                Option.iter (try_spec ~hopeless_against:round_hopeless_against spec) ~f:round_admit);
             match !round with
             | [] -> continue_ := false
             | (_, round_best_ms) :: _ ->
@@ -9610,6 +9742,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
               timings_unbatched = !n_timings_unbatched;
               timings_unreadable = !n_timings_unreadable;
               timings_dispersed = !n_timings_dispersed;
+              timings_hopeless = !n_timings_hopeless;
               timing_decisions = timing_decisions ();
               candidates_contended = candidates_contended ();
               default_refused = default_refused ();
