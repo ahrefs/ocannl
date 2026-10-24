@@ -186,13 +186,16 @@ commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue 
     longer spills (gh-ocannl-1317, gh-ocannl-1285).
   - aarch64 gcc 13/14 no longer spills or scalarizes (gh-ocannl-1158).
   - Long routine names and concurrent processes no longer break build artifacts
-    (gh-ocannl-1335).
+    (gh-ocannl-1335). On Windows, debug files of a routine named past about 150 characters
+    still exceed `MAX_PATH` (gh-ocannl-1411).
 - CUDA and HIP graph execs are destroyed at context finalization and exit (gh-ocannl-1445). A
   use-after-free on releasing a forked context that shares an upload arena is fixed
   (gh-ocannl-1328). ROCr's repeated time-stamp warnings are collapsed into one line plus a count
   (`collapse_foreign_stderr_noise`, gh-ocannl-1370).
 - Under `gpu_serial_lanes=admitted`, fission no longer costs a lane nest its lanes
   (gh-ocannl-1239). Every shipped kernel compiles in isolation again (gh-ocannl-1391).
+- `Calibrate`'s working-set and issue-rate sweeps time kernels on the monotonic clock. On Windows
+  they used to time microsecond kernels as 0 ms (gh-ocannl-1411).
 
 ### Measured performance and limitations
 

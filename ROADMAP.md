@@ -459,11 +459,12 @@ documented trigger.
 Created in the September 29 split. Each compiler improvement closed with a before/after benchmark
 cell, and several of those cells are measured nulls. All of the milestone's issues closed except
 per-site flip-chain profitability (#717), which moved to v1.2.2 to wait for a workload whose
-tensorization sites disagree. The release went through the CI gate: scheduled Windows (#1411) and
-OCaml 5.3 floor runs green (the floor job needed a ceiling sized for its unsharded suite and a
-fixture readable by 5.3, #1588), and a forced cross-machine `@slow` sweep passing on all six units
-(cc and Metal on M4 Max, CUDA, HIP on two boxes, multidev_cc). 223 issues closed between the
-v1.1.1 tag and this one.
+tensorization sites disagree. The release went through the CI gate: scheduled Windows and OCaml 5.3
+floor runs green, and a forced cross-machine `@slow` sweep passing on all six units (cc and Metal
+on M4 Max, CUDA, HIP on two boxes, multidev_cc). Windows had been red since October 17 for five
+unrelated Windows-only causes, found and fixed on a box rebooted into Windows (#1411). The floor
+job needed a ceiling sized for its unsharded suite and a fixture readable by 5.3 (#1588). Over 220
+issues closed between the v1.1.1 tag and this one.
 
 - **Reduced ResNet-style benchmark** (#1161): `cifar_resnet` at batch 64 and 1, with padded 3×3
   convolution, residual adds and strided 1×1 shortcuts. Second-reader staging (#1147) puts the tuned
