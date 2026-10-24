@@ -125,7 +125,14 @@ type delayed_var_ref = {
 [@@deriving equal, sexp_of]
 
 val get_variable_ref : string -> delayed_var_ref
-(** Returns a fully unset variable reference with the given label. *)
+(** Returns a fully unset variable reference with the given label.
+
+    A reference passed through [~capture_dims] to several operations names one dimension, in
+    whichever order inference solves them (gh-ocannl-1545): within one inference (up to the next
+    [finish_inference]) the operations' dimension variables are equated, as are their row variables,
+    and a dimension variable with a row variable has the row's product. Across a closure the
+    reference carries its solved value, for a row variable the product of its dimensions (see
+    {!set_dim}). *)
 
 val set_dim : delayed_var_ref -> int -> unit
 (** Sets the dimension resp. total elements of the dim resp. row variable reference to the given

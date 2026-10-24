@@ -45,6 +45,19 @@ files.
   and ternary keep the `false` default (RHS before LHS, or concat rows get prematurely solved to a
   concrete dimension). If a change makes one family's tests go green and another's red, the fix is
   the per-caller flag, not flipping the default.
+- A capture reference (`delayed_var_ref`) passed by hand to several operations names ONE dimension
+  (gh-ocannl-1545). Each operation's `bind_delayed_vars_to_envs` rebinds `var` to its own
+  variable, so it also ties the new variable to the previous binding, solved or not: `Dim_eq` for
+  dims, `Row_eq` for rows, equal products (`Total_elems` over a `Strided_var`, as `set_equal`) for
+  a mixed dim/row pair. Tying rows by product instead looks consistent with the solved arm
+  (`solved_dim` -> `Total_elems`) but `Total_elems` refuses rows holding a `Sym`, so two captures
+  of one symbolic row would fail. Across a closure only `solved_dim`/`solved_sym` carry the value
+  (a row's as its product): `var` then names a variable of the reset environment (or a
+  projection-local one, `derive_projections` rebinds `var`), free in the open work, so the tie to
+  it constrains nothing and needs no guard. Pinned by the shared-reference cases of
+  `test/operations/capture_per_call.ml`, which assert the reference unsolved after both
+  registrations: an operand of fixed size solves it at that step's Stage1 and exercises only the
+  solved arm.
 - Padded (`=`-mode) windows: max/tropical-family accumulations lower with clamped window bounds
   and demand NO margins (gh-504: `Row.proj_env.clamp_padded`; interval-based range guards in
   `Assignments.to_low_level`); add-family keeps physical halos committed as tensor-node identity

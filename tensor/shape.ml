@@ -474,36 +474,92 @@ let add_var_used_in_pointwise row =
   match row with Row.Row_var v -> Row.add_used_in_pointwise v | _ -> ()
 
 (** Shared helper: bind each [delayed_var_ref] to the dim/row variable resolved for its label in
-    [dim_var_env]/[row_var_env]. Returns the additional constraints implied by any pre-solved dims.
-    Extracted to eliminate duplication across the unary-permute, binary-einsum, block, and
-    ternary-einsum branches of [get_inequalities]. *)
+    [dim_var_env]/[row_var_env]. Returns the constraints the binding implies: equality with a value
+    already solved for the reference, and a tie to the variable another operation bound the
+    reference to (gh-ocannl-1545). Used by the unary-permute, binary-einsum, block, and
+    ternary-einsum branches of [get_inequalities].
+
+    A reference passed to several operations names one dimension. Within one inference, two dim
+    bindings are equated and two row bindings are [Row_eq]-tied, whether or not the reference is
+    already solved, so the outcome does not depend on the order inference runs in. A dim and a row
+    share only a number, so a mixed pair is tied by the row's product (as {!set_equal} does; with a
+    symbolic extent in the row this is refused, symbolic dimensions taking no part in total-elements
+    arithmetic). Across a closure the reference carries its value in [solved_dim]/[solved_sym], a
+    row's as its product: [var] then names a variable of the reset environment (or a
+    projection-local one, rebound by [derive_projections]), free in the open work, so the tie to it
+    constrains nothing. Projection derivation emits none of these constraints. *)
 let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~error_shapes
     dim_refs =
-  List.filter_map dim_refs ~f:(fun delayed_ref ->
+  List.concat_map dim_refs ~f:(fun delayed_ref ->
       check_ref_live delayed_ref;
       let label = delayed_ref.var_ref.ref_label in
+      let previous_binding = if for_projections then `Not_set_yet else delayed_ref.var in
+      let origin operation =
+        [
+          {
+            Row.lhs_name = label;
+            lhs_kind = `Output;
+            rhs_name = delayed_ref.var_ref.ref_label;
+            rhs_kind = `Output;
+            operation = Some operation;
+          };
+        ]
+      in
+      let shared_origin = origin "shared capture reference" in
+      let row_of var = Row.get_row_for_var Row.empty_provenance var in
+      let product_is row_var dim_var =
+        Row.Rows_constr
+          {
+            r = [ row_of row_var ];
+            constr =
+              Total_elems
+                {
+                  numerator =
+                    Strided_var
+                      {
+                        coeff = Utils.safe_lazy "shared_capture_reference" (fun () -> 1);
+                        var = dim_var;
+                        denom = 1;
+                        round_up = false;
+                      };
+                  divided_by = [];
+                  keep_axis = false;
+                };
+            origin = shared_origin;
+          }
+      in
+      let unsolved = Option.is_none delayed_ref.var_ref.solved_dim in
       match Hashtbl.find dim_var_env label with
-      | Some var -> (
+      | Some var ->
           touch_ref delayed_ref;
           delayed_ref.var <- `Dim var;
-          let origin =
-            [
-              {
-                Row.lhs_name = label;
-                lhs_kind = `Output;
-                rhs_name = delayed_ref.var_ref.ref_label;
-                rhs_kind = `Output;
-                operation = Some "set_dim";
-              };
-            ]
+          let solved =
+            match (delayed_ref.var_ref.solved_sym, delayed_ref.var_ref.solved_dim) with
+            | _ when for_projections -> []
+            | Some sym, _ ->
+                [
+                  Row.Dim_eq
+                    { d1 = Row.Var var; d2 = Row.get_sym_dim sym; origin = origin "set_dim" };
+                ]
+            | None, Some solved_dim ->
+                [
+                  Row.Dim_eq
+                    {
+                      d1 = Row.Var var;
+                      d2 = Row.get_default_dim ~d:solved_dim ();
+                      origin = origin "set_dim";
+                    };
+                ]
+            | None, None -> []
           in
-          match (delayed_ref.var_ref.solved_sym, delayed_ref.var_ref.solved_dim) with
-          | _ when for_projections -> None
-          | Some sym, _ -> Some (Row.Dim_eq { d1 = Row.Var var; d2 = Row.get_sym_dim sym; origin })
-          | None, Some solved_dim ->
-              Some
-                (Row.Dim_eq { d1 = Row.Var var; d2 = Row.get_default_dim ~d:solved_dim (); origin })
-          | None, None -> None)
+          let tie =
+            match previous_binding with
+            | `Dim v0 when not (Row.equal_dim_var v0 var) ->
+                [ Row.Dim_eq { d1 = Row.Var var; d2 = Row.Var v0; origin = shared_origin } ]
+            | `Row r0 when unsolved -> [ product_is r0 var ]
+            | `Dim _ | `Row _ | `Not_set_yet -> []
+          in
+          solved @ tie
       | None -> (
           match Hashtbl.find row_var_env label with
           | Some var ->
@@ -516,26 +572,34 @@ let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~
                        ^ " is bound to a row variable but was set to a symbolic dimension \
                           (set_sym_dim does not support row variables)",
                        [ Shape_mismatch error_shapes ] );
-              Option.map
-                ~f:(fun solved_dim ->
-                  Row.Rows_constr
-                    {
-                      r = [ Row.get_row_for_var Row.empty_provenance var ];
-                      constr =
-                        Row.Total_elems
-                          { numerator = Num_elems solved_dim; divided_by = []; keep_axis = false };
-                      origin =
-                        [
-                          {
-                            Row.lhs_name = label;
-                            lhs_kind = `Output;
-                            rhs_name = delayed_ref.var_ref.ref_label;
-                            rhs_kind = `Output;
-                            operation = Some "set_dim";
-                          };
-                        ];
-                    })
-                (if for_projections then None else delayed_ref.var_ref.solved_dim)
+              let solved =
+                match delayed_ref.var_ref.solved_dim with
+                | _ when for_projections -> []
+                | Some solved_dim ->
+                    [
+                      Row.Rows_constr
+                        {
+                          r = [ row_of var ];
+                          constr =
+                            Row.Total_elems
+                              {
+                                numerator = Num_elems solved_dim;
+                                divided_by = [];
+                                keep_axis = false;
+                              };
+                          origin = origin "set_dim";
+                        };
+                    ]
+                | None -> []
+              in
+              let tie =
+                match previous_binding with
+                | `Row r0 when not (Row.equal_row_var r0 var) ->
+                    [ Row.Row_eq { r1 = row_of var; r2 = row_of r0; origin = shared_origin } ]
+                | `Dim v0 when unsolved -> [ product_is var v0 ]
+                | `Dim _ | `Row _ | `Not_set_yet -> []
+              in
+              solved @ tie
           | None ->
               raise
               @@ Row.Shape_error
