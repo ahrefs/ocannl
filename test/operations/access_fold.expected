@@ -19,3 +19,16 @@ loop bounds sees scalar-position loops: true
 statement-local census excludes assignments instantiated inside scopes: true
 tile footprint comes from fallback: true
 pruning an opaque construct skips descendants: true
+a scan's init sits outside its binder: true
+a body read sees its enclosing binders innermost first, the scan's with no axis: true
+a Where charges its condition and its wider arm, not the union: true
+a Where whose arms tie charges the first: true
+a scope body inside an arm charges the statement, not the arm: true
+nested alternatives take the wider arm at each level: true
+the setter's own reads and merge-buffer reads are no contributors: true
+a gather charges its index and its table: true
+a projection charges only its rendered operand: true
+a stored computation's dead loop replays nothing: true
+a stored computation's Tile_mma is opaque: true
+the write demand enters a scan body, counts a Tile_mma once as its accumulator, and skips expressions: true
+the write demand reports every binder in program order, a scan's with no axis: true

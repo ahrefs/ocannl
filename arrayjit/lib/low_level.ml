@@ -298,12 +298,20 @@ module Access_fold = struct
     scan_implicit : visit;
   }
 
+  type binder = {
+    index : Indexing.symbol;
+    from_ : int;
+    to_ : int;
+    axis : axis_type option;  (** [None]: a [Scan_loop]'s index. *)
+  }
+
   type context = {
     live : bool;
     guards : scalar_arg list;
     gated : bool;
     scope_depth : int;
     implicit : implicit;
+    loops : binder list;
   }
 
   type 'a descent = Continue of 'a | Prune of 'a
@@ -313,7 +321,10 @@ module Access_fold = struct
     scalar : context -> 'a -> scalar_t -> 'a descent;
     after_statement : context -> 'a -> t -> 'a;
     after_scalar : context -> 'a -> scalar_t -> 'a;
+    branches : context -> 'a -> ('a -> 'a) list -> 'a;
   }
+
+  let in_order _ acc arms = List.fold arms ~init:acc ~f:(fun acc arm -> arm acc)
 
   let hooks () =
     {
@@ -321,11 +332,13 @@ module Access_fold = struct
       scalar = (fun _ acc _ -> Continue acc);
       after_statement = (fun _ acc _ -> acc);
       after_scalar = (fun _ acc _ -> acc);
+      branches = in_order;
     }
 
-  let initial = { live = true; guards = []; gated = false; scope_depth = 0; implicit = Explicit }
+  let initial =
+    { live = true; guards = []; gated = false; scope_depth = 0; implicit = Explicit; loops = [] }
 
-  let fold ~policy ~hooks ~init code =
+  let traversal ~policy ~hooks =
     let rec stmt ctx acc code =
       match hooks.statement ctx acc code with
       | Prune acc -> acc
@@ -336,8 +349,9 @@ module Access_fold = struct
             | Zero_out _ ->
                 acc
             | Seq (a, b) -> stmt ctx (stmt ctx acc a) b
-            | For_loop { from_; to_; body; _ } -> loop ctx acc ~from_ ~to_ body
-            | Scan_loop { from_; to_; carried; body; _ } -> (
+            | For_loop { index; from_; to_; body; axis } ->
+                loop ctx acc { index; from_; to_; axis = Some axis } body
+            | Scan_loop { index; from_; to_; carried; body; _ } -> (
                 let acc =
                   List.fold carried ~init:acc ~f:(fun acc c ->
                       match policy.scan_implicit with
@@ -345,7 +359,7 @@ module Access_fold = struct
                           stmt { ctx with implicit = Scan_init } acc (Set_local (c.prev, c.init))
                       | Skip -> scalar ctx acc c.init)
                 in
-                let acc = loop ctx acc ~from_ ~to_ body in
+                let acc = loop ctx acc { index; from_; to_; axis = None } body in
                 match policy.scan_implicit with
                 | Skip -> acc
                 | Visit ->
@@ -368,9 +382,9 @@ module Access_fold = struct
             | Set_dynamic { dyn_value; llsc; _ } -> scalar ctx (scalar ctx acc (fst dyn_value)) llsc
           in
           hooks.after_statement ctx acc code
-    and loop ctx acc ~from_ ~to_ body =
-      if to_ < from_ && Poly.equal policy.dead_loops Skip then acc
-      else stmt { ctx with live = ctx.live && to_ >= from_ } acc body
+    and loop ctx acc (b : binder) body =
+      if b.to_ < b.from_ && Poly.equal policy.dead_loops Skip then acc
+      else stmt { ctx with live = ctx.live && b.to_ >= b.from_; loops = b :: ctx.loops } acc body
     and scalar ctx acc code =
       match hooks.scalar ctx acc code with
       | Prune acc -> acc
@@ -400,12 +414,16 @@ module Access_fold = struct
                 in
                 operand ctx (operand ctx acc first a) second b
             | Ternop (op, a, b, c) ->
-                let rest =
-                  match Ops.ternop_conditionality op with
-                  | Ops.All_three -> `Always
-                  | Ops.Cond_and_one_arm -> `Gated
-                in
-                operand ctx (operand ctx (scalar ctx acc (fst a)) rest b) rest c
+                let acc = scalar ctx acc (fst a) in
+                match Ops.ternop_conditionality op with
+                | Ops.All_three -> operand ctx (operand ctx acc `Always b) `Always c
+                | Ops.Cond_and_one_arm -> (
+                    match policy.gated_operands with
+                    | Skip -> acc
+                    | Visit ->
+                        let ctx = { ctx with gated = true } in
+                        hooks.branches ctx acc
+                          [ (fun acc -> scalar ctx acc (fst b)); (fun acc -> scalar ctx acc (fst c)) ])
           in
           hooks.after_scalar ctx acc code
     and operand ctx acc kind arg =
@@ -418,8 +436,67 @@ module Access_fold = struct
           | Skip -> acc
           | Visit -> scalar { ctx with gated = true } acc (fst arg))
     in
-    stmt initial init code
+    (stmt, scalar)
+
+  let fold ~policy ~hooks ~init code = (fst (traversal ~policy ~hooks)) initial init code
+  let fold_scalar ~policy ~hooks ~init sc = (snd (traversal ~policy ~hooks)) initial init sc
 end
+
+(** The tensor node a statement writes ITSELF -- not through a sub-statement -- or [None]
+    (gh-ocannl-1451). Exhaustive on purpose: together with {!Access_fold.fold}'s descent it is
+    where a new statement constructor has to be classified, and the write-sensitive walks built on
+    it ({!write_demand}, [trace_node_facts]' refusal of writes it does not know) follow. A
+    [Tile_mma] writes its accumulator [d] (its [fallback] is the same write, spelled scalar). *)
+let direct_write : t -> Tn.t option = function
+  | Set { tn; _ } | Set_dynamic { tn; _ } | Set_from_vec { tn; _ } | Zero_out tn -> Some tn
+  | Tile_mma { d = tn, _; _ } -> Some tn
+  | Noop | Comment _ | Staged_compilation _ | Seq _ | For_loop _ | Scan_loop _ | Set_local _
+  | Declare_local _ | Workgroup_barrier | If _ ->
+      None
+
+(* gh-ocannl-1451: the one statement-position walk -- loops, scans, guards and sequences, in source
+   order; never a scalar (so never a [Local_scope] body or a scan's synthetic local assignments),
+   never a [Tile_mma]'s fallback (the statement counts atomically: [statement] sees it, its fallback
+   is pruned). Scan bodies are entered: their writes are writes like any other (gh-ocannl-1134).
+   Dead loops are entered, the walk being structural. [statement] may [Prune] a subtree it handles
+   itself. *)
+let fold_statement_positions ~init ~(statement : Access_fold.context -> 'a -> t -> 'a Access_fold.descent)
+    (llc : t) : 'a =
+  let open Access_fold in
+  let policy =
+    {
+      discarded_operands = Skip;
+      gated_operands = Skip;
+      dead_loops = Visit;
+      local_scopes = Skip;
+      guards = Ignore;
+      scan_implicit = Skip;
+    }
+  in
+  let statement ctx acc stmt =
+    match (statement ctx acc stmt, stmt) with
+    | Continue acc, Tile_mma _ -> Prune acc
+    | descent, _ -> descent
+  in
+  fold ~policy ~hooks:{ (hooks ()) with statement; scalar = (fun _ acc _ -> Prune acc) } ~init llc
+
+type write_demand = { written : Tn.t list; binders : Access_fold.binder list }
+
+let write_demand (llc : t) : write_demand =
+  let written, binders =
+    fold_statement_positions ~init:([], []) llc ~statement:(fun _ (written, binders) stmt ->
+        let written = match direct_write stmt with Some tn -> tn :: written | None -> written in
+        let binders =
+          match stmt with
+          | For_loop { index; from_; to_; axis; _ } ->
+              { Access_fold.index; from_; to_; axis = Some axis } :: binders
+          | Scan_loop { index; from_; to_; _ } ->
+              { Access_fold.index; from_; to_; axis = None } :: binders
+          | _ -> binders
+        in
+        Access_fold.Continue (written, binders))
+  in
+  { written = List.rev written; binders = List.rev binders }
 
 (* gh-563: the one canonical rendering of lowered code, shared by both digest consumers —
    [analysis_digest] (the analysis cache, consulted inside [optimize]) and
@@ -1313,13 +1390,100 @@ let same_position ?dyn_axis ~statics_set (m : Indexing.axis_index array)
       | Some fa, Some fb -> [%equal: (int * Indexing.symbol) list * int] fa fb
       | _ -> false)
 
+(* gh-ocannl-1451: the one read collector -- the tensor nodes one evaluation of a setter of [self]
+   loads, as the transitive inline-fanin guard (gh-573) charges them. Shared by [trace_node_facts]'
+   per-setter [setter_reads] and the guard's replay of a computation an earlier routine stored, so
+   the two can no longer drift. Its algebra:
+   - a [Get] or [Get_dynamic] of a node other than [self] is a contributor (a gather is a read of
+     its table, recorded after its index expression, which evaluates first; gh-ocannl-1327);
+   - a projection's discarded operand is not evaluated, a gated binary operand is charged (its
+     worst case evaluates both), and merge-buffer reads are not contributors: a merge-buffer read
+     loads a materialized copy, never inlining the source's computation;
+   - exactly one arm of a [Cond_and_one_arm] ternary evaluates per visit, so the wider arm is
+     charged, not the union -- two arms each within the cap must not jointly trip it -- and on a
+     tie the first;
+   - [Local_scope] bodies hoist to statement level and execute unconditionally (both [Where] arms'
+     bodies really run), so their reads join the STATEMENT sink, never an arm's;
+   - a dead loop's body replays zero times, and a [Tile_mma] (constructed after the analyses) is
+     opaque. *)
+type eval_reads = { e_stmt : Set.M(Tn).t; e_cur : Set.M(Tn).t; e_saved : Set.M(Tn).t list }
+
+let eval_reads_traversal ~self =
+  let open Access_fold in
+  let empty = Set.empty (module Tn) in
+  let policy =
+    {
+      discarded_operands = Skip;
+      gated_operands = Visit;
+      dead_loops = Skip;
+      local_scopes = Visit;
+      guards = Ignore;
+      scan_implicit = Skip;
+    }
+  in
+  let contributor acc q = if Tn.equal q self then acc else { acc with e_cur = Set.add acc.e_cur q } in
+  let hooks =
+    {
+      statement = (fun _ acc stmt -> match stmt with Tile_mma _ -> Prune acc | _ -> Continue acc);
+      scalar =
+        (fun _ acc sc ->
+          match sc with
+          | Local_scope _ -> Continue { acc with e_cur = empty; e_saved = acc.e_cur :: acc.e_saved }
+          | _ -> Continue acc);
+      after_statement = (fun _ acc _ -> acc);
+      after_scalar =
+        (fun _ acc sc ->
+          match sc with
+          | Get (q, _) | Get_dynamic { tn = q; _ } -> contributor acc q
+          | Local_scope _ -> (
+              match acc.e_saved with
+              | cur :: saved -> { e_stmt = Set.union acc.e_stmt acc.e_cur; e_cur = cur; e_saved = saved }
+              | [] -> assert false)
+          | _ -> acc);
+      branches =
+        (fun _ acc arms ->
+          let acc', wider =
+            List.fold arms ~init:(acc, None) ~f:(fun (acc', wider) arm ->
+                let r = arm { acc' with e_cur = empty } in
+                let wider =
+                  match wider with
+                  | Some w when Set.length r.e_cur <= Set.length w -> wider
+                  | _ -> Some r.e_cur
+                in
+                ({ r with e_cur = acc.e_cur }, wider))
+          in
+          { acc' with e_cur = Set.union acc.e_cur (Option.value wider ~default:empty) });
+    }
+  in
+  (policy, hooks, { e_stmt = empty; e_cur = empty; e_saved = [] })
+
+let eval_reads_result r = Set.union r.e_stmt r.e_cur
+
+(** See the comment above {!eval_reads}: the contributors of one evaluation of [llsc], the
+    right-hand side of a setter of [self]. *)
+let evaluation_reads ~(self : Tn.t) (llsc : scalar_t) : Set.M(Tn).t =
+  let policy, hooks, init = eval_reads_traversal ~self in
+  eval_reads_result (Access_fold.fold_scalar ~policy ~hooks ~init llsc)
+
+(** {!evaluation_reads} of a statement: the contributors of one replay of [code], a stored
+    computation of [self]. *)
+let evaluation_reads_of_proc ~(self : Tn.t) (code : t) : Set.M(Tn).t =
+  let policy, hooks, init = eval_reads_traversal ~self in
+  eval_reads_result (Access_fold.fold ~policy ~hooks ~init code)
+
 (* Structural facts pass (gh-554): a single non-enumerating program-order traversal computing the
    per-node facts of {!traced_array} that are not affine questions — setter/reader structure,
    scalar-constexpr and one-hot classifications, reduction extents, loop-symbol ownership and the
    merge node. Each statement is visited exactly once (the retired concrete-index tracer's
    [first_visit] pass); the per-cell visit counts and read-before-write facts the tracer sampled by
    enumerating loop iterations are answered exactly by the affine queries instead
-   ({!read_multiplicity_query}, {!reads_covered_query}, consumed by {!decide_placements}). *)
+   ({!read_multiplicity_query}, {!reads_covered_query}, consumed by {!decide_placements}).
+
+   gh-ocannl-1451: the traversal is {!Access_fold}'s (dead loops skipped, projection-discarded
+   operands skipped, both [Where] arms and scope bodies visited, scan inits as scalars outside the
+   scan's binder), and a setter's fan-in sink is {!evaluation_reads}. A write this pass does not
+   know -- anything {!direct_write} classifies as a write besides [Set], [Set_from_vec] and
+   [Zero_out] -- is refused rather than silently passed over. *)
 let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indices llc =
   let statics_set =
     Set.of_list (module Indexing.Symbol)
@@ -1339,45 +1503,46 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
              during lowering"
       | _ -> ())
   in
-  (* [loop_ranges] maps each enclosing loop's index symbol to its full trip count; at a setter, the
-     fiber cardinality of the LHS map over that box — the product over symbols absent from the LHS
-     indices — is the recompute cost (per read site) of inlining that setter's computation (gh-494:
-     {!Affine.fiber_cardinality}; the exact-vs-lower-bound distinction is not needed here, the
-     absent-symbol product is the cost either way). *)
+  (* Each enclosing loop's index symbol mapped to its full trip count, an inner binder shadowing an
+     outer one. At a setter, the fiber cardinality of the LHS map over that box — the product over
+     symbols absent from the LHS indices — is the recompute cost (per read site) of inlining that
+     setter's computation (gh-494: {!Affine.fiber_cardinality}; the exact-vs-lower-bound
+     distinction is not needed here, the absent-symbol product is the cost either way). *)
+  let loop_ranges (ctx : Access_fold.context) =
+    List.fold_right ctx.loops
+      ~init:(Map.empty (module Indexing.Symbol))
+      ~f:(fun (b : Access_fold.binder) m -> Map.set m ~key:b.index ~data:(b.to_ - b.from_ + 1))
+  in
   let reduction_extent loop_ranges idcs =
     match Affine.fiber_cardinality ~domain:(Map.to_alist loop_ranges) idcs with
     | `Exact n | `At_least n -> n
   in
-  (* [scope_reads] is the enclosing setter's identity and read sinks when this traversal is inside a
-     [Local_scope] body in that setter's right-hand side (gh-573): the body's loads execute per
-     evaluation of the setter, so they belong to its [setter_reads], with the setter's own
-     read-modify-write self-reads still excluded. The payload carries TWO sinks, (self, statement
-     sink, current sink): scope bodies hoist to just before the enclosing statement and execute
-     unconditionally (both [Where] arms' bodies really run — see the operand-conditionality notes),
-     so they record into the statement sink, while directly conditional arm expressions record into
-     per-arm current sinks maxed by the [Ternop] arm below. [None] at top level. *)
-  let rec loop_proc ~loop_ranges ~scope_reads llc =
-    let loop = loop_proc ~loop_ranges ~scope_reads in
-    match llc with
-    | Noop -> ()
-    | (Seq (c1, c2) : t) ->
-        loop c1;
-        loop c2
-    | For_loop { index; from_; to_; body; axis = _ } ->
-        (* A dead loop ([to_ < from_]) never executes its body: record no facts from it, like the
-           retired tracer, which never enumerated such loops. *)
-        if to_ >= from_ then
-          loop_proc ~scope_reads
-            ~loop_ranges:(Map.set loop_ranges ~key:index ~data:(to_ - from_ + 1))
-            body
-    | Scan_loop { index; from_; to_; carried; body; _ } ->
-        (* gh-ocannl-696: the inits are recorded once and the body's facts under the scan index
-           exactly as under a loop index. (A dead range never reaches here: the validator refuses it
-           ahead of the analysis, so no walker needs a dead-scan convention.) *)
-        List.iter carried ~f:(fun c -> loop_scalar ~loop_ranges ~lhs:None ~reads:scope_reads c.init);
-        loop_proc ~scope_reads
-          ~loop_ranges:(Map.set loop_ranges ~key:index ~data:(to_ - from_ + 1))
-          body
+  (* The innermost enclosing statement's write target, when that statement is a [Set] or
+     [Set_from_vec]: a read in its right-hand side is a read by the setter itself. A [Local_scope]
+     body's statements, an [If] condition and a scan's inits push [None]. *)
+  let lhs : (Tn.t * Indexing.axis_index array) option list ref = ref [] in
+  let current_lhs () = match !lhs with top :: _ -> top | [] -> None in
+  let setter_facts ctx ~tn ~idcs ~(rhs : scalar_t) =
+    let traced : traced_array = get_node traced_store tn in
+    traced.setter_reads <- evaluation_reads ~self:tn rhs :: traced.setter_reads;
+    let loop_ranges = loop_ranges ctx in
+    traced.inline_reduction_extent <-
+      max traced.inline_reduction_extent (reduction_extent loop_ranges idcs);
+    (traced, loop_ranges)
+  in
+  let open Access_fold in
+  let policy =
+    {
+      discarded_operands = Skip;
+      gated_operands = Visit;
+      dead_loops = Skip;
+      local_scopes = Visit;
+      guards = Ignore;
+      scan_implicit = Skip;
+    }
+  in
+  let statement _ () (stmt : t) =
+    (match stmt with
     | Zero_out tn ->
         let traced : traced_array = get_node traced_store tn in
         if (not traced.has_assignment) && not (Hash_set.mem read_seen tn) then (
@@ -1386,15 +1551,29 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
           traced.is_complex <- false;
           if is_scalar_dims tn then traced.is_scalar_constexpr <- true);
         traced.zeroed_out <- true
+    | Set { idcs; _ } | Set_from_vec { idcs; _ } -> check_no_concat idcs
+    | Set_dynamic _ ->
+        (* gh-466: [rewrite_one_hot_reductions] constructs [Set_dynamic] after fact tracing. *)
+        invalid_arg "Low_level.trace_node_facts: Set_dynamic reached fact tracing"
+    | Tile_mma _ ->
+        (* Schedule transforms construct [Tile_mma] after the optimization pipeline ran; it never
+           reaches fact tracing. *)
+        invalid_arg "Low_level.trace_node_facts: Tile_mma reached the optimization pipeline"
+    | stmt when Option.is_some (direct_write stmt) ->
+        invalid_arg "Low_level.trace_node_facts: a write this pass does not trace reached it"
+    | _ -> ());
+    lhs :=
+      (match stmt with
+      | Set { tn; idcs; _ } | Set_from_vec { tn; idcs; _ } -> Some (tn, idcs)
+      | _ -> None)
+      :: !lhs;
+    Continue ()
+  in
+  let after_statement ctx () (stmt : t) =
+    lhs := List.tl_exn !lhs;
+    match stmt with
     | Set { tn; idcs; llsc; debug = _ } ->
-        check_no_concat idcs;
-        let reads = Hash_set.create (module Tnode) in
-        loop_scalar ~loop_ranges ~lhs:(Some (tn, idcs)) ~reads:(Some (tn, reads, reads)) llsc;
-        let traced : traced_array = get_node traced_store tn in
-        traced.setter_reads <-
-          Set.of_list (module Tnode) (Hash_set.to_list reads) :: traced.setter_reads;
-        traced.inline_reduction_extent <-
-          max traced.inline_reduction_extent (reduction_extent loop_ranges idcs);
+        let traced, loop_ranges = setter_facts ctx ~tn ~idcs ~rhs:llsc in
         if (not traced.has_assignment) && (not (Hash_set.mem read_seen tn)) && is_scalar_dims tn
         then
           (* An assignment re-executed by an enclosing loop is not a single constant assignment (the
@@ -1421,14 +1600,7 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
            genuine computation complexity does (see #134). *)
         track_symbol reverse_node_map tn idcs
     | Set_from_vec { tn; idcs; length = _; vec_unop = _; arg = arg, _; debug = _ } ->
-        check_no_concat idcs;
-        let reads = Hash_set.create (module Tnode) in
-        loop_scalar ~loop_ranges ~lhs:(Some (tn, idcs)) ~reads:(Some (tn, reads, reads)) arg;
-        let traced : traced_array = get_node traced_store tn in
-        traced.setter_reads <-
-          Set.of_list (module Tnode) (Hash_set.to_list reads) :: traced.setter_reads;
-        traced.inline_reduction_extent <-
-          max traced.inline_reduction_extent (reduction_extent loop_ranges idcs);
+        let traced, _ = setter_facts ctx ~tn ~idcs ~rhs:arg in
         (* Vector operations cannot be scalar constexpr or one-hot selectors. *)
         traced.is_scalar_constexpr <- false;
         traced.has_non_one_hot_setter <- true;
@@ -1436,69 +1608,11 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
         traced.is_complex <- traced.is_complex || not (is_constexpr_comp traced_store arg);
         traced.has_assignment <- true;
         track_symbol reverse_node_map tn idcs
-    | Set_local (_, llsc) -> loop_scalar ~loop_ranges ~lhs:None ~reads:scope_reads llsc
-    | Declare_local _ -> ()
-    | Comment _ -> ()
-    | Staged_compilation _ -> ()
-    | Workgroup_barrier -> ()
-    | Set_dynamic _ ->
-        (* gh-466: [rewrite_one_hot_reductions] constructs [Set_dynamic] after fact tracing. *)
-        invalid_arg "Low_level.trace_node_facts: Set_dynamic reached fact tracing"
-    | Tile_mma _ ->
-        (* Schedule transforms construct [Tile_mma] after the optimization pipeline ran; it never
-           reaches fact tracing. *)
-        invalid_arg "Low_level.trace_node_facts: Tile_mma reached the optimization pipeline"
-    | If { cond = c, _; body } ->
-        loop_scalar ~loop_ranges ~lhs:None ~reads:scope_reads c;
-        loop body
-  and loop_scalar ~loop_ranges ~lhs ~reads llsc =
-    let loop = loop_scalar ~loop_ranges ~lhs ~reads in
-    match llsc with
-    | Constant _ | Constant_bits _ -> ()
-    | Get (ptr, indices) ->
-        check_no_concat indices;
-        let traced : traced_array = get_node traced_store ptr in
-        if not (Option.exists lhs ~f:(fun (tn, _) -> Tn.equal ptr tn)) then
-          traced.read_by_other <- true;
-        (* The collector carries the setter's identity separately from [lhs], which a [Local_scope]
-           body does not inherit: the read-modify-write self-read exclusion must follow the OUTER
-           setter through the body, or a self-accumulating scope records a phantom contributor that
-           can flip a decision at the cap boundary. *)
-        Option.iter reads ~f:(fun (self, _stmt, cur) ->
-            if not (Tn.equal ptr self) then Hash_set.add cur ptr);
-        (* The read-modify-write exemption: a read at the enclosing statement's write position is
-           not a visit ([inline_complex_computations]), whichever node it reads. *)
-        let exempt =
-          virtualize_settings.inline_complex_computations
-          && Option.exists lhs ~f:(fun (_, w_idcs) -> same_position ~statics_set w_idcs indices)
-        in
-        if not exempt then Hash_set.add read_seen ptr
-    | Get_dynamic { tn = ptr; idcs; dyn_axis = _; dyn_value = v, _ } ->
-        (* gh-343: the pipeline mints [Get_dynamic] after this pass; hand-built IR handed to
-           [optimize] reaches it (test/operations/dynamic_axis_coverage). A gather is a read of its
-           table like a static [Get] (gh-ocannl-1327): it counts for [read_by_other] and the
-           setter's fan-in sink — mirroring the guard's [reads_of_scalar] — and it is a first touch,
-           so a later constant [Set] or [Zero_out] is not taken for the table's first touch. No
-           read-modify-write exemption: the runtime row is not provably the write's cell, as
-           [reads_covered_query] rules for a gather under a static write (gh-ocannl-1244), and the
-           one write that could share it, [Set_dynamic], never reaches this pass. The index is
-           walked first: it is evaluated before the load (a [Local_scope] in it hoists ahead of the
-           statement), so a touch inside it precedes the gather's in program order. *)
-        check_no_concat idcs;
-        loop v;
-        let traced : traced_array = get_node traced_store ptr in
-        if not (Option.exists lhs ~f:(fun (tn, _) -> Tn.equal ptr tn)) then
-          traced.read_by_other <- true;
-        Option.iter reads ~f:(fun (self, _stmt, cur) ->
-            if not (Tn.equal ptr self) then Hash_set.add cur ptr);
-        Hash_set.add read_seen ptr
-    | Local_scope { body; _ } ->
-        (* The body hoists to statement level, outside any conditional arm of the enclosing
-           expression: its reads record into the statement sink unconditionally. *)
-        loop_proc ~loop_ranges
-          ~scope_reads:(Option.map reads ~f:(fun (self, stmt, _cur) -> (self, stmt, stmt)))
-          body
-    | Get_local _ -> ()
+    | _ -> ()
+  in
+  let scalar _ () (sc : scalar_t) =
+    (match sc with
+    | Get (_, idcs) | Get_dynamic { idcs; _ } -> check_no_concat idcs
     | Get_merge_buffer (source, _) ->
         Option.iter !merge_node_ref ~f:(fun merge_node ->
             if not (Tn.equal merge_node source) then
@@ -1508,37 +1622,44 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
                      "Low_evel.optimize_proc: currently only one merge buffer per routine is \
                       allowed, found nodes %{Tn.debug_name source} and %{Tn.debug_name merge_node}"]);
         merge_node_ref := Some source
-        (* Not recorded in [reads]: a merge-buffer read loads a materialized copy, never inlining
-           the source's computation, and the source's placement here says nothing about that copy.
-           The fanin guard undercounts the one load — the safe direction for a heuristic cap. *)
-    | Embed_index _ -> ()
-    | Binop (Arg1, (llv1, _), _llv2) -> loop llv1
-    | Binop (Arg2, _llv1, (llv2, _)) -> loop llv2
-    | Ternop (op, (llv1, _), (llv2, _), (llv3, _)) -> (
-        loop llv1;
-        match (Ops.ternop_conditionality op, reads) with
-        | Ops.All_three, _ | Ops.Cond_and_one_arm, None ->
-            loop llv2;
-            loop llv3
-        | Ops.Cond_and_one_arm, Some (self, stmt, cur) ->
-            (* Exactly one arm's EXPRESSION evaluates per visit ([Ops.ternop_conditionality]): the
-               setter's fan-in charges the wider arm, not the union — two arms each within the cap
-               must not jointly trip it. [Local_scope] bodies inside the arms are the exception:
-               they hoist to statement level and both execute, so their reads flow to the statement
-               sink via the [Local_scope] arm above rather than into the per-arm sinks. The other
-               traced facts still record from both arms (their subjects are rendering-level, and
-               both arms are rendered). *)
-            let r2 = Hash_set.create (module Tnode) and r3 = Hash_set.create (module Tnode) in
-            loop_scalar ~loop_ranges ~lhs ~reads:(Some (self, stmt, r2)) llv2;
-            loop_scalar ~loop_ranges ~lhs ~reads:(Some (self, stmt, r3)) llv3;
-            let wider = if Hash_set.length r3 > Hash_set.length r2 then r3 else r2 in
-            Hash_set.iter wider ~f:(Hash_set.add cur))
-    | Binop (_, (llv1, _), (llv2, _)) ->
-        loop llv1;
-        loop llv2
-    | Unop (_, (llsc, _)) -> loop llsc
+    | _ -> ());
+    Continue ()
   in
-  loop_proc ~loop_ranges:(Map.empty (module Indexing.Symbol)) ~scope_reads:None llc
+  let read_by_other ptr =
+    let traced : traced_array = get_node traced_store ptr in
+    if not (Option.exists (current_lhs ()) ~f:(fun (tn, _) -> Tn.equal ptr tn)) then
+      traced.read_by_other <- true
+  in
+  let after_scalar _ () (sc : scalar_t) =
+    match sc with
+    | Get (ptr, indices) ->
+        read_by_other ptr;
+        (* The read-modify-write exemption: a read at the enclosing statement's write position is
+           not a visit ([inline_complex_computations]), whichever node it reads. *)
+        let exempt =
+          virtualize_settings.inline_complex_computations
+          && Option.exists (current_lhs ()) ~f:(fun (_, w_idcs) ->
+              same_position ~statics_set w_idcs indices)
+        in
+        if not exempt then Hash_set.add read_seen ptr
+    | Get_dynamic { tn = ptr; _ } ->
+        (* gh-343: the pipeline mints [Get_dynamic] after this pass; hand-built IR handed to
+           [optimize] reaches it (test/operations/dynamic_axis_coverage). A gather is a read of its
+           table like a static [Get] (gh-ocannl-1327): it counts for [read_by_other] and the
+           setter's fan-in sink ({!evaluation_reads}), and it is a first touch, so a later constant
+           [Set] or [Zero_out] is not taken for the table's first touch. No read-modify-write
+           exemption: the runtime row is not provably the write's cell, as [reads_covered_query]
+           rules for a gather under a static write (gh-ocannl-1244), and the one write that could
+           share it, [Set_dynamic], never reaches this pass. Recorded after the index expression
+           ([after_scalar]): it is evaluated before the load (a [Local_scope] in it hoists ahead of
+           the statement), so a touch inside it precedes the gather's in program order. *)
+        read_by_other ptr;
+        Hash_set.add read_seen ptr
+    | _ -> ()
+  in
+  fold ~policy
+    ~hooks:{ statement; scalar; after_statement; after_scalar; branches = in_order }
+    ~init:() llc
 
 (* Review round 2 of the gh-610/611 PR: the refusal of a cross-routine merge splice, shared by the
    consumption-time check ([inline_computation]) and the store that a capture walk's merge-tainted
@@ -7240,18 +7361,9 @@ let is_accumulating_write ~tn (llc : t) =
   | _ -> false
 
 let accumulating_writes ~tn (llc : t) : t list =
-  let acc = ref [] in
-  let rec stmt (llc : t) =
-    match llc with
-    | For_loop { body; _ } | If { body; _ } | Scan_loop { body; _ } -> stmt body
-    | Seq (a, b) ->
-        stmt a;
-        stmt b
-    | _ when is_accumulating_write ~tn llc -> acc := llc :: !acc
-    | _ -> ()
-  in
-  stmt llc;
-  List.rev !acc
+  List.rev
+  @@ fold_statement_positions ~init:[] llc ~statement:(fun _ acc stmt ->
+      Access_fold.Continue (if is_accumulating_write ~tn stmt then stmt :: acc else acc))
 
 type serial_accum = { sa_level : Indexing.symbol option; sa_widens : bool }
 
@@ -7268,42 +7380,38 @@ type serial_accum = { sa_level : Indexing.symbol option; sa_widens : bool }
 let serial_accum_widths ~serialized ~tn (llc : t) : serial_accum list =
   let loop_ranges = loop_ranges llc in
   let extra_level index axis = equal_axis_type axis Workgroup_reduce && serialized index axis in
-  let acc = ref [] in
-  let rec stmt (llc : t) =
-    match llc with
-    | For_loop { index; from_; to_; body; axis } -> (
-        let asks =
-          match axis with
-          | Serial | Unrolled | Vectorized -> true
-          | Workgroup | Workgroup_reduce -> serialized index axis
-          | Grid -> false
-        in
-        let decision =
-          if asks then Some (decide_accum_width ~extra_level ~loop_ranges ~index ~from_ ~to_ body)
-          else None
-        in
-        match decision with
-        | Some (Accum_base { tn = tn'; pinned = None; _ } as d) ->
-            (* Localized here. Another node's base sits at the end of a single-statement chain,
-               which holds no write of [tn]. *)
-            if Tn.equal tn tn' then
-              acc := { sa_level = Some index; sa_widens = accum_decision_widens d } :: !acc
-        | Some (Accum_base { pinned = Some _; _ } | Accum_not_a_nest _) | None -> stmt body)
-    | Seq (a, b) ->
-        stmt a;
-        stmt b
-    | If { body; _ } | Scan_loop { body; _ } -> stmt body
-    | _ when is_accumulating_write ~tn llc ->
-        let widens =
-          match peel_accum_nest ~loop_ranges ~free_of:[] llc with
-          | Some (_, idcs, (`Scope _ as base), _, _) -> accum_base_widens ~tn ~idcs base
-          | Some (_, _, `Update _, _, _) | None -> false
-        in
-        acc := { sa_level = None; sa_widens = widens } :: !acc
-    | _ -> ()
-  in
-  stmt llc;
-  List.rev !acc
+  List.rev
+  @@ fold_statement_positions ~init:[] llc ~statement:(fun _ acc (llc : t) ->
+      match llc with
+      | For_loop { index; from_; to_; body; axis } -> (
+          let asks =
+            match axis with
+            | Serial | Unrolled | Vectorized -> true
+            | Workgroup | Workgroup_reduce -> serialized index axis
+            | Grid -> false
+          in
+          let decision =
+            if asks then Some (decide_accum_width ~extra_level ~loop_ranges ~index ~from_ ~to_ body)
+            else None
+          in
+          match decision with
+          | Some (Accum_base { tn = tn'; pinned = None; _ } as d) ->
+              (* Localized here. Another node's base sits at the end of a single-statement chain,
+                 which holds no write of [tn]. *)
+              Access_fold.Prune
+                (if Tn.equal tn tn' then
+                   { sa_level = Some index; sa_widens = accum_decision_widens d } :: acc
+                 else acc)
+          | Some (Accum_base { pinned = Some _; _ } | Accum_not_a_nest _) | None ->
+              Access_fold.Continue acc)
+      | _ when is_accumulating_write ~tn llc ->
+          let widens =
+            match peel_accum_nest ~loop_ranges ~free_of:[] llc with
+            | Some (_, idcs, (`Scope _ as base), _, _) -> accum_base_widens ~tn ~idcs base
+            | Some (_, _, `Update _, _, _) | None -> false
+          in
+          Access_fold.Continue ({ sa_level = None; sa_widens = widens } :: acc)
+      | _ -> Access_fold.Continue acc)
 
 (* gh-ocannl-1168 / gh-ocannl-1238. The [Workgroup_reduce] sites the renderer owns the communication
    of, and whether workgroup-uniform control reaches each: the lane all-reduce into a reassociable
@@ -7958,18 +8066,20 @@ let seed_first_write ~(tn : Tn.t) (stmt : t) : t option =
   match zero_seed_candidate tn stmt with
   | None -> None
   | Some (write, repeated) -> (
-      let rec binders acc = function
-        | For_loop { index; axis; body; _ } -> binders ((index, Some axis) :: acc) body
-        | Scan_loop { index; body; _ } -> binders ((index, None) :: acc) body
-        | Seq (a, b) -> binders (binders acc a) b
-        | If { body; _ } -> binders acc body
-        | _ -> acc
+      (* The statement's binders at statement positions ({!write_demand}). A symbol is program
+         ordered when it has a binder and every binder of it -- siblings may rebind one -- is a
+         [Serial] or [Unrolled] loop (a scan binder's [axis] is [None]). *)
+      let stmt_binders = (write_demand stmt).binders in
+      let every_binder s ~f =
+        match
+          List.filter stmt_binders ~f:(fun (b : Access_fold.binder) ->
+              Indexing.equal_symbol b.index s)
+        with
+        | [] -> false
+        | bs -> List.for_all bs ~f:(fun (b : Access_fold.binder) -> f b.axis)
       in
-      let stmt_binders = binders [] stmt in
-      let program_ordered s =
-        match List.Assoc.find stmt_binders s ~equal:Indexing.equal_symbol with
-        | Some (Some (Serial | Unrolled)) -> true
-        | _ -> false
+      let program_ordered =
+        every_binder ~f:(function Some (Serial | Unrolled) -> true | _ -> false)
       in
       (* Every rewrite replaces the one self-read {!zero_seed_candidate} found; [rewrite] refuses a
          statement where the walk reached a different number of reads (a construct it does not
@@ -8078,7 +8188,11 @@ let seed_first_write ~(tn : Tn.t) (stmt : t) : t option =
               | Some (tn', idcs, `Update llsc, debug, rebuild) when Tn.equal tn tn' ->
                   if not (accum_update_widens ~tn ~idcs llsc) then `Pinned
                   else
-                    let inside = index :: List.map (binders [] body) ~f:fst in
+                    let inside =
+                      index
+                      :: List.map (write_demand body).binders ~f:(fun (b : Access_fold.binder) ->
+                          b.index)
+                    in
                     let outer =
                       List.filter repeated ~f:(fun s ->
                           not (List.mem inside s ~equal:Indexing.equal_symbol))
@@ -8126,9 +8240,7 @@ let seed_first_write ~(tn : Tn.t) (stmt : t) : t option =
           | None, None -> guarded_rewrite repeated
           | Some l, Some l'
             when Indexing.equal_symbol l l'
-                 && Poly.equal
-                      (List.Assoc.find stmt_binders l ~equal:Indexing.equal_symbol)
-                      (Some (Some Serial)) -> (
+                 && every_binder l ~f:(function Some Serial -> true | _ -> false) -> (
               match scope_at ~l ~bounds:Affine.Loop_ranges.empty stmt with
               | `Scoped stmt -> Some stmt
               | `Pinned -> guarded_rewrite repeated
@@ -9030,69 +9142,11 @@ let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads
      once per consumer. Per-setter maximum, not union across setters — a read of one cell executes
      one setter's computation (Block/concat range-guarded setters). *)
   if virtualize_settings.max_inline_fanin >= 0 then
-    (* The reads a stored computation replays when [inline_computation] inlines it: [Get]s of nodes
-       other than [self], including inside [Local_scope] bodies. Mirrors [trace_node_facts]'
-       collection for this routine's own setters; used for a dependency this routine only READS
-       whose definition an earlier routine in the lineage committed [Virtual] — its traced entry
-       here has no setters, but its computation will be replayed all the same. Merge-buffer reads
-       stay uncounted (a materialized copy), and projections charge only the evaluated operand. *)
-    (* [reads_of_proc acc code] is the statement-level sink; [reads_of_scalar (stmt, cur) v]
-       threads the statement sink alongside the current (possibly per-arm) expression sink:
-       [Local_scope] bodies hoist to statement level and execute unconditionally — both [Where]
-       arms' bodies really run — so their reads join [stmt], while directly conditional arm
-       expressions collect into fresh [cur] sinks maxed by the [Cond_and_one_arm] case. *)
-    let rec reads_of_proc ~self acc code =
-      let open Access_fold in
-      let policy =
-        {
-          discarded_operands = Skip;
-          gated_operands = Visit;
-          dead_loops = Skip;
-          local_scopes = Visit;
-          guards = Ignore;
-          scan_implicit = Skip;
-        }
-      in
-      let hooks =
-        {
-          (hooks ()) with
-          statement =
-            (fun _ acc stmt -> match stmt with Tile_mma _ -> Prune acc | _ -> Continue acc);
-          scalar = (fun _ acc sc -> Prune (scalar_into ~self acc sc));
-        }
-      in
-      fold ~policy ~hooks ~init:acc code
-    and scalar_into ~self acc v =
-      let stmt, cur = reads_of_scalar ~self (acc, Set.empty (module Tnode)) v in
-      Set.union stmt cur
-    and reads_of_scalar ~self ((stmt, cur) as acc) (sc : scalar_t) =
-      match sc with
-      | Constant _ | Constant_bits _ | Embed_index _ | Get_local _ | Get_merge_buffer _ -> acc
-      | Get (q, _) -> if Tn.equal q self then acc else (stmt, Set.add cur q)
-      | Get_dynamic { tn = q; dyn_value = v, _; _ } ->
-          reads_of_scalar ~self (stmt, if Tn.equal q self then cur else Set.add cur q) v
-      | Local_scope { body; _ } -> (reads_of_proc ~self stmt body, cur)
-      | Ternop (op, (v1, _), (v2, _), (v3, _)) -> (
-          let acc = reads_of_scalar ~self acc v1 in
-          match Ops.ternop_conditionality op with
-          | Ops.All_three -> reads_of_scalar ~self (reads_of_scalar ~self acc v2) v3
-          | Ops.Cond_and_one_arm ->
-              (* Exactly one arm's expression evaluates per visit: charge the wider arm, not the
-                 union. The arms' hoisted scope bodies flowed to [stmt] above regardless. *)
-              let stmt, cur = acc in
-              let stmt, s2 = reads_of_scalar ~self (stmt, Set.empty (module Tnode)) v2 in
-              let stmt, s3 = reads_of_scalar ~self (stmt, Set.empty (module Tnode)) v3 in
-              (stmt, Set.union cur (if Set.length s3 > Set.length s2 then s3 else s2)))
-      | Binop (op, (v1, _), (v2, _)) -> (
-          match Ops.binop_conditionality op with
-          | Ops.Only_first -> reads_of_scalar ~self acc v1
-          | Ops.Only_second -> reads_of_scalar ~self acc v2
-          | Ops.Both_operands | Ops.Gated_second ->
-              (* A gated second operand still charges: the worst-case evaluation runs both, and with
-                 a single alternative the per-arm maximum degenerates to the union. *)
-              reads_of_scalar ~self (reads_of_scalar ~self acc v1) v2)
-      | Unop (_, (v, _)) -> reads_of_scalar ~self acc v
-    in
+    (* The reads a stored computation replays when [inline_computation] inlines it: the one read
+       collector ({!evaluation_reads_of_proc}, gh-ocannl-1451) that [trace_node_facts] uses for this
+       routine's own setters. Used for a dependency this routine only READS whose definition an
+       earlier routine in the lineage committed [Virtual] — its traced entry here has no setters,
+       but its computation will be replayed all the same. *)
     let memo = Hashtbl.create (module Tnode) in
     let rec fanin tn : Set.M(Tnode).t =
       match Hashtbl.find memo tn with
@@ -9135,7 +9189,7 @@ let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads
               match Hashtbl.find optim_ctx.computations tn with
               | Some comps ->
                   List.map comps ~f:(fun (_, code) ->
-                      reads_of_proc ~self:tn (Set.empty (module Tnode)) code)
+                      evaluation_reads_of_proc ~self:tn code)
               | None -> []
           in
           let s =
