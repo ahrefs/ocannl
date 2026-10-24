@@ -6,6 +6,8 @@
   stdio
   arrayjit.utils
   unix
+  mtime
+  mtime.clock.os
   ppx_here.runtime-lib
   ppx_minidebug.runtime
   arrayjit.ir

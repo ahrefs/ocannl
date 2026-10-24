@@ -6,6 +6,11 @@ open Ocannl_tensor.Operation.DSL_modules
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 
+(* Milliseconds on the monotonic clock since [counter] started. [Unix.gettimeofday] reads the system
+   time, which Windows ticks in whole milliseconds or coarser, so a microsecond kernel timed as 0 ms
+   there (gh-ocannl-1411); this is the clock the autotuner's own timings read. *)
+let elapsed_ms counter = Mtime.Span.to_float_ns (Mtime_clock.count counter) /. 1e6
+
 let stream ?(elems = 1 lsl 26) ?repeats ctx =
   let file = Utils.registered_text ~arg_name:"autotune_calibration_file" in
   if String.is_empty file then
@@ -147,10 +152,10 @@ let working_set ?(m = 256) ?(n = 1024)
           Context.sync ctx';
           let best = ref Float.infinity in
           for _ = 1 to repeats do
-            let t0 = Unix.gettimeofday () in
+            let t0 = Mtime_clock.counter () in
             let ctx' = Context.run run_ctx routine in
             Context.sync ctx';
-            best := Float.min !best ((Unix.gettimeofday () -. t0) *. 1000.)
+            best := Float.min !best (elapsed_ms t0)
           done;
           {
             wp_k = k;
@@ -309,10 +314,10 @@ let issue_sweep ?(m = 512) ?(n = 512) ?(ks = [ 256; 512; 1024; 2048; 4096; 8192;
           Context.sync ctx';
           let best = ref Float.infinity in
           for _ = 1 to repeats do
-            let t0 = Unix.gettimeofday () in
+            let t0 = Mtime_clock.counter () in
             let ctx' = Context.run run_ctx routine in
             Context.sync ctx';
-            best := Float.min !best ((Unix.gettimeofday () -. t0) *. 1000.)
+            best := Float.min !best (elapsed_ms t0)
           done;
           {
             ip_k = k;
