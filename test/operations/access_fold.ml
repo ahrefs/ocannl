@@ -195,6 +195,28 @@ let () =
   p "a scan's init sits outside its binder" (same_loops (loops_of b) [ (i, Some LL.Serial) ]);
   p "a body read sees its enclosing binders innermost first, the scan's with no axis"
     (same_loops (loops_of a) [ (k, Some LL.Unrolled); (j, None); (i, Some LL.Serial) ]);
+  let implicit_loops =
+    F.fold ~policy
+      ~hooks:
+        {
+          (F.hooks ()) with
+          after_statement =
+            (fun ctx acc stmt ->
+              match (stmt, ctx.implicit) with
+              | LL.Set_local _, (F.Scan_init | F.Scan_rotate) ->
+                  (ctx.implicit, List.map ctx.loops ~f:(fun (b : F.binder) -> (b.index, b.axis)))
+                  :: acc
+              | _ -> acc);
+        }
+      ~init:[] nest
+    |> List.rev
+  in
+  p "a scan's synthetic init sits outside its binder, its rotation inside"
+    (match implicit_loops with
+    | [ (F.Scan_init, init_loops); (F.Scan_rotate, rot_loops) ] ->
+        same_loops (Some init_loops) [ (i, Some LL.Serial) ]
+        && same_loops (Some rot_loops) [ (j, None); (i, Some LL.Serial) ]
+    | _ -> false);
   let set_eq got want = Set.equal got (Set.of_list (module Tn) want) in
   let ev sc = LL.evaluation_reads ~self:out sc in
   p "a Where charges its condition and its wider arm, not the union"

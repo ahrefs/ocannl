@@ -359,13 +359,20 @@ module Access_fold = struct
                           stmt { ctx with implicit = Scan_init } acc (Set_local (c.prev, c.init))
                       | Skip -> scalar ctx acc c.init)
                 in
-                let acc = loop ctx acc { index; from_; to_; axis = None } body in
+                let binder = { index; from_; to_; axis = None } in
+                let acc = loop ctx acc binder body in
                 match policy.scan_implicit with
                 | Skip -> acc
                 | Visit ->
+                    (* The rotations run per iteration, inside the scan's binder. *)
                     List.fold carried ~init:acc ~f:(fun acc c ->
                         stmt
-                          { ctx with implicit = Scan_rotate; live = ctx.live && to_ >= from_ }
+                          {
+                            ctx with
+                            implicit = Scan_rotate;
+                            live = ctx.live && to_ >= from_;
+                            loops = binder :: ctx.loops;
+                          }
                           acc
                           (Set_local (c.prev, Get_local c.next))))
             | If { cond; body } ->

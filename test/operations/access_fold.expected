@@ -21,6 +21,7 @@ tile footprint comes from fallback: true
 pruning an opaque construct skips descendants: true
 a scan's init sits outside its binder: true
 a body read sees its enclosing binders innermost first, the scan's with no axis: true
+a scan's synthetic init sits outside its binder, its rotation inside: true
 a Where charges its condition and its wider arm, not the union: true
 a Where whose arms tie charges the first: true
 a scope body inside an arm charges the statement, not the arm: true
