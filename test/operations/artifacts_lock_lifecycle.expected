@@ -1,0 +1,15 @@
+fork: the forked child wrote its artifacts: true
+fork: the forking holder exited: true
+fork: with the forking holder gone, its child still holds the lock: true
+fork: the holder query names the forked child: true
+fork: once the child exits, the lock is free: true
+chdir: the two working directories have distinct lock files: true
+chdir: the lock of the first directory is held: true
+chdir: the lock of the second directory is held too: true
+force: an unforced start ran: true
+force: unforced, the held directory's artifact stays: true
+force: a forced start ran: true
+force: forced, the held directory's artifact is removed: true
+force: the forced cleanup says it emptied a held directory: true
+force: it names the holder where the platform can tell: true
+force: the lock file itself stays: true

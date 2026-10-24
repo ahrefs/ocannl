@@ -162,6 +162,7 @@ execution-neutral -- debug artifacts and where they go: the files are written be
   build_files_prefix
   clean_up_build_files_on_startup
   clean_up_log_files_on_startup
+  force_clean_up_artifacts_on_startup
   log_buffer_aliasing
   log_memory_budget
   output_dlls_in_build_directory [read at codegen]

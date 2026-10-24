@@ -353,7 +353,16 @@ configuration.
   the subdirectory, out of every listing; under the flat layout the cleanup skips it by its
   suffix, and it is created 0666 so every account sharing the directory can lock it -- one that
   cannot open it for writing reads it as held); and two dune rules running ONE executable share its subdirectory and so sweep each
-  other, which `cc_kept_library`'s rules serialize with a dune lock.
+  other, which `cc_kept_library`'s rules serialize with a dune lock. POSIX does not carry record
+  locks into a forked child, so the table of held locks is keyed by OS pid too and a child
+  re-takes them; that, and holding each directory's lock across `chdir`, are pinned by
+  `test/operations/artifacts_lock_lifecycle` (gh-ocannl-1462), which observes every lock from a
+  separate process (record locks never conflict within one). A long-running holder blocks every
+  later cleanup: `force_clean_up_artifacts_on_startup=true` empties a held directory anyway and
+  names a holder pid on stderr (`fcntl(F_GETLK)`, `Utils.lock_holder_pid`: one of possibly several
+  shared holders; unknown on Windows). It overrides the lock's gate only: the lock file stays
+  (unlinking it would let later processes lock different inodes) and so do a running owner's
+  owner-named artifacts.
 
 - A failed cc kernel compile blames the generated code only after a trivial kernel compiles under
   the same command, flags and link flags (gh-ocannl-1350, `Cc_backend.toolchain_fault`,

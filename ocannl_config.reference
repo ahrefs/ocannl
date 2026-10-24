@@ -194,6 +194,13 @@
 # clean_up_build_files_on_startup, the logs stay while another process writing there runs.
 #clean_up_log_files_on_startup=true
 
+# gh-ocannl-1462: if true, a startup cleanup above that finds its directory's lock held (another
+# process writing there is running) empties the directory anyway, and names a holder pid on stderr
+# (one of possibly several; unknown on Windows). The lock file stays, and so do the artifacts whose
+# names record a running owner. The `--ocannl_force_clean_up_artifacts_on_startup=true` command line
+# is the "--force" spelling for a long-running process that holds every later cleanup back.
+#force_clean_up_artifacts_on_startup=false
+
 # Other configurations:
 
 # The default backend for computations, if `Backends.fresh_backend` isn't passed `backend_name`.

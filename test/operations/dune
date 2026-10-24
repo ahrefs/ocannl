@@ -1559,6 +1559,16 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1462: Utils.Artifacts_lock across fork and chdir, and the forced startup cleanup.
+
+(test
+ ; ocannl-backend: none -- exercises artifact-directory locks and starts no backend.
+ (name artifacts_lock_lifecycle)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules artifacts_lock_lifecycle)
+ (libraries base stdio unix arrayjit.utils arrayjit.verdict))
+
 ; gh-ocannl-1462: the upload-arena ownership checker on hand-built lineage state.
 
 (test
