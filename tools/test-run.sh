@@ -170,7 +170,7 @@
 # name one test, or pass -j 1, to time it alone. A red fresh run cannot be
 # promoted from the worktree (its build directory is gone): rerun it with `run`.
 #
-# Exit codes: `run` and `wait` exit with dune's status, with TWO substitutions.
+# Exit codes: `run` and `wait` exit with dune's status, with THREE substitutions.
 # A run the fleet's run-time slot refused (see plan_slot below) exits 75 under
 # the verdict `SLOT REFUSED`: nothing ran, and the fleet's own line says why.
 # And an invocation dune's own CLI refused -- an unknown option or subcommand, a
@@ -181,7 +181,15 @@
 # The recorded status (the `exit:` sentinel, `status`, `list`) stays dune's
 # own 1; the substitution is the caller-facing one, so a caller branching on
 # the status needs no log parsing to tell "fix the command line" from "read
-# the failures". `repeat` preserves the
+# the failures". And a red run whose own dune trace holds a failed build step
+# -- a process that exited nonzero producing only compile artifacts: a type
+# error, a ppx or link failure -- exits 65 under the verdict `BUILD FAILED`:
+# the tests needing that step never ran, so the red is not a test's verdict,
+# and an output an earlier run left under `_build` is not this run's (the
+# digest names the build steps, and the stale outputs of the tests the argv
+# names; see record_build_failures, gh-ocannl-1547). A run in which a test
+# failed and a build step too is BUILD FAILED: its red cannot be read as the
+# tests' alone. `repeat` preserves the
 # first nonzero dune status, or exits 1 when otherwise-green stdout/statuses
 # differ, and exits 2 with the same verdict when its first iteration is refused
 # (there is nothing to repeat) (142 = the cap expired -- for `run`/`start`
@@ -1956,7 +1964,13 @@ fresh_argv() { # operands
 # for both. Input: the alias list, then tools/action-durations.sh's `--tsv`
 # rows. `mode=timings` prints `fresh`'s per-alias line (fresh_timings);
 # `mode=rows` prints `ALIAS<TAB>ROW` for each row (1-based) that is the
-# alias's action (_direct_plan).
+# alias's action (_direct_plan). Both pass `-v art="$compile_artifact_ere"`.
+#
+# A compile artifact, by its file name: what a compile, link, preprocess or
+# dependency step produces -- never a test's output. One copy, read by the
+# attribution below (an output named after a test is not one of these) and by
+# build_failure_awk (a failed process producing only these is a build step).
+compile_artifact_ere='[.](exe|bc|bc-for-jsoo|js|cm[a-z]*|o|a|so|dll|d|pp[.]ml|pp[.]mli)$'
 attribution_awk='
     function ends(s, t) { return length(s) >= length(t) && substr(s, length(s) - length(t) + 1) == t }
     function named(i) { # the alias i: a, rec (a recursive @), p, d (its DIR), base, name
@@ -1976,7 +1990,7 @@ attribution_awk='
     function produces(s, pre, b) {
       b = s; sub(/^.*\//, "", b)
       if (substr(s, 1, 1) == "@" || substr(s, 1, 1) == "(" || !in_dir(dir_of(s))) return 0
-      if (b ~ /\.(exe|bc|bc-for-jsoo|js|cm[a-z]*|o|a|so|dll|d|pp\.ml|pp\.mli)$/) return 0
+      if (b ~ art) return 0
       return index(b, pre ".") == 1
     }
     function action_of(j, k, s) { # a target of row j is the alias action, or the test output
@@ -2062,13 +2076,84 @@ fresh_timings() { # <trace file>
       return 0
     fi
   fi
-  awk -F '\t' -v mode=timings "$attribution_awk" "$run_dir/fresh-aliases" "$tsv" >"$run_dir/timings.tmp" 2>"$err" &&
+  awk -F '\t' -v mode=timings -v art="$compile_artifact_ere" "$attribution_awk" "$run_dir/fresh-aliases" "$tsv" >"$run_dir/timings.tmp" 2>"$err" &&
     mv -f "$run_dir/timings.tmp" "$run_dir/timings" || {
       rm -f "$run_dir/timings.tmp"
       printf 'the per-test times could not be recorded: %s\n' \
         "$(grep . "$err" 2>/dev/null | head -n 1 | cut -c1-200)" >"$run_dir/timings-skipped"
     }
   rm -f "$tsv" "$err"
+}
+
+# A red run whose build failed before its tests ran (gh-ocannl-1547): dune
+# exits 1 for a compile error as for a failed claim, and read as one, a mutant
+# that did not compile passed for a caught one -- and the `.exe.output` an
+# earlier run left beside it for the mutant's output. Its own trace tells them
+# apart: a build step is a process that exited nonzero and produced nothing but
+# compile artifacts (compile_artifact_ere) -- the compiler, the linker, the ppx
+# driver, ocamldep, a C stub's cc. A test's own action never qualifies (an
+# alias action, a NAME.exe.output or NAME.actual producer), nor a process the
+# run's end left open, nor one with no target (`(in DIR)`), nor a rule
+# generating sources (its targets are not compile artifacts): those stay FAIL.
+# Input: tools/action-durations.sh's `--tsv` rows; prints `PROG<TAB>ACTION`
+# per build step that failed.
+build_failure_awk='
+    $2 !~ /^[0-9]+$/ || $2 == 0 { next }
+    {
+      act = $4; sub(/ \+[0-9]+$/, "", act)
+      n = NF < 5 ? 1 : NF - 4; ok = 1
+      for (k = 1; k <= n; k++) {
+        t = NF < 5 ? act : $(k + 4); b = t; sub(/^.*\//, "", b)
+        if (substr(t, 1, 1) == "@" || substr(t, 1, 1) == "(" || b !~ art) ok = 0
+      }
+      if (ok) print $3 "\t" act
+    }'
+
+# Recorded in `_resolve` once a red dune has exited, from the run's own trace,
+# bounded like the promotion list: `build-failures`, build_failure_awk's rows,
+# published only when there is one. The digest reads a red run with it as
+# BUILD FAILED (exit 65). Beside it, `stale-outputs`: each stdout file a test
+# the argv names (`@DIR/runtest-NAME`, `slow-`, `train-`) leaves under the
+# build directory -- NAME.exe.output, NAME.actual or NAME.output in DIR, the
+# files tools/mutation-run.sh counts -- that no process of this run's trace
+# produced: an earlier run's, which the digest names so that nobody reads it as
+# this one's. Read from the trace, not from timestamps: a file system's mtime
+# granularity cannot tell a file written this second from one written by the
+# run before.
+# Not where the argv names its own build directory or root (no worktree
+# `_build` to look in). A reader that fails records nothing, and the run reads
+# FAIL as before.
+record_build_failures() { # <trace file>
+  local tsv=$run_dir/build-processes.tsv alias d name rel bd
+  [ -f "$1" ] || return 0
+  if promotion_bounded bash "$runner_root/tools/action-durations.sh" --tsv -n 0 "$1" >"$tsv" 2>/dev/null 9>&- &&
+     awk -F '\t' -v art="$compile_artifact_ere" "$build_failure_awk" "$tsv" >"$run_dir/build-failures.tmp" &&
+     [ -s "$run_dir/build-failures.tmp" ]; then
+    mv -f "$run_dir/build-failures.tmp" "$run_dir/build-failures"
+  fi
+  rm -f "$run_dir/build-failures.tmp"
+  if [ -s "$run_dir/build-failures" ] && [ -n "$promotions_recordable" ]; then
+    bd=${DUNE_BUILD_DIR:-_build}/default
+    case $bd in /*) ;; *) bd=$PWD/$bd ;; esac
+    for alias in ${named_tests[@]+"${named_tests[@]}"}; do
+      alias=${alias#@}
+      alias=${alias#@}
+      d=${alias%/*} name=${alias##*/}
+      name=${name#*-}
+      for rel in "$d/$name.exe.output" "$d/$name.actual" "$d/$name.output"; do
+        [ -f "$bd/$rel" ] || continue
+        # A row's targets are its fifth field on, relative to the build context.
+        awk -F '\t' -v t="$rel" '{ for (k = 5; k <= NF; k++) if ($k == t) { f = 1; exit } }
+                                END { exit !f }' "$tsv" || printf '%s\n' "$bd/$rel"
+      done
+    done >"$run_dir/stale-outputs.tmp" 2>/dev/null
+    if [ -s "$run_dir/stale-outputs.tmp" ]; then
+      mv -f "$run_dir/stale-outputs.tmp" "$run_dir/stale-outputs"
+    else
+      rm -f "$run_dir/stale-outputs.tmp"
+    fi
+  fi
+  rm -f "$tsv"
 }
 
 new_run() {
@@ -2567,6 +2652,9 @@ digest() {
       elif [ "$rc" = 1 ] && complaint=$(dune_refusal "$refusal_src" "$prelude_bytes"); then
         verdict="INVOCATION REFUSED (dune rejected the arguments; nothing ran)"
         digest_rc=2
+      elif [ "$rc" = 1 ] && [ -s "$dir/build-failures" ]; then
+        verdict="BUILD FAILED (a compile step failed: the tests needing it never ran, not judged)"
+        digest_rc=65
       else
         verdict=FAIL
       fi
@@ -2699,6 +2787,20 @@ digest() {
       fi ;;
   esac
   case $verdict in
+    BUILD*)
+      echo "build steps that failed (this run's dune trace: nonzero exits producing only compile artifacts):"
+      sed -n '1,10p' "$dir/build-failures" | awk -F '\t' '{ printf "  %-14s %s\n", $1, $2 }'
+      local bf_n
+      bf_n=$(grep -c '' "$dir/build-failures")
+      [ "$bf_n" -le 10 ] || echo "  ... and $((bf_n - 10)) more, in $dir/build-failures"
+      if [ -s "$dir/stale-outputs" ]; then
+        echo "NOT this run's output -- no process of this run wrote it; an earlier run left it in place:"
+        sed 's/^/  /' "$dir/stale-outputs"
+      fi
+      echo "a test output under _build that this run did not write is an earlier run's, not a" \
+           "result of this source; fix the build and run again" ;;
+  esac
+  case $verdict in
     ALIAS*)
       # The refusal lines above say what dune does not know; no rule ran.
       echo "fix the alias and run again -- \`dune show aliases DIR\` lists a directory's;" \
@@ -2725,7 +2827,7 @@ digest() {
   # read only for runs that recorded none.
   local promo_n=
   case $verdict in
-    pass | FAIL) [ ! -f "$dir/promotions" ] || promo_n=$(grep -c '' "$dir/promotions") ;;
+    pass | FAIL | BUILD*) [ ! -f "$dir/promotions" ] || promo_n=$(grep -c '' "$dir/promotions") ;;
   esac
   # Without it, promotion is offered only on a diff dune actually printed: a
   # `--- ` header line directly followed by a `+++ ` one (git diff and diff
@@ -3679,6 +3781,14 @@ case $sub in
     # Decided on the caller's argv, before the slot's words are put in front.
     promotions_recordable=1
     ! explicit_build_root "$@" || promotions_recordable=
+    # The per-test aliases the caller named, whose outputs a red build may
+    # have left stale (record_build_failures).
+    named_tests=()
+    for arg do
+      [ "$arg" != -- ] || break
+      [[ ! $arg =~ ^@@?[A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)*/(runtest|slow|train)-[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] ||
+        named_tests+=("$arg")
+    done
     # The batch's dune writes its trace into the run directory, for the run's
     # slowest actions (see explicit_trace_file) -- after `cmd` was recorded,
     # so the command the digest prints is still the caller's. Not where the
@@ -3737,6 +3847,7 @@ case $sub in
     fi
     [ -z "$promotions_recordable" ] || record_promotions
     [ "$mode" != fresh ] || [ -z "${trace_file:-}" ] || fresh_timings "$trace_file"
+    [ "$rc" = 1 ] && [ -n "${trace_file:-}" ] && record_build_failures "$trace_file"
     exit "$rc"
     ;;
   _direct_plan)
@@ -3758,7 +3869,7 @@ case $sub in
       : >"$pdir/rows-dirs.tsv"
     fi
     cut -f2- "$pdir/rows-dirs.tsv" >"$pdir/rows.tsv" &&
-      awk -F '\t' -v mode=rows "$attribution_awk" "$run_dir/direct-aliases" "$pdir/rows.tsv" >"$pdir/hits" &&
+      awk -F '\t' -v mode=rows -v art="$compile_artifact_ere" "$attribution_awk" "$run_dir/direct-aliases" "$pdir/rows.tsv" >"$pdir/hits" &&
       awk -F '\t' 'NR == FNR { row[FNR] = $0; next } { print $1 "\t" row[$2] }' \
         "$pdir/rows-dirs.tsv" "$pdir/hits" >"$pdir/rows" ||
       { echo "test-run: the build phase's processes could not be attributed" >&2; exit 126; }

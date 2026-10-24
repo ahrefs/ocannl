@@ -14,7 +14,7 @@
 # below and closed by the one group it belongs to (gh-ocannl-1202):
 # #group-alive (1-5), #stop (6-8, 67), #queries (39), #repeat (9-25, 38, 83-85),
 # #options (26-28, 37, 89), #width (29-34, 48-52, 64, 70), #digest (35-36,
-# 68-69, 71-73, 80, 87), #fresh (81), #lifecycle (40-47, 65, 74: the run/start
+# 68-69, 71-73, 80, 87, 92), #fresh (81), #lifecycle (40-47, 65, 74: the run/start
 # lifecycle with its signal legs, and both fork-window negative controls),
 # #source (59-63, 66), #slot (53-58, 78, 88), #device (75-77, 91), #credentials (79, 90),
 # #bisect (82), #harness (86). A body that cannot go on (an extraction that
@@ -323,6 +323,14 @@
 #      left. A refused slot or device probe and a setup error never
 #      print a record, a cancellation does. Beside it, against a real dune: a
 #      manual build running beside a managed run keeps its live trace.
+#  92 sits after leg 80b: a red run whose own trace holds a failed build step
+#      (a nonzero exit producing only compile artifacts) is BUILD FAILED,
+#      exit 65 over a recorded 1 (`wait` too), naming the step and the output
+#      an earlier run left for a named test this run never wrote, never one
+#      this run's trace produced; a red test, a failed source generator and
+#      an unfinished compile stay FAIL (exit 1); an argv naming its own build
+#      directory looks in no worktree `_build` (gh-ocannl-1547). 92b: the same
+#      against a real dune, a type error beside a red and a passing test.
 #  81 sits after leg 80: `fresh` hands dune exactly `build --build-dir=<the
 #      run's own> --force --cache=disabled` and the named aliases, records that
 #      command, and removes the build directory with the run (the fixture dune
@@ -343,7 +351,8 @@
 #      build is a skip, never bad, and the first bad commit is found under
 #      the runner frozen at the start -- the range's last commit carries one
 #      that cannot run; a range left with only skipped commits lists them
-#      (exit 1); SLOT REFUSED and a cap's TIMEOUT in a step abort the bisect
+#      (exit 1), and so is a test run that is BUILD FAILED (gh-ocannl-1547);
+#      SLOT REFUSED and a cap's TIMEOUT in a step abort the bisect
 #      (75, 142; git stopped by the step's 128) judging nothing; ends that do
 #      not hold here bisect nothing; no backend, an unrelated GOOD or a
 #      misplaced option is refused before any step; first-parent by default
@@ -4730,6 +4739,187 @@ fi
 }
 harness_leg_run '80b: a manual dune beside a managed run keeps its live trace #digest' leg_80_live
 
+# A synthetic dune trace (python3), for the legs that need a run's own trace to
+# say which processes ran and how they ended. Each ROW is
+# `PROG|EXIT|TARGET[,TARGET...]`, targets relative to BUILD/default; EXIT
+# `open` leaves the process unfinished.
+synthetic_trace() { # <path> <build dir> ROW...
+  python3 - "$@" <<'PY'
+import sys
+path, build, rows = sys.argv[1], sys.argv[2], sys.argv[3:]
+S, T0 = 1_000_000_000, 1_791_291_000 * 1_000_000_000
+def atom(s):
+    s = str(s).encode()
+    return str(len(s)).encode() + b':' + s
+def sexp(x):
+    return b'(' + b''.join(sexp(e) if isinstance(e, list) else atom(e) for e in x) + b')'
+out = [sexp(['config', 'init', str(T0), ['build_dir', build]])]
+for i, row in enumerate(rows):
+    prog, ex, targets = row.split('|')
+    t = T0 + (i + 1) * S
+    f = [['pid', str(100 + i)], ['prog', '/opt/bin/' + prog], ['dir', build + '/default'],
+         ['target_files', [build + '/default/' + x for x in targets.split(',')]]]
+    out.append(sexp(['process', 'start', str(t)] + f))
+    if ex != 'open':
+        out.append(sexp(['process', 'finish', [str(t), str(S // 10)]] + f + [['exit', ex]]))
+open(path, 'wb').write(b''.join(out))
+PY
+}
+
+# Leg 92: a build failure is not a failed test (gh-ocannl-1547). dune exits 1
+# for both; a red run whose own trace holds a failed build step -- a nonzero
+# exit producing only compile artifacts -- is BUILD FAILED, exit 65 (the
+# recorded status stays dune's 1), naming the step, and an output an earlier
+# run left for a named test that this run never wrote is named as not this
+# run's -- while one this run's trace produced is not. Controls: a red run
+# whose failed processes are a test's action, a source generator and an
+# unfinished compile stays FAIL (exit 1) and names no stale output; an argv
+# naming its own build directory is still BUILD FAILED but looks in no
+# worktree `_build`. Against a real dune too (92b, below).
+leg_92() {
+bf_label="a red run whose own trace holds a failed build step is BUILD FAILED (exit 65), not FAIL"
+if ! command -v python3 >/dev/null 2>&1; then
+  skip "$bf_label" "no python3 on PATH (tools/action-durations.sh needs it)"
+  return
+fi
+cp "$HERE/action-durations.sh" "$repeat_root/tools/action-durations.sh"
+bf_build=$repeat_root/_build
+mkdir -p "$bf_build/default/t"
+synthetic_trace "$TMP/bf-broken.csexp" "$bf_build" \
+  'ocamlopt.opt|2|t/.bad.eobjs/native/dune__exe__Bad.cmx,t/.bad.eobjs/native/dune__exe__Bad.o' \
+  'ocamlopt.opt|0|t/good.exe' 'good.exe|0|t/good.exe.output' 'red.exe|1|@t/runtest-red'
+synthetic_trace "$TMP/bf-red.csexp" "$bf_build" \
+  'ocamlopt.opt|0|t/bad.exe' 'red.exe|1|@t/runtest-red' 'bad.exe|3|t/bad.exe.output' \
+  'gen.exe|1|t/generated.ml' 'ocamlopt.opt|open|t/.slow.eobjs/native/dune__exe__Slow.cmx'
+# What an earlier run left: bad's output, which the broken build never rewrote,
+# and good's, which this run's trace says it wrote.
+printf 'earlier\n' >"$bf_build/default/t/bad.exe.output"
+printf 'earlier\n' >"$bf_build/default/t/good.exe.output"
+bf_detail=
+REPEAT_TEST_TRACE=$TMP/bf-broken.csexp argv_mode=red argv_probe bf-broken run build @t/runtest-bad @t/runtest-good
+argv_mode=
+case $argv_rc:$argv_out in
+  65:*"verdict: BUILD FAILED (a compile step failed: the tests needing it never ran, not judged) (exit 65)"*) ;;
+  *) bf_detail="a broken build: exit $argv_rc (want 65 under BUILD FAILED): $argv_out" ;;
+esac
+bf_steps=$(printf '%s\n' "$argv_out" | awk '/^build steps that failed/ { f = 1; next } f && /^  / { print; next } f { exit }')
+[ -n "$bf_detail" ] || [ "$bf_steps" = "  ocamlopt.opt   t/.bad.eobjs/native/dune__exe__Bad.cmx" ] ||
+  bf_detail="a broken build: the failed steps listed are not the compile alone: ${bf_steps:-<none>}"
+bf_stale=$(printf '%s\n' "$argv_out" | awk '/^NOT this run.s output/ { f = 1; next } f && /^  / { print; next } f { exit }')
+case $bf_stale in
+  "  "*/_build/default/t/bad.exe.output) ;;
+  *) [ -n "$bf_detail" ] || bf_detail="a broken build: the stale outputs named are not bad's alone: ${bf_stale:-<none>}" ;;
+esac
+[ -n "$bf_detail" ] || [ "$(cat "$argv_dir/exit" 2>/dev/null)" = 1 ] ||
+  bf_detail="a broken build: the recorded status is not dune's own 1: $(cat "$argv_dir/exit" 2>/dev/null)"
+# The fingerprint still shows the compiler's error.
+case $bf_detail:$argv_out in
+  :*"fingerprint:"*"Error: This expression has type int"*) ;;
+  :*) bf_detail="a broken build: the compiler's error is not in the fingerprint: $argv_out" ;;
+esac
+# `wait` exits with the same substitution; `status` with its publication 0.
+if [ -z "$bf_detail" ]; then
+  bf_wait=$(OCANNL_TOOL_TEST_RUNS=$TMP/argv-runs-bf-broken "$repeat_root/tools/test-run.sh" wait last 2>&1)
+  bf_wait_rc=$?
+  OCANNL_TOOL_TEST_RUNS=$TMP/argv-runs-bf-broken "$repeat_root/tools/test-run.sh" status last >/dev/null 2>&1
+  bf_status_rc=$?
+  case $bf_wait_rc:$bf_status_rc:$bf_wait in
+    65:0:*"verdict: BUILD FAILED"*) ;;
+    *) bf_detail="wait/status: exits $bf_wait_rc/$bf_status_rc (want 65/0): $bf_wait" ;;
+  esac
+fi
+if [ -z "$bf_detail" ]; then
+  REPEAT_TEST_TRACE=$TMP/bf-red.csexp argv_mode=red argv_probe bf-red run build @t/runtest-bad @t/runtest-red
+  argv_mode=
+  case $argv_rc:$argv_out in
+    1:*"verdict: FAIL (exit 1)"*) ;;
+    *) bf_detail="a red test, generator and unfinished compile: exit $argv_rc (want 1 under FAIL): $argv_out" ;;
+  esac
+  case $argv_out in
+    *"build steps that failed"* | *"NOT this run"*)
+      [ -n "$bf_detail" ] || bf_detail="a red test named build steps or stale outputs: $argv_out" ;;
+  esac
+  [ -n "$bf_detail" ] || [ ! -e "$argv_dir/build-failures" ] ||
+    bf_detail="a red test recorded build failures: $(cat "$argv_dir/build-failures")"
+fi
+if [ -z "$bf_detail" ]; then
+  REPEAT_TEST_TRACE=$TMP/bf-broken.csexp argv_mode=red \
+    argv_probe bf-elsewhere run build --build-dir=$TMP/bf-elsewhere @t/runtest-bad
+  argv_mode=
+  case $argv_rc:$argv_out in
+    65:*"NOT this run"*) bf_detail="a build directory of its own: the worktree's _build was read: $argv_out" ;;
+    65:*"verdict: BUILD FAILED"*) ;;
+    *) bf_detail="a build directory of its own: exit $argv_rc (want 65): $argv_out" ;;
+  esac
+fi
+rm -f "$bf_build/default/t/bad.exe.output" "$bf_build/default/t/good.exe.output"
+if [ -z "$bf_detail" ]; then report 0 "$bf_label"; else report 1 "$bf_label" "$bf_detail"; fi
+}
+harness_leg_run '92: a build failure is BUILD FAILED, not a failed test #digest' leg_92
+
+# The same against a real dune: a test whose source does not type-check beside
+# one that fails and one that passes. A first, green run leaves the broken
+# test's output; the broken run names it, and not the passing test's, which
+# this run rewrote. A host with no dune skips it, as leg 80b does.
+leg_92_real() {
+bfr_label="a real type error is BUILD FAILED naming the stale output; a red test alone stays FAIL (real dune)"
+bfr_real=$( (command -v dune >/dev/null 2>&1 || . "$HERE/opam-env.sh" >/dev/null 2>&1
+  command -v dune) 2>/dev/null) || bfr_real=
+if [ -z "$bfr_real" ] || ! command -v python3 >/dev/null 2>&1; then
+  skip "$bfr_label" "no dune on PATH, nor through tools/opam-env.sh, or no python3"
+  return
+fi
+bfr_root=$TMP/build-failed-real
+mkdir -p "$bfr_root/tools" "$bfr_root/scripts" "$bfr_root/t"
+cp "$SRC" "$bfr_root/tools/test-run.sh"
+stage_sourced "$bfr_root" || { harness_abandon "$stage_error"; return; }
+cp "$HERE/action-durations.sh" "$bfr_root/tools/action-durations.sh"
+chmod +x "$bfr_root/tools/test-run.sh"
+printf '(lang dune 3.20)\n' >"$bfr_root/dune-project"
+printf '(test (name bad) (modules bad))\n(test (name good) (modules good))\n(test (name red) (modules red))\n' \
+  >"$bfr_root/t/dune"
+printf 'let () = print_endline "one"\n' >"$bfr_root/t/bad.ml"
+printf 'one\n' >"$bfr_root/t/bad.expected"
+printf 'let () = print_endline "v1"\n' >"$bfr_root/t/good.ml"
+printf 'v1\n' >"$bfr_root/t/good.expected"
+printf 'let () = exit 1\n' >"$bfr_root/t/red.ml"
+bfr_run() { # tag dune-args...
+  local tag=$1
+  shift
+  (cd "$bfr_root" && PATH=$(dirname "$bfr_real"):$PATH OCANNL_TOOL_TEST_RUNS=$TMP/bfr-runs \
+    "$bfr_root/tools/test-run.sh" run build --cache=disabled "$@") >"$TMP/bfr-$tag.out" 2>&1
+  bfr_rc=$?
+  bfr_out=$(cat "$TMP/bfr-$tag.out")
+}
+bfr_detail=
+bfr_run green @t/runtest-bad @t/runtest-good
+[ "$bfr_rc" = 0 ] || bfr_detail="the first, green run: exit $bfr_rc: $bfr_out"
+if [ -z "$bfr_detail" ]; then
+  printf 'let () = print_endline 1\n' >"$bfr_root/t/bad.ml"
+  printf 'let () = print_endline "v2"\n' >"$bfr_root/t/good.ml"
+  printf 'v2\n' >"$bfr_root/t/good.expected"
+  bfr_run broken @t/runtest-bad @t/runtest-good @t/runtest-red
+  case $bfr_rc:$bfr_out in
+    65:*"verdict: BUILD FAILED"*"build steps that failed"*"dune__exe__Bad"*"NOT this run's output"*/_build/default/t/bad.exe.output*) ;;
+    *) bfr_detail="a type error: exit $bfr_rc (want 65 naming the step and bad's stale output): $bfr_out" ;;
+  esac
+  bfr_stale=$(printf '%s\n' "$bfr_out" | awk '/^NOT this run.s output/ { f = 1; next } f && /^  / { print; next } f { exit }')
+  case $bfr_detail:$bfr_stale in
+    :*good.exe.output*) bfr_detail="a type error: the rewritten good.exe.output was named stale: $bfr_out" ;;
+  esac
+fi
+if [ -z "$bfr_detail" ]; then
+  printf 'let () = print_endline "one"\n' >"$bfr_root/t/bad.ml"
+  bfr_run red @t/runtest-bad @t/runtest-red
+  case $bfr_rc:$bfr_out in
+    1:*"verdict: FAIL (exit 1)"*) ;;
+    *) bfr_detail="a red test alone: exit $bfr_rc (want 1 under FAIL): $bfr_out" ;;
+  esac
+fi
+if [ -z "$bfr_detail" ]; then report 0 "$bfr_label"; else report 1 "$bfr_label" "$bfr_detail"; fi
+}
+harness_leg_run '92b: a real build failure is BUILD FAILED, not a failed test #digest' leg_92_real
+
 # The guard from leg 26 is not made redundant by the digest: it knows the
 # correct order and refuses without spawning dune. With a fixture that WOULD
 # refuse, the guard's refusal is the one that arrives, and the calls file --
@@ -7545,6 +7735,11 @@ case " $* " in
 esac
 case $st in
   fail) echo 'Error: the test failed'; exit 1 ;;
+  # A build step that fails for the targets alone, @check green (a link): the
+  # run's own trace records it, so test-run reads BUILD FAILED (gh-ocannl-1547).
+  linkfail)
+    for a do case $a in --trace-file=*) cp "$BISECT_LINKFAIL_TRACE" "${a#--trace-file=}" ;; esac; done
+    echo 'Error: the link failed'; exit 1 ;;
   hang) exec sleep 60 ;;
   escape*)
     # A descendant that leaves dune's group, keeping the run's lock (fd 9),
@@ -7581,6 +7776,8 @@ EOF
     bi_root=$TMP/bisect-repo-$bi_n
     mkdir -p "$bi_root/tools" "$bi_root/scripts" && cp "$SRC" "$bi_root/tools/test-run.sh" || return 1
     stage_sourced "$bi_root" || return 1
+    # The trace reader, frozen with the runner: (b2)'s BUILD FAILED is read from a run's trace.
+    cp "$HERE/action-durations.sh" "$bi_root/tools/action-durations.sh" || return 1
     printf 'pass\n' >"$bi_root/STATE"
     { bi_git init -q "$bi_root" && bi_git -C "$bi_root" config user.name harness &&
       bi_git -C "$bi_root" config user.email harness@invalid &&
@@ -7667,6 +7864,33 @@ EOF
   elif ! bi_clean; then bi_detail="the tree was left, or the checkout changed"
   fi
   if [ -z "$bi_detail" ]; then report 0 "$l_skipped"; else report 1 "$l_skipped" "$bi_detail"; fi
+
+  # (b2) a test run that is BUILD FAILED -- @check green, a build step of the
+  # targets' own failed -- is a skip too, never bad (gh-ocannl-1547): the
+  # range's only untested commit is listed as a candidate, exit 1.
+  l_linkfail="bisect: a test run that is BUILD FAILED is a skip, never bad"
+  if ! command -v python3 >/dev/null 2>&1; then
+    skip "$l_linkfail" "no python3 on PATH (tools/action-durations.sh needs it)"
+  else
+    bi_detail=
+    bi_repo linkfail fail || bi_detail="fixture"
+    if [ -z "$bi_detail" ]; then
+      synthetic_trace "$TMP/bisect-linkfail.csexp" "$TMP/bisect-linkfail-build" 'ocamlopt.opt|2|t/x.exe'
+      bi_run OCANNL_BACKEND=cc OCANNL_TOOL_FLEET_WORKER=none BISECT_LINKFAIL_TRACE=$TMP/bisect-linkfail.csexp \
+        -- "$bi_base" range @t
+    fi
+    if [ -n "$bi_detail" ]; then :
+    elif [ "$bi_rc" != 1 ] || grep -q 'FIRST BAD COMMIT' <<<"$bi_out" ||
+         ! grep -q "only skipped commits are left" <<<"$bi_out" ||
+         ! grep -q "^  ${bi_shas[0]} linkfail" <<<"$bi_out"; then
+      bi_detail="exit $bi_rc: $bi_out $bi_err"
+    elif ! grep -q "	${bi_shas[0]}	skip	" "$bi_dir/steps.tsv" ||
+         ! grep -q '^verdict: BUILD FAILED' "$bi_dir/steps/"*-test.out; then
+      bi_detail="the BUILD FAILED test run was not a skip: $(cat "$bi_dir/steps.tsv")"
+    elif ! bi_clean; then bi_detail="the tree was left, or the checkout changed"
+    fi
+    if [ -z "$bi_detail" ]; then report 0 "$l_linkfail"; else report 1 "$l_linkfail" "$bi_detail"; fi
+  fi
 
   # (c) a refused slot mid-bisect ABORTS it: git bisect stops (the step's 128),
   # the bisect exits 75, nothing is called bad, and the tree goes.

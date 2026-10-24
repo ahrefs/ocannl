@@ -17,6 +17,7 @@ tools/test-test-run.sh	negative control: with the scrub cut out, the real trace 
 tools/test-test-run.sh	repeat --direct: one build, then each test's own rules replayed as dune ran them (real dune)
 tools/test-test-run.sh	negative control: with the replay cut out, dune's --force alone runs no target-producing test again (real dune)
 tools/test-test-run.sh	negative control: with the replay's inherited descriptors closed, a session-escaped descendant goes unseen (real dune)
+tools/test-test-run.sh	a real type error is BUILD FAILED naming the stale output; a red test alone stays FAIL (real dune)
 # MSYS link files and the symlink-copy mode exist only under Git Bash.
 tools/test-windows-opam-cache.sh	negative control: switch restored with system link files
 tools/test-windows-opam-cache.sh	negative control: MSYS deepcopy links

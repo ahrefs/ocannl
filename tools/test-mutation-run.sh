@@ -51,8 +51,9 @@ own_trace() { # <word>; 0 iff it is --trace-file=<a run directory>/trace.csexp
   d=${d%/trace.csexp}
   [ -f "$d/wt" ] && [ -f "$d/cap" ] && [ -f "$d/log" ]
 }
+trace_to=
 if [ $# -ge 2 ] && own_trace "$2"; then
-  sub=$1
+  sub=$1 trace_to=${2#--trace-file=}
   shift 2
   set -- "$sub" "$@"
 fi
@@ -96,6 +97,12 @@ section='\nSynthetic controls: scanner refusal diagnostics exercised by this con
 closing='End of synthetic controls.\n'
 why='Refusal marker not printed (not part of the golden): '
 case "$PROBE_MODE" in
+  # A mutant that does not compile, its failed compile step in the run's own trace: test-run's
+  # BUILD FAILED, exit 65 (gh-ocannl-1547), which is no evidence either.
+  compile_traced)
+    [ -z "$trace_to" ] || cp "$PROBE_TRACE" "$trace_to"
+    printf 'File "module.ml", line 1, characters 0-1:\nError: Syntax error\n' >&2
+    exit 1 ;;
   fail)
     # Two Verdict.fail messages ending like claims, on both streams as Verdict.fail prints them.
     rows 'first: false\nFAIL: a message ending like a claim: false\nnested: label: false\nlast: true\nFAIL: one ending like pass_fail: FAIL\n'
@@ -644,7 +651,34 @@ for mode in pass compile refused; do
   run_case "$rc"
   grep -q '^(none)$' "$fixture/result"
 done
-printf 'PASS surviving mutation, compile failure (never ran), invocation refusal\n'
+# The same compile failure as test-run reads it from the run's own trace: BUILD FAILED (65), mapped
+# to no evidence (4) like the 1 above, never passed through as another status.
+if command -v python3 >/dev/null 2>&1; then
+  cp "$root/tools/action-durations.sh" tools/action-durations.sh
+  python3 - "$fixture/compile.trace" "$PWD/_build" <<'TRACE'
+import sys
+path, build = sys.argv[1], sys.argv[2]
+def atom(s):
+    s = str(s).encode()
+    return str(len(s)).encode() + b':' + s
+def sexp(x):
+    return b'(' + b''.join(sexp(e) if isinstance(e, list) else atom(e) for e in x) + b')'
+f = [['pid', '7'], ['prog', '/opt/bin/ocamlopt.opt'], ['dir', build + '/default'],
+     ['target_files', [build + '/default/.probe.eobjs/native/dune__exe__Probe.cmx']]]
+open(path, 'wb').write(sexp(['config', 'init', '1000', ['build_dir', build]])
+    + sexp(['process', 'start', '2000'] + f)
+    + sexp(['process', 'finish', ['2000', '5']] + f + [['exit', '2']]))
+TRACE
+  export PROBE_MODE=compile_traced PROBE_TRACE=$fixture/compile.trace
+  run_case 4
+  grep -q '^verdict: BUILD FAILED' "$fixture/result" ||
+    { cat "$fixture/result"; echo 'compile_traced: test-run did not read BUILD FAILED'; exit 1; }
+  flagged 'NEVER RAN: this run wrote no stdout of probe (a build failure, or an executable the mutation left unchanged, so dune reused its result)'
+  rm -f tools/action-durations.sh
+  printf 'PASS surviving mutation, compile failure (never ran; also as BUILD FAILED), invocation refusal\n'
+else
+  printf 'PASS surviving mutation, compile failure (never ran), invocation refusal (BUILD FAILED: no python3)\n'
+fi
 }
 harness_leg_run_errexit '6: surviving mutation, compile failure, invocation refusal' leg_6
 leg_6b() {
