@@ -183,7 +183,7 @@ files.
   through. When asserting a memory bound, assert on `live_working_pools`, not `live_pools`: summing the
   constant class in makes the assertion fail for a reason it is not about, and on a workload with no
   hoisted candidates it passes while proving less than it looks like.
-- Four facts about the allocation seams that each cost a review round to learn, and that any further
+- Five facts about the allocation seams that each cost a review round to learn, and that any further
   release work will meet again. (1) There are **two** shared allocation sites, not one:
   `Backends.allocate_delta` for a compile's delta, and the transfer destinations inside
   `Add_buffer_retrieval_and_syncing` for a node not yet in the context (`upload_slot` for
@@ -197,7 +197,13 @@ files.
   standing bug shape in this area: decide what ships *after* the last thing that can raise, or the one
   artifact you deliberately kept is the one nobody can reach. Corollary for reviewing such a change:
   each fix adds a container, a guard or a retention decision, i.e. a new path with the same obligation
-  — re-examine the failure paths the fix itself created, not just the ones it closed.
+  — re-examine the failure paths the fix itself created, not just the ones it closed. (5) A cleanup
+  with no retry owner (`allocate_delta`'s unwind, `free_delta` after a failed link, the probe's give-back)
+  frees through `Backends.free_pools_continuing`: every pool is attempted and the first refusal
+  re-raised at the end, since nothing holds the ids afterwards and a skipped pool is leaked for good
+  (gh-ocannl-1555). A context `finalize` is the opposite case: it stops at the first refusal and
+  keeps `released_pool_ids` as the retry ledger. `resource_fault_injection` pins the unwind's half at
+  `Delta_unwind_before_free` with a working and a constant pool.
 - **Host uploads and device copies of absent nodes share upload arenas, owned by the context LIFECYCLE**
   (gh-ocannl-1125). One pool per `set_values` of a not-yet-linked node made a routine reading 18
   such parameters need 20 pools, over Metal's 16-binding budget (`build_pool_binding`), so

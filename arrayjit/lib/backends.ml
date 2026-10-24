@@ -773,12 +773,33 @@ let free_and_forget_pool device ~free_pool pool_id =
   free_pool device ~pool_id;
   Alloc_census.forget_pool ~device_id:device.device_id ~pool_id
 
+(* Frees every pool of [pool_ids] for a cleanup with no retry owner -- nothing holds the ids
+   afterwards, so a pool skipped here is leaked for good. Every pool is attempted, so one free the
+   driver refuses strands no other, and the first refusal is re-raised once all were tried
+   (gh-ocannl-1493, gh-ocannl-1555). [?before_free] names the fault-injection point hit before each
+   free. A context [finalize] is not such a cleanup: it keeps a retry ledger and stops at the first
+   refusal on purpose. *)
+let free_pools_continuing ?before_free device ~free_pool pool_ids =
+  let first_failure =
+    List.fold pool_ids ~init:None ~f:(fun failure pool_id ->
+        match
+          Option.iter before_free ~f:Resource_fault_injection.hit;
+          free_and_forget_pool device ~free_pool pool_id
+        with
+        | () -> failure
+        | exception exn -> (
+            match failure with
+            | Some _ -> failure
+            | None -> Some (exn, Stdlib.Printexc.get_raw_backtrace ())))
+  in
+  Option.iter first_failure ~f:(fun (exn, backtrace) ->
+      Stdlib.Printexc.raise_with_backtrace exn backtrace)
+
 (* Uncommitted compile deltas have no upload siblings. Use the same owned-pool classification as
    upload reference registration and context cleanup, freeing each pool once. *)
 let free_owned_pools ~device ~free_pool ~owned_elsewhere (ctx_buffers : ctx_buffers) : unit =
-  Set.iter
-    (owned_pool_ids ~device ~owned_elsewhere ctx_buffers)
-    ~f:(free_and_forget_pool device ~free_pool)
+  free_pools_continuing device ~free_pool
+    (Set.to_list (owned_pool_ids ~device ~owned_elsewhere ctx_buffers))
 
 (** Adds a scheduler and brings a lowered no-device backend on par with lowered device backends. *)
 module Add_device
@@ -1301,9 +1322,11 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
          come out first or a later context would resolve a freed slab. Entries that were already
          there belong to earlier compiles and are untouched. *)
       List.iter !cache_inserts ~f:(Hashtbl.remove device.constant_buffer_cache);
+      (* gh-ocannl-1555: past a refused free too -- the caller never receives these ids, so a pool
+         this skipped would be leaked for good. *)
       Option.iter free_pool ~f:(fun free_pool ->
-          List.dedup_and_sort !(tx.minted) ~compare:Int.compare
-          |> List.iter ~f:(free_and_forget_pool device ~free_pool))
+          free_pools_continuing ~before_free:Delta_unwind_before_free device ~free_pool
+            (List.dedup_and_sort !(tx.minted) ~compare:Int.compare))
     in
     let pack (gl : group_layout) ~(register : Tn.t -> alloc:(unit -> buffer_loc) -> unit) : unit =
       let pool_ids = allocate_group_pools tx device gl in
@@ -1422,17 +1445,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
            let tx = new_pool_tx ~name in
            (* Every pool is attempted, so one free the driver refuses strands no other; the first
               refusal is re-raised once all were tried. *)
-           let give_back () =
-             let first_failure =
-               List.fold !(tx.minted) ~init:None ~f:(fun failure pool_id ->
-                   match free_and_forget_pool device ~free_pool pool_id with
-                   | () -> failure
-                   | exception exn ->
-                       Option.first_some failure (Some (exn, Stdlib.Printexc.get_raw_backtrace ())))
-             in
-             Option.iter first_failure ~f:(fun (exn, backtrace) ->
-                 Stdlib.Printexc.raise_with_backtrace exn backtrace)
-           in
+           let give_back () = free_pools_continuing device ~free_pool !(tx.minted) in
            (match List.iter groups ~f:(fun gl -> ignore (allocate_group_pools tx device gl)) with
            | () -> ()
            | exception exn ->
