@@ -1,2 +1,4 @@
 FAIL: tensor/row.ml:7: add writes seen without note_mutation () (nor a classification)
 FAIL: tensor/row.ml:15: seen (Hash_set) is used in a form the scan does not classify: only the listed reads and writes of its own kind, with the binding as the first positional argument
+FAIL: tensor/tensor.ml:20: drop_roots writes session_state.roots without note_mutation () (nor a classification)
+FAIL: tensor/tensor.ml:28: forget writes checkpoint.saved without note_mutation () (nor a classification)

@@ -65,4 +65,29 @@ an unknown attribute name is malformed: true
 fingerprinted takes no payload: true
 an attribute on something it does not classify is refused: true
 two classifications on one binding are refused: true
+an unnoted write to a record field is refused, named by its field: true
+the same field write after note_mutation () is accounted for: true
+a field read and a record copy are reads: true
+a record passed to a helper is refused: true
+an alias of a record is refused: true
+destructuring a record is refused: true
+a parameter spelled like the record is not the record: true
+a note in a nested helper does not account for a field write: true
+a field write in a callback shares its caller's note: true
+a field write in an escaping closure is its own frame: true
+a field write at module initialization is refused: true
+an exempt field needs no note: true
+a field exemption does not cover the record's other fields: true
+a field exemption nothing needs is stale: true
+a record binding cannot be exempted whole: true
+a record field cannot be fingerprinted: true
+an exemption on an immutable field classifies nothing: true
+a record literal whose labels fit two declared types is refused: true
+the same literal under a type constraint is resolved, and its writes judged: true
+a record of another module's type is not read (the stated boundary): true
+a record of an immutable type is not tracked: true
+a boundary on a local function excuses its field writes: true
+without the boundary, the local function's field write is refused: true
+an exported exempt binding is accepted, its exemption used by the export: true
+an exported binding that is not exempt is still refused: true
 a source that does not parse is the input's fault, not the scanner's: true

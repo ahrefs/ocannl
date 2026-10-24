@@ -2,18 +2,19 @@
    advances Row.mutation_serial, or is classified in place as not needing to. The reader, its closed
    lists and what it deliberately does not read are in test/support/mutation_serial_scan.ml's
    header; the classification lives on the bindings themselves, as [@@mutation_serial.*] attributes
-   in tensor/row.ml and tensor/shape.ml.
+   in tensor/row.ml, tensor/shape.ml and tensor/tensor.ml (gh-ocannl-1573 added tensor.ml, whose
+   session records are classified field by field).
 
-   Live: [mutation_serial_scan.exe <root>] reads <root>/tensor/{row,shape}.ml with their .mli.
-   Control: [mutation_serial_scan.exe --fixture <root>] reads the same layout under a fixture tree,
-   each file with a [.fixture] suffix so that no other scan or build reads it as a source, and ends
-   as a negative control: its golden is the findings, and it must exit 1. *)
+   Live: [mutation_serial_scan.exe <root>] reads <root>/tensor/{row,shape,tensor}.ml with their
+   .mli. Control: [mutation_serial_scan.exe --fixture <root>] reads the same layout under a fixture
+   tree, each file with a [.fixture] suffix so that no other scan or build reads it as a source, and
+   ends as a negative control: its golden is the findings, and it must exit 1. *)
 open Base
 open Stdio
 module Scan = Test_utils.Mutation_serial_scan
 
-(* The corpus is a policy, not a census: the two modules holding the inference session's state. *)
-let corpus = [ "tensor/row.ml"; "tensor/shape.ml" ]
+(* The corpus is a policy, not a census: the three modules holding the inference session's state. *)
+let corpus = [ "tensor/row.ml"; "tensor/shape.ml"; "tensor/tensor.ml" ]
 
 let scan_file ~root ~suffix file =
   let read path =
@@ -61,5 +62,13 @@ let () =
       Verdict.p "the scan tracks an exempt counter (row.ml's uid)"
         (has "tensor/row.ml: uid (ref) -- exempt");
       Verdict.p "the scan tracks a fingerprinted ref (shape.ml's state)"
-        (has "tensor/shape.ml: state (ref) -- fingerprinted")
+        (has "tensor/shape.ml: state (ref) -- fingerprinted");
+      (* gh-ocannl-1573: module-level record values, judged field by field. *)
+      Verdict.p
+        "the scan tracks an accounted record field (tensor.ml's session_state.forward_roots)"
+        (has "tensor/tensor.ml: session_state.forward_roots (mutable field) -- accounted");
+      Verdict.p "the scan tracks an exempt record field (tensor.ml's session_state.next_id)"
+        (has "tensor/tensor.ml: session_state.next_id (mutable field) -- exempt");
+      Verdict.p "the scan tracks the checkpoint record's fields (tensor.ml's checkpoint.ck_fwd)"
+        (has "tensor/tensor.ml: checkpoint.ck_fwd (mutable field) -- accounted")
   | _ -> Stdlib.exit 2

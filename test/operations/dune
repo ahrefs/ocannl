@@ -8773,10 +8773,12 @@
  (action
   (diff operand_key_ratchet.expected operand_key_ratchet.actual)))
 
-; gh-ocannl-1506: every write to a module-level mutable binding of tensor/row.ml and tensor/shape.ml
-; advances Row.mutation_serial, or is classified in place by a [@@mutation_serial.*] attribute. The
-; reader states its closed lists in test/support/mutation_serial_scan.ml. The corpus is the two
-; inference-session modules and their interfaces, named as dependencies: a policy, not a census.
+; gh-ocannl-1506: every write to a module-level mutable binding of tensor/row.ml, tensor/shape.ml and
+; tensor/tensor.ml (gh-ocannl-1573, which added module-level record values and their mutable
+; fields) advances Row.mutation_serial, or is classified in place by a [@@mutation_serial.*]
+; attribute. The reader states its closed lists in test/support/mutation_serial_scan.ml. The corpus
+; is the three inference-session modules and their interfaces, named as dependencies: a policy, not
+; a census.
 
 (executable
  (name mutation_serial_scan)
@@ -8784,7 +8786,7 @@
  (libraries base stdio test_utils arrayjit.verdict))
 
 (rule
- ; ocannl-backend: none -- parses two library sources without running a backend.
+ ; ocannl-backend: none -- parses three library sources without running a backend.
  (target mutation_serial_scan.actual)
  (package neural_nets_lib)
  (deps
@@ -8793,7 +8795,9 @@
   ../../tensor/row.ml
   ../../tensor/row.mli
   ../../tensor/shape.ml
-  ../../tensor/shape.mli)
+  ../../tensor/shape.mli
+  ../../tensor/tensor.ml
+  ../../tensor/tensor.mli)
  (action
   (with-stdout-to
    %{target}
@@ -8805,8 +8809,9 @@
  (action
   (diff mutation_serial_scan.expected mutation_serial_scan.actual)))
 
-; The shipping scanner on a committed tree with a planted unaccounted table: it must refuse, and its
-; golden is the refusal, so a scanner that stopped reading the corpus cannot pass.
+; The shipping scanner on a committed tree with a planted unaccounted table, and (gh-ocannl-1573)
+; one planted unaccounted field write in each of two module-level records: it must refuse, and its
+; golden is the refusals, so a scanner that stopped reading the corpus or the records cannot pass.
 
 (rule
  ; ocannl-backend: none -- parses a committed fixture tree without running a backend.
