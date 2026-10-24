@@ -1795,10 +1795,16 @@ let calibrate_and_time ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch
     ~on_call:(fun _ -> ())
     ~phase:None ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch
 
+(* gh-ocannl-1556: raised by [time_routine] when its [stop] answers [true] -- before the warmup, or
+   before a batch -- abandoning the call with nothing dispatched past the last synchronized
+   batch. *)
+exception Timing_stopped
+
 (* [routine.bindings] exposes the routine's live binding refs — restore them after timing (Codex P2
    on PR #103), or the returned winner would stay bound to the tuner's midpoint test values. *)
 let time_routine ?(on_retry = fun () -> ()) ?(on_call = fun _ -> ()) ?(tag_failures = false) ?phase
-    ~timing ~repeats cctx routine =
+    ?(stop = fun () -> false) ~timing ~repeats cctx routine =
+  let check_stop () = if stop () then raise Timing_stopped in
   (* The call's [setup_ms] runs from here: the pre-dispatch validation, the warmup and the
      calibration. *)
   let started = Mtime_clock.counter () in
@@ -1828,11 +1834,13 @@ let time_routine ?(on_retry = fun () -> ()) ?(on_call = fun _ -> ()) ?(tag_failu
             Seam.get on_candidate_preflight routine.Context.name;
             Context.check_launch_bindings routine);
       (* Warmup run: absorbs lazy initialization and fills caches like a steady-state iteration. *)
+      check_stop ();
       let ctx = ref (run cctx) in
       sync !ctx;
       (* Monotonic high-resolution clock: on Windows, [Unix.gettimeofday] ticks at ~1 ms, which
          makes sub-millisecond candidates indistinguishable (they all measure 0). *)
       let batch depth =
+        check_stop ();
         let c0 = Mtime_clock.counter () in
         for _ = 1 to depth do
           ctx := run !ctx
@@ -7922,6 +7930,84 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
          without its staff, and a dedup carries the time its code was already measured at, if
          it was. *)
           let last_attempt = ref `Other in
+          (* gh-ocannl-1409, gh-ocannl-1556: the search's wall-clock budget, measured from the start
+             of the call. Nothing in flight can be cancelled -- a compile runs to its end -- so the
+             budget is kept by three checks, each against the same clock ([budget_clock]): - as each
+             attempt (and each beam round) starts, it is refused once the budget is spent, or once
+             the elapsed time plus the costliest candidate compile this search has made
+             ([costliest_compile_s], the projection) would pass it: a compile is the part of an
+             attempt nothing can stop, so one is started only where one as costly as the worst seen
+             still ends within the budget; - as each batch of a candidate's timing starts, and
+             before its warmup, the timing is abandoned once the budget is passed ([budget_stop]):
+             the candidate is not ranked, its compile is spent, and the search ends as at a refused
+             attempt. Once the budget is spent (or projected to be), nothing more is compiled -- the
+             seeds left, the composites, the playoff and the rounds are skipped where they would
+             have been attempted, which costs no compile -- and the search crowns its incumbent
+             exactly as a completed one does. The untuned floors are exempt from all three
+             ([floor]): the seeded untuned plan (gh-ocannl-1388) and the default-pipeline seed, so a
+             cut search has measured what the caller ships without tuning and crowns nothing slower.
+             A skipped spec leaves [last_attempt] at [`Other]: the staffed sweep must neither retry
+             it bare nor rank a stale dedup time for it. *)
+          let budget_clock () = Seam.get budget_elapsed (seconds_since progress_clock) in
+          let budget_spent = ref false in
+          let costliest_compile_s = ref 0. in
+          let spend_budget ~b ~elapsed reason =
+            budget_spent := true;
+            logf "budget of %gs %s (%.1f s elapsed, %d timed): crowning the incumbent" b reason
+              elapsed !n_timed;
+            progress_line "budget_spent"
+              (Printf.sprintf "budget_s=%g timed=%d %s" b !n_timed (progress_costs ()))
+          in
+          let budget_allows ~what ~floor =
+            match budget with
+            | None -> true
+            | Some b ->
+                (if not !budget_spent then
+                   let elapsed = budget_clock () in
+                   if Float.(elapsed >= b) then spend_budget ~b ~elapsed "spent"
+                   else if Float.(elapsed + !costliest_compile_s > b) then
+                     spend_budget ~b ~elapsed
+                       (Printf.sprintf
+                          "would be overrun by a compile as costly as the costliest so far (%.1f s)"
+                          !costliest_compile_s));
+                if (not !budget_spent) || floor then true
+                else (
+                  if not !budget_cut then
+                    logf "budget spent: skipping %s and every later non-floor candidate" what;
+                  budget_cut := true;
+                  false)
+          in
+          let budget_floor spec =
+            match spec with
+            | Fiss (F_seeded _) -> true
+            | _ -> Option.exists default_candidate_label ~f:(String.equal (spec_label spec))
+          in
+          (* The projection's evidence: a candidate compile's cost on the budget clock, kept as the
+             costliest so far. Floors' compiles count -- they are compiles of the same computation
+             -- while the base compile, which precedes every check, does not. *)
+          let budget_compile f =
+            match budget with
+            | None -> f ()
+            | Some _ ->
+                let c0 = budget_clock () in
+                Exn.protect ~f ~finally:(fun () ->
+                    costliest_compile_s := Float.max !costliest_compile_s (budget_clock () -. c0))
+          in
+          (* The timing check, for a non-floor candidate: [time_routine] raises [Timing_stopped]
+             before the first batch it starts past the budget. *)
+          let budget_stop spec =
+            match budget with
+            | Some b when not (budget_floor spec) ->
+                fun () ->
+                  let elapsed = budget_clock () in
+                  Float.(elapsed > b)
+                  &&
+                  (if not !budget_spent then
+                     spend_budget ~b ~elapsed "passed during a candidate's timing";
+                   budget_cut := true;
+                   true)
+            | Some _ | None -> fun () -> false
+          in
           let try_spec spec =
             last_attempt := `Other;
             Seam.get on_candidate_attempt (spec_label spec);
@@ -7961,6 +8047,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
               in
               match
                 timed_into progress_compile_s (fun () ->
+                    budget_compile @@ fun () ->
                     costed ~stage:"candidate" ~attempt:(spec_label spec)
                       ~verdict_of:(function
                         | Compiled _ -> "compiled"
@@ -8050,14 +8137,34 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                         ~provenance:Outcome.Candidate ~phase:Outcome.Launch
                         ~candidate:(spec_label spec) (fun () ->
                           timed_into progress_timing_s (fun () ->
-                              time_routine ~on_retry ~on_call ~tag_failures:true
-                                ~phase:!progress_phase ~timing ~repeats c.cctx c.routine))
+                              (* gh-ocannl-1556: [None] is a timing the budget stopped -- not a
+                                 failure of the candidate, so caught inside the boundary. *)
+                              match
+                                time_routine ~on_retry ~on_call ~tag_failures:true
+                                  ~phase:!progress_phase ~stop:(budget_stop spec) ~timing ~repeats
+                                  c.cctx c.routine
+                              with
+                              | timing_result -> Some timing_result
+                              | exception Timing_stopped -> None))
                       (* Outside the boundary: the seam is not a candidate failure to classify. *)
                       |> Result.map
                            ~f:
-                             (apply_measurement_seam ~label:(spec_label spec) ~digest:c.digest_after)
+                             (Option.map
+                                ~f:
+                                  (apply_measurement_seam ~label:(spec_label spec)
+                                     ~digest:c.digest_after))
                     with
-                    | Ok timing_result when Option.is_none (admitted_timing_ms timing_result) ->
+                    | Ok None ->
+                        (* The budget passed during this candidate's timing: it is not ranked, and a
+                           later floor of the same digest must compile and time afresh rather than
+                           dedup against a timing that never finished. *)
+                        Hash_set.remove seen c.digest_after;
+                        logf "%s: NOT TIMED, the budget passed during its timing (digest %s)"
+                          (spec_label spec) (dshort c.digest_after);
+                        release_candidate c;
+                        None
+                    | Ok (Some timing_result) when Option.is_none (admitted_timing_ms timing_result)
+                      ->
                         (* The family counters answer whether a candidate compiled and reached a
                            timing window, independently of whether that window yielded a usable
                            verdict. Keep that accounting stable under refusal; the historical
@@ -8089,7 +8196,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                           (refusal_reason refusal) (dshort c.digest_after);
                         release_candidate c;
                         None
-                    | Ok timing_result ->
+                    | Ok (Some timing_result) ->
                         (* gh-ocannl-1326: the timing is all a candidate is for, the incumbent-to-be
                            included, so its buffers go before anything else happens: the next
                            compile must not find this one's working set still resident. A winner is
@@ -8286,41 +8393,6 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                 | Some ab -> raise (Abandon_now ab)
                 | None -> ())
             | Some _ | None -> ()
-          in
-          (* gh-ocannl-1409: the search's wall-clock budget, measured from the start of the call and
-             checked as each attempt (and each beam round) starts, so a candidate in flight is never
-             cut short: its compile and timing complete and it is ranked. Once the budget is spent,
-             nothing more is compiled -- the seeds left, the composites, the playoff and the rounds
-             are skipped where they would have been attempted, which costs no compile -- and the
-             search crowns its incumbent exactly as a completed one does. The untuned floors are
-             exempt ([floor]): the seeded untuned plan (gh-ocannl-1388) and the default-pipeline
-             seed, so a cut search has measured what the caller ships without tuning and crowns
-             nothing slower. A skipped spec leaves [last_attempt] at [`Other]: the staffed sweep
-             must neither retry it bare nor rank a stale dedup time for it. *)
-          let budget_spent = ref false in
-          let budget_allows ~what ~floor =
-            match budget with
-            | None -> true
-            | Some b ->
-                (if not !budget_spent then
-                   let elapsed = Seam.get budget_elapsed (seconds_since progress_clock) in
-                   if Float.(elapsed >= b) then (
-                     budget_spent := true;
-                     logf "budget of %gs spent (%.1f s elapsed, %d timed): crowning the incumbent" b
-                       elapsed !n_timed;
-                     progress_line "budget_spent"
-                       (Printf.sprintf "budget_s=%g timed=%d %s" b !n_timed (progress_costs ()))));
-                if (not !budget_spent) || floor then true
-                else (
-                  if not !budget_cut then
-                    logf "budget spent: skipping %s and every later non-floor candidate" what;
-                  budget_cut := true;
-                  false)
-          in
-          let budget_floor spec =
-            match spec with
-            | Fiss (F_seeded _) -> true
-            | _ -> Option.exists default_candidate_label ~f:(String.equal (spec_label spec))
           in
           (* Written as an attempt STARTS, naming it: a search killed inside a long candidate then
              leaves the candidate it was in, and the costs of everything before it. Counted before

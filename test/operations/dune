@@ -9111,6 +9111,25 @@
  (preprocess
   (pps ppx_ocannl)))
 
+;; gh-ocannl-1556: the budget bounds wall time within its stated tolerance -- a compile is
+;; projected from the costliest so far, a candidate's timing stops at the first batch past it.
+
+(test
+ (name autotune_budget_overrun)
+ ; ocannl-backend: cc -- Context.cpu (); the scripted ranking and virtual clock are backend-independent
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules autotune_budget_overrun)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  fissioned_chain
+  scripted_search)
+ (preprocess
+  (pps ppx_ocannl)))
+
 ; gh-ocannl-1409: a budget-cut search with no reproducible untuned floor (schedule_fission=false,
 ; read once per process, hence its own executable) ships the untuned default and stores nothing.
 

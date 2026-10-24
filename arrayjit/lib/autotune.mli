@@ -2916,11 +2916,15 @@ val with_timing_call_observer : (timing_call -> unit) -> (unit -> 'a) -> 'a
     {!install_timing_call_observer}, restoring the domain's observers on return or exception, so
     scopes nest. *)
 
+exception Timing_stopped
+(** Raised by {!time_routine} when its [stop] answers [true] (gh-ocannl-1556). *)
+
 val time_routine :
   ?on_retry:(unit -> unit) ->
   ?on_call:(timing_call -> unit) ->
   ?tag_failures:bool ->
   ?phase:string ->
+  ?stop:(unit -> bool) ->
   timing:timing_mode ->
   repeats:int ->
   Context.t ->
@@ -3005,7 +3009,13 @@ val time_routine :
     [65 + 200 * max 64 repeats] on cc, twice the timed part on Metal for its one retry. Thus a
     routine whose values grow per run reaches larger ones. That is a fact about the scratch buffers,
     not about the measurement: the cap bounds each in-memory queue while the ~25 ms budget
-    accumulates per-launch samples, and a candidate's time is not what it accumulated. *)
+    accumulates per-launch samples, and a candidate's time is not what it accumulated.
+
+    [stop] (default: never) is asked before the warmup and before every batch -- each calibration
+    probe's and each timed window's -- and when it answers [true] the call raises {!Timing_stopped}
+    at once, with every batch it dispatched synchronized and the bindings restored: a caller can
+    abandon a timing within one batch of deciding to (gh-ocannl-1556; {!tune}'s budget is the
+    caller). *)
 
 val calibrate_and_time :
   retry_contended:bool ->
@@ -3292,10 +3302,16 @@ val tune :
     [test/operations/autotune_candidate_release].
 
     Budget (gh-ocannl-1409, config [autotune_budget_seconds], default none): a search whose
-    wall-clock time since the call started has reached the budget attempts no further candidate --
-    checked as each attempt and each beam round starts, so the candidate in flight completes -- and
-    crowns its incumbent as a completed search does; the untuned floors (the seeded untuned plan and
-    the default-pipeline seed, {!default_seed_label}) are attempted regardless, so the crown is no
+    wall-clock time since the call started has reached the budget attempts no further candidate, and
+    crowns its incumbent as a completed search does. A compile cannot be cancelled, so the budget is
+    kept by checks against one clock (gh-ocannl-1556): an attempt (or beam round) starts only while
+    the elapsed time is below the budget and the elapsed time plus the costliest candidate compile
+    the search has made so far is within it; and a non-floor candidate's timing is abandoned before
+    its first batch past the budget ([time_routine]'s [stop]), the candidate unranked. A search
+    therefore overruns its budget by at most the excess of the compile in flight over the costliest
+    before it (all of the first candidate compile's), one timing batch, the exempt floors, the base
+    compile and the winner's recompile; the untuned floors (the seeded untuned plan and the
+    default-pipeline seed, {!default_seed_label}) are attempted regardless, so the crown is no
     slower than what the caller ships untuned. Where the cut left the untuned default unmeasured --
     no candidate reproduces it (automatic scheduling with [schedule_fission=false] and no seeded
     plan), or its windows were refused -- the call ships the untuned default compile, stores nothing
@@ -3430,7 +3446,9 @@ val budget_elapsed : (float -> float) Seam.t
 (** Test seam (gh-ocannl-1409): maps the call's real elapsed seconds to the seconds a budget check
     reads. A test substitutes a virtual clock -- the attempts so far, say -- to place a cut at a
     chosen candidate, which a wall clock cannot. The default is the identity and no configuration
-    selects it. *)
+    selects it. Read as each attempt and beam round starts, around each candidate compile (the
+    projection's evidence) and before each batch of a non-floor candidate's timing (gh-ocannl-1556).
+*)
 
 val call_budget_setting : unit -> float option
 (** Config [tune_call_budget_seconds] as [Train.tune_placements] resolves it (gh-ocannl-1440), by
