@@ -1,11 +1,13 @@
 (* gh-ocannl-1506: Shape.t is a private record, so the closed-shape guard's setters are the only way
-   to write a shape. That is a property of the INTERFACE, which nothing executed can observe: this
-   control hands real ocamlc programs against the built Shape interface. Reads and pattern matches
-   must compile; an assignment to each mutable field, a record literal, a record update and the
-   retired [t_of_sexp] must each be rejected with their own diagnostic. Every rejected leg compiled
-   on the base, where the record was public. A failed compiler launch or a missing include directory
-   cannot pass as a rejection: the positive leg runs through the same path, and each negative leg
-   names the diagnostic it expects. *)
+   to write a shape. gh-ocannl-1573 extended the same to the rest of gh-ocannl-903's frontier: an
+   update step (its projections), a capture reference ([var]) and the [Ir.Indexing.variable_ref] it
+   carries ([solved_dim], [solved_sym]). That is a property of the INTERFACE, which nothing executed
+   can observe: this control hands real ocamlc programs against the built Shape interface. Reads and
+   pattern matches must compile; an assignment to each mutable field, a record literal, a record
+   update and the retired [t_of_sexp] must each be rejected with their own diagnostic. Every
+   rejected leg compiled on the base, where the record was public. A failed compiler launch or a
+   missing include directory cannot pass as a rejection: the positive leg runs through the same
+   path, and each negative leg names the diagnostic it expects. *)
 open Base
 open Stdio
 open Verdict.Claims
@@ -49,12 +51,19 @@ let contains_run text run =
   in
   go (words text)
 
-let prelude = "type shape = Ocannl_tensor.Shape.t\n"
+let prelude =
+  "type shape = Ocannl_tensor.Shape.t\n\
+   type step = Ocannl_tensor.Shape.update_step\n\
+   type dref = Ocannl_tensor.Shape.delayed_var_ref\n\
+   type vref = Ir.Indexing.variable_ref\n"
+
+let private_write field = [ "Cannot"; "assign"; "field"; field; "of"; "the"; "private"; "type" ]
+let private_construction = [ "Cannot"; "create"; "values"; "of"; "the"; "private"; "type" ]
 
 let () =
   let compiler = Stdlib.Sys.argv.(1) in
-  (* The directories of the interfaces the snippets reach: Shape's own, and Base's for its field
-     types. *)
+  (* The directories of the interfaces the snippets reach: Shape's own, Ir's (for the capture
+     reference's [variable_ref] and a step's projections), and Base's for field types. *)
   let include_dirs =
     List.map (List.drop (Array.to_list Stdlib.Sys.argv) 2) ~f:Stdlib.Filename.dirname
   in
@@ -66,6 +75,26 @@ let () =
   in
   if not (Poly.equal positive (Unix.WEXITED 0)) then eprintf "%s" positive_log;
   p "reading and pattern-matching a shape's fields compiles" (Poly.equal positive (Unix.WEXITED 0));
+  let frontier, frontier_log =
+    compile ~compiler ~include_dirs
+      (prelude
+     ^ "let read_step (s : step) = Option.is_none s.unsafe_projections && s.neutral_elem = None\n\
+        let match_step (s : step) = match s with { unsafe_projections = None; _ } -> true | _ -> \
+        false\n\
+        let read_ref (r : dref) =\n\
+       \  match r with\n\
+       \  | { var = `Not_set_yet; var_ref = { solved_dim = None; _ }; _ } -> true\n\
+       \  | _ -> Option.is_some r.var_ref.solved_sym\n\
+        let read_vref (v : vref) = v.ref_label\n\
+        let fresh_ref : dref = Ocannl_tensor.Shape.get_variable_ref \"d\"\n\
+        let fresh_vref : vref = Ir.Indexing.variable_ref \"d\"\n\
+        let make = Ocannl_tensor.Shape.make_update_step\n")
+  in
+  if not (Poly.equal frontier (Unix.WEXITED 0)) then eprintf "%s" frontier_log;
+  p
+    "reading and matching an update step, a capture reference and its variable_ref compiles, and \
+     so do their public constructors"
+    (Poly.equal frontier (Unix.WEXITED 0));
   let rejected name code expected =
     let status, log = compile ~compiler ~include_dirs (prelude ^ code) in
     let ok = Poly.equal status (Unix.WEXITED 2) && contains_run log ("Error" :: expected) in
@@ -97,6 +126,33 @@ let () =
     \    input_padding = None; output_padding = None; padding_elem = None; closed = false;\n\
     \    discarded_by = None; id = 0; debug_name = \"forged\" }\n"
     [ "Cannot"; "create"; "values"; "of"; "the"; "private"; "type" ];
+  (* gh-ocannl-1573: the rest of the frontier. *)
+  rejected "assigning an update step's projections is rejected as a private-type write"
+    "let write (s : step) = s.unsafe_projections <- None\n"
+    (private_write "unsafe_projections");
+  rejected "a record update of an update step is rejected as a private-type construction"
+    "let copy (s : step) : step = { s with unsafe_projections = None }\n" private_construction;
+  rejected "a record literal of an update step is rejected as a private-type construction"
+    "let forge (s : step) : step =\n\
+    \  { shape = s.shape; logic = s.logic; id = s.id; unsafe_projections = None; neutral_elem = \
+     None }\n"
+    private_construction;
+  rejected "assigning a capture reference's binding is rejected as a private-type write"
+    "let write (r : dref) = r.var <- `Not_set_yet\n" (private_write "var");
+  rejected "a record update of a capture reference is rejected as a private-type construction"
+    "let copy (r : dref) : dref = { r with var = `Not_set_yet }\n" private_construction;
+  rejected "a record literal of a capture reference is rejected as a private-type construction"
+    "let forge (r : dref) : dref = { var_ref = r.var_ref; var = `Not_set_yet; uid = 0 }\n"
+    private_construction;
+  rejected "assigning a capture reference's solved dimension is rejected as a private-type write"
+    "let write (r : dref) = r.var_ref.solved_dim <- Some 3\n" (private_write "solved_dim");
+  rejected "assigning a variable_ref's solved symbol is rejected as a private-type write"
+    "let write (v : vref) = v.solved_sym <- None\n" (private_write "solved_sym");
+  rejected "a record literal of a variable_ref is rejected as a private-type construction"
+    "let forge : vref = { ref_label = \"x\"; solved_dim = None; solved_sym = None }\n"
+    private_construction;
+  rejected "a record update of a variable_ref is rejected as a private-type construction"
+    "let copy (v : vref) : vref = { v with solved_dim = Some 1 }\n" private_construction;
   rejected "deserializing a shape is no longer offered"
     "let parse = Ocannl_tensor.Shape.t_of_sexp\n"
     [ "Unbound"; "value"; "Ocannl_tensor"; "Shape"; "t_of_sexp" ]

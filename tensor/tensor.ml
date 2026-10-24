@@ -356,10 +356,7 @@ let max_sublabel_length = ref 25
     could observe a step without it. {!raw_accum} knows its accumulation up-front; {!op} reads the
     neutral element off the assignments [op_asn] built, and creates the step afterwards. *)
 let register_update_step ~neutral_elem ~shape ~shape_logic : Shape.update_step =
-  let update_step =
-    Shape.
-      { shape; logic = shape_logic; id = get_update_id (); unsafe_projections = None; neutral_elem }
-  in
+  let update_step = Shape.make_update_step ~shape ~logic:shape_logic ~neutral_elem in
   Shape.propagate_shapes update_step;
   update_step
 

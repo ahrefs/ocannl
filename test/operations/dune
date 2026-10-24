@@ -3437,6 +3437,8 @@
   %{lib:neural_nets_lib.tensor:ocannl_tensor.cmi}
   %{lib:neural_nets_lib.tensor:ocannl_tensor__Row.cmi}
   %{lib:neural_nets_lib.tensor:ocannl_tensor__Shape.cmi}
+  %{lib:arrayjit.ir:ir.cmi}
+  %{lib:arrayjit.ir:ir__Indexing.cmi}
   %{lib:base:base.cmi})
  (modules shape_private_compile_control)
  (libraries base stdio unix arrayjit.verdict)
@@ -3445,6 +3447,7 @@
    %{test}
    %{ocamlc}
    %{lib:neural_nets_lib.tensor:ocannl_tensor__Shape.cmi}
+   %{lib:arrayjit.ir:ir__Indexing.cmi}
    %{lib:base:base.cmi})))
 
 ; How both consistency scanners read a source file, exercised on hostile input rather than only

@@ -106,12 +106,27 @@ val affine_injective : symbol_range:(symbol -> int) -> axis_index array -> bool
 val prod_project_for : projections -> dims:int array -> axis_index array
 val reflect_projection : dims:int array -> projection:axis_index array -> axis_index
 
-type variable_ref = {
+type variable_ref = private {
   ref_label : string;
   mutable solved_dim : int option;
   mutable solved_sym : static_symbol option;
 }
 [@@deriving sexp_of, equal]
+(** Private (gh-ocannl-1573): read and matched freely, written only through the setters below. A
+    solution is reached once: at most one of [solved_dim], [solved_sym] is ever set, and a set field
+    keeps its value. Shape inference is the only writer ([Shape]'s capture references wrap these
+    setters with the session's accounting); the cell is shared, so an [Assignments.Embed_dim] built
+    before inference observes the solution it later reaches. *)
+
+val variable_ref : string -> variable_ref
+(** A fresh, unsolved reference with the given label. *)
+
+val set_solved_dim : variable_ref -> int -> unit
+(** Records a concrete solution. Setting the value it already holds is a no-op; a different value,
+    or a reference already solved to a symbol, raises. *)
+
+val set_solved_sym : variable_ref -> static_symbol -> unit
+(** Records a symbolic-extent solution, guarded like {!set_solved_dim}. *)
 
 module Doc_helpers : sig
   val ( ^^ ) : PPrint.document -> PPrint.document -> PPrint.document

@@ -13,6 +13,7 @@ tensor/row.ml: global_template_cache (Hashtbl) -- accounted: every write noted o
 tensor/row.ml: fresh (unread state) -- exempt
 tensor/row.ml: boundary commit_symbol_roles -- part of the commit: only a successful finish_inference calls it
 tensor/row.ml: boundary drop_symbol_roles -- part of a rewind or session reset, which clears the taint
+tensor/shape.ml: ref_uid (ref) -- exempt: a fresh-id counter: ids are never reused, so a rewind need not restore it
 tensor/shape.ml: open_refs (ref) -- accounted: every write noted or at a boundary
 tensor/shape.ml: discarded_refs (ref) -- accounted: every write noted or at a boundary
 tensor/shape.ml: update_uid (ref) -- exempt: a fresh-id counter: ids are never reused, so a rewind need not restore it
