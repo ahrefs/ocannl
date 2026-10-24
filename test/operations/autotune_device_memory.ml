@@ -15,14 +15,23 @@
    Asserted: under room for one and a half footprints, a cold search declines nothing for memory
    (its incumbents are not resident beside a challenger) and a warm search replays its winner (the
    replay is not co-resident with the base compile); under room for half a footprint, the search is
-   refused before any candidate is compiled, with a typed [Pre_search_failure] -- where the baseline
-   is refused before codegen (gh-ocannl-1340), by the link-free probe of its footprint
-   (gh-ocannl-1493), which allocates exactly what the base link would; under room for the
+   refused before any candidate is compiled, with a typed [Pre_search_failure] -- by the link-free
+   probe of the floor every schedule must allocate (gh-ocannl-1554), asked where the baseline is
+   refused before codegen (gh-ocannl-1340) and where its link is refused; under room for the
    unscheduled footprint but not the default compile's, with the first candidate to reach link
    refused, the search runs, a refused candidate being only its own decline (gh-ocannl-1493: the
    first candidate to reach link used to refuse the step); and, through [Train.tune_placements], arm
    A's search leaves nothing resident when it reports, so both arms search in room for one and a
-   half footprints, and the recorded decision replays in one cached search (gh-ocannl-1408). *)
+   half footprints, and the recorded decision replays in one cached search (gh-ocannl-1408).
+
+   gh-ocannl-1554, the floor's search-level claims (section 6): under [buffer_aliasing], a device
+   with room for half the floor refuses the search before any candidate (the probe used to abstain
+   there, and the search declined its candidates one by one), and one with room for a measured
+   smaller candidate but not the unscheduled delta searches it; without aliasing, on a GPU backend,
+   a step whose reduction target a shared epilogue placement can keep off the device is searched in
+   room for the floor but not the unscheduled delta (the exact probe refused it); and where the
+   baseline links, a refusal of that link alone, with room for the floor, declines the baseline and
+   nothing more. *)
 
 open Base
 open Ocannl
@@ -103,6 +112,209 @@ let memory_declines (r : Autotune.report) =
 
 let approx_tol _ = 1e-4
 
+(* [approx_tol]'s closeness as a value, for claims gated on whether their leg runs: never true of
+   two empty readbacks. *)
+let close got want =
+  Array.length got > 0
+  && Array.length got = Array.length want
+  && Array.for_all2_exn got want ~f:(fun a b -> Float.(abs (a - b) <= 1e-4 * max 1. (abs b)))
+
+let attempted f =
+  let attempts = ref [] in
+  let result =
+    Autotune.Seam.with_value Autotune.on_candidate_attempt
+      (fun label -> attempts := label :: !attempts)
+      f
+  in
+  (result, List.rev !attempts)
+
+(* The floor and the unscheduled delta of [comp]'s lowering on a fresh context, taken inside an
+   unscheduled compile's transform as the search takes them (released again). *)
+let floor_and_delta comp =
+  let ctx = Context.auto () in
+  let got = ref None in
+  let lowered_transform o =
+    got := Some (Context.link_floor ctx o, Context.link_delta ctx o [ o ]);
+    [ o ]
+  in
+  let ctx', _ = Context.compile ~lowered_transform ctx comp Ir.Indexing.Empty in
+  Context.release ctx';
+  Option.value_exn !got
+
+(* gh-ocannl-1554: section 6, see the header. *)
+let floor_scenarios ~backend_name ~on_gpu ~baseline_links ~check_values comp =
+  let tune_with ~cache_dir ~report ?(ctx = Context.auto ()) comp =
+    Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir ~report ctx comp Ir.Indexing.Empty
+  in
+  let cache_dir_6a = "autotune_cache_floor_aliasing_refused" in
+  let cache_dir_6b = "autotune_cache_floor_aliasing_room" in
+  let cache_dir_6c = "autotune_cache_floor_fusion" in
+  let cache_dir_6d = "autotune_cache_floor_base_link" in
+  List.iter [ cache_dir_6a; cache_dir_6b; cache_dir_6c; cache_dir_6d ] ~f:clean_cache;
+  (* 6a/6b: a forward chain whose intermediates (past every workgroup-memory limit, so no shared
+     placement holds them) the liveness planner may overlap. *)
+  Unix.putenv "OCANNL_BUFFER_ALIASING" "true";
+  let c = 128 in
+  let init label ~modulus =
+    NTDSL.init ~l:label ~prec:Ir.Ops.single ~o:[ c ] ~i:[ c ]
+      ~f:(Ll_test.weighted ~weights:[| 2; 1 |] ~modulus ~offset:0. ~stride:0.25)
+      ()
+  in
+  let xa = init "fl_xa" ~modulus:7 and xb = init "fl_xb" ~modulus:5 in
+  let xw = init "fl_xw" ~modulus:3 in
+  let%op c1 = xa * xb in
+  let%op c2 = relu c1 * xw in
+  let%op chain = relu c2 in
+  let chain_comp = Train.forward chain in
+  let ctx_ref, routine_ref = Context.compile (Context.auto ()) chain_comp Ir.Indexing.Empty in
+  let chain_expected = Context.get_values (Context.run ctx_ref routine_ref) chain.Tensor.value in
+  let f, exact = floor_and_delta chain_comp in
+  let default_fp = footprint chain_comp in
+  Stdio.eprintf
+    "aliasing chain (not part of the golden): floor %d working B, unscheduled delta %d, default \
+     compile %d\n\
+     %!"
+    f.lf_working_bytes exact.ld_working_bytes default_fp;
+  p "aliasing on: the chain's floor is below its unscheduled delta"
+    (f.lf_working_bytes > 0 && f.lf_working_bytes < exact.ld_working_bytes);
+  (* 6a: room for half the floor -- refused before any candidate. *)
+  let report = ref None in
+  let start = live_working () in
+  let (result, refused), attempts =
+    attempted (fun () ->
+        with_capacity
+          ~capacity:(start + (f.lf_working_bytes / 2))
+          (fun () ->
+            tune_with ~cache_dir:cache_dir_6a ~report:(fun r -> report := Some r) chain_comp))
+  in
+  let r = Option.value_exn !report in
+  p "aliasing on, room for half the floor: the search is refused, typed, before any candidate"
+    (Result.is_error result && refused_for_memory r
+    && List.equal String.equal attempts [ "baseline" ]);
+  p "aliasing on, room for half the floor: the baseline has one account, and nothing stayed live"
+    (r.Autotune.baseline_declined && r.Autotune.candidates_failed = 1
+    && (refused = if baseline_links then 2 else 1)
+    && live_working () <= start);
+  (* 6b: room for the default compile (a candidate measured to fit) but not the unscheduled delta,
+     where the default compile is the smaller (the GPU planner's kernel positions: the fissioned
+     form overlaps what the one-kernel base cannot). *)
+  let report = ref None in
+  let start = live_working () in
+  let smaller = default_fp < exact.ld_working_bytes in
+  let result, _ =
+    if not smaller then (Error (Failure "not run"), 0)
+    else
+      with_capacity ~capacity:(start + default_fp) (fun () ->
+          tune_with ~cache_dir:cache_dir_6b ~report:(fun r -> report := Some r) chain_comp)
+  in
+  Verdict.gated ~when_:smaller ~on:backend_name
+    "aliasing on, room for a smaller candidate but not the unscheduled delta: the search runs and \
+     times a candidate"
+    (Result.is_ok result
+    && Option.exists !report ~f:(fun r -> searched r && r.Autotune.candidates_timed >= 1));
+  Verdict.gated ~when_:smaller ~on:backend_name
+    "the chain searched in room for its default compile computes the right values"
+    (match result with
+    | Ok (ctx, routine) ->
+        close (Context.get_values (Context.run ctx routine) chain.Tensor.value) chain_expected
+    | Error _ -> false);
+  Context.release ctx_ref;
+  Unix.putenv "OCANNL_BUFFER_ALIASING" "false";
+  (* 6c: no aliasing; a reduction target past the default stack threshold (so the unscheduled
+     compile settles it on the device) and within every GPU backend's workgroup memory (so a shared
+     epilogue placement may hold it) -- [link_delta_parity]'s fusion fixture. Room for the floor,
+     not the unscheduled delta: the search is not refused before its candidates. *)
+  let m = 192 and k = 32 and nn = 32 in
+  let fa =
+    NTDSL.init ~l:"fl_fa" ~prec:Ir.Ops.single ~o:[ m ] ~i:[ k ]
+      ~f:(Ll_test.weighted ~weights:[| 3; 1 |] ~modulus:7 ~offset:(-3.) ~stride:1.)
+      ()
+  in
+  let fb =
+    NTDSL.init ~l:"fl_fb" ~prec:Ir.Ops.single ~o:[ k ] ~i:[ nn ]
+      ~f:(Ll_test.weighted ~weights:[| 1; 2 |] ~modulus:5 ~offset:(-2.) ~stride:1.)
+      ()
+  in
+  let%op fprod = fa * fb in
+  let%op fused = relu fprod in
+  let fused_comp = Train.forward fused in
+  let f, exact = floor_and_delta fused_comp in
+  Stdio.eprintf
+    "fusion window (not part of the golden): floor %d working B (%d left out off-device), \
+     unscheduled delta %d\n\
+     %!"
+    f.lf_working_bytes f.lf_off_device_bytes exact.ld_working_bytes;
+  let report = ref None in
+  let start = live_working () in
+  let (result, _), attempts =
+    if not on_gpu then ((Error (Failure "not run"), 0), [])
+    else
+      attempted (fun () ->
+          with_capacity
+            ~capacity:
+              (start + f.lf_working_bytes + ((exact.ld_working_bytes - f.lf_working_bytes) / 2))
+            (fun () ->
+              tune_with ~cache_dir:cache_dir_6c ~report:(fun r -> report := Some r) fused_comp))
+  in
+  Stdio.eprintf "fusion window search (not part of the golden): outcome %s, %d attempt(s)\n%!"
+    (Option.value_map !report ~default:"-" ~f:(fun r -> Autotune.outcome_name r.Autotune.outcome))
+    (List.length attempts);
+  Verdict.gated ~when_:on_gpu ~on:backend_name
+    "no aliasing, room for the floor but not the unscheduled delta of a shared-fusable step: the \
+     search is not refused before its candidates"
+    (Option.exists !report ~f:(fun r ->
+         match r.Autotune.outcome with Autotune.Pre_search_failure _ -> false | _ -> true)
+    && List.exists attempts ~f:(fun l -> not (String.equal l "baseline")));
+  (* Where the backend tensorizes the f32 site, the search seeds the shared-fused twin (the sketch
+     families' [epilogue_shared]: a GPU tile-MMA site), the one candidate that fits this room: the
+     search then ships, and what it ships computes the right values. Elsewhere every candidate holds
+     the target on the device and is declined, which the claim above already allows. *)
+  Verdict.gated
+    ~when_:
+      (on_gpu
+      && Ll_test.advertised ~backend_name ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single
+           ~d_prec:Ir.Ops.single)
+    ~on:backend_name
+    "where the backend tensorizes it, the shared-fusable step searched in room for its floor ships \
+     a routine computing the right values"
+    (match result with
+    | Ok (ctx, routine) ->
+        let ctx_ref, routine_ref = Context.compile (Context.auto ()) fused_comp Ir.Indexing.Empty in
+        let want = Context.get_values (Context.run ctx_ref routine_ref) fused.Tensor.value in
+        close (Context.get_values (Context.run ctx routine) fused.Tensor.value) want
+    | Error _ -> false);
+  (* 6d: where the baseline links, a refusal of that link alone -- the device admits the floor --
+     declines the baseline and nothing more: the search runs on its candidates. *)
+  let report = ref None in
+  let refused = ref 0 in
+  let refuse_base_link = function
+    | FI.Delta_pool_allocated when !refused = 0 ->
+        Int.incr refused;
+        raise
+          (SO.Device_memory_exhausted
+             {
+               backend = "simulated";
+               requested = 1;
+               free = Some 0;
+               detail = "gh-ocannl-1554 simulated refusal of the base link alone";
+             })
+    | _ -> ()
+  in
+  let result =
+    if not baseline_links then Error (Failure "not run")
+    else
+      Result.try_with (fun () ->
+          FI.with_callback refuse_base_link ~f:(fun () ->
+              tune_with ~cache_dir:cache_dir_6d ~report:(fun r -> report := Some r) comp))
+  in
+  Verdict.gated ~when_:baseline_links ~on:backend_name
+    "a refused base link alone, with room for the floor, declines the baseline and the search runs"
+    (!refused = 1 && Result.is_ok result
+    && Option.exists !report ~f:(fun r -> searched r && r.Autotune.baseline_declined));
+  Verdict.gated ~when_:baseline_links ~on:backend_name
+    "the step searched past its refused base link computes the right values"
+    (match result with Ok (ctx, routine) -> check_values ctx routine | Error _ -> false)
+
 let () =
   let mav =
     Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:7 ~offset:0. ~stride:0.5)
@@ -117,7 +329,12 @@ let () =
   ignore mc;
   let comp = Train.forward t2 in
   let ctx_ref, routine_ref = Context.compile (Context.auto ()) comp Ir.Indexing.Empty in
-  Stdio.eprintf "backend: %s (not part of the golden)\n%!" (Context.backend_name ctx_ref);
+  let backend_name = Context.backend_name ctx_ref in
+  Stdio.eprintf "backend: %s (not part of the golden)\n%!" backend_name;
+  (* Where the serial baseline links: not on a GPU backend, which refuses it before codegen
+     (gh-ocannl-1340) -- the predicate [Autotune.tune]'s own [dispatchable] reads. *)
+  let on_gpu = Ir.Schedule.backend_is_gpu backend_name in
+  let baseline_links = not on_gpu in
   let ctx_ref = Context.run ctx_ref routine_ref in
   let expected = Context.get_values ctx_ref t2.Tensor.value in
   let check_values what (ctx, routine) =
@@ -178,10 +395,10 @@ let () =
   p "nothing was refused for device memory in the warm call" (refused = 0);
   Result.iter result ~f:(check_values "the replayed winner computes the right values");
 
-  (* --- 3. Room for half the unscheduled footprint: the base compile is refused, and with it the
-     search, before any candidate is compiled; where the baseline is refused before codegen, the
-     probe of its footprint is refused in its place (gh-ocannl-1493), before any candidate too.
-     --- *)
+  (* --- 3. Room for half the unscheduled footprint: the floor every schedule must allocate is
+     refused (gh-ocannl-1554), and with it the search, before any candidate is compiled -- after the
+     base compile's own link was refused too where the baseline links, and in place of that link
+     where the baseline is refused before codegen (gh-ocannl-1493). --- *)
   let cache_dir3 = "autotune_cache_device_memory_refused" in
   clean_cache cache_dir3;
   let report3 = ref None in
@@ -212,8 +429,10 @@ let () =
     r3.Autotune.declines ~f:refused_baseline;
   p "the baseline is declined, once: one failed candidate"
     (r3.Autotune.baseline_declined && r3.Autotune.candidates_failed = 1);
-  p "the device refused exactly one allocation, and nothing stayed live"
-    (refused = 1 && live_working () <= start3);
+  p
+    "the device refused the floor's allocation, and the base link's before it where the baseline \
+     links, and nothing stayed live"
+    ((refused = if baseline_links then 2 else 1) && live_working () <= start3);
 
   (* --- 3b. gh-ocannl-1493: room for the unscheduled footprint and half the default compile's
      extra, and the FIRST candidate to reach link refused outright (as a candidate larger than the
@@ -397,4 +616,8 @@ let () =
     (match (measured_winner, shipped) with Some w, [ s ] -> not (String.equal w s) | _ -> false);
   Result.iter result ~f:(check_values "the arm shipped instead computes the right values");
   let _, reports, _, _ = run5 ~arm:false in
-  p "nothing was recorded: the next call compares both arms again" (List.length reports = 2)
+  p "nothing was recorded: the next call compares both arms again" (List.length reports = 2);
+  floor_scenarios ~backend_name ~on_gpu ~baseline_links
+    ~check_values:(fun ctx routine ->
+      close (Context.get_values (Context.run ctx routine) t2.Tensor.value) expected)
+    comp

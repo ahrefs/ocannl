@@ -105,32 +105,37 @@ files.
   (`Schedule_outcome.Device_memory_exhausted`, the `Resource_exceeded Device_memory` decline with
   the refused bytes and the driver's free bytes), because HIP has no `classify_failure` and its
   out-of-memory error was therefore unclassified, i.e. fatal under strict classification, and
-  CUDA's was a `Backend_rejected` stage string nothing could reason about. A refused BASE compile
-  refuses the whole search before the cache is consulted (`Pre_search_failure` at `Backend_link`):
-  scheduling only adds device buffers to the base lowering (new tiles, fission's local-to-device
-  promotions), so no candidate, replay or fallback would fit either. On a GPU backend the base is
-  refused before codegen (it binds no hardware dimension, gh-ocannl-1340) and links nothing, so
-  there `Context.probe_link_delta` asks the device the base link's question without the link
-  (gh-ocannl-1493): `Backends.link_delta` runs the post-transform layout steps of `compile` and the
-  very plan `allocate_delta` runs (`plan_delta`), allocates exactly those pools through the same
-  seam (`allocate_group_pools`: census, `Delta_pool_allocated`, the gh-ocannl-1424 detail) and frees
-  them on every path. A trial allocation rather than a comparison with
-  `Context.get_free_and_total_memory`: only the allocator's verdict is exact on a unified-memory
-  part, and Metal has no free reading at all. Its refusal is the same typed `Pre_search_failure`,
-  before the cache; until then the first search candidate to reach link stood in, and a
-  fission-promoted first candidate could refuse a step a smaller one would fit. The probe abstains
-  under `buffer_aliasing` (`ld_liveness_planned`): "scheduling only adds device buffers" fails
-  there, since the GPU liveness planner's position is the segment, so the one-kernel base overlaps
-  nothing a fissioned candidate overlaps (954 KB against 791 KB for `link_delta_parity`'s training
-  step on Metal).
+  CUDA's was a `Backend_rejected` stage string nothing could reason about. A search-wide
+  refusal (`Pre_search_failure` at `Backend_link`, before the cache is consulted) asks one question:
+  does the device admit the FLOOR every schedule of the base lowering must allocate,
+  `Context.probe_link_floor` (gh-ocannl-1554)? Asked where the GPU baseline is refused before
+  codegen (gh-ocannl-1340), and where the base link or a stale entry's baseline relink is refused
+  for device memory, which then declines the baseline and nothing more. Not the base link's own
+  delta (`Context.probe_link_delta`, gh-ocannl-1493, kept exact): "scheduling only adds device
+  buffers" fails twice. Under `buffer_aliasing` the GPU planner's position is the kernel, so the
+  one-kernel base overlaps nothing a fissioned candidate overlaps (954 KB against 791 KB for
+  `link_delta_parity`'s training step on Metal), and a CPU `Split_reduce` candidate refines the
+  base's statement spans. And `Fuse_epilogue`'s shared placement keeps an unsettled target off the
+  device (49 KB against 25 KB). The floor (`Backends.link_floor`) is raw node bytes over the delta's
+  nodes the base code touches, less `Schedule.may_keep_off_device` (an unsettled fusion target
+  within `max_workgroup_memory_bytes`, which the hardware gate holds every kernel's shared bytes to,
+  GPU only) and `Schedule.may_replace_by_packed_tile` (a hoisted `Stage` source); under the planner,
+  the nodes failing `Backends.alias_eligible` plus the largest eligible node per precision class.
+  The size window is narrow in practice: a `Never_virtual` node within `stack_threshold_in_bytes`
+  is `Local` in the base anyway. Its probe asks each group's bytes in one request cut at the pool
+  cap, decisive under a page-granular allocator that admits by the total of page-rounded requests,
+  not against a contiguous-block limit. A floor the device admits says nothing about any
+  candidate. A transform that newly takes storage off a node must extend the floor and
+  `link_delta_parity`.
   `Context.link_delta` is the allocation-free half (the plan's bytes), and
   `test/operations/link_delta_parity` pins it to the census delta of a real compile. Size a
-  capacity meant to refuse the base on the UNSCHEDULED form: on a GPU the default compile needs more (8192 against 4096 B on the test's
-  workload under CUDA), which made a half-footprint test capacity fit the baseline there. The
-  same holds for a search WINNER: the unscheduled footprint bounds every shipped routine from
-  below, but the default compile's does not, since a winner such as an epilogue-fused sketch need
-  not carry fission's promotions (4096 B on Metal where the default holds 8192). A capacity meant
-  to leave no room beside "the shipped routine" is sized from the unscheduled footprint, or it
+  capacity meant to refuse the search on the FLOOR, which is the unscheduled delta only where
+  nothing is left out, and never on the default compile: on a GPU that needs more (8192 against
+  4096 B on the test's workload under CUDA), which made a half-footprint test capacity fit the
+  baseline there. The same holds for a search WINNER: the floor bounds every shipped routine from
+  below, but the default compile's footprint does not, since a winner such as an epilogue-fused
+  sketch need not carry fission's promotions (4096 B on Metal where the default holds 8192). A
+  capacity meant to leave no room beside "the shipped routine" is sized from the floor, or it
   passes or fails by which candidate the timings crowned (gh-ocannl-1415).
 - **`Context.t.context_id` names a release unit, not a value** (gh-ocannl-1203). The merge-buffer
   ledger retires a consumer's registration by the released context's id, so every value that shares

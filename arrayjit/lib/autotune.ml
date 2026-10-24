@@ -6987,36 +6987,30 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
         cache_replay_refusal = !cache_replay_refusal;
       }
     in
-    (* gh-ocannl-1326: the base compile allocated one candidate's working set for real, so a device
-       that refused it has answered for the whole search: every candidate, a cache replay and the
-       untuned fallback need about as much. Refused here, typed, rather than by declining every
-       candidate in turn at link (a b256 [gpt2_mini_train] arm on a 12 GiB card spent 12 minutes
-       doing that before its fallback compile died of the same cause), and before the cache is
-       consulted, whose replay would be refused alike. A [Pre_search_failure] is no search and no
-       replay, which is how {!Train.tune_placements}' other arm still ships and how a benchmark
-       harness tells this from a search.
-
-       gh-ocannl-1493: where the baseline was refused before codegen (an undispatchable GPU base,
-       gh-ocannl-1340), it allocated nothing, so the device is asked the base link's question
-       without the link: {!Context.probe_link_delta} allocates exactly the pools linking the base
-       lowering would, and frees them ([?probe] names it in the log). Not the first search candidate
-       to reach link, which stood in until then: scheduling only adds device buffers to the base
-       lowering, so that candidate could be larger than the base and refuse a step a smaller
-       candidate would fit. *)
+    (* gh-ocannl-1326: a device that refuses what every schedule of the base lowering must allocate
+       has answered for the whole search: every candidate, a cache replay and the untuned fallback.
+       Refused here, typed, rather than by declining every candidate in turn at link (a b256
+       [gpt2_mini_train] arm on a 12 GiB card spent 12 minutes doing that before its fallback
+       compile died of the same cause), and before the cache is consulted, whose replay would be
+       refused alike. A [Pre_search_failure] is no search and no replay, which is how
+       {!Train.tune_placements}' other arm still ships and how a benchmark harness tells this from a
+       search. What "must allocate" means is the floor ({!Context.probe_link_floor}, gh-ocannl-1554,
+       [probe_floor] below): not the base link's delta, which bounds no candidate from below under
+       the liveness planner or on-chip fusion; and not the first search candidate to reach link
+       (gh-ocannl-1493), which can be larger than the base. *)
     let is_device_memory = function
       | { Outcome.cause = Outcome.Resource_exceeded { resource = Outcome.Device_memory; _ }; _ } ->
           true
       | _ -> false
     in
-    let refuse_if_device_memory ?probe = function
+    let refuse_if_device_memory ~probe = function
       | Some classified when is_device_memory classified ->
-          logf "%s: REFUSED, the search cannot run: one candidate's footprint does not fit: %s"
-            (Option.value probe ~default:"baseline")
+          logf "%s: REFUSED, the search cannot run: the floor under every schedule does not fit: %s"
+            probe
             (Outcome.detail_of_cause classified.cause);
-          (* Every caller refuses on a declined baseline -- the base compile's, the relink's, or the
-             footprint probe's that stands for the base link -- which [census] reads off the base
-             compile alone; the probe's decline is in the census already, as the baseline's one
-             account. *)
+          (* The search is refused on a declined baseline -- the floor's refusal stands for it --
+             which [census] reads off the base compile alone; the baseline's one account is in the
+             census already (its own decline, or the floor's in its place). *)
           raise_pre_search
             ~base:{ (census ()) with baseline_declined = true }
             (Outcome.Classified classified)
@@ -7056,52 +7050,56 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
               !release_baseline_hook ();
               Stdlib.Printexc.raise_with_backtrace exn backtrace)
     in
-    if Option.is_none lineage_refusal then refuse_if_device_memory baseline_decline;
-    (* gh-ocannl-1493: the base compile's footprint question, answered without its link where the
-       baseline was refused before codegen. Same place, same refusal: after the lineage check (a
-       refused timing lineage says nothing of the caller's routine) and before the cache, whose
-       replay would be refused alike. A device that admits the base delta has answered nothing about
-       a larger candidate, which is that candidate's own decline at link. Not under the liveness
-       planner, where the base delta is no lower bound (below). *)
-    if Option.is_none lineage_refusal && !base_undispatched then (
+    (* gh-ocannl-1554: the footprint question every search-wide device-memory refusal asks -- does
+       the device admit the FLOOR under every schedule of the base lowering
+       ({!Context.probe_link_floor})? Not the base link's own delta, which bounds no candidate from
+       below under the liveness planner (the serial base is one kernel, one GPU planner position, so
+       it overlaps nothing a fissioned candidate's segments separate: 954 KB against 791 KB on
+       [link_delta_parity]'s training step) nor under on-chip fusion (a shared epilogue placement
+       keeps its target off the device), nor on the CPU under aliasing (a [Split_reduce] candidate
+       refines the base's statement-grained spans). Asked in the same place for every path: after
+       the lineage check (a refused timing lineage says nothing of the caller's routine) and before
+       the cache, whose replay would be refused alike. A floor the device admits answers nothing
+       about any candidate, which is that candidate's own decline at link.
+
+       [~account]: where the baseline has no account in the census yet (it was refused before
+       codegen, gh-ocannl-1340), a refused floor is its one account -- declined at [Backend_link]
+       for device memory, as a refused base link's was before gh-ocannl-1340, and not beside its
+       [Not_dispatched] refusal, which the search records only once it runs. Where the baseline's
+       own link (or relink) was declined, that decline is its account already. *)
+    let probe_floor ~account =
       progress_stage "footprint_probe";
-      let probe = "baseline footprint probe" in
+      let probe = "baseline footprint floor probe" in
       match
         Outcome.protect ~classify_backend:(Context.failure_classifier search_ctx)
           ~provenance:Outcome.Candidate ~phase:Outcome.Backend_link ~candidate:probe (fun () ->
-            (* The base delta bounds every candidate's from below only while it does not depend on
-               the kernel sequence. Under the liveness planner it does: the serial base is one
-               kernel, one GPU planner position, so it overlaps nothing, while a fissioned candidate
-               of the same lowering can overlap what its segments separate (the materialized chains
-               of [buffer_aliasing]). There the probe has no answer, and the candidates are declined
-               one by one, as a base that never linked leaves them. *)
-            let planned = Context.link_delta ?name search_ctx base_opt [ base_opt ] in
-            if planned.ld_liveness_planned then None
-            else Some (Context.probe_link_delta ?name search_ctx base_opt [ base_opt ]))
+            Context.probe_link_floor ?name search_ctx base_opt)
       with
-      | Ok None ->
+      | Ok (f : Context.link_floor) ->
           logf
-            "%s: no answer -- under the liveness planner (buffer_aliasing) the base lowering's \
-             delta depends on the kernel sequence, so it bounds no candidate's from below"
+            "%s: %s: %d working + %d constant bytes in %d pool(s); left out: %d bytes some \
+             schedule keeps off the device, %d a packed tile can replace, %d the liveness planner \
+             may overlap. It promises nothing about any candidate"
             probe
-      | Ok (Some (d : Context.link_delta)) ->
-          logf
-            "%s: the base lowering's link delta fits: %d working + %d constant bytes in %d pool(s)"
-            probe d.ld_working_bytes d.ld_constant_bytes d.ld_pools
+            (if f.lf_pools = 0 then "empty floor, nothing to ask" else "the floor fits")
+            f.lf_working_bytes f.lf_constant_bytes f.lf_pools f.lf_off_device_bytes
+            f.lf_replaceable_bytes f.lf_overlap_bytes
       | Error (Outcome.Classified classified) when is_device_memory classified ->
-          (* The baseline's one account in the census, as a refused base link's was before
-             gh-ocannl-1340: declined at [Backend_link] for device memory. Not beside its
-             [Not_dispatched] refusal as well, which the search records only once it runs: the two
-             are exclusive accounts of one baseline, and both would count it as two failed
-             candidates. *)
-          record_decline declines classified;
+          if account then record_decline declines classified;
           refuse_if_device_memory ~probe (Some classified)
       | Error (Outcome.Classified classified) ->
-          (* Not the device's memory: no answer to the footprint question, which a declined base
-             link never gave either, so the search proceeds. *)
+          (* Not the device's memory: no answer to the footprint question, so the search
+             proceeds. *)
           logf "%s: no answer, %s %s" probe (phase_label classified.phase)
             (Outcome.detail_of_cause classified.cause)
-      | Error (Outcome.Fatal _ as failure) -> raise_pre_search ~base:(census ()) failure);
+      | Error (Outcome.Fatal _ as failure) -> raise_pre_search ~base:(census ()) failure
+    in
+    (* The base compile's own device-memory decline refuses nothing by itself (it bounds no
+       candidate from below, above): the floor answers. Where the baseline was refused before
+       codegen (every GPU backend's), it allocated nothing, and the floor answers in its place. *)
+    if Option.is_none lineage_refusal then
+      if Option.exists baseline_decline ~f:is_device_memory then probe_floor ~account:false
+      else if !base_undispatched then probe_floor ~account:true;
     let cached =
       if use_cache && Option.is_none lineage_refusal then
         match SC.lookup ~dir:cache_dir ~key with
@@ -7435,9 +7433,9 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
             | Error (Outcome.Classified classified) ->
                 baseline_linked := None;
                 record_decline declines classified;
-                (* The same footprint probe as the base compile's, so the same refusal: a relink the
-                   device refused leaves no candidate room either. *)
-                refuse_if_device_memory (Some classified);
+                (* The same footprint question as the base compile's (gh-ocannl-1554): a relink the
+                   device refused bounds no candidate from below, the floor does. *)
+                if is_device_memory classified then probe_floor ~account:false;
                 Some classified
             | Error (Outcome.Fatal _ as failure) -> raise_pre_search ~base:(census ()) failure)
           else baseline_decline

@@ -3280,18 +3280,20 @@ val tune :
     a link. A cache replay is not co-resident with the base compile either: the baseline is released
     before the replay compile.
 
-    A device that refuses the base compile's allocation ({!Ir.Schedule_outcome.Device_memory}) has
-    refused one candidate's working set, which every candidate, a replay and the untuned fallback
-    need about as much of: the call reports {!Pre_search_failure} at [Backend_link] with that
-    decline in its census, and raises, instead of declining every candidate in turn. Where the
-    baseline is refused before codegen (every GPU backend, gh-ocannl-1340) the device is asked
-    without a link: {!Context.probe_link_delta} allocates and frees exactly the pools linking the
-    base lowering would (gh-ocannl-1493), before the cache is consulted, and its refusal is the same
-    [Pre_search_failure], with [baseline_declined] and the decline as the baseline's one account. A
-    device that admits the base delta answers nothing about a larger candidate, which is declined on
-    its own at link. Under the liveness planner (config [buffer_aliasing]) the probe abstains: the
-    serial base is one kernel, which on a GPU overlaps no buffers, while a fissioned candidate can,
-    so its delta bounds no candidate's from below ({!Context.link_delta}'s [ld_liveness_planned]).
+    A device that refuses what every schedule of the base lowering must allocate — the floor of
+    {!Context.probe_link_floor} (gh-ocannl-1554) — has answered for every candidate, a replay and
+    the untuned fallback: the call reports {!Pre_search_failure} at [Backend_link] with
+    [baseline_declined] and one device-memory decline as the baseline's account, and raises, instead
+    of declining every candidate in turn. The floor is asked before the cache is consulted, where
+    the baseline is refused before codegen (every GPU backend, gh-ocannl-1340) and where the base
+    compile's link, or a stale entry's baseline relink, is refused for device memory: the base
+    link's own delta bounds no candidate from below under the liveness planner (config
+    [buffer_aliasing]: one kernel overlaps no buffers a fissioned candidate can, and a CPU
+    [Split_reduce] candidate refines its statement-grained spans) or on-chip fusion (a shared
+    epilogue placement keeps its target off the device). The floor's refusal is decisive under a
+    page-granular allocator that admits by the total of page-rounded requests, not against a
+    contiguous-block or fragmentation limit. A device that admits the floor answers nothing about
+    any candidate, which is declined on its own at link.
 
     The bound is on working pools, and that qualifier is load-bearing: {!Context.release} cannot
     free per-device constants, and a hoisted [Stage] candidate mints a fresh packed constant per
