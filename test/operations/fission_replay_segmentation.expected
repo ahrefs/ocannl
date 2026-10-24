@@ -20,6 +20,10 @@ the twins carry different schedules: true
 the twins' entry replays from the cache: true
 each twin replays its own schedule: true
 the twins' replay computes the right values: true
+6 (structural): the synthetic GPU policy folds the projection's zero into a scheduled segment: true
+6 (structural): under a zero policy proposing nothing, the plan replays as recorded: true
+6 (structural): every replayed segment has the canonical digest it was saved with: true
+6 (structural): every replayed segment reconstructs the schedule saved for it: true
 the folded segmentation opens a segment with the projection's zero: true
 the folded winner replays from the cache: true
 the folded replay computes the right values: true

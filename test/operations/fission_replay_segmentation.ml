@@ -22,9 +22,11 @@
    segment's kind and schedule) keep their own saved schedules through a replay. 6. A folded segment
    (gh-ocannl-1175: a reduction's zero expanded into its kernel) replays after the zero policy stops
    proposing that fold, with or without search: the recorded fold is rebuilt from its proven target,
-   never re-asked of the current policy. 7. The unfissioned routine's single segment records whether
-   its head zero stayed whole ([`Unfolded], gh-ocannl-1480), and a replay rebuilds exactly the
-   segment it recorded; a [`Normal] record of it still replays folded. *)
+   never re-asked of the current policy. Its structural leg (gh-ocannl-1275) derives the fold under
+   a synthetic GPU policy, so it runs on every backend, cc included; the executed legs fold only on
+   a GPU backend. 7. The unfissioned routine's single segment records whether its head zero stayed
+   whole ([`Unfolded], gh-ocannl-1480), and a replay rebuilds exactly the segment it recorded; a
+   [`Normal] record of it still replays folded. *)
 
 open Base
 open Ocannl
@@ -449,6 +451,66 @@ let () =
   Train.set_materialized q.Tensor.value;
   let comp = Train.forward q in
   let rut = lower comp in
+  (* The structural leg (gh-ocannl-1275), backend-independent. The fold is GPU zero policy, so the
+     executed legs below fold only on a GPU backend, and per-PR CI runs cc. Here the plan is derived
+     under a synthetic GPU pipeline whatever the host -- promoted locals, the GPU presets and the
+     GPU zero policy, at no hardware limits and a permissive threshold -- and then replayed under a
+     zero policy that proposes nothing. The replay must cut the very segments the derivation cut,
+     and every saved schedule must reconstruct against its segment unchanged. A policy gate on the
+     replayed fold (#1018's round-2 form) leaves the folded segment's head zero whole, so its
+     segment's digest moves and the schedule saved against it no longer applies. *)
+  let () =
+    let limits = Ir.Backend_intf.no_hardware_limits in
+    let synth ~zero_sched ?replay () =
+      Sched.fission_segmented ~promote_locals:true ~fold_zeros:true ?replay
+        ~preset:(Sched.default_gpu ~min_parallel:1 ~limits)
+        ~zero_sched ~static_indices:[] (copy rut.base_opt)
+    in
+    let segmentation, tuples =
+      synth ~zero_sched:(fun tns -> Sched.zero_expansion ~min_parallel:1 ~limits tns) ()
+    in
+    let expanded_zero (pre : LL.optimized) =
+      List.exists (LL.flat_lines [ pre.LL.llc ]) ~f:(function
+        | LL.Zero_out _ -> false
+        | stmt -> Option.exists (LL.zero_initializer_target stmt) ~f:(Ir.Tnode.equal q.Tensor.value))
+    in
+    (* Scheduled, so the reconstruction claim below compares a schedule, not two empty ones. *)
+    p
+      "6 (structural): the synthetic GPU policy folds the projection's zero into a scheduled \
+       segment"
+      (List.length tuples >= 2
+      && List.exists tuples ~f:(fun (kind, pre, sched, _) ->
+          Poly.equal kind `Normal && expanded_zero pre && not (List.is_empty sched)));
+    let saved = List.map (SC.save_segments segmentation tuples) ~f:fst in
+    (* As the autotuner's replay does ([Autotune.saved_fission_replay]): each segment cut is checked
+       against the digest its schedule was saved with, and only then reconstructed from it. *)
+    let schedule i pre =
+      let canon = SC.canonicalize ~with_placements:false pre in
+      match List.nth saved i with
+      | Some s when String.equal (SC.digest canon) s.SC.seg_digest ->
+          Some (fst (SC.of_saved canon s.SC.seg_saved))
+      | _ -> Some []
+    in
+    let replayed =
+      match synth ~zero_sched:(fun _ -> []) ~replay:(SC.segmentation_of saved, schedule) () with
+      | result -> Some result
+      | exception Ir.Schedule_outcome.Cause_at _ -> None
+    in
+    p "6 (structural): under a zero policy proposing nothing, the plan replays as recorded"
+      (Option.exists replayed ~f:(fun (replayed, _) ->
+           Sched.equal_segmentation replayed segmentation));
+    p "6 (structural): every replayed segment has the canonical digest it was saved with"
+      (Option.exists replayed ~f:(fun (_, rtuples) ->
+           List.equal String.equal
+             (List.map rtuples ~f:(fun (_, pre, _, _) ->
+                  SC.digest (SC.canonicalize ~with_placements:false pre)))
+             (List.map saved ~f:(fun s -> s.SC.seg_digest))));
+    p "6 (structural): every replayed segment reconstructs the schedule saved for it"
+      (Option.exists replayed ~f:(fun (replayed, rtuples) ->
+           List.equal SC.equal_saved_schedule
+             (List.map (SC.save_segments replayed rtuples) ~f:(fun (s, _) -> s.SC.seg_saved))
+             (List.map saved ~f:(fun s -> s.SC.seg_saved))))
+  in
   let folded_label = "the folded segmentation opens a segment with the projection's zero" in
   let segmentation, tuples = fission rut ~fold_zeros:true () in
   let folded =
