@@ -18,7 +18,9 @@
    sk_hoist seed), pm_mixed (hoisted B~ plus an in-kernel per-chunk A~ pack; the sk_pack_rest seed),
    and pm_bpk (both operands packed in-kernel, each chunk re-packing its own B~ panel — needs the
    panel under the per-chunk privatization cap, config cc_grid_private_bytes_cap, or it silently
-   declines to serial: check with --ocannl_schedule_log_declines=true).
+   declines to serial: check with --ocannl_schedule_log_declines=true). The packed variants are
+   built by [Bench_gebp], [narrow_gebp_bench]'s builder, which pads a row or reduction extent its
+   block does not divide (gh-ocannl-1562).
 
    The C-backend register-tiled variants (tensorize, packmma, packmma_par and the three
    grid-outermost flavors) take the renderer's own C-tile geometry unless [--tile=rm,rn,lanes] or
@@ -41,20 +43,24 @@
    announces itself BEFORE it runs and reports what it cost, so a run in progress is distinguishable
    from a hang.
 
-   Each scheduled variant needs its own [Sched.split] factors to divide the extents they split (i
-   over m, j over n, k over k), and every one of them needs a non-degenerate nest to address; a
-   variant whose requirement fails is skipped by name with the reason. Two are exempt from the
-   divisibility half — [parallel] on the GPU backends and [tensorize] on the C ones, which put
-   nothing downstream of the split that a remainder guard would break — so an arbitrary
-   (non-degenerate) extent still gets a scheduled measurement on either branch, and the naive kernel
-   runs at any size whatsoever. Each line carries a position-weighted checksum of the whole output,
-   which is what makes a remainder-region error visible, and every variant carrying a [Tile_mma]
-   carries its [C_syntax.mma_census] rendering: a [Tile_mma] whose preconditions fail (a column
-   extent below the compute vector width is one way in, and arbitrary extents reach it) renders the
-   scalar fallback while still reporting under its schedule's name, so read the bracket, not the
-   variant name, when deciding what a timing measured. Run with OCANNL_BACKEND=metal (or cuda); the
-   C backends reject the shared schedules. Timing includes kernel executions and one device-to-host
-   transfer per variant (runs queue on the stream; get_values synchronizes). *)
+   Each scheduled variant needs a non-degenerate nest to address, and most need their own
+   [Sched.split] factors to divide the extents they split (i over m, j over n, k over k); a variant
+   whose requirement fails is skipped by name with the reason. Exempt from the divisibility half:
+   [parallel] on the GPU backends and [tensorize] on the C ones, which put nothing downstream of the
+   split that a remainder guard would break, and the packed GEBP variants that stage both operands
+   (packmma, packmma_par, pm_mixed, pm_bpk), which pad a non-dividing axis before splitting it — the
+   header's [padded:] line states the padding and the extra multiply-adds it costs, while GFLOP/s
+   stays on the logical 2mnk. pm_hoist reads A in place, so it has no staged tile to carry a pad's
+   zero fringe and keeps the gate, skipped with that reason. So an arbitrary (non-degenerate) extent
+   still gets scheduled measurements on either branch, and the naive kernel runs at any size
+   whatsoever. Each line carries a position-weighted checksum of the whole output, which is what
+   makes a remainder-region error visible, and every variant carrying a [Tile_mma] carries its
+   [C_syntax.mma_census] rendering: a [Tile_mma] whose preconditions fail (a column extent below the
+   compute vector width is one way in, and arbitrary extents reach it) renders the scalar fallback
+   while still reporting under its schedule's name, so read the bracket, not the variant name, when
+   deciding what a timing measured. Run with OCANNL_BACKEND=metal (or cuda); the C backends reject
+   the shared schedules. Timing includes kernel executions and one device-to-host transfer per
+   variant (runs queue on the stream; get_values synchronizes). *)
 
 open Base
 open Ocannl
@@ -471,106 +477,26 @@ let () =
     [ ez; rz; tz ]
   in
 
-  (* Tile_mma composed with cache tiling + operand packing (the GEBP shape; the closing piece of
-     gh-ocannl-469, autotune's [cpu_mma_pack_sketch_schedule]): pack the B panel [bk x n] at k_o
-     (reused across all row blocks) and the A tile [bm x bk] at i_o, then tensorize the inner triple
-     — the register-tiled micro-kernel streams the contiguous packed tiles. All-Serial with a unit
-     lane, so the whole-node zeroing stays legal. *)
-  let packmma_schedule ~mc:_ opt =
-    let bm, bk = (gebp_bm, gebp_bk) in
-    let i, j, k = accum_syms opt in
-    let sp_i, i_o, i_i = Sched.split ~axis:i ~factor:bm ~outer:LL.Serial ~inner:LL.Serial in
-    let sp_k, k_o, k_i = Sched.split ~axis:k ~factor:bk ~outer:LL.Serial ~inner:LL.Serial in
-    let sink sym below = List.map below ~f:(fun inner -> Sched.Swap { outer = sym; inner }) in
-    let stage source tile_loops =
-      Sched.Stage
-        {
-          source;
-          tile_loops;
-          shared = false;
-          cooperative = None;
-          hoisted = false;
-          swizzle = None;
-          pad_stride = None;
-          pipeline_depth = 1;
-          tile_prec = None;
-        }
-    in
-    let tz, _lane = Sched.tensorize ?tile ~i:i_i ~j ~k:k_i ~simd_width:1 () in
-    [ sp_i; sp_k ] @ sink j [ k_o ] @ sink i_i [ k_o ] @ sink i_o [ k_o ]
-    @ [ stage mb.Tensor.value [ k_i; j ]; stage ma.Tensor.value [ i_i; k_i ]; tz ]
-  in
-
-  (* The fully parallel packed GEMM (gh-ocannl-469 follow-up): the row-block loop is Grid-typed and
-     pool-parallelizes — the per-row-block A~ tile is privatized to per-chunk block-scope storage by
-     the renderer, the B~ panel packed at k_o is read-only inside the Grid body (behind a pointer
-     alias under the blocks extension). The whole-node zeroing is no longer legal beside a
-     hardware-annotated loop, so it expands with the same Grid row geometry. *)
-  let packmma_par_schedule ~mc opt =
-    let bm, bk = (gebp_bm, gebp_bk) in
-    let i, j, k = accum_syms opt in
-    let ez, zsyms = Sched.expand_zero ~tn:mc in
-    let zi = match zsyms with [ zi; _ ] -> zi | _ -> assert false in
-    let sp_zi, _, _ = Sched.split ~axis:zi ~factor:bm ~outer:LL.Grid ~inner:LL.Serial in
-    let sp_i, i_o, i_i = Sched.split ~axis:i ~factor:bm ~outer:LL.Grid ~inner:LL.Serial in
-    let sp_k, k_o, k_i = Sched.split ~axis:k ~factor:bk ~outer:LL.Serial ~inner:LL.Serial in
-    let sink sym below = List.map below ~f:(fun inner -> Sched.Swap { outer = sym; inner }) in
-    let stage source tile_loops =
-      Sched.Stage
-        {
-          source;
-          tile_loops;
-          shared = false;
-          cooperative = None;
-          hoisted = false;
-          swizzle = None;
-          pad_stride = None;
-          pipeline_depth = 1;
-          tile_prec = None;
-        }
-    in
-    let tz, _lane = Sched.tensorize ?tile ~i:i_i ~j ~k:k_i ~simd_width:1 () in
-    [ ez; sp_zi; sp_i; sp_k ] @ sink j [ k_o ] @ sink i_i [ k_o ] @ sink i_o [ k_o ]
-    @ [ stage mb.Tensor.value [ k_i; j ]; stage ma.Tensor.value [ i_i; k_i ]; tz ]
-  in
-
-  (* Grid-outermost flavors (one dispatch spanning the whole GEBP triple; gh-ocannl-473 /
-     gh-ocannl-475): the row-block Grid loop stays outermost — no [sink i_o [k_o]] — so anything
-     packed at [k_o] lands inside the Grid body. [pack_b = `Hoist] packs the (constant) B~ panel at
-     link time into the constant pool; [`Chunk] packs it in-kernel, each chunk re-packing its own
-     panel (redundant work, but no dispatch-per-k-block; the panel must fit the per-chunk
-     privatization cap). [pack_a] toggles the in-kernel per-chunk A~ pack vs. reading A in place. *)
-  let packmma_outer_schedule ~pack_a ~pack_b ~mc opt =
-    let bm, bk = (gebp_bm, gebp_bk) in
-    let i, j, k = accum_syms opt in
-    let ez, zsyms = Sched.expand_zero ~tn:mc in
-    let zi = match zsyms with [ zi; _ ] -> zi | _ -> assert false in
-    let sp_zi, _, _ = Sched.split ~axis:zi ~factor:bm ~outer:LL.Grid ~inner:LL.Serial in
-    let sp_i, _, i_i = Sched.split ~axis:i ~factor:bm ~outer:LL.Grid ~inner:LL.Serial in
-    let sp_k, k_o, k_i = Sched.split ~axis:k ~factor:bk ~outer:LL.Serial ~inner:LL.Serial in
-    let sink sym below = List.map below ~f:(fun inner -> Sched.Swap { outer = sym; inner }) in
-    let stage ~hoisted source tile_loops =
-      Sched.Stage
-        {
-          source;
-          tile_loops;
-          shared = false;
-          cooperative = None;
-          hoisted;
-          swizzle = None;
-          pad_stride = None;
-          pipeline_depth = 1;
-          tile_prec = None;
-        }
-    in
-    let stage_b =
-      match pack_b with
-      | `Hoist -> [ stage ~hoisted:true mb.Tensor.value [ k_i; j ] ]
-      | `Chunk -> [ stage ~hoisted:false mb.Tensor.value [ k_i; j ] ]
-    in
-    let stage_a = if pack_a then [ stage ~hoisted:false ma.Tensor.value [ i_i; k_i ] ] else [] in
-    let tz, _lane = Sched.tensorize ?tile ~i:i_i ~j ~k:k_i ~simd_width:1 () in
-    [ ez; sp_zi; sp_i; sp_k ] @ sink j [ k_o ] @ sink i_i [ k_o ] @ stage_b @ stage_a @ [ tz ]
+  (* The packed GEBP family (gh-ocannl-469's closing piece, autotune's
+     [cpu_mma_pack_sketch_schedule]): pack the B panel [bk x n] at k_o and the A tile [bm x bk]
+     under it, then tensorize the inner [i_i x j x k_i] triple — the register-tiled micro-kernel
+     streams the contiguous packed tiles. Built by [Bench_gebp], [narrow_gebp_bench]'s builder, so
+     the two benches cannot drift apart in what a packed variant schedules — including the
+     pad-before-split that builds them at extents their blocking does not divide (gh-ocannl-627,
+     gh-ocannl-1562). The variants differ in where the row-block loop runs ([Bench_gebp.layout]),
+     whether the constant B~ panel is packed at link time into the constant pool ([~hoist_b]; the
+     sk_hoist seed) or in-kernel, and whether A is packed per chunk or read in place ([~stage_a]): -
+     packmma: all-Serial, [k_o { i_o }]; a unit lane, so the whole-node zeroing stays legal. -
+     packmma_par: [k_o { Grid i_o }], pool-parallel row blocks with per-chunk privatized A~ tiles;
+     the B~ pack at k_o re-enters the parallel construct once per k block. - pm_hoist, pm_mixed,
+     pm_bpk: [Grid i_o { k_o }], one dispatch spanning the whole triple (gh-ocannl-473 /
+     gh-ocannl-475). pm_hoist hoists B~ and reads A in place (autotune's sk_grid && sk_hoist seed);
+     pm_mixed hoists B~ and packs A~ per chunk (the sk_pack_rest seed); pm_bpk packs both in-kernel,
+     each chunk re-packing its own B~ panel (redundant work, but no dispatch per k block; the panel
+     must fit the per-chunk privatization cap). *)
+  let gebp_schedule ~layout ~hoist_b ~stage_a ~mc opt =
+    Bench_gebp.packed_schedule ~layout ~hoist_b ~stage_a ~tile_prec:None ?tile ~bm:gebp_bm
+      ~bk:gebp_bk ~a:ma.Tensor.value ~b:mb.Tensor.value ~c:mc opt
   in
 
   (* What every variant is compared against, cell by cell (gh-ocannl-711 review). That comparison,
@@ -784,8 +710,8 @@ let () =
      when it is not, so an unschedulable size still measures everything that is schedulable at it. A
      skipped variant times as nan, like the naive leg under [naive_repeats = 0]. The naive leg needs
      no gate — it addresses no loop nest at all, so it runs at any size, degenerate included. *)
-  let bench_v ?repeats ~variant ~reqs ~schedule () =
-    match unmet reqs with
+  let bench_v ?repeats ?(refusals = []) ~variant ~reqs ~schedule () =
+    match unmet reqs @ refusals with
     | [] -> attempt ?repeats ~variant ~schedule ()
     | reasons ->
         p "%-10s skipped — this size is not schedulable with this blocking:\n" variant;
@@ -818,6 +744,13 @@ let () =
     "matmul m=%d n=%d k=%d, %d repeats (naive: %d), register tile %s, backend from \
      config/OCANNL_BACKEND\n"
     m n k repeats naive_repeats (Bench_tile.describe tile);
+  (* The padding the packed GEBP variants schedule at this blocking, from the function the builder
+     derives its pads from — so the work a packed timing measured is stated, not inferred. Only the
+     C branch runs them, and a degenerate extent schedules nothing. *)
+  (let pads = Bench_gebp.pads ~bm:gebp_bm ~bk:gebp_bk ~ni:m ~nk:k in
+   if (not has_shared) && List.is_empty degenerate && not (List.is_empty pads) then
+     p "padded: %s — the packed GEBP variants do %.2fx the logical multiply-adds (gh-ocannl-1562)\n"
+       (Bench_gebp.describe_pads pads) (Bench_gebp.work_ratio pads));
   let t_naive =
     if naive_repeats > 0 then attempt ~repeats:naive_repeats ~variant:"naive" ~schedule:None ()
     else Float.nan
@@ -833,8 +766,9 @@ let () =
         split, so [Sched.split]'s remainder guard is all the partial block needs. Measured at 17^3,
         33^3, 100^3 and 100x17x33 on metal — the checksum matches the naive leg's at each, tail
         included. That does NOT generalize to the others: with their reqs disabled, smem, regtile
-        and both mma_pd variants raise [Invalid_argument] at 100^3, as do all six C-backend blocked
-        variants, so those gates report a real requirement rather than an assumed one. *)
+        and both mma_pd variants raise [Invalid_argument] at 100^3, as did all six C-backend blocked
+        variants while they split without padding, so those gates report a real requirement rather
+        than an assumed one. *)
      let t_par = bench_v ~variant:"parallel" ~reqs:[] ~schedule:(Some parallel_schedule) () in
      let t_smem =
        bench_v ~variant:"smem"
@@ -861,33 +795,47 @@ let () =
        (t_naive /. t_par) (t_naive /. t_smem) (t_naive /. t_reg) (t_naive /. t_mma1)
        (t_naive /. t_mma2)
    else
-     (* The GEBP family blocks i and k only — j is left whole — so it asks nothing of n. The
-        [tensorize] variant has no blocking at all: the whole triple becomes one [Tile_mma], so any
-        non-degenerate extent still gets a scheduled measurement. *)
-     let gebp_reqs = [ ("bm", gebp_bm, "m", m); ("bk", gebp_bk, "k", k) ] in
+     (* The packed GEBP family needs nothing of the extents beyond a nest to address: [Bench_gebp]
+        pads a row or reduction extent its block does not divide, and j is never split
+        (gh-ocannl-1562). pm_hoist is the exception, by the builder's own predicate: it reads A in
+        place, so a padded slot would have no staged tile's zero fringe under it, and
+        [Bench_gebp.in_place_a_refusal] says so. The [tensorize] variant has no blocking at all: the
+        whole triple becomes one [Tile_mma]. *)
      let t_pack =
        bench_v ~variant:"cpupack"
          ~reqs:[ ("bm", cpu_bm, "m", m); ("bn", cpu_bn, "n", n); ("bk", cpu_bk, "k", k) ]
          ~schedule:(Some cpupack_schedule) ()
      in
      let t_tmma = bench_v ~variant:"tensorize" ~reqs:[] ~schedule:(Some tensorize_schedule) () in
-     let t_pmma = bench_v ~variant:"packmma" ~reqs:gebp_reqs ~schedule:(Some packmma_schedule) () in
+     let t_pmma =
+       bench_v ~variant:"packmma" ~reqs:[]
+         ~schedule:(Some (gebp_schedule ~layout:Bench_gebp.Serial ~hoist_b:false ~stage_a:true))
+         ()
+     in
      let t_pmmap =
-       bench_v ~variant:"packmma_par" ~reqs:gebp_reqs ~schedule:(Some packmma_par_schedule) ()
+       bench_v ~variant:"packmma_par" ~reqs:[]
+         ~schedule:
+           (Some (gebp_schedule ~layout:Bench_gebp.Grid_below_k ~hoist_b:false ~stage_a:true))
+         ()
      in
      let t_hoist =
-       bench_v ~variant:"pm_hoist" ~reqs:gebp_reqs
-         ~schedule:(Some (packmma_outer_schedule ~pack_a:false ~pack_b:`Hoist))
+       bench_v ~variant:"pm_hoist" ~reqs:[]
+         ~refusals:
+           (Option.to_list (Bench_gebp.in_place_a_refusal ~bm:gebp_bm ~bk:gebp_bk ~ni:m ~nk:k))
+         ~schedule:
+           (Some (gebp_schedule ~layout:Bench_gebp.Grid_outermost ~hoist_b:true ~stage_a:false))
          ()
      in
      let t_mixed =
-       bench_v ~variant:"pm_mixed" ~reqs:gebp_reqs
-         ~schedule:(Some (packmma_outer_schedule ~pack_a:true ~pack_b:`Hoist))
+       bench_v ~variant:"pm_mixed" ~reqs:[]
+         ~schedule:
+           (Some (gebp_schedule ~layout:Bench_gebp.Grid_outermost ~hoist_b:true ~stage_a:true))
          ()
      in
      let t_bpk =
-       bench_v ~variant:"pm_bpk" ~reqs:gebp_reqs
-         ~schedule:(Some (packmma_outer_schedule ~pack_a:true ~pack_b:`Chunk))
+       bench_v ~variant:"pm_bpk" ~reqs:[]
+         ~schedule:
+           (Some (gebp_schedule ~layout:Bench_gebp.Grid_outermost ~hoist_b:false ~stage_a:true))
          ()
      in
      p

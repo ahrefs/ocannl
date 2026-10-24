@@ -84,9 +84,10 @@
  (modules bench_tile)
  (libraries base arrayjit.ir bench_args))
 
-; The packed GEBP schedule `narrow_gebp_bench` times, padded at extents its blocking does not
-; divide (gh-ocannl-627), with the bench's operand producers. A library so that the parity test in
-; test/operations runs the bench's own builder rather than a copy that could drift from it.
+; The packed GEBP schedules `narrow_gebp_bench` and `schedule_bench`'s CPU branch time, padded at
+; extents their blocking does not divide (gh-ocannl-627, gh-ocannl-1562), with
+; `narrow_gebp_bench`'s operand producers. A library so that the two benches share one builder and
+; the parity test in test/operations runs it rather than a copy that could drift from it.
 
 (library
  (name bench_gebp)
@@ -116,6 +117,7 @@
   time_now
   bench_args
   bench_checksum
+  bench_gebp
   bench_out
   bench_tile)
  (preprocess

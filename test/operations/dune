@@ -282,6 +282,7 @@
   (alias runtest-foreign_c_stderr_noise)
   (alias runtest-device_init_deadline)
   (alias runtest-narrow_gebp_bench_padded)
+  (alias runtest-schedule_bench_padded)
   (alias runtest-exit_stream_teardown)
   (alias runtest-config_var_warnings)
   (alias runtest-config_var_fatal_spelling)
@@ -6437,6 +6438,34 @@
   (alias runtest-env_spelling_gate))
  (action
   (diff narrow_gebp_bench_padded.expected narrow_gebp_bench_padded.actual)))
+
+; gh-ocannl-1562: bin/schedule_bench itself, run as the shipped executable on cc at extents its
+; GEBP blocking does not divide: the four packed variants that stage both operands must run, match
+; the unscheduled computation cell for cell, and report the register tiling; pm_hoist must be
+; skipped with the shared builder's refusal; the header must state the padding. A dividing control
+; keeps every packed variant running. Timings go to stderr; the golden holds only the claims.
+
+(executable
+ (name schedule_bench_padded)
+ (modules schedule_bench_padded)
+ (libraries base stdio unix fresh_process bench_gebp arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: cc -- the child bench is pinned to cc on its commandline; the parent links none.
+ (target schedule_bench_padded.actual)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:schedule_bench_padded.exe} %{dep:../../bin/schedule_bench.exe}))))
+
+(rule
+ (alias runtest-schedule_bench_padded)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff schedule_bench_padded.expected schedule_bench_padded.actual)))
 
 (test
  (name gebp_padded_parity)
