@@ -118,3 +118,9 @@ data parallel updates owner running variance: true
 data parallel preserves non-trainable mean across optimizer steps: true
 data parallel preserves non-trainable variance across optimizer steps: true
 data parallel averages only trainable gradients: true
+debug files on: data parallel retains all four model-state parameters: true
+debug files on: data parallel updates owner running mean: true
+debug files on: data parallel updates owner running variance: true
+debug files on: data parallel preserves non-trainable mean across optimizer steps: true
+debug files on: data parallel preserves non-trainable variance across optimizer steps: true
+debug files on: data parallel averages only trainable gradients: true

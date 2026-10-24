@@ -183,7 +183,8 @@ let precision_policy spatial =
     ~tol:(fun _ -> 0.01);
   Context.release ctx
 
-let data_parallel () =
+let data_parallel_claims ~label () =
+  let p claim = p (label claim) and check claim = check (label claim) in
   Tensor.unsafe_reinitialize ();
   let input values =
     NTDSL.init ~l:"parallel_input" ~prec:Ir.Ops.single ~b:[ 4 ] ~o:[ 1 ]
@@ -205,9 +206,12 @@ let data_parallel () =
     ~inputs:first ~targets ~loss_of ~weight_decay:0.2
     ~f:(fun h ->
       p "data parallel retains all four model-state parameters" (Array.length h.owner_params = 4);
+      (* Keyed on the node's label, never its [debug_name]: once the shard broadcast is printed to a
+         [.cd] file the owner's and the shard's [running_mean_parallel] share one routine, so the
+         owner's code name becomes [n<id>_running_mean_parallel] (gh-ocannl-1552). *)
       let find name =
         Array.find_exn h.owner_params ~f:(fun p ->
-            String.equal (Ir.Tnode.debug_name p.Tensor.value) (name ^ "_parallel"))
+            String.equal (Ir.Tnode.label p.Tensor.value) (name ^ "_parallel"))
       in
       let running_mean = find "running_mean" and running_variance = find "running_variance" in
       h.step ();
@@ -227,6 +231,16 @@ let data_parallel () =
         [| gamma2 |])
     ()
 
+(* [~debug_files:true] forces [output_debug_files_in_build_directory] on, whatever the ambient
+   configuration: writing the [.cd] files renames nodes whose identifiers repeat within a routine, a
+   path only that setting takes (gh-ocannl-1552). [false] leaves the setting as configured. *)
+let data_parallel ~debug_files () =
+  let saved = Utils.settings.output_debug_files_in_build_directory in
+  if debug_files then Utils.settings.output_debug_files_in_build_directory <- true;
+  let label claim = if debug_files then "debug files on: " ^ claim else claim in
+  Exn.protect ~f:(data_parallel_claims ~label) ~finally:(fun () ->
+      Utils.settings.output_debug_files_in_build_directory <- saved)
+
 let () =
   List.iter [ false; true ] ~f:(fun spatial ->
       Verdict.case
@@ -243,4 +257,5 @@ let () =
           let explicit = trajectory spatial (Some 0.9) in
           let default = trajectory spatial None in
           check "default retains 0.9 of previous statistics" default explicit));
-  Verdict.case "data-parallel batch norm" data_parallel
+  Verdict.case "data-parallel batch norm" (data_parallel ~debug_files:false);
+  Verdict.case "data-parallel batch norm, debug files on" (data_parallel ~debug_files:true)
