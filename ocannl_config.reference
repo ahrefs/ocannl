@@ -453,6 +453,12 @@
 # to stderr. A debugging/soak switch: off by default, no effect on behavior beyond the comparison.
 #legality_crosscheck=false
 
+# gh-ocannl-1462: after every context release, check that each upload arena tenant the lineage
+# still lists is held, at its own pool and offset, by a live owner of the arena's pool
+# (Backend_intf.upload_arena_violations); a violation raises after the release completes. A
+# debugging/soak switch: off by default, no effect on behavior beyond the check.
+#debug_check_upload_arenas=false
+
 # How the C backend renders eligible outermost Grid loops (pool-backed Grid rendering,
 # docs/proposals/gh-ocannl-164.md): "dispatch" uses libdispatch's dispatch_apply (macOS),
 # "openmp" uses `#pragma omp parallel for` (adds -fopenmp to the kernel compile), "none" keeps

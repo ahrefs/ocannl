@@ -157,6 +157,7 @@ let known_config_keys =
       "schedule_log_launches";
       "schedule_log_declines";
       "legality_crosscheck";
+      "debug_check_upload_arenas";
       "cc_parallel_grid";
       "cc_parallel_chunks";
       "cc_pool_core_class";
@@ -552,6 +553,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "check_half_prec_constants_cutoff";
         "legality_crosscheck";
         "autotune_strict_replay";
+        "debug_check_upload_arenas";
         "hip_scratch_validation";
         "cc_backend_verify_codesign";
         "cc_backend_post_compile_timeout";

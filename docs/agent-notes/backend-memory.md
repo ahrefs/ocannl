@@ -236,6 +236,12 @@ files.
   `Backend_intf.holds_tenant` (the node at the tenant's own pool and offset) in `fits`, the doubling's
   sizing and the trim alike; asking `Map.mem` of the node let a fork holding the same node elsewhere
   append into a pool only its sibling owned, freed under it at the sibling's release (gh-ocannl-1328).
+  The resulting invariant -- every tenant a retained arena lists is held at its location by a
+  registered owner of its pool, since only a holder of the last tenant appends, maps only grow, and
+  the trim stops at a held tenant -- is `Backend_intf.upload_arena_violations`; `finalize` checks it
+  after a successful cleanup under `debug_check_upload_arenas` (gh-ocannl-1462), outside the
+  flag-resetting branch and after the release hooks, and `set_values_pool_coalescing` runs with it
+  on.
   A reused tail keeps its `Buffer_key`, so the execution ledger may hold a released leaf's writer for
   it; harmless, because only `upload_slot` re-issues a location and its callers record an external
   write over it, and a ledger writer is always executed. A failed upload into an existing arena rolls

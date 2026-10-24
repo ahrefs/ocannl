@@ -1,0 +1,6 @@
+uasc: an owner holding every tenant at its location is no violation: true
+uasc: one of several owners holding them suffices: true
+uasc: a tenant whose node the owner holds only elsewhere is exactly one violation: true
+uasc: the violation names the tenant, its pool and its offset: true
+uasc: a retained arena with no owner list is a violation: true
+uasc: a retained arena with no tenant is a violation: true

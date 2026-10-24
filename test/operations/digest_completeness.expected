@@ -197,6 +197,7 @@ execution-neutral -- a check that can refuse or report, but never changes what i
   cc_backend_post_compile_timeout [read at codegen]
   cc_backend_verify_codesign [read at codegen]
   check_half_prec_constants_cutoff
+  debug_check_upload_arenas
   device_init_deadline
   hip_scratch_validation [read at codegen]
   legality_crosscheck
