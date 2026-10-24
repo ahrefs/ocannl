@@ -13,18 +13,21 @@
 # once:
 #
 #   - The exit mapping. `run` exits 1 for a failing test AND for a build that
-#     fails, and a bisect must count the second as untestable (git's skip,
-#     125), never as bad. So each step first runs `build @check` and every
-#     `--build TARGET` (name the tests' executables, so a link failure skips
-#     too); only a green build goes on to `build TARGET...`. And a verdict
+#     fails where its trace shows no failed compile step, and a bisect must
+#     count the second as untestable (git's skip, 125), never as bad. So each
+#     step first runs `build @check` and every `--build TARGET` (name the
+#     tests' executables, so a link failure skips too); only a green build
+#     goes on to `build TARGET...`, and a test run that is BUILD FAILED (65,
+#     a compile step of its own failed; gh-ocannl-1547) skips as well. And a verdict
 #     that is not the suite's -- SLOT REFUSED (75), DEVICE UNHEALTHY (69), a
 #     cap's TIMEOUT (142), INVOCATION REFUSED (2), a cancellation, a setup
 #     error, a run whose recorded verdict or commit is not the one its
 #     launcher reports -- ABORTS the bisect: the step exits 128, which `git
 #     bisect run` takes as "stop", where any of them read as bad would
-#     silently steer it. Only a run whose recorded exit is 0 or 1, equal to
-#     the launcher's own status, and whose recorded `head` is the commit under
-#     test is a verdict. A TIMEOUT aborts too: a hang cannot be told from a
+#     silently steer it. Only a run whose recorded exit is 0 or 1, the
+#     launcher's own status equal to it (or 65 over a recorded 1: BUILD
+#     FAILED), and whose recorded `head` is the commit under test is a
+#     verdict. A TIMEOUT aborts too: a hang cannot be told from a
 #     wedged device by the step, and the device probe catches the latter only
 #     at the next step's start.
 #   - The backend. OCANNL_BACKEND is required, and passed explicitly to every
@@ -373,7 +376,9 @@ bisect_step() { # <bisect dir> [label]
   builds=(${bisect_read_out[@]+"${bisect_read_out[@]}"})
   # One phase: a plain `run` of the frozen runner in the bisect's tree, read
   # through what the run itself recorded. Sets phase_rc, phase_run and
-  # phase_verdict (pass, fail, or the digest's verdict line for anything else).
+  # phase_verdict (pass, fail, build-failed for a BUILD FAILED run -- exit 65
+  # over dune's recorded 1, gh-ocannl-1547 -- or the digest's verdict line for
+  # anything else).
   bisect_phase() { # <phase> dune-build-args...
     local phase=$1 out recorded
     shift
@@ -389,7 +394,7 @@ bisect_step() { # <bisect dir> [label]
     recorded=
     [ -z "$phase_run" ] || recorded=$(cat "$phase_run/exit" 2>/dev/null)
     case $phase_rc:$recorded in
-      0:0 | 1:1) ;;
+      0:0 | 1:1 | 65:1) ;;
       *) return 0 ;;
     esac
     # The commit the run recorded is the one under test, or its verdict is
@@ -398,7 +403,7 @@ bisect_step() { # <bisect dir> [label]
       phase_verdict="the run recorded commit $(cat "$phase_run/head" 2>/dev/null || echo '(none)'), not $sha"
       return 0
     fi
-    case $phase_rc in 0) phase_verdict=pass ;; 1) phase_verdict=fail ;; esac
+    case $phase_rc in 0) phase_verdict=pass ;; 1) phase_verdict=fail ;; 65) phase_verdict=build-failed ;; esac
   }
   # Before a verdict goes back to git, which then checks the next commit out:
   # nothing a run started may still hold the tree (a descendant that left
@@ -425,7 +430,7 @@ bisect_step() { # <bisect dir> [label]
   build_run=${phase_run:--}
   case $phase_verdict in
     pass) bisect_settle ;;
-    fail)
+    fail | build-failed)
       bisect_settle
       printf '%s\t%s\tskip\t%s\t-\n' "$label" "$sha" "$build_run" >>"$dir/steps.tsv"
       echo "bisect: $label $sha: skip -- the build is red (steps/$label-build.out)" >&2
@@ -437,6 +442,14 @@ bisect_step() { # <bisect dir> [label]
   case $phase_verdict in
     pass) verdict=good ;;
     fail) verdict=bad ;;
+    # Compiled by @check yet failing to build for the targets (a link, an
+    # executable @check does not build): the tests never ran, so the commit
+    # is neither good nor bad.
+    build-failed)
+      bisect_settle
+      printf '%s\t%s\tskip\t%s\t%s\n' "$label" "$sha" "$build_run" "$test_run" >>"$dir/steps.tsv"
+      echo "bisect: $label $sha: skip -- the targets do not build (steps/$label-test.out)" >&2
+      exit 125 ;;
     *) bisect_abort "$phase_rc" "the test run of $sha is not a verdict: $phase_verdict (steps/$label-test.out)" ;;
   esac
   bisect_settle

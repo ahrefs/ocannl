@@ -53,7 +53,7 @@
 # that stopped early, or never ran (a build failure; an executable the mutation
 # left unchanged, so dune reused its result), prints STOPPED EARLY or NEVER RAN
 # (NOT COUNTED when two candidates changed) and exits 4 in place of test-run's
-# 1 ("caught") or 0 ("survived").
+# 1 ("caught"), 0 ("survived") or 65 (BUILD FAILED: a mutant that did not compile).
 # The false claims are the log's `FAIL: ` claim lines; a Verdict.fail message, which
 # prints the same line on stdout too, is listed apart under `failure messages`.
 # Exit: test-run's status, 2 for refusal, 3 for deferred/failed restoration,
@@ -651,7 +651,8 @@ sub mutate {
             if (defined $verdict) {
                 print "$verdict\n",
                     "(not evidence: the mutant was neither caught nor survived)\n";
-                $code = 4 if $code == 0 || $code == 1;
+                # 65: test-run's BUILD FAILED (gh-ocannl-1547), a mutant that did not compile.
+                $code = 4 if $code == 0 || $code == 1 || $code == 65;
             }
         } else {
             print "run: unavailable (test-run produced no digest)\n";

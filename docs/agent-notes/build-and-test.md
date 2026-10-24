@@ -1019,7 +1019,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   exit-code contract a caller branches on without parsing the log: `pass` (0); `FAIL` (dune's own
   status, with a fingerprint of the `File "…"`/`Error` lines); `INVOCATION REFUSED` (`run` and
   `wait` exit 2 — the script's usage code, shared with its own refusals, while the RECORDED status
-  — the log's `exit:` sentinel, `status`, `list` — stays dune's 1: it is what happened); `TIMEOUT`
+  — the log's `exit:` sentinel, `status`, `list` — stays dune's 1: it is what happened); `BUILD
+  FAILED` (65 over a recorded 1, gh-ocannl-1547: the run's own trace holds a process that exited
+  nonzero producing only compile artifacts — a type error, a ppx or link failure — so the tests
+  needing it never ran; the digest names the step, and a named test's `.exe.output`/`.actual` no
+  process of this run wrote as NOT this run's output, which is how a mutant that did not compile
+  once passed for a caught one and an earlier run's output for the mutant's); `TIMEOUT`
   (142, the cap's SIGALRM exit and the only code allowed to say timeout); `KILLED` (137);
   `CANCELLED` (129/130/143); `ERROR (toolchain/setup: nothing ran)` (126/127). `wait`'s own
   deadline is 124, and `status` exits 0 published / 3 running / 1 died without a verdict — it
@@ -4570,7 +4575,8 @@ three easy ways to lie; the verb encodes each once (tools/bisect-steps.sh says h
 
 - **Exit mapping.** `run` exits 1 for a red test and for a red build alike. Each step first runs
   `build @check` plus every `--build TARGET` (name the tests' executables, so a link failure counts
-  too) and only then `build <targets…>`: a red build is git's skip (125), never bad. A verdict that
+  too) and only then `build <targets…>`: a red build is git's skip (125), never bad, and so is a
+  test run that is `BUILD FAILED` (65; a build step of the targets' own failed). A verdict that
   is not the suite's — `SLOT REFUSED` (75), `DEVICE UNHEALTHY` (69), a cap's TIMEOUT (142), an
   `INVOCATION REFUSED`, a cancellation, a run that died without a verdict or whose recorded verdict
   or commit disagrees with its launcher — makes the step exit 128, which stops `git bisect run`;
