@@ -64,8 +64,12 @@ let distinct = [ 2; 4; 6 ]
    rewritten identically. Normalising the comparison instead would have made those three checks pass
    without checking what the module actually prints, which is the whole question. Dune's `(diff)` is
    a TEXT diff, so putting this process's own golden output in binary changes nothing for the
-   `.expected` on any platform. *)
-let () = Stdlib.set_binary_mode_out Stdlib.stdout true
+   `.expected` on any platform. The same holds for stderr: the value-failure details
+   (gh-ocannl-1224) are checked there byte for byte too, so a child's "\n" must reach the parent as
+   "\n" on that stream as well. *)
+let () =
+  Stdlib.set_binary_mode_out Stdlib.stdout true;
+  Stdlib.set_binary_mode_out Stdlib.stderr true
 
 let () =
   let mode =

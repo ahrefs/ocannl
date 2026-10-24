@@ -613,7 +613,10 @@ chmod +x "$fake_bin/wake-lab.sh"
 # slot's flock: one line per slot file whose non-blocking test lock fails now, in the fleet's
 # fields, of the slot's kind under the box's tokens; the holder's pid -- which the real one reads
 # from /proc/locks, absent on macOS -- from the `<slot file>.holder` file a fixture batch leaves
-# beside it, else null and named in `unknown`, as the real one says it.
+# beside it, else null and named in `unknown`, as the real one says it. The holder's command and
+# user come from /proc/<pid> where it exists, as the real one reads them, and from `ps` where it
+# does not (macOS): MSYS has a /proc but its `ps` takes no `-o`, so a `ps`-only read left Git Bash
+# a holder line with neither (gh-ocannl-1411).
 cat >"$fake_bin/fleet-worker.sh" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SWEEP_TEST_FLEET_CALLS"
@@ -678,10 +681,20 @@ case $* in
         my ($p, $pid);
         if (open($p, "<", "$dir/slot.$i.holder") and defined($pid = <$p>)) {
           chomp $pid;
-          my $args = qx{ps -o args= -p $pid 2>/dev/null};
-          chomp $args;
-          my $user = qx{ps -o user= -p $pid 2>/dev/null};
-          $user =~ s/\s+//g;
+          my ($args, $user);
+          if (open(my $c, "<", "/proc/$pid/cmdline")) {
+            local $/;
+            $args = <$c> // "";
+            $args =~ s/\0+\z//;
+            $args =~ tr/\0/ /;
+            $args =~ s/\s+/ /g;
+            $user = getpwuid((stat "/proc/$pid")[4]) // "";
+          } else {
+            $args = qx{ps -o args= -p $pid 2>/dev/null};
+            chomp $args;
+            $user = qx{ps -o user= -p $pid 2>/dev/null};
+            $user =~ s/\s+//g;
+          }
           @l{qw(pid user command)} = (0 + $pid, $user, substr($args, 0, 300));
         } else {
           $l{unknown}{$_} = "no FLOCK line names this slot file" for qw(pid user command cwd);
