@@ -839,6 +839,21 @@
 # process.
 #autotune_log_seeding=false
 
+# gh-ocannl-1560: strict replay. If true, every fissioned candidate `Autotune.tune` compiles is,
+# after its compile and link, rebuilt from the form the search would save for it -- the saved
+# split-reduce prelude decoded and applied, the saved segmentation cut, every segment's structural
+# digest checked by position against the saved one and its saved schedule applied -- exactly as a
+# winner's replay or a schedule-cache hit derives it. A form that does not replay ends the search
+# with a fatal failure naming the candidate and the refusal, whatever
+# strict_failure_classification says: the search timed code its own replay would not rebuild, the
+# class of defect behind gh-ocannl-1480 (a fold reading link-time value bounds; a segmentation
+# recorded ambiguously), which otherwise surfaces only as an untuned default shipped in the
+# winner's place. A point-in-time check: it sees the process state of that moment, so it covers what
+# the candidate's own link changed, not a later unrelated link. Whole-routine forms are not
+# checked (their replay checks no digest). Costs one extra fission and schedule application per
+# fissioned candidate, no codegen. A debugging/soak switch, read per search.
+#autotune_strict_replay=false
+
 # gh-555: budget for the greedy per-node inlining refinement of `Train.tune_placements` — after
 # the placement A/B, try flipping up to this many of the winning arm's most expensive inlining
 # decisions (materialize a policy-virtual node / inline a cap-materialized one), each accepted

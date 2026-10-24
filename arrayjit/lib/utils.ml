@@ -182,6 +182,7 @@ let known_config_keys =
       "autotune_log";
       "autotune_progress";
       "autotune_log_seeding";
+      "autotune_strict_replay";
       "tune_inline_flips";
       "tune_call_budget_seconds";
       "tune_flip_ordering";
@@ -550,6 +551,7 @@ let config_key_classification : (config_key_class * string * string list) list =
       [
         "check_half_prec_constants_cutoff";
         "legality_crosscheck";
+        "autotune_strict_replay";
         "hip_scratch_validation";
         "cc_backend_verify_codesign";
         "cc_backend_post_compile_timeout";

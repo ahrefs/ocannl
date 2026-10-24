@@ -3367,6 +3367,96 @@ let not_dispatched_origin = function
   | Outcome.Cache_replay -> "cache_replay"
   | Outcome.Candidate | Outcome.Advisory | Outcome.User_schedule -> "candidate"
 
+(* gh-ocannl-1480, gh-ocannl-1560: every whole-routine transform ahead of fission applies through
+   here -- the split-reduce prelude, in the search's candidates, their replays and the seeded plan.
+   Blind to node bounds candidates, so its trailing fold is a function of the code alone: the
+   segments fission cuts from the result are what a replay's digests check, and a bounds candidate
+   proposed by a link between a candidate's compile and the winner's replay (on GPU the search's
+   first candidate compiles before anything has linked) used to fold a gather guard in the replay
+   only -- the saved segmentation "no longer applied" and the untuned default shipped. The
+   per-segment schedules still fold against the bounds as they stand: nothing checks their
+   output. *)
+let apply_before_fission ~static_indices prelude (opt : LL.optimized) =
+  if List.is_empty prelude then opt
+  else LL.without_node_bounds (fun () -> Sched.apply_classified ~static_indices prelude opt)
+
+(* The replay a saved fissioned form compiles under ({!Sched.fission_segmented}'s [replay]): the
+   routine cut where the saved segments say, the [i]th segment given the [i]th saved schedule -- by
+   position, never by digest: the digest leaves placements out, and two segments of one structure
+   can differ in placements, hence in kind and schedule. The replay-validity check rides on the same
+   position: the segment cut there must be the one its schedule was saved against, otherwise the
+   entry no longer applies and the candidate fails (a cache replay then re-searches) rather than
+   running a segment under a schedule saved for other code. The check compares the STRUCTURAL canon
+   ([with_placements:false]): placement classes can render differently across compilation lineages
+   on byte-identical segments (decided in one, undecided in the other -- e.g. tuning with
+   [timing_ctx]), which used to fail winner replays wholesale. *)
+let saved_fission_replay ~static_indices (saved : SC.saved_segment list) =
+  let segs = Array.of_list saved in
+  let schedule i seg =
+    let seg_canon = SC.canonicalize ~static_indices ~with_placements:false seg in
+    let s = segs.(i) in
+    if not (String.equal (SC.digest seg_canon) s.SC.seg_digest) then
+      raise
+        (Outcome.Cause_at
+           ( Outcome.Transform,
+             Outcome.Illegal_schedule
+               {
+                 check = "Autotune.fission_replay";
+                 detail =
+                   Printf.sprintf
+                     "segment %d differs from the one its schedule was saved against: the saved \
+                      segmentation no longer applies"
+                     i;
+               } ));
+    Some (fst (SC.of_saved seg_canon s.SC.seg_saved))
+  in
+  (SC.segmentation_of saved, schedule)
+
+(* gh-ocannl-1560: the [autotune_strict_replay] check. Read per search, so a test can state it for
+   one search. *)
+let strict_replay_enabled () =
+  Utils.get_global_flag ~default:false ~arg_name:"autotune_strict_replay"
+
+(* Whether a fissioned candidate's saved form replays: the code a winner's replay ({!tune}'s
+   [winner_compile]) or a cache hit would derive from it -- the saved prelude decoded and applied,
+   then the saved segmentation cut with every saved schedule digest-checked by position and applied
+   -- rebuilt now, after the candidate's own link, on [base_opt] and [pristine] (a copy of the
+   candidate's compile-fork placements taken as its transform began). [None] when it replays, else
+   the refusal's detail. A whole-routine form has no segmentation to check: its replay decodes its
+   schedule against [canon] and checks no digest. Point-in-time: it sees the process state of this
+   moment, so it catches a transform reading state the candidate's own link changed
+   (gh-ocannl-1480's CUDA shape, where the first candidate's link uploads the index tensor) and any
+   encoding asymmetry between what a candidate records and what a replay reads back
+   (gh-ocannl-1480's single-kernel head zero), not state a later, unrelated link changes. *)
+let strict_replay_refusal ~static_indices ~canon ~limits ~is_gpu ~(base_opt : LL.optimized)
+    ~pristine form =
+  match form with
+  | Whole_saved _ -> None
+  | Fiss_saved segs | Split_saved (_, segs) -> (
+      let opt =
+        {
+          base_opt with
+          LL.traced_store = Hashtbl.copy base_opt.LL.traced_store;
+          LL.optimize_ctx = pristine;
+        }
+      in
+      let zero_sched tns = if is_gpu then Sched.zero_expansion ~limits tns else [] in
+      match
+        let opt =
+          match form with
+          | Split_saved (psaved, _) ->
+              apply_before_fission ~static_indices (fst (SC.of_saved canon psaved)) opt
+          | Whole_saved _ | Fiss_saved _ -> opt
+        in
+        Sched.fission_segmented ~promote_locals:is_gpu
+          ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
+          ~replay:(saved_fission_replay ~static_indices segs)
+          ~preset:(fun _ -> [])
+          ~zero_sched ~static_indices opt
+      with
+      | (_ : Sched.segmentation * _) -> None
+      | exception Outcome.Cause_at (_, cause) -> Some (Outcome.detail_of_cause cause))
+
 let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> ()) ?retain
     ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu ~provenance ctx comp bindings spec :
     gated_compile =
@@ -3411,6 +3501,14 @@ let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> (
     else []
   in
   let captured = ref None in
+  (* gh-ocannl-1560: under [autotune_strict_replay], a searched candidate's compile-fork placements
+     as its transform received them, for {!strict_replay_refusal}. *)
+  let strict_replay =
+    match provenance with
+    | Outcome.Candidate -> strict_replay_enabled ()
+    | Outcome.Cache_replay | Outcome.Advisory | Outcome.User_schedule -> false
+  in
+  let pristine = ref None in
   let compile_ctx () =
     match spec with
     | Whole flavor ->
@@ -3445,6 +3543,7 @@ let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> (
           ctx comp bindings
     | Fiss flavor ->
         let transforms fresh =
+          if strict_replay then pristine := Some (LL.copy_optimize_ctx fresh.LL.optimize_ctx);
           let opt = rebase fresh in
           (* The split-reduce prelude (gh-ocannl-484 task 3) applies whole-routine BEFORE fission:
              the partials edge it mints is what fission cuts at, giving the two passes separate
@@ -3465,29 +3564,9 @@ let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> (
                 let sched, _ = SC.of_saved canon psaved in
                 (sched, psaved)
           in
-          (* gh-ocannl-1480: blind to node bounds candidates, so the prelude's trailing fold is a
-             function of the base lowering alone. The segments fission cuts from its result are what
-             a replay's digests check, and a bounds candidate proposed by a link between the
-             candidate's compile and the winner's replay (on GPU the search's first candidate
-             compiles before anything has linked) used to fold a gather guard in the replay only:
-             the saved segmentation "no longer applied" and the untuned default shipped. The
-             per-segment schedules still fold against the bounds as they stand. *)
-          let opt =
-            if List.is_empty prelude then opt
-            else
-              LL.without_node_bounds (fun () -> Sched.apply_classified ~static_indices prelude opt)
-          in
+          let opt = apply_before_fission ~static_indices prelude opt in
           let zero_sched tns = if is_gpu then Sched.zero_expansion ~limits tns else [] in
-          (* A replay cuts where its saved segments say and gives the [i]th segment the [i]th saved
-             schedule — by position, never by digest: the digest leaves placements out, and two
-             segments of one structure can differ in placements, hence in kind and schedule. The
-             replay-validity check rides on the same position: the segment cut there must be the one
-             its schedule was saved against, otherwise the entry no longer applies and the candidate
-             fails (a cache replay then re-searches) rather than running a segment under a schedule
-             saved for other code. The check compares the STRUCTURAL canon
-             ([with_placements:false]): placement classes can render differently across compilation
-             lineages on byte-identical segments (decided in one, undecided in the other — e.g.
-             tuning with [timing_ctx]), which used to fail winner replays wholesale. The sketch
+          (* A replay cuts where its saved segments say ({!saved_fission_replay}); the sketch
              candidates replay the segmentation their seeds were enumerated under the same way
              ({!sketch_replay}). *)
           let replay =
@@ -3499,26 +3578,7 @@ let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> (
                      ~sketch:(fun p seg -> sketch_schedule ~accum_prec ~p seg)
                      plan (entries @ staff))
             | F_saved (saved, _) | F_split_saved (_, saved, _) ->
-                let saved = Array.of_list saved in
-                let schedule i seg =
-                  let seg_canon = SC.canonicalize ~static_indices ~with_placements:false seg in
-                  let s = saved.(i) in
-                  if not (String.equal (SC.digest seg_canon) s.SC.seg_digest) then
-                    raise
-                      (Outcome.Cause_at
-                         ( Outcome.Transform,
-                           Outcome.Illegal_schedule
-                             {
-                               check = "Autotune.fission_replay";
-                               detail =
-                                 Printf.sprintf
-                                   "segment %d differs from the one its schedule was saved \
-                                    against: the saved segmentation no longer applies"
-                                   i;
-                             } ));
-                  Some (fst (SC.of_saved seg_canon s.SC.seg_saved))
-                in
-                Some (SC.segmentation_of (Array.to_list saved), schedule)
+                Some (saved_fission_replay ~static_indices saved)
           in
           let preset seg =
             match flavor with
@@ -3597,8 +3657,33 @@ let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> (
   | Error failure -> Failed failure
   | Ok (cctx, routine) -> (
       match !captured with
-      | Some (form, units, all_opts, digest_after) ->
-          Compiled { form; cctx; routine; units; all_opts; digest_after }
+      | Some (form, units, all_opts, digest_after) -> (
+          let refusal =
+            match !pristine with
+            | Some pristine when strict_replay ->
+                strict_replay_refusal ~static_indices ~canon ~limits ~is_gpu ~base_opt ~pristine
+                  form
+            | Some _ | None -> None
+          in
+          match refusal with
+          | None -> Compiled { form; cctx; routine; units; all_opts; digest_after }
+          | Some detail -> (
+              (* Fatal whatever [strict_failure_classification] says: the check was asked for, and a
+                 form the search timed that its own replay refuses is what it exists to stop. *)
+              Context.release cctx;
+              match
+                Outcome.protect ~strict:true
+                  ~classify_backend:(fun _ _ -> None)
+                  ~provenance ~phase:Outcome.Transform ~candidate
+                  (fun () ->
+                    failwith
+                      (Printf.sprintf
+                         "Autotune: autotune_strict_replay: candidate %s does not replay from its \
+                          saved form (gh-ocannl-1560): %s"
+                         candidate detail))
+              with
+              | Ok (_ : compiled) -> assert false
+              | Error failure -> Failed failure))
       | None -> (
           match
             Outcome.protect
@@ -4935,9 +5020,8 @@ let seeded_split ~backend ~min_serial ~static_indices (opt : LL.optimized) =
       match
         (* Blind to node bounds, as the search's prelude is (gh-ocannl-1480): the plan's seeded
            digests are taken on these segments, and an [F_seeded] candidate replays the prelude. *)
-        LL.without_node_bounds (fun () ->
-            Sched.apply_classified ~static_indices (split_reduce_prelude sites)
-              { opt with LL.traced_store = Hashtbl.copy opt.LL.traced_store })
+        apply_before_fission ~static_indices (split_reduce_prelude sites)
+          { opt with LL.traced_store = Hashtbl.copy opt.LL.traced_store }
       with
       | split_opt ->
           logf "seeded_default: %d reduction(s) split: %s" (List.length sites)

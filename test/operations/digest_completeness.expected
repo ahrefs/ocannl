@@ -193,6 +193,7 @@ execution-neutral -- ppx_minidebug logging of the library's own execution
   toc_entry_minimal_span
 
 execution-neutral -- a check that can refuse or report, but never changes what is emitted
+  autotune_strict_replay
   cc_backend_post_compile_timeout [read at codegen]
   cc_backend_verify_codesign [read at codegen]
   check_half_prec_constants_cutoff

@@ -7170,6 +7170,23 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1560: a seeded crown whose split prelude runs before fission replays as timed (the
+; CUDA/HIP shape of gh-ocannl-1480, end to end), and autotune_strict_replay checks every fissioned
+; candidate's saved form replays.
+
+(test
+ ; cc-vector-width: independent -- its claims are search completion and ship outcomes on scripted
+ ; timings, and outputs over inputs any summation order computes exactly, alike at every width.
+ (name tune_strict_replay)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules tune_strict_replay)
+ (libraries base ocannl stdio arrayjit.verdict ll_test scripted_search)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-1480: arm A's crowned schedule ships as it was timed after arm B has searched -- cold,
 ; warm, placement store bypassed, forced, with a timing_ctx, and through Autotune.tune_deferred.
 

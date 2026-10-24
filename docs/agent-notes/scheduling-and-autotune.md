@@ -2171,7 +2171,31 @@ files.
   default. The search's and the seeded plan's preludes now apply under
   `Low_level.without_node_bounds`; per-segment schedules still fold against the live bounds,
   since only the pre-schedule segments are digest-checked. A new whole-routine transform ahead of
-  fission gets the same scope. Less folding is always sound.
+  fission applies through `Autotune.apply_before_fission`, which owns the scope. Less folding is
+  always sound.
+- **The pre-fission audit (gh-ocannl-1560): only the split prelude read the bounds.** What runs
+  between the base lowering and the digest check, and whether it reads a node's bounds candidate
+  (`Low_level.interval_of_node`, reached through every `ienv` whose `node_bounds` is set:
+  `simplify_llc`, `rewrite_one_hot_reductions`' `guard_conjuncts`): (1) the base lowering
+  (`optimize`: inlining, the one-hot rewrite, `simplify_llc`) reads them, but `tune` captures it
+  once per call and every candidate and the in-call winner replay rebase on it, so it cannot
+  diverge within a call; across calls its canonical digest IS the cache key (`source_digest`),
+  so a base lowered after a link folds into a different key -- a miss and a fresh search, never a
+  mis-replay; (2) the split-reduce prelude (`F_split`, `F_split_saved`, `F_seeded`, and
+  `seeded_split` deriving the plan) read them through `Schedule.apply`'s trailing simplify -- the
+  gh-ocannl-1480 fix; (3) inside `Schedule.fission_segmented` before the cut, the Local
+  promotions touch placements only (the replay digest is structural), `collect_units`,
+  `group_units`, `resolve_scope_crossings` and `segments_of_plan` are structural, and a folded
+  zero's `expand` (`probe_opt_op` of `Expand_zero`) builds a zero-writing loop nest and folds
+  nothing; (4)
+  `segment_optimized` filters metadata and simplifies nothing. After the cut the per-segment
+  schedules fold against the live bounds, a Whole form's replay checks no digest, and a post-
+  schedule digest only deduplicates, so a later fold there drops a run-time guard and changes no
+  verdict. `autotune_strict_replay=true` checks this at run time: each fissioned candidate is
+  rebuilt from its saved form after its own link, as a replay would, and a refusal is fatal
+  (`test/operations/tune_strict_replay`, which also runs the CUDA/HIP prelude case end to end --
+  its search must be the first thing in the process to touch the ids, since a device run before it
+  uploads them and the BASE lowering then folds the guard, leaving nothing for a replay to fold).
 - **What a cache entry says is input, so its refusals are typed** (gh-ocannl-1242). The rule above
   holds for every raise a replay can reach: `SC.of_saved`'s dangling symbol reference and
   `SC.tn_of_ref`'s out-of-range node index raise `Cause_at (Transform, Illegal_schedule
