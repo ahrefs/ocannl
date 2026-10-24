@@ -165,11 +165,15 @@ files.
   buffer for the same node vouches for nothing here (the run context's node-level
   `initialized_nodes` is deliberately not consulted for this class), and a caller dropping the
   context `run` returned loses nothing. `rollback_execution` withdraws exactly the keys the
-  rolled-back run introduced (`fresh_writes`). Allocation-time zeros no longer count. A read-only
-  input is still accepted once merely allocated, because read-only gradient accumulators
-  legitimately start at zero. Before, any allocated buffer passed, and since `compile` allocates
-  every input, the check fired only for a routine run in a context that had not compiled it.
-  Hand-built tests that accumulate from zero therefore seed the accumulator (`peel_census`); state
+  rolled-back run introduced (`fresh_writes`). Allocation-time zeros no longer count. A READ-ONLY
+  input must be written the same way unless `Tnode.zero_valid` declares zero its correct value
+  (gh-ocannl-1462): `Tensor` marks every gradient at creation (both sites, `op` and
+  `force_param_diff`), `Tnode.mark_zero_valid` marks any other read-only accumulator, and the mark
+  never excuses read-before-write state. Before, a read-only input passed once merely allocated, and
+  since `compile` allocates every input a forgotten data input read zeros. A node every routine only
+  reads may live in a device-wide constant pool that compile siblings SHARE, so a sibling-seeding
+  test makes it `context_owned` to get a buffer per sibling (`chr_read_only_buffer`). Hand-built
+  tests that accumulate from zero therefore seed the accumulator (`peel_census`) or mark it; state
   meant to start from zero inside a model is an inline declaration, an embedded node excluded from
   `inputs` (`Train.sgd_one`'s momentum). An SGD step compiled without `Train.init_params` never
   reaches this check: linking already refuses a parameter the prior context lacks.

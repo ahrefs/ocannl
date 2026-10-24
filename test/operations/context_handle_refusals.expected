@@ -41,4 +41,13 @@ chr_sibling_seed: the seeded sibling's context names the counter initialized: tr
 chr_sibling_seed: the other sibling's routine is refused even run in that context: true
 chr_rollback: after the writer's run is rolled back, the counter is unwritten again: true
 chr_read_only: the source is a read-only input: true
-chr_read_only: an allocated, never-written read-only input runs from zero: true
+chr_read_only: an allocated, never-written, unmarked read-only input is refused: true
+chr_read_only: seeded, it runs from the seed: true
+chr_zero_valid: a read-only input marked zero-valid runs from its allocation-time zeros: true
+chr_zero_valid: a zero-valid read-before-write input is still refused until seeded: true
+chr_read_only_buffer: a sibling seeding its own buffer does not let the other's routine run: true
+chr_read_only_buffer: the consumer reads the producer's output read-only: true
+chr_read_only_buffer: after the producer's run is rolled back, the input is unwritten again: true
+chr_grad_zero_valid: a tensor's gradient is zero-valid: true
+chr_grad_zero_valid: a parameter's gradient is zero-valid: true
+chr_grad_zero_valid: the value nodes are not: true

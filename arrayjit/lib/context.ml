@@ -660,25 +660,23 @@ let check_lineage_runnable ctx routine =
      declaration is an embedded node, excluded from [inputs] at compile ([Train.sgd_one]'s momentum
      is the pattern) -- or is seeded explicitly.
 
-     A READ-ONLY input is accepted once it is allocated in the running context's device buffers
-     ([in_backend]): such inputs are either user-set via [set_values]/[from_host] (which write the
-     allocated buffer in place) or zero-initialized at allocation, which is the correct identity for
-     read-only accumulators (e.g. gradients). NOTE (Codex P1): this does not distinguish a forgotten
-     non-zero data input from a zero-valid accumulator — both are read-only buffers allocated with
-     [~zero_init:true] — so a forgotten data input reads zeros rather than failing. Catching that
-     precisely needs per-node "needs-nonzero-init" metadata OCANNL does not currently carry; a
-     stricter check produces false positives on read-only accumulator gradients (zero2hero_1of7,
-     primitive_ops). *)
-  let ctx_buffers = Backends.query ctx.wrapped { q = (fun _ c -> c.BI.ctx_buffers) } in
-  let in_backend tn = Map.mem ctx_buffers tn in
-  let written tn =
-    Option.exists (buffer_key routine.context tn) ~f:(Set.mem ctx.ledger.written_buffers)
+     A READ-ONLY input must have been written the same way, unless allocation-time zero is declared
+     a correct value of it ([Tn.is_zero_valid], gh-ocannl-1462): every gradient is marked at
+     creation, being an accumulator, and [Tn.mark_zero_valid] marks any other. Before, a read-only
+     input was accepted once merely allocated, and since [compile] allocates every input the check
+     accepted nearly anything, so a forgotten data input read zeros. Neither the running context's
+     allocation nor its node-level [initialized_nodes] vouches for the buffer either: a compile
+     sibling that seeded its own buffer for the node says nothing about this one. The mark excuses
+     only the read-only class: a read-before-write input is state the routine overwrites, and its
+     entry value is the caller's to give. *)
+  let accepted tn =
+    match buffer_key routine.context tn with
+    | None -> false
+    | Some key ->
+        Set.mem ctx.ledger.written_buffers key
+        || ((not (Set.mem routine.outputs tn)) && Tn.is_zero_valid tn)
   in
-  let missing_inputs =
-    Set.filter routine.inputs ~f:(fun tn ->
-        if Set.mem routine.outputs tn then not (written tn)
-        else not (Set.mem ctx.initialized_nodes tn || in_backend tn))
-  in
+  let missing_inputs = Set.filter routine.inputs ~f:(fun tn -> not (accepted tn)) in
   (if not (Set.is_empty missing_inputs) then
      let missing_names =
        Set.to_list missing_inputs
@@ -690,7 +688,9 @@ let check_lineage_runnable ctx routine =
      @@ Utils.User_error
           (Printf.sprintf
              "Context.run: routine %s: required input nodes not initialized: %s. Seed them (e.g. \
-              Context.set_values, or a routine writing them run first) before running."
+              Context.set_values, or a routine writing them run first) before running; a read-only \
+              input whose allocation-time zeros are its correct value can instead be declared so \
+              with Ir.Tnode.mark_zero_valid."
              routine.name missing_names));
 
   (* Check execution dependencies *)

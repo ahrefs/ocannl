@@ -277,6 +277,11 @@ let () =
     (refused ~needle:"chr_ctr_rb (read before written)" (fun () -> Context.run c_bump r_bump));
   Context.release c_bump
 
+(* gh-ocannl-1462: a READ-ONLY input must be written too, unless allocation-time zero is declared
+   its correct value. Before, it was accepted once allocated -- and [compile] allocates every input
+   -- so a forgotten data input read zeros. *)
+let ro_refused name f = refused ~needle:("not initialized: " ^ name) f
+
 let () =
   Verdict.case "chr_read_only" @@ fun () ->
   let base = Context.auto () in
@@ -284,8 +289,76 @@ let () =
   let c, r = link_shift ~ctx:base ~name:"chr_ro" ~src:x ~dst:out () in
   pf "chr_read_only: the source is a read-only input"
     (Set.mem r.Context.inputs x && not (Set.mem r.Context.outputs x));
-  (* Deliberate: a read-only input is accepted on its allocation-time zeros. *)
-  let c = Context.run c r in
-  pf "chr_read_only: an allocated, never-written read-only input runs from zero"
-    (Poly.equal (Context.get_values c out) [| 1.; 2.; 3.; 4. |]);
+  pf "chr_read_only: an allocated, never-written, unmarked read-only input is refused"
+    (ro_refused "chr_ro_x." (fun () -> Context.run c r));
+  let c = Context.run (Context.set_values c x seed) r in
+  pf "chr_read_only: seeded, it runs from the seed" (Poly.equal (Context.get_values c out) shifted);
   Context.release c
+
+let () =
+  Verdict.case "chr_zero_valid" @@ fun () ->
+  let base = Context.auto () in
+  let x = node "chr_zv_x" and out = node "chr_zv_out" in
+  Ir.Tnode.mark_zero_valid x;
+  let c, r = link_shift ~ctx:base ~name:"chr_zv" ~src:x ~dst:out () in
+  let c = Context.run c r in
+  pf "chr_zero_valid: a read-only input marked zero-valid runs from its allocation-time zeros"
+    (Poly.equal (Context.get_values c out) [| 1.; 2.; 3.; 4. |]);
+  Context.release c;
+  (* The mark does not excuse state the routine overwrites. *)
+  let ctr = node "chr_zv_ctr" in
+  Ll_test.materialize ctr;
+  Ir.Tnode.mark_zero_valid ctr;
+  let o = Ll_test.optimize ~materialized:[ ctr ] ~name:"chr_zv_bump" (bump ctr) in
+  let c, r = Ll_test.link ~ctx:base ~name:"chr_zv_bump" o in
+  pf "chr_zero_valid: a zero-valid read-before-write input is still refused until seeded"
+    (refused ~needle:"chr_zv_ctr (read before written)" (fun () -> Context.run c r));
+  Context.release c
+
+(* What vouches for a read-only input is the buffer the routine binds, as for read-before-write
+   state: a compile sibling's seeded buffer for the same node does not, and neither does a producer
+   whose run was rolled back. *)
+let () =
+  Verdict.case "chr_read_only_buffer" @@ fun () ->
+  let base = Context.auto () in
+  let x = node "chr_rob_x" and out = node "chr_rob_out" in
+  (* Context-owned, so each sibling binds working storage of its own: a node every routine only
+     reads may otherwise live in one device-wide constant pool, which the siblings share. *)
+  Ir.Tnode.set_context_owned x;
+  let c_a, _r_a = link_shift ~ctx:base ~name:"chr_rob_a" ~src:x ~dst:out () in
+  let c_b, r_b = link_shift ~ctx:base ~name:"chr_rob_b" ~src:x ~dst:out () in
+  let c_a = Context.set_values c_a x seed in
+  pf "chr_read_only_buffer: a sibling seeding its own buffer does not let the other's routine run"
+    (ro_refused "chr_rob_x." (fun () -> Context.run c_a r_b));
+  Context.release c_a;
+  Context.release c_b;
+  let src = node "chr_rob_src" in
+  Ll_test.materialize src;
+  let lctx = LL.empty_optimize_ctx () in
+  let o_fill = Ll_test.optimize_in lctx ~materialized:[ src ] ~name:"chr_rob_fill" (fill src) in
+  let c_fill, r_fill = Ll_test.link ~ctx:base ~name:"chr_rob_fill" o_fill in
+  let c_use, r_use =
+    link_shift ~lctx ~ctx:c_fill ~name:"chr_rob_use" ~src ~dst:(node "chr_rob_use_out") ()
+  in
+  pf "chr_read_only_buffer: the consumer reads the producer's output read-only"
+    (Set.mem r_use.Context.inputs src && not (Set.mem r_use.Context.outputs src));
+  ignore (Context.run c_fill r_fill : Context.t);
+  Context.sync c_fill;
+  Context.rollback_execution c_fill r_fill.Context.routine_id;
+  pf "chr_read_only_buffer: after the producer's run is rolled back, the input is unwritten again"
+    (ro_refused "chr_rob_src." (fun () -> Context.run c_use r_use));
+  Context.release c_use
+
+(* Both gradient creation sites mark the gradient zero-valid: a tensor's own ([Tensor.op]) and a
+   parameter's ([Tensor.param], which replaces it). *)
+let () =
+  Verdict.case "chr_grad_zero_valid" @@ fun () ->
+  let open Ocannl.Operation.DSL_modules in
+  let grad_marked (t : Tensor.t) =
+    Option.exists t.Tensor.diff ~f:(fun d -> Ir.Tnode.is_zero_valid d.Tensor.grad)
+  in
+  let t = Tensor.term_init [| 1.; 2. |] ~grad_spec:Tensor.Require_grad () in
+  let w = TDSL.param "chr_w" () in
+  pf "chr_grad_zero_valid: a tensor's gradient is zero-valid" (grad_marked t);
+  pf "chr_grad_zero_valid: a parameter's gradient is zero-valid" (grad_marked w);
+  pf "chr_grad_zero_valid: the value nodes are not" (not (Ir.Tnode.is_zero_valid w.Tensor.value))

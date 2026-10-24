@@ -274,14 +274,17 @@ val decision_surface :
 val run : t -> routine -> t
 (** Execute a compiled routine. Mutates buffers in-place. Returns updated context with newly
     initialized nodes tracked. Raises [Failure] if execution dependencies are not satisfied, and
-    {!Ir.Utils.User_error} if [t] was {!release}d, or the routine's compile context was and [t] is
-    not a live upload fork of it (a fork reference-counts the routine's buffers), or if a required
-    input was never initialized. A {e read-before-write} input — one the routine reads and then
-    writes, such as a counter or a running statistic — must have been written by something in this
-    lineage (a run, an upload, a device copy): its allocation-time zeros do not count
-    (gh-ocannl-1339). State meant to start from zero declares that in its own computation (an inline
-    declaration, embedded in the routine) or is seeded with {!set_values}. A read-only input is
-    accepted once it is allocated, since zero is the right initial value of a read-only accumulator.
+    {!Ir.Utils.User_error} if [t] was {!release}d (or a lifecycle ancestor of it was), or the
+    routine's compile context was and [t] is not a live upload fork of it (a fork reference-counts
+    the routine's buffers), or if a required input was never initialized. A {e read-before-write}
+    input — one the routine reads and then writes, such as a counter or a running statistic — must
+    have been written by something in this lineage (a run, an upload, a device copy): its
+    allocation-time zeros do not count (gh-ocannl-1339). State meant to start from zero declares
+    that in its own computation (an inline declaration, embedded in the routine) or is seeded with
+    {!set_values}. A read-only input must have been written the same way -- the buffer the routine
+    binds, not merely the node in some context -- unless allocation-time zero is declared its
+    correct value ({!Ir.Tnode.mark_zero_valid}; every gradient is marked at creation, being an
+    accumulator), so a forgotten data input is refused rather than read as zeros (gh-ocannl-1462).
 
     The routine's static-index bindings are read HERE, not when the device gets to the work: the
     dispatch carries the values they hold at this call, so a caller may rebind them for the next run
