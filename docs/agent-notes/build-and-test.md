@@ -4772,6 +4772,20 @@ box.
   not last, since the last line also carries the list's closing parentheses and every appender
   edits it.
 
+- A mechanism a GPU policy gates gets a cc-runnable structural leg whenever its premise can be
+  synthesized, beside the executed GPU legs (gh-ocannl-1275). Per-PR CI runs cc, and on cc a
+  GPU-gated premise is `Verdict.skipped`, so every later claim of that section exercises the
+  mechanism's absence. Section 6 of `fission_replay_segmentation` replayed an UNFOLDED segmentation
+  on cc, and a reintroduced replay policy gate passed there. The synthetic premise is the GPU
+  pipeline called with an explicit policy whatever the host: `Sched.default_gpu`,
+  `Sched.zero_expansion` and `~promote_locals:true` at `Ir.Backend_intf.no_hardware_limits` and an
+  explicit `~min_parallel:1`, so the leg reads no ambient threshold. The leg asserts its premise
+  unskipped (here: a `Normal` segment opening with the per-cell zero, carrying a non-empty
+  schedule, so the reconstruction claim cannot compare two empty schedules). Then it claims
+  structurally: canonical digests and reconstructed schedules (`SC.save_segments` on both sides). It
+  needs a negative control that turns it red on cc: the policy-gate mutant there. `qkv_zero_init`'s
+  sketch-escape leg (gh-ocannl-1043) is the earlier instance.
+
 - `refused_action_streams` (gh-ocannl-1005) holds accepted-failure Dune actions to the same
   stream contract as fresh-child controls: a run whose owning executable directly declares
   `arrayjit.verdict` and accepts a nonzero exit must capture or drop both streams on its own action
