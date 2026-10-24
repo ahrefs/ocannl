@@ -2290,7 +2290,18 @@ files.
   the same reason (`Train.tune_placements`' `persist`). The budget is `Search_shaping`, so a cut
   `best_steps` serves early stopping only under the same budget value. A test places a cut with the
   `Autotune.budget_elapsed` seam's virtual clock, never with a wall clock
-  (`test/operations/autotune_budget.ml`). On a small cc chain the default seed dedups against the
+  (`test/operations/autotune_budget.ml`). **The budget bounds wall time, not only the last start**
+  (gh-ocannl-1556): checked only as attempts started, a 120 s budget ran 452 s on tuf, the slow
+  candidate in flight finishing its whole compile and timing. Now an attempt also does not start
+  when the elapsed time plus the costliest candidate compile so far (`costliest_compile_s`, on the
+  same clock; the base compile is not evidence, so the first candidate compile is unprojected)
+  would pass it, and a non-floor candidate's timing is abandoned before its first batch past it
+  (`time_routine ?stop`, raising `Timing_stopped`, caught inside the candidate's failure boundary
+  as an unranked `Ok None`, not a decline). The stop is strict (`elapsed > b`) and the projection
+  admits an exact fit, so a virtual clock that charges a whole attempt as it starts (the scripted
+  harness's attempt clock) cuts exactly where it did. `test/operations/autotune_budget_overrun.ml`
+  charges compiles through the compile observer and timing batches as budget reads after
+  `on_candidate_preflight`; the stated tolerance is in `ocannl_config.reference`. On a small cc chain the default seed dedups against the
   baseline, so check the floor's TIME (`default_ms`), not its label. Every report carries the
   budget its call resolved (`budget_s`, gh-ocannl-1438) -- the call's, where a replay's
   `budget_cut` is the crown's -- and benchmark arms carry it as `budget_s`. It is deliberately not

@@ -760,15 +760,20 @@
 # or negative means none. Measured from the start of the call, it is checked as each candidate
 # attempt starts: once it is spent, no further candidate is compiled or timed -- the rest of the
 # seed pass, the composites, the playoff and the beam rounds are skipped -- and the search crowns
-# its incumbent, then compiles and ships it as a completed search would. The untuned floors are
+# its incumbent, then compiles and ships it as a completed search would. A compile cannot be
+# cancelled, so an attempt also does not start when the elapsed time plus the costliest candidate
+# compile of the search so far would pass the budget (gh-ocannl-1556), and a candidate's timing is
+# abandoned, unranked, before its first batch past the budget. The untuned floors are
 # exempt, so a cut search still measures what the caller would get without tuning and crowns
 # nothing slower: the seeded untuned plan (CUDA/HIP) and the default-pipeline seed. Where no
 # candidate reproduces the untuned default (automatic scheduling with schedule_fission=false and
 # no seeded plan), or the floor's windows were refused, a cut search ships the untuned default
-# and stores nothing instead of crowning what it reached (its report's best_ms is then infinite). The budget
-# bounds when the last attempt STARTS, so a search can overrun it by the candidate in flight, the
-# exempt floors and the winner's compile; the base compile before the first check is not bounded
-# either. Each search has its own budget: `Train.tune_placements` runs one per placement arm
+# and stores nothing instead of crowning what it reached (its report's best_ms is then infinite).
+# The tolerance: a search overruns its budget by at most the excess of the compile in flight over
+# the costliest one before it (the whole first candidate compile, which has nothing to project
+# from), one timing batch (a calibration probe or a timed window's batch, ~10 ms of launches on a
+# GPU, or one run of a routine slower than that), the exempt floors and the winner's recompile;
+# the base compile before the first check is not bounded either. Each search has its own budget: `Train.tune_placements` runs one per placement arm
 # (plus one per flip), so a step's tuning can take a multiple of it -- tune_call_budget_seconds
 # below bounds the whole call. A cut search's crown is
 # stored when its timings were clean, marked as cut (the report's and the cache entry's
@@ -787,13 +792,13 @@
 # searched plus the flip slots still planned, tune_inline_flips or the decision surface's
 # alternatives if fewer), so the time a cache hit or a short search leaves goes to the searches
 # after it. A search is cut at the tighter of its share and autotune_budget_seconds, by that key's
-# rule (attempts checked as they start, the untuned floors exempt, a cut crown stored as cut and
-# replayed only by a budgeted call). Both placement arms are always searched -- they are the
-# call's floor, and a spent budget leaves arm B only its untuned floors -- while the flip
-# refinement stops, before any further alternative, once the budget is spent. The budget is
-# cooperative: compiles and timing windows cannot be cancelled, so the call can overrun it by each
-# search's own overrun (its base compile, the candidate in flight, the exempt floors), by arm B's
-# floors when arm A spent everything, and by the shipped routine's compile. A decision reached
+# rule (attempts checked as they start, a compile projected, a timing stopped past it, the untuned
+# floors exempt, a cut crown stored as cut and replayed only by a budgeted call). Both placement
+# arms are always searched -- they are the call's floor, and a spent budget leaves arm B only its
+# untuned floors -- while the flip refinement stops, before any further alternative, once the
+# budget is spent. The budget is cooperative: a compile cannot be cancelled, so the call can
+# overrun it by each search's own tolerance (stated at autotune_budget_seconds), by arm B's floors
+# when arm A spent everything, and by the shipped routine's compile. A decision reached
 # over a cut search is not recorded in the placement store. `?call_budget` on
 # `Train.tune_placements` overrides it for one call.
 #tune_call_budget_seconds=
