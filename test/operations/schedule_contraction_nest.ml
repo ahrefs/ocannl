@@ -237,25 +237,28 @@ let leg ~tag ~ko_extents ~nk ?(companion = false) ~build () =
   in
   let cpu_seeds = unfused_seeds ~is_gpu:false ~is_cpu:true ~limits:cpu_limits opt in
   let cpu_valid, cpu_invalid = constructs_and_validates ~tag ~what:"CPU" cpu_seeds opt in
-  (* The CPU pipelines carry no companion coverage ([companion_geometry] is consulted by the GPU
-     pipelines only), so on a site with a companion nest the pool-parallel CPU shapes -- the ones
-     binding a Grid dimension -- decline at validation and are skipped, exactly as on a
-     single-axis site; the all-serial shapes validate. *)
-  (* Quantified over the whole CPU family rather than over the declines (gh-ocannl-729): on a leg
-     with no companion nest nothing declines, and "every decline binds a Grid dimension" is then a
-     claim about an empty set -- a golden line byte-identical to a checked one. Over [cpu_seeds] it
-     says the same thing and is evaluated on every leg. The membership test comes first so that
-     [binds_hardware], which re-applies the schedule, still runs only on the declines. *)
+  (* The CPU pipelines give a companion nest no geometry, so the shapes binding a hardware dimension
+     -- the pool-parallel Grid shapes and the whole-triple form's Workgroup lane -- cannot build
+     beside one. They used to be seeded and decline at validation; since gh-ocannl-1561 the family
+     tree refutes them at seeding, naming the companion, so every seeded CPU seed validates on every
+     leg, and the companion leg finds the refutation in the tree instead. *)
+  (* Quantified over the whole CPU family (gh-ocannl-729). The membership test comes first so that
+     [binds_hardware], which re-applies the schedule, runs only on the declines. *)
   p_none (tag ^ ": every CPU seed binding no hardware dimension validates") cpu_seeds ~f:(fun q ->
       List.mem cpu_invalid q ~equal:phys_equal && fst (binds_hardware q opt) = 1);
-  if not companion then p_empty (tag ^ ": every CPU seed validates") ~over:cpu_seeds cpu_invalid
-  else if on_gpu then
-    (* Built under no-limits here, the CPU family has no Grid shapes to decline. *)
-    skipped (tag ^ ": the Grid-bound CPU shapes decline on the uncovered companion")
-  else
-    p
-      (tag ^ ": the Grid-bound CPU shapes decline on the uncovered companion")
-      (not (List.is_empty cpu_invalid));
+  p_empty (tag ^ ": every CPU seed validates") ~over:cpu_seeds cpu_invalid;
+  (if companion then
+     let claim = tag ^ ": the seeding refutes the hardware-binding CPU shapes on the companion" in
+     if on_gpu then
+       (* Built under no-limits here, the CPU family has no tensorized shapes to refute. *)
+       skipped claim
+     else
+       p claim
+         (match fst (Autotune.family_seeding ~is_gpu:false ~is_cpu:true ~limits:cpu_limits opt) with
+         | Autotune.Seeding_matmul { tree; _ } ->
+             List.exists (Ir.Schedule_space.refutations tree) ~f:(fun (_, w) ->
+                 String.is_substring w ~substring:"gh-ocannl-1561")
+         | Autotune.Seeding_conv _ | Autotune.Seeding_none -> false));
   (* Returns the seeds whose routine rendered tensorized per its mma census (gh-ocannl-1283): a
      tensorized seed whose [Tile_mma] declined to the scalar fallback still matches bitwise. *)
   let execute ~what seeds =

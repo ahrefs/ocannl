@@ -1802,6 +1802,51 @@ let matmul_coverage_witness ~(opt : LL.optimized) ~(fused : bool) (site : matmul
   | Ok _ -> None
   | Error why -> Some (Printf.sprintf "GPU matmul companion coverage (gh-521): %s" why)
 
+(* The CPU analog of the rule above, for the CPU tensorized flavors that bind a hardware dimension
+   (gh-ocannl-1561): the whole-triple form's [Workgroup] lane — the zeroing's column loop and the
+   [Tensorize] lane at the full column extent [m_nj], so active at every seeded extent — plus its
+   [Grid] row split under [sk_bm > 0], and the packed Grid shapes' row-block loop (at least two
+   blocks, so active). The builders annotate only the accumulation nest and the output zero they
+   expand; they give companions no geometry, so where a nest writing a materialized node remains
+   beside them, [validate_parallel] rejects the candidate at every compile (every hardware index
+   would execute the companion). The packed Serial and Hoisted shapes bind nothing (all-serial
+   loops, a unit lane) and stay unaffected. The demand is the GPU rule's, with the fused flavor's
+   epilogue tail skipped (the fusion relocates it into the accumulation nest) and a whole-node zero
+   of the output excluded; its emptiness, not an alignment, decides, since no CPU builder gives a
+   companion the site's geometry. Before this, a whole-routine search over a matmul with any
+   materialized companion -- footprint_diagonal's product read through its diagonal, in the
+   materialize-all arm -- offered [W_sketch[mma-cpu 0x0x0]] (the whole-triple form: [0] is the
+   unsplit row, not a size) and paid a failed compile for it. The [F_sketch] granularity, where
+   fission leaves the matmul alone in its segment, keeps the form. [None] when nothing would be left
+   uncovered, else the companions' materialized writes. *)
+let cpu_mma_companion_writes ~(opt : LL.optimized) ~(fused : bool) (site : matmul_site) :
+    string option =
+  match
+    companion_demand ~site_syms:(matmul_site_chain site)
+      ~skip:(if fused then epilogue_tail_loop_syms ~target:site.m_d opt else [])
+      ~expanded_zeros:(if site.m_zeroed then [ site.m_d ] else [])
+      opt
+  with
+  | [] -> None
+  | needs ->
+      let plc = opt.LL.optimize_ctx.LL.placements in
+      (* Node names deduplicated: a companion reduction's zero and its accumulation write one
+         node. *)
+      Some
+        (Printf.sprintf "%d companion nest(s) writing materialized %s" (List.length needs)
+           (String.concat ~sep:"; "
+              (List.dedup_and_sort ~compare:String.compare
+                 (List.map needs ~f:(materialized_writes ~plc)))))
+
+(* The refutation of a CPU tensorized flavor whose [what] binds a hardware dimension, given
+   {!cpu_mma_companion_writes}' verdict. *)
+let cpu_mma_companion_witness ~what companions =
+  Option.map companions ~f:(fun c ->
+      Printf.sprintf
+        "CPU matmul companion coverage (gh-ocannl-1561): %s binds a hardware dimension, and %s \
+         outside it, which validate_parallel rejects"
+        what c)
+
 (* Chain-position roles matching [matmul_site_chain]: row/column positions get the pipeline's
    geometry; batch positions stay [Serial] by default (serial loops above hardware loops are legal:
    hardware loops bind, not iterate) and become whole-loop [Grid] axes under the [sk_batch_grid]
@@ -3272,11 +3317,12 @@ let interval_axis ~(axis : [ `Bm | `Bk ]) ~(values : int array)
 
 (* One epilogue-fusion flavor of the matmul family: the pipeline level and everything below it.
    [fused] selects the leaves' [sk_epilogue] and the flavor's own companion-coverage verdict
-   ([coverage_witness], owned by {!matmul_family_tree} so that the flavors can share it). *)
+   ([coverage_witness], owned by {!matmul_family_tree} so that the flavors can share it), and the
+   CPU tensorized flavors' ([cpu_companions], {!cpu_mma_companion_writes}). *)
 let matmul_flavor_tree ?(coalesced : coalesce_layout option)
     ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~is_gpu ~is_cpu
     ~(limits : Ir.Backend_intf.hardware_limits) ~(coverage_witness : string option Lazy.t)
-    ~(fused : bool) site : family_tree =
+    ~(cpu_companions : string option Lazy.t) ~(fused : bool) site : family_tree =
   (* Builder preconditions statically decidable at tree construction (gh-ocannl-577): rules the
      schedule builders settle identically for every tile completion refute here, with their
      witnesses, instead of failing candidate by candidate at build — the same lift phase 2 gave the
@@ -3931,16 +3977,24 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
             in
             let whole_child =
               refute_unless
-                [
-                  ( site.m_row_stride = 1,
-                    strided_row_in_place_witness site ~what:"the whole-triple form" );
-                  ( not tb_in_place,
-                    "stored B is transposed: whole-triple reads B in place, which the register \
-                     tiling statically declines" );
-                  ( lanes_fit site.m_nj,
-                    Printf.sprintf "column extent n=%d is below one vector of lanes (%d)" site.m_nj
-                      lanes );
-                ]
+                ([
+                   ( site.m_row_stride = 1,
+                     strided_row_in_place_witness site ~what:"the whole-triple form" );
+                   ( not tb_in_place,
+                     "stored B is transposed: whole-triple reads B in place, which the register \
+                      tiling statically declines" );
+                   ( lanes_fit site.m_nj,
+                     Printf.sprintf "column extent n=%d is below one vector of lanes (%d)" site.m_nj
+                       lanes );
+                 ]
+                @
+                (* Every [bm] of the form keeps the lane, so the verdict is the form's. *)
+                match
+                  cpu_mma_companion_witness ~what:"the whole-triple form's Workgroup lane"
+                    (Lazy.force cpu_companions)
+                with
+                | Some w -> [ (false, w) ]
+                | None -> [])
                 (fun () ->
                   match site.m_tb with
                   | None ->
@@ -4024,6 +4078,17 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                       full_div,
                       tiles_bytes ))
               in
+              (* What refutes every Grid shape whatever its geometry: a configuration that renders
+                 Grid loops serially, or a companion the row-block loop would leave uncovered
+                 ({!cpu_mma_companion_writes}). *)
+              let grid_refutation =
+                lazy
+                  (match Lazy.force cpu_grid_rendering_disabled with
+                  | Some _ as w -> w
+                  | None ->
+                      cpu_mma_companion_witness ~what:"the packed Grid shape's row-block loop"
+                        (Lazy.force cpu_companions))
+              in
               let grid_ok p = blocks_of site.m_ni p.sk_bm >= 2 in
               let too_few_blocks p =
                 Printf.sprintf "bm=%d gives %d row block(s); a Grid split needs at least 2" p.sk_bm
@@ -4102,8 +4167,8 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                     else Sspace.Refuted no_constant );
                   ( Family_decision.Packing_shape `Hoisted_grid,
                     if not any_hoistable then Sspace.Refuted no_constant
-                    else if Option.is_some (Lazy.force cpu_grid_rendering_disabled) then
-                      Sspace.Refuted (Option.value_exn (Lazy.force cpu_grid_rendering_disabled))
+                    else if Option.is_some (Lazy.force grid_refutation) then
+                      Sspace.Refuted (Option.value_exn (Lazy.force grid_refutation))
                     else if site.m_row_stride > 1 then
                       (* A strided-row site's A is never [site_hoistable], so this shape omits its
                          stage. *)
@@ -4143,8 +4208,8 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                               else leaf { p with sk_hoist = true; sk_grid = true })) );
                   ( Family_decision.Packing_shape `Hoisted_grid_pack_rest,
                     if not any_hoistable then Sspace.Refuted no_constant
-                    else if Option.is_some (Lazy.force cpu_grid_rendering_disabled) then
-                      Sspace.Refuted (Option.value_exn (Lazy.force cpu_grid_rendering_disabled))
+                    else if Option.is_some (Lazy.force grid_refutation) then
+                      Sspace.Refuted (Option.value_exn (Lazy.force grid_refutation))
                     else if site_hoistable site site.m_a && site_hoistable site site.m_b then
                       Sspace.Excluded
                         ( "both operands are hoistable: nothing is left to pack in-kernel, the \
@@ -4203,8 +4268,8 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                             | Some w -> Sspace.Refuted w
                             | None -> leaf { p with sk_grid = true; sk_pack_rest = true })
                     in
-                    if Option.is_some (Lazy.force cpu_grid_rendering_disabled) then
-                      Sspace.Refuted (Option.value_exn (Lazy.force cpu_grid_rendering_disabled))
+                    if Option.is_some (Lazy.force grid_refutation) then
+                      Sspace.Refuted (Option.value_exn (Lazy.force grid_refutation))
                     else if any_hoistable then
                       Sspace.Excluded
                         ( "a hoistable operand exists: the hoisted shapes cover the one-dispatch \
@@ -4212,7 +4277,7 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                           lazy (subt judged) )
                     else subt judged );
                   ( Family_decision.Packing_shape `Grid,
-                    match Lazy.force cpu_grid_rendering_disabled with
+                    match Lazy.force grid_refutation with
                     | Some w -> Sspace.Refuted w
                     | None ->
                         subt (fun () ->
@@ -4294,6 +4359,7 @@ let matmul_family_tree ?coalesced ?capabilities ~is_gpu ~is_cpu
     Sspace.Child
       (lazy
         (matmul_flavor_tree ?coalesced ?capabilities ~is_gpu ~is_cpu ~limits ~coverage_witness
+           ~cpu_companions:(lazy (cpu_mma_companion_writes ~opt ~fused site))
            ~fused site))
   in
   decided_choice

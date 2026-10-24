@@ -10149,3 +10149,15 @@
  (libraries base ocannl stdio arrayjit.verdict ll_test scripted_search)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(test
+ ; gh-ocannl-1561: the CPU tensorized flavors binding a hardware dimension are not offered beside a
+ ; companion nest they would leave uncovered.
+ (name cpu_mma_companion_coverage)
+ ; ocannl-backend: cc -- Context.cpu (); seeding reads synthetic limits
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules cpu_mma_companion_coverage)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))

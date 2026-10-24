@@ -1,0 +1,24 @@
+diag8: premise: the matmul site writes the materialized product: true
+diag8: premise: CPU tensorized seeds are offered: true
+diag8: every offered seed passes validate_parallel: true
+diag8: no offered seed is the whole-triple form: true
+diag8: the whole-triple form is refuted naming the companion's node: true
+diag8: every offered seed computes the output bit for bit: true
+diag64: premise: the matmul site writes the materialized product: true
+diag64: premise: CPU tensorized seeds are offered: true
+diag64: every offered seed passes validate_parallel: true
+diag64: no offered seed is the whole-triple form: true
+diag64: no offered seed is a Grid shape: true
+diag64: the whole-triple form is refuted naming the companion's node: true
+diag64: the packed Grid shapes are refuted naming the companion's node: true
+diag64: every offered seed computes the output bit for bit: true
+control: the whole-triple form is offered: true
+control: a packed Grid shape is offered: true
+control: every offered seed passes validate_parallel: true
+control: no refutation names a companion: true
+tail64: no unfused seed binds a hardware dimension: true
+tail64: every unfused seed passes validate_parallel: true
+tail64: every unfused seed computes the output bit for bit: true
+tail64: the fused flavor keeps the whole-triple form, and it passes validate_parallel: true
+tail64: every fused whole-triple seed computes the output bit for bit: true
+cpu_mma_companion_coverage: done

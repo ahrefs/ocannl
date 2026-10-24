@@ -697,8 +697,9 @@ let () =
      from the site and the lowering alone, so the tree refutes both pipelines at construction —
      where each candidate previously died at build. The refutation sits above the geometry menus and
      the lattice: lifting the lattice over the refuted family expands nothing and scores nothing
-     (the gh-514 phase-6 finding this pins). CPU pipelines carry no kernel-global launch geometry
-     and still enumerate. *)
+     (the gh-514 phase-6 finding this pins). The CPU all-serial pipelines bind no launch geometry
+     and still enumerate; the CPU tensorized shapes that do bind one (the whole-triple form, the
+     packed Grid shapes) are refuted on the same companion (gh-ocannl-1561). *)
   let%op cred = av +* "ik;kj=>ij" bv ++ "ij=>i" in
   let opt_c = with_lowering ~name:"sft_companion" cred in
   awkward_section "companion-reduction gpu" ~is_gpu:true ~is_cpu:false ~limits:gpu_full_limits opt_c;
@@ -793,13 +794,43 @@ let () =
           (List.equal (fun a b -> String.equal (show a) (show b)) (Sspace.leaves tree) seeds);
         Verdict.p_alli "every fused leaf follows every unfused leaf" seeds ~f:(fun i p ->
             Bool.equal p.Autotune.sk_epilogue (i >= List.length unfused));
-        Verdict.p "the fused flavor twins the unfused leaves geometry for geometry"
-          ((not (List.is_empty fused))
-          && List.equal
-               (fun u f -> String.equal (show { u with Autotune.sk_epilogue = true }) (show f))
-               unfused fused);
-        (* The fused flavor's own verdicts carry its path — the same refutations and exclusions the
-           unfused flavor has, plus nothing, on this fully-dividing site. *)
+        (* The flavors' companion demands differ by the tail the fusion relocates, so the fused
+           flavor can keep leaves the unfused one refutes -- on the C backends, the tensorized
+           shapes binding a hardware dimension, which the tail would leave uncovered
+           (gh-ocannl-1561). Every unfused leaf still has its fused twin, in order, and any fused
+           leaf without one is such a shape, with the unfused flavor's refutation naming why. *)
+        let twins = List.map unfused ~f:(fun u -> show { u with Autotune.sk_epilogue = true }) in
+        let rec subsequence xs ys =
+          match (xs, ys) with
+          | [], _ -> true
+          | _, [] -> false
+          | x :: xs', y :: ys' ->
+              if String.equal x y then subsequence xs' ys' else subsequence xs ys'
+        in
+        Verdict.p "every unfused leaf has its fused twin, in order"
+          ((not (List.is_empty fused)) && subsequence twins (List.map fused ~f:show));
+        let extras =
+          List.filter fused ~f:(fun f -> not (List.mem twins (show f) ~equal:String.equal))
+        in
+        let companion_refutation (path, w) =
+          List.exists path ~f:(fun (_, d) -> FD.equal d (FD.Fusion `Unfused))
+          && String.is_substring w ~substring:"gh-ocannl-1561"
+        in
+        if List.is_empty extras then
+          Verdict.p "the fused flavor twins the unfused leaves geometry for geometry"
+            (List.equal String.equal twins (List.map fused ~f:show))
+        else (
+          Verdict.p_all
+            "every fused leaf without an unfused twin is a CPU tensorized shape binding a hardware \
+             dimension"
+            extras ~f:(fun f ->
+              f.Autotune.sk_mma && (not f.Autotune.sk_gpu)
+              && (f.Autotune.sk_bk = 0 || f.Autotune.sk_grid));
+          Verdict.p_exists "the unfused flavor refutes those shapes on companion coverage"
+            (Sspace.refutations tree) ~f:companion_refutation);
+        (* The fused flavor's own verdicts carry its path — on this fully-dividing site, the same
+           refutations and exclusions the unfused flavor has, plus nothing, except where the unfused
+           flavor's companion refutation (gh-ocannl-1561) stands in for a subtree's. *)
         let flavor_of (path, _) =
           List.find_map path ~f:(fun (_, d) ->
               match d with FD.Fusion f -> Some (FD.Fusion f) | _ -> None)

@@ -402,22 +402,14 @@ tree leaves = flat enumeration: true
   fusion=unfused > pipeline=blocktile: GPU matmul companion coverage (gh-521): the cross-nest race analysis bails on this routine, so the 2 companion nest(s) (cred; cred) cannot be given aligned geometry
   fusion=unfused > pipeline=tensorized: GPU matmul companion coverage (gh-521): the cross-nest race analysis bails on this routine, so the 2 companion nest(s) (cred; cred) cannot be given aligned geometry
   fusion=fused: Schedule.Fuse_epilogue: the tail is not the sole consumer: a later statement mentions n14
-== companion-reduction cpu: 22 seeds ==
+== companion-reduction cpu: 12 seeds ==
 tree leaves = flat enumeration: true
 -- refuted --
-  fusion=unfused > pipeline=tensorized > tensorized-form=whole-triple > row-block=bm64: bm=64 gives 1 row block(s); a Grid split needs at least 2
-  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=hoisted-grid > geometry=bm64 bn0 bk64: bm=64 gives 1 row block(s); a Grid split needs at least 2
-  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=hoisted-grid > geometry=bm64 bn0 bk256: extents do not divide the blocks: the non-hoistable operand is read in place and cannot absorb the zero-fringe pad
-  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=hoisted-grid > geometry=bm128 bn128 bk128: extents do not divide the blocks: the non-hoistable operand is read in place and cannot absorb the zero-fringe pad
-  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=hoisted-grid > geometry=bm64 bn128 bk256: extents do not divide the blocks: the non-hoistable operand is read in place and cannot absorb the zero-fringe pad
-  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=hoisted-grid-pack-rest > geometry=bm64 bn0 bk64: bm=64 gives 1 row block(s); a Grid split needs at least 2
-  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=hoisted-grid-pack-rest > geometry=bm64 bn0 bk256: bm=64 gives 1 row block(s); a Grid split needs at least 2
-  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=hoisted-grid-pack-rest > geometry=bm128 bn128 bk128: bm=128 gives 1 row block(s); a Grid split needs at least 2
-  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=hoisted-grid-pack-rest > geometry=bm64 bn128 bk256: bm=64 gives 1 row block(s); a Grid split needs at least 2
-  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm64 bn0 bk64: bm=64 gives 1 row block(s); a Grid split needs at least 2
-  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm64 bn0 bk256: bm=64 gives 1 row block(s); a Grid split needs at least 2
-  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm128 bn128 bk128: bm=128 gives 1 row block(s); a Grid split needs at least 2
-  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm64 bn128 bk256: bm=64 gives 1 row block(s); a Grid split needs at least 2
+  fusion=unfused > pipeline=tensorized > tensorized-form=whole-triple: CPU matmul companion coverage (gh-ocannl-1561): the whole-triple form's Workgroup lane binds a hardware dimension, and 2 companion nest(s) writing materialized cred outside it, which validate_parallel rejects
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=hoisted-grid: CPU matmul companion coverage (gh-ocannl-1561): the packed Grid shape's row-block loop binds a hardware dimension, and 2 companion nest(s) writing materialized cred outside it, which validate_parallel rejects
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=hoisted-grid-pack-rest: CPU matmul companion coverage (gh-ocannl-1561): the packed Grid shape's row-block loop binds a hardware dimension, and 2 companion nest(s) writing materialized cred outside it, which validate_parallel rejects
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid-pack-rest: CPU matmul companion coverage (gh-ocannl-1561): the packed Grid shape's row-block loop binds a hardware dimension, and 2 companion nest(s) writing materialized cred outside it, which validate_parallel rejects
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid: CPU matmul companion coverage (gh-ocannl-1561): the packed Grid shape's row-block loop binds a hardware dimension, and 2 companion nest(s) writing materialized cred outside it, which validate_parallel rejects
   fusion=fused: Schedule.Fuse_epilogue: the tail is not the sole consumer: a later statement mentions n14
 -- excluded --
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=serial > geometry=bm64 bn0 bk256: pad waste: padding k=64 to 256 does 4.00x the site's work, 4.00x the 1.00x of this menu's least-padded geometry, at or above the 2x search-economy threshold (config autotune_pad_waste_max)
@@ -426,7 +418,6 @@ tree leaves = flat enumeration: true
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=hoisted > geometry=bm64 bn0 bk256: pad waste: padding k=64 to 256 does 4.00x the site's work, 4.00x the 1.00x of this menu's least-padded geometry, at or above the 2x search-economy threshold (config autotune_pad_waste_max)
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=hoisted > geometry=bm128 bn128 bk128: pad waste: padding m=64 to 128, n=64 to 128, k=64 to 128 does 8.00x the site's work, 8.00x the 1.00x of this menu's least-padded geometry, at or above the 2x search-economy threshold (config autotune_pad_waste_max)
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=hoisted > geometry=bm64 bn128 bk256: pad waste: padding n=64 to 128, k=64 to 256 does 8.00x the site's work, 8.00x the 1.00x of this menu's least-padded geometry, at or above the 2x search-economy threshold (config autotune_pad_waste_max)
-  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid-pack-rest: a hoistable operand exists: the hoisted shapes cover the one-dispatch role without per-chunk re-packing
 lifted-lattice search over the refuted family: 2 expanded, 0 scored, 3 refuted
 == out-projection cpu: 6 seeds ==
  0  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
@@ -593,15 +584,18 @@ fusion = unfused
 fusion = fused
 tree leaves = flat enumeration: true
 every fused leaf follows every unfused leaf: true
+every unfused leaf has its fused twin, in order: true
 the fused flavor twins the unfused leaves geometry for geometry: true
 refuted: 0 unfused, 0 fused; excluded: 1 unfused, 1 fused
-== fusable tail cpu: 44 seeds (22 unfused + 22 fused), 43 choice nodes, depth 6 ==
+== fusable tail cpu: 34 seeds (12 unfused + 22 fused), 34 choice nodes, depth 6 ==
 fusion = unfused
 fusion = fused
 tree leaves = flat enumeration: true
 every fused leaf follows every unfused leaf: true
-the fused flavor twins the unfused leaves geometry for geometry: true
-refuted: 13 unfused, 13 fused; excluded: 7 unfused, 7 fused
+every unfused leaf has its fused twin, in order: true
+every fused leaf without an unfused twin is a CPU tensorized shape binding a hardware dimension: true
+the unfused flavor refutes those shapes on companion coverage: true
+refuted: 5 unfused, 13 fused; excluded: 6 unfused, 7 fused
 == gpu tight smem: 9 seeds ==
 tree leaves = flat enumeration: true
 -- refuted --
