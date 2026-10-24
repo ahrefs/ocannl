@@ -464,14 +464,14 @@ class DriverResultReaderModulesTest(unittest.TestCase):
         for label in ("a", "b"):
             self.gh612_cell(root, label, 1, ["2.5", "2.25"])
         proc = subprocess.run(
-            ["bash", str(HERE / "gh612_cells.sh"), "parity"], text=True, capture_output=True,
+            [box_gate.BASH, str(HERE / "gh612_cells.sh"), "parity"], text=True, capture_output=True,
             cwd=self.dir, timeout=120,
             env=dict(os.environ, OUT_ROOT=str(root), EXPECT_STEPS="2"))
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("parity gate PASSED", proc.stdout)
         # Negative control: the step count the driver passes through is the gate's.
         proc = subprocess.run(
-            ["bash", str(HERE / "gh612_cells.sh"), "parity"], text=True, capture_output=True,
+            [box_gate.BASH, str(HERE / "gh612_cells.sh"), "parity"], text=True, capture_output=True,
             cwd=self.dir, timeout=120, env=dict(os.environ, OUT_ROOT=str(root)))
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertIn("expected EXPECT_STEPS=8", proc.stderr)
@@ -600,7 +600,7 @@ class Gh1003SummaryTest(unittest.TestCase):
         # fails on the empty matrix.
         out = self.dir / "driven"
         proc = subprocess.run(
-            ["bash", str(HERE / "gh1003_fold_cells.sh"), str(out), "60", "summary"],
+            [box_gate.BASH, str(HERE / "gh1003_fold_cells.sh"), str(out), "60", "summary"],
             text=True, capture_output=True, cwd=self.dir, timeout=120)
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         summary = (out / "summary.md").read_text()
@@ -610,7 +610,7 @@ class Gh1003SummaryTest(unittest.TestCase):
 
     def driver(self, *steps, env=None):
         return subprocess.run(
-            ["bash", str(HERE / "gh1003_fold_cells.sh"), str(self.out), "60", *steps],
+            [box_gate.BASH, str(HERE / "gh1003_fold_cells.sh"), str(self.out), "60", *steps],
             text=True, capture_output=True, cwd=self.dir, timeout=120,
             env=dict(os.environ, **(env or {})))
 

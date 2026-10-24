@@ -13,11 +13,43 @@ so on the run's output. Neither, at `require`, exits 2; a GAP exits 1; any other
 check (a usage or harness error: nothing was judged) exits 2.
 """
 
+import os
 import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 CHECK_BOX = HERE / "check-box.sh"
+
+
+def _bash():
+    """The bash that runs this directory's `.sh` helpers: Git for Windows' own launcher, named by its
+    absolute path, on Windows; `bash` from PATH everywhere else.
+
+    A bare `bash` handed to `subprocess` on Windows is resolved by CreateProcess, which searches
+    System32 before PATH, and `C:\\Windows\\System32\\bash.exe` is the WSL launcher stub: with no
+    distribution installed it prints "Windows Subsystem for Linux has no installed distributions"
+    (in UTF-16) and exits 1 without reading the script (gh-ocannl-1411). The roots and the
+    `bin\\bash.exe`-first order are `test/operations/shell_scripts_parse.ml`'s
+    `windows_git_roots`/`git_for_windows`: the launcher prepends Git's `/usr/bin`, which the raw
+    `usr\\bin\\bash.exe` does not."""
+    if os.name != "nt":
+        return "bash"
+    roots = [
+        Path(os.environ[name]) / "Git"
+        for name in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)")
+        if os.environ.get(name)
+    ]
+    if os.environ.get("LOCALAPPDATA"):
+        roots.append(Path(os.environ["LOCALAPPDATA"]) / "Programs" / "Git")
+    roots.append(Path(r"C:\Progra~1\Git"))
+    for root in roots:
+        for shell in (root / "bin" / "bash.exe", root / "usr" / "bin" / "bash.exe"):
+            if shell.is_file():
+                return str(shell)
+    return "bash"
+
+
+BASH = _bash()
 
 
 def canonical_box(name):
@@ -30,7 +62,7 @@ def canonical_box(name):
 
     try:
         done = subprocess.run(
-            ["bash", str(CHECK_BOX), "--canonical-box", name],
+            [BASH, str(CHECK_BOX), "--canonical-box", name],
             capture_output=True, text=True, timeout=60,
         )
     except (OSError, subprocess.SubprocessError):
@@ -85,7 +117,7 @@ def require(driver, args, fixture_dir, names, *, run):
             flush=True,
         )
         sys.exit(2)
-    cmd = ["bash", str(CHECK_BOX), "--box", args.box, "--fixture-dir", str(fixture_dir)]
+    cmd = [BASH, str(CHECK_BOX), "--box", args.box, "--fixture-dir", str(fixture_dir)]
     for name in names:
         cmd += ["--fixture", name]
     sys.stdout.flush()
