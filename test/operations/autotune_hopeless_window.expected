@@ -1,0 +1,41 @@
+== the rule, pure ==
+the rule cuts at three samples, over four times the reference: true
+a steady window five times the reference is cut once it has three samples: true
+a window one and a half times the reference is never cut: true
+a window exactly at four times the reference is not cut: the bound is strict: true
+a dispersed window is not cut, however slow its minimum: true
+... and the rule leaves it alone: true
+one stall among clean samples moves neither the minimum nor the verdict: true
+the gate keeps a minimum under it from cutting, and admits one at it: true
+no finite positive reference, no cut: true
+== one timing call ==
+isolated: five times the reference is cut after three single launches: true
+isolated: with no reference the same routine takes its whole window: true
+isolated: one and a half times the reference takes exactly that whole window: true
+queued, cc calibration: five times the reference is cut after three single launches: true
+queued, cc calibration: with no reference the same routine takes its whole window: true
+queued, cc calibration: one and a half times the reference takes exactly that whole window: true
+queued, CUDA/HIP calibration: five times the reference is cut after three single launches: true
+queued, CUDA/HIP calibration: with no reference the same routine takes its whole window: true
+queued, CUDA/HIP calibration: one and a half times the reference takes exactly that whole window: true
+fast queued: the singles under the batch target are all taken: true
+fast queued: the timed window at its depth is cut after three batches: true
+fast queued: ... each of them a batch deeper than one: true
+== an executed cc search ==
+rounds=0: every window ran in full or was cut after three samples: true
+rounds=0: the report counts the cut windows: true
+rounds=0: every floor and near window ran in full: true
+rounds=0: every per-segment single ran in full, however slow: true
+rounds=0: a single slower than four times the floor was timed: true
+rounds=0: the search crowned at the floor, refusing nothing: true
+rounds=0: a search with cut windows still commits its schedule entry: true
+rounds=0: a whole-routine seed over four times the head was cut: true
+rounds=0: ... and every whole-routine seed over four times the head was: true
+rounds=1: every window ran in full or was cut after three samples: true
+rounds=1: the report counts the cut windows: true
+rounds=1: every floor and near window ran in full: true
+rounds=1: every per-segment single ran in full, however slow: true
+rounds=1: a single slower than four times the floor was timed: true
+rounds=1: the search crowned at the floor, refusing nothing: true
+rounds=1: a search with cut windows still commits its schedule entry: true
+rounds=1: the first whole-routine seed timed is the hopeless one, and it ran in full: true

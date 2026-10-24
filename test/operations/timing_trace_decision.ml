@@ -24,7 +24,7 @@ let call ~fixed ~marginal =
     (fun c -> decisions := c.Autotune.decision :: !decisions)
     (fun () ->
       let reading =
-        Autotune.calibrate_and_time_with_retry_observer
+        Autotune.calibrate_and_time_with_retry_observer ~hopeless_against:None
           ~on_retry:(fun () -> ())
           ~on_call:(fun c -> depth := Some c.Autotune.decision.depth)
           ~phase:None ~retry_contended:false ~dispersion:Autotune.Refuse_dispersed

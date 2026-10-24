@@ -959,6 +959,25 @@ files.
   `timings_dispersed` and the cache entry stores `best_spread`. Drive it with
   `Autotune.host_load_reading` (scripted readings) and `Autotune.on_batch_wall` (scripted clock),
   as `autotune_dispersion_attribution` does.
+- **A hopeless window ends early, against what its reading is RANKED by, not against the search's
+  best** (gh-ocannl-1527). `Autotune.hopeless_window` cuts a window once 3+ samples have a minimum
+  over 4x the reference and are not dispersed (noise only adds time, so the full window could rank
+  under the reference only if every sample so far were inflated past twice the stall ratio; a
+  uniform co-tenant delay over the prefix is the stated boundary). `time_routine ?hopeless_against`
+  applies it to the calibration's singles (gated at `queued_batch_ms`, where cc/Metal settle at
+  depth 1) and to every timed window, raising `Timing_hopeless`; the search releases the candidate
+  unranked (`timings_hopeless`; not a refusal, so still cacheable; not an admitted timing, so
+  `candidates_timed` and `best_steps` skip it). The trap the issue walked into: the per-segment
+  singles that dominate a gpt2_mini arm-B search (~131-144 ms on minix around an 18 ms seeded
+  incumbent, probe of staging#1327) are timed around an all-preset backdrop and ranked only
+  against their own key's singles at the 0.5% playoff margin, so cutting them against the
+  incumbent would delete the recombination composite. Only whole-routine seeds (against the beam:
+  its head with `rounds = 0`, its slowest entry once full otherwise) and round candidates (against
+  the round's slowest once full) are cut; singles, composites, playoff alternates and floors never.
+  On that probe the sound cut reaches the ~9 slow `F_preset` seeds (~3 s each of 556 s timing), not
+  the 166 singles: their cost is the 16-sample floor plus the depth-2 probe, a different lever.
+  Nothing is cut under a scripted `on_candidate_measured` (the physical window says nothing about
+  a scripted rank). `autotune_hopeless_window` drives it with `on_batch_wall`.
 - A new scripted-ranking test takes the harness in `test/support/scripted_search.ml` (library
   `scripted_search`) rather than hand-rolling it: `Scripted_search.scripted` is the scope (the
   measurement script with each window's ordinal, label, digest and reading; the uncontended windows;

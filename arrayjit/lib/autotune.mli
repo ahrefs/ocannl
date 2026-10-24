@@ -1206,6 +1206,19 @@ type report = {
           contention. Not a refusal and not a subset of [timings_contended]: a search whose every
           refusal is gone this way stays cacheable. Under {!with_uncontended_test_windows} a
           dispersed window whose flag the scope cleared counts here too. Zero on a cache hit. *)
+  timings_hopeless : int;
+      (** Candidate windows cut as hopeless (gh-ocannl-1527): {!hopeless_window} found them over
+          {!hopeless_ratio} times what their reading would have been ranked against, so the
+          candidate was released unranked after a few samples. Not a refusal (the search stays
+          cacheable), not an admitted timing ([candidates_timed], [best_steps] and the calibration
+          rows do not count it), and not a failure. Only a whole-routine seed (a preset or a
+          whole-routine sketch, never a floor) is cut, against the beam -- its head when the search
+          runs no rounds, its slowest entry once full when it does -- and a round candidate against
+          its round's slowest entry once that is full; a per-segment single, a composite and a floor
+          are timed in full, since what they are ranked against is not the search's best. Nothing is
+          cut while {!on_candidate_measured} scripts the readings: the physical window says nothing
+          about how a scripted candidate ranks. A cut tensorized candidate counts in [mma_timed] and
+          sets no [mma_best_ms]. Zero on a cache hit. *)
   timing_decisions : (batch_settle * batch_admission * int) list;
       (** How this call's baseline and candidate timing calls settled their depth and were admitted
           (gh-ocannl-1263): one [(settle, admission, calls)] per pair that occurred, in constructor
@@ -1701,10 +1714,10 @@ val no_search_report : timing:timing_mode -> report
       line written before it, so a killed search is inside the step its last line names.
     - [search_done] ({!tune}, exactly once per call, with its report): [routine], [elapsed_s],
       [outcome] ({!outcome_name}), [timed], [contended], [timings_retried], [unbatched],
-      [unreadable] ([timings_unreadable]), [dispersed] ([timings_dispersed]), [failed], [rounds],
-      [budget_cut], [baseline_refused] (whether [baseline_refusal] is [Some _]) and
-      [privatize_dropped] (the report's [privatize_drops] counts summed; gh-ocannl-1438),
-      [attempts], [compile_s], [timing_s], [best_ms], [best].
+      [unreadable] ([timings_unreadable]), [dispersed] ([timings_dispersed]), [hopeless]
+      ([timings_hopeless]), [failed], [rounds], [budget_cut], [baseline_refused] (whether
+      [baseline_refusal] is [Some _]) and [privatize_dropped] (the report's [privatize_drops] counts
+      summed; gh-ocannl-1438), [attempts], [compile_s], [timing_s], [best_ms], [best].
     - [placements_start] ({!Train.tune_placements}, once, before anything is searched or replayed):
       [working_bytes], [device_free] and [device_total] (gh-ocannl-1424). The first is the
       {!Ir.Alloc_census} live working-pool bytes (process-wide, counted at the shared allocator
@@ -2731,8 +2744,20 @@ val sample_min : repeats:int -> sample:(unit -> timing_sample) -> timing_result
     non-finite is refused by {!admitted_timing_ms} instead. Exposed so tests can inject a
     deterministic clock. Equal to [window_result (sample_window ~repeats ~sample ())]. *)
 
+type hopeless = {
+  hopeless_ms : float;  (** The cut window's minimum [per_launch_ms]. *)
+  hopeless_threshold_ms : float;  (** {!hopeless_ratio} times the reference it was cut against. *)
+  hopeless_samples : int;  (** How many samples the window had taken when it was cut. *)
+}
+(** A timing window cut as hopeless (gh-ocannl-1527), see {!hopeless_window}. *)
+
+exception Timing_hopeless of hopeless
+(** Raised by {!sample_window} when its [hopeless] answers, and so by {!time_routine} and the
+    calibration helpers given a [hopeless_against] reference. *)
+
 val sample_window :
   ?prior:timing_sample list ->
+  ?hopeless:(timing_sample list -> hopeless option) ->
   repeats:int ->
   sample:(unit -> timing_sample) ->
   unit ->
@@ -2741,11 +2766,44 @@ val sample_window :
     window already taken, which the loop resumes under the same stopping rule rather than restarting
     (gh-ocannl-1074): a resumed window stops exactly where one uninterrupted window over the same
     samples would, so it takes no fresh sample when [prior] already meets the floor and the top-up
-    budget. *)
+    budget. [hopeless] (default: never) is asked after every fresh sample with the window so far,
+    oldest first, and when it answers the loop raises {!Timing_hopeless} at once (gh-ocannl-1527).
+*)
 
 val window_result : timing_sample list -> timing_result
 (** A window's reading: its minimum [per_launch_ms], its sample count, its [spread], and the
     dispersion-only verdict {!sample_min} documents, as both [dispersed] and [contended]. *)
+
+val hopeless_ratio : float
+(** 4: how far over its reference a window's minimum must be for {!hopeless_window} to cut it --
+    twice the 2x {!sample_min} ratio at which a sample counts as a stall. *)
+
+val hopeless_min_samples : int
+(** 3: the fewest samples {!hopeless_window} cuts on. *)
+
+val hopeless_window :
+  ?at_least_ms:float -> reference_ms:float -> timing_sample list -> hopeless option
+(** Whether a timing window, oldest sample first, may end before its sample floor because its
+    candidate is out of the running against [reference_ms] -- the reading its caller ranks it by
+    (gh-ocannl-1527): at least {!hopeless_min_samples} samples, whose minimum [per_launch_ms] is
+    finite, over {!hopeless_ratio} times the reference and at least [at_least_ms] (default 0), and
+    which {!window_result} does not find dispersed. [None] for a reference that is not finite and
+    positive.
+
+    Why it cannot flip a ranking within the noise the timing rules bound: noise only adds time, so a
+    window's minimum only falls; the full window could read under the reference only if every sample
+    so far were inflated beyond twice the stall ratio, and a stall that spares some sample leaves
+    the minimum clean, while one that inflates most but not all of them disperses the window, which
+    then never cuts. The stated boundary: a co-tenant that delays every one of the first samples
+    uniformly by more than the ratio and then leaves is not detected -- the uniform delay the
+    admission rule already accepts as a valid reading of a whole window.
+
+    [at_least_ms] is how {!time_routine} gates a queued calibration's synchronized singles: it
+    passes {!queued_batch_ms}, the minimum at which cc and Metal settle at depth 1, where the
+    singles are the reading. On CUDA/HIP a depth-2 probe follows and could settle deeper; a single
+    of at least the target over the ratio stays out of the running at any depth unless the fixed
+    per-batch synchronization term exceeds three quarters of it (7.5 ms, against a ~60 us round
+    trip). *)
 
 (** How a timing call turns a dispersed window into a verdict (gh-ocannl-1558). [Refuse_dispersed]
     is the dispersion-only rule. [Attribute_dispersion] refuses a dispersed window only when the
@@ -2978,6 +3036,7 @@ val time_routine :
   ?tag_failures:bool ->
   ?phase:string ->
   ?stop:(unit -> bool) ->
+  ?hopeless_against:float ->
   timing:timing_mode ->
   repeats:int ->
   Context.t ->
@@ -3068,7 +3127,13 @@ val time_routine :
     probe's and each timed window's -- and when it answers [true] the call raises {!Timing_stopped}
     at once, with every batch it dispatched synchronized and the bindings restored: a caller can
     abandon a timing within one batch of deciding to (gh-ocannl-1556; {!tune}'s budget is the
-    caller). *)
+    caller).
+
+    [hopeless_against] (default: none) is the reading the caller will rank this one against
+    (gh-ocannl-1527): the calibration's synchronized singles, gated at {!queued_batch_ms}, and every
+    timed window (a Metal retry's included) end as soon as {!hopeless_window} cuts them, and the
+    call raises {!Timing_hopeless} with every batch it dispatched synchronized and the bindings
+    restored. Neither [on_call] nor the domain's observers see a cut call. *)
 
 val calibrate_and_time :
   retry_contended:bool ->
@@ -3088,6 +3153,7 @@ val calibrate_and_time :
     retry only under [Queued], never [Isolated]. *)
 
 val calibrate_and_time_with_retry_observer :
+  hopeless_against:float option ->
   on_retry:(unit -> unit) ->
   on_call:(timing_call -> unit) ->
   phase:string option ->
@@ -3103,8 +3169,9 @@ val calibrate_and_time_with_retry_observer :
     ({!calibrate_and_time} itself is [Refuse_dispersed]). [on_retry] runs once when a fresh
     contention retry starts, before any retry dispatch; [on_call] receives the call's {!timing_call}
     record as {!time_routine}'s does, its [setup_ms] timed from this call's own start and its
-    [tagged] false. [phase] is reported as {!batch_decision}'s. The original helper remains a
-    no-op-observer, phase-less wrapper for source compatibility. *)
+    [tagged] false. [phase] is reported as {!batch_decision}'s, and [hopeless_against] ([None]:
+    never) cuts as {!time_routine}'s does. The original helper remains a no-op-observer, phase-less
+    wrapper for source compatibility. *)
 
 val retry_contended_window_for_backend : string -> bool
 (** The backend whose contended queued windows get one immediate retry: Metal only. *)

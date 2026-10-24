@@ -178,7 +178,7 @@ let call ?host ~dispersion ~foreign ~timing ~floor_ms () =
   let host = match host with Some h -> h events | None -> scripted_host ~foreign events in
   let result =
     Autotune.Seam.with_value Autotune.host_load_reading host (fun () ->
-        Autotune.calibrate_and_time_with_retry_observer
+        Autotune.calibrate_and_time_with_retry_observer ~hopeless_against:None
           ~on_retry:(fun () -> ())
           ~on_call:(fun c -> record := Some c)
           ~phase:None ~retry_contended:false ~dispersion ~timing ~repeats:3
