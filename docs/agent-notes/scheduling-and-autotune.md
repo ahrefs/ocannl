@@ -923,6 +923,23 @@ files.
   `on_candidate_measured` returning NaN inside the uncontended scope (outside it, a host contention
   refusal can pre-empt the scripted one), contention by `with_contended_test_windows`; both are
   pinned in `autotune_refusal_causes`.
+- **Dispersion is a fact; on a CPU backend contention is an attribution** (gh-ocannl-1558). The
+  2x-majority rule (`window_result`) sets `dispersed`, and records `spread` (median raw wall over
+  the floor). On GPU backends a dispersed window is still refused (`Refuse_dispersed`). On
+  `Sched.backend_is_cpu` backends `time_routine` reads `Utils.Host_load` (machine busy CPU-s from
+  `/proc/stat` or mach ticks, minus this whole process's `Unix.times`, over the wall) from before
+  the calibration to after the window, and refuses a dispersed window only on `Cotenant` (at least a
+  core of foreign load plus a two-tick allowance over the span; a dispersed window shorter than
+  `Host_load.min_span_s` waits out the rest idle and is charged the padded span's whole foreign
+  load, so padding never dilutes a co-tenant); `Quiet` admits it, and
+  `Unavailable` (Windows, or a counter that went backwards) keeps the refusal. A co-tenant does not
+  refuse a tight window: uniform delay stays a valid reading. Why: a 32-thread cc routine's own
+  spread met the 2x rule on a quiet minix, so no search there cached. Consequences: own-process load
+  in other domains is never a co-tenant; a claim derived from `median <= 2 * minimum` must bypass
+  `dispersed`, not only `contended` (`autotune_timing_modes`' executed legs); the report counts
+  `timings_dispersed` and the cache entry stores `best_spread`. Drive it with
+  `Autotune.host_load_reading` (scripted readings) and `Autotune.on_batch_wall` (scripted clock),
+  as `autotune_dispersion_attribution` does.
 - A new scripted-ranking test takes the harness in `test/support/scripted_search.ml` (library
   `scripted_search`) rather than hand-rolling it: `Scripted_search.scripted` is the scope (the
   measurement script with each window's ordinal, label, digest and reading; the uncontended windows;

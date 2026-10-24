@@ -72,6 +72,7 @@ Programs starting a search with a run that can select cc, each pinning the cc ve
   test/operations/dune, test autotune_composite_playoff (Scripted_search.search, Train.tune_placements): pinned: autotune_composite_playoff.ml calls `Fissioned_chain.small_menu` at initialization, before any search
   test/operations/dune, test autotune_concurrent_refusal (Autotune.tune, Autotune.tune_deferred): independent, by its marker
   test/operations/dune, test autotune_device_memory (Autotune.tune, Train.tune_placements): independent, by its marker
+  test/operations/dune, test autotune_dispersion_attribution (Autotune.tune): independent, by its marker
   test/operations/dune, test autotune_labels (Autotune.tune, Scripted_search.search): independent, by its marker
   test/operations/dune, test autotune_measured_refusal (Autotune.tune): independent, by its marker
   test/operations/dune, test autotune_progress (Train.tune_placements): independent, by its marker

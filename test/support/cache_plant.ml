@@ -33,6 +33,7 @@ let entry ?(numerics = SC.numerics_tag ()) ?codegen ?objective ?(saved = []) ?se
     baseline_ms;
     default_ms = None;
     mma_best_ms;
+    best_spread = None;
     default_fingerprint = None;
     best_steps = None;
     budget_cut = false;

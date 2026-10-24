@@ -1,0 +1,48 @@
+== the attribution, pure ==
+a mostly slow window is dispersed, and the dispersion-only rule refuses it: true
+its spread is its median over its floor: true
+a quiet host admits it at its minimum: true
+the admitted window keeps its dispersion and spread: true
+a co-tenant keeps the refusal: true
+no signal keeps the refusal: true
+a uniformly delayed window under a co-tenant is admitted as before: true
+a quiet host does not make an unresolved clock usable: true
+the attribution policy is the CPU backends' and only theirs: true
+== the host-load classification ==
+a many-thread routine consuming the machine's busy time is quiet: true
+residual load of several cores is a co-tenant: true
+just under the bar is quiet and just over it a co-tenant: true
+the allowance asks a short span for more evidence than a long one: true
+the precise own time running ahead of the tick-sampled busy count is quiet: true
+a counter that went backwards, a non-finite reading or an empty span is no signal: true
+padding a short window does not dilute a co-tenant that ran only during it: true
+a window longer than its span, or not positive, is no signal: true
+the real counters resolve to a verdict over a 0.3 s span: true
+== one timing call ==
+isolated: the scripted window is dispersed with spread 3: true
+isolated: a quiet host admits it at the floor: true
+isolated: a co-tenant refuses it as contention: true
+isolated: the dispersion-only policy refuses it and reads no load: true
+isolated: the load readings bracket every batch: true
+queued: the scripted window is dispersed with spread 3: true
+queued: a quiet host admits it at the floor: true
+queued: a co-tenant refuses it as contention: true
+queued: the dispersion-only policy refuses it and reads no load: true
+queued: the load readings bracket every batch: true
+queued depth-1 reuse: the scripted window is dispersed with spread 3: true
+queued depth-1 reuse: a quiet host admits it at the floor: true
+queued depth-1 reuse: a co-tenant refuses it as contention: true
+queued depth-1 reuse: the dispersion-only policy refuses it and reads no load: true
+queued depth-1 reuse: the load readings bracket every batch: true
+the depth-1 shape reuses the calibration singles: true
+the fast queued shape batches deeper than one: true
+a short dispersed window waits for a third reading and charges the span's foreign load to it: true
+== an executed cc search ==
+quiet: the search timed candidates and refused no window: true
+quiet: every admitted window was dispersed: true
+quiet: each one has a log line naming it: true
+quiet: the winner's spread is recorded: true
+quiet: the search committed a schedule entry: true
+quiet: the second call replays it, with the stored spread: true
+co-tenant: the windows are refused as contention: true
+co-tenant: none of the search's cache operations stores a schedule: true

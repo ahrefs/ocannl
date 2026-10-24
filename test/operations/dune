@@ -9850,6 +9850,30 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1558: a dispersed timing window on a CPU backend is refused as host contention only
+; when the host-load signal shows a co-tenant -- the attribution pure, the classification, one
+; timing call and an executed cc search, on a scripted clock and a scripted host.
+
+(test
+ (name autotune_dispersion_attribution)
+ ; ocannl-backend: cc -- Context.cpu (); the attribution is the CPU backends' policy
+ ; cc-vector-width: independent -- the claims are about admission and caching on a scripted clock,
+ ; never about which candidates the search seeds or keeps
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules autotune_dispersion_attribution)
+ (libraries
+  base
+  ocannl
+  stdio
+  unix
+  stderr_capture
+  arrayjit.verdict
+  ll_test
+  test_utils)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  (name autotune_sketch_placements)
  (package neural_nets_lib)

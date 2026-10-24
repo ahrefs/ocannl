@@ -11,6 +11,7 @@ module Sspace = Ir.Schedule_space
 module LL = Ir.Low_level
 module Idx = Ir.Indexing
 module Outcome = Ir.Schedule_outcome
+module Host_load = Utils.Host_load
 module SC = Ir.Schedule_cache
 
 type decline_summary = { key : Outcome.rejection_key; count : int; sample_details : string list }
@@ -79,8 +80,23 @@ type timing_sample = { per_launch_ms : float; contention_ms : float }
    cannot silently consume it as an ordinary measurement (gh-ocannl-855). [unbatched] is the other
    refusal, kept apart from contention so a report can tell them apart (gh-ocannl-1098): a queued
    calibration that measured no batch within its target for a candidate its single launch said
-   should batch. *)
-type timing_result = { ms : float; contended : bool; unbatched : bool; samples : int }
+   should batch.
+
+   [dispersed] and [spread] describe the window apart from its verdict (gh-ocannl-1558). [dispersed]
+   is the 2x-majority rule of [window_result]: at least half of the window's raw batch walls exceed
+   twice its fastest. [spread] is the window's median raw batch wall over that fastest one -- the
+   statistic the rule reads, recorded so a reader can see how noisy an admitted reading was. On a
+   GPU backend a dispersed window is a contended one; on a CPU backend it is refused only when the
+   host-load signal shows a co-tenant ([attribute_dispersion]), so a routine's own variance on a
+   quiet many-core host is admitted with its spread kept. *)
+type timing_result = {
+  ms : float;
+  contended : bool;
+  unbatched : bool;
+  dispersed : bool;
+  spread : float;
+  samples : int;
+}
 
 (* A diagnostic stream's switch: a config flag read once per process, which one {!tune} or
    [Train.tune_placements] call can override for its own duration through its argument. The override
@@ -232,7 +248,7 @@ let batch_admission_name = function
    nothing used to be counted as a contended host. [unbatched] comes first because it is set on the
    depth-1 reading calibration fell back to, whose own minimum and dispersion are beside the
    point. *)
-let timing_admission { ms; contended; unbatched; samples = _ } =
+let timing_admission { ms; contended; unbatched; _ } =
   if unbatched then Refused_unbatched
   else if (not (Float.is_finite ms)) || not (Float.is_positive ms) then Refused_unreadable
   else if contended then Refused_contended
@@ -285,6 +301,8 @@ type report = {
   timings_unreadable : int;
       (** Of [timings_contended], the windows refused for a degenerate clock reading
           (gh-ocannl-1517). See the interface. *)
+  timings_dispersed : int;
+      (** Admitted windows that were dispersed (gh-ocannl-1558). See the interface. *)
   timing_decisions : (batch_settle * batch_admission * int) list;
       (** How this call's search timing calls settled and were admitted (gh-ocannl-1263). See the
           interface. *)
@@ -354,6 +372,8 @@ type report = {
   default_ms : float option;
   seeded_ms : float option;
   best_ms : float;
+  best_spread : float option;
+      (** The winning window's spread (gh-ocannl-1558). See the interface. *)
   timing : timing_mode;
   best_label : string;
   best_tensorized : bool;
@@ -401,6 +421,7 @@ let no_search_report ~timing =
     timings_retried = 0;
     timings_unbatched = 0;
     timings_unreadable = 0;
+    timings_dispersed = 0;
     timing_decisions = [];
     candidates_contended = 0;
     default_refused = false;
@@ -454,6 +475,7 @@ let no_search_report ~timing =
     best_mma_statements = 0;
     best_mma_scalar_fallbacks = 0;
     mma_best_ms = Float.infinity;
+    best_spread = None;
     best_schedule = [];
     (* No base lowering reached yet: [tune] fills this in once its base compile has captured one,
        and every report from then on carries it. *)
@@ -690,6 +712,15 @@ let sample_window ?(prior = []) ~repeats ~sample () =
   done;
   List.rev !samples
 
+(* The median of a list of floats; [nan] for an empty one. *)
+let median_float values =
+  let sorted = Array.of_list values in
+  Array.sort sorted ~compare:Float.compare;
+  let n = Array.length sorted in
+  if n = 0 then Float.nan
+  else if n % 2 = 1 then sorted.(n / 2)
+  else (sorted.((n / 2) - 1) +. sorted.(n / 2)) /. 2.
+
 let window_result samples =
   let ms =
     List.fold samples ~init:Float.infinity ~f:(fun best s -> Float.min best s.per_launch_ms)
@@ -704,10 +735,35 @@ let window_result samples =
   (* Dispersion only. A window whose minimum is zero, NaN or infinite is a clock that resolved
      nothing -- a different fact, and one [admitted_timing_ms] already refuses on the number itself.
      Folding the two lost the distinction exactly where it is load-bearing (gh-ocannl-888): the
-     depth policy consults one and must ignore the other. *)
-  { ms; contended = stalled * 2 >= count; unbatched = false; samples = count }
+     depth policy consults one and must ignore the other. The verdict here is the dispersion-only
+     policy; a CPU backend's caller then attributes it ([attribute_dispersion], gh-ocannl-1558). *)
+  let dispersed = stalled * 2 >= count in
+  let spread = median_float (List.map samples ~f:(fun s -> s.contention_ms)) /. contention_floor in
+  { ms; contended = dispersed; unbatched = false; samples = count; dispersed; spread }
 
 let sample_min ~repeats ~sample = window_result (sample_window ~repeats ~sample ())
+
+(* How a timing call turns a dispersed window into a verdict (gh-ocannl-1558). [Refuse_dispersed] is
+   the dispersion-only rule, kept on GPU backends: host CPU accounting cannot see a device
+   co-tenant, and Metal's queued retry is for a transient device-scheduler burst.
+   [Attribute_dispersion] is the CPU backends' rule: a dispersed window is refused only when the
+   host-load signal over it shows a co-tenant. A many-thread cc routine's own run-to-run spread
+   meets the 2x-majority rule on a quiet 32-thread host (step p90 1.7-4.9x p10 on minix,
+   gh-ocannl-1482), and refusing it made every search there uncacheable. *)
+type dispersion_policy = Refuse_dispersed | Attribute_dispersion
+
+let dispersion_policy_for_backend backend =
+  if Sched.backend_is_cpu backend then Attribute_dispersion else Refuse_dispersed
+
+(* The attribution itself, pure. Only a dispersed window changes, and only on a [Quiet] verdict: a
+   co-tenant keeps the refusal, and so does an [Unavailable] signal -- no evidence of quiet is not
+   evidence of it. A window that is not dispersed is admitted under load exactly as before: a
+   uniformly delayed window is a valid reading (Codex P2, round 4 on PR #735), and refusing on load
+   alone would make every cc search on a busy box or a parallel CI run uncacheable. *)
+let attribute_dispersion (verdict : Host_load.verdict) result =
+  match verdict with
+  | Quiet _ when result.dispersed && result.contended -> { result with contended = false }
+  | Quiet _ | Cotenant _ | Unavailable -> result
 
 (* A usable winner drawn from an incomplete measurement set may ship for this call, but must not
    become the answer to every later call through the schedule cache. A later idle process needs to
@@ -1140,6 +1196,19 @@ let test_window_contention : test_window_contention Seam.t = Seam.make Physical
 let with_uncontended_test_windows f = Seam.with_value test_window_contention Cleared f
 let with_contended_test_windows f = Seam.with_value test_window_contention Forced f
 
+(* The host-load signal a CPU backend's timing call reads around its window (gh-ocannl-1558), as a
+   seam so a test supplies load evidence independently of its clock: a scripted quiet host admits a
+   dispersed window, a scripted co-tenant refuses it, on any machine. Default {!Host_load.read}; no
+   configuration selects another. *)
+let host_load_reading : (unit -> Host_load.reading option) Seam.t = Seam.make Host_load.read
+
+(* The scripted clock for an executed search (gh-ocannl-1558): applied by [time_routine] to every
+   batch wall it measures -- warmup excluded -- given the batch's depth and a per-call ordinal
+   counted from 0, so a test can make a real cc routine's windows dispersed and drive the ordinary
+   admission path end to end. Default the identity; no configuration selects another. *)
+let on_batch_wall : (depth:int -> ordinal:int -> float -> float) Seam.t =
+  Seam.make (fun ~depth:_ ~ordinal:_ wall -> wall)
+
 (* Unless the test-only scope above is active, only an admitted window reaches the seam; its result
    then passes the same [admitted_timing_ms] gate as a real reading, so a value that gate refuses
    (zero, negative, NaN, infinite) refuses the window exactly as a degenerate clock reading would --
@@ -1196,6 +1265,7 @@ type batch_decision = {
   budget_spent : bool;
   admission : batch_admission;
   retried : bool;
+  host_load : Host_load.verdict option;
 }
 
 (* A window of the timed loop (gh-ocannl-994): how many batches it ran, counted by the loop itself
@@ -1211,8 +1281,15 @@ type batch_decision = {
    bypassed belongs on a statistic a minority cannot move. [reused] says how many of [samples] the
    loop did NOT dispatch (gh-ocannl-1074): a queued call that settles at depth 1 resumes the
    calibration's synchronized singles as its window, and those launches are already counted as
-   calibration -- so the launches the loop itself dispatched are [depth * (samples - reused)]. *)
-type timed_window = { samples : int; reused : int; wall_ms : float; median_wall_ms : float }
+   calibration -- so the launches the loop itself dispatched are [depth * (samples - reused)].
+   [spread] is the window's [timing_result.spread], from the same samples (gh-ocannl-1558). *)
+type timed_window = {
+  samples : int;
+  reused : int;
+  wall_ms : float;
+  median_wall_ms : float;
+  spread : float;
+}
 
 (* Everything one timing call did, reported once, as it returns (gh-ocannl-1263). It replaces four
    seams fired at different moments of the call -- the depth decision (gh-ocannl-851), each
@@ -1285,8 +1362,17 @@ let install_compile_observer f =
    returns the wall in milliseconds. Separated from [time_routine] so a test can drive the whole
    policy -- which depth a call settles on, which window it times, how many launches each costs --
    on an injected clock, with no device and no machine-dependent routine (gh-ocannl-1074). *)
-let calibrate_and_time_from ~started ~tagged ~on_retry ~on_call ~phase ~retry_contended ~timing
-    ~repeats ~queue_depth_cap ~batch =
+let calibrate_and_time_from ~started ~tagged ~on_retry ~on_call ~phase ~retry_contended ~dispersion
+    ~timing ~repeats ~queue_depth_cap ~batch =
+  (* The host-load reading the window's attribution starts from (gh-ocannl-1558), taken before the
+     calibration so a depth-1 window that resumes the calibration's singles is covered whole. Read
+     only under [Attribute_dispersion]. *)
+  let read_load () =
+    match dispersion with
+    | Refuse_dispersed -> None
+    | Attribute_dispersion -> Seam.get host_load_reading ()
+  in
+  let load_before = ref (read_load ()) in
   (* Every finite positive batch minimum the calibration measured, as [(depth, wall)]: the evidence
      that bounds an unresolved calibration's fallback depth. *)
   let observed = ref [] and no_supported_batch = ref false in
@@ -1336,7 +1422,14 @@ let calibrate_and_time_from ~started ~tagged ~on_retry ~on_call ~phase ~retry_co
     observe ~depth !best_ms;
     probes_ended :=
       { role; depth; runs = !runs; wall_ms = !wall_ms; min_ms = !best_ms } :: !probes_ended;
-    { ms = !best_ms; contended = false; unbatched = false; samples = !runs }
+    {
+      ms = !best_ms;
+      contended = false;
+      unbatched = false;
+      samples = !runs;
+      dispersed = false;
+      spread = Float.nan;
+    }
   in
   (* [singles] is the calibration's window of synchronized single launches, kept rather than reduced
      to its minimum: they are depth-1 batches, sampled under the timed loop's own stopping rule, so
@@ -1701,20 +1794,14 @@ let calibrate_and_time_from ~started ~tagged ~on_retry ~on_call ~phase ~retry_co
              { per_launch_ms = wall /. Float.of_int depth; contention_ms = wall })
            ()
     in
-    let median_wall_ms =
-      let sorted = Array.of_list !timed_walls in
-      Array.sort sorted ~compare:Float.compare;
-      let n = Array.length sorted in
-      if n = 0 then 0.
-      else if n % 2 = 1 then sorted.(n / 2)
-      else (sorted.((n / 2) - 1) +. sorted.(n / 2)) /. 2.
-    in
+    let median_wall_ms = if List.is_empty !timed_walls then 0. else median_float !timed_walls in
     ( result,
       {
         samples = !timed_batches;
         reused = List.length reused;
         wall_ms = !timed_wall_ms;
         median_wall_ms;
+        spread = result.spread;
       } )
   in
   let reused = if depth = 1 then singles else [] in
@@ -1730,6 +1817,8 @@ let calibrate_and_time_from ~started ~tagged ~on_retry ~on_call ~phase ~retry_co
          retries must likewise dispatch fresh singles rather than resume the refused ones. *)
       logf "queued timing retry: contention refused the first window (%d samples)" first.samples;
       on_retry ();
+      (* A fresh window gets fresh load evidence: the refused one's must not vouch for it. *)
+      load_before := read_load ();
       (time_window [], Some discarded))
     else (window, None)
   in
@@ -1741,6 +1830,54 @@ let calibrate_and_time_from ~started ~tagged ~on_retry ~on_call ~phase ~retry_co
         queued_batch_ms;
       { result with unbatched = true })
     else result
+  in
+  (* gh-ocannl-1558: the attribution of a dispersed window. For a dispersed window shorter than
+     [Host_load.min_span_s] the second reading waits out the remainder, so the tick-sampled busy
+     counter covers a span it can resolve; the process is idle meanwhile, so the wait measures the
+     co-tenant and not this routine. Every foreign CPU-second of the padded span is then charged to
+     the window itself (worst case, [~window_s]): the padding can add evidence, never dilute a
+     co-tenant that ran only during the window. *)
+  let host_load =
+    match dispersion with
+    | Refuse_dispersed -> None
+    | Attribute_dispersion ->
+        Some
+          (match !load_before with
+          | None -> Host_load.Unavailable
+          | Some before -> (
+              let after, window_s =
+                match read_load () with
+                | Some after
+                  when result.dispersed
+                       && Float.(after.wall_s -. before.wall_s < Host_load.min_span_s) ->
+                    let window_s = after.wall_s -. before.wall_s in
+                    Unix.sleepf (Host_load.min_span_s -. window_s);
+                    (read_load (), Some window_s)
+                | after -> (after, None)
+              in
+              match after with
+              | None -> Host_load.Unavailable
+              | Some after -> Host_load.classify ?window_s ~before ~after ()))
+  in
+  let result =
+    match host_load with
+    | None -> result
+    | Some verdict ->
+        let attributed = attribute_dispersion verdict result in
+        (if result.dispersed then
+           match verdict with
+           | Quiet foreign when not attributed.contended ->
+               logf
+                 "admitted a dispersed window (spread %.2fx, foreign load %.2f cores): the \
+                  routine's own variance, not a co-tenant (gh-ocannl-1558)"
+                 result.spread foreign
+           | Cotenant foreign ->
+               logf
+                 "a dispersed window (spread %.2fx) under a co-tenant (foreign load %.2f cores): \
+                  refused as host contention"
+                 result.spread foreign
+           | Quiet _ | Unavailable -> ());
+        attributed
   in
   let decision =
     {
@@ -1761,6 +1898,7 @@ let calibrate_and_time_from ~started ~tagged ~on_retry ~on_call ~phase ~retry_co
       budget_spent = probe_budget_spent ();
       admission = timing_admission result;
       retried;
+      host_load;
     }
   in
   let call =
@@ -1781,11 +1919,11 @@ let calibrate_and_time_from ~started ~tagged ~on_retry ~on_call ~phase ~retry_co
   result
 
 (* Exposed for tests with an injected clock: the per-call observers [time_routine] gives a search,
-   timed from this call's own start. *)
-let calibrate_and_time_with_retry_observer ~on_retry ~on_call ~phase ~retry_contended ~timing
-    ~repeats ~queue_depth_cap ~batch =
+   timed from this call's own start, and the dispersion policy it picks by backend. *)
+let calibrate_and_time_with_retry_observer ~on_retry ~on_call ~phase ~retry_contended ~dispersion
+    ~timing ~repeats ~queue_depth_cap ~batch =
   calibrate_and_time_from ~started:(Mtime_clock.counter ()) ~tagged:false ~on_retry ~on_call ~phase
-    ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch
+    ~retry_contended ~dispersion ~timing ~repeats ~queue_depth_cap ~batch
 
 (* Preserve the original all-labelled helper's source interface: an optional observer would not
    erase without adding a positional argument. *)
@@ -1793,7 +1931,8 @@ let calibrate_and_time ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch
   calibrate_and_time_with_retry_observer
     ~on_retry:(fun () -> ())
     ~on_call:(fun _ -> ())
-    ~phase:None ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch
+    ~phase:None ~retry_contended ~dispersion:Refuse_dispersed ~timing ~repeats ~queue_depth_cap
+    ~batch
 
 (* [routine.bindings] exposes the routine's live binding refs — restore them after timing (Codex P2
    on PR #103), or the returned winner would stay bound to the tuner's midpoint test values. *)
@@ -1832,17 +1971,22 @@ let time_routine ?(on_retry = fun () -> ()) ?(on_call = fun _ -> ()) ?(tag_failu
       sync !ctx;
       (* Monotonic high-resolution clock: on Windows, [Unix.gettimeofday] ticks at ~1 ms, which
          makes sub-millisecond candidates indistinguishable (they all measure 0). *)
+      let ordinal = ref 0 in
       let batch depth =
         let c0 = Mtime_clock.counter () in
         for _ = 1 to depth do
           ctx := run !ctx
         done;
         sync !ctx;
-        Mtime.Span.to_float_ns (Mtime_clock.count c0) /. 1e6
+        let wall = Mtime.Span.to_float_ns (Mtime_clock.count c0) /. 1e6 in
+        let wall = Seam.get on_batch_wall ~depth ~ordinal:!ordinal wall in
+        Int.incr ordinal;
+        wall
       in
       calibrate_and_time_from ~started ~tagged:tag_failures ~on_retry ~on_call ~phase ~timing
         ~repeats
         ~retry_contended:(retry_contended_window_for_backend (Context.backend_name cctx))
+        ~dispersion:(dispersion_policy_for_backend (Context.backend_name cctx))
         ~queue_depth_cap:(queue_depth_cap_for_backend (Context.backend_name cctx))
         ~batch)
 
@@ -6461,10 +6605,11 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
       progress_line "search_done"
         (Printf.sprintf
            "outcome=%s timed=%d contended=%d timings_retried=%d unbatched=%d unreadable=%d \
-            failed=%d rounds=%d budget_cut=%b baseline_refused=%b privatize_dropped=%d %s \
-            best_ms=%s best=%S"
+            dispersed=%d failed=%d rounds=%d budget_cut=%b baseline_refused=%b \
+            privatize_dropped=%d %s best_ms=%s best=%S"
            (outcome_name r.outcome) r.candidates_timed r.timings_contended r.timings_retried
-           r.timings_unbatched r.timings_unreadable r.candidates_failed r.rounds_run r.budget_cut
+           r.timings_unbatched r.timings_unreadable r.timings_dispersed r.candidates_failed
+           r.rounds_run r.budget_cut
            (Option.is_some r.baseline_refusal)
            (List.sum (module Int) r.privatize_drops ~f:(fun d -> d.count))
            (progress_costs ()) (progress_ms r.best_ms) r.best_label);
@@ -7199,6 +7344,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                     timings_retried = 0;
                     timings_unbatched = 0;
                     timings_unreadable = 0;
+                    timings_dispersed = 0;
                     timing_decisions = timing_decisions ();
                     candidates_contended = 0;
                     default_refused = false;
@@ -7271,6 +7417,8 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                        other way on every warm-cache run after it. [None] for a search that timed
                        none, and for entries written before the field existed. *)
                     mma_best_ms = Option.value entry.SC.mma_best_ms ~default:Float.infinity;
+                    (* A time of the program, replayed with [best_ms] (gh-ocannl-1558). *)
+                    best_spread = entry.SC.best_spread;
                     best_schedule = flat_schedule c.form;
                     source_digest = base_digest;
                     (* Replayed for the same reason as [mma_best_ms]: a flip chain whose incumbent
@@ -7621,6 +7769,19 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
           Option.value_map best_c ~default:"" ~f:(fun c ->
               Option.value (Hashtbl.find label_by_digest c.digest_after) ~default:"")
         in
+        (* gh-ocannl-1558: each admitted window's spread, keyed like the labels, and how many
+           admitted windows were dispersed -- a CPU routine's own variance on a quiet host, which
+           the dispersion rule alone would have refused. *)
+        let spread_by_digest = Hashtbl.create (module String) and n_timings_dispersed = ref 0 in
+        let note_admitted_window ~digest (r : timing_result) =
+          Hashtbl.set spread_by_digest ~key:digest ~data:r.spread;
+          if r.dispersed then Int.incr n_timings_dispersed
+        in
+        if baseline_timed then
+          Option.iter !baseline_timing_result ~f:(note_admitted_window ~digest:base_digest);
+        let winner_spread best_c =
+          Option.bind best_c ~f:(fun c -> Hashtbl.find spread_by_digest c.digest_after)
+        in
         let winner_tensorized best_c =
           Option.exists best_c ~f:(fun c -> saved_is_tensorized (flat_schedule c.form))
         in
@@ -7786,6 +7947,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
             timings_retried = !n_timings_retried;
             timings_unbatched = !n_timings_unbatched;
             timings_unreadable = !n_timings_unreadable;
+            timings_dispersed = !n_timings_dispersed;
             timing_decisions = timing_decisions ();
             candidates_contended = candidates_contended ();
             default_refused = default_refused ();
@@ -7836,6 +7998,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
             best_mma_statements = Option.value_map best_c ~default:0 ~f:mma_statements;
             best_mma_scalar_fallbacks = Option.value_map best_c ~default:0 ~f:mma_scalar_fallbacks;
             mma_best_ms = !mma_best_ms;
+            best_spread = winner_spread best_c;
             best_schedule = Option.value_map best_c ~default:[] ~f:(fun c -> flat_schedule c.form);
             source_digest = base_digest;
             best_steps = List.rev !best_steps;
@@ -8097,6 +8260,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                         release_candidate c;
                         let ms = Option.value_exn (admitted_timing_ms timing_result) in
                         Int.incr n_timed;
+                        note_admitted_window ~digest:c.digest_after timing_result;
                         (* Publish window accounting before the post-admission injection seam: it
                            can raise, and the partial report still owns this completed window. *)
                         (match spec with
@@ -9237,6 +9401,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                       flip chain's profitability term reads the same evidence on a warm cache as on
                       the cold run that measured it. Absent when nothing tensorized was timed. *)
                    mma_best_ms = (if Float.is_finite !mma_best_ms then Some !mma_best_ms else None);
+                   best_spread = winner_spread best_c;
                    default_ms = default_ms ();
                    default_fingerprint =
                      Option.map (default_ms ()) ~f:(fun _ ->
@@ -9287,6 +9452,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
               timings_retried = !n_timings_retried;
               timings_unbatched = !n_timings_unbatched;
               timings_unreadable = !n_timings_unreadable;
+              timings_dispersed = !n_timings_dispersed;
               timing_decisions = timing_decisions ();
               candidates_contended = candidates_contended ();
               default_refused = default_refused ();
@@ -9337,6 +9503,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
               best_mma_statements = Option.value_map best_c ~default:0 ~f:mma_statements;
               best_mma_scalar_fallbacks = Option.value_map best_c ~default:0 ~f:mma_scalar_fallbacks;
               mma_best_ms = !mma_best_ms;
+              best_spread = winner_spread best_c;
               best_schedule = Option.value_map best_c ~default:[] ~f:(fun c -> flat_schedule c.form);
               source_digest = base_digest;
               best_steps = List.rev !best_steps;

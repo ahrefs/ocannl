@@ -3161,6 +3161,9 @@ module Cpu_topology = Cpu_topology
    [Utils.Atomic_file] is the only spelling a dependant can reach it by. *)
 module Atomic_file = Atomic_file
 
+(* Re-exported for the same reason (gh-ocannl-1558): the autotuner's co-tenant signal. *)
+module Host_load = Host_load
+
 type build_file_channel = { f_path : string; oc : Stdlib.out_channel; finalize : unit -> unit }
 
 let open_build_file ~base_name ~extension : build_file_channel =
