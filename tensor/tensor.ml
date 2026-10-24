@@ -107,8 +107,12 @@ end
 
 let sexp_of_comparator_witness _ = Sexp.Atom "comparator_witness"
 
+(* The session's graph state. Its writes are held to the mutation-serial obligation field by field
+   (gh-ocannl-1573): the root maps count as session mutations, the id counter does not. *)
 type session_state = {
   mutable next_id : int;
+      [@mutation_serial.exempt
+        "a fresh-id counter: ids are never reused, so a rewind need not restore it"]
   mutable forward_roots : t Map.M(Int).t;
   mutable backprop_roots : t Map.M(Int).t;
 }
@@ -172,6 +176,10 @@ let checkpoint =
    every frontend [Tn.create]). A closure closes every shape of the open work, so it empties
    this. *)
 let open_node_uids : int list ref = ref []
+[@@mutation_serial.exempt
+  "a record of what the open work allocated: an entry left by a failure that did not taint is a \
+   node nobody holds, which a later rewind discards and a closure forgets"]
+
 let note_open_node (tn : Tn.t) = open_node_uids := tn.uid :: !open_node_uids
 
 let record_checkpoint () =
@@ -181,6 +189,9 @@ let record_checkpoint () =
   checkpoint.ck_bprop <- session_state.backprop_roots;
   checkpoint.ck_count <- checkpoint.ck_count + 1;
   checkpoint.ck_seed <- !random_seed
+[@@mutation_serial.boundary
+  "the closure's record: run at the commit of a successful finish_inference, and to re-anchor \
+   after a rewind or a session reset"]
 
 let () = Shape.set_on_closure record_checkpoint
 
@@ -192,6 +203,9 @@ let record_handout_in_checkpoint ~fwd t =
   if t.value.id < checkpoint.ck_mark then
     if fwd then checkpoint.ck_fwd <- Map.remove checkpoint.ck_fwd t.value.id
     else checkpoint.ck_bprop <- Map.remove checkpoint.ck_bprop t.value.id
+[@@mutation_serial.boundary
+  "a closed-world act: records in the closure's record that closed work left the session, so a \
+   rewind does not resurrect it; not open inference state"]
 
 (* The nodes discarded by rewinds, by uid (never reused, across namespaces and reinitializations
    alike), with the provenance of the rewind that discarded each. *)
@@ -227,6 +241,8 @@ let with_unchanged_roots ~f =
        construction not yet taken: restoring the maps restores the markers. *)
     Map.iter fwd_roots ~f:(fun t -> t.consumption.fwd <- Not_handed_out);
     Map.iter bprop_roots ~f:(fun t -> t.consumption.bprop <- Not_handed_out)
+      [@@mutation_serial.boundary
+        "a scoped restore: puts back the roots saved at entry, on return and on a raise alike"]
   in
   Exn.protectx ~f ~finally ()
 
@@ -277,7 +293,10 @@ let initial_default_prec =
   Ir.Ops.prec_of_string (Utils.get_global_arg ~default:"single" ~arg_name:"default_prec")
 
 let default_value_prec = ref initial_default_prec
+[@@mutation_serial.exempt "user configuration read when a tensor is built, not inference state"]
+
 let default_grad_prec = ref initial_default_prec
+[@@mutation_serial.exempt "user configuration read when a tensor is built, not inference state"]
 
 exception Session_error of string * t option [@@deriving sexp]
 
@@ -349,6 +368,7 @@ let fetch_zeros array shape =
   Asgns.Fetch { array; fetch_op = Constant 0.; dims = lazy_to_dims shape }
 
 let max_sublabel_length = ref 25
+[@@mutation_serial.exempt "user configuration of label printing, not inference state"]
 
 (** Creates the shape update step of an operation, complete, and registers it with shape inference
     (propagating shapes eagerly). A step carries the neutral element of its operation's accumulation
@@ -356,10 +376,7 @@ let max_sublabel_length = ref 25
     could observe a step without it. {!raw_accum} knows its accumulation up-front; {!op} reads the
     neutral element off the assignments [op_asn] built, and creates the step afterwards. *)
 let register_update_step ~neutral_elem ~shape ~shape_logic : Shape.update_step =
-  let update_step =
-    Shape.
-      { shape; logic = shape_logic; id = get_update_id (); unsafe_projections = None; neutral_elem }
-  in
+  let update_step = Shape.make_update_step ~shape ~logic:shape_logic ~neutral_elem in
   Shape.propagate_shapes update_step;
   update_step
 
@@ -737,6 +754,9 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     || Fn.non is_require_grad grad_spec
        && List.for_all orig_ts ~f:(fun ti -> Option.is_none ti.diff)
   then (
+    (* Installing the result as a root is a session mutation (gh-ocannl-1301), counted here, in
+       [op]'s own frame (gh-ocannl-1573): nothing after it can fail. *)
+    Row.note_mutation ();
     session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:t;
     t)
   else
@@ -832,6 +852,8 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
         embedded_nodes = Set.union backprop.embedded_nodes !embedded_nodes;
       }
     in
+    (* As in the forward-only branch: the root changes below count, and nothing after them fails. *)
+    Row.note_mutation ();
     List.iter ordered_ts ~f:(fun ti ->
         session_state.backprop_roots <- Map.remove session_state.backprop_roots ti.value.id);
     let diff = Some { grad = g; zero_grads; backprop } in
@@ -1060,6 +1082,7 @@ let strip_param_diff t =
     then reads the twin while the optimizer keeps updating the master parameter, which remains the
     sole member of the result's {!field:params}. Reset by {!unsafe_reinitialize}. *)
 let param_postprocess : (t -> t) ref = ref Fn.id
+[@@mutation_serial.exempt "a user-installed hook applied to new parameters, not inference state"]
 
 (* gh-ocannl-544: an initialization expression's job is to fill the parameter's shape, so its
    intermediate results resolve at their use sites — they widen to the parameter instead of closing
@@ -1242,6 +1265,9 @@ let set_random_seed ?seed () =
   in
   let res = bits ~label:[ "random_seed" ] ~grad_spec:Prohibit_grad (Int64.of_int seed) in
   Tn.update_prec res.value Ir.Ops.uint4x32;
+  (* The seed singleton is restored by a rewind, so replacing it counts (gh-ocannl-1573); [bits]
+     above already counted, through [op]. *)
+  Row.note_mutation ();
   random_seed := Some res
 
 let rec get_random_seed () =
@@ -1261,6 +1287,8 @@ let with_saved_random_seed f =
          (gh-ocannl-1301). *)
       if checkpoint.ck_count <> ck_count then checkpoint.ck_seed <- saved)
     ()
+[@@mutation_serial.boundary
+  "a scoped restore: puts back the seed saved at entry, on return and on a raise alike"]
 
 let install_validity_check () =
   Tn.validity_check :=
@@ -1293,6 +1321,7 @@ let rewind_to_last_closure ?reason () =
   random_seed := checkpoint.ck_seed;
   Shape.rewind_open_state ~provenance;
   record_checkpoint ()
+[@@mutation_serial.boundary "the rewind: it discards all open state and clears the taint"]
 
 let%track5_sexp unsafe_reinitialize ?(namespace = Tn.default_namespace) () : unit =
   Tn.set_current_namespace namespace;
@@ -1312,6 +1341,7 @@ let%track5_sexp unsafe_reinitialize ?(namespace = Tn.default_namespace) () : uni
   Ir.Rewrites.reset ();
   Shape.unsafe_reinitialize ();
   record_checkpoint ()
+[@@mutation_serial.boundary "the session reset: it discards all state and clears the taint"]
 
 let header t =
   let v_dims_s = Tn.dims_to_string t.value in

@@ -445,6 +445,37 @@ type variable_ref = {
 }
 [@@deriving sexp_of, equal]
 
+let variable_ref ref_label = { ref_label; solved_dim = None; solved_sym = None }
+
+let refuse_solution r ~held ~wanted =
+  raise
+  @@ Utils.User_error
+       [%string
+         "Indexing: the variable reference %{r.ref_label} is already solved to %{held}; it cannot \
+          be solved to %{wanted}"]
+
+let set_solved_dim r d =
+  match (r.solved_dim, r.solved_sym) with
+  | Some d0, _ when d0 = d -> ()
+  | Some d0, _ -> refuse_solution r ~held:(Int.to_string d0) ~wanted:(Int.to_string d)
+  | None, Some s ->
+      refuse_solution r
+        ~held:(Sexp.to_string_hum (sexp_of_static_symbol s))
+        ~wanted:(Int.to_string d)
+  | None, None -> r.solved_dim <- Some d
+
+let set_solved_sym r s =
+  match (r.solved_sym, r.solved_dim) with
+  | Some s0, _ when equal_static_symbol s0 s -> ()
+  | Some s0, _ ->
+      refuse_solution r
+        ~held:(Sexp.to_string_hum (sexp_of_static_symbol s0))
+        ~wanted:(Sexp.to_string_hum (sexp_of_static_symbol s))
+  | None, Some d0 ->
+      refuse_solution r ~held:(Int.to_string d0)
+        ~wanted:(Sexp.to_string_hum (sexp_of_static_symbol s))
+  | None, None -> r.solved_sym <- Some s
+
 module Doc_helpers = struct
   let ( ^^ ) = PPrint.( ^^ )
   let ( !^ ) = PPrint.( !^ )

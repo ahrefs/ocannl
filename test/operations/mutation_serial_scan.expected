@@ -13,6 +13,7 @@ tensor/row.ml: global_template_cache (Hashtbl) -- accounted: every write noted o
 tensor/row.ml: fresh (unread state) -- exempt
 tensor/row.ml: boundary commit_symbol_roles -- part of the commit: only a successful finish_inference calls it
 tensor/row.ml: boundary drop_symbol_roles -- part of a rewind or session reset, which clears the taint
+tensor/shape.ml: ref_uid (ref) -- exempt: a fresh-id counter: ids are never reused, so a rewind need not restore it
 tensor/shape.ml: open_refs (ref) -- accounted: every write noted or at a boundary
 tensor/shape.ml: discarded_refs (ref) -- accounted: every write noted or at a boundary
 tensor/shape.ml: update_uid (ref) -- exempt: a fresh-id counter: ids are never reused, so a rewind need not restore it
@@ -29,6 +30,30 @@ tensor/shape.ml: on_closure (ref) -- exempt: a hook Tensor installs once at modu
 tensor/shape.ml: boundary rewind_open_state -- the rewind: it discards all open state and clears the taint
 tensor/shape.ml: boundary unsafe_reinitialize -- the session reset: it discards all state and clears the taint
 tensor/shape.ml: boundary finish_inference_body -- the commit point: finish_inference taints the session on any failure of this body
+tensor/tensor.ml: session_state.next_id (mutable field) -- exempt: a fresh-id counter: ids are never reused, so a rewind need not restore it
+tensor/tensor.ml: session_state.forward_roots (mutable field) -- accounted: every write noted or at a boundary
+tensor/tensor.ml: session_state.backprop_roots (mutable field) -- accounted: every write noted or at a boundary
+tensor/tensor.ml: random_seed (ref) -- accounted: every write noted or at a boundary
+tensor/tensor.ml: checkpoint.ck_mark (mutable field) -- accounted: every write noted or at a boundary
+tensor/tensor.ml: checkpoint.ck_fwd (mutable field) -- accounted: every write noted or at a boundary
+tensor/tensor.ml: checkpoint.ck_bprop (mutable field) -- accounted: every write noted or at a boundary
+tensor/tensor.ml: checkpoint.ck_count (mutable field) -- accounted: every write noted or at a boundary
+tensor/tensor.ml: checkpoint.ck_seed (mutable field) -- accounted: every write noted or at a boundary
+tensor/tensor.ml: open_node_uids (ref) -- exempt: a record of what the open work allocated: an entry left by a failure that did not taint is a node nobody holds, which a later rewind discards and a closure forgets
+tensor/tensor.ml: discarded_nodes (Hashtbl) -- accounted: every write noted or at a boundary
+tensor/tensor.ml: default_value_prec (ref) -- exempt: user configuration read when a tensor is built, not inference state
+tensor/tensor.ml: default_grad_prec (ref) -- exempt: user configuration read when a tensor is built, not inference state
+tensor/tensor.ml: max_sublabel_length (ref) -- exempt: user configuration of label printing, not inference state
+tensor/tensor.ml: param_postprocess (ref) -- exempt: a user-installed hook applied to new parameters, not inference state
+tensor/tensor.ml: boundary record_checkpoint -- the closure's record: run at the commit of a successful finish_inference, and to re-anchor after a rewind or a session reset
+tensor/tensor.ml: boundary record_handout_in_checkpoint -- a closed-world act: records in the closure's record that closed work left the session, so a rewind does not resurrect it; not open inference state
+tensor/tensor.ml: boundary finally -- a scoped restore: puts back the roots saved at entry, on return and on a raise alike
+tensor/tensor.ml: boundary with_saved_random_seed -- a scoped restore: puts back the seed saved at entry, on return and on a raise alike
+tensor/tensor.ml: boundary rewind_to_last_closure -- the rewind: it discards all open state and clears the taint
+tensor/tensor.ml: boundary unsafe_reinitialize -- the session reset: it discards all state and clears the taint
 the scan tracks a noted table (row.ml's safe_to_guess): true
 the scan tracks an exempt counter (row.ml's uid): true
 the scan tracks a fingerprinted ref (shape.ml's state): true
+the scan tracks an accounted record field (tensor.ml's session_state.forward_roots): true
+the scan tracks an exempt record field (tensor.ml's session_state.next_id): true
+the scan tracks the checkpoint record's fields (tensor.ml's checkpoint.ck_fwd): true

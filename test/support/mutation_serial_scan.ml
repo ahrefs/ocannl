@@ -1,6 +1,7 @@
 (** The reader behind [test/operations/mutation_serial_scan] (gh-ocannl-1506): every write to a
     module-level mutable binding of the inference-session modules ([tensor/row.ml],
-    [tensor/shape.ml]) advances [Row.mutation_serial], or is classified in place as not needing to.
+    [tensor/shape.ml], and since gh-ocannl-1573 [tensor/tensor.ml]) advances [Row.mutation_serial],
+    or is classified in place as not needing to.
 
     The serial is how a failed construction is told apart from one that failed before touching the
     session (gh-ocannl-1301): a write it does not count is a construction that fails after mutating
@@ -16,6 +17,14 @@
       constraints, is an allocation: [ref _] (also [Stdlib.ref], [Base.ref]), or [M.create _] /
       [M.make _] for [M] one of [Hashtbl], [Hashtbl.Poly], [Hash_set], [Hash_set.Poly], [Queue],
       [Stack], [Array].
+    - {b Tracked record value} (gh-ocannl-1573): a [let x = { … }] of the top-level structure whose
+      record literal, under constraints, resolves to exactly one record type the file declares at
+      top level with a [mutable] field -- by a type constraint naming it (on the binding or the
+      expression), or else by its labels (all of them, for a literal; a subset, for a [{ e with … }]
+      copy). Labels fitting several declared types are refused (constrain it). Each mutable field is
+      then judged as a binding of its own, [x.f]: [x.f] is its read, [x.f <- v] its write,
+      [{ x with … }] a read; any other use of [x] -- an alias, an argument, a destructuring pattern
+      -- is refused like any unclassified use.
     - {b Occurrences} of a tracked name are classified by the application they are the first
       positional argument of, from closed lists ({!ref_reads}, {!ref_writes}, {!family_functions}):
       [!x] reads a ref; [x := _], [incr x], [decr x], [Int.incr x], [Int.decr x] write it; a
@@ -38,15 +47,18 @@
     - {b In-place classification}, as attributes with a closed grammar; a reason is a string literal
       of more than one word:
     - [[@@mutation_serial.exempt "<reason>"]] on a tracked binding: its writes need no note
-      (fresh-id counters, the serial itself, a solver pass's transient flags). Also the only way to
-      admit state the scan cannot read (below).
+      (fresh-id counters, the serial itself, a solver pass's transient flags, user configuration).
+      Also the only way to admit state the scan cannot read (below). On a record value it goes on
+      the field instead -- [[@mutation_serial.exempt "<reason>"]] on the [mutable] label declaration
+      of its type -- and exempts that field alone; on the record binding itself it is refused.
     - [[@@mutation_serial.fingerprinted]] on a tracked [ref] that [Shape.fingerprint] compares
       physically: held to the relationship, not to a reason -- the file's top-level [fingerprint]
       must capture [!x] as a field of the record it returns ([{ f = !x }] as its result), and its
       top-level [mutated_since] must hand that field and [!x] to the library's [phys_equal]
       ([phys_equal fp.f !x]) as an operand of its returned boolean, through [||], [&&] and [not].
-    - [[@@mutation_serial.boundary "<reason>"]] on a let-bound function that is a session boundary
-      (the commit, a rewind, a reset): its own writes need no note.
+    - [[@@mutation_serial.boundary "<reason>"]] on a let-bound function, at any depth, that is a
+      session boundary (the commit, a rewind, a reset, or a scoped restore that puts back on return
+      and on a raise what it saved at entry): its own writes need no note.
 
     {1 What it refuses}
 
@@ -66,8 +78,10 @@
       that binding is [exempt];
     - a tracked binding the sibling [.mli] exports as a [val], at top level or through an
       [include sig … end], since its writers outside the file are not read ([Row.mutation_serial] is
-      exported as a function for that reason); an interface [include] of any other module type,
-      which the scan cannot read;
+      exported as a function for that reason) -- unless it is [exempt]: an exempt binding's writes
+      need no note wherever they are, so the unread writers lose nothing, and the export is a use of
+      the exemption (gh-ocannl-1573: [Tensor]'s configuration refs); an interface [include] of any
+      other module type, which the scan cannot read;
     - an attribute nothing consumes, a malformed one, two on one binding, a stale [exempt] (no write
       of the binding would be a finding without it), a stale [boundary] (no write in the function
       would be), a [fingerprinted] binding [mutated_since] does not compare.
@@ -76,26 +90,35 @@
 
     - Branch dominance: a function that notes on one path and writes on another passes. The rule is
       "the definition counts the session's writes", not a control-flow proof.
-    - Values whose mutability comes from their type with no allocation call at the head: record
-      literals with mutable fields, array literals, objects, a mutable value some function returns.
-      Mutable record fields in general ([Shape.t] is private behind guarded setters, gh-ocannl-1506;
-      [update_step.unsafe_projections] and delayed references are gh-ocannl-903's field-type
-      snapshot).
-    - Modules other than the two named: [tensor.ml]'s session records, notably.
+    - Values whose mutability comes from their type with no allocation call at the head, beyond the
+      tracked record values above: a record literal of a type declared elsewhere (or with qualified
+      labels), one hidden under a local [let] or in a nested module, array literals, objects, a
+      mutable value some function returns. Mutable fields of records that are not module-level
+      values -- a shape, an update step, a capture reference, a tensor's [consumption] -- are not
+      read: the first three are private behind guarded setters (gh-ocannl-1506, gh-ocannl-1573),
+      which the compiler holds every writer to.
+    - Modules other than the three named.
     - [Obj] and other escapes from the type system. *)
 
 open Base
 open Ppxlib
-
-type kind = Ref | Container of string
 
 type binding_class =
   | Plain
   | Exempt of string
   | Fingerprinted  (** A tracked binding, with its in-place classification. *)
 
-type binding = {
-  key : int;  (** The binding's source offset: its identity, apart from same-named ones. *)
+type kind =
+  | Ref
+  | Container of string
+  | Record of (string * binding) list
+      (** A module-level record value: its mutable fields, each judged as a binding of its own. *)
+  | Field  (** One mutable field of a tracked record, named [<binding>.<field>]. *)
+
+and binding = {
+  key : int;
+      (** The binding's source offset (a field's: its label declaration's): its identity, apart from
+          same-named ones. *)
   name : string;
   line : int;
   kind : kind;
@@ -235,7 +258,11 @@ let family_functions =
         [ ("set", 3); ("unsafe_set", 3); ("fill", 4); ("blit", 5); ("sort", 2); ("swap", 3) ] ) );
   ]
 
-let kind_name = function Ref -> "ref" | Container m -> m
+let kind_name = function
+  | Ref -> "ref"
+  | Container m -> m
+  | Record _ -> "record"
+  | Field -> "mutable field"
 
 let rec flatten = function
   | Longident.Lident s -> Some [ s ]
@@ -247,6 +274,34 @@ let unqualified = function ("Stdlib" | "Base") :: (_ :: _ as rest) -> rest | pat
 
 let rec strip (e : expression) =
   match e.pexp_desc with Pexp_constraint (e, _) | Pexp_coerce (e, _, _) -> strip e | _ -> e
+
+(* The record a module-level binding's expression builds, under constraints: its labels (all
+   unqualified -- [None] for a literal naming another module's labels), whether it copies a base ([{
+   e with … }], which lists only some labels), and the type name a constraint gives it, if any. *)
+let record_literal (vb : value_binding) =
+  let constraint_name (t : core_type) =
+    match t.ptyp_desc with Ptyp_constr ({ txt; _ }, []) -> Some (flatten txt) | _ -> Some None
+  in
+  let rec go (e : expression) constrained =
+    match e.pexp_desc with
+    | Pexp_constraint (e, t) -> go e (Option.first_some constrained (constraint_name t))
+    | Pexp_coerce (e, _, t) -> go e (Option.first_some constrained (constraint_name t))
+    | Pexp_record (fields, base) ->
+        let labels =
+          List.map fields ~f:(fun ({ txt; _ }, _) ->
+              match txt with Lident l -> Some l | _ -> None)
+        in
+        Some (Option.all labels, Option.is_some base, constrained)
+    | _ -> None
+  in
+  let from_pattern =
+    match (vb.pvb_constraint, vb.pvb_pat.ppat_desc) with
+    | Some (Pvc_constraint { typ; _ }), _ -> constraint_name typ
+    | Some (Pvc_coercion { coercion; _ }), _ -> constraint_name coercion
+    | None, Ppat_constraint (_, t) -> constraint_name t
+    | None, _ -> None
+  in
+  go vb.pvb_expr from_pattern
 
 let allocation (e : expression) =
   match (strip e).pexp_desc with
@@ -405,6 +460,20 @@ let scan ~file ?(serial_owner = false) ?interface source =
         None
   in
   (* {2 Discovery} *)
+  (* The record types the file declares at top level, by name: what a module-level record value is
+     resolved against. *)
+  let record_types =
+    List.concat_map structure ~f:(fun item ->
+        match item.pstr_desc with
+        | Pstr_type (_, decls) ->
+            List.filter_map decls ~f:(fun d ->
+                match d.ptype_kind with
+                | Ptype_record labels -> Some (d.ptype_name.txt, labels)
+                | _ -> None)
+        | _ -> [])
+  in
+  (* Field bindings share no source offset with a binding of their own: number them apart. *)
+  let field_key = ref 0 in
   let tracked = Hashtbl.create (module Int) in
   let note_binding = ref None in
   let exempt_used = Hash_set.create (module Int) in
@@ -488,7 +557,83 @@ let scan ~file ?(serial_owner = false) ?interface source =
            Hashtbl, Hashtbl.Poly, Hash_set, Hash_set.Poly, Queue, Stack, Array); extend the list \
            or bind something it reads"
           path
-    | `No -> ()
+    | `No -> (
+        match (record_literal vb, name, nested) with
+        | Some (labels, copies, constrained), Some name, false -> (
+            (* A literal lists every label of its type; a copy, some of them. *)
+            let declares labels (_, decl) =
+              let declared = List.map decl ~f:(fun (d : label_declaration) -> d.pld_name.txt) in
+              List.for_all labels ~f:(List.mem declared ~equal:String.equal)
+              && (copies || List.length labels = List.length declared)
+            in
+            let resolved =
+              match (constrained, labels) with
+              | _, None -> `Not_ours
+              | Some (Some [ ty ]), Some _ -> (
+                  match List.Assoc.find record_types ty ~equal:String.equal with
+                  | Some decl -> `Type (ty, decl)
+                  | None -> `Not_ours)
+              | Some _, Some _ -> `Not_ours
+              | None, Some labels -> (
+                  match List.filter record_types ~f:(declares labels) with
+                  | [] -> `Not_ours
+                  | [ (ty, decl) ] -> `Type (ty, decl)
+                  | several -> `Ambiguous (List.map several ~f:fst))
+            in
+            match resolved with
+            | `Not_ours -> ()
+            | `Ambiguous types ->
+                finding line
+                  "%s: its record literal's labels belong to several record types this \
+                   file                    declares (%s); constrain its type"
+                  name (String.concat ~sep:", " types)
+            | `Type (_, decl) ->
+                let mutable_fields =
+                  List.filter decl ~f:(fun (d : label_declaration) ->
+                      match d.pld_mutable with Mutable -> true | Immutable -> false)
+                in
+                if not (List.is_empty mutable_fields) then (
+                  (match cls with
+                  | Some ((A_exempt _ | A_fingerprinted), a) ->
+                      consume a;
+                      finding line
+                        "%s: a record value is classified field by field, by an attribute on \
+                         its                          type's label declaration, not on the binding"
+                        name
+                  | Some (A_boundary _, _) | None -> ());
+                  let fields =
+                    List.map mutable_fields ~f:(fun (d : label_declaration) ->
+                        let fline = line_of d.pld_loc in
+                        let fname = name ^ "." ^ d.pld_name.txt in
+                        let fcls =
+                          match classification_of d.pld_attributes with
+                          | Some (A_exempt reason, a) ->
+                              consume a;
+                              Exempt reason
+                          | Some (A_fingerprinted, a) ->
+                              consume a;
+                              finding fline "%s: a record field cannot be fingerprinted" fname;
+                              Plain
+                          | Some (A_boundary _, _) | None -> Plain
+                        in
+                        Int.decr field_key;
+                        let fb =
+                          { key = !field_key; name = fname; line = fline; kind = Field; cls = fcls }
+                        in
+                        bindings := fb :: !bindings;
+                        (d.pld_name.txt, fb))
+                  in
+                  let b =
+                    {
+                      key = vb.pvb_loc.loc_start.pos_cnum;
+                      name;
+                      line;
+                      kind = Record fields;
+                      cls = Plain;
+                    }
+                  in
+                  Hashtbl.set tracked ~key:b.key ~data:b))
+        | _ -> ())
     | `Alloc kind -> (
         match (name, nested) with
         | Some name, false ->
@@ -501,7 +646,8 @@ let scan ~file ?(serial_owner = false) ?interface source =
                   consume a;
                   (match kind with
                   | Ref -> ()
-                  | Container _ -> finding line "%s: only a ref can be fingerprinted" name);
+                  | Container _ | Record _ | Field ->
+                      finding line "%s: only a ref can be fingerprinted" name);
                   Fingerprinted
               | Some (A_boundary _, _) | None -> Plain
             in
@@ -697,6 +843,7 @@ let scan ~file ?(serial_owner = false) ?interface source =
                                 | Some arity -> `Write arity
                                 | None -> `Unlisted)
                           | _ -> `Unlisted)
+                      | Record _ | Field -> `Unlisted
                     in
                     match verdict with
                     | `Read -> Hash_set.add classified loc.loc_start.pos_cnum
@@ -710,6 +857,20 @@ let scan ~file ?(serial_owner = false) ?interface source =
                            where the scan cannot judge it; apply it in full"
                           b.name
                     | `Unlisted -> ())))
+        (* A tracked record: a field read, a field write (judged as a write of that field), and a [{
+           x with … }] copy (a read) are its only classified forms. *)
+        | Pexp_field (obj, _) | Pexp_record (_, Some obj) -> (
+            match self#tracked env obj with
+            | Some ({ kind = Record _; _ }, loc) -> Hash_set.add classified loc.loc_start.pos_cnum
+            | _ -> ())
+        | Pexp_setfield (obj, { txt = label; _ }, _) -> (
+            match self#tracked env obj with
+            | Some ({ kind = Record fields; _ }, loc) -> (
+                Hash_set.add classified loc.loc_start.pos_cnum;
+                match List.Assoc.find fields (Longident.last_exn label) ~equal:String.equal with
+                | Some fb -> self#record_write fb loc
+                | None -> ())
+            | _ -> ())
         | _ -> ());
         (* A function literal passed as an argument is a callback, assumed to run during the call
            (the [~default] of [find_or_add], the [~f] of [List.iter]): it shares the caller's frame.
@@ -809,7 +970,8 @@ let scan ~file ?(serial_owner = false) ?interface source =
         | Ok _ ->
             finding (line_of a.attr_loc)
               "[@@%s] is attached to nothing it classifies: exempt and fingerprinted belong on a \
-               tracked binding, boundary on a let-bound function"
+               tracked binding (exempt also on a mutable field of a tracked record's type), \
+               boundary on a let-bound function"
               a.attr_name.txt);
   let bindings = List.rev !bindings in
   List.iter bindings ~f:(fun b ->
@@ -821,12 +983,6 @@ let scan ~file ?(serial_owner = false) ?interface source =
           finding b.line
             "%s is fingerprinted, but mutated_since does not compare !%s through phys_equal" b.name
             b.name
-      | _ -> ());
-  (* An exempt tracked binding whose writes would all be accounted for anyway is stale. *)
-  Hashtbl.iter tracked ~f:(fun b ->
-      match b.cls with
-      | Exempt _ when not (Hash_set.mem exempt_used b.key) ->
-          finding b.line "stale exemption on %s: none of its writes would need it" b.name
       | _ -> ());
   Option.iter interface ~f:(fun interface ->
       let lexbuf = Lexing.from_string interface in
@@ -854,12 +1010,24 @@ let scan ~file ?(serial_owner = false) ?interface source =
             | _ -> [])
       in
       let exported = exported_of (Parse.interface lexbuf) in
+      (* An exempt binding may be exported: its writes need no note wherever they are, so the
+         writers outside this file the scan does not read lose nothing. That use keeps its exemption
+         from being stale. *)
       Hashtbl.iter tracked ~f:(fun b ->
           if List.mem exported b.name ~equal:String.equal then
-            finding b.line
-              "%s is exported by the interface: its writers outside this file are not read; export \
-               a function instead"
-              b.name));
+            match b.cls with
+            | Exempt _ -> Hash_set.add exempt_used b.key
+            | Plain | Fingerprinted ->
+                finding b.line
+                  "%s is exported by the interface: its writers outside this file are not read; \
+                   export a function instead, or exempt it if its writes need no note"
+                  b.name));
+  (* An exempt tracked binding whose writes would all be accounted for anyway is stale. *)
+  List.iter bindings ~f:(fun b ->
+      match b.cls with
+      | Exempt _ when not (Hash_set.mem exempt_used b.key) ->
+          finding b.line "stale exemption on %s: none of its writes would need it" b.name
+      | _ -> ());
   let inventory =
     List.map bindings ~f:(fun b ->
         Printf.sprintf "%s: %s (%s) -- %s" file b.name (kind_name b.kind)

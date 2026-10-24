@@ -118,11 +118,17 @@ type deduce_within_shape = Not_constrained | Input_equals_output [@@deriving com
 
 val infer_equal : t -> t -> unit
 
-type delayed_var_ref = {
+type delayed_var_ref = private {
   var_ref : Ir.Indexing.variable_ref;
   mutable var : [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ];
+  uid : int;  (** The reference's identity for rewind tracking; ignored by [equal] and sexps. *)
 }
 [@@deriving equal, sexp_of]
+(** Private (gh-ocannl-1573): read and matched freely, written only by [Shape] -- through guarded
+    setters that refuse a reference a rewind discarded and count the write as a session mutation --
+    and built only by {!get_variable_ref}. The privacy is shallow in one place:
+    {!Ir.Indexing.set_solved_dim} and [set_solved_sym] are public, guarded by the [variable_ref]'s
+    own write-once invariant but not by the session's accounting. *)
 
 val get_variable_ref : string -> delayed_var_ref
 (** Returns a fully unset variable reference with the given label.
@@ -308,12 +314,10 @@ type logic =
 
 type update_id [@@deriving equal, compare, hash, sexp]
 
-val get_update_id : unit -> update_id
-
 val logic_to_spec : logic -> string
 (** Converts a shape logic to its string specification for debugging/display purposes. *)
 
-type update_step = {
+type update_step = private {
   shape : t;
   logic : logic;
   id : update_id;
@@ -331,7 +335,14 @@ type update_step = {
     twice, the second time after all the other relevant updates have been performed for the first
     time. In OCANNL, this is achieved by performing updates both as the tensors are constructed, and
     via lazy callbacks as the corresponding [Ir.Indexing] dimensions and projections are first
-    accessed. *)
+    accessed.
+
+    Private (gh-ocannl-1573): read and matched freely; built only by {!make_update_step}, and only
+    [Shape]'s projection derivation publishes [unsafe_projections], once. *)
+
+val make_update_step : shape:t -> logic:logic -> neutral_elem:float option -> update_step
+(** A fresh update step with a new id and no projections yet. It is not registered: see
+    {!propagate_shapes}. *)
 
 val to_dims : t -> int array
 (** Uses the matrix convention of putting the input axes last. *)

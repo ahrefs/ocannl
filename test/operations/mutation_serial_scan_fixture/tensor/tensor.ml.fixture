@@ -1,0 +1,28 @@
+(* A planted module-level record pair (gh-ocannl-1573): each record has one write the scan must
+   refuse, beside the accepted forms -- a noted write, an exempt field, a boundary. *)
+type session_state = {
+  mutable next_id : int; [@mutation_serial.exempt "a fresh-id counter that is never restored"]
+  mutable roots : int list;
+}
+
+let session_state = { next_id = 0; roots = [] }
+
+type checkpoint = { mutable mark : int; mutable saved : int list }
+
+let checkpoint = { mark = 0; saved = [] }
+let fresh_id () = session_state.next_id <- session_state.next_id + 1
+
+let add_root id =
+  Row.note_mutation ();
+  session_state.roots <- id :: session_state.roots
+
+(* Refused: a field write with no note_mutation () in its definition. *)
+let drop_roots () = session_state.roots <- []
+
+let record_checkpoint () =
+  checkpoint.mark <- session_state.next_id;
+  checkpoint.saved <- session_state.roots
+[@@mutation_serial.boundary "the commit point of the planted session"]
+
+(* Refused: the other record's field, written outside any boundary. *)
+let forget () = checkpoint.saved <- []

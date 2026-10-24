@@ -309,6 +309,110 @@ let () =
         [@@mutation_serial.fingerprinted]\n\
         let f () = incr uid"
        "mutation_serial attributes on one binding");
+  (* Module-level record values (gh-ocannl-1573): each mutable field is judged as a binding. *)
+  let record =
+    "let note_mutation () = ()\n\
+     type st = { mutable n : int; mutable roots : int list; label : string }\n\
+     let st = { n = 0; roots = []; label = \"s\" }\n"
+  in
+  p "an unnoted write to a record field is refused, named by its field"
+    (says (record ^ "let clear () = st.roots <- []") "clear writes st.roots without note_mutation");
+  p "the same field write after note_mutation () is accounted for"
+    (count (record ^ "let clear () =\n  note_mutation ();\n  st.roots <- []") = 0);
+  p "a field read and a record copy are reads"
+    (count (record ^ "let next () = st.n + 1\nlet relabel () = { st with label = \"t\" }") = 0);
+  p "a record passed to a helper is refused"
+    (says (record ^ "let leak () = Fn.id st") "st (record) is used in a form");
+  p "an alias of a record is refused"
+    (says (record ^ "let alias () =\n  let s = st in\n  s.n") "st (record) is used in a form");
+  p "destructuring a record is refused"
+    (says (record ^ "let d () =\n  let { n; _ } = st in\n  n") "st (record) is used in a form");
+  p "a parameter spelled like the record is not the record"
+    (count (record ^ "let clear st = st.roots <- []") = 0);
+  p "a note in a nested helper does not account for a field write"
+    (count (record ^ "let clear () =\n  let g () = note_mutation () in\n  g ();\n  st.roots <- []")
+    = 1);
+  p "a field write in a callback shares its caller's note"
+    (count
+       (record
+      ^ "let add xs =\n  note_mutation ();\n  List.iter xs ~f:(fun x -> st.roots <- x :: st.roots)"
+       )
+    = 0);
+  p "a field write in an escaping closure is its own frame"
+    (says
+       (record ^ "let later () =\n  note_mutation ();\n  fun () -> st.roots <- []")
+       "a closure escaping later writes st.roots");
+  p "a field write at module initialization is refused"
+    (says (record ^ "let () = st.roots <- []") "writes st.roots at module initialization");
+  let exempt_n =
+    "type st = { mutable n : int; [@mutation_serial.exempt \"a fresh counter\"]\n\
+    \  mutable roots : int list }\n\
+     let st = { n = 0; roots = [] }\n"
+  in
+  p "an exempt field needs no note" (count (exempt_n ^ "let bump () = st.n <- st.n + 1") = 0);
+  p "a field exemption does not cover the record's other fields"
+    (says
+       (exempt_n ^ "let bump () = st.n <- st.n + 1\nlet clear () = st.roots <- []")
+       "clear writes st.roots");
+  p "a field exemption nothing needs is stale"
+    (says
+       (exempt_n ^ "let bump () =\n  Row.note_mutation ();\n  st.n <- st.n + 1")
+       "stale exemption on st.n");
+  p "a record binding cannot be exempted whole"
+    (says
+       "type st = { mutable n : int }\n\
+        let st = { n = 0 } [@@mutation_serial.exempt \"the whole record\"]\n\
+        let bump () = st.n <- 1"
+       "classified field by field");
+  p "a record field cannot be fingerprinted"
+    (says
+       "type st = { mutable n : int [@mutation_serial.fingerprinted] }\n\
+        let st = { n = 0 }\n\
+        let bump () = st.n <- 1"
+       "cannot be fingerprinted");
+  p "an exemption on an immutable field classifies nothing"
+    (says
+       "type st = { mutable n : int; k : int [@mutation_serial.exempt \"a fixed key\"] }\n\
+        let st = { n = 0; k = 1 }\n\
+        let bump () =\n\
+       \  Row.note_mutation ();\n\
+       \  st.n <- 1"
+       "attached to nothing");
+  p "a record literal whose labels fit two declared types is refused"
+    (says "type a = { mutable n : int }\ntype b = { mutable n : int }\nlet x = { n = 0 }"
+       "belong to several record types");
+  p "the same literal under a type constraint is resolved, and its writes judged"
+    (says
+       "type a = { mutable n : int }\n\
+        type b = { mutable n : int }\n\
+        let x : a = { n = 0 }\n\
+        let set () = x.n <- 1"
+       "set writes x.n");
+  p "a record of another module's type is not read (the stated boundary)"
+    (count "let x = { Foo.n = 0 }\nlet set () = x.n <- 1" = 0);
+  p "a record of an immutable type is not tracked"
+    (count "type c = { k : int }\nlet c = { k = 0 }\nlet f () = Fn.id c" = 0);
+  p "a boundary on a local function excuses its field writes"
+    (count
+       (record
+      ^ "let with_saved f =\n\
+        \  let finally () = st.roots <- [] [@@mutation_serial.boundary \"a scoped restore\"] in\n\
+        \  Exn.protect ~f ~finally")
+    = 0);
+  p "without the boundary, the local function's field write is refused"
+    (says
+       (record
+      ^ "let with_saved f =\n  let finally () = st.roots <- [] in\n  Exn.protect ~f ~finally")
+       "finally writes st.roots");
+  (* Exports (gh-ocannl-1573): an exempt binding's writes need no note, wherever they are. *)
+  p "an exported exempt binding is accepted, its exemption used by the export"
+    (count ~interface:"val limit : int ref"
+       "let limit = ref 25 [@@mutation_serial.exempt \"user configuration value\"]"
+    = 0);
+  p "an exported binding that is not exempt is still refused"
+    (says ~interface:"val limit : int ref"
+       "let limit = ref 25\nlet set v =\n  note_mutation ();\n  limit := v"
+       "limit is exported by the interface");
   (* Failure routing. *)
   p "a source that does not parse is the input's fault, not the scanner's"
     (match Test_utils.Scan_attempt.run (fun () -> Scan.scan ~file:"x.ml" "let = (") with

@@ -142,7 +142,16 @@ files.
   submodule's guarded setters (`set_rows`, `set_paddings`, `set_padding_elem`, plus `of_rows`,
   `copy`, `close`, `mark_discarded`); `shape_private_compile_control` holds the interface to it. A
   new kind of write is a new setter there. The privacy is shallow: a padding array read off a shape
-  is still mutable. Reads of committed state
+  is still mutable. Since gh-ocannl-1573 the rest of gh-ocannl-903's frontier is private the same
+  way: an `update_step` is built only by `make_update_step` (and `dealias_operands`' same-id
+  `with_logic` copy) and its projections published once, by `set_projections`; a capture reference
+  (`delayed_var_ref`) is written only by the sealed `Delayed_ref`'s setters, each of which refuses a
+  rewound reference and counts the write (its open/discarded tracking is keyed by the reference's
+  `uid`, so it stays top-level state the scan reads); and the `Ir.Indexing.variable_ref` it carries
+  is private in `indexing.mli`, solved once through `set_solved_dim`/`set_solved_sym` (same value a
+  no-op, a different one or a second kind refused). Those two Indexing setters are public — a write
+  through them skips the session accounting; `Delayed_ref` is their only caller. Reads of committed
+  state
   (`to_dims`/`to_padding` of a closed shape, `get_projections` of a committed step) skip
   `finish_inference`: a failed closure of OTHER work would otherwise poison a closed tensor's lazies
   (OCaml lazies re-raise their first exception). Tests that deliberately continue after an
@@ -150,13 +159,16 @@ files.
   set (`test_symbolic_extents.ml`), and a test that closes an operand to inspect it (e.g. via
   `Shape.to_padding`) can no longer then give it a padded consumer — read the fields instead
   (`neutral_elem_guard.ml`).
-- Every write to a module-level mutable binding of `row.ml` or `shape.ml` (a `ref`, `Hashtbl`,
-  `Hash_set`, ...) must count as a session mutation — the definition writing it calls
+- Every write to a module-level mutable binding of `row.ml`, `shape.ml` or `tensor.ml` (a `ref`,
+  `Hashtbl`, `Hash_set`, ..., or since gh-ocannl-1573 a mutable field of a module-level record value
+  such as `Tensor.session_state` or `checkpoint`) must count as a session mutation — the definition writing it calls
   `note_mutation ()`, usually as `if not (mem ...) then (note_mutation (); add ...)` so a no-op write
   does not taint — or carry an in-place classification: `[@@mutation_serial.exempt "<reason>"]` on
-  the binding (fresh-id counters, the serial itself, a solver pass's transient flags),
-  `[@@mutation_serial.fingerprinted]` on a ref `Shape.mutated_since` compares physically, or
-  `[@@mutation_serial.boundary "<reason>"]` on a commit, rewind or reset function.
+  the binding (fresh-id counters, the serial itself, a solver pass's transient flags, user
+  configuration — the one kind of binding the `.mli` may export) or, for a record value, on the
+  field's label declaration in its type (`session_state.next_id`), `[@@mutation_serial.fingerprinted]`
+  on a ref `Shape.mutated_since` compares physically, or `[@@mutation_serial.boundary "<reason>"]`
+  on a commit, rewind or reset function, or a scoped restore (`with_unchanged_roots`' `finally`).
   `mutation_serial_scan` (gh-ocannl-1506) enforces it; its header in
   `test/support/mutation_serial_scan.ml` lists the forms it reads and what it refuses, including a
   table passed to a helper or exported by the `.mli` (export a function instead, as

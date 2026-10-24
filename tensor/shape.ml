@@ -179,36 +179,102 @@ let row_of_kind kind (sh : t) =
 type deduce_within_shape = Not_constrained | Input_equals_output
 [@@deriving compare, sexp, variants]
 
-type delayed_var_ref = {
-  var_ref : Ir.Indexing.variable_ref;
-  mutable var : [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ];
-}
-[@@deriving equal, sexp_of]
+(* Capture references are caller-retained (gh-ocannl-1301): the ones open work bound or set since
+   the last closure ([open_refs], by uid) are, after a rewind, stale handles like the work's tensors
+   -- a reference carries what the discarded inference wrote into it (its binding, an inferred
+   [solved_dim]), so reusing it is refused rather than letting it inject a discarded dimension. The
+   tracking is keyed by uid so that it can live here, at the top level the mutation-serial scan
+   reads, ahead of the sealed {!Delayed_ref} whose setters maintain it (gh-ocannl-1573). *)
+let ref_uid = ref 0
+[@@mutation_serial.exempt
+  "a fresh-id counter: ids are never reused, so a rewind need not restore it"]
 
-let get_variable_ref ref_label =
-  { var_ref = Ir.Indexing.{ ref_label; solved_dim = None; solved_sym = None }; var = `Not_set_yet }
+let open_refs : int list ref = ref []
+let discarded_refs : (int * string) list ref = ref []
 
-(* Variable references are caller-retained (gh-ocannl-1301): the ones open work bound or set since
-   the last closure ([open_refs]) are, after a rewind, stale handles like the work's tensors -- a
-   reference carries what the discarded inference wrote into it (its binding, an inferred
-   [solved_dim]), so reusing it is refused rather than letting it inject a discarded dimension. *)
-let open_refs : delayed_var_ref list ref = ref []
-let discarded_refs : (delayed_var_ref * string) list ref = ref []
-
-let touch_ref (r : delayed_var_ref) =
+let touch_ref uid =
   Row.note_mutation ();
-  if not (List.mem !open_refs r ~equal:phys_equal) then open_refs := r :: !open_refs
+  if not (List.mem !open_refs uid ~equal:Int.equal) then open_refs := uid :: !open_refs
 
-let check_ref_live (r : delayed_var_ref) =
-  match List.find !discarded_refs ~f:(fun (d, _) -> phys_equal d r) with
+let check_ref_live ~uid ~label =
+  match List.Assoc.find !discarded_refs uid ~equal:Int.equal with
   | None -> ()
-  | Some (_, provenance) ->
+  | Some provenance ->
       raise
       @@ Row.Shape_error
            ( [%string
-               "the variable reference %{r.var_ref.ref_label} was bound or set by work discarded \
-                by the rewind after %{provenance}; capture it afresh"],
+               "the variable reference %{label} was bound or set by work discarded by the rewind \
+                after %{provenance}; capture it afresh"],
              [] )
+
+(** A capture reference: the [Ir.Indexing.variable_ref] an operation's [~capture_dims] fills in, and
+    the variable inference bound it to. Private (gh-ocannl-1573): read and matched freely, written
+    only through the setters here, each of which refuses a reference a rewind discarded and records
+    the write as a session mutation of open work ({!touch_ref}). Rebinding [var] is legitimate --
+    every operation the reference is passed to binds it to its own variable, and projection
+    derivation rebinds it to projection-local ones -- whereas a solution is reached once
+    ({!Ir.Indexing.set_solved_dim}). *)
+module Delayed_ref : sig
+  type t = private {
+    var_ref : Ir.Indexing.variable_ref;
+    mutable var : [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ];
+    uid : int; [@equal.ignore] [@sexp_drop_if fun _ -> true]
+        (** The reference's identity for the rewind's tracking; not part of its value. *)
+  }
+  [@@deriving equal, sexp_of]
+
+  val make : string -> t
+  (** A fresh, unbound and unsolved reference. *)
+
+  val check_live : t -> unit
+  (** Raises if a rewind discarded the reference. *)
+
+  val set_var : t -> [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ] -> unit
+  val set_solved_dim : t -> int -> unit
+  val set_solved_sym : t -> Ir.Indexing.static_symbol -> unit
+end = struct
+  type t = {
+    var_ref : Ir.Indexing.variable_ref;
+    mutable var : [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ];
+    uid : int; [@equal.ignore] [@sexp_drop_if fun _ -> true]
+  }
+  [@@deriving equal, sexp_of]
+
+  let make ref_label =
+    Int.incr ref_uid;
+    { var_ref = Ir.Indexing.variable_ref ref_label; var = `Not_set_yet; uid = !ref_uid }
+
+  let check_live r = check_ref_live ~uid:r.uid ~label:r.var_ref.ref_label
+
+  let set_var r v =
+    check_live r;
+    touch_ref r.uid;
+    r.var <- v
+
+  (* A solution already held is no change, so it is not a mutation; a conflicting one raises before
+     anything is written or counted. *)
+  let set_solved_dim r d =
+    check_live r;
+    if not ([%equal: int option] r.var_ref.solved_dim (Some d)) then (
+      Ir.Indexing.set_solved_dim r.var_ref d;
+      touch_ref r.uid)
+
+  let set_solved_sym r sym =
+    check_live r;
+    if not ([%equal: Ir.Indexing.static_symbol option] r.var_ref.solved_sym (Some sym)) then (
+      Ir.Indexing.set_solved_sym r.var_ref sym;
+      touch_ref r.uid)
+end
+
+type delayed_var_ref = Delayed_ref.t = private {
+  var_ref : Ir.Indexing.variable_ref;
+  mutable var : [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ];
+  uid : int; [@equal.ignore] [@sexp_drop_if fun _ -> true]
+}
+[@@deriving equal, sexp_of]
+
+let get_variable_ref = Delayed_ref.make
+let check_ref_live = Delayed_ref.check_live
 
 type compose_type =
   | Pointwise_bin
@@ -288,26 +354,71 @@ let get_update_id () =
   Int.incr update_uid;
   Update_id.Update_id !update_uid
 
-type update_step = {
+(** Data required for a shape inference update step. Ideally, an update should be performed at least
+    twice, the second time after all the other relevant updates have been performed for the first
+    time. In OCANNL, this is achieved by performing updates both as the tensors are constructed, and
+    via lazy callbacks as the corresponding [Ir.Indexing] dimensions and projections are first
+    accessed.
+
+    Private (gh-ocannl-1573): read and matched freely; built only by [make] and [with_logic], and
+    its projections published only by [set_projections], which refuses to replace a result. *)
+module Update_step_record : sig
+  type update_step = private {
+    shape : t;
+    logic : logic;
+    id : update_id;
+    mutable unsafe_projections : Idx.projections option;
+    neutral_elem : float option;
+        (** The neutral element of the operation's accumulation, fixed at creation: [Some v] when
+            all assignment ops in the update step use the same neutral element [v], [None] when
+            different operations have different neutral elements or when there are no accumulator
+            operations. [derive_projections] reads it for the clamped-window decision (gh-504) and
+            to commit the margins' neutral ([padding_elem]), so a step is only created once its
+            operation's assignments are known -- see [Tensor.op]. *)
+  }
+  [@@deriving sexp_of]
+
+  val make : shape:t -> logic:logic -> neutral_elem:float option -> update_step
+  (** A fresh step, with a new id and no projections yet. *)
+
+  val with_logic : update_step -> logic -> update_step
+  (** The same step (same id, same projection state) over another logic: [dealias_operands]'s
+      temporary derivation copy, never registered. *)
+
+  val set_projections : update_step -> Idx.projections -> unit
+  (** Publishes the step's projections; raises if they were already computed. *)
+end = struct
+  type update_step = {
+    shape : t;
+    logic : logic;
+    id : update_id;
+    mutable unsafe_projections : Idx.projections option;
+    neutral_elem : float option;
+  }
+  [@@deriving sexp_of]
+
+  let make ~shape ~logic ~neutral_elem =
+    { shape; logic; id = get_update_id (); unsafe_projections = None; neutral_elem }
+
+  let with_logic step logic = { step with logic }
+
+  let set_projections step projections =
+    if Option.is_some step.unsafe_projections then
+      raise
+      @@ Utils.User_error "derive_projections: projections already computed for this update_step";
+    step.unsafe_projections <- Some projections
+end
+
+type update_step = Update_step_record.update_step = private {
   shape : t;
   logic : logic;
   id : update_id;
   mutable unsafe_projections : Idx.projections option;
   neutral_elem : float option;
-      (** The neutral element of the operation's accumulation, fixed at creation: [Some v] when all
-          assignment ops in the update step use the same neutral element [v], [None] when different
-          operations have different neutral elements or when there are no accumulator operations.
-          [derive_projections] reads it for the clamped-window decision (gh-504) and to commit the
-          margins' neutral ([padding_elem]), so a step is only created once its operation's
-          assignments are known -- see [Tensor.op]. *)
 }
 [@@deriving sexp_of]
-(** Data required for a shape inference update step. Ideally, an update should be performed at least
-    twice, the second time after all the other relevant updates have been performed for the first
-    time. In OCANNL, this is achieved by performing updates both as the tensors are constructed, and
-    via lazy callbacks as the corresponding [Ir.Indexing] dimensions and projections are first
-    accessed. *)
 
+let make_update_step = Update_step_record.make
 let with_error_trace = ref true
 
 (** Converts an axes-keyed map into three arrays of values: batch axes, input axes, output axes. If
@@ -531,8 +642,7 @@ let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~
       let unsolved = Option.is_none delayed_ref.var_ref.solved_dim in
       match Hashtbl.find dim_var_env label with
       | Some var ->
-          touch_ref delayed_ref;
-          delayed_ref.var <- `Dim var;
+          Delayed_ref.set_var delayed_ref (`Dim var);
           let solved =
             match (delayed_ref.var_ref.solved_sym, delayed_ref.var_ref.solved_dim) with
             | _ when for_projections -> []
@@ -563,8 +673,7 @@ let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~
       | None -> (
           match Hashtbl.find row_var_env label with
           | Some var ->
-              touch_ref delayed_ref;
-              delayed_ref.var <- `Row var;
+              Delayed_ref.set_var delayed_ref (`Row var);
               if Option.is_some delayed_ref.var_ref.solved_sym then
                 raise
                 @@ Row.Shape_error
@@ -1743,7 +1852,7 @@ let rewind_open_state ~provenance =
   if !update_uid > !update_mark then
     discarded_updates := (!update_mark, !update_uid, provenance) :: !discarded_updates;
   update_mark := !update_uid;
-  discarded_refs := List.map !open_refs ~f:(fun r -> (r, provenance)) @ !discarded_refs;
+  discarded_refs := List.map !open_refs ~f:(fun uid -> (uid, provenance)) @ !discarded_refs;
   open_refs := [];
   state := Row.empty_env;
   active_update_steps := [];
@@ -2002,11 +2111,9 @@ let%track7_sexp set_dim (delayed_var_ref : delayed_var_ref) (dim : int) : unit =
              [ Row.Dim_mismatch [ Row.get_default_dim ~d:dim2 (); Row.get_default_dim ~d:dim () ] ]
            )
   | { var_ref = { solved_dim = None; _ }; var = `Not_set_yet; _ } ->
-      touch_ref delayed_var_ref;
-      delayed_var_ref.var_ref.solved_dim <- Some dim
+      Delayed_ref.set_solved_dim delayed_var_ref dim
   | { var_ref = { solved_dim = None; _ }; var = `Dim dim_var; _ } ->
-      touch_ref delayed_var_ref;
-      delayed_var_ref.var_ref.solved_dim <- Some dim;
+      Delayed_ref.set_solved_dim delayed_var_ref dim;
       active_constraints :=
         Row.Dim_eq
           {
@@ -2025,8 +2132,7 @@ let%track7_sexp set_dim (delayed_var_ref : delayed_var_ref) (dim : int) : unit =
           }
         :: !active_constraints
   | { var_ref = { solved_dim = None; _ }; var = `Row row_var; _ } ->
-      touch_ref delayed_var_ref;
-      delayed_var_ref.var_ref.solved_dim <- Some dim;
+      Delayed_ref.set_solved_dim delayed_var_ref dim;
       active_constraints :=
         Row.Rows_constr
           {
@@ -2082,11 +2188,9 @@ let%track7_sexp set_sym_dim (delayed_var_ref : delayed_var_ref) (sym : Ir.Indexi
              ^ ": already set to a concrete dimension",
              [ Row.Dim_mismatch [ Row.get_default_dim ~d:dim2 (); sym_dim ] ] )
   | { var_ref = { solved_dim = None; _ }; var = `Not_set_yet; _ } ->
-      touch_ref delayed_var_ref;
-      delayed_var_ref.var_ref.solved_sym <- Some sym
+      Delayed_ref.set_solved_sym delayed_var_ref sym
   | { var_ref = { solved_dim = None; _ }; var = `Dim dim_var; _ } ->
-      touch_ref delayed_var_ref;
-      delayed_var_ref.var_ref.solved_sym <- Some sym;
+      Delayed_ref.set_solved_sym delayed_var_ref sym;
       active_constraints :=
         Row.Dim_eq { d1 = Row.Var dim_var; d2 = sym_dim; origin } :: !active_constraints
   | { var_ref = { solved_dim = None; ref_label; _ }; var = `Row _; _ } ->
@@ -2555,7 +2659,8 @@ let dealias_operands (update_step : update_step) : update_step * (t * t) list =
     | Block { spec; delayed_vars; rhses } ->
         Block { spec; delayed_vars; rhses = List.map rhses ~f:occurrence }
   in
-  if List.is_empty !copies then (update_step, []) else ({ update_step with logic }, List.rev !copies)
+  if List.is_empty !copies then (update_step, [])
+  else (Update_step_record.with_logic update_step logic, List.rev !copies)
 
 (** A copy made by {!dealias_operands} stands for its original during one derivation, so the padding
     that derivation infers for the copy belongs to the original: merge it in, axis by axis, taking
@@ -2925,7 +3030,7 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
       with Row.Shape_error (s, trace) ->
         raise @@ Row.Shape_error (s, Shape_mismatch (lhs :: rhs) :: trace)
     in
-    original_step.unsafe_projections <- Some projections)
+    Update_step_record.set_projections original_step projections)
 
 (** {3 Shape inference} *)
 
@@ -2987,9 +3092,8 @@ let update_delayed_var_refs env update_step =
             | Some d ->
                 (* If solved_dim was set by set_dim, preserve it - consistency checked in
                    finish_inference. Otherwise, update from inference. *)
-                if Option.is_none delayed_ref.var_ref.solved_dim then (
-                  touch_ref delayed_ref;
-                  delayed_ref.var_ref.solved_dim <- Some d)
+                if Option.is_none delayed_ref.var_ref.solved_dim then
+                  Delayed_ref.set_solved_dim delayed_ref d
             | None -> () (* Not yet resolved *))
         | `Row row_var -> (
             match Row.get_row_from_env env row_var with
@@ -2998,9 +3102,8 @@ let update_delayed_var_refs env update_step =
                 | Some product ->
                     (* If solved_dim was set by set_dim, preserve it - the Total_elems constraint
                        will be processed in finish_inference to reconcile. Otherwise, update. *)
-                    if Option.is_none delayed_ref.var_ref.solved_dim then (
-                      touch_ref delayed_ref;
-                      delayed_ref.var_ref.solved_dim <- Some product)
+                    if Option.is_none delayed_ref.var_ref.solved_dim then
+                      Delayed_ref.set_solved_dim delayed_ref product
                 | None -> () (* Row has unresolved dimensions *))
             | None -> () (* Row variable not yet resolved *)))
   in
