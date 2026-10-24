@@ -1162,7 +1162,7 @@ test_cmd() { # backend wt [jobs [host]]
 # environment readings from the owning box.
 #
 # Where the effective vector genuinely exists the block points at it:
-# `cuda_to_ptx` and `hip_to_code` re-raise their runtime compiler's exception
+# the CUDA and HIP `compile_program` re-raise their runtime compiler's exception
 # with the vector appended to its message. The hardware-backed compile-failure
 # probes pin that each backend writes the line this block promises (gh-ocannl-849).
 

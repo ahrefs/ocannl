@@ -260,17 +260,33 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
     |> List.iter ~f:(fun pool_id ->
         Option.iter Slab.free_pool ~f:(fun free -> free device ~pool_id))
 
-  let%diagn2_sexp cuda_to_ptx ~name cu_src =
-    let cu_src =
-      C_syntax.prepend_conditional_includes
-        ~conditional_includes:Cuda_like_config.Cuda.conditional_includes cu_src
-    in
+  let with_conditional_includes cu_src =
+    C_syntax.prepend_conditional_includes
+      ~conditional_includes:Cuda_like_config.Cuda.conditional_includes cu_src
+
+  (* The options nvrtc compiles [cu_src] -- the source with its conditional includes applied --
+     with: the target arch its markers floor (over the device set), the include paths, the numerics
+     flags, the debug flag. A function of the source and the device set alone, so the kernel code
+     cache keys on it (gh-ocannl-1529). *)
+  let nvrtc_options cu_src =
     let arch_opts = Cuda_mma.gpu_arch_options ~device_cc:(min_compute_capability ()) cu_src in
-    let name_cu = name ^ ".cu" in
+    (* gh-ocannl-784: assembled by [Compiler_options.nvrtc], the pure module the HIP backend already
+       shares, so the exact vector -- semantic state for fast-math numerics -- is pinned by a
+       GPU-free test (arrayjit/test/test_cuda_compile_options.ml) instead of only by whichever box
+       happens to have a device. Its header carries the measured reassociation boundary. *)
+    Compiler_options.nvrtc ~cuda_include_options:(cuda_include_options ()) ~arch_options:arch_opts
+      ~with_device_debug:(Utils.with_runtime_debug ())
+
+  let write_source_artifact ~name cu_src =
     if Utils.settings.output_debug_files_in_build_directory then (
       let build_file = Utils.open_build_file ~base_name:name ~extension:".cu" in
       Stdio.Out_channel.output_string build_file.oc cu_src;
-      build_file.finalize ());
+      build_file.finalize ())
+
+  (* One nvrtc program, [cu_src] with its conditional includes applied. [log_header] opens the
+     [.cu_log] artifact: the kernel cache's account of which kernels this program compiled. *)
+  let%diagn2_sexp compile_program ~name ?(log_header = "") ~options cu_src =
+    let name_cu = name ^ ".cu" in
     [%log "compiling to PTX"];
     (* [with_debug] only asks NVRTC to keep the compilation log on a SUCCESSFUL compile (a failing
        one carries its log in the exception either way), and the only reader of that log is the
@@ -278,17 +294,8 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
        that file's [Option.value_exn] is what makes the implication load-bearing. The [|| log_level
        > 0] disjunct it used to carry made the log's retention hostage to a verbosity knob that
        nothing here consults (gh-ocannl-595). Kernel debug codegen is separate: it comes from
-       [Utils.with_runtime_debug ()] via [--device-debug] below. *)
+       [Utils.with_runtime_debug ()] via [--device-debug] in [nvrtc_options]. *)
     let with_debug = Utils.settings.output_debug_files_in_build_directory in
-    let cuda_include_opt = cuda_include_options () in
-    (* gh-ocannl-784: assembled by [Compiler_options.nvrtc], the pure module the HIP backend already
-       shares, so the exact vector -- semantic state for fast-math numerics -- is pinned by a
-       GPU-free test (arrayjit/test/test_cuda_compile_options.ml) instead of only by whichever box
-       happens to have a device. Its header carries the measured reassociation boundary. *)
-    let options =
-      Compiler_options.nvrtc ~cuda_include_options:cuda_include_opt ~arch_options:arch_opts
-        ~with_device_debug:(Utils.with_runtime_debug ())
-    in
     [%log "nvrtc options", (options : string list)];
     let ptx =
       C_syntax.with_compiler_options ~compiler:"nvrtc" ~options
@@ -305,6 +312,7 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
       Stdio.Out_channel.flush oc;
       Stdio.Out_channel.close oc;
       let oc = Out_channel.open_text @@ Utils.build_file @@ name ^ ".cu_log" in
+      Stdio.Out_channel.output_string oc log_header;
       Stdio.Out_channel.output_string oc
       @@ Option.value_exn ~here:[%here] (Nvrtc.compilation_log ptx);
       Stdio.Out_channel.flush oc;
@@ -441,8 +449,29 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
         let dst_base = Slab.resolve_pool dst.device loc in
         memcpy ~dst_base ~dst_offset:loc.offset
 
-  type code = {
+  (* One nvrtc program's PTX. [program_id] identifies it. With the kernel code cache
+     (gh-ocannl-1529) the kernels of one batch can come from several programs: the ones it reused
+     from earlier compiles, and the one program it compiled its cache misses into.
+
+     [modules] holds the program's loaded module per CUDA context, loaded on the first link into
+     that context and kept with the program ([module_of]): the driver's PTX JIT costs about as much
+     per kernel as nvrtc does (measured for gh-ocannl-1529: 4.6 ms against 12.9 ms per kernel on
+     sm_120), so a reused program that was loaded again on every link would pay it again for every
+     kernel it holds, the unchanged ones included. A loaded module holds device code memory for as
+     long as the program lives -- the cache's retention ([cuda_kernel_cache_mib]) or a compiled
+     routine holding it -- and is unloaded by cudajit's finalizer once neither does. Sharing one
+     module between routines is sound because OCANNL's kernels keep no mutable module-scope state:
+     the only module-scope data are the builtins' [__constant__] tables. *)
+  type program = {
+    program_id : int;
     ptx : Nvrtc.compile_to_ptx_result;
+    mutable modules : ((Cu.Context.t * Cu.Module.t) list[@sexp.opaque]);
+    modules_lock : (Stdlib.Mutex.t[@sexp.opaque]);
+  }
+  [@@deriving sexp_of]
+
+  type code = {
+    code : program;
     kparams : (string * kparam_source) list;
     bindings : Indexing.unit_bindings;
     name : string;
@@ -451,7 +480,7 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
   [@@deriving sexp_of]
 
   type code_batch = {
-    ptx : Nvrtc.compile_to_ptx_result;
+    programs : program array;  (** Per kernel, in batch order: the program holding it. *)
     bindings : Indexing.unit_bindings;
     kparams_and_names : ((string * kparam_source) list * string * Low_level.launch_dims) array;
   }
@@ -701,11 +730,11 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
        - The CUDA wmma C++ API for the 16-bit combinations: f16 x f16 -> f32 (the flagship), f16 x
        f16 -> f16 (under [Numerics.Fp16_auto]/[Fp16_narrow] only — the wide policy routes the
        uniform-f16 combination to the f32-accumulate inline-PTX m16n8k16 arm instead,
-       gh-ocannl-680), and bf16 x bf16 -> f32 (sm_80+; the [(wmma-bf16)] marker makes [cuda_to_ptx]
-       select the arch). 16x16x16 fragment blocks are resident across the whole [k] extent,
-       mirroring the Metal emission. - Inline-PTX
+       gh-ocannl-680), and bf16 x bf16 -> f32 (sm_80+; the [(wmma-bf16)] marker makes
+       [nvrtc_options] select the arch). 16x16x16 fragment blocks are resident across the whole [k]
+       extent, mirroring the Metal emission. - Inline-PTX
        [mma.sync.aligned.m16n8k32.row.col.f32.e5m2.e5m2.f32] for fp8 x fp8 -> f32 (OCANNL's fp8 is
-       e5m2), which wmma cannot express. sm_89+ (Ada); the [(mma-fp8)] marker makes [cuda_to_ptx]
+       e5m2), which wmma cannot express. sm_89+ (Ada); the [(mma-fp8)] marker makes [nvrtc_options]
        target compute_89, whose PTX the driver forward-JIT-compiles on newer GPUs (e.g. sm_120
        Blackwell GeForce) — deliberately NOT the device arch, where the plain e5m2 encoding gives
        way to the family-specific [kind::f8f6f4] forms.
@@ -1445,23 +1474,204 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
 
   module Compile = C_syntax.Compile_driver (Cuda_syntax_config)
 
-  let%diagn2_sexp compile ~name bindings lowered =
-    let ptx, kparams, name, launch =
-      Compile.compile ~name bindings lowered ~includes:(cuda_includes ())
+  let next_program_id = Atomic.make 0
+
+  let new_program ptx =
+    {
+      program_id = Atomic.fetch_and_add next_program_id 1;
+      ptx;
+      modules = [];
+      modules_lock = Stdlib.Mutex.create ();
+    }
+
+  (* {2 The kernel code cache (gh-ocannl-1529)}
+
+     The HIP backend's cache (gh-ocannl-1314), ported: a search candidate re-renders the whole
+     routine and typically changes a handful of its kernels, so the batch path compiles only the
+     kernels no earlier compile in this process produced -- its cache misses -- as ONE program, and
+     reuses the rest. On CUDA the case rests on per-KERNEL cost rather than hiprtc's per-program
+     overhead. Measured on rog (sm_120, nvrtc 13.4, driver cache disabled) on a [gpt2_mini_train]
+     step's 269 kernels: nvrtc costs 18 ms per program plus 12.9 ms per kernel, the driver's PTX JIT
+     4.6 ms per kernel. A cold search's candidates spent a median 1.42 s in nvrtc and 0.95 s in the
+     JIT of a 2.77 s compile, compiling all 261 kernels where a sketch changes about 12. Every
+     kernel as its own program costs 2.6x the joint program, and nvrtc's threads recover only 1.7x
+     of that, so compiling FEWER kernels in one program is the lever, as on HIP.
+
+     A kernel's key is its standalone source ([render_batch]'s [assemble [i]] with the conditional
+     includes applied: the includes, the builtins it uses, its definition, including its name) with
+     its minted names renamed by first occurrence ([Kernel_code_cache.canonical_symbols]), and the
+     complete nvrtc option list that source compiles under ([nvrtc_options]: the arch the device set
+     and the source's markers floor, the include paths, the numerics flags, the debug flag). Misses
+     with different option lists compile as separate programs, so a kernel's PTX always came from
+     its own option list. The reused PTX was compiled from the same kernel text up to that renaming
+     -- a bijection on names the kernel owns -- possibly beside other kernels: the builtins are
+     [__forceinline__] helpers and [__constant__] tables, so a companion changes nothing it
+     computes. Process-local and bounded by [cuda_kernel_cache_mib] (PTX bytes; each retained
+     program also keeps its loaded modules, see [program]); 0 disables it, and every batch compiles
+     as one program of all its kernels, as before. Parameters, bindings and launch geometry always
+     come from the current rendering. *)
+  let kernel_cache_capacity_bytes =
+    lazy
+      (let mib = Utils.get_global_arg ~default:"64" ~arg_name:"cuda_kernel_cache_mib" in
+       match Int.of_string_opt (String.strip mib) with
+       | Some m when m >= 0 -> m * 1024 * 1024
+       | _ ->
+           raise
+           @@ Utils.User_error
+                ("cuda_kernel_cache_mib must be a non-negative integer (MiB); found: " ^ mib))
+
+  let kernel_cache : program Kernel_code_cache.t =
+    Kernel_code_cache.create ~capacity_bytes:(fun () -> Lazy.force kernel_cache_capacity_bytes)
+
+  (* Held from the cache lookups to the publication of what they missed, so two domains compiling
+     the same kernels cannot both miss and both compile them: the second finds the first's PTX.
+     nvrtc's threads overlap little (8 threads recovered 1.7x on separate programs), so serializing
+     here gives up little. *)
+  let kernel_compile_lock = Stdlib.Mutex.create ()
+
+  let compile_kernels ~batch ~names bindings lowereds =
+    Compile_cost.record_reuse_capable ();
+    let r =
+      Compile.render_batch ~names bindings lowereds ~includes:(cuda_includes ())
         ~builtins:Builtins_cuda.builtins
-        ~conditional_includes:Cuda_like_config.Cuda.conditional_includes ~compile_source:cuda_to_ptx
-        ()
+        ~conditional_includes:Cuda_like_config.Cuda.conditional_includes ()
     in
-    { ptx; kparams; bindings; name; launch }
+    let n = Array.length r.entries in
+    Compile_cost.record_kernels ~rendered:n ~compiled:0;
+    let all = List.init n ~f:Fn.id in
+    let kernel_names = Array.map r.entries ~f:(fun (_, name, _) -> name) in
+    (* The artifacts' name, as [Compile_driver.drive] derives it. *)
+    let name =
+      if batch then
+        String.(strip ~drop:(equal_char '_') @@ common_prefix (Array.to_list kernel_names))
+      else kernel_names.(0)
+    in
+    (* The routine's full source, as codegen emitted it, is its [.cu] artifact whatever was
+       compiled: the debug view of what codegen emitted (and what tests read) does not depend on
+       what the cache held. The renaming is the key's alone; nvrtc compiles the emitted text. *)
+    let full_source = with_conditional_includes (r.assemble all) in
+    write_source_artifact ~name full_source;
+    let programs = Array.create ~len:n None in
+    (* Not under device debugging: PTX debug info names the source file it was compiled from, which
+       a later compile of the same routine rewrites, so reuse would point a debugger at text that is
+       not the code's. Every kernel compiles, as with the cache off. *)
+    let enabled = Kernel_code_cache.enabled kernel_cache && not (Utils.with_runtime_debug ()) in
+    let keyed =
+      if not enabled then [||]
+      else
+        Array.init n ~f:(fun i ->
+            let source = with_conditional_includes (r.assemble [ i ]) in
+            let options = nvrtc_options source in
+            (* Keyed on the text with its minted names renamed, so the next candidate's unchanged
+               kernel -- rendered with other symbol numbers -- finds this one. *)
+            let canonical = Kernel_code_cache.canonical_symbols ~keep:[ kernel_names.(i) ] source in
+            (options, Kernel_code_cache.key ~parts:(options @ [ canonical ])))
+    in
+    let lookup idxs =
+      List.iter idxs ~f:(fun i ->
+          if Option.is_none programs.(i) then
+            programs.(i) <- Kernel_code_cache.find kernel_cache (snd keyed.(i)))
+    in
+    let misses () = List.filter all ~f:(fun i -> Option.is_none programs.(i)) in
+    (* The lookups run without the lock, so an all-hit compile never waits on another domain's
+       nvrtc; the misses are looked up again under it, where another domain may just have published
+       them. *)
+    if enabled then lookup all;
+    let compile_misses () =
+      if enabled then lookup (misses ());
+      let misses = misses () in
+      let groups =
+        if not enabled then
+          (* As before the cache: one program of every kernel. *)
+          [ (nvrtc_options full_source, all) ]
+        else
+          (* Misses grouped by option list, in batch order: one program per distinct list, so a
+             kernel's PTX always comes from its own option list. *)
+          let same = List.equal String.equal in
+          let distinct =
+            List.fold misses ~init:[] ~f:(fun acc i ->
+                let options = fst keyed.(i) in
+                if List.mem acc options ~equal:same then acc else acc @ [ options ])
+          in
+          List.map distinct ~f:(fun options ->
+              (options, List.filter misses ~f:(fun i -> same (fst keyed.(i)) options)))
+      in
+      let n_compiled = List.length misses in
+      let log_header =
+        Printf.sprintf "/* kernel code cache: compiled %d of %d kernels, reused %d */\n" n_compiled
+          n (n - n_compiled)
+      in
+      (* A program of every kernel in batch order is the routine's own source, already written as
+         [<name>.cu]; any other program is written as [<name>.part<k>.cu] beside its PTX and log,
+         under the name nvrtc was given, so its diagnostics point at the text it compiled.
+         [.part<k>] is a spelling no routine name takes. *)
+      let whole = match groups with [ (_, idxs) ] -> List.equal Int.equal idxs all | _ -> false in
+      if Utils.settings.output_debug_files_in_build_directory then (
+        (* What an earlier compile of this name left is not this compile's: remove it, so none is
+           left that would read as one. *)
+        let dir = Stdlib.Filename.dirname (Utils.build_file (name ^ ".ptx")) in
+        let ours file =
+          List.exists [ ".ptx"; ".cu_log" ] ~f:(fun ext -> String.equal file (name ^ ext))
+          || String.is_prefix file ~prefix:(name ^ ".part")
+        in
+        (try
+           Array.iter (Stdlib.Sys.readdir dir) ~f:(fun file ->
+               if ours file then
+                 try Stdlib.Sys.remove (Stdlib.Filename.concat dir file) with Sys_error _ -> ())
+         with Sys_error _ -> ());
+        if List.is_empty groups then
+          Stdio.Out_channel.write_all (Utils.build_file (name ^ ".cu_log")) ~data:log_header);
+      List.iteri groups ~f:(fun k (options, idxs) ->
+          let artifact = if whole then name else name ^ ".part" ^ Int.to_string k in
+          let source = with_conditional_includes (r.assemble idxs) in
+          if not whole then write_source_artifact ~name:artifact source;
+          (* Before the call: a program nvrtc refuses was still given these kernels. *)
+          Compile_cost.record_kernels ~rendered:0 ~compiled:(List.length idxs);
+          let ptx =
+            try
+              Compile_cost.time_device (fun () ->
+                  compile_program ~name:artifact ~log_header ~options source)
+            with exn ->
+              let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+              r.attribute idxs exn backtrace
+          in
+          let program = new_program ptx in
+          (* Published only now, after nvrtc returned: a failed program leaves no entry. *)
+          if enabled then
+            Kernel_code_cache.publish kernel_cache
+              ~keys:(List.map idxs ~f:(fun i -> snd keyed.(i)))
+              ~bytes:(String.length (Nvrtc.string_from_ptx ptx))
+              program;
+          List.iter idxs ~f:(fun i -> programs.(i) <- Some program))
+    in
+    if List.is_empty (misses ()) then (
+      if Utils.settings.output_debug_files_in_build_directory then
+        Stdlib.Mutex.protect kernel_compile_lock compile_misses)
+    else Stdlib.Mutex.protect kernel_compile_lock compile_misses;
+    (Array.map programs ~f:(fun p -> Option.value_exn ~here:[%here] p), r.entries)
+
+  let%diagn2_sexp compile ~name bindings lowered =
+    let programs, entries = compile_kernels ~batch:false ~names:[| name |] bindings [| lowered |] in
+    let kparams, name, launch = entries.(0) in
+    { code = programs.(0); kparams; bindings; name; launch }
 
   let%diagn2_sexp compile_batch ~names bindings lowereds =
-    let ptx, kparams_and_names =
-      Compile.compile_batch ~names bindings lowereds ~includes:(cuda_includes ())
-        ~builtins:Builtins_cuda.builtins
-        ~conditional_includes:Cuda_like_config.Cuda.conditional_includes ~compile_source:cuda_to_ptx
-        ()
-    in
-    { ptx; kparams_and_names; bindings }
+    let programs, kparams_and_names = compile_kernels ~batch:true ~names bindings lowereds in
+    { programs; kparams_and_names; bindings }
+
+  (* [program]'s module in [prior_context]'s CUDA context: loaded on the program's first link into
+     that context, then shared by every kernel and every routine the program holds there. *)
+  let module_of prior_context (program : program) =
+    let ctx = ctx_of prior_context in
+    Stdlib.Mutex.protect program.modules_lock (fun () ->
+        match List.Assoc.find program.modules ~equal:phys_equal ctx with
+        | Some run_module -> run_module
+        | None ->
+            set_ctx ctx;
+            let run_module = load_module program.ptx in
+            prior_context.device.dev.set_builtins_in run_module;
+            program.modules <- (ctx, run_module) :: program.modules;
+            run_module)
 
   let link_proc ~prior_context ~name ~(kparams : (string * kparam_source) list)
       ~(launch : Low_level.launch_dims) ~ctx_buffers lowered_bindings run_module =
@@ -1528,9 +1738,8 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
 
   let%track3_sexp link prior_context (code : code) ctx_buffers =
     let ctx = ctx_of prior_context in
+    let run_module = module_of prior_context code.code in
     set_ctx ctx;
-    let run_module = load_module code.ptx in
-    prior_context.device.dev.set_builtins_in run_module;
     let idx_params = Indexing.bound_symbols code.bindings in
     let lowered_bindings : Indexing.lowered_bindings =
       List.map idx_params ~f:(fun s -> (s, ref 0))
@@ -1547,11 +1756,12 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
       List.map idx_params ~f:(fun s -> (s, ref 0))
     in
     let ctx = ctx_of prior_context in
-    set_ctx ctx;
-    let run_module = load_module code_batch.ptx in
-    prior_context.device.dev.set_builtins_in run_module;
+    (* Each distinct program's module is loaded once per context ([module_of]); every task keeps its
+       own kernel's module alive through its [context_lifetime], as before. *)
     let procs =
-      Array.map code_batch.kparams_and_names ~f:(fun (kparams, name, launch) ->
+      Array.mapi code_batch.kparams_and_names ~f:(fun i (kparams, name, launch) ->
+          let run_module = module_of prior_context code_batch.programs.(i) in
+          set_ctx ctx;
           link_proc ~prior_context ~name ~kparams ~launch ~ctx_buffers lowered_bindings run_module)
     in
     (lowered_bindings, procs)

@@ -7237,6 +7237,8 @@ class FixtureDriverGateInventoryTest(unittest.TestCase):
         "check-box.sh": "the check the gate runs",
         "fixture_digest.py": "records and checks fixture digests; measures nothing",
         "gen_fixtures.py": "writes fixtures; measures nothing",
+        "gh1529_nvrtc_cost.sh": "times the CUDA compiler and JIT, never a step against another "
+        "framework, so no venv or torch item applies; it checks its fixture's digest itself",
         "gh612v_session.sh": "hands --box/--skip-box-check to every gh612_cells.sh cell, whose "
         "fixture check runs the gate",
         "runners/bench_common.py": "a runner's helper: reads the fixture its driver hands it",

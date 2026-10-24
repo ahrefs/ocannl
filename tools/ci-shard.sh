@@ -200,7 +200,7 @@ batch_norm_running 25
 online_softmax_block_mma 23
 cc_march_census-w16_native_foreign 22
 cc_march_census-w64_native_foreign 22
-hip_kernel_cache 22
+gpu_kernel_cache 22
 cc_march_census-w64_native_host 21
 limits_field_classes 21
 dead_export_scan 20

@@ -424,5 +424,23 @@ files.
   `.hip_log` opens with `kernel code cache: compiled k of n kernels`. Reuse is only as high as the
   re-rendered kernels are byte-identical: identifiers and scope scans run over the whole batch, so a
   changed segment that mints a node can change its neighbours' text (a miss, never a wrong hit).
-  Guards: `kernel_code_cache` (the cache, any backend), `hip_kernel_cache` (reuse on HIP, with an
-  `OCANNL_HIP_KERNEL_CACHE_MIB=0` negative control).
+  Guards: `kernel_code_cache` (the cache, any backend), `gpu_kernel_cache` (reuse on HIP and CUDA,
+  with an `OCANNL_HIP_KERNEL_CACHE_MIB=0` / `OCANNL_CUDA_KERNEL_CACHE_MIB=0` negative control).
+- **CUDA has the same cache, for a different reason** (gh-ocannl-1529, `cuda_kernel_cache_mib`,
+  default 64): nvrtc and the driver's PTX JIT cost per KERNEL, not per program. Measured on rog
+  (sm_120, nvrtc 13.4, `CUDA_CACHE_DISABLE=1`) on a `gpt2_mini_train` step's 269 kernels with
+  `benchmarks/gh1529_nvrtc_cost.sh`: nvrtc 18 ms per program + 12.9 ms per kernel, JIT 4.6 ms per
+  kernel; a cold search's candidates spent a median 1.42 s in nvrtc and 0.95 s in the JIT of a
+  2.77 s compile, on all 261 kernels. Per-kernel programs cost 2.6x the joint one and nvrtc's
+  threads recover only 1.7x, so the HIP design carries over: key, misses as one program per option
+  list, publish after nvrtc returns. Two CUDA specifics: a `program` keeps its loaded module per
+  CUDA context (`module_of`), since reloading a reused program would re-pay the JIT for every
+  kernel in it; that keeps device code resident while the cache or a routine holds the program,
+  hence the smaller default. And the nvrtc options key on the source WITH its conditional includes
+  (`nvrtc_options`, as `cuda_to_ptx` did), where HIP keys before them. Measuring trap: with the
+  driver's compute cache on (the default), nvrtc too answers an unchanged program from it (0.14 s
+  instead of 3.5 s for the joint gpt2 program), so a cost probe that repeats a compile must run
+  under `CUDA_CACHE_DISABLE=1` -- an A/B of two searches too, or the arm re-rendering candidates an
+  earlier run compiled reads warm. Measured that way (`gh1529_nvrtc_cost.sh ab`), the cache took a
+  cold gpt2 b8 search's candidate compile from 3.46 s to 1.73 s (nvrtc 1.38 to 0.40 s, JIT 0.96 to
+  0.17 s, 29 of 261 kernels compiled) and fit 40 candidates in a budget that fit 26.
