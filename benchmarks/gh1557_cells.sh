@@ -7,7 +7,8 @@
 # summary prints each replay's crown (`best_ms`) against its timed steps' p10 and p50. The step
 # times come from replay processes only, as the README's two-pass protocol requires: a searching
 # process's launches are inflated by its accumulated modules. A replay that searched instead (the
-# search pass was contended, so nothing was stored) has no pair and fails the run.
+# search pass was contended, so nothing was stored), or whose ship substituted the untuned default
+# (`tune.ship_substituted`), has no pair and fails the run.
 #
 # Usage:
 #   benchmarks/gh1557_cells.sh (--box BOX | --skip-box-check) FIXTURE OUT BUDGET [WEIGHTS...]
@@ -82,17 +83,25 @@ for w in sys.argv[3:]:
             continue
         try:
             shipped = d["tune"]["shipped"]
+            if shipped != arm.upper():
+                raise ValueError(f"forced arm {arm.upper()} but shipped {shipped}")
             a = {x["arm"]: x for x in d["tune"]["arms"]}[shipped]
             s = d["step_ms"]
             if d["searched"] is not False or a["state"] != "cache-replay":
                 raise ValueError(f"not a replay (searched={d['searched']}, state={a['state']})")
+            # A shipping compile that fell back to the untuned default keeps the replay's report:
+            # its steps are not the crown's (orchestrate.substitution_check reads the same field).
+            # Only an explicit false is a measured ship; true, null or absent has no pair.
+            if d["tune"].get("ship_substituted") is not False:
+                raise ValueError(f"not a measured ship (ship_substituted="
+                                 f"{d['tune'].get('ship_substituted')})")
             crown = float(a["best_ms"])
             float(s["p10"]), float(s["p50"])
             if not (math.isfinite(crown) and crown > 0):
                 raise ValueError(f"crown {crown}")
         except (AttributeError, KeyError, TypeError, ValueError) as e:
             # No result line (None), a process that searched (its step times are a searching
-            # process's), or a search that crowned nothing (best_ms null): no pair.
+            # process's), a substituted ship, or a search that crowned nothing (best_ms null).
             print(f"weights={w} arm={arm.upper()}: no crown/step pair ({e!r})")
             bad += 1
             continue
