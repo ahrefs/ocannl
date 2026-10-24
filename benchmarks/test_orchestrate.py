@@ -6979,7 +6979,8 @@ class BoxGateTest(BoxGateStandIn, unittest.TestCase):
 
         self.assertIsNone(code, err)
         self.assertEqual(
-            self.called(), ["--box m4-max --fixture-dir /store --fixture gpt2_mini --fixture lenet"]
+            self.called(),
+            [f"--box m4-max --fixture-dir {Path('/store')} --fixture gpt2_mini --fixture lenet"],
         )
 
     def test_a_gap_refuses_to_start(self):
