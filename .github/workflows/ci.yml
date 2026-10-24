@@ -765,9 +765,15 @@ jobs:
         # status travels through dune-quiet.sh's stderr filter, where a dropped
         # PIPESTATUS would report every red run as green -- the one failure this
         # whole file exists to prevent. Exactly 1, not merely nonzero: the
-        # script's own refusals (usage, lock, unrewritten toolchain) exit 2 and
-        # the cap exits 142, and neither may pass for a build failure.
+        # script's own refusals (usage, lock, unrewritten toolchain, an unknown
+        # alias) exit 2 and the cap exits 142, and neither may pass for a build
+        # failure. The failing target is a FILE dune cannot build, not an
+        # alias: an alias dune does not know is refused before dune runs
+        # (staging#1357), so it never reaches dune-quiet.sh (gh-ocannl-1589).
         expect 1 'run (failing target)' \
+          tools/test-run.sh run --cap 300 build no-such-target-smoke
+        # That refusal is the script's own 2, on Windows as elsewhere.
+        expect 2 'run (unknown alias)' \
           tools/test-run.sh run --cap 300 build @no-such-alias-smoke
         # Detached mode: `start` publishes pointers and returns immediately,
         # `wait` polls the verdict FILE under its own bound (the run's cap plus
