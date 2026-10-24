@@ -93,7 +93,7 @@ Equivalently, solving for output_dim: `output_dim = (input_dim - effective_kerne
 **Projection inference** handles `Affine` terms differently depending on `use_padding`:
 
 - If `use_padding = false`: the effective kernel span is incorporated during shape inference; projection inference just applies the index formula with the actual `stride_offset`.
-- If `use_padding = true`: kernel extent doesn't affect shape inference; padding is computed during projection inference, keyed by `proj_id`. The padding is the maximal dilated kernel extent encountered in constraints involving that projection id.
+- If `use_padding = true`: kernel extent doesn't affect shape inference; padding is computed during projection inference, keyed by `proj_id`. The padding is the maximal dilated kernel extent encountered in constraints involving that projection id. A padded window can only index an operand: one in an einsum spec's result slot is refused during constraint generation (`Shape.refuse_result_side_padded_window`, gh-ocannl-1550), since writing through it would be a padded transposed convolution, whose projections are not defined.
 
 Shape inference does not maintain padding for axes of individual tensor nodes—these padding values are computed and updated during projections inference.
 

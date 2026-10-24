@@ -49,7 +49,10 @@ files.
   and demand NO margins (gh-504: `Row.proj_env.clamp_padded`; interval-based range guards in
   `Assignments.to_low_level`); add-family keeps physical halos committed as tensor-node identity
   (padded convs lower offset-free). The padded dim equation requires the input divisible by the
-  stride, and a stride-2 window only clips on the right for window ≥ 5.
+  stride, and a stride-2 window only clips on the right for window ≥ 5. A padded window in the
+  RESULT slot is refused before elaboration (gh-ocannl-1550, `refuse_result_side_padded_window`,
+  called from `einsum_n_constraints` and the `Permute` branch); a padded window's backward writes
+  through the same window but reuses the forward projections, so it never comes through there.
 - Use-site row resolution is opt-in (gh-ocannl-544): an operation result's open row variables
   close DOWN to its arguments' shapes; a use site broadcasts the result in but cannot widen it.
   The resolve-at-use mark (`Row.add_resolve_at_use`, propagated through unification) grants the
