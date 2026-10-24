@@ -14,8 +14,8 @@
    neutral element, by contract), so the smoothed value at each edge picked up the margin's
    contribution: on the base commit both edge cells of [sm] differed from the zero-padded oracle,
    and the margins held the padding positions' contributions. A forward result-side padded window
-   ([=> o=+k]), the other way the issue imagined margins being written and read, does not reach
-   lowering: its projections are not inferred.
+   ([=> o=+k]), the other way the issue imagined margins being written and read, is refused at shape
+   inference (gh-ocannl-1550; test/einsum/result_side_padded_window.ml).
 
    Every product below is a small integer, so every sum is exact in single precision on every
    backend, in any order; the values discriminate: each padding position's contribution is

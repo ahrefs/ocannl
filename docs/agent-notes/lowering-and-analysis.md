@@ -570,7 +570,7 @@ files.
   per-element test in the hot loop); `set ~margin_writes` records the node and `margin_restores`
   re-emits its margin reset after the loop nest, with fresh loop symbols, in both `loop_accum` and
   `loop_accum_rev`. Forward result-side padded windows (`=> o=+k`) would be the other writer, but
-  do not reach lowering (their projections are not inferred). Executed:
+  shape inference refuses them (gh-ocannl-1550). Executed:
   `test/operations/padded_window_margin_writes.ml`.
 - **A reachability audit of a lowering shape counts user `%cd` readers, not only the library's
   ops** (gh-ocannl-1496). The gh-ocannl-1474 audit enumerated forward operations and concluded that

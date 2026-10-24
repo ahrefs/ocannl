@@ -537,6 +537,7 @@ The affine axis syntax enables convolution and pooling operations directly in ei
   input_size = stride * (output_size - 1) + effective_kernel_span
   ```
   where `effective_kernel_span = 1 + (kernel_size - 1) * dilation`.
+- **Padded windows are operand-only**: a padded window in the result slot (after `=>`), e.g. `"s, i; k => s, i=+k"`, would be a padded transposed convolution, which is not implemented; shape inference refuses it with a message naming the window (gh-ocannl-1550). Write the padded window on an operand instead — with stride 1, dilation 1 and an odd kernel size, `"s, o=+k; k => s, o"` with the kernel reversed is the same map — or use an unpadded result-side window (`=> s, i<+k`), a full transposed convolution whose result extent is `stride * (operand_size - 1) + effective_kernel_span`. Result-side unpadded and stride-only (`=> s, 2*i`) axes are supported, and so is the gradient of an operand-side padded window (it reuses the forward projections).
 
 **Important constraint for valid convolution**: The formula must hold exactly, meaning `(input_size - effective_kernel_span)` must be divisible by `stride`. Otherwise, shape inference will fail with "incompatible stride" error.
 

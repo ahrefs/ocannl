@@ -542,6 +542,41 @@ let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~
                    ( "Variable " ^ label ^ " not found in environments for spec: " ^ spec,
                      [ Shape_mismatch error_shapes ] )))
 
+(** Refuses a padded ([=+]) window in the result slot of an einsum spec (gh-ocannl-1550). A padded
+    window on the result would be a padded transposed convolution: the result's index is the affine
+    combination, so its projection is never iterated, and projection inference has no semantics for
+    it. The check is structural over the parsed result slot (every kind and position of its [labels]
+    map) and runs before any elaboration. Operand-side padded windows, unpadded ([<+]) and
+    stride-only result axes are unaffected; the backward of an operand-side padded window reuses the
+    forward's projections and never comes here with a reversed spec. *)
+let refuse_result_side_padded_window ~spec ~(error_shapes : t list) (ls_lhs : parsed_axis_labels) =
+  Map.iter ls_lhs.labels ~f:(function
+    | Affine_spec
+        {
+          stride;
+          over_label;
+          stride_offset;
+          conv = Some { dilation; kernel_label; use_padding = `True };
+        } ->
+        let coeff c = if String.equal c "1" then "" else c ^ "*" in
+        let offset = if stride_offset = 0 then "" else "+" ^ Int.to_string stride_offset in
+        let window =
+          [%string "%{coeff stride}%{over_label}=%{offset}+%{coeff dilation}%{kernel_label}"]
+        in
+        raise
+        @@ Row.Shape_error
+             ( [%string
+                 "result-side padded window `%{window}` in einsum spec \"%{spec}\" is not \
+                  supported: a padded (=+) window on the result is a padded transposed \
+                  convolution, which OCANNL does not implement. Put the padded window on an \
+                  operand instead (e.g. \"s, o=+k; k => s, o\"): with stride 1, dilation 1 and an \
+                  odd kernel size that is the same map with the kernel reversed. Or write the \
+                  result-side window unpadded (<+), a different operation: a full transposed \
+                  convolution, whose result extent is stride*(n-1) + the dilated kernel extent for \
+                  an operand extent n."],
+               [ Shape_mismatch error_shapes ] )
+    | Label _ | Fixed_index _ | Affine_spec _ | Concat_spec _ -> ())
+
 (** Shared n-ary einsum constraint builder used by [Broadcast (Einsum ...)],
     [Broadcast_tern (Einsum_tern ...)], and [Block]. Handles per-shape
     [einsum_slot_spec_to_dims_bio] calls, name-clash check, delayed-var binding, proj-env merge, and
@@ -558,6 +593,7 @@ let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~
 let einsum_n_constraints ~for_projections ~spec ~(rhs_slots : (parsed_axis_labels * t) list)
     ~(cur_sh : t) ~ls_lhs ~dim_refs ~result_label ~arg_label_prefix ~(error_shapes : t list)
     ?(lhs_constraints_first = false) () =
+  refuse_result_side_padded_window ~spec ~error_shapes ls_lhs;
   let row_var_env = Hashtbl.create (module String) in
   let dim_var_env = Hashtbl.create (module String) in
   let rhs_results =
@@ -1270,6 +1306,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                  ( "Invalid permutation spec (expected one argument): " ^ spec,
                    [ Shape_mismatch [ cur_sh; sh ] ] )
       in
+      refuse_result_side_padded_window ~spec ~error_shapes:[ cur_sh; sh ] ls_lhs;
       let row_var_env = Hashtbl.create (module String) in
       let dim_var_env = Hashtbl.create (module String) in
 

@@ -1,0 +1,15 @@
+the operand-side padded window with the reversed kernel is the padded transposed convolution: true
+the result-side unpadded window's extent is n + K - 1: true
+the result-side unpadded window is the full transposed convolution: true
+a result-side stride-only axis builds and runs: true
+binary (the reported spec): result-side padded window `i=+k` in einsum spec "s, i; k => s, i=+k" is not supported: a padded (=+) window on the result is a padded transposed convolution, which OCANNL does not implement. Put the padded window on an operand instead (e.g. "s, o=+k; k => s, o"): with stride 1, dilation 1 and an odd kernel size that is the same map with the kernel reversed. Or write the result-side window unpadded (<+), a different operation: a full transposed convolution, whose result extent is stride*(n-1) + the dilated kernel extent for an operand extent n.
+binary (the reported spec): refused at construction, naming the result-side padded window i=+k: true
+binary, strided and dilated: refused at construction, naming the result-side padded window 2*i=+2*k: true
+unary: refused at construction, naming the result-side padded window i=+k: true
+ternary: refused at construction, naming the result-side padded window i=+k: true
+block: refused at construction, naming the result-side padded window s=+k: true
+batch axis: refused at construction, naming the result-side padded window b=+k: true
+input axis: refused at construction, naming the result-side padded window i=+k: true
+axis before a row variable: refused at construction, naming the result-side padded window i=+k: true
+legacy + with use_padding = true: refused at construction, naming the result-side padded window i=+k: true
+%cd ~logic: refused at construction, naming the result-side padded window i=+k: true
