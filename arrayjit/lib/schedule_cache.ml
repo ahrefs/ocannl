@@ -718,6 +718,11 @@ type entry = {
           the PROGRAM, like [best_ms] and [baseline_ms] and under the same key regime, which is what
           makes it replayable: the flip chain's profitability term reads it, so without it a warm
           cache would rank the decision surface differently from the cold run that measured it. *)
+  best_spread : float option; [@sexp.option]
+      (** The storing search's winning window's spread ([Autotune.report.best_spread],
+          gh-ocannl-1558): its median raw batch wall over its fastest, so a warm-cache report shows
+          how noisy the measurement behind [best_ms] was. Absent when unknown, and for entries
+          written before the field. *)
   default_fingerprint : string option; [@sexp.option]
       (** {!Schedule.default_schedule_fingerprint} at store time, present iff [default_ms] is: the
           cache key covers only the source digest and the backend, so a config change can redefine

@@ -8,6 +8,7 @@
 #include <caml/mlvalues.h>
 #include <caml/signals.h>
 #include <inttypes.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +24,7 @@
 #if defined(_WIN32)
 #include <windows.h>
 #elif defined(__APPLE__)
+#include <mach/mach.h>
 #include <sys/sysctl.h>
 #include <sys/types.h>
 #elif defined(__linux__)
@@ -933,4 +935,48 @@ CAMLprim value ocannl_set_process_affinity(value mask) {
   (void)mask;
   return Val_int(-1);
 #endif
+}
+
+/* Cumulative CPU-seconds the whole machine has spent busy since boot, summed over every logical
+   CPU, or NaN where this platform gives no such counter (gh-ocannl-1558: [Host_load], the
+   co-tenant signal the autotuner's dispersion attribution reads). Linux: the aggregate [cpu] line
+   of /proc/stat -- user, nice, system, irq, softirq and steal; idle and iowait are not busy, and
+   guest time is already inside user, so the guest columns are not added again -- over
+   sysconf(_SC_CLK_TCK). macOS: the mach host's CPU load ticks (user, system, nice) over the same
+   tick rate; those tick counters are 32-bit and wrap after weeks of uptime, which a reader sees as
+   a counter that went backwards. Windows: not provided. */
+CAMLprim value ocannl_host_cpu_busy_seconds(value unit) {
+  CAMLparam1(unit);
+  double busy = NAN;
+#if defined(__linux__)
+  {
+    FILE *f = fopen("/proc/stat", "r");
+    long hz = sysconf(_SC_CLK_TCK);
+    if (f != NULL) {
+      unsigned long long user = 0, nice = 0, system = 0, idle = 0, iowait = 0, irq = 0,
+                         softirq = 0, steal = 0;
+      int n = fscanf(f, "cpu %llu %llu %llu %llu %llu %llu %llu %llu", &user, &nice, &system,
+                     &idle, &iowait, &irq, &softirq, &steal);
+      fclose(f);
+      /* Kernels before 2.6.11 lack steal; anything shorter than the first four is malformed. */
+      if (n >= 4 && hz > 0)
+        busy = (double)(user + nice + system + irq + softirq + steal) / (double)hz;
+    }
+  }
+#elif defined(__APPLE__)
+  {
+    host_cpu_load_info_data_t info;
+    mach_msg_type_number_t count = HOST_CPU_LOAD_INFO_COUNT;
+    mach_port_t host = mach_host_self();
+    long hz = sysconf(_SC_CLK_TCK);
+    kern_return_t kr =
+        host_statistics(host, HOST_CPU_LOAD_INFO, (host_info_t)&info, &count);
+    mach_port_deallocate(mach_task_self(), host);
+    if (kr == KERN_SUCCESS && hz > 0)
+      busy = ((double)info.cpu_ticks[CPU_STATE_USER] + (double)info.cpu_ticks[CPU_STATE_SYSTEM] +
+              (double)info.cpu_ticks[CPU_STATE_NICE]) /
+             (double)hz;
+  }
+#endif
+  CAMLreturn(caml_copy_double(busy));
 }

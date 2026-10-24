@@ -426,7 +426,7 @@ let decision_line ~call (d : Autotune.batch_decision) =
   Printf.sprintf
     "timing-trace: decision %d: phase %s, %s, depth %d by %s (cap %d, target %.1f ms, estimated \
      wall %s ms), fit %s, %d cap-directed probes, bounded from %s, fallback from %s, rescue %s, \
-     probes %d of %d (%.3f of %.0f ms%s), %s%s"
+     probes %d of %d (%.3f of %.0f ms%s), %s%s%s"
     call (opt d.phase ~f:Fn.id) (Autotune.timing_string d.timing) d.depth
     (Autotune.batch_settle_name d.settle)
     d.cap d.target_ms (opt d.estimated_wall_ms ~f:ms) fit d.cap_directed_probes
@@ -438,6 +438,13 @@ let decision_line ~call (d : Autotune.batch_decision) =
     (if d.budget_spent then ", spent" else "")
     (Autotune.batch_admission_name d.admission)
     (if d.retried then " after a retry" else "")
+    (* gh-ocannl-1558: the co-tenant verdict a CPU backend's window was attributed by; absent under
+       the dispersion-only policy, so a GPU line reads as before. *)
+    (match d.host_load with
+    | None -> ""
+    | Some (Quiet cores) -> Printf.sprintf ", host load quiet (%.2f foreign cores)" cores
+    | Some (Cotenant cores) -> Printf.sprintf ", host load co-tenant (%.2f foreign cores)" cores
+    | Some Unavailable -> ", host load unavailable")
 
 let install_timing_trace () =
   if env_flag "BENCH_TIMING_TRACE" then begin
@@ -523,8 +530,9 @@ let install_timing_trace () =
         Hashtbl.update depths depth ~f:(fun k -> 1 + Option.value k ~default:0);
         pr
           "timing-trace: call %d at %.1fs: depth %d, %d batches (%d reused)%s, %d launches, calib \
-           %.1f ms%s, timed %.1f ms (median batch %.3f ms) | totals: %d calls, %d launches, calib \
-           %.2f s (%d calls untagged), timed %.2f s, %d calls raised, %d calls reused %d batches\n"
+           %.1f ms%s, timed %.1f ms (median batch %.3f ms, spread %.2fx) | totals: %d calls, %d \
+           launches, calib %.2f s (%d calls untagged), timed %.2f s, %d calls raised, %d calls \
+           reused %d batches\n"
           !calls
           (now () -. t0)
           depth c.window.samples c.window.reused
@@ -532,8 +540,8 @@ let install_timing_trace () =
                Printf.sprintf " after a discarded window of %d" w.samples))
           n c.setup_ms
           (if c.tagged then "" else " (untagged call)")
-          c.timed_ms c.window.median_wall_ms !calls !launches !calib_s !untagged !timed_s
-          (raised ()) !reusing_calls !reused_batches;
+          c.timed_ms c.window.median_wall_ms c.window.spread !calls !launches !calib_s !untagged
+          !timed_s (raised ()) !reusing_calls !reused_batches;
         pr "%s\n" (decision_line ~call:!calls c.decision));
     Stdlib.at_exit (fun () ->
         let hist =

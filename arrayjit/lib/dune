@@ -11,7 +11,7 @@
  (public_name arrayjit.utils)
  (preprocessor_deps
   (env_var OCANNL_LOG_LEVEL_UTILS))
- (modules utils datatypes cpu_topology atomic_file)
+ (modules utils datatypes cpu_topology atomic_file host_load)
  ; `unix` for `Unix.environment`, which the unknown-environment-variable warning walks, and for
  ; `Atomic_file`'s exclusive open, file mtime and sub-second sleep (its pid comes from the
  ; `utils_stubs` C stub, not `Unix.getpid`). `mtime.clock.os` for the one thing `unix` has no clock

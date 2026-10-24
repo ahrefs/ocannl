@@ -1007,12 +1007,14 @@ type timing_sample = {
 type timing_result = {
   ms : float;  (** The minimum per-launch sample. Callers admit it through {!admitted_timing_ms}. *)
   contended : bool;
-      (** At least half the sample window was more than 2x slower than its minimum. This is a
-          refusal signal: the window mostly measured host stalls, so the autotuner does not rank or
-          cache the number (gh-ocannl-855). Dispersion only — a window whose minimum is non-positive
-          or non-finite is a clock that resolved nothing, a separate fact that {!admitted_timing_ms}
-          refuses on the number itself (gh-ocannl-888). Not set for {!field-unbatched}'s refusal,
-          which has its own reason (gh-ocannl-1098).
+      (** The window was refused as host contention. At least half the sample window was more than
+          2x slower than its minimum ({!field-dispersed}) -- and, on a CPU backend, the host-load
+          signal over the window showed a co-tenant ({!attribute_dispersion}, gh-ocannl-1558). This
+          is a refusal signal: the window mostly measured host stalls, so the autotuner does not
+          rank or cache the number (gh-ocannl-855). Dispersion only — a window whose minimum is
+          non-positive or non-finite is a clock that resolved nothing, a separate fact that
+          {!admitted_timing_ms} refuses on the number itself (gh-ocannl-888). Not set for
+          {!field-unbatched}'s refusal, which has its own reason (gh-ocannl-1098).
 
           Because they are separate, [not contended] is HALF a proof of usability: a consumer
           deciding whether to keep a number asks {!admitted_timing_ms}, never this field. Reading it
@@ -1028,6 +1030,18 @@ type timing_result = {
           two call for different follow-ups -- a no-batch refusal that persists across idle reruns
           is a threshold's signature, which a count mixed into the contention verdict hides. A
           refusal like [contended]: {!admitted_timing_ms} admits neither. *)
+  dispersed : bool;
+      (** The 2x-majority rule fired on the window (gh-ocannl-1558): at least half its raw
+          [contention_ms] samples exceed twice its minimum. A fact about the window, not a verdict:
+          {!window_result} makes it [contended] too, and a CPU backend's timing call then clears
+          [contended] when the host-load signal shows no co-tenant. A bound derived from "fewer than
+          half the window exceed twice its floor" holds on a window that is not [dispersed], not on
+          every admitted one. *)
+  spread : float;
+      (** The window's median raw [contention_ms] over its minimum: the statistic the 2x rule reads,
+          recorded so a reader can see how noisy an admitted reading was (gh-ocannl-1558). [nan] for
+          a calibration probe's reading, which keeps no window, and non-finite for a clock that
+          resolved nothing. *)
   samples : int;
       (** The number of samples behind [ms] and [contended], for diagnostics and exact dispatch
           accounting. *)
@@ -1185,6 +1199,13 @@ type report = {
           count mixed into the contention verdict hid which one a run met. Disjoint from
           [timings_unbatched] ({!timing_admission} names one cause per window). Zero wherever
           [timings_contended] is. *)
+  timings_dispersed : int;
+      (** Admitted windows that were dispersed (gh-ocannl-1558): the 2x-majority rule fired on them,
+          and on a CPU backend the host-load signal over them showed no co-tenant
+          ({!attribute_dispersion}), so they were the routine's own variance rather than host
+          contention. Not a refusal and not a subset of [timings_contended]: a search whose every
+          refusal is gone this way stays cacheable. Under {!with_uncontended_test_windows} a
+          dispersed window whose flag the scope cleared counts here too. Zero on a cache hit. *)
   timing_decisions : (batch_settle * batch_admission * int) list;
       (** How this call's baseline and candidate timing calls settled their depth and were admitted
           (gh-ocannl-1263): one [(settle, admission, calls)] per pair that occurred, in constructor
@@ -1488,6 +1509,11 @@ type report = {
           read as a throughput figure (gh-ocannl-755). The same caution applies to [baseline_ms],
           [default_ms] and [mma_best_ms], which are the same instrument's readings; ratios between
           them are safe, since all four were taken under one setting within one search. *)
+  best_spread : float option;
+      (** The winning window's [spread] (gh-ocannl-1558): how noisy the measurement behind [best_ms]
+          was. On a {!Cache_replay} report it is the storing search's, replayed from the entry as
+          [best_ms] is. [None] when nothing was timed, and on a hit whose entry predates the field.
+      *)
   timing : timing_mode;
       (** The {!timing_mode} every time in this report was measured under (gh-ocannl-755), including
           the times a [Cache_replay] carries: the objective is a cache-key component, so an entry
@@ -1675,10 +1701,10 @@ val no_search_report : timing:timing_mode -> report
       line written before it, so a killed search is inside the step its last line names.
     - [search_done] ({!tune}, exactly once per call, with its report): [routine], [elapsed_s],
       [outcome] ({!outcome_name}), [timed], [contended], [timings_retried], [unbatched],
-      [unreadable] ([timings_unreadable]), [failed], [rounds], [budget_cut], [baseline_refused]
-      (whether [baseline_refusal] is [Some _]) and [privatize_dropped] (the report's
-      [privatize_drops] counts summed; gh-ocannl-1438), [attempts], [compile_s], [timing_s],
-      [best_ms], [best].
+      [unreadable] ([timings_unreadable]), [dispersed] ([timings_dispersed]), [failed], [rounds],
+      [budget_cut], [baseline_refused] (whether [baseline_refusal] is [Some _]) and
+      [privatize_dropped] (the report's [privatize_drops] counts summed; gh-ocannl-1438),
+      [attempts], [compile_s], [timing_s], [best_ms], [best].
     - [placements_start] ({!Train.tune_placements}, once, before anything is searched or replayed):
       [working_bytes], [device_free] and [device_total] (gh-ocannl-1424). The first is the
       {!Ir.Alloc_census} live working-pool bytes (process-wide, counted at the shared allocator
@@ -2718,8 +2744,27 @@ val sample_window :
     budget. *)
 
 val window_result : timing_sample list -> timing_result
-(** A window's reading: its minimum [per_launch_ms], its sample count, and the dispersion-only
-    [contended] verdict {!sample_min} documents. *)
+(** A window's reading: its minimum [per_launch_ms], its sample count, its [spread], and the
+    dispersion-only verdict {!sample_min} documents, as both [dispersed] and [contended]. *)
+
+(** How a timing call turns a dispersed window into a verdict (gh-ocannl-1558). [Refuse_dispersed]
+    is the dispersion-only rule. [Attribute_dispersion] refuses a dispersed window only when the
+    host-load signal ({!host_load_reading}) over it shows a co-tenant. *)
+type dispersion_policy = Refuse_dispersed | Attribute_dispersion
+
+val dispersion_policy_for_backend : string -> dispersion_policy
+(** [Attribute_dispersion] on a CPU backend ({!Ir.Schedule.backend_is_cpu}), [Refuse_dispersed]
+    elsewhere: host CPU accounting cannot see a device co-tenant, and Metal's queued retry is for a
+    transient device-scheduler burst. On a quiet many-core host a many-thread cc routine's own
+    run-to-run spread meets the 2x rule (step p90 1.7-4.9x p10 on a 32-thread Zen 5,
+    gh-ocannl-1482), and refusing it made every search there uncacheable. *)
+
+val attribute_dispersion : Utils.Host_load.verdict -> timing_result -> timing_result
+(** Pure. A window that is [dispersed] and [contended] is admitted ([contended] cleared, [dispersed]
+    and [spread] kept) on a [Quiet] verdict; every other window and verdict is returned unchanged. A
+    co-tenant refuses only a dispersed window: a window that is not dispersed is admitted under load
+    exactly as before, since a uniformly delayed window is a valid reading. An [Unavailable] signal
+    keeps the refusal: no evidence of quiet is not evidence of it. *)
 
 val search_measurements_cacheable : nothing_timed:bool -> timings_contended:int -> bool
 (** Pure cache-policy seam (gh-ocannl-855). A search result is cacheable only when at least one
@@ -2822,6 +2867,13 @@ type batch_decision = {
   budget_spent : bool;  (** Whether that budget was spent when the calibration ended. *)
   admission : batch_admission;
   retried : bool;  (** Whether a contended first window was discarded for one fresh retry. *)
+  host_load : Utils.Host_load.verdict option;
+      (** The host-load verdict over the returned window under {!Attribute_dispersion}
+          (gh-ocannl-1558), [None] under {!Refuse_dispersed}. Its span covers exactly the window's
+          samples: it opens before the calibration's first single for a depth-1 window resuming
+          those singles, and just before the first batch of a fresh window (any other depth,
+          {!Isolated}, a retry), so calibration time never dilutes it. For a dispersed window
+          shorter than {!Utils.Host_load.min_span_s} the closing reading waits out the remainder. *)
 }
 (** One timing call's depth decision and admission verdict, from the policy's own metadata. *)
 
@@ -2840,6 +2892,7 @@ type timed_window = {
           is not bypassed belongs on it rather than on the mean: {!sample_min} declares [contended]
           on a majority of the window exceeding twice its floor, and a median is unmoved by a
           stalled minority while one long batch moves a mean without limit. *)
+  spread : float;  (** The window's {!field-timing_result.spread}, from the same samples. *)
 }
 (** A window of {!time_routine}'s timed loop (gh-ocannl-994): the window a reading is a minimum
     over, and so the one a bound on that reading belongs against. The whole call's wall also holds
@@ -3039,16 +3092,19 @@ val calibrate_and_time_with_retry_observer :
   on_call:(timing_call -> unit) ->
   phase:string option ->
   retry_contended:bool ->
+  dispersion:dispersion_policy ->
   timing:timing_mode ->
   repeats:int ->
   queue_depth_cap:int ->
   batch:(int -> float) ->
   timing_result
-(** {!calibrate_and_time} with the per-call observers that drive search accounting. [on_retry] runs
-    once when a fresh contention retry starts, before any retry dispatch; [on_call] receives the
-    call's {!timing_call} record as {!time_routine}'s does, its [setup_ms] timed from this call's
-    own start and its [tagged] false. [phase] is reported as {!batch_decision}'s. The original
-    helper remains a no-op-observer, phase-less wrapper for source compatibility. *)
+(** {!calibrate_and_time} with the per-call observers that drive search accounting, and the
+    [dispersion] policy {!time_routine} picks with {!dispersion_policy_for_backend}
+    ({!calibrate_and_time} itself is [Refuse_dispersed]). [on_retry] runs once when a fresh
+    contention retry starts, before any retry dispatch; [on_call] receives the call's {!timing_call}
+    record as {!time_routine}'s does, its [setup_ms] timed from this call's own start and its
+    [tagged] false. [phase] is reported as {!batch_decision}'s. The original helper remains a
+    no-op-observer, phase-less wrapper for source compatibility. *)
 
 val retry_contended_window_for_backend : string -> bool
 (** The backend whose contended queued windows get one immediate retry: Metal only. *)
@@ -3503,6 +3559,17 @@ val with_contended_test_windows : (unit -> 'a) -> 'a
     as contended), while the report's refusal counts and [baseline_refusal] follow the scoped
     verdict. A test reading the two side by side relies on that split, as
     [autotune_measured_refusal] does to tell the host's refusals from the seam's. *)
+
+val host_load_reading : (unit -> Utils.Host_load.reading option) Seam.t
+(** The host-load signal an {!Attribute_dispersion} timing call reads around its window
+    (gh-ocannl-1558), as a seam so a test supplies load evidence independently of its clock. Default
+    {!Utils.Host_load.read}; no configuration selects another. Per domain, like every {!Seam}. *)
+
+val on_batch_wall : (depth:int -> ordinal:int -> float -> float) Seam.t
+(** The scripted clock for an executed search (gh-ocannl-1558): {!time_routine} passes every batch
+    wall it measures through it -- the warmup's excluded -- with the batch's depth and the call's
+    0-based batch ordinal, so a test can make a real routine's windows dispersed and drive the
+    ordinary admission path end to end. Default the identity; no configuration selects another. *)
 
 val apply_measurement_seam : label:string -> digest:string -> timing_result -> timing_result
 (** Candidate-window admission and scripted measurement, shared by real searches and deterministic

@@ -27,7 +27,8 @@ let call ~fixed ~marginal =
         Autotune.calibrate_and_time_with_retry_observer
           ~on_retry:(fun () -> ())
           ~on_call:(fun c -> depth := Some c.Autotune.decision.depth)
-          ~phase:None ~retry_contended:false ~timing:Autotune.Queued ~repeats:3
+          ~phase:None ~retry_contended:false ~dispersion:Autotune.Refuse_dispersed
+          ~timing:Autotune.Queued ~repeats:3
           ~queue_depth_cap:(Autotune.queue_depth_cap_for_backend "hip")
           ~batch:(fun d -> if d = 1 then 9.75 else fixed +. (marginal *. Float.of_int d))
       in

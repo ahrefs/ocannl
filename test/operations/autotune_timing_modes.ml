@@ -81,7 +81,14 @@ let () =
   p "a refused positive timing cannot enter ranking or calibration"
     (Option.is_none
        (Autotune.admitted_timing_ms
-          { ms = 0.0002; contended = true; unbatched = false; samples = 16 }));
+          {
+            ms = 0.0002;
+            contended = true;
+            unbatched = false;
+            samples = 16;
+            dispersed = true;
+            spread = 3.;
+          }));
   (* gh-ocannl-888: the contention verdict judged single dispatches, whose dispersion on a GPU is
      the round trip's own tail. Refusing a depth on it starved every search on both GPU backends,
      and a deeper batch is the remedy for that dispersion rather than a casualty of it. Pinned both
@@ -209,7 +216,14 @@ let () =
     ~f:(fun (what, est_ms, want) ->
       let got =
         Autotune.queued_batch_depth
-          { ms = est_ms; contended = false; unbatched = false; samples = 0 }
+          {
+            ms = est_ms;
+            contended = false;
+            unbatched = false;
+            samples = 0;
+            dispersed = false;
+            spread = 1.;
+          }
       in
       if got <> want then
         Stdio.eprintf "  %s: est %g ms -> depth %d, expected %d\n%!" what est_ms got want;
@@ -217,7 +231,14 @@ let () =
   Verdict.p_all "every degenerate calibration estimate is refused by ranking but still batched"
     degenerate_depth_cases ~f:(fun (what, est_ms, want) ->
       let result : Autotune.timing_result =
-        { ms = est_ms; contended = false; unbatched = false; samples = 16 }
+        {
+          ms = est_ms;
+          contended = false;
+          unbatched = false;
+          samples = 16;
+          dispersed = false;
+          spread = 1.;
+        }
       in
       let admitted = Autotune.admitted_timing_ms result in
       let depth = Autotune.queued_batch_depth result in
@@ -230,11 +251,27 @@ let () =
   let all_depth_cases = depth_cases @ degenerate_depth_cases in
   Verdict.p_all "no calibration estimate ever yields a depth below 1" all_depth_cases
     ~f:(fun (_, est_ms, _) ->
-      Autotune.queued_batch_depth { ms = est_ms; contended = false; unbatched = false; samples = 0 }
+      Autotune.queued_batch_depth
+        {
+          ms = est_ms;
+          contended = false;
+          unbatched = false;
+          samples = 0;
+          dispersed = false;
+          spread = 1.;
+        }
       >= 1);
   Verdict.p_all "no calibration estimate ever yields a depth above the cap" all_depth_cases
     ~f:(fun (_, est_ms, _) ->
-      Autotune.queued_batch_depth { ms = est_ms; contended = false; unbatched = false; samples = 0 }
+      Autotune.queued_batch_depth
+        {
+          ms = est_ms;
+          contended = false;
+          unbatched = false;
+          samples = 0;
+          dispersed = false;
+          spread = 1.;
+        }
       <= 2048);
   Verdict.p_all "depth refinement removes fixed synchronization cost from launch scaling"
     refinement_cases ~f:(fun (what, single_ms, probe_depth, probe_ms, want_depth, want_wall) ->
@@ -366,7 +403,8 @@ let synthetic_call ?(repeats = 3) ?(retry_contended = false) ?walls ~timing ~cap
     if retry_contended then
       Autotune.calibrate_and_time_with_retry_observer
         ~on_retry:(fun () -> Int.incr retries_started)
-        ~on_call:record ~phase:None ~retry_contended ~timing ~repeats ~queue_depth_cap:cap ~batch
+        ~on_call:record ~phase:None ~retry_contended ~dispersion:Autotune.Refuse_dispersed ~timing
+        ~repeats ~queue_depth_cap:cap ~batch
     else
       (* The original public helper, observed the way a trace observes a search: through the
          domain's observer rather than a per-call one. *)
@@ -1279,6 +1317,10 @@ let counter_routine () =
 type reading = {
   ms : float;
   contended : bool;
+  dispersed : bool;
+      (** The window met the 2x-majority rule (gh-ocannl-1558). On cc it can be admitted anyway, as
+          the routine's own variance on a quiet host; the claims whose derivation rests on
+          [median <= 2 * minimum] bypass it as they bypass a contended one. *)
   samples : int;
   wall_ms : float;
   dispatches : int;
@@ -1321,6 +1363,7 @@ let () =
     {
       ms = result.ms;
       contended = result.contended || result.unbatched;
+      dispersed = result.dispersed;
       samples = result.samples;
       wall_ms;
       dispatches = count () - before;
@@ -1389,7 +1432,9 @@ let () =
   (* [contended] is reported here because it is the escape hatch every executed claim below is
      written around: a reading that took it is outside the envelope those claims calibrate, so a
      calibration run has to be able to tell the two apart. *)
-  let contention r = if r.contended then " (contended)" else "" in
+  let contention r =
+    if r.contended then " (contended)" else if r.dispersed then " (dispersed, admitted)" else ""
+  in
   Stdio.eprintf
     "  (not part of the golden) isolated %.6f ms%s over %d dispatches in %.1f ms wall; queued %.6f \
      ms%s over %d dispatches (batch depth %d) in %.1f ms wall; second round isolated %.6f ms%s, \
@@ -1583,7 +1628,9 @@ let () =
       Printf.sprintf "%.6f ms vs low bound %.6f ms at depth %d" que.ms queued_low_bound que.depth)
     "queued reading is not that per-launch time divided by the batch depth as well, or reports \
      contention"
-    (que.contended || Float.(que.ms >= queued_low_bound));
+    (* A dispersed window is outside the [median <= 2 * minimum] bound this side rests on, whether
+       or not its host-load attribution admitted it (gh-ocannl-1558). *)
+    (que.contended || que.dispersed || Float.(que.ms >= queued_low_bound));
   (* Amortizing a round trip can only remove time, so a queued reading above the isolated one is the
      instrument reporting the wrong quantity, not a slow machine. The factor absorbs the noise a
      min-of-N leaves; the point of the claim is the direction.
@@ -1601,7 +1648,10 @@ let () =
      decomposition, not about a quantity two calls can be minimized over. *)
   let iso_min = Float.min iso.ms iso2.ms and que_min = Float.min que.ms que2.ms in
   Verdict.pass_fail "queued timing does not read above isolated timing or reports contention"
-    (iso.contended || iso2.contended || que.contended || que2.contended
+    (* A dispersed window admitted as a cc routine's own variance (gh-ocannl-1558) is bypassed as a
+       contended one is: the direction needs one unstalled sample under each minimum. *)
+    (iso.contended || iso2.contended || que.contended || que2.contended || iso.dispersed
+   || iso2.dispersed || que.dispersed || que2.dispersed
     || Float.(que_min <= iso_min * 2.))
     ~detail:(fun () ->
       Printf.sprintf "queued %.6f ms (%.6f, %.6f) vs isolated %.6f ms (%.6f, %.6f)" que_min que.ms

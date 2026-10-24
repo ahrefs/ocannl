@@ -29,7 +29,7 @@ open Verdict.Claims
 (* --- The classifier: one cause per window, the reading before contention. --- *)
 
 let reading ?(contended = false) ?(unbatched = false) ms =
-  { Autotune.ms; contended; unbatched; samples = 16 }
+  { Autotune.ms; contended; unbatched; samples = 16; dispersed = contended; spread = 1. }
 
 let cases =
   [
