@@ -1,6 +1,6 @@
-(* gh-ocannl-1314: a backend with a kernel code cache (HIP's [hip_kernel_cache_mib]) compiles only
-   the kernels no earlier compile in the process produced, and reuses the rest -- without changing
-   what any kernel computes.
+(* gh-ocannl-1314, gh-ocannl-1529: a backend with a kernel code cache (HIP's [hip_kernel_cache_mib],
+   CUDA's [cuda_kernel_cache_mib]) compiles only the kernels no earlier compile in the process
+   produced, and reuses the rest -- without changing what any kernel computes.
 
    The routine is a materialized contraction feeding a reduction, which a search's fissioned
    candidates split into several kernels. Every input is a small integer, so every product and sum
@@ -15,7 +15,8 @@
 
    The reuse claims are gated on the compile census's [reuse_capable] (a compile went through a
    kernel code cache), never on a backend name, and that flag stays set with the cache disabled: a
-   run with [OCANNL_HIP_KERNEL_CACHE_MIB=0] must fail them, the negative control. *)
+   run with [OCANNL_HIP_KERNEL_CACHE_MIB=0] on HIP, or [OCANNL_CUDA_KERNEL_CACHE_MIB=0] on CUDA,
+   must fail them, the negative control. *)
 
 open Base
 open Ocannl
@@ -91,7 +92,7 @@ let () =
   gated ~when_ ~on "second compile: the same kernels rendered, none compiled"
     (c2.kernels = c1.kernels && c2.kernels_compiled = 0);
   Stdio.eprintf
-    "hip_kernel_cache (not part of the golden): first compile %d of %d kernels compiled, second %d \
+    "gpu_kernel_cache (not part of the golden): first compile %d of %d kernels compiled, second %d \
      of %d; device %s s then %s s\n\
      %!"
     c1.kernels_compiled c1.kernels c2.kernels_compiled c2.kernels
@@ -122,5 +123,5 @@ let () =
       let c = rc.compile_cost in
       c.kernels_compiled > 0 && c.kernels_compiled < c.kernels);
   List.iter candidates_compiled ~f:(fun rc ->
-      Stdio.eprintf "hip_kernel_cache (not part of the golden): %s: %d of %d kernels compiled\n%!"
+      Stdio.eprintf "gpu_kernel_cache (not part of the golden): %s: %d of %d kernels compiled\n%!"
         rc.compile_attempt rc.compile_cost.kernels_compiled rc.compile_cost.kernels)

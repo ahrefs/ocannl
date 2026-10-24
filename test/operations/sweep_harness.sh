@@ -1490,7 +1490,7 @@ holder_pid=
 # A red unit, not a green one: this is diagnosis, and emitting it on a pass would
 # run dune a second time on every sweep.
 # The failure text the fake dune writes. Its remaining lines are the shapes
-# `cuda_to_ptx` and `hip_to_code` append to their compiler's message when a
+# the CUDA and HIP `compile_program` append to their compiler's message when a
 # compile fails, and `compile_metal_source` appends to a Metal failure -- as
 # opposed to the pure policy vectors the context block prints. `fingerprint` is
 # backend-blind, so the local metal unit pins all three lines' extraction;

@@ -2762,16 +2762,17 @@
  (libraries base arrayjit.ir stdio arrayjit.verdict))
 
 (test
- ; gh-ocannl-1314: a backend's kernel code cache (HIP) compiles only the kernels it has not
- ; compiled, and changes nothing a kernel computes. Gated on the compile census, skipped elsewhere.
- ; cc-vector-width: independent -- off HIP its only claims are exact integer outputs, which every
- ; schedule at every width computes alike; the reuse claims are gated on the HIP cache.
- (name hip_kernel_cache)
+ ; gh-ocannl-1314, gh-ocannl-1529: a backend's kernel code cache (HIP, CUDA) compiles only the
+ ; kernels it has not compiled, and changes nothing a kernel computes. Gated on the compile census,
+ ; skipped elsewhere.
+ ; cc-vector-width: independent -- off HIP and CUDA its only claims are exact integer outputs, which
+ ; every schedule at every width computes alike; the reuse claims are gated on the cache.
+ (name gpu_kernel_cache)
  (package neural_nets_lib)
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
- (modules hip_kernel_cache)
+ (modules gpu_kernel_cache)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))

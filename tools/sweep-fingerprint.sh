@@ -106,7 +106,7 @@ sweep_fingerprint() {
     sweep_fingerprint_sites "$1"
     grep -hoE '^(Error|Fatal error|Exception)[^,]*' "$1"
     # A production compiler option vector appended to the exception message by
-    # `cuda_to_ptx`, `hip_to_code`, or `compile_metal_source`. The selectors above
+    # the CUDA or HIP `compile_program`, or `compile_metal_source`. The selectors above
     # cannot reach it (it starts neither at an error site nor at
     # `Error`/`Fatal error`/`Exception`), so match the prefix each backend writes.
     # A changed option set then appears as a fingerprint diff rather than as a

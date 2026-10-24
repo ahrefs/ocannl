@@ -1197,6 +1197,18 @@
 # 1) bypasses it too, since a code object's debug info names the file it was compiled from.
 #hip_kernel_cache_mib=256
 
+# Megabytes of compiled CUDA kernel code (PTX) kept for reuse within a process (gh-ocannl-1529),
+# the CUDA counterpart of hip_kernel_cache_mib: a batch of kernels compiles only the kernels no
+# earlier compile in this process produced, as one nvrtc program, and reuses the rest, a kernel
+# being reused only when its standalone source and its complete nvrtc option list are
+# byte-identical. nvrtc and the driver's PTX JIT cost per kernel compiled (about 13 ms and 5 ms on
+# sm_120), so this keeps an autotuning candidate that changes a few kernels of a large routine from
+# recompiling all of them. A retained program also keeps its loaded module, so its device code stays
+# resident while the cache holds it: the default is smaller than HIP's for that reason. 0 disables
+# it: every routine compiles as one program of all its kernels. Device debugging bypasses it, as on
+# HIP.
+#cuda_kernel_cache_mib=64
+
 # The `-O` argument to the compiler executable for the `cc` and `multidev_cc` backends.
 #cc_backend_optimization_level=3
 
