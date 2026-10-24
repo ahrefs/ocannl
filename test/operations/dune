@@ -6401,11 +6401,13 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-; gh-ocannl-627: the packed GEBP schedule bin/narrow_gebp_bench times, built by the bench's own
-; builder (`bench_gebp`, linked rather than copied), executed at extents its blocking does not
-; divide -- cell-by-cell bitwise against the unscheduled kernel, register-tiled per the census, at
-; f32 and at bf16 storage widened into f32 panels -- plus the before-pin: without its pads the
-; composition is refused at a Swap.
+; gh-ocannl-627, gh-ocannl-1562: the packed GEBP schedules bin/narrow_gebp_bench and
+; bin/schedule_bench time, built by the benches' own builder (`bench_gebp`, linked rather than
+; copied), executed at extents its blocking does not divide in every layout the benches use --
+; cell-by-cell bitwise against the unscheduled kernel, register-tiled per the census, at f32 and at
+; bf16 storage widened into f32 panels -- plus two pins: without its pads the composition is
+; refused at a Swap, and the A-in-place layout is refused at every padded site, by the builder and
+; by Tensorize alike.
 
 ; gh-ocannl-627: bin/narrow_gebp_bench itself, run as the shipped executable at extents its
 ; blocking does not divide: the packed rows must run, agree, and report the register tiling, and
