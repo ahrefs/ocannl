@@ -4754,6 +4754,17 @@ box.
 
 ## Test support and placement
 
+- Find a tensor by name through `Ir.Tnode.label`, never `Ir.Tnode.debug_name`. The debug name
+  becomes the node's code name once a renderer has minted one. A label that two nodes of one
+  routine share gets the `n<id>_<label>` form, and that form sticks. The `.cd`/`.ll` printers
+  that `output_debug_files_in_build_directory` turns on name nodes the C emitter never asks
+  about (a merge buffer's source). So `batch_norm_running`'s data-parallel lookup of the owner's
+  `running_mean_parallel` held with the setting off and raised `Not_found_s` with it on, because
+  the shard broadcast `n53_running_mean_parallel =: n13_running_mean_parallel.merge` had renamed
+  the owner (gh-ocannl-1552). Many tests still match on `debug_name`. That only holds while no
+  routine they print carries the label twice: data-parallel shards, param broadcasts and grad
+  all-reduces all do.
+
 - Insert a new stanza in `test/operations/dune` beside its topical neighbours, never at the end of
   the file. The file is grouped by subsystem rather than alphabetized, and the end is where every
   concurrent branch appends, so two unrelated PRs that both append conflict on rebase. The same

@@ -309,6 +309,13 @@ let get_debug_name ?code_name ?(namespace = default_namespace) ~id ~label () =
       | None when is_grad -> [%string "%{n}%{id - 1#Int}%{opt_grad}"]
       | None -> n ^ Int.to_string id)
 
+(** [debug_name tn] is a display name, not an identity. Once a renderer has minted an identifier for
+    [tn] ({!update_code_name}) it is that code name, and the name can change over the process: a
+    node whose label another node of the same routine also carries is minted as [n<id>_<label>], and
+    that form sticks. Which renderers run depends on configuration -- with
+    [output_debug_files_in_build_directory] the [.cd]/[.ll] printers name nodes the C emitter never
+    asks about, such as a merge-buffer source -- so the same program can report different debug
+    names (gh-ocannl-1552). To find a node by name, compare {!label}. *)
 let debug_name tn =
   let id = tn.id and label = tn.label and code_name = tn.code_name in
   get_debug_name ?code_name ~namespace:tn.namespace ~id ~label ()
