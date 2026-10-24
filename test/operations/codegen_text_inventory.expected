@@ -534,15 +534,15 @@ test/operations/tile_mma_declines.ml [run by @test/operations/runtest-tile_mma_d
     "#pragma omp parallel for"
     "dispatch_apply"
     "tile_"
-test/operations/tile_mma_geometry.ml [run by @test/operations/runtest-tile_mma_geometry; also pins text this scan cannot name: computed fragment, untraced callback]
+test/operations/tile_mma_geometry.ml [run by @test/operations/runtest-tile_mma_geometry; also pins text this scan cannot name: computed fragment, untraced callback, opaque aggregate component, rebound parameter]
     "geometry from the schedule"
     "ocannl_pv__ = {" ^ ...
     "tmma_acc__"
-    ... ^ " = " ^ ... ^ "[2];"
-    ... ^ " = ocannl_pv__[2];"
     ... ^ " = {" ^ ...
     ... ^ "};"
     sprintf "%d, %s, (const %s *)&%s);"
+    sprintf "%s = %s[%d];"
+    sprintf "%s = ocannl_pv__[%d];"
 test/operations/tile_mma_narrow.ml [run by @test/operations/runtest-tile_mma_narrow; also pins text this scan cannot name: computed fragment]
     "HALF_T tile_"
     "OCANNL_VEC_NARROW_BFLOAT16"

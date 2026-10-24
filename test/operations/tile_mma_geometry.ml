@@ -26,7 +26,8 @@
    - The tails (gh-ocannl-620), on the C backends: a site the geometry divides in neither dimension
    renders its leftover columns and rows as narrower register tiles — the last column vector PARTIAL
    — with no scalar code, bitwise against the serial twin, at f32 and through the narrow-storage
-   bridges at partial width.
+   bridges at partial width; at the file's own widest lanes and again at every narrower file's width
+   the file renders (gh-ocannl-1455).
 
    - The seeding, on the pre-schedule lowering under synthetic limits: the whole-triple seeds carry
    exactly [Register_tile.alternatives] of the site's extents beside one auto seed, and one seeded
@@ -460,56 +461,67 @@ let () =
    width a divisibility question (gh-ocannl-575) and cost 3.6x at n = 512 on a 48-wide fp16 tile.
    Now both edges are narrower register tiles: the row band at [m mod rm] rows, the column tail as
    whole vectors plus one PARTIAL vector whose lanes past its width read as zero and are not
-   stored. A 6 x 19 site divides neither way at every width the fleet renders (19 is 3 mod 4, 8 and
-   16; 6 is 2 mod 4): the header names the tails, no scalar accumulator is emitted, the partial
-   column is a zeroed register filled at exactly its width — a three-lane initializer and three lane
-   stores at f32 (gh-ocannl-1071), and for bf16 and half (widened to f32) the same around a whole
-   vector of storage bits the bridges convert at full width (gh-ocannl-1102) — and the values match
-   the serial twin bitwise. *)
+   stored. A 6 x 19 site divides neither way at every width the renderer accepts (19 is odd, so no
+   even lane count divides it; 6 is 2 mod 4): the header names the tails, no scalar accumulator is
+   emitted, the partial column is a zeroed register filled at exactly its width — at f32 an
+   initializer and stores of exactly the partial's lanes (gh-ocannl-1071), and for bf16 and half
+   (widened to f32) the same around a whole vector of storage bits the bridges convert at full
+   width (gh-ocannl-1102) — and the values match the serial twin bitwise.
+
+   The partial's width is read from {!RT.coverage} like the rest of the geometry, not restated: it
+   is three lanes at the 4-, 8- and 16-lane tiles of a 16-, 32- or 64-byte file, but ONE lane at the
+   2-lane tile of an 8-byte file (gh-ocannl-1455).
+
+   The same site is also rendered at every narrower file's width the renderer honours on this file
+   (gh-ocannl-1317's [Register_tile.renderable_lanes] below the file's own ladder: 4 and 2 lanes on
+   a 32- or 64-byte file, 2 on a 16-byte one, none on an 8-byte one), at f32 and through the bf16
+   and half bridges: a geometry a narrower file minted keeps its tile on a wider one, so its bridges
+   run at a lane count the wider file never picks for itself -- the 4-lane bridges inside an AVX2 or
+   AVX-512 kernel, the 2-lane portable ones everywhere (gh-ocannl-1455). *)
+
+(* What one tiled rendering of the tail site showed: the five tail claims, evaluated. *)
+type tail_result = { tiled : bool; header : bool; no_scalar : bool; partial : bool; parity : bool }
+
 let () =
   let m, nt, k = (6, 19, 5) in
-  let names tag =
+  let claims =
     [
-      tag ^ ": a site the tile divides in neither dimension renders register-tiled";
-      tag ^ ": the header names the column tail and the two-row band";
-      tag ^ ": no scalar accumulator is emitted";
-      tag ^ ": the partial column is a zeroed register filled at exactly its width";
-      tag ^ ": the tails match the serial twin bitwise";
+      "a site the tile divides in neither dimension renders register-tiled";
+      "the header names the column tail and the two-row band";
+      "no scalar accumulator is emitted";
+      "the partial column is a zeroed register filled at exactly its width";
+      "the tails match the serial twin bitwise";
     ]
   in
-  if not on_cpu then
-    List.iter [ "f32"; "bf16"; "half"; "half_ns" ] ~f:(fun tag -> List.iter (names tag) ~f:skipped)
+  let names tag = List.map claims ~f:(fun c -> tag ^ ": " ^ c) in
+  let narrower_tag tag = tag ^ " at every narrower file's width" in
+  let tags = [ "f32"; "bf16"; "half"; "half_ns" ] and narrower_tags = [ "f32"; "bf16"; "half" ] in
+  if not on_cpu then (
+    List.iter tags ~f:(fun tag -> List.iter (names tag) ~f:skipped);
+    List.iter narrower_tags ~f:(fun tag -> List.iter (names (narrower_tag tag)) ~f:skipped))
   else begin
     let limits = Context.hardware_limits (Context.auto ()) in
-    let lanes =
-      List.hd_exn
-        (RT.simd_lane_ladder ~vector_bytes:limits.Ir.Backend_intf.simd_vector.bytes ~elt_bytes)
+    let file = limits.Ir.Backend_intf.simd_vector in
+    let ladder = RT.simd_lane_ladder ~vector_bytes:file.bytes ~elt_bytes in
+    (* A 16-column width at [lanes] -- [4x1] of 16, [4x2] of 8, [4x4] of 4, [4x8] of 2 -- capped at
+       the widest four-row tile the register file holds: a 16-register file at 4 lanes (SSE, or x86
+       at a forced 16 bytes) takes [4x3] of 4, whose 12 columns leave a two-vector tail rather than
+       one (gh-ocannl-1285), and a 32-register file at 2 lanes takes [4x6]. Whatever the tile, the
+       19 - [n_full] leftover columns end in a PARTIAL vector and 6 - 4 = 2 rows form the band; the
+       header the tile must state, and the partial's width, are derived from {!RT.coverage}. *)
+    let tile_at lanes =
+      { RT.rm = 4; rn = min (16 / lanes) (RT.rn_cap ~vector_registers:file.registers); lanes }
     in
-    (* A 16-column width at the file's widest f32 lanes -- [4x1] of 16, [4x2] of 8, [4x4] of 4 --
-       capped at the widest four-row tile the register file holds: a 16-register file at 4 lanes
-       (SSE, or x86 at a forced 16 bytes) takes [4x3] of 4, whose 12 columns leave a two-vector tail
-       rather than one (gh-ocannl-1285). Either way 19 - 16 = 3 leftover columns end in a three-lane
-       PARTIAL vector at column 16, and 6 - 4 = 2 rows form the band; the header the tile must state
-       is derived from {!RT.coverage}, not restated. *)
-    let tile =
-      {
-        RT.rm = 4;
-        rn =
-          min (16 / lanes)
-            (RT.rn_cap ~vector_registers:limits.Ir.Backend_intf.simd_vector.registers);
-        lanes;
-      }
-    in
-    let cov = RT.coverage ~m ~n:nt tile in
-    let tail_vectors = List.length cov.tail_widths in
-    (* The partial vector is the tail pass's last column: its accumulator and its address, which the
-       emission spells as the tail's first column plus the column's lane offset. *)
-    let partial_acc = Printf.sprintf "tmma_c_0_%d__" (tail_vectors - 1) in
-    let partial_at = Printf.sprintf "%d + %d" cov.n_full ((tail_vectors - 1) * lanes) in
-    let tails_header =
-      Printf.sprintf "; column tail %d in %d vector%s; row tail %d)" (nt - cov.n_full) tail_vectors
-        (if tail_vectors = 1 then "" else "s")
-        (m - cov.m_full)
+    let tile = tile_at (List.hd_exn ladder) in
+    (* The f32 lane counts of every narrower file this one contains -- each halving of its width
+       down to the 8-byte floor every rendering file meets -- that its own ladder does not rank.
+       Derived from the files, not read from [RT.renderable_lanes]: that is the rule under test, and
+       a gate reading it would turn its regression into a skip. *)
+    let narrower =
+      let rec halvings bytes = if bytes < 8 then [] else bytes :: halvings (bytes / 2) in
+      halvings (file.bytes / 2)
+      |> List.map ~f:(fun bytes -> bytes / elt_bytes)
+      |> List.filter ~f:(fun lanes -> lanes < List.last_exn ladder)
     in
     (* Exact in bf16 and half: cells are the multiples of 1/2 in [-1.5, 1.5], so products are
        multiples of 1/4 and the five-term sums at most 11.25 — six significand bits. That both
@@ -520,7 +532,55 @@ let () =
        twin. *)
     let av = Ll_test.cycle ~dims:[| m; k |] ~modulus:7 ~offset:(-3.) ~stride:0.5 in
     let bv = Ll_test.cycle ~dims:[| k; nt |] ~modulus:7 ~offset:(-3.) ~stride:0.5 in
-    let leg ?b_label ~tag ~prec ~tile ~partial () =
+    (* The tail geometry [tile] renders at this site, as the emission spells it: the partial vector
+       is the tail pass's last column -- its accumulator, and its address as the tail's first column
+       plus the column's lane offset -- and [width] is how many of its lanes are real. *)
+    let geometry (t : RT.t) =
+      let cov = RT.coverage ~m ~n:nt t in
+      let tail_vectors = List.length cov.tail_widths in
+      let acc = Printf.sprintf "tmma_c_0_%d__" (tail_vectors - 1) in
+      let at = Printf.sprintf "%d + %d" cov.n_full ((tail_vectors - 1) * t.lanes) in
+      let width = Option.value (List.last cov.tail_widths) ~default:0 in
+      let header =
+        Printf.sprintf "; column tail %d in %d vector%s; row tail %d)" (nt - cov.n_full)
+          tail_vectors
+          (if tail_vectors = 1 then "" else "s")
+          (m - cov.m_full)
+      in
+      (acc, at, width, header)
+    in
+    (* At f32: a zeroed register initialized from exactly [width] lanes and storing exactly
+       those. *)
+    let f32_partial (t : RT.t) has =
+      let acc, at, width, _ = geometry t in
+      let lane l = Printf.sprintf "(&tmma_d__[(tmma_i__ + 0) * %d + %s])[%d]" nt at l in
+      let last = width - 1 in
+      0 < width && width < t.lanes
+      && has (acc ^ " = {" ^ lane 0)
+      && has (lane last ^ "};")
+      && has (Printf.sprintf "%s = %s[%d];" (lane last) acc last)
+      && not (has (lane width))
+    in
+    (* Through the bridges: the partial column's storage bits are staged in a whole vector, [width]
+       lanes in and [width] lanes out, and the bridge macro converts it at the full lane count --
+       for half, bit-cast to a vector of [HALF_T] first, so the macro's per-lane fallback reads
+       [HALF_T]s. *)
+    let narrow_partial ~bridged ~via (t : RT.t) has =
+      let acc, at, width, _ = geometry t in
+      let bits ~qual l =
+        Printf.sprintf "((%socannl_u16_alias *)&tmma_d__[(tmma_i__ + 0) * %d + %s])[%d]" qual nt at
+          l
+      in
+      let last = width - 1 in
+      0 < width && width < t.lanes
+      && has ("ocannl_pv__ = {" ^ bits ~qual:"const " 0)
+      && has (bits ~qual:"const " last ^ "};")
+      && has (Printf.sprintf "%s = ocannl_pv__[%d];" (bits ~qual:"" last) last)
+      && has (Printf.sprintf "%d, %s, (const %s *)&%s);" t.lanes acc bridged via)
+      && not (has (bits ~qual:"const " width) || has (bits ~qual:"" width))
+    in
+    (* One serial twin per precision, then one tiled rendering per requested tile. *)
+    let leg ?b_label ~tag ~prec ~partial tiles =
       let a = NTDSL.init ~l:("tmt_a_" ^ tag) ~prec ~i:[ k ] ~o:[ m ] ~f:av () in
       let b_label = Option.value b_label ~default:("tmt_b_" ^ tag) in
       let b = NTDSL.init ~l:b_label ~prec ~i:[ nt ] ~o:[ k ] ~f:bv () in
@@ -530,66 +590,85 @@ let () =
         compile_run ~simd_width:nt ~name:("tmt_" ^ tag ^ "_serial") ~leg:Serial serial
       in
       let want = nonzero ("tmt_" ^ tag ^ "_serial") want in
-      let%op tiled = a * b in
-      Tn.update_prec tiled.Tensor.value prec;
-      let got, census =
-        compile_run ~simd_width:nt ~name:("tmt_" ^ tag) ~leg:(Tensorized tile) tiled
-      in
-      let src = Generated.read ("tmt_" ^ tag) in
-      let has s = String.is_substring src ~substring:s in
-      match names tag with
-      | [ n_tiled; n_header; n_scalar; n_partial; n_parity ] ->
-          p n_tiled (register_tiled census);
-          p n_header (has tails_header);
-          p n_scalar (not (has "tmma_acc__"));
-          p n_partial (partial has);
-          p_all2 n_parity got want ~f:Float.equal
+      List.map tiles ~f:(fun (name, (t : RT.t)) ->
+          let%op tiled = a * b in
+          Tn.update_prec tiled.Tensor.value prec;
+          let got, census = compile_run ~simd_width:nt ~name ~leg:(Tensorized (Some t)) tiled in
+          let src = Generated.read name in
+          let has s = String.is_substring src ~substring:s in
+          let _, _, _, header = geometry t in
+          ( {
+              tiled = register_tiled census;
+              header = has header;
+              no_scalar = not (has "tmma_acc__");
+              partial = partial t has;
+              parity = Array.equal Float.equal got want;
+            },
+            got,
+            want ))
+    in
+    (* The host-width legs: one rendering each, claimed as it ran, parity with its first differing
+       cell named. *)
+    let host_leg ?b_label ~tag ~prec ~partial () =
+      match leg ?b_label ~tag ~prec ~partial [ ("tmt_" ^ tag, tile) ] with
+      | [ (r, got, want) ] -> (
+          match names tag with
+          | [ n_tiled; n_header; n_scalar; n_partial; n_parity ] ->
+              p n_tiled r.tiled;
+              p n_header r.header;
+              p n_scalar r.no_scalar;
+              p n_partial r.partial;
+              p_all2 n_parity got want ~f:Float.equal
+          | _ -> assert false)
       | _ -> assert false
     in
-    let lane l = Printf.sprintf "(&tmma_d__[(tmma_i__ + 0) * %d + %s])[%d]" nt partial_at l in
-    leg ~tag:"f32" ~prec:Ir.Ops.single ~tile:(Some tile)
-      ~partial:(fun has ->
-        has (partial_acc ^ " = {" ^ lane 0)
-        && has (lane 2 ^ "};")
-        && has (lane 2 ^ " = " ^ partial_acc ^ "[2];")
-        && not (has (lane 3)))
-      ();
+    (* The narrower-width legs: one rendering per narrower width, each claim over all of them. *)
+    let narrower_leg ~tag ~prec ~partial () =
+      let results =
+        if List.is_empty narrower then []
+        else
+          List.map
+            ~f:(fun (r, _, _) -> r)
+            (leg ~tag:(tag ^ "_nw") ~prec ~partial
+               (List.map narrower ~f:(fun lanes ->
+                    (Printf.sprintf "tmt_%s_nw%d" tag lanes, tile_at lanes))))
+      in
+      let on = Printf.sprintf "a %d-byte vector file, which contains no narrower one" file.bytes in
+      List.iter2_exn
+        (names (narrower_tag tag))
+        [
+          (fun r -> r.tiled);
+          (fun r -> r.header);
+          (fun r -> r.no_scalar);
+          (fun r -> r.partial);
+          (fun r -> r.parity);
+        ]
+        ~f:(fun label f ->
+          gated_all ~aggregation:`Environment ~min:(List.length narrower)
+            ~when_:(not (List.is_empty narrower))
+            ~on label results ~f)
+    in
+    host_leg ~tag:"f32" ~prec:Ir.Ops.single ~partial:f32_partial ();
     (* The narrow legs request the f32 leg's geometry at the same lanes: the lane count follows the
        COMPUTE precision, f32 for bf16 and — under the default policy — for half too, so a width the
        narrow storage's element size picked would be declined. They used to leave the geometry to
        the renderer, which stopped meaning a one-vector tail when NEON's 19-column default became
-       the 4x3 tile of a two-vector tail (gh-ocannl-1180). The partial column's storage bits are
-       staged in a whole vector, three lanes in and three lanes out, and the bridge macro converts
-       it at the full lane count -- for half, bit-cast to a vector of [HALF_T] first, so the macro's
-       per-lane fallback reads [HALF_T]s. *)
-    let narrow_partial ~bridged ~via has =
-      let bits ~qual l =
-        Printf.sprintf "((%socannl_u16_alias *)&tmma_d__[(tmma_i__ + 0) * %d + %s])[%d]" qual nt
-          partial_at l
-      in
-      has ("ocannl_pv__ = {" ^ bits ~qual:"const " 0)
-      && has (bits ~qual:"const " 2 ^ "};")
-      && has (bits ~qual:"" 2 ^ " = ocannl_pv__[2];")
-      && has (Printf.sprintf "%d, %s, (const %s *)&%s);" lanes partial_acc bridged via)
-      && not (has (bits ~qual:"const " 3) || has (bits ~qual:"" 3))
-    in
-    let tile16 = Some tile in
-    leg ~tag:"bf16" ~prec:Ir.Ops.bfloat16 ~tile:tile16
-      ~partial:(narrow_partial ~bridged:"unsigned short" ~via:"ocannl_pv__")
-      ();
-    leg ~tag:"half" ~prec:Ir.Ops.half ~tile:tile16
-      ~partial:(narrow_partial ~bridged:"HALF_T" ~via:"ocannl_pc__")
-      ();
+       the 4x3 tile of a two-vector tail (gh-ocannl-1180). *)
+    let bf16_partial = narrow_partial ~bridged:"unsigned short" ~via:"ocannl_pv__" in
+    let half_partial = narrow_partial ~bridged:"HALF_T" ~via:"ocannl_pc__" in
+    host_leg ~tag:"bf16" ~prec:Ir.Ops.bfloat16 ~partial:bf16_partial ();
+    host_leg ~tag:"half" ~prec:Ir.Ops.half ~partial:half_partial ();
     (* The same half leg with its B operand labeled like the staging typedef the tile declares
        ([ocannl_vec<lanes>hs]) ahead of its operand pointers: [ocannl_] is the emitter's namespace,
        so the node's code name takes the [n<id>_] form and the kernel compiles (gh-ocannl-1102). A
        bare name there would be shadowed by the typedef and the pointer's initializer would not
        parse. *)
-    leg
-      ~b_label:(Printf.sprintf "ocannl_vec%dhs" lanes)
-      ~tag:"half_ns" ~prec:Ir.Ops.half ~tile:tile16
-      ~partial:(narrow_partial ~bridged:"HALF_T" ~via:"ocannl_pc__")
-      ()
+    host_leg
+      ~b_label:(Printf.sprintf "ocannl_vec%dhs" tile.lanes)
+      ~tag:"half_ns" ~prec:Ir.Ops.half ~partial:half_partial ();
+    narrower_leg ~tag:"f32" ~prec:Ir.Ops.single ~partial:f32_partial ();
+    narrower_leg ~tag:"bf16" ~prec:Ir.Ops.bfloat16 ~partial:bf16_partial ();
+    narrower_leg ~tag:"half" ~prec:Ir.Ops.half ~partial:half_partial ()
   end
 
 (* === The seeding === *)
