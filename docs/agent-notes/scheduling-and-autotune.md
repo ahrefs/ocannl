@@ -1243,8 +1243,11 @@ files.
   subnormal. That was most of the "arm A ships 18–28% above its crown" gap: the benchmark runners
   searched on an init-draw scratch lineage and stepped on fixture weights. They now seed the scratch
   with the fixture (`Bench_harness.tuning_scratch`; `BENCH_TUNE_SCRATCH_WEIGHTS=init` restores the
-  old search, `benchmarks/gh1557_cells.sh` runs the A/B), which took arm A from +28% to +9% (p10
-  over crown) and left arm B at +2.5%. The rest is the search's own drift: every timed run is a
+  old search, `benchmarks/gh1557_cells.sh` runs the A/B), which took arm A's step p10 from 28% over
+  its crown to 4% on minix (Zen 5, a measurement window; 9% on a shared M4 Max) and left arm B
+  within 3%. Those arm-A steps were timed in the searching process, which only inflates launches,
+  so they bound the fixed gap from above; the driver now times both arms in replay processes. The
+  rest is the search's own drift: every timed run is a
   training step on the scratch lineage at one fixed batch, so after a 200 s search its weights had
   61k zero grad entries against the fixture's 50k, and the shipped routine ran 100 ms on them
   against 112 ms on the fixture. Late candidates are therefore timed at a sparser state than early

@@ -1,12 +1,13 @@
 #!/bin/bash
 # gh-ocannl-1557 measurement driver: does each placement arm's shipped step keep the time its
-# search crowned it at? Runs the tuned cifar_resnet cell on cc four times -- the search's scratch
-# lineage on the `Train.init_params` draw (BENCH_TUNE_SCRATCH_WEIGHTS=init, how the runners searched
-# before gh-ocannl-1557) and on the fixture's weights (the default), each with arm A and arm B
-# forced (`tune_ship_arm`) -- and prints, per cell, the shipped arm's crown (`best_ms`) against the
-# timed steps' p10 and p50. One fresh schedule cache per weight set: its arm-A cell searches both
-# arms, and its arm-B cell replays the stored crowns when the search's timings were clean (a
-# contended search stores nothing, so that cell searches again).
+# search crowned it at? Per weight set -- the search's scratch lineage on the `Train.init_params`
+# draw (BENCH_TUNE_SCRATCH_WEIGHTS=init, how the runners searched before gh-ocannl-1557) or on the
+# fixture's weights (the default) -- one search pass fills a fresh schedule cache with both arms'
+# crowns, then two fresh processes replay it with arm A and arm B forced (`tune_ship_arm`), and the
+# summary prints each replay's crown (`best_ms`) against its timed steps' p10 and p50. The step
+# times come from replay processes only, as the README's two-pass protocol requires: a searching
+# process's launches are inflated by its accumulated modules. A replay that searched instead (the
+# search pass was contended, so nothing was stored) has no pair and fails the run.
 #
 # Usage:
 #   benchmarks/gh1557_cells.sh (--box BOX | --skip-box-check) FIXTURE OUT BUDGET [WEIGHTS...]
@@ -16,8 +17,9 @@
 #            run). The checkout is the one this script is in; bench_conv.exe must already be built
 #            there (`dune build ./benchmarks/runners/ocannl/bench_conv.exe`): it never builds.
 #   FIXTURE  cifar_resnet.safetensors (the gate checks it against fixtures/DIGESTS.txt).
-#   OUT      results directory, created, refused unless empty: OUT/<weights>-<arm>.out (the result
-#            line) and .err per cell, OUT/cache-<weights>/ the schedule caches, OUT/summary.txt.
+#   OUT      results directory, created, refused unless empty: OUT/<weights>-<pass>.out (the result
+#            line) and .err per process (pass: search, a, b), OUT/cache-<weights>/ the schedule
+#            caches, OUT/summary.txt.
 #   BUDGET   autotune_budget_seconds for every search (each arm is its own search).
 #   WEIGHTS  init and/or fixture (default: both, init first).
 #
@@ -53,11 +55,14 @@ while read -r v; do unset "$v"; done < <(env | sed -nE 's/^((OCANNL|BENCH|OMP|GO
 cd "$root/benchmarks" || exit 2
 rc=0
 for w in "${weights[@]}"; do
-  for arm in a b; do
-    echo "gh1557_cells: weights=$w arm=$arm start $(date +%T)" >&2
+  # The search pass ships arm A (any arm would do: forcing one skips neither arm's search).
+  for pass in search a b; do
+    arm=$pass
+    [ "$pass" = search ] && arm=a
+    echo "gh1557_cells: weights=$w pass=$pass start $(date +%T)" >&2
     BENCH_FIXTURE=$fixture BENCH_TUNE=1 BENCH_TUNE_SCRATCH_WEIGHTS=$w "$exe" --ocannl_backend=cc \
       --ocannl_tune_ship_arm="$arm" --ocannl_autotune_cache_dir="$out/cache-$w" \
-      --ocannl_autotune_budget_seconds="$budget" >"$out/$w-$arm.out" 2>"$out/$w-$arm.err" || rc=1
+      --ocannl_autotune_budget_seconds="$budget" >"$out/$w-$pass.out" 2>"$out/$w-$pass.err" || rc=1
   done
 done
 python3 - "$root/benchmarks" "$out" "${weights[@]}" >"$out/summary.txt" <<'EOF' || rc=1
@@ -79,12 +84,15 @@ for w in sys.argv[3:]:
             shipped = d["tune"]["shipped"]
             a = {x["arm"]: x for x in d["tune"]["arms"]}[shipped]
             s = d["step_ms"]
+            if d["searched"] is not False or a["state"] != "cache-replay":
+                raise ValueError(f"not a replay (searched={d['searched']}, state={a['state']})")
             crown = float(a["best_ms"])
             float(s["p10"]), float(s["p50"])
             if not (math.isfinite(crown) and crown > 0):
                 raise ValueError(f"crown {crown}")
         except (AttributeError, KeyError, TypeError, ValueError) as e:
-            # No result line (None), or a search that crowned nothing (best_ms null): no pair.
+            # No result line (None), a process that searched (its step times are a searching
+            # process's), or a search that crowned nothing (best_ms null): no pair.
             print(f"weights={w} arm={arm.upper()}: no crown/step pair ({e!r})")
             bad += 1
             continue
