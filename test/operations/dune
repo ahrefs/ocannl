@@ -5313,6 +5313,18 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1250: fission's shape sort of zero runs, executed from prefilled buffers against the
+; original statement order.
+
+(test
+ (name zero_run_reorder)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules zero_run_reorder)
+ (libraries base ocannl stdio arrayjit.verdict ll_test))
+
 (test
  (name gpu_parallel_prefix)
  (package neural_nets_lib)

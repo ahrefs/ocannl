@@ -1,0 +1,47 @@
+the prefill differs from what the routine leaves in every cell: true
+--- reference: no transform, the original statement order ---
+reference: the optimized code keeps every zero, the repeated one included: true
+reference: zrr_a holds the reference's values: true
+reference: zrr_b holds the reference's values: true
+reference: zrr_c holds the reference's values: true
+reference: zrr_d holds the reference's values: true
+reference: zrr_e holds the reference's values: true
+reference: zrr_f holds the reference's values: true
+reference: zrr_p holds the reference's values: true
+--- GPU pipeline, schedule-aware ---
+GPU pipeline, schedule-aware: the zero runs are reordered: true
+GPU pipeline, schedule-aware: zrr_a holds the reference's values: true
+GPU pipeline, schedule-aware: zrr_b holds the reference's values: true
+GPU pipeline, schedule-aware: zrr_c holds the reference's values: true
+GPU pipeline, schedule-aware: zrr_d holds the reference's values: true
+GPU pipeline, schedule-aware: zrr_e holds the reference's values: true
+GPU pipeline, schedule-aware: zrr_f holds the reference's values: true
+GPU pipeline, schedule-aware: zrr_p holds the reference's values: true
+--- GPU pipeline, legality-only ---
+GPU pipeline, legality-only: the zero runs are reordered: true
+GPU pipeline, legality-only: zrr_a holds the reference's values: true
+GPU pipeline, legality-only: zrr_b holds the reference's values: true
+GPU pipeline, legality-only: zrr_c holds the reference's values: true
+GPU pipeline, legality-only: zrr_d holds the reference's values: true
+GPU pipeline, legality-only: zrr_e holds the reference's values: true
+GPU pipeline, legality-only: zrr_f holds the reference's values: true
+GPU pipeline, legality-only: zrr_p holds the reference's values: true
+--- GPU pipeline, schedule-aware, folded zeros ---
+GPU pipeline, schedule-aware, folded zeros: the zero runs are reordered: true
+GPU pipeline, schedule-aware, folded zeros: a zero folds into the accumulation the sort moved it next to: true
+GPU pipeline, schedule-aware, folded zeros: zrr_a holds the reference's values: true
+GPU pipeline, schedule-aware, folded zeros: zrr_b holds the reference's values: true
+GPU pipeline, schedule-aware, folded zeros: zrr_c holds the reference's values: true
+GPU pipeline, schedule-aware, folded zeros: zrr_d holds the reference's values: true
+GPU pipeline, schedule-aware, folded zeros: zrr_e holds the reference's values: true
+GPU pipeline, schedule-aware, folded zeros: zrr_f holds the reference's values: true
+GPU pipeline, schedule-aware, folded zeros: zrr_p holds the reference's values: true
+--- CPU pipeline ---
+CPU pipeline: the zero runs are reordered: true
+CPU pipeline: zrr_a holds the reference's values: true
+CPU pipeline: zrr_b holds the reference's values: true
+CPU pipeline: zrr_c holds the reference's values: true
+CPU pipeline: zrr_d holds the reference's values: true
+CPU pipeline: zrr_e holds the reference's values: true
+CPU pipeline: zrr_f holds the reference's values: true
+CPU pipeline: zrr_p holds the reference's values: true

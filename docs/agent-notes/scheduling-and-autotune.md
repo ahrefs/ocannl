@@ -58,7 +58,14 @@ files.
   topology), the only mixed-shape fallback left in that step once `keeps_mapping` cut the
   `wte.grad` + final-LN-grad union. Zero runs are stably sorted by shape in `collect_units` (they
   commute; units stay a function of the code), else the cuts fall at every alternation of a
-  backward pass's shapes. Case 4 of `gpu_fission_mapping`.
+  backward pass's shapes. Case 4 of `gpu_fission_mapping`. A parity check of the sort must not
+  share it: compare against the unfissioned routine (no `lowered_transform`, original order), and
+  prefill the zeroed buffers with nonzero values, since fresh ones are already zero and hide a zero
+  that never runs (gh-ocannl-1250, `zero_run_reorder`). Reordering zeros WITHIN a run is
+  value-neutral (that is the soundness argument), so no executed check can see it; the hazards a
+  value check catches are a dropped zero and a sort that crosses the run's boundary (an
+  overlapping slice write, an accumulation). The fold pairs a zero with its neighbour AFTER the
+  sort, so the sort can enable a fold the statement order did not have.
 - Scratch (`Local`, a function-scope array on the C backends) is where the CPU preset and fission
   part from the GPU reading (gh-ocannl-1343). A whole-node `Zero_out` of scratch conflicts with
   nothing, so greedy grouping used to take it into the PRECEDING segment and cut before its
