@@ -82,7 +82,6 @@ let exempt_zero_reference_exports =
     "Ndarray.default_kind";
     "Ndarray.float_to_uint32";
     "Ndarray.float_to_uint64";
-    "Ndarray.fold_bigarray";
     "Ndarray.get_voidptr_not_managed";
     "Ndarray.hash";
     "Ndarray.hash_fold_t";
@@ -91,13 +90,18 @@ let exempt_zero_reference_exports =
     "Ndarray.log_debug_info";
     "Ndarray.mappable_file_region";
     "Ndarray.mapped_count";
-    "Ndarray.precision_string";
     "Ndarray.precision_to_bigarray_kind";
     "Ndarray.ptr_to_string_hum";
     "Ndarray.to_native";
     "Ndarray.two_pow_63";
     "Ndarray.uint32_to_float";
     "Ndarray.uint64_to_float";
+    (* Not pre-existing (gh-ocannl-1333). The linear-range converters the host readers and writers
+       share -- retrieve_flat_values, set_flat_values, convert, init_array -- and the reason those
+       allocate nothing per cell; the tree outside reads and writes through those four. Ndarray has
+       no .mli to hide them in. *)
+    "Ndarray.flat_reader";
+    "Ndarray.flat_writer";
     "Ndarray.used_memory";
     "Operation.add";
     "Operation.centered_uniform1_param_init";

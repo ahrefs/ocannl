@@ -1,0 +1,39 @@
+uneven margins on all three axes: flat reader matches per-cell reads in every precision: true
+uneven margins on all three axes: fold visits the interior in row-major order in every precision: true
+uneven margins on all three axes: init_array matches per-cell writes in every precision: true
+uneven margins on all three axes: convert matches per-cell conversion for every precision pair: true
+unpadded innermost axis: flat reader matches per-cell reads in every precision: true
+unpadded innermost axis: fold visits the interior in row-major order in every precision: true
+unpadded innermost axis: init_array matches per-cell writes in every precision: true
+unpadded innermost axis: convert matches per-cell conversion for every precision pair: true
+padding shorter than the rank: flat reader matches per-cell reads in every precision: true
+padding shorter than the rank: fold visits the interior in row-major order in every precision: true
+padding shorter than the rank: init_array matches per-cell writes in every precision: true
+padding shorter than the rank: convert matches per-cell conversion for every precision pair: true
+padded rank 1: flat reader matches per-cell reads in every precision: true
+padded rank 1: fold visits the interior in row-major order in every precision: true
+padded rank 1: init_array matches per-cell writes in every precision: true
+padded rank 1: convert matches per-cell conversion for every precision pair: true
+margins covering an axis: flat reader matches per-cell reads in every precision: true
+margins covering an axis: fold visits the interior in row-major order in every precision: true
+margins covering an axis: init_array matches per-cell writes in every precision: true
+margins covering an axis: convert matches per-cell conversion for every precision pair: true
+unpadded rank 3: flat reader matches per-cell reads in every precision: true
+unpadded rank 3: fold visits the interior in row-major order in every precision: true
+unpadded rank 3: init_array matches per-cell writes in every precision: true
+unpadded rank 3: convert matches per-cell conversion for every precision pair: true
+rank 0: flat reader matches per-cell reads in every precision: true
+rank 0: fold visits the interior in row-major order in every precision: true
+rank 0: init_array matches per-cell writes in every precision: true
+rank 0: convert matches per-cell conversion for every precision pair: true
+raw codes: flat reader widens every code as the per-cell reader does, in every precision: true
+raw codes: convert matches per-cell conversion for every precision pair: true
+edge values: convert from double raises or stores as per-cell conversion, in every precision: true
+a 65536-cell flat read allocates its float array and under 512 heap words more, padded or not, in every scalar precision: true
+a packed uint4x32 flat read allocates no more than its 3-word record per cell: true
+the chunk buffer is far smaller than the witness: true
+a 65536-cell init_array with a non-allocating callback allocates its chunk buffer and under 512 heap words more, padded or not, in every scalar precision: true
+a 65536-cell convert allocates its chunk buffer and under 512 heap words more between every two scalar precisions: true
+a 65536-cell convert to or from uint4x32 allocates no more than its 3-word record per cell: true
+a 65536-cell padded fold allocates under 512 heap words: true
+65536 calls of each of bfloat16_to_single, fp8_to_single and single_to_fp8 allocate under 512 heap words: true
