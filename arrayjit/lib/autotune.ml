@@ -1364,9 +1364,11 @@ let install_compile_observer f =
    on an injected clock, with no device and no machine-dependent routine (gh-ocannl-1074). *)
 let calibrate_and_time_from ~started ~tagged ~on_retry ~on_call ~phase ~retry_contended ~dispersion
     ~timing ~repeats ~queue_depth_cap ~batch =
-  (* The host-load reading the window's attribution starts from (gh-ocannl-1558), taken before the
-     calibration so a depth-1 window that resumes the calibration's singles is covered whole. Read
-     only under [Attribute_dispersion]. *)
+  (* The host-load reading the window's attribution starts from (gh-ocannl-1558): the span covers
+     exactly the window's samples. Taken here, before the calibration's first single, for a depth-1
+     window that resumes those singles; retaken just before a fresh window's first batch (below), so
+     quiet calibration time never dilutes a co-tenant that arrived with the window. Read only under
+     [Attribute_dispersion]. *)
   let read_load () =
     match dispersion with
     | Refuse_dispersed -> None
@@ -1805,6 +1807,7 @@ let calibrate_and_time_from ~started ~tagged ~on_retry ~on_call ~phase ~retry_co
       } )
   in
   let reused = if depth = 1 then singles else [] in
+  if List.is_empty reused then load_before := read_load ();
   let ((first, discarded) as window) = time_window reused in
   let retried =
     retry_contended && Poly.equal timing Queued && first.contended && Float.is_finite first.ms

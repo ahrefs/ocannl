@@ -2869,10 +2869,11 @@ type batch_decision = {
   retried : bool;  (** Whether a contended first window was discarded for one fresh retry. *)
   host_load : Utils.Host_load.verdict option;
       (** The host-load verdict over the returned window under {!Attribute_dispersion}
-          (gh-ocannl-1558), [None] under {!Refuse_dispersed}. Its reading starts before the
-          calibration, so a depth-1 window resuming the calibration's singles is covered whole; a
-          retried window starts a fresh one. For a dispersed window shorter than
-          {!Utils.Host_load.min_span_s} the closing reading waits out the remainder. *)
+          (gh-ocannl-1558), [None] under {!Refuse_dispersed}. Its span covers exactly the window's
+          samples: it opens before the calibration's first single for a depth-1 window resuming
+          those singles, and just before the first batch of a fresh window (any other depth,
+          {!Isolated}, a retry), so calibration time never dilutes it. For a dispersed window
+          shorter than {!Utils.Host_load.min_span_s} the closing reading waits out the remainder. *)
 }
 (** One timing call's depth decision and admission verdict, from the policy's own metadata. *)
 

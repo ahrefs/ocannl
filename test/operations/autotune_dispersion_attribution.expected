@@ -23,20 +23,20 @@ isolated: the scripted window is dispersed with spread 3: true
 isolated: a quiet host admits it at the floor: true
 isolated: a co-tenant refuses it as contention: true
 isolated: the dispersion-only policy refuses it and reads no load: true
-isolated: the load readings bracket every batch: true
+isolated: the load span covers exactly the window's batches: true
 queued: the scripted window is dispersed with spread 3: true
 queued: a quiet host admits it at the floor: true
 queued: a co-tenant refuses it as contention: true
 queued: the dispersion-only policy refuses it and reads no load: true
-queued: the load readings bracket every batch: true
+queued: the load span covers exactly the window's batches: true
 queued depth-1 reuse: the scripted window is dispersed with spread 3: true
 queued depth-1 reuse: a quiet host admits it at the floor: true
 queued depth-1 reuse: a co-tenant refuses it as contention: true
 queued depth-1 reuse: the dispersion-only policy refuses it and reads no load: true
-queued depth-1 reuse: the load readings bracket every batch: true
+queued depth-1 reuse: the load span covers exactly the window's batches: true
 the depth-1 shape reuses the calibration singles: true
 the fast queued shape batches deeper than one: true
-a short dispersed window waits for a third reading and charges the span's foreign load to it: true
+a short dispersed window reads once more after its wait and charges the span's foreign load to it: true
 == an executed cc search ==
 quiet: the search timed candidates and refused no window: true
 quiet: every admitted window was dispersed: true

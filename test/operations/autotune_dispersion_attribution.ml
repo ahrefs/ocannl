@@ -228,12 +228,20 @@ let () =
         (Poly.equal (Autotune.timing_admission refuse.result) Autotune.Refused_contended
         && Option.is_none refuse.c.decision.host_load
         && not (List.mem refuse.events `Load ~equal:Poly.equal));
-      (* The span covers every batch the window holds, reused calibration singles included. *)
+      (* The span covers exactly the window's samples: after the reading that opens it come the
+         window's batches and nothing else -- reused calibration singles counted, unused calibration
+         batches not (GitHub Codex review, round 1) -- and the closing reading is the call's last
+         event. *)
       p
-        (name ^ ": the load readings bracket every batch")
-        (match (List.hd quiet.events, List.last quiet.events) with
-        | Some `Load, Some `Load -> List.count quiet.events ~f:(Poly.equal `Load) = 2
-        | _ -> false));
+        (name ^ ": the load span covers exactly the window's batches")
+        (let rev = List.rev quiet.events in
+         match rev with
+         | `Load :: rest -> (
+             match List.findi rest ~f:(fun _ e -> Poly.equal e `Load) with
+             (* Everything between the two last readings is a batch: events are only those. *)
+             | Some (i, _) -> i = quiet.c.window.samples
+             | None -> false)
+         | _ -> false));
   p "the depth-1 shape reuses the calibration singles"
     (let reuse =
        call ~dispersion:Autotune.Attribute_dispersion ~foreign:0.125 ~timing:Autotune.Queued
@@ -248,11 +256,13 @@ let () =
        .depth > 1)
 
 (* A window too short for the counters, padded: the co-tenant's 0.1 CPU-s all fall in the window's
-   0.05 s, and nothing after it. The third reading is the one the call takes after its wait. *)
+   0.05 s, and nothing after it. The first reading is the call's opening one, which an isolated
+   window retakes before its first batch; the last is the one the call takes after its wait. *)
 let short_window_host events =
   let readings =
     ref
       [
+        reading ~wall_s:(-1.) ~busy_s:0. ~own_s:0.;
         reading ~wall_s:0. ~busy_s:0. ~own_s:0.;
         reading ~wall_s:0.05 ~busy_s:0.5 ~own_s:0.4;
         reading ~wall_s:Host_load.min_span_s ~busy_s:0.5 ~own_s:0.4;
@@ -271,8 +281,10 @@ let () =
     call ~host:short_window_host ~dispersion:Autotune.Attribute_dispersion ~foreign:0.
       ~timing:Autotune.Isolated ~floor_ms:1. ()
   in
-  p "a short dispersed window waits for a third reading and charges the span's foreign load to it"
-    (List.count short.events ~f:(Poly.equal `Load) = 3
+  p
+    "a short dispersed window reads once more after its wait and charges the span's foreign load \
+     to it"
+    ((match List.rev short.events with `Load :: `Load :: `Batch :: _ -> true | _ -> false)
     && Option.exists short.c.decision.host_load ~f:is_cotenant
     && Poly.equal (Autotune.timing_admission short.result) Autotune.Refused_contended)
 
