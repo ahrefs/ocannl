@@ -6821,7 +6821,8 @@ let crosscheck_scratch_containment (opt : Low_level.optimized) (chains : Low_lev
             List.for_all writes ~f:(fun w ->
                 let crossing =
                   List.exists accs ~f:(fun r ->
-                      (not r.Affine.a_write) && head r.a_path <> head w.Affine.a_path)
+                      (not r.Affine.a_write)
+                      && not ([%equal: int option] (head r.a_path) (head w.Affine.a_path)))
                 in
                 (not crossing)
                 || List.for_all w.Affine.a_val_syms ~f:(fun s ->

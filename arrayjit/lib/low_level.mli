@@ -282,10 +282,10 @@ and carried = { prev : scope_id; next : scope_id; init : scalar_t }
     {!Ops.Cond_and_one_arm} ternary -- exactly one of which evaluates per visit -- reach the
     [branches] hook as one continuation each (in source order, under [gated]); the default
     {!in_order} folds them in sequence, and a consumer with a branch algebra (a per-arm maximum,
-    gh-ocannl-1451) supplies its own reduction there. Scope bodies reset [gated]
-    because definitions hoist, while preserving statement guards. Dead-loop bodies visited
-    structurally carry [live=false]; this does not evaluate constant guards or perform cleanup's
-    placement-dependent setter elimination.
+    gh-ocannl-1451) supplies its own reduction there. Scope bodies reset [gated] because definitions
+    hoist, while preserving statement guards. Dead-loop bodies visited structurally carry
+    [live=false]; this does not evaluate constant guards or perform cleanup's placement-dependent
+    setter elimination.
 
     Scan init assignments precede the body; rotation assignments follow it. With
     [scan_implicit = Skip], init expressions are still visited but synthetic Set_local events are
@@ -368,8 +368,8 @@ val evaluation_reads : self:Tnode.t -> scalar_t -> Set.M(Tnode).t
     right-hand side of a setter of [self], loads -- the transitive inline-fanin guard's contributors
     (gh-573), shared by [trace_node_facts]' per-setter [setter_reads] and the guard's replay of
     stored computations. [self] and merge-buffer reads are excluded, a gather counts its table,
-    projection-discarded operands are not evaluated, a [Where] charges its wider arm (the first on
-    a tie), and [Local_scope] bodies -- hoisted, unconditional -- charge the statement whichever arm
+    projection-discarded operands are not evaluated, a [Where] charges its wider arm (the first on a
+    tie), and [Local_scope] bodies -- hoisted, unconditional -- charge the statement whichever arm
     they sit in. Dead loops replay nothing; a [Tile_mma] is opaque. *)
 
 val evaluation_reads_of_proc : self:Tnode.t -> t -> Set.M(Tnode).t

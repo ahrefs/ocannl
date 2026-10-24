@@ -413,7 +413,7 @@ module Access_fold = struct
                   | Ops.Only_second -> (`Discarded, `Always)
                 in
                 operand ctx (operand ctx acc first a) second b
-            | Ternop (op, a, b, c) ->
+            | Ternop (op, a, b, c) -> (
                 let acc = scalar ctx acc (fst a) in
                 match Ops.ternop_conditionality op with
                 | Ops.All_three -> operand ctx (operand ctx acc `Always b) `Always c
@@ -423,7 +423,9 @@ module Access_fold = struct
                     | Visit ->
                         let ctx = { ctx with gated = true } in
                         hooks.branches ctx acc
-                          [ (fun acc -> scalar ctx acc (fst b)); (fun acc -> scalar ctx acc (fst c)) ])
+                          [
+                            (fun acc -> scalar ctx acc (fst b)); (fun acc -> scalar ctx acc (fst c));
+                          ]))
           in
           hooks.after_scalar ctx acc code
     and operand ctx acc kind arg =
@@ -443,10 +445,10 @@ module Access_fold = struct
 end
 
 (** The tensor node a statement writes ITSELF -- not through a sub-statement -- or [None]
-    (gh-ocannl-1451). Exhaustive on purpose: together with {!Access_fold.fold}'s descent it is
-    where a new statement constructor has to be classified, and the write-sensitive walks built on
-    it ({!write_demand}, [trace_node_facts]' refusal of writes it does not know) follow. A
-    [Tile_mma] writes its accumulator [d] (its [fallback] is the same write, spelled scalar). *)
+    (gh-ocannl-1451). Exhaustive on purpose: together with {!Access_fold.fold}'s descent it is where
+    a new statement constructor has to be classified, and the write-sensitive walks built on it
+    ({!write_demand}, [trace_node_facts]' refusal of writes it does not know) follow. A [Tile_mma]
+    writes its accumulator [d] (its [fallback] is the same write, spelled scalar). *)
 let direct_write : t -> Tn.t option = function
   | Set { tn; _ } | Set_dynamic { tn; _ } | Set_from_vec { tn; _ } | Zero_out tn -> Some tn
   | Tile_mma { d = tn, _; _ } -> Some tn
@@ -460,8 +462,8 @@ let direct_write : t -> Tn.t option = function
    is pruned). Scan bodies are entered: their writes are writes like any other (gh-ocannl-1134).
    Dead loops are entered, the walk being structural. [statement] may [Prune] a subtree it handles
    itself. *)
-let fold_statement_positions ~init ~(statement : Access_fold.context -> 'a -> t -> 'a Access_fold.descent)
-    (llc : t) : 'a =
+let fold_statement_positions ~init
+    ~(statement : Access_fold.context -> 'a -> t -> 'a Access_fold.descent) (llc : t) : 'a =
   let open Access_fold in
   let policy =
     {
@@ -1393,19 +1395,17 @@ let same_position ?dyn_axis ~statics_set (m : Indexing.axis_index array)
 (* gh-ocannl-1451: the one read collector -- the tensor nodes one evaluation of a setter of [self]
    loads, as the transitive inline-fanin guard (gh-573) charges them. Shared by [trace_node_facts]'
    per-setter [setter_reads] and the guard's replay of a computation an earlier routine stored, so
-   the two can no longer drift. Its algebra:
-   - a [Get] or [Get_dynamic] of a node other than [self] is a contributor (a gather is a read of
-     its table, recorded after its index expression, which evaluates first; gh-ocannl-1327);
-   - a projection's discarded operand is not evaluated, a gated binary operand is charged (its
-     worst case evaluates both), and merge-buffer reads are not contributors: a merge-buffer read
-     loads a materialized copy, never inlining the source's computation;
-   - exactly one arm of a [Cond_and_one_arm] ternary evaluates per visit, so the wider arm is
-     charged, not the union -- two arms each within the cap must not jointly trip it -- and on a
-     tie the first;
-   - [Local_scope] bodies hoist to statement level and execute unconditionally (both [Where] arms'
-     bodies really run), so their reads join the STATEMENT sink, never an arm's;
-   - a dead loop's body replays zero times, and a [Tile_mma] (constructed after the analyses) is
-     opaque. *)
+   the two can no longer drift. Its algebra: - a [Get] or [Get_dynamic] of a node other than [self]
+   is a contributor (a gather is a read of its table, recorded after its index expression, which
+   evaluates first; gh-ocannl-1327); - a projection's discarded operand is not evaluated, a gated
+   binary operand is charged (its worst case evaluates both), and merge-buffer reads are not
+   contributors: a merge-buffer read loads a materialized copy, never inlining the source's
+   computation; - exactly one arm of a [Cond_and_one_arm] ternary evaluates per visit, so the wider
+   arm is charged, not the union -- two arms each within the cap must not jointly trip it -- and on
+   a tie the first; - [Local_scope] bodies hoist to statement level and execute unconditionally
+   (both [Where] arms' bodies really run), so their reads join the STATEMENT sink, never an arm's; -
+   a dead loop's body replays zero times, and a [Tile_mma] (constructed after the analyses) is
+   opaque. *)
 type eval_reads = { e_stmt : Set.M(Tn).t; e_cur : Set.M(Tn).t; e_saved : Set.M(Tn).t list }
 
 let eval_reads_traversal ~self =
@@ -1421,7 +1421,9 @@ let eval_reads_traversal ~self =
       scan_implicit = Skip;
     }
   in
-  let contributor acc q = if Tn.equal q self then acc else { acc with e_cur = Set.add acc.e_cur q } in
+  let contributor acc q =
+    if Tn.equal q self then acc else { acc with e_cur = Set.add acc.e_cur q }
+  in
   let hooks =
     {
       statement = (fun _ acc stmt -> match stmt with Tile_mma _ -> Prune acc | _ -> Continue acc);
@@ -1437,7 +1439,8 @@ let eval_reads_traversal ~self =
           | Get (q, _) | Get_dynamic { tn = q; _ } -> contributor acc q
           | Local_scope _ -> (
               match acc.e_saved with
-              | cur :: saved -> { e_stmt = Set.union acc.e_stmt acc.e_cur; e_cur = cur; e_saved = saved }
+              | cur :: saved ->
+                  { e_stmt = Set.union acc.e_stmt acc.e_cur; e_cur = cur; e_saved = saved }
               | [] -> assert false)
           | _ -> acc);
       branches =
@@ -1506,8 +1509,8 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
   (* Each enclosing loop's index symbol mapped to its full trip count, an inner binder shadowing an
      outer one. At a setter, the fiber cardinality of the LHS map over that box — the product over
      symbols absent from the LHS indices — is the recompute cost (per read site) of inlining that
-     setter's computation (gh-494: {!Affine.fiber_cardinality}; the exact-vs-lower-bound
-     distinction is not needed here, the absent-symbol product is the cost either way). *)
+     setter's computation (gh-494: {!Affine.fiber_cardinality}; the exact-vs-lower-bound distinction
+     is not needed here, the absent-symbol product is the cost either way). *)
   let loop_ranges (ctx : Access_fold.context) =
     List.fold_right ctx.loops
       ~init:(Map.empty (module Indexing.Symbol))
@@ -8762,6 +8765,19 @@ type footprint_eligibility =
   | Not_footprintable of string
 [@@deriving sexp_of]
 
+(* A top-level statement's identity in an access path ({!Affine.stmt_head}): [None] is the routine's
+   one statement when its root is not a sequence, ordered before every [Some] (gh-ocannl-1451). *)
+module Stmt_key = struct
+  type t = int option [@@deriving compare, sexp_of, hash]
+
+  include Comparator.Make (struct
+    type nonrec t = t
+
+    let compare = compare
+    let sexp_of_t = sexp_of_t
+  end)
+end
+
 let footprint_eligibility_query (static_indices : Indexing.static_symbol list)
     (accs : Tn.t Affine.access list) (effs : Tn.t Affine.statement_effect list) :
     Tn.t -> footprint_eligibility =
@@ -8778,7 +8794,7 @@ let footprint_eligibility_query (static_indices : Indexing.static_symbol list)
      template outside the scope can read. *)
   let effectful, local_effects =
     let statement_level path = not (Affine.in_scope_body path) in
-    let empty = Set.empty (module Int) in
+    let empty = Set.empty (module Stmt_key) in
     let from_writes =
       List.fold accs ~init:empty ~f:(fun eff (a : _ Affine.access) ->
           if a.a_write && statement_level a.a_path then Set.add eff (Affine.stmt_head a.a_path)
@@ -8797,7 +8813,7 @@ let footprint_eligibility_query (static_indices : Indexing.static_symbol list)
   in
   let reads_by_tn = Hashtbl.create (module Tn) in
   let writes_by_tn = Hashtbl.create (module Tn) in
-  let writers_by_stmt = Hashtbl.create (module Int) in
+  let writers_by_stmt = Hashtbl.create (module Stmt_key) in
   List.iter accs ~f:(fun a ->
       if a.Affine.a_write then (
         Hashtbl.add_multi writes_by_tn ~key:a.a_tn ~data:a;
@@ -8826,26 +8842,34 @@ let footprint_eligibility_query (static_indices : Indexing.static_symbol list)
     (* The prologue of a LOCAL producer runs right after the producer's last top-level statement —
        the position the materialized producer would have run at, so the scratch snapshots exactly
        what its buffer would have held — which a reader placed earlier could not see. *)
-    let own_last =
-      List.fold own_writes ~init:(-1) ~f:(fun acc w -> max acc (Affine.stmt_head w.Affine.a_path))
+    (* [None] when the producer writes nothing here -- distinct from a headless statement's [None]
+       key, which is a statement like any other (the routine's only one). *)
+    let own_span =
+      match List.map own_writes ~f:(fun w -> Affine.stmt_head w.Affine.a_path) with
+      | [] -> None
+      | h :: rest ->
+          Some
+            (List.fold rest ~init:(h, h) ~f:(fun (lo, hi) s ->
+                 ( (if Stmt_key.compare s lo < 0 then s else lo),
+                   if Stmt_key.compare s hi > 0 then s else hi )))
     in
     (* Between the producer's first and last top-level write statements, inclusive, every statement
        either writes exactly the producer or has no effect at all: the prologue replays every stored
        component after the last write, so anything mutated in that span — a shared loop's sibling
        write after the producer, a tensor or a LOCAL written between two accumulating components —
        would reach components the materialized execution ran before the mutation. *)
-    let own_first =
-      List.fold own_writes ~init:Int.max_value ~f:(fun acc w ->
-          min acc (Affine.stmt_head w.Affine.a_path))
-    in
     let producer_span_clean =
-      List.is_empty own_writes
-      || Set.for_all effectful ~f:(fun s ->
-          s < own_first || s > own_last
-          || (not (Set.mem local_effects s))
-             && Set.equal
-                  (Hashtbl.find writers_by_stmt s |> Option.value ~default:(Set.empty (module Tn)))
-                  (Set.singleton (module Tn) tn))
+      match own_span with
+      | None -> true
+      | Some (own_first, own_last) ->
+          Set.for_all effectful ~f:(fun s ->
+              Stmt_key.compare s own_first < 0
+              || Stmt_key.compare s own_last > 0
+              || (not (Set.mem local_effects s))
+                 && Set.equal
+                      (Hashtbl.find writers_by_stmt s
+                      |> Option.value ~default:(Set.empty (module Tn)))
+                      (Set.singleton (module Tn) tn))
     in
     let site (a : _ Affine.access) =
       if List.exists own_writes ~f:(fun w -> Affine.same_statement w.Affine.a_path a.a_path) then
@@ -8858,8 +8882,10 @@ let footprint_eligibility_query (static_indices : Indexing.static_symbol list)
            statement writes before the read would be seen by the prologue as it was, by the inlined
            read as updated. *)
         Error "reader statement writes a local"
-      else if (not (List.is_empty own_writes)) && Affine.stmt_head a.a_path <= own_last then
-        Error "reader precedes the producer's last write"
+      else if
+        Option.exists own_span ~f:(fun (_, own_last) ->
+            Stmt_key.compare (Affine.stmt_head a.a_path) own_last <= 0)
+      then Error "reader precedes the producer's last write"
       else if not producer_span_clean then
         Error "another node is written between the producer's first and last writes"
       else
@@ -9188,8 +9214,7 @@ let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads
             else
               match Hashtbl.find optim_ctx.computations tn with
               | Some comps ->
-                  List.map comps ~f:(fun (_, code) ->
-                      evaluation_reads_of_proc ~self:tn code)
+                  List.map comps ~f:(fun (_, code) -> evaluation_reads_of_proc ~self:tn code)
               | None -> []
           in
           let s =

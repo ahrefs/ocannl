@@ -183,28 +183,23 @@ let () =
     }
   in
   let seen = List.rev (F.fold ~policy:{ policy with scan_implicit = Skip } ~hooks ~init:[] nest) in
-  let loops_of tn =
-    List.find_map seen ~f:(fun (tn', ls) -> Option.some_if (Tn.equal tn tn') ls)
-  in
+  let loops_of tn = List.find_map seen ~f:(fun (tn', ls) -> Option.some_if (Tn.equal tn tn') ls) in
   let same_loops got want =
     match got with
     | None -> false
     | Some got ->
         List.equal
-          (fun (s, ax) (s', ax') ->
-            Idx.equal_symbol s s' && Option.equal LL.equal_axis_type ax ax')
+          (fun (s, ax) (s', ax') -> Idx.equal_symbol s s' && Option.equal LL.equal_axis_type ax ax')
           got want
   in
-  p "a scan's init sits outside its binder"
-    (same_loops (loops_of b) [ (i, Some LL.Serial) ]);
+  p "a scan's init sits outside its binder" (same_loops (loops_of b) [ (i, Some LL.Serial) ]);
   p "a body read sees its enclosing binders innermost first, the scan's with no axis"
     (same_loops (loops_of a) [ (k, Some LL.Unrolled); (j, None); (i, Some LL.Serial) ]);
   let set_eq got want = Set.equal got (Set.of_list (module Tn) want) in
   let ev sc = LL.evaluation_reads ~self:out sc in
   p "a Where charges its condition and its wider arm, not the union"
     (set_eq (ev (where_ (at a) (add (at b) (at c_)) (at d_))) [ a; b; c_ ]);
-  p "a Where whose arms tie charges the first"
-    (set_eq (ev (where_ (at a) (at b) (at c_))) [ a; b ]);
+  p "a Where whose arms tie charges the first" (set_eq (ev (where_ (at a) (at b) (at c_))) [ a; b ]);
   p "a scope body inside an arm charges the statement, not the arm"
     (set_eq
        (ev (where_ (at a) (scope (LL.Set_local (scope_id, add (at d_) (at e_)))) (at b)))
@@ -217,7 +212,8 @@ let () =
     (set_eq (ev (add (at out) (LL.Get_merge_buffer (a, [| fixed 0 |])))) []);
   p "a gather charges its index and its table"
     (set_eq (ev (gather ~tn:b ~idcs:[| fixed 0 |] ~dyn_axis:0 ~dyn_value:(at a, single))) [ a; b ]);
-  p "a projection charges only its rendered operand" (set_eq (ev (binop Ops.Arg2 (at a) (at b))) [ b ]);
+  p "a projection charges only its rendered operand"
+    (set_eq (ev (binop Ops.Arg2 (at a) (at b))) [ b ]);
   p "a stored computation's dead loop replays nothing"
     (set_eq
        (LL.evaluation_reads_of_proc ~self:out (seq (loop ~upto:(-1) i (put (at a))) (put (at b))))
@@ -225,15 +221,23 @@ let () =
   p "a stored computation's Tile_mma is opaque"
     (set_eq
        (LL.evaluation_reads_of_proc ~self:out
-          (tile_mma ~d:(d_, [| fixed 0 |]) ~a:(a, [| fixed 0 |]) ~b:(b, [| fixed 0 |]) (put (at c_))))
+          (tile_mma
+             ~d:(d_, [| fixed 0 |])
+             ~a:(a, [| fixed 0 |])
+             ~b:(b, [| fixed 0 |])
+             (put (at c_))))
        []);
   let tile =
-    tile_mma ~d:(d_, [| fixed 0 |]) ~a:(a, [| fixed 0 |]) ~b:(b, [| fixed 0 |])
+    tile_mma
+      ~d:(d_, [| fixed 0 |])
+      ~a:(a, [| fixed 0 |])
+      ~b:(b, [| fixed 0 |])
       (set_at e_ (fixed 0) (at a))
   in
   let scoped = put (scope (seq (set_at e_ (fixed 0) (at a)) (LL.Set_local (scope_id, at b)))) in
   let demand = LL.write_demand (seq nest (seq tile (seq scoped (zero c_)))) in
-  p "the write demand enters a scan body, counts a Tile_mma once as its accumulator, and skips \
+  p
+    "the write demand enters a scan body, counts a Tile_mma once as its accumulator, and skips \
      expressions"
     (List.equal Tn.equal demand.written [ out; d_; out; c_ ]);
   p "the write demand reports every binder in program order, a scan's with no axis"

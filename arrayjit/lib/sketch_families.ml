@@ -563,7 +563,8 @@ let path_head = A.stmt_head
 (* Access records per top-level statement, in program order (the extraction fires in program order
    and top-level statement indices are nondecreasing). *)
 let accesses_by_statement (accs : Ir.Tnode.t A.access list) =
-  List.group accs ~break:(fun a b -> path_head a.A.a_path <> path_head b.A.a_path)
+  List.group accs ~break:(fun a b ->
+      not (Option.equal Int.equal (path_head a.A.a_path) (path_head b.A.a_path)))
 
 (* The statement an access path leads to, followed the way [LL.affine_accesses] builds it: a loop
    adds no component, a [Seq] level one [Stmt] per flattened statement, an [If] its [Body]. The head
@@ -1548,8 +1549,8 @@ let zero_geometry ?(layout : batch_layout = `Serial) ?folded (site : matmul_site
     let interior = match layout with `Grid_inner -> interior | `Serial | `Grid -> [] in
     ez @ batch_ops @ mk_zops ~zi ~zj ~interior)
 
-(* The [For_loop] symbols of a statement, at statement positions ({!LL.write_demand}): loops
-   beneath a [Scan_loop] included, the scan's own binder not -- it is no schedulable loop. *)
+(* The [For_loop] symbols of a statement, at statement positions ({!LL.write_demand}): loops beneath
+   a [Scan_loop] included, the scan's own binder not -- it is no schedulable loop. *)
 let nest_loop_syms (llc : LL.t) =
   List.filter_map (LL.write_demand llc).binders ~f:(fun b ->
       Option.map b.LL.Access_fold.axis ~f:(fun _ -> b.LL.Access_fold.index))

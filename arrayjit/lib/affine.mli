@@ -304,9 +304,11 @@ val same_statement : path_comp list -> path_comp list -> bool
     reads nested deeper, e.g. in a [Local_scope] body's statements, have longer paths and do not
     match). This is the path-level counterpart of the [a_stmt_write] subordination. *)
 
-val stmt_head : path_comp list -> int
-(** The top-level statement index of a path, [-1] when the whole routine is a single statement (its
-    accesses' paths start with an intra-statement component). *)
+val stmt_head : path_comp list -> int option
+(** The path's leading [Stmt] component -- the index of its top-level statement -- or [None] when
+    the whole routine is a single statement (its accesses' paths start with an intra-statement
+    component; gh-ocannl-1451). A path component, not necessarily an index into [flat_lines]: a loop
+    enclosing a sequence adds no component of its own. *)
 
 type 'tn access = {
   a_tn : 'tn;

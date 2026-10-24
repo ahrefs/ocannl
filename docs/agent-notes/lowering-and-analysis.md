@@ -233,7 +233,8 @@ files.
   compare bare paths for "same statement" — use `Affine.same_statement` (agreement above the
   final component; the path-level twin of `a_stmt_write` subordination) — and must take top-level
   statement identity via `Affine.stmt_head`, never `List.hd` (a single-statement routine's paths
-  start with a marker, not a `Stmt`). History: with bare positions an `If` condition's read
+  start with a marker, not a `Stmt`, and `stmt_head` says `None` for them -- the routine's one
+  statement, which an ordering consumer must place explicitly; gh-ocannl-1451). History: with bare positions an `If` condition's read
   aliased its guarded body's write (gh-554 round 3), and `read_covered_before` needed a
   prefix-exclusion hack for enclosing writes vs their inlined `Local_scope` bodies — both
   unrepresentable now. Each `Local_scope` occurrence additionally extends the path with an `Arg`
