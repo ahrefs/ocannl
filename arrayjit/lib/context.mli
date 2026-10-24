@@ -478,7 +478,9 @@ val from_host : t -> Ir.Tnode.t -> Ir.Ndarray.t -> t
     routine reads the uploaded buffer. *)
 
 val get_values : t -> Ir.Tnode.t -> float array
-(** Retrieves all (unpadded) values of the node via an on-demand device-to-host transfer. *)
+(** Retrieves all (unpadded) values of the node via an on-demand device-to-host transfer. The host
+    side of the read allocates the result array and a constant number of heap words more
+    ({!Ir.Ndarray.retrieve_flat_values}). *)
 
 val set_values : t -> Ir.Tnode.t -> float array -> t
 (** Sets all (unpadded) values of the node via an on-demand host-to-device transfer, returning a

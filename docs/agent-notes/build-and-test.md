@@ -4750,7 +4750,13 @@ box.
   it is written (a polymorphic helper), so match the precision first; any out-of-line call taking
   or returning a float, `int32` or `int64` — Base's checked `of_float`s, an `external` without
   `[@unboxed]`; an `[@inline]` helper whose branches join a boxed result, which boxes the fast path
-  too; and a `Complex.t` store, whose record the compiler does not elide.
+  too; and a `Complex.t` store, whose record the compiler does not elide (nor a `Complex.t` read's).
+  The read side (gh-ocannl-1333, witness `ndarray_flat_reader`) adds one: a float RETURNED from a
+  closure the caller does not know is boxed, so a per-precision reader or writer is a closure over
+  ints that does the store itself (`Ndarray.flat_reader`/`flat_writer`, `int -> int -> int ->
+  unit`), and a callback API that returns a float (`init_array`'s `f`) can be constant only when
+  its callback returns a preallocated constant. A read's witness claims its result array (one word
+  per cell plus a header) and a bound beyond it.
 
 ## Test support and placement
 

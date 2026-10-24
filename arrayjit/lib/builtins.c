@@ -253,6 +253,13 @@ CAMLprim value arrayjit_bfloat16_to_single(value v_bf16)
   CAMLreturn(caml_copy_double((double)result));
 }
 
+/* The native-code entry point ([@untagged]/[@unboxed], [@@noalloc] in ops.ml): the host readers
+   widen per cell, and boxing the result would allocate per cell (gh-ocannl-1333). */
+CAMLprim double arrayjit_bfloat16_to_single_unboxed(intnat bf16)
+{
+  return (double)bfloat16_to_single((uint16_t)bf16);
+}
+
 /* Float to BFloat16 conversion (OCaml wrapper) */
 CAMLprim value arrayjit_single_to_bfloat16(value v_float)
 {
@@ -296,6 +303,12 @@ CAMLprim value arrayjit_fp8_to_single(value v_fp8)
   CAMLreturn(caml_copy_double((double)result));
 }
 
+/* Native-code entry point, as for [arrayjit_bfloat16_to_single_unboxed]. */
+CAMLprim double arrayjit_fp8_to_single_unboxed(intnat fp8)
+{
+  return (double)fp8_to_single((uint8_t)fp8);
+}
+
 /* Float to FP8 E5M2 conversion (OCaml wrapper) */
 CAMLprim value arrayjit_single_to_fp8(value v_float)
 {
@@ -303,6 +316,12 @@ CAMLprim value arrayjit_single_to_fp8(value v_float)
   float f = (float)Double_val(v_float);
   uint8_t fp8 = single_to_fp8(f);
   CAMLreturn(Val_int(fp8));
+}
+
+/* Native-code entry point, as for [arrayjit_single_to_bfloat16_unboxed]. */
+CAMLprim intnat arrayjit_single_to_fp8_unboxed(double f)
+{
+  return single_to_fp8((float)f);
 }
 
 /* An OCaml float IS a double, so the host side narrows from f64 — through the one-step codec, or

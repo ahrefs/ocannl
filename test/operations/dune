@@ -2826,6 +2826,14 @@
  (libraries base stdio arrayjit.ir arrayjit.verdict))
 
 (test
+ ; ocannl-backend: none -- links arrayjit.ir alone; host-side Ndarray reads, no device.
+ (name ndarray_flat_reader)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules ndarray_flat_reader)
+ (libraries base stdio arrayjit.ir arrayjit.verdict))
+
+(test
  (name test_ident_blacklist)
  (package neural_nets_lib)
  (deps
