@@ -7,7 +7,7 @@ commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue 
 
 ## [Unreleased]
 
-## [1.1.2] -- 2026-10-27
+## [1.1.2] -- 2026-10-25
 
 > Performance beyond transformers, plus a much faster untuned GPU training step. A reduced
 > ResNet-style benchmark (`cifar_resnet`, batch 64 and 1) gives convolutions a measured cell. On
