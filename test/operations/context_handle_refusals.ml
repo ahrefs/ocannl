@@ -349,6 +349,27 @@ let () =
     (ro_refused "chr_rob_src." (fun () -> Context.run c_use r_use));
   Context.release c_use
 
+(* Two independently rooted contexts -- separate ledgers -- can share one buffer for a node every
+   routine only reads (a device-wide constant pool). Copying it between them moves nothing, and must
+   still tell the destination's ledger that the buffer holds the source's value. *)
+let () =
+  Verdict.case "chr_shared_copy" @@ fun () ->
+  let x = node "chr_sc_x" in
+  let c_a, _r_a =
+    link_shift ~ctx:(Context.auto ()) ~name:"chr_sc_a" ~src:x ~dst:(node "chr_sc_out_a") ()
+  in
+  let out_b = node "chr_sc_out_b" in
+  let c_b, r_b = link_shift ~ctx:(Context.auto ()) ~name:"chr_sc_b" ~src:x ~dst:out_b () in
+  pf "chr_shared_copy: unseeded, the other root's consumer is refused"
+    (ro_refused "chr_sc_x." (fun () -> Context.run c_b r_b));
+  let c_a = Context.set_values c_a x seed in
+  let c_b = Context.copy ~src:c_a ~dst:c_b x in
+  let c_b = Context.run c_b r_b in
+  pf "chr_shared_copy: after the copy, the other root's consumer runs from the copied value"
+    (Poly.equal (Context.get_values c_b out_b) shifted);
+  Context.release c_a;
+  Context.release c_b
+
 (* Both gradient creation sites mark the gradient zero-valid: a tensor's own ([Tensor.op]) and a
    parameter's ([Tensor.param], which replaces it). *)
 let () =

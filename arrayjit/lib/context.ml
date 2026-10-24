@@ -1148,9 +1148,20 @@ let copy ?(into_merge_buffer = BI.No) ~src ~dst tn =
           record_external_writes
             (derive dst (rewrap (Backend.init_from_device tn ~dst:dctx ~src:sctx)))
             (Set.singleton (module Tn) tn)
-        else
-          (* The source and destination buffers are physically the same: nothing to transfer. *)
-          mark_initialized dst (Set.singleton (module Tn) tn)
+        else (
+          (* The source and destination buffers are physically the same: nothing to transfer. Two
+             independently rooted contexts can share it (a cached constant buffer) while keeping
+             separate ledgers, so the destination's ledger learns the buffer holds a value -- the
+             one [check_lineage_runnable] asks of a read-only input (gh-ocannl-1462) -- when the
+             source's ledger, or the source context, says it was written. Nothing was written now,
+             so the access history stays as it is. *)
+          if
+            Set.mem src.initialized_nodes tn
+            || Option.exists (buffer_key src tn) ~f:(Set.mem src.ledger.written_buffers)
+          then
+            Option.iter (buffer_key dst tn) ~f:(fun key ->
+                dst.ledger.written_buffers <- Set.add dst.ledger.written_buffers key);
+          mark_initialized dst (Set.singleton (module Tn) tn))
   in
   match Backends.pair_contexts src.wrapped dst.wrapped with
   | Backends.Same_backend (impl, s, d) -> same impl s d

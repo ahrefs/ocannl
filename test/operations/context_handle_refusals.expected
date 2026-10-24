@@ -48,6 +48,8 @@ chr_zero_valid: a zero-valid read-before-write input is still refused until seed
 chr_read_only_buffer: a sibling seeding its own buffer does not let the other's routine run: true
 chr_read_only_buffer: the consumer reads the producer's output read-only: true
 chr_read_only_buffer: after the producer's run is rolled back, the input is unwritten again: true
+chr_shared_copy: unseeded, the other root's consumer is refused: true
+chr_shared_copy: after the copy, the other root's consumer runs from the copied value: true
 chr_grad_zero_valid: a tensor's gradient is zero-valid: true
 chr_grad_zero_valid: a parameter's gradient is zero-valid: true
 chr_grad_zero_valid: the value nodes are not: true
