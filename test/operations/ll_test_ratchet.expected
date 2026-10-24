@@ -23,6 +23,7 @@ test/operations/cost_model_floor.ml -- records=4 traversals=0
 test/operations/cost_model_template.ml -- records=1 traversals=0
 test/operations/cpu_parallel.ml -- records=11 traversals=0
 test/operations/fission_schedule.ml -- records=8 traversals=2
+test/operations/fixed_name_temporaries.ml -- records=1 traversals=1
 test/operations/fragment_scope_move_legality.ml -- records=0 traversals=1
 test/operations/gpu_lane_reduction.ml -- records=0 traversals=3
 test/operations/gpu_serial_lanes.ml -- records=2 traversals=5

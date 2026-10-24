@@ -1,0 +1,11 @@
+two packed draws are siblings in one block of the compiled routine: true
+packed draws: the routine compiles with them in one scope: true
+packed draws: every draw lies in [0, 1): true
+packed draws: both draw bitwise-equal values: true
+four vectorized loops are siblings in one block of the compiled routine: true
+vectorized loops: all four compile in one scope and compute their values: true
+vectorized loops: both elementwise loops render the vector form: true
+vectorized loops: both reductions render the vector form: true
+two Tile_mma statements are siblings in one block of the compiled routine: true
+two tiles: both compile in one lane body and accumulate their products: true
+two tiles: both render tensorized where the backend advertises the tile, else both decline: true
