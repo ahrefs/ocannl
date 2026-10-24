@@ -68,6 +68,20 @@ let computes_3x_plus_1 claim values =
 let departed_pid = 2147483647
 let debug = Utils.settings.output_debug_files_in_build_directory
 
+(* Under debug files the long-named routine's debug sources are named by its UNCUT name (only owned
+   artifacts are cut): [long_routine] keeps [<name>-unoptimized.ll] within a 255-byte component, but
+   on Windows the whole path is held to MAX_PATH (260 characters), which the build directory already
+   spends a third of, so the first such write fails (gh-ocannl-1411). No length both exercises the
+   cut and fits there; the [cc_kept_library] rule, without debug files, still compiles the long name
+   on Windows. *)
+let long_name_compiles = not (debug && Stdlib.Sys.win32)
+
+(* A claim about the long-named routine: [claim label] where it compiles, a skip naming why where it
+   cannot. *)
+let long_claim label claim =
+  Verdict.gate ~aggregation:`Environment ~when_:long_name_compiles
+    ~on:"windows (debug file past MAX_PATH)" label (fun () -> claim label)
+
 (* The child's flags: the parent's own configuration (which follows its mode argument), less the
    settings a child mode sets for itself. *)
 let run_child child_mode settings =
@@ -113,17 +127,24 @@ let parent () =
   let backend, values = compile_and_run routine in
   Stdio.printf "backend: %s\n" backend;
   computes_3x_plus_1 "the routine computes 3x + 1 from its kept library" values;
-  let _backend, long_values = compile_and_run long_routine in
-  computes_3x_plus_1 "a routine with a 240-byte name computes 3x + 1 from its kept library"
-    long_values;
-  let long_kept = Generated.kept_libraries long_routine in
-  p "the long-named routine's library is kept, under its cut name" (List.length long_kept = 1);
-  p_all "the long-named routine's library name fits a file-name component" long_kept ~f:(fun path ->
-      String.length (Stdlib.Filename.basename path) <= 255);
+  let long_kept =
+    if long_name_compiles then
+      let _backend, long_values = compile_and_run long_routine in
+      Some (long_values, Generated.kept_libraries long_routine)
+    else None
+  in
+  let with_long label f = long_claim label (fun label -> Option.iter long_kept ~f:(f label)) in
+  with_long "a routine with a 240-byte name computes 3x + 1 from its kept library"
+    (fun label (long_values, _) -> computes_3x_plus_1 label long_values);
+  with_long "the long-named routine's library is kept, under its cut name"
+    (fun label (_, long_kept) -> p label (List.length long_kept = 1));
+  with_long "the long-named routine's library name fits a file-name component"
+    (fun label (_, long_kept) ->
+      p_all label long_kept ~f:(fun path -> String.length (Stdlib.Filename.basename path) <= 255));
   (* The digest in a cut name keeps apart routines whose names share their opening bytes. *)
-  p_empty "no library is found for another routine sharing the long name's opening bytes"
-    ~over:long_kept
-    (Generated.kept_libraries ~owner:`Any (long_routine ^ "_other"));
+  with_long "no library is found for another routine sharing the long name's opening bytes"
+    (fun label (_, long_kept) ->
+      p_empty label ~over:long_kept (Generated.kept_libraries ~owner:`Any (long_routine ^ "_other")));
   (* The cut never splits a character: a name of two-byte characters, placed so that the limit falls
      inside one. *)
   let wide_routine = "kernel" ^ String.concat (List.init 150 ~f:(fun _ -> "\u{e9}")) in
@@ -146,8 +167,8 @@ let parent () =
   let log = Utils.diagn_log_file "gh1335_parent.log" in
   Stdio.Out_channel.write_all log ~data:"written by the parent\n";
   if debug then
-    p "this process wrote the long-named routine's debug source"
-      (Stdlib.Sys.file_exists (Generated.path long_routine));
+    long_claim "this process wrote the long-named routine's debug source" (fun label ->
+        p label (Stdlib.Sys.file_exists (Generated.path long_routine)));
   (* A library left by a process that is gone: while this process holds the lock, the child's
      startup cannot rule out that its owner is running where liveness cannot see. *)
   let departed_during = Generated.plant_kept_library ~run_id:2 ~pid:departed_pid routine in
@@ -173,8 +194,8 @@ let parent () =
       String.is_substring (Stdio.In_channel.read_all path) ~substring:routine);
   p "this process's log stays through the child's startup cleanup" (Stdlib.Sys.file_exists log);
   if debug then
-    p "this process's debug source stays through the child's startup cleanup"
-      (Stdlib.Sys.file_exists (Generated.path long_routine))
+    long_claim "this process's debug source stays through the child's startup cleanup" (fun label ->
+        p label (Stdlib.Sys.file_exists (Generated.path long_routine)))
 
 let () =
   p "a library is kept: library output or debug files are requested"
