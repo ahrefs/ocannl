@@ -201,7 +201,6 @@ let exempt_zero_reference_exports =
     "Tnode.current_namespace";
     "Tnode.fresh_uid";
     "Tnode.hash_t";
-    "Tnode.header";
     "Tnode.initial_default_prec";
     "Tnode.is_alphanum_";
     "Tnode.known_not_materialized";

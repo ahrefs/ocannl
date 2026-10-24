@@ -298,9 +298,12 @@ files.
   presets then decline in about a second each, and the fissioned candidates, whose `promote_locals`
   moves the crossing scratch to device memory, compile and get searched. Guard:
   `test/operations/thread_private_gate.ml`. The sum reads `Tn.size_in_bytes_peek`, never
-  `Lazy.force tn.size_in_bytes`: a forced size shows in `Tn.header` (`mem in bytes: 64` where every
-  other backend prints `<not-in-yet>`), and forcing it from a HIP-only check turned the
-  backend-uniform `test/einsum/moons_demo_variant` golden red on HIP alone.
+  `Lazy.force tn.size_in_bytes`, and so does `Schedule.workgroup_memory_bytes`: a backend-specific
+  estimate leaves the node's lazies as every other backend finds them. Whatever the tests print
+  must not read a lazy's forced state — `Tn.header`'s `mem in bytes` is derived from dims and
+  precision (`<not-in-yet>` only while the dims are unresolved), not `Lazy.is_val` of the size
+  (gh-ocannl-1369), after a HIP-only forcing turned the backend-uniform
+  `test/einsum/moons_demo_variant` golden red on HIP alone.
 - Building a test kernel that actually *has* a big scratch frame takes care: write the `Local`
   array in one loop and read it back in REVERSE in another. A forward read in the same order lets
   the compiler forward each store to its load and delete the array, leaving nothing to reject.

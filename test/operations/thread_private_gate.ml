@@ -19,9 +19,12 @@
    observable [Never_virtual] node, or one over the stack threshold, both of which codegen puts
    [On_device] -- fails here rather than as a false refusal on a device. - Asking settles nothing:
    the open placements are still open after the estimate, and no node's [size_in_bytes] is forced by
-   it. A forced size shows in [Tn.header] ([mem in bytes: 64] for [<not-in-yet>]), and HIP is the
-   one backend running this check, so forcing it turned the backend-uniform
-   [test/einsum/moons_demo_variant] golden red on HIP alone. *)
+   it, nor by the sibling workgroup-memory estimate [Schedule.workgroup_memory_bytes]. HIP is the
+   one backend running these checks, so a forced size is node state only HIP leaves behind.
+   [Tn.header] once printed that state ([mem in bytes: <not-in-yet>] until forced), turning the
+   backend-uniform [test/einsum/moons_demo_variant] golden red on HIP alone; it now prints the size
+   derived from the node (gh-ocannl-1369), which the header claims below pin: the same text before
+   and after the size is forced. *)
 
 open Base
 open Ll_test
@@ -128,12 +131,18 @@ let () =
   let opt, declared, small, big, observed = kernel () in
   let plc = opt.LL.optimize_ctx.LL.placements in
   let size tn = Lazy.force tn.Tn.size_in_bytes in
+  let scratch = [ declared; small; big; observed ] in
   let estimate = Sched.thread_private_bytes opt in
-  (* Read before anything below forces a size through [size]: each node with whether its size was
-     forced by then. *)
-  let sizes_after_estimate =
-    List.map [ declared; small; big; observed ] ~f:(fun tn -> Lazy.is_val tn.Tn.size_in_bytes)
+  (* Every scratch node as a workgroup-shared tile: the capability-free workgroup estimate then
+     counts exactly their sizes. *)
+  let wg_estimate =
+    Sched.workgroup_memory_bytes ~capabilities:BI.no_codegen_capabilities
+      { opt with LL.workgroup_shared = Set.of_list (module Tn) scratch }
   in
+  (* Read before anything below forces a size through [size]: each node with whether its size was
+     forced by then, and its header at that point. *)
+  let sizes_after_estimate = List.map scratch ~f:(fun tn -> Lazy.is_val tn.Tn.size_in_bytes) in
+  let headers_unforced = List.map scratch ~f:Tn.header in
 
   (* The premises: which scratch node settles where. Without them the estimate below could match for
      the wrong reason, e.g. every node silently virtualized. *)
@@ -152,12 +161,24 @@ let () =
     (estimate = size declared + size small);
   p_all "estimate: asking settles nothing" [ small; big; observed ]
     ~f:(Tn.Placements.mode_is_unspecified plc);
-  p_none "estimate: asking forces no node's size_in_bytes, which Tn.header would print"
+  p_none
+    "estimate: neither thread_private_bytes nor workgroup_memory_bytes forces a node's \
+     size_in_bytes"
     sizes_after_estimate ~f:Fn.id;
   p "estimate: a workgroup-shared tile is declared per workgroup, not counted per work-item"
     (Sched.thread_private_bytes
        { opt with LL.workgroup_shared = Set.singleton (module Tn) declared }
     = size small);
+  p "workgroup estimate: the shared tiles' sizes, nothing else"
+    (wg_estimate = List.sum (module Int) scratch ~f:size);
+
+  (* The header reports the node, not the lazy's state: every size is forced by now. *)
+  p_all "premise: every scratch node's size_in_bytes is forced by now" scratch ~f:(fun tn ->
+      Lazy.is_val tn.Tn.size_in_bytes);
+  p_all "header: unchanged by forcing size_in_bytes, and printing the size it forced to"
+    (List.zip_exn scratch headers_unforced) ~f:(fun (tn, unforced) ->
+      String.equal unforced (Tn.header tn)
+      && String.is_substring unforced ~substring:("mem in bytes: " ^ Int.to_string_hum (size tn)));
 
   (* The gate, refusing and accepting side by side. *)
   p "gate: no cap accepts" (accepts opt ~limits:BI.no_hardware_limits);

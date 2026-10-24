@@ -248,11 +248,12 @@ let num_elems tn =
   let dims = Lazy.force tn.dims in
   Array.fold dims ~init:1 ~f:( * )
 
-(** [tn]'s size in bytes at its storage precision, computed WITHOUT forcing [tn.size_in_bytes]. That
-    lazy's state is observable: {!header} prints [mem in bytes: <not-in-yet>] until something forces
-    it, and tests pin those headers backend-uniformly. A query meant to leave the node as it found
-    it — a schedule-time estimate one backend alone runs, such as [Schedule.thread_private_bytes] —
-    reads this instead, so it cannot make that backend's headers diverge. *)
+(** [tn]'s size in bytes at its storage precision — the value [tn.size_in_bytes] forces to —
+    computed WITHOUT forcing that lazy. {!header} prints it, so the header reports a property of the
+    node rather than whether some code path happened to force the lazy (gh-ocannl-1369). A query
+    meant to leave the node as it found it — a schedule-time estimate one backend alone runs, such
+    as [Schedule.thread_private_bytes] or [Schedule.workgroup_memory_bytes] — reads this too, so no
+    observer of the lazy's state can tell which backend ran. *)
 let size_in_bytes_peek tn = num_elems tn * Ops.prec_in_bytes (Lazy.force tn.storage_prec)
 
 let dims_without_padding tn =
@@ -938,9 +939,11 @@ let get_style ?(arg_name = "ll_ident_style") ?(no_dots = false) () =
 
 let header tn =
   let debug = Utils.settings.log_level > 0 in
+  (* Derived from the dims and the storage precision whenever the dims are resolved, the same
+     condition [dims_to_string] prints them on; never the forced state of [tn.size_in_bytes]
+     (gh-ocannl-1369). *)
   let mem_size =
-    if Lazy.is_val tn.size_in_bytes then Int.to_string_hum @@ Lazy.force tn.size_in_bytes
-    else "<not-in-yet>"
+    if Lazy.is_val tn.dims then Int.to_string_hum @@ size_in_bytes_peek tn else "<not-in-yet>"
   in
   let repeating_nograd_idents = Hashtbl.create ~size:1 (module String) in
   let repeating_grad_idents = Hashtbl.create ~size:1 (module String) in
