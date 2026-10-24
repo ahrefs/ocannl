@@ -71,8 +71,9 @@ files.
   independent (each `compile` mints its own `pool_id`s) but a released context is a dead handle, and
   **release leaves, never interior nodes**: a context compiled from another inherits its buffer
   locations, so releasing an ancestor leaves the descendant resolving a dropped `pool_id`. This
-  precondition remains for compiled descendants; upload siblings reference-count shared working
-  pools (gh-ocannl-1173) without counting superseded values in a linear upload chain.
+  discipline remains for compiled descendants (now refused, next entries, not repaired); upload
+  siblings reference-count shared working pools (gh-ocannl-1173) without counting superseded values
+  in a linear upload chain.
 - **A search holds one candidate, and a replay never sits beside the base compile**
   (gh-ocannl-1326). gh-ocannl-550's beam bound (`beam_width + 2` routine footprints) still caps
   tuning at half the device: a b256 `gpt2_mini_train` search on a 12 GiB card timed one candidate
@@ -149,10 +150,14 @@ files.
   `User_error`. The compile-context check is waived when the run context shares its upload lineage:
   a live upload fork reference-counts the routine's pools, so it outlives the released chain. Because the flag is shared exactly where pools are, an earlier value of a linear
   upload chain is refused with the latest one, while compile siblings and upload forks keep working.
-  What it cannot see is a released ANCESTOR: a compiled descendant has a fresh flag of its own, so
-  "release leaves" stays an unchecked precondition. The `decide_*` refusal matters for that reason:
-  `make_child` of a dead handle would mint a live-looking flag over freed buffer locations.
-  Guard: `test/operations/context_handle_refusals.ml`.
+  A released ANCESTOR is refused too (gh-ocannl-1462): a compiled descendant has a fresh flag of
+  its own, so `check_live` also walks the backend context's `parent` chain (the lifecycle chain
+  `make_child` records) for a set flag, naming how many levels up; no second registry. An upload
+  fork keeps its source's PARENT, not the source, so a fork outliving its chain is not refused, nor
+  is a child compiled from it. `release` itself is not checked: a descendant still frees its own
+  pools. The `decide_*` refusal matters for the same reason: `make_child` of a dead handle would
+  mint a live-looking flag over freed buffer locations. Guard:
+  `test/operations/context_handle_refusals.ml` (`chr_released_ancestor`, `chr_fork_child`).
 - **`Context.run`'s initialization check has two classes** (gh-ocannl-1339). A read-before-write
   input (in both `inputs` and `outputs`: a counter, a running statistic) must have its BUFFER
   written in the lineage: the ledger's `written_buffers` holds the buffer keys every run, upload and

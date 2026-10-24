@@ -18,6 +18,17 @@ chr_released: the compile sibling still runs and reads back: true
 chr_released: the live parent still compiles and runs: true
 chr_fork: the compile context, sharing the released chain's flag, is refused: true
 chr_fork: the live fork still runs the routine and reads back: true
+chr_released_ancestor: the descendant ran from its ancestor's buffer before the release: true
+chr_released_ancestor: compile from the child is refused: true
+chr_released_ancestor: run on the child is refused: true
+chr_released_ancestor: run on a live context of another lineage with the child's routine is refused: true
+chr_released_ancestor: sync is refused: true
+chr_released_ancestor: get_values is refused: true
+chr_released_ancestor: set_values is refused: true
+chr_released_ancestor: decide_materialized is refused: true
+chr_released_ancestor: the refusal names the entry point and the distance: true
+chr_released_ancestor: the descendants still release their own pools: true
+chr_fork_child: a child of the surviving fork still runs and reads back: true
 chr_unseeded: the counter is read before written: true
 chr_unseeded: the counter is both an input and an output of the routine: true
 chr_unseeded: the counter has a buffer, which is not a value: true

@@ -144,9 +144,30 @@ let upload_lineage wrapped = Backends.query wrapped { q = (fun _ c -> c.BI.uploa
    refuses it here, by its own release flag, rather than reaching a freed pool or pointer. The flag
    is shared exactly by the values that share pools (a linear upload chain), so a still-live sibling
    (a compile sibling, an upload fork) keeps its own flag and keeps working. One atomic read per
-   call, at entry points only: nothing below them re-checks. What this cannot see is a released
-   ANCESTOR: a descendant has a flag of its own, so releasing an interior node stays the documented,
-   unchecked precondition of {!release}. *)
+   call, at entry points only: nothing below them re-checks.
+
+   gh-ocannl-1462: a released ANCESTOR is refused too. A descendant has a flag of its own, but it
+   inherits its ancestors' buffer locations, so releasing an interior node frees pools the
+   descendant still binds. The backend context already records the lifecycle chain
+   ([BI.context.parent], set by [make_child]) with each node's flag, so the walk below reads it
+   rather than keeping a second registry: one atomic read per lifecycle ancestor. An upload fork
+   keeps its source's PARENT, not the source, so a fork outliving the chain it forked from is not
+   refused. [release] itself does not check: a descendant must still be able to free its own
+   pools. *)
+let released_ancestor_depth wrapped =
+  Backends.query wrapped
+    {
+      q =
+        (fun _ c ->
+          let rec walk depth p =
+            match p with
+            | None -> None
+            | Some p when Atomic.get p.BI.finalized -> Some depth
+            | Some p -> walk (depth + 1) p.BI.parent
+          in
+          walk 1 c.BI.parent);
+    }
+
 let check_live ~fn ctx =
   if Atomic.get (release_flag ctx.wrapped) then
     raise
@@ -155,7 +176,17 @@ let check_live ~fn ctx =
             "Context.%s: context %d (backend %s, device %d) was released by Context.release and is \
              a dead handle: its device buffers are freed. Use a live context -- e.g. a sibling, or \
              recompile from a live ancestor."
-            fn ctx.context_id (backend_name ctx) ctx.ordinal)
+            fn ctx.context_id (backend_name ctx) ctx.ordinal);
+  Option.iter (released_ancestor_depth ctx.wrapped) ~f:(fun depth ->
+      raise
+      @@ Utils.User_error
+           (Printf.sprintf
+              "Context.%s: context %d (backend %s, device %d) descends from a context released by \
+               Context.release (its lifecycle ancestor %d level%s up): the device buffers it \
+               inherits from that ancestor are freed. Release leaves before their ancestors, or \
+               recompile from a live ancestor."
+              fn ctx.context_id (backend_name ctx) ctx.ordinal depth
+              (if depth = 1 then "" else "s")))
 
 (* The one constructor for a derived logical context — the result of any operation that makes a
    child (compiling, transfers that touch the wrapped context, decision recording). [context_id]

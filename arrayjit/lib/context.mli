@@ -621,24 +621,28 @@ val release : t -> unit
     refill of the merge buffer; an upload fork keeps them pending until every leaf holding their
     buffers is released (gh-ocannl-1203).
 
-    {b Precondition, not checked}: the context must have no live descendants. A context compiled
-    {e from} this one inherits its buffer locations while keeping it as their backend parent, so
-    releasing an ancestor leaves the descendant resolving a dropped pool id (or reading a freed
-    pointer). Release leaves, not interior nodes. This is the pre-existing contract of the
-    underlying {!Backends.finalize} — what is new is that it is reachable from here — and it is
-    deliberately left as a precondition rather than enforced: tracking lifecycle descendants would
-    require broader lifetime management of persistent context values. Upload siblings retain their
-    shared pools independently; descendants made by compile, decision recording, or transfers that
-    create a lifecycle child still require their ancestor to remain live. {!Autotune.tune} releases
-    only leaf siblings of one search context.
+    {b Ownership discipline}: release leaves, not interior nodes. A context compiled {e from} this
+    one inherits its buffer locations while keeping it as their backend parent, so releasing an
+    ancestor frees pools the descendant still binds. This is the pre-existing contract of the
+    underlying {!Backends.finalize}. Upload siblings retain their shared pools independently;
+    descendants made by compile, decision recording, or transfers that create a lifecycle child
+    require their ancestor to remain live. {!Autotune.tune} releases only leaf siblings of one
+    search context.
 
     A context whose buffers were released is a dead handle: {!compile}, {!run}, {!sync}, the
     transfers and the [decide_*] recorders refuse it with {!Ir.Utils.User_error} naming the context
     (gh-ocannl-1329), by the release flag it shares with exactly the values that share its pools (a
     linear upload chain). A compile sibling or an upload fork has its own flag and keeps working.
-    Nothing in the context is invalidated for {e reading metadata} (placements, names, the ledger,
-    the backend's static queries), only for touching buffers. What the refusal cannot see is a
-    released {e ancestor} — the precondition above.
+    The same entry points refuse a context one of whose lifecycle ancestors was released
+    (gh-ocannl-1462), naming how many levels up: detecting the misuse does not retain or resurrect
+    the freed pools, so the descendant cannot be used for buffers again, but [release] itself still
+    accepts it, so it can free its own. An upload fork's lifecycle ancestors are those of the value
+    it forked, not that value, so a fork outliving the chain it forked from is not refused. A
+    descendant of an earlier value of a released linear upload chain is refused even when an upload
+    fork still holds that value's pools, as that value itself is. Nothing in the context is
+    invalidated for {e reading metadata} (placements, names, the ledger, the backend's static
+    queries), only for touching buffers. The check walks the lifecycle chain, one atomic read per
+    ancestor.
 
     What it does {e not} free: per-device constants
     ({!Ir.Backend_intf.field-device.constant_buffer_cache} entries), which are shared across

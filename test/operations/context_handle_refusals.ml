@@ -1,11 +1,12 @@
-(* Two refusals at the Context API's entry points.
+(* Refusals at the Context API's entry points.
 
    gh-ocannl-1329: a context [Context.release] freed is a dead handle. Compile, run (on the released
    value, or on a live value outside its upload lineage with a routine compiled into it), sync, the
    transfers and the decision recorders all refuse it with a typed [Utils.User_error] naming the
    release, rather than reaching a freed pool. The release flag is shared exactly by the values that
    share pools: an earlier value of the same linear upload chain is refused too, while a compile
-   sibling, the parent and an upload fork keep working.
+   sibling, the parent and an upload fork keep working. gh-ocannl-1462: so is a context one of whose
+   lifecycle ancestors was released, while a child of a surviving upload fork keeps working.
 
    gh-ocannl-1339: [Context.run] refuses a READ-BEFORE-WRITE input that nothing ever wrote. The
    issue's case is a counter a routine reads and then overwrites, run with the counter never seeded:
@@ -119,6 +120,70 @@ let () =
   pf "chr_fork: the live fork still runs the routine and reads back"
     (Poly.equal (Context.get_values fork out) shifted
     && Poly.equal (Context.get_values fork y) shifted);
+  Context.release fork
+
+(* gh-ocannl-1462: a released ANCESTOR. [c2] is compiled from [c1] and binds [c1]'s buffer of [out1]
+   (its source), and [c3] is compiled from [c2]; releasing the interior [c1] frees that buffer under
+   both descendants. Every buffer-touching entry point refuses them, naming how far up the released
+   ancestor is, before reaching the freed pool -- and a live context of another lineage running
+   [c2]'s routine is refused too, by the routine's compile context. The descendants can still
+   release their own pools. *)
+let ancestor = "descends from a context released by Context.release"
+
+let () =
+  Verdict.case "chr_released_ancestor" @@ fun () ->
+  let base = Context.auto () in
+  let x1 = node "chr_ax1" and out1 = node "chr_aout1" in
+  let out2 = node "chr_aout2" and out3 = node "chr_aout3" in
+  let c1, r1 = link_shift ~ctx:base ~name:"chr_anc1" ~src:x1 ~dst:out1 () in
+  let c1 = Context.run (Context.set_values c1 x1 seed) r1 in
+  let c2, r2 = link_shift ~ctx:c1 ~name:"chr_anc2" ~src:out1 ~dst:out2 () in
+  let c3, _r3 = link_shift ~ctx:c2 ~name:"chr_anc3" ~src:out2 ~dst:out3 () in
+  let c2 = Context.run c2 r2 in
+  pf "chr_released_ancestor: the descendant ran from its ancestor's buffer before the release"
+    (Poly.equal (Context.get_values c2 out2) [| 12.; 24.; 36.; 48. |]);
+  Context.release c1;
+  let refused_here what f =
+    pf "chr_released_ancestor: %s is refused" what (refused ~needle:ancestor f)
+  in
+  refused_here "compile from the child" (fun () ->
+      link_shift ~ctx:c2 ~name:"chr_anc4" ~src:out2 ~dst:out3 ());
+  refused_here "run on the child" (fun () -> Context.run c2 r2);
+  refused_here "run on a live context of another lineage with the child's routine" (fun () ->
+      Context.run base r2);
+  refused_here "sync" (fun () -> Context.sync c2);
+  refused_here "get_values" (fun () -> Context.get_values c2 out1);
+  refused_here "set_values" (fun () -> Context.set_values c2 out1 seed);
+  refused_here "decide_materialized" (fun () -> Context.decide_materialized c2 [ out2 ]);
+  pf "chr_released_ancestor: the refusal names the entry point and the distance"
+    (refused ~needle:"Context.sync: context" (fun () -> Context.sync c2)
+    && refused ~needle:"ancestor 1 level up" (fun () -> Context.sync c2)
+    && refused ~needle:"ancestor 2 levels up" (fun () -> Context.sync c3));
+  p "chr_released_ancestor: the descendants still release their own pools"
+    (match
+       Context.release c3;
+       Context.release c2
+     with
+    | () -> true
+    | exception _ -> false)
+
+(* An upload fork's lifecycle ancestors are those of the value it forked, not that value: a child
+   compiled from a fork survives the release of the chain the fork came from. *)
+let () =
+  Verdict.case "chr_fork_child" @@ fun () ->
+  let base = Context.auto () in
+  let x = node "chr_fcx" and out = node "chr_fcout" and y = node "chr_fcy" in
+  let out2 = node "chr_fcout2" in
+  Ll_test.materialize y;
+  let c, _r = link_shift ~ctx:base ~name:"chr_fc" ~src:x ~dst:out () in
+  let chain = Context.set_values c y seed in
+  let fork = Context.set_values c y shifted in
+  let child, r_child = link_shift ~ctx:fork ~name:"chr_fc_child" ~src:y ~dst:out2 () in
+  Context.release chain;
+  let child = Context.run child r_child in
+  pf "chr_fork_child: a child of the surviving fork still runs and reads back"
+    (Poly.equal (Context.get_values child out2) [| 12.; 24.; 36.; 48. |]);
+  Context.release child;
   Context.release fork
 
 (* [ctr[i] := ctr[i] + 1 + i]: the counter is read before it is written. *)
