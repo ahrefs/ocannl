@@ -652,6 +652,13 @@ objects can be used to add shape constraints via `Shape.set_dim` and `Shape.set_
 corresponding variable (as a number) into a tensor expression. For a row variable, the number
 will be the product of the dimensions it resolved into.
 
+The ppx never shares a capture between calls, but a reference made by hand with
+`Shape.get_variable_ref` can be passed through `~capture_dims` to several operations. It then
+names one dimension, whichever order shape inference solves them in (gh-ocannl-1545): until
+inference closes, their dimension variables are equated, as are their row variables, and a
+dimension with a row has the row's product. Across a closure (say a `Train.forward_once` between
+the operations) the reference carries its solved value, which for a row variable is the product.
+
 Capturing requires the specification to be a **literal string**: every capture pattern in
 `tensor/ppx_op.ml` and `tensor/ppx_cd.ml` matches on a string constant, so
 `x ++ "ab => a" ["b"]` works while `let s = "ab => a" in x ++ s ["b"]` does not expand as a

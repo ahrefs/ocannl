@@ -7,3 +7,60 @@ unit-parameter instance: the width-5 call averages over its own width: true
 unit-parameter instance: both calls use the instance's one parameter: true
 batch_norm1d: the batch-2 call normalizes with its own batch size: true
 batch_norm1d: the batch-4 call normalizes with its own batch size: true
+both open, second fixed: the reference is still unsolved when the operations have registered: true
+both open, second fixed: w1 is 5
+both open, second fixed: w2 is 5
+both open, second fixed: the first operand follows the second: true
+both open, first fixed: the reference is still unsolved when the operations have registered: true
+both open, first fixed: w1 is 5
+both open, first fixed: w2 is 5
+both open, first fixed: the second operand follows the first: true
+three registrations: the reference is still unsolved when the operations have registered: true
+three registrations: w1 is 4
+three registrations: w2 is 4
+three registrations: w3 is 4
+three registrations: every operand follows the last: true
+both open, then set_dim: the reference is still unsolved when the operations have registered: true
+both open, then set_dim: w1 is 5
+both open, then set_dim: w2 is 5
+both open, then set_dim: set_dim reaches both operands: true
+both open, conflicting: the reference is still unsolved when the operations have registered: true
+both open, conflicting: sizes 3 and 5 for one reference are a shape error: true
+solved first: the first registration solved the reference: true
+solved first: w2 is 5
+solved first: the open operand takes the solved size: true
+solved first: a different size after the reference is solved is a shape error: true
+after a closure: w2 is 5
+after a closure: the later operand takes the closed size: true
+after a valueless closure: the reference is still unsolved when the operations have registered: true
+after a valueless closure: w2 is 2x3
+after a valueless closure: the later operand keeps its own shape: true
+symbolic, set before the registrations: both operands carry the symbolic extent: true
+symbolic, set after both open registrations: the reference is still unsolved when the operations have registered: true
+symbolic, set after both open registrations: both operands carry the symbolic extent: true
+rows, both open: the reference is still unsolved when the operations have registered: true
+rows, both open: w1 is 2x3
+rows, both open: w2 is 2x3
+rows, both open: the other operand has the fixed operand's row: true
+rows, both open, first fixed: the reference is still unsolved when the operations have registered: true
+rows, both open, first fixed: w1 is 2x3
+rows, both open, first fixed: w2 is 2x3
+rows, both open, first fixed: the other operand has the fixed operand's row: true
+dim then row: the reference is still unsolved when the operations have registered: true
+dim then row: w1 is 6
+dim then row: w2 is 2x3
+dim then row: the other operand has the fixed operand's product: true
+row then dim: the reference is still unsolved when the operations have registered: true
+row then dim: w1 is 2x3
+row then dim: w2 is 6
+row then dim: the other operand has the fixed operand's product: true
+rows, solved first: the first registration solved the reference: true
+rows, solved first: w2 is 2x3
+rows, solved first: the open operand takes the solved row: true
+rows, after a closure: w2 is 6
+rows, after a closure: the later operand takes the closed product: true
+rows holding a symbolic extent: w is 6
+rows holding a symbolic extent: two captures of one row close without a shape error: true
+executed: the reference is still unsolved when the operations have registered: true
+executed: y1 computes all 5 cells of the shared width: true
+executed: y2 computes all 5 cells of the shared width: true
