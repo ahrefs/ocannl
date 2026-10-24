@@ -165,22 +165,34 @@ let tune_arm ~name ~state ~searched ~cache_hit ~timing ~rounds_run ~beam_width ~
     recorded decision, replayed, and the [source_digest] of the search whose compile shipped -- the
     digest its schedule-cache entry is stored under, which a splice A/B (gh-ocannl-1277) matches
     entries against. [null] when the harness recorded no ship, and the digest also when the shipped
-    search reported none. *)
+    search reported none.
+
+    [ship_substituted] says no measured schedule shipped ({!Train.shipped}'s [ship_substituted],
+    gh-ocannl-1559): the shipping compile substituted the untuned default for the crown it was asked
+    for, with nothing left to fall back to, or the last resort shipped the caller's own untuned
+    compile. The cell's step times are then the untuned default's under a tuned variant, and nothing
+    else on the line says so -- the arms, [shipped] and [shipped_digest] all still name the search
+    whose crown was discarded. [substituted_from] is that discarded crown's [best_label], [null]
+    when nothing was substituted or on the last resort (which ships no search's crown). The
+    substitute is always the untuned default, so it needs no field. Both [null] when the harness
+    recorded no ship. *)
 let mma_object = function
   | None -> "null"
   | Some (tensorization, statements, scalar_fallbacks) ->
       Printf.sprintf {|{"tensorization":"%s","statements":%d,"scalar_fallbacks":%d}|}
         (string tensorization) statements scalar_fallbacks
 
-let tune_object ~shipped ?placement_replay ?shipped_digest ~searches ~replays ~no_searches
-    ~shipped_mma ~arms () =
+let tune_object ~shipped ?placement_replay ?shipped_digest ?ship_substituted ?substituted_from
+    ~searches ~replays ~no_searches ~shipped_mma ~arms () =
+  let quoted = Option.value_map ~default:"null" ~f:(fun d -> Printf.sprintf {|"%s"|} (string d)) in
   Printf.sprintf
-    {|{"shipped":"%s","placement_replay":%s,"shipped_digest":%s,"searches":%d,"replays":%d,"no_searches":%d,"shipped_mma":%s,"arms":[%s]}|}
+    {|{"shipped":"%s","placement_replay":%s,"shipped_digest":%s,"ship_substituted":%s,"substituted_from":%s,"searches":%d,"replays":%d,"no_searches":%d,"shipped_mma":%s,"arms":[%s]}|}
     (string shipped)
     (Option.value_map placement_replay ~default:"null" ~f:Bool.to_string)
-    (Option.value_map shipped_digest ~default:"null" ~f:(fun d ->
-         Printf.sprintf {|"%s"|} (string d)))
-    searches replays no_searches (mma_object shipped_mma) (String.concat ~sep:"," arms)
+    (quoted shipped_digest)
+    (Option.value_map ship_substituted ~default:"null" ~f:Bool.to_string)
+    (quoted substituted_from) searches replays no_searches (mma_object shipped_mma)
+    (String.concat ~sep:"," arms)
 
 (** The [regime_knobs] object: where each key of the approximate profile's payload resolved from in
     this process, keyed by the setting's name -- [{"source":"default"}] for a key nothing set,

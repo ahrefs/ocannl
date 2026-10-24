@@ -52,9 +52,11 @@ let tune =
      cell shipped a flip refinement or a replay fallback, so the arm describes a schedule that was
      discarded and only this field describes what ran (gh-ocannl-626). *)
   (* gh-ocannl-1438: the shipped placement was replayed from the placement store, under the digest
-     of the search that compiled it. *)
-  Bench_json.tune_object ~shipped:"B" ~placement_replay:true ~shipped_digest:"0123abcd" ~searches:3
-    ~replays:1 ~no_searches:1
+     of the search that compiled it. gh-ocannl-1559: and what shipped was that search's measured
+     schedule, not the untuned default substituted for it -- a replayed placement whose compile
+     substitutes is treated as stale and re-searched, so the pair cannot both hold. *)
+  Bench_json.tune_object ~shipped:"B" ~placement_replay:true ~shipped_digest:"0123abcd"
+    ~ship_substituted:false ~searches:3 ~replays:1 ~no_searches:1
     ~shipped_mma:(Some ("tensorized", 4, 0))
     ~arms:
       [
@@ -355,6 +357,33 @@ let () =
     (Yojson.Safe.equal
        (member "value" (resolved "OCANNL_AUTOTUNE_CACHE_DIR"))
        (`String "/tmp/a 'b'/c"));
+  (* gh-ocannl-1559: a ship that substituted the untuned default for the crown it was asked for is
+     on the line, with the crown it discarded -- the arms and [shipped_digest] still name that
+     crown's search, so nothing else on the line says the step times are the untuned default's. *)
+  let substituted ?substituted_from () =
+    Yojson.Safe.from_string
+      (Bench_json.tune_object ~shipped:"A" ~shipped_digest:"0123abcd" ~ship_substituted:true
+         ?substituted_from ~searches:1 ~replays:0 ~no_searches:0 ~shipped_mma:None ~arms:[] ())
+  in
+  p "a substituted ship says so, and names the discarded crown"
+    (let t = substituted ~substituted_from:"grid \"128\"" () in
+     Yojson.Safe.equal (member "ship_substituted" t) (`Bool true)
+     && Yojson.Safe.equal (member "substituted_from" t) (`String "grid '128'"));
+  p "a last-resort substitution, which discarded no search's crown, names none"
+    (let t = substituted () in
+     Yojson.Safe.equal (member "ship_substituted" t) (`Bool true)
+     && Yojson.Safe.equal (member "substituted_from" t) `Null);
+  p "a measured ship says it was not substituted, and names no discarded crown"
+    (Yojson.Safe.equal (member "ship_substituted" (member "tune" j)) (`Bool false)
+    && Yojson.Safe.equal (member "substituted_from" (member "tune" j)) `Null);
+  p "a tune object that recorded no ship says null for the substitution, not false"
+    (let t =
+       Yojson.Safe.from_string
+         (Bench_json.tune_object ~shipped:"A" ~searches:1 ~replays:0 ~no_searches:0
+            ~shipped_mma:None ~arms:[] ())
+     in
+     Yojson.Safe.equal (member "ship_substituted" t) `Null
+     && Yojson.Safe.equal (member "substituted_from" t) `Null);
   p "a tune object that recorded no shipped census says null, not a label"
     (Yojson.Safe.equal
        (member "shipped_mma"
