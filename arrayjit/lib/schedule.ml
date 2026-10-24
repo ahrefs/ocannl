@@ -1486,6 +1486,18 @@ let remap_reads ?(writes = false) ~source ~from_idcs ~tile ~tile_idcs (llc : Low
    site; Codex P2 on PR #123). *)
 let hoistable_constant tn = Tn.known_host_constant tn && Host_inits.mem tn
 
+(* The constancy half of [apply_stage]'s hoisted-source preconditions, named so that what the op
+   admits and what the device-memory floor leaves out ([may_replace_by_packed_tile]) are one
+   test. *)
+let hoist_known_constant plc tn = Tn.known_host_constant tn || Tn.Placements.known_constant plc tn
+
+(* gh-ocannl-1554: whether some schedule can take every read of [tn] off the node: a hoisted [Stage]
+   reads a host-packed tile instead and emits no load nest, so a candidate whose store is filtered
+   to its code footprint ([segment_optimized]) holds the packed tile and not [tn]. The tile is sized
+   by the staged accesses, not by [tn], so nothing below [tn]'s own size is known about it. Exactly
+   [apply_stage]'s hoisted-source preconditions on the node itself. *)
+let may_replace_by_packed_tile plc tn = Host_inits.mem tn && hoist_known_constant plc tn
+
 (* Host-side packing for hoisted Stage (gh-ocannl-470): materialize the packed layout of a constant
    operand from its host-init data. Forced at link/upload time — through the packed node's own
    [Host_inits] lazy — and uploaded into the per-device constant pool like any other
@@ -1799,11 +1811,7 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
       refuse
         ("Schedule.Stage: hoisted staging requires registered host-init data for "
        ^ Tn.debug_name source);
-    if
-      not
-        (Tn.known_host_constant source
-        || Tn.Placements.known_constant opt.Low_level.optimize_ctx.placements source)
-    then
+    if not (hoist_known_constant opt.Low_level.optimize_ctx.placements source) then
       refuse
         ("Schedule.Stage: hoisted staging requires a known-constant source, got "
        ^ Tn.debug_name source);
@@ -3886,6 +3894,10 @@ let apply_tensorize op (opt : Low_level.optimized) : Low_level.optimized =
       contract_tensorized_accumulator ~lane ~masks opt
   | _ -> assert false
 
+(* Whether [tn]'s placement is settled [On_device] in this lineage: the one placement the shared
+   epilogue placement below leaves alone. The device-memory floor's [may_keep_off_device] asks the
+   same question, so the two cannot drift apart. *)
+
 (** Epilogue fusion (gh-ocannl-486): fold the sole-consumer, index-space-compatible elementwise tail
     that re-reads [target] — the typical bias add / activation / residual after a reduction — into
     [target]'s store-back site, so the tail's separate memory pass over the output disappears and
@@ -3915,6 +3927,9 @@ let apply_tensorize op (opt : Low_level.optimized) : Low_level.optimized =
     store-back per iteration (so the relocated tail writes each output element exactly once, from
     the completed accumulation). Nodes related by buffer aliasing ([Tnode.alias_of]) are not
     analyzed — sole-consumption is judged by node identity. *)
+let settled_on_device plc tn =
+  match Tn.Placements.get plc tn with Some (Tn.On_device, _) -> true | _ -> false
+
 let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.optimized =
   let open Low_level in
   let fail msg = refuse ("Schedule.Fuse_epilogue: " ^ msg) in
@@ -4427,19 +4442,19 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
     fail
       "shared accumulator placement requires the fragment store-back site (apply after Tensorize's \
        contraction)"
-  else
+  else if
     (* GPU quality knob: the fused tail is often [target]'s last consumer, so placement makes
        [target] routine-local — a per-thread array the fragment hooks cannot [simdgroup_load] from.
        Place it in workgroup-shared memory instead (like [Stage]'s shared tiles), so the intrinsic
        fragment path fires against threadgroup memory. Nodes already settled on-device are left
        alone (device pointers are loadable as-is). CPU backends reject shared placement, so CPU
        schedules must not set [shared]. *)
-    match Tn.Placements.get opt.optimize_ctx.placements target with
-    | Some (Tn.On_device, _) -> opt
-    | _ ->
-        Tn.Placements.update opt.optimize_ctx.placements target Tn.Local
-          (Site "486:epilogue-workgroup-shared");
-        { opt with workgroup_shared = Set.add opt.workgroup_shared target }
+    settled_on_device opt.optimize_ctx.placements target
+  then opt
+  else (
+    Tn.Placements.update opt.optimize_ctx.placements target Tn.Local
+      (Site "486:epilogue-workgroup-shared");
+    { opt with workgroup_shared = Set.add opt.workgroup_shared target })
 
 let fuse_epilogue_witness ~target (opt : Low_level.optimized) : string option =
   try
@@ -9086,6 +9101,26 @@ let backend_is_gpu name =
   || String.is_substring name ~substring:"metal"
 
 let backend_is_cpu name = String.is_substring name ~substring:"cc"
+
+(* gh-ocannl-1554: whether some schedule can keep the existing node [tn] off the device -- the
+   premise the device-memory floor ([Backends.link_floor]) leaves such a node out on. The only
+   schedule op that turns an existing node's placement [Local] is the shared epilogue placement of
+   [apply_fuse_epilogue] (every other [Local] update in this module is of a node the op minted), and
+   it does so for a fusion target -- written by the reduction, read by the fused tail -- that is not
+   [settled_on_device]. Shared placement exists only on the GPU backends (CPU codegen rejects a
+   non-empty [workgroup_shared]), and the target is then charged its whole [size_in_bytes] by
+   [workgroup_memory_bytes], which [check_hardware_limits_classified] holds to
+   [max_workgroup_memory_bytes] for every kernel a compile emits: a larger node cannot leave the
+   device in any kernel the hardware gate admits. An unknown limit bounds nothing. *)
+let may_keep_off_device ~backend_name ~(limits : Backend_intf.hardware_limits) plc tn
+    (node : Low_level.traced_array) =
+  backend_is_gpu backend_name
+  && (not (settled_on_device plc tn))
+  && node.Low_level.has_assignment && node.Low_level.read_by_other
+  && Option.for_all limits.Backend_intf.max_workgroup_memory_bytes ~f:(fun limit ->
+      (* The peek is the forced size's value without forcing it (a forced size shows in HIP's
+         [Tn.header]; see [thread_private_bytes]). *)
+      Tn.size_in_bytes_peek tn <= limit)
 
 (* gh-ocannl-1331: the default pipeline's [Search_shaping] keys that only one kind of backend reads
    -- the GPU presets, lane geometry and fission mapping, and the CPU preset's threshold -- each

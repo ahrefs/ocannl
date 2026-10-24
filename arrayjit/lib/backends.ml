@@ -122,6 +122,28 @@ let size_in_bytes_of (key : Tn.t) =
    kernels lack grid-wide sync between statements). [lowered] is the whole-routine (pre-fission)
    code, whose traced store and placements decide eligibility; [segments] is the final kernel
    sequence in execution order. *)
+(* The aliasing-eligibility half of [plan_alias_spans] that depends on the node and the
+   whole-routine lowering only, never on the kernel sequence: a node failing it gets no live span in
+   any schedule, so the arena keeps it apart from every other node. Shared with the device-memory
+   floor ([link_floor], gh-ocannl-1554), which counts such nodes in full. *)
+let alias_eligible ~(lowered : Low_level.optimized) (tn : Tn.t) : bool =
+  let plc = lowered.Low_level.optimize_ctx.placements in
+  match Hashtbl.find lowered.Low_level.traced_store tn with
+  | None -> false
+  | Some node ->
+      Tn.Placements.is_in_context_force plc tn (Site "45:export-span")
+      && (not node.Low_level.read_only)
+      && (not node.Low_level.read_before_write)
+      && (node.Low_level.zeroed_out || node.Low_level.has_assignment)
+      (* Written but never consumed in-routine means the write is an EXPORT for later routines
+         (parameter initialization is the ubiquitous case) -- its lifetime extends past this
+         routine, so it must keep dedicated bytes. *)
+      && node.Low_level.read_by_other
+      && (not (Tn.is_observable tn))
+      && (not (Host_inits.mem tn))
+      && (not (Tn.Placements.known_constant plc tn))
+      && not (Option.exists lowered.Low_level.merge_node ~f:(Tn.equal tn))
+
 let plan_alias_spans ~(name : string) ~(limits : hardware_limits) ~(lowered : Low_level.optimized)
     ~(segments : Low_level.optimized list) : (Tn.t, int * int) Base.Hashtbl.t option =
   if not (buffer_aliasing ()) then None
@@ -133,23 +155,7 @@ let plan_alias_spans ~(name : string) ~(limits : hardware_limits) ~(lowered : Lo
     with
     | None -> None
     | Some spans ->
-        let plc = lowered.Low_level.optimize_ctx.placements in
-        Hashtbl.filter_keys_inplace spans ~f:(fun tn ->
-            match Hashtbl.find lowered.Low_level.traced_store tn with
-            | None -> false
-            | Some node ->
-                Tn.Placements.is_in_context_force plc tn (Site "45:export-span")
-                && (not node.Low_level.read_only)
-                && (not node.Low_level.read_before_write)
-                && (node.Low_level.zeroed_out || node.Low_level.has_assignment)
-                (* Written but never consumed in-routine means the write is an EXPORT for later
-                   routines (parameter initialization is the ubiquitous case) -- its lifetime
-                   extends past this routine, so it must keep dedicated bytes. *)
-                && node.Low_level.read_by_other
-                && (not (Tn.is_observable tn))
-                && (not (Host_inits.mem tn))
-                && (not (Tn.Placements.known_constant plc tn))
-                && not (Option.exists lowered.Low_level.merge_node ~f:(Tn.equal tn)));
+        Hashtbl.filter_keys_inplace spans ~f:(alias_eligible ~lowered);
         if Hashtbl.is_empty spans then None
         else (
           Hashtbl.iter_keys spans ~f:(Hash_set.add lowered.Low_level.optimize_ctx.alias_candidates);
@@ -298,12 +304,16 @@ let layout_item (key : Tn.t) : int * int =
 
 let layout_items group = List.map group ~f:(fun (key, _) -> layout_item key)
 
+(* The arena's precision class: nodes of different classes never share bytes ([plan_arena_offsets]),
+   whatever their spans. *)
+let alias_class (key : Tn.t) = Ops.prec_string (Lazy.force key.Tn.storage_prec)
+
 (* The [plan_arena_offsets] input for a layout group under the given live [spans] (gh-ocannl-489):
    liveness-disjoint same-precision nodes may overlap. *)
 let arena_items ~spans group =
   List.map group ~f:(fun ((key : Tn.t), _) ->
       let size, align = layout_item key in
-      (size, align, Ops.prec_string (Lazy.force key.Tn.storage_prec), Hashtbl.find spans key))
+      (size, align, alias_class key, Hashtbl.find spans key))
 
 (* gh-ocannl-498: the byte footprint a routine's placement vector implies, scored with the same
    liveness/arena machinery the allocator uses ([plan_alias_spans] + [plan_arena_offsets]) but
@@ -1235,18 +1245,18 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
 
   let new_pool_tx ~name = { tx_name = name; minted = ref []; held = ref 0 }
 
-  (* Mints a pool id per planned pool up front, then allocates each; returns the ids in [gl_pools]
-     order. *)
-  let allocate_group_pools tx device (gl : group_layout) : int array =
+  (* Mints a pool id per planned pool up front, then allocates each; returns the ids in [pools]
+     order. [~constant] is the group's class, for the census and the refusal's detail. *)
+  let allocate_pools tx device ~constant (pools : (int * int) list) : int array =
     let pool_ids =
-      Array.of_list_map gl.gl_pools ~f:(fun _ ->
+      Array.of_list_map pools ~f:(fun _ ->
           let pool_id = device.next_pool_id in
           device.next_pool_id <- pool_id + 1;
           pool_id)
     in
     let count = Array.length pool_ids in
-    let group_bytes = List.sum (module Int) gl.gl_pools ~f:fst in
-    List.iteri gl.gl_pools ~f:(fun index (size_in_bytes, alignment) ->
+    let group_bytes = List.sum (module Int) pools ~f:fst in
+    List.iteri pools ~f:(fun index (size_in_bytes, alignment) ->
         let pool_id = pool_ids.(index) in
         (try alloc_pool device ~pool_id ~size_in_bytes ~alignment
          with Schedule_outcome.Device_memory_exhausted r when count > 1 || !(tx.held) > 0 ->
@@ -1261,7 +1271,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
                        %d earlier pool(s), %d bytes, were still allocated when the free bytes were \
                        read"
                       r.detail (index + 1) count tx.tx_name
-                      (if gl.gl_constant then "constant" else "working")
+                      (if constant then "constant" else "working")
                       group_bytes (List.length !(tx.minted)) !(tx.held);
                 })
              backtrace);
@@ -1271,10 +1281,12 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
            per-class census records it. [~constant] separates the two groups, whose lifetimes
            differ: a working pool belongs to the context and dies with it, a constant pool is
            deduped per device and outlives it. *)
-        Alloc_census.record_pool ~device_id:device.device_id ~pool_id ~constant:gl.gl_constant
-          ~size_in_bytes;
+        Alloc_census.record_pool ~device_id:device.device_id ~pool_id ~constant ~size_in_bytes;
         Resource_fault_injection.hit Delta_pool_allocated);
     pool_ids
+
+  let allocate_group_pools tx device (gl : group_layout) : int array =
+    allocate_pools tx device ~constant:gl.gl_constant gl.gl_pools
 
   (* gh-ocannl-344 Phase B/C: allocate a context's delta ([plan_delta]). Working pools belong to the
      context (freed at its [finalize]); constant pools are deduped per-device via
@@ -1382,6 +1394,29 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
         Stdlib.Printexc.raise_with_backtrace exn backtrace);
     !ctx_buffers
 
+  (* gh-ocannl-1493: a trial allocation of [groups] -- [(constant, pools)] in allocation order --
+     through the seam the link allocates through, freed again before returning, on every path: the
+     device answers the question a link would put to it without memset, uploads, constant-cache
+     inserts, codegen or link. The pools are given back by [free_pools_continuing]: every one is
+     freed even when one free fails, and the first failure is re-raised once all were tried. *)
+  let trial_allocate (context : context) ~fn ~name (groups : (bool * (int * int) list) list) =
+    match free_pool with
+    | None -> invalid_arg (fn ^ ": " ^ Device.name ^ " cannot free a probe's pools")
+    | Some free_pool ->
+        let device = context.device in
+        let tx = new_pool_tx ~name in
+        let give_back () = free_pools_continuing device ~free_pool !(tx.minted) in
+        (match
+           List.iter groups ~f:(fun (constant, pools) ->
+               ignore (allocate_pools tx device ~constant pools : int array))
+         with
+        | () -> ()
+        | exception exn ->
+            let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+            (try give_back () with _ -> ());
+            Stdlib.Printexc.raise_with_backtrace exn backtrace);
+        give_back ()
+
   (* gh-ocannl-1493: what linking, on [context], a compile whose [lowered_transform] received
      [lowered] and returned [segments] would allocate -- planned without codegen or link, by the
      post-transform layout steps [compile] runs (the GPU covering-zero elision, the liveness spans)
@@ -1437,23 +1472,104 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
         ld_liveness_planned = Option.is_some alias_spans;
       }
     in
-    (if probe then
-       match free_pool with
-       | None -> invalid_arg ("Backends.link_delta: " ^ Device.name ^ " cannot free a probe's pools")
-       | Some free_pool ->
-           let device = context.device in
-           let tx = new_pool_tx ~name in
-           (* Every pool is attempted, so one free the driver refuses strands no other; the first
-              refusal is re-raised once all were tried. *)
-           let give_back () = free_pools_continuing device ~free_pool !(tx.minted) in
-           (match List.iter groups ~f:(fun gl -> ignore (allocate_group_pools tx device gl)) with
-           | () -> ()
-           | exception exn ->
-               let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-               (try give_back () with _ -> ());
-               Stdlib.Printexc.raise_with_backtrace exn backtrace);
-           give_back ());
+    if probe then
+      trial_allocate context ~fn:"Backends.link_delta" ~name
+        (List.map groups ~f:(fun gl -> (gl.gl_constant, gl.gl_pools)));
     summary
+
+  (* gh-ocannl-1554: the floor under every schedule of [lowered] -- see [link_floor] in
+     [Backend_intf]. Settledness is read before the partition forces the open placements (on the
+     copies, as in [link_delta]); a node the base code does not touch is not counted, since a
+     single-kernel candidate's store is filtered to its code footprint. *)
+  let link_floor (context : context) ?(name = "link_floor") ?(prelowered = false) ~probe
+      (lowered : Low_level.optimized) : link_floor =
+    let lowered =
+      {
+        lowered with
+        Low_level.traced_store = Hashtbl.copy lowered.Low_level.traced_store;
+        optimize_ctx = Low_level.copy_optimize_ctx lowered.Low_level.optimize_ctx;
+      }
+    in
+    (* As in [compile] and [link_delta]: a [?prelowered] routine's zeros are compiled as written. *)
+    let lowered =
+      if prelowered then lowered
+      else
+        match maybe_elide_zeros ~backend_name:Device.name [ lowered ] with
+        | [ single ] -> single
+        | _ -> lowered
+    in
+    let plc = lowered.Low_level.optimize_ctx.placements in
+    let limits = Device.hardware_limits () in
+    let off_device =
+      Hashtbl.fold lowered.Low_level.traced_store
+        ~init:(Set.empty (module Tn))
+        ~f:(fun ~key ~data acc ->
+          if Schedule.may_keep_off_device ~backend_name:Device.name ~limits plc key data then
+            Set.add acc key
+          else acc)
+    in
+    let touched, _ = Schedule.code_footprint lowered.Low_level.llc in
+    let working, constants =
+      partition_layout_groups ~plc ~skip:(Map.mem context.ctx_buffers)
+        lowered.Low_level.traced_store
+    in
+    let size (key, _) = size_in_bytes_of key in
+    let sum = List.sum (module Int) ~f:size in
+    let working = List.filter working ~f:(fun (key, _) -> Set.mem touched key) in
+    let off, pinned = List.partition_tf working ~f:(fun (key, _) -> Set.mem off_device key) in
+    let working_bytes, overlap_bytes =
+      if not (buffer_aliasing ()) then (sum pinned, 0)
+      else
+        let eligible, dedicated =
+          List.partition_tf pinned ~f:(fun (key, _) -> alias_eligible ~lowered key)
+        in
+        let largest =
+          Map.of_alist_fold
+            (module String)
+            (List.map eligible ~f:(fun ((key, _) as item) -> (alias_class key, size item)))
+            ~init:0 ~f:Int.max
+          |> Map.data
+          |> List.sum (module Int) ~f:Fn.id
+        in
+        (sum dedicated + largest, sum eligible - largest)
+    in
+    let fresh =
+      List.filter constants ~f:(fun (key, _) ->
+          Set.mem touched key && not (Hashtbl.mem context.device.constant_buffer_cache key))
+    in
+    let replaceable, kept =
+      List.partition_tf fresh ~f:(fun (key, _) -> Schedule.may_replace_by_packed_tile plc key)
+    in
+    let constant_bytes = sum kept in
+    (* One request per group, cut only at the per-pool cap: with the cap a page multiple, the
+       requests' page-rounded total is the floor's rounded up, never above the rounded total of a
+       candidate's pools, which hold at least the floor's bytes. *)
+    let cap = pool_cap () in
+    let alignment items =
+      List.fold items ~init:1 ~f:(fun a (key, _) ->
+          max a (Ops.prec_in_bytes (Lazy.force key.Tn.storage_prec)))
+    in
+    let pools ~items bytes =
+      let rec cut rest acc =
+        if rest <= 0 then List.rev acc
+        else
+          let piece = min rest cap in
+          cut (rest - piece) ((piece, alignment items) :: acc)
+      in
+      cut bytes []
+    in
+    let groups =
+      [ (false, pools ~items:pinned working_bytes); (true, pools ~items:kept constant_bytes) ]
+    in
+    if probe then trial_allocate context ~fn:"Backends.link_floor" ~name groups;
+    {
+      lf_working_bytes = working_bytes;
+      lf_constant_bytes = constant_bytes;
+      lf_pools = List.sum (module Int) groups ~f:(fun (_, p) -> List.length p);
+      lf_off_device_bytes = sum off;
+      lf_replaceable_bytes = sum replaceable;
+      lf_overlap_bytes = overlap_bytes;
+    }
 
   (* gh-ocannl-550: [allocate_delta] runs BEFORE the backend link, and the pool table roots whatever
      it allocated — so a link that raises (HIP's scratch-budget validator, a driver refusal, an

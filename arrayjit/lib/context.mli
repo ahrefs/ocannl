@@ -573,6 +573,39 @@ val probe_link_delta :
     with {!get_free_and_total_memory} reproduces on a unified-memory part. Raises [Invalid_argument]
     on a backend that cannot free a pool. *)
 
+type link_floor = Ir.Backend_intf.link_floor = {
+  lf_working_bytes : int;
+  lf_constant_bytes : int;
+  lf_pools : int;
+  lf_off_device_bytes : int;
+  lf_replaceable_bytes : int;
+  lf_overlap_bytes : int;
+}
+[@@deriving sexp_of, equal]
+
+val link_floor : ?name:string -> ?prelowered:bool -> t -> Ir.Low_level.optimized -> link_floor
+(** gh-ocannl-1554: a floor under {!link_delta} for EVERY schedule of [lowered] (the lowering as a
+    [lowered_transform] receives it) compiled from [ctx]: the bytes any candidate, cache replay or
+    untuned compile of it must allocate on the device, where {!link_delta} of the unscheduled form
+    bounds none of them from below under [buffer_aliasing] (one kernel overlaps nothing a fissioned
+    schedule can) or on-chip fusion (a shared epilogue placement keeps its target off the device).
+    Raw node bytes over the nodes of the delta the lowering's code touches, leaving out what some
+    schedule can keep off the device ({!field-lf_off_device_bytes}) or replace by a packed tile
+    ({!field-lf_replaceable_bytes}), and under the liveness planner counting the nodes no kernel
+    sequence can overlap plus the largest overlap-eligible node of each precision class
+    ({!field-lf_overlap_bytes} is what that leaves out). Link-free and hermetic, like {!link_delta}.
+*)
+
+val probe_link_floor : ?name:string -> ?prelowered:bool -> t -> Ir.Low_level.optimized -> link_floor
+(** gh-ocannl-1554: {!link_floor}, then a trial allocation of its pools -- each group's bytes in one
+    request, cut only at the per-pool cap -- through the seam the link allocates through (census,
+    [Resource_fault_injection.Delta_pool_allocated] per pool), all freed again before returning, on
+    every path. Its refusal, {!Ir.Schedule_outcome.Device_memory_exhausted}, answers for every
+    schedule under a page-granular allocator that admits by the total of page-rounded requests --
+    the floor's requests round to no more than any candidate's pools -- and not against a
+    contiguous-block or fragmentation limit. Raises [Invalid_argument] on a backend that cannot free
+    a pool. *)
+
 val global_debug_info : t -> Sexp.t
 (** The context's backend's process-wide debug information ([Sexp.message]-shaped, backend-specific:
     e.g. the CUDA and HIP backends' [live_streams] and [live_graph_execs]). *)
