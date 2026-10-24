@@ -3543,14 +3543,16 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   Windows and the OCaml floor ride the same cadence because they fail slowly through the
   dependency cone or toolchain.
 - The Windows job ends with a smoke of `tools/test-run.sh` itself, from Git Bash: `run`, `status
-  last`, a deliberately failing target, `start`/`wait last`, `list`, each asserted against its
-  documented exit code. That script's MSYS branches (unconditional and fatal `opam-env.sh` sourcing,
+  last`, a deliberately failing target, an unknown alias, `start`/`wait last`, `list`, each
+  asserted against its documented exit code. That script's MSYS branches (unconditional and fatal `opam-env.sh` sourcing,
   dune routed through `dune-quiet.sh`, the tokenless liveness degradation where MSYS `ps` has no
   lstart/state columns, the flock through MSYS perl) execute nowhere else, and are otherwise reached
   only from rare hand-run Windows sessions — where their rot is discovered mid-task. It builds
   `tools/promote.sh`, a source file dune copies rather than compiles, so it costs a workspace scan;
   the failing-target leg is the load-bearing one, since it is where a dropped `PIPESTATUS` in
-  `dune-quiet.sh` would report red runs as green. It runs even when `dune runtest` above went red
+  `dune-quiet.sh` would report red runs as green. Its target is a file dune cannot build, never an
+  alias: `test-run.sh` refuses an unknown alias itself (exit 2) before dune runs, so an alias there
+  never reaches `dune-quiet.sh` (gh-ocannl-1589). It runs even when `dune runtest` above went red
   (Windows runs once a day; a golden drift must not mask the runner's health for a day) and
   it runs last, so a broken runner cannot abort the sweep's only Windows test coverage.
 - That smoke step has itself been run on real MSYS (rog, Git Bash, under GitHub's exact
