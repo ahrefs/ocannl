@@ -340,7 +340,8 @@ files.
   under its host time -- tracing costs about 2-3% of the step there, as on rog. Quote tuf's
   in-step shares, then. The 108% stays unexplained -- the cell is gone, and it recorded neither
   stamps' composition nor co-tenants; a shared-box co-tenant is the likeliest reading, not a
-  finding -- and every kprof cell now prints the composition that would expose it. **minix is the opposite case**: on its unified gfx1151 rocprofv3 stamps
+  finding -- and every kprof cell now prints the composition that would expose it, and the GPU
+  co-tenants seen at its start and end (gh-ocannl-1521; `UNREAD` when no probe ran). **minix is the opposite case**: on its unified gfx1151 rocprofv3 stamps
   whole batches of a step's dispatches (up to 128) with one start, with graph capture and without
   (`--ocannl_gpu_graph_capture=false`), so a 16 ms step's segments span 0.4-2.3 ms of trace and
   overlap by 85-97% of their summed durations. The durations themselves hold up -- graph on and

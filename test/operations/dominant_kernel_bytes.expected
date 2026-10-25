@@ -1,0 +1,6 @@
+a staged blocktile's dominant-kernel bytes are below the whole-kernel total: true
+a staged blocktile's dominant-kernel bytes leave out exactly its on-chip nodes' bytes: true
+the dominant-kernel bytes are the kernel table's io: read plus written, on every plan: true
+the dominant kernel's op count stays the whole kernel's, on every plan: true
+the unstaged default plan touches no on-chip node: true
+on the unstaged default plan nothing is left out: true

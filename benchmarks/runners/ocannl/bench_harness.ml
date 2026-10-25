@@ -1248,23 +1248,34 @@ let segment_geometry seg =
   let dims a = String.concat_array ~sep:";" (Array.map a ~f:Int.to_string) in
   Printf.sprintf "grid=[%s] block=[%s]" (dims d.grid) (dims d.block)
 
-(** A segment's global-memory traffic by the cost model ({!Ir.Cost_model.analyze}, gh-ocannl-1444):
-    [io:<read>/<written>] bytes, the distinct cells each GLOBAL node's accesses touch times its
-    element size -- workgroup-shared tiles and thread-private scratch ({!Ir.Cost_model.global_in}
-    false) stay on chip and are left out, so a staged kernel is not charged its staging twice. A
-    trailing [~] marks a count that is an upper bound (an approximate access image among the global
-    nodes), a trailing [?] code the model cannot see (an [opaque] kernel, whose counts may
-    under-count). *)
+(** A segment's cost-model counts ([s], {!Ir.Cost_model.analyze} of its code) with the byte counts
+    restricted to GLOBAL memory (gh-ocannl-1444, gh-ocannl-1520): [per_node], [read_bytes] and
+    [write_bytes] keep only the nodes {!Ir.Cost_model.global_in} places in global memory --
+    workgroup-shared tiles and thread-private scratch stay on chip and are left out, so a staged
+    kernel is not charged its staging twice against a DRAM ceiling. The op count and the opacity
+    flag are the whole kernel's, as analyzed. The one accounting behind both the kernel table's
+    [io:] field ({!segment_io}) and the dominant kernel's [bytes] ({!dominant_kernel_record}). *)
+let global_counts seg (s : Ir.Cost_model.summary) =
+  let module CM = Ir.Cost_model in
+  let per_node = List.filter s.CM.per_node ~f:(fun (tn, _) -> CM.global_in seg tn) in
+  let sum f = List.sum (module Int) per_node ~f:(fun (_, fp) -> f fp) in
+  {
+    s with
+    CM.per_node;
+    read_bytes = sum (fun fp -> fp.CM.fp_read_bytes);
+    write_bytes = sum (fun fp -> fp.CM.fp_write_bytes);
+  }
+
+(** A segment's global-memory traffic, {!global_counts}: [io:<read>/<written>] bytes, the distinct
+    cells each global node's accesses touch times its element size. A trailing [~] marks a count
+    that is an upper bound (an approximate access image among the global nodes), a trailing [?] code
+    the model cannot see (an [opaque] kernel, whose counts may under-count). *)
 let segment_io seg =
   let module CM = Ir.Cost_model in
-  let s = CM.analyze seg.Ir.Low_level.llc in
-  let global = List.filter s.CM.per_node ~f:(fun (tn, _) -> CM.global_in seg tn) in
-  let sum f = List.sum (module Int) global ~f:(fun (_, fp) -> f fp) in
-  Printf.sprintf "io:%d/%d%s%s"
-    (sum (fun fp -> fp.CM.fp_read_bytes))
-    (sum (fun fp -> fp.CM.fp_write_bytes))
-    (if List.exists global ~f:(fun (_, fp) -> fp.CM.fp_approx) then "~" else "")
-    (if s.CM.opaque then "?" else "")
+  let g = global_counts seg (CM.analyze seg.Ir.Low_level.llc) in
+  Printf.sprintf "io:%d/%d%s%s" g.CM.read_bytes g.CM.write_bytes
+    (if CM.footprint_approximate g then "~" else "")
+    (if g.CM.opaque then "?" else "")
 
 (** Diagnostic census of the segments actually compiled, including gradient zeroing, backward and
     optimizer kernels for a training step. IDs match {!time_shipped_segments}. *)
@@ -1353,6 +1364,40 @@ let narrow_native ~(limits : Ir.Backend_intf.hardware_limits) (s : Ir.Cost_model
 (** How many written nodes a kernel's label names before eliding the rest. *)
 let label_writes = 3
 
+(** The dominant kernel's {!Bench_json.kernel} record for shipped segment [seg], with what was
+    measured of it, and its whole-kernel {!Ir.Cost_model.analyze} summary (the ceiling's
+    [narrow_native] reads every node it touches, staging included). The op counts are the whole
+    kernel's; [bytes] and [bytes_exact] are global memory's only ({!global_counts}, gh-ocannl-1520),
+    the traffic the bandwidth ceiling it is scored against moves -- the same count as the kernel
+    table's [io:] field. *)
+let dominant_kernel_record ~segment ~segments ~declined ~seg_ms ~segments_ms ~tensorization seg =
+  let module CM = Ir.Cost_model in
+  let s = CM.analyze seg.Ir.Low_level.llc in
+  let g = global_counts seg s in
+  let writes =
+    let names = List.map (writes_of seg.Ir.Low_level.llc) ~f:Tn.debug_name in
+    let shown = List.take names label_writes in
+    String.concat ~sep:" " shown
+    ^
+    if List.length names > label_writes then Printf.sprintf " +%d" (List.length names - label_writes)
+    else ""
+  in
+  ( {
+      Bench_json.segment;
+      segments;
+      declined;
+      writes;
+      seg_ms;
+      segments_ms;
+      tensorization;
+      flops = s.CM.flops;
+      bytes = CM.total_bytes g;
+      flops_exact = not s.CM.flops_approx;
+      bytes_exact = not (CM.footprint_approximate g);
+      opaque = s.CM.opaque;
+    },
+    s )
+
 (** Times every kernel of [routines] — the compiled routines of one step — and returns the
     {!Bench_json.dominant_kernel_object} of the slowest. [ctx] is the context the step last ran in
     and [bindings] the ones the step was compiled with; call after the timed steps, since timing a
@@ -1426,32 +1471,11 @@ let dominant_kernel ?(repeats = 20) ?budget_s ?(time_kernel = fun ~i:_ timing ->
             List.max_elt timed ~compare:(fun (_, _, a, _) (_, _, b, _) -> Float.compare a b)
             |> Option.value_exn ~here:[%here]
           in
-          let s = Ir.Cost_model.analyze seg.Ir.Low_level.llc in
-          let writes =
-            let names = List.map (writes_of seg.Ir.Low_level.llc) ~f:Tn.debug_name in
-            let shown = List.take names label_writes in
-            String.concat ~sep:" " shown
-            ^
-            if List.length names > label_writes then
-              Printf.sprintf " +%d" (List.length names - label_writes)
-            else ""
-          in
           let tensorization = Ir.C_syntax.tensorization_name mma.Ir.C_syntax.tensorization in
-          let kernel =
-            {
-              Bench_json.segment = i;
-              segments = n;
-              declined = n - List.length timed;
-              writes;
-              seg_ms;
-              segments_ms;
-              tensorization;
-              flops = s.Ir.Cost_model.flops;
-              bytes = Ir.Cost_model.total_bytes s;
-              flops_exact = not s.Ir.Cost_model.flops_approx;
-              bytes_exact = not (Ir.Cost_model.footprint_approximate s);
-              opaque = s.Ir.Cost_model.opaque;
-            }
+          let kernel, s =
+            dominant_kernel_record ~segment:i ~segments:n
+              ~declined:(n - List.length timed)
+              ~seg_ms ~segments_ms ~tensorization seg
           in
           let ceiling =
             Bench_json.choose_ceiling ~gpu ~tensorization ~narrow_native:(narrow_native ~limits s)

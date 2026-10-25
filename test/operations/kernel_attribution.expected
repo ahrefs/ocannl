@@ -4,6 +4,7 @@ the isolated warmup run is not an isolated timing: true
 ISO flags an isolated time off its in-step one, SPREAD a wide in-step spread: true
 with a common factor of 1, OWN flags exactly what ISO does: true
 one cell renders its table and owes no repeatability section: true
+a cell prints the GPU co-tenants recorded at its start and end, or that none were: true
 cells of one kernel list are compared kernel by kernel, the moved one listed: true
 a cell that shipped other kernels is attributed but compared with none: true
 a step-wide clock factor is ISO but not OWN; a kernel's own deviation beyond it is: true

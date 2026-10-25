@@ -142,6 +142,23 @@ with tempfile.TemporaryDirectory() as scratch:
     check("sum of in-step medians 5.00 ms" in text and "| 1 | 2.000 | 2.000..2.000 | 3.000 | 1.50 |" in text, text)
     check("Kernel repeatability" not in text, text)
     print("one cell renders its table and owes no repeatability section: true")
+    check("- GPU co-tenants: not recorded (no %s.cotenants.jsonl: a cell from before gh-ocannl-1521)"
+          % stem in text, text)
+    # The co-tenant record the driver writes around the cell (gh-ocannl-1521), printed under it.
+    snap = {"cell": stem, "box": "rog-nv", "host": "h", "at": "2026-10-25T00:00:00Z",
+            "probes": [{"probe": "nvidia-smi", "status": "ran", "detail": ""}],
+            "gpu_processes": [{"pid": 77, "user": "bob", "command": "python3 train.py",
+                               "probe": "nvidia-smi", "gpu_memory_mib": 640}]}
+    (out / (stem + ".cotenants.jsonl")).write_text(
+        json.dumps(dict(snap, event="opened")) + "\n"
+        + json.dumps(dict(snap, event="closed", gpu_processes=[])) + "\n")
+    text = io.StringIO()
+    with contextlib.redirect_stdout(text):
+        code = ka.report(str(out))
+    text = text.getvalue()
+    check(code == 0 and "- GPU co-tenants: opened 1 [pid 77 bob python3 train.py (nvidia-smi, 640 MiB)]"
+          " (nvidia-smi ran); closed 0 (nvidia-smi ran)" in text, text)
+    print("a cell prints the GPU co-tenants recorded at its start and end, or that none were: true")
 
     # An A/A pair: a second cell of the same kernel list, one kernel moved in-step by 20%.
     moved = {**IN_STEP, 0: [1.2] * 4}

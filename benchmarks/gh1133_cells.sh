@@ -39,7 +39,8 @@
 #                 provides one where the distribution ships none), an amdgpu sysfs clock sampler
 #                 beside it where the box has one amdgpu card (gh-ocannl-1444). On both, a device
 #                 probe (bin/device_props) runs first, and every cell states its one device's memory
-#                 model, unified or discrete. Every shipped segment's device duration over the timed steps is
+#                 model, unified or discrete, and the GPU co-tenants seen at its start and end
+#                 (benchmarks/gpu_cotenants.py, gh-ocannl-1521). Every shipped segment's device duration over the timed steps is
 #                 joined with the same compile's isolated minimum (benchmarks/kernel_attribution.py,
 #                 which refuses a cell it cannot map), and rows where the two disagree, or the
 #                 in-step spread is wide, are flagged: only the in-step column attributes step
@@ -235,7 +236,8 @@ capped() {
 # OUT/CELL.smi.csv for the cell's duration. On HIP it is rocprofv3, whose kernel trace records each
 # dispatch at the HSA queue (graph nodes included) in OUT/CELL_kernel_trace.csv, beside
 # OUT/CELL_agent_info.csv, and an amdgpu sysfs sampler records OUT/CELL.clk.csv. Either way the
-# cell's .err states KPROF_HEADER (the tracer and the memory model).
+# cell's .err states KPROF_HEADER (the tracer and the memory model), and OUT/CELL.cotenants.jsonl
+# records the box's GPU co-tenants just before the cell and just after it (gh-ocannl-1521).
 cell() {
   local fixture=$1 treatment=$2 tag=$3 exe=${4:-bench_gpt} profile=${5:-} flags r st smi=
   flags=$(flags_of "$treatment") || { failed=1; return 1; }
@@ -243,6 +245,8 @@ cell() {
   local name="$backend-$fixture-$treatment-$tag" wrap=()
   echo "backend=$backend fixture=$fixture treatment=$treatment runner=$r flags=[$flags]" >"$out/$name.err"
   [ -z "$profile" ] || printf '%s\n' "$kprof_header" >>"$out/$name.err"
+  # The box's GPU co-tenants before the tracer and sampler start (gh-ocannl-1521).
+  [ -z "$profile" ] || cotenants "$name" opened
   if [ -n "$profile" ] && [ "$backend" = hip ]; then
     wrap=("$rocprof" --kernel-trace --output-format csv -d "$out" -o "$name" --)
     if [ -n "$hwmon" ]; then
@@ -269,7 +273,20 @@ cell() {
     kill "$smi" 2>/dev/null
     wait "$smi" 2>/dev/null
   fi
+  # ...and after the cell and its sampler have ended.
+  [ -z "$profile" ] || cotenants "$name" closed
   return "$st"
+}
+
+# [cotenants CELL EVENT]: append the box's GPU-using processes to OUT/CELL.cotenants.jsonl
+# (benchmarks/gpu_cotenants.py: nvidia-smi's compute apps and the DRM clients' fdinfo), the record
+# kernel_attribution.py prints under the cell. Evidence only: a probe that cannot run is recorded as
+# such, and nothing here fails the cell.
+cotenants() {
+  local box=()
+  [ -z "$box_gate_box" ] || box=(--box "$box_gate_box")
+  python3 "$root/benchmarks/gpu_cotenants.py" record ${box[@]+"${box[@]}"} \
+    "$out/$1.cotenants.jsonl" "$1" "$2" || echo "gh1133: $1: the co-tenant record ($2) failed"
 }
 
 # The cell list in pass order: forward on odd passes, reversed on even ones.

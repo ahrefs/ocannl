@@ -308,6 +308,9 @@ type kernel = {
   tensorization : string;  (** [Ir.C_syntax.tensorization_name] of its own compile. *)
   flops : int;
   bytes : int;
+      (** Global-memory bytes read plus written: on-chip staging tiles and thread-private scratch
+          are left out (gh-ocannl-1520), so the memory leg is the traffic [ceiling_bandwidth] moves
+          -- the kernel table's [io:] count ([Bench_harness.global_counts]). *)
   flops_exact : bool;
   bytes_exact : bool;
   opaque : bool;

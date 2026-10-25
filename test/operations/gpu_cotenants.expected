@@ -1,0 +1,9 @@
+each probe lists exactly its GPU processes, the non-DRM descriptor and non-pid entry left out: true
+nvidia-smi: a process on two GPUs is one entry, its memory summed; [N/A] gives none; a non-process line is counted, not listed: true
+drm-fdinfo: a client's engine times are summed once however many descriptors share it: true
+a live process carries its user and command line, an ended one neither: true
+the snapshot names its cell, box, host, event and UTC time: true
+the summary lists each snapshot's processes, and an idle GPU as 0 with the probes that ran: true
+a snapshot in which no probe ran is UNREAD, with each probe's reason: true
+a missing event, a malformed line and a missing record each say so: true
+record exits 0 even when it cannot write, refuses an unknown event; summary prints the line: true

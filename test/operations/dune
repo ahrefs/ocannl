@@ -237,6 +237,7 @@
  (deps
   (alias runtest-gh1133_summary)
   (alias runtest-kernel_attribution)
+  (alias runtest-gpu_cotenants)
   (alias runtest-gh1002_kernels)
   (alias runtest-bin_cells)
   (alias runtest-online_softmax_fast_math)
@@ -9693,6 +9694,7 @@
   kernel_attribution.py
   kernel_attribution.expected
   ../../benchmarks/kernel_attribution.py
+  ../../benchmarks/gpu_cotenants.py
   ../../benchmarks/gh1002_cells.py
   ../../benchmarks/bench_output.py
   ../../benchmarks/box_gate.py
@@ -9710,6 +9712,35 @@
       %{dep:kernel_attribution.py}
       %{dep:../../benchmarks/kernel_attribution.py}))
     (diff kernel_attribution.expected kernel_attribution.actual)))))
+
+; The kprof cell's GPU co-tenant record (gh-ocannl-1521): its probes over a stubbed nvidia-smi and a
+; stubbed /proc, its summary, its command line. POSIX only: the stubs run by shebang, the stubbed
+; /proc is symlinks, and the probes' process names come from ps -- none of which native Windows has,
+; and the kprof driver itself runs only on the Linux GPU boxes.
+
+(rule
+ ; ocannl-backend: none -- probes stub processes in Python and launches no OCANNL executable.
+ (alias runtest-gpu_cotenants)
+ (enabled_if
+  (<> %{os_type} Win32))
+ (deps
+  (alias runtest-env_spelling_gate)
+  gpu_cotenants.py
+  gpu_cotenants.expected
+  ../../benchmarks/gpu_cotenants.py
+  ../../benchmarks/display_safe.py
+  ../../benchmarks/strict_json.py
+  (sandbox always preserve_file_kind))
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     gpu_cotenants.actual
+     (run
+      python3
+      %{dep:gpu_cotenants.py}
+      %{dep:../../benchmarks/gpu_cotenants.py}))
+    (diff gpu_cotenants.expected gpu_cotenants.actual)))))
 
 ; Exercise the shipping per-kernel table reader with and without Python assertions.
 
@@ -10284,6 +10315,24 @@
  (deps ocannl_config)
  (modules cost_model_reuse)
  (libraries base stdio ocannl arrayjit.verdict ll_test))
+
+; gh-ocannl-1520: the dominant kernel's bytes count global memory only, the kernel table's io:
+; accounting, so a staged kernel's tiles and scratch stay off the bandwidth ceiling's leg.
+
+(test
+ ; ocannl-backend: none -- hand-built IR is scheduled and counted, never compiled or executed.
+ (name dominant_kernel_bytes)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules dominant_kernel_bytes)
+ (libraries
+  base
+  stdio
+  ocannl
+  bench_harness
+  bench_json
+  arrayjit.verdict
+  ll_test))
 
 ; gh-ocannl-1253: every hardware_limits field has a cache-identity class; the cache key hashes the
 ; Key-class projection, byte-identical to the pre-classification record; no Untimed field is read
