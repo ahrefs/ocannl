@@ -74,12 +74,6 @@ let make_merged ~rows tag =
   let%op y3 = y2 *. 0.5 in
   y3
 
-(* The tuner's GPU fission settings ([Autotune.tune]'s segment enumeration). *)
-let fission ~preset opt =
-  Sched.fission_scheduled ~promote_locals:true ~fold_zeros:true
-    ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu:true ~limits)
-    ~preset ~zero_sched:(Sched.zero_expansion ~limits) ~static_indices:[] opt
-
 let gpu_seeds seg = Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits seg
 
 let gpu_real_stmts seg =
@@ -89,8 +83,8 @@ let gpu_real_stmts seg =
 
 let is_conv_segment (seg : LL.optimized) = Option.is_some (Autotune.detect_conv seg.LL.llc)
 
-(* The routine's whole lowering and its merged conv segment, captured on the way through a
-   compile. *)
+(* The routine's whole lowering and its merged conv segment -- the tuner's own segmentation
+   ([Ll_test.tuner_segments], gh-ocannl-1483) -- captured on the way through a compile. *)
 let lowerings ~name y =
   let captured = ref None in
   ignore
@@ -104,7 +98,7 @@ let lowerings ~name y =
   let whole = Option.value_exn !captured in
   let segment =
     List.find_map
-      (fission ~preset:(fun seg -> Sched.default_gpu ~min_parallel:1 ~limits seg) (scratch whole))
+      (snd (Ll_test.tuner_segments whole))
       ~f:(fun (_, pre, _, _) -> Option.some_if (is_conv_segment pre) pre)
   in
   (whole, segment)
@@ -169,18 +163,18 @@ let leg ~tag ~rows =
     List.mapi seg_seeds ~f:(fun i _ ->
         let name = Printf.sprintf "%s_s%d" tag i in
         let applied = ref false in
-        let transform opt =
-          let preset seg =
-            if is_conv_segment seg then
-              match List.nth (gpu_seeds seg) i with
-              | Some sp ->
-                  applied := true;
-                  Autotune.sketch_schedule ~accum_prec ~p:sp seg
-              | None -> failwith (Printf.sprintf "%s: seed %d is gone from the segment" name i)
-            else Sched.default_gpu ~min_parallel:1 ~limits seg
-          in
-          List.map (fission ~preset opt) ~f:(fun (_, _, _, post) -> post)
+        (* Compiled as a per-segment sketch candidate: the tuner's segmentation replayed, the conv
+           segment sketched, every other one on its preset. *)
+        let schedule _ seg =
+          if is_conv_segment seg then
+            match List.nth (gpu_seeds seg) i with
+            | Some sp ->
+                applied := true;
+                Some (Autotune.sketch_schedule ~accum_prec ~p:sp seg)
+            | None -> failwith (Printf.sprintf "%s: seed %d is gone from the segment" name i)
+          else None
         in
+        let transform = Ll_test.tuner_transform ~schedule in
         match execute_seed ~name ~want ~transform (make_merged ~rows name) with
         | `Ran _ when not !applied ->
             Stdio.eprintf "%s: the seed never reached the conv segment\n" name;

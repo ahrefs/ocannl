@@ -46,7 +46,8 @@ files.
   Metal), the fused dV denied its lanes by dK, the logits trimmed by their row max. The probes run
   under `Indexing.discarding_symbols`: `split` mints symbols, and a discarded probe's would shift every
   later minted name. Autotuner fission call sites pass `Schedule.fission_keep_mapping` too, or their
-  segmentation stops being the untuned default's (`fission_equivalence`). The segmentation's inputs
+  segmentation stops being the untuned default's (`fission_equivalence`): they go through
+  `Autotune.tuner_fission`, which carries it with the placements and zero policy (gh-ocannl-1483). The segmentation's inputs
   beyond the code (the gate, `gpu_schedule_block_size`, `_min_parallel`, `_workgroup_fill`) stay
   out of the schedule-cache key: a fissioned winner replays its persisted segmentation, never a
   re-derived one (gh-ocannl-1164, "Cache regimes and placement replay" below). A cut needs no retest after
@@ -208,9 +209,13 @@ files.
   tensorized fused twin places in workgroup-shared storage (`epilogue_shared`, an intermediate whose
   only consumer is the fused tail) is annotated by the pipeline itself (`shared_folded_zero`,
   gh-ocannl-1453) — bare, it failed gh-ocannl-959's binding legality on every such twin. A test of
-  the folded path segments as the tuner does (host limits, promoted locals): `qkv_zero_init`'s
-  `fission` helper (no hardware limits) left that fold a whole-node `Zero_out`, which takes the
-  whole-node expansion and passed on the unfixed code. The
+  the folded path takes the tuner's own segmentation, `Ll_test.tuner_segments` (over
+  `Autotune.sketch_segmentation`, gh-ocannl-1483; `tuner_transform` compiles through it as a
+  per-segment candidate does: derived on a copy, replayed with the test's schedules), never a
+  hand-rolled `fission_scheduled`: `qkv_zero_init`'s old copy promoted no locals, left that fold a
+  whole-node `Zero_out`, which takes the whole-node expansion, and passed on the unfixed code. A
+  test-supplied schedule is a REPLAY of the derived plan, as in the tuner: a per-segment `preset`
+  in one pass can change the cuts, since coalescing reads which segments the preset annotated. The
   tuner and model selector explore a singleton segment whose pre-schedule digest the fold changed,
   since whole-routine sketches see the original whole-node zero. The fold is OPT-IN
   (`fission_scheduled ~fold_zeros`): only the sketch candidates and their seeding pass it. The
