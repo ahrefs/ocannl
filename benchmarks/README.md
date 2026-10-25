@@ -743,6 +743,24 @@ OCANNL_CC_PARALLEL_GRID=none` times single-threaded segments that sum to the ser
   opaque constructs. A lowering that is not complete is never stored (`Autotune.tune` says so on
   stderr, `autotune: WARNING: schedule cache not used`), so a tuned cell's pass 2 searches again
   and fails the provenance gate (gh-ocannl-1161).
+  `BENCH_CENSUS_ONLY=1` (`bench_conv_diag`) prints the autotuner's seeding census for the step —
+  the `autotune-seeding:` lines of every lowering a search seeds, the whole routine and each keyed
+  coarse and fine fission segment, from `Autotune.search_seeding`, the enumeration `tune` runs —
+  and exits without starting a search (it used to take `BENCH_TUNE=1 autotune_budget_seconds=1
+  autotune_log_seeding=true` on `bench_conv`). `BENCH_PARITY=1` executes each conv seed
+  (`BENCH_PARITY_SEEDS=all`: every seed) of each keyed segment, compiled as the search's
+  per-segment candidate, for one step against the default pipeline's step from the same state, and
+  prints a verdict per seed: the worst normalized difference over every materialized node both
+  routines write, parameters after the update and the loss included, against `BENCH_PARITY_TOL`
+  (default 1e-3; 1e-2 when `tf32_matmuls` lets f32 matmuls read as tf32, where the in-memory smoke's
+  CUDA conv seeds reach 4e-4). Before each run the parameters are restored and every other written node is
+  filled with NaN, so a seed that misses cells cannot pass on values another routine left.
+  `BENCH_PARITY_PERTURB=1` is its negative control: every seeded segment's code is perturbed after
+  scheduling, and each perturbed seed must come back a mismatch. Exit 4 when a seed fails, 5 when no
+  seed executed (gh-ocannl-1490; `test/operations/bench_seed_parity_smoke` runs both modes on an
+  in-memory convnet). Candidates are timed, not value-checked, so this is how a seed's soundness
+  on a real graph is checked: on `cifar_resnet` materialize-all, Metal, all 52 conv seeds match
+  (worst 2.5e-6) and all 52 perturbed seeds are caught.
   `BENCH_SR_SITES=1` (`bench_conv_diag`, and `bench_gpt_diag` on the GPT step) prints what `Autotune.split_reduce_sites` proposes on the
   same graph — the gh-ocannl-484 task-3 seeding can only reach the accumulations listed there, so
   it is the companion to the census above when asking why a seeded split-reduce family did or did

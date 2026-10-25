@@ -35,6 +35,17 @@
  (modules bench_splice)
  (libraries base stdio arrayjit.ir arrayjit.utils arrayjit.autotune))
 
+; The autotuner's per-segment seeds, censused and executed one by one against the default pipeline
+; without a search (gh-ocannl-1490): bench_conv_diag's BENCH_CENSUS_ONLY and BENCH_PARITY modes. A
+; library so that test/operations/bench_seed_parity drives both on an in-memory model, with the
+; parity mode's negative control.
+
+(library
+ (name bench_seed_parity)
+ (package neural_nets_lib)
+ (modules bench_seed_parity)
+ (libraries base ocannl))
+
 (library
  (name bench_conv_model)
  (package neural_nets_lib)
@@ -80,6 +91,7 @@
   bench_conv_model
   bench_gpt_model
   bench_json
+  bench_seed_parity
   bench_splice
   ocannl
   stdio

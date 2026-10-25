@@ -2645,6 +2645,16 @@ files.
   before citing a seeding gate as evidence: the decline census can never show a seeding refusal,
   and on real training graphs the binding conv gate is usually the matmul family claiming the
   whole routine first, not the gate an issue names.
+- **A driver takes the search's seeds from `Autotune.search_seeding`, never from a re-derived
+  segmentation** (gh-ocannl-1490): it is the enumeration `tune` itself runs — whole routine, coarse
+  keyed segments, the GPU's finer segments and which of them are new — with a `?census` hook taking
+  each seeded lowering's census where the `autotune_log_seeding` stream would. `bench_conv_diag`'s
+  `BENCH_CENSUS_ONLY` (the census, no search) and `BENCH_PARITY` (each seed compiled as a
+  per-segment candidate through `Autotune.sketch_replay` + `tuner_fission`, executed one step
+  against the default pipeline, NaN-poisoned written nodes, a perturbed-code negative control) are
+  built on it (`Bench_seed_parity`). Perturbing a tensorized segment's `Set`s can make its
+  `Tile_mma` render as the scalar fallback: the control proves detection, not that the
+  tensorized path ran.
 - A test claims a tensorized seed's PRESENCE wherever the backend advertises the capability, and
   gates on that capability, never on the seed list its claims are about (gh-ocannl-1115). Gated on
   the seeds, a seeding regression — or a claim asking for a seed the seeder excludes by
