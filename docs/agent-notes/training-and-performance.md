@@ -299,6 +299,28 @@ files.
   touches (`C_syntax.derive_kparams`), because parameter names are disambiguated over the code and
   an untouched entry -- a node whose zero `gpu_elide_covered_zeros` dropped -- otherwise shared
   its name with another (ahrefs/ocannl#1387; `shipped_kernels_alone` pins it).
+- **cc attribution: an untuned step is often ONE serial kernel, so split it by threshold**
+  (gh-ocannl-1549). `default_cpu` compares `cpu_schedule_min_parallel` (16384) against a nest's
+  two-outermost-loop chain product, 64 x 32 = 2048 for every cifar_resnet nest. So nothing is
+  retyped, fission coalesces the all-serial segments, and `BENCH_SEG_TIMES` or
+  `BENCH_KERNEL_TABLE` show one row, the step. Run with `OCANNL_CPU_SCHEDULE_MIN_PARALLEL=1024
+  OCANNL_CC_PARALLEL_GRID=none`: the step is fissioned, but each Grid loop renders serially. The
+  per-segment times are single-threaded and their sum tracks the serial step (429 vs 410 ms), so
+  on cc they are a step attribution. That the threshold measures the wrong thing is gh-ocannl-1458.
+- **The untuned cc direct-conv forward is latency-bound, not recomputed** (gh-ocannl-1549).
+  Lowering leaves `for b,h,w,oc { acc = 0; for ic,kh,kw: acc += x*w; y = acc }` with a scalar
+  local accumulator, each conv computed once. Without reassociation clang vectorizes neither the
+  reduction nor, behind a 144-576-long body it does not unroll, the `oc` loop: one scalar `fmadd`
+  chain per output, 2-3 GMAC/s on M4 Max. A body short enough to unroll fully leaves `oc`
+  innermost, and clang then vectorizes it by lane (`fmla.4s`, no reassociation): the stem's
+  27-long body and Winograd's 16-long contractions run at 9-12 GMAC/s. The backward nests write
+  a different cell on every innermost iteration and vectorize too. On mac-studio, serial
+  segments: forward convs 295 of 429 ms (s3c2 alone 75), the whole backward plus SGD 126 ms on
+  twice the MACs. Winograd's 5.5x forward (276 -> 50 ms; the 2.2x step of staging#1355) is 2.25x
+  fewer multiplies, each about 4x cheaper, less the transforms. Standalone C on the s1c1 nest: `ic` innermost buys 8% (48 -> 45 ms); an
+  `oc`-innermost vector accumulator 3x (16 ms) under the default contraction, but it loses under
+  `cc_backend_fp_contract=off`, where the `[oc,kh,kw,ic]` layout makes its loads strided. The
+  existing cure is tuning (`cpu_conv_sketch_schedule`'s register tiles) or `winograd_conv`.
 - **HIP in-step attribution: `BACKEND=hip gh1133_cells.sh ... kprof`** (gh-ocannl-1392) traces
   with `rocprofv3 --kernel-trace`, which sees the replayed hipGraph's nodes without a flag, and
   states each cell's memory model (unified on minix's gfx1151, discrete on tuf's gfx1102) from the
