@@ -765,7 +765,9 @@
 # sweep, where the backdrop is the same; a staffed single that is refused is retried once without
 # its staff. The split-reduce sites are swept the same way, each site's split staffed with the
 # others'. Off by default: on gpt2_mini/CUDA it brought the first gain forward from the end of the
-# search to its start, but at about 30% more search time for the same crown (gh-ocannl-1138). It
+# search to its start, but at about 30% more search time for the same crown (gh-ocannl-1138). On
+# gpt2_mini_train/HIP it moved only near-tie crowns, at about three times the compile cost per
+# single, and in neither mode did a composite of singles beat the seeded plan (gh-ocannl-1528). It
 # shapes what a search times, not what a crowned schedule means, so a warm schedule cache replays
 # its winner whatever the setting. No profile sets it.
 #autotune_staffed_singles=false
