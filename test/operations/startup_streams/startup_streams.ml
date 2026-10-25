@@ -40,7 +40,14 @@ open Stdio
    a bare "Command exited with code 1". Stdout is where the reason survives. *)
 let guard () =
   let guarded_keys =
-    [ "suppress_welcome_message"; "log_config_sourcing"; "log_level"; "no_config_file"; "profile" ]
+    [
+      "suppress_welcome_message";
+      "log_config_sourcing";
+      "log_config_json";
+      "log_level";
+      "no_config_file";
+      "profile";
+    ]
   in
   Base.List.iter guarded_keys ~f:(fun arg_name ->
       match Utils.read_env_var arg_name with
@@ -86,7 +93,29 @@ let bootstrap_check () =
   Verdict.p "bootstrap trace carries the commandline file-search source"
     (contains "Found false, commandline --ocannl_no_config_file=false");
   Verdict.p "profile trace carries the normalized commandline selection"
-    (contains "Found reproducible, commandline --ocannl_profile= RePROducible ")
+    (contains "Found reproducible, commandline --ocannl_profile= RePROducible ");
+  (* gh-ocannl-1566: the conflicting file also turns [log_config_json] on, which only the second,
+     file-reading bootstrap phase can see; the stream then carries the bootstrap records with the
+     same provenance as the prose above. *)
+  let records =
+    List.filter (String.split_lines text) ~f:(String.is_prefix ~prefix:{|{"ocannl_config":1,|})
+  in
+  let has line = List.mem records line ~equal:String.equal in
+  Verdict.p "the config file alone turns the JSON stream on, and the stream says so"
+    (List.exists records ~f:(fun l ->
+         String.is_prefix l
+           ~prefix:
+             {|{"ocannl_config":1,"key":"log_config_json","value":"true","source":"config_file","layer":"config_file","profile":null,"origin":"|}
+         && String.is_suffix l ~suffix:{|ocannl_config"}|}));
+  Verdict.p "the stream carries the commandline suppression and file-search sources"
+    (has
+       {|{"ocannl_config":1,"key":"suppress_welcome_message","value":"false","source":"commandline","layer":"commandline","profile":null,"origin":"--ocannl_suppress_welcome_message=false"}|}
+    && has
+         {|{"ocannl_config":1,"key":"no_config_file","value":"false","source":"commandline","layer":"commandline","profile":null,"origin":"--ocannl_no_config_file=false"}|}
+    );
+  Verdict.p "the stream carries the normalized profile with the argv element that picked it"
+    (has
+       {|{"ocannl_config":1,"key":"profile","value":"reproducible","source":"commandline","layer":"commandline","profile":null,"origin":"--ocannl_profile= RePROducible "}|})
 
 let () =
   (* The configuration flags a rule passes are addressed to the library, which read them during

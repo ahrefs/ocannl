@@ -1,4 +1,5 @@
 suppress_welcome_message=true
 no_config_file=true
 log_config_sourcing=false
+log_config_json=true
 profile=approximate

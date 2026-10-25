@@ -225,12 +225,21 @@ let exempt_zero_reference_exports =
     "Utils.log_config_sourcing_resolution";
     "Utils.suppress_welcome_message_resolution";
     "Utils.profile_selection";
+    (* gh-ocannl-1566: the same carried bootstrap resolution for the JSON stream's switch, and the
+       switch itself, published as [Utils.log_config_sourcing] is so that a program can turn the
+       stream on for what it reads after startup; nothing in the tree does. *)
+    "Utils.log_config_json_resolution";
+    "Utils.log_config_json";
     (* Not pre-existing (gh-ocannl-1332): the lookup the typed getters share and the unchecked one
        beneath [Utils.get_global_arg_with_source]. Utils has no .mli; every read of a registered key
        goes through a getter, and of any other key through [get_global_arg], so nothing outside
        should call either. *)
     "Utils.registered_canonical";
     "Utils.unchecked_global_arg_with_source";
+    (* Not pre-existing (gh-ocannl-1566): the recorder the getters and the bootstrap feed, beneath
+       [Utils.resolved_config]. Recording is the getters' job; a caller outside would forge a
+       resolution the process never made. *)
+    "Utils.record_config_resolution";
     (* Not pre-existing. The C stub behind [Utils.c_stderr_detached] (gh-ocannl-1031): the module
        calls it once at its own initialization, and what the rest of the tree reads is the resulting
        boolean, not the stub. Publishing the stub is still right -- a caller that has taken fd 2
@@ -334,7 +343,6 @@ let exempt_unmentioned_types =
     "Nn_blocks.position_embedding";
     "Ops.apply_prec";
     "Ops.prec_family";
-    "Utils.config_source";
     "Utils.env_var_class";
     "Utils.requirement";
   ]

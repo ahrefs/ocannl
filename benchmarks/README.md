@@ -776,9 +776,10 @@ OCANNL_CC_PARALLEL_GRID=none` times single-threaded segments that sum to the ser
   (gh-ocannl-743). Those executables read the ambient `OCANNL_*` environment and the nearest
   `ocannl_config`, so the same command line could measure different treatments; the driver clears
   `OCANNL_*`/`BENCH_*`/`OMP_*`/`GOMP_*`/`KMP_*`, runs each cell with
-  `--ocannl_no_config_file=true` from a directory of its own, and reads back the
-  `log_config_sourcing` trace: a cell fails if any setting came from the environment or a config
-  file, the run fails if two cells of one arm resolved a setting differently, and the report lists
+  `--ocannl_no_config_file=true` from a directory of its own, and reads back the library's
+  resolved-configuration records (`--ocannl_log_config_json=true`, one JSON line per setting on
+  stderr, read by `benchmarks/config_records.py`; gh-ocannl-1566): a cell fails if any setting came
+  from the environment or a config file, the run fails if two cells of one arm resolved a setting differently, and the report lists
   every resolved setting and what the arms differ by. Arms are named argument sets
   (`--arm rn6=--rn=6`), visited as whole processes round by round in `Bench_design`'s spread
   mirrored rotation, each cell a supervised process group under `--cell-timeout`; the report pairs

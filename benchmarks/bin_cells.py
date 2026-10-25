@@ -25,10 +25,13 @@ bench so that the command line IS the treatment, and records what the process ac
   when the driver does it, runs with DUNE_* and OCAMLPARAM cleared and the root and build directory
   named, so the executable measured is the one built from this checkout.
 - The resolved configuration is echoed, not assumed. Each cell runs under
-  `--ocannl_log_config_sourcing=true`, and the driver reads that trace back: every setting the
-  process read, with its value and where it came from. A cell fails when any setting came from the
-  environment or a config file, when the backend it ran is not the one pinned, or when the trace is
-  unreadable; the run fails when two cells of one arm resolved a setting differently. The report
+  `--ocannl_log_config_json=true`, and the driver reads the library's resolved-configuration
+  records back from its stderr (`config_records.py`, gh-ocannl-1566): every setting the process
+  read, with its value and where it came from. A cell fails when any setting came from the
+  environment or a config file (a profile picked there included), when a commandline source names
+  no argument of the cell, when the backend it ran is not the one pinned, or when a record is
+  unreadable or there are none; the run fails when two cells of one arm resolved a setting
+  differently. The report
   lists what the arms differ by as RESOLVED, and the whole resolved configuration beside the
   numbers, so a published number carries the settings that produced it -- the knobs a bench cannot
   pin itself (`autotune_bound_pruning`, the roofline constants, `gpu_graph_capture`, ...) included.
@@ -80,6 +83,7 @@ import time
 from pathlib import Path
 
 import cell_group
+import config_records
 import strict_json
 from display_safe import code_span, display_value, log_line, table_lines
 
@@ -156,7 +160,7 @@ def design_balance(arms, orders):
 
 
 # ---------------------------------------------------------------------------------------------
-# The environment and the configuration trace.
+# The environment and the configuration records.
 
 
 def hermetic_env(environ):
@@ -165,103 +169,27 @@ def hermetic_env(environ):
     return {k: v for k, v in environ.items() if k not in cleared}, cleared
 
 
-class TraceError(ValueError):
-    """The configuration trace in a cell's stderr cannot be read as the library writes it."""
-
-
-_RETRIEVING = re.compile(r"Retrieving commandline, environment, or config file variable ocannl_(\S+)")
-# `Utils.describe_config_source`'s five shapes. Four end in a part that cannot hold their own
-# separator (a variable name, fixed words, a quoted profile name and a fixed level), so the value is
-# greedy up to the LAST separator. The commandline shape ends in the argv element, which repeats
-# the value and so can hold `, commandline ` itself: it is matched against the cell's own argv
-# instead (`_commandline_entry`), and never by this list.
-_COMMANDLINE = "commandline"
-_SOURCES = [
-    (re.compile(r"Found (.*), environment (\S+)"), "environment"),
-    (re.compile(r"Found (.*), in the config file"), "config file"),
-    (re.compile(r'Found (.*), in the profile "(.*)" picked via (.*)'), "profile"),
-    (re.compile(r"Not found, using default (.*)"), "default"),
-]
-
-
-def _commandline_entry(line, argv):
-    """The entry of a `Found <value>, commandline <arg>` line, `arg` being one of `argv` -- the
-    longest that fits, so an argument that is a suffix of another cannot steal its line -- or None
-    when the line is not of that shape. A commandline-shaped line naming no argv element is
-    refused: the cell's command line is known exactly."""
-    if not line.startswith("Found ") or ", commandline " not in line:
-        return None
-    for arg in sorted(set(argv), key=len, reverse=True):
-        tail = ", commandline " + arg
-        if line.endswith(tail) and len(line) >= len("Found ") + len(tail):
-            return {"value": line[len("Found "):-len(tail)], "source": _COMMANDLINE, "detail": arg}
-    if any(pattern.fullmatch(line) for pattern, _ in _SOURCES):
-        return None  # another source's line whose value happens to hold the separator
-    raise TraceError(f"a commandline source naming no argument of the cell: {line!r}")
-
-
-def parse_config_trace(text, argv):
-    """{key: {"value", "source", "detail"}} from the `log_config_sourcing` trace in `text`, for a
-    cell run with the command line `argv`.
-
-    The trace prints a `Retrieving ... ocannl_<key>` line and then where the value came from; other
-    stderr may sit between the two, but a second request before the first is answered, a request
-    never answered, or one key resolved to two values is refused with `TraceError`."""
-    config, pending = {}, None
-    for line in text.splitlines():
-        line = line.rstrip("\r")
-        m = _RETRIEVING.fullmatch(line)
-        if m:
-            if pending is not None:
-                raise TraceError(f"ocannl_{pending} was requested and never resolved")
-            pending = m.group(1)
-            continue
-        if pending is None:
-            continue
-        entry = _commandline_entry(line, argv)
-        for pattern, source in [] if entry is not None else _SOURCES:
-            m = pattern.fullmatch(line)
-            if not m:
-                continue
-            if source == "default":
-                entry = {"value": m.group(1), "source": "default", "detail": ""}
-            elif source == "profile":
-                entry = {"value": m.group(1), "source": "profile",
-                         "detail": f"{m.group(2)} via {m.group(3)}"}
-            elif source == "config file":
-                entry = {"value": m.group(1), "source": source, "detail": ""}
-            else:
-                entry = {"value": m.group(1), "source": source, "detail": m.group(2)}
-            break
-        if entry is not None:
-            known = config.get(pending)
-            if known is not None and known["value"] != entry["value"]:
-                raise TraceError(
-                    f"ocannl_{pending} resolved to both {known['value']!r} and {entry['value']!r}")
-            config.setdefault(pending, entry)
-            pending = None
-    if pending is not None:
-        raise TraceError(f"ocannl_{pending} was requested and never resolved")
-    return config
-
-
-def treatment_problems(config, backend):
-    """Why a cell's resolved configuration is not the treatment its command line states."""
+def treatment_problems(config, backend, argv):
+    """Why a cell's resolved configuration (`config_records.parse_config_records`) is not the
+    treatment its command line `argv` states."""
     if not config:
-        return ["no configuration trace: the bench resolved no setting the driver could read"]
+        return ["no configuration records: the bench resolved no setting the driver could read"]
     problems = []
     b = config.get("backend")
-    if b is None or b["value"] != backend or b["source"] != _COMMANDLINE:
+    if b is None or b["value"] != backend or b["source"] != "commandline":
         problems.append(f"the backend resolved to {b and b['value']!r} from "
                         f"{b and b['source']}, not to the pinned {backend!r}")
     nc = config.get("no_config_file")
-    if nc is None or nc["value"] != "true" or nc["source"] != _COMMANDLINE:
+    if nc is None or nc["value"] != "true" or nc["source"] != "commandline":
         problems.append("the config file was not disabled")
     for key, entry in sorted(config.items()):
-        if entry["source"] in ("environment", "config file"):
-            problems.append(f"ocannl_{key} came from the {entry['source']}")
-        elif entry["source"] == "profile" and not entry["detail"].endswith("via the commandline"):
-            problems.append(f"ocannl_{key} came from a profile picked outside the command line")
+        # The layer is where the value entered: a profile value's is the level that picked it.
+        if entry["layer"] in ("environment", "config_file"):
+            via = " through a profile picked there" if entry["source"] == "profile" else ""
+            problems.append(f"ocannl_{key} came from the {entry['layer']}{via}")
+        elif entry["layer"] == "commandline" and entry["origin"] not in argv:
+            problems.append(f"ocannl_{key} came from a commandline argument the cell was not given: "
+                            f"{entry['origin']!r}")
     return problems
 
 
@@ -433,7 +361,7 @@ def render_report(manifest, records, problems):
         a = next(a for a in arms if a in configs and k in configs[a])
         e = configs[a][k]
         rows.append((code_span("ocannl_" + k), display_value(e["value"]),
-                     e["source"] + (f" {display_value(e['detail'])}" if e["detail"] else ""),
+                     display_value(config_records.provenance(e)),
                      "differs" if k in differing else "all arms"))
     if rows:
         lines += table_lines(("setting", "value", "source", "arms"), rows)
@@ -631,7 +559,7 @@ def main(argv=None):
 
     env, cleared = hermetic_env(os.environ)
     pins = [f"--ocannl_backend={args.backend}", "--ocannl_no_config_file=true",
-            "--ocannl_log_config_sourcing=true"]
+            "--ocannl_log_config_json=true"]
     manifest = {
         "bench": bench, "backend": args.backend, "rounds": args.rounds, "commit": commit,
         "executable": str(exe), "executable_sha256": sha256(exe), **host_identity(),
@@ -662,10 +590,10 @@ def main(argv=None):
                 if status != 0:
                     problems.append("timed out" if status == "timeout" else f"exited {status}")
                 try:
-                    config = parse_config_trace(stderr, cmd)
-                    problems += treatment_problems(config, args.backend)
-                except TraceError as e:
-                    problems.append(f"unreadable configuration trace: {e}")
+                    config = config_records.parse_config_records(stderr)
+                    problems += treatment_problems(config, args.backend, cmd)
+                except config_records.ConfigRecordError as e:
+                    problems.append(f"unreadable configuration records: {e}")
                 try:
                     results = parse_results(stdout)
                 except ValueError as e:

@@ -1,14 +1,15 @@
 (* A stand-in bench for the control of benchmarks/bin_cells.py (gh-ocannl-743): the two things the
    driver reads off a real bench, produced by the real code that produces them there. The
-   configuration trace is the library's own -- this links [arrayjit.utils] and reads settings
-   through the same getters a bench does, so the driver's trace parser is held to what [Utils]'s
-   [log_config_sourcing] trace actually prints rather than to a copy of its wording -- and the
-   result lines are [Bench_out.result]'s, the printer every bin/ timing bench uses.
+   configuration records are the library's own -- this links [arrayjit.utils] and reads settings
+   through the same getters a bench does, so the driver's record reader is held to what [Utils]'s
+   [log_config_json] stream actually prints rather than to a copy of its schema -- and the result
+   lines are [Bench_out.result]'s, the printer every bin/ timing bench uses.
 
    Its one positional is the treatment: a time in seconds to report (as [probe], and half of it as
    [probe_half]), or a misbehaviour -- [fail] exits 1, [silent] reports nothing, [twice] reports one
    variant twice, [sleep] outlives any cap the control sets, [nonfinite] reports a time JSON cannot
-   carry. No backend is linked: nothing is compiled. *)
+   carry -- or [records], which prints the process's resolved-configuration records on stdout. No
+   backend is linked: nothing is compiled. *)
 
 open Base
 
@@ -31,6 +32,13 @@ let () =
   | "unchecked" ->
       Bench_out.result ~variant:"probe" ~check:(Bench_out.Unchecked "no oracle for this one")
         ~seconds:0.001
+  | "records" ->
+      (* The function's records, on stdout, for the control to hold equal to the stream the same run
+         printed on stderr under [log_config_json] (gh-ocannl-1566) -- after one read more, made
+         here, past every read the other modes make. *)
+      let _late : string = Utils.get_global_arg ~arg_name:"debug_highlight_pcre" ~default:"" in
+      List.iter (Utils.resolved_config ()) ~f:(fun r ->
+          Stdlib.print_endline (Utils.config_record_to_json r))
   | "sleep" -> Unix.sleepf 120.
   | "nonfinite" -> Bench_out.result ~variant:"probe" ~check:Bench_out.Passed ~seconds:Float.nan
   | s ->

@@ -4,7 +4,7 @@ Arguments: the driver, the stand-in bench `bin_cells_probe.exe`, and the golden 
 `bench_design` test (whose ORDERS table the driver's design must reproduce).
 
 The driver runs end to end against the probe, which is a real OCANNL-linked executable: its
-configuration trace and result lines come from the library code a bench uses. The ambient sources
+configuration records and result lines come from the library code a bench uses. The ambient sources
 the driver exists to clear are planted first -- OCANNL_*, BENCH_* and OMP_* variables, and an
 `ocannl_config` above the output directory -- and the cells must not see them.
 """
@@ -55,54 +55,82 @@ claim("design_orders reproduces every row of Bench_design's ORDERS table",
 claim("an odd round count is refused", refused(lambda: bc.design_orders(3, 5)))
 claim("no arms is refused", refused(lambda: bc.design_orders(0, 2)))
 
-# --- The trace parser, on the shapes Utils.describe_config_source prints. -----------------------
-R = "Retrieving commandline, environment, or config file variable ocannl_"
-trace = "\n".join([
-    R + "backend", "Found cc, commandline --ocannl_backend=cc",
+# --- The record reader, on the shapes Utils.config_record_to_json prints. ------------------------
+cr = bc.config_records
+
+
+def rec(key, value, source, layer=None, profile=None, origin=None):
+    return json.dumps({"ocannl_config": 1, "key": key, "value": value, "source": source,
+                       "layer": source if layer is None else layer, "profile": profile,
+                       "origin": origin}, separators=(",", ":"), ensure_ascii=False)
+
+
+stream = "\n".join([
+    rec("backend", "cc", "commandline", origin="--ocannl_backend=cc"),
     "a line the bench printed in between",
-    R + "autotune_rounds", "Not found, using default 2",
-    R + "tf32_matmuls", 'Found true, in the profile "approximate" picked via the commandline',
-    R + "fp_contract", "Found true, environment OCANNL_FP_CONTRACT",
-    R + "log_level", "Found 0, in the config file",
-    R + "debug_highlight_pcre", "Found a, b, commandline --ocannl_debug_highlight_pcre=a, b",
+    rec("no_config_file", "true", "commandline", origin="--ocannl_no_config_file=true"),
+    rec("autotune_rounds", "2", "default"),
+    rec("tf32_matmuls", "true", "profile", "commandline", "approximate",
+        "--ocannl_profile=approximate"),
+    rec("fp_contract", "true", "environment", origin="OCANNL_FP_CONTRACT"),
+    rec("log_level", "0", "config_file", origin="/x/ocannl_config"),
+    rec("debug_highlight_pcre", "x, commandline y",
+        "commandline", origin="--ocannl_debug_highlight_pcre=x, commandline y"),
+    rec("debug_highlight_pcre", "x, commandline y",
+        "commandline", origin="--ocannl_debug_highlight_pcre=x, commandline y") + "\r",
 ])
-ARGV = ["bench.exe", "--ocannl_backend=cc", "--ocannl_debug_highlight_pcre=a, b", "--k=2"]
-parsed = bc.parse_config_trace(trace, ARGV)
-claim("every source shape is read with its value", [(k, parsed[k]["value"], parsed[k]["source"])
-      for k in sorted(parsed)] == [
-    ("autotune_rounds", "2", "default"), ("backend", "cc", "commandline"),
-    ("debug_highlight_pcre", "a, b", "commandline"), ("fp_contract", "true", "environment"),
-    ("log_level", "0", "config file"), ("tf32_matmuls", "true", "profile")])
-claim("a request never answered is refused",
-      refused(lambda: bc.parse_config_trace(R + "backend\nnothing\n", ARGV), bc.TraceError))
-claim("two requests in a row are refused",
-      refused(lambda: bc.parse_config_trace(R + "a\n" + R + "b\nNot found, using default 1", ARGV),
-              bc.TraceError))
-claim("one key resolved to two values is refused", refused(lambda: bc.parse_config_trace(
-    "\n".join([R + "k", "Not found, using default 1", R + "k", "Found 2, commandline --k=2"]),
-    ARGV),
-    bc.TraceError))
-TRICKY = "--ocannl_debug_highlight_pcre=x, commandline y"
-claim("a commandline value holding the separator is split at the argument, not inside it",
-      bc.parse_config_trace(R + "debug_highlight_pcre\nFound x, commandline y, commandline " + TRICKY,
-                            ["bench.exe", TRICKY])["debug_highlight_pcre"]
-      == {"value": "x, commandline y", "source": "commandline", "detail": TRICKY})
-claim("a commandline source naming no argument of the cell is refused",
-      refused(lambda: bc.parse_config_trace(R + "backend\nFound cc, commandline --backend=cc",
-                                            ["bench.exe"]), bc.TraceError))
-problems = bc.treatment_problems({**parsed, "no_config_file": {
-    "value": "true", "source": "commandline", "detail": ""}}, "cc")
+ARGV = ["bench.exe", "--ocannl_backend=cc", "--ocannl_no_config_file=true",
+        "--ocannl_profile=approximate", "--ocannl_debug_highlight_pcre=x, commandline y"]
+parsed = cr.parse_config_records(stream)
+claim("every source shape is read with its value and layer, a repeated identical record once",
+      [(k, parsed[k]["value"], parsed[k]["source"], parsed[k]["layer"]) for k in sorted(parsed)]
+      == [("autotune_rounds", "2", "default", "default"),
+          ("backend", "cc", "commandline", "commandline"),
+          ("debug_highlight_pcre", "x, commandline y", "commandline", "commandline"),
+          ("fp_contract", "true", "environment", "environment"),
+          ("log_level", "0", "config_file", "config_file"),
+          ("no_config_file", "true", "commandline", "commandline"),
+          ("tf32_matmuls", "true", "profile", "commandline")])
+GOOD = rec("k", "1", "default")
+claim("a tagged line that is not JSON is refused",
+      refused(lambda: cr.parse_config_records(GOOD[:-5]), cr.ConfigRecordError))
+claim("a schema version this reader does not know is refused",
+      refused(lambda: cr.parse_config_records(GOOD.replace(':1,', ':2,', 1)), cr.ConfigRecordError))
+claim("a record missing a field, or with a field of the wrong type, is refused",
+      refused(lambda: cr.parse_config_records(GOOD.replace(',"origin":null', '')),
+              cr.ConfigRecordError)
+      and refused(lambda: cr.parse_config_records(GOOD.replace('"value":"1"', '"value":1')),
+                  cr.ConfigRecordError))
+claim("a source that does not fit its layer, profile and origin is refused",
+      all(refused(lambda line=line: cr.parse_config_records(line), cr.ConfigRecordError) for line in [
+          rec("fp_contract", "1", "environment", "commandline", origin="OCANNL_FP_CONTRACT"),
+          rec("k", "1", "commandline"),
+          rec("k", "1", "profile", "commandline", None, "--ocannl_profile=p"),
+          rec("k", "1", "default", origin="x"),
+          rec("k", "1", "profile", "default", "p", "x")]))
+claim("one key resolved two ways is refused",
+      refused(lambda: cr.parse_config_records(GOOD + "\n" + rec("k", "2", "environment",
+                                                                  origin="OCANNL_FP_CONTRACT")),
+              cr.ConfigRecordError))
+claim("the prose trace of log_config_sourcing carries no records",
+      cr.parse_config_records("Retrieving commandline, environment, or config file variable "
+                              "ocannl_backend\nFound cc, commandline --ocannl_backend=cc") == {})
 claim("the environment and config-file sources each fail the treatment",
-      problems == ["ocannl_fp_contract came from the environment",
-                   "ocannl_log_level came from the config file"])
+      bc.treatment_problems(parsed, "cc", ARGV)
+      == ["ocannl_fp_contract came from the environment",
+          "ocannl_log_level came from the config_file"])
 claim("a backend other than the pinned one fails the treatment",
-      any("not to the pinned 'cuda'" in p for p in bc.treatment_problems(parsed, "cuda")))
-claim("a profile picked outside the command line fails the treatment",
-      bc.treatment_problems({"backend": parsed["backend"], "no_config_file": {
-          "value": "true", "source": "commandline", "detail": ""}, "x": {
-          "value": "1", "source": "profile", "detail": "approximate via the environment"}}, "cc")
-      == ["ocannl_x came from a profile picked outside the command line"])
-claim("an empty trace fails the treatment", bc.treatment_problems({}, "cc") != [])
+      any("not to the pinned 'cuda'" in p for p in bc.treatment_problems(parsed, "cuda", ARGV)))
+clean = {k: parsed[k] for k in ("backend", "no_config_file")}
+claim("a profile picked outside the command line fails the treatment, whatever its value",
+      bc.treatment_problems({**clean, "x": cr.parse_config_records(rec(
+          "x", "1", "profile", "environment", "approximate", "OCANNL_PROFILE"))["x"]}, "cc", ARGV)
+      == ["ocannl_x came from the environment through a profile picked there"])
+claim("a commandline source naming no argument of the cell fails the treatment",
+      bc.treatment_problems(clean, "cc", ["bench.exe", "--ocannl_no_config_file=true"])
+      == ["ocannl_backend came from a commandline argument the cell was not given: "
+          "'--ocannl_backend=cc'"])
+claim("no records at all fail the treatment", bc.treatment_problems({}, "cc", ARGV) != [])
 claim("two cells of one arm resolving a setting differently are reported",
       bc.consistency_problems([
           {"arm": "a", "cell": 0, "config": {"k": {"value": "1"}}},
@@ -144,6 +172,26 @@ with tempfile.TemporaryDirectory() as scratch:
                                "cc", "--out", str(scratch / out), *argv], env=env,
                               capture_output=True, text=True)
 
+    # The stream and the function are one list: the probe's [records] mode prints
+    # Utils.resolved_config on stdout, after the same run streamed it on stderr.
+    (scratch / "direct").mkdir()
+    direct = subprocess.run([str(probe), "--ocannl_no_config_file=true", "--ocannl_backend=cc",
+                             "--ocannl_log_config_json=true", "records"], cwd=scratch / "direct",
+                            env=env, capture_output=True, text=True)
+    streamed = [l for l in direct.stderr.splitlines() if l.startswith(cr.TAG)]
+    claim("the stream on stderr is, line for line, the records the function returns",
+          direct.returncode == 0 and streamed and streamed == direct.stdout.splitlines())
+    seen = cr.parse_config_records(direct.stderr)
+    claim("the stream opens with the bootstrap settings and carries a read made late in main",
+          [k for k in seen][:5] == ["log_config_sourcing", "log_config_json", "no_config_file",
+                                    "suppress_welcome_message", "profile"]
+          and seen["debug_highlight_pcre"]["source"] == "default")
+    claim("the stream names each source: an argv element, a planted variable",
+          seen["backend"]["origin"] == "--ocannl_backend=cc"
+          and seen["log_config_json"]["origin"] == "--ocannl_log_config_json=true"
+          and (seen["autotune_timing"]["value"], seen["autotune_timing"]["origin"])
+          == ("x", "OCANNL_AUTOTUNE_TIMING"))
+
     run = drive("ab", "--rounds", "4", "--arm", "slow=0.004",
                 "--arm", "fast=0.002 --ocannl_autotune_timing=isolated")
     claim("a clean run exits 0", run.returncode == 0)
@@ -179,7 +227,7 @@ with tempfile.TemporaryDirectory() as scratch:
               for r in records))
     claim("each cell's command line is the driver's pins, then the arm's arguments",
           all(r["argv"][:4] == [str(probe), "--ocannl_backend=cc", "--ocannl_no_config_file=true",
-                                "--ocannl_log_config_sourcing=true"] for r in records)
+                                "--ocannl_log_config_json=true"] for r in records)
           and {tuple(r["argv"][4:]) for r in records}
           == {("0.004",), ("0.002", "--ocannl_autotune_timing=isolated")})
     report = run.stdout

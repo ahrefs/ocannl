@@ -697,8 +697,9 @@ files.
   things it does that a hand-rolled driver tends not to. It pins the config FILE away rather than
   relying on cwd (`--ocannl_no_config_file=true`), so no `ocannl_config` on any path reaches a
   cell. And it verifies hermeticity instead of asserting it: every cell runs under
-  `--ocannl_log_config_sourcing=true` and the driver parses the trace back (every key the process
-  read, value and source), failing a cell with any environment or config-file source and a run whose
+  `--ocannl_log_config_json=true` and the driver reads the records back through
+  `benchmarks/config_records.py` (every key the process read: value, source, layer, origin;
+  gh-ocannl-1566), failing a cell with any environment or config-file source and a run whose
   arm resolved a key two ways -- the knobs a bench has no parameter for (bound pruning, the
   roofline constants, `gpu_graph_capture`) are then recorded rather than merely unpinned. A bench
   reports to it through `Bench_out.result` (`bench-result:` lines), each stating its output check

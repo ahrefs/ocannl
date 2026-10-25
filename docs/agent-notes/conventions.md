@@ -107,8 +107,8 @@ files.
   two separate copies of the idiom. `test/operations/bench_args_parsing` pins the predicate, the
   slot alignment and the refusals; it links `bench_args` alone, no backend.
 - An OCANNL-linked executable's stdout belongs to the program, not to the library: the config
-  startup chatter (welcome message, `log_config_sourcing` trace, profile banner) and every other
-  library diagnostic go to stderr. That is what lets a tool make stdout a data channel — the
+  startup chatter (welcome message, `log_config_sourcing` trace, `log_config_json` records, profile
+  banner) and every other library diagnostic go to stderr. That is what lets a tool make stdout a data channel — the
   benchmark one-JSON-line runners, `tools/fit_envelope.exe`'s config-pasteable fits — without
   suppression flags. Keep new library-side reporting on stderr. `test/operations/startup_streams`
   pins both halves: stdout stays empty with the chatter turned all the way up, and a default run's
@@ -116,6 +116,13 @@ files.
   `log_config_sourcing` and `log_level` default to off/0 (gh-ocannl-595): a stream that carries
   eighty lines of routine trace cannot carry a warning, and the unknown-config-key warning is the
   one startup message that means the user made a mistake.
+- A tool that needs to know what configuration a process resolved reads it structurally, never by
+  parsing the prose trace: `Utils.resolved_config ()` in-process, or `--ocannl_log_config_json=true`
+  (one JSON line per setting on stderr, the same records, schema in `ocannl_config.reference`) read
+  by `benchmarks/config_records.py` across processes (gh-ocannl-1566). Records appear as settings
+  are first read, not as a startup inventory: most defaults live at their read sites, so a setting
+  never read has no record -- which is what lets a driver tell "read in some cells and not in
+  others" apart. The value is the raw resolved string, before a typed getter parses it.
 - That contract holds for `.expected` goldens, which diff stdout only, but NOT for inline `%expect`
   blocks: ppx_expect's capture dup2s its temp file onto fd 1 AND fd 2
   (`ppx_expect_runtime_before_test`), so anything on stderr during a block is diffed. The library

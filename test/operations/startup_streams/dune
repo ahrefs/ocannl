@@ -102,6 +102,7 @@
     %{dep:startup_streams.exe}
     --ocannl_no_config_file=true
     --ocannl_log_config_sourcing=true
+    --ocannl_log_config_json=true
     --ocannl_log_level=1))))
 
 (rule
