@@ -1,0 +1,23 @@
+the approximate profile turns the gate on: true
+the reproducible profile pins the gate off, its default: true
+a bf16 matmul output accumulated at bf16 is seeded (the control): true
+under a widening accumulator the rule refuses it: true
+under a widening accumulator the rule refuses it with the admission off too: true
+admitted, the rule seeds it at the geometry it seeds at storage-width accumulation: true
+the weight gradient is not trivially zero: true
+where accum_prec widens bf16, with the admission off the seeded default seeds and sinks fewer segments than with it on: true
+with the admission off the weight gradient is bitwise the default pipeline's: true
+with the admission off the bias gradient is bitwise the default pipeline's: true
+where accum_prec widens bf16, with the admission on the weight gradient is seeded: true
+where accum_prec widens bf16, with the admission on the bias gradient is sunk: true
+where accum_prec widens bf16, the admitted routine compiles without falling back: true
+with the admission on the seeded weight gradient is bitwise the default pipeline's: true
+where accum_prec widens bf16, the admission changes the bias gradient in some cell: true
+where accum_prec widens bf16, the admitted bias gradient is closer to the f64 reference: true
+where accum_prec widens bf16, every admitted bias-gradient cell is one bf16 rounding of the reference: true
+where accum_prec widens bf16, some default bias-gradient cell is not (the control): true
+where nothing widens, the admission leaves the weight gradient bitwise the default's: true
+where nothing widens, the admission leaves the bias gradient bitwise the default's: true
+where accum_prec widens bf16, with the key unset the seeded default decides as with the admission off, short of what the admission takes: true
+where accum_prec widens bf16, the key stated true seeds what the admission seeds: true
+with the key true the model's weight gradient is bitwise the default pipeline's: true

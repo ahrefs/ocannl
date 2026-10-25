@@ -3000,6 +3000,7 @@ type seeded_plan = {
   sp_segments : (Sched.segmentation * seeded_segment list) option;
   sp_refined : int;
   sp_start : seeded_start option;
+  sp_admit_narrow : bool;
 }
 
 type fiss_flavor =
@@ -3466,7 +3467,11 @@ let seeded_plan_digest (plan : seeded_plan) =
               "sketch " ^ digest ^ " " ^ Sexp.to_string_mach (sexp_of_sketch_params params)
           | Seeded_sunk { digest; swaps } -> Printf.sprintf "sunk %s %d" digest swaps)
   in
-  Stdlib.Digest.to_hex (Stdlib.Digest.string (String.concat ~sep:"\n" (split @ segments)))
+  (* gh-ocannl-1405: the replay re-derives each sunk segment's chain under the plan's narrow-storage
+     admission, so the admission is part of what the plan means; rendered only when on, so every
+     digest that predates the key is unchanged. *)
+  let narrow = if plan.sp_admit_narrow then [ "admit narrow storage" ] else [] in
+  Stdlib.Digest.to_hex (Stdlib.Digest.string (String.concat ~sep:"\n" (split @ segments @ narrow)))
 
 let seeded_plan_label (plan : seeded_plan) =
   let count f = function None -> 0 | Some (_, segs) -> List.count segs ~f in
@@ -3536,8 +3541,8 @@ let seeded_preset ~limits seg = Sched.default_gpu ~limits seg
 (* gh-ocannl-1348: a segment no sketch takes gets its accumulations' reduction loops sunk below
    their write loops, then the default preset of the interchanged code: the number of [Swap]s and
    the schedule, or [None] where nothing sinks. *)
-let seeded_sunk_schedule ~limits ~accum_prec ~static_indices seg =
-  match reduction_sink ~accum_prec seg with
+let seeded_sunk_schedule ~limits ~accum_prec ~admit_narrow ~static_indices seg =
+  match reduction_sink ~admit_narrow ~accum_prec seg with
   | [] -> None
   | swaps -> (
       match Sched.apply_classified ~static_indices swaps (scratch_of seg) with
@@ -3551,7 +3556,7 @@ let seeded_sunk_schedule ~limits ~accum_prec ~static_indices seg =
    position, as a replayed segmentation is; a slice whose code is not the decided one's keeps its
    preset. Every applied segment is validated, which raises on a parallelization the backend would
    refuse. *)
-let seeded_replay ~limits ~accum_prec ~static_indices segments (opt : LL.optimized) =
+let seeded_replay ~limits ~accum_prec ~admit_narrow ~static_indices segments (opt : LL.optimized) =
   let preset = seeded_preset ~limits in
   let zero_sched tns = Sched.zero_expansion ~limits tns in
   let default () =
@@ -3569,7 +3574,9 @@ let seeded_replay ~limits ~accum_prec ~static_indices segments (opt : LL.optimiz
         | Seeded_sketch { digest = d; params = p } when String.equal d (digest seg) ->
             Some (sketch_schedule ~accum_prec ~p seg)
         | Seeded_sunk { digest = d; _ } when String.equal d (digest seg) ->
-            Option.map (seeded_sunk_schedule ~limits ~accum_prec ~static_indices seg) ~f:snd
+            Option.map
+              (seeded_sunk_schedule ~limits ~accum_prec ~admit_narrow ~static_indices seg)
+              ~f:snd
         | Seeded_preset | Seeded_sketch _ | Seeded_sunk _ -> None
       in
       match
@@ -3861,7 +3868,8 @@ let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> (
                 (* The untuned compile's own replay, so the candidate is the step it ships, its
                    fallback to the default segments included. *)
                 let segmented, applied =
-                  seeded_replay ~limits ~accum_prec ~static_indices plan.sp_segments opt
+                  seeded_replay ~limits ~accum_prec ~admit_narrow:plan.sp_admit_narrow
+                    ~static_indices plan.sp_segments opt
                 in
                 if Option.is_some plan.sp_segments && not applied then
                   logf "%s: the plan's segments did not apply; compiled the default segments"
@@ -4944,8 +4952,7 @@ let site_reduction_extent (site : matmul_site) =
 (* CUDA and HIP only: the backends the untiled-contraction gap was measured on (gh-ocannl-1183) and
    the seeded plan's before/after was measured on. Metal keeps the plain default until a Metal
    measurement says otherwise. *)
-let seeded_default_backend backend =
-  String.is_substring backend ~substring:"cuda" || String.is_substring backend ~substring:"hip"
+let seeded_default_backend backend = Sched.backend_seeds_untuned_default backend
 
 type seed_gate =
   | Min_reduction of int
@@ -4999,6 +5006,19 @@ let seeded_default_gate ~limits =
    seed below their write loops ({!reduction_sink}). *)
 let reduction_sink_enabled () = Utils.registered_flag ~arg_name:"gpu_default_reduction_sink"
 
+(* gh-ocannl-1405: whether the untuned plan also takes the sites whose accumulator precision widens
+   their storage precision (a bf16 weight gradient on CUDA, fp8 on CUDA and HIP): seeded, sunk and
+   admitted to the model's numerics-preserving set. Seeding one keeps its result: the sketch's
+   [Privatize] mints its tile wide only where the default's serial rendering widens too
+   (gh-ocannl-1151), so a backprop weight gradient, which the default narrows after every batch row,
+   keeps a storage-precision tile and the same narrowing points (measured bitwise on CUDA,
+   test/operations/seeded_narrow_storage). Sinking one does not: the sunk reduction's accumulator is
+   localized below its write loops, where code generation widens it, so it rounds to storage once
+   instead of after every row -- an accuracy gain that changes the result, hence a numerics gate:
+   off by default, on in the [approximate] profile, pinned off in [reproducible]. *)
+let seed_narrow_storage_enabled () =
+  Utils.get_global_flag ~default:false ~arg_name:"gpu_default_seed_narrow_storage"
+
 let seeded_geometries =
   [ (64, 64, 8, 4, 4); (32, 32, 8, 4, 4); (32, 32, 16, 2, 2); (16, 16, 8, 2, 2); (16, 16, 8, 4, 4) ]
 
@@ -5028,16 +5048,17 @@ let accumulates_at_storage ~accum_prec (site : matmul_site) =
 (* [Error] names the refusing gate, for the seeding census (gh-ocannl-1407). [capabilities] are the
    compiling context's, so the family's workgroup-memory refutation charges the tiles as the gate
    that judges the seeded kernel does ([Sched.kernel_workgroup_bytes], gh-ocannl-1330). *)
-let seeded_params_judged ?capabilities ~limits ~accum_prec ~min_reduction (seg : LL.optimized) :
-    (sketch_params, string) Result.t =
+let seeded_params_judged ?capabilities ?(admit_narrow = false) ~limits ~accum_prec ~min_reduction
+    (seg : LL.optimized) : (sketch_params, string) Result.t =
   match detect_matmul_canonical seg with
   | None -> Error "no matmul site"
   | Some (site, _, _) when site_reduction_extent site < min_reduction ->
       Error
         (Printf.sprintf "site %s: reduction extent %d is under the seeding threshold %d"
            (Ir.Tnode.debug_name site.m_d) (site_reduction_extent site) min_reduction)
-  | Some (site, _, _) when not (accumulates_at_storage ~accum_prec site) ->
-      (* Left to the default, so that seeding never changes a result. *)
+  | Some (site, _, _) when not (admit_narrow || accumulates_at_storage ~accum_prec site) ->
+      (* Left to the default unless the narrow-storage admission (gh-ocannl-1405, the [approximate]
+         profile's) takes it, which {!seed_narrow_storage_enabled} explains. *)
       Error
         (Printf.sprintf
            "site %s: the accumulator precision widens its %s storage, so a sketch would change the \
@@ -5104,8 +5125,9 @@ let seeded_params_judged ?capabilities ~limits ~accum_prec ~min_reduction (seg :
                        (Ir.Tnode.debug_name site.m_d) (List.length leaves)
                        (List.length (Sspace.refutations tree))))))
 
-let seeded_params ?capabilities ~limits ~accum_prec ~min_reduction seg =
-  Result.ok (seeded_params_judged ?capabilities ~limits ~accum_prec ~min_reduction seg)
+let seeded_params ?capabilities ?admit_narrow ~limits ~accum_prec ~min_reduction seg =
+  Result.ok
+    (seeded_params_judged ?capabilities ?admit_narrow ~limits ~accum_prec ~min_reduction seg)
 
 (* The untuned split runs wherever the seeded default does (gh-ocannl-1325, gh-ocannl-1412). It was
    CUDA's alone until its first pass ran the block loop outside the cell loops ([sr_block_hoist]):
@@ -5236,8 +5258,8 @@ let no_seeded_choice =
 (* The resolved thresholds, or [None] where the untuned compile is the plain default. The backend
    first: the thresholds are CUDA/HIP settings, so a malformed value must not break a compile on a
    backend that ignores them. *)
-let seeded_settings ?min_reduction ?seed_gate ?min_serial ?reduction_sink:sink_override ~backend
-    ~configured_gate () =
+let seeded_settings ?min_reduction ?seed_gate ?min_serial ?reduction_sink:sink_override ?seed_narrow
+    ~backend ~configured_gate () =
   let gate () =
     match (seed_gate, min_reduction) with
     | Some _, Some _ ->
@@ -5255,13 +5277,16 @@ let seeded_settings ?min_reduction ?seed_gate ?min_serial ?reduction_sink:sink_o
   let sink_enabled () =
     match sink_override with Some b -> b | None -> reduction_sink_enabled ()
   in
+  let admit_narrow () =
+    match seed_narrow with Some b -> b | None -> seed_narrow_storage_enabled ()
+  in
   if
     (not (seeded_default_backend backend))
     || (gate_off () && min_serial () <= 0 && not (sink_enabled ()))
     || (not (Sched.automatic_schedule_active ~backend_name:backend))
     || not (Sched.default_pipeline_fissions ())
   then None
-  else Some (gate (), min_serial (), sink_enabled ())
+  else Some (gate (), min_serial (), sink_enabled (), admit_narrow ())
 
 (* The split reductions first, whole-routine and before any segmentation, as the search's [F_split]
    seeds apply them: the partials edge each split mints is what fission cuts the two passes apart
@@ -5319,16 +5344,18 @@ let seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices ~capacity ~c
    on the segment alone, or [None] where the segment keeps its preset. Also the staffed search's
    start (gh-ocannl-1138), which applies it to each key's own segment. The judgment's [Error]
    names the refusing gate, for the seeding census (gh-ocannl-1407). *)
-let seeded_segment_judgment ~capabilities ~limits ~accum_prec ~static_indices ~gate ~ranked_below
-    (pre : LL.optimized) : (sketch_params, string) Result.t =
+let seeded_segment_judgment ~capabilities ~limits ~accum_prec ~admit_narrow ~static_indices ~gate
+    ~ranked_below (pre : LL.optimized) : (sketch_params, string) Result.t =
   let candidate =
     match gate with
     | Min_reduction n when n <= 0 ->
         Error "sketch seeding is off (gpu_default_sketch_min_reduction=0)"
     | Min_reduction min_reduction ->
-        seeded_params_judged ~capabilities ~limits ~accum_prec ~min_reduction pre
+        seeded_params_judged ~capabilities ~admit_narrow ~limits ~accum_prec ~min_reduction pre
     | Ranked { capacity; cache_rate; scalar_rate; dram_rate } -> (
-        match seeded_params_judged ~capabilities ~limits ~accum_prec ~min_reduction:1 pre with
+        match
+          seeded_params_judged ~capabilities ~admit_narrow ~limits ~accum_prec ~min_reduction:1 pre
+        with
         | Ok p
           when ranked_below ~capacity ~cache_bandwidth:cache_rate ~issue_rate:scalar_rate
                  ~dram_bandwidth:dram_rate p pre ->
@@ -5359,14 +5386,14 @@ let seeded_segment_judgment ~capabilities ~limits ~accum_prec ~static_indices ~g
           Error
             (sketch_params_label p ^ " declined on the segment: " ^ Outcome.detail_of_cause cause))
 
-let seeded_segment_params ~capabilities ~limits ~accum_prec ~static_indices ~gate ~ranked_below pre
-    =
+let seeded_segment_params ~capabilities ~limits ~accum_prec ~admit_narrow ~static_indices ~gate
+    ~ranked_below pre =
   Result.ok
-    (seeded_segment_judgment ~capabilities ~limits ~accum_prec ~static_indices ~gate ~ranked_below
-       pre)
+    (seeded_segment_judgment ~capabilities ~limits ~accum_prec ~admit_narrow ~static_indices ~gate
+       ~ranked_below pre)
 
-let seeded_decisions ~capabilities ~limits ~accum_prec ~static_indices ~gate ~ranked_below
-    ~sink_enabled (opt : LL.optimized) =
+let seeded_decisions ~capabilities ~limits ~accum_prec ~admit_narrow ~static_indices ~gate
+    ~ranked_below ~sink_enabled (opt : LL.optimized) =
   let preset = seeded_preset ~limits in
   let zero_sched tns = Sched.zero_expansion ~limits tns in
   let keep_mapping = Sched.fission_keep_mapping ~is_gpu:true ~limits in
@@ -5408,8 +5435,8 @@ let seeded_decisions ~capabilities ~limits ~accum_prec ~static_indices ~gate ~ra
     | `Normal, _ ->
         Hashtbl.find_or_add decided (Lazy.force key) ~default:(fun () ->
             let judged =
-              seeded_segment_judgment ~capabilities ~limits ~accum_prec ~static_indices ~gate
-                ~ranked_below pre
+              seeded_segment_judgment ~capabilities ~limits ~accum_prec ~admit_narrow
+                ~static_indices ~gate ~ranked_below pre
             in
             census ~key
               (match judged with
@@ -5424,7 +5451,7 @@ let seeded_decisions ~capabilities ~limits ~accum_prec ~static_indices ~gate ~ra
     | `Zeros | `Solo -> None
     | `Normal when not sink_enabled -> None
     | `Normal -> (
-        match seeded_sunk_schedule ~limits ~accum_prec ~static_indices pre with
+        match seeded_sunk_schedule ~limits ~accum_prec ~admit_narrow ~static_indices pre with
         | None -> None
         | Some (n_swaps, sched) -> (
             match
@@ -5512,38 +5539,46 @@ let seeded_plan_choice (plan : seeded_plan) =
       }
 
 (* The plan on [opt], the routine [split] was applied to. *)
-let seeded_plan_on ~capabilities ~limits ~accum_prec ~static_indices ~gate ~ranked_below
-    ~sink_enabled ~split opt =
+let seeded_plan_on ~capabilities ~limits ~accum_prec ~admit_narrow ~static_indices ~gate
+    ~ranked_below ~sink_enabled ~split opt =
   match
-    seeded_decisions ~capabilities ~limits ~accum_prec ~static_indices ~gate ~ranked_below
-      ~sink_enabled opt
+    seeded_decisions ~capabilities ~limits ~accum_prec ~admit_narrow ~static_indices ~gate
+      ~ranked_below ~sink_enabled opt
   with
-  | None -> { sp_split = split; sp_segments = None; sp_refined = 0; sp_start = None }
+  | None ->
+      {
+        sp_split = split;
+        sp_segments = None;
+        sp_refined = 0;
+        sp_start = None;
+        sp_admit_narrow = admit_narrow;
+      }
   | Some (segmentation, segs, refined) ->
       {
         sp_split = split;
         sp_segments = Some (segmentation, segs);
         sp_refined = refined;
         sp_start = None;
+        sp_admit_narrow = admit_narrow;
       }
 
-let seeded_plan ?min_reduction ?seed_gate ?min_serial ?reduction_sink
+let seeded_plan ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narrow
     ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~backend ~limits ~accum_prec
     ~static_indices (opt : LL.optimized) =
   match
-    seeded_settings ?min_reduction ?seed_gate ?min_serial ?reduction_sink ~backend
+    seeded_settings ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narrow ~backend
       ~configured_gate:(fun () -> seeded_default_gate ~limits)
       ()
   with
   | None -> None
-  | Some (gate, min_serial, sink_enabled) -> (
+  | Some (gate, min_serial, sink_enabled, admit_narrow) -> (
       (* Hermetic, prelude included: deriving the plan must leave the caller's lowering as it
          was. *)
       let opt, split = seeded_split ~backend ~min_serial ~static_indices (scratch_of opt) in
       let ranked_below = seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices in
       match
-        seeded_plan_on ~capabilities ~limits ~accum_prec ~static_indices ~gate ~ranked_below
-          ~sink_enabled ~split opt
+        seeded_plan_on ~capabilities ~limits ~accum_prec ~admit_narrow ~static_indices ~gate
+          ~ranked_below ~sink_enabled ~split opt
       with
       | { sp_split = []; sp_segments = None; _ } -> None
       | plan ->
@@ -5566,8 +5601,8 @@ let seeded_plan ?min_reduction ?seed_gate ?min_serial ?reduction_sink
                 Some
                   {
                     decide =
-                      seeded_segment_params ~capabilities ~limits ~accum_prec ~static_indices ~gate
-                        ~ranked_below;
+                      seeded_segment_params ~capabilities ~limits ~accum_prec ~admit_narrow
+                        ~static_indices ~gate ~ranked_below;
                     gate_tag;
                   };
             })
@@ -5576,14 +5611,21 @@ let seeded_plan ?min_reduction ?seed_gate ?min_serial ?reduction_sink
    decided on the split routine, its replay. Shared by the untuned compile's transform and by
    [model_default], which starts from it (gh-ocannl-1253). *)
 let seeded_apply ?(on_choice = fun (_ : seeded_choice) -> ()) ~capabilities ~backend ~limits
-    ~accum_prec ~static_indices ~gate ~min_serial ~sink_enabled (opt : LL.optimized) :
+    ~accum_prec ~static_indices ~gate ~min_serial ~sink_enabled ~admit_narrow (opt : LL.optimized) :
     LL.optimized list =
   let t0 = Unix.gettimeofday () in
   let opt, split = seeded_split ~backend ~min_serial ~static_indices opt in
   on_choice
-    (seeded_plan_choice { sp_split = split; sp_segments = None; sp_refined = 0; sp_start = None });
+    (seeded_plan_choice
+       {
+         sp_split = split;
+         sp_segments = None;
+         sp_refined = 0;
+         sp_start = None;
+         sp_admit_narrow = admit_narrow;
+       });
   let plan =
-    seeded_plan_on ~capabilities ~limits ~accum_prec ~static_indices ~gate
+    seeded_plan_on ~capabilities ~limits ~accum_prec ~admit_narrow ~static_indices ~gate
       ~ranked_below:(seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices)
       ~sink_enabled ~split opt
   in
@@ -5591,7 +5633,7 @@ let seeded_apply ?(on_choice = fun (_ : seeded_choice) -> ()) ~capabilities ~bac
      hit, timed so its cost can be read off any untuned compile. *)
   logf "seeded_default: plan derived in %.3f s" (Unix.gettimeofday () -. t0);
   let (_, tuples), applied =
-    seeded_replay ~limits ~accum_prec ~static_indices plan.sp_segments opt
+    seeded_replay ~limits ~accum_prec ~admit_narrow ~static_indices plan.sp_segments opt
   in
   if applied then (
     let choice = seeded_plan_choice plan in
@@ -5607,30 +5649,30 @@ let seeded_apply ?(on_choice = fun (_ : seeded_choice) -> ()) ~capabilities ~bac
     on_choice choice);
   List.map tuples ~f:(fun (_, _, _, post) -> post)
 
-let seeded_transform ?min_reduction ?seed_gate ?min_serial ?reduction_sink
+let seeded_transform ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narrow
     ?(on_choice = fun (_ : seeded_choice) -> ()) ctx bindings =
   let backend = Context.backend_name ctx in
   match
-    seeded_settings ?min_reduction ?seed_gate ?min_serial ?reduction_sink ~backend
+    seeded_settings ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narrow ~backend
       ~configured_gate:(fun () -> seeded_default_gate ~limits:(Context.hardware_limits ctx))
       ()
   with
   | None -> None
-  | Some (gate, min_serial, sink_enabled) ->
+  | Some (gate, min_serial, sink_enabled, admit_narrow) ->
       let limits = Context.hardware_limits ctx in
       let capabilities = Context.codegen_capabilities ctx in
       let accum_prec = capabilities.Ir.Backend_intf.accum_prec in
       let static_indices = Idx.bound_symbols bindings in
       Some
         (seeded_apply ~on_choice ~capabilities ~backend ~limits ~accum_prec ~static_indices ~gate
-           ~min_serial ~sink_enabled)
+           ~min_serial ~sink_enabled ~admit_narrow)
 
-let seeded_default ?name ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?report ctx comp
-    bindings =
+let seeded_default ?name ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narrow ?report
+    ctx comp bindings =
   let choice = ref no_seeded_choice in
   let emit () = Option.iter report ~f:(fun f -> f !choice) in
   match
-    seeded_transform ?min_reduction ?seed_gate ?min_serial ?reduction_sink
+    seeded_transform ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narrow
       ~on_choice:(fun c -> choice := c)
       ctx bindings
   with
@@ -5672,9 +5714,14 @@ let model_seeding ~backend ~limits =
    Other leaves are kept out of the ranking, counted as not numerics-preserving, never an error.
    Metal, the CPU backends and an unseeded CUDA/HIP compile keep the whole family. *)
 let model_admits ~seeding ~accum_prec (base_opt : LL.optimized) =
+  (* gh-ocannl-1405: a narrow-storage site is in the set exactly where the seeded plan admits it, so
+     the model's pick still changes no result the seeded plan would not. *)
+  let admit_narrow = match seeding with Some (_, _, _, admit) -> admit | None -> false in
   let preserving =
     lazy
-      (match detect_matmul_canonical base_opt with
+      (admit_narrow
+      ||
+      match detect_matmul_canonical base_opt with
       | Some (site, _, _) -> accumulates_at_storage ~accum_prec site
       | None -> true)
   in
@@ -5900,9 +5947,9 @@ let model_default ?name ?report ctx comp bindings =
        action reproducing it. Shared between the in-compile transform seam and the placement
        pre-search's leaf scoring (hermetic lowerings of decided placement vectors). *)
     let seeded_segs ?on_choice seeding opt =
-      let gate, min_serial, sink_enabled = seeding in
+      let gate, min_serial, sink_enabled, admit_narrow = seeding in
       seeded_apply ?on_choice ~capabilities ~backend ~limits ~accum_prec ~static_indices ~gate
-        ~min_serial ~sink_enabled opt
+        ~min_serial ~sink_enabled ~admit_narrow opt
     in
     (* Whether the applied seeded plan differs from the default pipeline, as [seeded_default] judges
        it: a plan that seeds, splits and sinks nothing IS the default pipeline, so a compilation
@@ -5916,7 +5963,7 @@ let model_default ?name ?report ctx comp bindings =
        fails on an undecided node (gh-ocannl-1477's fissioned chain, on HIP). *)
     let prelude ?(hermetic = true) (opt : LL.optimized) =
       match Lazy.force seeding_here with
-      | Some (_, min_serial, _) ->
+      | Some (_, min_serial, _, _) ->
           fst
             (seeded_split ~backend ~min_serial ~static_indices
                (if hermetic then scratch_of opt else opt))
@@ -6367,12 +6414,12 @@ let model_explain ?name ?(coalesced = false) ctx comp bindings =
     let record = ref [] in
     let incumbent_label, incumbent =
       match seeding with
-      | Some (gate, min_serial, sink_enabled) ->
+      | Some (gate, min_serial, sink_enabled, admit_narrow) ->
           ( "seeded",
             seeded_apply
               ~on_choice:(fun c -> record := c.sd_seeded)
               ~capabilities:caps ~backend ~limits ~accum_prec ~static_indices ~gate ~min_serial
-              ~sink_enabled (scratch_of opt) )
+              ~sink_enabled ~admit_narrow (scratch_of opt) )
       | None ->
           ( "default",
             Sched.maybe_default_schedules ~backend_name:backend ~limits ~static_indices
@@ -6380,7 +6427,7 @@ let model_explain ?name ?(coalesced = false) ctx comp bindings =
     in
     let base =
       match seeding with
-      | Some (_, min_serial, _) ->
+      | Some (_, min_serial, _, _) ->
           fst (seeded_split ~backend ~min_serial ~static_indices (scratch_of opt))
       | None -> opt
     in

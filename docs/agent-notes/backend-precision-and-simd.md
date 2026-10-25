@@ -900,7 +900,14 @@ files.
   the rewrite never touches). `test_config_consistency` checks the payloads and
   `ocannl_config.reference`'s quote of them; `config_profiles` pins approximate ⊇ performance.
   Every knob the profile flips today is already in the numerics or codegen digest, which is what
-  keeps a default-flags run from replaying a winner tuned under the profile. Benchmark side: `orchestrate.py --profile
+  keeps a default-flags run from replaying a winner tuned under the profile. A schedule-time
+  gate, which neither digest reaches by construction, is hashed into the codegen tag ON-regime
+  only and only on the backends it acts on, as `gpu_elide_covered_zeros` is (GPU) and
+  `gpu_default_seed_narrow_storage` (gh-ocannl-1405, CUDA/HIP via
+  `Schedule.backend_seeds_untuned_default`): every pre-existing key stays valid, and
+  `cache_key_agreement` flips it under that scope. Keeping such a gate `Search_shaping` with its
+  plan's siblings was the first draft's choice; the local review pointed out it lets a winner
+  crowned with the gate on replay with it off, `autotune_search=false` included. Benchmark side: `orchestrate.py --profile
   approximate` dispatches the OCANNL cells under `--ocannl_profile=approximate`, the torch cells
   under torch's own defaults (`high` matmul precision, SDPA, `cudnn.benchmark`), gates at
   `PARITY_TOL_APPROX` (looser than every exact envelope), labels every row with its regime, and

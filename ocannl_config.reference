@@ -407,6 +407,18 @@
 # seeding disabled (0) the sink still applies, to every segment.
 #gpu_default_reduction_sink=true
 
+# If true, the untuned CUDA/HIP default (the seeded sketches, the reduction sink above, and the
+# analytic model's numerics-preserving set) also takes the sites whose accumulator precision is
+# wider than their storage precision (gh-ocannl-1405): a bf16 weight gradient on CUDA (on HIP
+# unless bf16_arithmetic=true), fp8 on both, f16 under fp16_arithmetic=false. Off, those sites keep
+# the default pipeline. On, a seeded contraction keeps its result (the sketch's private tile stays
+# at storage precision wherever the default narrows inside the reduction), while a sunk reduction
+# (a bias or layer-norm parameter gradient) keeps its summation order but accumulates at the
+# accumulator precision and rounds to storage once, where the default rounds after every batch row:
+# results change, towards the exact sum. A numerics gate: on in the approximate profile, pinned off
+# in reproducible. Ignored where gpu_default_sketch_min_reduction is.
+#gpu_default_seed_narrow_storage=false
+
 # If true, backend compilation logs one stderr line per compiled kernel/segment with its launch
 # grid/block dimensions and statement count — for diffing what two compiles of nominally
 # identical code actually emit. Debugging aid; independent of the ppx_minidebug log levels.
@@ -1933,6 +1945,10 @@
 # # from the routine alone, but they reassociate long sums into a tree over blocks, which this
 # # profile keeps serial.
 # gpu_default_split_reduce_min_serial=0
+# # The untuned GPU default's narrow-storage admission (gh-ocannl-1405) at its default, off: a sunk
+# # narrow-storage reduction keeps its accumulator wide across the whole reduction, where the default
+# # pipeline rounds it to storage after every step, so admitting one changes its result.
+# gpu_default_seed_narrow_storage=false
 # --- END PROFILE PAYLOAD reproducible ---
 
 # --- BEGIN PROFILE PAYLOAD performance ---
@@ -2023,4 +2039,9 @@
 # # does not), so `performance` leaves it alone. Two flips: each costs a full search, so this
 # # bounds the extra cost at two searches per arm while still exercising the refinement.
 # tune_inline_flips=2
+# # The untuned CUDA/HIP default also seeds and sinks the sites whose accumulator is wider than their
+# # storage (gh-ocannl-1405): a bf16 weight gradient on CUDA, fp8 on CUDA and HIP. A seeded one keeps
+# # its result; a sunk one (a bias gradient) keeps its summation order but rounds to storage once
+# # instead of after every step.
+# gpu_default_seed_narrow_storage=true
 # --- END PROFILE PAYLOAD approximate ---

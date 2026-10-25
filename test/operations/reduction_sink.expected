@@ -5,6 +5,7 @@ an accumulator a reduction loop's affine index also moves is left alone: true
 an overwrite (no self-read) is not an accumulation and is left alone: true
 a bf16 accumulator its backend widens to f32 is left alone: true
 the same bf16 accumulator kept at its storage precision is sunk (the control): true
+admitted, the widened bf16 accumulator is sunk by the chain it gets at its storage precision: true
 on CUDA/HIP the untuned compile sinks a segment with the seeding off: true
 on CUDA/HIP the sunk routine compiles without falling back to the default: true
 on CUDA/HIP the default renders some accumulation against its cell: true

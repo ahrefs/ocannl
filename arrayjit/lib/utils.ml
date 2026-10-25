@@ -157,6 +157,7 @@ let known_config_keys =
       "gpu_default_sketch_min_reduction";
       "gpu_default_split_reduce_min_serial";
       "gpu_default_reduction_sink";
+      "gpu_default_seed_narrow_storage";
       "schedule_log_launches";
       "schedule_log_declines";
       "legality_crosscheck";
@@ -399,7 +400,7 @@ let config_key_classification : (config_key_class * string * string list) list =
     ( Search_shaping,
       "they define the seeded untuned plan -- which large CUDA/HIP contractions the recipes' \
        untuned compile seeds with the matmul family's sketch (Autotune.seeded_default, \
-       gh-ocannl-1324), which long reductions it splits before segmenting (gh-ocannl-1325) and \
+       gh-ocannl-1324), which long reductions it splits before segmenting (gh-ocannl-1325), \
        whether it sinks the reduction loops of the segments it does not seed (gh-ocannl-1348) -- \
        which a search seeds as its FIRST candidate and floor (gh-ocannl-1388), so they decide what \
        it times first; a cached winner carries its own ops and segmentation and replays without \
@@ -409,6 +410,13 @@ let config_key_classification : (config_key_class * string * string list) list =
         "gpu_default_split_reduce_min_serial";
         "gpu_default_reduction_sink";
       ] );
+    ( Keyed "codegen",
+      "a numerics gate on the seeded untuned plan (gh-ocannl-1405): it admits narrow-storage \
+       sites, and a sunk narrow reduction rounds to storage once where the default rounds every \
+       step, so a winner crowned from that plan is not the default regime's answer and must not \
+       replay under it; AGENTS.md's numerics-gate rule. Hashed into the codegen tag on CUDA and \
+       HIP, where the plan runs, when on",
+      [ "gpu_default_seed_narrow_storage" ] );
     ( Search_shaping,
       "it steers the search: how wide, how long, what is proposed, what is pruned, how candidates \
        are ranked, and when a candidate's failure ends the search",
@@ -1477,6 +1485,10 @@ winograd_conv=false
 # from the routine alone, but they reassociate long sums into a tree over blocks, which this
 # profile keeps serial.
 gpu_default_split_reduce_min_serial=0
+# The untuned GPU default's narrow-storage admission (gh-ocannl-1405) at its default, off: a sunk
+# narrow-storage reduction keeps its accumulator wide across the whole reduction, where the default
+# pipeline rounds it to storage after every step, so admitting one changes its result.
+gpu_default_seed_narrow_storage=false
 |}
 
 let performance_profile_payload =
@@ -1567,6 +1579,11 @@ fp_finite_math=true
 # does not), so `performance` leaves it alone. Two flips: each costs a full search, so this
 # bounds the extra cost at two searches per arm while still exercising the refinement.
 tune_inline_flips=2
+# The untuned CUDA/HIP default also seeds and sinks the sites whose accumulator is wider than their
+# storage (gh-ocannl-1405): a bf16 weight gradient on CUDA, fp8 on CUDA and HIP. A seeded one keeps
+# its result; a sunk one (a bias gradient) keeps its summation order but rounds to storage once
+# instead of after every step.
+gpu_default_seed_narrow_storage=true
 |}
 
 (** The embedded profile payloads, by name. Each is literally a partial [ocannl_config] file: same

@@ -8080,6 +8080,25 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1405: the untuned CUDA/HIP default seeds and sinks narrow-storage sites (a bf16 weight
+; gradient whose accumulator the backend widens to f32) only under gpu_default_seed_narrow_storage:
+; off, the gradients are bitwise the default pipeline's; on, the weight gradient is seeded and stays
+; bitwise, the bias gradient is sunk and closer to an f64 reference; the approximate profile turns
+; the gate on and reproducible pins it off. The seeding
+; threshold and the FMA contraction are pinned in the source, the gate is passed explicitly before
+; the source states the key itself, so the golden is backend-uniform.
+
+(test
+ (name seeded_narrow_storage)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules seeded_narrow_storage)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-1477: under seeding, model_default never displaces the seeded plan with a sketch that
 ; only ties the seeded plan's own sketch: on CUDA/HIP each walk (whole-routine, and per segment of a
 ; fissioned chain) is anchored at that sketch, the pick ranks strictly below it or is the seeded

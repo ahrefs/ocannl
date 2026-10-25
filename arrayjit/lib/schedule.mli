@@ -1013,6 +1013,11 @@ val backend_is_cpu : string -> bool
 (** Whether the named backend renders [Grid] loops on the CPU pool (currently: name contains
     ["cc"]). *)
 
+val backend_seeds_untuned_default : string -> bool
+(** Whether the untuned compile seeds its plan on the named backend ([Autotune.seeded_default]):
+    CUDA and HIP. Here rather than in [Autotune] so that {!Schedule_cache.codegen_tag} can scope the
+    seeded plan's numerics gate by it (gh-ocannl-1405). *)
+
 val code_footprint : Low_level.t -> Set.M(Tn).t * bool
 (** All tensor nodes the code references (scope ids' backing nodes included) — the set a fission
     segment's traced store is filtered to — and whether it reads the merge buffer. *)

@@ -126,7 +126,17 @@ let () =
     ~over:(LL.flat_lines [ opt.LL.llc ])
     (Autotune.reduction_sink ~accum_prec:(fun _ -> Ir.Ops.single) opt);
   p "the same bf16 accumulator kept at its storage precision is sunk (the control)"
-    (not (List.is_empty (Autotune.reduction_sink ~accum_prec:Fn.id opt)))
+    (not (List.is_empty (Autotune.reduction_sink ~accum_prec:Fn.id opt)));
+  (* gh-ocannl-1405: the narrow-storage admission takes it under the widening accumulator too, with
+     the chain it takes at storage-width accumulation -- the admission changes which statements
+     qualify, not the interchange. *)
+  p "admitted, the widened bf16 accumulator is sunk by the chain it gets at its storage precision"
+    (let admitted =
+       Autotune.reduction_sink ~admit_narrow:true ~accum_prec:(fun _ -> Ir.Ops.single) opt
+     in
+     let render sched = Sexp.to_string (Sched.sexp_of_schedule sched) in
+     (not (List.is_empty admitted))
+     && String.equal (render admitted) (render (Autotune.reduction_sink ~accum_prec:Fn.id opt)))
 
 (* {2 Executed: a backpropagated dense layer} *)
 
