@@ -767,6 +767,14 @@ files.
   buffer does not, because its writer is itself a task on the same queue and FIFO order covers it.
   `test/operations/async_launch_bindings` is the probe — sweep a static index with nothing between
   the dispatch and the next rebind, accumulate two moments of the bound value on device, sync once.
+- **A launch parameter starts UNASSIGNED, and a run refuses it** (gh-ocannl-940): every backend's
+  link mints its cells with `Indexing.fresh_launch_param` (an out-of-band `Int.min_value`, so the
+  cell stays an `int ref` and `find_exn bindings sym := v` stays the API), and
+  `Indexing.validate_bound_value` names an unassigned one — at `Context.check_launch_bindings` before
+  dispatch, and again at each backend's launch-side read (cc's `work`, the GPU `Static_idx` arms) for
+  a task scheduled around `Context.run`. Library code that runs a routine nobody outside can bind
+  writes 0 itself (`Train.init_params`/`run_once`, `Parallel.schedule`, `Autotune.set_test_bindings`
+  for an unranged one); a new such site must too. `test/operations/unassigned_launch_param` pins it.
 - **`static_properties` has one shape across the backends, and it is a contract**
   (gh-ocannl-710): `(<backend>_devices (device (key value) ...) (device ...) ...)` — a group atom
   naming the dump, then exactly one `Sexp.message`-shaped entry per device, in ordinal order, each

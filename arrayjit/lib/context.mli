@@ -57,6 +57,12 @@ type routine = private {
           this routine (see {!section:execution_deps}). *)
   task : task_handle;
   bindings : Ir.Indexing.lowered_bindings;
+      (** The routine's launch parameters — one cell per bound symbol of the [unit_bindings] it was
+          compiled with — which the CALLER assigns before every {!run} that needs a new value:
+          [Ir.Indexing.find_exn routine.bindings sym := v]. Linking leaves each one UNASSIGNED, and
+          {!run} refuses a routine with an unassigned parameter, naming it (gh-ocannl-940): a caller
+          that means 0 writes 0. A value, once written, persists across runs until the caller writes
+          another. *)
   name : string;  (** The name of the routine, derived from the backend compilation. *)
   inputs : Set.M(Ir.Tnode).t;
       (** The externally required initialization set — what {!run}'s initialization check requires
@@ -317,9 +323,10 @@ val check_lineage_runnable : t -> routine -> unit
 
 val check_launch_bindings : routine -> unit
 (** The per-candidate half of {!check_runnable}: bind-time validation of the launch parameters the
-    caller just wrote (non-negative, within the declared static range, within the index width).
-    Candidates differ in their static ranges, so one can fail this while its siblings time cleanly —
-    which is what makes it the half a search contains as a decline (gh-ocannl-564). *)
+    caller just wrote (assigned at all — gh-ocannl-940 — non-negative, within the declared static
+    range, within the index width). Candidates differ in their static ranges, so one can fail this
+    while its siblings time cleanly — which is what makes it the half a search contains as a decline
+    (gh-ocannl-564). *)
 
 val sync : t -> unit
 (** Blocks until the context's device is idle. Host reads ({!to_host}, {!get_values}) synchronize on

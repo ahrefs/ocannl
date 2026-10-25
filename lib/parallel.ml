@@ -110,7 +110,12 @@ type handle = {
   shard_seeds : int array;
 }
 
-let schedule (r : _ Ir.Backend_intf.routine) = Task.run r.Ir.Backend_intf.schedule
+(* [data_parallel] hands no routine back, so nothing outside can assign a launch parameter: every
+   routine runs with each one at 0, written here explicitly because linking leaves them unassigned
+   (gh-ocannl-940). *)
+let schedule (r : _ Ir.Backend_intf.routine) =
+  List.iter r.Ir.Backend_intf.bindings ~f:(fun (_, v) -> v := 0);
+  Task.run r.Ir.Backend_intf.schedule
 
 let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(momentum = 0.0)
     ?(base_seed = 0) ~n_shards ~(bindings : Idx.unit_bindings) ~(learning_rate : Tensor.t)

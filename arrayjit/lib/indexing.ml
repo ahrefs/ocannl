@@ -99,6 +99,28 @@ let lowered_bindings bs vs =
 
 let find_exn (bs : lowered_bindings) = List.Assoc.find_exn ~equal:equal_static_symbol bs
 
+(* gh-ocannl-940: the value a launch parameter's cell holds from linking until the caller assigns
+   it. Out of band for every legal value (they are non-negative), so an unassigned parameter is told
+   apart from one the caller set to 0 without changing the cell's type -- the caller's [find_exn
+   bindings sym := v] stays the way to assign one. *)
+let unassigned_launch_value = Int.min_value
+let fresh_launch_param () = ref unassigned_launch_value
+let launch_param_assigned r = !r <> unassigned_launch_value
+
+let launch_param_kind { used_as_extent; used_as_slice; _ } =
+  if used_as_extent then "symbolic extent"
+  else if used_as_slice then "batch-slice index"
+  else "static index"
+
+let unassigned_message syms =
+  Printf.sprintf
+    "Indexing: launch parameter(s) never assigned: %s. Backend linking leaves every launch \
+     parameter unassigned; write each one's value -- 0 included -- through [Indexing.find_exn \
+     routine.bindings sym := v] before running"
+    (String.concat ~sep:", "
+       (List.map syms ~f:(fun s ->
+            Printf.sprintf "%s (%s)" (symbol_ident s.static_symbol) (launch_param_kind s))))
+
 let get_static_symbol ?static_range bindings =
   let s =
     { static_symbol = get_symbol (); static_range; used_as_extent = false; used_as_slice = false }
@@ -112,8 +134,10 @@ let get_static_symbol ?static_range bindings =
     (step counters) take runtime values unrelated to any touched node's extent -- so narrowing an
     unbounded parameter requires declaring (and thereby bind-validating) a range. *)
 let validate_bound_value ?(width64 = false)
-    ({ static_symbol; static_range; used_as_extent; used_as_slice = _ } : static_symbol) (v : int) =
+    ({ static_symbol; static_range; used_as_extent; used_as_slice = _ } as s : static_symbol)
+    (v : int) =
   let ident = symbol_ident static_symbol in
+  if v = unassigned_launch_value then raise @@ Utils.User_error (unassigned_message [ s ]);
   if v < 0 then
     raise
     @@ Utils.User_error
@@ -144,6 +168,11 @@ let validate_bound_value ?(width64 = false)
   | Some _ | None -> ()
 
 let validate_lowered_bindings ?width64 (bs : lowered_bindings) =
+  (* Every unassigned parameter in one message, ahead of the value checks: a caller who forgot
+     several learns of all of them at once. *)
+  (match List.filter_map bs ~f:(fun (s, r) -> Option.some_if (not (launch_param_assigned r)) s) with
+  | [] -> ()
+  | unassigned -> raise @@ Utils.User_error (unassigned_message unassigned));
   List.iter bs ~f:(fun (s, r) -> validate_bound_value ?width64 s !r)
 
 (** Dimensions to string, ["x"]-separated, e.g. 1x2x3 for batch dims 1, input dims 3, output dims 2.

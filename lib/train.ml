@@ -1839,6 +1839,9 @@ let%track7_sexp to_routine (ctx : Context.t) ?(output_cd_file = false) ?budget ?
      with no budget this is the identity and the compile below is unchanged. *)
   compile_within_budget ?budget ?max_candidates ?budget_report ctx comp bindings
 
+let bind_all_to_zero (routine : Context.routine) =
+  List.iter routine.Context.bindings ~f:(fun (_, r) -> r := 0)
+
 let init_params ?(reinit_all = false) ctx bindings t =
   let skip =
     if reinit_all then None
@@ -1873,6 +1876,9 @@ let init_params ?(reinit_all = false) ctx bindings t =
      these parameters. A newly linked buffer needs no second upload during ordinary
      initialization. *)
   let ctx, routine = Context.compile ctx comp bindings in
+  (* Initialization runs once, not per launch-parameter value: it binds every parameter to 0,
+     explicitly, since linking leaves them unassigned (gh-ocannl-940). *)
+  bind_all_to_zero routine;
   let ctx =
     Set.fold host_params ~init:ctx ~f:(fun ctx tn ->
         if reinit_all || not (Context.is_initialized ctx tn) then
@@ -1894,6 +1900,8 @@ let%track3_sexp run_once ?(output_cd_file = false) ?(skip_init = false) ?reinit_
   let ctx, routine =
     compile_within_budget ?budget ?max_candidates ?budget_report ctx update bindings
   in
+  (* A one-off run: every launch parameter at 0, written explicitly (gh-ocannl-940). *)
+  bind_all_to_zero routine;
   Context.run ctx routine
 
 let forward_once ?output_cd_file ?(skip_init = false) ?reinit_all ?(bindings = IDX.empty) ?budget

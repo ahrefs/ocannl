@@ -290,6 +290,11 @@ let run_train_step routines ctx_ref ~step =
   match routines with
   | Plain routine -> Train.run !ctx_ref routine
   | Host_gate (scaler, checksum, grad_routine, sgd_routine) ->
+      (* The step's launch parameters are assigned on [train_step_bindings] -- the gradient
+         routine's -- and the optimizer routine, compiled with the same bindings, takes the same
+         values: linking left its own unassigned (gh-ocannl-940). *)
+      List.iter sgd_routine.Context.bindings ~f:(fun (sym, cell) ->
+          cell := !(Ir.Indexing.find_exn grad_routine.Context.bindings sym));
       let ctx, ran = Mixed_prec.scaled_step ~scaler ~grad_routine ~sgd_routine ~checksum !ctx_ref in
       if ran then Int.incr host_gated_optimizer_runs;
       ctx_ref := ctx

@@ -129,6 +129,9 @@ let () =
     Idx.find_exn micro_r.Context.bindings g.extent := e;
     Context.run ctx micro_r
   in
+  (* The zeroing routine takes the extent too; the planted gradient below overwrites what it wrote,
+     so it runs at the micro-steps' extent for want of any other. *)
+  Idx.find_exn zero_r.Context.bindings g.extent := e;
   let ctx = Context.run ctx zero_r in
   let planted = rows ~rows:range ~width (fun s a -> if s < e then 0. else sentinel s a) in
   let ctx = Context.set_values ctx gx planted in
@@ -179,6 +182,7 @@ let () =
   and v0 = seeded ~range:2 ~width:1 ~e ~past:poison in
   let ctx = Context.set_values ctx u.Tensor.value u0 in
   let ctx = Context.set_values ctx v.Tensor.value v0 in
+  Idx.find_exn zero_r.Context.bindings extent := e;
   let ctx = Context.run ctx zero_r in
   let planted width = rows ~rows:2 ~width (fun s a -> if s < e then 0. else sentinel s a) in
   let ctx = Context.set_values ctx (grad_of u) (planted 2) in

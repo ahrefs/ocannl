@@ -1,0 +1,9 @@
+a run with both parameters unassigned is refused: true
+that refusal names both parameters: true
+a run with one parameter unassigned is refused: true
+that refusal names the unassigned parameter: true
+that refusal does not name the assigned parameter: true
+the refused runs dispatched nothing: true
+with 0 written explicitly the routine runs, at the assigned index: true
+with 0 written explicitly the routine runs, at the explicit 0: true
+a written value persists across runs: true

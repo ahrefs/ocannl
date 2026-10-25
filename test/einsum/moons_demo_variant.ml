@@ -44,7 +44,10 @@ let () =
   let sgd = Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
   let ctx = Train.init_params ctx bindings scalar_loss in
   let _, sgd_routine = Train.to_routine ctx bindings (Asgns.sequence [ update; sgd ]) in
-  (* Skipping over the training loop, not needed for the test. *)
+  (* Skipping over the training loop, not needed for the test: one step, at the first batch and step
+     0. *)
+  IDX.find_exn sgd_routine.Context.bindings batch_n := 0;
+  IDX.find_exn sgd_routine.Context.bindings step_n := 0;
   Train.run ctx sgd_routine;
 
   Tn.print_accessible_headers ();

@@ -670,7 +670,11 @@ let set_test_bindings routine =
              conservative for smaller runtime extents. *)
           r := range
       | Some range when range > 0 -> r := range / 2
-      | _ -> ())
+      | _ ->
+          (* No range to pick from. Time a value the caller assigned at the caller's value, and
+             otherwise at 0, written explicitly: linking leaves the parameter unassigned
+             (gh-ocannl-940), and a compile-time search runs before the caller could assign it. *)
+          if not (Idx.launch_param_assigned r) then r := 0)
 
 (* Fast routines get extra timed runs beyond [repeats], until this much accumulated PER-SAMPLE time
    (or [max_timing_runs]); every routine gets [min_timing_samples]. A caller's larger [repeats]

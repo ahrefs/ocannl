@@ -189,6 +189,7 @@ let () =
 
   let open Operation.At in
   let step_ref = IDX.find_exn sgd_step.Context.bindings step_n in
+  step_ref := 0;
   let batch_ref = IDX.find_exn sgd_step.Context.bindings batch_n in
   let counter_ref = IDX.find_exn infer_routine.Context.bindings counter_n in
   counter_ref := 0;

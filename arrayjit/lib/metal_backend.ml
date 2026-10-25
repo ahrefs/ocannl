@@ -1872,7 +1872,8 @@ using namespace metal;|}
             ~source:code.metal_source ~device)
     in
     let lowered_bindings : Indexing.lowered_bindings =
-      List.map (Indexing.bound_symbols code.bindings) ~f:(fun s -> (s, ref 0))
+      List.map (Indexing.bound_symbols code.bindings) ~f:(fun s ->
+          (s, Indexing.fresh_launch_param ()))
     in
     let task =
       link_proc ~prior_context ~library ~func_name:code.func_name ~kparams:code.kparams
@@ -1897,7 +1898,8 @@ using namespace metal;|}
             ~source:code_batch.metal_source ~device)
     in
     let lowered_bindings : Indexing.lowered_bindings =
-      List.map (Indexing.bound_symbols code_batch.bindings) ~f:(fun s -> (s, ref 0))
+      List.map (Indexing.bound_symbols code_batch.bindings) ~f:(fun s ->
+          (s, Indexing.fresh_launch_param ()))
     in
     let tasks =
       Array.map code_batch.funcs ~f:(fun (func_name, kparams, launch) ->
