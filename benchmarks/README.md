@@ -760,7 +760,16 @@ OCANNL_CC_PARALLEL_GRID=none` times single-threaded segments that sum to the ser
   seed executed (gh-ocannl-1490; `test/operations/bench_seed_parity_smoke` runs both modes on an
   in-memory convnet). Candidates are timed, not value-checked, so this is how a seed's soundness
   on a real graph is checked: on `cifar_resnet` materialize-all, Metal, all 52 conv seeds match
-  (worst 2.5e-6) and all 52 perturbed seeds are caught.
+  (worst 2.5e-6) and all 52 perturbed seeds are caught. Under `tf32_matmuls` (CUDA's only regime
+  with f32 conv seeds) a training step's max-pool backward confounds the oracle: a tf32 conv
+  rounds apart from the f32 reference, a pool window's argmax flips, and the routed gradient moves
+  between cells — normalized difference exactly 1 at a `..._cond_..._sum` selection node, a few
+  percent on the parameter gradients — so every conv seed of `cifar_resnet` mismatches there. Add
+  `BENCH_FWD=1` to judge the forward conv seeds without the routing: on CUDA (rog-nv-linux)
+  30 of 32 match at worst 3.9e-4, and the unfused row-block seeds `conv-mma-gpu 0x0x0/16x0 simd32`
+  of segments u45 and u50 compute a wrong conv output (0.74 and 0.60) while their fused-epilogue
+  twins match — a genuine defect, and the loss alone moved 3e-5, which is why every written node
+  is compared rather than the step's outcome.
   `BENCH_SR_SITES=1` (`bench_conv_diag`, and `bench_gpt_diag` on the GPT step) prints what `Autotune.split_reduce_sites` proposes on the
   same graph — the gh-ocannl-484 task-3 seeding can only reach the accumulations listed there, so
   it is the companion to the census above when asking why a seeded split-reduce family did or did
