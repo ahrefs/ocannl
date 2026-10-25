@@ -22,22 +22,21 @@
    backend [compile] applies, at the configured thresholds): a 128x128 matmul [h] (materialized: it
    exceeds the stack threshold) followed by row statistics [s] (scratch) and [y = h - s]. The
    matmul's accumulation nest is [Grid]-typed, the statistics stay scratch, and their consumer keeps
-   its [Grid]: linking the scratch writer [s[i]] to its reader [y[i, j]] trims the reader's chain to
-   [i], below [cpu_schedule_min_parallel], so the preset keeps the plain analysis there.
+   its [Grid]. (Under the GPU alignment rule, linking the scratch writer [s[i]] to its reader [y[i,
+   j]] trimmed the reader's chain to [i]; the CPU preset proves each nest's one loop on its own
+   since gh-ocannl-1458, so nothing is trimmed.)
 
-   1b. [rowstats], under the tuner's presets ([min_parallel] 1): the same shape over a materialized
-   32x32 input. The trim to [i] keeps the kernel eligible, so the scratch statistics' nest is
-   [Grid]-typed beside its consumer -- comparing chain sizes instead of eligibility would fall back
-   and leave it serial.
+   1b. [rowstats], under the tuner's ungated presets ([min_work] 0): the same shape over a
+   materialized 32x32 input. The scratch statistics' nest is [Grid]-typed beside its consumer.
 
-   2. [chain], through the default pipeline at [min_parallel] 1 (the presets the tuner seeds and
-   times its fissioned candidates with): the issue's three layers [y_k = relu (w_k * y_{k-1})] at
-   32x32, every [y_k] materialized and only the last product, so the first two products are scratch.
-   Every product's accumulation nest is [Grid]-typed and the scratch products stay scratch.
+   2. [chain], through the default pipeline at [min_work] 0 (the presets the tuner seeds and times
+   its fissioned candidates with): the issue's three layers [y_k = relu (w_k * y_{k-1})] at 32x32,
+   every [y_k] materialized and only the last product, so the first two products are scratch. Every
+   product's accumulation nest is [Grid]-typed and the scratch products stay scratch.
 
-   3. [transposed], same presets: a scratch product its consumer reads transposed cannot be linked
-   to it by the alignment rule, so the preset falls back to the plain analysis -- the consumer keeps
-   its [Grid] and the producer stays serial, as before the fix. *)
+   3. [transposed], same presets: a scratch product its consumer reads transposed. The GPU alignment
+   rule cannot link the two, and before gh-ocannl-1458 the preset fell back to leaving the producer
+   serial; the CPU preset needs no alignment across a fork-join, so both nests are [Grid]-typed. *)
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
@@ -93,12 +92,11 @@ let grid_writer segments tn = List.exists (writer_axes segments tn) ~f:is_grid
 let pool_rendered src =
   List.length (String.substr_index_all src ~may_overlap:false ~pattern:"Pool-backed Grid rendering")
 
-(* The default pipeline: as configured, or with the presets at [min_parallel] 1. *)
+(* The default pipeline: as configured, or with the ungated presets ([min_work] 0). *)
 let schedules ~tuner_presets opt =
   if tuner_presets then
     List.map
-      (Sched.fission_scheduled
-         ~preset:(Sched.default_cpu ~min_parallel:1)
+      (Sched.fission_scheduled ~preset:(Sched.default_cpu ~min_work:0)
          ~zero_sched:(fun _ -> [])
          ~static_indices:[] opt)
       ~f:(fun (_, _, _, post) -> post)
@@ -220,9 +218,8 @@ let () =
   in
   p_all "transposed: the product is scratch" still_scratch ~f:Fn.id;
   p "transposed: the consumer keeps its Grid" (grid_writer segments y.Tensor.value);
-  p_all "transposed: the scratch producer stays serial"
-    (writer_axes segments h.Tensor.value)
-    ~f:(Fn.non is_grid);
+  p "transposed: the scratch producer's nest is Grid-typed too"
+    (grid_writer segments h.Tensor.value);
   p "transposed: every Grid loop renders on the pool"
     (grid_loops segments > 0 && pool_rendered src = grid_loops segments);
   p_all2 "transposed: values equal the unscheduled compile's, bit for bit" got want ~f:Float.equal
@@ -256,8 +253,7 @@ let () =
     (not (Tn.Placements.is_materialized_peek o.LL.optimize_ctx.LL.placements s));
   let segments =
     List.map
-      (Sched.fission_scheduled
-         ~preset:(Sched.default_cpu ~min_parallel:1)
+      (Sched.fission_scheduled ~preset:(Sched.default_cpu ~min_work:0)
          ~zero_sched:(fun _ -> [])
          ~static_indices:[] o)
       ~f:(fun (_, _, _, post) -> post)

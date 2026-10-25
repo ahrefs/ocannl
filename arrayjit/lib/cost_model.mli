@@ -487,6 +487,22 @@ val recompute_cost :
     materialized, the computations the virtualizer's own walk stores once the node is not
     materialized. Memoized per lineage: partially apply to the context once per compile. *)
 
+val tile_mma_macs_per_update : int
+(** How many multiply-accumulates of a [Tile_mma] {!fork_join_updates} charges as one scalar update
+    (16: on cc a [Tile_mma] renders as a register-tiled vector micro-kernel; gh-ocannl-1564). *)
+
+val fork_join_updates : cap:int -> Low_level.t -> int
+(** Scalar updates one run of the statement performs, saturating at [cap]: one per executed store or
+    register update, loop extents multiplying, [Local_scope] bodies counted (an apparently single
+    store may carry a whole reduction), a whole-node [Zero_out] its cells, an [If] guards-taken, a
+    [Tile_mma] its MACs over {!tile_mma_macs_per_update}; [Staged_compilation], barriers and
+    [Scan_loop] read as [cap]. The one count both CPU fork/join judgments use (gh-ocannl-1458): the
+    renderer's launch floor ([C_syntax], config [cc_grid_min_updates]) and the default CPU
+    annotator's per-dispatch gate ([Schedule.default_cpu], config [cpu_schedule_min_work]) -- so at
+    equal thresholds the annotator never retypes a loop the renderer would decline. A decline
+    heuristic in machine-independent units, not a runtime prediction: arithmetic inside a store's
+    expression is not charged. *)
+
 module Calibration : sig
   (** The calibration TSV schema (config [autotune_calibration_file], gh-ocannl-491 task 4) and the
       envelope fitter over it (gh-ocannl-514 phase 0): one row per timed candidate, the model's

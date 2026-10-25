@@ -1008,7 +1008,12 @@ val validate_no_slice_aliases : ?site:string -> t -> unit
     a [?prelowered] routine that skipped {!optimize}). *)
 
 val validate_parallel :
-  ?warp_size:int -> ?reassociable:(Tnode.t -> bool) -> Tnode.Placements.t -> t -> unit
+  ?warp_size:int ->
+  ?reassociable:(Tnode.t -> bool) ->
+  ?fork_join:bool ->
+  Tnode.Placements.t ->
+  t ->
+  unit
 (** Backend-independent well-formedness of hardware annotations (axis-types proposal §2); a no-op
     for all-[Serial] code. Raises [Invalid_argument] on structural violations: nonzero [from_], more
     than 3 slots per kind, annotated loops inside [Local_scope] bodies, barriers under divergent
@@ -1019,12 +1024,22 @@ val validate_parallel :
     (and the lane all-reduce's [reassociable], [Online_softmax.reassociable_local]) it also refuses
     a lane collective the renderer inserts ({!inserted_collectives}) under control flow that is not
     uniform across the lanes it spans (gh-ocannl-1238 for barriers, gh-ocannl-1334 for warp
-    shuffles); the default [warp_size] of 0 is a backend rendering no warp shuffles. Does not prove
-    iteration independence: an annotating pass proves it for the annotations it mints, and the
-    renderer asks {!unseparated_thread_write} of every binding it actually emits. *)
+    shuffles); the default [warp_size] of 0 is a backend rendering no warp shuffles. [fork_join]
+    (default [false], hardware-thread semantics) states the C backends' execution model
+    (gh-ocannl-1458): each pool-parallel [Grid] loop is one synchronous dispatch joined before the
+    next statement, and code outside every [Grid] loop runs once, on the calling thread — so a
+    materialized write or whole-node [Zero_out] nested under no [Grid] loop is exempt from the
+    coverage rules, while writes under a [Grid] loop keep them. Does not prove iteration
+    independence: an annotating pass proves it for the annotations it mints, and the renderer asks
+    {!unseparated_thread_write} of every binding it actually emits. *)
 
 val validate_parallel_classified :
-  warp_size:int -> reassociable:(Tnode.t -> bool) -> Tnode.Placements.t -> t -> unit
+  warp_size:int ->
+  reassociable:(Tnode.t -> bool) ->
+  fork_join:bool ->
+  Tnode.Placements.t ->
+  t ->
+  unit
 (** Internal backend-facing variant of {!validate_parallel}; transports a validation
     [Invalid_argument] as a typed {!Schedule_outcome.Illegal_schedule}. [warp_size] and
     [reassociable] are required here: the callers are the ones about to render, or to rank

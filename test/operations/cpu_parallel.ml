@@ -5,11 +5,11 @@
    a large elementwise kernel, and the C backend renders the outermost Grid loop as chunked parallel
    loops on the native pool ([dispatch_apply] on macOS, OpenMP elsewhere) -- checked structurally on
    the generated source, and by value parity plus a bitwise determinism check. - A kernel below
-   [cpu_schedule_min_parallel] stays entirely serial. - Per-chunk local privatization: a
-   [Privatize]d matmul accumulator is a stack array written grid-invariantly (on GPU each thread has
-   a private copy; one shared function-scope array would race across parallel chunks). Its accesses
-   all sit inside the Grid body and each iteration's first access is a covering write (the seed
-   forwarded from zero, or an init-load from the target), so the renderer privatizes it to per-chunk
+   [cpu_schedule_min_work] stays entirely serial. - Per-chunk local privatization: a [Privatize]d
+   matmul accumulator is a stack array written grid-invariantly (on GPU each thread has a private
+   copy; one shared function-scope array would race across parallel chunks). Its accesses all sit
+   inside the Grid body and each iteration's first access is a covering write (the seed forwarded
+   from zero, or an init-load from the target), so the renderer privatizes it to per-chunk
    block-scope storage and parallelizes the loop ([C_syntax.parallel_grid_safe]'s privatization
    rule, gh-ocannl-469; a local failing that rule — e.g. carrying values across iterations — still
    keeps the loop serial).
@@ -95,7 +95,7 @@ let () =
    in
    p "large kernel rendered in parallel" ok);
 
-  (* --- Small kernel: below [cpu_schedule_min_parallel], must stay serial. --- *)
+  (* --- Small kernel: below [cpu_schedule_min_work], must stay serial. --- *)
   phase "small kernel";
   let m = 8 in
   let sv = Array.init (m * m) ~f:(fun i -> Float.of_int i) in

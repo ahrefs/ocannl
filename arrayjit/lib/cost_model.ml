@@ -1074,6 +1074,62 @@ let modeled_recompute_flops ~static_indices
 
 let () = Low_level.recompute_pricer := modeled_recompute_flops
 
+(* How many multiply-accumulates of a [Tile_mma] statement {!fork_join_updates} charges as one
+   scalar update. On cc a [Tile_mma] renders as a register-tiled vector micro-kernel, which retires
+   on the order of vector lanes x FMA ports MACs per cycle (8 x 2 on AVX2, 4 x 4 on NEON) where a
+   scalar update costs about a cycle. Charging MACs at par let a 2 x (16 x 32 x 32) launch pass the
+   floor and lose 10x (gh-ocannl-1564). A fixed constant, like the floors, so eligibility is
+   machine-independent; a [Tile_mma] that falls back to its scalar micro-kernel is undercharged by
+   this factor. *)
+let tile_mma_macs_per_update = 16
+
+(* Scalar updates per invocation, capped at [cap] before arithmetic can overflow. Conditional bodies
+   are charged in full: decline only when even that upper estimate is small. Scalar Local_scope
+   bodies matter because an apparently single store may contain an entire reduction. A [Tile_mma] is
+   charged its covered MACs over [tile_mma_macs_per_update]. Moved here from [C_syntax]
+   (gh-ocannl-1458) so the CPU default annotator and the renderer's launch floor count one thing. *)
+let fork_join_updates ~cap (llc : Low_level.t) =
+  let cap = Int.max 1 cap in
+  let add a b = min cap (a + b) in
+  let mul_capped ~cap a b = if a = 0 || b = 0 then 0 else if a > cap / b then cap else a * b in
+  let mul a b = mul_capped ~cap a b in
+  let extent from_ to_ =
+    if to_ < from_ then 0
+    else
+      let diff = Int64.(of_int to_ - of_int from_) in
+      if Int64.compare diff (Int64.of_int (cap - 1)) >= 0 then cap else Int64.to_int_exn diff + 1
+  in
+  let rec scalar (s : Low_level.scalar_t) =
+    match s with
+    | Local_scope { body; _ } -> stmt body
+    | Get_dynamic { dyn_value = v, _; _ } | Unop (_, (v, _)) -> scalar v
+    | Binop (_, (a, _), (b, _)) -> add (scalar a) (scalar b)
+    | Ternop (_, (a, _), (b, _), (c, _)) -> add (scalar a) (add (scalar b) (scalar c))
+    | Get_local _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> 0
+  and stmt (s : Low_level.t) =
+    match s with
+    | Noop | Comment _ | Declare_local _ -> 0
+    | Seq (a, b) -> add (stmt a) (stmt b)
+    | For_loop { from_; to_; body; _ } -> mul (extent from_ to_) (stmt body)
+    | If { cond = c, _; body } -> add (scalar c) (stmt body)
+    | Set { llsc; _ } | Set_local (_, llsc) -> add 1 (scalar llsc)
+    | Set_dynamic { dyn_value = v, _; llsc; _ } -> add 1 (add (scalar v) (scalar llsc))
+    | Set_from_vec { length; arg = v, _; _ } -> add (min cap length) (scalar v)
+    | Zero_out tn -> min cap (Tn.num_elems tn)
+    | Tile_mma { m; n; k; _ } ->
+        (* Saturate the MAC product at [cap] updates' worth before dividing, so a large tile still
+           reads as [cap] rather than wrapping. *)
+        let macs_cap =
+          if cap > Int.max_value / tile_mma_macs_per_update then Int.max_value
+          else cap * tile_mma_macs_per_update
+        in
+        let macs = mul_capped ~cap:macs_cap m (mul_capped ~cap:macs_cap n k) in
+        min cap (macs / tile_mma_macs_per_update)
+    (* These renderings have their own safety/opacity rules. Do not guess their cost here. *)
+    | Staged_compilation _ | Workgroup_barrier | Scan_loop _ -> cap
+  in
+  stmt llc
+
 module Calibration = struct
   (* The calibration TSV schema and the envelope fitter over it (gh-ocannl-514 phase 0). This module
      is the schema's single owner: rows are emitted through [to_line] (Autotune) and read back

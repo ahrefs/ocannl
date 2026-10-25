@@ -210,7 +210,7 @@ let seg_key seg =
     (Ir.Schedule_cache.canonicalize ~static_indices:[] ~with_placements:false seg)
 
 let default_preset seg =
-  if on_cpu then Sched.default_cpu ~min_parallel:1 seg
+  if on_cpu then Sched.default_cpu ~min_work:0 seg
   else Sched.default_gpu ~min_parallel:1 ~limits:device_limits seg
 
 let fission ~arity_cuts ~preset opt =

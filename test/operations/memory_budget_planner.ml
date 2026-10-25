@@ -186,6 +186,14 @@ let () =
 
 let () = Unix.putenv "OCANNL_BUFFER_ALIASING" "true"
 
+(* Section 3 compares two kernel shapes bitwise (recompute-at-use against the stored activations),
+   so the C compiler must not contract on its own: with gcc's default [-ffp-contract=fast], whether
+   a product fuses can differ between a pool chunk's vectorized body and its scalar remainder, and
+   the chunk boundaries differ between the two shapes once their loops run on the pool
+   (gh-ocannl-1458). The codegen's own FMAs are explicit, so pinning the compiler's licence off
+   changes nothing the comparison is about. *)
+let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"
+
 (* Layers 1 and 2: calibrate, then pin the selector's contract against the two calibrated ends. *)
 let baseline, minimum, mid, minimize_flips =
   let ctx, comp, _loss, _mem0 = build () in

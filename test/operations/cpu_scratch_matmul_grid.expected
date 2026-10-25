@@ -14,7 +14,7 @@ chain: every Grid loop renders on the pool: true
 chain: values equal the unscheduled compile's, bit for bit: true
 transposed: the product is scratch: true
 transposed: the consumer keeps its Grid: true
-transposed: the scratch producer stays serial: true
+transposed: the scratch producer's nest is Grid-typed too: true
 transposed: every Grid loop renders on the pool: true
 transposed: values equal the unscheduled compile's, bit for bit: true
 solo: the accumulated node is scratch: true

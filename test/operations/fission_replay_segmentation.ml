@@ -136,7 +136,7 @@ let lower comp =
    aggressive presets. *)
 let preset rut o =
   if is_gpu then Sched.default_gpu ~min_parallel:1 ~limits:rut.limits o
-  else if is_cpu then Sched.default_cpu ~min_parallel:1 o
+  else if is_cpu then Sched.default_cpu ~min_work:0 o
   else []
 
 let zero_sched rut tns = if is_gpu then Sched.zero_expansion ~limits:rut.limits tns else []
@@ -251,13 +251,13 @@ let () =
 
   (* The segmentation policy changes: block size, minimum parallelism and workgroup fill feed the
      default GPU schedule, hence the schedule-aware merge decision and the zero expansion; the CPU
-     minimum parallelism feeds the default CPU schedule. *)
+     minimum work feeds the default CPU schedule. *)
   List.iter
     [
       ("OCANNL_GPU_SCHEDULE_BLOCK_SIZE", "32");
       ("OCANNL_GPU_SCHEDULE_MIN_PARALLEL", "1000000");
       ("OCANNL_GPU_SCHEDULE_WORKGROUP_FILL", "1");
-      ("OCANNL_CPU_SCHEDULE_MIN_PARALLEL", "1000000");
+      ("OCANNL_CPU_SCHEDULE_MIN_WORK", "1000000");
     ]
     ~f:(fun (var, value) -> Unix.putenv var value);
   let policy_segmentation, _ =

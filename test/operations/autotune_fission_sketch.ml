@@ -138,7 +138,7 @@ let () =
       ~lowered_transform:(fun opt ->
         let preset o =
           if is_gpu then Sched.default_gpu ~min_parallel:1 ~limits o
-          else if is_cpu then Sched.default_cpu ~min_parallel:1 o
+          else if is_cpu then Sched.default_cpu ~min_work:0 o
           else []
         in
         let zero_sched tns = if is_gpu then Sched.zero_expansion ~limits tns else [] in
@@ -174,7 +174,7 @@ let () =
       ~lowered_transform:(fun opt ->
         let preset o =
           if is_gpu then Sched.default_gpu ~min_parallel:1 ~limits o
-          else if is_cpu then Sched.default_cpu ~min_parallel:1 o
+          else if is_cpu then Sched.default_cpu ~min_work:0 o
           else []
         in
         let zero_sched tns = if is_gpu then Sched.zero_expansion ~limits tns else [] in

@@ -95,8 +95,8 @@ iteration's first access a covering write — `Privatize` accumulators and gh-oc
 packed tiles; combined footprint capped for the pool workers' stacks). Under
 `dispatch_apply`, blocks cannot capture array declarations, so non-privatized locals
 accessed in the body are declared behind a `const` pointer alias. The new
-`Schedule.default_cpu` preset (config `automatic_cpu_schedule`,
-`cpu_schedule_min_parallel`) reuses the GPU annotator's analysis and just retypes each
+`Schedule.default_cpu` preset (config `automatic_cpu_schedule`, and a threshold now named
+`cpu_schedule_min_work`, gh-ocannl-1458) reuses the GPU annotator's analysis and just retypes each
 nest's outermost chain loop to `Grid`. Workgroup loops stay serial inside a chunk;
 barrier support via loop fission remains future work, as does the multi-device
 repurposing. Coverage: `test/operations/cpu_parallel.ml`.

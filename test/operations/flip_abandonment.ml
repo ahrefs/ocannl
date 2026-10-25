@@ -327,7 +327,7 @@ let cache_replay comp =
     in
     Option.value_exn !report
   in
-  (* The dune rule sets, on the command line, [cpu_schedule_min_parallel] off its default and
+  (* The dune rule sets, on the command line, [cpu_schedule_min_work] off its default and
      [autotune_keep_fraction] at it (["1"] against the read site's ["1."]), both Search_shaping, and
      [autotune_progress] (Execution_neutral). Only a value off its default is identity
      (gh-ocannl-1272). *)
@@ -335,7 +335,7 @@ let cache_replay comp =
   p
     "the trajectory's identity carries the Search_shaping key set off its default, not the one set \
      at it, and no other class's"
-    (String.is_substring shape ~substring:"cpu_schedule_min_parallel=32768;"
+    (String.is_substring shape ~substring:"cpu_schedule_min_work=32768;"
     && (not (String.is_substring shape ~substring:"autotune_keep_fraction"))
     && not (String.is_substring shape ~substring:"autotune_progress"));
   clean_cache "autotune_cache_flip_abandonment";

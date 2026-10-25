@@ -2639,12 +2639,13 @@ let fission_exposes_sites ~static_indices (opt : LL.optimized) tuples =
   | _ -> true
 
 (* gh-ocannl-1483: the default preset a segment gets in the tuner's fission pipelines. [`Search] is
-   the search's aggressive [min_parallel:1] thresholds, [`Config] the configured ones -- which, with
-   no [block_size], reproduce the untuned default pipeline's presets. *)
+   the search's ungated presets ([min_parallel:1] on GPU, [min_work:0] on CPU), [`Config] the
+   configured thresholds -- which, with no [block_size], reproduce the untuned default pipeline's
+   presets. *)
 let segment_preset ?block_size ~presets ~is_gpu ~is_cpu ~limits seg =
-  let min_parallel = match presets with `Search -> Some 1 | `Config -> None in
-  if is_gpu then Sched.default_gpu ?block_size ?min_parallel ~limits seg
-  else if is_cpu then Sched.default_cpu ?min_parallel seg
+  let search = match presets with `Search -> true | `Config -> false in
+  if is_gpu then Sched.default_gpu ?block_size ?min_parallel:(Option.some_if search 1) ~limits seg
+  else if is_cpu then Sched.default_cpu ?min_work:(Option.some_if search 0) seg
   else []
 
 (* gh-ocannl-1483: the fission pipeline every tuner call site segments under, in place on [opt]:
@@ -3008,11 +3009,12 @@ type fiss_flavor =
       block_size : int option;
       privatize : bool;
       config_thresholds : bool;
-          (** Use the config-default [min_parallel] thresholds instead of the search's
-              [min_parallel:1] — with [block_size = None] this reproduces the untuned default
-              pipeline ({!Sched.maybe_default_schedules}) exactly, so the candidate pool always
-              contains the behavior the user gets without tuning: on launch-overhead-bound workloads
-              the aggressive [min_parallel:1] presets can all lose to it. *)
+          (** Use the config-default thresholds ([min_parallel] on GPU, [min_work] on CPU) instead
+              of the search's ungated presets ([min_parallel:1] / [min_work:0]) — with
+              [block_size = None] this reproduces the untuned default pipeline
+              ({!Sched.maybe_default_schedules}) exactly, so the candidate pool always contains the
+              behavior the user gets without tuning: on launch-overhead-bound workloads the
+              aggressive ungated presets can all lose to it. *)
     }
   | F_saved of SC.saved_segment list * move option
       (** Replay of a fissioned winner (gh-ocannl-1164): the routine is cut where the saved segments
@@ -3528,12 +3530,12 @@ let default_seed_label ~backend_name =
    advisory containment -- codegen carries the same typed cause -- only to preserve "best viable
    model candidate" selection without compiling every contender. [limits]' shuffle width lets it see
    the barriers the warp-shuffle renderings insert (gh-ocannl-1238), as codegen's does. *)
-let validate_segments_for_model ~(limits : Ir.Backend_intf.hardware_limits)
+let validate_segments_for_model ?(fork_join = false) ~(limits : Ir.Backend_intf.hardware_limits)
     (segs : LL.optimized list) =
   let warp_size = Option.value limits.simdgroup_width ~default:0 in
   List.iter segs ~f:(fun (o : LL.optimized) ->
       LL.validate_parallel_classified ~warp_size ~reassociable:Ir.Online_softmax.reassociable_local
-        o.LL.optimize_ctx.LL.placements o.LL.llc);
+        ~fork_join o.LL.optimize_ctx.LL.placements o.LL.llc);
   segs
 
 let seeded_preset ~limits seg = Sched.default_gpu ~limits seg
@@ -5851,7 +5853,7 @@ let model_default ?name ?report ctx comp bindings =
        way back to default. The validator is typed, so only an expected schedule rejection is
        excluded; compiler assertions and other failures still escape. *)
     let score_valid opts =
-      match validate_segments_for_model ~limits opts with
+      match validate_segments_for_model ~fork_join:is_cpu ~limits opts with
       | opts -> score opts
       | exception Outcome.Cause_at _ ->
           Int.incr n_rejected;
@@ -6116,7 +6118,7 @@ let model_default ?name ?report ctx comp bindings =
         | `Default -> default_segs ()
         | `Seeded seeding ->
             seeded_changed := false;
-            validate_segments_for_model ~limits
+            validate_segments_for_model ~fork_join:is_cpu ~limits
               (seeded_segs
                  ~on_choice:(fun c ->
                    seeded_changed :=
@@ -6126,11 +6128,11 @@ let model_default ?name ?report ctx comp bindings =
                  seeding opt)
         | `Whole p ->
             let opt = prelude ~hermetic:false opt in
-            validate_segments_for_model ~limits
+            validate_segments_for_model ~fork_join:is_cpu ~limits
               [ Sched.apply_classified ~static_indices (sketch_schedule ~accum_prec ~p opt) opt ]
         | `Fiss (plan, entries) ->
             let opt = prelude ~hermetic:false opt in
-            validate_segments_for_model ~limits (apply_fiss ~plan ~entries opt)
+            validate_segments_for_model ~fork_join:is_cpu ~limits (apply_fiss ~plan ~entries opt)
       in
       match apply_action () with
       | segs ->
@@ -6437,7 +6439,7 @@ let model_explain ?name ?(coalesced = false) ctx comp bindings =
     let explain_leaves ~label ~admits prog leaves =
       List.filter_map leaves ~f:(fun p ->
           match
-            validate_segments_for_model ~limits
+            validate_segments_for_model ~fork_join:is_cpu ~limits
               [
                 Sched.apply_classified ~static_indices
                   (sketch_schedule ~accum_prec ~p prog)
@@ -8168,8 +8170,8 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
            the untuned default IS the unscheduled serial form, so the reference is the base digest —
            timed on CPU, deliberately unmeasured on GPU (gh-ocannl-532). With [schedule_fission]
            off, the untuned default is the whole-routine config-thresholds annotation, which no
-           candidate reproduces (the whole-routine presets use [min_parallel:1]): no attribution,
-           rather than labeling a differently-scheduled pipeline as the default. *)
+           candidate reproduces (the whole-routine presets are ungated): no attribution, rather than
+           labeling a differently-scheduled pipeline as the default. *)
         let auto_sched = Sched.automatic_schedule_active ~backend_name:backend in
         (* A candidate label only when scheduling is active: inactive, the default is the base
            digest attributed right here, never a seed. *)
@@ -9064,8 +9066,8 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                  (* Each fissioned preset is seeded plain and privatized (the latter dedups away by
                     digest when no accumulator is eligible). The [config_thresholds] seeds reproduce
                     the untuned default pipeline exactly (plus its privatized variant), so the
-                    winner is never worse than not tuning — the aggressive [min_parallel:1] presets
-                    can all lose to it on launch-overhead-bound workloads. *)
+                    winner is never worse than not tuning — the aggressive ungated presets can all
+                    lose to it on launch-overhead-bound workloads. *)
                  List.concat_map [ false; true ] ~f:(fun privatize ->
                      Fiss (F_preset { block_size = None; privatize; config_thresholds = true })
                      :: block_size_presets (fun block_size ->

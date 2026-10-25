@@ -112,7 +112,7 @@ let limits = Context.hardware_limits (Context.auto ())
 
 let preset opt =
   if is_gpu then Sched.default_gpu ~limits opt
-  else if is_cpu then Sched.default_cpu ~min_parallel:1 opt
+  else if is_cpu then Sched.default_cpu ~min_work:0 opt
   else []
 
 let zero_sched _tns = []

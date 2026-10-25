@@ -24,9 +24,9 @@ open Ocannl.Operation.DSL_modules
 open Verdict.Claims
 
 let () =
-  (* 128 x 128 output cells reach [cpu_schedule_min_parallel], so on cc the untuned default is
-     parallel and distinct from the serial baseline; below it, the default seed dedups against the
-     baseline and is timed only under the label ["baseline"]. *)
+  (* 128 x 128 output cells reach [cpu_schedule_min_work], so on cc the untuned default is parallel
+     and distinct from the serial baseline; below it, the default seed dedups against the baseline
+     and is timed only under the label ["baseline"]. *)
   let n = 128 in
   let a =
     TDSL.ndarray

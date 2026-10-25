@@ -150,10 +150,11 @@ a sweep run with `BENCH_KERNEL_TABLE=1 BENCH_CELL_LOG_DIR=<cell-log-dir>`. The f
 adds, `s<i>res`) and `sc1x1s2` (the stride-2 1×1 shortcuts, `s<i>sc`); `--per-site` adds one
 column per site. A kernel counts toward every family it writes names of, so a fused kernel is in
 several columns and the columns do not sum to the step; a kernel writing only unnamed nodes (a
-conv's raw output) is `unattributed`. On `cc` the whole step is one kernel, so there every site
-cell is the step: cite the step cell. A diagnostic per-site split on `cc` is still possible:
-`bench_conv_diag` with `BENCH_SEG_TIMES=1` under `OCANNL_CPU_SCHEDULE_MIN_PARALLEL=1024
-OCANNL_CC_PARALLEL_GRID=none` times single-threaded segments that sum to the serial step
+conv's raw output) is `unattributed`. On `cc` cite the step cell: its site cells are only
+as fine as the step's segmentation. A diagnostic per-site split on `cc` is still possible:
+`bench_conv_diag` with `BENCH_SEG_TIMES=1` under `OCANNL_CC_PARALLEL_GRID=none` (lower
+`OCANNL_CPU_SCHEDULE_MIN_WORK` if a nest stays unannotated and its segment coalesces) times
+single-threaded segments that sum to the serial step
 (gh-ocannl-1549; [agent note](../docs/agent-notes/training-and-performance.md)). Each issue's cell:
 
 | issue | cell |

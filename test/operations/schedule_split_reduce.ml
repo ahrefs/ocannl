@@ -128,7 +128,7 @@ let census ?label (llc : LL.t) : int * int * int =
   (!ifs, !loops, !labeled)
 
 let preset opt =
-  if on_cpu then Sched.default_cpu ~min_parallel:1 opt else Sched.default_gpu ~min_parallel:1 opt
+  if on_cpu then Sched.default_cpu ~min_work:0 opt else Sched.default_gpu ~min_parallel:1 opt
 
 (* Fission the (already Split_reduce-transformed) routine and annotate each segment with the default
    preset — the plural-transform flow of gh-484: the partials edge cuts, each pass gets its own

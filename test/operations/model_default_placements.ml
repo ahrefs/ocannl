@@ -122,9 +122,10 @@ let () =
    picked placements applies its pipeline last, so that call is inside the picked compile (the pick
    must fire, as above). A clean run's count is checked stable first, since the injected run is
    located by it. The graph keeps the flip -- [y = exp u] read twice, now within one elementwise
-   statement -- at [cpu_schedule_min_parallel]'s default extent, so the default CPU pipeline is not
-   empty: it retypes the parallel loop to [Grid], which is what gives the compile op applications to
-   fault (the graph above, whose consumers are scalar reductions, applies none). *)
+   statement -- at 16384 cells, each costing at least a store, so it reaches
+   [cpu_schedule_min_work]'s default and the default CPU pipeline is not empty: it retypes the
+   parallel loop to [Grid], which is what gives the compile op applications to fault (the graph
+   above, whose consumers are scalar reductions, applies none). *)
 let () =
   let m = 16384 in
   let uv = Array.init m ~f:(fun i -> Float.of_int (i % 9) *. 0.25) in

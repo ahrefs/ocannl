@@ -104,60 +104,12 @@ let grid_min_updates () =
   | None ->
       invalid_arg ("cc_grid_min_updates: expected an integer (0 disables the floor), got " ^ setting)
 
-(* How many multiply-accumulates of a [Tile_mma] statement [grid_update_count] charges as one scalar
-   update. On cc a [Tile_mma] renders as a register-tiled vector micro-kernel, which retires on the
-   order of vector lanes x FMA ports MACs per cycle (8 x 2 on AVX2, 4 x 4 on NEON) where a scalar
-   update costs about a cycle. Charging MACs at par let a 2 x (16 x 32 x 32) launch pass the floor
-   and lose 10x (gh-ocannl-1564). A fixed constant, like the floor, so eligibility is
-   machine-independent; a [Tile_mma] that falls back to its scalar micro-kernel is undercharged by
-   this factor. *)
-let tile_mma_macs_per_update = 16
+(* The launch-work estimate: {!Cost_model.fork_join_updates}, shared with the CPU default
+   annotator's per-dispatch gate (gh-ocannl-1458). *)
+let tile_mma_macs_per_update = Cost_model.tile_mma_macs_per_update
 
-(* Scalar updates per invocation, capped at [cap] (default: the default floor) before arithmetic can
-   overflow. Conditional bodies are charged in full: decline only when even that upper estimate is
-   small. Scalar Local_scope bodies matter because an apparently single store may contain an entire
-   reduction. A [Tile_mma] is charged its covered MACs over [tile_mma_macs_per_update]. *)
 let grid_update_count ?(cap = default_grid_min_updates) (llc : Low_level.t) =
-  let cap = Int.max 1 cap in
-  let add a b = min cap (a + b) in
-  let mul_capped ~cap a b = if a = 0 || b = 0 then 0 else if a > cap / b then cap else a * b in
-  let mul a b = mul_capped ~cap a b in
-  let extent from_ to_ =
-    if to_ < from_ then 0
-    else
-      let diff = Int64.(of_int to_ - of_int from_) in
-      if Int64.compare diff (Int64.of_int (cap - 1)) >= 0 then cap else Int64.to_int_exn diff + 1
-  in
-  let rec scalar (s : Low_level.scalar_t) =
-    match s with
-    | Local_scope { body; _ } -> stmt body
-    | Get_dynamic { dyn_value = v, _; _ } | Unop (_, (v, _)) -> scalar v
-    | Binop (_, (a, _), (b, _)) -> add (scalar a) (scalar b)
-    | Ternop (_, (a, _), (b, _), (c, _)) -> add (scalar a) (add (scalar b) (scalar c))
-    | Get_local _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> 0
-  and stmt (s : Low_level.t) =
-    match s with
-    | Noop | Comment _ | Declare_local _ -> 0
-    | Seq (a, b) -> add (stmt a) (stmt b)
-    | For_loop { from_; to_; body; _ } -> mul (extent from_ to_) (stmt body)
-    | If { cond = c, _; body } -> add (scalar c) (stmt body)
-    | Set { llsc; _ } | Set_local (_, llsc) -> add 1 (scalar llsc)
-    | Set_dynamic { dyn_value = v, _; llsc; _ } -> add 1 (add (scalar v) (scalar llsc))
-    | Set_from_vec { length; arg = v, _; _ } -> add (min cap length) (scalar v)
-    | Zero_out tn -> min cap (Tn.num_elems tn)
-    | Tile_mma { m; n; k; _ } ->
-        (* Saturate the MAC product at [cap] updates' worth before dividing, so a large tile still
-           reads as [cap] rather than wrapping. *)
-        let macs_cap =
-          if cap > Int.max_value / tile_mma_macs_per_update then Int.max_value
-          else cap * tile_mma_macs_per_update
-        in
-        let macs = mul_capped ~cap:macs_cap m (mul_capped ~cap:macs_cap n k) in
-        min cap (macs / tile_mma_macs_per_update)
-    (* These renderings have their own safety/opacity rules. Do not guess their cost here. *)
-    | Staged_compilation _ | Workgroup_barrier | Scan_loop _ -> cap
-  in
-  stmt llc
+  Cost_model.fork_join_updates ~cap llc
 
 (* Census of [Tile_mma] statement renderings, collected during codegen while [mma_census_enabled]
    (gh-ocannl-479): "the tensorized candidate lost" and "the tensorized candidate never ran
@@ -4209,13 +4161,17 @@ module C_syntax (B : C_syntax_config) = struct
     level (Low_level.flat_lines [ body ]) ~loops:[]
 
   (* Whether the body of an outermost [Grid] loop over [sym] tolerates its iterations being
-     partitioned into chunks that execute on parallel CPU threads. Materialized accesses are already
-     safe: [validate_parallel] requires every materialized write to cover [sym], so chunks write
-     disjoint elements, and nests execute as separate parallel loops with a join in between
-     (stronger than the GPU's single launch). The hazards are the stack arrays of [Local]-placement
-     nodes: on GPU each thread gets a private copy, so a GPU-valid kernel may legally write them
-     grid-invariantly (identical values per iteration) -- under one shared function-scope array that
-     is a data race. A local written under the loop must satisfy one of:
+     partitioned into chunks that execute on parallel CPU threads. Materialized accesses are the
+     annotating pass's obligation: the default CPU preset proves the loop's own iterations
+     independent ({!Schedule.default_cpu}'s per-nest hazard analysis over exactly this symbol), and
+     the renderer's store-separation check ([refuse_unseparated_thread_write]) refuses a store this
+     loop does not separate. Across statements nothing needs proving: nests execute as separate
+     parallel loops with a join in between, and code outside [Grid] loops runs once on the calling
+     thread — the fork-join model [validate_parallel ~fork_join] encodes (gh-ocannl-1458). The
+     hazards are the stack arrays of [Local]-placement nodes: on GPU each thread gets a private
+     copy, so a GPU-valid kernel may legally write them grid-invariantly (identical values per
+     iteration) -- under one shared function-scope array that is a data race. A local written under
+     the loop must satisfy one of:
 
      - Shared rule: every access to it (read or write) mentions [sym], and all accesses agree on
      every index component that mentions [sym] -- the same agreement rule as the default annotator's
@@ -8071,7 +8027,11 @@ module C_syntax (B : C_syntax_config) = struct
     (* gh-ocannl-1238: with this backend's shuffle width, so the validator sees the barriers the
        warp-shuffle and lane all-reduce renderings insert, not only the IR's own. *)
     Low_level.validate_parallel_classified ~warp_size:B.warp_size
-      ~reassociable:Online_softmax.reassociable_local optimize_ctx.Low_level.placements llc;
+      ~reassociable:Online_softmax.reassociable_local
+        (* gh-ocannl-1458: a backend binding no hardware [Grid] index renders each [Grid] loop as a
+           joined pool dispatch (or a serial loop), so code outside [Grid] loops runs once. *)
+      ~fork_join:(Option.is_none (B.hardware_index ~kind:`Grid ~slot:0))
+      optimize_ctx.Low_level.placements llc;
     (* Launch-extent guards (construct-then-fold, axis-types proposal §2), only for kinds this
        backend binds in hardware -- the serial fallback iterates the true extent. *)
     let llc =

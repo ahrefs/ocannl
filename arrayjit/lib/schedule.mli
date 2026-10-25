@@ -820,12 +820,12 @@ val aligned_chains :
   ?expanded_zeros:Tn.t list ->
   Low_level.optimized ->
   (Low_level.t * (Indexing.symbol * int) list) list option
-(** The cross-nest analysis behind {!default_gpu} / {!default_cpu}, as data: per top-level loop nest
-    (paired with the nest statement itself), the outermost loops that may carry hardware geometry —
-    already trimmed to the common aligned prefix each dependency component admits, so chain position
-    [k] of two linked nests denotes the same hardware thread coordinate and the two extents at
-    position [k] are equal. [None] when the analysis bails, i.e. when the kernel is not safely
-    parallelizable at all.
+(** The cross-nest analysis behind {!default_gpu} (the CPU preset proves nests separately), as data:
+    per top-level loop nest (paired with the nest statement itself), the outermost loops that may
+    carry hardware geometry — already trimmed to the common aligned prefix each dependency component
+    admits, so chain position [k] of two linked nests denotes the same hardware thread coordinate
+    and the two extents at position [k] are equal. [None] when the analysis bails, i.e. when the
+    kernel is not safely parallelizable at all.
 
     [max_chain] caps each nest's chain length; the default 2 mirrors the presets' one-Grid +
     one-Workgroup shape. A caller supplying its own geometry per chain position passes the arity it
@@ -979,21 +979,36 @@ val default_gpu :
     slower than a CPU core; the remaining small threshold keeps sub-simdgroup-scale programs fully
     serial so their segments coalesce and placements stay unchanged). *)
 
-val default_cpu : ?min_parallel:int -> Low_level.optimized -> schedule
-(** The default CPU annotator preset: the same conservative analysis as {!default_gpu}, but each
-    nest's outermost parallelizable loop is merely retyped to [Grid] — pool-backed Grid rendering in
-    the C backend (docs/proposals/gh-ocannl-164.md) partitions that loop into contiguous chunks
-    executing on a process-global native thread pool, and a [Workgroup] split would only add loop
-    structure that runs serially inside a chunk. One departure from the GPU analysis
-    (gh-ocannl-1343): a nest that writes only scratch ([Local], a function-scope array on the C
-    backends) takes its chain from those writes instead of staying serial -- on GPU such a nest runs
-    whole in every thread over a per-thread copy, on the C backends a serial nest runs once, on one
-    core. Where linking such a nest to its readers bails, or trims a reader's chain so that the
-    kernel falls below [min_parallel] where the plain analysis met it, the plain analysis is the
-    result, and the C renderer's rule for locals under a pool-parallel loop stays the final word on
-    rendering. Returns the empty schedule below [min_parallel] (default from config
-    [cpu_schedule_min_parallel] = 16384; task fan-out costs more than a GPU launch is worth on small
-    kernels). *)
+val default_cpu : ?min_work:int -> Low_level.optimized -> schedule
+(** The default CPU annotator preset (gh-ocannl-1458): per top-level nest, at most one loop is
+    retyped to [Grid] -- pool-backed Grid rendering in the C backend
+    (docs/proposals/gh-ocannl-164.md) partitions it into contiguous chunks on a process-global
+    native thread pool, and a [Workgroup] split would only add loop structure that runs serially
+    inside a chunk. The candidate is the nest's first path loop whose index is a plain [Iterator] in
+    every materialized write -- in every scratch write for a nest writing only scratch ([Local], one
+    function-scope array on the C backends; gh-ocannl-1343) -- with at least two iterations and the
+    per-nest hazard analysis passing over that ONE symbol: the loop actually made parallel is the
+    one proven independent.
+
+    No cross-nest alignment, unlike {!default_gpu}. The C renderer runs each pool-parallel [Grid]
+    loop as one synchronous dispatch ([dispatch_apply] / [#pragma omp parallel for]) that joins
+    before the next statement, and everything outside those loops once, on the calling thread, in
+    program order. So two accesses in different top-level statements are ordered by a join for every
+    placement -- materialized buffers and shared function-scope locals alike; a [Local] is
+    privatized per chunk only when all its accesses in the kernel sit inside that loop's body, so no
+    privatized value crosses statements; within one dispatch the hazard proof,
+    [C_syntax.parallel_grid_safe] (locals) and the renderer's store-separation check decide; a
+    [Grid] loop under serial loops forks and joins per instance. {!Low_level.validate_parallel}'s
+    [~fork_join] mode is the validator's side of the same model: writes outside every [Grid] loop
+    are not subject to coverage, so a serial nest may sit beside a parallel one. A statement the
+    access scan cannot model, or a nest with no candidate or a failed proof, stays serial without
+    affecting its siblings.
+
+    Profitability is per dispatch: a candidate is retyped only when one run of it does at least
+    [min_work] scalar updates ({!Cost_model.fork_join_updates}, the renderer's launch-floor units;
+    enclosing serial iterations and sibling nests do not count). Default from config
+    [cpu_schedule_min_work] = 16384; a non-positive value disables the gate (the tuner's ungated
+    presets pass [~min_work:0]). *)
 
 val log_launches : bool Lazy.t
 (** Config [schedule_log_launches]: backend [compile] logs one stderr line per compiled segment with
@@ -1042,8 +1057,8 @@ val search_shaping_key_read : backend_name:string -> string -> bool
 (** Whether a search on [backend_name] can read the default pipeline's configuration key [key]
     (gh-ocannl-1331): the GPU-only keys ([automatic_gpu_schedule], [gpu_schedule_*], the lane modes,
     [gpu_fission_keep_mapping]) exactly where {!backend_is_gpu} holds, the CPU-only ones
-    ([automatic_cpu_schedule], [cpu_schedule_min_parallel]) where {!backend_is_cpu} does, and any
-    other key everywhere. [Autotune.search_shaping_key_read] adds the seeded plan's keys. *)
+    ([automatic_cpu_schedule], [cpu_schedule_min_work]) where {!backend_is_cpu} does, and any other
+    key everywhere. [Autotune.search_shaping_key_read] adds the seeded plan's keys. *)
 
 val automatic_schedule_active : backend_name:string -> bool
 (** Whether {!maybe_default_schedule} (and {!maybe_default_schedules}) would apply a default preset
@@ -1062,11 +1077,10 @@ val default_schedule_fingerprint : backend_name:string -> string
     backend: the {!automatic_schedule_active} gate (["inactive"] when it is off — the untuned
     default is then the unscheduled serial form), the policy's version tags (bumped when a change
     redefines the untuned default), the [schedule_fission] gate, and the preset thresholds
-    ([gpu_schedule_block_size] / [gpu_schedule_min_parallel] / [cpu_schedule_min_parallel]).
-    Diagnostics recorded against one default pipeline (e.g. the autotuner's [default_ms],
-    gh-ocannl-552) compare fingerprints to detect that a config change redefined the default (Codex
-    P2 on PR #279). Does not cover per-device hardware limits — cache consumers already key per
-    backend. *)
+    ([gpu_schedule_block_size] / [gpu_schedule_min_parallel] / [cpu_schedule_min_work]). Diagnostics
+    recorded against one default pipeline (e.g. the autotuner's [default_ms], gh-ocannl-552) compare
+    fingerprints to detect that a config change redefined the default (Codex P2 on PR #279). Does
+    not cover per-device hardware limits — cache consumers already key per backend. *)
 
 val maybe_default_schedule :
   backend_name:string ->

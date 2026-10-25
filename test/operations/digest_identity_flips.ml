@@ -131,15 +131,15 @@ let () =
      copied into [Utils.settings] at startup, so poking the config file would have flipped nothing
      and left an assertion that cannot go red — worse than no assertion. So the settings-borne one
      is mutated in the record, and the config-borne ones are keys a compile really reads:
-     [cpu_schedule_min_parallel] shapes the untuned default pipeline, and [ll_ident_style] renames
+     [cpu_schedule_min_work] shapes the untuned default pipeline, and [ll_ident_style] renames
      identifiers in the emitted code, which the canonical rendering alpha-renames away. *)
-  set_config "cpu_schedule_min_parallel" "1";
+  set_config "cpu_schedule_min_work" "1";
   set_config "ll_ident_style" "name_only";
   let precision0 = Utils.settings.print_decimals_precision in
   Utils.settings.print_decimals_precision <- precision0 + 7;
   let digest_n, key_n = identity_of ctx in
   Utils.settings.print_decimals_precision <- precision0;
-  unset_config "cpu_schedule_min_parallel";
+  unset_config "cpu_schedule_min_work";
   unset_config "ll_ident_style";
   p "search-shaping and execution-neutral knobs leave the identity untouched"
     (String.equal digest0 digest_n && String.equal key0 key_n);
