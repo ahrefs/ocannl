@@ -5,3 +5,15 @@ one operation count fits nothing: true
 on CUDA/HIP every swept extent is timed, seeded as one scalar kernel's contraction: true
 on CUDA/HIP the kernel's operations grow with the reduction extent: true
 where the seeded default does not apply, the sweep refuses rather than time the default: true
+the fill fit recovers the saturating threads and the full-fill rate: true
+the pre-fill fit over a partially filled launch reads the full-fill rate times its fill: true
+under the fill model the same sweep reads the full-fill rate: true
+the uncapped form fits the capped sweep worse: true
+a sweep that never leaves full fill identifies no saturation: true
+a point with tile-MMA work refuses: the fill is a scalar fit: true
+a single geometry whose every point is partial identifies no saturation: true
+the rate is the caller's lead geometry's, whatever the series' names sort to: true
+fewer than three points refuse: true
+on a GPU backend every launch point is timed, one scalar context of 64-thread blocks: true
+on a GPU backend the launch's blocks grow with the output: true
+without the GPU sketch family the launch sweep refuses: true

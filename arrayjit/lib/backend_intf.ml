@@ -367,10 +367,12 @@ type hardware_limits = {
           ranking score's compute leg for scalar work (gh-ocannl-1442,
           {!Ir.Cost_model.ranking_seconds}), where {!field-peak_flops} stays the bound's ceiling and
           keeps pricing [Tile_mma] work. The slope of [tools/calibrate_issue_rate.exe]'s sweep of
-          the seeded weight-gradient sketch. Read as at most {!field-peak_flops}. Overridable by
-          config [model_issue_rate]; [None] where unmeasured, which prices scalar work at
-          {!field-peak_flops} as before. Same readers and same cache identity as
-          {!field-cache_capacity_bytes}. *)
+          the seeded weight-gradient sketch — or, where {!field-fill_threads} is set, the full-fill
+          rate its launch sweep fits jointly with it (gh-ocannl-1479): the two are one calibration,
+          and a pre-fill rate under a fill model double-counts the calibration kernel's partial
+          fill. Read as at most {!field-peak_flops}. Overridable by config [model_issue_rate];
+          [None] where unmeasured, which prices scalar work at {!field-peak_flops} as before. Same
+          readers and same cache identity as {!field-cache_capacity_bytes}. *)
   dram_bandwidth : float option; [@sexp.option]
       (** [Untimed]: the DRAM rate kernels achieve, in bytes/s — the ranking score's DRAM tier and
           distinct-byte charge (gh-ocannl-1442), where {!field-peak_memory_bandwidth} stays the
@@ -378,6 +380,21 @@ type hardware_limits = {
           {!field-peak_memory_bandwidth}. Overridable by config [model_dram_bandwidth]; [None] where
           unmeasured, which prices DRAM traffic at {!field-peak_memory_bandwidth} as before. Same
           readers and same cache identity as {!field-cache_capacity_bytes}. *)
+  multiprocessors : int option; [@sexp.option]
+      (** [Untimed]: the device's multiprocessor (SM / CU / GPU core) count — the [P] of the ranking
+          score's launch fill (gh-ocannl-1479, {!Ir.Cost_model.context_fill}). Queried on CUDA and
+          HIP; [None] elsewhere (Metal publishes no core count). Overridable by config
+          [model_multiprocessors]. The launch fill applies only when both this and
+          {!field-fill_threads} resolve. Same readers and same cache identity as
+          {!field-cache_capacity_bytes}. *)
+  fill_threads : int option; [@sexp.option]
+      (** [Untimed]: the threads per multiprocessor at which a register-blocktiled kernel's scalar
+          issue saturates — the [t] of the launch fill (gh-ocannl-1479). A FITTED constant of the
+          launch sweep of [tools/calibrate_issue_rate.exe], jointly with {!field-issue_rate}, which
+          it normalizes (the rate is then a full-fill rate); not the physical residency. Per-class
+          advisories where measured, overridable by config [model_fill_threads]; [None] elsewhere,
+          which leaves the compute leg as before. Same readers and same cache identity as
+          {!field-cache_capacity_bytes}. *)
   native_fp16_arithmetic : bool;
       (** Whether 16-bit float arithmetic executes natively at twice f32's lane count
           (gh-ocannl-516: ARMv8.2-FP16, AVX512-FP16). [false] covers both "no [_Float16] on this
@@ -779,6 +796,8 @@ let no_hardware_limits =
     cache_bandwidth = None;
     issue_rate = None;
     dram_bandwidth = None;
+    multiprocessors = None;
+    fill_threads = None;
     native_fp16_arithmetic = false;
     simdgroup_width = None;
     lane_scalar_recompute_cheap = false;
@@ -855,6 +874,8 @@ let limits_key
        cache_bandwidth = _;
        issue_rate = _;
        dram_bandwidth = _;
+       multiprocessors = _;
+       fill_threads = _;
        native_fp16_arithmetic;
        simdgroup_width;
        lane_scalar_recompute_cheap;
@@ -890,6 +911,8 @@ type untimed_limits = {
   cache_rate : float option;
   scalar_rate : float option;  (** {!field-hardware_limits.issue_rate}. *)
   dram_rate : float option;  (** {!field-hardware_limits.dram_bandwidth}. *)
+  core_count : int option;  (** {!field-hardware_limits.multiprocessors}. *)
+  saturation_threads : int option;  (** {!field-hardware_limits.fill_threads}. *)
 }
 (** The [Untimed] fields' readings, the one accessor their readers go through
     ([test/operations/limits_field_classes] refuses a direct read elsewhere). *)
@@ -901,6 +924,8 @@ let untimed_limits (l : hardware_limits) : untimed_limits =
     cache_rate = l.cache_bandwidth;
     scalar_rate = l.issue_rate;
     dram_rate = l.dram_bandwidth;
+    core_count = l.multiprocessors;
+    saturation_threads = l.fill_threads;
   }
 
 (** A base for [{ minimal_mma_capability with ... }] literals, so adding a field to

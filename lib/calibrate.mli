@@ -116,6 +116,9 @@ type issue_point = {
       (** The contraction kernel's ranking score under the configuration in force
           ({!Autotune.ranking_ms}). *)
   ip_bound_ms : float option;  (** Its distinct-cell roofline lower bound. *)
+  ip_contexts : Ir.Cost_model.launch_context list;
+      (** The contraction kernel's parallel contexts ({!Ir.Cost_model.launch_contexts}): what a
+          launch-fill model needs to predict the point (gh-ocannl-1479). *)
 }
 (** One point of the {!issue_sweep}. *)
 
@@ -145,5 +148,99 @@ type issue_fit =
     }
   | Issue_unfittable of string  (** Why no line fits: too few points, or no growth. *)
 
-val fit_issue_rate : issue_point list -> issue_fit
-(** The least-squares line [time = latency + ops / rate] over the timed points with operations. *)
+val fit_issue_rate : ?fill:Ir.Cost_model.fill_model -> issue_point list -> issue_fit
+(** The least-squares line [time = latency + ops / rate] over the timed points with operations;
+    under [fill] (gh-ocannl-1479), each point's operations divided by its kernel's scalar launch
+    fill ({!Ir.Cost_model.launch_fill} of [ip_contexts]): the fill-normalized rate, equal to the
+    plain one where the calibration kernel fills the device. *)
+
+(** {2 Launch-fill calibration (gh-ocannl-1479)}
+
+    The ranking score prices a kernel's scalar work at the issue rate times its launch fill
+    ({!Ir.Cost_model.context_fill}): [min 1 (B * min T t / (P * t))] for [B] blocks of [T] threads
+    on [P] multiprocessors saturating at [t] threads each. [P] is the device's; [t] and the
+    full-fill issue rate are fitted together, on a sweep that leaves full fill: one PINNED scalar
+    blocktile geometry per series (never the seeding's size-dependent choice, which would mix
+    geometries of different rates), over output sizes from a handful of blocks to many, at two block
+    widths so a saturation above the narrower block's threads is identifiable. *)
+
+type launch_point = {
+  lp_geometry : string;  (** The pinned leaf's [bm x bn x bk / tm x tn]. *)
+  lp_m : int;
+  lp_n : int;  (** The output's extents. *)
+  lp_k : int;  (** The reduction extent, sized so the kernel's work is about the sweep's target. *)
+  lp_contexts : Ir.Cost_model.launch_context list;
+      (** The shipped kernels' parallel contexts ({!Ir.Cost_model.launch_contexts}). *)
+  lp_ms : float;  (** The routine's best synced wall time over the repeats, in milliseconds. *)
+}
+
+val launch_sweep :
+  ?geometries:(int * int * int * int * int) list ->
+  ?sizes:int list ->
+  ?target_ops:int ->
+  ?max_k:int ->
+  ?repeats:int ->
+  Context.t ->
+  launch_point list
+(** [launch_sweep ctx] times [dw[o,i] = sum_k dy[k,o] * x[k,i]] at each square output size of
+    [sizes] (default 32 to 1024 in powers of two) a geometry of [geometries] tiles exactly (default
+    [32x32x8/4x4], 64 threads a block, and [64x64x8/4x4], 256), compiled through
+    {!Autotune.pinned_sketch_transform} with that geometry, at the power-of-two reduction extent (at
+    most [max_k], default [2^20]) putting about [target_ops] (default [2^31]) operations in the
+    kernel. Raises {!Utils.User_error} on a backend without the GPU sketch family, or where a
+    geometry is no leaf of the family at a size. *)
+
+type fill_form =
+  | Capped  (** {!Ir.Cost_model.context_fill}: each block counts at most [t] threads. *)
+  | Uncapped  (** [min 1 (B * T / (P * t))]: the alternative the fit reports for comparison. *)
+
+val effective_ops :
+  ?form:fill_form ->
+  multiprocessors:int ->
+  fill_threads:int ->
+  Ir.Cost_model.launch_context list ->
+  float
+(** The scalar contexts' operations, each divided by its fill under [form] (default [Capped]). *)
+
+type fill_fit =
+  | Fill_fit of {
+      cores : int;  (** The [P] the fit was given, the [model_multiprocessors]. *)
+      saturation : int;  (** The fitted [t], the [model_fill_threads]. *)
+      rate : float;
+          (** The full-fill scalar operation rate, operations/s: the normalized [model_issue_rate].
+          *)
+      max_residual : float;  (** The largest relative error of the fitted line over the points. *)
+      partial_points : int;  (** Points below 0.9 fill under the fitted [t]. *)
+      points : int;  (** The points fitted. *)
+      starved_points : int;
+          (** Points left out as latency-starved: below [starved] of their geometry's best
+              throughput. *)
+      raw_rate : float option;
+          (** The same points' proportional fit over RAW scalar operations — what a fit blind to the
+              launch reads off them. *)
+      raw_residual : float option;
+      uncapped : (int * float) option;
+          (** The best [t] and its largest residual under the [Uncapped] form, beside the capped
+              fit: which form the data prefers. *)
+    }
+  | Fill_unfittable of string
+      (** Too few points, a point with tile-MMA work, no finite fit, no geometry whose own points
+          both reach and fall below full fill under the best [t] (each series' rate would absorb any
+          saturation), or a sweep that never leaves full fill under the best [t] (fewer than two
+          points below 0.9 fill): no saturation is identified. *)
+
+val default_fill_candidates : int list
+
+val fit_fill :
+  ?candidates:int list -> ?starved:float -> multiprocessors:int -> launch_point list -> fill_fit
+(** For each candidate [t] (default {!default_fill_candidates}), per geometry, the proportional fit
+    [time = effective_ops / rate] minimizing the squared relative residuals — per geometry, as a
+    wider tile reuses more and runs at its own rate while the saturation is the device's; relative,
+    as a launch sweep's times span orders of magnitude; through the origin, as the sweep holds the
+    operations fixed and an intercept would trade against the rate (the score prices no latency).
+    The candidate with the smallest summed squared relative residuals wins; [rate] is the lead
+    geometry's (the first point's: the seeded sketch's). Points below [starved] (default 1/8) of
+    their geometry's best throughput are left out: a few warps per multiprocessor with no latency
+    hidden sit on a regime the fill does not model, and fitting them inflates [t] until well-filled
+    launches read as partial. The capped and uncapped forms coincide on points whose blocks are no
+    wider than [t]. *)

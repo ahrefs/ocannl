@@ -192,18 +192,30 @@ files.
   the gh-ocannl-1190 fp8 site every tensorized leaf ties at `peak_flops` while staged leaves ran
   2.3x faster than unstaged and the fastest was the plain 32x32x32 twin, not a swizzled one. The
   operand-load count orders that top pair wrongly, so pricing it is not the staging term either.
-- **The score is blind to how a scalar blocktile's work is LAUNCHED** (gh-ocannl-1278, measured at
-  gpt2_mini's q/k/v and out projections, b8 and b256, on rog CUDA and minix HIP unified; RANK_ONLY
-  `gh1253_cells.sh` + `bench_rank_site` `qkv`/`outproj`). Every scalar leaf of a site scores the
-  same compute leg whatever its geometry, batch-grid flavor or coalescing: a plain leaf (batch loops
-  serial in the kernel) ties its `bgrid` twin and measures 3-36x slower, and a coalesced leaf ties
-  its uncoalesced twin while the fastest leaf at q/k/v was `64x64x8/4x4 bgrid coal-n` (1.25-1.75x
-  under the seeded plan). Coalesced leaves therefore stay out of `model_default` until the score
-  prices launch parallelism; their scalar leaves ARE numerics-preserving (`coalesce_numerics`: every
-  scalar `coal-n`/`coal-k` seed computes the scalar family's values bitwise on order-sensitive
-  inputs, on CUDA, HIP and Metal), so admission is a score question only. The contraction layout's
-  tensorized and fused leaves (gh-ocannl-1459) are no more admissible than their uncoalesced twins:
-  `model_explain`'s coalesced rows judge each leaf by its uncoalesced form.
+- **The score prices how a scalar blocktile's work is LAUNCHED, not how it is laid out**
+  (gh-ocannl-1278, gh-ocannl-1479). Before the launch fill every scalar leaf of a site scored the
+  same compute leg: a plain leaf (batch loops serial in the kernel) tied its `bgrid` twin and
+  measured 3-36x slower at gpt2_mini's q/k/v and out projections (b8/b256, rog CUDA, minix HIP
+  unified). Now `Cost_model.launch_contexts` attributes each op-carrying statement's work (the
+  `analyze` census, one walk) to its `B` blocks (enclosing `Grid` loops) of `T` threads (enclosing
+  `Workgroup` loops), and the scalar part is priced at the issue rate times
+  `min 1 (B·min(T,t)/(P·t))` per context, summed. Keep it per context: a kernel-wide
+  `launch_dims` reading lets a wide zero nest make a one-block contraction look full
+  (`cost_model_fill` pins that). Tile-MMA work takes its `Tile_mma` contexts' fill too (unfilled, a plain tensorized leaf tied its `bgrid` twin on Metal and was the gate-0 pick, measured 12x slower). `P` is
+  the queried multiprocessor count, `t` a FITTED saturating thread count (not residency:
+  normalizing 512²'s 16K threads by rog's 107K resident threads would put the issue rate above the
+  class ceiling); `tools/calibrate_issue_rate.exe`'s launch sweep fits `t` with the full-fill rate
+  on pinned geometries at two block widths (the seeding's size-dependent choice would mix rates).
+  Metal publishes no core count: there both constants are configuration only. What the fill does
+  NOT do: separate a coalesced leaf from its uncoalesced twin (same work and launch per context;
+  coalescing is a memory-transaction effect), or the 64x64 vs 32x32 bgrid geometries at outproj b8
+  (64 blocks of 256 threads fill 64/70 under the cap, while the 64-block leaf measured fastest:
+  its tile reuse is not a compute-leg effect). Coalesced leaves therefore still stay out of
+  `model_default`; admitting them while the memory leg ranks outproj `coal-k` 0.6-0.8% below its
+  twins would pick a leaf measured 1.8x slower on rog at b256. Their scalar leaves ARE
+  numerics-preserving (`coalesce_numerics`: bitwise on order-sensitive inputs, on CUDA, HIP and
+  Metal), so admission is a score question only; `model_explain`'s coalesced rows judge each leaf
+  by its uncoalesced form.
 - **Compare a plan and its rivals in ONE kernel decomposition** (gh-ocannl-1477). The ranking score
   sums `max(compute, memory)` per kernel, so a memory-bound kernel run on its own (the seeded plan's
   zero-fill, the default segmentation having no zero fold) is charged in full, while the same writes
@@ -216,11 +228,11 @@ files.
   `ex_anchor`), so only a leaf the score separates displaces the plan. Read the record, never the
   gate re-run: under `auto` the ranked judgment of the whole routine (zero nest inside) declined a
   site whose own segment the plan seeded, and a fix pinned at threshold 32 passed every check while
-  both profiles still shipped the slow leaves. A launch-fill term was set aside rather than landed:
-  the `auto` seeding gate reads the same score, the fitted issue rate already absorbs its
-  calibration kernel's partial fill, and blocks against `seeded_min_blocks` mis-orders outproj b8
-  (its fastest leaf launches 64 blocks). `test/operations/model_seeded_anchor` pins the anchor on
-  CUDA and HIP.
+  both profiles still shipped the slow leaves. The launch fill (above) does not displace the anchor: a leaf
+  must still rank strictly below it, and the anchor's own sketch is a full-fill `bgrid` leaf, so
+  under seeding the fill reorders the leaves the anchor already beats. Counting blocks against
+  `seeded_min_blocks` instead would mis-order outproj b8 (its fastest leaf launches 64 blocks).
+  `test/operations/model_seeded_anchor` pins the anchor on CUDA and HIP.
 - benchmarks/ is the cross-framework parity+timing suite (self-describing safetensors fixtures,
   one-JSON-line runners, loss-trajectory parity gate ~1e-7 fp32 vs pytorch/cpu). The gate
   doubles as a gradient oracle. tinygrad: realize the loss BEFORE `opt.step()` or it recomputes

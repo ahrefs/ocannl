@@ -2779,6 +2779,33 @@ let dram_bandwidth_override =
 let resolve override advisory =
   match Lazy.force override with `Advisory -> advisory | `Off -> None | `Value v -> Some v
 
+(* gh-ocannl-1479: the launch fill's two constants -- config [model_multiprocessors] and
+   [model_fill_threads] (positive integers; [none]: no launch fill) -- beat the backend's advisory
+   [multiprocessors] / [fill_threads]. Same readers and class as the rates above. *)
+let parse_count ~key ~what raw =
+  let raw = String.strip raw in
+  match String.lowercase raw with
+  | "" -> `Advisory
+  | "none" -> `Off
+  | _ -> (
+      match Int.of_string_opt raw with
+      | Some n when n > 0 -> `Value n
+      | _ ->
+          raise
+          @@ Utils.User_error
+               (Printf.sprintf "Autotune: ocannl_%s should be a positive %s, or none; found: %s" key
+                  what raw))
+
+let multiprocessors_override =
+  lazy
+    (parse_count ~key:"model_multiprocessors" ~what:"multiprocessor count"
+       (Utils.get_global_arg ~arg_name:"model_multiprocessors" ~default:""))
+
+let fill_threads_override =
+  lazy
+    (parse_count ~key:"model_fill_threads" ~what:"thread count per multiprocessor"
+       (Utils.get_global_arg ~arg_name:"model_fill_threads" ~default:""))
+
 let ranking_capacity ~limits =
   let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
   (resolve cache_capacity_override u.cache_capacity, u.resident_threads)
@@ -2795,13 +2822,30 @@ let ranking_dram_bandwidth ~limits =
   let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
   resolve dram_bandwidth_override u.dram_rate
 
-type kernel_legs = { kl_compute : float option; kl_memory : float option; kl_spilled : bool }
+let ranking_fill_model ~limits : CM.fill_model option =
+  let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
+  match
+    ( resolve multiprocessors_override u.core_count,
+      resolve fill_threads_override u.saturation_threads )
+  with
+  | Some fm_multiprocessors, Some fm_fill_threads -> Some { CM.fm_multiprocessors; fm_fill_threads }
+  | _ -> None
+
+type kernel_legs = {
+  kl_compute : float option;
+  kl_memory : float option;
+  kl_spilled : bool;
+  kl_fill : float;
+      (** gh-ocannl-1479: the kernel's scalar launch fill ({!Ir.Cost_model.launch_fill}), 1 without
+          a fill model. A diagnostic: the compute leg sums per context. *)
+}
 
 (* Per kernel, the ranking score's two legs and whether its working set left the cache, beside the
    candidate's roofline lower bound ([summaries_roofline]'s). [None] exactly where
    [summaries_roofline] is. *)
-let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth ~peak_flops
-    ~peak_memory_bandwidth ~limits (segs : LL.optimized list) : (float * kernel_legs list) option =
+let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth ?fill_model
+    ~peak_flops ~peak_memory_bandwidth ~limits (segs : LL.optimized list) :
+    (float * kernel_legs list) option =
   (* Each reading only where no explicit value replaces it: a caller's gate isolates the score from
      the configuration it overrides, a malformed override of it included. *)
   let max_resident_threads = (Ir.Backend_intf.untimed_limits limits).resident_threads in
@@ -2815,6 +2859,7 @@ let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_ban
   let dram_bandwidth =
     match dram_bandwidth with Some r -> r | None -> ranking_dram_bandwidth ~limits
   in
+  let fill_model = match fill_model with Some f -> f | None -> ranking_fill_model ~limits in
   let summaries = List.map segs ~f:(fun o -> (o, CM.analyze o.LL.llc)) in
   match summaries_roofline ~peak_flops ~peak_memory_bandwidth (List.map summaries ~f:snd) with
   | None -> None
@@ -2829,6 +2874,9 @@ let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_ban
                     Some
                       (CM.reuse_traffic ?max_resident_threads ~is_global:(CM.global_in o) o.LL.llc)
               in
+              (* gh-ocannl-1479: the compute nests' own launches, whether or not the cache tiers are
+                 on. *)
+              let launch = Option.map fill_model ~f:(fun fm -> (fm, CM.launch_contexts o.LL.llc)) in
               let kl_compute, kl_memory =
                 (* gh-ocannl-1442: tile-MMA work runs on the matrix units only where the backend's
                    own hook accepts it; without the capabilities to ask, all of it is priced as
@@ -2839,12 +2887,15 @@ let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_ban
                       CM.accepted_tile_mma_flops ~operand_accepts:c.mma_accepts o)
                 in
                 CM.ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes
-                  ?cache_bandwidth ?issue_rate ?dram_bandwidth ~mma_flops s reuse
+                  ?cache_bandwidth ?issue_rate ?dram_bandwidth ~mma_flops ?launch s reuse
               in
               {
                 kl_compute;
                 kl_memory;
                 kl_spilled = Option.exists reuse ~f:(CM.spills ?cache_capacity_bytes);
+                kl_fill =
+                  Option.value_map launch ~default:1. ~f:(fun (fm, contexts) ->
+                      CM.launch_fill fm contexts);
               }) )
 
 (* A kernel's ranking score: the larger leg ({!Ir.Cost_model.ranking_seconds_of}). *)
@@ -2859,10 +2910,11 @@ let kernel_rank { kl_compute; kl_memory; _ } =
    by the untimed choosers only — [model_default], [model_explain] and the [auto] seeding gate. An
    explicit [capacity] / [cache_bandwidth] (the gate's own, or a test's) overrides the readings. *)
 let segments_ranking ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth
-    ~peak_flops ~peak_memory_bandwidth ~limits (segs : LL.optimized list) : (float * float) option =
+    ?fill_model ~peak_flops ~peak_memory_bandwidth ~limits (segs : LL.optimized list) :
+    (float * float) option =
   Option.map
-    (segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth ~peak_flops
-       ~peak_memory_bandwidth ~limits segs) ~f:(fun (bound, legs) ->
+    (segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth ?fill_model
+       ~peak_flops ~peak_memory_bandwidth ~limits segs) ~f:(fun (bound, legs) ->
       (List.fold legs ~init:0. ~f:(fun acc l -> acc +. kernel_rank l), bound))
 
 let ranking_ms ?capabilities ~limits segs =
@@ -4961,6 +5013,7 @@ type seed_gate =
       cache_rate : float option;
       scalar_rate : float option;
       dram_rate : float option;
+      fill : Ir.Cost_model.fill_model option;
     }
 
 (* The threshold [auto] falls back to where the device publishes no capacity (gh-ocannl-1253):
@@ -4995,6 +5048,7 @@ let seeded_default_gate ~limits =
               cache_rate;
               scalar_rate = ranking_issue_rate ~limits;
               dram_rate = ranking_dram_bandwidth ~limits;
+              fill = ranking_fill_model ~limits;
             })
 
 (* The seeded geometries in preference order: the largest block tile first, for its operand reuse,
@@ -5319,7 +5373,7 @@ let seeded_split ~backend ~min_serial ~static_indices (opt : LL.optimized) =
    build, to apply or to score keeps the preset. Only a typed refusal fails: any other exception is
    a builder or transform bug and propagates (gh-ocannl-1390). *)
 let seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices ~capacity ~cache_bandwidth
-    ~issue_rate ~dram_bandwidth p pre =
+    ~issue_rate ~dram_bandwidth ~fill_model p pre =
   let peak_flops, peak_memory_bandwidth = envelope ~limits in
   let rank sched =
     match Sched.apply_classified ~static_indices (sched ()) (scratch_of pre) with
@@ -5327,7 +5381,7 @@ let seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices ~capacity ~c
     | post ->
         Option.map
           (segments_ranking ~capabilities ~capacity ~cache_bandwidth ~issue_rate ~dram_bandwidth
-             ~peak_flops ~peak_memory_bandwidth ~limits [ post ])
+             ~fill_model ~peak_flops ~peak_memory_bandwidth ~limits [ post ])
           ~f:fst
   in
   match
@@ -5352,13 +5406,13 @@ let seeded_segment_judgment ~capabilities ~limits ~accum_prec ~admit_narrow ~sta
         Error "sketch seeding is off (gpu_default_sketch_min_reduction=0)"
     | Min_reduction min_reduction ->
         seeded_params_judged ~capabilities ~admit_narrow ~limits ~accum_prec ~min_reduction pre
-    | Ranked { capacity; cache_rate; scalar_rate; dram_rate } -> (
+    | Ranked { capacity; cache_rate; scalar_rate; dram_rate; fill } -> (
         match
           seeded_params_judged ~capabilities ~admit_narrow ~limits ~accum_prec ~min_reduction:1 pre
         with
         | Ok p
           when ranked_below ~capacity ~cache_bandwidth:cache_rate ~issue_rate:scalar_rate
-                 ~dram_bandwidth:dram_rate p pre ->
+                 ~dram_bandwidth:dram_rate ~fill_model:fill p pre ->
             Ok p
         | Ok p ->
             Error
@@ -5585,14 +5639,17 @@ let seeded_plan ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narr
           let gate_tag =
             match gate with
             | Min_reduction n -> Printf.sprintf "min_reduction=%d" n
-            | Ranked { capacity; cache_rate; scalar_rate; dram_rate } ->
-                (* Every reading the per-segment decisions rest on (gh-ocannl-1442): the staffed
-                   start re-decides on the search's own segments, which the plan digest does not
-                   cover. *)
+            | Ranked { capacity; cache_rate; scalar_rate; dram_rate; fill } ->
+                (* Every reading the per-segment decisions rest on (gh-ocannl-1442, gh-ocannl-1479):
+                   the staffed start re-decides on the search's own segments, which the plan digest
+                   does not cover. *)
                 let rate = Option.value_map ~default:"none" ~f:Float.to_string in
-                Printf.sprintf "ranked capacity=%s cache_rate=%s scalar_rate=%s dram_rate=%s"
+                Printf.sprintf "ranked capacity=%s cache_rate=%s scalar_rate=%s dram_rate=%s%s"
                   (Option.value_map capacity ~default:"none" ~f:Int.to_string)
                   (rate cache_rate) (rate scalar_rate) (rate dram_rate)
+                  (Option.value_map fill ~default:""
+                     ~f:(fun { CM.fm_multiprocessors; fm_fill_threads } ->
+                       Printf.sprintf " fill=%dx%d" fm_multiprocessors fm_fill_threads))
           in
           Some
             {
@@ -5666,6 +5723,38 @@ let seeded_transform ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed
       Some
         (seeded_apply ~on_choice ~capabilities ~backend ~limits ~accum_prec ~static_indices ~gate
            ~min_serial ~sink_enabled ~admit_narrow)
+
+(* gh-ocannl-1479: the launch sweep's pinned sketch -- one whole-routine scalar blocktile leaf of
+   the matmul family, whatever the seeding would pick at the size, so every timed point of a fit
+   runs the same geometry. Applied and validated as [model_default] applies a whole-routine pick. *)
+let pinned_sketch_transform ~select ?(on_leaf = fun (_ : sketch_params) -> ()) ctx bindings =
+  let backend = Context.backend_name ctx in
+  if not (Sched.backend_is_gpu backend) then
+    raise
+      (Utils.User_error
+         (Printf.sprintf "Autotune.pinned_sketch_transform: backend %s has no GPU sketch family"
+            backend));
+  let limits = Context.hardware_limits ctx in
+  let capabilities = Context.codegen_capabilities ctx in
+  let accum_prec = capabilities.Ir.Backend_intf.accum_prec in
+  let static_indices = Idx.bound_symbols bindings in
+  fun (opt : LL.optimized) ->
+    match matmul_sketch_tree ~capabilities ~is_gpu:true ~is_cpu:false ~limits opt with
+    | None -> raise (Utils.User_error "Autotune.pinned_sketch_transform: no matmul site")
+    | Some tree -> (
+        match List.find (Sspace.leaves tree) ~f:(fun p -> scalar_blocktile p && select p) with
+        | None ->
+            raise
+              (Utils.User_error
+                 "Autotune.pinned_sketch_transform: no scalar blocktile leaf of the family matches")
+        | Some p ->
+            on_leaf p;
+            validate_segments_for_model ~limits
+              [ Sched.apply_classified ~static_indices (sketch_schedule ~accum_prec ~p opt) opt ])
+
+let ranking_multiprocessors ~limits =
+  let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
+  resolve multiprocessors_override u.core_count
 
 let seeded_default ?name ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narrow ?report
     ctx comp bindings =
@@ -6342,6 +6431,7 @@ type explain = {
   ex_compute_ms : float option;
   ex_memory_ms : float option;
   ex_spilled : bool option;
+  ex_fills : float list option;
   ex_operand_loads : CM.load_count;
   ex_admitted : bool;
   ex_anchor : bool;
@@ -6372,6 +6462,7 @@ let model_explain ?name ?(coalesced = false) ctx comp bindings =
           ex_compute_ms = None;
           ex_memory_ms = None;
           ex_spilled = None;
+          ex_fills = None;
           ex_operand_loads;
           ex_admitted;
           ex_anchor;
@@ -6387,6 +6478,7 @@ let model_explain ?name ?(coalesced = false) ctx comp bindings =
           ex_compute_ms = ms (total (fun l -> l.kl_compute));
           ex_memory_ms = ms (total (fun l -> l.kl_memory));
           ex_spilled = Some (List.exists legs ~f:(fun l -> l.kl_spilled));
+          ex_fills = Some (List.map legs ~f:(fun l -> l.kl_fill));
           ex_operand_loads;
           ex_admitted;
           ex_anchor;

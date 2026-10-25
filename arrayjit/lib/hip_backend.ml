@@ -1844,6 +1844,10 @@ end = struct
            max_resident_threads =
              min_over (fun (a : H.Device.attributes) ->
                  a.multiprocessor_count * a.max_threads_per_multiprocessor);
+           (* gh-ocannl-1479: the launch fill's multiprocessor count, queried; its saturating
+              threads per multiprocessor are a fitted per-class constant (unmeasured: no fill). *)
+           multiprocessors = min_over (fun (a : H.Device.attributes) -> a.multiprocessor_count);
+           fill_threads = None;
          })
     in
     (* gh-ocannl-572: the kernel source is a function of the lowered code, the device capabilities

@@ -61,6 +61,8 @@ let full =
     cache_bandwidth = Some 2e12;
     issue_rate = Some 3e12;
     dram_bandwidth = Some 5e11;
+    multiprocessors = Some 64;
+    fill_threads = Some 256;
     native_fp16_arithmetic = true;
     simdgroup_width = Some 32;
     lane_scalar_recompute_cheap = true;
@@ -91,6 +93,8 @@ let toggles : (string * (BI.hardware_limits -> BI.hardware_limits)) list =
     ("cache_bandwidth", fun l -> { l with cache_bandwidth = Some 1. });
     ("issue_rate", fun l -> { l with issue_rate = Some 1. });
     ("dram_bandwidth", fun l -> { l with dram_bandwidth = Some 1. });
+    ("multiprocessors", fun l -> { l with multiprocessors = Some 1 });
+    ("fill_threads", fun l -> { l with fill_threads = Some 1 });
     ("native_fp16_arithmetic", fun l -> { l with native_fp16_arithmetic = false });
     ("simdgroup_width", fun l -> { l with simdgroup_width = Some 64 });
     ("lane_scalar_recompute_cheap", fun l -> { l with lane_scalar_recompute_cheap = false });
@@ -122,16 +126,19 @@ let () =
       List.mem names f ~equal:String.equal);
   p_all ~min:1 "every toggle here names a field of the record" names ~f:(fun f ->
       List.mem all_fields f ~equal:String.equal);
-  (* The ranking score's capacity, residency, and its cache, issue and DRAM rates. *)
-  p "the Untimed fields are the ranking score's capacity, residency and three rates"
+  (* The ranking score's capacity, residency, its cache, issue and DRAM rates, and its launch fill's
+     two constants. *)
+  p "the Untimed fields are the ranking score's capacity, residency, three rates and launch fill"
     (List.equal String.equal
        (List.sort untimed_fields ~compare:String.compare)
        [
          "cache_bandwidth";
          "cache_capacity_bytes";
          "dram_bandwidth";
+         "fill_threads";
          "issue_rate";
          "max_resident_threads";
+         "multiprocessors";
        ]);
   let base = key_of full in
   p_all ~min:(List.length all_fields)
@@ -167,6 +174,8 @@ let presets =
         cache_bandwidth = Some 3e12;
         issue_rate = Some 3.4e12;
         dram_bandwidth = Some 5.8e11;
+        multiprocessors = Some 70;
+        fill_threads = Some 128;
         codegen_tag = Some "graph-capture/no-device-debug";
       } );
   ]
@@ -183,6 +192,8 @@ let () =
           cache_bandwidth = None;
           issue_rate = None;
           dram_bandwidth = None;
+          multiprocessors = None;
+          fill_threads = None;
         }
       in
       let ok =

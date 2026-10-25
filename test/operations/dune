@@ -10334,6 +10334,21 @@
   arrayjit.verdict
   ll_test))
 
+;  gh-ocannl-1479: the ranking score's launch fill -- per-context fills on hand-built kernels (exact
+; values at a stand-in fill model), the zero-sibling and wide-block cases, accepted vs declined
+; tile-MMA work, the bound; then the q/k/v projection's scalar leaves under a CUDA-like stand-in:
+; plain leaves rank above their bgrid twins with the fill constants and tie without them.
+
+(test
+ ; ocannl-backend: cc -- Context.cpu selects cc directly; the lowering is hermetic and nothing compiles.
+ (name cost_model_fill)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules cost_model_fill)
+ (libraries base stdio ocannl arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_ocannl)))
+
 ; gh-ocannl-1253: every hardware_limits field has a cache-identity class; the cache key hashes the
 ; Key-class projection, byte-identical to the pre-classification record; no Untimed field is read
 ; outside its readers. The globs are the library and tool sources the Untimed fields could leak

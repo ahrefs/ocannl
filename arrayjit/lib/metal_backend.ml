@@ -424,6 +424,10 @@ module Impl = struct
            (* gh-ocannl-1442: the ranking score's own rates; unmeasured here. *)
            issue_rate = None;
            dram_bandwidth = None;
+           (* gh-ocannl-1479: Metal publishes no GPU core count, so the launch fill is configured
+              (model_multiprocessors, model_fill_threads), never advisory. *)
+           multiprocessors = None;
+           fill_threads = None;
          })
     in
     fun () -> Lazy.force limits

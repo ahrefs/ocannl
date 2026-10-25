@@ -608,6 +608,9 @@ let () =
       (* gh-ocannl-1442: its scalar issue rate and DRAM rate, likewise. *)
       ("model_issue_rate", "");
       ("model_dram_bandwidth", "");
+      (* gh-ocannl-1479: its launch fill's two constants, likewise. *)
+      ("model_multiprocessors", "");
+      ("model_fill_threads", "");
     ]
   in
   p "they are exactly the Untimed_model class" (same_keys model_keys Utils.Untimed_model);

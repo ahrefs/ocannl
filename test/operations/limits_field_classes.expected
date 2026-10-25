@@ -1,6 +1,6 @@
 every field of the record has a toggle here: true
 every toggle here names a field of the record: true
-the Untimed fields are the ranking score's capacity, residency and three rates: true
+the Untimed fields are the ranking score's capacity, residency, three rates and launch fill: true
 toggling a Key field changes the cache key, toggling an Untimed field leaves it unchanged: true
 the Key projection renders as the full record with its Untimed fields absent, on every preset: true
 the read rule finds the field access and the binding pattern, not the literal or the discard: true
@@ -22,7 +22,7 @@ nothing Autotune.tune reaches past the seeded plan and the search-less fallback 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:6dd30560f9e032ec9afc45a6fec9ce97] every field of
   [scanner-refusal:280bb27b49e792a7b0d751509c083f70] every toggle here
-  [scanner-refusal:c352667fa4bbd3d9dda5005e39d9c102] score's capacity residency
+  [scanner-refusal:7e3d87beda6db5aca558591972c7b662] score's capacity residency
   [scanner-refusal:fdcb8ce65a493ff3ca298ab6cd096a0d] Untimed field leaves
   [scanner-refusal:18ba6e03ce2dfd1162c3816126efe2fe] Key projection renders
   [scanner-refusal:0a9177a9cf5f80388c5ecb335859d27d] the binding pattern
