@@ -65,6 +65,21 @@ half_ns: the header names the column tail and the two-row band: true
 half_ns: no scalar accumulator is emitted: true
 half_ns: the partial column is a zeroed register filled at exactly its width: true
 half_ns: the tails match the serial twin bitwise: true
+f32 at every narrower file's width: a site the tile divides in neither dimension renders register-tiled: true
+f32 at every narrower file's width: the header names the column tail and the two-row band: true
+f32 at every narrower file's width: no scalar accumulator is emitted: true
+f32 at every narrower file's width: the partial column is a zeroed register filled at exactly its width: true
+f32 at every narrower file's width: the tails match the serial twin bitwise: true
+bf16 at every narrower file's width: a site the tile divides in neither dimension renders register-tiled: true
+bf16 at every narrower file's width: the header names the column tail and the two-row band: true
+bf16 at every narrower file's width: no scalar accumulator is emitted: true
+bf16 at every narrower file's width: the partial column is a zeroed register filled at exactly its width: true
+bf16 at every narrower file's width: the tails match the serial twin bitwise: true
+half at every narrower file's width: a site the tile divides in neither dimension renders register-tiled: true
+half at every narrower file's width: the header names the column tail and the two-row band: true
+half at every narrower file's width: no scalar accumulator is emitted: true
+half at every narrower file's width: the partial column is a zeroed register filled at exactly its width: true
+half at every narrower file's width: the tails match the serial twin bitwise: true
 seeds: whole-triple bm0 tiles on 16-byte vectors at 64x512x64: auto, rm4 rn4 lanes4
 the whole-triple seeds carry one auto geometry then exactly the model's alternatives: true
 the site offers at least one alternative to time: true
