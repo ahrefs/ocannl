@@ -4,9 +4,10 @@
 # "tail-free, then smaller rn" key against the "fewer tail vectors, then larger rn" key it replaced.
 # Both geometries are requested of ONE prebuilt bin/narrow_gebp_bench with --rn=N (bin/bench_tile.ml:
 # Register_tile.rm_cap rows at the widest width the machine renders at the compute precision), so
-# the comparison is two geometries, not two builds of the model. The protocol is gh-ocannl-1099's
-# (docs/research/gh-1099-register-tile-c-traffic.md): interleaved rounds, the pair's order reversed
-# on every other round.
+# the comparison is two geometries, not two builds of the model. The cells are bin_cells.py's
+# (gh-ocannl-1565): per case, one run whose two arms are rnA and rnB, hermetic (no OCANNL_*/BENCH_*/
+# OpenMP variable, no config file, the configuration records read back), supervised, visited in
+# Bench_design's order (AB BA ...) and paired round by round on the bench's bench-result lines.
 #
 # Usage:
 #   benchmarks/gh1180_tie_ab.sh build   ROOT
@@ -15,111 +16,100 @@
 #
 #   ROOT    the checkout whose _build/default/bin/narrow_gebp_bench.exe runs; `build` builds it (a
 #           measurement never builds, so it can run inside a timing-only window).
-#   OUT     results directory, created, refused unless empty; OUT/driver.log records the run, each
-#           invocation writes OUT/<case>_r<round>_rn<N>.out and .err, `summary` writes
-#           OUT/summary.md (and `measure` runs it at the end).
-#   ROUNDS  a positive even count: round r runs (A, B) for even r and (B, A) for odd r.
+#   OUT     results directory, outside the checkout, created, refused unless empty;
+#           OUT/driver.log records the run, OUT/<case>/ is that case's bin_cells run (report.md,
+#           cells.jsonl, cells/<NNN>-rn<N>/stdout), `summary` writes OUT/summary.md (and `measure`
+#           runs it at the end).
+#   ROUNDS  a positive even count (Bench_design's rounds; for two arms, (A, B) then (B, A)).
 #   CASE    PREC:N:BM:BK:REPEATS:RNA:RNB -- narrow_gebp_bench's positionals and the two column
 #           counts. PREC is f32, f16 (narrow storage, f32 compute: --ocannl_fp16_arithmetic=false)
 #           or f16a (pure f16 where the target has the arithmetic: --ocannl_fp16_arithmetic=true).
 #           The bench's register-tile site is BM rows by N columns by BK, so RM = min 4 BM.
 #
-# The summary also refuses an incomplete design: every case of the driver.log's case list, every
-# round of its rounds=N, both sides of every pair. A cell counts only when the bench exited 0 (a required cross-variant disagreement exits 1),
-# printed the requested geometry on its header, and every packed line's census reads
-# Mma_register_tiled with no scalar fallback; any other cell fails the run and the summary marks it.
-# The summary's percentage is the median of the PAIRED throughput ratios A/B - 1 per round; a
-# positive value favors A. Serial (packmma) and pool-parallel (packmma_par) are kept apart.
+# The summary refuses an incomplete design: every case of driver.log's case list, every cell its
+# bin_cells run planned, both arms of every round. A cell counts only when bin_cells found it clean
+# (exit 0 -- a required cross-variant disagreement exits 1 -- and a clean treatment), its header
+# names the requested geometry, and every packed line's census reads Mma_register_tiled with no
+# scalar fallback; any other cell fails the run and the summary marks it. Serial (packmma) and
+# pool-parallel (packmma_par) are kept apart; the ratio is rnB's time over rnA's, per round.
 #
-# Exit: 0 every cell valid; 1 a cell failed; 2 usage.
-# Hermetic: every OCANNL_* variable is unset, the backend and every flag are on argv, and the bench
-# runs from benchmarks/, whose ocannl_config is the nearest on the upward search.
+# Exit: 0 every cell valid; 1 a cell failed or failed a check (this outranks a refusal); 2 usage;
+# 3 the only faults are cells refusing their measurement for host contention (bin_cells' exit 3).
 set -u
-while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(OCANNL_[A-Z0-9_]*\)=.*/\1/p')
 usage() { sed -n '/^# Usage/,/^# Exit/p' "$0" | sed '$d' >&2; exit 2; }
 HERE=$(cd "$(dirname "$0")" && pwd -P)
 
 summary() { # OUT
   python3 - "$1" "$HERE" <<'EOF'
-import glob, os, re, statistics, sys
+import os, re, sys
 out = sys.argv[1]
-sys.path.insert(0, sys.argv[2])  # benchmarks/, for the shared table and line builders
+sys.path.insert(0, sys.argv[2])  # benchmarks/, for the shared runner and the table builders
+import cells
 from display_safe import display_value, log_line, table_lines
-line_re = re.compile(r'^(packmma(?:_par)?)\s+\S+ ms\s+(\S+) GFLOP/s.*\[(.*)\]\s*$')
-cells, bad = {}, []
-for path in sorted(glob.glob(os.path.join(out, '*.out'))):
-    m = re.match(r'(.+)_r(\d+)_rn(\d+)\.out$', os.path.basename(path))
-    if not m:
-        continue
-    case, rnd, rn = m.group(1), int(m.group(2)), int(m.group(3))
-    status = open(path[:-4] + '.status').read().strip() if os.path.exists(path[:-4] + '.status') else '?'
-    text = open(path).read()
-    rates = {}
-    for ln in text.splitlines():
-        lm = line_re.match(ln)
-        if lm:
-            census = lm.group(3)
-            if 'Mma_register_tiled' not in census or 'fallback' in census.lower():
-                bad.append(f'{display_value(os.path.basename(path))}: census [{census}]')
-            rates[lm.group(1)] = float(lm.group(2))
-    if status != '0':
-        bad.append(f'{display_value(os.path.basename(path))}: exit {status}')
-    header = next((ln for ln in text.splitlines() if ln.startswith('GEBP ')), '')
-    if f' rn{rn} ' not in header or '(requested)' not in header:
-        bad.append(f'{display_value(os.path.basename(path))}: header does not name the requested rn{rn}')
-    if set(rates) != {'packmma', 'packmma_par'}:
-        bad.append(f'{display_value(os.path.basename(path))}: packed lines missing ({sorted(rates)})')
-    cells.setdefault(case, {}).setdefault(rnd, {})[rn] = rates
-rows = []
-# The round count the run was launched with: a summary over fewer rounds, or over a round missing
-# one side of its pair, would be an unbalanced ABBA design reported as a complete one.
-m = re.search(r' rounds=(\d+)', open(os.path.join(out, 'driver.log')).read()) \
-    if os.path.exists(os.path.join(out, 'driver.log')) else None
+line_re = re.compile(r'^(packmma(?:_par)?)\s+\S+ ms\s+\S+ GFLOP/s.*\[(.*)\]\s*$')
+bad, refused, rows = [], [], []
+log = os.path.join(out, 'driver.log')
+m = re.search(r'cases: (.*)', open(log).read()) if os.path.exists(log) else None
 if not m:
-    bad.append('driver.log names no rounds=N: cannot tell a complete run from a partial one')
-expected = int(m.group(1)) if m else 0
-cases = sorted(cells)
-if m:
-    for c in re.search(r'cases: (.*)', open(os.path.join(out, 'driver.log')).read()).group(1).split():
-        prec, n, bm, bk, reps, rna, rnb = c.split(':')
-        name = f'{prec}-{n}-{bm}-{bk}-{reps}-rn{rna}-rn{rnb}'
-        if name not in cells:
-            bad.append(f'{display_value(name)}: no cells at all')
-for case in cases:
-    rounds = cells[case]
-    prec, n, bm, bk, reps, rna, rnb = case.split('-')
-    rna, rnb = int(rna[2:]), int(rnb[2:])
-    if rna == rnb:
-        bad.append(f'{display_value(case)}: rn{rna} paired with itself -- both sides read one cell')
-    if sorted(rounds) != list(range(expected)):
-        bad.append(f'{display_value(case)}: rounds {sorted(rounds)}, expected 0..{expected - 1}')
-    for variant in ('packmma', 'packmma_par'):
-        missing = [r for r in sorted(rounds)
-                   if rounds[r].get(rna, {}).get(variant) is None or rounds[r].get(rnb, {}).get(variant) is None]
-        if missing:
-            bad.append(f'{display_value(case)}: {variant} lacks a side of the pair in rounds {missing}')
-        a = [rounds[r].get(rna, {}).get(variant) for r in sorted(rounds)]
-        b = [rounds[r].get(rnb, {}).get(variant) for r in sorted(rounds)]
-        pairs = [(x, y) for x, y in zip(a, b) if x is not None and y is not None]
-        if not pairs:
+    bad.append('driver.log names no cases: cannot tell a complete run from a partial one')
+for c in (m.group(1).split() if m else []):
+    prec, n, bm, bk, reps, rna, rnb = c.split(':')
+    name = f'{prec}-{n}-{bm}-{bk}-{reps}-rn{rna}-rn{rnb}'
+    run = os.path.join(out, name)
+    try:
+        manifest, records = cells.read_run(run)
+    except (OSError, ValueError) as e:
+        bad.append(f'{display_value(name)}: no complete bin_cells run ({display_value(str(e))})')
+        continue
+    planned = sum(len(order) for order in manifest['orders'])
+    if len(records) != planned:
+        bad.append(f'{display_value(name)}: {len(records)} of {planned} planned cells ran')
+    # The run's own faults no cell carries (an arm resolving a setting two ways, an unidentified
+    # kernel compiler), judged by the runner's own rule rather than restated here.
+    bad += [f'{display_value(name)}: ' + display_value(p)
+            for p in cells.run_level_problems(manifest, records)]
+    by, case_refused = {}, False
+    for r in records:
+        cell = f'{display_value(name)} cell {r["cell"]} ({display_value(r["arm"])})'
+        if not r['ok']:
+            # A cell whose one fault is its own refusal (host contention) is the box's verdict,
+            # kept apart from a cell that failed: the driver exits 3 on refusals alone.
+            only_refused = r.get('refused') and len(r['problems']) == 1
+            (refused if only_refused else bad).append(
+                f'{cell}: ' + display_value('; '.join(r['problems'])))
+            case_refused = case_refused or only_refused
             continue
-        ratios = [x / y - 1 for x, y in pairs]
-        wins = sum(1 for x, y in pairs if x > y)
-        ties = sum(1 for x, y in pairs if x == y)
-        xs, ys = [p[0] for p in pairs], [p[1] for p in pairs]
-        # The case's parts come from the cell file names, which the operator's case list named.
-        label = ' '.join(display_value(x) for x in (prec, f'n={n}', f'bm={bm}', f'bk={bk}'))
+        text = cells.cell_stream(run, r, 'stdout')
+        rn = r['arm'][2:]
+        header = next((ln for ln in text.splitlines() if ln.startswith('GEBP ')), '')
+        if f' rn{rn} ' not in header or '(requested)' not in header:
+            bad.append(f'{cell}: header does not name the requested rn{rn}')
+        packed = {lm.group(1): lm.group(2) for lm in map(line_re.match, text.splitlines()) if lm}
+        if set(packed) != {'packmma', 'packmma_par'}:
+            bad.append(f'{cell}: packed lines missing ({sorted(packed)})')
+        for variant, census in packed.items():
+            if 'Mma_register_tiled' not in census or 'fallback' in census.lower():
+                bad.append(f'{cell}: {variant} census [{display_value(census)}]')
+        for variant, seconds, _, _ in r['results']:
+            by.setdefault((variant, r['arm']), {})[r['round']] = seconds
+    label = ' '.join(display_value(x) for x in (prec, f'n={n}', f'bm={bm}', f'bk={bk}'))
+    for variant in ('packmma', 'packmma_par'):
+        a, b = by.get((variant, f'rn{rna}'), {}), by.get((variant, f'rn{rnb}'), {})
+        if (sorted(a) != sorted(b) or len(a) != manifest['rounds']) and not case_refused:
+            bad.append(f'{display_value(name)}: {variant} lacks a side of the pair in some round')
+        stats = cells.paired(a, b)
         rows.append((label, 'serial' if variant == 'packmma' else 'parallel', f'rn{rna}', f'rn{rnb}',
-                     f'{min(xs):.2f}–{max(xs):.2f}', f'{min(ys):.2f}–{max(ys):.2f}',
-                     f'{statistics.median(ratios) * 100:+.2f}%',
-                     f'{wins}/{len(pairs)}' + (f', {ties} tie' if ties else '')))
-text = '\n'.join(table_lines(['Case', 'Variant', 'A', 'B', 'A range (GFLOP/s)',
-                               'B range (GFLOP/s)', 'Median A vs B', 'A wins'], rows)) + '\n'
+                     *cells.paired_cells(stats)))
+text = '\n'.join(table_lines(['Case', 'Variant', 'A', 'B', *cells.PAIRED_HEADER], rows)) + '\n'
+text += '\nratio = B time / A time per round; each case\'s full report is OUT/<case>/report.md\n'
 if bad:
     text += '\nINVALID CELLS:\n' + '\n'.join(log_line('- ' + b) for b in bad) + '\n'
+if refused:
+    text += ('\nREFUSED CELLS (host contention; the box, not the treatment):\n'
+             + '\n'.join(log_line('- ' + b) for b in refused) + '\n')
 open(os.path.join(out, 'summary.md'), 'w').write(text)
 print(text, end='')
-sys.exit(1 if bad else 0)
+sys.exit(1 if bad else 3 if refused else 0)
 EOF
 }
 
@@ -160,31 +150,27 @@ out=$(cd "$out" && pwd -P) || exit 2
 exec 3>&1
 exec >>"$out/driver.log" 2>&1 || exit 2
 trap 'cat "$out/driver.log" >&3' EXIT
-echo "gh1180: $(date -u +%FT%TZ) host=$(hostname) root=$root sha=$(git -C "$root" rev-parse HEAD) rounds=$rounds"
-echo "gh1180: dirty files: $(git -C "$root" status --porcelain --untracked-files=no | wc -l | tr -d ' ')"
-echo "gh1180: bench mtime $(ls -l "$bench" | awk '{print $6, $7, $8}')"
+echo "gh1180: $(date -u +%FT%TZ) host=$(hostname) root=$root sha=$(git -C "$root" rev-parse HEAD 2>&1) rounds=$rounds"
 echo "gh1180: cases: $*"
-cd "$root/benchmarks" || exit 2
-failed=0
-for ((r = 0; r < rounds; r++)); do
-  for c in "$@"; do
-    IFS=: read -r prec n bm bk reps rna rnb <<<"$c"
-    case $prec in
-      f32) flags=(f32) ;;
-      f16) flags=(f16 --ocannl_fp16_arithmetic=false) ;;
-      f16a) flags=(f16 --ocannl_fp16_arithmetic=true) ;;
-    esac
-    if ((r % 2 == 0)); then order=("$rna" "$rnb"); else order=("$rnb" "$rna"); fi
-    for rn in "${order[@]}"; do
-      cell="$out/${prec}-${n}-${bm}-${bk}-${reps}-rn${rna}-rn${rnb}_r${r}_rn${rn}"
-      "$bench" "${flags[0]}" "$n" "$reps" "$bm" "$bk" "--rn=$rn" "${flags[@]:1}" \
-        --ocannl_backend=cc --ocannl_log_config_sourcing=true >"$cell.out" 2>"$cell.err"
-      st=$?
-      echo "$st" >"$cell.status"
-      ((st == 0)) || failed=1
-      echo "round=$r case=$c rn=$rn exit=$st"
-    done
-  done
+worst=0
+for c in "$@"; do
+  IFS=: read -r prec n bm bk reps rna rnb <<<"$c"
+  case $prec in
+    f32) common=(f32 "$n" "$reps" "$bm" "$bk") ;;
+    f16) common=(f16 "$n" "$reps" "$bm" "$bk" --ocannl_fp16_arithmetic=false) ;;
+    f16a) common=(f16 "$n" "$reps" "$bm" "$bk" --ocannl_fp16_arithmetic=true) ;;
+  esac
+  python3 "$HERE/bin_cells.py" --exe "$bench" --backend cc --out "$out/$prec-$n-$bm-$bk-$reps-rn$rna-rn$rnb" \
+    --rounds "$rounds" --arm "rn$rna=--rn=$rna" --arm "rn$rnb=--rn=$rnb" -- "${common[@]}" >/dev/null
+  st=$?
+  echo "case=$c bin_cells exit=$st"
+  # A failure (any nonzero status but 3) outranks a refusal (3), whichever case came last.
+  if ((st != 0 && (worst == 0 || worst == 3))); then worst=$st; fi
 done
-summary "$out" || failed=1
-exit $failed
+summary "$out"
+st=$?
+# The summary judges every case: its validation failure (1) outranks any refusal, and its
+# refusal-only verdict (3) stands unless a case's bin_cells run failed outright.
+if ((st == 1 || (worst != 0 && worst != 3))); then exit 1; fi
+if ((st == 3 || worst == 3)); then exit 3; fi
+exit "$st"

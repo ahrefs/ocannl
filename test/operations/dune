@@ -9625,6 +9625,7 @@
   gh1133_summary.py
   gh1133_summary.expected
   ../../benchmarks/gh1133_summary.py
+  ../../benchmarks/bench_output.py
   ../../benchmarks/strict_json.py
   ../../benchmarks/display_safe.py
   (sandbox always preserve_file_kind))
@@ -9650,6 +9651,7 @@
   kernel_attribution.expected
   ../../benchmarks/kernel_attribution.py
   ../../benchmarks/gh1002_cells.py
+  ../../benchmarks/bench_output.py
   ../../benchmarks/box_gate.py
   ../../benchmarks/cell_group.py
   ../../benchmarks/strict_json.py
@@ -9676,6 +9678,7 @@
   gh1002_kernels.py
   gh1002_kernels.expected
   ../../benchmarks/gh1002_cells.py
+  ../../benchmarks/bench_output.py
   ../../benchmarks/box_gate.py
   ../../benchmarks/cell_group.py
   ../../benchmarks/strict_json.py
@@ -9710,7 +9713,7 @@
 (executable
  (name bin_cells_probe)
  (modules bin_cells_probe)
- (libraries base unix arrayjit.utils bench_args bench_out))
+ (libraries base stdio unix arrayjit.utils bench_args bench_out bench_json))
 
 (rule
  ; ocannl-backend: none -- the probe links arrayjit.utils and bench_out alone and compiles nothing.
@@ -9723,6 +9726,9 @@
   bench_design.expected
   bin_cells_probe.exe
   ../../benchmarks/bin_cells.py
+  ../../benchmarks/cells.py
+  ../../benchmarks/bench_output.py
+  ../../benchmarks/box_gate.py
   ../../benchmarks/config_records.py
   ../../benchmarks/cell_group.py
   ../../benchmarks/strict_json.py

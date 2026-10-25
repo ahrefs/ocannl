@@ -2,7 +2,7 @@
 
 Usage: python3 gh834_session.py OUT_FILE
 
-Reads the last line of OUT_FILE that starts with "{" (the runner's result line) and prints one
+Reads the runner's result line from OUT_FILE (`bench_output.result_record`) and prints one
 diagnostic per problem, exiting 1 if there was any and 0 if the session is complete. The driver
 prefixes each line with its step name.
 
@@ -19,7 +19,7 @@ import sys
 
 # gh834_cells.sh runs this under `python3 -I`, which leaves the script's own directory off sys.path.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import strict_json  # noqa: E402
+import bench_output  # noqa: E402
 
 # The two placement arms a tuned gpt2_mini session runs (Train.tune_placements).
 REQUIRED_ARMS = ("A", "B")
@@ -35,23 +35,31 @@ def is_count(v):
 def problems(path):
     try:
         with open(path, encoding="utf-8") as f:
-            lines = [line for line in f.read().splitlines() if line.startswith("{")]
+            text = f.read()
     except OSError as e:
         return ["INCOMPLETE SESSION: cannot read the result: %s" % e]
-    if not lines:
-        return ["INCOMPLETE SESSION: no result line"]
     try:
         # JSON has no NaN or Infinity, but json.loads accepts both by default (and reads 1e999 as
         # infinity); a runner that spells a non-finite number either way has emitted a line no other
-        # consumer can read.
-        record = strict_json.loads(lines[-1])
+        # consumer can read (bench_output reads it strictly).
+        record = bench_output.result_record(text)
     except ValueError as e:
         return ["INCOMPLETE SESSION: the result line is not JSON (%s)" % e]
-    tune = record.get("tune") if isinstance(record, dict) else None
+    if record is None:
+        return ["INCOMPLETE SESSION: no result line"]
+    if not isinstance(record, dict):
+        return ["INCOMPLETE SESSION: the result line is not a JSON object"]
+    out = []
+    # The session's cost record and its treatment, read as fields rather than grepped as text.
+    compile_s = record.get("compile_s")
+    if not isinstance(compile_s, (int, float)) or isinstance(compile_s, bool):
+        out.append("MISSING EVIDENCE: the result line carries no compile_s (the search's wall)")
+    if record.get("searched") is not True:
+        out.append("INCOMPLETE SESSION: the result line does not say the session searched")
+    tune = record.get("tune")
     arms = tune.get("arms") if isinstance(tune, dict) else None
     if not isinstance(arms, list) or not all(isinstance(a, dict) for a in arms):
-        return ["INCOMPLETE SESSION: the result line carries no tune arms"]
-    out = []
+        return out + ["INCOMPLETE SESSION: the result line carries no tune arms"]
     for name in REQUIRED_ARMS:
         found = [a for a in arms if a.get("arm") == name]
         if len(found) != 1 or found[0].get("state") != "searched":

@@ -497,14 +497,14 @@
   (pps ppx_here ppx_ocannl)))
 
 ; bench_mlp_bn_step is a manual diagnostic (not a test): the mlp_bn_names training step through the
-; untuned default pipeline, its segment census and steady-state per-step timing
-; (benchmarks/gh1343_ab.sh drives it before/after gh-ocannl-1343). Run from test/config or
-; benchmarks/.
+; untuned default pipeline, its segment census and steady-state per-step timing, the median also as
+; a Bench_out.result line (benchmarks/gh1343_ab.sh drives it before/after gh-ocannl-1343, through
+; benchmarks/ab.py). Run from test/config or benchmarks/, or under the drivers.
 
 (executable
  (name bench_mlp_bn_step)
  (modules bench_mlp_bn_step)
- (libraries base ocannl stdio dataprep unix)
+ (libraries base ocannl stdio dataprep unix bench_out)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

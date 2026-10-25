@@ -9,7 +9,7 @@ import re
 import statistics
 import sys
 
-import strict_json
+import bench_output
 from display_safe import display_value, log_line, table_lines
 
 
@@ -39,14 +39,12 @@ def read_cells(out, treatments):
         if not m:
             continue
         rec, error = None, None
-        for line in open(os.path.join(out, name)):
-            line = line.strip()
-            if line.startswith("{") and '"step_ms"' in line:
-                try:
-                    rec, error = strict_json.loads(line), None
-                except ValueError as e:
-                    # Truncated, or a non-finite number JSON cannot spell (strict_json).
-                    rec, error = None, e
+        try:
+            with open(os.path.join(out, name)) as f:
+                rec = bench_output.result_record(f.read())
+        except ValueError as e:
+            # Truncated, or a non-finite number JSON cannot spell (strict_json).
+            error = e
         if error is not None:
             unreadable.append((name, error))
             continue

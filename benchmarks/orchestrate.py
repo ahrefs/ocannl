@@ -37,11 +37,11 @@ import tempfile
 import time
 from pathlib import Path
 
+import bench_output
 import bench_venv
 import box_gate
 import fixture_digest
 import cell_group
-import strict_json
 # The shared builders every report-writing script uses (gh-ocannl-1355).
 from display_safe import display_value, log_line, log_lines, table_lines
 
@@ -1307,32 +1307,11 @@ def open_cell_log(label):
 
 
 # What an OCANNL runner writes before each checkpoint of a measurement still in progress
-# (gh-ocannl-1209): `Bench_json.checkpoint_prefix`. The golden of test/operations/bench_result_line
-# holds lines the OCaml side built, which test_orchestrate feeds back through `last_checkpoint`.
-CHECKPOINT_PREFIX = "bench: checkpoint "
-
-
-def last_checkpoint(text):
-    """The last checkpoint in a cell's output, parsed, or None.
-
-    A checkpoint records the parity losses a cell observed before a later stage -- the timed steps,
-    or the dominant-kernel instrument -- and is all that is left of them when the cell is killed
-    there. It is not a result line and never stands in for one: it starts with CHECKPOINT_PREFIX,
-    not '{', so the result parser cannot pick it up, and it carries no timing.
-
-    A kill can land in the middle of a write, so a final line that does not parse is skipped for
-    the one before it.
-    """
-    for line in reversed(text.splitlines()):
-        if not line.startswith(CHECKPOINT_PREFIX):
-            continue
-        try:
-            obj = strict_json.loads(line[len(CHECKPOINT_PREFIX):])
-        except ValueError:  # strict_json.NonFinite included: a runner emits null there
-            continue
-        if isinstance(obj, dict) and obj.get("record") == "checkpoint":
-            return obj
-    return None
+# (gh-ocannl-1209), and its reader: bench_output's, re-exported here for the sweep's callers. The
+# golden of test/operations/bench_result_line holds lines the OCaml side built, which test_orchestrate
+# feeds back through `last_checkpoint`.
+CHECKPOINT_PREFIX = bench_output.CHECKPOINT_PREFIX
+last_checkpoint = bench_output.last_checkpoint
 
 
 def checkpoint_note(checkpoint):
@@ -1539,16 +1518,14 @@ def _run_logged_cell(label, cmd, env, cwd, timeout, on_incomplete, on_checkpoint
         print(f"!!! {label}: {leftovers}", flush=True)
     elif not timed_out:
         proc.close()
-    line = next((l for l in reversed(stdout.splitlines()) if l.startswith("{")), None)
     result, unreadable = None, None
-    if line is not None:
-        try:
-            result = strict_json.loads(line)
-        except ValueError as e:
-            # Truncated, or spelling a non-finite number JSON has no word for (strict_json): a
-            # line no other reader of results.jsonl could take is no result, and the cell fails
-            # with the reason rather than taking the sweep down with it.
-            unreadable = f"its result line is not strict JSON ({e})"
+    try:
+        result = bench_output.result_record(stdout)
+    except ValueError as e:
+        # Truncated, or spelling a non-finite number JSON has no word for (strict_json): a line no
+        # other reader of results.jsonl could take is no result, and the cell fails with the
+        # reason rather than taking the sweep down with it.
+        unreadable = f"its result line is not strict JSON ({e})"
     if timed_out:
         # A cell over the cap is a FAILURE, not a slow measurement: whatever it was doing, it was
         # not making progress in the time the same search takes in every other repeat, and a

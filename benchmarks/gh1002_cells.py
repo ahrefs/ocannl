@@ -63,9 +63,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import bench_output
 import box_gate
 import cell_group
-import strict_json
 from display_safe import code_span, display_value, log_line, table_lines
 
 HERE = Path(__file__).resolve().parent
@@ -144,12 +144,11 @@ def result_line(path):
     try:
         if Path(str(path) + ".status").read_text().strip() != "0":
             return None
-        for line in Path(str(path) + ".out").read_text().splitlines():
-            line = line.strip()
-            if line.startswith("{"):
-                res = strict_json.loads(line)  # NonFinite is a ValueError: no result
-                fixture = Path(str(path)).name.split("__")[1]
-                return res if valid_losses(res.get("losses"), fixture) else None
+        res = bench_output.result_record(Path(str(path) + ".out").read_text())
+        if res is None:  # NonFinite, raised above, is a ValueError: no result either
+            return None
+        fixture = Path(str(path)).name.split("__")[1]
+        return res if valid_losses(res.get("losses"), fixture) else None
     except (OSError, ValueError, IndexError):
         pass
     return None
@@ -228,13 +227,9 @@ def run_cell(out, backend, fixture, treatment, r, artifacts=False):
 
 
 def cell_checkpoint(base):
-    """The last checkpoint the cell wrote to its .err (`orchestrate.last_checkpoint`), or None."""
-    # Imported here, as gh1181_cells.py does: the summaries' readers (kernel_attribution.py's
-    # KERNEL, test/operations' gh1002_kernels) load this module with its own imports only.
-    import orchestrate
-
+    """The last checkpoint the cell wrote to its .err (`bench_output.last_checkpoint`), or None."""
     try:
-        return orchestrate.last_checkpoint(
+        return bench_output.last_checkpoint(
             Path(str(base) + ".err").read_text(encoding="utf-8", errors="replace"))
     except OSError:
         return None
@@ -403,8 +398,8 @@ def valid_losses(losses, fx):
 def torch_losses(out, fx):
     tf = out / "torch" / f"{fx}.out"
     try:
-        lines = tf.read_text().strip().splitlines()
-        losses = strict_json.loads(lines[-1])["losses"] if lines else None
+        record = bench_output.result_record(tf.read_text())
+        losses = record["losses"] if record is not None else None
     except (OSError, ValueError, KeyError, TypeError):
         return None
     return losses if valid_losses(losses, fx) else None

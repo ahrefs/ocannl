@@ -20,8 +20,8 @@ SRC=$here/gh834_cells.sh
 CHECKER=$here/gh834_session.py
 tree=$TMP/tree
 mkdir -p "$tree/benchmarks" "$TMP/runs"
-# The checker's strict result-line loader, beside it as in the shipping tree.
-cp "$here/strict_json.py" "$tree/benchmarks/" || exit 2
+# The checker's result-line reader and its strict loader, beside it as in the shipping tree.
+cp "$here/bench_output.py" "$here/strict_json.py" "$tree/benchmarks/" || exit 2
 
 # The trace summary of a session whose timing calls all completed.
 GOOD_TRACE='timing-trace: summary: 12.5s wall, 9 candidate attempts, 31 timing calls'

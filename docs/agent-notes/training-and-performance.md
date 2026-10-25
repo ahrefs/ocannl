@@ -710,6 +710,14 @@ files.
   within Higham's gamma_K at the compute precision for the kernel's rounding count K, times one
   storage rounding where storage is narrower; its err/tol column shows the bound's margin (~1 where
   the output rounding dominates). Its arms are whole processes in `Bench_design`'s order, paired round by round.
+- That machinery is one module now, `benchmarks/cells.py` (gh-ocannl-1565), with two front ends:
+  `bin_cells.py` (named arms over one build, `--arm-exe` for two builds, `--reader record` for a
+  runner such as bench_gpt) and `ab.py` (two revisions, each built once in its own worktree). A new
+  driver imports them rather than re-deriving env scrubbing, supervision, the visiting order or the
+  sign test, and reads bench output only through `benchmarks/bench_output.py` (gh-ocannl-1443): five
+  private result-line readers had drifted apart (first vs last `{` line, a substring filter, a
+  lenient fallback) before they were folded. A bench that refuses its measurement for host
+  contention exits 3, and the drivers keep that apart from a failure (a 1 outranks a 3).
 - **Interleaved timing visits arms in `Bench_design`'s spread mirrored rotation** (`bin/bench_design.ml`,
   gh-ocannl-743). Mirroring each batch cancels LINEAR drift (every pair exchanged, equal mean
   positions); it does not equalize each arm's position histogram, which is what a nonlinear effect

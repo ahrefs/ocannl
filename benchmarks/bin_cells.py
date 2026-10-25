@@ -9,19 +9,26 @@ bench so that the command line IS the treatment, and records what the process ac
     python3 benchmarks/bin_cells.py --bench narrow_gebp_bench --backend cc --out DIR \\
         --rounds 12 --arm rn4=--rn=4 --arm rn6=--rn=6 -- f16 512 20
 
+The machinery is the shared cell runner's (`cells.py`, gh-ocannl-1565); this file is its front end
+for named arms over one checkout or prebuilt executables. `ab.py` is the front end for two
+revisions.
+
 - Hermetic. Every OCANNL_*, BENCH_* and OpenMP-runtime (OMP_*, GOMP_*, KMP_*) variable is removed
   from the cells' environment, and each cell runs with `--ocannl_no_config_file=true` from a fresh
   directory of its own under DIR, so neither an exported variable nor any `ocannl_config` on any
   path can reach it. What is left is the command line -- the driver's three pins first, then the
-  bench's common arguments (after `--`), then the arm's -- over the defaults of the commit the
-  bench was built from. Device and loader runtime controls (CUDA_*, HIP_*, HSA_*, MTL_*, DYLD_*,
-  LD_*, ... -- `RUNTIME_PREFIXES`) are the box's: some boxes cannot run without them, so they pass
-  through, and each one present is recorded with its value beside the numbers (OCAMLRUNPARAM, the
-  OCaml runtime's, among them), as are the toolchain variables (PATH, TMPDIR, SDKROOT, ...); every
-  other variable is recorded by name only, since an inherited environment carries credentials no
-  name pattern recognizes. On the C backends the compiler the kernels are compiled with -- the
-  resolved `cc_backend_compiler_command`, else `ocamlc -config`'s `c_compiler` -- is resolved on
-  the cells' PATH and fingerprinted per arm. The build,
+  bench's common arguments (after `--`), then the arm's -- over the defaults of the commit the bench
+  was built from. A runner mode or an OpenMP control that IS the treatment is stated: with `--env
+  NAME=VALUE` for every cell, or as the leading NAME=VALUE words of an arm's ARGS (as `env`(1) reads
+  them) for that arm; a stated OCANNL_* variable is refused, since a library setting is stated on
+  the command line, where its configuration record reads it back. Device and loader runtime controls
+  (CUDA_*, HIP_*, HSA_*, MTL_*, DYLD_*, LD_*, ... -- `cells.RUNTIME_PREFIXES`) are the box's: some
+  boxes cannot run without them, so they pass through, and each one present is recorded with its
+  value beside the numbers (OCAMLRUNPARAM, the OCaml runtime's, among them), as are the toolchain
+  variables (PATH, TMPDIR, SDKROOT, ...); every other variable is recorded by name only, since an
+  inherited environment carries credentials no name pattern recognizes. On the C backends the
+  compiler the kernels are compiled with -- the resolved `cc_backend_compiler_command`, else `ocamlc
+  -config`'s `c_compiler` -- is resolved on the cells' PATH and fingerprinted per arm. The build,
   when the driver does it, runs with DUNE_* and OCAMLPARAM cleared and the root and build directory
   named, so the executable measured is the one built from this checkout.
 - The resolved configuration is echoed, not assumed. Each cell runs under
@@ -40,13 +47,25 @@ bench so that the command line IS the treatment, and records what the process ac
   the device every later cell would be timed against. The build, when the driver does it, runs the
   same way.
 - Position-balanced. Arms are whole bench processes, visited round by round in `Bench_design`'s
-  spread mirrored rotation (bin/bench_design.ml; `design_orders` here is held equal to it by
+  spread mirrored rotation (bin/bench_design.ml; `cells.design_orders` is held equal to it by
   test/operations/bin_cells.py): every pair of arms exchanges positions within each pair of rounds,
   and every arm's position histogram is equal once the round count reaches the arm count (twice it
   for an odd one).
 - Paired. A bench reports a timed variant through `Bench_out.result`'s `bench-result:` line on
   stdout (seconds per run); a cell reporting none, or one variant twice, fails -- an executable
-  that does not report (`device_props`, `compilation_speed`) is not something this driver measures. The report gives each arm's median/min/max per variant, and for each
+  that does not report (`device_props`, `compilation_speed`) is not something this driver measures.
+  With `--reader record` a cell is a runner instead (`bench_gpt`, `bench_conv`, ...), read through
+  its result line (`bench_output.result_record`): each `--metric` (a dotted time field, default
+  `step_ms.p50`) is a variant, unchecked -- a runner states no output check, so the report compares
+  the arms' parity losses instead, informationally (a treatment may change numerics on purpose).
+  A stated `BENCH_FIXTURE` is made absolute, content-stamped in the manifest, and puts the run
+  behind the box gate (`--box BOX` or `--skip-box-check`, box_gate.py). For example, two placements
+  of one `bench_gpt` build:
+      python3 benchmarks/bin_cells.py --exe _build/default/benchmarks/runners/ocannl/bench_gpt.exe \
+          --backend cuda --out DIR --box rog-nv --reader record --rounds 12 \
+          --env BENCH_FIXTURE=benchmarks/fixtures/gpt2_mini.safetensors --env BENCH_TUNE=0 \
+          --arm base= --arm treat=--ocannl_gpu_graph_capture=false
+  The report gives each arm's median/min/max per variant, and for each
   non-reference arm the PAIRED ratio against the first arm, round by round -- the median ratio, its
   range, in how many rounds the arm was faster, and the exact two-sided sign-test p. Twelve paired
   rounds can resolve a 5% effect that overlapping intervals of single runs read as parity
@@ -54,201 +73,127 @@ bench so that the command line IS the treatment, and records what the process ac
 
 DIR must not exist yet or be empty, and must lie outside the checkout. It receives `manifest.json`
 (what ran: commit, host, bench, arms, design, the variables cleared), `cells.jsonl` (one record per
-cell: argv, exit, wall time, results, resolved configuration), `report.md` (also printed), and a
-`cells/<NNN>-<arm>/` directory per cell holding its `stdout`/`stderr` and anything it wrote. The
-exit status is 0 only when every cell exited 0 inside its cap with a clean treatment.
+cell: argv, stated environment, exit, wall time, results, resolved configuration), `report.md` (also
+printed), and a `cells/<NNN>-<arm>/` directory per cell holding its `stdout`/`stderr` and anything
+it wrote. The exit status is 0 only when every cell exited 0 inside its cap with a clean treatment;
+3 when the only faults are cells that exited 3 themselves (a bench refusing its measurement for host
+contention: the box's verdict, not the treatment's); 1 otherwise.
 
 Boundary: hermeticity here is about CONFIGURATION -- what the library reads. The machine (clock
 behaviour, co-tenants, thermal state, device state) is the operator's to control, through an
 exclusive measurement window; the driver records the host and the commit but does not query the
 device. The resolved configuration is what the process read through the library's traced getters,
 which is every library setting. `--exe` runs a prebuilt executable instead of building
-`bin/<bench>.exe` (for tests, and for measuring a binary as it is): the binary's sha256 is then its
-identity, and no commit is claimed for it.
+`bin/<bench>.exe` (for tests, and for measuring a binary as it is), and `--arm-exe LABEL=PATH` runs
+one arm's cells on an executable of its own (two builds of one bench, paired): such a binary's
+sha256 is then its identity, and no commit is claimed for it.
 """
 
 import argparse
-import hashlib
 import json
 import math
 import os
-import platform
-import re
-import shlex
-import shutil
 import statistics
-import subprocess
 import sys
-import time
 from pathlib import Path
 
-import cell_group
-import config_records
-import strict_json
+import bench_output
+import box_gate
+import cells
+import config_records  # noqa: F401  (re-exported: test/operations/bin_cells.py reads it here)
+from cells import (consistency_problems, design_orders, sign_test_p,  # noqa: F401
+                   treatment_problems)
 from display_safe import code_span, display_value, log_line, table_lines
 
-HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent
-BACKENDS = ("cc", "multidev_cc", "cuda", "hip", "metal")
-# The environment families a cell must not inherit: the library's settings, the benchmark runners'
-# modes, and the OpenMP runtime's controls (team size and placement shape the cc backend's Grid
-# kernels).
-CLEARED_PREFIXES = ("OCANNL_", "BENCH_", "OMP_", "GOMP_", "KMP_")
-# The environment families that steer a device or loader runtime without being OCANNL configuration
-# (`CUDA_LAUNCH_BLOCKING`, `HSA_OVERRIDE_GFX_VERSION`, `MTL_DEBUG_LAYER`, a preloaded library, ...).
-# Clearing them could leave a box unable to run at all (some AMD boxes need their HSA override), so
-# they pass through, and every one present is RECORDED with its value as part of the treatment.
-# Every other variable that passes is recorded by name.
-RUNTIME_PREFIXES = ("CUDA_", "NVIDIA_", "CUBLAS", "HIP_", "ROCR_", "HSA_", "AMD_", "GPU_", "MTL_",
-                    "METAL_", "OBJC_", "DYLD_", "LD_", "MALLOC", "OCAMLRUNPARAM")
-# What the build must not inherit: Dune's own environment and the compiler's flag override.
-BUILD_CLEARED_PREFIXES = ("DUNE_", "OCAMLPARAM")
-RESULT_PREFIX = "bench-result: "
-CELL_TIMEOUT_S = 1800
-BUILD_TIMEOUT_S = 3600
-LABEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
-_cancellation = cell_group.CancellationDeferral("bin_cells")
+ROOT = cells.ROOT
+RESULT_PREFIX = bench_output.RESULT_PREFIX
+LABEL_RE = cells.LABEL_RE
+DRIVER = "bin_cells"
 
 
-# ---------------------------------------------------------------------------------------------
-# The visiting order: bin/bench_design.ml's spread mirrored rotation, line for line.
+# A bench's `bench-result:` lines, read by the one reader of every bench output format.
+parse_results = bench_output.bench_results
 
 
-def design_offset(arms, pairs, p):
-    """The rotation offset of mirrored pair `p` of `pairs` (`Bench_design.offset`)."""
-    if arms % 2 == 0:
-        return 2 * (p * (arms // 2) // pairs)
-    return p * arms // pairs
+def bench_result_reader(stdout, _stderr):
+    """The cell reader for `Bench_out.result` lines."""
+    results = parse_results(stdout)
+    return results, cells.timed_results_problems(results, "reported no bench-result line")
 
 
-def design_orders(arms, batches):
-    """The arm indices each batch visits, in order (`Bench_design.orders`)."""
-    if arms < 1:
-        raise ValueError(f"{arms} arms; at least one is needed")
-    if batches < 2 or batches % 2:
-        raise ValueError(
-            f"{batches} rounds; the count must be even and positive -- every round is mirrored "
-            "by its partner")
-    orders = []
-    for b in range(batches):
-        s = design_offset(arms, batches // 2, b // 2)
-        idx = [(i + s) % arms for i in range(arms)]
-        if b % 2:
-            idx.reverse()
-        orders.append(idx)
-    return orders
+RECORD_NOTE = ("a runner's result line states no output check; the arms' parity losses are "
+               "compared under Parity losses")
 
 
-def exact_batches(arms):
-    """The least round count at which every arm's position histogram is equal."""
-    return arms if arms % 2 == 0 else 2 * arms
-
-
-def design_balance(arms, orders):
-    """(pairs exchanged, histograms equal, (fewest, most) edge visits), as `Bench_design.balance`."""
-    hist = [[0] * arms for _ in range(arms)]
-    before = [[0] * arms for _ in range(arms)]
-    for order in orders:
-        for pos, a in enumerate(order):
-            hist[a][pos] += 1
-            for later in order[pos + 1:]:
-                before[a][later] += 1
-    exchanged = all(before[a][b] == before[b][a] for a in range(arms) for b in range(arms))
-    equal = all(h == hist[0] for h in hist)
-    edges = [h[0] if arms == 1 else h[0] + h[-1] for h in hist]
-    return exchanged, equal, (min(edges), max(edges))
-
-
-# ---------------------------------------------------------------------------------------------
-# The environment and the configuration records.
-
-
-def hermetic_env(environ):
-    """`environ` without the cleared families, and the sorted names it cleared."""
-    cleared = sorted(k for k in environ if k.startswith(CLEARED_PREFIXES))
-    return {k: v for k, v in environ.items() if k not in cleared}, cleared
-
-
-def treatment_problems(config, backend, argv):
-    """Why a cell's resolved configuration (`config_records.parse_config_records`) is not the
-    treatment its command line `argv` states."""
-    if not config:
-        return ["no configuration records: the bench resolved no setting the driver could read"]
-    problems = []
-    b = config.get("backend")
-    if b is None or b["value"] != backend or b["source"] != "commandline":
-        problems.append(f"the backend resolved to {b and b['value']!r} from "
-                        f"{b and b['source']}, not to the pinned {backend!r}")
-    nc = config.get("no_config_file")
-    if nc is None or nc["value"] != "true" or nc["source"] != "commandline":
-        problems.append("the config file was not disabled")
-    for key, entry in sorted(config.items()):
-        # The layer is where the value entered: a profile value's is the level that picked it.
-        if entry["layer"] in ("environment", "config_file"):
-            via = " through a profile picked there" if entry["source"] == "profile" else ""
-            problems.append(f"ocannl_{key} came from the {entry['layer']}{via}")
-        elif entry["layer"] == "commandline" and entry["origin"] not in argv:
-            problems.append(f"ocannl_{key} came from a commandline argument the cell was not given: "
-                            f"{entry['origin']!r}")
-    return problems
-
-
-def consistency_problems(records):
-    """Settings the successful cells of one arm did not resolve identically: to two values, or read
-    in some cells and not in others (a cell that took a path reading one more setting ran a
-    treatment its siblings did not)."""
-    problems = []
-    arms = {}
-    for rec in records:
-        if rec["config"] is not None:
-            arms.setdefault(rec["arm"], []).append(rec)
-    for arm, recs in arms.items():
-        for key in sorted({k for r in recs for k in r["config"]}):
-            values = {}
-            for r in recs:
-                entry = r["config"].get(key)
-                values.setdefault(None if entry is None else entry["value"], []).append(r["cell"])
-            if len(values) > 1:
-                problems.append(f"arm {arm}: ocannl_{key} resolved differently -- " + "; ".join(
-                    ("not read" if v is None else repr(v)) + " in cell(s) "
-                    + ", ".join(map(str, cells)) for v, cells in values.items()))
-    return problems
-
-
-CHECKS = ("passed", "failed", "unchecked")
-
-
-def parse_results(text):
-    """The cell's `bench-result:` records: [(variant, seconds, check, note)], refusing with
-    ValueError a malformed one, a non-finite or non-positive time, or one that does not state its
-    output check (`Bench_out.check`)."""
-    results = []
-    for line in text.splitlines():
-        if not line.startswith(RESULT_PREFIX):
-            continue
-        record = strict_json.loads(line[len(RESULT_PREFIX):])
-        if not isinstance(record, dict):
-            raise ValueError(f"unusable result line (not a JSON object): {line}")
-        variant, seconds = record.get("variant"), record.get("seconds")
-        check, note = record.get("check"), record.get("check_note")
-        if not isinstance(variant, str) or isinstance(seconds, bool) or not isinstance(
-                seconds, (int, float)) or not math.isfinite(seconds) or seconds <= 0 \
-                or check not in CHECKS or not isinstance(note, str):
-            raise ValueError(f"unusable result line: {line}")
-        results.append((variant, float(seconds), check, note))
-    return results
-
-
-# ---------------------------------------------------------------------------------------------
-# Statistics and the report.
-
-
-def sign_test_p(faster, n):
-    """The exact two-sided sign-test p of `faster` successes in `n` untied pairs."""
-    if n == 0:
+def metric_scale(path):
+    """Seconds per unit of the result-line field at the dotted `path`: a `step_ms` percentile or a
+    `*_ms` field is milliseconds, a `*_s` field seconds; ValueError for any other (a count, a
+    flag), which is not a time this driver pairs."""
+    last = path.rsplit(".", 1)[-1]
+    if path.startswith("step_ms.") or last.endswith("_ms"):
+        return 1e-3
+    if last.endswith("_s"):
         return 1.0
-    k = min(faster, n - faster)
-    return min(1.0, 2 * sum(math.comb(n, i) for i in range(k + 1)) / 2 ** n)
+    raise ValueError(f"--metric {path}: not a time field (step_ms.*, *_ms, *_s)")
+
+
+def record_reader(metrics):
+    """The cell reader for a runner's result line (`bench_gpt`, `bench_conv`, ...): each of
+    `metrics` (dotted paths) becomes one timed variant, in seconds."""
+    def read(stdout, _stderr):
+        record = bench_output.result_record(stdout)
+        if record is None:
+            return [], ["reported no result line"]
+        results, problems = [], []
+        for path in metrics:
+            try:
+                value = bench_output.field(record, path)
+            except KeyError as e:
+                problems.append(e.args[0])
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                    or not math.isfinite(value) or value <= 0:
+                problems.append(f"{path} is {value!r}, not a positive time")
+                continue
+            results.append((path, value * metric_scale(path), "unchecked", RECORD_NOTE))
+        return results, problems + cells.timed_results_problems(results, "reported no result line")
+    return read
+
+
+def cell_losses(out, rec):
+    """The parity losses of a cell's result line, or None."""
+    try:
+        record = bench_output.result_record(cells.cell_stream(out, rec, "stdout"))
+    except (OSError, ValueError):
+        return None
+    losses = record.get("losses") if isinstance(record, dict) else None
+    return losses if isinstance(losses, list) else None
+
+
+def parity_lines(out, manifest, records):
+    """The Parity losses section of a record-reading run: per arm, how many distinct loss
+    sequences its clean cells reported, and whether they are the reference arm's. Informational:
+    a treatment may change numerics on purpose (a precision, a reassociation), so a difference is
+    reported, never failed."""
+    arms = [a["label"] for a in manifest["arms"]]
+    seqs = {a: [] for a in arms}
+    for r in records:
+        if r["ok"]:
+            losses = cell_losses(out, r)
+            if losses is not None:
+                seqs[r["arm"]].append(json.dumps(losses))
+    ref = set(seqs[arms[0]])
+    rows = [(display_value(a), str(len(seqs[a])), str(len(set(seqs[a]))),
+             "(reference)" if a == arms[0] else "-" if not seqs[a] or not ref else
+             "identical" if set(seqs[a]) == ref else "DIFFERENT")
+            for a in arms]
+    return ["", "## Parity losses", "",
+            *table_lines(("arm", "cells", "distinct sequences", "against the reference"), rows,
+                         "lrrl")]
+
+
+# ---------------------------------------------------------------------------------------------
+# The report.
 
 
 def spans(args):
@@ -256,18 +201,30 @@ def spans(args):
     return " ".join(code_span(a) for a in args) or "(none)"
 
 
+def assignments(env):
+    """A stated environment as code spans, or the empty string."""
+    return " ".join(code_span(f"{k}={v}") for k, v in sorted(env.items()))
+
+
 def ms(seconds):
     return f"{seconds * 1e3:.4g}"
 
 
-def render_report(manifest, records, problems):
+def render_report(manifest, records, problems, title="bin/ bench cells", extra=()):
     arms = [a["label"] for a in manifest["arms"]]
     rounds = manifest["rounds"]
-    lines = [f"# bin/ bench cells: {display_value(manifest['bench'])} on {manifest['backend']}", ""]
+    lines = [f"# {title}: {display_value(manifest['bench'])} on {manifest['backend']}", ""]
     lines.append("## Identity")
     lines.append("")
     for key in ("commit", "executable_sha256", "host", "system", "cpu"):
-        lines.append(log_line(f"- {key}: {display_value(str(manifest.get(key)))}"))
+        value = manifest.get(key)
+        lines.append(log_line(f"- {key}: " + ("n/a (per arm, below)" if value is None
+                                              else display_value(str(value)))))
+    for a in manifest["arms"]:
+        if "executable_sha256" in a:
+            lines.append(log_line(f"- executable ({display_value(a['label'])}): "
+                                  f"{display_value(a.get('commit', 'n/a'))}, sha256 "
+                                  f"{a['executable_sha256']}"))
     lines.append(log_line("- runtime controls passed through (device, loader, OCaml runtime): " + (
         ", ".join(f"{k}={display_value(v)}" for k, v in manifest["runtime_controls"].items())
         or "none")))
@@ -279,14 +236,17 @@ def render_report(manifest, records, problems):
     lines.append(log_line("- cleared from the environment: " + (
         ", ".join(display_value(v) for v in manifest["cleared"]) or "nothing")))
     lines += ["", "## Arms", ""]
-    lines.append(log_line("- common arguments: " + spans(manifest["common_args"])))
+    common_env = manifest.get("common_env", {})
+    lines.append(log_line("- common arguments: " + spans(manifest["common_args"])
+                          + (f"; stated environment {assignments(common_env)}"
+                             if common_env else "")))
     for a in manifest["arms"]:
-        lines.append(log_line(f"- {display_value(a['label'])}: " + spans(a["args"])))
-    exchanged, equal, (lo, hi) = design_balance(len(arms), design_orders(len(arms), rounds))
-    lines.append(log_line(
-        f"- design: spread mirrored rotation, {len(arms)} arm(s) x {rounds} rounds; every pair "
-        f"exchanged: {str(exchanged).lower()}; position histograms equal: {str(equal).lower()} "
-        f"(exact at multiples of {exact_batches(len(arms))} rounds); edge visits per arm {lo}-{hi}"))
+        env = a.get("env", {})
+        lines.append(log_line(f"- {display_value(a['label'])}: " + spans(a["args"])
+                              + (f"; stated environment {assignments(env)}" if env else "")))
+    for path, digest in manifest.get("stated_files", {}).items():
+        lines.append(log_line(f"- stated file {display_value(path)}: sha256 {digest}"))
+    lines.append(log_line(cells.design_line(len(arms), rounds)))
 
     ok = [r for r in records if r["ok"]]
     by, unchecked = {}, {}
@@ -303,8 +263,8 @@ def render_report(manifest, records, problems):
             for a in arms:
                 xs = sorted(by.get((v, a), {}).values())
                 rows.append((display_value(v), display_value(a), str(len(xs)),
-                             ms(statistics.median(xs)) if xs else "-", ms(xs[0]) if xs else "-",
-                             ms(xs[-1]) if xs else "-"))
+                             ms(statistics.median(xs)) if xs else "-",
+                             ms(xs[0]) if xs else "-", ms(xs[-1]) if xs else "-"))
         lines += table_lines(("variant", "arm", "n", "median", "min", "max"), rows, "llrrrr")
         if unchecked:
             lines += ["", "Variants whose output was NOT checked (their times are not evidence of a "
@@ -313,27 +273,17 @@ def render_report(manifest, records, problems):
                                f": {note}")  # the bench's own words; log_line refuses a line break
                       for (v, note), on in sorted(unchecked.items())]
     else:
-        lines.append("No cell reported a `bench-result:` line.")
+        lines.append("No cell reported a result.")
     if len(arms) > 1 and variants:
         ref = arms[0]
         lines += ["", f"## Paired against {display_value(ref)} (ratio = arm / reference, per round)",
                   ""]
-        rows = []
-        for v in variants:
-            base = by.get((v, ref), {})
-            for a in arms[1:]:
-                mine = by.get((v, a), {})
-                ratios = [mine[r] / base[r] for r in sorted(set(base) & set(mine))]
-                untied = [x for x in ratios if x != 1.0]
-                faster = sum(1 for x in untied if x < 1.0)
-                rows.append((display_value(v), display_value(a), str(len(ratios)),
-                             f"{statistics.median(ratios):.3f}" if ratios else "-",
-                             f"{min(ratios):.3f}-{max(ratios):.3f}" if ratios else "-",
-                             f"{faster} of {len(untied)}",
-                             f"{sign_test_p(faster, len(untied)):.3g}"))
-        lines += table_lines(("variant", "arm", "pairs", "median ratio", "range", "faster in",
-                              "sign-test p"), rows, "llrrrrr")
+        rows = [(display_value(v), display_value(a),
+                 *cells.paired_cells(cells.paired(by.get((v, ref), {}), by.get((v, a), {}))))
+                for v in variants for a in arms[1:]]
+        lines += table_lines(("variant", "arm", *cells.PAIRED_HEADER), rows, "llrrrrr")
 
+    lines += list(extra)
     lines += ["", "## Resolved configuration", ""]
     configs = {}
     for r in ok:
@@ -382,266 +332,208 @@ def render_report(manifest, records, problems):
 # Running.
 
 
-def run_in_group(argv, cwd, env, timeout, stdout, stderr):
-    """`argv` as a managed process group under a cap: its exit status, or "timeout"."""
-    with _cancellation.deferring():
-        proc = cell_group.spawn(argv, cwd=cwd, env=env, stdout=stdout, stderr=stderr)
-        try:
-            with _cancellation.cancellable():
-                status = proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            status = "timeout"
-        finally:
-            cleanup = cell_group.terminate(proc, grace=1.0)
-            if cleanup.observation is not cell_group.GONE or not cleanup.reaped:
-                raise cell_group.CleanupFailed(
-                    f"bin_cells: child group {proc.pid} cleanup {cleanup.observation.value}; clear "
-                    "survivors before measuring again")
-    return status
-
-
-def sha256(path):
-    with open(path, "rb") as f:
-        return hashlib.file_digest(f, "sha256").hexdigest()
-
-
-# The variables a C toolchain consults, recorded with their values beside `RUNTIME_PREFIXES`'s.
-# Every other variable a cell receives is recorded by NAME only: an inherited environment carries
-# credentials under names no pattern can recognize (a token inside DATABASE_URL), and the manifest
-# travels with published numbers. What the cc backend actually compiles kernels with is
-# fingerprinted directly instead (`kernel_compiler`), so a toolchain fact does not rest on this
-# list being complete.
-TOOLCHAIN_VARS = ("PATH", "TMPDIR", "SDKROOT", "DEVELOPER_DIR", "MACOSX_DEPLOYMENT_TARGET", "CPATH",
-                  "C_INCLUDE_PATH", "LIBRARY_PATH", "CC", "CFLAGS", "CPPFLAGS", "LDFLAGS",
-                  "OCAMLFIND_TOOLCHAIN")
-
-
-def recorded_values(env):
-    """The variables of `env` recorded with their values: runtime controls and toolchain ones."""
-    return {k: env[k] for k in sorted(env)
-            if k.startswith(RUNTIME_PREFIXES) or k in TOOLCHAIN_VARS}
-
-
-def kernel_compiler(command, env, out):
-    """The executable the cc backend compiles kernels with, fingerprinted: the first word of the
-    resolved `cc_backend_compiler_command` (`command`), or of `ocamlc -config`'s `c_compiler` when
-    that is empty -- `Cc_backend.compiler_command`'s rule -- resolved on the cells' PATH as
-    `Cc_backend.resolve_executable` resolves it. {"command", "resolved", "sha256"}, or an
-    {"error"} naming what could not be resolved."""
-    path = env.get("PATH", "")
-    if not command.strip():
-        ocamlc = shutil.which("ocamlc", path=path)
-        if ocamlc is None:
-            return {"error": "no ocamlc on the cells' PATH to ask for its c_compiler"}
-        with open(out, "wb") as f:
-            status = run_in_group([ocamlc, "-config"], out.parent, env, 120, f, subprocess.STDOUT)
-        lines = out.read_text(errors="replace").splitlines() if status == 0 else []
-        command = next((l.split(":", 1)[1].strip() for l in lines if l.startswith("c_compiler:")),
-                       "")
-        if not command:
-            return {"error": f"ocamlc -config named no c_compiler (status {status})"}
-    try:
-        first = shlex.split(command)[0]
-    except (ValueError, IndexError):
-        return {"command": command, "error": "the compiler command does not split into words"}
-    found = first if os.sep in first else shutil.which(first, path=path)
-    if found is None or not os.path.isfile(found):
-        return {"command": command, "error": f"{first} resolves to no executable"}
-    real = os.path.realpath(found)
-    return {"command": command, "resolved": real, "sha256": sha256(real)}
-
-
-def tree_commit():
-    """HEAD, marked when the tree carries anything that commit does not (read before the build)."""
-    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True)
-    if head.returncode != 0:
-        sys.exit(f"bin_cells: {ROOT} is not a git checkout; pass --exe to measure a binary as is")
-    dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=ROOT,
-                           capture_output=True, text=True)
-    return head.stdout.strip() + ("+uncommitted" if dirty.stdout.strip() else "")
-
-
-def host_identity():
-    cpu = "unknown"
-    if platform.system() == "Darwin":
-        probe = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True,
-                               text=True)
-        cpu = probe.stdout.strip() or cpu
-    elif Path("/proc/cpuinfo").exists():
-        cpu = next((line.split(":", 1)[1].strip()
-                    for line in Path("/proc/cpuinfo").read_text().splitlines()
-                    if line.startswith("model name")), cpu)
-    return {"host": platform.node(), "system": platform.platform(), "cpu": cpu}
-
-
 def parse_arm(text):
-    label, sep, args = text.partition("=")
-    if not sep or not LABEL_RE.fullmatch(label):
-        raise argparse.ArgumentTypeError(
-            f"--arm {text!r}: expected LABEL=ARGS with LABEL of letters, digits, '_', '.', '-'")
-    return {"label": label, "args": shlex.split(args)}
+    try:
+        return cells.parse_arm(text)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e))
+
+
+def parse_arm_exe(text):
+    label, sep, path = text.partition("=")
+    if not sep or not LABEL_RE.fullmatch(label) or not path:
+        raise argparse.ArgumentTypeError(f"--arm-exe {text!r}: expected LABEL=PATH")
+    return label, Path(path)
+
+
+def parse_assignment(text):
+    try:
+        env, rest = cells.split_assignments([text])
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(f"--env {text!r}: {e}")
+    if rest:
+        raise argparse.ArgumentTypeError(f"--env {text!r}: expected NAME=VALUE")
+    return env
 
 
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="bin_cells.py", description=__doc__.split("\n\n", 1)[0],
-        usage="%(prog)s (--bench NAME | --exe PATH) --backend B --out DIR [--rounds R] "
-              "[--arm LABEL=ARGS]... [--cell-timeout S] [-- BENCH-ARGS...]")
-    which = parser.add_mutually_exclusive_group(required=True)
+        usage="%(prog)s [--bench NAME | --exe PATH] --backend B --out DIR [--rounds R] "
+              "[--arm LABEL=ARGS]... [--arm-exe LABEL=PATH]... [--env NAME=VALUE]... "
+              "[--cell-timeout S] [-- BENCH-ARGS...]")
+    which = parser.add_mutually_exclusive_group()
     which.add_argument("--bench", help="a bin/ executable's dune name, built as bin/<NAME>.exe")
     which.add_argument("--exe", type=Path, help="run this prebuilt executable instead")
-    parser.add_argument("--backend", required=True, choices=BACKENDS)
+    parser.add_argument("--backend", required=True, choices=cells.BACKENDS)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--rounds", type=int, default=6,
                         help="even; each round runs every arm once (default 6)")
     parser.add_argument("--arm", action="append", type=parse_arm, default=[],
-                        help="LABEL=ARGS, the arm's own arguments (shell-split); the first arm is "
-                             "the reference of the paired ratios. Default: one arm, 'base', "
-                             "with none")
-    parser.add_argument("--cell-timeout", type=float, default=CELL_TIMEOUT_S,
-                        help=f"seconds per cell (default {CELL_TIMEOUT_S})")
+                        help="LABEL=ARGS, the arm's own arguments (shell-split; leading NAME=VALUE "
+                             "words are its stated environment); the first arm is the reference "
+                             "of the paired ratios. Default: one arm, 'base', with none")
+    parser.add_argument("--arm-exe", action="append", type=parse_arm_exe, default=[],
+                        help="LABEL=PATH: the arm LABEL runs this prebuilt executable (an arm "
+                             "named only here takes no arguments of its own)")
+    parser.add_argument("--env", action="append", type=parse_assignment, default=[],
+                        help="NAME=VALUE stated in every cell's environment (BENCH_*, OMP_*, ...; "
+                             "never OCANNL_*)")
+    parser.add_argument("--cell-timeout", type=float, default=cells.CELL_TIMEOUT_S,
+                        help=f"seconds per cell (default {cells.CELL_TIMEOUT_S})")
+    parser.add_argument("--reader", choices=("bench-result", "record"), default="bench-result",
+                        help="what a cell reports: `Bench_out.result` lines (the bin/ benches; the "
+                             "default), or a runner's result line (bench_gpt, bench_conv, ...)")
+    parser.add_argument("--metric", action="append", default=[],
+                        help="with --reader record: a dotted time field of the result line to "
+                             "pair (repeatable; default step_ms.p50)")
+    box_gate.add_arguments(parser)  # checked only when a cell is handed a fixture
     return parser
 
 
-def main(argv=None):
-    argv = sys.argv[1:] if argv is None else argv
-    split = argv.index("--") if "--" in argv else len(argv)
-    args = build_parser().parse_args(argv[:split])
-    common = argv[split + 1:]
-    arms = args.arm or [{"label": "base", "args": []}]
+def resolve_arms(args, parser):
+    """The arms with their executables, or a usage exit."""
+    arms = list(args.arm)
+    labels = [a["label"] for a in arms]
+    exes = dict(args.arm_exe)
+    if len(exes) != len(args.arm_exe):
+        parser.exit(2, f"{DRIVER}: one --arm-exe per arm\n")
+    arms += [{"label": label, "args": [], "env": {}} for label in exes if label not in labels]
+    arms = arms or [{"label": "base", "args": [], "env": {}}]
     labels = [a["label"] for a in arms]
     if len(set(labels)) != len(labels):
-        sys.exit(f"bin_cells: arm labels must be distinct, got {labels}")
+        parser.exit(2, f"{DRIVER}: arm labels must be distinct, got {labels}\n")
+    if args.bench is None and args.exe is None and any(a["label"] not in exes for a in arms):
+        parser.exit(2, f"{DRIVER}: --bench or --exe is required unless every arm has its "
+                       "--arm-exe\n")
+    for a in arms:
+        if a["label"] in exes:
+            exe = exes[a["label"]].resolve()
+            if not exe.is_file():
+                parser.exit(2, f"{DRIVER}: no executable at {exes[a['label']]}\n")
+            a["exe"] = exe
+    return arms
+
+
+def stated_fixtures(common_env, arms):
+    """Every stated BENCH_FIXTURE, made absolute (a cell runs in a directory of its own, where a
+    relative path names nothing); exit when one names no file."""
+    for env in [common_env, *(a["env"] for a in arms)]:
+        if "BENCH_FIXTURE" in env:
+            path = Path(env["BENCH_FIXTURE"]).expanduser().resolve()
+            if not path.is_file():
+                sys.exit(f"{DRIVER}: BENCH_FIXTURE={env['BENCH_FIXTURE']} names no file")
+            env["BENCH_FIXTURE"] = str(path)
+    return sorted({env["BENCH_FIXTURE"] for env in [common_env, *(a["env"] for a in arms)]
+                   if "BENCH_FIXTURE" in env})
+
+
+def gate_fixtures(args, fixtures):
+    """The box gate over the stated fixtures, per fixture directory (`box_gate.require`)."""
+    by_dir = {}
+    for f in fixtures:
+        path = Path(f)
+        by_dir.setdefault(path.parent, []).append(path.name.removesuffix(".safetensors"))
+    for fixture_dir, names in sorted(by_dir.items()):
+        box_gate.require(DRIVER, args, fixture_dir, names,
+                         run=lambda cmd: cells.run_in_group(cmd, ROOT, dict(os.environ), 900,
+                                                            None, None))
+
+
+def stated_files(common_env, arms):
+    """{path: sha256} of every stated value naming an existing file by an absolute path: what a
+    cell read besides its executable (a fixture), content-stamped beside the numbers."""
+    files = {}
+    for env in [common_env, *(a["env"] for a in arms)]:
+        for value in env.values():
+            if os.path.isabs(value) and os.path.isfile(value):
+                files[value] = cells.sha256(value)
+    return dict(sorted(files.items()))
+
+
+def main(argv=None, arm_commits=None):
+    argv = sys.argv[1:] if argv is None else argv
+    split = argv.index("--") if "--" in argv else len(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv[:split])
+    common = argv[split + 1:]
+    arms = resolve_arms(args, parser)
+    common_env = {k: v for e in args.env for k, v in e.items()}
+    if args.metric and args.reader != "record":
+        parser.exit(2, f"{DRIVER}: --metric reads a runner's result line: pass --reader record\n")
+    metrics = args.metric or ["step_ms.p50"]
+    try:
+        for m in metrics:
+            metric_scale(m)
+    except ValueError as e:
+        parser.exit(2, f"{DRIVER}: {e}\n")
+    reader = bench_result_reader if args.reader == "bench-result" else record_reader(metrics)
+    fixtures = stated_fixtures(common_env, arms)
     try:
         orders = design_orders(len(arms), args.rounds)
     except ValueError as e:
-        sys.exit(f"bin_cells: {e}")
+        sys.exit(f"{DRIVER}: {e}")
     if not args.cell_timeout > 0:
-        sys.exit("bin_cells: --cell-timeout must be positive")
-    out = args.out.resolve()
-    if out == ROOT or ROOT in out.parents:
-        sys.exit(f"bin_cells: --out must lie outside the checkout {ROOT}: its cells would write "
-                 "into the tree they measure")
-    if out.exists() and (not out.is_dir() or any(out.iterdir())):
-        sys.exit(f"bin_cells: {out} is not an empty directory; a leftover cell would be read as "
-                 "this run's")
-    _cancellation.install()
+        sys.exit(f"{DRIVER}: --cell-timeout must be positive")
+    out = cells.fresh_out_dir(args.out, DRIVER)
+    cells.install_cancellation(DRIVER)
+    if fixtures:
+        gate_fixtures(args, fixtures)
 
-    if args.exe is not None:
+    shared = [a for a in arms if "exe" not in a]
+    exe = None
+    if not shared:
+        bench, commit = "per-arm executables", "n/a (--arm-exe: prebuilt binaries, identified by sha256)"
+    elif args.exe is not None:
         exe = args.exe.resolve()
         if not exe.is_file():
-            sys.exit(f"bin_cells: no executable at {args.exe}")
+            sys.exit(f"{DRIVER}: no executable at {args.exe}")
         bench, commit = exe.name, "n/a (--exe: a prebuilt binary, identified by its sha256)"
     else:
         bench = args.bench
         if not LABEL_RE.fullmatch(bench):
-            sys.exit(f"bin_cells: not a dune executable name: {bench!r}")
-        commit = tree_commit()
+            sys.exit(f"{DRIVER}: not a dune executable name: {bench!r}")
+        commit = cells.tree_commit(ROOT, DRIVER)
         out.mkdir(parents=True, exist_ok=True)
-        build_dir = ROOT / "_build"
-        # The build is hermetic in the same sense as the cells: Dune's own environment
-        # (DUNE_BUILD_DIR moves the artifacts, DUNE_PROFILE changes the flags, ...) and OCAMLPARAM
-        # (compiler flags) are cleared, and the build directory is named, so the executable read
-        # below is the one this command built from this checkout.
-        build_env = {k: v for k, v in os.environ.items()
-                     if not k.startswith(BUILD_CLEARED_PREFIXES)}
-        with open(out / "build.log", "wb") as log:
-            # --root: dune otherwise picks the OUTERMOST project root, so a nested worktree without
-            # its dune-workspace would build the parent checkout while the executable read below
-            # (and the commit recorded above) are this one's (AGENTS.md, Worktrees).
-            status = run_in_group(["dune", "build", "--root", str(ROOT), "--build-dir",
-                                   str(build_dir), f"bin/{bench}.exe"], ROOT, build_env,
-                                  BUILD_TIMEOUT_S, log, subprocess.STDOUT)
-        exe = build_dir / "default/bin" / f"{bench}.exe"
-        if status != 0 or not exe.is_file():
-            sys.exit(f"bin_cells: building bin/{bench}.exe failed ({status}); see {out}/build.log")
+        exe = cells.build_target(ROOT, f"bin/{bench}.exe", out / "build.log", DRIVER)
+    for a in shared:
+        a["exe"] = exe
     out.mkdir(parents=True, exist_ok=True)
 
-    env, cleared = hermetic_env(os.environ)
-    pins = [f"--ocannl_backend={args.backend}", "--ocannl_no_config_file=true",
-            "--ocannl_log_config_json=true"]
+    env, cleared = cells.hermetic_env(os.environ)
     manifest = {
         "bench": bench, "backend": args.backend, "rounds": args.rounds, "commit": commit,
-        "executable": str(exe), "executable_sha256": sha256(exe), **host_identity(),
-        "common_args": common, "arms": arms, "pins": pins, "cleared": cleared,
-        "runtime_controls": {k: env[k] for k in sorted(env) if k.startswith(RUNTIME_PREFIXES)},
-        "environment_values": recorded_values(env),
+        "executable": None if exe is None else str(exe),
+        "executable_sha256": None if exe is None else cells.sha256(exe), **cells.host_identity(),
+        "common_args": common, "common_env": common_env,
+        "arms": [{"label": a["label"], "args": a["args"], "env": a["env"],
+                  **({"executable": str(a["exe"]), "executable_sha256": cells.sha256(a["exe"])}
+                     if a["exe"] != exe else {}),
+                  **({"commit": arm_commits[a["label"]]}
+                     if arm_commits and a["label"] in arm_commits else {})} for a in arms],
+        "reader": args.reader, **({"metrics": metrics} if args.reader == "record" else {}),
+        "stated_files": stated_files(common_env, arms),
+        "pins": cells.pins(args.backend), "cleared": cleared,
+        "runtime_controls": cells.runtime_controls(env),
+        "environment_values": cells.recorded_values(env),
         "environment_names": sorted(env),
         "cell_timeout_s": args.cell_timeout, "orders": orders,
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
 
-    records = []
-    with open(out / "cells.jsonl", "w") as jsonl:
-        for rnd, order in enumerate(orders):
-            for pos, a in enumerate(order):
-                arm = arms[a]
-                cell = len(records)
-                cwd = out / "cells" / f"{cell:03d}-{arm['label']}"
-                cwd.mkdir(parents=True)
-                cmd = [str(exe), *pins, *common, *arm["args"]]
-                started = time.monotonic()
-                with open(cwd / "stdout", "wb") as so, open(cwd / "stderr", "wb") as se:
-                    status = run_in_group(cmd, cwd, env, args.cell_timeout, so, se)
-                wall = time.monotonic() - started
-                stdout = (cwd / "stdout").read_text(errors="replace")
-                stderr = (cwd / "stderr").read_text(errors="replace")
-                problems, config, results = [], None, []
-                if status != 0:
-                    problems.append("timed out" if status == "timeout" else f"exited {status}")
-                try:
-                    config = config_records.parse_config_records(stderr)
-                    problems += treatment_problems(config, args.backend, cmd)
-                except config_records.ConfigRecordError as e:
-                    problems.append(f"unreadable configuration records: {e}")
-                try:
-                    results = parse_results(stdout)
-                except ValueError as e:
-                    problems.append(str(e))
-                else:
-                    # A cell that measured nothing the driver can read is no measurement: either
-                    # the executable does not report through Bench_out.result, or every variant
-                    # was skipped. Exiting 0 over an empty table would publish nothing as clean.
-                    if not results:
-                        problems.append("reported no bench-result line")
-                    problems += [f"{v} failed its output check: {note}"
-                                 for v, _, check, note in results if check == "failed"]
-                    names = [v for v, *_ in results]
-                    if len(set(names)) != len(names):
-                        problems.append("a variant reported twice: "
-                                        + ", ".join(sorted({v for v in names if names.count(v) > 1})))
-                rec = {"cell": cell, "round": rnd, "position": pos, "arm": arm["label"],
-                       "argv": cmd, "status": status, "wall_s": round(wall, 3),
-                       "results": results, "config": config, "problems": problems,
-                       "ok": not problems}
-                records.append(rec)
-                jsonl.write(json.dumps(rec) + "\n")
-                jsonl.flush()
-                print(log_line(
-                    f"bin_cells: cell {cell} round {rnd} position {pos} {display_value(arm['label'])}"
-                    f": exit {status}, {len(results)} result(s), {wall:.1f} s"
-                    + ("" if not problems else " -- " + display_value("; ".join(problems)))),
-                    file=sys.stderr, flush=True)
-
+    records = cells.run_cells(arms=arms, orders=orders, out=out, env=env, backend=args.backend,
+                              common=common, common_env=common_env, timeout=args.cell_timeout,
+                              reader=reader, driver=DRIVER)
     if args.backend in ("cc", "multidev_cc"):
-        compilers = {}
-        for arm in arms:
-            config = next((r["config"] for r in records
-                           if r["arm"] == arm["label"] and r["config"]), {})
-            command = config.get("cc_backend_compiler_command", {}).get("value", "")
-            compilers[arm["label"]] = kernel_compiler(command, env,
-                                                      out / f"ocamlc-config-{arm['label']}.txt")
-        manifest["kernel_compilers"] = compilers
+        manifest["kernel_compilers"] = cells.kernel_compilers(arms, records, env, out)
         (out / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
-    problems = [f"cell {r['cell']} ({r['arm']}): {'; '.join(r['problems'])}"
-                for r in records if not r["ok"]]
-    problems += [f"arm {arm}: the kernel compiler could not be identified: {c['error']}"
-                 for arm, c in manifest.get("kernel_compilers", {}).items() if "error" in c]
-    problems += consistency_problems([r for r in records if r["ok"]])
-    report = render_report(manifest, records, problems)
+    problems = cells.run_problems(manifest, records)
+    report = render_report(manifest, records, problems,
+                           extra=parity_lines(out, manifest, records)
+                           if args.reader == "record" else ())
     (out / "report.md").write_text(report)
     sys.stdout.write(report)
-    return 1 if problems else 0
+    return cells.exit_status(records, problems)
 
 
 if __name__ == "__main__":

@@ -19,7 +19,7 @@ grepping the line's text (gh-ocannl-1355):
 
   python3 benchmarks/strict_json.py field CELL.out step_ms.p50
 
-prints the field of the cell's last result line (`last_result`, `field`): a string as it is,
+prints the field of the cell's last result line (`bench_output.result_record`, `field`): a string as it is,
 anything else as JSON. It exits 1, naming the problem on stderr, when the file holds no result
 line, the line is not strict JSON, or the field is missing -- so `step_ms` being a
 `{p10,p50,p90}` object, or a nested `tune.shipped`, is the reader's business, not a pattern's.
@@ -56,14 +56,6 @@ def loads(text):
     return json.loads(text, parse_constant=_reject_constant, parse_float=_finite_float)
 
 
-def last_result(text):
-    """The record of the last line of `text` (a cell's stdout) that opens a JSON object, read by
-    `loads`; None when there is none. The LAST one, as orchestrate.py and gh612_cells.sh's parity
-    gate read it: a cell's stdout can carry earlier records."""
-    line = next((l.strip() for l in reversed(text.splitlines()) if l.lstrip().startswith("{")), None)
-    return None if line is None else loads(line)
-
-
 def field(record, path):
     """`record`'s value at the dotted `path` (`step_ms.p50`, `tune.shipped`), refusing with
     `KeyError` -- naming the path so far -- where a key is missing or its parent is not an
@@ -82,9 +74,10 @@ def _main(argv):
         print("usage: strict_json.py field FILE KEY[.KEY...]", file=sys.stderr)
         return 2
     _, path, key = argv
+    import bench_output  # the one reader of result lines (gh-ocannl-1443); it imports this module
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
-            record = last_result(f.read())
+            record = bench_output.result_record(f.read())
         if record is None:
             raise ValueError("no result line")
         value = field(record, key)

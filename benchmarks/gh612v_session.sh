@@ -408,7 +408,7 @@ assert_shipped_arm_A() {  # <cell>...
       f="$OUT_ROOT/${cell%/*}/${cell#*/}/$kind"
       [ -s "$f" ] || { echo "gh612v_session: missing record $f" >&2; bad=1; continue; }
       # The LAST JSON line, matching what `parity` reads: a cell's stdout can carry earlier records
-      # (strict_json.py's last_result, which parses it).
+      # (bench_output.result_record, which strict_json.py's field command reads it through).
       arm=$(python3 "$HERE/strict_json.py" field "$f" tune.shipped 2>/dev/null)
       n=$((n + 1))
       [ "${arm:-?}" = "A" ] || {

@@ -261,6 +261,72 @@ with tempfile.TemporaryDirectory() as scratch:
     claim("a cell reporting one variant twice fails the run",
           twice.returncode == 1 and "a variant reported twice: probe" in twice.stdout)
 
+    # --- The shared runner's front-end features (gh-ocannl-1565). ------------------------------
+    refused_run = drive("refused", "--rounds", "2", "--arm", "r=refused")
+    claim("a run whose only faults are cells refusing their measurement exits 3, though they "
+          "reported no result",
+          refused_run.returncode == 3 and "refused its measurement (exit 3)" in refused_run.stdout
+          and "reported no bench-result line" not in refused_run.stdout)
+    mixed = drive("mixed", "--rounds", "2", "--arm", "r=refused", "--arm", "f=fail")
+    claim("a refusal beside a failure is a failed run", mixed.returncode == 1)
+
+    stated = drive("stated", "--rounds", "2", "--env", "BENCH_PROBE_UNUSED=x",
+                   "--arm", "e3=BENCH_PROBE_SECONDS=0.003 env",
+                   "--arm", "e6=BENCH_PROBE_SECONDS=0.006 env")
+    stated_records = [json.loads(l)
+                      for l in (scratch / "stated/cells.jsonl").read_text().splitlines()]
+    stated_manifest = json.loads((scratch / "stated/manifest.json").read_text())
+    claim("an arm's stated variable reaches its cells, the ambient BENCH_TUNE does not",
+          stated.returncode == 0
+          and {(r["arm"], r["results"][0][1]) for r in stated_records}
+          == {("e3", 0.003), ("e6", 0.006)}
+          and "BENCH_TUNE" in stated_manifest["cleared"])
+    claim("the stated environment is recorded per cell and in the manifest",
+          all(r["env"] == {"BENCH_PROBE_UNUSED": "x",
+                           "BENCH_PROBE_SECONDS": "0.003" if r["arm"] == "e3" else "0.006"}
+              for r in stated_records)
+          and stated_manifest["common_env"] == {"BENCH_PROBE_UNUSED": "x"}
+          and "`BENCH_PROBE_SECONDS=0.006`" in stated.stdout)
+    claim("a stated library setting is refused before any cell runs",
+          drive("ocannl_env", "--env", "OCANNL_BACKEND=cc").returncode == 2
+          and drive("ocannl_arm", "--arm", "a=OCANNL_BACKEND=cc 1").returncode == 2
+          and not (scratch / "ocannl_env").exists() and not (scratch / "ocannl_arm").exists())
+
+    def drive_exes(out, *argv):
+        return subprocess.run([sys.executable, str(driver_path), "--backend", "cc", "--out",
+                               str(scratch / out), *argv], env=env, capture_output=True, text=True)
+
+    paired = drive_exes("arm_exe", "--rounds", "2", "--arm-exe", f"one={probe}",
+                        "--arm-exe", f"two={probe}", "--arm", "two=0.002")
+    paired_manifest = json.loads((scratch / "arm_exe/manifest.json").read_text())
+    claim("arms on executables of their own need no --bench or --exe, and carry their sha256",
+          paired.returncode == 0 and paired_manifest["executable"] is None
+          and all(a["executable"] == str(probe) and len(a["executable_sha256"]) == 64
+                  for a in paired_manifest["arms"])
+          and [a["args"] for a in paired_manifest["arms"]] == [["0.002"], []])
+    claim("an arm without an executable is refused when neither --bench nor --exe is given",
+          drive_exes("arm_exe_missing", "--arm-exe", f"one={probe}", "--arm", "two=1").returncode
+          == 2)
+
+    record = drive("record", "--rounds", "2", "--reader", "record", "--metric", "step_ms.p50",
+                   "--metric", "compile_s", "--arm", "slow=record:4", "--arm", "fast=record:2")
+    record_records = [json.loads(l)
+                      for l in (scratch / "record/cells.jsonl").read_text().splitlines()]
+    claim("a runner's result line is read as one unchecked variant per metric, in seconds",
+          record.returncode == 0
+          and all(sorted((v, s, c) for v, s, c, _ in r["results"])
+                  == [("compile_s", 0.5, "unchecked"),
+                      ("step_ms.p50", 0.004 if r["arm"] == "slow" else 0.002, "unchecked")]
+                  for r in record_records))
+    section = record.stdout[record.stdout.index("## Parity losses"):]
+    print(section[:section.index("## Resolved configuration")], end="")
+    claim("a metric that is no time field is refused",
+          drive("record_bad", "--reader", "record", "--metric", "timed_steps").returncode == 2
+          and drive("metric_alone", "--metric", "step_ms.p50").returncode == 2)
+    missing = drive("record_missing", "--rounds", "2", "--reader", "record", "--arm", "q=0.001")
+    claim("a cell printing no result line fails a record-reading run",
+          missing.returncode == 1 and "reported no result line" in missing.stdout)
+
     hung = drive("hung", "--rounds", "2", "--cell-timeout", "2", "--arm", "sleeps=sleep")
     hung_records = [json.loads(l) for l in (scratch / "hung/cells.jsonl").read_text().splitlines()]
     claim("a cell past its cap is recorded as timed out and fails the run",

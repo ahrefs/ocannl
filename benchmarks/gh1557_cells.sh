@@ -69,14 +69,14 @@ done
 python3 - "$root/benchmarks" "$out" "${weights[@]}" >"$out/summary.txt" <<'EOF' || rc=1
 import math, os, sys
 sys.path.insert(0, sys.argv[1])
-import strict_json
+import bench_output
 out = sys.argv[2]
 bad = 0
 for w in sys.argv[3:]:
     for arm in "ab":
         path = os.path.join(out, f"{w}-{arm}.out")
         try:
-            d = strict_json.last_result(open(path).read())
+            d = bench_output.result_record(open(path).read())
         except (OSError, ValueError) as e:
             print(f"weights={w} arm={arm.upper()}: no result line ({e})")
             bad += 1

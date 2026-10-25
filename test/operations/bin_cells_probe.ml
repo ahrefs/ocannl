@@ -8,8 +8,12 @@
    Its one positional is the treatment: a time in seconds to report (as [probe], and half of it as
    [probe_half]), or a misbehaviour -- [fail] exits 1, [silent] reports nothing, [twice] reports one
    variant twice, [sleep] outlives any cap the control sets, [nonfinite] reports a time JSON cannot
-   carry -- or [records], which prints the process's resolved-configuration records on stdout. No
-   backend is linked: nothing is compiled. *)
+   carry, [refused] reports nothing and exits 3 as a bench whose every timing window was refused for
+   host contention does (projection_shape_bench), [env] reports the seconds a stated
+   [BENCH_PROBE_SECONDS] carries, [record:<ms>] prints a runner's result line
+   ([Bench_json.result_line], the printer bench_gpt uses) with that p50 step time -- or [records],
+   which prints the process's resolved-configuration records on stdout. No backend is linked:
+   nothing is compiled. *)
 
 open Base
 
@@ -41,6 +45,17 @@ let () =
           Stdlib.print_endline (Utils.config_record_to_json r))
   | "sleep" -> Unix.sleepf 120.
   | "nonfinite" -> Bench_out.result ~variant:"probe" ~check:Bench_out.Passed ~seconds:Float.nan
+  | "refused" -> Stdlib.exit 3
+  | "env" ->
+      let seconds = Float.of_string (Stdlib.Sys.getenv "BENCH_PROBE_SECONDS") in
+      Bench_out.result ~variant:"probe" ~check:Bench_out.Passed ~seconds
+  | s when String.is_prefix s ~prefix:"record:" ->
+      let p50 = Float.of_string (String.chop_prefix_exn s ~prefix:"record:") in
+      Stdio.print_endline
+        (Bench_json.result_line ~backend:"cc" ~variant:"default" ~precision:"f32" ~profile:None
+           ~regime_knobs:[] ~ambient_resolved:[] ~workload:"probe" ~compile_s:0.5 ~searched:false
+           ~p10:(p50 /. 2.) ~p50 ~p90:(p50 *. 2.) ~queued_ms:p50 ~timed_steps:4 ~peak_memory:None
+           ~losses:[| 2.5; 1.25 |] ())
   | s ->
       let seconds = Float.of_string s in
       Bench_out.result ~variant:"probe" ~check:Bench_out.Passed ~seconds;

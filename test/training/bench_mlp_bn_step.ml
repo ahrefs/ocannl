@@ -6,8 +6,12 @@
 
    mlp_bn_step: segments=<n> grid_segments=<g> steps=<n> median_ms=<m> mean_ms=<a> min_ms=<x>
 
-   Usage: bench_mlp_bn_step.exe [STEPS] (default 200, after 20 warmup steps). Run from a directory
-   whose nearest ocannl_config names the backend (benchmarks/ does), or pass --ocannl_backend=cc. *)
+   and the median as a [Bench_out.result] line (variant [step]), which is what the benchmark drivers
+   (benchmarks/bin_cells.py, benchmarks/ab.py) read.
+
+   Usage: bench_mlp_bn_step.exe [STEPS] (default 200, after 20 warmup steps; STEPS is the first
+   argument that is not an --ocannl_ flag, wherever it sits). Run from a directory whose nearest
+   ocannl_config names the backend (benchmarks/ does), or pass --ocannl_backend=cc. *)
 open Base
 open Ocannl
 open Stdio
@@ -24,9 +28,13 @@ let batch_size = 1000
 
 let () =
   let steps =
-    match Sys.get_argv () |> Array.to_list |> List.tl with
-    | Some (s :: _) when not (String.is_prefix s ~prefix:"--") -> Int.of_string s
-    | _ -> 200
+    (* The drivers put their pinned flags first, so the count is found, not assumed at argv.(1). *)
+    match
+      Sys.get_argv () |> Array.to_list |> List.tl_exn
+      |> List.find ~f:(fun s -> not (String.is_prefix s ~prefix:"--"))
+    with
+    | Some s -> Int.of_string s
+    | None -> 200
   in
   Utils.settings.fixed_state_for_init <- Some 3;
   Tensor.unsafe_reinitialize ();
@@ -109,4 +117,8 @@ let () =
     "mlp_bn_step: backend=%s segments=%d grid_segments=%d steps=%d median_ms=%.4f mean_ms=%.4f \
      min_ms=%.4f\n\
      %!"
-    (Context.backend_name ctx) (List.length segments) grid_segments steps median mean sorted.(0)
+    (Context.backend_name ctx) (List.length segments) grid_segments steps median mean sorted.(0);
+  Bench_out.result ~variant:"step"
+    ~check:
+      (Bench_out.Unchecked "a timing of the training step; its loss is not compared to an oracle")
+    ~seconds:(median /. 1000.)
