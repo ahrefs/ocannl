@@ -703,8 +703,12 @@ files.
   roofline constants, `gpu_graph_capture`) are then recorded rather than merely unpinned. A bench
   reports to it through `Bench_out.result` (`bench-result:` lines), each stating its output check
   -- a timing of a kernel that failed its check is no measurement, so the cell fails, and an
-  unchecked variant (`narrow_storage_bench` has no oracle) is listed as such; the human table can
-  change freely. Its arms are whole processes in `Bench_design`'s order, paired round by round.
+  unchecked variant is listed as such; the human table can change freely. For a narrow-precision
+  elementwise bench the oracle that stays tight is `narrow_storage_bench`'s (gh-ocannl-1567): a
+  double twin evaluated over the inputs READ BACK from storage (so input rounding is not slack),
+  within Higham's gamma_K at the compute precision for the kernel's rounding count K, times one
+  storage rounding where storage is narrower; its err/tol column shows the bound's margin (~1 where
+  the output rounding dominates). Its arms are whole processes in `Bench_design`'s order, paired round by round.
 - **Interleaved timing visits arms in `Bench_design`'s spread mirrored rotation** (`bin/bench_design.ml`,
   gh-ocannl-743). Mirroring each batch cancels LINEAR drift (every pair exchanged, equal mean
   positions); it does not equalize each arm's position histogram, which is what a nonlinear effect

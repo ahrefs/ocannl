@@ -1944,7 +1944,9 @@ files.
 - The traffic win is real but it favors **fp16, not bf16**, the reverse of gh-ocannl-517's
   expectation. On an M-series at n = 2^22, a bandwidth-bound elementwise add measures 131 GB/s at
   f32, 1.97x that at half storage, and **0.91x** at bf16 (`bin/narrow_storage_bench.exe`); a
-  compute-bound control stays below 1x for both, as it must. bf16's round-to-nearest-even narrowing
+  compute-bound control stays below 1x for both, as it must (its half legs store `inf` for ~72% of
+  elements -- the polynomial passes 65504 -- which the bench's oracle accepts only where the double
+  reference overflows too). bf16's round-to-nearest-even narrowing
   is four vector ops against fp16's single NEON instruction, and at stream speed that costs more
   than halving the bytes saves. The route to competitive bf16 is a hardware convert (`BFCVT` on
   ARMv8.6-A, AVX512-BF16 on x86) — but only if it can be shown to agree with `single_to_bfloat16`
