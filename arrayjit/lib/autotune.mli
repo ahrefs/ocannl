@@ -790,11 +790,16 @@ val sketch_path_traffic_floor :
     in-kernel [serial] packing — a hoisted panel replaces the original operand's reads rather than
     adding traffic), and a lattice box contributes its most favorable (smallest-tiles) corner priced
     at the same per-format intrinsic tile the lattice is built from, so the increment is monotone in
-    refinement. [0] when no matmul site is detected or nothing is certain. Composed with the floor's
-    legs, this is what makes the family bound non-uniform across the tree — the schedule-invariant
-    floor differentiates only placements (phase 3), the increments differentiate the sketch-geometry
-    subtrees. Detection runs once at partial application; the returned closure is cheap per path.
-    Exposed for tests. *)
+    refinement. On a conv lowering (no matmul site, a {!detect_conv} one — the family that claims
+    it, gh-ocannl-1489) a committed row geometry ([conv-shape] on the CPU leg, [conv-rows] on the
+    GPU leg) contributes both staged operand tiles, written and read, at the tiles' own precisions
+    (the CPU packing precision where it widens; GPU reduction and column extents padded to the
+    selected format's intrinsic tile), one copy whatever the pipelined depth; every prefix above the
+    row geometry prices [0]. [0] when neither family has a site or nothing is certain. Composed with
+    the floor's legs, this is what makes the family bound non-uniform across the tree — the
+    schedule-invariant floor differentiates only placements (phase 3), the increments differentiate
+    the sketch-geometry subtrees. Detection runs once at partial application; the returned closure
+    is cheap per path. Exposed for tests. *)
 
 val sketch_schedule :
   accum_prec:(Ir.Ops.prec -> Ir.Ops.prec) ->

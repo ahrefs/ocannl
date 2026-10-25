@@ -4869,8 +4869,9 @@ let model_operand_loads ~(capabilities : Ir.Backend_intf.codegen_capabilities) (
    leaf with no tile-MMA site has no count and stays out of the comparison (its operands load by
    paths the count does not see), and the incumbent still wins every tie. The walk covers whichever
    family claims the lowering ({!sketch_family_tree}): the conv family is a tree under the same
-   fusion root since gh-ocannl-697, with no traffic increment of its own (the floor's [0] there is
-   sound — [completion_floor] bounds every completion). [None] = neither family has a site. *)
+   fusion root since gh-ocannl-697, and since gh-ocannl-1489 its committed row geometries raise the
+   bound by their two staged operand tiles' certain traffic, so conv geometry subtrees fathom as
+   matmul ones do. [None] = neither family has a site. *)
 let model_family_search ?(on_rejected = fun () -> ()) ?(admit = fun _ -> true)
     ?(on_excluded = fun () -> ()) ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices ~peak_flops
     ~peak_memory_bandwidth ~score ~incumbent (base_opt : LL.optimized) =

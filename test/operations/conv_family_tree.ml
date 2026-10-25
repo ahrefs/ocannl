@@ -425,3 +425,285 @@ let () =
       p "pad waste: lifting re-proposes nothing refuted: the refutations are the default's"
         (List.equal Poly.equal (Sspace.refutations lifted) (Sspace.refutations default_tree))
   | _ -> p "pad waste: the conv family claims the 20-row site" false
+
+(* gh-ocannl-1489: the conv family's certain-traffic increment. Before, [sketch_path_traffic_floor]
+   priced every conv path at 0, so the model search's bound was the schedule-invariant floor on
+   every conv subtree and nothing below the root could fathom. A committed row geometry now prices
+   both staged operand tiles, written and read, at the tiles' own precisions.
+
+   Three things are pinned, over paths walked out of the combined view (the [family] root included,
+   as the search sees them): - every leaf's increment is what its OWN sketch parameters imply
+   (nothing read off the path), and the increment is monotone along every prefix; - soundness,
+   exhaustively on small sites: every leaf's schedule is applied and [Cost_model.analyze]d, its
+   freshly minted nodes are charged at least the increment, and for EVERY prefix of its path the
+   composed floor stays at or below the leaf's [analyze] bytes and its bound at or below the leaf's
+   ranking score; - pruning: on a memory-dominated envelope with the incumbent at the best leaf's
+   score, the walk never admits a leaf whose own bound reaches it, at least one such leaf exists,
+   and it scores fewer leaves than the same walk under the old zero increment. *)
+
+(* A conv with a stride-2 window, the input tile's row compacted by [Stage]. *)
+let make_strided_conv tag ~b ~h ~ic ~oc =
+  let x =
+    NTDSL.init ~l:(tag ^ "x") ~prec:Ir.Ops.single ~b:[ b ] ~o:[ h; h; ic ]
+      ~f:(Ll_test.weighted ~weights:[| 1; 1; 2; 3 |] ~modulus:7 ~offset:0. ~stride:1.)
+      ()
+  in
+  let kern =
+    NTDSL.init ~l:(tag ^ "k") ~prec:Ir.Ops.single ~i:[ 3; 3; ic ] ~o:[ oc ]
+      ~f:(Ll_test.weighted ~weights:[| 2; 1; 1; 3 |] ~modulus:5 ~offset:(-2.) ~stride:1.)
+      ()
+  in
+  let%op y =
+    x +* "...| 2*oh<+kh, 2*ow<+kw, ..ic..; |kh, kw, ..ic.. -> ..oc.. => ...| oh, ow, ..oc.." kern
+  in
+  y
+
+(* Half-precision operands into a single-precision output: the CPU leg packs both operands at the
+   wider compute precision ([sk_pack_prec]), so its tiles are twice the operands' width. *)
+let make_narrow_conv tag ~b ~h ~ic ~oc =
+  let x =
+    NTDSL.init ~l:(tag ^ "x") ~prec:Ir.Ops.half ~b:[ b ] ~o:[ h; h; ic ]
+      ~f:(Ll_test.weighted ~weights:[| 1; 1; 2; 3 |] ~modulus:7 ~offset:0. ~stride:1.)
+      ()
+  in
+  let kern =
+    NTDSL.init ~l:(tag ^ "k") ~prec:Ir.Ops.half ~i:[ 3; 3; ic ] ~o:[ oc ]
+      ~f:(Ll_test.weighted ~weights:[| 2; 1; 1; 3 |] ~modulus:5 ~offset:(-2.) ~stride:1.)
+      ()
+  in
+  let%op y =
+    x +* "...| oh<+kh, ow<+kw, ..ic..; |kh, kw, ..ic.. -> ..oc.. => ...| oh, ow, ..oc.." kern
+  in
+  y
+
+(* The increment a leaf's own parameters imply: the two staged tiles' cells, written and read. The
+   row is the panel or block ([sk_bm]), else the whole row — on the GPU leg padded to the intrinsic
+   row tile the seed carries in [sk_tm]; the GPU leg pads the out-channel and reduction extents to
+   the multiples it carries in [sk_bn]/[sk_bk] (0 = already a multiple). A tile is at the packing
+   precision where it differs from its operand's, else at the operand's. *)
+let expected_conv_inc (site : Autotune.conv_site) (p : Autotune.sketch_params) =
+  let pad n t = if t = 0 then n else (n + t - 1) / t * t in
+  let width (tn : Ir.Tnode.t) =
+    let sp = Lazy.force tn.Ir.Tnode.storage_prec in
+    match p.Autotune.sk_pack_prec with
+    | Some q when not (Ir.Ops.equal_prec q sp) -> Ir.Ops.prec_in_bytes q
+    | _ -> Ir.Ops.prec_in_bytes sp
+  in
+  let m, k, n =
+    if p.Autotune.sk_gpu then
+      ( (if p.Autotune.sk_bm > 0 then p.Autotune.sk_bm else pad site.Autotune.c_nrow p.Autotune.sk_tm),
+        pad site.Autotune.c_nred p.Autotune.sk_bk,
+        pad site.Autotune.c_noc p.Autotune.sk_bn )
+    else
+      ( (if p.Autotune.sk_bm > 0 then p.Autotune.sk_bm else site.Autotune.c_nrow),
+        site.Autotune.c_nred,
+        site.Autotune.c_noc )
+  in
+  2 * ((m * k * width site.Autotune.c_a) + (k * n * width site.Autotune.c_b))
+
+let prefixes path =
+  List.folding_map path ~init:[] ~f:(fun acc entry ->
+      let acc = acc @ [ entry ] in
+      (acc, acc))
+
+let envelope limits ~peak_flops ~bandwidth =
+  {
+    limits with
+    Ir.Backend_intf.peak_flops = Some peak_flops;
+    peak_memory_bandwidth = Some bandwidth;
+  }
+
+let rank_with (limits : Ir.Backend_intf.hardware_limits) (o : LL.optimized) =
+  CM.ranking_seconds ?peak_flops:limits.peak_flops
+    ?peak_memory_bandwidth:limits.peak_memory_bandwidth ~is_global:(CM.global_in o) o.LL.llc
+
+let apply_leaf base p =
+  match Sched.apply (Autotune.sketch_schedule ~accum_prec:Fn.id ~p base) (scratch base) with
+  | post -> Some post
+  | exception _ -> None
+
+let bytes_of (s : CM.summary) = s.CM.read_bytes + s.CM.write_bytes
+
+let traffic_floor_pins name ~is_gpu ~limits base =
+  let limits = envelope limits ~peak_flops:1e12 ~bandwidth:1e11 in
+  match
+    ( Autotune.detect_conv base.LL.llc,
+      Autotune.sketch_family_tree ~is_gpu ~is_cpu:(not is_gpu) ~limits base )
+  with
+  | Some site, Some tree ->
+      let inc = Autotune.sketch_path_traffic_floor ~limits base in
+      let paths = Sspace.enumerate tree in
+      let leg = if is_gpu then FD.Conv_leg `Gpu else FD.Conv_leg `Cpu in
+      let on_leg = List.filter paths ~f:(fun (path, _) -> on_path leg path) in
+      let floor = CM.completion_floor base.LL.llc in
+      let bound_at i =
+        CM.roofline_seconds ?peak_flops:limits.peak_flops
+          ?peak_memory_bandwidth:limits.peak_memory_bandwidth ~flops:floor.CM.fr_flops
+          ~bytes:(floor.CM.fr_bytes + i) ()
+      in
+      let base_nodes =
+        Set.of_list (module Ir.Tnode) (List.map (CM.analyze base.LL.llc).CM.per_node ~f:fst)
+      in
+      let applied =
+        List.filter_map paths ~f:(fun (path, p) ->
+            Option.map (apply_leaf base p) ~f:(fun post -> (path, p, post)))
+      in
+      Stdio.printf
+        "== %s: %d leaf paths (%d on the %s leg), %d applied; floor %d bytes; increments %s ==\n"
+        name (List.length paths) (List.length on_leg)
+        (if is_gpu then "gpu" else "cpu")
+        (List.length applied) floor.CM.fr_bytes
+        (String.concat ~sep:" "
+           (List.dedup_and_sort ~compare:Int.compare (List.map paths ~f:(fun (path, _) -> inc path))
+           |> List.map ~f:Int.to_string));
+      p_all (name ^ ": every leaf's increment is the traffic its own parameters imply") paths
+        ~f:(fun (path, p) -> inc path = expected_conv_inc site p);
+      p_exists (name ^ ": a leaf on the target's leg prices above the floor") on_leg
+        ~f:(fun (path, _) -> inc path > 0);
+      p_all (name ^ ": the increment is monotone along every path's prefixes") paths
+        ~f:(fun (path, _) ->
+          List.is_sorted (0 :: List.map (prefixes path) ~f:inc) ~compare:Int.compare);
+      p (name ^ ": every leaf's schedule applies") (List.length applied = List.length paths);
+      p_all (name ^ ": the freshly minted nodes are charged at least the increment") applied
+        ~f:(fun (path, _, post) ->
+          let fresh =
+            List.sum
+              (module Int)
+              (CM.analyze post.LL.llc).CM.per_node
+              ~f:(fun (tn, fp) ->
+                if Set.mem base_nodes tn then 0 else fp.CM.fp_read_bytes + fp.CM.fp_write_bytes)
+          in
+          fresh >= inc path);
+      p_all (name ^ ": at every prefix the composed floor is within the leaf's analyzed bytes")
+        applied ~f:(fun (path, _, post) ->
+          let total = bytes_of (CM.analyze post.LL.llc) in
+          List.for_all (prefixes path) ~f:(fun pre -> floor.CM.fr_bytes + inc pre <= total));
+      p_all (name ^ ": every leaf's bound is within its ranking score") applied
+        ~f:(fun (path, _, post) ->
+          match (bound_at (inc path), rank_with limits post) with
+          | Some b, Some s -> Float.(b <= s)
+          | _ -> false)
+  | _ -> p (name ^ ": the conv family claims the site") false
+
+let () =
+  let narrow_cpu = { cpu_limits with Ir.Backend_intf.native_fp16_arithmetic = false } in
+  let masked = lowering "cft_tf_masked" (make_conv "tm" ~b:2 ~h:11 ~ic:4 ~oc:8) in
+  let dividing = lowering "cft_tf_dividing" (make_conv "td" ~b:2 ~h:18 ~ic:8 ~oc:8) in
+  let tailed = lowering "cft_tf_tail" (make_conv ~tail:true "tt" ~b:2 ~h:11 ~ic:4 ~oc:8) in
+  let strided = lowering "cft_tf_strided" (make_strided_conv "ts" ~b:2 ~h:21 ~ic:8 ~oc:8) in
+  let narrow = lowering "cft_tf_narrow" (make_narrow_conv "tn" ~b:2 ~h:18 ~ic:8 ~oc:8) in
+  traffic_floor_pins "floor, masked 9-row, cpu" ~is_gpu:false ~limits:cpu_limits masked;
+  traffic_floor_pins "floor, masked 9-row, gpu" ~is_gpu:true ~limits:gpu_limits masked;
+  traffic_floor_pins "floor, dividing 16-row, cpu" ~is_gpu:false ~limits:cpu_limits dividing;
+  traffic_floor_pins "floor, dividing 16-row, gpu" ~is_gpu:true ~limits:gpu_limits dividing;
+  traffic_floor_pins "floor, bias/relu tail, cpu" ~is_gpu:false ~limits:cpu_limits tailed;
+  traffic_floor_pins "floor, bias/relu tail, gpu" ~is_gpu:true ~limits:gpu_limits tailed;
+  traffic_floor_pins "floor, stride 2, cpu" ~is_gpu:false ~limits:cpu_limits strided;
+  traffic_floor_pins "floor, stride 2, gpu" ~is_gpu:true ~limits:gpu_limits strided;
+  traffic_floor_pins "floor, f16 operands packed at f32, cpu" ~is_gpu:false ~limits:narrow_cpu
+    narrow
+
+(* Pruning: the walk on a memory-dominated envelope, with the incumbent strictly between the
+   schedule-invariant floor's bound and the largest raised bound ([inc_max - 1] bytes above the
+   floor). The increments the incumbent and the raised set are read from are the leaves' own
+   ([expected_conv_inc] of their sketch parameters), never the floor under test, so a floor that
+   prices nothing fails the fathoming claims themselves. Every leaf's real score sits far above that
+   incumbent, so the walk's answer is [None] either way; what moves is the work: the leaves whose
+   raised bound reaches the incumbent are fathomed unscored, where the zero increment scored them.
+   Why the incumbent is not a real leaf's score: [completion_floor] prices the windowed input read
+   at 0 (an overlapping window's image is not exact), so every leaf's traffic sits about the input's
+   size above floor + increment, more than any two leaves' tile increments differ by. *)
+let pruning_pins name ~is_gpu ~limits base =
+  let limits = envelope limits ~peak_flops:1e15 ~bandwidth:1e9 in
+  let score segs =
+    List.fold segs ~init:(Some 0.) ~f:(fun acc o ->
+        Option.map2 acc (rank_with limits o) ~f:Float.( + ))
+  in
+  let score_p p = Option.bind (apply_leaf base p) ~f:(fun post -> score [ post ]) in
+  let floor = CM.completion_floor base.LL.llc in
+  let bound_at i =
+    CM.roofline_seconds ?peak_flops:limits.peak_flops
+      ?peak_memory_bandwidth:limits.peak_memory_bandwidth ~flops:floor.CM.fr_flops
+      ~bytes:(floor.CM.fr_bytes + i) ()
+  in
+  match
+    ( Autotune.detect_conv base.LL.llc,
+      Autotune.sketch_family_tree ~is_gpu ~is_cpu:(not is_gpu) ~limits base )
+  with
+  | None, _ | _, None -> p (name ^ ": the conv family claims the site") false
+  | Some site, Some tree ->
+      let scored =
+        List.filter_map (Sspace.enumerate tree) ~f:(fun (path, p) ->
+            Option.map (score_p p) ~f:(fun s -> (path, p, s)))
+      in
+      let inc_max =
+        List.fold scored ~init:0 ~f:(fun acc (_, p, _) -> max acc (expected_conv_inc site p))
+      in
+      (match (bound_at 0, bound_at (inc_max - 1)) with
+      | Some b0, Some incumbent when Float.(incumbent > b0) ->
+          let admitted = ref [] in
+          let r =
+            Autotune.model_family_search
+              ~admit:(fun p ->
+                admitted := p :: !admitted;
+                true)
+              ~capabilities:Ir.Backend_intf.no_codegen_capabilities ~is_gpu ~is_cpu:(not is_gpu)
+              ~limits ~static_indices:[] ~peak_flops:limits.peak_flops
+              ~peak_memory_bandwidth:limits.peak_memory_bandwidth ~score ~incumbent base
+          in
+          let reaches (_, p, _) =
+            Option.exists (bound_at (expected_conv_inc site p)) ~f:(fun b -> Float.(b >= incumbent))
+          in
+          let raised = List.filter scored ~f:reaches in
+          (* The old walk: the same tree and scores under a uniform zero increment. *)
+          let _, zero_stats =
+            Sspace.search ~bound:(fun ~path:_ _ -> bound_at 0) ~incumbent ~score:score_p tree
+          in
+          let st = match r with Some (_, st, _) -> st.Sspace.st_scored | None -> -1 in
+          Stdio.printf
+            "== %s: %d scored leaves, %d with a bound at the incumbent; the walk scores %d, the \
+             zero-increment walk %d ==\n"
+            name (List.length scored) (List.length raised) st zero_stats.Sspace.st_scored;
+          p_exists (name ^ ": some leaf's raised bound reaches the incumbent") scored ~f:reaches;
+          p_none (name ^ ": no leaf whose bound reaches the incumbent is admitted to scoring")
+            raised ~f:(fun (_, p, _) -> List.mem !admitted p ~equal:Poly.equal);
+          p
+            (name ^ ": the walk scores fewer leaves than under the zero increment")
+            (st >= 0 && st < zero_stats.Sspace.st_scored);
+          p
+            (name ^ ": the pick is the exhaustive answer below the incumbent")
+            (match r with
+            | Some (pick, _, _) ->
+                let below =
+                  List.fold scored ~init:None ~f:(fun acc (_, p, s) ->
+                      if Float.(s >= incumbent) then acc
+                      else match acc with Some (_, b) when Float.(s >= b) -> acc | _ -> Some (p, s))
+                in
+                Option.equal
+                  (fun (p1, s1) (p2, s2) -> Poly.equal p1 p2 && Float.equal s1 s2)
+                  pick below
+            | None -> false)
+      | _ -> p (name ^ ": a leaf prices above the floor, so an incumbent fits between") false);
+      (* With an unbeatable incumbent the raised bound still finds the exhaustive first argmin. *)
+      let exhaustive =
+        List.fold scored ~init:None ~f:(fun acc (_, p, s) ->
+            match acc with Some (_, b) when Float.(s >= b) -> acc | _ -> Some (p, s))
+      in
+      p
+        (name ^ ": with an unbeatable incumbent the pick is the exhaustive first argmin")
+        (match
+           Autotune.model_family_search ~capabilities:Ir.Backend_intf.no_codegen_capabilities
+             ~is_gpu ~is_cpu:(not is_gpu) ~limits ~static_indices:[] ~peak_flops:limits.peak_flops
+             ~peak_memory_bandwidth:limits.peak_memory_bandwidth ~score ~incumbent:Float.infinity
+             base
+         with
+        | Some (pick, _, _) ->
+            Option.equal
+              (fun (p1, s1) (p2, s2) -> Poly.equal p1 p2 && Float.equal s1 s2)
+              pick exhaustive
+        | None -> false)
+
+let () =
+  let dividing = lowering "cft_prune" (make_conv "pd" ~b:2 ~h:18 ~ic:8 ~oc:8) in
+  pruning_pins "pruning, dividing 16-row, cpu" ~is_gpu:false ~limits:cpu_limits dividing;
+  pruning_pins "pruning, dividing 16-row, gpu" ~is_gpu:true ~limits:gpu_limits dividing

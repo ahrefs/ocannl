@@ -224,3 +224,87 @@ pad waste: the 16-row block is excluded with the witness: true
 pad waste: the least-padded geometries stay proposed: true
 pad waste: lifting re-proposes exactly the default threshold's leaves: true
 pad waste: lifting re-proposes nothing refuted: the refutations are the default's: true
+== floor, masked 9-row, cpu: 2 leaf paths (2 on the cpu leg), 2 applied; floor 11520 bytes; increments 544 ==
+floor, masked 9-row, cpu: every leaf's increment is the traffic its own parameters imply: true
+floor, masked 9-row, cpu: a leaf on the target's leg prices above the floor: true
+floor, masked 9-row, cpu: the increment is monotone along every path's prefixes: true
+floor, masked 9-row, cpu: every leaf's schedule applies: true
+floor, masked 9-row, cpu: the freshly minted nodes are charged at least the increment: true
+floor, masked 9-row, cpu: at every prefix the composed floor is within the leaf's analyzed bytes: true
+floor, masked 9-row, cpu: every leaf's bound is within its ranking score: true
+== floor, masked 9-row, gpu: 2 leaf paths (2 on the gpu leg), 2 applied; floor 11520 bytes; increments 1024 1536 ==
+floor, masked 9-row, gpu: every leaf's increment is the traffic its own parameters imply: true
+floor, masked 9-row, gpu: a leaf on the target's leg prices above the floor: true
+floor, masked 9-row, gpu: the increment is monotone along every path's prefixes: true
+floor, masked 9-row, gpu: every leaf's schedule applies: true
+floor, masked 9-row, gpu: the freshly minted nodes are charged at least the increment: true
+floor, masked 9-row, gpu: at every prefix the composed floor is within the leaf's analyzed bytes: true
+floor, masked 9-row, gpu: every leaf's bound is within its ranking score: true
+== floor, dividing 16-row, cpu: 2 leaf paths (2 on the cpu leg), 2 applied; floor 35072 bytes; increments 1536 ==
+floor, dividing 16-row, cpu: every leaf's increment is the traffic its own parameters imply: true
+floor, dividing 16-row, cpu: a leaf on the target's leg prices above the floor: true
+floor, dividing 16-row, cpu: the increment is monotone along every path's prefixes: true
+floor, dividing 16-row, cpu: every leaf's schedule applies: true
+floor, dividing 16-row, cpu: the freshly minted nodes are charged at least the increment: true
+floor, dividing 16-row, cpu: at every prefix the composed floor is within the leaf's analyzed bytes: true
+floor, dividing 16-row, cpu: every leaf's bound is within its ranking score: true
+== floor, dividing 16-row, gpu: 4 leaf paths (4 on the gpu leg), 4 applied; floor 35072 bytes; increments 1024 1536 ==
+floor, dividing 16-row, gpu: every leaf's increment is the traffic its own parameters imply: true
+floor, dividing 16-row, gpu: a leaf on the target's leg prices above the floor: true
+floor, dividing 16-row, gpu: the increment is monotone along every path's prefixes: true
+floor, dividing 16-row, gpu: every leaf's schedule applies: true
+floor, dividing 16-row, gpu: the freshly minted nodes are charged at least the increment: true
+floor, dividing 16-row, gpu: at every prefix the composed floor is within the leaf's analyzed bytes: true
+floor, dividing 16-row, gpu: every leaf's bound is within its ranking score: true
+== floor, bias/relu tail, cpu: 3 leaf paths (3 on the cpu leg), 3 applied; floor 16736 bytes; increments 544 ==
+floor, bias/relu tail, cpu: every leaf's increment is the traffic its own parameters imply: true
+floor, bias/relu tail, cpu: a leaf on the target's leg prices above the floor: true
+floor, bias/relu tail, cpu: the increment is monotone along every path's prefixes: true
+floor, bias/relu tail, cpu: every leaf's schedule applies: true
+floor, bias/relu tail, cpu: the freshly minted nodes are charged at least the increment: true
+floor, bias/relu tail, cpu: at every prefix the composed floor is within the leaf's analyzed bytes: true
+floor, bias/relu tail, cpu: every leaf's bound is within its ranking score: true
+== floor, bias/relu tail, gpu: 2 leaf paths (2 on the gpu leg), 2 applied; floor 16736 bytes; increments 1024 1536 ==
+floor, bias/relu tail, gpu: every leaf's increment is the traffic its own parameters imply: true
+floor, bias/relu tail, gpu: a leaf on the target's leg prices above the floor: true
+floor, bias/relu tail, gpu: the increment is monotone along every path's prefixes: true
+floor, bias/relu tail, gpu: every leaf's schedule applies: true
+floor, bias/relu tail, gpu: the freshly minted nodes are charged at least the increment: true
+floor, bias/relu tail, gpu: at every prefix the composed floor is within the leaf's analyzed bytes: true
+floor, bias/relu tail, gpu: every leaf's bound is within its ranking score: true
+== floor, stride 2, cpu: 2 leaf paths (2 on the cpu leg), 2 applied; floor 15104 bytes; increments 1152 ==
+floor, stride 2, cpu: every leaf's increment is the traffic its own parameters imply: true
+floor, stride 2, cpu: a leaf on the target's leg prices above the floor: true
+floor, stride 2, cpu: the increment is monotone along every path's prefixes: true
+floor, stride 2, cpu: every leaf's schedule applies: true
+floor, stride 2, cpu: the freshly minted nodes are charged at least the increment: true
+floor, stride 2, cpu: at every prefix the composed floor is within the leaf's analyzed bytes: true
+floor, stride 2, cpu: every leaf's bound is within its ranking score: true
+== floor, stride 2, gpu: 2 leaf paths (2 on the gpu leg), 2 applied; floor 15104 bytes; increments 1024 1536 ==
+floor, stride 2, gpu: every leaf's increment is the traffic its own parameters imply: true
+floor, stride 2, gpu: a leaf on the target's leg prices above the floor: true
+floor, stride 2, gpu: the increment is monotone along every path's prefixes: true
+floor, stride 2, gpu: every leaf's schedule applies: true
+floor, stride 2, gpu: the freshly minted nodes are charged at least the increment: true
+floor, stride 2, gpu: at every prefix the composed floor is within the leaf's analyzed bytes: true
+floor, stride 2, gpu: every leaf's bound is within its ranking score: true
+== floor, f16 operands packed at f32, cpu: 2 leaf paths (2 on the cpu leg), 2 applied; floor 17536 bytes; increments 1536 ==
+floor, f16 operands packed at f32, cpu: every leaf's increment is the traffic its own parameters imply: true
+floor, f16 operands packed at f32, cpu: a leaf on the target's leg prices above the floor: true
+floor, f16 operands packed at f32, cpu: the increment is monotone along every path's prefixes: true
+floor, f16 operands packed at f32, cpu: every leaf's schedule applies: true
+floor, f16 operands packed at f32, cpu: the freshly minted nodes are charged at least the increment: true
+floor, f16 operands packed at f32, cpu: at every prefix the composed floor is within the leaf's analyzed bytes: true
+floor, f16 operands packed at f32, cpu: every leaf's bound is within its ranking score: true
+== pruning, dividing 16-row, cpu: 2 scored leaves, 2 with a bound at the incumbent; the walk scores 0, the zero-increment walk 2 ==
+pruning, dividing 16-row, cpu: some leaf's raised bound reaches the incumbent: true
+pruning, dividing 16-row, cpu: no leaf whose bound reaches the incumbent is admitted to scoring: true
+pruning, dividing 16-row, cpu: the walk scores fewer leaves than under the zero increment: true
+pruning, dividing 16-row, cpu: the pick is the exhaustive answer below the incumbent: true
+pruning, dividing 16-row, cpu: with an unbeatable incumbent the pick is the exhaustive first argmin: true
+== pruning, dividing 16-row, gpu: 4 scored leaves, 2 with a bound at the incumbent; the walk scores 2, the zero-increment walk 4 ==
+pruning, dividing 16-row, gpu: some leaf's raised bound reaches the incumbent: true
+pruning, dividing 16-row, gpu: no leaf whose bound reaches the incumbent is admitted to scoring: true
+pruning, dividing 16-row, gpu: the walk scores fewer leaves than under the zero increment: true
+pruning, dividing 16-row, gpu: the pick is the exhaustive answer below the incumbent: true
+pruning, dividing 16-row, gpu: with an unbeatable incumbent the pick is the exhaustive first argmin: true

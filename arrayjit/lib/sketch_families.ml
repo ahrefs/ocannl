@@ -4382,6 +4382,29 @@ let matmul_seed_params ?coalesced ?capabilities ~is_gpu ~is_cpu
 let conv_offset_witness =
   "a conv axis carries a nonzero padding offset, at which the packing anchor would mispack"
 
+(* The CPU conv leg's packing precision (gh-ocannl-575): the site's compute precision, resolved
+   through the same [Numerics.cpu_compute_prec] the emission asks, carried as [sk_pack_prec] when
+   either operand stores narrower — [cpu_conv_sketch_schedule]'s [Stage]s then mint that operand's
+   tiles at it. Shared by the tree (which seeds it) and the traffic floor (which prices the tiles at
+   it, gh-ocannl-1489), so the two cannot disagree on a staged tile's width. *)
+let cpu_conv_pack_prec ~(limits : Ir.Backend_intf.hardware_limits) (site : conv_site) =
+  let native_fp16 = limits.Ir.Backend_intf.native_fp16_arithmetic in
+  let comp_prec p = Ir.Numerics.cpu_compute_prec ~native_fp16_arithmetic:native_fp16 p in
+  let cprec = comp_prec (Lazy.force site.c_d.Ir.Tnode.storage_prec) in
+  let a_prec = Lazy.force site.c_a.Ir.Tnode.storage_prec
+  and b_prec = Lazy.force site.c_b.Ir.Tnode.storage_prec in
+  if Ir.Ops.equal_prec cprec a_prec && Ir.Ops.equal_prec cprec b_prec then None else Some cprec
+
+(* The bytes a staged tile of [source] holds per cell under [pack_prec] (the CPU leg's
+   [sk_pack_prec]; [None] on the GPU leg, whose [Stage] declares no [tile_prec]): [Stage] mints the
+   tile at [pack_prec] exactly where the source stores at another precision, else at the
+   source's. *)
+let staged_tile_elt_bytes ~pack_prec (source : Ir.Tnode.t) =
+  let source_prec = Lazy.force source.Ir.Tnode.storage_prec in
+  match pack_prec with
+  | Some p when not (Ir.Ops.equal_prec p source_prec) -> Ir.Ops.prec_in_bytes p
+  | _ -> Ir.Ops.prec_in_bytes source_prec
+
 (* The conv family's verdicts on one site, decided once and shared by both fusion flavors: every
    gate below is flavor-independent, so each flavor's subtree reads the same judgments (forced on
    first use) and only its leaves' [sk_epilogue] differs. *)
@@ -4504,13 +4527,7 @@ let conv_family_tree ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~
         ]
         (fun () ->
           let base =
-            {
-              base with
-              sk_epilogue = fused;
-              sk_pack_prec =
-                (if Ir.Ops.equal_prec cprec a_prec && Ir.Ops.equal_prec cprec b_prec then None
-                 else Some cprec);
-            }
+            { base with sk_epilogue = fused; sk_pack_prec = cpu_conv_pack_prec ~limits site }
           in
           (* The register-tile level (gh-ocannl-619 for the matmul family; gh-ocannl-697 here):
              every CPU conv leaf is twinned with the geometries {!Ir.Register_tile.alternatives}
@@ -5173,6 +5190,68 @@ let lift_pad_waste (tree : family_tree) : family_tree =
   in
   tree_f tree
 
+(* gh-ocannl-1489: the conv family's certain-traffic increment. Both legs end in the same staging
+   ([cpu_conv_sketch_schedule], [gpu_conv_sketch_schedule]): [Stage c_a [row; red]] and [Stage c_b
+   [red; oc]], then [Tensorize]. Each [Stage] mints a FRESH tile node — absent from the base
+   program, so whatever [Cost_model.analyze] charges it is additional to the base nodes the
+   schedule-invariant floor already counts — sized by the tile part's range over the tile loops (a
+   strided row is compacted by [Schedule.stage_compaction_factor], so the stride does not enlarge
+   it). The load nest writes every slot (edge guards store 0 into the fringe), and the micro-kernel
+   reads every slot through [Tile_mma]'s fallback, which [Low_level.affine_accesses] walks.
+   [analyze] charges a node [min (node bytes, sum of its per-access images)], guarded accesses
+   counted taken — an upper bound on its distinct cells — so each tile node is charged at least one
+   whole tile written and one read: [2 * (M*K*wA + K*N*wB)].
+
+   - CPU leg: M is the GEMM row ([Conv_shape `Serial | `Grid]) or the panel's [bm] rows ([`Row_block
+   bm], the row padded to a multiple of it); K and N the reduction and out-channel extents,
+   unpadded; the widths those of the tiles' own precision ([cpu_conv_pack_prec]: the packing
+   precision where an operand stores narrower, [Stage] admitting exact widenings only). - GPU leg: K
+   and N padded to the selected format's intrinsic tile (the tree's own resolver,
+   [mma_tile_for_precisions_in_scope] at [conv_mma_scope]); M the row block, or the row padded to
+   the intrinsic row tile at [Conv_rows 0]; the operands' storage widths ([tile_prec = None]). No
+   format tile refutes the leg, and the increment is then vacuous: zero.
+
+   Zero until the row geometry commits — every prefix above it, whatever the leg, prices nothing —
+   so the increment is monotone along every path without restating the menus' feasibility here.
+   Below it the fusion flavor, the staging, the register tile and the pipelined depth change
+   nothing: a rotating tile keeps its logical dimensions ([Schedule.apply_stage] records the depth
+   in [opt.pipelined]), and its extra copies are not counted. Pinned by test/operations/
+   conv_family_tree against every leaf's scheduled [analyze] (the soundness oracle). *)
+let conv_path_traffic_floor ~(limits : Ir.Backend_intf.hardware_limits) (site : conv_site) :
+    Family_decision.path -> int =
+  let tiles ~pack_prec ~m ~k ~n =
+    let wa = staged_tile_elt_bytes ~pack_prec site.c_a
+    and wb = staged_tile_elt_bytes ~pack_prec site.c_b in
+    2 * ((m * k * wa) + (k * n * wb))
+  in
+  let cpu =
+    lazy
+      (let pack_prec = cpu_conv_pack_prec ~limits site in
+       fun m -> tiles ~pack_prec ~m ~k:site.c_nred ~n:site.c_noc)
+  in
+  let gpu =
+    lazy
+      (Option.bind limits.Ir.Backend_intf.mma ~f:(fun mma ->
+           let d_prec = Lazy.force site.c_d.Ir.Tnode.storage_prec in
+           let a_prec = Lazy.force site.c_a.Ir.Tnode.storage_prec
+           and b_prec = Lazy.force site.c_b.Ir.Tnode.storage_prec in
+           mma_tile_for_precisions_in_scope mma ~scope:(conv_mma_scope site) ~a_prec ~b_prec ~d_prec)
+      |> Option.map ~f:(fun (tm_t, tn_t, tk_t) ->
+          let pad n t = blocks_of n t * t in
+          let k = pad site.c_nred tk_t and n = pad site.c_noc tn_t in
+          fun bm ->
+            let m = if bm = 0 then pad site.c_nrow tm_t else bm in
+            tiles ~pack_prec:None ~m ~k ~n))
+  in
+  fun path ->
+    List.fold path ~init:0 ~f:(fun acc (_, d) ->
+        match d with
+        | Family_decision.Conv_shape (`Serial | `Grid) -> Lazy.force cpu site.c_nrow
+        | Family_decision.Conv_shape (`Row_block bm) -> Lazy.force cpu bm
+        | Family_decision.Conv_rows bm ->
+            Option.value_map (Lazy.force gpu) ~default:0 ~f:(fun f -> f bm)
+        | _ -> acc)
+
 (* gh-ocannl-514 phase 5: the certain-traffic increment of a family-tree decision path — bytes that
    {e every} completion below the path moves beyond the schedule-invariant
    [Cost_model.completion_floor], mirroring [Cost_model.analyze]'s counting downward so the composed
@@ -5190,7 +5269,12 @@ let lift_pad_waste (tree : family_tree) : family_tree =
 let sketch_path_traffic_floor ~(limits : Ir.Backend_intf.hardware_limits) (opt : LL.optimized) :
     Family_decision.path -> int =
   match detect_matmul_canonical opt with
-  | None -> fun _path -> 0
+  | None -> (
+      (* [claimed_family]'s order: the conv family claims a lowering only where no matmul site does,
+         so the conv branch prices exactly the paths of the tree that lowering seeds. *)
+      match detect_conv opt.LL.llc with
+      | None -> fun _path -> 0
+      | Some site -> conv_path_traffic_floor ~limits site)
   | Some (site, _, _) -> (
       let a_prec = Lazy.force site.m_a.Ir.Tnode.storage_prec in
       let b_prec = Lazy.force site.m_b.Ir.Tnode.storage_prec in
