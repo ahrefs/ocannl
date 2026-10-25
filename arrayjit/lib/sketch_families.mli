@@ -225,7 +225,10 @@ val detect_matmul_canonical :
     see {!Autotune.detect_matmul_canonical}. *)
 
 val reduction_sink :
-  accum_prec:(Ir.Ops.prec -> Ir.Ops.prec) -> Ir.Low_level.optimized -> Ir.Schedule.schedule
+  ?admit_narrow:bool ->
+  accum_prec:(Ir.Ops.prec -> Ir.Ops.prec) ->
+  Ir.Low_level.optimized ->
+  Ir.Schedule.schedule
 (** The adjacent-[Swap] chain sinking each accumulation's reduction loops below its write loops
     (gh-ocannl-1348), statement by statement, every [Swap] [Op_legal]; empty where no statement
     qualifies. See {!Autotune.reduction_sink}. *)

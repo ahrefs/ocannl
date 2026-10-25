@@ -320,6 +320,10 @@ the retained procedural analyses alongside the affine engine and raises on diver
   loops first (`Autotune.reduction_sink`, gh-ocannl-1348; `gpu_default_reduction_sink`), so a
   bias or layer-norm parameter gradient reduced over the batch keeps its accumulator in a register
   rather than in its device cell; each cell keeps its summation order.
+  A site whose accumulator is wider than its storage (a bf16 weight gradient on CUDA) is left to
+  the default by both, since one rounding to storage would replace the default's per-row rounding;
+  `gpu_default_seed_narrow_storage` (gh-ocannl-1405; on in the `approximate` profile, pinned off in
+  `reproducible`) admits it, trading the bitwise result for a more accurate one.
 - **Caching**: winners persist in `autotune_cache_dir`, keyed by `Schedule_cache.canonicalize` —
   an alpha-renamed structural digest of the optimized code including dims, precisions, operand
   hoistability, and placement classes — plus the backend name and a digest of the numerics

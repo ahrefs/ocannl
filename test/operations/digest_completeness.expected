@@ -93,8 +93,9 @@ search-shaping -- it defines the untuned default pipeline -- its schedules and, 
   gpu_serial_lanes
   schedule_fission
 
-search-shaping -- they define the seeded untuned plan -- which large CUDA/HIP contractions the recipes' untuned compile seeds with the matmul family's sketch (Autotune.seeded_default, gh-ocannl-1324), which long reductions it splits before segmenting (gh-ocannl-1325) and whether it sinks the reduction loops of the segments it does not seed (gh-ocannl-1348) -- which a search seeds as its FIRST candidate and floor (gh-ocannl-1388), so they decide what it times first; a cached winner carries its own ops and segmentation and replays without consulting them
+search-shaping -- they define the seeded untuned plan -- which large CUDA/HIP contractions the recipes' untuned compile seeds with the matmul family's sketch (Autotune.seeded_default, gh-ocannl-1324), which long reductions it splits before segmenting (gh-ocannl-1325), whether it sinks the reduction loops of the segments it does not seed (gh-ocannl-1348) and whether it also takes the sites whose accumulator widens their narrow storage (gh-ocannl-1405) -- which a search seeds as its FIRST candidate and floor (gh-ocannl-1388), so they decide what it times first; a cached winner carries its own ops and segmentation and replays without consulting them. The last one changes results, yet keys no digest: the search's own sketches already privatize narrow-storage sites at accumulator width under every setting of it, so a winner crowned with it on is one a search with it off can crown too, and its trajectory (the plan digest it seeded) is keyed by the search shape
   gpu_default_reduction_sink
+  gpu_default_seed_narrow_storage
   gpu_default_sketch_min_reduction
   gpu_default_split_reduce_min_serial
 

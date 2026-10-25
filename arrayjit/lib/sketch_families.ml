@@ -1324,10 +1324,12 @@ let detect_matmul_canonical (opt : LL.optimized) :
     keeps. A statement whose cell a reduction loop's [Affine] or [Concat] index also moves (a
     convolution's input gradient, an embedding's scattered rows) is left alone, as is one whose
     storage precision is narrower than its accumulator's: localized, it would round once where the
-    default rounds after every step. *)
+    default rounds after every step. [admit_narrow] (default [false]) admits those too
+    (gh-ocannl-1405): the summation order is still the default's, but the result rounds to storage
+    once instead of after every step -- an accuracy gain, and a change. *)
 
-let reduction_sink ~(accum_prec : Ir.Ops.prec -> Ir.Ops.prec) (opt : LL.optimized) : Sched.schedule
-    =
+let reduction_sink ?(admit_narrow = false) ~(accum_prec : Ir.Ops.prec -> Ir.Ops.prec)
+    (opt : LL.optimized) : Sched.schedule =
   let candidate stmt =
     match serial_nest_of stmt with
     | (_ :: _ :: _ as loops), LL.Set { tn = d; idcs = di; llsc; _ } ->
@@ -1339,7 +1341,7 @@ let reduction_sink ~(accum_prec : Ir.Ops.prec -> Ir.Ops.prec) (opt : LL.optimize
         if
           List.exists (collect_gets llsc) ~f:self_read
           && List.for_all order ~f:(fun s -> (not (is_write s)) || plain s)
-          && Ir.Ops.equal_prec (accum_prec d_prec) d_prec
+          && (admit_narrow || Ir.Ops.equal_prec (accum_prec d_prec) d_prec)
         then contraction_sink_swaps ~is_write order
         else []
     | _ -> []

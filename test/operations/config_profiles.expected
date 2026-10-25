@@ -47,6 +47,7 @@ Profile "reproducible" sets:
   online_softmax_block=0
   winograd_conv=false
   gpu_default_split_reduce_min_serial=0
+  gpu_default_seed_narrow_storage=false
 
 Profile "performance" sets:
   autotune_search=true
@@ -77,6 +78,7 @@ Profile "approximate" sets:
   fp_reassociate=true
   fp_finite_math=true
   tune_inline_flips=2
+  gpu_default_seed_narrow_storage=true
 
 every key the performance profile sets, the approximate profile sets to the same value: true
 the approximate profile sets keys the performance profile does not: true

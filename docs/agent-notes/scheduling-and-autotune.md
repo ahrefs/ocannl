@@ -627,7 +627,13 @@ files.
   precision. A sketch's `Privatize` keeps a wide accumulator across the whole reduction, while the
   default rounds back to storage after each outer contraction step, so a narrow-storage weight
   gradient would change its result. Losses stayed bitwise identical on f32 (pinned by
-  `test/operations/seeded_default`).
+  `test/operations/seeded_default`). The reduction sink and `model_admits` share the refusal.
+  `gpu_default_seed_narrow_storage` (gh-ocannl-1405, the `approximate` profile's) lifts it in all
+  three, threaded as `seed_narrow`/`admit_narrow` and recorded in the plan (`sp_admit_narrow`):
+  the replay re-derives a sunk segment's chain, so a replay under a different admission would sink
+  different statements. Under `approximate` it bites on CUDA bf16 and on fp8; HIP's bf16 is narrow
+  there (`bf16_arithmetic=true`). Executed in `test/operations/seeded_narrow_storage`: closer to an
+  f64 reference, one bf16 rounding per cell.
 - **`model_default` ranks segments against the search's presets, and ships the configured ones
   where it does not sketch** (gh-ocannl-1512, `Autotune.model_segments`). The preset decides the
   cuts: `fission_segmented` coalesces adjacent segments whose preset is empty. At the configured

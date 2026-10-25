@@ -900,7 +900,13 @@ files.
   the rewrite never touches). `test_config_consistency` checks the payloads and
   `ocannl_config.reference`'s quote of them; `config_profiles` pins approximate ⊇ performance.
   Every knob the profile flips today is already in the numerics or codegen digest, which is what
-  keeps a default-flags run from replaying a winner tuned under the profile. Benchmark side: `orchestrate.py --profile
+  keeps a default-flags run from replaying a winner tuned under the profile -- except
+  `gpu_default_seed_narrow_storage` (gh-ocannl-1405), a schedule-time gate on the untuned plan,
+  classified `Search_shaping` with the seeded plan's other keys: the search's own sketches already
+  privatize narrow-storage sites at accumulator width whatever the key says, so a winner crowned
+  with it on is one a key-off search can crown too, and keying the numerics digest would split
+  entries for nothing; the trajectory is keyed through the search shape (the key and the plan
+  digest). Benchmark side: `orchestrate.py --profile
   approximate` dispatches the OCANNL cells under `--ocannl_profile=approximate`, the torch cells
   under torch's own defaults (`high` matmul precision, SDPA, `cudnn.benchmark`), gates at
   `PARITY_TOL_APPROX` (looser than every exact envelope), labels every row with its regime, and

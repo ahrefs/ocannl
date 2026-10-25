@@ -157,6 +157,7 @@ let known_config_keys =
       "gpu_default_sketch_min_reduction";
       "gpu_default_split_reduce_min_serial";
       "gpu_default_reduction_sink";
+      "gpu_default_seed_narrow_storage";
       "schedule_log_launches";
       "schedule_log_declines";
       "legality_crosscheck";
@@ -399,15 +400,20 @@ let config_key_classification : (config_key_class * string * string list) list =
     ( Search_shaping,
       "they define the seeded untuned plan -- which large CUDA/HIP contractions the recipes' \
        untuned compile seeds with the matmul family's sketch (Autotune.seeded_default, \
-       gh-ocannl-1324), which long reductions it splits before segmenting (gh-ocannl-1325) and \
-       whether it sinks the reduction loops of the segments it does not seed (gh-ocannl-1348) -- \
-       which a search seeds as its FIRST candidate and floor (gh-ocannl-1388), so they decide what \
-       it times first; a cached winner carries its own ops and segmentation and replays without \
-       consulting them",
+       gh-ocannl-1324), which long reductions it splits before segmenting (gh-ocannl-1325), \
+       whether it sinks the reduction loops of the segments it does not seed (gh-ocannl-1348) and \
+       whether it also takes the sites whose accumulator widens their narrow storage \
+       (gh-ocannl-1405) -- which a search seeds as its FIRST candidate and floor (gh-ocannl-1388), \
+       so they decide what it times first; a cached winner carries its own ops and segmentation \
+       and replays without consulting them. The last one changes results, yet keys no digest: the \
+       search's own sketches already privatize narrow-storage sites at accumulator width under \
+       every setting of it, so a winner crowned with it on is one a search with it off can crown \
+       too, and its trajectory (the plan digest it seeded) is keyed by the search shape",
       [
         "gpu_default_sketch_min_reduction";
         "gpu_default_split_reduce_min_serial";
         "gpu_default_reduction_sink";
+        "gpu_default_seed_narrow_storage";
       ] );
     ( Search_shaping,
       "it steers the search: how wide, how long, what is proposed, what is pruned, how candidates \
@@ -679,6 +685,7 @@ let config_key_defaults : (string * (config_value_kind * string)) list =
     ("gpu_default_sketch_min_reduction", (Keyword, "auto"));
     ("gpu_default_split_reduce_min_serial", (Integer, "1024"));
     ("gpu_default_reduction_sink", (Flag, "true"));
+    ("gpu_default_seed_narrow_storage", (Flag, "false"));
     ("autotune_search", (Flag, "true"));
     ("autotune_beam_width", (Integer, "2"));
     ("autotune_rounds", (Integer, "2"));
@@ -1477,6 +1484,10 @@ winograd_conv=false
 # from the routine alone, but they reassociate long sums into a tree over blocks, which this
 # profile keeps serial.
 gpu_default_split_reduce_min_serial=0
+# The untuned GPU default's narrow-storage seeding (gh-ocannl-1405) at its default, off: a sketch
+# keeps a narrow-storage site's accumulator wide across the whole reduction, where the default
+# pipeline rounds it to storage after every step, so seeding one changes its result.
+gpu_default_seed_narrow_storage=false
 |}
 
 let performance_profile_payload =
@@ -1567,6 +1578,10 @@ fp_finite_math=true
 # does not), so `performance` leaves it alone. Two flips: each costs a full search, so this
 # bounds the extra cost at two searches per arm while still exercising the refinement.
 tune_inline_flips=2
+# The untuned CUDA/HIP default also seeds and sinks the sites whose accumulator is wider than their
+# storage (gh-ocannl-1405): a bf16 weight gradient on CUDA, fp8 on CUDA and HIP. The summation
+# order stays the default's, but the reduction rounds to storage once instead of after every step.
+gpu_default_seed_narrow_storage=true
 |}
 
 (** The embedded profile payloads, by name. Each is literally a partial [ocannl_config] file: same
