@@ -48,9 +48,11 @@ let () =
         true
     | _ -> false);
   p "a commandline record renders its argv element as the origin, and its source as its layer"
-    (String.equal
-       (json (List.hd_exn (records_of "autotune_timing")))
-       {|{"ocannl_config":1,"key":"autotune_timing","value":"isolated","source":"commandline","layer":"commandline","profile":null,"origin":"--ocannl_autotune_timing=isolated"}|});
+    (List.equal String.equal
+       (List.map (records_of "autotune_timing") ~f:json)
+       [
+         {|{"ocannl_config":1,"key":"autotune_timing","value":"isolated","source":"commandline","layer":"commandline","profile":null,"origin":"--ocannl_autotune_timing=isolated"}|};
+       ]);
   (* A profile-payload value, through a typed getter: the raw string is recorded. *)
   let rounds = Utils.registered_int ~arg_name:"autotune_rounds" in
   p "a typed getter's read is recorded, the profile value under the level that picked it"

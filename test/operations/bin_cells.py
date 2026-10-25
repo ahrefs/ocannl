@@ -185,12 +185,12 @@ with tempfile.TemporaryDirectory() as scratch:
     claim("the stream opens with the bootstrap settings and carries a read made late in main",
           [k for k in seen][:5] == ["log_config_sourcing", "log_config_json", "no_config_file",
                                     "suppress_welcome_message", "profile"]
-          and seen["debug_highlight_pcre"]["source"] == "default")
+          and seen.get("debug_highlight_pcre", {}).get("source") == "default")
     claim("the stream names each source: an argv element, a planted variable",
-          seen["backend"]["origin"] == "--ocannl_backend=cc"
-          and seen["log_config_json"]["origin"] == "--ocannl_log_config_json=true"
-          and (seen["autotune_timing"]["value"], seen["autotune_timing"]["origin"])
-          == ("x", "OCANNL_AUTOTUNE_TIMING"))
+          seen.get("backend", {}).get("origin") == "--ocannl_backend=cc"
+          and seen.get("log_config_json", {}).get("origin") == "--ocannl_log_config_json=true"
+          and [seen.get("autotune_timing", {}).get(f) for f in ("value", "origin")]
+          == ["x", "OCANNL_AUTOTUNE_TIMING"])
 
     run = drive("ab", "--rounds", "4", "--arm", "slow=0.004",
                 "--arm", "fast=0.002 --ocannl_autotune_timing=isolated")
