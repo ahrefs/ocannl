@@ -222,7 +222,12 @@ files.
   twins would pick a leaf measured 1.8x slower on rog at b256. Their scalar leaves ARE
   numerics-preserving (`coalesce_numerics`: bitwise on order-sensitive inputs, on CUDA, HIP and
   Metal), so admission is a score question only; `model_explain`'s coalesced rows judge each leaf
-  by its uncoalesced form.
+  by its uncoalesced form. Trap for tests: the fill made the `auto` gate's picks DEVICE-dependent
+  (rog and minix ship fill constants, tuf none), so a small test workload the gate seeded before
+  may now seed nothing, or leave a site to the reduction sink, on one box only. A test whose claim
+  needs the rule to seed a site pins `gpu_default_sketch_min_reduction` to a threshold for that
+  call (`autotune_staffed_fine`, `seeded_narrow_storage`'s model leg; gh-ocannl-1599's triage);
+  its PR's CUDA leg before the fill landed proves nothing after.
 - **Compare a plan and its rivals in ONE kernel decomposition** (gh-ocannl-1477). The ranking score
   sums `max(compute, memory)` per kernel, so a memory-bound kernel run on its own (the seeded plan's
   zero-fill, the default segmentation having no zero fold) is charged in full, while the same writes

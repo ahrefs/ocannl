@@ -30,6 +30,13 @@ let is_gpu = Ir.Schedule.backend_is_gpu backend_name
 let seeds = Autotune.seeded_default_backend backend_name
 let staffed_key = "autotune_staffed_singles"
 
+(* The seeded rule under a reduction threshold, not the [auto] gate's ranking: what is claimed here
+   is that the staffed start carries whatever the rule picks, so the test pins a rule that picks a
+   sketch for these GEMMs. Under [auto] the ranking prices a launch at its fill (gh-ocannl-1479),
+   and at this size a sketch's few blocks leave the device idle, so the rule rightly seeds nothing
+   and the start is empty (gh-ocannl-1599's triage). Every GEMM here reduces over [k]. *)
+let gate_key = "gpu_default_sketch_min_reduction"
+
 (* A per-segment label's entries ([params @key]), its focus and its staff apart. *)
 let parts label =
   let body =
@@ -109,9 +116,12 @@ let () =
       in
       let crowned =
         Exn.protect
-          ~finally:(fun () -> Hashtbl.remove Utils.config_file_args staffed_key)
+          ~finally:(fun () ->
+            Hashtbl.remove Utils.config_file_args staffed_key;
+            Hashtbl.remove Utils.config_file_args gate_key)
           ~f:(fun () ->
             Hashtbl.set Utils.config_file_args ~key:staffed_key ~data:"true";
+            Hashtbl.set Utils.config_file_args ~key:gate_key ~data:(Int.to_string k);
             Autotune.Seam.with_value Autotune.on_candidate_measured (fun ~label ~digest:_ _ms ->
                 measured := label :: !measured;
                 routine_ms label)
@@ -169,8 +179,8 @@ let () =
         (List.length coarse_singles) (List.length fine_singles) r.Autotune.best_label
         r.Autotune.best_ms);
   (* On CUDA and HIP the seeded plan's decision rule picks a sketch for the GEMMs, whose reductions
-     reach [gpu_default_sketch_min_reduction]: the coarse composite starts from it, and the first
-     coarse window carries it. Metal has no seeded plan, so no start. *)
+     reach the [gpu_default_sketch_min_reduction] pinned above: the coarse composite starts from it,
+     and the first coarse window carries it. Metal has no seeded plan, so no start. *)
   let first_window =
     Option.value_map (List.hd coarse_singles) ~default:[] ~f:(fun l ->
         let f, s = parts l in
