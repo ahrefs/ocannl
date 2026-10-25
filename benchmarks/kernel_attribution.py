@@ -49,6 +49,12 @@ unified gfx1151, where only each dispatch's own duration holds), and a device sp
 host wall time enclosing it is flagged CLOCK. Each row carries the cost model's bytes read/written from the kernel
 table (`io:`) and the in-step bandwidth they imply.
 
+Co-tenants (gh-ocannl-1521): each cell prints the GPU-using processes the driver recorded just
+before it started and just after it ended (OUT/CELL.cotenants.jsonl, benchmarks/gpu_cotenants.py),
+UNREAD where no probe ran and `not recorded` for a cell from before the record existed -- the
+evidence the 108% reading lacked. A co-tenant explains nothing by itself; a reader weighs it
+against the composition lines.
+
 Joining cells (gh-ocannl-1444): cells of one kernel list -- repeats of one build, whose trace names
 are identical -- are compared kernel by kernel in table order; cells of different kernel lists (a
 treatment, a revision) are joined by stable_key, the written nodes without schedule-minted staging
@@ -72,6 +78,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import strict_json  # noqa: E402
 from display_safe import display_value, log_line, table_lines  # noqa: E402
 from gh1002_cells import KERNEL  # noqa: E402  (the one reader of the kernel-table row)
+import gpu_cotenants  # noqa: E402  (the co-tenant record's writer and reader)
 
 ISO_TOLERANCE = 0.10
 SPREAD_TOLERANCE = 1.10
@@ -433,6 +440,8 @@ def render_cell(out, name, rec, rows):
     render_composition(rec)
     if rec["memory_model"] is not None:
         print(log_line("- memory model: %s %s" % rec["memory_model"]))
+    print(log_line("- GPU co-tenants: %s"
+                   % gpu_cotenants.summary(Path(out) / (stem + ".cotenants.jsonl"))))
     clk = clocks(out, stem)
     if clk:
         print("- SM clock in P0: %d..%d MHz, median %d (%d samples)" % (clk[0], clk[2], clk[1], clk[3]))

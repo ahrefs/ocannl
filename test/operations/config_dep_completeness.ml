@@ -86,6 +86,10 @@ let exempt_sites =
        %{dep:../../benchmarks/kernel_attribution.py}",
       "the kprof attribution controls (gh-ocannl-1347) import only Python modules and join \
        synthetic traces; they launch no OCANNL executable and read no OCANNL configuration" );
+    ( "test/operations:python3, handed %{dep:gpu_cotenants.py}, \
+       %{dep:../../benchmarks/gpu_cotenants.py}",
+      "the kprof co-tenant record's controls (gh-ocannl-1521) run a stub nvidia-smi and ps over a \
+       stubbed /proc; they launch no OCANNL executable and read no OCANNL configuration" );
     ( "test/operations:python3, handed %{dep:bin_cells.py}, %{dep:../../benchmarks/bin_cells.py}, \
        %{dep:bin_cells_probe.exe}, %{dep:bench_design.expected}",
       "the hermetic bench driver's control (gh-ocannl-743) does launch an OCANNL-linked probe, but \

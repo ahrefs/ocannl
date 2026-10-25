@@ -717,7 +717,12 @@ OCANNL_CC_PARALLEL_GRID=none` times single-threaded segments that sum to the ser
   repeatability table; cells whose kernel lists differ (another treatment or revision, where every
   segment index after a change shifts) get a **kernel join** against the `base` list, keyed by the
   nodes each kernel writes with schedule-minted staging nodes (`tile__n<id>_...`) set aside, which
-  lists what moved, appeared or went.
+  lists what moved, appeared or went. Every cell also records the box's GPU co-tenants just before
+  it starts and just after it ends (gh-ocannl-1521): `benchmarks/gpu_cotenants.py` lists
+  nvidia-smi's compute apps and the DRM clients' fdinfo (the AMD boxes' path), in the fleet's
+  co-tenant vocabulary, into `CELL.cotenants.jsonl`, and the attribution prints a `GPU co-tenants`
+  line per cell -- `UNREAD` where no probe ran, never an idle GPU. It is presence at two instants:
+  a co-tenant that comes and goes inside the cell is not seen.
   **Without a tracer** -- Metal, cc, a WSL2 box, or a quick look before a kprof window --
   `BENCH_KERNEL_TABLE=1` on any of the three runners is the per-kernel recipe: run the runner as a
   step cell does (from `benchmarks/`, so it finds the suite's `ocannl_config`), e.g.
