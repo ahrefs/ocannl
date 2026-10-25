@@ -481,3 +481,11 @@ files.
   the lock, one representative per key, one program per option list, publish after success),
   pinned against a fake compiler in `kernel_code_cache`; `gpu_kernel_cache` pins a fresh build with
   colliding labels compiling no kernel (and a renamed routine compiling afresh).
+- **cc has the cache too** (gh-ocannl-1525, `cc_kernel_cache_mib`, default 256, weighted by library
+  file bytes): the C compiler costs per kernel and a lot -- a `gpt2_mini_train` candidate of 16
+  kernels spent 10-37 s in it on mac-studio. Misses compile as one library; the toolchain identity
+  (command, resolved executable, kernel flags, link flags) is in the key. A cached library stays
+  loaded while the cache holds it (under OpenMP none is ever unloaded anyway).
+- **Metal has none yet, measured**: its library compile (at link) took about 0.4 s of a 1.8 s
+  candidate compile on a gpt2 b8 search, the rest of the link being pipeline-state creation, which a
+  library cache does not save; a Metal cache wants a pipeline cache beside it.

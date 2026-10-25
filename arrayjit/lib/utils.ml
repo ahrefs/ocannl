@@ -124,6 +124,7 @@ let known_config_keys =
       "hip_scratch_validation";
       "hip_kernel_cache_mib";
       "cuda_kernel_cache_mib";
+      "cc_kernel_cache_mib";
       "gpu_graph_capture";
       "multidev_num_devices";
       "buffer_aliasing";
@@ -587,7 +588,7 @@ let config_key_classification : (config_key_class * string * string list) list =
       "reuse of compiled kernel code within a process, keyed by the kernel's exact source and \
        compiler options, so a reused kernel was compiled from the same text under the same \
        options: only the compile's cost changes",
-      [ "hip_kernel_cache_mib"; "cuda_kernel_cache_mib" ] );
+      [ "hip_kernel_cache_mib"; "cuda_kernel_cache_mib"; "cc_kernel_cache_mib" ] );
     ( Execution_neutral,
       "identifier spelling in generated code and in printouts",
       [ "ll_ident_style"; "cd_ident_style"; "print_decimals_precision" ] );

@@ -1286,6 +1286,17 @@
 # HIP.
 #cuda_kernel_cache_mib=64
 
+# Megabytes of compiled cc kernel libraries kept for reuse within a process (gh-ocannl-1525), the
+# cc counterpart of hip_kernel_cache_mib: a batch of kernels compiles only the kernels no earlier
+# compile in this process produced, as one library, and reuses the rest. A kernel is reused when its
+# source, with the names it owns renamed, and the toolchain it compiles under (the compiler command
+# and executable, the kernel compiler flags, the link flags) are identical. The C compiler costs per
+# kernel, seconds for a large one, so this keeps an autotuning candidate that changes a few kernels
+# from recompiling all of them. A library the cache holds stays loaded while it does. 0 disables it:
+# every routine compiles as one library of all its kernels. Device debugging bypasses it, as on HIP,
+# and so does output_dlls_in_build_directory, which keeps each routine's own whole library.
+#cc_kernel_cache_mib=256
+
 # The `-O` argument to the compiler executable for the `cc` and `multidev_cc` backends.
 #cc_backend_optimization_level=3
 
