@@ -83,6 +83,20 @@
 # `--ocannl_log_config_sourcing=true`) to debug which configuration a run actually picks up.
 #log_config_sourcing=false
 
+# If true, prints every setting a run resolves to stderr as one JSON line (gh-ocannl-1566),
+# for drivers and tests to read back instead of the prose of `log_config_sourcing` -- the
+# same records `Utils.resolved_config ()` returns, whether or not this is on. Schema 1:
+#   {"ocannl_config":1,"key":K,"value":V,"source":S,"layer":L,"profile":P,"origin":O}
+# `source` is commandline|environment|config_file|profile|default; `layer` the precedence
+# level the value came from (the level that picked the profile, for a profile value);
+# `profile` the profile's name or null; `origin` the argv element, the environment variable,
+# the config file's path (for a profile value: where the profile was picked), or null for a
+# default. `value` is the raw string, before a typed getter parses it. A line is printed when
+# the setting is first resolved -- the bootstrap settings once this switch is settled, every
+# other one at its first read -- and again only if a later read resolves it differently; a
+# setting never read prints nothing. Stdout is never touched. Off by default.
+#log_config_json=false
+
 # A goal-oriented preset bundle. Three are built in:
 #   reproducible -- deterministic, and identical across machines wherever reasonable
 #                   (cross-BACKEND reproducibility is out of scope).

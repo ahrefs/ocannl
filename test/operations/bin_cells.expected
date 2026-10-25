@@ -2,16 +2,19 @@ the design golden carries an ORDERS table: true
 design_orders reproduces every row of Bench_design's ORDERS table: true
 an odd round count is refused: true
 no arms is refused: true
-every source shape is read with its value: true
-a request never answered is refused: true
-two requests in a row are refused: true
-one key resolved to two values is refused: true
-a commandline value holding the separator is split at the argument, not inside it: true
-a commandline source naming no argument of the cell is refused: true
+every source shape is read with its value and layer, a repeated identical record once: true
+a value holding a Unicode line separator stays one record: true
+a tagged line that is not JSON is refused: true
+a schema version this reader does not know is refused: true
+a record missing a field, or with a field of the wrong type, is refused: true
+a source that does not fit its layer, profile and origin is refused: true
+one key resolved two ways is refused: true
+the prose trace of log_config_sourcing carries no records: true
 the environment and config-file sources each fail the treatment: true
 a backend other than the pinned one fails the treatment: true
-a profile picked outside the command line fails the treatment: true
-an empty trace fails the treatment: true
+a profile picked outside the command line fails the treatment, whatever its value: true
+a commandline source naming no argument of the cell fails the treatment: true
+no records at all fail the treatment: true
 two cells of one arm resolving a setting differently are reported: true
 a setting read in some cells of an arm and not in others is reported: true
 a well-formed result line is read with its check: true
@@ -19,6 +22,9 @@ a non-finite or non-positive result is refused: true
 a result line that is JSON but not an object is refused as unusable: true
 a result that does not state its output check is refused: true
 the sign test is exact: true
+the stream on stderr is, line for line, the records the function returns: true
+the stream opens with the bootstrap settings and carries a read made late in main: true
+the stream names each source: an argv element, a planted variable: true
 a clean run exits 0: true
 every round runs every arm, in the design's order: true
 the planted variables are cleared, by name: true

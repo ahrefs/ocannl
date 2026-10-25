@@ -1,0 +1,15 @@
+the bootstrap settings are the first records, in their resolution order: true
+the profile picked on the commandline is recorded with its argv element: true
+a commandline setting is recorded once, with the argv element that stated it: true
+a commandline record renders its argv element as the origin, and its source as its layer: true
+a typed getter's read is recorded, the profile value under the level that picked it: true
+every config-file record names, as its origin, a file stating exactly that key=value: true
+a default read and then a changed resolution are two records, the change last: true
+reading the records records nothing: true
+Rendered records:
+{"ocannl_config":1,"key":"debug_highlight_pcre","value":"a\"b\\c\u0009d\u000ae\u0001f","source":"commandline","layer":"commandline","profile":null,"origin":"--ocannl_debug_highlight_pcre=a\"b"}
+{"ocannl_config":1,"key":"debug_highlight_pcre","value":"x, commandline y","source":"commandline","layer":"commandline","profile":null,"origin":"--ocannl_debug_highlight_pcre=x, commandline y"}
+{"ocannl_config":1,"key":"debug_highlight_pcre","value":"zażółć","source":"environment","layer":"environment","profile":null,"origin":"OCANNL_DEBUG_HIGHLIGHT_PCRE"}
+{"ocannl_config":1,"key":"debug_highlight_pcre","value":"","source":"default","layer":"default","profile":null,"origin":null}
+{"ocannl_config":1,"key":"debug_highlight_pcre","value":"true","source":"profile","layer":"commandline","profile":"approximate","origin":"--ocannl_profile=approximate"}
+every rendered record is one line, free of control characters: true

@@ -2991,6 +2991,23 @@
  (modules config_profiles)
  (libraries base arrayjit.utils arrayjit.verdict stdio))
 
+; gh-ocannl-1566: the resolved-configuration records and their JSON lines. The commandline states
+; one setting and picks the `approximate` profile; this directory's config file states others; the
+; executable sets one environment variable itself, mid-run, for the changed-resolution case.
+
+(test
+ ; ocannl-backend: none -- reads settings through Utils' getters and links no backend.
+ (name config_records)
+ (package neural_nets_lib)
+ (deps ocannl_config config_records.expected)
+ (modules config_records)
+ (libraries base arrayjit.utils arrayjit.verdict stdio unix)
+ (action
+  (run
+   %{test}
+   --ocannl_autotune_timing=isolated
+   --ocannl_profile=approximate)))
+
 ; gh-ocannl-605: the environment and commandline spellings of a configuration key. The rule sets
 ; the synthetic keys the executable looks up -- `demo_key` in the one environment spelling that
 ; survives and in the three dash-prefixed ones that do not, `dashed_only_key` in the dropped ones
@@ -9683,8 +9700,9 @@
     (diff gh1002_kernels.expected gh1002_kernels.optimized.actual)))))
 
 ; gh-ocannl-743: the hermetic bin/ bench driver, benchmarks/bin_cells.py, end to end against a
-; stand-in bench whose configuration trace and result lines are the library's own (see
-; bin_cells_probe.ml), with the ambient sources it clears planted around it; plus its trace parser,
+; stand-in bench whose configuration records and result lines are the library's own (see
+; bin_cells_probe.ml), with the ambient sources it clears planted around it; plus its record reader
+; (benchmarks/config_records.py, gh-ocannl-1566) held to the stream the probe prints,
 ; treatment checks and statistics on synthetic input, and its visiting order held to the ORDERS table
 ; of the bench_design golden. The probe is a test executable, not a public bin/ one, so this is no
 ; second runtime path of `@bin-smoke`'s census.
@@ -9705,6 +9723,7 @@
   bench_design.expected
   bin_cells_probe.exe
   ../../benchmarks/bin_cells.py
+  ../../benchmarks/config_records.py
   ../../benchmarks/cell_group.py
   ../../benchmarks/strict_json.py
   ../../benchmarks/display_safe.py

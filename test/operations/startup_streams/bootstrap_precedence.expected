@@ -2,3 +2,6 @@ explicit false overrides file welcome suppression: true
 bootstrap trace carries the commandline suppression source: true
 bootstrap trace carries the commandline file-search source: true
 profile trace carries the normalized commandline selection: true
+the config file alone turns the JSON stream on, and the stream says so: true
+the stream carries the commandline suppression and file-search sources: true
+the stream carries the normalized profile with the argv element that picked it: true
