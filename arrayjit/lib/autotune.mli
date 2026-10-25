@@ -1924,6 +1924,12 @@ val ranking_issue_rate : limits:Ir.Backend_intf.hardware_limits -> float option
     [model_issue_rate] ([none]: scalar work priced at the envelope's [peak_flops]) over the
     backend's advisory [issue_rate]. An [Untimed] reading, like {!ranking_capacity}. *)
 
+val ranking_fill_model : limits:Ir.Backend_intf.hardware_limits -> Ir.Cost_model.fill_model option
+(** The ranking score's launch fill model (gh-ocannl-1479, {!Ir.Cost_model.context_fill}): config
+    [model_multiprocessors] and [model_fill_threads] (each [none]: no launch fill) over the
+    backend's advisory [multiprocessors] / [fill_threads]; [None] unless both resolve. An [Untimed]
+    reading, like {!ranking_capacity}. *)
+
 val ranking_dram_bandwidth : limits:Ir.Backend_intf.hardware_limits -> float option
 (** The ranking score's achieved DRAM rate, in bytes/s (gh-ocannl-1442): config
     [model_dram_bandwidth] ([none]: DRAM traffic priced at the envelope's [peak_memory_bandwidth])
@@ -2473,13 +2479,15 @@ type seed_gate =
       cache_rate : float option;
       scalar_rate : float option;
       dram_rate : float option;
+      fill : Ir.Cost_model.fill_model option;
     }
       (** The [auto] gate: a segment whose {!seeded_params} sketch the ranking score
           ({!Ir.Cost_model.ranking_seconds}) puts strictly below the default preset of the same
           segment, scored alone with this cache capacity (bytes; [None]: no DRAM tier) and cache
           bandwidth (bytes/s; [None]: re-reads within capacity uncharged), and the score's own
           scalar issue rate and DRAM rate ({!ranking_issue_rate}, {!ranking_dram_bandwidth}; [None]:
-          the envelope's ceilings, gh-ocannl-1442) — so it seeds exactly where the cross-block
+          the envelope's ceilings, gh-ocannl-1442), and its launch fill ({!ranking_fill_model};
+          [None]: no launch fill, gh-ocannl-1479) — so it seeds exactly where the cross-block
           re-reads the sketch removes are priced. The geometry and the numerics-preserving candidate
           set are {!seeded_params}' either way. *)
 
@@ -2603,6 +2611,25 @@ val seeded_transform :
     seeded pipeline does not apply; a failure in backend compilation is the caller's, as
     {!seeded_default}'s fallback is not part of it. *)
 
+val pinned_sketch_transform :
+  select:(sketch_params -> bool) ->
+  ?on_leaf:(sketch_params -> unit) ->
+  Context.t ->
+  Ir.Indexing.unit_bindings ->
+  Ir.Low_level.optimized ->
+  Ir.Low_level.optimized list
+(** A [lowered_transform] applying, to a routine with one matmul site, the first whole-routine
+    scalar blocktile leaf ({!scalar_blocktile}) of {!matmul_sketch_tree} that [select] accepts —
+    reported to [on_leaf] — as {!model_default} applies a whole-routine pick (gh-ocannl-1479: the
+    launch sweep of [Calibrate] pins one geometry across sizes). Raises [Utils.User_error] on a
+    backend without the GPU sketch family (checked at partial application), and when no site is
+    detected or no leaf matches. *)
+
+val ranking_multiprocessors : limits:Ir.Backend_intf.hardware_limits -> int option
+(** The launch fill's multiprocessor count alone (gh-ocannl-1479): config [model_multiprocessors]
+    over the backend's advisory [multiprocessors]; the calibration's input, which needs it before a
+    saturating thread count exists. An [Untimed] reading, like {!ranking_capacity}. *)
+
 val seeded_default :
   ?name:string ->
   ?min_reduction:int ->
@@ -2677,6 +2704,10 @@ type explain = {
   ex_spilled : bool option;
       (** Some kernel's working set exceeds the cache capacity; [None] where the ranking score was
           not computed (no envelope constants, or an opaque kernel). *)
+  ex_fills : float list option;
+      (** Per kernel, in launch order, its scalar launch fill ({!Ir.Cost_model.launch_fill}; 1.
+          without a fill model, gh-ocannl-1479): a diagnostic of the compute leg, which sums per
+          parallel context rather than dividing by it. [None] where [ex_spilled] is. *)
   ex_operand_loads : Ir.Cost_model.load_count;
       (** Tile-MMA operand load instructions under the backend's load rule ({!model_operand_loads}),
           over all the candidate's kernels ({!Ir.Cost_model.combine_load_counts}: [Undescribed] if

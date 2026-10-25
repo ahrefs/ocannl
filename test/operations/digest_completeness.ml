@@ -94,6 +94,14 @@ let reached_unread_exemptions =
       "read by the seeded plan's auto gate, which tune seeds first; the plan it resolves to joins \
        the identity as its digest, and the staffed start's gate tag carries the rate \
        (gh-ocannl-1442)" );
+    ( "model_multiprocessors",
+      "read by the seeded plan's auto gate, which tune seeds first; the plan it resolves to joins \
+       the identity as its digest, and the staffed start's gate tag carries the launch fill \
+       (gh-ocannl-1479)" );
+    ( "model_fill_threads",
+      "read by the seeded plan's auto gate, which tune seeds first; the plan it resolves to joins \
+       the identity as its digest, and the staffed start's gate tag carries the launch fill \
+       (gh-ocannl-1479)" );
   ]
 
 let class_name : Utils.config_key_class -> string = function

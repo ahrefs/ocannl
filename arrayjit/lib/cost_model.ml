@@ -298,39 +298,64 @@ let footprints ~read_uncertain ~any_uncertain (accesses : Tn.t Affine.access lis
           fp_approx = reads_approx || writes_approx;
         } ))
 
-let analyze (code : Low_level.t) : summary =
+(* A statement's parallel context (gh-ocannl-1479): the product of its enclosing [Grid] loop extents
+   and of its enclosing [Workgroup] / [Workgroup_reduce] loop extents. *)
+type par_ctx = { pc_blocks : int; pc_threads : int }
+
+let top_ctx = { pc_blocks = 1; pc_threads = 1 }
+
+(* The op census {!analyze} charges, shared with {!launch_contexts}: [on_ops ctx ~tile ops] is
+   called once per op-carrying statement of the statement tree with its parallel context, whether it
+   is a [Tile_mma], and the ops it contributes to the total (a statement with none is not reported).
+   The bodies of [Local_scope]s are counted into the statement that hoists them, in its context.
+   Returns the total and the [flops_approx] / [opaque] flags. *)
+let op_census ~on_ops (code : Low_level.t) : int * bool * bool =
   let flops_approx = ref false and opaque = ref false in
+  let emit ~report ctx ~tile ops =
+    if report && ops > 0 then on_ops ctx ~tile ops;
+    ops
+  in
   (* [scale] is the product of enclosing loop extents, [env] their (symbol, extent) bindings —
      needed by [Tile_mma], whose 2*m*n*k multiply-adds are cooperative across its [lane] loop, not
-     repeated per lane. *)
-  let rec go ~scale ~env (c : Low_level.t) : int =
+     repeated per lane. [report] is off inside hoisted scope bodies, whose work their hoisting
+     statement reports. *)
+  let rec go ~report ~ctx ~scale ~env (c : Low_level.t) : int =
     match c with
     | Low_level.Noop | Comment _ | Zero_out _ | Declare_local _ | Workgroup_barrier -> 0
     | Staged_compilation _ ->
         opaque := true;
         0
-    | Seq (c1, c2) -> go ~scale ~env c1 + go ~scale ~env c2
-    | For_loop { index; from_; to_; body; _ } ->
+    | Seq (c1, c2) -> go ~report ~ctx ~scale ~env c1 + go ~report ~ctx ~scale ~env c2
+    | For_loop { index; from_; to_; body; axis; _ } ->
         let extent = max 0 (to_ - from_ + 1) in
-        go ~scale:(scale * extent) ~env:((index, extent) :: env) body
+        let ctx =
+          match Low_level.hardware_kind_of_axis axis with
+          | Some `Grid -> { ctx with pc_blocks = ctx.pc_blocks * extent }
+          | Some `Workgroup -> { ctx with pc_threads = ctx.pc_threads * extent }
+          | None -> ctx
+        in
+        go ~report ~ctx ~scale:(scale * extent) ~env:((index, extent) :: env) body
     | Scan_loop { index; from_; to_; carried; body; _ } ->
         (* The inits run once; the body's work scales with the range like a serial loop's. *)
         let extent = max 0 (to_ - from_ + 1) in
-        (scale * List.sum (module Int) carried ~f:(fun c -> sc_flops c.init))
-        + go ~scale:(scale * extent) ~env:((index, extent) :: env) body
-    | Set { llsc; _ } -> scale * sc_flops llsc
-    | Set_dynamic { dyn_value = dv, _; llsc; _ } -> scale * (sc_flops dv + sc_flops llsc)
-    | Set_from_vec { length; arg = a, _; _ } -> scale * (length + sc_flops a)
-    | Set_local (_, llsc) -> scale * sc_flops llsc
+        emit ~report ctx ~tile:false
+          (scale * List.sum (module Int) carried ~f:(fun c -> sc_flops c.init))
+        + go ~report ~ctx ~scale:(scale * extent) ~env:((index, extent) :: env) body
+    | Set { llsc; _ } -> emit ~report ctx ~tile:false (scale * sc_flops llsc)
+    | Set_dynamic { dyn_value = dv, _; llsc; _ } ->
+        emit ~report ctx ~tile:false (scale * (sc_flops dv + sc_flops llsc))
+    | Set_from_vec { length; arg = a, _; _ } ->
+        emit ~report ctx ~tile:false (scale * (length + sc_flops a))
+    | Set_local (_, llsc) -> emit ~report ctx ~tile:false (scale * sc_flops llsc)
     | If { cond = cnd, _; body } ->
         (* Guards-taken: the body is charged as if the guard always passes. *)
         flops_approx := true;
-        (scale * sc_flops cnd) + go ~scale ~env body
+        emit ~report ctx ~tile:false (scale * sc_flops cnd) + go ~report ~ctx ~scale ~env body
     | Tile_mma { m; n; k; lane; _ } ->
         let lane_extent =
           List.Assoc.find env lane ~equal:Idx.equal_symbol |> Option.value ~default:1
         in
-        scale / max 1 lane_extent * (2 * m * n * k)
+        emit ~report ctx ~tile:true (scale / max 1 lane_extent * (2 * m * n * k))
   and sc_flops (sc : Low_level.scalar_t) : int =
     let inline, hoisted = sc_split sc in
     inline + hoisted
@@ -344,7 +369,7 @@ let analyze (code : Low_level.t) : summary =
      guards-taken bound. *)
   and sc_split (sc : Low_level.scalar_t) : int * int =
     match sc with
-    | Low_level.Local_scope { body; _ } -> (0, go ~scale:1 ~env:[] body)
+    | Low_level.Local_scope { body; _ } -> (0, go ~report:false ~ctx:top_ctx ~scale:1 ~env:[] body)
     | Get_local _ | Get _ | Constant _ | Constant_bits _ | Embed_index _ -> (0, 0)
     | Get_merge_buffer _ ->
         (* Merge-buffer traffic is not represented by [affine_accesses] either: flag the
@@ -393,7 +418,11 @@ let analyze (code : Low_level.t) : summary =
         let i1, h1 = arg a1 in
         (1 + i1, h1)
   and arg (sc, _prec) = sc_split sc in
-  let flops = go ~scale:1 ~env:[] code in
+  let flops = go ~report:true ~ctx:top_ctx ~scale:1 ~env:[] code in
+  (flops, !flops_approx, !opaque)
+
+let analyze (code : Low_level.t) : summary =
+  let flops, flops_approx, opaque = op_census ~on_ops:(fun _ ~tile:_ _ -> ()) code in
   let read_uncertain, any_uncertain = access_uncertainty ~open_placement:(fun _ -> false) code in
   let per_node = footprints ~read_uncertain ~any_uncertain (Low_level.affine_accesses code) in
   {
@@ -401,8 +430,8 @@ let analyze (code : Low_level.t) : summary =
     read_bytes = List.fold per_node ~init:0 ~f:(fun acc (_, fp) -> acc + fp.fp_read_bytes);
     write_bytes = List.fold per_node ~init:0 ~f:(fun acc (_, fp) -> acc + fp.fp_write_bytes);
     flops;
-    flops_approx = !flops_approx;
-    opaque = !opaque;
+    flops_approx;
+    opaque;
   }
 
 let total_bytes s = s.read_bytes + s.write_bytes
@@ -696,6 +725,65 @@ let spills ?cache_capacity_bytes (r : reuse) =
   | Some capacity -> r.ru_working_set_bytes > capacity
   | None -> false
 
+(* {2 Launch fill — gh-ocannl-1479}
+
+   The compute leg divided by one issue rate tied every scalar leaf of a site whatever its launch: a
+   plain leaf whose batch loops run serially inside a few blocks scored like its [bgrid] twin that
+   spreads them over the grid, and measured 3-36x slower. Each op-carrying statement's work is now
+   attributed to its parallel context ([op_census]'s, so the census cannot drift from [analyze]'s),
+   and priced at the issue rate times that context's fill. A context of [B] blocks of [T] active
+   threads fills [min 1 (B * min T t / (P * t))] of a device of [P] multiprocessors, each saturating
+   its scalar issue at [t] threads: a block counts at most one multiprocessor's saturating share.
+   Statements with no work (zero nests, copies) contribute nothing, so a wide sibling nest cannot
+   make a narrow contraction look full — which a kernel-wide {!Low_level.launch_dims} reading
+   would. *)
+
+type launch_context = { lc_blocks : int; lc_threads : int; lc_tile_mma : bool; lc_ops : int }
+[@@deriving sexp_of]
+
+let launch_contexts (code : Low_level.t) : launch_context list =
+  let tbl = Hashtbl.Poly.create () and order = ref [] in
+  let _, _, _ =
+    op_census code ~on_ops:(fun ctx ~tile ops ->
+        let key = (ctx.pc_blocks, ctx.pc_threads, tile) in
+        match Hashtbl.find tbl key with
+        | Some r -> r := !r + ops
+        | None ->
+            Hashtbl.set tbl ~key ~data:(ref ops);
+            order := key :: !order)
+  in
+  List.rev_map !order ~f:(fun ((b, t, tile) as key) ->
+      { lc_blocks = b; lc_threads = t; lc_tile_mma = tile; lc_ops = !(Hashtbl.find_exn tbl key) })
+
+type fill_model = { fm_multiprocessors : int; fm_fill_threads : int } [@@deriving sexp_of]
+
+let context_fill (fm : fill_model) ~blocks ~threads =
+  let p = Float.of_int (max 1 fm.fm_multiprocessors) and t = max 1 fm.fm_fill_threads in
+  let effective = Float.of_int (max 1 blocks) *. Float.of_int (min (max 1 threads) t) in
+  Float.min 1. (effective /. (p *. Float.of_int t))
+
+(* One class of statements (scalar ones, or [Tile_mma] ones): its operations, and the sum over its
+   contexts of each context's operations divided by its fill. *)
+let class_work fm (contexts : launch_context list) ~tile =
+  List.fold contexts ~init:(0., 0.) ~f:(fun (o, w) c ->
+      if Bool.equal c.lc_tile_mma tile && c.lc_ops > 0 then
+        let ops = Float.of_int c.lc_ops in
+        (o +. ops, w +. (ops /. context_fill fm ~blocks:c.lc_blocks ~threads:c.lc_threads))
+      else (o, w))
+
+(* [work] operations of a class priced as the class's contexts price theirs: the class's own
+   fill-divided sum when [work] is the class's whole work (exactly, the common case), else [work]
+   scaled by the class's harmonic fill; [work] itself for a class with no work. *)
+let filled_work fm contexts ~tile work =
+  let ops, weighted = class_work fm contexts ~tile in
+  if Float.(ops <= 0.) then work
+  else if Float.equal work ops then weighted
+  else work *. (weighted /. ops)
+
+let launch_fill fm contexts =
+  let ops, weighted = class_work fm contexts ~tile:false in
+  if Float.(ops <= 0.) then 1. else ops /. weighted
+
 (* A ranking rate is at most its ceiling — the envelope constant the bound divides by — so every leg
    priced at it is at least the bound's leg over the same counts; unset, it is the ceiling. *)
 let ranking_rate ~ceiling rate = match rate with None -> ceiling | Some r -> Float.min r ceiling
@@ -709,7 +797,7 @@ let scratch_bytes (s : summary) (r : reuse) =
       |> Option.value_map ~default:0 ~f:(fun fp -> fp.fp_read_bytes + fp.fp_write_bytes))
 
 let ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
-    ?issue_rate ?dram_bandwidth ?(mma_flops = 0) (s : summary) (r : reuse option) :
+    ?issue_rate ?dram_bandwidth ?(mma_flops = 0) ?launch (s : summary) (r : reuse option) :
     float option * float option =
   let total = Float.of_int (total_bytes s) in
   let memory =
@@ -737,38 +825,60 @@ let ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?ca
   let compute =
     Option.map peak_flops ~f:(fun ceiling ->
         let issue = ranking_rate ~ceiling issue_rate in
-        (* At the ceiling, the bound's own quotient: exact ties between candidates stay exact. *)
-        if Float.(issue >= ceiling) then Float.of_int s.flops /. ceiling
-        else
-          (* Only tile-MMA work the backend accepts runs on its matrix units; the caller's count, at
-             most the summary's operations. *)
-          let mma = Float.of_int (min (max 0 mma_flops) s.flops) in
-          let scalar = Float.of_int s.flops -. mma in
-          (scalar /. issue) +. (mma /. ceiling))
+        (* Only tile-MMA work the backend accepts runs on its matrix units; the caller's count, at
+           most the summary's operations. *)
+        let mma = Float.of_int (min (max 0 mma_flops) s.flops) in
+        match launch with
+        | Some (fm, contexts) ->
+            (* gh-ocannl-1479: scalar work at the issue rate times its contexts' fill. Tile-MMA work
+               runs where the [Tile_mma] statements sit, on the multiprocessors their launch covers:
+               accepted work at the matrix units' ceiling, declined work (its scalar fallback) at
+               the issue rate, each times the [Tile_mma] contexts' fill. Unfilled, a plain
+               tensorized leaf -- its batch loops serial in a few blocks -- tied its [bgrid] twin on
+               Metal and was the pick, measured 12x slower. The saturating thread count is the
+               scalar sweep's; for the matrix units it is uncalibrated, and what orders plain
+               against [bgrid] is the blocks-over-multiprocessors factor. *)
+            let tile_ops =
+              List.sum (module Int) contexts ~f:(fun c -> if c.lc_tile_mma then c.lc_ops else 0)
+            in
+            let declined = Float.max 0. (Float.of_int tile_ops -. mma) in
+            let scalar = Float.max 0. (Float.of_int s.flops -. mma -. declined) in
+            (filled_work fm contexts ~tile:false scalar
+            +. filled_work fm contexts ~tile:true declined)
+            /. issue
+            +. (filled_work fm contexts ~tile:true mma /. ceiling)
+        | None ->
+            (* At the ceiling, the bound's own quotient: exact ties between candidates stay
+               exact. *)
+            if Float.(issue >= ceiling) then Float.of_int s.flops /. ceiling
+            else
+              let scalar = Float.of_int s.flops -. mma in
+              (scalar /. issue) +. (mma /. ceiling))
   in
   (compute, memory)
 
 let ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
-    ?issue_rate ?dram_bandwidth ?mma_flops (s : summary) (r : reuse option) : float option =
+    ?issue_rate ?dram_bandwidth ?mma_flops ?launch (s : summary) (r : reuse option) : float option =
   let compute, memory =
     ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
-      ?issue_rate ?dram_bandwidth ?mma_flops s r
+      ?issue_rate ?dram_bandwidth ?mma_flops ?launch s r
   in
   match List.filter_opt [ compute; memory ] with
   | [] -> None
   | l -> Some (List.reduce_exn l ~f:Float.max)
 
 let ranking_seconds ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
-    ?issue_rate ?dram_bandwidth ?mma_flops ?max_resident_threads ~is_global (code : Low_level.t) :
-    float option =
+    ?issue_rate ?dram_bandwidth ?mma_flops ?fill_model ?max_resident_threads ~is_global
+    (code : Low_level.t) : float option =
   let s = analyze code in
+  let launch = Option.map fill_model ~f:(fun fm -> (fm, launch_contexts code)) in
   let r =
     match (cache_capacity_bytes, cache_bandwidth) with
     | None, None -> None
     | _ -> Some (reuse_traffic ?max_resident_threads ~is_global code)
   in
   ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
-    ?issue_rate ?dram_bandwidth ?mma_flops s r
+    ?issue_rate ?dram_bandwidth ?mma_flops ?launch s r
 
 (* {2 Tile-MMA operand loads — gh-ocannl-1254}
 

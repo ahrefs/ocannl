@@ -1,0 +1,19 @@
+the grid-bound nest is one context of 4 blocks of 64 threads holding all its operations: true
+the serial-batch twin is one context of 2 blocks: its batch loop adds work, not blocks: true
+4 blocks of 64 threads fill P=4 at t=64; 2 blocks fill half: true
+without a fill model the twins tie on the compute leg: true
+with it the serial-batch twin's compute leg is exactly twice the grid-bound one's: true
+a fill model under which every context is full scores bitwise what no fill model does: true
+the zero nest contributes no context: only the contraction's 1 block of 64 threads: true
+so the kernel's fill is the contraction's quarter, though its launch spans 16 blocks: true
+2 blocks of 128 threads fill half of P=4 at t=64 (not all of it: a block is on one multiprocessor): true
+8 blocks of 128 threads fill it: true
+two nests of equal work, at fills 1 and 1/4, price as 1 + 4 times one nest's work: true
+the tile-MMA statement is one tile context of 1 block: true
+accepted tile-MMA work prices at the ceiling times its context's fill: true
+declined tile-MMA work prices at the issue rate times its context's fill: true
+the filled compute leg is never below the roofline's compute leg: true
+with the fill constants every plain leaf ranks strictly above its bgrid twin: true
+without them the twins tie, as before the launch fill: true
+every leaf's rank is at least its bound: true
+the best-ranked scalar leaf is a bgrid one: true

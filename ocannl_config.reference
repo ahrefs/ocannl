@@ -1174,6 +1174,23 @@
 # Unset/empty uses the backend's value. Same readers and cache identity as model_cache_capacity.
 #model_dram_bandwidth=
 
+# gh-ocannl-1479: overrides the backend's multiprocessor (SM / CU / GPU core) count for the
+# ranking score's launch fill. The score attributes each statement's scalar work to its launch
+# context -- B blocks (its enclosing Grid loops) of T threads (its Workgroup loops); serial loops,
+# such as a plain sketch's batch loops, add work but no parallelism -- and prices it at the issue
+# rate times min(1, B * min(T, t) / (P * t)), with P this count and t model_fill_threads. CUDA and
+# HIP query it; Metal publishes none (an Apple GPU's core count: `ioreg -l | grep gpu-core-count`).
+# The fill applies only when both keys resolve; `none` turns it off. Unset/empty uses the backend's
+# value. Same readers and cache identity as model_cache_capacity.
+#model_multiprocessors=
+
+# gh-ocannl-1479: overrides the backend's advisory threads per multiprocessor at which a
+# register-blocktiled kernel's scalar issue saturates -- the t of the launch fill above, a fitted
+# constant, not the physical residency. Fit it with `tools/calibrate_issue_rate.exe`, whose launch
+# sweep fits it jointly with model_issue_rate (then a full-fill rate). `none` turns the fill off.
+# Unset/empty uses the backend's value. Same readers and cache identity as model_cache_capacity.
+#model_fill_threads=
+
 # If true, stdout capturing is disabled, so some logs meant for the ppx_minidebug log files
 # (in particular CUDA logs) remain on the stdout.
 #

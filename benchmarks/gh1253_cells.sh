@@ -7,8 +7,8 @@
 #
 # Usage (from the checkout under test): benchmarks/gh1253_cells.sh BACKEND OUT [CAP]
 #
-#   BACKEND  cuda | hip -- pinned on every command line; no ambient OCANNL_* variable or config
-#            file reaches a cell (see below).
+#   BACKEND  cuda | hip, or metal with RANK_ONLY=1 -- pinned on every command line; no ambient
+#            OCANNL_* variable or config file reaches a cell (see below).
 #   OUT      results directory, created, and refused unless empty: OUT/driver.log records what this
 #            script prints, each cell writes OUT/<cell>.out and OUT/<cell>.err.
 #   CAP      wall cap in seconds per cell (default 900); a capped cell counts as failed.
@@ -27,9 +27,11 @@
 #                      model_cache_bandwidth (the below-capacity plateau), passed to the wgrad
 #                      cells.
 #   issue              tools/calibrate_issue_rate.exe: the seeded sketch of a 512 x 512 contraction
-#                      (not the validation cells' 256 x 1024) swept over reduction extents; prints
-#                      the fitted model_issue_rate, passed to every later cell, and the intercept
-#                      the score does not price.
+#                      (not the validation cells' 256 x 1024) swept over reduction extents, and
+#                      (gh-ocannl-1479) the launch sweep of pinned geometries over output sizes;
+#                      prints the fitted model_issue_rate (full-fill when the launch fit holds),
+#                      model_fill_threads and model_multiprocessors, passed to every later cell,
+#                      and the intercept the score does not price.
 #   wgrad_b<B>_untiled bench_wgrad at batch B in {1, 8, 256} (gpt2_mini_train's l*_ffn_w2 gradient)
 #                      with seeding, the split and the reduction sink off -- the plain default
 #                      plan, whose
@@ -55,6 +57,15 @@
 # (gh-ocannl-1477). PICK_PROFILES (with RANK_ONLY=1, say 'performance approximate') adds, per site,
 # a pick-only cell rank_<site>_pick_<profile> under --ocannl_profile=<profile> with the shipped
 # seeding gate (no threshold pin): what that profile ships, joined to the same measured rows.
+# gh-ocannl-1479, the launch fill: every listing cell gains a `nofill` arm, the same constants with
+# model_fill_threads=none, so one timing TSV gives the agreement before and after the fill term.
+# FIT_FILL=1 with RANK_ONLY=1 runs the issue cell first (MULTIPROCESSORS=P passes --multiprocessors
+# where the device reports none: Metal) and passes its fitted constants to the listing and pick
+# cells, which otherwise run the shipped ones. PICK_GATE0=1 adds pick cells with the seeding off
+# (gpu_default_sketch_min_reduction=0), with and without the fill (gate0, gate0nofill):
+# model_default against the plain default, no anchor. A pick
+# whose configuration seeds a plan the timing cell did not time (a profile's auto gate deciding
+# otherwise) gets a timing cell of its own under that profile, appended to the same TSV.
 # Both wgrad arms pin BENCH_TUNE=0 and model_default_schedule=false, so an ambient profile or
 # environment cannot swap the measured plans for tuned or model-picked ones.
 # The shipped-kernel rows (`bench: kernel ... w: wg_w.grad`) are the measured side of the table.
@@ -70,8 +81,14 @@ out=$2
 cap=${3:-900}
 case "$backend" in
 cuda | hip) ;;
+metal)
+  if [[ ${RANK_ONLY:-0} != 1 ]]; then
+    echo "$0: BACKEND metal needs RANK_ONLY=1 (the calibration cells are CUDA/HIP only)" >&2
+    exit 2
+  fi
+  ;;
 *)
-  echo "$0: BACKEND must be cuda or hip, got $backend" >&2
+  echo "$0: BACKEND must be cuda, hip or metal, got $backend" >&2
   exit 2
   ;;
 esac
@@ -128,9 +145,27 @@ fitted() { if $last_ok; then sed -n "s/^$1=//p" "$2" | tail -1; fi; }
 model=()
 tiers=()
 fitted_arm=fitted
+# The issue cell's fitted constants: the rate always, the launch fill's two when its fit held.
+issue_flags() {
+  local rate fill mp
+  rate=$(fitted model_issue_rate "$out/issue.out")
+  fill=$(fitted model_fill_threads "$out/issue.out")
+  mp=$(fitted model_multiprocessors "$out/issue.out")
+  if [[ -n "$rate" ]]; then model+=("--ocannl_model_issue_rate=$rate"); fi
+  if [[ -n "$fill" ]]; then model+=("--ocannl_model_fill_threads=$fill"); fi
+  if [[ -n "$mp" ]]; then model+=("--ocannl_model_multiprocessors=$mp"); fi
+}
+mp_flag=()
+if [[ -n "${MULTIPROCESSORS:-}" ]]; then mp_flag=("--multiprocessors=$MULTIPROCESSORS"); fi
 if [[ ${RANK_ONLY:-0} == 1 ]]; then
   fitted_arm=shipped
   echo "   RANK_ONLY: agreement cells only, under the shipped constants"
+  if [[ ${FIT_FILL:-0} == 1 ]]; then
+    fitted_arm=fitted
+    cell issue "$issue" --repeats=10 "--ocannl_backend=$backend" ${mp_flag[@]+"${mp_flag[@]}"}
+    issue_flags
+    echo "   FIT_FILL: listing and pick cells under ${model[*]:-the shipped constants}"
+  fi
 else
   cell bandwidth "$bandwidth" "--ocannl_backend=$backend" \
     "--ocannl_autotune_calibration_file=$out/calibration.tsv"
@@ -152,9 +187,9 @@ else
   if [[ -n "$cache_bw" ]]; then model+=("--ocannl_model_cache_bandwidth=$cache_bw"); fi
   # The capacity and cache tier as fitted, without the rates: the ceilings arm of the agreement cells.
   tiers=(${model[@]+"${model[@]}"})
-  cell issue "$issue" --repeats=10 "--ocannl_backend=$backend" ${model[@]+"${model[@]}"}
-  rate=$(fitted model_issue_rate "$out/issue.out")
-  if [[ -n "$rate" ]]; then model+=("--ocannl_model_issue_rate=$rate"); fi
+  cell issue "$issue" --repeats=10 "--ocannl_backend=$backend" ${mp_flag[@]+"${mp_flag[@]}"} \
+    ${model[@]+"${model[@]}"}
+  issue_flags
   echo "   model flags for the wgrad cells: ${model[*]:-none}"
   for batch in 1 8 256; do
     dims="$batch,128,256,1024"
@@ -178,7 +213,8 @@ ceilings=()
 for flag in ${tiers[@]+"${tiers[@]}"}; do
   case "$flag" in --ocannl_model_dram_bandwidth=*) ;; *) ceilings+=("$flag") ;; esac
 done
-ceilings+=(--ocannl_model_issue_rate=none --ocannl_model_dram_bandwidth=none)
+ceilings+=(--ocannl_model_issue_rate=none --ocannl_model_dram_bandwidth=none
+  --ocannl_model_fill_threads=none)
 for site in ${SITES:-wgrad:8,128,256,1024 wgrad:256,128,256,1024 fp8mm:8192,32,4096}; do
   kind=${site%%:*}
   dims=${site#*:}
@@ -193,17 +229,47 @@ for site in ${SITES:-wgrad:8,128,256,1024 wgrad:256,128,256,1024 fp8mm:8192,32,4
     ${model[@]+"${model[@]}"}
   cell "rank_${name}_ceilings" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
     "--ocannl_backend=$backend" --ocannl_gpu_default_sketch_min_reduction=32 "${ceilings[@]}"
+  # The first statement of a key wins, so the fill's own flags are dropped, not overridden.
+  nofill=()
+  for flag in ${model[@]+"${model[@]}"}; do
+    case "$flag" in --ocannl_model_fill_threads=* | --ocannl_model_multiprocessors=*) ;; *) nofill+=("$flag") ;; esac
+  done
+  cell "rank_${name}_nofill" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
+    "--ocannl_backend=$backend" --ocannl_gpu_default_sketch_min_reduction=32 \
+    ${nofill[@]+"${nofill[@]}"} --ocannl_model_fill_threads=none
   picks=()
   if [[ ${RANK_ONLY:-0} == 1 ]]; then
-    for profile in ${PICK_PROFILES:-}; do
-      cell "rank_${name}_pick_${profile}" env BENCH_PICK=1 BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" \
-        "$rank_site" "--ocannl_backend=$backend" "--ocannl_profile=$profile"
-      if $last_ok; then picks+=(--pick "${profile}=$out/rank_${name}_pick_${profile}.out"); fi
+    pick_cells=()
+    for profile in ${PICK_PROFILES:-}; do pick_cells+=("$profile:--ocannl_profile=$profile"); done
+    if [[ ${PICK_GATE0:-0} == 1 ]]; then
+      # The gate-0 pick with and without the fill: what nothing-seeded model_default ships.
+      pick_cells+=("gate0:--ocannl_gpu_default_sketch_min_reduction=0")
+      pick_cells+=("gate0nofill:--ocannl_gpu_default_sketch_min_reduction=0")
+    fi
+    for spec in ${pick_cells[@]+"${pick_cells[@]}"}; do
+      pname=${spec%%:*}
+      pflag=${spec#*:}
+      pout="$out/rank_${name}_pick_${pname}.out"
+      pflags=(${model[@]+"${model[@]}"})
+      if [[ $pname == *nofill ]]; then pflags=(${nofill[@]+"${nofill[@]}"} --ocannl_model_fill_threads=none); fi
+      cell "rank_${name}_pick_${pname}" env BENCH_PICK=1 BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" \
+        "$rank_site" "--ocannl_backend=$backend" "$pflag" ${pflags[@]+"${pflags[@]}"}
+      if $last_ok; then
+        picks+=(--pick "${pname}=$pout")
+        # The plan this configuration seeds, timed here unless the timing cell already did.
+        seeded=$(sed -n 's/.*seeded_label="\([^"]*\)".*/\1/p' "$pout" | tail -1)
+        if $timed && [[ -n "$seeded" && "$seeded" != none ]] &&
+          ! grep -qF "$seeded" "$out/rank_${name}.tsv"; then
+          cell "rank_${name}_time_${pname}" env BENCH_TUNE=1 BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" \
+            "$rank_site" "--ocannl_backend=$backend" "$pflag" --ocannl_autotune_keep_fraction=1 \
+            "--ocannl_autotune_calibration_file=$out/rank_${name}.tsv" ${pflags[@]+"${pflags[@]}"}
+        fi
+      fi
     done
   fi
   if $timed; then
     python3 "$root/benchmarks/gh1442_agreement.py" "$out/rank_${name}.tsv" \
-      "ceilings=$out/rank_${name}_ceilings.out" \
+      "ceilings=$out/rank_${name}_ceilings.out" "nofill=$out/rank_${name}_nofill.out" \
       "${fitted_arm}=$out/rank_${name}_${fitted_arm}.out" ${picks[@]+"${picks[@]}"} |
       tee "$out/rank_${name}_agreement.txt" || failed=$((failed + 1))
   fi

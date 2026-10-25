@@ -43,7 +43,9 @@ very plan (ratio 1 by construction) whether or not the timing cell timed it -- a
 profile's plan is not the timing cell's. A leaf pick needs its own row and its configuration's
 seeded plan's row both timed. An explicit --pick output without a pick line fails too. A pick that does not join a measured row is reported
 `pick_unmatched` and makes the exit status 1: an acceptance that cannot time the pick has not
-passed. Stdout only; exit 2 on unusable input.
+passed -- unless the pick line carries the pick cell's own timing (gh-ocannl-1479: `pick_ms` and
+`untuned_ms`, the pick and its configuration's untuned plan timed in one process), which every
+pick line then reports as `pick_over_untuned` beside `pick_over_best`. Stdout only; exit 2 on unusable input.
 """
 
 import argparse
@@ -62,6 +64,9 @@ def unescape(text):
     return None if text is None else text.encode().decode("unicode_escape")
 
 
+PICK_TIMED = re.compile(r' pick_ms=(\S+) untuned_ms=(\S+)')
+
+
 def pick_of(path):
     """(pick label, the seeded plan's label under the pick's configuration, or None)."""
     with open(path) as f:
@@ -72,10 +77,36 @@ def pick_of(path):
     return None, None
 
 
+def pick_timing(path):
+    """gh-ocannl-1479: the pick cell's own timing of the pick and of its configuration's untuned
+    plan (one harness, one process), or None for an older pick line."""
+    with open(path) as f:
+        for line in f:
+            if PICK.search(line):
+                m = PICK_TIMED.search(line)
+                if m:
+                    return float(m.group(1)), float(m.group(2))
+    return None
+
+
 def report_pick(name, path, times, required):
     """Prints the pick line; False when there is a pick that does not join a measured row, or when
     a [required] output (an explicit --pick) carries no pick line at all."""
     label, seeded_label = pick_of(path)
+    # gh-ocannl-1479: the pick against the fastest row timed here, beside the pick against seeded,
+    # and the pick cell's own same-harness timing of the pick and the untuned plan.
+    # Over whole-routine rows only (a candidate, the seeded plan, the default): an F_sketch row
+    # times one segment of the routine.
+    whole = [ms for lbl, ms in times.items()
+             if lbl.startswith(("W_sketch[", "F_seeded[")) or lbl == "baseline"]
+    best = min(whole) if whole else min(times.values())
+    own = pick_timing(path)
+    own_text = (f" own: pick_ms={own[0]:.6f} untuned_ms={own[1]:.6f}"
+                f" pick_over_untuned={own[0] / own[1]:.3f}" if own is not None else "")
+
+    def over_best(row):
+        return (f" pick_over_best={times[row] / best:.3f}" if row is not None else "") + own_text
+
     if label is None:
         print(f"{name}: pick none (no `rank-site: pick` line)")
         return not required
@@ -95,22 +126,28 @@ def report_pick(name, path, times, required):
         timed = (f" row={seeded!r} measured_ms={times[seeded]:.6f}" if seeded is not None
                  else " (that plan untimed here)")
         print(f"{name}: pick label='seeded' seeded_label={seeded_label!r}{timed}"
-              f" pick_over_seeded=1.000 (the same plan)")
+              f" pick_over_seeded=1.000 (the same plan){over_best(seeded)}")
         return True
     row = seeded if label == "seeded" else row_label(label, times)
     if row is None:
+        if own is not None:
+            # Not a row of the timing cell's, but timed by the pick cell beside its untuned plan.
+            print(f"{name}: pick label={label!r} (untimed by the tuner){own_text}"
+                  f" own_over_best={own[0] / best:.3f} (cross-harness)")
+            return True
         print(f"{name}: pick_unmatched label={label!r} seeded_label={seeded_label!r}")
         return False
     if seeded is None and seeded_label is not None:
-        # The pick is timed, but not the plan it is to be compared with.
+        # The pick is timed, but not the plan it is to be compared with -- unless the pick cell
+        # timed both itself.
         print(f"{name}: pick label={label!r} row={row!r} measured_ms={times[row]:.6f}"
-              f" seeded_unmatched seeded_label={seeded_label!r}")
-        return False
+              f" seeded_unmatched seeded_label={seeded_label!r}{over_best(row)}")
+        return own is not None
     line = f"{name}: pick label={label!r} row={row!r} measured_ms={times[row]:.6f}"
     if seeded is not None:
         line += (f" seeded_ms={times[seeded]:.6f}"
                  f" pick_over_seeded={times[row] / times[seeded]:.3f}")
-    print(line)
+    print(line + over_best(row))
     return True
 
 

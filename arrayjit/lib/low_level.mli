@@ -834,6 +834,10 @@ type hardware_axis_info = {
   ha_extent : int;  (** [to_ - from_ + 1]. *)
 }
 
+val hardware_kind_of_axis : axis_type -> [ `Grid | `Workgroup ] option
+(** The launch slot space a loop annotation binds: [Grid] the blocks, [Workgroup] and
+    [Workgroup_reduce] the threads of a block, the rest none (iterated inside one work item). *)
+
 val hardware_axes : t -> hardware_axis_info list
 (** All hardware-annotated loops in pre-order, with their positional slots. *)
 

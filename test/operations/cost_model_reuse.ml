@@ -410,7 +410,9 @@ let () =
   let rated_limits = { limits with peak_flops = Some c_flops; peak_memory_bandwidth = Some c_bw } in
   let tag ?scalar_rate ?dram_rate () =
     Autotune.seeded_plan
-      ~seed_gate:(Autotune.Ranked { capacity = Some 0; cache_rate = None; scalar_rate; dram_rate })
+      ~seed_gate:
+        (Autotune.Ranked
+           { capacity = Some 0; cache_rate = None; scalar_rate; dram_rate; fill = None })
       ~backend:"cuda" ~limits:rated_limits ~accum_prec:Fn.id ~static_indices:[] (hermetic base)
     |> Option.bind ~f:(fun plan -> plan.Autotune.sp_start)
     |> Option.map ~f:(fun start -> start.Autotune.gate_tag)
