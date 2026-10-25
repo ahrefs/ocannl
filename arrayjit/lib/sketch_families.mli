@@ -572,8 +572,10 @@ val lift_geometry_lattice :
 val sketch_path_traffic_floor :
   limits:Ir.Backend_intf.hardware_limits -> Ir.Low_level.optimized -> Family_decision.path -> int
 (** Additional bytes every completion below a path must move beyond
-    {!Ir.Cost_model.completion_floor}. Detection runs at partial application; an unrecognized site
-    or an uncommitted staging decision contributes zero. *)
+    {!Ir.Cost_model.completion_floor}: the matmul family's staged geometries, and the conv family's
+    two staged operand tiles once its row geometry commits (gh-ocannl-1489). Detection runs at
+    partial application, in the claiming family's order; an unrecognized site or an uncommitted
+    staging decision contributes zero. *)
 
 (** {2 Constructing schedules and inspecting reductions} *)
 

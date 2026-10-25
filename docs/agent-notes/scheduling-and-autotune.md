@@ -328,8 +328,24 @@ files.
   site gets the family bound, the stats ledger and the operand-load tie-break: where `model_default`
   used to scan conv seeds flat (`best_flat`, first strict improvement), an exact score tie between
   two conv leaves with tile-MMA load counts can now crown the second one. The conv traffic-floor
-  increment is 0 (sound: `completion_floor` bounds every completion); a positive staging increment
-  for conv paths needs its own derivation. **Consequence for diagnostics: since gh-577 a companion-coverage
+  increment (gh-ocannl-1489, `conv_path_traffic_floor`) prices both staged operand tiles, written
+  and read, once the row geometry commits (`conv-shape` / `conv-rows`; every prefix above prices 0,
+  so monotonicity needs no copy of the menus' feasibility): each `Stage` mints a FRESH tile node
+  that the load nest fills and `Tile_mma`'s fallback reads in full, and `analyze` charges a node at
+  least its distinct cells, so the charge is additional to the base nodes. Widths are the tiles' own
+  (`cpu_conv_pack_prec`, shared with the tree, on the CPU leg; storage widths on the GPU leg, whose
+  reduction and column extents pad to the format tile); a pipelined tile keeps its logical dims, so
+  one copy. `conv_family_tree` checks it against every leaf's scheduled `analyze` (fresh nodes, the
+  composed floor at every prefix, the bound against the ranking score): on every fixture the two
+  `Stage` tiles are charged EXACTLY the increment, and the fresh-node slack is `Tensorize`'s
+  accumulator fragment (`rows x noc_p` at the output's width, written and read), which the floor
+  leaves unpriced — a tightening once its certainty is argued. **Its pruning power is
+  capped by the base floor, not the increment**: `completion_floor` prices an overlapping-window
+  input read at 0 (the image is not exact), so a real leaf's traffic sits about the input's size
+  above floor + increment — more than two leaves' A tiles differ by — and with the incumbent at a
+  real score nothing below the root fathoms; the test's pruning claim therefore puts the incumbent
+  between the floor and the largest raised bound. A sound lower bound on a windowed image (an
+  affine sum's interval) is what would let conv subtrees fathom at real incumbents. **Consequence for diagnostics: since gh-577 a companion-coverage
   DECLINE CENSUS is empty, and that is not evidence the rule stopped firing** — a refuted family is
   never seeded, so it never reaches the decline log. gh-569's Part 3 read 25 coverage declines out of
   `schedule_log_declines`; the same workload on current master logs zero
