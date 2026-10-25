@@ -9118,8 +9118,7 @@ let may_keep_off_device ~backend_name ~(limits : Backend_intf.hardware_limits) p
   && (not (settled_on_device plc tn))
   && node.Low_level.has_assignment && node.Low_level.read_by_other
   && Option.for_all limits.Backend_intf.max_workgroup_memory_bytes ~f:(fun limit ->
-      (* The peek is the forced size's value without forcing it (a forced size shows in HIP's
-         [Tn.header]; see [thread_private_bytes]). *)
+      (* The peek is the forced size's value without forcing it; see [thread_private_bytes]. *)
       Tn.size_in_bytes_peek tn <= limit)
 
 (* gh-ocannl-1331: the default pipeline's [Search_shaping] keys that only one kind of backend reads
@@ -9273,7 +9272,8 @@ let workgroup_memory_bytes ~(capabilities : Backend_intf.codegen_capabilities)
           | Some { Low_level.pt_depth; _ } -> pt_depth
           | None -> 1
         in
-        (copies * Lazy.force tn.Tn.size_in_bytes) :: acc)
+        (* The peek, as in [thread_private_bytes]: estimating forces no node's size. *)
+        (copies * Tn.size_in_bytes_peek tn) :: acc)
   in
   let prec (tn : Tn.t) = Lazy.force tn.Tn.storage_prec in
   (* gh-ocannl-1168: the per-simdgroup partials of each lane all-reduce site that may stage them,
@@ -9311,8 +9311,8 @@ let workgroup_memory_bytes ~(capabilities : Backend_intf.codegen_capabilities)
    [C_syntax]'s [local_decls] emits, one per [Local]-settling node of the kernel's traced store,
    sized [num_elems] at its storage precision — less the workgroup-shared tiles, which it declares
    once per workgroup instead. Read with the pure placement peek and {!Tn.size_in_bytes_peek}, so
-   asking settles nothing and forces no node's [size_in_bytes] (the forcing would show in its
-   [Tn.header] on HIP alone, the only backend running this check). An upper estimate of the arrays:
+   asking settles nothing and forces no node's [size_in_bytes]: HIP is the only backend running this
+   check, and it leaves the node as every other backend finds it. An upper estimate of the arrays:
    on the CPU backends a pool-parallel [Grid] loop declares its privatized locals per chunk instead,
    and on Metal a rendered simdgroup fragment suppresses its array, both rendering decisions taken
    after this point. A device compiler may still drop an array it can prove dead; the GPT-2 step

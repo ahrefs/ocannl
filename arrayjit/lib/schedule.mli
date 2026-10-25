@@ -1362,7 +1362,8 @@ val workgroup_memory_bytes :
     {!field:Backend_intf.warp_reduce_workgroup_bytes} for its extent at the accumulator residency of
     the cell's storage precision: the per-warp partials its multi-warp form declares. Pass the
     compiling context's [Context.codegen_capabilities]; the capability-free
-    {!Backend_intf.no_codegen_capabilities} counts the tiles alone. *)
+    {!Backend_intf.no_codegen_capabilities} counts the tiles alone. Forces no node's [size_in_bytes]
+    ({!Tnode.size_in_bytes_peek}). *)
 
 val thread_private_bytes : Low_level.optimized -> int
 (** The per-work-item scratch bytes the kernel will declare (gh-ocannl-1313): one function-scope
