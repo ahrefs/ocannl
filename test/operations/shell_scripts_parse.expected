@@ -569,6 +569,7 @@ benchmarks/gh1253_cells.sh parses: true
 benchmarks/gh1253_flip_cells.sh parses: true
 benchmarks/gh1279_cells.sh parses: true
 benchmarks/gh1343_ab.sh parses: true
+benchmarks/gh1525_reuse_ab.sh parses: true
 benchmarks/gh1529_nvrtc_cost.sh parses: true
 benchmarks/gh1557_cells.sh parses: true
 benchmarks/gh514_cells.sh parses: true

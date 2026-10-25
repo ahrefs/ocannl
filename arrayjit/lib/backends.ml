@@ -1071,7 +1071,9 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
           in
           (Either.First compiled, single)
       | segments ->
-          let seg_names = List.mapi segments ~f:(fun i _ -> name ^ "__seg" ^ Int.to_string i) in
+          let seg_names =
+            List.mapi segments ~f:(fun i _ -> Kernel_code_cache.segment_kernel_name ~routine:name i)
+          in
           List.iter2_exn seg_names segments ~f:(fun seg_name seg ->
               Schedule.check_hardware_limits_classified ~name:seg_name ~limits ~capabilities seg);
           let batch =

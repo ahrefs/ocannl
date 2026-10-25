@@ -1000,12 +1000,23 @@ let host_capabilities () =
 
 module Tn = Tnode
 
-type library = { lib : (Dl.library[@sexp.opaque]); libname : string } [@@deriving sexp_of]
+type library = {
+  lib : (Dl.library[@sexp.opaque]);
+  libname : string;
+  bytes : int;
+      (** The library file's size as compiled, its weight in the kernel code cache (gh-ocannl-1525).
+      *)
+}
+[@@deriving sexp_of]
 
 type procedure = {
   bindings : Indexing.unit_bindings;
   name : string;
   result : library;
+  symbol : string;
+      (** What [result] exports this kernel as: [name] unless the kernel code cache answered with
+          code compiled under another name (gh-ocannl-1525); [name] stays the one diagnostics use.
+      *)
   kparams : (string * kparam_source) list;
 }
 [@@deriving sexp_of]
@@ -1362,7 +1373,8 @@ let%track7_sexp c_compile_and_load ~name:(base_name : string) ~run_id ~f_path =
   (* Loaded: a debug run's private source copy has served its purpose, the informational
      [build_files/] copy being the one a reader looks at. *)
   if retain_debug then remove f_path;
-  let result = { lib; libname } in
+  let bytes = try (Unix.stat libname).st_size with Unix.Unix_error _ -> 0 in
+  let result = { lib; libname; bytes } in
   (* The kernel now executes from the mapping, not from the path. POSIX unlinks a mapped file's name
      and keeps the mapping alive; Windows refuses to delete a mapped DLL, and then the removal waits
      for the unload below, if one happens before exit. Either outcome is safe, so the code does not
@@ -1665,20 +1677,122 @@ let compile_source ~name source =
   let run_id = Utils.get_global_run_id () in
   c_compile_and_load ~name ~run_id ~f_path:(compilation_copy ~name ~run_id build_file source)
 
-let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized) : procedure =
-  let result, kparams, name, _launch =
-    Compile.compile ~name bindings lowered ~includes:Builtins_cc.includes
-      ~builtins:Builtins_cc.builtins ~compile_source ()
+(* {2 The kernel code cache (gh-ocannl-1525)}
+
+   The C compiler's cost is per kernel, and large: a [gpt2_mini_train] search candidate of 16
+   kernels spent 10-37 s in it on mac-studio, so a cc search could time a handful of candidates in a
+   budget. As on HIP and CUDA ([Kernel_code_cache], gh-ocannl-1314/1529), a batch compiles only the
+   kernels no earlier compile in this process produced -- its misses, one library of them per batch
+   -- and reuses the rest. A kernel's key is its canonical standalone source ([render_batch]'s
+   [key_text]: the names it owns renamed, its segment index dropped) plus the toolchain it compiles
+   under: the compiler command, the executable it resolves to, the kernel compiler flags and the
+   link flags, the same identity the toolchain diagnosis keys on. A reused kernel is looked up in
+   its library by the symbol it was compiled under. Process-local, bounded by [cc_kernel_cache_mib]
+   (library file bytes); 0 disables it, and every batch compiles as one library of all its kernels,
+   as before. Bypassed under device debugging, as on the GPUs. A library the cache holds stays
+   loaded while it does; under OpenMP a library is never unloaded anyway. *)
+let kernel_cache_capacity_bytes =
+  lazy
+    (let mib = Utils.get_global_arg ~default:"256" ~arg_name:"cc_kernel_cache_mib" in
+     match Int.of_string_opt (String.strip mib) with
+     | Some m when m >= 0 -> m * 1024 * 1024
+     | _ ->
+         raise
+         @@ Utils.User_error
+              ("cc_kernel_cache_mib must be a non-negative integer (MiB); found: " ^ mib))
+
+let kernel_cache : (library * string) Kernel_code_cache.t =
+  Kernel_code_cache.create ~capacity_bytes:(fun () -> Lazy.force kernel_cache_capacity_bytes)
+
+(* Held from the lookups of a batch's misses to their publication, so two domains compiling the same
+   kernels compile them once. *)
+let kernel_compile_lock = Stdlib.Mutex.create ()
+
+let write_source_artifact ~name source =
+  if Utils.settings.output_debug_files_in_build_directory then (
+    let build_file = Utils.open_build_file ~base_name:name ~extension:".c" in
+    Out_channel.output_string build_file.oc source;
+    build_file.finalize ())
+
+let compile_kernels ~batch ~names bindings (lowereds : Low_level.optimized array) : procedure array
+    =
+  Compile_cost.record_reuse_capable ();
+  let r =
+    Compile.render_batch ~names bindings lowereds ~includes:Builtins_cc.includes
+      ~builtins:Builtins_cc.builtins ()
   in
-  { result; kparams; bindings; name }
+  let n = Array.length r.entries in
+  Compile_cost.record_kernels ~rendered:n ~compiled:0;
+  let all = List.init n ~f:Fn.id in
+  let kernel_names = Array.map r.entries ~f:(fun (_, name, _) -> name) in
+  (* The artifacts' name, as [Compile_driver.drive] derives it. *)
+  let name =
+    if batch then
+      String.(strip ~drop:(equal_char '_') @@ common_prefix (Array.to_list kernel_names))
+    else kernel_names.(0)
+  in
+  (* Not under device debugging, as on the GPUs, nor when the caller asked for the routine's library
+     as an artifact ([output_dlls_in_build_directory]): what is kept is then the routine's own whole
+     library, compiled as before. *)
+  let enabled =
+    Kernel_code_cache.enabled kernel_cache
+    && (not (Utils.with_runtime_debug ()))
+    && not (Utils.get_global_flag ~default:false ~arg_name:"output_dlls_in_build_directory")
+  in
+  (* One library of [idxs]. A library of every kernel in batch order compiles the routine's own
+     source as [<name>.c]; any other is compiled as [<name>.part<k>.c], and the routine's full
+     source is still written as [<name>.c] (what tests read through [Generated] does not depend on
+     what the cache held). [.part<k>] is a spelling no routine name takes. *)
+  let compile_group ~group ~n_groups idxs =
+    let whole = n_groups = 1 && List.equal Int.equal idxs all in
+    let artifact = if whole then name else name ^ ".part" ^ Int.to_string group in
+    (* Before the call: a failed compile was still given these kernels. *)
+    Compile_cost.record_kernels ~rendered:0 ~compiled:(List.length idxs);
+    let lib =
+      try Compile_cost.time_device (fun () -> compile_source ~name:artifact (r.assemble idxs))
+      with exn ->
+        let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+        r.attribute idxs exn backtrace
+    in
+    (lib, lib.bytes)
+  in
+  let resolved =
+    if not enabled then
+      let lib, _ = compile_group ~group:0 ~n_groups:1 all in
+      Array.map kernel_names ~f:(fun symbol -> (lib, symbol))
+    else
+      let toolchain =
+        [
+          compiler_command ();
+          compiler_executable_identity (compiler_command ());
+          kernel_compiler_flags ();
+          Lazy.force kernel_link_flags;
+        ]
+      in
+      let keys =
+        Array.init n ~f:(fun i -> Kernel_code_cache.key ~parts:(toolchain @ [ r.key_text i ]))
+      in
+      let resolved =
+        Kernel_code_cache.resolve kernel_cache ~lock:kernel_compile_lock ~keys
+          ~options:(Array.create ~len:n toolchain) ~symbols:kernel_names
+          ~compile_group:(fun ~group ~n_groups _ idxs -> compile_group ~group ~n_groups idxs)
+          ()
+      in
+      (* The routine's own full source as [<name>.c], whatever was compiled (a whole-batch library
+         wrote the same text there already). *)
+      write_source_artifact ~name (r.assemble all);
+      resolved
+  in
+  Array.mapi r.entries ~f:(fun i (kparams, name, _launch) ->
+      let result, symbol = resolved.(i) in
+      { result; kparams; bindings; name; symbol })
+
+let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized) : procedure =
+  (compile_kernels ~batch:false ~names:[| name |] bindings [| lowered |]).(0)
 
 let%diagn_sexp compile_batch ~names bindings (lowereds : Low_level.optimized array) :
     procedure array =
-  let result, entries =
-    Compile.compile_batch ~names bindings lowereds ~includes:Builtins_cc.includes
-      ~builtins:Builtins_cc.builtins ~compile_source ()
-  in
-  Array.map entries ~f:(fun (kparams, name, _launch) -> { result; kparams; bindings; name })
+  compile_kernels ~batch:true ~names bindings lowereds
 
 let%track3_sexp link_compiled ?lowered_bindings ~merge_buffer ~resolve ~runner_label ctx_buffers
     (code : procedure) =
@@ -1703,7 +1817,7 @@ let%track3_sexp link_compiled ?lowered_bindings ~merge_buffer ~resolve ~runner_l
           ('a -> 'b, 'idcs, 'p1, 'p2) Indexing.variadic =
        fun (type a b idcs) (binds : idcs Indexing.bindings) kparams (cs : (a -> b) Ctypes.fn) ->
         match (binds, kparams) with
-        | Empty, [] -> Indexing.Result (Foreign.foreign ~from:code.result.lib _name cs)
+        | Empty, [] -> Indexing.Result (Foreign.foreign ~from:code.result.lib code.symbol cs)
         | Bind _, [] -> invalid_arg "Cc_backend.link: too few static index params"
         | Bind (_, bs), Static_idx s :: ps -> Param_idx (idx_ref s, link bs ps Ctypes.(int @-> cs))
         | Empty, Static_idx _ :: _ -> invalid_arg "Cc_backend.link: too many static index params"

@@ -4970,7 +4970,8 @@ box.
   `model_peak_memory_bandwidth`.
 - `c_syntax.ml`: `cc_grid_private_bytes_cap`, `schedule_log_declines`.
 - `cc_backend.ml`: `cc_backend_arch_flags`, `cc_backend_compiler_command`,
-  `cc_backend_probe_cache`, `cc_backend_simd_flags`, `cc_parallel_grid`, `cc_pool_core_class`.
+  `cc_backend_probe_cache`, `cc_backend_simd_flags`, `cc_kernel_cache_mib`, `cc_parallel_grid`,
+  `cc_pool_core_class`.
 - `cuda_backend.ml`: `cuda_kernel_cache_mib`, `cuda_printf_fifo_size`, `debug_log_from_routines`,
   `log_level`.
 - `hip_backend.ml`: `collapse_foreign_stderr_noise`, `debug_log_from_routines`,

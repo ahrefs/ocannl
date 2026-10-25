@@ -5,3 +5,8 @@ first compile: every kernel it rendered was compiled: true
 second compile: the same kernels rendered, none compiled: true
 the tuned routine's outputs equal the host reference: true
 some candidate compiled part of its kernels and reused the rest: true
+colliding labels: outputs equal the host reference: true
+fresh build: outputs equal the host reference: true
+renamed routine: outputs equal the host reference: true
+fresh build, freshly numbered nodes: the same kernels rendered, none compiled: true
+another routine name: the same kernels rendered, all compiled afresh: true
