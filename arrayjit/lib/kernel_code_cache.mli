@@ -103,9 +103,11 @@ val canonical_kernel :
 
     Never renamed: a name in [keep] or [free]; an identifier after [.], [->] or [::] (a member or a
     qualified name); anything inside [[[...]]] (an attribute), a preprocessor line, or a string or
-    character literal. If [bound] meets [free] -- a node declared under a name that is also a
-    language, builtin or vendor name, whose other occurrences might be its free meaning, as with a
-    macro, which no declaration shadows -- no [bound] name is renamed.
+    character literal. If [bound] meets [free], or holds a name in the implementation's reserved
+    namespace ([__x], [_X]) -- a node declared under a name that is also a language, builtin, vendor
+    or predefined-macro name, whose other occurrences might be its free meaning, as with a macro,
+    which no declaration shadows -- no [bound] name is renamed: such a kernel may not compile at
+    all, and its key must not reach the code of a twin that did.
 
     Why this is sound: every renamed name is bound in the kernel (declared there, and a declaration
     shadows any outer meaning of its name throughout its scope; parameters are passed by position;

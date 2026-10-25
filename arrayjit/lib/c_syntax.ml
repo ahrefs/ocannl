@@ -2465,6 +2465,12 @@ module C_syntax (B : C_syntax_config) = struct
      [void exp(...)] after [<math.h>] is a conflicting declaration, while a parameter or local named
      [exp] merely shadows it and is well-formed C (gh-ocannl-686 review round 1). *)
 
+  (* The predefined macros a C compiler may define OUTSIDE the reserved namespace: GCC and clang
+     define [unix] and [linux] (and the others on their targets) in their GNU dialects, the default.
+     A routine, or a node, declared under one of them is macro-expanded and does not compile. Every
+     other predefined macro is spelled [__x] or [_X], which [kernel_ident] and the kernel code
+     cache's canonical text already treat as reserved (gh-ocannl-1525 review). *)
+
   (** [kernel_ident name] is [name] made safe to emit as a kernel function's C identifier
       (gh-ocannl-686).
 
@@ -2513,7 +2519,10 @@ module C_syntax (B : C_syntax_config) = struct
       fails in the vendor compiler, and {!Compile_driver} (or Metal's link-time compile) reports
       that failure as the NAME's, through {!attribute_routine_name_failure} -- not as the "bug in
       OCANNL" gh-ocannl-686 was about. *)
-  let routine_ident_blacklist = ident_blacklist @ c_stdlib_idents @ B.vendor_routine_idents
+  let system_macro_idents = [ "linux"; "unix"; "i386"; "sun"; "sparc"; "mips"; "vax"; "m68k" ]
+
+  let routine_ident_blacklist =
+    ident_blacklist @ c_stdlib_idents @ system_macro_idents @ B.vendor_routine_idents
 
   let routine_ident_table = Hash_set.of_list (module String) routine_ident_blacklist
 

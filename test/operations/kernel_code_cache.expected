@@ -44,6 +44,7 @@ a member name is never renamed, even when it spells a bound node: true
 so kernels reading different members stay apart: true
 attributes and preprocessor lines are copied as they are: true
 a bound name that is also a free name disables the node renaming: true
+a bound name in the reserved namespace (a compiler macro's) disables the node renaming: true
 the emitter's derived locals are renamed whole, over a node, a symbol or a uid: true
 every template the emitter spells through is listed for the canonical text: true
 a derived spelling over an unbound base is left alone: true

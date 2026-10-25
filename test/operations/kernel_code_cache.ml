@@ -188,6 +188,8 @@ let () =
       d CS.mma_fragment_derivation "812";
     ]
   in
+  p "a bound name in the reserved namespace (a compiler macro's) disables the node renaming"
+    (String.equal (canon ~bound:[ "x"; "__GNUC__" ] "x[0] = __GNUC__[0];") "x[0] = __GNUC__[0];");
   p "the emitter's derived locals are renamed whole, over a node, a symbol or a uid"
     (String.equal
        (canon ~bound:[ "n12_x" ] (String.concat ~sep:" + " derived_locals))

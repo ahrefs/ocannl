@@ -91,14 +91,15 @@ case "${1:-}" in
     if [ -e "$OUT" ] && [ -n "$(ls -A "$OUT")" ]; then echo "gh1525: $OUT is not empty" >&2; exit 2; fi
     mkdir -p "$OUT/bin/head" && OUT=$(cd "$OUT" && pwd -P) || exit 2
     echo "gh1525: host=$(hostname) date=$(date -u +%Y-%m-%dT%H:%M:%SZ) head=$(git -C "$ROOT" rev-parse HEAD)" > "$OUT/driver.log"
-    (cd "$ROOT" && dune build "./$BENCH") || exit 1
+    (cd "$ROOT" && dune build --root . "./$BENCH") || exit 1
     cp "$ROOT/_build/default/$BENCH" "$OUT/bin/head/bench_gpt.exe" || exit 1
     if [ "$BASE_REV" != - ]; then
       SRC=$OUT/base-src
       git -C "$ROOT" worktree add --detach "$SRC" "$BASE_REV" || exit 1
       echo "base=$(git -C "$SRC" rev-parse HEAD)" >> "$OUT/driver.log"
       status=0
-      (cd "$SRC" && dune build "./$BENCH") && mkdir -p "$OUT/bin/base" \
+      # --root: OUT may sit inside ROOT, and dune would build the base under ROOT's workspace.
+      (cd "$SRC" && dune build --root . "./$BENCH") && mkdir -p "$OUT/bin/base" \
         && cp "$SRC/_build/default/$BENCH" "$OUT/bin/base/bench_gpt.exe" || status=1
       git -C "$ROOT" worktree remove --force "$SRC"
       [ "$status" -eq 0 ] || exit 1

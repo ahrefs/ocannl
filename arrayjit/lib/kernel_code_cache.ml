@@ -167,10 +167,17 @@ let canonical_kernel ?kernel_name ?(keep = []) ?(bound = []) ?(derivations = [])
   let free = Hash_set.of_list (module String) free in
   let keep = Hash_set.of_list (module String) keep in
   let bound =
-    (* A declared name that is also a free name of the language, a builtin or a vendor identifier is
-       renamed nowhere: its occurrences might be the free meaning (a macro is not shadowed by a
-       declaration). *)
-    if List.exists bound ~f:(Hash_set.mem free) then Hash_set.create (module String)
+    (* A declared name that is also a free name of the language, a builtin, a vendor identifier or a
+       predefined macro -- or that is spelled in the implementation's reserved namespace ([__x],
+       [_X]), where a compiler's own macros live -- is renamed nowhere: its occurrences might be the
+       free meaning, and a macro is not shadowed by a declaration, so such a kernel may not compile
+       at all, and its key must not reach the code of a twin that did (gh-ocannl-1525 review). *)
+    let reserved b =
+      String.is_prefix b ~prefix:"__"
+      || (String.length b >= 2 && Char.equal b.[0] '_' && Char.is_uppercase b.[1])
+    in
+    if List.exists bound ~f:(fun b -> Hash_set.mem free b || reserved b) then
+      Hash_set.create (module String)
     else Hash_set.of_list (module String) bound
   in
   let is_base base = Hash_set.mem bound base || is_symbol base || all_digits base in
