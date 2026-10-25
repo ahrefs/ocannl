@@ -100,10 +100,12 @@ let () =
     ~f:(fun (label, ex) ->
       Stdio.printf
         "rank-site: explain site=%s label=%S rank_ms=%s compute_ms=%s memory_ms=%s floor_ms=%s \
-         admitted=%b anchor=%b\n\
+         admitted=%b anchor=%b fills=%s\n\
          %!"
         site label (ms ex.Autotune.ex_rank_ms) (ms ex.ex_compute_ms) (ms ex.ex_memory_ms)
-        (ms ex.ex_floor_ms) ex.ex_admitted ex.ex_anchor);
+        (ms ex.ex_floor_ms) ex.ex_admitted ex.ex_anchor
+        (Option.value_map ex.ex_fills ~default:"n/a" ~f:(fun fills ->
+             String.concat ~sep:"," (List.map fills ~f:(Printf.sprintf "%.4f")))));
   (* [BENCH_PICK=1] (gh-ocannl-1278): what [Autotune.model_default] actually picks here under the
      configuration in force, read off the compile itself. Nothing is timed. [seeded_label] names the
      seeded plan under the same configuration as the tuner labels its seed ([F_seeded[...]], the
@@ -123,16 +125,42 @@ let () =
        | None -> "none"
      in
      let pick = ref None in
-     let _ctx, _routine =
+     let pick_ctx, pick_routine =
        Autotune.model_default ~name:(name ^ "_pick")
          ~report:(fun c -> pick := Some c)
          ctx comp Ir.Indexing.Empty
      in
+     (* gh-ocannl-1479: the pick timed by itself, beside the configuration's untuned plan
+        ([Autotune.seeded_default]: the seeded plan, or the default where nothing seeds) timed the
+        same way -- a pick the timing cell never timed still gets a measured comparison. Best of
+        [BENCH_PICK_REPEATS] (default 20) synced runs after a warm-up. *)
+     let repeats =
+       Option.value_map (Stdlib.Sys.getenv_opt "BENCH_PICK_REPEATS") ~default:20 ~f:Int.of_string
+     in
+     let time run_ctx routine =
+       Context.sync (Context.run run_ctx routine);
+       let best = ref Float.infinity in
+       for _ = 1 to repeats do
+         let t0 = Mtime_clock.counter () in
+         Context.sync (Context.run run_ctx routine);
+         best := Float.min !best (Mtime.Span.to_float_ns (Mtime_clock.count t0) /. 1e6)
+       done;
+       !best
+     in
+     let pick_ms = time pick_ctx pick_routine in
+     let untuned_ctx, untuned_routine =
+       Autotune.seeded_default ~name:(name ^ "_untuned") ctx comp Ir.Indexing.Empty
+     in
+     let untuned_ms = time untuned_ctx untuned_routine in
      match !pick with
      | None -> Stdio.printf "rank-site: pick site=%s no report\n%!" site
      | Some c ->
-         Stdio.printf "rank-site: pick site=%s label=%S rank_ms=%s seeded_label=%S\n%!" site
-           c.Autotune.mc_label (ms c.mc_rank_ms) seeded_label);
+         Stdio.printf
+           "rank-site: pick site=%s label=%S rank_ms=%s seeded_label=%S pick_ms=%.6f \
+            untuned_ms=%.6f pick_over_untuned=%.3f\n\
+            %!"
+           site c.Autotune.mc_label (ms c.mc_rank_ms) seeded_label pick_ms untuned_ms
+           (pick_ms /. untuned_ms));
   if tune then
     let report = ref None in
     let _ctx, _routine =
