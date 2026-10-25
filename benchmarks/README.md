@@ -1124,7 +1124,9 @@ rog-nv's and minix's `raw-v1` rows, on no box's disk. minix and tuf compare diff
     hermetic segment) is counted as `+N untimed`, and the dominant one is dominant among the rest.
   - *What number.* The roofline lower bound over the measured time — `max(ops / peak FLOP/s, bytes
     / peak bandwidth)` on `Ir.Cost_model.analyze`'s counts — so a memory-bound kernel is scored
-    against bandwidth and a compute-bound one against arithmetic. Printed **only on an exact
+    against bandwidth and a compute-bound one against arithmetic. The bytes are global memory's
+    only, the kernel table's `io:` count (gh-ocannl-1520): a staged kernel's workgroup tiles and
+    thread-private scratch never cross the bus the bandwidth ceiling describes. Printed **only on an exact
     count**, per leg as the calibration fit reads exactness: `approx` when the leg that binds has
     an upper-bound count (`flops_approx` / `footprint_approximate`), `opaque` for code the model
     cannot see. An upper bound on the leg that does *not* bind is harmless — it can only shrink,

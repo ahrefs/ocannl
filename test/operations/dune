@@ -10256,6 +10256,24 @@
  (modules cost_model_reuse)
  (libraries base stdio ocannl arrayjit.verdict ll_test))
 
+; gh-ocannl-1520: the dominant kernel's bytes count global memory only, the kernel table's io:
+; accounting, so a staged kernel's tiles and scratch stay off the bandwidth ceiling's leg.
+
+(test
+ ; ocannl-backend: none -- hand-built IR is scheduled and counted, never compiled or executed.
+ (name dominant_kernel_bytes)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules dominant_kernel_bytes)
+ (libraries
+  base
+  stdio
+  ocannl
+  bench_harness
+  bench_json
+  arrayjit.verdict
+  ll_test))
+
 ; gh-ocannl-1253: every hardware_limits field has a cache-identity class; the cache key hashes the
 ; Key-class projection, byte-identical to the pre-classification record; no Untimed field is read
 ; outside its readers. The globs are the library and tool sources the Untimed fields could leak
