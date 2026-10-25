@@ -487,19 +487,21 @@ val recompute_cost :
     materialized, the computations the virtualizer's own walk stores once the node is not
     materialized. Memoized per lineage: partially apply to the context once per compile. *)
 
-val bounded_work : cap:int -> Low_level.t -> int option
-(** A cheap work estimate for the CPU default annotator's per-dispatch profitability gate
-    (gh-ocannl-1458; [Schedule.default_cpu], config [cpu_schedule_min_work]): scalar operations
-    executed by one run of the statement, saturating at [cap] (so a caller comparing against a
-    threshold passes the threshold as [cap] and never overflows). Per executed scalar statement it
-    counts the store (or register update), one per [Unop]/[Binop]/[Ternop] evaluation, and one per
-    memory read ([Get], [Get_dynamic], merge-buffer reads); loop extents multiply, [Local_scope]
-    bodies count, a [Set_from_vec] counts its run length, a whole-node [Zero_out] its cell count,
-    and an [If] is charged guards-taken. So a copy has nonzero work and a store whose expression is
-    long is charged its operations, unlike {!analyze}'s FLOP count. No affine analysis runs. [None]
-    for constructs the walk does not model ([Staged_compilation], barriers, [Scan_loop],
-    [Tile_mma]): unknown work never passes a profitability gate. A ranking heuristic like the rest
-    of this module, not a runtime prediction. *)
+val tile_mma_macs_per_update : int
+(** How many multiply-accumulates of a [Tile_mma] {!fork_join_updates} charges as one scalar update
+    (16: on cc a [Tile_mma] renders as a register-tiled vector micro-kernel; gh-ocannl-1564). *)
+
+val fork_join_updates : cap:int -> Low_level.t -> int
+(** Scalar updates one run of the statement performs, saturating at [cap]: one per executed store or
+    register update, loop extents multiplying, [Local_scope] bodies counted (an apparently single
+    store may carry a whole reduction), a whole-node [Zero_out] its cells, an [If] guards-taken, a
+    [Tile_mma] its MACs over {!tile_mma_macs_per_update}; [Staged_compilation], barriers and
+    [Scan_loop] read as [cap]. The one count both CPU fork/join judgments use (gh-ocannl-1458): the
+    renderer's launch floor ([C_syntax], config [cc_grid_min_updates]) and the default CPU
+    annotator's per-dispatch gate ([Schedule.default_cpu], config [cpu_schedule_min_work]) -- so at
+    equal thresholds the annotator never retypes a loop the renderer would decline. A decline
+    heuristic in machine-independent units, not a runtime prediction: arithmetic inside a store's
+    expression is not charged. *)
 
 module Calibration : sig
   (** The calibration TSV schema (config [autotune_calibration_file], gh-ocannl-491 task 4) and the

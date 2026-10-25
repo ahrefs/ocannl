@@ -5,8 +5,9 @@
    nests need no common geometry: [Schedule.default_cpu] proves, per nest, the ONE loop it retypes
    independent over its own iterations, leaves a nest it cannot prove serial without affecting the
    others, and parallelizes a loop only when one run of it does at least [cpu_schedule_min_work]
-   scalar operations ([Cost_model.bounded_work]). [Low_level.validate_parallel ~fork_join] admits
-   the resulting mixed kernels: a write outside every [Grid] loop runs once.
+   scalar updates ([Cost_model.fork_join_updates], the renderer's launch-floor units).
+   [Low_level.validate_parallel ~fork_join] admits the resulting mixed kernels: a write outside
+   every [Grid] loop runs once.
 
    Legs 1-6 apply [Sched.default_cpu] (configured threshold, no optional arguments) DIRECTLY to one
    optimized hand-built kernel -- no fission, which would otherwise separate unschedulable or
@@ -111,7 +112,7 @@ let () =
 (* 2. Producer and consumer of different extents (the consumer reads two producer cells per
    iteration): no common-extent prefix, so the GPU rule bailed the kernel. *)
 let () =
-  let n = 20000 in
+  let n = 40000 in
   let a = mk "a2" [| n |] and b = mk "b2" [| n / 2 |] in
   let i = sym () and k = sym () in
   let llc =
@@ -201,11 +202,12 @@ let () =
   renders_on_pool "hazard" llc src;
   parity "hazard" got want
 
-(* 6 (and 7). The work gate, over one kernel: equal store counts over equal extents with a cheap and
-   an expensive expression (only the expensive one pays for a dispatch; the old element threshold,
-   2048 < 16384, refused both), a large copy (zero FLOPs, nonzero work), a loop under a serial loop
-   that may not borrow the enclosing iterations, and an extent-1 candidate over a heavy inner loop
-   (never parallel). Nests that stay serial sit beside parallel ones. *)
+(* 6 (and 7). The work gate, over one kernel: equal output extents with a cheap pointwise body and a
+   16-long reduction per cell (only the reduction pays for a dispatch, 2048 x 16 updates; the old
+   element threshold, 2048 < 16384, refused both), a large copy (zero FLOPs, nonzero work, exactly
+   at the threshold), a loop under a serial loop that may not borrow the enclosing iterations, and
+   an extent-1 candidate over a heavy inner loop (never parallel). Nests that stay serial sit beside
+   parallel ones. *)
 let gate_program () =
   let m = 2048 and n = 16384 in
   let cheap = mk "cheap" [| m |] and costly = mk "costly" [| m |] in
@@ -217,15 +219,17 @@ let gate_program () =
   and r = sym ()
   and ir = sym ()
   and k = sym ()
+  and kk = sym ()
   and i1 = sym () in
-  let poly s =
-    List.fold (List.init 4 ~f:Fn.id) ~init:(tick s) ~f:(fun e _ -> add (mul e (c 0.5)) (c 0.25))
-  in
   let llc =
     LL.unflat_lines
       [
         loop_n ic m (set_at cheap (iter ic) (tick ic));
-        loop_n ie m (set_at costly (iter ie) (poly ie));
+        zero costly;
+        loop_n ie m
+          (loop_n kk 16
+             (set_at costly (iter ie)
+                (add (get costly [| iter ie |]) (mul (get x [| iter kk |]) (tick ie)))));
         loop_n ix n (set_at copy (iter ix) (get x [| iter ix |]));
         zero f;
         loop_n r 64
@@ -250,8 +254,8 @@ let () =
   let llc, src, got, want =
     direct ~name:"fj_gate" ~materialized ~seed ~read:[ cheap; costly; copy; f; h ] llc
   in
-  serial_writer "gate: the cheap expression stays serial" llc cheap;
-  grid_writer "gate: the expensive expression, same stores and extent, is Grid-typed" llc costly;
+  serial_writer "gate: the cheap pointwise nest stays serial" llc cheap;
+  grid_writer "gate: the reduction over the same output extent is Grid-typed" llc costly;
   grid_writer "gate: the large copy is Grid-typed" llc copy;
   serial_writer "gate: the loop under a serial loop does not borrow its iterations" llc f;
   serial_writer "gate: the extent-1 candidate stays serial" llc h;
@@ -282,8 +286,8 @@ let () =
     Ll_test.execute ~ctx:(Context.cpu ()) ~name:(name ^ "_serial") o ~seed:(seed_of seed) ~read
   in
   let all = LL.unflat_lines (List.map !segments ~f:(fun (s : LL.optimized) -> s.LL.llc)) in
-  serial_writer "pipeline: the cheap expression stays serial" all cheap;
-  grid_writer "pipeline: the expensive expression is Grid-typed" all costly;
+  serial_writer "pipeline: the cheap pointwise nest stays serial" all cheap;
+  grid_writer "pipeline: the reduction is Grid-typed" all costly;
   grid_writer "pipeline: the large copy is Grid-typed" all copy;
   renders_on_pool "pipeline" all src;
   parity "pipeline" got want

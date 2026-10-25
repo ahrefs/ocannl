@@ -7874,15 +7874,11 @@ let default_cpu ?min_work (opt : Low_level.optimized) : schedule =
         Utils.registered_int ~arg_name:"cpu_schedule_min_work")
   in
   (* Per dispatch: the work of ONE run of the candidate loop -- enclosing serial iterations and
-     sibling nests do not count, since each run forks and joins on its own. Unknown work never
-     passes; a non-positive threshold disables the gate (the tuner's ungated presets). *)
-  let pays loop =
-    min_work <= 0
-    ||
-    match Cost_model.bounded_work ~cap:min_work loop with
-    | Some w -> w >= min_work
-    | None -> false
-  in
+     sibling nests do not count, since each run forks and joins on its own -- in the renderer's own
+     launch-floor units ({!Cost_model.fork_join_updates}), so at equal thresholds no loop is retyped
+     only to be declined at render time. A non-positive threshold disables the gate (the tuner's
+     ungated presets). *)
+  let pays loop = min_work <= 0 || Cost_model.fork_join_updates ~cap:min_work loop >= min_work in
   (* Retype the candidate loop to [Grid], nothing else: pool-backed Grid rendering (gh-ocannl-164)
      partitions that loop into contiguous chunks, and a [Workgroup] split would only add loop
      structure that executes serially inside a chunk. *)

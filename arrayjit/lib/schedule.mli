@@ -1005,8 +1005,8 @@ val default_cpu : ?min_work:int -> Low_level.optimized -> schedule
     affecting its siblings.
 
     Profitability is per dispatch: a candidate is retyped only when one run of it does at least
-    [min_work] scalar operations ({!Cost_model.bounded_work}; enclosing serial iterations and
-    sibling nests do not count, unknown work never passes). Default from config
+    [min_work] scalar updates ({!Cost_model.fork_join_updates}, the renderer's launch-floor units;
+    enclosing serial iterations and sibling nests do not count). Default from config
     [cpu_schedule_min_work] = 16384; a non-positive value disables the gate (the tuner's ungated
     presets pass [~min_work:0]). *)
 

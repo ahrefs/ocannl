@@ -100,18 +100,21 @@ files.
   materialized edges on CPU, harmless but no longer needed), and so is `conv_direct_grid_witness`,
   whose refutation of companion-writing conv flavors is now conservative on cc.
 - **The CPU threshold is work per dispatch** (gh-ocannl-1458): `cpu_schedule_min_work` (16384)
-  against `Cost_model.bounded_work` of the candidate loop alone -- stores, arithmetic ops and reads,
-  times extents, saturating at the cap, `None` (never passes) for `Scan_loop`/`Tile_mma`/barriers.
-  Enclosing serial loops do not count (each run forks and joins; the renderer's own floor,
-  `C_syntax.repeated_grid_min_updates`, guards repeated launches of explicit schedules separately),
-  and at least 2 iterations are required. The element threshold it replaced compared the product of
+  against `Cost_model.fork_join_updates` of the candidate loop alone -- the SAME count the
+  renderer's launch floor (`cc_grid_min_updates`, gh-ocannl-1564) applies to every pool launch, so
+  at equal values nothing is annotated only to render serially. Enclosing serial loops do not count
+  (each run forks and joins), and at least 2 iterations are required. The count charges stores, not
+  the arithmetic inside a store's expression: an annotator-only count of ops and reads was tried in
+  this PR and dropped once the renderer floor applied to every launch, since the floor decides at
+  run time; widening both together needs recalibrating the floor (minix's gh-1564 cells still lose
+  at the default for small packed GEBP). The element threshold it replaced compared the product of
   the two outermost chain extents for the whole kernel: cifar_resnet's 64 x 32 left every conv
   serial, while once one nest passed every tiny sibling forked too. `~min_work:0` is the tuner's
   ungated preset. `Cost_model.reuse_traffic` reads each iteration of a cc `Grid` loop as a resident
   GPU block, so a parallel default's modeled working set can pass a cache capacity its serial twin
   fits (`cost_model_selection`'s rank legs pin a serial default for that reason).
   `test/operations/cpu_fork_join_chains` (direct and pipeline legs, each against the serial
-  compile), `cost_model_bounded_work`.
+  compile), `cost_model_fork_join_updates`.
 - A parallel loop under a serial loop is reachable only past lane-uniform scalar work
   (gh-ocannl-1003). The presets' chain is the single-child loop path, which stops at the
   online-softmax hoist's preamble (`for t { p := P[s, t]; for e { O[s, e] += p * V[t, e] } }`);

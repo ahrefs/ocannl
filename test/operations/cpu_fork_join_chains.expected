@@ -24,8 +24,8 @@ hazard: its independent sibling is Grid-typed: true
 hazard: every Grid loop renders on the pool: true
 hazard: readback 0 equals the unscheduled compile's, bit for bit: true
 hazard: readback 1 equals the unscheduled compile's, bit for bit: true
-gate: the cheap expression stays serial: true
-gate: the expensive expression, same stores and extent, is Grid-typed: true
+gate: the cheap pointwise nest stays serial: true
+gate: the reduction over the same output extent is Grid-typed: true
 gate: the large copy is Grid-typed: true
 gate: the loop under a serial loop does not borrow its iterations: true
 gate: the extent-1 candidate stays serial: true
@@ -35,8 +35,8 @@ gate: readback 1 equals the unscheduled compile's, bit for bit: true
 gate: readback 2 equals the unscheduled compile's, bit for bit: true
 gate: readback 3 equals the unscheduled compile's, bit for bit: true
 gate: readback 4 equals the unscheduled compile's, bit for bit: true
-pipeline: the cheap expression stays serial: true
-pipeline: the expensive expression is Grid-typed: true
+pipeline: the cheap pointwise nest stays serial: true
+pipeline: the reduction is Grid-typed: true
 pipeline: the large copy is Grid-typed: true
 pipeline: every Grid loop renders on the pool: true
 pipeline: readback 0 equals the unscheduled compile's, bit for bit: true

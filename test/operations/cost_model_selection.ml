@@ -410,14 +410,14 @@ let () =
      A chain under the configured threshold: a 64x64 product over a 4096-long contraction, a second
      32x64 product of it, and a pointwise tail, each materialized. The threshold counts work per
      dispatch ([cpu_schedule_min_work], gh-ocannl-1458), and a product whose operands exceed the
-     cache capacity cannot sit under its default, so the leg raises it past the chain in-process
-     (as the rank legs above do): the configured CPU preset then leaves every nest unannotated, and fission
-     coalesces adjacent unannotated segments back into one kernel, so the configured segmentation is
-     the single kernel and [model_default] used to make no per-segment substitution at all. The
-     search's ungated presets keep the chain cut, and its first product's operands (2 MiB)
-     exceed the rule's 1 MiB cache capacity, so a reuse-tiled sketch of that segment strictly beats
-     its preset. The inputs are dyadic and small, so every sum is exact in f32 and the values are
-     checked exactly against the host. *)
+     cache capacity cannot sit under its default, so the leg raises it past the chain in-process (as
+     the rank legs above do): the configured CPU preset then leaves every nest unannotated, and
+     fission coalesces adjacent unannotated segments back into one kernel, so the configured
+     segmentation is the single kernel and [model_default] used to make no per-segment substitution
+     at all. The search's ungated presets keep the chain cut, and its first product's operands (2
+     MiB) exceed the rule's 1 MiB cache capacity, so a reuse-tiled sketch of that segment strictly
+     beats its preset. The inputs are dyadic and small, so every sum is exact in f32 and the values
+     are checked exactly against the host. *)
   let bm = 64 and bk = 4096 and bn = 64 and bp = 32 in
   let cyc ~dims ~modulus = Ll_test.cycle_flat ~dims ~modulus ~offset:0. ~stride:0.5 in
   let bav = Array.init (bm * bk) ~f:(cyc ~dims:[| bm; bk |] ~modulus:3) in

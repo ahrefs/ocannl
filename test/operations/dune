@@ -5350,15 +5350,15 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-; gh-ocannl-1458: Cost_model.bounded_work, the CPU preset's per-dispatch work estimate, over
-; hand-built IR: what it counts, saturation at its cap, and None for unmodelled constructs.
+; gh-ocannl-1458: Cost_model.fork_join_updates, the work count the CPU preset's per-dispatch gate
+; and the renderer's launch floor share, over hand-built IR: what it counts and saturation.
 
 (test
  ; ocannl-backend: none -- pure analysis of hand-built IR; links no backend and compiles nothing.
- (name cost_model_bounded_work)
+ (name cost_model_fork_join_updates)
  (package neural_nets_lib)
  (deps ocannl_config)
- (modules cost_model_bounded_work)
+ (modules cost_model_fork_join_updates)
  (libraries base arrayjit.ir arrayjit.verdict arrayjit.ll_builders))
 
 ; gh-ocannl-1458: the default CPU preset's fork-join cross-nest rule and per-dispatch work gate,

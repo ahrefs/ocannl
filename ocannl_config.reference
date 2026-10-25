@@ -308,10 +308,11 @@
 #automatic_cpu_schedule=true
 
 # The default CPU schedule parallelizes a nest's loop only when ONE run of it (one fork-join) does
-# at least this much work, in scalar operations: stores, arithmetic operations and memory reads,
-# multiplied by loop extents (`Cost_model.bounded_work`). Enclosing serial loops and sibling nests
-# do not count; a loop whose work cannot be estimated stays serial. Replaces the element-count
-# threshold `cpu_schedule_min_parallel` (gh-ocannl-1458).
+# at least this much work, in scalar updates multiplied by loop extents -- the units of
+# `cc_grid_min_updates`, the renderer's floor for the same fork-join (`Cost_model.fork_join_updates`),
+# so at equal values no loop is annotated only to be rendered serially. Enclosing serial loops and
+# sibling nests do not count. Replaces the element-count threshold `cpu_schedule_min_parallel`
+# (gh-ocannl-1458).
 #cpu_schedule_min_work=16384
 
 # If true (and the automatic schedule for the backend is active), routines are split into multiple

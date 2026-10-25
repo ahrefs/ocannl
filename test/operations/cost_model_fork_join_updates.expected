@@ -1,0 +1,10 @@
+a 100-cell copy costs 100 (one store per cell): true
+a store's expression is not charged: the 9-op expression costs what the copy does: true
+a reduction body is charged per inner iteration: 100 x 16: true
+a 10^12-store nest saturates at the cap: true
+at an Int.max_value cap the product saturates instead of wrapping: true
+an empty loop costs nothing: true
+a whole-node zero costs its cells: true
+a guarded body is charged guards-taken (a store per iteration): true
+a barrier reads as the cap: true
+a scan loop reads as the cap: true

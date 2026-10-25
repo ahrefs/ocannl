@@ -1,9 +1,0 @@
-a 100-cell copy costs 200 (a store and a read per cell): true
-equal stores over equal extents: the cheap expression costs 200, the costly one 1000: true
-a 10^12-store nest saturates at the cap: true
-at an Int.max_value cap the product saturates instead of wrapping: true
-an empty loop costs nothing: true
-a whole-node zero costs its cells: true
-a guarded body is charged guards-taken (the comparison plus the store per iteration): true
-a barrier is unknown work: true
-a scan loop is unknown work: true

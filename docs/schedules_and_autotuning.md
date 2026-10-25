@@ -208,8 +208,9 @@ With no explicit transform, backend `compile` applies `Schedule.maybe_default_sc
   before the next statement, and code outside `Grid` loops runs once on the calling thread, so
   sibling nests may differ in geometry or stay serial (`Low_level.validate_parallel ~fork_join`
   admits such kernels). A nest it cannot prove stays serial alone. Profitability is per dispatch:
-  one run of the loop must do at least `cpu_schedule_min_work` (default 16384) scalar operations,
-  stores, arithmetic and reads, by `Cost_model.bounded_work` (gh-ocannl-1458).
+  one run of the loop must do at least `cpu_schedule_min_work` (default 16384) scalar updates,
+  counted by `Cost_model.fork_join_updates` -- the renderer's own launch-floor units
+  (`cc_grid_min_updates`) -- (gh-ocannl-1458).
 - **Kernel fission** (`schedule_fission`): top-level statements are partitioned into segments at
   cross-workgroup dependency edges (materialized producer/consumer pairs, bare writes,
   whole-node `Zero_out`s, statements opaque to the analysis); each segment is scheduled
