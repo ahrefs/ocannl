@@ -46,6 +46,8 @@ let claims_parity =
     "parity: no seed fails to reach its segment, or raises";
     "negative control: at least one perturbed seed executes";
     "negative control: every executed perturbed seed is reported a mismatch";
+    "negative control: no perturbed seed fails to reach its segment, raises, or has nothing to \
+     perturb";
   ]
 
 let tensorized_capability =
@@ -127,4 +129,5 @@ let () =
       p_none (List.nth_exn claims_parity 2) results ~f:broken;
       let perturbed = parity ~perturb:true in
       p (List.nth_exn claims_parity 3) (not (List.is_empty (executed perturbed)));
-      p_all (List.nth_exn claims_parity 4) (executed perturbed) ~f:mismatched
+      p_all (List.nth_exn claims_parity 4) (executed perturbed) ~f:mismatched;
+      p_none (List.nth_exn claims_parity 5) perturbed ~f:broken
