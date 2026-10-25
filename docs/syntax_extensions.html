@@ -1325,6 +1325,20 @@ padding. The dimension relationship is:</p>
 <pre><code>input_size = stride * (output_size - 1) + effective_kernel_span</code></pre>
 <p>where
 <code>effective_kernel_span = 1 + (kernel_size - 1) * dilation</code>.</p></li>
+<li><p><strong>Padded windows are operand-only</strong>: a padded window
+in the result slot (after <code>=&gt;</code>),
+e.g. <code>&quot;s, i; k =&gt; s, i=+k&quot;</code>, would be a padded transposed
+convolution, which is not implemented; shape inference refuses it with a
+message naming the window (gh-ocannl-1550). Write the padded window on
+an operand instead — with stride 1, dilation 1 and an odd kernel size,
+<code>&quot;s, o=+k; k =&gt; s, o&quot;</code> with the kernel reversed is the
+same map — or use an unpadded result-side window
+(<code>=&gt; s, i&lt;+k</code>), a full transposed convolution whose
+result extent is
+<code>stride * (operand_size - 1) + effective_kernel_span</code>.
+Result-side unpadded and stride-only (<code>=&gt; s, 2*i</code>) axes
+are supported, and so is the gradient of an operand-side padded window
+(it reuses the forward projections).</p></li>
 </ul>
 <p><strong>Important constraint for valid convolution</strong>: The
 formula must hold exactly, meaning
@@ -1575,6 +1589,15 @@ or its alias <code>Operation.TDSL.O.dim</code> to embed the solved
 dimension of the corresponding variable (as a number) into a tensor
 expression. For a row variable, the number will be the product of the
 dimensions it resolved into.</p>
+<p>The ppx never shares a capture between calls, but a reference made by
+hand with <code>Shape.get_variable_ref</code> can be passed through
+<code>~capture_dims</code> to several operations. It then names one
+dimension, whichever order shape inference solves them in
+(gh-ocannl-1545): until inference closes, their dimension variables are
+equated, as are their row variables, and a dimension with a row has the
+row’s product. Across a closure (say a <code>Train.forward_once</code>
+between the operations) the reference carries its solved value, which
+for a row variable is the product.</p>
 <p>Capturing requires the specification to be a <strong>literal
 string</strong>: every capture pattern in <code>tensor/ppx_op.ml</code>
 and <code>tensor/ppx_cd.ml</code> matches on a string constant, so
