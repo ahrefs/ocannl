@@ -488,12 +488,39 @@ let () =
      tree refutes it at construction (it used to be proposed and fail validation at compile); its
      fused twin, which relocates the tail under the Grid loop, survives. The tuned routine matches
      the untuned twin === *)
-  (* A tuning report's seeding counts, on stderr (not part of the golden): what a failing count
-     claim saw. *)
+  (* A tuning report's seeding counts and the windows that left its dedup set, on stderr (not part of
+     the golden): what a failing count claim saw. *)
   let show_counts tag (r : Autotune.report) =
-    Stdio.eprintf "%s: sketch_candidates=%d epilogue=%d fiss_sketch_candidates=%d fiss_timed=%d\n"
+    Stdio.eprintf
+      "%s: sketch_candidates=%d epilogue=%d fiss_sketch_candidates=%d fiss_timed=%d contended=%d \
+       unbatched=%d unreadable=%d budget_cut=%b hopeless=%d retried=%d\n"
       tag r.Autotune.sketch_candidates r.Autotune.epilogue_sketch_candidates
-      r.Autotune.fiss_sketch_candidates r.Autotune.fiss_sketch_timed
+      r.Autotune.fiss_sketch_candidates r.Autotune.fiss_sketch_timed r.Autotune.timings_contended
+      r.Autotune.timings_unbatched r.Autotune.timings_unreadable r.Autotune.budget_cut
+      r.Autotune.timings_hopeless r.Autotune.timings_retried
+  in
+  (* A per-segment GPU candidate that compiles to its whole-routine twin's digest is deduplicated
+     only while that twin's digest is still in the search's dedup set. A window refused for any
+     cause, one cut as hopeless (gh-ocannl-1527) and one the budget stopped all drop their digest
+     from it, so an equivalent later seed is retried, and timed, rather than deduplicated: a loaded
+     host refusing a whole-routine window lets its per-segment twin be timed (gh-ocannl-1484). The
+     dedup claim is therefore evaluated only on a report where no window left the set, and skipped
+     -- as an environment gap, the host's load -- with the departures on stderr otherwise. Off the
+     uniform-f32 GPU legs the per-segment seeds have no whole-routine twin, so there is nothing to
+     dedup. *)
+  let claim_dedup tag (r : Autotune.report) label ok =
+    if not has_uniform_f32_mma then skipped label
+    else if
+      r.Autotune.timings_contended = 0 && r.Autotune.timings_hopeless = 0
+      && not r.Autotune.budget_cut
+    then p label ok
+    else (
+      Stdio.eprintf
+        "%s: a timing window left the dedup set (refused=%d of which unbatched=%d unreadable=%d, \
+         hopeless=%d, budget_cut=%b): per-segment twins could be retried\n"
+        tag r.Autotune.timings_contended r.Autotune.timings_unbatched r.Autotune.timings_unreadable
+        r.Autotune.timings_hopeless r.Autotune.budget_cut;
+      Verdict.skipped ~aggregation:`Environment ~backend:backend_name label)
   in
   let clean_cache dir =
     if Stdlib.Sys.file_exists dir && Stdlib.Sys.is_directory dir then
@@ -983,6 +1010,9 @@ let () =
      segment (and whole-routine); metal seeds the staged GPU flavor per fission segment and on the
      whole routine, whose zeroed site the pipeline expands (gh-ocannl-503). --- *)
   clean_cache "autotune_cache_conv_gpu";
+  let cvu_dedup_label =
+    "cvu: every per-segment GPU candidate dedups against its whole-routine twin (none timed)"
+  in
   let _, _, y = make_conv8 "cvu_t" in
   let reports = ref [] in
   let ctx = Context.auto () in
@@ -1000,21 +1030,23 @@ let () =
   | [ r ] ->
       show_counts "cvu" r;
       (* metal: the whole-extent staged flavor plus its pd2 pipelined twin (gh-ocannl-487), on the
-         whole routine (gh-ocannl-503) and per fission segment. No per-segment candidate is timed:
-         GPU fission folds the conv's zero into a per-cell companion of the one segment, and the
-         whole-routine pipeline expands it into that same nest with that same geometry, so each
-         per-segment candidate compiles to its whole-routine twin's digest and dedups. *)
+         whole routine (gh-ocannl-503) and per fission segment. *)
       p "cvu: conv seeds per fission segment (GPU staged on metal; serial+grid on cc)"
         (if has_uniform_f32_mma then
-           r.Autotune.sketch_candidates = 2
-           && r.Autotune.fiss_sketch_candidates = 2
-           && r.Autotune.fiss_sketch_timed = 0
+           r.Autotune.sketch_candidates = 2 && r.Autotune.fiss_sketch_candidates = 2
          else if on_cpu then
            r.Autotune.sketch_candidates = 2
            && r.Autotune.fiss_sketch_candidates = 2
            && r.Autotune.fiss_sketch_timed = 2
-         else true)
-  | _ -> p "cvu: conv seeds per fission segment (GPU staged on metal; serial+grid on cc)" false);
+         else true);
+      (* No per-segment candidate is timed: GPU fission folds the conv's zero into a per-cell
+         companion of the one segment, and the whole-routine pipeline expands it into that same nest
+         with that same geometry, so each per-segment candidate compiles to its whole-routine twin's
+         digest and dedups. *)
+      claim_dedup "cvu" r cvu_dedup_label (r.Autotune.fiss_sketch_timed = 0)
+  | _ ->
+      p "cvu: conv seeds per fission segment (GPU staged on metal; serial+grid on cc)" false;
+      p cvu_dedup_label false);
   p_close "cvu: tuned conv matches the untuned twin within tolerance" got_u want8 ~tol:(fun _ ->
       1e-3);
 
@@ -1095,6 +1127,10 @@ let () =
      match the unit-stride [cvu] leg — the stride only changes the packing Stage's load arithmetic,
      not which flavors are proposable — and the tuned routine matches the untuned twin. --- *)
   clean_cache "autotune_cache_conv_s2";
+  let cvu2_dedup_label =
+    "cvu2: every per-segment GPU stride-2 candidate dedups against its whole-routine twin (none \
+     timed)"
+  in
   let _, _, y = make_conv8_s2 "cvu2_t" in
   let reports = ref [] in
   let ctx = Context.auto () in
@@ -1115,17 +1151,17 @@ let () =
          and per segment, where each dedups against its whole-routine twin (see [cvu]). *)
       p "cvu2: stride-2 conv seeds per fission segment (GPU staged on metal; serial+grid on cc)"
         (if has_uniform_f32_mma then
-           r.Autotune.sketch_candidates = 2
-           && r.Autotune.fiss_sketch_candidates = 2
-           && r.Autotune.fiss_sketch_timed = 0
+           r.Autotune.sketch_candidates = 2 && r.Autotune.fiss_sketch_candidates = 2
          else if on_cpu then
            r.Autotune.sketch_candidates = 2
            && r.Autotune.fiss_sketch_candidates = 2
            && r.Autotune.fiss_sketch_timed = 2
-         else true)
+         else true);
+      claim_dedup "cvu2" r cvu2_dedup_label (r.Autotune.fiss_sketch_timed = 0)
   | _ ->
       p "cvu2: stride-2 conv seeds per fission segment (GPU staged on metal; serial+grid on cc)"
-        false);
+        false;
+      p cvu2_dedup_label false);
   p_close "cvu2: tuned stride-2 conv matches the untuned twin within tolerance" got_u2 want8s2
     ~tol:(fun _ -> 1e-3);
 

@@ -222,7 +222,12 @@ files.
   the nest and geometry the fold above gives the per-cell zero. So where one fission segment holds
   the whole routine, its sketch candidates compile to their whole-routine twins' digests and dedup
   (`schedule_conv_gemm`'s `cvu` pins `fiss_sketch_timed = 0` on metal): count the whole-routine
-  candidates before reading a zero per-segment timing count as a regression. The expanded zero's
+  candidates before reading a zero per-segment timing count as a regression. The dedup holds only
+  while the twin's digest is in the dedup set: a window refused for any cause, cut as hopeless or
+  stopped by the budget drops it, so on a loaded host the per-segment twin is retried and timed
+  (gh-ocannl-1484). A claim that counts dedups gates on the report (`timings_contended`,
+  `timings_hopeless`, `budget_cut` all clear) and skips as `Environment` otherwise; the
+  forced-refusal control is `with_contended_test_windows` around the tune. The expanded zero's
   loops follow the output's AXIS order (`Expand_zero`), the site's chain its NEST order; the conv
   expansion reorders the zero nest through `c_d_syms` before `annotate`, since thread identity
   across nests is positional.
