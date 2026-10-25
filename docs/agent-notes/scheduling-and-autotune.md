@@ -1599,7 +1599,26 @@ files.
   placement arms' timings (bare: 96%), at +29% search compile time, crown and step p50 unchanged,
   against the plan's bar of under half. The pre-sweep seeds (presets, whole-routine sketches) still
   come first and late keys still lower the best; flip the default only on a re-measurement that
-  clears it (entry_version bump with it). The coarse keys are swept one at a time, each single's `staff` holding
+  clears it (entry_version bump with it).
+  **Not for HIP either** (gh-ocannl-1528). On minix (gfx1151, **unified**, gpt2_mini_train b8, exact,
+  cold caches, `74f53479`), the off cell finished. The on cell finished arm A and was cut by the
+  window 4 keys into arm B's sweep. (1) **The staffed backdrop is ~30 ms, not the seeded composite's
+  15.5.** Staffing cuts the singles' backdrop from 102-131 ms (preset) to 21-32 ms, but the start
+  lacks `F_seeded`'s 30 split-reduce choices and its sunk node. (2) **The backdrop moves only
+  near-ties.** Arm A, 22 keys: each key's increments over its best correlate at r = 0.98 across
+  backdrops (arm B's 4 keys: 0.91). Kendall tau has a median of 0.56, and 14 of 22 crowns differ, but
+  every differing staffed crown sat within 0.62% (<= 0.78 ms) of the bare crown under the preset
+  backdrop. Inside the composite the bare crown loses by 0.2-1.8%. (3) **No per-segment composite
+  beats `F_seeded` in either mode.** Both arms of both cells crowned the very first candidate (A
+  15.57/15.53 ms, B 17.74/17.74 ms). The best composite of singles reached 21.2 ms staffed and
+  21.6 ms bare in A, and 18.4 ms bare in B. So the singles' ranking decides nothing shipped on this
+  workload. (4) **Staffed singles cost ~3x the compile.** On HIP a staffed single compiles about 67
+  of 183 kernels (median 4.9 s; arm A total 1510 s), where a bare single compiles 4 of 178 (1.7 s;
+  total 550 s). The staff's sketched kernels miss the HIP kernel code cache, though they are
+  unchanged across a key's sweep. Arm A's wall was nonetheless only +6% (2055 vs 1934 s), because
+  the shorter windows time faster. What would make the singles matter is a backdrop that IS the
+  seeded composite (the seeded plan with one key replaced), not a different setting of this flag.
+  The coarse keys are swept one at a time, each single's `staff` holding
   the composite's choice for every OTHER key (label `F_sketch[p @k | staff ...]`; tests read the part
   before ` | staff `, `Fissioned_chain.focus`), and a key's fastest joins the composite after its
   sweep, heaviest key first (segment count times its best sketch's roofline score, logged as
