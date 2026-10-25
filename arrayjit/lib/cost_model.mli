@@ -194,11 +194,24 @@ val roofline_seconds :
       issue rate — an empirical approximation that holds for the staging geometry the rate was
       fitted on, not a model of copies, barriers or shared-memory gathers. Without a reuse
       extraction they keep the roofline's charge.
+    - Launch fill (gh-ocannl-1479). Given a {!fill_model} and the kernel's {!launch_contexts}, the
+      scalar work is priced at the issue rate times its contexts' fill ({!context_fill}): per
+      parallel context, its operations over its fill, summed. Serial loops (a plain leaf's batch
+      loops) multiply work but add no parallelism; [Grid] and [Workgroup] loops add parallelism, not
+      work. Tile-MMA work takes the fill of the [Tile_mma] statements' contexts: accepted work at
+      [peak_flops], declined work (its scalar fallback) at the issue rate. The saturating thread
+      count is fitted on scalar kernels; for the matrix units it is uncalibrated, and the
+      blocks-over-multiprocessors factor is what orders a plain tensorized leaf against its [bgrid]
+      twin. Without a fill model the compute leg is exactly as before. A launch-shape proxy, not an
+      occupancy model: no registers, shared memory, wave quantization, or the block a wider sibling
+      nest allocates.
     - Never below the bound: the memory leg is at least the distinct bytes at the
       [peak_memory_bandwidth] ceiling, and the compute leg at least the operations at the
-      [peak_flops] ceiling, so {!ranking_seconds} is at least {!roofline_seconds} over {!analyze}'s
-      counts — and therefore at least any roofline over {!completion_floor}. Monotone: raising the
-      capacity, the cache bandwidth, the issue rate or the DRAM rate never raises the score.
+      [peak_flops] ceiling (a fill is at most 1), so {!ranking_seconds} is at least
+      {!roofline_seconds} over {!analyze}'s counts — and therefore at least any roofline over
+      {!completion_floor}. Monotone: raising the capacity, the cache bandwidth, the issue rate or
+      the DRAM rate never raises the score; raising the fill model's multiprocessors or saturating
+      threads never lowers it.
 
     Writes, op counts and the opacity flag are {!analyze}'s. *)
 
@@ -232,6 +245,33 @@ val requested_bytes : summary -> reuse -> int
 val spills : ?cache_capacity_bytes:int -> reuse -> bool
 (** Whether the working set exceeds the capacity ([false] without one). *)
 
+type launch_context = { lc_blocks : int; lc_threads : int; lc_tile_mma : bool; lc_ops : int }
+[@@deriving sexp_of]
+(** One op-carrying parallel context of a kernel (gh-ocannl-1479): the statements whose enclosing
+    [Grid] loop extents multiply to [lc_blocks] and enclosing [Workgroup] / [Workgroup_reduce]
+    extents to [lc_threads], split by whether they are [Tile_mma] statements, and their operations —
+    {!analyze}'s census (one walk), attributed per statement: a hoisted [Local_scope] body counts in
+    its hoisting statement's context. *)
+
+val launch_contexts : Low_level.t -> launch_context list
+(** In first-reported order, one entry per distinct context; contexts with no operations (zero
+    nests, copies) are absent. The [lc_ops] sum to {!analyze}'s [flops]. *)
+
+type fill_model = { fm_multiprocessors : int; fm_fill_threads : int } [@@deriving sexp_of]
+(** The device's launch shape as the score reads it: [fm_multiprocessors] multiprocessors, each
+    saturating its scalar issue at [fm_fill_threads] threads — a fitted constant
+    ([tools/calibrate_issue_rate.exe]), not the physical residency. *)
+
+val context_fill : fill_model -> blocks:int -> threads:int -> float
+(** [min 1 (B * min T t / (P * t))]: the fraction of the device's saturated issue a launch of [B]
+    blocks of [T] threads reaches, each block counting at most one multiprocessor's saturating
+    share. Positive, at most 1. *)
+
+val launch_fill : fill_model -> launch_context list -> float
+(** The scalar contexts' work-weighted harmonic fill: total scalar operations over the sum of each
+    context's operations divided by its fill. 1 without scalar work. A diagnostic: the score sums
+    per context. *)
+
 val ranking_seconds_of :
   ?peak_flops:float ->
   ?peak_memory_bandwidth:float ->
@@ -240,6 +280,7 @@ val ranking_seconds_of :
   ?issue_rate:float ->
   ?dram_bandwidth:float ->
   ?mma_flops:int ->
+  ?launch:fill_model * launch_context list ->
   summary ->
   reuse option ->
   float option
@@ -247,7 +288,8 @@ val ranking_seconds_of :
     two-tier memory leg (section contract; [None] for the reuse means no per-block charge, the
     roofline). Bandwidths in bytes/s, the issue rate in operations/s. [mma_flops] (default 0) is the
     summary's tile-MMA work the backend accepts ({!accepted_tile_mma_flops}), capped at its
-    operations. [None] when neither peak is given. *)
+    operations. [launch] is the device's fill model and the kernel's {!launch_contexts} (absent: no
+    launch fill). [None] when neither peak is given. *)
 
 val ranking_legs_of :
   ?peak_flops:float ->
@@ -257,6 +299,7 @@ val ranking_legs_of :
   ?issue_rate:float ->
   ?dram_bandwidth:float ->
   ?mma_flops:int ->
+  ?launch:fill_model * launch_context list ->
   summary ->
   reuse option ->
   float option * float option
@@ -272,13 +315,14 @@ val ranking_seconds :
   ?issue_rate:float ->
   ?dram_bandwidth:float ->
   ?mma_flops:int ->
+  ?fill_model:fill_model ->
   ?max_resident_threads:int ->
   is_global:(Tnode.t -> bool) ->
   Low_level.t ->
   float option
-(** {!ranking_seconds_of} over {!analyze} and, when a capacity or a cache bandwidth is given,
-    {!reuse_traffic}. A ranking score, not a runtime prediction — and, unlike {!roofline_seconds},
-    not a lower bound either. *)
+(** {!ranking_seconds_of} over {!analyze}, {!launch_contexts} when a fill model is given, and, when
+    a capacity or a cache bandwidth is given, {!reuse_traffic}. A ranking score, not a runtime
+    prediction — and, unlike {!roofline_seconds}, not a lower bound either. *)
 
 (** {2 Tile-MMA operand loads (gh-ocannl-1254)}
 
