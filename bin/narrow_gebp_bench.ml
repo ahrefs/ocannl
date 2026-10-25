@@ -132,9 +132,9 @@ let () =
       ~f:(fun idcs -> Bench_gebp.b_value idcs.(0) idcs.(1))
       ()
   in
-  let packed_schedule ~grid ~tile_prec ~tile ~mc opt =
-    Bench_gebp.packed_schedule ~grid ~tile_prec ?tile ~bm ~bk ~a:ma.Tensor.value ~b:mb.Tensor.value
-      ~c:mc opt
+  let packed_schedule ~layout ~tile_prec ~tile ~mc opt =
+    Bench_gebp.packed_schedule ~layout ~tile_prec ?tile ~bm ~bk ~a:ma.Tensor.value
+      ~b:mb.Tensor.value ~c:mc opt
   in
   (* Every variant is compared against another one CELL BY CELL, and each call site says which and
      whether the equality is required (gh-ocannl-711 review). The checksum cannot carry this: it is
@@ -271,10 +271,7 @@ let () =
      stays on the logical 2n^3: it is the rate at which the requested product was delivered. *)
   if (not (List.is_empty pads)) && List.is_empty unschedulable then
     p "padded: %s — the packed variants do %.2fx the logical multiply-adds (gh-ocannl-627)\n"
-      (String.concat ~sep:", "
-         (List.map pads ~f:(fun { Bench_gebp.axis; extent; padded; _ } ->
-              Printf.sprintf "%s %d to %d" (Bench_gebp.axis_name axis) extent padded)))
-      (Bench_gebp.work_ratio pads);
+      (Bench_gebp.describe_pads pads) (Bench_gebp.work_ratio pads);
   (* Say it at runtime rather than only in a comment: since gh-ocannl-639 every variant accumulates
      at compute precision (naive narrows once per cell, packed once per k block). Whether the
      checksums are comparable depends on the extent: every rounding any variant performs is exact as
@@ -312,7 +309,7 @@ let () =
   | [] ->
       let t_pack, r_pack, v_pack =
         bench ~variant:"packmma"
-          ~schedule:(Some (packed_schedule ~grid:false ~tile_prec ~tile))
+          ~schedule:(Some (packed_schedule ~layout:Bench_gebp.Serial ~tile_prec ~tile))
           ~against:(Some ("naive", v_naive, naive_comparable))
           ()
       in
@@ -322,7 +319,7 @@ let () =
          DIFFERS output as block-boundary rounding. *)
       let t_par, r_par, _ =
         bench ~variant:"packmma_par"
-          ~schedule:(Some (packed_schedule ~grid:true ~tile_prec ~tile))
+          ~schedule:(Some (packed_schedule ~layout:Bench_gebp.Grid_outermost ~tile_prec ~tile))
           ~against:(Some ("packmma", v_pack, true))
           ()
       in

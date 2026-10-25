@@ -1,14 +1,19 @@
-(* gh-ocannl-627: the packed GEBP schedule [bin/narrow_gebp_bench] times, built by the bench's own
-   builder ([Bench_gebp.packed_schedule], linked here rather than copied), at extents its blocking
-   does not divide. The builder pads such an axis to its block before splitting it — the autotuner's
+(* gh-ocannl-627, gh-ocannl-1562: the packed GEBP schedules [bin/narrow_gebp_bench] and
+   [bin/schedule_bench]'s CPU branch time, built by the benches' own builder
+   ([Bench_gebp.packed_schedule], linked here rather than copied), at extents its blocking does not
+   divide. The builder pads such an axis to its block before splitting it — the autotuner's
    composition (gh-ocannl-485) — and this test executes what it builds:
 
-   every packed leg (serial, and Grid-parallel with its own zeroing nest) equals the unscheduled
-   kernel CELL BY CELL, bitwise, and the two packed legs equal each other. Every [Tile_mma] of every
-   packed leg rendered the register tiling, read off the compile's census, so a padded site that
-   silently fell back to the scalar loops cannot pass as a measured one. And the same holds with
-   narrow (bf16) storage widened into f32 packed panels, the [tile_prec] seam the padded
-   [schedule_pad] leg does not cover.
+   every packed leg that stages both operands (serial; Grid row blocks outermost, with their own
+   zeroing nest; Grid row blocks below the k-block loop; Grid outermost with the B~ panel hoisted to
+   the constant pool) equals the unscheduled kernel CELL BY CELL, bitwise, and the legs equal each
+   other. The layout that reads A in place ([schedule_bench]'s [pm_hoist]) is refused at every
+   padded site, by the builder and — with its refusal bypassed by dropping A's [Stage] — by
+   [Tensorize] itself, so the builder's gate is the compiler's; at the dividing control it builds
+   and agrees. Every [Tile_mma] of every packed leg rendered the register tiling, read off the
+   compile's census, so a padded site that silently fell back to the scalar loops cannot pass as a
+   measured one. And the same holds with narrow (bf16) storage widened into f32 packed panels, the
+   [tile_prec] seam the padded [schedule_pad] leg does not cover.
 
    The sites cover the motivating n = 76 at the bench's default 64 x 256 blocking (rows padded to
    128, a k extent below its block), both tails at once with the micro-kernel's column tail (n =
@@ -77,6 +82,10 @@ let operands ~prec s =
       ~f:(fun idcs -> Bench_gebp.b_value idcs.(0) idcs.(1))
       ()
   in
+  (* The hoisted-B~ legs pack mb at link time, which needs a known-constant source. [init] does not
+     mark one ([Tensor.ndarray], [schedule_bench]'s operand constructor, does), and mb is written
+     only by its initialization, so it is declared constant the way [Tensor.ndarray] declares it. *)
+  Ir.Tnode.set_host_constant mb.Tensor.value;
   (ma, mb)
 
 (* One compile and run of [ma * mb] under [schedule] (none: the unscheduled kernel), returning the
@@ -102,8 +111,48 @@ let run ~prec ~name ~ma ~mb ~schedule =
   let ctx = Context.run ctx routine in
   (Context.get_values ctx mc.Tensor.value, Ll_test.renderings routine.Context.mma, !site)
 
-let packed ~grid ~tile_prec ~bm ~bk ~ma ~mb ~c opt =
-  Bench_gebp.packed_schedule ~grid ~tile_prec ~bm ~bk ~a:ma.Tensor.value ~b:mb.Tensor.value ~c opt
+let packed ~layout ~hoist_b ~stage_a ~tile_prec ~bm ~bk ~ma ~mb ~c opt =
+  Bench_gebp.packed_schedule ~layout ~hoist_b ~stage_a ~tile_prec ~bm ~bk ~a:ma.Tensor.value
+    ~b:mb.Tensor.value ~c opt
+
+(* The packed legs both benches time, all staging both operands: [narrow_gebp_bench]'s two
+   ([Serial], [Grid_outermost]) and [schedule_bench]'s four (those plus [Grid_below_k], its
+   [packmma_par], and the hoisted-B~ [Grid_outermost], its [pm_mixed]) — gh-ocannl-1562. *)
+type leg = { leg : string; layout : Bench_gebp.layout; hoist_b : bool; what : string }
+
+let legs =
+  [
+    { leg = "serial"; layout = Bench_gebp.Serial; hoist_b = false; what = "serial" };
+    { leg = "grid"; layout = Bench_gebp.Grid_outermost; hoist_b = false; what = "Grid" };
+    { leg = "gridk"; layout = Bench_gebp.Grid_below_k; hoist_b = false; what = "Grid-below-k" };
+    { leg = "gridh"; layout = Bench_gebp.Grid_outermost; hoist_b = true; what = "hoisted-B~ Grid" };
+  ]
+
+let padded s = s.m % s.bm <> 0 || s.k % s.bk <> 0
+
+let agrees_label l =
+  if String.equal l.leg "serial" then "the serial packed leg matches the unscheduled kernel bitwise"
+  else Printf.sprintf "the %s packed leg matches the serial packed leg bitwise" l.what
+
+let tiled_label what = Printf.sprintf "every %s Tile_mma renders the register tiling" what
+
+(* [schedule_bench]'s [pm_hoist]: the hoisted-B~ Grid leg reading A in place. Padded, the builder
+   refuses it, and the refusal is the compiler's own — the composition with A's [Stage] dropped is
+   refused at [Tensorize]; dividing, it builds and agrees. *)
+let in_place_labels s =
+  if padded s then
+    [
+      "with A read in place, the builder refuses to pad";
+      "with A read in place, Tensorize itself refuses the padded composition";
+    ]
+  else
+    [ "the A-in-place packed leg matches the serial packed leg bitwise"; tiled_label "A-in-place" ]
+
+let site_labels s =
+  [ "the builder reads the site's m x n x k off the nest"; "the reference is not all zeros" ]
+  @ List.map legs ~f:agrees_label
+  @ List.map legs ~f:(fun l -> tiled_label l.what)
+  @ in_place_labels s
 
 (* The k tail's contribution to output cell (row, col): the sum over the reduction indices past the
    last full k block. Host arithmetic over the bench's own operand values. *)
@@ -124,30 +173,74 @@ let check_site ~idx ~prec s =
   let tile_prec = if Ir.Ops.equal_prec cprec prec then None else Some cprec in
   let ma, mb = operands ~prec s in
   let want, _, _ = run ~prec ~name:(name "ref") ~ma ~mb ~schedule:None in
-  let ser, ser_census, ser_site =
-    run ~prec ~name:(name "serial") ~ma ~mb
-      ~schedule:(Some (packed ~grid:false ~tile_prec ~bm:s.bm ~bk:s.bk ~ma ~mb))
+  let runs =
+    List.map legs ~f:(fun l ->
+        ( l,
+          run ~prec ~name:(name l.leg) ~ma ~mb
+            ~schedule:
+              (Some
+                 (packed ~layout:l.layout ~hoist_b:l.hoist_b ~stage_a:true ~tile_prec ~bm:s.bm
+                    ~bk:s.bk ~ma ~mb)) ))
   in
-  let par, par_census, _ =
-    run ~prec ~name:(name "grid") ~ma ~mb
-      ~schedule:(Some (packed ~grid:true ~tile_prec ~bm:s.bm ~bk:s.bk ~ma ~mb))
-  in
+  let ser, _, ser_site = List.Assoc.find_exn runs ~equal:phys_equal (List.hd_exn legs) in
   p
     (lbl "the builder reads the site's m x n x k off the nest")
     (match ser_site with
     | Some { Bench_gebp.ni; nj; nk; _ } -> ni = s.m && nj = s.n && nk = s.k
     | None -> false);
   p (lbl "the reference is not all zeros") (Array.exists want ~f:(fun x -> Float.(x <> 0.)));
-  p_all2
-    (lbl "the serial packed leg matches the unscheduled kernel bitwise")
-    ser want ~f:Float.equal;
-  p_all2 (lbl "the Grid packed leg matches the serial packed leg bitwise") par ser ~f:Float.equal;
-  p
-    (lbl "every serial Tile_mma renders the register tiling")
-    (Ll_test.all_rendered ~what:(lbl "serial") Ir.C_syntax.Mma_register_tiled ser_census);
-  p
-    (lbl "every Grid Tile_mma renders the register tiling")
-    (Ll_test.all_rendered ~what:(lbl "grid") Ir.C_syntax.Mma_register_tiled par_census)
+  List.iter runs ~f:(fun (l, (got, _, _)) ->
+      p_all2
+        (lbl (agrees_label l))
+        got
+        (if String.equal l.leg "serial" then want else ser)
+        ~f:Float.equal);
+  List.iter runs ~f:(fun (l, (_, census, _)) ->
+      p
+        (lbl (tiled_label l.what))
+        (Ll_test.all_rendered ~what:(lbl l.what) Ir.C_syntax.Mma_register_tiled census));
+  let in_place ~stage_a =
+    packed ~layout:Bench_gebp.Grid_outermost ~hoist_b:true ~stage_a ~tile_prec ~bm:s.bm ~bk:s.bk ~ma
+      ~mb
+  in
+  let raised schedule =
+    match run ~prec ~name:(name "inplace") ~ma ~mb ~schedule:(Some schedule) with
+    | _ -> None
+    (* The raw message: [Exn.to_string] escapes its non-ASCII bytes. *)
+    | exception Invalid_argument msg -> Some msg
+    | exception e -> Some (Exn.to_string e)
+  in
+  if padded s then begin
+    let why = Option.value_exn (Bench_gebp.in_place_a_refusal ~bm:s.bm ~bk:s.bk ~ni:s.m ~nk:s.k) in
+    p
+      (lbl "with A read in place, the builder refuses to pad")
+      (Option.exists
+         (raised (in_place ~stage_a:false))
+         ~f:(fun msg -> String.is_substring msg ~substring:why));
+    (* The staged composition with A's [Stage] dropped: what the builder would emit without its
+       refusal. *)
+    let unstaged_a ~c opt =
+      List.filter (in_place ~stage_a:true ~c opt) ~f:(function
+        | Sched.Stage { source; _ } -> not (Ir.Tnode.equal source ma.Tensor.value)
+        | _ -> true)
+    in
+    p
+      (lbl "with A read in place, Tensorize itself refuses the padded composition")
+      (Option.exists (raised unstaged_a) ~f:(fun msg ->
+           String.is_substring msg ~substring:"Schedule.Tensorize"
+           && String.is_substring msg ~substring:"zero-fringe staged tile"))
+  end
+  else begin
+    let got, census, _ =
+      run ~prec ~name:(name "inplace") ~ma ~mb ~schedule:(Some (in_place ~stage_a:false))
+    in
+    p_all2
+      (lbl "the A-in-place packed leg matches the serial packed leg bitwise")
+      got ser ~f:Float.equal;
+    p
+      (lbl (tiled_label "A-in-place"))
+      (Ll_test.all_rendered ~what:(lbl "A-in-place") Ir.C_syntax.Mma_register_tiled census)
+  end
 
 (* What the comparisons above can see at the padded edges, from the operand values alone: a padded
    row block's real rows, and the k tail's share of the output. Either all-zero would let a schedule
@@ -175,15 +268,7 @@ let () =
       edge_content s;
       List.iter [ Ir.Ops.single; Ir.Ops.bfloat16 ] ~f:(fun prec ->
           let labels =
-            List.map
-              [
-                "the builder reads the site's m x n x k off the nest";
-                "the reference is not all zeros";
-                "the serial packed leg matches the unscheduled kernel bitwise";
-                "the Grid packed leg matches the serial packed leg bitwise";
-                "every serial Tile_mma renders the register tiling";
-                "every Grid Tile_mma renders the register tiling";
-              ]
+            List.map (site_labels s)
               ~f:(Printf.sprintf "%s, %s storage: %s" s.label (Ir.Ops.prec_string prec))
           in
           (* The packed composition is the C backends' register-tiled GEBP ([Tensorize] at a unit
@@ -205,8 +290,9 @@ let () =
         let s = List.hd_exn sites in
         let ma, mb = operands ~prec:Ir.Ops.single s in
         let unpadded ~c opt =
-          List.filter (packed ~grid:false ~tile_prec:None ~bm:s.bm ~bk:s.bk ~ma ~mb ~c opt)
-            ~f:(function
+          List.filter
+            (packed ~layout:Bench_gebp.Serial ~hoist_b:false ~stage_a:true ~tile_prec:None ~bm:s.bm
+               ~bk:s.bk ~ma ~mb ~c opt) ~f:(function
             | Sched.Pad _ -> false
             | _ -> true)
         in

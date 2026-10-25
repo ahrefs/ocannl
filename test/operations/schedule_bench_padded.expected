@@ -1,0 +1,28 @@
+100x76x130, rows and k padded: the bench exits 0: true
+100x76x130, rows and k padded: packmma ran, matched the unscheduled computation, and is register-tiled: true
+100x76x130, rows and k padded: packmma_par ran, matched the unscheduled computation, and is register-tiled: true
+100x76x130, rows and k padded: pm_mixed ran, matched the unscheduled computation, and is register-tiled: true
+100x76x130, rows and k padded: pm_bpk ran, matched the unscheduled computation, and is register-tiled: true
+100x76x130, rows and k padded: pm_hoist is skipped, with the builder's refusal as the reason: true
+100x76x130, rows and k padded: the header states the padded extents: true
+37x40x45, below both blocks: the bench exits 0: true
+37x40x45, below both blocks: packmma ran, matched the unscheduled computation, and is register-tiled: true
+37x40x45, below both blocks: packmma_par ran, matched the unscheduled computation, and is register-tiled: true
+37x40x45, below both blocks: pm_mixed ran, matched the unscheduled computation, and is register-tiled: true
+37x40x45, below both blocks: pm_bpk ran, matched the unscheduled computation, and is register-tiled: true
+37x40x45, below both blocks: pm_hoist is skipped, with the builder's refusal as the reason: true
+37x40x45, below both blocks: the header states the padded extents: true
+128x76x130, k-only remainder: the bench exits 0: true
+128x76x130, k-only remainder: packmma ran, matched the unscheduled computation, and is register-tiled: true
+128x76x130, k-only remainder: packmma_par ran, matched the unscheduled computation, and is register-tiled: true
+128x76x130, k-only remainder: pm_mixed ran, matched the unscheduled computation, and is register-tiled: true
+128x76x130, k-only remainder: pm_bpk ran, matched the unscheduled computation, and is register-tiled: true
+128x76x130, k-only remainder: pm_hoist is skipped, with the builder's refusal as the reason: true
+128x76x130, k-only remainder: the header states the padded extents: true
+64x40x64, dividing control: the bench exits 0: true
+64x40x64, dividing control: packmma ran, matched the unscheduled computation, and is register-tiled: true
+64x40x64, dividing control: packmma_par ran, matched the unscheduled computation, and is register-tiled: true
+64x40x64, dividing control: pm_mixed ran, matched the unscheduled computation, and is register-tiled: true
+64x40x64, dividing control: pm_bpk ran, matched the unscheduled computation, and is register-tiled: true
+64x40x64, dividing control: pm_hoist ran, matched the unscheduled computation, and is register-tiled: true
+64x40x64, dividing control: no padding is stated: true
