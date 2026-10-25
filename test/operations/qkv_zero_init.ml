@@ -40,15 +40,12 @@ let capture ~name out =
   in
   Option.value_exn !captured
 
-(* The sketch candidates' segmentation folds the zero ([fold_zeros:true], what the autotuner and the
-   model selector pass); the untuned default pipeline does not. *)
-let fission ?(fold_zeros = true) opt =
-  let limits = Ir.Backend_intf.no_hardware_limits in
-  Sched.fission_scheduled
-    ~keep_mapping:(Sched.mapping_probe (Sched.default_gpu ~limits))
-    ~fold_zeros ~preset:(Sched.default_gpu ~limits)
-    ~zero_sched:(fun tns -> Sched.zero_expansion ~limits tns)
-    ~static_indices:[] opt
+(* The sketch candidates' segmentation folds the zero; the untuned default pipeline does not. Both
+   are the tuner's own pipeline (gh-ocannl-1483), under a synthetic GPU target so the GPU zero
+   policy applies on every host. *)
+let synthetic = Ll_test.synthetic_gpu ()
+let fission opt = snd (Ll_test.tuner_segments ~target:synthetic opt)
+let unfolded opt = snd (Ll_test.tuner_segments_unfolded ~target:synthetic opt)
 
 (* A synthetic matrix-unit capability (as [launch_predicate_parity]'s), so the tensorized seeds are
    proposed and validated whatever the host backend. *)
@@ -141,7 +138,7 @@ let () =
   let parts = fission opt in
   p "gpt2 qkv projection has one kernel including initialization" (List.length parts = 1);
   p "the untuned default keeps the projection's zero in its own kernel"
-    (List.map (fission ~fold_zeros:false opt) ~f:(fun (kind, _, _, _) -> kind)
+    (List.map (unfolded opt) ~f:(fun (kind, _, _, _) -> kind)
     |> List.equal Poly.equal [ `Zeros; `Normal ]);
   p_all "qkv kernel retains GPU parallelism" parts ~f:(fun (_, _, _, o) ->
       not (List.is_empty (LL.hardware_axes o.LL.llc)));
@@ -214,7 +211,7 @@ let () =
     ~matches:(Array.equal Float.equal);
   let ctx, routine =
     Context.compile ~name:"zi_default" ~prelowered:opt
-      ~lowered_transform:(fun o -> List.map (fission o) ~f:(fun (_, _, _, scheduled) -> scheduled))
+      ~lowered_transform:(Ll_test.tuner_transform ~target:synthetic)
       (Context.auto ()) Ir.Assignments.empty_comp Ir.Indexing.Empty
   in
   let ctx = Ll_test.run_linked (ctx, routine) ~seed in
@@ -298,7 +295,7 @@ let () =
     |> Set.of_list (module Ir.Tnode)
   in
   let segments parts = List.map parts ~f:(fun (kind, pre, _, _) -> (kind, writes pre)) in
-  let unexpanded = segments (fission ~fold_zeros:false opt) in
+  let unexpanded = segments (unfolded opt) in
   let folded = segments (fission opt) in
   let rec fold_zeros = function
     | (`Zeros, zs) :: (_, ws) :: rest when Set.is_subset zs ~of_:ws -> ws :: fold_zeros rest
@@ -346,7 +343,7 @@ let () =
     (List.concat_map want ~f:Array.to_list) ~f:(fun v -> Float.(v > 0.));
   let ctx, routine =
     Context.compile ~name:"zs_fission" ~prelowered:opt
-      ~lowered_transform:(fun o -> List.map (fission o) ~f:(fun (_, _, _, scheduled) -> scheduled))
+      ~lowered_transform:(Ll_test.tuner_transform ~target:synthetic)
       (Context.auto ()) Ir.Assignments.empty_comp Ir.Indexing.Empty
   in
   let ctx = Ll_test.run_linked (ctx, routine) ~seed in
@@ -437,7 +434,8 @@ let () =
   Train.set_materialized out.Tensor.value;
   let opt = capture ~name:"ze_capture" out in
   let limits = mma_limits in
-  let folded = fission opt in
+  let target = Ll_test.synthetic_gpu ~limits () in
+  let plan, folded = Ll_test.tuner_segments ~target opt in
   p "the folded matmul and its tail collapse to one segment opening with the zero"
     (match folded with
     | [ (`Normal, pre, _, _) ] ->
@@ -449,13 +447,11 @@ let () =
   p_exists "the folded segment seeds fused-epilogue twins" seeds ~f:(fun q ->
       q.Autotune.sk_epilogue);
   let outcome q =
-    let preset seg = Autotune.sketch_schedule ~accum_prec:Fn.id ~p:q seg in
+    (* Replayed as a per-segment sketch candidate compiles: the derived plan, every segment
+       sketched. *)
+    let schedule _ seg = Some (Autotune.sketch_schedule ~accum_prec:Fn.id ~p:q seg) in
     match
-      Sched.fission_scheduled ~fold_zeros:true
-        ~keep_mapping:(Sched.mapping_probe (Sched.default_gpu ~limits))
-        ~preset
-        ~zero_sched:(fun tns -> Sched.zero_expansion ~limits tns)
-        ~static_indices:[]
+      Ll_test.tuner_replay ~target ~plan ~schedule
         {
           opt with
           LL.traced_store = Hashtbl.copy opt.LL.traced_store;
@@ -477,18 +473,19 @@ let () =
     ~f:(fun (_, o) -> Poly.equal o `Escaped)
 
 (* The same matmul+tail with the product NOT materialized (gh-ocannl-1453), segmented as the tuner's
-   per-segment sketch candidates segment it (the host's limits: promoted locals, the default GPU
-   mapping probe, the zero folded and expanded per cell). The fused tail is the product's only
+   per-segment sketch candidates segment it ([Ll_test.tuner_segments]: promoted locals, the default
+   GPU mapping probe, the zero folded and expanded per cell). The fused tail is the product's only
    consumer, so the tensorized fused twins' [Fuse_epilogue] places it in workgroup-shared storage,
    and the folded per-cell zero nest beside the site takes the site's geometry from the sketch
    itself -- companion coverage counts only materialized writes, and the zero used to stay bare
-   (every thread storing every cell), which gh-ocannl-959's binding legality refused at render. (The
-   [fission] above, at no hardware limits, leaves the folded zero whole-node, which the pipelines
-   always expanded with the site's geometry.) Every GPU seed of the folded segment executes against
-   the materialized run, bitwise: every operand numerator is below 2^11 over a power-of-two
-   denominator and every partial sum is a multiple of 2^-12 below 2^8, so a correct schedule rounds
-   nowhere, tf32 included; the integral bias drives part of the output below zero, so the relu both
-   passes and clamps cells. GPU-only: the C backends fold no per-cell zero. *)
+   (every thread storing every cell), which gh-ocannl-959's binding legality refused at render.
+   (This file's earlier hand-rolled segmentation promoted no locals, so it left the folded zero
+   whole-node, which the pipelines always expanded with the site's geometry, and the leg passed on
+   the unfixed code, gh-ocannl-1483.) Every GPU seed of the folded segment executes against the
+   materialized run, bitwise: every operand numerator is below 2^11 over a power-of-two denominator
+   and every partial sum is a multiple of 2^-12 below 2^8, so a correct schedule rounds nowhere,
+   tf32 included; the integral bias drives part of the output below zero, so the relu both passes
+   and clamps cells. GPU-only: the C backends fold no per-cell zero. *)
 let () =
   let n = 32 in
   let init ~l ~o ~f = NTDSL.init ~l ~prec:Ir.Ops.single ~o ~f () in
@@ -518,32 +515,35 @@ let () =
       "the routine-local product's folded segment seeds tensorized fused-epilogue twins";
     ]
   in
+  (* The one segment opening with the product's PER-CELL zero (a whole-node [Zero_out] is the form
+     the bug hid behind). *)
+  let folded_per_cell segments =
+    match segments with
+    | [ (`Normal, pre, _, _) ] ->
+        Option.some_if
+          (List.exists (LL.flat_lines [ pre.LL.llc ]) ~f:(function
+            | LL.Zero_out _ -> false
+            | stmt ->
+                Option.exists (LL.zero_initializer_target stmt)
+                  ~f:(Ir.Tnode.equal prod.Tensor.value)))
+          pre
+    | _ -> None
+  in
+  (* gh-ocannl-1483: the tuner's segmentation reaches the folded per-cell path on every host, cc
+     included, under a synthetic GPU target -- the fold is GPU zero policy. The hand-rolled
+     segmentation this file used before promoted no locals, so the routine-local product's zero
+     never reached fission as a materialized whole-node zero and stayed whole in the matmul's
+     segment: this claim is false under it, and under a pipeline that drops the fold. *)
+  p "the tuner's segmentation under a synthetic GPU folds the routine-local product's zero per cell"
+    (Option.is_some (folded_per_cell (fission opt)));
   let pre =
     if not (Sched.backend_is_gpu backend_name) then (
       List.iter structural ~f:(Verdict.skipped ~backend:backend_name);
       opt)
     else
       let limits = Context.hardware_limits (Context.auto ()) in
-      let segments =
-        Sched.fission_scheduled ~promote_locals:true ~fold_zeros:true
-          ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu:true ~limits)
-          ~preset:(Sched.default_gpu ~min_parallel:1 ~limits)
-          ~zero_sched:(fun tns -> Sched.zero_expansion ~limits tns)
-          ~static_indices:[]
-          {
-            opt with
-            LL.traced_store = Hashtbl.copy opt.LL.traced_store;
-            optimize_ctx = LL.copy_optimize_ctx opt.LL.optimize_ctx;
-          }
-      in
-      let pre = match segments with [ (`Normal, pre, _, _) ] -> Some pre | _ -> None in
-      p (List.nth_exn structural 0)
-        (Option.exists pre ~f:(fun pre ->
-             List.exists (LL.flat_lines [ pre.LL.llc ]) ~f:(function
-               | LL.Zero_out _ -> false
-               | stmt ->
-                   Option.exists (LL.zero_initializer_target stmt)
-                     ~f:(Ir.Tnode.equal prod.Tensor.value))));
+      let pre = folded_per_cell (snd (Ll_test.tuner_segments opt)) in
+      p (List.nth_exn structural 0) (Option.is_some pre);
       let pre = Option.value pre ~default:opt in
       p (List.nth_exn structural 1)
         (not

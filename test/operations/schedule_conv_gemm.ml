@@ -873,18 +873,12 @@ let () =
      the unfused seeds decline at companion coverage, as on the whole routine ([cvzt]). --- *)
   let segment_gpu_leg ~tag ~build ~want =
     let limits = Context.hardware_limits (Context.auto ()) in
-    let fission ~preset opt =
-      Sched.fission_scheduled ~promote_locals:true ~fold_zeros:true
-        ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu:true ~limits)
-        ~preset
-        ~zero_sched:(fun tns -> Sched.zero_expansion ~limits tns)
-        ~static_indices:[] opt
-      |> List.map ~f:(fun (_, _, _, post) -> post)
-    in
-    let other seg = Sched.default_gpu ~min_parallel:1 ~limits seg in
+    (* Every compile below is a per-segment sketch candidate's ([Ll_test.tuner_transform],
+       gh-ocannl-1483): the tuner's segmentation derived, then replayed with the conv segment
+       sketched and every other one on its preset. *)
     let seeds = ref [] and folded_local = ref false in
     (let y = build (tag ^ "_p") in
-     let preset (seg : LL.optimized) =
+     let schedule _ (seg : LL.optimized) =
        (match Autotune.detect_conv seg.LL.llc with
        | Some site ->
            let d = site.Autotune.c_d in
@@ -895,10 +889,12 @@ let () =
                | LL.Zero_out _ -> false
                | stmt -> Option.exists (LL.zero_initializer_target stmt) ~f:(Ir.Tnode.equal d))
        | None -> ());
-       other seg
+       None
      in
      ignore
-       (Context.compile ~lowered_transform:(fission ~preset) (Context.auto ())
+       (Context.compile
+          ~lowered_transform:(Ll_test.tuner_transform ~schedule)
+          (Context.auto ())
           (named (tag ^ "_probe") (Train.forward y))
           Ir.Indexing.Empty));
     Stdio.eprintf "%s: %d GPU seeds on the folded conv segment (not part of the golden)\n" tag
@@ -906,14 +902,15 @@ let () =
     let run_seed i p_ =
       let name = Printf.sprintf "%s_%d" tag i in
       let y = build name in
-      let preset (seg : LL.optimized) =
-        match Autotune.detect_conv seg.LL.llc with
-        | Some _ -> Autotune.sketch_schedule ~accum_prec ~p:p_ seg
-        | None -> other seg
+      let schedule _ (seg : LL.optimized) =
+        Option.map (Autotune.detect_conv seg.LL.llc) ~f:(fun _ ->
+            Autotune.sketch_schedule ~accum_prec ~p:p_ seg)
       in
       let result =
         match
-          Context.compile ~lowered_transform:(fission ~preset) (Context.auto ())
+          Context.compile
+            ~lowered_transform:(Ll_test.tuner_transform ~schedule)
+            (Context.auto ())
             (named name (Train.forward y))
             Ir.Indexing.Empty
         with

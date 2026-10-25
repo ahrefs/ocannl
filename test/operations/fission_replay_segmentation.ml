@@ -453,21 +453,17 @@ let () =
   let rut = lower comp in
   (* The structural leg (gh-ocannl-1275), backend-independent. The fold is GPU zero policy, so the
      executed legs below fold only on a GPU backend, and per-PR CI runs cc. Here the plan is derived
-     under a synthetic GPU pipeline whatever the host -- promoted locals, the GPU presets and the
-     GPU zero policy, at no hardware limits and a permissive threshold -- and then replayed under a
-     zero policy that proposes nothing. The replay must cut the very segments the derivation cut,
-     and every saved schedule must reconstruct against its segment unchanged. A policy gate on the
-     replayed fold (#1018's round-2 form) leaves the folded segment's head zero whole, so its
-     segment's digest moves and the schedule saved against it no longer applies. *)
+     as the tuner derives it ([Ll_test.tuner_segments], gh-ocannl-1483) under a synthetic GPU target
+     whatever the host -- promoted locals, the GPU presets and the GPU zero policy, at no hardware
+     limits and the permissive threshold this section pins -- and then replayed under a zero policy
+     that proposes nothing. The replay must cut the very segments the derivation cut, and every
+     saved schedule must reconstruct against its segment unchanged. A policy gate on the replayed
+     fold (#1018's round-2 form) leaves the folded segment's head zero whole, so its segment's
+     digest moves and the schedule saved against it no longer applies. *)
   let () =
     let limits = Ir.Backend_intf.no_hardware_limits in
-    let synth ~zero_sched ?replay () =
-      Sched.fission_segmented ~promote_locals:true ~fold_zeros:true ?replay
-        ~preset:(Sched.default_gpu ~min_parallel:1 ~limits)
-        ~zero_sched ~static_indices:[] (copy rut.base_opt)
-    in
     let segmentation, tuples =
-      synth ~zero_sched:(fun tns -> Sched.zero_expansion ~min_parallel:1 ~limits tns) ()
+      Ll_test.tuner_segments ~target:(Ll_test.synthetic_gpu ~limits ()) rut.base_opt
     in
     let expanded_zero (pre : LL.optimized) =
       List.exists (LL.flat_lines [ pre.LL.llc ]) ~f:(function
@@ -492,7 +488,13 @@ let () =
       | _ -> Some []
     in
     let replayed =
-      match synth ~zero_sched:(fun _ -> []) ~replay:(SC.segmentation_of saved, schedule) () with
+      match
+        Sched.fission_segmented ~promote_locals:true ~fold_zeros:true
+          ~replay:(SC.segmentation_of saved, schedule)
+          ~preset:(Sched.default_gpu ~min_parallel:1 ~limits)
+          ~zero_sched:(fun _ -> [])
+          ~static_indices:[] (copy rut.base_opt)
+      with
       | result -> Some result
       | exception Ir.Schedule_outcome.Cause_at _ -> None
     in
@@ -512,7 +514,8 @@ let () =
              (List.map saved ~f:(fun s -> s.SC.seg_saved))))
   in
   let folded_label = "the folded segmentation opens a segment with the projection's zero" in
-  let segmentation, tuples = fission rut ~fold_zeros:true () in
+  (* The tuner's own segmentation on the host ([Ll_test.tuner_segments]), stored as its winner. *)
+  let segmentation, tuples = Ll_test.tuner_segments rut.base_opt in
   let folded =
     List.exists tuples ~f:(fun (kind, pre, _, _) ->
         Poly.equal kind `Normal
@@ -535,7 +538,7 @@ let () =
     (Option.value_map report_a ~default:false ~f:replayed);
   p_close "the folded replay computes the right values" got_a expected ~tol:approx_tol;
   Unix.putenv "OCANNL_GPU_SCHEDULE_MIN_PARALLEL" "1000000";
-  let refolds, _ = fission rut ~fold_zeros:true () in
+  let refolds, _ = Ll_test.tuner_segments rut.base_opt in
   gated ~when_:is_gpu ~on:backend_name "the raised threshold no longer proposes the fold"
     (not (Sched.equal_segmentation refolds segmentation));
   List.iter [ None; Some false ] ~f:(fun search ->
