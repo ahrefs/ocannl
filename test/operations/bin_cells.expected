@@ -3,6 +3,7 @@ design_orders reproduces every row of Bench_design's ORDERS table: true
 an odd round count is refused: true
 no arms is refused: true
 every source shape is read with its value and layer, a repeated identical record once: true
+a value holding a Unicode line separator stays one record: true
 a tagged line that is not JSON is refused: true
 a schema version this reader does not know is refused: true
 a record missing a field, or with a field of the wrong type, is refused: true

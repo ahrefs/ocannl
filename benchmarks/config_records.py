@@ -67,7 +67,9 @@ def parse_config_records(text):
     in `text` (a process's stderr), refusing a malformed tagged line, an unknown version, or one key
     with two different records with `ConfigRecordError`."""
     config = {}
-    for line in text.splitlines():
+    # Records are framed by "\n" alone: str.splitlines would also split at U+0085, U+2028 and
+    # U+2029, which the library's encoder leaves inside a string as the UTF-8 they are.
+    for line in text.split("\n"):
         line = line.rstrip("\r")
         if not line.startswith(TAG):
             continue

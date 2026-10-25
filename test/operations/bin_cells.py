@@ -91,6 +91,9 @@ claim("every source shape is read with its value and layer, a repeated identical
           ("log_level", "0", "config_file", "config_file"),
           ("no_config_file", "true", "commandline", "commandline"),
           ("tf32_matmuls", "true", "profile", "commandline")])
+claim("a value holding a Unicode line separator stays one record",
+      cr.parse_config_records(rec("k", "a\u2028b\u0085c", "default") + "\n")["k"]["value"]
+      == "a\u2028b\u0085c")
 GOOD = rec("k", "1", "default")
 claim("a tagged line that is not JSON is refused",
       refused(lambda: cr.parse_config_records(GOOD[:-5]), cr.ConfigRecordError))
