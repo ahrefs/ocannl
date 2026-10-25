@@ -272,9 +272,31 @@ let () =
   Verdict.gated ~when_:narrow_here ~on:backend_name
     "where accum_prec widens bf16, the key stated true seeds what the admission seeds"
     ((not (List.is_empty (census r_on))) && List.equal String.equal (census r_keyed) (census r_on));
-  (* [model_default] starts from the seeded plan under the configured admission, and its
+  (* Under the configured [auto] gate, for the record: the ranking prices a launch at its fill
+     (gh-ocannl-1479), which on a device it leaves idle can decline the contraction's sketch, and
+     the admitted reduction sink then takes the weight gradient as it takes the bias gradient. *)
+  let auto_report = ref None in
+  ignore
+    (run (fun ctx comp bindings ->
+         Autotune.seeded_default ~report:(fun r -> auto_report := Some r) ctx comp bindings)
+      : float array * float array);
+  Option.iter !auto_report ~f:(fun r ->
+      List.iter (census r) ~f:(fun line ->
+          Stdio.eprintf "auto gate, key true: %s (not part of the golden)\n" line));
+  (* [model_default] starts from the seeded plan under the configured gate and admission, and its
      numerics-preserving set admits the narrow contraction with it: whichever scalar blocktile it
-     picks, the weight gradient keeps the default's narrowing points. *)
-  let w_model, _ = run (fun ctx comp bindings -> Autotune.model_default ctx comp bindings) in
+     picks, the weight gradient keeps the default's narrowing points. The gate is pinned to the
+     threshold the seeded runs above use, under which the plan seeds the contraction: under [auto]
+     whether it does depends on the device's launch fill, and where it does not, the plan sinks the
+     weight gradient and the model's incumbent rounds it once, as the bias's (gh-ocannl-1599's
+     triage). *)
+  Unix.putenv "OCANNL_GPU_DEFAULT_SKETCH_MIN_REDUCTION" "128";
+  let w_model, _ =
+    run (fun ctx comp bindings ->
+        Autotune.model_default
+          ~report:(fun (c : Autotune.model_choice) ->
+            Stdio.eprintf "model pick with the key true: %s (not part of the golden)\n%!" c.mc_label)
+          ctx comp bindings)
+  in
   p_all2 "with the key true the model's weight gradient is bitwise the default pipeline's" w_model
     w_default ~f:bitwise
