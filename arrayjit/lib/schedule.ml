@@ -3832,6 +3832,50 @@ let contract_tensorized_accumulator ~lane ~(masks : pad_mask list) (opt : Low_le
     | _ -> None
   in
   let llc = rewrite opt.llc in
+  (* Where the statement-site contraction below can be confined to the edge blocks (gh-ocannl-1563):
+     [Some (block, last_full)] when every mask is a range of one block symbol [block] (a positive
+     multiple of it plus the micro index), the [Serial] loop binding [block] encloses the lane loop
+     and runs both full blocks (through [last_full], the last value at which every mask holds over
+     the whole [m x n] block) and edge blocks, and some enclosing loop of more than one iteration
+     leaves the accumulator unindexed — a reduction loop, so the store-back runs once per reduction
+     block. Without one the site is whole-K: its single store-back per output tile is what
+     [Fuse_epilogue] relocates a tail to, and its round-trip costs a [1/K] fraction, so it is left
+     alone. A GPU pipeline's shared fragment ([shared_frag]) brackets its reduction with barriers
+     and is left alone too. *)
+  let full_block_split llc =
+    let rec path_to_lane acc = function
+      | For_loop { index; _ } when same_lane index -> Some acc
+      | For_loop { index; from_; to_; body; axis } ->
+          path_to_lane (({ index; from_; to_; body; axis } : floop) :: acc) body
+      | Seq (a, b) -> Option.first_some (path_to_lane acc a) (path_to_lane acc b)
+      | If { body; _ } -> path_to_lane acc body
+      | _ -> None
+    in
+    let block_terms =
+      List.map masks ~f:(fun pm ->
+          match pm.pm_terms with [ (c, s) ] when c > 0 -> Some (c, s) | _ -> None)
+    in
+    match (shared_frag, Option.all block_terms, matching_tiles [] llc, path_to_lane [] llc) with
+    | false, Some ((_, block) :: _ as terms), [ Tile_mma { d = _, d_base; m; n; _ } ], Some path
+      when List.for_all terms ~f:(fun (_, s) -> Indexing.equal_symbol s block) -> (
+        let last_full =
+          List.fold2_exn masks terms ~init:(Some Int.max_value) ~f:(fun acc pm (c, _) ->
+              let room = pm.pm_bound - pm.pm_offset - if pm.pm_row then m else n in
+              match acc with Some acc when room >= 0 -> Some (Int.min acc (room / c)) | _ -> None)
+        in
+        let reduction_above =
+          List.exists path ~f:(fun (fc : floop) ->
+              fc.to_ > fc.from_ && not (idcs_mention fc.index d_base))
+        in
+        match
+          (last_full, List.find path ~f:(fun (fc : floop) -> Indexing.equal_symbol fc.index block))
+        with
+        | Some last_full, Some { from_; to_; axis = Serial; _ }
+          when reduction_above && from_ <= last_full && last_full < to_ ->
+            Some (block, last_full)
+        | _ -> None)
+    | _ -> None
+  in
   (* Statement-site fallback for masked tensorization without a qualifying enclosing serial loop
      (e.g. a whole-extent block with no reduction blocking, or an extent-1 block loop): the
      transfers wrap the lane loop of the [Tile_mma] itself. *)
@@ -3863,7 +3907,39 @@ let contract_tensorized_accumulator ~lane ~(masks : pad_mask list) (opt : Low_le
         | If ({ body; _ } as x) -> If { x with body = go body }
         | other -> other
       in
-      go llc
+      match full_block_split llc with
+      | Some (block, last_full) ->
+          (* Full-block specialization (gh-ocannl-1563). The statement-site transfers run once per
+             execution of the [Tile_mma], so under a reduction loop the accumulator round-trips
+             through the fragment once per reduction block — about 11-15% of a padded serial GEBP on
+             AVX2, beyond its pad waste — although only the edge block's masks can fail. Split the
+             block loop at its last fully valid block, as a [Partition] would: the full blocks keep
+             the [Tile_mma] on the target itself, the unmasked code a dividing site runs, and only
+             the edge blocks contract. [apply]'s trailing simplify then folds the pad guards the
+             full segment decides (the staged tiles' edge guards, the fallback's). The values are
+             bitwise those of the contraction, which copies exactly. *)
+          let rec at_block llc =
+            match llc with
+            | For_loop ({ index; from_; to_; body; _ } as fc) when Indexing.equal_symbol index block
+              ->
+                let s_full = Indexing.get_symbol () in
+                let full =
+                  refresh_scopes
+                  @@ map_code
+                       ~fidx:
+                         (subst_axis_index ~sym:block ~by:{ terms = [ (1, s_full) ]; offset = 0 })
+                       body
+                in
+                Seq
+                  ( For_loop { index = s_full; from_; to_ = last_full; body = full; axis = Serial },
+                    For_loop { fc with from_ = last_full + 1; to_; body = go body } )
+            | For_loop fc -> For_loop { fc with body = at_block fc.body }
+            | Seq (a, b) -> Seq (at_block a, at_block b)
+            | If ({ body; _ } as x) -> If { x with body = at_block body }
+            | other -> other
+          in
+          at_block llc
+      | None -> go llc
     else llc
   in
   if masked && Option.is_none !promoted then
