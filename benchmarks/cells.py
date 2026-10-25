@@ -156,8 +156,8 @@ def assignment_problem(name):
     they outrank every other source and the configuration trace reads them back as `commandline`,
     where an environment value is exactly what the treatment check refuses."""
     if name.startswith("OCANNL_"):
-        return (f"{name}: a library setting is stated on the command line "
-                f"(--ocannl_{name[len('OCANNL_'):].lower()}=...), never in the cell's environment")
+        return (f"{name}: a library setting is stated on the command line, where the "
+                "configuration trace reads it back, never in the cell's environment")
     if not name.startswith(CLEARED_PREFIXES):
         return (f"{name}: only the cleared families ({', '.join(CLEARED_PREFIXES[1:])}) are stated; "
                 "every other variable is the box's and passes through as it is")
@@ -468,7 +468,7 @@ def fresh_out_dir(path, driver):
     return out
 
 
-def build_target(root, target, log_path, driver):
+def build_target(root, target, log_path, driver, jobs=None):
     """Build the dune `target` (a path such as `bin/schedule_bench.exe`) of the checkout `root`,
     hermetically, and return the built file's path; exit naming the log when it fails.
 
@@ -476,13 +476,13 @@ def build_target(root, target, log_path, driver):
     moves the artifacts, DUNE_PROFILE changes the flags, ...) and OCAMLPARAM (compiler flags) are
     cleared, and the root and build directory are named -- dune otherwise picks the OUTERMOST
     project root, so a nested worktree without its dune-workspace would build the parent checkout
-    while the executable read here is this one's (AGENTS.md, Worktrees)."""
+    while the executable read here is this one's (AGENTS.md, Worktrees). `jobs` is dune's -j."""
     build_dir = Path(root) / "_build"
     build_env = {k: v for k, v in os.environ.items() if not k.startswith(BUILD_CLEARED_PREFIXES)}
     with open(log_path, "wb") as log:
         status = run_in_group(["dune", "build", "--root", str(root), "--build-dir",
-                               str(build_dir), target], root, build_env, BUILD_TIMEOUT_S, log,
-                              subprocess.STDOUT)
+                               str(build_dir), *([] if jobs is None else ["-j", str(jobs)]),
+                               target], root, build_env, BUILD_TIMEOUT_S, log, subprocess.STDOUT)
     exe = build_dir / "default" / target
     if status != 0 or not exe.is_file():
         sys.exit(f"{driver}: building {target} failed ({status}); see {log_path}")
@@ -592,6 +592,22 @@ def run_problems(records, extra=()):
     problems += list(extra)
     problems += consistency_problems([r for r in records if r["ok"]])
     return problems
+
+
+def read_run(run_dir):
+    """A finished run's `manifest.json` and `cells.jsonl` records, for a driver that judges its cells
+    further (a census, a header): (manifest, records). OSError/ValueError when either is missing
+    or unreadable."""
+    run_dir = Path(run_dir)
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    records = [json.loads(line) for line in (run_dir / "cells.jsonl").read_text().splitlines()]
+    return manifest, records
+
+
+def cell_stream(run_dir, rec, stream):
+    """The text of a cell's `stdout` or `stderr`, as its run directory keeps it."""
+    return (Path(run_dir) / "cells" / f"{rec['cell']:03d}-{rec['arm']}" / stream).read_text(
+        errors="replace")
 
 
 def exit_status(records, problems):

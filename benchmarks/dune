@@ -13,13 +13,14 @@
  ; repository; the source-identity test builds a repository of its own.
  ;
  ; The Python modules are globbed rather than named: the test grows imports faster than anyone
- ; remembers to pin them. Today it imports orchestrate, strict_json, display_safe, gh675_cells,
- ; gh998_cells, gh1002_cells, gen_fixtures, bench_venv, cell_group, fixture_digest,
- ; runners.bench_common and test.test_cell_group, runs gh1003_summary.py, gh612_parity.py and
- ; gh728_protocol.py by path, and its venv-interpreter scan reads every `*.py` here and under
- ; runners/ at any depth -- hence the recursive glob, the same population as the scan's
- ; `runners/**/*.py`. The shell scripts are listed for the same reason: the test drives
- ; gh612_cells.sh's parity step and gh1003_fold_cells.sh's summary step themselves, and its
+ ; remembers to pin them. Today it imports orchestrate, strict_json, bench_output, display_safe,
+ ; gh675_cells, gh998_cells, gh1002_cells, gen_fixtures, bench_venv, cell_group, fixture_digest,
+ ; runners.bench_common, test.test_cell_group and test_cells, runs gh1003_summary.py,
+ ; gh612_parity.py, gh728_protocol.py and ab.py by path, and its venv-interpreter scan reads every
+ ; `*.py` here and under runners/ at any depth -- hence the recursive glob, the same population as
+ ; the scan's `runners/**/*.py`. The shell scripts are listed for the same reason: the test drives
+ ; gh612_cells.sh's parity step, gh1003_fold_cells.sh's summary step, and gh1343_ab.sh and
+ ; gh1180_tie_ab.sh end to end on stub benches (test_cells.py) themselves, and its
  ; json.loads inventory and its table-row scan read every `*.py` and `*.sh` here and under runners/
  ; (an unlisted script is one they silently cannot see).
  ; fixtures/DIGESTS.txt and the workload specs are data it reads (gh-ocannl-645), pinned so a

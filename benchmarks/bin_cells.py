@@ -159,9 +159,7 @@ def record_reader(metrics):
 def cell_losses(out, rec):
     """The parity losses of a cell's result line, or None."""
     try:
-        record = bench_output.result_record(
-            (out / "cells" / f"{rec['cell']:03d}-{rec['arm']}" / "stdout").read_text(
-                errors="replace"))
+        record = bench_output.result_record(cells.cell_stream(out, rec, "stdout"))
     except (OSError, ValueError):
         return None
     losses = record.get("losses") if isinstance(record, dict) else None

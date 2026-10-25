@@ -28,6 +28,7 @@ import orchestrate
 import strict_json
 from runners import bench_common
 from test.test_cell_group import CellGroupTest  # imported so unittest.main includes shared tests
+from test_cells import AbDriverTest, Gh1180DriverTest  # noqa: F401  (likewise)
 from test.test_cell_group import kill_the_group_on_cleanup, publish_pid
 
 HERE = Path(__file__).resolve().parent
@@ -683,6 +684,8 @@ JSON_LOADS_NOT_RESULT_LINES = {
     ("gh1181_cells.py", 'env = json.loads((out / "env.json")'): "the driver's own env.json",
     ("gh1181_cells.py", 'old = json.loads((out / "summary.json")'): "the driver's own summary.json",
     ("gh675_cells.py", "r = json.loads(ln)"): "the driver's own records file",
+    ("cells.py", 'manifest = json.loads((run_dir'): "the runner's own manifest.json",
+    ("cells.py", "records = [json.loads(line) for line"): "the runner's own cells.jsonl",
     ("gh998_cells.py", "if json.loads(paths[0]"): "the driver's own source manifests",
     ("gh998_cells.py", "matrix = json.loads("): "the driver's own matrix.json",
     ("gh998_cells.py", "preflight = json.loads("): "the driver's own preflight.json",

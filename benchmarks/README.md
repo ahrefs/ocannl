@@ -796,6 +796,24 @@ OCANNL_CC_PARALLEL_GRID=none` times single-threaded segments that sum to the ser
   hermetic environment, the configuration-trace check, `cell_group` supervision, `Bench_design`'s
   visiting order, the cell loop and the paired sign test, so a new driver imports them rather than
   re-deriving them (`gh834_cells.sh` took ten review rounds of exactly that machinery).
+- `ab.py` — the two-revision A/B driver (gh-ocannl-1443): `python3 benchmarks/ab.py BASE HEAD
+  --target bin/narrow_gebp_bench.exe --backend cc --out DIR --rounds 12 -- f16 512 20` builds the
+  dune target once per revision, each in a detached worktree of its own under DIR (removed once its
+  executable is copied out), and measures the two executables as the arms `a` and `b` of one
+  `bin_cells.py` run, so the cells are hermetic, trace-checked, supervised, visited AB BA ... and
+  paired with the exact sign test, the report naming each arm's commit beside its sha256. bin_cells'
+  shared options pass through (`--reader record --metric step_ms.p50`, `--env`, `--box`), and
+  `--args-a`/`--args-b` give an arm arguments of its own. A treatment that is not yet a commit is
+  committed first: `gh1343_ab.sh` writes its "HEAD with BASE's scheduler sources" as a commit with
+  git plumbing, touching no branch, and hands ab.py the two commits; `gh1180_tie_ab.sh` runs one
+  bin_cells run per case (two geometries of one build) and keeps only its census and header checks.
+  The drivers that still hand-roll their cells, and why: `gh1051_bf16_ab.sh` (its drift control
+  diffs the generated `.hip` between arms, HIP-only), `gh1051_boundary_split.sh` (two checkouts
+  each running from its own tree, with cross-revision source proofs), `gh1253_cells.sh` (a
+  calibration pipeline whose fits feed later cells), `gh1253_flip_cells.sh` (bench_gpt's untuned
+  step under two gates: a record-reader conversion, not yet made), `gh1557_cells.sh` (search, then
+  two replays sharing one cache: sequential by design), `gh1529_nvrtc_cost.sh` (a C probe and
+  per-cell caches), `gh1279_cells.sh` and `gh740_cells.sh` (the interleaving is inside the bench).
 - `bench_output.py` — the one reader of what OCANNL's benches print (gh-ocannl-1443): `bench-result:`
   lines, the runners' result line (the last stdout line opening a JSON object, read strictly;
   `strict_json.py field` asks it for one field from a shell driver), `bench: checkpoint` lines and

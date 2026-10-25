@@ -154,7 +154,7 @@
    ; --allow-unmeasured: this canary asks whether the pipeline runs end to end, and a shared CI
    ; runner can refuse every timing window of a 2x2 cell for host contention (gh-ocannl-855) --
    ; a fact about the machine, not about the code path. The refusal still prints its `!!` line;
-   ; a parity or compile failure still exits 1, as does a refusal in an ordinary bench run.
+   ; a parity or compile failure still exits 1; a refusal in an ordinary bench run exits 3.
    (run
     %{exe:projection_shape_bench.exe}
     2
