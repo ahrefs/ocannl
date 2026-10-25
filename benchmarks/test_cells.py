@@ -12,7 +12,6 @@ proves which tree it was built from. Run through test_orchestrate.py, which impo
 
 import json
 import os
-import shutil
 import stat
 import subprocess
 import sys
@@ -73,6 +72,12 @@ print("steps " + " ".join(positionals), file=sys.stderr)
 ''' + result_line("step", "SECONDS", "unchecked", "a stub")
 
 
+# The stand-ins are extensionless Python scripts run by their shebang (and a stub `dune` found on
+# PATH ahead of the real one), which native Windows' CreateProcess cannot launch.
+POSIX_ONLY = unittest.skipIf(os.name == "nt", "stub executables run by shebang: POSIX only")
+
+
+@POSIX_ONLY
 class StubRunTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -217,22 +222,23 @@ print("bench-result: " + json.dumps({{"variant": "packmma", "seconds": secs, "ch
                                       "check_note": ""}}))
 print("bench-result: " + json.dumps({{"variant": "packmma_par", "seconds": secs / 2,
                                       "check": "passed", "check_note": ""}}))
-sys.exit(EXIT)
+sys.exit(3 if positionals[1] == "REFUSE_N" else EXIT)
 '''
 
 
 class Gh1180DriverTest(StubRunTest):
     """gh1180_tie_ab.sh on bin_cells: the census and header checks over each case's cells."""
 
-    def measure(self, census="Mma_register_tiled", exit_code=0):
+    def measure(self, census="Mma_register_tiled", exit_code=0, refuse_n="none",
+                cases=("f16:64:8:16:3:4:6",)):
         root = self.dir / "root"
         write_stub(root / "_build/default/bin/narrow_gebp_bench.exe",
-                   GEBP_BODY.replace("CENSUS", census).replace("EXIT", str(exit_code))
-                   .replace("{{", "{").replace("}}", "}"))
+                   GEBP_BODY.replace("CENSUS", census).replace("REFUSE_N", refuse_n)
+                   .replace("EXIT", str(exit_code)).replace("{{", "{").replace("}}", "}"))
         out = self.dir / "out"
         proc = self.run_tool(
             [box_gate.BASH, str(HERE / "gh1180_tie_ab.sh"), "measure", str(root), str(out), "2",
-             "f16:64:8:16:3:4:6"], {"OCANNL_FP16_ARITHMETIC": "true", "OMP_NUM_THREADS": "1"})
+             *cases], {"OCANNL_FP16_ARITHMETIC": "true", "OMP_NUM_THREADS": "1"})
         return proc, out
 
     def test_a_clean_run_pairs_the_two_geometries(self):
@@ -258,7 +264,19 @@ class Gh1180DriverTest(StubRunTest):
     def test_a_refused_measurement_exits_3(self):
         proc, out = self.measure(exit_code=3)
         self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
-        self.assertIn("refused its measurement", (out / "summary.md").read_text())
+        summary = (out / "summary.md").read_text()
+        self.assertIn("REFUSED CELLS", summary)
+        self.assertNotIn("INVALID CELLS", summary)
+
+    def test_a_failed_check_outranks_a_refusal_in_another_case(self):
+        # The refusing case runs first: its 3 must not stand over the second case's census
+        # failure, whichever order they come in.
+        proc, out = self.measure(census="scalar fallback RN", refuse_n="32",
+                                 cases=("f16:32:8:16:3:4:6", "f16:64:8:16:3:4:6"))
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        summary = (out / "summary.md").read_text()
+        self.assertIn("REFUSED CELLS", summary)
+        self.assertIn('f16-64-8-16-3-rn4-rn6 cell 0 (rn4): packmma census', summary)
 
 
 if __name__ == "__main__":

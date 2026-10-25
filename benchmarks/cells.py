@@ -516,7 +516,8 @@ def run_cells(*, arms, orders, out, env, backend, common, common_env, timeout, r
     `reader(stdout, stderr)` turns a cell's output into ([(variant, seconds, check, note)],
     [problem]), raising ValueError for output it cannot read; a cell is clean when it exited 0, its
     trace states the treatment, and its reader found results and no problem. A cell exiting
-    `REFUSED_EXIT` is marked `refused`."""
+    `REFUSED_EXIT` is marked `refused`, and its reader's complaints are not added to its
+    refusal."""
     records = []
     with open(out / "cells.jsonl", "w") as jsonl:
         for rnd, order in enumerate(orders):
@@ -545,11 +546,14 @@ def run_cells(*, arms, orders, out, env, backend, common, common_env, timeout, r
                     problems += treatment_problems(config, backend)
                 except TraceError as e:
                     problems.append(f"unreadable configuration trace: {e}")
+                # A refused cell measured nothing by its own account, so what its output lacks is
+                # not a further fault (projection_shape_bench prints no result line when every
+                # window was refused); whatever it did report is kept, never paired.
                 try:
                     results, read_problems = reader(stdout, stderr)
                 except ValueError as e:
-                    problems.append(str(e))
-                else:
+                    results, read_problems = [], [str(e)]
+                if not refused:
                     problems += read_problems
                 rec = {"cell": cell, "round": rnd, "position": pos, "arm": arm["label"],
                        "argv": cmd, "env": {**common_env, **arm.get("env", {})},

@@ -86,7 +86,7 @@ a cell reporting no result fails the run: true
 a variant that failed its output check fails the run: true
 an unchecked variant is measured, and reported as unchecked with its reason: true
 a cell reporting one variant twice fails the run: true
-a run whose only faults are cells refusing their measurement exits 3: true
+a run whose only faults are cells refusing their measurement exits 3, though they reported no result: true
 a refusal beside a failure is a failed run: true
 an arm's stated variable reaches its cells, the ambient BENCH_TUNE does not: true
 the stated environment is recorded per cell and in the manifest: true

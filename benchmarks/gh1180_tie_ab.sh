@@ -33,8 +33,8 @@
 # scalar fallback; any other cell fails the run and the summary marks it. Serial (packmma) and
 # pool-parallel (packmma_par) are kept apart; the ratio is rnB's time over rnA's, per round.
 #
-# Exit: 0 every cell valid; 1 a cell failed; 2 usage; 3 the only faults are cells refusing their
-# measurement for host contention (bin_cells' exit 3).
+# Exit: 0 every cell valid; 1 a cell failed or failed a check (this outranks a refusal); 2 usage;
+# 3 the only faults are cells refusing their measurement for host contention (bin_cells' exit 3).
 set -u
 usage() { sed -n '/^# Usage/,/^# Exit/p' "$0" | sed '$d' >&2; exit 2; }
 HERE=$(cd "$(dirname "$0")" && pwd -P)
@@ -47,7 +47,7 @@ sys.path.insert(0, sys.argv[2])  # benchmarks/, for the shared runner and the ta
 import cells
 from display_safe import display_value, log_line, table_lines
 line_re = re.compile(r'^(packmma(?:_par)?)\s+\S+ ms\s+\S+ GFLOP/s.*\[(.*)\]\s*$')
-bad, rows = [], []
+bad, refused, rows = [], [], []
 log = os.path.join(out, 'driver.log')
 m = re.search(r'cases: (.*)', open(log).read()) if os.path.exists(log) else None
 if not m:
@@ -64,11 +64,16 @@ for c in (m.group(1).split() if m else []):
     planned = sum(len(order) for order in manifest['orders'])
     if len(records) != planned:
         bad.append(f'{display_value(name)}: {len(records)} of {planned} planned cells ran')
-    by = {}
+    by, case_refused = {}, False
     for r in records:
         cell = f'{display_value(name)} cell {r["cell"]} ({display_value(r["arm"])})'
         if not r['ok']:
-            bad.append(f'{cell}: ' + display_value('; '.join(r['problems'])))
+            # A cell whose one fault is its own refusal (host contention) is the box's verdict,
+            # kept apart from a cell that failed: the driver exits 3 on refusals alone.
+            only_refused = r.get('refused') and len(r['problems']) == 1
+            (refused if only_refused else bad).append(
+                f'{cell}: ' + display_value('; '.join(r['problems'])))
+            case_refused = case_refused or only_refused
             continue
         text = cells.cell_stream(run, r, 'stdout')
         rn = r['arm'][2:]
@@ -86,7 +91,7 @@ for c in (m.group(1).split() if m else []):
     label = ' '.join(display_value(x) for x in (prec, f'n={n}', f'bm={bm}', f'bk={bk}'))
     for variant in ('packmma', 'packmma_par'):
         a, b = by.get((variant, f'rn{rna}'), {}), by.get((variant, f'rn{rnb}'), {})
-        if sorted(a) != sorted(b) or len(a) != manifest['rounds']:
+        if (sorted(a) != sorted(b) or len(a) != manifest['rounds']) and not case_refused:
             bad.append(f'{display_value(name)}: {variant} lacks a side of the pair in some round')
         stats = cells.paired(a, b)
         rows.append((label, 'serial' if variant == 'packmma' else 'parallel', f'rn{rna}', f'rn{rnb}',
@@ -95,9 +100,12 @@ text = '\n'.join(table_lines(['Case', 'Variant', 'A', 'B', *cells.PAIRED_HEADER]
 text += '\nratio = B time / A time per round; each case\'s full report is OUT/<case>/report.md\n'
 if bad:
     text += '\nINVALID CELLS:\n' + '\n'.join(log_line('- ' + b) for b in bad) + '\n'
+if refused:
+    text += ('\nREFUSED CELLS (host contention; the box, not the treatment):\n'
+             + '\n'.join(log_line('- ' + b) for b in refused) + '\n')
 open(os.path.join(out, 'summary.md'), 'w').write(text)
 print(text, end='')
-sys.exit(1 if bad else 0)
+sys.exit(1 if bad else 3 if refused else 0)
 EOF
 }
 
@@ -152,10 +160,13 @@ for c in "$@"; do
     --rounds "$rounds" --arm "rn$rna=--rn=$rna" --arm "rn$rnb=--rn=$rnb" -- "${common[@]}" >/dev/null
   st=$?
   echo "case=$c bin_cells exit=$st"
-  # A failure (1, or a usage error) outranks a refusal (3), whichever case came last.
-  if ((st != 0 && worst != 1 && worst != 2)); then worst=$st; fi
+  # A failure (any nonzero status but 3) outranks a refusal (3), whichever case came last.
+  if ((st != 0 && (worst == 0 || worst == 3))); then worst=$st; fi
 done
 summary "$out"
 st=$?
-if ((st != 0 && worst == 0)); then worst=1; fi
-exit $worst
+# The summary judges every case: its validation failure (1) outranks any refusal, and its
+# refusal-only verdict (3) stands unless a case's bin_cells run failed outright.
+if ((st == 1 || (worst != 0 && worst != 3))); then exit 1; fi
+if ((st == 3 || worst == 3)); then exit 3; fi
+exit "$st"

@@ -212,8 +212,10 @@ with tempfile.TemporaryDirectory() as scratch:
 
     # --- The shared runner's front-end features (gh-ocannl-1565). ------------------------------
     refused_run = drive("refused", "--rounds", "2", "--arm", "r=refused")
-    claim("a run whose only faults are cells refusing their measurement exits 3",
-          refused_run.returncode == 3 and "refused its measurement (exit 3)" in refused_run.stdout)
+    claim("a run whose only faults are cells refusing their measurement exits 3, though they "
+          "reported no result",
+          refused_run.returncode == 3 and "refused its measurement (exit 3)" in refused_run.stdout
+          and "reported no bench-result line" not in refused_run.stdout)
     mixed = drive("mixed", "--rounds", "2", "--arm", "r=refused", "--arm", "f=fail")
     claim("a refusal beside a failure is a failed run", mixed.returncode == 1)
 
