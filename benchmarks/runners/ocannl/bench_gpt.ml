@@ -57,7 +57,9 @@ let () =
   (* Both placement arms' crowned candidates go into the emitted result (gh-ocannl-546). *)
   let arms = H.tune_arms () in
   let tuned ctx comp =
-    let scratch = Train.init_params (Context.auto ()) bindings batch_loss in
+    (* On the fixture's weights, so the crowns are times of the data the steps run on
+       (gh-ocannl-1557). *)
+    let scratch = H.tuning_scratch st batch_loss mapping bindings in
     (* [flip_report] only counts the gh-555 refinement searches toward the result line's [searched]
        (gh-ocannl-644): they run whenever [tune_inline_flips] is configured, whether or not a
        callback is wired, and a flip search loads this process like an arm search. *)

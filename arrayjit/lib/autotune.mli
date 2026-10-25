@@ -3355,7 +3355,11 @@ val tune :
      [Invalid_argument] otherwise — candidates timed elsewhere do not predict this device). The
      winning schedule is compiled from [ctx], exactly like a cache hit, with or without it. Without
      it, the search shares [ctx]'s buffers and the caller should re-initialize mutated state
-     afterwards. *)
+     afterwards. Its VALUES are part of what is timed: code that branches on data (the ReLU and
+     max-pool backward selects an inlined placement recomputes in its nests) runs at a speed set by
+     the activations, so a scratch lineage holding the init draw crowns a time the routine does not
+     keep on other weights — 23% on cifar_resnet/cc's default-placements arm (gh-ocannl-1557). Give
+     it the weights [ctx] will run with ([Context.set_values]) when they are known. *)
   ?abandon:abandon_rule ->
   (* gh-ocannl-1110: stop the search, raising {!Search_abandoned} after delivering an {!Abandoned}
      report, when {!abandon_verdict} decides at [k = beam_width] admitted timings. Absent (the

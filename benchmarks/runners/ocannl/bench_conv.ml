@@ -54,7 +54,9 @@ let () =
   let arms = H.tune_arms () in
   let ctx, routine =
     if tune then
-      let scratch = Train.init_params (Context.auto ()) bindings batch_loss in
+      (* On the fixture's weights, so the crowns are times of the data the steps run on
+         (gh-ocannl-1557). *)
+      let scratch = H.tuning_scratch st batch_loss mapping bindings in
       (* Placement A/B: tune the default (virtual + promotion) graph and the materialize-all graph,
          keep the measured winner. *)
       (* [flip_report] only counts the gh-555 refinement searches toward the result line's
