@@ -1674,6 +1674,13 @@ files.
   unchanged across a key's sweep. Arm A's wall was nonetheless only +6% (2055 vs 1934 s), because
   the shorter windows time faster. What would make the singles matter is a backdrop that IS the
   seeded composite (the seeded plan with one key replaced), not a different setting of this flag.
+  **The compile overhead is gone since gh-ocannl-1525** (stable kernel keys): on minix (gfx1151,
+  **unified**, gpt2_mini_train b8, 300 s call budget, cold caches, 2 rounds of
+  `benchmarks/gh1525_reuse_ab.sh`) a staffed candidate's median compile went from 4.10 s (68 of 261
+  kernels compiled) to 0.69 s (1 of 266), a bare one's from 1.87 s (12 of 261) to 0.68 s (1 of
+  261): staffed over bare +119% before, +2% after, and the budget fit 147 staffed candidates
+  instead of 57. The default stays off on the search-quality evidence above, which this does not
+  change.
   The coarse keys are swept one at a time, each single's `staff` holding
   the composite's choice for every OTHER key (label `F_sketch[p @k | staff ...]`; tests read the part
   before ` | staff `, `Fissioned_chain.focus`), and a key's fastest joins the composite after its

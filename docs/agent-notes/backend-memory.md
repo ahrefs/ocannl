@@ -480,12 +480,19 @@ files.
   `Kernel_code_cache.resolve` is the one orchestration (lookup unlocked, misses re-looked-up under
   the lock, one representative per key, one program per option list, publish after success),
   pinned against a fake compiler in `kernel_code_cache`; `gpu_kernel_cache` pins a fresh build with
-  colliding labels compiling no kernel (and a renamed routine compiling afresh).
+  colliding labels compiling no kernel (and a renamed routine compiling afresh). Measured on minix (gfx1151,
+  **unified**, gpt2 b8, 300 s budget, base vs head): a bare candidate's median compile 1.87 to 0.68 s
+  (12 to 1 of 261 kernels), a staffed one's 4.10 to 0.69 s (68 to 1), the winner's 6.7 to 1.9 s (112
+  to 6-8 of 269).
 - **cc has the cache too** (gh-ocannl-1525, `cc_kernel_cache_mib`, default 256, weighted by library
   file bytes): the C compiler costs per kernel and a lot -- a `gpt2_mini_train` candidate of 16
   kernels spent 10-37 s in it on mac-studio. Misses compile as one library; the toolchain identity
   (command, resolved executable, kernel flags, link flags) is in the key. A cached library stays
-  loaded while the cache holds it (under OpenMP none is ever unloaded anyway).
+  loaded while the cache holds it (under OpenMP none is ever unloaded anyway). Measured on mac-studio (gpt2
+  b8 cc search, 600 s budget, cache on vs `cc_kernel_cache_mib=0`, 2 rounds): candidate compile
+  7.45 s to 4.11 s median (C compiler 5.8 to 0.46 s, 128 to 1 of 128 kernels compiled; the rest is
+  lowering), the winner's 7.2 s to 1.8 s with no kernel compiled; the budget there is dominated by
+  the two serial base compiles (about 53 s each).
 - **Metal has none yet, measured**: its library compile (at link) took about 0.4 s of a 1.8 s
   candidate compile on a gpt2 b8 search, the rest of the link being pipeline-state creation, which a
   library cache does not save; a Metal cache wants a pipeline cache beside it.
