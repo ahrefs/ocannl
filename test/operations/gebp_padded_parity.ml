@@ -23,6 +23,15 @@
    and their products are multiples of 1/8 small enough that every leg's reduction is exact whatever
    order it sums in — which is why bitwise is the right claim, at bf16 too at these extents.
 
+   Where the serial leg accumulates (gh-ocannl-1563): under a k-block loop, a row-padded site runs
+   its full row blocks' [Tile_mma] on the output itself and contracts only the edge block through
+   the masked fragment, so the per-k-block round-trip is confined to the one block whose rows can be
+   out of range; a whole-K site (no k-block loop) and a site with no full row block keep the single
+   masked contraction, and an unpadded row axis never contracts. Read off the scheduled code, with
+   each [Tile_mma]'s executions per k block, so the claim also pins where the split lands (all [m /
+   bm] full blocks on the output, exactly one on the fragment). The bitwise parity above is what
+   says the specialized leg computes the same values.
+
    Two host-side claims per padded site say the parity has content where a pad could go wrong: the
    reference's masked rows are not all zero, and the k tail's contribution to the output is not all
    zero — so a schedule that dropped either would fail the cell comparison. The before-pin: the same
@@ -93,13 +102,15 @@ let operands ~prec s =
 let run ~prec ~name ~ma ~mb ~schedule =
   let%op mc = ma * mb in
   Ir.Tnode.update_prec mc.Tensor.value prec;
-  let site = ref None in
+  let site = ref None and scheduled = ref None in
   let transform opt =
     match schedule with
     | None -> opt
     | Some s ->
         site := Some (Bench_gebp.find_site opt);
-        Sched.apply (s ~c:mc.Tensor.value opt) opt
+        let o = Sched.apply (s ~c:mc.Tensor.value opt) opt in
+        scheduled := Some (o, mc.Tensor.value);
+        o
   in
   let ctx, routine =
     Context.compile
@@ -109,7 +120,7 @@ let run ~prec ~name ~ma ~mb ~schedule =
       Ir.Indexing.Empty
   in
   let ctx = Context.run ctx routine in
-  (Context.get_values ctx mc.Tensor.value, Ll_test.renderings routine.Context.mma, !site)
+  (Context.get_values ctx mc.Tensor.value, Ll_test.renderings routine.Context.mma, !site, !scheduled)
 
 let packed ~layout ~hoist_b ~stage_a ~tile_prec ~bm ~bk ~ma ~mb ~c opt =
   Bench_gebp.packed_schedule ~layout ~hoist_b ~stage_a ~tile_prec ~bm ~bk ~a:ma.Tensor.value
@@ -148,8 +159,41 @@ let in_place_labels s =
   else
     [ "the A-in-place packed leg matches the serial packed leg bitwise"; tiled_label "A-in-place" ]
 
+(* gh-ocannl-1563: where the serial leg's accumulator lives, row block by row block. Each [Tile_mma]
+   of the scheduled code, in program order, as what it accumulates in (the output itself, or the
+   contraction's fragment) and how many times it executes per k block: the product of its enclosing
+   loops' extents over the k-block count, since every leg runs each row block once per k block. *)
+let k_blocks s = (s.k + s.bk - 1) / s.bk
+let row_padded s = s.m % s.bm <> 0
+
+let tile_sites s ~(c : Ir.Tnode.t) (o : Ir.Low_level.optimized) =
+  let execs = ref [ 1 ] and found = ref [] in
+  Ll_test.walk o.Ir.Low_level.llc
+    ~on_stmt:(function
+      | Ir.Low_level.For_loop { from_; to_; _ } ->
+          execs := (List.hd_exn !execs * (to_ - from_ + 1)) :: !execs
+      | Ir.Low_level.Tile_mma { d = tn, _; _ } ->
+          found :=
+            ((if Ir.Tnode.equal tn c then "output" else "fragment"), List.hd_exn !execs / k_blocks s)
+            :: !found
+      | _ -> ())
+    ~on_exit:(function Ir.Low_level.For_loop _ -> execs := List.tl_exn !execs | _ -> ());
+  List.rev !found
+
+(* The expected sites and the claim's label. Specialized: a row pad, at least one full row block,
+   and a k-block loop to hoist the round-trip out of. *)
+let serial_sites_expected s =
+  if row_padded s && s.m >= s.bm && k_blocks s > 1 then
+    ( "the serial leg's full row blocks accumulate in the output, only the edge block in a fragment",
+      [ ("output", s.m / s.bm); ("fragment", 1) ] )
+  else if row_padded s then
+    ( "the serial leg's every row block accumulates in the masked fragment",
+      [ ("fragment", (s.m + s.bm - 1) / s.bm) ] )
+  else ("the serial leg's every row block accumulates in the output", [ ("output", s.m / s.bm) ])
+
 let site_labels s =
   [ "the builder reads the site's m x n x k off the nest"; "the reference is not all zeros" ]
+  @ [ fst (serial_sites_expected s) ]
   @ List.map legs ~f:agrees_label
   @ List.map legs ~f:(fun l -> tiled_label l.what)
   @ in_place_labels s
@@ -172,7 +216,7 @@ let check_site ~idx ~prec s =
   let cprec = compute_prec prec in
   let tile_prec = if Ir.Ops.equal_prec cprec prec then None else Some cprec in
   let ma, mb = operands ~prec s in
-  let want, _, _ = run ~prec ~name:(name "ref") ~ma ~mb ~schedule:None in
+  let want, _, _, _ = run ~prec ~name:(name "ref") ~ma ~mb ~schedule:None in
   let runs =
     List.map legs ~f:(fun l ->
         ( l,
@@ -182,20 +226,32 @@ let check_site ~idx ~prec s =
                  (packed ~layout:l.layout ~hoist_b:l.hoist_b ~stage_a:true ~tile_prec ~bm:s.bm
                     ~bk:s.bk ~ma ~mb)) ))
   in
-  let ser, _, ser_site = List.Assoc.find_exn runs ~equal:phys_equal (List.hd_exn legs) in
+  let ser, _, ser_site, ser_scheduled =
+    List.Assoc.find_exn runs ~equal:phys_equal (List.hd_exn legs)
+  in
   p
     (lbl "the builder reads the site's m x n x k off the nest")
     (match ser_site with
     | Some { Bench_gebp.ni; nj; nk; _ } -> ni = s.m && nj = s.n && nk = s.k
     | None -> false);
   p (lbl "the reference is not all zeros") (Array.exists want ~f:(fun x -> Float.(x <> 0.)));
-  List.iter runs ~f:(fun (l, (got, _, _)) ->
+  (let what, expected = serial_sites_expected s in
+   let got = Option.value_map ser_scheduled ~default:[] ~f:(fun (o, c) -> tile_sites s ~c o) in
+   let render sites =
+     String.concat ~sep:"; " (List.map sites ~f:(fun (kind, n) -> Printf.sprintf "%s x%d" kind n))
+   in
+   let holds = List.equal (fun (a, x) (b, y) -> String.equal a b && x = y) got expected in
+   if not holds then
+     Stdio.eprintf "%s: Tile_mma sites [%s], expected [%s]\n%!" (lbl what) (render got)
+       (render expected);
+   p (lbl what) holds);
+  List.iter runs ~f:(fun (l, (got, _, _, _)) ->
       p_all2
         (lbl (agrees_label l))
         got
         (if String.equal l.leg "serial" then want else ser)
         ~f:Float.equal);
-  List.iter runs ~f:(fun (l, (_, census, _)) ->
+  List.iter runs ~f:(fun (l, (_, census, _, _)) ->
       p
         (lbl (tiled_label l.what))
         (Ll_test.all_rendered ~what:(lbl l.what) Ir.C_syntax.Mma_register_tiled census));
@@ -231,7 +287,7 @@ let check_site ~idx ~prec s =
            && String.is_substring msg ~substring:"zero-fringe staged tile"))
   end
   else begin
-    let got, census, _ =
+    let got, census, _, _ =
       run ~prec ~name:(name "inplace") ~ma ~mb ~schedule:(Some (in_place ~stage_a:false))
     in
     p_all2

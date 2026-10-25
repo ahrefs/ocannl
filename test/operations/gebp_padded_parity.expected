@@ -2,6 +2,7 @@
 76^3 at the default 64x256: the k tail contributes to some output cell: true
 76^3 at the default 64x256, single storage: the builder reads the site's m x n x k off the nest: true
 76^3 at the default 64x256, single storage: the reference is not all zeros: true
+76^3 at the default 64x256, single storage: the serial leg's every row block accumulates in the masked fragment: true
 76^3 at the default 64x256, single storage: the serial packed leg matches the unscheduled kernel bitwise: true
 76^3 at the default 64x256, single storage: the Grid packed leg matches the serial packed leg bitwise: true
 76^3 at the default 64x256, single storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
@@ -14,6 +15,7 @@
 76^3 at the default 64x256, single storage: with A read in place, Tensorize itself refuses the padded composition: true
 76^3 at the default 64x256, bfloat16 storage: the builder reads the site's m x n x k off the nest: true
 76^3 at the default 64x256, bfloat16 storage: the reference is not all zeros: true
+76^3 at the default 64x256, bfloat16 storage: the serial leg's every row block accumulates in the masked fragment: true
 76^3 at the default 64x256, bfloat16 storage: the serial packed leg matches the unscheduled kernel bitwise: true
 76^3 at the default 64x256, bfloat16 storage: the Grid packed leg matches the serial packed leg bitwise: true
 76^3 at the default 64x256, bfloat16 storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
@@ -28,6 +30,7 @@
 77^3 at 16x32: the k tail contributes to some output cell: true
 77^3 at 16x32, single storage: the builder reads the site's m x n x k off the nest: true
 77^3 at 16x32, single storage: the reference is not all zeros: true
+77^3 at 16x32, single storage: the serial leg's full row blocks accumulate in the output, only the edge block in a fragment: true
 77^3 at 16x32, single storage: the serial packed leg matches the unscheduled kernel bitwise: true
 77^3 at 16x32, single storage: the Grid packed leg matches the serial packed leg bitwise: true
 77^3 at 16x32, single storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
@@ -40,6 +43,7 @@
 77^3 at 16x32, single storage: with A read in place, Tensorize itself refuses the padded composition: true
 77^3 at 16x32, bfloat16 storage: the builder reads the site's m x n x k off the nest: true
 77^3 at 16x32, bfloat16 storage: the reference is not all zeros: true
+77^3 at 16x32, bfloat16 storage: the serial leg's full row blocks accumulate in the output, only the edge block in a fragment: true
 77^3 at 16x32, bfloat16 storage: the serial packed leg matches the unscheduled kernel bitwise: true
 77^3 at 16x32, bfloat16 storage: the Grid packed leg matches the serial packed leg bitwise: true
 77^3 at 16x32, bfloat16 storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
@@ -53,6 +57,7 @@
 row-only remainder 76x40x64 at 16x32: the last (masked) row block's rows carry nonzero k-sums: true
 row-only remainder 76x40x64 at 16x32, single storage: the builder reads the site's m x n x k off the nest: true
 row-only remainder 76x40x64 at 16x32, single storage: the reference is not all zeros: true
+row-only remainder 76x40x64 at 16x32, single storage: the serial leg's full row blocks accumulate in the output, only the edge block in a fragment: true
 row-only remainder 76x40x64 at 16x32, single storage: the serial packed leg matches the unscheduled kernel bitwise: true
 row-only remainder 76x40x64 at 16x32, single storage: the Grid packed leg matches the serial packed leg bitwise: true
 row-only remainder 76x40x64 at 16x32, single storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
@@ -65,6 +70,7 @@ row-only remainder 76x40x64 at 16x32, single storage: with A read in place, the 
 row-only remainder 76x40x64 at 16x32, single storage: with A read in place, Tensorize itself refuses the padded composition: true
 row-only remainder 76x40x64 at 16x32, bfloat16 storage: the builder reads the site's m x n x k off the nest: true
 row-only remainder 76x40x64 at 16x32, bfloat16 storage: the reference is not all zeros: true
+row-only remainder 76x40x64 at 16x32, bfloat16 storage: the serial leg's full row blocks accumulate in the output, only the edge block in a fragment: true
 row-only remainder 76x40x64 at 16x32, bfloat16 storage: the serial packed leg matches the unscheduled kernel bitwise: true
 row-only remainder 76x40x64 at 16x32, bfloat16 storage: the Grid packed leg matches the serial packed leg bitwise: true
 row-only remainder 76x40x64 at 16x32, bfloat16 storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
@@ -78,6 +84,7 @@ row-only remainder 76x40x64 at 16x32, bfloat16 storage: with A read in place, Te
 k-only remainder 64x40x76 at 16x32: the k tail contributes to some output cell: true
 k-only remainder 64x40x76 at 16x32, single storage: the builder reads the site's m x n x k off the nest: true
 k-only remainder 64x40x76 at 16x32, single storage: the reference is not all zeros: true
+k-only remainder 64x40x76 at 16x32, single storage: the serial leg's every row block accumulates in the output: true
 k-only remainder 64x40x76 at 16x32, single storage: the serial packed leg matches the unscheduled kernel bitwise: true
 k-only remainder 64x40x76 at 16x32, single storage: the Grid packed leg matches the serial packed leg bitwise: true
 k-only remainder 64x40x76 at 16x32, single storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
@@ -90,6 +97,7 @@ k-only remainder 64x40x76 at 16x32, single storage: with A read in place, the bu
 k-only remainder 64x40x76 at 16x32, single storage: with A read in place, Tensorize itself refuses the padded composition: true
 k-only remainder 64x40x76 at 16x32, bfloat16 storage: the builder reads the site's m x n x k off the nest: true
 k-only remainder 64x40x76 at 16x32, bfloat16 storage: the reference is not all zeros: true
+k-only remainder 64x40x76 at 16x32, bfloat16 storage: the serial leg's every row block accumulates in the output: true
 k-only remainder 64x40x76 at 16x32, bfloat16 storage: the serial packed leg matches the unscheduled kernel bitwise: true
 k-only remainder 64x40x76 at 16x32, bfloat16 storage: the Grid packed leg matches the serial packed leg bitwise: true
 k-only remainder 64x40x76 at 16x32, bfloat16 storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
@@ -103,6 +111,7 @@ k-only remainder 64x40x76 at 16x32, bfloat16 storage: with A read in place, Tens
 three k blocks and a tail 48x40x100 at 16x32: the k tail contributes to some output cell: true
 three k blocks and a tail 48x40x100 at 16x32, single storage: the builder reads the site's m x n x k off the nest: true
 three k blocks and a tail 48x40x100 at 16x32, single storage: the reference is not all zeros: true
+three k blocks and a tail 48x40x100 at 16x32, single storage: the serial leg's every row block accumulates in the output: true
 three k blocks and a tail 48x40x100 at 16x32, single storage: the serial packed leg matches the unscheduled kernel bitwise: true
 three k blocks and a tail 48x40x100 at 16x32, single storage: the Grid packed leg matches the serial packed leg bitwise: true
 three k blocks and a tail 48x40x100 at 16x32, single storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
@@ -115,6 +124,7 @@ three k blocks and a tail 48x40x100 at 16x32, single storage: with A read in pla
 three k blocks and a tail 48x40x100 at 16x32, single storage: with A read in place, Tensorize itself refuses the padded composition: true
 three k blocks and a tail 48x40x100 at 16x32, bfloat16 storage: the builder reads the site's m x n x k off the nest: true
 three k blocks and a tail 48x40x100 at 16x32, bfloat16 storage: the reference is not all zeros: true
+three k blocks and a tail 48x40x100 at 16x32, bfloat16 storage: the serial leg's every row block accumulates in the output: true
 three k blocks and a tail 48x40x100 at 16x32, bfloat16 storage: the serial packed leg matches the unscheduled kernel bitwise: true
 three k blocks and a tail 48x40x100 at 16x32, bfloat16 storage: the Grid packed leg matches the serial packed leg bitwise: true
 three k blocks and a tail 48x40x100 at 16x32, bfloat16 storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
@@ -129,6 +139,7 @@ below both blocks 5x24x7 at 64x256: the last (masked) row block's rows carry non
 below both blocks 5x24x7 at 64x256: the k tail contributes to some output cell: true
 below both blocks 5x24x7 at 64x256, single storage: the builder reads the site's m x n x k off the nest: true
 below both blocks 5x24x7 at 64x256, single storage: the reference is not all zeros: true
+below both blocks 5x24x7 at 64x256, single storage: the serial leg's every row block accumulates in the masked fragment: true
 below both blocks 5x24x7 at 64x256, single storage: the serial packed leg matches the unscheduled kernel bitwise: true
 below both blocks 5x24x7 at 64x256, single storage: the Grid packed leg matches the serial packed leg bitwise: true
 below both blocks 5x24x7 at 64x256, single storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
@@ -141,6 +152,7 @@ below both blocks 5x24x7 at 64x256, single storage: with A read in place, the bu
 below both blocks 5x24x7 at 64x256, single storage: with A read in place, Tensorize itself refuses the padded composition: true
 below both blocks 5x24x7 at 64x256, bfloat16 storage: the builder reads the site's m x n x k off the nest: true
 below both blocks 5x24x7 at 64x256, bfloat16 storage: the reference is not all zeros: true
+below both blocks 5x24x7 at 64x256, bfloat16 storage: the serial leg's every row block accumulates in the masked fragment: true
 below both blocks 5x24x7 at 64x256, bfloat16 storage: the serial packed leg matches the unscheduled kernel bitwise: true
 below both blocks 5x24x7 at 64x256, bfloat16 storage: the Grid packed leg matches the serial packed leg bitwise: true
 below both blocks 5x24x7 at 64x256, bfloat16 storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
@@ -155,6 +167,7 @@ rectangular 37x76x45 at 16x32: the last (masked) row block's rows carry nonzero 
 rectangular 37x76x45 at 16x32: the k tail contributes to some output cell: true
 rectangular 37x76x45 at 16x32, single storage: the builder reads the site's m x n x k off the nest: true
 rectangular 37x76x45 at 16x32, single storage: the reference is not all zeros: true
+rectangular 37x76x45 at 16x32, single storage: the serial leg's full row blocks accumulate in the output, only the edge block in a fragment: true
 rectangular 37x76x45 at 16x32, single storage: the serial packed leg matches the unscheduled kernel bitwise: true
 rectangular 37x76x45 at 16x32, single storage: the Grid packed leg matches the serial packed leg bitwise: true
 rectangular 37x76x45 at 16x32, single storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
@@ -167,6 +180,7 @@ rectangular 37x76x45 at 16x32, single storage: with A read in place, the builder
 rectangular 37x76x45 at 16x32, single storage: with A read in place, Tensorize itself refuses the padded composition: true
 rectangular 37x76x45 at 16x32, bfloat16 storage: the builder reads the site's m x n x k off the nest: true
 rectangular 37x76x45 at 16x32, bfloat16 storage: the reference is not all zeros: true
+rectangular 37x76x45 at 16x32, bfloat16 storage: the serial leg's full row blocks accumulate in the output, only the edge block in a fragment: true
 rectangular 37x76x45 at 16x32, bfloat16 storage: the serial packed leg matches the unscheduled kernel bitwise: true
 rectangular 37x76x45 at 16x32, bfloat16 storage: the Grid packed leg matches the serial packed leg bitwise: true
 rectangular 37x76x45 at 16x32, bfloat16 storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
@@ -179,6 +193,7 @@ rectangular 37x76x45 at 16x32, bfloat16 storage: with A read in place, the build
 rectangular 37x76x45 at 16x32, bfloat16 storage: with A read in place, Tensorize itself refuses the padded composition: true
 dividing control 64x40x64 at 16x32, single storage: the builder reads the site's m x n x k off the nest: true
 dividing control 64x40x64 at 16x32, single storage: the reference is not all zeros: true
+dividing control 64x40x64 at 16x32, single storage: the serial leg's every row block accumulates in the output: true
 dividing control 64x40x64 at 16x32, single storage: the serial packed leg matches the unscheduled kernel bitwise: true
 dividing control 64x40x64 at 16x32, single storage: the Grid packed leg matches the serial packed leg bitwise: true
 dividing control 64x40x64 at 16x32, single storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
@@ -191,6 +206,7 @@ dividing control 64x40x64 at 16x32, single storage: the A-in-place packed leg ma
 dividing control 64x40x64 at 16x32, single storage: every A-in-place Tile_mma renders the register tiling: true
 dividing control 64x40x64 at 16x32, bfloat16 storage: the builder reads the site's m x n x k off the nest: true
 dividing control 64x40x64 at 16x32, bfloat16 storage: the reference is not all zeros: true
+dividing control 64x40x64 at 16x32, bfloat16 storage: the serial leg's every row block accumulates in the output: true
 dividing control 64x40x64 at 16x32, bfloat16 storage: the serial packed leg matches the unscheduled kernel bitwise: true
 dividing control 64x40x64 at 16x32, bfloat16 storage: the Grid packed leg matches the serial packed leg bitwise: true
 dividing control 64x40x64 at 16x32, bfloat16 storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true

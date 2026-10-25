@@ -159,7 +159,9 @@ what the autotuner's sketch seeds parameterize:
 - **PADTO** (gh-ocannl-485): `Pad` each awkward extent to its tile multiple before the splits;
   staged tiles zero-fill the fringe, `Tensorize` masks the fragment transfers, and the whole
   padded block runs the intrinsic/register-tiled path — arbitrary extents tensorize at the cost
-  of `(padded/valid − 1)` wasted flops, a measured tradeoff.
+  of `(padded/valid − 1)` wasted flops, a measured tradeoff. A masked statement-site
+  contraction under a reduction loop runs only in the edge blocks: `Tensorize` splits the
+  serial block loop at its last fully valid block (gh-ocannl-1563).
 - **Partition specializations** (gh-ocannl-508): partition-then-split for guard-free main nests
   plus a serial epilogue; partitioning a consumer loop at `partition_breakpoints` to converge
   inlined concatenations with segmented rendering. Pad masks are `partition_breakpoints` flip

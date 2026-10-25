@@ -1771,9 +1771,22 @@ files.
   BOTH operands staged: `Tensorize` refuses a pad guard over an operand read in place ("requires
   operand ma to be a zero-fringe staged tile"), so `schedule_bench`'s `pm_hoist` (A in place) keeps
   the divisibility gate, by `Bench_gebp.in_place_a_refusal`. A hoisted (link-time packed) B~ panel
-  pads fine: its edge-tile pad slots are zero-filled on the host. On cc a row mask
-  sends the serial flavor's accumulator through a storage-precision fragment round-trip per row
-  block and k block, which costs traffic but moves no narrowing point.
+  pads fine: its edge-tile pad slots are zero-filled on the host. A row mask forces
+  `Tensorize`'s accumulator contraction, and in the serial flavor (`k_o { i_o { .. } }`) no loop
+  qualifies, so the transfers land at the statement site: a storage-precision fragment round-trip
+  per row block and k block, ~11-15% beyond the pad waste on AVX2 rog (gh-ocannl-627 cells,
+  gh-ocannl-1562). Since gh-ocannl-1563 `contract_tensorized_accumulator` splits the block loop at
+  its last fully valid block (`full_block_split`): full blocks keep the `Tile_mma` on the output,
+  only the edge block contracts, and the trailing simplify folds the full segment's tile edge
+  guards. It applies only under a reduction loop (some enclosing loop of extent > 1 leaves the
+  accumulator unindexed) on a `Serial` block loop whose symbol is every mask's one outer term, with
+  no GPU shared fragment. A whole-K site keeps the single contraction ON PURPOSE: its store-back
+  runs once per output tile, which is what `Fuse_epilogue` relocates a tail to, and
+  `fuse_at_fragment` neither descends a segment starting above 0 nor fuses two sites; under a
+  k-block loop it refuses either form on exactly-once, so splitting there costs nothing. The
+  `Grid` flavors are untouched (a `Grid` loop is not split; `Grid_outermost` contracts at `k_o`).
+  The census then reports two register-tiled `Tile_mma`s for one padded serial GEBP;
+  `gebp_padded_parity` pins where each row block accumulates.
 - What a pad MAY do is not what it SHOULD: `Sketch_families.judge_pad_waste` (gh-ocannl-740)
   excludes, per geometry menu, a geometry whose padded work is at least `autotune_pad_waste_max`
   (2) times that of the menu's least-padded PROPOSED geometry, witness naming both ratios. Relative

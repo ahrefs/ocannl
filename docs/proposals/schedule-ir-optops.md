@@ -278,7 +278,13 @@ then distributes across the transforms that already exist:
 The surviving per-element guards are exactly `partition_breakpoints` flip points: a
 later `Partition` of the enclosing block loop at the last fully valid block folds
 them in the interior segments (pad-vs-peel as measured alternatives — the peel leg
-and per-segment specialization remain follow-ups).
+remains a follow-up). `Tensorize` does that split itself where it pays most
+(gh-ocannl-1563): a masked contraction at the statement site under a reduction
+loop (the serial CPU GEBP) would round-trip the accumulator per reduction block, so
+the block loop is split at the last fully valid block, the full blocks keep the
+unmasked `Tile_mma` on the target and only the edge blocks contract. A whole-K site
+keeps its single contraction (the store-back `Fuse_epilogue` relocates a tail to),
+and so do a `Grid` block loop and a GPU shared fragment.
 
 ### 4. `Unroll`: annotation flavor vs. IR flavor
 
