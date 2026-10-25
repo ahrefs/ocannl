@@ -14,17 +14,17 @@
    towards the exact sum.
 
    Four parts. 1. Payloads: the [approximate] profile turns the gate on, and [reproducible] pins it
-   at its registered default (off). 2. Structure, on every backend: the seeding rule refuses a bf16
-   matmul output under a widening [accum_prec] unless admitted, and admitted it seeds the geometry
-   it seeds at storage-width accumulation. 3. Executed: one dense layer with bf16 weight and bias
-   gradients, the inputs NOT dyadic, compiled on the default pipeline and through the seeded default
-   with the admission off and on. Off, both gradients are bitwise the default's on every backend.
-   On, where the seeded default runs and [accum_prec] widens bf16 (the backend's own resolution),
-   the weight gradient is seeded and stays bitwise the default's, and the bias gradient is sunk,
-   closer to an f64 host reference than the default's, and within one bf16 rounding of it in every
-   cell, which the default's is not. Where nothing widens, the admission changes nothing. 4.
-   Configuration: the key reaches the seeded default and [model_default] when no override is
-   passed. *)
+   off, at its default (part 4 executes the unset default). 2. Structure, on every backend: the
+   seeding rule refuses a bf16 matmul output under a widening [accum_prec] unless admitted, and
+   admitted it seeds the geometry it seeds at storage-width accumulation. 3. Executed: one dense
+   layer with bf16 weight and bias gradients, the inputs NOT dyadic, compiled on the default
+   pipeline and through the seeded default with the admission off and on. Off, both gradients are
+   bitwise the default's on every backend. On, where the seeded default runs and [accum_prec] widens
+   bf16 (the backend's own resolution), the weight gradient is seeded and stays bitwise the
+   default's, and the bias gradient is sunk, closer to an f64 host reference than the default's, and
+   within one bf16 rounding of it in every cell, which the default's is not. Where nothing widens,
+   the admission changes nothing. 4. Configuration: the key reaches the seeded default and
+   [model_default] when no override is passed. *)
 
 open Base
 open Ocannl
@@ -49,12 +49,10 @@ let () =
       (String.split_lines (List.Assoc.find_exn Utils.profile_payloads name ~equal:String.equal))
   in
   let stated name = List.Assoc.find (payload name) key ~equal:String.equal in
-  let default = Option.map (Utils.registered_config_default key) ~f:snd in
-  p "the gate is registered off by default" (Option.equal String.equal default (Some "false"));
   p "the approximate profile turns the gate on"
     (Option.equal String.equal (stated "approximate") (Some "true"));
-  p "the reproducible profile pins the gate at its registered default"
-    (Option.is_some default && Option.equal String.equal (stated "reproducible") default)
+  p "the reproducible profile pins the gate off, its default"
+    (Option.equal String.equal (stated "reproducible") (Some "false"))
 
 (* {2 2. The seeding rule} *)
 

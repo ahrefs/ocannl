@@ -633,11 +633,21 @@ let codegen_tag ~(backend : string) ~(limits : Backend_intf.hardware_limits)
        existed -- with every zero kernel intact -- are the off regime's and stop replaying under the
        default, while the gate switched off finds them again; a CPU backend, where the gate does
        nothing, keeps every key it had (Codex P1, P2 and P1 on staging#1113). *)
+    @ (if
+         Schedule.backend_is_gpu backend
+         && Utils.get_global_flag ~default:true ~arg_name:"gpu_elide_covered_zeros"
+       then [ "zero-elision" ]
+       else [])
+    (* gh-ocannl-1405: the untuned plan's narrow-storage admission sinks narrow-storage reductions
+       whose accumulator then rounds to storage once, so a winner crowned from that plan computes
+       different numbers than the default regime's; AGENTS.md's numerics-gate rule keys it. As with
+       the zero elision, the ON regime is the one hashed, and only where the seeded plan runs (CUDA
+       and HIP), so every key that predates the gate, and every other backend's, is unchanged. *)
     @
     if
-      Schedule.backend_is_gpu backend
-      && Utils.get_global_flag ~default:true ~arg_name:"gpu_elide_covered_zeros"
-    then [ "zero-elision" ]
+      Schedule.backend_seeds_untuned_default backend
+      && Utils.get_global_flag ~default:false ~arg_name:"gpu_default_seed_narrow_storage"
+    then [ "seed-narrow-storage" ]
     else []
   in
   String.prefix (Stdlib.Digest.to_hex (Stdlib.Digest.string (String.concat ~sep:"\000" parts))) 8

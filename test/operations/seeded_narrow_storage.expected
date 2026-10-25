@@ -1,6 +1,5 @@
-the gate is registered off by default: true
 the approximate profile turns the gate on: true
-the reproducible profile pins the gate at its registered default: true
+the reproducible profile pins the gate off, its default: true
 a bf16 matmul output accumulated at bf16 is seeded (the control): true
 under a widening accumulator the rule refuses it: true
 under a widening accumulator the rule refuses it with the admission off too: true

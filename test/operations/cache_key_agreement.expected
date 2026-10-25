@@ -47,3 +47,4 @@ Keyed keys hashed only on some backends:
   output_debug_files_in_build_directory -- CUDA and HIP
   gpu_graph_capture -- CUDA and HIP
   gpu_elide_covered_zeros -- GPU backends
+  gpu_default_seed_narrow_storage -- CUDA and HIP

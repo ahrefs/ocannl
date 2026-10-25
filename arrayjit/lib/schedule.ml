@@ -9179,6 +9179,9 @@ let backend_is_gpu name =
 
 let backend_is_cpu name = String.is_substring name ~substring:"cc"
 
+let backend_seeds_untuned_default name =
+  String.is_substring name ~substring:"cuda" || String.is_substring name ~substring:"hip"
+
 (* gh-ocannl-1554: whether some schedule can keep the existing node [tn] off the device -- the
    premise the device-memory floor ([Backends.link_floor]) leaves such a node out on. The only
    schedule op that turns an existing node's placement [Local] is the shared epilogue placement of

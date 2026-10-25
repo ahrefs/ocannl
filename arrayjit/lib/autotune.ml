@@ -4952,8 +4952,7 @@ let site_reduction_extent (site : matmul_site) =
 (* CUDA and HIP only: the backends the untiled-contraction gap was measured on (gh-ocannl-1183) and
    the seeded plan's before/after was measured on. Metal keeps the plain default until a Metal
    measurement says otherwise. *)
-let seeded_default_backend backend =
-  String.is_substring backend ~substring:"cuda" || String.is_substring backend ~substring:"hip"
+let seeded_default_backend backend = Sched.backend_seeds_untuned_default backend
 
 type seed_gate =
   | Min_reduction of int
@@ -5018,7 +5017,7 @@ let reduction_sink_enabled () = Utils.registered_flag ~arg_name:"gpu_default_red
    instead of after every row -- an accuracy gain that changes the result, hence a numerics gate:
    off by default, on in the [approximate] profile, pinned off in [reproducible]. *)
 let seed_narrow_storage_enabled () =
-  Utils.registered_flag ~arg_name:"gpu_default_seed_narrow_storage"
+  Utils.get_global_flag ~default:false ~arg_name:"gpu_default_seed_narrow_storage"
 
 let seeded_geometries =
   [ (64, 64, 8, 4, 4); (32, 32, 8, 4, 4); (32, 32, 16, 2, 2); (16, 16, 8, 2, 2); (16, 16, 8, 4, 4) ]
@@ -5145,8 +5144,7 @@ let seeded_split_backend backend = seeded_default_backend backend
 let search_shaping_key_read ~backend key =
   match key with
   | "autotune_register_tile_rm_twin" -> Sched.backend_is_cpu backend
-  | "gpu_default_sketch_min_reduction" | "gpu_default_reduction_sink"
-  | "gpu_default_seed_narrow_storage" ->
+  | "gpu_default_sketch_min_reduction" | "gpu_default_reduction_sink" ->
       seeded_default_backend backend
   | "gpu_default_split_reduce_min_serial" ->
       seeded_default_backend backend && seeded_split_backend backend

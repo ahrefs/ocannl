@@ -401,22 +401,22 @@ let config_key_classification : (config_key_class * string * string list) list =
       "they define the seeded untuned plan -- which large CUDA/HIP contractions the recipes' \
        untuned compile seeds with the matmul family's sketch (Autotune.seeded_default, \
        gh-ocannl-1324), which long reductions it splits before segmenting (gh-ocannl-1325), \
-       whether it sinks the reduction loops of the segments it does not seed (gh-ocannl-1348) and \
-       whether it also takes the sites whose accumulator widens their narrow storage \
-       (gh-ocannl-1405) -- which a search seeds as its FIRST candidate and floor (gh-ocannl-1388), \
-       so they decide what it times first; a cached winner carries its own ops and segmentation \
-       and replays without consulting them. The last one changes results (its sunk narrow \
-       reductions round to storage once), yet keys no digest, like the split threshold beside it: \
-       under the default regime's search a crowned winner is already free to change numerics \
-       (tensorized forms, split reductions), which is why the reproducible profile turns the \
-       search off, and the trajectory it seeds is keyed by the search shape (the key and the plan \
-       digest)",
+       whether it sinks the reduction loops of the segments it does not seed (gh-ocannl-1348) -- \
+       which a search seeds as its FIRST candidate and floor (gh-ocannl-1388), so they decide what \
+       it times first; a cached winner carries its own ops and segmentation and replays without \
+       consulting them",
       [
         "gpu_default_sketch_min_reduction";
         "gpu_default_split_reduce_min_serial";
         "gpu_default_reduction_sink";
-        "gpu_default_seed_narrow_storage";
       ] );
+    ( Keyed "codegen",
+      "a numerics gate on the seeded untuned plan (gh-ocannl-1405): it admits narrow-storage \
+       sites, and a sunk narrow reduction rounds to storage once where the default rounds every \
+       step, so a winner crowned from that plan is not the default regime's answer and must not \
+       replay under it; AGENTS.md's numerics-gate rule. Hashed into the codegen tag on CUDA and \
+       HIP, where the plan runs, when on",
+      [ "gpu_default_seed_narrow_storage" ] );
     ( Search_shaping,
       "it steers the search: how wide, how long, what is proposed, what is pruned, how candidates \
        are ranked, and when a candidate's failure ends the search",
@@ -687,7 +687,6 @@ let config_key_defaults : (string * (config_value_kind * string)) list =
     ("gpu_default_sketch_min_reduction", (Keyword, "auto"));
     ("gpu_default_split_reduce_min_serial", (Integer, "1024"));
     ("gpu_default_reduction_sink", (Flag, "true"));
-    ("gpu_default_seed_narrow_storage", (Flag, "false"));
     ("autotune_search", (Flag, "true"));
     ("autotune_beam_width", (Integer, "2"));
     ("autotune_rounds", (Integer, "2"));
