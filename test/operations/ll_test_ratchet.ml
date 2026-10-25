@@ -17,9 +17,6 @@ let exemptions =
     ( "test/operations/buffer_aliasing.ml",
       Scan.Migration { records = 1; traversals = 0 },
       "links ll_test for operand helpers only; still hand-builds Low_level" );
-    ( "test/operations/cost_model_selection.ml",
-      Scan.Migration { records = 0; traversals = 1 },
-      "links ll_test for operand helpers only; still hand-builds Low_level" );
     ( "test/operations/cpu_simd_reduction.ml",
       Scan.Migration { records = 5; traversals = 1 },
       "links ll_test for operand helpers only; still hand-builds Low_level" );
