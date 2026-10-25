@@ -86,7 +86,19 @@ let executes = not (logged && String.equal backend_name "metal")
 let compile_and_run what ~name o ~seed ~read ~skip =
   let compiled = what ^ ": the routine compiles with them in one scope" in
   if executes then (
-    let values = Ll_test.execute ~name o ~seed ~read in
+    (* gh-ocannl-1599: CUDA and HIP routine logs are device-side [printf], which writes to the
+       process's stdout at a synchronization point whatever [debug_log_to_stream_files] says. The
+       capture window routes those lines through the backend's log processor (to the stream files
+       this leg asks for) so stdout stays the golden's data channel; the claims print outside it,
+       after the [sync] that drains the device's printf FIFO. On the C backends, which log to files,
+       the window is inert. *)
+    let values =
+      Utils.capture_stdout_logs @@ fun () ->
+      let ctx, _routine = Ll_test.run_routine ~name o ~seed in
+      let values = List.map read ~f:(Context.get_values ctx) in
+      Context.sync ctx;
+      values
+    in
     p compiled true;
     Some values)
   else (
