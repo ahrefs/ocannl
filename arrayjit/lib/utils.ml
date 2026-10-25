@@ -60,6 +60,7 @@ let known_config_keys =
       "suppress_welcome_message";
       "no_config_file";
       "log_config_sourcing";
+      "log_config_json";
       (* The preset-bundle picker (gh-ocannl-559); resolved before any ordinary key *)
       "profile";
       (* Utils.settings *)
@@ -502,6 +503,7 @@ let config_key_classification : (config_key_class * string * string list) list =
       [
         "suppress_welcome_message";
         "log_config_sourcing";
+        "log_config_json";
         "never_capture_stdout";
         "detach_c_stderr";
         "collapse_foreign_stderr_noise";
@@ -709,6 +711,12 @@ let registered_config_default key = List.Assoc.find config_key_defaults key ~equ
     [log_level]: it says "tell me where the configuration came from", and answering that for one key
     is not a useful reading of it. *)
 let log_config_sourcing = ref false
+
+(** Whether to print every resolved setting to stderr as one JSON line (gh-ocannl-1566): the
+    machine-readable sibling of {!log_config_sourcing}, carrying the same records {!resolved_config}
+    returns, rendered by {!config_record_to_json}. Bootstrapped the same way, and opt-in for the
+    same reason. *)
+let log_config_json = ref false
 
 (** The environment spelling of a config key: [OCANNL_] followed by the key in uppercase, and
     nothing else. The prefix is mandatory here (unlike on the commandline and in a config file) so
@@ -1294,7 +1302,10 @@ let early_log_config_sourcing_resolution =
 
 let () =
   log_config_sourcing :=
-    bool_of_config_string ~arg_name:"log_config_sourcing" (fst early_log_config_sourcing_resolution)
+    bool_of_config_string ~arg_name:"log_config_sourcing" (fst early_log_config_sourcing_resolution);
+  log_config_json :=
+    bool_of_config_string ~arg_name:"log_config_json"
+      (fst (resolve_bootstrap_config ~default:"false" ~arg_name:"log_config_json" ()))
 
 (** Parses the [ocannl_config] syntax: one [key=value] per line, [#] and [~~] lines are comments,
     empty values mean "unset", the [ocannl_] key prefix is optional and keys are case-insensitive.
@@ -1327,7 +1338,7 @@ let config_table_of_lines ~source lines =
   | `Ok h -> h
   | `Duplicate_key key -> failwith @@ "OCANNL: duplicate key in " ^ source ^ ": " ^ key
 
-let config_file_args, suppress_welcome_message_resolution =
+let config_file_args, config_file_path, suppress_welcome_message_resolution =
   let early_suppression =
     resolve_bootstrap_config ~default:"false" ~arg_name:"suppress_welcome_message" ()
   in
@@ -1360,19 +1371,25 @@ let config_file_args, suppress_welcome_message_resolution =
       in
       if String.length fname > 0 && not (Bool.of_string (fst suppression)) then
         Stdio.eprintf "\nWelcome to OCANNL! Reading configuration defaults from %s.\n%!" fname;
-      (result, suppression)
+      (result, fname, suppression)
   | _ ->
       if not (suppress_welcome_message ()) then
         Stdio.eprintf "\nWelcome to OCANNL! Configuration defaults file is disabled.\n%!";
-      (Hashtbl.create (module String), early_suppression)
+      (Hashtbl.create (module String), "", early_suppression)
 
 let log_config_sourcing_resolution =
   resolve_bootstrap_config ~file:(Hashtbl.find config_file_args) ~default:"false"
     ~arg_name:"log_config_sourcing" ()
 
+let log_config_json_resolution =
+  resolve_bootstrap_config ~file:(Hashtbl.find config_file_args) ~default:"false"
+    ~arg_name:"log_config_json" ()
+
 let () =
   log_config_sourcing :=
-    bool_of_config_string ~arg_name:"log_config_sourcing" (fst log_config_sourcing_resolution)
+    bool_of_config_string ~arg_name:"log_config_sourcing" (fst log_config_sourcing_resolution);
+  log_config_json :=
+    bool_of_config_string ~arg_name:"log_config_json" (fst log_config_json_resolution)
 
 (** {2 Configuration profiles (gh-ocannl-559)} *)
 
@@ -1381,7 +1398,13 @@ let () =
 let profile_ineligible_keys =
   Set.of_list
     (module String)
-    [ "profile"; "no_config_file"; "log_config_sourcing"; "suppress_welcome_message" ]
+    [
+      "profile";
+      "no_config_file";
+      "log_config_sourcing";
+      "log_config_json";
+      "suppress_welcome_message";
+    ]
 
 (* The payloads are embedded rather than installed as files: the config search walks up from the
    working directory and would find the USER's config, so a shipped preset file would need
@@ -1605,21 +1628,131 @@ let active_profile =
               (describe_config_level level);
           (level, name, parse_profile_payload ~name text))
 
-(** Bootstrap values cannot trace themselves until the sourcing switch is settled. Report the
+(** {2 Resolved-configuration records (gh-ocannl-1566)} *)
+
+type config_record = { key : string; value : string; source : config_source }
+(** One resolution of one setting: the key, the raw string the precedence walk settled on (before a
+    typed getter canonicalizes or refuses it), and where it came from. *)
+
+(** A JSON string literal: the double quote, the backslash and the control characters below 0x20
+    escaped, every other byte as it is (so UTF-8 passes intact). The same escaping as
+    [Bench_out.json_string]. *)
+let json_string_literal text =
+  let buf = Buffer.create (String.length text + 10) in
+  Buffer.add_char buf '"';
+  String.iter text ~f:(fun c ->
+      match c with
+      | '"' -> Buffer.add_string buf "\\\""
+      | '\\' -> Buffer.add_string buf "\\\\"
+      | c when Char.to_int c < 0x20 ->
+          Buffer.add_string buf (Printf.sprintf "\\u%04x" (Char.to_int c))
+      | c -> Buffer.add_char buf c);
+  Buffer.add_char buf '"';
+  Buffer.contents buf
+
+(** One record as the one-line JSON object the [log_config_json] stream carries -- schema version 1,
+    every field always present, in this order:
+    [{"ocannl_config":1,"key":K,"value":V,"source":S,"layer":L,"profile":P,"origin":O}]. [source] is
+    the sublevel kind: [commandline], [environment], [config_file], [profile] or [default]. [layer]
+    is the precedence level the value came from: [source] itself, except for a profile value, whose
+    layer is the level that picked the profile. [profile] is that profile's name, else [null].
+    [origin] is the concrete place that stated the value -- the argv element, the environment
+    variable's name, the config file's path, and for a profile value the place that picked the
+    profile -- or [null] for a default. The leading field is both the tag a reader picks the lines
+    out of stderr by and the schema version. *)
+let config_record_to_json ({ key; value; source } : config_record) =
+  let level_tag = function
+    | Cmdline_level -> "commandline"
+    | Env_level -> "environment"
+    | Config_file_level -> "config_file"
+  in
+  let source_tag = function
+    | From_cmdline _ -> "commandline"
+    | From_env _ -> "environment"
+    | From_config_file -> "config_file"
+    | From_profile _ -> "profile"
+    | From_default -> "default"
+  in
+  (* The concrete place a non-profile source names: the argv element, the variable, the file. *)
+  let explicit_origin = function
+    | From_cmdline arg -> Some arg
+    | From_env var -> Some var
+    | From_config_file -> Some config_file_path
+    | From_profile _ | From_default -> None
+  in
+  let layer, profile, origin =
+    match source with
+    | From_profile (level, name) ->
+        (level_tag level, Some name, explicit_origin (snd profile_selection))
+    | _ -> (source_tag source, None, explicit_origin source)
+  in
+  let opt = function None -> "null" | Some s -> json_string_literal s in
+  Printf.sprintf
+    {|{"ocannl_config":1,"key":%s,"value":%s,"source":%s,"layer":%s,"profile":%s,"origin":%s}|}
+    (json_string_literal key) (json_string_literal value)
+    (json_string_literal (source_tag source))
+    (json_string_literal layer) (opt profile) (opt origin)
+
+(** [record_config_resolution ~key (value, source)] records one resolution, and prints it when
+    [log_config_json] is on. A resolution identical to the key's last record adds nothing; one that
+    differs (the sources changed under the process) is a new record, so the change stays visible.
+    The bookkeeping and the line share one lock, so the stream's order is the records' order; each
+    line goes out in one write.
+
+    [resolved_config ()] is every setting this process has resolved so far, in the order it was
+    first resolved (a changed re-resolution appended where it happened): exactly the records the
+    [log_config_json] stream printed, whether or not the stream is on. Observational -- it looks
+    nothing up and prints nothing. It covers every read through this module's getters, beginning
+    with the bootstrap settings; a setting never read is absent, since most defaults belong to their
+    read sites. *)
+let record_config_resolution, resolved_config =
+  let mutex = Stdlib.Mutex.create () in
+  let records_rev : config_record list ref = ref [] in
+  let last_record = Hashtbl.create (module String) in
+  let equal_source s1 s2 =
+    match (s1, s2) with
+    | From_cmdline a1, From_cmdline a2 | From_env a1, From_env a2 -> String.equal a1 a2
+    | From_config_file, From_config_file | From_default, From_default -> true
+    | From_profile (l1, n1), From_profile (l2, n2) -> equal_config_level l1 l2 && String.equal n1 n2
+    | (From_cmdline _ | From_env _ | From_config_file | From_profile _ | From_default), _ -> false
+  in
+  let record ~key (value, source) =
+    Stdlib.Mutex.protect mutex (fun () ->
+        match Hashtbl.find last_record key with
+        | Some (last : config_record)
+          when String.equal last.value value && equal_source last.source source ->
+            ()
+        | _ ->
+            let r = { key; value; source } in
+            Hashtbl.set last_record ~key ~data:r;
+            records_rev := r :: !records_rev;
+            if !log_config_json then (
+              Stdio.Out_channel.output_string Stdio.stderr (config_record_to_json r ^ "\n");
+              Stdio.Out_channel.flush Stdio.stderr))
+  in
+  let resolved () = Stdlib.Mutex.protect mutex (fun () -> List.rev !records_rev) in
+  (record, resolved)
+
+(** Bootstrap values cannot trace themselves until the sourcing switches are settled. Report the
     sourced resolutions already used above, without another precedence walk. [no_config_file]
     deliberately has no file source, and every bootstrap read has no profile source. *)
 let () =
+  let bootstrap =
+    [
+      ("log_config_sourcing", "false", log_config_sourcing_resolution);
+      ("log_config_json", "false", log_config_json_resolution);
+      ("no_config_file", "false", no_config_file_resolution);
+      ("suppress_welcome_message", "false", suppress_welcome_message_resolution);
+      ("profile", "", profile_selection);
+    ]
+  in
   if !log_config_sourcing then (
     Stdio.eprintf
       "\nOCANNL: settings resolved before the ordinary per-key trace could report them:\n%!";
-    let report n ~default (value, source) =
-      Stdio.eprintf "Retrieving commandline, environment, or config file variable ocannl_%s\n%!" n;
-      Stdio.eprintf "%s\n%!" (describe_config_source ~value ~default source)
-    in
-    report "log_config_sourcing" ~default:"false" log_config_sourcing_resolution;
-    report "no_config_file" ~default:"false" no_config_file_resolution;
-    report "suppress_welcome_message" ~default:"false" suppress_welcome_message_resolution;
-    report "profile" ~default:"" profile_selection)
+    List.iter bootstrap ~f:(fun (n, default, (value, source)) ->
+        Stdio.eprintf "Retrieving commandline, environment, or config file variable ocannl_%s\n%!" n;
+        Stdio.eprintf "%s\n%!" (describe_config_source ~value ~default source)));
+  List.iter bootstrap ~f:(fun (key, _, resolution) -> record_config_resolution ~key resolution)
 
 let profile_lookup =
   Option.map active_profile ~f:(fun (level, name, table) ->
@@ -1635,6 +1768,7 @@ let unchecked_global_arg_with_source ~default ~arg_name:n =
       ~file:(Hashtbl.find config_file_args) ~profile:profile_lookup ~default ~arg_name:n
   in
   if with_debug then Stdio.eprintf "%s\n%!" (describe_config_source ~value:result ~default source);
+  record_config_resolution ~key:n (result, source);
   Hash_set.add accessed_global_args n;
   (result, source)
 

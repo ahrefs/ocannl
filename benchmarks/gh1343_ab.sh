@@ -9,8 +9,9 @@
 # benchmarks/ab.py (gh-ocannl-1443): each built once in a worktree of its own, then the two
 # executables as the arms of one bin_cells run -- hermetic (no OCANNL_*/BENCH_*/OpenMP variable: on
 # Linux the pool-parallel loops run on OpenMP, and an inherited OMP_NUM_THREADS=1 would quietly
-# serialize exactly what is measured), backend pinned to cc, no config file, the configuration trace
-# read back, supervised, interleaved AB BA ..., paired round by round with the exact sign test.
+# serialize exactly what is measured), backend pinned to cc, no config file, the configuration
+# records read back, supervised, interleaved AB BA ..., paired round by round with the exact sign
+# test.
 #
 # Usage:
 #   benchmarks/gh1343_ab.sh ROOT BASE OUT ROUNDS STEPS [AB-OPTION...]

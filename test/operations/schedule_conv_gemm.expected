@@ -48,10 +48,12 @@ cvft: every compiling candidate of the folded segment matches the natural form r
 cvft: no candidate of the folded segment fails other than at companion coverage: true
 cvft: every compiling candidate of the folded segment is labeled tensorized: true
 cvu: conv seeds per fission segment (GPU staged on metal; serial+grid on cc): true
+cvu: every per-segment GPU candidate dedups against its whole-routine twin (none timed): true
 cvu: tuned conv matches the untuned twin within tolerance: true
 cvu2: GPU staged stride-2 conv (compacted) matches the natural form within tolerance: true
 cvu2: the GPU staged stride-2 conv pipeline's routine is labeled tensorized: true
 cvu2: stride-2 conv seeds per fission segment (GPU staged on metal; serial+grid on cc): true
+cvu2: every per-segment GPU stride-2 candidate dedups against its whole-routine twin (none timed): true
 cvu2: tuned stride-2 conv matches the untuned twin within tolerance: true
 cvs2b: the strided non-dividing row seeds a padded row-panel flavor: true
 cvs2b: every per-segment stride-2 candidate matches the natural form within tolerance: true

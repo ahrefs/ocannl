@@ -6,7 +6,7 @@
 # Register_tile.rm_cap rows at the widest width the machine renders at the compute precision), so
 # the comparison is two geometries, not two builds of the model. The cells are bin_cells.py's
 # (gh-ocannl-1565): per case, one run whose two arms are rnA and rnB, hermetic (no OCANNL_*/BENCH_*/
-# OpenMP variable, no config file, the configuration trace read back), supervised, visited in
+# OpenMP variable, no config file, the configuration records read back), supervised, visited in
 # Bench_design's order (AB BA ...) and paired round by round on the bench's bench-result lines.
 #
 # Usage:

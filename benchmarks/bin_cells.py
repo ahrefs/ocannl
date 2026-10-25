@@ -17,25 +17,28 @@ revisions.
   from the cells' environment, and each cell runs with `--ocannl_no_config_file=true` from a fresh
   directory of its own under DIR, so neither an exported variable nor any `ocannl_config` on any
   path can reach it. What is left is the command line -- the driver's three pins first, then the
-  bench's common arguments (after `--`), then the arm's -- over the defaults of the commit the
-  bench was built from. A runner mode or an OpenMP control that IS the treatment is stated: with
-  `--env NAME=VALUE` for every cell, or as the leading NAME=VALUE words of an arm's ARGS (as
-  `env`(1) reads them) for that arm; a stated OCANNL_* variable is refused, since a library setting
-  is stated on the command line, where the trace reads it back. Device and loader runtime controls
+  bench's common arguments (after `--`), then the arm's -- over the defaults of the commit the bench
+  was built from. A runner mode or an OpenMP control that IS the treatment is stated: with `--env
+  NAME=VALUE` for every cell, or as the leading NAME=VALUE words of an arm's ARGS (as `env`(1) reads
+  them) for that arm; a stated OCANNL_* variable is refused, since a library setting is stated on
+  the command line, where its configuration record reads it back. Device and loader runtime controls
   (CUDA_*, HIP_*, HSA_*, MTL_*, DYLD_*, LD_*, ... -- `cells.RUNTIME_PREFIXES`) are the box's: some
   boxes cannot run without them, so they pass through, and each one present is recorded with its
   value beside the numbers (OCAMLRUNPARAM, the OCaml runtime's, among them), as are the toolchain
   variables (PATH, TMPDIR, SDKROOT, ...); every other variable is recorded by name only, since an
   inherited environment carries credentials no name pattern recognizes. On the C backends the
-  compiler the kernels are compiled with -- the resolved `cc_backend_compiler_command`, else
-  `ocamlc -config`'s `c_compiler` -- is resolved on the cells' PATH and fingerprinted per arm. The
-  build, when the driver does it, runs with DUNE_* and OCAMLPARAM cleared and the root and build
-  directory named, so the executable measured is the one built from this checkout.
+  compiler the kernels are compiled with -- the resolved `cc_backend_compiler_command`, else `ocamlc
+  -config`'s `c_compiler` -- is resolved on the cells' PATH and fingerprinted per arm. The build,
+  when the driver does it, runs with DUNE_* and OCAMLPARAM cleared and the root and build directory
+  named, so the executable measured is the one built from this checkout.
 - The resolved configuration is echoed, not assumed. Each cell runs under
-  `--ocannl_log_config_sourcing=true`, and the driver reads that trace back: every setting the
-  process read, with its value and where it came from. A cell fails when any setting came from the
-  environment or a config file, when the backend it ran is not the one pinned, or when the trace is
-  unreadable; the run fails when two cells of one arm resolved a setting differently. The report
+  `--ocannl_log_config_json=true`, and the driver reads the library's resolved-configuration
+  records back from its stderr (`config_records.py`, gh-ocannl-1566): every setting the process
+  read, with its value and where it came from. A cell fails when any setting came from the
+  environment or a config file (a profile picked there included), when a commandline source names
+  no argument of the cell, when the backend it ran is not the one pinned, or when a record is
+  unreadable or there are none; the run fails when two cells of one arm resolved a setting
+  differently. The report
   lists what the arms differ by as RESOLVED, and the whole resolved configuration beside the
   numbers, so a published number carries the settings that produced it -- the knobs a bench cannot
   pin itself (`autotune_bound_pruning`, the roofline constants, `gpu_graph_capture`, ...) included.
@@ -97,8 +100,9 @@ from pathlib import Path
 import bench_output
 import box_gate
 import cells
-from cells import (TraceError, consistency_problems, design_orders, parse_config_trace,  # noqa: F401
-                   sign_test_p, treatment_problems)
+import config_records  # noqa: F401  (re-exported: test/operations/bin_cells.py reads it here)
+from cells import (consistency_problems, design_orders, sign_test_p,  # noqa: F401
+                   treatment_problems)
 from display_safe import code_span, display_value, log_line, table_lines
 
 ROOT = cells.ROOT
@@ -307,7 +311,7 @@ def render_report(manifest, records, problems, title="bin/ bench cells", extra=(
         a = next(a for a in arms if a in configs and k in configs[a])
         e = configs[a][k]
         rows.append((code_span("ocannl_" + k), display_value(e["value"]),
-                     e["source"] + (f" {display_value(e['detail'])}" if e["detail"] else ""),
+                     display_value(config_records.provenance(e)),
                      "differs" if k in differing else "all arms"))
     if rows:
         lines += table_lines(("setting", "value", "source", "arms"), rows)

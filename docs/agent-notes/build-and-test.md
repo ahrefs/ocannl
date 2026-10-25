@@ -4782,10 +4782,12 @@ box.
   synthesized, beside the executed GPU legs (gh-ocannl-1275). Per-PR CI runs cc, and on cc a
   GPU-gated premise is `Verdict.skipped`, so every later claim of that section exercises the
   mechanism's absence. Section 6 of `fission_replay_segmentation` replayed an UNFOLDED segmentation
-  on cc, and a reintroduced replay policy gate passed there. The synthetic premise is the GPU
-  pipeline called with an explicit policy whatever the host: `Sched.default_gpu`,
-  `Sched.zero_expansion` and `~promote_locals:true` at `Ir.Backend_intf.no_hardware_limits` and an
-  explicit `~min_parallel:1`, so the leg reads no ambient threshold. The leg asserts its premise
+  on cc, and a reintroduced replay policy gate passed there. The synthetic premise is the tuner's
+  own pipeline under a GPU target whatever the host (`Ll_test.tuner_segments
+  ~target:(Ll_test.synthetic_gpu ())`, gh-ocannl-1483: `Sched.default_gpu`, `Sched.zero_expansion`
+  and `~promote_locals:true` at `Ir.Backend_intf.no_hardware_limits`); its zero policy reads the
+  configured `gpu_schedule_min_parallel`, so a leg whose premise depends on the threshold pins it
+  for the process (section 6 sets it to 1). The leg asserts its premise
   unskipped (here: a `Normal` segment opening with the per-cell zero, carrying a non-empty
   schedule, so the reconstruction claim cannot compare two empty schedules). Then it claims
   structurally: canonical digests and reconstructed schedules (`SC.save_segments` on both sides). It

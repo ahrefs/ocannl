@@ -126,20 +126,24 @@ type arm = {
     LL.optimized -> ([ `Normal | `Zeros | `Solo ] * LL.optimized * S.schedule * LL.optimized) list;
 }
 
-let gpu_fission ?(fold_zeros = false) ~keep o =
+let gpu_fission ~keep o =
   let keep_mapping = if keep then S.fission_keep_mapping ~is_gpu:true ~limits else None in
-  S.fission_scheduled ~promote_locals:true ~fold_zeros ?keep_mapping ~preset:(S.default_gpu ~limits)
+  S.fission_scheduled ~promote_locals:true ?keep_mapping ~preset:(S.default_gpu ~limits)
     ~zero_sched:(S.zero_expansion ~limits) ~static_indices:[] o
+
+(* The folded zeros are the per-segment sketch candidates' pipeline: the tuner's own segmentation
+   ([Ll_test.tuner_segments], gh-ocannl-1483), replayed on the compiled record as a candidate
+   compiles it. *)
+let tuner_fission o =
+  let target = L.synthetic_gpu ~limits () in
+  let plan, _ = L.tuner_segments ~target o in
+  snd (L.tuner_replay ~target ~plan ~schedule:(fun _ _ -> None) o)
 
 let arms =
   [
     { arm = "GPU pipeline, schedule-aware"; folds = false; fission = gpu_fission ~keep:true };
     { arm = "GPU pipeline, legality-only"; folds = false; fission = gpu_fission ~keep:false };
-    {
-      arm = "GPU pipeline, schedule-aware, folded zeros";
-      folds = true;
-      fission = gpu_fission ~fold_zeros:true ~keep:true;
-    };
+    { arm = "GPU pipeline, schedule-aware, folded zeros"; folds = true; fission = tuner_fission };
     {
       arm = "CPU pipeline";
       folds = false;

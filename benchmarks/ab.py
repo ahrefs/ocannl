@@ -6,7 +6,7 @@
 
 builds the dune TARGET once at each revision, each in a detached worktree of this repository under
 DIR, and then measures the two executables as the two arms of one `bin_cells.py` run: the same
-hermetic cells, the same configuration-trace check, the same supervision, visited in
+hermetic cells, the same resolved-configuration check, the same supervision, visited in
 `Bench_design`'s order (for two arms, AB BA AB BA ...), paired round by round with the exact sign
 test, and written as one table through display_safe. The first revision is the reference of the
 ratios. Everything after `--` is the bench's common arguments; every bin_cells option the two arms

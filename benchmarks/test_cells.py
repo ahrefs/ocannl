@@ -3,7 +3,7 @@
 repository, `gh1343_ab.sh` (which writes its "before" commit itself), and `gh1180_tie_ab.sh`.
 
 A stub bench is a small Python program standing in for an OCANNL executable: it echoes the
-`log_config_sourcing` trace a real one prints for its `--ocannl_*` arguments (the trace reader
+`log_config_json` records a real one prints for its `--ocannl_*` arguments (the record reader
 itself is held to the library's real output by test/operations/bin_cells.py) and prints the lines
 the driver reads. A stub `dune` first on PATH builds a revision by writing such a stub, whose
 reported time comes from that revision's own `arrayjit/lib/schedule.ml` -- so a number in a report
@@ -24,17 +24,18 @@ import box_gate
 
 HERE = Path(__file__).resolve().parent
 
-# The trace a library getter prints, for every `--ocannl_<key>=<value>` the stub was given, and
-# then `body` (Python source, with `argv` and `positionals` bound).
+# The record `Utils.config_record_to_json` prints (config_records.py's schema) for every
+# `--ocannl_<key>=<value>` the stub was given, and then `body` (Python source, with `argv` and
+# `positionals` bound).
 STUB = '''#!{python}
-import sys
+import json as _json, sys
 argv = sys.argv[1:]
 for a in argv:
     if a.startswith("--ocannl_") and "=" in a:
         key, value = a[len("--ocannl_"):].split("=", 1)
-        print("Retrieving commandline, environment, or config file variable ocannl_" + key,
-              file=sys.stderr)
-        print(f"Found {{value}}, commandline {{a}}", file=sys.stderr)
+        print(_json.dumps({{"ocannl_config": 1, "key": key, "value": value,
+                           "source": "commandline", "layer": "commandline", "profile": None,
+                           "origin": a}}, separators=(",", ":")), file=sys.stderr)
 positionals = [a for a in argv if not a.startswith("--")]
 {body}
 '''
@@ -253,8 +254,8 @@ class Gh1180DriverTest(StubRunTest):
         self.assertEqual([r["arm"] for r in records], ["rn4", "rn6", "rn6", "rn4"])
         # The case's precision flag is on argv, the ambient one cleared.
         self.assertTrue(all(r["config"]["fp16_arithmetic"] == {
-            "value": "false", "source": "commandline", "detail": "--ocannl_fp16_arithmetic=false"}
-            for r in records))
+            "value": "false", "source": "commandline", "layer": "commandline", "profile": None,
+            "origin": "--ocannl_fp16_arithmetic=false"} for r in records))
 
     def test_the_standalone_summary_reapplies_the_runs_own_checks(self):
         proc, out = self.measure()
@@ -263,7 +264,8 @@ class Gh1180DriverTest(StubRunTest):
         # cell still reads ok, and only the run-level consistency rule can fail it.
         jsonl = out / "f16-64-8-16-3-rn4-rn6/cells.jsonl"
         records = self.records(jsonl.parent)
-        records[0]["config"]["late_setting"] = {"value": "x", "source": "default", "detail": ""}
+        records[0]["config"]["late_setting"] = {"value": "x", "source": "default",
+                                                "layer": "default", "profile": None, "origin": None}
         jsonl.write_text("".join(json.dumps(r) + "\n" for r in records))
         proc = self.run_tool([box_gate.BASH, str(HERE / "gh1180_tie_ab.sh"), "summary", str(out)])
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)

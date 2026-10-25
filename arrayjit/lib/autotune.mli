@@ -213,6 +213,66 @@ val fiss_sketch_label :
     entries rendered alike, so the part before it is the candidate's focus and reads as the bare
     single's whole label does. *)
 
+val segment_preset :
+  ?block_size:int ->
+  presets:[ `Search | `Config ] ->
+  is_gpu:bool ->
+  is_cpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  Ir.Low_level.optimized ->
+  Ir.Schedule.schedule
+(** The default preset a segment gets in the tuner's fission pipelines (gh-ocannl-1483):
+    {!Ir.Schedule.default_gpu} on a GPU backend, {!Ir.Schedule.default_cpu} on a CPU one, nothing
+    otherwise. [`Search] is the search's aggressive [min_parallel:1] thresholds — what {!tune}'s
+    candidates and their per-segment seeding use; [`Config] the configured ones — what
+    {!model_default} and {!model_explain} use, and with no [block_size] the untuned default
+    pipeline's own presets. *)
+
+val tuner_fission :
+  ?arity_cuts:bool ->
+  ?fold_zeros:bool ->
+  ?replay:Ir.Schedule.segmentation * (int -> Ir.Low_level.optimized -> Ir.Schedule.schedule option) ->
+  is_gpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  preset:(Ir.Low_level.optimized -> Ir.Schedule.schedule) ->
+  static_indices:Ir.Indexing.static_symbol list ->
+  Ir.Low_level.optimized ->
+  Ir.Schedule.segmentation
+  * ([ `Normal | `Zeros | `Solo ]
+    * Ir.Low_level.optimized
+    * Ir.Schedule.schedule
+    * Ir.Low_level.optimized)
+    list
+(** The fission pipeline the tuner's call sites segment and compile under (gh-ocannl-1483):
+    {!Ir.Schedule.fission_segmented} {e in place} on the argument (its placements receive the
+    promotions), with the untuned default pipeline's placements ([promote_locals] on GPU), its
+    schedule-aware merge probes ({!Ir.Schedule.fission_keep_mapping}) and its zero policy
+    ({!Ir.Schedule.zero_expansion} on GPU, none otherwise). A fissioned candidate compiles through
+    it, a per-segment sketch candidate with its recorded segmentation as [replay]. *)
+
+val sketch_segmentation :
+  ?arity_cuts:bool ->
+  presets:[ `Search | `Config ] ->
+  is_gpu:bool ->
+  is_cpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  static_indices:Ir.Indexing.static_symbol list ->
+  Ir.Low_level.optimized ->
+  Ir.Schedule.segmentation
+  * ([ `Normal | `Zeros | `Solo ]
+    * Ir.Low_level.optimized
+    * Ir.Schedule.schedule
+    * Ir.Low_level.optimized)
+    list
+(** The segmentation the per-segment sketch candidates are enumerated ({!tune}, at [`Search]
+    presets, [arity_cuts] for its finer pass), modeled ({!model_default}) and explained
+    ({!model_explain}, both at [`Config]) under (gh-ocannl-1483): {!tuner_fission} with the zero
+    fold ([fold_zeros], gh-ocannl-1175) and {!segment_preset}'s presets, derived on a hermetic copy
+    of the argument, so its placements are left as they were. The tuples' segments carry the copy's
+    placements, promotions included. A test that needs the tuner's per-segment view derives it here
+    rather than restating these settings. Raises {!Ir.Schedule_outcome.Cause_at} as
+    {!Ir.Schedule.fission_segmented} does. *)
+
 type matmul_site = {
   m_i : Ir.Indexing.symbol;
   m_j : Ir.Indexing.symbol;

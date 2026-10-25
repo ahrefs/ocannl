@@ -150,6 +150,7 @@ untimed-model -- they are the cache capacity, cache bandwidth, scalar issue rate
 execution-neutral -- startup and configuration-sourcing chatter, which descriptor foreign C-library chatter follows, and whether its known per-event noise is collapsed into a count
   collapse_foreign_stderr_noise
   detach_c_stderr
+  log_config_json
   log_config_sourcing
   never_capture_stdout
   suppress_welcome_message

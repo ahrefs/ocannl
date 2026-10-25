@@ -776,9 +776,10 @@ OCANNL_CC_PARALLEL_GRID=none` times single-threaded segments that sum to the ser
   (gh-ocannl-743). Those executables read the ambient `OCANNL_*` environment and the nearest
   `ocannl_config`, so the same command line could measure different treatments; the driver clears
   `OCANNL_*`/`BENCH_*`/`OMP_*`/`GOMP_*`/`KMP_*`, runs each cell with
-  `--ocannl_no_config_file=true` from a directory of its own, and reads back the
-  `log_config_sourcing` trace: a cell fails if any setting came from the environment or a config
-  file, the run fails if two cells of one arm resolved a setting differently, and the report lists
+  `--ocannl_no_config_file=true` from a directory of its own, and reads back the library's
+  resolved-configuration records (`--ocannl_log_config_json=true`, one JSON line per setting on
+  stderr, read by `benchmarks/config_records.py`; gh-ocannl-1566): a cell fails if any setting came
+  from the environment or a config file, the run fails if two cells of one arm resolved a setting differently, and the report lists
   every resolved setting and what the arms differ by. Arms are named argument sets
   (`--arm rn6=--rn=6`), visited as whole processes round by round in `Bench_design`'s spread
   mirrored rotation, each cell a supervised process group under `--cell-timeout`; the report pairs
@@ -793,14 +794,14 @@ OCANNL_CC_PARALLEL_GRID=none` times single-threaded segments that sum to the ser
   --rounds 12 --arm rn4=--rn=4 --arm rn6=--rn=6 -- f16 512 20`. Its control is
   `test/operations/bin_cells.py`, against a stand-in bench that prints the library's own trace.
 - `cells.py` — the shared cell runner under `bin_cells.py` and `ab.py` (gh-ocannl-1565): the
-  hermetic environment, the configuration-trace check, `cell_group` supervision, `Bench_design`'s
+  hermetic environment, the resolved-configuration check, `cell_group` supervision, `Bench_design`'s
   visiting order, the cell loop and the paired sign test, so a new driver imports them rather than
   re-deriving them (`gh834_cells.sh` took ten review rounds of exactly that machinery).
 - `ab.py` — the two-revision A/B driver (gh-ocannl-1443): `python3 benchmarks/ab.py BASE HEAD
   --target bin/narrow_gebp_bench.exe --backend cc --out DIR --rounds 12 -- f16 512 20` builds the
   dune target once per revision, each in a detached worktree of its own under DIR (removed once its
   executable is copied out), and measures the two executables as the arms `a` and `b` of one
-  `bin_cells.py` run, so the cells are hermetic, trace-checked, supervised, visited AB BA ... and
+  `bin_cells.py` run, so the cells are hermetic, configuration-checked, supervised, visited AB BA ... and
   paired with the exact sign test, the report naming each arm's commit beside its sha256. bin_cells'
   shared options pass through (`--reader record --metric step_ms.p50`, `--env`, `--box`), and
   `--args-a`/`--args-b` give an arm arguments of its own. A treatment that is not yet a commit is

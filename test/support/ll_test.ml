@@ -1004,3 +1004,79 @@ let advertised ~backend_name ~a_prec ~b_prec ~d_prec =
 let census_agrees_with_capability ~backend_name ~what ~a_prec ~b_prec ~d_prec census =
   if advertised ~backend_name ~a_prec ~b_prec ~d_prec then all_tensorized ~what census
   else all_declined ~what census
+
+(** {1 The tuner's segmentation}
+
+    A test that needs the autotuner's per-segment view — the fission segments its per-segment sketch
+    candidates are seeded on and compile into — takes it from here (gh-ocannl-1483), never from a
+    hand-rolled {!Ir.Schedule.fission_scheduled} call: every setting of the pipeline (promoted
+    locals, the zero fold, the schedule-aware merge probes, the zero policy, the search's presets)
+    is the tuner's own ({!Autotune.sketch_segmentation}, {!Autotune.tuner_fission}), so a setting
+    the tuner changes reaches the test. A hand-rolled copy at no hardware limits and without
+    promoted locals left [qkv_zero_init]'s routine-local product's folded zero a whole-node
+    [Zero_out], and the leg passed on the code gh-ocannl-1453 fixed. *)
+
+type tuner_target = { is_gpu : bool; is_cpu : bool; limits : Ir.Backend_intf.hardware_limits }
+(** What the tuner reads off the compiling context to segment a routine. *)
+
+(** The host's: the backend {!base_ctx} compiles on, classified as the tuner classifies it, and its
+    hardware limits. *)
+let host_target () =
+  let ctx = Lazy.force base_ctx in
+  let name = Context.backend_name ctx in
+  {
+    is_gpu = Ir.Schedule.backend_is_gpu name;
+    is_cpu = Ir.Schedule.backend_is_cpu name;
+    limits = Context.hardware_limits ctx;
+  }
+
+(** A GPU pipeline whatever the host, at [limits] (default {!Ir.Backend_intf.no_hardware_limits}):
+    the cc-runnable premise of a GPU-gated mechanism's structural leg (gh-ocannl-1275). The zero
+    policy still reads the configured [gpu_schedule_min_parallel]; a leg whose premise must not
+    depend on it pins it for the process. *)
+let synthetic_gpu ?(limits = Ir.Backend_intf.no_hardware_limits) () =
+  { is_gpu = true; is_cpu = false; limits }
+
+(** [tuner_segments o]: the segmentation the tuner's per-segment sketch candidates are enumerated
+    under ({!Autotune.sketch_segmentation} at {!Autotune.tune}'s [`Search] presets), and its
+    segments, on a hermetic copy of [o] — [o]'s own placements stay as they were. [target] defaults
+    to {!host_target}. *)
+let tuner_segments ?target ?arity_cuts ?(static_indices = []) o =
+  let t = match target with Some t -> t | None -> host_target () in
+  Autotune.sketch_segmentation ?arity_cuts ~presets:`Search ~is_gpu:t.is_gpu ~is_cpu:t.is_cpu
+    ~limits:t.limits ~static_indices o
+
+(** {!tuner_segments} with the zero fold left out — the same pipeline and presets, on a copy of [o]:
+    the baseline a claim that the fold changes nothing else compares against. *)
+let tuner_segments_unfolded ?target ?(static_indices = []) o =
+  let t = match target with Some t -> t | None -> host_target () in
+  Autotune.tuner_fission ~fold_zeros:false ~is_gpu:t.is_gpu ~limits:t.limits
+    ~preset:
+      (Autotune.segment_preset ~presets:`Search ~is_gpu:t.is_gpu ~is_cpu:t.is_cpu ~limits:t.limits)
+    ~static_indices
+    {
+      o with
+      LL.traced_store = Hashtbl.copy o.LL.traced_store;
+      optimize_ctx = LL.copy_optimize_ctx o.LL.optimize_ctx;
+    }
+
+(** [tuner_replay ~plan ~schedule o]: [plan] applied to [o] in place as a per-segment sketch
+    candidate compiles it ({!Autotune.tuner_fission} with [plan] as its replay): the [i]th segment
+    gets [schedule i pre] where that is [Some], its kind's [`Search] preset otherwise. Raises
+    {!Ir.Schedule_outcome.Cause_at} where [plan] does not fit [o] or a schedule does not apply. *)
+let tuner_replay ?target ?(static_indices = []) ~plan ~schedule o =
+  let t = match target with Some t -> t | None -> host_target () in
+  Autotune.tuner_fission ~replay:(plan, schedule) ~is_gpu:t.is_gpu ~limits:t.limits
+    ~preset:
+      (Autotune.segment_preset ~presets:`Search ~is_gpu:t.is_gpu ~is_cpu:t.is_cpu ~limits:t.limits)
+    ~static_indices o
+
+(** A [Context.compile ~lowered_transform] that compiles [o] as the tuner's per-segment candidates
+    do: {!tuner_segments} derived on a copy of the routine the transform receives, then
+    {!tuner_replay}ed on the routine itself under [schedule] (default: every segment its kind's
+    preset), one kernel per segment. *)
+let tuner_transform ?target ?arity_cuts ?static_indices ?(schedule = fun _ _ -> None) o =
+  let plan, _ = tuner_segments ?target ?arity_cuts ?static_indices o in
+  List.map
+    (snd (tuner_replay ?target ?static_indices ~plan ~schedule o))
+    ~f:(fun (_, _, _, post) -> post)
