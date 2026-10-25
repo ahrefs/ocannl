@@ -71,6 +71,17 @@
  (modules bench_design)
  (libraries base))
 
+; The two-stage finalist selection projection_shape_bench applies (gh-ocannl-1531): shortlist each
+; class's top arms from their geometry rounds, re-time the shortlist interleaved, pick from the
+; re-timing. Its own library for the reason the ones above are; depends on base alone, so the
+; scripted-noise test that pins it links no backend.
+
+(library
+ (name bench_select)
+ (package neural_nets_lib)
+ (modules bench_select)
+ (libraries base))
+
 ; The register-tile geometry request the two C-backend GEBP benches share (gh-ocannl-620
 ; follow-up): `--tile=rm,rn,lanes` / `--rn=N` parsed once, so `narrow_gebp_bench` and
 ; `schedule_bench` cannot disagree about the spelling or about what `--rn=` derives. Its own
@@ -235,6 +246,7 @@
   mtime.clock.os
   bench_args
   bench_design
+  bench_select
   bench_out)
  (preprocess
   (pps ppx_here ppx_ocannl))
