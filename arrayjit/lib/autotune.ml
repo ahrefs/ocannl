@@ -5009,10 +5009,14 @@ let reduction_sink_enabled () = Utils.registered_flag ~arg_name:"gpu_default_red
 
 (* gh-ocannl-1405: whether the untuned plan also takes the sites whose accumulator precision widens
    their storage precision (a bf16 weight gradient on CUDA, fp8 on CUDA and HIP): seeded, sunk and
-   admitted to the model's numerics-preserving set. Their summation order is still the default's,
-   but the whole reduction accumulates at [accum_prec] and rounds to storage once, where the default
-   rounds after every outer contraction step -- an accuracy gain that changes the result, hence a
-   numerics gate: off by default, on in the [approximate] profile, pinned off in [reproducible]. *)
+   admitted to the model's numerics-preserving set. Seeding one keeps its result: the sketch's
+   [Privatize] mints its tile wide only where the default's serial rendering widens too
+   (gh-ocannl-1151), so a backprop weight gradient, which the default narrows after every batch row,
+   keeps a storage-precision tile and the same narrowing points (measured bitwise on CUDA,
+   test/operations/seeded_narrow_storage). Sinking one does not: the sunk reduction's accumulator is
+   localized below its write loops, where code generation widens it, so it rounds to storage once
+   instead of after every row -- an accuracy gain that changes the result, hence a numerics gate:
+   off by default, on in the [approximate] profile, pinned off in [reproducible]. *)
 let seed_narrow_storage_enabled () =
   Utils.registered_flag ~arg_name:"gpu_default_seed_narrow_storage"
 
@@ -5054,9 +5058,8 @@ let seeded_params_judged ?capabilities ?(admit_narrow = false) ~limits ~accum_pr
         (Printf.sprintf "site %s: reduction extent %d is under the seeding threshold %d"
            (Ir.Tnode.debug_name site.m_d) (site_reduction_extent site) min_reduction)
   | Some (site, _, _) when not (admit_narrow || accumulates_at_storage ~accum_prec site) ->
-      (* Left to the default, so that seeding never changes a result -- unless the narrow-storage
-         admission (gh-ocannl-1405, the [approximate] profile's) trades that for the accuracy of one
-         rounding to storage. *)
+      (* Left to the default unless the narrow-storage admission (gh-ocannl-1405, the [approximate]
+         profile's) takes it, which {!seed_narrow_storage_enabled} explains. *)
       Error
         (Printf.sprintf
            "site %s: the accumulator precision widens its %s storage, so a sketch would change the \

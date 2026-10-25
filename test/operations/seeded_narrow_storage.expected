@@ -12,14 +12,13 @@ with the admission off the bias gradient is bitwise the default pipeline's: true
 where accum_prec widens bf16, with the admission on the weight gradient is seeded: true
 where accum_prec widens bf16, with the admission on the bias gradient is sunk: true
 where accum_prec widens bf16, the admitted routine compiles without falling back: true
-where accum_prec widens bf16, the admission changes the weight gradient in some cell: true
-where accum_prec widens bf16, the admitted weight gradient is closer to the f64 reference: true
+with the admission on the seeded weight gradient is bitwise the default pipeline's: true
+where accum_prec widens bf16, the admission changes the bias gradient in some cell: true
 where accum_prec widens bf16, the admitted bias gradient is closer to the f64 reference: true
-where accum_prec widens bf16, every admitted weight-gradient cell is one bf16 rounding of the reference: true
 where accum_prec widens bf16, every admitted bias-gradient cell is one bf16 rounding of the reference: true
+where accum_prec widens bf16, some default bias-gradient cell is not (the control): true
 where nothing widens, the admission leaves the weight gradient bitwise the default's: true
 where nothing widens, the admission leaves the bias gradient bitwise the default's: true
 where accum_prec widens bf16, with the key unset the seeded default decides as with the admission off, short of what the admission takes: true
 where accum_prec widens bf16, the key stated true seeds what the admission seeds: true
-where accum_prec widens bf16, with the key true the model's weight gradient is one bf16 rounding of the reference in every cell: true
-where accum_prec widens bf16, the default pipeline's weight gradient is not (the control): true
+with the key true the model's weight gradient is bitwise the default pipeline's: true

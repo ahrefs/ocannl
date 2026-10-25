@@ -405,10 +405,12 @@ let config_key_classification : (config_key_class * string * string list) list =
        whether it also takes the sites whose accumulator widens their narrow storage \
        (gh-ocannl-1405) -- which a search seeds as its FIRST candidate and floor (gh-ocannl-1388), \
        so they decide what it times first; a cached winner carries its own ops and segmentation \
-       and replays without consulting them. The last one changes results, yet keys no digest: the \
-       search's own sketches already privatize narrow-storage sites at accumulator width under \
-       every setting of it, so a winner crowned with it on is one a search with it off can crown \
-       too, and its trajectory (the plan digest it seeded) is keyed by the search shape",
+       and replays without consulting them. The last one changes results (its sunk narrow \
+       reductions round to storage once), yet keys no digest, like the split threshold beside it: \
+       under the default regime's search a crowned winner is already free to change numerics \
+       (tensorized forms, split reductions), which is why the reproducible profile turns the \
+       search off, and the trajectory it seeds is keyed by the search shape (the key and the plan \
+       digest)",
       [
         "gpu_default_sketch_min_reduction";
         "gpu_default_split_reduce_min_serial";
@@ -1484,9 +1486,9 @@ winograd_conv=false
 # from the routine alone, but they reassociate long sums into a tree over blocks, which this
 # profile keeps serial.
 gpu_default_split_reduce_min_serial=0
-# The untuned GPU default's narrow-storage seeding (gh-ocannl-1405) at its default, off: a sketch
-# keeps a narrow-storage site's accumulator wide across the whole reduction, where the default
-# pipeline rounds it to storage after every step, so seeding one changes its result.
+# The untuned GPU default's narrow-storage admission (gh-ocannl-1405) at its default, off: a sunk
+# narrow-storage reduction keeps its accumulator wide across the whole reduction, where the default
+# pipeline rounds it to storage after every step, so admitting one changes its result.
 gpu_default_seed_narrow_storage=false
 |}
 
@@ -1579,8 +1581,9 @@ fp_finite_math=true
 # bounds the extra cost at two searches per arm while still exercising the refinement.
 tune_inline_flips=2
 # The untuned CUDA/HIP default also seeds and sinks the sites whose accumulator is wider than their
-# storage (gh-ocannl-1405): a bf16 weight gradient on CUDA, fp8 on CUDA and HIP. The summation
-# order stays the default's, but the reduction rounds to storage once instead of after every step.
+# storage (gh-ocannl-1405): a bf16 weight gradient on CUDA, fp8 on CUDA and HIP. A seeded one keeps
+# its result; a sunk one (a bias gradient) keeps its summation order but rounds to storage once
+# instead of after every step.
 gpu_default_seed_narrow_storage=true
 |}
 

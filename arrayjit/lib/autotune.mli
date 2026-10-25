@@ -2397,17 +2397,18 @@ val seeded_params :
     wider accumulator across the whole reduction where the default rounds it back per contraction
     step, so a narrow-storage site stays on the default rather than change its result --
     [admit_narrow] (default [false]; {!seeded_default}'s [seed_narrow], gh-ocannl-1405) seeds it
-    anyway, trading the bitwise result for one rounding to storage. Otherwise one leaf of the
-    segment's own GPU {!matmul_sketch_tree} — so every refutation the search applies applies here —
-    restricted to the unfused scalar blocktile pipeline without twin flavors: batch loops as grid
-    blocks on a batched site where the device admits them, and the first geometry of a fixed
-    preference list (64x64x8/4x4, 32x32x8/4x4, 32x32x16/2x2, 16x16x8/2x2, 16x16x8/4x4) whose launch
-    has 128 blocks, else the one putting the most threads on the output — among the geometries
-    padding the output by at most an eighth, where there are any. [capabilities] as for
-    {!matmul_sketch_tree}: the compiling context's {!Context.codegen_capabilities}, so the tree's
-    workgroup-memory refutation charges the staged tiles exactly as the gate judging the seeded
-    kernel does; every caller holding a context passes them, the seeded plan's decision rule
-    included. Exposed for tests. *)
+    anyway. (The premise is conservative: [Privatize] mints its tile wide only where the default's
+    serial rendering widens too, gh-ocannl-1151, so a seeded backprop weight gradient keeps the
+    default's narrowing points; see {!seeded_default}.) Otherwise one leaf of the segment's own GPU
+    {!matmul_sketch_tree} — so every refutation the search applies applies here — restricted to the
+    unfused scalar blocktile pipeline without twin flavors: batch loops as grid blocks on a batched
+    site where the device admits them, and the first geometry of a fixed preference list
+    (64x64x8/4x4, 32x32x8/4x4, 32x32x16/2x2, 16x16x8/2x2, 16x16x8/4x4) whose launch has 128 blocks,
+    else the one putting the most threads on the output — among the geometries padding the output by
+    at most an eighth, where there are any. [capabilities] as for {!matmul_sketch_tree}: the
+    compiling context's {!Context.codegen_capabilities}, so the tree's workgroup-memory refutation
+    charges the staged tiles exactly as the gate judging the seeded kernel does; every caller
+    holding a context passes them, the seeded plan's decision rule included. Exposed for tests. *)
 
 val seeded_params_judged :
   ?capabilities:Ir.Backend_intf.codegen_capabilities ->
@@ -2639,10 +2640,12 @@ val seeded_default :
     [approximate] profile, pinned false in [reproducible]; gh-ocannl-1405) also seeds and sinks the
     sites whose accumulator precision widens their storage precision under the backend's
     [accum_prec] -- a bf16 weight gradient on CUDA (and on HIP unless [bf16_arithmetic=true]), fp8
-    on both, f16 under [fp16_arithmetic=false]. Their summation order is still the default's, but
-    the whole reduction accumulates wide and rounds to storage once, where the default rounds after
-    every outer contraction step: the result changes, towards the exact sum. {!model_default}'s
-    numerics-preserving set follows the same admission.
+    on both, f16 under [fp16_arithmetic=false]. A seeded one keeps its result bitwise: the sketch's
+    [Privatize] tile stays at storage precision wherever the default narrows inside the reduction
+    (gh-ocannl-1151). A sunk one does not: localized below its write loops, the accumulator is held
+    wide across the whole reduction and rounds to storage once where the default rounds after every
+    step, so the result changes, towards the exact sum -- which is why the admission is a numerics
+    gate. {!model_default}'s numerics-preserving set follows the same admission.
 
     Before segmenting (on CUDA and HIP), the reductions {!seeded_split_sites} admits at [min_serial]
     (default: config [gpu_default_split_reduce_min_serial], 1024; 0 disables) are split
