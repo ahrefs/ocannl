@@ -1511,6 +1511,45 @@ let vec_narrow_macro ~store_prec ~prec ~lanes =
     elements, which is how [test/operations/cc_march_census] finds the block's instructions. *)
 let partial_staging_idents = ("ocannl_pv__", "ocannl_pc__")
 
+(** {2 Identifiers the emitter derives from a base name (gh-ocannl-1525)}
+
+    Each template [(prefix, suffix)] spells a local the emitter declares, [prefix ^ base ^ suffix],
+    from a tensor node's identifier or a loop symbol's ([Indexing.symbol_ident]) or, for an MMA
+    fragment, a node's uid. Every emission site spells its name through {!derived_name} and one of
+    these, and {!minted_derivations} lists them all, so the kernel code cache's canonical text
+    ({!Kernel_code_cache.canonical_kernel}) renames exactly the names the emitter mints: the base
+    changes from one candidate's lowering to the next (fresh symbols, fresh tile ids, batch-wide
+    disambiguation) while the kernel does not. *)
+
+let derived_name (prefix, suffix) base = prefix ^ base ^ suffix
+
+(* A local array's alias pointer ([local_array_decl ~alias_ptr]). *)
+let mem_alias_derivation = ("", "_mem__")
+
+(* A pool-chunked [Grid] loop's chunk index and bounds. *)
+let grid_chunk_derivations = (("", "_chunk"), ("", "_lo"), ("", "_hi"))
+
+(* A lane all-reduce's value and partials, and a warp-shuffle reduction's. *)
+let lane_reduce_derivations = (("lred_v_", "__"), ("lred_partials_", "__"))
+let warp_reduce_derivations = (("wred_v_", "__"), ("wred_partials_", "__"))
+
+(* An MMA fragment register, named by its node's uid. *)
+let mma_fragment_derivation = ("__mma_fragment_", "")
+
+let minted_derivations =
+  let c, l, h = grid_chunk_derivations in
+  [
+    mem_alias_derivation;
+    c;
+    l;
+    h;
+    fst lane_reduce_derivations;
+    snd lane_reduce_derivations;
+    fst warp_reduce_derivations;
+    snd warp_reduce_derivations;
+    mma_fragment_derivation;
+  ]
+
 (** The cc builtins a register tile's A column widens its rows through, as [(pack, row)], where the
     tile holds [lanes] lanes of [prec] over [store_prec] storage; [None] where each row widens its
     own scalar. [pack] widens one k step's A elements of [lanes] consecutive rows into one vector
@@ -4419,7 +4458,7 @@ module C_syntax (B : C_syntax_config) = struct
     let open PPrint in
     let typ = B.typ_of_prec @@ Lazy.force tn.Tn.storage_prec in
     let ident = get_ident tn in
-    let arr_name = if alias_ptr then ident ^ "_mem__" else ident in
+    let arr_name = if alias_ptr then derived_name mem_alias_derivation ident else ident in
     let align_doc =
       (* SIMD alignment for plain stack arrays (gh-ocannl-164). *)
       match B.aligned_local_attr with
@@ -4589,7 +4628,9 @@ module C_syntax (B : C_syntax_config) = struct
            which can. *)
         match (narrow_operand target_raw, narrow_source a_raw, narrow_source b_raw) with
         | Some target_op, Some a_src, Some b_src -> (
-            let fragment_name = Printf.sprintf "__mma_fragment_%d" fragment.Tn.uid in
+            let fragment_name =
+              derived_name mma_fragment_derivation (Int.to_string fragment.Tn.uid)
+            in
             let render_with active =
               let old = !(ctx.active_mma_accumulator) in
               ctx.active_mma_accumulator := Some active;
@@ -6069,7 +6110,10 @@ module C_syntax (B : C_syntax_config) = struct
     let nchunks = (extent + grain - 1) / grain in
     let it = B.loop_index_type in
     let ident = symbol_ident i in
-    let chunk = ident ^ "_chunk" and lo = ident ^ "_lo" and hi = ident ^ "_hi" in
+    let chunk_d, lo_d, hi_d = grid_chunk_derivations in
+    let chunk = derived_name chunk_d ident
+    and lo = derived_name lo_d ident
+    and hi = derived_name hi_d ident in
     let decls =
       string (Printf.sprintf "const %s%s = (%s)(%s * %d);" it lo (String.strip it) chunk grain)
       ^^ hardline
@@ -6951,7 +6995,7 @@ module C_syntax (B : C_syntax_config) = struct
                   let ident = symbol_ident i in
                   let ctyp = B.typ_of_prec prec in
                   let cast = "(" ^ String.strip B.loop_index_type ^ ")" in
-                  let vname = "lred_v_" ^ ident ^ "__" in
+                  let vname = derived_name (fst lane_reduce_derivations) ident in
                   let combine a b = B.binop_syntax prec op a b in
                   let shuffle_stage off =
                     string (vname ^ " = ")
@@ -6972,7 +7016,7 @@ module C_syntax (B : C_syntax_config) = struct
                   let across_simdgroups =
                     if num_warps = 1 then empty
                     else
-                      let pname = "lred_partials_" ^ ident ^ "__" in
+                      let pname = derived_name (snd lane_reduce_derivations) ident in
                       let barrier = string (Option.value_exn ~here:[%here] B.barrier_syntax) in
                       string
                         (Printf.sprintf "%s%s %s[%d];"
@@ -7229,7 +7273,7 @@ module C_syntax (B : C_syntax_config) = struct
           let ident = symbol_ident i in
           let ctyp = B.typ_of_prec prec in
           let cast = "(" ^ String.strip B.loop_index_type ^ ")" in
-          let vname = "wred_v_" ^ ident ^ "__" in
+          let vname = derived_name (fst warp_reduce_derivations) ident in
           let combine a b = B.binop_syntax prec op a b in
           let shuffle_stage off =
             string (vname ^ " = ")
@@ -7258,7 +7302,7 @@ module C_syntax (B : C_syntax_config) = struct
           let tail =
             if num_warps = 1 then fold_total
             else
-              let pname = "wred_partials_" ^ ident ^ "__" in
+              let pname = derived_name (snd warp_reduce_derivations) ident in
               (* gh-ocannl-1452: the schedule's workgroup-memory estimate charges this declaration
                  through the capability; a disagreement means the two have drifted apart. *)
               (let charged =
@@ -8318,6 +8362,14 @@ struct
     attribute : 'a. int list -> exn -> Stdlib.Printexc.raw_backtrace -> 'a;
         (** Re-raises a failed compile of [assemble idxs] as {!compile_batch} would: attributed to a
             routine's name when the report points at one of those kernels' declarations. *)
+    key_text : int -> string;
+        (** Kernel [i]'s standalone source as a kernel code cache keys it (gh-ocannl-1525): its
+            prelude verbatim, its definition through {!Kernel_code_cache.canonical_kernel} -- the
+            names it owns (symbols, scope locals, its nodes' identifiers, the emitter's
+            {!minted_derivations} of them) renamed by first occurrence and its segment index
+            dropped, so that an unchanged kernel keys alike whatever names the rest of the batch
+            made it take. The backend adds the compiler options and looks the code up by the stored
+            symbol. *)
   }
 
   (** Renders a batch without compiling it: the kernels are rendered by one syntax instance over the
@@ -8349,7 +8401,27 @@ struct
         ~routine_names:(List.map idxs ~f:(fun i -> (names.(i), given_names.(i))))
         exn backtrace
     in
-    { entries = Array.map rendered ~f:fst; assemble; attribute }
+    let key_text i =
+      let def = snd rendered.(i) and full = assemble [ i ] in
+      let llc = lowereds.(i).Low_level.llc in
+      (* The identifiers this rendering gave the kernel's nodes ([get_ident] visits exactly the
+         nodes [touched_tns_in_order] lists). A [Staged_compilation] callback emits text this module
+         does not see, so such a kernel renames none of them. *)
+      let bound =
+        if Low_level.has_staged_compilation llc then []
+        else List.map (Low_level.touched_tns_in_order llc) ~f:Syntax.get_ident
+      in
+      let canonical ~bound =
+        Kernel_code_cache.canonical_kernel ~kernel_name:names.(i) ~bound
+          ~derivations:minted_derivations ~free:Syntax.routine_ident_blacklist
+      in
+      (* The prelude -- includes, the builtins this kernel uses, conditional includes -- is fixed
+         vocabulary, kept verbatim; only the kernel's own definition is renamed. *)
+      match String.chop_suffix full ~suffix:def with
+      | Some prelude -> prelude ^ canonical ~bound def
+      | None -> canonical ~bound:[] full
+    in
+    { entries = Array.map rendered ~f:fst; assemble; attribute; key_text }
 
   (* [compiles_source]: whether [compile_source] runs the vendor compiler, timed as the compile's
      [device_s] ({!Compile_cost}); false for a backend that only retains the source and compiles it

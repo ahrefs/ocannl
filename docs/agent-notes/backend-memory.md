@@ -439,10 +439,7 @@ files.
   compile hits the cache, so the shipped code is the timed code.
 - The `.hip` build artifact stays the routine's FULL generated source whatever was compiled (tests
   read it through `Generated`); `.hsaco`/`.hip_log` belong to the program actually compiled, and
-  `.hip_log` opens with `kernel code cache: compiled k of n kernels`. Reuse is only as high as the
-  re-rendered kernels are byte-identical: identifiers and scope scans run over the whole batch, so a
-  changed segment that mints a node can change its neighbours' text (a miss, never a wrong hit).
-  Guards: `kernel_code_cache` (the cache, any backend), `gpu_kernel_cache` (reuse on HIP and CUDA,
+  `.hip_log` opens with `kernel code cache: compiled k of n kernels`. Guards: `kernel_code_cache` (the cache, any backend), `gpu_kernel_cache` (reuse on HIP and CUDA,
   with an `OCANNL_HIP_KERNEL_CACHE_MIB=0` / `OCANNL_CUDA_KERNEL_CACHE_MIB=0` negative control).
 - **CUDA has the same cache, for a different reason** (gh-ocannl-1529, `cuda_kernel_cache_mib`,
   default 64): nvrtc and the driver's PTX JIT cost per KERNEL, not per program. Measured on rog
@@ -462,3 +459,25 @@ files.
   earlier run compiled reads warm. Measured that way (`gh1529_nvrtc_cost.sh ab`), the cache took a
   cold gpt2 b8 search's candidate compile from 3.46 s to 1.73 s (nvrtc 1.38 to 0.40 s, JIT 0.96 to
   0.17 s, 29 of 261 kernels compiled) and fit 40 candidates in a budget that fit 26.
+- **An unchanged kernel must key alike whatever names the rest of the batch made it take**
+  (gh-ocannl-1525). Three things renamed unchanged kernels between candidates: node names are
+  disambiguated over the WHOLE batch (`get_ident`: a repeated label becomes `n<id>_<label>`, and the
+  `Schedule` tile nodes a sketch mints -- `tile__n<fresh>`, label `packed_<src>` -- get fresh ids
+  every lowering, so two sketched kernels packing same-labelled sources change text on every
+  candidate, as do the locals derived from them); segment kernels are named by position
+  (`<routine>__seg<i>`), so a candidate adding or removing a segment renames every later one; and
+  equal kernels of one batch (repeated layers) compiled once each. Simulated over a Metal staffed
+  gpt2 search's 10.5k rendered kernels: 3852 misses with the old key, 2104 name-insensitive, about
+  630 with node names renamed too. So the key is `Compile_driver.render_batch`'s `key_text`: the
+  prelude verbatim, the definition through `Kernel_code_cache.canonical_kernel`, which renames the
+  names the kernel BINDS -- symbols, scope locals, the identifiers `get_ident` gave its nodes (bare
+  or disambiguated), and the emitter's derivations of them (`C_syntax.minted_derivations`; every
+  emission site spells a derived local through `derived_name`) -- and drops its segment index (`Kernel_code_cache.kernel_token`: the routine name stays, since it can decide whether the text compiles); the
+  cache stores the symbol each kernel was compiled under (`code.symbol`, `procedure.symbol`) and the
+  link looks the function up by it. Sound because a declaration shadows every outer meaning of its
+  name in its scope; members, attributes, preprocessor lines and literals are never renamed, and a
+  node named like a free name (`routine_ident_blacklist`) disables node renaming for that kernel.
+  `Kernel_code_cache.resolve` is the one orchestration (lookup unlocked, misses re-looked-up under
+  the lock, one representative per key, one program per option list, publish after success),
+  pinned against a fake compiler in `kernel_code_cache`; `gpu_kernel_cache` pins a fresh build with
+  colliding labels compiling no kernel (and a renamed routine compiling afresh).

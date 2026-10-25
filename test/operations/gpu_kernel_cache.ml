@@ -13,6 +13,15 @@
    reuses the rest -- its changed kernels miss and its unchanged ones hit, so the key both separates
    and joins -- and the tuned routine's outputs equal the reference.
 
+   - gh-ocannl-1525: an unchanged kernel keys alike whatever names the rest of the batch or the
+   process made it take. A fresh build of a graph whose labels repeat (so its nodes are emitted
+   under disambiguated, freshly numbered names) compiles no kernel; the same computation under
+   another routine name compiles afresh, the routine's name being one of the things that decide
+   whether its text compiles at all (only a segment's positional index is dropped from the key,
+   which [kernel_code_cache] pins). (Two isomorphic kernels of one batch compiling once is pinned by
+   [kernel_code_cache], against a fake compiler: a plain compile here renders the routine as one
+   kernel on every backend.)
+
    The reuse claims are gated on the compile census's [reuse_capable] (a compile went through a
    kernel code cache), never on a backend name, and that flag stays set with the cache disabled: a
    run with [OCANNL_HIP_KERNEL_CACHE_MIB=0] on HIP, or [OCANNL_CUDA_KERNEL_CACHE_MIB=0] on CUDA,
@@ -125,3 +134,69 @@ let () =
   List.iter candidates_compiled ~f:(fun rc ->
       Stdio.eprintf "gpu_kernel_cache (not part of the golden): %s: %d of %d kernels compiled\n%!"
         rc.compile_attempt rc.compile_cost.kernels_compiled rc.compile_cost.kernels)
+
+(* gh-ocannl-1525. Other extents than the first sections', so no kernel of theirs answers for these.
+   Two inputs share one label, so the batch-wide disambiguation emits both under their numbered
+   names ([n<id>_hkf_x]), which a fresh build numbers afresh. *)
+let fn = 3
+let fk = 5
+let fm = 7
+
+let fxv =
+  Array.init
+    (b * fn * fk)
+    ~f:(Ll_test.cycle_flat ~dims:[| b; fn; fk |] ~modulus:7 ~offset:(-3.) ~stride:1.)
+
+let fwv =
+  Array.init (fk * fm)
+    ~f:(Ll_test.cycle_flat ~dims:[| fk; fm |] ~modulus:5 ~offset:(-2.) ~stride:1.)
+
+(* r[b,i] = 2 * sum_j sum_k x[b,i,k] w[k,j]: both inputs hold the same values. *)
+let doubled =
+  Array.init (b * fn) ~f:(fun bi ->
+      let bb = bi / fn and i = bi % fn in
+      let acc = ref 0. in
+      for j = 0 to fm - 1 do
+        for kk = 0 to fk - 1 do
+          acc := !acc +. (fxv.((((bb * fn) + i) * fk) + kk) *. fwv.((kk * fm) + j))
+        done
+      done;
+      2. *. !acc)
+
+let collide_graph () =
+  let x1 = TDSL.ndarray fxv ~label:[ "hkf_x" ] ~batch_dims:[ b ] ~output_dims:[ fn; fk ] () in
+  let x2 = TDSL.ndarray fxv ~label:[ "hkf_x" ] ~batch_dims:[ b ] ~output_dims:[ fn; fk ] () in
+  let w = TDSL.ndarray fwv ~label:[ "hkf_w" ] ~output_dims:[ fk; fm ] () in
+  let%op z1 = x1 +* "b|ik;kj=>b|ij" w in
+  let%op z2 = x2 +* "b|ik;kj=>b|ij" w in
+  Train.set_materialized z1.Tensor.value;
+  Train.set_materialized z2.Tensor.value;
+  let%op r = z1 + z2 ++ "b|ij => b|i" in
+  r
+
+let compile_run name r =
+  let comp = named name (Train.forward r) in
+  let ctx = Context.auto () in
+  let (ctx, routine), cost =
+    CC.with_census (fun () -> Context.compile ctx comp Ir.Indexing.Empty)
+  in
+  let ctx = Context.run ctx routine in
+  (Context.backend_name ctx, Context.get_values ctx r.Tensor.value, cost)
+
+let () =
+  let backend, first, c1 = compile_run "hkf_fresh" (collide_graph ()) in
+  let _, second, c2 = compile_run "hkf_fresh" (collide_graph ()) in
+  let _, renamed, c3 = compile_run "hkf_renamed" (collide_graph ()) in
+  let on = backend and when_ = c1.reuse_capable in
+  p "colliding labels: outputs equal the host reference" (bitwise_equal first doubled);
+  p "fresh build: outputs equal the host reference" (bitwise_equal second doubled);
+  p "renamed routine: outputs equal the host reference" (bitwise_equal renamed doubled);
+  gated ~when_ ~on "fresh build, freshly numbered nodes: the same kernels rendered, none compiled"
+    (c2.kernels = c1.kernels && c2.kernels_compiled = 0);
+  gated ~when_ ~on "another routine name: the same kernels rendered, all compiled afresh"
+    (c3.kernels = c1.kernels && c3.kernels_compiled = c3.kernels);
+  Stdio.eprintf
+    "gpu_kernel_cache (not part of the golden): colliding labels %d of %d kernels compiled, fresh \
+     build %d of %d, renamed %d of %d\n\
+     %!"
+    c1.kernels_compiled c1.kernels c2.kernels_compiled c2.kernels c3.kernels_compiled c3.kernels

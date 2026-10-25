@@ -1264,9 +1264,11 @@
 
 # Megabytes of compiled HIP kernel code kept for reuse within a process (gh-ocannl-1314). A batch of
 # kernels compiles only the kernels no earlier compile in this process produced, as one hiprtc
-# program, and reuses the rest: a kernel is reused only when its standalone source and its complete
-# hiprtc option list are byte-identical. hiprtc's cost is mostly per program and it compiles one
-# program at a time, so this is what keeps an autotuning candidate that changes a few kernels of a
+# program, and reuses the rest: a kernel is reused only when its standalone source, with the names
+# it owns renamed (its loop symbols, locals and node identifiers, and its segment index,
+# gh-ocannl-1525), and its complete hiprtc option list are identical. hiprtc's cost is mostly per
+# program and it compiles one program at a time, so this is what keeps an autotuning candidate that
+# changes a few kernels of a
 # large routine from recompiling all of them. 0 disables it: every routine compiles as one program
 # of all its kernels. Device debugging (output_debug_files_in_build_directory with log_level above
 # 1) bypasses it too, since a code object's debug info names the file it was compiled from.
@@ -1275,9 +1277,9 @@
 # Megabytes of compiled CUDA kernel code (PTX) kept for reuse within a process (gh-ocannl-1529),
 # the CUDA counterpart of hip_kernel_cache_mib: a batch of kernels compiles only the kernels no
 # earlier compile in this process produced, as one nvrtc program, and reuses the rest, a kernel
-# being reused only when its standalone source and its complete nvrtc option list are
-# byte-identical. nvrtc and the driver's PTX JIT cost per kernel compiled (about 13 ms and 5 ms on
-# sm_120), so this keeps an autotuning candidate that changes a few kernels of a large routine from
+# being reused only when its standalone source, with the names it owns renamed as on HIP, and its
+# complete nvrtc option list are identical. nvrtc and the driver's PTX JIT cost per kernel compiled
+# (about 13 ms and 5 ms on sm_120), so this keeps an autotuning candidate that changes a few kernels of a large routine from
 # recompiling all of them. A retained program also keeps its loaded module, so its device code stays
 # resident while the cache holds it: the default is smaller than HIP's for that reason. 0 disables
 # it: every routine compiles as one program of all its kernels. Device debugging bypasses it, as on

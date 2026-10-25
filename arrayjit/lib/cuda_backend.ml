@@ -472,6 +472,9 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
 
   type code = {
     code : program;
+    symbol : string;
+        (** What [code] holds this kernel under: [name] unless the kernel code cache answered with
+            code compiled under another name (gh-ocannl-1525). *)
     kparams : (string * kparam_source) list;
     bindings : Indexing.unit_bindings;
     name : string;
@@ -480,7 +483,9 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
   [@@deriving sexp_of]
 
   type code_batch = {
-    programs : program array;  (** Per kernel, in batch order: the program holding it. *)
+    programs : (program * string) array;
+        (** Per kernel, in batch order: the program holding it, and the symbol it holds it under
+            (gh-ocannl-1525: not necessarily the kernel's current name, which diagnostics use). *)
     bindings : Indexing.unit_bindings;
     kparams_and_names : ((string * kparam_source) list * string * Low_level.launch_dims) array;
   }
@@ -1497,19 +1502,22 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
      kernel as its own program costs 2.6x the joint program, and nvrtc's threads recover only 1.7x
      of that, so compiling FEWER kernels in one program is the lever, as on HIP.
 
-     A kernel's key is its standalone source ([render_batch]'s [assemble [i]] with the conditional
-     includes applied: the includes, the builtins it uses, its definition, including its name) with
-     its minted names renamed by first occurrence ([Kernel_code_cache.canonical_symbols]), and the
-     complete nvrtc option list that source compiles under ([nvrtc_options]: the arch the device set
-     and the source's markers floor, the include paths, the numerics flags, the debug flag). Misses
-     with different option lists compile as separate programs, so a kernel's PTX always came from
-     its own option list. The reused PTX was compiled from the same kernel text up to that renaming
-     -- a bijection on names the kernel owns -- possibly beside other kernels: the builtins are
+     A kernel's key is its canonical standalone source ([render_batch]'s [key_text i]: the includes
+     and the builtins it uses verbatim, its definition with the names it owns renamed by first
+     occurrence and its segment index dropped, [Kernel_code_cache.canonical_kernel],
+     gh-ocannl-1525), and the complete nvrtc option list its standalone source, conditional includes
+     applied, compiles under ([nvrtc_options]: the arch the device set and the source's markers
+     floor, the include paths, the numerics flags, the debug flag). Misses with different option
+     lists compile as separate programs, so a kernel's PTX always came from its own option list;
+     misses with equal keys compile once ([Kernel_code_cache.resolve]). The reused PTX was compiled
+     from the same kernel text up to that renaming -- a bijection on names the kernel binds --
+     possibly beside other kernels and possibly under another name: the builtins are
      [__forceinline__] helpers and [__constant__] tables, so a companion changes nothing it
-     computes. Process-local and bounded by [cuda_kernel_cache_mib] (PTX bytes; each retained
-     program also keeps its loaded modules, see [program]); 0 disables it, and every batch compiles
-     as one program of all its kernels, as before. Parameters, bindings and launch geometry always
-     come from the current rendering. *)
+     computes, and the function is looked up by the symbol the cache stored with it ([code.symbol]).
+     Process-local and bounded by [cuda_kernel_cache_mib] (PTX bytes; each retained program also
+     keeps its loaded modules, see [program]); 0 disables it, and every batch compiles as one
+     program of all its kernels, as before. Parameters, bindings and launch geometry always come
+     from the current rendering. *)
   let kernel_cache_capacity_bytes =
     lazy
       (let mib = Utils.get_global_arg ~default:"64" ~arg_name:"cuda_kernel_cache_mib" in
@@ -1520,7 +1528,7 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
            @@ Utils.User_error
                 ("cuda_kernel_cache_mib must be a non-negative integer (MiB); found: " ^ mib))
 
-  let kernel_cache : program Kernel_code_cache.t =
+  let kernel_cache : (program * string) Kernel_code_cache.t =
     Kernel_code_cache.create ~capacity_bytes:(fun () -> Lazy.force kernel_cache_capacity_bytes)
 
   (* Held from the cache lookups to the publication of what they missed, so two domains compiling
@@ -1551,64 +1559,14 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
        what the cache held. The renaming is the key's alone; nvrtc compiles the emitted text. *)
     let full_source = with_conditional_includes (r.assemble all) in
     write_source_artifact ~name full_source;
-    let programs = Array.create ~len:n None in
     (* Not under device debugging: PTX debug info names the source file it was compiled from, which
        a later compile of the same routine rewrites, so reuse would point a debugger at text that is
        not the code's. Every kernel compiles, as with the cache off. *)
     let enabled = Kernel_code_cache.enabled kernel_cache && not (Utils.with_runtime_debug ()) in
-    let keyed =
-      if not enabled then [||]
-      else
-        Array.init n ~f:(fun i ->
-            let source = with_conditional_includes (r.assemble [ i ]) in
-            let options = nvrtc_options source in
-            (* Keyed on the text with its minted names renamed, so the next candidate's unchanged
-               kernel -- rendered with other symbol numbers -- finds this one. *)
-            let canonical = Kernel_code_cache.canonical_symbols ~keep:[ kernel_names.(i) ] source in
-            (options, Kernel_code_cache.key ~parts:(options @ [ canonical ])))
-    in
-    let lookup idxs =
-      List.iter idxs ~f:(fun i ->
-          if Option.is_none programs.(i) then
-            programs.(i) <- Kernel_code_cache.find kernel_cache (snd keyed.(i)))
-    in
-    let misses () = List.filter all ~f:(fun i -> Option.is_none programs.(i)) in
-    (* The lookups run without the lock, so an all-hit compile never waits on another domain's
-       nvrtc; the misses are looked up again under it, where another domain may just have published
-       them. *)
-    if enabled then lookup all;
-    let compile_misses () =
-      if enabled then lookup (misses ());
-      let misses = misses () in
-      let groups =
-        if not enabled then
-          (* As before the cache: one program of every kernel. *)
-          [ (nvrtc_options full_source, all) ]
-        else
-          (* Misses grouped by option list, in batch order: one program per distinct list, so a
-             kernel's PTX always comes from its own option list. *)
-          let same = List.equal String.equal in
-          let distinct =
-            List.fold misses ~init:[] ~f:(fun acc i ->
-                let options = fst keyed.(i) in
-                if List.mem acc options ~equal:same then acc else acc @ [ options ])
-          in
-          List.map distinct ~f:(fun options ->
-              (options, List.filter misses ~f:(fun i -> same (fst keyed.(i)) options)))
-      in
-      let n_compiled = List.length misses in
-      let log_header =
-        Printf.sprintf "/* kernel code cache: compiled %d of %d kernels, reused %d */\n" n_compiled
-          n (n - n_compiled)
-      in
-      (* A program of every kernel in batch order is the routine's own source, already written as
-         [<name>.cu]; any other program is written as [<name>.part<k>.cu] beside its PTX and log,
-         under the name nvrtc was given, so its diagnostics point at the text it compiled.
-         [.part<k>] is a spelling no routine name takes. *)
-      let whole = match groups with [ (_, idxs) ] -> List.equal Int.equal idxs all | _ -> false in
+    (* Clears what an earlier compile of this name left, which is not this compile's; with
+       [log_header], writes the [.cu_log] an all-hit compile has no nvrtc call to write. *)
+    let clear_artifacts ?log_header () =
       if Utils.settings.output_debug_files_in_build_directory then (
-        (* What an earlier compile of this name left is not this compile's: remove it, so none is
-           left that would read as one. *)
         let dir = Stdlib.Filename.dirname (Utils.build_file (name ^ ".ptx")) in
         let ours file =
           List.exists [ ".ptx"; ".cu_log" ] ~f:(fun ext -> String.equal file (name ^ ext))
@@ -1619,41 +1577,71 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
                if ours file then
                  try Stdlib.Sys.remove (Stdlib.Filename.concat dir file) with Sys_error _ -> ())
          with Sys_error _ -> ());
-        if List.is_empty groups then
-          Stdio.Out_channel.write_all (Utils.build_file (name ^ ".cu_log")) ~data:log_header);
-      List.iteri groups ~f:(fun k (options, idxs) ->
-          let artifact = if whole then name else name ^ ".part" ^ Int.to_string k in
-          let source = with_conditional_includes (r.assemble idxs) in
-          if not whole then write_source_artifact ~name:artifact source;
-          (* Before the call: a program nvrtc refuses was still given these kernels. *)
-          Compile_cost.record_kernels ~rendered:0 ~compiled:(List.length idxs);
-          let ptx =
-            try
-              Compile_cost.time_device (fun () ->
-                  compile_program ~name:artifact ~log_header ~options source)
-            with exn ->
-              let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-              r.attribute idxs exn backtrace
-          in
-          let program = new_program ptx in
-          (* Published only now, after nvrtc returned: a failed program leaves no entry. *)
-          if enabled then
-            Kernel_code_cache.publish kernel_cache
-              ~keys:(List.map idxs ~f:(fun i -> snd keyed.(i)))
-              ~bytes:(String.length (Nvrtc.string_from_ptx ptx))
-              program;
-          List.iter idxs ~f:(fun i -> programs.(i) <- Some program))
+        Option.iter log_header ~f:(fun data ->
+            Stdio.Out_channel.write_all (Utils.build_file (name ^ ".cu_log")) ~data))
     in
-    if List.is_empty (misses ()) then (
-      if Utils.settings.output_debug_files_in_build_directory then
-        Stdlib.Mutex.protect kernel_compile_lock compile_misses)
-    else Stdlib.Mutex.protect kernel_compile_lock compile_misses;
-    (Array.map programs ~f:(fun p -> Option.value_exn ~here:[%here] p), r.entries)
+    let log_header n_compiled =
+      Printf.sprintf "/* kernel code cache: compiled %d of %d kernels, reused %d */\n" n_compiled n
+        (n - n_compiled)
+    in
+    (* One program of [idxs]. A program of every kernel in batch order is the routine's own source,
+       already written as [<name>.cu]; any other program is written as [<name>.part<k>.cu] beside
+       its PTX and log, under the name nvrtc was given, so its diagnostics point at the text it
+       compiled. [.part<k>] is a spelling no routine name takes. *)
+    let compile_group ~log_header ~group ~n_groups options idxs =
+      let whole = n_groups = 1 && List.equal Int.equal idxs all in
+      let artifact = if whole then name else name ^ ".part" ^ Int.to_string group in
+      let source = with_conditional_includes (r.assemble idxs) in
+      if not whole then write_source_artifact ~name:artifact source;
+      (* Before the call: a program nvrtc refuses was still given these kernels. *)
+      Compile_cost.record_kernels ~rendered:0 ~compiled:(List.length idxs);
+      let ptx =
+        try
+          Compile_cost.time_device (fun () ->
+              compile_program ~name:artifact ~log_header ~options source)
+        with exn ->
+          let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+          r.attribute idxs exn backtrace
+      in
+      (new_program ptx, String.length (Nvrtc.string_from_ptx ptx))
+    in
+    if not enabled then
+      (* As before the cache: one program of every kernel, each looked up by its own name. *)
+      let log_header = log_header n in
+      Stdlib.Mutex.protect kernel_compile_lock (fun () ->
+          clear_artifacts ();
+          let program, _ =
+            compile_group ~log_header ~group:0 ~n_groups:1 (nvrtc_options full_source) all
+          in
+          (Array.map kernel_names ~f:(fun symbol -> (program, symbol)), r.entries))
+    else
+      (* Each kernel keyed by its canonical standalone source ([render_batch]'s [key_text]: the
+         names it owns renamed, its segment index dropped, gh-ocannl-1525) plus the complete nvrtc
+         option list its standalone source, conditional includes applied, compiles under. *)
+      let options =
+        Array.init n ~f:(fun i -> nvrtc_options (with_conditional_includes (r.assemble [ i ])))
+      in
+      let keys =
+        Array.init n ~f:(fun i -> Kernel_code_cache.key ~parts:(options.(i) @ [ r.key_text i ]))
+      in
+      let header = ref "" in
+      let resolved =
+        Kernel_code_cache.resolve kernel_cache ~lock:kernel_compile_lock ~keys ~options
+          ~symbols:kernel_names ~always_lock:Utils.settings.output_debug_files_in_build_directory
+          ~before_compile:(fun ~n_compiled ~n_groups ->
+            header := log_header n_compiled;
+            clear_artifacts ?log_header:(if n_groups = 0 then Some !header else None) ())
+          ~compile_group:(fun ~group ~n_groups options idxs ->
+            compile_group ~log_header:!header ~group ~n_groups options idxs)
+          ()
+      in
+      (resolved, r.entries)
 
   let%diagn2_sexp compile ~name bindings lowered =
     let programs, entries = compile_kernels ~batch:false ~names:[| name |] bindings [| lowered |] in
     let kparams, name, launch = entries.(0) in
-    { code = programs.(0); kparams; bindings; name; launch }
+    let code, symbol = programs.(0) in
+    { code; symbol; kparams; bindings; name; launch }
 
   let%diagn2_sexp compile_batch ~names bindings lowereds =
     let programs, kparams_and_names = compile_kernels ~batch:true ~names bindings lowereds in
@@ -1673,9 +1661,9 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
             program.modules <- (ctx, run_module) :: program.modules;
             run_module)
 
-  let link_proc ~prior_context ~name ~(kparams : (string * kparam_source) list)
+  let link_proc ~prior_context ~name ~symbol ~(kparams : (string * kparam_source) list)
       ~(launch : Low_level.launch_dims) ~ctx_buffers lowered_bindings run_module =
-    let func = Cu.Module.get_function run_module ~name in
+    let func = Cu.Module.get_function run_module ~name:symbol in
     let device = prior_context.device in
     let stream_name = get_name device in
     (* Pre-resolve slab bases to keep the owning [Deviceptr.t]'s alive for the lifetime of the task
@@ -1745,8 +1733,8 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
       List.map idx_params ~f:(fun s -> (s, Indexing.fresh_launch_param ()))
     in
     let task =
-      link_proc ~prior_context ~name:code.name ~kparams:code.kparams ~launch:code.launch
-        ~ctx_buffers lowered_bindings run_module
+      link_proc ~prior_context ~name:code.name ~symbol:code.symbol ~kparams:code.kparams
+        ~launch:code.launch ~ctx_buffers lowered_bindings run_module
     in
     (lowered_bindings, task)
 
@@ -1760,9 +1748,11 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
        own kernel's module alive through its [context_lifetime], as before. *)
     let procs =
       Array.mapi code_batch.kparams_and_names ~f:(fun i (kparams, name, launch) ->
-          let run_module = module_of prior_context code_batch.programs.(i) in
+          let program, symbol = code_batch.programs.(i) in
+          let run_module = module_of prior_context program in
           set_ctx ctx;
-          link_proc ~prior_context ~name ~kparams ~launch ~ctx_buffers lowered_bindings run_module)
+          link_proc ~prior_context ~name ~symbol ~kparams ~launch ~ctx_buffers lowered_bindings
+            run_module)
     in
     (lowered_bindings, procs)
 

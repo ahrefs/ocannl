@@ -61,15 +61,15 @@ let find c k =
       shrink_to c (Int.max 0 capacity);
       if capacity <= 0 then None else Option.map (Hashtbl.find c.entries k) ~f:snd)
 
-let publish c ~keys ~bytes v =
+let publish c ~entries ~bytes =
   locked c (fun () ->
       let capacity = c.capacity_bytes () in
       shrink_to c (Int.max 0 capacity);
-      if capacity > 0 && bytes <= capacity && not (List.is_empty keys) then (
+      if capacity > 0 && bytes <= capacity && not (List.is_empty entries) then (
         let id = c.next_id in
         c.next_id <- id + 1;
-        List.iter keys ~f:(fun k -> Hashtbl.set c.entries ~key:k ~data:(id, v));
-        Queue.enqueue c.groups { id; group_keys = keys; group_bytes = bytes };
+        List.iter entries ~f:(fun (k, v) -> Hashtbl.set c.entries ~key:k ~data:(id, v));
+        Queue.enqueue c.groups { id; group_keys = List.map entries ~f:fst; group_bytes = bytes };
         c.retained_bytes <- c.retained_bytes + bytes;
         shrink_to c capacity))
 
@@ -82,38 +82,129 @@ let stats c =
         n_evicted_groups = c.evicted_groups;
       })
 
+(* {2 Lookup, dedup and compile of the misses} *)
+
+let resolve c ~lock ~keys ~options ~symbols ?(always_lock = false)
+    ?(before_compile = fun ~n_compiled:_ ~n_groups:_ -> ()) ~compile_group () =
+  let n = Array.length keys in
+  let found = Array.create ~len:n None in
+  let all = List.init n ~f:Fn.id in
+  let lookup i = if Option.is_none found.(i) then found.(i) <- find c keys.(i) in
+  let misses () = List.filter all ~f:(fun i -> Option.is_none found.(i)) in
+  (* Without the lock first, so an all-hit compile never waits on another domain's compiler; the
+     misses are looked up again under it, where another domain may just have published them. *)
+  List.iter all ~f:lookup;
+  let compile_misses () =
+    List.iter (misses ()) ~f:lookup;
+    let misses = misses () in
+    (* One representative per distinct key, the first in batch order; the others share its code. *)
+    let rep_of_key = Hashtbl.create (module String) in
+    let reps =
+      List.filter misses ~f:(fun i ->
+          match Hashtbl.find rep_of_key keys.(i) with
+          | Some _ -> false
+          | None ->
+              Hashtbl.set rep_of_key ~key:keys.(i) ~data:i;
+              true)
+    in
+    (* Representatives grouped by option list, in batch order: one program per distinct list, so a
+       kernel's code always comes from its own option list. *)
+    let same = List.equal String.equal in
+    let distinct =
+      List.fold reps ~init:[] ~f:(fun acc i ->
+          if List.mem acc options.(i) ~equal:same then acc else acc @ [ options.(i) ])
+    in
+    let groups =
+      List.map distinct ~f:(fun opts ->
+          (opts, List.filter reps ~f:(fun i -> same options.(i) opts)))
+    in
+    before_compile ~n_compiled:(List.length reps) ~n_groups:(List.length groups);
+    List.iteri groups ~f:(fun k (opts, idxs) ->
+        let program, bytes = compile_group ~group:k ~n_groups:(List.length groups) opts idxs in
+        let entries = List.map idxs ~f:(fun i -> (keys.(i), (program, symbols.(i)))) in
+        (* Published only now, after the compiler returned: a failed group leaves no entry. *)
+        publish c ~entries ~bytes;
+        List.iter idxs ~f:(fun i -> found.(i) <- Some (program, symbols.(i))));
+    List.iter misses ~f:(fun i ->
+        if Option.is_none found.(i) then found.(i) <- found.(Hashtbl.find_exn rep_of_key keys.(i)))
+  in
+  if List.is_empty (misses ()) then (if always_lock then Stdlib.Mutex.protect lock compile_misses)
+  else Stdlib.Mutex.protect lock compile_misses;
+  Array.map found ~f:(fun v -> Option.value_exn ~here:[%here] v)
+
+(* {2 The kernel's canonical text} *)
+
+let segment_kernel_name ~routine i = routine ^ "__seg" ^ Int.to_string i
+
+let kernel_token name =
+  match String.substr_index_all name ~may_overlap:false ~pattern:"__seg" with
+  | [] -> name
+  | idxs ->
+      let j = List.last_exn idxs in
+      let digits = String.drop_prefix name (j + 5) in
+      if (not (String.is_empty digits)) && String.for_all digits ~f:Char.is_digit then
+        String.prefix name (j + 5)
+      else name
+
 let is_ident_start c = Char.is_alpha c || Char.equal c '_'
 let is_ident_char c = Char.is_alphanum c || Char.equal c '_'
+let all_digits s = (not (String.is_empty s)) && String.for_all s ~f:Char.is_digit
 
-(* The spellings the lowering mints fresh: a symbol [i<N>] ([Indexing.symbol_ident]) and a
-   scope-local [v<N>_<ident>] ([C_syntax]'s local names). The suffix of a local is kept. *)
-let minted_spelling tok =
-  let n = String.length tok in
-  let digits_end =
-    let j = ref 1 in
-    while !j < n && Char.is_digit tok.[!j] do
-      Int.incr j
-    done;
-    !j
+(* A loop or static-index symbol as [Indexing.symbol_ident] spells it: [i] then digits. *)
+let is_symbol tok =
+  String.length tok >= 2 && Char.equal tok.[0] 'i' && all_digits (String.drop_prefix tok 1)
+
+(* A scope-local as [C_syntax] spells it: [v], digits, [_], anything. *)
+let is_scope_local tok =
+  String.length tok >= 3
+  && Char.equal tok.[0] 'v'
+  &&
+  match String.index_from tok 1 '_' with
+  | Some j -> j > 1 && all_digits (String.sub tok ~pos:1 ~len:(j - 1))
+  | None -> false
+
+let canonical_kernel ?kernel_name ?(keep = []) ?(bound = []) ?(derivations = []) ?(free = []) text =
+  let free = Hash_set.of_list (module String) free in
+  let keep = Hash_set.of_list (module String) keep in
+  let bound =
+    (* A declared name that is also a free name of the language, a builtin or a vendor identifier is
+       renamed nowhere: its occurrences might be the free meaning (a macro is not shadowed by a
+       declaration). *)
+    if List.exists bound ~f:(Hash_set.mem free) then Hash_set.create (module String)
+    else Hash_set.of_list (module String) bound
   in
-  if n < 2 || digits_end = 1 then None
-  else
-    match tok.[0] with
-    | 'i' when digits_end = n -> Some ""
-    | 'v' when digits_end < n && Char.equal tok.[digits_end] '_' ->
-        Some (String.drop_prefix tok digits_end)
-    | _ -> None
-
-let canonical_symbols ?(keep = []) text =
+  let is_base base = Hash_set.mem bound base || is_symbol base || all_digits base in
+  let derived tok =
+    List.exists derivations ~f:(fun (prefix, suffix) ->
+        String.length tok > String.length prefix + String.length suffix
+        && String.is_prefix tok ~prefix && String.is_suffix tok ~suffix
+        && is_base
+             (String.sub tok ~pos:(String.length prefix)
+                ~len:(String.length tok - String.length prefix - String.length suffix)))
+  in
+  let renamed tok =
+    (not (Hash_set.mem keep tok))
+    && (not (Hash_set.mem free tok))
+    && (is_symbol tok || is_scope_local tok || Hash_set.mem bound tok || derived tok)
+  in
   let n = String.length text in
   let out = Buffer.create (n + 64) in
   let names = Hashtbl.create (module String) in
-  let canonical_of tok suffix =
+  let canonical_of tok =
     Hashtbl.find_or_add names tok ~default:(fun () ->
-        "ocannl_k" ^ Int.to_string (Hashtbl.length names) ^ suffix)
+        "ocannl_k" ^ Int.to_string (Hashtbl.length names))
   in
   let at i s =
     i + String.length s <= n && String.equal (String.sub text ~pos:i ~len:(String.length s)) s
+  in
+  (* Copies verbatim from [i] through the end of [stop] (or of the text). *)
+  let copy_through i stop =
+    let rec find j =
+      if j >= n then n else if at j stop then j + String.length stop else find (j + 1)
+    in
+    let j = find i in
+    Buffer.add_string out (String.sub text ~pos:i ~len:(j - i));
+    j
   in
   (* Copies a quoted literal starting at [i] (the opening quote) through its closing quote. *)
   let rec literal quote i =
@@ -127,27 +218,56 @@ let canonical_symbols ?(keep = []) text =
       else if Char.equal c quote then i + 1
       else literal quote (i + 1)
   in
-  (* [in_comment]: [`Block] until [*/], [`Line] until a newline; a quote there is prose, not a
-     literal, and identifiers are renamed as in code. *)
-  let rec go ~in_comment i =
+  (* A preprocessor line, continuations included, is copied verbatim. *)
+  let rec directive i =
+    if i >= n then i
+    else if Char.equal text.[i] '\\' && i + 1 < n && Char.equal text.[i + 1] '\n' then (
+      Buffer.add_string out "\\\n";
+      directive (i + 2))
+    else if Char.equal text.[i] '\n' then i
+    else (
+      Buffer.add_char out text.[i];
+      directive (i + 1))
+  in
+  (* [line_start]: only blanks since the last newline, where a [#] opens a directive. [member]: the
+     last significant token was [.], [->] or [::], so an identifier here names a member or a
+     qualified name -- never a binding of the kernel -- and is copied as is. *)
+  let rec go ~in_comment ~line_start ~member i =
     if i < n then
       let c = text.[i] in
       match in_comment with
       | `Block when at i "*/" ->
           Buffer.add_string out "*/";
-          go ~in_comment:`Code (i + 2)
+          go ~in_comment:`Code ~line_start:false ~member:false (i + 2)
       | `Line when Char.equal c '\n' ->
           Buffer.add_char out c;
-          go ~in_comment:`Code (i + 1)
+          go ~in_comment:`Code ~line_start:true ~member:false (i + 1)
+      | `Code when Char.equal c '\n' ->
+          Buffer.add_char out c;
+          go ~in_comment ~line_start:true ~member (i + 1)
+      | _ when Char.equal c ' ' || Char.equal c '\t' || Char.equal c '\r' ->
+          Buffer.add_char out c;
+          go ~in_comment ~line_start ~member (i + 1)
+      | `Code when line_start && Char.equal c '#' ->
+          go ~in_comment ~line_start:false ~member:false (directive i)
       | `Code when at i "/*" ->
           Buffer.add_string out "/*";
-          go ~in_comment:`Block (i + 2)
+          go ~in_comment:`Block ~line_start:false ~member:false (i + 2)
       | `Code when at i "//" ->
           Buffer.add_string out "//";
-          go ~in_comment:`Line (i + 2)
+          go ~in_comment:`Line ~line_start:false ~member:false (i + 2)
+      | `Code when at i "[[" ->
+          (* An attribute ([[buffer(0)]], [[thread_position_in_grid]]): fixed vocabulary. *)
+          go ~in_comment ~line_start:false ~member:false (copy_through i "]]")
       | `Code when Char.equal c '"' || Char.equal c '\'' ->
           Buffer.add_char out c;
-          go ~in_comment (literal c (i + 1))
+          go ~in_comment ~line_start:false ~member:false (literal c (i + 1))
+      | _ when at i "->" || at i "::" ->
+          Buffer.add_string out (String.sub text ~pos:i ~len:2);
+          go ~in_comment ~line_start:false ~member:true (i + 2)
+      | _ when Char.equal c '.' ->
+          Buffer.add_char out c;
+          go ~in_comment ~line_start:false ~member:true (i + 1)
       | _ when is_ident_start c ->
           let j = ref (i + 1) in
           while !j < n && is_ident_char text.[!j] do
@@ -155,22 +275,22 @@ let canonical_symbols ?(keep = []) text =
           done;
           let tok = String.sub text ~pos:i ~len:(!j - i) in
           Buffer.add_string out
-            (match minted_spelling tok with
-            | Some suffix when not (List.mem keep tok ~equal:String.equal) ->
-                canonical_of tok suffix
-            | Some _ | None -> tok);
-          go ~in_comment !j
+            (if member then tok
+             else if Option.exists kernel_name ~f:(String.equal tok) then kernel_token tok
+             else if renamed tok then canonical_of tok
+             else tok);
+          go ~in_comment ~line_start:false ~member:false !j
       | _ when Char.is_digit c ->
-          (* A number, suffix and exponent letters included, is never an identifier. *)
+          (* A number, suffix, exponent and decimal point included, is never an identifier. *)
           let j = ref (i + 1) in
           while !j < n && (is_ident_char text.[!j] || Char.equal text.[!j] '.') do
             Int.incr j
           done;
           Buffer.add_string out (String.sub text ~pos:i ~len:(!j - i));
-          go ~in_comment !j
+          go ~in_comment ~line_start:false ~member:false !j
       | _ ->
           Buffer.add_char out c;
-          go ~in_comment (i + 1)
+          go ~in_comment ~line_start:false ~member:false (i + 1)
   in
-  go ~in_comment:`Code 0;
+  go ~in_comment:`Code ~line_start:true ~member:false 0;
   Buffer.contents out

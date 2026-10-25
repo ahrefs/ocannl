@@ -2828,7 +2828,7 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules kernel_code_cache)
- (libraries base arrayjit.ir arrayjit.verdict))
+ (libraries base unix arrayjit.ir arrayjit.verdict))
 
 (test
  ; ocannl-backend: none -- links arrayjit.ir alone; host-side Ndarray writes, no device.

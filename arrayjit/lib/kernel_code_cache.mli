@@ -32,26 +32,90 @@ val key : parts:string list -> string
 val enabled : 'v t -> bool
 val find : 'v t -> string -> 'v option
 
-val publish : 'v t -> keys:string list -> bytes:int -> 'v -> unit
-(** [publish c ~keys ~bytes v] retains [v] under every key in [keys], as one group of [bytes] bytes,
-    evicting the oldest groups while the retained total exceeds the capacity. A key already present
-    is re-pointed to [v]; the older group then no longer owns it, and its eviction leaves it be. *)
+val publish : 'v t -> entries:(string * 'v) list -> bytes:int -> unit
+(** [publish c ~entries ~bytes] retains each value under its key, as one group of [bytes] (the
+    caller's weight: compiled bytes where the backend can measure them), evicting the oldest groups
+    while the retained total exceeds the capacity. The values of one group typically share one
+    compiled program and differ in the symbol each kernel was compiled under. A key already present
+    is re-pointed; the older group then no longer owns it, and its eviction leaves it be. *)
 
 type stats = { n_groups : int; n_entries : int; n_bytes : int; n_evicted_groups : int }
 
 val stats : 'v t -> stats
 
-val canonical_symbols : ?keep:string list -> string -> string
-(** [canonical_symbols kernel_text] renames, in one kernel's C text, every identifier token the
-    lowering mints fresh -- a loop or static-index symbol as {!Ir.Indexing.symbol_ident} spells it
-    ([i] then digits) and a scope-local ([v] then digits, [_], the node's identifier) -- to
-    [ocannl_k<n>] (a local keeping its [_<ident>] suffix), numbered by first occurrence. A bijection
-    on those tokens, so the kernel's meaning is unchanged: they are the kernel's own loop variables,
-    locals and parameters, and parameters are passed by position. String and character literals are
-    left alone; comments are renamed like code.
+val resolve :
+  ('p * string) t ->
+  lock:Stdlib.Mutex.t ->
+  keys:string array ->
+  options:string list array ->
+  symbols:string array ->
+  ?always_lock:bool ->
+  ?before_compile:(n_compiled:int -> n_groups:int -> unit) ->
+  compile_group:(group:int -> n_groups:int -> string list -> int list -> 'p * int) ->
+  unit ->
+  ('p * string) array
+(** One batch's kernels, by index: [keys.(i)] is kernel [i]'s key, [options.(i)] the compiler option
+    list it compiles under, [symbols.(i)] the name the current rendering gives it. Answers, per
+    kernel, the program holding its code and the symbol to look it up by -- the symbol it was
+    compiled under, which a hit may have taken from another name (gh-ocannl-1525: the key does not
+    depend on a segment kernel's positional index, {!kernel_token}).
 
-    Why (gh-ocannl-1314): symbols and scope ids come from process-wide counters that every lowering
-    and every loop-splitting schedule op advance, so two candidates of one search -- or two compiles
-    of one computation -- render an unchanged kernel with other numbers, and a cache keyed on raw
-    text would never hit. Only a whole token is renamed: an identifier that merely contains such a
-    spelling keeps it, and costs a miss, never a wrong hit. *)
+    Every kernel is looked up first without [lock]; if any missed, the misses are looked up again
+    under it (another domain may just have published them) and the remaining ones compiled there:
+    one representative per distinct key (the first in batch order; the others share its program and
+    symbol), grouped by option list in batch order, [compile_group ~group:k ~n_groups opts idxs]
+    once per group, returning the program and its weight. A group is published only after its
+    compile returned, so one that raises publishes nothing (earlier groups stay published) and the
+    exception propagates; the next compile of those kernels compiles them afresh. [before_compile]
+    runs under the lock ahead of the compiles, also when nothing is left to compile -- which happens
+    under the lock only with [always_lock] (a caller that writes per-compile artifacts even for an
+    all-hit batch). *)
+
+val segment_kernel_name : routine:string -> int -> string
+(** The name a fissioned routine's segment kernel [i] is given ([Backends]: [<routine>__seg<i>]). *)
+
+val kernel_token : string -> string
+(** What a kernel's own name contributes to its canonical text: the name without the positional
+    index {!segment_kernel_name} appends ([<routine>__seg<i>] becomes [<routine>__seg]); any other
+    name as it is. The routine's name stays in the key because it can decide whether the text
+    compiles at all -- a routine named after a declaration the prelude's headers make is refused --
+    and a hit must not answer for text that would not compile; the segment index never can, and a
+    candidate that adds or removes a segment shifts every later one's (gh-ocannl-1525). *)
+
+val canonical_kernel :
+  ?kernel_name:string ->
+  ?keep:string list ->
+  ?bound:string list ->
+  ?derivations:(string * string) list ->
+  ?free:string list ->
+  string ->
+  string
+(** [canonical_kernel kernel_text] is the text a kernel's key is taken over: one kernel's C text
+    with the names it OWNS renamed to [ocannl_k<n>], numbered by first occurrence, and its own name
+    (when [kernel_name] is given) replaced by its {!kernel_token}. The renamed tokens are:
+    - a loop or static-index symbol as {!Ir.Indexing.symbol_ident} spells it ([i] then digits);
+    - a scope-local ([v], digits, [_], anything), suffix included;
+    - a name in [bound]: what the renderer declares for the kernel's tensor nodes (parameters,
+      locals), bare or disambiguated;
+    - a name derived from one of those by a [derivations] template [(prefix, suffix)] --
+      [prefix ^ base ^ suffix] with [base] in [bound], a symbol, or digits -- the emitter's own
+      derived locals ([C_syntax.minted_derivations]).
+
+    Never renamed: a name in [keep] or [free]; an identifier after [.], [->] or [::] (a member or a
+    qualified name); anything inside [[[...]]] (an attribute), a preprocessor line, or a string or
+    character literal. If [bound] meets [free] -- a node declared under a name that is also a
+    language, builtin or vendor name, whose other occurrences might be its free meaning, as with a
+    macro, which no declaration shadows -- no [bound] name is renamed.
+
+    Why this is sound: every renamed name is bound in the kernel (declared there, and a declaration
+    shadows any outer meaning of its name throughout its scope; parameters are passed by position;
+    the kernel is looked up through the symbol the cache stores), and distinct tokens get distinct
+    names, so two kernels whose canonical texts are equal are equal up to a renaming of their own
+    bindings, which neither their meaning nor their machine code depends on. Comments are renamed
+    like code.
+
+    Why (gh-ocannl-1314, gh-ocannl-1525): symbols, scope ids and minted tile nodes come from
+    process-wide counters, node names are disambiguated over the whole batch ([n<id>_<label>]
+    whenever a label repeats), and segment kernels are named by position, so two candidates of one
+    search render an unchanged kernel with other names. A difference in anything else costs a miss,
+    never a wrong hit. *)

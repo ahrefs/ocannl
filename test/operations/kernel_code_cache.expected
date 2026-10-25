@@ -26,8 +26,35 @@ kernels differing in structure stay apart: true
 string and character literals are left alone: true
 identifiers and numbers merely containing the spelling are left alone: true
 comments are renamed like code: true
-scope-local names are renamed in the same numbering, keeping their node suffix: true
+scope-local names are renamed whole, in the same numbering: true
 two lowerings' locals and symbols render alike: true
+a local whose node suffix carries a fresh tile id renders alike: true
 a v-prefixed name without the scope shape is left alone: true
 a quote inside a comment is prose: code after it is still renamed: true
 a kept name is left alone whatever its spelling: true
+the same kernel under two names and two node numberings renders alike: true
+a segment's positional index is dropped, its routine's name kept: true
+kernels of two routines stay apart: true
+a node's bare and disambiguated spellings render alike: true
+two layers' kernels over differently labelled nodes render alike: true
+a name outside the bound set is not renamed: true
+two parameters stay apart from one parameter used twice: true
+swapped operands stay apart: true
+a member name is never renamed, even when it spells a bound node: true
+so kernels reading different members stay apart: true
+attributes and preprocessor lines are copied as they are: true
+a bound name that is also a free name disables the node renaming: true
+the emitter's derived locals are renamed whole, over a node, a symbol or a uid: true
+every template the emitter spells through is listed for the canonical text: true
+a derived spelling over an unbound base is left alone: true
+different literals stay apart: true
+equal keys in one batch compile one representative: true
+the duplicate shares the representative's program and symbol: true
+a later batch compiles only its misses: true
+a hit answers the symbol its code was compiled under, not the current name: true
+misses compile as one program per option list, in batch order: true
+a refused compile propagates: true
+and publishes nothing: true
+the next compile of those kernels compiles them afresh: true
+two domains missing the same keys compile them once: true
+and both get the one program: true
