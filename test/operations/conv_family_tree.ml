@@ -166,6 +166,39 @@ let agrees path (p : Autotune.sketch_params) =
     | FD.Register_tile (Some t) -> Option.exists p.Autotune.sk_tile ~f:(Poly.equal t)
     | _ -> false)
 
+(* gh-ocannl-1488: the combined view ([Autotune.sketch_family_tree]) is a [family = matmul | conv]
+   root above the claiming family's own tree, each family judged by its own detector on this site.
+   On a conv site the matmul child is refuted with the no-matmul-site witness, and the conv child is
+   [conv_sketch_tree] unchanged — every path below the root is the per-family tree's, behind the one
+   [family=conv] commitment, so its leaves are the seed list. The matmul site's twin of these pins
+   is in sketch_family_tree. *)
+let family_root_pins name ~is_gpu ~limits opt family =
+  let matmul = FD.Family `Matmul and conv = FD.Family `Conv in
+  let under d = List.map ~f:(fun (path, x) -> ((FD.level d, d) :: path, x)) in
+  match Autotune.sketch_family_tree ~is_gpu ~is_cpu:(not is_gpu) ~limits opt with
+  | Some (Sspace.Choice { level; children } as combined) ->
+      let verdict = function
+        | Sspace.Child _ -> "live"
+        | Sspace.Unknown (w, _) -> "unknown: " ^ w
+        | Sspace.Excluded (w, _) -> "excluded: " ^ w
+        | Sspace.Refuted w -> "refuted: " ^ w
+      in
+      Stdio.printf "  combined view, root level %s:\n" level;
+      List.iter children ~f:(fun (d, c) -> Stdio.printf "    %s: %s\n" (FD.to_label d) (verdict c));
+      p
+        (name ^ ": the root commits the family, matmul then conv")
+        (String.equal level (FD.level conv)
+        && List.equal FD.equal (List.map children ~f:fst) [ matmul; conv ]);
+      p
+        (name ^ ": below the root, the conv child is the conv family's own tree")
+        (Poly.equal (Sspace.enumerate combined) (under conv (Sspace.enumerate family)));
+      p
+        (name ^ ": the refutations are the matmul family's no-site witness, then the conv family's")
+        (Poly.equal (Sspace.refutations combined)
+           (([ (FD.level matmul, matmul) ], Autotune.no_matmul_site_witness)
+           :: under conv (Sspace.refutations family)))
+  | _ -> p (name ^ ": a conv site has a family root above its family tree") false
+
 (* [~refused:true] states the section's passing case is an empty leaf list: every geometry is
    refuted, which the section's own claims then say. *)
 let trees = ref []
@@ -183,10 +216,7 @@ let section ?(refused = false) name ~is_gpu ~limits opt =
       p
         (name ^ ": the tree's leaves are the seed list")
         (List.equal Poly.equal (Sspace.leaves tree) seeds);
-      p
-        (name ^ ": the claiming family's tree is the conv tree")
-        (Option.exists (Autotune.sketch_family_tree ~is_gpu ~is_cpu:(not is_gpu) ~limits opt)
-           ~f:(fun t -> List.equal Poly.equal (Sspace.leaves t) seeds));
+      family_root_pins name ~is_gpu ~limits opt tree;
       (* The register-tile twins of the CPU leaves, against the alternatives at each leaf's own
          micro-kernel extents (f32 sites: 4-byte elements). *)
       (if not is_gpu then

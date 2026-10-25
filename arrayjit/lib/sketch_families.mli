@@ -333,6 +333,7 @@ module Family_decision : sig
     | Lattice
 
   type t =
+    | Family of [ `Matmul | `Conv ]
     | Fusion of [ `Unfused | `Fused ]
     | Pipeline of [ `Blocktile | `Tensorized ]
     | Batch of [ `Serial | `Grid | `Grid_inner ]
@@ -395,9 +396,23 @@ val sketch_family_tree :
   limits:Ir.Backend_intf.hardware_limits ->
   Ir.Low_level.optimized ->
   (Family_decision.t, sketch_params) Ir.Schedule_space.tree option
-(** The tree of whichever family claims the lowering — the matmul family where a matmul site is
-    detected (directly or through the enabling interchange), else the convolution family — unforced
-    below its root; [None] when neither does. {!sketch_seed_params} is its leaves. *)
+(** The combined view (gh-ocannl-1488): a [family = matmul | conv] root above the tree of whichever
+    family claims the lowering — the matmul family where a matmul site is detected (directly or
+    through the enabling interchange), else the convolution family — unforced below that family's
+    root; [None] when neither does. Each family is judged on the site's own shape: the other child
+    is refuted with {!no_matmul_site_witness} or {!no_conv_site_witness}, or with
+    {!matmul_precedence_witness} should both detectors claim the site. {!sketch_seed_params} is its
+    leaves. *)
+
+val no_matmul_site_witness : string
+(** The combined view's refutation of the matmul family on a lowering with no matmul site. *)
+
+val no_conv_site_witness : string
+(** The combined view's refutation of the conv family on a lowering with no conv site. *)
+
+val matmul_precedence_witness : string
+(** The combined view's refutation of the conv family on a site both detectors claim: matmul keeps
+    its precedence, so a lowering seeds one family. *)
 
 val sketch_seed_params :
   ?capabilities:Ir.Backend_intf.codegen_capabilities ->

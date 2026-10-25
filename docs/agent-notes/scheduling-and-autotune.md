@@ -310,8 +310,11 @@ files.
   under the same root since gh-ocannl-697 (`conv_sketch_tree`: `conv-leg = cpu | gpu`, the CPU
   `conv-shape` menu, the GPU `conv-staging` above `conv-rows`, so the leaves keep the flat list's
   plain-geometries-then-depth-twins order for any depth list); `sketch_family_tree` is whichever
-  family claims the lowering, and its census lines are the tree's refutations, path by path,
-  where the conv legs used to keep free-text notes. `model_family_search` walks it too, so a conv
+  family claims the lowering, under a `family = matmul | conv` root since gh-ocannl-1488 (each
+  family judged by its own detector, the other refuted with `no_matmul_site_witness` /
+  `no_conv_site_witness`; the per-family trees and `family_seeding`'s trees carry no such level,
+  so a path read off the combined view starts one level deeper), and its census lines are the
+  tree's refutations, path by path, where the conv legs used to keep free-text notes. `model_family_search` walks it too, so a conv
   site gets the family bound, the stats ledger and the operand-load tie-break: where `model_default`
   used to scan conv seeds flat (`best_flat`, first strict improvement), an exact score tie between
   two conv leaves with tile-MMA load counts can now crown the second one. The conv traffic-floor

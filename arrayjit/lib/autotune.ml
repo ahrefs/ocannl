@@ -4837,9 +4837,10 @@ let model_operand_loads ~(capabilities : Ir.Backend_intf.codegen_capabilities) (
    every one; it fathoms the whole family exactly when the incumbent already achieves it (the
    memory-bound kernels where the default preset is optimal) — raised per subtree by the committed
    staging decisions' certain traffic (phase 5, [sketch_path_traffic_floor]). The epilogue twins are
-   the tree's root level (gh-ocannl-613), so they compete inside the walk, after the unfused leaves
-   and at the threshold those tightened to, with the same bound and on the same stats ledger. Leaves
-   whose scores tie exactly are ordered by their tile-MMA operand loads under [operand_loads]
+   the claiming family's root level (gh-ocannl-613), below the combined view's [family] root whose
+   other child is refuted (gh-ocannl-1488), so they compete inside the walk, after the unfused
+   leaves and at the threshold those tightened to, with the same bound and on the same stats ledger.
+   Leaves whose scores tie exactly are ordered by their tile-MMA operand loads under [operand_loads]
    (gh-ocannl-1254, {!model_operand_loads}): fewer load instructions win, so a staged twin that
    brings its operands in through [ldmatrix] beats its gathering twin of equal flops and bytes; a
    leaf with no tile-MMA site has no count and stays out of the comparison (its operands load by
