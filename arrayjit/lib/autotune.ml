@@ -2638,6 +2638,35 @@ let fission_exposes_sites ~static_indices (opt : LL.optimized) tuples =
       not (String.equal (key pre) (key opt))
   | _ -> true
 
+(* gh-ocannl-1483: the default preset a segment gets in the tuner's fission pipelines. [`Search] is
+   the search's aggressive [min_parallel:1] thresholds, [`Config] the configured ones -- which, with
+   no [block_size], reproduce the untuned default pipeline's presets. *)
+let segment_preset ?block_size ~presets ~is_gpu ~is_cpu ~limits seg =
+  let min_parallel = match presets with `Search -> Some 1 | `Config -> None in
+  if is_gpu then Sched.default_gpu ?block_size ?min_parallel ~limits seg
+  else if is_cpu then Sched.default_cpu ?min_parallel seg
+  else []
+
+(* gh-ocannl-1483: the fission pipeline every tuner call site segments under, in place on [opt]:
+   statement-crossing [Local]s promoted on GPU and the GPU zero policy, as the untuned default
+   pipeline ([Sched.maybe_default_schedules]) has them, and the same schedule-aware merge probes
+   ([Sched.fission_keep_mapping]), so a fissioned candidate and the untuned baseline schedule the
+   same code. *)
+let tuner_fission ?arity_cuts ?fold_zeros ?replay ~is_gpu ~limits ~preset ~static_indices opt =
+  Sched.fission_segmented ~promote_locals:is_gpu ?arity_cuts ?fold_zeros
+    ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
+    ?replay ~preset
+    ~zero_sched:(fun tns -> if is_gpu then Sched.zero_expansion ~limits tns else [])
+    ~static_indices opt
+
+(* gh-ocannl-1483: the segmentation the per-segment sketch candidates are enumerated, modeled and
+   explained under, derived on a hermetic copy of [opt]: {!tuner_fission} with the zero fold
+   (gh-ocannl-1175) and the default presets [presets] names. *)
+let sketch_segmentation ?arity_cuts ~presets ~is_gpu ~is_cpu ~limits ~static_indices opt =
+  tuner_fission ?arity_cuts ~fold_zeros:true ~is_gpu ~limits
+    ~preset:(segment_preset ~presets ~is_gpu ~is_cpu ~limits)
+    ~static_indices (scratch_of opt)
+
 (* Per-machine calibrated envelope constants from the config beat the backend's class-level advisory
    constants ([Backend_intf.hardware_limits]'s [peak_flops] / [peak_memory_bandwidth]) — fitting
    them from [autotune_calibration_file] data is the intended workflow. Empty and non-positive
@@ -3672,7 +3701,6 @@ let strict_replay_refusal ~static_indices ~canon ~limits ~is_gpu ~(base_opt : LL
           LL.optimize_ctx = pristine;
         }
       in
-      let zero_sched tns = if is_gpu then Sched.zero_expansion ~limits tns else [] in
       match
         let opt =
           match form with
@@ -3680,11 +3708,10 @@ let strict_replay_refusal ~static_indices ~canon ~limits ~is_gpu ~(base_opt : LL
               apply_before_fission ~static_indices (fst (SC.of_saved canon psaved)) opt
           | Whole_saved _ | Fiss_saved _ -> opt
         in
-        Sched.fission_segmented ~promote_locals:is_gpu
-          ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
+        tuner_fission ~is_gpu ~limits
           ~replay:(saved_fission_replay ~static_indices segs)
           ~preset:(fun _ -> [])
-          ~zero_sched ~static_indices opt
+          ~static_indices opt
       with
       | (_ : Sched.segmentation * _) -> None
       | exception Outcome.Cause_at (_, cause) -> Some (Outcome.detail_of_cause cause))
@@ -3727,10 +3754,9 @@ let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> (
     }
   in
   let preset_sched ?block_size ?(config_thresholds = false) opt =
-    let min_parallel = if config_thresholds then None else Some 1 in
-    if is_gpu then Sched.default_gpu ?block_size ?min_parallel ~limits opt
-    else if is_cpu then Sched.default_cpu ?min_parallel opt
-    else []
+    segment_preset ?block_size
+      ~presets:(if config_thresholds then `Config else `Search)
+      ~is_gpu ~is_cpu ~limits opt
   in
   let captured = ref None in
   (* gh-ocannl-1560: under [autotune_strict_replay], a searched candidate's compile-fork placements
@@ -3797,7 +3823,6 @@ let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> (
                 (sched, psaved)
           in
           let opt = apply_before_fission ~static_indices prelude opt in
-          let zero_sched tns = if is_gpu then Sched.zero_expansion ~limits tns else [] in
           (* A replay cuts where its saved segments say ({!saved_fission_replay}); the sketch
              candidates replay the segmentation their seeds were enumerated under the same way
              ({!sketch_replay}). *)
@@ -3845,9 +3870,7 @@ let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> (
             | F_preset _ | F_saved _ | F_sketch _ | F_split _ | F_split_saved _ ->
                 (* Match the default pipeline's placements (statement-crossing [Local]s promoted on
                    GPU), so fissioned candidates and the untuned baseline schedule the same code. *)
-                Sched.fission_segmented ~promote_locals:is_gpu
-                  ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
-                  ?replay ~preset ~zero_sched ~static_indices opt
+                tuner_fission ~is_gpu ~limits ?replay ~preset ~static_indices opt
           in
           let saved_with_registries = SC.save_segments ~static_indices segmentation tuples in
           let posts = List.map tuples ~f:(fun (_, _, _, post) -> post) in
@@ -5832,8 +5855,7 @@ let model_default ?name ?report ctx comp bindings =
             stats.Sspace.st_refuted stats.Sspace.st_excluded;
           Some best
     in
-    let preset seg = if is_gpu then Sched.default_gpu ~limits seg else Sched.default_cpu seg in
-    let zero_sched tns = if is_gpu then Sched.zero_expansion ~limits tns else [] in
+    let preset = segment_preset ~presets:`Config ~is_gpu ~is_cpu ~limits in
     (* A per-segment substitution, as [tune]'s [F_sketch] candidates apply one: [plan] replayed,
        each keyed segment found by position (gh-ocannl-1243), the others on their kind's preset. *)
     let apply_fiss ~plan ~entries opt =
@@ -5843,9 +5865,7 @@ let model_default ?name ?report ctx comp bindings =
           plan entries
       in
       List.map
-        (snd
-           (Sched.fission_segmented ~promote_locals:is_gpu ~replay ~preset ~zero_sched
-              ~static_indices opt))
+        (snd (tuner_fission ~is_gpu ~limits ~replay ~preset ~static_indices opt))
         ~f:(fun (_, _, _, post) -> post)
     in
     (* The model-argmin pipeline choice for one lowering — label, roofline score (seconds), and the
@@ -5929,9 +5949,7 @@ let model_default ?name ?report ctx comp bindings =
                (gh-ocannl-1243), a digest mismatch degrading to the default preset. *)
             let fiss =
               match
-                Sched.fission_segmented ~promote_locals:is_gpu ~fold_zeros:true
-                  ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
-                  ~preset ~zero_sched ~static_indices (scratch_of base)
+                sketch_segmentation ~presets:`Config ~is_gpu ~is_cpu ~limits ~static_indices base
               with
               | exception Outcome.Cause_at _ ->
                   Int.incr n_rejected;
@@ -6407,14 +6425,8 @@ let model_explain ?name ?(coalesced = false) ctx comp bindings =
        fold-zeros segmentation of the searched program, when it splits the routine or exposes a
        changed lowering -- one entry per keyed segment: the segment's default preset, the incumbent
        its sketches must strictly beat, then the sketch leaves it searches there. *)
-    let preset seg = if is_gpu then Sched.default_gpu ~limits seg else Sched.default_cpu seg in
-    let zero_sched tns = if is_gpu then Sched.zero_expansion ~limits tns else [] in
     let x_segments =
-      match
-        Sched.fission_segmented ~promote_locals:is_gpu ~fold_zeros:true
-          ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
-          ~preset ~zero_sched ~static_indices (scratch_of base)
-      with
+      match sketch_segmentation ~presets:`Config ~is_gpu ~is_cpu ~limits ~static_indices base with
       | exception Outcome.Cause_at _ -> []
       | _, tuples when not (fission_exposes_sites ~static_indices base tuples) -> []
       | plan, tuples ->
@@ -8834,22 +8846,9 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
           let enum_fiss_entries ~arity_cuts =
             if not (is_gpu || is_cpu) then ([], [])
             else
-              let scratch =
-                {
-                  base_opt with
-                  LL.traced_store = Hashtbl.copy base_opt.LL.traced_store;
-                  LL.optimize_ctx = LL.copy_optimize_ctx base_opt.LL.optimize_ctx;
-                }
-              in
-              let preset seg =
-                if is_gpu then Sched.default_gpu ~min_parallel:1 ~limits seg
-                else Sched.default_cpu ~min_parallel:1 seg
-              in
-              let zero_sched tns = if is_gpu then Sched.zero_expansion ~limits tns else [] in
               match
-                Sched.fission_segmented ~promote_locals:is_gpu ~fold_zeros:true
-                  ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
-                  ~arity_cuts ~preset ~zero_sched ~static_indices scratch
+                sketch_segmentation ~arity_cuts ~presets:`Search ~is_gpu ~is_cpu ~limits
+                  ~static_indices base_opt
               with
               | exception Outcome.Cause_at _ -> ([], [])
               | _, tuples when not (fission_exposes_sites ~static_indices base_opt tuples) ->
