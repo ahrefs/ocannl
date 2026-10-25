@@ -81,18 +81,47 @@ let per_chunk_private_bytes_cap =
     | _ -> 256 * 1024
     | exception _ -> 256 * 1024)
 
-(* Repeated inner CPU Grid launches must amortize one native fork/join per enclosing iteration. A
-   fixed IR-work floor keeps eligibility independent of the host pool width (gh-ocannl-933). This is
-   a decline heuristic, not a prediction that every admitted loop will speed up. *)
-let repeated_grid_min_updates = 16384
+(* Every pool-parallel CPU Grid launch must amortize one native fork/join: a launch whose estimated
+   work ([grid_update_count]) is below this floor renders as a serial loop. Repeated inner launches
+   pay that fork/join once per enclosing iteration (gh-ocannl-933); a top-level launch pays it once
+   per routine call, which still dominates a small kernel -- [narrow_gebp_bench]'s [packmma_par] at
+   n <= 32 ran 10x slower than its serial twin on rog's hybrid CPU (gh-ocannl-1564). A fixed IR-work
+   floor keeps eligibility independent of the host pool width, so emitted code does not depend on
+   the machine. This is a decline heuristic, not a prediction that every admitted loop will speed
+   up. Config [cc_grid_min_updates]; 0 (or negative) admits every launch the safety rules admit, the
+   fine-grained concurrency stress of [test/operations/cpu_parallel]. Read per compile, so a test
+   can flip it between compiles. *)
+let default_grid_min_updates = 16384
 
-(* Scalar updates per invocation, capped before arithmetic can overflow. Conditional bodies are
-   charged in full: decline only when even that upper estimate is small. Scalar Local_scope bodies
-   matter because an apparently single store may contain an entire reduction. *)
-let grid_update_count (llc : Low_level.t) =
-  let cap = repeated_grid_min_updates in
+let grid_min_updates () =
+  let setting =
+    Utils.get_global_arg
+      ~default:(Int.to_string default_grid_min_updates)
+      ~arg_name:"cc_grid_min_updates"
+  in
+  match Int.of_string_opt (String.strip setting) with
+  | Some n -> Int.max 0 n
+  | None ->
+      invalid_arg ("cc_grid_min_updates: expected an integer (0 disables the floor), got " ^ setting)
+
+(* How many multiply-accumulates of a [Tile_mma] statement [grid_update_count] charges as one scalar
+   update. On cc a [Tile_mma] renders as a register-tiled vector micro-kernel, which retires on the
+   order of vector lanes x FMA ports MACs per cycle (8 x 2 on AVX2, 4 x 4 on NEON) where a scalar
+   update costs about a cycle. Charging MACs at par let a 2 x (16 x 32 x 32) launch pass the floor
+   and lose 10x (gh-ocannl-1564). A fixed constant, like the floor, so eligibility is
+   machine-independent; a [Tile_mma] that falls back to its scalar micro-kernel is undercharged by
+   this factor. *)
+let tile_mma_macs_per_update = 16
+
+(* Scalar updates per invocation, capped at [cap] (default: the default floor) before arithmetic can
+   overflow. Conditional bodies are charged in full: decline only when even that upper estimate is
+   small. Scalar Local_scope bodies matter because an apparently single store may contain an entire
+   reduction. A [Tile_mma] is charged its covered MACs over [tile_mma_macs_per_update]. *)
+let grid_update_count ?(cap = default_grid_min_updates) (llc : Low_level.t) =
+  let cap = Int.max 1 cap in
   let add a b = min cap (a + b) in
-  let mul a b = if a = 0 || b = 0 then 0 else if a > cap / b then cap else a * b in
+  let mul_capped ~cap a b = if a = 0 || b = 0 then 0 else if a > cap / b then cap else a * b in
+  let mul a b = mul_capped ~cap a b in
   let extent from_ to_ =
     if to_ < from_ then 0
     else
@@ -116,8 +145,17 @@ let grid_update_count (llc : Low_level.t) =
     | Set_dynamic { dyn_value = v, _; llsc; _ } -> add 1 (add (scalar v) (scalar llsc))
     | Set_from_vec { length; arg = v, _; _ } -> add (min cap length) (scalar v)
     | Zero_out tn -> min cap (Tn.num_elems tn)
+    | Tile_mma { m; n; k; _ } ->
+        (* Saturate the MAC product at [cap] updates' worth before dividing, so a large tile still
+           reads as [cap] rather than wrapping. *)
+        let macs_cap =
+          if cap > Int.max_value / tile_mma_macs_per_update then Int.max_value
+          else cap * tile_mma_macs_per_update
+        in
+        let macs = mul_capped ~cap:macs_cap m (mul_capped ~cap:macs_cap n k) in
+        min cap (macs / tile_mma_macs_per_update)
     (* These renderings have their own safety/opacity rules. Do not guess their cost here. *)
-    | Staged_compilation _ | Workgroup_barrier | Scan_loop _ | Tile_mma _ -> cap
+    | Staged_compilation _ | Workgroup_barrier | Scan_loop _ -> cap
   in
   stmt llc
 
@@ -4384,6 +4422,7 @@ module C_syntax (B : C_syntax_config) = struct
       let syms = ref (Set.empty (module Indexing.Symbol)) in
       let privs = ref (Map.empty (module Indexing.Symbol)) in
       let aliases = ref (Set.empty (module Tn)) in
+      let floor = grid_min_updates () in
       let rec go ~repeated (llc : Low_level.t) =
         match llc with
         | Low_level.For_loop { axis = Grid; index; from_; to_; body; _ } -> (
@@ -4391,11 +4430,14 @@ module C_syntax (B : C_syntax_config) = struct
               match
                 (parallel_grid_safe ctx) ~sym:index ~grid_range:(from_, to_) ~global_counts body
               with
-              | Some _ when repeated && grid_update_count llc < repeated_grid_min_updates ->
+              | Some _ when floor > 0 && grid_update_count ~cap:floor llc < floor ->
                   (declinef ctx)
-                    "Grid loop %s stays serial: repeated native fork/join has only %d scalar \
-                     updates per launch, below %d"
-                    (Indexing.symbol_ident index) (grid_update_count llc) repeated_grid_min_updates
+                    "Grid loop %s stays serial: %s native fork/join has only %d estimated scalar \
+                     updates per launch, below cc_grid_min_updates = %d"
+                    (Indexing.symbol_ident index)
+                    (if repeated then "a repeated" else "its")
+                    (grid_update_count ~cap:floor llc)
+                    floor
               | Some (privatized, ptr_aliased) ->
                   syms := Set.add !syms index;
                   if not (List.is_empty privatized) then

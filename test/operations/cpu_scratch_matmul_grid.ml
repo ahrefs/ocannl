@@ -52,6 +52,11 @@ let backend_name = "cc"
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 let () = Generated.init ~backend_name
 
+(* These legs pin which Grid loops the C backend CAN render on its pool (the safety rules), not
+   whether a launch is worth its fork/join: the pool-launch work floor ([cc_grid_min_updates],
+   gh-ocannl-1564) would serialize their small nests, so it is disabled for every compile here. *)
+let () = Hashtbl.set Utils.config_file_args ~key:"cc_grid_min_updates" ~data:"0"
+
 let matrix ~q ~label ~modulus ~offset ~stride =
   TDSL.ndarray
     (Array.init (q * q) ~f:(Ll_test.cycle_flat ~dims:[| q; q |] ~modulus ~offset ~stride))

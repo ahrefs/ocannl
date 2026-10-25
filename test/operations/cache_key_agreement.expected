@@ -42,6 +42,7 @@ Keyed keys hashed only on some backends:
   cc_vector_registers -- CPU backends
   cc_fp16_arithmetic -- CPU backends
   cc_parallel_grid -- CPU backends
+  cc_grid_min_updates -- CPU backends
   cc_parallel_chunks -- CPU backends
   output_debug_files_in_build_directory -- CUDA and HIP
   gpu_graph_capture -- CUDA and HIP

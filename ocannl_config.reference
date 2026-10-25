@@ -516,6 +516,18 @@
 # default.
 #cc_grid_private_bytes_cap=262144
 
+# Work floor of one pool-parallel Grid launch, in estimated scalar updates per native fork/join
+# (C_syntax.grid_update_count: the Grid loop and its body extents multiplied, scalar Local_scope
+# work included, a Tile_mma charged its multiply-accumulates over 16 since it renders as a
+# register-tiled vector micro-kernel). A launch estimated below the floor renders as a serial loop
+# (log with schedule_log_declines) -- top-level and repeated inner launches alike: a fork/join per
+# routine call still dominates a small kernel (gh-ocannl-1564: packed GEBP at n <= 32 ran 10x
+# slower pool-parallel than serial on a hybrid CPU), and one per enclosing iteration more so
+# (gh-ocannl-933). A fixed number rather than a function of the pool width, so emitted code does
+# not depend on the machine. 0 (or negative) disables the floor: every Grid loop the safety rules
+# admit renders parallel.
+#cc_grid_min_updates=16384
+
 # Vector register width in bytes for explicit SIMD rendering of Vectorized-typed loops in the C
 # backends (GCC/Clang vector extensions): eligible loop bodies emit vector loads/arithmetic/stores
 # in width/element-size lanes plus a serial remainder, instead of relying on the compiler's
@@ -658,8 +670,8 @@
 # the codegen configuration (large_models, buffer_aliasing, the effective routine-logging
 # predicate, the logging-only settings once it holds, and the compiling backend's own knobs --
 # for cc the compiler command and flags, the OpenMP team, cc_vector_bytes, cc_fp16_arithmetic,
-# cc_parallel_grid/chunks, cc_grid_private_bytes_cap; for CUDA and HIP the graph-capture regime
-# and debug compilation:
+# cc_parallel_grid/chunks, cc_grid_private_bytes_cap, cc_grid_min_updates; for CUDA and HIP the
+# graph-capture regime and debug compilation:
 # all read AFTER lowering, so they are likewise invisible to the digest, gh-ocannl-572, together
 # with the device's hardware limits and, on cc, a fingerprint of the toolchain's predefined macros
 # under the configured flags -- so entries do not transfer between unlike devices or toolchains),

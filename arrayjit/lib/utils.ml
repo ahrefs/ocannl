@@ -164,6 +164,7 @@ let known_config_keys =
       "cc_parallel_chunks";
       "cc_pool_core_class";
       "cc_grid_private_bytes_cap";
+      "cc_grid_min_updates";
       "cc_vector_bytes";
       "cc_vector_registers";
       "cc_fp16_arithmetic";
@@ -338,6 +339,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "cc_parallel_grid";
         "cc_parallel_chunks";
         "cc_grid_private_bytes_cap";
+        "cc_grid_min_updates";
       ] );
     ( Keyed "codegen",
       "a codegen knob whose effect is not a property of the lowered code. The two debug gates bite \

@@ -127,6 +127,10 @@ let keyed_flips =
     ("cc_vector_registers", config ~scope:Cpu [ "7"; "8" ]);
     ("cc_fp16_arithmetic", config ~scope:Cpu [ "none"; "promoted" ]);
     ("cc_parallel_grid", config ~scope:Cpu [ "none"; "openmp" ]);
+    (* Read per compile, and only behind a parallel grid, so flipped behind one like the chunk
+       count. *)
+    ( "cc_grid_min_updates",
+      config ~scope:Cpu ~under:[ Stated ("cc_parallel_grid", "openmp") ] [ "0"; "4096" ] );
     (* The chunk count reaches the emitted code only through a parallel grid, so it is flipped
        behind one: stating the mode probes nothing, and nothing is compiled here, so OpenMP serves
        on a box whose own [auto] resolves to no grid. *)

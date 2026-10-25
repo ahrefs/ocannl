@@ -1106,10 +1106,24 @@ let () =
   if on_cpu then
     Stdio.eprintf "cc pool-parallel grid: %b (not part of the golden)\n%!"
       (Context.Cc_backend.pool_parallel_grid ());
-  if on_gpu || (on_cpu && Context.Cc_backend.pool_parallel_grid ()) then
-    match refused ~name:"race_pin_grid_wshfl" ~transform:pin_grid_transform pgs with
+  if on_gpu || (on_cpu && Context.Cc_backend.pool_parallel_grid ()) then (
+    (* The pool-launch work floor ([cc_grid_min_updates], gh-ocannl-1564) would keep this two-chunk
+       launch serial, and then nothing binds the grid to judge: the leg pins the binding rule, so
+       the floor is disabled for its compile. *)
+    let key = "cc_grid_min_updates" in
+    let prior = Hashtbl.find Utils.config_file_args key in
+    Hashtbl.set Utils.config_file_args ~key ~data:"0";
+    let outcome =
+      Exn.protect
+        ~f:(fun () -> refused ~name:"race_pin_grid_wshfl" ~transform:pin_grid_transform pgs)
+        ~finally:(fun () ->
+          match prior with
+          | Some v -> Hashtbl.set Utils.config_file_args ~key ~data:v
+          | None -> Hashtbl.remove Utils.config_file_args key)
+    in
+    match outcome with
     | Some msg -> p claim_pin_other_axis_refused (String.is_substring msg ~substring:refusal_phrase)
-    | None -> p claim_pin_other_axis_refused false
+    | None -> p claim_pin_other_axis_refused false)
   else if on_cpu then
     p claim_pin_other_axis_refused
       (approx
