@@ -11,7 +11,12 @@
     conv-leg = gpu  [refuted: not a GPU target]
   fusion = fused  [refuted: Schedule.Fuse_epilogue: no statement follows the reduction over y]
 9x9 conv, CPU: the tree's leaves are the seed list: true
-9x9 conv, CPU: the claiming family's tree is the conv tree: true
+  combined view, root level family:
+    matmul: refuted: no matmul site: no accumulation nest classifies as a contraction, directly or through the enabling interchange
+    conv: live
+9x9 conv, CPU: the root commits the family, matmul then conv: true
+9x9 conv, CPU: below the root, the conv child is the conv family's own tree: true
+9x9 conv, CPU: the refutations are the matmul family's no-site witness, then the conv family's: true
 9x9 conv, CPU: the register-tile twins are the alternatives at each leaf's extents: true
 9x9 conv, CPU: every leaf's path agrees with its parameters: true
 == 9x9 conv, GPU (masked) ==
@@ -34,7 +39,12 @@
         conv-rows = rows-bm32  [refuted: row block gives fewer than two blocks of the 9 rows]
   fusion = fused  [refuted: Schedule.Fuse_epilogue: no statement follows the reduction over y]
 9x9 conv, GPU (masked): the tree's leaves are the seed list: true
-9x9 conv, GPU (masked): the claiming family's tree is the conv tree: true
+  combined view, root level family:
+    matmul: refuted: no matmul site: no accumulation nest classifies as a contraction, directly or through the enabling interchange
+    conv: live
+9x9 conv, GPU (masked): the root commits the family, matmul then conv: true
+9x9 conv, GPU (masked): below the root, the conv child is the conv family's own tree: true
+9x9 conv, GPU (masked): the refutations are the matmul family's no-site witness, then the conv family's: true
 9x9 conv, GPU (masked): every leaf's path agrees with its parameters: true
 a site without a fusable tail refutes the fused flavor with the recognizer's reason: true
 == 16x16 conv, GPU (dividing) ==
@@ -59,7 +69,12 @@ a site without a fusable tail refutes the fused flavor with the recognizer's rea
         conv-rows = rows-bm32  [refuted: row block gives fewer than two blocks of the 16 rows]
   fusion = fused  [refuted: Schedule.Fuse_epilogue: no statement follows the reduction over y]
 16x16 conv, GPU (dividing): the tree's leaves are the seed list: true
-16x16 conv, GPU (dividing): the claiming family's tree is the conv tree: true
+  combined view, root level family:
+    matmul: refuted: no matmul site: no accumulation nest classifies as a contraction, directly or through the enabling interchange
+    conv: live
+16x16 conv, GPU (dividing): the root commits the family, matmul then conv: true
+16x16 conv, GPU (dividing): below the root, the conv child is the conv family's own tree: true
+16x16 conv, GPU (dividing): the refutations are the matmul family's no-site witness, then the conv family's: true
 16x16 conv, GPU (dividing): every leaf's path agrees with its parameters: true
 dividing: a pipelined depth-2 twin is a leaf: true
 == 16x16 conv into 64 channels, CPU ==
@@ -81,7 +96,12 @@ dividing: a pipelined depth-2 twin is a leaf: true
     conv-leg = gpu  [refuted: not a GPU target]
   fusion = fused  [refuted: Schedule.Fuse_epilogue: no statement follows the reduction over y]
 16x16 conv into 64 channels, CPU: the tree's leaves are the seed list: true
-16x16 conv into 64 channels, CPU: the claiming family's tree is the conv tree: true
+  combined view, root level family:
+    matmul: refuted: no matmul site: no accumulation nest classifies as a contraction, directly or through the enabling interchange
+    conv: live
+16x16 conv into 64 channels, CPU: the root commits the family, matmul then conv: true
+16x16 conv into 64 channels, CPU: below the root, the conv child is the conv family's own tree: true
+16x16 conv into 64 channels, CPU: the refutations are the matmul family's no-site witness, then the conv family's: true
 16x16 conv into 64 channels, CPU: the register-tile twins are the alternatives at each leaf's extents: true
 16x16 conv into 64 channels, CPU: every leaf's path agrees with its parameters: true
 64 channels: a register-tile twin is a leaf: true
@@ -106,7 +126,12 @@ dividing: a pipelined depth-2 twin is a leaf: true
       conv-shape = bm32  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
     conv-leg = gpu  [refuted: not a GPU target]
 9x9 conv + bias/relu tail, CPU: the tree's leaves are the seed list: true
-9x9 conv + bias/relu tail, CPU: the claiming family's tree is the conv tree: true
+  combined view, root level family:
+    matmul: refuted: no matmul site: no accumulation nest classifies as a contraction, directly or through the enabling interchange
+    conv: live
+9x9 conv + bias/relu tail, CPU: the root commits the family, matmul then conv: true
+9x9 conv + bias/relu tail, CPU: below the root, the conv child is the conv family's own tree: true
+9x9 conv + bias/relu tail, CPU: the refutations are the matmul family's no-site witness, then the conv family's: true
 9x9 conv + bias/relu tail, CPU: the register-tile twins are the alternatives at each leaf's extents: true
 9x9 conv + bias/relu tail, CPU: every leaf's path agrees with its parameters: true
 tail, CPU: the unfused Grid flavor is refuted on its uncovered companion: true
@@ -133,7 +158,12 @@ tail, CPU: the fused Grid flavor is a leaf: true
         conv-rows = rows-bm16  [refuted: row block gives fewer than two blocks of the 9 rows]
         conv-rows = rows-bm32  [refuted: row block gives fewer than two blocks of the 9 rows]
 9x9 conv + bias/relu tail, GPU: the tree's leaves are the seed list: true
-9x9 conv + bias/relu tail, GPU: the claiming family's tree is the conv tree: true
+  combined view, root level family:
+    matmul: refuted: no matmul site: no accumulation nest classifies as a contraction, directly or through the enabling interchange
+    conv: live
+9x9 conv + bias/relu tail, GPU: the root commits the family, matmul then conv: true
+9x9 conv + bias/relu tail, GPU: below the root, the conv child is the conv family's own tree: true
+9x9 conv + bias/relu tail, GPU: the refutations are the matmul family's no-site witness, then the conv family's: true
 9x9 conv + bias/relu tail, GPU: every leaf's path agrees with its parameters: true
 tail, GPU: the unfused flavor is refuted on companion coverage: true
 tail, GPU: the fused flavor keeps its leaves: true
@@ -155,7 +185,12 @@ tail, GPU: no unfused leaf survives: true
         conv-rows = rows-bm32  [refuted: row block gives fewer than two blocks of the 4 rows]
   fusion = fused  [refuted: Schedule.Fuse_epilogue: no statement follows the reduction over y]
 4x4 conv over 4 images, GPU, grid cap 3: the tree's leaves are the seed list: true
-4x4 conv over 4 images, GPU, grid cap 3: the claiming family's tree is the conv tree: true
+  combined view, root level family:
+    matmul: refuted: no matmul site: no accumulation nest classifies as a contraction, directly or through the enabling interchange
+    conv: live
+4x4 conv over 4 images, GPU, grid cap 3: the root commits the family, matmul then conv: true
+4x4 conv over 4 images, GPU, grid cap 3: below the root, the conv child is the conv family's own tree: true
+4x4 conv over 4 images, GPU, grid cap 3: the refutations are the matmul family's no-site witness, then the conv family's: true
 4x4 conv over 4 images, GPU, grid cap 3: no leaf survives: true
 cap 3: the whole-extent geometry is refuted with the gate's sentence: true
 cap 4: the whole-extent geometry is admitted: true

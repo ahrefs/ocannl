@@ -475,7 +475,12 @@ module Family_decision : sig
       the whole identity of the commitment: no consumer needs the level name, or the label, to know
       what was decided. *)
   type t =
-    | Fusion of [ `Unfused | `Fused ]  (** The root: the epilogue-fusion flavor (gh-ocannl-613). *)
+    | Family of [ `Matmul | `Conv ]
+        (** The combined view's root ({!sketch_family_tree}, gh-ocannl-1488): which family the
+            site's own shape admits, the other refuted with its witness. The per-family trees
+            ({!matmul_sketch_tree}, {!conv_sketch_tree}) carry no such level. *)
+    | Fusion of [ `Unfused | `Fused ]
+        (** A family's root: the epilogue-fusion flavor (gh-ocannl-613). *)
     | Pipeline of [ `Blocktile | `Tensorized ]  (** Which composed pipeline. *)
     | Batch of [ `Serial | `Grid | `Grid_inner ]
         (** The batch-geometry twin (gh-ocannl-643), GPU only; [`Grid_inner] binds the interior
@@ -572,9 +577,23 @@ val sketch_family_tree :
   limits:Ir.Backend_intf.hardware_limits ->
   Ir.Low_level.optimized ->
   (Family_decision.t, sketch_params) Ir.Schedule_space.tree option
-(** The tree of whichever family claims the lowering ({!matmul_sketch_tree} where a matmul site is
-    detected, else {!conv_sketch_tree}), unforced below its root: {!sketch_seed_params} is its
+(** The combined view (gh-ocannl-1488): a [family = matmul | conv] root above the tree of whichever
+    family claims the lowering ({!matmul_sketch_tree} where a matmul site is detected, else
+    {!conv_sketch_tree}), unforced below that family's root; [None] when neither does. Each family
+    is judged on the site's own shape, so the family choice is a decision with a witness: the other
+    child is refuted with {!no_matmul_site_witness} or {!no_conv_site_witness}, or with
+    {!matmul_precedence_witness} should both detectors claim the site. {!sketch_seed_params} is its
     leaves, and {!model_family_search} walks it. *)
+
+val no_matmul_site_witness : string
+(** The combined view's refutation of the matmul family on a lowering with no matmul site. *)
+
+val no_conv_site_witness : string
+(** The combined view's refutation of the conv family on a lowering with no conv site. *)
+
+val matmul_precedence_witness : string
+(** The combined view's refutation of the conv family on a site both detectors claim: matmul keeps
+    its precedence, so a lowering seeds one family. *)
 
 (** {2 The seeding census (gh-ocannl-1407)}
 

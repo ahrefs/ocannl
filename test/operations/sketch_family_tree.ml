@@ -170,6 +170,46 @@ let tree_section name ~is_gpu ~is_cpu ~limits opt seeds =
       Verdict.p "tree leaves = flat enumeration"
         (List.equal (fun a b -> String.equal (show a) (show b)) (Sspace.leaves tree) seeds)
 
+(* gh-ocannl-1488: the combined view ([Autotune.sketch_family_tree]) is a [family = matmul | conv]
+   root above the claiming family's own tree, each family judged by its own detector on this site.
+   On a matmul site the matmul child is [matmul_sketch_tree] unchanged — every path and leaf below
+   the root is the per-family tree's, behind the one [family=matmul] commitment — and the conv child
+   is refuted with the no-conv-site witness: the family choice is a witness like every level below
+   it. The conv site's twin of these pins is in conv_family_tree. *)
+let family_root_pins name ~is_gpu ~is_cpu ~limits opt =
+  let matmul = FD.Family `Matmul and conv = FD.Family `Conv in
+  match
+    ( Autotune.sketch_family_tree ~is_gpu ~is_cpu ~limits opt,
+      Autotune.matmul_sketch_tree ~is_gpu ~is_cpu ~limits opt )
+  with
+  | Some (Sspace.Choice { level; children } as combined), Some family ->
+      let verdict = function
+        | Sspace.Child _ -> "live"
+        | Sspace.Unknown (w, _) -> "unknown: " ^ w
+        | Sspace.Excluded (w, _) -> "excluded: " ^ w
+        | Sspace.Refuted w -> "refuted: " ^ w
+      in
+      Stdio.printf "== %s: combined view, root level %s ==\n" name level;
+      List.iter children ~f:(fun (d, c) -> Stdio.printf "  %s: %s\n" (FD.to_label d) (verdict c));
+      let under d = List.map ~f:(fun (path, x) -> ((FD.level d, d) :: path, x)) in
+      Verdict.p
+        (name ^ ": the root commits the family, matmul then conv")
+        (String.equal level (FD.level matmul)
+        && List.equal FD.equal (List.map children ~f:fst) [ matmul; conv ]);
+      Verdict.p
+        (name ^ ": below the root, the matmul child is the matmul family's own tree")
+        (Poly.equal (Sspace.enumerate combined) (under matmul (Sspace.enumerate family)));
+      Verdict.p
+        (name ^ ": the refutations are the matmul family's, then the conv family's no-site witness")
+        (Poly.equal (Sspace.refutations combined)
+           (under matmul (Sspace.refutations family)
+           @ [ ([ (FD.level conv, conv) ], Autotune.no_conv_site_witness) ]));
+      Verdict.p
+        (name ^ ": the combined view's leaves are the seed list")
+        (Poly.equal (Sspace.leaves combined)
+           (Autotune.sketch_seed_params ~is_gpu ~is_cpu ~limits opt))
+  | _ -> Verdict.p (name ^ ": a matmul site has a family root above its family tree") false
+
 (* gh-ocannl-591: what the certain-traffic increment of a leaf's path MUST be, derived from the
    leaf's own sketch parameters and NOTHING on the path — no decision, no label. Cross-checking it
    against [sketch_path_traffic_floor] over paths walked out of the real tree is what pins the
@@ -392,6 +432,8 @@ let () =
   in
   tree_section "cpu simd32" ~is_gpu:false ~is_cpu:true ~limits:cpu_limits opt cpu_seeds;
   tree_section "gpu staged+depth" ~is_gpu:true ~is_cpu:false ~limits:gpu_full_limits opt gpu_seeds;
+  family_root_pins "cpu simd32" ~is_gpu:false ~is_cpu:true ~limits:cpu_limits opt;
+  family_root_pins "gpu staged+depth" ~is_gpu:true ~is_cpu:false ~limits:gpu_full_limits opt;
   pad_waste_pins "cpu simd32" ~is_gpu:false ~is_cpu:true ~limits:cpu_limits ~m:nn ~n:nn ~k:nn
     ~pads:true opt;
   pad_waste_pins "gpu staged+depth" ~is_gpu:true ~is_cpu:false ~limits:gpu_full_limits ~m:nn ~n:nn

@@ -3074,7 +3074,12 @@ module Family_decision = struct
       level ({!level}) and carries the whole identity of the commitment — no consumer needs the
       level name, or the label, to know what was decided. *)
   type t =
-    | Fusion of [ `Unfused | `Fused ]  (** The root: the epilogue-fusion flavor (gh-ocannl-613). *)
+    | Family of [ `Matmul | `Conv ]
+        (** The combined view's root ({!sketch_family_tree}, gh-ocannl-1488): which family the
+            site's own shape admits, the other refuted with the witness of why. A per-family tree
+            ({!matmul_family_tree}, {!conv_family_tree}) carries no such level. *)
+    | Fusion of [ `Unfused | `Fused ]
+        (** A family's root: the epilogue-fusion flavor (gh-ocannl-613). *)
     | Pipeline of [ `Blocktile | `Tensorized ]  (** Which composed pipeline. *)
     | Batch of [ `Serial | `Grid | `Grid_inner ]
         (** The batch-geometry twin (gh-ocannl-643), GPU only; [`Grid_inner] binds the interior
@@ -3133,6 +3138,7 @@ module Family_decision = struct
   (** The level a decision belongs to — the name {!Ir.Schedule_space.Choice} carries. Derived, so
       the tree cannot mint a node whose level disagrees with its children's decisions. *)
   let level = function
+    | Family _ -> "family"
     | Fusion _ -> "fusion"
     | Pipeline _ -> "pipeline"
     | Batch _ -> "batch"
@@ -3157,6 +3163,8 @@ module Family_decision = struct
     in
     let geom3 { g_bm; g_bn; g_bk; _ } = Printf.sprintf "bm%d bn%d bk%d" g_bm g_bn g_bk in
     function
+    | Family `Matmul -> "matmul"
+    | Family `Conv -> "conv"
     | Fusion `Unfused -> "unfused"
     | Fusion `Fused -> "fused"
     | Pipeline `Blocktile -> "blocktile"
@@ -4876,12 +4884,44 @@ let family_seeding ?capabilities ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hard
     | Seeding_matmul { tree; _ } | Seeding_conv { tree; _ } -> Sspace.leaves tree
     | Seeding_none -> [] )
 
-(* The claiming family's tree, as {!family_seeding} chooses it, unforced below its root: the search
-   driver's entry into the family space ({!Autotune.model_family_search}). *)
+let no_matmul_site_witness =
+  "no matmul site: no accumulation nest classifies as a contraction, directly or through the \
+   enabling interchange"
+
+let no_conv_site_witness =
+  "no conv site: no accumulation nest carries the implicit-GEMM convolution fingerprint"
+
+let matmul_precedence_witness =
+  "a conv site, but the matmul family claims the lowering first: a lowering seeds one family"
+
+(* The combined view (gh-ocannl-1488): a [family = matmul | conv] root above the claiming family's
+   own tree, so the family choice is a decision with witnesses like every level below it. Each
+   family is judged on the site's own shape — its own detector — and a refuted family says why; the
+   claiming family's child is the tree {!family_seeding} built, so the leaves (the seed list) are
+   unchanged. Both detectors can only agree on a site the matmul classifier admits and the conv one
+   does too, which [classify_matmul]'s rules close (a 1x1 window is a plain GEMM, and the conv
+   detector refuses singleton kernel axes); should both claim one, matmul keeps its precedence and
+   the conv child is refuted with that witness rather than seeding a second family. [None] when
+   neither family has a site, as before. The search driver's entry into the family space
+   ({!Autotune.model_family_search}), unforced below the claiming family's root. *)
 let sketch_family_tree ?capabilities ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
     (opt : LL.optimized) : family_tree option =
+  let root ~matmul ~conv =
+    Some
+      (decided_choice
+         [ (Family_decision.Family `Matmul, matmul); (Family_decision.Family `Conv, conv) ])
+  in
   match claimed_family ?capabilities ~is_gpu ~is_cpu ~limits opt with
-  | Seeding_matmul { tree; _ } | Seeding_conv { tree; _ } -> Some tree
+  | Seeding_matmul { tree; _ } ->
+      root
+        ~matmul:(Sspace.Child (Lazy.from_val tree))
+        ~conv:
+          (Sspace.Refuted
+             (match detect_conv opt.LL.llc with
+             | None -> no_conv_site_witness
+             | Some _ -> matmul_precedence_witness))
+  | Seeding_conv { tree; _ } ->
+      root ~matmul:(Sspace.Refuted no_matmul_site_witness) ~conv:(Sspace.Child (Lazy.from_val tree))
   | Seeding_none -> None
 
 let sketch_seed_params ?capabilities ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)

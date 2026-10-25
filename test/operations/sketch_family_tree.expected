@@ -183,6 +183,20 @@ fusion = unfused
 fusion = fused  [refuted: Schedule.Fuse_epilogue: no statement follows the reduction over mm]
 last leaf's decision path: fusion=unfused > pipeline=tensorized > geometry=bm32 bn32 bk16 > twin=depth2
 tree leaves = flat enumeration: true
+== cpu simd32: combined view, root level family ==
+  matmul: live
+  conv: refuted: no conv site: no accumulation nest carries the implicit-GEMM convolution fingerprint
+cpu simd32: the root commits the family, matmul then conv: true
+cpu simd32: below the root, the matmul child is the matmul family's own tree: true
+cpu simd32: the refutations are the matmul family's, then the conv family's no-site witness: true
+cpu simd32: the combined view's leaves are the seed list: true
+== gpu staged+depth: combined view, root level family ==
+  matmul: live
+  conv: refuted: no conv site: no accumulation nest carries the implicit-GEMM convolution fingerprint
+gpu staged+depth: the root commits the family, matmul then conv: true
+gpu staged+depth: below the root, the matmul child is the matmul family's own tree: true
+gpu staged+depth: the refutations are the matmul family's, then the conv family's no-site witness: true
+gpu staged+depth: the combined view's leaves are the seed list: true
 == cpu simd32 pad waste (threshold 2x the menu's least): 22 seeds proposed, 12 excluded ==
     4.00x (4.00x its menu's least)  gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
     4.00x (4.00x its menu's least)  gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
