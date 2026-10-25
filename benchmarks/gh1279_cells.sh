@@ -22,8 +22,9 @@
 # candidate is checked cell by cell against a host oracle on inputs whose sums are exact in f32.
 #
 # Hermetic: OCANNL_* and BENCH_* are unset, the treatment is on argv, the runner starts from
-# benchmarks/ (the nearest ocannl_config; bin/ has the cwd trap). No fixture is read. Exits nonzero
-# when any leg did.
+# benchmarks/ (the nearest ocannl_config; bin/ has the cwd trap). No fixture is read. Exits 1 when
+# any leg failed, 3 when the only faults are legs whose timings were all refused for host contention
+# (the bench's own exit 3: the box's verdict, not the experiment's), 0 otherwise.
 set -u
 [ $# -eq 2 ] || [ $# -eq 4 ] || { sed -n '6,8p' "$0"; exit 2; }
 OUT=$1 BACKEND=$2
@@ -55,7 +56,8 @@ leg() { # NAME ORDER MODE
   echo "exit: $r" >>"$OUT/$1.out"
   echo "leg $1 ($2 $3): exit: $r"
   grep -E '^gh1279:|crowned:' "$OUT/$1.out"
-  [ "$r" -ne 0 ] && rc=$r
+  # A failure outranks a refusal, whichever leg came last.
+  if [ "$r" -ne 0 ] && [ "$rc" -ne 1 ]; then rc=$r; fi
   return 0
 }
 leg psb_fwd fwd both

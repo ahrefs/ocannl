@@ -443,8 +443,10 @@ let () =
      [bin-smoke] canary hit on a GitHub runner (PR #608), where the cell is 2x2 and the question
      being asked is whether the pipeline runs end to end, not what it measures. So the canary passes
      [--allow-unmeasured] and a refusal leaves it green, while an ordinary run — which was asked for
-     numbers and got none — still exits 1. Refusals print their [!!] line either way; a silent "n/a"
-     is what neither caller wants. *)
+     numbers and got none — exits nonzero: 3 when refusals are its ONLY fault, the shared refusal
+     status of the benchmark drivers (benchmarks/cells.py, gh-ocannl-1443), so a driver tells "the
+     box was contended" from "the experiment failed"; 1 when any cell failed. Refusals print their
+     [!!] line either way; a silent "n/a" is what neither caller wants. *)
   let failures = ref 0 in
   let unmeasured = ref 0 in
   let allow_unmeasured = Bench_args.flag args ~name:"allow-unmeasured" in
@@ -1331,4 +1333,5 @@ let () =
        %d cell(s) of this experiment could not be measured or failed parity, and %d had every \
        timing refused for host contention -- see the !! lines.\n"
       !failures !unmeasured;
-  if !failures > 0 || (!unmeasured > 0 && not allow_unmeasured) then Stdlib.exit 1
+  if !failures > 0 then Stdlib.exit 1
+  else if !unmeasured > 0 && not allow_unmeasured then Stdlib.exit 3
