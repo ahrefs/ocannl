@@ -2131,10 +2131,14 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
            max_resident_threads =
              min_over (fun (a : Cu.Device.attributes) ->
                  a.multiprocessor_count * a.max_threads_per_multiprocessor);
-           (* gh-ocannl-1479: the launch fill's multiprocessor count, queried; its saturating
-              threads per multiprocessor are a fitted per-class constant (unmeasured: no fill). *)
+           (* gh-ocannl-1479: the launch fill -- the multiprocessor count, queried, and the threads
+              per multiprocessor at which scalar issue saturates, fitted by
+              tools/calibrate_issue_rate.exe's launch sweep on rog-nv's RTX 5070 Ti Laptop GPU (46
+              multiprocessors; 2026-10-25, ffeac5f8). The 512 x 512 calibration kernel launches
+              16384 threads, full under it, so issue_rate above needs no normalization. One device's
+              constant for the class, overridable by model_fill_threads. *)
            multiprocessors = min_over (fun (a : Cu.Device.attributes) -> a.multiprocessor_count);
-           fill_threads = None;
+           fill_threads = Some 256;
          })
     in
     (* gh-ocannl-572: the kernel source is a function of the lowered code, the device capabilities

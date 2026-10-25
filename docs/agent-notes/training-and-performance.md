@@ -206,7 +206,14 @@ files.
   normalizing 512²'s 16K threads by rog's 107K resident threads would put the issue rate above the
   class ceiling); `tools/calibrate_issue_rate.exe`'s launch sweep fits `t` with the full-fill rate
   on pinned geometries at two block widths (the seeding's size-dependent choice would mix rates).
-  Metal publishes no core count: there both constants are configuration only. What the fill does
+  Metal publishes no core count: there both constants are configuration only. Fit per geometry
+  (a wider tile runs at its own rate) and drop latency-starved points (below 1/8 of the geometry's
+  best throughput): fitted on all points, rog's `t` came out 512, a 16K-thread launch read as 70%
+  full, and the performance-profile pick at outproj b8 moved off the anchor to a 2x2 leaf measured
+  5% slower (a 4x4 register tile's ILP is not threads). Measured 2026-10-25 (`ffeac5f8`): t=256 on
+  rog (46 SMs), 384 on minix (20 CUs); the 512² calibration kernel is full on both, so the issue
+  rates stand; agreement 33-56% -> 52-79% at the batched cells; picks under seeding unchanged;
+  gate-0 picks a bgrid leaf, 2.9-37x faster than the plain one it picked before. What the fill does
   NOT do: separate a coalesced leaf from its uncoalesced twin (same work and launch per context;
   coalescing is a memory-transaction effect), or the 64x64 vs 32x32 bgrid geometries at outproj b8
   (64 blocks of 256 threads fill 64/70 under the cap, while the 64-block leaf measured fastest:
