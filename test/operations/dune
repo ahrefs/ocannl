@@ -9705,6 +9705,7 @@
   bench_design.expected
   bin_cells_probe.exe
   ../../benchmarks/bin_cells.py
+  ../../benchmarks/cells.py
   ../../benchmarks/cell_group.py
   ../../benchmarks/strict_json.py
   ../../benchmarks/display_safe.py
