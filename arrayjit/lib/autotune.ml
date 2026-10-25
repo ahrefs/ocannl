@@ -3465,6 +3465,105 @@ let fiss_sketch_label ?(staff = []) ~fine entries =
     (render entries)
     (match staff with [] -> "" | _ -> " | staff " ^ render staff)
 
+(* gh-ocannl-1512: the per-segment view [model_default] ranks and [model_explain] lists -- exactly
+   what {!tune}'s seed enumeration derives: {!sketch_segmentation} at [`Search] of [base], when it
+   splits the routine or exposes a changed lowering, as the plan and one [(key, pre, post)] per
+   keyed segment, [post] being the segment under the search's preset: the threshold its sketches
+   must strictly beat to enter a substitution. Not the configured thresholds: they leave a
+   below-threshold nest unannotated, and fission coalesces adjacent unannotated segments back into
+   one kernel, so on cc below [cpu_schedule_min_parallel] that segmentation was the single kernel
+   and the per-segment path never fired. Nor the configured preset as the threshold: the ranking
+   score charges no operand re-reads to an unannotated kernel (one block), so a segment's sketches
+   could at best tie its serial preset and no substitution would ever form. (What a substitution
+   SHIPS on the segments it leaves unsketched is the configured preset: [model_default]'s
+   [apply_fiss].) [None] where fission exposes no site; raises {!Outcome.Cause_at} as
+   {!Sched.fission_segmented} does. [tune] enumerates its per-segment seeds on it
+   ({!search_segment_entries}, gh-ocannl-1490), its finer pass with [arity_cuts]. *)
+let model_segments ?arity_cuts ~is_gpu ~is_cpu ~limits ~static_indices (base : LL.optimized) =
+  match
+    sketch_segmentation ?arity_cuts ~presets:`Search ~is_gpu ~is_cpu ~limits ~static_indices base
+  with
+  | _, tuples when not (fission_exposes_sites ~static_indices base tuples) -> None
+  | plan, tuples -> Some (plan, keyed_segments ~static_indices plan tuples)
+
+(* gh-ocannl-1490: the search's seeding, as one value a driver can take without a search -- the
+   seeding census without a budget hack, and the seeds a per-seed parity check executes. [tune]
+   enumerates through it, so the census and the parity driver see exactly what a search seeds.
+   [census] takes each seeded lowering's census line where [tune] takes it (default: the
+   [autotune_log_seeding] stream). *)
+let default_census ~capabilities ~is_gpu ~is_cpu ~limits ~where opt =
+  log_seeding ~coalesced:true ~capabilities ~where ~is_gpu ~is_cpu ~limits opt
+
+let search_seed_params ?census ~capabilities ~is_gpu ~is_cpu ~limits ~where opt =
+  (match census with
+  | Some census -> census ~where opt
+  | None -> default_census ~capabilities ~is_gpu ~is_cpu ~limits ~where opt);
+  sketch_seed_params ~capabilities ~is_gpu ~is_cpu ~limits opt
+  @ coalesced_seed_params ~capabilities ~is_gpu ~is_cpu ~limits opt
+
+(* The search's per-fission-segment seeds on one segmentation (coarse, or the finer [arity_cuts]
+   one): the keyed segments of {!sketch_segmentation} at the search's presets, each with the seeds
+   it admits; a segment with none is left out. Empty off the C and GPU backends, where the
+   segmentation refuses, and where fission exposes no site the whole-routine seeds miss. *)
+let search_segment_entries ?census ~capabilities ~arity_cuts ~is_gpu ~is_cpu ~limits ~static_indices
+    base_opt =
+  if not (is_gpu || is_cpu) then ([], [])
+  else
+    match model_segments ~arity_cuts ~is_gpu ~is_cpu ~limits ~static_indices base_opt with
+    | exception Outcome.Cause_at _ -> ([], [])
+    | None -> ([], [])
+    | Some (plan, keyed) ->
+        ( plan,
+          List.filter_map keyed ~f:(fun (key, pre, _) ->
+              let where =
+                Printf.sprintf "tune %s segment %s"
+                  (if arity_cuts then "fine" else "coarse")
+                  (seg_key_tag key)
+              in
+              match search_seed_params ?census ~capabilities ~is_gpu ~is_cpu ~limits ~where pre with
+              | [] -> None
+              | params -> Some (key, pre, params)) )
+
+type segment_seeds = seg_key * LL.optimized * sketch_params list
+
+type search_seeding = {
+  ss_whole : sketch_params list;
+  ss_coarse_plan : Sched.segmentation;
+  ss_coarse : segment_seeds list;
+  ss_fine_plan : Sched.segmentation;
+  ss_fine : segment_seeds list;
+  ss_fine_new : segment_seeds list;
+}
+
+let search_seeding ?census ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices base_opt =
+  let ss_whole =
+    search_seed_params ?census ~capabilities ~is_gpu ~is_cpu ~limits ~where:"tune whole-routine"
+      base_opt
+  in
+  let entries ~arity_cuts =
+    search_segment_entries ?census ~capabilities ~arity_cuts ~is_gpu ~is_cpu ~limits ~static_indices
+      base_opt
+  in
+  let ss_coarse_plan, ss_coarse = entries ~arity_cuts:false in
+  (* The finer segmentation (gh-ocannl-574) is GPU-only, and is dropped whole when it cuts nothing
+     new: see [tune]. *)
+  let coarse_keys = List.map ss_coarse ~f:(fun (k, _, _) -> k) in
+  let is_new (k, _, _) = not (List.mem coarse_keys k ~equal:equal_seg_key) in
+  let ss_fine_plan, ss_fine =
+    if not is_gpu then ([], [])
+    else
+      let plan, fine = entries ~arity_cuts:true in
+      if List.exists fine ~f:is_new then (plan, fine) else ([], [])
+  in
+  {
+    ss_whole;
+    ss_coarse_plan;
+    ss_coarse;
+    ss_fine_plan;
+    ss_fine;
+    ss_fine_new = List.filter ss_fine ~f:is_new;
+  }
+
 (* A split-reduce candidate's label renders EVERY field of each [(site, num_blocks)] entry
    (post-wave task of gh-ocannl-1230), as {!sketch_params_label} does for a sketch: the target by
    its debug name AND its id, since two nodes can share a debug name (two [x.grad]s of one model),
@@ -5866,24 +5965,6 @@ let seeded_record_for_key ~(plan : Sched.segmentation) ~record (key : seg_key) =
         (List.exists spans ~f:(fun (start, n) ->
              List.mem key.key_units start ~equal:Int.equal && start <= u && u < start + n))
         p)
-
-(* gh-ocannl-1512: the per-segment view [model_default] ranks and [model_explain] lists -- exactly
-   what {!tune}'s seed enumeration derives: {!sketch_segmentation} at [`Search] of [base], when it
-   splits the routine or exposes a changed lowering, as the plan and one [(key, pre, post)] per
-   keyed segment, [post] being the segment under the search's preset: the threshold its sketches
-   must strictly beat to enter a substitution. Not the configured thresholds: they leave a
-   below-threshold nest unannotated, and fission coalesces adjacent unannotated segments back into
-   one kernel, so on cc below [cpu_schedule_min_parallel] that segmentation was the single kernel
-   and the per-segment path never fired. Nor the configured preset as the threshold: the ranking
-   score charges no operand re-reads to an unannotated kernel (one block), so a segment's sketches
-   could at best tie its serial preset and no substitution would ever form. (What a substitution
-   SHIPS on the segments it leaves unsketched is the configured preset: [model_default]'s
-   [apply_fiss].) [None] where fission exposes no site; raises {!Outcome.Cause_at} as
-   {!Sched.fission_segmented} does. *)
-let model_segments ~is_gpu ~is_cpu ~limits ~static_indices (base : LL.optimized) =
-  match sketch_segmentation ~presets:`Search ~is_gpu ~is_cpu ~limits ~static_indices base with
-  | _, tuples when not (fission_exposes_sites ~static_indices base tuples) -> None
-  | plan, tuples -> Some (plan, keyed_segments ~static_indices plan tuples)
 
 let model_default ?name ?report ctx comp bindings =
   let backend = Context.backend_name ctx in
@@ -8949,14 +9030,14 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                   (Printf.sprintf "%s attempt=%S" (progress_where ()) (spec_label spec));
               try_spec ?hopeless_against spec)
           in
-          (* The search's seeds for one lowering: the family seeds, then the coalesced layout's
-             branch beside them (gh-ocannl-1165) — prepared hermetically from the same lowering, its
-             candidates' schedules carry their structural [Coalesce] prefix. *)
-          let search_seed_params ~where opt =
-            let capabilities = Context.codegen_capabilities ctx in
-            log_seeding ~coalesced:true ~capabilities ~where ~is_gpu ~is_cpu ~limits opt;
-            sketch_seed_params ~capabilities ~is_gpu ~is_cpu ~limits opt
-            @ coalesced_seed_params ~capabilities ~is_gpu ~is_cpu ~limits opt
+          (* The search's seeds for each lowering it seeds ({!search_seeding}, gh-ocannl-1490): the
+             family seeds, then the coalesced layout's branch beside them (gh-ocannl-1165) —
+             prepared hermetically from the same lowering, its candidates' schedules carry their
+             structural [Coalesce] prefix. *)
+          let seeding =
+            search_seeding
+              ~capabilities:(Context.codegen_capabilities ctx)
+              ~is_gpu ~is_cpu ~limits ~static_indices base_opt
           in
           let block_size_presets mk =
             mk None
@@ -9000,8 +9081,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
               List.map kept ~f:fst
           in
           let sketch_params =
-            model_prefilter_params ~seg_opt:base_opt ~family:"whole-routine"
-              (search_seed_params ~where:"tune whole-routine" base_opt)
+            model_prefilter_params ~seg_opt:base_opt ~family:"whole-routine" seeding.ss_whole
           in
           n_sketch_candidates := List.length sketch_params;
           n_epilogue_sketch_candidates := List.count sketch_params ~f:(fun p -> p.sk_epilogue);
@@ -9010,30 +9090,8 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
              segmentation once, on a hermetic copy of the base lowering with the same pipeline
              settings the candidate transform uses ([preset_sched]'s defaults), and detect a matmul
              site per keyed segment ({!keyed_segments}): the candidates replay this segmentation and
-             find their segments in it by position (gh-ocannl-1243). *)
-          let enum_fiss_entries ~arity_cuts =
-            if not (is_gpu || is_cpu) then ([], [])
-            else
-              match
-                sketch_segmentation ~arity_cuts ~presets:`Search ~is_gpu ~is_cpu ~limits
-                  ~static_indices base_opt
-              with
-              | exception Outcome.Cause_at _ -> ([], [])
-              | _, tuples when not (fission_exposes_sites ~static_indices base_opt tuples) ->
-                  ([], [])
-              | plan, tuples ->
-                  ( plan,
-                    List.filter_map (keyed_segments ~static_indices plan tuples)
-                      ~f:(fun (key, pre, _) ->
-                        let where =
-                          Printf.sprintf "tune %s segment %s"
-                            (if arity_cuts then "fine" else "coarse")
-                            (seg_key_tag key)
-                        in
-                        match search_seed_params ~where pre with
-                        | [] -> None
-                        | params -> Some (key, pre, params)) )
-          in
+             find their segments in it by position (gh-ocannl-1243). Enumerated in [seeding]
+             above. *)
           let prefilter_entries ~tag entries =
             (* Per-segment pre-filtering: each segment's sketches are their own family —
                cross-segment scores are incomparable (different code volumes), and the singles below
@@ -9041,7 +9099,7 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
             List.map entries ~f:(fun (key, pre, ps) ->
                 (key, model_prefilter_params ~seg_opt:pre ~family:(tag ^ seg_key_tag key) ps))
           in
-          let coarse_plan, coarse_entries = enum_fiss_entries ~arity_cuts:false in
+          let coarse_plan, coarse_entries = (seeding.ss_coarse_plan, seeding.ss_coarse) in
           (* Each coarse key's pre-schedule segment, which the staffed sweep weighs its key by. *)
           let coarse_pre = List.map coarse_entries ~f:(fun (key, pre, _) -> (key, pre)) in
           let fiss_sketch_entries = prefilter_entries ~tag:"segment " coarse_entries in
@@ -9057,23 +9115,16 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
              bests. A segment the finer cuts leave unchanged keeps its first unit and its digest, so
              its key is the coarse one. *)
           let fine_plan, fine_all_entries, fine_pre =
-            if not is_gpu then ([], [], [])
-            else
-              let plan, fine = enum_fiss_entries ~arity_cuts:true in
-              let coarse_keys = List.map fiss_sketch_entries ~f:fst in
-              if List.for_all fine ~f:(fun (k, _, _) -> List.mem coarse_keys k ~equal:equal_seg_key)
-              then ([], [], [])
-                (* The finer mode cut nothing new: the coarse seeds cover every segment. *)
-              else
-                ( plan,
-                  prefilter_entries ~tag:"fine segment " fine,
-                  List.map fine ~f:(fun (key, pre, _) -> (key, pre)) )
+            (* Empty off GPU, and when the finer mode cut nothing new: the coarse seeds cover every
+               segment. *)
+            ( seeding.ss_fine_plan,
+              prefilter_entries ~tag:"fine segment " seeding.ss_fine,
+              List.map seeding.ss_fine ~f:(fun (key, pre, _) -> (key, pre)) )
           in
           let plan_of ~fine = if fine then fine_plan else coarse_plan in
           let fine_new_entries =
-            let coarse_keys = List.map fiss_sketch_entries ~f:fst in
             List.filter fine_all_entries ~f:(fun (k, _) ->
-                not (List.mem coarse_keys k ~equal:equal_seg_key))
+                List.exists seeding.ss_fine_new ~f:(fun (k', _, _) -> equal_seg_key k k'))
           in
           let fiss_sketch_specs =
             (* Single-segment specs: each parameter set of each keyed segment is proposed alone,

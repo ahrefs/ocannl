@@ -276,6 +276,49 @@ val sketch_segmentation :
     rather than restating these settings. Raises {!Ir.Schedule_outcome.Cause_at} as
     {!Ir.Schedule.fission_segmented} does. *)
 
+type segment_seeds = seg_key * Ir.Low_level.optimized * sketch_params list
+(** A keyed segment of the search's segmentation, its pre-schedule slice, and the seeds it admits.
+*)
+
+type search_seeding = {
+  ss_whole : sketch_params list;  (** The whole-routine seeds. *)
+  ss_coarse_plan : Ir.Schedule.segmentation;
+  ss_coarse : segment_seeds list;  (** The coarse segmentation's seeded segments. *)
+  ss_fine_plan : Ir.Schedule.segmentation;
+  ss_fine : segment_seeds list;
+      (** The finer ([arity_cuts]) segmentation's seeded segments (gh-ocannl-574): empty off GPU,
+          and when the finer cuts key no segment the coarse ones do not. *)
+  ss_fine_new : segment_seeds list;
+      (** Those of [ss_fine] whose keys the coarse segmentation lacks: the ones {!tune} proposes
+          singles for. *)
+}
+
+val search_seeding :
+  ?census:(where:string -> Ir.Low_level.optimized -> unit) ->
+  capabilities:Ir.Backend_intf.codegen_capabilities ->
+  is_gpu:bool ->
+  is_cpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  static_indices:Ir.Indexing.static_symbol list ->
+  Ir.Low_level.optimized ->
+  search_seeding
+(** The seeds {!tune} proposes for a base lowering before its model pre-filter (gh-ocannl-1490):
+    {!sketch_seed_params} then {!coalesced_seed_params}, on the whole routine and on each keyed
+    segment of {!sketch_segmentation} at [`Search] presets. {!tune} enumerates through this, so a
+    driver taking the seeding census, or executing the seeds one by one, sees what a search seeds
+    without running one. [census] is called on every lowering seeded, tagged as the
+    [autotune_log_seeding] stream tags it (default: that stream, a no-op unless the key is on). *)
+
+val sketch_replay :
+  static_indices:Ir.Indexing.static_symbol list ->
+  sketch:(sketch_params -> Ir.Low_level.optimized -> Ir.Schedule.schedule) ->
+  Ir.Schedule.segmentation ->
+  (seg_key * sketch_params) list ->
+  Ir.Schedule.segmentation * (int -> Ir.Low_level.optimized -> Ir.Schedule.schedule option)
+(** The replay a per-segment sketch candidate compiles under ({!tuner_fission}'s [replay]): the
+    segmentation, with each segment a key names by position — and whose structural digest is the
+    key's — scheduled by [sketch], every other one left to its preset. *)
+
 type matmul_site = {
   m_i : Ir.Indexing.symbol;
   m_j : Ir.Indexing.symbol;

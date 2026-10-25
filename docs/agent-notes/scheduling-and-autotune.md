@@ -2673,6 +2673,22 @@ files.
   before citing a seeding gate as evidence: the decline census can never show a seeding refusal,
   and on real training graphs the binding conv gate is usually the matmul family claiming the
   whole routine first, not the gate an issue names.
+- **A driver takes the search's seeds from `Autotune.search_seeding`, never from a re-derived
+  segmentation** (gh-ocannl-1490): it is the enumeration `tune` itself runs — whole routine, coarse
+  keyed segments, the GPU's finer segments and which of them are new — with a `?census` hook taking
+  each seeded lowering's census where the `autotune_log_seeding` stream would. `bench_conv_diag`'s
+  `BENCH_CENSUS_ONLY` (the census, no search) and `BENCH_PARITY` (each seed compiled as a
+  per-segment candidate through `Autotune.sketch_replay` + `tuner_fission`, executed one step
+  against the default pipeline, NaN-poisoned written nodes, a perturbed-code negative control) are
+  built on it (`Bench_seed_parity`). Perturbing a tensorized segment's `Set`s can make its
+  `Tile_mma` render as the scalar fallback: the control proves detection, not that the
+  tensorized path ran. **A parity oracle compares every written node, not the step's outcome**:
+  CUDA's two wrong row-block conv seeds on cifar_resnet (forward output off by 0.74) moved the loss
+  by 3e-5. **Under tf32, max-pool backward confounds a training-step oracle**: the seed's conv
+  rounds apart from the f32 reference, a window's argmax flips, and the routed gradient moves
+  between cells (exactly 1 at the `..._cond_..._sum` node, a few percent on parameter gradients),
+  so every conv seed mismatches; judge forward conv seeds with `BENCH_FWD=1` there. On Metal and
+  cc (f32 seeds) no selection flips.
 - A test claims a tensorized seed's PRESENCE wherever the backend advertises the capability, and
   gates on that capability, never on the seed list its claims are about (gh-ocannl-1115). Gated on
   the seeds, a seeding regression — or a claim asking for a seed the seeder excludes by

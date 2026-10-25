@@ -1,0 +1,8 @@
+census: the whole routine is censused: true
+census: fission segments are censused: true
+parity: at least one seed of a keyed segment executes: true
+parity: every executed seed matches the default pipeline's step: true
+parity: no seed fails to reach its segment, or raises: true
+negative control: at least one perturbed seed executes: true
+negative control: every executed perturbed seed is reported a mismatch: true
+negative control: no perturbed seed fails to reach its segment, raises, or has nothing to perturb: true

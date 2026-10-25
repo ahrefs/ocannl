@@ -1,7 +1,18 @@
 (* Diagnostic for the conv workloads' training step's default schedule: prints the fission segment
    census (kinds, launch geometry, per-nest loop extents and written nodes) on the configured
    backend, then times a few individual steps. Builds bench_conv.ml's model (Bench_conv_model); not
-   part of the benchmark protocol. *)
+   part of the benchmark protocol.
+
+   Two modes replace the rest of the run (gh-ocannl-1490, Bench_seed_parity): - BENCH_CENSUS_ONLY=1
+   prints the autotuner's seeding census for the step -- every lowering a search seeds, the whole
+   routine and each keyed fission segment -- and exits, no search started. - BENCH_PARITY=1 executes
+   each conv seed (BENCH_PARITY_SEEDS=all: every seed) of each keyed segment, compiled as the
+   search's per-segment candidate, for one step against the default pipeline's step, and prints a
+   verdict per seed. BENCH_PARITY_TOL (default 1e-3, 1e-2 under tf32_matmuls) bounds the worst
+   normalized difference. BENCH_PARITY_PERTURB=1 is the negative control: every seeded segment's
+   code is perturbed, and each perturbed seed must be reported a mismatch. Exits 4 when a seed fails
+   (a mismatch, or under the control a perturbation not detected), 5 when no seed was executed, 0
+   otherwise. *)
 
 open Base
 open Ocannl
@@ -73,6 +84,53 @@ let () =
      routine is discarded); the timed routine is compiled with the regular default pipeline
      below. *)
   let opt = H.capture_lowering ctx step_comp bindings in
+  (* gh-ocannl-1490: the search's seeding census, no search started. *)
+  if H.env_flag "BENCH_CENSUS_ONLY" then (
+    List.iter
+      (Bench_seed_parity.census_lines ctx ~static_indices:[ batch_n ] opt)
+      ~f:Stdio.print_endline;
+    Stdlib.exit 0);
+  (* gh-ocannl-1490: every selected seed of every keyed segment the search seeds, executed against
+     the default pipeline's step; exit 4 when any seed fails. *)
+  if H.env_flag "BENCH_PARITY" then (
+    let perturb = H.env_flag "BENCH_PARITY_PERTURB" in
+    let select =
+      match Stdlib.Sys.getenv_opt "BENCH_PARITY_SEEDS" with
+      | None | Some ("" | "conv") -> Bench_seed_parity.conv_seed
+      | Some "all" -> Bench_seed_parity.any_seed
+      | Some other -> failwith ("BENCH_PARITY_SEEDS must be conv or all; found: " ^ other)
+    in
+    let tol =
+      match Stdlib.Sys.getenv_opt "BENCH_PARITY_TOL" with
+      | Some t -> Float.of_string t
+      | None -> Bench_seed_parity.default_tol ()
+    in
+    let n = ref 0 in
+    let reference, results =
+      Bench_seed_parity.parity ~tol ~perturb ~select
+        ~on_result:(fun r ->
+          Int.incr n;
+          Stdio.printf "parity seed %d %s\n%!" !n (Bench_seed_parity.verdict_line r))
+        ctx step_comp bindings
+        ~bind:(fun r -> IDX.find_exn r.Context.bindings batch_n := 0)
+        ~static_indices:[ batch_n ] opt
+    in
+    let failed = List.count results ~f:(fun r -> not (Bench_seed_parity.passed ~perturb r)) in
+    Stdio.printf
+      "parity (%s): backend %s, %d seeds, %d failed at tolerance %g; reference: the default \
+       pipeline, %d nodes compared, %d restored, %d poisoned%s\n"
+      (if perturb then "negative control, every seed perturbed" else "seeds as proposed")
+      backend (List.length results) failed tol reference.ref_compared reference.ref_restored
+      reference.ref_poisoned
+      (match reference.ref_poison_unsafe with
+      | [] -> ""
+      | l -> ", not poisoned: " ^ String.concat ~sep:" " l);
+    let executed =
+      List.count results ~f:(fun r ->
+          match r.Bench_seed_parity.verdict with Match _ | Mismatch _ -> true | _ -> false)
+    in
+    if executed = 0 then Stdio.printf "parity: no seed was executed, so nothing was checked\n";
+    Stdlib.exit (if failed > 0 then 4 else if executed = 0 then 5 else 0));
   if H.env_flag "BENCH_CANON" then (
     let module LL = Ir.Low_level in
     let canon = Ir.Schedule_cache.canonicalize ~static_indices:[ batch_n ] opt in

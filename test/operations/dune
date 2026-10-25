@@ -8287,6 +8287,30 @@
  (preprocess
   (pps ppx_ocannl)))
 
+; gh-ocannl-1490: bench_conv_diag's census-only and per-seed parity modes, through the library
+; both call, on a small convnet step fabricated in memory, with the parity mode's negative control
+; (every seeded segment perturbed must be reported a mismatch). Compiles one training step per seed,
+; so it takes the shared training lock.
+
+(test
+ (name bench_seed_parity_smoke)
+ (package neural_nets_lib)
+ (locks ocannl_training_test)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules bench_seed_parity_smoke)
+ (libraries
+  base
+  stdio
+  ocannl
+  bench_harness
+  bench_seed_parity
+  ll_test
+  arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-657: the exhaustive half of the e5m2 codec verification, the half that needs no GPU.
 ; 2^32 f32 bit patterns and 17.2e9 doubles, so it belongs on `slow` rather than in `runtest` --
 ; seconds, not milliseconds -- but `@check` compiles it and `dune build
