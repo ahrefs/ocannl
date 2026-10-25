@@ -1,0 +1,21 @@
+scripted case: single-shot picks arm 1; shortlist 0,1,2; two-stage picks arm 0
+scripted: the single-shot pick is not the true best: true
+scripted: the shortlist holds the true best: true
+scripted: the two-stage pick is the true best: true
+scripted: a shortlist of one is the single-shot pick: true
+seeded population, 2000 trials of 8 seeds 1.5% apart, shortlist of 3:
+  round offsets, +-0.5% jitter: single-shot 1411, two-stage 1614 picked the true best (shortlist held it 1614 times)
+  no offsets, +-2.5% jitter:    single-shot 1473, two-stage 1468 picked the true best
+with round offsets, single-shot misses the true best in over a fifth of trials: true
+the two-stage rule picks it in at least a twentieth more of them: true
+and whenever the shortlist held the true best, the re-timing picked it: true
+with no round offsets, single-shot misses the true best sometimes: true
+and the two rules agree to within a fiftieth of the trials: true
+every arm the single-shot rule picks is on the shortlist: true
+a shortlist holds at most k plus one per other statistic, and all of a smaller class: true
+both rules keep the input order, without duplicates: true
+a tie goes to the earlier arm: true
+the population holds empty classes: true
+a class selects nothing exactly when it is empty, under both rules: true
+a NaN never wins over a number: true
+a shortlist of fewer than one is refused: true

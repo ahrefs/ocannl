@@ -679,6 +679,15 @@ files.
   Metal kernel timings) was larger than the effect under test. After `Train.tune_placements` the
   debug source left on disk is arm B's — the returned already-compiled arm — so grep the artifact you
   actually mean.
+- Picking the best of many candidates timed in DIFFERENT rounds is a winner's-curse selection: each
+  reading carries its round's offset (drift, or contention that only ever slows a round down), so
+  the round-best is often the luckiest round, not the fastest candidate. Re-timing the round-best
+  does not repair that: it sharpens the number reported for the wrong pick. Re-time a SHORTLIST
+  in one interleaved round instead, and pick by that round alone (`Bench_select`, which
+  `projection_shape_bench` applies, gh-ocannl-1531). The gain comes from the shared round, not from
+  the second draw: under scripted noise, when round offsets dominate, the shortlist round recovers
+  the true best every time the shortlist holds it. With i.i.d. noise only, the two rules tie
+  (`test/operations/bench_select`).
 - An effect smaller than the variance between two independent searches (on `gpt2_mini` that
   variance is several percent of a step, gh-ocannl-1165) is measured by SPLICING, not by comparing
   two searched schedules: both arms replay the control's winner except at the target segments

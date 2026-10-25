@@ -43,27 +43,33 @@
 
    Timing is ROUND-INTERLEAVED, not site-by-site: one round per base tile geometry ([bgrid] twins
    included, since a merged site's plain arm and a batched site's [bgrid] arm are the pair being
-   compared), inside which every arm is timed batch by batch. A last FINALISTS round recompiles each
-   site's best scalar and best tensorized seed (under each of the three statistics, from their own
-   rounds) and its default, and times them again, interleaved with every other site's finalists and
-   with the searches' crowned routines: the cross-geometry question "which candidate is best" is
-   then answered inside one round rather than across rounds' drift, by numbers that are not the
-   selection's own optimistic draw. The visiting order is [Bench_design]'s (gh-ocannl-743): ONE
-   rotation per adjacent PAIR of batches, mirrored on the odd member, so each such pair exchanges
-   the positions of every pair of arms exactly -- the run-by-run A/B alternation, for all pairs at
-   once and with no RNG -- with the pairs' rotations spread over the arm count, so every arm's
-   position histogram is equal once the batch count reaches the arm count (twice it, for an odd
-   one), and each round's header line says whether this run's count does. Timing one site to
-   completion before the next puts the drift straight into the difference under test, and reversing
-   the site order only moves that bias. Three statistics per arm: [repeats] dispatches queued
-   back-to-back with one sync -- the sync only, never a device-to-host readback, which would put a
-   transfer and a host allocation inside the timed region (what a kernel sustains inside a step, and
-   the summary's statistic, taken at the MEDIAN batch), and [Autotune.time_routine] in each of its
-   two modes ([Isolated], one dispatch and one sync, which reads up to 2.6x higher; and [Queued],
-   its gh-ocannl-755 companion), minimized over the same interleaved passes. The last two are the
-   TUNER'S instrument rather than a re-derivation of it, which is what makes the closing
-   gh-ocannl-755 table a comparison of the ranking a search would produce against the ranking
-   steady-state throughput produces, and not of two lookalikes.
+   compared), inside which every arm is timed batch by batch. Then the finalists are SELECTED in two
+   stages ([Bench_select], gh-ocannl-1531), per site and per candidate class (scalar seeds per
+   coalesced layout, tensorized seeds per layout): a SHORTLIST round recompiles each class's top 3
+   seeds by their geometry rounds' median batch, plus its best by min batch and by tuner queued
+   time, and re-times them all interleaved in one round; a class's finalists are its best under each
+   of the three statistics by THAT round's readings alone (a class with a single shortlisted seed
+   skips it). A seed's own round is one draw, read in a different round from its rivals', and the
+   round-best is too often the luckiest batch rather than the fastest seed. A last FINALISTS round
+   recompiles the finalists and each site's default, and times them again, interleaved with every
+   other site's finalists and with the searches' crowned routines: the cross-geometry question
+   "which candidate is best" is then answered inside one round rather than across rounds' drift, by
+   numbers that are not the selection's own optimistic draw. The visiting order is [Bench_design]'s
+   (gh-ocannl-743): ONE rotation per adjacent PAIR of batches, mirrored on the odd member, so each
+   such pair exchanges the positions of every pair of arms exactly -- the run-by-run A/B
+   alternation, for all pairs at once and with no RNG -- with the pairs' rotations spread over the
+   arm count, so every arm's position histogram is equal once the batch count reaches the arm count
+   (twice it, for an odd one), and each round's header line says whether this run's count does.
+   Timing one site to completion before the next puts the drift straight into the difference under
+   test, and reversing the site order only moves that bias. Three statistics per arm: [repeats]
+   dispatches queued back-to-back with one sync -- the sync only, never a device-to-host readback,
+   which would put a transfer and a host allocation inside the timed region (what a kernel sustains
+   inside a step, and the summary's statistic, taken at the MEDIAN batch), and
+   [Autotune.time_routine] in each of its two modes ([Isolated], one dispatch and one sync, which
+   reads up to 2.6x higher; and [Queued], its gh-ocannl-755 companion), minimized over the same
+   interleaved passes. The last two are the TUNER'S instrument rather than a re-derivation of it,
+   which is what makes the closing gh-ocannl-755 table a comparison of the ranking a search would
+   produce against the ranking steady-state throughput produces, and not of two lookalikes.
 
    Which of the numbers on a line to believe depends on what the noise is. The median is the right
    summary when the noise is symmetric, which is why it is the summary. On a CONTENDED box it is
@@ -267,6 +273,13 @@ type stats = { st_med : float; st_min : float; st_queued : float }
 (* The label prefix of an arm re-timed in the finalists round, which keeps it apart from the seed
    round's arm of the same geometry in every table. *)
 let final_prefix = "FINAL "
+
+(* The label prefix of an arm re-timed in the shortlist round (gh-ocannl-1531): the evidence the
+   finalists are picked by, kept out of the closing tables like a [FINAL] arm. *)
+let shortlist_prefix = "SHORT "
+
+(* How many seeds of a class, by their geometry rounds' median, the shortlist round re-times. *)
+let shortlist_size = 3
 
 (* The label of a search's crowned winner. *)
 let tuned_label = "TUNED (full search)"
@@ -776,9 +789,13 @@ let () =
       ~check:
         (if lv.lv_parity then Bench_out.Passed
          else Bench_out.Failed "differs from the host-computed oracle");
-    (* The finalists round re-times arms under a [FINAL] label; they stay out of the gh-755 ranking,
-       whose population is one tuning round's seeds. *)
-    if not (String.is_prefix lv.lv_label ~prefix:final_prefix) then
+    (* The shortlist and finalists rounds re-time arms under a [SHORT] or [FINAL] label; they stay
+       out of the gh-755 ranking, whose population is one tuning round's seeds. *)
+    if
+      not
+        (String.is_prefix lv.lv_label ~prefix:final_prefix
+        || String.is_prefix lv.lv_label ~prefix:shortlist_prefix)
+    then
       Hashtbl.update instrument
         ~f:(function
           | None -> [ (lv.lv_label, median, !(lv.lv_iso), !(lv.lv_queued)) ]
@@ -1017,53 +1034,85 @@ let () =
   in
   (* The finalists round (gh-ocannl-728 Move 0). Each geometry round compares arms AT one geometry;
      "the best candidate a site has" is a comparison ACROSS rounds, which the bestseed column reads
-     through whatever drift separated them. So each site's best scalar seed and best tensorized seed
-     (by their own rounds' readings, under each statistic the gate uses) are recompiled and timed
-     again here, interleaved with each other, with every other site's finalists, and with the
-     searches' crowned winners -- one round holding every contender of the question "does the merged
-     site beat the best the split site has", duplicated sites included. The finalists are chosen by
-     one statistic and then re-measured, so the round's numbers are not the selection's own
-     optimistic draw. The untuned default joins the round too: it is a candidate a site has, and
-     nothing guarantees a seed or the queued search's crown beats it under every statistic the gate
-     reads. *)
-  let finalists =
+     through whatever drift separated them. So each site's best seeds of each class are recompiled
+     and timed again here, interleaved with each other, with every other site's finalists, and with
+     the searches' crowned winners -- one round holding every contender of the question "does the
+     merged site beat the best the split site has", duplicated sites included. The finalists are
+     selected by the shortlist round below and then re-measured, so the round's numbers are not the
+     selection's own optimistic draw. The untuned default joins the round too: it is a candidate a
+     site has, and nothing guarantees a seed or the queued search's crown beats it under every
+     statistic the gate reads. *)
+  (* Classes: the scalar seeds per coalesced layout (none, columns, contraction), and the tensorized
+     ones uncoalesced and contraction-coalesced (gh-ocannl-1459: the only layout with tensorized
+     leaves), so the best uncoalesced seed and the best coalesced one of each layout and pipeline
+     are all re-timed together (gh-ocannl-1279's comparison reads the scalar classes from the
+     finalists round). *)
+  let classes =
+    [
+      (true, None);
+      (true, Some Autotune.Coalesce_contraction);
+      (false, None);
+      (false, Some Autotune.Coalesce_columns);
+      (false, Some Autotune.Coalesce_contraction);
+    ]
+  in
+  (* Every statistic the gate reads, the median first: it is the summary, and the shortlist's
+     primary ranking. Selecting the best under EACH, deduplicated, keeps the best under the
+     min-batch or queued reading in the race when the statistics rank differently (the gh-755
+     question), not only the median's pick. *)
+  let med (_, st) = st.st_med and min_b (_, st) = st.st_min and queued (_, st) = st.st_queued in
+  (* gh-ocannl-1531: the shortlist of each (site, class), from the geometry rounds' readings -- its
+     top [shortlist_size] by median, plus its best by min batch and by queued time
+     ([Bench_select.shortlist], a superset of the single-shot pick this bench used to make). *)
+  let shortlists =
     if not do_seeds then []
     else
-      List.concat_map prepared ~f:(fun ((s, _, seeds, _, _, _) as pr) ->
+      List.map prepared ~f:(fun ((s, _, seeds, _, _, _) as pr) ->
           let seed_rows =
             Option.value (Hashtbl.find measured s.tag) ~default:[]
             |> List.filter_map ~f:(fun (l, st) ->
                 List.find seeds ~f:(fun q -> String.equal (geom_label q) l)
                 |> Option.map ~f:(fun q -> (q, st)))
           in
-          (* The best seed of each class under EACH statistic the gate reads, deduplicated: when the
-             statistics rank differently (the gh-755 question), the best under the min-batch or
-             queued reading is in the round too, not only the median's pick. *)
-          (* Classes: the scalar seeds per coalesced layout (none, columns, contraction), and the
-             tensorized ones uncoalesced and contraction-coalesced (gh-ocannl-1459: the only layout
-             with tensorized leaves), so the best uncoalesced seed and the best coalesced one of
-             each layout and pipeline are all re-timed together (gh-ocannl-1279's comparison reads
-             the scalar classes from this round). *)
-          List.concat_map
-            [
-              (true, None);
-              (true, Some Autotune.Coalesce_contraction);
-              (false, None);
-              (false, Some Autotune.Coalesce_columns);
-              (false, Some Autotune.Coalesce_contraction);
-            ]
-            ~f:(fun (mma, layout) ->
-              let rows =
+          ( pr,
+            List.filter_map classes ~f:(fun (mma, layout) ->
                 List.filter seed_rows ~f:(fun ((q : Autotune.sketch_params), _) ->
                     Bool.equal q.sk_mma mma && Poly.equal q.sk_coalesce layout)
-              in
-              List.filter_map
-                [ (fun st -> st.st_med); (fun st -> st.st_min); (fun st -> st.st_queued) ]
-                ~f:(fun stat ->
-                  List.max_elt rows ~compare:(fun (_, a) (_, b) -> Float.compare (stat a) (stat b))
-                  |> Option.map ~f:fst))
-          |> List.dedup_and_sort ~compare:(fun a b -> String.compare (geom_label a) (geom_label b))
-          |> List.filter_map ~f:(seed_arm ~prefix:final_prefix pr))
+                |> Bench_select.shortlist ~k:shortlist_size ~primary:med ~others:[ min_b; queued ]
+                |> List.map ~f:fst
+                |> function
+                | [] -> None
+                | qs -> Some qs) ))
+  in
+  (* The shortlist round: every shortlist of two or more seeds, of every site, re-timed in ONE
+     interleaved round, so a class's contenders are compared under the same drift rather than each
+     in its own geometry round. A one-seed shortlist is already its class's finalist. *)
+  run_round
+    ~label:
+      (Printf.sprintf
+         "shortlist (each class's top %d seeds by median, plus its best by min batch and by queued \
+          time; the finalists are picked from this round's readings)"
+         shortlist_size)
+    (List.concat_map shortlists ~f:(fun (pr, per_class) ->
+         List.concat_map per_class ~f:(function
+           | [] | [ _ ] -> []
+           | qs -> List.filter_map qs ~f:(seed_arm ~prefix:shortlist_prefix pr))));
+  (* A class's finalists: its best under each statistic by the shortlist round's readings alone
+     ([Bench_select.best]). A seed whose re-timing failed or was refused has no reading and drops
+     out; that cell is already counted against the exit status. *)
+  let finalists =
+    List.concat_map shortlists ~f:(fun (((s, _, _, _, _, _) as pr), per_class) ->
+        let retimed = Option.value (Hashtbl.find measured s.tag) ~default:[] in
+        List.concat_map per_class ~f:(function
+          | [ q ] -> [ q ]
+          | qs ->
+              List.filter_map qs ~f:(fun q ->
+                  List.Assoc.find retimed ~equal:String.equal (shortlist_prefix ^ geom_label q)
+                  |> Option.map ~f:(fun st -> (q, st)))
+              |> Bench_select.best ~scores:[ med; min_b; queued ]
+              |> List.map ~f:fst)
+        |> List.dedup_and_sort ~compare:(fun a b -> String.compare (geom_label a) (geom_label b))
+        |> List.filter_map ~f:(seed_arm ~prefix:final_prefix pr))
   in
   let contenders = finalists @ winners in
   run_round
@@ -1163,7 +1212,7 @@ let () =
       let seeds_only =
         List.filter all ~f:(fun (l, _) ->
             not
-              (List.exists [ "default"; "TUNED"; final_prefix ] ~f:(fun prefix ->
+              (List.exists [ "default"; "TUNED"; final_prefix; shortlist_prefix ] ~f:(fun prefix ->
                    String.is_prefix l ~prefix)))
       in
       let best_of =
