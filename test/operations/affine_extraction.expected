@@ -61,4 +61,7 @@ the merge read in the other arm is a gated effect row: true
 every statement's effect kinds are the expected ones: true
 the scan's rows name its locals: init writes prev, body reads prev and writes next, the rotation reads next and writes prev: true
 only the dead loop's row is dead: true
+a lone statement's accesses have no statement head: true
+a lone statement's effects have no statement head: true
+every access of the sequenced routine has a statement head: true
 a_gated agrees with Access_fold's gated context, read for read: true

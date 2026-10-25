@@ -157,3 +157,112 @@ let () =
     }
   in
   p "pruning an opaque construct skips descendants" (F.fold ~policy ~hooks ~init:0 tile = 0)
+
+(* gh-ocannl-1451: the enclosing-binder context, the [branches] hook, the one read collector
+   ([LL.evaluation_reads]) and the one statement-position walk ([LL.write_demand]). *)
+let () =
+  let c_ = mk "c" and d_ = mk "d" and e_ = mk "e" in
+  let st2 = mk "state2" in
+  virtualize st2;
+  let i = sym () and j = sym () and k = sym () in
+  let cr = carry ~init:(at b) st2 in
+  let nest =
+    loop ~upto:3 i
+      (scan ~upto:2 j ~carried:[ cr ]
+         (seq (set_next cr (prev cr)) (loop ~upto:1 k ~axis:LL.Unrolled (put (at a)))))
+  in
+  let hooks =
+    {
+      (F.hooks ()) with
+      after_scalar =
+        (fun ctx acc sc ->
+          match sc with
+          | LL.Get (tn, _) ->
+              (tn, List.map ctx.loops ~f:(fun (b : F.binder) -> (b.index, b.axis))) :: acc
+          | _ -> acc);
+    }
+  in
+  let seen = List.rev (F.fold ~policy:{ policy with scan_implicit = Skip } ~hooks ~init:[] nest) in
+  let loops_of tn = List.find_map seen ~f:(fun (tn', ls) -> Option.some_if (Tn.equal tn tn') ls) in
+  let same_loops got want =
+    match got with
+    | None -> false
+    | Some got ->
+        List.equal
+          (fun (s, ax) (s', ax') -> Idx.equal_symbol s s' && Option.equal LL.equal_axis_type ax ax')
+          got want
+  in
+  p "a scan's init sits outside its binder" (same_loops (loops_of b) [ (i, Some LL.Serial) ]);
+  p "a body read sees its enclosing binders innermost first, the scan's with no axis"
+    (same_loops (loops_of a) [ (k, Some LL.Unrolled); (j, None); (i, Some LL.Serial) ]);
+  let implicit_loops =
+    F.fold ~policy
+      ~hooks:
+        {
+          (F.hooks ()) with
+          after_statement =
+            (fun ctx acc stmt ->
+              match (stmt, ctx.implicit) with
+              | LL.Set_local _, (F.Scan_init | F.Scan_rotate) ->
+                  (ctx.implicit, List.map ctx.loops ~f:(fun (b : F.binder) -> (b.index, b.axis)))
+                  :: acc
+              | _ -> acc);
+        }
+      ~init:[] nest
+    |> List.rev
+  in
+  p "a scan's synthetic init sits outside its binder, its rotation inside"
+    (match implicit_loops with
+    | [ (F.Scan_init, init_loops); (F.Scan_rotate, rot_loops) ] ->
+        same_loops (Some init_loops) [ (i, Some LL.Serial) ]
+        && same_loops (Some rot_loops) [ (j, None); (i, Some LL.Serial) ]
+    | _ -> false);
+  let set_eq got want = Set.equal got (Set.of_list (module Tn) want) in
+  let ev sc = LL.evaluation_reads ~self:out sc in
+  p "a Where charges its condition and its wider arm, not the union"
+    (set_eq (ev (where_ (at a) (add (at b) (at c_)) (at d_))) [ a; b; c_ ]);
+  p "a Where whose arms tie charges the first" (set_eq (ev (where_ (at a) (at b) (at c_))) [ a; b ]);
+  p "a scope body inside an arm charges the statement, not the arm"
+    (set_eq
+       (ev (where_ (at a) (scope (LL.Set_local (scope_id, add (at d_) (at e_)))) (at b)))
+       [ a; b; d_; e_ ]);
+  p "nested alternatives take the wider arm at each level"
+    (set_eq
+       (ev (where_ (at a) (where_ (at b) (add (at c_) (at d_)) (at e_)) (at e_)))
+       [ a; b; c_; d_ ]);
+  p "the setter's own reads and merge-buffer reads are no contributors"
+    (set_eq (ev (add (at out) (LL.Get_merge_buffer (a, [| fixed 0 |])))) []);
+  p "a gather charges its index and its table"
+    (set_eq (ev (gather ~tn:b ~idcs:[| fixed 0 |] ~dyn_axis:0 ~dyn_value:(at a, single))) [ a; b ]);
+  p "a projection charges only its rendered operand"
+    (set_eq (ev (binop Ops.Arg2 (at a) (at b))) [ b ]);
+  p "a stored computation's dead loop replays nothing"
+    (set_eq
+       (LL.evaluation_reads_of_proc ~self:out (seq (loop ~upto:(-1) i (put (at a))) (put (at b))))
+       [ b ]);
+  p "a stored computation's Tile_mma is opaque"
+    (set_eq
+       (LL.evaluation_reads_of_proc ~self:out
+          (tile_mma
+             ~d:(d_, [| fixed 0 |])
+             ~a:(a, [| fixed 0 |])
+             ~b:(b, [| fixed 0 |])
+             (put (at c_))))
+       []);
+  let tile =
+    tile_mma
+      ~d:(d_, [| fixed 0 |])
+      ~a:(a, [| fixed 0 |])
+      ~b:(b, [| fixed 0 |])
+      (set_at e_ (fixed 0) (at a))
+  in
+  let scoped = put (scope (seq (set_at e_ (fixed 0) (at a)) (LL.Set_local (scope_id, at b)))) in
+  let demand = LL.write_demand (seq nest (seq tile (seq scoped (zero c_)))) in
+  p
+    "the write demand enters a scan body, counts a Tile_mma once as its accumulator, and skips \
+     expressions"
+    (List.equal Tn.equal demand.written [ out; d_; out; c_ ]);
+  p "the write demand reports every binder in program order, a scan's with no axis"
+    (same_loops
+       (Some (List.map demand.binders ~f:(fun (b : F.binder) -> (b.index, b.axis))))
+       [ (i, Some LL.Serial); (j, None); (k, Some LL.Unrolled) ])

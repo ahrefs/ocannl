@@ -563,7 +563,8 @@ let path_head = A.stmt_head
 (* Access records per top-level statement, in program order (the extraction fires in program order
    and top-level statement indices are nondecreasing). *)
 let accesses_by_statement (accs : Ir.Tnode.t A.access list) =
-  List.group accs ~break:(fun a b -> path_head a.A.a_path <> path_head b.A.a_path)
+  List.group accs ~break:(fun a b ->
+      not (Option.equal Int.equal (path_head a.A.a_path) (path_head b.A.a_path)))
 
 (* The statement an access path leads to, followed the way [LL.affine_accesses] builds it: a loop
    adds no component, a [Seq] level one [Stmt] per flattened statement, an [If] its [Body]. The head
@@ -1548,6 +1549,12 @@ let zero_geometry ?(layout : batch_layout = `Serial) ?folded (site : matmul_site
     let interior = match layout with `Grid_inner -> interior | `Serial | `Grid -> [] in
     ez @ batch_ops @ mk_zops ~zi ~zj ~interior)
 
+(* The [For_loop] symbols of a statement, at statement positions ({!LL.write_demand}): loops beneath
+   a [Scan_loop] included, the scan's own binder not -- it is no schedulable loop. *)
+let nest_loop_syms (llc : LL.t) =
+  List.filter_map (LL.write_demand llc).binders ~f:(fun b ->
+      Option.map b.LL.Access_fold.axis ~f:(fun _ -> b.LL.Access_fold.index))
+
 (* The would-be epilogue tail's loop symbols: the first real statement after the last statement
    writing [target] — the nest [Sched.Fuse_epilogue] consumes (its perfect-Serial-nest and
    sole-consumer vetting happens in the op itself). Used by the fused twins to leave that nest
@@ -1561,30 +1568,10 @@ let epilogue_tail_loop_syms ~(target : Ir.Tnode.t) (opt : LL.optimized) : Idx.sy
       | LL.Noop | LL.Comment _ -> false
       | _ -> true)
   in
-  let rec writes_target = function
-    | LL.Set { tn; _ } | LL.Zero_out tn | LL.Set_dynamic { tn; _ } | LL.Set_from_vec { tn; _ } ->
-        Ir.Tnode.equal tn target
-    | LL.Tile_mma { d = tn, _; _ } -> Ir.Tnode.equal tn target
-    | LL.Seq (a, b) -> writes_target a || writes_target b
-    | LL.For_loop { body; _ } | LL.If { body; _ } -> writes_target body
-    | _ -> false
-  in
-  let rec loop_syms acc = function
-    | LL.For_loop { index; body; _ } -> loop_syms (index :: acc) body
-    | LL.Seq (a, b) -> loop_syms (loop_syms acc a) b
-    | LL.If { body; _ } -> loop_syms acc body
-    | _ -> acc
-  in
+  let writes_target s = List.mem (LL.write_demand s).written target ~equal:Ir.Tnode.equal in
   match List.filter_mapi stmts ~f:(fun i s -> Option.some_if (writes_target s) i) |> List.last with
   | None -> []
-  | Some r -> ( match List.nth stmts (r + 1) with Some tail -> loop_syms [] tail | None -> [])
-
-let rec nest_loop_syms acc (llc : LL.t) =
-  match llc with
-  | LL.For_loop { index; body; _ } -> nest_loop_syms (index :: acc) body
-  | LL.Seq (a, b) -> nest_loop_syms (nest_loop_syms acc a) b
-  | LL.If { body; _ } -> nest_loop_syms acc body
-  | _ -> acc
+  | Some r -> ( match List.nth stmts (r + 1) with Some tail -> nest_loop_syms tail | None -> [])
 
 (* Companion geometry for the GPU matmul sketches (gh-ocannl-521).
 
@@ -1640,24 +1627,11 @@ let rec nest_loop_syms acc (llc : LL.t) =
    emits; [qkv_zero_init] executes every seed of a folded projection against a materialized run. *)
 (* The materialized nodes a statement writes, by debug name: what a companion witness names. *)
 let materialized_writes ~plc (stmt : LL.t) : string =
-  let acc = ref [] in
-  let rec go (llc : LL.t) =
-    match llc with
-    | LL.Set { tn; _ }
-    | LL.Set_dynamic { tn; _ }
-    | LL.Set_from_vec { tn; _ }
-    | LL.Zero_out tn
-    | LL.Tile_mma { d = tn, _; _ } ->
-        if Ir.Tnode.Placements.is_materialized_peek plc tn then
-          acc := Ir.Tnode.debug_name tn :: !acc
-    | LL.Seq (a, b) ->
-        go a;
-        go b
-    | LL.For_loop { body; _ } | LL.If { body; _ } | LL.Scan_loop { body; _ } -> go body
-    | _ -> ()
-  in
-  go stmt;
-  String.concat ~sep:"," (List.dedup_and_sort ~compare:String.compare !acc)
+  (LL.write_demand stmt).written
+  |> List.filter ~f:(Ir.Tnode.Placements.is_materialized_peek plc)
+  |> List.map ~f:Ir.Tnode.debug_name
+  |> List.dedup_and_sort ~compare:String.compare
+  |> String.concat ~sep:","
 
 (* The companion nests a parallel site geometry must cover: the top-level statements writing a
    MATERIALIZED node — [validate_parallel]'s rule is about shared memory, and routine-local scratch
@@ -1671,7 +1645,7 @@ let companion_demand ~(site_syms : (Idx.symbol * int) list) ~(skip : Idx.symbol 
     ~(expanded_zeros : Ir.Tnode.t list) (opt : LL.optimized) : LL.t list =
   let plc = opt.LL.optimize_ctx.LL.placements in
   let mentions syms stmt =
-    List.exists (nest_loop_syms [] stmt) ~f:(fun s -> List.mem syms s ~equal:Idx.equal_symbol)
+    List.exists (nest_loop_syms stmt) ~f:(fun s -> List.mem syms s ~equal:Idx.equal_symbol)
   in
   let site_sym_list = List.map site_syms ~f:fst in
   List.filter (LL.flat_lines [ opt.LL.llc ]) ~f:(fun stmt ->
@@ -1720,7 +1694,7 @@ let companion_geometry ~(site_syms : (Idx.symbol * int) list) ~(skip : Idx.symbo
         (* Loop symbols are unique per loop construct, so a nest is identified by its chain's
            outermost symbol occurring among the statement's loops. *)
         let chain_of stmt =
-          let syms = nest_loop_syms [] stmt in
+          let syms = nest_loop_syms stmt in
           List.find_map chains ~f:(fun (_, cs) ->
               match cs with
               | (s, _) :: _ when List.mem syms s ~equal:Idx.equal_symbol -> Some cs

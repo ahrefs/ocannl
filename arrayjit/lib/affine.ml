@@ -1003,9 +1003,11 @@ let same_statement p q =
   | Some p', Some q' -> List.equal equal_path_comp p' q'
   | _ -> false
 
-(** The top-level statement index of a path, [-1] when the whole routine is a single statement (its
-    accesses' paths start with an intra-statement component). *)
-let stmt_head = function Stmt h :: _ -> h | _ -> -1
+(** The path's leading [Stmt] component -- the index of its top-level statement -- or [None] when
+    the whole routine is a single statement (its accesses' paths start with an intra-statement
+    component; gh-ocannl-1451). A path component, not necessarily an index into [flat_lines]: a loop
+    enclosing a sequence adds no component of its own. *)
+let stmt_head = function Stmt h :: _ -> Some h | _ -> None
 
 type 'tn access = {
   a_tn : 'tn;

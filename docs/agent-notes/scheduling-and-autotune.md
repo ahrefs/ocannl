@@ -2455,9 +2455,11 @@ files.
   nodes. Fission makes the cut there: the default schedule-aware `keep_mapping` probe already keeps
   the scores' kernel apart, and `arity_cuts` does so under the legality rules alone. The walk used
   to stop at the scan: the witness passed and every seed died at compile, which is how gh-1003's
-  stage-1 tuned arm lost its tensorized scores. A new walker deciding a kernel's write demand must
-  descend into scan bodies too. `test/operations/scan_companion_coverage` executes every seed of
-  both shapes.
+  stage-1 tuned arm lost its tensorized scores. The sketch's demand walks (`materialized_writes`,
+  `nest_loop_syms`, `epilogue_tail_loop_syms`) are now `Low_level.write_demand`, which enters scans
+  (gh-ocannl-1451): ask it for a kernel's writes and loop binders rather than writing another walk;
+  `nest_loop_syms` keeps the `For_loop` binders beneath a scan but not the scan's own (no schedule
+  op targets it). `test/operations/scan_companion_coverage` executes every seed of both shapes.
 ## Timing identity
 
 - Timed cache evidence uses `Context.timing_identity` separately from conservative construction

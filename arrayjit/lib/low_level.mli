@@ -277,23 +277,35 @@ and carried = { prev : scope_id; next : scope_id; init : scalar_t }
     Scan_loop when the consumer treats them as opaque.
 
     [Visit] discarded operands is structural; [Skip] follows rendering. Gated operands are visited
-    in source order (both Where arms), never combined as a cost bound. [Skip] gated operands skips
-    the entire subtree, including hoisted definitions: it is NOT an execution floor. Consumers with
-    branch algebras can prune scalars and supply their own reduction. Scope bodies reset [gated]
-    because definitions hoist, while preserving statement guards. Dead-loop bodies visited
-    structurally carry [live=false]; this does not evaluate constant guards or perform cleanup's
-    placement-dependent setter elimination.
+    in source order (both Where arms) by default. [Skip] gated operands skips the entire subtree,
+    including hoisted definitions: it is NOT an execution floor. The arms of a
+    {!Ops.Cond_and_one_arm} ternary -- exactly one of which evaluates per visit -- reach the
+    [branches] hook as one continuation each (in source order, under [gated]); the default
+    {!in_order} folds them in sequence, and a consumer with a branch algebra (a per-arm maximum,
+    gh-ocannl-1451) supplies its own reduction there. Scope bodies reset [gated] because definitions
+    hoist, while preserving statement guards. Dead-loop bodies visited structurally carry
+    [live=false]; this does not evaluate constant guards or perform cleanup's placement-dependent
+    setter elimination.
 
     Scan init assignments precede the body; rotation assignments follow it. With
     [scan_implicit = Skip], init expressions are still visited but synthetic Set_local events are
     absent. Scans must satisfy [validate_scan_loops] (in particular nonempty ranges). The fold
     visits a loop body once, not once per iteration; rotation events describe value dependencies
     rather than simulating simultaneous assignment. [implicit] identifies synthetic statements and
-    their descendants; [scope_depth] counts Local_scope bodies. *)
+    their descendants; [scope_depth] counts Local_scope bodies; [loops] lists the enclosing
+    [For_loop] / [Scan_loop] binders, innermost first (a scan's init expressions sit outside its
+    binder, its body and rotations inside). *)
 module Access_fold : sig
   type visit = Visit | Skip
   type guards = Track | Ignore
   type implicit = Explicit | Scan_init | Scan_rotate
+
+  type binder = {
+    index : Indexing.symbol;
+    from_ : int;
+    to_ : int;
+    axis : axis_type option;  (** [None]: a [Scan_loop]'s index. *)
+  }
 
   type policy = {
     discarded_operands : visit;
@@ -310,6 +322,7 @@ module Access_fold : sig
     gated : bool;
     scope_depth : int;
     implicit : implicit;
+    loops : binder list;
   }
 
   type 'a descent = Continue of 'a | Prune of 'a
@@ -319,11 +332,48 @@ module Access_fold : sig
     scalar : context -> 'a -> scalar_t -> 'a descent;
     after_statement : context -> 'a -> t -> 'a;
     after_scalar : context -> 'a -> scalar_t -> 'a;
+    branches : context -> 'a -> ('a -> 'a) list -> 'a;
   }
+
+  val in_order : context -> 'a -> ('a -> 'a) list -> 'a
+  (** The default [branches]: the arms folded in source order (union semantics). *)
 
   val hooks : unit -> 'a hooks
   val fold : policy:policy -> hooks:'a hooks -> init:'a -> t -> 'a
+
+  val fold_scalar : policy:policy -> hooks:'a hooks -> init:'a -> scalar_t -> 'a
+  (** [fold] entered at an expression, in the top-level context. *)
 end
+
+val direct_write : t -> Tnode.t option
+(** The tensor node a statement writes itself (not through a sub-statement): [Set], [Set_dynamic],
+    [Set_from_vec], [Zero_out], and a [Tile_mma]'s accumulator. An exhaustive match: with
+    {!Access_fold.fold}'s descent, the one place a new statement constructor must be classified for
+    the write-sensitive walks (gh-ocannl-1451). *)
+
+type write_demand = {
+  written : Tnode.t list;  (** {!direct_write} of every statement reached, program order. *)
+  binders : Access_fold.binder list;  (** Every loop and scan binder reached, program order. *)
+}
+
+val write_demand : t -> write_demand
+(** The one statement-position walk (gh-ocannl-1451): loops, scans, guards and sequences, in source
+    order; never an expression (so never a [Local_scope] body or a scan's synthetic local
+    assignments) and never a [Tile_mma]'s fallback (the statement counts atomically as its write).
+    Scan bodies are entered (gh-ocannl-1134); a scan binder is reported with [axis = None]. Dead
+    loops are entered: the walk is structural. *)
+
+val evaluation_reads : self:Tnode.t -> scalar_t -> Set.M(Tnode).t
+(** The one read collector (gh-ocannl-1451): the tensor nodes one evaluation of [llsc], the
+    right-hand side of a setter of [self], loads -- the transitive inline-fanin guard's contributors
+    (gh-573), shared by [trace_node_facts]' per-setter [setter_reads] and the guard's replay of
+    stored computations. [self] and merge-buffer reads are excluded, a gather counts its table,
+    projection-discarded operands are not evaluated, a [Where] charges its wider arm (the first on a
+    tie), and [Local_scope] bodies -- hoisted, unconditional -- charge the statement whichever arm
+    they sit in. Dead loops replay nothing; a [Tile_mma] is opaque. *)
+
+val evaluation_reads_of_proc : self:Tnode.t -> t -> Set.M(Tnode).t
+(** {!evaluation_reads} of a statement: one replay of a stored computation of [self]. *)
 
 module Canonical_render : sig
   (** gh-563: the one canonical rendering of lowered code, shared by both digest consumers —

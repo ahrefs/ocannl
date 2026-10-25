@@ -402,9 +402,10 @@ let () =
         (if e.e_gated then "gated " else "")
         (if Aff.loops_live e.e_loops then "" else "dead"));
   let open Verdict.Claims in
+  let at_stmt path stmt = Option.equal Int.equal (Aff.stmt_head path) (Some stmt) in
   let reads_in stmt tn =
     List.filter accs ~f:(fun a ->
-        (not a.Aff.a_write) && Aff.stmt_head a.a_path = stmt && Tn.equal a.a_tn tn)
+        (not a.Aff.a_write) && at_stmt a.a_path stmt && Tn.equal a.a_tn tn)
   in
   let gated_as name cases =
     p_all name
@@ -418,7 +419,7 @@ let () =
   gated_as "And's first operand is ungated and its second gated" [ (3, p_, false); (3, q_, true) ];
   let kinds_at stmt =
     List.filter_map effs ~f:(fun (e : Tn.t Aff.statement_effect) ->
-        Option.some_if (Aff.stmt_head e.e_path = stmt) (show_kind e.e_kind))
+        Option.some_if (at_stmt e.e_path stmt) (show_kind e.e_kind))
   in
   p_exists "the merge read in the other arm is a gated effect row" effs
     ~f:(fun (e : Tn.t Aff.statement_effect) ->
@@ -439,7 +440,7 @@ let () =
   (* gh-ocannl-1050: a local row names its local, so a hazard query can match a read to a write. *)
   let locals_at stmt =
     List.filter_map effs ~f:(fun (e : Tn.t Aff.statement_effect) ->
-        if Aff.stmt_head e.e_path <> stmt then None
+        if not (at_stmt e.e_path stmt) then None
         else
           match e.e_kind with
           | Aff.Local_write l -> Some ("write", l)
@@ -466,7 +467,17 @@ let () =
     | List.Or_unequal_lengths.Ok all -> all
     | Unequal_lengths -> false);
   p_all "only the dead loop's row is dead" effs ~f:(fun (e : Tn.t Aff.statement_effect) ->
-      Bool.equal (Aff.loops_live e.e_loops) (Aff.stmt_head e.e_path <> 7));
+      Bool.equal (Aff.loops_live e.e_loops) (not (at_stmt e.e_path 7)));
+  (* gh-ocannl-1451: a routine whose root (under its loops) is one statement has no statement head:
+     [stmt_head] says so with [None] rather than a sentinel index. *)
+  let lone = List.nth_exn (LL.flat_lines [ program ]) 2 in
+  let lone_accs, lone_effs = LL.affine_relations lone in
+  p_all "a lone statement's accesses have no statement head" lone_accs
+    ~f:(fun (a : Tn.t Aff.access) -> Option.is_none (Aff.stmt_head a.a_path));
+  p_all "a lone statement's effects have no statement head" lone_effs
+    ~f:(fun (e : Tn.t Aff.statement_effect) -> Option.is_none (Aff.stmt_head e.e_path));
+  p_all "every access of the sequenced routine has a statement head" accs
+    ~f:(fun (a : Tn.t Aff.access) -> Option.is_some (Aff.stmt_head a.a_path));
   (* The relationship, not a restatement: the view's gatedness IS [Access_fold]'s gated context —
      the convention every remaining [Access_fold] consumer reads — read for read, in order. *)
   let fold_reads =
