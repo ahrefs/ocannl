@@ -7239,6 +7239,8 @@ class FixtureDriverGateInventoryTest(unittest.TestCase):
         "check-box.sh": "the check the gate runs",
         "fixture_digest.py": "records and checks fixture digests; measures nothing",
         "gen_fixtures.py": "writes fixtures; measures nothing",
+        "gh1525_reuse_ab.sh": "compares OCANNL builds' search compile costs, never a step against "
+        "another framework, so no venv or torch item applies; it checks its fixture's digest itself",
         "gh1529_nvrtc_cost.sh": "times the CUDA compiler and JIT, never a step against another "
         "framework, so no venv or torch item applies; it checks its fixture's digest itself",
         "gh612v_session.sh": "hands --box/--skip-box-check to every gh612_cells.sh cell, whose "
