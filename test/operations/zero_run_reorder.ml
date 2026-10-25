@@ -148,7 +148,7 @@ let arms =
       arm = "CPU pipeline";
       folds = false;
       fission =
-        S.fission_scheduled ~preset:(S.default_cpu ~min_parallel:1)
+        S.fission_scheduled ~preset:(S.default_cpu ~min_work:0)
           ~zero_sched:(fun _ -> [])
           ~static_indices:[];
     };

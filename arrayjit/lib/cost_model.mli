@@ -487,6 +487,20 @@ val recompute_cost :
     materialized, the computations the virtualizer's own walk stores once the node is not
     materialized. Memoized per lineage: partially apply to the context once per compile. *)
 
+val bounded_work : cap:int -> Low_level.t -> int option
+(** A cheap work estimate for the CPU default annotator's per-dispatch profitability gate
+    (gh-ocannl-1458; [Schedule.default_cpu], config [cpu_schedule_min_work]): scalar operations
+    executed by one run of the statement, saturating at [cap] (so a caller comparing against a
+    threshold passes the threshold as [cap] and never overflows). Per executed scalar statement it
+    counts the store (or register update), one per [Unop]/[Binop]/[Ternop] evaluation, and one per
+    memory read ([Get], [Get_dynamic], merge-buffer reads); loop extents multiply, [Local_scope]
+    bodies count, a [Set_from_vec] counts its run length, a whole-node [Zero_out] its cell count,
+    and an [If] is charged guards-taken. So a copy has nonzero work and a store whose expression is
+    long is charged its operations, unlike {!analyze}'s FLOP count. No affine analysis runs. [None]
+    for constructs the walk does not model ([Staged_compilation], barriers, [Scan_loop],
+    [Tile_mma]): unknown work never passes a profitability gate. A ranking heuristic like the rest
+    of this module, not a runtime prediction. *)
+
 module Calibration : sig
   (** The calibration TSV schema (config [autotune_calibration_file], gh-ocannl-491 task 4) and the
       envelope fitter over it (gh-ocannl-514 phase 0): one row per timed candidate, the model's

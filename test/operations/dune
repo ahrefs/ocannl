@@ -5350,6 +5350,29 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1458: Cost_model.bounded_work, the CPU preset's per-dispatch work estimate, over
+; hand-built IR: what it counts, saturation at its cap, and None for unmodelled constructs.
+
+(test
+ ; ocannl-backend: none -- pure analysis of hand-built IR; links no backend and compiles nothing.
+ (name cost_model_bounded_work)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules cost_model_bounded_work)
+ (libraries base arrayjit.ir arrayjit.verdict arrayjit.ll_builders))
+
+; gh-ocannl-1458: the default CPU preset's fork-join cross-nest rule and per-dispatch work gate,
+; applied directly to single kernels and through the default pipeline, with parity against the
+; unscheduled compile.
+
+(test
+ ; ocannl-backend: cc -- every execution context is an explicit Context.cpu ().
+ (name cpu_fork_join_chains)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules cpu_fork_join_chains)
+ (libraries base ocannl unix arrayjit.verdict test_utils ll_test))
+
 ; gh-ocannl-1003 stage 1: the default GPU annotator's lane geometry for the online-softmax hoist's
 ; value pass, executed against exact references and pinned in the emitted kernel.
 
@@ -7598,7 +7621,7 @@
 ; autotune_progress is on because the abandonment is claimed in the progress record;
 ; autotune_keep_fraction is pinned at its default, spelled otherwise than its read site, so the
 ; cached trajectory's identity can be seen leaving it out (gh-ocannl-1272), and
-; cpu_schedule_min_parallel is raised off its default -- past anything these 64-cell tensors
+; cpu_schedule_min_work is raised off its default -- past any work these 64-cell tensors
 ; reach, so no schedule changes -- for the identity to be seen carrying it.
 
 (executable
@@ -7634,7 +7657,7 @@
     "--ocannl_backend=cc"
     "--ocannl_autotune_progress=true"
     "--ocannl_autotune_keep_fraction=1"
-    "--ocannl_cpu_schedule_min_parallel=32768"))))
+    "--ocannl_cpu_schedule_min_work=32768"))))
 
 (rule
  (alias runtest-flip_abandonment)

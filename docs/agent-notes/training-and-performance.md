@@ -299,14 +299,13 @@ files.
   touches (`C_syntax.derive_kparams`), because parameter names are disambiguated over the code and
   an untouched entry -- a node whose zero `gpu_elide_covered_zeros` dropped -- otherwise shared
   its name with another (ahrefs/ocannl#1387; `shipped_kernels_alone` pins it).
-- **cc attribution: an untuned step is often ONE serial kernel, so split it by threshold**
-  (gh-ocannl-1549). `default_cpu` compares `cpu_schedule_min_parallel` (16384) against a nest's
-  two-outermost-loop chain product, 64 x 32 = 2048 for every cifar_resnet nest. So nothing is
-  retyped, fission coalesces the all-serial segments, and `BENCH_SEG_TIMES` or
-  `BENCH_KERNEL_TABLE` show one row, the step. Run with `OCANNL_CPU_SCHEDULE_MIN_PARALLEL=1024
-  OCANNL_CC_PARALLEL_GRID=none`: the step is fissioned, but each Grid loop renders serially. The
-  per-segment times are single-threaded and their sum tracks the serial step (429 vs 410 ms), so
-  on cc they are a step attribution. That the threshold measures the wrong thing is gh-ocannl-1458.
+- **cc attribution: time the fissioned segments single-threaded** (gh-ocannl-1549). A cc step
+  whose nests all stay serial coalesces into one kernel, and `BENCH_SEG_TIMES` or
+  `BENCH_KERNEL_TABLE` show one row, the step. With nests retyped (the default per-dispatch work
+  gate retypes cifar_resnet's convs; lower `OCANNL_CPU_SCHEDULE_MIN_WORK` where a nest stays
+  unannotated), run with `OCANNL_CC_PARALLEL_GRID=none`: the step is fissioned, but each Grid loop
+  renders serially. The per-segment times are single-threaded and their sum tracks the serial step
+  (429 vs 410 ms on the cifar_resnet step), so on cc they are a step attribution.
 - **The untuned cc direct-conv forward is latency-bound, not recomputed** (gh-ocannl-1549).
   Lowering leaves `for b,h,w,oc { acc = 0; for ic,kh,kw: acc += x*w; y = acc }` with a scalar
   local accumulator, each conv computed once. Without reassociation clang vectorizes neither the

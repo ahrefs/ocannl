@@ -75,18 +75,43 @@ files.
   mlp_bn_names the batch-norm statistics' zeros serialized the first layer's 1000x200x30 matmul that
   way. `group_units` now lets such a zero join a segment only when the unit accumulating into its
   node would join too; a `Solo` next unit that may touch the node (opaque units always may)
-  splits it off as well, so the zero shares the serial unit's fate (review round 2). Separately, `default_cpu` runs `analyze_parallel_chains ~shared_locals:true`:
-  a nest writing only scratch takes its chain from those writes (on GPU it runs whole per thread
-  over a per-thread copy, so the empty chain is right there; on cc a serial nest runs once, on one
-  core), falling back to the plain analysis when linking it bails OR costs the kernel its
-  `min_parallel` eligibility (a `y[i, j]` reading `s[i]` is trimmed to `[i]`; compare
-  threshold eligibility, never chain sizes -- the preset retypes only the outermost loop, which a
-  trim keeps, and a size comparison left the scratch nest serial in exactly the case it serves:
-  review round 1; the test's stats and rowstats legs pin both directions) -- `C_syntax.parallel_grid_safe`
-  stays the arbiter of whether a loop over a local renders in parallel. Mind the size: at the
-  default `stack_threshold_in_bytes` (16 KB) a scratch node holds at most 4096 cells, below the
-  default `cpu_schedule_min_parallel`, so the chain change bites in the tuner's `min_parallel:1`
-  presets or beside a large nest; the zero rule bites at any size. `test/operations/cpu_scratch_matmul_grid`.
+  splits it off as well, so the zero shares the serial unit's fate (review round 2). A nest writing
+  only scratch takes its candidate from those writes (on GPU it runs whole per thread over a
+  per-thread copy, so the empty chain is right there; on cc a serial nest runs once, on one core);
+  `C_syntax.parallel_grid_safe` stays the arbiter of whether a loop over a local renders in
+  parallel. `test/operations/cpu_scratch_matmul_grid`.
+- **`default_cpu` is fork-join, not aligned** (gh-ocannl-1458). The C renderer runs each
+  pool-parallel `Grid` loop as one synchronous dispatch joined before the next statement, and code
+  outside `Grid` loops once on the calling thread, so the GPU rules that assume every thread runs
+  every nest do not apply: no cross-nest alignment (trims, equal-extent prefix, value invariance,
+  `crosscheck_scratch_containment`), no whole-kernel bail. `cpu_fork_join_loops` scans each
+  top-level statement on its own (a statement `scan_accesses` refuses -- a materialized
+  `Zero_out`, opaque code -- just stays serial), takes the nest's FIRST qualifying path loop
+  (`nest_chain ~max_chain:1 ~shared_locals:true`) and proves `nest_hazards` over that ONE symbol:
+  a two-symbol proof is not a proof for its first symbol, and only one loop goes parallel. The
+  validator side is `validate_parallel ~fork_join` (C_syntax derives it from "binds no hardware
+  `Grid` index"; `Autotune.validate_segments_for_model` takes it from `is_cpu`): a materialized
+  write or `Zero_out` under no `Grid` loop is exempt from coverage, writes under one keep the rule.
+  Without it a per-nest decision is impossible -- a serial materialized-writing nest beside a
+  `Grid` one is a GPU race and was rejected. Soundness, why it holds for ANY cc schedule:
+  statements are ordered by the joins; a `Local` is privatized only when all its kernel accesses
+  sit in one loop body; within a dispatch the hazard proof, `parallel_grid_safe` and
+  `refuse_unseparated_thread_write` decide. Fission is unchanged (it still cuts at GPU-unaligned
+  materialized edges on CPU, harmless but no longer needed), and so is `conv_direct_grid_witness`,
+  whose refutation of companion-writing conv flavors is now conservative on cc.
+- **The CPU threshold is work per dispatch** (gh-ocannl-1458): `cpu_schedule_min_work` (16384)
+  against `Cost_model.bounded_work` of the candidate loop alone -- stores, arithmetic ops and reads,
+  times extents, saturating at the cap, `None` (never passes) for `Scan_loop`/`Tile_mma`/barriers.
+  Enclosing serial loops do not count (each run forks and joins; the renderer's own floor,
+  `C_syntax.repeated_grid_min_updates`, guards repeated launches of explicit schedules separately),
+  and at least 2 iterations are required. The element threshold it replaced compared the product of
+  the two outermost chain extents for the whole kernel: cifar_resnet's 64 x 32 left every conv
+  serial, while once one nest passed every tiny sibling forked too. `~min_work:0` is the tuner's
+  ungated preset. `Cost_model.reuse_traffic` reads each iteration of a cc `Grid` loop as a resident
+  GPU block, so a parallel default's modeled working set can pass a cache capacity its serial twin
+  fits (`cost_model_selection`'s rank legs pin a serial default for that reason).
+  `test/operations/cpu_fork_join_chains` (direct and pipeline legs, each against the serial
+  compile), `cost_model_bounded_work`.
 - A parallel loop under a serial loop is reachable only past lane-uniform scalar work
   (gh-ocannl-1003). The presets' chain is the single-child loop path, which stops at the
   online-softmax hoist's preamble (`for t { p := P[s, t]; for e { O[s, e] += p * V[t, e] } }`);
@@ -602,7 +627,7 @@ files.
 - **The seeded untuned default replays the DEFAULT segmentation, never the tuner's**
   (gh-ocannl-1324, `Autotune.seeded_default`). The tuner's per-segment sketches use a different
   segmentation: they fold each covering zero into its reduction's segment, and their other segments
-  get the `min_parallel:1` presets. The seeded default instead derives `maybe_default_schedules`'
+  get the ungated presets (`min_parallel:1` on GPU, `min_work:0` on CPU). The seeded default instead derives `maybe_default_schedules`'
   own plan and swaps the preset for a sketch only on segments that seed. It compares that plan with
   its `arity_cuts` refinement block by block (`Autotune.refine_segments`, gh-ocannl-1413): a block
   is a maximal run of units whose two ends are boundaries in both, and it takes the finer segments

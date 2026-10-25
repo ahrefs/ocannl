@@ -546,8 +546,8 @@ kernel fission:
   inversion (manifesto §1): kernel boundaries are *discovered* in the fused program, not
   assembled from an operator graph.
 
-In our toy example every extent is below `gpu_schedule_min_parallel`/
-`cpu_schedule_min_parallel`, so the nests stay serial and no fission cut is needed — the
+In our toy example every extent is below `gpu_schedule_min_parallel` and every nest's work is
+below `cpu_schedule_min_work`, so the nests stay serial and no fission cut is needed — the
 whole step ships as one kernel even on Metal. On real models this stage is where the
 matmul-tiling, staging, tensorization, and split-reduction transforms apply, either as
 autotuner-searched compositions (`Autotune.tune`, with winners persisted in a schedule cache

@@ -74,7 +74,7 @@ let () =
   let transform (opt : LL.optimized) =
     let preset =
       if Sched.backend_is_gpu backend_name then Sched.default_gpu ~min_parallel:1 opt
-      else if Sched.backend_is_cpu backend_name then Sched.default_cpu ~min_parallel:1 opt
+      else if Sched.backend_is_cpu backend_name then Sched.default_cpu ~min_work:0 opt
       else []
     in
     let extended = Autotune.extend_with_privatize ~accum_prec ~static_indices:[] preset opt in

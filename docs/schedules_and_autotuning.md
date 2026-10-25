@@ -200,9 +200,16 @@ With no explicit transform, backend `compile` applies `Schedule.maybe_default_sc
   parallelize (the embedding-dim column of the gh-ocannl-466 scatter, `Split_reduce`'s block
   loop over partials rows), while loops driving the dynamic index are never proven confined and
   stay serial — the deterministic no-atomics invariant, now per-loop instead of per-nest.
-- **CPU preset** (`default_cpu`): the same analysis; the outermost parallelizable loop is
-  retyped `Grid`, which the C backend renders on a process-global thread pool
-  (`dispatch_apply` / OpenMP). Threshold `cpu_schedule_min_parallel` (default 16384).
+- **CPU preset** (`default_cpu`): per nest, one loop -- the first path loop that owns every
+  materialized write (every scratch write, for a nest writing only scratch) -- proven
+  independent over its own iterations by the same per-nest hazard analysis, is retyped `Grid`,
+  which the C backend renders on a process-global thread pool (`dispatch_apply` / OpenMP). There
+  is no cross-nest alignment: each pool-parallel `Grid` loop is a synchronous dispatch joined
+  before the next statement, and code outside `Grid` loops runs once on the calling thread, so
+  sibling nests may differ in geometry or stay serial (`Low_level.validate_parallel ~fork_join`
+  admits such kernels). A nest it cannot prove stays serial alone. Profitability is per dispatch:
+  one run of the loop must do at least `cpu_schedule_min_work` (default 16384) scalar operations,
+  stores, arithmetic and reads, by `Cost_model.bounded_work` (gh-ocannl-1458).
 - **Kernel fission** (`schedule_fission`): top-level statements are partitioned into segments at
   cross-workgroup dependency edges (materialized producer/consumer pairs, bare writes,
   whole-node `Zero_out`s, statements opaque to the analysis); each segment is scheduled

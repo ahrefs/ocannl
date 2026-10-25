@@ -1074,6 +1074,46 @@ let modeled_recompute_flops ~static_indices
 
 let () = Low_level.recompute_pricer := modeled_recompute_flops
 
+(* The CPU default annotator's profitability gate (gh-ocannl-1458). A capped, saturating walk:
+   counting stops mattering once the cap is reached, so no product can overflow. Unmodelled
+   constructs raise [Unknown_work] — unknown work never passes a profitability gate. *)
+exception Unknown_work
+
+let bounded_work ~cap (llc : Low_level.t) : int option =
+  let cap = max 0 cap in
+  let add a b = if a >= cap - b then cap else a + b in
+  let mul a b = if a = 0 || b = 0 then 0 else if a > cap / b then cap else min cap (a * b) in
+  let extent from_ to_ =
+    if to_ < from_ then 0
+    else
+      let diff = Int64.(of_int to_ - of_int from_) in
+      if Int64.compare diff (Int64.of_int cap) >= 0 then cap else Int64.to_int_exn diff + 1
+  in
+  let rec scalar (s : Low_level.scalar_t) =
+    match s with
+    | Low_level.Local_scope { body; _ } -> stmt body
+    | Get_local _ | Constant _ | Constant_bits _ | Embed_index _ -> 0
+    | Get _ | Get_merge_buffer _ -> min cap 1
+    | Get_dynamic { dyn_value = v, _; _ } -> add 1 (scalar v)
+    | Unop (_, (a, _)) -> add 1 (scalar a)
+    | Binop (_, (a, _), (b, _)) -> add 1 (add (scalar a) (scalar b))
+    | Ternop (_, (a, _), (b, _), (c, _)) -> add 1 (add (scalar a) (add (scalar b) (scalar c)))
+  and stmt (s : Low_level.t) =
+    match s with
+    | Noop | Comment _ | Declare_local _ -> 0
+    | Seq (a, b) -> add (stmt a) (stmt b)
+    | For_loop { from_; to_; body; _ } ->
+        let e = extent from_ to_ in
+        if e = 0 then 0 else mul e (stmt body)
+    | If { cond = c, _; body } -> add (scalar c) (stmt body)
+    | Set { llsc; _ } | Set_local (_, llsc) -> add 1 (scalar llsc)
+    | Set_dynamic { dyn_value = v, _; llsc; _ } -> add 1 (add (scalar v) (scalar llsc))
+    | Set_from_vec { length; arg = v, _; _ } -> add (min cap (max 0 length)) (scalar v)
+    | Zero_out tn -> min cap (Tn.num_elems tn)
+    | Staged_compilation _ | Workgroup_barrier | Scan_loop _ | Tile_mma _ -> raise Unknown_work
+  in
+  match stmt llc with w -> Some w | exception Unknown_work -> None
+
 module Calibration = struct
   (* The calibration TSV schema and the envelope fitter over it (gh-ocannl-514 phase 0). This module
      is the schema's single owner: rows are emitted through [to_line] (Autotune) and read back

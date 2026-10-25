@@ -143,7 +143,7 @@ let census ~what ctx (opt : LL.optimized) =
   let accum_prec = capabilities.Ir.Backend_intf.accum_prec in
   let preset seg =
     if is_gpu then Sched.default_gpu ~min_parallel:1 ~limits seg
-    else if is_cpu then Sched.default_cpu ~min_parallel:1 seg
+    else if is_cpu then Sched.default_cpu ~min_work:0 seg
     else []
   in
   let zero_sched tns = if is_gpu then Sched.zero_expansion ~limits tns else [] in

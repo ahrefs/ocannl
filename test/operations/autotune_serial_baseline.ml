@@ -42,8 +42,8 @@ let approx_tol _ = 1e-4
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 
-(* Comfortably above [cpu_schedule_min_parallel] (16384) so the default annotator parallelizes on
-   CPU backends too, not only on GPU ones (where the threshold is [gpu_schedule_min_parallel] = 64).
+(* Comfortably above [cpu_schedule_min_work] (16384) so the default annotator parallelizes on CPU
+   backends too, not only on GPU ones (where the threshold is [gpu_schedule_min_parallel] = 64).
    Compiled, never run: this half of the test is structural. *)
 let side = 256
 let n = 16

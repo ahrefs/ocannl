@@ -7715,7 +7715,8 @@ let warp_reduce_cell_sites ~(reassociable : Tn.t -> bool) (llc : t) : warp_reduc
     materialized tensor nodes lexically outside all annotated loops (every hardware thread would
     execute them, racing with the annotated writes — there is no grid-wide synchronization). Cannot
     prove iteration independence; that is the annotating pass's obligation. *)
-let validate_parallel ?(warp_size = 0) ?(reassociable = fun _ -> false) plc (llc : t) : unit =
+let validate_parallel ?(warp_size = 0) ?(reassociable = fun _ -> false) ?(fork_join = false) plc
+    (llc : t) : unit =
   let axes = hardware_axes llc in
   if not (List.is_empty axes) then (
     List.iter axes ~f:(fun a ->
@@ -7835,23 +7836,33 @@ let validate_parallel ?(warp_size = 0) ?(reassociable = fun _ -> false) plc (llc
              initialization"
           else "")
     in
-    let rec check_writes ~covered ~enclosing llc =
+    (* [fork_join] (gh-ocannl-1458): the C backends run each pool-parallel [Grid] loop as one
+       synchronous dispatch joined before the next statement, and everything outside [Grid] loops
+       once, on the calling thread. A write nested under no [Grid] loop therefore executes once, in
+       program order, whatever loops are annotated elsewhere -- exempt from the coverage rule.
+       Writes under a [Grid] loop keep the rule unchanged. *)
+    let rec check_writes ~covered ~enclosing ~in_grid llc =
+      let coverage_applies = in_grid || not fork_join in
       match llc with
-      | For_loop { index; body; _ } ->
+      | For_loop { index; body; axis; _ } ->
           let covered =
             match List.Assoc.find slot_of_index ~equal:Indexing.equal_symbol index with
             | Some pair -> pair :: covered
             | None -> covered
           in
-          check_writes ~covered ~enclosing:(index :: enclosing) body
-      | Scan_loop { index; body; _ } -> check_writes ~covered ~enclosing:(index :: enclosing) body
+          check_writes ~covered ~enclosing:(index :: enclosing)
+            ~in_grid:(in_grid || equal_axis_type axis Grid)
+            body
+      | Scan_loop { index; body; _ } ->
+          check_writes ~covered ~enclosing:(index :: enclosing) ~in_grid body
       | Seq (a, b) ->
-          check_writes ~covered ~enclosing a;
-          check_writes ~covered ~enclosing b
-      | If { body; _ } -> check_writes ~covered ~enclosing body
+          check_writes ~covered ~enclosing ~in_grid a;
+          check_writes ~covered ~enclosing ~in_grid b
+      | If { body; _ } -> check_writes ~covered ~enclosing ~in_grid body
       | Zero_out tn ->
           if
-            (not (List.is_empty active))
+            coverage_applies
+            && (not (List.is_empty active))
             && Tn.Placements.is_materialized_force plc tn (Site "160:parallel-validation")
           then
             invalid_arg
@@ -7861,7 +7872,7 @@ let validate_parallel ?(warp_size = 0) ?(reassociable = fun _ -> false) plc (llc
                 (Schedule.Expand_zero expands the init into a loop nest the same geometry ops can \
                 annotate)")
       | Set { tn; _ } | Set_dynamic { tn; _ } | Set_from_vec { tn; _ } ->
-          check_covered_write ~covered tn
+          if coverage_applies then check_covered_write ~covered tn
       | Tile_mma { d = d_tn, d_idcs; a = _, a_idcs; b = _, b_idcs; lane; _ } ->
           (* The cooperating [lane] axis must be a real enclosing [Workgroup]-typed loop: the launch
              needs its threads, hardware backends reach the intrinsic on all of them together, and
@@ -7888,10 +7899,10 @@ let validate_parallel ?(warp_size = 0) ?(reassociable = fun _ -> false) plc (llc
         ->
           ()
     in
-    check_writes ~covered:[] ~enclosing:[] llc)
+    check_writes ~covered:[] ~enclosing:[] ~in_grid:false llc)
 
-let validate_parallel_classified ~warp_size ~reassociable plc llc =
-  match validate_parallel ~warp_size ~reassociable plc llc with
+let validate_parallel_classified ~warp_size ~reassociable ~fork_join plc llc =
+  match validate_parallel ~warp_size ~reassociable ~fork_join plc llc with
   | () -> ()
   | exception Invalid_argument detail ->
       raise

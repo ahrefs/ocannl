@@ -4209,13 +4209,17 @@ module C_syntax (B : C_syntax_config) = struct
     level (Low_level.flat_lines [ body ]) ~loops:[]
 
   (* Whether the body of an outermost [Grid] loop over [sym] tolerates its iterations being
-     partitioned into chunks that execute on parallel CPU threads. Materialized accesses are already
-     safe: [validate_parallel] requires every materialized write to cover [sym], so chunks write
-     disjoint elements, and nests execute as separate parallel loops with a join in between
-     (stronger than the GPU's single launch). The hazards are the stack arrays of [Local]-placement
-     nodes: on GPU each thread gets a private copy, so a GPU-valid kernel may legally write them
-     grid-invariantly (identical values per iteration) -- under one shared function-scope array that
-     is a data race. A local written under the loop must satisfy one of:
+     partitioned into chunks that execute on parallel CPU threads. Materialized accesses are the
+     annotating pass's obligation: the default CPU preset proves the loop's own iterations
+     independent ({!Schedule.default_cpu}'s per-nest hazard analysis over exactly this symbol), and
+     the renderer's store-separation check ([refuse_unseparated_thread_write]) refuses a store this
+     loop does not separate. Across statements nothing needs proving: nests execute as separate
+     parallel loops with a join in between, and code outside [Grid] loops runs once on the calling
+     thread — the fork-join model [validate_parallel ~fork_join] encodes (gh-ocannl-1458). The
+     hazards are the stack arrays of [Local]-placement nodes: on GPU each thread gets a private
+     copy, so a GPU-valid kernel may legally write them grid-invariantly (identical values per
+     iteration) -- under one shared function-scope array that is a data race. A local written under
+     the loop must satisfy one of:
 
      - Shared rule: every access to it (read or write) mentions [sym], and all accesses agree on
      every index component that mentions [sym] -- the same agreement rule as the default annotator's
@@ -8071,7 +8075,11 @@ module C_syntax (B : C_syntax_config) = struct
     (* gh-ocannl-1238: with this backend's shuffle width, so the validator sees the barriers the
        warp-shuffle and lane all-reduce renderings insert, not only the IR's own. *)
     Low_level.validate_parallel_classified ~warp_size:B.warp_size
-      ~reassociable:Online_softmax.reassociable_local optimize_ctx.Low_level.placements llc;
+      ~reassociable:Online_softmax.reassociable_local
+        (* gh-ocannl-1458: a backend binding no hardware [Grid] index renders each [Grid] loop as a
+           joined pool dispatch (or a serial loop), so code outside [Grid] loops runs once. *)
+      ~fork_join:(Option.is_none (B.hardware_index ~kind:`Grid ~slot:0))
+      optimize_ctx.Low_level.placements llc;
     (* Launch-extent guards (construct-then-fold, axis-types proposal §2), only for kinds this
        backend binds in hardware -- the serial fallback iterates the true extent. *)
     let llc =

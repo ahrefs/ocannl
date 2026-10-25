@@ -2532,13 +2532,16 @@ let conv_coverage_witness ~(opt : LL.optimized) ~(fused : bool) (site : conv_sit
 
 (* The CPU conv pipeline's flavors that Grid-type a loop of the conv nest itself — the Grid flavor
    and the row panels, wherever the segment holds at most one statement besides the conv (more, and
-   they adopt the preset's aligned whole-segment geometry, [conv_aligned_grid]) — leave every other
-   nest outside the only annotated loop. [validate_parallel] rejects such a nest that writes a
-   materialized node (every pool chunk would execute it), so the flavor is refuted where one
-   remains: the companion demand, with the fused flavor's tail skipped (the fusion relocates it
-   under the Grid loop) and a whole-node zero of the output excluded (the pipeline expands and
-   annotates it). Before gh-ocannl-697 the unfused Grid flavor of a conv+tail segment was proposed
-   and failed validation at every compile, its fused twin the only survivor. *)
+   they adopt the preset's whole-segment geometry, [conv_aligned_grid]) — leave every other nest
+   outside the only annotated loop. [validate_parallel]'s hardware-thread mode rejects such a nest
+   that writes a materialized node, so the flavor is refuted where one remains. On the C backends
+   this is now conservative: their fork-join mode (gh-ocannl-1458) runs a nest outside every [Grid]
+   loop once, on the calling thread, and admits it — relaxing this refutation is left to a follow-up
+   with its own conv tests, since it widens the tuner's search space. The demand: the companion
+   demand, with the fused flavor's tail skipped (the fusion relocates it under the Grid loop) and a
+   whole-node zero of the output excluded (the pipeline expands and annotates it). Before
+   gh-ocannl-697 the unfused Grid flavor of a conv+tail segment was proposed and failed validation
+   at every compile, its fused twin the only survivor. *)
 let conv_direct_grid_witness ~(opt : LL.optimized) ~(fused : bool) (site : conv_site) :
     string option =
   match
@@ -2559,17 +2562,17 @@ let conv_direct_grid_witness ~(opt : LL.optimized) ~(fused : bool) (site : conv_
 
 (* Whole-segment Grid alignment for the conv pipeline on merged segments (gh-ocannl-493): the
    pipeline's own [Retype] covers only the conv nest, so on an aligned-merged segment (lenet's
-   conv+bias/relu+pooling) the companions' materialized writes would fail [validate_parallel]. Reuse
-   the default CPU preset's aligned cross-nest analysis instead of re-proving alignment: a non-empty
-   [Sched.default_cpu] schedule Grid-retypes the outermost qualifying loop of {e every}
-   materialized-writing nest, with the equal-extent common-prefix trims applied — exactly the
-   whole-segment geometry the fissioned default runs. Accept it as the conv sketch's grid ops when
-   it covers the conv nest at its outermost loop (which must be an outer output loop of extent >= 2,
-   so the pipeline's reorder keeps it outermost and pool chunking has work to split). *)
+   conv+bias/relu+pooling) the companions would stay serial. Reuse the default CPU preset's per-nest
+   analysis instead of re-proving it: [Sched.default_cpu ~min_work:0] Grid-retypes, per nest, the
+   one loop it proves independent (gh-ocannl-1458; a companion it cannot prove stays serial, which
+   [validate_parallel]'s fork-join mode admits on the C backends) — exactly the whole-segment
+   geometry the fissioned default runs, ungated. Accept it as the conv sketch's grid ops when it
+   covers the conv nest at its outermost loop (which must be an outer output loop of extent >= 2, so
+   the pipeline's reorder keeps it outermost and pool chunking has work to split). *)
 let conv_aligned_grid (site : conv_site) (opt : LL.optimized) : Sched.schedule option =
   match (site.c_outer, site.c_loops) with
   | (outermost, n) :: _, first :: _ when n >= 2 && Idx.equal_symbol outermost first -> (
-      match Sched.default_cpu ~min_parallel:1 opt with
+      match Sched.default_cpu ~min_work:0 opt with
       | [] -> None
       | sched ->
           if

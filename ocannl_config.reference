@@ -300,15 +300,19 @@
 #gpu_serial_lanes=auto
 
 # If true, on CPU backends (cc, multidev_cc) kernels compiled without an explicit
-# `lowered_transform` get the default CPU schedule: the same conservative analysis as the GPU
-# schedule, retyping each nest's outermost parallelizable loop to Grid, which the C backend
-# renders as chunked parallel loops on a native thread pool (see `cc_parallel_grid`). Disabled
-# automatically while `debug_log_from_routines` is active.
+# `lowered_transform` get the default CPU schedule: per top-level loop nest, one loop proven free of
+# hazards among its own iterations is retyped to Grid, which the C backend renders as a chunked
+# parallel loop on a native thread pool (see `cc_parallel_grid`). Each such loop is a fork-join, so
+# sibling nests need no common geometry. Disabled automatically while `debug_log_from_routines` is
+# active.
 #automatic_cpu_schedule=true
 
-# Kernels whose largest parallelizable loop nest has fewer than this many parallel iterations are
-# left unscheduled by the default CPU schedule (task fan-out overhead would dominate).
-#cpu_schedule_min_parallel=16384
+# The default CPU schedule parallelizes a nest's loop only when ONE run of it (one fork-join) does
+# at least this much work, in scalar operations: stores, arithmetic operations and memory reads,
+# multiplied by loop extents (`Cost_model.bounded_work`). Enclosing serial loops and sibling nests
+# do not count; a loop whose work cannot be estimated stays serial. Replaces the element-count
+# threshold `cpu_schedule_min_parallel` (gh-ocannl-1458).
+#cpu_schedule_min_work=16384
 
 # If true (and the automatic schedule for the backend is active), routines are split into multiple
 # kernels at cross-workgroup dependency edges — sibling top-level statements whose

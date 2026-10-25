@@ -345,8 +345,14 @@ let () =
           (List.length xs.Autotune.xs_candidates));
     (r, explained)
   in
+  (* Both legs rank against a SERIAL untuned default: the claims are about the capacity charge. The
+     CPU preset would parallelize these gradients' output loop (gh-ocannl-1458), and
+     [Cost_model.reuse_traffic] reads each iteration of a [Grid] loop as a resident block that
+     re-requests its cells, which moves the default's own working set past the capacity. *)
+  Hashtbl.set Utils.config_file_args ~key:"cpu_schedule_min_work" ~data:"1000000000000";
   let large, large_explained = leg ~tag:"rk_large" (16, 32, 64, 128) in
   let small, small_explained = leg ~tag:"rk_small" (4, 32, 64, 128) in
+  Hashtbl.remove Utils.config_file_args "cpu_schedule_min_work";
   p "past capacity the weight gradient's pick is a sketch, not the default"
     (not (String.equal large.Autotune.mc_label "default"));
   p "below capacity the weight gradient's pick stays the default"
@@ -359,8 +365,8 @@ let () =
      its per-segment substitution, against what it picked. The weight-gradient steps above are
      segmented too since gh-ocannl-1512 (their small nests no longer coalesce), and keep their
      picks. The two-matmul chain the autotune tests search, with its materialized sums cutting it
-     into keyed matmul segments, at 128x128: every nest sits at cc's default parallel threshold
-     ([cpu_schedule_min_parallel], 16384 cells), where the configured and the search's presets
+     into keyed matmul segments, at 128x128: every nest's per-dispatch work clears cc's default
+     threshold ([cpu_schedule_min_work], 16384), where the configured and the search's presets
      agree. The leg below takes a chain under it. --- *)
   let chain_comp =
     let q = 128 in
@@ -401,12 +407,14 @@ let () =
   (* --- Below the parallel threshold the model ranks on the search's segmentation (gh-ocannl-1512)
      ---
 
-     A chain whose every nest has fewer than [cpu_schedule_min_parallel] parallel iterations: a
-     64x64 product over a 4096-long contraction, a second 32x64 product of it, and a pointwise tail,
-     each materialized. The configured CPU preset leaves every nest unannotated, and fission
+     A chain under the configured threshold: a 64x64 product over a 4096-long contraction, a second
+     32x64 product of it, and a pointwise tail, each materialized. The threshold counts work per
+     dispatch ([cpu_schedule_min_work], gh-ocannl-1458), and a product whose operands exceed the
+     cache capacity cannot sit under its default, so the leg raises it past the chain in-process
+     (as the rank legs above do): the configured CPU preset then leaves every nest unannotated, and fission
      coalesces adjacent unannotated segments back into one kernel, so the configured segmentation is
      the single kernel and [model_default] used to make no per-segment substitution at all. The
-     search's [min_parallel:1] presets keep the chain cut, and its first product's operands (2 MiB)
+     search's ungated presets keep the chain cut, and its first product's operands (2 MiB)
      exceed the rule's 1 MiB cache capacity, so a reuse-tiled sketch of that segment strictly beats
      its preset. The inputs are dyadic and small, so every sum is exact in f32 and the values are
      checked exactly against the host. *)
@@ -443,6 +451,7 @@ let () =
     let%op bh = bg + bt in
     (named "below_threshold_chain" (Train.forward bh), bh)
   in
+  Hashtbl.set Utils.config_file_args ~key:"cpu_schedule_min_work" ~data:"1000000000000";
   let below_choice = ref None in
   let below_ctx = Context.auto () in
   (* The premise: the configured segmentation is the single kernel, the search's cuts the chain. *)
@@ -488,6 +497,7 @@ let () =
           List.exists leaves ~f:(fun (_, ex) ->
               match ex.Autotune.ex_rank_ms with Some r -> Float.(r < preset) | None -> false)
       | _ -> false);
+  Hashtbl.remove Utils.config_file_args "cpu_schedule_min_work";
   let below_ctx = Context.run below_ctx below_routine in
   let below_got = Context.get_values below_ctx bh.Tensor.value in
   p_all2 "the below-threshold pick computes the host's values exactly" below_got bh_expected

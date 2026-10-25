@@ -1441,7 +1441,7 @@ let () =
       let tz, _lane =
         Sched.tensorize ~i:row_i ~j:site.Autotune.c_oc ~k:site.Autotune.c_red ~simd_width:1 ()
       in
-      Sched.default_cpu ~min_parallel:1 seg
+      Sched.default_cpu ~min_work:0 seg
       @ (sp_row :: reorder_swaps ~current ~target)
       @ [
           stage x.Tensor.value [ row_i; site.Autotune.c_red ];
@@ -1490,7 +1490,7 @@ let () =
 
   (* --- The aligned-merged Grid flavor: conv + two materialized elementwise companions form one
      aligned-merged segment; the Grid conv seed adopts the default preset's whole-segment geometry
-     ([Sched.default_cpu]'s aligned cross-nest analysis Grid-retypes every companion nest). --- *)
+     ([Sched.default_cpu]'s per-nest analysis Grid-retypes every companion nest it proves). --- *)
   let make_merged sub =
     let x = make_x8 sub in
     let kern = make_kern8 sub in
@@ -1531,7 +1531,7 @@ let () =
         Sched.tensorize ~i:site.Autotune.c_row ~j:site.Autotune.c_oc ~k:site.Autotune.c_red
           ~simd_width:1 ()
       in
-      Sched.default_cpu ~min_parallel:1 seg
+      Sched.default_cpu ~min_work:0 seg
       @ reorder_swaps ~current:site.Autotune.c_loops ~target:(conv_target site)
       @ [
           stage x.Tensor.value [ site.Autotune.c_row; site.Autotune.c_red ];
@@ -1564,16 +1564,17 @@ let () =
   (match !reports with
   | [ r ] ->
       show_counts "cva" r;
-      (* cc: the whole routine seeds the serial flavor and its fused twin (the routine carries the
-         conv's [Zero_out], so the aligned analysis bails there and no Grid flavor is seeded); per
-         fission segment serial + aligned-grid, each with its fused-epilogue twin, all four timed
-         (the aligned twin compiles by fuse-before-annotate, gh-ocannl-501). A GPU with the f32
-         capability seeds the staged flavors on the whole routine and the merged segment, whose
-         companions take the site's geometry (gh-ocannl-1406); one without seeds nothing. *)
+      (* cc: the whole routine, as each fission segment, seeds serial + aligned-grid, each with its
+         fused-epilogue twin (the routine's top-level [Zero_out] of the conv output runs once on the
+         calling thread, so the CPU preset still retypes the conv nest there, gh-ocannl-1458); per
+         fission segment all four are timed (the aligned twin compiles by fuse-before-annotate,
+         gh-ocannl-501). A GPU with the f32 capability seeds the staged flavors on the whole routine
+         and the merged segment, whose companions take the site's geometry (gh-ocannl-1406); one
+         without seeds nothing. *)
       p "cva: aligned-grid conv seeded and timed on the merged fission segment"
         (if on_cpu then
-           r.Autotune.sketch_candidates = 2
-           && r.Autotune.epilogue_sketch_candidates = 1
+           r.Autotune.sketch_candidates = 4
+           && r.Autotune.epilogue_sketch_candidates = 2
            && r.Autotune.fiss_sketch_candidates = 4
            && r.Autotune.fiss_sketch_timed = 4
          else if Lazy.force gpu_capable then

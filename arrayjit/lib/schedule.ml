@@ -6484,6 +6484,122 @@ let lane_preamble_reductions ~lane (nest : Low_level.t) : (Indexing.symbol * int
         | _ -> [])
     | _ -> [])
 
+(* One nest's parallelizable chain, before any cross-nest alignment: the outermost (up to
+   [max_chain]) Serial path loops whose index occurs as a plain [Iterator] component in every
+   materialized write vector of the nest -- or, under [shared_locals], of every write vector of a
+   nest that writes only scratch. Also returns whether the nest writes a materialized node (the GPU
+   analysis bails on such a nest with an empty chain).
+
+   [shared_locals] is the CPU reading (gh-ocannl-1343): under the GPU reading a nest writing only
+   scratch runs whole in every thread over a per-thread copy, so an empty chain is the safe default;
+   on the C backends a serial nest runs once and [Local] scratch is ONE function-scope array, so the
+   empty chain left a whole matmul serial whenever its product was a non-materialized intermediate.
+   The C renderer's shared/privatization rule for locals under a pool-parallel [Grid] loop
+   ([C_syntax.parallel_grid_safe]) stays the final word on whether the loop renders in parallel. *)
+let nest_chain ~plc ~lanes ~preamble_reductions ~shared_locals ~select_chain ~max_chain
+    (n : nest_info) : Low_level.t list * bool =
+  let open Low_level in
+  let mat_writes =
+    List.filter n.n_accesses ~f:(fun a ->
+        a.a_write && Tn.Placements.is_materialized_peek plc a.a_tn)
+  in
+  let owned_writes =
+    if shared_locals && List.is_empty mat_writes then
+      List.filter n.n_accesses ~f:(fun a -> a.a_write)
+    else mat_writes
+  in
+  let qualifies s =
+    (not (List.is_empty owned_writes))
+    && List.for_all owned_writes ~f:(fun a ->
+        Array.exists a.a_idcs ~f:(fun idx -> Indexing.equal_axis_index idx (Indexing.Iterator s)))
+  in
+  let chain =
+    List.filter (path_loops ~lanes ~preamble_reductions n.n_loops) ~f:(function
+      | For_loop fc -> fc.from_ = 0 && qualifies fc.index
+      | _ -> false)
+    |> select_chain
+    |> fun l -> List.take l max_chain
+  in
+  (chain, not (List.is_empty mat_writes))
+
+(* The per-nest hazard analysis over parallel symbols [syms] (see the module comment for the safety
+   argument): concurrent iterations of [syms] must not conflict on any written node. Raises [Bail]
+   when the nest is not provably independent over them. *)
+let nest_hazards ~plc (n : nest_info) (syms : Indexing.symbol list) : unit =
+  let env = Low_level.loop_ranges n.n_loops in
+  let range = Affine.Loop_ranges.find env in
+  let dup = Affine.Loop_ranges.mem env in
+  let pairs = List.map syms ~f:(fun s -> (s, s)) in
+  (* The agreement rule: all accesses agree on every component that mentions a parallel symbol. For
+     materialized nodes it is the legacy (procedural) special case of the affine conflict query,
+     kept for [legality_crosscheck]; for non-materialized (per-thread copy) scratch it IS the rule
+     (see [pair_aligned_procedural]'s note). *)
+  let agreement_ok accs =
+    let rank = List.fold accs ~init:0 ~f:(fun m a -> max m (Array.length a.a_idcs)) in
+    let ok = ref true in
+    for p = 0 to rank - 1 do
+      let comps =
+        List.map accs ~f:(fun a ->
+            if p < Array.length a.a_idcs then a.a_idcs.(p) else Indexing.Fixed_idx 0)
+      in
+      if List.exists comps ~f:(mentions_sym syms) then
+        match comps with
+        | [] -> ()
+        | c0 :: rest ->
+            if not (List.for_all rest ~f:(Indexing.equal_axis_index c0)) then ok := false
+    done;
+    !ok
+  in
+  let by_tn = Hashtbl.create (module Int) in
+  List.iter n.n_accesses ~f:(fun a -> Hashtbl.add_multi by_tn ~key:a.a_tn.Tn.uid ~data:a);
+  Hashtbl.iter by_tn ~f:(fun accs ->
+      let written = List.exists accs ~f:(fun a -> a.a_write) in
+      if written then
+        let is_mat = Tn.Placements.is_materialized_peek plc (List.hd_exn accs).a_tn in
+        let chain_relevant =
+          List.exists accs ~f:(fun a -> Array.exists a.a_idcs ~f:(mentions_sym syms))
+        in
+        if is_mat || chain_relevant then (
+          let has_dynamic = List.exists accs ~f:(fun a -> Option.is_some a.a_dyn_axis) in
+          (* gh-484 (task 2, unbailing the gh-466 scatter): dynamic accesses of a materialized node
+             no longer bail wholesale. The dynamic component is an unknown coordinate of
+             [query_view], so the conflict query decides from the statically-known ones: a chain
+             symbol pinning a same-position plain component of every access confines conflicts to
+             its own thread (the per-block partials row of [Split_reduce], the embedding-dim column
+             of the scatter), while loops driving the dynamic index are never forced equal across
+             threads and stay serial. Per-thread (non-materialized) scratch keeps bailing: its
+             containment rule ("reads hit exactly the cells the same thread wrote") is
+             order-sensitive and unknowable under data-dependent rows. *)
+          if has_dynamic && not is_mat then raise Bail;
+          if is_mat then (
+            (* Materialized: genuine shared memory — the affine conflict query decides. Every pair
+               involving a write must have its conflicts confined to one thread of the chain tuple,
+               or be disjoint outright. *)
+            let witness = ref "" in
+            let query_safe =
+              List.for_all accs ~f:(fun w ->
+                  (not w.a_write)
+                  || List.for_all accs ~f:(fun x ->
+                      match
+                        Affine.pair_conflict ~left_range:range ~right_range:range ~dup_left:dup
+                          ~dup_right:dup ~pairs ~left:(query_view ~range w)
+                          ~right:(query_view ~range x)
+                      with
+                      | Affine.Disjoint | Affine.Same_thread -> true
+                      | Affine.Cross_thread wit ->
+                          witness := wit;
+                          false))
+            in
+            (* The procedural agreement rule does not model dynamic accesses (it never ran on them —
+               they used to bail first), so the crosscheck compares only static nodes. *)
+            if not has_dynamic then
+              Affine.crosscheck ~site:"schedule per-nest hazard"
+                ~context:(Tn.debug_name (List.hd_exn accs).a_tn)
+                ~procedural_safe:(fun () -> agreement_ok accs)
+                ~query_safe ~witness:!witness;
+            if not query_safe then raise Bail)
+          else if not (agreement_ok accs) then raise Bail))
+
 (* Shared analysis of the default annotator presets (schedule-ir-optops §6): per top-level nest, the
    parallelizable chain of outermost Serial path loops, validated by the conservative race analysis
    (see {!default_gpu}'s doc). Nests linked by cross-nest dependencies keep a common aligned prefix
@@ -6499,20 +6615,10 @@ let lane_preamble_reductions ~lane (nest : Low_level.t) : (Indexing.symbol * int
    capping at 2 made every rank-3+ site's companion coverage decline, serializing the axis whose
    spreading the hardware wanted most). The alignment rule is arity-independent; a longer chain only
    asks the same per-position question more times. [lanes] reads chains through {!path_loops}' lane
-   extension (the GPU preset's lane geometry, see {!lane_geometry}).
-
-   [shared_locals] (the CPU preset, gh-ocannl-1343): a nest writing no materialized node takes its
-   chain from its scratch writes instead of staying empty. Under the GPU reading such a nest runs
-   whole in every thread over a per-thread copy, so an empty chain is the safe default; on the C
-   backends a serial nest runs once and [Local] scratch is ONE function-scope array, so the empty
-   chain leaves a whole matmul serial whenever its product is a non-materialized intermediate. The
-   chain loops then go through the same alignment and per-nest agreement rules as any written
-   scratch, and the C renderer's own shared/privatization rule for locals under a pool-parallel
-   [Grid] loop ([C_syntax.parallel_grid_safe]) stays the final word on whether the loop renders in
-   parallel. *)
+   extension (the GPU preset's lane geometry, see {!lane_geometry}). The CPU preset does not use
+   this analysis ({!cpu_fork_join_loops}). *)
 let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = false)
-    ?(preamble_reductions = false) ?(shared_locals = false) (opt : Low_level.optimized) :
-    Low_level.t list list =
+    ?(preamble_reductions = false) (opt : Low_level.optimized) : Low_level.t list list =
   let open Low_level in
   let plc = opt.optimize_ctx.placements in
   let nests, bare = split_nests plc opt.llc in
@@ -6520,33 +6626,14 @@ let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = f
   if List.exists bare ~f:(fun a -> a.a_write && Tn.Placements.is_materialized_peek plc a.a_tn) then
     raise Bail;
   (* Chains: per nest, the outermost (up to [max_chain]) Serial path loops whose index occurs as a
-     plain [Iterator] component in every materialized write vector of the nest -- or, under
-     [shared_locals], of every write vector of a nest that writes only scratch. *)
+     plain [Iterator] component in every materialized write vector of the nest. *)
   let chains =
     List.map nests ~f:(fun n ->
-        let mat_writes =
-          List.filter n.n_accesses ~f:(fun a ->
-              a.a_write && Tn.Placements.is_materialized_peek plc a.a_tn)
+        let chain, has_mat_writes =
+          nest_chain ~plc ~lanes ~preamble_reductions ~shared_locals:false ~select_chain ~max_chain
+            n
         in
-        let owned_writes =
-          if shared_locals && List.is_empty mat_writes then
-            List.filter n.n_accesses ~f:(fun a -> a.a_write)
-          else mat_writes
-        in
-        let qualifies s =
-          (not (List.is_empty owned_writes))
-          && List.for_all owned_writes ~f:(fun a ->
-              Array.exists a.a_idcs ~f:(fun idx ->
-                  Indexing.equal_axis_index idx (Indexing.Iterator s)))
-        in
-        let chain =
-          List.filter (path_loops ~lanes ~preamble_reductions n.n_loops) ~f:(function
-            | For_loop fc -> fc.from_ = 0 && qualifies fc.index
-            | _ -> false)
-          |> select_chain
-          |> fun l -> List.take l max_chain
-        in
-        if List.is_empty chain && not (List.is_empty mat_writes) then raise Bail;
+        if List.is_empty chain && has_mat_writes then raise Bail;
         chain)
   in
   let chain_syms chain =
@@ -6736,81 +6823,7 @@ let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = f
   let chains = List.mapi chains ~f:(fun i c -> List.take c trims.(i)) in
   (* Per-nest hazard analysis over the final (possibly trimmed) parallel symbols (see the module
      comment for the safety argument). *)
-  List.iter2_exn nests chains ~f:(fun n chain ->
-      let syms = chain_syms chain in
-      let env = Low_level.loop_ranges n.n_loops in
-      let range = Affine.Loop_ranges.find env in
-      let dup = Affine.Loop_ranges.mem env in
-      let pairs = List.map syms ~f:(fun s -> (s, s)) in
-      (* The agreement rule: all accesses agree on every component that mentions a parallel symbol.
-         For materialized nodes it is the legacy (procedural) special case of the affine conflict
-         query, kept for [legality_crosscheck]; for non-materialized (per-thread copy) scratch it IS
-         the rule (see [pair_aligned_procedural]'s note). *)
-      let agreement_ok accs =
-        let rank = List.fold accs ~init:0 ~f:(fun m a -> max m (Array.length a.a_idcs)) in
-        let ok = ref true in
-        for p = 0 to rank - 1 do
-          let comps =
-            List.map accs ~f:(fun a ->
-                if p < Array.length a.a_idcs then a.a_idcs.(p) else Indexing.Fixed_idx 0)
-          in
-          if List.exists comps ~f:(mentions_sym syms) then
-            match comps with
-            | [] -> ()
-            | c0 :: rest ->
-                if not (List.for_all rest ~f:(Indexing.equal_axis_index c0)) then ok := false
-        done;
-        !ok
-      in
-      let by_tn = Hashtbl.create (module Int) in
-      List.iter n.n_accesses ~f:(fun a -> Hashtbl.add_multi by_tn ~key:a.a_tn.Tn.uid ~data:a);
-      Hashtbl.iter by_tn ~f:(fun accs ->
-          let written = List.exists accs ~f:(fun a -> a.a_write) in
-          if written then
-            let is_mat = Tn.Placements.is_materialized_peek plc (List.hd_exn accs).a_tn in
-            let chain_relevant =
-              List.exists accs ~f:(fun a -> Array.exists a.a_idcs ~f:(mentions_sym syms))
-            in
-            if is_mat || chain_relevant then (
-              let has_dynamic = List.exists accs ~f:(fun a -> Option.is_some a.a_dyn_axis) in
-              (* gh-484 (task 2, unbailing the gh-466 scatter): dynamic accesses of a materialized
-                 node no longer bail wholesale. The dynamic component is an unknown coordinate of
-                 [query_view], so the conflict query decides from the statically-known ones: a chain
-                 symbol pinning a same-position plain component of every access confines conflicts
-                 to its own thread (the per-block partials row of [Split_reduce], the embedding-dim
-                 column of the scatter), while loops driving the dynamic index are never forced
-                 equal across threads and stay serial. Per-thread (non-materialized) scratch keeps
-                 bailing: its containment rule ("reads hit exactly the cells the same thread wrote")
-                 is order-sensitive and unknowable under data-dependent rows. *)
-              if has_dynamic && not is_mat then raise Bail;
-              if is_mat then (
-                (* Materialized: genuine shared memory — the affine conflict query decides. Every
-                   pair involving a write must have its conflicts confined to one thread of the
-                   chain tuple, or be disjoint outright. *)
-                let witness = ref "" in
-                let query_safe =
-                  List.for_all accs ~f:(fun w ->
-                      (not w.a_write)
-                      || List.for_all accs ~f:(fun x ->
-                          match
-                            Affine.pair_conflict ~left_range:range ~right_range:range ~dup_left:dup
-                              ~dup_right:dup ~pairs ~left:(query_view ~range w)
-                              ~right:(query_view ~range x)
-                          with
-                          | Affine.Disjoint | Affine.Same_thread -> true
-                          | Affine.Cross_thread wit ->
-                              witness := wit;
-                              false))
-                in
-                (* The procedural agreement rule does not model dynamic accesses (it never ran on
-                   them — they used to bail first), so the crosscheck compares only static nodes. *)
-                if not has_dynamic then
-                  Affine.crosscheck ~site:"schedule per-nest hazard"
-                    ~context:(Tn.debug_name (List.hd_exn accs).a_tn)
-                    ~procedural_safe:(fun () -> agreement_ok accs)
-                    ~query_safe ~witness:!witness;
-                if not query_safe then raise Bail)
-              else if not (agreement_ok accs) then raise Bail)));
+  List.iter2_exn nests chains ~f:(fun n chain -> nest_hazards ~plc n (chain_syms chain));
   chains
 
 (* gh-494 waypoint 2: the per-thread-copy scratch rule, recomputed as same-thread containment
@@ -6939,7 +6952,7 @@ let chain_size chain =
     | _ -> sz)
 
 (* Threshold helper: skip kernels whose largest parallelizable nest is too small to pay for a launch
-   (GPU) or a task fan-out (CPU). *)
+   (GPU; the CPU preset gates per dispatch on work instead, gh-ocannl-1458). *)
 let max_parallel_size chains = List.fold chains ~init:0 ~f:(fun m chain -> max m (chain_size chain))
 
 (* The default annotators' cross-nest analysis, exposed as data instead of as a preset schedule
@@ -7822,42 +7835,61 @@ let default_gpu ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction ?a
       default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction
         ?all_reduce_simdgroups ?lanes ~limits opt
 
-let default_cpu ?min_parallel (opt : Low_level.optimized) : schedule =
-  let min_parallel =
-    Option.value_or_thunk min_parallel ~default:(fun () ->
-        Utils.registered_int ~arg_name:"cpu_schedule_min_parallel")
+(* The CPU fork-join chains (gh-ocannl-1458): per top-level nest, at most one loop -- the nest's
+   first qualifying path loop ({!nest_chain} with [shared_locals], gh-ocannl-1343) -- proven free of
+   hazards among its OWN concurrent iterations ({!nest_hazards} over that one symbol), with at least
+   two iterations. No cross-nest rule: the C renderer runs each pool-parallel [Grid] loop as one
+   synchronous dispatch that joins before the next statement, and everything outside those loops on
+   the calling thread in program order, so accesses in different top-level statements are ordered by
+   the join whatever their geometry (the soundness argument is in {!default_cpu}'s doc). A statement
+   the access scan cannot model, or a nest with no candidate or a failed proof, stays serial without
+   affecting the others. Returns the candidate loops in program order. *)
+let cpu_fork_join_loops (opt : Low_level.optimized) : Low_level.t list =
+  let open Low_level in
+  let plc = opt.optimize_ctx.placements in
+  let rec is_nest = function For_loop _ -> true | If { body; _ } -> is_nest body | _ -> false in
+  (* Scope-local value symbols are a whole-kernel fact: a local may be assigned in another top-level
+     statement. *)
+  let local_syms = Low_level.scope_value_syms opt.llc in
+  List.filter_map (flat_lines [ opt.llc ]) ~f:(fun stmt ->
+      if not (is_nest stmt) then None
+      else
+        match scan_accesses plc ~local_syms stmt with
+        | exception Bail -> None
+        | n_accesses -> (
+            let n = { n_loops = stmt; n_accesses } in
+            match
+              nest_chain ~plc ~lanes:false ~preamble_reductions:false ~shared_locals:true
+                ~select_chain:Fn.id ~max_chain:1 n
+            with
+            | [ (For_loop fc as loop) ], _ when fc.to_ >= 1 -> (
+                match nest_hazards ~plc n [ fc.index ] with
+                | exception Bail -> None
+                | () -> Some loop)
+            | _ -> None))
+
+let default_cpu ?min_work (opt : Low_level.optimized) : schedule =
+  let min_work =
+    Option.value_or_thunk min_work ~default:(fun () ->
+        Utils.registered_int ~arg_name:"cpu_schedule_min_work")
   in
-  try
-    (* Scratch-writing nests take chains too (gh-ocannl-1343). Linking them to their readers can
-       bail the kernel, or trim a reader's chain to the prefix it shares with the scratch writer --
-       a [y[i, j]] reading [s[i]] keeps only [i]. A trim costs this preset nothing by itself:
-       alignment keeps every trimmed chain's outermost loop, and the outermost loop is all it
-       retypes. What a trim can cost is the threshold: the largest parallel size can drop below
-       [min_parallel] where the plain analysis met it, and then the whole kernel would stay serial.
-       So the plain analysis (scratch-writing nests serial, as before) is the result when the
-       scratch-aware one bails or loses threshold eligibility the plain one has -- never merely
-       because its chains are shorter. *)
-    let chains =
-      let plain = lazy (analyze_parallel_chains opt) in
-      match analyze_parallel_chains ~shared_locals:true opt with
-      | exception Bail -> Lazy.force plain
-      | shared when max_parallel_size shared >= min_parallel -> shared
-      | shared -> (
-          match Lazy.force plain with
-          | plain when max_parallel_size plain >= min_parallel -> plain
-          | _ -> shared
-          | exception Bail -> shared)
-    in
-    crosscheck_scratch_containment opt chains;
-    if max_parallel_size chains < min_parallel then []
-    else
-      (* Retype the outermost chain loop to [Grid], nothing else: pool-backed Grid rendering
-         (gh-ocannl-164) partitions that loop into contiguous chunks, and a [Workgroup] split would
-         only add loop structure that executes serially inside a chunk. *)
-      List.concat_map chains ~f:(function
-        | Low_level.For_loop fc :: _ -> [ Retype { axis = fc.index; ty = Low_level.Grid } ]
-        | _ -> [])
-  with Bail -> []
+  (* Per dispatch: the work of ONE run of the candidate loop -- enclosing serial iterations and
+     sibling nests do not count, since each run forks and joins on its own. Unknown work never
+     passes; a non-positive threshold disables the gate (the tuner's ungated presets). *)
+  let pays loop =
+    min_work <= 0
+    ||
+    match Cost_model.bounded_work ~cap:min_work loop with
+    | Some w -> w >= min_work
+    | None -> false
+  in
+  (* Retype the candidate loop to [Grid], nothing else: pool-backed Grid rendering (gh-ocannl-164)
+     partitions that loop into contiguous chunks, and a [Workgroup] split would only add loop
+     structure that executes serially inside a chunk. *)
+  List.filter_map (cpu_fork_join_loops opt) ~f:(function
+    | Low_level.For_loop fc as loop when pays loop ->
+        Some (Retype { axis = fc.index; ty = Low_level.Grid })
+    | _ -> None)
 
 (** {2 Kernel fission at cross-workgroup edges}
 
@@ -9210,7 +9242,7 @@ let search_shaping_key_read ~backend_name key =
   | "gpu_schedule_min_parallel" | "gpu_schedule_workgroup_fill" | "gpu_lane_preamble_reduction"
   | "gpu_lane_all_reduce_simdgroups" | "gpu_serial_lanes" ->
       backend_is_gpu backend_name
-  | "automatic_cpu_schedule" | "cpu_schedule_min_parallel" -> backend_is_cpu backend_name
+  | "automatic_cpu_schedule" | "cpu_schedule_min_work" -> backend_is_cpu backend_name
   | _ -> true
 
 let schedule_fission = lazy (Utils.registered_flag ~arg_name:"schedule_fission")
@@ -9268,10 +9300,13 @@ let default_schedule_fingerprint ~backend_name =
       [%string
         "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1+lane-reductions-v1+lane-economics-v1+lane-all-reduce-v1+zero-topology-v1+lane-trade-v1:fission=%{fission#Bool}:keep_mapping=%{keep#Bool}:block_size=%{bs#Int}:min_parallel=%{mp#Int}:workgroup_fill=%{fill#Int}:preamble=%{preamble}:serial_lanes=%{lanes}:all_reduce_simdgroups=%{all_reduce}"]
     else
-      let mp = Utils.registered_int ~arg_name:"cpu_schedule_min_parallel" in
+      let mw = Utils.registered_int ~arg_name:"cpu_schedule_min_work" in
       (* [scratch-chains-v1] (gh-ocannl-1343): scratch-writing nests take chains, and a scratch
-         node's whole-node zero joins the segment of its accumulation. *)
-      [%string "cpu:policy=scratch-chains-v1:fission=%{fission#Bool}:min_parallel=%{mp#Int}"]
+         node's whole-node zero joins the segment of its accumulation. [fork-join-v1]
+         (gh-ocannl-1458): per-nest one-loop proofs with no cross-nest alignment, gated per dispatch
+         by [Cost_model.bounded_work] against [cpu_schedule_min_work]. *)
+      [%string
+        "cpu:policy=scratch-chains-v1+fork-join-v1:fission=%{fission#Bool}:min_work=%{mw#Int}"]
 
 let maybe_default_schedule ~backend_name ?(limits = Backend_intf.no_hardware_limits) ~static_indices
     (opt : Low_level.optimized) : Low_level.optimized =

@@ -113,8 +113,7 @@ let enumerate comp =
   Context.release ctx;
   let base = Option.value_exn ~here:[%here] !captured in
   let preset o =
-    if is_gpu then Sched.default_gpu ~min_parallel:1 ~limits o
-    else Sched.default_cpu ~min_parallel:1 o
+    if is_gpu then Sched.default_gpu ~min_parallel:1 ~limits o else Sched.default_cpu ~min_work:0 o
   in
   let zero_sched tns = if is_gpu then Sched.zero_expansion ~limits tns else [] in
   let _plan, tuples =
