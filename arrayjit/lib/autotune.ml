@@ -2644,8 +2644,7 @@ let fission_exposes_sites ~static_indices (opt : LL.optimized) tuples =
    presets. *)
 let segment_preset ?block_size ~presets ~is_gpu ~is_cpu ~limits seg =
   let search = match presets with `Search -> true | `Config -> false in
-  if is_gpu then
-    Sched.default_gpu ?block_size ?min_parallel:(Option.some_if search 1) ~limits seg
+  if is_gpu then Sched.default_gpu ?block_size ?min_parallel:(Option.some_if search 1) ~limits seg
   else if is_cpu then Sched.default_cpu ?min_work:(Option.some_if search 0) seg
   else []
 
