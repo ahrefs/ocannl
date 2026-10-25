@@ -373,9 +373,12 @@ def tree_commit(root=ROOT, driver="cells"):
 def host_identity():
     cpu = "unknown"
     if platform.system() == "Darwin":
-        probe = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True,
-                               text=True)
-        cpu = probe.stdout.strip() or cpu
+        try:  # /usr/sbin can be off a scrubbed PATH: an unknown CPU is recorded as such
+            probe = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"],
+                                   capture_output=True, text=True)
+            cpu = probe.stdout.strip() or cpu
+        except OSError:
+            pass
     elif Path("/proc/cpuinfo").exists():
         cpu = next((line.split(":", 1)[1].strip()
                     for line in Path("/proc/cpuinfo").read_text().splitlines()

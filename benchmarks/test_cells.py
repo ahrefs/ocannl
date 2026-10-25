@@ -84,10 +84,19 @@ class StubRunTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self.tmp.name).resolve()
         self.addCleanup(self.tmp.cleanup)
+        # A cc cell's kernel compiler is fingerprinted from `ocamlc -config`'s c_compiler; the
+        # CPU-torch CI job has no OCaml at all, so a stub ocamlc names this interpreter, which
+        # exists everywhere the stubs do.
+        self.fakebin = self.dir / "fakebin"
+        self.fakebin.mkdir()
+        ocamlc = self.fakebin / "ocamlc"
+        ocamlc.write_text(f"#!/bin/sh\necho 'c_compiler: {sys.executable}'\n")
+        ocamlc.chmod(0o755)
+        self.path = f"{self.fakebin}{os.pathsep}{os.environ.get('PATH', '')}"
 
     def run_tool(self, argv, env=None, timeout=300):
         return subprocess.run(argv, text=True, capture_output=True, cwd=self.dir, timeout=timeout,
-                              env=dict(os.environ, **(env or {})))
+                              env=dict(os.environ, PATH=self.path, **(env or {})))
 
     def records(self, run_dir):
         return [json.loads(l) for l in (run_dir / "cells.jsonl").read_text().splitlines()]
@@ -98,14 +107,12 @@ class AbDriverTest(StubRunTest):
 
     def setUp(self):
         super().setUp()
-        fakebin = self.dir / "fakebin"
-        fakebin.mkdir()
+        fakebin = self.fakebin
         step_stub = STUB.format(python=sys.executable, body=textwrap.dedent(STEP_BODY))
         dune = fakebin / "dune"
         dune.write_text(FAKE_DUNE.format(python=sys.executable, stub=step_stub))
         dune.chmod(0o755)
-        self.env = {"PATH": f"{fakebin}{os.pathsep}{os.environ.get('PATH', '')}",
-                    "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+        self.env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
                     "GIT_COMMITTER_EMAIL": "t@t", "OCANNL_BACKEND": "metal",
                     "BENCH_TUNE": "1"}
         self.repo = self.dir / "repo"
