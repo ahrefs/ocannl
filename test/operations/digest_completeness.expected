@@ -57,6 +57,7 @@ keyed: codegen -- a cc-backend codegen knob: rendering or compiling a kernel rea
   cc_backend_optimization_level [read at codegen]
   cc_backend_simd_flags [read at codegen]
   cc_fp16_arithmetic [read at codegen]
+  cc_grid_min_updates [read at codegen]
   cc_grid_private_bytes_cap [read at codegen]
   cc_parallel_chunks [read at codegen]
   cc_parallel_grid [read at codegen]

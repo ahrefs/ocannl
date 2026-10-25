@@ -388,13 +388,21 @@ configuration.
   only their combination does. Probing rather than matching compiler stderr keeps it independent of
   the compiler's wording; it runs only on a failure, once per process per configuration.
 
-- Repeated inner CPU `Grid` loops require at least 16,384 scalar updates per native dispatch
-  (gh-ocannl-933, `C_syntax.grid_update_count`). The estimate multiplies only the Grid and its
-  body extents, includes scalar `Local_scope` work, and saturates before overflow; enclosing
-  serial iterations cannot amortize their own separate fork/joins. The floor is fixed across
-  machines, is applied after safety checks, and does not claim all larger regions are profitable.
-  Top-level small Grid stress remains parallel; `cpu_parallel` pins both that control and the
-  repeated 128-by-6 / 128-by-15-by-32 cases with executed index-dependent values.
+- Every pool-parallel CPU `Grid` launch, top-level or repeated, requires at least
+  `cc_grid_min_updates` (default 16,384) estimated scalar updates per native dispatch
+  (`C_syntax.grid_update_count`; repeated launches since gh-ocannl-933, top-level ones since
+  gh-ocannl-1564, where `narrow_gebp_bench`'s `packmma_par` at n <= 32 lost 10x to serial on rog).
+  The estimate multiplies only the Grid and its body extents, includes scalar `Local_scope` work,
+  charges a `Tile_mma` its MACs over `C_syntax.tile_mma_macs_per_update` (16: it renders as a
+  vector micro-kernel; MACs at par let a 2 x 16x32x32 launch through), and saturates before
+  overflow; enclosing serial iterations cannot amortize their own fork/joins. The floor is fixed
+  across machines (emitted code must not depend on the pool), is applied after safety checks, and
+  does not claim all larger regions are profitable. Default-schedule Grids already carry
+  `cpu_schedule_min_parallel` (16,384) parallel iterations, so the floor bites on hand-built and
+  tuned schedules and the tuner's `min_parallel:1` presets. It is read per compile: a test that pins
+  which Grid loops CAN render on the pool (eligibility, binding legality, fine-grained stress)
+  states `cc_grid_min_updates=0` for its compiles (`cpu_parallel`'s `top_six_nofloor`,
+  `cpu_scratch_matmul_grid`, `schedule_pack_mma_matmul`); `grid_launch_floor` pins the floor itself.
 
 - `C_syntax.render_ctx` owns the state of one emission, including volatility observers, zero seeds,
   thread-binding analysis and codegen-minted accumulator scopes (gh-ocannl-769). `create_render_ctx`

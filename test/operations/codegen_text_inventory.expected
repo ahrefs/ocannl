@@ -199,6 +199,9 @@ test/operations/gpu_packed_prec.ml [run by @test/operations/runtest-gpu_packed_p
     sprintf "const %s*>(&"
 test/operations/gpu_serial_lanes.ml [run by @test/operations/runtest-gpu_serial_lanes; also pins text this scan cannot name: computed fragment, untraced callback]
     "for ("
+test/operations/grid_launch_floor.ml [run by @test/operations/runtest-grid_launch_floor; also pins text this scan cannot name: opaque aggregate component, mutation or unseen buffer write]
+    "#pragma omp parallel for"
+    "dispatch_apply"
 test/operations/half_float_power.ml [run by @test/operations/runtest-half_float_power]
     " half8_t*>(&"
     "(half)pow((float)("
@@ -610,6 +613,7 @@ so, and the goldens' families say which backends a change has to be run on.
 @test/operations/runtest-gpu_lane_reduction
 @test/operations/runtest-gpu_packed_prec
 @test/operations/runtest-gpu_serial_lanes
+@test/operations/runtest-grid_launch_floor
 @test/operations/runtest-half_float_power
 @test/operations/runtest-half_unary_math
 @test/operations/runtest-hardware_axes_parity

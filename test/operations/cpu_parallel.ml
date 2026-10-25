@@ -49,6 +49,17 @@ let has_parallel_construct src =
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 
+(* The pool-launch work floor ([C_syntax.grid_min_updates], config [cc_grid_min_updates]) is read
+   per compile; a leg states it for its own compiles and restores what was there. *)
+let with_floor value f =
+  let key = "cc_grid_min_updates" in
+  let prior = Hashtbl.find Utils.config_file_args key in
+  Hashtbl.set Utils.config_file_args ~key ~data:value;
+  Exn.protect ~f ~finally:(fun () ->
+      match prior with
+      | Some v -> Hashtbl.set Utils.config_file_args ~key ~data:v
+      | None -> Hashtbl.remove Utils.config_file_args key)
+
 let () =
   (* --- Large elementwise kernel through the automatic schedule (no lowered_transform): 512 x 512 =
      262144 parallel iterations, above every threshold. --- *)
@@ -299,8 +310,14 @@ let () =
   repeated_grid ~name:"cpu_par_repeat_two_tiles" ~outer:128 ~middle:15 ~inner:2 ~width:128
     ~parallel:false;
   repeated_grid ~name:"cpu_par_repeat_large" ~outer:2 ~middle:1 ~inner:16384 ~width:1 ~parallel:true;
-  (* The old top-level fine-grained stress remains intentional and must not silently go serial. *)
-  repeated_grid ~name:"cpu_par_top_six" ~outer:1 ~middle:1 ~inner:6 ~width:1 ~parallel:true;
+  (* A top-level launch pays its fork/join once per routine call, which still dominates six updates
+     (gh-ocannl-1564): under the default floor it renders serial. With the floor disabled
+     ([cc_grid_min_updates=0]) the same loop is the fine-grained concurrency stress it always was,
+     and must render on the pool. *)
+  repeated_grid ~name:"cpu_par_top_six" ~outer:1 ~middle:1 ~inner:6 ~width:1 ~parallel:false;
+  with_floor "0" (fun () ->
+      repeated_grid ~name:"cpu_par_top_six_nofloor" ~outer:1 ~middle:1 ~inner:6 ~width:1
+        ~parallel:true);
   let update =
     LL.Set
       {

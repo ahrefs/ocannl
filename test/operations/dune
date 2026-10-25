@@ -6514,6 +6514,20 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1564: the pool-launch work floor serializes a small top-level Grid launch (the packed
+; GEBP's packmma_par at 32^3) and leaves a large one pool-parallel, values bitwise either way.
+
+(test
+ (name grid_launch_floor)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules grid_launch_floor)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test bench_gebp)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  (name clamped_window_pool)
  (package neural_nets_lib)

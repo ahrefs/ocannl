@@ -18,4 +18,6 @@ cpu_par_repeat_large executed values: true
 cpu_par_repeat_large pool rendering: true
 cpu_par_top_six executed values: true
 cpu_par_top_six pool rendering: true
+cpu_par_top_six_nofloor executed values: true
+cpu_par_top_six_nofloor pool rendering: true
 update estimate handles threshold, saturation and empty ranges: true
