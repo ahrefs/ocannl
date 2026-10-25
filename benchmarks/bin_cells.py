@@ -50,7 +50,19 @@ revisions.
   for an odd one).
 - Paired. A bench reports a timed variant through `Bench_out.result`'s `bench-result:` line on
   stdout (seconds per run); a cell reporting none, or one variant twice, fails -- an executable
-  that does not report (`device_props`, `compilation_speed`) is not something this driver measures. The report gives each arm's median/min/max per variant, and for each
+  that does not report (`device_props`, `compilation_speed`) is not something this driver measures.
+  With `--reader record` a cell is a runner instead (`bench_gpt`, `bench_conv`, ...), read through
+  its result line (`bench_output.result_record`): each `--metric` (a dotted time field, default
+  `step_ms.p50`) is a variant, unchecked -- a runner states no output check, so the report compares
+  the arms' parity losses instead, informationally (a treatment may change numerics on purpose).
+  A stated `BENCH_FIXTURE` is made absolute, content-stamped in the manifest, and puts the run
+  behind the box gate (`--box BOX` or `--skip-box-check`, box_gate.py). For example, two placements
+  of one `bench_gpt` build:
+      python3 benchmarks/bin_cells.py --exe _build/default/benchmarks/runners/ocannl/bench_gpt.exe \
+          --backend cuda --out DIR --box rog-nv --reader record --rounds 12 \
+          --env BENCH_FIXTURE=benchmarks/fixtures/gpt2_mini.safetensors --env BENCH_TUNE=0 \
+          --arm base= --arm treat=--ocannl_gpu_graph_capture=false
+  The report gives each arm's median/min/max per variant, and for each
   non-reference arm the PAIRED ratio against the first arm, round by round -- the median ratio, its
   range, in how many rounds the arm was faster, and the exact two-sided sign-test p. Twelve paired
   rounds can resolve a 5% effect that overlapping intervals of single runs read as parity
@@ -76,12 +88,14 @@ sha256 is then its identity, and no commit is claimed for it.
 
 import argparse
 import json
+import math
 import os
 import statistics
 import sys
 from pathlib import Path
 
 import bench_output
+import box_gate
 import cells
 from cells import (TraceError, consistency_problems, design_orders, parse_config_trace,  # noqa: F401
                    sign_test_p, treatment_problems)
@@ -103,6 +117,79 @@ def bench_result_reader(stdout, _stderr):
     return results, cells.timed_results_problems(results, "reported no bench-result line")
 
 
+RECORD_NOTE = ("a runner's result line states no output check; the arms' parity losses are "
+               "compared under Parity losses")
+
+
+def metric_scale(path):
+    """Seconds per unit of the result-line field at the dotted `path`: a `step_ms` percentile or a
+    `*_ms` field is milliseconds, a `*_s` field seconds; ValueError for any other (a count, a
+    flag), which is not a time this driver pairs."""
+    last = path.rsplit(".", 1)[-1]
+    if path.startswith("step_ms.") or last.endswith("_ms"):
+        return 1e-3
+    if last.endswith("_s"):
+        return 1.0
+    raise ValueError(f"--metric {path}: not a time field (step_ms.*, *_ms, *_s)")
+
+
+def record_reader(metrics):
+    """The cell reader for a runner's result line (`bench_gpt`, `bench_conv`, ...): each of
+    `metrics` (dotted paths) becomes one timed variant, in seconds."""
+    def read(stdout, _stderr):
+        record = bench_output.result_record(stdout)
+        if record is None:
+            return [], ["reported no result line"]
+        results, problems = [], []
+        for path in metrics:
+            try:
+                value = bench_output.field(record, path)
+            except KeyError as e:
+                problems.append(e.args[0])
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                    or not math.isfinite(value) or value <= 0:
+                problems.append(f"{path} is {value!r}, not a positive time")
+                continue
+            results.append((path, value * metric_scale(path), "unchecked", RECORD_NOTE))
+        return results, problems + cells.timed_results_problems(results, "reported no result line")
+    return read
+
+
+def cell_losses(out, rec):
+    """The parity losses of a cell's result line, or None."""
+    try:
+        record = bench_output.result_record(
+            (out / "cells" / f"{rec['cell']:03d}-{rec['arm']}" / "stdout").read_text(
+                errors="replace"))
+    except (OSError, ValueError):
+        return None
+    losses = record.get("losses") if isinstance(record, dict) else None
+    return losses if isinstance(losses, list) else None
+
+
+def parity_lines(out, manifest, records):
+    """The Parity losses section of a record-reading run: per arm, how many distinct loss
+    sequences its clean cells reported, and whether they are the reference arm's. Informational:
+    a treatment may change numerics on purpose (a precision, a reassociation), so a difference is
+    reported, never failed."""
+    arms = [a["label"] for a in manifest["arms"]]
+    seqs = {a: [] for a in arms}
+    for r in records:
+        if r["ok"]:
+            losses = cell_losses(out, r)
+            if losses is not None:
+                seqs[r["arm"]].append(json.dumps(losses))
+    ref = set(seqs[arms[0]])
+    rows = [(display_value(a), str(len(seqs[a])), str(len(set(seqs[a]))),
+             "(reference)" if a == arms[0] else "-" if not seqs[a] or not ref else
+             "identical" if set(seqs[a]) == ref else "DIFFERENT")
+            for a in arms]
+    return ["", "## Parity losses", "",
+            *table_lines(("arm", "cells", "distinct sequences", "against the reference"), rows,
+                         "lrrl")]
+
+
 # ---------------------------------------------------------------------------------------------
 # The report.
 
@@ -121,7 +208,7 @@ def ms(seconds):
     return f"{seconds * 1e3:.4g}"
 
 
-def render_report(manifest, records, problems, title="bin/ bench cells"):
+def render_report(manifest, records, problems, title="bin/ bench cells", extra=()):
     arms = [a["label"] for a in manifest["arms"]]
     rounds = manifest["rounds"]
     lines = [f"# {title}: {display_value(manifest['bench'])} on {manifest['backend']}", ""]
@@ -155,6 +242,8 @@ def render_report(manifest, records, problems, title="bin/ bench cells"):
         env = a.get("env", {})
         lines.append(log_line(f"- {display_value(a['label'])}: " + spans(a["args"])
                               + (f"; stated environment {assignments(env)}" if env else "")))
+    for path, digest in manifest.get("stated_files", {}).items():
+        lines.append(log_line(f"- stated file {display_value(path)}: sha256 {digest}"))
     lines.append(log_line(cells.design_line(len(arms), rounds)))
 
     ok = [r for r in records if r["ok"]]
@@ -192,6 +281,7 @@ def render_report(manifest, records, problems, title="bin/ bench cells"):
                 for v in variants for a in arms[1:]]
         lines += table_lines(("variant", "arm", *cells.PAIRED_HEADER), rows, "llrrrrr")
 
+    lines += list(extra)
     lines += ["", "## Resolved configuration", ""]
     configs = {}
     for r in ok:
@@ -289,6 +379,13 @@ def build_parser():
                              "never OCANNL_*)")
     parser.add_argument("--cell-timeout", type=float, default=cells.CELL_TIMEOUT_S,
                         help=f"seconds per cell (default {cells.CELL_TIMEOUT_S})")
+    parser.add_argument("--reader", choices=("bench-result", "record"), default="bench-result",
+                        help="what a cell reports: `Bench_out.result` lines (the bin/ benches; the "
+                             "default), or a runner's result line (bench_gpt, bench_conv, ...)")
+    parser.add_argument("--metric", action="append", default=[],
+                        help="with --reader record: a dotted time field of the result line to "
+                             "pair (repeatable; default step_ms.p50)")
+    box_gate.add_arguments(parser)  # checked only when a cell is handed a fixture
     return parser
 
 
@@ -316,7 +413,43 @@ def resolve_arms(args, parser):
     return arms
 
 
-def main(argv=None):
+def stated_fixtures(common_env, arms):
+    """Every stated BENCH_FIXTURE, made absolute (a cell runs in a directory of its own, where a
+    relative path names nothing); exit when one names no file."""
+    for env in [common_env, *(a["env"] for a in arms)]:
+        if "BENCH_FIXTURE" in env:
+            path = Path(env["BENCH_FIXTURE"]).expanduser().resolve()
+            if not path.is_file():
+                sys.exit(f"{DRIVER}: BENCH_FIXTURE={env['BENCH_FIXTURE']} names no file")
+            env["BENCH_FIXTURE"] = str(path)
+    return sorted({env["BENCH_FIXTURE"] for env in [common_env, *(a["env"] for a in arms)]
+                   if "BENCH_FIXTURE" in env})
+
+
+def gate_fixtures(args, fixtures):
+    """The box gate over the stated fixtures, per fixture directory (`box_gate.require`)."""
+    by_dir = {}
+    for f in fixtures:
+        path = Path(f)
+        by_dir.setdefault(path.parent, []).append(path.name.removesuffix(".safetensors"))
+    for fixture_dir, names in sorted(by_dir.items()):
+        box_gate.require(DRIVER, args, fixture_dir, names,
+                         run=lambda cmd: cells.run_in_group(cmd, ROOT, dict(os.environ), 900,
+                                                            None, None))
+
+
+def stated_files(common_env, arms):
+    """{path: sha256} of every stated value naming an existing file by an absolute path: what a
+    cell read besides its executable (a fixture), content-stamped beside the numbers."""
+    files = {}
+    for env in [common_env, *(a["env"] for a in arms)]:
+        for value in env.values():
+            if os.path.isabs(value) and os.path.isfile(value):
+                files[value] = cells.sha256(value)
+    return dict(sorted(files.items()))
+
+
+def main(argv=None, arm_commits=None):
     argv = sys.argv[1:] if argv is None else argv
     split = argv.index("--") if "--" in argv else len(argv)
     parser = build_parser()
@@ -324,6 +457,16 @@ def main(argv=None):
     common = argv[split + 1:]
     arms = resolve_arms(args, parser)
     common_env = {k: v for e in args.env for k, v in e.items()}
+    if args.metric and args.reader != "record":
+        parser.exit(2, f"{DRIVER}: --metric reads a runner's result line: pass --reader record\n")
+    metrics = args.metric or ["step_ms.p50"]
+    try:
+        for m in metrics:
+            metric_scale(m)
+    except ValueError as e:
+        parser.exit(2, f"{DRIVER}: {e}\n")
+    reader = bench_result_reader if args.reader == "bench-result" else record_reader(metrics)
+    fixtures = stated_fixtures(common_env, arms)
     try:
         orders = design_orders(len(arms), args.rounds)
     except ValueError as e:
@@ -332,6 +475,8 @@ def main(argv=None):
         sys.exit(f"{DRIVER}: --cell-timeout must be positive")
     out = cells.fresh_out_dir(args.out, DRIVER)
     cells.install_cancellation(DRIVER)
+    if fixtures:
+        gate_fixtures(args, fixtures)
 
     shared = [a for a in arms if "exe" not in a]
     exe = None
@@ -361,7 +506,11 @@ def main(argv=None):
         "common_args": common, "common_env": common_env,
         "arms": [{"label": a["label"], "args": a["args"], "env": a["env"],
                   **({"executable": str(a["exe"]), "executable_sha256": cells.sha256(a["exe"])}
-                     if a["exe"] != exe else {})} for a in arms],
+                     if a["exe"] != exe else {}),
+                  **({"commit": arm_commits[a["label"]]}
+                     if arm_commits and a["label"] in arm_commits else {})} for a in arms],
+        "reader": args.reader, **({"metrics": metrics} if args.reader == "record" else {}),
+        "stated_files": stated_files(common_env, arms),
         "pins": cells.pins(args.backend), "cleared": cleared,
         "runtime_controls": cells.runtime_controls(env),
         "environment_values": cells.recorded_values(env),
@@ -372,14 +521,16 @@ def main(argv=None):
 
     records = cells.run_cells(arms=arms, orders=orders, out=out, env=env, backend=args.backend,
                               common=common, common_env=common_env, timeout=args.cell_timeout,
-                              reader=bench_result_reader, driver=DRIVER)
+                              reader=reader, driver=DRIVER)
     if args.backend in ("cc", "multidev_cc"):
         manifest["kernel_compilers"] = cells.kernel_compilers(arms, records, env, out)
         (out / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
     problems = cells.run_problems(records, [
         f"arm {arm}: the kernel compiler could not be identified: {c['error']}"
         for arm, c in manifest.get("kernel_compilers", {}).items() if "error" in c])
-    report = render_report(manifest, records, problems)
+    report = render_report(manifest, records, problems,
+                           extra=parity_lines(out, manifest, records)
+                           if args.reader == "record" else ())
     (out / "report.md").write_text(report)
     sys.stdout.write(report)
     return cells.exit_status(records, problems)

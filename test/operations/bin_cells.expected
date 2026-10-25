@@ -86,6 +86,23 @@ a cell reporting no result fails the run: true
 a variant that failed its output check fails the run: true
 an unchecked variant is measured, and reported as unchecked with its reason: true
 a cell reporting one variant twice fails the run: true
+a run whose only faults are cells refusing their measurement exits 3: true
+a refusal beside a failure is a failed run: true
+an arm's stated variable reaches its cells, the ambient BENCH_TUNE does not: true
+the stated environment is recorded per cell and in the manifest: true
+a stated library setting is refused before any cell runs: true
+arms on executables of their own need no --bench or --exe, and carry their sha256: true
+an arm without an executable is refused when neither --bench nor --exe is given: true
+a runner's result line is read as one unchecked variant per metric, in seconds: true
+## Parity losses
+
+| arm | cells | distinct sequences | against the reference |
+|---|---:|---:|---|
+| slow | 2 | 1 | (reference) |
+| fast | 2 | 1 | identical |
+
+a metric that is no time field is refused: true
+a cell printing no result line fails a record-reading run: true
 a cell past its cap is recorded as timed out and fails the run: true
 a non-empty output directory is refused: true
 an output directory inside the checkout is refused: true

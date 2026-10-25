@@ -9695,7 +9695,7 @@
 (executable
  (name bin_cells_probe)
  (modules bin_cells_probe)
- (libraries base unix arrayjit.utils bench_args bench_out))
+ (libraries base stdio unix arrayjit.utils bench_args bench_out bench_json))
 
 (rule
  ; ocannl-backend: none -- the probe links arrayjit.utils and bench_out alone and compiles nothing.
@@ -9710,6 +9710,7 @@
   ../../benchmarks/bin_cells.py
   ../../benchmarks/cells.py
   ../../benchmarks/bench_output.py
+  ../../benchmarks/box_gate.py
   ../../benchmarks/cell_group.py
   ../../benchmarks/strict_json.py
   ../../benchmarks/display_safe.py
