@@ -30,6 +30,11 @@ past capacity the weight gradient's pick is a sketch, not the default: true
 below capacity the weight gradient's pick stays the default: true
 the pick's rank is at least its bound: true
 a fissioned chain's explanation lists its matmul segments, each with sketch leaves: true
+below the threshold the configured segmentation is the single kernel: true
+below the threshold the search's segmentation cuts the chain: true
+below the threshold the explanation lists the chain's matmul segments, each with sketch leaves: true
+below the threshold some segment's sketch strictly beats the segment's preset: true
+the below-threshold pick computes the host's values exactly: true
 each explained segment is listed once: true
 each explained segment lists its preset first, admitted: true
 every explained per-segment ranking score is at least its bound: true

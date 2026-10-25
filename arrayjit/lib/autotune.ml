@@ -5728,6 +5728,24 @@ let seeded_record_for_key ~(plan : Sched.segmentation) ~record (key : seg_key) =
              List.mem key.key_units start ~equal:Int.equal && start <= u && u < start + n))
         p)
 
+(* gh-ocannl-1512: the per-segment view [model_default] ranks and [model_explain] lists -- exactly
+   what {!tune}'s seed enumeration derives: {!sketch_segmentation} at [`Search] of [base], when it
+   splits the routine or exposes a changed lowering, as the plan and one [(key, pre, post)] per
+   keyed segment, [post] being the segment under the search's preset: the threshold its sketches
+   must strictly beat to enter a substitution. Not the configured thresholds: they leave a
+   below-threshold nest unannotated, and fission coalesces adjacent unannotated segments back into
+   one kernel, so on cc below [cpu_schedule_min_parallel] that segmentation was the single kernel
+   and the per-segment path never fired. Nor the configured preset as the threshold: the ranking
+   score charges no operand re-reads to an unannotated kernel (one block), so a segment's sketches
+   could at best tie its serial preset and no substitution would ever form. (What a substitution
+   SHIPS on the segments it leaves unsketched is the configured preset: [model_default]'s
+   [apply_fiss].) [None] where fission exposes no site; raises {!Outcome.Cause_at} as
+   {!Sched.fission_segmented} does. *)
+let model_segments ~is_gpu ~is_cpu ~limits ~static_indices (base : LL.optimized) =
+  match sketch_segmentation ~presets:`Search ~is_gpu ~is_cpu ~limits ~static_indices base with
+  | _, tuples when not (fission_exposes_sites ~static_indices base tuples) -> None
+  | plan, tuples -> Some (plan, keyed_segments ~static_indices plan tuples)
+
 let model_default ?name ?report ctx comp bindings =
   let backend = Context.backend_name ctx in
   let is_gpu = Sched.backend_is_gpu backend and is_cpu = Sched.backend_is_cpu backend in
@@ -5856,9 +5874,17 @@ let model_default ?name ?report ctx comp bindings =
             stats.Sspace.st_refuted stats.Sspace.st_excluded;
           Some best
     in
-    let preset = segment_preset ~presets:`Config ~is_gpu ~is_cpu ~limits in
     (* A per-segment substitution, as [tune]'s [F_sketch] candidates apply one: [plan] replayed,
-       each keyed segment found by position (gh-ocannl-1243), the others on their kind's preset. *)
+       each keyed segment found by position (gh-ocannl-1243), the others on their kind's CONFIGURED
+       preset (gh-ocannl-1512) -- what the incumbent ships, not the search's [min_parallel:1] one
+       its segments were ranked against ({!model_segments}). The model times nothing: on GPU the
+       search's preset can give a small segment a lane reduction, which reorders its sums, where the
+       configured one keeps it serial -- under seeding, a result the seeded plan would not compute;
+       on cc it would fan a tiny segment out over the pool, an overhead the score does not see. So a
+       pick labeled [F_sketch[...]] is the search's candidate of that label up to the presets of the
+       segments it leaves unsketched; the substituted pipeline is scored whole and must still
+       strictly beat the incumbent. *)
+    let preset = segment_preset ~presets:`Config ~is_gpu ~is_cpu ~limits in
     let apply_fiss ~plan ~entries opt =
       let replay =
         sketch_replay ~static_indices
@@ -5944,22 +5970,20 @@ let model_default ?name ?report ctx comp bindings =
               | Some (p, sc) -> [ (spec_label (Whole (W_sketch p)), sc, `Whole p) ]
               | None -> []
             in
-            (* Per-segment sketch substitution when fission splits the routine or exposes a new
-               lowering (a covering GPU zero companion) for sketching. Mirrors [tune]'s [F_sketch]
-               flavor: the derived segmentation replayed, keyed segments found in it by position
-               (gh-ocannl-1243), a digest mismatch degrading to the default preset. *)
+            (* Per-segment sketch substitution when the search's segmentation splits the routine or
+               exposes a new lowering (a covering GPU zero companion) for sketching
+               ({!model_segments}, gh-ocannl-1512). Mirrors [tune]'s [F_sketch] flavor: the derived
+               segmentation replayed, keyed segments found in it by position (gh-ocannl-1243), a
+               digest mismatch degrading to the configured preset. *)
             let fiss =
-              match
-                sketch_segmentation ~presets:`Config ~is_gpu ~is_cpu ~limits ~static_indices base
-              with
+              match model_segments ~is_gpu ~is_cpu ~limits ~static_indices base with
               | exception Outcome.Cause_at _ ->
                   Int.incr n_rejected;
                   None
-              | _, tuples when not (fission_exposes_sites ~static_indices base tuples) -> None
-              | plan, tuples -> (
+              | None -> None
+              | Some (plan, keyed) -> (
                   let decided =
-                    List.filter_map (keyed_segments ~static_indices plan tuples)
-                      ~f:(fun (key, pre, post) ->
+                    List.filter_map keyed ~f:(fun (key, pre, post) ->
                         match score [ post ] with
                         | None -> None
                         | Some bs -> (
@@ -6422,16 +6446,17 @@ let model_explain ?name ?(coalesced = false) ctx comp bindings =
           prog
           (coalesced_seed_params ~capabilities:caps ~is_gpu ~is_cpu ~limits prog)
     in
-    (* gh-ocannl-1438: [model_default]'s per-segment substitution, as it derives it -- the
-       fold-zeros segmentation of the searched program, when it splits the routine or exposes a
-       changed lowering -- one entry per keyed segment: the segment's default preset, the incumbent
-       its sketches must strictly beat, then the sketch leaves it searches there. *)
+    (* gh-ocannl-1438: [model_default]'s per-segment substitution, as it derives it
+       ({!model_segments}: the search's fold-zeros segmentation of the searched program, when it
+       splits the routine or exposes a changed lowering, gh-ocannl-1512) -- one entry per keyed
+       segment: the segment under the search's preset, the incumbent its sketches must strictly
+       beat, then the sketch leaves it searches there. *)
     let x_segments =
-      match sketch_segmentation ~presets:`Config ~is_gpu ~is_cpu ~limits ~static_indices base with
+      match model_segments ~is_gpu ~is_cpu ~limits ~static_indices base with
       | exception Outcome.Cause_at _ -> []
-      | _, tuples when not (fission_exposes_sites ~static_indices base tuples) -> []
-      | plan, tuples ->
-          List.map (keyed_segments ~static_indices plan tuples) ~f:(fun (key, pre, post) ->
+      | None -> []
+      | Some (plan, keyed) ->
+          List.map keyed ~f:(fun (key, pre, post) ->
               let tag = seg_key_tag key in
               {
                 xs_segment = tag;

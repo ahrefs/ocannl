@@ -224,9 +224,10 @@ val segment_preset :
 (** The default preset a segment gets in the tuner's fission pipelines (gh-ocannl-1483):
     {!Ir.Schedule.default_gpu} on a GPU backend, {!Ir.Schedule.default_cpu} on a CPU one, nothing
     otherwise. [`Search] is the search's aggressive [min_parallel:1] thresholds — what {!tune}'s
-    candidates and their per-segment seeding use; [`Config] the configured ones — what
-    {!model_default} and {!model_explain} use, and with no [block_size] the untuned default
-    pipeline's own presets. *)
+    candidates, their per-segment seeding, and the threshold of {!model_default}'s per-segment
+    substitution use (gh-ocannl-1512); [`Config] the configured ones — with no [block_size] the
+    untuned default pipeline's own presets, and what that substitution ships on the segments it
+    leaves unsketched. *)
 
 val tuner_fission :
   ?arity_cuts:bool ->
@@ -264,11 +265,13 @@ val sketch_segmentation :
     * Ir.Schedule.schedule
     * Ir.Low_level.optimized)
     list
-(** The segmentation the per-segment sketch candidates are enumerated ({!tune}, at [`Search]
-    presets, [arity_cuts] for its finer pass), modeled ({!model_default}) and explained
-    ({!model_explain}, both at [`Config]) under (gh-ocannl-1483): {!tuner_fission} with the zero
-    fold ([fold_zeros], gh-ocannl-1175) and {!segment_preset}'s presets, derived on a hermetic copy
-    of the argument, so its placements are left as they were. The tuples' segments carry the copy's
+(** The segmentation the per-segment sketch candidates are enumerated ({!tune}, [arity_cuts] for its
+    finer pass), modeled ({!model_default}) and explained ({!model_explain}) under, all at [`Search]
+    presets (gh-ocannl-1483, gh-ocannl-1512): the configured thresholds leave a below-threshold nest
+    unannotated, and fission coalesces adjacent unannotated segments back into one kernel, so at
+    [`Config] a small routine's sites are never cut apart. {!tuner_fission} with the zero fold
+    ([fold_zeros], gh-ocannl-1175) and {!segment_preset}'s presets, derived on a hermetic copy of
+    the argument, so its placements are left as they were. The tuples' segments carry the copy's
     placements, promotions included. A test that needs the tuner's per-segment view derives it here
     rather than restating these settings. Raises {!Ir.Schedule_outcome.Cause_at} as
     {!Ir.Schedule.fission_segmented} does. *)
@@ -2258,7 +2261,8 @@ val model_default :
   Context.t * Context.routine
 (** A drop-in for {!Context.compile} that raises the untuned floor (gh-ocannl-491 task 3): inside
     the compile's own transform seam, the untuned default pipeline and the sketch families
-    (whole-routine, and per-fission-segment substitutions when the default fissions) are scored with
+    (whole-routine, and per-fission-segment substitutions where the search's segmentation splits the
+    routine, their unsketched segments on the configured presets, gh-ocannl-1512) are scored with
     the cost model's ranking score ({!Ir.Cost_model.ranking_seconds}, gh-ocannl-1253: the roofline,
     with operand re-reads requested per block and charged at DRAM bandwidth once the working set
     exceeds the cache capacity, at the cache bandwidth within it — {!ranking_capacity},
@@ -2664,11 +2668,12 @@ type segment_explain = {
       (** The segment's key tag ([<digest prefix>:u<first units>]), as {!tune}'s per-segment sketch
           labels ([F_sketch[...]]) and {!model_default}'s pick name it. *)
   xs_candidates : (string * explain) list;
-      (** ["preset"] first -- the segment under its default preset, the incumbent its sketches must
-          strictly beat, as must they the segment's [ex_anchor] leaf where there is one -- then
-          every sketch leaf {!model_default}'s family search visits on the segment, in visiting
-          order, each labeled [<sketch parameters> @<key tag>] as an [F_sketch] label renders its
-          entries ({!sketch_params_label}). *)
+      (** ["preset"] first -- the segment under the search's preset ({!segment_preset} at [`Search],
+          gh-ocannl-1512), the incumbent its sketches must strictly beat, as must they the segment's
+          [ex_anchor] leaf where there is one -- then every sketch leaf {!model_default}'s family
+          search visits on the segment, in visiting order, each labeled
+          [<sketch parameters> @<key tag>] as an [F_sketch] label renders its entries
+          ({!sketch_params_label}). *)
 }
 
 type explanation = {
@@ -2680,10 +2685,11 @@ type explanation = {
           labels them ([W_sketch[...]]), in the family search's visiting order. *)
   x_segments : segment_explain list;
       (** One entry per keyed segment of the per-segment substitution {!model_default} ranks beside
-          the whole-routine candidates (gh-ocannl-1438), in segment order: the fold-zeros fission
-          segmentation of the searched program, keyed as {!tune}'s per-segment candidates key it.
-          Empty where {!model_default} makes no per-segment substitution: fission splits nothing and
-          exposes no changed lowering, or the segmentation declines. *)
+          the whole-routine candidates (gh-ocannl-1438), in segment order: the search's fold-zeros
+          fission segmentation of the searched program ({!sketch_segmentation} at [`Search],
+          gh-ocannl-1512), keyed as {!tune}'s per-segment candidates key it. Empty where
+          {!model_default} makes no per-segment substitution: fission splits nothing and exposes no
+          changed lowering, or the segmentation declines. *)
 }
 
 val model_explain :

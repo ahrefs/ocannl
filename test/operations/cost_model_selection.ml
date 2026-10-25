@@ -357,10 +357,11 @@ let () =
     | _ -> false);
   (* --- [model_explain] per segment (gh-ocannl-1438): what [model_default] saw of each segment of
      its per-segment substitution, against what it picked. The weight-gradient steps above are
-     ranked whole (fission exposes no site there). The two-matmul chain the autotune tests search,
-     with its materialized sums cutting it into keyed matmul segments, but at 128x128: below cc's
-     default parallel threshold ([cpu_schedule_min_parallel], 16384 cells) the untuned preset maps
-     nothing and the fission [model_default] derives under it cuts nothing. --- *)
+     segmented too since gh-ocannl-1512 (their small nests no longer coalesce), and keep their
+     picks. The two-matmul chain the autotune tests search, with its materialized sums cutting it
+     into keyed matmul segments, at 128x128: every nest sits at cc's default parallel threshold
+     ([cpu_schedule_min_parallel], 16384 cells), where the configured and the search's presets
+     agree. The leg below takes a chain under it. --- *)
   let chain_comp =
     let q = 128 in
     let mat ~label ~modulus =
@@ -397,7 +398,108 @@ let () =
     (List.count chain_explained.Autotune.x_segments ~f:(fun xs ->
          List.length xs.Autotune.xs_candidates > 1)
     >= 2);
-  let legs = [ (large, large_explained); (small, small_explained); (chain, chain_explained) ] in
+  (* --- Below the parallel threshold the model ranks on the search's segmentation (gh-ocannl-1512)
+     ---
+
+     A chain whose every nest has fewer than [cpu_schedule_min_parallel] parallel iterations: a
+     64x64 product over a 4096-long contraction, a second 32x64 product of it, and a pointwise tail,
+     each materialized. The configured CPU preset leaves every nest unannotated, and fission
+     coalesces adjacent unannotated segments back into one kernel, so the configured segmentation is
+     the single kernel and [model_default] used to make no per-segment substitution at all. The
+     search's [min_parallel:1] presets keep the chain cut, and its first product's operands (2 MiB)
+     exceed the rule's 1 MiB cache capacity, so a reuse-tiled sketch of that segment strictly beats
+     its preset. The inputs are dyadic and small, so every sum is exact in f32 and the values are
+     checked exactly against the host. *)
+  let bm = 64 and bk = 4096 and bn = 64 and bp = 32 in
+  let cyc ~dims ~modulus = Ll_test.cycle_flat ~dims ~modulus ~offset:0. ~stride:0.5 in
+  let bav = Array.init (bm * bk) ~f:(cyc ~dims:[| bm; bk |] ~modulus:3) in
+  let bcv = Array.init (bk * bn) ~f:(cyc ~dims:[| bk; bn |] ~modulus:5) in
+  let bfv = Array.init (bp * bm) ~f:(cyc ~dims:[| bp; bm |] ~modulus:5) in
+  let btv = Array.init (bp * bn) ~f:(cyc ~dims:[| bp; bn |] ~modulus:3) in
+  let host_mm a b ~rows ~inner ~cols =
+    Array.init (rows * cols) ~f:(fun idx ->
+        let i = idx / cols and j = idx % cols in
+        let acc = ref 0. in
+        for l = 0 to inner - 1 do
+          acc := !acc +. (a.((i * inner) + l) *. b.((l * cols) + j))
+        done;
+        !acc)
+  in
+  let bh_expected =
+    let be = host_mm bav bcv ~rows:bm ~inner:bk ~cols:bn in
+    let bg = host_mm bfv be ~rows:bp ~inner:bm ~cols:bn in
+    Array.mapi bg ~f:(fun i g -> g +. btv.(i))
+  in
+  let below_comp, bh =
+    let mat ~label values ~o ~i =
+      TDSL.ndarray values ~label:[ label ] ~input_dims:[ i ] ~output_dims:[ o ] ()
+    in
+    let ba = mat ~label:"bt_a" bav ~o:bm ~i:bk and bc = mat ~label:"bt_c" bcv ~o:bk ~i:bn in
+    let bf = mat ~label:"bt_f" bfv ~o:bp ~i:bm and bt = mat ~label:"bt_t" btv ~o:bp ~i:bn in
+    let%op be = ba * bc in
+    Train.set_materialized be.Tensor.value;
+    let%op bg = bf * be in
+    Train.set_materialized bg.Tensor.value;
+    let%op bh = bg + bt in
+    (named "below_threshold_chain" (Train.forward bh), bh)
+  in
+  let below_choice = ref None in
+  let below_ctx = Context.auto () in
+  (* The premise: the configured segmentation is the single kernel, the search's cuts the chain. *)
+  let premise_segments presets =
+    let target = Ll_test.host_target () in
+    List.length
+      (fst
+         (Autotune.sketch_segmentation ~presets ~is_gpu:target.Ll_test.is_gpu
+            ~is_cpu:target.Ll_test.is_cpu ~limits:target.Ll_test.limits ~static_indices:[]
+            (Context.lowered_for_decisions below_ctx below_comp Ir.Indexing.Empty)))
+  in
+  let config_segments = premise_segments `Config and search_segments = premise_segments `Search in
+  Stdio.eprintf
+    "below_threshold_chain: %d configured segment(s), %d search segment(s) (not part of the golden)\n"
+    config_segments search_segments;
+  p "below the threshold the configured segmentation is the single kernel" (config_segments = 1);
+  p "below the threshold the search's segmentation cuts the chain" (search_segments >= 3);
+  let below_explained = Autotune.model_explain below_ctx below_comp Ir.Indexing.Empty in
+  let below_ctx, below_routine =
+    Autotune.model_default
+      ~report:(fun r -> below_choice := Some r)
+      below_ctx below_comp Ir.Indexing.Empty
+  in
+  let below = Option.value_exn ~here:[%here] !below_choice in
+  Stdio.eprintf "below_threshold_chain: picked %s; segments [%s] (not part of the golden)\n"
+    below.Autotune.mc_label
+    (String.concat ~sep:"; "
+       (List.map below_explained.Autotune.x_segments ~f:(fun xs ->
+            Printf.sprintf "%s: %d candidates" xs.Autotune.xs_segment
+              (List.length xs.Autotune.xs_candidates))));
+  p "below the threshold the explanation lists the chain's matmul segments, each with sketch leaves"
+    (List.count below_explained.Autotune.x_segments ~f:(fun xs ->
+         List.length xs.Autotune.xs_candidates > 1)
+    >= 2);
+  (* The condition for [model_default] to form a per-segment substitution at all: a segment whose
+     family search finds a leaf strictly below the segment's preset. Under the search's preset the
+     first product's re-reads past capacity are charged; under the configured (unannotated) one they
+     would not be, its sketches could at best tie it, and no substitution would form. *)
+  p_exists "below the threshold some segment's sketch strictly beats the segment's preset"
+    below_explained.Autotune.x_segments ~f:(fun xs ->
+      match xs.Autotune.xs_candidates with
+      | ("preset", { Autotune.ex_rank_ms = Some preset; _ }) :: leaves ->
+          List.exists leaves ~f:(fun (_, ex) ->
+              match ex.Autotune.ex_rank_ms with Some r -> Float.(r < preset) | None -> false)
+      | _ -> false);
+  let below_ctx = Context.run below_ctx below_routine in
+  let below_got = Context.get_values below_ctx bh.Tensor.value in
+  p_all2 "the below-threshold pick computes the host's values exactly" below_got bh_expected
+    ~f:Float.equal;
+  let legs =
+    [
+      (large, large_explained);
+      (small, small_explained);
+      (chain, chain_explained);
+      (below, below_explained);
+    ]
+  in
   p_all "each explained segment is listed once" legs ~f:(fun (_, x) ->
       not
         (List.contains_dup x.Autotune.x_segments ~compare:(fun a b ->

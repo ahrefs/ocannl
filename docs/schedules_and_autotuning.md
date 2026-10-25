@@ -299,7 +299,10 @@ the retained procedural analyses alongside the affine engine and raises on diver
   the benchmark runners, via `Autotune.model_default` — not direct `Context.compile` calls,
   which always use the ordinary presets) pick the default-schedule flavor by model, with zero
   timing runs. Counts are deliberately conservative upper bounds; exactness is tracked per
-  kernel.
+  kernel. The model's per-segment substitutions use the search's own segmentation and sketch
+  leaves, at the search's `min_parallel:1` presets (gh-ocannl-1512). A segment's sketch enters a
+  substitution when it strictly beats that preset. The substitution ships the configured presets on
+  the segments it leaves unsketched, as the untuned pipeline it must strictly beat does.
 - **Seeded default** (gh-ocannl-1324): with `model_default_schedule` off, those same recipe-level
   untuned compiles go through `Autotune.seeded_default` on CUDA and HIP. It schedules each
   default fission segment that is a matmul site (backprop's gradients included) and passes the
