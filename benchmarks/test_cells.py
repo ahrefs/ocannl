@@ -256,6 +256,19 @@ class Gh1180DriverTest(StubRunTest):
             "value": "false", "source": "commandline", "detail": "--ocannl_fp16_arithmetic=false"}
             for r in records))
 
+    def test_the_standalone_summary_reapplies_the_runs_own_checks(self):
+        proc, out = self.measure()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        # Rewrite one clean rn4 cell as having resolved a setting its siblings did not: every
+        # cell still reads ok, and only the run-level consistency rule can fail it.
+        jsonl = out / "f16-64-8-16-3-rn4-rn6/cells.jsonl"
+        records = self.records(jsonl.parent)
+        records[0]["config"]["late_setting"] = {"value": "x", "source": "default", "detail": ""}
+        jsonl.write_text("".join(json.dumps(r) + "\n" for r in records))
+        proc = self.run_tool([box_gate.BASH, str(HERE / "gh1180_tie_ab.sh"), "summary", str(out)])
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("ocannl_late_setting resolved differently", proc.stdout)
+
     def test_a_scalar_fallback_census_invalidates_the_run(self):
         proc, out = self.measure(census="scalar fallback RN")
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)

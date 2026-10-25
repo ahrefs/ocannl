@@ -589,13 +589,20 @@ def timed_results_problems(results, nothing):
     return problems
 
 
-def run_problems(records, extra=()):
-    """The run's verdict lines: each unclean cell, then `extra`, then the arms' consistency."""
+def run_level_problems(manifest, records):
+    """The faults of a run that no single cell carries: a kernel compiler that could not be
+    identified, and an arm whose clean cells resolved a setting two ways. A driver re-judging a
+    finished run (`read_run`) applies these beside its per-cell checks, as the front end did."""
+    problems = [f"arm {arm}: the kernel compiler could not be identified: {c['error']}"
+                for arm, c in manifest.get("kernel_compilers", {}).items() if "error" in c]
+    return problems + consistency_problems([r for r in records if r["ok"]])
+
+
+def run_problems(manifest, records):
+    """The run's verdict lines: each unclean cell, then `run_level_problems`."""
     problems = [f"cell {r['cell']} ({r['arm']}): {'; '.join(r['problems'])}"
                 for r in records if not r["ok"]]
-    problems += list(extra)
-    problems += consistency_problems([r for r in records if r["ok"]])
-    return problems
+    return problems + run_level_problems(manifest, records)
 
 
 def read_run(run_dir):

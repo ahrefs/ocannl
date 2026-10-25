@@ -64,6 +64,10 @@ for c in (m.group(1).split() if m else []):
     planned = sum(len(order) for order in manifest['orders'])
     if len(records) != planned:
         bad.append(f'{display_value(name)}: {len(records)} of {planned} planned cells ran')
+    # The run's own faults no cell carries (an arm resolving a setting two ways, an unidentified
+    # kernel compiler), judged by the runner's own rule rather than restated here.
+    bad += [f'{display_value(name)}: ' + display_value(p)
+            for p in cells.run_level_problems(manifest, records)]
     by, case_refused = {}, False
     for r in records:
         cell = f'{display_value(name)} cell {r["cell"]} ({display_value(r["arm"])})'

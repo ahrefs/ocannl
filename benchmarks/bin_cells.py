@@ -523,9 +523,7 @@ def main(argv=None, arm_commits=None):
     if args.backend in ("cc", "multidev_cc"):
         manifest["kernel_compilers"] = cells.kernel_compilers(arms, records, env, out)
         (out / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
-    problems = cells.run_problems(records, [
-        f"arm {arm}: the kernel compiler could not be identified: {c['error']}"
-        for arm, c in manifest.get("kernel_compilers", {}).items() if "error" in c])
+    problems = cells.run_problems(manifest, records)
     report = render_report(manifest, records, problems,
                            extra=parity_lines(out, manifest, records)
                            if args.reader == "record" else ())
