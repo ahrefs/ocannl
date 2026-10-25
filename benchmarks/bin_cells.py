@@ -76,46 +76,25 @@ sha256 is then its identity, and no commit is claimed for it.
 
 import argparse
 import json
-import math
 import os
 import statistics
 import sys
 from pathlib import Path
 
+import bench_output
 import cells
 from cells import (TraceError, consistency_problems, design_orders, parse_config_trace,  # noqa: F401
                    sign_test_p, treatment_problems)
-import strict_json
 from display_safe import code_span, display_value, log_line, table_lines
 
 ROOT = cells.ROOT
-RESULT_PREFIX = "bench-result: "
+RESULT_PREFIX = bench_output.RESULT_PREFIX
 LABEL_RE = cells.LABEL_RE
 DRIVER = "bin_cells"
 
 
-CHECKS = ("passed", "failed", "unchecked")
-
-
-def parse_results(text):
-    """The cell's `bench-result:` records: [(variant, seconds, check, note)], refusing with
-    ValueError a malformed one, a non-finite or non-positive time, or one that does not state its
-    output check (`Bench_out.check`)."""
-    results = []
-    for line in text.splitlines():
-        if not line.startswith(RESULT_PREFIX):
-            continue
-        record = strict_json.loads(line[len(RESULT_PREFIX):])
-        if not isinstance(record, dict):
-            raise ValueError(f"unusable result line (not a JSON object): {line}")
-        variant, seconds = record.get("variant"), record.get("seconds")
-        check, note = record.get("check"), record.get("check_note")
-        if not isinstance(variant, str) or isinstance(seconds, bool) or not isinstance(
-                seconds, (int, float)) or not math.isfinite(seconds) or seconds <= 0 \
-                or check not in CHECKS or not isinstance(note, str):
-            raise ValueError(f"unusable result line: {line}")
-        results.append((variant, float(seconds), check, note))
-    return results
+# A bench's `bench-result:` lines, read by the one reader of every bench output format.
+parse_results = bench_output.bench_results
 
 
 def bench_result_reader(stdout, _stderr):

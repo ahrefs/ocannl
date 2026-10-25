@@ -22,7 +22,7 @@ import math
 import os
 import sys
 
-import strict_json
+import bench_output
 
 
 def ulp32(x):
@@ -46,16 +46,13 @@ def loss_sequences(root):
             # a cell
             if os.sep + ".staging" in f:
                 continue
-            t = [line for line in open(f).read().splitlines() if line.startswith("{")]
-            if not t:
-                continue
             try:
-                d = strict_json.loads(t[-1])
-            except strict_json.NonFinite as e:
+                d = bench_output.result_record(open(f).read())
+            except bench_output.NonFinite as e:
                 # A runner writes null for a number JSON cannot spell (gh-ocannl-676); NaN, Infinity
                 # or 1e999 here is a regressed emitter, and a finding rather than a traceback.
                 sys.exit(f"FAILED: {f}: the result line is not strict JSON ({e})")
-            if "losses" not in d:
+            if d is None or "losses" not in d:
                 continue
             tag = "/".join(f.split(os.sep)[-3:-1]) + ("" if kind == "search.out" else " [pass2]")
             seqs[tuple(d["losses"])].append(tag)

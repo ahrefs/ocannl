@@ -19,18 +19,19 @@ with the reason.
 """
 import sys
 
-import strict_json
+import bench_output
 
 
 def result_line(path):
     """The leg's one result line, parsed; SystemExit naming the defect otherwise."""
+    with open(path) as f:
+        lines = bench_output.result_lines(f.read())
+    if len(lines) != 1:
+        sys.exit(f"   protocol: {path}: expected one result line, found {len(lines)}")
     try:
-        rows = [strict_json.loads(line) for line in open(path) if line.startswith('{"framework"')]
+        return bench_output.only_result_record("\n".join(lines))
     except ValueError as e:  # NaN, Infinity or 1e999 included: a runner writes null there
         sys.exit(f"   protocol: {path}: a result line is not strict JSON ({e})")
-    if len(rows) != 1:
-        sys.exit(f"   protocol: {path}: expected one result line, found {len(rows)}")
-    return rows[0]
 
 
 def verdict(row, want):

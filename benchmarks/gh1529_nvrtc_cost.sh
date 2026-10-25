@@ -44,8 +44,10 @@ CUDA_HOME=${CUDA_HOME:-/usr/local/cuda}
 BENCH=benchmarks/runners/ocannl/bench_gpt.exe
 
 summary() { # OUT
-  python3 - "$1" <<'EOF'
+  python3 - "$1" "$(cd "$(dirname "$0")" && pwd -P)" <<'EOF'
 import os, re, statistics, sys
+sys.path.insert(0, sys.argv[2])
+import bench_output
 out = sys.argv[1]
 ok = True
 probe = os.path.join(out, 'probe.out')
@@ -64,17 +66,16 @@ if not errs:
     print('search: no search*.err'); ok = False
 for name in errs:
     err = os.path.join(out, name)
-    rx = re.compile(r'timing-trace: compile \d+ at \S+: (\S+) "(.*)" (\S+), (\S+) s \(lower (\S+), '
-                    r'transform (\S+), codegen (\S+), device (\S+), link (\S+)\), (\d+) of (\d+) kernels')
-    rows = [m.groups() for m in map(rx.search, open(err).read().splitlines()) if m]
+    rows = bench_output.compile_traces(open(err).read())
     print(f'== {name}: {len(rows)} compile records ==')
     by = {}
-    for stage, label, verdict, wall, lower, transform, codegen, device, link, kc, kr in rows:
-        if verdict != 'compiled':
+    for r in rows:
+        if r['verdict'] != 'compiled':
             continue
-        by.setdefault(stage, []).append(
-            (float(wall), float(lower), float(transform), float(codegen),
-             float(device) if device != 'none' else 0.0, float(link), int(kc), int(kr)))
+        by.setdefault(r['stage'], []).append(
+            (r['wall'], r['lower'], r['transform'], r['codegen'],
+             r['device'] if r['device'] is not None else 0.0, r['link'], r['kernels_compiled'],
+             r['kernels']))
     for stage, rs in sorted(by.items()):
         med = lambda i: statistics.median(r[i] for r in rs)
         print(f'{stage}: {len(rs)} compiled; medians: wall {med(0):.3f} s, lower {med(1):.3f}, '

@@ -320,8 +320,7 @@ for s in "$@"; do
       --ocannl_autotune_timing="$mode" --ocannl_autotune_cache_dir="$out/cache-$mode" \
       --ocannl_autotune_log=false --ocannl_log_config_sourcing=true; then
       # A completed session is evidence only with its treatment and its cost record in it.
-      require "$s" out '"compile_s":'
-      require "$s" out '"searched":true'
+      # compile_s and searched:true are the result line's fields: gh834_session.py reads them.
       require "$s" err '^timing-trace: summary: '
       require "$s" err "^Found $backend, commandline --ocannl_backend=$backend\$"
       require "$s" err "^Found $mode, commandline --ocannl_autotune_timing=$mode\$"

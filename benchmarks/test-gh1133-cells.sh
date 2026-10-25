@@ -20,7 +20,7 @@ harness_scratch test-gh1133-cells
 SRC=$here/gh1133_cells.sh
 tree=$TMP/tree
 mkdir -p "$tree/benchmarks" "$TMP/base" "$TMP/runs"
-cp "$here/gh1133_summary.py" "$here/strict_json.py" "$here/display_safe.py" "$here/box-gate.sh" "$tree/benchmarks/" || exit 2
+cp "$here/gh1133_summary.py" "$here/bench_output.py" "$here/strict_json.py" "$here/display_safe.py" "$here/box-gate.sh" "$tree/benchmarks/" || exit 2
 
 # [drive SUBJECT RUN STEP...]: run SUBJECT as the scratch tree's driver with
 # OUT=runs/RUN/out; its stdout (the driver log) goes to runs/RUN/stdout. The

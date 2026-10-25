@@ -9608,6 +9608,7 @@
   gh1133_summary.py
   gh1133_summary.expected
   ../../benchmarks/gh1133_summary.py
+  ../../benchmarks/bench_output.py
   ../../benchmarks/strict_json.py
   ../../benchmarks/display_safe.py
   (sandbox always preserve_file_kind))
@@ -9633,6 +9634,7 @@
   kernel_attribution.expected
   ../../benchmarks/kernel_attribution.py
   ../../benchmarks/gh1002_cells.py
+  ../../benchmarks/bench_output.py
   ../../benchmarks/box_gate.py
   ../../benchmarks/cell_group.py
   ../../benchmarks/strict_json.py
@@ -9659,6 +9661,7 @@
   gh1002_kernels.py
   gh1002_kernels.expected
   ../../benchmarks/gh1002_cells.py
+  ../../benchmarks/bench_output.py
   ../../benchmarks/box_gate.py
   ../../benchmarks/cell_group.py
   ../../benchmarks/strict_json.py
@@ -9706,6 +9709,7 @@
   bin_cells_probe.exe
   ../../benchmarks/bin_cells.py
   ../../benchmarks/cells.py
+  ../../benchmarks/bench_output.py
   ../../benchmarks/cell_group.py
   ../../benchmarks/strict_json.py
   ../../benchmarks/display_safe.py

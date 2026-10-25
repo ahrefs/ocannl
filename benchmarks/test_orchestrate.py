@@ -17,6 +17,7 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
+import bench_output
 import bench_venv
 import box_gate
 import fixture_digest
@@ -266,7 +267,7 @@ class StrictJsonTest(unittest.TestCase):
 
 
 class ResultFieldReaderTest(unittest.TestCase):
-    """strict_json's `last_result`/`field` and the `field` command a shell driver asks instead of
+    """bench_output's `result_record`, strict_json's `field` and the `field` command a shell driver asks instead of
     grepping a result line's text (gh-ocannl-1355; gh-ocannl-1253's driver read `step_ms` as a
     number where the runner prints a `{p10,p50,p90}` object)."""
 
@@ -286,10 +287,10 @@ class ResultFieldReaderTest(unittest.TestCase):
                               text=True, capture_output=True, timeout=60)
 
     def test_the_last_result_line_and_its_nested_fields(self):
-        record = strict_json.last_result(self.LINES)
+        record = bench_output.result_record(self.LINES)
         self.assertEqual(strict_json.field(record, "step_ms.p50"), 2.5)
         self.assertEqual(strict_json.field(record, "tune.shipped"), "A")
-        self.assertIsNone(strict_json.last_result("no record here\n"))
+        self.assertIsNone(bench_output.result_record("no record here\n"))
         for key in ("nope", "step_ms.p50.x", "tune.arms"):
             with self.subTest(key=key):
                 with self.assertRaises(KeyError) as caught:
@@ -682,8 +683,6 @@ JSON_LOADS_NOT_RESULT_LINES = {
     ("gh1181_cells.py", 'env = json.loads((out / "env.json")'): "the driver's own env.json",
     ("gh1181_cells.py", 'old = json.loads((out / "summary.json")'): "the driver's own summary.json",
     ("gh675_cells.py", "r = json.loads(ln)"): "the driver's own records file",
-    ("gh998_cells.py", "lenient = json.loads(line)"):
-        "re-reads a line strict_json refused, only to tell a result line from noise",
     ("gh998_cells.py", "if json.loads(paths[0]"): "the driver's own source manifests",
     ("gh998_cells.py", "matrix = json.loads("): "the driver's own matrix.json",
     ("gh998_cells.py", "preflight = json.loads("): "the driver's own preflight.json",

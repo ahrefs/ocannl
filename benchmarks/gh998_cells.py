@@ -40,7 +40,7 @@ import box_gate
 import fixture_digest
 import cell_group
 import bench_venv
-import strict_json
+import bench_output
 from display_safe import display_value, log_line, table_lines
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -132,24 +132,16 @@ def clean_env():
 
 
 def result(path):
-    rows = []
-    for line in path.read_text().splitlines():
-        try:
-            row = strict_json.loads(line)
-        except strict_json.NonFinite as e:
-            # A runner writes null for a number JSON cannot spell; a result line spelling one is
-            # a regressed emitter, not noise to skip past.
-            lenient = json.loads(line)
-            if isinstance(lenient, dict) and 'losses' in lenient:
-                raise RuntimeError(f'{path}: its result line is not strict JSON ({e})') from e
-            continue
-        except json.JSONDecodeError:
-            continue
-        if isinstance(row, dict) and 'losses' in row:
-            rows.append(row)
-    if len(rows) != 1:
-        raise RuntimeError(f'{path}: expected one result line, got {len(rows)}')
-    return rows[0]
+    """The cell's result line (bench_output's reader: the last line opening a JSON object),
+    refused when it is not strict JSON -- a runner writes null for a number JSON cannot spell, so a
+    result line spelling one is a regressed emitter -- or carries no losses."""
+    try:
+        row = bench_output.result_record(path.read_text())
+    except ValueError as e:
+        raise RuntimeError(f'{path}: its result line is not strict JSON ({e})') from e
+    if not isinstance(row, dict) or 'losses' not in row:
+        raise RuntimeError(f'{path}: no result line carrying losses')
+    return row
 
 
 def cell(out, name, argv, env):

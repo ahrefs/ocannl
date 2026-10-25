@@ -792,6 +792,14 @@ OCANNL_CC_PARALLEL_GRID=none` times single-threaded segments that sum to the ser
   `python3 benchmarks/bin_cells.py --bench narrow_gebp_bench --backend cc --out ~/cells-rn
   --rounds 12 --arm rn4=--rn=4 --arm rn6=--rn=6 -- f16 512 20`. Its control is
   `test/operations/bin_cells.py`, against a stand-in bench that prints the library's own trace.
+- `cells.py` — the shared cell runner under `bin_cells.py` and `ab.py` (gh-ocannl-1565): the
+  hermetic environment, the configuration-trace check, `cell_group` supervision, `Bench_design`'s
+  visiting order, the cell loop and the paired sign test, so a new driver imports them rather than
+  re-deriving them (`gh834_cells.sh` took ten review rounds of exactly that machinery).
+- `bench_output.py` — the one reader of what OCANNL's benches print (gh-ocannl-1443): `bench-result:`
+  lines, the runners' result line (the last stdout line opening a JSON object, read strictly;
+  `strict_json.py field` asks it for one field from a shell driver), `bench: checkpoint` lines and
+  the `timing-trace: compile` records. A driver that needs a new format adds its reader here.
 
 ## Historical Metal fixture provenance
 
