@@ -948,6 +948,9 @@ jobs:
   # skips this runner expects (gh-ocannl-1236): a skip that newly appears here
   # fails its harness, and a listed one that stops occurring fails the step,
   # rather than either being counted silently behind a green footer.
+  # --ci-shell is that run spelled once: --shell against that list, with the
+  # absences of this runner (no dune, not a fleet host) put on, so any box
+  # with a toolchain reproduces the check before it pushes (gh-ocannl-1593).
   harnesses:
     if: github.event_name != 'workflow_dispatch' || !inputs.windows_only && inputs.ocaml_compiler == '5.5.x'
     name: Shell harnesses
@@ -958,7 +961,7 @@ jobs:
       with:
         ref: ${{ inputs.expected_sha }}
     - name: Test shell harnesses
-      run: tools/test-harnesses.sh --shell --expected-skips tools/harness-skips-ci-shell.txt
+      run: tools/test-harnesses.sh --ci-shell
 
   # Every gated leg of the hand-run harnesses, and every group of legs, run
   # alone (gh-ocannl-1367). A leg that needs what an EARLIER leg's body made

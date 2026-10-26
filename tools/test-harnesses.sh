@@ -2,6 +2,7 @@
 # Run the shell-harness tier CI runs, from any working directory.
 # Usage: tools/test-harnesses.sh [--shell|--toolchain|--promotion] [--list]
 #                               [--expected-skips FILE]
+#        tools/test-harnesses.sh --ci-shell [--list]
 # With no group, run all three. --shell needs no OCaml toolchain; --toolchain
 # runs the formatter controls and the scan-case type check (which links
 # ppxlib) and --promotion the controls of tools that read
@@ -25,9 +26,21 @@
 #     listed once.
 # Without the option the list variables are cleared, so no ambient list
 # relaxes a strict run.
+#
+# --ci-shell runs the shell tier as the toolchain-free `harnesses` CI job
+# does, which is the job's own command, so any Linux or macOS box reproduces
+# its skip check before a push (gh-ocannl-1593): --shell --expected-skips
+# tools/harness-skips-ci-shell.txt, with that job's absences put on: dune
+# hidden from every real-dune probe (OCANNL_TOOL_HARNESS_NO_DUNE=1,
+# scripts/harness-support.sh's harness_real_dune), FLEET_BOXES unset and the
+# fleet anchor's wake-lab.sh pointed away (OCANNL_TOOL_SWEEP_WAKE_LAB). On
+# macOS the further skips of Linux-only legs that
+# tools/harness-skips-ci-shell-darwin.txt lists are expected too, under the
+# same rules. It takes no group and no --expected-skips. Without it, an
+# ambient OCANNL_TOOL_HARNESS_NO_DUNE is cleared, so no run hides dune unasked.
 set -u
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 2
-group=all list=0 expected=
+group=all list=0 expected= ci_shell=0
 while [ $# -gt 0 ]; do
   arg=$1
   case $arg in
@@ -35,6 +48,7 @@ while [ $# -gt 0 ]; do
       [ "$group" = all ] || { echo "choose one harness group" >&2; exit 2; }
       group=${arg#--} ;;
     --list) list=1 ;;
+    --ci-shell) ci_shell=1 ;;
     --expected-skips)
       [ $# -ge 2 ] && [ -n "$2" ] || { echo "test-harnesses.sh: --expected-skips needs a file" >&2; exit 2; }
       expected=$2
@@ -44,6 +58,11 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+if [ "$ci_shell" = 1 ]; then
+  [ "$group" = all ] && [ -z "$expected" ] ||
+    { echo "test-harnesses.sh: --ci-shell takes no group and no --expected-skips" >&2; exit 2; }
+  group=shell
+fi
 # This is the sole membership list: CI selects groups from this entrypoint.
 manifest() {
   cat <<'HARNESS_LIST'
@@ -82,7 +101,26 @@ members() {
     printf '%s\n' "$script"
   done < <(manifest)
 }
-unset OCANNL_TOOL_HARNESS_EXPECTED_SKIPS OCANNL_TOOL_HARNESS_SKIP_RECORD
+unset OCANNL_TOOL_HARNESS_EXPECTED_SKIPS OCANNL_TOOL_HARNESS_SKIP_RECORD OCANNL_TOOL_HARNESS_NO_DUNE
+scratch=()
+trap 'rm -rf ${scratch[@]+"${scratch[@]}"}' EXIT
+if [ "$ci_shell" = 1 ]; then
+  expected=$root/tools/harness-skips-ci-shell.txt
+  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+    # The job's list, then the Linux-only legs' skips, as ONE list validated
+    # and checked like any other: its line numbers run on through the second.
+    darwin=$root/tools/harness-skips-ci-shell-darwin.txt
+    for list_file in "$expected" "$darwin"; do
+      [ -f "$list_file" ] && [ -r "$list_file" ] ||
+        { echo "test-harnesses.sh: --ci-shell: cannot read $list_file" >&2; exit 2; }
+    done
+    joined=$(mktemp -d "${TMPDIR:-/tmp}/test-harnesses-ci-shell.XXXXXX") ||
+      { echo "test-harnesses.sh: cannot create the --ci-shell list" >&2; exit 2; }
+    scratch+=("$joined")
+    { cat "$expected"; echo; cat "$darwin"; } >"$joined/harness-skips-ci-shell+darwin.txt"
+    expected=$joined/harness-skips-ci-shell+darwin.txt
+  fi
+fi
 if [ -n "$expected" ]; then
   case $expected in /*) ;; *) expected=$PWD/$expected ;; esac
   [ -f "$expected" ] && [ -r "$expected" ] ||
@@ -112,9 +150,13 @@ if [ -n "$expected" ]; then
   done <"$expected"
   record=$(mktemp "${TMPDIR:-/tmp}/test-harnesses-skips.XXXXXX") ||
     { echo "test-harnesses.sh: cannot create the skip record" >&2; exit 2; }
-  trap 'rm -f "$record"' EXIT
+  scratch+=("$record")
   export OCANNL_TOOL_HARNESS_STRICT=1 OCANNL_TOOL_HARNESS_EXPECTED_SKIPS=$expected \
     OCANNL_TOOL_HARNESS_SKIP_RECORD=$record
+fi
+if [ "$ci_shell" = 1 ]; then
+  unset FLEET_BOXES
+  export OCANNL_TOOL_HARNESS_NO_DUNE=1 OCANNL_TOOL_SWEEP_WAKE_LAB=$record.no-wake-lab
 fi
 failures=0 total=0
 cd "$root" || exit 2

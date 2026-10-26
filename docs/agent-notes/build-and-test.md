@@ -952,6 +952,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   there, and red on a listed skip that no longer occurs (gh-ocannl-1236). A leg that newly skips
   on Ubuntu is a defect to fix or a line to add, with its reason in a comment above it; the
   list's line forms are a fail-closed allowlist (`tools/test-harnesses.sh`'s header).
+  The job's command is `tools/test-harnesses.sh --ci-shell`, and it reproduces that check on any
+  box with a toolchain (gh-ocannl-1593; under `execution slot` on a fleet box): it hides dune from
+  every leg that probes a real one through `harness_real_dune` (`OCANNL_TOOL_HARNESS_NO_DUNE=1`),
+  and the fleet tables `benchmarks/test-check-box.sh` reads, so a Linux box shows the job's
+  skip set and macOS adds the Linux-only legs `tools/harness-skips-ci-shell-darwin.txt` lists. A
+  leg that needs a real dune takes it from `harness_real_dune`, never a probe of its own: one
+  `--ci-shell` cannot hide runs green here and skips, unlisted, only on the job.
 
 - Shell harness checks capture failures with `command || rc=$?`, preserving the caller's
   `errexit` state; an unconditional `set -e` after a check makes later unguarded failures
