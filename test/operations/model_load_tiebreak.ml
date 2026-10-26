@@ -19,9 +19,16 @@
    a rule without [ldmatrix], which is every other backend's.
 
    [Autotune.model_family_search] over that site: the pick has the fewest loads among the leaves
-   tied with it under either rule, and both picks score alike. The site's argmin is an unstaged leaf
-   with no twin, so the walk also runs over the staged leaves alone, where it crowns the swizzled
-   twin under CUDA's rule and keeps the plain one without [ldmatrix].
+   tied with it under either rule, and both picks score alike. Without a device-gather rate the
+   site's argmin is an unstaged leaf with no twin, so the walk also runs over the staged leaves
+   alone, where it crowns the swizzled twin under CUDA's rule and keeps the plain one without
+   [ldmatrix].
+
+   gh-ocannl-1495, under a record with a tile-MMA rate and a device-gather rate (rog's advisories):
+   the unstaged leaves' operands are per-lane gathers from device memory, the staged ones' are not,
+   so every staged leaf ranks below every unstaged one, and the walk over the WHOLE site picks a
+   staged leaf -- a swizzled twin under CUDA's rule, gh-ocannl-1190's clause -- where without the
+   gather rate it picks an unstaged one.
 
    The same claims are made over the backend's own record and rule where it advertises the staged
    fp8 layout (CUDA from sm_89), and [Autotune.model_explain]'s shape on every backend. *)
@@ -198,19 +205,28 @@ let hermetic (o : LL.optimized) =
 let accepted (capabilities : BI.codegen_capabilities) o =
   CM.accepted_tile_mma_flops ~operand_accepts:capabilities.mma_accepts o
 
+(* The per-lane operand gathers from device memory the hook's accepted statements issue, under the
+   backend's own arm description: what the score prices at the device-gather rate
+   (gh-ocannl-1495). *)
+let gathers (capabilities : BI.codegen_capabilities) o =
+  CM.device_operand_gathers ~operand_accepts:capabilities.mma_accepts
+    ~operand_fragments:capabilities.mma_operand_fragments
+    ~operand_loads:capabilities.mma_operand_loads o
+
 (* The ranking score [Autotune.model_default] minimizes, under a record's own constants and load
    rule. *)
 let rank ~capabilities (limits : BI.hardware_limits) (o : LL.optimized) =
   CM.ranking_seconds ?peak_flops:limits.peak_flops
     ?peak_memory_bandwidth:limits.peak_memory_bandwidth
     ?cache_capacity_bytes:limits.cache_capacity_bytes ?cache_bandwidth:limits.cache_bandwidth
-    ?issue_rate:limits.issue_rate ?dram_bandwidth:limits.dram_bandwidth
-    ~mma_flops:(accepted capabilities o) ?max_resident_threads:limits.max_resident_threads
+    ?issue_rate:limits.issue_rate ?dram_bandwidth:limits.dram_bandwidth ?mma_rate:limits.mma_rate
+    ~mma_flops:(accepted capabilities o) ~device_gathers:(gathers capabilities o)
+    ?device_gather_rate:limits.device_gather_rate ?max_resident_threads:limits.max_resident_threads
     ~is_global:(CM.global_in o) o.LL.llc
 
 (* The two legs of one kernel's score, under the same constants. *)
 let legs_with ~capabilities (limits : BI.hardware_limits) ?(issue_rate = limits.issue_rate)
-    (o : LL.optimized) =
+    ?(mma_rate = limits.mma_rate) (o : LL.optimized) =
   let r =
     CM.reuse_traffic ?max_resident_threads:limits.max_resident_threads ~is_global:(CM.global_in o)
       o.LL.llc
@@ -218,7 +234,8 @@ let legs_with ~capabilities (limits : BI.hardware_limits) ?(issue_rate = limits.
   CM.ranking_legs_of ?peak_flops:limits.peak_flops
     ?peak_memory_bandwidth:limits.peak_memory_bandwidth
     ?cache_capacity_bytes:limits.cache_capacity_bytes ?cache_bandwidth:limits.cache_bandwidth
-    ?issue_rate ?dram_bandwidth:limits.dram_bandwidth ~mma_flops:(accepted capabilities o)
+    ?issue_rate ?dram_bandwidth:limits.dram_bandwidth ?mma_rate ~mma_flops:(accepted capabilities o)
+    ~device_gathers:(gathers capabilities o) ?device_gather_rate:limits.device_gather_rate
     (CM.analyze o.LL.llc) (Some r)
 
 let score ~capabilities limits segs =
@@ -497,10 +514,10 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~(capabilities : BI.codegen_
       (match (cuda_pick, plain_pick) with
       | Some (_, _, a), Some (_, _, b) -> Float.equal a b
       | _ -> false));
-  (* At this site the argmin is an unstaged leaf, which has no twin. Restricted to the staged leaves
-     — the others left unscored, which the walk never crowns — the argmin is a tied twin pair, and
-     the loads decide it: the swizzled twin under CUDA's rule, the first-listed plain twin under a
-     rule without ldmatrix. *)
+  (* Without a device-gather rate the argmin at this site is an unstaged leaf, which has no twin
+     (with one, {!gather_claims}). Restricted to the staged leaves — the others left unscored, which
+     the walk never crowns — the argmin is a tied twin pair, and the loads decide it: the swizzled
+     twin under CUDA's rule, the first-listed plain twin under a rule without ldmatrix. *)
   let staged_pick rule =
     if not evaluated then None
     else
@@ -523,6 +540,128 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~(capabilities : BI.codegen_
     (lazy (Option.exists (staged_pick rule) ~f:swizzled));
   claim "among the staged leaves, without ldmatrix it keeps the first-listed plain twin"
     (lazy (Option.exists (staged_pick no_ldmatrix) ~f:(fun p -> not (swizzled p))))
+
+(* gh-ocannl-1495: the gh-ocannl-1190 clause. With a device-gather rate the score sees what staging
+   buys -- the unstaged leaves' operands gathered per lane straight from device memory, which the
+   staged ones bring in from shared tiles -- and the family search over the WHOLE site, not only its
+   staged leaves, picks a staged leaf; under CUDA's rule the load tie-break makes it a swizzled
+   twin, as gh-ocannl-1190 asked. On rog the staged leaves ran 2.3x faster than the unstaged argmin
+   the score picked before. [limits] must carry a device-gather rate. *)
+let gather_claims ~tag ~(limits : BI.hardware_limits) ~(capabilities : BI.codegen_capabilities)
+    ~evaluated =
+  let rule = capabilities in
+  let label s = tag ^ ": " ^ s in
+  let claim s b =
+    if evaluated then p (label s) (Lazy.force b) else skipped ~backend:backend_name (label s)
+  in
+  let seeds =
+    if evaluated then Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits base else []
+  in
+  let tensorized =
+    List.filter_map seeds ~f:(fun p ->
+        if p.Autotune.sk_mma then Option.try_with (fun () -> (p, schedule p)) else None)
+  in
+  let is_staged (o : LL.optimized) = not (Set.is_empty o.LL.workgroup_shared) in
+  let staged = List.filter tensorized ~f:(fun (_, o) -> is_staged o)
+  and unstaged = List.filter tensorized ~f:(fun (_, o) -> not (is_staged o)) in
+  let both = lazy ((not (List.is_empty staged)) && not (List.is_empty unstaged)) in
+  List.iter tensorized ~f:(fun (p, o) ->
+      Stdio.eprintf "%s: leaf %s: device gathers %d, rank_ms %s (not part of the golden)\n" tag
+        (Autotune.sketch_params_label p) (gathers rule o)
+        (Option.value_map (rank ~capabilities:rule limits o) ~default:"n/a" ~f:(fun s ->
+             Printf.sprintf "%.6f" (s *. 1e3))));
+  claim "every staged tensorized leaf has no device gathers, and every unstaged one has some"
+    (lazy
+      (Lazy.force both
+      && List.for_all staged ~f:(fun (_, o) -> gathers rule o = 0)
+      && List.for_all unstaged ~f:(fun (_, o) -> gathers rule o > 0)));
+  let ranks o = rank ~capabilities:rule limits o in
+  claim "every staged tensorized leaf ranks strictly below every unstaged one"
+    (lazy
+      (Lazy.force both
+      && List.for_all staged ~f:(fun (_, s) ->
+          List.for_all unstaged ~f:(fun (_, u) ->
+              match (ranks s, ranks u) with Some a, Some b -> Float.(a < b) | _ -> false))));
+  (* The tile-MMA part moves with its rate and nothing else does: a tenfold slower rate adds exactly
+     nine times the accepted work over the rate to a gather-free leaf's compute leg. *)
+  let r = Option.value_map limits.mma_rate ~default:1. ~f:(fun r -> r) in
+  claim "a tenfold slower tile-MMA rate adds exactly nine times its accepted work over the rate"
+    (lazy
+      ((not (List.is_empty staged))
+      && List.for_all staged ~f:(fun (_, o) ->
+          match
+            ( fst (legs_with ~capabilities:rule limits ~mma_rate:(Some (r /. 10.)) o),
+              fst (legs_with ~capabilities:rule limits ~mma_rate:(Some r) o) )
+          with
+          | Some slow, Some fast ->
+              let expected = 9. *. Float.of_int (accepted rule o) /. r in
+              Float.(abs (slow -. fast -. expected) <= 1e-9 *. slow)
+          | _ -> false)));
+  let decline_all =
+    {
+      capabilities with
+      mma_accepts =
+        (fun ~d_prec:_
+          ~a_prec:_
+          ~b_prec:_
+          ~ta:_
+          ~tb:_
+          ~m:_
+          ~n:_
+          ~k:_
+          ~fragment_target:_
+          ~d:_
+          ~a:_
+          ~b:_
+        -> false);
+    }
+  in
+  claim "under a hook that declines every statement, no leaf has device gathers"
+    (lazy
+      ((not (List.is_empty unstaged))
+      && List.for_all tensorized ~f:(fun (_, o) -> gathers decline_all o = 0)));
+  (* A fragment the arm loads whole (wmma's [load_matrix_sync]) is one cooperative load, not a
+     per-lane gather, wherever it comes from. *)
+  let whole_fragments =
+    {
+      capabilities with
+      mma_operand_fragments =
+        (fun ~a_prec ~b_prec ~d_prec ~scope ->
+          Option.map (capabilities.mma_operand_fragments ~a_prec ~b_prec ~d_prec ~scope)
+            ~f:(fun f -> { f with BI.mf_fragment_loads = true }));
+    }
+  in
+  claim "under an arm that loads whole fragments, no leaf has device gathers"
+    (lazy
+      ((not (List.is_empty unstaged))
+      && List.for_all tensorized ~f:(fun (_, o) -> gathers whole_fragments o = 0)));
+  let score limits segs =
+    List.fold segs ~init:(Some 0.) ~f:(fun acc o ->
+        Option.map2 acc (rank ~capabilities:rule limits o) ~f:Float.( + ))
+  in
+  let pick limits =
+    if not evaluated then None
+    else
+      match
+        Autotune.model_family_search ~capabilities:rule ~is_gpu:true ~is_cpu:false ~limits
+          ~static_indices:[] ~peak_flops:limits.BI.peak_flops
+          ~peak_memory_bandwidth:limits.peak_memory_bandwidth ~score:(score limits)
+          ~incumbent:Float.infinity base
+      with
+      | Some (Some (p, _), _, _) -> Some (p, schedule p)
+      | Some (None, _, _) | None -> None
+  in
+  let priced = pick limits and unpriced = pick { limits with device_gather_rate = None } in
+  if evaluated then
+    Stdio.eprintf "%s: pick %s; without the gather rate %s (not part of the golden)\n" tag
+      (Option.value_map priced ~default:"none" ~f:(fun (p, _) -> Autotune.sketch_params_label p))
+      (Option.value_map unpriced ~default:"none" ~f:(fun (p, _) -> Autotune.sketch_params_label p));
+  claim "the family search over the whole site picks a staged leaf"
+    (lazy (Option.exists priced ~f:(fun (_, o) -> is_staged o)));
+  claim "under CUDA's rule that pick is a swizzled twin"
+    (lazy (Option.exists priced ~f:(fun (p, _) -> Option.is_some p.Autotune.sk_swizzle)));
+  claim "without the gather rate the same search picks an unstaged leaf"
+    (lazy (Option.exists unpriced ~f:(fun (_, o) -> not (is_staged o))))
 
 let stand_in_capabilities =
   {
@@ -558,6 +697,24 @@ let () =
     ~limits:{ stand_in with issue_rate = Some 3.4e12; dram_bandwidth = Some 5.82e11 }
     ~capabilities:stand_in_capabilities ~evaluated:true
 
+(* gh-ocannl-1495: the same site under the tile-MMA and device-gather rates as well, rog's
+   advisories: every claim above still holds -- the twins tie exactly, the loads decide among them
+   -- and the gather term moves the whole site's pick onto a staged twin. *)
+let gather_priced =
+  {
+    stand_in with
+    issue_rate = Some 3.4e12;
+    dram_bandwidth = Some 5.82e11;
+    mma_rate = Some 1.37e13;
+    device_gather_rate = Some 2.9e10;
+  }
+
+let () =
+  site_claims ~tag:"gather-priced stand-in" ~limits:gather_priced
+    ~capabilities:stand_in_capabilities ~evaluated:true;
+  gather_claims ~tag:"gather-priced stand-in" ~limits:gather_priced
+    ~capabilities:stand_in_capabilities ~evaluated:true
+
 (* The backend's own record and rule, where they describe the staged fp8 twins: CUDA from sm_89. *)
 let () =
   let ctx = Context.auto () in
@@ -570,7 +727,11 @@ let () =
   in
   site_claims ~tag:"backend record" ~limits
     ~capabilities:(Context.codegen_capabilities ctx)
-    ~evaluated:staged_fp8
+    ~evaluated:staged_fp8;
+  (* Where the backend also prices device gathers: CUDA. *)
+  gather_claims ~tag:"backend record" ~limits
+    ~capabilities:(Context.codegen_capabilities ctx)
+    ~evaluated:(staged_fp8 && Option.is_some limits.device_gather_rate)
 
 (* [Autotune.model_explain] over the same site as a computation: what [model_default] sees of each
    candidate. On every backend: the default first, then distinct labels, each score at least its

@@ -295,7 +295,7 @@ let raw_entries =
       [
         "[scanner-refusal:6dd30560f9e032ec9afc45a6fec9ce97] every field of";
         "[scanner-refusal:280bb27b49e792a7b0d751509c083f70] every toggle here";
-        "[scanner-refusal:7e3d87beda6db5aca558591972c7b662] score's capacity residency";
+        "[scanner-refusal:55eecefdd2105ee98e5aa8c26e124b92] score's capacity residency";
         "[scanner-refusal:fdcb8ce65a493ff3ca298ab6cd096a0d] Untimed field leaves";
         "[scanner-refusal:18ba6e03ce2dfd1162c3816126efe2fe] Key projection renders";
         "[scanner-refusal:0a9177a9cf5f80388c5ecb335859d27d] the binding pattern";

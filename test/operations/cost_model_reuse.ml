@@ -271,6 +271,8 @@ and c_bw = 8e12
 and r_issue = 3.4e12
 and r_dram = 5.8e11
 and r_cache = 1.8e12
+and r_mma = 1.2e13
+and r_gather = 3e10
 
 let huge = Int.max_value / 2
 
@@ -401,18 +403,76 @@ let () =
   p "an accepted count above the operations reads as the operations"
     (eq
        (compute ~issue_rate:r_issue ~mma_flops:5_000_000 (summary ~flops:1_000_000))
-       (compute ~issue_rate:r_issue ~mma_flops:1_000_000 (summary ~flops:1_000_000)))
+       (compute ~issue_rate:r_issue ~mma_flops:1_000_000 (summary ~flops:1_000_000)));
+  (* gh-ocannl-1495: the accepted work at the tile-MMA rate, and the device gathers at theirs. The
+     expected values are the same float expressions in the same order, so equality is exact. *)
+  let legs_of ?issue_rate ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate s =
+    CM.ranking_legs_of ~peak_flops:c_flops ~peak_memory_bandwidth:c_bw ?issue_rate ?mma_rate
+      ?mma_flops ?device_gathers ?device_gather_rate s None
+  in
+  let compute ?issue_rate ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate s =
+    fst (legs_of ?issue_rate ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate s)
+  in
+  let s1m = summary ~flops:1_000_000 in
+  p "a tile-MMA rate prices exactly the accepted work: the rest at the issue rate, it at its own"
+    (eq
+       (compute ~issue_rate:r_issue ~mma_rate:r_mma ~mma_flops:400_000 s1m)
+       (Some ((600_000. /. r_issue) +. (400_000. /. r_mma))));
+  p "a tile-MMA rate alone, at the issue ceiling, still prices the accepted work at its own rate"
+    (eq
+       (compute ~mma_rate:r_mma ~mma_flops:400_000 s1m)
+       (Some ((600_000. /. c_flops) +. (400_000. /. r_mma))));
+  p "a tile-MMA rate above the ceiling reads as the ceiling"
+    (eq
+       (compute ~issue_rate:r_issue ~mma_rate:(c_flops *. 10.) ~mma_flops:400_000 s1m)
+       (compute ~issue_rate:r_issue ~mma_flops:400_000 s1m));
+  p "device gathers without a gather rate leave the compute leg as it was"
+    (eq
+       (compute ~issue_rate:r_issue ~mma_rate:r_mma ~mma_flops:400_000 ~device_gathers:1_000 s1m)
+       (compute ~issue_rate:r_issue ~mma_rate:r_mma ~mma_flops:400_000 s1m));
+  p "device gathers add exactly their count over the gather rate"
+    (eq
+       (compute ~issue_rate:r_issue ~mma_rate:r_mma ~mma_flops:400_000 ~device_gathers:1_000
+          ~device_gather_rate:r_gather s1m)
+       (Some ((600_000. /. r_issue) +. (400_000. /. r_mma) +. (1_000. /. r_gather))));
+  p "at the ceilings, device gathers add their count over the gather rate to the bound's quotient"
+    (eq
+       (compute ~mma_flops:400_000 ~device_gathers:1_000 ~device_gather_rate:r_gather s1m)
+       (Some ((1_000_000. /. c_flops) +. (1_000. /. r_gather))));
+  p "a gather rate without gathers adds nothing"
+    (eq
+       (compute ~issue_rate:r_issue ~mma_flops:400_000 ~device_gather_rate:r_gather s1m)
+       (compute ~issue_rate:r_issue ~mma_flops:400_000 s1m));
+  let with_bytes = { s1m with CM.read_bytes = 1_000_000 } in
+  p "the tile-MMA rate and the gathers leave the memory leg unchanged"
+    (eq
+       (snd
+          (legs_of ~issue_rate:r_issue ~mma_rate:r_mma ~mma_flops:400_000 ~device_gathers:1_000
+             ~device_gather_rate:r_gather with_bytes))
+       (snd (legs_of with_bytes)));
+  p "with every rate set, the compute leg is at least the bound's"
+    (Option.exists
+       (compute ~issue_rate:r_issue ~mma_rate:r_mma ~mma_flops:400_000 ~device_gathers:1_000
+          ~device_gather_rate:r_gather s1m) ~f:(fun c -> Float.(c >= 1_000_000. /. c_flops)))
 
 (* The staffed start re-decides each segment of the search's own segmentation under the gate, so its
    tag -- which joins the search trajectory's identity -- names every reading those decisions rest
    on: two gates differing only in the issue rate, or only in the DRAM rate, tag apart. *)
 let () =
   let rated_limits = { limits with peak_flops = Some c_flops; peak_memory_bandwidth = Some c_bw } in
-  let tag ?scalar_rate ?dram_rate () =
+  let tag ?scalar_rate ?dram_rate ?matrix_rate ?gather_rate () =
     Autotune.seeded_plan
       ~seed_gate:
         (Autotune.Ranked
-           { capacity = Some 0; cache_rate = None; scalar_rate; dram_rate; fill = None })
+           {
+             capacity = Some 0;
+             cache_rate = None;
+             scalar_rate;
+             dram_rate;
+             matrix_rate;
+             gather_rate;
+             fill = None;
+           })
       ~backend:"cuda" ~limits:rated_limits ~accum_prec:Fn.id ~static_indices:[] (hermetic base)
     |> Option.bind ~f:(fun plan -> plan.Autotune.sp_start)
     |> Option.map ~f:(fun start -> start.Autotune.gate_tag)
@@ -423,4 +483,9 @@ let () =
        and a plan that seeds nothing has no start to tag. *)
     (apart (tag ~dram_rate:r_dram ()) (tag ~scalar_rate:r_issue ~dram_rate:r_dram ()));
   p "the staffed start's gate tag tells two DRAM rates apart"
-    (apart (tag ()) (tag ~dram_rate:r_dram ()))
+    (apart (tag ()) (tag ~dram_rate:r_dram ()));
+  (* gh-ocannl-1495: and the tile-MMA and device-gather rates, each only where set. *)
+  p "the staffed start's gate tag tells two tile-MMA rates apart"
+    (apart (tag ~dram_rate:r_dram ()) (tag ~dram_rate:r_dram ~matrix_rate:r_mma ()));
+  p "the staffed start's gate tag tells two device-gather rates apart"
+    (apart (tag ~dram_rate:r_dram ()) (tag ~dram_rate:r_dram ~gather_rate:r_gather ()))

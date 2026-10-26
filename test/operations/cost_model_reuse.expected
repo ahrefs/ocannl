@@ -29,5 +29,16 @@ a staged blocktile's tiles are off the DRAM leg: its memory leg is below the sam
 an all-accepted-tile-MMA kernel's compute leg does not depend on the issue rate: true
 with no accepted tile-MMA work, the compute leg is all operations at the issue rate: true
 an accepted count above the operations reads as the operations: true
+a tile-MMA rate prices exactly the accepted work: the rest at the issue rate, it at its own: true
+a tile-MMA rate alone, at the issue ceiling, still prices the accepted work at its own rate: true
+a tile-MMA rate above the ceiling reads as the ceiling: true
+device gathers without a gather rate leave the compute leg as it was: true
+device gathers add exactly their count over the gather rate: true
+at the ceilings, device gathers add their count over the gather rate to the bound's quotient: true
+a gather rate without gathers adds nothing: true
+the tile-MMA rate and the gathers leave the memory leg unchanged: true
+with every rate set, the compute leg is at least the bound's: true
 the staffed start's gate tag tells two issue rates apart: true
 the staffed start's gate tag tells two DRAM rates apart: true
+the staffed start's gate tag tells two tile-MMA rates apart: true
+the staffed start's gate tag tells two device-gather rates apart: true

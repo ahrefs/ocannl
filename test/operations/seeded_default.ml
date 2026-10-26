@@ -149,7 +149,15 @@ let () =
   let (w_auto, b_auto), r_auto =
     seeded_gated
       (Autotune.Ranked
-         { capacity = Some 0; cache_rate = None; scalar_rate = None; dram_rate = None; fill = None })
+         {
+           capacity = Some 0;
+           cache_rate = None;
+           scalar_rate = None;
+           dram_rate = None;
+           matrix_rate = None;
+           gather_rate = None;
+           fill = None;
+         })
   in
   let _, r_auto_cached =
     seeded_gated
@@ -159,6 +167,8 @@ let () =
            cache_rate = None;
            scalar_rate = None;
            dram_rate = None;
+           matrix_rate = None;
+           gather_rate = None;
            fill = None;
          })
   in

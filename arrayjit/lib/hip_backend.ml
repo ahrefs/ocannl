@@ -1842,6 +1842,10 @@ end = struct
               class. Override per machine with model_dram_bandwidth / model_issue_rate. *)
            issue_rate = Some (if all_integrated then 2.8e12 else 1.9e12);
            dram_bandwidth = Some (if all_integrated then 2.35e11 else 2.6e11);
+           (* gh-ocannl-1495: unmeasured here; rocWMMA loads whole fragments, so no operand is a
+              per-lane device gather anyway. *)
+           mma_rate = None;
+           device_gather_rate = None;
            max_resident_threads =
              min_over (fun (a : H.Device.attributes) ->
                  a.multiprocessor_count * a.max_threads_per_multiprocessor);

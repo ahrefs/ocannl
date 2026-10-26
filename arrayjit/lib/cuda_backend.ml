@@ -2128,6 +2128,16 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
               above: override per machine with model_dram_bandwidth / model_issue_rate. *)
            issue_rate = Some 3.4e12;
            dram_bandwidth = Some 6.0e11;
+           (* gh-ocannl-1495: the tile-MMA rate and the device-gather rate, fitted
+              (benchmarks/gh1442_agreement.py --fit-mma) on the gh-ocannl-1190 fp8 site
+              (8192x32x4096, inline-PTX m16n8k32, f32 accumulator) on rog-nv's RTX 5070 Ti, timed by
+              benchmarks/gh1253_cells.sh (2026-10-21, 46d84231): the four staged tensorized leaves'
+              geometric-mean rate (1.37e13 operations/s, under the 1.5e13 ceiling), and the per-lane
+              device gathers (2.93e10/s) that make the two unstaged leaves' excess over it
+              (predicted 0.372 and 0.534 ms, measured 0.373 and 0.532). One device and one format
+              for the class, overridable by model_mma_rate / model_device_gather_rate. *)
+           mma_rate = Some 1.37e13;
+           device_gather_rate = Some 2.93e10;
            max_resident_threads =
              min_over (fun (a : Cu.Device.attributes) ->
                  a.multiprocessor_count * a.max_threads_per_multiprocessor);

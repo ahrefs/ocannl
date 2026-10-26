@@ -1160,7 +1160,8 @@
 # gh-ocannl-1442: overrides the backend's advisory scalar issue rate (operations/s, an FMA
 # counting two) of the ranking score: the score's compute leg prices a kernel's scalar operations
 # at this rate -- the effective rate of a register-blocktiled kernel, its operand staging
-# included -- and its tile-MMA operations at model_peak_flops, which stays the bound's ceiling. Fit
+# included -- and its accepted tile-MMA operations at model_mma_rate; model_peak_flops stays the
+# bound's ceiling. Fit
 # it with `tools/calibrate_issue_rate.exe`, a reduction-extent sweep of the seeded weight-gradient
 # sketch (the slope of time over operations). Read as at most model_peak_flops. `none`: price
 # scalar work at model_peak_flops. Unset/empty uses the backend's value. Same readers and cache
@@ -1173,6 +1174,27 @@
 # at most model_peak_memory_bandwidth. `none`: price DRAM traffic at model_peak_memory_bandwidth.
 # Unset/empty uses the backend's value. Same readers and cache identity as model_cache_capacity.
 #model_dram_bandwidth=
+
+# gh-ocannl-1495: overrides the backend's advisory tile-MMA rate (operations/s, an FMA counting
+# two) of the ranking score: the score's compute leg prices the Tile_mma work the backend's hook
+# accepts at this rate -- the effective rate of the emitted tensorized kernels, their operand
+# staging and shared-memory loads included, not the matrix units' datasheet peak. Fit it with
+# `benchmarks/gh1442_agreement.py --fit-mma` over a site's timed tensorized leaves (the geometric
+# mean of the staged leaves' rates). Read as at most model_peak_flops. `none`: price tile-MMA work
+# at model_peak_flops. Unset/empty uses the backend's value. Same readers and cache identity as
+# model_cache_capacity.
+#model_mma_rate=
+
+# gh-ocannl-1495: overrides the backend's advisory device-gather rate of the ranking score, in
+# per-lane gather instructions per second (one per lane group's instruction, the operand-load
+# count's unit): each accepted Tile_mma operand the arm gathers element by element straight from
+# device memory -- an unstaged inline-PTX operand on CUDA -- adds its count over this rate to the
+# compute leg, at the Tile_mma contexts' fill. Shared-memory gathers, ldmatrix and whole-fragment
+# loads (wmma, simdgroup_load, rocWMMA) are not priced. Fit it with
+# `benchmarks/gh1442_agreement.py --fit-mma` (the unstaged leaves' excess over model_mma_rate).
+# `none`: no gather term. Unset/empty uses the backend's value. Same readers and cache identity as
+# model_cache_capacity.
+#model_device_gather_rate=
 
 # gh-ocannl-1479: overrides the backend's multiprocessor (SM / CU / GPU core) count for the
 # ranking score's launch fill. The score attributes each statement's scalar work to its launch
