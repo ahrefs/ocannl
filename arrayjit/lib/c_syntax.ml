@@ -603,6 +603,14 @@ module type C_syntax_config = sig
 
   val main_kernel_prefix : string
   val kernel_prep_line : string
+
+  val outline_part_weight : unit -> int option
+  (** gh-ocannl-1603: [Some w] when a kernel whose top-level statements weigh more than [16 * w]
+      ({!Kernel_outline.groups}) is rendered OUTLINED -- its statements packed in order into parts
+      of about [w] each, every part a [noinline] function the kernel calls in turn -- because a C
+      compiler's cost grows faster than linearly in a function's size. [None] renders every kernel
+      whole. Only a host C backend can outline: a part is an ordinary function call. *)
+
   val buffer_prefix : string
   val buffer_suffix : pos:int -> string
   val arg_int_prefix : string
@@ -2195,6 +2203,7 @@ struct
   let procs = Input.procs
   let main_kernel_prefix = ""
   let kernel_prep_line = ""
+  let outline_part_weight () = None
   let buffer_prefix = ""
   let buffer_suffix = fun ~pos:_ -> ""
 
@@ -8038,7 +8047,11 @@ module C_syntax (B : C_syntax_config) = struct
        whenever a fresh build's numbers straddle a power of ten. *)
     (ptr_params, log_file_param @ merge_param @ idx_params @ kparams)
 
-  let compile_proc ~name idx_params
+  (** {!compile_proc} as the separately compilable units of the kernel's definition, in emission
+      order: the kernel alone, or -- outlined (gh-ocannl-1603) -- its parts, then the kernel with
+      their declarations. Any partition of them into translation units compiles to the same code,
+      every part being a [noinline] function the kernel calls. *)
+  let compile_proc_units ~name idx_params
       (Low_level.
          {
            traced_store;
@@ -8053,7 +8066,7 @@ module C_syntax (B : C_syntax_config) = struct
            flip_candidates = _;
            spliced_rbw = _;
            source = _;
-         } as proc) : (string * kparam_source) list * PPrint.document * Low_level.launch_dims =
+         } as proc) : (string * kparam_source) list * PPrint.document list * Low_level.launch_dims =
     let open PPrint in
     (if not (Set.is_empty workgroup_shared) then
        match B.shared_decl_prefix with
@@ -8253,9 +8266,25 @@ module C_syntax (B : C_syntax_config) = struct
           ^^ hardline
     | `Pooled _ -> ());
 
+    (* gh-ocannl-1603: an outlined kernel's main logic is its parts, rendered in program order on
+       this one context, so every occurrence-level fact ([zero_out_seen], the census) flows from one
+       part to the next exactly as through a single rendering. Not under routine logging, whose
+       [log_file] is a local of the kernel's own frame. *)
+    let outlined_groups =
+      match B.outline_part_weight () with
+      | Some part when part > 0 && not (Utils.debug_log_from_routines ()) ->
+          Kernel_outline.groups ~part (Low_level.flat_lines [ llc ])
+      | _ -> None
+    in
     (* Render before declarations so accepted marked-fragment regions can suppress their otherwise
        dead scalar local arrays. Declining/debug paths leave the set empty and keep the arrays. *)
-    let main_logic_doc = (compile_main ctx) llc in
+    let main_logic_doc, part_docs =
+      match outlined_groups with
+      | None -> ((compile_main ctx) llc, [])
+      | Some groups ->
+          ( empty,
+            List.map groups ~f:(fun group -> (compile_main ctx) (Low_level.unflat_lines group)) )
+    in
     ctx.volatility_requested := B.volatile_serial_accumulation;
     if !(ctx.volatility_census_enabled) then
       ctx.volatility_census :=
@@ -8272,6 +8301,10 @@ module C_syntax (B : C_syntax_config) = struct
         ~init:(Set.empty (module Tn))
         ~f:(fun ~key:_ ~data acc -> List.fold data ~init:acc ~f:Set.add)
     in
+    (* The function-scope local arrays, in declaration order: an outlined kernel's parts reach them
+       through pointer parameters of the same names (a dispatch-aliased one is already accessed
+       through its pointer [ident]), so the statements render the same in a part as in place. *)
+    let outlined_locals = ref [] in
     let local_decls =
       string "/* Local declarations and initialization. */"
       ^^ hardline
@@ -8322,11 +8355,13 @@ module C_syntax (B : C_syntax_config) = struct
                          | Some { Low_level.pt_depth; _ } -> pt_depth
                          | None -> 1))
                  ^^ semi ^^ hardline
-               else
+               else (
+                 outlined_locals :=
+                   (B.typ_of_prec @@ Lazy.force tn.storage_prec, get_ident tn) :: !outlined_locals;
                  local_array_decl
                    ~alias_ptr:(Set.mem !(ctx.current_local_ptr_alias) tn)
                    ~zero_init:node.Low_level.zero_initialized_by_code tn
-                 ^^ hardline
+                 ^^ hardline)
              else empty)
            (let touched, untouched = store_order ~llc ~traced_store in
             List.map (touched @ untouched) ~f:(fun tn -> (tn, Hashtbl.find_exn traced_store tn)))
@@ -8345,7 +8380,37 @@ module C_syntax (B : C_syntax_config) = struct
           ^^ separate_map hardline string lines
           ^^ hardline ^^ hardline);
 
-    let main_logic = string "/* Main logic. */" ^^ hardline ^^ main_logic_doc in
+    (* gh-ocannl-1603: an outlined kernel's parts take the kernel's own parameters and a pointer per
+       function-scope local array, and the kernel calls them in order. *)
+    let part_name k = Kernel_outline.part_name ~kernel:name k in
+    let locals = List.rev !outlined_locals in
+    let part_header k =
+      let wide = !(ctx.widest_vector_bytes) > 32 in
+      string
+        ((if wide then "OCANNL_WIDE_VECTOR_KERNEL " else "")
+        ^ Kernel_outline.part_attribute ^ " void " ^ part_name k)
+      ^^ nest 4
+           (lparen ^^ hardline
+           ^^ separate (comma ^^ hardline)
+                (args_docs
+                @ List.map locals ~f:(fun (typ, ident) -> string (typ ^ " *restrict " ^ ident)))
+           ^^ rparen)
+    in
+    let call_args =
+      String.concat ~sep:", "
+        (List.map params ~f:(fun (decl, _) -> Kernel_outline.trailing_ident decl)
+        @ List.map B.extra_args ~f:Kernel_outline.trailing_ident
+        @ List.map locals ~f:snd)
+    in
+    let main_logic =
+      string "/* Main logic. */" ^^ hardline
+      ^^
+      if List.is_empty part_docs then main_logic_doc
+      else
+        separate_map hardline
+          (fun k -> string (Printf.sprintf "%s(%s);" (part_name k) call_args))
+          (List.init (List.length part_docs) ~f:Fn.id)
+    in
     body := !body ^^ main_logic;
 
     if Utils.debug_log_from_routines () && B.log_involves_file_management then
@@ -8357,7 +8422,32 @@ module C_syntax (B : C_syntax_config) = struct
     let func_doc =
       func_header () ^^ space ^^ lbrace ^^ nest 2 (hardline ^^ !body) ^^ hardline ^^ rbrace
     in
-    (params, func_doc, launch)
+    let units =
+      if List.is_empty part_docs then [ func_doc ]
+      else
+        (* Each unit opens with the part attribute's definition, so whichever translation unit it
+           lands in can compile it; the kernel's unit declares every part it calls. *)
+        let guard =
+          separate_map hardline string (String.split_lines Kernel_outline.part_attribute_definition)
+          ^^ hardline
+        in
+        List.mapi part_docs ~f:(fun k part_doc ->
+            guard ^^ part_header k ^^ space ^^ lbrace
+            ^^ nest 2 (hardline ^^ part_doc)
+            ^^ hardline ^^ rbrace)
+        @ [
+            guard
+            ^^ separate_map hardline
+                 (fun k -> part_header k ^^ semi)
+                 (List.init (List.length part_docs) ~f:Fn.id)
+            ^^ hardline ^^ func_doc;
+          ]
+    in
+    (params, units, launch)
+
+  let compile_proc ~name idx_params proc =
+    let params, units, launch = compile_proc_units ~name idx_params proc in
+    (params, PPrint.separate PPrint.hardline units, launch)
 end
 
 (** One driver owns naming, binding order, emission order and batch source assembly. The compiler
@@ -8381,6 +8471,12 @@ struct
             includes applied. [assemble] of every index in order is the batch source
             {!compile_batch} hands its compiler; [assemble [i]] is kernel [i]'s standalone source,
             which a kernel code cache keys on (gh-ocannl-1314). *)
+    assemble_units : int list -> max_units:int -> min_unit_bytes:int -> string list;
+        (** gh-ocannl-1603: the same kernels as {!assemble} as several translation units, to be
+            compiled concurrently and linked into one library: their units -- a kernel, or an
+            outlined kernel's parts and the kernel -- packed by size into at most [max_units]
+            sources of at least about [min_unit_bytes] each ([0]: no minimum), each with its own
+            prelude. One unit is [[assemble idxs]] exactly. *)
     attribute : 'a. int list -> exn -> Stdlib.Printexc.raw_backtrace -> 'a;
         (** Re-raises a failed compile of [assemble idxs] as {!compile_batch} would: attributed to a
             routine's name when the report points at one of those kernels' declarations. *)
@@ -8405,18 +8501,60 @@ struct
     let given_names = names in
     let names = Array.map names ~f:Syntax.kernel_ident in
     let idx_params = Indexing.bound_symbols bindings in
-    let rendered =
+    let units =
       Array.map2_exn names lowereds ~f:(fun name lowered ->
-          let kparams, doc, launch = Syntax.compile_proc ~name idx_params lowered in
-          ((kparams, name, launch), Syntax.render_doc doc))
+          let kparams, units, launch = Syntax.compile_proc_units ~name idx_params lowered in
+          ((kparams, name, launch), List.map units ~f:Syntax.render_doc))
+    in
+    (* Each document starts at column 0 after a hard line, so rendering them apart and joining them
+       with newlines gives the text of rendering them together. *)
+    let rendered =
+      Array.map units ~f:(fun (entry, texts) -> (entry, String.concat ~sep:"\n" texts))
+    in
+    let source_of ~routine_names texts =
+      Syntax.prepend_builtins_to_text ~conditional_includes ~routine_names ~includes ~builtins
+        ~doc_string:(String.concat ~sep:"\n" texts) ()
     in
     let assemble idxs =
-      (* Each kernel's document starts at column 0 after a hard line, so rendering them apart and
-         joining them with newlines gives the text of rendering them together. *)
-      let doc_string = String.concat ~sep:"\n" (List.map idxs ~f:(fun i -> snd rendered.(i))) in
-      Syntax.prepend_builtins_to_text ~conditional_includes
+      source_of
         ~routine_names:(List.map idxs ~f:(fun i -> names.(i)))
-        ~includes ~builtins ~doc_string ()
+        (List.map idxs ~f:(fun i -> snd rendered.(i)))
+    in
+    let assemble_units idxs ~max_units ~min_unit_bytes =
+      let pieces =
+        List.concat_map idxs ~f:(fun i -> List.map (snd units.(i)) ~f:(fun text -> (i, text)))
+      in
+      let total = List.sum (module Int) pieces ~f:(fun (_, text) -> String.length text) in
+      let n =
+        Int.min (List.length pieces)
+          (Int.min max_units (if min_unit_bytes <= 0 then max_units else total / min_unit_bytes))
+      in
+      if n <= 1 then [ assemble idxs ]
+      else
+        (* Largest first onto the lightest unit (ties to the lowest index), then each unit's pieces
+           back in emission order. *)
+        let bins = Array.create ~len:n [] and loads = Array.create ~len:n 0 in
+        List.mapi pieces ~f:(fun j piece -> (j, piece))
+        |> List.stable_sort ~compare:(fun (_, (_, a)) (_, (_, b)) ->
+            Int.compare (String.length b) (String.length a))
+        |> List.iter ~f:(fun (j, ((_, text) as piece)) ->
+            let k, _ =
+              Array.foldi loads ~init:(0, Int.max_value) ~f:(fun k (best, load) l ->
+                  if l < load then (k, l) else (best, load))
+            in
+            bins.(k) <- (j, piece) :: bins.(k);
+            loads.(k) <- loads.(k) + String.length text);
+        Array.to_list bins
+        |> List.filter_map ~f:(fun bin ->
+            if List.is_empty bin then None
+            else
+              let bin = List.sort bin ~compare:(fun (a, _) (b, _) -> Int.compare a b) in
+              Some
+                (source_of
+                   ~routine_names:
+                     (List.dedup_and_sort ~compare:String.compare
+                        (List.map bin ~f:(fun (_, (i, _)) -> names.(i))))
+                   (List.map bin ~f:(fun (_, (_, text)) -> text))))
     in
     let attribute idxs exn backtrace =
       attribute_routine_name_failure
@@ -8433,6 +8571,14 @@ struct
         if Low_level.has_staged_compilation llc then []
         else List.map (Low_level.touched_tns_in_order llc) ~f:Syntax.get_ident
       in
+      (* An outlined kernel's parts are names it declares, renamed like its nodes' (gh-ocannl-1603):
+         they are spelled after the kernel's name, segment index included. *)
+      let bound =
+        bound
+        @ List.init
+            (List.length (snd units.(i)) - 1)
+            ~f:(fun k -> Kernel_outline.part_name ~kernel:names.(i) k)
+      in
       let canonical ~bound =
         Kernel_code_cache.canonical_kernel ~kernel_name:names.(i) ~bound
           ~derivations:minted_derivations ~free:Syntax.routine_ident_blacklist
@@ -8443,7 +8589,7 @@ struct
       | Some prelude -> prelude ^ canonical ~bound def
       | None -> canonical ~bound:[] full
     in
-    { entries = Array.map rendered ~f:fst; assemble; attribute; key_text }
+    { entries = Array.map rendered ~f:fst; assemble; assemble_units; attribute; key_text }
 
   (* [compiles_source]: whether [compile_source] runs the vendor compiler, timed as the compile's
      [device_s] ({!Compile_cost}); false for a backend that only retains the source and compiles it

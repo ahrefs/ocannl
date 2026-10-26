@@ -125,6 +125,9 @@ let known_config_keys =
       "hip_kernel_cache_mib";
       "cuda_kernel_cache_mib";
       "cc_kernel_cache_mib";
+      "cc_kernel_part_weight";
+      "cc_compile_jobs";
+      "cc_compile_unit_min_bytes";
       "gpu_graph_capture";
       "multidev_num_devices";
       "buffer_aliasing";
@@ -340,6 +343,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "cc_backend_simd_flags";
         "cc_backend_fp_contract";
         "cc_backend_fast_math";
+        "cc_kernel_part_weight";
         "cc_vector_bytes";
         "cc_vector_registers";
         "cc_fp16_arithmetic";
@@ -594,6 +598,11 @@ let config_key_classification : (config_key_class * string * string list) list =
        compiler options, so a reused kernel was compiled from the same text under the same \
        options: only the compile's cost changes",
       [ "hip_kernel_cache_mib"; "cuda_kernel_cache_mib"; "cc_kernel_cache_mib" ] );
+    ( Execution_neutral,
+      "how a cc batch is split into translation units and how many compiler processes build them \
+       at once (gh-ocannl-1603): every function is compiled alone, never inlined across units, so \
+       only the compile's cost changes",
+      [ "cc_compile_jobs"; "cc_compile_unit_min_bytes" ] );
     ( Execution_neutral,
       "identifier spelling in generated code and in printouts",
       [ "ll_ident_style"; "cd_ident_style"; "print_decimals_precision" ] );

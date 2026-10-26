@@ -863,6 +863,69 @@ let timing_identity () =
         }
   with Unix.Unix_error _ | Stdlib.Sys_error _ -> None
 
+(* {2 Split compilation (gh-ocannl-1603)}
+
+   A C compiler's cost grows faster than linearly in a function's size: the serial baseline a cc
+   search compiles first is one function of every statement of the routine, and on a
+   [gpt2_mini_train] step clang -O3 took 127 s over it, against 30 s for the same statements as 62
+   [noinline] functions in one translation unit, and 8 s for those spread over 8 units compiled
+   concurrently. So a large kernel is rendered OUTLINED
+   ([C_syntax.C_syntax_config.outline_part_weight], [cc_kernel_part_weight]), and a large batch is
+   compiled as up to [cc_compile_jobs] translation units of at least [cc_compile_unit_min_bytes]
+   each, by as many compiler processes, linked into one library. Neither changes what a kernel
+   computes. Windows compiles one unit: the concurrent compile is verified on the Unix toolchains
+   only. *)
+type split_settings = { part_weight : int; jobs : int; unit_min_bytes : int }
+
+let non_negative_int ~key value =
+  match Int.of_string_opt (String.strip value) with
+  | Some n when n >= 0 -> n
+  | _ ->
+      raise
+      @@ Utils.User_error (Printf.sprintf "%s must be a non-negative integer; found: %s" key value)
+
+let split_override : split_settings option ref = ref None
+
+(* Read apart from the other two: it is the one a cache key hashes ([codegen_tag]), and computing a
+   key reads no key outside the [Keyed] class. *)
+let part_weight_setting () =
+  match !split_override with
+  | Some split -> split.part_weight
+  | None ->
+      non_negative_int ~key:"cc_kernel_part_weight"
+        (Utils.get_global_arg ~default:"256" ~arg_name:"cc_kernel_part_weight")
+
+let split_settings () =
+  match !split_override with
+  | Some split -> split
+  | None ->
+      let jobs =
+        match
+          String.lowercase
+            (String.strip (Utils.get_global_arg ~default:"auto" ~arg_name:"cc_compile_jobs"))
+        with
+        | "auto" -> Int.min 8 (Stdlib.Domain.recommended_domain_count ())
+        | value -> non_negative_int ~key:"cc_compile_jobs" value
+      in
+      let unit_min_bytes =
+        non_negative_int ~key:"cc_compile_unit_min_bytes"
+          (Utils.get_global_arg ~default:"65536" ~arg_name:"cc_compile_unit_min_bytes")
+      in
+      let jobs = if String.equal Sys.os_type "Unix" then Int.max 1 jobs else 1 in
+      { part_weight = part_weight_setting (); jobs; unit_min_bytes }
+
+let with_split_settings split f =
+  let saved = !split_override in
+  split_override := Some split;
+  Exn.protect ~f ~finally:(fun () -> split_override := saved)
+
+module Translation_units = struct
+  let count = Stdlib.Atomic.make 0
+  let record n = ignore (Stdlib.Atomic.fetch_and_add count n : int)
+end
+
+let translation_units_compiled () = Stdlib.Atomic.get Translation_units.count
+
 let codegen_tag () =
   let parts =
     [
@@ -879,6 +942,8 @@ let codegen_tag () =
       | `None -> "fp16-none"
       | `Promoted -> "fp16-promoted"
       | `Native -> "fp16-native");
+      (* gh-ocannl-1603: where a large kernel's function boundaries fall. *)
+      "part-weight=" ^ Int.to_string (part_weight_setting ());
     ]
     (* The pool-parallel Grid rendering, and only when there IS one: with the grid syntax resolved
        to [`None], [C_syntax.collect_parallel_grid] returns before the chunk count or the
@@ -1184,7 +1249,7 @@ let toolchain_failure_detail { culprits; alone; probe_command; probe_output } ~e
      else "No single setting fails alone; the toolchain rejects these together")
     named probe_command probe_output command compiler_output
 
-let%track7_sexp c_compile_and_load ~name:(base_name : string) ~run_id ~f_path =
+let%track7_sexp c_compile_and_load ~name:(base_name : string) ~run_id ~f_paths =
   (* The pool restriction (gh-ocannl-530) must be in force before the first [-fopenmp] kernel is
      dlopened, not merely before its first parallel region: libgomp computes its default team size
      from the affinity mask in its ELF/PE constructor, which runs at dlopen. Forced unconditionally
@@ -1232,26 +1297,87 @@ let%track7_sexp c_compile_and_load ~name:(base_name : string) ~run_id ~f_path =
   in
   (try Stdlib.Sys.remove libname with _ -> ());
   let kernel_link_flags = Lazy.force kernel_link_flags in
-  let temp_log = Stdlib.Filename.temp_file "ocannl_cc_" ".log" in
-  let _cmdline : string =
-    (* Quoted for the same reason as the probes': these paths sit under the build or the system temp
-       directory, either of which can contain whitespace, and an unquoted one splits into arguments
-       and fails every compile with a "this is a bug in OCANNL" report against a command the shell
-       never saw whole. *)
-    Printf.sprintf "%s %s %s -o %s %s > %s 2>&1" (compiler_command ())
-      (Stdlib.Filename.quote f_path) (kernel_compiler_flags ()) (Stdlib.Filename.quote libname)
-      kernel_link_flags (Stdlib.Filename.quote temp_log)
-  in
-  (* Debug: log the command if debugging is enabled *)
-  [%log3 "command", _cmdline];
-  let _rc : int = Stdlib.Sys.command _cmdline in
-  (* The compiler was the source's only reader: without debug files nothing else needs it. *)
-  if not retain_debug then remove f_path;
-  let source_note =
+  let source_note_of f_path =
     if retain_debug then "the generated .c file at " ^ f_path
     else
       "the generated .c file (this compile removed its temporary copy; rerun with \
        --ocannl_output_debug_files_in_build_directory=true to keep it)"
+  in
+  (* The compile: its exit code, the command a failure reports, the log holding its output, and the
+     source a failure names. *)
+  let _rc, _cmdline, temp_log, source_note =
+    match f_paths with
+    | [ f_path ] ->
+        let temp_log = Stdlib.Filename.temp_file "ocannl_cc_" ".log" in
+        let _cmdline : string =
+          (* Quoted for the same reason as the probes': these paths sit under the build or the
+             system temp directory, either of which can contain whitespace, and an unquoted one
+             splits into arguments and fails every compile with a "this is a bug in OCANNL" report
+             against a command the shell never saw whole. *)
+          Printf.sprintf "%s %s %s -o %s %s > %s 2>&1" (compiler_command ())
+            (Stdlib.Filename.quote f_path) (kernel_compiler_flags ())
+            (Stdlib.Filename.quote libname) kernel_link_flags (Stdlib.Filename.quote temp_log)
+        in
+        (* Debug: log the command if debugging is enabled *)
+        [%log3 "command", _cmdline];
+        let _rc : int = Stdlib.Sys.command _cmdline in
+        (* The compiler was the source's only reader: without debug files nothing else needs it. *)
+        if not retain_debug then remove f_path;
+        (_rc, _cmdline, temp_log, source_note_of f_path)
+    | _ -> (
+        (* gh-ocannl-1603: several translation units, each compiled to an object by its own compiler
+           process, all at once, then linked into the one library. Everything a process needs is
+           prepared before the first starts; the objects and the compile logs are this compilation's
+           temporaries, removed on every path. *)
+        let units =
+          List.map f_paths ~f:(fun f_path ->
+              let obj = Stdlib.Filename.temp_file "ocannl_cc_" ".o" in
+              let log = Stdlib.Filename.temp_file "ocannl_cc_" ".log" in
+              let command =
+                Printf.sprintf "%s -c %s %s -fPIC -o %s > %s 2>&1" (compiler_command ())
+                  (Stdlib.Filename.quote f_path) (kernel_compiler_flags ())
+                  (Stdlib.Filename.quote obj) (Stdlib.Filename.quote log)
+              in
+              [%log3 "command", command];
+              (f_path, obj, log, command))
+        in
+        let started =
+          List.map units ~f:(fun (_, _, _, command) ->
+              try Ok (Unix.open_process_out command) with exn -> Error exn)
+        in
+        let exits =
+          List.map started ~f:(function
+            | Error _ -> 127
+            | Ok process -> (
+                match Unix.close_process_out process with
+                | Unix.WEXITED rc -> rc
+                | Unix.WSIGNALED _ | Unix.WSTOPPED _ -> 255
+                | exception Unix.Unix_error _ -> 255))
+        in
+        Translation_units.record (List.length units);
+        if not retain_debug then List.iter units ~f:(fun (f_path, _, _, _) -> remove f_path);
+        let remove_objects () = List.iter units ~f:(fun (_, obj, _, _) -> remove obj) in
+        let failed = List.find (List.zip_exn units exits) ~f:(fun (_, rc) -> rc <> 0) in
+        match failed with
+        | Some ((f_path, _, log, command), rc) ->
+            List.iter units ~f:(fun (_, _, other, _) ->
+                if not (String.equal other log) then remove other);
+            remove_objects ();
+            (rc, command, log, source_note_of f_path)
+        | None ->
+            List.iter units ~f:(fun (_, _, log, _) -> remove log);
+            let temp_log = Stdlib.Filename.temp_file "ocannl_cc_" ".log" in
+            let command =
+              Printf.sprintf "%s %s %s -o %s %s > %s 2>&1" (compiler_command ())
+                (String.concat ~sep:" "
+                   (List.map units ~f:(fun (_, obj, _, _) -> Stdlib.Filename.quote obj)))
+                (kernel_compiler_flags ()) (Stdlib.Filename.quote libname) kernel_link_flags
+                (Stdlib.Filename.quote temp_log)
+            in
+            [%log3 "command", command];
+            let rc = Stdlib.Sys.command command in
+            remove_objects ();
+            (rc, command, temp_log, source_note_of (List.hd_exn f_paths)))
   in
   if _rc <> 0 then (
     let compiler_output =
@@ -1372,7 +1498,7 @@ let%track7_sexp c_compile_and_load ~name:(base_name : string) ~run_id ~f_path =
   in
   (* Loaded: a debug run's private source copy has served its purpose, the informational
      [build_files/] copy being the one a reader looks at. *)
-  if retain_debug then remove f_path;
+  if retain_debug then List.iter f_paths ~f:remove;
   let bytes = try (Unix.stat libname).st_size with Unix.Unix_error _ -> 0 in
   let result = { lib; libname; bytes } in
   (* The kernel now executes from the mapping, not from the path. POSIX unlinks a mapped file's name
@@ -1420,6 +1546,7 @@ struct
   let parallel_grid_syntax = parallel_grid_syntax_setting ()
   let parallel_grid_chunks = parallel_grid_chunks_setting ()
   let vector_file = vector_file_setting ()
+  let outline_part_weight () = match part_weight_setting () with 0 -> None | weight -> Some weight
 
   (* gh-ocannl-517: a CPU has no 16-bit arithmetic -- the narrow arms of the operator renderings
      below are widen/op/narrow round-trips through f32, and [_Float16] arithmetic, where the type
@@ -1665,17 +1792,28 @@ let compilation_copy ~name ~run_id (build_file : Utils.build_file_channel) filte
 
 module Compile = C_syntax.Compile_driver (CC_syntax_config)
 
-let compile_source ~name source =
-  let build_file = Utils.open_build_file ~base_name:name ~extension:".c" in
-  Out_channel.output_string build_file.oc source;
-  build_file.finalize ();
+(* [sources]: one translation unit, compiled as [<name>.c]; or several (gh-ocannl-1603), compiled as
+   [<name>.tu<k>.c] and linked into one library. *)
+let compile_source ~name sources =
   (* The run id makes every library path unique within the process, even once the file is gone. A
      dynamic loader (glibc, dyld, LoadLibrary) answers a [dlopen] of a path it already has mapped
      with that mapping, without reading the file; the library is unlinked while still mapped and
      [Dl.dlclose] need not unload it, so a later [temp_file] landing on the freed name would
      otherwise run the earlier kernel. *)
   let run_id = Utils.get_global_run_id () in
-  c_compile_and_load ~name ~run_id ~f_path:(compilation_copy ~name ~run_id build_file source)
+  let write ~name source =
+    let build_file = Utils.open_build_file ~base_name:name ~extension:".c" in
+    Out_channel.output_string build_file.oc source;
+    build_file.finalize ();
+    compilation_copy ~name ~run_id build_file source
+  in
+  let f_paths =
+    match sources with
+    | [ source ] -> [ write ~name source ]
+    | _ ->
+        List.mapi sources ~f:(fun k source -> write ~name:(name ^ ".tu" ^ Int.to_string k) source)
+  in
+  c_compile_and_load ~name ~run_id ~f_paths
 
 (* {2 The kernel code cache (gh-ocannl-1525)}
 
@@ -1749,7 +1887,14 @@ let compile_kernels ~batch ~names bindings (lowereds : Low_level.optimized array
     (* Before the call: a failed compile was still given these kernels. *)
     Compile_cost.record_kernels ~rendered:0 ~compiled:(List.length idxs);
     let lib =
-      try Compile_cost.time_device (fun () -> compile_source ~name:artifact (r.assemble idxs))
+      let { part_weight = _; jobs; unit_min_bytes } = split_settings () in
+      let sources =
+        if jobs <= 1 then [ r.assemble idxs ]
+        else r.assemble_units idxs ~max_units:jobs ~min_unit_bytes:unit_min_bytes
+      in
+      (* Several units: the routine's full source is still [<name>.c] (read through [Generated]). *)
+      if List.length sources > 1 && whole then write_source_artifact ~name (r.assemble all);
+      try Compile_cost.time_device (fun () -> compile_source ~name:artifact sources)
       with exn ->
         let backtrace = Stdlib.Printexc.get_raw_backtrace () in
         r.attribute idxs exn backtrace

@@ -123,6 +123,7 @@ let keyed_flips =
     ("cc_backend_simd_flags", config ~scope:Cpu [ "-mflipped-simd" ]);
     ("cc_backend_fp_contract", config ~scope:Cpu [ "off"; "on" ]);
     ("cc_backend_fast_math", config ~scope:Cpu flag);
+    ("cc_kernel_part_weight", config ~scope:Cpu [ "0"; "1" ]);
     ("cc_vector_bytes", config ~scope:Cpu [ "0"; "64" ]);
     ("cc_vector_registers", config ~scope:Cpu [ "7"; "8" ]);
     ("cc_fp16_arithmetic", config ~scope:Cpu [ "none"; "promoted" ]);
@@ -243,6 +244,8 @@ let off_default (kind : Utils.config_value_kind) default =
 let emitted_flips =
   [
     ("cc_backend_post_compile_timeout", [ "2.5" ]);
+    ("cc_compile_jobs", [ "1"; "4" ]);
+    ("cc_compile_unit_min_bytes", [ "0"; "1048576" ]);
     ("max_shape_error_origins", [ "3"; "9" ]);
     ("output_dlls_in_build_directory", flag);
     ("output_prec_in_ll_files", flag);

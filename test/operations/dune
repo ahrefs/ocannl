@@ -262,6 +262,7 @@
   (alias runtest-cc_temp_ownership-compiler_debug)
   (alias runtest-cc_temp_ownership-compiler_dll)
   (alias runtest-cc_kept_library)
+  (alias runtest-cc_kernel_outline)
   (alias runtest-cc_kept_library-debug)
   (alias runtest-cc_temp_library_sweep)
   (alias runtest-cc_toolchain_attribution-arch_flags)
@@ -1243,6 +1244,34 @@
 ; name; a concurrent child process of the same executable keeps its own, and its startup cleanup
 ; spares this process's artifacts while removing a finished process's. Read through
 ; Test_utils.Generated.kept_libraries.
+
+;; gh-ocannl-1603: an outlined, multi-unit cc compile computes what the whole one does.
+
+(executable
+ (name cc_kernel_outline)
+ (modules cc_kernel_outline)
+ (libraries base stdio ocannl test_utils ll_test arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: cc -- it compares two cc compiles; the command line pins the backend.
+ (target cc_kernel_outline.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_kernel_outline.exe}
+    --ocannl_backend=cc
+    --ocannl_output_debug_files_in_build_directory=true))))
+
+(rule
+ (alias runtest-cc_kernel_outline)
+ (package neural_nets_lib)
+ (action
+  (diff cc_kernel_outline.expected cc_kernel_outline.actual)))
 
 (executable
  (name cc_kept_library)

@@ -159,6 +159,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-cc_dlopen_cause_dll
   test/operations/dune                     @runtest-cc_kept_library
   test/operations/dune                     @runtest-cc_kept_library-debug
+  test/operations/dune                     @runtest-cc_kernel_outline
   test/operations/dune                     @runtest-cc_march_census-emission
   test/operations/dune                     @runtest-cc_march_census-w16_native_foreign
   test/operations/dune                     @runtest-cc_march_census-w16_native_host

@@ -1323,6 +1323,27 @@
 # and so does output_dlls_in_build_directory, which keeps each routine's own whole library.
 #cc_kernel_cache_mib=256
 
+# The size of the parts a large cc kernel is rendered OUTLINED into (gh-ocannl-1603): its top-level
+# statements packed in order into parts of about this weight each (statement and expression nodes of
+# the lowered code, roughly a line of C each), every part a noinline function the kernel calls in
+# turn. A C compiler's cost grows faster than linearly in a function's size -- a search's serial
+# baseline is one function of the whole routine, and clang -O3 took 127 s over a gpt2_mini_train
+# step's against 30 s for the same statements as 62 parts -- so a kernel weighing more than sixteen
+# parts is outlined. Results are bitwise unchanged: the same statements run in the same order. A part
+# never ends inside the reach of a scope local or right after a zero initializer; a kernel under
+# debug_log_from_routines stays whole. 0 disables outlining.
+#cc_kernel_part_weight=256
+
+# How many compiler processes build one cc batch at once (gh-ocannl-1603): a batch whose kernels and
+# outlined parts total at least two cc_compile_unit_min_bytes is split by size into up to this many
+# translation units, compiled concurrently and linked into one library. auto: the recommended
+# domain count, at most 8. 1 compiles every batch as one unit. Windows always compiles one unit.
+#cc_compile_jobs=auto
+
+# The least source, in bytes, a translation unit of a split cc batch holds (see cc_compile_jobs): a
+# compiler process costs a fixed startup, so a smaller batch is compiled as one unit.
+#cc_compile_unit_min_bytes=65536
+
 # The `-O` argument to the compiler executable for the `cc` and `multidev_cc` backends.
 #cc_backend_optimization_level=3
 
