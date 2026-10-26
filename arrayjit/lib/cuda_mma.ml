@@ -274,8 +274,8 @@ let operand_loads ~a_prec ~b_prec ~d_prec ~scope ~ta ~tb ~a ~b =
 (* The inline-PTX bodies load an [a] and a [b] fragment inside their [__mi x __ni x __ki] loops, so
    each is reloaded for every tile of the other's free axis; wmma loads its B row of fragments and
    then each A fragment once per [__ki] step, reusing them across [__mi] / [__ni]. Stated beside the
-   loops: [Cuda_backend]'s inline-PTX [mma_syntax] bodies and [wmma_k_loop_lines] above, which
-   [test/operations/mma_format_arm_tables] counts against it (gh-ocannl-1456). *)
+   loops: [wmma_k_loop_lines] above and [inline_ptx_statement_lines] below, which
+   [test/operations/mma_format_arm_tables] counts against it (gh-ocannl-1456, gh-ocannl-1511). *)
 let arm_reloads_operands = function Inline_ptx _ -> true | Wmma _ -> false
 
 let operand_fragments ~a_prec ~b_prec ~d_prec ~scope =
@@ -287,6 +287,375 @@ let operand_fragments ~a_prec ~b_prec ~d_prec ~scope =
            per lane. *)
         mf_fragment_loads = (match arm with Wmma _ -> true | Inline_ptx _ -> false);
       })
+
+(* Shared by statement and scope for the inline-PTX arms: the intrinsic divides the block, the
+   device meets the arm's floor, and every operand is plain or shared-swizzled. The 16-bit arms read
+   swizzled operands with [ldmatrix]; fp8 uses it in its contiguous orientations and swizzle-aware
+   byte gathers otherwise. Destination conditions remain with the callers. *)
+let inline_ptx_accepts inline ~cc ~m ~n ~k ~a:((a_space, a_layout) as a)
+    ~b:((b_space, b_layout) as b) =
+  let arm = Inline_ptx inline in
+  let tm, tn, tk = arm_tile arm in
+  let plain = function `Plain -> true | `Swizzled_b128 -> false in
+  (* Generic-address loads cover both device and shared memory. *)
+  let loadable = function `Device | `Shared -> true | `Thread -> false in
+  (plain a_layout || ldmatrix_eligible a)
+  && (plain b_layout || ldmatrix_eligible b)
+  && m % tm = 0
+  && n % tn = 0
+  && k % tk = 0
+  && loadable a_space && loadable b_space
+  && cc >= arm_floor arm
+
+(* The inline-PTX arms' rendering (moved from [Cuda_backend], gh-ocannl-1511), so that the loads its
+   loops execute are counted against {!operand_fragments} and {!operand_loads} with no device.
+
+   Both inline-PTX shapes address and move the same four f32 accumulators. The statement declares
+   scalar registers on load; a persistent boundary moves to/from its existing fragment array. [None]
+   is the f32 storage identity; [Some] names the boundary conversions. *)
+let mma16_d_rows ~elt_typ ~ldd =
+  [
+    Printf.sprintf "%s *__mma_dr0 = __mma_dp + (__mi * 16 + __mma_g) * %d + __ni * 8 + 2 * __mma_t;"
+      elt_typ ldd;
+    Printf.sprintf "%s *__mma_dr1 = __mma_dr0 + 8 * %d;" elt_typ ldd;
+  ]
+
+let mma16_d_moves ~dir ~reg ~declare ~d_cvt =
+  let convert value =
+    match d_cvt with
+    | None -> value
+    | Some (widen, narrow) ->
+        let conversion = match dir with `Load -> widen | `Store -> narrow in
+        Printf.sprintf "%s(%s)" conversion value
+  in
+  let move i row col =
+    let cell = Printf.sprintf "__mma_dr%d[%d]" row col in
+    match dir with
+    | `Load -> Printf.sprintf "%s%s = %s;" (if declare then "float " else "") (reg i) (convert cell)
+    | `Store -> Printf.sprintf "%s = %s;" cell (convert (reg i))
+  in
+  [ move 0 0 0 ^ " " ^ move 1 0 1; move 2 1 0 ^ " " ^ move 3 1 1 ]
+
+let mma16_acc resident i =
+  match resident with
+  | None -> Printf.sprintf "__mma_d%d" i
+  | Some frag -> Printf.sprintf "%s[__mi][__ni][%d]" frag i
+
+let mma16_either resident ~fragment ~statement =
+  match resident with Some _ -> fragment | None -> statement
+
+let mma16_d_statement_lines ~dir ~elt_typ ~d_cvt ~ldd =
+  let rows = match dir with `Load -> mma16_d_rows ~elt_typ ~ldd | `Store -> [] in
+  List.map
+    (rows @ mma16_d_moves ~dir ~reg:(mma16_acc None) ~declare:true ~d_cvt)
+    ~f:(fun line -> "    " ^ line)
+
+(* No coordinate table is needed here, unlike [Cuda_backend]'s converted wmma boundary: the PTX ISA
+   fixes the accumulator layout -- with groupID g = lane>>2 and threadID-in-group t = lane&3,
+   registers 0..3 hold rows {g, g+8} x columns {2t, 2t+1} -- which is the same mapping the
+   per-statement rendering ({!inline_ptx_statement_lines}) loads and stores through. *)
+let inline_ptx_d_boundary_lines inline ~dir ~frag ~ldd ~mt ~nt =
+  let elt_typ, d_cvt = inline_ptx_d_storage inline in
+  let reg i = Printf.sprintf "%s[__mi][__ni][%d]" frag i in
+  [
+    "{ /* mma.sync register fragment d boundary: the m16n8 f32 accumulator layout */";
+    "  unsigned __mma_lid;";
+    "  asm(\"mov.u32 %0, %%laneid;\" : \"=r\"(__mma_lid));";
+    "  const int __mma_g = (int)(__mma_lid >> 2);";
+    "  const int __mma_t = (int)(__mma_lid & 3);";
+    "#pragma unroll";
+    Printf.sprintf "  for (int __mi = 0; __mi < %d; ++__mi) {" mt;
+    "#pragma unroll";
+    Printf.sprintf "    for (int __ni = 0; __ni < %d; ++__ni) {" nt;
+  ]
+  @ List.map
+      (mma16_d_rows ~elt_typ ~ldd @ mma16_d_moves ~dir ~reg ~declare:false ~d_cvt)
+      ~f:(fun line -> "      " ^ line)
+  @ [ "    }"; "  }"; "}" ]
+
+(* Element offset in a [Swizzle_b128] tile: XOR the column's 16-byte-unit index with the low row
+   bits, preserving the within-unit remainder. Both [ldmatrix] addresses and fp8 byte gathers use
+   this map. *)
+let b128_offset ~ld ~u ~row ~col =
+  let shift = Int.floor_log2 u in
+  Printf.sprintf "(%s) * %d + (((((%s) >> %d) ^ ((%s) & %d)) << %d) + ((%s) & %d))" row ld col shift
+    row
+    ((ld / u) - 1)
+    shift col (u - 1)
+
+(* [ldmatrix] takes a [.shared] address, converted from the generic window. Its fragment entry
+   points have columns aligned to 16-byte units. *)
+let swz_saddr ~ptr ~ld ~prec ~row ~col =
+  let offset = b128_offset ~ld ~u:(16 / Ops.prec_in_bytes prec) ~row ~col in
+  Printf.sprintf "(unsigned)__cvta_generic_to_shared(%s + %s)" ptr offset
+
+(* [ldmatrix.sync.aligned.m8n8.xN[.trans].shared.b16]: the first 8N lanes each supply one 16-byte
+   row address of the N 8x8 tiles of 16-bit elements, and the results land in exactly the per-lane
+   fragment layout [mma.sync] consumes — replacing 4 (resp. 2) per-lane gather chains with one
+   instruction. The remaining lanes' addresses are ignored; they are still computed in range. *)
+let ldmatrix_lines ~indent ~regs ~trans ~addr =
+  let num = List.length regs in
+  let outs = String.concat ~sep:", " (List.map regs ~f:(fun r -> Printf.sprintf "\"=r\"(%s)" r)) in
+  let slots = String.concat ~sep:"," (List.mapi regs ~f:(fun i _ -> Printf.sprintf "%%%d" i)) in
+  [
+    Printf.sprintf "%sunsigned %s;" indent (String.concat ~sep:", " regs);
+    Printf.sprintf "%s{ unsigned __mma_sa = %s;" indent addr;
+    Printf.sprintf
+      "%s  asm volatile(\"ldmatrix.sync.aligned.m8n8.x%d%s.shared.b16 {%s}, [%%%d];\" : %s : \
+       \"r\"(__mma_sa)); }"
+      indent num
+      (if trans then ".trans" else "")
+      slots num outs;
+  ]
+
+(* Names the load path in the emitted block comment, so a reader (and the structural test pins) can
+   tell which operands came in through [ldmatrix]. *)
+let ldm_tag ~a ~b =
+  match (a, b) with
+  | false, false -> ""
+  | true, true -> " ldmatrix a,b"
+  | true, false -> " ldmatrix a"
+  | false, true -> " ldmatrix b"
+
+let inline_ptx_statement_lines inline ~a_prec ~b_prec ~resident ~ta ~tb ~lda ~ldb ~ldd ~a_swz ~b_swz
+    ~m ~n ~k =
+  let arm = Inline_ptx inline in
+  let a_ldm, b_ldm = arm_ldmatrix_operands arm ~ta ~tb ~a:a_swz ~b:b_swz in
+  let elt_typ, d_cvt = inline_ptx_d_storage inline in
+  let barrier = "__syncthreads();" in
+  (* Which of two renderings: against the scope's register [fragment], or the self-contained
+     [statement] that loads and stores [d] itself. *)
+  let either ~fragment ~statement = mma16_either resident ~fragment ~statement in
+  let acc = mma16_acc resident in
+  let unroll = either ~fragment:[ "#pragma unroll" ] ~statement:[] in
+  (* The shared frame of both shapes: lane coordinates, the [__mi x __ni] tile loops with the
+     statement form's [d] boundary inside, and the [__ki] reduction loop around [k_body]. *)
+  let frame ~kt ~k_body =
+    either ~fragment:[] ~statement:[ barrier ]
+    @ [
+        "unsigned __mma_lid;";
+        "asm(\"mov.u32 %0, %%laneid;\" : \"=r\"(__mma_lid));";
+        "const int __mma_g = (int)(__mma_lid >> 2);";
+        "const int __mma_t = (int)(__mma_lid & 3);";
+      ]
+    @ unroll
+    @ [ Printf.sprintf "for (int __mi = 0; __mi < %d; ++__mi) {" (m / 16) ]
+    @ unroll
+    @ [ Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" (n / 8) ]
+    @ either ~fragment:[] ~statement:(mma16_d_statement_lines ~dir:`Load ~elt_typ ~d_cvt ~ldd)
+    @ [ Printf.sprintf "    for (int __ki = 0; __ki < %d; ++__ki) {" kt ]
+    @ k_body @ [ "    }" ]
+    @ either ~fragment:[] ~statement:(mma16_d_statement_lines ~dir:`Store ~elt_typ ~d_cvt ~ldd)
+    @ [ "  }"; "}"; barrier ]
+  in
+  let mma_asm instr =
+    [
+      Printf.sprintf "      asm(\"%s \"" instr;
+      "          \"{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\"";
+      Printf.sprintf "          : \"+f\"(%s), \"+f\"(%s), \"+f\"(%s), \"+f\"(%s)" (acc 0) (acc 1)
+        (acc 2) (acc 3);
+      "          : \"r\"(__mma_a0), \"r\"(__mma_a1), \"r\"(__mma_a2), \"r\"(__mma_a3), \
+       \"r\"(__mma_b0), \"r\"(__mma_b1));";
+    ]
+  in
+  let title ~suffix =
+    Printf.sprintf "{ /* tile_mma %s%dx%dx%d (%s)%s%s */"
+      (either ~fragment:"fragment update " ~statement:"")
+      m n k (arm_marker arm) suffix (ldm_tag ~a:a_ldm ~b:b_ldm)
+  in
+  let a_regs = [ "__mma_a0"; "__mma_a1"; "__mma_a2"; "__mma_a3" ] in
+  let b_regs = [ "__mma_b0"; "__mma_b1" ] in
+  match inline with
+  | Fp8_m16n8k32 ->
+      (* Raw [mma.sync] with the architecture-defined per-lane fragment layouts of m16n8k32 (PTX ISA
+         "Matrix Fragments for mma.m16n8k32"; fp8 shares the .s8/.u8 layouts). Thread [lane], with
+         groupID g = lane>>2 and threadID-in-group t = lane&3, holds: A (16x32, row-major source)
+         regs a0..a3 = 4 consecutive bytes at rows {g, g+8} x column groups {4t, 4t+16}; B (32x8,
+         column-major fragment from our row-major source) regs b0,b1 = rows {4t..4t+3,
+         16+4t..16+4t+3} down column g, gathered bytewise (stride ldb); accumulator D (16x8 f32)
+         regs d0..d3 = rows {g, g+8} x columns {2t, 2t+1}. Low-indexed elements sit in low-order
+         bytes of each .b32 register. Byte loads impose no alignment or stride constraints and read
+         generic addresses, covering both __shared__ tiles and device pointers.
+
+         Transposed operand storage ([ta]/[tb], gh-ocannl-481 item 1) is bookkeeping here, not a
+         layout constraint: every fragment byte is addressed by its logical (row, col) through
+         [a_at]/[b_at], which index the STORED matrix at (col, row) under the flag while keeping the
+         operand's own leading dimension. The fragment content is unchanged, only its addresses are
+         — so the gradient GEMMs ([dA = g.B^T], [dB = A^T.g]), whose layouts are exactly these,
+         tensorize instead of silently scalar-falling-back.
+
+         fp8's [ldmatrix] eligibility is one-sided per operand, and the sides are opposite
+         (gh-ocannl-481 item 3, D2; {!arm_ldmatrix_operands}). [ldmatrix.b16] moves 16-bit units, so
+         it can build a fragment register only when the 4 fp8 bytes that register holds are
+         CONTIGUOUS in storage. For A those 4 bytes are 4 consecutive [k] at fixed [m] -- contiguous
+         exactly when A is stored row-major ([ta = false]); for B they are 4 consecutive [k] at
+         fixed [n] -- contiguous exactly when B is stored transposed ([tb = true]). The other
+         orientations keep byte gathers through the tile's XOR-swizzled address map. This lets BOTH
+         row-major staged operands be swizzled: A uses [ldmatrix], B gathers its strided bytes, and
+         both twins share the accumulator scope. *)
+      let pack4 name base offs =
+        Printf.sprintf
+          "unsigned %s = (unsigned)%s[%s] | ((unsigned)%s[%s] << 8) | ((unsigned)%s[%s] << 16) | \
+           ((unsigned)%s[%s] << 24);"
+          name base offs.(0) base offs.(1) base offs.(2) base offs.(3)
+      in
+      (* Byte offset of logical element (row, col) in an operand stored under its own leading
+         dimension, transposed or not, then through the b128 map when swizzled. fp8 is one byte per
+         element, so element index = byte offset from the [unsigned char *] base. *)
+      let elem_at ~ld ~transposed ~swizzled ~row ~col =
+        let row, col = if transposed then (col, row) else (row, col) in
+        if swizzled then b128_offset ~ld ~u:16 ~row ~col
+        else Printf.sprintf "(%s) * %d + (%s)" row ld col
+      in
+      let a_at ~row ~col = elem_at ~ld:lda ~transposed:ta ~swizzled:a_swz ~row ~col in
+      let b_at ~row ~col = elem_at ~ld:ldb ~transposed:tb ~swizzled:b_swz ~row ~col in
+      let a_row lo = if lo then "__mi * 16 + __mma_g" else "__mi * 16 + __mma_g + 8" in
+      let a_col c = Printf.sprintf "__ki * 32 + 4 * __mma_t + %d" c in
+      let b_row r = Printf.sprintf "__ki * 32 + 4 * __mma_t + %d" r in
+      let b_col = "__ni * 8 + __mma_g" in
+      (* A regs: 4 consecutive columns at rows {g, g+8} of column groups {4t, 4t+16}. *)
+      let a_reg name ~lo ~c =
+        "      "
+        ^ pack4 name "__mma_ap"
+            (Array.init 4 ~f:(fun i -> a_at ~row:(a_row lo) ~col:(a_col (c + i))))
+      in
+      (* B regs: 4 consecutive rows of the column-major fragment column [g]. *)
+      let b_reg name ~r =
+        "      "
+        ^ pack4 name "__mma_bp" (Array.init 4 ~f:(fun i -> b_at ~row:(b_row (r + i)) ~col:b_col))
+      in
+      (* The [ldmatrix] entry points, in the 16-bit view of the fp8 bytes: A's four 8x8 matrices are
+         (m rows {0-7, 8-15}) x (byte columns {0-15, 16-31}), which is the [m16n8k16] A arrangement
+         at byte granularity; B stored transposed is (n rows 0-7) x (byte columns {0-15, 16-31}),
+         giving b0/b1 in that order. With [q = lane >> 3] naming the matrix, lane [r = lane & 7]
+         supplies row [r] of matrix [q]. *)
+      let a_ldm_lines =
+        ldmatrix_lines ~indent:"      " ~regs:a_regs ~trans:false
+          ~addr:
+            (swz_saddr ~ptr:"__mma_ap" ~ld:lda ~prec:a_prec
+               ~row:"__mi * 16 + (__mma_lid & 7) + 8 * ((__mma_lid >> 3) & 1)"
+               ~col:"__ki * 32 + 16 * (__mma_lid >> 4)")
+      in
+      let b_ldm_lines =
+        ldmatrix_lines ~indent:"      " ~regs:b_regs ~trans:false
+          ~addr:
+            (swz_saddr ~ptr:"__mma_bp" ~ld:ldb ~prec:b_prec ~row:"__ni * 8 + (__mma_lid & 7)"
+               ~col:"__ki * 32 + 16 * ((__mma_lid >> 3) & 1)")
+      in
+      ( title ~suffix:" e5m2",
+        frame ~kt:(k / 32)
+          ~k_body:
+            ((if a_ldm then a_ldm_lines
+              else
+                [
+                  a_reg "__mma_a0" ~lo:true ~c:0;
+                  a_reg "__mma_a1" ~lo:false ~c:0;
+                  a_reg "__mma_a2" ~lo:true ~c:16;
+                  a_reg "__mma_a3" ~lo:false ~c:16;
+                ])
+            @ (if b_ldm then b_ldm_lines else [ b_reg "__mma_b0" ~r:0; b_reg "__mma_b1" ~r:16 ])
+            @ mma_asm "mma.sync.aligned.m16n8k32.row.col.f32.e5m2.e5m2.f32") )
+  | M16n8k16 kind ->
+      (* Raw [mma.sync] with the architecturally-defined per-lane fragment layouts of m16n8k16 (PTX
+         ISA "Matrix Fragments for mma.m16n8k16", shared by .f16 and .bf16 — which is what lets
+         {!m16n8k16_spelling} parameterize this one body over both element types). Thread [lane],
+         with groupID g = lane>>2 and threadID-in-group t = lane&3, holds: A (16x16) regs a0..a3 =
+         the element pairs at rows {g, g+8} x column pairs {2t, 2t+8}; B (16x8, column-major
+         fragment) regs b0,b1 = row pairs {2t, 2t+8} down column g; accumulator D (16x8 f32) regs
+         d0..d3 = rows {g, g+8} x columns {2t, 2t+1}. The lower-indexed element of each pair sits in
+         the low half of its .b32 register.
+
+         Unlike the fp8 arm, transposed operand storage ([ta]/[tb]) is supported by [ldmatrix] too:
+         every gather goes through [a_at]/[b_at], which index the STORED matrix at (col, row) under
+         the flag while keeping the operand's own leading dimension — the fragment content is
+         unchanged, only its addresses are. Element-wise 16-bit loads impose no alignment or stride
+         constraint and read generic addresses, so both __shared__ tiles and device pointers are
+         covered.
+
+         The accumulator is read from and written back to the 16-bit [d] once per statement, with
+         the whole [k] extent accumulated in f32 registers in between. For bf16 that is strictly
+         better rounding than the scalar fallback this replaces, which rounds to bf16 per term; for
+         f16 it is the [Numerics.Fp16_wide] residency [accum_prec] gives every serial rendering
+         (gh-ocannl-680).
+
+         Against a [resident] register fragment (gh-ocannl-1063) the call is update-only: the f32
+         registers are [frag[__mi][__ni][0..3]], loaded and stored once by the enclosing fragment
+         scope, so no [d] crosses a 16-bit boundary per outer [k] block. The leading barrier goes
+         too — no sibling zeroing of [d] is read here, and the staged tiles' visibility is the
+         staging's own barrier, as for the wmma update form — while the trailing one stays: it
+         releases the staged tiles for the next serial iteration's cooperative loads. *)
+      let { ms_as_ushort = as_ushort; ms_infix = instr_elt; _ } = m16n8k16_spelling kind in
+      (* Address of logical element (row, col) in an operand stored under its own leading dimension,
+         transposed or not. *)
+      let elem_at ~ld ~transposed ~row ~col =
+        if transposed then Printf.sprintf "(%s) * %d + (%s)" col ld row
+        else Printf.sprintf "(%s) * %d + (%s)" row ld col
+      in
+      let a_at ~row ~col = elem_at ~ld:lda ~transposed:ta ~row ~col in
+      let b_at ~row ~col = elem_at ~ld:ldb ~transposed:tb ~row ~col in
+      let pack2 name base i0 i1 =
+        Printf.sprintf "unsigned %s = (unsigned)%s(%s[%s]) | ((unsigned)%s(%s[%s]) << 16);" name
+          as_ushort base i0 as_ushort base i1
+      in
+      let a_row lo = if lo then "__mi * 16 + __mma_g" else "__mi * 16 + __mma_g + 8" in
+      let a_col c = Printf.sprintf "__ki * 16 + 2 * __mma_t + %d" c in
+      let b_row r = Printf.sprintf "__ki * 16 + 2 * __mma_t + %d" r in
+      let b_col = "__ni * 8 + __mma_g" in
+      let a_reg name ~lo ~c =
+        "      "
+        ^ pack2 name "__mma_ap"
+            (a_at ~row:(a_row lo) ~col:(a_col c))
+            (a_at ~row:(a_row lo) ~col:(a_col (c + 1)))
+      in
+      let b_reg name ~r =
+        "      "
+        ^ pack2 name "__mma_bp"
+            (b_at ~row:(b_row r) ~col:b_col)
+            (b_at ~row:(b_row (r + 1)) ~col:b_col)
+      in
+      (* The [ldmatrix] entry points. Naming the matrix [q = lane >> 3] and the row within it [r =
+         lane & 7], the four A matrices are (m rows {0-7, 8-15}) x (k columns {0-7, 8-15}) in
+         register order a0..a3, and the two B matrices are (k rows {0-7, 8-15}) x (n columns 0-7) in
+         order b0, b1. Each is read as 8 rows of 8 contiguous 16-bit elements from the operand's OWN
+         storage, so the transposed orientations swap which index walks the rows and add [.trans]
+         exactly when the fragment's minor direction is the stored major one. *)
+      let a_ldm_lines =
+        ldmatrix_lines ~indent:"      " ~regs:a_regs ~trans:ta
+          ~addr:
+            (if ta then
+               swz_saddr ~ptr:"__mma_ap" ~ld:lda ~prec:a_prec
+                 ~row:"__ki * 16 + (__mma_lid & 7) + 8 * (__mma_lid >> 4)"
+                 ~col:"__mi * 16 + 8 * ((__mma_lid >> 3) & 1)"
+             else
+               swz_saddr ~ptr:"__mma_ap" ~ld:lda ~prec:a_prec
+                 ~row:"__mi * 16 + (__mma_lid & 7) + 8 * ((__mma_lid >> 3) & 1)"
+                 ~col:"__ki * 16 + 8 * (__mma_lid >> 4)")
+      in
+      let b_ldm_lines =
+        ldmatrix_lines ~indent:"      " ~regs:b_regs ~trans:(not tb)
+          ~addr:
+            (if tb then
+               swz_saddr ~ptr:"__mma_bp" ~ld:ldb ~prec:b_prec ~row:"__ni * 8 + (__mma_lid & 7)"
+                 ~col:"__ki * 16 + 8 * ((__mma_lid >> 3) & 1)"
+             else
+               swz_saddr ~ptr:"__mma_bp" ~ld:ldb ~prec:b_prec ~row:"__ki * 16 + (__mma_lid & 15)"
+                 ~col:"__ni * 8")
+      in
+      ( title ~suffix:"",
+        frame ~kt:(k / 16)
+          ~k_body:
+            ((if a_ldm then a_ldm_lines
+              else
+                [
+                  a_reg "__mma_a0" ~lo:true ~c:0;
+                  a_reg "__mma_a1" ~lo:false ~c:0;
+                  a_reg "__mma_a2" ~lo:true ~c:8;
+                  a_reg "__mma_a3" ~lo:false ~c:8;
+                ])
+            @ (if b_ldm then b_ldm_lines else [ b_reg "__mma_b0" ~r:0; b_reg "__mma_b1" ~r:8 ])
+            @ mma_asm
+                (Printf.sprintf "mma.sync.aligned.m16n8k16.row.col.f32.%s.%s.f32" instr_elt
+                   instr_elt)) )
 
 let mma_arm ~a_prec ~b_prec ~d_prec ~scope =
   Option.map (resolve_arm ~a_prec ~b_prec ~d_prec ~scope) ~f:(fun arm ->

@@ -621,16 +621,17 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
 
     let mma_plain = function `Plain -> true | `Swizzled_b128 -> false
 
+    (* An operand as the hooks receive it, as the [Cuda_mma] acceptance predicates take it: a
+       [`Fragment] [a] or [b] is never an addressed one. *)
+    let mma_addressed space layout =
+      match space with
+      | `Fragment _ -> None
+      | (`Device | `Shared | `Thread) as space -> Some (space, layout)
+
     (* The wmma arms' one acceptance predicate ([Cuda_mma.wmma_accepts], gh-ocannl-1456) at this
-       device's compute capability, for the operands as the hooks receive them: a [`Fragment] [a] or
-       [b] is never an addressed one. *)
+       device's compute capability. *)
     let mma_wmma_accepts kind ~m ~n ~k ~d ~a:(lda, a_space, a_layout) ~b:(ldb, b_space, b_layout) =
-      let place space layout =
-        match space with
-        | `Fragment _ -> None
-        | (`Device | `Shared | `Thread) as space -> Some (space, layout)
-      in
-      match (place a_space a_layout, place b_space b_layout) with
+      match (mma_addressed a_space a_layout, mma_addressed b_space b_layout) with
       | Some a, Some b ->
           Cuda_mma.wmma_accepts kind ~cc:(min_compute_capability ()) ~m ~n ~k ~d ~a:(lda, a)
             ~b:(ldb, b)
@@ -647,96 +648,17 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
           Cuda_mma.ldmatrix_eligible (space, layout)
       | `Fragment _, (`Plain | `Swizzled_b128) -> false
 
-    (* The same per-operand load choice drives emission, its census and the cost model's load
-       tie-break: the arm's own [Cuda_mma.arm_ldmatrix_operands] over each operand's eligibility.
-       The census and the capability read [Cuda_mma.operand_loads], its per-statement-arm form. *)
-    let mma_ldmatrix_operands arm ~ta ~tb ~a ~b =
-      Cuda_mma.arm_ldmatrix_operands arm ~ta ~tb ~a:(mma_ldm a) ~b:(mma_ldm b)
-
     let mma_operand_loads = Cuda_mma.operand_loads
     let mma_operand_fragments = Cuda_mma.operand_fragments
 
-    (* Shared by statement and scope for the inline-PTX arms: the intrinsic divides the block, the
-       device meets the arm's floor, and every operand is plain or shared-swizzled. The 16-bit arms
-       read swizzled operands with [ldmatrix]; fp8 uses it in its contiguous orientations and
-       swizzle-aware byte gathers otherwise. Destination conditions remain with the callers. *)
+    (* The inline-PTX arms' one operand predicate ([Cuda_mma.inline_ptx_accepts], gh-ocannl-1511),
+       shared by statement and scope at this device's compute capability; a [`Fragment] operand is
+       never an addressed one. Destination conditions remain with the callers. *)
     let mma16_operands_ok inline ~m ~n ~k ~a:(a_space, a_layout) ~b:(b_space, b_layout) =
-      let arm = Cuda_mma.Inline_ptx inline in
-      let tm, tn, tk = Cuda_mma.arm_tile arm in
-      (mma_plain a_layout || mma_ldm (a_space, a_layout))
-      && (mma_plain b_layout || mma_ldm (b_space, b_layout))
-      && m % tm = 0
-      && n % tn = 0
-      && k % tk = 0
-      && mma_loadable a_space && mma_loadable b_space
-      && min_compute_capability () >= Cuda_mma.arm_floor arm
-
-    (* Both inline-PTX shapes address and move the same four f32 accumulators. The statement
-       declares scalar registers on load; a persistent boundary moves to/from its existing fragment
-       array. [None] is the f32 storage identity; [Some] names the boundary conversions. *)
-    let mma16_d_rows ~elt_typ ~ldd =
-      [
-        Printf.sprintf
-          "%s *__mma_dr0 = __mma_dp + (__mi * 16 + __mma_g) * %d + __ni * 8 + 2 * __mma_t;" elt_typ
-          ldd;
-        Printf.sprintf "%s *__mma_dr1 = __mma_dr0 + 8 * %d;" elt_typ ldd;
-      ]
-
-    let mma16_d_moves ~dir ~reg ~declare ~d_cvt =
-      let convert value =
-        match d_cvt with
-        | None -> value
-        | Some (widen, narrow) ->
-            let conversion = match dir with `Load -> widen | `Store -> narrow in
-            Printf.sprintf "%s(%s)" conversion value
-      in
-      let move i row col =
-        let cell = Printf.sprintf "__mma_dr%d[%d]" row col in
-        match dir with
-        | `Load ->
-            Printf.sprintf "%s%s = %s;" (if declare then "float " else "") (reg i) (convert cell)
-        | `Store -> Printf.sprintf "%s = %s;" cell (convert (reg i))
-      in
-      [ move 0 0 0 ^ " " ^ move 1 0 1; move 2 1 0 ^ " " ^ move 3 1 1 ]
-
-    let mma16_acc resident i =
-      match resident with
-      | None -> Printf.sprintf "__mma_d%d" i
-      | Some frag -> Printf.sprintf "%s[__mi][__ni][%d]" frag i
-
-    let mma16_either resident ~fragment ~statement =
-      match resident with Some _ -> fragment | None -> statement
-
-    let mma16_d_statement_lines ~dir ~elt_typ ~d_cvt ~ldd =
-      let rows = match dir with `Load -> mma16_d_rows ~elt_typ ~ldd | `Store -> [] in
-      List.map
-        (rows @ mma16_d_moves ~dir ~reg:(mma16_acc None) ~declare:true ~d_cvt)
-        ~f:(fun line -> "    " ^ line)
-
-    (* The [d] boundary of an m16n8 register fragment [frag] ([float frag[mt][nt][4]], one m16n8
-       accumulator tile per [(__mi, __ni)]; gh-ocannl-1063): [`Load] fills it from the [elt] storage
-       at [__mma_dp], applying [d_cvt] on load/store when storage is narrower than f32. Unlike
-       [wmma_d_boundary_lines] no coordinate table is needed: the PTX ISA fixes the accumulator
-       layout — with groupID g = lane>>2 and threadID-in-group t = lane&3, registers 0..3 hold rows
-       {g, g+8} x columns {2t, 2t+1} — which is the same mapping the per-statement rendering in
-       [mma_syntax] loads and stores through. *)
-    let mma16_d_boundary_lines ~dir ~frag ~elt_typ ~d_cvt ~ldd ~mt ~nt =
-      let reg i = Printf.sprintf "%s[__mi][__ni][%d]" frag i in
-      [
-        "{ /* mma.sync register fragment d boundary: the m16n8 f32 accumulator layout */";
-        "  unsigned __mma_lid;";
-        "  asm(\"mov.u32 %0, %%laneid;\" : \"=r\"(__mma_lid));";
-        "  const int __mma_g = (int)(__mma_lid >> 2);";
-        "  const int __mma_t = (int)(__mma_lid & 3);";
-        "#pragma unroll";
-        Printf.sprintf "  for (int __mi = 0; __mi < %d; ++__mi) {" mt;
-        "#pragma unroll";
-        Printf.sprintf "    for (int __ni = 0; __ni < %d; ++__ni) {" nt;
-      ]
-      @ List.map
-          (mma16_d_rows ~elt_typ ~ldd @ mma16_d_moves ~dir ~reg ~declare:false ~d_cvt)
-          ~f:(fun line -> "      " ^ line)
-      @ [ "    }"; "  }"; "}" ]
+      match (mma_addressed a_space a_layout, mma_addressed b_space b_layout) with
+      | Some a, Some b ->
+          Cuda_mma.inline_ptx_accepts inline ~cc:(min_compute_capability ()) ~m ~n ~k ~a ~b
+      | _ -> false
 
     (* Tensorize-mma T3: cooperative tile-MMA emission for [Low_level.Tile_mma]. Two renderings:
 
@@ -792,55 +714,6 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
           in
           let loadable = mma_loadable and plain = mma_plain in
           let a_swz = mma_ldm (a_space, a_layout) and b_swz = mma_ldm (b_space, b_layout) in
-          (* Element offset in a [Swizzle_b128] tile: XOR the column's 16-byte-unit index with the
-             low row bits, preserving the within-unit remainder. Both [ldmatrix] addresses and fp8
-             byte gathers use this map. *)
-          let b128_offset ~ld ~u ~row ~col =
-            let shift = Int.floor_log2 u in
-            Printf.sprintf "(%s) * %d + (((((%s) >> %d) ^ ((%s) & %d)) << %d) + ((%s) & %d))" row ld
-              col shift row
-              ((ld / u) - 1)
-              shift col (u - 1)
-          in
-          (* [ldmatrix] takes a [.shared] address, converted from the generic window. Its fragment
-             entry points have columns aligned to 16-byte units. *)
-          let swz_saddr ~ptr ~ld ~prec ~row ~col =
-            let offset = b128_offset ~ld ~u:(16 / Ops.prec_in_bytes prec) ~row ~col in
-            Printf.sprintf "(unsigned)__cvta_generic_to_shared(%s + %s)" ptr offset
-          in
-          (* [ldmatrix.sync.aligned.m8n8.xN[.trans].shared.b16]: the first 8N lanes each supply one
-             16-byte row address of the N 8x8 tiles of 16-bit elements, and the results land in
-             exactly the per-lane fragment layout [mma.sync] consumes — replacing 4 (resp. 2)
-             per-lane gather chains with one instruction. The remaining lanes' addresses are
-             ignored; they are still computed in range. *)
-          let ldmatrix_lines ~indent ~regs ~trans ~addr =
-            let num = List.length regs in
-            let outs =
-              String.concat ~sep:", " (List.map regs ~f:(fun r -> Printf.sprintf "\"=r\"(%s)" r))
-            in
-            let slots =
-              String.concat ~sep:"," (List.mapi regs ~f:(fun i _ -> Printf.sprintf "%%%d" i))
-            in
-            [
-              Printf.sprintf "%sunsigned %s;" indent (String.concat ~sep:", " regs);
-              Printf.sprintf "%s{ unsigned __mma_sa = %s;" indent addr;
-              Printf.sprintf
-                "%s  asm volatile(\"ldmatrix.sync.aligned.m8n8.x%d%s.shared.b16 {%s}, [%%%d];\" : \
-                 %s : \"r\"(__mma_sa)); }"
-                indent num
-                (if trans then ".trans" else "")
-                slots num outs;
-            ]
-          in
-          (* Names the load path in the emitted block comment, so a reader (and the structural test
-             pins) can tell which operands came in through [ldmatrix]. *)
-          let ldm_tag ~a ~b =
-            match (a, b) with
-            | false, false -> ""
-            | true, true -> " ldmatrix a,b"
-            | true, false -> " ldmatrix a"
-            | false, true -> " ldmatrix b"
-          in
           (* gh-ocannl-1063: an update-only call against the register fragment array the inline-PTX
              arms' [mma_fragment_syntax] scope declared. *)
           let resident =
@@ -848,352 +721,47 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
             | Some (Cuda_mma.Inline_ptx _), `Fragment frag -> Some frag
             | _, (`Fragment _ | `Device | `Shared | `Thread) -> None
           in
-          (* fp8's [ldmatrix] eligibility is one-sided per operand, and the sides are opposite
-             (gh-ocannl-481 item 3, D2). [ldmatrix.b16] moves 16-bit units, so it can build a
-             fragment register only when the 4 fp8 bytes that register holds are CONTIGUOUS in
-             storage. For A those 4 bytes are 4 consecutive [k] at fixed [m] — contiguous exactly
-             when A is stored row-major ([ta = false]); for B they are 4 consecutive [k] at fixed
-             [n] — contiguous exactly when B is stored transposed ([tb = true]). The other
-             orientations keep byte gathers through the tile's XOR-swizzled address map. This lets
-             BOTH row-major staged operands be swizzled: A uses [ldmatrix], B gathers its strided
-             bytes, and both twins share the accumulator scope. *)
-          let a_ldm, b_ldm =
-            match arm with
-            | Some arm ->
-                mma_ldmatrix_operands arm ~ta ~tb ~a:(a_space, a_layout) ~b:(b_space, b_layout)
-            | None -> (false, false)
-          in
           match arm with
           | None -> None
-          | Some (Cuda_mma.Inline_ptx (Cuda_mma.Fp8_m16n8k32 as inline) as arm) ->
+          | Some (Cuda_mma.Inline_ptx inline) ->
               if
                 plain d_layout
                 && (loadable d_space || Option.is_some resident)
                 && mma16_operands_ok inline ~m ~n ~k ~a:(a_space, a_layout) ~b:(b_space, b_layout)
               then
-                (* Raw [mma.sync] with the architecture-defined per-lane fragment layouts of
-                   m16n8k32 (PTX ISA "Matrix Fragments for mma.m16n8k32"; fp8 shares the .s8/.u8
-                   layouts). Thread [lane], with groupID g = lane>>2 and threadID-in-group t =
-                   lane&3, holds: A (16x32, row-major source) regs a0..a3 = 4 consecutive bytes at
-                   rows {g, g+8} x column groups {4t, 4t+16}; B (32x8, column-major fragment from
-                   our row-major source) regs b0,b1 = rows {4t..4t+3, 16+4t..16+4t+3} down column g,
-                   gathered bytewise (stride ldb); accumulator D (16x8 f32) regs d0..d3 = rows {g,
-                   g+8} x columns {2t, 2t+1}. Low-indexed elements sit in low-order bytes of each
-                   .b32 register. Byte loads impose no alignment or stride constraints and read
-                   generic addresses, covering both __shared__ tiles and device pointers.
-
-                   Transposed operand storage ([ta]/[tb], gh-ocannl-481 item 1) is bookkeeping here,
-                   not a layout constraint: every fragment byte is addressed by its logical (row,
-                   col) through [a_at]/[b_at], which index the STORED matrix at (col, row) under the
-                   flag while keeping the operand's own leading dimension. The fragment content is
-                   unchanged, only its addresses are — so the gradient GEMMs ([dA = g.B^T], [dB =
-                   A^T.g]), whose layouts are exactly these, tensorize instead of silently
-                   scalar-falling-back. *)
+                (* The loops are [Cuda_mma.inline_ptx_statement_lines] (gh-ocannl-1511), where the
+                   per-lane fragment layouts, the [ldmatrix] entry points and the update-only form
+                   against a [resident] register fragment are documented. *)
                 let open PPrint in
-                let mt = m / 16 and nt = n / 8 and kt = k / 32 in
-                let pack4 name base offs =
-                  Printf.sprintf
-                    "unsigned %s = (unsigned)%s[%s] | ((unsigned)%s[%s] << 8) | ((unsigned)%s[%s] \
-                     << 16) | ((unsigned)%s[%s] << 24);"
-                    name base offs.(0) base offs.(1) base offs.(2) base offs.(3)
+                let title, body_lines =
+                  Cuda_mma.inline_ptx_statement_lines inline ~a_prec ~b_prec ~resident ~ta ~tb ~lda
+                    ~ldb ~ldd ~a_swz ~b_swz ~m ~n ~k
                 in
-                (* Byte offset of logical element (row, col) in an operand stored under its own
-                   leading dimension, transposed or not, then through the b128 map when swizzled.
-                   fp8 is one byte per element, so element index = byte offset from the [unsigned
-                   char *] base. *)
-                let elem_at ~ld ~transposed ~swizzled ~row ~col =
-                  let row, col = if transposed then (col, row) else (row, col) in
-                  if swizzled then b128_offset ~ld ~u:16 ~row ~col
-                  else Printf.sprintf "(%s) * %d + (%s)" row ld col
-                in
-                let a_at ~row ~col = elem_at ~ld:lda ~transposed:ta ~swizzled:a_swz ~row ~col in
-                let b_at ~row ~col = elem_at ~ld:ldb ~transposed:tb ~swizzled:b_swz ~row ~col in
-                let a_row lo = if lo then "__mi * 16 + __mma_g" else "__mi * 16 + __mma_g + 8" in
-                let a_col c = Printf.sprintf "__ki * 32 + 4 * __mma_t + %d" c in
-                let b_row r = Printf.sprintf "__ki * 32 + 4 * __mma_t + %d" r in
-                let b_col = "__ni * 8 + __mma_g" in
-                (* A regs: 4 consecutive columns at rows {g, g+8} of column groups {4t, 4t+16}. *)
-                let a_reg name ~lo ~c =
-                  "      "
-                  ^ pack4 name "__mma_ap"
-                      (Array.init 4 ~f:(fun i -> a_at ~row:(a_row lo) ~col:(a_col (c + i))))
-                in
-                (* B regs: 4 consecutive rows of the column-major fragment column [g]. *)
-                let b_reg name ~r =
-                  "      "
-                  ^ pack4 name "__mma_bp"
-                      (Array.init 4 ~f:(fun i -> b_at ~row:(b_row (r + i)) ~col:b_col))
-                in
-                (* The [ldmatrix] entry points, in the 16-bit view of the fp8 bytes: A's four 8x8
-                   matrices are (m rows {0-7, 8-15}) x (byte columns {0-15, 16-31}), which is the
-                   [m16n8k16] A arrangement at byte granularity; B stored transposed is (n rows 0-7)
-                   x (byte columns {0-15, 16-31}), giving b0/b1 in that order. With [q = lane >> 3]
-                   naming the matrix, lane [r = lane & 7] supplies row [r] of matrix [q]. *)
-                let a_ldm_lines =
-                  ldmatrix_lines ~indent:"      "
-                    ~regs:[ "__mma_a0"; "__mma_a1"; "__mma_a2"; "__mma_a3" ]
-                    ~trans:false
-                    ~addr:
-                      (swz_saddr ~ptr:"__mma_ap" ~ld:lda ~prec:a_prec
-                         ~row:"__mi * 16 + (__mma_lid & 7) + 8 * ((__mma_lid >> 3) & 1)"
-                         ~col:"__ki * 32 + 16 * (__mma_lid >> 4)")
-                in
-                let b_ldm_lines =
-                  ldmatrix_lines ~indent:"      " ~regs:[ "__mma_b0"; "__mma_b1" ] ~trans:false
-                    ~addr:
-                      (swz_saddr ~ptr:"__mma_bp" ~ld:ldb ~prec:b_prec
-                         ~row:"__ni * 8 + (__mma_lid & 7)"
-                         ~col:"__ki * 32 + 16 * ((__mma_lid >> 3) & 1)")
-                in
-                let barrier = "__syncthreads();" in
-                let either ~fragment ~statement = mma16_either resident ~fragment ~statement in
-                let acc = mma16_acc resident in
-                let unroll = either ~fragment:[ "#pragma unroll" ] ~statement:[] in
-                let body_lines =
-                  either ~fragment:[] ~statement:[ barrier ]
-                  @ [
-                      "unsigned __mma_lid;";
-                      "asm(\"mov.u32 %0, %%laneid;\" : \"=r\"(__mma_lid));";
-                      "const int __mma_g = (int)(__mma_lid >> 2);";
-                      "const int __mma_t = (int)(__mma_lid & 3);";
-                    ]
-                  @ unroll
-                  @ [ Printf.sprintf "for (int __mi = 0; __mi < %d; ++__mi) {" mt ]
-                  @ unroll
-                  @ [ Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt ]
-                  @ either ~fragment:[]
-                      ~statement:
-                        (mma16_d_statement_lines ~dir:`Load ~elt_typ:"float" ~d_cvt:None ~ldd)
-                  @ [ Printf.sprintf "    for (int __ki = 0; __ki < %d; ++__ki) {" kt ]
-                  @ (if a_ldm then a_ldm_lines
-                     else
-                       [
-                         a_reg "__mma_a0" ~lo:true ~c:0;
-                         a_reg "__mma_a1" ~lo:false ~c:0;
-                         a_reg "__mma_a2" ~lo:true ~c:16;
-                         a_reg "__mma_a3" ~lo:false ~c:16;
-                       ])
-                  @ (if b_ldm then b_ldm_lines
-                     else [ b_reg "__mma_b0" ~r:0; b_reg "__mma_b1" ~r:16 ])
-                  @ [
-                      "      asm(\"mma.sync.aligned.m16n8k32.row.col.f32.e5m2.e5m2.f32 \"";
-                      "          \"{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\"";
-                      Printf.sprintf "          : \"+f\"(%s), \"+f\"(%s), \"+f\"(%s), \"+f\"(%s)"
-                        (acc 0) (acc 1) (acc 2) (acc 3);
-                      "          : \"r\"(__mma_a0), \"r\"(__mma_a1), \"r\"(__mma_a2), \
-                       \"r\"(__mma_a3), \"r\"(__mma_b0), \"r\"(__mma_b1));";
-                      "    }";
-                    ]
-                  @ either ~fragment:[]
-                      ~statement:
-                        (mma16_d_statement_lines ~dir:`Store ~elt_typ:"float" ~d_cvt:None ~ldd)
-                  @ [ "  }"; "}"; barrier ]
-                in
-                let cast_ptr name ptr =
-                  string (Printf.sprintf "const unsigned char *%s = (const unsigned char *)(" name)
-                  ^^ ptr ^^ string ");"
-                in
-                let body ~a_ptr ~b_ptr =
-                  either ~fragment:empty
-                    ~statement:(string "float *__mma_dp = " ^^ d_ptr ^^ semi ^^ hardline)
-                  ^^ cast_ptr "__mma_ap" a_ptr ^^ hardline ^^ cast_ptr "__mma_bp" b_ptr ^^ hardline
-                  ^^ separate_map hardline string body_lines
-                in
-                Some
-                  (fun ~a_ptr ~b_ptr ->
-                    group
-                      (string
-                         (Printf.sprintf "{ /* tile_mma %s%dx%dx%d (%s) e5m2%s */"
-                            (either ~fragment:"fragment update " ~statement:"")
-                            m n k (Cuda_mma.arm_marker arm) (ldm_tag ~a:a_ldm ~b:b_ldm))
-                      ^^ nest 2 (hardline ^^ body ~a_ptr ~b_ptr)
-                      ^^ hardline ^^ rbrace))
-              else None
-          | Some (Cuda_mma.Inline_ptx (Cuda_mma.M16n8k16 kind as inline) as arm) ->
-              if
-                (* Unlike fp8, both 16-bit operands can come in through [ldmatrix] in either storage
-                   orientation: the fragment registers hold 16-bit element PAIRS, and the pair a
-                   lane needs is contiguous under one of the two forms — [.trans] transposes each
-                   8x8 tile on distribution, which is exactly the difference between the two
-                   orientations. *)
-                plain d_layout
-                && (loadable d_space || Option.is_some resident)
-                && mma16_operands_ok inline ~m ~n ~k ~a:(a_space, a_layout) ~b:(b_space, b_layout)
-              then
-                (* Raw [mma.sync] with the architecturally-defined per-lane fragment layouts of
-                   m16n8k16 (PTX ISA "Matrix Fragments for mma.m16n8k16", shared by .f16 and .bf16 —
-                   which is what lets [Cuda_mma.m16n8k16_spelling] parameterize this one body over
-                   both element types). Thread [lane], with groupID g = lane>>2 and
-                   threadID-in-group t = lane&3, holds: A (16x16) regs a0..a3 = the element pairs at
-                   rows {g, g+8} x column pairs {2t, 2t+8}; B (16x8, column-major fragment) regs
-                   b0,b1 = row pairs {2t, 2t+8} down column g; accumulator D (16x8 f32) regs d0..d3
-                   = rows {g, g+8} x columns {2t, 2t+1}. The lower-indexed element of each pair sits
-                   in the low half of its .b32 register.
-
-                   Unlike the fp8 arm, transposed operand storage ([ta]/[tb]) is supported: every
-                   gather goes through [a_at]/[b_at], which index the STORED matrix at (col, row)
-                   under the flag while keeping the operand's own leading dimension — the fragment
-                   content is unchanged, only its addresses are. Element-wise 16-bit loads impose no
-                   alignment or stride constraint and read generic addresses, so both __shared__
-                   tiles and device pointers are covered.
-
-                   The accumulator is read from and written back to the 16-bit [d] once per
-                   statement, with the whole [k] extent accumulated in f32 registers in between. For
-                   bf16 that is strictly better rounding than the scalar fallback this replaces,
-                   which rounds to bf16 per term; for f16 it is the [Numerics.Fp16_wide] residency
-                   [accum_prec] gives every serial rendering (gh-ocannl-680).
-
-                   Against a [resident] register fragment (gh-ocannl-1063) the call is update-only:
-                   the f32 registers are [frag[__mi][__ni][0..3]], loaded and stored once by the
-                   enclosing [mma_fragment_syntax] scope, so no [d] crosses a 16-bit boundary per
-                   outer [k] block. The leading barrier goes too — no sibling zeroing of [d] is read
-                   here, and the staged tiles' visibility is the staging's own barrier, as for the
-                   wmma update form — while the trailing one stays: it releases the staged tiles for
-                   the next serial iteration's cooperative loads. *)
-                let open PPrint in
-                let {
-                  Cuda_mma.ms_elt_typ = elt_typ;
-                  ms_as_ushort = as_ushort;
-                  ms_widen = to_float;
-                  ms_narrow = from_float;
-                  ms_infix = instr_elt;
-                } =
-                  Cuda_mma.m16n8k16_spelling kind
-                in
-                let marker = Cuda_mma.arm_marker arm in
-                let mt = m / 16 and nt = n / 8 and kt = k / 16 in
-                (* Address of logical element (row, col) in an operand stored under its own leading
-                   dimension, transposed or not. *)
-                let elem_at ~ld ~transposed ~row ~col =
-                  if transposed then Printf.sprintf "(%s) * %d + (%s)" col ld row
-                  else Printf.sprintf "(%s) * %d + (%s)" row ld col
-                in
-                let a_at ~row ~col = elem_at ~ld:lda ~transposed:ta ~row ~col in
-                let b_at ~row ~col = elem_at ~ld:ldb ~transposed:tb ~row ~col in
-                let pack2 name base i0 i1 =
-                  Printf.sprintf
-                    "unsigned %s = (unsigned)%s(%s[%s]) | ((unsigned)%s(%s[%s]) << 16);" name
-                    as_ushort base i0 as_ushort base i1
-                in
-                let a_row lo = if lo then "__mi * 16 + __mma_g" else "__mi * 16 + __mma_g + 8" in
-                let a_col c = Printf.sprintf "__ki * 16 + 2 * __mma_t + %d" c in
-                let b_row r = Printf.sprintf "__ki * 16 + 2 * __mma_t + %d" r in
-                let b_col = "__ni * 8 + __mma_g" in
-                let a_reg name ~lo ~c =
-                  "      "
-                  ^ pack2 name "__mma_ap"
-                      (a_at ~row:(a_row lo) ~col:(a_col c))
-                      (a_at ~row:(a_row lo) ~col:(a_col (c + 1)))
-                in
-                let b_reg name ~r =
-                  "      "
-                  ^ pack2 name "__mma_bp"
-                      (b_at ~row:(b_row r) ~col:b_col)
-                      (b_at ~row:(b_row (r + 1)) ~col:b_col)
-                in
-                (* The [ldmatrix] entry points. Naming the matrix [q = lane >> 3] and the row within
-                   it [r = lane & 7], the four A matrices are (m rows {0-7, 8-15}) x (k columns
-                   {0-7, 8-15}) in register order a0..a3, and the two B matrices are (k rows {0-7,
-                   8-15}) x (n columns 0-7) in order b0, b1. Each is read as 8 rows of 8 contiguous
-                   16-bit elements from the operand's OWN storage, so the transposed orientations
-                   swap which index walks the rows and add [.trans] exactly when the fragment's
-                   minor direction is the stored major one. *)
-                let a_ldm_lines =
-                  ldmatrix_lines ~indent:"      "
-                    ~regs:[ "__mma_a0"; "__mma_a1"; "__mma_a2"; "__mma_a3" ]
-                    ~trans:ta
-                    ~addr:
-                      (if ta then
-                         swz_saddr ~ptr:"__mma_ap" ~ld:lda ~prec:a_prec
-                           ~row:"__ki * 16 + (__mma_lid & 7) + 8 * (__mma_lid >> 4)"
-                           ~col:"__mi * 16 + 8 * ((__mma_lid >> 3) & 1)"
-                       else
-                         swz_saddr ~ptr:"__mma_ap" ~ld:lda ~prec:a_prec
-                           ~row:"__mi * 16 + (__mma_lid & 7) + 8 * ((__mma_lid >> 3) & 1)"
-                           ~col:"__ki * 16 + 8 * (__mma_lid >> 4)")
-                in
-                let b_ldm_lines =
-                  ldmatrix_lines ~indent:"      " ~regs:[ "__mma_b0"; "__mma_b1" ] ~trans:(not tb)
-                    ~addr:
-                      (if tb then
-                         swz_saddr ~ptr:"__mma_bp" ~ld:ldb ~prec:b_prec
-                           ~row:"__ni * 8 + (__mma_lid & 7)"
-                           ~col:"__ki * 16 + 8 * ((__mma_lid >> 3) & 1)"
-                       else
-                         swz_saddr ~ptr:"__mma_bp" ~ld:ldb ~prec:b_prec
-                           ~row:"__ki * 16 + (__mma_lid & 15)" ~col:"__ni * 8")
-                in
-                let barrier = "__syncthreads();" in
-                (* Which of two renderings: against the scope's register [fragment], or the
-                   self-contained [statement] that loads and stores [d] itself. *)
-                let either ~fragment ~statement = mma16_either resident ~fragment ~statement in
-                let acc = mma16_acc resident in
-                let unroll = either ~fragment:[ "#pragma unroll" ] ~statement:[] in
-                let body_lines =
-                  either ~fragment:[] ~statement:[ barrier ]
-                  @ [
-                      "unsigned __mma_lid;";
-                      "asm(\"mov.u32 %0, %%laneid;\" : \"=r\"(__mma_lid));";
-                      "const int __mma_g = (int)(__mma_lid >> 2);";
-                      "const int __mma_t = (int)(__mma_lid & 3);";
-                    ]
-                  @ unroll
-                  @ [ Printf.sprintf "for (int __mi = 0; __mi < %d; ++__mi) {" mt ]
-                  @ unroll
-                  @ [ Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt ]
-                  @ either ~fragment:[]
-                      ~statement:
-                        (mma16_d_statement_lines ~dir:`Load ~elt_typ
-                           ~d_cvt:(Some (to_float, from_float))
-                           ~ldd)
-                  @ [ Printf.sprintf "    for (int __ki = 0; __ki < %d; ++__ki) {" kt ]
-                  @ (if a_ldm then a_ldm_lines
-                     else
-                       [
-                         a_reg "__mma_a0" ~lo:true ~c:0;
-                         a_reg "__mma_a1" ~lo:false ~c:0;
-                         a_reg "__mma_a2" ~lo:true ~c:8;
-                         a_reg "__mma_a3" ~lo:false ~c:8;
-                       ])
-                  @ (if b_ldm then b_ldm_lines else [ b_reg "__mma_b0" ~r:0; b_reg "__mma_b1" ~r:8 ])
-                  @ [
-                      Printf.sprintf
-                        "      asm(\"mma.sync.aligned.m16n8k16.row.col.f32.%s.%s.f32 \"" instr_elt
-                        instr_elt;
-                      "          \"{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\"";
-                      Printf.sprintf "          : \"+f\"(%s), \"+f\"(%s), \"+f\"(%s), \"+f\"(%s)"
-                        (acc 0) (acc 1) (acc 2) (acc 3);
-                      "          : \"r\"(__mma_a0), \"r\"(__mma_a1), \"r\"(__mma_a2), \
-                       \"r\"(__mma_a3), \"r\"(__mma_b0), \"r\"(__mma_b1));";
-                      "    }";
-                    ]
-                  @ either ~fragment:[]
-                      ~statement:
-                        (mma16_d_statement_lines ~dir:`Store ~elt_typ
-                           ~d_cvt:(Some (to_float, from_float))
-                           ~ldd)
-                  @ [ "  }"; "}"; barrier ]
-                in
+                let elt_typ, _ = Cuda_mma.inline_ptx_d_storage inline in
                 let ptr_decl name typ ptr =
                   string (Printf.sprintf "%s *%s = " typ name) ^^ ptr ^^ semi
                 in
+                (* fp8 reads its operands as bytes; the 16-bit arms at their element type. *)
+                let operand_decl name ptr =
+                  match inline with
+                  | Cuda_mma.Fp8_m16n8k32 ->
+                      string
+                        (Printf.sprintf "const unsigned char *%s = (const unsigned char *)(" name)
+                      ^^ ptr ^^ string ");"
+                  | Cuda_mma.M16n8k16 _ -> ptr_decl name ("const " ^ elt_typ) ptr
+                in
                 let body ~a_ptr ~b_ptr =
-                  either ~fragment:empty ~statement:(ptr_decl "__mma_dp" elt_typ d_ptr ^^ hardline)
-                  ^^ ptr_decl "__mma_ap" ("const " ^ elt_typ) a_ptr
-                  ^^ hardline
-                  ^^ ptr_decl "__mma_bp" ("const " ^ elt_typ) b_ptr
+                  (match resident with
+                    | Some _ -> empty
+                    | None -> ptr_decl "__mma_dp" elt_typ d_ptr ^^ hardline)
+                  ^^ operand_decl "__mma_ap" a_ptr ^^ hardline ^^ operand_decl "__mma_bp" b_ptr
                   ^^ hardline
                   ^^ separate_map hardline string body_lines
                 in
                 Some
                   (fun ~a_ptr ~b_ptr ->
                     group
-                      (string
-                         (Printf.sprintf "{ /* tile_mma %s%dx%dx%d (%s)%s */"
-                            (either ~fragment:"fragment update " ~statement:"")
-                            m n k marker (ldm_tag ~a:a_ldm ~b:b_ldm))
-                      ^^ nest 2 (hardline ^^ body ~a_ptr ~b_ptr)
-                      ^^ hardline ^^ rbrace))
+                      (string title ^^ nest 2 (hardline ^^ body ~a_ptr ~b_ptr) ^^ hardline ^^ rbrace))
               else None
           | Some (Cuda_mma.Wmma kind as arm) -> (
               (* wmma fragments are opaque: [load_matrix_sync] assumes row-major (or column-major)
@@ -1348,11 +916,10 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
             when plain d_layout && loadable d_space
                  && mma16_operands_ok inline ~m ~n ~k ~a:(a_space, a_layout) ~b:(b_space, b_layout)
             ->
-              let elt_typ, d_cvt = Cuda_mma.inline_ptx_d_storage inline in
               let marker = Cuda_mma.arm_marker arm in
               let mt = m / 16 and nt = n / 8 in
               let boundary dir =
-                mma16_d_boundary_lines ~dir ~frag:fragment ~elt_typ ~d_cvt ~ldd ~mt ~nt
+                Cuda_mma.inline_ptx_d_boundary_lines inline ~dir ~frag:fragment ~ldd ~mt ~nt
               in
               Some
                 (scope_doc

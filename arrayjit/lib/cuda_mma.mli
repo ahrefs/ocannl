@@ -201,6 +201,55 @@ val inline_ptx_d_storage : inline_ptx -> string * (string * string) option
 (** An inline-PTX arm's destination element type and its [(widen, narrow)] boundary conversions
     ([None] for fp8's f32 destination, moved directly). *)
 
+val inline_ptx_accepts :
+  inline_ptx ->
+  cc:int ->
+  m:int ->
+  n:int ->
+  k:int ->
+  a:Backend_intf.mma_operand_place ->
+  b:Backend_intf.mma_operand_place ->
+  bool
+(** Whether an inline-PTX arm renders a statement's operands on a device of compute capability [cc]:
+    {!arm_tile} dividing the extents, every operand plain or {!ldmatrix_eligible}, in device or
+    shared memory, and [cc] at the arm's {!arm_floor}. The one operand predicate both of
+    [Cuda_backend]'s inline-PTX sites decide by (gh-ocannl-1511); the destination's conditions stay
+    with them. *)
+
+val inline_ptx_statement_lines :
+  inline_ptx ->
+  a_prec:Ops.prec ->
+  b_prec:Ops.prec ->
+  resident:string option ->
+  ta:bool ->
+  tb:bool ->
+  lda:int ->
+  ldb:int ->
+  ldd:int ->
+  a_swz:bool ->
+  b_swz:bool ->
+  m:int ->
+  n:int ->
+  k:int ->
+  string * string list
+(** An accepted [m x n x k] inline-PTX statement as [Cuda_backend]'s [mma_syntax] renders it
+    (gh-ocannl-1511): its block-comment title and the lines after the [__mma_dp] / [__mma_ap] /
+    [__mma_bp] pointer declarations -- the [__mi x __ni x __ki] loops, each step gathering (or
+    [ldmatrix]-loading) an [a] and a [b] fragment and issuing one [mma.sync]. [resident] names the
+    register fragment array an update-only call accumulates into ([None]: a self-contained statement
+    that loads and stores [d] at its storage type, {!inline_ptx_d_storage}). [a_swz] / [b_swz]: the
+    operand is {!ldmatrix_eligible}; the arm's {!arm_ldmatrix_operands} decides which of them load
+    through [ldmatrix], and the others gather per lane through the swizzled address map.
+    {!operand_fragments} and {!operand_loads} describe its loads, which
+    [test/operations/mma_format_arm_tables] counts. *)
+
+val inline_ptx_d_boundary_lines :
+  inline_ptx -> dir:[ `Load | `Store ] -> frag:string -> ldd:int -> mt:int -> nt:int -> string list
+(** The [d] boundary of an inline-PTX register fragment scope (gh-ocannl-1063): [frag] is
+    [float frag[mt][nt][4]], one m16n8 f32 accumulator tile per [(__mi, __ni)], filled from
+    ([`Load]) or written back to ([`Store]) the storage at [__mma_dp] (leading dimension [ldd]),
+    converted per {!inline_ptx_d_storage}. *)
+
 (** {1 Capability} *)
 
 val mma_arm :
