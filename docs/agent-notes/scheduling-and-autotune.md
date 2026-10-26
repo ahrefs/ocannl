@@ -2618,15 +2618,23 @@ files.
   (`test/operations/autotune_budget.ml`). **The budget bounds wall time, not only the last start**
   (gh-ocannl-1556): checked only as attempts started, a 120 s budget ran 452 s on tuf, the slow
   candidate in flight finishing its whole compile and timing. Now an attempt also does not start
-  when the elapsed time plus the costliest candidate compile so far (`costliest_compile_s`, on the
-  same clock; the base compile is not evidence, so the first candidate compile is unprojected)
-  would pass it, and a non-floor candidate's timing is abandoned before its first batch past it
-  (`time_routine ?stop`, raising `Timing_stopped`, caught inside the candidate's failure boundary
-  as an unranked `Ok None`, not a decline). The stop is strict (`elapsed > b`) and the projection
-  admits an exact fit, so a virtual clock that charges a whole attempt as it starts (the scripted
-  harness's attempt clock) cuts exactly where it did. `test/operations/autotune_budget_overrun.ml`
-  charges compiles through the compile observer and timing batches as budget reads after
-  `on_candidate_preflight`; the stated tolerance is in `ocannl_config.reference`. On a small cc chain the default seed dedups against the
+  when the elapsed time plus TWO compiles as costly as the costliest so far would pass it
+  (`costliest_compile_s`, on the same clock): the attempt's own, and a reserve for the winner's
+  recompile, which runs after every check (gh-ocannl-1604); and a non-floor candidate's timing is
+  abandoned before its first batch past the budget less that reserve (`time_routine ?stop`, raising
+  `Timing_stopped`, caught inside the candidate's failure boundary as an unranked `Ok None`, not a
+  decline). The evidence starts at the base compile, measured from the transform's start (after
+  the `baseline` attempt hook, as a candidate's span starts after its hook), so the first candidate
+  compile is projected too; on a GPU the baseline is refused before codegen, so there it is the
+  first candidate's cold compile that sets it. The max is conservative under the kernel cache (a
+  cold compile keeps the projection high, and a cached recompile costs seconds) -- a cache-aware
+  estimate is the refinement if a budget's yield matters. The stop is strict (`elapsed + reserve >
+  b`) and the projection admits an exact fit, so a virtual clock that charges a whole attempt as it
+  starts (the scripted harness's attempt clock, under which every compile spans zero) cuts exactly
+  where it did. `test/operations/autotune_budget_overrun.ml` charges the base compile, candidate
+  compiles and the winner's recompile through the compile observer (stages `base_compile`,
+  `candidate`, `winner_compile`) and timing batches as budget reads after `on_candidate_preflight`;
+  the stated tolerance is in `ocannl_config.reference`. On a small cc chain the default seed dedups against the
   baseline, so check the floor's TIME (`default_ms`), not its label. Every report carries the
   budget its call resolved (`budget_s`, gh-ocannl-1438) -- the call's, where a replay's
   `budget_cut` is the crown's -- and benchmark arms carry it as `budget_s`. It is deliberately not
