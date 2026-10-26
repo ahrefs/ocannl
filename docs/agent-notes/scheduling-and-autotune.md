@@ -2751,7 +2751,18 @@ files.
   `tf32_reference_rounding`. Which targets: the `Tile_mma` accumulator when the reference writes
   it, else the one product accumulation of the pre-schedule segment; a mixed fallback rendering or
   an ambiguous match is `UNJUDGED` (a failure), never a guess. `BENCH_PARITY_ROUND=0` is the
-  control.
+  control. **Equal rounding still leaves accumulation-order ties**: tensor-core accumulation is not
+  IEEE-ordered, and a residual's pre-activation within ulps of 0 flips a relu gate and a
+  tied-at-zero pool window (cifar_resnet u31: 3 selection cells of 524,288, then 1 gate cell). A
+  flipped seed is judged by **decision replay**: the reference recompiled with the forward nodes
+  the decisions are taken on -- a comparison-written selection's operands, a gate's threshold
+  operand (`decision_nodes`) -- self-copied and preloaded with the candidate's values once they are
+  within tolerance, every other node compared at the tolerance. Replay the operands, never the
+  selection itself: a seed whose selection node is computed wrong off any tie would otherwise hand
+  the reference its wrong decisions. The flipped cells are bounded (1e-5 of the decision cells: on
+  cifar_resnet a rounded seed flips 0-4 of 6.5M, an f32-referenced one 21-645, so the bound also
+  keeps the rounding load-bearing).
+  Masking cells instead cannot work: a flip moves the downstream gradients by 1e-2.
 - A test claims a tensorized seed's PRESENCE wherever the backend advertises the capability, and
   gates on that capability, never on the seed list its claims are about (gh-ocannl-1115). Gated on
   the seeds, a seeding regression — or a claim asking for a seed the seeder excludes by

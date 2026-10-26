@@ -17,13 +17,14 @@
    golden holds the claims.
 
    gh-ocannl-1602: a tf32 arm (CUDA, the [-tf32] rule) rounds a tensorized conv's multiplicands, so
-   the parity reference rounds the seed's accumulations the same way. The step is built to make that
-   load-bearing: the conv kernel is set to 1/8 and the images to multiples of 1/8, so every sum is
-   exact whatever the order, except one pool window of image 0 whose two top cells differ by [3 *
-   2^-12] in f32 -- the column only the first reads holds [1 + 2^-12], which tf32 rounds to 1 -- and
-   tie in tf32, so the pool's backward routes the gradient to both under a tf32 conv and to one
-   under an f32 conv. Every seed must match the rounded reference; against the plain reference some
-   tf32-rounded conv seed must mismatch. On an arm that reads f32 as f32 those two claims skip. *)
+   the parity reference rounds the seed's accumulations the same way, and a seed whose max-pool
+   selections still flip (an accumulation-order tie) is judged against a reference replaying its
+   decisions. The step is built to make both load-bearing: the conv kernel is set to 1/8 and the
+   images to multiples of 1/8, so every sum is exact whatever the order, except image 0's pool
+   window that f32 decides and tf32 ties at zero ([image]). Every seed must match the rounded
+   reference; against the plain reference a tf32-rounded conv seed must mismatch when nothing is
+   replayed, and match with the window's flip replayed. On an arm that reads f32 as f32 the three
+   tf32 claims skip. *)
 
 open Base
 open Ocannl
@@ -60,24 +61,31 @@ let claims_parity =
      perturb";
   ]
 
+(* Image 0's pattern repeats down every row, so it flips two cells of each pool window on columns
+   2-3 in every row band and out-channel: on the order of a hundred of the step's few thousand
+   selection cells, far above the default bound (one in a hundred thousand), which is sized for real
+   graphs. The smoke states its own fraction. *)
+let replay_fraction = 0.05
+
 let claims_tf32 =
   [
     "tf32: some executed seed's reference is rounded to tf32";
-    "tf32 control: against the plain reference, some tf32-rounded conv seed mismatches";
+    "tf32 control: against the plain reference, nothing replayed, some tf32-rounded conv seed \
+     mismatches";
+    "tf32 replay: against the plain reference, the tied-at-zero window's flip is replayed and that \
+     seed matches";
   ]
 
-(* Image 0's near-tie pool window (output rows 2-3, columns 2-3). Output cell (h, w) reads input
-   rows h+o..h+o+2 and columns w+o..w+o+2 for the padded conv's offset [o], 0 or -1; the block below
-   is laid out to work for either. Rows 1-4 of columns 1-5 hold 1, except columns 1 and 2, which
-   hold 1 + 2^-12, and row 5 of columns 0-6 holds 0. The window's top-left cell reads one more
-   perturbed column than the top-right one, so in f32 it is strictly larger by 3 * 2^-12 (a bottom
-   cell can tie it, never exceed it), while tf32 rounds the perturbation away and the top-right cell
-   ties it. The rest of the image is [wave], as the other images are, so the gradient reaching the
-   window is not killed by dead activations. *)
-let image ~img ~h ~w k =
-  if img = 0 && h >= 1 && h <= 4 && w >= 1 && w <= 5 then if w <= 2 then 1. +. (2. **. -12.) else 1.
-  else if img = 0 && h = 5 && w <= 6 then 0.
-  else wave k
+(* Image 0 is a tied-at-zero pool window, the shape a residual's pre-activation near 0 gives real
+   graphs (gh-ocannl-1602: cifar_resnet's u31). Every row of image 0 holds, column by column, 0, a,
+   -1, 0, -1, a, 0, 0, where a = 1 + 2^-12 (tf32 rounds it to 1). A conv output cell (h, w) reads
+   columns w+o..w+o+2 for the padded conv's offset o, 0 or -1, so at either offset exactly one of
+   the window's (rows 2-3, columns 2-3) two columns sums to a - 1 = 2^-12 per row and channel --
+   positive in f32, exactly 0 in tf32 -- and the other to -2: after the relu, f32 picks that
+   column's cells as the window's max, while under tf32 all four cells tie at 0 and the pool's
+   backward routes the gradient to every one. *)
+let image ~img ~w k =
+  if img = 0 then match w with 1 | 5 -> 1. +. (2. **. -12.) | 2 | 4 -> -1. | _ -> 0. else wave k
 
 let tensorized_capability =
   lazy
@@ -90,8 +98,7 @@ let () =
   let total = batch * n_batches in
   let x_nd =
     nd "sp_x" [| total; side; side; chans |] (fun i ->
-        image ~img:i.(0) ~h:i.(1) ~w:i.(2)
-          ((((((i.(0) * side) + i.(1)) * side) + i.(2)) * chans) + i.(3)))
+        image ~img:i.(0) ~w:i.(2) ((((((i.(0) * side) + i.(1)) * side) + i.(2)) * chans) + i.(3)))
   in
   let y_nd = nd "sp_y" [| total; classes |] (fun i -> if i.(1) = i.(0) % classes then 1. else 0.) in
   let xs = TDSL.rebatch ~l:"xs" x_nd () in
@@ -152,13 +159,15 @@ let () =
       List.iter (claims_parity @ claims_tf32)
         ~f:(Verdict.skipped ~aggregation ~backend:backend_name)
   | None -> (
-      let parity ?(round = true) ?(select = P.any_seed) ~perturb () =
+      let parity ?(round = true) ?(replay = true) ?(select = P.any_seed) ~perturb () =
         snd
-          (P.parity ~perturb ~round ~select
+          (P.parity ~perturb ~round ~replay ~replay_fraction ~select
              ~on_result:(fun r ->
                Stdio.eprintf "%s%s%s (not part of the golden)\n"
                  (if perturb then "perturbed " else "")
-                 (if round then "" else "plain reference: ")
+                 (if round then ""
+                  else if replay then "plain reference, replay: "
+                  else "plain reference: ")
                  (P.verdict_line r))
              ctx step bindings
              ~bind:(fun r -> IDX.find_exn r.Context.bindings batch_n := 0)
@@ -190,6 +199,9 @@ let () =
           let rounded_labels =
             List.filter_map results ~f:(fun r -> if rounded r then Some r.P.label else None)
           in
-          let plain = parity ~round:false ~select:P.conv_seed ~perturb:false () in
-          p_exists (List.nth_exn claims_tf32 1) plain ~f:(fun r ->
-              mismatched r && List.mem rounded_labels r.P.label ~equal:String.equal))
+          let ours r = List.mem rounded_labels r.P.label ~equal:String.equal in
+          let plain = parity ~round:false ~replay:false ~select:P.conv_seed ~perturb:false () in
+          p_exists (List.nth_exn claims_tf32 1) plain ~f:(fun r -> mismatched r && ours r);
+          let replayed = parity ~round:false ~select:P.conv_seed ~perturb:false () in
+          p_exists (List.nth_exn claims_tf32 2) replayed ~f:(fun r ->
+              matched r && ours r && r.P.replayed && r.P.flipped > 0))

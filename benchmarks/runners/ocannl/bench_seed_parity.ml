@@ -24,7 +24,15 @@
    rounded to tf32 (gh-ocannl-1602, [tf32_round]): against the f32 reference, a pool window's argmax
    flips and the routed gradient moves, so every such seed of a training step used to mismatch.
    [round:false] keeps the plain reference, the control that shows the rounding is load-bearing.
-   Nothing is masked: every cell of every compared node counts.
+   What equal rounding leaves is the order of the f32 accumulation, which tensor cores do not keep,
+   and a decision on a tie -- a relu gate on a pre-activation within ulps of 0, a pool window tied
+   at 0 -- can still flip. A seed that mismatches with flipped decisions is judged against the
+   reference replaying them ([decision_nodes], [replay_nodes]): the forward nodes the decisions are
+   taken on (a selection's comparison operands, a gate's threshold operand) hold the seed's values
+   and must be within the tolerance before any replay; everything else, the selections included, is
+   recomputed from them and compared at the tolerance; and the flipped cells are bounded
+   ([replay_bound]). [replay:false] turns that off. Nothing is masked: every cell of every compared
+   node counts.
 
    [perturb] is the negative control: the seeded segment's code is perturbed after scheduling (every
    [Set] stores one more than it computes), so each perturbed seed that compiles must be reported a
@@ -62,6 +70,10 @@ type seed_result = {
           (the seed computes them on a tf32 arm); empty when the reference is the plain default
           pipeline. *)
   rounded_stmts : int;  (** The reference's accumulation statements so rounded. *)
+  flipped : int;
+      (** gh-ocannl-1602: the decision cells the seed decided otherwise than its reference; counted
+          only for a seed that mismatched. *)
+  replayed : bool;  (** The verdict is the replayed reference's ([flipped] cells replayed). *)
 }
 
 type reference = {
@@ -73,6 +85,10 @@ type reference = {
   ref_rounded_compiles : int;
       (** gh-ocannl-1602: tf32-rounded references compiled, one per distinct rounded node set in a
           row. *)
+  ref_replay_compiles : int;  (** References compiled to replay a flipped seed's decisions. *)
+  ref_decisions : string list;  (** The decision nodes ([decision_nodes]) a replay replays. *)
+  ref_decision_cells : int;  (** Their cells: the replay bound's base. *)
+  ref_unreplayable : string list;  (** Decisions the replay cannot reach. *)
 }
 
 (* The default bound on a seed's worst normalized difference, in every numerics regime: a seed that
@@ -324,6 +340,62 @@ let worst_difference ~reference ~candidate =
           if Float.(err > worst) || String.is_empty at then (err, Tn.debug_name tn, n + 1)
           else (worst, at, n + 1))
 
+(* A mismatch's anatomy, for diagnosis: each compared node with cells over [tol] (normalized as in
+   [worst_difference]), worst first, how many and the first few; then, at the first such cells of
+   the worst node, every same-sized node's reference and candidate values -- for a selection node,
+   the candidates it chose between. *)
+let mismatch_detail ~tol ~reference ~candidate emit =
+  let bad_cells want got =
+    let mag =
+      Array.fold want ~init:0. ~f:(fun m v ->
+          if Float.is_finite v then Float.max m (Float.abs v) else m)
+    in
+    let mag = if Float.(mag > 0.) then mag else 1. in
+    List.filter
+      (List.init (Array.length want) ~f:Fn.id)
+      ~f:(fun i ->
+        let w = want.(i) and g = got.(i) in
+        if Float.is_finite w && Float.is_finite g then Float.(abs (g -. w) /. mag > tol)
+        else not (Float.equal w g || (Float.is_nan w && Float.is_nan g)))
+  in
+  let pairs =
+    List.filter_map reference ~f:(fun (tn, want) ->
+        match List.Assoc.find candidate ~equal:Tn.equal tn with
+        | Some got when Array.length got = Array.length want -> Some (tn, want, got)
+        | _ -> None)
+  in
+  let bad =
+    List.filter_map pairs ~f:(fun (tn, want, got) ->
+        match bad_cells want got with
+        | [] -> None
+        | cells ->
+            Some
+              ( worst_difference ~reference:[ (tn, want) ] ~candidate:[ (tn, got) ],
+                (tn, want, got, cells) ))
+    |> List.sort ~compare:(fun ((a, _, _), _) ((b, _, _), _) -> Float.compare b a)
+    |> List.map ~f:snd
+  in
+  List.iteri bad ~f:(fun k (tn, want, got, cells) ->
+      if k < 16 then
+        emit
+          (Printf.sprintf "  %s: %d of %d cells over tolerance; first: %s" (Tn.debug_name tn)
+             (List.length cells) (Array.length want)
+             (String.concat ~sep:" "
+                (List.map (List.take cells 4) ~f:(fun i ->
+                     Printf.sprintf "[%d] %.9g/%.9g" i want.(i) got.(i))))));
+  match bad with
+  | [] -> ()
+  | (tn, want, _, cells) :: _ ->
+      List.iter (List.take cells 3) ~f:(fun i ->
+          emit
+            (Printf.sprintf "  at %s[%d], same-sized nodes (reference/candidate): %s"
+               (Tn.debug_name tn) i
+               (String.concat ~sep:"; "
+                  (List.filter_map pairs ~f:(fun (tn', w, g) ->
+                       if Array.length w = Array.length want then
+                         Some (Printf.sprintf "%s %.9g/%.9g" (Tn.debug_name tn') w.(i) g.(i))
+                       else None)))))
+
 (* An [@|] slice view has no host access of its own (its parent is read or written instead), so it
    is neither compared, restored nor poisoned; its parent, when the routine writes it, is. *)
 let host_accessible tn = Option.is_none (Tn.slice_of tn)
@@ -335,16 +407,129 @@ let read ctx nodes =
   List.filter_map nodes ~f:(fun tn ->
       if host_accessible tn then Some (tn, Context.get_values ctx tn) else None)
 
+(* gh-ocannl-1602: the decisions of a lowering -- the discontinuities a value within rounding of a
+   threshold can flip -- found structurally, with the forward nodes they are taken on: - [Selection
+   tn]: a node written by a comparison ([cond = eq (t, v)], max-pooling's backward gate in
+   [Operation.tropical]); its cells are the decisions. Never replayed: the reference recomputes it
+   from the replayed operands, and it is compared. - [Operand tn]: a node a selection's comparison
+   reads. - [Gate (op, tn)]: a node read as the threshold operand of a gate ([relu_gate (v1, g)],
+   the relu's backward); its cells' side of the threshold are the decisions. Operands and gates are
+   what a replay preloads. The second list names the decisions a replay cannot reach: a comparison
+   written to a scope local (the node inlined into its consumer), or a comparison or gate whose
+   operand is an expression rather than a node read. *)
+type decision = Selection of Tn.t | Operand of Tn.t | Gate of Ir.Ops.binop * Tn.t
+
+let decision_tn = function Selection tn | Operand tn | Gate (_, tn) -> tn
+let is_replayed = function Selection _ -> false | Operand _ | Gate _ -> true
+
+let equal_decision a b =
+  match (a, b) with
+  | Selection a, Selection b | Operand a, Operand b -> Tn.equal a b
+  | Gate (o, a), Gate (o', b) -> Ir.Ops.equal_binop o o' && Tn.equal a b
+  | _ -> false
+
+let decision_nodes (code : LL.t) =
+  let found = ref [] and unreachable = ref [] in
+  let add d = if not (List.mem !found d ~equal:equal_decision) then found := d :: !found in
+  let is_comparison = function
+    | Ir.Ops.Cmpeq | Ir.Ops.Cmpne | Ir.Ops.Cmplt | Ir.Ops.Cmple -> true
+    | _ -> false
+  in
+  let operand ~into = function
+    | LL.Get (tn, _) -> add (Operand tn)
+    | _ -> unreachable := ("an expression compared into " ^ Tn.debug_name into) :: !unreachable
+  in
+  let rec stmt (c : LL.t) =
+    match c with
+    | Set { tn; llsc; _ } ->
+        (match llsc with
+        | Binop (op, (a, _), (b, _)) when is_comparison op ->
+            add (Selection tn);
+            operand ~into:tn a;
+            operand ~into:tn b
+        | _ -> ());
+        scalar llsc
+    | Set_local (id, llsc) ->
+        (match llsc with
+        | Binop (op, _, _) when is_comparison op ->
+            unreachable := ("comparison into the inlined " ^ Tn.debug_name id.LL.tn) :: !unreachable
+        | _ -> ());
+        scalar llsc
+    | Seq (a, b) ->
+        stmt a;
+        stmt b
+    | For_loop { body; _ } | If { body; _ } | Scan_loop { body; _ } -> stmt body
+    | _ -> ()
+  and scalar (e : LL.scalar_t) =
+    match e with
+    | Local_scope { body; _ } -> stmt body
+    | Binop (((Ir.Ops.Relu_gate | Ir.Ops.Satur01_gate) as op), (a, _), (b, _)) ->
+        (match a with
+        | Get (tn, _) -> add (Gate (op, tn))
+        | _ -> unreachable := (Ir.Ops.binop_cd_syntax op ^ " of an expression") :: !unreachable);
+        scalar a;
+        scalar b
+    | Ternop (_, (a, _), (b, _), (c, _)) ->
+        scalar a;
+        scalar b;
+        scalar c
+    | Binop (_, (a, _), (b, _)) ->
+        scalar a;
+        scalar b
+    | Unop (_, (a, _)) -> scalar a
+    | _ -> ()
+  in
+  stmt code;
+  (List.rev !found, List.dedup_and_sort !unreachable ~compare:String.compare)
+
+(* The decision a cell takes: a selection's value, a gate's side of its threshold; an operand takes
+   none of its own. *)
+let decides d v =
+  match d with Selection _ | Operand _ -> v | Gate (op, _) -> Ir.Ops.interpret_binop op v 1.
+
+(* [code] with every write of a node in [replayed] made a self-copy, and its whole-node zeroings
+   dropped: the node keeps the values it holds when the routine starts -- the candidate's, set
+   before the run -- while every statement stays where it was, so the schedule, the segmentation and
+   the routine's interface are those of the unreplayed reference. *)
+let replay_nodes ~replayed (code : LL.t) : LL.t =
+  let mem tn = List.mem replayed tn ~equal:Tn.equal in
+  let rec stmt (c : LL.t) : LL.t =
+    match c with
+    | Set ({ tn; idcs; _ } as s) when mem tn -> Set { s with llsc = Get (tn, idcs) }
+    | Zero_out tn when mem tn -> Noop
+    | Seq (a, b) -> Seq (stmt a, stmt b)
+    | For_loop f -> For_loop { f with body = stmt f.body }
+    | If i -> If { i with body = stmt i.body }
+    | Scan_loop s -> Scan_loop { s with body = stmt s.body }
+    | _ -> c
+  in
+  stmt code
+
+(* The most decision cells a seed may decide otherwise than its reference and still be judged by
+   replay: [fraction] of the decision nodes' cells, at least one. A gate's threshold operand is a
+   forward node, compared at the tolerance before any replay, and a selection's operands are forward
+   nodes too: a flip is a decision the forward puts within the tolerance of its threshold, while a
+   wrong forward shows in the forward nodes. The bound keeps the replay from absorbing a systematic
+   disagreement. The default, one in a hundred thousand, is set from cifar_resnet's training step on
+   CUDA tf32 (rog-nv-linux): against the rounded reference a seed flips 0 or 4 of 6.5M decision
+   cells (6e-7), against the plain f32 reference 21 to 645 (3e-6 to 1e-4). *)
+let default_replay_fraction = 1e-5
+
+let replay_bound ?(fraction = default_replay_fraction) ~decision_cells () =
+  Int.max 1 (Float.iround_down_exn (fraction *. Float.of_int decision_cells))
+
 (* The default pipeline over [comp]'s lowering with the products accumulated into [targets] rounded
    to tf32: the transform rounds, then schedules exactly as a compile without a transform does
-   ([Ir.Schedule.maybe_default_schedules] over the bindings' static symbols). Returns the context,
-   the routine and how many accumulation statements were rounded. *)
-let compile_rounded ~targets ctx comp bindings =
+   ([Ir.Schedule.maybe_default_schedules] over the bindings' static symbols). With [replayed], those
+   nodes hold the values set before the run ([replay_nodes]). Returns the context, the routine and
+   how many accumulation statements were rounded. *)
+let compile_rounded ?(replayed = []) ~targets ctx comp bindings =
   let backend_name = Context.backend_name ctx in
   let limits = Context.hardware_limits ctx in
   let stmts = ref 0 in
   let transform (lowered : LL.optimized) =
     let llc, n = round_products ~targets lowered.LL.llc in
+    let llc = if List.is_empty replayed then llc else replay_nodes ~replayed llc in
     stmts := n;
     Ir.Schedule.maybe_default_schedules ~backend_name ~limits
       ~static_indices:(Ir.Indexing.bound_symbols bindings)
@@ -353,8 +538,9 @@ let compile_rounded ~targets ctx comp bindings =
   let rctx, r = Context.compile ~lowered_transform:transform ctx comp bindings in
   (rctx, r, !stmts)
 
-let parity ?tol ?(perturb = false) ?(round = true) ?(select = conv_seed) ?(on_result = fun _ -> ())
-    ctx comp bindings ~bind ~static_indices opt =
+let parity ?tol ?(perturb = false) ?(round = true) ?(replay = true) ?replay_fraction
+    ?(select = conv_seed) ?(on_result = fun _ -> ()) ?detail ctx comp bindings ~bind ~static_indices
+    opt =
   let tol = match tol with Some t -> t | None -> default_tol () in
   let is_gpu, is_cpu = target ctx in
   let limits = Context.hardware_limits ctx in
@@ -405,6 +591,28 @@ let parity ?tol ?(perturb = false) ?(round = true) ?(select = conv_seed) ?(on_re
      alone must not decline for sharing it with the reference. *)
   Context.release rctx;
   let ref_written tn = List.Assoc.mem plain ~equal:Tn.equal tn in
+  (* gh-ocannl-1602: the decisions a flipped seed's reference replays -- on nodes the reference
+     writes, the host reads and the routine does not restore -- and the ones it cannot reach. *)
+  let decisions, unreplayable =
+    let found, unreachable = decision_nodes opt.LL.llc in
+    let restored tn = List.Assoc.mem snapshot ~equal:Tn.equal tn in
+    let reachable, unreached =
+      List.partition_tf found ~f:(fun d ->
+          let tn = decision_tn d in
+          ref_written tn && host_accessible tn && not (restored tn))
+    in
+    ( reachable,
+      unreachable
+      @ List.map unreached ~f:(fun d -> "decision node " ^ Tn.debug_name (decision_tn d)) )
+  in
+  let replayed_tns =
+    List.dedup_and_sort ~compare:Tn.compare
+      (List.filter_map decisions ~f:(fun d -> if is_replayed d then Some (decision_tn d) else None))
+  in
+  (* The decisions whose cells are counted: selections and gates (an operand decides nothing). *)
+  let deciding = List.filter decisions ~f:(function Operand _ -> false | _ -> true) in
+  let unreplayable_names = String.concat ~sep:"; " unreplayable in
+  let decision_cells = List.sum (module Int) deciding ~f:(fun d -> Tn.num_elems (decision_tn d)) in
   (* gh-ocannl-1602: the reference of a seed that computes [targets] on a tf32 arm -- the default
      pipeline, scheduled exactly as the default compile schedules it, over the lowering with those
      targets' accumulated products rounded to tf32 ([round_products]). Compiled once per distinct
@@ -430,6 +638,30 @@ let parity ?tol ?(perturb = false) ?(round = true) ?(select = conv_seed) ?(on_re
         let result = (values, stmts) in
         last_rounded := Some (targets, result);
         result
+  in
+  (* gh-ocannl-1602: the reference that judges a seed whose decisions flipped -- the same pipeline
+     (rounded at [targets]), the decisions' forward operands holding the candidate's values
+     ([replay_nodes]), so everything the reference computes from them decides as the candidate's
+     forward values decide. Compiled per flipped seed (flips are rare), and released before the next
+     candidate compiles. *)
+  let replay_compiles = ref 0 in
+  let replayed_reference targets candidate =
+    let rctx, r, _ = compile_rounded ~replayed:replayed_tns ~targets ctx comp bindings in
+    Int.incr replay_compiles;
+    bind r;
+    Exn.protect
+      ~finally:(fun () -> Context.release rctx)
+      ~f:(fun () ->
+        let rctx = restore rctx r in
+        let rctx =
+          List.fold replayed_tns ~init:rctx ~f:(fun rctx tn ->
+              match List.Assoc.find candidate ~equal:Tn.equal tn with
+              | Some vs -> Context.set_values rctx tn vs
+              | None -> rctx)
+        in
+        let rctx = Context.run rctx r in
+        Context.sync rctx;
+        read rctx (set_list r.outputs))
   in
   let seeding =
     Autotune.search_seeding
@@ -512,15 +744,18 @@ let parity ?tol ?(perturb = false) ?(round = true) ?(select = conv_seed) ?(on_re
           else post)
     in
     let census = ref Ir.C_syntax.empty_mma_summary in
-    let result ?(rounded = []) ?(rounded_stmts = 0) verdict ~tensorized ~compared =
+    let result ?(rounded = []) ?(rounded_stmts = 0) ?(flipped = 0) ?(replayed = false) verdict
+        ~tensorized ~compared =
       {
-        mma = !census;
         label;
         verdict;
         tensorized;
+        mma = !census;
         compared;
         rounded = List.map rounded ~f:Tn.debug_name;
         rounded_stmts;
+        flipped;
+        replayed;
       }
     in
     match
@@ -570,17 +805,108 @@ let parity ?tol ?(perturb = false) ?(round = true) ?(select = conv_seed) ?(on_re
                      "the reference has no accumulation of a product into the nodes the seed \
                       computes on a tf32 arm, so nothing was rounded")
                   ~tensorized ~compared:0
-            | reference, rounded_stmts ->
+            | reference, rounded_stmts -> (
                 let rounded = targets in
                 let err, node, compared = worst_difference ~reference ~candidate in
+                let explain verdict ~reference =
+                  match (verdict, detail) with
+                  | Mismatch _, Some emit ->
+                      List.iter (List.rev !segs)
+                        ~f:(fun ((pre : LL.optimized), (post : LL.optimized)) ->
+                          let names l = String.concat ~sep:" " (List.map l ~f:Tn.debug_name) in
+                          emit
+                            (Printf.sprintf
+                               "  seeded segment: product accumulations into %s; tensor-core \
+                                statements (d a b): %s"
+                               (names (product_targets pre.llc))
+                               (String.concat ~sep:", "
+                                  (List.map (tile_mmas post.llc) ~f:(fun (d, a, b) ->
+                                       names [ d; a; b ])))));
+                      mismatch_detail ~tol ~reference ~candidate emit
+                  | _ -> ()
+                in
                 if compared = 0 then
                   result ~rounded ~rounded_stmts (Failed "no node both routines write was compared")
                     ~tensorized ~compared
+                else if Float.(err <= tol) then
+                  result ~rounded ~rounded_stmts (Match { err; node }) ~tensorized ~compared
                 else
-                  let verdict =
-                    if Float.(err <= tol) then Match { err; node } else Mismatch { err; node }
+                  (* gh-ocannl-1602: the decision cells the two runs decided differently, and
+                     whether every gate's threshold operand -- a forward node -- is within the
+                     tolerance (a selection's own cells are 0/1; its operands are forward nodes
+                     compared in their own right). *)
+                  let pair tn =
+                    match
+                      ( List.Assoc.find reference ~equal:Tn.equal tn,
+                        List.Assoc.find candidate ~equal:Tn.equal tn )
+                    with
+                    | Some w, Some g when Array.length w = Array.length g -> Some (w, g)
+                    | _ -> None
                   in
-                  result ~rounded ~rounded_stmts verdict ~tensorized ~compared))
+                  let flips =
+                    List.sum
+                      (module Int)
+                      deciding
+                      ~f:(fun d ->
+                        match pair (decision_tn d) with
+                        | Some (w, g) ->
+                            Array.count (Array.zip_exn w g) ~f:(fun (w, g) ->
+                                not (Float.equal (decides d w) (decides d g)))
+                        | None -> 0)
+                  in
+                  let gates_within =
+                    List.for_all replayed_tns ~f:(fun tn ->
+                        match pair tn with
+                        | Some (w, g) ->
+                            let e, _, _ =
+                              worst_difference ~reference:[ (tn, w) ] ~candidate:[ (tn, g) ]
+                            in
+                            Float.(e <= tol)
+                        | None -> false)
+                  in
+                  let mismatch () =
+                    let verdict = Mismatch { err; node } in
+                    explain verdict ~reference;
+                    result ~rounded ~rounded_stmts ~flipped:flips verdict ~tensorized ~compared
+                  in
+                  if flips = 0 || (not replay) || not gates_within then
+                    if (not replay) || List.is_empty unreplayable then mismatch ()
+                    else
+                      result ~rounded ~rounded_stmts
+                        (Unjudged
+                           ("the seed mismatches, and decisions the replay cannot reach ("
+                          ^ unreplayable_names ^ ") may have flipped"))
+                        ~tensorized ~compared
+                  else if not (List.is_empty unreplayable) then
+                    result ~rounded ~rounded_stmts ~flipped:flips
+                      (Unjudged
+                         ("decisions flipped, and some the replay cannot reach ("
+                        ^ unreplayable_names ^ ")"))
+                      ~tensorized ~compared
+                  else if flips > replay_bound ?fraction:replay_fraction ~decision_cells () then
+                    mismatch ()
+                  else
+                    match replayed_reference targets candidate with
+                    | exception exn ->
+                        result ~rounded ~rounded_stmts ~flipped:flips
+                          (Failed ("the replayed reference: " ^ Exn.to_string exn))
+                          ~tensorized ~compared:0
+                    | replayed_values ->
+                        (* Every node but the replayed operands, which hold the candidate's own: the
+                           selections included, recomputed from them. *)
+                        let reference =
+                          List.filter replayed_values ~f:(fun (tn, _) ->
+                              not (List.mem replayed_tns tn ~equal:Tn.equal))
+                        in
+                        let err, node, compared = worst_difference ~reference ~candidate in
+                        let verdict =
+                          if compared = 0 then Failed "no node but the decisions was compared"
+                          else if Float.(err <= tol) then Match { err; node }
+                          else Mismatch { err; node }
+                        in
+                        explain verdict ~reference;
+                        result ~rounded ~rounded_stmts ~flipped:flips ~replayed:true verdict
+                          ~tensorized ~compared)))
   in
   let results =
     List.concat_map segments ~f:(fun (fine, plan, (key, _pre, params)) ->
@@ -591,6 +917,11 @@ let parity ?tol ?(perturb = false) ?(round = true) ?(select = conv_seed) ?(on_re
               Some r)
             else None))
   in
+  (* Every run restored the read-and-written nodes (the parameters) and then updated them on the
+     device: leave the caller's context holding the values it came in with, so a second [parity]
+     over it starts from the same state as the first. *)
+  ignore
+    (List.fold snapshot ~init:ctx ~f:(fun ctx (tn, vs) -> Context.set_values ctx tn vs) : Context.t);
   let reference =
     {
       ref_compared = List.length plain;
@@ -598,6 +929,10 @@ let parity ?tol ?(perturb = false) ?(round = true) ?(select = conv_seed) ?(on_re
       ref_poisoned;
       ref_poison_unsafe = List.map unsafe ~f:Tn.debug_name;
       ref_rounded_compiles = !rounded_compiles;
+      ref_replay_compiles = !replay_compiles;
+      ref_decisions = List.map replayed_tns ~f:Tn.debug_name;
+      ref_decision_cells = decision_cells;
+      ref_unreplayable = unreplayable;
     }
   in
   (reference, results)
@@ -630,3 +965,8 @@ let verdict_line r =
     | l ->
         Printf.sprintf "; reference rounded to tf32 at %s, %d statements" (String.concat ~sep:" " l)
           r.rounded_stmts)
+  ^
+  if r.flipped = 0 then ""
+  else
+    Printf.sprintf "; %d decision cells flipped, %s" r.flipped
+      (if r.replayed then "replayed" else "not replayed")

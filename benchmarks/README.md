@@ -772,7 +772,17 @@ single-threaded segments that sum to the serial step
   could judge them. The verdict line names the rounded nodes; the summary counts the rounded
   seeds, the rounded reference compiles (one per distinct node set in a row) and masked cells
   (always 0). `BENCH_PARITY_ROUND=0` keeps the plain reference, the control that shows the rounding
-  is load-bearing. A seed whose rounding cannot be established (some of its tensor-core statements
+  is load-bearing. Equal rounding leaves the order of the f32 accumulation, which tensor cores do
+  not keep: a seed whose decisions -- max-pool selections, relu gates -- flipped on such a tie is
+  judged against the reference replaying its decisions (the forward nodes they are taken on --
+  comparison operands, gate thresholds -- preloaded with the seed's values, once they are within
+  the tolerance), every other node at the tolerance, selections included, the flipped cells bounded
+  by 1e-5 of the decision cells and printed per seed; `BENCH_PARITY_REPLAY=0` turns the replay off, and
+  `BENCH_PARITY_DETAIL=1` prints a mismatch's anatomy (its nodes worst first, and the same-sized
+  nodes' values at its first cells). On CUDA (rog-nv-linux) all 32 cifar_resnet conv seeds of a
+  training step match, worst 3.3e-6, four of them (segment u31) after replaying 4 flipped decision
+  cells; against the plain reference 28 of 32 fail even with the replay (21 to 645 flips per seed,
+  over the bound) and all 32 without it. A seed whose rounding cannot be established (some of its tensor-core statements
   fell back, or its accumulator matches no single reference accumulation) is `UNJUDGED`, a
   failure. Before gh-ocannl-1598 the unfused pad-masked seeds `conv-mma-gpu 0x0x0/16x0 simd32` of
   segments u45 and u50 computed a wrong conv output (0.74 and 0.60) while their fused-epilogue
