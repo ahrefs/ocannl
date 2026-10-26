@@ -31,6 +31,8 @@
 //              cache compiles when k kernels changed). A least-squares fit of the subsets'
 //              times against kernel count gives `fit ... fixed_s=... per_kernel_s=...`.
 //   perkernel  every kernel as its own program, serially (twice), and on 8 threads.
+//   chunks k   the routine as k programs of contiguous kernels, nvrtc on k threads at once, then
+//              the k modules loaded serially (gh-ocannl-1603), for k = 2, 4, 8, twice.
 //   cubin      the joint program and one subset compiled straight to machine code
 //              (--gpu-architecture=sm_<device cc>, nvrtcGetCUBIN), which moves the JIT into nvrtc.
 // Every compiled program's PTX is checked to hold exactly as many `.entry` directives as kernels
@@ -287,6 +289,58 @@ static void measure_perkernel(int threads, CUcontext ctx) {
   free(ts);
 }
 
+// gh-ocannl-1603: the routine as [k] programs of contiguous kernels (balanced by count), their
+// nvrtc compiles run concurrently on [k] threads, then their modules loaded one after another on
+// this thread -- what a backend compiling a batch's misses as [k] concurrent programs would pay
+// before its (serial) link. Prints a row.
+typedef struct {
+  int lo, hi;
+  compiled c;
+} chunk;
+
+static void *chunk_worker(void *arg) {
+  chunk *ch = arg;
+  int k = ch->hi - ch->lo;
+  int *idx = malloc(sizeof(int) * (size_t)k);
+  for (int j = 0; j < k; j++) idx[j] = ch->lo + j;
+  char *src = program_of(idx, k);
+  ch->c = compile_src(src, "gh1603.cu", 0);
+  if (count_entries(ch->c.code) != k) {
+    fprintf(stderr, "chunk [%d,%d): PTX holds %d entries\n", ch->lo, ch->hi,
+            count_entries(ch->c.code));
+    exit(1);
+  }
+  free(src);
+  free(idx);
+  return NULL;
+}
+
+static void measure_chunks(int k) {
+  if (k > n_kernels) k = n_kernels;
+  chunk *chs = calloc((size_t)k, sizeof(chunk));
+  pthread_t *ts = malloc(sizeof(pthread_t) * (size_t)k);
+  for (int t = 0; t < k; t++) {
+    chs[t].lo = (int)((long)t * n_kernels / k);
+    chs[t].hi = (int)((long)(t + 1) * n_kernels / k);
+  }
+  double t0 = now_s();
+  for (int t = 0; t < k; t++) pthread_create(&ts[t], NULL, chunk_worker, &chs[t]);
+  for (int t = 0; t < k; t++) pthread_join(ts[t], NULL);
+  double nvrtc_wall = now_s() - t0;
+  double nvrtc_sum = 0, load_sum = 0;
+  for (int t = 0; t < k; t++) {
+    nvrtc_sum += chs[t].c.nvrtc_s;
+    load_sum += load_s(&chs[t].c);
+    free(chs[t].c.code);
+  }
+  printf("row chunks k=%d programs=%d nvrtc_wall_s=%.4f nvrtc_sum_s=%.4f load_sum_s=%.4f "
+         "total_s=%.4f\n",
+         k, k, nvrtc_wall, nvrtc_sum, load_sum, nvrtc_wall + load_sum);
+  fflush(stdout);
+  free(ts);
+  free(chs);
+}
+
 static void synthetic(int n) {
   // N trivial kernels, no prelude: one program of all, then each alone.
   size_t cap = (size_t)n * 128 + 1;
@@ -419,6 +473,12 @@ int main(int argc, char **argv) {
   measure_perkernel(1, ctx);
   measure_perkernel(1, ctx);
   measure_perkernel(8, ctx);
+  // Coarse concurrent programs (gh-ocannl-1603), twice each, smallest k first.
+  for (int round = 0; round < 2; round++) {
+    measure_chunks(2);
+    measure_chunks(4);
+    measure_chunks(8);
+  }
 
   {
     double nv, ld;
