@@ -252,6 +252,18 @@ val fiber_cardinality_ub :
     whole fiber and the bound is exact. Otherwise the mentioned symbols' contribution is bounded per
     component (see the implementation), and the smallest component-wise bound is taken. *)
 
+val image_cardinality_lb : domain:(Indexing.symbol * int) list -> coord array -> int
+(** [image_cardinality_lb ~domain v]: a lower bound on the distinct cells an access whose view is
+    [v] touches over the loop box [domain] (symbol, width pairs; a symbol absent from it reads as
+    fixed). Per [Known] coordinate, its terms' sumset counted after dividing the coefficients by
+    their gcd and adding the terms in ascending magnitude — an interval stays an interval while the
+    next coefficient is at most its length, disjoint translates multiply, and otherwise the integer
+    sumset bound [|S + T| >= |S| + |T| - 1] applies — capped by the coordinate's size (the in-bounds
+    assumption of {!view}). Across coordinates, the best product over subsets whose varying symbols
+    are pairwise disjoint (the image's projection onto them is a product); [Unknown] coordinates are
+    left out. Exact on unit-stride and stride-at-most-window convolution windows ([s*o + k] with
+    [s <= K] counts [s*(O-1) + K]); [0] on an empty box (gh-ocannl-1601). *)
+
 (** {2 Projection-level predicates}
 
     Queries about the affine LHS map of a projection: {!is_surjective} decides whether every LHS

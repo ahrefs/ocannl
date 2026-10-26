@@ -85,9 +85,9 @@ val footprint_approximate : summary -> bool
 type floor = { fr_flops : int; fr_bytes : int; fr_exact : bool } [@@deriving sexp_of]
 (** Lower bounds on arithmetic work and compulsory traffic — the dual extraction (gh-ocannl-514
     phase 3), for bounding {e every completion} of a partial placement vector where {!analyze}
-    upper-bounds one concrete candidate. [fr_exact] is [false] when some flooring-to-zero occurred
-    (a guarded body, a non-exact access image, opaque code): the floor is then sound but not tight.
-*)
+    upper-bounds one concrete candidate. [fr_exact] is [false] when some flooring occurred (a
+    guarded body, a non-exact access image counted at its lower bound, opaque code): the floor is
+    then sound but not tight. *)
 
 val completion_floor : ?open_placement:(Tnode.t -> bool) -> Low_level.t -> floor
 (** The floor of the roofline legs over placement completions, with every approximation biased
@@ -110,10 +110,12 @@ val completion_floor : ?open_placement:(Tnode.t -> bool) -> Low_level.t -> floor
       provably disjoint (a disjoint union attains its sum — both extractions then agree,
       gh-ocannl-578), otherwise the largest exact image (a union is at least its largest member —
       dual to the upper extraction's capped sum; a second nonzero contribution then marks the floor
-      loose); guarded, non-exact, dead-loop-enclosed, conditionally-evaluated (a [Where] arm's or an
-      [And]/[Or] right operand's inline read — not a hoisted scope body's) and open-producer-operand
-      accesses contribute zero — their execution is not certain in every completion. Nodes with
-      [open_placement] contribute zero.
+      loose); a certain access whose image is not exact — an overlapping window's [s*o + d*k], a
+      dynamic gather's or a vector run's known coordinates — counts {!Affine.image_cardinality_lb}
+      of its coordinate view (gh-ocannl-1601), at most its true image; guarded, dead-loop-enclosed,
+      conditionally-evaluated (a [Where] arm's or an [And]/[Or] right operand's inline read — not a
+      hoisted scope body's) and open-producer-operand accesses contribute zero — their execution is
+      not certain in every completion. Nodes with [open_placement] contribute zero.
 
     {e Committing} a placement decision is re-evaluation with the narrowed [open_placement]: the
     suppression sets only shrink, so the floor is monotone in refinement — the property that lets a
