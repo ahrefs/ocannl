@@ -3,5 +3,5 @@ pin-depends: [
   ["notty-community.dev" "git+https://github.com/lukstafi/notty-community.git#master"]
   ["cudajit.dev" "git+https://github.com/lukstafi/ocaml-cudajit.git#0.8.0"]
   ["hipjit.dev" "git+https://github.com/lukstafi/ocaml-hipjit.git#0.2.0"]
-  ["metal.dev" "git+https://github.com/lukstafi/ocaml-metal.git#ea3b38aa9517ce0ea2871d0de6c51fb788c9e683"]
+  ["metal.dev" "git+https://github.com/lukstafi/ocaml-metal.git#dda8a6c1bb9fe8298fd694153b49d8e325bdaba1"]
 ]
