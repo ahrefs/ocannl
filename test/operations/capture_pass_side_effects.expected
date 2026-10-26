@@ -19,3 +19,8 @@ dead sibling arm, inherited template: the candidate w stays virtual: true
 dead sibling arm, inherited template: extra keeps its raw guards-taken verdict (not spliced, not an input): true
 dead sibling arm, inherited template: the sibling executes to its live arm: true
 dead sibling arm, inherited template: the reading agrees with the materialized one: true
+nested loop under a width-1 capture: w is deferred: true
+nested loop under a width-1 capture: y is refused by the walk's per-statement store and materializes (the boundary): true
+nested loop under a width-1 capture: y executes to k: true
+nested loop under a width-1 capture: with w materialized, y is captured at its own loop: true
+nested loop under a width-1 capture: every reading agrees with the materialized one: true

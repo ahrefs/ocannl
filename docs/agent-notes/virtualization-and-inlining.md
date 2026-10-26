@@ -513,11 +513,17 @@ files.
   setter's right-hand side was walked with the CANDIDATE's write-index loops opaque, entering arms
   the emitted code never evaluates — committing an unservable local producer `Never_virtual` and
   marking an inherited template's operands spliced; a setter the walk will not store, not the
-  candidate's, now decides `Where` with every loop's extent, as the emit walk does. Still open: a
-  node whose own loop nests inside a width-1 capture gets the walk's per-statement store, which a
-  loop-varying operand refuses (`9`), where the emit walk alone would have captured it at its loop.
-  Shared loops are hand-built IR (`Ll_test`); `Assignments` lowering gives each assignment its own
-  nest.
+  candidate's, now decides `Where` with every loop's extent, as the emit walk does. **Stated
+  boundary** (gh-ocannl-1620): a node whose own loop nests inside a width-1 capture gets the walk's
+  per-statement store (`in_storage_pass` suppresses the nested capture), which lacks its inner
+  binder and refuses a loop-varying operand (`9:sibling-escaping-read-index`); that refusal is a
+  placement, which restoring the provisional computations does not retract, so the node
+  materializes where the emit walk alone would have captured it at its loop. A lost
+  virtualization, values correct; `capture_pass_side_effects.ml`'s `nested loop under a width-1
+  capture` pins it (`zero y; for i<1 { w[i] := x[i] + 1; for j<4 { y[j] += k[j] } }`). Retracting
+  the placement alone is unsound: phase 1's template already holds a raw read of the node, which
+  would then read a virtual node with no buffer — a fix needs transactional nested captures. Shared
+  loops are hand-built IR (`Ll_test`); `Assignments` lowering gives each assignment its own nest.
 - Big-reduction producers are forced `Never_virtual` by `virtualize_max_inline_reduction`
   (default 16) — remember it when a structural expectation assumes inlining.
 - Wide-fanin producers are forced `Never_virtual 41` by `virtualize_max_inline_fanin` (default 8,

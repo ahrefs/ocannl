@@ -113,6 +113,61 @@ let case_duplicate ~label ~tag ~candidates ~with_reader =
         (label ^ ": the deferred reading agrees with the materialized one")
         (Array.concat got) (Array.concat got_m) ~f:Float.equal
 
+(* gh-ocannl-1620, item 3, a stated boundary: [zero y; for i<1 { w[i] := x[i] + 1; for j<4 { y[j] +=
+   k[j] } }], the accumulation of [case_duplicate] with a LOOP-VARYING operand. Phase 1 of [w]'s
+   capture walks with nested captures suppressed ([in_storage_pass]), so [y] gets the walk's
+   per-statement store, which does not contain [y]'s own loop [j] and refuses the read [k[j]]
+   ([9:sibling-escaping-read-index]). The refusal is a placement, which restoring the walk's
+   provisional computations does not retract: [y] materializes, where the emit walk alone would have
+   captured it at [j] -- as it does with [w] materialized, when nothing is captured at [i]. A lost
+   virtualization, with correct values either way. *)
+let case_nested_under_width1 () =
+  let label = "nested loop under a width-1 capture" and tag = "nw" in
+  let k_vals = Array.init dim ~f:(fun j -> 3. +. (10. *. Float.of_int j)) in
+  let build ~sfx ~materialize_w ~materialize_y =
+    let x = mk ~dims:[| 1 |] (tag ^ "x" ^ sfx) and k = mk (tag ^ "k" ^ sfx) in
+    let w = mk ~dims:[| 1 |] (tag ^ "w" ^ sfx) and y = mk (tag ^ "y" ^ sfx) in
+    let out_y = mk (tag ^ "outy" ^ sfx) and out_w = mk ~dims:[| 1 |] (tag ^ "outw" ^ sfx) in
+    List.iter [ x; k; out_y; out_w ] ~f:materialize;
+    if materialize_w then materialize w;
+    if materialize_y then materialize y;
+    let i = sym () and j = sym () and s2 = sym () in
+    let llc =
+      List.reduce_exn ~f:seq
+        [
+          zero y;
+          loop ~upto:0 i
+            (seq
+               (set w [| iter i |] (add (get x [| iter i |]) (c 1.)))
+               (loop_n j dim (set y [| iter j |] (add (get y [| iter j |]) (get k [| iter j |])))));
+          loop_n s2 dim (set out_y [| iter s2 |] (get y [| iter s2 |]));
+          set out_w [| fixed 0 |] (get w [| fixed 0 |]);
+        ]
+    in
+    let seed = [ (x, [| 5. |]); (k, k_vals); (out_y, blank dim); (out_w, blank 1) ] in
+    (llc, w, y, seed, [ out_y; out_w ])
+  in
+  let run ~sfx ~materialize_w ~materialize_y =
+    let llc, w, y, seed, read = build ~sfx ~materialize_w ~materialize_y in
+    let o = optimize ~name:("cpse_" ^ tag ^ sfx) llc in
+    (o, w, y, execute ~name:("cpse_" ^ tag ^ sfx) o ~seed ~read)
+  in
+  let o, w, y, got = run ~sfx:"" ~materialize_w:false ~materialize_y:false in
+  p (label ^ ": w is deferred") (known_virtual o w);
+  p
+    (label ^ ": y is refused by the walk's per-statement store and materializes (the boundary)")
+    (Option.equal Tn.equal_provenance (rejection_code o y)
+       (Some (Tn.Site "9:sibling-escaping-read-index")));
+  p_all2 (label ^ ": y executes to k") (List.hd_exn got) k_vals ~f:Float.equal;
+  let o_w, _, y_w, got_w = run ~sfx:"w" ~materialize_w:true ~materialize_y:false in
+  p (label ^ ": with w materialized, y is captured at its own loop") (known_virtual o_w y_w);
+  let _, _, _, got_m = run ~sfx:"m" ~materialize_w:false ~materialize_y:true in
+  p_all2
+    (label ^ ": every reading agrees with the materialized one")
+    (Array.concat (got @ got_w))
+    (Array.concat (got_m @ got_m))
+    ~f:Float.equal
+
 (* A local producer written cell by cell, [r[0] := ell[0] + 100; r[1] := ell[1] + 100] -- covered,
    so the raw analysis demands nothing of it, but its fixed-cell components cannot be served at a
    loop-varying read ([13:call-site-index-mismatch]) -- read only in the sibling's dead arm. *)
@@ -247,4 +302,5 @@ let () =
     ~with_reader:false;
   case_duplicate ~label:"duplicate store, later reader" ~tag:"dr" ~candidates:1 ~with_reader:true;
   case_dead_arm_placement ();
-  case_dead_arm_splice ()
+  case_dead_arm_splice ();
+  case_nested_under_width1 ()
