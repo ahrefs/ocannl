@@ -22,6 +22,12 @@ set -Eeuo pipefail
 . "$(dirname "$0")/../../scripts/harness-support.sh"
 . "$(dirname "$0")/../../scripts/process-group.sh"
 
+# What the run under test said, replayed as this harness's failure output: every line behind
+# `| `. The sweep's fixture logs hold dune-shaped error blocks (`File "test/dune", lines 1-4`), and
+# this output lands in the CI build log tools/ci-failed-rules.sh reads, which takes a header only
+# at the start of its line -- unprefixed, a fixture block read as a failed rule (gh-ocannl-1590).
+replayed() { sed 's/^/| /'; }
+
 # Most assertions below are deliberately quiet shell predicates. If one fails
 # under errexit, name the exact site before cleanup removes its evidence; the
 # expected-error controls temporarily disable errexit and therefore stay quiet.
@@ -66,15 +72,16 @@ on_error() {
     after_cancel prune_raced local_remote local_replaced local_busy local_prep_error local_control \
     box_gap box_ready box_broken; do
     [ -n "${!name:-}" ] || continue
-    printf -- '--- %s ---\n%s\n' "$name" "${!name}" >&2
+    printf -- '--- %s ---\n' "$name" >&2
+    printf '%s\n' "${!name}" | replayed >&2
   done
   if [ -n "${remote_root:-}" ] && [ -f "$remote_root/commands" ]; then
     printf -- '--- remote commands ---\n' >&2
-    cat "$remote_root/commands" >&2
+    replayed <"$remote_root/commands" >&2
   fi
   if [ -n "${local_log:-}" ] && [ -f "$local_log" ]; then
     printf -- '--- remote unit log ---\n' >&2
-    cat "$local_log" >&2
+    replayed <"$local_log" >&2
   fi
   return "$rc"
 }
