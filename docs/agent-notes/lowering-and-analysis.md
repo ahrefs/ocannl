@@ -43,7 +43,8 @@ files.
   also how lowering guards a read that may be out of range (gh-504 clamps, virtualization's range
   and unit-solve conditions, `Schedule`'s masks — all over `Embed_index`), and gh-343's gather guard
   is a VALUE condition over a `Get_dynamic` arm whose row runs out of range; the predicate refuses
-  exactly those two shapes. The operand-evaluation checker gains the converse leg: a blend must
+  exactly those two shapes, and walks a nested select or gate WHOLE: evaluated eagerly, an inner
+  condition can hold where the outer one did not, so an integer division under it is reachable. The operand-evaluation checker gains the converse leg: a blend must
   render all three operands with no `?`/`&&`/`||`. Consequences for the classifier's consumers: the
   floors stay floors, `a_gated` over-approximates (conservative), and the upper cost walk's per-arm
   maximum under-counts only where both arms are non-trivial. Two traps for a test of it

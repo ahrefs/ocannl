@@ -148,17 +148,16 @@ test/operations/accum_width.ml [run by @test/operations/runtest-accum_width]
     "= single_to_bfloat16(v"
     "Vectorized reduction rendering"
     "single_to_bfloat16((bfloat16_to_single("
-test/operations/branchless_select.ml [run by @test/operations/runtest-branchless_select; also pins text this scan cannot name: untraced callback, opaque aggregate component, unsupplied application]
+test/operations/branchless_select.ml [run by @test/operations/runtest-branchless_select; also pins text this scan cannot name: untraced callback, forwarded parameter, opaque aggregate component, unsupplied application]
     ") != 0.0 ? ("
     "? ("
     "__auto_type ocannl_sel_a__"
     "bs_gather_guard"
     "bs_index_guard"
-    "bs_int_div_guard"
-    "bs_int_div_guard" ^ "_v["
     "bs_nested_guard"
     "bs_pool_inlined"
     ... ^ "("
+    ... ^ "_v["
 test/operations/cache_key_agreement.ml [run by @test/operations/runtest-cache_key_agreement]
 test/operations/canonical_render.ml [renders generated text in memory; run by @test/operations/runtest-canonical_render; also pins text this scan cannot name: opaque aggregate component, mutation or unseen buffer write]
     "?"

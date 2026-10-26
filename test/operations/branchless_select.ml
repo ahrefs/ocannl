@@ -338,30 +338,40 @@ let () =
     p claim (has text blend_marker && has text "? (")
   else skipped claim
 
-(* [out[i] := v[i] != 0 ? ((int)a[i] / (int)b[i] == 0 ? g[i] : 0) : -1]: the inner condition is an
-   int32 comparison, so its division renders as C INTEGER division even though the division's own
-   annotation says f32 (a homogeneous operator renders its operands at its own precision), and [b]
-   is zero exactly where the outer select is off. Blending the outer select would execute it: SIGFPE
-   on x86, a silently discarded value on AArch64 -- so the claim is the structural one, the outer
-   select keeping its [?:] (review round 1). *)
-let () =
-  let name = "bs_int_div_guard" in
-  let mk4 = node_factory ~first_id:16380 ~dims:[| 4 |] () in
-  let v = mk4 (name ^ "_v") and a = mk4 (name ^ "_a") and b = mk4 (name ^ "_b") in
+(* [out[i] := v[i] != 0 ? ((int)a[i] / (int)b[i] == 0 ? g[i] : 0) : -1], and the same with one more
+   select between: [v[i] != 0 ? (u[i] != 0 ? (... division select ...) : 0) : -1]. The division's
+   condition is an int32 comparison, so it renders as C INTEGER division even though the division's
+   own annotation says f32 (a homogeneous operator renders its operands at its own precision, review
+   round 1), and [b] is zero exactly where the outer select is off. Blending the outer select would
+   execute it: SIGFPE on x86, a silently discarded value on AArch64 -- so the claim is the
+   structural one, the outer select keeping its [?:]. The deeper form is review round 2's: the
+   middle select keeps short-circuiting, but its condition [u] can hold where [v] does not, so it
+   protects nothing once the outer arm evaluates eagerly. *)
+let int_div_leg ~name ~middle_select =
+  let mk4 = node_factory ~first_id:(if middle_select then 16400 else 16380) ~dims:[| 4 |] () in
+  let v = mk4 (name ^ "_v") and u = mk4 (name ^ "_u") in
+  let a = mk4 (name ^ "_a") and b = mk4 (name ^ "_b") in
   let g = mk4 (name ^ "_g") and out = mk4 (name ^ "_out") in
-  let vv = [| 1.; 0.; 1.; 0. |] and av = [| 1.; 5.; 6.; 7. |] and bv = [| 2.; 0.; 3.; 0. |] in
+  let vv = [| 1.; 0.; 1.; 0. |] and uv = [| 1.; 1.; 0.; 1. |] in
+  let av = [| 1.; 5.; 6.; 7. |] and bv = [| 2.; 0.; 3.; 0. |] in
   let gv = [| 0.5; 1.5; 2.5; 3.5 |] in
   let i = sym () in
   let at tn = (get tn [| iter i |], single) in
   let quotient = LL.Binop (Ops.Div, at a, at b) in
-  let inner_cond = LL.Binop (Ops.Cmpeq, (quotient, single), (c 0., single)) in
-  let inner = LL.Ternop (Ops.Where, (inner_cond, Ops.int32), at g, (c 0., single)) in
-  let outer = LL.Ternop (Ops.Where, at v, (inner, single), (c (-1.), single)) in
+  let div_cond = LL.Binop (Ops.Cmpeq, (quotient, single), (c 0., single)) in
+  let division_select = LL.Ternop (Ops.Where, (div_cond, Ops.int32), at g, (c 0., single)) in
+  let arm =
+    if middle_select then LL.Ternop (Ops.Where, at u, (division_select, single), (c 0., single))
+    else division_select
+  in
+  let outer = LL.Ternop (Ops.Where, at v, (arm, single), (c (-1.), single)) in
   let llc = loop_n i 4 (set out [| iter i |] outer) in
-  let got = execute_leg ~name ~seed:[ (v, vv); (a, av); (b, bv); (g, gv) ] ~out llc in
-  (* 1/2 and 6/3 in integers: 0 and 2. *)
-  p_all2 (name ^ ": values") got [| 0.5; -1.; 0.; -1. |] ~f:same_bits;
-  (* The outer select, over [v], keeps its [?:]; the inner one may blend, since its condition is
+  let seed = [ (v, vv); (a, av); (b, bv); (g, gv) ] @ if middle_select then [ (u, uv) ] else [] in
+  let got = execute_leg ~name ~seed ~out llc in
+  (* Integer quotients 1/2 = 0 and 6/3 = 2; the middle select is off at lane 2. *)
+  let want = [| 0.5; -1.; 0.; -1. |] in
+  p_all2 (name ^ ": values") got want ~f:same_bits;
+  (* The outer select, over [v], keeps its [?:]; an inner one may blend, since its condition is
      evaluated inside the outer arm either way. *)
   let claim = name ^ ": a select whose arm divides integers keeps its [?:]" in
   if on_cc then
@@ -370,6 +380,10 @@ let () =
       (List.exists (String.split_lines text) ~f:(fun l ->
            has l (name ^ "_v[") && has l ") != 0.0 ? ("))
   else skipped claim
+
+let () =
+  int_div_leg ~name:"bs_int_div_guard" ~middle_select:false;
+  int_div_leg ~name:"bs_int_div_nested" ~middle_select:true
 
 (* === The realistic composition: ReLU into a 2x2 max pool, backward. === *)
 

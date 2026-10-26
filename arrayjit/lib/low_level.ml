@@ -7081,17 +7081,17 @@ let speculable_select ~(cond : scalar_t) ~(arms : scalar_arg list) =
           if Ops.is_homogeneous_prec_ternop op then (prec, prec, prec)
           else match op with Ops.Where -> (pa, prec, prec) | _ -> (pa, pb, pc)
         in
+        (* A nested select is walked whole: once the enclosing arm evaluates eagerly, its condition
+           can hold where the enclosing one did not, so everything its arms evaluate is reachable
+           (review round 2) -- even while it keeps short-circuiting itself. *)
         match Ops.ternop_conditionality op with
-        | Ops.All_three -> safe pa a && safe pb b && safe pc c
-        (* A nested select either still short-circuits — guarding its own arms — or was itself
-           admitted here. Either way only its condition evaluates unconditionally. *)
-        | Ops.Cond_and_one_arm -> safe pa a)
+        | Ops.All_three | Ops.Cond_and_one_arm -> safe pa a && safe pb b && safe pc c)
     | Binop ((Ops.Div | Ops.Mod), _, _) when not (Ops.is_float prec) -> false
     | Binop (op, (a, pa), (b, pb)) -> (
         let pa, pb = if Ops.is_homogeneous_prec_binop op then (prec, prec) else (pa, pb) in
         match Ops.binop_conditionality op with
-        | Ops.Both_operands -> safe pa a && safe pb b
-        | Ops.Gated_second -> safe pa a
+        (* A gated operand is reachable, as a nested select's arms are. *)
+        | Ops.Both_operands | Ops.Gated_second -> safe pa a && safe pb b
         | Ops.Only_first -> safe pa a
         | Ops.Only_second -> safe pb b)
     | Unop (op, (a, pa)) -> safe (if Ops.is_homogeneous_prec_unop op then prec else pa) a

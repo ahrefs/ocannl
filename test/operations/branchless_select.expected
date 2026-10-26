@@ -35,6 +35,8 @@ bs_nested_guard: values: true
 bs_nested_guard: the value select blends around the inner guard's [?:]: true
 bs_int_div_guard: values: true
 bs_int_div_guard: a select whose arm divides integers keeps its [?:]: true
+bs_int_div_nested: values: true
+bs_int_div_nested: a select whose arm divides integers keeps its [?:]: true
 the reference gradient is discriminating (zero and nonzero cells): true
 pool backward: the inlined gradient equals the reference, bitwise: true
 pool backward: the inlined gradient equals the inlining-off run, bitwise: true

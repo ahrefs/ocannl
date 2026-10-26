@@ -514,8 +514,10 @@ val speculable_select : cond:scalar_t -> arms:scalar_arg list -> bool
     - no arm may contain a [Get_dynamic], nor a [Div] / [Mod] that renders at an integer precision
       (which can trap) — judged at the precision [C_syntax] renders each operand at, not at the
       operand's own annotation, which a homogeneous operator overrides;
-    - a nested conditional operator counts only its always-evaluated operand: it either keeps
-      short-circuiting, guarding its own arms, or was itself admitted here.
+    - a nested conditional operator is walked whole, arms included: evaluated eagerly, its own
+      condition can hold where the enclosing one did not, so everything under it is reachable. (An
+      index guard nested inside stays [?:] and still protects its read: its condition says exactly
+      whether the read is in range, whatever the enclosing select says.)
 
     [Local_scope] bodies are hoisted ahead of the statement and run unconditionally already, so a
     scope reference is a plain local read. Admitting an instance evaluates an arm the classifiers
