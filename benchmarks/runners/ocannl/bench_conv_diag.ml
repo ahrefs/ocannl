@@ -8,11 +8,13 @@
    routine and each keyed fission segment -- and exits, no search started. - BENCH_PARITY=1 executes
    each conv seed (BENCH_PARITY_SEEDS=all: every seed) of each keyed segment, compiled as the
    search's per-segment candidate, for one step against the default pipeline's step, and prints a
-   verdict per seed. BENCH_PARITY_TOL (default 1e-3, 1e-2 under tf32_matmuls) bounds the worst
-   normalized difference. BENCH_PARITY_PERTURB=1 is the negative control: every seeded segment's
-   code is perturbed, and each perturbed seed must be reported a mismatch. Exits 4 when a seed fails
-   (a mismatch, or under the control a perturbation not detected), 5 when no seed was executed, 0
-   otherwise. *)
+   verdict per seed. BENCH_PARITY_TOL (default 1e-3) bounds the worst normalized difference. A seed
+   computing on a tf32 arm is compared with the default pipeline whose matching accumulations round
+   their multiplicands to tf32 (gh-ocannl-1602); BENCH_PARITY_ROUND=0 keeps the plain reference, the
+   control showing the rounding is load-bearing. BENCH_PARITY_PERTURB=1 is the negative control:
+   every seeded segment's code is perturbed, and each perturbed seed must be reported a mismatch.
+   Exits 4 when a seed fails (a mismatch, an unjudged seed, or under the control a perturbation not
+   detected), 5 when no seed was executed, 0 otherwise. *)
 
 open Base
 open Ocannl
@@ -94,6 +96,12 @@ let () =
      the default pipeline's step; exit 4 when any seed fails. *)
   if H.env_flag "BENCH_PARITY" then (
     let perturb = H.env_flag "BENCH_PARITY_PERTURB" in
+    let round =
+      match Stdlib.Sys.getenv_opt "BENCH_PARITY_ROUND" with
+      | None | Some ("" | "1") -> true
+      | Some "0" -> false
+      | Some other -> failwith ("BENCH_PARITY_ROUND must be 0 or 1; found: " ^ other)
+    in
     let select =
       match Stdlib.Sys.getenv_opt "BENCH_PARITY_SEEDS" with
       | None | Some ("" | "conv") -> Bench_seed_parity.conv_seed
@@ -107,7 +115,7 @@ let () =
     in
     let n = ref 0 in
     let reference, results =
-      Bench_seed_parity.parity ~tol ~perturb ~select
+      Bench_seed_parity.parity ~tol ~perturb ~round ~select
         ~on_result:(fun r ->
           Int.incr n;
           Stdio.printf "parity seed %d %s\n%!" !n (Bench_seed_parity.verdict_line r))
@@ -116,12 +124,19 @@ let () =
         ~static_indices:[ batch_n ] opt
     in
     let failed = List.count results ~f:(fun r -> not (Bench_seed_parity.passed ~perturb r)) in
+    let rounded =
+      List.count results ~f:(fun r -> not (List.is_empty r.Bench_seed_parity.rounded))
+    in
     Stdio.printf
       "parity (%s): backend %s, %d seeds, %d failed at tolerance %g; reference: the default \
-       pipeline, %d nodes compared, %d restored, %d poisoned%s\n"
+       pipeline%s, %d nodes compared, %d restored, %d poisoned%s; masked cells: 0\n"
       (if perturb then "negative control, every seed perturbed" else "seeds as proposed")
-      backend (List.length results) failed tol reference.ref_compared reference.ref_restored
-      reference.ref_poisoned
+      backend (List.length results) failed tol
+      (if not round then " (tf32 rounding off)"
+       else
+         Printf.sprintf ", tf32-rounded for %d seeds (%d rounded compiles)" rounded
+           reference.ref_rounded_compiles)
+      reference.ref_compared reference.ref_restored reference.ref_poisoned
       (match reference.ref_poison_unsafe with
       | [] -> ""
       | l -> ", not poisoned: " ^ String.concat ~sep:" " l);

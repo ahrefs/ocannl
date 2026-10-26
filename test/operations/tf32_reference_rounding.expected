@@ -1,0 +1,8 @@
+emulation: the rounded compile rewrites the accumulation into the target: true
+emulation: every value rounds bitwise as cvt.rna.tf32.f32 does: true
+emulation: the plain compile leaves some value unrounded (the inputs discriminate): true
+emulation: the sweep holds ties where ties-to-even rounds the other way: true
+hardware: at least one seed executes tensorized with its reference rounded to tf32: true
+hardware: every executed seed matches its reference bitwise: true
+hardware: no seed fails to reach its segment, is unjudged, or raises: true
+hardware control: against the plain reference, some tensorized seed differs: true

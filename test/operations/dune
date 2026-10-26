@@ -245,6 +245,8 @@
   (alias runtest-online_softmax_block_fast_math)
   (alias runtest-qkv_zero_init-approximate)
   (alias runtest-conv_merged_gpu_seeds-tf32)
+  (alias runtest-tf32_reference_rounding-tf32)
+  (alias runtest-bench_seed_parity_smoke-tf32)
   (alias runtest-fast_math_libmvec)
   (alias runtest-cc_post_compile_cause-artifact_missing)
   (alias runtest-cc_post_compile_cause-artifact_missing_dll)
@@ -8426,6 +8428,71 @@
   arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1602: the smoke with tf32_matmuls on, which opens CUDA's tf32 tile to its f32 conv and
+; dense sites: every seed against the tf32-rounded reference, and the plain reference's control on
+; the step's built-in near-tie pool window. Elsewhere the flag is a no-op and the rule repeats the
+; run. One golden for both runs.
+
+(rule
+ (target bench_seed_parity_smoke-tf32.actual)
+ (package neural_nets_lib)
+ (locks ocannl_training_test)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:bench_seed_parity_smoke.exe} --ocannl_tf32_matmuls=true))))
+
+(rule
+ (alias runtest-bench_seed_parity_smoke-tf32)
+ (package neural_nets_lib)
+ (action
+  (diff bench_seed_parity_smoke.expected bench_seed_parity_smoke-tf32.actual)))
+
+; gh-ocannl-1602: the seed-parity reference's tf32 rounding (Bench_seed_parity.tf32_round), executed
+; bitwise against cvt.rna's bit model on every backend, and against the hardware's own conversion
+; through a one-hot matmul's seeds where the backend's arm reads f32 as tf32. The -tf32 rule runs
+; the hardware leg on CUDA, which the default run skips (tf32 off); elsewhere it repeats the run.
+
+(test
+ (name tf32_reference_rounding)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules tf32_reference_rounding)
+ (libraries
+  base
+  stdio
+  ocannl
+  bench_harness
+  bench_seed_parity
+  ll_test
+  arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
+ (target tf32_reference_rounding-tf32.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:tf32_reference_rounding.exe} --ocannl_tf32_matmuls=true))))
+
+(rule
+ (alias runtest-tf32_reference_rounding-tf32)
+ (package neural_nets_lib)
+ (action
+  (diff tf32_reference_rounding.expected tf32_reference_rounding-tf32.actual)))
 
 ; gh-ocannl-657: the exhaustive half of the e5m2 codec verification, the half that needs no GPU.
 ; 2^32 f32 bit patterns and 17.2e9 doubles, so it belongs on `slow` rather than in `runtest` --
