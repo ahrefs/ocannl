@@ -66,6 +66,14 @@ files.
   RESULT slot is refused before elaboration (gh-ocannl-1550, `refuse_result_side_padded_window`,
   called from `einsum_n_constraints` and the `Permute` branch); a padded window's backward writes
   through the same window but reuses the forward projections, so it never comes through there.
+- An affine axis's constant offset is sized for by nothing: the dim formulas omit it, so an offset
+  at or past the stride, or on an unpadded window, indexes past the extent. On the result side
+  those writes were silently dropped (stride 1 died in `projection_of_solved_dims`); on an
+  operand they read past it. `refuse_out_of_extent_offset` (gh-ocannl-1618) refuses them in
+  `einsum_slot_spec_to_dims_bio`, so every slot of every route; padded windows keep offsets.
+  `test/einsum/result_side_affine_forms` executes every accepted result-side form against an
+  oracle — extend it when adding one. The `%op`/`%cd` renderer (`Ppx_shared`) re-renders specs, so
+  a grammar form it renders wrong is a parse error of a spec the user never wrote.
 - Use-site row resolution is opt-in (gh-ocannl-544): an operation result's open row variables
   close DOWN to its arguments' shapes; a use site broadcasts the result in but cannot widen it.
   The resolve-at-use mark (`Row.add_resolve_at_use`, propagated through unification) grants the

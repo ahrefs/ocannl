@@ -58,7 +58,9 @@ and dim =
   | Affine of { stride : int; over : dim; conv : convolution option; stride_offset : int }
       (** An affine transformation of a dimension. When [conv] is [None], this is a simple strided
           dimension. When [conv] is [Some], this includes convolution parameters. Invariants:
-          [stride > 0], [dilation > 0] (when present), [0 <= stride_offset < stride]. *)
+          [stride > 0], [dilation > 0] (when present), [0 <= stride_offset < stride], and
+          [stride_offset = 0] on an unpadded window; [Shape] refuses an einsum spec that breaks the
+          last two (gh-ocannl-1618). *)
   | Concat of dim list  (** Concatenation of multiple dimensions into a single axis. *)
 
 and sym_dim = { sym : Ir.Indexing.static_symbol; sym_basis : string; sym_proj_id : proj_id option }

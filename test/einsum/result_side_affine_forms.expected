@@ -1,0 +1,53 @@
+unary stride-only 2*i: extent: true
+unary stride-only 2*i: values: true
+unary stride and offset 2*i+1: extent: true
+unary stride and offset 2*i+1: values: true
+unary stride and offset 3*i+2: extent: true
+unary stride and offset 3*i+2: values: true
+binary stride and offset 2*i+1: extent: true
+binary stride and offset 2*i+1: values: true
+interleave (%cd ~logic 2*i and 2*i+1): extent: true
+interleave (%cd ~logic 2*i and 2*i+1): values: true
+binary window i<+k: extent: true
+binary window i<+k: values: true
+binary strided window 2*i<+k: extent: true
+binary strided window 2*i<+k: values: true
+binary dilated window i<+2*k: extent: true
+binary dilated window i<+2*k: values: true
+binary strided dilated window 2*i<+3*k: extent: true
+binary strided dilated window 2*i<+3*k: values: true
+unary multi-term i<+3*j: extent: true
+unary multi-term i<+3*j: values: true
+unary window, kernel captured and set: extent: true
+unary window, kernel captured and set: values: true
+unary window, kernel unbound (closes to 1): extent: true
+unary window, kernel unbound (closes to 1): values: true
+ternary window i<+k: extent: true
+ternary window i<+k: values: true
+binary two windows i<+k, j<+l: extent: true
+binary two windows i<+k, j<+l: values: true
+batch-axis window b<+k: extent: true
+batch-axis window b<+k: values: true
+input-axis window i<+k: extent: true
+input-axis window i<+k: values: true
+legacy + with use_padding = false: extent: true
+legacy + with use_padding = false: values: true
+%cd ~logic window 2*i<+k: extent: true
+%cd ~logic window 2*i<+k: values: true
+d/da of the strided dilated window: true
+d/dw of the strided dilated window: true
+d/da of the stride-and-offset scatter: true
+result offset equal to the stride: affine axis `2*i+2` in einsum spec "s, i => s, 2*i+2" has offset 2, which is not smaller than its stride 2: the axis's extent is stride * n for an extent n of the strided label, so the last positions would fall outside it. Write an offset below the stride; to shift by whole strides, slice or pad the tensor separately.
+result offset equal to the stride: refused at construction, naming the affine axis 2*i+2: true
+result offset past the stride: refused at construction, naming the affine axis 2*i+5: true
+result offset at stride 1, %op: refused at construction, naming the affine axis 1*i+1: true
+result offset at stride 1, binary: refused at construction, naming the affine axis 1*i+1: true
+result unpadded window with an offset: affine axis `2*i<+1+k` in einsum spec "s, i; k => s, 2*i<+1+k" has offset 1, which an unpadded (<+) window cannot take: its extent, stride * (n - 1) + the dilated kernel extent, has no room for an offset, so the last kernel positions would fall outside it. Drop the offset, and slice or pad the tensor separately to shift it.
+result unpadded window with an offset: refused at construction, naming the affine axis 2*i<+1+k: true
+result unpadded stride-1 window with an offset: refused at construction, naming the affine axis i<+1+k: true
+result window with an offset, ternary: refused at construction, naming the affine axis i<+2+k: true
+result offset, %cd ~logic: refused at construction, naming the affine axis 2*i<+1+k: true
+operand offset equal to the stride: refused at construction, naming the affine axis 2*o+2: true
+operand unpadded window with an offset: refused at construction, naming the affine axis 2*o<+1+k: true
+the %op route of 2*o=+1+k has the plain string's extent: true
+the %op route of 2*o=+1+k computes the plain string's values: true
