@@ -138,7 +138,9 @@ files.
   statements against the target; an unmarked one per statement. CUDA, Metal and HIP describe
   every arm (Metal's and HIP's since gh-ocannl-1456: their whole-fragment loads, once per reduction
   step, and no `ldmatrix`), pinned device-free by `mma_format_arm_tables`, which counts the loads of
-  each pure-module reduction loop against `Cost_model.statement_operand_loads`. A
+  each pure-module reduction loop against `Cost_model.statement_operand_loads` — CUDA's inline-PTX
+  arms too since gh-ocannl-1511 moved their bodies into `Cuda_mma.inline_ptx_statement_lines`, with
+  plain and swizzled staged operands, so the `ldmatrix` load sizes are counted as well. A
   backend that describes no arm (the CPU register tiles) gets `Undescribed`, code with no
   `Tile_mma` `No_tile_mma` (`Cost_model.load_count`), and a keyless leaf neither wins nor loses a tie: each review round of staging#1216 that restated an
   emission detail in the cost model found the next arm it got wrong. `Schedule_space.search

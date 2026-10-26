@@ -23,16 +23,18 @@
 
    The same grid pins each backend's description of its operand loads (gh-ocannl-1456): the
    [mma_operand_fragments] record the cost model's tie-break counts by
-   ([Ir.Cost_model.statement_operand_loads]) is there exactly where an arm is. Where the arm's
-   reduction loop is rendered by its pure module -- Metal's and HIP's arms, CUDA's wmma ones (its
-   inline-PTX bodies live in the [cudajit]-gated backend) -- that loop is rendered at several
-   geometries and orientations and its operand loads counted as each lane executes them: the
-   statements that read [__mma_ap] or [__mma_bp], weighted by their enclosing loop extents. The
-   count must be the cost model's for that statement under the backend's own description, so a
-   renderer that starts reloading a fragment, or a description whose tile, reload or whole-fragment
-   flag drifts from the loop, disagrees here with no device. The counter reads line-shaped forms
-   only: one loop header ([for (...; __x < N; ...) {]), closing brace or statement per line, as the
-   renderers emit them. *)
+   ([Ir.Cost_model.statement_operand_loads]) is there exactly where an arm is. Every arm's reduction
+   loop is rendered by its backend's pure module -- Metal's and HIP's arms, CUDA's wmma and (since
+   gh-ocannl-1511) inline-PTX ones -- at several geometries and orientations, with each operand in
+   shared memory plain or swizzled wherever the backend's own acceptance predicate takes it, and its
+   operand loads counted as each lane executes them: the reads of [__mma_ap] or [__mma_bp], weighted
+   by their enclosing loop extents (an element gather reads its pointer once per element, an
+   [ldmatrix] address or a whole-fragment load once). The count must be the cost model's for that
+   statement under the backend's own description -- [mma_operand_loads] for the [ldmatrix] choice --
+   so a renderer that starts reloading a fragment, or a description whose tile, reload,
+   whole-fragment or [ldmatrix] flag drifts from the loop, disagrees here with no device. The
+   counter reads line-shaped forms only: one loop header ([for (...; __x < N; ...) {]), closing
+   brace or statement per line, as the renderers emit them. *)
 
 open Base
 open Verdict.Claims
@@ -74,8 +76,17 @@ type table = {
     b_prec:Ir.Ops.prec ->
     d_prec:Ir.Ops.prec ->
     scope:BI.mma_emission_scope ->
-    (ta:bool -> tb:bool -> m:int -> n:int -> k:int -> string list) option;
-      (** The reduction loop the arm's hooks render, where its pure module renders it. *)
+    (ta:bool ->
+    tb:bool ->
+    a:BI.mma_operand_place ->
+    b:BI.mma_operand_place ->
+    m:int ->
+    n:int ->
+    k:int ->
+    string list option)
+    option;
+      (** The reduction loop the arm's hooks render, where its pure module renders it; [None] where
+          the backend's acceptance declines the operands. *)
 }
 
 (* The lowest compute capability every CUDA arm emits at: above it the descriptor and the resolver
@@ -87,6 +98,13 @@ let cuda_cc =
    addresses. *)
 let lda = 64
 let ldb = 72
+let ldd = 64
+
+(* The destination as each scope's hooks see it: a fragment scope's nested call accumulates into the
+   resident array, a per-statement call addresses its own. *)
+let destination = function
+  | BI.Mma_fragment_scope -> `Resident `Plain
+  | BI.Mma_per_statement -> `Addressed (ldd, (`Shared, `Plain))
 
 (* The loop a backend's pure module renders for an arm, keyed on the arm's presence in that module's
    own table. *)
@@ -109,9 +127,27 @@ let tables =
           match Cuda.resolve_arm ~a_prec ~b_prec ~d_prec ~scope with
           | Some (Cuda.Wmma kind) ->
               Some
-                (fun ~ta ~tb ~m ~n ~k ->
-                  Cuda.wmma_k_loop_lines kind ~acc:"acc" ~ta ~tb ~lda ~ldb ~m ~n ~k)
-          | Some (Cuda.Inline_ptx _) | None -> None);
+                (fun ~ta ~tb ~a ~b ~m ~n ~k ->
+                  Option.some_if
+                    (Cuda.wmma_accepts kind ~cc:cuda_cc ~m ~n ~k ~d:(destination scope) ~a:(lda, a)
+                       ~b:(ldb, b))
+                    (Cuda.wmma_k_loop_lines kind ~acc:"acc" ~ta ~tb ~lda ~ldb ~m ~n ~k))
+          | Some (Cuda.Inline_ptx inline) ->
+              (* A fragment scope's nested calls are update-only against its register array. *)
+              let resident =
+                match scope with
+                | BI.Mma_fragment_scope -> Some "acc"
+                | BI.Mma_per_statement -> None
+              in
+              Some
+                (fun ~ta ~tb ~a ~b ~m ~n ~k ->
+                  Option.some_if
+                    (Cuda.inline_ptx_accepts inline ~cc:cuda_cc ~m ~n ~k ~a ~b)
+                    (snd
+                       (Cuda.inline_ptx_statement_lines inline ~a_prec ~b_prec ~resident ~ta ~tb
+                          ~lda ~ldb ~ldd ~a_swz:(Cuda.ldmatrix_eligible a)
+                          ~b_swz:(Cuda.ldmatrix_eligible b) ~m ~n ~k)))
+          | None -> None);
     };
     {
       name = "metal";
@@ -121,8 +157,14 @@ let tables =
       fragments = Ir.Metal_mma.operand_fragments;
       loads = Ir.Metal_mma.operand_loads;
       k_loop =
-        rendered_by Ir.Metal_mma.mma_arm (fun ~ta ~tb ~m ~n ~k ->
-            Ir.Metal_mma.k_loop_lines ~a_frag:"A" ~b_frag:"B" ~acc:"acc" ~ta ~tb ~lda ~ldb ~m ~n ~k);
+        (* [Metal_mma] states no acceptance predicate of its own; its hooks take plain operands only
+           (no [ldmatrix] analogue, gh-ocannl-1456). *)
+        rendered_by Ir.Metal_mma.mma_arm (fun ~ta ~tb ~a:(_, a_layout) ~b:(_, b_layout) ~m ~n ~k ->
+            let plain = function `Plain -> true | `Swizzled_b128 -> false in
+            Option.some_if
+              (plain a_layout && plain b_layout)
+              (Ir.Metal_mma.k_loop_lines ~a_frag:"A" ~b_frag:"B" ~acc:"acc" ~ta ~tb ~lda ~ldb ~m ~n
+                 ~k));
     };
     {
       name = "hip";
@@ -132,8 +174,14 @@ let tables =
       fragments = Ir.Hip_mma.operand_fragments;
       loads = Ir.Hip_mma.operand_loads;
       k_loop =
-        rendered_by Ir.Hip_mma.mma_arm (fun ~ta ~tb ~m ~n ~k ->
-            Ir.Hip_mma.k_loop_lines ~ab_typ:"AB" ~acc:"acc" ~ta ~tb ~lda ~ldb ~m ~n ~k);
+        (fun ~a_prec ~b_prec ~d_prec ~scope ->
+          rendered_by Ir.Hip_mma.mma_arm
+            (fun ~ta ~tb ~a ~b ~m ~n ~k ->
+              Option.some_if
+                (Ir.Hip_mma.accepts ~a_prec ~b_prec ~d_prec ~m ~n ~k ~d:(destination scope)
+                   ~a:(lda, a) ~b:(ldb, b))
+                (Ir.Hip_mma.k_loop_lines ~ab_typ:"AB" ~acc:"acc" ~ta ~tb ~lda ~ldb ~m ~n ~k))
+            ~a_prec ~b_prec ~d_prec ~scope);
     };
     {
       name = "cc";
@@ -191,9 +239,16 @@ type row = {
   arm : bool;
   has_arm : bool;  (** The arm table has an arm, whatever its floor. *)
   described : bool;  (** The backend describes the arm's operand loads. *)
-  counted : bool list;
-      (** Per rendered geometry and orientation: whether the loop's load count is the cost model's
-          under the description. Empty where no pure module renders the arm's loop. *)
+  counted : counted list;
+      (** Per geometry, orientation and operand placement. Empty where no pure module renders the
+          arm's loop. *)
+}
+
+and counted = {
+  ldmatrix : bool;  (** The description loads some operand through [ldmatrix]. *)
+  agrees : bool option;
+      (** Whether the rendered loop's load count is the cost model's under the description; [None]
+          where the backend declines the operands. *)
 }
 
 (* The operand loads one lane executes running [lines]: the statements that read the [a] / [b] tile
@@ -216,7 +271,9 @@ let executed_loads lines =
     | None, _ :: rest when String.equal line "}" -> Some (rest, a, b)
     | None, [] when String.equal line "}" -> None
     | None, _ ->
-        let reads ptr = if String.is_substring line ~substring:ptr then weight else 0 in
+        let reads ptr =
+          weight * List.length (String.substr_index_all line ~may_overlap:false ~pattern:ptr)
+        in
         Some (stack, a + reads "__mma_ap", b + reads "__mma_bp")
   in
   match
@@ -230,8 +287,9 @@ let executed_loads lines =
 let lanes table = Option.value_map table.mma ~default:1 ~f:(fun mma -> mma.BI.mma_simd_width)
 
 (* Several tile multiples per axis, so a reload across a free axis or a tile drift changes the
-   count; both orientations of each operand. *)
+   count; both orientations of each operand, each operand staged plain or swizzled. *)
 let geometries = [ (1, 1, 1); (2, 3, 1); (3, 2, 4); (2, 2, 3) ]
+let places : BI.mma_operand_place list = [ (`Shared, `Plain); (`Shared, `Swizzled_b128) ]
 
 let counted table ~scope (a_prec, b_prec, d_prec) =
   match
@@ -240,27 +298,39 @@ let counted table ~scope (a_prec, b_prec, d_prec) =
   | Some render, Some ({ BI.mf_tile = tm, tn, tk; _ } as fragments) ->
       List.concat_map geometries ~f:(fun (mt, nt, kt) ->
           List.concat_map [ false; true ] ~f:(fun ta ->
-              List.map [ false; true ] ~f:(fun tb ->
-                  let m = mt * tm and n = nt * tn and k = kt * tk in
-                  (* The loop renders an accepted call, whose operands are plain. *)
-                  let ldmatrix =
-                    table.loads ~a_prec ~b_prec ~d_prec ~scope ~ta ~tb ~a:(`Shared, `Plain)
-                      ~b:(`Shared, `Plain)
-                  in
-                  let model =
-                    Ir.Cost_model.statement_operand_loads fragments ~ldmatrix ~a_prec ~b_prec
-                      ~lanes:(lanes table) ~m ~n ~k
-                  in
-                  let got = executed_loads (render ~ta ~tb ~m ~n ~k) in
-                  let show = Option.value_map ~f:(fun (a, b) -> Printf.sprintf "a %d b %d" a b) in
-                  Option.equal (fun (a, b) (a', b') -> a = a' && b = b') model got
-                  && Option.is_some got
-                  ||
-                  (Stdio.eprintf "%s %s %dx%dx%d ta %b tb %b: rendered loads %s, cost model %s\n"
-                     table.name
-                     (Sexp.to_string (BI.sexp_of_mma_emission_scope scope))
-                     m n k ta tb (show got ~default:"unbalanced") (show model ~default:"none");
-                   false))))
+              List.concat_map [ false; true ] ~f:(fun tb ->
+                  List.concat_map places ~f:(fun a ->
+                      List.map places ~f:(fun b ->
+                          let m = mt * tm and n = nt * tn and k = kt * tk in
+                          let ((a_ldm, b_ldm) as ldmatrix) =
+                            table.loads ~a_prec ~b_prec ~d_prec ~scope ~ta ~tb ~a ~b
+                          in
+                          let agrees =
+                            Option.map (render ~ta ~tb ~a ~b ~m ~n ~k) ~f:(fun lines ->
+                                let model =
+                                  Ir.Cost_model.statement_operand_loads fragments ~ldmatrix ~a_prec
+                                    ~b_prec ~lanes:(lanes table) ~m ~n ~k
+                                in
+                                let got = executed_loads lines in
+                                let show =
+                                  Option.value_map ~f:(fun (a, b) -> Printf.sprintf "a %d b %d" a b)
+                                in
+                                let layout (_, l) =
+                                  match l with `Plain -> "plain" | `Swizzled_b128 -> "swizzled"
+                                in
+                                Option.equal (fun (a, b) (a', b') -> a = a' && b = b') model got
+                                && Option.is_some got
+                                ||
+                                (Stdio.eprintf
+                                   "%s %s %dx%dx%d ta %b tb %b a %s b %s: rendered loads %s, cost \
+                                    model %s\n"
+                                   table.name
+                                   (Sexp.to_string (BI.sexp_of_mma_emission_scope scope))
+                                   m n k ta tb (layout a) (layout b)
+                                   (show got ~default:"unbalanced") (show model ~default:"none");
+                                 false))
+                          in
+                          { ldmatrix = a_ldm || b_ldm; agrees })))))
   | _ -> []
 
 let rows table =
@@ -339,10 +409,15 @@ let () =
              (Sexp.to_string (N.sexp_of_t row.policy))
              row.described;
            false));
+      let counted = List.concat_map rows ~f:(fun row -> row.counted) in
       if List.exists rows ~f:(fun row -> row.has_arm) then
         p_all
           (table.name
          ^ ": every rendered reduction loop loads its operands as the cost model counts them")
-          (List.concat_map rows ~f:(fun row -> row.counted))
-          ~f:Fn.id);
+          (List.filter_map counted ~f:(fun c -> c.agrees))
+          ~f:Fn.id;
+      (* The [ldmatrix] loads a description names are counted somewhere, not only declined. *)
+      if List.exists counted ~f:(fun c -> c.ldmatrix) then
+        p_exists (table.name ^ ": some rendered reduction loop loads an operand through ldmatrix")
+          counted ~f:(fun c -> c.ldmatrix && Option.is_some c.agrees));
   N.set_policy saved

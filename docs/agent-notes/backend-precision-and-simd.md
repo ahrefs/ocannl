@@ -757,7 +757,7 @@ files.
   would have kept the per-`k_o` inline-PTX rendering — narrowing at every block while its plain
   sibling stayed f32, making the crowned twin decide the numerics. Holding `float frag[m/16][n/8][4]`
   in the architected m16n8k16 accumulator layout across the reduction serves both twins with one
-  instruction sequence (`mma16_d_boundary_lines` converts once per end; no coordinate table, the
+  instruction sequence (`Cuda_mma.inline_ptx_d_boundary_lines` converts once per end; no coordinate table, the
   PTX layout is specified). Before it, every staged uniform-bf16 schedule on CUDA narrowed per block
   under EVERY policy although `accum_prec` said f32 — a staged k-split discriminator (256 + 1 per
   later block) read 256, now 264. Before extending a fragment scope, list the staged twins the
