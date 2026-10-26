@@ -52,6 +52,12 @@ let () =
   p "not without the workgroup capacity"
     (not (Autotune.model_ranks_coalesced ~limits:without_capacity));
   p "not without the transaction rate" (not (Autotune.model_ranks_coalesced ~limits:without_rate));
+  p "not without the launch fill's multiprocessor count, which the occupancy factor reads"
+    (not
+       (Autotune.model_ranks_coalesced
+          ~limits:{ minix_like with multiprocessors = None; fill_threads = None }));
+  p "not without the device residency"
+    (not (Autotune.model_ranks_coalesced ~limits:{ minix_like with max_resident_threads = None }));
   p "not without a lane width"
     (not (Autotune.model_ranks_coalesced ~limits:{ minix_like with simdgroup_width = None }))
 

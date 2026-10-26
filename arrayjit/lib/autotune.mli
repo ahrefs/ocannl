@@ -2446,8 +2446,9 @@ val model_family_search :
 
 val model_ranks_coalesced : limits:Ir.Backend_intf.hardware_limits -> bool
 (** gh-ocannl-1600: whether {!model_default} ranks the coalesced layouts -- where the terms that
-    tell them from their uncoalesced twins are priced: {!ranking_transaction_rate} and
-    {!ranking_workgroup_capacity} both resolve and the backend states its [simdgroup_width]. Its
+    tell them from their uncoalesced twins are priced: {!ranking_transaction_rate},
+    {!ranking_workgroup_capacity}, the device residency and {!ranking_fill_model} all resolve (the
+    occupancy factor reads the last two) and the backend states its [simdgroup_width]. Its
     numerics-preserving set then also admits a coalesced scalar blocktile. *)
 
 type seeded_choice = {
@@ -2905,8 +2906,9 @@ val model_explain :
     [~coalesced:true] (default [false]) appends to [x_routine] the whole-routine leaves of the
     coalesced tuner branch ({!coalesced_seed_params}), so the score's ranking of them can be checked
     against timings (gh-ocannl-1278); they are appended regardless where {!model_default} ranks them
-    ({!model_ranks_coalesced}, gh-ocannl-1600), so its pick is a listed row. Each is marked admitted
-    exactly when its uncoalesced form would be. *)
+    ({!model_ranks_coalesced}, gh-ocannl-1600), so its pick is a listed row -- on each segment's
+    candidates too, labeled as the segment's leaves are. Each is marked admitted exactly when its
+    uncoalesced form would be. *)
 
 val untuned_compile :
   ?name:string ->

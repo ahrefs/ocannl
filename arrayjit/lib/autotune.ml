@@ -6125,12 +6125,17 @@ let model_seeding ~backend ~limits =
    Metal, the CPU backends and an unseeded CUDA/HIP compile keep the whole family. *)
 (* gh-ocannl-1600: whether [model_default] ranks the coalesced layouts: only where both terms that
    tell them apart are priced -- the memory-transaction rate (with the lane group's width stated)
-   and the occupancy factor's workgroup capacity. A coalesced layout never changes which lanes read
+   and the occupancy factor (its workgroup capacity, the device residency and the fill model's
+   multiprocessor count). A coalesced layout never changes which lanes read
    contiguous cells (its transactions equal its twin's); what it adds is geometry the uncoalesced
    site cannot reach -- deep-K tiles, whose workgroup memory only the occupancy factor charges. *)
 let model_ranks_coalesced ~limits =
   Option.is_some (ranking_transaction_rate ~limits)
   && Option.is_some (ranking_workgroup_capacity ~limits)
+  (* The occupancy factor needs the residency and a multiprocessor count too (segments_legs): a
+     capacity that prices nothing must not admit what only it ranks. *)
+  && Option.is_some (Ir.Backend_intf.untimed_limits limits).resident_threads
+  && Option.is_some (ranking_fill_model ~limits)
   && Option.is_some limits.Ir.Backend_intf.simdgroup_width
 
 let model_admits ?(coalesced = false) ~seeding ~accum_prec (base_opt : LL.optimized) =
@@ -6939,12 +6944,11 @@ let model_explain ?name ?(coalesced = false) ctx comp bindings =
        (gh-ocannl-1600, {!model_ranks_coalesced}), so its pick is among the listed rows. A leaf is
        marked admitted when its uncoalesced form is: the set [model_default] ranks where it ranks
        them (neither layout reorders a cell's summation). *)
-    let coalesced_explains prog =
+    let coalesced_explains ?(label = fun p -> spec_label (Whole (W_sketch p))) prog =
       if not (coalesced || model_ranks_coalesced ~limits) then []
       else
         let admits = model_admits ~seeding ~accum_prec prog in
-        explain_leaves
-          ~label:(fun p -> spec_label (Whole (W_sketch p)))
+        explain_leaves ~label
           ~admits:(fun p -> admits { p with sk_coalesce = None })
           prog
           (coalesced_seed_params ~capabilities:caps ~is_gpu ~is_cpu ~limits prog)
@@ -6965,10 +6969,13 @@ let model_explain ?name ?(coalesced = false) ctx comp bindings =
                 xs_segment = tag;
                 xs_candidates =
                   ("preset", explain [ post ])
-                  :: leaf_explains
-                       ~seeded:(seeded_record_for_key ~plan ~record key)
-                       ~label:(fun p -> sketch_params_label p ^ " @" ^ tag)
-                       pre;
+                  :: (leaf_explains
+                        ~seeded:(seeded_record_for_key ~plan ~record key)
+                        ~label:(fun p -> sketch_params_label p ^ " @" ^ tag)
+                        pre
+                     (* gh-ocannl-1600: the segment's coalesced menu, which [model_default]'s walk
+                        on the segment searches too where it ranks them. *)
+                     @ coalesced_explains ~label:(fun p -> sketch_params_label p ^ " @" ^ tag) pre);
               })
     in
     {
