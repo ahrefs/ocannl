@@ -660,16 +660,16 @@ curated leaves 16, lifted leaves 80 (+64 lattice singletons), depth 4 -> 9
 the lattice exclusion carries the lift instructions: true
 == gpu staged lattice: certain-traffic increments over 80 leaf paths ==
   levels on the leaf paths: bk, bm, fusion, geometry, pipeline, twin
-  priced above the schedule-invariant floor: 78; max increment 49152 bytes
+  priced above the schedule-invariant floor: 78; max increment 59392 bytes
 gpu staged lattice: every leaf's increment is the traffic its own parameters imply: true
 gpu staged lattice: the increment is monotone along every path's prefixes: true
 gpu staged lattice: the staging commitments price above the floor: true
 gpu staged lattice: every leaf path commits its pipeline's shape level: true
-  staged geometry            12288 bytes
+  staged geometry            16384 bytes
     fusion=unfused > pipeline=tensorized > geometry=bm16 bn32 bk32 > twin=plain
   unpriced geometry          0 bytes
     fusion=unfused > pipeline=tensorized > geometry=bm16 bn32 bk0 > twin=plain
-  lattice leaf               2560 bytes
+  lattice leaf               4608 bytes
     fusion=unfused > pipeline=tensorized > geometry=lattice > bm=bm 8..32 > bm=bm 8..16 > bm=bm=8 > bk=bk 8..32 > bk=bk 8..16 > bk=bk=8
   lattice refinement chain:
     bm 40..64      -> 4608 bytes
@@ -678,7 +678,10 @@ gpu staged lattice: every leaf path commits its pipeline's shape level: true
     bk 40..64      -> 30720 bytes
     bk 56..64      -> 43008 bytes
     bk=64          -> 49152 bytes
-lifted search at incumbent 6000: 34 expanded, 13 scored, 26 fathomed, 1 refuted, 0 excluded
+== gpu staged lattice: 80 leaf paths, 80 applied; floor 49152 bytes ==
+gpu staged lattice: the freshly minted nodes are charged at least the increment: true
+gpu staged lattice: at every prefix the composed floor is within the leaf's analyzed bytes: true
+lifted search at incumbent 6000: 22 expanded, 6 scored, 21 fathomed, 1 refuted, 0 excluded
 == cpu simd32: certain-traffic increments over 22 leaf paths ==
   levels on the leaf paths: fusion, geometry, packing, packing-shape, pipeline, register-tile, row-block, tensorized-form
   priced above the schedule-invariant floor: 4; max increment 32768 bytes
@@ -691,6 +694,9 @@ cpu simd32: every leaf path commits its pipeline's shape level: true
   unpriced geometry          0 bytes
     fusion=unfused > pipeline=blocktile > packing=in-kernel > geometry=b16
   lattice leaf               (none in this tree)
+== cpu simd32: 22 leaf paths, 22 applied; floor 49152 bytes ==
+cpu simd32: the freshly minted nodes are charged at least the increment: true
+cpu simd32: at every prefix the composed floor is within the leaf's analyzed bytes: true
 MMA emission-scope serialization and comparison distinguish accumulator lifetimes: true
 a one-block staged matmul uses the per-statement wide-f16 capability: true
 a multi-axis contraction requires fragment-scope wide-f16 accumulation even with no explicit k-block: true

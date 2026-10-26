@@ -5205,7 +5205,8 @@ let lift_pad_waste (tree : family_tree) : family_tree =
    reads every slot through [Tile_mma]'s fallback, which [Low_level.affine_accesses] walks.
    [analyze] charges a node [min (node bytes, sum of its per-access images)], guarded accesses
    counted taken — an upper bound on its distinct cells — so each tile node is charged at least one
-   whole tile written and one read: [2 * (M*K*wA + K*N*wB)].
+   whole tile written and one read: [2 * (M*K*wA + K*N*wB)]. The accumulator fragment adds [2 *
+   M*N*wD] where its contraction is certain (gh-ocannl-1601, [fragment] below).
 
    - CPU leg: M is the GEMM row ([Conv_shape `Serial | `Grid]) or the panel's [bm] rows ([`Row_block
    bm], the row padded to a multiple of it); K and N the reduction and out-channel extents,
@@ -5224,10 +5225,24 @@ let lift_pad_waste (tree : family_tree) : family_tree =
    conv_family_tree against every leaf's scheduled [analyze] (the soundness oracle). *)
 let conv_path_traffic_floor ~(limits : Ir.Backend_intf.hardware_limits) (site : conv_site) :
     Family_decision.path -> int =
+  (* gh-ocannl-1601: the accumulator fragment. [Tensorize]'s contraction
+     ([Sched.contract_tensorized_accumulator]) mints a fresh [m x n] node at the output's storage
+     precision wherever a serial loop of more than one iteration encloses the micro-kernel without
+     indexing the accumulator — on the conv pipelines, the outermost kernel-window loop ([outer..;
+     kernel..; row; oc; ic] on both legs). Its init-load writes every slot and its store-back reads
+     every slot, so [analyze] charges it at least one whole fragment written and one read, counted
+     guards-taken. Certain only where a window loop has two or more iterations; elsewhere (a site
+     whose every window extent is 1, which only a pad mask would contract) it prices nothing. *)
+  let fragment =
+    if List.exists site.c_axes ~f:(fun cx -> cx.cx_nk >= 2) then
+      let wd = Ir.Ops.prec_in_bytes (Lazy.force site.c_d.Ir.Tnode.storage_prec) in
+      fun ~m ~n -> 2 * m * n * wd
+    else fun ~m:_ ~n:_ -> 0
+  in
   let tiles ~pack_prec ~m ~k ~n =
     let wa = staged_tile_elt_bytes ~pack_prec site.c_a
     and wb = staged_tile_elt_bytes ~pack_prec site.c_b in
-    2 * ((m * k * wa) + (k * n * wb))
+    (2 * ((m * k * wa) + (k * n * wb))) + fragment ~m ~n
   in
   let cpu =
     lazy
@@ -5302,6 +5317,16 @@ let sketch_path_traffic_floor ~(limits : Ir.Backend_intf.hardware_limits) (opt :
             | Some tile -> tile
             | None -> m.Ir.Backend_intf.mma_tile)
       in
+      (* gh-ocannl-1601: the accumulator fragment of a staged tensorized geometry. The GPU mma
+         pipeline's reduction-block loop ([blocks_of m_nk bk] iterations, serial, enclosing the
+         micro-kernel without indexing the accumulator) is the contraction site of
+         [Sched.contract_tensorized_accumulator], which mints a fresh [bm x bn] fragment at the
+         output's storage precision, written by the init-load and read by the store-back: certain
+         once that loop runs at least twice, i.e. [bk < m_nk]. A single-block reduction contracts
+         only under pad masks, and the CPU pipelines' contraction depends on the packing shape's
+         loop order, so both price nothing here. *)
+      let pd = Ir.Ops.prec_in_bytes (Lazy.force site.m_d.Ir.Tnode.storage_prec) in
+      let fragment ~bm ~bn ~bk_max = if bk_max < site.m_nk then 2 * bm * bn * pd else 0 in
       fun path ->
         let decisions = List.map path ~f:snd in
         let committed =
@@ -5315,7 +5340,7 @@ let sketch_path_traffic_floor ~(limits : Ir.Backend_intf.hardware_limits) (opt :
         | Some (Family_decision.Gpu_mma { g_bm = bm; g_bn = bn; g_bk = bk; _ }) ->
             (* Staged mma geometries (bk > 0) stage both operand tiles in kernel; unstaged read in
                place. *)
-            if bk > 0 then 2 * tile_bytes ~bm ~bn ~bk else 0
+            if bk > 0 then (2 * tile_bytes ~bm ~bn ~bk) + fragment ~bm ~bn ~bk_max:bk else 0
         | Some (Family_decision.Cpu_packed { g_bm = bm; g_bn = bn; g_bk = bk; _ }) ->
             (* CPU packed shapes: only in-kernel packing of both panels ([Packing_shape `Serial])
                certainly ADDS traffic — the packing nest reads the original operands (already in the
@@ -5348,5 +5373,14 @@ let sketch_path_traffic_floor ~(limits : Ir.Backend_intf.hardware_limits) (opt :
                     lb_lo
                 | _ -> acc)
             in
-            2 * tile_bytes ~bm:(corner `Bm tm_t) ~bn:w ~bk:(corner `Bk tk_t)
+            (* A bk box's every completion contracts only when its LARGEST bk leaves two blocks;
+               before any bk box commits, the menu reaches the whole reduction and the fragment is
+               not certain. *)
+            let bk_max =
+              List.fold decisions ~init:site.m_nk ~f:(fun acc -> function
+                | Family_decision.Lattice_box { lb_axis = `Bk; lb_hi; _ } -> min acc lb_hi
+                | _ -> acc)
+            in
+            let bm = corner `Bm tm_t in
+            (2 * tile_bytes ~bm ~bn:w ~bk:(corner `Bk tk_t)) + fragment ~bm ~bn:w ~bk_max
         | None -> 0)

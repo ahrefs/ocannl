@@ -219,11 +219,14 @@ let family_root_pins name ~is_gpu ~is_cpu ~limits opt =
    both operand tiles in kernel (written and read), while the CPU packed composition adds traffic
    only where it packs in kernel — every other shape packs at link time or per Grid chunk, replacing
    the original operand's reads rather than adding to them. *)
-let expected_inc ~elt_bytes ~n_extent (p : Autotune.sketch_params) =
+let expected_inc ~elt_bytes ~n_extent ~k_extent (p : Autotune.sketch_params) =
   let bm = p.Autotune.sk_bm and bk = p.Autotune.sk_bk in
   let bn = if p.Autotune.sk_bn = 0 then n_extent else p.Autotune.sk_bn in
   let tile = ((bm * bk) + (bk * bn)) * elt_bytes in
-  if p.Autotune.sk_gpu then if bk > 0 then 2 * tile else 0
+  (* gh-ocannl-1601: a staged tensorized GPU leaf whose reduction runs in two or more blocks
+     contracts its accumulator into a fresh [bm x bn] fragment, written and read. *)
+  let fragment = if p.Autotune.sk_mma && bk < k_extent then 2 * bm * bn * elt_bytes else 0 in
+  if p.Autotune.sk_gpu then if bk > 0 then (2 * tile) + fragment else 0
   else if
     p.Autotune.sk_mma && bk > 0
     && not (p.Autotune.sk_hoist || p.Autotune.sk_grid || p.Autotune.sk_pack_rest)
@@ -239,7 +242,7 @@ let prefixes path =
    from [Sspace.enumerate] of the real tree, never from literals. A renamed level or a reworded
    label moves the rendered lines below and no number; a level ADDED, REMOVED or re-parameterized
    moves the counts and the per-leaf agreement. *)
-let traffic_pins name ~limits ~elt_bytes ~n_extent tree opt =
+let traffic_pins name ~limits ~elt_bytes ~n_extent ~k_extent tree opt =
   let inc = Autotune.sketch_path_traffic_floor ~limits opt in
   let paths = Sspace.enumerate tree in
   let priced = List.count paths ~f:(fun (path, _) -> inc path > 0) in
@@ -252,7 +255,7 @@ let traffic_pins name ~limits ~elt_bytes ~n_extent tree opt =
   Stdio.printf "  priced above the schedule-invariant floor: %d; max increment %d bytes\n" priced
     (List.fold paths ~init:0 ~f:(fun acc (path, _) -> max acc (inc path)));
   Verdict.p_all (name ^ ": every leaf's increment is the traffic its own parameters imply") paths
-    ~f:(fun (path, p) -> inc path = expected_inc ~elt_bytes ~n_extent p);
+    ~f:(fun (path, p) -> inc path = expected_inc ~elt_bytes ~n_extent ~k_extent p);
   Verdict.p_all (name ^ ": the increment is monotone along every path's prefixes") paths
     ~f:(fun (path, _) ->
       let incs = 0 :: List.map (prefixes path) ~f:inc in
@@ -260,7 +263,8 @@ let traffic_pins name ~limits ~elt_bytes ~n_extent tree opt =
   Verdict.p
     (name ^ ": the staging commitments price above the floor")
     (priced > 0
-    && priced = List.count paths ~f:(fun (_, p) -> expected_inc ~elt_bytes ~n_extent p > 0));
+    && priced
+       = List.count paths ~f:(fun (_, p) -> expected_inc ~elt_bytes ~n_extent ~k_extent p > 0));
   Verdict.p_all (name ^ ": every leaf path commits its pipeline's shape level") paths
     ~f:(fun (path, _) ->
       List.exists path ~f:(fun (_, d) ->
@@ -302,6 +306,48 @@ let traffic_pins name ~limits ~elt_bytes ~n_extent tree opt =
 (* Awkward sites (phase 2): the tree's verdicts explain, before any compilation, why branches
    propose nothing — where the flat enumeration silently dropped them. Only the collector reports
    print here; the leaves are still the seeds the flat API proposes. *)
+(* gh-ocannl-1601: the composed bound judged against the leaves it bounds — every leaf's schedule
+   applied and [Cost_model.analyze]d, as [conv_family_tree] judges the conv family. The freshly
+   minted nodes (staged tiles, the accumulator fragment) carry at least the path's increment, and at
+   every prefix of the path, the root included, the schedule-invariant floor plus the prefix's
+   increment stays within the leaf's analyzed bytes. *)
+let scratch (o : LL.optimized) =
+  {
+    o with
+    LL.traced_store = Hashtbl.copy o.LL.traced_store;
+    LL.optimize_ctx = LL.copy_optimize_ctx o.LL.optimize_ctx;
+  }
+
+let soundness_pins name ~limits tree (opt : LL.optimized) =
+  let inc = Autotune.sketch_path_traffic_floor ~limits opt in
+  let floor = Ir.Cost_model.completion_floor opt.LL.llc in
+  let base_nodes =
+    Set.of_list (module Ir.Tnode) (List.map (Ir.Cost_model.analyze opt.LL.llc).per_node ~f:fst)
+  in
+  let paths = Sspace.enumerate tree in
+  let applied =
+    List.filter_map paths ~f:(fun (path, p) ->
+        match
+          Ir.Schedule.apply (Autotune.sketch_schedule ~accum_prec:Fn.id ~p opt) (scratch opt)
+        with
+        | post -> Some (path, p, Ir.Cost_model.analyze post.LL.llc)
+        | exception _ -> None)
+  in
+  let fresh (s : Ir.Cost_model.summary) =
+    List.sum
+      (module Int)
+      s.per_node
+      ~f:(fun (tn, fp) -> if Set.mem base_nodes tn then 0 else fp.fp_read_bytes + fp.fp_write_bytes)
+  in
+  Stdio.printf "== %s: %d leaf paths, %d applied; floor %d bytes ==\n" name (List.length paths)
+    (List.length applied) floor.fr_bytes;
+  Verdict.p_all (name ^ ": the freshly minted nodes are charged at least the increment") applied
+    ~f:(fun (path, _, s) -> fresh s >= inc path);
+  Verdict.p_all (name ^ ": at every prefix the composed floor is within the leaf's analyzed bytes")
+    applied ~f:(fun (path, _, s) ->
+      let total = Ir.Cost_model.total_bytes s in
+      List.for_all ([] :: prefixes path) ~f:(fun pre -> floor.fr_bytes + inc pre <= total))
+
 let awkward_section name ~is_gpu ~is_cpu ~limits opt =
   match Autotune.matmul_sketch_tree ~is_gpu ~is_cpu ~limits opt with
   | None -> Stdio.printf "== %s: no site detected ==\n" name
@@ -1048,7 +1094,9 @@ let () =
          (gh-ocannl-591), so the pin moves with the tree rather than with a list of literals this
          test wrote for itself. *)
       let inc = Autotune.sketch_path_traffic_floor ~limits:gpu_full_limits mm2 in
-      traffic_pins "gpu staged lattice" ~limits:gpu_full_limits ~elt_bytes:4 ~n_extent:64 lifted mm2;
+      traffic_pins "gpu staged lattice" ~limits:gpu_full_limits ~elt_bytes:4 ~n_extent:64
+        ~k_extent:64 lifted mm2;
+      soundness_pins "gpu staged lattice" ~limits:gpu_full_limits lifted mm2;
       (* Search over the lifted tree with the increment itself as the bound and an incumbent between
          the small and large boxes' floors: large-tile boxes fathom without expansion, so the walk
          scores a fraction of the lattice — the logarithmic-effective regime. The score never
@@ -1068,7 +1116,9 @@ let () =
      floor are pinned by the tree rather than by a literal path. *)
   (match Autotune.matmul_sketch_tree ~is_gpu:false ~is_cpu:true ~limits:cpu_limits opt with
   | None -> Stdio.printf "cpu traffic: no site detected\n"
-  | Some tree -> traffic_pins "cpu simd32" ~limits:cpu_limits ~elt_bytes:4 ~n_extent:64 tree opt);
+  | Some tree ->
+      traffic_pins "cpu simd32" ~limits:cpu_limits ~elt_bytes:4 ~n_extent:64 ~k_extent:64 tree opt;
+      soundness_pins "cpu simd32" ~limits:cpu_limits tree opt);
   check_wide_scope_edges ();
   (* Corner-judged box refutations: a workgroup-memory cap that admits only the smallest staged
      tiles refutes the large-tile half-boxes at their most favorable corner, pre-expansion — the

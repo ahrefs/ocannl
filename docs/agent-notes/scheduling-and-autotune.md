@@ -365,15 +365,25 @@ files.
   reduction and column extents pad to the format tile); a pipelined tile keeps its logical dims, so
   one copy. `conv_family_tree` checks it against every leaf's scheduled `analyze` (fresh nodes, the
   composed floor at every prefix, the bound against the ranking score): on every fixture the two
-  `Stage` tiles are charged EXACTLY the increment, and the fresh-node slack is `Tensorize`'s
-  accumulator fragment (`rows x noc_p` at the output's width, written and read), which the floor
-  leaves unpriced — a tightening once its certainty is argued. **Its pruning power is
-  capped by the base floor, not the increment**: `completion_floor` prices an overlapping-window
-  input read at 0 (the image is not exact), so a real leaf's traffic sits about the input's size
-  above floor + increment — more than two leaves' A tiles differ by — and with the incumbent at a
-  real score nothing below the root fathoms; the test's pruning claim therefore puts the incumbent
-  between the floor and the largest raised bound. A sound lower bound on a windowed image (an
-  affine sum's interval) is what would let conv subtrees fathom at real incumbents. **Consequence for diagnostics: since gh-577 a companion-coverage
+  `Stage` tiles are charged EXACTLY the increment. Since gh-ocannl-1601 the increment also prices
+  `Tensorize`'s accumulator fragment (`rows x noc_p` at the output's width, written and read) where
+  every completion contracts: on conv, a window loop of two or more iterations (the contraction
+  site is the outermost kernel-window loop — `detect_conv` does NOT refuse singleton windows, so
+  the condition is explicit); on matmul, a staged GPU mma geometry with `bk < m_nk` (a lattice box
+  only once its LARGEST `bk` leaves two blocks — a whole-K box has no fragment unless pad masks
+  force one). The CPU packed shapes are left unpriced: whether they contract depends on the
+  packing shape's loop order (the hoisted-grid shapes do, serial does not), not on the geometry.
+  **Pruning at real conv incumbents needed both halves of the byte accounting tight**: the floor
+  prices a windowed read by `Affine.image_cardinality_lb` (sumset/interval counting per
+  coordinate, products over symbol-disjoint coordinates), and `analyze` caps a non-injective
+  map's count by its coordinates' value ranges, exact where the two meet — before that, `analyze`
+  charged a padded input's whole buffer (`[1, 2]` padding leaves one unread row and column) and
+  that uniform slack exceeded every two leaves' increment difference, so nothing fathomed. On
+  cifar_resnet's stage-1 conv every leaf's `analyze` is now exactly floor + increment
+  (`conv_family_tree`'s `real_site_pins`). **The floor drops an accumulation's read of its own
+  cell**: a privatizing completion (the blocktile pipelines) never performs it, and the matmul
+  applied-leaf oracle (`sketch_family_tree`'s `soundness_pins`) caught the floor above blocktile
+  leaves' bytes while it was counted. **Consequence for diagnostics: since gh-577 a companion-coverage
   DECLINE CENSUS is empty, and that is not evidence the rule stopped firing** — a refuted family is
   never seeded, so it never reaches the decline log. gh-569's Part 3 read 25 coverage declines out of
   `schedule_log_declines`; the same workload on current master logs zero

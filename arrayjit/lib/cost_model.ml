@@ -88,7 +88,29 @@ let access_cells ?(fixed = fun (_ : Idx.symbol) -> false) (a : Tn.t Affine.acces
         let disjoint_runs = Affine.vec_runs_disjoint ~dims a in
         ( min node_cells (image * max 1 a.a_vec_len),
           (not (exact_image && disjoint_runs)) || a.a_guarded )
-    | None -> (min node_cells image, (not exact_image) || a.a_guarded)
+    | None when exact_image -> (min node_cells image, a.a_guarded)
+    | None when uninterpretable -> (min node_cells image, true)
+    | None ->
+        (* gh-ocannl-1601: a non-injective interpretable map — an overlapping window's [s*o + d*k] —
+           touches, per coordinate, at most the values between its extremes: [span + 1], where the
+           span is [sum |c| * (w - 1)]. The coordinates' ranges multiply into a box holding the
+           image, so their product is an upper bound beside [box / fiber]; it is what keeps a padded
+           input's unread margin (the window's image is one row short of a buffer padded [1, 2]) off
+           the charge. Where it meets the lower bound {!Affine.image_cardinality_lb} (a unit-stride
+           or stride-at-most-window window), the count is exact. *)
+        let v = Affine.view ~dims a.a_map in
+        let width s = List.Assoc.find domain s ~equal:Idx.equal_symbol |> Option.value ~default:1 in
+        let range_ub =
+          Array.fold v ~init:1 ~f:(fun acc -> function
+            | Affine.Known { terms; size; _ } ->
+                let span =
+                  List.sum (module Int) terms ~f:(fun (c, s) -> Int.abs c * (max 1 (width s) - 1))
+                in
+                acc * min size (span + 1)
+            | Affine.Unknown { size; _ } -> acc * size)
+        in
+        let ub = min node_cells (min image range_ub) in
+        (ub, a.a_guarded || Affine.image_cardinality_lb ~domain v < ub)
 
 (* Same-node accesses whose images provably share no cell: the union of their images is then the sum
    of their cardinalities. *)
@@ -447,18 +469,31 @@ let arithmetic_intensity s = Float.of_int s.flops /. Float.of_int (max 1 (total_
    arm where the upper walk charges the dearer one and a gated right operand floors away, a node's
    multiple same-direction accesses sum only when the exact images are pairwise provably disjoint
    (both extractions then agree the union is the sum) and otherwise take their MAX (a union is at
-   least its largest member) instead of the capped sum, non-exact images contribute zero, and opaque
+   least its largest member) instead of the capped sum, a non-exact image counts its affine lower
+   bound ({!Affine.image_cardinality_lb}, gh-ocannl-1601) instead of the upper count, and opaque
    code ([Staged_compilation], merge-buffer reads) — the upper contract's one escape hatch — merely
    loosens a floor without breaking it. [fr_exact] is [false] when any flooring occurred: the floor
    is then sound but not tight. *)
 
 type floor = { fr_flops : int; fr_bytes : int; fr_exact : bool } [@@deriving sexp_of]
 
-(* An access's certain distinct-cell count: the exact image, or zero when only an upper bound is
-   known. Reuses [access_cells]' exactness verdict. *)
-let access_cells_floor a =
+(* An access's certain distinct-cell count, with whether it is exact: the exact image where
+   [access_cells] proves one; otherwise, for an access that executes whenever its loops do, the
+   lower bound {!Affine.image_cardinality_lb} reads off its coordinate view (gh-ocannl-1601) — an
+   overlapping window's [s*o + d*k] image, the known coordinates of a dynamic gather or a vector
+   run. A guarded or gated access (whose approximation [access_cells] folds into its verdict) is not
+   certain and counts zero, as does a guarded whole-node access. *)
+let access_cells_floor (a : Tn.t Affine.access) : int * bool =
   let cells, approx = access_cells a in
-  if approx then 0 else cells
+  if not approx then (cells, true)
+  else if a.a_guarded || a.a_gated || a.a_whole then (0, false)
+  else
+    let dims = Lazy.force a.a_tn.Tn.dims in
+    let range s = List.Assoc.find a.a_loops s ~equal:Idx.equal_symbol in
+    let vec = if a.a_vec_last && a.a_vec_len > 1 then Some (Affine.Run a.a_vec_len) else None in
+    let v = Affine.view ~range ?dyn_axis:a.a_dyn_axis ?vec ~dims a.a_map in
+    let domain = List.map a.a_loops ~f:(fun (s, (lo, hi)) -> (s, hi - lo + 1)) in
+    (min (Tn.num_elems a.a_tn) (Affine.image_cardinality_lb ~domain v), false)
 
 let floor_flops ~open_placement (code : Low_level.t) : int * bool =
   let exact = ref true in
@@ -569,8 +604,9 @@ let completion_floor ?(open_placement = fun _ -> false) (code : Low_level.t) : f
      contribute zero: their fully-inlined completion moves no bytes for them, and the floor
      quantifies over every completion. Committing such a node to Materialize adds back
      {!node_floor_bytes} — the monotone refinement delta. Reads that are not certain in every
-     completion (Where arms, open producers\' operands, dead code) floor to zero, as do guarded and
-     non-exact accesses. *)
+     completion (Where arms, open producers\' operands, dead code) floor to zero, as do guarded
+     accesses; a certain access with a non-exact image counts its affine lower bound
+     ([access_cells_floor]). *)
   let tbl = Hashtbl.create (module Tn) in
   let inexact = ref (not flops_exact) in
   List.iter (Low_level.affine_accesses code) ~f:(fun a ->
@@ -581,12 +617,29 @@ let completion_floor ?(open_placement = fun _ -> false) (code : Low_level.t) : f
         cell := a :: !cell);
   let bytes =
     Hashtbl.fold tbl ~init:0 ~f:(fun ~key:tn ~data:accs acc ->
+        let writes, reads = List.partition_tf !accs ~f:(fun a -> a.Affine.a_write) in
+        (* An accumulation's read of its own cell ([C[i] = C[i] + ...], the read in the rmw write's
+           statement at the write's own position) is not certain in every completion: a privatizing
+           schedule ([Schedule.Privatize], the blocktile pipelines) accumulates in a register
+           initialized to the reduction's neutral element and stores the target once, never reading
+           it (gh-ocannl-1601: the composed-floor oracle over the matmul family's applied leaves
+           caught the floor above a blocktile leaf's analyzed bytes). *)
+        let self_read (a : Tn.t Affine.access) =
+          match a.a_stmt_write with
+          | Some w_map ->
+              Array.equal Idx.equal_axis_index w_map a.a_map
+              && List.exists writes ~f:(fun (w : Tn.t Affine.access) ->
+                  w.a_rmw && Affine.same_statement w.a_path a.a_path)
+          | None -> false
+        in
         let direction accs =
           let counted =
             List.map accs ~f:(fun a ->
-                let cells = access_cells_floor a in
-                let cells = if (not a.a_write) && read_uncertain a.a_tn then 0 else cells in
-                if cells = 0 then inexact := true;
+                let cells, exact = access_cells_floor a in
+                let cells =
+                  if (not a.a_write) && (read_uncertain a.a_tn || self_read a) then 0 else cells
+                in
+                if cells = 0 || not exact then inexact := true;
                 (a, cells))
           in
           let nz = List.filter counted ~f:(fun (_, c) -> c > 0) in
@@ -598,7 +651,6 @@ let completion_floor ?(open_placement = fun _ -> false) (code : Low_level.t) : f
             List.fold nz ~init:0 ~f:(fun m (_, c) -> max m c)
           end
         in
-        let writes, reads = List.partition_tf !accs ~f:(fun a -> a.Affine.a_write) in
         let width = Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec) in
         acc + ((direction reads + direction writes) * width))
   in

@@ -712,6 +712,82 @@ let fiber_cardinality_ub ~(domain : (Idx.symbol * int) list) (idcs : Idx.axis_in
     in
     `At_most (base * best)
 
+(* gh-ocannl-1601: a lower bound on the distinct cells a viewed access touches, for the floor
+   extraction's non-exact images (an overlapping window's [s*o + d*k]). Three integer facts, each
+   only shrinking what is counted:
+
+   - one coordinate's value set is the sumset of its terms' sets [{c*x : x < w}], which has [w]
+   values per nonzero term. Dividing every coefficient by their gcd keeps the count. Adding the
+   terms in ascending [|c|] order: an interval of [n] values plus a term with [|c| <= n] stays an
+   interval, of [n + |c|*(w-1)] values (the translates overlap or abut); a set of span [span] plus a
+   term with [|c| > span] has [n*w] values (the translates are disjoint); otherwise the integer
+   sumset bound [|S + T| >= |S| + |T| - 1] gives at least [n + w - 1]. The count is at most the
+   coordinate's [size] under the in-bounds assumption every view makes; - coordinates whose varying
+   symbols are pairwise disjoint take their value sets independently, so the image's projection onto
+   them is the product of their counts, and a projection has at most as many points as the image; -
+   an [Unknown] coordinate (a dynamic axis, a vector run, a [Concat]) is left out of the projection,
+   which stays a projection.
+
+   Arithmetic saturates at a cap below which every real count lies, so a saturated value is still a
+   lower bound. *)
+let image_cardinality_lb ~(domain : (Idx.symbol * int) list) (v : coord array) : int =
+  if List.exists domain ~f:(fun (_, w) -> w <= 0) then 0
+  else
+    let width s = List.Assoc.find domain s ~equal:Idx.equal_symbol |> Option.value ~default:1 in
+    let cap = Int.max_value / 4 in
+    let sat_add a b = if a > cap - b then cap else a + b in
+    let sat_mul a b = if a = 0 || b = 0 then 0 else if a > cap / b then cap else a * b in
+    let coord_lb terms size =
+      let terms =
+        List.filter_map terms ~f:(fun (c, s) ->
+            let w = width s in
+            if c = 0 || w <= 1 then None else Some (abs c, s, w))
+      in
+      let g = List.fold terms ~init:0 ~f:(fun g (c, _, _) -> gcd g c) in
+      let sorted =
+        List.sort
+          ~compare:(fun (c1, _, _) (c2, _, _) -> Int.compare c1 c2)
+          (List.map terms ~f:(fun (c, s, w) -> (c / max 1 g, s, w)))
+      in
+      let n, _, _ =
+        List.fold sorted ~init:(1, 0, true) ~f:(fun (n, span, interval) (c, _, w) ->
+            let d = sat_mul c (w - 1) in
+            let span' = sat_add span d in
+            if interval && c <= n then
+              let n' = sat_add n d in
+              (n', span', n' < cap)
+            else if c > span then (sat_mul n w, span', false)
+            else (sat_add n (w - 1), span', false))
+      in
+      ( List.map sorted ~f:(fun (_, s, _) -> s) |> List.dedup_and_sort ~compare:Idx.compare_symbol,
+        min n (max 1 size) )
+    in
+    let coords =
+      Array.to_list v
+      |> List.filter_map ~f:(function
+        | Known { terms; size; _ } -> Some (coord_lb terms size)
+        | Unknown _ -> None)
+      |> List.filter ~f:(fun (_, n) -> n > 1)
+    in
+    let disjoint s1 s2 = not (List.exists s1 ~f:(fun s -> List.mem s2 s ~equal:Idx.equal_symbol)) in
+    (* The best product over symbol-disjoint subsets: exhaustively for the ranks tensors have, a
+       greedy pick (largest count first) beyond that — any such subset is sound. *)
+    let rec best chosen = function
+      | [] -> 1
+      | (syms, n) :: rest ->
+          let skip = best chosen rest in
+          if List.for_all chosen ~f:(disjoint syms) then
+            max skip (sat_mul n (best (syms :: chosen) rest))
+          else skip
+    in
+    if List.length coords <= 12 then best [] coords
+    else
+      let sorted = List.sort coords ~compare:(fun (_, a) (_, b) -> Int.compare b a) in
+      List.fold sorted ~init:([], 1) ~f:(fun (chosen, acc) (syms, n) ->
+          if List.for_all chosen ~f:(disjoint syms) then (syms :: chosen, sat_mul acc n)
+          else (chosen, acc))
+      |> snd
+
 (** {2 Projection-level predicates}
 
     Moved from [Indexing] (they are queries about the affine LHS map of a projection, this module's

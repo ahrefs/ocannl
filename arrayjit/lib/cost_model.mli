@@ -11,18 +11,20 @@
     Approximation contract (each direction is explicit, all biases point the same way):
 
     - Byte counts are upper bounds on compulsory traffic (distinct cells touched, perfect-cache
-      assumption): per-access image cardinalities are exact for injective interpretable maps, and
-      for vectorized runs whose bases are provably non-overlapping ({!Affine.vec_runs_disjoint});
-      non-injective maps, guarded ([If]) accesses (counted guards-taken), other vectorized runs,
-      dynamic accesses (the known coordinates' image times the dynamic axis's extent, capped by the
-      loop box — gh-ocannl-1174), and other unknown coordinates ([Concat] — whole-node fallback; a
-      rank mismatch — the loop box over the unmentioned symbols' widths, never exact; a flattened
-      [Sub_axis] run is interpretable, {!Affine.type-coord}) only over-count, as does summing
-      multiple same-direction accesses of one node (a union bound, capped by the node's size) —
-      except that a direction whose accesses are all exact and pairwise provably disjoint
-      ({!Affine.may_touch_same_cell}) sums exactly (gh-ocannl-578). Conditional evaluation also
-      over-counts: a read the renderers may skip — a [Where] arm's or a gated right operand's
-      ([&&]/[||]/a gate) inline read — or any access under a dead loop keeps its direction
+      assumption): per-access image cardinalities are exact for injective interpretable maps, for
+      non-injective interpretable ones whose coordinates' value ranges ([span + 1] each, which also
+      caps their count) meet {!Affine.image_cardinality_lb} — overlapping convolution windows
+      (gh-ocannl-1601) — and for vectorized runs whose bases are provably non-overlapping
+      ({!Affine.vec_runs_disjoint}); other non-injective maps, guarded ([If]) accesses (counted
+      guards-taken), other vectorized runs, dynamic accesses (the known coordinates' image times the
+      dynamic axis's extent, capped by the loop box — gh-ocannl-1174), and other unknown coordinates
+      ([Concat] — whole-node fallback; a rank mismatch — the loop box over the unmentioned symbols'
+      widths, never exact; a flattened [Sub_axis] run is interpretable, {!Affine.type-coord}) only
+      over-count, as does summing multiple same-direction accesses of one node (a union bound,
+      capped by the node's size) — except that a direction whose accesses are all exact and pairwise
+      provably disjoint ({!Affine.may_touch_same_cell}) sums exactly (gh-ocannl-578). Conditional
+      evaluation also over-counts: a read the renderers may skip — a [Where] arm's or a gated right
+      operand's ([&&]/[||]/a gate) inline read — or any access under a dead loop keeps its direction
       approximate, since the image can exceed what executes; a read inside a [Local_scope] body
       under such an operand is certain, the body being hoisted out of the conditional
       (gh-ocannl-637). [fp_approx] is [false] only when the count is exact.
@@ -85,9 +87,9 @@ val footprint_approximate : summary -> bool
 type floor = { fr_flops : int; fr_bytes : int; fr_exact : bool } [@@deriving sexp_of]
 (** Lower bounds on arithmetic work and compulsory traffic — the dual extraction (gh-ocannl-514
     phase 3), for bounding {e every completion} of a partial placement vector where {!analyze}
-    upper-bounds one concrete candidate. [fr_exact] is [false] when some flooring-to-zero occurred
-    (a guarded body, a non-exact access image, opaque code): the floor is then sound but not tight.
-*)
+    upper-bounds one concrete candidate. [fr_exact] is [false] when some flooring occurred (a
+    guarded body, a non-exact access image counted at its lower bound, opaque code): the floor is
+    then sound but not tight. *)
 
 val completion_floor : ?open_placement:(Tnode.t -> bool) -> Low_level.t -> floor
 (** The floor of the roofline legs over placement completions, with every approximation biased
@@ -110,10 +112,15 @@ val completion_floor : ?open_placement:(Tnode.t -> bool) -> Low_level.t -> floor
       provably disjoint (a disjoint union attains its sum — both extractions then agree,
       gh-ocannl-578), otherwise the largest exact image (a union is at least its largest member —
       dual to the upper extraction's capped sum; a second nonzero contribution then marks the floor
-      loose); guarded, non-exact, dead-loop-enclosed, conditionally-evaluated (a [Where] arm's or an
-      [And]/[Or] right operand's inline read — not a hoisted scope body's) and open-producer-operand
-      accesses contribute zero — their execution is not certain in every completion. Nodes with
-      [open_placement] contribute zero.
+      loose); a certain access whose image is not exact — an overlapping window's [s*o + d*k], a
+      dynamic gather's or a vector run's known coordinates — counts {!Affine.image_cardinality_lb}
+      of its coordinate view (gh-ocannl-1601), at most its true image; guarded, dead-loop-enclosed,
+      conditionally-evaluated (a [Where] arm's or an [And]/[Or] right operand's inline read — not a
+      hoisted scope body's) and open-producer-operand accesses contribute zero — their execution is
+      not certain in every completion. So does an accumulation's read of its own cell (the read at
+      the position its read-modify-write statement writes): a privatizing completion accumulates in
+      a register and stores the target once (gh-ocannl-1601). Nodes with [open_placement] contribute
+      zero.
 
     {e Committing} a placement decision is re-evaluation with the narrowed [open_placement]: the
     suppression sets only shrink, so the floor is monotone in refinement — the property that lets a

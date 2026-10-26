@@ -4,18 +4,20 @@
    extraction ([analyze]).
 
    - pointwise map: all accesses exact, floor = upper on both legs; - matmul with an rmw
-   accumulator: exact when closed; opening the accumulator's placement attributes the whole producer
-   — its ops and operand reads — to the open level, and committing (re-evaluation with the narrowed
-   open set) recovers the closed floor, monotone in refinement; - guarded write: the floor counts
-   guards-never-taken (condition ops only, no write traffic) where the upper counts guards-taken —
-   [fr_exact] false; - two reads of one node: pairwise provably-disjoint exact images sum in both
-   extractions (gh-ocannl-578); possibly-overlapping ones keep the asymmetry — the floor takes the
-   larger exact image (a union is at least its largest member, flagged loose) where the upper takes
-   the capped sum; - short-circuiting forms: Where arms, And/Or right operands (conditional —
-   cheaper-arm / left-operand floors, conditional reads zeroed — but an arm's hoisted scope body is
-   certain work in both extractions, gh-ocannl-637) and Arg1/Arg2 discarded operands (never rendered
-   at all, so absent from both extractions); - the over-producing open producer, dead loops, and the
-   dynamic-gather fallback flooring to zero where the upper falls back to the whole node.
+   accumulator: the floor leaves out the accumulator's read of its own cell, which a privatizing
+   completion never performs (gh-ocannl-1601); opening the accumulator's placement attributes the
+   whole producer — its ops and operand reads — to the open level, and committing (re-evaluation
+   with the narrowed open set) recovers the closed floor, monotone in refinement; - guarded write:
+   the floor counts guards-never-taken (condition ops only, no write traffic) where the upper counts
+   guards-taken — [fr_exact] false; - two reads of one node: pairwise provably-disjoint exact images
+   sum in both extractions (gh-ocannl-578); possibly-overlapping ones keep the asymmetry — the floor
+   takes the larger exact image (a union is at least its largest member, flagged loose) where the
+   upper takes the capped sum; - short-circuiting forms: Where arms, And/Or right operands
+   (conditional — cheaper-arm / left-operand floors, conditional reads zeroed — but an arm's hoisted
+   scope body is certain work in both extractions, gh-ocannl-637) and Arg1/Arg2 discarded operands
+   (never rendered at all, so absent from both extractions); - the over-producing open producer,
+   dead loops, and the dynamic gather, whose floor counts the projection onto its known coordinates
+   (gh-ocannl-1601) where the upper falls back to the whole node.
 
    The last section pins the classifier those short-circuiting cases now read from
    ([Ops.binop_conditionality] / [Ops.ternop_conditionality], gh-ocannl-582) and its agreement with
@@ -28,6 +30,7 @@ module Idx = Ir.Indexing
 module Tn = Ir.Tnode
 module Ops = Ir.Ops
 module CM = Ir.Cost_model
+module Affine = Ir.Affine
 
 let fresh_tn =
   let make = Ll_test.node_factory ~first_id:980_000_000 ~dims:[||] () in
@@ -64,9 +67,11 @@ let () =
             (LL.Binop (Ops.Add, (get a [| it i; it j |], sp), (get b [| it j |], sp)))))
   in
   let _ = show "pointwise map" pointwise in
-  (* 4x5x6 matmul, rmw accumulator: D[i][j] += A2[i][k] * B2[k][j]. Exact both ways: flops = 2*4*5*6
-     = 240; bytes = A2 96 + B2 120 + D rd 80 + D wr 80 = 376. Opening D's placement drops its 160
-     bytes; node_floor_bytes D restores them — the Materialize delta. *)
+  (* 4x5x6 matmul, rmw accumulator: D[i][j] += A2[i][k] * B2[k][j]. The upper extraction is exact:
+     flops = 2*4*5*6 = 240; bytes = A2 96 + B2 120 + D rd 80 + D wr 80 = 376. The floor leaves out
+     D's read of its own cell — a privatizing schedule accumulates in a register and never performs
+     it (gh-ocannl-1601) — so 296, inexact. Opening D's placement drops its write too; committing D
+     restores it. *)
   let a2 = fresh_tn "A2" [| 4; 6 |] in
   let b2 = fresh_tn "B2" [| 6; 5 |] in
   let d = fresh_tn "D" [| 4; 5 |] in
@@ -136,7 +141,8 @@ let () =
   in
   let _ = show "two overlapping reads, union floor = larger image" overlapping_reads in
   (* Dynamic gather: P[i] = Q[R[i]]. Q's access is uninterpretable — the upper falls back to the
-     whole node, the floor to zero (inexact). *)
+     whole node; the floor counts the projection onto Q's known coordinates (gh-ocannl-1601), here
+     none, so one cell (inexact). *)
   let p = fresh_tn "P" [| 4 |] in
   let q = fresh_tn "Q" [| 8 |] in
   let r = fresh_tn "R" [| 4 |] in
@@ -271,6 +277,218 @@ let () =
   in
   let _ = show "dead loop" dead in
   ()
+
+(* gh-ocannl-1601: the image lower bound behind the floor of a non-exact access
+   ([Affine.image_cardinality_lb]), judged against the image ENUMERATED cell by cell. Every case
+   builds an index map over a small loop box (origins shifted, widths 1-4), sizes the node so the
+   map stays in bounds, enumerates the box and counts the distinct cells, and claims the bound never
+   exceeds that count. The shapes: one-coordinate sums of one to three terms over every coefficient
+   and width combination in a range (unit and larger strides, dilations with holes, negative
+   coefficients, a symbol repeated so its terms cancel); random multi-coordinate maps, some sharing
+   a symbol across coordinates; flattened [Sub_axis] pairs; dynamic gathers, whose data-chosen
+   coordinate the enumeration picks both adversarially (a constant) and at random; vector runs. Then
+   the tightness pins on windows, and the floor of hand-built window programs. *)
+let () =
+  Stdio.printf "\n== image lower bound vs enumerated image ==\n";
+  let rng = Random.State.make [| 1601 |] in
+  let s = Array.init 3 ~f:(fun _ -> Idx.get_symbol ()) in
+  let eval env (idx : Idx.axis_index) =
+    match idx with
+    | Idx.Fixed_idx c -> c
+    | Idx.Iterator sy -> env sy
+    | Idx.Affine { symbols; offset } ->
+        List.fold symbols ~init:offset ~f:(fun acc (c, sy) -> acc + (c * env sy))
+    | Idx.Sub_axis | Idx.Concat _ -> assert false
+  in
+  (* The loop box: per symbol, an origin and a width. *)
+  let points (box : (Idx.symbol * (int * int)) list) =
+    List.fold box ~init:[ [] ] ~f:(fun acc (sy, (lo, hi)) ->
+        List.concat_map acc ~f:(fun env ->
+            List.map (List.range lo (hi + 1)) ~f:(fun v -> (sy, v) :: env)))
+    |> List.map ~f:(fun env sy ->
+        List.Assoc.find env sy ~equal:Idx.equal_symbol |> Option.value ~default:0)
+  in
+  (* One coordinate's terms shifted to start at 0: the map component and its extent. *)
+  let component box terms ~slack =
+    let lo, hi =
+      List.fold terms ~init:(0, 0) ~f:(fun (lo, hi) (c, sy) ->
+          let a, b = List.Assoc.find_exn box sy ~equal:Idx.equal_symbol in
+          (lo + min (c * a) (c * b), hi + max (c * a) (c * b)))
+    in
+    (Idx.affine ~symbols:terms ~offset:(-lo + slack), hi - lo + 1 + slack)
+  in
+  let domain box = List.map box ~f:(fun (sy, (lo, hi)) -> (sy, hi - lo + 1)) in
+  let cases = ref [] in
+  let record name bound image = cases := (name, bound, image) :: !cases in
+  (* A static map: [cell] enumerates each point's cell tuple. *)
+  let static_case name box idcs dims =
+    let v = Affine.view ~dims idcs in
+    let bound = Affine.image_cardinality_lb ~domain:(domain box) v in
+    let cells = List.map (points box) ~f:(fun env -> Array.map idcs ~f:(eval env)) in
+    let image = List.length (List.dedup_and_sort cells ~compare:(Array.compare Int.compare)) in
+    record name bound image
+  in
+  let random_box () =
+    Array.to_list s
+    |> List.map ~f:(fun sy ->
+        let lo = Random.State.int rng 2 and w = 1 + Random.State.int rng 4 in
+        (sy, (lo, lo + w - 1)))
+  in
+  (* One coordinate, every combination of up to three terms. *)
+  let coeffs = [ -3; -2; -1; 1; 2; 3; 4; 6 ] and widths = [ 1; 2; 3; 4 ] in
+  List.iter coeffs ~f:(fun c1 ->
+      List.iter widths ~f:(fun w1 ->
+          List.iter coeffs ~f:(fun c2 ->
+              List.iter widths ~f:(fun w2 ->
+                  let box = [ (s.(0), (1, w1)); (s.(1), (0, w2 - 1)) ] in
+                  let idx, size = component box [ (c1, s.(0)); (c2, s.(1)) ] ~slack:0 in
+                  static_case "1 coord, 2 terms" box [| idx |] [| size |];
+                  List.iter [ 1; 5 ] ~f:(fun c3 ->
+                      let box = box @ [ (s.(2), (0, 2)) ] in
+                      let idx, size =
+                        component box [ (c1, s.(0)); (c2, s.(1)); (c3, s.(2)) ] ~slack:1
+                      in
+                      static_case "1 coord, 3 terms" box [| idx |] [| size |])))));
+  (* Cancellation: one symbol twice, its coefficients summing to zero or not. *)
+  List.iter
+    [ (1, -1); (2, -1); (3, -3) ]
+    ~f:(fun (a, b) ->
+      let box = [ (s.(0), (0, 3)); (s.(1), (0, 2)) ] in
+      let idx, size = component box [ (a, s.(0)); (b, s.(0)); (1, s.(1)) ] ~slack:0 in
+      static_case "cancelling terms" box [| idx |] [| size |]);
+  (* Random multi-coordinate maps; the symbol pool is small, so coordinates often share one. *)
+  for _ = 1 to 600 do
+    let box = random_box () in
+    let rank = 1 + Random.State.int rng 3 in
+    let comps =
+      Array.init rank ~f:(fun _ ->
+          let nterms = Random.State.int rng 3 in
+          let terms =
+            List.init nterms ~f:(fun _ ->
+                ( List.nth_exn coeffs (Random.State.int rng (List.length coeffs)),
+                  s.(Random.State.int rng 3) ))
+          in
+          component box terms ~slack:(Random.State.int rng 2))
+    in
+    static_case "random map" box (Array.map comps ~f:fst) (Array.map comps ~f:snd)
+  done;
+  (* Flattened [Sub_axis] pairs: the component after the run indexes the whole run's extent. *)
+  for _ = 1 to 200 do
+    let box = random_box () in
+    let terms =
+      List.init
+        (1 + Random.State.int rng 3)
+        ~f:(fun _ -> (1 + Random.State.int rng 4, s.(Random.State.int rng 3)))
+    in
+    let idx, size = component box terms ~slack:0 in
+    let inner = (size + 1) / 2 in
+    let v_idcs = [| Idx.Sub_axis; idx |] in
+    let v = Affine.view ~dims:[| 2; inner |] v_idcs in
+    let bound = Affine.image_cardinality_lb ~domain:(domain box) v in
+    let image =
+      List.length
+        (List.dedup_and_sort ~compare:Int.compare
+           (List.map (points box) ~f:(fun env -> eval env idx)))
+    in
+    record "flattened Sub_axis" bound image
+  done;
+  (* Dynamic gathers over a rank-2 node: the data picks the dynamic axis's coordinate per point. *)
+  for _ = 1 to 200 do
+    let box = random_box () in
+    let pick () =
+      List.init (Random.State.int rng 3) ~f:(fun _ ->
+          (1 + Random.State.int rng 3, s.(Random.State.int rng 3)))
+    in
+    let known, ksize = component box (pick ()) ~slack:0 in
+    let dyn_axis = Random.State.int rng 2 and dsize = 1 + Random.State.int rng 4 in
+    let idcs, dims =
+      if dyn_axis = 0 then ([| Idx.Fixed_idx 0; known |], [| dsize; ksize |])
+      else ([| known; Idx.Fixed_idx 0 |], [| ksize; dsize |])
+    in
+    let v = Affine.view ~dyn_axis ~dims idcs in
+    let bound = Affine.image_cardinality_lb ~domain:(domain box) v in
+    List.iter
+      [ (fun _ -> 0); (fun _ -> Random.State.int rng dsize) ]
+      ~f:(fun choose ->
+        let cells =
+          List.map (points box) ~f:(fun env ->
+              let k = eval env known and d = choose env in
+              if dyn_axis = 0 then (d, k) else (k, d))
+        in
+        record "dynamic gather" bound
+          (List.length
+             (List.dedup_and_sort cells ~compare:(fun (a1, b1) (a2, b2) ->
+                  match Int.compare a1 a2 with 0 -> Int.compare b1 b2 | c -> c))))
+  done;
+  (* Vector runs of [len] consecutive flat cells from each base, over a rank-2 node. *)
+  for _ = 1 to 200 do
+    let box = random_box () in
+    let len = 2 + Random.State.int rng 3 in
+    let row, rsize = component box [ (1 + Random.State.int rng 2, s.(0)) ] ~slack:0 in
+    let col, csize =
+      component box [ (len * (1 + Random.State.int rng 2), s.(1)); (1, s.(2)) ] ~slack:0
+    in
+    let csize = csize + len in
+    let idcs = [| row; col |] and dims = [| rsize; csize |] in
+    let range sy = List.Assoc.find box sy ~equal:Idx.equal_symbol in
+    let v = Affine.view ~range ~vec:(Affine.Run len) ~dims idcs in
+    let bound = Affine.image_cardinality_lb ~domain:(domain box) v in
+    let cells =
+      List.concat_map (points box) ~f:(fun env ->
+          let base = (eval env row * csize) + eval env col in
+          List.init len ~f:(fun i -> base + i))
+    in
+    record "vector run" bound (List.length (List.dedup_and_sort cells ~compare:Int.compare))
+  done;
+  let cases = List.rev !cases in
+  let kinds =
+    List.dedup_and_sort ~compare:String.compare (List.map cases ~f:(fun (n, _, _) -> n))
+  in
+  List.iter kinds ~f:(fun kind ->
+      let of_kind = List.filter cases ~f:(fun (n, _, _) -> String.equal n kind) in
+      Stdio.printf "  %-20s %4d cases, %4d bounded exactly\n" kind (List.length of_kind)
+        (List.count of_kind ~f:(fun (_, b, i) -> b = i)));
+  Verdict.p_all ~min:2000 "  the bound never exceeds the enumerated image" cases
+    ~f:(fun (_, bound, image) -> bound <= image);
+  (* Tightness: overlapping and strided windows count their whole image. *)
+  let window ~stride ~o ~k =
+    let box = [ (s.(0), (0, o - 1)); (s.(1), (0, k - 1)) ] in
+    let idx, size = component box [ (stride, s.(0)); (1, s.(1)) ] ~slack:0 in
+    Affine.image_cardinality_lb ~domain:(domain box) (Affine.view ~dims:[| size |] [| idx |])
+  in
+  Verdict.p "  a unit-stride window counts O + K - 1 (8 + 3 - 1)" (window ~stride:1 ~o:8 ~k:3 = 10);
+  Verdict.p "  a stride-2 window counts 2*(O-1) + K (2*7 + 3)" (window ~stride:2 ~o:8 ~k:3 = 17);
+  Verdict.p "  a non-overlapping stride-4 window counts O*K (8*3)" (window ~stride:4 ~o:8 ~k:3 = 24);
+  let gcd_case =
+    let box = [ (s.(0), (0, 2)); (s.(1), (0, 2)) ] in
+    let idx, size = component box [ (2, s.(0)); (4, s.(1)) ] ~slack:0 in
+    Affine.image_cardinality_lb ~domain:(domain box) (Affine.view ~dims:[| size |] [| idx |])
+  in
+  Verdict.p "  2*x + 4*y over 3x3 counts its 7 values (the gcd normalization)" (gcd_case = 7);
+  (* The floor of window programs: B[o] += A[s*o + k] reads A's whole image. *)
+  let window_program ~stride ~o ~k =
+    let oi = Idx.get_symbol () and ki = Idx.get_symbol () in
+    let a = fresh_tn "WA" [| (stride * (o - 1)) + k |] in
+    let b = fresh_tn "WB" [| o |] in
+    let code =
+      for_over ~extent:o oi
+        (for_over ~extent:k ki
+           (set b
+              [| it oi |]
+              (LL.Binop
+                 ( Ops.Add,
+                   (get b [| it oi |], sp),
+                   (get a [| Idx.affine ~symbols:[ (stride, oi); (1, ki) ] ~offset:0 |], sp) ))))
+    in
+    show (Printf.sprintf "window read, stride %d, O=%d, K=%d" stride o k) code
+  in
+  let f1 = window_program ~stride:1 ~o:8 ~k:3 in
+  (* A 40 B, B wr 32 B; B's accumulation self-read is not certain (a privatizing completion skips
+     it). *)
+  Verdict.p "  the unit-stride window's input read floors at its whole image" (f1.CM.fr_bytes = 72);
+  let f2 = window_program ~stride:2 ~o:8 ~k:3 in
+  (* A 68 B, B wr 32 B. *)
+  Verdict.p "  the stride-2 window's input read floors at its whole image" (f2.CM.fr_bytes = 100)
 
 (* gh-ocannl-582: the classifier the cases above read from. The table is printed over [Ops]' derived
    enumeration, so adding an operator is a visible promotion diff here whether or not anyone

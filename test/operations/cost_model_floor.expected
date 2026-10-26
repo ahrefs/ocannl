@@ -3,7 +3,7 @@
   upper: flops=20 bytes=180
   floor <= upper: true
 == matmul (rmw accumulator) ==
-  floor: flops=240 bytes=376 exact
+  floor: flops=240 bytes=296 inexact
   upper: flops=240 bytes=376
   floor <= upper: true
 == matmul, D's placement open ==
@@ -25,7 +25,7 @@
   upper: flops=4 bytes=48
   floor <= upper: true
 == dynamic gather ==
-  floor: flops=0 bytes=32 inexact
+  floor: flops=0 bytes=36 inexact
   upper: flops=0 bytes=48
   floor <= upper: true
 == where short-circuit ==
@@ -61,6 +61,30 @@
   floor: flops=0 bytes=0 inexact
   upper: flops=0 bytes=16
   floor <= upper: true
+
+== image lower bound vs enumerated image ==
+  1 coord, 2 terms     1024 cases,  940 bounded exactly
+  1 coord, 3 terms     2048 cases, 1440 bounded exactly
+  cancelling terms        3 cases,    3 bounded exactly
+  dynamic gather        400 cases,  266 bounded exactly
+  flattened Sub_axis    200 cases,  181 bounded exactly
+  random map            600 cases,  559 bounded exactly
+  vector run            200 cases,    0 bounded exactly
+  the bound never exceeds the enumerated image: true
+  a unit-stride window counts O + K - 1 (8 + 3 - 1): true
+  a stride-2 window counts 2*(O-1) + K (2*7 + 3): true
+  a non-overlapping stride-4 window counts O*K (8*3): true
+  2*x + 4*y over 3x3 counts its 7 values (the gcd normalization): true
+== window read, stride 1, O=8, K=3 ==
+  floor: flops=24 bytes=72 inexact
+  upper: flops=24 bytes=104
+  floor <= upper: true
+  the unit-stride window's input read floors at its whole image: true
+== window read, stride 2, O=8, K=3 ==
+  floor: flops=24 bytes=100 inexact
+  upper: flops=24 bytes=132
+  floor <= upper: true
+  the stride-2 window's input read floors at its whole image: true
 
 == operand conditionality ==
   fst                          Only_first
