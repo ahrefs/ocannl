@@ -4361,7 +4361,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   descendant reads `SIG_DFL` with `SA_SIGINFO` set, and a flag check silently disarmed the deadline
   there while bare-metal Macs passed. Every bound in it is measured on `CLOCK_MONOTONIC`, never
   counted in naps: on that loaded VM 200 "10 ms" naps took 10 s (`taskpolicy -b`, or the test's
-  in-process throttle, reproduces it on a bare-metal Mac).
+  in-process throttle, reproduces it on a bare-metal Mac; `taskpolicy -b` reaches every descendant,
+  so `taskpolicy -b tools/test-run.sh fresh @test/operations/runtest-device_init_deadline` reruns
+  the whole test that way, and passes). Each arm is a generation, and a region's exit disarms only its
+  own: a region a `fork` child inherited would otherwise cancel a deadline a new domain of the child
+  armed (gh-ocannl-1446, the `fork-disarm` case). The disposition is read at arm time, so a handler
+  installed mid-region is overridden only at the death (a recorded boundary).
 - **Revisit a per-action bound from the traces, through `tools/action-durations.sh`**: it reads a
   dune trace (`_build/trace.csexp` by default — a bare dune's; a `tools/test-run.sh run` writes its
   batch's into the run directory and keeps only the five slowest, below) and

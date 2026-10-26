@@ -411,6 +411,17 @@ CAMLprim value ocannl_collapse_c_stderr_noise(value unit) {
    a vanished thread would stay locked). Once the watchdog has committed to the death, no [arm]
    proceeds: the diagnostic it is about to write is never overwritten.
 
+   Each arm is a GENERATION, and [disarm] takes back only the one it names (gh-ocannl-1446): a
+   region armed before a [fork] is still on the child's stack, and its disarm must not take back a
+   deadline a new domain of the child armed meanwhile. The fork reset keeps the counter, so no
+   generation the child arms equals one it inherited.
+
+   Boundary: whether SIGALRM has its default disposition is read when a region arms (and again
+   after waiting for another region), not afterwards. A handler a thread installs while the region
+   runs is overridden only if the region outlives its bound: the deadline is then a death, not a
+   signal delivery, and it puts the default disposition back to die by it. Until then the handler
+   is untouched.
+
    The death never waits on the diagnostic for more than 2 s: the write runs on a thread of its
    own, so a blocking fd 2 that is full, or that another writer fills meanwhile, cannot hold it.
    The watchdog then puts
@@ -429,6 +440,7 @@ static int ocannl_deadline_thread_started; /* under the lock */
 static int ocannl_deadline_writer_started; /* under the lock */
 static int ocannl_deadline_armed;          /* under the lock */
 static int ocannl_deadline_dying;          /* under the lock: the watchdog committed to the death */
+static long ocannl_deadline_generation;    /* under the lock: the latest arm's, positive once armed */
 static pthread_t ocannl_deadline_owner;    /* under the lock: the armed region's thread */
 static int64_t ocannl_deadline_due_ns;     /* under the lock; monotonic */
 static char ocannl_deadline_msg[OCANNL_DEADLINE_MSG_MAX];
@@ -456,6 +468,8 @@ static void ocannl_deadline_atfork_child(void) {
   ocannl_deadline_writer_started = 0;
   ocannl_deadline_armed = 0;
   ocannl_deadline_dying = 0;
+  /* [ocannl_deadline_generation] is kept: a region the fork copied disarms by its own generation,
+     which no arm in this process will reuse. */
   {
     pthread_mutex_t fresh_write_lock = PTHREAD_MUTEX_INITIALIZER;
     pthread_cond_t fresh_write_go = PTHREAD_COND_INITIALIZER;
@@ -596,12 +610,16 @@ static int ocannl_deadline_start_thread(void) {
   /* Created with every signal blocked, which it inherits: it must never take the program's. */
   sigfillset(&all);
   pthread_sigmask(SIG_SETMASK, &all, &saved);
-  pthread_attr_init(&attr);
-  pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+  /* Neither call can fail on glibc or macOS; a failure elsewhere is "could not start", never an
+     uninitialized attribute handed to [pthread_create]. */
+  if (pthread_attr_init(&attr) != 0) {
+    pthread_sigmask(SIG_SETMASK, &saved, NULL);
+    return 0;
+  }
+  rc = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
   /* The writer first: a watchdog without it would have nothing to write the diagnostic with. A
      writer whose watchdog could not be created is kept, and reused by the retry. */
-  rc = 0;
-  if (!ocannl_deadline_writer_started) {
+  if (rc == 0 && !ocannl_deadline_writer_started) {
     rc = pthread_create(&thread, &attr, ocannl_deadline_writer, NULL);
     if (rc == 0) ocannl_deadline_writer_started = 1;
   }
@@ -625,11 +643,11 @@ CAMLprim value ocannl_device_init_deadline_supported(value unit) {
 #endif
 }
 
-/* [ocannl_device_init_deadline_arm seconds message]: 1 when the deadline is now armed (and must be
-   disarmed); 0 when disabled, refused, nested in this thread's own armed region, or on Windows; 2
-   when it should have been armed and the watchdog thread could not be started (or the monotonic
-   clock read), which the caller must not take as "no deadline". Waits, outside the OCaml runtime
-   lock, while another thread's region is armed. */
+/* [ocannl_device_init_deadline_arm seconds message]: a positive generation when the deadline is now
+   armed (to be passed to [disarm]); 0 when disabled, refused, nested in this thread's own armed
+   region, or on Windows; -1 when it should have been armed and the watchdog thread could not be
+   started (or the monotonic clock read), which the caller must not take as "no deadline". Waits,
+   outside the OCaml runtime lock, while another thread's region is armed. */
 CAMLprim value ocannl_device_init_deadline_arm(value v_seconds, value v_msg) {
 #if defined(_WIN32)
   (void)v_seconds;
@@ -639,7 +657,7 @@ CAMLprim value ocannl_device_init_deadline_arm(value v_seconds, value v_msg) {
   double seconds = Double_val(v_seconds);
   char msg[OCANNL_DEADLINE_MSG_MAX];
   size_t len;
-  int armed = 2;
+  long armed = -1;
   pthread_t self = pthread_self();
   if (!(seconds > 0.0)) return Val_int(0);
   /* A bound past three years is a bound all the same, never "disabled". */
@@ -669,25 +687,32 @@ CAMLprim value ocannl_device_init_deadline_arm(value v_seconds, value v_msg) {
         ocannl_deadline_due_ns = now + (int64_t)(seconds * 1e9);
         ocannl_deadline_owner = self;
         ocannl_deadline_armed = 1;
-        armed = 1;
+        if (++ocannl_deadline_generation <= 0) ocannl_deadline_generation = 1;
+        armed = ocannl_deadline_generation;
         pthread_cond_signal(&ocannl_deadline_cond);
       }
     }
   }
   pthread_mutex_unlock(&ocannl_deadline_lock);
   caml_leave_blocking_section();
-  return Val_int(armed);
+  return Val_long(armed);
 #endif
 }
 
-/* Take the deadline [ocannl_device_init_deadline_arm] gave back. A no-op when nothing is armed. */
-CAMLprim value ocannl_device_init_deadline_disarm(value unit) {
-  (void)unit;
-#if !defined(_WIN32)
+/* [ocannl_device_init_deadline_disarm generation]: take back the deadline the [arm] that returned
+   [generation] gave. A no-op when nothing is armed, or when the armed deadline is another arm's --
+   one a fork child armed after inheriting this region (gh-ocannl-1446). */
+CAMLprim value ocannl_device_init_deadline_disarm(value v_generation) {
+#if defined(_WIN32)
+  (void)v_generation;
+#else
+  long generation = Long_val(v_generation);
   pthread_mutex_lock(&ocannl_deadline_lock);
-  ocannl_deadline_armed = 0;
-  pthread_cond_signal(&ocannl_deadline_cond);
-  pthread_cond_broadcast(&ocannl_deadline_free);
+  if (ocannl_deadline_armed && ocannl_deadline_generation == generation) {
+    ocannl_deadline_armed = 0;
+    pthread_cond_signal(&ocannl_deadline_cond);
+    pthread_cond_broadcast(&ocannl_deadline_free);
+  }
   pthread_mutex_unlock(&ocannl_deadline_lock);
 #endif
   return Val_unit;
