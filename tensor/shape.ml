@@ -791,9 +791,10 @@ let refuse_result_side_padded_window ~spec ~(error_shapes : t list) (ls_lhs : pa
                   window over a one-hot kernel: \"s, o<+c; c => s, o\" with c of extent 2*padding \
                   - output_padding + 1 holding its 1 at position `padding`; when output_padding > \
                   padding, crop only the start and append the output_padding - padding extra zero \
-                  cells by concatenation (see docs/syntax_extensions.md). With stride 1, dilation \
-                  1 and an odd kernel size, the padded window on an operand with the kernel \
-                  reversed (e.g. \"s, o=+k; k => s, o\") is the same map in one step."],
+                  cells by concatenation (if the full extent is at most padding, the result is all \
+                  zeros; see docs/syntax_extensions.md). With stride 1, dilation 1 and an odd \
+                  kernel size, the padded window on an operand with the kernel reversed (e.g. \"s, \
+                  o=+k; k => s, o\") is the same map in one step."],
                [ Shape_mismatch error_shapes ] )
     | Label _ | Fixed_index _ | Affine_spec _ | Concat_spec _ -> ())
 
