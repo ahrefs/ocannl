@@ -351,3 +351,193 @@ let () =
             (Array.to_list (Context.get_values ctx y.Tensor.value))
             ~f:(Float.equal 2.));
       Context.release ctx)
+
+(* A reference the operands solve to a symbolic extent records the symbol (gh-ocannl-1616), as one
+   they solve to a concrete size records the size: both are what carries the reference's value
+   across a closure. Before the fix only a concrete solution was recorded, so a shared reference
+   whose dimension the operands made symbolic was untied after the closure, and [dim d] could not
+   read it. Each case below starts from a fresh session: a conflict rewinds, discarding the
+   reference. *)
+
+let symbol () = fst (Ir.Indexing.get_static_symbol ~static_range:6 Ir.Indexing.Empty)
+
+(* A shape printed with the symbol's identifier, which a global counter numbers, spelled [seq]. *)
+let shape_str seq t =
+  String.substr_replace_all
+    (Shape.to_string_hum ~style:Axis_size t.Tensor.shape)
+    ~pattern:(Ir.Indexing.symbol_ident seq.Ir.Indexing.static_symbol)
+    ~with_:"seq"
+
+(* An independent capture fixes [t]'s one axis to the symbol. *)
+let fix_sym t seq =
+  let e = Shape.get_variable_ref "e" in
+  Shape.set_sym_dim e seq;
+  ignore (capture ~spec:"e=>e" e t : Tensor.t)
+
+let holds_sym (d : Shape.delayed_var_ref) seq =
+  match (d.var_ref.solved_sym, d.var_ref.solved_dim) with
+  | Some s, None -> Ir.Indexing.equal_static_symbol s seq
+  | _ -> false
+
+let holds_dim (d : Shape.delayed_var_ref) n =
+  match (d.var_ref.solved_dim, d.var_ref.solved_sym) with Some m, None -> m = n | _ -> false
+
+(* How a conflict surfaces: as the solver's shape error, or as anything else -- in particular the
+   [Ir.Indexing] refusal of a second kind of solution, which no inference path should reach. *)
+let conflict f =
+  let rewind () = Tensor.rewind_to_last_closure ~reason:"gh-1616 conflict case" () in
+  match f () with
+  | () -> "no error"
+  | exception Row.Shape_error _ ->
+      rewind ();
+      "a shape error"
+  | exception Utils.User_error msg ->
+      rewind ();
+      "a user error: " ^ msg
+
+let is_shape_error name what outcome =
+  if not (String.equal outcome "a shape error") then
+    Stdio.printf "%s: %s gives %s\n" name what outcome;
+  p (name ^ ": " ^ what ^ " is a shape error") (String.equal outcome "a shape error")
+
+(* [d] registered on an open operand, asserted unsolved, then the operand made symbolic by an
+   independent capture: the symbol reaches [d] when the closure publishes. *)
+let closed_on_symbol name seq =
+  let d = Shape.get_variable_ref "d" in
+  let w = open_leaf "w" in
+  let y = capture d w in
+  unsolved name d;
+  fix_sym w seq;
+  ignore (dims y : int list);
+  d
+
+let () =
+  Verdict.case "operand-solved symbol, published at the closure" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let name = "symbol at the closure" in
+      let seq = symbol () in
+      let d = closed_on_symbol name seq in
+      p (name ^ ": the closure records the operand's symbol, and no size") (holds_sym d seq);
+      let w2 = open_leaf "w2" in
+      let y2 = capture d w2 in
+      ignore (dims y2 : int list);
+      Stdio.printf "%s: w2 is %s\n" name (shape_str seq w2);
+      p (name ^ ": a later operand takes the symbol") (String.equal (shape_str seq w2) "seq<=6"));
+  Verdict.case "operand-solved symbol, published at the registration" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let name = "symbol at the registration" in
+      let seq = symbol () in
+      let w = open_leaf "w" in
+      fix_sym w seq;
+      ignore (dims w : int list);
+      let d = Shape.get_variable_ref "d" in
+      let y = capture d w in
+      p (name ^ ": the registration records the operand's symbol, and no size") (holds_sym d seq);
+      ignore (dims y : int list);
+      let w2 = open_leaf "w2" in
+      let y2 = capture d w2 in
+      ignore (dims y2 : int list);
+      Stdio.printf "%s: w2 is %s\n" name (shape_str seq w2);
+      p (name ^ ": a later operand takes the symbol") (String.equal (shape_str seq w2) "seq<=6"));
+  Verdict.case "operand-solved symbol, reused on the symbol's maximum" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let name = "symbol vs its maximum" in
+      let seq = symbol () in
+      let d = closed_on_symbol name seq in
+      let c6 = NTDSL.init ~l:"c6" ~prec:Ir.Ops.single ~b:[] ~o:[ 6 ] ~f:(fun _ -> 2.) () in
+      is_shape_error name "a concrete size equal to the symbol's maximum"
+        (conflict (fun () -> ignore (dims (capture d c6) : int list))));
+  Verdict.case "operand-solved symbol, reused on another symbol" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let name = "symbol vs another symbol" in
+      let seq = symbol () in
+      let d = closed_on_symbol name seq in
+      let other = symbol () in
+      let w2 = open_leaf "w2" in
+      fix_sym w2 other;
+      ignore (dims w2 : int list);
+      is_shape_error name "another symbol of the same maximum"
+        (conflict (fun () -> ignore (dims (capture d w2) : int list))));
+  Verdict.case "operand-solved symbol, read by dim" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let name = "symbol read by dim" in
+      let seq = symbol () in
+      let d = closed_on_symbol name seq in
+      let n = NTDSL.embed_dim d in
+      observe n;
+      let values =
+        match Train.forward_once (Context.auto ()) n with
+        | ctx ->
+            let v = Array.to_list (Context.get_values ctx n.Tensor.value) in
+            Context.release ctx;
+            v
+        | exception Utils.User_error msg ->
+            Stdio.printf "%s: %s\n" name msg;
+            []
+      in
+      p_all ~min:1
+        (name ^ ": dim materializes the symbol at its maximum")
+        values ~f:(Float.equal 6.))
+
+(* A dimension and a symbol meeting on one reference, in every order a program can bring them: the
+   solver refuses, with a shape error, and the reference keeps the one solution it held. The
+   [Ir.Indexing] guard against a second kind of solution is never what fires; the last case pins the
+   guard itself. *)
+let () =
+  Verdict.case "a dimension and a symbol on one reference" (fun () ->
+      let case name ~held ~meet =
+        Tensor.unsafe_reinitialize ();
+        let seq = symbol () in
+        let d = Shape.get_variable_ref "d" in
+        let outcome = conflict (fun () -> meet d seq) in
+        is_shape_error name "the meeting" outcome;
+        p
+          (name ^ ": the reference keeps the solution it held, and only that")
+          (match held with `Sym -> holds_sym d seq | `Dim n -> holds_dim d n)
+      in
+      case "symbol set, then the operand sized" ~held:`Sym ~meet:(fun d seq ->
+          Shape.set_sym_dim d seq;
+          let w = open_leaf "w" in
+          let y = capture d w in
+          fix w [ 5 ];
+          ignore (dims y : int list));
+      case "registered open, symbol set, then the operand sized by another operation" ~held:`Sym
+        ~meet:(fun d seq ->
+          let w = open_leaf "w" in
+          let y = capture d w in
+          Shape.set_sym_dim d seq;
+          fix w [ 5 ];
+          ignore (dims y : int list));
+      case "size set, then a symbolic operand" ~held:(`Dim 6) ~meet:(fun d seq ->
+          Shape.set_dim d 6;
+          let w = open_leaf "w" in
+          fix_sym w seq;
+          ignore (dims w : int list);
+          ignore (dims (capture d w) : int list));
+      case "operand-solved symbol, then a size set" ~held:`Sym ~meet:(fun d seq ->
+          let w = open_leaf "w" in
+          fix_sym w seq;
+          ignore (dims w : int list);
+          ignore (dims (capture d w) : int list);
+          Shape.set_dim d 6));
+  Verdict.case "the Indexing guard against a second kind of solution" (fun () ->
+      let module Idx = Ir.Indexing in
+      let seq = symbol () in
+      let refused f = match f () with () -> false | exception Utils.User_error _ -> true in
+      let r = Idx.variable_ref "r" in
+      Idx.set_solved_sym r seq;
+      Idx.set_solved_sym r seq;
+      p "Indexing guard: re-setting the held symbol is a no-op" (Option.is_some r.solved_sym);
+      p "Indexing guard: a size, even the symbol's maximum, is refused on a symbol"
+        (refused (fun () -> Idx.set_solved_dim r 6));
+      p "Indexing guard: the refused size leaves the symbol alone"
+        (Option.is_none r.solved_dim && Option.equal Idx.equal_static_symbol r.solved_sym (Some seq));
+      let q = Idx.variable_ref "q" in
+      Idx.set_solved_dim q 6;
+      Idx.set_solved_dim q 6;
+      p "Indexing guard: re-setting the held size is a no-op"
+        (Option.equal Int.equal q.solved_dim (Some 6));
+      p "Indexing guard: a symbol is refused on a size"
+        (refused (fun () -> Idx.set_solved_sym q seq));
+      p "Indexing guard: the refused symbol leaves the size alone"
+        (Option.is_none q.solved_sym && Option.equal Int.equal q.solved_dim (Some 6)))

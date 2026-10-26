@@ -445,6 +445,9 @@ type environment = { dim_env : dim_env; row_env : row_env; discardable_vars : di
 let get_dim_val env var =
   match find_dim env.dim_env var with Some (Solved_dim (Dim { d; _ })) -> Some d | _ -> None
 
+let get_dim_from_env env var =
+  match find_dim env.dim_env var with Some (Solved_dim d) -> Some d | _ -> None
+
 let get_row_from_env env var =
   match find_row env.row_env var with Some (Solved_row row) -> Some row | _ -> None
 
