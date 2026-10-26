@@ -1439,7 +1439,9 @@ files.
   a transfer before every calibration probe. No cache-regime bump: a drift-era crown is a correct
   schedule chosen on another state, which every crown is relative to its lineage's values.
   `test/operations/autotune_timing_state_restore` pins it (parameter and momentum, with and
-  without `timing_ctx`, and a search killed mid-way).
+  without `timing_ctx`, and a search killed mid-way). Measured with `gh1557_cells.sh` (fixture
+  weights, 200 s per arm, mac-studio window): arm A's crown-to-replay-p10 gap went from 9% to
+  0.4% (99.61 vs 99.99 ms, inside its 1.2 ms p10-p50 spread), arm B's is 1.1%.
 - **A schedule op refuses typed; any other raise inside `apply` is a transform bug** (gh-ocannl-1323).
   `Schedule.apply_classified` used to turn every `Invalid_argument` escaping application into an
   `Illegal_schedule` decline, so an array bound or a `List.zip_exn` in a transform read as one more
