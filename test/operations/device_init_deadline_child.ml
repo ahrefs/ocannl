@@ -50,6 +50,11 @@
    [fork-in-region BACKEND]: forks from inside an armed region; the child stalls 5 s in a region of
    its own, and the parent prints [fork-child <how it ended>].
 
+   [fork-disarm BACKEND]: forks from inside an armed region. In the child, a new domain enters a
+   region of its own, under BACKEND, whose stall is 3 s; once that region is armed, the child's main
+   thread leaves the region it inherited, and so runs that region's disarm. The parent prints
+   [fork-child <how it ended>].
+
    [concurrent FIRST SECOND]: a second domain enters FIRST's guarded [num_devices], whose stall is
    healthy (0.3 s); once that stall has begun, this thread enters SECOND's, whose stall is 5 s.
 
@@ -100,6 +105,25 @@ let stall_for seconds () =
   say "stall-began %.6f" (now ());
   Unix.sleepf seconds;
   raise Stall_done
+
+(* Waits for [pid] under a 15 s cap: a child stuck on state the fork copied (an OCaml mutex its
+   owner thread took along, gh-ocannl-1281 review round 8) hangs for good, and is reported. *)
+let reap_child pid =
+  let started = now () in
+  let rec reap () =
+    match Unix.waitpid [ Unix.WNOHANG ] pid with
+    | 0, _ when Float.(now () -. started > 15.0) ->
+        Unix.kill pid Stdlib.Sys.sigkill;
+        ignore (Unix.waitpid [] pid : int * Unix.process_status);
+        "hung"
+    | 0, _ ->
+        Unix.sleepf 0.05;
+        reap ()
+    | _, Unix.WSIGNALED s when s = Stdlib.Sys.sigalrm -> "sigalrm"
+    | _, Unix.WEXITED n -> "exited-" ^ Int.to_string n
+    | _ -> "other"
+  in
+  reap ()
 
 let start_timer seconds =
   ignore
@@ -227,24 +251,44 @@ let () =
           | pid ->
               child := Some pid;
               raise Stall_done);
-      (* Reaped under a 15 s cap: a child stuck on state the fork copied (an OCaml mutex its owner
-         thread took along, gh-ocannl-1281 review round 8) hangs for good, and is reported. *)
-      Option.iter !child ~f:(fun pid ->
-          let started = now () in
-          let rec reap () =
-            match Unix.waitpid [ Unix.WNOHANG ] pid with
-            | 0, _ when Float.(now () -. started > 15.0) ->
-                Unix.kill pid Stdlib.Sys.sigkill;
-                ignore (Unix.waitpid [] pid : int * Unix.process_status);
-                "hung"
-            | 0, _ ->
-                Unix.sleepf 0.05;
-                reap ()
-            | _, Unix.WSIGNALED s when s = Stdlib.Sys.sigalrm -> "sigalrm"
-            | _, Unix.WEXITED n -> "exited-" ^ Int.to_string n
-            | _ -> "other"
-          in
-          say "fork-child %s" (reap ()));
+      Option.iter !child ~f:(fun pid -> say "fork-child %s" (reap_child pid));
+      say "survived"
+  | [ "fork-disarm"; name ] ->
+      (* The parent's region is armed when it forks; the child's copy of it is still on the child's
+         stack. A domain the child spawns arms a region of its own, wedged for 3 s; only then does
+         the inherited region return, running its disarm. That disarm must leave the domain's
+         deadline armed (gh-ocannl-1446): the child dies by it, rather than outliving the stall. *)
+      let child = ref None and wedged = ref None in
+      guarded_call name (fun () ->
+          match Unix.fork () with
+          | 0 ->
+              let armed = Atomic.make false in
+              Utils.device_init_test_stall :=
+                Some
+                  (fun () ->
+                    Atomic.set armed true;
+                    stall_for 3.0 ());
+              wedged :=
+                Some
+                  (Stdlib.Domain.spawn (fun () ->
+                       try call_entry name "num_devices" with Stall_done -> ()));
+              while not (Atomic.get armed) do
+                Unix.sleepf 0.01
+              done;
+              (* Leaves the inherited region: [guarded_call] catches it, past the region's
+                 disarm. *)
+              raise Stall_done
+          | pid ->
+              child := Some pid;
+              raise Stall_done);
+      (match (!child, !wedged) with
+      | Some pid, _ -> say "fork-child %s" (reap_child pid)
+      | None, Some domain ->
+          (* The child, out of the region it inherited: it outlives the wedged stall only if that
+             region's disarm took the domain's deadline back. *)
+          Stdlib.Domain.join domain;
+          Stdlib.exit 0
+      | None, None -> ());
       say "survived"
   | [ "concurrent"; first; second ] ->
       (* The first region to take the hook is the healthy one: it returns 0.3 s in. This thread

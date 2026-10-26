@@ -204,6 +204,33 @@
     test_hip_compile_failure_options.real.ml)
    (-> test_hip_compile_failure_options.missing.ml))))
 
+; gh-ocannl-1446: HIP's driver initialization, forced by a direct Impl.hip_to_code call, is under the
+; device-init deadline. The test re-runs its own executable as the child it observes.
+
+(test
+ (name test_hip_driver_init_deadline)
+ (package arrayjit)
+ (modules test_hip_driver_init_deadline)
+ (deps
+  ocannl_config
+  ocannl_ambient
+  test_hip_driver_init_deadline.expected
+  (env_var OCANNL_BACKEND))
+ (libraries
+  base
+  stdio
+  unix
+  arrayjit.utils
+  arrayjit.verdict
+  (select
+   test_hip_driver_init_deadline.ml
+   from
+   (hipjit.hiprtc
+    arrayjit.hip_backend
+    ->
+    test_hip_driver_init_deadline.real.ml)
+   (-> test_hip_driver_init_deadline.missing.ml))))
+
 (test
  ; ocannl-backend: none -- tests a pure compiler-option helper and selects no runtime backend.
  (name test_cuda_compile_options)

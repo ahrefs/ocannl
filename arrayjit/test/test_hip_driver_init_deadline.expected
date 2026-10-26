@@ -1,0 +1,1 @@
+a stuck HIP driver initialization that a direct Impl.hip_to_code call forces dies by the device-init deadline, with the diagnostic naming hip: true

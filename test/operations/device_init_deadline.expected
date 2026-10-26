@@ -14,6 +14,7 @@ a real-time timer the program starts during a region is left in place: it fires 
 with fd 2 a full pipe nobody reads, the deadline still kills the process by SIGALRM, its backstop alarm firing while the diagnostic's write is blocked: true
 the backstop's 2 s are measured, not counted in naps: with the process's timers throttled so every nap oversleeps by far (as on a loaded macOS VM), the full-pipe case still dies by SIGALRM within 10 s of the stall's start: true
 a child forked from inside an armed region gets a deadline of its own: its stall dies by SIGALRM, and the parent's region returns: true
+a region a fork child inherited, returning after a new domain of the child armed its own, leaves that deadline armed: the domain's wedged stall still kills the child by SIGALRM with the diagnostic (gh-ocannl-1446): true
 guarded regions are serialized: a wedged one entered while a healthy one held the timer is still killed by its own deadline after the healthy one returns: true
 a SIGALRM an ancestor caught with SA_SIGINFO reaches an exec'd process as its default disposition, and the deadline is armed there (on macOS the flag survives the exec): true
 the cc backends' entry points are not guarded: the stall hook never runs: true

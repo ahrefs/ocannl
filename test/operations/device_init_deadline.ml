@@ -25,8 +25,9 @@
    domains are serialized, so a healthy one's disarm does not leave a wedged one unbounded; a
    process exec'd under an ancestor that caught SIGALRM with SA_SIGINFO, which on macOS reads the
    default disposition with that flag still set (GitHub's macOS runner agent is such an ancestor),
-   is armed; and the cc backends are not guarded at all. Last, the diagnostic's tag is the one
-   [tools/test-run.sh]'s digest reads. *)
+   is armed; a region a fork child inherited takes back only its own deadline, not one a domain of
+   the child armed meanwhile; and the cc backends are not guarded at all. Last, the diagnostic's tag
+   is the one [tools/test-run.sh]'s digest reads. *)
 
 open Base
 open Stdio
@@ -271,6 +272,14 @@ let () =
     "a child forked from inside an armed region gets a deadline of its own: its stall dies by \
      SIGALRM, and the parent's region returns"
     (holds forked ~f:(fun o -> says o "fork-child sigalrm" && exited_0 o && says o "survived"));
+  let fork_disarm = run ~deadline:"0.5" [ "fork-disarm"; "hip" ] in
+  gated ~when_ ~on ~aggregation:`Environment
+    "a region a fork child inherited, returning after a new domain of the child armed its own, \
+     leaves that deadline armed: the domain's wedged stall still kills the child by SIGALRM with \
+     the diagnostic (gh-ocannl-1446)"
+    (holds fork_disarm ~f:(fun o ->
+         says o "fork-child sigalrm" && exited_0 o && says o "survived"
+         && Option.exists (diagnostic o) ~f:(String.is_prefix ~prefix:(tag ^ " hip device"))));
   let concurrent = run ~deadline:"0.5" [ "concurrent"; "cuda"; "hip" ] in
   gated ~when_ ~on ~aggregation:`Environment
     "guarded regions are serialized: a wedged one entered while a healthy one held the timer is \
