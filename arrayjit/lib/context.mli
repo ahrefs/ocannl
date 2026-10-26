@@ -72,6 +72,11 @@ type routine = private {
           data, which self-initialize at link time from [Ir.Host_inits] (gh-ocannl-333). Not the
           backend's raw read set: the execution-dependency frontier is built from the unfiltered
           backend inputs before these exclusions. *)
+  shared_reads : Set.M(Ir.Tnode).t;
+      (** The non-embedded nodes the routine reads whose buffers are their device's cached constants
+          ({!Ir.Backend_intf.field-device.constant_buffer_cache}) — host-initialized ones included —
+          which independently created contexts on the device share: {!run} refuses one another root
+          wrote since this lineage last wrote or copied it (gh-ocannl-1623). *)
   outputs : Set.M(Ir.Tnode).t;
       (** The materialized nodes the routine writes — what {!run} marks initialized. *)
   routine_id : int;
@@ -292,6 +297,14 @@ val run : t -> routine -> t
     correct value ({!Ir.Tnode.mark_zero_valid}; every gradient is marked at creation, being an
     accumulator), so a forgotten data input is refused rather than read as zeros (gh-ocannl-1462).
 
+    A node every routine of a compile only reads (and that is not made context-owned by
+    [Ir.Tnode.set_context_owned]) lives in its device's constant pool, which every independently
+    created context on that device shares (the routine's [shared_reads]). Each such context keeps
+    its own ledger, so a write one of them makes there would silently change what another's routine
+    reads; {!run} therefore also refuses a read of such a buffer that another root wrote after this
+    lineage last wrote it, or adopted it by a {!copy} (gh-ocannl-1623). Within one root its compile
+    siblings share the buffer as before.
+
     The routine's static-index bindings are read HERE, not when the device gets to the work: the
     dispatch carries the values they hold at this call, so a caller may rebind them for the next run
     the moment this returns, without syncing, on every backend. That is what makes the bind/run/
@@ -428,7 +441,21 @@ val copy : ?into_merge_buffer:Ir.Backend_intf.merge_buffer_use -> src:t -> dst:t
     invalidates their old transfer dependency so they cannot silently re-run against new bytes. A
     cross-backend copy falls back to a host round-trip ([Copy] raises). Nodes absent from [src]'s
     device buffers fall back to the host round-trip as well, serving host-init literals and
-    for-print proxies. *)
+    for-print proxies.
+
+    A copy into a buffer [dst] already holds, and a merge-buffer fill, allocate nothing in [dst], so
+    the result is the same release unit as [dst] (as for an upload into an existing buffer):
+    releasing either releases both, and repeated copies do not deepen the lifecycle chain
+    ({!lifecycle_depth}, gh-ocannl-1623). When [src] and [dst] already bind the same buffer (two
+    independently created contexts sharing a device-wide constant), nothing moves: [dst]'s ledger
+    adopts the value -- and its current write token -- only if [src]'s ledger vouches for it and no
+    other root has overwritten it since (see {!run}). *)
+
+val lifecycle_depth : t -> int
+(** How many lifecycle ancestors the context has: the [parent] links {!release}'s refusal of a
+    released ancestor walks at every entry point. A root context is at depth 0; {!compile} and the
+    [decide_*] recorders add one level, while {!copy}, {!from_host} and {!set_values} add none. A
+    diagnostic (gh-ocannl-1623). *)
 
 (** {2 On-demand host access}
 
@@ -637,9 +664,9 @@ val release : t -> unit
     one inherits its buffer locations while keeping it as their backend parent, so releasing an
     ancestor frees pools the descendant still binds. This is the pre-existing contract of the
     underlying {!Backends.finalize}. Upload siblings retain their shared pools independently;
-    descendants made by compile, decision recording, or transfers that create a lifecycle child
-    require their ancestor to remain live. {!Autotune.tune} releases only leaf siblings of one
-    search context.
+    descendants made by compile or decision recording require their ancestor to remain live (a
+    transfer creates no lifecycle child: see {!copy}). {!Autotune.tune} releases only leaf siblings
+    of one search context.
 
     A context whose buffers were released is a dead handle: {!compile}, {!run}, {!sync}, the
     transfers and the [decide_*] recorders refuse it with {!Ir.Utils.User_error} naming the context

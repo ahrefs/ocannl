@@ -630,7 +630,12 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
                 (* Same device + same location => physically the same buffer; nothing to copy. *)
                 if equal_device src.device dst.device && [%equal: buffer_loc] s_loc d_loc then None
                 else
-                  let context = Backend.make_child dst in
+                  (* gh-ocannl-1623: a copy into a buffer [dst] already holds allocates nothing, so
+                     its result is [dst] itself -- the same release unit, as for an upload into an
+                     existing buffer -- not a pool-less lifecycle child: a child per copy grew the
+                     [parent] chain [Context.check_live] walks by one level per transfer, and kept
+                     every ancestor alive. *)
+                  let context = dst in
                   let description =
                     "device_to_device " ^ Tn.debug_name tn ^ " from " ^ Backend.get_name src.device
                     ^ " to " ^ Backend.get_name dst.device
@@ -661,7 +666,10 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
                       outputs = Set.singleton (module Tnode) tn;
                     })
         | Copy ->
-            let context = Backend.make_child dst ~merge_buffer_node:(Some tn) in
+            (* gh-ocannl-1623: the merge slab is device-owned, so the fill allocates nothing in
+               [dst] either: the result is [dst]'s release unit carrying the new static
+               [merge_buffer_node] (the record-update shape of a linear upload), not a child. *)
+            let context = { dst with merge_buffer_node = Some tn } in
             let description =
               "device_to_device " ^ Tn.debug_name tn ^ " into merge buffer from "
               ^ Backend.get_name src.device

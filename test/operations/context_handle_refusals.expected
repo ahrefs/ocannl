@@ -49,7 +49,25 @@ chr_read_only_buffer: a sibling seeding its own buffer does not let the other's 
 chr_read_only_buffer: the consumer reads the producer's output read-only: true
 chr_read_only_buffer: after the producer's run is rolled back, the input is unwritten again: true
 chr_shared_copy: unseeded, the other root's consumer is refused: true
+chr_shared_copy: seeded by the first root only, the other root's consumer is still refused: true
 chr_shared_copy: after the copy, the other root's consumer runs from the copied value: true
+chr_shared_overwrite: the two roots read the same device-wide constant buffer: true
+chr_shared_overwrite: after the first root writes again, the other root's run is refused: true
+chr_shared_overwrite: the writer itself runs from its own write: true
+chr_shared_overwrite: copying again readmits the other root, reading the new value: true
+chr_shared_overwrite: re-seeding readmits a root too: true
+chr_shared_overwrite: and makes the first root stale in turn: true
+chr_shared_overwrite: a copy out of a stale root vouches for nothing: true
+chr_shared_overwrite: a write by another context of the same root is not stale to it: true
+chr_shared_writer: the writer writes the node: true
+chr_shared_writer: compiled but not run, the writer leaves the other root current: true
+chr_shared_writer: a rolled-back run of the writer leaves the other root current: true
+chr_shared_writer: run, the writer makes the other root stale: true
+chr_shared_implicit: a zero-valid input runs from zeros: true
+chr_shared_implicit: another root's write makes the zero-valid reader stale: true
+chr_shared_implicit: a host-initialized input is not a required input, but a shared read: true
+chr_shared_implicit: it runs from its host initialization: true
+chr_shared_implicit: another root's write makes the host-initialized reader stale: true
 chr_grad_zero_valid: a tensor's gradient is zero-valid: true
 chr_grad_zero_valid: a parameter's gradient is zero-valid: true
 chr_grad_zero_valid: the value nodes are not: true

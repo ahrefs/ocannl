@@ -13,11 +13,13 @@
    before, the input check accepted any node that merely had a buffer, so the routine read
    allocation-time zeros. It now has to have been written in the lineage -- by a run, an upload or a
    device copy -- and a caller that dropped the context [run] returned keeps that fact. A READ-ONLY
-   input stays accepted once allocated (zero is the right entry value of a read-only accumulator);
-   that asymmetry is pinned below so a later tightening is a deliberate change. (The tensor-level
-   form of the mistake -- an SGD step, which reads each parameter before writing it, compiled
-   without [Train.init_params] -- never gets this far: linking already refuses a parameter the prior
-   context lacks.) *)
+   input must be written the same way unless [Tnode.mark_zero_valid] declares zero its correct value
+   (gh-ocannl-1462). gh-ocannl-1623: independently created contexts on one device share the
+   device-wide constant buffer of a node every routine only reads; a write one of them makes there
+   is refused as stale to the others' routines until they re-seed or copy. (The tensor-level form of
+   the mistake -- an SGD step, which reads each parameter before writing it, compiled without
+   [Train.init_params] -- never gets this far: linking already refuses a parameter the prior context
+   lacks.) *)
 
 open Base
 open Verdict.Claims
@@ -363,12 +365,120 @@ let () =
   pf "chr_shared_copy: unseeded, the other root's consumer is refused"
     (ro_refused "chr_sc_x." (fun () -> Context.run c_b r_b));
   let c_a = Context.set_values c_a x seed in
+  pf "chr_shared_copy: seeded by the first root only, the other root's consumer is still refused"
+    (ro_refused "chr_sc_x." (fun () -> Context.run c_b r_b));
   let c_b = Context.copy ~src:c_a ~dst:c_b x in
   let c_b = Context.run c_b r_b in
   pf "chr_shared_copy: after the copy, the other root's consumer runs from the copied value"
     (Poly.equal (Context.get_values c_b out_b) shifted);
   Context.release c_a;
   Context.release c_b
+
+(* gh-ocannl-1623: once both roots hold a value for the shared buffer, a later write by one of them
+   changes the bytes the other's routine reads. Before, the other's ledger still said "written" and
+   its routine silently read the writer's values; it is now refused as stale until it re-seeds or
+   copies. *)
+let stale_refused name f =
+  refused ~needle:(name ^ " live in a device-wide constant buffer that another") f
+
+let seed2 = [| 100.; 200.; 300.; 400. |]
+let shifted2 = [| 101.; 202.; 303.; 404. |]
+
+let () =
+  Verdict.case "chr_shared_overwrite" @@ fun () ->
+  let x = node "chr_so_x" and out_a = node "chr_so_out_a" and out_b = node "chr_so_out_b" in
+  let c_a, r_a = link_shift ~ctx:(Context.auto ()) ~name:"chr_so_a" ~src:x ~dst:out_a () in
+  let c_b, r_b = link_shift ~ctx:(Context.auto ()) ~name:"chr_so_b" ~src:x ~dst:out_b () in
+  pf "chr_shared_overwrite: the two roots read the same device-wide constant buffer"
+    (Set.mem r_a.Context.shared_reads x && Set.mem r_b.Context.shared_reads x);
+  let c_a = Context.set_values c_a x seed in
+  let c_b = Context.run (Context.copy ~src:c_a ~dst:c_b x) r_b in
+  let c_a = Context.set_values c_a x seed2 in
+  pf "chr_shared_overwrite: after the first root writes again, the other root's run is refused"
+    (stale_refused "chr_so_x" (fun () -> Context.run c_b r_b));
+  let c_a = Context.run c_a r_a in
+  pf "chr_shared_overwrite: the writer itself runs from its own write"
+    (Poly.equal (Context.get_values c_a out_a) shifted2);
+  let c_b = Context.run (Context.copy ~src:c_a ~dst:c_b x) r_b in
+  pf "chr_shared_overwrite: copying again readmits the other root, reading the new value"
+    (Poly.equal (Context.get_values c_b out_b) shifted2);
+  let c_b = Context.run (Context.set_values c_b x seed) r_b in
+  pf "chr_shared_overwrite: re-seeding readmits a root too"
+    (Poly.equal (Context.get_values c_b out_b) shifted);
+  pf "chr_shared_overwrite: and makes the first root stale in turn"
+    (stale_refused "chr_so_x" (fun () -> Context.run c_a r_a));
+  (* A third root copying from the stale first one adopts nothing: the bytes are not its
+     source's. *)
+  let out_c = node "chr_so_out_c" in
+  let c_c, r_c = link_shift ~ctx:(Context.auto ()) ~name:"chr_so_c" ~src:x ~dst:out_c () in
+  let c_c = Context.copy ~src:c_a ~dst:c_c x in
+  pf "chr_shared_overwrite: a copy out of a stale root vouches for nothing"
+    (ro_refused "chr_so_x." (fun () -> Context.run c_c r_c));
+  (* Within one root the buffer is shared as before: a write through another context value of the
+     same root (here a descendant compiled from it) is that root's own. *)
+  let c_s, _ = link_shift ~ctx:c_b ~name:"chr_so_sib" ~src:x ~dst:(node "chr_so_out_s") () in
+  let c_s = Context.set_values c_s x seed2 in
+  pf "chr_shared_overwrite: a write by another context of the same root is not stale to it"
+    (Poly.equal (Context.get_values (Context.run c_b r_b) out_b) shifted2);
+  List.iter [ c_a; c_s; c_b; c_c ] ~f:Context.release
+
+(* A routine that writes the shared buffer -- compiled from a context where an earlier routine bound
+   it as a constant -- makes the other root stale only by RUNNING, and a rollback of that run (known
+   not to have written) restores the other root's currency. *)
+let () =
+  Verdict.case "chr_shared_writer" @@ fun () ->
+  let x = node "chr_sw_x" and out_a = node "chr_sw_out_a" and out_b = node "chr_sw_out_b" in
+  let lctx = LL.empty_optimize_ctx () in
+  let c_a, r_a = link_shift ~lctx ~ctx:(Context.auto ()) ~name:"chr_sw_a" ~src:x ~dst:out_a () in
+  let o_w = Ll_test.optimize_in lctx ~materialized:[ x ] ~name:"chr_sw_w" (fill x) in
+  let c_w, r_w = Ll_test.link ~ctx:c_a ~name:"chr_sw_w" o_w in
+  pf "chr_shared_writer: the writer writes the node" (Set.mem r_w.Context.outputs x);
+  let c_b, r_b = link_shift ~ctx:(Context.auto ()) ~name:"chr_sw_b" ~src:x ~dst:out_b () in
+  (* The reader runs first: the writer waits on it (write after read). *)
+  let c_w = Context.run (Context.set_values c_w x seed) r_a in
+  let c_b = Context.run (Context.copy ~src:c_w ~dst:c_b x) r_b in
+  pf "chr_shared_writer: compiled but not run, the writer leaves the other root current"
+    (Poly.equal (Context.get_values (Context.run c_b r_b) out_b) shifted);
+  let c_w = Context.run c_w r_w in
+  Context.sync c_w;
+  Context.rollback_execution c_w r_w.Context.routine_id;
+  pf "chr_shared_writer: a rolled-back run of the writer leaves the other root current"
+    (match Context.run c_b r_b with _ -> true | exception _ -> false);
+  let c_w = Context.run c_w r_w in
+  pf "chr_shared_writer: run, the writer makes the other root stale"
+    (stale_refused "chr_sw_x" (fun () -> Context.run c_b r_b));
+  List.iter [ c_w; c_a; c_b ] ~f:Context.release
+
+(* Allocation-time zeros and a host initialization are values too: another root's write replaces
+   them in the shared buffer, so a reader relying on either is refused once it happened. *)
+let () =
+  Verdict.case "chr_shared_implicit" @@ fun () ->
+  let x = node "chr_si_zv" and out_a = node "chr_si_out_a" and out_b = node "chr_si_out_b" in
+  Ir.Tnode.mark_zero_valid x;
+  let c_a, _ = link_shift ~ctx:(Context.auto ()) ~name:"chr_si_a" ~src:x ~dst:out_a () in
+  let c_b, r_b = link_shift ~ctx:(Context.auto ()) ~name:"chr_si_b" ~src:x ~dst:out_b () in
+  let c_b = Context.run c_b r_b in
+  pf "chr_shared_implicit: a zero-valid input runs from zeros"
+    (Poly.equal (Context.get_values c_b out_b) [| 1.; 2.; 3.; 4. |]);
+  let c_a = Context.set_values c_a x seed in
+  pf "chr_shared_implicit: another root's write makes the zero-valid reader stale"
+    (stale_refused "chr_si_zv" (fun () -> Context.run c_b r_b));
+  List.iter [ c_a; c_b ] ~f:Context.release;
+  let h = node "chr_si_host" and out_a = node "chr_si_hout_a" and out_b = node "chr_si_hout_b" in
+  let nd = Ir.Ndarray.create_array ~debug:"chr_si_host" Ir.Ops.single ~dims:[| 4 |] ~padding:None in
+  Ir.Ndarray.fill_from_float nd 5.;
+  Ir.Host_inits.register h (lazy nd);
+  let c_a, _ = link_shift ~ctx:(Context.auto ()) ~name:"chr_si_ha" ~src:h ~dst:out_a () in
+  let c_b, r_b = link_shift ~ctx:(Context.auto ()) ~name:"chr_si_hb" ~src:h ~dst:out_b () in
+  pf "chr_shared_implicit: a host-initialized input is not a required input, but a shared read"
+    ((not (Set.mem r_b.Context.inputs h)) && Set.mem r_b.Context.shared_reads h);
+  let c_b = Context.run c_b r_b in
+  pf "chr_shared_implicit: it runs from its host initialization"
+    (Poly.equal (Context.get_values c_b out_b) [| 6.; 7.; 8.; 9. |]);
+  let c_a = Context.set_values c_a h seed in
+  pf "chr_shared_implicit: another root's write makes the host-initialized reader stale"
+    (stale_refused "chr_si_host" (fun () -> Context.run c_b r_b));
+  List.iter [ c_a; c_b ] ~f:Context.release
 
 (* Both gradient creation sites mark the gradient zero-valid: a tensor's own ([Tensor.op]) and a
    parameter's ([Tensor.param], which replaces it). *)

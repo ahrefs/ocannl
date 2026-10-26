@@ -177,6 +177,33 @@ files.
   meant to start from zero inside a model is an inline declaration, an embedded node excluded from
   `inputs` (`Train.sgd_one`'s momentum). An SGD step compiled without `Train.init_params` never
   reaches this check: linking already refuses a parameter the prior context lacks.
+- **Independently created roots on one device share constant buffers, so a write in one is a
+  stale read in the other** (gh-ocannl-1623). Every non-`context_owned` node a compile only reads
+  (data inputs, `Host_inits` literals: only parameters are `context_owned`) lands in the device's
+  `constant_buffer_cache`, which every root resolves to one location, so one `Buffer_key`, while each
+  root keeps its own ledger. A wrong REFUSAL does not arise: a root that never wrote the node is
+  refused even after another root seeded it, and an explicit no-op `Context.copy` is how it adopts
+  that value. A wrong VALUE did: once both held a value, a later `set_values` by one root (or a run
+  of a routine compiled after the node was bound as a constant, which then writes the constant
+  buffer) changed the bytes the other read while its ledger still said "written"; a zero-valid node
+  read non-zero, and a `Host_inits` literal (not even in `routine.inputs`) read the overwrite. Every
+  write into a constant-cache buffer now mints a token (`Context.shared_write_tokens`, plus the
+  writer ledger's `observed_tokens`); `run` refuses a `routine.shared_reads` member whose current
+  token its ledger did not leave or adopt, a no-op copy adopts only from a source that is current,
+  and `rollback_execution` restores both tokens while nothing wrote since. Compile siblings and
+  descendants share a ledger, so sharing inside one root is unchanged. Ordering needs no edge: roots
+  on one device share its single FIFO runner (concurrent host domains are outside this, as for all
+  of `Context`). Not refused: `to_host`/`get_values` and real copies out of a stale source, since
+  reads check no initialization. The structural alternative, deduplicating constants per root
+  rather than per device, would remove the sharing itself. Guard: `context_handle_refusals`
+  (`chr_shared_copy`, `chr_shared_overwrite`, `chr_shared_writer`, `chr_shared_implicit`).
+- **A transfer adds no lifecycle level** (gh-ocannl-1623). `device_to_device` into a buffer `dst`
+  already holds returns `dst` itself, and a merge-buffer fill returns `{ dst with
+  merge_buffer_node }`: neither allocates in `dst`, so both are `dst`'s release unit (releasing
+  either releases both, as in a linear upload chain). A `make_child` per copy grew the `parent`
+  chain `check_live` walks by one level per transfer and retained every ancestor. Compiles and the
+  `decide_*` recorders are genuine children and still add a level; `Context.lifecycle_depth` reads
+  it. Guard: `context_copy` scenario 6 (1000 copies per path, depth constant).
 - **Read-only in one routine does not make a parameter a device-wide constant** (gh-ocannl-641).
   A host-backed parameter used only as another parameter's initializer input has no executable
   write in that routine. Its `Tnode.context_owned` construction marker keeps it in the working
