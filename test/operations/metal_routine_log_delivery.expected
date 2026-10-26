@@ -1,0 +1,6 @@
+mrld_first: the routine stores its values: true
+the first routine's stores are all in the stream log after its sync: true
+a second sync adds none of them again: true
+mrld_second: the routine stores its values: true
+the second routine's stores are all in the stream log after its sync: true
+the first routine's lines are still there exactly once: true

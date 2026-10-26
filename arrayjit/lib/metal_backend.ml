@@ -151,41 +151,42 @@ module Impl = struct
      where it means something; every indexing use is guarded by an ordinal check. *)
   let metal_devices : Me.Device.t array Lazy.t = lazy (Me.Device.copy_all_devices ())
 
-  (* Store for captured logs per device_id (the device is its own single compute stream). *)
-  let stream_logs : (int, string list ref) Hashtbl.t = Hashtbl.create (module Int)
+  (* Captured routine logs per device_id (the device is its own single compute stream). Metal calls
+     log handlers on its own dispatch threads, so the handler is ocaml-metal's native one, which
+     buffers messages C-side and never runs OCaml there (gh-ocannl-1594); [await] drains it on the
+     host thread. *)
+  let stream_logs : (int, Me.LogState.log_buffer) Hashtbl.t = Hashtbl.create (module Int)
 
   (* Device Management *)
   let num_devs () = Array.length (Lazy.force metal_devices)
   let devices_cache = lazy (Array.create ~len:(num_devs ()) None)
 
   (* Builds the device's single compute runner (command queue + sync event), optionally with a
-     debug-log-capturing queue. Returns the runner and the captured-log ref (if logging is on). *)
+     debug-log-capturing queue. Returns the runner and the captured-log buffer (if logging is
+     on). *)
   let spinup_runner metal_device =
     let queue =
       if Utils.debug_log_from_routines () then (
-        let log_entries_ref = ref [] in
-        (* This ref will be captured by the log handler *)
         let log_desc = Me.LogStateDescriptor.create () in
         Me.LogStateDescriptor.set_level log_desc Me.LogLevel.Debug;
         (* Capture all debug logs and above *)
         Me.LogStateDescriptor.set_buffer_size log_desc (1024 * 100);
         (* 100KB buffer *)
         let log_state = Me.LogState.on_device_with_descriptor metal_device log_desc in
-        Me.LogState.add_log_handler log_state (fun ~sub_system:_ ~category:_ ~level:_ ~message ->
-            log_entries_ref := message :: !log_entries_ref);
+        let log_buffer = Me.LogState.add_buffered_log_handler log_state in
         let queue_desc = Me.CommandQueueDescriptor.create () in
         Me.CommandQueueDescriptor.set_log_state queue_desc (Some log_state);
-        (* The log_state and its handler (capturing log_entries_ref) are kept alive by the
-           queue_desc / queue itself. *)
+        (* The queue's OCaml value holds the log state, and with it the buffer, through the
+           descriptor's lifetime chain; [stream_logs] holds the buffer too. *)
         let created_q = Me.CommandQueue.on_device_with_descriptor metal_device queue_desc in
-        (created_q, Some log_entries_ref))
+        (created_q, Some log_buffer))
       else (Me.CommandQueue.on_device metal_device, None)
     in
-    let actual_queue, opt_log_entries_ref = queue in
+    let actual_queue, opt_log_buffer = queue in
     let shared_event_obj = Me.SharedEvent.on_device metal_device in
     let counter = Unsigned.ULLong.one in
     (* Next value = 1 *)
-    ({ queue = actual_queue; event = shared_event_obj; counter; fused = None }, opt_log_entries_ref)
+    ({ queue = actual_queue; event = shared_event_obj; counter; fused = None }, opt_log_buffer)
 
   let get_device ~(ordinal : int) : device =
     (* See the note in [Cuda_backend.get_device]: no Metal device at all is the discovery failure
@@ -199,11 +200,11 @@ module Impl = struct
     let devices_cache = Lazy.force devices_cache in
     let default () =
       let metal_device = (Lazy.force metal_devices).(ordinal) in
-      let runner, opt_log_entries_ref = spinup_runner metal_device in
+      let runner, opt_log_buffer = spinup_runner metal_device in
       let result_device = make_device metal_device runner ~ordinal in
       (* The device is its own single compute stream; key captured logs by [device_id]. *)
-      Option.iter opt_log_entries_ref ~f:(fun log_ref ->
-          Hashtbl.add_exn stream_logs ~key:result_device.device_id ~data:log_ref);
+      Option.iter opt_log_buffer ~f:(fun log_buffer ->
+          Hashtbl.add_exn stream_logs ~key:result_device.device_id ~data:log_buffer);
       Stdlib.Gc.finalise (fun d -> Hashtbl.remove stream_logs d.device_id) result_device;
       devices_cache.(ordinal) <- Some result_device;
       result_device
@@ -236,7 +237,9 @@ module Impl = struct
       event.value;
     Me.CommandBuffer.commit command_buffer
 
-  let all_work device =
+  (* Commits a command buffer signalling the device's event after all current work; returns the
+     event and that command buffer. *)
+  let signal_after_all_work device =
     let queue = device.runner.queue in
     let shared_event = device.runner.event in
     let counter = device.runner.counter in
@@ -247,23 +250,43 @@ module Impl = struct
       (Me.SharedEvent.super shared_event)
       next_value;
     Me.CommandBuffer.commit command_buffer;
-    { shared = shared_event; value = next_value }
+    ({ shared = shared_event; value = next_value }, command_buffer)
+
+  let all_work device = fst (signal_after_all_work device)
 
   let await device =
     (* Signal an event after all current work and wait for it. This ensures all previously submitted
        command buffers complete. *)
-    let event = all_work device in
+    let event, command_buffer = signal_after_all_work device in
     sync event;
-    (* Process captured logs if any *)
+    (* Drain the captured routine logs, if logging is on for this device. The event firing is a GPU
+       timeline fact, while Metal hands log messages to the handler on the CPU side, so under
+       logging [await] also waits for the signalling command buffer (the queue's last) to complete
+       before draining: no Metal document promises delivery by either point, and completion is the
+       later of the two. test/operations/metal_routine_log_delivery pins that every message of the
+       work is drained by then (it held 10 of 10 runs even without this wait). A message that does
+       arrive later is not lost: it is in the next [await]'s drain. *)
     if Utils.debug_log_from_routines () then
       match Hashtbl.find stream_logs device.device_id with
-      | Some log_entries_ref ->
-          let logs_to_process = List.rev !log_entries_ref in
-          if not (List.is_empty logs_to_process) then
-            Utils.log_debug_routine_logs ~log_contents:logs_to_process
-              ~stream_name:(get_name device);
-          log_entries_ref := [] (* Clear processed logs *)
-      | None -> () (* No log bucket for this device, logging likely not enabled for it *)
+      | Some log_buffer ->
+          Me.CommandBuffer.wait_until_completed command_buffer;
+          (* The drain detaches the batch: if writing it out raises, the batch is lost, never
+             written twice. *)
+          let entries, dropped = Me.LogState.drain_log_buffer log_buffer in
+          let messages = List.map entries ~f:(fun (e : Me.LogState.log_entry) -> e.message) in
+          let messages =
+            if dropped > 0 then
+              messages
+              @ [
+                  [%string
+                    "[ocannl] %{dropped#Int} Metal routine log messages were dropped (allocation \
+                     failure)"];
+                ]
+            else messages
+          in
+          if not (List.is_empty messages) then
+            Utils.log_debug_routine_logs ~log_contents:messages ~stream_name:(get_name device)
+      | None -> () (* No log buffer for this device, logging likely not enabled for it *)
 
   let is_idle device =
     (* FIXME: store the latest CommandBuffer with the device runner and check that it's completed *)
@@ -435,13 +458,12 @@ module Impl = struct
   let get_global_debug_info () = Sexp.Atom "Metal global debug info NYI"
 
   let get_debug_info device =
-    let num_pending_logs =
-      match Hashtbl.find stream_logs device.device_id with None -> 0 | Some r -> List.length !r
-    in
+    (* The captured shader logs wait C-side until [await] drains them; counting them would drain
+       them, so this reports only whether capture is on. *)
     Sexp.message "Metal device debug info"
       [
         ("device_id", sexp_of_int device.device_id);
-        ("pending_shader_logs", sexp_of_int num_pending_logs);
+        ("shader_log_capture", sexp_of_bool (Hashtbl.mem stream_logs device.device_id));
       ]
 
   (* --- Copy Operations --- (transfers take {!Backend_intf.buffer_loc} and resolve to the concrete
@@ -1774,9 +1796,9 @@ using namespace metal;|}
 
     let work () : unit =
       [%log3_result "Launching", func_name, "on", runner_label];
-      (* Unlike CUDA, we don't use Utils.add_log_processor here. Logs are captured by the LogState
-         handler installed on the CommandQueue. They will be processed by Utils.log_trace_tree in
-         `await`. *)
+      (* Unlike CUDA, we don't use Utils.add_log_processor here. Logs are captured C-side by the
+         buffered LogState handler installed on the CommandQueue, and [await] drains them to
+         [Utils.log_debug_routine_logs]. *)
       try
         (* Inside a [sequence_segments] batch, encode into the routine's open serial compute pass
            (one command buffer for all segments); standalone, commit our own command buffer. *)
