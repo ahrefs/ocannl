@@ -302,30 +302,33 @@ end = struct
      program startup (Backends instantiates it eagerly for nameable types), and hipjit is a depopt
      -- the library being installed does not imply a usable driver/GPU. Forcing here, at first
      device use, keeps CPU-only runs from touching the driver and lets [Context.auto] catch
-     unusable-HIP failures per call. *)
+     unusable-HIP failures per call. The driver call takes the device-init deadline itself
+     (gh-ocannl-1281), wherever it is forced from: [hip_to_code] and the batched compile force it
+     ahead of their own guarded discovery, and a direct [Impl] caller reaches them with no
+     [Backends.With_device_init_deadline] around it (gh-ocannl-1446). Forced inside a guarded
+     region, it runs under that region's deadline. *)
   let ensure_initialized =
     lazy
       (if not !initialized then (
-         quiet_first_call (fun () -> H.init ());
+         Utils.with_device_init_deadline ~backend_name:name (fun () ->
+             Option.iter !Utils.driver_init_test_stall ~f:(fun stall -> stall ());
+             quiet_first_call (fun () -> H.init ()));
          initialized := true))
 
   (* Under the inline-test harness, when the session's backend is [hip], force runtime
      initialization at module init: the "HIP Library Path" banner then goes to the runner's own
      stdout instead of the first [%expect] block (no ppx_expect capture is active yet, so the banner
      cannot corrupt or pollute test output). Failures are swallowed — an unusable driver/GPU
-     surfaces at [get_device], where [Context.auto]'s fallback can catch it. This is the one driver
-     entry that runs before [Backends.With_device_init_deadline] wraps the module, so it takes the
-     same deadline itself (gh-ocannl-1281): a wedged driver would otherwise hang every inline-test
+     surfaces at [get_device], where [Context.auto]'s fallback can catch it. This driver entry runs
+     before [Backends.With_device_init_deadline] wraps the module; [ensure_initialized]'s own
+     deadline bounds it (gh-ocannl-1281): a wedged driver would otherwise hang every inline-test
      runner in [H.init] with no bound. *)
   let () =
     if
       am_running_inline_tests
       && String.equal "hip"
            (String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:""))
-    then
-      try
-        Utils.with_device_init_deadline ~backend_name:name (fun () -> Lazy.force ensure_initialized)
-      with _ -> ()
+    then try Lazy.force ensure_initialized with _ -> ()
 
   let num_devices () =
     Lazy.force ensure_initialized;

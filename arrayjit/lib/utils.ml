@@ -2925,6 +2925,12 @@ let device_init_deadline_tag = "OCANNL device_init_deadline:"
     raising, skip the real one. *)
 let device_init_test_stall : (unit -> unit) option ref = ref None
 
+(** Test-only: when set, a GPU backend's one-time driver initialization (HIP's [hipInit]) runs it
+    right before the driver call, inside that initialization's own guarded region -- so a test can
+    simulate a driver whose initialization is stuck, wherever the initialization is forced from
+    (gh-ocannl-1446). *)
+let driver_init_test_stall : (unit -> unit) option ref = ref None
+
 (** The pieces of {!with_device_init_deadline}: its C stubs ([utils_stubs.c]) and its setting. *)
 module Device_init_deadline_internals = struct
   external arm : float -> string -> int = "ocannl_device_init_deadline_arm"

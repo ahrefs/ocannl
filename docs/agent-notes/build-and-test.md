@@ -4366,7 +4366,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   the whole test that way, and passes). Each arm is a generation, and a region's exit disarms only its
   own: a region a `fork` child inherited would otherwise cancel a deadline a new domain of the child
   armed (gh-ocannl-1446, the `fork-disarm` case). The disposition is read at arm time, so a handler
-  installed mid-region is overridden only at the death (a recorded boundary).
+  installed mid-region is overridden only at the death (a recorded boundary). HIP's `hipInit` takes
+  the deadline itself, inside `ensure_initialized`, because `Impl.hip_to_code` forces it ahead of its
+  guarded discovery; `Utils.driver_init_test_stall` stalls there
+  (`arrayjit/test/test_hip_driver_init_deadline`, a HIP leg only).
 - **Revisit a per-action bound from the traces, through `tools/action-durations.sh`**: it reads a
   dune trace (`_build/trace.csexp` by default — a bare dune's; a `tools/test-run.sh run` writes its
   batch's into the run directory and keeps only the five slowest, below) and
