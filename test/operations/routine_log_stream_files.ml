@@ -7,9 +7,8 @@
    honours the key, so a run outside one printed them on stdout. Now the backend opens the window
    around each logged launch itself. The C backends log to files and never touched stdout, so there
    the claims hold trivially; the backend that ran is printed on stderr, since the golden is the
-   same on every backend. On Metal a logged routine can crash the host process once it runs
-   (gh-ocannl-1594), and its logs go to os_log rather than a stream file, so there the routine only
-   compiles and the claims about its run are skipped. *)
+   same on every backend. Metal's shader logs are buffered C-side by its log handler and drained to
+   the stream file at synchronization (gh-ocannl-1594), so its claims run like the rest. *)
 
 open Base
 open Verdict.Claims
@@ -90,29 +89,25 @@ let () =
   let computes = "the logged routine computes its values"
   and quiet = "the logged run writes nothing to stdout"
   and filed = "the logged run's lines reach its stream file" in
-  if String.equal backend_name "metal" then (
-    ignore (Ll_test.link ~name o : Context.t * Context.routine);
-    List.iter [ computes; quiet; filed ] ~f:(skipped ~backend:backend_name))
-  else
-    let av = [| 3.; -1.; 4.; 1. |] in
-    let (ctx, values), out =
-      stdout_of (fun () ->
-          let ctx, _routine = Ll_test.run_routine ~name o ~seed:[ (a, av); (x, Ll_test.blank n) ] in
-          (ctx, Context.get_values ctx x))
-    in
-    p_all2 computes values (Array.map av ~f:(fun v -> v +. 1.)) ~f:Float.equal;
-    if not (String.is_empty out) then
-      Stdio.eprintf "routine_log_stream_files: the run wrote to stdout:\n%s\n%!" out;
-    p quiet (String.is_empty out);
-    (* The stream files are named after the stream that ran the routine:
-       [<backend>-<ordinal>-<id>]. *)
-    let dir = Utils.log_files_dir () in
-    let stream_lines =
-      Stdlib.Sys.readdir dir |> Array.to_list
-      |> List.filter ~f:(fun file ->
-          String.is_prefix file ~prefix:(Context.backend_name ctx ^ "-")
-          && String.is_suffix file ~suffix:".log")
-      |> List.concat_map ~f:(fun file ->
-          Stdio.In_channel.read_lines (Stdlib.Filename.concat dir file))
-    in
-    p_exists filed stream_lines ~f:(String.is_substring ~substring:"rlsf_x")
+  let av = [| 3.; -1.; 4.; 1. |] in
+  let (ctx, values), out =
+    stdout_of (fun () ->
+        let ctx, _routine = Ll_test.run_routine ~name o ~seed:[ (a, av); (x, Ll_test.blank n) ] in
+        (ctx, Context.get_values ctx x))
+  in
+  p_all2 computes values (Array.map av ~f:(fun v -> v +. 1.)) ~f:Float.equal;
+  if not (String.is_empty out) then
+    Stdio.eprintf "routine_log_stream_files: the run wrote to stdout:\n%s\n%!" out;
+  p quiet (String.is_empty out);
+  (* The stream files are named after the stream that ran the routine:
+     [<backend>-<ordinal>-<id>]. *)
+  let dir = Utils.log_files_dir () in
+  let stream_lines =
+    Stdlib.Sys.readdir dir |> Array.to_list
+    |> List.filter ~f:(fun file ->
+        String.is_prefix file ~prefix:(Context.backend_name ctx ^ "-")
+        && String.is_suffix file ~suffix:".log")
+    |> List.concat_map ~f:(fun file ->
+        Stdio.In_channel.read_lines (Stdlib.Filename.concat dir file))
+  in
+  p_exists filed stream_lines ~f:(String.is_substring ~substring:"rlsf_x")

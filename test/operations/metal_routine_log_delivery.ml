@@ -11,8 +11,10 @@
    routine's lines arrive the same way, exactly once, and leave the first routine's alone.
 
    The C backends write the same stream log (each routine's log file is appended to it after the
-   run), so they run the same claims. CUDA and HIP log by device-side [printf] through stdout, a
-   different channel ([Utils.capture_stdout_logs]); their claims are skipped here. *)
+   run), so they run the same claims. CUDA and HIP deliver device-side [printf] lines through the
+   capture window each logged launch opens (gh-ocannl-1636), a mechanism
+   test/operations/routine_log_stream_files pins; this test, whose counts were established on cc and
+   Metal only, skips them. *)
 
 open Base
 module LL = Ir.Low_level
