@@ -557,4 +557,11 @@ files.
   capture shows the library's source, another routine's text for a reused kernel).
   `Compile_cost.pipelines_created` counts creations; `gpu_kernel_cache` pins both levels, gated on
   the census (`reuse_capable`, `pipelines_created > 0`), with `OCANNL_METAL_KERNEL_CACHE_MIB=0` as
-  the negative control.
+  the negative control. Measured on mac-studio (M-series Metal, gpt2 b8 search, 300 s budget, 2
+  alternating rounds, `benchmarks/gh1525_reuse_ab.sh`, base 65aae889c vs head): a candidate's median
+  compile went from 2.10 / 1.63 s (base) and 1.79 / 1.79 s (head, cache off) to 0.61 / 0.60 s, its
+  link from 1.17-1.55 s to 0.27-0.29 s (median 1 of 262 kernels compiled, against all of them), so
+  the budget fit 127-129 candidates where it fit 74-92; the winner's compile went from 1.9-2.0 s to
+  0.50 s (0 kernels compiled). The tuned step was unchanged (64-66 ms). The base arm's library
+  compiles may have been warmed by macOS's own Metal compiler cache; its link time is read from the
+  trace as measured.
