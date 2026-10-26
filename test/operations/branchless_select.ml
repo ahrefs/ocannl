@@ -4,9 +4,10 @@
    a conditional branch: C forbids evaluating the unselected arm, and the compiler cannot prove the
    load dereferenceable. Inlined into the nests that consume them, the ReLU and max-pool backward
    selects made cifar_resnet's step time follow its activation sparsity (gh-ocannl-1557). The cc
-   backend now renders a value select it may speculate ([Low_level.speculable_select]) as a call to
-   [ocannl_select_f32] / [ocannl_select_f64], whose arguments always evaluate, so the compiler
-   if-converts. The same [Where] is also how lowering guards a read that may be out of range, and
+   backend now renders a value select it may speculate ([Low_level.speculable_select]) as a GNU
+   statement expression that evaluates both arms into [__auto_type] locals and then selects, so the
+   compiler if-converts; the locals keep each arm's C type, so the blend has the [?:] spelling's
+   exact type too. The same [Where] is also how lowering guards a read that may be out of range, and
    those must keep short-circuiting.
 
    Pinned here:
@@ -15,8 +16,10 @@
    an unselected NaN or infinity does not reach the result (a mask multiply would leak it), a
    selected negative zero stays negative, a NaN condition selects the then-arm of a [Where] and
    gates a [Relu_gate] shut, and [Satur01_gate] yields its operand where its test FAILS. Legs at
-   f32, f64, a half-precision condition beside an f32 result, and bf16 storage computing at f32. -
-   Emission, on cc: those legs call the blend and keep no [?:] spelling of their select. - Guards,
+   f32, f64, a half-precision condition beside an f32 result, and bf16 storage computing at f32;
+   and, on cc, a gate and a [Where] composed into further arithmetic, whose rounding follows the
+   [?:] spelling's C type (a gate's [0.0] literal makes it double, a [Where] of floats stays float).
+   - Emission, on cc: those legs call the blend and keep no [?:] spelling of their select. - Guards,
    on cc: an index-guarded out-of-range read and a value-guarded [Get_dynamic] gather (its index
    runs far out of range on the inactive lanes) keep [?:]; a value select over an index guard blends
    outside and keeps the inner guard. Executed with the hazardous reads inactive. - Assembly, on
@@ -75,6 +78,9 @@ let has text s = String.is_substring text ~substring:s
    [Ops.binop_c_syntax], float arms). *)
 let short_circuit_forms = [ ") != 0.0 ? ("; " > 0.0 ?"; ")) > 0.0 ? 0.0 :" ]
 
+(* The blend's own spelling (cc's [select_blend_syntax]). *)
+let blend_marker = "__auto_type ocannl_sel_a__"
+
 (* Executes [llc] writing [out], every node materialized and the inputs seeded. *)
 let execute_leg ~name ~seed ~out llc =
   List.iter (out :: List.map seed ~f:fst) ~f:materialize;
@@ -124,7 +130,7 @@ let compiled_branch_free ~patterns name =
 
 type leg = {
   name : string;
-  blend : string;  (** the helper the leg's select must call on cc *)
+  cpu_only : bool;  (** whose expected values are the C backends' (C typing, or no f64 elsewhere) *)
   seed : (Tn.t * float array) list;
   out : Tn.t;
   llc : LL.t;
@@ -134,7 +140,7 @@ type leg = {
 (* [?else_zero]: the else-arm is the constant [0.0] — the backward gates' shape, [where cond g 0].
    It is also the shape a compiler cannot if-convert by selecting between two addresses instead,
    which it does when both arms are loads of one index. *)
-let where_leg ?(else_zero = false) ~name ~blend ~mk ~cmk ~cprec ~prec () =
+let where_leg ?(else_zero = false) ?(cpu_only = false) ~name ~mk ~cmk ~cprec ~prec () =
   let cv = [| 1.; 0.; nan; -0.; 2.; 0.; -.inf; 0.5 |] in
   let gv = [| -0.; nan; 3.5; nan; inf; inf; -2.25; -0. |] in
   let ev =
@@ -150,7 +156,7 @@ let where_leg ?(else_zero = false) ~name ~blend ~mk ~cmk ~cprec ~prec () =
   in
   {
     name;
-    blend;
+    cpu_only;
     seed = ([ (cond, cv); (g, gv) ] @ if else_zero then [] else [ (e, ev) ]);
     out;
     llc = loop_n i n (set out [| iter i |] sel);
@@ -164,25 +170,63 @@ let gate_leg ~name ~op ~semantics ~xv ~gv =
   let sel = LL.Binop (op, (get x [| iter i |], single), (get g [| iter i |], single)) in
   {
     name;
-    blend = "ocannl_select_f32(";
+    cpu_only = false;
     seed = [ (x, xv); (g, gv) ];
     out;
     llc = loop_n i n (set out [| iter i |] sel);
     want = Array.init n ~f:(fun i -> semantics xv.(i) gv.(i));
   }
 
+(* A select inlined into further arithmetic, [out = (sel + h) - k] at f32. The expected values are
+   the C semantics of the short-circuiting spelling, which the blend must keep: [x > 0.0 ? g : 0.0]
+   is a DOUBLE (its [0.0] literal), so the gate's sum and difference are exact; a [Where] of float
+   arms is a float, so both round at f32. An f32-typed blend would flip the first (review round 1).
+   cc only: another dialect types the literal its own way. *)
+let composed_leg ~name ~select =
+  let x = mk_single (name ^ "_x") and g = mk_single (name ^ "_g") and e = mk_single (name ^ "_e") in
+  let h = mk_single (name ^ "_h") and k = mk_single (name ^ "_k") in
+  let out = mk_single (name ^ "_out") in
+  let xv = [| 1.; 1.; 1.; -1.; 1.; 0.; 1.; 2. |] in
+  let gv = [| 1.; 3.; -1.; 5.; 0.5; 1.; 0.25; 1. |] in
+  let ev = [| 7.; 7.; 7.; 9.; 7.; 2.; 7.; 7. |] in
+  let big = Array.create ~len:n 16777216. in
+  let i = sym () in
+  let at tn = (get tn [| iter i |], single) in
+  let sel, want =
+    match select with
+    | `Relu_gate ->
+        ( LL.Binop (Ops.Relu_gate, at x, at g),
+          Array.init n ~f:(fun i -> if Float.(xv.(i) > 0.) then gv.(i) else 0.) )
+    | `Where ->
+        let to_f32 v = Int32.float_of_bits (Int32.bits_of_float v) in
+        ( LL.Ternop (Ops.Where, at x, at g, at e),
+          Array.init n ~f:(fun i ->
+              let s = if Float.(xv.(i) <> 0.) then gv.(i) else ev.(i) in
+              to_f32 (to_f32 (s +. big.(i)) -. big.(i))) )
+  in
+  let sum = LL.Binop (Ops.Add, (sel, single), at h) in
+  let llsc = LL.Binop (Ops.Sub, (sum, single), at k) in
+  {
+    name;
+    cpu_only = true;
+    seed =
+      ([ (x, xv); (g, gv); (h, big); (k, big) ]
+      @ match select with `Where -> [ (e, ev) ] | `Relu_gate -> []);
+    out;
+    llc = loop_n i n (set out [| iter i |] llsc);
+    want;
+  }
+
 let legs =
   [
-    where_leg ~name:"bs_where_f32" ~blend:"ocannl_select_f32(" ~mk:mk_single ~cmk:mk_single
-      ~cprec:single ~prec:single ();
-    where_leg ~else_zero:true ~name:"bs_where_zero" ~blend:"ocannl_select_f32(" ~mk:mk_single
-      ~cmk:mk_single ~cprec:single ~prec:single ();
-    where_leg ~name:"bs_where_f64" ~blend:"ocannl_select_f64(" ~mk:mk_double ~cmk:mk_double
-      ~cprec:Ops.double ~prec:Ops.double ();
-    where_leg ~name:"bs_where_hcond" ~blend:"ocannl_select_f32(" ~mk:mk_single ~cmk:mk_half
-      ~cprec:Ops.half ~prec:single ();
-    where_leg ~name:"bs_where_bf16" ~blend:"ocannl_select_f32(" ~mk:mk_bf16 ~cmk:mk_bf16
-      ~cprec:Ops.bfloat16 ~prec:Ops.bfloat16 ();
+    where_leg ~name:"bs_where_f32" ~mk:mk_single ~cmk:mk_single ~cprec:single ~prec:single ();
+    where_leg ~else_zero:true ~name:"bs_where_zero" ~mk:mk_single ~cmk:mk_single ~cprec:single
+      ~prec:single ();
+    where_leg ~cpu_only:true ~name:"bs_where_f64" ~mk:mk_double ~cmk:mk_double ~cprec:Ops.double
+      ~prec:Ops.double ();
+    where_leg ~name:"bs_where_hcond" ~mk:mk_single ~cmk:mk_half ~cprec:Ops.half ~prec:single ();
+    where_leg ~name:"bs_where_bf16" ~mk:mk_bf16 ~cmk:mk_bf16 ~cprec:Ops.bfloat16 ~prec:Ops.bfloat16
+      ();
     (* [x > 0.0 ? g : 0.0]: a NaN or a zero of either sign gates shut, to POSITIVE zero. *)
     gate_leg ~name:"bs_relu_gate" ~op:Ops.Relu_gate
       ~semantics:(fun x g -> if Float.(x > 0.) then g else 0.)
@@ -194,12 +238,15 @@ let legs =
       ~semantics:(fun x g -> if Float.(abs (round_down x) > 0.) then 0. else g)
       ~xv:[| 0.5; 1.5; -0.5; nan; 0.; 0.75; -1.; 2. |]
       ~gv:[| -0.; nan; nan; 7.; inf; -2.5; 1.; nan |];
+    (* Composed into [(sel + h) - k] with [h = k = 2^24]: the sum keeps a small [sel] exactly at
+       double but rounds it away at f32, so the result shows the C type the select had. *)
+    composed_leg ~name:"bs_relu_composed" ~select:`Relu_gate;
+    composed_leg ~name:"bs_where_composed" ~select:`Where;
   ]
 
 let () =
   List.iter legs ~f:(fun leg ->
-      let is_f64 = has leg.blend "f64" in
-      if is_f64 && not on_cc then skipped (leg.name ^ ": values match the select's semantics")
+      if leg.cpu_only && not on_cc then skipped (leg.name ^ ": values match the select's semantics")
       else
         let got = execute_leg ~name:leg.name ~seed:leg.seed ~out:leg.out leg.llc in
         p_all2
@@ -207,7 +254,7 @@ let () =
           got leg.want ~f:same_bits;
         if on_cc then (
           let text = kernel_text leg.name in
-          p (leg.name ^ ": the select calls the blend helper") (has text leg.blend);
+          p (leg.name ^ ": the select calls the blend helper") (has text blend_marker);
           p_none
             (leg.name ^ ": no short-circuiting spelling of the select remains")
             short_circuit_forms ~f:(has text))
@@ -222,7 +269,7 @@ let () =
       let claim = name ^ ": no conditional branch on the select's lines (host compiler)" in
       (* Anchored on either spelling, so the same claim reads base's [?:] lines too. A hand-built
          leg's kernel holds this one select and nothing else conditional. *)
-      let patterns = "ocannl_select_f" :: short_circuit_forms in
+      let patterns = "ocannl_sel_" :: short_circuit_forms in
       if on_cc then p claim (compiled_branch_free ~patterns name) else skipped claim)
 
 (* === The guards that must keep short-circuiting. === *)
@@ -243,7 +290,7 @@ let () =
   let claim = name ^ ": an index guard keeps its [?:] and calls no blend" in
   if on_cc then
     let text = kernel_text name in
-    p claim (has text "? (" && not (has text "ocannl_select_f"))
+    p claim (has text "? (" && not (has text blend_marker))
   else skipped claim
 
 (* [out[i] := 0 <= idx[i] && idx[i] < 4 ? table[idx[i]] : 0]: the guard reads only a data value — no
@@ -267,7 +314,7 @@ let () =
   let claim = name ^ ": a value-guarded gather keeps its [?:] and calls no blend" in
   if on_cc then
     let text = kernel_text name in
-    p claim (has text "? (" && not (has text "ocannl_select_f"))
+    p claim (has text "? (" && not (has text blend_marker))
   else skipped claim
 
 (* [out[i] := v[i] != 0 ? (i < 4 ? a[i] : 0) : -1] over [i < 6]: the outer, value select blends —
@@ -288,7 +335,40 @@ let () =
   let claim = name ^ ": the value select blends around the inner guard's [?:]" in
   if on_cc then
     let text = kernel_text name in
-    p claim (has text "ocannl_select_f32(" && has text "? (")
+    p claim (has text blend_marker && has text "? (")
+  else skipped claim
+
+(* [out[i] := v[i] != 0 ? ((int)a[i] / (int)b[i] == 0 ? g[i] : 0) : -1]: the inner condition is an
+   int32 comparison, so its division renders as C INTEGER division even though the division's own
+   annotation says f32 (a homogeneous operator renders its operands at its own precision), and [b]
+   is zero exactly where the outer select is off. Blending the outer select would execute it: SIGFPE
+   on x86, a silently discarded value on AArch64 -- so the claim is the structural one, the outer
+   select keeping its [?:] (review round 1). *)
+let () =
+  let name = "bs_int_div_guard" in
+  let mk4 = node_factory ~first_id:16380 ~dims:[| 4 |] () in
+  let v = mk4 (name ^ "_v") and a = mk4 (name ^ "_a") and b = mk4 (name ^ "_b") in
+  let g = mk4 (name ^ "_g") and out = mk4 (name ^ "_out") in
+  let vv = [| 1.; 0.; 1.; 0. |] and av = [| 1.; 5.; 6.; 7. |] and bv = [| 2.; 0.; 3.; 0. |] in
+  let gv = [| 0.5; 1.5; 2.5; 3.5 |] in
+  let i = sym () in
+  let at tn = (get tn [| iter i |], single) in
+  let quotient = LL.Binop (Ops.Div, at a, at b) in
+  let inner_cond = LL.Binop (Ops.Cmpeq, (quotient, single), (c 0., single)) in
+  let inner = LL.Ternop (Ops.Where, (inner_cond, Ops.int32), at g, (c 0., single)) in
+  let outer = LL.Ternop (Ops.Where, at v, (inner, single), (c (-1.), single)) in
+  let llc = loop_n i 4 (set out [| iter i |] outer) in
+  let got = execute_leg ~name ~seed:[ (v, vv); (a, av); (b, bv); (g, gv) ] ~out llc in
+  (* 1/2 and 6/3 in integers: 0 and 2. *)
+  p_all2 (name ^ ": values") got [| 0.5; -1.; 0.; -1. |] ~f:same_bits;
+  (* The outer select, over [v], keeps its [?:]; the inner one may blend, since its condition is
+     evaluated inside the outer arm either way. *)
+  let claim = name ^ ": a select whose arm divides integers keeps its [?:]" in
+  if on_cc then
+    let text = kernel_text name in
+    p claim
+      (List.exists (String.split_lines text) ~f:(fun l ->
+           has l (name ^ "_v[") && has l ") != 0.0 ? ("))
   else skipped claim
 
 (* === The realistic composition: ReLU into a 2x2 max pool, backward. === *)
@@ -363,7 +443,7 @@ let () =
   let claim = "pool backward: the inlined gradient's selects call the blend" in
   if on_cc then
     let text = kernel_text "bs_pool_inlined" in
-    p claim (has text "ocannl_select_f32(")
+    p claim (has text blend_marker)
   else skipped claim;
   (* Not discriminating against the short-circuiting spelling at this size — the base compiler
      already if-converts these few unrolled loads — so the two hand-built legs above carry the
@@ -372,5 +452,5 @@ let () =
   (* Anchored on the blend calls alone (and the helper's line, where an inlined select is
      attributed): the backward's own index guards keep their [?:] by design, and gcc branches on
      them (CI's ubuntu leg). *)
-  if on_cc then p claim (compiled_branch_free ~patterns:[ "ocannl_select_f" ] "bs_pool_inlined")
+  if on_cc then p claim (compiled_branch_free ~patterns:[ "ocannl_sel_" ] "bs_pool_inlined")
   else skipped claim

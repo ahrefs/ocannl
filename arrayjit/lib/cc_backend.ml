@@ -1735,24 +1735,30 @@ struct
               ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2))
               ^^ string op_suffix))
 
-  (* gh-ocannl-1622: value selects render as a call to one of [Builtins_cc.builtins]'
-     [ocannl_select_*] helpers at the two compute precisions it defines; every other precision keeps
-     the [?:] spellings above. *)
+  (* gh-ocannl-1622: a value select renders as a GNU statement expression that evaluates both arms
+     into [__auto_type] locals before selecting between them. The arms are then plain values, so the
+     compiler if-converts ([fcsel] / [bsl] on AArch64, [cmov] / blends on x86) instead of branching
+     around an arm's load, as it must for a short-circuiting [?:]. The locals take each arm's own C
+     type and the final [?:] applies the usual arithmetic conversions to them, so the blend has
+     EXACTLY the type and value of the [?:] spelling it replaces -- a gate's double [0.0] literal
+     included, which an f32 helper function would round away (review round 1). It is a true select,
+     not a multiply by a mask: NaN, infinities and signed zeros pass unchanged. Inner blends shadow
+     the names in their own block, and no arm can mention them. Only at the two compute precisions
+     whose [?:] spellings above are the plain [Ops] ones; the bridged narrow precisions keep
+     [?:]. *)
   let select_blend_syntax prec =
-    let call name truth a b =
+    let blend truth a b =
       let open PPrint in
       group
-        (string (name ^ "(")
-        ^^ truth ^^ string ","
-        ^^ ifflat (space ^^ a) (nest 2 (break 1 ^^ a))
-        ^^ string ","
-        ^^ ifflat (space ^^ b) (nest 2 (break 1 ^^ b))
-        ^^ string ")")
+        (string "({ __auto_type ocannl_sel_a__ ="
+        ^^ nest 2 (break 1 ^^ a)
+        ^^ string ";" ^^ break 1
+        ^^ string "__auto_type ocannl_sel_b__ ="
+        ^^ nest 2 (break 1 ^^ b)
+        ^^ string ";" ^^ break 1 ^^ string "(" ^^ truth
+        ^^ string ") ? ocannl_sel_a__ : ocannl_sel_b__; })")
     in
-    match prec with
-    | Ops.Single_prec _ -> Some (call "ocannl_select_f32")
-    | Ops.Double_prec _ -> Some (call "ocannl_select_f64")
-    | _ -> None
+    match prec with Ops.Single_prec _ | Ops.Double_prec _ -> Some blend | _ -> None
 
   let unop_syntax prec op v =
     match op with

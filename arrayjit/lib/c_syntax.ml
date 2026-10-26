@@ -676,18 +676,19 @@ module type C_syntax_config = sig
   val select_blend_syntax :
     Ops.prec -> (PPrint.document -> PPrint.document -> PPrint.document -> PPrint.document) option
   (** A branchless rendering of a value select at this compute precision (gh-ocannl-1622): applied
-      to a C truth expression and the two arms, it must evaluate all three — a call, never [?:],
-      [&&] or [||] ({!operand_conditionality_violations} checks it) — and yield the then-arm where
-      the truth holds, the else-arm otherwise, bit for bit. [pp_scalar_op] uses it for a [Where],
-      [Relu_gate] or [Satur01_gate] that {!Low_level.speculable_select} admits, keeping the
-      condition exactly as the short-circuiting spelling tests it.
+      to a C truth expression and the two arms, it must evaluate both arms unconditionally — each
+      rendered before any [?:], [&&] or [||] ({!operand_conditionality_violations} checks it) — and
+      have exactly the C type and value of the short-circuiting spelling it replaces, bit for bit.
+      [pp_scalar_op] uses it for a [Where], [Relu_gate] or [Satur01_gate] that
+      {!Low_level.speculable_select} admits, keeping the condition exactly as the short-circuiting
+      spelling tests it.
 
       Why: C forbids evaluating the unselected arm of [?:], so where an arm holds a load the
       compiler cannot prove dereferenceable it emits a conditional branch, and a step's time follows
       the data (cifar_resnet's inlined ReLU and max-pool backward selects on cc, gh-ocannl-1557).
-      Call arguments always evaluate, so after inlining the compiler if-converts. [None] (the
-      {!Pure_C_config} default, kept by the GPU backends, which predicate a short ternary
-      themselves) keeps the short-circuiting [ternop_syntax] / [binop_syntax] spelling. *)
+      With both arms already values, the compiler if-converts. [None] (the {!Pure_C_config} default,
+      kept by the GPU backends, which predicate a short ternary themselves) keeps the
+      short-circuiting [ternop_syntax] / [binop_syntax] spelling. *)
 
   val unop_syntax : Ops.prec -> Ops.unop -> PPrint.document -> PPrint.document
   val vec_unop_syntax : Ops.prec -> Ops.vec_unop -> PPrint.document -> PPrint.document
@@ -1466,23 +1467,23 @@ let operand_conditionality_violations ~ternop_syntax ~binop_syntax ~select_blend
                         report what
                           "classified as evaluating one arm, but its arms are not the two sides of \
                            a [?:] alternative -- a call form (MSL's [select]) evaluates both")));
-      (* gh-ocannl-1622: the blend is the one rendering that must evaluate every operand. *)
+      (* gh-ocannl-1622: the blend is the one rendering that must evaluate both arms
+         unconditionally: each arm is rendered before any construct that could skip it. (The
+         selection itself may be a [?:] -- over values already computed, it skips nothing.) *)
       match select_blend_syntax prec with
       | None -> ()
       | Some blend -> (
           match render (fun () -> blend a1 a2 a3) with
           | None -> ()
-          | Some s ->
+          | Some s -> (
               let what = at_prec "select blend" in
-              if
-                Option.is_none (at s "$1")
-                || Option.is_none (at s "$2")
-                || Option.is_none (at s "$3")
-              then report what "not every operand is rendered"
-              else if gated_in s then
-                report what
-                  "must evaluate every operand, but the rendering short-circuits ([?], [&&] or \
-                   [||])"));
+              match (at s "$1", at s "$2", at s "$3") with
+              | None, _, _ | _, None, _ | _, _, None -> report what "not every operand is rendered"
+              | Some _, Some i2, Some i3 ->
+                  if gated_before s (Int.max i2 i3) then
+                    report what
+                      "must evaluate both arms unconditionally, but the rendering reaches an arm \
+                       after a [?], [&&] or [||]")));
   List.rev !violations
 
 (** The names defined by a backend's builtins table (the keys of its

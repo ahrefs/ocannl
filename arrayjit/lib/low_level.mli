@@ -511,7 +511,9 @@ val speculable_select : cond:scalar_t -> arms:scalar_arg list -> bool
     - [cond] must not mention an [Embed_index] (read syntactically: a guard is spliced in place,
       never routed through a [Local_scope]); a select over an index comparison stays
       short-circuiting even when it is a user's mask, which is safe and only forgoes the blend;
-    - no arm may contain a [Get_dynamic], nor an integer [Div] / [Mod] (which can trap);
+    - no arm may contain a [Get_dynamic], nor a [Div] / [Mod] that renders at an integer precision
+      (which can trap) — judged at the precision [C_syntax] renders each operand at, not at the
+      operand's own annotation, which a homogeneous operator overrides;
     - a nested conditional operator counts only its always-evaluated operand: it either keeps
       short-circuiting, guarding its own arms, or was itself admitted here.
 

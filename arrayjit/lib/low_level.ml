@@ -7064,29 +7064,39 @@ let speculable_select ~(cond : scalar_t) ~(arms : scalar_arg list) =
     | Binop (_, (a, _), (b, _)) -> mentions_index a || mentions_index b
     | Unop (_, (a, _)) -> mentions_index a
   in
-  (* Whether evaluating [s] at precision [prec] is safe whatever the select's condition is. *)
-  let rec safe ((s, prec) : scalar_arg) =
+  (* Whether evaluating [s] RENDERED AT [prec] is safe whatever the select's condition is. The
+     precision is the one [C_syntax.pp_scalar_op] renders each operand at -- the operator's own for
+     a homogeneous operator, the operand's for a heterogeneous one, and for a [Where] its own
+     precision for the condition and the operator's for the arms -- never the operand's stored
+     annotation, which a homogeneous operator overrides: an integer division the annotation calls
+     f32 renders as C integer division, and traps on a zero divisor (review round 1). *)
+  let rec safe prec (s : scalar_t) =
     match s with
     | Get _ | Get_local _ | Get_merge_buffer _ | Local_scope _ | Constant _ | Constant_bits _
     | Embed_index _ ->
         true
     | Get_dynamic _ -> false
-    | Ternop (op, a, b, c) -> (
+    | Ternop (op, (a, pa), (b, pb), (c, pc)) -> (
+        let pa, pb, pc =
+          if Ops.is_homogeneous_prec_ternop op then (prec, prec, prec)
+          else match op with Ops.Where -> (pa, prec, prec) | _ -> (pa, pb, pc)
+        in
         match Ops.ternop_conditionality op with
-        | Ops.All_three -> safe a && safe b && safe c
+        | Ops.All_three -> safe pa a && safe pb b && safe pc c
         (* A nested select either still short-circuits — guarding its own arms — or was itself
            admitted here. Either way only its condition evaluates unconditionally. *)
-        | Ops.Cond_and_one_arm -> safe a)
+        | Ops.Cond_and_one_arm -> safe pa a)
     | Binop ((Ops.Div | Ops.Mod), _, _) when not (Ops.is_float prec) -> false
-    | Binop (op, a, b) -> (
+    | Binop (op, (a, pa), (b, pb)) -> (
+        let pa, pb = if Ops.is_homogeneous_prec_binop op then (prec, prec) else (pa, pb) in
         match Ops.binop_conditionality op with
-        | Ops.Both_operands -> safe a && safe b
-        | Ops.Gated_second -> safe a
-        | Ops.Only_first -> safe a
-        | Ops.Only_second -> safe b)
-    | Unop (_, a) -> safe a
+        | Ops.Both_operands -> safe pa a && safe pb b
+        | Ops.Gated_second -> safe pa a
+        | Ops.Only_first -> safe pa a
+        | Ops.Only_second -> safe pb b)
+    | Unop (op, (a, pa)) -> safe (if Ops.is_homogeneous_prec_unop op then prec else pa) a
   in
-  (not (mentions_index cond)) && List.for_all arms ~f:safe
+  (not (mentions_index cond)) && List.for_all arms ~f:(fun (s, prec) -> safe prec s)
 
 (* The reduction operator of a scope-local update in EITHER spelling: the plain
    [accum_local_update_parts] form, or virtualization's guarded-read form — [Set_local (id, Where

@@ -30,10 +30,16 @@ files.
   cannot prove the load dereferenceable), so a backward pass inlining the ReLU and max-pool gates
   ran at a speed that followed activation sparsity (gh-ocannl-1557). `pp_scalar_op` renders a
   `Where` / `Relu_gate` / `Satur01_gate` that `Low_level.speculable_select` admits through the
-  backend's `select_blend_syntax` instead — on cc a call to `ocannl_select_f32`/`_f64`
-  (`Builtins_cc`), whose arguments always evaluate, so the compiler if-converts; `None` everywhere
-  else. The truth expression is the short-circuiting spelling's own test, so values are identical,
-  NaN conditions and signed zeros included. Never blend a select the predicate refuses: `Where` is
+  backend's `select_blend_syntax` instead — on cc a GNU statement expression,
+  `({ __auto_type ocannl_sel_a__ = a; __auto_type ocannl_sel_b__ = b; (truth) ? ocannl_sel_a__ :
+  ocannl_sel_b__; })`, whose arms are values before the select, so the compiler if-converts;
+  `None` everywhere else. The truth expression is the short-circuiting spelling's own test and the
+  `__auto_type` locals keep each arm's C TYPE, so values are identical, NaN conditions, signed zeros
+  and promotions included: a typed helper (`float ocannl_select_f32(...)`, the first version) rounds
+  a gate's double-typed `x > 0.0 ? g : 0.0` to float and changes what an inlined `(gate + h) - k`
+  computes. The safety walk judges each operand at the precision `pp_scalar_op` RENDERS it at (a
+  homogeneous operator's own), never its annotation: an int32 comparison's f32-annotated division
+  is C integer division. Never blend a select the predicate refuses: `Where` is
   also how lowering guards a read that may be out of range (gh-504 clamps, virtualization's range
   and unit-solve conditions, `Schedule`'s masks — all over `Embed_index`), and gh-343's gather guard
   is a VALUE condition over a `Get_dynamic` arm whose row runs out of range; the predicate refuses
