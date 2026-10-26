@@ -1,18 +1,19 @@
-(* gh-ocannl-1556: [autotune_budget_seconds] bounds a search's wall time, not only when its last
-   attempt starts. A compile cannot be cancelled, so an attempt starts only where a compile as
-   costly as the costliest one the search has made still ends within the budget (the projection);
-   and a non-floor candidate's timing is abandoned, unranked, before its first batch past the
-   budget.
+(* gh-ocannl-1556, gh-ocannl-1604: [autotune_budget_seconds] bounds a search's wall time, not only
+   when its last attempt starts. A compile cannot be cancelled, so an attempt starts only where a
+   compile as costly as the costliest one the search has made (the base compile's included: the
+   projection's first evidence) still ends within the budget with a second one reserved for the
+   winner's recompile, which runs after every check; and a non-floor candidate's timing is
+   abandoned, unranked, before its first batch past the budget less that reserve.
 
    No real clock: every search reads a virtual one through [Autotune.budget_elapsed]. It advances
-   only by what the test charges -- each non-floor candidate compile [compile_s] (charged as the
-   compile's record reaches [Autotune.install_compile_observer], inside the compile's span), and
-   each budget read made during one chosen candidate's timing [batch_s] (the reads the timing check
-   makes, one before the warmup and one before each batch). The floors (the baseline, the untuned
-   default seed) cost nothing: they are exempt from the budget, so the claims bound only what the
-   budget governs. The timings are scripted ([Scripted_search]) so the ranking is the script's; the
-   crowned routines are still compiled, run and compared with the untuned output. Searched on cc,
-   over [Fissioned_chain]'s small menu. *)
+   only by what the test charges -- the base compile [base_s], each non-floor candidate compile
+   [compile_s] and the winner's recompile [winner_s] (each charged as the compile's record reaches
+   [Autotune.install_compile_observer], inside the compile's span), and each budget read made during
+   one chosen candidate's timing [batch_s] (the reads the timing check makes, one before the warmup
+   and one before each batch). The floors (the untuned default seed) cost nothing: they are exempt
+   from the budget, so the claims bound only what the budget governs. The timings are scripted
+   ([Scripted_search]) so the ranking is the script's; the crowned routines are still compiled, run
+   and compared with the untuned output. Searched on cc, over [Fissioned_chain]'s small menu. *)
 
 open Base
 open Verdict.Claims
@@ -40,28 +41,39 @@ let reference = Scripted_search.untuned (fst chain) (snd chain)
 type charges = {
   mutable clock : float;
   mutable compiles : int;  (** Non-floor candidate compiles charged. *)
+  mutable recompiles : int;  (** Winner recompiles charged. *)
   mutable timing_reads : int;  (** Budget reads charged during [timing_of]'s timing. *)
   mutable current : string;
   mutable in_timing : bool;
 }
 
-(* The search in flight's charges and per-compile charge. *)
-let active : (charges * float) option ref = ref None
+(* What a search charges per compile: the base compile, a non-floor candidate's, the winner's
+   recompile. *)
+type rates = { base_s : float; compile_s : float; winner_s : float }
+
+(* The search in flight's charges and rates. *)
+let active : (charges * rates) option ref = ref None
 
 let () =
   Autotune.install_compile_observer (fun r ->
-      match !active with
-      | Some (c, compile_s)
-        when String.equal r.Autotune.compile_stage "candidate"
-             && not (is_floor r.Autotune.compile_attempt) ->
+      match (!active, r.Autotune.compile_stage) with
+      | Some (c, rates), "candidate" when not (is_floor r.Autotune.compile_attempt) ->
           c.compiles <- c.compiles + 1;
-          c.clock <- c.clock +. compile_s
-      | Some _ | None -> ())
+          c.clock <- c.clock +. rates.compile_s
+      | Some (c, rates), "base_compile" -> c.clock <- c.clock +. rates.base_s
+      | Some (c, rates), "winner_compile" ->
+          c.recompiles <- c.recompiles + 1;
+          c.clock <- c.clock +. rates.winner_s
+      | Some _, _ | None, _ -> ())
 
-(* One search under a budget, charging [compile_s] per non-floor candidate compile and [batch_s] per
-   budget read during [timing_of]'s timing. *)
-let search ?budget ?(compile_s = 0.) ?(batch_s = 0.) ?timing_of ~tag () =
-  let c = { clock = 0.; compiles = 0; timing_reads = 0; current = ""; in_timing = false } in
+(* One search under a budget, charging [base_s] for the base compile, [compile_s] per non-floor
+   candidate compile, [winner_s] for the winner's recompile and [batch_s] per budget read during
+   [timing_of]'s timing. *)
+let search ?budget ?(base_s = 0.) ?(compile_s = 0.) ?(winner_s = 0.) ?(batch_s = 0.) ?timing_of ~tag
+    () =
+  let c =
+    { clock = 0.; compiles = 0; recompiles = 0; timing_reads = 0; current = ""; in_timing = false }
+  in
   let qg, comp = chain in
   let attempt = Autotune.Seam.get Autotune.on_candidate_attempt in
   let preflight = Autotune.Seam.get Autotune.on_candidate_preflight in
@@ -70,7 +82,7 @@ let search ?budget ?(compile_s = 0.) ?(batch_s = 0.) ?timing_of ~tag () =
     Exn.protect
       ~finally:(fun () -> active := None)
       ~f:(fun () ->
-        active := Some (c, compile_s);
+        active := Some (c, { base_s; compile_s; winner_s });
         Autotune.Seam.with_value Autotune.on_candidate_attempt (fun label ->
             c.current <- label;
             c.in_timing <- false;
@@ -98,12 +110,13 @@ let search ?budget ?(compile_s = 0.) ?(batch_s = 0.) ?timing_of ~tag () =
   in
   Stdio.eprintf
     "%s (not part of the golden): attempts %s | measured %s | clock %.1f, %d compiles charged, %d \
-     timing reads, budget_cut %b, crown %s\n\
+     recompiles, %d timing reads, budget_cut %b, crown %s\n\
      %!"
     tag
     (String.concat ~sep:"; " o.attempts)
     (String.concat ~sep:"; " o.measured)
-    c.clock c.compiles c.timing_reads o.report.Autotune.budget_cut o.report.Autotune.best_label;
+    c.clock c.compiles c.recompiles c.timing_reads o.report.Autotune.budget_cut
+    o.report.Autotune.best_label;
   (o, c)
 
 let non_floor attempts = List.filter attempts ~f:(fun l -> not (is_floor l))
@@ -121,21 +134,46 @@ let () =
   p "control: the menu offers at least five non-floor attempts" (List.length control_non_floor >= 5);
   p "control: nothing was cut" (searched control && not control.report.Autotune.budget_cut)
 
-(* --- the projection: each non-floor compile costs 3 s against a 10 s budget --- *)
+(* --- the projection: each non-floor compile and the winner's recompile cost 3 s against a 10 s
+   budget --- *)
 
 let () =
   let budget = 10. and compile_s = 3. in
-  let o, c = search ~budget:"10" ~compile_s ~tag:"projection" () in
-  (* At 9 s a fourth compile would end at 12 s: the projection refuses it, where a check of the
-     elapsed time alone (9 < 10) started it. *)
-  p "projection: the non-floor compiles ended within the budget" Float.(c.clock <= budget);
-  p "projection: as many compiles started as fit in the budget"
-    (c.compiles = Float.iround_towards_zero_exn (budget /. compile_s));
+  let o, c = search ~budget:"10" ~compile_s ~winner_s:compile_s ~tag:"projection" () in
+  (* At 6 s a third compile would end at 9 s, but the winner's recompile reserved after it would end
+     at 12 s: the reserve refuses it, where the projection alone (or a check of the elapsed time
+     alone) started it. *)
+  p "projection: the winner's recompile was charged once" (c.recompiles = 1);
+  p "projection: the search ended within the budget, the winner's recompile included"
+    Float.(c.clock <= budget);
+  p "projection: as many compiles started as fit in the budget beside the reserve"
+    (c.compiles = Float.iround_towards_zero_exn ((budget -. compile_s) /. compile_s));
   p "projection: its attempts are a prefix of the control's, cut by the budget"
     (searched o && o.report.Autotune.budget_cut
     && List.is_prefix control_non_floor ~prefix:(non_floor o.attempts) ~equal:String.equal);
   p_all2 "projection: the crowned routine computes the untuned output bit for bit" o.output
     reference ~f:Float.equal
+
+(* --- the base compile: charged, and the first compile evidence: a 3 s base compile, 1 s candidate
+   compiles and a 3 s winner's recompile against a 10 s budget --- *)
+
+let () =
+  let budget = 10. and base_s = 3. and compile_s = 1. in
+  let o, c = search ~budget:"10" ~base_s ~compile_s ~winner_s:base_s ~tag:"base" () in
+  (* From 3 s, a candidate compile is projected at the base compile's 3 s, the reserve too: a
+     compile starts while the elapsed time is at most 4 s. Without the base compile as evidence the
+     first started unprojected and the later ones were projected at 1 s, each with no reserve. *)
+  p "base: the winner's recompile was charged once" (c.recompiles = 1);
+  p "base: the search ended within the budget, the base compile and the winner's recompile included"
+    Float.(c.clock <= budget);
+  p "base: as many compiles started as the base compile's projection admits"
+    (c.compiles
+    = Float.iround_towards_zero_exn ((budget -. base_s -. (2. *. base_s)) /. compile_s) + 1);
+  p "base: its attempts are a prefix of the control's, cut by the budget"
+    (searched o && o.report.Autotune.budget_cut
+    && List.is_prefix control_non_floor ~prefix:(non_floor o.attempts) ~equal:String.equal);
+  p_all2 "base: the crowned routine computes the untuned output bit for bit" o.output reference
+    ~f:Float.equal
 
 (* --- the timing check: the second non-floor candidate the control timed passes a 3 s budget in its
    timing, at 1 s per batch --- *)
@@ -160,4 +198,30 @@ let () =
       p "timing: no non-floor attempt started after it"
         (Option.equal String.equal (List.last (non_floor o.attempts)) (Some slow));
       p_all2 "timing: the crowned routine computes the untuned output bit for bit" o.output
+        reference ~f:Float.equal
+
+(* --- the reserve in the timing check: the same slow candidate, after a 1 s base compile, against a
+   5 s budget at 1 s per batch, with a 1 s winner's recompile --- *)
+
+let () =
+  match List.nth control_measured 1 with
+  | None -> p "reserve: the control timed a second non-floor candidate" false
+  | Some slow ->
+      let budget = 5. and base_s = 1. and batch_s = 1. in
+      let o, c =
+        search ~budget:"5" ~base_s ~winner_s:base_s ~batch_s ~timing_of:slow ~tag:"reserve" ()
+      in
+      p "reserve: the slow candidate was attempted" (List.mem o.attempts slow ~equal:String.equal);
+      p "reserve: its timing was abandoned, unranked"
+        (not (List.mem o.measured slow ~equal:String.equal));
+      p "reserve: the winner's recompile was charged once" (c.recompiles = 1);
+      (* From 1 s, the read that passed 4 s (the budget less the 1 s reserve) was the fourth. *)
+      p "reserve: its timing stopped at the first batch past the budget less the reserve"
+        (c.timing_reads
+        = Float.iround_towards_zero_exn ((budget -. base_s -. base_s) /. batch_s) + 1);
+      p
+        "reserve: the search, the winner's recompile included, passed the budget by one batch at \
+         most"
+        Float.(c.clock <= budget +. batch_s);
+      p_all2 "reserve: the crowned routine computes the untuned output bit for bit" o.output
         reference ~f:Float.equal

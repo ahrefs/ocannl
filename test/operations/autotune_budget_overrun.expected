@@ -1,9 +1,15 @@
 control: the menu offers at least five non-floor attempts: true
 control: nothing was cut: true
-projection: the non-floor compiles ended within the budget: true
-projection: as many compiles started as fit in the budget: true
+projection: the winner's recompile was charged once: true
+projection: the search ended within the budget, the winner's recompile included: true
+projection: as many compiles started as fit in the budget beside the reserve: true
 projection: its attempts are a prefix of the control's, cut by the budget: true
 projection: the crowned routine computes the untuned output bit for bit: true
+base: the winner's recompile was charged once: true
+base: the search ended within the budget, the base compile and the winner's recompile included: true
+base: as many compiles started as the base compile's projection admits: true
+base: its attempts are a prefix of the control's, cut by the budget: true
+base: the crowned routine computes the untuned output bit for bit: true
 timing: the slow candidate was attempted: true
 timing: its timing was abandoned, unranked: true
 timing: the search completed, cut by its budget: true
@@ -11,3 +17,9 @@ timing: it stopped at the first batch past the budget, not before its warmup: tr
 timing: the clock passed the budget by one batch at most: true
 timing: no non-floor attempt started after it: true
 timing: the crowned routine computes the untuned output bit for bit: true
+reserve: the slow candidate was attempted: true
+reserve: its timing was abandoned, unranked: true
+reserve: the winner's recompile was charged once: true
+reserve: its timing stopped at the first batch past the budget less the reserve: true
+reserve: the search, the winner's recompile included, passed the budget by one batch at most: true
+reserve: the crowned routine computes the untuned output bit for bit: true
