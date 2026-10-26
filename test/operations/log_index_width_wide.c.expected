@@ -5,6 +5,12 @@
 #include <string.h>
 #include <stdlib.h>
 
+/* The builtins' linkage (gh-ocannl-1603): internal in a kernel library, which may be linked from
+   several translation units that each carry them; the host stubs' copy keeps them external. */
+#ifndef ARRAYJIT_BUILTIN_LINKAGE
+  #define ARRAYJIT_BUILTIN_LINKAGE static
+#endif
+
 /* SIMD platform detection (gh-ocannl-164): compile-time macros for conditional SIMD code paths
    (explicit intrinsics are emitted by follow-up work; auto-vectorization needs no guards). */
 #ifdef __AVX2__

@@ -6,6 +6,9 @@ let () =
   print_endline "#ifndef ARRAYJIT_BUILTINS_SHARED_H";
   print_endline "#define ARRAYJIT_BUILTINS_SHARED_H";
   print_endline "#include <math.h>\n#include <stdint.h>\n#include <string.h>\n#include <stdlib.h>";
+  (* External here (gh-ocannl-1603): host stubs elsewhere link against these definitions, which a
+     kernel library gives internal linkage. *)
+  print_endline "#define ARRAYJIT_BUILTIN_LINKAGE";
   let shared =
     List.filter
       (fun (key, _, _) -> not (String.starts_with ~prefix:"OCANNL_" key))
