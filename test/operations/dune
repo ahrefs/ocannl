@@ -10794,3 +10794,12 @@
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(test
+ (name set_equal_rows)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules set_equal_rows)
+ (libraries base ocannl stdio arrayjit.verdict))

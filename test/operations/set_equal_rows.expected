@@ -1,0 +1,54 @@
+solved by a fixed operand, r registered first, set_equal r s: r is solved at the call: true
+solved by a fixed operand, r registered first, set_equal r s: x is 2x3
+solved by a fixed operand, r registered first, set_equal r s: w is 2x3
+solved by a fixed operand, r registered first, set_equal r s: the open row takes the fixed row's structure: true
+solved by a fixed operand, r registered first, set_equal s r: r is solved at the call: true
+solved by a fixed operand, r registered first, set_equal s r: x is 2x3
+solved by a fixed operand, r registered first, set_equal s r: w is 2x3
+solved by a fixed operand, r registered first, set_equal s r: the open row takes the fixed row's structure: true
+solved by a fixed operand, s registered first, set_equal r s: r is solved at the call: true
+solved by a fixed operand, s registered first, set_equal r s: x is 2x3
+solved by a fixed operand, s registered first, set_equal r s: w is 2x3
+solved by a fixed operand, s registered first, set_equal r s: the open row takes the fixed row's structure: true
+solved by a fixed operand, s registered first, set_equal s r: r is solved at the call: true
+solved by a fixed operand, s registered first, set_equal s r: x is 2x3
+solved by a fixed operand, s registered first, set_equal s r: w is 2x3
+solved by a fixed operand, s registered first, set_equal s r: the open row takes the fixed row's structure: true
+solved by set_dim, r registered first, set_equal r s: w is 2x3
+solved by set_dim, r registered first, set_equal r s: x is 2x3
+solved by set_dim, r registered first, set_equal r s: the set_dim row takes the other row's structure: true
+solved by set_dim, r registered first, set_equal s r: w is 2x3
+solved by set_dim, r registered first, set_equal s r: x is 2x3
+solved by set_dim, r registered first, set_equal s r: the set_dim row takes the other row's structure: true
+solved by set_dim, s registered first, set_equal r s: w is 2x3
+solved by set_dim, s registered first, set_equal r s: x is 2x3
+solved by set_dim, s registered first, set_equal r s: the set_dim row takes the other row's structure: true
+solved by set_dim, s registered first, set_equal s r: w is 2x3
+solved by set_dim, s registered first, set_equal s r: x is 2x3
+solved by set_dim, s registered first, set_equal s r: the set_dim row takes the other row's structure: true
+both open, fixed afterwards, r registered first, set_equal r s: neither reference is solved at the call: true
+both open, fixed afterwards, r registered first, set_equal r s: x is 2x3
+both open, fixed afterwards, r registered first, set_equal r s: w is 2x3
+both open, fixed afterwards, r registered first, set_equal r s: the open row takes the later structure: true
+both open, fixed afterwards, r registered first, set_equal s r: neither reference is solved at the call: true
+both open, fixed afterwards, r registered first, set_equal s r: x is 2x3
+both open, fixed afterwards, r registered first, set_equal s r: w is 2x3
+both open, fixed afterwards, r registered first, set_equal s r: the open row takes the later structure: true
+both open, fixed afterwards, s registered first, set_equal r s: neither reference is solved at the call: true
+both open, fixed afterwards, s registered first, set_equal r s: x is 2x3
+both open, fixed afterwards, s registered first, set_equal r s: w is 2x3
+both open, fixed afterwards, s registered first, set_equal r s: the open row takes the later structure: true
+both open, fixed afterwards, s registered first, set_equal s r: neither reference is solved at the call: true
+both open, fixed afterwards, s registered first, set_equal s r: x is 2x3
+both open, fixed afterwards, s registered first, set_equal s r: w is 2x3
+both open, fixed afterwards, s registered first, set_equal s r: the open row takes the later structure: true
+equal products, different structure, r registered first, set_equal r s: the rows 2x3 and 6 do not unify: true
+equal products, different structure, r registered first, set_equal s r: the rows 2x3 and 6 do not unify: true
+equal products, different structure, s registered first, set_equal r s: the rows 2x3 and 6 do not unify: true
+equal products, different structure, s registered first, set_equal s r: the rows 2x3 and 6 do not unify: true
+one reference closed, set_equal r s: r is solved to its product by the closure: true
+one reference closed, set_equal r s: refused: Shape.set_equal: the row variable reference r was bound by shape inference that has since closed, which keeps only its row's product 6; equating it with the row reference s needs the row itself, which the closure did not keep. Call set_equal before the closure, or capture the row afresh in an operation of the open work.
+one reference closed, set_equal r s: the call is refused: true
+one reference closed, set_equal s r: r is solved to its product by the closure: true
+one reference closed, set_equal s r: refused: Shape.set_equal: the row variable reference r was bound by shape inference that has since closed, which keeps only its row's product 6; equating it with the row reference s needs the row itself, which the closure did not keep. Call set_equal before the closure, or capture the row afresh in an operation of the open work.
+one reference closed, set_equal s r: the call is refused: true
