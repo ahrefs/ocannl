@@ -4702,10 +4702,10 @@ harness_leg_run '81: fresh runs per-test aliases forced, uncached and timed #fre
 # A host with no dune skips it, as leg 79's trace leg does.
 leg_80_live() {
 live_label="a manual dune running beside a managed run keeps its live trace (real dune)"
-live_real=$( (command -v dune >/dev/null 2>&1 || . "$HERE/opam-env.sh" >/dev/null 2>&1
-  command -v dune) 2>/dev/null) || live_real=
+live_real=
+! harness_real_dune || live_real=$harness_dune
 if [ -z "$live_real" ] || ! command -v python3 >/dev/null 2>&1; then
-  skip "$live_label" "no dune on PATH, nor through tools/opam-env.sh, or no python3"
+  skip "$live_label" "${harness_dune_absent:-no python3 on PATH}"
 else
   live_root=$TMP/live-trace
   mkdir -p "$live_root/tools" "$live_root/scripts"
@@ -4873,10 +4873,10 @@ harness_leg_run '92: a build failure is BUILD FAILED, not a failed test #digest'
 # this run rewrote. A host with no dune skips it, as leg 80b does.
 leg_92_real() {
 bfr_label="a real type error is BUILD FAILED naming the stale output; a red test alone stays FAIL (real dune)"
-bfr_real=$( (command -v dune >/dev/null 2>&1 || . "$HERE/opam-env.sh" >/dev/null 2>&1
-  command -v dune) 2>/dev/null) || bfr_real=
+bfr_real=
+! harness_real_dune || bfr_real=$harness_dune
 if [ -z "$bfr_real" ] || ! command -v python3 >/dev/null 2>&1; then
-  skip "$bfr_label" "no dune on PATH, nor through tools/opam-env.sh, or no python3"
+  skip "$bfr_label" "${harness_dune_absent:-no python3 on PATH}"
   return
 fi
 bfr_root=$TMP/build-failed-real
@@ -6859,12 +6859,12 @@ leg_84() {
 direct_label="repeat --direct: one build, then each test's own rules replayed as dune ran them (real dune)"
 direct_nc_label="negative control: with the replay cut out, dune's --force alone runs no target-producing test again (real dune)"
 direct_fd_label="negative control: with the replay's inherited descriptors closed, a session-escaped descendant goes unseen (real dune)"
-direct_real=$( (command -v dune >/dev/null 2>&1 || . "$HERE/opam-env.sh" >/dev/null 2>&1
-  command -v dune) 2>/dev/null) || direct_real=
+direct_real=
+! harness_real_dune || direct_real=$harness_dune
 if [ -z "$direct_real" ] || ! command -v python3 >/dev/null 2>&1; then
-  skip "$direct_label" "no dune on PATH, nor through tools/opam-env.sh, or no python3"
-  skip "$direct_nc_label" "no dune on PATH, nor through tools/opam-env.sh, or no python3"
-  skip "$direct_fd_label" "no dune on PATH, nor through tools/opam-env.sh, or no python3"
+  skip "$direct_label" "${harness_dune_absent:-no python3 on PATH}"
+  skip "$direct_nc_label" "${harness_dune_absent:-no python3 on PATH}"
+  skip "$direct_fd_label" "${harness_dune_absent:-no python3 on PATH}"
 else
   direct_root=$TMP/direct-repo
   mkdir -p "$direct_root/tools" "$direct_root/scripts" "$direct_root/t"
@@ -7426,11 +7426,11 @@ fi
 # The trace itself, which is what the issue found tokens in. A host with no
 # dune skips it (the toolchain-free CI job); a dune that writes no trace there
 # skips it too, since there is then nothing to leak into.
-cred_real=$( (command -v dune >/dev/null 2>&1 || . "$HERE/opam-env.sh" >/dev/null 2>&1
-  command -v dune) 2>/dev/null) || cred_real=
+cred_real=
+! harness_real_dune || cred_real=$harness_dune
 if [ -z "$cred_real" ]; then
-  skip "$cred_trace_label" "no dune on PATH, nor through tools/opam-env.sh"
-  skip "$cred_trace_nc_label" "no dune on PATH, nor through tools/opam-env.sh"
+  skip "$cred_trace_label" "$harness_dune_absent"
+  skip "$cred_trace_nc_label" "$harness_dune_absent"
 else
   cred_project() { # root: a one-rule dune project whose build spawns a process
     printf '(lang dune 3.20)\n' >"$1/dune-project"
@@ -7634,10 +7634,10 @@ fi
 rm -rf "$repeat_root/al"
 # A real dune's listing, in a project of its own: the format the check reads
 # is dune's, not only the fixture's.
-alias_real=$( (command -v dune >/dev/null 2>&1 || . "$HERE/opam-env.sh" >/dev/null 2>&1
-  command -v dune) 2>/dev/null) || alias_real=
+alias_real=
+! harness_real_dune || alias_real=$harness_dune
 if [ -z "$alias_real" ]; then
-  skip "$alias_real_label" "no dune on PATH, nor through tools/opam-env.sh"
+  skip "$alias_real_label" "$harness_dune_absent"
 else
   alias_root=$TMP/alias-real
   mkdir -p "$alias_root/tools" "$alias_root/scripts" "$alias_root/al/sub"

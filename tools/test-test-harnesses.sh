@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Opposing controls for the aggregate: run all selected members, preserve
 # failures, select the CI groups, hold a strict run to its list of expected
-# skips, and refuse arguments (or a malformed list) before executing work.
+# skips, run the CI shell job's own check (--ci-shell) with that job's
+# absences, and refuse arguments (or a malformed list) before executing work.
 # Usage: tools/test-test-harnesses.sh [--keep|--help]
 set -u
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -34,6 +35,12 @@ while IFS= read -r script; do
 name=${0#"$FIXTURE/"}
 printf '%s\n' "$name" >>"$RECORD"
 [ "$PWD" = "$FIXTURE" ] || exit 90
+if [ -n "${ENV_RECORD:-}" ]; then
+  wake=unset
+  [ -z "${OCANNL_TOOL_SWEEP_WAKE_LAB+x}" ] || { wake=present; [ -e "$OCANNL_TOOL_SWEEP_WAKE_LAB" ] || wake=absent; }
+  printf '%s no-dune=%s fleet=%s wake-lab=%s\n' "$name" "${OCANNL_TOOL_HARNESS_NO_DUNE-unset}" \
+    "${FLEET_BOXES-unset}" "$wake" >>"$ENV_RECORD"
+fi
 if [ "$name" = "${FAIL_MEMBER:-}" ]; then
   if [ -n "${FAIL_SIGNAL:-}" ]; then
     # Background launchers can inherit ignored INT; reset the member itself
@@ -176,6 +183,79 @@ for missing in '' "$TMP/no-such-list"; do
   if [ "$got" = 2 ] && [ ! -s "$RECORD" ]; then
     report 0 "--expected-skips '${missing##*/}' is refused before any harness executes"
   else report 1 "--expected-skips '${missing##*/}' is refused before any harness executes" "exit $got; $(cat "$TMP/out")"; fi
+done
+# --ci-shell (gh-ocannl-1593): the job's list from the repository, on macOS
+# with the Darwin list joined to it, and every member run with dune hidden,
+# FLEET_BOXES unset and the wake-lab script pointed at nothing. A stand-in
+# `uname` says which platform the run is on.
+mkdir -p "$TMP/uname-Linux" "$TMP/uname-Darwin"
+for os in Linux Darwin; do
+  printf '#!/bin/sh\necho %s\n' "$os" >"$TMP/uname-$os/uname"
+  chmod +x "$TMP/uname-$os/uname"
+done
+SKIP_MEMBER=$first
+ci_list=$fixture/tools/harness-skips-ci-shell.txt darwin_list=$fixture/tools/harness-skips-ci-shell-darwin.txt
+ci_run() { # OS ARGS...: --ci-shell run from TMP on that platform, the fleet's facts ambient
+  local os=$1
+  shift
+  : >"$TMP/env-record"
+  got=0
+  (PATH=$TMP/uname-$os:$PATH FLEET_BOXES='box-a box-b' OCANNL_TOOL_SWEEP_WAKE_LAB=$TMP/out \
+    ENV_RECORD=$TMP/env-record; export PATH FLEET_BOXES OCANNL_TOOL_SWEEP_WAKE_LAB ENV_RECORD; run "$@"
+   exit "$got") || got=$?
+}
+env_all() { # WANT: every member ran, each with exactly these facts
+  [ "$(sed 's/ .*//' "$TMP/env-record")" = "$(cat "$TMP/shell")" ] &&
+    [ "$(sed 's/^[^ ]* //' "$TMP/env-record" | sort -u)" = "$1" ]
+}
+printf '# job\n%s\t%s\n' "$SKIP_MEMBER" "$SKIP_LABEL" >"$ci_list"
+printf '# darwin\n' >"$darwin_list"
+for os in Linux Darwin; do
+  ci_run "$os" --ci-shell
+  if [ "$got" = 0 ] && cmp -s "$TMP/shell" "$RECORD" && env_all 'no-dune=1 fleet=unset wake-lab=absent' \
+     && grep -qxF "SKIP  $SKIP_LABEL" "$TMP/out" \
+     && grep -q '^harnesses: [0-9]* run, 0 failed; 0 expected skip(s) did not occur$' "$TMP/out"; then
+    report 0 "--ci-shell on $os runs the shell tier against the job's list with dune and the fleet tables hidden"
+  else report 1 "--ci-shell on $os runs the shell tier against the job's list with dune and the fleet tables hidden" \
+    "exit $got; $(cat "$TMP/out" "$TMP/env-record")"; fi
+done
+# The Darwin list is read on macOS alone: a skip only it lists passes there
+# and fails its member on Linux.
+printf '# job\n' >"$ci_list"
+printf '# darwin\n%s\t%s\n' "$SKIP_MEMBER" "$SKIP_LABEL" >"$darwin_list"
+ci_run Darwin --ci-shell
+darwin_rc=$got
+darwin_out=$(cat "$TMP/out")
+ci_run Linux --ci-shell
+if [ "$darwin_rc" = 0 ] && grep -qxF "SKIP  $SKIP_LABEL" <<<"$darwin_out" \
+   && [ "$got" = 1 ] && grep -qxF "FAIL  $SKIP_LABEL" "$TMP/out"; then
+  report 0 '--ci-shell expects the Darwin list on macOS alone'
+else report 1 '--ci-shell expects the Darwin list on macOS alone' "Darwin exit $darwin_rc; Linux exit $got; $darwin_out; $(cat "$TMP/out")"; fi
+# Its entries are held like the job's: one that no longer occurs on macOS
+# fails the tier there.
+SKIP_MEMBER=
+ci_run Darwin --ci-shell
+if [ "$got" = 1 ] && grep -qxF "harnesses: expected skip did not occur: $first: $SKIP_LABEL" "$TMP/out"; then
+  report 0 '--ci-shell on macOS fails on a Darwin-listed skip that no longer occurs'
+else report 1 '--ci-shell on macOS fails on a Darwin-listed skip that no longer occurs' "exit $got; $(cat "$TMP/out")"; fi
+SKIP_MEMBER=$first
+# Without --ci-shell nothing is hidden: an ambient switch is cleared, and the
+# fleet's facts pass through.
+got=0
+(OCANNL_TOOL_HARNESS_NO_DUNE=1; export OCANNL_TOOL_HARNESS_NO_DUNE; SKIP_MEMBER=; ci_run Darwin --shell; exit "$got") || got=$?
+if [ "$got" = 0 ] && env_all "no-dune=unset fleet=box-a box-b wake-lab=present"; then
+  report 0 'without --ci-shell an ambient OCANNL_TOOL_HARNESS_NO_DUNE is cleared and the fleet facts kept'
+else report 1 'without --ci-shell an ambient OCANNL_TOOL_HARNESS_NO_DUNE is cleared and the fleet facts kept' \
+  "exit $got; $(cat "$TMP/out" "$TMP/env-record")"; fi
+for args in group expected missing; do
+  case $args in
+    group) ci_run Linux --ci-shell --shell ;;
+    expected) ci_run Linux --expected-skips "$ci_list" --ci-shell ;;
+    missing) rm -f "$darwin_list"; ci_run Darwin --ci-shell ;;
+  esac
+  if [ "$got" = 2 ] && [ ! -s "$RECORD" ]; then
+    report 0 "--ci-shell with $args is refused before any harness executes"
+  else report 1 "--ci-shell with $args is refused before any harness executes" "exit $got; $(cat "$TMP/out")"; fi
 done
 unset SKIP_MEMBER SKIP_LABEL
 # Empty membership is an invocation error, never a vacuous green tier.

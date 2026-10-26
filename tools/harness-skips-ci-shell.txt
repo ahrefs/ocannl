@@ -1,8 +1,11 @@
 # The skips the `harnesses` CI job (Ubuntu, no OCaml toolchain) expects:
-# `tools/test-harnesses.sh --shell --expected-skips tools/harness-skips-ci-shell.txt`
-# fails a member on any skip not listed here, and the tier on a listed one
-# that no longer occurs (gh-ocannl-1236). The line forms are the header of
-# tools/test-harnesses.sh: `HARNESS<TAB>LABEL`, comments, empty lines.
+# `tools/test-harnesses.sh --ci-shell` (the job's command) fails a member on
+# any skip not listed here, and the tier on a listed one that no longer occurs
+# (gh-ocannl-1236). Run it before pushing a leg that can skip: it hides the
+# host's dune and fleet tables, so a Linux box shows exactly this set, and a
+# macOS one this set plus tools/harness-skips-ci-shell-darwin.txt
+# (gh-ocannl-1593). The line forms are the header of tools/test-harnesses.sh:
+# `HARNESS<TAB>LABEL`, comments, empty lines.
 
 # Windows drive spellings exist only on Windows (MSYS / Git Bash).
 tools/test-test-run.sh	queries: missing state directly below a drive root matches the launch shell without writes
