@@ -7922,8 +7922,21 @@ module C_syntax (B : C_syntax_config) = struct
     in
     (touched, untouched)
 
+  (* The [restrict_keyword] qualifier of a kernel pointer to [tn], or none where [tn] is among the
+     kernel's {!Low_level.lane_selected_writes}: there one lane stores cells that the workgroup's
+     other lanes read after a barrier, and a no-alias pointer licenses the compiler to treat the
+     memory as this thread's alone. nvrtc's sm_80..sm_90 code generation did exactly that on CUDA's
+     pad-masked tensorized conv seeds (gh-ocannl-1598): every lane but 0 kept the value its own
+     zeroing nest had stored in a register across the barrier and lane 0's store-back, and the
+     companion reading the conv output saw zeros in the last row it zeroed. *)
+  let lane_restrict ~lane_selected tn =
+    match B.restrict_keyword with
+    | Some kw when not (List.mem lane_selected tn ~equal:Tn.equal) -> kw ^ " "
+    | _ -> ""
+
   let derive_kparams ~llc ~traced_store ~placements ~alias_candidates ~(merge_node : Tn.t option)
       ~idx_params =
+    let lane_selected = Low_level.lane_selected_writes llc in
     (* The materialized in-context nodes the kernel's code touches, in [store_order] (canonical
        across fresh builds, gh-ocannl-1473), with their per-param pointer declaration (used by the
        [`Per_param] style). Touched, not merely stored (gh-ocannl-1391, ahrefs/ocannl#1387):
@@ -7975,11 +7988,9 @@ module C_syntax (B : C_syntax_config) = struct
             (* gh-ocannl-489: an aliasing candidate may be placed at bytes overlapping another
                parameter's by the link-time liveness planner, so its pointer must not promise
                [restrict] -- whether a candidate pair actually shares bytes is unknowable at codegen
-               time. *)
+               time. A node one lane writes for its workgroup does not either ([lane_restrict]). *)
             let restrict_ =
-              match B.restrict_keyword with
-              | Some kw when not (Hash_set.mem alias_candidates tn) -> kw ^ " "
-              | _ -> ""
+              if Hash_set.mem alias_candidates tn then "" else lane_restrict ~lane_selected tn
             in
             Some
               (B.typ_of_prec (Lazy.force tn.Tn.storage_prec) ^ " *" ^ restrict_ ^ get_ident tn, tn)))
@@ -8224,12 +8235,14 @@ module C_syntax (B : C_syntax_config) = struct
              restrict qualifier asserts (gh-ocannl-164). The liveness planner (gh-ocannl-489)
              preserves the disjointness for pooled backends: they use segment-granularity liveness,
              under which any two nodes accessed by ONE kernel have overlapping live spans and are
-             therefore never placed at overlapping offsets. *)
-          let restrict_ = match B.restrict_keyword with Some kw -> kw ^ " " | None -> "" in
+             therefore never placed at overlapping offsets. A node one lane writes for its workgroup
+             stays unqualified as in the per-param style ([lane_restrict]). *)
+          let lane_selected = Low_level.lane_selected_writes llc in
           List.mapi ptr_params ~f:(fun k (_decl, tn) ->
               let typ = B.typ_of_prec (Lazy.force tn.Tn.storage_prec) in
               Printf.sprintf "%s%s* %s%s = (%s%s*)(__pools[__pool_slots[%d]] + __pool_slots[%d]);"
-                B.buffer_prefix typ restrict_ (get_ident tn) B.buffer_prefix typ (2 * k)
+                B.buffer_prefix typ (lane_restrict ~lane_selected tn) (get_ident tn) B.buffer_prefix
+                typ (2 * k)
                 ((2 * k) + 1))
         in
         body :=

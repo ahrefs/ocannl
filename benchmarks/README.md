@@ -767,10 +767,10 @@ single-threaded segments that sum to the serial step
   between cells — normalized difference exactly 1 at a `..._cond_..._sum` selection node, a few
   percent on the parameter gradients — so every conv seed of `cifar_resnet` mismatches there. Add
   `BENCH_FWD=1` to judge the forward conv seeds without the routing: on CUDA (rog-nv-linux)
-  30 of 32 match at worst 3.9e-4, and the unfused row-block seeds `conv-mma-gpu 0x0x0/16x0 simd32`
-  of segments u45 and u50 compute a wrong conv output (0.74 and 0.60) while their fused-epilogue
-  twins match — a genuine defect, and the loss alone moved 3e-5, which is why every written node
-  is compared rather than the step's outcome.
+  all 32 match at worst 3.9e-4. Before gh-ocannl-1598 the unfused pad-masked seeds
+  `conv-mma-gpu 0x0x0/16x0 simd32` of segments u45 and u50 computed a wrong conv output (0.74 and
+  0.60) while their fused-epilogue twins matched, and the loss alone moved 3e-5, which is why
+  every written node is compared rather than the step's outcome.
   `BENCH_SR_SITES=1` (`bench_conv_diag`, and `bench_gpt_diag` on the GPT step) prints what `Autotune.split_reduce_sites` proposes on the
   same graph — the gh-ocannl-484 task-3 seeding can only reach the accumulations listed there, so
   it is the companion to the census above when asking why a seeded split-reduce family did or did

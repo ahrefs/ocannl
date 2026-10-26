@@ -378,6 +378,14 @@ files.
   never seeded, so it never reaches the decline log. gh-569's Part 3 read 25 coverage declines out of
   `schedule_log_declines`; the same workload on current master logs zero
   (`report-gh612-hip.md`). Ask the emitted source and the launch geometry instead.
+- **Aligned geometry covers a companion's own cells, not a tensorized site's accumulator
+  transfers**: the fragment is loaded and stored back by lane 0 (or by the wmma/simdgroup store in
+  fragment layout), so the site's zeroing and its companions exchange the target's cells across
+  lanes. The register-fragment scope's renderer brackets the region with barriers
+  (`render_mma_fragment_scope`); the pad-masked SHARED fragment, rendered literally, carries the
+  same outer barriers in the IR (`contract_tensorized_accumulator`, gh-ocannl-1598), and its
+  target drops `restrict` (backend-dialects-and-idents.md). `conv_merged_gpu_seeds`' 64-channel
+  legs and its `-tf32` rule execute that flavor on CUDA.
 - **The same rule binds the CPU tensorized flavors that bind a hardware dimension** (gh-ocannl-1561):
   the whole-triple `Tile_mma` form's `Workgroup` lane (its zeroing's column loop at the full column
   extent, so always active; plus a `Grid` row split at `sk_bm > 0`) and the packed Grid shapes'
@@ -2690,8 +2698,8 @@ files.
   built on it (`Bench_seed_parity`). Perturbing a tensorized segment's `Set`s can make its
   `Tile_mma` render as the scalar fallback: the control proves detection, not that the
   tensorized path ran. **A parity oracle compares every written node, not the step's outcome**:
-  CUDA's two wrong row-block conv seeds on cifar_resnet (forward output off by 0.74) moved the loss
-  by 3e-5. **Under tf32, max-pool backward confounds a training-step oracle**: the seed's conv
+  CUDA's two wrong pad-masked conv seeds on cifar_resnet (forward output off by 0.74, gh-ocannl-1598)
+  moved the loss by 3e-5. **Under tf32, max-pool backward confounds a training-step oracle**: the seed's conv
   rounds apart from the f32 reference, a window's argmax flips, and the routed gradient moves
   between cells (exactly 1 at the `..._cond_..._sum` node, a few percent on parameter gradients),
   so every conv seed mismatches; judge forward conv seeds with `BENCH_FWD=1` there. On Metal and

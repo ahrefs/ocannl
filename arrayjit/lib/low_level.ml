@@ -11279,6 +11279,30 @@ let fragment_transfer ~into_fragment = function
       descend [] body
   | _ -> None
 
+let lane_selected_writes (llc : t) : Tn.t list =
+  let acc = ref [] in
+  let add tn = if not (List.mem !acc tn ~equal:Tn.equal) then acc := tn :: !acc in
+  let rec walk ~lanes ~selected = function
+    | For_loop { index; axis = Workgroup; body; _ } -> walk ~lanes:(index :: lanes) ~selected body
+    | For_loop { body; _ } | Scan_loop { body; _ } -> walk ~lanes ~selected body
+    | If { cond = cond, _; body } ->
+        walk ~lanes
+          ~selected:(selected || List.exists lanes ~f:(fun l -> is_lane0_guard l cond))
+          body
+    | Seq (a, b) ->
+        walk ~lanes ~selected a;
+        walk ~lanes ~selected b
+    | (Set { tn; _ } | Set_dynamic { tn; _ } | Set_from_vec { tn; _ } | Zero_out tn) when selected
+      ->
+        add tn
+    | Tile_mma { d = tn, _; _ } when selected -> add tn
+    | Noop | Comment _ | Staged_compilation _ | Set _ | Set_dynamic _ | Set_from_vec _ | Zero_out _
+    | Set_local _ | Declare_local _ | Workgroup_barrier | Tile_mma _ ->
+        ()
+  in
+  walk ~lanes:[] ~selected:false llc;
+  List.rev !acc
+
 (* The target's leading-dimension stride: the stride of the axis carrying the transfer nest's
    outermost (row) copy symbol — the minor dim in the plain case, larger when interior batch axes
    sit between the tile roles (gh-ocannl-528). *)

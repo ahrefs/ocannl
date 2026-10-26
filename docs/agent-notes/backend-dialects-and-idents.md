@@ -74,6 +74,21 @@ files.
   those flips at a power of ten. Two fresh builds of one program therefore emit one kernel up to
   those numbers; `Test_utils.Generated.normalize_minted` renames them away, and
   `test/operations/fresh_build_kernel_text` (gh-ocannl-1473) pins it, ids straddling 10^4 included.
+- **A `restrict` kernel pointer is a promise no other THREAD hands values through that buffer
+  within the kernel, and barriers do not take it back** (gh-ocannl-1598). The device compilers
+  read the no-alias qualifier as "this thread's memory alone": on CUDA's pad-masked tensorized
+  conv seeds, where lane 0 stores the shared fragment back for its whole workgroup and a companion
+  then reads the cells per lane, nvrtc's PTX for `compute_80`..`compute_90` (the tf32 wmma floor
+  OCANNL targets) kept each other lane's own zeroing store of the last zeroed row in a register
+  across `__syncthreads()` and lane 0's stores, so that row read back as 0; `compute_100`+ PTX and
+  the same kernel with `pr` unqualified computed it right. `C_syntax.lane_restrict` therefore
+  leaves `Low_level.lane_selected_writes` (nodes written under an `if lane == 0` of a `Workgroup`
+  loop) unqualified in both parameter styles; every other pointer keeps the qualifier the
+  register promotion of gh-ocannl-1348 relies on. Reproducing a codegen-flag-dependent wrong value
+  outside OCANNL: an nvrtc + driver harness that compiles the emitted `.cu` with the backend's
+  options (`Compiler_options.nvrtc`, the `--gpu-architecture=` from `Cuda_mma.gpu_arch_options`)
+  and launches it at `Low_level.launch_dims`; `nvcc -arch=native` compiles for the device's own
+  arch and hides this class.
 - Query optional `MTLCompileOptions` properties on an initialized object, not through the nominal
   class's `instancesRespondToSelector:`. On macOS 26.6.2 that class-level query returned false for
   the macOS-15 math properties even though the object accepted them, silently selecting the macOS-14

@@ -1768,6 +1768,13 @@ val fragment_transfer :
     renderer's fragment-scope recognition and the cost model's operand-load count (gh-ocannl-1254)
     both read regions through it. *)
 
+val lane_selected_writes : t -> Tnode.t list
+(** The nodes [llc] writes under a lane-selecting guard ([if lane == 0] of an enclosing [Workgroup]
+    loop, the form of {!fragment_transfer}'s transfers): one hardware thread writing on behalf of
+    its workgroup, whose cells other threads of the workgroup read after a barrier. Such a node
+    carries values between threads within one kernel, which a no-alias kernel parameter rules out
+    (gh-ocannl-1598): [C_syntax] leaves it unqualified. In first-write order, deduplicated. *)
+
 val fragment_target_ld :
   row_sym:Indexing.symbol option -> Tnode.t * Indexing.axis_index array -> int
 (** The transfer target's leading-dimension stride in elements: the stride of the axis carrying the

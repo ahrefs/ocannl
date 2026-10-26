@@ -10,3 +10,16 @@ cm16: the GPU leg seeds the merged segment: true
 cm16: every whole-routine GPU seed compiles and matches the natural form exactly, run twice: true
 cm16: every merged-segment GPU seed compiles and matches the natural form exactly, run twice: true
 cm16: every GPU seed's routine is labeled tensorized: true
+cm8w: the whole routine and its merged conv segment carry three or more real statements: true
+cm8w: the GPU leg seeds the whole routine: true
+cm8w: the GPU leg seeds the merged segment: true
+cm8w: every whole-routine GPU seed compiles and matches the natural form exactly, run twice: true
+cm8w: every merged-segment GPU seed compiles and matches the natural form exactly, run twice: true
+cm8w: every GPU seed's routine is labeled tensorized: true
+cm6w: the whole routine and its merged conv segment carry three or more real statements: true
+cm6w: the GPU leg seeds the whole routine: true
+cm6w: the GPU leg seeds the merged segment: true
+cm6w: a whole-routine GPU seed pads the row to the mma tile: true
+cm6w: every whole-routine GPU seed compiles and matches the natural form exactly, run twice: true
+cm6w: every merged-segment GPU seed compiles and matches the natural form exactly, run twice: true
+cm6w: every GPU seed's routine is labeled tensorized: true

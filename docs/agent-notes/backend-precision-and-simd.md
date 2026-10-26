@@ -629,8 +629,9 @@ files.
   bf16 partial sum stays exact and per-step narrowing is invisible (`accum_width.ml`'s policy-off
   negative control is the canary).
 - **A read-modify-write in the generated SOURCE is not necessarily one in the machine code; read
-  the PTX or ISA before attributing time to it** (gh-ocannl-1348). Every GPU kernel pointer is
-  `__restrict__` (`Cuda_like_config.restrict_keyword`), so the device compilers may promote a
+  the PTX or ISA before attributing time to it** (gh-ocannl-1348). Every GPU kernel pointer but a
+  lane-selected write's (backend-dialects-and-idents.md, gh-ocannl-1598) is `__restrict__`
+  (`Cuda_like_config.restrict_keyword`), so the device compilers may promote a
   loop-invariant cell to a register themselves. On gpt2_mini's untuned training step, NVRTC did
   it for every accumulation the source still updated in device memory: the plain default's
   attention `dP` (fully unrolled, no load of the cell at all), and the bias and layer-norm gamma/beta
