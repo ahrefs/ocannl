@@ -234,6 +234,9 @@ files.
   5% slower (a 4x4 register tile's ILP is not threads). Measured 2026-10-25 (`ffeac5f8`): t=256 on
   rog (46 SMs), 384 on minix (20 CUs); the 512² calibration kernel is full on both, so the issue
   rates stand; agreement 33-56% -> 52-79% at the batched cells; picks under seeding unchanged;
+  later (gh-ocannl-1638) t=320 on the M4 Max (40 cores, `20d048c3`) and t=512 on tuf (HIP
+  DISCRETE, 16 multiprocessors as reported, `03369cfe`, residual 0.164; agreement 30-52% -> 63-79%
+  at the batched cells, gate-0 picks a bgrid leaf, 0.46-0.59x of the untuned default's time);
   gate-0 picks a bgrid leaf, 2.9-37x faster than the plain one it picked before. What the fill does
   NOT do: separate a coalesced leaf from its uncoalesced twin (same work and launch per context;
   coalescing is a memory-transaction effect), or the 64x64 vs 32x32 bgrid geometries at outproj b8
@@ -244,7 +247,7 @@ files.
   numerics-preserving (`coalesce_numerics`: bitwise on order-sensitive inputs, on CUDA, HIP and
   Metal), so admission is a score question only; `model_explain`'s coalesced rows judge each leaf
   by its uncoalesced form. Trap for tests: the fill made the `auto` gate's picks DEVICE-dependent
-  (rog and minix ship fill constants, tuf none), so a small test workload the gate seeded before
+  (every CUDA and HIP class now ships fill constants, each its own), so a small test workload the gate seeded before
   may now seed nothing, or leave a site to the reduction sink, on one box only. A test whose claim
   needs the rule to seed a site pins `gpu_default_sketch_min_reduction` to a threshold for that
   call (`autotune_staffed_fine`, `seeded_narrow_storage`'s model leg; gh-ocannl-1599's triage);
