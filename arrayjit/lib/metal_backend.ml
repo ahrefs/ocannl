@@ -551,45 +551,58 @@ module Impl = struct
         memcpy ~dst_ptr:(Slab.resolve_pool dst.device loc) ~dst_offset:loc.offset
 
   (* --- Compilation and Linking --- *)
-  (* gh-ocannl-1440: the library a code value's first link compiled, on the device it compiled for. A
-     relink of retained code ([Context.relink_outcome]) reuses it: Metal's device compile happens at
-     link, so without this a relink would compile the source a second time. Per code value, so it
-     lives exactly as long as the code (a retained one, or a linked routine's). *)
-  type library_memo = (Me.Device.t * Me.Library.t) option ref
+  (* gh-ocannl-1605: a library compiled for one device, with the function and compute pipeline state
+     of each kernel it holds, created on a kernel's first link and kept beside the library
+     ([pipeline_of]). It is what a kernel code cache entry answers, so a kernel an earlier compile
+     produced skips both the library compile and the pipeline creation -- the larger share of a
+     Metal link. *)
+  type program = {
+    library : Me.Library.t;
+    pipelines : (string, Me.Function.t * Me.ComputePipelineState.t) Hashtbl.t;
+    pipelines_lock : Stdlib.Mutex.t;
+  }
 
-  let sexp_of_library_memo _ = Sexp.Atom "<library>"
+  let new_program library =
+    { library; pipelines = Hashtbl.create (module String); pipelines_lock = Stdlib.Mutex.create () }
 
-  (* The library [source] compiles to on [device], compiled at most once per [memo] and device. *)
-  let memoized_library memo ~device compile =
-    match !memo with
-    | Some (d, library) when phys_equal d device -> library
-    | _ ->
-        let library = compile () in
-        (* A device compile at link time, counted like a compile-time one (gh-ocannl-1440). *)
-        Utils.count_backend_compile ();
-        memo := Some (device, library);
-        library
+  (* gh-ocannl-1440: the programs a code value's first link resolved its kernels to, on the device
+     it linked for, each with the symbol its kernel is looked up by. A relink of retained code
+     ([Context.relink_outcome]) reuses them: Metal's device compile happens at link, so without this
+     a relink would compile the source a second time. Per code value, so it lives exactly as long as
+     the code (a retained one, or a linked routine's), whatever the kernel code cache evicts. *)
+  type resolved_memo = (Me.Device.t * (program * string) array) option ref
+
+  let sexp_of_resolved_memo _ = Sexp.Atom "<resolved kernels>"
+
+  (* What a link needs to compile any subset of a code value's kernels: Metal compiles at link, when
+     a device is available, so the rendering is retained ([Compile_driver.render_batch]). *)
+  type kernels = {
+    artifact_name : string;  (** The name the routine's [.metal] artifact is written under. *)
+    source : string;  (** Every kernel, in batch order: the routine's full source. *)
+    symbols : string array;  (** Each kernel's emitted name. *)
+    given_names : string array;
+        (** The names the caller asked for: a link-time compile attributes a name-caused failure to
+            them (gh-ocannl-707). *)
+    assemble : (int list -> string[@sexp.opaque]);
+    key_text : (int -> string[@sexp.opaque]);
+    resolved : resolved_memo;
+  }
+  [@@deriving sexp_of]
 
   type code = {
-    metal_source : string; (* Store source, the library is built during link *)
-    library : library_memo;
+    kernels : kernels;
     func_name : string;
     kparams : (string * kparam_source) list;
     bindings : Indexing.unit_bindings;
     launch : Low_level.launch_dims;
-    routine_names : (string * string) list;
-        (* (emitted, given): the link-time compile attributes a name-caused failure to the name the
-           caller asked for (gh-ocannl-707) *)
   }
   [@@deriving sexp_of]
 
   type code_batch = {
-    metal_source : string; (* Store combined source, compiled per device at link time *)
-    batch_library : library_memo;
+    batch_kernels : kernels;
     funcs : (string * (string * kparam_source) list * Low_level.launch_dims) array;
         (* func_name * kparams * launch dims *)
     bindings : Indexing.unit_bindings;
-    routine_names : (string * string) list; (* (emitted, given), as in [code] *)
   }
   [@@deriving sexp_of]
 
@@ -1536,12 +1549,24 @@ module Impl = struct
     List.exists (String.substr_index_all msg ~may_overlap:false ~pattern:prefix) ~f:(fun i ->
         diagnosed_at (i + String.length prefix))
 
-  let%diagn_sexp compile_metal_source ~name ~routine_names ~source ~device =
+  (* The compile options a link compiles under, computed once per link: what the kernel code cache
+     keys on is what [compile_metal_source] applies. *)
+  let metal_option_state () =
+    Compiler_options.metal
+      ~routine_logging:(Utils.debug_log_from_routines ())
+      ~math_api:(Lazy.force runtime_math_api)
+
+  (* Writes [source] as the [<name>.metal] build artifact when debug files are on. *)
+  let write_source_artifact ~name source =
+    if Utils.settings.output_debug_files_in_build_directory then (
+      let metal_file = Utils.build_file (name ^ ".metal") in
+      Stdio.Out_channel.write_all metal_file ~data:source;
+      Some metal_file)
+    else None
+
+  let%diagn_sexp compile_metal_source ~name ~routine_names ~source ~metal_file ~option_state ~device
+      =
     let options = Me.CompileOptions.init () in
-    let math_api = Lazy.force runtime_math_api in
-    let option_state =
-      Compiler_options.metal ~routine_logging:(Utils.debug_log_from_routines ()) ~math_api
-    in
     List.iter option_state ~f:(function
       | Compiler_options.Language_version_3_1 ->
           (* Version 3.1 is required for the [bfloat] type (bfloat16 precision). *)
@@ -1557,15 +1582,6 @@ module Impl = struct
             Me.CompileOptions.MathFloatingPointFunctions.Fast
       | Enable_logging -> Me.CompileOptions.set_enable_logging options true);
     [%log "metal options", (Compiler_options.render_metal option_state : string)];
-
-    let metal_file =
-      if Utils.settings.output_debug_files_in_build_directory then (
-        let metal_file = Utils.build_file (name ^ ".metal") in
-        Stdio.Out_channel.write_all metal_file ~data:source;
-        [%log "Wrote metal source to file:", metal_file];
-        Some metal_file)
-      else None
-    in
     (* The kernels this library compiles, counted where Metal's compiler runs (gh-ocannl-1314):
        [Compile_driver] counted them as rendered only. *)
     Compile_cost.record_kernels ~rendered:0 ~compiled:(List.length routine_names);
@@ -1631,36 +1647,173 @@ using namespace metal;|}
 
   let conditional_includes = [ ("simdgroup_load", "#include <metal_simdgroup_matrix>") ]
 
-  (* Metal compiles at link time, when a device is available. Retain source here. *)
-  let compile_source ~name:_ source = source
+  (* Metal compiles at link time, when a device is available: the rendering is retained, so the link
+     can compile any subset of the kernels (gh-ocannl-1605). [artifact_name] is the name the link's
+     [.metal] artifact takes: the kernel's own, or the common prefix of a batch's names -- fissioned
+     segments of one routine share the routine name as a prefix, and a fixed name would collide
+     across routines. *)
+  let render ~batch ~names bindings lowereds =
+    (* Whether or not the cache is enabled: a test gated on this flag must then see reuse fail. *)
+    Compile_cost.record_reuse_capable ();
+    let r =
+      Compile.render_batch ~names bindings lowereds ~includes:metal_includes
+        ~builtins:Builtins_metal.builtins ~conditional_includes ()
+    in
+    let n = Array.length r.entries in
+    (* Rendered here; compiled where Metal's compiler runs, at link ([compile_metal_source]). *)
+    Compile_cost.record_kernels ~rendered:n ~compiled:0;
+    let symbols = Array.map r.entries ~f:(fun (_, name, _) -> name) in
+    let artifact_name =
+      if batch then
+        let prefix =
+          String.(strip ~drop:(equal_char '_') @@ common_prefix (Array.to_list symbols))
+        in
+        if String.is_empty prefix then "batch" else prefix
+      else symbols.(0)
+    in
+    ( r.entries,
+      {
+        artifact_name;
+        source = r.assemble (List.init n ~f:Fn.id);
+        symbols;
+        given_names = names;
+        assemble = r.assemble;
+        key_text = r.key_text;
+        resolved = ref None;
+      } )
 
   let compile ~name bindings lowered =
-    let metal_source, kparams, func_name, launch =
-      Compile.compile ~name bindings lowered ~includes:metal_includes
-        ~builtins:Builtins_metal.builtins ~conditional_includes ~compiles_source:false
-        ~compile_source ()
-    in
-    {
-      metal_source;
-      library = ref None;
-      func_name;
-      kparams;
-      bindings;
-      launch;
-      routine_names = [ (func_name, name) ];
-    }
+    let entries, kernels = render ~batch:false ~names:[| name |] bindings [| lowered |] in
+    let kparams, func_name, launch = entries.(0) in
+    { kernels; func_name; kparams; bindings; launch }
 
   let compile_batch ~names bindings lowereds =
-    let metal_source, entries =
-      Compile.compile_batch ~names bindings lowereds ~includes:metal_includes
-        ~builtins:Builtins_metal.builtins ~conditional_includes ~compiles_source:false
-        ~compile_source ()
-    in
+    let entries, batch_kernels = render ~batch:true ~names bindings lowereds in
     let funcs = Array.map entries ~f:(fun (kparams, name, launch) -> (name, kparams, launch)) in
-    let routine_names =
-      Array.to_list (Array.map2_exn funcs names ~f:(fun (emitted, _, _) given -> (emitted, given)))
+    { batch_kernels; funcs; bindings }
+
+  (* {2 The kernel code cache (gh-ocannl-1605)}
+
+     The other backends' cache (gh-ocannl-1314, gh-ocannl-1529, gh-ocannl-1525), at Metal's link: a
+     search candidate re-renders the whole routine and typically changes a handful of its kernels,
+     so a link compiles only the kernels no earlier link in this process produced -- its cache
+     misses -- as ONE library, and reuses the rest. Unlike the others, a Metal link spends most of
+     its time after the library compile, creating each kernel's compute pipeline state (about 0.4 s
+     of a 1.8 s [gpt2_mini_train] candidate compile was the library), so what the cache holds is a
+     [program]: the library together with the pipelines its kernels' links created. A reused kernel
+     skips both.
+
+     A kernel's key is its canonical standalone source ([render_batch]'s [key_text i]: the includes
+     and the builtins it uses verbatim, its definition with the names it owns renamed by first
+     occurrence and its segment index dropped, [Kernel_code_cache.canonical_kernel]), the complete
+     Metal compile option state the link applies ([metal_option_state]: language version, math mode,
+     math API, logging) and the device, whose library and pipelines are its own. The reused library
+     was compiled from the same kernel text up to that renaming, possibly beside other kernels and
+     possibly under another name: the builtins are inline helpers and constants, so a companion
+     changes nothing a kernel computes, and the function is looked up by the symbol the cache stored
+     with it. A pipeline state depends only on its function and device (no descriptor, no function
+     constants), and launch geometry is a dispatch argument: [link_proc] checks the current launch
+     against the reused pipeline on every link. A pipeline creation that fails caches nothing.
+
+     Process-local and bounded by [metal_kernel_cache_mib], weighted by the source bytes of each
+     compiled library -- a proxy: Metal exposes neither a library's nor a pipeline's size, so it is
+     no bound on driver memory. 0 disables it, and so does device debugging, where a GPU capture
+     shows a library's source and a reused kernel's would be another routine's text: every link then
+     compiles one library of all its kernels, as before. *)
+  let kernel_cache_capacity_bytes =
+    lazy
+      (let mib = Utils.get_global_arg ~default:"64" ~arg_name:"metal_kernel_cache_mib" in
+       match Int.of_string_opt (String.strip mib) with
+       | Some m when m >= 0 -> m * 1024 * 1024
+       | _ ->
+           raise
+           @@ Utils.User_error
+                ("metal_kernel_cache_mib must be a non-negative integer (MiB); found: " ^ mib))
+
+  let kernel_cache : (program * string) Kernel_code_cache.t =
+    Kernel_code_cache.create ~capacity_bytes:(fun () -> Lazy.force kernel_cache_capacity_bytes)
+
+  (* Held from the cache lookups to the publication of what they missed, so two domains linking the
+     same kernels cannot both miss and both compile them. *)
+  let kernel_compile_lock = Stdlib.Mutex.create ()
+
+  (* Removes the [<name>.part<k>.metal] artifacts an earlier link of this name left, which are not
+     this link's. [.part<k>] is a spelling no routine name takes. *)
+  let clear_part_artifacts name =
+    if Utils.settings.output_debug_files_in_build_directory then
+      let dir = Stdlib.Filename.dirname (Utils.build_file (name ^ ".metal")) in
+      try
+        Array.iter (Stdlib.Sys.readdir dir) ~f:(fun file ->
+            if
+              String.is_prefix file ~prefix:(name ^ ".part")
+              && String.is_suffix file ~suffix:".metal"
+            then try Stdlib.Sys.remove (Stdlib.Filename.concat dir file) with Sys_error _ -> ())
+      with Sys_error _ -> ()
+
+  (* Every kernel of [k] as a program on [device] and the symbol to look it up by: from the kernel
+     code cache where an earlier link produced it, the misses compiled as one library. *)
+  let resolve_kernels_afresh (device : device) (k : kernels) =
+    let n = Array.length k.symbols in
+    let all = List.init n ~f:Fn.id in
+    let option_state = metal_option_state () in
+    (* The routine's full source is its [.metal] artifact whatever is compiled: the debug view of
+       what codegen emitted (and what tests read) does not depend on what the cache held. *)
+    let metal_file = write_source_artifact ~name:k.artifact_name k.source in
+    (* One library of [idxs]. Every kernel in batch order is the routine's own source, already
+       written; any other subset is written as [<name>.part<k>.metal], under the name its
+       diagnostics then carry. *)
+    let compile_group ~group ~n_groups idxs =
+      let whole = n_groups = 1 && List.equal Int.equal idxs all in
+      let name, source, metal_file =
+        if whole then (k.artifact_name, k.source, metal_file)
+        else
+          let name = k.artifact_name ^ ".part" ^ Int.to_string group in
+          let source = k.assemble idxs in
+          (name, source, write_source_artifact ~name source)
+      in
+      let routine_names = List.map idxs ~f:(fun i -> (k.symbols.(i), k.given_names.(i))) in
+      let library =
+        compile_metal_source ~name ~routine_names ~source ~metal_file ~option_state
+          ~device:device.dev
+      in
+      (new_program library, String.length source)
     in
-    { metal_source; batch_library = ref None; funcs; bindings; routine_names }
+    if not (Kernel_code_cache.enabled kernel_cache && not (Utils.with_runtime_debug ())) then
+      Stdlib.Mutex.protect kernel_compile_lock (fun () ->
+          clear_part_artifacts k.artifact_name;
+          let program, _ = compile_group ~group:0 ~n_groups:1 all in
+          Array.map k.symbols ~f:(fun symbol -> (program, symbol)))
+    else
+      let registry_id = (Me.Device.get_attributes device.dev).registry_id in
+      let options =
+        [
+          Compiler_options.render_metal option_state;
+          [%string
+            "metal device %{device.ordinal#Int} registry %{Unsigned.ULLong.to_string registry_id}"];
+        ]
+      in
+      let options = Array.create ~len:n options in
+      let keys =
+        Array.init n ~f:(fun i -> Kernel_code_cache.key ~parts:(options.(i) @ [ k.key_text i ]))
+      in
+      Kernel_code_cache.resolve kernel_cache ~lock:kernel_compile_lock ~keys ~options
+        ~symbols:k.symbols ~always_lock:Utils.settings.output_debug_files_in_build_directory
+        ~before_compile:(fun ~n_compiled:_ ~n_groups:_ -> clear_part_artifacts k.artifact_name)
+        ~compile_group:(fun ~group ~n_groups _options idxs -> compile_group ~group ~n_groups idxs)
+        ()
+
+  (* At most once per code value and device ([resolved_memo]). Counted as a device compile at link
+     time whether its kernels were compiled or taken from the cache, as an all-hit compile counts on
+     the other backends: what [Context.backend_compiles] counts is the work a relink skips
+     (gh-ocannl-1440). *)
+  let resolve_kernels (device : device) (k : kernels) =
+    match !(k.resolved) with
+    | Some (d, resolved) when phys_equal d device.dev -> resolved
+    | _ ->
+        let resolved = resolve_kernels_afresh device k in
+        Utils.count_backend_compile ();
+        k.resolved := Some (device.dev, resolved);
+        resolved
 
   (* gh-ocannl-344: from the routine's materialized nodes, assign each distinct pool an index (first
      use order), build the [(pool_index, byte_offset)] slot table (one [uint] pair per node,
@@ -1736,76 +1889,92 @@ using namespace metal;|}
         (Me.SharedEvent.super dev.runner.event)
         counter
 
-  let%debug4_sexp link_proc ~prior_context ~library ~func_name
+  (* Post-link validation (gh-ocannl-536 landing step 3, the portable half): the pre-compile
+     [Schedule.check_hardware_limits] judges the schedule against DEVICE-wide limits, but the
+     compiled pipeline can be stricter — [maxTotalThreadsPerThreadgroup] drops below the device
+     width under register pressure — and knows its own threadgroup-memory footprint. These are typed
+     [Resource_exceeded] causes rather than a bare [Utils.User_error]: to a tuner candidate they are
+     an ordinary decline (and their key is what the blocker census tabulates), while a hand-written
+     schedule still gets the same [Utils.User_error] rendering at the public [Context.compile]
+     boundary. Untyped, strict classification would make them fatal and one register-heavy candidate
+     would end the search. *)
+  let reject_link resource ~requested ~limit detail =
+    raise
+    @@ Schedule_outcome.Cause_at
+         ( Schedule_outcome.Backend_link,
+           Schedule_outcome.Resource_exceeded { resource; requested; limit = Some limit; detail } )
+
+  (* The function and compute pipeline state of the kernel [program] holds under [symbol], created
+     on its first use and kept with the program, so every later link of the kernel -- this code
+     value's or, through the kernel code cache, another's -- reuses them (gh-ocannl-1605).
+     [func_name] is the kernel's current name, for diagnostics. A creation that fails keeps
+     nothing. *)
+  let pipeline_of (program : program) ~metal_device ~func_name symbol =
+    Stdlib.Mutex.protect program.pipelines_lock (fun () ->
+        match Hashtbl.find program.pipelines symbol with
+        | Some func_and_pso -> func_and_pso
+        | None ->
+            let func = Me.Library.new_function_with_name program.library symbol in
+            (* Over-limit threadgroup memory never reaches a pipeline to query: Metal refuses to
+               create one, and the binding reports it as a bare [Failure] carrying the driver's
+               sentence. It is typed here, at the same cause as [link_proc]'s post-link check, with
+               the driver's own byte counts (gh-ocannl-1226): the driver applies per-allocation
+               alignment the schedule-level estimate does not (each [threadgroup] array is rounded
+               up to 4 bytes, so two odd-length [half] tiles summing exactly to the limit are
+               refused), so an estimate at the limit can still be over it here. Any other
+               pipeline-creation failure keeps propagating untyped: nothing here establishes that it
+               is the candidate's rather than the environment's. *)
+            let pso, _ =
+              try Me.ComputePipelineState.on_device_with_function metal_device func
+              with Failure msg as exn -> (
+                let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+                let overflow =
+                  Option.bind (String.substr_index msg ~pattern:"Threadgroup memory size (")
+                    ~f:(fun pos ->
+                      try
+                        Some
+                          (Stdlib.Scanf.sscanf (String.drop_prefix msg pos)
+                             "Threadgroup memory size (%d) exceeds the maximum threadgroup memory \
+                              allowed (%d)" (fun requested limit -> (requested, limit)))
+                      with Stdlib.Scanf.Scan_failure _ | End_of_file | Failure _ -> None)
+                in
+                match overflow with
+                | Some (requested, limit) ->
+                    reject_link Schedule_outcome.Workgroup_memory ~requested ~limit
+                      [%string
+                        "Metal: pipeline creation for %{func_name} refused its threadgroup memory: \
+                         %{requested#Int} bytes requested, over the device limit of %{limit#Int} \
+                         bytes (driver: %{msg})"]
+                | None -> Stdlib.Printexc.raise_with_backtrace exn backtrace)
+            in
+            Compile_cost.record_pipeline_created ();
+            Hashtbl.set program.pipelines ~key:symbol ~data:(func, pso);
+            (func, pso))
+
+  let%debug4_sexp link_proc ~prior_context ~(program : program) ~symbol ~func_name
       ~(kparams : (string * kparam_source) list) ~(launch : Low_level.launch_dims) ~lowered_bindings
       ~(ctx_buffers : ctx_buffers) : Task.t =
     let dev = prior_context.device in
     let metal_device = dev.dev in
     let queue = dev.runner.queue in
     let runner_label = get_name dev in
-    let func = Me.Library.new_function_with_name library func_name in
-    (* Post-link validation (gh-ocannl-536 landing step 3, the portable half): the pre-compile
-       [Schedule.check_hardware_limits] judges the schedule against DEVICE-wide limits, but the
-       compiled pipeline can be stricter — [maxTotalThreadsPerThreadgroup] drops below the device
-       width under register pressure — and knows its own threadgroup-memory footprint. These are
-       typed [Resource_exceeded] causes rather than a bare [Utils.User_error]: to a tuner candidate
-       they are an ordinary decline (and their key is what the blocker census tabulates), while a
-       hand-written schedule still gets the same [Utils.User_error] rendering at the public
-       [Context.compile] boundary. Untyped, strict classification would make them fatal and one
-       register-heavy candidate would end the search. *)
-    let reject resource ~requested ~limit detail =
-      raise
-      @@ Schedule_outcome.Cause_at
-           ( Schedule_outcome.Backend_link,
-             Schedule_outcome.Resource_exceeded { resource; requested; limit = Some limit; detail }
-           )
-    in
-    (* Over-limit threadgroup memory never reaches a pipeline to query: Metal refuses to create one,
-       and the binding reports it as a bare [Failure] carrying the driver's sentence. It is typed
-       here, at the same cause as the post-link check below, with the driver's own byte counts
-       (gh-ocannl-1226): the driver applies per-allocation alignment the schedule-level estimate
-       does not (each [threadgroup] array is rounded up to 4 bytes, so two odd-length [half] tiles
-       summing exactly to the limit are refused), so an estimate at the limit can still be over it
-       here. Any other pipeline-creation failure keeps propagating untyped: nothing here establishes
-       that it is the candidate's rather than the environment's. *)
-    let pso, _ =
-      try Me.ComputePipelineState.on_device_with_function metal_device func
-      with Failure msg as exn -> (
-        let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-        let overflow =
-          Option.bind (String.substr_index msg ~pattern:"Threadgroup memory size (") ~f:(fun pos ->
-              try
-                Some
-                  (Stdlib.Scanf.sscanf (String.drop_prefix msg pos)
-                     "Threadgroup memory size (%d) exceeds the maximum threadgroup memory allowed \
-                      (%d)" (fun requested limit -> (requested, limit)))
-              with Stdlib.Scanf.Scan_failure _ | End_of_file | Failure _ -> None)
-        in
-        match overflow with
-        | Some (requested, limit) ->
-            reject Schedule_outcome.Workgroup_memory ~requested ~limit
-              [%string
-                "Metal: pipeline creation for %{func_name} refused its threadgroup memory: \
-                 %{requested#Int} bytes requested, over the device limit of %{limit#Int} bytes \
-                 (driver: %{msg})"]
-        | None -> Stdlib.Printexc.raise_with_backtrace exn backtrace)
-    in
+    let _func, pso = pipeline_of program ~metal_device ~func_name symbol in
     let block_product = launch.block.(0) * launch.block.(1) * launch.block.(2) in
     let max_threads = Me.ComputePipelineState.get_max_total_threads_per_threadgroup pso in
     if block_product > max_threads then
-      reject Schedule_outcome.Workgroup_threads ~requested:block_product ~limit:max_threads
+      reject_link Schedule_outcome.Workgroup_threads ~requested:block_product ~limit:max_threads
         [%string
           "Metal: threadgroup size %{block_product#Int} for %{func_name} exceeds \
            maxTotalThreadsPerThreadgroup %{max_threads#Int}"];
     (* The compiled kernel's own static threadgroup allocation, which the schedule-level accounting
        (a sum over the staged tnodes) only approximates. A backstop, not the primary check: a kernel
-       whose allocation is over the device limit never gets here, because pipeline creation above
-       already refused it (gh-ocannl-1226). What remains is a pipeline the driver accepted yet
-       reports as over the limit the schedule layer used. *)
+       whose allocation is over the device limit never gets here, because pipeline creation
+       ([pipeline_of]) already refused it (gh-ocannl-1226). What remains is a pipeline the driver
+       accepted yet reports as over the limit the schedule layer used. *)
     Option.iter (hardware_limits ()).Backend_intf.max_workgroup_memory_bytes ~f:(fun max_bytes ->
         let static_bytes = Me.ComputePipelineState.get_static_threadgroup_memory_length pso in
         if static_bytes > max_bytes then
-          reject Schedule_outcome.Workgroup_memory ~requested:static_bytes ~limit:max_bytes
+          reject_link Schedule_outcome.Workgroup_memory ~requested:static_bytes ~limit:max_bytes
             [%string
               "Metal: compiled kernel %{func_name} statically allocates %{static_bytes#Int} bytes \
                of threadgroup memory, exceeding the device limit of %{max_bytes#Int} bytes"]);
@@ -1907,52 +2076,34 @@ using namespace metal;|}
     in
     Task.Task
       {
-        context_lifetime = (library, pso, ctx_buffers, pool_binding);
-        (* Keep library, PSO and the slot-table buffer alive *)
+        context_lifetime = (program, pso, ctx_buffers, pool_binding);
+        (* Keep the library, the PSO and the slot-table buffer alive *)
         description = "launches " ^ func_name ^ " on " ^ runner_label;
         work;
       }
 
-  let link prior_context code ctx_buffers =
-    let device = prior_context.device.dev in
-    let library =
-      memoized_library code.library ~device (fun () ->
-          compile_metal_source ~name:code.func_name ~routine_names:code.routine_names
-            ~source:code.metal_source ~device)
-    in
+  let link prior_context (code : code) ctx_buffers =
+    let program, symbol = (resolve_kernels prior_context.device code.kernels).(0) in
     let lowered_bindings : Indexing.lowered_bindings =
       List.map (Indexing.bound_symbols code.bindings) ~f:(fun s ->
           (s, Indexing.fresh_launch_param ()))
     in
     let task =
-      link_proc ~prior_context ~library ~func_name:code.func_name ~kparams:code.kparams
+      link_proc ~prior_context ~program ~symbol ~func_name:code.func_name ~kparams:code.kparams
         ~launch:code.launch ~lowered_bindings ~ctx_buffers
     in
     (lowered_bindings, task)
 
   let link_batch prior_context code_batch ctx_buffers =
-    let device = prior_context.device.dev in
-    (* Name the (debug) source file from the batch's function names — fissioned segments of one
-       routine share the routine name as a prefix; a fixed "batch" name would collide across
-       routines. *)
-    let base_name =
-      String.(
-        strip ~drop:(equal_char '_')
-        @@ common_prefix (List.map (Array.to_list code_batch.funcs) ~f:(fun (n, _, _) -> n)))
-    in
-    let base_name = if String.is_empty base_name then "batch" else base_name in
-    let library =
-      memoized_library code_batch.batch_library ~device (fun () ->
-          compile_metal_source ~name:base_name ~routine_names:code_batch.routine_names
-            ~source:code_batch.metal_source ~device)
-    in
+    let resolved = resolve_kernels prior_context.device code_batch.batch_kernels in
     let lowered_bindings : Indexing.lowered_bindings =
       List.map (Indexing.bound_symbols code_batch.bindings) ~f:(fun s ->
           (s, Indexing.fresh_launch_param ()))
     in
     let tasks =
-      Array.map code_batch.funcs ~f:(fun (func_name, kparams, launch) ->
-          link_proc ~prior_context ~library ~func_name ~kparams ~launch ~lowered_bindings
+      Array.map2_exn code_batch.funcs resolved
+        ~f:(fun (func_name, kparams, launch) (program, symbol) ->
+          link_proc ~prior_context ~program ~symbol ~func_name ~kparams ~launch ~lowered_bindings
             ~ctx_buffers)
     in
     (lowered_bindings, tasks)

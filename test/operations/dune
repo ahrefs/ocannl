@@ -2847,9 +2847,9 @@
  (libraries base arrayjit.ir stdio arrayjit.verdict))
 
 (test
- ; gh-ocannl-1314, gh-ocannl-1529: a backend's kernel code cache (HIP, CUDA) compiles only the
- ; kernels it has not compiled, and changes nothing a kernel computes. Gated on the compile census,
- ; skipped elsewhere.
+ ; gh-ocannl-1314, gh-ocannl-1529, gh-ocannl-1605: a backend's kernel code cache (HIP, CUDA, cc,
+ ; Metal) compiles only the kernels it has not compiled -- and on Metal creates only their pipelines --
+ ; and changes nothing a kernel computes. Gated on the compile census, skipped elsewhere.
  ; cc-vector-width: independent -- off HIP and CUDA its only claims are exact integer outputs, which
  ; every schedule at every width computes alike; the reuse claims are gated on the cache.
  (name gpu_kernel_cache)

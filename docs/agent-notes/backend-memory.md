@@ -538,6 +538,23 @@ files.
   `OCANNL_`-prefixed macro names trip the environment-spelling scan. Windows compiles one unit.
   Arm A's base compile went from 30.7 to 8-13 s, arm B's from 102-157 to 11.7 s (correctness-grade
   diagnostics, shared box).
-- **Metal has none yet, measured**: its library compile (at link) took about 0.4 s of a 1.8 s
-  candidate compile on a gpt2 b8 search, the rest of the link being pipeline-state creation, which a
-  library cache does not save; a Metal cache wants a pipeline cache beside it.
+- **Metal caches the library AND the pipeline states** (gh-ocannl-1605, `metal_kernel_cache_mib`,
+  default 64, weighted by compiled source bytes -- a proxy, Metal reports no library or pipeline
+  size). Metal compiles at LINK, and on a gpt2 b8 search the library compile was only about 0.4 s
+  of a 1.8 s candidate compile: the rest was creating each kernel's compute pipeline state, which a
+  library-only cache does not save. So `Metal_backend` renders through `render_batch` at compile,
+  keeps `assemble`/`key_text` in the code value, and resolves at link, where the device is known:
+  the key adds the rendered Metal option state (computed once per link, and the same value
+  `compile_metal_source` applies) and the device (ordinal and registry id: a library and its
+  pipelines belong to one `MTLDevice`). The cached value is a `program`: the library plus a table of
+  per-symbol `(MTLFunction, pipeline)` created LAZILY on a kernel's first link (`pipeline_of`), so
+  a kernel whose pipeline the driver refuses (the gh-1226 threadgroup overflow, a normal decline)
+  costs only its own retry, never the group's library. The launch-dependent checks re-run on every
+  link against the reused pipeline. The per-code `resolved` memo (gh-1440) still makes a relink
+  resolve nothing, and `Utils.count_backend_compile` fires once per memo miss whether the kernels
+  hit or not -- `deferred_hit_compiles`' `one_compile` is 2 on Metal and must stay so, since the
+  winner's in-process recompile now hits the cache. Device debugging bypasses the cache (a GPU
+  capture shows the library's source, another routine's text for a reused kernel).
+  `Compile_cost.pipelines_created` counts creations; `gpu_kernel_cache` pins both levels, gated on
+  the census (`reuse_capable`, `pipelines_created > 0`), with `OCANNL_METAL_KERNEL_CACHE_MIB=0` as
+  the negative control.

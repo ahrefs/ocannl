@@ -218,6 +218,7 @@ execution-neutral -- reuse of compiled kernel code within a process, keyed by th
   cc_kernel_cache_mib [read at codegen]
   cuda_kernel_cache_mib [read at codegen]
   hip_kernel_cache_mib [read at codegen]
+  metal_kernel_cache_mib [read at codegen]
 
 execution-neutral -- how a cc batch is split into translation units and how many compiler processes build them at once (gh-ocannl-1603): every function is compiled alone, never inlined across units, so only the compile's cost changes
   cc_compile_jobs [read at codegen]

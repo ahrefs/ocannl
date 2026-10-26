@@ -1,6 +1,8 @@
-(* gh-ocannl-1314, gh-ocannl-1529: a backend with a kernel code cache (HIP's [hip_kernel_cache_mib],
-   CUDA's [cuda_kernel_cache_mib]) compiles only the kernels no earlier compile in the process
-   produced, and reuses the rest -- without changing what any kernel computes.
+(* gh-ocannl-1314, gh-ocannl-1529, gh-ocannl-1605: a backend with a kernel code cache (HIP's
+   [hip_kernel_cache_mib], CUDA's [cuda_kernel_cache_mib], cc's [cc_kernel_cache_mib], Metal's
+   [metal_kernel_cache_mib]) compiles only the kernels no earlier compile in the process produced,
+   and reuses the rest -- without changing what any kernel computes. Where a link creates a pipeline
+   object per kernel (Metal's compute pipeline states), a reused kernel reuses its pipeline too.
 
    The routine is a materialized contraction feeding a reduction, which a search's fissioned
    candidates split into several kernels. Every input is a small integer, so every product and sum
@@ -24,8 +26,11 @@
 
    The reuse claims are gated on the compile census's [reuse_capable] (a compile went through a
    kernel code cache), never on a backend name, and that flag stays set with the cache disabled: a
-   run with [OCANNL_HIP_KERNEL_CACHE_MIB=0] on HIP, or [OCANNL_CUDA_KERNEL_CACHE_MIB=0] on CUDA,
-   must fail them, the negative control. *)
+   run with [OCANNL_HIP_KERNEL_CACHE_MIB=0] on HIP, [OCANNL_CUDA_KERNEL_CACHE_MIB=0] on CUDA or
+   [OCANNL_METAL_KERNEL_CACHE_MIB=0] on Metal must fail them, the negative control. The pipeline
+   claims are gated on the census having seen the first compile create pipelines
+   ([pipelines_created]), so a cache that reused libraries but recreated every pipeline fails
+   them. *)
 
 open Base
 open Ocannl
@@ -78,6 +83,9 @@ let bitwise_equal a e =
    quantifies. *)
 let reuse_capable = ref None
 
+(* Whether this backend's links create a pipeline object per kernel, read off the same compile. *)
+let creates_pipelines = ref false
+
 let () =
   let r = graph "hkc_" in
   let comp = named "hkc_twice" (Train.forward r) in
@@ -92,6 +100,7 @@ let () =
   let backend, first, c1 = compile_and_run () in
   let _, second, c2 = compile_and_run () in
   reuse_capable := Some (backend, c1.reuse_capable);
+  creates_pipelines := c1.pipelines_created > 0;
   let on = backend and when_ = c1.reuse_capable in
   p "first compile: outputs equal the host reference" (bitwise_equal first expected);
   p "second compile: outputs equal the first compile's" (bitwise_equal second first);
@@ -100,11 +109,16 @@ let () =
     (c1.kernels_compiled = c1.kernels);
   gated ~when_ ~on "second compile: the same kernels rendered, none compiled"
     (c2.kernels = c1.kernels && c2.kernels_compiled = 0);
+  let when_ = !creates_pipelines in
+  gated ~when_ ~on "first compile: a pipeline created for every kernel"
+    (c1.pipelines_created = c1.kernels);
+  gated ~when_ ~on "second compile: no pipeline created" (c2.pipelines_created = 0);
   Stdio.eprintf
     "gpu_kernel_cache (not part of the golden): first compile %d of %d kernels compiled, second %d \
-     of %d; device %s s then %s s\n\
+     of %d; pipelines created %d then %d; device %s s then %s s\n\
      %!"
-    c1.kernels_compiled c1.kernels c2.kernels_compiled c2.kernels
+    c1.kernels_compiled c1.kernels c2.kernels_compiled c2.kernels c1.pipelines_created
+    c2.pipelines_created
     (Option.value_map c1.device_s ~default:"none" ~f:(Printf.sprintf "%.3f"))
     (Option.value_map c2.device_s ~default:"none" ~f:(Printf.sprintf "%.3f"))
 
@@ -131,9 +145,18 @@ let () =
     candidates_compiled ~f:(fun rc ->
       let c = rc.compile_cost in
       c.kernels_compiled > 0 && c.kernels_compiled < c.kernels);
+  gated_exists ~when_:!creates_pipelines ~on:backend
+    "some candidate created pipelines for part of its kernels and reused the rest"
+    candidates_compiled ~f:(fun rc ->
+      let c = rc.compile_cost in
+      c.pipelines_created > 0 && c.pipelines_created < c.kernels);
   List.iter candidates_compiled ~f:(fun rc ->
-      Stdio.eprintf "gpu_kernel_cache (not part of the golden): %s: %d of %d kernels compiled\n%!"
-        rc.compile_attempt rc.compile_cost.kernels_compiled rc.compile_cost.kernels)
+      Stdio.eprintf
+        "gpu_kernel_cache (not part of the golden): %s: %d of %d kernels compiled, %d pipelines \
+         created\n\
+         %!"
+        rc.compile_attempt rc.compile_cost.kernels_compiled rc.compile_cost.kernels
+        rc.compile_cost.pipelines_created)
 
 (* gh-ocannl-1525. Other extents than the first sections', so no kernel of theirs answers for these.
    Two inputs share one label, so the batch-wide disambiguation emits both under their numbered
@@ -195,6 +218,11 @@ let () =
     (c2.kernels = c1.kernels && c2.kernels_compiled = 0);
   gated ~when_ ~on "another routine name: the same kernels rendered, all compiled afresh"
     (c3.kernels = c1.kernels && c3.kernels_compiled = c3.kernels);
+  let when_ = !creates_pipelines in
+  gated ~when_ ~on "fresh build, freshly numbered nodes: no pipeline created"
+    (c2.pipelines_created = 0);
+  gated ~when_ ~on "another routine name: a pipeline created for every kernel"
+    (c3.pipelines_created = c3.kernels);
   Stdio.eprintf
     "gpu_kernel_cache (not part of the golden): colliding labels %d of %d kernels compiled, fresh \
      build %d of %d, renamed %d of %d\n\
