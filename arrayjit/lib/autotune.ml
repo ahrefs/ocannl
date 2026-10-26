@@ -294,6 +294,21 @@ type round_moves = {
   round_entries : round_entry_moves list;
 }
 
+(* gh-ocannl-1635: how the beam finals decided the crown. See the interface. *)
+type finals_outcome = Finals_not_run | Finals_kept | Finals_swapped | Finals_inconclusive
+
+let finals_outcome_name = function
+  | Finals_not_run -> "not run"
+  | Finals_kept -> "kept"
+  | Finals_swapped -> "swapped"
+  | Finals_inconclusive -> "inconclusive"
+
+type finals_contender = {
+  contender_label : string;
+  contender_search_ms : float;
+  contender_finals_ms : float option;
+}
+
 type report = {
   outcome : outcome;
   candidates_timed : int;
@@ -324,6 +339,11 @@ type report = {
   cache_replay_refusal : Outcome.classified_cause option;
   rounds_run : int;
   round_moves : round_moves list;
+  finals : finals_contender list;
+      (** The beam finals' contenders and readings (gh-ocannl-1635). See the interface. *)
+  finals_timed : int;
+  finals_admitted : int;
+  finals_outcome : finals_outcome;
   budget_cut : bool;
   budget_s : float option;
       (** The wall-clock budget this call resolved (gh-ocannl-1438). See the interface. *)
@@ -406,6 +426,21 @@ type report = {
    counts minus its two named subsets (gh-ocannl-1517). See the interface. *)
 let contention_refusals r = r.timings_contended - r.timings_unbatched - r.timings_unreadable
 
+(* gh-ocannl-1635: whether the beam finals crowned [r]'s winner over a contender that read
+   [search_ms] in the search -- the one way [best_ms] can exceed the search reading of an entry the
+   beam ranked. See the interface. *)
+let finals_outranked r ~search_ms =
+  match r.finals_outcome with
+  | Finals_swapped -> (
+      match List.filter_map r.finals ~f:(fun c -> c.contender_finals_ms) with
+      | [] -> false
+      | readings ->
+          let crown_ms = Option.value_exn (List.min_elt readings ~compare:Float.compare) in
+          List.exists r.finals ~f:(fun c ->
+              Float.equal c.contender_search_ms search_ms
+              && Option.exists c.contender_finals_ms ~f:(fun f -> Float.(f >= crown_ms))))
+  | Finals_not_run | Finals_kept | Finals_inconclusive -> false
+
 (** The report of a [tune] call that never searched (config [autotune_search=false], gh-ocannl-559):
     every counter zero and every time [infinity], like a search whose candidates all failed. The
     caller gets the untuned default compile; [outcome] says why. Also the base that the [census]
@@ -438,6 +473,10 @@ let no_search_report ~timing =
     cache_replay_refusal = None;
     rounds_run = 0;
     round_moves = [];
+    finals = [];
+    finals_timed = 0;
+    finals_admitted = 0;
+    finals_outcome = Finals_not_run;
     budget_cut = false;
     budget_s = None;
     call_budget_s = None;
@@ -611,6 +650,48 @@ let round_expansion_name = function
   | Expand_differing -> "differing"
   | Expand_full -> "full"
   | Expand_head -> "head"
+
+(* The beam finals (gh-ocannl-1635). Every candidate is timed in a window of its own, and the beam
+   ranks entries by those readings, so the head is the entry whose window read fastest -- and a
+   window's reading carries the window's own offset: drift, or contention that only ever slows a
+   window down, which the 2x-majority rule admits when it is uniform. The crown was therefore often
+   the luckiest window rather than the fastest schedule, the winner's curse [Bench_select] fixed for
+   [projection_shape_bench] (gh-ocannl-1531). Re-timing the head alone does not repair that: it
+   sharpens the number of the wrong pick. The finals re-time the near-tie contenders TOGETHER, in
+   adjacent windows, and crown by those readings alone.
+
+   [finals_contenders]: the entries [pool] offers (the search passes the final beam, the beams
+   accepted rounds displaced and the round a rejected round discarded, deduplicated), by first
+   reading, ties in [pool] order, keeping those with a finite reading within [margin] of the
+   fastest, at most [width]; none when fewer than two qualify, or [margin <= 0] (the off setting).
+   [finals_order]: the windows' order, the contenders and then the same in reverse, so each
+   contender is timed twice and a drift across the finals reaches every contender alike.
+   [finals_crown]: a contender's finals reading is the least of its admitted ones, and the crown the
+   contender with the least, ties to the earlier; [None] when some contender has no admitted
+   reading, since a contender with none cannot be compared in the shared round (the crown then stays
+   the first readings' head). *)
+let finals_contenders ~margin ~width pool =
+  let ranked =
+    List.filter pool ~f:(fun (_, ms) -> Float.is_finite ms)
+    |> List.stable_sort ~compare:(fun (_, a) (_, b) -> Float.compare a b)
+  in
+  match ranked with
+  | [] -> []
+  | (_, best_ms) :: _ ->
+      let within =
+        List.filter ranked ~f:(fun (_, ms) -> Float.(ms <= best_ms *. (1. +. margin)))
+        |> Fn.flip List.take width
+      in
+      if Float.(margin <= 0.) || List.length within < 2 then [] else within
+
+let finals_order contenders = contenders @ List.rev contenders
+
+let finals_crown readings =
+  if List.exists readings ~f:(fun (_, rs) -> List.is_empty rs) then None
+  else
+    List.fold readings ~init:None ~f:(fun acc (c, rs) ->
+        let ms = Option.value_exn (List.min_elt rs ~compare:Float.compare) in
+        match acc with Some (_, best) when Float.(best <= ms) -> acc | _ -> Some (c, ms))
 
 (* The composite playoff (gh-ocannl-1166). A per-segment single is timed as the WHOLE routine with
    every other segment on its untuned preset, so its time carries that backdrop: on gpt2_mini/CUDA
@@ -7067,6 +7148,9 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
   let playoff_margin =
     Float.max 0. (Utils.registered_float ~arg_name:"autotune_composite_playoff_margin")
   in
+  (* gh-ocannl-1635: the beam finals' margin ([finals_contenders]); 0 or less turns them off. A
+     malformed value, NaN included, is refused. *)
+  let finals_margin = Utils.registered_float ~arg_name:"autotune_finals_margin" in
   (* Read only where a round can run, so a malformed value refuses the searches it would shape and
      no other call (like [autotune_timing] above). *)
   let round_expansion =
@@ -7805,6 +7889,13 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
       | Split_saved (prelude, segs) -> prelude @ List.concat_map segs ~f:(fun s -> s.SC.seg_saved)
     in
     let is_fissioned = function Whole_saved _ -> false | Fiss_saved _ | Split_saved _ -> true in
+    (* A timed candidate's saved form as the spec that recompiles it: the winner replay's, and the
+       beam finals' re-timings (gh-ocannl-1635). *)
+    let spec_of_form = function
+      | Whole_saved saved -> Whole (W_saved (saved, None))
+      | Fiss_saved segs -> Fiss (F_saved (segs, None))
+      | Split_saved (prelude, segs) -> Fiss (F_split_saved (prelude, segs, None))
+    in
     (* Whether the crowned schedule tensorizes is read off the schedule, not off the winning spec's
        label (gh-ocannl-546): the beam can extend a plainly-labeled incumbent with a [Tensorize]
        move, and a sketch label promises tensorization the transform may not have kept. *)
@@ -8068,6 +8159,10 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
                     cache_replay_refusal = None;
                     rounds_run = 0;
                     round_moves = [];
+                    finals = [];
+                    finals_timed = 0;
+                    finals_admitted = 0;
+                    finals_outcome = Finals_not_run;
                     (* A fact about the crown, like [best_ms] (gh-ocannl-1409). *)
                     budget_cut = entry.SC.budget_cut;
                     budget_s;
@@ -8536,6 +8631,11 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
         let rounds_run = ref 0 in
         (* [report.round_moves], newest first (gh-ocannl-1360). *)
         let round_moves = ref [] in
+        (* gh-ocannl-1635: the beam finals' accounting, published as each window ends. *)
+        let finals_record = ref []
+        and n_finals_timed = ref 0
+        and n_finals_admitted = ref 0
+        and finals_outcome = ref Finals_not_run in
         (* gh-ocannl-1409: set once the search's budget has stopped a candidate or a round. *)
         let budget_cut = ref false in
         let n_sketch_candidates = ref 0
@@ -8676,6 +8776,10 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
             cache_replay_refusal = !cache_replay_refusal;
             rounds_run = !rounds_run;
             round_moves = List.rev !round_moves;
+            finals = !finals_record;
+            finals_timed = !n_finals_timed;
+            finals_admitted = !n_finals_admitted;
+            finals_outcome = !finals_outcome;
             budget_cut = !budget_cut;
             budget_s;
             call_budget_s;
@@ -8883,6 +8987,60 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
           (* [hopeless_against] (gh-ocannl-1527) is what the caller ranks this candidate's reading
              against, asked as its timing starts: [Some ms] lets the window end as soon as it is
              hopeless against [ms] ({!hopeless_window}); [None], the default, times it in full. *)
+          (* One timing window of the compiled candidate [c], timed under [label] -- a candidate's
+             in [try_spec], a contender's re-timing in the beam finals (gh-ocannl-1635).
+
+             The backend's own classifier decides whether a launch or sync failure is this
+             candidate's fault: the driver error is all the evidence there is, and only the backend
+             can read it. With the always-[None] classifier this used to pass, no backend could ever
+             declare one, so every launch failure was fatal by phase default and there was nowhere
+             for a backend to plug one in (gh-ocannl-536; the HIP scratch-overflow arm of
+             gh-ocannl-533 is what fills this seam). The phase reaching the report is the tagged one
+             inside [time_routine], so a report distinguishes a launch refusal from an asynchronous
+             failure at sync.
+
+             And from the third case, which is not the backend's to judge: [time_routine]'s
+             pre-dispatch validation carries [Preflight] and is contained without asking the
+             classifier (gh-ocannl-564). Tagged [Launch] it was fatal on every C backend, so a
+             scratch context missing one of the caller's initializations condemned the search
+             instead of declining a candidate. *)
+          let timing_window ~label ~stop ?hopeless_against c =
+            (* The lineage-wide validation is OUTSIDE the boundary (gh-ocannl-569): a poisoned
+               lineage, an uninitialized input and an unexecuted dependency are properties of the
+               context and the computation, so a genuine one fails every candidate of every arm at
+               once. Contained as a decline it is silent — on a backend whose serial baseline is not
+               dispatched (every GPU backend) every candidate declines for the one reason, nothing
+               is timed, and the search ships the untuned default out of an unusable lineage under a
+               report that says it completed. It reaches the caller instead, which is the only party
+               that can fix it.
+
+               Tagged, though not contained: the tag carries no boundary here, it only labels the
+               phase so the fallback handler at the end of [search] reports a pre-dispatch
+               validation failure as [Preflight] rather than as its [Transform] default. *)
+            Outcome.tag Outcome.Preflight (fun () ->
+                Context.check_lineage_runnable c.cctx c.routine);
+            (* gh-ocannl-1621: the state every window starts from, restored outside the boundary for
+               the same reason -- it is the lineage's, not this candidate's. *)
+            Outcome.tag Outcome.Preflight before_timing_window;
+            Outcome.protect ~classify_backend:(Context.failure_classifier c.cctx)
+              ~provenance:Outcome.Candidate ~phase:Outcome.Launch ~candidate:label (fun () ->
+                timed_into progress_timing_s (fun () ->
+                    (* gh-ocannl-1556: [`Stopped] is a timing the budget stopped, and
+                       gh-ocannl-1527: [`Hopeless] a window cut as out of the running -- neither a
+                       failure of the candidate, so caught inside the boundary. *)
+                    match
+                      time_routine ~on_retry ~on_call ~tag_failures:true ~phase:!progress_phase
+                        ~stop ?hopeless_against ~timing ~repeats c.cctx c.routine
+                    with
+                    | timing_result -> `Timed timing_result
+                    | exception Timing_stopped -> `Stopped
+                    | exception Timing_hopeless h -> `Hopeless h))
+            (* Outside the boundary: the seam is not a candidate failure to classify. *)
+            |> Result.map ~f:(function
+              | `Timed timing_result ->
+                  `Timed (apply_measurement_seam ~label ~digest:c.digest_after timing_result)
+              | (`Stopped | `Hopeless _) as other -> other)
+          in
           let try_spec ?(hopeless_against = fun () -> None) spec =
             last_attempt := `Other;
             Seam.get on_candidate_attempt (spec_label spec);
@@ -8980,64 +9138,10 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
                   else (
                     Hash_set.add seen c.digest_after;
                     match
-                      (* The backend's own classifier decides whether a launch or sync failure is this
-               candidate's fault: the driver error is all the evidence there is, and only the
-               backend can read it. With the always-[None] classifier this used to pass, no
-               backend could ever declare one, so every launch failure was fatal by phase
-               default and there was nowhere for a backend to plug one in (gh-ocannl-536; the
-               HIP scratch-overflow arm of gh-ocannl-533 is what fills this seam). The phase
-               reaching the report is the tagged one inside [time_routine], so a report
-               distinguishes a launch refusal from an asynchronous failure at sync.
-
-               And from the third case, which is not the backend's to judge: [time_routine]'s
-               pre-dispatch validation carries [Preflight] and is contained without asking the
-               classifier (gh-ocannl-564). Tagged [Launch] it was fatal on every C backend, so a
-               scratch context missing one of the caller's initializations condemned the search
-               instead of declining a candidate. *)
-                      (* The lineage-wide validation is OUTSIDE the boundary (gh-ocannl-569): a poisoned
-               lineage, an uninitialized input and an unexecuted dependency are properties of
-               the context and the computation, so a genuine one fails every candidate of every
-               arm at once. Contained as a decline it is silent — on a backend whose serial
-               baseline is not dispatched (every GPU backend) every candidate declines for the
-               one reason, nothing is timed, and the search ships the untuned default out of an
-               unusable lineage under a report that says it completed. It reaches the caller
-               instead, which is the only party that can fix it.
-
-               Tagged, though not contained: the tag carries no boundary here, it only labels
-               the phase so the fallback handler at the end of [search] reports a pre-dispatch
-               validation failure as [Preflight] rather than as its [Transform] default. *)
-                      Outcome.tag Outcome.Preflight (fun () ->
-                          Context.check_lineage_runnable c.cctx c.routine);
-                      (* gh-ocannl-1621: the state every window starts from, restored outside the
-                         boundary for the same reason -- it is the lineage's, not this
-                         candidate's. *)
-                      Outcome.tag Outcome.Preflight before_timing_window;
-                      Outcome.protect ~classify_backend:(Context.failure_classifier c.cctx)
-                        ~provenance:Outcome.Candidate ~phase:Outcome.Launch
-                        ~candidate:(spec_label spec) (fun () ->
-                          timed_into progress_timing_s (fun () ->
-                              (* gh-ocannl-1556: [`Stopped] is a timing the budget stopped, and
-                                 gh-ocannl-1527: [`Hopeless] a window cut as out of the running --
-                                 neither a failure of the candidate, so caught inside the
-                                 boundary. *)
-                              match
-                                time_routine ~on_retry ~on_call ~tag_failures:true
-                                  ~phase:!progress_phase ~stop:(budget_stop spec)
-                                  ?hopeless_against:
-                                    (if measurement_is_physical () then hopeless_against ()
-                                     else None)
-                                  ~timing ~repeats c.cctx c.routine
-                              with
-                              | timing_result -> `Timed timing_result
-                              | exception Timing_stopped -> `Stopped
-                              | exception Timing_hopeless h -> `Hopeless h))
-                      (* Outside the boundary: the seam is not a candidate failure to classify. *)
-                      |> Result.map ~f:(function
-                        | `Timed timing_result ->
-                            `Timed
-                              (apply_measurement_seam ~label:(spec_label spec)
-                                 ~digest:c.digest_after timing_result)
-                        | (`Stopped | `Hopeless _) as other -> other)
+                      timing_window ~label:(spec_label spec) ~stop:(budget_stop spec)
+                        ?hopeless_against:
+                          (if measurement_is_physical () then hopeless_against () else None)
+                        c
                     with
                     | Ok (`Hopeless h) ->
                         (* gh-ocannl-1527: not ranked, and not a refusal -- the window proved the
@@ -9996,6 +10100,11 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
              undispatched GPU baseline never enters the beam with a finite rank; a declined one does
              not enter it at all). *)
           let best = ref (List.hd !beam) in
+          (* gh-ocannl-1635: the entries a round's decision set aside -- the beam an accepted round
+             replaced, the round a rejected one discarded -- oldest first. That decision compares
+             the round's readings with the incumbent's, taken in earlier windows, so the beam finals
+             below re-time the near-ties among them beside the final beam. *)
+          let displaced = ref [] in
           let continue_ = ref true in
           while
             !continue_ && !rounds_run < rounds
@@ -10138,14 +10247,166 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
             | (_, round_best_ms) :: _ ->
                 let incumbent_ms = Option.value_map !best ~default:Float.infinity ~f:snd in
                 if Float.(round_best_ms < incumbent_ms *. (1. -. min_progress)) then (
+                  displaced := !displaced @ !beam;
                   beam := !round;
                   best := List.hd !beam)
                 else (
                   (* The round did not beat the incumbent by enough: the beam is unchanged, and the
                      search stops. *)
+                  displaced := !displaced @ !round;
                   continue_ := false;
                   round := [])
           done;
+          (* gh-ocannl-1635: the beam finals ([finals_contenders]). The pool is every entry the
+             search ranked as an incumbent: the final beam first, then [displaced], each entry once.
+             Its contenders are recompiled from their saved forms -- every candidate's buffers went
+             at its timing (gh-ocannl-1326) -- in [finals_order], one compile per run of equal
+             contenders and one resident at a time, each window under the contender's own label and
+             digest and after the timing-state restore every window starts from (gh-ocannl-1621).
+             The crown then follows the finals' readings alone; [best_ms] stays the crown's search
+             reading, the number its label, spread and digest were recorded with. A refused or
+             failed finals window is the finals' own: it is not a candidate refusal or decline, so
+             it neither enters [timings_contended] nor makes the search uncacheable -- a contender
+             left with no reading makes the finals inconclusive, and the crown is then the first
+             readings' head, as without finals. The finals run only while the budget allows a
+             window, and a window stops once it passes, without marking the search as cut: every
+             candidate the menu proposed was already timed. *)
+          (let finals_pool =
+             let seen_digests = Hash_set.create (module String) in
+             List.filter (!beam @ !displaced) ~f:(fun ((c : compiled), _) ->
+                 if Hash_set.mem seen_digests c.digest_after then false
+                 else (
+                   Hash_set.add seen_digests c.digest_after;
+                   true))
+           in
+           let contenders = finals_contenders ~margin:finals_margin ~width:beam_width finals_pool in
+           let label_of (c : compiled) =
+             Option.value
+               (Hashtbl.find label_by_digest c.digest_after)
+               ~default:(dshort c.digest_after)
+           in
+           let finals_stop () =
+             match budget with Some b -> Float.(budget_clock () > b) | None -> false
+           in
+           let budget_allows_finals () =
+             match budget with
+             | None -> true
+             | Some b -> (not !budget_spent) && Float.(budget_clock () < b)
+           in
+           if not (List.is_empty contenders) then
+             if not (budget_allows_finals ()) then
+               logf "finals: skipped, the budget is spent (%d contender(s))"
+                 (List.length contenders)
+             else (
+               logf "finals: %d contender(s) re-timed together: %s" (List.length contenders)
+                 (String.concat ~sep:"; "
+                    (List.map contenders ~f:(fun (c, ms) ->
+                         Printf.sprintf "%s %.4f ms (digest %s)" (label_of c) ms
+                           (dshort c.digest_after))));
+               (* No total, like the playoff's: a finals window is no attempt, so no candidate line
+                  follows the phase. *)
+               progress_phase_begin "finals" None;
+               let readings = Hashtbl.create (module String) in
+               let groups =
+                 List.group (finals_order contenders) ~break:(fun ((a : compiled), _) (b, _) ->
+                     not (String.equal a.digest_after b.digest_after))
+               in
+               List.iter groups ~f:(fun group ->
+                   let entry, _ = List.hd_exn group in
+                   let label = label_of entry in
+                   match
+                     timed_into progress_compile_s (fun () ->
+                         compile_spec (spec_of_form entry.form))
+                   with
+                   | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal
+                   | Error (Outcome.Classified classified) ->
+                       logf "finals: %s: recompile FAILED at %s %s" label
+                         (phase_label classified.phase)
+                         (Outcome.detail_of_cause classified.cause)
+                   | Ok c when not (String.equal c.digest_after entry.digest_after) ->
+                       logf "finals: %s: recompiled to digest %s, not %s: not re-timed" label
+                         (dshort c.digest_after) (dshort entry.digest_after);
+                       release_quietly ~what:("finals contender " ^ label) c.cctx
+                   | Ok c ->
+                       pending := Some c;
+                       let rec windows k =
+                         if k > 0 then (
+                           Int.incr n_finals_timed;
+                           match timing_window ~label ~stop:finals_stop c with
+                           | Ok (`Timed timing_result) -> (
+                               match admitted_timing_ms timing_result with
+                               | Some ms ->
+                                   Int.incr n_finals_admitted;
+                                   Hashtbl.add_multi readings ~key:c.digest_after ~data:ms;
+                                   logf "finals: %s: %.4f ms (digest %s)" label ms
+                                     (dshort c.digest_after);
+                                   windows (k - 1)
+                               | None ->
+                                   logf "finals: %s: NOT TIMED, %s (digest %s)" label
+                                     (refusal_reason (timing_admission timing_result))
+                                     (dshort c.digest_after);
+                                   windows (k - 1))
+                           | Ok `Stopped ->
+                               logf "finals: %s: NOT TIMED, the budget passed during its timing"
+                                 label
+                           | Ok (`Hopeless _) ->
+                               (* Unreachable: a finals window is timed in full. *)
+                               logf "finals: %s: NOT TIMED, cut as hopeless" label
+                           | Error (Outcome.Classified classified) -> (
+                               logf "finals: %s: RUN FAILED at %s %s" label
+                                 (phase_label classified.phase)
+                                 (Outcome.detail_of_cause classified.cause);
+                               (* As a candidate's run failure (see [try_spec]): one that wrote
+                                  nothing withdraws its executed claim; one that may have written
+                                  condemns the lineage. *)
+                               match classified.execution_effect with
+                               | Outcome.No_device_writes ->
+                                   Context.rollback_execution c.cctx c.routine.Context.routine_id
+                               | Outcome.Writes_may_have_occurred ->
+                                   Context.poison_lineage c.cctx
+                                     ~routine_name:c.routine.Context.name
+                                     (Outcome.exception_of_cause classified.cause);
+                                   release_candidate c;
+                                   emit_partial_and_raise
+                                     (Outcome.fatal_of_classified ~candidate:label classified))
+                           | Error (Outcome.Fatal fatal) ->
+                               Context.poison_lineage c.cctx ~routine_name:c.routine.Context.name
+                                 fatal.Outcome.exn;
+                               release_candidate c;
+                               emit_partial_and_raise fatal)
+                       in
+                       windows (List.length group);
+                       release_candidate c);
+               finals_record :=
+                 List.map contenders ~f:(fun (c, ms) ->
+                     {
+                       contender_label = label_of c;
+                       contender_search_ms = ms;
+                       contender_finals_ms =
+                         List.min_elt
+                           (Hashtbl.find_multi readings c.digest_after)
+                           ~compare:Float.compare;
+                     });
+               let incumbent_digest =
+                 Option.map !best ~f:(fun ((c : compiled), _) -> c.digest_after)
+               in
+               match
+                 finals_crown
+                   (List.map contenders ~f:(fun ((c, _) as e) ->
+                        (e, Hashtbl.find_multi readings c.digest_after)))
+               with
+               | None ->
+                   finals_outcome := Finals_inconclusive;
+                   logf
+                     "finals: inconclusive, a contender has no admitted reading: the crown stays %s"
+                     (Option.value_map !best ~default:"none" ~f:(fun (c, _) -> label_of c))
+               | Some ((((crown : compiled), first_ms) as e), finals_ms) ->
+                   let kept = Option.exists incumbent_digest ~f:(String.equal crown.digest_after) in
+                   finals_outcome := if kept then Finals_kept else Finals_swapped;
+                   logf "finals: %s %s (%.4f ms in the finals, %.4f ms in the search)"
+                     (if kept then "kept" else "crowned")
+                     (label_of crown) finals_ms first_ms;
+                   best := Some e));
           let best_c, best_ms =
             match !best with Some (c, ms) -> (Some c, ms) | None -> (None, Float.infinity)
           in
@@ -10265,6 +10526,10 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
               cache_replay_refusal = !cache_replay_refusal;
               rounds_run = !rounds_run;
               round_moves = List.rev !round_moves;
+              finals = !finals_record;
+              finals_timed = !n_finals_timed;
+              finals_admitted = !n_finals_admitted;
+              finals_outcome = !finals_outcome;
               budget_cut = !budget_cut;
               budget_s;
               call_budget_s;
@@ -10338,12 +10603,7 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
                  (gh-ocannl-1326), and with [timing_ctx] the search ran against the scratch lineage
                  anyway. Digest mismatch or replay failure falls back to the production default
                  schedule. *)
-              let spec =
-                match best_c.form with
-                | Whole_saved saved -> Whole (W_saved (saved, None))
-                | Fiss_saved segs -> Fiss (F_saved (segs, None))
-                | Split_saved (prelude, segs) -> Fiss (F_split_saved (prelude, segs, None))
-              in
+              let spec = spec_of_form best_c.form in
               (* The rebuilt spec has lost what the winner was timed as: a round candidate's parent
                  and move, a sketch's or preset's parameters -- its saved form alone would print as
                  the bare [F_saved[N segs]] every round candidate of one parent shares. So the

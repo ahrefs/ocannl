@@ -170,7 +170,11 @@ let () =
      reference -- admitted only against the refusal count. *)
   p "the untuned default pipeline is measured as the reference, or refused by contention (gh-552)"
     (match r.Autotune.default_ms with
-    | Some d -> Float.is_finite d && Float.(r.Autotune.best_ms <= d)
+    (* The crown's search reading is no slower than the default's, unless the beam finals
+       (gh-ocannl-1635) crowned it over the default in shared windows. *)
+    | Some d ->
+        Float.is_finite d
+        && (Float.(r.Autotune.best_ms <= d) || Autotune.finals_outranked r ~search_ms:d)
     (* The default seed's OWN refusal, not the search's refusal count: report-wide, the count cannot
        separate this from the gh-552 regression of never proposing or attributing the seed (Codex P2
        on PR #608). *)
