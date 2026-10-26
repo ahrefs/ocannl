@@ -1,0 +1,21 @@
+setup: nothing had proposed the ids' bounds before the cold search: true
+cold: the call searched: true
+cold: the search stored its winner: true
+cold: a fissioned candidate won, so a replay checks each segment's digest: true
+cold: the shipped routine computes the host reference bit for bit: true
+after cold: a link proposed the ids' bounds: true
+after cold: the routine lowered blind to node bounds is the cold base: true
+after cold: the routine lowered with the node bounds is another program: true
+warm: the call replayed the cold winner rather than searching: true
+warm: the replay names the code the winner was searched on: true
+warm: nothing was stored: true
+warm: the shipped routine computes the host reference bit for bit: true
+third: the call replayed the cold winner rather than searching: true
+third: the replay names the code the winner was searched on: true
+third: nothing was stored: true
+third: the shipped routine computes the host reference bit for bit: true
+relu: the routine lowers to two programs too, so the blind tier is consulted: true
+relu: its blind lowering is not the gather's: true
+relu: the call searched rather than replaying the gather's winner: true
+relu: the shipped routine computes the host reference bit for bit: true
+tune_warm_cache_key: done

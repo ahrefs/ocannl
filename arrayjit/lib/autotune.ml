@@ -7636,11 +7636,88 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
     release_baseline_hook := release_baseline;
     let codegen_tag = SC.codegen_tag ~backend ~limits ~capabilities () in
     let objective = timing_string timing in
-    let key =
+    let key_of canon =
       SC.cache_key
         ~timing_identity:(Context.timing_identity search_ctx)
         ~objective ~limits ~capabilities canon ~backend
     in
+    (* Whether a stored winner answers this call, for the base whose digest is [digest]. The
+       numerics and codegen checks are belt-and-braces: the key already carries both tags
+       (gh-ocannl-568, gh-ocannl-572), so a regime-mismatched entry normally lives in a different
+       file and is never looked up. They catch a hand-moved or hand-written entry, which is the
+       shape of the misdirection this guards against — a tf32-vs-default A/B whose cache directories
+       got crossed. An entry from before the codegen field existed carries no claim about its
+       regime, so it is not rejected on that ground. *)
+    let entry_replayable ~digest (entry : SC.entry) =
+      String.equal entry.SC.source_digest digest
+      && String.equal entry.SC.numerics (SC.numerics_tag ())
+      && Option.value_map entry.SC.codegen ~default:true ~f:(String.equal codegen_tag)
+      && Option.value_map entry.SC.objective ~default:true ~f:(String.equal objective)
+      (* gh-ocannl-1409: a budget-cut crown answers only a call that has a budget too. *)
+      && (Option.is_some budget || not entry.SC.budget_cut)
+    in
+    (* gh-ocannl-1614: the base lowering reads node value bounds (gh-ocannl-1560's audit), so a base
+       lowered after a link that proposed some -- a [Host_inits] upload of an index tensor -- folds
+       guards a base lowered before it kept, and digests to another key: a tune after a run missed
+       the entry its cold twin stored and searched again. The base the call keeps is the bounded one
+       (its folds are free speed for a fresh search), but when no winner is stored under its key and
+       one is stored under the key of the same routine lowered blind to node bounds
+       ([LL.without_node_bounds]), the call takes the blind lowering as its base instead. The swap
+       is whole: every candidate, the replay, a re-search on a stale entry (whose baseline relinks
+       from [base_opt]) and the store all derive from the blind base, so the stored entry keeps
+       naming the code it was searched on, and a replay applies a schedule to exactly the code it
+       was saved against -- never the bounded code to a schedule searched on the blind one. A cold
+       base is blind already when nothing has proposed bounds for its nodes, which is when its entry
+       is stored. What it costs a hit: the guard folds of the bounded lowering, which the cold call
+       that stored the winner shipped without too. Neither key is widened: each is still the digest
+       of the code it names, so two bases that differ in anything but those folds keep apart. Gated
+       on a node the routine mentions carrying a bounds candidate (nothing can fold otherwise, so
+       the blind lowering would be the base itself), then on a miss under the bounded key, checked
+       before the blind lowering: a call with no bounds pays nothing, and a warm bounded hit one
+       extra entry read but no second lowering. *)
+    let blind_rebase =
+      let bounds_proposed () =
+        let ins, outs = Ir.Assignments.collect_nodes_guess_output comp.Ir.Assignments.asgns in
+        Set.exists (Set.union ins outs) ~f:(fun tn -> Option.is_some (Ir.Tnode.bounds_candidate tn))
+      in
+      let stored ~digest canon =
+        Option.exists (SC.lookup ~dir:cache_dir ~key:(key_of canon)) ~f:(entry_replayable ~digest)
+      in
+      if
+        String.is_empty cache_dir
+        || (not (SC.complete canon))
+        || Option.is_none (key_of canon)
+        || (not (bounds_proposed ()))
+        || stored ~digest:base_digest canon
+      then None
+      else
+        match
+          LL.without_node_bounds (fun () ->
+              Context.lowered_for_decisions ?name search_ctx comp bindings)
+        with
+        | exception exn when not (process_fatal_exn exn) ->
+            logf "blind base lowering failed, keeping the bounded base: %s" (Exn.to_string exn);
+            None
+        | blind_opt ->
+            let blind_canon = SC.canonicalize ~static_indices blind_opt in
+            let blind_digest = SC.digest blind_canon in
+            if String.equal blind_digest base_digest || not (SC.complete blind_canon) then None
+            else if stored ~digest:blind_digest blind_canon then
+              Some (blind_opt, blind_canon, blind_digest)
+            else None
+    in
+    let base_opt, canon, base_digest, base_report =
+      match blind_rebase with
+      | None -> (base_opt, canon, base_digest, base_report)
+      | Some (blind_opt, blind_canon, blind_digest) ->
+          logf
+            "base lowered after a link (digest %s); a winner is stored for its bounds-blind \
+             lowering (digest %s), which this call rebases on (gh-ocannl-1614)"
+            (dshort base_digest) (dshort blind_digest);
+          if is_gpu then base_pristine := Some (scratch_of blind_opt);
+          (blind_opt, blind_canon, blind_digest, { base_report with source_digest = blind_digest })
+    in
+    let key = key_of canon in
     let use_cache = (not (String.is_empty cache_dir)) && SC.complete canon && Option.is_some key in
     (* gh-ocannl-1384: unconditional, not [logf]. Declining the cache this way is invisible
        otherwise -- the call searches, returns a good routine and stores nothing, so every later
@@ -7857,19 +7934,7 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
     let cached =
       if use_cache && Option.is_none lineage_refusal then
         match SC.lookup ~dir:cache_dir ~key with
-        (* The numerics and codegen checks are belt-and-braces: [key] already carries both tags
-           (gh-ocannl-568, gh-ocannl-572), so a regime-mismatched entry normally lives in a
-           different file and is never looked up. They catch a hand-moved or hand-written entry,
-           which is the shape of the misdirection this guards against — a tf32-vs-default A/B whose
-           cache directories got crossed. An entry from before the codegen field existed carries no
-           claim about its regime, so it is not rejected on that ground. *)
-        | Some entry
-          when String.equal entry.SC.source_digest base_digest
-               && String.equal entry.SC.numerics (SC.numerics_tag ())
-               && Option.value_map entry.SC.codegen ~default:true ~f:(String.equal codegen_tag)
-               && Option.value_map entry.SC.objective ~default:true ~f:(String.equal objective)
-               (* gh-ocannl-1409: a budget-cut crown answers only a call that has a budget too. *)
-               && (Option.is_some budget || not entry.SC.budget_cut) -> (
+        | Some entry when entry_replayable ~digest:base_digest entry -> (
             let spec =
               match entry.SC.segments with
               (* A fissioned entry with a non-empty [saved] is a split-reduce winner: [saved] is the

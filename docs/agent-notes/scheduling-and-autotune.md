@@ -2448,8 +2448,9 @@ files.
   (`optimize`: inlining, the one-hot rewrite, `simplify_llc`) reads them, but `tune` captures it
   once per call and every candidate and the in-call winner replay rebase on it, so it cannot
   diverge within a call; across calls its canonical digest IS the cache key (`source_digest`),
-  so a base lowered after a link folds into a different key -- a miss and a fresh search, never a
-  mis-replay; (2) the split-reduce prelude (`F_split`, `F_split_saved`, `F_seeded`, and
+  so a base lowered after a link folds into a different key (gh-ocannl-1614: a miss under it, with
+  a winner stored under the key of the routine lowered `without_node_bounds`, rebases the whole
+  call on that blind lowering, so a cold call's entry replays after a run; see the next bullet); (2) the split-reduce prelude (`F_split`, `F_split_saved`, `F_seeded`, and
   `seeded_split` deriving the plan) read them through `Schedule.apply`'s trailing simplify -- the
   gh-ocannl-1480 fix; (3) inside `Schedule.fission_segmented` before the cut, the Local
   promotions touch placements only (the replay digest is structural), `collect_units`,
@@ -2464,6 +2465,19 @@ files.
   (`test/operations/tune_strict_replay`, which also runs the CUDA/HIP prelude case end to end --
   its search must be the first thing in the process to touch the ids, since a device run before it
   uploads them and the BASE lowering then folds the guard, leaving nothing for a replay to fold).
+- **A base lowered after a link replays its cold twin's entry** (gh-ocannl-1614). Two keys, each
+  the digest of the code it names, never one key widened: `tune` keeps the bounded base (its folds
+  are free speed for a fresh search), and only when nothing is stored under its key does it lower
+  the routine again under `Low_level.without_node_bounds` (`Context.lowered_for_decisions` from the
+  search context) and look up THAT key. A hit there swaps the whole call onto the blind base --
+  candidates, replay, a stale entry's re-search (the baseline relinks from `base_opt`) and the
+  store -- so a schedule always meets the code it was saved against; a bounded base under a
+  blind-searched schedule is the mis-replay the swap exists to rule out. Gated on a node the
+  routine mentions carrying a bounds candidate, then on a miss under the bounded key (read before
+  the blind lowering), so a call with no bounds pays nothing and a bounded hit no second lowering. The hit ships without the bounded folds, as the
+  cold call that stored it did. `test/operations/tune_warm_cache_key` pins cold-search, warm
+  replay, third replay over a fissioned crown, and a relu variant over the same ids that must
+  search: drift present in both, keys apart.
 - **What a cache entry says is input, so its refusals are typed** (gh-ocannl-1242). The rule above
   holds for every raise a replay can reach: `SC.of_saved`'s dangling symbol reference and
   `SC.tn_of_ref`'s out-of-range node index raise `Cause_at (Transform, Illegal_schedule

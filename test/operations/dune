@@ -7544,6 +7544,22 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1614: a tune after a link (whose upload proposed an index tensor's bounds, so the base
+; now lowers with a gather guard folded) replays the winner its cold twin stored, and the
+; bounds-blind tier still keeps a genuinely different routine apart.
+
+(test
+ ; cc-vector-width: independent -- its claims are cache outcomes on scripted timings and digests of
+ ; the lowering, and outputs over inputs any summation order computes exactly, alike at every width.
+ (name tune_warm_cache_key)
+ ; ocannl-backend: cc -- Context.cpu (); the bounds a Host_inits upload proposes are backend-independent
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules tune_warm_cache_key)
+ (libraries base ocannl stdio arrayjit.verdict scripted_search)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-1480: arm A's crowned schedule ships as it was timed after arm B has searched -- cold,
 ; warm, placement store bypassed, forced, with a timing_ctx, and through Autotune.tune_deferred.
 

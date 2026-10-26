@@ -108,6 +108,7 @@ Programs starting a search with a run that can select cc, each pinning the cc ve
   test/operations/dune, test tune_footprint_default (Train.tune_placements): independent, by its marker
   test/operations/dune, test tune_placements_config_refusal (Train.tune_placements): independent, by its marker
   test/operations/dune, test tune_strict_replay (Autotune.tune_deferred): independent, by its marker
+  test/operations/dune, test tune_warm_cache_key (Scripted_search.search): independent, by its marker
   test/operations/dune, test winograd_conv (Autotune.tune): independent, by its marker
   test/training/dune, executable bigram (Autotune.tune): independent, by its marker
   test/training/dune, executable circles_conv (Autotune.tune): independent, by its marker
