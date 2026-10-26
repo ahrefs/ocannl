@@ -5,15 +5,16 @@
    composition (gh-ocannl-485) — and this test executes what it builds:
 
    every packed leg that stages both operands (serial; Grid row blocks outermost, with their own
-   zeroing nest; Grid row blocks below the k-block loop; Grid outermost with the B~ panel hoisted to
-   the constant pool) equals the unscheduled kernel CELL BY CELL, bitwise, and the legs equal each
-   other. The layout that reads A in place ([schedule_bench]'s [pm_hoist]) is refused at every
-   padded site, by the builder and — with its refusal bypassed by dropping A's [Stage] — by
-   [Tensorize] itself, so the builder's gate is the compiler's; at the dividing control it builds
-   and agrees. Every [Tile_mma] of every packed leg rendered the register tiling, read off the
-   compile's census, so a padded site that silently fell back to the scalar loops cannot pass as a
-   measured one. And the same holds with narrow (bf16) storage widened into f32 packed panels, the
-   [tile_prec] seam the padded [schedule_pad] leg does not cover.
+   zeroing nest, B~ packed whole ahead of the Grid or, past its cap, per row block; Grid row blocks
+   below the k-block loop; Grid outermost with the B~ panel hoisted to the constant pool) equals the
+   unscheduled kernel CELL BY CELL, bitwise, and the legs equal each other. The layout that reads A
+   in place ([schedule_bench]'s [pm_hoist]) is refused at every padded site, by the builder and —
+   with its refusal bypassed by dropping A's [Stage] — by [Tensorize] itself, so the builder's gate
+   is the compiler's; at the dividing control it builds and agrees. Every [Tile_mma] of every packed
+   leg rendered the register tiling, read off the compile's census, so a padded site that silently
+   fell back to the scalar loops cannot pass as a measured one. And the same holds with narrow
+   (bf16) storage widened into f32 packed panels, the [tile_prec] seam the padded [schedule_pad] leg
+   does not cover.
 
    The sites cover the motivating n = 76 at the bench's default 64 x 256 blocking (rows padded to
    128, a k extent below its block), both tails at once with the micro-kernel's column tail (n =
@@ -31,6 +32,15 @@
    each [Tile_mma]'s executions per k block, so the claim also pins where the split lands (all [m /
    bm] full blocks on the output, exactly one on the fragment). The bitwise parity above is what
    says the specialized leg computes the same values.
+
+   Where B~ is packed (gh-ocannl-1631), read off each leg's scheduled code as executed B~ stores:
+   the Grid-outermost leg in each of its two B~ packs — whole, once, ahead of its Grid ([grid]), and
+   re-packed per row block ([gridr]) — the first copying each slot of the padded B~ exactly once, as
+   the serial and Grid-below-k legs do, the second once per row block. Which one the builder picks
+   by default is a host-side claim at the bench cells the choice was measured on. And under a
+   k-block loop only the edge k block's B~ stores are guarded: the builder's k-block [Partition]
+   leaves the full blocks a segment whose range folds the zero-fringe guard away. All of them are
+   bitwise-checked like every other leg.
 
    Two host-side claims per padded site say the parity has content where a pad could go wrong: the
    reference's masked rows are not all zero, and the k tail's contribution to the output is not all
@@ -122,21 +132,55 @@ let run ~prec ~name ~ma ~mb ~schedule =
   let ctx = Context.run ctx routine in
   (Context.get_values ctx mc.Tensor.value, Ll_test.renderings routine.Context.mma, !site, !scheduled)
 
-let packed ~layout ~hoist_b ~stage_a ~tile_prec ~bm ~bk ~ma ~mb ~c opt =
-  Bench_gebp.packed_schedule ~layout ~hoist_b ~stage_a ~tile_prec ~bm ~bk ~a:ma.Tensor.value
+let packed ~b_pack ~layout ~hoist_b ~stage_a ~tile_prec ~bm ~bk ~ma ~mb ~c opt =
+  Bench_gebp.packed_schedule ?b_pack ~layout ~hoist_b ~stage_a ~tile_prec ~bm ~bk ~a:ma.Tensor.value
     ~b:mb.Tensor.value ~c opt
 
 (* The packed legs both benches time, all staging both operands: [narrow_gebp_bench]'s two
    ([Serial], [Grid_outermost]) and [schedule_bench]'s four (those plus [Grid_below_k], its
    [packmma_par], and the hoisted-B~ [Grid_outermost], its [pm_mixed]) — gh-ocannl-1562. *)
-type leg = { leg : string; layout : Bench_gebp.layout; hoist_b : bool; what : string }
+type leg = {
+  leg : string;
+  layout : Bench_gebp.layout;
+  hoist_b : bool;
+  b_pack : Bench_gebp.b_pack option;
+  what : string;
+}
 
+(* The [Grid_outermost] leg in both of its in-kernel B~ packs (gh-ocannl-1631), each forced: at
+   these small sites [Bench_gebp.grid_b_pack] picks [Per_row_block] ([gridr]); [grid] packs the
+   whole B~ once, ahead of its Grid. *)
 let legs =
   [
-    { leg = "serial"; layout = Bench_gebp.Serial; hoist_b = false; what = "serial" };
-    { leg = "grid"; layout = Bench_gebp.Grid_outermost; hoist_b = false; what = "Grid" };
-    { leg = "gridk"; layout = Bench_gebp.Grid_below_k; hoist_b = false; what = "Grid-below-k" };
-    { leg = "gridh"; layout = Bench_gebp.Grid_outermost; hoist_b = true; what = "hoisted-B~ Grid" };
+    { leg = "serial"; layout = Bench_gebp.Serial; hoist_b = false; b_pack = None; what = "serial" };
+    {
+      leg = "grid";
+      layout = Bench_gebp.Grid_outermost;
+      hoist_b = false;
+      b_pack = Some Bench_gebp.Once;
+      what = "Grid";
+    };
+    {
+      leg = "gridr";
+      layout = Bench_gebp.Grid_outermost;
+      hoist_b = false;
+      b_pack = Some Bench_gebp.Per_row_block;
+      what = "row-block-panel Grid";
+    };
+    {
+      leg = "gridk";
+      layout = Bench_gebp.Grid_below_k;
+      hoist_b = false;
+      b_pack = None;
+      what = "Grid-below-k";
+    };
+    {
+      leg = "gridh";
+      layout = Bench_gebp.Grid_outermost;
+      hoist_b = true;
+      b_pack = None;
+      what = "hoisted-B~ Grid";
+    };
   ]
 
 let padded s = s.m % s.bm <> 0 || s.k % s.bk <> 0
@@ -174,11 +218,16 @@ let tile_sites s ~(c : Ir.Tnode.t) (o : Ir.Low_level.optimized) =
           execs := (List.hd_exn !execs * (to_ - from_ + 1)) :: !execs
       | Ir.Low_level.Tile_mma { d = tn, _; _ } ->
           found :=
-            ((if Ir.Tnode.equal tn c then "output" else "fragment"), List.hd_exn !execs / k_blocks s)
-            :: !found
+            ((if Ir.Tnode.equal tn c then "output" else "fragment"), List.hd_exn !execs) :: !found
       | _ -> ())
     ~on_exit:(function Ir.Low_level.For_loop _ -> execs := List.tl_exn !execs | _ -> ());
-  List.rev !found
+  (* Summed per kind, in order of first appearance: the k-block split (gh-ocannl-1631) repeats each
+     row-block site once per k segment, and a segment runs only some of the k blocks. *)
+  List.fold (List.rev !found) ~init:[] ~f:(fun acc (kind, n) ->
+      if List.Assoc.mem acc ~equal:String.equal kind then
+        List.map acc ~f:(fun (k', m) -> (k', if String.equal k' kind then m + n else m))
+      else acc @ [ (kind, n) ])
+  |> List.map ~f:(fun (kind, n) -> (kind, n / k_blocks s))
 
 (* The expected sites and the claim's label. Specialized: a row pad, at least one full row block,
    and a k-block loop to hoist the round-trip out of. *)
@@ -191,9 +240,50 @@ let serial_sites_expected s =
       [ ("fragment", (s.m + s.bm - 1) / s.bm) ] )
   else ("the serial leg's every row block accumulates in the output", [ ("output", s.m / s.bm) ])
 
+(* gh-ocannl-1631: B~'s packing stores in a leg's scheduled code, as executions in all and
+   executions under a guard (a [Where] in the stored value — the [Stage] zero fringe — or an
+   enclosing [If]). [None] for a leg that packs no B~ in the kernel (the hoisted panel). *)
+let b_pack_stores (o : Ir.Low_level.optimized) =
+  let b_tile = ref None in
+  Ll_test.walk o.Ir.Low_level.llc ~on_stmt:(function
+    | Ir.Low_level.Tile_mma { b = tn, _; _ } when Option.is_none !b_tile -> b_tile := Some tn
+    | _ -> ());
+  Option.bind !b_tile ~f:(fun bt ->
+      let execs = ref [ 1 ] and ifs = ref 0 and total = ref 0 and guarded = ref 0 in
+      Ll_test.walk o.Ir.Low_level.llc
+        ~on_stmt:(function
+          | Ir.Low_level.For_loop { from_; to_; _ } ->
+              execs := (List.hd_exn !execs * (to_ - from_ + 1)) :: !execs
+          | Ir.Low_level.If _ -> Int.incr ifs
+          | Ir.Low_level.Set { tn; llsc; _ } when Ir.Tnode.equal tn bt ->
+              let n = List.hd_exn !execs in
+              total := !total + n;
+              let where = ref false in
+              Ll_test.walk_scalar llsc ~on_ternop:(function
+                | Ir.Ops.Where -> where := true
+                | _ -> ());
+              if !where || !ifs > 0 then guarded := !guarded + n
+          | _ -> ())
+        ~on_exit:(function
+          | Ir.Low_level.For_loop _ -> execs := List.tl_exn !execs
+          | Ir.Low_level.If _ -> Int.decr ifs
+          | _ -> ());
+      if !total = 0 then None else Some (!total, !guarded))
+
+let k_padded_extent s = k_blocks s * s.bk
+
+(* The legs that pack B~ in the kernel, and the ones of them whose pack sits under the k-block loop,
+   so that the k-block split reaches it. The Grid-outermost leg packs the whole padded B~ once,
+   ahead of its Grid (gh-ocannl-1631), outside any k block. *)
+let in_kernel_b_legs = [ "serial"; "grid"; "gridk" ]
+let k_blocked_b_legs = [ "serial"; "gridk" ]
+let b_once_label = "every in-kernel B~ pack copies each B~ slot exactly once"
+let b_per_row_block_label = "the per-row-block Grid leg re-packs B~ once per row block"
+let b_guard_label = "under the k-block loop, only the edge k block's B~ packing is guarded"
+
 let site_labels s =
   [ "the builder reads the site's m x n x k off the nest"; "the reference is not all zeros" ]
-  @ [ fst (serial_sites_expected s) ]
+  @ [ fst (serial_sites_expected s); b_once_label; b_per_row_block_label; b_guard_label ]
   @ List.map legs ~f:agrees_label
   @ List.map legs ~f:(fun l -> tiled_label l.what)
   @ in_place_labels s
@@ -223,8 +313,8 @@ let check_site ~idx ~prec s =
           run ~prec ~name:(name l.leg) ~ma ~mb
             ~schedule:
               (Some
-                 (packed ~layout:l.layout ~hoist_b:l.hoist_b ~stage_a:true ~tile_prec ~bm:s.bm
-                    ~bk:s.bk ~ma ~mb)) ))
+                 (packed ~b_pack:l.b_pack ~layout:l.layout ~hoist_b:l.hoist_b ~stage_a:true
+                    ~tile_prec ~bm:s.bm ~bk:s.bk ~ma ~mb)) ))
   in
   let ser, _, ser_site, ser_scheduled =
     List.Assoc.find_exn runs ~equal:phys_equal (List.hd_exn legs)
@@ -245,6 +335,32 @@ let check_site ~idx ~prec s =
      Stdio.eprintf "%s: Tile_mma sites [%s], expected [%s]\n%!" (lbl what) (render got)
        (render expected);
    p (lbl what) holds);
+  (let stores leg =
+     let _, (_, _, _, scheduled) = List.find_exn runs ~f:(fun (l, _) -> String.equal l.leg leg) in
+     Option.bind scheduled ~f:(fun (o, _) -> b_pack_stores o)
+   in
+   let report what leg got =
+     Stdio.eprintf "%s: %s leg B~ pack stores (total, guarded) = %s\n%!" (lbl what) leg
+       (Option.value_map got ~default:"none" ~f:(fun (t, g) -> Printf.sprintf "(%d, %d)" t g))
+   in
+   let once = k_padded_extent s * s.n in
+   p_all (lbl b_once_label) in_kernel_b_legs ~f:(fun leg ->
+       let got = stores leg in
+       let holds = Option.exists got ~f:(fun (total, _) -> total = once) in
+       if not holds then report b_once_label leg got;
+       holds);
+   (let got = stores "gridr" in
+    let holds = Option.exists got ~f:(fun (total, _) -> total = (s.m + s.bm - 1) / s.bm * once) in
+    if not holds then report b_per_row_block_label "gridr" got;
+    p (lbl b_per_row_block_label) holds);
+   (* With k padded, the edge k block is the one [bk x n] panel whose guard can fail; a dividing k
+      guards nothing. *)
+   let edge = if s.k % s.bk <> 0 then s.bk * s.n else 0 in
+   p_all (lbl b_guard_label) k_blocked_b_legs ~f:(fun leg ->
+       let got = stores leg in
+       let holds = Option.exists got ~f:(fun (_, guarded) -> guarded = edge) in
+       if not holds then report b_guard_label leg got;
+       holds));
   List.iter runs ~f:(fun (l, (got, _, _, _)) ->
       p_all2
         (lbl (agrees_label l))
@@ -256,8 +372,8 @@ let check_site ~idx ~prec s =
         (lbl (tiled_label l.what))
         (Ll_test.all_rendered ~what:(lbl l.what) Ir.C_syntax.Mma_register_tiled census));
   let in_place ~stage_a =
-    packed ~layout:Bench_gebp.Grid_outermost ~hoist_b:true ~stage_a ~tile_prec ~bm:s.bm ~bk:s.bk ~ma
-      ~mb
+    packed ~b_pack:None ~layout:Bench_gebp.Grid_outermost ~hoist_b:true ~stage_a ~tile_prec ~bm:s.bm
+      ~bk:s.bk ~ma ~mb
   in
   let raised schedule =
     match run ~prec ~name:(name "inplace") ~ma ~mb ~schedule:(Some schedule) with
@@ -319,6 +435,22 @@ let edge_content s =
     p_exists (lbl "the k tail contributes to some output cell") (List.range 0 s.m) ~f:(fun row ->
         List.exists (List.range 0 s.n) ~f:(fun col -> Float.(k_tail_contribution s ~row ~col <> 0.)))
 
+(* gh-ocannl-1631: [Bench_gebp.grid_b_pack]'s default at the cells it was measured on (rog, f32):
+   the whole-B~ pack where the per-row-block tiles outgrow the per-chunk cap and the Grid would
+   otherwise decline to serial ([narrow_gebp_bench]'s default 512^3 at 64 x 256), the per-row-block
+   panels where they fit (gh-ocannl-1564's 128^3 at 16 x 32 and 76^3 at 64 x 256). Read under the
+   default [cc_grid_private_bytes_cap]. *)
+let () =
+  let label =
+    "the Grid-outermost B~ pack defaults to whole-once at 512^3 64x256 and per-row-block at 128^3 \
+     16x32 and 76^3 64x256"
+  in
+  let pick n bm bk = Bench_gebp.grid_b_pack ~elem_bytes:4 ~stage_a:true ~bm ~bk ~ni:n ~nj:n ~nk:n in
+  p label
+    (match (pick 512 64 256, pick 128 16 32, pick 76 64 256) with
+    | Bench_gebp.Once, Bench_gebp.Per_row_block, Bench_gebp.Per_row_block -> true
+    | _ -> false)
+
 let () =
   List.iteri sites ~f:(fun idx s ->
       edge_content s;
@@ -347,8 +479,8 @@ let () =
         let ma, mb = operands ~prec:Ir.Ops.single s in
         let unpadded ~c opt =
           List.filter
-            (packed ~layout:Bench_gebp.Serial ~hoist_b:false ~stage_a:true ~tile_prec:None ~bm:s.bm
-               ~bk:s.bk ~ma ~mb ~c opt) ~f:(function
+            (packed ~b_pack:None ~layout:Bench_gebp.Serial ~hoist_b:false ~stage_a:true
+               ~tile_prec:None ~bm:s.bm ~bk:s.bk ~ma ~mb ~c opt) ~f:(function
             | Sched.Pad _ -> false
             | _ -> true)
         in

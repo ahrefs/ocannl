@@ -95,7 +95,8 @@ let work_ratio pads =
    B~ panel packed at [k_o] sits outside the parallel construct, which the pool re-enters once per k
    block. - [Grid_outermost]: [Grid i_o { k_o { ... } }] — one dispatch spanning the whole triple
    (gh-ocannl-473 / gh-ocannl-475): [narrow_gebp_bench]'s [packmma_par] and [schedule_bench]'s
-   [pm_bpk], [pm_mixed] and [pm_hoist]; anything packed at [k_o] lands inside the Grid body. Both
+   [pm_bpk], [pm_mixed] and [pm_hoist]; anything packed at [k_o] lands inside the Grid body, so an
+   in-kernel B~ is either re-packed per row block or packed whole ahead of the Grid ([b_pack]). Both
    Grid layouts zero the output in its own Grid-split nest (a whole-node zeroing is not legal beside
    a hardware-annotated loop), so each thread zeroes the rows it then accumulates. *)
 type layout = Serial | Grid_below_k | Grid_outermost
@@ -118,9 +119,54 @@ let in_place_a_refusal ~bm ~bk ~ni ~nk =
               (List.map pads ~f:(fun { axis; extent; block; _ } ->
                    Printf.sprintf "%s extent %d (block %d)" (axis_name axis) extent block))))
 
-let packed_schedule ~layout ?(hoist_b = false) ?(stage_a = true) ~tile_prec ?tile ~bm ~bk
+(* How a [Grid_outermost] layout packs an in-kernel B~ (gh-ocannl-1631). [Serial] and [Grid_below_k]
+   pack one [bk x n] panel per k block at [k_o], outside the row-block loop: once per k block,
+   shared by every row block. Under [Grid_outermost] [k_o] sits inside the Grid body, so:
+
+   - [Per_row_block]: the panel anchored at [k_o] is re-packed by every row block, [ceil(ni / bm)]
+   times per k block, into per-chunk privatized storage — concurrently, so with no more row blocks
+   than workers the redundant copies cost the critical path nothing. - [Once]: the stage tiles over
+   [k_o] as well, which leaves it no outer-part loop to anchor at, so its copy nest goes to the
+   routine root, ahead of the Grid: the whole [K x n] B~ (k padded) is packed once — each k block's
+   panel once — serially, and read by every row block.
+
+   [grid_b_pack] picks [Once] exactly when the per-row-block layout's per-chunk tiles (the B~ panel,
+   the A~ tile, and the masked accumulator fragment when rows pad) outgrow
+   [cc_grid_private_bytes_cap]: past it the renderer cannot privatize them and declines the whole
+   Grid to serial ([narrow_gebp_bench]'s default n = 512 at 64 x 256: [packmma_par] ran at 2.08 ms
+   against serial [packmma]'s 1.78, and at 0.91 packing once, on rog). Below it the serial pre-pass
+   is pure critical-path cost: gh-ocannl-1564's cells at n = 48 to 128 ran 8-24% slower packing
+   once. And only while the whole B~ fits [whole_b_bytes_cap]: it is routine-scope scratch, which cc
+   declares on the stack, so the cap is half the 8 MiB default main-thread stack. A hoisted B~ is
+   packed once at link time either way and keeps its per-k-block panel. *)
+type b_pack = Per_row_block | Once
+
+let whole_b_bytes_cap = 4 * 1024 * 1024
+
+let grid_b_pack ~elem_bytes ~stage_a ~bm ~bk ~ni ~nj ~nk =
+  let per_chunk =
+    elem_bytes * ((bk * nj) + (if stage_a then bm * bk else 0) + if ni % bm <> 0 then bm * nj else 0)
+  in
+  if padded ~extent:nk ~block:bk * nj * elem_bytes > whole_b_bytes_cap then Per_row_block
+  else if per_chunk > Lazy.force Ir.C_syntax.per_chunk_private_bytes_cap then Once
+  else Per_row_block
+
+(* The k-block split (gh-ocannl-1631): with k padded, every element the packing nests copy is
+   guarded by [bk*k_o + k_i < nk] (a [Where] storing the zero fringe), in every k block, although
+   only the last block's guard can fail. Partitioning [k_o] at its last full block — the [Partition]
+   [Sched.Pad]'s contract names for exactly this — leaves the full blocks a segment whose range
+   decides every such guard, which [Sched.apply]'s trailing simplify folds away, and keeps the
+   guards in the edge block alone: the k analog of [Tensorize]'s full-row-block split
+   (gh-ocannl-1563). The micro-kernel itself carries no k guard either way (its reduction masks are
+   discharged against the zero-filled operands), so values are unchanged. Empty when k divides or
+   has no full block. *)
+let k_block_split ~nk ~bk ~k_o =
+  let full = nk / bk in
+  if nk % bk = 0 || full = 0 then [] else [ fst (Sched.partition ~axis:k_o ~breakpoints:[ full ]) ]
+
+let packed_schedule ~layout ?(hoist_b = false) ?(stage_a = true) ?b_pack ~tile_prec ?tile ~bm ~bk
     ~(a : Ir.Tnode.t) ~(b : Ir.Tnode.t) ~(c : Ir.Tnode.t) (opt : LL.optimized) : Sched.schedule =
-  let { i; j; k; ni; nk; _ } = find_site opt in
+  let { i; j; k; ni; nj; nk } = find_site opt in
   (if not stage_a then
      match in_place_a_refusal ~bm ~bk ~ni ~nk with
      | Some why -> invalid_arg ("Bench_gebp.packed_schedule: " ^ why)
@@ -129,6 +175,13 @@ let packed_schedule ~layout ?(hoist_b = false) ?(stage_a = true) ~tile_prec ?til
   let pad_ops =
     List.map pads ~f:(fun { axis; block; _ } ->
         Sched.Pad { axis = (match axis with `I -> i | `K -> k); to_multiple_of = block })
+  in
+  let b_pack_resolved =
+    match b_pack with
+    | Some p -> p
+    | None ->
+        let prec = Option.value tile_prec ~default:(Lazy.force b.Ir.Tnode.storage_prec) in
+        grid_b_pack ~elem_bytes:(Ir.Ops.prec_in_bytes prec) ~stage_a ~bm ~bk ~ni ~nj ~nk
   in
   let grid = match layout with Serial -> false | Grid_below_k | Grid_outermost -> true in
   let outer_i = if grid then LL.Grid else LL.Serial in
@@ -163,9 +216,14 @@ let packed_schedule ~layout ?(hoist_b = false) ?(stage_a = true) ~tile_prec ?til
   let tz, _lane = Sched.tensorize ?tile ~i:i_i ~j ~k:k_i ~simd_width:1 () in
   pad_ops @ zops @ [ sp_i; sp_k ] @ sink j [ k_o ] @ sink i_i [ k_o ]
   @ (match layout with Serial | Grid_below_k -> sink i_o [ k_o ] | Grid_outermost -> [])
-  @ [ stage ~hoisted:hoist_b b [ k_i; j ] ]
+  @ [
+      stage ~hoisted:hoist_b b
+        (match (layout, hoist_b, b_pack_resolved) with
+        | Grid_outermost, false, Once -> [ k_o; k_i; j ]
+        | _ -> [ k_i; j ]);
+    ]
   @ (if stage_a then [ stage a [ i_i; k_i ] ] else [])
-  @ [ tz ]
+  @ [ tz ] @ k_block_split ~nk ~bk ~k_o
 
 (* The operand values the bench mints, at index pair [(row, column)] of each operand: drawn through
    [Bench_checksum.mix] so that no shift of any index is a symmetry, and exactly representable at
