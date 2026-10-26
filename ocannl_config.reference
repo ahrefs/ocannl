@@ -797,9 +797,12 @@
 # others'. Off by default: on gpt2_mini/CUDA it brought the first gain forward from the end of the
 # search to its start, but at about 30% more search time for the same crown (gh-ocannl-1138). On
 # gpt2_mini_train/HIP it moved only near-tie crowns, at about three times the compile cost per
-# single, and in neither mode did a composite of singles beat the seeded plan (gh-ocannl-1528). It
-# shapes what a search times, not what a crowned schedule means, so a warm schedule cache replays
-# its winner whatever the setting. No profile sets it.
+# single, and in neither mode did a composite of singles beat the seeded plan (gh-ocannl-1528).
+# Either way a single reading at least twice the 10 ms batch target settles its CUDA/HIP calibration
+# without the depth-2 probe (gh-ocannl-1627): on that minix workload a bare single's timing call
+# fell from 23 launches and ~3.0 s to 17 and ~2.2 s, the crowns unchanged. It shapes what a search
+# times, not what a crowned schedule means, so a warm schedule cache replays its winner whatever the
+# setting. No profile sets it.
 #autotune_staffed_singles=false
 
 # Which units of each beam entry a beam-expansion round of `Autotune.tune` expands
