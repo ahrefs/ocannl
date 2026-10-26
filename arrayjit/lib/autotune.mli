@@ -1344,8 +1344,9 @@ val finals_contenders : margin:float -> width:int -> ('a * float) list -> ('a * 
 
 val finals_order : 'a list -> 'a list
 (** The finals' windows, in order: the contenders, then the same in reverse, so each is timed twice
-    and a drift across the finals reaches every contender alike. Adjacent equal contenders share one
-    compile. *)
+    and a drift across the finals reaches every contender alike. Every window is a compile of its
+    own, the adjacent pair in the middle included, so each starts from the state a search
+    candidate's window starts from. *)
 
 val finals_crown : ('a * float list) list -> ('a * float) option
 (** The finals' crown from each contender's admitted finals readings: a contender's finals reading

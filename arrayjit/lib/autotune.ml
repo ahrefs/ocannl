@@ -10260,19 +10260,24 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
           (* gh-ocannl-1635: the beam finals ([finals_contenders]). The pool is every entry the
              search ranked as an incumbent: the final beam first, then [displaced], each entry once.
              Its contenders are recompiled from their saved forms -- every candidate's buffers went
-             at its timing (gh-ocannl-1326) -- in [finals_order], one compile per run of equal
-             contenders and one resident at a time, each window under the contender's own label and
-             digest and after the timing-state restore every window starts from (gh-ocannl-1621).
-             The crown then follows the finals' readings alone; [best_ms] stays the crown's search
-             reading, the number its label, spread and digest were recorded with. A refused or
-             failed finals window is the finals' own: it is not a candidate refusal or decline, so
-             it neither enters [timings_contended] nor makes the search uncacheable -- a contender
-             left with no reading makes the finals inconclusive, and the crown is then the first
-             readings' head, as without finals. Under a budget, each recompile starts only while the
-             elapsed time plus the costliest candidate compile so far stays within it -- the
-             projection a candidate attempt is held to -- and once one may not start, no later one
-             does; a window stops once the budget passes. Neither marks the search as cut: every
-             candidate the menu proposed was already timed. *)
+             at its timing (gh-ocannl-1326) -- in [finals_order], one compile PER WINDOW and one
+             resident at a time, each window under the contender's own label and digest and after
+             the timing-state restore every window starts from (gh-ocannl-1621). A compile per
+             window, even for the adjacent pair in the middle of the order, because that restore
+             covers only the nodes [search_ctx] holds: the buffers a compile allocates afresh (an
+             optimizer's state before its first step, say) are reset only by the next compile, so a
+             reused compile's second window would start from state the first one trained -- every
+             window starts as a search candidate's single window does. The crown then follows the
+             finals' readings alone; [best_ms] stays the crown's search reading, the number its
+             label, spread and digest were recorded with. A refused or failed finals window is the
+             finals' own: it is not a candidate refusal or decline, so it neither enters
+             [timings_contended] nor makes the search uncacheable -- a contender left with no
+             reading makes the finals inconclusive, and the crown is then the first readings' head,
+             as without finals. Under a budget, each recompile starts only while the elapsed time
+             plus the costliest candidate compile so far stays within it -- the projection a
+             candidate attempt is held to -- and once one may not start, no later one does; a window
+             stops once the budget passes. Neither marks the search as cut: every candidate the menu
+             proposed was already timed. *)
           (let finals_pool =
              let seen_digests = Hash_set.create (module String) in
              List.filter (!beam @ !displaced) ~f:(fun ((c : compiled), _) ->
@@ -10310,10 +10315,7 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
                   follows the phase. *)
                progress_phase_begin "finals" None;
                let readings = Hashtbl.create (module String) in
-               let groups =
-                 List.group (finals_order contenders) ~break:(fun ((a : compiled), _) (b, _) ->
-                     not (String.equal a.digest_after b.digest_after))
-               in
+               let groups = List.map (finals_order contenders) ~f:(fun entry -> [ entry ]) in
                List.iter groups ~f:(fun group ->
                    let entry, _ = List.hd_exn group in
                    let label = label_of entry in
