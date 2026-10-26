@@ -161,8 +161,13 @@ val set_equal : delayed_var_ref -> delayed_var_ref -> unit
     inference.
 
     When both references are dimension variables or both are row variables, this means they are
-    precisely equal. When one is a dimension variable and the other is a row variable, this means
-    they have the same number of total elements. *)
+    precisely equal: two rows get the same axes, not only the same product, whatever either
+    reference has been solved to so far (gh-ocannl-1617). When one is a dimension variable and the
+    other is a row variable, this means they have the same number of total elements.
+
+    A row reference bound by an inference that has since closed keeps only its row's product
+    ([solved_dim]), so a Row-Row call involving it raises [Row.Shape_error]: relate the rows before
+    the closure. *)
 
 val set_scale : factor:int -> delayed_var_ref -> delayed_var_ref -> unit
 (** Asserts a multiplicative relation between two dimension variable references: the first ref

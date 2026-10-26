@@ -43,7 +43,7 @@ Test 2 - Multiple constraints (a=d, c=7):
   Output z2 shape: 3,3
   Dimensions: a=3, b=5, c=7, d=3
 
-Test 3 - Row variable constraints (row1=row2 total elements):
+Test 3 - Row variable constraints (row1 = row2 as rows):
   Input r1 shape: 2,3,4
   Input r2 shape: 3,5
   Output r3 shape: 2,3,5

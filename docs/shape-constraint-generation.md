@@ -379,7 +379,9 @@ sh1_O \approx sh2_O
 `set_equal ref1 ref2` emits:
 
 - dimension/dimension: `alpha = beta`;
-- row/row: `rho_1 \approx rho_2`;
+- row/row: `rho_1 \approx rho_2`, whatever either reference has been solved to (a row
+  reference's solved value is only its product; gh-ocannl-1617), and refused for a reference bound
+  before the last closure, whose row is gone;
 - dimension/row: `Total_elems([rho], Strided_var(coeff=1, var=alpha))`.
 
 `set_scale ~factor large small` is restricted to dimension variables. For

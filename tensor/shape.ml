@@ -2239,11 +2239,58 @@ let%track7_sexp set_sym_dim (delayed_var_ref : delayed_var_ref) (sym : Ir.Indexi
              ^ ": it is bound to a row variable (set_sym_dim does not support row variables)",
              [] )
 
+(* A row reference bound before the last closure (or session reset) no longer names its row: [var]
+   is a variable of the reset environment, or a projection-local one, and [solved_dim] holds only
+   the row's product. Row-Row equality cannot be stated from that, and the product is not a
+   substitute (gh-ocannl-1617), so such a reference is refused. Binding a reference in the open work
+   records it in [open_refs] ({!touch_ref}); a closure empties that list. *)
+let refuse_closed_row_ref ~other (delayed_ref : delayed_var_ref) =
+  if not (List.mem !open_refs delayed_ref.uid ~equal:Int.equal) then
+    let label = delayed_ref.var_ref.ref_label in
+    let held =
+      match delayed_ref.var_ref.solved_dim with
+      | Some product -> [%string ", which keeps only its row's product %{product#Int}"]
+      | None -> ""
+    in
+    raise
+    @@ Row.Shape_error
+         ( [%string
+             "Shape.set_equal: the row variable reference %{label} was bound by shape inference \
+              that has since closed%{held}; equating it with the row reference %{other} needs the \
+              row itself, which the closure did not keep. Call set_equal before the closure, or \
+              capture the row afresh in an operation of the open work."],
+           [] )
+
 let set_equal delayed_ref1 delayed_ref2 =
   check_ref_live delayed_ref1;
   check_ref_live delayed_ref2;
   (* TODO: use provenance from the row variables once we have it there. *)
   match (delayed_ref1, delayed_ref2) with
+  | { var = `Row row_var1; _ }, { var = `Row row_var2; _ } ->
+      (* Two row references are equal rows, whatever either one's solved state (gh-ocannl-1617): a
+         row reference's [solved_dim] holds only its product, so deciding on it first tied the rows
+         by product, or compared two products, depending on what inference had solved by the time of
+         the call. A solution a reference holds already has its own constraint on [var] ([set_dim]
+         pushed it, or the solver reached it), so nothing else is needed here. *)
+      refuse_closed_row_ref ~other:delayed_ref2.var_ref.ref_label delayed_ref1;
+      refuse_closed_row_ref ~other:delayed_ref1.var_ref.ref_label delayed_ref2;
+      active_constraints :=
+        Row.Row_eq
+          {
+            r1 = Row.get_row_for_var Row.empty_provenance row_var1;
+            r2 = Row.get_row_for_var Row.empty_provenance row_var2;
+            origin =
+              [
+                {
+                  lhs_name = delayed_ref1.var_ref.ref_label;
+                  lhs_kind = `Output;
+                  rhs_name = delayed_ref2.var_ref.ref_label;
+                  rhs_kind = `Output;
+                  operation = Some "Shape.set_equal Row-Row";
+                };
+              ];
+          }
+        :: !active_constraints
   | { var_ref = { solved_sym = Some sym1; _ }; _ }, { var_ref = { solved_sym = Some sym2; _ }; _ }
     ->
       if Ir.Indexing.equal_static_symbol sym1 sym2 then ()
@@ -2298,25 +2345,6 @@ let set_equal delayed_ref1 delayed_ref2 =
                   rhs_name = delayed_ref2.var_ref.ref_label;
                   rhs_kind = `Output;
                   operation = Some "Shape.set_equal Dim-Dim";
-                };
-              ];
-          }
-        :: !active_constraints
-  | { var = `Row row_var1; _ }, { var = `Row row_var2; _ } ->
-      (* Both are row variables - create row equality constraint *)
-      active_constraints :=
-        Row.Row_eq
-          {
-            r1 = Row.get_row_for_var Row.empty_provenance row_var1;
-            r2 = Row.get_row_for_var Row.empty_provenance row_var2;
-            origin =
-              [
-                {
-                  lhs_name = delayed_ref1.var_ref.ref_label;
-                  lhs_kind = `Output;
-                  rhs_name = delayed_ref2.var_ref.ref_label;
-                  rhs_kind = `Output;
-                  operation = Some "Shape.set_equal Row-Row";
                 };
               ];
           }

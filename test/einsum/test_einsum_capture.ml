@@ -196,12 +196,12 @@ let capture_for_shape_validation () =
   let%op r2 = { r2 = uniform1 (); o = [ 3; 5 ] } in
   let%op r3 = r1 +* "a, ..row1.., b; ..row2.., c => a, ..row1.., c" [ "row1"; "row2" ] r2 in
 
-  (* Constraint: row1 and row2 should have same total elements *)
+  (* Constraint: row1 and row2 are the same row (the same axes, not only the same product) *)
   Shape.set_equal row1 row2;
 
   let ctx = Train.forward_once ctx r3 in
 
-  Stdio.printf "\nTest 3 - Row variable constraints (row1=row2 total elements):\n";
+  Stdio.printf "\nTest 3 - Row variable constraints (row1 = row2 as rows):\n";
   Stdio.printf "  Input r1 shape: %s\n" (Shape.to_string_hum r1.shape);
   Stdio.printf "  Input r2 shape: %s\n" (Shape.to_string_hum r2.shape);
   Stdio.printf "  Output r3 shape: %s\n" (Shape.to_string_hum r3.shape);

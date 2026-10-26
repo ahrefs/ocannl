@@ -662,6 +662,12 @@ inference closes, their dimension variables are equated, as are their row variab
 dimension with a row has the row's product. Across a closure (say a `Train.forward_once` between
 the operations) the reference carries its solved value, which for a row variable is the product.
 
+`Shape.set_equal` on two row references equates the rows themselves, not their products, whatever
+either reference has been solved to so far (gh-ocannl-1617): rows `2, 3` and `6` do not unify.
+Product equality is what relates a dimension to a row (`set_equal` on a dimension and a row
+reference, or `Shape.set_dim` on a row reference). A row reference bound before a closure has kept
+only its product, so `set_equal` refuses it in a Row-Row pair; relate rows before the closure.
+
 Capturing requires the specification to be a **literal string**: every capture pattern in
 `tensor/ppx_op.ml` and `tensor/ppx_cd.ml` matches on a string constant, so
 `x ++ "ab => a" ["b"]` works while `let s = "ab => a" in x ++ s ["b"]` does not expand as a

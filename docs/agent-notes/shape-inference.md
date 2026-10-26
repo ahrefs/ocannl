@@ -64,6 +64,16 @@ files.
   `test/operations/capture_per_call.ml`, which assert the reference unsolved after both
   registrations: an operand of fixed size solves it at that step's Stage1 and exercises only the
   solved arm.
+- `Shape.set_equal` on two row references is `Row_eq` in every solved state (gh-ocannl-1617): its
+  Row-Row arm matches on `var` BEFORE the `solved_sym`/`solved_dim` arms. A row reference's
+  `solved_dim` is only its product, and it is set early (by `set_dim`, or by
+  `update_delayed_var_refs` at the registering step's Stage1 when an operand is fixed), so deciding
+  on it first tied two rows by product, or compared two products, depending on what was solved
+  by the time of the call. `Total_elems` is for a row against a number or a dimension variable only
+  (`set_dim` on a row, the Dim-Row arm). A Row-Row pair with a reference bound before the last
+  closure is refused, not product-tied: such a reference's uid is no longer in `open_refs`, its
+  `var` is dead. Pinned under both registration and argument orders by
+  `test/operations/set_equal_rows.ml`.
 - Padded (`=`-mode) windows: max/tropical-family accumulations lower with clamped window bounds
   and demand NO margins (gh-504: `Row.proj_env.clamp_padded`; interval-based range guards in
   `Assignments.to_low_level`); add-family keeps physical halos committed as tensor-node identity
