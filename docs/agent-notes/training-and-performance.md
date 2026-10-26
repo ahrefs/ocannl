@@ -147,13 +147,11 @@ files.
   walk `model_default` runs, exposed so `test/operations/model_load_tiebreak` drives it on cc with a
   CUDA-shaped record and capability; `Autotune.model_explain` lists what the model sees of each
   whole-routine candidate and, since gh-ocannl-1438, of each segment of its per-segment
-  substitution (`x_segments`: the preset first, then the leaves labeled as `F_sketch` entries). The swizzled staged fp8 twin beats its plain twin, but at the
-  gh-ocannl-1190 shape neither is the argmin: an unstaged tensorized leaf ranks strictly below
-  every staged one (the staging copies add ops and the per-block global reads are the same; until
-  gh-ocannl-1442 the shared tiles also added distinct-cell bytes at the DRAM rate). Every
-  tensorized leaf there is compute-bound at `peak_flops`, so the score cannot see load paths at
-  all: making `model_default` pick a staged twin needs the model to price what staging buys, not a
-  tie-break.
+  substitution (`x_segments`: the preset first, then the leaves labeled as `F_sketch` entries). The swizzled staged fp8 twin beats its plain twin
+  on the tie-break; since gh-ocannl-1495 the device-gather term (below) also puts every staged leaf
+  of the gh-ocannl-1190 site below the unstaged ones, so the whole-site walk picks a swizzled twin
+  wherever the device prices gathers (`model_load_tiebreak`'s `gather-priced` and CUDA
+  `backend record` claims). Without a gather rate an unstaged leaf is the argmin there.
 - The ranking score's `cache_capacity_bytes` and `cache_bandwidth` are calibrated, not looked up
   (gh-ocannl-1253): the working set sums per-block footprints that co-resident blocks share, so
   the boundary sits above any L2. `tools/calibrate_cache_capacity.exe`
@@ -174,13 +172,31 @@ files.
   the advisory class ceiling (8e12 on CUDA, 6e12 on HIP), and a cache bandwidth below it reads as
   it. The two rates land together or not at all: an issue rate under the ceiling's DRAM makes the
   untiled preset compute-bound and the `auto` gate stops seeding (`cost_model_reuse` pins it).
-  `Tile_mma` work stays at `peak_flops` only where the backend's own `mma_accepts` hook accepts
-  it (`Cost_model.accepted_tile_mma_flops`, the operand-load count's walk); declined or unreached
+  `Tile_mma` work runs on the matrix units (at `mma_rate`, gh-ocannl-1495) only where the
+  backend's own `mma_accepts` hook accepts it (`Cost_model.accepted_tile_mma_flops`, the operand-load count's walk); declined or unreached
   tile-MMA work runs its scalar fallback and is priced as scalar. Under the per-block model the
   chip-resident nodes (`ru_scratch`) leave the DRAM leg, their cost carried by the fitted issue
   rate for the geometry it was fitted on: an approximation, not a model of copies, barriers or
   shared gathers. The staffed start's gate tag names both rates, since its per-segment decisions
   rest on them.
+- **Tile-MMA rate and device gathers** (gh-ocannl-1495): `mma_rate` (`model_mma_rate`) prices
+  the work `mma_accepts` accepts, read as at most `peak_flops`; `device_gather_rate`
+  (`model_device_gather_rate`) prices `Cost_model.device_operand_gathers` -- the operand-load
+  count's per-lane `Gather` instructions from a `Device` place, the same walk and unit (executions
+  per lane group times per-lane instructions) -- added to the compute leg at the `Tile_mma`
+  contexts' fill. Unset, the score is bit-identical. Shared gathers, `ldmatrix` and whole-fragment
+  loads (wmma, `simdgroup_load`, rocWMMA) are never priced, so the term exists only on CUDA's
+  inline-PTX arms; HIP and Metal ship no constants. Fit with `gh1442_agreement.py --fit-mma` over
+  a timed fp8mm site (`gh1253_cells.sh` wires it, with `nomma` and `mmaonly` arms): the rate is the
+  geometric mean of the staged leaves' filled work over time, the gather rate of the unstaged
+  leaves' gathers over their excess. On rog (46d84231 data) 1.37e13 and 2.93e10: unstaged predicted
+  0.372/0.534 ms against 0.373/0.532 measured. Residuals, not fixed: the fill reads the 32-row
+  staged tile as 0.70 full (predicted 1.44x its 16-row twin, measured 0.76x: tile reuse, not a
+  compute-leg effect), so the pick is the swizzled 16x32x32 (0.191 ms), not the plain 32x32x32
+  winner (0.162 ms); plain against swizzled stays the load tie-break's call. On CUDA's seeded
+  default path the clause is still moot: `model_admits` admits no tensorized leaf there (a
+  numerics policy, not a ranking one); it is reachable at gate 0, with seeding off, and in
+  `model_explain`.
 - What the rates do and do not fix, measured (`benchmarks/gh1253_cells.sh`, 2026-10-21, rog CUDA,
   minix HIP unified, tuf HIP discrete). The seeded weight-gradient kernel is predicted within
   0.69-1.35x at b8 and b256 on all three (3-12x too fast at the class peak), and at b1 everywhere
@@ -191,7 +207,8 @@ files.
   occupancy effect no leg models; the argmin was a 2x-slower 16x16x8/4x4 on rog and tuf), and at
   the gh-ocannl-1190 fp8 site every tensorized leaf ties at `peak_flops` while staged leaves ran
   2.3x faster than unstaged and the fastest was the plain 32x32x32 twin, not a swizzled one. The
-  operand-load count orders that top pair wrongly, so pricing it is not the staging term either.
+  operand-load count orders that top pair wrongly, so pricing all of it is not the staging term
+  either; pricing its device-gather part is (gh-ocannl-1495, above).
 - **The score prices how a scalar blocktile's work is LAUNCHED, not how it is laid out**
   (gh-ocannl-1278, gh-ocannl-1479). Before the launch fill every scalar leaf of a site scored the
   same compute leg: a plain leaf (batch loops serial in the kernel) tied its `bgrid` twin and

@@ -59,6 +59,9 @@
 # seeding gate (no threshold pin): what that profile ships, joined to the same measured rows.
 # gh-ocannl-1479, the launch fill: every listing cell gains a `nofill` arm, the same constants with
 # model_fill_threads=none, so one timing TSV gives the agreement before and after the fill term.
+# gh-ocannl-1495: and `nomma` (model_mma_rate and model_device_gather_rate none: the score before
+# them) and `mmaonly` (the gather rate none) arms; at an fp8mm site the agreement also fits the two
+# rates from the `fitted`/`shipped` arm's explain lines (gh1442_agreement.py --fit-mma).
 # FIT_FILL=1 with RANK_ONLY=1 runs the issue cell first (MULTIPROCESSORS=P passes --multiprocessors
 # where the device reports none: Metal) and passes its fitted constants to the listing and pick
 # cells, which otherwise run the shipped ones. PICK_GATE0=1 adds pick cells with the seeding off
@@ -214,7 +217,8 @@ for flag in ${tiers[@]+"${tiers[@]}"}; do
   case "$flag" in --ocannl_model_dram_bandwidth=*) ;; *) ceilings+=("$flag") ;; esac
 done
 ceilings+=(--ocannl_model_issue_rate=none --ocannl_model_dram_bandwidth=none
-  --ocannl_model_fill_threads=none)
+  --ocannl_model_fill_threads=none --ocannl_model_mma_rate=none
+  --ocannl_model_device_gather_rate=none)
 for site in ${SITES:-wgrad:8,128,256,1024 wgrad:256,128,256,1024 fp8mm:8192,32,4096}; do
   kind=${site%%:*}
   dims=${site#*:}
@@ -237,6 +241,18 @@ for site in ${SITES:-wgrad:8,128,256,1024 wgrad:256,128,256,1024 fp8mm:8192,32,4
   cell "rank_${name}_nofill" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
     "--ocannl_backend=$backend" --ocannl_gpu_default_sketch_min_reduction=32 \
     ${nofill[@]+"${nofill[@]}"} --ocannl_model_fill_threads=none
+  # gh-ocannl-1495: the same constants without its two terms (the score before it) and with the
+  # tile-MMA rate alone, so one timing TSV gives the agreement of each step.
+  nomma=()
+  for flag in ${model[@]+"${model[@]}"}; do
+    case "$flag" in --ocannl_model_mma_rate=* | --ocannl_model_device_gather_rate=*) ;; *) nomma+=("$flag") ;; esac
+  done
+  cell "rank_${name}_nomma" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
+    "--ocannl_backend=$backend" --ocannl_gpu_default_sketch_min_reduction=32 \
+    ${nomma[@]+"${nomma[@]}"} --ocannl_model_mma_rate=none --ocannl_model_device_gather_rate=none
+  cell "rank_${name}_mmaonly" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
+    "--ocannl_backend=$backend" --ocannl_gpu_default_sketch_min_reduction=32 \
+    ${nomma[@]+"${nomma[@]}"} --ocannl_model_device_gather_rate=none
   picks=()
   if [[ ${RANK_ONLY:-0} == 1 ]]; then
     pick_cells=()
@@ -268,9 +284,15 @@ for site in ${SITES:-wgrad:8,128,256,1024 wgrad:256,128,256,1024 fp8mm:8192,32,4
     done
   fi
   if $timed; then
+    # gh-ocannl-1495: the tile-MMA and device-gather rates, fitted on a site with tensorized
+    # leaves (the fp8 matmul).
+    fit=()
+    if [[ $kind == fp8mm ]]; then fit=(--fit-mma "$out/rank_${name}_${fitted_arm}.out"); fi
     python3 "$root/benchmarks/gh1442_agreement.py" "$out/rank_${name}.tsv" \
       "ceilings=$out/rank_${name}_ceilings.out" "nofill=$out/rank_${name}_nofill.out" \
-      "${fitted_arm}=$out/rank_${name}_${fitted_arm}.out" ${picks[@]+"${picks[@]}"} |
+      "nomma=$out/rank_${name}_nomma.out" "mmaonly=$out/rank_${name}_mmaonly.out" \
+      "${fitted_arm}=$out/rank_${name}_${fitted_arm}.out" ${fit[@]+"${fit[@]}"} \
+      ${picks[@]+"${picks[@]}"} |
       tee "$out/rank_${name}_agreement.txt" || failed=$((failed + 1))
   fi
 done
