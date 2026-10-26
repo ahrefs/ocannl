@@ -3116,60 +3116,11 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
   (* The hit refusing a per-statement store of [tn]: a capture walk's own, or a covered scratch read
      the emit walk met in [tn]'s code. *)
   let statement_hit tn = Option.first_some (owner_hit tn) (Hashtbl.find local_dependents tn) in
-  (* A read of routine-local scratch in [tn]'s own setters in [code], which a RAW capture (a
-     packed-uniform producer's, see [proc_contains_set_from_vec]) stores as written: no walk meets
-     it, so the hit is read off the code (local review of the gh-ocannl-1620 PR). *)
-  let live_operands_policy =
-    Access_fold.
-      {
-        discarded_operands = Skip;
-        gated_operands = Visit;
-        dead_loops = Skip;
-        local_scopes = Visit;
-        guards = Ignore;
-        scan_implicit = Skip;
-      }
-  in
-  (* gh-ocannl-1645: a scratch read a template of [owner] may carry after all. [owner] is already
-     committed virtual, so refusing its store is a refusal of the routine (it has no materialization
-     fallback), and recompiling a step in the lineage that ran it is the ordinary case: the first
-     compile stored [owner]'s template while [tn] was undecided, and only its finalization placed
-     [tn] [Local]. The read is admitted when (1) this routine reads [tn] live and its own earlier
-     writes strictly cover every such read, so the template's replays in this routine read this
-     routine's scratch, and (2) [owner]'s INHERITED template already reads [tn], so no read site in
-     any routine gains a scratch dependency the lineage did not already carry
-     ([instantiate_computations] replays every component). Without (2), a declared-virtual consumer
-     would newly store a template reading the scratch, and a later routine replaying it without
-     covering writes would read uninitialized scratch where it is refused today (gh-ocannl-1646,
-     which owns the replay-time half of the rule: a stored template's scratch reads are covered at
-     replay or refused at replay, never silently uninitialized). *)
-  let carried_local_read ~owner tn =
-    Tn.Placements.known_virtual plc owner
-    && (match live_local tn with `Covered -> true | `Unread | `Uncovered -> false)
-    &&
-    match Hashtbl.find inherited_computations owner with
-    | None -> false
-    | Some comps ->
-        let open Access_fold in
-        let reads = ref false in
-        let hooks =
-          {
-            (hooks ()) with
-            scalar =
-              (fun _ () sc ->
-                (match sc with
-                | Get (t, _) | Get_dynamic { tn = t; _ } -> if Tn.equal t tn then reads := true
-                | _ -> ());
-                Continue ());
-          }
-        in
-        List.exists comps ~f:(fun (_, body) ->
-            fold ~policy:live_operands_policy ~hooks ~init:() body;
-            !reads)
-  in
-  let raw_local_read tn code =
+  (* The first read satisfying [f] in the right-hand sides of [tn]'s OWN setters in [code] -- the
+     code a template of [tn] replays at a read site, since [instantiate_computations] drops sibling
+     setters -- under [policy]. *)
+  let setter_read ~policy tn code ~f =
     let open Access_fold in
-    let policy = live_operands_policy in
     let found = ref None in
     let in_scalar =
       {
@@ -3177,11 +3128,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
         scalar =
           (fun _ () sc ->
             (match sc with
-            | (Get (t, _) | Get_dynamic { tn = t; _ })
-              when Option.is_none !found
-                   && Tn.Placements.known_non_virtual plc t
-                   && Tn.Placements.known_not_materialized plc t
-                   && not (carried_local_read ~owner:tn t) ->
+            | (Get (t, _) | Get_dynamic { tn = t; _ }) when Option.is_none !found && f t ->
                 found := Some t
             | _ -> ());
             Continue ());
@@ -3198,7 +3145,69 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
       | _ -> Continue ()
     in
     fold ~policy ~hooks:{ (hooks ()) with statement } ~init:() code;
-    Option.map !found ~f:(fun t -> Capture_reads_local t)
+    !found
+  in
+  (* gh-ocannl-1645: a scratch read a template of [owner] may carry after all. [owner] is already
+     committed virtual, so refusing its store is a refusal of the routine (it has no materialization
+     fallback), and recompiling a step in the lineage that ran it is the ordinary case: the first
+     compile stored [owner]'s template while [tn] was undecided, and only its finalization placed
+     [tn] [Local]. The read is admitted when (1) this routine reads [tn] live and its own earlier
+     writes strictly cover every such read, so the template's replays in this routine read this
+     routine's scratch, and (2) [owner]'s INHERITED template already reads [tn], so no read site in
+     any routine gains a scratch dependency the lineage did not already carry
+     ([instantiate_computations] replays every component). Without (2), a declared-virtual consumer
+     would newly store a template reading the scratch, and a later routine replaying it without
+     covering writes would read uninitialized scratch where it is refused today (gh-ocannl-1646,
+     which owns the replay-time half of the rule: a stored template's scratch reads are covered at
+     replay or refused at replay, never silently uninitialized).
+
+     (2) under-approximates what the inherited template replays, the safe direction: only its
+     [owner]'s own setters (a sibling setter of a captured shared loop never replays -- local review
+     of the gh-ocannl-1645 PR), outside [Where] arms (one may be dead at every read site), outside
+     dead loops and discarded operands. *)
+  let carried_local_read ~owner tn =
+    let replayed =
+      Access_fold.
+        {
+          discarded_operands = Skip;
+          gated_operands = Skip;
+          dead_loops = Skip;
+          local_scopes = Visit;
+          guards = Ignore;
+          scan_implicit = Skip;
+        }
+    in
+    Tn.Placements.known_virtual plc owner
+    && (match live_local tn with `Covered -> true | `Unread | `Uncovered -> false)
+    &&
+    match Hashtbl.find inherited_computations owner with
+    | None -> false
+    | Some comps ->
+        List.exists comps ~f:(fun (_, body) ->
+            Option.is_some (setter_read ~policy:replayed owner body ~f:(Tn.equal tn)))
+  in
+  (* A read of routine-local scratch in [tn]'s own setters in [code], which a RAW capture (a
+     packed-uniform producer's, see [proc_contains_set_from_vec]) stores as written: no walk meets
+     it, so the hit is read off the code (local review of the gh-ocannl-1620 PR). Every operand that
+     may execute counts here, the safe direction for a refusal. *)
+  let raw_local_read tn code =
+    let policy =
+      Access_fold.
+        {
+          discarded_operands = Skip;
+          gated_operands = Visit;
+          dead_loops = Skip;
+          local_scopes = Visit;
+          guards = Ignore;
+          scan_implicit = Skip;
+        }
+    in
+    Option.map
+      (setter_read ~policy tn code ~f:(fun t ->
+           Tn.Placements.known_non_virtual plc t
+           && Tn.Placements.known_not_materialized plc t
+           && not (carried_local_read ~owner:tn t)))
+      ~f:(fun t -> Capture_reads_local t)
   in
   (* Walks a setter's right-hand side with the setter as the owner of any hit in it. *)
   let owning_rhs tn f =

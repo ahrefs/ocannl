@@ -504,7 +504,8 @@ files.
   ordinary case — the first compile stores the virtual `w.grad`'s template while `y.grad` is
   undecided, and only its finalization places `y.grad` `Local`. Such an owner's read is admitted
   (recorded as no hit) when this routine reads the node live and strictly covers it, AND the
-  owner's INHERITED template already reads it, so no read site gains a scratch dependency the
+  owner's INHERITED template already reads it in the owner's own setters (a shared loop's sibling
+  setter never replays; `Where` arms do not count), so no read site gains a scratch dependency the
   lineage did not carry. The uncovered case never reaches it (`decide_placements` refuses it first),
   so the coverage half only adds the read-in-a-dead-arm (`Unread`) exclusion. **Shared rule with
   gh-ocannl-1646:** a stored template's scratch reads are covered at replay or refused at

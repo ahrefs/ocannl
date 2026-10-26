@@ -130,6 +130,8 @@ carried: no covering write: routine A placed v as routine-local scratch and comm
 carried: no covering write: routine B is refused, naming v routine-local scratch: true
 carried: a partial write: routine A placed v as routine-local scratch and committed w virtual, its template reading v: true
 carried: a partial write: routine B is refused, naming v routine-local scratch: true
+carried: only a sibling setter of the inherited capture reads v: routine A placed v as routine-local scratch and committed w virtual, its template reading v: true
+carried: only a sibling setter of the inherited capture reads v: routine B is refused, naming v routine-local scratch: true
 virtual consumer where (i < 4) x v: routine A defers v, its template reading the merge buffer: true
 virtual consumer where (i < 4) x v: routine B compiles: true
 virtual consumer where (i < 4) x v: routine B declares no merge buffer and does not read v: true

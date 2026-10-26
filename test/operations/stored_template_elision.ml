@@ -1076,8 +1076,8 @@ let case_carried_accepted ~label ~tag ~w_code ~read_w ~expected =
         (label ^ ": the reading agrees with the materialized one")
         (List.hd_exn got) (List.hd_exn got_m) ~f:Float.equal
 
-let case_carried_refused ~label ~tag ~b_code =
-  let ctx, _, _, v, w, x = carried_scratch ~label ~tag ~w_code:loop_w ~read_w:loop_read_w in
+let case_carried_refused ?(w_code = loop_w) ~label ~tag ~b_code () =
+  let ctx, _, _, v, w, x = carried_scratch ~label ~tag ~w_code ~read_w:loop_read_w in
   let out = mk (tag ^ "out") in
   materialize out;
   match consume_local ctx ~name:("sts_" ^ tag ^ "_b") (b_code ~w ~x ~v ~out) with
@@ -1096,10 +1096,31 @@ let case_carried_reads () =
   case_carried_accepted ~label:"carried, covered: a per-statement committed-virtual consumer"
     ~tag:"cc2" ~w_code:cell_w ~read_w:cell_read_w
     ~expected:(Array.init dim ~f:(fun i -> if i = 0 then 501.5 else sentinel));
-  case_carried_refused ~label:"carried: no covering write" ~tag:"cu1" ~b_code:(fun ~w ~x ~v ~out ->
-      seq (loop_w ~w ~x ~v) (loop_read_w ~out ~w));
-  case_carried_refused ~label:"carried: a partial write" ~tag:"cu2" ~b_code:(fun ~w ~x ~v ~out ->
+  case_carried_refused ~label:"carried: no covering write" ~tag:"cu1"
+    ~b_code:(fun ~w ~x ~v ~out -> seq (loop_w ~w ~x ~v) (loop_read_w ~out ~w))
+    ();
+  case_carried_refused ~label:"carried: a partial write" ~tag:"cu2"
+    ~b_code:(fun ~w ~x ~v ~out ->
       List.reduce_exn ~f:seq [ set v [| fixed 0 |] (c 7.); loop_w ~w ~x ~v; loop_read_w ~out ~w ])
+    ();
+  (* A's template of [w] is captured from a shared loop whose materialized SIBLING setter reads [v]:
+     the stored body holds that read, but consumption drops sibling setters, so [w]'s replays never
+     read [v] and the lineage carries no scratch dependency of [w] for B to extend (local
+     review). *)
+  let sibling_tag = "cs1" in
+  let sibling = mk (sibling_tag ^ "sib") in
+  materialize sibling;
+  case_carried_refused ~label:"carried: only a sibling setter of the inherited capture reads v"
+    ~tag:sibling_tag
+    ~w_code:(fun ~w ~x ~v ->
+      let s = sym () in
+      loop_n s dim
+        (seq
+           (set w [| iter s |] (get x [| iter s |]))
+           (set sibling [| iter s |] (get v [| iter s |]))))
+    ~b_code:(fun ~w ~x ~v ~out ->
+      List.reduce_exn ~f:seq [ fill_v v; loop_w ~w ~x ~v; loop_read_w ~out ~w ])
+    ()
 
 let () =
   case_merge ();
