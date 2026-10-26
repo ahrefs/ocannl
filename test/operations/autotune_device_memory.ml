@@ -376,7 +376,10 @@ let () =
      %!"
     r1.Autotune.candidates_timed r1.Autotune.candidates_failed refused (!peak1 - start1);
   p "the cold search completed" (Result.is_ok result && searched r1);
-  p "it timed more than one candidate" (r1.Autotune.candidates_timed >= 2);
+  (* An admitted-window count: a refused, hopeless or budget-stopped window moves it
+     (gh-ocannl-1632). *)
+  Tune_counts.claim ~count:`Admitted ~tag:"cold search" [ r1 ] "it timed more than one candidate"
+    (r1.Autotune.candidates_timed >= 2);
   p "no candidate was declined for device memory" (memory_declines r1 = 0 && refused = 0);
   Result.iter result ~f:(check_values "the cold search's winner computes the right values");
 

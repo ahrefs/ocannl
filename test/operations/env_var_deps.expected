@@ -105,6 +105,7 @@ Programs starting a search with a run that can select cc, each pinning the cc ve
   test/operations/dune, test symbolic_extent_launch (Autotune.tune): independent, by its marker
   test/operations/dune, test tune_arm_a_replay (Autotune.tune_deferred, Train.tune_placements): independent, by its marker
   test/operations/dune, test tune_call_budget (Train.tune_placements): independent, by its marker
+  test/operations/dune, test tune_count_gate (Autotune.tune): pinned: tune_count_gate.ml calls `Fissioned_chain.small_menu_envelope` at initialization, before any search
   test/operations/dune, test tune_footprint_default (Train.tune_placements): independent, by its marker
   test/operations/dune, test tune_placements_config_refusal (Train.tune_placements): independent, by its marker
   test/operations/dune, test tune_strict_replay (Autotune.tune_deferred): independent, by its marker

@@ -148,6 +148,15 @@
  (preprocess
   (pps ppx_ocannl)))
 
+; Count claims over a physical search's report, gated on the departures that move the count
+; (gh-ocannl-1632): the one place a test decides whether "this many timed / deduplicated" is exact.
+
+(library
+ (name tune_counts)
+ (package neural_nets_lib)
+ (modules tune_counts)
+ (libraries base stdio arrayjit.autotune arrayjit.verdict))
+
 ; The scripted-search harness of the autotune tests: the measurement, attempt and budget-clock
 ; seams, per-search settings and cache-I/O recording around a search whose ranking the test scripts.
 ; A test reading the search's stderr captures it through [stderr_capture].

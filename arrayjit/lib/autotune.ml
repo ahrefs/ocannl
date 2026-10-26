@@ -307,6 +307,9 @@ type report = {
       (** Admitted windows that were dispersed (gh-ocannl-1558). See the interface. *)
   timings_hopeless : int;
       (** Windows cut as hopeless, their candidates unranked (gh-ocannl-1527). See the interface. *)
+  timings_retimed : int;
+      (** Timing attempts on a digest an earlier window of this search let leave the dedup set
+          (gh-ocannl-1632). See the interface. *)
   timing_decisions : (batch_settle * batch_admission * int) list;
       (** How this call's search timing calls settled and were admitted (gh-ocannl-1263). See the
           interface. *)
@@ -427,6 +430,7 @@ let no_search_report ~timing =
     timings_unreadable = 0;
     timings_dispersed = 0;
     timings_hopeless = 0;
+    timings_retimed = 0;
     timing_decisions = [];
     candidates_contended = 0;
     default_refused = false;
@@ -7203,11 +7207,11 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
       progress_line "search_done"
         (Printf.sprintf
            "outcome=%s timed=%d contended=%d timings_retried=%d unbatched=%d unreadable=%d \
-            dispersed=%d hopeless=%d failed=%d rounds=%d budget_cut=%b baseline_refused=%b \
-            privatize_dropped=%d %s best_ms=%s best=%S"
+            dispersed=%d hopeless=%d retimed=%d failed=%d rounds=%d budget_cut=%b \
+            baseline_refused=%b privatize_dropped=%d %s best_ms=%s best=%S"
            (outcome_name r.outcome) r.candidates_timed r.timings_contended r.timings_retried
            r.timings_unbatched r.timings_unreadable r.timings_dispersed r.timings_hopeless
-           r.candidates_failed r.rounds_run r.budget_cut
+           r.timings_retimed r.candidates_failed r.rounds_run r.budget_cut
            (Option.is_some r.baseline_refusal)
            (List.sum (module Int) r.privatize_drops ~f:(fun d -> d.count))
            (progress_costs ()) (progress_ms r.best_ms) r.best_label);
@@ -8055,6 +8059,7 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
                     timings_unreadable = 0;
                     timings_dispersed = 0;
                     timings_hopeless = 0;
+                    timings_retimed = 0;
                     timing_decisions = timing_decisions ();
                     candidates_contended = 0;
                     default_refused = false;
@@ -8468,6 +8473,17 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
            gh-ocannl-552 regression of never proposing or attributing it. *)
         let contended_digests = Hash_set.create (module String) in
         if Option.is_some !baseline_refusal then Hash_set.add contended_digests base_digest;
+        (* gh-ocannl-1632: every digest a window let leave [seen] -- refused, cut as hopeless,
+           stopped by the budget -- and the timing attempts a later equivalent seed then made on one
+           instead of deduplicating. The count is what makes a claim about how many candidates were
+           timed or deduplicated attributable: on a quiet host it is zero, and a departure that
+           nothing re-proposes leaves it zero too. *)
+        let departed_digests = Hash_set.create (module String) and n_timings_retimed = ref 0 in
+        if Option.is_some !baseline_refusal then Hash_set.add departed_digests base_digest;
+        let depart digest =
+          Hash_set.remove seen digest;
+          Hash_set.add departed_digests digest
+        in
         (* Live search state for an honest partial report. Each counter starts at the amount of work
            completed so far and is updated at its ordinary accounting site below. [best_so_far] is
            updated after every successful timing, including midway through seed enumeration. *)
@@ -8665,6 +8681,7 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
             timings_unreadable = !n_timings_unreadable;
             timings_dispersed = !n_timings_dispersed;
             timings_hopeless = !n_timings_hopeless;
+            timings_retimed = !n_timings_retimed;
             timing_decisions = timing_decisions ();
             candidates_contended = candidates_contended ();
             default_refused = default_refused ();
@@ -8979,6 +8996,7 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
                     None)
                   else (
                     Hash_set.add seen c.digest_after;
+                    if Hash_set.mem departed_digests c.digest_after then Int.incr n_timings_retimed;
                     match
                       (* The backend's own classifier decides whether a launch or sync failure is this
                candidate's fault: the driver error is all the evidence there is, and only the
@@ -9047,7 +9065,7 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
                            its own. *)
                         Int.incr n_timings_hopeless;
                         if spec_expects_mma spec then Int.incr n_mma_timed;
-                        Hash_set.remove seen c.digest_after;
+                        depart c.digest_after;
                         logf
                           "%s: NOT RANKED, hopeless: its first %d samples read %.4f ms, over \
                            the                            %.4f ms (%gx what it would have to beat) \
@@ -9060,7 +9078,7 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
                         (* The budget passed during this candidate's timing: it is not ranked, and a
                            later floor of the same digest must compile and time afresh rather than
                            dedup against a timing that never finished. *)
-                        Hash_set.remove seen c.digest_after;
+                        depart c.digest_after;
                         logf "%s: NOT TIMED, the budget passed during its timing (digest %s)"
                           (spec_label spec) (dshort c.digest_after);
                         release_candidate c;
@@ -9093,7 +9111,7 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
                         (* Unlike a launch/compile decline, a refused window (contention, a
                            degenerate reading) is not a property of this schedule. An equivalent
                            later seed is a useful retry, not a dedup. *)
-                        Hash_set.remove seen c.digest_after;
+                        depart c.digest_after;
                         logf "%s: NOT TIMED, %s (digest %s)" (spec_label spec)
                           (refusal_reason refusal) (dshort c.digest_after);
                         release_candidate c;
@@ -10254,6 +10272,7 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
               timings_unreadable = !n_timings_unreadable;
               timings_dispersed = !n_timings_dispersed;
               timings_hopeless = !n_timings_hopeless;
+              timings_retimed = !n_timings_retimed;
               timing_decisions = timing_decisions ();
               candidates_contended = candidates_contended ();
               default_refused = default_refused ();

@@ -1320,12 +1320,12 @@ type report = {
           replay and search-disabled calls, which time nothing in this process. Lets a completed
           search distinguish transient measurement refusal from structural candidate declines and
           retry when appropriate. Counts WINDOWS: a refused digest is dropped from the dedup set so
-          an equivalent seed can retry it, so one candidate refused twice contributes two. Sound
-          evidence for "was this search's measurement set complete?", and for nothing narrower — see
-          [candidates_contended] and [default_refused] for the per-candidate facts. Despite the
-          name, it counts refusals for EVERY cause: it includes the [timings_unbatched] and
-          [timings_unreadable] windows, and {!contention_refusals} is the part left to contention
-          alone. *)
+          an equivalent seed can retry it ([timings_retimed] counts those retries), so one candidate
+          refused twice contributes two. Sound evidence for "was this search's measurement set
+          complete?", and for nothing narrower — see [candidates_contended] and [default_refused]
+          for the per-candidate facts. Despite the name, it counts refusals for EVERY cause: it
+          includes the [timings_unbatched] and [timings_unreadable] windows, and
+          {!contention_refusals} is the part left to contention alone. *)
   timings_retried : int;
       (** Baseline and candidate timing calls that started a fresh contention retry (Metal queued
           timing only). Counts each discarded first window once, whether its retry was admitted,
@@ -1367,6 +1367,17 @@ type report = {
           cut while {!on_candidate_measured} scripts the readings: the physical window says nothing
           about how a scripted candidate ranks. A cut tensorized candidate counts in [mma_timed] and
           sets no [mma_best_ms]. Zero on a cache hit. *)
+  timings_retimed : int;
+      (** Candidate timing attempts on a digest an earlier window of this search let leave its dedup
+          set (gh-ocannl-1632): a window refused for any cause (the baseline's included), cut as
+          hopeless, or stopped by the budget drops its digest so an equivalent later seed is timed
+          afresh rather than deduplicated, and each such later attempt counts once, whatever its own
+          window yields. This is the departure a claim about how many candidates were timed or
+          deduplicated reads: a window-counting family counter ([fiss_sketch_timed],
+          [split_reduce_timed], [mma_timed]) or a dedup moves off its quiet-host value only through
+          it or a [budget_cut], and a departure nothing re-proposes leaves it zero. Not the
+          Metal-only [timings_retried], which counts fresh retries inside one timing call. Zero
+          where no window departed, on cache replay and on search-disabled calls. *)
   timing_decisions : (batch_settle * batch_admission * int) list;
       (** How this call's baseline and candidate timing calls settled their depth and were admitted
           (gh-ocannl-1263): one [(settle, admission, calls)] per pair that occurred, in constructor
@@ -1863,9 +1874,10 @@ val no_search_report : timing:timing_mode -> report
     - [search_done] ({!tune}, exactly once per call, with its report): [routine], [elapsed_s],
       [outcome] ({!outcome_name}), [timed], [contended], [timings_retried], [unbatched],
       [unreadable] ([timings_unreadable]), [dispersed] ([timings_dispersed]), [hopeless]
-      ([timings_hopeless]), [failed], [rounds], [budget_cut], [baseline_refused] (whether
-      [baseline_refusal] is [Some _]) and [privatize_dropped] (the report's [privatize_drops] counts
-      summed; gh-ocannl-1438), [attempts], [compile_s], [timing_s], [best_ms], [best].
+      ([timings_hopeless]), [retimed] ([timings_retimed]), [failed], [rounds], [budget_cut],
+      [baseline_refused] (whether [baseline_refusal] is [Some _]) and [privatize_dropped] (the
+      report's [privatize_drops] counts summed; gh-ocannl-1438), [attempts], [compile_s],
+      [timing_s], [best_ms], [best].
     - [placements_start] ({!Train.tune_placements}, once, before anything is searched or replayed):
       [working_bytes], [device_free] and [device_total] (gh-ocannl-1424). The first is the
       {!Ir.Alloc_census} live working-pool bytes (process-wide, counted at the shared allocator

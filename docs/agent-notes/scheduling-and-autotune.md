@@ -258,9 +258,16 @@ files.
   candidates before reading a zero per-segment timing count as a regression. The dedup holds only
   while the twin's digest is in the dedup set: a window refused for any cause, cut as hopeless or
   stopped by the budget drops it, so on a loaded host the per-segment twin is retried and timed
-  (gh-ocannl-1484). A claim that counts dedups gates on the report (`timings_contended`,
-  `timings_hopeless`, `budget_cut` all clear) and skips as `Environment` otherwise; the
-  forced-refusal control is `with_contended_test_windows` around the tune. The expanded zero's
+  (gh-ocannl-1484). The report counts each such later attempt (`timings_retimed`, gh-ocannl-1632),
+  and every claim pinning how many candidates a physical search timed or deduplicated goes through
+  `Tune_counts.claim` (`test/support/tune_counts.ml`): `` `Reached `` for a count of windows reached
+  (the family `*_timed` counters, which count refused and cut windows too) or of dedups, gated on
+  `timings_retimed` and `budget_cut`; `` `Admitted `` for `candidates_timed`, gated on every
+  departure. A closed gate is an `Environment` skip with the departures on stderr. A count that
+  cannot move needs no gate: a scripted search (`Scripted_search`: no contention, no hopeless cut),
+  or, with no budget set, a family count equal to its candidate count (nothing in the family
+  deduplicates, so nothing can be re-timed). `tune_count_gate` holds the gate's shape and its forced-contention control
+  (`with_contended_test_windows` re-times the seed a quiet 16x16 matmul search deduplicates). The expanded zero's
   loops follow the output's AXIS order (`Expand_zero`), the site's chain its NEST order; the conv
   expansion reorders the zero nest through `c_d_syms` before `annotate`, since thread identity
   across nests is positional.
