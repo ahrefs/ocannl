@@ -1,0 +1,34 @@
+bs_where_f32: values match the select's semantics, bitwise: true
+bs_where_f32: the select calls the blend helper: true
+bs_where_f32: no short-circuiting spelling of the select remains: true
+bs_where_zero: values match the select's semantics, bitwise: true
+bs_where_zero: the select calls the blend helper: true
+bs_where_zero: no short-circuiting spelling of the select remains: true
+bs_where_f64: values match the select's semantics, bitwise: true
+bs_where_f64: the select calls the blend helper: true
+bs_where_f64: no short-circuiting spelling of the select remains: true
+bs_where_hcond: values match the select's semantics, bitwise: true
+bs_where_hcond: the select calls the blend helper: true
+bs_where_hcond: no short-circuiting spelling of the select remains: true
+bs_where_bf16: values match the select's semantics, bitwise: true
+bs_where_bf16: the select calls the blend helper: true
+bs_where_bf16: no short-circuiting spelling of the select remains: true
+bs_relu_gate: values match the select's semantics, bitwise: true
+bs_relu_gate: the select calls the blend helper: true
+bs_relu_gate: no short-circuiting spelling of the select remains: true
+bs_sat01_gate: values match the select's semantics, bitwise: true
+bs_sat01_gate: the select calls the blend helper: true
+bs_sat01_gate: no short-circuiting spelling of the select remains: true
+bs_where_zero: no conditional branch on the select's lines (host compiler): true
+bs_relu_gate: no conditional branch on the select's lines (host compiler): true
+bs_index_guard: values: true
+bs_index_guard: an index guard keeps its [?:] and calls no blend: true
+bs_gather_guard: values: true
+bs_gather_guard: a value-guarded gather keeps its [?:] and calls no blend: true
+bs_nested_guard: values: true
+bs_nested_guard: the value select blends around the inner guard's [?:]: true
+the reference gradient is discriminating (zero and nonzero cells): true
+pool backward: the inlined gradient equals the reference, bitwise: true
+pool backward: the inlined gradient equals the inlining-off run, bitwise: true
+pool backward: the inlined gradient's selects call the blend: true
+pool backward: no conditional branch on the select's lines (host compiler): true

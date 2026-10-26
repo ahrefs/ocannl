@@ -1003,6 +1003,32 @@ let attributed_in ({ lines; frame; files; _ } : parsed) op_class ~anchor =
   in
   count_range attributed ~frame op_class ~from_:0 ~to_:(Array.length attributed - 1)
 
+(** Whether a branch mnemonic is CONDITIONAL: {!is_branch} less the unconditional jumps ([b], [jmp],
+    [jmpq]). *)
+let is_conditional_branch ~mnemonic =
+  is_branch ~mnemonic && not (List.mem [ "b"; "jmp"; "jmpq" ] mnemonic ~equal:String.equal)
+
+(** [conditional_branches_in p ~anchor] is [(branches, instructions)]: how many conditional branch
+    instructions, and how many instructions at all, [p] attributes to a source line in [anchor] —
+    attribution as in {!attributed_in}, by the last [.loc] above an instruction. The question it
+    answers is whether a construct COMPILED to a branch (gh-ocannl-1622: a value select whose arm
+    holds a load), which a loop census cannot tell from the loop's own control; the instruction
+    count is there so that a construct the compiler folded away, or an anchor naming nothing, reads
+    as [0] instructions rather than as a branch-free success. *)
+let conditional_branches_in ({ lines; files; _ } : parsed) ~anchor =
+  let current = ref false and branches = ref 0 and instructions = ref 0 in
+  Array.iter lines ~f:(function
+    | Some (Directive (".loc" :: fno :: lno :: _)) -> (
+        current :=
+          match (Int.of_string_opt fno, Int.of_string_opt lno) with
+          | Some f, Some l -> Set.mem files f && Set.mem anchor l
+          | _ -> false)
+    | Some (Insn { mnemonic; _ }) when !current ->
+        Int.incr instructions;
+        if is_conditional_branch ~mnemonic then Int.incr branches
+    | _ -> ());
+  (!branches, !instructions)
+
 (** {!census_in} over an assembly listing parsed for this one question. Convenient where a caller
     asks about one construct in one file; a caller asking about many should {!parse} once. *)
 let census op_class ~asm ~source_basename ~anchor =

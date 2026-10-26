@@ -49,6 +49,8 @@
 
 /* No longer need export macros since we're using textual prepending */
 
+static inline float ocannl_select_f32(int c, float a, float b) { return c ? a : b; }
+
 
 #ifdef __FLT16_MAX__
   #define HAS_NATIVE_FLOAT16 1
@@ -126,6 +128,8 @@ ARRAYJIT_BUILTIN_LINKAGE float bfloat16_to_single(uint16_t bf16)
   /* Main logic. */
   /* where fwd */
   where[0] =
-      ((cond_condition[0]) != 0.0 ? ( HALF_TO_FLOAT(a_then_val[0])) : ( bfloat16_to_single(b_else_val[0])));
+      ocannl_select_f32((cond_condition[0]) != 0.0,
+        HALF_TO_FLOAT(a_then_val[0]),
+        bfloat16_to_single(b_else_val[0]));
   /* end */
 }

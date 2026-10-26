@@ -1844,6 +1844,21 @@ ARRAYJIT_BUILTIN_LINKAGE uint64_t uint4x32_to_uint64_uniform_lane(uint4x32_t x, 
   ]
 
 let builtins =
-  integer_power_builtins ~prefix:"static inline" ~supports_double:true ~dialect:`C @ builtins
+  (* gh-ocannl-1622: the value select [C_syntax]'s [select_blend_syntax] renders on cc. A call
+     evaluates its arguments, so once inlined both arms are plain values and the compiler
+     if-converts ([fcsel] / [bsl] on AArch64, [cmov] / blends on x86) instead of branching around an
+     arm's load, as it must for a short-circuiting [?:]. It is a true select, not a multiply by a
+     mask: the selected arm's bits come out unchanged, NaN, infinities and signed zeros included. *)
+  let select_builtins =
+    List.map
+      (fun (typ, name) ->
+        ( name,
+          Printf.sprintf "static inline %s %s(int c, %s a, %s b) { return c ? a : b; }\n" typ name
+            typ typ,
+          [] ))
+      [ ("float", "ocannl_select_f32"); ("double", "ocannl_select_f64") ]
+  in
+  integer_power_builtins ~prefix:"static inline" ~supports_double:true ~dialect:`C
+  @ select_builtins @ builtins
 
 let source = includes ^ String.concat "" (List.map (fun (_, def, _) -> def) builtins)

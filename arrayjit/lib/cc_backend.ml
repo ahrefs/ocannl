@@ -1735,6 +1735,25 @@ struct
               ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2))
               ^^ string op_suffix))
 
+  (* gh-ocannl-1622: value selects render as a call to one of [Builtins_cc.builtins]'
+     [ocannl_select_*] helpers at the two compute precisions it defines; every other precision keeps
+     the [?:] spellings above. *)
+  let select_blend_syntax prec =
+    let call name truth a b =
+      let open PPrint in
+      group
+        (string (name ^ "(")
+        ^^ truth ^^ string ","
+        ^^ ifflat (space ^^ a) (nest 2 (break 1 ^^ a))
+        ^^ string ","
+        ^^ ifflat (space ^^ b) (nest 2 (break 1 ^^ b))
+        ^^ string ")")
+    in
+    match prec with
+    | Ops.Single_prec _ -> Some (call "ocannl_select_f32")
+    | Ops.Double_prec _ -> Some (call "ocannl_select_f64")
+    | _ -> None
+
   let unop_syntax prec op v =
     match op with
     | Ops.Uint4x32_to_prec_uniform1 ->

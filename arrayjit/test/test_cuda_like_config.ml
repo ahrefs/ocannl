@@ -66,9 +66,13 @@ let () =
     (bridges Cuda.unop_syntax Cuda.binop_syntax Cuda.ternop_syntax)
     ~f:(String.is_prefix ~prefix:"(__nv_fp8_e5m2)(");
   p_all "both shared dialects preserve operand evaluation contracts"
-    [ (Cuda.binop_syntax, Cuda.ternop_syntax); (Hip.binop_syntax, Hip.ternop_syntax) ]
-    ~f:(fun (binop_syntax, ternop_syntax) ->
-      List.is_empty (Cs.operand_conditionality_violations ~binop_syntax ~ternop_syntax))
+    [
+      (Cuda.binop_syntax, Cuda.ternop_syntax, Cuda.select_blend_syntax);
+      (Hip.binop_syntax, Hip.ternop_syntax, Hip.select_blend_syntax);
+    ]
+    ~f:(fun (binop_syntax, ternop_syntax, select_blend_syntax) ->
+      List.is_empty
+        (Cs.operand_conditionality_violations ~binop_syntax ~ternop_syntax ~select_blend_syntax))
 
 (* gh-ocannl-707: the vendor-header table reaches the EFFECTIVE configs. It is checked through
    [kernel_ident] of the instantiated syntax rather than by membership in the top-level list: [Make]

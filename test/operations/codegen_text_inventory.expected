@@ -35,6 +35,7 @@ pp_static_symbol [Ir.Indexing.Doc_helpers.pp_static_symbol]
 pp_symbol [Ir.Indexing.Doc_helpers.pp_symbol]
 pp_tn_offset [Ir.C_syntax.C_syntax.pp_tn_offset]
 render_mma_fragment_scope [Ir.C_syntax.C_syntax.render_mma_fragment_scope]
+select_blend_syntax [Ir.C_syntax.C_syntax_config.select_blend_syntax]
 serial_loop [Ir.C_syntax.C_syntax.serial_loop]
 ternop_syntax [Ir.C_syntax.C_syntax_config.ternop_syntax Ir.C_syntax.Pure_C_config.ternop_syntax Ir.Cuda_like_config.Make.ternop_syntax]
 to_doc [Ir.Assignments.to_doc Ir.Low_level.to_doc Ir.Ndarray.to_doc]
@@ -147,6 +148,15 @@ test/operations/accum_width.ml [run by @test/operations/runtest-accum_width]
     "= single_to_bfloat16(v"
     "Vectorized reduction rendering"
     "single_to_bfloat16((bfloat16_to_single("
+test/operations/branchless_select.ml [run by @test/operations/runtest-branchless_select; also pins text this scan cannot name: untraced callback, opaque aggregate component, unsupplied application]
+    "? ("
+    "bs_gather_guard"
+    "bs_index_guard"
+    "bs_nested_guard"
+    "bs_pool_inlined"
+    "ocannl_select_f"
+    "ocannl_select_f32("
+    ... ^ "("
 test/operations/cache_key_agreement.ml [run by @test/operations/runtest-cache_key_agreement]
 test/operations/canonical_render.ml [renders generated text in memory; run by @test/operations/runtest-canonical_render; also pins text this scan cannot name: opaque aggregate component, mutation or unseen buffer write]
     "?"
@@ -589,6 +599,7 @@ so, and the goldens' families say which backends a change has to be run on.
 @test/einsum/runtest-inline_permuted_view-c_fwd
 @test/einsum/runtest-test_cse-cse_d_fwd
 @test/operations/runtest-accum_width
+@test/operations/runtest-branchless_select
 @test/operations/runtest-cache_key_agreement
 @test/operations/runtest-canonical_render
 @test/operations/runtest-cc_kernel_outline

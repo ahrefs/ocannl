@@ -24,6 +24,26 @@ files.
   escape either check by being left off a hand-maintained list. `Ops.prec` cannot be derived that
   way (its constructors carry the phantom-typed `precision` witness), so `C_syntax.all_precs` keeps
   a hand list next to an exhaustive match that turns a new precision into a build error.
+- **One per-instance exception evaluates MORE than the classifier requires: cc's branchless value
+  selects** (gh-ocannl-1622). A `?:` whose arm holds a load from a buffer argument compiles to a
+  compare and a conditional branch (C forbids evaluating the unselected arm, and the compiler
+  cannot prove the load dereferenceable), so a backward pass inlining the ReLU and max-pool gates
+  ran at a speed that followed activation sparsity (gh-ocannl-1557). `pp_scalar_op` renders a
+  `Where` / `Relu_gate` / `Satur01_gate` that `Low_level.speculable_select` admits through the
+  backend's `select_blend_syntax` instead — on cc a call to `ocannl_select_f32`/`_f64`
+  (`Builtins_cc`), whose arguments always evaluate, so the compiler if-converts; `None` everywhere
+  else. The truth expression is the short-circuiting spelling's own test, so values are identical,
+  NaN conditions and signed zeros included. Never blend a select the predicate refuses: `Where` is
+  also how lowering guards a read that may be out of range (gh-504 clamps, virtualization's range
+  and unit-solve conditions, `Schedule`'s masks — all over `Embed_index`), and gh-343's gather guard
+  is a VALUE condition over a `Get_dynamic` arm whose row runs out of range; the predicate refuses
+  exactly those two shapes. The operand-evaluation checker gains the converse leg: a blend must
+  render all three operands with no `?`/`&&`/`||`. Consequences for the classifier's consumers: the
+  floors stay floors, `a_gated` over-approximates (conservative), and the upper cost walk's per-arm
+  maximum under-counts only where both arms are non-trivial. Two traps for a test of it
+  (`test/operations/branchless_select`): clang if-converts `c ? a[i] : b[i]` on base by selecting
+  the ADDRESS, so a branch claim needs a constant arm (`where cond g 0`, the backward shape); and a
+  routine-local array is dereferenceable, so the realistic leg materializes the gated gradient.
 - The upper cost walk charges every operand that is *rendered*, which is more than can *execute*,
   and the two differ in exactly one way (gh-ocannl-637): a `Local_scope` anywhere in a statement's
   expression renders as statements hoisted OUT of it — `C_syntax.pp_scalar` returns definitions
