@@ -46,6 +46,21 @@
  (modules bench_seed_parity)
  (libraries base ocannl))
 
+; The post-compile re-timing of a shipped routine with a stated spread (gh-ocannl-1524): the
+; tuner's own timing calls, repeated and interleaved, summarized as a median with its range and a
+; paired ratio. A library so that test/operations/bench_retime_spread pins the summaries.
+
+(library
+ (name bench_retime)
+ (package neural_nets_lib)
+ (modules bench_retime)
+ (libraries
+  base
+  arrayjit.utils
+  arrayjit.context
+  arrayjit.autotune
+  bench_design))
+
 (library
  (name bench_conv_model)
  (package neural_nets_lib)
@@ -91,6 +106,8 @@
   bench_conv_model
   bench_gpt_model
   bench_json
+  bench_out
+  bench_retime
   bench_seed_parity
   bench_splice
   ocannl

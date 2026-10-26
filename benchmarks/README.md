@@ -1423,6 +1423,25 @@ rog-nv's and minix's `raw-v1` rows, on no box's disk. minix and tuf compare diff
   runner adopts the mode with two calls, `Bench_splice.from_env` before compiling and
   `Bench_splice.replay_guarded` around the compile;
   `test/operations/bench_splice_dirs` pins the arms' contents and every refusal.
+- **Re-timing a shipped routine reports a spread, not one minimum** (gh-ocannl-1524). The site
+  runners that time what a compile shipped -- `bench_strided_1x1`'s arms, `bench_rank_site`'s
+  pick against its untuned plan, `bench_wgrad`'s whole routine -- used to take one min-of-N
+  synchronized reading per routine. Below ~50 us that number is noise-dominated on cc:
+  gh-ocannl-1397's unchanged control site read 0.69x between two builds and a changed site 1.44x
+  the wrong way, while the search's `best_ms` agreed with itself. They now re-time through
+  `Bench_retime` (`benchmarks/runners/ocannl/bench_retime.ml`): each reading is one
+  `Autotune.time_routine` call under the configured `autotune_timing` and `autotune_repeats`, the
+  tuner's own protocol (on cc and Metal a fast kernel runs up to 200 launches per synchronization);
+  each routine is read `BENCH_RETIME_CALLS` times (default 6), the routines of one line interleaved
+  in `Bench_design`'s mirrored rotation; a time prints as the median with its range (`ms`, `ms_lo`,
+  `ms_hi`, and `ms_retimed`, the readings the admission gate kept), and a ratio between two
+  routines as the median of the call-by-call paired ratios with their range, `resolved` only when
+  every pair falls on one side of 1 (six of six: sign-test p = 0.031). Fewer than four admitted
+  readings state no range (NaN), and no ratio over them is resolved. The spread is the process's;
+  a base-against-head A/B of `bench_strided_1x1` crosses processes, so run it through `ab.py`
+  (each arm prints a `bench-result:` line, variant `<site>/<arm>`, the median), whose paired
+  rounds carry the between-process variance, and read each process's own range beside it.
+  `test/operations/bench_retime_spread` pins the summaries on scripted readings.
 - **A report states the fixture digest its numbers are on, whose bytes those are, and the declared
   measurement-box set.**
   `orchestrate.py` puts both in each workload section of `results/report.md` and in every

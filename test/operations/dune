@@ -7996,6 +7996,17 @@
  (modules bench_select)
  (libraries base stdio bench_select arrayjit.verdict))
 
+; gh-ocannl-1524: the bench runners' re-timing summaries (median with range, paired ratio),
+; driven by scripted readings.
+
+(test
+ ; ocannl-backend: none -- summarizes scripted readings; times and compiles nothing.
+ (name bench_retime_spread)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules bench_retime_spread)
+ (libraries base stdio unix bench_retime test_utils arrayjit.verdict))
+
 ; gh-ocannl-655: the provenance guarantees of Test_utils.Generated, which ~30 tests' structural
 ; assertions now rest on. Every one of those guarantees fires only when something has already gone
 ; wrong, so none of them is exercised by the tests that depend on them -- the code that decides a

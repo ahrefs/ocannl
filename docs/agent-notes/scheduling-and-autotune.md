@@ -590,7 +590,9 @@ files.
   decline where it only reports on stderr, and the 16-channel virtualization is a manual
   observation (conv2d into batch_norm2d, 16 channels) that no test exercises.
   `benchmarks/runners/ocannl/bench_strided_1x1` times the site alone (roles, seed count, untuned
-  and tuned arms, exact oracle), a build on each side of a classifier change making the A/B.
+  and tuned arms, exact oracle), a build on each side of a classifier change making the A/B --
+  through `benchmarks/ab.py`, which pairs its `bench-result:` lines round by round; each arm's
+  re-timing carries its own range (`Bench_retime`, gh-ocannl-1524).
 - **`Stage` stages only the reads that vary with its tile loops** (gh-ocannl-1147). A whole-routine
   matmul seed stages its A operand while another nest reads the same node at another index vector
   (the 3x3 conv or max pool beside a strided 1x1 shortcut, the K and V projections beside Q).
