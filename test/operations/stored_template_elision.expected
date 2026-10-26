@@ -99,6 +99,9 @@ local, covered: a per-statement virtual consumer: routine B compiles, v stays ro
 local, covered: a per-statement virtual consumer: w is refused by its per-statement store and materializes: true
 local, covered: a per-statement virtual consumer: lc4out executes to its expected values: true
 local, covered: a per-statement virtual consumer: the reading agrees with the materialized one: true
+local, covered: a raw-captured packed-uniform producer: routine A placed v as routine-local scratch, its computation in the table: true
+local, covered: a raw-captured packed-uniform producer: the producer is refused by its capture and materializes: true
+local, covered: a raw-captured packed-uniform producer: no template of it reads v: true
 local, covered: a declared-virtual consumer: routine A placed v as routine-local scratch, its computation in the table: true
 local, covered: a declared-virtual consumer: routine B is refused, naming v routine-local scratch: true
 local: a partial write: routine A placed v as routine-local scratch, its computation in the table: true

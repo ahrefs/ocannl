@@ -3102,6 +3102,50 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
   (* The hit refusing a per-statement store of [tn]: a capture walk's own, or a covered scratch read
      the emit walk met in [tn]'s code. *)
   let statement_hit tn = Option.first_some (owner_hit tn) (Hashtbl.find local_dependents tn) in
+  (* A read of routine-local scratch in [tn]'s own setters in [code], which a RAW capture (a
+     packed-uniform producer's, see [proc_contains_set_from_vec]) stores as written: no walk meets
+     it, so the hit is read off the code (local review of the gh-ocannl-1620 PR). *)
+  let raw_local_read tn code =
+    let open Access_fold in
+    let policy =
+      {
+        discarded_operands = Skip;
+        gated_operands = Visit;
+        dead_loops = Skip;
+        local_scopes = Visit;
+        guards = Ignore;
+        scan_implicit = Skip;
+      }
+    in
+    let found = ref None in
+    let in_scalar =
+      {
+        (hooks ()) with
+        scalar =
+          (fun _ () sc ->
+            (match sc with
+            | (Get (t, _) | Get_dynamic { tn = t; _ })
+              when Option.is_none !found
+                   && Tn.Placements.known_non_virtual plc t
+                   && Tn.Placements.known_not_materialized plc t ->
+                found := Some t
+            | _ -> ());
+            Continue ());
+      }
+    in
+    let statement _ () (c : t) =
+      match c with
+      | (Set { tn = t; _ } | Set_from_vec { tn = t; _ }) when Tn.equal t tn ->
+          (match c with
+          | Set { llsc; _ } -> fold_scalar ~policy ~hooks:in_scalar ~init:() llsc
+          | Set_from_vec { arg = a, _; _ } -> fold_scalar ~policy ~hooks:in_scalar ~init:() a
+          | _ -> ());
+          Prune ()
+      | _ -> Continue ()
+    in
+    fold ~policy ~hooks:{ (hooks ()) with statement } ~init:() code;
+    Option.map !found ~f:(fun t -> Capture_reads_local t)
+  in
   (* Walks a setter's right-hand side with the setter as the owner of any hit in it. *)
   let owning_rhs tn f =
     let outer_owner = !rhs_owner in
@@ -3460,7 +3504,11 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
                     let stored =
                       (* gh-509 task 4: vector-store producers are stored raw, see
                          [proc_contains_set_from_vec]. *)
-                      if proc_contains_set_from_vec tn body then For_loop { for_config with body }
+                      if proc_contains_set_from_vec tn body then (
+                        let raw = For_loop { for_config with body } in
+                        Option.iter (raw_local_read tn raw) ~f:(fun hit ->
+                            ignore (Hashtbl.add hits ~key:tn ~data:hit : [ `Ok | `Duplicate ]));
+                        raw)
                       else
                         (* gh-ocannl-1469: this walk becomes [tn]'s stored template, which replays
                            with the read site's index substituted for its write index's symbols — so

@@ -497,7 +497,8 @@ files.
   inconsistent transition). **No stored template may hold such a read**, covered or not: it would
   replay wherever the template does, in later routines too. The capture walk's `155` hit stands for
   covered reads, and outside a capture the emit walk records the setter owning the read
-  (`local_dependents`), refusing its per-statement store with the same `155`. Pinned, executed
+  (`local_dependents`), refusing its per-statement store with the same `155`; a packed-uniform
+  producer's RAW capture, which no walk reads, is scanned for such a read (`raw_local_read`). Pinned, executed
   against the materialized reading, by the `local, ...` cases of `stored_template_elision.ml`
   (lineages with and without a stored template; partial, guarded, read-before-write and
   uninitialized-accumulation controls). Boundary: the rules apply to `Local` nodes only — a fresh

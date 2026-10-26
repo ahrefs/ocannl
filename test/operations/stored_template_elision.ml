@@ -945,6 +945,24 @@ let case_local_reads () =
       covered_capture_reader ~tag:"lc3n" ~sfx ~v ());
   case_local_accepted ~label:"local, covered: a per-statement virtual consumer" ~tag:"lc4"
     (covered_statement_reader ~tag:"lc4");
+  (* A packed-uniform producer is captured RAW, with no walk to meet its read (local review). *)
+  (let label = "local, covered: a raw-captured packed-uniform producer" and tag = "lc6" in
+   let ctx, v = local_scratch ~label ~tag () in
+   let w = mk (tag ^ "w") and i = sym () in
+   let llc =
+     seq (fill_v v)
+       (loop_n i 1
+          (set_from_vec ~length:4 ~vec_unop:Ir.Ops.Uint4x32_to_prec_uniform w
+             [| aff [ (4, i) ] 0 |]
+             (get v [| iter i |], Ir.Ops.single)))
+   in
+   match consume_local ctx ~name:("sts_" ^ tag ^ "_b") llc with
+   | Refused msg | Crashed msg -> p (label ^ ": routine B compiles (refused: " ^ msg ^ ")") false
+   | Compiled o_b ->
+       p (label ^ ": the producer is refused by its capture and materializes") (refused_local o_b w);
+       p
+         (label ^ ": no template of it reads v")
+         (Option.value (template_count ctx w ~f:(read_of v)) ~default:0 = 0));
   case_local_refused ~label:"local, covered: a declared-virtual consumer" ~tag:"lc5" (fun ~v ->
       let llc, _, _, _ = covered_capture_reader ~declare_virtual:true ~tag:"lc5" ~sfx:"" ~v () in
       llc);
