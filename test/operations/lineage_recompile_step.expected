@@ -1,0 +1,12 @@
+step 1: compiles in the lineage that ran the earlier steps: true
+step 1: w.grad is committed virtual: true
+step 1: y.grad is routine-local scratch: true
+step 1: the reference materializes y.grad and w.grad: true
+step 1: changes the parameter: true
+step 1: the parameter agrees bitwise with the materialized lineage: true
+step 2: compiles in the lineage that ran the earlier steps: true
+step 2: changes the parameter: true
+step 2: the parameter agrees bitwise with the materialized lineage: true
+step 3: compiles in the lineage that ran the earlier steps: true
+step 3: changes the parameter: true
+step 3: the parameter agrees bitwise with the materialized lineage: true

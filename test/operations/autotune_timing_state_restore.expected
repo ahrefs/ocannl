@@ -1,3 +1,5 @@
+the warm-up commits w.grad virtual: true
+the warm-up places y.grad as routine-local scratch: true
 the step changes the parameter: true
 timing_ctx: the search timed more than one window: true
 timing_ctx: every window starts from the state the lineage held before the search: true

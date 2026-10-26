@@ -46,12 +46,6 @@ let () =
   let%op learning_rate = 0.0078125 in
   Train.set_materialized w.Tensor.value;
   Train.set_materialized learning_rate.Tensor.value;
-  (* Every lineage here compiles the step more than once (the warm-up step, then the search's
-     candidates or a reference step), and the first compile places [y.grad] as routine-local scratch
-     while the virtual [w.grad]'s stored template reads it -- a later compile of the same step is
-     then refused for that read (gh-ocannl-1620's rule), though its own writes cover it.
-     Materialized, [y.grad] is no scratch and the template no hazard. *)
-  Train.set_materialized (Option.value_exn ~here:[%here] y.Tensor.diff).grad;
   let comp =
     Ir.Assignments.sequence
       [ Train.grad_update loss; Train.sgd_update ~learning_rate ~momentum:0.5 loss ]
@@ -68,6 +62,20 @@ let () =
      restored lineage is held to. *)
   let reference = warm_lineage () in
   Stdio.eprintf "backend: %s (not part of the golden)\n%!" (Context.backend_name reference);
+  (* Every lineage here compiles the step more than once (the warm-up step, then the search's
+     candidates or a reference step). The warm-up places [y.grad] as routine-local scratch while the
+     virtual [w.grad]'s stored template reads it, the shape a later compile of the same step must
+     accept (gh-ocannl-1645; [lineage_recompile_step] pins it without a search). That is the CPU
+     backends' placement: on Metal [y.grad] is not routine-local scratch at this size. *)
+  (let plc = Context.placements reference
+   and grad t = (Option.value_exn ~here:[%here] t.Tensor.diff).grad
+   and backend = Context.backend_name reference in
+   let on_cpu = Ir.Schedule.backend_is_cpu backend in
+   gated ~when_:on_cpu ~on:backend "the warm-up commits w.grad virtual"
+     (Ir.Tnode.Placements.known_virtual plc (grad w));
+   gated ~when_:on_cpu ~on:backend "the warm-up places y.grad as routine-local scratch"
+     (Ir.Tnode.Placements.known_non_virtual plc (grad y)
+     && Ir.Tnode.Placements.known_not_materialized plc (grad y)));
   let snapshot = read reference in
   let stepped_once =
     let ctx, routine = Context.compile reference comp IDX.empty in

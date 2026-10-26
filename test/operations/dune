@@ -10845,3 +10845,18 @@
   (env_var OCANNL_BACKEND))
  (modules set_equal_rows)
  (libraries base ocannl stdio arrayjit.verdict))
+
+; gh-ocannl-1645: a training step compiled again in the lineage that ran it, its virtual w.grad's
+; template reading the y.grad the first compile placed as routine-local scratch; executed parity
+; against a lineage materializing both.
+
+(test
+ (name lineage_recompile_step)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules lineage_recompile_step)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
