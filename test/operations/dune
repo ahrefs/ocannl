@@ -6119,6 +6119,48 @@
  (deps
   (alias runtest-routine_log_stream_files)))
 
+; gh-ocannl-1594: routine logs reach the stream log by the sync after the routine, exactly once, and
+; a logging Metal routine does not crash the host. Its own log-file stem, cleaned on startup, so the
+; counts see only this run's lines.
+
+(executable
+ (name metal_routine_log_delivery)
+ (modules metal_routine_log_delivery)
+ (libraries base ocannl stdio arrayjit.verdict ll_test))
+
+(rule
+ (target metal_routine_log_delivery.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:metal_routine_log_delivery.exe}
+    "--ocannl_debug_log_from_routines=true"
+    "--ocannl_log_level=2"
+    "--ocannl_debug_log_to_stream_files=true"
+    "--ocannl_log_main_domain_to_stdout=false"
+    "--ocannl_clean_up_log_files_on_startup=true"
+    "--ocannl_log_file_stem=metal_routine_log_delivery"
+    "--ocannl_build_files_prefix=metal_routine_log_delivery"))))
+
+(rule
+ (alias runtest-metal_routine_log_delivery)
+ (package neural_nets_lib)
+ (action
+  (diff
+   metal_routine_log_delivery.expected
+   metal_routine_log_delivery.actual)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias runtest-metal_routine_log_delivery)))
+
 (test
  ; ocannl-backend: none -- inspects precision witnesses and renderer enumeration, executes no backend.
  (name precision_families)

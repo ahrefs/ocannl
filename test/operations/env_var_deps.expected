@@ -231,6 +231,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-ll_test_ratchet
   test/operations/dune                     @runtest-log_index_width_narrow
   test/operations/dune                     @runtest-log_index_width_wide
+  test/operations/dune                     @runtest-metal_routine_log_delivery
   test/operations/dune                     @runtest-micrograd_demo_logging
   test/operations/dune                     @runtest-model_default_fallback
   test/operations/dune                     @runtest-model_default_placements

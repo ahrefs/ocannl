@@ -249,6 +249,20 @@ files.
   its own type overrides both together. Every array offset in a value-log line goes through the
   same seam, including nested `debug_float` accessors and vector-store offsets (gh-ocannl-953), so
   a wide routine never pairs a 64-bit offset argument with a narrow conversion.
+- Metal routine logs arrive on Metal's own dispatch threads, through the `MTLLogState` handler,
+  so no OCaml may run there. The backend installs ocaml-metal's native
+  `LogState.add_buffered_log_handler`, which copies each message into a C-side buffer, and `await`
+  drains it on the host thread with `drain_log_buffer` into `Utils.log_debug_routine_logs`
+  (gh-ocannl-1594). Under logging, `await` also waits for its own signalling command buffer to
+  complete before draining, since no Metal document promises delivery by either point. A message
+  that arrives late lands in the next `await`. The trap behind it is general: never hand Metal a
+  ctypes `Runtime.Block` whose body is OCaml. The old `add_log_handler` did, and its block literal
+  lived in ctypes-managed memory that Metal kept pointing at (a global-flagged block's
+  `Block_copy` returns the same pointer), so the next log message after a GC reused that memory
+  crashed the host (SEGV, bus error, TRAP; 6 of 6 under GC churn). ocaml-metal's other block users
+  (`add_completed_handler`, `notify_listener`, the no-copy buffer deallocator) share the shape, and
+  OCANNL uses none of them. `test/operations/metal_routine_log_delivery` pins delivery: exactly one
+  copy of each store line by the next sync, on cc and Metal.
 
 ## Choosing a backend-query seam
 

@@ -26,9 +26,9 @@
 
    GPU backends: the CPU vector rendering is the C backends'. There a vectorized loop renders packed
    or serial; the leg still compiles and executes, and its claims about the rendering are skipped.
-   The tile leg reads which way each tile went from the routine's mma census on every backend. Under
-   routine logging on Metal the routines compile but do not run, and the claims about their values
-   are skipped (gh-ocannl-1594). *)
+   The tile leg reads which way each tile went from the routine's mma census on every backend. The
+   logged leg executes on every backend, Metal included: it is the witness that Metal routine
+   logging no longer crashes the host (gh-ocannl-1594). *)
 
 open Base
 module LL = Ir.Low_level
@@ -75,32 +75,17 @@ let input n = Array.init n ~f:(fun i -> Float.of_int ((i * 5 % 11) - 4))
 let read2 = function [ x; y ] -> (x, y) | _ -> assert false
 let read3 = function [ x; y; z ] -> (x, y, z) | _ -> assert false
 
-(* gh-ocannl-1594: on Metal, a routine that logs can crash the host process once it runs (the log
-   handler enters OCaml from a Metal dispatch thread). What this test pins is decided when the
-   routine compiles, so there a logged leg compiles its routine and skips the claims that need it to
-   run. *)
-let executes = not (logged && String.equal backend_name "metal")
-
-(* [what]'s routine compiled, claimed on every backend, then [Some] of the values read back where
-   the routine may run; [None] where it only compiles, with the value claims [skip] each skipped. *)
-let compile_and_run what ~name o ~seed ~read ~skip =
-  let compiled = what ^ ": the routine compiles with them in one scope" in
-  if executes then (
-    (* No capture window around the run (gh-ocannl-1636): CUDA and HIP routine logs are device-side
-       [printf], and under the [debug_log_to_stream_files] this leg asks for, the backend routes
-       them to the stream files itself, so stdout stays the golden's data channel. A line of them
-       reaching stdout fails the golden diff. *)
-    let ctx, _routine = Ll_test.run_routine ~name o ~seed in
-    let values = List.map read ~f:(Context.get_values ctx) in
-    p compiled true;
-    Some values)
-  else (
-    ignore (Ll_test.link ~name o : Context.t * Context.routine);
-    p compiled true;
-    Stdio.eprintf "%s: not executed on %s under routine logging (gh-ocannl-1594)\n%!" what
-      backend_name;
-    List.iter skip ~f:(skipped ~backend:backend_name);
-    None)
+(* [what]'s routine compiled and run, claimed on every backend; returns the values read back. *)
+let compile_and_run what ~name o ~seed ~read =
+  (* No capture window around the run (gh-ocannl-1636): CUDA and HIP routine logs are device-side
+     [printf], and under the [debug_log_to_stream_files] this leg asks for, the backend routes them
+     to the stream files itself, so stdout stays the golden's data channel. A line of them reaching
+     stdout fails the golden diff. Metal's logs are drained at synchronization from a C-side buffer
+     (gh-ocannl-1594). *)
+  let ctx, _routine = Ll_test.run_routine ~name o ~seed in
+  let values = List.map read ~f:(Context.get_values ctx) in
+  p (what ^ ": the routine compiles with them in one scope") true;
+  values
 
 (* {1 Logging arms} *)
 
@@ -126,12 +111,12 @@ let check_logged_sets ~first_id =
   let values = "logged Sets: both stores write their values" in
   compile_and_run "logged Sets" ~name o
     ~seed:[ (a, av); (x, Ll_test.blank n); (y, Ll_test.blank n) ]
-    ~read:[ x; y ] ~skip:[ values ]
-  |> Option.iter ~f:(fun got ->
-      let vx, vy = read2 got in
-      p_all2 values (Array.append vx vy)
-        (Array.append (Array.map av ~f:(fun v -> v +. 1.)) (Array.map av ~f:(fun v -> v *. 2.)))
-        ~f:Float.equal)
+    ~read:[ x; y ]
+  |> fun got ->
+  let vx, vy = read2 got in
+  p_all2 values (Array.append vx vy)
+    (Array.append (Array.map av ~f:(fun v -> v +. 1.)) (Array.map av ~f:(fun v -> v *. 2.)))
+    ~f:Float.equal
 
 (* Two [Set_dynamic]s and a [Set] in one loop body: under logging all three declare [new_set_v]. The
    rows come from a reversing permutation stored in a node, so each scatter lands somewhere its loop
@@ -172,18 +157,14 @@ let check_logged_dynamic ~first_id =
       [
         (a, av); (rows, reversed); (x, Ll_test.blank n); (y, Ll_test.blank n); (z, Ll_test.blank n);
       ]
-    ~read:[ x; y; z ] ~skip:[ values ]
-  |> Option.iter ~f:(fun got ->
-      let vx, vy, vz = read3 got in
-      p_all2 values
-        (Array.concat [ vx; vy; vz ])
-        (Array.concat
-           [
-             at_row (fun v -> v +. 1.);
-             at_row (fun v -> v *. 2.);
-             Array.map av ~f:(fun v -> v +. 3.);
-           ])
-        ~f:Float.equal)
+    ~read:[ x; y; z ]
+  |> fun got ->
+  let vx, vy, vz = read3 got in
+  p_all2 values
+    (Array.concat [ vx; vy; vz ])
+    (Array.concat
+       [ at_row (fun v -> v +. 1.); at_row (fun v -> v *. 2.); Array.map av ~f:(fun v -> v +. 3.) ])
+    ~f:Float.equal
 
 (* Two [Set_local]s in one loop body: under logging each declares [new_set_local_v]. Optimization
    would fold single-assignment locals away, so the scoped form replaces the optimized twin through
@@ -211,12 +192,10 @@ let check_logged_locals ~first_id =
   two_siblings "logged Set_locals" ~f:is_set_local o;
   let av = input n in
   let values = "logged Set_locals: both carry their values" in
-  compile_and_run "logged Set_locals" ~name o
-    ~seed:[ (a, av); (x, Ll_test.blank n) ]
-    ~read:[ x ] ~skip:[ values ]
-  |> Option.iter ~f:(function
-    | [ vx ] -> p_all2 values vx (Array.map av ~f:(fun v -> (3. *. v) +. 1.)) ~f:Float.equal
-    | _ -> assert false)
+  compile_and_run "logged Set_locals" ~name o ~seed:[ (a, av); (x, Ll_test.blank n) ] ~read:[ x ]
+  |> function
+  | [ vx ] -> p_all2 values vx (Array.map av ~f:(fun v -> (3. *. v) +. 1.)) ~f:Float.equal
+  | _ -> assert false
 
 (* {1 Set_from_vec, logged or not} *)
 
@@ -243,11 +222,10 @@ let check_two_packed_draws ~first_id =
   two_siblings "packed draws" ~f:is_set_from_vec o;
   let in_range = "packed draws: every draw lies in [0, 1)" in
   let equal = "packed draws: both draw bitwise-equal values" in
-  compile_and_run "packed draws" ~name o ~seed:[] ~read:[ a; b ] ~skip:[ in_range; equal ]
-  |> Option.iter ~f:(fun got ->
-      let va, vb = read2 got in
-      p_all in_range (Array.to_list va) ~f:(fun x -> Float.(0. <= x && x < 1.));
-      p_all2 equal va vb ~f:bits_equal)
+  compile_and_run "packed draws" ~name o ~seed:[] ~read:[ a; b ] |> fun got ->
+  let va, vb = read2 got in
+  p_all in_range (Array.to_list va) ~f:(fun x -> Float.(0. <= x && x < 1.));
+  p_all2 equal va vb ~f:bits_equal
 
 (* {1 Families that render only without logging} *)
 

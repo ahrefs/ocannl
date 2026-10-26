@@ -30,16 +30,6 @@ let () =
            ~stream_name:"cuda-0-0";
          Utils.restore_settings ();
          Stdlib.exit 0
-     | "metal" ->
-         Utils.log_debug_routine_logs
-           ~log_contents:
-             [
-               "Metal routine stream logging is skipped: the Metal backend emits routine debug \
-                logs via os_log rather than the captured stream-file logger.";
-             ]
-           ~stream_name:"metal-0-0";
-         Utils.restore_settings ();
-         Stdlib.exit 0
      | _ -> ());
   let%op c = { a = [ -4 ] } + { b = [ 2 ] } in
   let%op d = (a *. b) + (b **. 3) in
