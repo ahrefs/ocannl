@@ -10268,8 +10268,10 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
              failed finals window is the finals' own: it is not a candidate refusal or decline, so
              it neither enters [timings_contended] nor makes the search uncacheable -- a contender
              left with no reading makes the finals inconclusive, and the crown is then the first
-             readings' head, as without finals. The finals run only while the budget allows a
-             window, and a window stops once it passes, without marking the search as cut: every
+             readings' head, as without finals. Under a budget, each recompile starts only while the
+             elapsed time plus the costliest candidate compile so far stays within it -- the
+             projection a candidate attempt is held to -- and once one may not start, no later one
+             does; a window stops once the budget passes. Neither marks the search as cut: every
              candidate the menu proposed was already timed. *)
           (let finals_pool =
              let seen_digests = Hash_set.create (module String) in
@@ -10291,8 +10293,9 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
            let budget_allows_finals () =
              match budget with
              | None -> true
-             | Some b -> (not !budget_spent) && Float.(budget_clock () < b)
+             | Some b -> (not !budget_spent) && Float.(budget_clock () +. !costliest_compile_s <= b)
            in
+           let finals_cut = ref false in
            if not (List.is_empty contenders) then
              if not (budget_allows_finals ()) then
                logf "finals: skipped, the budget is spent (%d contender(s))"
@@ -10314,69 +10317,75 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
                List.iter groups ~f:(fun group ->
                    let entry, _ = List.hd_exn group in
                    let label = label_of entry in
-                   match
-                     timed_into progress_compile_s (fun () ->
-                         compile_spec (spec_of_form entry.form))
-                   with
-                   | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal
-                   | Error (Outcome.Classified classified) ->
-                       logf "finals: %s: recompile FAILED at %s %s" label
-                         (phase_label classified.phase)
-                         (Outcome.detail_of_cause classified.cause)
-                   | Ok c when not (String.equal c.digest_after entry.digest_after) ->
-                       logf "finals: %s: recompiled to digest %s, not %s: not re-timed" label
-                         (dshort c.digest_after) (dshort entry.digest_after);
-                       release_quietly ~what:("finals contender " ^ label) c.cctx
-                   | Ok c ->
-                       pending := Some c;
-                       let rec windows k =
-                         if k > 0 then (
-                           Int.incr n_finals_timed;
-                           match timing_window ~label ~stop:finals_stop c with
-                           | Ok (`Timed timing_result) -> (
-                               match admitted_timing_ms timing_result with
-                               | Some ms ->
-                                   Int.incr n_finals_admitted;
-                                   Hashtbl.add_multi readings ~key:c.digest_after ~data:ms;
-                                   logf "finals: %s: %.4f ms (digest %s)" label ms
-                                     (dshort c.digest_after);
-                                   windows (k - 1)
-                               | None ->
-                                   logf "finals: %s: NOT TIMED, %s (digest %s)" label
-                                     (refusal_reason (timing_admission timing_result))
-                                     (dshort c.digest_after);
-                                   windows (k - 1))
-                           | Ok `Stopped ->
-                               logf "finals: %s: NOT TIMED, the budget passed during its timing"
-                                 label
-                           | Ok (`Hopeless _) ->
-                               (* Unreachable: a finals window is timed in full. *)
-                               logf "finals: %s: NOT TIMED, cut as hopeless" label
-                           | Error (Outcome.Classified classified) -> (
-                               logf "finals: %s: RUN FAILED at %s %s" label
-                                 (phase_label classified.phase)
-                                 (Outcome.detail_of_cause classified.cause);
-                               (* As a candidate's run failure (see [try_spec]): one that wrote
-                                  nothing withdraws its executed claim; one that may have written
-                                  condemns the lineage. *)
-                               match classified.execution_effect with
-                               | Outcome.No_device_writes ->
-                                   Context.rollback_execution c.cctx c.routine.Context.routine_id
-                               | Outcome.Writes_may_have_occurred ->
-                                   Context.poison_lineage c.cctx
-                                     ~routine_name:c.routine.Context.name
-                                     (Outcome.exception_of_cause classified.cause);
-                                   release_candidate c;
-                                   emit_partial_and_raise
-                                     (Outcome.fatal_of_classified ~candidate:label classified))
-                           | Error (Outcome.Fatal fatal) ->
-                               Context.poison_lineage c.cctx ~routine_name:c.routine.Context.name
-                                 fatal.Outcome.exn;
-                               release_candidate c;
-                               emit_partial_and_raise fatal)
-                       in
-                       windows (List.length group);
-                       release_candidate c);
+                   if !finals_cut || not (budget_allows_finals ()) then (
+                     if not !finals_cut then
+                       logf "finals: the budget allows no further recompile, from %s on" label;
+                     finals_cut := true)
+                   else
+                     match
+                       timed_into progress_compile_s (fun () ->
+                           budget_compile (fun () -> compile_spec (spec_of_form entry.form)))
+                     with
+                     | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal
+                     | Error (Outcome.Classified classified) ->
+                         logf "finals: %s: recompile FAILED at %s %s" label
+                           (phase_label classified.phase)
+                           (Outcome.detail_of_cause classified.cause)
+                     | Ok c when not (String.equal c.digest_after entry.digest_after) ->
+                         logf "finals: %s: recompiled to digest %s, not %s: not re-timed" label
+                           (dshort c.digest_after) (dshort entry.digest_after);
+                         release_quietly ~what:("finals contender " ^ label) c.cctx
+                     | Ok c ->
+                         pending := Some c;
+                         let rec windows k =
+                           if k > 0 then (
+                             Int.incr n_finals_timed;
+                             match timing_window ~label ~stop:finals_stop c with
+                             | Ok (`Timed timing_result) -> (
+                                 match admitted_timing_ms timing_result with
+                                 | Some ms ->
+                                     Int.incr n_finals_admitted;
+                                     Hashtbl.add_multi readings ~key:c.digest_after ~data:ms;
+                                     logf "finals: %s: %.4f ms (digest %s)" label ms
+                                       (dshort c.digest_after);
+                                     windows (k - 1)
+                                 | None ->
+                                     logf "finals: %s: NOT TIMED, %s (digest %s)" label
+                                       (refusal_reason (timing_admission timing_result))
+                                       (dshort c.digest_after);
+                                     windows (k - 1))
+                             | Ok `Stopped ->
+                                 finals_cut := true;
+                                 logf "finals: %s: NOT TIMED, the budget passed during its timing"
+                                   label
+                             | Ok (`Hopeless _) ->
+                                 (* Unreachable: a finals window is timed in full. *)
+                                 logf "finals: %s: NOT TIMED, cut as hopeless" label
+                             | Error (Outcome.Classified classified) -> (
+                                 logf "finals: %s: RUN FAILED at %s %s" label
+                                   (phase_label classified.phase)
+                                   (Outcome.detail_of_cause classified.cause);
+                                 (* As a candidate's run failure (see [try_spec]): one that wrote
+                                    nothing withdraws its executed claim; one that may have written
+                                    condemns the lineage. *)
+                                 match classified.execution_effect with
+                                 | Outcome.No_device_writes ->
+                                     Context.rollback_execution c.cctx c.routine.Context.routine_id
+                                 | Outcome.Writes_may_have_occurred ->
+                                     Context.poison_lineage c.cctx
+                                       ~routine_name:c.routine.Context.name
+                                       (Outcome.exception_of_cause classified.cause);
+                                     release_candidate c;
+                                     emit_partial_and_raise
+                                       (Outcome.fatal_of_classified ~candidate:label classified))
+                             | Error (Outcome.Fatal fatal) ->
+                                 Context.poison_lineage c.cctx ~routine_name:c.routine.Context.name
+                                   fatal.Outcome.exn;
+                                 release_candidate c;
+                                 emit_partial_and_raise fatal)
+                         in
+                         windows (List.length group);
+                         release_candidate c);
                finals_record :=
                  List.map contenders ~f:(fun (c, ms) ->
                      {
