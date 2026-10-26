@@ -210,6 +210,8 @@ let known_config_keys =
       "model_cache_bandwidth";
       "model_issue_rate";
       "model_dram_bandwidth";
+      "model_mma_rate";
+      "model_device_gather_rate";
       "model_multiprocessors";
       "model_fill_threads";
       (* Numerics policy (gh-ocannl-478) *)
@@ -497,22 +499,25 @@ let config_key_classification : (config_key_class * string * string list) list =
        ranking and bound pruning read them too",
       [ "model_default_schedule"; "model_default_placements"; "model_default_geometry_lattice" ] );
     ( Untimed_model,
-      "they are the cache capacity, cache bandwidth, scalar issue rate, DRAM rate and launch-fill \
-       constants of the analytic model's ranking score (gh-ocannl-1253, gh-ocannl-1442, \
-       gh-ocannl-1479), which only the untimed choosers read (Autotune.model_default's pick, and \
-       the auto seeding gate of Autotune.seeded_default) -- like the backends' advisory \
-       cache_capacity_bytes, cache_bandwidth, issue_rate, dram_bandwidth, multiprocessors and \
-       fill_threads they override, Untimed fields of the device description and outside the cache \
-       key for the same reason: a stored winner is a measured schedule, which they change neither \
-       the compilation nor the speed of. Autotune.tune's bound pruning and keep-fraction ranking \
-       read the distinct-cell roofline; the search reaches them only through the seeded plan it \
-       seeds first, which joins the trajectory identity as its content digest and, for a staffed \
-       start, as a gate tag naming these readings",
+      "they are the cache capacity, cache bandwidth, scalar issue rate, DRAM rate, tile-MMA rate, \
+       device-gather rate and launch-fill constants of the analytic model's ranking score \
+       (gh-ocannl-1253, gh-ocannl-1442, gh-ocannl-1479, gh-ocannl-1495), which only the untimed \
+       choosers read (Autotune.model_default's pick, and the auto seeding gate of \
+       Autotune.seeded_default) -- like the backends' advisory cache_capacity_bytes, \
+       cache_bandwidth, issue_rate, dram_bandwidth, mma_rate, device_gather_rate, multiprocessors \
+       and fill_threads they override, Untimed fields of the device description and outside the \
+       cache key for the same reason: a stored winner is a measured schedule, which they change \
+       neither the compilation nor the speed of. Autotune.tune's bound pruning and keep-fraction \
+       ranking read the distinct-cell roofline; the search reaches them only through the seeded \
+       plan it seeds first, which joins the trajectory identity as its content digest and, for a \
+       staffed start, as a gate tag naming these readings",
       [
         "model_cache_capacity";
         "model_cache_bandwidth";
         "model_issue_rate";
         "model_dram_bandwidth";
+        "model_mma_rate";
+        "model_device_gather_rate";
         "model_multiprocessors";
         "model_fill_threads";
       ] );

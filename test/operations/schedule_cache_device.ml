@@ -64,6 +64,8 @@ let () =
             cache_bandwidth = None;
             issue_rate = None;
             dram_bandwidth = None;
+            mma_rate = None;
+            device_gather_rate = None;
             multiprocessors = None;
             fill_threads = None;
           }));

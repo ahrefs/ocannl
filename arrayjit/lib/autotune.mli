@@ -1973,6 +1973,17 @@ val ranking_issue_rate : limits:Ir.Backend_intf.hardware_limits -> float option
     [model_issue_rate] ([none]: scalar work priced at the envelope's [peak_flops]) over the
     backend's advisory [issue_rate]. An [Untimed] reading, like {!ranking_capacity}. *)
 
+val ranking_mma_rate : limits:Ir.Backend_intf.hardware_limits -> float option
+(** The ranking score's tile-MMA rate, in operations/s (gh-ocannl-1495): config [model_mma_rate]
+    ([none]: accepted tile-MMA work priced at the envelope's [peak_flops]) over the backend's
+    advisory [mma_rate]. An [Untimed] reading, like {!ranking_capacity}. *)
+
+val ranking_device_gather_rate : limits:Ir.Backend_intf.hardware_limits -> float option
+(** The ranking score's device-gather rate, in per-lane gathers/s (gh-ocannl-1495,
+    {!Ir.Cost_model.device_operand_gathers}): config [model_device_gather_rate] ([none]: no gather
+    term) over the backend's advisory [device_gather_rate]. An [Untimed] reading, like
+    {!ranking_capacity}. *)
+
 val ranking_fill_model : limits:Ir.Backend_intf.hardware_limits -> Ir.Cost_model.fill_model option
 (** The ranking score's launch fill model (gh-ocannl-1479, {!Ir.Cost_model.context_fill}): config
     [model_multiprocessors] and [model_fill_threads] (each [none]: no launch fill) over the
@@ -2528,6 +2539,8 @@ type seed_gate =
       cache_rate : float option;
       scalar_rate : float option;
       dram_rate : float option;
+      matrix_rate : float option;
+      gather_rate : float option;
       fill : Ir.Cost_model.fill_model option;
     }
       (** The [auto] gate: a segment whose {!seeded_params} sketch the ranking score
@@ -2535,10 +2548,12 @@ type seed_gate =
           segment, scored alone with this cache capacity (bytes; [None]: no DRAM tier) and cache
           bandwidth (bytes/s; [None]: re-reads within capacity uncharged), and the score's own
           scalar issue rate and DRAM rate ({!ranking_issue_rate}, {!ranking_dram_bandwidth}; [None]:
-          the envelope's ceilings, gh-ocannl-1442), and its launch fill ({!ranking_fill_model};
-          [None]: no launch fill, gh-ocannl-1479) — so it seeds exactly where the cross-block
-          re-reads the sketch removes are priced. The geometry and the numerics-preserving candidate
-          set are {!seeded_params}' either way. *)
+          the envelope's ceilings, gh-ocannl-1442), its tile-MMA and device-gather rates
+          ({!ranking_mma_rate}, {!ranking_device_gather_rate}; [None]: the [peak_flops] ceiling and
+          no gather term, gh-ocannl-1495), and its launch fill ({!ranking_fill_model}; [None]: no
+          launch fill, gh-ocannl-1479) — so it seeds exactly where the cross-block re-reads the
+          sketch removes are priced. The geometry and the numerics-preserving candidate set are
+          {!seeded_params}' either way. *)
 
 val seeded_default_gate : limits:Ir.Backend_intf.hardware_limits -> seed_gate
 (** Config [gpu_default_sketch_min_reduction]: an integer is [Min_reduction]; [auto] is [Ranked]
@@ -2757,6 +2772,13 @@ type explain = {
       (** Per kernel, in launch order, its scalar launch fill ({!Ir.Cost_model.launch_fill}; 1.
           without a fill model, gh-ocannl-1479): a diagnostic of the compute leg, which sums per
           parallel context rather than dividing by it. [None] where [ex_spilled] is. *)
+  ex_mma_work : float list option;
+  ex_device_gathers : float list option;
+      (** gh-ocannl-1495: per kernel, the accepted tile-MMA work (operations) and the per-lane
+          device gathers as the compute leg divides them by the tile-MMA and device-gather rates
+          ({!Ir.Cost_model.ranking_mma_terms}: over the [Tile_mma] contexts' fill). What
+          [benchmarks/gh1442_agreement.py --fit-mma] fits the two rates from. [None] where
+          [ex_spilled] is. *)
   ex_operand_loads : Ir.Cost_model.load_count;
       (** Tile-MMA operand load instructions under the backend's load rule ({!model_operand_loads}),
           over all the candidate's kernels ({!Ir.Cost_model.combine_load_counts}: [Undescribed] if

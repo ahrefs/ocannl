@@ -183,24 +183,36 @@ val roofline_seconds :
       by what kernels achieve. [dram_bandwidth] (the STREAM-achieved DRAM rate) prices the DRAM tier
       and the distinct bytes; [issue_rate] (the effective scalar operation rate of a
       register-blocktiled kernel, its staging included) prices the scalar operations, while the
-      [Tile_mma] work the backend accepts (the caller's [mma_flops], {!accepted_tile_mma_flops})
-      stays at [peak_flops]: a scalar rate never prices work on the matrix units. Tile-MMA work not
-      counted there — declined by a layout or by the backend's hook, so its scalar fallback runs, or
-      not classified at all — is priced as scalar work. Each rate reads as at most its ceiling, and
-      as the ceiling when not given, so a device without them scores exactly as before.
+      [Tile_mma] work the backend accepts (the caller's [mma_flops], {!accepted_tile_mma_flops}) is
+      priced at [mma_rate] (below): a scalar rate never prices work on the matrix units. Tile-MMA
+      work not counted there — declined by a layout or by the backend's hook, so its scalar fallback
+      runs, or not classified at all — is priced as scalar work. Each rate reads as at most its
+      ceiling, and as the ceiling when not given, so a device without them scores exactly as before.
     - Memory space (gh-ocannl-1442). Under the per-block model (a reuse extraction given), the bytes
       of the nodes the kernel touches outside global memory ({!reuse.ru_scratch}: staged workgroup
       tiles and thread-private scratch) are off the DRAM leg. Their cost is carried by the fitted
       issue rate — an empirical approximation that holds for the staging geometry the rate was
       fitted on, not a model of copies, barriers or shared-memory gathers. Without a reuse
       extraction they keep the roofline's charge.
+    - Tile-MMA rate and device gathers (gh-ocannl-1495). Accepted tile-MMA work is priced at
+      [mma_rate], the effective rate the staged tensorized kernels of a site achieve, read as at
+      most [peak_flops] and as it when not given. The per-lane operand gathers those statements
+      issue straight from device memory (the caller's [device_gathers], {!device_operand_gathers})
+      add their count over [device_gather_rate] to the compute leg, at the [Tile_mma] contexts' fill
+      under a launch model; no rate, no term. That is what operand staging buys: at the
+      gh-ocannl-1190 fp8 site on rog the staged leaves ran 2.3x faster than the unstaged ones, which
+      every score before tied. Shared-memory gathers, [ldmatrix] and whole-fragment loads are not
+      priced (their cost is in the fitted [mma_rate]), nor bank conflicts, swizzle arithmetic or
+      barriers, and the two plain/swizzled twins of a staged geometry still tie exactly. Several
+      [Tile_mma] contexts in one kernel share their class's harmonic fill, as the accepted work
+      does.
     - Launch fill (gh-ocannl-1479). Given a {!fill_model} and the kernel's {!launch_contexts}, the
       scalar work is priced at the issue rate times its contexts' fill ({!context_fill}): per
       parallel context, its operations over its fill, summed. Serial loops (a plain leaf's batch
       loops) multiply work but add no parallelism; [Grid] and [Workgroup] loops add parallelism, not
       work. Tile-MMA work takes the fill of the [Tile_mma] statements' contexts: accepted work at
-      [peak_flops], declined work (its scalar fallback) at the issue rate. The saturating thread
-      count is fitted on scalar kernels; for the matrix units it is uncalibrated, and the
+      [mma_rate], declined work (its scalar fallback) at the issue rate. The saturating thread count
+      is fitted on scalar kernels; for the matrix units it is uncalibrated, and the
       blocks-over-multiprocessors factor is what orders a plain tensorized leaf against its [bgrid]
       twin. Without a fill model the compute leg is exactly as before. A launch-shape proxy, not an
       occupancy model: no registers, shared memory, wave quantization, or the block a wider sibling
@@ -209,9 +221,9 @@ val roofline_seconds :
       [peak_memory_bandwidth] ceiling, and the compute leg at least the operations at the
       [peak_flops] ceiling (a fill is at most 1), so {!ranking_seconds} is at least
       {!roofline_seconds} over {!analyze}'s counts — and therefore at least any roofline over
-      {!completion_floor}. Monotone: raising the capacity, the cache bandwidth, the issue rate or
-      the DRAM rate never raises the score; raising the fill model's multiprocessors or saturating
-      threads never lowers it.
+      {!completion_floor}. Monotone: raising the capacity, the cache bandwidth, the issue rate, the
+      DRAM rate, the tile-MMA rate or the device-gather rate never raises the score; raising the
+      fill model's multiprocessors or saturating threads never lowers it.
 
     Writes, op counts and the opacity flag are {!analyze}'s. *)
 
@@ -279,17 +291,22 @@ val ranking_seconds_of :
   ?cache_bandwidth:float ->
   ?issue_rate:float ->
   ?dram_bandwidth:float ->
+  ?mma_rate:float ->
   ?mma_flops:int ->
+  ?device_gathers:int ->
+  ?device_gather_rate:float ->
   ?launch:fill_model * launch_context list ->
   summary ->
   reuse option ->
   float option
 (** The ranking score of one kernel from its extractions: the larger of the compute leg and the
     two-tier memory leg (section contract; [None] for the reuse means no per-block charge, the
-    roofline). Bandwidths in bytes/s, the issue rate in operations/s. [mma_flops] (default 0) is the
-    summary's tile-MMA work the backend accepts ({!accepted_tile_mma_flops}), capped at its
-    operations. [launch] is the device's fill model and the kernel's {!launch_contexts} (absent: no
-    launch fill). [None] when neither peak is given. *)
+    roofline). Bandwidths in bytes/s, the issue and tile-MMA rates in operations/s. [mma_flops]
+    (default 0) is the summary's tile-MMA work the backend accepts ({!accepted_tile_mma_flops}),
+    capped at its operations; [device_gathers] (default 0) its accepted statements' per-lane device
+    gathers ({!device_operand_gathers}), priced at [device_gather_rate] (gathers/s). [launch] is the
+    device's fill model and the kernel's {!launch_contexts} (absent: no launch fill). [None] when
+    neither peak is given. *)
 
 val ranking_legs_of :
   ?peak_flops:float ->
@@ -298,7 +315,10 @@ val ranking_legs_of :
   ?cache_bandwidth:float ->
   ?issue_rate:float ->
   ?dram_bandwidth:float ->
+  ?mma_rate:float ->
   ?mma_flops:int ->
+  ?device_gathers:int ->
+  ?device_gather_rate:float ->
   ?launch:fill_model * launch_context list ->
   summary ->
   reuse option ->
@@ -307,6 +327,17 @@ val ranking_legs_of :
     [None] when its peak is not given. For reports that explain a score ([Autotune.model_explain]).
 *)
 
+val ranking_mma_terms :
+  ?mma_flops:int ->
+  ?device_gathers:int ->
+  ?launch:fill_model * launch_context list ->
+  summary ->
+  float * float
+(** The accepted tile-MMA work and the device gathers as the compute leg divides them by their rates
+    (gh-ocannl-1495): each over its [Tile_mma] contexts' fill under a launch model, as counted
+    without one. For reports and for fitting the two rates
+    ([benchmarks/gh1442_agreement.py --fit-mma]). *)
+
 val ranking_seconds :
   ?peak_flops:float ->
   ?peak_memory_bandwidth:float ->
@@ -314,7 +345,10 @@ val ranking_seconds :
   ?cache_bandwidth:float ->
   ?issue_rate:float ->
   ?dram_bandwidth:float ->
+  ?mma_rate:float ->
   ?mma_flops:int ->
+  ?device_gathers:int ->
+  ?device_gather_rate:float ->
   ?fill_model:fill_model ->
   ?max_resident_threads:int ->
   is_global:(Tnode.t -> bool) ->
@@ -326,13 +360,14 @@ val ranking_seconds :
 
 (** {2 Tile-MMA operand loads (gh-ocannl-1254)}
 
-    Not a priced term and not part of any score: a count the untimed choosers break {e exact}
-    ranking ties with ([Autotune.model_default]'s family search, through {!Schedule_space.search}'s
-    [tie_break]). Twins that differ only in a staged tile's physical layout — the plain and
-    [Swizzle_b128] staged fp8 twins of gh-ocannl-1190 — touch the same cells with the same
-    operations, so {!analyze} and the ranking score tie them; what differs is how a lane brings each
-    operand tile into registers, which the backend's load rule decides
-    ({!Backend_intf.codegen_capabilities.mma_operand_loads}, the rule its emission applies).
+    Not a priced term and not part of any score (only its device-gather part is,
+    {!device_operand_gathers}): a count the untimed choosers break {e exact} ranking ties with
+    ([Autotune.model_default]'s family search, through {!Schedule_space.search}'s [tie_break]).
+    Twins that differ only in a staged tile's physical layout — the plain and [Swizzle_b128] staged
+    fp8 twins of gh-ocannl-1190 — touch the same cells with the same operations, so {!analyze} and
+    the ranking score tie them; what differs is how a lane brings each operand tile into registers,
+    which the backend's load rule decides ({!Backend_intf.codegen_capabilities.mma_operand_loads},
+    the rule its emission applies).
 
     Each [Tile_mma] operand is classified, in the statement's emission scope, from its place —
     workgroup-shared, per-thread ([Local]) or device, and its [optimized.swizzled] layout — by that
@@ -457,6 +492,46 @@ val operand_load_count :
     [mma_operand_loads]) and fragment structure ([operand_fragments], its [mma_operand_fragments]),
     for the statements its hook accepts ([operand_accepts], its [mma_accepts]: a declined statement
     is [Undescribed]); {!load_count} says when there is nothing, or nothing complete, to count. *)
+
+val device_operand_gathers :
+  operand_accepts:
+    (d_prec:Ops.prec ->
+    a_prec:Ops.prec ->
+    b_prec:Ops.prec ->
+    ta:bool ->
+    tb:bool ->
+    m:int ->
+    n:int ->
+    k:int ->
+    fragment_target:(int * Backend_intf.mma_operand_place) option ->
+    d:int * Backend_intf.mma_operand_place ->
+    a:int * Backend_intf.mma_operand_place ->
+    b:int * Backend_intf.mma_operand_place ->
+    bool) ->
+  operand_fragments:
+    (a_prec:Ops.prec ->
+    b_prec:Ops.prec ->
+    d_prec:Ops.prec ->
+    scope:Backend_intf.mma_emission_scope ->
+    Backend_intf.mma_fragments option) ->
+  operand_loads:
+    (a_prec:Ops.prec ->
+    b_prec:Ops.prec ->
+    d_prec:Ops.prec ->
+    scope:Backend_intf.mma_emission_scope ->
+    ta:bool ->
+    tb:bool ->
+    a:Backend_intf.mma_operand_place ->
+    b:Backend_intf.mma_operand_place ->
+    bool * bool) ->
+  Low_level.optimized ->
+  int
+(** The part of {!operand_load_count} the ranking score prices (gh-ocannl-1495): the per-lane load
+    instructions of the operands an accepted statement GATHERS element by element ([Gather], never
+    [Ldmatrix] or [Fragment_load]) from a [`Device] place, summed over executions in the same unit.
+    A declined statement, or one whose arm is undescribed, adds nothing (the score then prices it as
+    before); so does a staged operand (workgroup-shared or per-thread). Zero for code with no
+    [Tile_mma]. *)
 
 (** {2 The cost of one inlined computation (gh-ocannl-637 Part 2, gh-ocannl-1011)}
 

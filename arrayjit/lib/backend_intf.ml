@@ -365,14 +365,15 @@ type hardware_limits = {
       (** [Untimed]: the effective scalar operation rate, in operations/s ([summary.flops]' units,
           an FMA counting two), of a register-blocktiled kernel, its operand staging included — the
           ranking score's compute leg for scalar work (gh-ocannl-1442,
-          {!Ir.Cost_model.ranking_seconds}), where {!field-peak_flops} stays the bound's ceiling and
-          keeps pricing [Tile_mma] work. The slope of [tools/calibrate_issue_rate.exe]'s sweep of
-          the seeded weight-gradient sketch — or, where {!field-fill_threads} is set, the full-fill
-          rate its launch sweep fits jointly with it (gh-ocannl-1479): the two are one calibration,
-          and a pre-fill rate under a fill model double-counts the calibration kernel's partial
-          fill. Read as at most {!field-peak_flops}. Overridable by config [model_issue_rate];
-          [None] where unmeasured, which prices scalar work at {!field-peak_flops} as before. Same
-          readers and same cache identity as {!field-cache_capacity_bytes}. *)
+          {!Ir.Cost_model.ranking_seconds}), where {!field-peak_flops} stays the bound's ceiling;
+          accepted [Tile_mma] work is priced at {!field-mma_rate}. The slope of
+          [tools/calibrate_issue_rate.exe]'s sweep of the seeded weight-gradient sketch — or, where
+          {!field-fill_threads} is set, the full-fill rate its launch sweep fits jointly with it
+          (gh-ocannl-1479): the two are one calibration, and a pre-fill rate under a fill model
+          double-counts the calibration kernel's partial fill. Read as at most {!field-peak_flops}.
+          Overridable by config [model_issue_rate]; [None] where unmeasured, which prices scalar
+          work at {!field-peak_flops} as before. Same readers and same cache identity as
+          {!field-cache_capacity_bytes}. *)
   dram_bandwidth : float option; [@sexp.option]
       (** [Untimed]: the DRAM rate kernels achieve, in bytes/s — the ranking score's DRAM tier and
           distinct-byte charge (gh-ocannl-1442), where {!field-peak_memory_bandwidth} stays the
@@ -380,6 +381,28 @@ type hardware_limits = {
           {!field-peak_memory_bandwidth}. Overridable by config [model_dram_bandwidth]; [None] where
           unmeasured, which prices DRAM traffic at {!field-peak_memory_bandwidth} as before. Same
           readers and same cache identity as {!field-cache_capacity_bytes}. *)
+  mma_rate : float option; [@sexp.option]
+      (** [Untimed]: the effective rate, in operations/s (an FMA counting two), of [Tile_mma] work
+          the backend's [mma_accepts] hook accepts — the ranking score's compute leg for work on the
+          matrix units (gh-ocannl-1495, {!Ir.Cost_model.ranking_seconds}). A FITTED constant of the
+          emitted tensorized kernels, operand staging and shared-memory loads included, not the
+          units' datasheet peak: the geometric mean of the rates the staged tensorized leaves of a
+          site achieve ([benchmarks/gh1442_agreement.py --fit-mma]). Read as at most
+          {!field-peak_flops}. Overridable by config [model_mma_rate]; [None] where unmeasured,
+          which prices tile-MMA work at {!field-peak_flops} as before. Same readers and same cache
+          identity as {!field-cache_capacity_bytes}. *)
+  device_gather_rate : float option; [@sexp.option]
+      (** [Untimed]: how many per-lane operand gather instructions a lane group issues per second
+          from DEVICE memory — the rate of the ranking score's device-gather term (gh-ocannl-1495,
+          {!Ir.Cost_model.device_operand_gathers}): a [Tile_mma] operand the arm gathers element by
+          element straight from global memory (an unstaged inline-PTX operand) costs its count over
+          this rate, at the [Tile_mma] contexts' fill. Its unit is the operand-load count's
+          (executions per lane group times instructions per lane). Shared-memory gathers, [ldmatrix]
+          and whole-fragment loads are not counted. A FITTED constant: the rate that makes a site's
+          unstaged tensorized leaves' excess over {!field-mma_rate} come out as measured
+          ([benchmarks/gh1442_agreement.py --fit-mma]). Overridable by config
+          [model_device_gather_rate]; [None] where unmeasured, which adds no term. Same readers and
+          same cache identity as {!field-cache_capacity_bytes}. *)
   multiprocessors : int option; [@sexp.option]
       (** [Untimed]: the device's multiprocessor (SM / CU / GPU core) count — the [P] of the ranking
           score's launch fill (gh-ocannl-1479, {!Ir.Cost_model.context_fill}). Queried on CUDA and
@@ -796,6 +819,8 @@ let no_hardware_limits =
     cache_bandwidth = None;
     issue_rate = None;
     dram_bandwidth = None;
+    mma_rate = None;
+    device_gather_rate = None;
     multiprocessors = None;
     fill_threads = None;
     native_fp16_arithmetic = false;
@@ -874,6 +899,8 @@ let limits_key
        cache_bandwidth = _;
        issue_rate = _;
        dram_bandwidth = _;
+       mma_rate = _;
+       device_gather_rate = _;
        multiprocessors = _;
        fill_threads = _;
        native_fp16_arithmetic;
@@ -911,6 +938,8 @@ type untimed_limits = {
   cache_rate : float option;
   scalar_rate : float option;  (** {!field-hardware_limits.issue_rate}. *)
   dram_rate : float option;  (** {!field-hardware_limits.dram_bandwidth}. *)
+  matrix_rate : float option;  (** {!field-hardware_limits.mma_rate}. *)
+  gather_rate : float option;  (** {!field-hardware_limits.device_gather_rate}. *)
   core_count : int option;  (** {!field-hardware_limits.multiprocessors}. *)
   saturation_threads : int option;  (** {!field-hardware_limits.fill_threads}. *)
 }
@@ -924,6 +953,8 @@ let untimed_limits (l : hardware_limits) : untimed_limits =
     cache_rate = l.cache_bandwidth;
     scalar_rate = l.issue_rate;
     dram_rate = l.dram_bandwidth;
+    matrix_rate = l.mma_rate;
+    gather_rate = l.device_gather_rate;
     core_count = l.multiprocessors;
     saturation_threads = l.fill_threads;
   }

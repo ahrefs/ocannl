@@ -15,13 +15,14 @@
    lists -- the incumbent, then every whole-routine sketch leaf, then the coalesced branch's leaves
    the tuner seeds beside them (gh-ocannl-1278; [admitted] there says whether the leaf's uncoalesced
    form is) -- with its ranking score and the score's two legs under the configuration in force
-   (pass the box's fitted [model_*] constants, or [none] for the ceilings). With [BENCH_TUNE=1], the
-   same computation then goes through [Autotune.tune] with seed candidates only ([~rounds:0]) and no
-   schedule cache: every timed candidate appends a calibration row (label and measured time) to
-   config [autotune_calibration_file], which the driver joins with the explain lines by label
-   (benchmarks/gh1442_agreement.py). The labels are the ones [autotune_log] prints, which
-   [model_explain] uses too. [anchor=true] marks the leaf [model_default] anchors its walk at under
-   seeding, the seeded plan's own sketch (gh-ocannl-1477): a leaf must rank strictly below it.
+   (pass the box's fitted [model_*] constants, or [none] for the ceilings), and the accepted
+   tile-MMA work and device gathers the compute leg divides by their rates (gh-ocannl-1495). With
+   [BENCH_TUNE=1], the same computation then goes through [Autotune.tune] with seed candidates only
+   ([~rounds:0]) and no schedule cache: every timed candidate appends a calibration row (label and
+   measured time) to config [autotune_calibration_file], which the driver joins with the explain
+   lines by label (benchmarks/gh1442_agreement.py). The labels are the ones [autotune_log] prints,
+   which [model_explain] uses too. [anchor=true] marks the leaf [model_default] anchors its walk at
+   under seeding, the seeded plan's own sketch (gh-ocannl-1477): a leaf must rank strictly below it.
    Nothing here is a value check: the tuner's own validation and the timings are the point. *)
 
 open Base
@@ -95,17 +96,25 @@ let () =
   in
   let ctx = Context.auto () in
   let ms = Option.value_map ~default:"n/a" ~f:(Printf.sprintf "%.6f") in
+  let sum =
+    Option.value_map ~default:"n/a" ~f:(fun xs ->
+        Printf.sprintf "%.6e" (List.fold xs ~init:0. ~f:Float.( + )))
+  in
   List.iter
     (Autotune.model_explain ~name ~coalesced:true ctx comp Ir.Indexing.Empty).Autotune.x_routine
     ~f:(fun (label, ex) ->
       Stdio.printf
         "rank-site: explain site=%s label=%S rank_ms=%s compute_ms=%s memory_ms=%s floor_ms=%s \
-         admitted=%b anchor=%b fills=%s\n\
+         admitted=%b anchor=%b fills=%s mma_work=%s gathers=%s\n\
          %!"
         site label (ms ex.Autotune.ex_rank_ms) (ms ex.ex_compute_ms) (ms ex.ex_memory_ms)
         (ms ex.ex_floor_ms) ex.ex_admitted ex.ex_anchor
         (Option.value_map ex.ex_fills ~default:"n/a" ~f:(fun fills ->
-             String.concat ~sep:"," (List.map fills ~f:(Printf.sprintf "%.4f")))));
+             String.concat ~sep:"," (List.map fills ~f:(Printf.sprintf "%.4f"))))
+        (* gh-ocannl-1495: summed over kernels, as the compute leg divides them by their rates --
+           what [gh1442_agreement.py --fit-mma] fits the tile-MMA and device-gather rates from. *)
+        (sum ex.ex_mma_work)
+        (sum ex.ex_device_gathers));
   (* [BENCH_PICK=1] (gh-ocannl-1278): what [Autotune.model_default] actually picks here under the
      configuration in force, read off the compile itself. Nothing is timed. [seeded_label] names the
      seeded plan under the same configuration as the tuner labels its seed ([F_seeded[...]], the

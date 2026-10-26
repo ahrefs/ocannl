@@ -628,7 +628,12 @@ let roofline_seconds ?peak_flops ?peak_memory_bandwidth ~flops ~bytes () : float
    gh-ocannl-1442: the score's rates are its own, not the bound's ceilings — an effective scalar
    issue rate and an achieved DRAM rate, each read as at most its ceiling — and under the per-block
    model the bytes of nodes that never leave the chip (workgroup tiles, thread-private scratch) are
-   off the DRAM leg: the fitted issue rate carries their cost for the geometry it was fitted on. *)
+   off the DRAM leg: the fitted issue rate carries their cost for the geometry it was fitted on.
+
+   gh-ocannl-1495: accepted tile-MMA work at the matrix units' own fitted rate, and the per-lane
+   operand gathers its statements issue straight from device memory at theirs -- what staging buys,
+   which every score before tied: at the gh-ocannl-1190 fp8 site the staged leaves ran 2.3x faster
+   than the unstaged argmin. *)
 
 type reuse = {
   ru_requested : (Tn.t * int) list;
@@ -796,9 +801,30 @@ let scratch_bytes (s : summary) (r : reuse) =
       List.Assoc.find s.per_node tn ~equal:Tn.equal
       |> Option.value_map ~default:0 ~f:(fun fp -> fp.fp_read_bytes + fp.fp_write_bytes))
 
+(* gh-ocannl-1495: the device gathers priced, where a rate prices them: [None] without a rate or
+   without gathers, so an unset rate leaves the compute leg's arithmetic exactly as before. *)
+let priced_gathers ~device_gathers device_gather_rate =
+  match device_gather_rate with
+  | Some g when device_gathers > 0 && Float.(g > 0.) -> Some (Float.of_int device_gathers, g)
+  | _ -> None
+
+(* The tile-MMA work and the device gathers as the compute leg prices them: each over its [Tile_mma]
+   contexts' fill under a launch model, as counted without one. *)
+let filled_mma_terms ?launch ~mma ~gathers () =
+  match launch with
+  | Some (fm, contexts) ->
+      (filled_work fm contexts ~tile:true mma, filled_work fm contexts ~tile:true gathers)
+  | None -> (mma, gathers)
+
+let ranking_mma_terms ?(mma_flops = 0) ?(device_gathers = 0) ?launch (s : summary) =
+  filled_mma_terms ?launch
+    ~mma:(Float.of_int (min (max 0 mma_flops) s.flops))
+    ~gathers:(Float.of_int (max 0 device_gathers))
+    ()
+
 let ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
-    ?issue_rate ?dram_bandwidth ?(mma_flops = 0) ?launch (s : summary) (r : reuse option) :
-    float option * float option =
+    ?issue_rate ?dram_bandwidth ?mma_rate ?(mma_flops = 0) ?(device_gathers = 0) ?device_gather_rate
+    ?launch (s : summary) (r : reuse option) : float option * float option =
   let total = Float.of_int (total_bytes s) in
   let memory =
     Option.map peak_memory_bandwidth ~f:(fun ceiling ->
@@ -825,51 +851,66 @@ let ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?ca
   let compute =
     Option.map peak_flops ~f:(fun ceiling ->
         let issue = ranking_rate ~ceiling issue_rate in
+        (* gh-ocannl-1495: accepted tile-MMA work at the matrix units' own fitted rate, at most the
+           ceiling; per-lane operand gathers from device memory at theirs, an addition that only
+           raises the leg. *)
+        let matrix = ranking_rate ~ceiling mma_rate in
+        let gathers = priced_gathers ~device_gathers device_gather_rate in
         (* Only tile-MMA work the backend accepts runs on its matrix units; the caller's count, at
            most the summary's operations. *)
         let mma = Float.of_int (min (max 0 mma_flops) s.flops) in
+        let mma_filled, gathers_filled =
+          filled_mma_terms ?launch ~mma ~gathers:(Option.value_map gathers ~default:0. ~f:fst) ()
+        in
+        let with_gathers leg =
+          match gathers with None -> leg | Some (_, g) -> leg +. (gathers_filled /. g)
+        in
         match launch with
         | Some (fm, contexts) ->
             (* gh-ocannl-1479: scalar work at the issue rate times its contexts' fill. Tile-MMA work
                runs where the [Tile_mma] statements sit, on the multiprocessors their launch covers:
-               accepted work at the matrix units' ceiling, declined work (its scalar fallback) at
-               the issue rate, each times the [Tile_mma] contexts' fill. Unfilled, a plain
-               tensorized leaf -- its batch loops serial in a few blocks -- tied its [bgrid] twin on
-               Metal and was the pick, measured 12x slower. The saturating thread count is the
-               scalar sweep's; for the matrix units it is uncalibrated, and what orders plain
+               accepted work at the matrix units' rate (gh-ocannl-1495), declined work (its scalar
+               fallback) at the issue rate, each times the [Tile_mma] contexts' fill. Unfilled, a
+               plain tensorized leaf -- its batch loops serial in a few blocks -- tied its [bgrid]
+               twin on Metal and was the pick, measured 12x slower. The saturating thread count is
+               the scalar sweep's; for the matrix units it is uncalibrated, and what orders plain
                against [bgrid] is the blocks-over-multiprocessors factor. *)
             let tile_ops =
               List.sum (module Int) contexts ~f:(fun c -> if c.lc_tile_mma then c.lc_ops else 0)
             in
             let declined = Float.max 0. (Float.of_int tile_ops -. mma) in
             let scalar = Float.max 0. (Float.of_int s.flops -. mma -. declined) in
-            (filled_work fm contexts ~tile:false scalar
-            +. filled_work fm contexts ~tile:true declined)
-            /. issue
-            +. (filled_work fm contexts ~tile:true mma /. ceiling)
+            with_gathers
+              ((filled_work fm contexts ~tile:false scalar
+               +. filled_work fm contexts ~tile:true declined)
+               /. issue
+              +. (mma_filled /. matrix))
         | None ->
-            (* At the ceiling, the bound's own quotient: exact ties between candidates stay
+            (* At the ceilings, the bound's own quotient: exact ties between candidates stay
                exact. *)
-            if Float.(issue >= ceiling) then Float.of_int s.flops /. ceiling
+            if Float.(issue >= ceiling && matrix >= ceiling) then
+              with_gathers (Float.of_int s.flops /. ceiling)
             else
               let scalar = Float.of_int s.flops -. mma in
-              (scalar /. issue) +. (mma /. ceiling))
+              with_gathers ((scalar /. issue) +. (mma_filled /. matrix)))
   in
   (compute, memory)
 
 let ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
-    ?issue_rate ?dram_bandwidth ?mma_flops ?launch (s : summary) (r : reuse option) : float option =
+    ?issue_rate ?dram_bandwidth ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate ?launch
+    (s : summary) (r : reuse option) : float option =
   let compute, memory =
     ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
-      ?issue_rate ?dram_bandwidth ?mma_flops ?launch s r
+      ?issue_rate ?dram_bandwidth ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate ?launch s
+      r
   in
   match List.filter_opt [ compute; memory ] with
   | [] -> None
   | l -> Some (List.reduce_exn l ~f:Float.max)
 
 let ranking_seconds ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
-    ?issue_rate ?dram_bandwidth ?mma_flops ?fill_model ?max_resident_threads ~is_global
-    (code : Low_level.t) : float option =
+    ?issue_rate ?dram_bandwidth ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate ?fill_model
+    ?max_resident_threads ~is_global (code : Low_level.t) : float option =
   let s = analyze code in
   let launch = Option.map fill_model ~f:(fun fm -> (fm, launch_contexts code)) in
   let r =
@@ -878,7 +919,7 @@ let ranking_seconds ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?ca
     | _ -> Some (reuse_traffic ?max_resident_threads ~is_global code)
   in
   ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
-    ?issue_rate ?dram_bandwidth ?mma_flops ?launch s r
+    ?issue_rate ?dram_bandwidth ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate ?launch s r
 
 (* {2 Tile-MMA operand loads — gh-ocannl-1254}
 
@@ -924,7 +965,7 @@ let operand_load_instructions ~lanes ~elements ~elt_bytes = function
    bytes per lane), in every inline-PTX arm; an arm whose fragments load whole ([mf_fragment_loads]:
    wmma, [simdgroup_load], rocWMMA) issues one load per fragment. Extents the tile does not divide
    (the arm declines them) have no count. *)
-let statement_operand_loads (fragments : Backend_intf.mma_fragments) ~ldmatrix:(a_ldm, b_ldm)
+let statement_operand_load_forms (fragments : Backend_intf.mma_fragments) ~ldmatrix:(a_ldm, b_ldm)
     ~a_prec ~b_prec ~lanes ~m ~n ~k =
   let { Backend_intf.mf_tile = tm, tn, tk; mf_reloads; mf_fragment_loads } = fragments in
   if tm > 0 && tn > 0 && tk > 0 && m % tm = 0 && n % tn = 0 && k % tk = 0 then
@@ -939,12 +980,16 @@ let statement_operand_loads (fragments : Backend_intf.mma_fragments) ~ldmatrix:(
         else if mf_fragment_loads then Fragment_load
         else Gather { elt_bytes }
       in
-      frags * operand_load_instructions ~lanes:(max 1 lanes) ~elements ~elt_bytes form
+      (form, frags * operand_load_instructions ~lanes:(max 1 lanes) ~elements ~elt_bytes form)
     in
     Some
       ( loads a_prec a_ldm ~lane_bytes:16 ~elements:(tm * tk) ~frags:a_frags,
         loads b_prec b_ldm ~lane_bytes:8 ~elements:(tk * tn) ~frags:b_frags )
   else None
+
+let statement_operand_loads fragments ~ldmatrix ~a_prec ~b_prec ~lanes ~m ~n ~k =
+  Option.map (statement_operand_load_forms fragments ~ldmatrix ~a_prec ~b_prec ~lanes ~m ~n ~k)
+    ~f:(fun ((_, a), (_, b)) -> (a, b))
 
 (* Every [Tile_mma] statement the statement walk reaches, with its executions per lane group ([scale
    / lanes]), lanes and emission scope -- [None] where the renderer's layouts or the backend's hook
@@ -1070,7 +1115,11 @@ let tile_mma_scopes ~operand_accepts (opt : Low_level.optimized) : mma_site list
   go ~scale:1 ~env:[] opt.Low_level.llc;
   List.rev !sites
 
-let tile_mma_operand_loads ~operand_accepts ~operand_fragments ~operand_loads
+(* Per [Tile_mma] statement the walk reaches: its executions per lane group and, per operand, its
+   place, load form and per-lane instructions per execution -- [None] where the statement is
+   declined or its arm undescribed. The one description both the operand-load count and the
+   device-gather count (gh-ocannl-1495) read. *)
+let tile_mma_operand_forms ~operand_accepts ~operand_fragments ~operand_loads
     (opt : Low_level.optimized) =
   let prec tn = Lazy.force tn.Tn.storage_prec in
   List.map (tile_mma_scopes ~operand_accepts opt)
@@ -1080,16 +1129,43 @@ let tile_mma_operand_loads ~operand_accepts ~operand_fragments ~operand_loads
           let a_prec = prec a_tn and b_prec = prec b_tn and d_prec = prec d_tn in
           let description =
             Option.map scope ~f:(fun (scope, a_place, b_place) ->
-                ( operand_loads ~a_prec ~b_prec ~d_prec ~scope ~ta ~tb ~a:a_place ~b:b_place,
+                ( (a_place, b_place),
+                  operand_loads ~a_prec ~b_prec ~d_prec ~scope ~ta ~tb ~a:a_place ~b:b_place,
                   operand_fragments ~a_prec ~b_prec ~d_prec ~scope ))
           in
           match description with
-          | Some (ldmatrix, Some fragments) ->
+          | Some ((a_place, b_place), ldmatrix, Some fragments) ->
               Option.map
-                (statement_operand_loads fragments ~ldmatrix ~a_prec ~b_prec ~lanes ~m ~n ~k)
-                ~f:(fun (a_loads, b_loads) -> (scale / lanes, a_loads + b_loads))
-          | Some (_, None) | None -> None)
+                (statement_operand_load_forms fragments ~ldmatrix ~a_prec ~b_prec ~lanes ~m ~n ~k)
+                ~f:(fun ((a_form, a_loads), (b_form, b_loads)) ->
+                  (scale / lanes, [ (a_place, a_form, a_loads); (b_place, b_form, b_loads) ]))
+          | Some (_, _, None) | None -> None)
       | _ -> None)
+
+let tile_mma_operand_loads ~operand_accepts ~operand_fragments ~operand_loads opt =
+  List.map
+    (tile_mma_operand_forms ~operand_accepts ~operand_fragments ~operand_loads opt)
+    ~f:
+      (Option.map ~f:(fun (executions, operands) ->
+           (executions, List.sum (module Int) operands ~f:(fun (_, _, loads) -> loads))))
+
+(* gh-ocannl-1495: the per-lane gathers a kernel's accepted [Tile_mma] statements issue straight
+   from device memory -- operands the arm gathers element by element ([Gather]) from a [`Device]
+   place -- in the operand-load count's unit. A declined or undescribed statement adds nothing: its
+   pricing is the score's as before. *)
+let device_operand_gathers ~operand_accepts ~operand_fragments ~operand_loads opt =
+  List.sum
+    (module Int)
+    (tile_mma_operand_forms ~operand_accepts ~operand_fragments ~operand_loads opt)
+    ~f:(function
+      | None -> 0
+      | Some (executions, operands) ->
+          executions
+          * List.sum
+              (module Int)
+              operands
+              ~f:(fun (((space, _) : Backend_intf.mma_operand_place), form, loads) ->
+                match (space, form) with `Device, Gather _ -> loads | _ -> 0))
 
 let accepted_tile_mma_flops ~operand_accepts (opt : Low_level.optimized) =
   List.sum

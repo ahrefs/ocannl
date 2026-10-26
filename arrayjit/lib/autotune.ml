@@ -2777,6 +2777,19 @@ let dram_bandwidth_override =
     (parse_rate ~key:"model_dram_bandwidth" ~what:"rate in bytes/s"
        (Utils.get_global_arg ~arg_name:"model_dram_bandwidth" ~default:""))
 
+(* gh-ocannl-1495: the tile-MMA rate (operations/s; [none]: accepted tile-MMA work priced at the
+   envelope's [peak_flops]) and the device-gather rate (per-lane gathers/s; [none]: no gather term)
+   beat the backend's advisory [mma_rate] / [device_gather_rate]. Same readers and class. *)
+let mma_rate_override =
+  lazy
+    (parse_rate ~key:"model_mma_rate" ~what:"rate in operations/s"
+       (Utils.get_global_arg ~arg_name:"model_mma_rate" ~default:""))
+
+let device_gather_rate_override =
+  lazy
+    (parse_rate ~key:"model_device_gather_rate" ~what:"rate in gathers/s"
+       (Utils.get_global_arg ~arg_name:"model_device_gather_rate" ~default:""))
+
 let resolve override advisory =
   match Lazy.force override with `Advisory -> advisory | `Off -> None | `Value v -> Some v
 
@@ -2823,6 +2836,14 @@ let ranking_dram_bandwidth ~limits =
   let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
   resolve dram_bandwidth_override u.dram_rate
 
+let ranking_mma_rate ~limits =
+  let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
+  resolve mma_rate_override u.matrix_rate
+
+let ranking_device_gather_rate ~limits =
+  let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
+  resolve device_gather_rate_override u.gather_rate
+
 let ranking_fill_model ~limits : CM.fill_model option =
   let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
   match
@@ -2839,14 +2860,18 @@ type kernel_legs = {
   kl_fill : float;
       (** gh-ocannl-1479: the kernel's scalar launch fill ({!Ir.Cost_model.launch_fill}), 1 without
           a fill model. A diagnostic: the compute leg sums per context. *)
+  kl_mma_work : float;
+  kl_device_gathers : float;
+      (** gh-ocannl-1495: the accepted tile-MMA work and the device gathers as the compute leg
+          divides them by their rates ({!Ir.Cost_model.ranking_mma_terms}). *)
 }
 
 (* Per kernel, the ranking score's two legs and whether its working set left the cache, beside the
    candidate's roofline lower bound ([summaries_roofline]'s). [None] exactly where
    [summaries_roofline] is. *)
-let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth ?fill_model
-    ~peak_flops ~peak_memory_bandwidth ~limits (segs : LL.optimized list) :
-    (float * kernel_legs list) option =
+let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth ?mma_rate
+    ?device_gather_rate ?fill_model ~peak_flops ~peak_memory_bandwidth ~limits
+    (segs : LL.optimized list) : (float * kernel_legs list) option =
   (* Each reading only where no explicit value replaces it: a caller's gate isolates the score from
      the configuration it overrides, a malformed override of it included. *)
   let max_resident_threads = (Ir.Backend_intf.untimed_limits limits).resident_threads in
@@ -2859,6 +2884,10 @@ let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_ban
   let issue_rate = match issue_rate with Some r -> r | None -> ranking_issue_rate ~limits in
   let dram_bandwidth =
     match dram_bandwidth with Some r -> r | None -> ranking_dram_bandwidth ~limits
+  in
+  let mma_rate = match mma_rate with Some r -> r | None -> ranking_mma_rate ~limits in
+  let device_gather_rate =
+    match device_gather_rate with Some r -> r | None -> ranking_device_gather_rate ~limits
   in
   let fill_model = match fill_model with Some f -> f | None -> ranking_fill_model ~limits in
   let summaries = List.map segs ~f:(fun o -> (o, CM.analyze o.LL.llc)) in
@@ -2878,19 +2907,29 @@ let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_ban
               (* gh-ocannl-1479: the compute nests' own launches, whether or not the cache tiers are
                  on. *)
               let launch = Option.map fill_model ~f:(fun fm -> (fm, CM.launch_contexts o.LL.llc)) in
+              (* gh-ocannl-1442: tile-MMA work runs on the matrix units only where the backend's own
+                 hook accepts it; without the capabilities to ask, all of it is priced as scalar
+                 work. gh-ocannl-1495: the per-lane gathers its operands issue from device memory,
+                 under the backend's own description of its arms. *)
+              let mma_flops, device_gathers =
+                Option.value_map capabilities ~default:(0, 0)
+                  ~f:(fun (c : Ir.Backend_intf.codegen_capabilities) ->
+                    ( CM.accepted_tile_mma_flops ~operand_accepts:c.mma_accepts o,
+                      CM.device_operand_gathers ~operand_accepts:c.mma_accepts
+                        ~operand_fragments:c.mma_operand_fragments
+                        ~operand_loads:c.mma_operand_loads o ))
+              in
               let kl_compute, kl_memory =
-                (* gh-ocannl-1442: tile-MMA work runs on the matrix units only where the backend's
-                   own hook accepts it; without the capabilities to ask, all of it is priced as
-                   scalar work. *)
-                let mma_flops =
-                  Option.value_map capabilities ~default:0
-                    ~f:(fun (c : Ir.Backend_intf.codegen_capabilities) ->
-                      CM.accepted_tile_mma_flops ~operand_accepts:c.mma_accepts o)
-                in
                 CM.ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes
-                  ?cache_bandwidth ?issue_rate ?dram_bandwidth ~mma_flops ?launch s reuse
+                  ?cache_bandwidth ?issue_rate ?dram_bandwidth ?mma_rate ~mma_flops ~device_gathers
+                  ?device_gather_rate ?launch s reuse
+              in
+              let kl_mma_work, kl_device_gathers =
+                CM.ranking_mma_terms ~mma_flops ~device_gathers ?launch s
               in
               {
+                kl_mma_work;
+                kl_device_gathers;
                 kl_compute;
                 kl_memory;
                 kl_spilled = Option.exists reuse ~f:(CM.spills ?cache_capacity_bytes);
@@ -2910,12 +2949,13 @@ let kernel_rank { kl_compute; kl_memory; _ } =
    {!Ir.Cost_model.ranking_seconds_of}' contract. [None] exactly where [summaries_roofline] is. Read
    by the untimed choosers only — [model_default], [model_explain] and the [auto] seeding gate. An
    explicit [capacity] / [cache_bandwidth] (the gate's own, or a test's) overrides the readings. *)
-let segments_ranking ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth
-    ?fill_model ~peak_flops ~peak_memory_bandwidth ~limits (segs : LL.optimized list) :
-    (float * float) option =
+let segments_ranking ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth ?mma_rate
+    ?device_gather_rate ?fill_model ~peak_flops ~peak_memory_bandwidth ~limits
+    (segs : LL.optimized list) : (float * float) option =
   Option.map
-    (segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth ?fill_model
-       ~peak_flops ~peak_memory_bandwidth ~limits segs) ~f:(fun (bound, legs) ->
+    (segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth ?mma_rate
+       ?device_gather_rate ?fill_model ~peak_flops ~peak_memory_bandwidth ~limits segs)
+    ~f:(fun (bound, legs) ->
       (List.fold legs ~init:0. ~f:(fun acc l -> acc +. kernel_rank l), bound))
 
 let ranking_ms ?capabilities ~limits segs =
@@ -5114,6 +5154,8 @@ type seed_gate =
       cache_rate : float option;
       scalar_rate : float option;
       dram_rate : float option;
+      matrix_rate : float option;
+      gather_rate : float option;
       fill : Ir.Cost_model.fill_model option;
     }
 
@@ -5126,11 +5168,17 @@ let seed_gate_fallback = 32
    seeding's decisions can then say which gate, and which launch fill, decided them). *)
 let seed_gate_tag = function
   | Min_reduction n -> Printf.sprintf "min_reduction=%d" n
-  | Ranked { capacity; cache_rate; scalar_rate; dram_rate; fill } ->
+  | Ranked { capacity; cache_rate; scalar_rate; dram_rate; matrix_rate; gather_rate; fill } ->
       let rate = Option.value_map ~default:"none" ~f:Float.to_string in
-      Printf.sprintf "ranked capacity=%s cache_rate=%s scalar_rate=%s dram_rate=%s%s"
+      (* gh-ocannl-1495: the tile-MMA and device-gather rates only where set, so a gate without them
+         keeps its tag. *)
+      let set key =
+        Option.value_map ~default:"" ~f:(fun r -> Printf.sprintf " %s=%s" key (rate (Some r)))
+      in
+      Printf.sprintf "ranked capacity=%s cache_rate=%s scalar_rate=%s dram_rate=%s%s%s%s"
         (Option.value_map capacity ~default:"none" ~f:Int.to_string)
-        (rate cache_rate) (rate scalar_rate) (rate dram_rate)
+        (rate cache_rate) (rate scalar_rate) (rate dram_rate) (set "matrix_rate" matrix_rate)
+        (set "gather_rate" gather_rate)
         (Option.value_map fill ~default:""
            ~f:(fun { Ir.Cost_model.fm_multiprocessors; fm_fill_threads } ->
              Printf.sprintf " fill=%dx%d" fm_multiprocessors fm_fill_threads))
@@ -5163,6 +5211,8 @@ let seeded_default_gate ~limits =
               cache_rate;
               scalar_rate = ranking_issue_rate ~limits;
               dram_rate = ranking_dram_bandwidth ~limits;
+              matrix_rate = ranking_mma_rate ~limits;
+              gather_rate = ranking_device_gather_rate ~limits;
               fill = ranking_fill_model ~limits;
             })
 
@@ -5488,7 +5538,7 @@ let seeded_split ~backend ~min_serial ~static_indices (opt : LL.optimized) =
    build, to apply or to score keeps the preset. Only a typed refusal fails: any other exception is
    a builder or transform bug and propagates (gh-ocannl-1390). *)
 let seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices ~capacity ~cache_bandwidth
-    ~issue_rate ~dram_bandwidth ~fill_model p pre =
+    ~issue_rate ~dram_bandwidth ~mma_rate ~device_gather_rate ~fill_model p pre =
   let peak_flops, peak_memory_bandwidth = envelope ~limits in
   let rank sched =
     match Sched.apply_classified ~static_indices (sched ()) (scratch_of pre) with
@@ -5496,7 +5546,8 @@ let seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices ~capacity ~c
     | post ->
         Option.map
           (segments_ranking ~capabilities ~capacity ~cache_bandwidth ~issue_rate ~dram_bandwidth
-             ~fill_model ~peak_flops ~peak_memory_bandwidth ~limits [ post ])
+             ~mma_rate ~device_gather_rate ~fill_model ~peak_flops ~peak_memory_bandwidth ~limits
+             [ post ])
           ~f:fst
   in
   match
@@ -5521,13 +5572,14 @@ let seeded_segment_judgment ~capabilities ~limits ~accum_prec ~admit_narrow ~sta
         Error "sketch seeding is off (gpu_default_sketch_min_reduction=0)"
     | Min_reduction min_reduction ->
         seeded_params_judged ~capabilities ~admit_narrow ~limits ~accum_prec ~min_reduction pre
-    | Ranked { capacity; cache_rate; scalar_rate; dram_rate; fill } -> (
+    | Ranked { capacity; cache_rate; scalar_rate; dram_rate; matrix_rate; gather_rate; fill } -> (
         match
           seeded_params_judged ~capabilities ~admit_narrow ~limits ~accum_prec ~min_reduction:1 pre
         with
         | Ok p
           when ranked_below ~capacity ~cache_bandwidth:cache_rate ~issue_rate:scalar_rate
-                 ~dram_bandwidth:dram_rate ~fill_model:fill p pre ->
+                 ~dram_bandwidth:dram_rate ~mma_rate:matrix_rate ~device_gather_rate:gather_rate
+                 ~fill_model:fill p pre ->
             Ok p
         | Ok p ->
             Error
@@ -6519,6 +6571,8 @@ type explain = {
   ex_memory_ms : float option;
   ex_spilled : bool option;
   ex_fills : float list option;
+  ex_mma_work : float list option;
+  ex_device_gathers : float list option;
   ex_operand_loads : CM.load_count;
   ex_admitted : bool;
   ex_anchor : bool;
@@ -6550,6 +6604,8 @@ let model_explain ?name ?(coalesced = false) ctx comp bindings =
           ex_memory_ms = None;
           ex_spilled = None;
           ex_fills = None;
+          ex_mma_work = None;
+          ex_device_gathers = None;
           ex_operand_loads;
           ex_admitted;
           ex_anchor;
@@ -6566,6 +6622,8 @@ let model_explain ?name ?(coalesced = false) ctx comp bindings =
           ex_memory_ms = ms (total (fun l -> l.kl_memory));
           ex_spilled = Some (List.exists legs ~f:(fun l -> l.kl_spilled));
           ex_fills = Some (List.map legs ~f:(fun l -> l.kl_fill));
+          ex_mma_work = Some (List.map legs ~f:(fun l -> l.kl_mma_work));
+          ex_device_gathers = Some (List.map legs ~f:(fun l -> l.kl_device_gathers));
           ex_operand_loads;
           ex_admitted;
           ex_anchor;

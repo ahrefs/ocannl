@@ -2,6 +2,7 @@
 """gh-ocannl-1442: how well a ranking score orders what the autotuner measured at one site.
 
 Usage: gh1442_agreement.py TSV NAME=EXPLAIN [NAME=EXPLAIN ...] [--pick NAME=OUT ...] [--band B]
+                           [--fit-mma EXPLAIN]
 
   TSV      the calibration rows the site's tuning cell appended (config autotune_calibration_file:
            backend, digest, routine, label, measured ms, ...), one per timed candidate.
@@ -11,6 +12,9 @@ Usage: gh1442_agreement.py TSV NAME=EXPLAIN [NAME=EXPLAIN ...] [--pick NAME=OUT 
   --pick   a bench_rank_site.exe stdout holding only a `rank-site: pick` line (BENCH_PICK=1), say
            under a profile: its pick is reported as below, without the ranking analysis.
   --band   relative measured difference below which a pair counts as tied, noise (default 0.10).
+  --fit-mma  a bench_rank_site.exe stdout whose explain lines carry `mma_work=` and `gathers=`
+           (gh-ocannl-1495): fits the ranking score's tile-MMA and device-gather rates from the
+           tensorized leaves joined to the rows (see below).
 
 The explain lines and the rows join by label: model_explain labels its sketch leaves as the tuner
 does; its incumbent `default` is the tuner's `baseline` row and `seeded` its `F_seeded[...]` row.
@@ -46,9 +50,20 @@ seeded plan's row both timed. An explicit --pick output without a pick line fail
 passed -- unless the pick line carries the pick cell's own timing (gh-ocannl-1479: `pick_ms` and
 `untuned_ms`, the pick and its configuration's untuned plan timed in one process), which every
 pick line then reports as `pick_over_untuned` beside `pick_over_best`. Stdout only; exit 2 on unusable input.
+
+gh-ocannl-1495, --fit-mma: per joined candidate with accepted tile-MMA work W (operations, over its
+Tile_mma contexts' fill, as the compute leg divides it) and device gathers G (likewise), measured
+at t seconds. The tile-MMA rate is the geometric mean of W/t over the leaves with W > 0 and G = 0
+(the staged ones: their shared-memory loads and staging copies are in the rate); the device-gather
+rate the geometric mean of G/(t - W/rate) over the leaves with G > 0 whose time exceeds their
+tile-MMA part. The scalar work of a tensorized leaf (its staging copies) is left in t: a fit, not a
+decomposition. Prints `model_mma_rate=` and `model_device_gather_rate=` lines, each leaf's
+prediction W/rate + G/gather_rate beside its time, and `mma-fit: none` where a class of leaves is
+missing (not an error: the agreement analysis goes on).
 """
 
 import argparse
+import math
 import re
 import sys
 
@@ -179,6 +194,45 @@ def scores(path):
     return out
 
 
+MMA_TERMS = re.compile(r'rank-site: explain .*?label="((?:[^"\\]|\\.)*)" .* mma_work=(\S+)'
+                       r' gathers=(\S+)')
+
+
+def fit_mma(path, times):
+    """gh-ocannl-1495: prints the fitted tile-MMA and device-gather rates; False when nothing fits."""
+    leaves = []
+    with open(path) as f:
+        for line in f:
+            m = MMA_TERMS.search(line)
+            if not m or "n/a" in (m.group(2), m.group(3)):
+                continue
+            label = unescape(m.group(1))
+            row = row_label(label, times)
+            work, gathers = float(m.group(2)), float(m.group(3))
+            if row is not None and work > 0:
+                leaves.append((label, times[row] / 1e3, work, gathers))
+    staged = [(l, t, w) for l, t, w, g in leaves if g == 0]
+    if not staged:
+        print("mma-fit: none (no timed tensorized leaf without device gathers)")
+        return False
+    rate = math.exp(sum(math.log(w / t) for _, t, w in staged) / len(staged))
+    print(f"model_mma_rate={rate:.6e}  # from {len(staged)} leaves without device gathers")
+    excess = [(l, g / (t - w / rate)) for l, t, w, g in leaves if g > 0 and t > w / rate]
+    gather_rate = (math.exp(sum(math.log(r) for _, r in excess) / len(excess))
+                   if excess else None)
+    if gather_rate is None:
+        print("mma-fit: no device-gather rate (no timed leaf with device gathers above its"
+              " tile-MMA part)")
+    else:
+        print(f"model_device_gather_rate={gather_rate:.6e}  # from {len(excess)} leaves with"
+              " device gathers")
+    for label, t, w, g in sorted(leaves, key=lambda x: x[1]):
+        pred = w / rate + (g / gather_rate if gather_rate else 0.0)
+        print(f"  mma-fit: {label!r} measured_ms={t * 1e3:.6f} predicted_ms={pred * 1e3:.6f}"
+              f" ratio={pred / t:.3f} mma_work={w:.6e} gathers={g:.6e}")
+    return True
+
+
 def row_label(label, times):
     if label == "default":
         return "baseline" if "baseline" in times else None
@@ -203,11 +257,16 @@ def main():
     ap.add_argument("explain", nargs="+")
     ap.add_argument("--pick", action="append", default=[])
     ap.add_argument("--band", type=float, default=0.10)
+    ap.add_argument("--fit-mma", dest="fit_mma")
     args = ap.parse_args()
     times = measured(args.tsv)
     if not times:
         print(f"gh1442_agreement: no calibration rows in {args.tsv}", file=sys.stderr)
         return 2
+    if args.fit_mma is not None:
+        # A site with no timed tensorized leaf (a backend with no fp8 arm) has nothing to fit: the
+        # `mma-fit: none` line says so, and the agreement analysis goes on.
+        fit_mma(args.fit_mma, times)
     results = []
     picks_ok = True
     for spec in args.pick:

@@ -447,6 +447,9 @@ module Impl = struct
            (* gh-ocannl-1442: the ranking score's own rates; unmeasured here. *)
            issue_rate = None;
            dram_bandwidth = None;
+           (* gh-ocannl-1495: unmeasured; simdgroup_load loads whole fragments. *)
+           mma_rate = None;
+           device_gather_rate = None;
            (* gh-ocannl-1479: Metal publishes no GPU core count, so the launch fill is configured
               (model_multiprocessors, model_fill_threads), never advisory. *)
            multiprocessors = None;
