@@ -746,7 +746,12 @@ files.
   builds. Re-time through `Bench_retime` -- several independent `Autotune.time_routine` calls (the
   tuner's queued protocol, which amortizes the sync), routines interleaved, ratios PAIRED call by
   call -- and claim a difference only where the paired range excludes 1. Across builds, pair whole
-  processes (`ab.py`); the in-process range does not include the between-process variance.
+  processes (`ab.py`); the in-process range does not include the between-process variance. Measured
+  (gh-ocannl-1524, mac-studio cc, 12-process A/A of one build): the s3b8 default arm's in-process
+  range was ~1-2% of its median, while its medians moved 1.12x between processes; paired over six
+  rounds the A/A read 1.016 [0.895, 1.080]. A tuned arm also carries its crown: one process
+  crowned a different schedule, 15% slower, and its in-process ratio rightly resolved -- a real
+  difference between two programs, not instrument noise.
 - An effect smaller than the variance between two independent searches (on `gpt2_mini` that
   variance is several percent of a step, gh-ocannl-1165) is measured by SPLICING, not by comparing
   two searched schedules: both arms replay the control's winner except at the target segments
