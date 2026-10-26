@@ -2801,11 +2801,13 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
              unit-solved index, so for a non-matching kept-loop iteration that index (hence the flat
              offset) can be out of range. This is sound today: every backend lowers [Where] to a C/
              CUDA/Metal ternary that short-circuits, so arithmetic execution never dereferences the
-             discarded then-branch. The one path that would dereference it unconditionally is debug
-             value-logging, which is made safe by [C_syntax.debug_float]'s [Where] arm gating each
-             branch read on its (negated) condition. Full structural soundness -- index clamping or
-             an IR branch so the discarded read is never even constructed -- is deferred until an
-             eager/predicated backend that evaluates both [Where] arms actually lands. *)
+             discarded then-branch -- the cc backend's branchless value selects (gh-ocannl-1622)
+             never take these index-only conditions ([speculable_select]). The one path that would
+             dereference it unconditionally is debug value-logging, which is made safe by
+             [C_syntax.debug_float]'s [Where] arm gating each branch read on its (negated)
+             condition. Full structural soundness -- index clamping or an IR branch so the discarded
+             read is never even constructed -- is deferred until an eager/predicated backend that
+             evaluates both [Where] arms actually lands. *)
           let guarded =
             List.fold conds ~init:inlined ~f:(fun acc cond ->
                 Ternop (Ops.Where, (cond, index_prec), (acc, value_prec), (Get_local id, value_prec)))
@@ -7026,6 +7028,55 @@ let rec index_only_scalar (llsc : scalar_t) =
       index_only_scalar a && index_only_scalar b && index_only_scalar c
   | Binop (_, (a, _), (b, _)) -> index_only_scalar a && index_only_scalar b
   | Unop (_, (a, _)) -> index_only_scalar a
+
+let speculable_select ~(cond : scalar_t) ~(arms : scalar_arg list) =
+  (* The condition, read syntactically: [Local_scope] bodies are not descended into, because a
+     lowering guard is never routed through one — its builders splice the comparison in place, and
+     the only pass minting [Get_local] for an expression ([hoist_cross_statement_cse]) replaces
+     [Local_scope]s, never a guard. *)
+  let rec mentions_index (s : scalar_t) =
+    match s with
+    | Embed_index _ -> true
+    | Get _ | Get_local _ | Get_merge_buffer _ | Local_scope _ | Constant _ | Constant_bits _ ->
+        false
+    | Get_dynamic { dyn_value = v, _; _ } -> mentions_index v
+    | Ternop (_, (a, _), (b, _), (c, _)) -> mentions_index a || mentions_index b || mentions_index c
+    | Binop (_, (a, _), (b, _)) -> mentions_index a || mentions_index b
+    | Unop (_, (a, _)) -> mentions_index a
+  in
+  (* Whether evaluating [s] RENDERED AT [prec] is safe whatever the select's condition is. The
+     precision is the one [C_syntax.pp_scalar_op] renders each operand at -- the operator's own for
+     a homogeneous operator, the operand's for a heterogeneous one, and for a [Where] its own
+     precision for the condition and the operator's for the arms -- never the operand's stored
+     annotation, which a homogeneous operator overrides: an integer division the annotation calls
+     f32 renders as C integer division, and traps on a zero divisor (review round 1). *)
+  let rec safe prec (s : scalar_t) =
+    match s with
+    | Get _ | Get_local _ | Get_merge_buffer _ | Local_scope _ | Constant _ | Constant_bits _
+    | Embed_index _ ->
+        true
+    | Get_dynamic _ -> false
+    | Ternop (op, (a, pa), (b, pb), (c, pc)) -> (
+        let pa, pb, pc =
+          if Ops.is_homogeneous_prec_ternop op then (prec, prec, prec)
+          else match op with Ops.Where -> (pa, prec, prec) | _ -> (pa, pb, pc)
+        in
+        (* A nested select is walked whole: once the enclosing arm evaluates eagerly, its condition
+           can hold where the enclosing one did not, so everything its arms evaluate is reachable
+           (review round 2) -- even while it keeps short-circuiting itself. *)
+        match Ops.ternop_conditionality op with
+        | Ops.All_three | Ops.Cond_and_one_arm -> safe pa a && safe pb b && safe pc c)
+    | Binop ((Ops.Div | Ops.Mod), _, _) when not (Ops.is_float prec) -> false
+    | Binop (op, (a, pa), (b, pb)) -> (
+        let pa, pb = if Ops.is_homogeneous_prec_binop op then (prec, prec) else (pa, pb) in
+        match Ops.binop_conditionality op with
+        (* A gated operand is reachable, as a nested select's arms are. *)
+        | Ops.Both_operands | Ops.Gated_second -> safe pa a && safe pb b
+        | Ops.Only_first -> safe pa a
+        | Ops.Only_second -> safe pb b)
+    | Unop (op, (a, pa)) -> safe (if Ops.is_homogeneous_prec_unop op then prec else pa) a
+  in
+  (not (mentions_index cond)) && List.for_all arms ~f:(fun (s, prec) -> safe prec s)
 
 (* The reduction operator of a scope-local update in EITHER spelling: the plain
    [accum_local_update_parts] form, or virtualization's guarded-read form — [Set_local (id, Where

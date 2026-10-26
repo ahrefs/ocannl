@@ -847,6 +847,76 @@ let tuning_scratch st loss mapping bindings =
   | Some "init" -> scratch
   | Some other -> failwith ("BENCH_TUNE_SCRATCH_WEIGHTS must be fixture or init; found: " ^ other)
 
+(** Every param of [loss] with the values [ctx] holds for it: one weight set for {!weight_swap}. *)
+let param_values ctx loss =
+  Set.to_list loss.Tensor.params
+  |> List.map ~f:(fun p -> (p.Tensor.value, Context.get_values ctx p.Tensor.value))
+
+(** [BENCH_WEIGHT_SWAP=<blocks>]: the number of blocks per weight set {!weight_swap} times, or
+    [None] when unset (the benchmark protocol runs instead). The conv runner reads the block length
+    from [BENCH_WEIGHT_SWAP_STEPS] (default 20 steps). *)
+let weight_swap_blocks () =
+  match Stdlib.Sys.getenv_opt "BENCH_WEIGHT_SWAP" with
+  | None | Some "" -> None
+  | Some s -> (
+      match Int.of_string_opt s with
+      | Some b when b > 0 -> Some b
+      | _ -> failwith ("BENCH_WEIGHT_SWAP must be a positive block count; found: " ^ s))
+
+(** Diagnostic (gh-ocannl-1622): does one compiled training step's time follow the VALUES it runs
+    on? Times the SAME routine in one process on each of [sets] (named weight sets of the step's
+    params, e.g. the [Train.init_params] draw and the fixture's), in [blocks] rounds of
+    [steps_per_block] steps per set, the order alternating per round (AB BA AB ...) and every param
+    restored to its set before each block, so the routine, the process and the run's drift are the
+    same for every set. One warm-up block per set precedes the rounds. Prints a [weight-swap:] line
+    per set (per-step p10 and p50 over its blocks, ms) and the p50 ratio of every later set to the
+    first. Not part of the benchmark protocol: a measurement window's diagnostic, run alone.
+
+    On cifar_resnet/cc the default-placements step inlines the ReLU and max-pool backward selects
+    into the nests consuming them; spelled as short-circuiting [?:] they compiled to data-dependent
+    branches, and the step ran 23% slower on the fixture weights than on the init draw while the
+    materialize-all step moved 3% (gh-ocannl-1557). This is the in-process form of that comparison.
+*)
+let weight_swap ~blocks ~steps_per_block ~ctx ~routine ~sets ~prepare_step =
+  let ctx = ref ctx in
+  let set_weights values =
+    List.iter values ~f:(fun (tn, vs) -> ctx := Context.set_values !ctx tn vs);
+    Context.sync !ctx
+  in
+  let time_block values =
+    set_weights values;
+    let t0 = Unix.gettimeofday () in
+    for step = 0 to steps_per_block - 1 do
+      prepare_step ~step;
+      Train.run !ctx routine
+    done;
+    Context.sync !ctx;
+    (Unix.gettimeofday () -. t0) *. 1000. /. Float.of_int steps_per_block
+  in
+  List.iter sets ~f:(fun (_, values) -> ignore (time_block values : float));
+  let times = List.map sets ~f:(fun (name, _) -> (name, ref [])) in
+  for round = 0 to blocks - 1 do
+    let order = if round % 2 = 0 then sets else List.rev sets in
+    List.iter order ~f:(fun (name, values) ->
+        let ms = time_block values in
+        let acc = List.Assoc.find_exn times name ~equal:String.equal in
+        acc := ms :: !acc)
+  done;
+  let p50s =
+    List.map times ~f:(fun (name, acc) ->
+        let sorted = Array.of_list !acc in
+        Array.sort sorted ~compare:Float.compare;
+        let p10 = percentile sorted 10. and p50 = percentile sorted 50. in
+        Stdio.printf "weight-swap: %s blocks=%d steps/block=%d p10=%.3f p50=%.3f ms\n%!" name blocks
+          steps_per_block p10 p50;
+        (name, p50))
+  in
+  match p50s with
+  | (first, base) :: rest ->
+      List.iter rest ~f:(fun (name, p50) ->
+          Stdio.printf "weight-swap: ratio p50 %s/%s = %.4f\n%!" name first (p50 /. base))
+  | [] -> ()
+
 let dump_params loss =
   Set.iter loss.Tensor.params ~f:(fun p ->
       let tn = p.Tensor.value in

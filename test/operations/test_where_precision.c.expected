@@ -126,6 +126,10 @@ ARRAYJIT_BUILTIN_LINKAGE float bfloat16_to_single(uint16_t bf16)
   /* Main logic. */
   /* where fwd */
   where[0] =
-      ((cond_condition[0]) != 0.0 ? ( HALF_TO_FLOAT(a_then_val[0])) : ( bfloat16_to_single(b_else_val[0])));
+      ({ __auto_type ocannl_sel_a__ =
+        HALF_TO_FLOAT(a_then_val[0]);
+      __auto_type ocannl_sel_b__ =
+        bfloat16_to_single(b_else_val[0]);
+      ((cond_condition[0]) != 0.0) ? ocannl_sel_a__ : ocannl_sel_b__; });
   /* end */
 }

@@ -510,7 +510,7 @@ let () =
         (Sexp.to_string @@ Ops.sexp_of_ternop_conditionality @@ Ops.ternop_conditionality op));
   let violations =
     Ir.C_syntax.operand_conditionality_violations ~ternop_syntax:C_config.ternop_syntax
-      ~binop_syntax:C_config.binop_syntax
+      ~binop_syntax:C_config.binop_syntax ~select_blend_syntax:C_config.select_blend_syntax
   in
   (* Over the operators the table above enumerates, which is the sweep the violations came from. *)
   let swept =

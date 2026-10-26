@@ -498,6 +498,33 @@ val accum_local_update_op : id:scope_id -> scalar_t -> Ops.binop option
     deliberately not part of {!accum_local_update_parts} or of {!scope_updates_reduce_op}'s hoist
     license. *)
 
+val speculable_select : cond:scalar_t -> arms:scalar_arg list -> bool
+(** Whether a value select — a [Where], or a gated operator ([Relu_gate], [Satur01_gate]) — may
+    evaluate every one of its [arms] whatever [cond] says, so that a backend can render it as a
+    branchless blend (gh-ocannl-1622; [C_syntax]'s [select_blend_syntax] hook). Pass the arms at the
+    select's result precision.
+
+    The invariant it rests on: lowering emits a read that can be out of range only under a guard of
+    its own, and every such guard either compares embedded indices — gh-504's clamp conditions,
+    virtualization's range and unit-solve conditions, [Schedule]'s tile, fragment and pad masks — or
+    protects a [Get_dynamic] (gh-343's gather guard, whose condition is a data value). So:
+    - [cond] must not mention an [Embed_index] (read syntactically: a guard is spliced in place,
+      never routed through a [Local_scope]); a select over an index comparison stays
+      short-circuiting even when it is a user's mask, which is safe and only forgoes the blend;
+    - no arm may contain a [Get_dynamic], nor a [Div] / [Mod] that renders at an integer precision
+      (which can trap) — judged at the precision [C_syntax] renders each operand at, not at the
+      operand's own annotation, which a homogeneous operator overrides;
+    - a nested conditional operator is walked whole, arms included: evaluated eagerly, its own
+      condition can hold where the enclosing one did not, so everything under it is reachable. (An
+      index guard nested inside stays [?:] and still protects its read: its condition says exactly
+      whether the read is in range, whatever the enclosing select says.)
+
+    [Local_scope] bodies are hoisted ahead of the statement and run unconditionally already, so a
+    scope reference is a plain local read. Admitting an instance evaluates an arm the classifiers
+    ({!Ops.ternop_conditionality}, {!Ops.binop_conditionality}) call conditional: their floors stay
+    floors, [Affine]'s [a_gated] stays a conservative over-approximation, and only the cost model's
+    per-arm upper bound can under-count, where both arms are non-trivial. *)
+
 val mentions_rng_conversion : scalar_t -> bool
 (** Whether an RNG lane conversion occurs anywhere in the expression (not inside a [Local_scope]).
     Such a conversion picks its result type and the random bits it consumes from the precision it

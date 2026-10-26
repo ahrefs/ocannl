@@ -551,7 +551,12 @@ type op = Ternop of ternop | Binop of binop | Unop of unop [@@deriving sexp_of]
     They drifted apart three times in one review because each restated the same case analysis. Both
     classifiers below are matched exhaustively (no wildcard arm), so adding an operator to {!binop}
     or {!ternop} forces the decision here, and every consumer inherits it. The renderers are checked
-    against it rather than consulting it — see {!C_syntax.operand_conditionality_violations}. *)
+    against it rather than consulting it — see {!C_syntax.operand_conditionality_violations}.
+
+    The classification says which operands a rendering is REQUIRED to leave unevaluated, at most.
+    One per-instance exception evaluates more (gh-ocannl-1622): a backend with a branchless
+    [select_blend_syntax] (cc) evaluates every arm of a value select that
+    {!Low_level.speculable_select} admits. Floors over this classification stay floors. *)
 
 type binop_conditionality =
   | Both_operands  (** Both operands are always evaluated. *)

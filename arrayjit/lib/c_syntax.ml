@@ -672,6 +672,24 @@ module type C_syntax_config = sig
     PPrint.document
 
   val binop_syntax : Ops.prec -> Ops.binop -> PPrint.document -> PPrint.document -> PPrint.document
+
+  val select_blend_syntax :
+    Ops.prec -> (PPrint.document -> PPrint.document -> PPrint.document -> PPrint.document) option
+  (** A branchless rendering of a value select at this compute precision (gh-ocannl-1622): applied
+      to a C truth expression and the two arms, it must evaluate both arms unconditionally — each
+      rendered before any [?:], [&&] or [||] ({!operand_conditionality_violations} checks it) — and
+      have exactly the C type and value of the short-circuiting spelling it replaces, bit for bit.
+      [pp_scalar_op] uses it for a [Where], [Relu_gate] or [Satur01_gate] that
+      {!Low_level.speculable_select} admits, keeping the condition exactly as the short-circuiting
+      spelling tests it.
+
+      Why: C forbids evaluating the unselected arm of [?:], so where an arm holds a load the
+      compiler cannot prove dereferenceable it emits a conditional branch, and a step's time follows
+      the data (cifar_resnet's inlined ReLU and max-pool backward selects on cc, gh-ocannl-1557).
+      With both arms already values, the compiler if-converts. [None] (the {!Pure_C_config} default,
+      kept by the GPU backends, which predicate a short ternary themselves) keeps the
+      short-circuiting [ternop_syntax] / [binop_syntax] spelling. *)
+
   val unop_syntax : Ops.prec -> Ops.unop -> PPrint.document -> PPrint.document
   val vec_unop_syntax : Ops.prec -> Ops.vec_unop -> PPrint.document -> PPrint.document
   val convert_precision : from:Ops.prec -> to_:Ops.prec -> string * string
@@ -1368,7 +1386,7 @@ let op_syntax_idents ~ternop_syntax ~binop_syntax ~unop_syntax ~vec_unop_syntax 
     The operator sweep is [Ops]' derived enumeration, so an operator added to {!Ops.binop} or
     {!Ops.ternop} is checked here without anyone remembering to list it. A (precision, operator)
     pair the backend rejects by raising contributes nothing, as in {!op_syntax_idents}. *)
-let operand_conditionality_violations ~ternop_syntax ~binop_syntax =
+let operand_conditionality_violations ~ternop_syntax ~binop_syntax ~select_blend_syntax =
   let violations = ref [] in
   let report what msg = violations := Printf.sprintf "%s: %s" what msg :: !violations in
   let a1 = PPrint.string "$1" and a2 = PPrint.string "$2" and a3 = PPrint.string "$3" in
@@ -1448,7 +1466,24 @@ let operand_conditionality_violations ~ternop_syntax ~binop_syntax =
                       then
                         report what
                           "classified as evaluating one arm, but its arms are not the two sides of \
-                           a [?:] alternative -- a call form (MSL's [select]) evaluates both"))));
+                           a [?:] alternative -- a call form (MSL's [select]) evaluates both")));
+      (* gh-ocannl-1622: the blend is the one rendering that must evaluate both arms
+         unconditionally: each arm is rendered before any construct that could skip it. (The
+         selection itself may be a [?:] -- over values already computed, it skips nothing.) *)
+      match select_blend_syntax prec with
+      | None -> ()
+      | Some blend -> (
+          match render (fun () -> blend a1 a2 a3) with
+          | None -> ()
+          | Some s -> (
+              let what = at_prec "select blend" in
+              match (at s "$1", at s "$2", at s "$3") with
+              | None, _, _ | _, None, _ | _, _, None -> report what "not every operand is rendered"
+              | Some _, Some i2, Some i3 ->
+                  if gated_before s (Int.max i2 i3) then
+                    report what
+                      "must evaluate both arms unconditionally, but the rendering reaches an arm \
+                       after a [?], [&&] or [||]")));
   List.rev !violations
 
 (** The names defined by a backend's builtins table (the keys of its
@@ -2287,6 +2322,7 @@ struct
       ^^ string op_suffix)
 
   let binop_syntax = default_binop_syntax
+  let select_blend_syntax _prec = None
 
   let unop_syntax prec op v =
     let op_prefix, op_suffix = Ops.unop_c_syntax prec op in
@@ -2441,6 +2477,7 @@ module C_syntax (B : C_syntax_config) = struct
   let () =
     match
       operand_conditionality_violations ~ternop_syntax:B.ternop_syntax ~binop_syntax:B.binop_syntax
+        ~select_blend_syntax:B.select_blend_syntax
     with
     | [] -> ()
     | violations ->
@@ -2596,6 +2633,15 @@ module C_syntax (B : C_syntax_config) = struct
   let pp_scalar_op ~operand (prec : Ops.prec) (vcomp : Low_level.scalar_t) :
       (int * PPrint.document) list * PPrint.document =
     let open PPrint in
+    (* gh-ocannl-1622: a value select renders as the backend's blend where it has one at this
+       (float) compute precision and evaluating every arm is safe; otherwise it short-circuits. *)
+    let blend_for prec ~cond ~arms =
+      if not (Ops.is_float prec) then None
+      else
+        match B.select_blend_syntax prec with
+        | Some blend when Low_level.speculable_select ~cond ~arms -> Some blend
+        | _ -> None
+    in
     match vcomp with
     | Ternop (Ops.FMA, _, _, _) when not (Ops.is_float prec) ->
         (* gh-ocannl-873: hand-built low-level IR can bypass the simplifier's float-only FMA rewrite
@@ -2641,7 +2687,14 @@ module C_syntax (B : C_syntax_config) = struct
                 (d1, e1, d2, e2, d3, e3)
         in
         let defs = List.concat [ d1; d2; d3 ] in
-        let expr = group (B.ternop_syntax prec op e1 e2 e3) in
+        let expr =
+          match (op, blend_for prec ~cond:v1 ~arms:[ (v2, prec); (v3, prec) ]) with
+          | Ops.Where, Some blend ->
+              (* The truth is the short-circuiting spelling's own test ([Ops.ternop_c_syntax]'s
+                 float arm), so a NaN condition still selects the then-arm. *)
+              blend (parens e1 ^^ string " != 0.0") e2 e3
+          | _ -> group (B.ternop_syntax prec op e1 e2 e3)
+        in
         (defs, expr)
     | Binop (Ops.ToPowOf, (base, _), (Constant exponent, _))
       when Ops.is_float prec && Float.is_finite exponent && Float.is_integer exponent ->
@@ -2670,7 +2723,25 @@ module C_syntax (B : C_syntax_config) = struct
                 (d1, e1, d2, e2)
             in
             let defs = List.concat [ d1; d2 ] in
-            let expr = group (B.binop_syntax prec op e1 e2) in
+            let gate_blend () = blend_for prec ~cond:v1 ~arms:[ (v2, prec) ] in
+            let expr =
+              (* Each truth is the short-circuiting spelling's own test ([Ops.binop_c_syntax]'s
+                 float arms), arms in its order: [Satur01_gate] yields its second operand where the
+                 test FAILS. *)
+              match op with
+              | Ops.Relu_gate -> (
+                  match gate_blend () with
+                  | Some blend -> blend (parens e1 ^^ string " > 0.0") e2 (string "0.0")
+                  | None -> group (B.binop_syntax prec op e1 e2))
+              | Ops.Satur01_gate -> (
+                  match (gate_blend (), prec) with
+                  | Some blend, Ops.Single_prec _ ->
+                      blend (string "fabsf(floorf(" ^^ e1 ^^ string ")) > 0.0") (string "0.0") e2
+                  | Some blend, _ ->
+                      blend (string "fabs(floor(" ^^ e1 ^^ string ")) > 0.0") (string "0.0") e2
+                  | None, _ -> group (B.binop_syntax prec op e1 e2))
+              | _ -> group (B.binop_syntax prec op e1 e2)
+            in
             (defs, expr))
     | Unop (op, (v, v_prec)) ->
         let arg_prec =
