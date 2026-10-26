@@ -1062,11 +1062,21 @@ let memory_transactions ?(sector = transaction_sector_bytes) ~lane_width ~is_glo
         in
         let step = if step <= 0 then sector else step in
         let residues = List.init (sector / step) ~f:(fun i -> i * step) in
+        (* A symbol neither a lane's nor enumerated sits at its loop's first iteration: a folded
+           run's span starts there (a [Schedule.Partition] segment keeps absolute ranges), and for a
+           symbol in the residue step, any base is a multiple of that step and so only permutes the
+           residues averaged over. *)
         let address l pt =
           let value s =
             match lane_value l s with
             | Some v -> v
-            | None -> List.Assoc.find pt s ~equal:Idx.equal_symbol |> Option.value ~default:0
+            | None -> (
+                match List.Assoc.find pt s ~equal:Idx.equal_symbol with
+                | Some v -> v
+                | None -> (
+                    match List.Assoc.find a.a_loops s ~equal:Idx.equal_symbol with
+                    | Some (lo, _) -> lo
+                    | None -> 0))
           in
           Array.foldi view ~init:0 ~f:(fun i acc -> function
             | Affine.Unknown _ -> acc

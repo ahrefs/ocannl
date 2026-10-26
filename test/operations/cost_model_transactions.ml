@@ -12,12 +12,13 @@
    narrow sibling nest's extent; a lane's register tile counted as one footprint (a 4-wide tile
    reads contiguously, a column tile does not); grid blocks and serial iterations multiplying the
    count; the base residues a serial unit stride shifts through (a base-only count would read 0),
-   stepped by a symbol's summed stride when it appears in two coordinates; f16 against f32; a
-   flattened [Sub_axis] map counting as its unflattened twin; non-global nodes and [Tile_mma]
-   statements left out; a dynamic gather counted one sector per lane and reported uncovered. Then
-   the leg: without a rate, or without an excess, the compute leg is bitwise what it was; with them,
-   it adds exactly the excess over the rate, each context's over its fill under a launch model. And
-   the occupancy factor: theoretical occupancy's exact fractions, and the compute leg over it. *)
+   stepped by a symbol's summed stride when it appears in two coordinates; a folded run based at its
+   loop's lower bound; f16 against f32; a flattened [Sub_axis] map counting as its unflattened twin;
+   non-global nodes and [Tile_mma] statements left out; a dynamic gather counted one sector per lane
+   and reported uncovered. Then the leg: without a rate, or without an excess, the compute leg is
+   bitwise what it was; with them, it adds exactly the excess over the rate, each context's over its
+   fill under a launch model. And the occupancy factor: theoretical occupancy's exact fractions, and
+   the compute leg over it. *)
 
 open Base
 open Verdict.Claims
@@ -183,7 +184,19 @@ let () =
          (copy d [| it k; it w |] x [| it k; Ll_test.aff [ (1, k); (1, w) ] 0 |]))
   in
   p "a symbol in two coordinates steps by its summed flat stride: aligned, no excess"
-    (Float.equal (excess joint) 0.)
+    (Float.equal (excess joint) 0.);
+  (* A folded run starting past 0 (a [Schedule.Partition] segment keeps absolute ranges): lane [w]
+     reads [x[8w + j]] for [j = 1..8], so the group's 256 bytes start 4 bytes into a sector and
+     touch 9 sectors for 8. A span based at [j = 0] would read them aligned: excess 0. *)
+  let x = node "tx_ox" [| 72 |] and d = node "tx_od" [| 8; 9 |] in
+  let w = Ll_test.sym () and j = Ll_test.sym () in
+  let offset =
+    Ll_test.loop_n ~axis:wg w 8
+      (Ll_test.loop ~from_:1 ~upto:8 j
+         (copy d [| it w; it j |] x [| Ll_test.aff [ (8, w); (1, j) ] 0 |]))
+  in
+  p "a folded run starts at its loop's lower bound: 9 sectors for 8, excess 1"
+    (Float.equal (excess ~is_global:(fun tn -> Ir.Tnode.equal tn x) offset) 1.)
 
 let () =
   (* A flattened map: [Sub_axis] over [2; 32] indexed by one stride-2 lane term. *)
