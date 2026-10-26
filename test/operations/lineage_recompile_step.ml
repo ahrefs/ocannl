@@ -7,8 +7,8 @@
    of the same step writes [y.grad] before [w.grad] reads it, so the read is covered, but gh-1620's
    rule refused it because [w.grad] cannot fall back to materialization: [Utils.User_error] "... was
    computed as routine-local scratch by an earlier routine ...". The fix admits a covered scratch
-   read in an already-virtual node's re-stored template when the lineage's own template of the node
-   already carries it.
+   read in an already-virtual node's re-stored template; the template's replays are judged where
+   they land, covered or refused, in every routine's emitted code (gh-ocannl-1646).
 
    Executed parity: the lineage is held, step by step, to a sibling lineage that materializes
    [y.grad] and [w.grad] ([Context.decide_materialized]). Every value is exact by construction --
