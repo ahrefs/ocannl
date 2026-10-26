@@ -537,7 +537,16 @@ The affine axis syntax enables convolution and pooling operations directly in ei
   input_size = stride * (output_size - 1) + effective_kernel_span
   ```
   where `effective_kernel_span = 1 + (kernel_size - 1) * dilation`.
-- **Padded windows are operand-only**: a padded window in the result slot (after `=>`), e.g. `"s, i; k => s, i=+k"`, would be a padded transposed convolution, which is not implemented; shape inference refuses it with a message naming the window (gh-ocannl-1550). Write the padded window on an operand instead — with stride 1, dilation 1 and an odd kernel size, `"s, o=+k; k => s, o"` with the kernel reversed is the same map — or use an unpadded result-side window (`=> s, i<+k`), a full transposed convolution whose result extent is `stride * (operand_size - 1) + effective_kernel_span`. Result-side unpadded and stride-only (`=> s, 2*i`) axes are supported, and so is the gradient of an operand-side padded window (it reuses the forward projections).
+- **Padded windows are operand-only**: a padded window in the result slot (after `=>`), e.g. `"s, i; k => s, i=+k"`, would be a padded transposed convolution, which is not implemented in one step; shape inference refuses it with a message naming the window (gh-ocannl-1550). Result-side unpadded and stride-only (`=> s, 2*i`) axes are supported, and so is the gradient of an operand-side padded window (it reuses the forward projections).
+- **The padded transposed convolution in two steps** (PyTorch's `ConvTranspose` with `padding` and `output_padding`; gh-ocannl-1619): in a transposed convolution, `padding` only trims the edges of the full output. So compute the full transposed convolution with an unpadded result-side window (`=> s, 2*i<+k`), whose result extent is `stride * (operand_size - 1) + effective_kernel_span`, then crop `padding` cells at its start and `padding - output_padding` at its end. The crop is an operand-side valid window over a one-hot kernel of extent `2 * padding - output_padding + 1` holding its 1 at position `padding`, written as an ndarray literal:
+  ```ocaml doc-check=padded_conv_transpose
+  open Ocannl.Nn_blocks.DSL_modules
+
+  (* ConvTranspose1d with stride 2, kernel 3, padding 1, output_padding 1 (2x upsampling):
+     the full result has extent 2n + 1, and the crop drops 1 cell at the start, none at the end. *)
+  let%op upsample x w = (x +* "s, i; k => s, 2*i<+k" w) +* "s, o<+c; c => s, o" [ 0.; 1. ]
+  ```
+  The border is computed and then dropped, and the crop multiplies by the kernel's zeros, so a non-finite border value would reach the result as NaN. With stride 1, dilation 1 and an odd kernel size there is a one-step form: the padded window on an operand with the kernel reversed, `"s, o=+k; k => s, o"`. The recipe and the reversed-kernel form are executed against oracles in `test/einsum/result_side_affine_forms.ml` and `test/einsum/result_side_padded_window.ml`.
 - **Offsets stay inside the axis**: shape inference sizes an affine axis without its constant offset, so an offset must be smaller than the stride on an axis without a window (`2*i+1`, the odd half of `interleave`, is fine; `2*i+2` and `1*i+1` are not), and an unpadded window takes none (`2*o<+1+k`). Shape inference refuses such a spec, in either slot, with a message naming the axis (gh-ocannl-1618). A padded window keeps its offset, which its padding absorbs.
 - **Result-side forms** (writing through the index): stride-only and stride-and-offset axes scatter with gaps; unpadded windows, strided, dilated or both, several in one result, or with both terms bound by one operand (`ij => i<+3*j`), are transposed convolutions; their gradients read the result's gradient through the same index. Each form is executed against an oracle in `test/einsum/result_side_affine_forms.ml`.
 
@@ -590,12 +599,7 @@ The syntax `a^b` (or `a^b^c` etc.) creates a single axis of iteration that first
 
 **Shape inference behavior**: When the argument and result shapes are both known, prefix and suffix operations (`a^b => a`, `a^b => b`, `a => a^b`, `b => a^b`) don't need additional dimension information. Middle operations (`a^b^c => b`, `b => a^b^c`) require providing dimension constraints for the unmatched components.
 
-**Integer constants in concatenation**: When used with `^`, an integer specifies the size of that axis component rather than indexing into a fixed dimension. For example:
-- `3^a => a`: Skip 3 elements at the beginning of the input
-- `a => a^3`: Assign to all but the last 3 elements of the result
-- `3^a^5 => a`: Extract middle portion, skipping 3 at start and 5 at end
-
-These integer-sized components become fresh internal symbols during projection derivation, causing those components to be skipped.
+**Status of the slicing forms**: the concatenation `a; b => a^b` and block tensors are implemented and tested. The extract forms (`a^b => a`, `a^b => b`, `a^b^c => b`: a concatenated axis on an operand whose other components no operand supplies) are not implemented: with the unmatched components captured and set, projection inference still fails (with "Concat target projection ... conflicts with existing index" for the prefix and suffix forms, an internal assertion for the middle one; gh-ocannl-1619 probed them). The replace forms have no test. Integer-sized components (`3^a => a` to skip 3 elements, `3^a^5 => a` for a middle portion) are planned but do not parse: a component must be a label. Until the extract forms land, a contiguous crop is an operand-side valid window over a one-hot kernel (`"s, o<+c; c => s, o"` with the 1 at the crop's start offset; see the padded transposed convolution above).
 
 **N-ary einsum for multiple tensors**: The einsum parser supports any number of RHS tensors separated by semicolons. This enables operations like:
 ```ocaml

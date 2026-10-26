@@ -770,7 +770,10 @@ let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~
     it. The check is structural over the parsed result slot (every kind and position of its [labels]
     map) and runs before any elaboration. Operand-side padded windows, unpadded ([<+]) and
     stride-only result axes are unaffected; the backward of an operand-side padded window reuses the
-    forward's projections and never comes here with a reversed spec. *)
+    forward's projections and never comes here with a reversed spec. The message gives the two-step
+    recipe (gh-ocannl-1619): the full transposed convolution, then a crop by an operand-side valid
+    window over a one-hot kernel, executed against PyTorch's [ConvTranspose1d] semantics in
+    [test/einsum/result_side_affine_forms.ml]. *)
 let refuse_result_side_padded_window ~spec ~(error_shapes : t list) (ls_lhs : parsed_axis_labels) =
   Map.iter ls_lhs.labels ~f:(function
     | Affine_spec { conv = Some { use_padding = `True; _ }; _ } as axis ->
@@ -780,12 +783,16 @@ let refuse_result_side_padded_window ~spec ~(error_shapes : t list) (ls_lhs : pa
              ( [%string
                  "result-side padded window `%{window}` in einsum spec \"%{spec}\" is not \
                   supported: a padded (=+) window on the result is a padded transposed \
-                  convolution, which OCANNL does not implement. Put the padded window on an \
-                  operand instead (e.g. \"s, o=+k; k => s, o\"): with stride 1, dilation 1 and an \
-                  odd kernel size that is the same map with the kernel reversed. Or write the \
-                  result-side window unpadded (<+), a different operation: a full transposed \
-                  convolution, whose result extent is stride*(n-1) + the dilated kernel extent for \
-                  an operand extent n."],
+                  convolution, which OCANNL does not implement in one step. Build it in two: the \
+                  full transposed convolution, with the result-side window unpadded (<+; its \
+                  result extent is stride*(n-1) + the dilated kernel extent for an operand extent \
+                  n), then a crop of `padding` cells at its start and `padding - output_padding` \
+                  at its end (PyTorch's ConvTranspose arguments), written as an operand-side valid \
+                  window over a one-hot kernel: \"s, o<+c; c => s, o\" with c of extent 2*padding \
+                  - output_padding + 1 holding its 1 at position `padding` (see \
+                  docs/syntax_extensions.md). With stride 1, dilation 1 and an odd kernel size, \
+                  the padded window on an operand with the kernel reversed (e.g. \"s, o=+k; k => \
+                  s, o\") is the same map in one step."],
                [ Shape_mismatch error_shapes ] )
     | Label _ | Fixed_index _ | Affine_spec _ | Concat_spec _ -> ())
 

@@ -13,6 +13,7 @@ docs/slides-basics_backprop_training_codegen.md: excluded illustrative abbreviat
 docs/slides-shapes_and_einsum.md: excerpt of lib/nn_blocks.ml
 docs/slides-shapes_and_einsum.md: excerpt of lib/nn_blocks.ml
 docs/syntax_extensions.md: checked dimension_capture
+docs/syntax_extensions.md: checked padded_conv_transpose
 docs/tensors_and_contexts.md: checked context_compile
 docs/tensors_and_contexts.md: checked context_creation
 docs/tensors_and_contexts.md: excluded illustrative partial Tensor record; see tensor/tensor.ml
