@@ -1348,6 +1348,18 @@
 # compiler process costs a fixed startup, so a smaller batch is compiled as one unit.
 #cc_compile_unit_min_bytes=65536
 
+# Megabytes of Metal kernel source whose compiled libraries and pipeline states are kept for reuse
+# within a process (gh-ocannl-1605), the Metal counterpart of hip_kernel_cache_mib. Metal compiles
+# at link: a link compiles only the kernels no earlier link in this process produced, as one
+# library, and reuses the rest -- the library and each kernel's compute pipeline state, whose
+# creation is most of a Metal link. A kernel is reused when its source, with the names it owns
+# renamed, the Metal compile options and the device are identical. Weighted by the source bytes of
+# each compiled library, a proxy: Metal reports neither a library's nor a pipeline's size, so this
+# does not bound driver memory. 0 disables it: every link compiles one library of all its kernels.
+# Device debugging bypasses it, since a GPU capture shows a library's source, which for a reused
+# kernel would be another routine's.
+#metal_kernel_cache_mib=64
+
 # The `-O` argument to the compiler executable for the `cc` and `multidev_cc` backends.
 #cc_backend_optimization_level=3
 
