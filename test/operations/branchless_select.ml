@@ -244,26 +244,48 @@ let legs =
     composed_leg ~name:"bs_where_composed" ~select:`Where;
   ]
 
-(* The value claims a GPU backend's own [?:] rendering fails on these special values, a pre-existing
-   divergence this test exposed (ahrefs/ocannl#1647), each paired with a backend observed failing
-   it: [Satur01_gate] on CUDA (RTX 5070 Ti, master e5869546) and Metal (M-series, master 387de34a),
-   2 of 8 cells from cell 3; on HIP (gfx1151, master e5869546) the [Where] legs with a non-constant
-   else-arm, cell 2 (a NaN condition, which the reference resolves to the then-arm). The pairs are
-   the defect's record, not a capability: no backend predicate names them. Each such claim is
-   skipped on its backend only, its leg still executed and every disagreeing cell printed to stderr;
-   every other backend, and every other claim on these, stays exact. *)
+(* The value claims a GPU backend fails on special values, a pre-existing divergence this test
+   exposed (ahrefs/ocannl#1647), each paired with a backend observed failing it (CUDA RTX 5070 Ti
+   and HIP gfx1151 at 1d62ce19, Metal M-series at 387de34a). [Satur01_gate] on all three, cells 3
+   and 4: a NaN and a zero operand gate shut, since the GPU renderings spell [0 < x && x < 1 ? g :
+   0] ([Ops.interpret_binop]'s semantics) where the reference follows cc's [fabs(floor(x)) > 0 ? 0 :
+   g]. On HIP, besides, every select whose condition is NaN at a cell: the [Where] legs with a
+   loaded else-arm and [bs_nested_guard] take the else-arm, and [Relu_gate] passes its operand. The
+   pairs are the defect's record, not a capability: no backend predicate names them. Each such claim
+   is skipped on its backend only, with every disagreeing cell printed to stderr (and a note once
+   none disagrees); every other backend, and every other claim, stays exact. *)
 let known_divergence_1647 =
   [
     ("bs_sat01_gate", "cuda");
     ("bs_sat01_gate", "metal");
+    ("bs_sat01_gate", "hip");
     ("bs_where_f32", "hip");
     ("bs_where_hcond", "hip");
     ("bs_where_bf16", "hip");
+    ("bs_relu_gate", "hip");
+    ("bs_nested_guard", "hip");
   ]
 
-let diverges_here leg_name =
-  List.exists known_divergence_1647 ~f:(fun (name, backend) ->
-      String.equal name leg_name && String.is_substring backend_name ~substring:backend)
+(* [name]'s bitwise value claim, or its gated skip where ahrefs/ocannl#1647 records it failing. *)
+let values_claim ~name claim got want =
+  let diverges =
+    List.exists known_divergence_1647 ~f:(fun (leg, backend) ->
+        String.equal leg name && String.is_substring backend_name ~substring:backend)
+  in
+  if diverges then (
+    Array.iteri got ~f:(fun i v ->
+        let w = want.(i) in
+        if not (same_bits v w) then
+          Stdio.eprintf
+            "branchless_select: %s cell %d: got %h, the reference %h (known divergence, \
+             ahrefs/ocannl#1647; not part of the golden)\n"
+            name i v w);
+    Stdio.eprintf "branchless_select: %s: value claim gated on %s by ahrefs/ocannl#1647%s\n" name
+      backend_name
+      (if Array.for_all2_exn got want ~f:same_bits then " (every cell now matches: lift the gate)"
+       else "");
+    skipped claim)
+  else p_all2 claim got want ~f:same_bits
 
 let () =
   List.iter legs ~f:(fun leg ->
@@ -273,21 +295,7 @@ let () =
       (if leg.cpu_only && not on_cc then skipped claim
        else
          let got = execute_leg ~name:leg.name ~seed:leg.seed ~out:leg.out leg.llc in
-         if diverges_here leg.name then (
-           Array.iteri got ~f:(fun i v ->
-               let w = leg.want.(i) in
-               if not (same_bits v w) then
-                 Stdio.eprintf
-                   "branchless_select: %s cell %d: got %h, the reference %h (known divergence, \
-                    ahrefs/ocannl#1647; not part of the golden)\n"
-                   leg.name i v w);
-           Stdio.eprintf "branchless_select: %s: value claim gated on %s by ahrefs/ocannl#1647%s\n"
-             leg.name backend_name
-             (if Array.for_all2_exn got leg.want ~f:same_bits then
-                " (every cell now matches: lift the gate)"
-              else "");
-           skipped claim)
-         else p_all2 claim got leg.want ~f:same_bits);
+         values_claim ~name:leg.name claim got leg.want);
       if on_cc then (
         let text = kernel_text leg.name in
         p (leg.name ^ ": the select calls the blend helper") (has text blend_marker);
@@ -367,7 +375,7 @@ let () =
   in
   let llc = loop_n i 6 (set out [| iter i |] outer) in
   let got = execute_leg ~name ~seed:[ (a, a_vals); (v, vv) ] ~out llc in
-  p_all2 (name ^ ": values") got [| 1.5; -1.; 3.5; -1.; 0.; 0. |] ~f:same_bits;
+  values_claim ~name (name ^ ": values") got [| 1.5; -1.; 3.5; -1.; 0.; 0. |];
   let claim = name ^ ": the value select blends around the inner guard's [?:]" in
   if on_cc then
     let text = kernel_text name in
