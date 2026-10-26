@@ -9,12 +9,14 @@
    one unit) and split ([Cc_backend.with_split_settings]: every statement its own part, three
    units). The split compile must have outlined (its source defines parts) and been compiled as
    several units, and the two runs must agree bit for bit on every output. The routine is built to
-   exercise what crosses a part boundary: - [ol_scratch] is a [Local] array -- a declaration of the
-   kernel's own frame, written by the first nest and read by later ones, which a part reaches
-   through a pointer parameter; - [ol_z] is zeroed and then accumulated into: the renderer may
-   forward that zero into the accumulation, so no part boundary falls between them; - every producer
-   varies with its index, and the inputs are distinct dyadic values, so a part that read the wrong
-   cell, or ran out of order, changes the output exactly. *)
+   exercise what crosses a part boundary. [ol_scratch] is a [Local] array, a declaration of the
+   kernel's own frame written by the first nest and read by later ones, which a part reaches through
+   a pointer parameter. [ol_z] is zeroed and then accumulated into: the renderer may forward that
+   zero into the accumulation, so no part boundary falls between them. One output is labelled as the
+   split routine's third part would be named, so the part must take another name rather than be
+   shadowed by that node's parameter. Every producer varies with its index, and the inputs are
+   distinct dyadic values, so a part that read the wrong cell, or ran out of order, changes the
+   output exactly. *)
 
 open Base
 open Verdict.Claims
@@ -29,7 +31,7 @@ let x = node "ol_x"
 let scratch = node "ol_scratch"
 let y = node "ol_y"
 let z = node "ol_z"
-let w = node "ol_w"
+let w = node "ol_split__part2"
 let outputs = [ y; z; w ]
 let materialized = x :: outputs
 

@@ -8051,7 +8051,7 @@ module C_syntax (B : C_syntax_config) = struct
       order: the kernel alone, or -- outlined (gh-ocannl-1603) -- its parts, then the kernel with
       their declarations. Any partition of them into translation units compiles to the same code,
       every part being a [noinline] function the kernel calls. *)
-  let compile_proc_units ~name idx_params
+  let compile_proc_units ?(avoid = []) ~name idx_params
       (Low_level.
          {
            traced_store;
@@ -8066,7 +8066,8 @@ module C_syntax (B : C_syntax_config) = struct
            flip_candidates = _;
            spliced_rbw = _;
            source = _;
-         } as proc) : (string * kparam_source) list * PPrint.document list * Low_level.launch_dims =
+         } as proc) :
+      (string * kparam_source) list * PPrint.document list * string list * Low_level.launch_dims =
     let open PPrint in
     (if not (Set.is_empty workgroup_shared) then
        match B.shared_decl_prefix with
@@ -8382,7 +8383,20 @@ module C_syntax (B : C_syntax_config) = struct
 
     (* gh-ocannl-1603: an outlined kernel's parts take the kernel's own parameters and a pointer per
        function-scope local array, and the kernel calls them in order. *)
-    let part_name k = Kernel_outline.part_name ~kernel:name k in
+    (* A part's name is a file-scope symbol of the library, so it must name nothing else the
+       library or the kernel does: another routine of the batch ([avoid]), a node of this kernel
+       (a parameter or local would shadow the call), a reserved word, builtin or library name. *)
+    let taken =
+      lazy
+        (Hash_set.of_list
+           (module String)
+           (avoid @ routine_ident_blacklist
+           @ List.map (Low_level.touched_tns_in_order llc) ~f:get_ident))
+    in
+    let part_name k =
+      let rec free s = if Hash_set.mem (Lazy.force taken) s then free (s ^ "_") else s in
+      free (Kernel_outline.part_name ~kernel:name k)
+    in
     let locals = List.rev !outlined_locals in
     let part_header k =
       let wide = !(ctx.widest_vector_bytes) > 32 in
@@ -8443,10 +8457,10 @@ module C_syntax (B : C_syntax_config) = struct
             ^^ hardline ^^ func_doc;
           ]
     in
-    (params, units, launch)
+    (params, units, List.init (List.length part_docs) ~f:part_name, launch)
 
   let compile_proc ~name idx_params proc =
-    let params, units, launch = compile_proc_units ~name idx_params proc in
+    let params, units, _, launch = compile_proc_units ~name idx_params proc in
     (params, PPrint.separate PPrint.hardline units, launch)
 end
 
@@ -8503,13 +8517,15 @@ struct
     let idx_params = Indexing.bound_symbols bindings in
     let units =
       Array.map2_exn names lowereds ~f:(fun name lowered ->
-          let kparams, units, launch = Syntax.compile_proc_units ~name idx_params lowered in
-          ((kparams, name, launch), List.map units ~f:Syntax.render_doc))
+          let kparams, units, parts, launch =
+            Syntax.compile_proc_units ~avoid:(Array.to_list names) ~name idx_params lowered
+          in
+          ((kparams, name, launch), (List.map units ~f:Syntax.render_doc, parts)))
     in
     (* Each document starts at column 0 after a hard line, so rendering them apart and joining them
        with newlines gives the text of rendering them together. *)
     let rendered =
-      Array.map units ~f:(fun (entry, texts) -> (entry, String.concat ~sep:"\n" texts))
+      Array.map units ~f:(fun (entry, (texts, _)) -> (entry, String.concat ~sep:"\n" texts))
     in
     let source_of ~routine_names texts =
       Syntax.prepend_builtins_to_text ~conditional_includes ~routine_names ~includes ~builtins
@@ -8522,7 +8538,7 @@ struct
     in
     let assemble_units idxs ~max_units ~min_unit_bytes =
       let pieces =
-        List.concat_map idxs ~f:(fun i -> List.map (snd units.(i)) ~f:(fun text -> (i, text)))
+        List.concat_map idxs ~f:(fun i -> List.map (fst (snd units.(i))) ~f:(fun text -> (i, text)))
       in
       let total = List.sum (module Int) pieces ~f:(fun (_, text) -> String.length text) in
       let n =
@@ -8573,12 +8589,7 @@ struct
       in
       (* An outlined kernel's parts are names it declares, renamed like its nodes' (gh-ocannl-1603):
          they are spelled after the kernel's name, segment index included. *)
-      let bound =
-        bound
-        @ List.init
-            (List.length (snd units.(i)) - 1)
-            ~f:(fun k -> Kernel_outline.part_name ~kernel:names.(i) k)
-      in
+      let bound = bound @ snd (snd units.(i)) in
       let canonical ~bound =
         Kernel_code_cache.canonical_kernel ~kernel_name:names.(i) ~bound
           ~derivations:minted_derivations ~free:Syntax.routine_ident_blacklist

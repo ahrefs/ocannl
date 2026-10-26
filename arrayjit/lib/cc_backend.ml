@@ -1542,7 +1542,13 @@ struct
     let full_printf_support = C_syntax.printf_support_unless_uniform ()
   end)
 
-  let ident_blacklist = ident_blacklist @ C_syntax.builtin_idents Builtins_cc.builtins
+  (* The prelude's linkage macro and the outlined parts' attribute (gh-ocannl-1603) are macros: a
+     node or routine spelled like one would expand. *)
+  let ident_blacklist =
+    ident_blacklist
+    @ C_syntax.builtin_idents Builtins_cc.builtins
+    @ [ "ARRAYJIT_BUILTIN_LINKAGE"; Kernel_outline.part_attribute ]
+
   let parallel_grid_syntax = parallel_grid_syntax_setting ()
   let parallel_grid_chunks = parallel_grid_chunks_setting ()
   let vector_file = vector_file_setting ()
