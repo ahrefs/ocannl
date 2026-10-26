@@ -805,7 +805,7 @@ files.
   `Bf16_narrow` (`true`) resolves as auto everywhere except HIP, where it keeps the
   bf16-accumulate arm — and is what the `approximate` payload names, which is how that regime did
   not move when HIP's auto went wide; `reproducible` pins `auto`. Why wide: gfx11's bf16-accumulate WMMA is not
-  exactly rounded — on gfx1151, `schedule_mma_matmul`'s width-sensitive bf16 leg (32-term sums near
+  exactly rounded (it rounds toward zero, gh-ocannl-1509) — on gfx1151, `schedule_mma_matmul`'s width-sensitive bf16 leg (32-term sums near
   77, exact in f32) exceeds the half-bf16-ulp narrowing bound by 1.12 under auto and sits inside it
   under `Bf16_wide` (a two-sided claim), and the bf16 k-split discriminator (256 + 1 per later block
   over nine blocks) returns 256 narrow and 264 wide; over a 2048-term staged GEMM
@@ -1220,9 +1220,11 @@ files.
   a schedule decision, kept off integer accumulations (gh-ocannl-824). `tile_mma_declines` pins
   the register-tiled census with the contraction licence off.
 ## SIMD operations and rounding
-- **gfx11's WMMA is exactly rounded only when the products share a sign** (gh-ocannl-1420). The
+- **gfx11's WMMA is exactly rounded only when the products share a sign** (gh-ocannl-1420; the
+  bf16 builtins, gh-ocannl-1509). The
   raw `__builtin_amdgcn_wmma_{f32,f16}_16x16x16_f16_w32` returns `-2^-24` for `1*1 + 1*(-1)`, on
-  gfx1151 and gfx1102 alike, at `-O0` and `-O3`, with no rocWMMA and no OCANNL involved. Signed
+  gfx1151 and gfx1102 alike, at `-O0` and `-O3`, with no rocWMMA and no OCANNL involved, and so do
+  `__builtin_amdgcn_wmma_{f32,bf16}_16x16x16_bf16_w32` (measured on gfx1151 only). Signed
   small-integer operands miss in most f32 cells by a few `2^-24` at the products' scale, and the
   f16 arm, whose rounding absorbs residues that small elsewhere, misses in exactly its exact-zero
   cells (subnormal multiples of `2^-24`, either sign), in fragment scopes and per-statement tiles
@@ -1230,9 +1232,19 @@ files.
   sums up to 53760 included. So a HIP tensorized leg that claims bitwise equality with a serial
   twin needs same-sign operands (`fragment_scope_move_legality` cycles over `[0, modulus)`), and
   signed data needs a stated bound. `tools/hip_wmma_sign_probe.hip` is the standalone reproducer:
-  its exit status says whether the same-sign rule still holds on a new target or toolkit, and it
-  reports the mixed-sign cases without judging them. Re-run it after a ROCm upgrade, and extend it
-  to gfx12's builtins when a gfx12 box exists.
+  its exit status says whether the same-sign rule still holds on a new target or toolkit, for all
+  four builtins (f16 and bf16 inputs, each at both accumulator widths), and it reports the
+  mixed-sign cases without judging them. Re-run it after a ROCm upgrade, and extend it to gfx12's
+  builtins when a gfx12 box exists.
+- **Where a gfx11 WMMA sum is inexact, only the f16 accumulator rounds to nearest even**
+  (gh-ocannl-1509, gfx1151; the probe's rounding cases, two nonzero products per cell so the sum
+  is the one rounding, report each arm's mode beside the recorded one). The bf16 accumulator
+  rounds TOWARD ZERO (515 -> 512, 518 -> 516; a mixed-sign f32 residue `1 - 2^-24` comes back
+  `1 - 2^-8`), which is why the narrow bf16 arm drifts below its reference (the `Bf16_wide` bullet
+  above). Both f32 accumulators behave as an adder with one guard bit and no sticky bit:
+  `2^25 + 3` comes back `2^25` where nearest even says `2^25 + 4`. So even on same-sign data a
+  HIP tensorized result over INEXACT sums is not the serial twin's correctly rounded value at
+  either width: a bitwise claim there needs exact data, as the next bullet says.
 - **A HIP bitwise claim rests on two conditions, and a HIP tolerance needs a reason that is
   neither** (gh-ocannl-1432; gh-ocannl-1457, backend enforcement of the licence, builds on this
   rule). The rule, as the sweep applied it:
