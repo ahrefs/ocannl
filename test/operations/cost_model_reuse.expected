@@ -42,3 +42,4 @@ the staffed start's gate tag tells two issue rates apart: true
 the staffed start's gate tag tells two DRAM rates apart: true
 the staffed start's gate tag tells two tile-MMA rates apart: true
 the staffed start's gate tag tells two device-gather rates apart: true
+the staffed start's gate tag tells two memory-transaction rates apart: true

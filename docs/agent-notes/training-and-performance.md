@@ -238,16 +238,11 @@ files.
   DISCRETE, 16 multiprocessors as reported, `03369cfe`, residual 0.164; agreement 30-52% -> 63-79%
   at the batched cells, gate-0 picks a bgrid leaf, 0.46-0.59x of the untuned default's time);
   gate-0 picks a bgrid leaf, 2.9-37x faster than the plain one it picked before. What the fill does
-  NOT do: separate a coalesced leaf from its uncoalesced twin (same work and launch per context;
-  coalescing is a memory-transaction effect), or the 64x64 vs 32x32 bgrid geometries at outproj b8
-  (64 blocks of 256 threads fill 64/70 under the cap, while the 64-block leaf measured fastest:
-  its tile reuse is not a compute-leg effect). Coalesced leaves therefore still stay out of
-  `model_default`; admitting them while the memory leg ranks outproj `coal-k` 0.6-0.8% below its
-  twins would pick a leaf measured 1.8x slower on rog at b256. Their scalar leaves ARE
-  numerics-preserving (`coalesce_numerics`: bitwise on order-sensitive inputs, on CUDA, HIP and
-  Metal), so admission is a score question only; `model_explain`'s coalesced rows judge each leaf
-  by its uncoalesced form. Trap for tests: the fill made the `auto` gate's picks DEVICE-dependent
-  (every CUDA and HIP class now ships fill constants, each its own), so a small test workload the gate seeded before
+  NOT do: order the 64x64 vs 32x32 bgrid geometries at outproj b8 (64 blocks of 256 threads fill
+  64/70 under the cap, while the 64-block leaf measured fastest: its tile reuse is not a
+  compute-leg effect), nor the deep-K coalesced leaves (below). Trap for tests: the fill made the
+  `auto` gate's picks DEVICE-dependent (every CUDA and HIP class now ships fill constants, each its
+  own), so a small test workload the gate seeded before
   may now seed nothing, or leave a site to the reduction sink, on one box only. A test whose claim
   needs the rule to seed a site pins `gpu_default_sketch_min_reduction` to a threshold for that
   call (`autotune_staffed_fine`, `seeded_narrow_storage`'s model leg; gh-ocannl-1599's triage);
@@ -257,6 +252,32 @@ files.
   parity, gh-ocannl-1641). On `gpt2_mini_train` (b1_s128, b8, b256) the fill flips nothing: the
   untuned census is identical with and without it on rog and minix, and equal to tuf's. The
   `autotune_log` line `seeded_default: gate ...` names the gate and fill that decided a census.
+- **Coalesced layouts, transactions and occupancy (gh-ocannl-1600).** "Coalesced" in the tuner's
+  sense (`coal-n`, `coal-k`, `Sched.Coalesce`) MERGES LOOPS; it does not change which lanes read
+  contiguous memory. At every gh-1479 cell a coalesced leaf measured as its uncoalesced twin
+  (rog qkv b8 `32x32x8/4x4 bgrid` 0.0534 vs `coal-n` 0.0537 ms) with equal transaction counts;
+  its wins come from geometry merging makes reachable -- the 64-wide `coal-n` tile at qkv, deep
+  K tiles (32-256) at outproj. The slow coal-k argmins came from the compute leg being 0.5-0.8%
+  LOWER for deeper K (fewer K steps' overhead counted) while physically deeper K was 1.2-3.6x
+  slower. Two terms, both Untimed and unset-means-unchanged: `Cost_model.memory_transactions`
+  (excess 32-byte sectors per lane group over the compact count, priced at `transaction_rate`
+  in the compute leg; a lane's innermost serial run within 8 KiB is ONE footprint -- counted per
+  instruction, the 4x4 register tiles' 16-byte lane strides and the staging copies' row walks
+  looked uncoalesced and flipped outproj's admitted argmin to a slower 32x32 leaf), and the
+  occupancy factor (`Cost_model.occupancy`: theoretical occupancy from
+  `workgroup_bytes_per_multiprocessor`, the compute leg over it). `model_default` ranks the
+  coalesced menu (inside `model_family_search`, after the tree, strict improvement only) only
+  where BOTH resolve. HIP RDNA ships the physical 131072 (LDS per WGP; HIP counts WGPs) and the
+  coalesced argmin at minix outproj b8/b256 is the fastest leaf (`64x64x32 coal-k`, 1.41x faster
+  than the uncoalesced pick); CUDA ships no capacity: physical 100 KiB leaves `64x64x32 coal-k`
+  1.23x slow, and at b8 (64 blocks over 46 SMs) residency cannot bind at all, so the CUDA
+  deep-K slowdown has another mechanism (open: profile it). Once the per-lane run is one
+  footprint, qkv and outproj carry no excess at all; only the weight gradient's transposed
+  operand does (rates fitted there: CUDA 1e12, HIP 1e11, `benchmarks/gh1600_txn_fit.py`, which
+  re-scores per kernel from `bench_rank_site`'s `rank-site: kernels` lines -- the routine's summed
+  legs cannot rebuild a multi-kernel score). Their scalar leaves are numerics-preserving
+  (`coalesce_numerics`), so admission is a score question only; `model_explain`'s coalesced rows
+  judge each leaf by its uncoalesced form.
 - **Compare a plan and its rivals in ONE kernel decomposition** (gh-ocannl-1477). The ranking score
   sums `max(compute, memory)` per kernel, so a memory-bound kernel run on its own (the seeded plan's
   zero-fill, the default segmentation having no zero fold) is charged in full, while the same writes

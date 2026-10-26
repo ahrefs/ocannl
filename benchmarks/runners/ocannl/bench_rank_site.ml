@@ -114,7 +114,24 @@ let () =
         (* gh-ocannl-1495: summed over kernels, as the compute leg divides them by their rates --
            what [gh1442_agreement.py --fit-mma] fits the tile-MMA and device-gather rates from. *)
         (sum ex.ex_mma_work)
-        (sum ex.ex_device_gathers));
+        (sum ex.ex_device_gathers);
+      (* gh-ocannl-1600: per kernel, its two legs, its fill-weighted excess memory transactions
+         (32-, 64- and 128-byte sectors), its uncovered accesses, workgroup bytes and block threads
+         -- what [gh1442_agreement.py --fit-txn] re-scores offline (the score sums each kernel's
+         larger leg, so the routine's summed legs cannot rebuild it). *)
+      Option.iter ex.ex_kernels ~f:(fun kernels ->
+          Stdio.printf "rank-site: kernels site=%s label=%S kernels=%s\n%!" site label
+            (String.concat ~sep:";"
+               (List.map kernels ~f:(fun (k : Autotune.explain_kernel) ->
+                    Printf.sprintf
+                      "c=%s,m=%s,txn=%.6e,txn64=%s,txn128=%s,unc=%d,wg=%d,thr=%d,occ=%.6f"
+                      (ms k.ek_compute_ms) (ms k.ek_memory_ms) k.ek_transactions
+                      (Option.value_map ~default:"n/a" ~f:(Printf.sprintf "%.6e")
+                         (List.Assoc.find k.ek_transactions_by_sector 64 ~equal:Int.equal))
+                      (Option.value_map ~default:"n/a" ~f:(Printf.sprintf "%.6e")
+                         (List.Assoc.find k.ek_transactions_by_sector 128 ~equal:Int.equal))
+                      k.ek_transactions_uncovered k.ek_workgroup_bytes k.ek_block_threads
+                      k.ek_occupancy)))));
   (* [BENCH_PICK=1] (gh-ocannl-1278): what [Autotune.model_default] actually picks here under the
      configuration in force, read off the compile itself. Nothing is timed. [seeded_label] names the
      seeded plan under the same configuration as the tuner labels its seed ([F_seeded[...]], the

@@ -1,0 +1,6 @@
+the coalesced layouts are ranked where the rate and the capacity both resolve: true
+not without the workgroup capacity: true
+not without the transaction rate: true
+not without a lane width: true
+the uncoalesced walk returns an uncoalesced leaf: true
+with the coalesced menu, a coal-k leaf strictly beats the uncoalesced walk's pick: true

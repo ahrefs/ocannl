@@ -1991,6 +1991,18 @@ val ranking_device_gather_rate : limits:Ir.Backend_intf.hardware_limits -> float
     term) over the backend's advisory [device_gather_rate]. An [Untimed] reading, like
     {!ranking_capacity}. *)
 
+val ranking_transaction_rate : limits:Ir.Backend_intf.hardware_limits -> float option
+(** The ranking score's memory-transaction rate, in excess 32-byte sectors/s (gh-ocannl-1600,
+    {!Ir.Cost_model.memory_transactions}): config [model_transaction_rate] ([none]: no transaction
+    term, and no coalesced leaves in {!model_default}) over the backend's advisory
+    [transaction_rate]. An [Untimed] reading, like {!ranking_capacity}. *)
+
+val ranking_workgroup_capacity : limits:Ir.Backend_intf.hardware_limits -> int option
+(** The ranking score's occupancy capacity, in workgroup bytes per multiprocessor (gh-ocannl-1600,
+    {!Ir.Cost_model.occupancy}): config [model_workgroup_bytes_per_multiprocessor] ([none]: no
+    occupancy factor, and no coalesced leaves in {!model_default}) over the backend's advisory
+    [workgroup_bytes_per_multiprocessor]. An [Untimed] reading, like {!ranking_capacity}. *)
+
 val ranking_fill_model : limits:Ir.Backend_intf.hardware_limits -> Ir.Cost_model.fill_model option
 (** The ranking score's launch fill model (gh-ocannl-1479, {!Ir.Cost_model.context_fill}): config
     [model_multiprocessors] and [model_fill_threads] (each [none]: no launch fill) over the
@@ -2402,6 +2414,7 @@ val model_family_search :
   ?on_rejected:(unit -> unit) ->
   ?admit:(sketch_params -> bool) ->
   ?on_excluded:(unit -> unit) ->
+  ?coalesced:bool ->
   capabilities:Ir.Backend_intf.codegen_capabilities ->
   is_gpu:bool ->
   is_cpu:bool ->
@@ -2425,8 +2438,17 @@ val model_family_search :
     apply; a leaf [admit] refuses is left unscored, [on_excluded] called, before it is scheduled
     ({!model_default}'s numerics-preserving restriction). [None] for a lowering neither family
     claims. A conv path carries no certain-traffic increment, so its bound is the schedule-invariant
-    floor, sound for every completion. Exposed so a test can drive the walk with stand-in limits and
-    load rules on any backend. *)
+    floor, sound for every completion. With [coalesced] (default [false]; {!model_default} passes
+    {!model_ranks_coalesced}), the coalesced layouts' leaves ({!coalesced_seed_params}) are scored
+    after the walk, leaf by leaf under the same [admit] and accounting and with no bound, and one
+    displaces the walk's pick (or [incumbent]) only by strict improvement (gh-ocannl-1600). Exposed
+    so a test can drive the walk with stand-in limits and load rules on any backend. *)
+
+val model_ranks_coalesced : limits:Ir.Backend_intf.hardware_limits -> bool
+(** gh-ocannl-1600: whether {!model_default} ranks the coalesced layouts -- where the terms that
+    tell them from their uncoalesced twins are priced: {!ranking_transaction_rate} and
+    {!ranking_workgroup_capacity} both resolve and the backend states its [simdgroup_width]. Its
+    numerics-preserving set then also admits a coalesced scalar blocktile. *)
 
 type seeded_choice = {
   sd_seeded : (int * sketch_params) list;
@@ -2549,6 +2571,8 @@ type seed_gate =
       matrix_rate : float option;
       gather_rate : float option;
       fill : Ir.Cost_model.fill_model option;
+      sector_rate : float option;
+      wg_capacity : int option;
     }
       (** The [auto] gate: a segment whose {!seeded_params} sketch the ranking score
           ({!Ir.Cost_model.ranking_seconds}) puts strictly below the default preset of the same
@@ -2558,9 +2582,11 @@ type seed_gate =
           the envelope's ceilings, gh-ocannl-1442), its tile-MMA and device-gather rates
           ({!ranking_mma_rate}, {!ranking_device_gather_rate}; [None]: the [peak_flops] ceiling and
           no gather term, gh-ocannl-1495), and its launch fill ({!ranking_fill_model}; [None]: no
-          launch fill, gh-ocannl-1479) — so it seeds exactly where the cross-block re-reads the
-          sketch removes are priced. The geometry and the numerics-preserving candidate set are
-          {!seeded_params}' either way. *)
+          launch fill, gh-ocannl-1479), and its memory-transaction rate
+          ({!ranking_transaction_rate}; [None]: no transaction term, gh-ocannl-1600) and its
+          occupancy factor's capacity ({!ranking_workgroup_capacity}; [None]: no occupancy factor) —
+          so it seeds exactly where the cross-block re-reads the sketch removes are priced. The
+          geometry and the numerics-preserving candidate set are {!seeded_params}' either way. *)
 
 val seeded_default_gate : limits:Ir.Backend_intf.hardware_limits -> seed_gate
 (** Config [gpu_default_sketch_min_reduction]: an integer is [Min_reduction]; [auto] is [Ranked]
@@ -2762,6 +2788,29 @@ val seeded_default :
     [reduction_sink] (default: config [gpu_default_reduction_sink], true) turns it off; it applies
     with the seeding disabled too. Reads and writes no schedule cache. *)
 
+type explain_kernel = {
+  ek_compute_ms : float option;
+  ek_memory_ms : float option;
+      (** The kernel's two legs, as {!Ir.Cost_model.ranking_legs_of} prices them under the
+          configuration in force: its ranking score is the larger. *)
+  ek_transactions : float;
+  ek_transactions_uncovered : int;
+      (** gh-ocannl-1600: the kernel's excess memory transactions (32-byte sectors) as the compute
+          leg divides them by the transaction rate ({!Ir.Cost_model.filled_transactions}: over each
+          context's fill), counted whether or not a rate prices them (0 without a lane width), and
+          how many global accesses were estimated rather than counted. *)
+  ek_transactions_by_sector : (int * float) list;
+      (** The same at 64- and 128-byte sectors: whether the counting unit changes an ordering. *)
+  ek_workgroup_bytes : int;
+  ek_block_threads : int;
+      (** The kernel's static workgroup-shared bytes and its launch block's threads. *)
+  ek_occupancy : float;
+      (** Its occupancy as the compute leg divides by it ({!Ir.Cost_model.occupancy}; 1 where the
+          score reads none). *)
+}
+(** One kernel of an explained candidate: what [benchmarks/gh1442_agreement.py --fit-txn] re-scores
+    offline, the candidate's score being the sum over its kernels of the larger leg. *)
+
 type explain = {
   ex_floor_ms : float option;
       (** The candidate's roofline lower bound ({!Ir.Cost_model.analyze}'s counts), as
@@ -2786,6 +2835,8 @@ type explain = {
           ({!Ir.Cost_model.ranking_mma_terms}: over the [Tile_mma] contexts' fill). What
           [benchmarks/gh1442_agreement.py --fit-mma] fits the two rates from. [None] where
           [ex_spilled] is. *)
+  ex_kernels : explain_kernel list option;
+      (** Per kernel, in launch order (gh-ocannl-1600). [None] where [ex_spilled] is. *)
   ex_operand_loads : Ir.Cost_model.load_count;
       (** Tile-MMA operand load instructions under the backend's load rule ({!model_operand_loads}),
           over all the candidate's kernels ({!Ir.Cost_model.combine_load_counts}: [Undescribed] if
@@ -2852,8 +2903,9 @@ val model_explain :
     [x_routine] is the default pipeline alone and [x_segments] is empty.
 
     [~coalesced:true] (default [false]) appends to [x_routine] the whole-routine leaves of the
-    coalesced tuner branch ({!coalesced_seed_params}), which {!model_default} does not rank, so the
-    score's ranking of them can be checked against timings (gh-ocannl-1278). Each is marked admitted
+    coalesced tuner branch ({!coalesced_seed_params}), so the score's ranking of them can be checked
+    against timings (gh-ocannl-1278); they are appended regardless where {!model_default} ranks them
+    ({!model_ranks_coalesced}, gh-ocannl-1600), so its pick is a listed row. Each is marked admitted
     exactly when its uncoalesced form would be. *)
 
 val untuned_compile :

@@ -2819,6 +2819,14 @@ let device_gather_rate_override =
     (parse_rate ~key:"model_device_gather_rate" ~what:"rate in gathers/s"
        (Utils.get_global_arg ~arg_name:"model_device_gather_rate" ~default:""))
 
+(* gh-ocannl-1600: the memory-transaction rate (excess 32-byte sectors/s; [none]: no transaction
+   term, and no coalesced leaves in [model_default]) beats the backend's advisory
+   [transaction_rate]. Same readers and class as the rates above. *)
+let transaction_rate_override =
+  lazy
+    (parse_rate ~key:"model_transaction_rate" ~what:"rate in sectors/s"
+       (Utils.get_global_arg ~arg_name:"model_transaction_rate" ~default:""))
+
 let resolve override advisory =
   match Lazy.force override with `Advisory -> advisory | `Off -> None | `Value v -> Some v
 
@@ -2849,6 +2857,15 @@ let fill_threads_override =
     (parse_count ~key:"model_fill_threads" ~what:"thread count per multiprocessor"
        (Utils.get_global_arg ~arg_name:"model_fill_threads" ~default:""))
 
+(* gh-ocannl-1600: the occupancy factor's workgroup capacity per multiprocessor (bytes; [none]: no
+   occupancy factor, and no coalesced layouts in [model_default]) beats the backend's advisory
+   [workgroup_bytes_per_multiprocessor]. Same readers and class as the rates above. *)
+let workgroup_capacity_override =
+  lazy
+    (parse_count ~key:"model_workgroup_bytes_per_multiprocessor"
+       ~what:"workgroup byte count per multiprocessor"
+       (Utils.get_global_arg ~arg_name:"model_workgroup_bytes_per_multiprocessor" ~default:""))
+
 let ranking_capacity ~limits =
   let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
   (resolve cache_capacity_override u.cache_capacity, u.resident_threads)
@@ -2873,6 +2890,14 @@ let ranking_device_gather_rate ~limits =
   let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
   resolve device_gather_rate_override u.gather_rate
 
+let ranking_transaction_rate ~limits =
+  let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
+  resolve transaction_rate_override u.sector_rate
+
+let ranking_workgroup_capacity ~limits =
+  let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
+  resolve workgroup_capacity_override u.workgroup_capacity
+
 let ranking_fill_model ~limits : CM.fill_model option =
   let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
   match
@@ -2893,13 +2918,31 @@ type kernel_legs = {
   kl_device_gathers : float;
       (** gh-ocannl-1495: the accepted tile-MMA work and the device gathers as the compute leg
           divides them by their rates ({!Ir.Cost_model.ranking_mma_terms}). *)
+  kl_transactions : float;
+  kl_transactions_uncovered : int;
+      (** gh-ocannl-1600: the excess memory transactions as the compute leg divides them by the
+          transaction rate ({!Ir.Cost_model.filled_transactions}), and how many global accesses were
+          estimated rather than counted; 0 where they were not counted (no rate and no request, or
+          no lane width). *)
+  kl_transactions_by_sector : (int * float) list;
+      (** The same fill-weighted excess at the 64- and 128-byte sector sizes, on request only: a
+          diagnostic for whether the counting unit changes the ordering. *)
+  kl_workgroup_bytes : int;
+  kl_block_threads : int;
+      (** The kernel's static workgroup-shared bytes ({!Sched.workgroup_memory_bytes}; 0 without
+          capabilities) and its launch block's threads: what its occupancy reads. *)
+  kl_occupancy : float;
+      (** gh-ocannl-1600: the kernel's occupancy ({!Ir.Cost_model.occupancy}) where the score reads
+          one (a workgroup capacity, the device residency and a multiprocessor count resolved), 1
+          otherwise. *)
 }
 
 (* Per kernel, the ranking score's two legs and whether its working set left the cache, beside the
    candidate's roofline lower bound ([summaries_roofline]'s). [None] exactly where
    [summaries_roofline] is. *)
 let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth ?mma_rate
-    ?device_gather_rate ?fill_model ~peak_flops ~peak_memory_bandwidth ~limits
+    ?device_gather_rate ?fill_model ?transaction_rate ?workgroup_capacity
+    ?(count_transactions = false) ~peak_flops ~peak_memory_bandwidth ~limits
     (segs : LL.optimized list) : (float * kernel_legs list) option =
   (* Each reading only where no explicit value replaces it: a caller's gate isolates the score from
      the configuration it overrides, a malformed override of it included. *)
@@ -2919,6 +2962,25 @@ let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_ban
     match device_gather_rate with Some r -> r | None -> ranking_device_gather_rate ~limits
   in
   let fill_model = match fill_model with Some f -> f | None -> ranking_fill_model ~limits in
+  let transaction_rate =
+    match transaction_rate with Some r -> r | None -> ranking_transaction_rate ~limits
+  in
+  (* gh-ocannl-1600: the transactions are counted where they are priced, or where a report asks for
+     them, and only where the backend states the lane group's width. *)
+  let lane_width =
+    if Option.is_some transaction_rate || count_transactions then limits.simdgroup_width else None
+  in
+  (* gh-ocannl-1600: the occupancy factor, where a capacity, the residency and a multiprocessor
+     count all resolve: each multiprocessor's thread slots are the device's resident threads over
+     the fill model's multiprocessors. *)
+  let workgroup_capacity =
+    match workgroup_capacity with Some c -> c | None -> ranking_workgroup_capacity ~limits
+  in
+  let threads_per_mp =
+    match (workgroup_capacity, max_resident_threads, fill_model) with
+    | Some _, Some resident, Some fm -> Some (resident / max 1 fm.CM.fm_multiprocessors)
+    | _ -> None
+  in
   let summaries = List.map segs ~f:(fun o -> (o, CM.analyze o.LL.llc)) in
   match summaries_roofline ~peak_flops ~peak_memory_bandwidth (List.map summaries ~f:snd) with
   | None -> None
@@ -2948,17 +3010,42 @@ let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_ban
                         ~operand_fragments:c.mma_operand_fragments
                         ~operand_loads:c.mma_operand_loads o ))
               in
+              let workgroup_bytes =
+                Option.value_map capabilities ~default:0 ~f:(fun capabilities ->
+                    Sched.workgroup_memory_bytes ~capabilities o)
+              in
+              let block_threads = Array.fold (LL.launch_dims o.LL.llc).LL.block ~init:1 ~f:( * ) in
+              let occupancy =
+                Option.map2 workgroup_capacity threads_per_mp ~f:(fun bytes_per_mp threads_per_mp ->
+                    CM.occupancy ~workgroup_bytes ~block_threads ~threads_per_mp ~bytes_per_mp)
+              in
+              let count sector =
+                Option.value_map lane_width ~default:[] ~f:(fun lane_width ->
+                    CM.memory_transactions ?sector ~lane_width ~is_global:(CM.global_in o) o.LL.llc)
+              in
+              let transactions = count None in
               let kl_compute, kl_memory =
                 CM.ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes
                   ?cache_bandwidth ?issue_rate ?dram_bandwidth ?mma_rate ~mma_flops ~device_gathers
-                  ?device_gather_rate ?launch s reuse
+                  ?device_gather_rate ?launch ~transactions ?transaction_rate ?occupancy s reuse
               in
+              let filled ts = CM.filled_transactions ?fill_model:(Option.map launch ~f:fst) ts in
               let kl_mma_work, kl_device_gathers =
                 CM.ranking_mma_terms ~mma_flops ~device_gathers ?launch s
               in
               {
                 kl_mma_work;
                 kl_device_gathers;
+                kl_transactions = filled transactions;
+                kl_transactions_uncovered =
+                  List.sum (module Int) transactions ~f:(fun t -> t.CM.tx_uncovered);
+                kl_transactions_by_sector =
+                  (if count_transactions && Option.is_some lane_width then
+                     List.map [ 64; 128 ] ~f:(fun b -> (b, filled (count (Some b))))
+                   else []);
+                kl_workgroup_bytes = workgroup_bytes;
+                kl_block_threads = block_threads;
+                kl_occupancy = Option.value occupancy ~default:1.;
                 kl_compute;
                 kl_memory;
                 kl_spilled = Option.exists reuse ~f:(CM.spills ?cache_capacity_bytes);
@@ -2979,12 +3066,12 @@ let kernel_rank { kl_compute; kl_memory; _ } =
    by the untimed choosers only — [model_default], [model_explain] and the [auto] seeding gate. An
    explicit [capacity] / [cache_bandwidth] (the gate's own, or a test's) overrides the readings. *)
 let segments_ranking ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth ?mma_rate
-    ?device_gather_rate ?fill_model ~peak_flops ~peak_memory_bandwidth ~limits
-    (segs : LL.optimized list) : (float * float) option =
+    ?device_gather_rate ?fill_model ?transaction_rate ?workgroup_capacity ~peak_flops
+    ~peak_memory_bandwidth ~limits (segs : LL.optimized list) : (float * float) option =
   Option.map
     (segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_bandwidth ?mma_rate
-       ?device_gather_rate ?fill_model ~peak_flops ~peak_memory_bandwidth ~limits segs)
-    ~f:(fun (bound, legs) ->
+       ?device_gather_rate ?fill_model ?transaction_rate ?workgroup_capacity ~peak_flops
+       ~peak_memory_bandwidth ~limits segs) ~f:(fun (bound, legs) ->
       (List.fold legs ~init:0. ~f:(fun acc l -> acc +. kernel_rank l), bound))
 
 let ranking_ms ?capabilities ~limits segs =
@@ -5103,8 +5190,8 @@ let model_operand_loads ~(capabilities : Ir.Backend_intf.codegen_capabilities) (
    bound by their two staged operand tiles' certain traffic, so conv geometry subtrees fathom as
    matmul ones do. [None] = neither family has a site. *)
 let model_family_search ?(on_rejected = fun () -> ()) ?(admit = fun _ -> true)
-    ?(on_excluded = fun () -> ()) ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices ~peak_flops
-    ~peak_memory_bandwidth ~score ~incumbent (base_opt : LL.optimized) =
+    ?(on_excluded = fun () -> ()) ?(coalesced = false) ~capabilities ~is_gpu ~is_cpu ~limits
+    ~static_indices ~peak_flops ~peak_memory_bandwidth ~score ~incumbent (base_opt : LL.optimized) =
   let accum_prec = capabilities.Ir.Backend_intf.accum_prec in
   match sketch_family_tree ~capabilities ~is_gpu ~is_cpu ~limits base_opt with
   | None -> None
@@ -5156,6 +5243,23 @@ let model_family_search ?(on_rejected = fun () -> ()) ?(admit = fun _ -> true)
           ~bound:(fun ~path _sub -> bound_at (path_inc path))
           ~incumbent ~tie_break ~score:score_sketch tree
       in
+      (* gh-ocannl-1600: the coalesced layouts' leaves ({!coalesced_seed_params}, the menu [tune]
+         seeds beside the family on the whole routine and on every segment), where the caller's
+         score can tell one from its uncoalesced twin (the memory-transaction term). A structurally
+         different lowering, so no bound of the family tree applies: the bounded menu is scored leaf
+         by leaf, in its order, under the same admission and rejection accounting, and a leaf
+         displaces the tree's pick (or the incumbent) only by strict improvement -- a tie keeps the
+         uncoalesced pick. *)
+      let best =
+        if not coalesced then best
+        else
+          List.fold (coalesced_seed_params ~capabilities ~is_gpu ~is_cpu ~limits base_opt)
+            ~init:best ~f:(fun acc p ->
+              let threshold = match acc with Some (_, b) -> b | None -> incumbent in
+              match score_sketch p with
+              | Some sc when Float.(sc < threshold) -> Some (p, sc)
+              | _ -> acc)
+      in
       Some (best, stats, bound_at 0)
 
 (** {2 The seeded untuned default (gh-ocannl-1324)} *)
@@ -5186,6 +5290,8 @@ type seed_gate =
       matrix_rate : float option;
       gather_rate : float option;
       fill : Ir.Cost_model.fill_model option;
+      sector_rate : float option;
+      wg_capacity : int option;
     }
 
 (* The threshold [auto] falls back to where the device publishes no capacity (gh-ocannl-1253):
@@ -5197,7 +5303,18 @@ let seed_gate_fallback = 32
    seeding's decisions can then say which gate, and which launch fill, decided them). *)
 let seed_gate_tag = function
   | Min_reduction n -> Printf.sprintf "min_reduction=%d" n
-  | Ranked { capacity; cache_rate; scalar_rate; dram_rate; matrix_rate; gather_rate; fill } ->
+  | Ranked
+      {
+        capacity;
+        cache_rate;
+        scalar_rate;
+        dram_rate;
+        matrix_rate;
+        gather_rate;
+        fill;
+        sector_rate;
+        wg_capacity;
+      } ->
       let rate = Option.value_map ~default:"none" ~f:Float.to_string in
       (* gh-ocannl-1495: the tile-MMA and device-gather rates only where set, so a gate without them
          keeps its tag. *)
@@ -5211,6 +5328,9 @@ let seed_gate_tag = function
         (Option.value_map fill ~default:""
            ~f:(fun { Ir.Cost_model.fm_multiprocessors; fm_fill_threads } ->
              Printf.sprintf " fill=%dx%d" fm_multiprocessors fm_fill_threads))
+      (* gh-ocannl-1600: likewise only where set. *)
+      ^ set "sector_rate" sector_rate
+      ^ Option.value_map wg_capacity ~default:"" ~f:(Printf.sprintf " wg_capacity=%d")
 
 (* The configured gate, unresolved: [`Auto] or a threshold. *)
 let seed_gate_setting () =
@@ -5243,6 +5363,8 @@ let seeded_default_gate ~limits =
               matrix_rate = ranking_mma_rate ~limits;
               gather_rate = ranking_device_gather_rate ~limits;
               fill = ranking_fill_model ~limits;
+              sector_rate = ranking_transaction_rate ~limits;
+              wg_capacity = ranking_workgroup_capacity ~limits;
             })
 
 (* The seeded geometries in preference order: the largest block tile first, for its operand reuse,
@@ -5567,7 +5689,8 @@ let seeded_split ~backend ~min_serial ~static_indices (opt : LL.optimized) =
    build, to apply or to score keeps the preset. Only a typed refusal fails: any other exception is
    a builder or transform bug and propagates (gh-ocannl-1390). *)
 let seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices ~capacity ~cache_bandwidth
-    ~issue_rate ~dram_bandwidth ~mma_rate ~device_gather_rate ~fill_model p pre =
+    ~issue_rate ~dram_bandwidth ~mma_rate ~device_gather_rate ~fill_model ~transaction_rate
+    ~workgroup_capacity p pre =
   let peak_flops, peak_memory_bandwidth = envelope ~limits in
   let rank sched =
     match Sched.apply_classified ~static_indices (sched ()) (scratch_of pre) with
@@ -5575,8 +5698,8 @@ let seeded_ranker ~capabilities ~limits ~accum_prec ~static_indices ~capacity ~c
     | post ->
         Option.map
           (segments_ranking ~capabilities ~capacity ~cache_bandwidth ~issue_rate ~dram_bandwidth
-             ~mma_rate ~device_gather_rate ~fill_model ~peak_flops ~peak_memory_bandwidth ~limits
-             [ post ])
+             ~mma_rate ~device_gather_rate ~fill_model ~transaction_rate ~workgroup_capacity
+             ~peak_flops ~peak_memory_bandwidth ~limits [ post ])
           ~f:fst
   in
   match
@@ -5601,14 +5724,26 @@ let seeded_segment_judgment ~capabilities ~limits ~accum_prec ~admit_narrow ~sta
         Error "sketch seeding is off (gpu_default_sketch_min_reduction=0)"
     | Min_reduction min_reduction ->
         seeded_params_judged ~capabilities ~admit_narrow ~limits ~accum_prec ~min_reduction pre
-    | Ranked { capacity; cache_rate; scalar_rate; dram_rate; matrix_rate; gather_rate; fill } -> (
+    | Ranked
+        {
+          capacity;
+          cache_rate;
+          scalar_rate;
+          dram_rate;
+          matrix_rate;
+          gather_rate;
+          fill;
+          sector_rate;
+          wg_capacity;
+        } -> (
         match
           seeded_params_judged ~capabilities ~admit_narrow ~limits ~accum_prec ~min_reduction:1 pre
         with
         | Ok p
           when ranked_below ~capacity ~cache_bandwidth:cache_rate ~issue_rate:scalar_rate
                  ~dram_bandwidth:dram_rate ~mma_rate:matrix_rate ~device_gather_rate:gather_rate
-                 ~fill_model:fill p pre ->
+                 ~fill_model:fill ~transaction_rate:sector_rate ~workgroup_capacity:wg_capacity p
+                 pre ->
             Ok p
         | Ok p ->
             Error
@@ -5988,7 +6123,17 @@ let model_seeding ~backend ~limits =
    all: it preserves numerics, but the score ties it with its uncoalesced twins, gh-ocannl-1278.)
    Other leaves are kept out of the ranking, counted as not numerics-preserving, never an error.
    Metal, the CPU backends and an unseeded CUDA/HIP compile keep the whole family. *)
-let model_admits ~seeding ~accum_prec (base_opt : LL.optimized) =
+(* gh-ocannl-1600: whether [model_default] ranks the coalesced layouts: only where both terms that
+   tell them apart are priced -- the memory-transaction rate (with the lane group's width stated)
+   and the occupancy factor's workgroup capacity. A coalesced layout never changes which lanes read
+   contiguous cells (its transactions equal its twin's); what it adds is geometry the uncoalesced
+   site cannot reach -- deep-K tiles, whose workgroup memory only the occupancy factor charges. *)
+let model_ranks_coalesced ~limits =
+  Option.is_some (ranking_transaction_rate ~limits)
+  && Option.is_some (ranking_workgroup_capacity ~limits)
+  && Option.is_some limits.Ir.Backend_intf.simdgroup_width
+
+let model_admits ?(coalesced = false) ~seeding ~accum_prec (base_opt : LL.optimized) =
   (* gh-ocannl-1405: a narrow-storage site is in the set exactly where the seeded plan admits it, so
      the model's pick still changes no result the seeded plan would not. *)
   let admit_narrow = match seeding with Some (_, _, _, admit) -> admit | None -> false in
@@ -6000,7 +6145,15 @@ let model_admits ~seeding ~accum_prec (base_opt : LL.optimized) =
       | Some (site, _, _) -> accumulates_at_storage ~accum_prec site
       | None -> true)
   in
-  fun p -> Option.is_none seeding || (scalar_blocktile p && Lazy.force preserving)
+  (* gh-ocannl-1600: with the memory-transaction term priced ([coalesced]), a coalesced layout of a
+     scalar blocktile is in the set too: it keeps every cell's summation order
+     (test/operations/coalesce_numerics), and the score can now tell it from its twin. Its other
+     restrictions are the blocktile's own, so a staged tensorized [coal-k] leaf stays out. *)
+  let scalar p =
+    scalar_blocktile p
+    || (coalesced && Option.is_some p.sk_coalesce && scalar_blocktile { p with sk_coalesce = None })
+  in
+  fun p -> Option.is_none seeding || (scalar p && Lazy.force preserving)
 
 (* gh-ocannl-1477: the seeded plan's own sketches on a program [model_default] searches -- the whole
    routine, or one keyed segment of its per-segment substitution: each scalar blocktile the plan
@@ -6127,7 +6280,13 @@ let model_default ?name ?report ctx comp bindings =
        [model_admits] on the coalesced branch). Other leaves are kept out of the ranking, counted as
        not numerics-preserving ([n_excluded]), never an error. Metal, the CPU backends and an
        unseeded CUDA/HIP compile keep the whole family. *)
-    let admits base_opt = model_admits ~seeding:(Lazy.force seeding_here) ~accum_prec base_opt in
+    (* gh-ocannl-1600: the coalesced layouts compete only where the memory-transaction term prices
+       what tells them from their twins -- a rate resolved and a lane width stated. Elsewhere the
+       candidate set is exactly as before. *)
+    let coalesced = model_ranks_coalesced ~limits in
+    let admits base_opt =
+      model_admits ~coalesced ~seeding:(Lazy.force seeding_here) ~accum_prec base_opt
+    in
     let capabilities = Context.codegen_capabilities ctx in
     (* gh-ocannl-1477: under seeding, a walk's threshold is the seeded plan's own sketch on the
        searched program, scored as its leaves are ({!model_seeded_anchors}), where it is below the
@@ -6164,8 +6323,8 @@ let model_default ?name ?report ctx comp bindings =
           ~on_rejected:(fun () -> Int.incr n_rejected)
           ~admit:(admits base_opt)
           ~on_excluded:(fun () -> Int.incr n_excluded)
-          ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices ~peak_flops ~peak_memory_bandwidth
-          ~score:score_valid ~incumbent base_opt
+          ~coalesced ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices ~peak_flops
+          ~peak_memory_bandwidth ~score:score_valid ~incumbent base_opt
       with
       | None -> None
       | Some (best, stats, fb) ->
@@ -6593,6 +6752,17 @@ let model_default ?name ?report ctx comp bindings =
    pipeline) and every whole-routine sketch leaf of the program it searches (the seeded plan's split
    prelude included), each marked with whether the numerics restriction admits it — without
    choosing. *)
+type explain_kernel = {
+  ek_compute_ms : float option;
+  ek_memory_ms : float option;
+  ek_transactions : float;
+  ek_transactions_uncovered : int;
+  ek_transactions_by_sector : (int * float) list;
+  ek_workgroup_bytes : int;
+  ek_block_threads : int;
+  ek_occupancy : float;
+}
+
 type explain = {
   ex_floor_ms : float option;
   ex_rank_ms : float option;
@@ -6602,6 +6772,7 @@ type explain = {
   ex_fills : float list option;
   ex_mma_work : float list option;
   ex_device_gathers : float list option;
+  ex_kernels : explain_kernel list option;
   ex_operand_loads : CM.load_count;
   ex_admitted : bool;
   ex_anchor : bool;
@@ -6624,9 +6795,13 @@ let model_explain ?name ?(coalesced = false) ctx comp bindings =
     let ex_operand_loads =
       CM.combine_load_counts (List.map segs ~f:(model_operand_loads ~capabilities:caps))
     in
-    match segments_legs ~capabilities:caps ~peak_flops ~peak_memory_bandwidth ~limits segs with
+    match
+      segments_legs ~capabilities:caps ~count_transactions:true ~peak_flops ~peak_memory_bandwidth
+        ~limits segs
+    with
     | None ->
         {
+          ex_kernels = None;
           ex_floor_ms = None;
           ex_rank_ms = None;
           ex_compute_ms = None;
@@ -6653,6 +6828,19 @@ let model_explain ?name ?(coalesced = false) ctx comp bindings =
           ex_fills = Some (List.map legs ~f:(fun l -> l.kl_fill));
           ex_mma_work = Some (List.map legs ~f:(fun l -> l.kl_mma_work));
           ex_device_gathers = Some (List.map legs ~f:(fun l -> l.kl_device_gathers));
+          ex_kernels =
+            Some
+              (List.map legs ~f:(fun l ->
+                   {
+                     ek_compute_ms = ms l.kl_compute;
+                     ek_memory_ms = ms l.kl_memory;
+                     ek_transactions = l.kl_transactions;
+                     ek_transactions_uncovered = l.kl_transactions_uncovered;
+                     ek_transactions_by_sector = l.kl_transactions_by_sector;
+                     ek_workgroup_bytes = l.kl_workgroup_bytes;
+                     ek_block_threads = l.kl_block_threads;
+                     ek_occupancy = l.kl_occupancy;
+                   }));
           ex_operand_loads;
           ex_admitted;
           ex_anchor;
@@ -6746,12 +6934,13 @@ let model_explain ?name ?(coalesced = false) ctx comp bindings =
                 if String.equal l anchor then (l, { ex with ex_anchor = true }) else (l, ex))
           else listed @ [ row ]
     in
-    (* gh-ocannl-1278: the coalesced tuner branch's whole-routine leaves, which [model_default] does
-       not rank, listed on request to check the score's ranking of them against timings. A leaf is
-       marked admitted when its uncoalesced form is: the set [model_default] would rank were the
-       coalesced layouts admitted as numerics-preserving (neither reorders a cell's summation). *)
+    (* gh-ocannl-1278: the coalesced tuner branch's whole-routine leaves, listed on request to check
+       the score's ranking of them against timings, and always where [model_default] ranks them
+       (gh-ocannl-1600, {!model_ranks_coalesced}), so its pick is among the listed rows. A leaf is
+       marked admitted when its uncoalesced form is: the set [model_default] ranks where it ranks
+       them (neither layout reorders a cell's summation). *)
     let coalesced_explains prog =
-      if not coalesced then []
+      if not (coalesced || model_ranks_coalesced ~limits) then []
       else
         let admits = model_admits ~seeding ~accum_prec prog in
         explain_leaves

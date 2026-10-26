@@ -460,7 +460,7 @@ let () =
    on: two gates differing only in the issue rate, or only in the DRAM rate, tag apart. *)
 let () =
   let rated_limits = { limits with peak_flops = Some c_flops; peak_memory_bandwidth = Some c_bw } in
-  let tag ?scalar_rate ?dram_rate ?matrix_rate ?gather_rate () =
+  let tag ?scalar_rate ?dram_rate ?matrix_rate ?gather_rate ?sector_rate () =
     Autotune.seeded_plan
       ~seed_gate:
         (Autotune.Ranked
@@ -472,6 +472,8 @@ let () =
              matrix_rate;
              gather_rate;
              fill = None;
+             sector_rate;
+             wg_capacity = None;
            })
       ~backend:"cuda" ~limits:rated_limits ~accum_prec:Fn.id ~static_indices:[] (hermetic base)
     |> Option.bind ~f:(fun plan -> plan.Autotune.sp_start)
@@ -488,4 +490,7 @@ let () =
   p "the staffed start's gate tag tells two tile-MMA rates apart"
     (apart (tag ~dram_rate:r_dram ()) (tag ~dram_rate:r_dram ~matrix_rate:r_mma ()));
   p "the staffed start's gate tag tells two device-gather rates apart"
-    (apart (tag ~dram_rate:r_dram ()) (tag ~dram_rate:r_dram ~gather_rate:r_gather ()))
+    (apart (tag ~dram_rate:r_dram ()) (tag ~dram_rate:r_dram ~gather_rate:r_gather ()));
+  (* gh-ocannl-1600: and the memory-transaction rate, only where set. *)
+  p "the staffed start's gate tag tells two memory-transaction rates apart"
+    (apart (tag ~dram_rate:r_dram ()) (tag ~dram_rate:r_dram ~sector_rate:2e11 ()))

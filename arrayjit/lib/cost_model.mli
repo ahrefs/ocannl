@@ -224,13 +224,26 @@ val roofline_seconds :
       twin. Without a fill model the compute leg is exactly as before. A launch-shape proxy, not an
       occupancy model: no registers, shared memory, wave quantization, or the block a wider sibling
       nest allocates.
+    - Memory transactions (gh-ocannl-1600). Given the kernel's {!memory_transactions} and a
+      [transaction_rate] (sectors/s), the excess sector transactions of its global accesses -- per
+      lane group, the sectors touched beyond the compact count for the same distinct bytes, each
+      context's over its fill under a launch model -- add their count over the rate to the compute
+      leg: a strided access's replays occupy the issuing multiprocessor. That is what orders a
+      layout whose lanes read contiguous cells against a twin whose lanes stride, which every term
+      above ties (same work, launch and footprints). A fitted relative term: alignment is assumed,
+      L1/L2 reuse of an over-fetched sector is in the fitted rate, bank conflicts are not modeled.
+      No rate, or no excess: the leg is exactly as before. And the kernel's {!occupancy}, given a
+      workgroup capacity per multiprocessor: the compute leg over the fraction of a multiprocessor's
+      thread slots its resident blocks fill -- what orders a deep-K staged tile (16-64 KiB of
+      workgroup memory per block) against its shallow twin on HIP's RDNA parts, measured. Registers
+      are not modeled, nor the launch size (the fill's).
     - Never below the bound: the memory leg is at least the distinct bytes at the
       [peak_memory_bandwidth] ceiling, and the compute leg at least the operations at the
       [peak_flops] ceiling (a fill is at most 1), so {!ranking_seconds} is at least
       {!roofline_seconds} over {!analyze}'s counts — and therefore at least any roofline over
       {!completion_floor}. Monotone: raising the capacity, the cache bandwidth, the issue rate, the
-      DRAM rate, the tile-MMA rate or the device-gather rate never raises the score; raising the
-      fill model's multiprocessors or saturating threads never lowers it.
+      DRAM rate, the tile-MMA rate, the device-gather rate or the transaction rate never raises the
+      score; raising the fill model's multiprocessors or saturating threads never lowers it.
 
     Writes, op counts and the opacity flag are {!analyze}'s. *)
 
@@ -291,6 +304,56 @@ val launch_fill : fill_model -> launch_context list -> float
     context's operations divided by its fill. 1 without scalar work. A diagnostic: the score sums
     per context. *)
 
+type transaction_context = {
+  tx_blocks : int;
+  tx_threads : int;
+  tx_excess : float;
+      (** The excess sector transactions of the context's global accesses over the compact count for
+          the same distinct bytes, summed over every lane group and every execution: zero for a
+          fully coalesced access. Residue-averaged, hence fractional. *)
+  tx_uncovered : int;
+      (** How many of those accesses had an [Unknown] coordinate (a dynamic axis, a [Concat]) and
+          were counted one sector per active lane: an estimate, not exact evidence. *)
+}
+[@@deriving sexp_of]
+(** gh-ocannl-1600: the memory transactions of one parallel context of a kernel -- the global
+    accesses whose enclosing [Grid] loop extents multiply to [tx_blocks] and enclosing [Workgroup] /
+    [Workgroup_reduce] extents to [tx_threads]. *)
+
+val transaction_sector_bytes : int
+(** The counting unit, 32 bytes: the sector an NVIDIA L1 tags, and the smallest request the
+    supported AMD and Apple parts serve. A fitted transaction rate is per sector of this size. *)
+
+val memory_transactions :
+  ?sector:int ->
+  lane_width:int ->
+  is_global:(Tnode.t -> bool) ->
+  Low_level.t ->
+  transaction_context list
+(** The excess memory transactions of one kernel, per parallel context in first-access order
+    (contexts with no global access are absent). Lane groups are [lane_width] consecutive threads of
+    the kernel's launch block, slot [.x] fastest; [sector] (default {!transaction_sector_bytes}) is
+    the counting unit. Activity follows each access's own workgroup loops (a lane outside one is
+    idle), a slot the access has no loop of is a broadcast, a lane's innermost run (the serial loops
+    inside every hardware loop, while the lane group's footprint over them is at most 8 KiB) is one
+    footprint with its lane group's (L1 serves the next iteration), the other symbols stand at their
+    base with the base averaged over its sector residues, guards are taken, buffers start
+    sector-aligned, [Tile_mma] statements and non-global nodes are left out ([is_global], as
+    {!reuse_traffic}). *)
+
+val occupancy :
+  workgroup_bytes:int -> block_threads:int -> threads_per_mp:int -> bytes_per_mp:int -> float
+(** gh-ocannl-1600: theoretical occupancy, the occupancy calculator's with registers left out: the
+    blocks of [block_threads] threads declaring [workgroup_bytes] workgroup-shared bytes that one
+    multiprocessor of [threads_per_mp] thread slots and [bytes_per_mp] workgroup bytes keeps
+    resident -- [min (bytes_per_mp / workgroup_bytes) (threads_per_mp / block_threads)], at least
+    one -- times [block_threads], over [threads_per_mp]. Positive, at most 1. Not a launch-size
+    reading: a grid too small to fill the resident slots is the launch fill's to price. *)
+
+val filled_transactions : ?fill_model:fill_model -> transaction_context list -> float
+(** The excess transactions as the compute leg divides them by the transaction rate: each context's
+    over its {!context_fill} under a fill model, the plain sum without one. *)
+
 val ranking_seconds_of :
   ?peak_flops:float ->
   ?peak_memory_bandwidth:float ->
@@ -303,6 +366,9 @@ val ranking_seconds_of :
   ?device_gathers:int ->
   ?device_gather_rate:float ->
   ?launch:fill_model * launch_context list ->
+  ?transactions:transaction_context list ->
+  ?transaction_rate:float ->
+  ?occupancy:float ->
   summary ->
   reuse option ->
   float option
@@ -312,7 +378,11 @@ val ranking_seconds_of :
     (default 0) is the summary's tile-MMA work the backend accepts ({!accepted_tile_mma_flops}),
     capped at its operations; [device_gathers] (default 0) its accepted statements' per-lane device
     gathers ({!device_operand_gathers}), priced at [device_gather_rate] (gathers/s). [launch] is the
-    device's fill model and the kernel's {!launch_contexts} (absent: no launch fill). [None] when
+    device's fill model and the kernel's {!launch_contexts} (absent: no launch fill). [transactions]
+    (default none) are the kernel's {!memory_transactions}, their {!filled_transactions} priced at
+    [transaction_rate] (sectors/s) and added to the compute leg (gh-ocannl-1600): without a rate, or
+    without an excess, the leg is exactly as before. [occupancy] (default none) is the kernel's
+    {!occupancy}: below 1, the compute leg is divided by it; absent or 1, unchanged. [None] when
     neither peak is given. *)
 
 val ranking_legs_of :
@@ -327,6 +397,9 @@ val ranking_legs_of :
   ?device_gathers:int ->
   ?device_gather_rate:float ->
   ?launch:fill_model * launch_context list ->
+  ?transactions:transaction_context list ->
+  ?transaction_rate:float ->
+  ?occupancy:float ->
   summary ->
   reuse option ->
   float option * float option
@@ -357,13 +430,16 @@ val ranking_seconds :
   ?device_gathers:int ->
   ?device_gather_rate:float ->
   ?fill_model:fill_model ->
+  ?transaction_rate:float ->
+  ?lane_width:int ->
   ?max_resident_threads:int ->
   is_global:(Tnode.t -> bool) ->
   Low_level.t ->
   float option
 (** {!ranking_seconds_of} over {!analyze}, {!launch_contexts} when a fill model is given, and, when
-    a capacity or a cache bandwidth is given, {!reuse_traffic}. A ranking score, not a runtime
-    prediction — and, unlike {!roofline_seconds}, not a lower bound either. *)
+    a capacity or a cache bandwidth is given, {!reuse_traffic}; with both a transaction rate and a
+    lane width, {!memory_transactions}. A ranking score, not a runtime prediction — and, unlike
+    {!roofline_seconds}, not a lower bound either. *)
 
 (** {2 Tile-MMA operand loads (gh-ocannl-1254)}
 

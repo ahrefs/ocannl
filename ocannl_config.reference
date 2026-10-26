@@ -1217,6 +1217,29 @@
 # Unset/empty uses the backend's value. Same readers and cache identity as model_cache_capacity.
 #model_fill_threads=
 
+# gh-ocannl-1600: overrides the backend's advisory memory-transaction rate of the ranking score, in
+# excess 32-byte sectors per second. Per global access and lane group (simdgroup_width lanes of the
+# launch block, .x fastest), the sectors it touches beyond the compact count for the same distinct
+# bytes are its excess -- zero for a coalesced access; the kernel's excess, each context's over its
+# launch fill, adds its count over this rate to the compute leg. It is what tells a coalesced
+# layout (coal-n, coal-k) from its uncoalesced twin, so where it resolves model_default also ranks
+# the coalesced layouts. Fit it with `benchmarks/gh1442_agreement.py --fit-txn`. `none`: no term,
+# and no coalesced layouts in model_default. Unset/empty uses the backend's value. Same readers and
+# cache identity as model_cache_capacity.
+#model_transaction_rate=
+
+# gh-ocannl-1600: overrides the backend's advisory workgroup-shared memory per multiprocessor, in
+# bytes, of the ranking score's occupancy factor: a kernel whose blocks of T threads declare W
+# workgroup bytes keeps min(this / W, threads per multiprocessor / T) of them resident (at least
+# one), and its compute leg is divided by the fraction of the multiprocessor's thread slots they
+# fill (threads per multiprocessor: the device's resident threads over model_multiprocessors, so it
+# needs the launch fill's count). With model_transaction_rate it also admits the coalesced layouts
+# to model_default: their deep-K tiles differ from their twins only in workgroup memory. HIP's RDNA
+# wave32 parts advise 131072 (LDS per WGP); CUDA none. `none`: no occupancy factor, and no
+# coalesced layouts in model_default. Unset/empty uses the backend's value. Same readers and cache
+# identity as model_cache_capacity.
+#model_workgroup_bytes_per_multiprocessor=
+
 # If true, stdout capturing is disabled, so some logs meant for the ppx_minidebug log files
 # (in particular CUDA logs) remain on the stdout.
 #

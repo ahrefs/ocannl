@@ -841,6 +841,292 @@ let launch_fill fm contexts =
   let ops, weighted = class_work fm contexts ~tile:false in
   if Float.(ops <= 0.) then 1. else ops /. weighted
 
+(* {2 Memory transactions — gh-ocannl-1600}
+
+   Every score above ties a layout whose lanes read contiguous cells with one whose lanes stride
+   through memory: same work, same launch, same per-block footprints. What differs is how many
+   memory transactions one lane group (a warp, a wavefront, a simdgroup) issues for one access. Per
+   global access, every lane group of the kernel's launch block is formed (threads linearized slot
+   [.x] fastest, {!Low_level.hardware_axes}); each active lane's byte span is read off the access's
+   coordinate view at the lane's coordinates, every other symbol at its base; and the distinct
+   [sector]-byte sectors the group touches are set against the compact count for the same distinct
+   bytes. The excess is the feature: zero for a fully coalesced access, so pricing it changes no
+   score of a kernel without one.
+
+   Activity follows the access's own loops: a lane whose coordinate on a slot lies outside the
+   access's loop of that slot is idle, so a wide sibling nest lends a narrow access no lanes. A slot
+   the access has no loop of is a broadcast: its lanes read the same addresses. Serial and grid
+   iterations shift the base. A lane's innermost run -- the serial loops nested inside every
+   hardware loop, while the lane group's footprint over them stays within [transaction_tile_bytes]
+   (8 KiB, an L1-scale share per lane group) -- is counted as one footprint with its lane group's:
+   its iterations issue back to back, so a sector one over-fetches serves the next from L1 (a 4-wide
+   register tile's lanes stride by 16 bytes per instruction and still read contiguous sectors
+   together; so do a staging copy's lanes walking a row each). Over the other serial and grid
+   iterations, with [g] the gcd of the sector and the byte strides of every symbol neither a lane's
+   nor the tile's, the count is averaged over the base residues [0, g, 2g, ...] below the sector
+   (once where [g] is the sector itself: the count is invariant) — uniformly, an approximation where
+   the loops do not cover whole residue cycles. Buffers start sector-aligned. Guarded accesses are
+   counted guards-taken. An access with an [Unknown] coordinate (a dynamic axis, a [Concat]) is
+   counted one sector per active lane and reported uncovered: an estimate, never exact evidence.
+   [Tile_mma] statements are left out: their fallback is not what an accepted statement emits, and
+   the tile-MMA and device-gather terms price what it does. Workgroup-shared and thread-private
+   nodes are not global and not counted (bank conflicts are not modeled). *)
+
+let transaction_sector_bytes = 32
+let transaction_tile_bytes = 8192
+
+type transaction_context = {
+  tx_blocks : int;
+  tx_threads : int;
+  tx_excess : float;
+  tx_uncovered : int;
+}
+[@@deriving sexp_of]
+
+let rec without_tile_mma (c : Low_level.t) : Low_level.t =
+  match c with
+  | Low_level.Seq (a, b) -> Low_level.Seq (without_tile_mma a, without_tile_mma b)
+  | For_loop r -> For_loop { r with body = without_tile_mma r.body }
+  | Scan_loop r -> Scan_loop { r with body = without_tile_mma r.body }
+  | If r -> If { r with body = without_tile_mma r.body }
+  | Tile_mma _ -> Noop
+  | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_dynamic _ | Set_from_vec _
+  | Set_local _ | Declare_local _ | Workgroup_barrier ->
+      c
+
+let rec gcd a b = if b = 0 then a else gcd b (a % b)
+
+(* The distinct sectors a group's byte spans touch, the spans sorted by start and shifted by [shift]
+   bytes. *)
+let span_sectors ~sector ~shift (spans : (int * int) array) =
+  let count = ref 0 and last = ref None in
+  Array.iter spans ~f:(fun (start, len) ->
+      let lo = Int.( /% ) (start + shift) sector
+      and hi = Int.( /% ) (start + shift + len - 1) sector in
+      let lo = match !last with Some l -> max lo (l + 1) | None -> lo in
+      if hi >= lo then (
+        count := !count + (hi - lo + 1);
+        last := Some hi));
+  !count
+
+(* The distinct bytes of sorted spans. *)
+let span_union_bytes (spans : (int * int) array) =
+  let total = ref 0 and reach = ref None in
+  Array.iter spans ~f:(fun (start, len) ->
+      let stop = start + len in
+      match !reach with
+      | Some r when stop <= r -> ()
+      | Some r when start < r ->
+          total := !total + (stop - r);
+          reach := Some stop
+      | _ ->
+          total := !total + len;
+          reach := Some stop);
+  !total
+
+let memory_transactions ?(sector = transaction_sector_bytes) ~lane_width ~is_global
+    (code : Low_level.t) : transaction_context list =
+  let code = without_tile_mma code in
+  let lane_width = max 1 lane_width and sector = max 1 sector in
+  let hw = Hashtbl.create (module Idx.Symbol) in
+  List.iter (Low_level.hardware_axes code) ~f:(fun (h : Low_level.hardware_axis_info) ->
+      Hashtbl.set hw ~key:h.ha_index ~data:(h.ha_kind, h.ha_slot));
+  let block = (Low_level.launch_dims code).Low_level.block in
+  let block_threads = max 1 (Array.fold block ~init:1 ~f:( * )) in
+  (* Each linear thread's coordinate per workgroup slot, [.x] fastest. *)
+  let coord =
+    let b0 = max 1 block.(0) and b1 = max 1 block.(1) in
+    fun l slot -> match slot with 0 -> l % b0 | 1 -> l / b0 % b1 | _ -> l / (b0 * b1)
+  in
+  let tbl = Hashtbl.Poly.create () and order = ref [] in
+  let add key ~excess ~uncovered =
+    match Hashtbl.find tbl key with
+    | Some (e, u) ->
+        e := !e +. excess;
+        u := !u + uncovered
+    | None ->
+        Hashtbl.set tbl ~key ~data:(ref excess, ref uncovered);
+        order := key :: !order
+  in
+  List.iter (Low_level.affine_accesses code) ~f:(fun (a : Tn.t Affine.access) ->
+      if is_global a.a_tn && not a.a_whole then (
+        let width (lo, hi) = max 0 (hi - lo + 1) in
+        let elt = Ops.prec_in_bytes (Lazy.force a.a_tn.Tn.storage_prec) in
+        let dims = Lazy.force a.a_tn.Tn.dims in
+        let view = Affine.view ?dyn_axis:a.a_dyn_axis ~dims a.a_map in
+        let known =
+          Array.for_all view ~f:(function Affine.Known _ -> true | Affine.Unknown _ -> false)
+        in
+        (* Row-major flat strides of the view's coordinates. *)
+        let strides =
+          let n = Array.length view in
+          let st = Array.create ~len:n 1 in
+          for i = n - 2 downto 0 do
+            let size =
+              match view.(i + 1) with
+              | Affine.Known { size; _ } | Affine.Unknown { size; _ } -> size
+            in
+            st.(i) <- st.(i + 1) * max 1 size
+          done;
+          st
+        in
+        (* A symbol's flat cell stride in the access's address. *)
+        let flat_stride s =
+          Array.foldi view ~init:0 ~f:(fun i acc -> function
+            | Affine.Unknown _ -> acc
+            | Affine.Known { terms; _ } ->
+                List.fold terms ~init:acc ~f:(fun acc (c, s') ->
+                    if Idx.equal_symbol s s' then acc + (c * strides.(i)) else acc))
+        in
+        (* The per-lane run: the serial loops nested inside every hardware loop. A lane issues their
+           iterations back to back, so the sectors one over-fetches serve the next from L1, and they
+           are counted as one footprint with the lane group's, not one instruction at a time. Those
+           that walk the lane's cells contiguously (each stride the extent the previous ones cover)
+           fold into one byte span per lane; the innermost others are enumerated while the lane
+           group's footprint stays within [transaction_tile_bytes]. *)
+        let inner =
+          if not known then []
+          else List.rev a.a_loops |> List.take_while ~f:(fun (s, _) -> not (Hashtbl.mem hw s))
+        in
+        let run0 = if a.a_vec_last then max 1 a.a_vec_len else 1 in
+        let folded, run =
+          let by_stride =
+            List.sort inner ~compare:(fun (s1, _) (s2, _) ->
+                Int.compare (Int.abs (flat_stride s1)) (Int.abs (flat_stride s2)))
+          in
+          let rec fold acc cells = function
+            | (s, r) :: rest when width r > 1 && flat_stride s = cells ->
+                fold (s :: acc) (cells * width r) rest
+            | (s, r) :: rest when width r <= 1 -> fold (s :: acc) cells rest
+            | _ -> (acc, cells)
+          in
+          fold [] run0 by_stride
+        in
+        let is_folded s = List.exists folded ~f:(Idx.equal_symbol s) in
+        let tile =
+          let rec keep acc cells = function
+            | (s, _) :: rest when is_folded s -> keep acc cells rest
+            | (s, r) :: rest when lane_width * cells * width r * run * elt <= transaction_tile_bytes
+              ->
+                keep ((s, r) :: acc) (cells * width r) rest
+            | _ -> acc
+          in
+          keep [] 1 inner
+        in
+        let in_tile s = is_folded s || List.exists tile ~f:(fun (s', _) -> Idx.equal_symbol s s') in
+        let blocks = ref 1 and threads = ref 1 and serial = ref 1 and lanes = ref [] in
+        List.iter a.a_loops ~f:(fun (s, r) ->
+            match Hashtbl.find hw s with
+            | Some (`Grid, _) -> blocks := !blocks * width r
+            | Some (`Workgroup, slot) ->
+                threads := !threads * width r;
+                lanes := (s, slot, r) :: !lanes
+            | None -> if not (in_tile s) then serial := !serial * width r);
+        let lanes = !lanes in
+        (* Every point of the enumerated tile's box, as symbol values. *)
+        let tile_points =
+          List.fold tile ~init:[ [] ] ~f:(fun points (s, (lo, hi)) ->
+              List.concat_map points ~f:(fun pt ->
+                  List.init (max 0 (hi - lo + 1)) ~f:(fun i -> (s, lo + i) :: pt)))
+        in
+        let active l =
+          List.for_all lanes ~f:(fun (_, slot, (lo, hi)) ->
+              let c = coord l slot in
+              lo <= c && c <= hi)
+        in
+        let is_lane s = List.exists lanes ~f:(fun (s', _, _) -> Idx.equal_symbol s s') in
+        let lane_value l s =
+          List.find_map lanes ~f:(fun (s', slot, _) ->
+              if Idx.equal_symbol s s' then Some (coord l slot) else None)
+        in
+        (* The residue step: the gcd of the sector and every varying byte stride of a symbol neither
+           a lane's nor the run's. *)
+        let step =
+          Array.foldi view ~init:sector ~f:(fun i g -> function
+            | Affine.Unknown _ -> g
+            | Affine.Known { terms; _ } ->
+                List.fold terms ~init:g ~f:(fun g (c, s) ->
+                    let varies =
+                      match List.Assoc.find a.a_loops s ~equal:Idx.equal_symbol with
+                      | Some r -> width r > 1
+                      | None -> true
+                    in
+                    if varies && not (is_lane s || in_tile s) then
+                      gcd g (Int.abs (c * strides.(i) * elt))
+                    else g))
+        in
+        let step = if step <= 0 then sector else step in
+        let residues = List.init (sector / step) ~f:(fun i -> i * step) in
+        let address l pt =
+          let value s =
+            match lane_value l s with
+            | Some v -> v
+            | None -> List.Assoc.find pt s ~equal:Idx.equal_symbol |> Option.value ~default:0
+          in
+          Array.foldi view ~init:0 ~f:(fun i acc -> function
+            | Affine.Unknown _ -> acc
+            | Affine.Known { terms; offset; _ } ->
+                let v = List.fold terms ~init:offset ~f:(fun v (c, s) -> v + (c * value s)) in
+                acc + (v * strides.(i)))
+        in
+        let groups = (block_threads + lane_width - 1) / lane_width in
+        let excess = ref 0. in
+        for g = 0 to groups - 1 do
+          let members =
+            List.filter
+              (List.init lane_width ~f:(fun i -> (g * lane_width) + i))
+              ~f:(fun l -> l < block_threads && active l)
+          in
+          let n = List.length members in
+          if n > 0 then (
+            if not known then
+              (* One sector per active lane: an estimate, reported uncovered. *)
+              let compact = ((n * run * elt) + sector - 1) / sector in
+              excess := !excess +. Float.of_int (max 0 (n - compact))
+            else
+              let spans =
+                Array.of_list
+                  (List.concat_map members ~f:(fun l ->
+                       List.map tile_points ~f:(fun pt -> (address l pt * elt, run * elt))))
+              in
+              Array.sort spans ~compare:(fun (a, _) (b, _) -> Int.compare a b);
+              let compact = (span_union_bytes spans + sector - 1) / sector in
+              let total =
+                List.sum (module Int) residues ~f:(fun shift -> span_sectors ~sector ~shift spans)
+              in
+              let avg = Float.of_int total /. Float.of_int (List.length residues) in
+              excess := !excess +. Float.max 0. (avg -. Float.of_int compact))
+        done;
+        let executions = Float.of_int (!blocks * !serial) in
+        add (!blocks, !threads) ~excess:(executions *. !excess) ~uncovered:(if known then 0 else 1)));
+  List.rev_map !order ~f:(fun ((b, t) as key) ->
+      let e, u = Hashtbl.find_exn tbl key in
+      { tx_blocks = b; tx_threads = t; tx_excess = !e; tx_uncovered = !u })
+
+(* The excess transactions as the compute leg divides them by their rate: each context's over its
+   own fill under a launch model, as counted without one. *)
+let filled_transactions ?fill_model (contexts : transaction_context list) =
+  List.sum
+    (module Float)
+    contexts
+    ~f:(fun t ->
+      match fill_model with
+      | None -> t.tx_excess
+      | Some fm -> t.tx_excess /. context_fill fm ~blocks:t.tx_blocks ~threads:t.tx_threads)
+
+(* gh-ocannl-1600: theoretical occupancy -- the occupancy calculator's, registers aside: the blocks
+   of [block_threads] threads and [workgroup_bytes] workgroup bytes one multiprocessor keeps
+   resident, at least one (a block over either budget does not launch at all, which the hardware
+   limits check refuses first), as a fraction of its [threads_per_mp] thread slots. *)
+let occupancy ~workgroup_bytes ~block_threads ~threads_per_mp ~bytes_per_mp =
+  let t = max 1 block_threads and tpm = max 1 threads_per_mp in
+  let by_threads = tpm / t in
+  let by_bytes =
+    if workgroup_bytes <= 0 then by_threads else max 0 bytes_per_mp / workgroup_bytes
+  in
+  let resident = max 1 (min by_threads by_bytes) in
+  Float.min 1. (Float.of_int (resident * t) /. Float.of_int tpm)
+
 (* A ranking rate is at most its ceiling — the envelope constant the bound divides by — so every leg
    priced at it is at least the bound's leg over the same counts; unset, it is the ceiling. *)
 let ranking_rate ~ceiling rate = match rate with None -> ceiling | Some r -> Float.min r ceiling
@@ -876,7 +1162,8 @@ let ranking_mma_terms ?(mma_flops = 0) ?(device_gathers = 0) ?launch (s : summar
 
 let ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
     ?issue_rate ?dram_bandwidth ?mma_rate ?(mma_flops = 0) ?(device_gathers = 0) ?device_gather_rate
-    ?launch (s : summary) (r : reuse option) : float option * float option =
+    ?launch ?(transactions = []) ?transaction_rate ?occupancy (s : summary) (r : reuse option) :
+    float option * float option =
   let total = Float.of_int (total_bytes s) in
   let memory =
     Option.map peak_memory_bandwidth ~f:(fun ceiling ->
@@ -917,6 +1204,25 @@ let ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?ca
         let with_gathers leg =
           match gathers with None -> leg | Some (_, g) -> leg +. (gathers_filled /. g)
         in
+        (* gh-ocannl-1600: the excess memory transactions, each context's over its own fill, at the
+           fitted transaction rate -- an addition that only raises the leg, and nothing at all
+           without a rate or without an excess. *)
+        let with_transactions leg =
+          match transaction_rate with
+          | Some rate when Float.(rate > 0.) ->
+              let excess =
+                filled_transactions ?fill_model:(Option.map launch ~f:fst) transactions
+              in
+              if Float.(excess > 0.) then leg +. (excess /. rate) else leg
+          | _ -> leg
+        in
+        (* gh-ocannl-1600: the whole leg over the kernel's occupancy, where one is given below 1:
+           its resident threads hide that much less latency. *)
+        let with_occupancy leg =
+          match occupancy with Some o when Float.(o > 0. && o < 1.) -> leg /. o | _ -> leg
+        in
+        with_occupancy @@ with_transactions
+        @@
         match launch with
         | Some (fm, contexts) ->
             (* gh-ocannl-1479: scalar work at the issue rate times its contexts' fill. Tile-MMA work
@@ -950,11 +1256,11 @@ let ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?ca
 
 let ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
     ?issue_rate ?dram_bandwidth ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate ?launch
-    (s : summary) (r : reuse option) : float option =
+    ?transactions ?transaction_rate ?occupancy (s : summary) (r : reuse option) : float option =
   let compute, memory =
     ranking_legs_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
-      ?issue_rate ?dram_bandwidth ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate ?launch s
-      r
+      ?issue_rate ?dram_bandwidth ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate ?launch
+      ?transactions ?transaction_rate ?occupancy s r
   in
   match List.filter_opt [ compute; memory ] with
   | [] -> None
@@ -962,16 +1268,23 @@ let ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes 
 
 let ranking_seconds ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
     ?issue_rate ?dram_bandwidth ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate ?fill_model
-    ?max_resident_threads ~is_global (code : Low_level.t) : float option =
+    ?transaction_rate ?lane_width ?max_resident_threads ~is_global (code : Low_level.t) :
+    float option =
   let s = analyze code in
   let launch = Option.map fill_model ~f:(fun fm -> (fm, launch_contexts code)) in
+  let transactions =
+    match (transaction_rate, lane_width) with
+    | Some _, Some lane_width -> memory_transactions ~lane_width ~is_global code
+    | _ -> []
+  in
   let r =
     match (cache_capacity_bytes, cache_bandwidth) with
     | None, None -> None
     | _ -> Some (reuse_traffic ?max_resident_threads ~is_global code)
   in
   ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
-    ?issue_rate ?dram_bandwidth ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate ?launch s r
+    ?issue_rate ?dram_bandwidth ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate ?launch
+    ~transactions ?transaction_rate s r
 
 (* {2 Tile-MMA operand loads — gh-ocannl-1254}
 

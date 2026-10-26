@@ -157,6 +157,8 @@ let () =
            matrix_rate = None;
            gather_rate = None;
            fill = None;
+           sector_rate = None;
+           wg_capacity = None;
          })
   in
   let _, r_auto_cached =
@@ -170,6 +172,8 @@ let () =
            matrix_rate = None;
            gather_rate = None;
            fill = None;
+           sector_rate = None;
+           wg_capacity = None;
          })
   in
   List.iter (census r_auto) ~f:(fun (at, label) ->
