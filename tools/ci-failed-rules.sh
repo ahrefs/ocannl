@@ -30,6 +30,11 @@
 # second line is the command dune ran for it, or the error it printed. A
 # header in any other file is a compile error or an expectation diff and says
 # which. Warning and alert blocks that did not fail the build are left out.
+# A header is read only at the start of its line (after the timestamps and
+# prefixes GitHub adds), so a replay a test prefixes is never one; and a dune-
+# file header whose excerpt omits its first or last line is not dune's -- a
+# failing test's own output, quoting a fixture -- and is left out too
+# (gh-ocannl-1590).
 # Dune's locationless `Error:` lines (an unknown alias, say) are listed after
 # them: every one when the log has no header, and otherwise those printed
 # before the first header (after one, such a line may be a failing action's
@@ -127,6 +132,12 @@ function stanza_from_source(path, first, last,   line, n, kind, fields, f, ok) {
 }
 function close_block() {
   if (cur == "") return
+  # dune quotes the lines its header names, the first and the last at least
+  # (it elides only the middle). A dune-file header whose excerpt leaves either
+  # out is text a test printed -- a harness replaying a fixture log as its own
+  # failure output -- not a dune report (gh-ocannl-1590). A header with no
+  # excerpt at all is kept: dune prints none when it cannot read the file.
+  if (is_dune && nx > 0 && !((first in xl) && (last in xl))) dropped = 1
   if (!dropped) {
     if (!(cur in seen)) {
       seen[cur] = 1
@@ -165,7 +176,7 @@ BEGIN {
     last = range; sub(/^[0-9]+-?/, "", last); if (last == "") last = first
     first += 0; last += 0
     is_dune = (path ~ /(^|\/)dune$/ || path ~ /(^|\/)dune-project$/)
-    decided = 0; dropped = 0; detail = ""; xkind = ""; xfields = ""; split("", xl)
+    decided = 0; dropped = 0; detail = ""; xkind = ""; xfields = ""; nx = 0; split("", xl)
     next
   }
   if (cur == "" || decided) {
@@ -177,7 +188,7 @@ BEGIN {
   if (match(s, /^ *[0-9]+ \|( |$)/)) {
     src = substr(s, RLENGTH + 1)
     num = s; sub(/^ */, "", num); sub(/ .*/, "", num)
-    xl[num + 0] = src
+    xl[num + 0] = src; nx++
     if (xkind == "" && match(src, /^\([A-Za-z_]+/)) xkind = substr(src, 2, RLENGTH - 1)
     f = name_field(src)
     if (f != "") xfields = xfields (xfields == "" ? "" : ", ") f
