@@ -524,11 +524,13 @@ val tune_placements :
     the whole call -- its own arm lines and every search it runs -- as {!Autotune.tune}'s do for one
     search. Other arguments are forwarded to {!Autotune.tune}; the same caveats apply (notably
     [timing_ctx] and non-idempotent routines — both arms share [timing_ctx]'s device for their
-    searches). [name] included (gh-ocannl-669): it names both arms' compiles and the flip
-    refinement's decision-surface lowerings, and is what lets a comp carrying no
-    {!Ir.Assignments.Block_comment} — one {!Context.compile} would name at the call site — be tuned
-    here at all. The whole call is one search ({!Autotune.exclusive_search}, gh-ocannl-1352): made
-    while another domain searches, it raises {!Autotune.Concurrent_search} before doing anything.
+    searches, and its buffers: each search restores the training state it found when it ends,
+    gh-ocannl-1621, so every arm and flip is timed from the caller's values). [name] included
+    (gh-ocannl-669): it names both arms' compiles and the flip refinement's decision-surface
+    lowerings, and is what lets a comp carrying no {!Ir.Assignments.Block_comment} — one
+    {!Context.compile} would name at the call site — be tuned here at all. The whole call is one
+    search ({!Autotune.exclusive_search}, gh-ocannl-1352): made while another domain searches, it
+    raises {!Autotune.Concurrent_search} before doing anything.
 
     [call_budget] (config [tune_call_budget_seconds], gh-ocannl-1440; zero or less means none) is a
     wall-clock budget for the whole call, on one clock from its start, the placement-store replay
