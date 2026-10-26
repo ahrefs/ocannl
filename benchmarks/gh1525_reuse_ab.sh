@@ -20,7 +20,7 @@
 #   ROUNDS    a positive even count of rounds; every other round runs the cells in reverse order.
 #   CELLS     comma-separated cells, each BUILD-STAFFED[-nocache]: BUILD base|head, STAFFED on|off
 #             (autotune_staffed_singles), `-nocache` sets BACKEND's kernel code cache to 0 MiB
-#             (<backend>_kernel_cache_mib; refused for metal, which has none).
+#             (<backend>_kernel_cache_mib; metal's since gh-ocannl-1605).
 #
 # `prepare` (correctness-grade, builds): bench_gpt.exe of ROOT into OUT/bin/head, of BASE_REV into
 # OUT/bin/base. `ab` (timing-grade, never builds): each cell is one cold budgeted search of
@@ -29,7 +29,8 @@
 # cache answers nvrtc for program text an earlier process compiled, gh-ocannl-1529). Then the
 # summary. `summary` reads each search's `timing-trace: compile` records: per stage, the compiled
 # count, the medians (wall, device compiler, link, kernels compiled of rendered) and the sums, and
-# the result line's tuned step p50. A cut search compiles more candidates when each costs less, so
+# the result line's tuned step p50. The device compiler reads `n/a` for a stage none of whose
+# compiles timed one: Metal compiles at link, so its link time carries the compiler. A cut search compiles more candidates when each costs less, so
 # compare per-candidate medians; the sums are the whole-search cost.
 #
 # Exit: 0 every step succeeded; 1 a step failed; 2 usage. Hermetic like the other drivers: every
@@ -64,13 +65,15 @@ for name in errs:
         if r['verdict'] != 'compiled':
             continue
         by.setdefault(r['stage'], []).append(
-            (r['wall'], r['device'] if r['device'] is not None else 0.0, r['link'],
-             r['kernels_compiled'], r['kernels']))
+            (r['wall'], r['device'], r['link'], r['kernels_compiled'], r['kernels']))
     for stage, rs in sorted(by.items()):
         med = lambda i: statistics.median(r[i] for r in rs)
-        print(f'{stage}: {len(rs)} compiled; medians: wall {med(0):.3f} s, device {med(1):.3f}, '
+        timed = [r[1] for r in rs if r[1] is not None]
+        dev_med = f'{statistics.median(timed):.3f}' if timed else 'n/a'
+        dev_sum = f'{sum(timed):.1f} s' if timed else 'n/a'
+        print(f'{stage}: {len(rs)} compiled; medians: wall {med(0):.3f} s, device {dev_med}, '
               f'link {med(2):.3f}, kernels compiled {med(3):.0f} of {med(4):.0f}; sums: wall '
-              f'{sum(r[0] for r in rs):.1f} s, device {sum(r[1] for r in rs):.1f} s, kernels '
+              f'{sum(r[0] for r in rs):.1f} s, device {dev_sum}, kernels '
               f'compiled {sum(r[3] for r in rs)} of {sum(r[4] for r in rs)}')
     if not rows:
         print(f'{name}: no compile records'); ok = False
@@ -119,8 +122,7 @@ case "${1:-}" in
     for c in "${cells[@]}"; do
       case "$c" in
         base-on|base-off|head-on|head-off) ;;
-        base-on-nocache|base-off-nocache|head-on-nocache|head-off-nocache)
-          [ "$BACKEND" != metal ] || { echo "gh1525: metal has no kernel code cache" >&2; exit 2; } ;;
+        base-on-nocache|base-off-nocache|head-on-nocache|head-off-nocache) ;;
         *) usage ;;
       esac
       [ -x "$OUT/bin/${c%%-*}/bench_gpt.exe" ] || { echo "gh1525: no ${c%%-*} build; run prepare" >&2; exit 2; }
