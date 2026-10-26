@@ -108,18 +108,13 @@ type handle = {
   read_values : Tensor.t -> float array;
   owner_params : Tensor.t array;
   shard_seeds : int array;
+  set_launch_value : Idx.static_symbol -> int -> unit;
 }
 
-(* [data_parallel] hands no routine back, so nothing outside can assign a launch parameter: every
-   routine runs with each one at 0, written here explicitly because linking leaves them unassigned
-   (gh-ocannl-940). *)
-let schedule (r : _ Ir.Backend_intf.routine) =
-  List.iter r.Ir.Backend_intf.bindings ~f:(fun (_, v) -> v := 0);
-  Task.run r.Ir.Backend_intf.schedule
-
 let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(momentum = 0.0)
-    ?(base_seed = 0) ~n_shards ~(bindings : Idx.unit_bindings) ~(learning_rate : Tensor.t)
-    ~(inputs : Tensor.t) ~(targets : Tensor.t) ~(loss_of : Tensor.t -> Tensor.t -> Tensor.t) ~f () =
+    ?(base_seed = 0) ?(launch_values = []) ~n_shards ~(bindings : Idx.unit_bindings)
+    ~(learning_rate : Tensor.t) ~(inputs : Tensor.t) ~(targets : Tensor.t)
+    ~(loss_of : Tensor.t -> Tensor.t -> Tensor.t) ~f () =
   if n_shards <= 0 then invalid_arg "Parallel.data_parallel: n_shards must be > 0";
   let backend = Backends.backend_module (Backends.get_backend ?backend_name ()) in
   let module Backend = (val backend : Ir.Backend_intf.Backend) in
@@ -142,6 +137,24 @@ let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(mome
         Array.mapi shard_seeds ~f:(fun i seed ->
             Tensor.set_random_seed ~seed ();
             loss_of xs.(i) ys.(i)))
+  in
+  (* [data_parallel] hands no routine back, so its routines' launch parameters live here, in one
+     cell per bound symbol: the caller's [launch_values], an unranged parameter left out at 0, and a
+     ranged one left out refused (gh-ocannl-1629) -- once the shards' graphs exist, so that a
+     batch-slice role is known, and before anything is compiled. [schedule] copies them into each
+     routine it runs, so [set_launch_value] reaches every routine from the next one scheduled. *)
+  let width64 = Utils.settings.large_models in
+  let launch =
+    Idx.resolve_launch_values ~caller:"Parallel.data_parallel"
+      ~hint:"pass each one's value through ~launch_values; the handle's set_launch_value changes it"
+      ~ranged:Train.ranged_launch_param launch_values (Idx.bound_symbols bindings)
+  in
+  let schedule (r : _ Ir.Backend_intf.routine) =
+    Idx.copy_launch_values ~from:launch r.Ir.Backend_intf.bindings;
+    Task.run r.Ir.Backend_intf.schedule
+  in
+  let set_launch_value =
+    Idx.set_launch_value ~width64 ~caller:"Parallel.data_parallel: set_launch_value" launch
   in
   (* Parameters of each shard, in a stable order (Set order = ascending tnode id = creation order),
      so [params.(i).(k)] is shard i's replica of the k-th parameter. *)
@@ -345,4 +358,5 @@ let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(mome
       read_values;
       owner_params = params.(0);
       shard_seeds;
+      set_launch_value;
     }

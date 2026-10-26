@@ -1,0 +1,12 @@
+a one-off run with a ranged batch index given no value is refused: true
+that refusal names the batch index, as one: true
+a retry on the same tensor runs at the value given: slice 2: true
+a batch index with an inferred range, given no value, is refused too: true
+and runs at the value given: slice 1: true
+an unranged parameter given no value runs at 0: true
+an unranged parameter runs at the value given: true
+a symbolic extent given no value is refused, naming it: true
+a symbolic extent runs at its full range when given it: the sum of 4 ones: true
+and at a smaller value given: the sum of 2 ones: true
+a value for a symbol the bindings do not bind is refused, naming it: true
+a parameter given a value twice is refused, naming it: true

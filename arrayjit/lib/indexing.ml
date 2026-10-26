@@ -175,6 +175,62 @@ let validate_lowered_bindings ?width64 (bs : lowered_bindings) =
   | unassigned -> raise @@ Utils.User_error (unassigned_message unassigned));
   List.iter bs ~f:(fun (s, r) -> validate_bound_value ?width64 s !r)
 
+let launch_cell ~caller (bs : lowered_bindings) s =
+  match List.Assoc.find bs ~equal:equal_static_symbol s with
+  | None ->
+      raise
+      @@ Utils.User_error
+           (Printf.sprintf "%s: %s is not a launch parameter of the bindings given" caller
+              (symbol_ident s.static_symbol))
+  | Some r -> r
+
+let set_launch_value ?width64 ~caller (bs : lowered_bindings) s v =
+  let r = launch_cell ~caller bs s in
+  validate_bound_value ?width64 s v;
+  r := v
+
+(* gh-ocannl-1629: the launch values of a routine a library entry point runs on the caller's behalf.
+   A ranged parameter -- a batch-slice index, a ranged static index, a symbolic extent -- has no
+   neutral value: 0 is the first slice or the empty extent, which is the silent "forgot to assign"
+   gh-ocannl-940 refuses. An unranged one (a step counter) keeps 0. [ranged] is the caller's (it
+   names the kind of a ranged parameter): a batch-slice role is claimed during shape inference,
+   ahead of the flag this module can see. *)
+let resolve_launch_values ~caller ~hint ~ranged values symbols : lowered_bindings =
+  let bs = List.map symbols ~f:(fun s -> (s, fresh_launch_param ())) in
+  (* The values are written, not validated: what a value is validated against (an index's strict
+     range or an extent's inclusive one) is a role shape inference commits only at lowering, after
+     this runs. The run validates them, as it does any caller's. *)
+  List.iter values ~f:(fun (s, v) ->
+      let r = launch_cell ~caller bs s in
+      if launch_param_assigned r then
+        raise
+        @@ Utils.User_error
+             (Printf.sprintf "%s: launch parameter %s is given a value twice" caller
+                (symbol_ident s.static_symbol));
+      r := v);
+  (match
+     List.filter_map bs ~f:(fun (s, r) ->
+         if launch_param_assigned r then None else Option.map (ranged s) ~f:(fun kind -> (s, kind)))
+   with
+  | [] -> ()
+  | missing ->
+      raise
+      @@ Utils.User_error
+           (Printf.sprintf
+              "%s: ranged launch parameter(s) given no value: %s. Running at 0 would silently run \
+               only the first slice (or the empty extent); %s"
+              caller
+              (String.concat ~sep:", "
+                 (List.map missing ~f:(fun (s, kind) ->
+                      Printf.sprintf "%s (%s, range %s)" (symbol_ident s.static_symbol) kind
+                        (Option.value_map s.static_range ~default:"inferred" ~f:Int.to_string))))
+              hint));
+  List.iter bs ~f:(fun (_, r) -> if not (launch_param_assigned r) then r := 0);
+  bs
+
+let copy_launch_values ~from (bs : lowered_bindings) =
+  List.iter bs ~f:(fun (s, r) -> r := !(find_exn from s))
+
 (** Dimensions to string, ["x"]-separated, e.g. 1x2x3 for batch dims 1, input dims 3, output dims 2.
     Outputs ["-"] for empty dimensions. *)
 let dims_to_string ?(with_axis_numbers = false) dims =

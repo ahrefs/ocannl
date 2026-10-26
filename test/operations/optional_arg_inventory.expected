@@ -120,6 +120,7 @@ non-discard use; `unimplemented` must therefore be visible to callers as an unde
   lib/nn_blocks.ml:xavier_impl ?scale_sq -- implemented
   lib/parallel.ml:data_parallel ?backend_name -- implemented
   lib/parallel.ml:data_parallel ?base_seed -- implemented
+  lib/parallel.ml:data_parallel ?launch_values -- implemented
   lib/parallel.ml:data_parallel ?momentum -- implemented
   lib/parallel.ml:data_parallel ?reduction -- implemented
   lib/parallel.ml:data_parallel ?weight_decay -- implemented
@@ -139,6 +140,7 @@ non-discard use; `unimplemented` must therefore be visible to callers as an unde
   lib/train.ml:forward_once ?bindings -- implemented
   lib/train.ml:forward_once ?budget -- implemented
   lib/train.ml:forward_once ?budget_report -- implemented
+  lib/train.ml:forward_once ?launch_values -- implemented
   lib/train.ml:forward_once ?max_candidates -- implemented
   lib/train.ml:forward_once ?output_cd_file -- implemented
   lib/train.ml:forward_once ?reinit_all -- implemented
@@ -169,6 +171,7 @@ non-discard use; `unimplemented` must therefore be visible to callers as an unde
   lib/train.ml:run_once ?bindings -- implemented
   lib/train.ml:run_once ?budget -- implemented
   lib/train.ml:run_once ?budget_report -- implemented
+  lib/train.ml:run_once ?launch_values -- implemented
   lib/train.ml:run_once ?max_candidates -- implemented
   lib/train.ml:run_once ?output_cd_file -- implemented
   lib/train.ml:run_once ?reinit_all -- implemented
@@ -209,6 +212,7 @@ non-discard use; `unimplemented` must therefore be visible to callers as an unde
   lib/train.ml:update_once ?bindings -- implemented
   lib/train.ml:update_once ?budget -- implemented
   lib/train.ml:update_once ?budget_report -- implemented
+  lib/train.ml:update_once ?launch_values -- implemented
   lib/train.ml:update_once ?max_candidates -- implemented
   lib/train.ml:update_once ?output_cd_file -- implemented
   lib/train.ml:update_once ?reinit_all -- implemented

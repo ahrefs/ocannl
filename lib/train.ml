@@ -1839,6 +1839,11 @@ let%track7_sexp to_routine (ctx : Context.t) ?(output_cd_file = false) ?budget ?
      with no budget this is the identity and the compile below is unchanged. *)
   compile_within_budget ?budget ?max_candidates ?budget_report ctx comp bindings
 
+let ranged_launch_param (s : Idx.static_symbol) =
+  if Row.is_used_as_slice s then Some "batch-slice index"
+  else if Row.is_used_as_extent s then Some "symbolic extent"
+  else Option.map s.Idx.static_range ~f:(fun _ -> "ranged static index")
+
 let bind_all_to_zero (routine : Context.routine) =
   List.iter routine.Context.bindings ~f:(fun (_, r) -> r := 0)
 
@@ -1888,8 +1893,19 @@ let init_params ?(reinit_all = false) ctx bindings t =
   Context.run ctx routine
 
 let%track3_sexp run_once ?(output_cd_file = false) ?(skip_init = false) ?reinit_all
-    ?(bindings = IDX.empty) ?budget ?max_candidates ?budget_report ~f ctx (t : Tensor.t) : Context.t
-    =
+    ?(bindings = IDX.empty) ?(launch_values = []) ?budget ?max_candidates ?budget_report ~f ctx
+    (t : Tensor.t) : Context.t =
+  (* A one-off run (gh-ocannl-1629): the caller's values, an unranged parameter at 0, and a ranged
+     one the caller left out refused -- first, so a refusal leaves [t] as it was (its forward code
+     not yet consumed) for a retry with values. [t]'s construction already claimed any batch-slice
+     role [ranged_launch_param] reads. *)
+  let launch =
+    Idx.resolve_launch_values ~caller:"Train.run_once" ~ranged:ranged_launch_param
+      ~hint:
+        "pass each one's value through ~launch_values, or, to run every value of the range, \
+         compile with Train.to_routine and iterate with Train.sequential_loop"
+      launch_values (Idx.bound_symbols bindings)
+  in
   set_materialized t.Tensor.value;
   (* Compute the update early, to ensure the shape inference is done. *)
   let update = f t in
@@ -1900,24 +1916,23 @@ let%track3_sexp run_once ?(output_cd_file = false) ?(skip_init = false) ?reinit_
   let ctx, routine =
     compile_within_budget ?budget ?max_candidates ?budget_report ctx update bindings
   in
-  (* A one-off run: every launch parameter at 0, written explicitly (gh-ocannl-940). *)
-  bind_all_to_zero routine;
+  Idx.copy_launch_values ~from:launch routine.Context.bindings;
   Context.run ctx routine
 
-let forward_once ?output_cd_file ?(skip_init = false) ?reinit_all ?(bindings = IDX.empty) ?budget
-    ?max_candidates ?budget_report ctx t =
+let forward_once ?output_cd_file ?(skip_init = false) ?reinit_all ?(bindings = IDX.empty)
+    ?launch_values ?budget ?max_candidates ?budget_report ctx t =
   let ctx =
-    run_once ?output_cd_file ~skip_init ?reinit_all ~bindings ?budget ?max_candidates ?budget_report
-      ~f:forward ctx t
+    run_once ?output_cd_file ~skip_init ?reinit_all ~bindings ?launch_values ?budget ?max_candidates
+      ?budget_report ~f:forward ctx t
   in
   (* gh-ocannl-777's recompute-on-read path should retire this forward-root consumption cleanup. *)
   Tensor.discard_backprop_code t;
   ctx
 
-let update_once ?output_cd_file ?(skip_init = false) ?reinit_all ?(bindings = IDX.empty) ?budget
-    ?max_candidates ?budget_report ctx t =
-  run_once ?output_cd_file ~skip_init ?reinit_all ~bindings ?budget ?max_candidates ?budget_report
-    ~f:grad_update ctx t
+let update_once ?output_cd_file ?(skip_init = false) ?reinit_all ?(bindings = IDX.empty)
+    ?launch_values ?budget ?max_candidates ?budget_report ctx t =
+  run_once ?output_cd_file ~skip_init ?reinit_all ~bindings ?launch_values ?budget ?max_candidates
+    ?budget_report ~f:grad_update ctx t
 
 (* For-print materialization (gh-ocannl-333 AC 5): the [%cd "for_print" =: t] trick. When a tensor's
    value is not already materialized in the printing context, recompile a copy of it ([for_print = t
