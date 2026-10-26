@@ -223,7 +223,11 @@ files.
   normalizing 512²'s 16K threads by rog's 107K resident threads would put the issue rate above the
   class ceiling); `tools/calibrate_issue_rate.exe`'s launch sweep fits `t` with the full-fill rate
   on pinned geometries at two block widths (the seeding's size-dependent choice would mix rates).
-  Metal publishes no core count: there both constants are configuration only. Fit per geometry
+  Metal publishes no core count: the backend reads the IORegistry's `gpu-core-count` by the
+  device's registry ID (an IOKit stub, gh-ocannl-1638; a non-AGX GPU, as in a paravirtual VM, has
+  none and so no fill), and the Apple-silicon class ships `t` WITH its jointly fitted issue rate
+  (one calibration: a fill under the unmeasured rate's `peak_flops` stand-in would not be the
+  fill that was fitted). Fit per geometry
   (a wider tile runs at its own rate) and drop latency-starved points (below 1/8 of the geometry's
   best throughput): fitted on all points, rog's `t` came out 512, a 16K-thread launch read as 70%
   full, and the performance-profile pick at outproj b8 moved off the anchor to a 2x2 leaf measured

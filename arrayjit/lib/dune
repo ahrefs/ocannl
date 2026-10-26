@@ -175,6 +175,12 @@
   (env_var OCANNL_LOG_LEVEL_METAL_BACKEND))
  (modules metal_backend builtins_metal)
  (libraries base metal metal_math_api_runtime utils ir builtins_cc)
+ ; gh-ocannl-1638: the GPU core count Metal does not publish, read from the IORegistry.
+ (foreign_stubs
+  (language c)
+  (names metal_iokit_stubs))
+ (c_library_flags
+  (-framework IOKit -framework CoreFoundation))
  (preprocess
   (pps
    ppx_compare

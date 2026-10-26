@@ -62,8 +62,8 @@
 # gh-ocannl-1495: and `nomma` (model_mma_rate and model_device_gather_rate none: the score before
 # them) and `mmaonly` (the gather rate none) arms; at an fp8mm site the agreement also fits the two
 # rates from the `fitted`/`shipped` arm's explain lines (gh1442_agreement.py --fit-mma).
-# FIT_FILL=1 with RANK_ONLY=1 runs the issue cell first (MULTIPROCESSORS=P passes --multiprocessors
-# where the device reports none: Metal) and passes its fitted constants to the listing and pick
+# FIT_FILL=1 with RANK_ONLY=1 runs the issue cell first (MULTIPROCESSORS=P passes --multiprocessors,
+# needed only where the device reports none: a non-AGX Metal GPU) and passes its fitted constants to the listing and pick
 # cells, which otherwise run the shipped ones. PICK_GATE0=1 adds pick cells with the seeding off
 # (gpu_default_sketch_min_reduction=0), with and without the fill (gate0, gate0nofill):
 # model_default against the plain default, no anchor. A pick

@@ -1201,7 +1201,7 @@
 # context -- B blocks (its enclosing Grid loops) of T threads (its Workgroup loops); serial loops,
 # such as a plain sketch's batch loops, add work but no parallelism -- and prices it at the issue
 # rate times min(1, B * min(T, t) / (P * t)), with P this count and t model_fill_threads. CUDA and
-# HIP query it; Metal publishes none (an Apple GPU's core count: `ioreg -l | grep gpu-core-count`).
+# HIP query it; Metal publishes none, so there it is the IORegistry's gpu-core-count (gh-ocannl-1638).
 # The fill applies only when both keys resolve; `none` turns it off. Unset/empty uses the backend's
 # value. Same readers and cache identity as model_cache_capacity.
 #model_multiprocessors=

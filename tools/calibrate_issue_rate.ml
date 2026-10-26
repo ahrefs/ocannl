@@ -12,15 +12,15 @@
    Usage: dune exec tools/calibrate_issue_rate.exe -- [--m=N] [--n=N] [--ks=K1,K2,...] [--repeats=N]
    [--multiprocessors=P] [--sizes=S1,S2,...] [--no-launch] [--ocannl_* flags]
 
-   [--multiprocessors] is required where the device reports none (Metal: `ioreg -l | grep
-   gpu-core-count`); elsewhere it overrides the device's count. Stdout is the two tables, then the
-   fits under [#] comment lines -- the raw fit, the fill fit with its residual, the uncapped form's
-   best residual beside it, and the k-sweep predicted under the fill fit -- and config-pasteable
-   lines: [model_issue_rate=] (when the fill fit succeeds, the reduction-extent sweep's slope over
-   its kernel's fill-normalized operations, or the launch sweep's lead rate where there is no such
-   sweep; the raw slope otherwise), [model_fill_threads=] and [model_multiprocessors=] when it
-   succeeds. Exit 1 when no rate fits. Calibrate on an otherwise idle device: the fits read times.
-   Startup chatter goes to stderr. *)
+   [--multiprocessors] is required where the device reports none (a Metal GPU with no IORegistry
+   [gpu-core-count], gh-ocannl-1638); elsewhere it overrides the device's count. Stdout is the two
+   tables, then the fits under [#] comment lines -- the raw fit, the fill fit with its residual, the
+   uncapped form's best residual beside it, and the k-sweep predicted under the fill fit -- and
+   config-pasteable lines: [model_issue_rate=] (when the fill fit succeeds, the reduction-extent
+   sweep's slope over its kernel's fill-normalized operations, or the launch sweep's lead rate where
+   there is no such sweep; the raw slope otherwise), [model_fill_threads=] and
+   [model_multiprocessors=] when it succeeds. Exit 1 when no rate fits. Calibrate on an otherwise
+   idle device: the fits read times. Startup chatter goes to stderr. *)
 
 open Base
 module Cal = Ocannl.Calibrate
