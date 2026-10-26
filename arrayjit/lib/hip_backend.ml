@@ -1852,11 +1852,14 @@ end = struct
            (* gh-ocannl-1479: the launch fill -- the multiprocessor count, queried, and the threads
               per multiprocessor at which scalar issue saturates, fitted by
               tools/calibrate_issue_rate.exe's launch sweep on the unified gfx1151 (minix, 20
-              multiprocessors; 2026-10-25, ffeac5f8), whose 512 x 512 calibration kernel is full
-              under it, so issue_rate above needs no normalization. The discrete class is unmeasured
-              (no fill). Overridable by model_fill_threads. *)
+              multiprocessors; 2026-10-25, ffeac5f8), and on the discrete gfx1102 (tuf, 16
+              multiprocessors as HIP reports them; 2026-10-26, 03369cfe, gh-ocannl-1638): 512, over
+              8 points with 3 latency-starved ones left out, largest relative residual 0.164. Both
+              classes' 512 x 512 calibration kernels are full under them, so issue_rate above needs
+              no normalization (tuf's fill-normalized rate came out 1.99e12). Mixed machines take
+              the discrete class. Overridable by model_fill_threads. *)
            multiprocessors = min_over (fun (a : H.Device.attributes) -> a.multiprocessor_count);
-           fill_threads = (if all_integrated then Some 384 else None);
+           fill_threads = Some (if all_integrated then 384 else 512);
          })
     in
     (* gh-ocannl-572: the kernel source is a function of the lowered code, the device capabilities

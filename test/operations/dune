@@ -197,7 +197,8 @@
   (alias runtest-env_spelling_gate)
   (alias runtest-test_metal_pool_bindings)
   (alias runtest-test_metal_guarded_gather_codegen)
-  (alias runtest-test_metal_pool_slot_width)))
+  (alias runtest-test_metal_pool_slot_width)
+  (alias runtest-metal_gpu_core_count)))
 
 ; The resource-lifecycle probes: the tests that drive `Ir.Resource_fault_injection` or read
 ; `Ir.Alloc_census`, i.e. the ones that answer for allocation, free and context lifetimes across the
@@ -4667,6 +4668,25 @@
   arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(test
+ ; ocannl-backend: metal -- `Context.metal ()`, then compares the launch fill's multiprocessor count
+ ; with ioreg's gpu-core-count (gh-ocannl-1638); the off-platform `select` arm replays the golden.
+ (name metal_gpu_core_count)
+ (package neural_nets_lib)
+ (modules metal_gpu_core_count)
+ (deps ocannl_config metal_gpu_core_count.expected)
+ (libraries
+  base
+  stdio
+  unix
+  ocannl
+  (select
+   metal_gpu_core_count.ml
+   from
+   (metal -> metal_gpu_core_count.real.ml)
+   (-> metal_gpu_core_count.missing.ml))
+  arrayjit.verdict))
 
 (test
  ; ocannl-backend: cuda -- `Backends.get_backend ~backend_name:"cuda"` with an explicit compile

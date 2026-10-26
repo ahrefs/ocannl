@@ -406,7 +406,8 @@ type hardware_limits = {
   multiprocessors : int option; [@sexp.option]
       (** [Untimed]: the device's multiprocessor (SM / CU / GPU core) count — the [P] of the ranking
           score's launch fill (gh-ocannl-1479, {!Ir.Cost_model.context_fill}). Queried on CUDA and
-          HIP; [None] elsewhere (Metal publishes no core count). Overridable by config
+          HIP; on Metal, which publishes none, read from the IORegistry's [gpu-core-count]
+          (gh-ocannl-1638; [None] on a non-AGX GPU); [None] elsewhere. Overridable by config
           [model_multiprocessors]. The launch fill applies only when both this and
           {!field-fill_threads} resolve. Same readers and same cache identity as
           {!field-cache_capacity_bytes}. *)

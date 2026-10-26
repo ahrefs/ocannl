@@ -370,12 +370,25 @@ module Impl = struct
           toolchain_signature;
         })
 
+  (* gh-ocannl-1638: the IORegistry's "gpu-core-count" of the GPU with this registry ID
+     ([metal_iokit_stubs.c]); 0 where it has none. *)
+  external gpu_core_count : int64 -> int = "ocannl_metal_gpu_core_count"
+
   let hardware_limits =
     let limits =
       lazy
         (let min_over f =
            Array.map (Lazy.force metal_devices) ~f:(fun d -> f (Me.Device.get_attributes d))
            |> Array.min_elt ~compare:Int.compare
+         in
+         (* The Apple-silicon class (Apple7+: M1 and later). [for_all] is vacuously true on no
+            devices, which would advertise this class on a machine that has no Metal device at all.
+            Unreachable in practice (compiling needs a device), but it used to be impossible by the
+            discovery assertion, so it is stated rather than assumed. *)
+         let apple_silicon =
+           (not (Array.is_empty (Lazy.force metal_devices)))
+           && Array.for_all (Lazy.force metal_devices) ~f:(fun d ->
+               Me.Device.supports_family d Me.Device.GPUFamily.Apple7)
          in
          {
            Backend_intf.max_threads_per_workgroup =
@@ -405,17 +418,7 @@ module Impl = struct
            (* [simdgroup_matrix], available on Apple7+ (M1 and later): the device-free descriptor
               [Metal_mma.capability], whose format triples correspond to the arm table the hooks
               consult ([Metal_mma.mma_accumulator], gh-ocannl-1246). *)
-           mma =
-             (if
-                (* [for_all] is vacuously true on no devices, which would advertise simdgroup
-                   matrices on a machine that has no Metal device at all. Unreachable in practice
-                   (compiling needs a device), but it used to be impossible by the discovery
-                   assertion, so it is stated rather than assumed. *)
-                (not (Array.is_empty (Lazy.force metal_devices)))
-                && Array.for_all (Lazy.force metal_devices) ~f:(fun d ->
-                    Me.Device.supports_family d Me.Device.GPUFamily.Apple7)
-              then Some Metal_mma.capability
-              else None);
+           mma = (if apple_silicon then Some Metal_mma.capability else None);
            simd_vector = Ir.Vector_file.none;
            native_fp16_arithmetic = false;
            simdgroup_width = Some 32;
@@ -444,16 +447,33 @@ module Impl = struct
            cache_capacity_bytes = None;
            max_resident_threads = None;
            cache_bandwidth = None;
-           (* gh-ocannl-1442: the ranking score's own rates; unmeasured here. *)
-           issue_rate = None;
+           (* gh-ocannl-1442: the ranking score's own rates. The issue rate is the full-fill rate
+              tools/calibrate_issue_rate.exe's launch sweep fits jointly with fill_threads below
+              (gh-ocannl-1638; the two are one calibration): 2.21e12 on the M4 Max (40 GPU cores;
+              2026-10-25, 20d048c3, largest relative residual 0.150), for the Apple-silicon class.
+              The DRAM rate is unmeasured here. *)
+           issue_rate = (if apple_silicon then Some 2.21e12 else None);
            dram_bandwidth = None;
            (* gh-ocannl-1495: unmeasured; simdgroup_load loads whole fragments. *)
            mma_rate = None;
            device_gather_rate = None;
-           (* gh-ocannl-1479: Metal publishes no GPU core count, so the launch fill is configured
-              (model_multiprocessors, model_fill_threads), never advisory. *)
-           multiprocessors = None;
-           fill_threads = None;
+           (* gh-ocannl-1479, gh-ocannl-1638: the launch fill. Metal publishes no GPU core count, so
+              it is read from the IORegistry (the AGX accelerator's "gpu-core-count", by the
+              device's registry ID), minimum over devices; [None] when any device has none (a
+              non-AGX GPU). The threads per core at which scalar issue saturates is fitted by the
+              launch sweep on the M4 Max (40 cores, 6 points, 5 latency-starved points left out;
+              2026-10-25, 20d048c3), whose 512 x 512 calibration kernel is full under it. Both
+              overridable by model_multiprocessors / model_fill_threads. *)
+           multiprocessors =
+             (let counts =
+                Array.map (Lazy.force metal_devices) ~f:(fun d ->
+                    gpu_core_count
+                      (Unsigned.ULLong.to_int64 (Me.Device.get_attributes d).registry_id))
+              in
+              if Array.for_all counts ~f:(fun c -> c > 0) then
+                Array.min_elt counts ~compare:Int.compare
+              else None);
+           fill_threads = (if apple_silicon then Some 320 else None);
          })
     in
     fun () -> Lazy.force limits

@@ -1,0 +1,2 @@
+Metal's multiprocessors is the IORegistry's gpu-core-count as ioreg prints it: true
+with no configuration, the launch fill resolves on the IORegistry's gpu-core-count: true
