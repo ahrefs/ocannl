@@ -852,11 +852,15 @@ val sketch_path_traffic_floor :
     GPU leg) contributes both staged operand tiles, written and read, at the tiles' own precisions
     (the CPU packing precision where it widens; GPU reduction and column extents padded to the
     selected format's intrinsic tile), one copy whatever the pipelined depth; every prefix above the
-    row geometry prices [0]. [0] when neither family has a site or nothing is certain. Composed with
-    the floor's legs, this is what makes the family bound non-uniform across the tree — the
-    schedule-invariant floor differentiates only placements (phase 3), the increments differentiate
-    the sketch-geometry subtrees. Detection runs once at partial application; the returned closure
-    is cheap per path. Exposed for tests. *)
+    row geometry prices [0]. Both families add [Tensorize]'s accumulator fragment, written and read
+    at the output's storage width, where every completion below the path contracts the accumulator
+    (gh-ocannl-1601): a conv row geometry whose window has a loop of two or more iterations
+    ([rows x out-channels]), a staged GPU mma geometry whose reduction runs in two or more blocks
+    ([bm x bn]; a lattice box only once its largest [bk] leaves two blocks). [0] when neither family
+    has a site or nothing is certain. Composed with the floor's legs, this is what makes the family
+    bound non-uniform across the tree — the schedule-invariant floor differentiates only placements
+    (phase 3), the increments differentiate the sketch-geometry subtrees. Detection runs once at
+    partial application; the returned closure is cheap per path. Exposed for tests. *)
 
 val sketch_schedule :
   accum_prec:(Ir.Ops.prec -> Ir.Ops.prec) ->

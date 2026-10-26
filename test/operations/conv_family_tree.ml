@@ -499,7 +499,14 @@ let expected_conv_inc (site : Autotune.conv_site) (p : Autotune.sketch_params) =
         site.Autotune.c_nred,
         site.Autotune.c_noc )
   in
-  2 * ((m * k * width site.Autotune.c_a) + (k * n * width site.Autotune.c_b))
+  let fragment =
+    (* gh-ocannl-1601: the accumulator fragment Tensorize's contraction mints across the
+       kernel-window chain: [m x n] at the output's storage width, written and read. *)
+    if List.exists site.Autotune.c_axes ~f:(fun cx -> cx.Autotune.cx_nk >= 2) then
+      2 * m * n * Ir.Ops.prec_in_bytes (Lazy.force site.Autotune.c_d.Ir.Tnode.storage_prec)
+    else 0
+  in
+  (2 * ((m * k * width site.Autotune.c_a) + (k * n * width site.Autotune.c_b))) + fragment
 
 let prefixes path =
   List.folding_map path ~init:[] ~f:(fun acc entry ->
@@ -610,9 +617,10 @@ let () =
    prices nothing fails the fathoming claims themselves. Every leaf's real score sits far above that
    incumbent, so the walk's answer is [None] either way; what moves is the work: the leaves whose
    raised bound reaches the incumbent are fathomed unscored, where the zero increment scored them.
-   Why the incumbent is not a real leaf's score: [completion_floor] prices the windowed input read
-   at 0 (an overlapping window's image is not exact), so every leaf's traffic sits about the input's
-   size above floor + increment, more than any two leaves' tile increments differ by. *)
+   The incumbent is placed rather than taken from a leaf so that this section isolates the
+   increment's contribution (the walk against the same walk under a zero increment); pruning at real
+   incumbents, which the windowed-read floor and the fragment term make possible (gh-ocannl-1601),
+   is [real_site_pins]' claim below. *)
 let pruning_pins name ~is_gpu ~limits base =
   let limits = envelope limits ~peak_flops:1e15 ~bandwidth:1e9 in
   let score segs =
@@ -707,3 +715,118 @@ let () =
   let dividing = lowering "cft_prune" (make_conv "pd" ~b:2 ~h:18 ~ic:8 ~oc:8) in
   pruning_pins "pruning, dividing 16-row, cpu" ~is_gpu:false ~limits:cpu_limits dividing;
   pruning_pins "pruning, dividing 16-row, gpu" ~is_gpu:true ~limits:gpu_limits dividing
+
+(* gh-ocannl-1601: pruning at a real conv site, with real incumbents. cifar_resnet's stage-1 conv
+   (benchmarks/runners/ocannl/bench_conv_model.ml's [resnet]: 3x3, 16 -> 16 channels, padded, a
+   batch of 64 32x32 images, fed by the stem's relu and feeding its own, both materialized like the
+   network's activations), and the segment the tuner itself enumerates candidates for
+   ([Ll_test.tuner_segments] under each leg's target). The floor now prices the padded input's
+   windowed read ([Affine.image_cardinality_lb]) and the increment the accumulator fragment, so a
+   committed row geometry's bound reaches a real leaf's score. On each leg, under the
+   memory-dominated stand-in envelope of [pruning_pins] (the GPU leg is the model's, under the 8x8x8
+   stand-in tile — no GPU executes): the walk from an infinite incumbent and the walk from the best
+   leaf's own score each fathom a subtree below the root, admit fewer leaves to scoring than the
+   tree has, and agree with the exhaustive answer — the first argmin, which is the production tie
+   rule here: [no_codegen_capabilities] gives no leaf an operand-load key, so a tie keeps the
+   earlier leaf. *)
+let real_site_pins name ~is_gpu ~limits ~target =
+  let limits = envelope limits ~peak_flops:1e15 ~bandwidth:1e9 in
+  let x0 =
+    NTDSL.init ~l:"rsx" ~prec:Ir.Ops.single ~b:[ 64 ] ~o:[ 32; 32; 16 ]
+      ~f:(Ll_test.weighted ~weights:[| 1; 1; 2; 3 |] ~modulus:7 ~offset:0. ~stride:1.)
+      ()
+  in
+  (* The stem's activation, as in the network: computed in the routine, so its buffer takes the
+     conv's padding margins. *)
+  let%op x = relu x0 in
+  Ir.Tnode.update_memory_mode x.Tensor.value Ir.Tnode.On_device (Site "99:test-setup");
+  let conv =
+    Nn_blocks.conv2d ~label:[ "rs1c1" ] ~kernel_size:3 ~use_padding:true ~out_channels:16 ()
+  in
+  let%op y = relu (conv x) in
+  Ir.Tnode.update_memory_mode y.Tensor.value Ir.Tnode.On_device (Site "99:test-setup");
+  let whole =
+    (* The conv's kernel and bias are parameters: initialized into the context first, as a training
+       run does, so the forward routine links against them. *)
+    let captured = ref None in
+    let ctx = Train.init_params (Context.auto ()) Ir.Indexing.Empty y in
+    let _ctx, _routine =
+      Context.compile
+        ~name:("cft_resnet_" ^ if is_gpu then "gpu" else "cpu")
+        ~lowered_transform:(fun opt ->
+          captured := Some (scratch opt);
+          [ opt ])
+        ctx (Train.forward y) Ir.Indexing.Empty
+    in
+    Option.value_exn !captured
+  in
+  let segment =
+    List.find_map
+      (snd (Ll_test.tuner_segments ~target whole))
+      ~f:(fun (_, pre, _, _) ->
+        Option.some_if (Option.is_some (Autotune.detect_conv pre.LL.llc)) pre)
+  in
+  match segment with
+  | None -> p (name ^ ": the tuner's segmentation has a conv segment") false
+  | Some base -> (
+      let score segs =
+        List.fold segs ~init:(Some 0.) ~f:(fun acc o ->
+            Option.map2 acc (rank_with limits o) ~f:Float.( + ))
+      in
+      let score_p p = Option.bind (apply_leaf base p) ~f:(fun post -> score [ post ]) in
+      match Autotune.sketch_family_tree ~is_gpu ~is_cpu:(not is_gpu) ~limits base with
+      | None -> p (name ^ ": the conv family claims the segment") false
+      | Some tree ->
+          let scored =
+            List.filter_map (Sspace.enumerate tree) ~f:(fun (_, p) ->
+                Option.map (score_p p) ~f:(fun s -> (p, s)))
+          in
+          let exhaustive ~incumbent =
+            List.fold scored ~init:None ~f:(fun acc (p, s) ->
+                if Float.(s >= incumbent) then acc
+                else match acc with Some (_, b) when Float.(s >= b) -> acc | _ -> Some (p, s))
+          in
+          let best = Option.map (exhaustive ~incumbent:Float.infinity) ~f:snd in
+          let walk ~incumbent =
+            let admitted = ref 0 in
+            let r =
+              Autotune.model_family_search
+                ~admit:(fun _ ->
+                  Int.incr admitted;
+                  true)
+                ~capabilities:Ir.Backend_intf.no_codegen_capabilities ~is_gpu ~is_cpu:(not is_gpu)
+                ~limits ~static_indices:[] ~peak_flops:limits.peak_flops
+                ~peak_memory_bandwidth:limits.peak_memory_bandwidth ~score ~incumbent base
+            in
+            (r, !admitted)
+          in
+          Stdio.printf "== %s: %d leaves, %d scored ==\n" name
+            (List.length (Sspace.leaves tree))
+            (List.length scored);
+          p_exists ~min:2 (name ^ ": the tree's leaves score") scored ~f:(fun _ -> true);
+          List.iter
+            [
+              ("an infinite incumbent", Float.infinity);
+              ("the best leaf's score", Option.value_exn best);
+            ]
+            ~f:(fun (what, incumbent) ->
+              let r, admitted = walk ~incumbent in
+              match r with
+              | None -> p (name ^ ", from " ^ what ^ ": the walk runs") false
+              | Some (pick, st, _) ->
+                  Stdio.printf "  from %s: %d scored, %d fathomed, %d admitted of %d leaves\n" what
+                    st.Sspace.st_scored st.Sspace.st_fathomed admitted (List.length scored);
+                  p
+                    (name ^ ", from " ^ what ^ ": a subtree below the root fathoms unscored")
+                    (st.Sspace.st_fathomed > 0 && admitted < List.length scored);
+                  p
+                    (name ^ ", from " ^ what ^ ": the pick is the exhaustive answer")
+                    (Option.equal
+                       (fun (p1, s1) (p2, s2) -> Poly.equal p1 p2 && Float.equal s1 s2)
+                       pick (exhaustive ~incumbent))))
+
+let () =
+  real_site_pins "cifar_resnet stage-1 conv, cpu" ~is_gpu:false ~limits:cpu_limits
+    ~target:{ Ll_test.is_gpu = false; is_cpu = true; limits = cpu_limits };
+  real_site_pins "cifar_resnet stage-1 conv, gpu" ~is_gpu:true ~limits:gpu_limits
+    ~target:(Ll_test.synthetic_gpu ~limits:gpu_limits ())
