@@ -48,7 +48,7 @@ let logged_stores ~first_id ~label =
   let o = Ll_test.optimize ~materialized:[ a; x ] ~name:label llc in
   (o, a, x)
 
-let run_logged ?ctx ~first_id ~label () =
+let run_logged ~values ?ctx ~first_id ~label () =
   let o, a, x = logged_stores ~first_id ~label in
   let av = Array.init n ~f:Float.of_int in
   let ctx, _routine =
@@ -56,11 +56,7 @@ let run_logged ?ctx ~first_id ~label () =
   in
   let got = Context.get_values ctx x in
   Context.sync ctx;
-  p_all2
-    (label ^ ": the routine stores its values")
-    got
-    (Array.map av ~f:(fun v -> v +. 1.))
-    ~f:Float.equal;
+  p_all2 values got (Array.map av ~f:(fun v -> v +. 1.)) ~f:Float.equal;
   ctx
 
 let claim_count what ~label ~expected =
@@ -69,30 +65,30 @@ let claim_count what ~label ~expected =
     label;
   p what (got = expected)
 
+(* The claims in the order the executing branch makes them; a skipping backend prints the same lines
+   in the same order, so the golden is shared. *)
+let first_values = "mrld_first: the routine stores its values"
+let first_all = "the first routine's stores are all in the stream log after its sync"
+let second_sync = "a second sync adds none of them again"
+let second_values = "mrld_second: the routine stores its values"
+let second_all = "the second routine's stores are all in the stream log after its sync"
+let first_once = "the first routine's lines are still there exactly once"
+
 let () =
   if not (Utils.debug_log_from_routines ()) then
     fail "this test runs under --ocannl_debug_log_from_routines=true (see its dune rule)";
-  let labels = [ "mrld_first"; "mrld_second" ] in
   match backend_name with
   | "cuda" | "hip" ->
-      List.iter labels ~f:(fun label ->
-          skipped ~backend:backend_name (label ^ ": the routine stores its values"));
       List.iter
-        [
-          "the first routine's stores are all in the stream log after its sync";
-          "a second sync adds none of them again";
-          "the second routine's stores are all in the stream log after its sync";
-          "the first routine's lines are still there exactly once";
-        ]
+        [ first_values; first_all; second_sync; second_values; second_all; first_once ]
         ~f:(skipped ~backend:backend_name)
   | _ ->
-      let ctx = run_logged ~first_id:1000 ~label:"mrld_first" () in
-      claim_count "the first routine's stores are all in the stream log after its sync"
-        ~label:"mrld_first" ~expected:n;
+      let ctx = run_logged ~values:first_values ~first_id:1000 ~label:"mrld_first" () in
+      claim_count first_all ~label:"mrld_first" ~expected:n;
       Context.sync ctx;
-      claim_count "a second sync adds none of them again" ~label:"mrld_first" ~expected:n;
-      let (_ : Context.t) = run_logged ~ctx ~first_id:2000 ~label:"mrld_second" () in
-      claim_count "the second routine's stores are all in the stream log after its sync"
-        ~label:"mrld_second" ~expected:n;
-      claim_count "the first routine's lines are still there exactly once" ~label:"mrld_first"
-        ~expected:n
+      claim_count second_sync ~label:"mrld_first" ~expected:n;
+      let (_ : Context.t) =
+        run_logged ~values:second_values ~ctx ~first_id:2000 ~label:"mrld_second" ()
+      in
+      claim_count second_all ~label:"mrld_second" ~expected:n;
+      claim_count first_once ~label:"mrld_first" ~expected:n
