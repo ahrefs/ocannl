@@ -1,0 +1,2 @@
+C backends: every leg keeps bfloat16 subnormals, bitwise IEEE: true
+Metal: storage, copies and widening keep bfloat16 subnormals bitwise; narrowing and arithmetic flush them to the signed zero, exact on normals: true

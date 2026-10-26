@@ -174,8 +174,9 @@ let cases =
       ulp = spacing ~mant:7 ~emin:(-126);
       bound = (fun _ _ -> 1.);
       inputs =
-        (* No bfloat16 subnormal: Metal's [bfloat] flushes them on the way in or out (0x1p-130 read
-           back 0 through every op), a storage property, not these functions'. *)
+        (* No bfloat16 subnormal: Metal's float-to-bfloat narrowing, like its f32 arithmetic,
+           flushes them to the signed zero, a property of the GPU's float ALU rather than of these
+           functions (storage and widening keep them; [bf16_subnormal_storage]). *)
         specials
         @ [
             0x1p-126;
