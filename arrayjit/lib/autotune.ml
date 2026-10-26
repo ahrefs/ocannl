@@ -6834,10 +6834,10 @@ let lineage_identity ~static_indices (opt : LL.optimized) =
    re-runs), so it cannot carry one candidate's runs into the next. The state that drifts across a
    search is therefore exactly what the computation writes among the buffers the lineage holds: the
    base lowering's written nodes ([has_assignment] or [zeroed_out]; a hosted constant's writes are
-   gone from the code) present in [search_ctx], a written [\@|] slice view standing for its parent,
-   whose buffer it writes and which host access goes through. A node the lineage placed [Local] has
-   no observable buffer and holds no state between runs. Read-only nodes (the data batch, an
-   uploaded dataset) are never written, so they are not copied. *)
+   gone from the code) present in [search_ctx], a written slice ALIAS standing for its parent, whose
+   buffer it writes and which host access goes through. A node the lineage placed [Local] has no
+   observable buffer and holds no state between runs. Read-only nodes (the data batch, an uploaded
+   dataset) are never written, so they are not copied. *)
 let timing_state_nodes search_ctx (opt : LL.optimized) =
   let placements = Context.placements search_ctx in
   Hashtbl.fold opt.LL.traced_store
@@ -6845,15 +6845,23 @@ let timing_state_nodes search_ctx (opt : LL.optimized) =
     ~f:(fun ~key:_ ~data:(traced : LL.traced_array) acc ->
       if not (traced.has_assignment || traced.zeroed_out) then acc
       else
+        (* A confirmed slice alias owns no buffer: its writes land in its parent's. An ineligible
+           (copy) slice owns its own buffer, recomputed from its parent on every run -- no state,
+           and host access refuses it -- so it stands for nothing here; mapping it to its parent
+           would copy a read-only dataset in and out per window. *)
         let tn =
-          match Ir.Tnode.slice_of traced.tn with Some (parent, _) -> parent | None -> traced.tn
+          match (Ir.Tnode.alias_of traced.tn, Ir.Tnode.slice_of traced.tn) with
+          | Some (parent, _), _ -> Some parent
+          | None, Some _ -> None
+          | None, None -> Some traced.tn
         in
-        let local =
-          match Ir.Tnode.Placements.get placements tn with
-          | Some (Ir.Tnode.Local, _) -> true
-          | _ -> false
-        in
-        if local || not (Context.mem search_ctx tn) then acc else Set.add acc tn)
+        Option.fold tn ~init:acc ~f:(fun acc tn ->
+            let local =
+              match Ir.Tnode.Placements.get placements tn with
+              | Some (Ir.Tnode.Local, _) -> true
+              | _ -> false
+            in
+            if local || not (Context.mem search_ctx tn) then acc else Set.add acc tn))
 
 (* Host copies, not a second device buffer per node: a device snapshot would keep a second working
    set of the state resident through the search, against the one-live-candidate memory bound

@@ -1426,7 +1426,9 @@ files.
   one buffer every candidate writes, while a node it lacks is allocated afresh per candidate (its
   link-time init re-running). The state is therefore the base lowering's written nodes
   (`has_assignment || zeroed_out`) that `Context.mem search_ctx` -- parameters, and the momentum
-  buffer once a step has run on the lineage -- a written `@|` slice standing for its parent.
+  buffer once a step has run on the lineage -- a written slice alias (`Tn.alias_of`) standing for
+  its parent, while a copy slice, recomputed per run, stands for nothing (mapping it to its parent
+  would copy a read-only dataset per window).
   Not `routine.inputs ∩ outputs`: embedded nodes (the momentum) are excluded from `inputs`, and a
   GPU baseline has no routine. `Autotune.tune_in_stream_scope` copies them with `to_host` at the
   first window, writes them back with `from_host` on `search_ctx` (the returned context dropped)
