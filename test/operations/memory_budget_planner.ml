@@ -59,6 +59,16 @@ let () = Unix.putenv "OCANNL_BUFFER_ALIASING" "false"
    failure that looks like rematerialization changing values but is not. *)
 let () = Unix.putenv "OCANNL_MODEL_DEFAULT_SCHEDULE" "false"
 
+(* The seeded untuned plan (CUDA/HIP) yields to a budget for the same reason, so it is pinned off
+   too (gh-ocannl-1641): the budget-off arm would otherwise run the seeded plan, whose sites the
+   [auto] gate decides per device (the launch fill reads the multiprocessor count), and the parity
+   would compare two kernel shapes a GPU compiler may contract differently. The three settings are
+   what [Autotune.seeded_settings] needs to decline altogether: no seeding, no split, no sink. *)
+let () =
+  Unix.putenv "OCANNL_GPU_DEFAULT_SKETCH_MIN_REDUCTION" "0";
+  Unix.putenv "OCANNL_GPU_DEFAULT_SPLIT_REDUCE_MIN_SERIAL" "0";
+  Unix.putenv "OCANNL_GPU_DEFAULT_REDUCTION_SINK" "false"
+
 (* The config-key parser, exercised through the environment (values are re-read on each access). The
    suffix scaling is the interesting part: a syntactically valid but absurd setting must be REJECTED
    rather than wrapped into a small or negative target, which the planner would honor as an

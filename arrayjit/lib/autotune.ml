@@ -5121,6 +5121,20 @@ type seed_gate =
    gh-ocannl-1324's measured value. *)
 let seed_gate_fallback = 32
 
+(* The gate rendered with every reading its decisions rest on: the staffed start's search shape
+   ([seeded_start.gate_tag]) and the untuned compile's log line (gh-ocannl-1641: a survey of the
+   seeding's decisions can then say which gate, and which launch fill, decided them). *)
+let seed_gate_tag = function
+  | Min_reduction n -> Printf.sprintf "min_reduction=%d" n
+  | Ranked { capacity; cache_rate; scalar_rate; dram_rate; fill } ->
+      let rate = Option.value_map ~default:"none" ~f:Float.to_string in
+      Printf.sprintf "ranked capacity=%s cache_rate=%s scalar_rate=%s dram_rate=%s%s"
+        (Option.value_map capacity ~default:"none" ~f:Int.to_string)
+        (rate cache_rate) (rate scalar_rate) (rate dram_rate)
+        (Option.value_map fill ~default:""
+           ~f:(fun { Ir.Cost_model.fm_multiprocessors; fm_fill_threads } ->
+             Printf.sprintf " fill=%dx%d" fm_multiprocessors fm_fill_threads))
+
 (* The configured gate, unresolved: [`Auto] or a threshold. *)
 let seed_gate_setting () =
   Utils.registered_keyword ~arg_name:"gpu_default_sketch_min_reduction"
@@ -5737,21 +5751,10 @@ let seeded_plan ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narr
       with
       | { sp_split = []; sp_segments = None; _ } -> None
       | plan ->
-          let gate_tag =
-            match gate with
-            | Min_reduction n -> Printf.sprintf "min_reduction=%d" n
-            | Ranked { capacity; cache_rate; scalar_rate; dram_rate; fill } ->
-                (* Every reading the per-segment decisions rest on (gh-ocannl-1442, gh-ocannl-1479):
-                   the staffed start re-decides on the search's own segments, which the plan digest
-                   does not cover. *)
-                let rate = Option.value_map ~default:"none" ~f:Float.to_string in
-                Printf.sprintf "ranked capacity=%s cache_rate=%s scalar_rate=%s dram_rate=%s%s"
-                  (Option.value_map capacity ~default:"none" ~f:Int.to_string)
-                  (rate cache_rate) (rate scalar_rate) (rate dram_rate)
-                  (Option.value_map fill ~default:""
-                     ~f:(fun { CM.fm_multiprocessors; fm_fill_threads } ->
-                       Printf.sprintf " fill=%dx%d" fm_multiprocessors fm_fill_threads))
-          in
+          (* Every reading the per-segment decisions rest on (gh-ocannl-1442, gh-ocannl-1479): the
+             staffed start re-decides on the search's own segments, which the plan digest does not
+             cover. *)
+          let gate_tag = seed_gate_tag gate in
           Some
             {
               plan with
@@ -5790,6 +5793,7 @@ let seeded_apply ?(on_choice = fun (_ : seeded_choice) -> ()) ~capabilities ~bac
   (* gh-ocannl-1253: the derivation [tune] repeats (as [seeded_plan]) on a trajectory-matched warm
      hit, timed so its cost can be read off any untuned compile. *)
   logf "seeded_default: plan derived in %.3f s" (Unix.gettimeofday () -. t0);
+  logf "seeded_default: gate %s" (seed_gate_tag gate);
   let (_, tuples), applied =
     seeded_replay ~limits ~accum_prec ~admit_narrow ~static_indices plan.sp_segments opt
   in

@@ -227,7 +227,12 @@ files.
   may now seed nothing, or leave a site to the reduction sink, on one box only. A test whose claim
   needs the rule to seed a site pins `gpu_default_sketch_min_reduction` to a threshold for that
   call (`autotune_staffed_fine`, `seeded_narrow_storage`'s model leg; gh-ocannl-1599's triage);
-  its PR's CUDA leg before the fill landed proves nothing after.
+  its PR's CUDA leg before the fill landed proves nothing after. A test that runs `auto` on
+  purpose asserts the seeding unskipped, so a declining device fails it (`model_seeded_anchor`);
+  one whose claim is about something else pins the seeded plan off (`memory_budget_planner`'s
+  parity, gh-ocannl-1641). On `gpt2_mini_train` (b1_s128, b8, b256) the fill flips nothing: the
+  untuned census is identical with and without it on rog and minix, and equal to tuf's. The
+  `autotune_log` line `seeded_default: gate ...` names the gate and fill that decided a census.
 - **Compare a plan and its rivals in ONE kernel decomposition** (gh-ocannl-1477). The ranking score
   sums `max(compute, memory)` per kernel, so a memory-bound kernel run on its own (the seeded plan's
   zero-fill, the default segmentation having no zero fold) is charged in full, while the same writes
