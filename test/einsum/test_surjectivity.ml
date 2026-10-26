@@ -50,14 +50,14 @@ let test_multi_sparse () =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx result;
   Stdio.printf "\n"
 
-let _test_stride_gap () =
+let test_stride_gap () =
   Stdio.printf "\nTesting stride gap:\n";
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
   (* Create tensor with multiple dims and test sparse assignment *)
   let input = TDSL.range_of_shape ~output_dims:[ 2; 5 ] () in
   let use_padding = false in
-  let%op result = input ++ "ij=>i+3*j" in
+  let%op result = input ++ "i, j => i+3*j" in
 
   Train.set_materialized result.value;
   let ctx = Train.forward_once ctx result in
@@ -69,6 +69,8 @@ let () =
   test_diagonal_tensor ();
   test_sparse_fixed_index ();
   test_multi_sparse ();
-  (* FIXME(#354): Projections inference for convolution-style expressions not implemented yet. *)
-  (* test_stride_gap (); *)
+  (* A result-side window over two operand axes, spelled in multichar mode: the [+] and [*] switch a
+     spec to it, so [ij=>i+3*j] would read [ij] as one axis. result_side_affine_forms checks the
+     form against an oracle (gh-ocannl-1618). *)
+  test_stride_gap ();
   Stdio.printf "All surjectivity tests completed.\n"

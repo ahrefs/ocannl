@@ -240,16 +240,27 @@ let substitute_identifiers_in_einsum_spec ~loc str_input =
     | Fixed_index i -> [ estring ~loc (Int.to_string i) ]
     | Affine_spec { stride; over_label; conv; stride_offset } ->
         let stride_expr = int_value_expr stride in
+        (* The grammar reads the offset between the use_padding marker and the window ([2*o<+1+k]),
+           and needs the stride written on a window-less offset form ([1*i+1]: a bare [i+1] does not
+           parse) (gh-ocannl-1618). *)
         let base_segments =
-          if String.equal stride "1" then [ estring ~loc over_label ]
+          if String.equal stride "1" && (Option.is_some conv || stride_offset = 0) then
+            [ estring ~loc over_label ]
           else [ stride_expr; estring ~loc "*"; estring ~loc over_label ]
         in
         let offset_segments =
           if stride_offset = 0 then []
           else [ estring ~loc "+"; estring ~loc (Int.to_string stride_offset) ]
         in
-        let conv_segments = match conv with None -> [] | Some c -> conv_to_segments c in
-        base_segments @ conv_segments @ offset_segments
+        let marker_segments, window_segments =
+          match conv with
+          | None -> ([], [])
+          | Some c -> (
+              match conv_to_segments c with
+              | marker :: window -> ([ marker ], window)
+              | [] -> ([], []))
+        in
+        base_segments @ marker_segments @ offset_segments @ window_segments
     | Concat_spec labels ->
         (* Join labels with " ^ " separator *)
         List.concat_mapi labels ~f:(fun i label ->

@@ -489,6 +489,52 @@ let axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env:_ ~f labels =
   let output = to_row `Output ~implicit:false labels.bcast_output o_dims beg_o_dims in
   (batch, input, output)
 
+(** Renders an affine axis spec as the einsum grammar reads it back ([[s*]o[=|<][+off]+[d*]k], or
+    [s*o[+off]] without a window), for refusal messages. *)
+let render_affine_axis = function
+  | Affine_spec { stride; over_label; conv; stride_offset } -> (
+      let coeff c = if String.equal c "1" then "" else c ^ "*" in
+      let offset = if stride_offset = 0 then "" else "+" ^ Int.to_string stride_offset in
+      match conv with
+      | None -> [%string "%{stride}*%{over_label}%{offset}"]
+      | Some { dilation; kernel_label; use_padding } ->
+          let marker = match use_padding with `True -> "=" | `False -> "<" | `Unspecified -> "" in
+          [%string
+            "%{coeff stride}%{over_label}%{marker}%{offset}+%{coeff dilation}%{kernel_label}"])
+  | Label s -> s
+  | Fixed_index i -> Int.to_string i
+  | Concat_spec labels -> String.concat ~sep:"^" labels
+
+(** Refuses an affine axis whose constant offset reaches past the axis's extent (gh-ocannl-1618), in
+    any slot of an einsum spec. Shape inference sizes an affine axis without its offset
+    ([stride * n] without a window, [stride * (n - 1) +] the dilated kernel extent for an unpadded
+    window), so the offset is in bounds only below the stride and without an unpadded window. Before
+    this, such a spec ran: on the result side the out-of-extent cells were silently dropped, on an
+    operand they were read past the extent, and a stride-1 offset died with an internal projection
+    error. A padded ([=+]) operand window keeps its offset: the padding absorbs it. *)
+let refuse_out_of_extent_offset ~spec ~stride ~stride_offset ~(conv : bool option) ~axis =
+  let refuse reason =
+    raise
+    @@ Row.Shape_error
+         ( [%string
+             "affine axis `%{Lazy.force axis}` in einsum spec \"%{spec}\" has offset \
+              %{stride_offset#Int}, which %{reason}"],
+           [] )
+  in
+  match conv with
+  | None when stride_offset >= stride ->
+      refuse
+        [%string
+          "is not smaller than its stride %{stride#Int}: the axis's extent is stride * n for an \
+           extent n of the strided label, so the last positions would fall outside it. Write an \
+           offset below the stride; to shift by whole strides, slice or pad the tensor separately."]
+  | Some false when stride_offset > 0 ->
+      refuse
+        "an unpadded (<+) window cannot take: its extent, stride * (n - 1) + the dilated kernel \
+         extent, has no room for an offset, so the last kernel positions would fall outside it. \
+         Drop the offset, and slice or pad the tensor separately to shift it."
+  | None | Some _ -> ()
+
 let einsum_slot_spec_to_dims_bio ?(fixed_index = `Pin_var) ~original_spec ~sh_id ~row_var_env
     ~dim_var_env labels =
   let proj_env_update = ref @@ Row.dim_map_empty in
@@ -522,7 +568,7 @@ let einsum_slot_spec_to_dims_bio ?(fixed_index = `Pin_var) ~original_spec ~sh_id
             }
           :: !extras;
         d
-    | Affine_spec { stride; over_label; conv; stride_offset } ->
+    | Affine_spec { stride; over_label; conv; stride_offset } as axis_spec ->
         let stride_int =
           try Int.of_string stride
           with _ -> failwith ("Invalid stride value (expected integer): " ^ stride)
@@ -554,6 +600,9 @@ let einsum_slot_spec_to_dims_bio ?(fixed_index = `Pin_var) ~original_spec ~sh_id
               in
               { Row.dilation = dilation_int; kernel; use_padding = use_padding_bool })
         in
+        refuse_out_of_extent_offset ~spec:original_spec ~stride:stride_int ~stride_offset
+          ~conv:(Option.map conv ~f:(fun c -> c.use_padding))
+          ~axis:(lazy (render_affine_axis axis_spec));
         Row.Affine { stride = stride_int; over = over_dim; conv; stride_offset }
     | Concat_spec labels ->
         let dims =
@@ -724,18 +773,8 @@ let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~
     forward's projections and never comes here with a reversed spec. *)
 let refuse_result_side_padded_window ~spec ~(error_shapes : t list) (ls_lhs : parsed_axis_labels) =
   Map.iter ls_lhs.labels ~f:(function
-    | Affine_spec
-        {
-          stride;
-          over_label;
-          stride_offset;
-          conv = Some { dilation; kernel_label; use_padding = `True };
-        } ->
-        let coeff c = if String.equal c "1" then "" else c ^ "*" in
-        let offset = if stride_offset = 0 then "" else "+" ^ Int.to_string stride_offset in
-        let window =
-          [%string "%{coeff stride}%{over_label}=%{offset}+%{coeff dilation}%{kernel_label}"]
-        in
+    | Affine_spec { conv = Some { use_padding = `True; _ }; _ } as axis ->
+        let window = render_affine_axis axis in
         raise
         @@ Row.Shape_error
              ( [%string
