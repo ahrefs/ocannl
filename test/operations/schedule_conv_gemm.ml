@@ -493,34 +493,24 @@ let () =
   let show_counts tag (r : Autotune.report) =
     Stdio.eprintf
       "%s: sketch_candidates=%d epilogue=%d fiss_sketch_candidates=%d fiss_timed=%d contended=%d \
-       unbatched=%d unreadable=%d budget_cut=%b hopeless=%d retried=%d\n"
+       unbatched=%d unreadable=%d budget_cut=%b hopeless=%d retried=%d retimed=%d\n"
       tag r.Autotune.sketch_candidates r.Autotune.epilogue_sketch_candidates
       r.Autotune.fiss_sketch_candidates r.Autotune.fiss_sketch_timed r.Autotune.timings_contended
       r.Autotune.timings_unbatched r.Autotune.timings_unreadable r.Autotune.budget_cut
-      r.Autotune.timings_hopeless r.Autotune.timings_retried
+      r.Autotune.timings_hopeless r.Autotune.timings_retried r.Autotune.timings_retimed
   in
   (* A per-segment GPU candidate that compiles to its whole-routine twin's digest is deduplicated
      only while that twin's digest is still in the search's dedup set. A window refused for any
      cause, one cut as hopeless (gh-ocannl-1527) and one the budget stopped all drop their digest
      from it, so an equivalent later seed is retried, and timed, rather than deduplicated: a loaded
      host refusing a whole-routine window lets its per-segment twin be timed (gh-ocannl-1484). The
-     dedup claim is therefore evaluated only on a report where no window left the set, and skipped
-     -- as an environment gap, the host's load -- with the departures on stderr otherwise. Off the
-     uniform-f32 GPU legs the per-segment seeds have no whole-routine twin, so there is nothing to
-     dedup. *)
+     dedup claim is a window-reached count, so it goes through [Tune_counts]' gate on exactly that
+     re-timing and the budget (gh-ocannl-1632), and skips -- as an environment gap -- with the
+     departures on stderr otherwise. Off the uniform-f32 GPU legs the per-segment seeds have no
+     whole-routine twin, so there is nothing to dedup. *)
   let claim_dedup tag (r : Autotune.report) label ok =
     if not has_uniform_f32_mma then skipped label
-    else if
-      r.Autotune.timings_contended = 0 && r.Autotune.timings_hopeless = 0
-      && not r.Autotune.budget_cut
-    then p label ok
-    else (
-      Stdio.eprintf
-        "%s: a timing window left the dedup set (refused=%d of which unbatched=%d unreadable=%d, \
-         hopeless=%d, budget_cut=%b): per-segment twins could be retried\n"
-        tag r.Autotune.timings_contended r.Autotune.timings_unbatched r.Autotune.timings_unreadable
-        r.Autotune.timings_hopeless r.Autotune.budget_cut;
-      Verdict.skipped ~aggregation:`Environment ~backend:backend_name label)
+    else Tune_counts.claim ~count:`Reached ~tag [ r ] label ok
   in
   let clean_cache dir =
     if Stdlib.Sys.file_exists dir && Stdlib.Sys.is_directory dir then

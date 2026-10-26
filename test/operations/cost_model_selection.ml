@@ -132,7 +132,10 @@ let () =
   p "pre-filter scored the sketch candidates" (r_cut.Autotune.model_scored >= 2);
   p "pre-filter pruned the worse-scored sketches before timing"
     (r_cut.Autotune.model_pruned >= 1 && r_cut.Autotune.model_pruned < r_cut.Autotune.model_scored);
-  p "pruned search timed fewer candidates than the full search"
+  (* Admitted-window counts of two physical searches: a window either one refused, cut or stopped
+     moves its count, so the comparison is gated on both (gh-ocannl-1632). *)
+  Tune_counts.claim ~count:`Admitted ~tag:"prefilter" [ r_cut; r_all ]
+    "pruned search timed fewer candidates than the full search"
     (r_cut.Autotune.candidates_timed <= r_all.Autotune.candidates_timed);
   p "baseline still timed under aggressive pruning" (r_cut.Autotune.candidates_timed >= 1);
   p_close "tuned values correct without the pre-filter" got_all mm_expected ~tol:approx_tol;

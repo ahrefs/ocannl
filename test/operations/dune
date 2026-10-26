@@ -6716,7 +6716,14 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules schedule_conv_gemm)
- (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  test_utils
+  ll_test
+  tune_counts)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -7014,7 +7021,7 @@
  ; meets: all leaves fit at 16, 32 and 64 bytes.
  (name cost_model_selection)
  (modules cost_model_selection)
- (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (libraries base ocannl stdio arrayjit.verdict ll_test tune_counts)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -7520,7 +7527,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules autotune_device_memory)
- (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (libraries base ocannl stdio arrayjit.verdict ll_test tune_counts)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -10572,6 +10579,30 @@
  (deps ocannl_config)
  (modules autotune_refusal_causes)
  (libraries base ocannl stdio stderr_capture arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1632: the count claims' gate (test/support/tune_counts.ml) and the report's re-timed
+; digest count it reads -- the gate's shape over synthetic reports, and a forced-contention search
+; whose equivalent seeds are re-timed, where a gated claim must skip, counted, and never pass.
+
+(test
+ (name tune_count_gate)
+ ; ocannl-backend: cc -- Context.cpu (); the forced refusals are backend-independent
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules tune_count_gate)
+ (libraries
+  base
+  ocannl
+  stdio
+  unix
+  fresh_process
+  stderr_capture
+  arrayjit.verdict
+  ll_test
+  fissioned_chain
+  tune_counts)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

@@ -1,0 +1,6 @@
+each count kind's gate departs exactly on the departures that move that count: true
+forced: the search refused windows and admitted none: true
+forced: an equivalent seed was re-timed instead of deduplicated: true
+forced: its search_done line carries the re-timed count: true
+forced: the child gating claims that would fail exits clean: true
+forced: each gated count claim is skipped as a recorded environment gap: true
