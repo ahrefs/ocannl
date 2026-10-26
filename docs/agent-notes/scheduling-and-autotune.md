@@ -2473,8 +2473,8 @@ files.
   candidates, replay, a stale entry's re-search (the baseline relinks from `base_opt`) and the
   store -- so a schedule always meets the code it was saved against; a bounded base under a
   blind-searched schedule is the mis-replay the swap exists to rule out. Gated on a node the
-  routine mentions carrying a bounds candidate and on the blind digest differing, so a call with
-  nothing folded pays no second lowering or lookup. The hit ships without the bounded folds, as the
+  routine mentions carrying a bounds candidate, then on a miss under the bounded key (read before
+  the blind lowering), so a call with no bounds pays nothing and a bounded hit no second lowering. The hit ships without the bounded folds, as the
   cold call that stored it did. `test/operations/tune_warm_cache_key` pins cold-search, warm
   replay, third replay over a fissioned crown, and a relu variant over the same ids that must
   search: drift present in both, keys apart.

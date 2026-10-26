@@ -7672,8 +7672,9 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
        that stored the winner shipped without too. Neither key is widened: each is still the digest
        of the code it names, so two bases that differ in anything but those folds keep apart. Gated
        on a node the routine mentions carrying a bounds candidate (nothing can fold otherwise, so
-       the blind lowering would be the base itself) and on a miss under the bounded key, so a call
-       with nothing to gain pays no second lowering and no extra lookup. *)
+       the blind lowering would be the base itself), then on a miss under the bounded key, checked
+       before the blind lowering: a call with no bounds pays nothing, and a warm bounded hit one
+       extra entry read but no second lowering. *)
     let blind_rebase =
       let bounds_proposed () =
         let ins, outs = Ir.Assignments.collect_nodes_guess_output comp.Ir.Assignments.asgns in
@@ -7686,7 +7687,8 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
         String.is_empty cache_dir
         || (not (SC.complete canon))
         || Option.is_none (key_of canon)
-        || not (bounds_proposed ())
+        || (not (bounds_proposed ()))
+        || stored ~digest:base_digest canon
       then None
       else
         match
@@ -7700,7 +7702,6 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
             let blind_canon = SC.canonicalize ~static_indices blind_opt in
             let blind_digest = SC.digest blind_canon in
             if String.equal blind_digest base_digest || not (SC.complete blind_canon) then None
-            else if stored ~digest:base_digest canon then None
             else if stored ~digest:blind_digest blind_canon then
               Some (blind_opt, blind_canon, blind_digest)
             else None
