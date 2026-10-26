@@ -5,7 +5,7 @@ odd: the refused call is counted apart: true
 odd: the relative spread is (hi - lo) / median: true
 even: ms=2.500000 ms_lo=1.000000 ms_hi=4.000000 ms_retimed=4/4
 even: the median is the mean of the middle two: true
-unstated: median 2, admitted 3 of 6
+unstated: median 2.000000, admitted 3 of 6
 unstated: below min_readings the range is NaN: true
 unstated: so is the relative spread: true
 unstated: the median is still the admitted readings': true
@@ -16,7 +16,7 @@ drift: the unpaired ranges overlap, so a range-against-range reading could not r
 straddle: r=1.000 r_lo=0.500 r_hi=1.500 r_resolved=false
 straddle: pairs on both sides of 1 are within the spread: true
 straddle: the ratio is the paired median: true
-few: pairs 3, median 0.5
+few: pairs 3, median 5.000000e-1
 few: a pair with a refused side does not count: true
 few: below min_readings pairs no ratio is resolved, all below 1 or not: true
 env: an even count of at least min_readings is taken: true

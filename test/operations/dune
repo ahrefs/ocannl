@@ -8003,7 +8003,7 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules bench_retime_spread)
- (libraries base stdio unix bench_retime arrayjit.verdict))
+ (libraries base stdio unix bench_retime test_utils arrayjit.verdict))
 
 ; gh-ocannl-655: the provenance guarantees of Test_utils.Generated, which ~30 tests' structural
 ; assertions now rest on. Every one of those guarantees fires only when something has already gone

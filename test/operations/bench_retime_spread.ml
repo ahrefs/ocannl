@@ -24,6 +24,12 @@ open Stdio
 open Verdict.Claims
 module R = Bench_retime
 
+(* The test's own floats go through the portable printer (AGENTS.md); the runner-format lines
+   ([spread_fields], [ratio_fields]) print the module's fixed-point spelling, which is what they pin
+   -- every scripted value is a small dyadic, exact at those precisions, so no rounding tie reaches
+   the golden. *)
+let fl v = Test_utils.concise_float ~prec:6 v
+let () = Test_utils.set_binary_stdout ()
 let some = Array.map ~f:Option.some
 
 let () =
@@ -37,7 +43,8 @@ let () =
   printf "even: %s\n" (R.spread_fields ~name:"ms" e);
   p "even: the median is the mean of the middle two" Float.(e.R.ms = 2.5);
   let u = R.spread_of [| Some 2.; None; Some 1.; None; Some 3.; None |] in
-  printf "unstated: median %g, admitted %d of %d\n" u.R.ms u.R.admitted (u.R.admitted + u.R.refused);
+  printf "unstated: median %s, admitted %d of %d\n" (fl u.R.ms) u.R.admitted
+    (u.R.admitted + u.R.refused);
   p "unstated: below min_readings the range is NaN"
     (u.R.admitted < R.min_readings && Float.is_nan u.R.lo_ms && Float.is_nan u.R.hi_ms);
   p "unstated: so is the relative spread" (Float.is_nan (R.rel_spread u));
@@ -69,7 +76,7 @@ let () =
       ~num:[| Some 0.5; None; Some 0.5; Some 0.5; None; Some 0.5 |]
       ~den:[| Some 1.; Some 1.; None; Some 1.; Some 1.; Some 1. |]
   in
-  printf "few: pairs %d, median %g\n" few.R.pairs few.R.ratio;
+  printf "few: pairs %d, median %s\n" few.R.pairs (fl few.R.ratio);
   p "few: a pair with a refused side does not count" (few.R.pairs = 3);
   p "few: below min_readings pairs no ratio is resolved, all below 1 or not"
     ((not few.R.resolved) && Float.is_nan few.R.ratio_lo && Float.is_nan few.R.ratio_hi)
