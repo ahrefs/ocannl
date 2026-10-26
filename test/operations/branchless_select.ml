@@ -24,10 +24,10 @@
    runs far out of range on the inactive lanes) keep [?:]; a value select over an index guard blends
    outside and keeps the inner guard. Executed with the hazardous reads inactive. - Assembly, on
    cc's own compiler and kernel flags: no conditional branch is attributed to a select's source
-   lines, and those lines carry instructions. - The realistic composition: a ReLU feeding a 2x2 max
-   pool, backward through the default placements (the selects inlined into their consumers) — the
-   gradient emits the blend and equals, bitwise, both an OCaml reference and the same program with
-   inlining off. *)
+   lines, and those lines carry instructions (the realistic leg's census is printed only). - The
+   realistic composition: a ReLU feeding a 2x2 max pool, backward through the default placements
+   (the selects inlined into their consumers) — the gradient emits the blend and equals, bitwise,
+   both an OCaml reference and the same program with inlining off. *)
 
 open Base
 open Ocannl
@@ -459,12 +459,10 @@ let () =
     let text = kernel_text "bs_pool_inlined" in
     p claim (has text blend_marker)
   else skipped claim;
-  (* Not discriminating against the short-circuiting spelling at this size — the base compiler
-     already if-converts these few unrolled loads — so the two hand-built legs above carry the
-     assembly claim; this one keeps the realistic composition branch-free as it grows. *)
-  let claim = "pool backward: no conditional branch on the select's lines (host compiler)" in
-  (* Anchored on the blend calls alone (and the helper's line, where an inlined select is
-     attributed): the backward's own index guards keep their [?:] by design, and gcc branches on
-     them (CI's ubuntu leg). *)
-  if on_cc then p claim (compiled_branch_free ~patterns:[ "ocannl_sel_" ] "bs_pool_inlined")
-  else skipped claim
+  (* The realistic kernel's branch census is printed, not claimed: it cannot carry a claim. On clang
+     it does not discriminate against the short-circuiting spelling at this size (the base compiler
+     already if-converts these few unrolled loads), and on gcc (CI's x86 leg) the select's closing
+     line also carries the tail of the enclosing index guard's [?:], which branches by design, so
+     DWARF attribution cannot separate the two. The hand-built legs above, one select per kernel,
+     carry the assembly claim on both compilers. *)
+  if on_cc then ignore (compiled_branch_free ~patterns:[ "ocannl_sel_" ] "bs_pool_inlined" : bool)
