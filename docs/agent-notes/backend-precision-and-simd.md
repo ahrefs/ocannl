@@ -2210,6 +2210,22 @@ files.
   subnormals in storage (2^-130 reads back 0 through any op), which is a storage property, not
   these functions'. `unary_math_special_values` pins the values at f32, half and bf16, Metal-gated.
 
+- **Metal's `exp`/`log`/`exp2`/`log2` render bare: IEEE on the special values, with two recorded
+  departures** (gh-ocannl-1515; same probe, `metal_f32_math_probe.exe exp log exp2 log2`, M4 Max).
+  Under both policies, plain and `precise::` alike: ±0, ±inf, NaN and negative inputs to the logs
+  give the IEEE results, and `exp2`/`log2` are bitwise their `precise::` forms (`log` within 3.9
+  ulps, `precise::` 2.4). The fast `exp` is up to 59.5 ulps off at large |x| (≈ 0.7 |x|; 28 at
+  31.9; `precise::exp` 1.4, at 1.4x on the ALU-bound arm, `precise::log` 1.75x) -- the shape of
+  CUDA's `__expf` contract (`2 + 1.173 |x|`), so it is the fast-math trade, not a domain bug: a
+  softmax's `exp(x - max)` is accurate where it contributes. And all four flush f32 subnormals:
+  `log`/`log2` read a subnormal input as zero of its sign (`log(±2^-140) = -inf`, so a negative
+  subnormal gives -inf, not NaN), `exp`/`exp2` return +0 for a subnormal result -- under
+  `precise::` and the legacy `fastMathEnabled=false` too, so no spelling avoids it (`sin`/`cos`/
+  precise `tanh` keep subnormals), and CUDA's `--use_fast_math` implies `--ftz=true` alike: it
+  moves a cross-entropy's `log(p) = -inf` threshold from 2^-149 to 2^-126, no more. Half results
+  stay subnormal-capable (the f32 intermediate is normal). No helper was taken; the test bounds
+  `exp` by `2 + |x|` ulps and accepts a result at the flushed input or flushed f32 result.
+
 - A float power whose exponent is only known at run time renders on CUDA and HIP through
   `ocannl_pow_f32`/`ocannl_pow_f64` (`Builtins_cc.cuda_like_power_builtins`, gh-ocannl-1240), half
   and bf16 widened into the f32 one. CUDA's `--use_fast_math` lowers `powf` to

@@ -1,3 +1,3 @@
-Metal f32 sin, cos and tanh: NaN where f64 gives NaN, the signed zero where it gives zero, otherwise within the stated ulps of f64: true
-Metal half sin, cos and tanh: NaN where f64 gives NaN, the signed zero where it gives zero, otherwise within the stated ulps of f64: true
-Metal bfloat16 sin, cos and tanh: NaN where f64 gives NaN, the signed zero where it gives zero, otherwise within the stated ulps of f64: true
+Metal f32 sin, cos, tanh, exp, log, exp2 and log2: NaN where f64 gives NaN, the signed zero or infinity where f64 rounds to one, otherwise within the stated ulps of f64 -- for exp, log, exp2 and log2, of f64 at the input or the f32 result flushed from subnormal to zero: true
+Metal half sin, cos, tanh, exp, log, exp2 and log2: NaN where f64 gives NaN, the signed zero or infinity where f64 rounds to one, otherwise within the stated ulps of f64 -- for exp, log, exp2 and log2, of f64 at the input or the f32 result flushed from subnormal to zero: true
+Metal bfloat16 sin, cos, tanh, exp, log, exp2 and log2: NaN where f64 gives NaN, the signed zero or infinity where f64 rounds to one, otherwise within the stated ulps of f64 -- for exp, log, exp2 and log2, of f64 at the input or the f32 result flushed from subnormal to zero: true
