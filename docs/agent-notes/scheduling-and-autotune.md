@@ -858,8 +858,15 @@ files.
   `Indexing.validate_bound_value` names an unassigned one — at `Context.check_launch_bindings` before
   dispatch, and again at each backend's launch-side read (cc's `work`, the GPU `Static_idx` arms) for
   a task scheduled around `Context.run`. Library code that runs a routine nobody outside can bind
-  writes 0 itself (`Train.init_params`/`run_once`, `Parallel.schedule`, `Autotune.set_test_bindings`
-  for an unranged one); a new such site must too. `test/operations/unassigned_launch_param` pins it.
+  must not write 0 for a RANGED parameter (a batch-slice index, a ranged static index, an extent:
+  0 is the first slice, the silent case gh-ocannl-940 refuses, gh-ocannl-1629). It takes the
+  caller's values through `Indexing.resolve_launch_values` — unranged left out at 0, ranged left
+  out refused before anything compiles, `Train.ranged_launch_param` as the predicate since a slice
+  role is still pending in `Row` until lowering commits it — and `copy_launch_values` into each routine it links
+  (`Train.run_once`'s `~launch_values`, `Parallel.data_parallel`'s plus the handle's
+  `set_launch_value`). Only a run whose values cannot matter writes 0 wholesale (`Train.init_params`
+  runs once per initialization; `Autotune.set_test_bindings` times an unranged one at 0); a new
+  such site must too. `test/operations/unassigned_launch_param` and `once_launch_values` pin it.
 - **`static_properties` has one shape across the backends, and it is a contract**
   (gh-ocannl-710): `(<backend>_devices (device (key value) ...) (device ...) ...)` — a group atom
   naming the dump, then exactly one `Sexp.message`-shaped entry per device, in ordinal order, each

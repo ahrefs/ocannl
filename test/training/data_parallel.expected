@@ -10,3 +10,7 @@ driver routes per-shard seed into RNG: true
 shards seeded distinctly (base_seed + i): true
 global random-seed singleton preserved across data_parallel: true
 multi-step via set_batch ok: true
+data_parallel with a ranged batch index given no value is refused: true
+that refusal names the batch index, as one: true
+data_parallel runs every shard at the launch value given: w = 4.25: true
+set_launch_value moves the next step to its value: w = 1.4375: true

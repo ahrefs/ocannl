@@ -75,6 +75,31 @@ val validate_lowered_bindings : ?width64:bool -> lowered_bindings -> unit
 (** {!validate_bound_value} over every parameter, reporting all the unassigned ones in one message
     first. *)
 
+val set_launch_value :
+  ?width64:bool -> caller:string -> lowered_bindings -> static_symbol -> int -> unit
+(** [set_launch_value ~caller bs sym v] validates [v] ({!validate_bound_value}) and writes it into
+    [sym]'s cell of [bs]; a symbol [bs] does not bind is refused, naming [caller]. *)
+
+val resolve_launch_values :
+  ?width64:bool ->
+  caller:string ->
+  hint:string ->
+  ranged:(static_symbol -> string option) ->
+  (static_symbol * int) list ->
+  static_symbol list ->
+  lowered_bindings
+(** The launch values of a routine that a library entry point compiles and runs on the caller's
+    behalf (gh-ocannl-1629): a fresh cell per symbol, the caller's values written through
+    {!set_launch_value} (a symbol given twice is refused), then every parameter left unassigned set
+    to 0 -- unless [ranged] names its kind (a batch-slice index, a ranged static index, a symbolic
+    extent), which is refused instead, naming each one and its kind and ending with [hint]: 0 is its
+    first slice or empty extent, the silent default gh-ocannl-940 refuses. Hand the result to
+    {!copy_launch_values} once the routine is linked. *)
+
+val copy_launch_values : from:lowered_bindings -> lowered_bindings -> unit
+(** [copy_launch_values ~from bs] writes into each cell of [bs] the value [from] holds for the same
+    symbol; every symbol of [bs] must be bound by [from]. *)
+
 val dims_to_string : ?with_axis_numbers:bool -> int array -> string
 
 type affine_index = private { symbols : (int * symbol) list; offset : int }

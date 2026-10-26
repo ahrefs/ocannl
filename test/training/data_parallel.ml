@@ -190,6 +190,55 @@ let seed_singleton_preserved () : bool =
     ();
   phys_equal before (Tensor.get_random_seed ())
 
+(* gh-ocannl-1629: [~bindings] works. Each shard slices its two rows with a batch index [i]: a
+   ranged parameter given no value is refused, naming it, before anything is built; given a value
+   through [~launch_values] every shard's routines run at it, and the handle's [set_launch_value]
+   moves it between steps. The rows a step trained on are read off [w]: with lr = 1/16 and the
+   shards' rows x = (1, 2) and (3, 4) of y = 2x, a step from w at row i moves w by -(1/16) * 2 *
+   (x_a^2 + x_b^2) * (w - 2) over the two shards' row-i inputs -- 40 for i = 1, 20 for i = 0. Dyadic
+   throughout, so the pins are exact: w = 0.5 -> 4.25 (i = 1) -> 1.4375 (i = 0); a run that ignored
+   the value (slice 0 both times: 2.375, 1.90625) or the move (slice 1 both times: -1.375) misses
+   them. *)
+let sliced_sym = ref None
+
+let sliced_run ?launch_values ~second () =
+  Tensor.unsafe_reinitialize ();
+  Utils.settings.fixed_state_for_init <- Some 1;
+  let i, bindings = IDX.get_static_symbol ~static_range:2 IDX.empty in
+  sliced_sym := Some i;
+  let learning_rate = NTDSL.param ~value:0.0625 "lr" () in
+  let loss_of x y =
+    let w = TDSL.param ~values:[| 0.5 |] "w" ~output_dims:[ 1 ] () in
+    [%op (((w *. (x @| i)) - (y @| i)) *. ((w *. (x @| i)) - (y @| i))) ++ "...|... => |->0"]
+  in
+  Parallel.data_parallel ~backend_name:"cc" ~reduction:Parallel.Sum ~n_shards:2 ~bindings
+    ?launch_values:(Option.map launch_values ~f:(fun v -> [ (i, v) ]))
+    ~learning_rate ~inputs:(inputs ()) ~targets:(targets ()) ~loss_of
+    ~f:(fun h ->
+      let read () = only_value (h.Parallel.read_values h.Parallel.owner_params.(0)) in
+      h.Parallel.step ();
+      let w1 = read () in
+      h.Parallel.set_launch_value i second;
+      h.Parallel.step ();
+      (i, w1, read ()))
+    ()
+
+let sliced_case () =
+  (match sliced_run ~second:0 () with
+  | _ -> Verdict.p "data_parallel with a ranged batch index given no value is refused" false
+  | exception Utils.User_error msg ->
+      Stdio.eprintf "refused: %s (not part of the golden)\n%!" msg;
+      Verdict.p "data_parallel with a ranged batch index given no value is refused" true;
+      Verdict.p "that refusal names the batch index, as one"
+        (String.is_substring msg ~substring:"(batch-slice index,"
+        && Option.exists !sliced_sym ~f:(fun i ->
+            String.is_substring msg
+              ~substring:(Ir.Indexing.symbol_ident i.Ir.Indexing.static_symbol ^ " "))));
+  let _, w1, w2 = sliced_run ~launch_values:1 ~second:0 () in
+  Stdio.eprintf "sliced data_parallel: w1=%g w2=%g (not part of the golden)\n%!" w1 w2;
+  Verdict.p "data_parallel runs every shard at the launch value given: w = 4.25" Float.(w1 = 4.25);
+  Verdict.p "set_launch_value moves the next step to its value: w = 1.4375" Float.(w2 = 1.4375)
+
 let () =
   let p1 = run ~n_shards:1 () in
   let p2 = run ~n_shards:2 () in
@@ -214,4 +263,5 @@ let () =
   Verdict.p "shards seeded distinctly (base_seed + i)" (shards_seeded_distinctly ());
   Verdict.p "global random-seed singleton preserved across data_parallel"
     (seed_singleton_preserved ());
-  Verdict.p "multi-step via set_batch ok" (multistep_ok ())
+  Verdict.p "multi-step via set_batch ok" (multistep_ok ());
+  sliced_case ()

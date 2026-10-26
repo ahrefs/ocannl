@@ -52,6 +52,9 @@ type handle = {
       (** The RNG seed assigned to each shard ([shard_seeds.(i) = base_seed + i]). These are the
           exact values passed to [set_random_seed] when building the shards, so distinct entries
           witness that the per-shard RNG seeding diverges. *)
+  set_launch_value : Ir.Indexing.static_symbol -> int -> unit;
+      (** Changes a launch parameter of [bindings] for every routine scheduled from now on (the next
+          {!step}, say); refuses a symbol [bindings] does not bind, or an out-of-range value. *)
 }
 (** A handle to a live data-parallel training session. All raw-backend state (the shared backend
     module, the per-shard streams/contexts, the parameter replicas, and the compiled per-shard /
@@ -64,6 +67,7 @@ val data_parallel :
   ?weight_decay:float ->
   ?momentum:float ->
   ?base_seed:int ->
+  ?launch_values:(Ir.Indexing.static_symbol * int) list ->
   n_shards:int ->
   bindings:Ir.Indexing.unit_bindings ->
   learning_rate:Tensor.t ->
@@ -91,4 +95,9 @@ val data_parallel :
     differently per shard while the data slices are themselves distinct. The seed mutation is scoped
     by [Tensor.with_saved_random_seed], so the caller's global random seed is restored on return.
 
-    No routine is handed back, so every launch parameter of [bindings] runs at 0 (gh-ocannl-940). *)
+    Launch parameters (gh-ocannl-1629): every routine runs each parameter of [bindings] at the value
+    [launch_values] gives it, changed between steps by the handle's [set_launch_value]. An unranged
+    parameter left out runs at 0; a RANGED one left out (a batch-slice index, a ranged static index,
+    a symbolic extent) is refused, naming it, before anything is built: 0 would silently run only
+    the first slice (the gh-ocannl-940 contract). A value for a symbol [bindings] does not bind, or
+    given twice, is refused too. *)

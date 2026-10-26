@@ -339,6 +339,13 @@ val to_routine :
     {!Context.compile} and {!run_once}: chain it into the next compile instead of reaching into
     [routine.context] for the same value. A caller that only wants the routine can [snd] this. *)
 
+val ranged_launch_param : Ir.Indexing.static_symbol -> string option
+(** The kind of a launch parameter that has a range, so that 0 is not a neutral value for it, and
+    [None] for an unranged one: a batch-slice role, which shape inference claims as soon as the
+    slicing tensor is built (its range may be inferred), or a declared [static_range] (a symbolic
+    extent, a ranged static index). The [ranged] argument of [Ir.Indexing.resolve_launch_values]
+    (gh-ocannl-1629). *)
+
 val init_params :
   ?reinit_all:bool -> Context.t -> Ir.Indexing.unit_bindings -> Tensor.t -> Context.t
 (** [init_params] initializes the parameters of [t], via running their forward code or copying from
@@ -351,6 +358,7 @@ val run_once :
   ?skip_init:bool ->
   ?reinit_all:bool ->
   ?bindings:Ir.Indexing.unit_bindings ->
+  ?launch_values:(Ir.Indexing.static_symbol * int) list ->
   ?budget:Memory_budget.t ->
   ?max_candidates:int ->
   ?budget_report:(Memory_budget.plan -> unit) ->
@@ -362,8 +370,12 @@ val run_once :
     the context. If [skip_init] is true (false by default), no initialization is performmed. If
     [reinit_all] is true (false by default), all parameters are reinitialized, otherwise only the
     parameters that are not in [ctx.ctx_buffers] are initialized. The routine of [f t] runs once,
-    with every launch parameter of [bindings] at 0; to run it at other values, compile it with
-    {!to_routine} and assign them through [Context.bindings] (gh-ocannl-940).
+    with each launch parameter of [bindings] at the value [launch_values] gives it; an unranged one
+    it leaves out runs at 0, and a RANGED one it leaves out (a batch-slice index, a ranged static
+    index, a symbolic extent) is refused, naming it, before anything is initialized or compiled: 0
+    would silently run only the first slice (gh-ocannl-1629, the gh-ocannl-940 contract). To run
+    every value of a range, compile with {!to_routine} and iterate with {!sequential_loop}. A value
+    for a symbol [bindings] does not bind, or given twice, is refused too.
 
     If [output_cd_file] is true, the global setting [output_debug_files_in_build_directory] must be
     true, and the update code is output to a file before shape inference potentially crashes at
@@ -374,6 +386,7 @@ val forward_once :
   ?skip_init:bool ->
   ?reinit_all:bool ->
   ?bindings:Ir.Indexing.unit_bindings ->
+  ?launch_values:(Ir.Indexing.static_symbol * int) list ->
   ?budget:Memory_budget.t ->
   ?max_candidates:int ->
   ?budget_report:(Memory_budget.plan -> unit) ->
@@ -387,6 +400,7 @@ val update_once :
   ?skip_init:bool ->
   ?reinit_all:bool ->
   ?bindings:Ir.Indexing.unit_bindings ->
+  ?launch_values:(Ir.Indexing.static_symbol * int) list ->
   ?budget:Memory_budget.t ->
   ?max_candidates:int ->
   ?budget_report:(Memory_budget.plan -> unit) ->
