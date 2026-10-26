@@ -10312,7 +10312,8 @@
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
 
 ; gh-ocannl-1435: Metal sin, cos and tanh are IEEE on special inputs and accurate near zero and at
-; large magnitudes, at f32, half and bfloat16, under the fast math functions.
+; large magnitudes, at f32, half and bfloat16, under the fast math functions; gh-ocannl-1515: exp,
+; log, exp2 and log2 too, up to a recorded flush of f32 subnormals.
 
 (test
  (name unary_math_special_values)

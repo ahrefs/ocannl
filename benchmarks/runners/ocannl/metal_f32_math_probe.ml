@@ -1,5 +1,6 @@
 (* What do Metal's f32 [sin], [cos] and [tanh] return on special inputs, near zero and at large
-   magnitudes, and what does each candidate spelling cost? gh-ocannl-1435.
+   magnitudes, and what does each candidate spelling cost? gh-ocannl-1435. Since gh-ocannl-1515 also
+   [exp], [log], [exp2] and [log2], in their [plain] and [precise::] spellings only.
 
    Standalone like [metal_half_math_probe]: it links Metal, ctypes and Arrayjit's pure helpers, not
    OCANNL. Each op is compiled in several spellings -- [plain] (whatever the policy's functions
@@ -12,16 +13,19 @@
 
    Three tables. Special inputs (signed zeros, infinities, NaN, f32 subnormals): the result bits.
    Accuracy: the worst error in f32 ulps against an f64 reference per |x| band, over the inputs
-   whose reference is finite (a NaN or infinite result there counts as [inf]), with the worst input
-   where it exceeds 4 ulps, over a sample of 2048 mantissas from every binade of both signs (1048576
-   inputs), and how many results differ bitwise from [precise::]. Cost: GPU-clock medians, rotated
-   interleaved repeats, relative to [plain] under the same policy, for 1024 calls per thread on
-   advancing inputs summed into an accumulator (ALU-bound throughput; the calls do not depend on
-   each other) and for one call per element over 16M elements (streaming).
+   whose reference rounds to a finite f32 (a NaN or infinite result there counts as [inf]), with the
+   worst input where it exceeds 4 ulps, over a sample of 2048 mantissas from every binade of both
+   signs (1048576 inputs); how many results differ bitwise from [precise::]; and, kept out of the
+   bands, how many subnormal inputs or results are more than 4 ulps off (a flush). Cost: GPU-clock
+   medians, rotated interleaved repeats, relative to [plain] under the same policy, for 1024 calls
+   per thread on advancing inputs summed into an accumulator (ALU-bound throughput; the calls do not
+   depend on each other) and for one call per element over 16M elements (streaming).
 
    Run on a Metal Mac (macOS 15+) with:
 
-   dune exec benchmarks/runners/ocannl/metal_f32_math_probe.exe *)
+   dune exec benchmarks/runners/ocannl/metal_f32_math_probe.exe [OP...]
+
+   naming the ops to probe (all of them by default). *)
 
 module Me = Metal
 
@@ -42,13 +46,30 @@ let forms op =
   @
   match op with
   | "tanh" -> [ ("small-x", Printf.sprintf "(fabs(x) < 0x1p-12f ? x : %s)" plain) ]
+  | "exp" | "log" | "exp2" | "log2" -> []
   | _ ->
       [
         ("isfinite", Printf.sprintf "(isfinite(x) ? %s : x - x)" plain);
         ("range", Printf.sprintf "(fabs(x) < 0x1p22f ? %s : precise::%s(x))" plain op);
       ]
 
-let ops = [ ("sin", Float.sin); ("cos", Float.cos); ("tanh", Float.tanh) ]
+let all_ops =
+  [
+    ("sin", Float.sin);
+    ("cos", Float.cos);
+    ("tanh", Float.tanh);
+    ("exp", Float.exp);
+    ("log", Float.log);
+    ("exp2", Float.exp2);
+    ("log2", Float.log2);
+  ]
+
+(* The ops named on the command line, or all of them. *)
+let ops =
+  match List.tl (Array.to_list Sys.argv) with
+  | [] -> all_ops
+  | names -> List.filter (fun (op, _) -> List.mem op names) all_ops
+
 let kname op i = Printf.sprintf "%s_%d" op i
 
 let source =
@@ -72,7 +93,23 @@ kernel void t%s(device const float* in [[buffer(0)]], device float* out [[buffer
          ops)
 
 let specials =
-  [ -0.0; 0.0; Float.infinity; Float.neg_infinity; Float.nan; 0x1p-140; -0x1p-140; 0x1p-20 ]
+  [
+    -0.0;
+    0.0;
+    Float.infinity;
+    Float.neg_infinity;
+    Float.nan;
+    0x1p-140;
+    -0x1p-140;
+    0x1p-20;
+    1.0;
+    -1.0;
+    2.0;
+    88.75;
+    -103.5;
+    128.0;
+    -150.0;
+  ]
 
 (* 2048 evenly spread mantissas from each of the 256 exponent fields, both signs. *)
 let sample =
@@ -186,12 +223,14 @@ let () =
     policies;
   Printf.printf
     "\n\
-     worst f32 ulps vs f64 per |x| band over %d sampled inputs (finite results), and the count of \
-     results bitwise different from precise:: under the same policy (NaNs equal):\n"
+     worst f32 ulps vs f64 per |x| band over %d sampled inputs (finite results, subnormal inputs \
+     and results aside), the count of results bitwise different from precise:: under the same \
+     policy (NaNs equal), and how many of the subnormal inputs or results are more than 4 ulps off \
+     (a flush):\n"
     n;
-  Printf.printf "  %-18s %-5s %-9s %s %8s\n" "policy" "op" "form"
+  Printf.printf "  %-18s %-5s %-9s %s %8s %s\n" "policy" "op" "form"
     (String.concat " " (List.map (fun (b, _) -> Printf.sprintf "%11s" b) bands))
-    "!=precise";
+    "!=precise" "subnormal-off";
   let same a b =
     Int32.equal (Int32.bits_of_float a) (Int32.bits_of_float b) || (Float.is_nan a && Float.is_nan b)
   in
@@ -204,12 +243,22 @@ let () =
             (fun i (form, _) ->
               let r = run label (kname op i) sample in
               let worst = Array.make (List.length bands) (0.0, 0) in
-              let differ = ref 0 in
+              let differ = ref 0 and subnormal = ref 0 and flushed = ref 0 in
               Array.iteri
                 (fun j x ->
                   if not (same r.(j) precise.(j)) then incr differ;
                   let want = reference x in
-                  if Float.is_finite want then
+                  (* Rounded once to f32: past the f32 range the reference is infinite, so not an
+                     error of the function. *)
+                  let want32 = Int32.float_of_bits (Int32.bits_of_float want) in
+                  let is_subnormal v = v <> 0.0 && Float.abs v < 0x1p-126 in
+                  if Float.is_finite want32 && (is_subnormal x || is_subnormal want32) then (
+                    (* Subnormal inputs or results are counted apart from the bands, so a flush to
+                       zero does not hide the accuracy of the band they fall in. *)
+                    incr subnormal;
+                    if (not (same r.(j) want32)) && Float.abs (r.(j) -. want) > 4.0 *. f32_ulp want
+                    then incr flushed)
+                  else if Float.is_finite want32 then
                     (* A non-finite result for a finite reference is an unbounded error. *)
                     let err =
                       if Float.is_finite r.(j) then Float.abs (r.(j) -. want) /. f32_ulp want
@@ -220,10 +269,10 @@ let () =
                         if inside (Float.abs x) && err > fst worst.(b) then worst.(b) <- (err, j))
                       bands)
                 sample;
-              Printf.printf "  %-18s %-5s %-9s %s %8d\n" label op form
+              Printf.printf "  %-18s %-5s %-9s %s %8d %d/%d\n" label op form
                 (String.concat " "
                    (Array.to_list (Array.map (fun (w, _) -> Printf.sprintf "%11.3f" w) worst)))
-                !differ;
+                !differ !flushed !subnormal;
               Array.iter
                 (fun (w, j) ->
                   if w > 4.0 then
