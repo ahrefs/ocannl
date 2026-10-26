@@ -186,7 +186,7 @@ alias family, slow test or golden format.
 - `debug_log_from_routines=true` - enables runtime logging from kernels aka. routines
 - `debug_log_to_stream_files=true` - writes logs from kernels/routines to `log_files/<exe-name>/<backend>-<device>-<stream>.log`
 - `clean_up_build_files_on_startup=false` and `clean_up_log_files_on_startup=false` - preserve debug files between runs
-- CUDA routine logs may require `Utils.capture_stdout_logs` (see README)
+- CUDA/HIP routine logs need `Utils.capture_stdout_logs` unless `debug_log_to_stream_files=true` (see README)
 
 **Available Backends**:
 - `cc` (the default) combines cc_backend.ml with the scheduler `Sync` in schedulers.ml; kernel-level CPU parallelism is automatic (pool-rendered Grid loops)

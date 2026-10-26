@@ -1470,16 +1470,26 @@ end = struct
       in
       set_ctx @@ ctx_of prior_context;
       [%log "launching the kernel"];
-      (if Utils.debug_log_from_routines () then
-         Utils.add_log_processor ~prefix:log_id_prefix @@ fun log_contents ->
-         Utils.log_debug_routine_logs ~log_contents ~stream_name);
       (* Launch dimensions derived from hardware-annotated loops (axis-types proposal §4);
          all-Serial kernels launch 1x1x1, as before. Static [__shared__] declarations do not use the
          dynamic pool, so [shared_mem_bytes] stays 0. *)
-      S.launch_kernel func ~grid_dim_x:launch.Low_level.grid.(0)
-        ~grid_dim_y:launch.Low_level.grid.(1) ~grid_dim_z:launch.Low_level.grid.(2)
-        ~block_dim_x:launch.Low_level.block.(0) ~block_dim_y:launch.Low_level.block.(1)
-        ~block_dim_z:launch.Low_level.block.(2) ~shared_mem_bytes:0 device.runner args;
+      let launch_kernel () =
+        S.launch_kernel func ~grid_dim_x:launch.Low_level.grid.(0)
+          ~grid_dim_y:launch.Low_level.grid.(1) ~grid_dim_z:launch.Low_level.grid.(2)
+          ~block_dim_x:launch.Low_level.block.(0) ~block_dim_y:launch.Low_level.block.(1)
+          ~block_dim_z:launch.Low_level.block.(2) ~shared_mem_bytes:0 device.runner args
+      in
+      if Utils.debug_log_from_routines () then
+        (* The routine's log lines are device-side [printf]: under [debug_log_to_stream_files] the
+           window keeps them off stdout even when no caller opened one, draining the device before
+           it closes (the debug-only synchronization [await] uses, gh-ocannl-1636). *)
+        Utils.routine_log_window
+          ~drain:(fun () -> H.Context.synchronize ())
+          (fun () ->
+            Utils.add_log_processor ~prefix:log_id_prefix (fun log_contents ->
+                Utils.log_debug_routine_logs ~log_contents ~stream_name);
+            launch_kernel ())
+      else launch_kernel ();
       [%log "kernel launched"]
     in
     Task.Task

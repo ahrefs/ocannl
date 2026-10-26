@@ -1,0 +1,4 @@
+the run logs its routines to stream files: true
+the logged routine computes its values: true
+the logged run writes nothing to stdout: true
+the logged run's lines reach its stream file: true

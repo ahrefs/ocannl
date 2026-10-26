@@ -215,6 +215,10 @@ let exempt_zero_reference_exports =
     "Tnode.validate_padded_numel_contract";
     "Utils.artifacts_subdir";
     "Utils.captured_log_processors";
+    (* gh-ocannl-1636: the capture window's body and the count of open windows that
+       [Utils.routine_log_window] reads; internal to the capture, not consumer API. *)
+    "Utils.capture_stdout_logs_window";
+    "Utils.stdout_capture_depth";
     "Utils.config_table_of_lines";
     (* gh-ocannl-604: bootstrap resolution and the sourced values carried from startup to its
        deferred trace are intentionally internal, replacing the old unsourced bootstrap reader.
@@ -258,14 +262,12 @@ let exempt_zero_reference_exports =
     "Utils.filename_concat";
     "Utils.filename_of_parts";
     "Utils.filename_parts";
-    "Utils.flush_c_streams";
     "Utils.get_debug_output_channel";
     "Utils.header_sep";
     "Utils.input_line";
     "Utils.input_scan_line";
     "Utils.!@";
     "Utils.log_config_sourcing";
-    "Utils.log_files_dir";
     "Utils.log_trace_tree";
     "Utils.never_capture_stdout";
     "Utils.original_log_level";

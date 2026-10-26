@@ -3396,7 +3396,12 @@ let input_line chan =
   ( n > 0,
     String.chop_suffix_if_exists ~suffix:"\n" @@ String.chop_suffix_if_exists line ~suffix:"\r\n" )
 
-let capture_stdout_logs arg =
+(* How many [capture_stdout_logs] calls are running. A logged GPU launch inside one leaves its
+   device-side printf to that window; outside all of them, [routine_log_window] opens one of its own
+   (gh-ocannl-1636). *)
+let stdout_capture_depth = Atomic.make 0
+
+let capture_stdout_logs_window arg =
   if never_capture_stdout () || not (debug_log_from_routines ()) then arg ()
   else (
     Stdlib.flush Stdlib.stdout;
@@ -3512,6 +3517,33 @@ let capture_stdout_logs arg =
         ~finally:(fun () -> captured_log_processors := [])
     else captured_log_processors := [] (* Clear processors if reader failed *);
     result)
+
+let capture_stdout_logs arg =
+  Atomic.incr stdout_capture_depth;
+  Exn.protect
+    ~finally:(fun () -> Atomic.decr stdout_capture_depth)
+    ~f:(fun () -> capture_stdout_logs_window arg)
+
+(** [routine_log_window ~drain launch] runs a logged CUDA or HIP routine's [launch] -- which
+    registers the routine's log processor and launches its kernel -- so that, while
+    [debug_log_to_stream_files] is on, the kernel's device-side [printf] never reaches stdout
+    (gh-ocannl-1636). Those runtimes write a kernel's [printf] to process stdout at whichever
+    synchronization point, later launch or blocking copy comes next, and only a
+    [capture_stdout_logs] window hands the lines to the processor that writes the stream file. So
+    outside every window it opens one around [launch] followed by [drain], the synchronization that
+    empties the device's printf buffer, and every line of this launch is in the stream file when it
+    returns. Inside a caller's window it only runs [launch]: that window collects the lines, as
+    before. With the key off the lines are relogged through the debug trace, which needs the
+    caller's window, as before; [never_capture_stdout] still turns every capture off. *)
+let routine_log_window ~drain launch =
+  if
+    Atomic.get stdout_capture_depth > 0
+    || not (get_global_flag ~default:false ~arg_name:"debug_log_to_stream_files")
+  then launch ()
+  else
+    capture_stdout_logs (fun () ->
+        launch ();
+        drain ())
 
 let log_debug_routine_logs ~log_contents ~stream_name =
   if get_global_flag ~default:false ~arg_name:"debug_log_to_stream_files" then
