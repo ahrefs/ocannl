@@ -89,9 +89,71 @@ type execution_ledger = {
   fresh_writes : Buffer_key.t list Hashtbl.M(Int).t;
       (** Per routine id, the [written_buffers] entries the routine's latest {!run} introduced —
           what [rollback_execution] withdraws for a run known not to have written. *)
+  mutable observed_tokens : int Map.M(Buffer_key).t;
+      (** For each device-wide constant buffer this lineage wrote or adopted, the write token it
+          left there or adopted ([shared_write_tokens], gh-ocannl-1623). A buffer whose current
+          token differs was overwritten by another root since. *)
+  token_undo : token_undo list Hashtbl.M(Int).t;
+      (** Per routine id, the tokens the routine's latest {!run} minted — what [rollback_execution]
+          restores for a run known not to have written. *)
 }
 (** Shared mutable state for execution tracking, allocated once per root context. Shared by
     reference across all contexts derived from the same root. *)
+
+(* gh-ocannl-1623: write tokens for the buffers independently created roots can SHARE. A node every
+   routine of a compile only reads (and that is not [context_owned]) is laid out in its device's
+   [constant_buffer_cache], which every root on the device resolves to the same location -- the same
+   [Buffer_key] -- while each root keeps a ledger of its own. A write one root makes there
+   ([set_values], a device copy, a routine whose later compile writes the node) changes the bytes
+   another root's routine reads, and that root's ledger, which saw its own earlier write, still says
+   "written": a silent wrong value. Every write into such a buffer mints a fresh token, kept here
+   and in the writing ledger's [observed_tokens]; a run whose ledger holds a different token for a
+   buffer it reads is refused ([check_lineage_runnable]). Within one root the ledger is shared, so
+   its compile siblings always agree and keep sharing as before. Keys are constant-cache locations
+   only: they live as long as the device, and no other location is ever shared across roots (pool
+   ids are minted per device and never reused). Ordering needs no extra edge: roots on one device
+   share its single FIFO runner. *)
+and token_undo = {
+  tu_key : Buffer_key.t;
+  tu_minted : int;
+  tu_prev_device : int option;
+  tu_prev_observed : int option;
+}
+
+let shared_write_tokens : int Map.M(Buffer_key).t ref = ref (Map.empty (module Buffer_key))
+let next_write_token = ref 0
+
+(* Mint a token for [key] in [ledger]'s name; the record says how to undo it. *)
+let mint_write_token ledger key =
+  let token = !next_write_token in
+  Int.incr next_write_token;
+  let undo =
+    {
+      tu_key = key;
+      tu_minted = token;
+      tu_prev_device = Map.find !shared_write_tokens key;
+      tu_prev_observed = Map.find ledger.observed_tokens key;
+    }
+  in
+  shared_write_tokens := Map.set !shared_write_tokens ~key ~data:token;
+  ledger.observed_tokens <- Map.set ledger.observed_tokens ~key ~data:token;
+  undo
+
+(* Undo a mint known not to have written, as far as nothing wrote since. *)
+let undo_write_token ledger { tu_key = key; tu_minted; tu_prev_device; tu_prev_observed } =
+  let restore m prev =
+    match prev with None -> Map.remove m key | Some data -> Map.set m ~key ~data
+  in
+  if Option.equal Int.equal (Map.find !shared_write_tokens key) (Some tu_minted) then
+    shared_write_tokens := restore !shared_write_tokens tu_prev_device;
+  if Option.equal Int.equal (Map.find ledger.observed_tokens key) (Some tu_minted) then
+    ledger.observed_tokens <- restore ledger.observed_tokens tu_prev_observed
+
+(* Whether another root wrote [key] since [ledger] last wrote or adopted it. *)
+let stale_in ledger key =
+  match Map.find !shared_write_tokens key with
+  | None -> false
+  | Some token -> not (Option.equal Int.equal (Map.find ledger.observed_tokens key) (Some token))
 
 let empty_frontier =
   {
@@ -112,6 +174,8 @@ let create_ledger () =
     poisoned = None;
     written_buffers = Set.empty (module Buffer_key);
     fresh_writes = Hashtbl.create (module Int);
+    observed_tokens = Map.empty (module Buffer_key);
+    token_undo = Hashtbl.create (module Int);
   }
 
 type t = {
@@ -232,6 +296,34 @@ let buffer_key ctx tn =
           Option.map (Map.find c.BI.ctx_buffers tn) ~f:(fun loc -> (c.BI.device.device_id, loc)));
     }
 
+(* [tn]'s buffer key in [ctx] when that buffer is its device's cached constant for [tn] -- the one
+   kind of buffer independently created roots can share (gh-ocannl-1623, [shared_write_tokens]). *)
+let shared_constant_key ctx tn =
+  Backends.query ctx.wrapped
+    {
+      q =
+        (fun _ c ->
+          match Map.find c.BI.ctx_buffers tn with
+          | Some loc
+            when Option.exists
+                   (Hashtbl.find c.BI.device.constant_buffer_cache tn)
+                   ~f:(BI.equal_buffer_loc loc) ->
+              Some (c.BI.device.device_id, loc)
+          | _ -> None);
+    }
+
+(* gh-ocannl-1623: how many [BI.context.parent] links [check_live] walks from [ctx]. *)
+let lifecycle_depth ctx =
+  Backends.query ctx.wrapped
+    {
+      q =
+        (fun _ c ->
+          let rec walk depth p =
+            match p with None -> depth | Some p -> walk (depth + 1) p.BI.parent
+          in
+          walk 0 c.BI.parent);
+    }
+
 (* The context's backend as a first-class module, for the queries that read nothing FROM the
    context: [classify_failure], [static_properties] and [hardware_limits] are backend-level
    functions, so they need no type-recovering dispatch over the wrapped context. *)
@@ -246,6 +338,7 @@ type routine = {
   bindings : Idx.lowered_bindings;
   name : string;
   inputs : Set.M(Tn).t;
+  shared_reads : Set.M(Tn).t;
   outputs : Set.M(Tn).t;
   routine_id : int;
   execution_deps : Set.M(Int).t;
@@ -437,9 +530,12 @@ let finish_link ctx comp wrapped
      context-scoped memory-modes split removed the pre-lowering [context_nodes] settlement). Nodes
      with registered host initialization data (ndarray-backed literals, loaded tensors)
      self-initialize at link time from [Host_inits] (gh-ocannl-333), so they are excluded. *)
-  let inputs =
-    Set.filter (Set.diff backend_inputs comp.Asgns.embedded_nodes) ~f:(fun tn ->
-        not (Ir.Host_inits.mem tn))
+  let read_inputs = Set.diff backend_inputs comp.Asgns.embedded_nodes in
+  let inputs = Set.filter read_inputs ~f:(fun tn -> not (Ir.Host_inits.mem tn)) in
+  (* gh-ocannl-1623: the reads whose buffers may be device-wide constants another root overwrites,
+     host-initialized ones included -- [run] refuses a stale one ([shared_write_tokens]). *)
+  let shared_reads =
+    Set.filter read_inputs ~f:(fun tn -> Option.is_some (shared_constant_key updated_ctx tn))
   in
 
   (* Outputs are all nodes written by the computation *)
@@ -452,6 +548,7 @@ let finish_link ctx comp wrapped
       bindings = lowered_bindings;
       name;
       inputs;
+      shared_reads;
       outputs;
       routine_id = id;
       execution_deps = deps;
@@ -618,7 +715,9 @@ let rollback_execution ctx routine_id =
   (* Only the write claims this run introduced: a buffer an earlier writer had filled keeps its
      value, so it stays written. *)
   Option.iter (Hashtbl.find_and_remove ctx.ledger.fresh_writes routine_id) ~f:(fun keys ->
-      ctx.ledger.written_buffers <- List.fold keys ~init:ctx.ledger.written_buffers ~f:Set.remove)
+      ctx.ledger.written_buffers <- List.fold keys ~init:ctx.ledger.written_buffers ~f:Set.remove);
+  Option.iter (Hashtbl.find_and_remove ctx.ledger.token_undo routine_id) ~f:(fun undos ->
+      List.iter undos ~f:(undo_write_token ctx.ledger))
 
 let poison_lineage ctx ~routine_name exn =
   if Option.is_none ctx.ledger.poisoned then ctx.ledger.poisoned <- Some (routine_name, exn)
@@ -692,6 +791,27 @@ let check_lineage_runnable ctx routine =
               input whose allocation-time zeros are its correct value can instead be declared so \
               with Ir.Tnode.mark_zero_valid."
              routine.name missing_names));
+  (* gh-ocannl-1623: a buffer this lineage did write, or may read as zero or as its host init, but
+     that lives in a device-wide constant pool another root has written since: the bytes are that
+     root's, not this lineage's ([shared_write_tokens]). Checked after the class above, so a node
+     this lineage never wrote is reported as uninitialized, which is the more basic mistake. *)
+  let stale_inputs =
+    Set.filter routine.shared_reads ~f:(fun tn ->
+        Option.exists (shared_constant_key routine.context tn) ~f:(stale_in ctx.ledger))
+  in
+  (if not (Set.is_empty stale_inputs) then
+     let stale_names =
+       Set.to_list stale_inputs |> List.map ~f:Tn.debug_name |> String.concat ~sep:", "
+     in
+     raise
+     @@ Utils.User_error
+          (Printf.sprintf
+             "Context.run: routine %s: input nodes %s live in a device-wide constant buffer that \
+              another independently created context wrote after this lineage last wrote or copied \
+              it, so they no longer hold this lineage's values. Re-seed them in this lineage (e.g. \
+              Context.set_values), copy them from the writer with Context.copy, or give each \
+              context its own buffer with Ir.Tnode.set_context_owned before compiling."
+             routine.name stale_names));
 
   (* Check execution dependencies *)
   let missing_deps = Set.diff routine.execution_deps ctx.ledger.executed in
@@ -746,6 +866,13 @@ let run ctx routine =
               key :: fresh))
   in
   Hashtbl.set ctx.ledger.fresh_writes ~key:routine.routine_id ~data:fresh;
+  let minted =
+    Set.fold routine.outputs ~init:[] ~f:(fun minted tn ->
+        match shared_constant_key routine.context tn with
+        | None -> minted
+        | Some key -> mint_write_token ctx.ledger key :: minted)
+  in
+  Hashtbl.set ctx.ledger.token_undo ~key:routine.routine_id ~data:minted;
 
   (* Mark outputs as initialized and return updated context *)
   let initialized_nodes = Set.union ctx.initialized_nodes routine.outputs in
@@ -794,7 +921,9 @@ let record_external_writes ctx nodes =
   Set.iter nodes ~f:(fun tn ->
       Option.iter (buffer_key ctx tn) ~f:(fun key ->
           ctx.ledger.current_writers <- Map.remove ctx.ledger.current_writers key;
-          ctx.ledger.written_buffers <- Set.add ctx.ledger.written_buffers key));
+          ctx.ledger.written_buffers <- Set.add ctx.ledger.written_buffers key);
+      Option.iter (shared_constant_key ctx tn) ~f:(fun key ->
+          ignore (mint_write_token ctx.ledger key : token_undo)));
   let frontier =
     Set.fold nodes ~init:ctx.frontier ~f:(fun frontier tn ->
         {
@@ -1156,12 +1285,19 @@ let copy ?(into_merge_buffer = BI.No) ~src ~dst tn =
              one [check_lineage_runnable] asks of a read-only input (gh-ocannl-1462) -- when the
              source's ledger, or the source context, says it was written. Nothing was written now,
              so the access history stays as it is. *)
+          (* gh-ocannl-1623: the destination adopts the buffer's current write token with it, and
+             only from a source still holding its own value: a source another root overwrote since
+             vouches for nothing, so the destination stays as unwritten (or as stale) as it was. *)
           if
-            Set.mem src.initialized_nodes tn
-            || Option.exists (buffer_key src tn) ~f:(Set.mem src.ledger.written_buffers)
+            (Set.mem src.initialized_nodes tn
+            || Option.exists (buffer_key src tn) ~f:(Set.mem src.ledger.written_buffers))
+            && not (Option.exists (shared_constant_key src tn) ~f:(stale_in src.ledger))
           then
             Option.iter (buffer_key dst tn) ~f:(fun key ->
-                dst.ledger.written_buffers <- Set.add dst.ledger.written_buffers key);
+                dst.ledger.written_buffers <- Set.add dst.ledger.written_buffers key;
+                Option.iter (Map.find !shared_write_tokens key) ~f:(fun token ->
+                    dst.ledger.observed_tokens <-
+                      Map.set dst.ledger.observed_tokens ~key ~data:token));
           mark_initialized dst (Set.singleton (module Tn) tn))
   in
   match Backends.pair_contexts src.wrapped dst.wrapped with

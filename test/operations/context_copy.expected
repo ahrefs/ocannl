@@ -12,3 +12,15 @@ backends: cc -> multidev_cc
 === 5. Merge-buffer copy + statically verified consumer ===
 consumer against a transfer-less context: Merge buffer mismatch at link time: the linked context provides none, but the linked code expects t
 b after b += a.merge (expect 12 23 34): 12.0 23.0 34.0
+=== 6. Repeated copies keep the lifecycle chain bounded (gh-ocannl-1623) ===
+a compiled destination has a lifecycle ancestor: true
+copies into an existing buffer: every sampled depth is the initial one: true
+copies into an existing buffer: each changed value reached the destination: true
+a fresh root is at depth 0: true
+a fresh destination, then overwrites: every sampled depth is 0: true
+a fresh destination, then overwrites: each changed value reached it: true
+merge-buffer fills: every sampled depth is the initial one: true
+the consumer compiled after the fills reads the last one: true
+releasing a copy's result releases its destination: true
+releasing the destination again is harmless: true
+releasing the destination releases a copy's result: true
