@@ -59,7 +59,15 @@
    scratch, after a dead read too -- but a virtual consumer holding it materializes ([155], captured
    at its loop or stored per statement), since a template would replay it where the scratch is not;
    a live, undecided, partial, guarded, read-before-write or in-place read is refused with the
-   routine-local message. Lineages with and without a stored template of [v]. *)
+   routine-local message. Lineages with and without a stored template of [v].
+
+   The one exception (gh-ocannl-1645): a consumer an earlier routine already committed virtual,
+   whose inherited template reads [v] already -- stored while [v] was undecided, before A's
+   finalization placed it [Local] -- re-stores its template with B's covered read, executed against
+   the materialized reading, through its loop capture and per statement; without a covering write,
+   or with a partial one, B is still refused. A declared-virtual consumer with no such template
+   stays refused: a NEW template reading the scratch would replay, in a later routine, against
+   uninitialized scratch (gh-ocannl-1646 owns the replay-time half). *)
 
 open Base
 open Ll_test
@@ -995,6 +1003,104 @@ let case_local_reads () =
         (loop_n s dim (if_ (lt (embed s) (ic 2)) (set v [| iter s |] (ramp 500. s))))
         (read_v ~tag:"lu4" ~v))
 
+(* gh-ocannl-1645: routine A stores a virtual [w]'s template while [v] is undecided, and only A's
+   finalization then places [v] as routine-local scratch -- the lineage of a training step whose
+   virtual [w.grad] reads the [y.grad] its first compile makes [Local]. Routine B, recompiling the
+   step, re-stores [w] (committed virtual, so it has no materialization fallback) with the read of
+   [v] its own writes cover: admitted, because the lineage's template of [w] already carries it.
+   [w_code ~w ~x ~v] is [w]'s setter, the same in A and B; [out := w] reads it. *)
+let carried_scratch ~label ~tag ~w_code ~read_w =
+  let a = mk (tag ^ "a") and outa = mk (tag ^ "outa") and outw = mk (tag ^ "outw") in
+  let v = mk (tag ^ "v") and w = mk (tag ^ "w") and x = mk (tag ^ "x") in
+  List.iter [ a; outa; outw; x ] ~f:materialize;
+  let ctx = LL.empty_optimize_ctx () in
+  let llc_a =
+    let s = sym () in
+    List.reduce_exn ~f:seq
+      (List.init dim ~f:(fun k -> set v [| fixed k |] (add (get a [| fixed k |]) (c 1000.)))
+      @ [
+          loop_n s dim (set outa [| iter s |] (get v [| iter s |]));
+          w_code ~w ~x ~v;
+          read_w ~out:outw ~w;
+        ])
+  in
+  let name = "sts_" ^ tag ^ "_a" in
+  let o_a = optimize_in ctx ~name llc_a in
+  let seed_a = [ (a, Array.init dim ~f:(fun i -> 60. +. Float.of_int i)); (x, x_vals) ] in
+  let linked = link_finalized ~ctx:(Context.auto ()) ~placements:[ v ] ~name o_a in
+  let _ctx = run_linked linked ~seed:seed_a in
+  p
+    (label
+   ^ ": routine A placed v as routine-local scratch and committed w virtual, its template reading v"
+    )
+    (known_local o_a v && known_virtual o_a w
+    && Option.value (template_count ctx w ~f:(read_of v)) ~default:0 > 0);
+  (ctx, llc_a, seed_a, v, w, x)
+
+let loop_w ~w ~x ~v =
+  let s = sym () in
+  loop_n s dim (set w [| iter s |] (add (get v [| iter s |]) (get x [| iter s |])))
+
+let loop_read_w ~out ~w =
+  let s = sym () in
+  loop_n s dim (set out [| iter s |] (get w [| iter s |]))
+
+let cell_w ~w ~x:_ ~v = set w [| fixed 0 |] (add (get v [| fixed 1 |]) (c 0.5))
+let cell_read_w ~out ~w = set out [| fixed 0 |] (get w [| fixed 0 |])
+
+let case_carried_accepted ~label ~tag ~w_code ~read_w ~expected =
+  let ctx, llc_a, seed_a, v, w, x = carried_scratch ~label ~tag ~w_code ~read_w in
+  let out = mk (tag ^ "out") in
+  materialize out;
+  let llc_b = List.reduce_exn ~f:seq [ fill_v v; w_code ~w ~x ~v; read_w ~out ~w ] in
+  let before = Option.value (template_count ctx w ~f:(read_of v)) ~default:0 in
+  let seed_b = [ (x, x_vals); (out, blank dim) ] in
+  match consume_local ctx ~name:("sts_" ^ tag ^ "_b") llc_b with
+  | Refused msg | Crashed msg ->
+      p (label ^ ": routine B re-stores the committed-virtual w (refused: " ^ msg ^ ")") false
+  | Compiled o_b ->
+      p
+        (label ^ ": routine B compiles, w stays virtual, v stays routine-local scratch and no input")
+        (known_virtual o_b w && known_local o_b v && not (Set.mem (inputs o_b) v));
+      p
+        (label ^ ": B stored w's template again, reading v")
+        (Option.value (template_count ctx w ~f:(read_of v)) ~default:0 > before);
+      let got = execute ~name:("sts_" ^ tag ^ "_b") o_b ~seed:seed_b ~read:[ out ] in
+      p_all2
+        (label ^ ": out executes to its expected values")
+        (List.hd_exn got) expected ~f:Float.equal;
+      let got_m =
+        materialized_reading ~name:("sts_" ^ tag) ~v ~llc_a ~llc_b ~seed_a ~seed_b ~read:[ out ]
+      in
+      p_all2
+        (label ^ ": the reading agrees with the materialized one")
+        (List.hd_exn got) (List.hd_exn got_m) ~f:Float.equal
+
+let case_carried_refused ~label ~tag ~b_code =
+  let ctx, _, _, v, w, x = carried_scratch ~label ~tag ~w_code:loop_w ~read_w:loop_read_w in
+  let out = mk (tag ^ "out") in
+  materialize out;
+  match consume_local ctx ~name:("sts_" ^ tag ^ "_b") (b_code ~w ~x ~v ~out) with
+  | Compiled _ -> p (label ^ ": routine B is refused (it compiled)") false
+  | Crashed msg ->
+      p (label ^ ": routine B is refused with an actionable message (crashed: " ^ msg ^ ")") false
+  | Refused msg ->
+      p
+        (label ^ ": routine B is refused, naming v routine-local scratch")
+        (String.is_substring msg ~substring:"routine-local scratch")
+
+let case_carried_reads () =
+  case_carried_accepted ~label:"carried, covered: a captured committed-virtual consumer" ~tag:"cc1"
+    ~w_code:loop_w ~read_w:loop_read_w
+    ~expected:(Array.map2_exn local_vals x_vals ~f:( +. ));
+  case_carried_accepted ~label:"carried, covered: a per-statement committed-virtual consumer"
+    ~tag:"cc2" ~w_code:cell_w ~read_w:cell_read_w
+    ~expected:(Array.init dim ~f:(fun i -> if i = 0 then 501.5 else sentinel));
+  case_carried_refused ~label:"carried: no covering write" ~tag:"cu1" ~b_code:(fun ~w ~x ~v ~out ->
+      seq (loop_w ~w ~x ~v) (loop_read_w ~out ~w));
+  case_carried_refused ~label:"carried: a partial write" ~tag:"cu2" ~b_code:(fun ~w ~x ~v ~out ->
+      List.reduce_exn ~f:seq [ set v [| fixed 0 |] (c 7.); loop_w ~w ~x ~v; loop_read_w ~out ~w ])
+
 let () =
   case_merge ();
   case_provenance ();
@@ -1013,6 +1119,7 @@ let () =
   case_consumer_refused ~label:"consumer where (i < 2) x v (undecided)" ~tag:"cu" (fun s ~x ~v ->
       where_ (lt (embed s) (ic 2)) x v);
   case_local_reads ();
+  case_carried_reads ();
   capture_family ~kind:"" ~lineage:merge_lineage;
   capture_family ~kind:"local" ~lineage:local_lineage;
   capture_family ~kind:"uninlinable" ~lineage:uninlinable_lineage

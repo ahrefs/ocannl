@@ -498,7 +498,23 @@ files.
   replay wherever the template does, in later routines too. The capture walk's `155` hit stands for
   covered reads, and outside a capture the emit walk records the setter owning the read
   (`local_dependents`), refusing its per-statement store with the same `155`; a packed-uniform
-  producer's RAW capture, which no walk reads, is scanned for such a read (`raw_local_read`). Pinned, executed
+  producer's RAW capture, which no walk reads, is scanned for such a read (`raw_local_read`). **One
+  exception** (gh-ocannl-1645, `carried_local_read`): an owner already committed virtual has no
+  materialization fallback, and recompiling a training step in the lineage that ran it is the
+  ordinary case — the first compile stores the virtual `w.grad`'s template while `y.grad` is
+  undecided, and only its finalization places `y.grad` `Local`. Such an owner's read is admitted
+  (recorded as no hit) when this routine reads the node live and strictly covers it, AND the
+  owner's INHERITED template already reads it, so no read site gains a scratch dependency the
+  lineage did not carry. The uncovered case never reaches it (`decide_placements` refuses it first),
+  so the coverage half only adds the read-in-a-dead-arm (`Unread`) exclusion. **Shared rule with
+  gh-ocannl-1646:** a stored template's scratch reads are covered at replay or refused at
+  replay, never silently uninitialized. Replay is NOT checked yet: a spliced read of a `Local` node
+  only reaches `reconcile_traced_store`'s bookkeeping, so a template stored before its node was
+  finalized `Local` replays against uninitialized scratch in a routine that does not cover it
+  (gh-ocannl-1646's silent `nan`). The inherited-template condition holds this exception to "adds no new
+  instance" of that; gh-ocannl-1646's replay refusal lets it relax to coverage alone. Pinned by the
+  `carried, ...` cases of `stored_template_elision.ml` and by `lineage_recompile_step.ml` (three
+  SGD steps in one lineage, bitwise against a `decide_materialized` lineage). Pinned, executed
   against the materialized reading, by the `local, ...` cases of `stored_template_elision.ml`
   (lineages with and without a stored template; partial, guarded, read-before-write and
   uninitialized-accumulation controls). Boundary: the rules apply to `Local` nodes only — a fresh
