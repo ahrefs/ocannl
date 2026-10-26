@@ -1225,6 +1225,10 @@
 
 # If `false`, debug logs from routines are re-logged via the ppx_minidebug framework.
 # If `true`, the logs are in stream-specific files. WARNING: files are appended to, not overwritten.
+# On CUDA and HIP, where routine logs are device-side `printf` on process stdout, `true` also has
+# the backend capture each logged launch's output itself when no `Utils.capture_stdout_logs`
+# window is open, synchronizing the device inside the capture, so no log line reaches stdout
+# (gh-ocannl-1636); `never_capture_stdout=true` turns that capture off too.
 #debug_log_to_stream_files=false
 
 # If set and relevant, it's the `CU_LIMIT_PRINTF_FIFO_SIZE` CUDA configuration.

@@ -79,7 +79,7 @@ whole-profile comparisons, not isolated rewrite effects.
 
 ### Using the tracing debugger with CUDA and HIP computations
 
-To use debugging as provided by configuring `Utils.settings.debug_log_from_routines <- true` with the `cuda` or `hip` backend, wrap the code that schedules work and synchronizes the GPU with `Utils.capture_stdout_logs`. Both GPU APIs expose device-side `printf`, but not `fprintf`; the runtime drains the device printing buffer to process `stdout` around synchronization. Synchronize the context inside the capture window so all device output is available before stdout is restored.
+To use debugging as provided by configuring `Utils.settings.debug_log_from_routines <- true` with the `cuda` or `hip` backend, either set `debug_log_to_stream_files=true`, in which case the backend captures each logged launch's output into the stream files itself, or wrap the code that schedules work and synchronizes the GPU with `Utils.capture_stdout_logs`. Both GPU APIs expose device-side `printf`, but not `fprintf`; the runtime drains the device printing buffer to process `stdout` around synchronization. Synchronize the context inside the capture window so all device output is available before stdout is restored.
 
 NOTE: debug logging from CUDA or HIP in complex settings is a bit tricky, as it involves another thread (domain) intercepting and filtering `stdout`. If facing issues, try the setting `never_capture_stdout=true` (see [ocannl_config.reference](ocannl_config.reference)).
 

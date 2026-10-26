@@ -6081,6 +6081,44 @@
   (alias runtest-fixed_name_temporaries-plain)
   (alias runtest-fixed_name_temporaries-logged)))
 
+; gh-ocannl-1636: under debug_log_to_stream_files a logged routine's lines reach its stream file and
+; nothing reaches stdout, with no capture window opened by the caller.
+
+(executable
+ (name routine_log_stream_files)
+ (modules routine_log_stream_files)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test))
+
+(rule
+ (target routine_log_stream_files.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:routine_log_stream_files.exe}
+    "--ocannl_debug_log_from_routines=true"
+    "--ocannl_log_level=2"
+    "--ocannl_debug_log_to_stream_files=true"
+    "--ocannl_log_main_domain_to_stdout=false"
+    "--ocannl_log_file_stem=routine_log_stream_files"
+    "--ocannl_build_files_prefix=routine_log_stream_files"))))
+
+(rule
+ (alias runtest-routine_log_stream_files)
+ (package neural_nets_lib)
+ (action
+  (diff routine_log_stream_files.expected routine_log_stream_files.actual)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias runtest-routine_log_stream_files)))
+
 (test
  ; ocannl-backend: none -- inspects precision witnesses and renderer enumeration, executes no backend.
  (name precision_families)

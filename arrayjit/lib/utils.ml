@@ -3396,7 +3396,12 @@ let input_line chan =
   ( n > 0,
     String.chop_suffix_if_exists ~suffix:"\n" @@ String.chop_suffix_if_exists line ~suffix:"\r\n" )
 
-let capture_stdout_logs arg =
+(* How many [capture_stdout_logs] calls are running. A logged GPU launch inside one leaves its
+   device-side printf to that window; outside all of them, [routine_log_window] opens one of its own
+   (gh-ocannl-1636). *)
+let stdout_capture_depth = Atomic.make 0
+
+let capture_stdout_logs_window arg =
   if never_capture_stdout () || not (debug_log_from_routines ()) then arg ()
   else (
     Stdlib.flush Stdlib.stdout;
@@ -3412,10 +3417,14 @@ let capture_stdout_logs arg =
     let collected_logs_ref = ref [] in
     let reader_domain_failed = Atomic.make false in
 
+    (* The reader's own duplicate of the original stdout, for immediate passthrough. Made here,
+       before the reader is spawned: the reader made it itself, so when [arg] returned before the
+       reader had run, [original_stdout_fd] was already closed, the [dup] failed with [EBADF] and
+       the window lost every line it caught (gh-ocannl-1636). *)
+    let orig_out_fd = Unix.dup ~cloexec:true original_stdout_fd in
     let reader_domain_logic () =
       let in_channel = Unix.in_channel_of_descr pipe_read_fd in
-      (* Create an output channel to the original stdout for immediate passthrough *)
-      let orig_out = Unix.out_channel_of_descr (Unix.dup original_stdout_fd) in
+      let orig_out = Unix.out_channel_of_descr orig_out_fd in
       try
         while true do
           let _is_endlined, line = input_line in_channel in
@@ -3425,11 +3434,14 @@ let capture_stdout_logs arg =
               (* Forward non-log lines to original stdout immediately *)
               Stdlib.output_string orig_out (line ^ "\n");
               Stdlib.flush orig_out
-        done;
-        Stdlib.close_out_noerr orig_out;
-        Stdlib.close_in_noerr in_channel (* This closes pipe_read_fd *)
+        done
       with
-      | End_of_file -> () (* Normal termination of the reader *)
+      | End_of_file ->
+          (* Normal termination of the reader: the loop above only ends here, so both channels are
+             closed here, or each window leaks two descriptors -- one per logged launch under
+             [routine_log_window] (gh-ocannl-1636). *)
+          Stdlib.close_out_noerr orig_out;
+          Stdlib.close_in_noerr in_channel (* This closes pipe_read_fd *)
       | exn ->
           Stdlib.close_out_noerr orig_out;
           Atomic.set reader_domain_failed true;
@@ -3512,6 +3524,33 @@ let capture_stdout_logs arg =
         ~finally:(fun () -> captured_log_processors := [])
     else captured_log_processors := [] (* Clear processors if reader failed *);
     result)
+
+let capture_stdout_logs arg =
+  Atomic.incr stdout_capture_depth;
+  Exn.protect
+    ~finally:(fun () -> Atomic.decr stdout_capture_depth)
+    ~f:(fun () -> capture_stdout_logs_window arg)
+
+(** [routine_log_window ~drain launch] runs a logged CUDA or HIP routine's [launch] -- which
+    registers the routine's log processor and launches its kernel -- so that, while
+    [debug_log_to_stream_files] is on, the kernel's device-side [printf] never reaches stdout
+    (gh-ocannl-1636). Those runtimes write a kernel's [printf] to process stdout at whichever
+    synchronization point, later launch or blocking copy comes next, and only a
+    [capture_stdout_logs] window hands the lines to the processor that writes the stream file. So
+    outside every window it opens one around [launch] followed by [drain], the synchronization that
+    empties the device's printf buffer, and every line of this launch is in the stream file when it
+    returns. Inside a caller's window it only runs [launch]: that window collects the lines, as
+    before. With the key off the lines are relogged through the debug trace, which needs the
+    caller's window, as before; [never_capture_stdout] still turns every capture off. *)
+let routine_log_window ~drain launch =
+  if
+    Atomic.get stdout_capture_depth > 0
+    || not (get_global_flag ~default:false ~arg_name:"debug_log_to_stream_files")
+  then launch ()
+  else
+    capture_stdout_logs (fun () ->
+        launch ();
+        drain ())
 
 let log_debug_routine_logs ~log_contents ~stream_name =
   if get_global_flag ~default:false ~arg_name:"debug_log_to_stream_files" then
