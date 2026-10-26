@@ -83,9 +83,10 @@ let execute_leg ~name ~seed ~out llc =
 
 (* Whether [name]'s select compiled branch-free: compiled by the cc backend's own compiler with its
    own kernel flags (at [-O3], its default level), no conditional branch is attributed to a source
-   line spelling a select, and those lines carry instructions (an anchor naming nothing, or a select
-   folded away, fails). *)
-let compiled_branch_free name =
+   line matching [patterns], and those lines carry instructions (an anchor naming nothing, or a
+   select folded away, fails). Each anchored line's own count goes to stderr, so a red run names the
+   line that branched. *)
+let compiled_branch_free ~patterns name =
   let src_path = Generated.path name in
   let source = Generated.read name in
   let asm_path = Stdlib.Filename.temp_file ("bs_" ^ name ^ "_") ".s" in
@@ -105,7 +106,13 @@ let compiled_branch_free name =
       let asm = Stdio.In_channel.read_all asm_path in
       (try Stdlib.Sys.remove asm_path with _ -> ());
       let parsed = Asm.parse ~asm ~source_basename:(Stdlib.Filename.basename src_path) in
-      let anchor = Asm.anchor_lines ~source ~patterns:("ocannl_select_f" :: short_circuit_forms) in
+      let anchor = Asm.anchor_lines ~source ~patterns in
+      let lines = Array.of_list (String.split_lines source) in
+      Set.iter anchor ~f:(fun l ->
+          let b, i = Asm.conditional_branches_in parsed ~anchor:(Set.singleton (module Int) l) in
+          Stdio.eprintf "branchless_select: %s line %d: %d branch(es) in %d instruction(s): %s\n"
+            name l b i
+            (String.strip lines.(l - 1)));
       let branches, instructions = Asm.conditional_branches_in parsed ~anchor in
       Stdio.eprintf
         "branchless_select: %s: %d conditional branch(es) in %d instruction(s) on %d select \
@@ -213,7 +220,10 @@ let () =
 let () =
   List.iter [ "bs_where_zero"; "bs_relu_gate" ] ~f:(fun name ->
       let claim = name ^ ": no conditional branch on the select's lines (host compiler)" in
-      if on_cc then p claim (compiled_branch_free name) else skipped claim)
+      (* Anchored on either spelling, so the same claim reads base's [?:] lines too. A hand-built
+         leg's kernel holds this one select and nothing else conditional. *)
+      let patterns = "ocannl_select_f" :: short_circuit_forms in
+      if on_cc then p claim (compiled_branch_free ~patterns name) else skipped claim)
 
 (* === The guards that must keep short-circuiting. === *)
 
@@ -359,4 +369,8 @@ let () =
      already if-converts these few unrolled loads — so the two hand-built legs above carry the
      assembly claim; this one keeps the realistic composition branch-free as it grows. *)
   let claim = "pool backward: no conditional branch on the select's lines (host compiler)" in
-  if on_cc then p claim (compiled_branch_free "bs_pool_inlined") else skipped claim
+  (* Anchored on the blend calls alone (and the helper's line, where an inlined select is
+     attributed): the backward's own index guards keep their [?:] by design, and gcc branches on
+     them (CI's ubuntu leg). *)
+  if on_cc then p claim (compiled_branch_free ~patterns:[ "ocannl_select_f" ] "bs_pool_inlined")
+  else skipped claim
