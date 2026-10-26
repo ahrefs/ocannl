@@ -45,6 +45,9 @@ let () =
   let ctx = Context.auto () in
   let backend = Context.backend_name ctx in
   let ctx = Train.init_params ctx bindings batch_loss in
+  let swap_blocks = H.weight_swap_blocks () in
+  (* The init draw, kept for the weight-swap diagnostic before the fixture overwrites it. *)
+  let init_draw = Option.map swap_blocks ~f:(fun _ -> H.param_values ctx batch_loss) in
   if debug then (
     H.dump_params batch_loss;
     Stdlib.exit 0);
@@ -80,6 +83,19 @@ let () =
   (* Autotune's timing context re-ran param inits on [ctx]; restore fixture weights. *)
   let ctx = if tune then H.inject ctx st batch_loss mapping else ctx in
   let batch_ref = IDX.find_exn routine.Context.bindings batch_n in
+  (match (swap_blocks, init_draw) with
+  | Some blocks, Some init_draw ->
+      (* gh-ocannl-1622: the same routine on the init draw and on the fixture's weights, in one
+         process; see [Bench_harness.weight_swap]. *)
+      let steps_per_block =
+        Option.value_map ~default:20 ~f:Int.of_string
+          (Stdlib.Sys.getenv_opt "BENCH_WEIGHT_SWAP_STEPS")
+      in
+      H.weight_swap ~blocks ~steps_per_block ~ctx ~routine
+        ~sets:[ ("init", init_draw); ("fixture", H.param_values ctx batch_loss) ]
+        ~prepare_step:(fun ~step -> batch_ref := step % n_batches);
+      Stdlib.exit 0
+  | _ -> ());
   let step_count = ref 0 in
   let run_step () =
     batch_ref := !step_count % n_batches;

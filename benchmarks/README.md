@@ -365,6 +365,11 @@ single-threaded segments that sum to the serial step
   mac-studio (M4 Max, a measurement window, 200 s per arm) arm A's replay p10 is 0.4% over its
   crown (99.99 vs 99.61 ms; p50 101.19) and arm B's 1.1%, each within its replay's p10-p50 spread.
   `benchmarks/gh1557_cells.sh` runs that A/B.
+  `BENCH_WEIGHT_SWAP=<blocks>` (conv) asks the values question directly: it times the SAME compiled
+  step in one process on the init draw and on the fixture, in alternating blocks of
+  `BENCH_WEIGHT_SWAP_STEPS` steps (default 20) with the params restored before each, prints
+  `weight-swap:` per-set p10/p50 and their ratio, and exits instead of running the protocol
+  (gh-ocannl-1622; `BENCH_MATERIALIZE=1` gives the materialize-all arm).
   `BENCH_TIMING_TRACE=1` (all three runners) splits a searching process's wall between candidate
   timing and the rest (gh-ocannl-834). Every `Autotune.time_routine` call reports one record as it
   returns (gh-ocannl-1263), printed as its calibration probes, one call line (the batch depth it
