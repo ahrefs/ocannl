@@ -1,14 +1,20 @@
+the Grid-outermost B~ pack defaults to whole-once at 512^3 64x256 and per-row-block at 128^3 16x32 and 76^3 64x256: true
 76^3 at the default 64x256: the last (masked) row block's rows carry nonzero k-sums: true
 76^3 at the default 64x256: the k tail contributes to some output cell: true
 76^3 at the default 64x256, single storage: the builder reads the site's m x n x k off the nest: true
 76^3 at the default 64x256, single storage: the reference is not all zeros: true
 76^3 at the default 64x256, single storage: the serial leg's every row block accumulates in the masked fragment: true
+76^3 at the default 64x256, single storage: every in-kernel B~ pack copies each B~ slot exactly once: true
+76^3 at the default 64x256, single storage: the per-row-block Grid leg re-packs B~ once per row block: true
+76^3 at the default 64x256, single storage: under the k-block loop, only the edge k block's B~ packing is guarded: true
 76^3 at the default 64x256, single storage: the serial packed leg matches the unscheduled kernel bitwise: true
 76^3 at the default 64x256, single storage: the Grid packed leg matches the serial packed leg bitwise: true
+76^3 at the default 64x256, single storage: the row-block-panel Grid packed leg matches the serial packed leg bitwise: true
 76^3 at the default 64x256, single storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
 76^3 at the default 64x256, single storage: the hoisted-B~ Grid packed leg matches the serial packed leg bitwise: true
 76^3 at the default 64x256, single storage: every serial Tile_mma renders the register tiling: true
 76^3 at the default 64x256, single storage: every Grid Tile_mma renders the register tiling: true
+76^3 at the default 64x256, single storage: every row-block-panel Grid Tile_mma renders the register tiling: true
 76^3 at the default 64x256, single storage: every Grid-below-k Tile_mma renders the register tiling: true
 76^3 at the default 64x256, single storage: every hoisted-B~ Grid Tile_mma renders the register tiling: true
 76^3 at the default 64x256, single storage: with A read in place, the builder refuses to pad: true
@@ -16,12 +22,17 @@
 76^3 at the default 64x256, bfloat16 storage: the builder reads the site's m x n x k off the nest: true
 76^3 at the default 64x256, bfloat16 storage: the reference is not all zeros: true
 76^3 at the default 64x256, bfloat16 storage: the serial leg's every row block accumulates in the masked fragment: true
+76^3 at the default 64x256, bfloat16 storage: every in-kernel B~ pack copies each B~ slot exactly once: true
+76^3 at the default 64x256, bfloat16 storage: the per-row-block Grid leg re-packs B~ once per row block: true
+76^3 at the default 64x256, bfloat16 storage: under the k-block loop, only the edge k block's B~ packing is guarded: true
 76^3 at the default 64x256, bfloat16 storage: the serial packed leg matches the unscheduled kernel bitwise: true
 76^3 at the default 64x256, bfloat16 storage: the Grid packed leg matches the serial packed leg bitwise: true
+76^3 at the default 64x256, bfloat16 storage: the row-block-panel Grid packed leg matches the serial packed leg bitwise: true
 76^3 at the default 64x256, bfloat16 storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
 76^3 at the default 64x256, bfloat16 storage: the hoisted-B~ Grid packed leg matches the serial packed leg bitwise: true
 76^3 at the default 64x256, bfloat16 storage: every serial Tile_mma renders the register tiling: true
 76^3 at the default 64x256, bfloat16 storage: every Grid Tile_mma renders the register tiling: true
+76^3 at the default 64x256, bfloat16 storage: every row-block-panel Grid Tile_mma renders the register tiling: true
 76^3 at the default 64x256, bfloat16 storage: every Grid-below-k Tile_mma renders the register tiling: true
 76^3 at the default 64x256, bfloat16 storage: every hoisted-B~ Grid Tile_mma renders the register tiling: true
 76^3 at the default 64x256, bfloat16 storage: with A read in place, the builder refuses to pad: true
@@ -31,12 +42,17 @@
 77^3 at 16x32, single storage: the builder reads the site's m x n x k off the nest: true
 77^3 at 16x32, single storage: the reference is not all zeros: true
 77^3 at 16x32, single storage: the serial leg's full row blocks accumulate in the output, only the edge block in a fragment: true
+77^3 at 16x32, single storage: every in-kernel B~ pack copies each B~ slot exactly once: true
+77^3 at 16x32, single storage: the per-row-block Grid leg re-packs B~ once per row block: true
+77^3 at 16x32, single storage: under the k-block loop, only the edge k block's B~ packing is guarded: true
 77^3 at 16x32, single storage: the serial packed leg matches the unscheduled kernel bitwise: true
 77^3 at 16x32, single storage: the Grid packed leg matches the serial packed leg bitwise: true
+77^3 at 16x32, single storage: the row-block-panel Grid packed leg matches the serial packed leg bitwise: true
 77^3 at 16x32, single storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
 77^3 at 16x32, single storage: the hoisted-B~ Grid packed leg matches the serial packed leg bitwise: true
 77^3 at 16x32, single storage: every serial Tile_mma renders the register tiling: true
 77^3 at 16x32, single storage: every Grid Tile_mma renders the register tiling: true
+77^3 at 16x32, single storage: every row-block-panel Grid Tile_mma renders the register tiling: true
 77^3 at 16x32, single storage: every Grid-below-k Tile_mma renders the register tiling: true
 77^3 at 16x32, single storage: every hoisted-B~ Grid Tile_mma renders the register tiling: true
 77^3 at 16x32, single storage: with A read in place, the builder refuses to pad: true
@@ -44,12 +60,17 @@
 77^3 at 16x32, bfloat16 storage: the builder reads the site's m x n x k off the nest: true
 77^3 at 16x32, bfloat16 storage: the reference is not all zeros: true
 77^3 at 16x32, bfloat16 storage: the serial leg's full row blocks accumulate in the output, only the edge block in a fragment: true
+77^3 at 16x32, bfloat16 storage: every in-kernel B~ pack copies each B~ slot exactly once: true
+77^3 at 16x32, bfloat16 storage: the per-row-block Grid leg re-packs B~ once per row block: true
+77^3 at 16x32, bfloat16 storage: under the k-block loop, only the edge k block's B~ packing is guarded: true
 77^3 at 16x32, bfloat16 storage: the serial packed leg matches the unscheduled kernel bitwise: true
 77^3 at 16x32, bfloat16 storage: the Grid packed leg matches the serial packed leg bitwise: true
+77^3 at 16x32, bfloat16 storage: the row-block-panel Grid packed leg matches the serial packed leg bitwise: true
 77^3 at 16x32, bfloat16 storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
 77^3 at 16x32, bfloat16 storage: the hoisted-B~ Grid packed leg matches the serial packed leg bitwise: true
 77^3 at 16x32, bfloat16 storage: every serial Tile_mma renders the register tiling: true
 77^3 at 16x32, bfloat16 storage: every Grid Tile_mma renders the register tiling: true
+77^3 at 16x32, bfloat16 storage: every row-block-panel Grid Tile_mma renders the register tiling: true
 77^3 at 16x32, bfloat16 storage: every Grid-below-k Tile_mma renders the register tiling: true
 77^3 at 16x32, bfloat16 storage: every hoisted-B~ Grid Tile_mma renders the register tiling: true
 77^3 at 16x32, bfloat16 storage: with A read in place, the builder refuses to pad: true
@@ -58,12 +79,17 @@ row-only remainder 76x40x64 at 16x32: the last (masked) row block's rows carry n
 row-only remainder 76x40x64 at 16x32, single storage: the builder reads the site's m x n x k off the nest: true
 row-only remainder 76x40x64 at 16x32, single storage: the reference is not all zeros: true
 row-only remainder 76x40x64 at 16x32, single storage: the serial leg's full row blocks accumulate in the output, only the edge block in a fragment: true
+row-only remainder 76x40x64 at 16x32, single storage: every in-kernel B~ pack copies each B~ slot exactly once: true
+row-only remainder 76x40x64 at 16x32, single storage: the per-row-block Grid leg re-packs B~ once per row block: true
+row-only remainder 76x40x64 at 16x32, single storage: under the k-block loop, only the edge k block's B~ packing is guarded: true
 row-only remainder 76x40x64 at 16x32, single storage: the serial packed leg matches the unscheduled kernel bitwise: true
 row-only remainder 76x40x64 at 16x32, single storage: the Grid packed leg matches the serial packed leg bitwise: true
+row-only remainder 76x40x64 at 16x32, single storage: the row-block-panel Grid packed leg matches the serial packed leg bitwise: true
 row-only remainder 76x40x64 at 16x32, single storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
 row-only remainder 76x40x64 at 16x32, single storage: the hoisted-B~ Grid packed leg matches the serial packed leg bitwise: true
 row-only remainder 76x40x64 at 16x32, single storage: every serial Tile_mma renders the register tiling: true
 row-only remainder 76x40x64 at 16x32, single storage: every Grid Tile_mma renders the register tiling: true
+row-only remainder 76x40x64 at 16x32, single storage: every row-block-panel Grid Tile_mma renders the register tiling: true
 row-only remainder 76x40x64 at 16x32, single storage: every Grid-below-k Tile_mma renders the register tiling: true
 row-only remainder 76x40x64 at 16x32, single storage: every hoisted-B~ Grid Tile_mma renders the register tiling: true
 row-only remainder 76x40x64 at 16x32, single storage: with A read in place, the builder refuses to pad: true
@@ -71,12 +97,17 @@ row-only remainder 76x40x64 at 16x32, single storage: with A read in place, Tens
 row-only remainder 76x40x64 at 16x32, bfloat16 storage: the builder reads the site's m x n x k off the nest: true
 row-only remainder 76x40x64 at 16x32, bfloat16 storage: the reference is not all zeros: true
 row-only remainder 76x40x64 at 16x32, bfloat16 storage: the serial leg's full row blocks accumulate in the output, only the edge block in a fragment: true
+row-only remainder 76x40x64 at 16x32, bfloat16 storage: every in-kernel B~ pack copies each B~ slot exactly once: true
+row-only remainder 76x40x64 at 16x32, bfloat16 storage: the per-row-block Grid leg re-packs B~ once per row block: true
+row-only remainder 76x40x64 at 16x32, bfloat16 storage: under the k-block loop, only the edge k block's B~ packing is guarded: true
 row-only remainder 76x40x64 at 16x32, bfloat16 storage: the serial packed leg matches the unscheduled kernel bitwise: true
 row-only remainder 76x40x64 at 16x32, bfloat16 storage: the Grid packed leg matches the serial packed leg bitwise: true
+row-only remainder 76x40x64 at 16x32, bfloat16 storage: the row-block-panel Grid packed leg matches the serial packed leg bitwise: true
 row-only remainder 76x40x64 at 16x32, bfloat16 storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
 row-only remainder 76x40x64 at 16x32, bfloat16 storage: the hoisted-B~ Grid packed leg matches the serial packed leg bitwise: true
 row-only remainder 76x40x64 at 16x32, bfloat16 storage: every serial Tile_mma renders the register tiling: true
 row-only remainder 76x40x64 at 16x32, bfloat16 storage: every Grid Tile_mma renders the register tiling: true
+row-only remainder 76x40x64 at 16x32, bfloat16 storage: every row-block-panel Grid Tile_mma renders the register tiling: true
 row-only remainder 76x40x64 at 16x32, bfloat16 storage: every Grid-below-k Tile_mma renders the register tiling: true
 row-only remainder 76x40x64 at 16x32, bfloat16 storage: every hoisted-B~ Grid Tile_mma renders the register tiling: true
 row-only remainder 76x40x64 at 16x32, bfloat16 storage: with A read in place, the builder refuses to pad: true
@@ -85,12 +116,17 @@ k-only remainder 64x40x76 at 16x32: the k tail contributes to some output cell: 
 k-only remainder 64x40x76 at 16x32, single storage: the builder reads the site's m x n x k off the nest: true
 k-only remainder 64x40x76 at 16x32, single storage: the reference is not all zeros: true
 k-only remainder 64x40x76 at 16x32, single storage: the serial leg's every row block accumulates in the output: true
+k-only remainder 64x40x76 at 16x32, single storage: every in-kernel B~ pack copies each B~ slot exactly once: true
+k-only remainder 64x40x76 at 16x32, single storage: the per-row-block Grid leg re-packs B~ once per row block: true
+k-only remainder 64x40x76 at 16x32, single storage: under the k-block loop, only the edge k block's B~ packing is guarded: true
 k-only remainder 64x40x76 at 16x32, single storage: the serial packed leg matches the unscheduled kernel bitwise: true
 k-only remainder 64x40x76 at 16x32, single storage: the Grid packed leg matches the serial packed leg bitwise: true
+k-only remainder 64x40x76 at 16x32, single storage: the row-block-panel Grid packed leg matches the serial packed leg bitwise: true
 k-only remainder 64x40x76 at 16x32, single storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
 k-only remainder 64x40x76 at 16x32, single storage: the hoisted-B~ Grid packed leg matches the serial packed leg bitwise: true
 k-only remainder 64x40x76 at 16x32, single storage: every serial Tile_mma renders the register tiling: true
 k-only remainder 64x40x76 at 16x32, single storage: every Grid Tile_mma renders the register tiling: true
+k-only remainder 64x40x76 at 16x32, single storage: every row-block-panel Grid Tile_mma renders the register tiling: true
 k-only remainder 64x40x76 at 16x32, single storage: every Grid-below-k Tile_mma renders the register tiling: true
 k-only remainder 64x40x76 at 16x32, single storage: every hoisted-B~ Grid Tile_mma renders the register tiling: true
 k-only remainder 64x40x76 at 16x32, single storage: with A read in place, the builder refuses to pad: true
@@ -98,12 +134,17 @@ k-only remainder 64x40x76 at 16x32, single storage: with A read in place, Tensor
 k-only remainder 64x40x76 at 16x32, bfloat16 storage: the builder reads the site's m x n x k off the nest: true
 k-only remainder 64x40x76 at 16x32, bfloat16 storage: the reference is not all zeros: true
 k-only remainder 64x40x76 at 16x32, bfloat16 storage: the serial leg's every row block accumulates in the output: true
+k-only remainder 64x40x76 at 16x32, bfloat16 storage: every in-kernel B~ pack copies each B~ slot exactly once: true
+k-only remainder 64x40x76 at 16x32, bfloat16 storage: the per-row-block Grid leg re-packs B~ once per row block: true
+k-only remainder 64x40x76 at 16x32, bfloat16 storage: under the k-block loop, only the edge k block's B~ packing is guarded: true
 k-only remainder 64x40x76 at 16x32, bfloat16 storage: the serial packed leg matches the unscheduled kernel bitwise: true
 k-only remainder 64x40x76 at 16x32, bfloat16 storage: the Grid packed leg matches the serial packed leg bitwise: true
+k-only remainder 64x40x76 at 16x32, bfloat16 storage: the row-block-panel Grid packed leg matches the serial packed leg bitwise: true
 k-only remainder 64x40x76 at 16x32, bfloat16 storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
 k-only remainder 64x40x76 at 16x32, bfloat16 storage: the hoisted-B~ Grid packed leg matches the serial packed leg bitwise: true
 k-only remainder 64x40x76 at 16x32, bfloat16 storage: every serial Tile_mma renders the register tiling: true
 k-only remainder 64x40x76 at 16x32, bfloat16 storage: every Grid Tile_mma renders the register tiling: true
+k-only remainder 64x40x76 at 16x32, bfloat16 storage: every row-block-panel Grid Tile_mma renders the register tiling: true
 k-only remainder 64x40x76 at 16x32, bfloat16 storage: every Grid-below-k Tile_mma renders the register tiling: true
 k-only remainder 64x40x76 at 16x32, bfloat16 storage: every hoisted-B~ Grid Tile_mma renders the register tiling: true
 k-only remainder 64x40x76 at 16x32, bfloat16 storage: with A read in place, the builder refuses to pad: true
@@ -112,12 +153,17 @@ three k blocks and a tail 48x40x100 at 16x32: the k tail contributes to some out
 three k blocks and a tail 48x40x100 at 16x32, single storage: the builder reads the site's m x n x k off the nest: true
 three k blocks and a tail 48x40x100 at 16x32, single storage: the reference is not all zeros: true
 three k blocks and a tail 48x40x100 at 16x32, single storage: the serial leg's every row block accumulates in the output: true
+three k blocks and a tail 48x40x100 at 16x32, single storage: every in-kernel B~ pack copies each B~ slot exactly once: true
+three k blocks and a tail 48x40x100 at 16x32, single storage: the per-row-block Grid leg re-packs B~ once per row block: true
+three k blocks and a tail 48x40x100 at 16x32, single storage: under the k-block loop, only the edge k block's B~ packing is guarded: true
 three k blocks and a tail 48x40x100 at 16x32, single storage: the serial packed leg matches the unscheduled kernel bitwise: true
 three k blocks and a tail 48x40x100 at 16x32, single storage: the Grid packed leg matches the serial packed leg bitwise: true
+three k blocks and a tail 48x40x100 at 16x32, single storage: the row-block-panel Grid packed leg matches the serial packed leg bitwise: true
 three k blocks and a tail 48x40x100 at 16x32, single storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
 three k blocks and a tail 48x40x100 at 16x32, single storage: the hoisted-B~ Grid packed leg matches the serial packed leg bitwise: true
 three k blocks and a tail 48x40x100 at 16x32, single storage: every serial Tile_mma renders the register tiling: true
 three k blocks and a tail 48x40x100 at 16x32, single storage: every Grid Tile_mma renders the register tiling: true
+three k blocks and a tail 48x40x100 at 16x32, single storage: every row-block-panel Grid Tile_mma renders the register tiling: true
 three k blocks and a tail 48x40x100 at 16x32, single storage: every Grid-below-k Tile_mma renders the register tiling: true
 three k blocks and a tail 48x40x100 at 16x32, single storage: every hoisted-B~ Grid Tile_mma renders the register tiling: true
 three k blocks and a tail 48x40x100 at 16x32, single storage: with A read in place, the builder refuses to pad: true
@@ -125,12 +171,17 @@ three k blocks and a tail 48x40x100 at 16x32, single storage: with A read in pla
 three k blocks and a tail 48x40x100 at 16x32, bfloat16 storage: the builder reads the site's m x n x k off the nest: true
 three k blocks and a tail 48x40x100 at 16x32, bfloat16 storage: the reference is not all zeros: true
 three k blocks and a tail 48x40x100 at 16x32, bfloat16 storage: the serial leg's every row block accumulates in the output: true
+three k blocks and a tail 48x40x100 at 16x32, bfloat16 storage: every in-kernel B~ pack copies each B~ slot exactly once: true
+three k blocks and a tail 48x40x100 at 16x32, bfloat16 storage: the per-row-block Grid leg re-packs B~ once per row block: true
+three k blocks and a tail 48x40x100 at 16x32, bfloat16 storage: under the k-block loop, only the edge k block's B~ packing is guarded: true
 three k blocks and a tail 48x40x100 at 16x32, bfloat16 storage: the serial packed leg matches the unscheduled kernel bitwise: true
 three k blocks and a tail 48x40x100 at 16x32, bfloat16 storage: the Grid packed leg matches the serial packed leg bitwise: true
+three k blocks and a tail 48x40x100 at 16x32, bfloat16 storage: the row-block-panel Grid packed leg matches the serial packed leg bitwise: true
 three k blocks and a tail 48x40x100 at 16x32, bfloat16 storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
 three k blocks and a tail 48x40x100 at 16x32, bfloat16 storage: the hoisted-B~ Grid packed leg matches the serial packed leg bitwise: true
 three k blocks and a tail 48x40x100 at 16x32, bfloat16 storage: every serial Tile_mma renders the register tiling: true
 three k blocks and a tail 48x40x100 at 16x32, bfloat16 storage: every Grid Tile_mma renders the register tiling: true
+three k blocks and a tail 48x40x100 at 16x32, bfloat16 storage: every row-block-panel Grid Tile_mma renders the register tiling: true
 three k blocks and a tail 48x40x100 at 16x32, bfloat16 storage: every Grid-below-k Tile_mma renders the register tiling: true
 three k blocks and a tail 48x40x100 at 16x32, bfloat16 storage: every hoisted-B~ Grid Tile_mma renders the register tiling: true
 three k blocks and a tail 48x40x100 at 16x32, bfloat16 storage: with A read in place, the builder refuses to pad: true
@@ -140,12 +191,17 @@ below both blocks 5x24x7 at 64x256: the k tail contributes to some output cell: 
 below both blocks 5x24x7 at 64x256, single storage: the builder reads the site's m x n x k off the nest: true
 below both blocks 5x24x7 at 64x256, single storage: the reference is not all zeros: true
 below both blocks 5x24x7 at 64x256, single storage: the serial leg's every row block accumulates in the masked fragment: true
+below both blocks 5x24x7 at 64x256, single storage: every in-kernel B~ pack copies each B~ slot exactly once: true
+below both blocks 5x24x7 at 64x256, single storage: the per-row-block Grid leg re-packs B~ once per row block: true
+below both blocks 5x24x7 at 64x256, single storage: under the k-block loop, only the edge k block's B~ packing is guarded: true
 below both blocks 5x24x7 at 64x256, single storage: the serial packed leg matches the unscheduled kernel bitwise: true
 below both blocks 5x24x7 at 64x256, single storage: the Grid packed leg matches the serial packed leg bitwise: true
+below both blocks 5x24x7 at 64x256, single storage: the row-block-panel Grid packed leg matches the serial packed leg bitwise: true
 below both blocks 5x24x7 at 64x256, single storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
 below both blocks 5x24x7 at 64x256, single storage: the hoisted-B~ Grid packed leg matches the serial packed leg bitwise: true
 below both blocks 5x24x7 at 64x256, single storage: every serial Tile_mma renders the register tiling: true
 below both blocks 5x24x7 at 64x256, single storage: every Grid Tile_mma renders the register tiling: true
+below both blocks 5x24x7 at 64x256, single storage: every row-block-panel Grid Tile_mma renders the register tiling: true
 below both blocks 5x24x7 at 64x256, single storage: every Grid-below-k Tile_mma renders the register tiling: true
 below both blocks 5x24x7 at 64x256, single storage: every hoisted-B~ Grid Tile_mma renders the register tiling: true
 below both blocks 5x24x7 at 64x256, single storage: with A read in place, the builder refuses to pad: true
@@ -153,12 +209,17 @@ below both blocks 5x24x7 at 64x256, single storage: with A read in place, Tensor
 below both blocks 5x24x7 at 64x256, bfloat16 storage: the builder reads the site's m x n x k off the nest: true
 below both blocks 5x24x7 at 64x256, bfloat16 storage: the reference is not all zeros: true
 below both blocks 5x24x7 at 64x256, bfloat16 storage: the serial leg's every row block accumulates in the masked fragment: true
+below both blocks 5x24x7 at 64x256, bfloat16 storage: every in-kernel B~ pack copies each B~ slot exactly once: true
+below both blocks 5x24x7 at 64x256, bfloat16 storage: the per-row-block Grid leg re-packs B~ once per row block: true
+below both blocks 5x24x7 at 64x256, bfloat16 storage: under the k-block loop, only the edge k block's B~ packing is guarded: true
 below both blocks 5x24x7 at 64x256, bfloat16 storage: the serial packed leg matches the unscheduled kernel bitwise: true
 below both blocks 5x24x7 at 64x256, bfloat16 storage: the Grid packed leg matches the serial packed leg bitwise: true
+below both blocks 5x24x7 at 64x256, bfloat16 storage: the row-block-panel Grid packed leg matches the serial packed leg bitwise: true
 below both blocks 5x24x7 at 64x256, bfloat16 storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
 below both blocks 5x24x7 at 64x256, bfloat16 storage: the hoisted-B~ Grid packed leg matches the serial packed leg bitwise: true
 below both blocks 5x24x7 at 64x256, bfloat16 storage: every serial Tile_mma renders the register tiling: true
 below both blocks 5x24x7 at 64x256, bfloat16 storage: every Grid Tile_mma renders the register tiling: true
+below both blocks 5x24x7 at 64x256, bfloat16 storage: every row-block-panel Grid Tile_mma renders the register tiling: true
 below both blocks 5x24x7 at 64x256, bfloat16 storage: every Grid-below-k Tile_mma renders the register tiling: true
 below both blocks 5x24x7 at 64x256, bfloat16 storage: every hoisted-B~ Grid Tile_mma renders the register tiling: true
 below both blocks 5x24x7 at 64x256, bfloat16 storage: with A read in place, the builder refuses to pad: true
@@ -168,12 +229,17 @@ rectangular 37x76x45 at 16x32: the k tail contributes to some output cell: true
 rectangular 37x76x45 at 16x32, single storage: the builder reads the site's m x n x k off the nest: true
 rectangular 37x76x45 at 16x32, single storage: the reference is not all zeros: true
 rectangular 37x76x45 at 16x32, single storage: the serial leg's full row blocks accumulate in the output, only the edge block in a fragment: true
+rectangular 37x76x45 at 16x32, single storage: every in-kernel B~ pack copies each B~ slot exactly once: true
+rectangular 37x76x45 at 16x32, single storage: the per-row-block Grid leg re-packs B~ once per row block: true
+rectangular 37x76x45 at 16x32, single storage: under the k-block loop, only the edge k block's B~ packing is guarded: true
 rectangular 37x76x45 at 16x32, single storage: the serial packed leg matches the unscheduled kernel bitwise: true
 rectangular 37x76x45 at 16x32, single storage: the Grid packed leg matches the serial packed leg bitwise: true
+rectangular 37x76x45 at 16x32, single storage: the row-block-panel Grid packed leg matches the serial packed leg bitwise: true
 rectangular 37x76x45 at 16x32, single storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
 rectangular 37x76x45 at 16x32, single storage: the hoisted-B~ Grid packed leg matches the serial packed leg bitwise: true
 rectangular 37x76x45 at 16x32, single storage: every serial Tile_mma renders the register tiling: true
 rectangular 37x76x45 at 16x32, single storage: every Grid Tile_mma renders the register tiling: true
+rectangular 37x76x45 at 16x32, single storage: every row-block-panel Grid Tile_mma renders the register tiling: true
 rectangular 37x76x45 at 16x32, single storage: every Grid-below-k Tile_mma renders the register tiling: true
 rectangular 37x76x45 at 16x32, single storage: every hoisted-B~ Grid Tile_mma renders the register tiling: true
 rectangular 37x76x45 at 16x32, single storage: with A read in place, the builder refuses to pad: true
@@ -181,12 +247,17 @@ rectangular 37x76x45 at 16x32, single storage: with A read in place, Tensorize i
 rectangular 37x76x45 at 16x32, bfloat16 storage: the builder reads the site's m x n x k off the nest: true
 rectangular 37x76x45 at 16x32, bfloat16 storage: the reference is not all zeros: true
 rectangular 37x76x45 at 16x32, bfloat16 storage: the serial leg's full row blocks accumulate in the output, only the edge block in a fragment: true
+rectangular 37x76x45 at 16x32, bfloat16 storage: every in-kernel B~ pack copies each B~ slot exactly once: true
+rectangular 37x76x45 at 16x32, bfloat16 storage: the per-row-block Grid leg re-packs B~ once per row block: true
+rectangular 37x76x45 at 16x32, bfloat16 storage: under the k-block loop, only the edge k block's B~ packing is guarded: true
 rectangular 37x76x45 at 16x32, bfloat16 storage: the serial packed leg matches the unscheduled kernel bitwise: true
 rectangular 37x76x45 at 16x32, bfloat16 storage: the Grid packed leg matches the serial packed leg bitwise: true
+rectangular 37x76x45 at 16x32, bfloat16 storage: the row-block-panel Grid packed leg matches the serial packed leg bitwise: true
 rectangular 37x76x45 at 16x32, bfloat16 storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
 rectangular 37x76x45 at 16x32, bfloat16 storage: the hoisted-B~ Grid packed leg matches the serial packed leg bitwise: true
 rectangular 37x76x45 at 16x32, bfloat16 storage: every serial Tile_mma renders the register tiling: true
 rectangular 37x76x45 at 16x32, bfloat16 storage: every Grid Tile_mma renders the register tiling: true
+rectangular 37x76x45 at 16x32, bfloat16 storage: every row-block-panel Grid Tile_mma renders the register tiling: true
 rectangular 37x76x45 at 16x32, bfloat16 storage: every Grid-below-k Tile_mma renders the register tiling: true
 rectangular 37x76x45 at 16x32, bfloat16 storage: every hoisted-B~ Grid Tile_mma renders the register tiling: true
 rectangular 37x76x45 at 16x32, bfloat16 storage: with A read in place, the builder refuses to pad: true
@@ -194,12 +265,17 @@ rectangular 37x76x45 at 16x32, bfloat16 storage: with A read in place, Tensorize
 dividing control 64x40x64 at 16x32, single storage: the builder reads the site's m x n x k off the nest: true
 dividing control 64x40x64 at 16x32, single storage: the reference is not all zeros: true
 dividing control 64x40x64 at 16x32, single storage: the serial leg's every row block accumulates in the output: true
+dividing control 64x40x64 at 16x32, single storage: every in-kernel B~ pack copies each B~ slot exactly once: true
+dividing control 64x40x64 at 16x32, single storage: the per-row-block Grid leg re-packs B~ once per row block: true
+dividing control 64x40x64 at 16x32, single storage: under the k-block loop, only the edge k block's B~ packing is guarded: true
 dividing control 64x40x64 at 16x32, single storage: the serial packed leg matches the unscheduled kernel bitwise: true
 dividing control 64x40x64 at 16x32, single storage: the Grid packed leg matches the serial packed leg bitwise: true
+dividing control 64x40x64 at 16x32, single storage: the row-block-panel Grid packed leg matches the serial packed leg bitwise: true
 dividing control 64x40x64 at 16x32, single storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
 dividing control 64x40x64 at 16x32, single storage: the hoisted-B~ Grid packed leg matches the serial packed leg bitwise: true
 dividing control 64x40x64 at 16x32, single storage: every serial Tile_mma renders the register tiling: true
 dividing control 64x40x64 at 16x32, single storage: every Grid Tile_mma renders the register tiling: true
+dividing control 64x40x64 at 16x32, single storage: every row-block-panel Grid Tile_mma renders the register tiling: true
 dividing control 64x40x64 at 16x32, single storage: every Grid-below-k Tile_mma renders the register tiling: true
 dividing control 64x40x64 at 16x32, single storage: every hoisted-B~ Grid Tile_mma renders the register tiling: true
 dividing control 64x40x64 at 16x32, single storage: the A-in-place packed leg matches the serial packed leg bitwise: true
@@ -207,12 +283,17 @@ dividing control 64x40x64 at 16x32, single storage: every A-in-place Tile_mma re
 dividing control 64x40x64 at 16x32, bfloat16 storage: the builder reads the site's m x n x k off the nest: true
 dividing control 64x40x64 at 16x32, bfloat16 storage: the reference is not all zeros: true
 dividing control 64x40x64 at 16x32, bfloat16 storage: the serial leg's every row block accumulates in the output: true
+dividing control 64x40x64 at 16x32, bfloat16 storage: every in-kernel B~ pack copies each B~ slot exactly once: true
+dividing control 64x40x64 at 16x32, bfloat16 storage: the per-row-block Grid leg re-packs B~ once per row block: true
+dividing control 64x40x64 at 16x32, bfloat16 storage: under the k-block loop, only the edge k block's B~ packing is guarded: true
 dividing control 64x40x64 at 16x32, bfloat16 storage: the serial packed leg matches the unscheduled kernel bitwise: true
 dividing control 64x40x64 at 16x32, bfloat16 storage: the Grid packed leg matches the serial packed leg bitwise: true
+dividing control 64x40x64 at 16x32, bfloat16 storage: the row-block-panel Grid packed leg matches the serial packed leg bitwise: true
 dividing control 64x40x64 at 16x32, bfloat16 storage: the Grid-below-k packed leg matches the serial packed leg bitwise: true
 dividing control 64x40x64 at 16x32, bfloat16 storage: the hoisted-B~ Grid packed leg matches the serial packed leg bitwise: true
 dividing control 64x40x64 at 16x32, bfloat16 storage: every serial Tile_mma renders the register tiling: true
 dividing control 64x40x64 at 16x32, bfloat16 storage: every Grid Tile_mma renders the register tiling: true
+dividing control 64x40x64 at 16x32, bfloat16 storage: every row-block-panel Grid Tile_mma renders the register tiling: true
 dividing control 64x40x64 at 16x32, bfloat16 storage: every Grid-below-k Tile_mma renders the register tiling: true
 dividing control 64x40x64 at 16x32, bfloat16 storage: every hoisted-B~ Grid Tile_mma renders the register tiling: true
 dividing control 64x40x64 at 16x32, bfloat16 storage: the A-in-place packed leg matches the serial packed leg bitwise: true

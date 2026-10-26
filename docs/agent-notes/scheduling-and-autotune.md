@@ -1971,6 +1971,22 @@ files.
   `Grid` flavors are untouched (a `Grid` loop is not split; `Grid_outermost` contracts at `k_o`).
   The census then reports two register-tiled `Tile_mma`s for one padded serial GEBP;
   `gebp_padded_parity` pins where each row block accumulates.
+- **The padded GEBP's k guard was the rest of the excess** (gh-ocannl-1631). With k padded, the
+  packing nests store `Where (bk*k_o + k_i < nk)` per A~/B~ element in EVERY k block. `Bench_gebp`
+  now `Partition`s `k_o` at its last full block (what `Pad`'s contract prescribes); the full
+  segment's guards fold. On rog, `narrow_gebp_bench` n=76 at 16x32 went from 1.487x to 1.236x its
+  dividing 19x76 control (the pad waste is 1.33x), and n=48 at 16x32 serial from 3.38 to 2.64 us.
+  The autotuner's `cpu_mma_pack_sketch_schedule` pads the same way and does NOT split yet. The
+  whole-K residual (16x76 vs 19x76: 1.095x against 1.053x row waste, block shapes differing too)
+  is what two-site `Fuse_epilogue` fusion could at most recover, so it was not built.
+  `Grid_outermost` B~ packing is a size call, not a fix: re-packing a panel per row block runs
+  concurrently (free while row blocks <= workers; packing the whole B~ once, serially, ahead of the
+  Grid ran 8-24% slower at n=48..128), but past `cc_grid_private_bytes_cap` the per-chunk panels
+  decline the Grid to serial (n=512 at 64x256: 2.08 ms vs 0.91 packed once).
+  `Bench_gebp.grid_b_pack` switches at that cap, below a 4 MiB stack bound on the whole tile. A
+  `Stage` over `[k_o; k_i; j]` has no anchor, so its copy nest lands at the routine root;
+  `Tensorize` accepts its padded read at `bk*k_o + k_i` because a pad-masked operand may now be an
+  affine read whose range, over the enclosing loops, stays inside the tile.
 - What a pad MAY do is not what it SHOULD: `Sketch_families.judge_pad_waste` (gh-ocannl-740)
   excludes, per geometry menu, a geometry whose padded work is at least `autotune_pad_waste_max`
   (2) times that of the menu's least-padded PROPOSED geometry, witness naming both ratios. Relative

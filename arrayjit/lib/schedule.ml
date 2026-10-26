@@ -533,6 +533,7 @@ let tensorize_llc ~(zero_fringe : Tn.t -> bool) ~i ~j ~k ~lane ~simd_width ~tile
     : Low_level.t * pad_mask list =
   let open Low_level in
   let out_masks = ref [] in
+  let enclosing_ranges = lazy (Low_level.loop_ranges llc) in
   let llc =
     rewrite_loop ~what:"Schedule.Tensorize" ~sym:i llc ~f:(fun ifc ->
         if simd_width <= 0 then refuse "Schedule.Tensorize: simd_width must be positive";
@@ -738,10 +739,31 @@ let tensorize_llc ~(zero_fringe : Tn.t -> bool) ~i ~j ~k ~lane ~simd_width ~tile
                ^ " to be a zero-fringe staged tile (Stage the operand over the padded loops first)"
                 );
             let dims = Lazy.force tn.Tn.dims in
+            (* An affine read [s + outer terms] covers too when every value it takes over [s]'s
+               padded extent and the enclosing loops' ranges lies inside the tile (gh-ocannl-1631):
+               a tile staged over the block loop as well (the whole padded reduction axis of a
+               [Grid_outermost] GEBP's B~) reads its padded slots at [bk*k_o + k_i], each one the
+               zero-filled fringe slot of the source position the guard tests. *)
+            let covering_affine p { Indexing.symbols; offset } =
+              List.fold symbols
+                ~init:(Some (offset, offset))
+                ~f:(fun acc (c, sym) ->
+                  let range =
+                    if Indexing.equal_symbol sym s then Option.some_if (c = 1) (0, extent_of s - 1)
+                    else Affine.Loop_ranges.find (Lazy.force enclosing_ranges) sym
+                  in
+                  match (acc, range) with
+                  | Some (lo, hi), Some (rlo, rhi) ->
+                      if c >= 0 then Some (lo + (c * rlo), hi + (c * rhi))
+                      else Some (lo + (c * rhi), hi + (c * rlo))
+                  | _ -> None)
+              |> Option.exists ~f:(fun (lo, hi) -> lo >= 0 && hi < dims.(p))
+            in
             Array.iteri idcs ~f:(fun p idx ->
                 if mentions s idx then
                   match idx with
                   | Indexing.Iterator _ when dims.(p) >= extent_of s -> ()
+                  | Indexing.Affine aff when covering_affine p aff -> ()
                   | _ ->
                       refuse
                         ("Schedule.Tensorize: pad guard on " ^ Indexing.symbol_ident s

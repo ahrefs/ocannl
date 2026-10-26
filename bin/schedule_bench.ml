@@ -16,11 +16,13 @@
    grid-outermost flavors — one dispatch spanning the whole GEBP triple (gh-ocannl-473 /
    gh-ocannl-475): pm_hoist (hoisted constant-pool B~ panel, A read in place; autotune's sk_grid &&
    sk_hoist seed), pm_mixed (hoisted B~ plus an in-kernel per-chunk A~ pack; the sk_pack_rest seed),
-   and pm_bpk (both operands packed in-kernel, each chunk re-packing its own B~ panel — needs the
-   panel under the per-chunk privatization cap, config cc_grid_private_bytes_cap, or it silently
-   declines to serial: check with --ocannl_schedule_log_declines=true). The packed variants are
-   built by [Bench_gebp], [narrow_gebp_bench]'s builder, which pads a row or reduction extent its
-   block does not divide (gh-ocannl-1562).
+   and pm_bpk (both operands packed in-kernel: A~ per chunk, B~ re-packed per row block while the
+   per-chunk tiles fit the privatization cap, config cc_grid_private_bytes_cap, and past it packed
+   whole once ahead of the dispatch — [Bench_gebp.grid_b_pack], gh-ocannl-1631; past
+   [Bench_gebp.whole_b_bytes_cap] too, the Grid silently declines to serial: check with
+   --ocannl_schedule_log_declines=true). The packed variants are built by [Bench_gebp],
+   [narrow_gebp_bench]'s builder, which pads a row or reduction extent its block does not divide
+   (gh-ocannl-1562).
 
    The C-backend register-tiled variants (tensorize, packmma, packmma_par and the three
    grid-outermost flavors) take the renderer's own C-tile geometry unless [--tile=rm,rn,lanes] or
@@ -492,8 +494,8 @@ let () =
      pm_bpk: [Grid i_o { k_o }], one dispatch spanning the whole triple (gh-ocannl-473 /
      gh-ocannl-475). pm_hoist hoists B~ and reads A in place (autotune's sk_grid && sk_hoist seed);
      pm_mixed hoists B~ and packs A~ per chunk (the sk_pack_rest seed); pm_bpk packs both in-kernel,
-     each chunk re-packing its own B~ panel (redundant work, but no dispatch per k block; the panel
-     must fit the per-chunk privatization cap). *)
+     B~ per row block or, once the per-chunk tiles outgrow the privatization cap, whole once ahead
+     of the dispatch ([Bench_gebp.grid_b_pack], gh-ocannl-1631), and A~ per chunk. *)
   let gebp_schedule ~layout ~hoist_b ~stage_a ~mc opt =
     Bench_gebp.packed_schedule ~layout ~hoist_b ~stage_a ~tile_prec:None ?tile ~bm:gebp_bm
       ~bk:gebp_bk ~a:ma.Tensor.value ~b:mb.Tensor.value ~c:mc opt
