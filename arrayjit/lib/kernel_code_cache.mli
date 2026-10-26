@@ -43,6 +43,57 @@ type stats = { n_groups : int; n_entries : int; n_bytes : int; n_evicted_groups 
 
 val stats : 'v t -> stats
 
+(** {2 Concurrent programs (gh-ocannl-1603)}
+
+    A cold compile -- a search's first candidate, every kernel a miss -- compiles the whole batch as
+    one program. Where the vendor compiler costs per kernel and runs in parallel across programs
+    (nvrtc: a [gpt2_mini_train] step's 269 kernels took 4.73 s as one program, 2.14-2.18 s as 8
+    programs compiled on 8 threads, and 7.22 s as 269 programs on 8 threads), {!resolve} can split a
+    large group of misses into a few programs and compile them at once. *)
+
+type split = {
+  max_programs : int;  (** At most this many programs per option list; [<= 1] never splits. *)
+  min_kernels : int;  (** At least this many kernels per program ([0] counts as [1]). *)
+}
+
+val programs_for : split -> int -> int
+(** [programs_for split n] is how many programs [n] kernels of one option list compile as:
+    [min max_programs (n / min_kernels)], at least 1, at most [n]. *)
+
+val chunks : int -> int list -> int list list
+(** [chunks k idxs] is [idxs] cut into [k] contiguous runs, balanced by count (the first [t * n / k]
+    .. [(t + 1) * n / k] for each [t]), empty runs dropped. *)
+
+val with_split : split -> (unit -> 'a) -> 'a
+(** Runs [f] with [split] in place of whatever a backend's configuration would give
+    ({!current_split_override}), for tests that compare a split compile with a whole one in one
+    process. *)
+
+val current_split_override : unit -> split option
+
+val record_split_capable : unit -> unit
+(** A backend that can split its compiles records each compile, whether or not it split -- with its
+    kernel code cache disabled too -- so a test gates its split claims on {!split_capable_compiles}
+    rather than on a backend name. *)
+
+val split_capable_compiles : unit -> int
+
+val programs_compiled_concurrently : unit -> int
+(** Programs {!resolve} has compiled through its concurrent path in this process. *)
+
+type ('p, 'w) concurrent = {
+  split : split;
+  prepare : group:int -> n_groups:int -> string list -> int list -> unit -> 'w;
+      (** On the calling domain, in batch order, before any compile starts: whatever must be done
+          there (artifacts, census records); it answers the compile itself, which runs on a domain
+          of its own and must touch no domain-local or unsynchronized state. *)
+  finish : group:int -> 'w -> 'p * int;
+      (** On the calling domain, after every compile returned, in batch order, for each one that
+          succeeded: the program and its weight, as [compile_group] answers them. *)
+  phase : (unit -> unit) -> unit;
+      (** Wraps the concurrent phase on the calling domain (a timer: the census is domain-local). *)
+}
+
 val resolve :
   ('p * string) t ->
   lock:Stdlib.Mutex.t ->
@@ -51,6 +102,7 @@ val resolve :
   symbols:string array ->
   ?always_lock:bool ->
   ?before_compile:(n_compiled:int -> n_groups:int -> unit) ->
+  ?concurrent:('p, 'w) concurrent ->
   compile_group:(group:int -> n_groups:int -> string list -> int list -> 'p * int) ->
   unit ->
   ('p * string) array
@@ -69,7 +121,17 @@ val resolve :
     exception propagates; the next compile of those kernels compiles them afresh. [before_compile]
     runs under the lock ahead of the compiles, also when nothing is left to compile -- which happens
     under the lock only with [always_lock] (a caller that writes per-compile artifacts even for an
-    all-hit batch). *)
+    all-hit batch).
+
+    With [concurrent] (gh-ocannl-1603), each option list's representatives are cut into
+    [programs_for concurrent.split] {!chunks}. When none is cut, the compile is the one above,
+    through [compile_group]. When any is, every program of the batch -- numbered in batch order,
+    [n_groups] counting them all -- is prepared, then compiled at once (the first on the calling
+    domain, the others on domains of their own, every one joined before [resolve] returns or
+    raises), still under [lock]; then each one that succeeded is finished and published in batch
+    order, and the first failure in batch order propagates with its backtrace. So the partition
+    changes neither a key nor a published value's meaning: a kernel's program holds its own code
+    under its own option list, beside fewer companions. *)
 
 val segment_kernel_name : routine:string -> int -> string
 (** The name a fissioned routine's segment kernel [i] is given ([Backends]: [<routine>__seg<i>]). *)

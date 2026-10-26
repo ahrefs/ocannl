@@ -1,0 +1,9 @@
+split and joint agree bit for bit on cross_entropy_loss: true
+split and joint agree bit for bit on gcp_w1: true
+split and joint agree bit for bit on gcp_w2: true
+the step moved w1 (the parity is not over untouched values): true
+the step rendered at least two kernels: true
+the joint compile compiled no program concurrently: true
+the split compile compiled every kernel it rendered: true
+the split compile compiled at least two programs at once: true
+and timed them as device time: true

@@ -59,3 +59,23 @@ and publishes nothing: true
 the next compile of those kernels compiles them afresh: true
 two domains missing the same keys compile them once: true
 and both get the one program: true
+programs: bounded by the cap: true
+programs: bounded by the least kernels per program: true
+programs: a cap of 1 never splits: true
+programs: never more than the kernels: true
+chunks: contiguous, balanced by count: true
+split: three programs of contiguous representatives, numbered in batch order: true
+split: every program is prepared on the calling domain: true
+split: the compiles ran at once (each saw all three started before its deadline): true
+split: the first compile ran on the calling domain, the others on two more: true
+split: every program is finished on the calling domain, in batch order: true
+split: each kernel answers its own program: true
+split: a duplicate answers its representative's: true
+split: each program is published under its kernels' keys: true
+split: no serial compile: true
+split: the census counts three programs: true
+too few kernels for two programs: one serial compile: true
+and none of the six misses prepared for a concurrent compile: true
+a refused program propagates its failure: true
+after every compile was joined: true
+the programs that compiled are published, the refused one is not: true
