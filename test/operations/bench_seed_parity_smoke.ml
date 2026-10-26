@@ -14,7 +14,17 @@
    Gated on the seeder's own capability judgment for an f32 site, as conv_merged_gpu_seeds is: a GPU
    that withholds the f32 tensorized capability (CUDA at tf32 off) seeds nothing on GPU and skips
    with the aggregation that lifts it. Per-seed verdicts and the worst differences go to stderr; the
-   golden holds the claims. *)
+   golden holds the claims.
+
+   gh-ocannl-1602: a tf32 arm (CUDA, the [-tf32] rule) rounds a tensorized conv's multiplicands, so
+   the parity reference rounds the seed's accumulations the same way, and a seed whose max-pool
+   selections still flip (an accumulation-order tie) is judged against a reference replaying its
+   decisions. The step is built to make both load-bearing: the conv kernel is set to 1/8 and the
+   images to multiples of 1/8, so every sum is exact whatever the order, except image 0's pool
+   window that f32 decides and tf32 ties at zero ([image]). Every seed must match the rounded
+   reference; against the plain reference a tf32-rounded conv seed must mismatch when nothing is
+   replayed, and match with the window's flip replayed. On an arm that reads f32 as f32 the three
+   tf32 claims skip. *)
 
 open Base
 open Ocannl
@@ -32,8 +42,9 @@ let classes = 4
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 let on_cpu = Ir.Schedule.backend_is_cpu backend_name
 
-(* Deterministic, RNG-free, and varying with every axis of the images. *)
-let wave k = Float.of_int ((k * 37 % 19) - 9) /. 10.
+(* Deterministic, RNG-free, and varying with every axis of the images; multiples of 1/8, exact in
+   tf32, so that with the 1/8 kernel every conv sum is exact. *)
+let wave k = Float.of_int ((k * 37 % 19) - 9) /. 8.
 let nd debug dims f = Ir.Ndarray.init_array ~debug Ir.Ops.single ~dims ~padding:None ~f
 
 let claims_census =
@@ -50,6 +61,32 @@ let claims_parity =
      perturb";
   ]
 
+(* Image 0's pattern repeats down every row, so it flips two cells of each pool window on columns
+   2-3 in every row band and out-channel: on the order of a hundred of the step's few thousand
+   selection cells, far above the default bound (one in a hundred thousand), which is sized for real
+   graphs. The smoke states its own fraction. *)
+let replay_fraction = 0.05
+
+let claims_tf32 =
+  [
+    "tf32: some executed seed's reference is rounded to tf32";
+    "tf32 control: against the plain reference, nothing replayed, some tf32-rounded conv seed \
+     mismatches";
+    "tf32 replay: against the plain reference, the tied-at-zero window's flip is replayed and that \
+     seed matches";
+  ]
+
+(* Image 0 is a tied-at-zero pool window, the shape a residual's pre-activation near 0 gives real
+   graphs (gh-ocannl-1602: cifar_resnet's u31). Every row of image 0 holds, column by column, 0, a,
+   -1, 0, -1, a, 0, 0, where a = 1 + 2^-12 (tf32 rounds it to 1). A conv output cell (h, w) reads
+   columns w+o..w+o+2 for the padded conv's offset o, 0 or -1, so at either offset exactly one of
+   the window's (rows 2-3, columns 2-3) two columns sums to a - 1 = 2^-12 per row and channel --
+   positive in f32, exactly 0 in tf32 -- and the other to -2: after the relu, f32 picks that
+   column's cells as the window's max, while under tf32 all four cells tie at 0 and the pool's
+   backward routes the gradient to every one. *)
+let image ~img ~w k =
+  if img = 0 then match w with 1 | 5 -> 1. +. (2. **. -12.) | 2 | 4 -> -1. | _ -> 0. else wave k
+
 let tensorized_capability =
   lazy
     (let ctx = Context.auto () in
@@ -61,7 +98,7 @@ let () =
   let total = batch * n_batches in
   let x_nd =
     nd "sp_x" [| total; side; side; chans |] (fun i ->
-        wave ((((((i.(0) * side) + i.(1)) * side) + i.(2)) * chans) + i.(3)))
+        image ~img:i.(0) ~w:i.(2) ((((((i.(0) * side) + i.(1)) * side) + i.(2)) * chans) + i.(3)))
   in
   let y_nd = nd "sp_y" [| total; classes |] (fun i -> if i.(1) = i.(0) % classes then 1. else 0.) in
   let xs = TDSL.rebatch ~l:"xs" x_nd () in
@@ -85,6 +122,18 @@ let () =
     Asgns.sequence [ update; sgd ]
   in
   let ctx = Train.init_params (Context.auto ()) bindings loss in
+  (* The conv's kernel at 1/8 and its bias at 0: exact in tf32, so only the images' low bits differ
+     between a tf32 and an f32 conv. *)
+  let ctx =
+    Set.fold loss.Tensor.params ~init:ctx ~f:(fun ctx p ->
+        let tn = p.Tensor.value in
+        let dn = Ir.Tnode.debug_name tn in
+        if String.is_substring dn ~substring:"sp_conv" then
+          Context.set_values ctx tn
+            (Array.create ~len:(Ir.Tnode.num_elems tn)
+               (if String.is_substring dn ~substring:"bias" then 0. else 0.125))
+        else ctx)
+  in
   let static_indices = [ batch_n ] in
   let opt = Bench_harness.capture_lowering ctx step bindings in
   (* The census mode. *)
@@ -99,16 +148,26 @@ let () =
     | `Withheld aggregation when not on_cpu -> Some aggregation
     | `Withheld _ | `Advertised -> None
   in
+  let limits = Context.hardware_limits ctx in
+  let tf32_withheld =
+    if P.f32_reads_tf32 limits then None
+    else if P.f32_reads_tf32_under_tf32_policy limits then Some `Environment
+    else Some `Backend
+  in
   match gpu_withheld with
   | Some aggregation ->
-      List.iter claims_parity ~f:(Verdict.skipped ~aggregation ~backend:backend_name)
-  | None ->
-      let parity ~perturb =
+      List.iter (claims_parity @ claims_tf32)
+        ~f:(Verdict.skipped ~aggregation ~backend:backend_name)
+  | None -> (
+      let parity ?(round = true) ?(replay = true) ?(select = P.any_seed) ~perturb () =
         snd
-          (P.parity ~perturb ~select:P.any_seed
+          (P.parity ~perturb ~round ~replay ~replay_fraction ~select
              ~on_result:(fun r ->
-               Stdio.eprintf "%s%s (not part of the golden)\n"
+               Stdio.eprintf "%s%s%s (not part of the golden)\n"
                  (if perturb then "perturbed " else "")
+                 (if round then ""
+                  else if replay then "plain reference, replay: "
+                  else "plain reference: ")
                  (P.verdict_line r))
              ctx step bindings
              ~bind:(fun r -> IDX.find_exn r.Context.bindings batch_n := 0)
@@ -117,17 +176,32 @@ let () =
       let executed =
         List.filter ~f:(fun r -> match r.P.verdict with Match _ | Mismatch _ -> true | _ -> false)
       in
-      let results = parity ~perturb:false in
+      let results = parity ~perturb:false () in
       let matched = function { P.verdict = Match _; _ } -> true | _ -> false in
       let mismatched = function { P.verdict = Mismatch _; _ } -> true | _ -> false in
       let broken = function
-        | { P.verdict = Not_applied | Failed _ | Not_perturbed; _ } -> true
+        | { P.verdict = Not_applied | Unjudged _ | Failed _ | Not_perturbed; _ } -> true
         | _ -> false
       in
       p (List.nth_exn claims_parity 0) (not (List.is_empty (executed results)));
       p_all (List.nth_exn claims_parity 1) (executed results) ~f:matched;
       p_none (List.nth_exn claims_parity 2) results ~f:broken;
-      let perturbed = parity ~perturb:true in
+      let perturbed = parity ~perturb:true () in
       p (List.nth_exn claims_parity 3) (not (List.is_empty (executed perturbed)));
       p_all (List.nth_exn claims_parity 4) (executed perturbed) ~f:mismatched;
-      p_none (List.nth_exn claims_parity 5) perturbed ~f:broken
+      p_none (List.nth_exn claims_parity 5) perturbed ~f:broken;
+      match tf32_withheld with
+      | Some aggregation ->
+          List.iter claims_tf32 ~f:(Verdict.skipped ~aggregation ~backend:backend_name)
+      | None ->
+          let rounded r = not (List.is_empty r.P.rounded) in
+          p_exists (List.nth_exn claims_tf32 0) (executed results) ~f:rounded;
+          let rounded_labels =
+            List.filter_map results ~f:(fun r -> if rounded r then Some r.P.label else None)
+          in
+          let ours r = List.mem rounded_labels r.P.label ~equal:String.equal in
+          let plain = parity ~round:false ~replay:false ~select:P.conv_seed ~perturb:false () in
+          p_exists (List.nth_exn claims_tf32 1) plain ~f:(fun r -> mismatched r && ours r);
+          let replayed = parity ~round:false ~select:P.conv_seed ~perturb:false () in
+          p_exists (List.nth_exn claims_tf32 2) replayed ~f:(fun r ->
+              matched r && ours r && r.P.replayed && r.P.flipped > 0))

@@ -757,8 +757,7 @@ single-threaded segments that sum to the serial step
   per-segment candidate, for one step against the default pipeline's step from the same state, and
   prints a verdict per seed: the worst normalized difference over every materialized node both
   routines write, parameters after the update and the loss included, against `BENCH_PARITY_TOL`
-  (default 1e-3; 1e-2 when `tf32_matmuls` lets f32 matmuls read as tf32, where the in-memory smoke's
-  CUDA conv seeds reach 4e-4). Before each run the parameters are restored and every other written node is
+  (default 1e-3). Before each run the parameters are restored and every other written node is
   filled with NaN, so a seed that misses cells cannot pass on values another routine left.
   `BENCH_PARITY_PERTURB=1` is its negative control: every seeded segment's code is perturbed after
   scheduling, and each perturbed seed must come back a mismatch. Exit 4 when a seed fails, 5 when no
@@ -766,15 +765,29 @@ single-threaded segments that sum to the serial step
   in-memory convnet). Candidates are timed, not value-checked, so this is how a seed's soundness
   on a real graph is checked: on `cifar_resnet` materialize-all, Metal, all 52 conv seeds match
   (worst 2.5e-6) and all 52 perturbed seeds are caught. Under `tf32_matmuls` (CUDA's only regime
-  with f32 conv seeds) a training step's max-pool backward confounds the oracle: a tf32 conv
-  rounds apart from the f32 reference, a pool window's argmax flips, and the routed gradient moves
-  between cells — normalized difference exactly 1 at a `..._cond_..._sum` selection node, a few
-  percent on the parameter gradients — so every conv seed of `cifar_resnet` mismatches there. Add
-  `BENCH_FWD=1` to judge the forward conv seeds without the routing: on CUDA (rog-nv-linux)
-  all 32 match at worst 3.9e-4. Before gh-ocannl-1598 the unfused pad-masked seeds
-  `conv-mma-gpu 0x0x0/16x0 simd32` of segments u45 and u50 computed a wrong conv output (0.74 and
-  0.60) while their fused-epilogue twins matched, and the loss alone moved 3e-5, which is why
-  every written node is compared rather than the step's outcome.
+  with f32 conv seeds) a seed whose contraction renders on the tf32 arm is compared with the
+  default pipeline over a lowering whose matching accumulations round their multiplicands to tf32
+  (gh-ocannl-1602): against the plain f32 reference a pool window's argmax flips and the routed
+  gradient moves, so every conv seed of a training step used to mismatch, and only `BENCH_FWD=1`
+  could judge them. The verdict line names the rounded nodes; the summary counts the rounded
+  seeds, the rounded reference compiles (one per distinct node set in a row) and masked cells
+  (always 0). `BENCH_PARITY_ROUND=0` keeps the plain reference, the control that shows the rounding
+  is load-bearing. Equal rounding leaves the order of the f32 accumulation, which tensor cores do
+  not keep: a seed whose decisions -- max-pool selections, relu gates -- flipped on such a tie is
+  judged against the reference replaying its decisions (the forward nodes they are taken on --
+  comparison operands, gate thresholds -- preloaded with the seed's values, once they are within
+  the tolerance), every other node at the tolerance, selections included, the flipped cells bounded
+  by 1e-5 of the decision cells and printed per seed; `BENCH_PARITY_REPLAY=0` turns the replay off, and
+  `BENCH_PARITY_DETAIL=1` prints a mismatch's anatomy (its nodes worst first, and the same-sized
+  nodes' values at its first cells). On CUDA (rog-nv-linux) all 32 cifar_resnet conv seeds of a
+  training step match, worst 3.3e-6, four of them (segment u31) after replaying 4 flipped decision
+  cells; against the plain reference 28 of 32 fail even with the replay (21 to 645 flips per seed,
+  over the bound) and all 32 without it. A seed whose rounding cannot be established (some of its tensor-core statements
+  fell back, or its accumulator matches no single reference accumulation) is `UNJUDGED`, a
+  failure. Before gh-ocannl-1598 the unfused pad-masked seeds `conv-mma-gpu 0x0x0/16x0 simd32` of
+  segments u45 and u50 computed a wrong conv output (0.74 and 0.60) while their fused-epilogue
+  twins matched, and the loss alone moved 3e-5, which is why every written node is compared rather
+  than the step's outcome.
   `BENCH_SR_SITES=1` (`bench_conv_diag`, and `bench_gpt_diag` on the GPT step) prints what `Autotune.split_reduce_sites` proposes on the
   same graph — the gh-ocannl-484 task-3 seeding can only reach the accumulations listed there, so
   it is the companion to the census above when asking why a seeded split-reduce family did or did

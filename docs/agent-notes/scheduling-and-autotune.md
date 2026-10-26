@@ -2751,11 +2751,32 @@ files.
   `Tile_mma` render as the scalar fallback: the control proves detection, not that the
   tensorized path ran. **A parity oracle compares every written node, not the step's outcome**:
   CUDA's two wrong pad-masked conv seeds on cifar_resnet (forward output off by 0.74, gh-ocannl-1598)
-  moved the loss by 3e-5. **Under tf32, max-pool backward confounds a training-step oracle**: the seed's conv
-  rounds apart from the f32 reference, a window's argmax flips, and the routed gradient moves
-  between cells (exactly 1 at the `..._cond_..._sum` node, a few percent on parameter gradients),
-  so every conv seed mismatches; judge forward conv seeds with `BENCH_FWD=1` there. On Metal and
-  cc (f32 seeds) no selection flips.
+  moved the loss by 3e-5. **A tf32 seed is judged against a reference rounded as it rounds**
+  (gh-ocannl-1602): `tf32_matmuls` lets only a *tensorized* f32 contraction read tf32, and the
+  default pipeline never tensorizes a conv, so against the plain reference a max-pool window's
+  argmax flips and the routed gradient moves (exactly 1 at the `..._cond_..._sum` node), failing
+  every conv seed of a training step. The reference is therefore the default pipeline over the
+  lowering with the products accumulated into the seed's tf32 targets rounded (`round_products`,
+  scheduled by `maybe_default_schedules` itself): tf32 x tf32 products are exact in f32, leaving
+  only accumulation order, the regime where f32 seeds show no flips. The rounding is built from
+  existing ops (no tf32 op, no bitcast): Veltkamp's split with `c` an explicit `FMA(x, 2^s, x)` --
+  a bare `x * K - x` is fused by nvrtc's default `--fmad=true`, collapsing the split to the
+  identity -- plus an exact ties-away fix-up, pinned bitwise against `cvt.rna` and the hardware by
+  `tf32_reference_rounding`. Which targets: the `Tile_mma` accumulator when the reference writes
+  it, else the one product accumulation of the pre-schedule segment; a mixed fallback rendering or
+  an ambiguous match is `UNJUDGED` (a failure), never a guess. `BENCH_PARITY_ROUND=0` is the
+  control. **Equal rounding still leaves accumulation-order ties**: tensor-core accumulation is not
+  IEEE-ordered, and a residual's pre-activation within ulps of 0 flips a relu gate and a
+  tied-at-zero pool window (cifar_resnet u31: 3 selection cells of 524,288, then 1 gate cell). A
+  flipped seed is judged by **decision replay**: the reference recompiled with the forward nodes
+  the decisions are taken on -- a comparison-written selection's operands, a gate's threshold
+  operand (`decision_nodes`) -- self-copied and preloaded with the candidate's values once they are
+  within tolerance, every other node compared at the tolerance. Replay the operands, never the
+  selection itself: a seed whose selection node is computed wrong off any tie would otherwise hand
+  the reference its wrong decisions. The flipped cells are bounded (1e-5 of the decision cells: on
+  cifar_resnet a rounded seed flips 0-4 of 6.5M, an f32-referenced one 21-645, so the bound also
+  keeps the rounding load-bearing).
+  Masking cells instead cannot work: a flip moves the downstream gradients by 1e-2.
 - A test claims a tensorized seed's PRESENCE wherever the backend advertises the capability, and
   gates on that capability, never on the seed list its claims are about (gh-ocannl-1115). Gated on
   the seeds, a seeding regression — or a claim asking for a seed the seeder excludes by

@@ -57,7 +57,6 @@ let exempt_zero_reference_exports =
     "C_syntax.c_keywords";
     "C_syntax.c_stdlib_idents";
     "C_syntax.c_stdlib_macros";
-    "C_syntax.empty_mma_summary";
     "C_syntax.empty_peel_summary";
     "C_syntax.empty_volatility_summary";
     "C_syntax.extract_idents";
