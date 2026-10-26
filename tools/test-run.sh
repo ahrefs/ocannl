@@ -2887,8 +2887,10 @@ digest() {
     echo "action failed (no diff) -- nothing to promote; read the failure below"
   fi
   if [ "$rc" != 0 ]; then
-    fp=$({ scan_log | grep -oE '^File "[^"]+", lines? [0-9]+(-[0-9]+)?'
-           scan_log | grep -oE '^(Error|Fatal error|Exception)[^,]*'
+    # A forced color (CLICOLOR_FORCE=1) wraps dune's locations and `Error`
+    # tags in SGR escapes, which go before the match (gh-ocannl-1591).
+    fp=$({ scan_log | perl -pe 's/\e\[[0-9;]*m//g' | grep -oE '^File "[^"]+", lines? [0-9]+(-[0-9]+)?'
+           scan_log | perl -pe 's/\e\[[0-9;]*m//g' | grep -oE '^(Error|Fatal error|Exception)[^,]*'
          } 2>/dev/null | sort -u | head -40)
     if [ -n "$fp" ]; then
       echo "fingerprint:"

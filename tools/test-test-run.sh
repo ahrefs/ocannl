@@ -106,9 +106,10 @@
 #      keeps its publication 0, and dune was invoked exactly once; the
 #      launch's own prelude in the log (backends, width) does not hide it.
 #  36. controls: a red run (`Error:`/`File` lines, exit 1) still digests as
-#      FAIL with exit 1 -- including one whose output opens with a `dune:`
-#      line, and one that prints a complete nested dune refusal and then
-#      goes on (the shape must be alone in the log, not merely first).
+#      FAIL with exit 1 and that fingerprint, also where dune is made to
+#      color them (CLICOLOR_FORCE=1) -- including one whose output opens with
+#      a `dune:` line, and one that prints a complete nested dune refusal and
+#      then goes on (the shape must be alone in the log, not merely first).
 #  37. the `--cap` guard still refuses BEFORE dune is spawned: the two exit-2
 #      refusals are told apart by whether dune was ever invoked.
 #  38. `repeat` stops after a refused first iteration and exits 2 under the
@@ -2211,6 +2212,10 @@ case $REPEAT_TEST_MODE in
   red)
     printf 'File "test/operations/fixture.ml", line 3, characters 4-9:\nError: This expression has type int but an expression was expected of type float\n' >&2
     exit 1 ;;
+  # The same located error as dune prints it under CLICOLOR_FORCE=1.
+  red_color)
+    printf '\033[1mFile "test/operations/fixture.ml", line 3, characters 4-9\033[0m:\n\033[1;31mError\033[0m: This expression has type int but an expression was expected of type float\n' >&2
+    exit 1 ;;
   dune_prefixed_red)
     printf 'dune: is what this test prints first\n'
     printf 'File "test/operations/fixture.ml", line 3, characters 4-9:\nError: This expression has type int but an expression was expected of type float\n' >&2
@@ -3745,7 +3750,7 @@ harness_leg_run '35: a dune-refused invocation is INVOCATION REFUSED #digest' le
 leg_36() {
 red_label="a red run still digests as FAIL (exit 1) with its fingerprint"
 red_detail=
-for mode in red dune_prefixed_red nested_usage_red nested_usage_output; do
+for mode in red red_color dune_prefixed_red nested_usage_red nested_usage_output; do
   argv_mode=$mode argv_probe "red-$mode" run build @cheap
   case $argv_rc in
     1) ;;
