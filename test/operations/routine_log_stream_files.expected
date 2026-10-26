@@ -1,4 +1,6 @@
 the run logs its routines to stream files: true
+capture windows pass every non-log line through to stdout: true
+capture windows leave no descriptor open: true
 the logged routine computes its values: true
 the logged run writes nothing to stdout: true
 the logged run's lines reach its stream file: true

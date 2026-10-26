@@ -3417,10 +3417,14 @@ let capture_stdout_logs_window arg =
     let collected_logs_ref = ref [] in
     let reader_domain_failed = Atomic.make false in
 
+    (* The reader's own duplicate of the original stdout, for immediate passthrough. Made here,
+       before the reader is spawned: the reader made it itself, so when [arg] returned before the
+       reader had run, [original_stdout_fd] was already closed, the [dup] failed with [EBADF] and
+       the window lost every line it caught (gh-ocannl-1636). *)
+    let orig_out_fd = Unix.dup ~cloexec:true original_stdout_fd in
     let reader_domain_logic () =
       let in_channel = Unix.in_channel_of_descr pipe_read_fd in
-      (* Create an output channel to the original stdout for immediate passthrough *)
-      let orig_out = Unix.out_channel_of_descr (Unix.dup original_stdout_fd) in
+      let orig_out = Unix.out_channel_of_descr orig_out_fd in
       try
         while true do
           let _is_endlined, line = input_line in_channel in
@@ -3430,11 +3434,14 @@ let capture_stdout_logs_window arg =
               (* Forward non-log lines to original stdout immediately *)
               Stdlib.output_string orig_out (line ^ "\n");
               Stdlib.flush orig_out
-        done;
-        Stdlib.close_out_noerr orig_out;
-        Stdlib.close_in_noerr in_channel (* This closes pipe_read_fd *)
+        done
       with
-      | End_of_file -> () (* Normal termination of the reader *)
+      | End_of_file ->
+          (* Normal termination of the reader: the loop above only ends here, so both channels are
+             closed here, or each window leaks two descriptors -- one per logged launch under
+             [routine_log_window] (gh-ocannl-1636). *)
+          Stdlib.close_out_noerr orig_out;
+          Stdlib.close_in_noerr in_channel (* This closes pipe_read_fd *)
       | exn ->
           Stdlib.close_out_noerr orig_out;
           Atomic.set reader_domain_failed true;

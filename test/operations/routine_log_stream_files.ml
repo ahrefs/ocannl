@@ -45,11 +45,38 @@ let stdout_of f =
 
 let n = 4
 
+(* The descriptors this process holds open, where the host lists them. *)
+let fd_dir = "/dev/fd"
+let open_descriptors () = Array.length (Stdlib.Sys.readdir fd_dir)
+
 let () =
   Stdio.eprintf "routine_log_stream_files: backend %s (not part of the golden)\n%!" backend_name;
   p "the run logs its routines to stream files"
     (Utils.debug_log_from_routines ()
     && Utils.get_global_flag ~default:false ~arg_name:"debug_log_to_stream_files");
+  (* Each logged CUDA or HIP launch now opens a capture window of its own, so a window must pass
+     through every non-log line written inside it and give back every descriptor it opens, however
+     soon its body returns. Before gh-ocannl-1636 the reader's pipe end and its duplicate of stdout
+     leaked on the normal path, and a body that returned before the reader had started closed the
+     descriptor the reader was about to duplicate, so the window lost its lines. Checked through
+     [capture_stdout_logs] itself, on every backend. *)
+  let windows = 5 in
+  let line k = "window " ^ Int.to_string k ^ " passes this line through" in
+  let lists_descriptors = Stdlib.Sys.file_exists fd_dir in
+  let before = if lists_descriptors then open_descriptors () else 0 in
+  let (), passed =
+    stdout_of (fun () ->
+        for k = 1 to windows do
+          Utils.capture_stdout_logs (fun () -> Stdio.print_endline (line k))
+        done)
+  in
+  let leaked = if lists_descriptors then open_descriptors () - before else 0 in
+  if leaked <> 0 then Stdio.eprintf "routine_log_stream_files: %d descriptors leaked\n%!" leaked;
+  p "capture windows pass every non-log line through to stdout"
+    (List.equal String.equal (String.split_lines passed)
+       (List.init windows ~f:(fun k -> line (k + 1))));
+  gated ~aggregation:`Environment ~when_:lists_descriptors ~on:"a host without /dev/fd"
+    "capture windows leave no descriptor open" (leaked = 0);
   let mk = Ll_test.node_factory ~first_id:1636000 ~dims:[| n |] () in
   let a = mk "rlsf_a" and x = mk "rlsf_x" in
   List.iter [ a; x ] ~f:Ll_test.materialize;
