@@ -479,10 +479,30 @@ files.
   gh-ocannl-1551 generalized the hit (`capture_hit`) to the two other inherited reads that refuse a
   routine where they execute: routine-local scratch (`155:capture-reads-local`) and a template that
   cannot be instantiated at the read's indices (`156:capture-read-uninlinable`, reported through
-  `inline_computation ?on_inherited_unservable`, which commits nothing). A routine that only READS
-  an inherited `Local` node never reaches the walk: `decide_placements`' read-only-input rule
-  refuses it on the raw read, dead arm or not — the walk's `Local` refusal is met only by a node
-  the routine also writes.
+  `inline_computation ?on_inherited_unservable`, which commits nothing).
+- **Routine-local scratch an earlier routine placed is judged on the code that executes**
+  (gh-ocannl-1620). `Local` is only ever an earlier routine's finalization decision, so a `Local`
+  node at `decide_placements` is inherited, with or without a template in the table. It has no
+  incoming contents: every read the routine EVALUATES must be strictly covered by the routine's own
+  earlier writes. The raw facts cannot say that — `trace_node_facts` and the raw coverage verdicts
+  see both `Where` arms, take guards as taken, and exempt copy-position reads — so
+  `Low_level.live_view` (the raw code with dead loops dropped and every arm the emit walk decides
+  dead made `Constant 0.`; analysis only, never stored) feeds `an_live_reads` and a strict
+  `an_live_coverage` (a guarded write counts only where its guards dominate the read, as for spliced
+  reads). A condition that reads a buffer is never decided there: the emit walk decides it after
+  inlining, which the interval analysis cannot see through. Rules: no live read decides nothing (a
+  read-only node in a dead arm is no input, its placement untouched); a covered read executes on the
+  routine's scratch; any other read is refused with `inherited_local_read_rejection`, in
+  `decide_placements`, ahead of the `Local -> On_device` read-before-write promotion (an
+  inconsistent transition). **No stored template may hold such a read**, covered or not: it would
+  replay wherever the template does, in later routines too. The capture walk's `155` hit stands for
+  covered reads, and outside a capture the emit walk records the setter owning the read
+  (`local_dependents`), refusing its per-statement store with the same `155`. Pinned, executed
+  against the materialized reading, by the `local, ...` cases of `stored_template_elision.ml`
+  (lineages with and without a stored template; partial, guarded, read-before-write and
+  uninitialized-accumulation controls). Boundary: the rules apply to `Local` nodes only — a fresh
+  node read only in a dead arm still gets the raw `37:read-only-input` placement (over-materializes,
+  values correct).
 - **What a capture walk does to code its template drops** (gh-ocannl-1551). Phase 1 of a shared
   loop walks every setter of the body, though the stored template keeps only the candidate's. Two
   divergences from the emit walk were real (`capture_pass_side_effects.ml`): (1) a statement of

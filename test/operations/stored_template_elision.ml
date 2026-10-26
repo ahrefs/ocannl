@@ -51,7 +51,15 @@
    ([155:capture-reads-local]; [Local] is a backend-finalization decision, so routine A is linked),
    and a computation that cannot be instantiated at the read's indices, a fixed-cell producer read
    at a loop-varying index ([156:capture-read-uninlinable]). Each runs the whole capture family, and
-   each refusal keeps its own message where the read is live or the consumer is declared virtual. *)
+   each refusal keeps its own message where the read is live or the consumer is declared virtual.
+
+   Routine-local scratch on the routine's own terms (gh-ocannl-1620): B's reads of an inherited
+   [Local] node are judged on the code its emit walk evaluates. A read only in a dead arm (by a
+   constant or by B's loop extent) decides nothing; one B's own earlier writes cover executes on B's
+   scratch, after a dead read too -- but a virtual consumer holding it materializes ([155], captured
+   at its loop or stored per statement), since a template would replay it where the scratch is not;
+   a live, undecided, partial, guarded, read-before-write or in-place read is refused with the
+   routine-local message. Lineages with and without a stored template of [v]. *)
 
 open Base
 open Ll_test
@@ -533,39 +541,43 @@ let merge_lineage =
    a fixed-cell component ([13:call-site-index-mismatch]), which commits [v] [Never_virtual] there;
    backend finalization resolves it to [Local], so routine A is linked.
 
-   Routine B overwrites [v] before the consumer reads it: a routine that only READS an inherited
-   [Local] node is refused earlier, by [decide_placements]' read-only-input rule, which judges the
-   raw read wherever it stands -- the virtualizer's read refusal is met only by a node this routine
-   also writes. *)
-let local_lineage =
-  let lineage ~label ~tag =
-    let a = mk (tag ^ "a") and outa = mk (tag ^ "outa") and v = mk (tag ^ "v") in
-    List.iter [ a; outa ] ~f:materialize;
-    let ctx = LL.empty_optimize_ctx () in
-    let llc_a =
-      let s = sym () in
+   gh-ocannl-1620: with [~stored:false], routine A writes [v] under a guard instead, a computation
+   the virtualizer refuses to store ([142:guarded-computation]): the same [Local] scratch with no
+   computation in the table.
+
+   In the capture family routine B only READS [v]: [decide_placements] judges the reads the emitted
+   code evaluates (gh-ocannl-1620), so a read in an arm only the emit walk decides dead reaches the
+   capture walk, whose hit is the refusal under test. *)
+let local_scratch ?(stored = true) ~label ~tag () =
+  let a = mk (tag ^ "a") and outa = mk (tag ^ "outa") and v = mk (tag ^ "v") in
+  List.iter [ a; outa ] ~f:materialize;
+  let ctx = LL.empty_optimize_ctx () in
+  let llc_a =
+    let s = sym () and s2 = sym () in
+    if stored then
       List.reduce_exn ~f:seq
         (List.init dim ~f:(fun k -> set v [| fixed k |] (add (get a [| fixed k |]) (c 1000.)))
         @ [ loop_n s dim (set outa [| iter s |] (get v [| iter s |])) ])
-    in
-    let name = "sts_" ^ tag ^ "_a" in
-    let o_a = optimize_in ctx ~name llc_a in
-    let linked = link_finalized ~ctx:(Context.auto ()) ~placements:[ v ] ~name o_a in
-    let _ctx =
-      run_linked linked ~seed:[ (a, Array.init dim ~f:(fun i -> 60. +. Float.of_int i)) ]
-    in
-    p
-      (label ^ ": routine A placed v as routine-local scratch, its computation in the table")
-      (known_local o_a v && Hashtbl.mem ctx.LL.computations v);
-    (ctx, v)
+    else
+      seq
+        (loop_n s dim
+           (if_ (lt (embed s) (ic dim)) (set v [| iter s |] (add (get a [| iter s |]) (c 1000.)))))
+        (loop_n s2 dim (set outa [| iter s2 |] (get v [| iter s2 |])))
   in
-  let prelude v =
-    let s = sym () in
-    Some (loop_n s dim (set v [| iter s |] (ramp 500. s)))
-  in
+  let name = "sts_" ^ tag ^ "_a" in
+  let o_a = optimize_in ctx ~name llc_a in
+  let linked = link_finalized ~ctx:(Context.auto ()) ~placements:[ v ] ~name o_a in
+  let _ctx = run_linked linked ~seed:[ (a, Array.init dim ~f:(fun i -> 60. +. Float.of_int i)) ] in
+  p
+    (label ^ ": routine A placed v as routine-local scratch, "
+    ^ if stored then "its computation in the table" else "with no computation in the table")
+    (known_local o_a v && Bool.equal stored (Hashtbl.mem ctx.LL.computations v));
+  (ctx, v)
+
+let local_lineage =
   {
-    lineage;
-    prelude;
+    lineage = (fun ~label ~tag -> local_scratch ~label ~tag ());
+    prelude = (fun _ -> None);
     refusal = Tn.Site "155:capture-reads-local";
     message = "routine-local scratch";
   }
@@ -773,6 +785,198 @@ let capture_family ~kind ~lineage =
   case_capture_refused ~lineage ~label:(label "declared-virtual consumer where (i < 4) x v")
     ~tag:(tag "vcd") ~declare_virtual:true (fun s ~x ~v -> where_ (lt (embed s) (ic dim)) x v)
 
+(* gh-ocannl-1620: routine B's own reads of the inherited scratch [v], judged on the code B's
+   emitted walk evaluates. An outcome distinguishes an actionable refusal from a crash. *)
+type local_outcome = Compiled of LL.optimized | Refused of string | Crashed of string
+
+let consume_local ctx ~name llc =
+  try Compiled (optimize_in ctx ~name llc) with
+  | Utils.User_error msg -> Refused msg
+  | exn -> Crashed (Exn.to_string exn)
+
+let local_vals = Array.init dim ~f:(fun i -> 500. +. Float.of_int i)
+
+(* [build ~sfx ~v] returns B's code, its seeds, the nodes read back with their expected values, and
+   placement claims; the materialized reading builds it again over a materialized [v] holding junk,
+   which no evaluated read may observe. *)
+let case_local_accepted ?stored ~label ~tag build =
+  let ctx, v = local_scratch ?stored ~label ~tag () in
+  let llc, seed, reads, claims = build ~sfx:"" ~v in
+  match consume_local ctx ~name:("sts_" ^ tag ^ "_b") llc with
+  | Refused msg | Crashed msg -> p (label ^ ": routine B compiles (refused: " ^ msg ^ ")") false
+  | Compiled o_b ->
+      p
+        (label ^ ": routine B compiles, v stays routine-local scratch and is no input of B")
+        (known_local o_b v && not (Set.mem (inputs o_b) v));
+      List.iter claims ~f:(fun (claim, holds) -> p (label ^ ": " ^ claim) (holds o_b));
+      let got = execute ~name:("sts_" ^ tag ^ "_b") o_b ~seed ~read:(List.map reads ~f:fst) in
+      List.iter2_exn got reads ~f:(fun got (tn, expected) ->
+          p_all2
+            (label ^ ": " ^ Tn.debug_name tn ^ " executes to its expected values")
+            got expected ~f:Float.equal);
+      let v_m = mk (tag ^ "vm") in
+      materialize v_m;
+      let llc_m, seed_m, reads_m, _ = build ~sfx:"m" ~v:v_m in
+      let o_m = optimize ~name:("sts_" ^ tag ^ "_m") llc_m in
+      let got_m =
+        execute
+          ~name:("sts_" ^ tag ^ "_m")
+          o_m ~seed:((v_m, junk) :: seed_m) ~read:(List.map reads_m ~f:fst)
+      in
+      p_all2
+        (label ^ ": the reading agrees with the materialized one")
+        (Array.concat got) (Array.concat got_m) ~f:Float.equal
+
+let case_local_refused ?stored ~label ~tag llc_of =
+  let ctx, v = local_scratch ?stored ~label ~tag () in
+  match consume_local ctx ~name:("sts_" ^ tag ^ "_b") (llc_of ~v) with
+  | Compiled _ -> p (label ^ ": routine B is refused (it compiled)") false
+  | Crashed msg ->
+      p (label ^ ": routine B is refused with an actionable message (crashed: " ^ msg ^ ")") false
+  | Refused msg ->
+      p
+        (label ^ ": routine B is refused, naming v routine-local scratch")
+        (String.is_substring msg ~substring:"routine-local scratch")
+
+(* Item 1: [out[i] := shape i x[i] v[i]], B only reading [v]. *)
+let dead_arm_reader ~tag shape ~sfx ~v =
+  let x = mk (tag ^ "x" ^ sfx) and out = mk (tag ^ "out" ^ sfx) in
+  List.iter [ x; out ] ~f:materialize;
+  let s = sym () in
+  ( loop_n s dim (set out [| iter s |] (shape s ~x:(get x [| iter s |]) ~v:(get v [| iter s |]))),
+    [ (x, x_vals); (out, blank dim) ],
+    [ (out, x_vals) ],
+    [] )
+
+let fill_v v =
+  let s = sym () in
+  loop_n s dim (set v [| iter s |] (ramp 500. s))
+
+(* Item 2: B writes every cell of [v], then [out[i] := v[i] + x[i]] reads it. *)
+let covered_reader ~tag ~sfx ~v =
+  let x = mk (tag ^ "x" ^ sfx) and out = mk (tag ^ "out" ^ sfx) in
+  List.iter [ x; out ] ~f:materialize;
+  let s = sym () in
+  ( seq (fill_v v)
+      (loop_n s dim (set out [| iter s |] (add (get v [| iter s |]) (get x [| iter s |])))),
+    [ (x, x_vals); (out, blank dim) ],
+    [ (out, Array.map2_exn local_vals x_vals ~f:( +. )) ],
+    [] )
+
+(* A read in a dead arm ahead of B's write, which no coverage verdict may count. *)
+let dead_then_covered_reader ~tag ~sfx ~v =
+  let x = mk (tag ^ "x" ^ sfx) and o2 = mk (tag ^ "o2" ^ sfx) and out = mk (tag ^ "out" ^ sfx) in
+  List.iter [ x; o2; out ] ~f:materialize;
+  let s = sym () and s2 = sym () in
+  ( List.reduce_exn ~f:seq
+      [
+        loop_n s dim (set o2 [| iter s |] (where_ (ic 1) (get x [| iter s |]) (get v [| iter s |])));
+        fill_v v;
+        loop_n s2 dim (set out [| iter s2 |] (add (get v [| iter s2 |]) (get x [| iter s2 |])));
+      ],
+    [ (x, x_vals); (o2, blank dim); (out, blank dim) ],
+    [ (o2, x_vals); (out, Array.map2_exn local_vals x_vals ~f:( +. )) ],
+    [] )
+
+let refused_local o tn =
+  Option.equal Tn.equal_provenance (rejection_code o tn) (Some (Tn.Site "155:capture-reads-local"))
+
+(* A virtual candidate [w] whose own code reads the covered [v], captured at its loop: the read
+   executes here, but [w]'s template would carry it to every routine that replays it. *)
+let covered_capture_reader ?(declare_virtual = false) ~tag ~sfx ~v () =
+  let x = mk (tag ^ "x" ^ sfx) and w = mk (tag ^ "w" ^ sfx) and out = mk (tag ^ "out" ^ sfx) in
+  List.iter [ x; out ] ~f:materialize;
+  if declare_virtual then virtualize w;
+  let s = sym () and s2 = sym () in
+  ( List.reduce_exn ~f:seq
+      [
+        fill_v v;
+        loop_n s dim (set w [| iter s |] (add (get v [| iter s |]) (get x [| iter s |])));
+        loop_n s2 dim (set out [| iter s2 |] (get w [| iter s2 |]));
+      ],
+    [ (x, x_vals); (out, blank dim) ],
+    [ (out, Array.map2_exn local_vals x_vals ~f:( +. )) ],
+    [ ("w is refused by its capture and materializes", fun o -> refused_local o w) ] )
+
+(* The same through the per-statement store, outside any loop capture. *)
+let covered_statement_reader ~tag ~sfx ~v =
+  let w = mk (tag ^ "w" ^ sfx) and out = mk (tag ^ "out" ^ sfx) in
+  materialize out;
+  ( List.reduce_exn ~f:seq
+      [
+        fill_v v;
+        set w [| fixed 0 |] (add (get v [| fixed 1 |]) (c 0.5));
+        set out [| fixed 0 |] (get w [| fixed 0 |]);
+      ],
+    [ (out, blank dim) ],
+    [ (out, Array.init dim ~f:(fun i -> if i = 0 then 501.5 else sentinel)) ],
+    [ ("w is refused by its per-statement store and materializes", fun o -> refused_local o w) ] )
+
+let case_local_reads () =
+  let dead_const _ ~x ~v = where_ (ic 1) x v
+  and dead_extent s ~x ~v = where_ (lt (embed s) (ic dim)) x v in
+  case_local_accepted ~label:"local, read-only: dead by a constant" ~tag:"lr1"
+    (dead_arm_reader ~tag:"lr1" dead_const);
+  case_local_accepted ~stored:false ~label:"local, read-only, no template: dead by a constant"
+    ~tag:"lr1n"
+    (dead_arm_reader ~tag:"lr1n" dead_const);
+  case_local_accepted ~label:"local, read-only: dead by B's loop extent" ~tag:"lr2"
+    (dead_arm_reader ~tag:"lr2" dead_extent);
+  let reads shape ~v =
+    let llc, _, _, _ = dead_arm_reader ~tag:"lrx" shape ~sfx:"" ~v in
+    llc
+  in
+  case_local_refused ~label:"local, read-only: live arm" ~tag:"lr3"
+    (reads (fun _ ~x ~v -> where_ (ic 0) x v));
+  case_local_refused ~stored:false ~label:"local, read-only, no template: live arm" ~tag:"lr3n"
+    (reads (fun _ ~x ~v -> where_ (ic 0) x v));
+  case_local_refused ~label:"local, read-only: undecided arm" ~tag:"lr4"
+    (reads (fun s ~x ~v -> where_ (lt (embed s) (ic 2)) x v));
+  case_local_accepted ~label:"local, covered: a materialized consumer" ~tag:"lc1"
+    (covered_reader ~tag:"lc1");
+  case_local_accepted ~stored:false ~label:"local, covered, no template: a materialized consumer"
+    ~tag:"lc1n" (covered_reader ~tag:"lc1n");
+  case_local_accepted ~label:"local, covered after a dead read" ~tag:"lc2"
+    (dead_then_covered_reader ~tag:"lc2");
+  case_local_accepted ~label:"local, covered: a captured virtual consumer" ~tag:"lc3"
+    (fun ~sfx ~v -> covered_capture_reader ~tag:"lc3" ~sfx ~v ());
+  case_local_accepted ~stored:false
+    ~label:"local, covered, no template: a captured virtual consumer" ~tag:"lc3n" (fun ~sfx ~v ->
+      covered_capture_reader ~tag:"lc3n" ~sfx ~v ());
+  case_local_accepted ~label:"local, covered: a per-statement virtual consumer" ~tag:"lc4"
+    (covered_statement_reader ~tag:"lc4");
+  case_local_refused ~label:"local, covered: a declared-virtual consumer" ~tag:"lc5" (fun ~v ->
+      let llc, _, _, _ = covered_capture_reader ~declare_virtual:true ~tag:"lc5" ~sfx:"" ~v () in
+      llc);
+  let read_v ~tag ~v =
+    let out = mk (tag ^ "out") in
+    materialize out;
+    let s = sym () in
+    loop_n s dim (set out [| iter s |] (get v [| iter s |]))
+  in
+  case_local_refused ~label:"local: a partial write" ~tag:"lu1" (fun ~v ->
+      seq (set v [| fixed 0 |] (c 7.)) (read_v ~tag:"lu1" ~v));
+  case_local_refused ~stored:false ~label:"local, no template: a partial write" ~tag:"lu1n"
+    (fun ~v -> seq (set v [| fixed 0 |] (c 7.)) (read_v ~tag:"lu1n" ~v));
+  case_local_refused ~label:"local: a partial write, read at another cell" ~tag:"lu1c" (fun ~v ->
+      let out = mk "lu1cout" in
+      materialize out;
+      seq (set v [| fixed 0 |] (c 7.)) (set out [| fixed 0 |] (get v [| fixed 1 |])));
+  case_local_refused ~label:"local: read before write" ~tag:"lu2" (fun ~v ->
+      seq (read_v ~tag:"lu2" ~v) (fill_v v));
+  case_local_refused ~label:"local: an accumulation with no initialization" ~tag:"lu3" (fun ~v ->
+      let x = mk "lu3x" in
+      materialize x;
+      let s = sym () in
+      seq
+        (loop_n s dim (set v [| iter s |] (add (get v [| iter s |]) (get x [| iter s |]))))
+        (read_v ~tag:"lu3" ~v));
+  case_local_refused ~label:"local: a guarded write, then an unguarded read" ~tag:"lu4" (fun ~v ->
+      let s = sym () in
+      seq
+        (loop_n s dim (if_ (lt (embed s) (ic 2)) (set v [| iter s |] (ramp 500. s))))
+        (read_v ~tag:"lu4" ~v))
+
 let () =
   case_merge ();
   case_provenance ();
@@ -790,6 +994,7 @@ let () =
       where_ (ic 0) x v);
   case_consumer_refused ~label:"consumer where (i < 2) x v (undecided)" ~tag:"cu" (fun s ~x ~v ->
       where_ (lt (embed s) (ic 2)) x v);
+  case_local_reads ();
   capture_family ~kind:"" ~lineage:merge_lineage;
   capture_family ~kind:"local" ~lineage:local_lineage;
   capture_family ~kind:"uninlinable" ~lineage:uninlinable_lineage
