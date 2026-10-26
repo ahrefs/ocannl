@@ -103,6 +103,11 @@ let entry_of key p =
 
 type observed = Scripted_search.observed
 
+(* The beam finals (gh-ocannl-1635) off in every search here: the scripts tie composites, which the
+   finals would re-time after the search's own windows, and the claims count the composite windows.
+   The finals are [autotune_beam_finals]' subject. *)
+let finals_off = ("autotune_finals_margin", "0")
+
 (* One search under the additive script [cost]. [?staffed] and [?width] state
    [autotune_staffed_singles] and [autotune_composite_playoff_width] for this search only; [?start]
    gives the running composite its start; [?refuse] refuses (at pre-dispatch validation, a contained
@@ -113,6 +118,7 @@ let search ?(staffed = true) ?(log = false) ?(progress = false) ?keyed ?width ?s
   let current = ref "" in
   let settings =
     (staffed_key, Bool.to_string staffed)
+    :: finals_off
     :: Option.value_map width ~default:[] ~f:(fun w -> [ (width_key, Int.to_string w) ])
   in
   let (o : observed) =
@@ -563,7 +569,7 @@ let () =
           staffed_attempt := is_staffed label)
     @@ fun () ->
       Scripted_search.scripted
-        ~settings:[ (staffed_key, "true") ]
+        ~settings:[ (staffed_key, "true"); finals_off ]
         ~measure:(fun w -> routine_ms ~cost w.label)
       @@ fun () ->
       Autotune.Seam.with_value Autotune.on_candidate_timed (fun _ ~timed_so_far:_ ->
@@ -704,7 +710,7 @@ let () =
   in
   let (o : observed) =
     Scripted_search.search
-      ~settings:[ (staffed_key, "true") ]
+      ~settings:[ (staffed_key, "true"); finals_off ]
       ~output:z ~log:false ~progress:false ~tag:"split"
       ~measure:(fun w -> split_ms w.label)
       comp

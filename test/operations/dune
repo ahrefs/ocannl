@@ -5549,7 +5549,7 @@
 
 (test
  ; cc-vector-width: independent -- claims concern the baseline and accounting, and best <= default
- ; holds by construction.
+ ; holds by construction unless the beam finals outranked the default.
  (name autotune_serial_baseline)
  (package neural_nets_lib)
  (deps
@@ -9792,6 +9792,26 @@
   fissioned_chain
   scripted_search
   ll_test)
+ (preprocess
+  (pps ppx_ocannl)))
+
+; gh-ocannl-1635: the beam finals -- the beam's near-tie contenders re-timed together before the
+; crown (autotune_finals_margin). The selection functions under a scripted clock, then three
+; scripted searches, pinned to cc, on Fissioned_chain's small menu.
+
+(test
+ (name autotune_beam_finals)
+ ; ocannl-backend: cc -- Context.cpu (); the scripted ranking is backend-independent
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules autotune_beam_finals)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  fissioned_chain
+  scripted_search)
  (preprocess
   (pps ppx_ocannl)))
 

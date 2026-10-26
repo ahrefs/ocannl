@@ -99,8 +99,12 @@ let search ?(trace = true) ?(log = false) ?progress ?width ?margin ~tag ~single 
     if trace then Autotune.with_timing_call_observer (fun c -> calls := c :: !calls) body
     else body ()
   in
+  (* The beam finals (gh-ocannl-1635) off: these searches script near-tie composites, which the
+     finals would re-time after the playoff, and every claim here counts composite windows. The
+     finals are [autotune_beam_finals]' subject. *)
   let settings =
-    Option.value_map width ~default:[] ~f:(fun w -> [ (playoff_width_key, Int.to_string w) ])
+    [ ("autotune_finals_margin", "0") ]
+    @ Option.value_map width ~default:[] ~f:(fun w -> [ (playoff_width_key, Int.to_string w) ])
     @ Option.value_map margin ~default:[] ~f:(fun m -> [ (playoff_margin_key, Float.to_string m) ])
   in
   let (o : Scripted_search.observed) =

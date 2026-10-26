@@ -1,0 +1,40 @@
+seeded population, 2000 searches of 40 windows, 8 near-tie candidates 1.5% apart, beam of 2:
+  drift and co-tenant episodes, +-0.2% jitter: the head 1563, the finals 1645 kept the true best (contenders held it 1651 times)
+  contention independent per window:          the head 1479, the finals 1470
+  no window offsets, +-2.5% jitter:            the head 1410, the finals 1615
+with lasting window offsets, the head misses the true best in over a fifth of the searches: true
+the finals keep it in at least a fortieth more of them: true
+the population holds searches whose contenders held the true best: true
+and whenever the contenders held the true best, the finals crowned it in all but a fiftieth: true
+with contention independent per window, the head misses the true best sometimes: true
+and the finals lose at most a fiftieth of the searches there: true
+with no window offsets, the head misses the true best sometimes: true
+and the finals, reading each contender twice, keep it no less often: true
+the contenders: within the margin of the fastest, by reading, ties in pool order: true
+at most [width] of them: true
+a wide margin admits every finite reading, never an unmeasured one: true
+a margin of 0 or less is off: true
+a margin admitting the fastest alone holds no finals: true
+nor does a width of one: true
+the windows: the contenders, then the same in reverse: true
+the crown: the least of each contender's readings, the least of those: true
+a tie goes to the earlier contender: true
+a contender with no reading makes the finals inconclusive: true
+setup: the scripted searches met the same candidates in the same order: true
+setup: the true best is a candidate, not the baseline or the floor: true
+off: the search crowns the runner-up, whose window read faster than the true best's: true
+off: no finals ran: true
+on: the search's own windows are the finals-off search's, then the palindrome of the two contenders, runner-up first: true
+on: the finals crown the true best, swapping the head: true
+on: two contenders, four windows, all admitted: true
+on: the crown's best_ms is its search reading, the contended one: true
+on: the report holds each contender's search and finals readings, runner-up first: true
+on: the crown's search reading exceeds the runner-up's, which the finals outranked: true
+on: every search reading is no faster than the crown's, or was outranked in the finals: true
+off: nothing is outranked: true
+on: the finals windows are not candidate timings: true
+on: the crowned routine computes the untuned output bit for bit: true
+refused: the true best's finals windows were refused, so the finals are inconclusive: true
+refused: the crown stays the first readings' head: true
+refused: nothing is outranked: true
+refused: the finals' refusals are not the search's: true

@@ -1343,6 +1343,33 @@ files.
   (`gh1180_tie_ab.sh` in `benchmarks/` times a pair from one build; the A/B table is on
   lukstafi/ocannl-staging's PR for the issue).
 ## Crowned and shipped artifacts
+- **The crown is decided in shared windows: the beam finals** (gh-ocannl-1635). Every candidate is
+  timed in a window of its own, and the beam ranked entries by those readings, so the crown was the
+  entry whose WINDOW read fastest -- a window's offset (drift, a co-tenant lasting longer than the
+  window, which the 2x-majority rule admits as uniform delay) decided it as much as the schedule
+  did: `projection_shape_bench`'s winner's curse (gh-ocannl-1531). The round decision has the same
+  shape (the round's best against the incumbent's earlier reading). `Autotune.finals_contenders`
+  takes the near-ties (within `autotune_finals_margin`, default 0.1, of the fastest; at most
+  `beam_width`, so every beam-ranked entry outside the finals read no faster than every contender)
+  from the final beam plus the entries the rounds set aside (the beam an
+  accepted round replaced, the round a rejected one discarded), recompiles each from its saved form
+  (one resident at a time, gh-1326), times them in `finals_order` (c1..cn cn..c1, so a drift
+  reaches all alike) and crowns by `finals_crown` (least of each one's admitted readings). The
+  windows go through the candidates' own `timing_window` (lineage preflight, the gh-1621 restore,
+  the measurement seam under the contender's label and digest), but count in the report's
+  `finals_*` fields, not in `candidates_timed` or `timings_contended`: a refused finals window
+  leaves the search cacheable, and a contender with no reading makes the finals `inconclusive`
+  (crown = first readings' head). `best_ms` stays the crown's SEARCH reading, so it can exceed
+  another entry's (the untuned default's `default_ms`) exactly when that entry lost the finals:
+  a claim that `best_ms <= default_ms` "by construction" now reads `|| Autotune.finals_outranked
+  r ~search_ms:d` (the report's `finals` list holds each contender's two readings). No cache bump: an old
+  crown is a correctly timed schedule chosen with more noise. The boundary, measured under a
+  scripted clock (`autotune_beam_finals`): window-granular re-timing removes offsets that LAST
+  across adjacent windows (drift, co-tenant episodes -- what survives a window's own
+  least-of-batches), and is neutral against contention independent per window; only interleaving
+  batch by batch shares that, which needs every contender resident at once. Scripted searches see
+  the finals as extra admitted windows at the end of `measured` whenever two beam entries read
+  within 10%: a test scripting near ties pins `autotune_finals_margin=0` or expects them.
 - "Crowned" is not "shipped", and neither is reproducible on a small routine. `Train.tune_placements`
   runs two searches and keeps one artifact, so a family can win the arm that is then discarded whole
   — read `report.best_label` / `best_tensorized` / `best_tensorization` / `mma_best_ms` per arm (the A/B calls `?report`

@@ -268,7 +268,8 @@ let () =
     (reference_measured r1 && reference_measured r2
     &&
     match r1.Autotune.default_ms with
-    | Some d1 -> Float.(r1.Autotune.best_ms <= d1)
+    (* Unless the beam finals (gh-ocannl-1635) crowned the winner over the default. *)
+    | Some d1 -> Float.(r1.Autotune.best_ms <= d1) || Autotune.finals_outranked r1 ~search_ms:d1
     | None -> true);
   (* Codex P2 on PR #279: the cache key covers neither the scheduling gates nor the preset
      thresholds, so a config change can redefine the default pipeline without missing the cache.

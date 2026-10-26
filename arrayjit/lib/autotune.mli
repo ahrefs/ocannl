@@ -1304,6 +1304,56 @@ type round_moves = {
     test reads them to choose a beam entry with the moves it needs instead of discovering their
     absence by failing a claim. *)
 
+(** How the beam finals decided the crown (gh-ocannl-1635; see {!finals_contenders}).
+    [Finals_not_run]: fewer than two entries read within config [autotune_finals_margin] of the
+    fastest, the margin is [0] or less (off), the budget was spent, or no search ran. [Finals_kept]:
+    the finals crowned the entry the search's own readings put first. [Finals_swapped]: they crowned
+    another. [Finals_inconclusive]: some contender has no admitted finals reading (a refused, failed
+    or budget-stopped window), so the crown is the search's readings' head, as without finals. *)
+type finals_outcome = Finals_not_run | Finals_kept | Finals_swapped | Finals_inconclusive
+
+val finals_outcome_name : finals_outcome -> string
+(** ["not run"], ["kept"], ["swapped"] or ["inconclusive"]. *)
+
+type finals_contender = {
+  contender_label : string;  (** The label the contender was timed under in the search. *)
+  contender_search_ms : float;  (** Its reading in the search, the one the beam ranked it by. *)
+  contender_finals_ms : float option;
+      (** The least of its admitted finals readings; [None] when none was admitted. *)
+}
+(** One beam-finals contender (gh-ocannl-1635), in {!finals_contenders}' order. *)
+
+val finals_contenders : margin:float -> width:int -> ('a * float) list -> ('a * float) list
+(** The beam finals' contenders (gh-ocannl-1635) among [pool], each entry paired with its search
+    reading in ms: the entries with a finite reading within [margin] (a fraction) of the fastest, by
+    reading with ties in [pool] order, at most [width] of them; empty when fewer than two qualify or
+    [margin <= 0]. Every candidate of a search is timed in a window of its own, and a window's
+    reading carries the window's offset (drift, or contention that only slows it), so ranking by
+    those readings crowns the luckiest window as often as the fastest schedule -- the winner's curse
+    [Bench_select] fixed for [projection_shape_bench] (gh-ocannl-1531). {!tune} passes as [pool]
+    every entry it ranked as an incumbent -- the final beam, then the beams accepted rounds replaced
+    and the round a rejected round discarded -- with [margin] config [autotune_finals_margin]
+    (default [0.1]) and [width] its [beam_width]; it re-times the contenders in {!finals_order} and
+    crowns by {!finals_crown}.
+
+    The width is the beam's so that every entry outside the finals that the beam ranked read no
+    faster than every contender: each such entry was evicted from a beam (or a round's accumulator)
+    by [beam_width] faster ones, all in the pool. So a report's [best_ms] -- the crown's SEARCH
+    reading -- exceeds such an entry's reading only when the entry was a contender that the finals
+    ranked behind the crown ({!finals_outranked}). A beam of one holds no finals. *)
+
+val finals_order : 'a list -> 'a list
+(** The finals' windows, in order: the contenders, then the same in reverse, so each is timed twice
+    and a drift across the finals reaches every contender alike. Every window is a compile of its
+    own, the adjacent pair in the middle included, so each starts from the state a search
+    candidate's window starts from. *)
+
+val finals_crown : ('a * float list) list -> ('a * float) option
+(** The finals' crown from each contender's admitted finals readings: a contender's finals reading
+    is the least of its readings, and the crown is the contender with the least, ties to the
+    earlier, beside that reading; [None] when some contender has no reading -- it cannot be compared
+    in the shared round, so the search keeps its own head. *)
+
 type report = {
   outcome : outcome;
       (** What this call did about searching. The counters below say how much work that state got
@@ -1469,6 +1519,20 @@ type report = {
           counted in [rounds_run], including a round a fatal failure or an abandonment interrupted,
           whose report carries the record of the round in flight. Empty on cache replay and
           search-disabled calls, and for [~rounds:0]. *)
+  finals : finals_contender list;
+      (** The entries the beam finals re-timed together, with their readings (gh-ocannl-1635,
+          {!finals_contenders}): empty when they did not run. *)
+  finals_timed : int;
+      (** The finals' windows that ran, admitted or not: twice the contenders unless a recompile
+          failed or the budget stopped one. Counted here and NOT in [candidates_timed], nor among
+          the refusals of [timings_contended]: a finals window re-times a candidate already ranked,
+          and a refused one leaves the search's own measurement set as complete as it was. *)
+  finals_admitted : int;  (** Of [finals_timed], the admitted windows. *)
+  finals_outcome : finals_outcome;
+      (** Whether the finals ran, and whether their crown is the search readings' head. [best_ms],
+          [best_label] and [best_spread] describe the crown either way, [best_ms] being the crown's
+          reading in the search, not in the finals (the [autotune_log] line [finals: ...] has both).
+      *)
   budget_cut : bool;
       (** The crown comes from a search that stopped proposing candidates because its wall-clock
           budget (config [autotune_budget_seconds], gh-ocannl-1409, or its [call_share_s] of an
@@ -1814,6 +1878,13 @@ val contention_refusals : report -> int
     [timings_contended] minus its [timings_unbatched] and [timings_unreadable] subsets, so the three
     causes {!timing_admission} names partition the report's refusals. A skip or a retry excused by a
     loaded host reads this, not [timings_contended], which a degenerate clock reading also grows. *)
+
+val finals_outranked : report -> search_ms:float -> bool
+(** Whether the beam finals crowned the report's winner over a contender that read [search_ms] in
+    the search (gh-ocannl-1635): [finals_outcome] is [Finals_swapped], and a contender of that
+    search reading has an admitted finals reading no faster than the crown's. The one way [best_ms],
+    the crown's search reading, can exceed the search reading of another entry the beam ranked --
+    the untuned default's [default_ms] among them ({!finals_contenders}). *)
 
 val no_search_report : timing:timing_mode -> report
 (** The report of a {!tune} call that never searched (config [autotune_search=false], gh-ocannl-559,
@@ -3197,9 +3268,9 @@ type batch_decision = {
   phase : string option;
       (** The caller's [phase]: for a {!tune} candidate, the search phase as its [autotune_progress]
           lines name it ([seeds], [recombine], [playoff] for the composite playoff of
-          gh-ocannl-1166, or [round<k>]); [None] for the baseline, the untuned control and any other
-          caller. Carried by the call, not read from shared state, so concurrent searches never
-          label each other's decisions. *)
+          gh-ocannl-1166, or [round<k>]), or [finals] for a beam-finals re-timing (gh-ocannl-1635);
+          [None] for the baseline, the untuned control and any other caller. Carried by the call,
+          not read from shared state, so concurrent searches never label each other's decisions. *)
   timing : timing_mode;
   depth : int;  (** The depth the call settled on and its timed window ran at. *)
   cap : int;  (** The call's [queue_depth_cap]. *)
@@ -3901,18 +3972,20 @@ val on_candidate_callback :
 
 val on_candidate_measured : (label:string -> digest:string -> float -> float) Seam.t
 (** Measurement seam (gh-ocannl-1027), called once per ADMITTED timing window — the dispatched
-    baseline's (label ["baseline"]) and each candidate's — with the candidate's label, its schedule
-    digest and the admitted time in milliseconds. The returned time replaces the reading before the
-    admission gate, so it is what the search ranks, records and reports: the beam, the best-so-far
-    incumbent, {!on_candidate_callback}, [report.best_ms]/[baseline_ms], the calibration rows and
-    the schedule cache's stored times. A refused window (contended, or a degenerate clock reading)
-    never reaches it unless the test explicitly opts into {!with_uncontended_test_windows};
-    degenerate readings still never reach it. A returned time that is not finite and positive
-    refuses the window the way a degenerate reading does, and is counted as one
-    ([timings_unreadable]). It must return rather than raise: it runs outside the search's
-    containment boundaries. It exists so a test about the nonwinner paths can pin the ranking — make
-    the first admitted window the fastest and every later one slower — instead of depending on the
-    machine's timings. The default is the identity and no configuration selects it. *)
+    baseline's (label ["baseline"]), each candidate's, and each beam-finals re-timing's
+    (gh-ocannl-1635, under the contender's own label and digest, after the search's windows) — with
+    the candidate's label, its schedule digest and the admitted time in milliseconds. The returned
+    time replaces the reading before the admission gate, so it is what the search ranks, records and
+    reports: the beam, the best-so-far incumbent, {!on_candidate_callback},
+    [report.best_ms]/[baseline_ms], the calibration rows and the schedule cache's stored times. A
+    refused window (contended, or a degenerate clock reading) never reaches it unless the test
+    explicitly opts into {!with_uncontended_test_windows}; degenerate readings still never reach it.
+    A returned time that is not finite and positive refuses the window the way a degenerate reading
+    does, and is counted as one ([timings_unreadable]). It must return rather than raise: it runs
+    outside the search's containment boundaries. It exists so a test about the nonwinner paths can
+    pin the ranking — make the first admitted window the fastest and every later one slower —
+    instead of depending on the machine's timings. The default is the identity and no configuration
+    selects it. *)
 
 val with_uncontended_test_windows : (unit -> 'a) -> 'a
 (** Explicit test-only scope (gh-ocannl-1156) for scripted measurements: clear the physical window's
