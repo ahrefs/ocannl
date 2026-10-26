@@ -734,10 +734,12 @@ plan_test_cap() { # <requested, empty for the default> dune-argv
 # silent and lets dune decide, as before: a listing that does not read as dune
 # 3.20-3.24's (the listing on either stream, `DIR:` headers when it names more
 # than one directory, one alias name per line, `Error: Directory DIR does not
-# exist.`), a directory whose listing lacks dune's standard `default` alias, a
-# failed or timed-out query, an argv carrying any dune option not known to
-# leave the alias set alone (`--profile`, `--root`, `--workspace`, `-p`, ... --
-# plan_aliases holds the allow-list), and an operand that is not a plain
+# exist.`, read with any color escapes removed, since a forced color -- as
+# CLICOLOR_FORCE=1 -- wraps that `Error` tag in them), a directory whose
+# listing lacks dune's standard `default` alias, a failed or timed-out query,
+# an argv carrying any dune option not known to leave the alias set alone
+# (`--profile`, `--root`, `--workspace`, `-p`, ... -- plan_aliases holds the
+# allow-list), and an operand that is not a plain
 # relative `DIR/NAME` (an absolute path, a `..` or an inner `.` segment, or a
 # `_`-led directory such as a context's `_build/CONTEXT/`). The directories
 # below an operand's are those holding a dune file and those its `(subdir ...)`
@@ -758,6 +760,9 @@ alias_listing_perl='
   $cur = $dirs[0] if @dirs == 1;
   while (my $l = <$fh>) {
     $l =~ s/\r?\n\z//;
+    # The `Error` tag comes colored where dune is made to color (CLICOLOR_FORCE=1,
+    # which setup-ocaml exports job-wide; gh-ocannl-1591): its SGR escapes go.
+    $l =~ s/\e\[[0-9;]*m//g;
     next if $l eq "";
     if ($l =~ /^Error: Directory (.*) does not exist\.$/ && $dir{$1}) { $absent{$1} = 1; next }
     $listed = 1;
@@ -2882,8 +2887,10 @@ digest() {
     echo "action failed (no diff) -- nothing to promote; read the failure below"
   fi
   if [ "$rc" != 0 ]; then
-    fp=$({ scan_log | grep -oE '^File "[^"]+", lines? [0-9]+(-[0-9]+)?'
-           scan_log | grep -oE '^(Error|Fatal error|Exception)[^,]*'
+    # A forced color (CLICOLOR_FORCE=1) wraps dune's locations and `Error`
+    # tags in SGR escapes, which go before the match (gh-ocannl-1591).
+    fp=$({ scan_log | perl -pe 's/\e\[[0-9;]*m//g' | grep -oE '^File "[^"]+", lines? [0-9]+(-[0-9]+)?'
+           scan_log | perl -pe 's/\e\[[0-9;]*m//g' | grep -oE '^(Error|Fatal error|Exception)[^,]*'
          } 2>/dev/null | sort -u | head -40)
     if [ -n "$fp" ]; then
       echo "fingerprint:"
