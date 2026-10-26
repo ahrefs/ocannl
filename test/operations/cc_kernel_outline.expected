@@ -1,0 +1,7 @@
+the scratch node stays a Local array of the kernel's frame: true
+the whole compile renders no part: true
+the split compile outlines the kernel into at least three parts: true
+the split compile is compiled as more than one translation unit: true
+split and whole agree bit for bit on ol_y: true
+split and whole agree bit for bit on ol_z: true
+split and whole agree bit for bit on ol_split__part2: true

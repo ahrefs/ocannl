@@ -10,6 +10,12 @@ let includes =
 #include <string.h>
 #include <stdlib.h>
 
+/* The builtins' linkage (gh-ocannl-1603): internal in a kernel library, which may be linked from
+   several translation units that each carry them; the host stubs' copy keeps them external. */
+#ifndef ARRAYJIT_BUILTIN_LINKAGE
+  #define ARRAYJIT_BUILTIN_LINKAGE static
+#endif
+
 /* SIMD platform detection (gh-ocannl-164): compile-time macros for conditional SIMD code paths
    (explicit intrinsics are emitted by follow-up work; auto-vectorization needs no guards). */
 #ifdef __AVX2__
@@ -403,25 +409,25 @@ typedef struct {
     ( "threefry_common",
       {|
 /* Threefry4x32 constants */
-const uint32_t THREEFRY_C240 = 0x1BD11BDA;
+ARRAYJIT_BUILTIN_LINKAGE const uint32_t THREEFRY_C240 = 0x1BD11BDA;
 
 /* Rotation constants for Threefry4x32 */
-const unsigned int THREEFRY_ROTATION_0_0 = 13;
-const unsigned int THREEFRY_ROTATION_0_1 = 15;
-const unsigned int THREEFRY_ROTATION_0_2 = 26;
-const unsigned int THREEFRY_ROTATION_0_3 = 6;
-const unsigned int THREEFRY_ROTATION_1_0 = 17;
-const unsigned int THREEFRY_ROTATION_1_1 = 29;
-const unsigned int THREEFRY_ROTATION_1_2 = 16;
-const unsigned int THREEFRY_ROTATION_1_3 = 24;
+ARRAYJIT_BUILTIN_LINKAGE const unsigned int THREEFRY_ROTATION_0_0 = 13;
+ARRAYJIT_BUILTIN_LINKAGE const unsigned int THREEFRY_ROTATION_0_1 = 15;
+ARRAYJIT_BUILTIN_LINKAGE const unsigned int THREEFRY_ROTATION_0_2 = 26;
+ARRAYJIT_BUILTIN_LINKAGE const unsigned int THREEFRY_ROTATION_0_3 = 6;
+ARRAYJIT_BUILTIN_LINKAGE const unsigned int THREEFRY_ROTATION_1_0 = 17;
+ARRAYJIT_BUILTIN_LINKAGE const unsigned int THREEFRY_ROTATION_1_1 = 29;
+ARRAYJIT_BUILTIN_LINKAGE const unsigned int THREEFRY_ROTATION_1_2 = 16;
+ARRAYJIT_BUILTIN_LINKAGE const unsigned int THREEFRY_ROTATION_1_3 = 24;
 
 /* Rotate left function */
-uint32_t rotl32(uint32_t x, unsigned int n) {
+ARRAYJIT_BUILTIN_LINKAGE uint32_t rotl32(uint32_t x, unsigned int n) {
     return (x << n) | (x >> (32 - n));
 }
 
 /* Threefry4x32 round function */
-void threefry_round(uint32_t x[4], unsigned int r0, unsigned int r1, unsigned int r2, unsigned int r3) {
+ARRAYJIT_BUILTIN_LINKAGE void threefry_round(uint32_t x[4], unsigned int r0, unsigned int r1, unsigned int r2, unsigned int r3) {
     x[0] += x[1]; x[1] = rotl32(x[1], r0); x[1] ^= x[0];
     x[2] += x[3]; x[3] = rotl32(x[3], r1); x[3] ^= x[2];
     
@@ -442,7 +448,7 @@ void threefry_round(uint32_t x[4], unsigned int r0, unsigned int r1, unsigned in
       {|
 
 /* Threefry4x32 implementation - 20 rounds (cryptographic version) */
-uint4x32_t arrayjit_threefry4x32_crypto(uint4x32_t key, uint4x32_t counter) {
+ARRAYJIT_BUILTIN_LINKAGE uint4x32_t arrayjit_threefry4x32_crypto(uint4x32_t key, uint4x32_t counter) {
     uint32_t x[4];
     uint32_t ks[5];
     
@@ -533,7 +539,7 @@ uint4x32_t arrayjit_threefry4x32_crypto(uint4x32_t key, uint4x32_t counter) {
     ( "arrayjit_threefry4x32_light",
       {|
 /* Threefry4x32 implementation - 2 rounds (light version, as in JAX/XLA) */
-uint4x32_t arrayjit_threefry4x32_light(uint4x32_t key, uint4x32_t counter) {
+ARRAYJIT_BUILTIN_LINKAGE uint4x32_t arrayjit_threefry4x32_light(uint4x32_t key, uint4x32_t counter) {
     uint32_t x[4];
     uint32_t ks[5];
     
@@ -578,7 +584,7 @@ uint4x32_t arrayjit_threefry4x32_light(uint4x32_t key, uint4x32_t counter) {
     ( "arrayjit_threefry4x32",
       {|
 /* Default threefry4x32 function - will be configured at runtime */
-uint4x32_t arrayjit_threefry4x32(uint4x32_t key, uint4x32_t counter) {
+ARRAYJIT_BUILTIN_LINKAGE uint4x32_t arrayjit_threefry4x32(uint4x32_t key, uint4x32_t counter) {
     /* Default to light version */
     return arrayjit_threefry4x32_light(key, counter);
 }
@@ -619,7 +625,7 @@ typedef struct { uint64_t v[2]; } uint64x2_t;
     ( "uint32_to_single_uniform",
       {|
 /* Convert to float in [0, 1) */
-float uint32_to_single_uniform(uint32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE float uint32_to_single_uniform(uint32_t x) {
     /* Use upper 24 bits for float mantissa (23 bits + implicit 1) */
     return (x >> 8) * (1.0f / 16777216.0f);
 }
@@ -628,7 +634,7 @@ float uint32_to_single_uniform(uint32_t x) {
     ( "uint32_to_double_uniform",
       {|
 /* Convert to double in [0, 1) */
-double uint32_to_double_uniform(uint32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE double uint32_to_double_uniform(uint32_t x) {
     return x * (1.0 / 4294967296.0);
 }
 |},
@@ -637,7 +643,7 @@ double uint32_to_double_uniform(uint32_t x) {
     ( "uint4x32_to_single_uniform",
       {|
 /* Uint4x32 to float32 uniform - uses first 32 bits */
-float uint4x32_to_single_uniform(uint4x32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE float uint4x32_to_single_uniform(uint4x32_t x) {
     return uint32_to_single_uniform(x.v[0]);
 }
 |},
@@ -655,7 +661,7 @@ float uint4x32_to_single_uniform(uint4x32_t x) {
    the half STORAGE type: under native fp16 that is _Float16, and a uint16_t return type would
    convert the value through an integer (truncating every draw in [0, 1) to 0) and hand an integer
    to the half FMA builtin. */
-HALF_T uint32_to_half_uniform(uint32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE HALF_T uint32_to_half_uniform(uint32_t x) {
     float f = uint32_to_single_uniform(x);
     uint32_t bits;
     memcpy(&bits, &f, sizeof(bits));
@@ -673,7 +679,7 @@ HALF_T uint32_to_half_uniform(uint32_t x) {
    every backend renders. The largest draw is 1 - 2^-8; rounding to nearest instead returned exactly
    1.0 for every word from 0xFF800000 up. The scalar and _vec/_lane forms all go through here, as
    for half (uint32_to_half_uniform). */
-uint16_t uint32_to_bfloat16_uniform(uint32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE uint16_t uint32_to_bfloat16_uniform(uint32_t x) {
     float f = uint32_to_single_uniform(x);
     uint32_t bits;
     memcpy(&bits, &f, sizeof(bits));
@@ -694,7 +700,7 @@ uint16_t uint32_to_bfloat16_uniform(uint32_t x) {
    draws the same byte on every backend. The largest draw is 0.875 (1 - 2^-3). The scalar form
    takes the key's first word; the _vec/_lane forms move each byte to the word's top (the byte's
    value scaled by 2^-8), as the 16-bit forms move their lanes. */
-uint8_t uint32_to_fp8_uniform(uint32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE uint8_t uint32_to_fp8_uniform(uint32_t x) {
     if (x < 0x40000u) return (uint8_t)(x >> 16);
     float f = uint32_to_single_uniform(x);
     uint32_t bits;
@@ -709,7 +715,7 @@ uint8_t uint32_to_fp8_uniform(uint32_t x) {
    uint32_to_half_uniform): the route every backend takes for both scalar narrow draws, so one key
    draws the same half on every backend (gh-ocannl-951; the _vec/_lane forms consume 16 bits per
    lane on every backend). */
-HALF_T uint4x32_to_half_uniform(uint4x32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE HALF_T uint4x32_to_half_uniform(uint4x32_t x) {
     return uint32_to_half_uniform(x.v[0]);
 }
 |},
@@ -718,7 +724,7 @@ HALF_T uint4x32_to_half_uniform(uint4x32_t x) {
       {|
 /* Convert uint4x32 to 8 float16s in [0, 1): each word's low then high 16 bits, moved to the top of
    a word for uint32_to_half_uniform. */
-half8_t uint4x32_to_half_uniform_vec(uint4x32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE half8_t uint4x32_to_half_uniform_vec(uint4x32_t x) {
     half8_t result;
     for (int i = 0; i < 4; i++) {
         result.v[i*2 + 0] = uint32_to_half_uniform(x.v[i] << 16);
@@ -732,7 +738,7 @@ half8_t uint4x32_to_half_uniform_vec(uint4x32_t x) {
     ( "bfloat16_to_single",
       {|
 /* BFloat16 to Float conversion (C function) */
-float bfloat16_to_single(uint16_t bf16)
+ARRAYJIT_BUILTIN_LINKAGE float bfloat16_to_single(uint16_t bf16)
 {
   /* BFloat16 format: 1 sign bit, 8 exponent bits, 7 mantissa bits
      To convert to float32, we shift left by 16 bits */
@@ -746,7 +752,7 @@ float bfloat16_to_single(uint16_t bf16)
     ( "single_to_bfloat16",
       {|
 /* Float to BFloat16 conversion (C function) */
-uint16_t single_to_bfloat16(float f)
+ARRAYJIT_BUILTIN_LINKAGE uint16_t single_to_bfloat16(float f)
 {
   uint32_t f32;
   uint32_t rounded;
@@ -1206,7 +1212,7 @@ uint16_t single_to_bfloat16(float f)
     ( "half_to_single",
       {|
 /* Half (Float16) to Float conversion (C function) */
-float half_to_single(uint16_t h)
+ARRAYJIT_BUILTIN_LINKAGE float half_to_single(uint16_t h)
 {
   HALF_T half_val = UINT16_TO_HALF(h);
   return HALF_TO_FLOAT(half_val);
@@ -1216,7 +1222,7 @@ float half_to_single(uint16_t h)
     ( "single_to_half",
       {|
 /* Float to Half (Float16) conversion (C function) */
-uint16_t single_to_half(float f)
+ARRAYJIT_BUILTIN_LINKAGE uint16_t single_to_half(float f)
 {
   HALF_T half_val = FLOAT_TO_HALF(f);
   return HALF_TO_UINT16(half_val);
@@ -1227,7 +1233,7 @@ uint16_t single_to_half(float f)
       {|
 /* FP8 E5M2 format to Float conversion (C function)
    Format: 1 sign bit, 5 exponent bits, 2 mantissa bits */
-float fp8_to_single(uint8_t fp8)
+ARRAYJIT_BUILTIN_LINKAGE float fp8_to_single(uint8_t fp8)
 {
   /* Handle zero */
   if (fp8 == 0)
@@ -1281,7 +1287,7 @@ float fp8_to_single(uint8_t fp8)
    the same code a CUDA or HIP kernel would produce. See
    docs/agent-notes/backend-precision-and-simd.md for the two inputs where the vendors themselves
    disagree (an already-infinite input, and the sign of a NaN). */
-uint8_t single_to_fp8(float f)
+ARRAYJIT_BUILTIN_LINKAGE uint8_t single_to_fp8(float f)
 {
   uint32_t bits;
   memcpy(&bits, &f, sizeof(bits));
@@ -1358,7 +1364,7 @@ uint8_t single_to_fp8(float f)
    already made wrong. The CUDA and HIP fp8 types convert straight from the double, so a
    two-step host or cc conversion disagreed with them for exactly those inputs (gh-ocannl-648).
    Same rules as [single_to_fp8], read off f64's fields. */
-uint8_t double_to_fp8(double f)
+ARRAYJIT_BUILTIN_LINKAGE uint8_t double_to_fp8(double f)
 {
   uint64_t bits;
   memcpy(&bits, &f, sizeof(bits));
@@ -1427,7 +1433,7 @@ uint8_t double_to_fp8(double f)
     (* Conversion functions from various precisions to uint4x32_t *)
     ( "int32_to_uint4x32",
       {|
-uint4x32_t int32_to_uint4x32(int32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE uint4x32_t int32_to_uint4x32(int32_t x) {
     /* Spread bits across all 4 components for better entropy with light threefry.
        Without this, consecutive counter values produce nearly identical v[0] outputs
        from 2-round threefry, causing periodicity in random number generation. */
@@ -1444,7 +1450,7 @@ uint4x32_t int32_to_uint4x32(int32_t x) {
       [ "uint4x32_t" ] );
     ( "int64_to_uint4x32",
       {|
-uint4x32_t int64_to_uint4x32(int64_t x) {
+ARRAYJIT_BUILTIN_LINKAGE uint4x32_t int64_to_uint4x32(int64_t x) {
     uint64_t bits = (uint64_t)x;
     uint4x32_t result = {{(uint32_t)(bits & 0xFFFFFFFF), (uint32_t)(bits >> 32), 0, 0}};
     return result;
@@ -1453,7 +1459,7 @@ uint4x32_t int64_to_uint4x32(int64_t x) {
       [ "uint4x32_t" ] );
     ( "uint32_to_uint4x32",
       {|
-uint4x32_t uint32_to_uint4x32(uint32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE uint4x32_t uint32_to_uint4x32(uint32_t x) {
     /* Spread bits across all 4 components for better entropy with light threefry.
        Without this, consecutive counter values produce nearly identical v[0] outputs
        from 2-round threefry, causing periodicity in random number generation. */
@@ -1469,7 +1475,7 @@ uint4x32_t uint32_to_uint4x32(uint32_t x) {
       [ "uint4x32_t" ] );
     ( "uint64_to_uint4x32",
       {|
-uint4x32_t uint64_to_uint4x32(uint64_t x) {
+ARRAYJIT_BUILTIN_LINKAGE uint4x32_t uint64_to_uint4x32(uint64_t x) {
     uint4x32_t result = {{(uint32_t)(x & 0xFFFFFFFF), (uint32_t)(x >> 32), 0, 0}};
     return result;
 }
@@ -1477,7 +1483,7 @@ uint4x32_t uint64_to_uint4x32(uint64_t x) {
       [ "uint4x32_t" ] );
     ( "single_to_uint4x32",
       {|
-uint4x32_t single_to_uint4x32(float x) {
+ARRAYJIT_BUILTIN_LINKAGE uint4x32_t single_to_uint4x32(float x) {
     uint32_t bits;
     memcpy(&bits, &x, sizeof(float));
     uint4x32_t result = {{bits, 0, 0, 0}};
@@ -1487,7 +1493,7 @@ uint4x32_t single_to_uint4x32(float x) {
       [ "uint4x32_t" ] );
     ( "double_to_uint4x32",
       {|
-uint4x32_t double_to_uint4x32(double x) {
+ARRAYJIT_BUILTIN_LINKAGE uint4x32_t double_to_uint4x32(double x) {
     uint64_t bits;
     memcpy(&bits, &x, sizeof(double));
     uint4x32_t result = {{(uint32_t)(bits & 0xFFFFFFFF), (uint32_t)(bits >> 32), 0, 0}};
@@ -1497,7 +1503,7 @@ uint4x32_t double_to_uint4x32(double x) {
       [ "uint4x32_t" ] );
     ( "byte_to_uint4x32",
       {|
-uint4x32_t byte_to_uint4x32(unsigned char x) {
+ARRAYJIT_BUILTIN_LINKAGE uint4x32_t byte_to_uint4x32(unsigned char x) {
     uint4x32_t result = {{(uint32_t)x, 0, 0, 0}};
     return result;
 }
@@ -1505,7 +1511,7 @@ uint4x32_t byte_to_uint4x32(unsigned char x) {
       [ "uint4x32_t" ] );
     ( "uint16_to_uint4x32",
       {|
-uint4x32_t uint16_to_uint4x32(uint16_t x) {
+ARRAYJIT_BUILTIN_LINKAGE uint4x32_t uint16_to_uint4x32(uint16_t x) {
     uint4x32_t result = {{(uint32_t)x, 0, 0, 0}};
     return result;
 }
@@ -1513,7 +1519,7 @@ uint4x32_t uint16_to_uint4x32(uint16_t x) {
       [ "uint4x32_t" ] );
     ( "bfloat16_to_uint4x32",
       {|
-uint4x32_t bfloat16_to_uint4x32(uint16_t x) {
+ARRAYJIT_BUILTIN_LINKAGE uint4x32_t bfloat16_to_uint4x32(uint16_t x) {
     uint4x32_t result = {{(uint32_t)x, 0, 0, 0}};
     return result;
 }
@@ -1521,7 +1527,7 @@ uint4x32_t bfloat16_to_uint4x32(uint16_t x) {
       [ "uint4x32_t" ] );
     ( "half_to_uint4x32",
       {|
-uint4x32_t half_to_uint4x32(uint16_t x) {
+ARRAYJIT_BUILTIN_LINKAGE uint4x32_t half_to_uint4x32(uint16_t x) {
     uint4x32_t result = {{(uint32_t)x, 0, 0, 0}};
     return result;
 }
@@ -1529,7 +1535,7 @@ uint4x32_t half_to_uint4x32(uint16_t x) {
       [ "uint4x32_t" ] );
     ( "fp8_to_uint4x32",
       {|
-uint4x32_t fp8_to_uint4x32(uint8_t x) {
+ARRAYJIT_BUILTIN_LINKAGE uint4x32_t fp8_to_uint4x32(uint8_t x) {
     uint4x32_t result = {{(uint32_t)x, 0, 0, 0}};
     return result;
 }
@@ -1540,7 +1546,7 @@ uint4x32_t fp8_to_uint4x32(uint8_t x) {
       {|
 /* Uint4x32 to float64 uniform - top 53 of the first 64 bits, so the int-to-double conversion
    is exact and the result stays below 1.0 (all 64 bits could round up to 2^64, yielding 1.0) */
-double uint4x32_to_double_uniform(uint4x32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE double uint4x32_to_double_uniform(uint4x32_t x) {
     uint64_t combined = ((uint64_t)x.v[1] << 32) | x.v[0];
     return (combined >> 11) * (1.0 / 9007199254740992.0);
 }
@@ -1549,7 +1555,7 @@ double uint4x32_to_double_uniform(uint4x32_t x) {
     ( "uint4x32_to_int32_uniform",
       {|
 /* Uint4x32 to int32 uniform - full range */
-int32_t uint4x32_to_int32_uniform(uint4x32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE int32_t uint4x32_to_int32_uniform(uint4x32_t x) {
     return (int32_t)x.v[0];
 }
 |},
@@ -1557,7 +1563,7 @@ int32_t uint4x32_to_int32_uniform(uint4x32_t x) {
     ( "uint4x32_to_int64_uniform",
       {|
 /* Uint4x32 to int64 uniform - full range */
-int64_t uint4x32_to_int64_uniform(uint4x32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE int64_t uint4x32_to_int64_uniform(uint4x32_t x) {
     return (int64_t)(((uint64_t)x.v[1] << 32) | x.v[0]);
 }
 |},
@@ -1565,7 +1571,7 @@ int64_t uint4x32_to_int64_uniform(uint4x32_t x) {
     ( "uint4x32_to_uint32_uniform",
       {|
 /* Uint4x32 to uint32 uniform - full range */
-uint32_t uint4x32_to_uint32_uniform(uint4x32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE uint32_t uint4x32_to_uint32_uniform(uint4x32_t x) {
     return x.v[0];
 }
 |},
@@ -1573,7 +1579,7 @@ uint32_t uint4x32_to_uint32_uniform(uint4x32_t x) {
     ( "uint4x32_to_uint64_uniform",
       {|
 /* Uint4x32 to uint64 uniform - full range */
-uint64_t uint4x32_to_uint64_uniform(uint4x32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE uint64_t uint4x32_to_uint64_uniform(uint4x32_t x) {
     return ((uint64_t)x.v[1] << 32) | x.v[0];
 }
 |},
@@ -1581,7 +1587,7 @@ uint64_t uint4x32_to_uint64_uniform(uint4x32_t x) {
     ( "uint4x32_to_byte_uniform",
       {|
 /* Uint4x32 to int8 uniform - full range */
-int8_t uint4x32_to_byte_uniform(uint4x32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE int8_t uint4x32_to_byte_uniform(uint4x32_t x) {
     return (int8_t)(x.v[0] & 0xFF);
 }
 |},
@@ -1589,7 +1595,7 @@ int8_t uint4x32_to_byte_uniform(uint4x32_t x) {
     ( "uint4x32_to_uint16_uniform",
       {|
 /* Uint4x32 to uint16 uniform - full range */
-uint16_t uint4x32_to_uint16_uniform(uint4x32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE uint16_t uint4x32_to_uint16_uniform(uint4x32_t x) {
     return (uint16_t)(x.v[0] & 0xFFFF);
 }
 |},
@@ -1598,7 +1604,7 @@ uint16_t uint4x32_to_uint16_uniform(uint4x32_t x) {
       {|
 /* Uint4x32 to bfloat16 uniform - the single draw of the first 32 bits, truncated to bfloat16 (see
    uint32_to_bfloat16_uniform). */
-uint16_t uint4x32_to_bfloat16_uniform(uint4x32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE uint16_t uint4x32_to_bfloat16_uniform(uint4x32_t x) {
     return uint32_to_bfloat16_uniform(x.v[0]);
 }
 |},
@@ -1607,7 +1613,7 @@ uint16_t uint4x32_to_bfloat16_uniform(uint4x32_t x) {
       {|
 /* Uint4x32 to fp8 uniform - the single draw of the first 32 bits, truncated to e5m2 (see
    uint32_to_fp8_uniform), as the scalar half and bfloat16 draws are. */
-uint8_t uint4x32_to_fp8_uniform(uint4x32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE uint8_t uint4x32_to_fp8_uniform(uint4x32_t x) {
     return uint32_to_fp8_uniform(x.v[0]);
 }
 |},
@@ -1616,7 +1622,7 @@ uint8_t uint4x32_to_fp8_uniform(uint4x32_t x) {
     ( "uint4x32_to_single_uniform_vec",
       {|
 /* Convert uint4x32 to 4 floats in [0, 1) */
-float4_t uint4x32_to_single_uniform_vec(uint4x32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE float4_t uint4x32_to_single_uniform_vec(uint4x32_t x) {
     float4_t result;
     for (int i = 0; i < 4; i++) {
         result.v[i] = uint32_to_single_uniform(x.v[i]);
@@ -1629,7 +1635,7 @@ float4_t uint4x32_to_single_uniform_vec(uint4x32_t x) {
       {|
 /* Convert uint4x32 to 2 doubles in [0, 1) - top 53 bits per lane pair, see
    uint4x32_to_double_uniform */
-double2_t uint4x32_to_double_uniform_vec(uint4x32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE double2_t uint4x32_to_double_uniform_vec(uint4x32_t x) {
     double2_t result;
     uint64_t combined1 = ((uint64_t)x.v[1] << 32) | x.v[0];
     uint64_t combined2 = ((uint64_t)x.v[3] << 32) | x.v[2];
@@ -1642,7 +1648,7 @@ double2_t uint4x32_to_double_uniform_vec(uint4x32_t x) {
     ( "uint4x32_to_int32_uniform_vec",
       {|
 /* Convert uint4x32 to 4 int32s - full range */
-int32x4_t uint4x32_to_int32_uniform_vec(uint4x32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE int32x4_t uint4x32_to_int32_uniform_vec(uint4x32_t x) {
     int32x4_t result;
     for (int i = 0; i < 4; i++) {
         result.v[i] = (int32_t)x.v[i];
@@ -1654,7 +1660,7 @@ int32x4_t uint4x32_to_int32_uniform_vec(uint4x32_t x) {
     ( "uint4x32_to_int64_uniform_vec",
       {|
 /* Convert uint4x32 to 2 int64s - full range */
-int64x2_t uint4x32_to_int64_uniform_vec(uint4x32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE int64x2_t uint4x32_to_int64_uniform_vec(uint4x32_t x) {
     int64x2_t result;
     result.v[0] = (int64_t)(((uint64_t)x.v[1] << 32) | x.v[0]);
     result.v[1] = (int64_t)(((uint64_t)x.v[3] << 32) | x.v[2]);
@@ -1665,7 +1671,7 @@ int64x2_t uint4x32_to_int64_uniform_vec(uint4x32_t x) {
     ( "uint4x32_to_byte_uniform_vec",
       {|
 /* Convert uint4x32 to 16 int8s - full range */
-int8x16_t uint4x32_to_byte_uniform_vec(uint4x32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE int8x16_t uint4x32_to_byte_uniform_vec(uint4x32_t x) {
     int8x16_t result;
     for (int i = 0; i < 4; i++) {
         result.v[i*4 + 0] = (int8_t)(x.v[i] & 0xFF);
@@ -1680,7 +1686,7 @@ int8x16_t uint4x32_to_byte_uniform_vec(uint4x32_t x) {
     ( "uint4x32_to_uint16_uniform_vec",
       {|
 /* Convert uint4x32 to 8 uint16s - full range */
-uint16x8_t uint4x32_to_uint16_uniform_vec(uint4x32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE uint16x8_t uint4x32_to_uint16_uniform_vec(uint4x32_t x) {
     uint16x8_t result;
     for (int i = 0; i < 4; i++) {
         result.v[i*2 + 0] = (uint16_t)(x.v[i] & 0xFFFF);
@@ -1694,7 +1700,7 @@ uint16x8_t uint4x32_to_uint16_uniform_vec(uint4x32_t x) {
       {|
 /* Convert uint4x32 to 8 bfloat16s in [0, 1): each word's low then high 16 bits, moved to the top
    of a word for uint32_to_bfloat16_uniform. */
-uint16x8_t uint4x32_to_bfloat16_uniform_vec(uint4x32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE uint16x8_t uint4x32_to_bfloat16_uniform_vec(uint4x32_t x) {
     uint16x8_t result;
     for (int i = 0; i < 4; i++) {
         result.v[i*2 + 0] = uint32_to_bfloat16_uniform(x.v[i] << 16);
@@ -1709,7 +1715,7 @@ uint16x8_t uint4x32_to_bfloat16_uniform_vec(uint4x32_t x) {
 /* Convert uint4x32 to 16 fp8s in [0, 1): each word's bytes, lowest first, moved to the top of a
    word for uint32_to_fp8_uniform. Returns int8x16_t to match [Ops.c_vec_typ_of_prec], which maps
    both byte and fp8 to int8x16_t; the casts preserve the e5m2 bit patterns. */
-int8x16_t uint4x32_to_fp8_uniform_vec(uint4x32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE int8x16_t uint4x32_to_fp8_uniform_vec(uint4x32_t x) {
     int8x16_t result;
     for (int i = 0; i < 4; i++) {
         result.v[i*4 + 0] = (int8_t)uint32_to_fp8_uniform(x.v[i] << 24);
@@ -1724,7 +1730,7 @@ int8x16_t uint4x32_to_fp8_uniform_vec(uint4x32_t x) {
     ( "uint4x32_to_uint32_uniform_vec",
       {|
 /* Convert uint4x32 to 4 uint32s - full range */
-uint32x4_t uint4x32_to_uint32_uniform_vec(uint4x32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE uint32x4_t uint4x32_to_uint32_uniform_vec(uint4x32_t x) {
     uint32x4_t result;
     for (int i = 0; i < 4; i++) {
         result.v[i] = x.v[i];
@@ -1736,7 +1742,7 @@ uint32x4_t uint4x32_to_uint32_uniform_vec(uint4x32_t x) {
     ( "uint4x32_to_uint64_uniform_vec",
       {|
 /* Convert uint4x32 to 2 uint64s - full range */
-uint64x2_t uint4x32_to_uint64_uniform_vec(uint4x32_t x) {
+ARRAYJIT_BUILTIN_LINKAGE uint64x2_t uint4x32_to_uint64_uniform_vec(uint4x32_t x) {
     uint64x2_t result;
     result.v[0] = ((uint64_t)x.v[1] << 32) | x.v[0];
     result.v[1] = ((uint64_t)x.v[3] << 32) | x.v[2];
@@ -1750,7 +1756,7 @@ uint64x2_t uint4x32_to_uint64_uniform_vec(uint4x32_t x) {
     ( "uint4x32_to_single_uniform_lane",
       {|
 /* Lane of the packed single uniform conversion. */
-float uint4x32_to_single_uniform_lane(uint4x32_t x, int32_t lane) {
+ARRAYJIT_BUILTIN_LINKAGE float uint4x32_to_single_uniform_lane(uint4x32_t x, int32_t lane) {
     return uint4x32_to_single_uniform_vec(x).v[lane];
 }
 |},
@@ -1758,7 +1764,7 @@ float uint4x32_to_single_uniform_lane(uint4x32_t x, int32_t lane) {
     ( "uint4x32_to_double_uniform_lane",
       {|
 /* Lane of the packed double uniform conversion. */
-double uint4x32_to_double_uniform_lane(uint4x32_t x, int32_t lane) {
+ARRAYJIT_BUILTIN_LINKAGE double uint4x32_to_double_uniform_lane(uint4x32_t x, int32_t lane) {
     return uint4x32_to_double_uniform_vec(x).v[lane];
 }
 |},
@@ -1766,7 +1772,7 @@ double uint4x32_to_double_uniform_lane(uint4x32_t x, int32_t lane) {
     ( "uint4x32_to_int32_uniform_lane",
       {|
 /* Lane of the packed int32 uniform conversion. */
-int32_t uint4x32_to_int32_uniform_lane(uint4x32_t x, int32_t lane) {
+ARRAYJIT_BUILTIN_LINKAGE int32_t uint4x32_to_int32_uniform_lane(uint4x32_t x, int32_t lane) {
     return uint4x32_to_int32_uniform_vec(x).v[lane];
 }
 |},
@@ -1774,7 +1780,7 @@ int32_t uint4x32_to_int32_uniform_lane(uint4x32_t x, int32_t lane) {
     ( "uint4x32_to_int64_uniform_lane",
       {|
 /* Lane of the packed int64 uniform conversion. */
-int64_t uint4x32_to_int64_uniform_lane(uint4x32_t x, int32_t lane) {
+ARRAYJIT_BUILTIN_LINKAGE int64_t uint4x32_to_int64_uniform_lane(uint4x32_t x, int32_t lane) {
     return uint4x32_to_int64_uniform_vec(x).v[lane];
 }
 |},
@@ -1782,7 +1788,7 @@ int64_t uint4x32_to_int64_uniform_lane(uint4x32_t x, int32_t lane) {
     ( "uint4x32_to_byte_uniform_lane",
       {|
 /* Lane of the packed byte uniform conversion. */
-int8_t uint4x32_to_byte_uniform_lane(uint4x32_t x, int32_t lane) {
+ARRAYJIT_BUILTIN_LINKAGE int8_t uint4x32_to_byte_uniform_lane(uint4x32_t x, int32_t lane) {
     return uint4x32_to_byte_uniform_vec(x).v[lane];
 }
 |},
@@ -1790,7 +1796,7 @@ int8_t uint4x32_to_byte_uniform_lane(uint4x32_t x, int32_t lane) {
     ( "uint4x32_to_uint16_uniform_lane",
       {|
 /* Lane of the packed uint16 uniform conversion. */
-uint16_t uint4x32_to_uint16_uniform_lane(uint4x32_t x, int32_t lane) {
+ARRAYJIT_BUILTIN_LINKAGE uint16_t uint4x32_to_uint16_uniform_lane(uint4x32_t x, int32_t lane) {
     return uint4x32_to_uint16_uniform_vec(x).v[lane];
 }
 |},
@@ -1798,7 +1804,7 @@ uint16_t uint4x32_to_uint16_uniform_lane(uint4x32_t x, int32_t lane) {
     ( "uint4x32_to_bfloat16_uniform_lane",
       {|
 /* Lane of the packed bfloat16 uniform conversion (bfloat16 bits as uint16). */
-uint16_t uint4x32_to_bfloat16_uniform_lane(uint4x32_t x, int32_t lane) {
+ARRAYJIT_BUILTIN_LINKAGE uint16_t uint4x32_to_bfloat16_uniform_lane(uint4x32_t x, int32_t lane) {
     return uint4x32_to_bfloat16_uniform_vec(x).v[lane];
 }
 |},
@@ -1806,7 +1812,7 @@ uint16_t uint4x32_to_bfloat16_uniform_lane(uint4x32_t x, int32_t lane) {
     ( "uint4x32_to_half_uniform_lane",
       {|
 /* Lane of the packed half uniform conversion. */
-HALF_T uint4x32_to_half_uniform_lane(uint4x32_t x, int32_t lane) {
+ARRAYJIT_BUILTIN_LINKAGE HALF_T uint4x32_to_half_uniform_lane(uint4x32_t x, int32_t lane) {
     return uint4x32_to_half_uniform_vec(x).v[lane];
 }
 |},
@@ -1814,7 +1820,7 @@ HALF_T uint4x32_to_half_uniform_lane(uint4x32_t x, int32_t lane) {
     ( "uint4x32_to_fp8_uniform_lane",
       {|
 /* Lane of the packed fp8 uniform conversion (its e5m2 bit pattern as int8). */
-int8_t uint4x32_to_fp8_uniform_lane(uint4x32_t x, int32_t lane) {
+ARRAYJIT_BUILTIN_LINKAGE int8_t uint4x32_to_fp8_uniform_lane(uint4x32_t x, int32_t lane) {
     return uint4x32_to_fp8_uniform_vec(x).v[lane];
 }
 |},
@@ -1822,7 +1828,7 @@ int8_t uint4x32_to_fp8_uniform_lane(uint4x32_t x, int32_t lane) {
     ( "uint4x32_to_uint32_uniform_lane",
       {|
 /* Lane of the packed uint32 uniform conversion. */
-uint32_t uint4x32_to_uint32_uniform_lane(uint4x32_t x, int32_t lane) {
+ARRAYJIT_BUILTIN_LINKAGE uint32_t uint4x32_to_uint32_uniform_lane(uint4x32_t x, int32_t lane) {
     return uint4x32_to_uint32_uniform_vec(x).v[lane];
 }
 |},
@@ -1830,7 +1836,7 @@ uint32_t uint4x32_to_uint32_uniform_lane(uint4x32_t x, int32_t lane) {
     ( "uint4x32_to_uint64_uniform_lane",
       {|
 /* Lane of the packed uint64 uniform conversion. */
-uint64_t uint4x32_to_uint64_uniform_lane(uint4x32_t x, int32_t lane) {
+ARRAYJIT_BUILTIN_LINKAGE uint64_t uint4x32_to_uint64_uniform_lane(uint4x32_t x, int32_t lane) {
     return uint4x32_to_uint64_uniform_vec(x).v[lane];
 }
 |},

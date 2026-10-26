@@ -113,8 +113,11 @@ case "${1:-}" in
     PREFIX=gh1529-dump-$$
     DUMP=$ROOT/benchmarks/build_files/$PREFIX
     rm -rf "$DUMP"
+    # With the kernel code cache off (gh-ocannl-1529) the routine compiles as one program whose PTX
+    # is written beside its source as <routine>.ptx; with it on, a cache-miss program is named apart.
     (cd "$ROOT/benchmarks" && BENCH_FIXTURE=$FIX BENCH_TUNE=0 "$OUT/bin/bench_gpt.exe" \
       --ocannl_backend=cuda --ocannl_output_debug_files_in_build_directory=true \
+      --ocannl_cuda_kernel_cache_mib=0 \
       --ocannl_build_files_prefix="$PREFIX") > "$OUT/dump.out" 2> "$OUT/dump.err" \
       || { echo "gh1529: the untuned dump run failed (see $OUT/dump.err)" >&2; exit 1; }
     best= bestn=0

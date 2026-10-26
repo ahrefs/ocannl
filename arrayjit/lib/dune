@@ -88,6 +88,7 @@
   alloc_census
   compile_cost
   kernel_code_cache
+  kernel_outline
   ndarray
   indexing
   affine

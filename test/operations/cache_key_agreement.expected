@@ -38,6 +38,7 @@ Keyed keys hashed only on some backends:
   cc_backend_simd_flags -- CPU backends
   cc_backend_fp_contract -- CPU backends
   cc_backend_fast_math -- CPU backends
+  cc_kernel_part_weight -- CPU backends
   cc_vector_bytes -- CPU backends
   cc_vector_registers -- CPU backends
   cc_fp16_arithmetic -- CPU backends

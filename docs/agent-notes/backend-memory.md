@@ -520,6 +520,24 @@ files.
   7.45 s to 4.11 s median (C compiler 5.8 to 0.46 s, 128 to 1 of 128 kernels compiled; the rest is
   lowering), the winner's 7.2 s to 1.8 s with no kernel compiled; the budget there is dominated by
   the two serial base compiles (about 53 s each).
+- **A large cc kernel is outlined, and a large batch compiled as several units** (gh-ocannl-1603).
+  The cache cannot help a search's FIRST compile, the serial baseline: one C function of every
+  statement of the routine, and clang -O3's cost grows faster than linearly in a function's size
+  (`gpt2_mini_train` b8, arm B's 9,050 lines: 127 s whole, 30 s as 62 `noinline` functions in one
+  unit, 8 s across 8 units compiled concurrently). So `Kernel_outline.groups` packs a kernel's
+  top-level statements into parts (`cc_kernel_part_weight`, a statement weighing its IR nodes,
+  about a line of C each; a kernel is outlined above sixteen parts), each an
+  `ARRAYJIT_KERNEL_PART` function taking the kernel's parameters plus a pointer per function-scope
+  local array, called in order; and `Cc_backend` compiles a batch whose units total at least two
+  `cc_compile_unit_min_bytes` as up to `cc_compile_jobs` translation units (`-c` each, by
+  concurrent processes, then one link). Traps: a cut must not fall between a zero initializer and
+  the statement it may be forwarded into, nor inside a top-level scope local's reach (materialize-all
+  code has them: a reduction's `Local_scope` declared at the top level); the builtins needed
+  internal linkage (`ARRAYJIT_BUILTIN_LINKAGE`, `static` in kernels) because every unit carries
+  them, while the host header keeps them external for the stubs that link against `builtins.c`;
+  `OCANNL_`-prefixed macro names trip the environment-spelling scan. Windows compiles one unit.
+  Arm A's base compile went from 30.7 to 8-13 s, arm B's from 102-157 to 11.7 s (correctness-grade
+  diagnostics, shared box).
 - **Metal has none yet, measured**: its library compile (at link) took about 0.4 s of a 1.8 s
   candidate compile on a gpt2 b8 search, the rest of the link being pipeline-state creation, which a
   library cache does not save; a Metal cache wants a pipeline cache beside it.

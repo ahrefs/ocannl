@@ -59,6 +59,7 @@ keyed: codegen -- a cc-backend codegen knob: rendering or compiling a kernel rea
   cc_fp16_arithmetic [read at codegen]
   cc_grid_min_updates [read at codegen]
   cc_grid_private_bytes_cap [read at codegen]
+  cc_kernel_part_weight [read at codegen]
   cc_parallel_chunks [read at codegen]
   cc_parallel_grid [read at codegen]
   cc_vector_bytes [read at codegen]
@@ -217,6 +218,10 @@ execution-neutral -- reuse of compiled kernel code within a process, keyed by th
   cc_kernel_cache_mib [read at codegen]
   cuda_kernel_cache_mib [read at codegen]
   hip_kernel_cache_mib [read at codegen]
+
+execution-neutral -- how a cc batch is split into translation units and how many compiler processes build them at once (gh-ocannl-1603): every function is compiled alone, never inlined across units, so only the compile's cost changes
+  cc_compile_jobs [read at codegen]
+  cc_compile_unit_min_bytes [read at codegen]
 
 execution-neutral -- identifier spelling in generated code and in printouts
   cd_ident_style

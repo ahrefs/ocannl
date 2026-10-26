@@ -100,3 +100,21 @@ val compile_failure_detail :
     output. Exposed so a test can hand {!Ir.C_syntax.attribute_routine_name_failure} the report this
     backend actually raises: attributed to a routine's name, it is quoted without that claim; not
     attributed, it propagates with the claim intact. *)
+
+type split_settings = { part_weight : int; jobs : int; unit_min_bytes : int }
+(** gh-ocannl-1603: how a cc compile is split. [part_weight]: a kernel weighing more than sixteen
+    parts of this weight is rendered outlined, into [noinline] parts it calls in order ([0]: never;
+    config [cc_kernel_part_weight]). [jobs]: a batch is compiled as up to this many translation
+    units, by concurrent compiler processes, linked into one library ([cc_compile_jobs]; always 1
+    off Unix). [unit_min_bytes]: the least source a unit holds ([cc_compile_unit_min_bytes]). *)
+
+val split_settings : unit -> split_settings
+(** The settings in force: the configuration, or {!with_split_settings}'s. *)
+
+val with_split_settings : split_settings -> (unit -> 'a) -> 'a
+(** Runs [f] with these settings instead of the configured ones, then restores the previous ones:
+    for a test comparing a split compile with a whole one in one process. Not domain-local. *)
+
+val translation_units_compiled : unit -> int
+(** How many translation units this process has compiled as parts of a split batch (each unit of a
+    batch split into several counts; an unsplit compile counts none). *)
