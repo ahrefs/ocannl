@@ -253,6 +253,8 @@
 #      nothing past dune's `--` is asked about; `plan` says run would refuse
 #      it and `repeat` runs no iteration; a listing that is not dune's leaves
 #      the aliases to dune; and where a real dune is at hand, its own listing.
+#      Where dune is made to color (CLICOLOR_FORCE=1), its escaped `Error`
+#      tag reads as the plain one, from the fixture and from a real dune.
 #  90. the runner's own OCANNL_TOOL_TESTRUN_BG, _RD and _OWN reach no dune: a
 #      run, a probed GPU run under a slot, a probed repeat's iterations.
 #  59-63 sit after leg 47: the source a run tested, recorded at launch
@@ -2044,9 +2046,10 @@ fi
 # directory with no alias of its own) it answers as dune 3.24 does, on stderr
 # -- each known directory's aliases with the standard `default`, `DIR:` headers
 # for more than one, and nothing but `Error: Directory DIR does not exist.`
-# lines once one is unknown; unset, it prints nothing, which is not dune's
-# answer, so the check leaves every alias to dune. The directories each query
-# named go to REPEAT_TEST_SHOW_CALLS when that is set.
+# lines once one is unknown, its `Error` tag colored as dune colors it under
+# CLICOLOR_FORCE=1 (gh-ocannl-1591); unset, it prints nothing, which is not
+# dune's answer, so the check leaves every alias to dune. The directories each
+# query named go to REPEAT_TEST_SHOW_CALLS when that is set.
 if [ "${1:-}" = show ]; then
   [ -n "${REPEAT_TEST_ALIASES:-}" ] || exit 0
   shift 2
@@ -2056,8 +2059,10 @@ if [ "${1:-}" = show ]; then
     printf '%s\n' "${show_dirs[*]-}" >>"$REPEAT_TEST_SHOW_CALLS"
   show_missing=
   for d in ${show_dirs[@]+"${show_dirs[@]}"}; do
+    show_error=Error
+    [ "${CLICOLOR_FORCE-0}" = 0 ] || show_error=$'\e[1;31mError\e[0m'
     awk -v d="$d" '$1 == d { f = 1 } END { exit !f }' "$REPEAT_TEST_ALIASES" ||
-      { echo "Error: Directory $d does not exist." >&2; show_missing=1; }
+      { echo "$show_error: Directory $d does not exist." >&2; show_missing=1; }
   done
   [ -z "$show_missing" ] || exit 0
   for d in ${show_dirs[@]+"${show_dirs[@]}"}; do
@@ -7486,6 +7491,8 @@ harness_leg_run '79: credentials never reach dune #credentials' leg_79
 # reachability tool's (the backends' resolution) and dune's. The table empty
 # -- an answer that is not dune's -- leaves every alias to dune. Where a real
 # dune is at hand, the same refusals and acceptances against its own listing.
+# Both, plain and under CLICOLOR_FORCE=1, whose escapes around dune's `Error`
+# tag once made the answer inconclusive (gh-ocannl-1591).
 leg_89() {
 alias_label="an alias dune does not know is ALIAS REFUSED (exit 2) before the backends, the slot and dune's build; known ones, recursive or not, run"
 alias_open_label="an answer that is not dune's leaves the aliases to dune"
@@ -7542,6 +7549,18 @@ for probe in "@@al/deep|al defines no alias deep" \
   if [ -z "$alias_detail" ] && grep -q 'runtest-yes' <<<"$(grep 'alias refused' <<<"$argv_out")"; then
     alias_detail="$alias_args: a known alias was refused too: $argv_out"
   fi
+done
+# Where dune is made to color (CLICOLOR_FORCE=1, which setup-ocaml exports
+# job-wide), its `Error` tag comes wrapped in escapes, and the answer is as
+# conclusive as the plain one (gh-ocannl-1591): both, whatever the ambient
+# setting.
+for alias_color in 1 0; do
+  [ -z "$alias_detail" ] || break
+  CLICOLOR_FORCE=$alias_color alias_probe alias-color run build @nowhere/x @al/runtest-yes
+  { [ "$argv_rc" = 2 ] && [ -z "$argv_calls" ] && [ -z "$slot_calls" ] &&
+    [ "$(grep -c '^alias refused: ' <<<"$argv_out")" = 1 ] &&
+    grep -qF -- "alias refused: @nowhere/x: dune knows no directory nowhere" <<<"$argv_out"; } ||
+    alias_detail="CLICOLOR_FORCE=$alias_color @nowhere/x @al/runtest-yes: exit $argv_rc (want 2); dune calls: ${argv_calls:-<none>}; slot calls: ${slot_calls:-<none>}; digest: $argv_out"
 done
 # Known: in its own directory, under @@ and @, below it, at the root, and
 # past dune's own `--` nothing is asked about; nor where an option the check
@@ -7631,23 +7650,27 @@ else
     printf '(rule (alias cafealias) (action (progn)))\n' >"$alias_root/al/café/dune"
     GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$alias_root" init -q
     alias_real_detail=
-    alias_real_run() { # tag argv...
+    alias_real_run() { # tag color argv...: CLICOLOR_FORCE set to the color, whatever the ambient one
       local rc=0
-      (cd "$alias_root" && PATH=$(dirname "$alias_real"):$PATH OCANNL_TOOL_TEST_RUNS=$TMP/$1-runs \
-        tools/test-run.sh run "${@:2}") >"$TMP/$1.out" 2>&1 || rc=$?
+      (cd "$alias_root" && export CLICOLOR_FORCE="$2" && PATH=$(dirname "$alias_real"):$PATH \
+        OCANNL_TOOL_TEST_RUNS=$TMP/$1-runs tools/test-run.sh run "${@:3}") >"$TMP/$1.out" 2>&1 || rc=$?
       alias_real_rc=$rc
     }
+    # Each probe plain and where dune is made to color, its `Error` tag then
+    # wrapped in escapes (gh-ocannl-1591).
     for probe in "2|build @al/runtest-no_such @al/deep|alias refused: @al/runtest-no_such: neither al" \
                  "2|build @@al/deep|alias refused: @@al/deep: al defines no alias deep" \
                  "2|build @nowhere/x @al/runtest-yes|alias refused: @nowhere/x: dune knows no directory nowhere" \
                  "0|build @al/deep @@al/runtest-yes @deep @al/vdeep @vdeep @al/cafealias|verdict: pass"; do
       IFS='|' read -r want args text <<<"$probe"
-      # shellcheck disable=SC2086 # the probe's operands, split on purpose
-      alias_real_run alias-real $args
-      { [ "$alias_real_rc" = "$want" ] && grep -qF -- "$text" "$TMP/alias-real.out"; } ||
-        { alias_real_detail="$args: exit $alias_real_rc (want $want): $(cat "$TMP/alias-real.out")"; break; }
-      [ "$want" = 0 ] || [ "$(grep -c '^alias refused: ' "$TMP/alias-real.out")" = 1 ] ||
-        { alias_real_detail="$args: not exactly one refusal: $(cat "$TMP/alias-real.out")"; break; }
+      for alias_color in 0 1; do
+        # shellcheck disable=SC2086 # the probe's operands, split on purpose
+        alias_real_run alias-real "$alias_color" $args
+        { [ "$alias_real_rc" = "$want" ] && grep -qF -- "$text" "$TMP/alias-real.out"; } ||
+          { alias_real_detail="CLICOLOR_FORCE=$alias_color $args: exit $alias_real_rc (want $want): $(tr '\n' '|' <"$TMP/alias-real.out")"; break 2; }
+        [ "$want" = 0 ] || [ "$(grep -c '^alias refused: ' "$TMP/alias-real.out")" = 1 ] ||
+          { alias_real_detail="CLICOLOR_FORCE=$alias_color $args: not exactly one refusal: $(tr '\n' '|' <"$TMP/alias-real.out")"; break 2; }
+      done
     done
     if [ -z "$alias_real_detail" ]; then report 0 "$alias_real_label"; else report 1 "$alias_real_label" "$alias_real_detail"; fi
   fi
