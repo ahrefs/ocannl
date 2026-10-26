@@ -174,8 +174,15 @@
  (optional)
  (preprocessor_deps
   (env_var OCANNL_LOG_LEVEL_METAL_BACKEND))
- (modules metal_backend builtins_metal)
- (libraries base metal metal_math_api_runtime utils ir builtins_cc)
+ (modules metal_backend)
+ (libraries
+  base
+  metal
+  metal_math_api_runtime
+  utils
+  ir
+  builtins_cc
+  builtins_metal)
  ; gh-ocannl-1638: the GPU core count Metal does not publish, read from the IORegistry.
  (foreign_stubs
   (language c)
@@ -201,11 +208,12 @@
  (public_name arrayjit.builtins_cc)
  (modules builtins_cc))
 
-; The CUDA and HIP definition tables are strings too, so they are stdlib-only libraries beside it
-; rather than modules of the optional backend libraries (gh-ocannl-1353): every `dune build @check`
-; compiles them, on machines with neither cudajit nor hipjit -- per-PR CI among them -- and a host
-; test (test/operations/cuda_like_builtins_emulation) links them to compile their device-free
-; conversion helpers with the host C compiler and compare them with the C table's.
+; The CUDA, HIP and Metal definition tables are strings too, so they are stdlib-only libraries
+; beside it rather than modules of the optional backend libraries (gh-ocannl-1353, gh-ocannl-1580):
+; every `dune build @check` compiles them, on machines with no cudajit, hipjit or Metal -- per-PR CI
+; among them -- and host tests (test/operations/cuda_like_builtins_emulation,
+; test/operations/metal_builtins_emulation) link them to compile their device-free conversion
+; helpers with the host C (C++ for Metal) compiler and compare them with the C table's.
 
 (library
  (name builtins_cuda)
@@ -217,6 +225,12 @@
  (name builtins_hip)
  (public_name arrayjit.builtins_hip)
  (modules builtins_hip)
+ (libraries builtins_cc))
+
+(library
+ (name builtins_metal)
+ (public_name arrayjit.builtins_metal)
+ (modules builtins_metal)
  (libraries builtins_cc))
 
 (library
