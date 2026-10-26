@@ -1684,13 +1684,17 @@ let cross_routine_merge_splice_rejection (tn : Tn.t) : string =
 
 (* gh-ocannl-1551: the refusal of a read of an INHERITED node that an earlier routine of the lineage
    placed as routine-local ([Local]) scratch, shared by [virtual_llc]'s read arm and the store a
-   capture walk's hit of it refuses on a node that cannot fall back to materialization. *)
+   capture walk's hit of it refuses on a node that cannot fall back to materialization, and the
+   emitted-code check of every read of it ([refuse_uncovered_local_reads], gh-ocannl-1646, which
+   also reaches the reads a stored template replays). *)
 let inherited_local_read_rejection (tn : Tn.t) : string =
   [%string
     "the node %{Tn.debug_name tn} was computed as routine-local scratch by an earlier routine of \
-     this compilation lineage: its buffer does not persist, so a later routine cannot read it. \
-     Mark %{Tn.debug_name tn} as materialized (e.g. via Train.set_materialized) in the routine \
-     that computes it."]
+     this compilation lineage: its buffer does not persist, so a later routine can read it only \
+     where its own earlier writes cover every cell read, and this routine reads it (directly, or \
+     through a deferred computation that reads it) without such writes. Write %{Tn.debug_name tn} \
+     in this routine before the read, or mark it as materialized (e.g. via Train.set_materialized) \
+     in the routine that computes it."]
 
 (* gh-ocannl-1551: the refusal of an INHERITED computation that cannot be instantiated at a read
    site ([code] is [instantiate_computations]' rejection), shared like the one above. *)
@@ -1936,9 +1940,9 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx)
        emit walk -- which holds those loops' extents -- decides the arm: a dead one is skipped
        there, a live one raises the read's own rejection as before. A node already committed virtual
        has no such fallback, so it keeps that rejection rather than a provenance collision; the one
-       scratch read such a node's store may carry -- covered here, and read by the lineage's own
-       template of the node already -- is never recorded as a hit ([virtual_llc]'s
-       [carried_local_read], gh-ocannl-1645). *)
+       scratch read such a node's store may carry -- one this routine covers, whose replays are
+       judged wherever they land ([refuse_uncovered_local_reads], gh-ocannl-1646) -- is never
+       recorded as a hit ([virtual_llc]'s [carried_local_read], gh-ocannl-1645). *)
     Option.iter capture_hit ~f:(fun hit ->
         if Tn.Placements.known_virtual optim_ctx.placements traced.tn then
           raise @@ Utils.User_error (capture_hit_rejection hit);
@@ -3065,8 +3069,6 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
      update-an-inherited-virtual pattern) is tainted all the same: inlining would replay the
      inherited component. *)
   let inherited_tns = Hash_set.create (module Tnode) in
-  (* gh-ocannl-1645: the inherited computations themselves, as of routine entry. *)
-  let inherited_computations = Hashtbl.copy optim_ctx.computations in
   let inherited_merge_tainted =
     let tainted = Hash_set.create (module Tnode) in
     Hashtbl.iteri optim_ctx.computations ~f:(fun ~key ~data ->
@@ -3084,14 +3086,13 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
      the code being walked -- the setter whose right-hand side holds it, or the capture candidate
      for code outside every setter (a [Set_local], which the inline filter keeps). A store whose own
      node has a hit is refused ([check_and_store_virtual ~capture_hit], [154]/[155]/[156]), so no
-     stored template carries such a read in a setter of its own node (save the scratch reads an
-     already-virtual node's inherited template carries, see [carried_local_read]); the candidate
-     materializes and the emit walk decides the arm with the real loop extents, raising the read's
-     own rejection if it is live there. A hit owned by a SIBLING setter of a shared loop refuses
-     nothing: consumption drops sibling setters ([instantiate_computations],
-     [computation_reads_merge]). The walk is never aborted, so it leaves no state a completed
-     capture would not. [Some (owner, hits)] exactly during a capture walk; [hits] maps an owner to
-     the first hit it met. *)
+     stored template carries such a read in a setter of its own node (save the covered scratch reads
+     of an already-virtual node, see [carried_local_read]); the candidate materializes and the emit
+     walk decides the arm with the real loop extents, raising the read's own rejection if it is live
+     there. A hit owned by a SIBLING setter of a shared loop refuses nothing: consumption drops
+     sibling setters ([instantiate_computations], [computation_reads_merge]). The walk is never
+     aborted, so it leaves no state a completed capture would not. [Some (owner, hits)] exactly
+     during a capture walk; [hits] maps an owner to the first hit it met. *)
   let capture : (Tn.t * (Tn.t, capture_hit) Hashtbl.t) option ref = ref None in
   let record_hit hit =
     Option.iter !capture ~f:(fun (owner, hits) ->
@@ -3151,40 +3152,18 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
      committed virtual, so refusing its store is a refusal of the routine (it has no materialization
      fallback), and recompiling a step in the lineage that ran it is the ordinary case: the first
      compile stored [owner]'s template while [tn] was undecided, and only its finalization placed
-     [tn] [Local]. The read is admitted when (1) this routine reads [tn] live and its own earlier
-     writes strictly cover every such read, so the template's replays in this routine read this
-     routine's scratch, and (2) [owner]'s INHERITED template already reads [tn], so no read site in
-     any routine gains a scratch dependency the lineage did not already carry
-     ([instantiate_computations] replays every component). Without (2), a declared-virtual consumer
-     would newly store a template reading the scratch, and a later routine replaying it without
-     covering writes would read uninitialized scratch where it is refused today (gh-ocannl-1646,
-     which owns the replay-time half of the rule: a stored template's scratch reads are covered at
-     replay or refused at replay, never silently uninitialized).
-
-     (2) under-approximates what the inherited template replays, the safe direction: only its
-     [owner]'s own setters (a sibling setter of a captured shared loop never replays -- local review
-     of the gh-ocannl-1645 PR), outside [Where] arms (one may be dead at every read site), outside
-     dead loops and discarded operands. *)
+     [tn] [Local]. The read is admitted when this routine reads [tn] live and its own earlier writes
+     strictly cover every such read. gh-ocannl-1646: the template's replays then read covered
+     scratch wherever they land -- in this routine, and in a later one only if that routine covers
+     them too, which [refuse_uncovered_local_reads] enforces on every routine's emitted code. So the
+     lineage may gain the dependency (a declared-virtual consumer storing its first template reading
+     the scratch, or an owner whose inherited template did not read it): a stored template's scratch
+     reads are covered at replay or refused at replay, never silently uninitialized. An owner not
+     yet committed virtual is not admitted: its store is refused and it materializes, the cheaper
+     outcome, which pushes no refusal onto later routines. *)
   let carried_local_read ~owner tn =
-    let replayed =
-      Access_fold.
-        {
-          discarded_operands = Skip;
-          gated_operands = Skip;
-          dead_loops = Skip;
-          local_scopes = Visit;
-          guards = Ignore;
-          scan_implicit = Skip;
-        }
-    in
     Tn.Placements.known_virtual plc owner
-    && (match live_local tn with `Covered -> true | `Unread | `Uncovered -> false)
-    &&
-    match Hashtbl.find inherited_computations owner with
-    | None -> false
-    | Some comps ->
-        List.exists comps ~f:(fun (_, body) ->
-            Option.is_some (setter_read ~policy:replayed owner body ~f:(Tn.equal tn)))
+    && match live_local tn with `Covered -> true | `Unread | `Uncovered -> false
   in
   (* A read of routine-local scratch in [tn]'s own setters in [code], which a RAW capture (a
      packed-uniform producer's, see [proc_contains_set_from_vec]) stores as written: no walk meets
@@ -3755,8 +3734,9 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
              declared intent, never decided during optimization), so a [Local] node here is
              inherited, whether or not a computation of it is in the table. gh-ocannl-1620: a read
              this routine's own writes cover reads this routine's scratch and executes; no template
-             may hold it (see [local_dependents]) unless the lineage's template of an
-             already-virtual owner carries it already ([carried_local_read], gh-ocannl-1645). *)
+             may hold it (see [local_dependents]) unless its owner is already committed virtual
+             ([carried_local_read], gh-ocannl-1645; its replays are judged where they land,
+             gh-ocannl-1646). *)
           (if Tn.Placements.known_not_materialized plc tn then
              (* gh-ocannl-1551: during a capture walk, a hit (see [capture]), covered or not. *)
              match !capture with
@@ -9598,6 +9578,77 @@ let%diagn2_sexp analyze_proc (static_indices : Indexing.static_symbol list) (llc
 let copy_traced_store (store : traced_store) : traced_store =
   Hashtbl.map store ~f:(fun t -> { t with tn = t.tn })
 
+(* gh-ocannl-1646: the replay half of the rule a stored template's scratch reads obey -- covered at
+   replay or refused at replay, never silently uninitialized. A node an earlier routine of the
+   lineage finalized [Local] ([known_non_virtual && known_not_materialized], the [routine_local] of
+   {!decide_placements}: [Local] is only ever that finalization's decision) has no incoming
+   contents, so every read of it the routine's EMITTED code evaluates must be strictly covered by
+   the routine's own earlier writes -- however the read got there. [decide_placements] judges the
+   raw reads ([live_local]); this judges the final code, which also holds the reads no raw position
+   carried: an inherited template spliced at a read site (its operands need not be mentioned by the
+   raw code at all, and [reconcile_traced_store] only books them), a footprint prologue, and the
+   replays of a template this very routine stored ([carried_local_read] admits a covered read into a
+   committed-virtual owner's template, whose later replays are judged here, in whichever routine
+   they land).
+
+   The judgment is [live_local]'s, over the final code: the reads {!live_view} keeps (dead loops
+   dropped, a [Where] arm the emit walk decides dead elided -- a condition reading a buffer or a
+   scope is never decided, so such an arm is judged live: a loud refusal at worst), and coverage
+   strict as for spliced reads (a guarded write counts only where its guards dominate the read; the
+   read-modify-write exemption is no initialization). Per node, like [live_local]: all the node's
+   live reads are judged together. A pre-scan keeps routines that read no such node off the affine
+   pass. *)
+let refuse_uncovered_local_reads (plc : Tn.Placements.t)
+    ~(static_indices : Indexing.static_symbol list) (llc : t) : unit =
+  let routine_local tn =
+    Tn.Placements.known_non_virtual plc tn && Tn.Placements.known_not_materialized plc tn
+  in
+  let local_reads code =
+    let found = Hash_set.create (module Tnode) in
+    let open Access_fold in
+    let policy =
+      {
+        discarded_operands = Skip;
+        gated_operands = Visit;
+        dead_loops = Skip;
+        local_scopes = Visit;
+        guards = Ignore;
+        scan_implicit = Skip;
+      }
+    in
+    let hooks =
+      {
+        (hooks ()) with
+        scalar =
+          (fun _ () sc ->
+            (match sc with
+            | (Get (tn, _) | Get_dynamic { tn; _ }) when routine_local tn -> Hash_set.add found tn
+            | _ -> ());
+            Continue ());
+      }
+    in
+    fold ~policy ~hooks ~init:() code;
+    found
+  in
+  if not (Hash_set.is_empty (local_reads llc)) then
+    let live = live_view static_indices llc in
+    let read = local_reads live in
+    if not (Hash_set.is_empty read) then
+      let covered =
+        reads_covered_query
+          ~write_eligible:(fun ~read ~write ->
+            (not write.Affine.a_guarded) || write_guards_dominate ~write ~read)
+          static_indices
+          (drop_dead_loop_accesses (affine_accesses live))
+      in
+      (* Deterministic: the first uncovered node in creation order names the refusal. *)
+      Hash_set.to_list read |> List.sort ~compare:Tn.compare
+      |> List.iter ~f:(fun tn ->
+          match covered tn with
+          | `Covered -> ()
+          | `Covered_rmw_exempt _ | `Unknown _ ->
+              raise (Utils.User_error (inherited_local_read_rejection tn)))
+
 (* gh-610: reconcile the traced store with the FINAL optimized code. The traced store is the
    routine's node registry — the kernel parameter list ([C_syntax.compile_proc]), context allocation
    ([Backends.allocate_delta]) and the routine interface ([input_and_output_nodes]) all enumerate it
@@ -10250,6 +10301,7 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
       virtual_llc_result
   in
   let cap_inline_flips = Hash_set.create (module Tnode) in
+  refuse_uncovered_local_reads input_ctx.placements ~static_indices llc;
   let uses_merge, spliced_rbw =
     reconcile_traced_store input_ctx.placements traced_store ~spliced_reads ~static_indices
       ~merge_node:an.an_merge_node ~raw_coverage:an.an_reads_covered ~cap_inline_flips llc

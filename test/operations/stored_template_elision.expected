@@ -103,7 +103,10 @@ local, covered: a raw-captured packed-uniform producer: routine A placed v as ro
 local, covered: a raw-captured packed-uniform producer: the producer is refused by its capture and materializes: true
 local, covered: a raw-captured packed-uniform producer: no template of it reads v: true
 local, covered: a declared-virtual consumer: routine A placed v as routine-local scratch, its computation in the table: true
-local, covered: a declared-virtual consumer: routine B is refused, naming v routine-local scratch: true
+local, covered: a declared-virtual consumer: routine B compiles, v stays routine-local scratch and is no input of B: true
+local, covered: a declared-virtual consumer: w stays virtual, its stored template reading v: true
+local, covered: a declared-virtual consumer: lc5out executes to its expected values: true
+local, covered: a declared-virtual consumer: the reading agrees with the materialized one: true
 local: a partial write: routine A placed v as routine-local scratch, its computation in the table: true
 local: a partial write: routine B is refused, naming v routine-local scratch: true
 local, no template: a partial write: routine A placed v as routine-local scratch, with no computation in the table: true
@@ -130,8 +133,58 @@ carried: no covering write: routine A placed v as routine-local scratch and comm
 carried: no covering write: routine B is refused, naming v routine-local scratch: true
 carried: a partial write: routine A placed v as routine-local scratch and committed w virtual, its template reading v: true
 carried: a partial write: routine B is refused, naming v routine-local scratch: true
-carried: only a sibling setter of the inherited capture reads v: routine A placed v as routine-local scratch and committed w virtual, its template reading v: true
-carried: only a sibling setter of the inherited capture reads v: routine B is refused, naming v routine-local scratch: true
+carried, covered: only a sibling setter of the inherited capture reads v: routine A placed v as routine-local scratch and committed w virtual, its template reading v: true
+carried, covered: only a sibling setter of the inherited capture reads v: routine B compiles, w stays virtual, v stays routine-local scratch and no input: true
+carried, covered: only a sibling setter of the inherited capture reads v: B stored w's template again, reading v: true
+carried, covered: only a sibling setter of the inherited capture reads v: out executes to its expected values: true
+carried, covered: only a sibling setter of the inherited capture reads v: the reading agrees with the materialized one: true
+carried, covered: only a sibling setter of the inherited capture reads v: a later uncovered replay of w is refused, naming v routine-local scratch: true
+replayed: no write of v: routine A placed v as routine-local scratch and committed w virtual, its template reading v: true
+replayed: no write of v: routine C is refused, naming v routine-local scratch: true
+replayed, guarded A: no write of v: routine A placed v as routine-local scratch and committed w virtual, its template reading v: true
+replayed, guarded A: no write of v: routine C is refused, naming v routine-local scratch: true
+replayed, covered: routine A placed v as routine-local scratch and committed w virtual, its template reading v: true
+replayed, covered: routine C compiles, w stays virtual, v stays routine-local scratch and no input: true
+replayed, covered: out executes to its expected values: true
+replayed, covered: the reading agrees with the materialized one: true
+replayed, guarded A, covered: routine A placed v as routine-local scratch and committed w virtual, its template reading v: true
+replayed, guarded A, covered: routine C compiles, w stays virtual, v stays routine-local scratch and no input: true
+replayed, guarded A, covered: out executes to its expected values: true
+replayed, guarded A, covered: the reading agrees with the materialized one: true
+replayed: a partial write: routine A placed v as routine-local scratch and committed w virtual, its template reading v: true
+replayed: a partial write: routine C is refused, naming v routine-local scratch: true
+replayed: a guarded write, then an unguarded replay: routine A placed v as routine-local scratch and committed w virtual, its template reading v: true
+replayed: a guarded write, then an unguarded replay: routine C is refused, naming v routine-local scratch: true
+replayed: the write after the replay: routine A placed v as routine-local scratch and committed w virtual, its template reading v: true
+replayed: the write after the replay: routine C is refused, naming v routine-local scratch: true
+replayed: an in-place update with no initialization: routine A placed v as routine-local scratch and committed w virtual, its template reading v: true
+replayed: an in-place update with no initialization: routine C is refused, naming v routine-local scratch: true
+replayed, covered under one dominating guard: routine A placed v as routine-local scratch and committed w virtual, its template reading v: true
+replayed, covered under one dominating guard: routine C compiles, w stays virtual, v stays routine-local scratch and no input: true
+replayed, covered under one dominating guard: out executes to its expected values: true
+replayed, covered under one dominating guard: the reading agrees with the materialized one: true
+replayed only in a dead arm: routine A placed v as routine-local scratch and committed w virtual, its template reading v: true
+replayed only in a dead arm: routine C compiles, w stays virtual, v stays routine-local scratch and no input: true
+replayed only in a dead arm: out executes to its expected values: true
+replayed only in a dead arm: the reading agrees with the materialized one: true
+replayed only in a dead loop: routine A placed v as routine-local scratch and committed w virtual, its template reading v: true
+replayed only in a dead loop: routine C compiles, w stays virtual, v stays routine-local scratch and no input: true
+replayed only in a dead loop: out executes to its expected values: true
+replayed only in a dead loop: the reading agrees with the materialized one: true
+replayed per statement: no write of v: routine A placed v as routine-local scratch and committed w virtual, its template reading v: true
+replayed per statement: no write of v: routine C is refused, naming v routine-local scratch: true
+replayed per statement: a write of another cell: routine A placed v as routine-local scratch and committed w virtual, its template reading v: true
+replayed per statement: a write of another cell: routine C is refused, naming v routine-local scratch: true
+replayed per statement, covered: routine A placed v as routine-local scratch and committed w virtual, its template reading v: true
+replayed per statement, covered: routine C compiles, w stays virtual, v stays routine-local scratch and no input: true
+replayed per statement, covered: out executes to its expected values: true
+replayed per statement, covered: the reading agrees with the materialized one: true
+new dependency: a declared-virtual consumer's template: routine A placed v as routine-local scratch, its computation in the table: true
+new dependency: a declared-virtual consumer's template: B keeps w virtual and stored its template, reading v: true
+new dependency: a declared-virtual consumer's template: B computes from its own v: true
+new dependency: a declared-virtual consumer's template: a covering later routine compiles, v routine-local and no input: true
+new dependency: a declared-virtual consumer's template: the covering later routine computes from its own v: true
+new dependency: a declared-virtual consumer's template: a later uncovered replay of w is refused, naming v routine-local scratch: true
 virtual consumer where (i < 4) x v: routine A defers v, its template reading the merge buffer: true
 virtual consumer where (i < 4) x v: routine B compiles: true
 virtual consumer where (i < 4) x v: routine B declares no merge buffer and does not read v: true

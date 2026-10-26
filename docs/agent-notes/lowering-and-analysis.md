@@ -127,6 +127,10 @@ files.
   code cannot distinguish a legitimate same-routine inlining of the declared merge read from a
   cross-routine splice whose consumer declares the SAME source, which would silently rebind the
   read to the consumer's transfer; `reconcile_traced_store` keeps a mismatch check as backstop.
+  The bookkeeping refuses nothing about inherited `Local` scratch: a spliced read of one that the
+  routine never mentions would land as a fresh `read_only` entry over uninitialized scratch, so
+  `refuse_uncovered_local_reads` judges those reads on the final code first (gh-ocannl-1646,
+  owned by virtualization-and-inlining.md).
   The walk observes the raw analysis' conventions or it re-diverges (review rounds 3-6):
   dead-loop bodies register (renderers emit them, so their identifiers need parameters) but
   neither supply coverage (`written_seen`) nor demand it, and the coverage query filters through
