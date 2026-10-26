@@ -192,6 +192,18 @@ let run_forms () =
       let a = operand () in
       let w = kernel () in
       [%op a +* "s, i; k => s, 2*i<+k" w +* "s, o<+c; c => s, o" [ 0.; 1. ]]);
+  (* [output_padding > padding] grows the end instead: crop only the start, then append
+     [output_padding - padding] zero cells by concatenation. Stride 3, kernel 3, padding 1,
+     output_padding 2: the full 12 lose 1 cell at the start and gain 1 at the end. *)
+  executes "padded transposed conv recipe: 3*i<+k, crop the start, append a zero, output_padding 2"
+    ~dims:[| 1; ((n - 1) * 3) - 2 + 2 + 2 + 1 |]
+    ~want:(conv_transpose ~stride:3 ~dilation:1 ~padding:1 ~output_padding:2 a_vals kernel_vals)
+    (fun () ->
+      let a = operand () in
+      let w = kernel () in
+      let zeros = ndarray [ 1; 1 ] [| 0. |] in
+      let%op cropped = a +* "s, i; k => s, 3*i<+k" w +* "s, o<+c; c => s, o" [ 0.; 1. ] in
+      [%op (cropped, zeros) ++^ "s, a; s, b => s, a^b"]);
   (* Both terms of the index come from the operand: [res[i + 3j] = a[i, j]], injective for i < 3. *)
   let ij_vals = Array.init (2 * n) ~f:(fun x -> Float.of_int ((10 * (x / n)) + (x % n) + 1)) in
   executes "unary multi-term i<+3*j"
