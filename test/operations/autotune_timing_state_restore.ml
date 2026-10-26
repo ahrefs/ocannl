@@ -46,6 +46,12 @@ let () =
   let%op learning_rate = 0.0078125 in
   Train.set_materialized w.Tensor.value;
   Train.set_materialized learning_rate.Tensor.value;
+  (* Every lineage here compiles the step more than once (the warm-up step, then the search's
+     candidates or a reference step), and the first compile places [y.grad] as routine-local scratch
+     while the virtual [w.grad]'s stored template reads it -- a later compile of the same step is
+     then refused for that read (gh-ocannl-1620's rule), though its own writes cover it.
+     Materialized, [y.grad] is no scratch and the template no hazard. *)
+  Train.set_materialized (Option.value_exn ~here:[%here] y.Tensor.diff).grad;
   let comp =
     Ir.Assignments.sequence
       [ Train.grad_update loss; Train.sgd_update ~learning_rate ~momentum:0.5 loss ]
