@@ -116,6 +116,7 @@ type ('p, 'w) concurrent = {
   split : split;
   prepare : group:int -> n_groups:int -> string list -> int list -> unit -> 'w;
   finish : group:int -> 'w -> 'p * int;
+  reraise : 'a. group:int -> int list -> exn -> Stdlib.Printexc.raw_backtrace -> 'a;
   phase : (unit -> unit) -> unit;
 }
 
@@ -212,7 +213,7 @@ let resolve c ~lock ~keys ~options ~symbols ?(always_lock = false)
         let results = ref [] in
         cc.phase (fun () -> results := run_all works);
         (* Every compile has returned: each one that succeeded is finished and published in batch
-           order on this domain, then the first failure, in batch order, propagates. *)
+           order on this domain, then the first failure, in batch order, is re-raised here. *)
         let failure =
           List.foldi (List.zip_exn programs !results) ~init:None
             ~f:(fun k failure ((_, idxs), result) ->
@@ -220,10 +221,10 @@ let resolve c ~lock ~keys ~options ~symbols ?(always_lock = false)
               | Ok work ->
                   publish_group idxs (cc.finish ~group:k work);
                   failure
-              | Error e -> Option.first_some failure (Some e))
+              | Error (exn, backtrace) -> Option.first_some failure (Some (k, idxs, exn, backtrace)))
         in
-        Option.iter failure ~f:(fun (exn, backtrace) ->
-            Stdlib.Printexc.raise_with_backtrace exn backtrace));
+        Option.iter failure ~f:(fun (k, idxs, exn, backtrace) ->
+            cc.reraise ~group:k idxs exn backtrace));
     List.iter misses ~f:(fun i ->
         if Option.is_none found.(i) then found.(i) <- found.(Hashtbl.find_exn rep_of_key keys.(i)))
   in

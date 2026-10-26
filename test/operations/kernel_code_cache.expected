@@ -78,4 +78,5 @@ too few kernels for two programs: one serial compile: true
 and none of the six misses prepared for a concurrent compile: true
 a refused program propagates its failure: true
 after every compile was joined: true
+re-raised on the calling domain, for the refused program's kernels: true
 the programs that compiled are published, the refused one is not: true

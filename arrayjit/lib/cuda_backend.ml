@@ -1658,10 +1658,12 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
     in
     (* gh-ocannl-1603: the same program as [compile_group], in [Kernel_code_cache.resolve]'s three
        stages. Here, on the calling domain: its source and artifact, its census record. On a domain
-       of its own: the nvrtc call alone, its failure attributed as [compile_group] attributes it.
-       Back here, in batch order: its PTX artifacts and its program. The device time is the
-       concurrent phase's wall time, timed here: the census is domain-local, and a sum over the
-       overlapping compiles would overstate it. *)
+       of its own: the nvrtc call alone, a failure raised as it is. Back here, in batch order: its
+       PTX artifacts and its program, or its failure attributed as [compile_group] attributes it --
+       here, because attribution prints the exception, and nvrtc's printer (cudajit's) uses
+       [Format.str_formatter], which is not domain-safe. The device time is the concurrent phase's
+       wall time, timed here: the census is domain-local, and a sum over the overlapping compiles
+       would overstate it. *)
     let concurrent ~header :
         (program, string * Nvrtc.compile_to_ptx_result) Kernel_code_cache.concurrent =
       {
@@ -1673,15 +1675,12 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
             write_source_artifact ~name:artifact source;
             Compile_cost.record_kernels ~rendered:0 ~compiled:(List.length idxs);
             let with_debug = Utils.settings.output_debug_files_in_build_directory in
-            fun () ->
-              try (artifact, nvrtc_compile ~name:artifact ~options ~with_debug source)
-              with exn ->
-                let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-                r.attribute idxs exn backtrace);
+            fun () -> (artifact, nvrtc_compile ~name:artifact ~options ~with_debug source));
         finish =
           (fun ~group:_ (artifact, ptx) ->
             write_ptx_artifacts ~name:artifact ~log_header:!header ptx;
             (new_program ptx, String.length (Nvrtc.string_from_ptx ptx)));
+        reraise = (fun ~group:_ idxs exn backtrace -> r.attribute idxs exn backtrace);
         phase = Compile_cost.time_device;
       }
     in

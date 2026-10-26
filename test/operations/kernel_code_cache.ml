@@ -313,6 +313,10 @@ let () =
         (fun ~group (g, domain) ->
           record (`Finished (group, (Stdlib.Domain.self () :> int)));
           ((g, domain), 10));
+      reraise =
+        (fun ~group idxs exn backtrace ->
+          record (`Reraised (group, idxs, (Stdlib.Domain.self () :> int)));
+          Stdlib.Printexc.raise_with_backtrace exn backtrace);
       phase = (fun f -> f ());
     }
   in
@@ -387,6 +391,9 @@ let () =
   in
   p "a refused program propagates its failure" refused;
   p "after every compile was joined" (Atomic.get finished_late);
+  p_exists "re-raised on the calling domain, for the refused program's kernels" !log ~f:(function
+    | `Reraised (1, [ 2; 3 ], d) -> d = me
+    | _ -> false);
   p "the programs that compiled are published, the refused one is not"
     (Option.is_some (K.find c "e0")
     && Option.is_some (K.find c "e5")

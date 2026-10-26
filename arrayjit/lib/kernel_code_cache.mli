@@ -90,6 +90,11 @@ type ('p, 'w) concurrent = {
   finish : group:int -> 'w -> 'p * int;
       (** On the calling domain, after every compile returned, in batch order, for each one that
           succeeded: the program and its weight, as [compile_group] answers them. *)
+  reraise : 'a. group:int -> int list -> exn -> Stdlib.Printexc.raw_backtrace -> 'a;
+      (** On the calling domain, after every success was published: re-raises the first failed
+          compile's exception, as raised on its domain, for the program of these kernels (a
+          backend's diagnostic attribution, which may format the exception, runs here, not on the
+          compile's domain). *)
   phase : (unit -> unit) -> unit;
       (** Wraps the concurrent phase on the calling domain (a timer: the census is domain-local). *)
 }
@@ -129,9 +134,9 @@ val resolve :
     [n_groups] counting them all -- is prepared, then compiled at once (the first on the calling
     domain, the others on domains of their own, every one joined before [resolve] returns or
     raises), still under [lock]; then each one that succeeded is finished and published in batch
-    order, and the first failure in batch order propagates with its backtrace. So the partition
-    changes neither a key nor a published value's meaning: a kernel's program holds its own code
-    under its own option list, beside fewer companions. *)
+    order, and the first failure in batch order goes to [reraise] with its backtrace. So the
+    partition changes neither a key nor a published value's meaning: a kernel's program holds its
+    own code under its own option list, beside fewer companions. *)
 
 val segment_kernel_name : routine:string -> int -> string
 (** The name a fissioned routine's segment kernel [i] is given ([Backends]: [<routine>__seg<i>]). *)
