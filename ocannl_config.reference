@@ -658,8 +658,9 @@
 # probes can cost about another 840 ms per candidate. cc/Metal retain the historical
 # single-estimate calibration. A candidate SLOWER than the target costs more too, although it ends
 # up measured exactly as "isolated" measures it: its depth is settled first -- on CUDA/HIP sixteen
-# synchronized singles and a twelve-batch depth-2 confirmation, 40 launches; on cc/Metal the
-# sixteen singles alone. Those singles then ARE its timed window (gh-ocannl-1074): at depth 1 they
+# synchronized singles and a depth-2 confirmation of up to twelve batches, 40 launches, the
+# confirmation skipped once the singles read at least twice the target (gh-ocannl-1627); on
+# cc/Metal the sixteen singles alone. Those singles then ARE its timed window (gh-ocannl-1074): at depth 1 they
 # sample the very quantity the window measures, so the timed loop dispatches only what
 # autotune_repeats asks beyond them -- nothing at the default. End to end, slow candidates are the
 # larger cost. Measured BEFORE that reuse, when every depth-1 call timed a fresh window on top: one

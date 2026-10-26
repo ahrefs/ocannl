@@ -1094,6 +1094,17 @@ files.
   the round's slowest once full) are cut; singles, composites, playoff alternates and floors never.
   On that probe the sound cut reaches the ~9 slow `F_preset` seeds (~3 s each of 556 s timing), not
   the 166 singles: their cost is the 16-sample floor plus the depth-2 probe, a different lever.
+- **CUDA/HIP singles at twice the batch target or more take no depth-2 probe** (gh-ocannl-1627,
+  `Autotune.slow_singles_ratio`, settle `singles_far_over_target`). The provisional probe exists to
+  expose an inflated single window; for singles of `S` over the target it moves the depth off 1
+  only on a depth-2 batch under `S + target`, i.e. a fixed per-synchronization term above
+  `S - target`, which at `S >= 2 * target` is at least 10 ms -- the same order of implausibility
+  the hopeless cut's single gate rests on. The stated boundary (a fixed term of the target's size
+  past the ratio is timed at depth 1, not batched) is pinned in `autotune_timing_modes` beside the
+  same device under the ratio, which the probe still batches. It drops the probe's six launches
+  (~0.8 s) from every ~130 ms preset-backdrop single on minix; the 16-sample floor stays, being
+  the window itself. Synthetic calibration fixtures that pin probe behaviour must sit under the
+  ratio (the timing-modes slow devices were scaled to 16-19 ms for that).
   Nothing is cut under a scripted `on_candidate_measured` (the physical window says nothing about
   a scripted rank). `autotune_hopeless_window` drives it with `on_batch_wall`.
 - A new scripted-ranking test takes the harness in `test/support/scripted_search.ml` (library

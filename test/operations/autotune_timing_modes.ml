@@ -665,6 +665,64 @@ let () =
       && c.fresh_launches = c.window_batches * c.settled_depth
       && c.all_launches = c.calibration_launches + c.fresh_launches)
 
+(* {1 Singles far over the target take no depth-2 probe (gh-ocannl-1627)}
+
+   A CUDA/HIP candidate whose synchronized singles read at least [slow_singles_ratio] times the
+   batch target settles at depth 1 on them, with no provisional depth-2 probe: past that ratio the
+   probe could move the depth only on a fixed synchronization term of at least the target. On
+   gfx1151 the probe was ~0.8 s of a ~3 s gpt2_mini_train per-segment single. The boundary is read
+   off the policy's own ratio and target, a linear device just under it still probes, and the stated
+   boundary -- a fixed term of the target's size past the ratio, timed at depth 1 rather than
+   batched -- is pinned beside the same fixed-dominated device just under the ratio, which the probe
+   still batches. *)
+let () =
+  Stdio.printf "\n== singles far over the target take no depth-2 probe ==\n";
+  let gpu_cap = Autotune.queue_depth_cap_for_backend "hip" in
+  let at_ratio = Autotune.slow_singles_ratio *. Autotune.queued_batch_ms in
+  let settle c =
+    match c.decisions with [ (d : Autotune.batch_decision) ] -> Some d.settle | _ -> None
+  in
+  let linear what launch_ms =
+    let c = synthetic_call ~timing:Autotune.Queued ~cap:gpu_cap ~fixed_ms:0. ~launch_ms () in
+    describe what c;
+    c
+  in
+  let at = linear "linear, singles at the ratio" at_ratio in
+  let far = linear "linear, singles at 130 ms" 130. in
+  let under = linear "linear, singles just under the ratio" (at_ratio -. 0.5) in
+  p_all "singles at or past the ratio settle at depth 1 on themselves, with no probe" [ at; far ]
+    ~f:(fun c ->
+      c.settled_depth = 1
+      && c.calibration_launches = c.reading.samples
+      && c.fresh_launches = 0
+      && Poly.equal (settle c) (Some Autotune.Singles_far_over_target));
+  p "singles just under the ratio still take the depth-2 confirmation"
+    (under.settled_depth = 1
+    && List.equal Int.equal (List.map under.probes ~f:(fun pr -> pr.depth)) [ 2 ]
+    && Poly.equal (settle under) (Some Autotune.Singles_reach_target));
+  p_all "a skipped probe leaves the reading the singles' minimum, as the confirmed settle's"
+    [ (at, at_ratio); (far, 130.); (under, at_ratio -. 0.5) ]
+    ~f:(fun (c, launch_ms) ->
+      Float.equal c.reading.ms launch_ms && Option.is_some (Autotune.admitted_timing_ms c.reading));
+  (* The stated boundary: 1 ms of launch work behind a fixed term the size of the target. Under the
+     ratio its depth-2 probe exposes the fixed term and batches it; past the ratio nothing probes,
+     so it is timed at depth 1 on its singles -- what a ~10 ms synchronization, over a hundred times
+     the round trip batching amortizes, would cost. *)
+  let fixed_dominated what fixed_ms =
+    let c = synthetic_call ~timing:Autotune.Queued ~cap:gpu_cap ~fixed_ms ~launch_ms:1. () in
+    describe what c;
+    c
+  in
+  let probed = fixed_dominated "fixed-dominated, singles under the ratio" (at_ratio -. 8.) in
+  let skipped = fixed_dominated "fixed-dominated, singles past the ratio" at_ratio in
+  p "under the ratio a fixed-dominated device's probe still batches it"
+    (* Only a probe can settle deeper than the singles. *)
+    (probed.settled_depth > 1);
+  p "past the ratio a fixed term of the target's size is timed at depth 1 (the stated boundary)"
+    (skipped.settled_depth = 1
+    && skipped.calibration_launches = skipped.reading.samples
+    && Float.equal skipped.reading.ms (at_ratio +. 1.))
+
 (* {1 One fresh retry for Metal queued contention (gh-ocannl-1060)} *)
 
 let () =
@@ -760,11 +818,13 @@ let () =
    read off each device's own clean cost model rather than off the policy: the launch work of the
    settled batch fits the 10 ms target, or the batch is a single launch.
 
-   The slow device is 64 ms a launch whose batches grow slightly faster than linearly (1.5% at depth
-   4, 12.5% at depth 32), and whose depth-2 probe reads non-monotone. Drift proportional to the wall
-   is all it takes: the fit's 2.5 ms noise tolerance is under 1% of a slow candidate's batch, so
-   every depth-separated pair reads as an impossible negative fixed term, and each unresolved pair
-   doubles the depth until the validation loop runs out.
+   The slow device is 16 ms a launch whose batches grow slightly faster than linearly (1.5% at depth
+   4, 12.5% at depth 32), and whose depth-2 probe reads non-monotone -- that gfx1151 candidate
+   scaled down by four, into the band where a depth-2 probe still runs: singles at twice the target
+   or more settle at depth 1 with no probe at all since gh-ocannl-1627. Drift proportional to the
+   wall is all it takes: the fit's 2.5 ms noise tolerance is under 1% of a slow candidate's batch,
+   so every depth-separated pair reads as an impossible negative fixed term, and each unresolved
+   pair doubles the depth until the validation loop runs out.
 
    The two threshold devices are the cases a bound extrapolated through a per-launch cost gets wrong
    (Codex P1, rounds 1 and 2 on PR #846). Each is cheap at shallow depth and then grows
@@ -799,8 +859,8 @@ let () =
     describe (what ^ ", unresolved fits") c;
     c
   in
-  let slow_clean d = (64. *. Float.of_int d) +. (Float.of_int (d * d) /. 4.) in
-  let slow = unresolved "slow" ~launch_ms:64. (fun d -> if d = 2 then 60. else slow_clean d) in
+  let slow_clean d = (16. *. Float.of_int d) +. (Float.of_int (d * d) /. 16.) in
+  let slow = unresolved "slow" ~launch_ms:16. (fun d -> if d = 2 then 15. else slow_clean d) in
   let threshold_clean d =
     if d < 80 then 0.125 *. Float.of_int d else 0.0625 *. Float.of_int (d * d)
   in
@@ -883,8 +943,10 @@ let () =
      shallowest over-target batch, and a refusal that stands carries a reason of its own.
 
      The first threshold device, and the three below, are the fixtures. A 64 ms linear candidate is
-     the depth-1 settle every slow gpt2_mini step takes (gh-ocannl-834). A 61 ms one whose depth-2
-     batch is 3% superlinear is the pair the absolute 2.5 ms tolerance refused. A 16 ms one whose
+     the depth-1 settle every slow gpt2_mini step takes (gh-ocannl-834); since gh-ocannl-1627 its
+     singles alone settle it, with no probe. A 19 ms one whose depth-2 batch is 8% superlinear is
+     the kind of pair the absolute 2.5 ms tolerance refused (the 61 ms, 3% one it was found on now
+     takes no probe; [fit_queued_batch_depth_between] still pins that pair above). A 16 ms one whose
      depth-2 probe reads low sends its calibration doubling from an unresolved pair to a resolved
      one between two over-target batches, depths 4 and 8. The clean fast kernel is the negative
      control: a converging calibration's probes are target-sized, and the budget must not touch
@@ -901,9 +963,9 @@ let () =
   in
   let linear_clean d = 64. *. Float.of_int d in
   let linear = device "64 ms a launch" ~launch_ms:64. linear_clean in
-  let superlinear_clean d = (59. *. Float.of_int d) +. (2. *. Float.of_int (d * d)) in
+  let superlinear_clean d = (17. *. Float.of_int d) +. (2. *. Float.of_int (d * d)) in
   let superlinear =
-    device "61 ms a launch, 3% superlinear at depth 2" ~launch_ms:61. superlinear_clean
+    device "19 ms a launch, 8% superlinear at depth 2" ~launch_ms:19. superlinear_clean
   in
   let dip_clean d = 16. *. Float.of_int d in
   let dip =
@@ -1070,7 +1132,7 @@ let () =
       ("queue threshold above a fixed term", offset);
       ("fast, stalled validation", fast);
       ("64 ms a launch", linear);
-      ("61 ms a launch, superlinear", superlinear);
+      ("19 ms a launch, superlinear", superlinear);
       ("16 ms a launch, low depth-2 probe", dip);
       ("fixed-dominated, jumping past depth 8", jump);
       ("the last validation's projection", projected);
@@ -1115,12 +1177,16 @@ let () =
       pr.runs = Autotune.queue_batch_probe_runs);
   p "a converging calibration still reaches its affine target depth"
     (converging.settled_depth = 1272);
-  (* gh-ocannl-834's depth-1 settle: sixteen singles, then the depth-2 confirmation, whose 128 ms
-     batches pass the per-probe budget at the second -- three minima rather than twelve, 6 launches
-     rather than 24. *)
-  p "a 64 ms candidate's depth-2 confirmation stops at three minima"
-    (linear.settled_depth = 1 && linear.fresh_launches = 0
-    && linear.calibration_launches = 16 + (3 * 2));
+  (* gh-ocannl-834's depth-1 settle. Its depth-2 confirmation used to stop at three minima, its 128
+     ms batches passing the per-probe budget at the second; since gh-ocannl-1627 singles this far
+     over the target take no confirmation at all: sixteen launches, the window itself. *)
+  p "a 64 ms candidate settles at depth 1 on its sixteen singles, with no probe"
+    (linear.settled_depth = 1 && linear.fresh_launches = 0 && linear.calibration_launches = 16);
+  (* The per-probe budget itself, on the probes that still run: the low-dip device's depth-8 probe
+     reads 128 ms batches and stops at three minima rather than twelve. *)
+  p "an over-target probe stops at three minima once its wall passes two target-sized probes'"
+    (List.exists dip.probes ~f:(fun (pr : Autotune.calibration_probe) ->
+         pr.depth = 8 && pr.runs = 3));
   p "a slow candidate's superlinear first pair fits within the wall-relative tolerance"
     (superlinear.settled_depth = 1
     && List.equal Int.equal (List.map superlinear.probes ~f:(fun pr -> pr.depth)) [ 2 ]);
@@ -1128,7 +1194,7 @@ let () =
     "a resolved calibration never settles on a batch whose launch work exceeds the target"
     [
       ("64 ms a launch", linear, linear_clean);
-      ("61 ms a launch, superlinear", superlinear, superlinear_clean);
+      ("19 ms a launch, superlinear", superlinear, superlinear_clean);
       ("16 ms a launch, low depth-2 probe", dip, dip_clean);
       ("fast, clean", converging, fast_launch_work);
     ]
