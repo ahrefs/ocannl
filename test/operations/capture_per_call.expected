@@ -64,3 +64,30 @@ rows holding a symbolic extent: two captures of one row close without a shape er
 executed: the reference is still unsolved when the operations have registered: true
 executed: y1 computes all 5 cells of the shared width: true
 executed: y2 computes all 5 cells of the shared width: true
+symbol at the closure: the reference is still unsolved when the operations have registered: true
+symbol at the closure: the closure records the operand's symbol, and no size: true
+symbol at the closure: w2 is seq<=6
+symbol at the closure: a later operand takes the symbol: true
+symbol at the registration: the registration records the operand's symbol, and no size: true
+symbol at the registration: w2 is seq<=6
+symbol at the registration: a later operand takes the symbol: true
+symbol vs its maximum: the reference is still unsolved when the operations have registered: true
+symbol vs its maximum: a concrete size equal to the symbol's maximum is a shape error: true
+symbol vs another symbol: the reference is still unsolved when the operations have registered: true
+symbol vs another symbol: another symbol of the same maximum is a shape error: true
+symbol read by dim: the reference is still unsolved when the operations have registered: true
+symbol read by dim: dim materializes the symbol at its maximum: true
+symbol set, then the operand sized: the meeting is a shape error: true
+symbol set, then the operand sized: the reference keeps the solution it held, and only that: true
+registered open, symbol set, then the operand sized by another operation: the meeting is a shape error: true
+registered open, symbol set, then the operand sized by another operation: the reference keeps the solution it held, and only that: true
+size set, then a symbolic operand: the meeting is a shape error: true
+size set, then a symbolic operand: the reference keeps the solution it held, and only that: true
+operand-solved symbol, then a size set: the meeting is a shape error: true
+operand-solved symbol, then a size set: the reference keeps the solution it held, and only that: true
+Indexing guard: re-setting the held symbol is a no-op: true
+Indexing guard: a size, even the symbol's maximum, is refused on a symbol: true
+Indexing guard: the refused size leaves the symbol alone: true
+Indexing guard: re-setting the held size is a no-op: true
+Indexing guard: a symbol is refused on a size: true
+Indexing guard: the refused symbol leaves the size alone: true

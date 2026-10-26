@@ -678,8 +678,8 @@ let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~
                 raise
                 @@ Row.Shape_error
                      ( "Variable " ^ label
-                       ^ " is bound to a row variable but was set to a symbolic dimension \
-                          (set_sym_dim does not support row variables)",
+                       ^ " is bound to a row variable but is solved to a symbolic dimension \
+                          (symbolic dimensions take no part in row products)",
                        [ Shape_mismatch error_shapes ] );
               let solved =
                 match delayed_ref.var_ref.solved_dim with
@@ -3078,33 +3078,41 @@ let compute_row_product env (row : Row.t) : int option =
   in
   row_product 100 row
 
-(** Updates delayed variable references with inferred dimensions/row products from the environment.
-    If [solved_dim] was previously set by [set_dim], we skip updating to preserve the user's
-    constraint - consistency will be checked later in [finish_inference] when all constraints have
-    been fully processed. *)
+(** Publishes into each capture reference of [update_step] the solution [env] has reached for the
+    variable the reference is bound to: a dimension variable's solution of either kind -- a concrete
+    [Dim] as [solved_dim], a symbolic [Sym] as [solved_sym] (gh-ocannl-1616) -- and a row variable's
+    numeric product as [solved_dim]. A row holding a symbolic extent has no product and records
+    nothing: symbolic dimensions take no part in row-product arithmetic.
+
+    Only an unsolved reference (neither field set) is written. A solution the reference already
+    holds -- set by [set_dim]/[set_sym_dim], or published by an earlier step or inference -- is left
+    as it is and never adjudicated here: every held solution has a constraint relating it to the
+    reference's current variable ([set_dim]/[set_sym_dim] push one into [active_constraints], which
+    [finish_inference] solves before it publishes; a later binding emits it from
+    [bind_delayed_vars_to_envs]), so a disagreement is the solver's [Shape_error] before it could
+    reach this point. {!Ir.Indexing.set_solved_dim}'s refusal of a second kind of solution is a
+    backstop no inference path reaches. *)
 let update_delayed_var_refs env update_step =
   let update_var_ref_list var_refs =
     List.iter var_refs ~f:(fun delayed_ref ->
+        let unsolved =
+          Option.is_none delayed_ref.var_ref.solved_dim
+          && Option.is_none delayed_ref.var_ref.solved_sym
+        in
         match delayed_ref.var with
+        | _ when not unsolved -> ()
         | `Not_set_yet -> () (* Variable not bound yet, will be set later *)
         | `Dim dim_var -> (
-            match Row.get_dim_val env dim_var with
-            | Some d ->
-                (* If solved_dim was set by set_dim, preserve it - consistency checked in
-                   finish_inference. Otherwise, update from inference. *)
-                if Option.is_none delayed_ref.var_ref.solved_dim then
-                  Delayed_ref.set_solved_dim delayed_ref d
-            | None -> () (* Not yet resolved *))
+            match Row.get_dim_from_env env dim_var with
+            | Some (Row.Dim { d; _ }) -> Delayed_ref.set_solved_dim delayed_ref d
+            | Some (Row.Sym { sym; _ }) -> Delayed_ref.set_solved_sym delayed_ref sym
+            | Some (Row.Var _ | Row.Affine _ | Row.Concat _) | None -> () (* Not yet resolved *))
         | `Row row_var -> (
             match Row.get_row_from_env env row_var with
             | Some row -> (
                 match compute_row_product env row with
-                | Some product ->
-                    (* If solved_dim was set by set_dim, preserve it - the Total_elems constraint
-                       will be processed in finish_inference to reconcile. Otherwise, update. *)
-                    if Option.is_none delayed_ref.var_ref.solved_dim then
-                      Delayed_ref.set_solved_dim delayed_ref product
-                | None -> () (* Row has unresolved dimensions *))
+                | Some product -> Delayed_ref.set_solved_dim delayed_ref product
+                | None -> () (* Row has unresolved or symbolic dimensions *))
             | None -> () (* Row variable not yet resolved *)))
   in
   match update_step.logic with

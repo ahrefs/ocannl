@@ -51,8 +51,14 @@ files.
   dims, `Row_eq` for rows, equal products (`Total_elems` over a `Strided_var`, as `set_equal`) for
   a mixed dim/row pair. Tying rows by product instead looks consistent with the solved arm
   (`solved_dim` -> `Total_elems`) but `Total_elems` refuses rows holding a `Sym`, so two captures
-  of one symbolic row would fail. Across a closure only `solved_dim`/`solved_sym` carry the value
-  (a row's as its product): `var` then names a variable of the reset environment (or a
+  of one symbolic row would fail. Across a closure only `solved_dim`/`solved_sym` carry the value:
+  `update_delayed_var_refs` publishes a dim variable's solution of either kind (`Sym` too, through
+  `Row.get_dim_from_env`, gh-ocannl-1616) and a row's numeric product (none for a row holding a
+  `Sym`). It writes only a reference with neither field set and never adjudicates a held one: every
+  held solution has a constraint on the current variable (`set_dim`/`set_sym_dim` push one, a later
+  binding emits the `solved` arm), so a dim meeting a symbol is the solver's `Shape_error` first, and
+  the `Ir.Indexing` second-kind refusal is an unreached backstop (pinned directly, and every meeting
+  order, in `capture_per_call.ml`). After the closure `var` names a variable of the reset environment (or a
   projection-local one, `derive_projections` rebinds `var`), free in the open work, so the tie to
   it constrains nothing and needs no guard. Pinned by the shared-reference cases of
   `test/operations/capture_per_call.ml`, which assert the reference unsolved after both

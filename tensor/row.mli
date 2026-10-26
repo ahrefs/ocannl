@@ -292,6 +292,11 @@ val unify_row :
 
 val empty_env : environment
 val get_dim_val : environment -> dim_var -> int option
+
+val get_dim_from_env : environment -> dim_var -> dim option
+(** The variable's solution of any form (a concrete [Dim], a symbolic [Sym], ...), or [None] while
+    it is unsolved (absent or only bounded). {!get_dim_val} is its concrete-size projection. *)
+
 val get_row_from_env : environment -> row_var -> t option
 val unsolved_constraints : environment -> constraint_ list
 
