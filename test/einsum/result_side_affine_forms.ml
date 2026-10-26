@@ -13,7 +13,9 @@
    on an input axis; the legacy [+] under [use_padding = false]; a [%cd ~logic] assignment; and the
    gradients of a strided, dilated transposed convolution and of a stride-and-offset scatter. The
    padded result-side window ([=+]) is refused by [Shape.refuse_result_side_padded_window]
-   (gh-ocannl-1550, test [result_side_padded_window]).
+   (gh-ocannl-1550, test [result_side_padded_window]); the recipe its message gives for that layer,
+   the full transposed convolution followed by a one-hot crop, runs here against PyTorch's
+   [ConvTranspose1d] semantics with [padding] and [output_padding] (gh-ocannl-1619).
 
    The audit found the offset forms wrong: shape inference sizes an affine axis without its offset,
    so an offset at or past the stride ([2*i+2], [1*i+1]) or any offset on an unpadded window
@@ -58,6 +60,24 @@ let transposed ?(stride = 1) ?(dilation = 1) a w =
   scatter ~len
     (List.concat_mapi (Array.to_list a) ~f:(fun i av ->
          List.mapi (Array.to_list w) ~f:(fun k wv -> ((stride * i) + (dilation * k), av *. wv))))
+
+(* PyTorch's [ConvTranspose1d] (no bias, one channel), straight from its definition: [res[stride * i
+   + dilation * k - padding] += a[i] * w[k]] for the result positions in [[0, (n - 1) * stride - 2 *
+   padding + dilation * (K - 1) + output_padding + 1)]. Independent of [transposed]: the recipe
+   below crops the full transposed convolution, this oracle never builds it. *)
+let conv_transpose ~stride ~dilation ~padding ~output_padding a w =
+  let len =
+    ((Array.length a - 1) * stride)
+    - (2 * padding)
+    + (dilation * (Array.length w - 1))
+    + output_padding + 1
+  in
+  let res = Array.create ~len 0. in
+  Array.iteri a ~f:(fun i av ->
+      Array.iteri w ~f:(fun k wv ->
+          let o = (stride * i) + (dilation * k) - padding in
+          if o >= 0 && o < len then res.(o) <- res.(o) +. (av *. wv)));
+  res
 
 (* [res[stride * i + offset] = a[i]], extent [stride * n]. *)
 let strided ~stride ~offset a =
@@ -149,6 +169,41 @@ let run_forms () =
       let a = operand () in
       let w = kernel () in
       [%op a +* "s, i; k => s, 2*i<+3*k" w]);
+  (* gh-ocannl-1619: the padded transposed convolution (PyTorch's [ConvTranspose1d] with [padding])
+     has no single spec -- a result-side [=+] is refused -- and is built in two steps, the recipe
+     [Shape.refuse_result_side_padded_window] names and [docs/syntax_extensions.md] documents: the
+     full transposed convolution ([<+]), then a crop of [padding] cells at the start and [padding -
+     output_padding] at the end, written as an operand-side valid window over a one-hot kernel: an
+     ndarray literal of extent [2 * padding - output_padding + 1] with its 1 at [padding] reads
+     [full[o + padding]]. The cases: stride 2, dilation 2, kernel 3, padding 2 (extent 7 of the full
+     11); and the decoder's 2x upsampling, stride 2, kernel 3, padding 1, output_padding 1 (extent
+     2n). *)
+  executes "padded transposed conv recipe: 2*i<+2*k, then a one-hot crop, padding 2"
+    ~dims:[| 1; ((n - 1) * 2) - 4 + 4 + 1 |]
+    ~want:(conv_transpose ~stride:2 ~dilation:2 ~padding:2 ~output_padding:0 a_vals kernel_vals)
+    (fun () ->
+      let a = operand () in
+      let w = kernel () in
+      [%op a +* "s, i; k => s, 2*i<+2*k" w +* "s, o<+c; c => s, o" [ 0.; 0.; 1.; 0.; 0. ]]);
+  executes "padded transposed conv recipe: 2*i<+k, then a one-hot crop, padding 1, output_padding 1"
+    ~dims:[| 1; 2 * n |]
+    ~want:(conv_transpose ~stride:2 ~dilation:1 ~padding:1 ~output_padding:1 a_vals kernel_vals)
+    (fun () ->
+      let a = operand () in
+      let w = kernel () in
+      [%op a +* "s, i; k => s, 2*i<+k" w +* "s, o<+c; c => s, o" [ 0.; 1. ]]);
+  (* [output_padding > padding] grows the end instead: crop only the start, then append
+     [output_padding - padding] zero cells by concatenation. Stride 3, kernel 3, padding 1,
+     output_padding 2: the full 12 lose 1 cell at the start and gain 1 at the end. *)
+  executes "padded transposed conv recipe: 3*i<+k, crop the start, append a zero, output_padding 2"
+    ~dims:[| 1; ((n - 1) * 3) - 2 + 2 + 2 + 1 |]
+    ~want:(conv_transpose ~stride:3 ~dilation:1 ~padding:1 ~output_padding:2 a_vals kernel_vals)
+    (fun () ->
+      let a = operand () in
+      let w = kernel () in
+      let zeros = ndarray [ 1; 1 ] [| 0. |] in
+      let%op cropped = a +* "s, i; k => s, 3*i<+k" w +* "s, o<+c; c => s, o" [ 0.; 1. ] in
+      [%op (cropped, zeros) ++^ "s, a; s, b => s, a^b"]);
   (* Both terms of the index come from the operand: [res[i + 3j] = a[i, j]], injective for i < 3. *)
   let ij_vals = Array.init (2 * n) ~f:(fun x -> Float.of_int ((10 * (x / n)) + (x % n) + 1)) in
   executes "unary multi-term i<+3*j"

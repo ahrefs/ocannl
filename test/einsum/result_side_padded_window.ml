@@ -15,7 +15,9 @@
    oracles computed here (small integers: every sum is exact in single precision, in any order): the
    operand-side padded window with the kernel reversed is the padded transposed convolution (stride
    1, dilation 1, odd kernel size), and the unpadded result-side window ([<+]) is the full
-   transposed convolution, extent included. A stride-only result axis still builds and runs. *)
+   transposed convolution, extent included. A stride-only result axis still builds and runs. The
+   message's two-step recipe for the strided or dilated case, the full transposed convolution then a
+   one-hot crop, is executed in [result_side_affine_forms] (gh-ocannl-1619). *)
 
 open Base
 open Ocannl

@@ -82,6 +82,11 @@ files.
   RESULT slot is refused before elaboration (gh-ocannl-1550, `refuse_result_side_padded_window`,
   called from `einsum_n_constraints` and the `Permute` branch); a padded window's backward writes
   through the same window but reuses the forward projections, so it never comes through there.
+  The refusal stays (gh-ocannl-1619, maintainer's call): its message gives the two-step recipe,
+  `<+` then a crop by an operand-side valid window over a one-hot literal, executed against
+  PyTorch's `ConvTranspose1d` in `result_side_affine_forms`. The crop is not a concat slice
+  because operand-side concat extraction (`p^o^q => o`, `p^o => o`) dies in projection inference
+  and integer concat components do not parse, whatever `syntax_extensions.md` once advertised.
 - An affine axis's constant offset is sized for by nothing: the dim formulas omit it, so an offset
   at or past the stride, or on an unpadded window, indexes past the extent. On the result side
   those writes were silently dropped (stride 1 died in `projection_of_solved_dims`); on an
