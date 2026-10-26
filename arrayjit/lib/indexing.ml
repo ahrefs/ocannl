@@ -175,16 +175,19 @@ let validate_lowered_bindings ?width64 (bs : lowered_bindings) =
   | unassigned -> raise @@ Utils.User_error (unassigned_message unassigned));
   List.iter bs ~f:(fun (s, r) -> validate_bound_value ?width64 s !r)
 
-let set_launch_value ?width64 ~caller (bs : lowered_bindings) s v =
+let launch_cell ~caller (bs : lowered_bindings) s =
   match List.Assoc.find bs ~equal:equal_static_symbol s with
   | None ->
       raise
       @@ Utils.User_error
            (Printf.sprintf "%s: %s is not a launch parameter of the bindings given" caller
               (symbol_ident s.static_symbol))
-  | Some r ->
-      validate_bound_value ?width64 s v;
-      r := v
+  | Some r -> r
+
+let set_launch_value ?width64 ~caller (bs : lowered_bindings) s v =
+  let r = launch_cell ~caller bs s in
+  validate_bound_value ?width64 s v;
+  r := v
 
 (* gh-ocannl-1629: the launch values of a routine a library entry point runs on the caller's behalf.
    A ranged parameter -- a batch-slice index, a ranged static index, a symbolic extent -- has no
@@ -192,17 +195,19 @@ let set_launch_value ?width64 ~caller (bs : lowered_bindings) s v =
    gh-ocannl-940 refuses. An unranged one (a step counter) keeps 0. [ranged] is the caller's (it
    names the kind of a ranged parameter): a batch-slice role is claimed during shape inference,
    ahead of the flag this module can see. *)
-let resolve_launch_values ?width64 ~caller ~hint ~ranged values symbols : lowered_bindings =
+let resolve_launch_values ~caller ~hint ~ranged values symbols : lowered_bindings =
   let bs = List.map symbols ~f:(fun s -> (s, fresh_launch_param ())) in
+  (* The values are written, not validated: what a value is validated against (an index's strict
+     range or an extent's inclusive one) is a role shape inference commits only at lowering, after
+     this runs. The run validates them, as it does any caller's. *)
   List.iter values ~f:(fun (s, v) ->
-      (match List.Assoc.find bs ~equal:equal_static_symbol s with
-      | Some r when launch_param_assigned r ->
-          raise
-          @@ Utils.User_error
-               (Printf.sprintf "%s: launch parameter %s is given a value twice" caller
-                  (symbol_ident s.static_symbol))
-      | _ -> ());
-      set_launch_value ?width64 ~caller bs s v);
+      let r = launch_cell ~caller bs s in
+      if launch_param_assigned r then
+        raise
+        @@ Utils.User_error
+             (Printf.sprintf "%s: launch parameter %s is given a value twice" caller
+                (symbol_ident s.static_symbol));
+      r := v);
   (match
      List.filter_map bs ~f:(fun (s, r) ->
          if launch_param_assigned r then None else Option.map (ranged s) ~f:(fun kind -> (s, kind)))

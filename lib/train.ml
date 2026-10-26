@@ -1900,8 +1900,7 @@ let%track3_sexp run_once ?(output_cd_file = false) ?(skip_init = false) ?reinit_
      not yet consumed) for a retry with values. [t]'s construction already claimed any batch-slice
      role [ranged_launch_param] reads. *)
   let launch =
-    Idx.resolve_launch_values ~width64:Utils.settings.large_models ~caller:"Train.run_once"
-      ~ranged:ranged_launch_param
+    Idx.resolve_launch_values ~caller:"Train.run_once" ~ranged:ranged_launch_param
       ~hint:
         "pass each one's value through ~launch_values, or, to run every value of the range, \
          compile with Train.to_routine and iterate with Train.sequential_loop"

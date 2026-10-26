@@ -11,7 +11,8 @@
    refusal comes before the tensor's forward code is consumed, which the retry on the SAME tensor
    witnesses. A batch-slice index declared with no [static_range] is ranged too (its range is the
    sliced axis): refused alike. The unranged parameter is embedded as a value ([!@k]), so what runs
-   at 0 is read back as 0, and a value given for it is read back. *)
+   at 0 is read back as 0, and a value given for it is read back. A symbolic extent is ranged as
+   well, and its full range is a legal first value: the reduction over it sums that many ones. *)
 
 open Base
 open Stdio
@@ -69,6 +70,27 @@ let () =
   let%op embedded = !@k + 0.5 in
   let ctx = Train.forward_once ~bindings ~launch_values:[ (k, 5) ] ctx embedded in
   p "an unranged parameter runs at the value given" Float.(read ctx embedded = 5.5);
+  (* A symbolic extent, first run at its full declared range: a legal extent value, which only the
+     extent role -- still pending until lowering commits it -- tells from an out-of-range index. *)
+  let extent_sum e =
+    let%op x = { x = 0.5 } in
+    let%op y = (2. *. x) ++ "s=>s" [ "s" ] in
+    Shape.set_sym_dim s e;
+    [%op y ++ "... => 0"]
+  in
+  let e, e_bindings = IDX.get_static_symbol ~static_range:4 IDX.empty in
+  let total = extent_sum e in
+  let unvalued = refusal (fun () -> Train.forward_once ~bindings:e_bindings ctx total) in
+  p "a symbolic extent given no value is refused, naming it"
+    (Option.exists unvalued ~f:(fun msg ->
+         names msg e && String.is_substring msg ~substring:"(symbolic extent,"));
+  let ctx = Train.forward_once ~bindings:e_bindings ~launch_values:[ (e, 4) ] ctx total in
+  p "a symbolic extent runs at its full range when given it: the sum of 4 ones"
+    Float.(read ctx total = 4.);
+  let e2, e_bindings = IDX.get_static_symbol ~static_range:4 IDX.empty in
+  let total = extent_sum e2 in
+  let ctx = Train.forward_once ~bindings:e_bindings ~launch_values:[ (e2, 2) ] ctx total in
+  p "and at a smaller value given: the sum of 2 ones" Float.(read ctx total = 2.);
   (* Values that cannot be meant. *)
   let%op embedded = !@k + 0.5 in
   let stray =

@@ -145,7 +145,7 @@ let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(mome
      routine it runs, so [set_launch_value] reaches every routine from the next one scheduled. *)
   let width64 = Utils.settings.large_models in
   let launch =
-    Idx.resolve_launch_values ~width64 ~caller:"Parallel.data_parallel"
+    Idx.resolve_launch_values ~caller:"Parallel.data_parallel"
       ~hint:"pass each one's value through ~launch_values; the handle's set_launch_value changes it"
       ~ranged:Train.ranged_launch_param launch_values (Idx.bound_symbols bindings)
   in

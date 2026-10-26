@@ -81,7 +81,6 @@ val set_launch_value :
     [sym]'s cell of [bs]; a symbol [bs] does not bind is refused, naming [caller]. *)
 
 val resolve_launch_values :
-  ?width64:bool ->
   caller:string ->
   hint:string ->
   ranged:(static_symbol -> string option) ->
@@ -89,12 +88,13 @@ val resolve_launch_values :
   static_symbol list ->
   lowered_bindings
 (** The launch values of a routine that a library entry point compiles and runs on the caller's
-    behalf (gh-ocannl-1629): a fresh cell per symbol, the caller's values written through
-    {!set_launch_value} (a symbol given twice is refused), then every parameter left unassigned set
-    to 0 -- unless [ranged] names its kind (a batch-slice index, a ranged static index, a symbolic
-    extent), which is refused instead, naming each one and its kind and ending with [hint]: 0 is its
-    first slice or empty extent, the silent default gh-ocannl-940 refuses. Hand the result to
-    {!copy_launch_values} once the routine is linked. *)
+    behalf (gh-ocannl-1629): a fresh cell per symbol, the caller's values written into it (a symbol
+    it does not bind, or given twice, is refused; the values themselves are validated by the run,
+    once lowering has committed the role -- index or extent -- each is validated against), then
+    every parameter left unassigned set to 0 -- unless [ranged] names its kind (a batch-slice index,
+    a ranged static index, a symbolic extent), which is refused instead, naming each one and its
+    kind and ending with [hint]: 0 is its first slice or empty extent, the silent default
+    gh-ocannl-940 refuses. Hand the result to {!copy_launch_values} once the routine is linked. *)
 
 val copy_launch_values : from:lowered_bindings -> lowered_bindings -> unit
 (** [copy_launch_values ~from bs] writes into each cell of [bs] the value [from] holds for the same
