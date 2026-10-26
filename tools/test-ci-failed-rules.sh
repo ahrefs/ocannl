@@ -231,6 +231,51 @@ if harness_leg 'a golden mismatch and a compile error are told apart #dune'; the
   printf 'let () = print_string "ok\\n"\n' >"$proj/t/passing.ml"
   printf 'ok\n' >"$proj/t/passing.expected"
 fi
+if harness_leg 'a failing test that prints a fixture dune block is listed alone #dune'; then
+  # gh-ocannl-1590: the sweep harness's failure output replayed a fixture unit log holding a
+  # dune-shaped block, and every listing of that build named a `test/dune` that does not exist.
+  # Here a failing rule prints the same block bare, behind the sweep's `rtc ` prefix and behind
+  # the `| ` its harness now puts on a replay: only the rule itself is listed. The bare copy is
+  # left out because its excerpt omits line 4 of `lines 1-4`, the prefixed ones because a header
+  # is read only at the start of its line.
+  mkdir -p "$proj/p" || exit 2
+  cat >"$proj/p/dune" <<'DUNE'
+(rule
+ (alias runtest-phantom)
+ (deps phantom.log)
+ (action
+  (run sh -c "cat phantom.log; exit 1")))
+DUNE
+  block='File "test/dune", lines 1-4, characters 0-0:
+1 | (rule
+2 | (alias runtest-state-probe)
+unit.exe: segmentation fault'
+  { printf 'sweep-hold: sleep:idle block inhibitor held\n%s\n' "$block"
+    printf '%s\n' "$block" | sed 's/^/rtc /'
+    printf '%s\n' "$block" | sed 's/^/| /'; } >"$proj/p/phantom.log"
+  build "$TMP/phantom.log" @p/runtest-phantom; brc=$?
+  phantom_ok() { # OUTPUT RC
+    [ "$2" = 0 ] && [ "$(printf '%s\n' "$1" | sed -n '1,2p')" = 'Failed dune rules (1), in the order dune reported them:
+  p/dune:1-5  (rule) alias runtest-phantom' ] &&
+      [ "$(printf '%s\n' "$1" | wc -l | tr -d ' ')" = 3 ] &&
+      printf '%s\n' "$1" | sed -n '3p' | grep -qE "^      ran: \(cd _build/default/p && [^ ]*sh -c 'cat phantom\.log; exit 1'\)$"
+  }
+  out=$(cd "$proj" && subject "$TMP/phantom.log" 2>&1); rc=$?
+  if [ "$brc" = 1 ] && grep -q '^File "test/dune", lines 1-4' "$TMP/phantom.log" && phantom_ok "$out" "$rc"; then
+    report 0 'a failing test that prints a fixture dune block is listed alone'
+  else report 1 'a failing test that prints a fixture dune block is listed alone' "build exit $brc, exit $rc; $out"; fi
+  # The negative control: without the excerpt anchor the bare block is listed as a second failed
+  # rule -- the issue's false report -- while the prefixed copies still are not.
+  if mut=$(mutant no-excerpt-anchor '{ sub(/^  if \(is_dune && nx > 0 && .*dropped = 1$/, "  # excerpt anchor removed") } 1'); then
+    out=$(cd "$proj" && bash "$mut" "$TMP/phantom.log" 2>&1); rc=$?
+    if grep -q '^  # excerpt anchor removed$' "$mut" && ! phantom_ok "$out" "$rc" &&
+       [ "$(printf '%s\n' "$out" | sed -n '1p')" = 'Failed dune rules (2), in the order dune reported them:' ] &&
+       [ "$(printf '%s\n' "$out" | grep -c 'test/dune')" = 1 ]; then
+      report 0 'negative control: without the excerpt anchor the fixture block is a failed rule'
+    else report 1 'negative control: without the excerpt anchor the fixture block is a failed rule' \
+      "mutant applied: $(grep -c 'excerpt anchor removed' "$mut"); $out"; fi
+  else report 1 'negative control: without the excerpt anchor the fixture block is a failed rule' 'mutant did not build'; fi
+fi
 if harness_leg 'the green build prints nothing #dune'; then
   write_fixture 0
   build "$TMP/green.log" @runtest; brc=$?

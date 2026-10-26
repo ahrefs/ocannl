@@ -3280,7 +3280,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   a log GitHub serves too (timestamps, colour, CRLF, `--log-failed`'s JOB/STEP prefixes), so
   `gh run view <id> --log-failed | tools/ci-failed-rules.sh` is the first read of any red job; it
   names a stanza from the source tree only when every line dune quoted still matches, so a log
-  from another revision falls back to dune's excerpt. **A pipe into `tee` reports tee's status**:
+  from another revision falls back to dune's excerpt. A failing test's own output can hold
+  dune-shaped text, so the reader takes a header only at the start of its line and drops a
+  dune-file header whose excerpt omits the first or last line it names (dune quotes both); a
+  harness that replays fixture logs as its failure output prefixes them (`sweep_harness.sh`'s
+  `replayed`, `| `), so neither side alone carries it (gh-ocannl-1590). Out of reach: a test
+  printing a bare, self-consistent dune block. **A pipe into `tee` reports tee's status**:
   each such bash step says `shell: bash` (GitHub's `-eo pipefail`; the implicit default `bash -e`
   has no pipefail, and the build would read green), and the PowerShell one ends `exit
   $LASTEXITCODE`; `test/operations/ci_matrix.sh` holds both, with mutants.
