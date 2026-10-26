@@ -1359,14 +1359,9 @@ files.
   its crown to 4% on minix (Zen 5, a measurement window; 9% on a shared M4 Max) and left arm B
   within 3%. Those arm-A steps were timed in the searching process, which only inflates launches,
   so they bound the fixed gap from above; the driver now times both arms in replay processes. The
-  rest is the search's own drift: every timed run is a
-  training step on the scratch lineage at one fixed batch, so after a 200 s search its weights had
-  61k zero grad entries against the fixture's 50k, and the shipped routine ran 100 ms on them
-  against 112 ms on the fixture. Late candidates are therefore timed at a sparser state than early
-  ones. Nothing restores the timing lineage between candidates; the library cannot seed it for the
-  caller either (a `?timing_ctx` is the caller's lineage, and a training run's weights keep
-  moving), so on data-dependent code a crown is exact only for the sparsity it was timed at. The
-  init draw also mis-ranks the arms: arm A crowned 87.5 ms against B's 84.9 on it, and 102–104
+  library cannot seed the lineage for the caller (a `?timing_ctx` is the caller's lineage, and a
+  training run's weights keep moving), so on data-dependent code a crown is exact only for the
+  sparsity it was timed at. The init draw also mis-ranks the arms: arm A crowned 87.5 ms against B's 84.9 on it, and 102–104
   against 86 on the fixture. To attribute a crown/step gap, time the shipped routine under several
   weight sets interleaved in one process (`Context.get_values`/`set_values` on the params; the
   issue's comments hold the diagnostic).
@@ -1421,6 +1416,28 @@ files.
   Windows cannot run the shell fixtures or defer undefined symbols to dlopen. The
   `test_schedule_outcome` unit test pins all three stages across provenance and strictness on
   every platform.
+- **A search restores its lineage's training state around every timing window** (gh-ocannl-1621).
+  Every timed run of a training step is a step: unrestored, a 200 s cifar_resnet/cc search left
+  its scratch weights with 61k zero grad entries against the fixture's 50k, the shipped routine
+  ran 100 ms on them against 112 ms on the fixture, late candidates were timed on sparser weights
+  than early ones, and `Train.tune_placements`' arm B searched on arm A's leftovers (the arms'
+  `decide_materialized` lineages share the buffers). Which nodes drift follows from how candidates
+  compile: each is a compile of `search_ctx`, so a node `search_ctx` already holds a buffer for is
+  one buffer every candidate writes, while a node it lacks is allocated afresh per candidate (its
+  link-time init re-running). The state is therefore the base lowering's written nodes
+  (`has_assignment || zeroed_out`) that `Context.mem search_ctx` -- parameters, and the momentum
+  buffer once a step has run on the lineage -- a written `@|` slice standing for its parent.
+  Not `routine.inputs ∩ outputs`: embedded nodes (the momentum) are excluded from `inputs`, and a
+  GPU baseline has no routine. `Autotune.tune_in_stream_scope` copies them with `to_host` at the
+  first window, writes them back with `from_host` on `search_ctx` (the returned context dropped)
+  before every later window -- after `check_lineage_runnable`, outside `time_routine`'s clock, as
+  a `Preflight` step so a failure condemns nothing -- and `with_timing_state_restored` restores
+  once more as the call returns or raises (not over a poisoned lineage, never masking the
+  exception). The runs of one window still train from the snapshot: restoring per batch would put
+  a transfer before every calibration probe. No cache-regime bump: a drift-era crown is a correct
+  schedule chosen on another state, which every crown is relative to its lineage's values.
+  `test/operations/autotune_timing_state_restore` pins it (parameter and momentum, with and
+  without `timing_ctx`, and a search killed mid-way).
 - **A schedule op refuses typed; any other raise inside `apply` is a transform bug** (gh-ocannl-1323).
   `Schedule.apply_classified` used to turn every `Invalid_argument` escaping application into an
   `Illegal_schedule` decline, so an array bound or a `List.zip_exn` in a transform read as one more

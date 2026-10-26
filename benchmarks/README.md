@@ -360,7 +360,9 @@ single-threaded segments that sum to the serial step
   which is how the runners searched before: the default-placements arm's code branches on its
   activations, and on cifar_resnet/cc its shipped step then ran 18–28% above its crown, against
   about 5% for the materialize-all arm; on the fixture the gap was 4% on minix (Zen 5) and 9% on
-  a shared M4 Max (the rest is the search's own training steps drifting the scratch weights). `benchmarks/gh1557_cells.sh` runs that A/B.
+  a shared M4 Max, the rest being the search's own training steps drifting the scratch weights --
+  which the search now restores before every timing window (gh-ocannl-1621).
+  `benchmarks/gh1557_cells.sh` runs that A/B.
   `BENCH_TIMING_TRACE=1` (all three runners) splits a searching process's wall between candidate
   timing and the rest (gh-ocannl-834). Every `Autotune.time_routine` call reports one record as it
   returns (gh-ocannl-1263), printed as its calibration probes, one call line (the batch depth it

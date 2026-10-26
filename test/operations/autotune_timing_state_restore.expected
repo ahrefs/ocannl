@@ -1,0 +1,15 @@
+the step changes the parameter: true
+timing_ctx: the search timed more than one window: true
+timing_ctx: every window starts from the state the lineage held before the search: true
+timing_ctx: a window's runs still train (the optimizer update is part of what is timed): true
+timing_ctx: the search completed: true
+timing_ctx: the scratch lineage ends the search holding its state: true
+timing_ctx: the scratch lineage's next step is the reference step: true
+caller's context: the search timed more than one window: true
+caller's context: every window starts from the state the lineage held before the search: true
+caller's context: a window's runs still train (the optimizer update is part of what is timed): true
+caller's context: the caller's state is the one it had before the search: true
+caller's context: the shipped routine's first step is the reference step: true
+killed search: it died after timing two windows: true
+killed search: the lineage ends holding its state: true
+killed search: the lineage's next step is the reference step: true

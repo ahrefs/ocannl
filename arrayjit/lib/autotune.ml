@@ -6827,15 +6827,81 @@ let lineage_identity ~static_indices (opt : LL.optimized) =
   SC.digest
     (SC.canonicalize_code ~static_indices ~node_tag:(fun tn -> "#" ^ Ir.Tnode.id tn) opt.LL.llc)
 
+(* gh-ocannl-1621: the search lineage's training state, restored before every timing window. Every
+   candidate compiles from the search lineage, so a node that lineage already holds a buffer for is
+   ONE buffer every candidate's runs write -- parameters, optimizer state, counters -- while a node
+   it lacks is allocated afresh in each candidate's own compile (its link-time initialization
+   re-runs), so it cannot carry one candidate's runs into the next. The state that drifts across a
+   search is therefore exactly what the computation writes among the buffers the lineage holds: the
+   base lowering's written nodes ([has_assignment] or [zeroed_out]; a hosted constant's writes are
+   gone from the code) present in [search_ctx], a written [\@|] slice view standing for its parent,
+   whose buffer it writes and which host access goes through. A node the lineage placed [Local] has
+   no observable buffer and holds no state between runs. Read-only nodes (the data batch, an
+   uploaded dataset) are never written, so they are not copied. *)
+let timing_state_nodes search_ctx (opt : LL.optimized) =
+  let placements = Context.placements search_ctx in
+  Hashtbl.fold opt.LL.traced_store
+    ~init:(Set.empty (module Ir.Tnode))
+    ~f:(fun ~key:_ ~data:(traced : LL.traced_array) acc ->
+      if not (traced.has_assignment || traced.zeroed_out) then acc
+      else
+        let tn =
+          match Ir.Tnode.slice_of traced.tn with Some (parent, _) -> parent | None -> traced.tn
+        in
+        let local =
+          match Ir.Tnode.Placements.get placements tn with
+          | Some (Ir.Tnode.Local, _) -> true
+          | _ -> false
+        in
+        if local || not (Context.mem search_ctx tn) then acc else Set.add acc tn)
+
+(* Host copies, not a second device buffer per node: a device snapshot would keep a second working
+   set of the state resident through the search, against the one-live-candidate memory bound
+   (gh-ocannl-1326), while a copy per candidate is noise beside the candidate's compile. *)
+let snapshot_timing_state search_ctx opt =
+  List.map
+    (Set.to_list (timing_state_nodes search_ctx opt))
+    ~f:(fun tn -> (tn, Context.to_host search_ctx tn))
+
+(* Through the lineage's own handle: the bytes land in the buffer every candidate binds, and the
+   ledger records an external write, as a caller's [Context.set_values] before a run would. The
+   returned context is dropped -- the search keeps compiling from [search_ctx], whose nodes are all
+   initialized already. *)
+let restore_timing_state search_ctx snapshot =
+  List.iter snapshot ~f:(fun (tn, nd) -> ignore (Context.from_host search_ctx tn nd : Context.t))
+
+(* How a search's end restores its lineage (gh-ocannl-1621): [settle] is set once the search has
+   taken its snapshot, and [with_timing_state_restored] calls it on the way out of the call. *)
+type timing_state = { mutable settle : (after_exn:bool -> unit) option }
+
+(* The search leaves every buffer it found as it found it, however it ends: completed, budget-cut,
+   abandoned ([Search_abandoned]) or failed -- unless the lineage is poisoned, which is unusable by
+   contract and which a search can return over (a contained candidate failure on a [timing_ctx]). So
+   the next search of the lineage -- the other arm and the flips of [Train.tune_placements], whose
+   lineages share these buffers -- starts from the caller's values, and a search without a
+   [timing_ctx] does not train the caller's context. After an exception the restore is best effort:
+   never after a process-fatal exception, and a failure of the restore itself is logged, never
+   raised over the exception being propagated. *)
+let with_timing_state_restored f =
+  let state = { settle = None } in
+  match f state with
+  | result ->
+      Option.iter state.settle ~f:(fun settle -> settle ~after_exn:false);
+      result
+  | exception exn when not (process_fatal_exn exn) ->
+      let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+      Option.iter state.settle ~f:(fun settle -> settle ~after_exn:true);
+      Stdlib.Printexc.raise_with_backtrace exn backtrace
+
 (* What a search hands back: the compile of what it ships, as a thunk. Without [defer] the thunk is
    already forced (it returns the routine [tune] compiled before reporting); with it
    (gh-ocannl-1408, {!tune_deferred}) the search has reported, released everything it compiled, and
    the thunk compiles the shipped schedule on first call. [substituted] is set when that compile
    ships the untuned default in place of the schedule the report named (a winner or cache replay
    that failed or degenerated), which a deferred caller ranking by the report must hear about. *)
-let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?repeats ?timing
-    ?seed_block_sizes ?cache_dir ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon
-    ?call_budget ?report ctx comp bindings : unit -> Context.t * Context.routine =
+let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_width ?rounds
+    ?repeats ?timing ?seed_block_sizes ?cache_dir ?keep_fraction ?max_split_reduce_sites ?timing_ctx
+    ?abandon ?call_budget ?report ctx comp bindings : unit -> Context.t * Context.routine =
   (* gh-ocannl-559: with the search off, [tune] still replays an explicitly provided cache -- a
      pinned schedule is deterministic, and committing one is how a reproducible run keeps a tuned
      schedule -- but never times candidates, whose crowning is the largest cross-machine determinism
@@ -7379,6 +7445,54 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
       | None, Error failure -> raise_pre_search failure
       | None, Ok _ -> failwith "Autotune.tune: backend compile did not invoke lowered_transform"
     in
+    (* gh-ocannl-1621: every timing window starts from the state the search lineage held before the
+       search's first dispatch. The snapshot is taken at the first window -- after the base compile,
+       before any routine of this search has run, since [time_routine] is a search's only dispatch;
+       a call that times nothing (a cache replay, a search that declines everything) copies nothing.
+       Each later window first restores it, outside [time_routine] and so outside its clock and its
+       [setup_ms]: what a candidate is timed on is the routine it ships, optimizer update included,
+       started from the same values as every other candidate. The runs of one window still train
+       from there (the boundary; restoring per batch would put a host transfer before every
+       calibration probe). [with_timing_state_restored] restores once more when the call ends. *)
+    let timing_snapshot =
+      lazy
+        (let snapshot = snapshot_timing_state search_ctx base_opt in
+         logf
+           "timing state: %d written node(s) of the search lineage, %d bytes, restored before each \
+            timing window"
+           (List.length snapshot)
+           (List.sum (module Int) snapshot ~f:(fun (_, nd) -> Ir.Ndarray.size_in_bytes nd));
+         snapshot)
+    in
+    let timing_state_dirty = ref false in
+    let restore_timing_snapshot () =
+      let snapshot = Lazy.force timing_snapshot in
+      if !timing_state_dirty then (
+        restore_timing_state search_ctx snapshot;
+        timing_state_dirty := false)
+    in
+    (* Called right before every [time_routine] of the search, after the lineage-wide preflight (so
+       a restore never vouches for an input nobody initialized) and outside the candidate's failure
+       boundary: a failed restore is the lineage's, not a candidate's decline. *)
+    let before_timing_window () =
+      restore_timing_snapshot ();
+      timing_state_dirty := true
+    in
+    timing_state.settle <-
+      Some
+        (fun ~after_exn ->
+          (* A poisoned lineage is unusable by contract, and a search can still return over one:
+             with a [timing_ctx], a contained candidate failure poisons the scratch lineage while
+             the winner ships from [ctx] -- restoring there would refuse, and raise over a result
+             the caller is owed. *)
+          if !timing_state_dirty && Option.is_none (Context.poisoned_failure search_ctx) then
+            if not after_exn then restore_timing_snapshot ()
+            else
+              match restore_timing_snapshot () with
+              | () -> ()
+              | exception exn when not (process_fatal_exn exn) ->
+                  logf "timing state: restoring the search lineage after a failure FAILED: %s"
+                    (Exn.to_string exn));
     (* The key this call's schedule entry is stored and looked up under, and (gh-ocannl-1022) the
        [source_digest] of every report from here on, failures included: they all describe a search
        of this lowering. Shadowing [base_report] reaches [census] and every [~base] passed below;
@@ -8086,6 +8200,10 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                    and never reaches it (gh-ocannl-569). *)
                 Outcome.tag Outcome.Preflight (fun () ->
                     Context.check_lineage_runnable b.cctx b.routine);
+                (* gh-ocannl-1621: the search's first window, so this takes the snapshot. Tagged
+                   pre-dispatch like the check above: nothing has run, so a failure here withdraws
+                   nothing and condemns nothing, and propagates as the pre-search failure. *)
+                Outcome.tag Outcome.Preflight before_timing_window;
                 progress_stage "baseline_timing";
                 time_routine ~on_retry ~on_call ~tag_failures:true ~timing ~repeats b.cctx b.routine
               with
@@ -8726,6 +8844,10 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                validation failure as [Preflight] rather than as its [Transform] default. *)
                       Outcome.tag Outcome.Preflight (fun () ->
                           Context.check_lineage_runnable c.cctx c.routine);
+                      (* gh-ocannl-1621: the state every window starts from, restored outside the
+                         boundary for the same reason -- it is the lineage's, not this
+                         candidate's. *)
+                      Outcome.tag Outcome.Preflight before_timing_window;
                       Outcome.protect ~classify_backend:(Context.failure_classifier c.cctx)
                         ~provenance:Outcome.Candidate ~phase:Outcome.Launch
                         ~candidate:(spec_label spec) (fun () ->
@@ -9935,7 +10057,10 @@ let tune_in_stream_scope ~defer ~substituted ?name ?search ?beam_width ?rounds ?
                  (fun () -> Context.compile ?name search_ctx comp bindings)
              with
              | cctx, croutine ->
-                 (match time_routine ~timing ~repeats cctx croutine with
+                 (match
+                    before_timing_window ();
+                    time_routine ~timing ~repeats cctx croutine
+                  with
                  | timing_result -> (
                      match admitted_timing_ms timing_result with
                      | Some ms -> logf "untuned-default in-process control: %.4f ms" ms
@@ -10184,9 +10309,10 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
     bindings =
   exclusive_search @@ fun () ->
   with_streams ?log ?progress (fun () ->
-      tune_in_stream_scope ~defer:false ~substituted:(ref false) ?name ?search ?beam_width ?rounds
-        ?repeats ?timing ?seed_block_sizes ?cache_dir ?keep_fraction ?max_split_reduce_sites
-        ?timing_ctx ?abandon ?report ctx comp bindings ())
+      with_timing_state_restored (fun timing_state ->
+          tune_in_stream_scope ~timing_state ~defer:false ~substituted:(ref false) ?name ?search
+            ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?cache_dir ?keep_fraction
+            ?max_split_reduce_sites ?timing_ctx ?abandon ?report ctx comp bindings ()))
 
 type deferred = {
   compile : unit -> Context.t * Context.routine;
@@ -10204,9 +10330,12 @@ let tune_deferred ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block
         substituted;
         compiles = Atomic.make 0;
         compile =
-          tune_in_stream_scope ~defer:true ~substituted ?name ?search ?beam_width ?rounds ?repeats
-            ?timing ?seed_block_sizes ?cache_dir ?keep_fraction ?max_split_reduce_sites ?timing_ctx
-            ?abandon ?call_budget ?report ctx comp bindings;
+          (* The search runs here, so its lineage is restored here, before the thunk is handed
+             back. *)
+          with_timing_state_restored (fun timing_state ->
+              tune_in_stream_scope ~timing_state ~defer:true ~substituted ?name ?search ?beam_width
+                ?rounds ?repeats ?timing ?seed_block_sizes ?cache_dir ?keep_fraction
+                ?max_split_reduce_sites ?timing_ctx ?abandon ?call_budget ?report ctx comp bindings);
       })
 
 let compile_deferred d =

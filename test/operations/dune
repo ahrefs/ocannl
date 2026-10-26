@@ -9415,6 +9415,23 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1621: every timing window of a search starts from the training state its lineage held
+; before the search (parameter and momentum), and the search -- completed or killed -- leaves that
+; state as it found it, with and without a timing_ctx.
+
+(test
+ ; cc-vector-width: independent -- every claim reads the lineage's state, never which candidates were
+ ; seeded; the matmul SGD step seeds at least two windows at any width.
+ (name autotune_timing_state_restore)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules autotune_timing_state_restore)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_ocannl)))
+
 ; The search's test seams (Autotune.Seam) are per domain: two searches in two domains, each domain
 ; with its own value in every seam, and each observer sees only its own domain's search.
 

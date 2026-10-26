@@ -130,10 +130,16 @@
 
     Caveats (v1):
 
-    - Timing runs execute the routine several times, mutating its outputs (and accumulators — a
-      non-idempotent routine, e.g. gradient accumulation, will accumulate the timing runs).
-      Initialize inputs before tuning, and tune before meaningful state exists, or re-initialize
-      afterwards.
+    - Timing runs execute the routine many times, and a training step trains on every run. The
+      search therefore restores its lineage's state (gh-ocannl-1621): every node the computation
+      writes that the lineage ([timing_ctx], else the caller's context) already holds a buffer for
+      -- parameters, optimizer state, counters -- is copied to the host before the search's first
+      timing window, written back before every later window, and once more when the call ends,
+      however it ends (short of a poisoned lineage). Every candidate is thus timed from the same
+      values, on the routine it ships, optimizer update included, and the lineage ends the call as
+      the call found it. Within one window the runs still train from there. Initialize inputs before
+      tuning: what is restored is what the lineage held, so the values a candidate is timed on are
+      the caller's to choose (see [?timing_ctx]).
     - Timing uses wall clock around a device sync, so it includes queue overhead; times are
       min-of-N, where fast routines get extra runs beyond [repeats] until ~25 ms of accumulated
       per-launch samples — not queued-batch wall. Queued timing can consequently spend hundreds of
@@ -3301,19 +3307,20 @@ val time_routine :
     With [~tag_failures:true] the pre-dispatch validation, the launches and the synchronization are
     wrapped in their {!Ir.Schedule_outcome} phases, which is what lets a caller's
     {!Ir.Schedule_outcome.protect} attribute a failure to the phase it happened in; without it they
-    propagate raw. Timing dispatches the routine repeatedly against live buffers, so an accumulating
-    routine must be timed on a scratch lineage (see [tune]'s [?timing_ctx]) if its inputs matter
-    afterwards. [Queued] raises how many such dispatches happen. For [repeats <= 64], the maxima are
-    65 under [Isolated] and, under [Queued], 352321 on CUDA/HIP, 12865 on cc or 25665 on Metal. The
-    CUDA/HIP bound includes warmup, 64 single-launch calibration runs, at most
-    {!queue_calibration_max_probes} (nine) {!queue_batch_probe_runs}-sample calibration probes (the
-    provisional probe, four validations, a confirmation, its stall retry, a sampled shallower
-    crossing, and the rescue) and 64 timed batches at the cap; cc/Metal have no batch probes. In
-    general the queued bounds are [65 + 2048 * (108 + max 64 repeats)] on CUDA/HIP and
-    [65 + 200 * max 64 repeats] on cc, twice the timed part on Metal for its one retry. Thus a
-    routine whose values grow per run reaches larger ones. That is a fact about the scratch buffers,
-    not about the measurement: the cap bounds each in-memory queue while the ~25 ms budget
-    accumulates per-launch samples, and a candidate's time is not what it accumulated.
+    propagate raw. Timing dispatches the routine repeatedly against live buffers, and this function
+    restores nothing, so an accumulating routine timed here leaves its state advanced by every
+    dispatch; {!tune} restores its lineage's state around each window (gh-ocannl-1621). [Queued]
+    raises how many such dispatches happen. For [repeats <= 64], the maxima are 65 under [Isolated]
+    and, under [Queued], 352321 on CUDA/HIP, 12865 on cc or 25665 on Metal. The CUDA/HIP bound
+    includes warmup, 64 single-launch calibration runs, at most {!queue_calibration_max_probes}
+    (nine) {!queue_batch_probe_runs}-sample calibration probes (the provisional probe, four
+    validations, a confirmation, its stall retry, a sampled shallower crossing, and the rescue) and
+    64 timed batches at the cap; cc/Metal have no batch probes. In general the queued bounds are
+    [65 + 2048 * (108 + max 64 repeats)] on CUDA/HIP and [65 + 200 * max 64 repeats] on cc, twice
+    the timed part on Metal for its one retry. Thus a routine whose values grow per run reaches
+    larger ones. That is a fact about the scratch buffers, not about the measurement: the cap bounds
+    each in-memory queue while the ~25 ms budget accumulates per-launch samples, and a candidate's
+    time is not what it accumulated.
 
     [stop] (default: never) is asked before the warmup and before every batch -- each calibration
     probe's and each timed window's -- and when it answers [true] the call raises {!Timing_stopped}
@@ -3540,18 +3547,19 @@ val tune :
      [autotune_split_reduce_max_sites] (8); [0] disables the family. *)
   ?timing_ctx:Context.t ->
   (* A scratch context lineage against which candidates are compiled and timed, so the timing runs
-     never mutate [ctx]'s live buffers (parameters, accumulators — running a training step on
-     scratch/zero data can even poison them with inf/NaN). It must contain the nodes the computation
+     never touch [ctx]'s live buffers (parameters, accumulators) and a timing failure that condemns
+     its lineage condemns the scratch one, not [ctx]'s. It must contain the nodes the computation
      requires from a prior context, e.g. by repeating parameter initialization on a fresh root
      context, and must live on the same backend and device as the target context (raises
      [Invalid_argument] otherwise — candidates timed elsewhere do not predict this device). The
      winning schedule is compiled from [ctx], exactly like a cache hit, with or without it. Without
-     it, the search shares [ctx]'s buffers and the caller should re-initialize mutated state
-     afterwards. Its VALUES are part of what is timed: code that branches on data (the ReLU and
-     max-pool backward selects an inlined placement recomputes in its nests) runs at a speed set by
-     the activations, so a scratch lineage holding the init draw crowns a time the routine does not
-     keep on other weights — 23% on cifar_resnet/cc's default-placements arm (gh-ocannl-1557). Give
-     it the weights [ctx] will run with ([Context.set_values]) when they are known. *)
+     it, the search times on [ctx]'s own buffers; either way the search lineage's training state is
+     restored before every timing window and when the call ends (gh-ocannl-1621; the Caveats above).
+     Its VALUES are part of what is timed: code that branches on data (the ReLU and max-pool
+     backward selects an inlined placement recomputes in its nests) runs at a speed set by the
+     activations, so a scratch lineage holding the init draw crowns a time the routine does not keep
+     on other weights — 23% on cifar_resnet/cc's default-placements arm (gh-ocannl-1557). Give it
+     the weights [ctx] will run with ([Context.set_values]) when they are known. *)
   ?abandon:abandon_rule ->
   (* gh-ocannl-1110: stop the search, raising {!Search_abandoned} after delivering an {!Abandoned}
      report, when {!abandon_verdict} decides at [k = beam_width] admitted timings. Absent (the
