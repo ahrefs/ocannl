@@ -53,6 +53,69 @@ consumer where 0 x v (v live): routine A defers v, its template reading the merg
 consumer where 0 x v (v live): routine B is refused for the cross-routine merge splice: true
 consumer where (i < 2) x v (undecided): routine A defers v, its template reading the merge buffer: true
 consumer where (i < 2) x v (undecided): routine B is refused for the cross-routine merge splice: true
+local, read-only: dead by a constant: routine A placed v as routine-local scratch, its computation in the table: true
+local, read-only: dead by a constant: routine B compiles, v stays routine-local scratch and is no input of B: true
+local, read-only: dead by a constant: lr1out executes to its expected values: true
+local, read-only: dead by a constant: the reading agrees with the materialized one: true
+local, read-only, no template: dead by a constant: routine A placed v as routine-local scratch, with no computation in the table: true
+local, read-only, no template: dead by a constant: routine B compiles, v stays routine-local scratch and is no input of B: true
+local, read-only, no template: dead by a constant: lr1nout executes to its expected values: true
+local, read-only, no template: dead by a constant: the reading agrees with the materialized one: true
+local, read-only: dead by B's loop extent: routine A placed v as routine-local scratch, its computation in the table: true
+local, read-only: dead by B's loop extent: routine B compiles, v stays routine-local scratch and is no input of B: true
+local, read-only: dead by B's loop extent: lr2out executes to its expected values: true
+local, read-only: dead by B's loop extent: the reading agrees with the materialized one: true
+local, read-only: live arm: routine A placed v as routine-local scratch, its computation in the table: true
+local, read-only: live arm: routine B is refused, naming v routine-local scratch: true
+local, read-only, no template: live arm: routine A placed v as routine-local scratch, with no computation in the table: true
+local, read-only, no template: live arm: routine B is refused, naming v routine-local scratch: true
+local, read-only: undecided arm: routine A placed v as routine-local scratch, its computation in the table: true
+local, read-only: undecided arm: routine B is refused, naming v routine-local scratch: true
+local, covered: a materialized consumer: routine A placed v as routine-local scratch, its computation in the table: true
+local, covered: a materialized consumer: routine B compiles, v stays routine-local scratch and is no input of B: true
+local, covered: a materialized consumer: lc1out executes to its expected values: true
+local, covered: a materialized consumer: the reading agrees with the materialized one: true
+local, covered, no template: a materialized consumer: routine A placed v as routine-local scratch, with no computation in the table: true
+local, covered, no template: a materialized consumer: routine B compiles, v stays routine-local scratch and is no input of B: true
+local, covered, no template: a materialized consumer: lc1nout executes to its expected values: true
+local, covered, no template: a materialized consumer: the reading agrees with the materialized one: true
+local, covered after a dead read: routine A placed v as routine-local scratch, its computation in the table: true
+local, covered after a dead read: routine B compiles, v stays routine-local scratch and is no input of B: true
+local, covered after a dead read: lc2o2 executes to its expected values: true
+local, covered after a dead read: lc2out executes to its expected values: true
+local, covered after a dead read: the reading agrees with the materialized one: true
+local, covered: a captured virtual consumer: routine A placed v as routine-local scratch, its computation in the table: true
+local, covered: a captured virtual consumer: routine B compiles, v stays routine-local scratch and is no input of B: true
+local, covered: a captured virtual consumer: w is refused by its capture and materializes: true
+local, covered: a captured virtual consumer: lc3out executes to its expected values: true
+local, covered: a captured virtual consumer: the reading agrees with the materialized one: true
+local, covered, no template: a captured virtual consumer: routine A placed v as routine-local scratch, with no computation in the table: true
+local, covered, no template: a captured virtual consumer: routine B compiles, v stays routine-local scratch and is no input of B: true
+local, covered, no template: a captured virtual consumer: w is refused by its capture and materializes: true
+local, covered, no template: a captured virtual consumer: lc3nout executes to its expected values: true
+local, covered, no template: a captured virtual consumer: the reading agrees with the materialized one: true
+local, covered: a per-statement virtual consumer: routine A placed v as routine-local scratch, its computation in the table: true
+local, covered: a per-statement virtual consumer: routine B compiles, v stays routine-local scratch and is no input of B: true
+local, covered: a per-statement virtual consumer: w is refused by its per-statement store and materializes: true
+local, covered: a per-statement virtual consumer: lc4out executes to its expected values: true
+local, covered: a per-statement virtual consumer: the reading agrees with the materialized one: true
+local, covered: a raw-captured packed-uniform producer: routine A placed v as routine-local scratch, its computation in the table: true
+local, covered: a raw-captured packed-uniform producer: the producer is refused by its capture and materializes: true
+local, covered: a raw-captured packed-uniform producer: no template of it reads v: true
+local, covered: a declared-virtual consumer: routine A placed v as routine-local scratch, its computation in the table: true
+local, covered: a declared-virtual consumer: routine B is refused, naming v routine-local scratch: true
+local: a partial write: routine A placed v as routine-local scratch, its computation in the table: true
+local: a partial write: routine B is refused, naming v routine-local scratch: true
+local, no template: a partial write: routine A placed v as routine-local scratch, with no computation in the table: true
+local, no template: a partial write: routine B is refused, naming v routine-local scratch: true
+local: a partial write, read at another cell: routine A placed v as routine-local scratch, its computation in the table: true
+local: a partial write, read at another cell: routine B is refused, naming v routine-local scratch: true
+local: read before write: routine A placed v as routine-local scratch, its computation in the table: true
+local: read before write: routine B is refused, naming v routine-local scratch: true
+local: an accumulation with no initialization: routine A placed v as routine-local scratch, its computation in the table: true
+local: an accumulation with no initialization: routine B is refused, naming v routine-local scratch: true
+local: a guarded write, then an unguarded read: routine A placed v as routine-local scratch, its computation in the table: true
+local: a guarded write, then an unguarded read: routine B is refused, naming v routine-local scratch: true
 virtual consumer where (i < 4) x v: routine A defers v, its template reading the merge buffer: true
 virtual consumer where (i < 4) x v: routine B compiles: true
 virtual consumer where (i < 4) x v: routine B declares no merge buffer and does not read v: true

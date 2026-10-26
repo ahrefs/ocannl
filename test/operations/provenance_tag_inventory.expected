@@ -169,11 +169,11 @@ arrayjit/lib/tnode.ml -- 1 13 16 17 36 39 41 49 432
 arrayjit/lib/winograd.ml -- 505
 arrayjit/lib/winograd.mli -- 505
 benchmarks/report-gh612-hip.md -- 41
-docs/agent-notes/virtualization-and-inlining.md -- 1 8 9 13 19 39 41 52 141 142 143 144 147 148 149 154 155 156 432
+docs/agent-notes/virtualization-and-inlining.md -- 1 8 9 13 19 37 39 41 52 141 142 143 144 147 148 149 154 155 156 432
 docs/lowering_and_inlining.md -- 4 5 7 8 9 10 11 12 13 14 16 18 19 39 41 51 52 140 141 142 143 144 145 146 147 148 149 151 152 154 155 156 432
 lib/train.ml -- 28 29
 tensor/tensor.ml -- 24 49 241
-test/operations/capture_pass_side_effects.ml -- 13
+test/operations/capture_pass_side_effects.ml -- 9 13
 test/operations/cost_model_template.expected -- 9 13
 test/operations/cost_model_template.ml -- 13
 test/operations/footprint_materialization.ml -- 13
@@ -185,7 +185,7 @@ test/operations/scan_loop.expected -- 148
 test/operations/scan_loop.ml -- 148
 test/operations/scope_over_materialized.ml -- 1 13 142
 test/operations/splice_semantics.ml -- 51
-test/operations/stored_template_elision.ml -- 13 154 155 156
+test/operations/stored_template_elision.ml -- 13 142 154 155 156
 test/operations/virtual_chain_fanin.ml -- 13 41
 test/operations/virtual_diagonal.ml -- 13 52
 test/operations/virtual_guarded_setter.ml -- 142

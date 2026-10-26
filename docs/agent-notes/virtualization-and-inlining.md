@@ -479,10 +479,31 @@ files.
   gh-ocannl-1551 generalized the hit (`capture_hit`) to the two other inherited reads that refuse a
   routine where they execute: routine-local scratch (`155:capture-reads-local`) and a template that
   cannot be instantiated at the read's indices (`156:capture-read-uninlinable`, reported through
-  `inline_computation ?on_inherited_unservable`, which commits nothing). A routine that only READS
-  an inherited `Local` node never reaches the walk: `decide_placements`' read-only-input rule
-  refuses it on the raw read, dead arm or not — the walk's `Local` refusal is met only by a node
-  the routine also writes.
+  `inline_computation ?on_inherited_unservable`, which commits nothing).
+- **Routine-local scratch an earlier routine placed is judged on the code that executes**
+  (gh-ocannl-1620). `Local` is only ever an earlier routine's finalization decision, so a `Local`
+  node at `decide_placements` is inherited, with or without a template in the table. It has no
+  incoming contents: every read the routine EVALUATES must be strictly covered by the routine's own
+  earlier writes. The raw facts cannot say that — `trace_node_facts` and the raw coverage verdicts
+  see both `Where` arms, take guards as taken, and exempt copy-position reads — so
+  `Low_level.live_view` (the raw code with dead loops dropped and every arm the emit walk decides
+  dead made `Constant 0.`; analysis only, never stored) feeds `an_live_reads` and a strict
+  `an_live_coverage` (a guarded write counts only where its guards dominate the read, as for spliced
+  reads). A condition that reads a buffer is never decided there: the emit walk decides it after
+  inlining, which the interval analysis cannot see through. Rules: no live read decides nothing (a
+  read-only node in a dead arm is no input, its placement untouched); a covered read executes on the
+  routine's scratch; any other read is refused with `inherited_local_read_rejection`, in
+  `decide_placements`, ahead of the `Local -> On_device` read-before-write promotion (an
+  inconsistent transition). **No stored template may hold such a read**, covered or not: it would
+  replay wherever the template does, in later routines too. The capture walk's `155` hit stands for
+  covered reads, and outside a capture the emit walk records the setter owning the read
+  (`local_dependents`), refusing its per-statement store with the same `155`; a packed-uniform
+  producer's RAW capture, which no walk reads, is scanned for such a read (`raw_local_read`). Pinned, executed
+  against the materialized reading, by the `local, ...` cases of `stored_template_elision.ml`
+  (lineages with and without a stored template; partial, guarded, read-before-write and
+  uninitialized-accumulation controls). Boundary: the rules apply to `Local` nodes only — a fresh
+  node read only in a dead arm still gets the raw `37:read-only-input` placement (over-materializes,
+  values correct).
 - **What a capture walk does to code its template drops** (gh-ocannl-1551). Phase 1 of a shared
   loop walks every setter of the body, though the stored template keeps only the candidate's. Two
   divergences from the emit walk were real (`capture_pass_side_effects.ml`): (1) a statement of
@@ -493,11 +514,17 @@ files.
   setter's right-hand side was walked with the CANDIDATE's write-index loops opaque, entering arms
   the emitted code never evaluates — committing an unservable local producer `Never_virtual` and
   marking an inherited template's operands spliced; a setter the walk will not store, not the
-  candidate's, now decides `Where` with every loop's extent, as the emit walk does. Still open: a
-  node whose own loop nests inside a width-1 capture gets the walk's per-statement store, which a
-  loop-varying operand refuses (`9`), where the emit walk alone would have captured it at its loop.
-  Shared loops are hand-built IR (`Ll_test`); `Assignments` lowering gives each assignment its own
-  nest.
+  candidate's, now decides `Where` with every loop's extent, as the emit walk does. **Stated
+  boundary** (gh-ocannl-1620): a node whose own loop nests inside a width-1 capture gets the walk's
+  per-statement store (`in_storage_pass` suppresses the nested capture), which lacks its inner
+  binder and refuses a loop-varying operand (`9:sibling-escaping-read-index`); that refusal is a
+  placement, which restoring the provisional computations does not retract, so the node
+  materializes where the emit walk alone would have captured it at its loop. A lost
+  virtualization, values correct; `capture_pass_side_effects.ml`'s `nested loop under a width-1
+  capture` pins it (`zero y; for i<1 { w[i] := x[i] + 1; for j<4 { y[j] += k[j] } }`). Retracting
+  the placement alone is unsound: phase 1's template already holds a raw read of the node, which
+  would then read a virtual node with no buffer — a fix needs transactional nested captures. Shared
+  loops are hand-built IR (`Ll_test`); `Assignments` lowering gives each assignment its own nest.
 - Big-reduction producers are forced `Never_virtual` by `virtualize_max_inline_reduction`
   (default 16) — remember it when a structural expectation assumes inlining.
 - Wide-fanin producers are forced `Never_virtual 41` by `virtualize_max_inline_fanin` (default 8,
