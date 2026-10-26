@@ -419,6 +419,31 @@ type hardware_limits = {
           advisories where measured, overridable by config [model_fill_threads]; [None] elsewhere,
           which leaves the compute leg as before. Same readers and same cache identity as
           {!field-cache_capacity_bytes}. *)
+  transaction_rate : float option; [@sexp.option]
+      (** [Untimed]: how many excess 32-byte memory sectors a device serves per second -- the rate
+          of the ranking score's memory-transaction term (gh-ocannl-1600,
+          {!Ir.Cost_model.memory_transactions}): per lane group of {!field-simdgroup_width} lanes,
+          the sectors a global access touches beyond the compact count for the same distinct bytes,
+          at the access's own context fill, added to the compute leg. What orders a layout whose
+          lanes read contiguous cells against a twin whose lanes stride. A FITTED constant
+          ([benchmarks/gh1442_agreement.py --fit-txn]), per device class. Overridable by config
+          [model_transaction_rate]; [None] where unmeasured, which adds no term and keeps the
+          coalesced layouts out of [model_default]'s candidate set. Same readers and same cache
+          identity as {!field-cache_capacity_bytes}. *)
+  workgroup_bytes_per_multiprocessor : int option; [@sexp.option]
+      (** [Untimed]: the workgroup-shared memory one multiprocessor (SM / WGP) holds for all its
+          resident blocks -- the capacity of the ranking score's occupancy factor (gh-ocannl-1600,
+          {!Ir.Cost_model.occupancy}): a kernel declaring [W] workgroup bytes in blocks of [T]
+          threads keeps [min (capacity / W) (threads per multiprocessor / T)] blocks resident, and
+          its compute leg is divided by the fraction of the multiprocessor's thread slots they fill
+          (the threads per multiprocessor are {!field-max_resident_threads} over
+          {!field-multiprocessors}). Also the second half of [model_default]'s gate on the coalesced
+          layouts, beside {!field-transaction_rate}: their deep-K tiles are told apart only by it.
+          The physical value where advisory (HIP's RDNA wave32 parts: 128 KiB of LDS per WGP, the
+          unit HIP counts as a multiprocessor); [None] where the occupancy does not explain the
+          measured order (CUDA, gh-ocannl-1600) or is unmeasured. Overridable by config
+          [model_workgroup_bytes_per_multiprocessor]. Same readers and same cache identity as
+          {!field-cache_capacity_bytes}. *)
   native_fp16_arithmetic : bool;
       (** Whether 16-bit float arithmetic executes natively at twice f32's lane count
           (gh-ocannl-516: ARMv8.2-FP16, AVX512-FP16). [false] covers both "no [_Float16] on this
@@ -435,7 +460,10 @@ type hardware_limits = {
           configuration's [warp_size]: 32 on Metal, CUDA and HIP (whose shuffles pass an explicit
           width of 32). [None] where kernels render no shuffles (the C backends). The default GPU
           schedule retypes a cooperative lane reduction only at a multiple of this width, at most
-          [lane_all_reduce_simdgroups] of them (gh-ocannl-1124, gh-ocannl-1168). *)
+          [lane_all_reduce_simdgroups] of them (gh-ocannl-1124, gh-ocannl-1168). Where a
+          {!field-transaction_rate} is set, also the execution width the memory-transaction count
+          groups lanes by (gh-ocannl-1600): a backend sets that rate only on parts that execute this
+          width (HIP: the RDNA wave32 parts). *)
   lane_scalar_recompute_cheap : bool;
       (** Device economics (gh-ocannl-1124): whether scalar work every lane of a lane geometry
           recomputes redundantly -- the per-pair preamble a lane nest repeats in each of its lanes
@@ -824,6 +852,8 @@ let no_hardware_limits =
     device_gather_rate = None;
     multiprocessors = None;
     fill_threads = None;
+    transaction_rate = None;
+    workgroup_bytes_per_multiprocessor = None;
     native_fp16_arithmetic = false;
     simdgroup_width = None;
     lane_scalar_recompute_cheap = false;
@@ -904,6 +934,8 @@ let limits_key
        device_gather_rate = _;
        multiprocessors = _;
        fill_threads = _;
+       transaction_rate = _;
+       workgroup_bytes_per_multiprocessor = _;
        native_fp16_arithmetic;
        simdgroup_width;
        lane_scalar_recompute_cheap;
@@ -943,6 +975,9 @@ type untimed_limits = {
   gather_rate : float option;  (** {!field-hardware_limits.device_gather_rate}. *)
   core_count : int option;  (** {!field-hardware_limits.multiprocessors}. *)
   saturation_threads : int option;  (** {!field-hardware_limits.fill_threads}. *)
+  sector_rate : float option;  (** {!field-hardware_limits.transaction_rate}. *)
+  workgroup_capacity : int option;
+      (** {!field-hardware_limits.workgroup_bytes_per_multiprocessor}. *)
 }
 (** The [Untimed] fields' readings, the one accessor their readers go through
     ([test/operations/limits_field_classes] refuses a direct read elsewhere). *)
@@ -958,6 +993,8 @@ let untimed_limits (l : hardware_limits) : untimed_limits =
     gather_rate = l.device_gather_rate;
     core_count = l.multiprocessors;
     saturation_threads = l.fill_threads;
+    sector_rate = l.transaction_rate;
+    workgroup_capacity = l.workgroup_bytes_per_multiprocessor;
   }
 
 (** A base for [{ minimal_mma_capability with ... }] literals, so adding a field to

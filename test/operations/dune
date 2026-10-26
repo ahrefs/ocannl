@@ -10704,6 +10704,32 @@
 ; tile-MMA work, the bound; then the q/k/v projection's scalar leaves under a CUDA-like stand-in:
 ; plain leaves rank above their bgrid twins with the fill constants and tie without them.
 
+; gh-ocannl-1600: model_default ranks the coalesced layouts where both the transaction rate and the
+; occupancy capacity resolve; at the outproj site under a minix-shaped record a coal-k leaf then
+; strictly beats the uncoalesced walk.
+
+(test
+ ; ocannl-backend: cc -- Context.cpu lowers the site; the scheduling and scoring are hermetic and nothing compiles.
+ (name model_coalesced_admission)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules model_coalesced_admission)
+ (libraries base stdio ocannl arrayjit.verdict)
+ (preprocess
+  (pps ppx_ocannl)))
+
+; gh-ocannl-1600: the ranking score's memory-transaction term: exact excess-sector counts on
+; hand-built kernels (strides, broadcasts, wrapped rows, partial and idle lane groups, residues,
+; precisions, flattened maps, exclusions, a dynamic gather), and the compute leg it adds to.
+
+(test
+ ; ocannl-backend: none -- hand-built Low_level kernels, counted and scored; nothing is lowered or compiled.
+ (name cost_model_transactions)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules cost_model_transactions)
+ (libraries base ocannl arrayjit.verdict ll_test))
+
 (test
  ; ocannl-backend: cc -- Context.cpu selects cc directly; the lowering is hermetic and nothing compiles.
  (name cost_model_fill)

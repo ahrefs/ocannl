@@ -474,6 +474,9 @@ module Impl = struct
                 Array.min_elt counts ~compare:Int.compare
               else None);
            fill_threads = (if apple_silicon then Some 320 else None);
+           (* gh-ocannl-1600: unmeasured; configured (model_transaction_rate), never advisory. *)
+           transaction_rate = None;
+           workgroup_bytes_per_multiprocessor = None;
          })
     in
     fun () -> Lazy.force limits

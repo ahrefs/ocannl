@@ -1863,6 +1863,23 @@ end = struct
               the discrete class. Overridable by model_fill_threads. *)
            multiprocessors = min_over (fun (a : H.Device.attributes) -> a.multiprocessor_count);
            fill_threads = Some (if all_integrated then 384 else 512);
+           (* gh-ocannl-1600: the memory-transaction rate, fitted (benchmarks/gh1600_txn_fit.py) on
+              the gh-ocannl-1479 cells on the unified gfx1151 (minix, 2026-10-26, 630016bd): the qkv
+              and outproj kernels carry no excess (a lane's innermost run is one footprint), the
+              weight gradient's agreement rises 50 -> 75% at rates up to 2e11 and falls back above.
+              Only under all_rdna_wave32 (the count groups lanes by the 32-wide simdgroup, which a
+              CDNA wave64 part does not execute) and on the unified class it was fitted on: the
+              discrete class (tuf) is unmeasured. With the capacity below it admits the coalesced
+              layouts to model_default. Overridable by model_transaction_rate. *)
+           transaction_rate =
+             (if all_integrated && Lazy.force all_rdna_wave32 then Some 1.0e11 else None);
+           (* gh-ocannl-1600: the occupancy factor's capacity, physical: 128 KiB of LDS per WGP (the
+              unit multiprocessor_count counts) on the RDNA wave32 parts. With it the deep-K
+              coalesced leaves rank as measured at the gh-ocannl-1479 outproj cells on minix (argmin
+              1.00x of the fastest at b8 and b256, against 3.6x and 3.3x without). Overridable by
+              model_workgroup_bytes_per_multiprocessor. *)
+           workgroup_bytes_per_multiprocessor =
+             (if Lazy.force all_rdna_wave32 then Some 131072 else None);
          })
     in
     (* gh-ocannl-572: the kernel source is a function of the lowered code, the device capabilities

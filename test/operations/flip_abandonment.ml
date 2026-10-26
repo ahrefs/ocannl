@@ -614,6 +614,9 @@ let () =
       (* gh-ocannl-1479: its launch fill's two constants, likewise. *)
       ("model_multiprocessors", "");
       ("model_fill_threads", "");
+      (* gh-ocannl-1600: its memory-transaction rate, likewise. *)
+      ("model_transaction_rate", "");
+      ("model_workgroup_bytes_per_multiprocessor", "");
     ]
   in
   p "they are exactly the Untimed_model class" (same_keys model_keys Utils.Untimed_model);

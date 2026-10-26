@@ -62,6 +62,13 @@
 # gh-ocannl-1495: and `nomma` (model_mma_rate and model_device_gather_rate none: the score before
 # them) and `mmaonly` (the gather rate none) arms; at an fp8mm site the agreement also fits the two
 # rates from the `fitted`/`shipped` arm's explain lines (gh1442_agreement.py --fit-mma).
+# gh-ocannl-1600: and `notxn` (model_transaction_rate none) and `noocc`
+# (model_workgroup_bytes_per_multiprocessor none) arms -- the score without each of its two terms,
+# so one timing TSV gives each term's effect -- and TIME_REPEATS=N (default 1) times every candidate
+# N times into the same TSV, so benchmarks/gh1600_txn_fit.py, run on the `notxn` listing at the
+# shipped rate (TXN_RATE=R, the backend's advisory; unset: no transaction-term check), judges the
+# rate on medians against the measured spread (p90/p10 of the fastest admitted candidate);
+# NO_COALESCED=1 for a backend that does not admit the coalesced layouts (CUDA).
 # FIT_FILL=1 with RANK_ONLY=1 runs the issue cell first (MULTIPROCESSORS=P passes --multiprocessors,
 # needed only where the device reports none: a non-AGX Metal GPU) and passes its fitted constants to the listing and pick
 # cells, which otherwise run the shipped ones. PICK_GATE0=1 adds pick cells with the seeding off
@@ -223,11 +230,16 @@ for site in ${SITES:-wgrad:8,128,256,1024 wgrad:256,128,256,1024 fp8mm:8192,32,4
   kind=${site%%:*}
   dims=${site#*:}
   name="${kind}_${dims//,/x}"
-  cell "rank_${name}_time" env BENCH_TUNE=1 BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
-    "--ocannl_backend=$backend" --ocannl_gpu_default_sketch_min_reduction=32 \
-    --ocannl_autotune_keep_fraction=1 \
-    "--ocannl_autotune_calibration_file=$out/rank_${name}.tsv" ${model[@]+"${model[@]}"}
-  timed=$last_ok
+  timed=true
+  for rep in $(seq 1 "${TIME_REPEATS:-1}"); do
+    suffix=""
+    if [[ $rep -gt 1 ]]; then suffix="_r$rep"; fi
+    cell "rank_${name}_time$suffix" env BENCH_TUNE=1 BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
+      "--ocannl_backend=$backend" --ocannl_gpu_default_sketch_min_reduction=32 \
+      --ocannl_autotune_keep_fraction=1 \
+      "--ocannl_autotune_calibration_file=$out/rank_${name}.tsv" ${model[@]+"${model[@]}"}
+    if ! $last_ok; then timed=false; fi
+  done
   cell "rank_${name}_${fitted_arm}" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
     "--ocannl_backend=$backend" --ocannl_gpu_default_sketch_min_reduction=32 \
     ${model[@]+"${model[@]}"}
@@ -253,6 +265,14 @@ for site in ${SITES:-wgrad:8,128,256,1024 wgrad:256,128,256,1024 fp8mm:8192,32,4
   cell "rank_${name}_mmaonly" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
     "--ocannl_backend=$backend" --ocannl_gpu_default_sketch_min_reduction=32 \
     ${nomma[@]+"${nomma[@]}"} --ocannl_model_device_gather_rate=none
+  # gh-ocannl-1600: the same constants without the transaction term, and without the occupancy
+  # factor (which also leaves the coalesced layouts out of model_default).
+  cell "rank_${name}_notxn" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
+    "--ocannl_backend=$backend" --ocannl_gpu_default_sketch_min_reduction=32 \
+    ${model[@]+"${model[@]}"} --ocannl_model_transaction_rate=none
+  cell "rank_${name}_noocc" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
+    "--ocannl_backend=$backend" --ocannl_gpu_default_sketch_min_reduction=32 \
+    ${model[@]+"${model[@]}"} --ocannl_model_workgroup_bytes_per_multiprocessor=none
   picks=()
   if [[ ${RANK_ONLY:-0} == 1 ]]; then
     pick_cells=()
@@ -291,9 +311,19 @@ for site in ${SITES:-wgrad:8,128,256,1024 wgrad:256,128,256,1024 fp8mm:8192,32,4
     python3 "$root/benchmarks/gh1442_agreement.py" "$out/rank_${name}.tsv" \
       "ceilings=$out/rank_${name}_ceilings.out" "nofill=$out/rank_${name}_nofill.out" \
       "nomma=$out/rank_${name}_nomma.out" "mmaonly=$out/rank_${name}_mmaonly.out" \
+      "noocc=$out/rank_${name}_noocc.out" "notxn=$out/rank_${name}_notxn.out" \
       "${fitted_arm}=$out/rank_${name}_${fitted_arm}.out" ${fit[@]+"${fit[@]}"} \
       ${picks[@]+"${picks[@]}"} |
       tee "$out/rank_${name}_agreement.txt" || failed=$((failed + 1))
+    if [[ -n "${TXN_RATE:-}" ]]; then
+      # gh-ocannl-1600: the shipped transaction rate, judged on the medians of this TSV (held out
+      # from the cells it was fitted on) against its measured spread.
+      nocoal=()
+      if [[ ${NO_COALESCED:-0} == 1 ]]; then nocoal=(--no-coalesced); fi
+      python3 "$root/benchmarks/gh1600_txn_fit.py" --rate "$TXN_RATE" --show ${nocoal[@]+"${nocoal[@]}"} \
+        "$name=$out/rank_${name}.tsv,$out/rank_${name}_notxn.out" |
+        tee "$out/rank_${name}_txn.txt" || failed=$((failed + 1))
+    fi
   fi
 done
 

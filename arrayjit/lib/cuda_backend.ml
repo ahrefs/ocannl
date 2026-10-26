@@ -2229,6 +2229,20 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
               constant for the class, overridable by model_fill_threads. *)
            multiprocessors = min_over (fun (a : Cu.Device.attributes) -> a.multiprocessor_count);
            fill_threads = Some 256;
+           (* gh-ocannl-1600: the memory-transaction rate, fitted (benchmarks/gh1600_txn_fit.py) on
+              the gh-ocannl-1479 cells on rog-nv's RTX 5070 Ti (2026-10-26, 630016bd): once a lane's
+              innermost run counts as one footprint (L1 serves it), the qkv and outproj kernels
+              carry no excess, and only the weight gradient's transposed operand does; agreement
+              there rises 50.0 -> 58.3% over 7.9e11-1.6e12, everywhere else unchanged. No coalesced
+              layouts here regardless: no occupancy capacity (below). Overridable by
+              model_transaction_rate. *)
+           transaction_rate = Some 1.0e12;
+           (* gh-ocannl-1600: no occupancy capacity. At the gh-ocannl-1479 outproj cells on rog the
+              physical 100 KiB per SM leaves the deep-K coalesced argmin 1.23x slower, and at b8 (64
+              blocks over 46 SMs) residency does not bind at all: the deep-K slowdown has another
+              mechanism, so the coalesced layouts stay out of model_default here. Overridable by
+              model_workgroup_bytes_per_multiprocessor. *)
+           workgroup_bytes_per_multiprocessor = None;
          })
     in
     (* gh-ocannl-572: the kernel source is a function of the lowered code, the device capabilities

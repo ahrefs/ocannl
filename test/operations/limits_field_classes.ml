@@ -65,6 +65,8 @@ let full =
     device_gather_rate = Some 3e10;
     multiprocessors = Some 64;
     fill_threads = Some 256;
+    transaction_rate = Some 2e11;
+    workgroup_bytes_per_multiprocessor = Some 131072;
     native_fp16_arithmetic = true;
     simdgroup_width = Some 32;
     lane_scalar_recompute_cheap = true;
@@ -99,6 +101,9 @@ let toggles : (string * (BI.hardware_limits -> BI.hardware_limits)) list =
     ("device_gather_rate", fun l -> { l with device_gather_rate = Some 1. });
     ("multiprocessors", fun l -> { l with multiprocessors = Some 1 });
     ("fill_threads", fun l -> { l with fill_threads = Some 1 });
+    ("transaction_rate", fun l -> { l with transaction_rate = Some 1. });
+    ( "workgroup_bytes_per_multiprocessor",
+      fun l -> { l with workgroup_bytes_per_multiprocessor = Some 1 } );
     ("native_fp16_arithmetic", fun l -> { l with native_fp16_arithmetic = false });
     ("simdgroup_width", fun l -> { l with simdgroup_width = Some 64 });
     ("lane_scalar_recompute_cheap", fun l -> { l with lane_scalar_recompute_cheap = false });
@@ -130,9 +135,9 @@ let () =
       List.mem names f ~equal:String.equal);
   p_all ~min:1 "every toggle here names a field of the record" names ~f:(fun f ->
       List.mem all_fields f ~equal:String.equal);
-  (* The ranking score's capacity, residency, its cache, issue, DRAM, tile-MMA and device-gather
-     rates, and its launch fill's two constants. *)
-  p "the Untimed fields are the ranking score's capacity, residency, five rates and launch fill"
+  (* The ranking score's capacity, residency, its cache, issue, DRAM, tile-MMA, device-gather and
+     memory-transaction rates, its launch fill's two constants and its occupancy capacity. *)
+  p "the Untimed fields are the ranking score's capacities, residency, six rates and launch fill"
     (List.equal String.equal
        (List.sort untimed_fields ~compare:String.compare)
        [
@@ -145,6 +150,8 @@ let () =
          "max_resident_threads";
          "mma_rate";
          "multiprocessors";
+         "transaction_rate";
+         "workgroup_bytes_per_multiprocessor";
        ]);
   let base = key_of full in
   p_all ~min:(List.length all_fields)
@@ -184,6 +191,8 @@ let presets =
         device_gather_rate = Some 2.9e10;
         multiprocessors = Some 70;
         fill_threads = Some 128;
+        transaction_rate = Some 2e11;
+        workgroup_bytes_per_multiprocessor = Some 65536;
         codegen_tag = Some "graph-capture/no-device-debug";
       } );
   ]
@@ -204,6 +213,8 @@ let () =
           device_gather_rate = None;
           multiprocessors = None;
           fill_threads = None;
+          transaction_rate = None;
+          workgroup_bytes_per_multiprocessor = None;
         }
       in
       let ok =

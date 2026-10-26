@@ -1,0 +1,32 @@
+a contiguous f32 read and write: 4 sectors for 128 bytes, no excess: true
+a stride-2 read touches 8 sectors for 4 sectors' bytes: excess 4: true
+a column read (stride 32 cells) touches 32 sectors: excess 28: true
+a broadcast read (no lane coordinate) is one sector: no excess: true
+f16 lanes: contiguous is 2 sectors, no excess; stride 2 is 4 sectors: excess 2: true
+a partial lane group: 48 lanes at stride 2 are excess 4 + 2: true
+lanes reading row-major along .x are contiguous across the wrapped rows: no excess: true
+lanes reading 8 rows of 4 cells (16 bytes each) touch 8 sectors: excess 4: true
+a narrow sibling's idle lanes are not borrowed: 16 lanes at stride 2 are excess 2: true
+grid blocks and serial iterations multiply the excess: 4 * 3 * 4: true
+and the context is the 4 blocks of 32 threads: true
+a lane's 4-wide register tile is one footprint with its lane group's: no excess: true
+a register tile reading down a column still pays: excess 28: true
+blocks of 256 threads with 4 KiB each fill the multiprocessor's threads: occupancy 1: true
+16 KiB blocks of 256 threads: 4 resident, 1024 of 1536 slots: true
+a 64 KiB block of 64 threads is alone: 64 of 1536 slots: true
+a block over the capacity still counts as one resident block: true
+a kernel without workgroup memory is bounded by its threads alone: 2 blocks of 640: true
+a serial unit stride is counted over its sector residues: excess 7, not a base-only 0: true
+a symbol in two coordinates steps by its summed flat stride: aligned, no excess: true
+a folded run starts at its loop's lower bound: 9 sectors for 8, excess 1: true
+a flattened Sub_axis map counts as its unflattened twin: excess 4 each: true
+a non-global node is not counted: the same column read from a workgroup tile costs nothing: true
+a Tile_mma statement's fallback is left out of the count: true
+a dynamic gather is one uncovered access, estimated at one sector per lane: true
+the kernel's excess is 2 blocks of a 28-excess column read: true
+without a rate the compute leg is bitwise as before: true
+a rate without an excess adds nothing: true
+with a rate the compute leg adds exactly the excess over it: true
+under a launch model the excess is divided by its context's fill (a quarter): true
+an occupancy of a half doubles the compute leg; an occupancy of 1 leaves it bitwise: true
+and the term never lowers the leg below the bound's operations at the ceiling: true
