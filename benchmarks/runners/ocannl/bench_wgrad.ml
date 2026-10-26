@@ -9,15 +9,19 @@
    batch 256). BENCH_TUNE=1 times the tuned schedule (Autotune.tune, no disk cache) instead of the
    untuned default, which goes through Bench_harness.compile_default (Autotune.untuned_compile) and
    so honours the model_default_schedule and gpu_default_sketch_min_reduction settings.
-   BENCH_REPEATS is the number of timed runs, min taken (default 20). BENCH_WGRAD_REQUIRE_SEEDED=1
-   compiles the untuned arm through Autotune.seeded_default and exits 1, timing nothing, when it
-   seeds no segment or falls back to the default.
+   BENCH_REPEATS is the number of timed runs per shipped kernel, min taken (default 20);
+   BENCH_RETIME_CALLS the number of timing calls the whole routine is re-timed over ([Bench_retime],
+   gh-ocannl-1524: default 6). BENCH_WGRAD_REQUIRE_SEEDED=1 compiles the untuned arm through
+   Autotune.seeded_default and exits 1, timing nothing, when it seeds no segment or falls back to
+   the default.
 
-   Prints one [wgrad:] line -- the arm, the dims, the w.grad nest's lowered loop extents, the
-   min-of-repeats synced time of the whole routine, and for a tuned arm the search's crowned label
-   and counters -- then the shipped kernels' isolated times ([Bench_harness.time_shipped_segments]),
-   where the [w: wg_w.grad] row is the weight gradient's. Inputs are small positive dyadics, so the
-   gradient's checksum is exact whatever the schedule and must agree across arms.
+   Prints one [wgrad:] line -- the arm, the dims, the w.grad nest's lowered loop extents, the whole
+   routine's re-timing (the median [ms] of [Autotune.time_routine] calls under the configured
+   [autotune_timing], with its range [ms_lo]/[ms_hi]), and for a tuned arm the search's crowned
+   label and counters -- then the shipped kernels' isolated times
+   ([Bench_harness.time_shipped_segments]), where the [w: wg_w.grad] row is the weight gradient's.
+   Inputs are small positive dyadics, so the gradient's checksum is exact whatever the schedule and
+   must agree across arms.
 
    Before timing, [wgrad-model:] lines give the cost model's view (gh-ocannl-1253), per kernel of
    two plans compiled for the purpose: [plan=default], the plain default pipeline (untiled), and
@@ -175,15 +179,8 @@ let () =
     else H.compile_default ctx comp Ir.Indexing.Empty
   in
   let compile_s = Unix.gettimeofday () -. t0 in
-  let ctx = Context.run ctx routine in
-  Context.sync ctx;
-  let best = ref Float.infinity in
-  for _ = 1 to repeats do
-    let c0 = Unix.gettimeofday () in
-    let ctx = Context.run ctx routine in
-    Context.sync ctx;
-    best := Float.min !best ((Unix.gettimeofday () -. c0) *. 1000.)
-  done;
+  let timing, readings = Bench_retime.retime [ (ctx, routine) ] in
+  let spread = Bench_retime.spread_of (List.hd_exn readings) in
   let ctx = Context.run ctx routine in
   let checksum = Array.fold (Context.get_values ctx wgrad) ~init:0. ~f:( +. ) in
   let tuned =
@@ -197,12 +194,15 @@ let () =
           r.Autotune.sketch_candidates r.Autotune.fiss_sketch_candidates r.Autotune.candidates_timed
   in
   Stdio.printf
-    "wgrad: backend=%s arm=%s dims=%d,%d,%d,%d loops=[%s] compile_s=%.2f ms=%.4f checksum=%h%s\n%!"
+    "wgrad: backend=%s arm=%s dims=%d,%d,%d,%d loops=[%s] compile_s=%.2f %s timing=%s checksum=%h%s\n\
+     %!"
     backend
     (if tune then "tuned" else if require_seeded then "seeded" else "default")
     nb ns no ni
     (String.concat ~sep:"," (List.map !loops ~f:Int.to_string))
-    compile_s !best checksum tuned;
+    compile_s
+    (Bench_retime.spread_fields ~name:"ms" spread)
+    (Autotune.timing_string timing) checksum tuned;
   ignore
     (H.time_shipped_segments ~repeats ~ctx ~bindings:Ir.Indexing.Empty [ routine ]
       : (float, string) Result.t list)

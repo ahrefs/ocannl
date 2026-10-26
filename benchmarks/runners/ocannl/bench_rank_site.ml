@@ -121,55 +121,58 @@ let () =
      plan's content digest included, gh-ocannl-1477): a pick of ["seeded"] is joined to a timing
      only where the timed seed is this very plan -- a profile's [auto] gate can seed a different
      plan than the timing cell's pinned threshold. *)
-  (if Option.equal String.equal (Stdlib.Sys.getenv_opt "BENCH_PICK") (Some "1") then
-     let seeded_label =
-       let limits = Context.hardware_limits ctx in
-       let caps = Context.codegen_capabilities ctx in
-       match
-         Autotune.seeded_plan ~capabilities:caps ~backend:(Context.backend_name ctx) ~limits
-           ~accum_prec:caps.Ir.Backend_intf.accum_prec ~static_indices:[]
-           (Context.lowered_for_decisions ~name:(name ^ "_pick") ctx comp Ir.Indexing.Empty)
-       with
-       | Some plan -> Autotune.seeded_plan_label plan
-       | None -> "none"
-     in
-     let pick = ref None in
-     let pick_ctx, pick_routine =
-       Autotune.model_default ~name:(name ^ "_pick")
-         ~report:(fun c -> pick := Some c)
-         ctx comp Ir.Indexing.Empty
-     in
-     (* gh-ocannl-1479: the pick timed by itself, beside the configuration's untuned plan
-        ([Autotune.seeded_default]: the seeded plan, or the default where nothing seeds) timed the
-        same way -- a pick the timing cell never timed still gets a measured comparison. Best of
-        [BENCH_PICK_REPEATS] (default 20) synced runs after a warm-up. *)
-     let repeats =
-       Option.value_map (Stdlib.Sys.getenv_opt "BENCH_PICK_REPEATS") ~default:20 ~f:Int.of_string
-     in
-     let time run_ctx routine =
-       Context.sync (Context.run run_ctx routine);
-       let best = ref Float.infinity in
-       for _ = 1 to repeats do
-         let t0 = Mtime_clock.counter () in
-         Context.sync (Context.run run_ctx routine);
-         best := Float.min !best (Mtime.Span.to_float_ns (Mtime_clock.count t0) /. 1e6)
-       done;
-       !best
-     in
-     let pick_ms = time pick_ctx pick_routine in
-     let untuned_ctx, untuned_routine =
-       Autotune.seeded_default ~name:(name ^ "_untuned") ctx comp Ir.Indexing.Empty
-     in
-     let untuned_ms = time untuned_ctx untuned_routine in
-     match !pick with
-     | None -> Stdio.printf "rank-site: pick site=%s no report\n%!" site
-     | Some c ->
-         Stdio.printf
-           "rank-site: pick site=%s label=%S rank_ms=%s seeded_label=%S pick_ms=%.6f \
-            untuned_ms=%.6f pick_over_untuned=%.3f\n\
-            %!"
-           site c.Autotune.mc_label (ms c.mc_rank_ms) seeded_label pick_ms untuned_ms
-           (pick_ms /. untuned_ms));
+  if Option.equal String.equal (Stdlib.Sys.getenv_opt "BENCH_PICK") (Some "1") then (
+    let seeded_label =
+      let limits = Context.hardware_limits ctx in
+      let caps = Context.codegen_capabilities ctx in
+      match
+        Autotune.seeded_plan ~capabilities:caps ~backend:(Context.backend_name ctx) ~limits
+          ~accum_prec:caps.Ir.Backend_intf.accum_prec ~static_indices:[]
+          (Context.lowered_for_decisions ~name:(name ^ "_pick") ctx comp Ir.Indexing.Empty)
+      with
+      | Some plan -> Autotune.seeded_plan_label plan
+      | None -> "none"
+    in
+    let pick = ref None in
+    let pick_ctx, pick_routine =
+      Autotune.model_default ~name:(name ^ "_pick")
+        ~report:(fun c -> pick := Some c)
+        ctx comp Ir.Indexing.Empty
+    in
+    (* gh-ocannl-1479: the pick timed by itself, beside the configuration's untuned plan
+       ([Autotune.seeded_default]: the seeded plan, or the default where nothing seeds) timed the
+       same way -- a pick the timing cell never timed still gets a measured comparison. Both are
+       re-timed together by [Bench_retime] (gh-ocannl-1524): BENCH_RETIME_CALLS (default 6)
+       independent [Autotune.time_routine] calls each, interleaved, so the ratio is paired call by
+       call and carries its range. *)
+    if Option.is_some (Stdlib.Sys.getenv_opt "BENCH_PICK_REPEATS") then
+      failwith
+        "bench_rank_site: BENCH_PICK_REPEATS is retired; the pick is re-timed by Bench_retime \
+         (BENCH_RETIME_CALLS timing calls per routine, gh-ocannl-1524)";
+    let untuned_ctx, untuned_routine =
+      Autotune.seeded_default ~name:(name ^ "_untuned") ctx comp Ir.Indexing.Empty
+    in
+    let timing, readings =
+      Bench_retime.retime [ (pick_ctx, pick_routine); (untuned_ctx, untuned_routine) ]
+    in
+    let pick_r, untuned_r = match readings with [ p; u ] -> (p, u) | _ -> assert false in
+    let pick_s = Bench_retime.spread_of pick_r and untuned_s = Bench_retime.spread_of untuned_r in
+    match !pick with
+    | None -> Stdio.printf "rank-site: pick site=%s no report\n%!" site
+    | Some c ->
+        (* [pick_ms=... untuned_ms=...] stay adjacent and first: gh1442_agreement.py reads them
+           so. *)
+        Stdio.printf
+          "rank-site: pick site=%s label=%S rank_ms=%s seeded_label=%S pick_ms=%.6f \
+           untuned_ms=%.6f %s %s %s timing=%s\n\
+           %!"
+          site c.Autotune.mc_label (ms c.mc_rank_ms) seeded_label pick_s.Bench_retime.ms
+          untuned_s.Bench_retime.ms
+          (Bench_retime.ratio_fields ~name:"pick_over_untuned"
+             (Bench_retime.paired_ratio ~num:pick_r ~den:untuned_r))
+          (Bench_retime.bounds_fields ~name:"pick_ms" pick_s)
+          (Bench_retime.bounds_fields ~name:"untuned_ms" untuned_s)
+          (Autotune.timing_string timing));
   if tune then
     let report = ref None in
     let _ctx, _routine =

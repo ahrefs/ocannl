@@ -9,18 +9,28 @@
 
    Usage: bench_strided_1x1.exe SITE... [ocannl configuration flags], each SITE as
    [name=b,h,w,ic,oc]: a [b]-image [h x w x ic] input, [oc] out-channels, at stride 2 (the output is
-   [h/2 x w/2]). BENCH_REPEATS is the number of synced runs a shipped routine is timed over, min
-   taken (default 50). BENCH_TUNE=0 skips the tuned arm (the census and the untuned arm only).
+   [h/2 x w/2]). BENCH_TUNE=0 skips the tuned arm (the census and the untuned arm only).
+   BENCH_RETIME_CALLS is the number of timing calls per arm (default 6, even, at least 4).
 
    Prints, per site, one [s1x1-site:] line -- the classifier's roles (the row's extent and stride,
    the batch loops outside and inside it) and the whole-routine seed count under the device's own
    limits -- then one [s1x1:] line per arm: [default] (the untuned compile,
    [Bench_harness.compile_default], so it honours [model_default_schedule]) and [tuned]
-   ([Autotune.tune] from an empty schedule cache, with its crowned label and counters). Each arm's
-   [ms] is the min-of-repeats synced time of the shipped routine. Inputs are small integers, so
-   every product and sum is exact in f32 whatever the schedule: [exact] is the shipped routine's
-   output against a host oracle reading the input at the stride, and the runner exits 1 when an arm
-   disagrees. *)
+   ([Autotune.tune] from an empty schedule cache, with its crowned label and counters). Both arms
+   are compiled first and then re-timed together ([Bench_retime], gh-ocannl-1524): each reading is
+   one [Autotune.time_routine] call under the configured [autotune_timing] -- the tuner's own
+   protocol, so on cc a 6-50 us site is timed in batches of up to 200 launches per synchronization
+   rather than one -- and the arms' calls are interleaved. An arm's [ms] is the median of its
+   readings, [ms_lo]/[ms_hi] their range and [ms_retimed] how many the admission gate kept; with
+   both arms an [s1x1-ratio:] line gives tuned over default, paired call by call, with its range and
+   whether every pair fell on one side of 1. Each arm also prints a [bench-result:] line (variant
+   [<site>/<arm>], the median), so [benchmarks/ab.py] can pair two builds of this runner round by
+   round -- the way to A/B a classifier change (gh-ocannl-1397 read a single min-of-200 synced
+   re-timing instead, and its unchanged control moved 0.69x). Inputs are small integers, so every
+   product and sum is exact in f32 whatever the schedule: [exact] is the shipped routine's output,
+   after its timing, against a host oracle reading the input at the stride, and the runner exits 1
+   when an arm disagrees -- else 3, the drivers' host-contention verdict, when an arm kept too few
+   admitted readings to state its spread. *)
 
 open Base
 open Ocannl
@@ -88,19 +98,7 @@ let oracle (_, b, h, w, ic, oc) =
         (List.range 0 ic)
         ~f:(fun c -> x_val bi (2 * i) (2 * j) c *. k_val o c))
 
-let time_routine ~repeats ctx routine =
-  let ctx = Context.run ctx routine in
-  Context.sync ctx;
-  let best = ref Float.infinity in
-  for _ = 1 to repeats do
-    let t0 = Unix.gettimeofday () in
-    let ctx = Context.run ctx routine in
-    Context.sync ctx;
-    best := Float.min !best ((Unix.gettimeofday () -. t0) *. 1000.)
-  done;
-  !best
-
-let bench_site ~failed ~repeats ~tune ((name, b, h, w, ic, oc) as site) =
+let bench_site ~failed ~unstated ~tune ((name, b, h, w, ic, oc) as site) =
   let want = oracle site in
   let ctx = Context.auto () in
   let backend = Context.backend_name ctx in
@@ -142,35 +140,61 @@ let bench_site ~failed ~repeats ~tune ((name, b, h, w, ic, oc) as site) =
     let y, comp = build site in
     let report = ref None in
     let t0 = Unix.gettimeofday () in
-    let ctx, routine = compile ~report ctx comp in
-    let compile_s = Unix.gettimeofday () -. t0 in
-    let best = time_routine ~repeats ctx routine in
-    let ctx = Context.run ctx routine in
-    let got = Context.get_values ctx y.Tensor.value in
-    let exact =
-      Array.length got = Array.length want && Array.for_all2_exn got want ~f:Float.equal
-    in
-    if not exact then failed := true;
-    let tuned =
-      match !report with
-      | None -> ""
-      | Some r ->
-          Printf.sprintf
-            " outcome=%s crowned=%s best_ms=%.4f sketch_candidates=%d timed=%d failed=%d"
-            (Autotune.outcome_name r.Autotune.outcome)
-            r.Autotune.best_label r.Autotune.best_ms r.Autotune.sketch_candidates
-            r.Autotune.candidates_timed r.Autotune.candidates_failed
-    in
-    Stdio.printf "s1x1: backend=%s site=%s arm=%s compile_s=%.2f ms=%.4f exact=%b%s\n%!" backend
-      name label compile_s best exact tuned;
-    Context.release ctx
+    let arm_ctx, routine = compile ~report ctx comp in
+    (label, y, report, Unix.gettimeofday () -. t0, arm_ctx, routine)
   in
-  arm "default" (fun ~report:_ ctx comp -> Bench_harness.compile_default ctx comp Ir.Indexing.Empty);
-  if tune then
-    arm "tuned" (fun ~report ctx comp ->
-        Autotune.tune ~name ~search:true ~cache_dir:""
-          ~report:(fun r -> report := Some r)
-          ctx comp Ir.Indexing.Empty);
+  let arms =
+    arm "default" (fun ~report:_ ctx comp ->
+        Bench_harness.compile_default ctx comp Ir.Indexing.Empty)
+    ::
+    (if tune then
+       [
+         arm "tuned" (fun ~report ctx comp ->
+             Autotune.tune ~name ~search:true ~cache_dir:""
+               ~report:(fun r -> report := Some r)
+               ctx comp Ir.Indexing.Empty);
+       ]
+     else [])
+  in
+  let timing, readings =
+    Bench_retime.retime (List.map arms ~f:(fun (_, _, _, _, c, r) -> (c, r)))
+  in
+  List.iter2_exn arms readings ~f:(fun (label, y, report, compile_s, arm_ctx, routine) readings ->
+      let spread = Bench_retime.spread_of readings in
+      let arm_ctx = Context.run arm_ctx routine in
+      let got = Context.get_values arm_ctx y.Tensor.value in
+      let exact =
+        Array.length got = Array.length want && Array.for_all2_exn got want ~f:Float.equal
+      in
+      if not exact then failed := true;
+      if spread.Bench_retime.admitted < Bench_retime.min_readings then unstated := true;
+      let tuned =
+        match !report with
+        | None -> ""
+        | Some r ->
+            Printf.sprintf
+              " outcome=%s crowned=%s best_ms=%.4f sketch_candidates=%d timed=%d failed=%d"
+              (Autotune.outcome_name r.Autotune.outcome)
+              r.Autotune.best_label r.Autotune.best_ms r.Autotune.sketch_candidates
+              r.Autotune.candidates_timed r.Autotune.candidates_failed
+      in
+      Stdio.printf "s1x1: backend=%s site=%s arm=%s compile_s=%.2f %s timing=%s exact=%b%s\n%!"
+        backend name label compile_s
+        (Bench_retime.spread_fields ~name:"ms" spread)
+        (Autotune.timing_string timing) exact tuned;
+      Bench_out.result
+        ~variant:(name ^ "/" ^ label)
+        ~check:
+          (if exact then Bench_out.Passed
+           else Bench_out.Failed "the shipped routine disagrees with the host oracle")
+        ~seconds:(spread.Bench_retime.ms /. 1000.);
+      Context.release arm_ctx);
+  (match readings with
+  | [ default; tuned ] ->
+      Stdio.printf "s1x1-ratio: backend=%s site=%s %s\n%!" backend name
+        (Bench_retime.ratio_fields ~name:"tuned_over_default"
+           (Bench_retime.paired_ratio ~num:tuned ~den:default))
+  | _ -> ());
   (* Device buffers live in backend pool tables no finalizer reclaims: each site's root context is
      released before the next site's. *)
   Context.release ctx
@@ -188,10 +212,22 @@ let () =
   in
   if List.is_empty sites then
     failwith "usage: bench_strided_1x1.exe name=b,h,w,ic,oc ... [ocannl configuration flags]";
-  let repeats =
-    Option.value_map (Stdlib.Sys.getenv_opt "BENCH_REPEATS") ~default:50 ~f:Int.of_string
-  in
+  (* gh-ocannl-1524: the single min-of-BENCH_REPEATS re-timing is gone; a stale setting is refused
+     rather than silently ignored. *)
+  if Option.is_some (Stdlib.Sys.getenv_opt "BENCH_REPEATS") then
+    failwith
+      "bench_strided_1x1: BENCH_REPEATS is retired; the arms are re-timed by Bench_retime \
+       (BENCH_RETIME_CALLS timing calls per arm, gh-ocannl-1524)";
   let tune = not (Option.equal String.equal (Stdlib.Sys.getenv_opt "BENCH_TUNE") (Some "0")) in
-  let failed = ref false in
-  List.iter sites ~f:(bench_site ~failed ~repeats ~tune);
-  if !failed then Stdlib.exit 1
+  let failed = ref false and unstated = ref false in
+  List.iter sites ~f:(bench_site ~failed ~unstated ~tune);
+  if !failed then Stdlib.exit 1;
+  (* Exit 3 is the benchmark drivers' host-contention verdict (benchmarks/bin_cells.py): the box's,
+     not the treatment's. *)
+  if !unstated then (
+    Stdio.eprintf
+      "bench_strided_1x1: an arm kept fewer than %d admitted readings, so its spread is unstated \
+       (host contention); refusing the measurement\n\
+       %!"
+      Bench_retime.min_readings;
+    Stdlib.exit 3)

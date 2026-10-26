@@ -80,6 +80,9 @@ def unescape(text):
 
 
 PICK_TIMED = re.compile(r' pick_ms=(\S+) untuned_ms=(\S+)')
+# gh-ocannl-1524: the runner's own paired ratio with its range, when the line carries it.
+PICK_RATIO = re.compile(r' pick_over_untuned=(\S+) pick_over_untuned_lo=(\S+)'
+                        r' pick_over_untuned_hi=(\S+) pick_over_untuned_resolved=(\S+)')
 
 
 def pick_of(path):
@@ -94,13 +97,22 @@ def pick_of(path):
 
 def pick_timing(path):
     """gh-ocannl-1479: the pick cell's own timing of the pick and of its configuration's untuned
-    plan (one harness, one process), or None for an older pick line."""
+    plan (one harness, one process), or None for an older pick line or one whose times are not
+    admitted measurements (NaN: every timing call refused). Since gh-ocannl-1524 the times
+    are medians of a re-timing session, and the third element is the session's paired ratio with
+    its range as the line prints it (ratio, lo, hi, resolved), or None for an older line."""
     with open(path) as f:
         for line in f:
             if PICK.search(line):
                 m = PICK_TIMED.search(line)
                 if m:
-                    return float(m.group(1)), float(m.group(2))
+                    pick_ms, untuned_ms = float(m.group(1)), float(m.group(2))
+                    # A re-timing whose every call the admission gate refused prints `nan`: no
+                    # measurement, so it cannot stand in for a timed row.
+                    if not all(math.isfinite(t) and t > 0 for t in (pick_ms, untuned_ms)):
+                        return None
+                    r = PICK_RATIO.search(line)
+                    return pick_ms, untuned_ms, (r.groups() if r else None)
     return None
 
 
@@ -116,8 +128,15 @@ def report_pick(name, path, times, required):
              if lbl.startswith(("W_sketch[", "F_seeded[")) or lbl == "baseline"]
     best = min(whole) if whole else min(times.values())
     own = pick_timing(path)
-    own_text = (f" own: pick_ms={own[0]:.6f} untuned_ms={own[1]:.6f}"
-                f" pick_over_untuned={own[0] / own[1]:.3f}" if own is not None else "")
+    if own is None:
+        own_text = ""
+    elif own[2] is None:
+        own_text = (f" own: pick_ms={own[0]:.6f} untuned_ms={own[1]:.6f}"
+                    f" pick_over_untuned={own[0] / own[1]:.3f}")
+    else:
+        ratio, lo, hi, resolved = own[2]
+        own_text = (f" own: pick_ms={own[0]:.6f} untuned_ms={own[1]:.6f}"
+                    f" pick_over_untuned={ratio} [{lo}, {hi}] resolved={resolved}")
 
     def over_best(row):
         return (f" pick_over_best={times[row] / best:.3f}" if row is not None else "") + own_text

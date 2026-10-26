@@ -741,6 +741,12 @@ files.
   the second draw: under scripted noise, when round offsets dominate, the shortlist round recovers
   the true best every time the shortlist holds it. With i.i.d. noise only, the two rules tie
   (`test/operations/bench_select`).
+- A post-compile re-timing of a kernel under ~50 us is a spread, never one minimum (gh-ocannl-1524):
+  a single min-of-200 synchronized reading on cc moved an unchanged control 0.69x between two
+  builds. Re-time through `Bench_retime` -- several independent `Autotune.time_routine` calls (the
+  tuner's queued protocol, which amortizes the sync), routines interleaved, ratios PAIRED call by
+  call -- and claim a difference only where the paired range excludes 1. Across builds, pair whole
+  processes (`ab.py`); the in-process range does not include the between-process variance.
 - An effect smaller than the variance between two independent searches (on `gpt2_mini` that
   variance is several percent of a step, gh-ocannl-1165) is measured by SPLICING, not by comparing
   two searched schedules: both arms replay the control's winner except at the target segments
