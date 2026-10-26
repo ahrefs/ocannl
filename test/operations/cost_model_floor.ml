@@ -4,19 +4,20 @@
    extraction ([analyze]).
 
    - pointwise map: all accesses exact, floor = upper on both legs; - matmul with an rmw
-   accumulator: exact when closed; opening the accumulator's placement attributes the whole producer
-   — its ops and operand reads — to the open level, and committing (re-evaluation with the narrowed
-   open set) recovers the closed floor, monotone in refinement; - guarded write: the floor counts
-   guards-never-taken (condition ops only, no write traffic) where the upper counts guards-taken —
-   [fr_exact] false; - two reads of one node: pairwise provably-disjoint exact images sum in both
-   extractions (gh-ocannl-578); possibly-overlapping ones keep the asymmetry — the floor takes the
-   larger exact image (a union is at least its largest member, flagged loose) where the upper takes
-   the capped sum; - short-circuiting forms: Where arms, And/Or right operands (conditional —
-   cheaper-arm / left-operand floors, conditional reads zeroed — but an arm's hoisted scope body is
-   certain work in both extractions, gh-ocannl-637) and Arg1/Arg2 discarded operands (never rendered
-   at all, so absent from both extractions); - the over-producing open producer, dead loops, and the
-   dynamic gather, whose floor counts the projection onto its known coordinates (gh-ocannl-1601)
-   where the upper falls back to the whole node.
+   accumulator: the floor leaves out the accumulator's read of its own cell, which a privatizing
+   completion never performs (gh-ocannl-1601); opening the accumulator's placement attributes the
+   whole producer — its ops and operand reads — to the open level, and committing (re-evaluation
+   with the narrowed open set) recovers the closed floor, monotone in refinement; - guarded write:
+   the floor counts guards-never-taken (condition ops only, no write traffic) where the upper counts
+   guards-taken — [fr_exact] false; - two reads of one node: pairwise provably-disjoint exact images
+   sum in both extractions (gh-ocannl-578); possibly-overlapping ones keep the asymmetry — the floor
+   takes the larger exact image (a union is at least its largest member, flagged loose) where the
+   upper takes the capped sum; - short-circuiting forms: Where arms, And/Or right operands
+   (conditional — cheaper-arm / left-operand floors, conditional reads zeroed — but an arm's hoisted
+   scope body is certain work in both extractions, gh-ocannl-637) and Arg1/Arg2 discarded operands
+   (never rendered at all, so absent from both extractions); - the over-producing open producer,
+   dead loops, and the dynamic gather, whose floor counts the projection onto its known coordinates
+   (gh-ocannl-1601) where the upper falls back to the whole node.
 
    The last section pins the classifier those short-circuiting cases now read from
    ([Ops.binop_conditionality] / [Ops.ternop_conditionality], gh-ocannl-582) and its agreement with
@@ -66,9 +67,11 @@ let () =
             (LL.Binop (Ops.Add, (get a [| it i; it j |], sp), (get b [| it j |], sp)))))
   in
   let _ = show "pointwise map" pointwise in
-  (* 4x5x6 matmul, rmw accumulator: D[i][j] += A2[i][k] * B2[k][j]. Exact both ways: flops = 2*4*5*6
-     = 240; bytes = A2 96 + B2 120 + D rd 80 + D wr 80 = 376. Opening D's placement drops its 160
-     bytes; node_floor_bytes D restores them — the Materialize delta. *)
+  (* 4x5x6 matmul, rmw accumulator: D[i][j] += A2[i][k] * B2[k][j]. The upper extraction is exact:
+     flops = 2*4*5*6 = 240; bytes = A2 96 + B2 120 + D rd 80 + D wr 80 = 376. The floor leaves out
+     D's read of its own cell — a privatizing schedule accumulates in a register and never performs
+     it (gh-ocannl-1601) — so 296, inexact. Opening D's placement drops its write too; committing D
+     restores it. *)
   let a2 = fresh_tn "A2" [| 4; 6 |] in
   let b2 = fresh_tn "B2" [| 6; 5 |] in
   let d = fresh_tn "D" [| 4; 5 |] in
@@ -480,11 +483,12 @@ let () =
     show (Printf.sprintf "window read, stride %d, O=%d, K=%d" stride o k) code
   in
   let f1 = window_program ~stride:1 ~o:8 ~k:3 in
-  (* A 40 B, B rd 32 B, B wr 32 B. *)
-  Verdict.p "  the unit-stride window's input read floors at its whole image" (f1.CM.fr_bytes = 104);
+  (* A 40 B, B wr 32 B; B's accumulation self-read is not certain (a privatizing completion skips
+     it). *)
+  Verdict.p "  the unit-stride window's input read floors at its whole image" (f1.CM.fr_bytes = 72);
   let f2 = window_program ~stride:2 ~o:8 ~k:3 in
-  (* A 68 B, B rd 32 B, B wr 32 B. *)
-  Verdict.p "  the stride-2 window's input read floors at its whole image" (f2.CM.fr_bytes = 132)
+  (* A 68 B, B wr 32 B. *)
+  Verdict.p "  the stride-2 window's input read floors at its whole image" (f2.CM.fr_bytes = 100)
 
 (* gh-ocannl-582: the classifier the cases above read from. The table is printed over [Ops]' derived
    enumeration, so adding an operator is a visible promotion diff here whether or not anyone

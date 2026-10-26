@@ -88,7 +88,29 @@ let access_cells ?(fixed = fun (_ : Idx.symbol) -> false) (a : Tn.t Affine.acces
         let disjoint_runs = Affine.vec_runs_disjoint ~dims a in
         ( min node_cells (image * max 1 a.a_vec_len),
           (not (exact_image && disjoint_runs)) || a.a_guarded )
-    | None -> (min node_cells image, (not exact_image) || a.a_guarded)
+    | None when exact_image -> (min node_cells image, a.a_guarded)
+    | None when uninterpretable -> (min node_cells image, true)
+    | None ->
+        (* gh-ocannl-1601: a non-injective interpretable map — an overlapping window's [s*o + d*k] —
+           touches, per coordinate, at most the values between its extremes: [span + 1], where the
+           span is [sum |c| * (w - 1)]. The coordinates' ranges multiply into a box holding the
+           image, so their product is an upper bound beside [box / fiber]; it is what keeps a padded
+           input's unread margin (the window's image is one row short of a buffer padded [1, 2]) off
+           the charge. Where it meets the lower bound {!Affine.image_cardinality_lb} (a unit-stride
+           or stride-at-most-window window), the count is exact. *)
+        let v = Affine.view ~dims a.a_map in
+        let width s = List.Assoc.find domain s ~equal:Idx.equal_symbol |> Option.value ~default:1 in
+        let range_ub =
+          Array.fold v ~init:1 ~f:(fun acc -> function
+            | Affine.Known { terms; size; _ } ->
+                let span =
+                  List.sum (module Int) terms ~f:(fun (c, s) -> Int.abs c * (max 1 (width s) - 1))
+                in
+                acc * min size (span + 1)
+            | Affine.Unknown { size; _ } -> acc * size)
+        in
+        let ub = min node_cells (min image range_ub) in
+        (ub, a.a_guarded || Affine.image_cardinality_lb ~domain v < ub)
 
 (* Same-node accesses whose images provably share no cell: the union of their images is then the sum
    of their cardinalities. *)
@@ -595,11 +617,28 @@ let completion_floor ?(open_placement = fun _ -> false) (code : Low_level.t) : f
         cell := a :: !cell);
   let bytes =
     Hashtbl.fold tbl ~init:0 ~f:(fun ~key:tn ~data:accs acc ->
+        let writes, reads = List.partition_tf !accs ~f:(fun a -> a.Affine.a_write) in
+        (* An accumulation's read of its own cell ([C[i] = C[i] + ...], the read in the rmw write's
+           statement at the write's own position) is not certain in every completion: a privatizing
+           schedule ([Schedule.Privatize], the blocktile pipelines) accumulates in a register
+           initialized to the reduction's neutral element and stores the target once, never reading
+           it (gh-ocannl-1601: the composed-floor oracle over the matmul family's applied leaves
+           caught the floor above a blocktile leaf's analyzed bytes). *)
+        let self_read (a : Tn.t Affine.access) =
+          match a.a_stmt_write with
+          | Some w_map ->
+              Array.equal Idx.equal_axis_index w_map a.a_map
+              && List.exists writes ~f:(fun (w : Tn.t Affine.access) ->
+                  w.a_rmw && Affine.same_statement w.a_path a.a_path)
+          | None -> false
+        in
         let direction accs =
           let counted =
             List.map accs ~f:(fun a ->
                 let cells, exact = access_cells_floor a in
-                let cells = if (not a.a_write) && read_uncertain a.a_tn then 0 else cells in
+                let cells =
+                  if (not a.a_write) && (read_uncertain a.a_tn || self_read a) then 0 else cells
+                in
                 if cells = 0 || not exact then inexact := true;
                 (a, cells))
           in
@@ -612,7 +651,6 @@ let completion_floor ?(open_placement = fun _ -> false) (code : Low_level.t) : f
             List.fold nz ~init:0 ~f:(fun m (_, c) -> max m c)
           end
         in
-        let writes, reads = List.partition_tf !accs ~f:(fun a -> a.Affine.a_write) in
         let width = Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec) in
         acc + ((direction reads + direction writes) * width))
   in

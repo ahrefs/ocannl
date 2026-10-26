@@ -3,7 +3,7 @@
   upper: flops=20 bytes=180
   floor <= upper: true
 == matmul (rmw accumulator) ==
-  floor: flops=240 bytes=376 exact
+  floor: flops=240 bytes=296 inexact
   upper: flops=240 bytes=376
   floor <= upper: true
 == matmul, D's placement open ==
@@ -76,12 +76,12 @@
   a non-overlapping stride-4 window counts O*K (8*3): true
   2*x + 4*y over 3x3 counts its 7 values (the gcd normalization): true
 == window read, stride 1, O=8, K=3 ==
-  floor: flops=24 bytes=104 inexact
+  floor: flops=24 bytes=72 inexact
   upper: flops=24 bytes=104
   floor <= upper: true
   the unit-stride window's input read floors at its whole image: true
 == window read, stride 2, O=8, K=3 ==
-  floor: flops=24 bytes=132 inexact
+  floor: flops=24 bytes=100 inexact
   upper: flops=24 bytes=132
   floor <= upper: true
   the stride-2 window's input read floors at its whole image: true
