@@ -9,11 +9,24 @@
   <span><span class="label">bk</span>:<span class="xref-unresolved">Base__Int</span>.t <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">ni</span>:<span class="xref-unresolved">Base__Int</span>.t <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">nk</span>:<span class="xref-unresolved">Base__Int</span>.t <span class="arrow">&#45;&gt;</span></span>
-  <span>string option</span></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-packed_schedule"><a href="#val-packed_schedule" class="anchor"></a><code><span><span class="keyword">val</span> packed_schedule : 
+  <span>string option</span></span></code></div></div><div class="odoc-spec"><div class="spec type anchored" id="type-b_pack"><a href="#type-b_pack" class="anchor"></a><code><span><span class="keyword">type</span> b_pack</span><span> = </span></code><ol><li id="type-b_pack.Per_row_block" class="def variant constructor anchored"><a href="#type-b_pack.Per_row_block" class="anchor"></a><code><span>| </span><span><span class="constructor">Per_row_block</span></span></code></li><li id="type-b_pack.Once" class="def variant constructor anchored"><a href="#type-b_pack.Once" class="anchor"></a><code><span>| </span><span><span class="constructor">Once</span></span></code></li></ol></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-whole_b_bytes_cap"><a href="#val-whole_b_bytes_cap" class="anchor"></a><code><span><span class="keyword">val</span> whole_b_bytes_cap : <span class="xref-unresolved">Base__Int</span>.t</span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-grid_b_pack"><a href="#val-grid_b_pack" class="anchor"></a><code><span><span class="keyword">val</span> grid_b_pack : 
+  <span><span class="label">elem_bytes</span>:<span class="xref-unresolved">Base__Int</span>.t <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">stage_a</span>:bool <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">bm</span>:<span class="xref-unresolved">Base__Int</span>.t <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">bk</span>:<span class="xref-unresolved">Base__Int</span>.t <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">ni</span>:<span class="xref-unresolved">Base__Int</span>.t <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">nj</span>:<span class="xref-unresolved">Base__Int</span>.t <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">nk</span>:<span class="xref-unresolved">Base__Int</span>.t <span class="arrow">&#45;&gt;</span></span>
+  <a href="#type-b_pack">b_pack</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-k_block_split"><a href="#val-k_block_split" class="anchor"></a><code><span><span class="keyword">val</span> k_block_split : 
+  <span><span class="label">nk</span>:<span class="xref-unresolved">Base__Int</span>.t <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">bk</span>:<span class="xref-unresolved">Base__Int</span>.t <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">k_o</span>:<a href="../../arrayjit/Ir/Indexing/index.html#type-symbol">Ir.Indexing.symbol</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><a href="../../arrayjit/Ir/Schedule/index.html#type-optop">Sched.optop</a> list</span></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-packed_schedule"><a href="#val-packed_schedule" class="anchor"></a><code><span><span class="keyword">val</span> packed_schedule : 
   <span><span class="label">layout</span>:<a href="#type-layout">layout</a> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?hoist_b</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?stage_a</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="label">tile_prec</span>:<span><a href="../../arrayjit/Ir/Ops/index.html#type-prec">Ir.Ops.prec</a> <span class="xref-unresolved">Base</span>.option</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?b_pack</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">tile_prec</span>:<span><a href="../../arrayjit/Ir/Ops/index.html#type-prec">Ir.Ops.prec</a> <span class="xref-unresolved">Base</span>.Option.t</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?tile</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">bm</span>:<span class="xref-unresolved">Base__Int</span>.t <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">bk</span>:<span class="xref-unresolved">Base__Int</span>.t <span class="arrow">&#45;&gt;</span></span>
