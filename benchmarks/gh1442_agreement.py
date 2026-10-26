@@ -59,7 +59,7 @@ rate the geometric mean of G/(t - W/rate) over the leaves with G > 0 whose time 
 tile-MMA part. The scalar work of a tensorized leaf (its staging copies) is left in t: a fit, not a
 decomposition. Prints `model_mma_rate=` and `model_device_gather_rate=` lines, each leaf's
 prediction W/rate + G/gather_rate beside its time, and `mma-fit: none` where a class of leaves is
-missing.
+missing (not an error: the agreement analysis goes on).
 """
 
 import argparse
@@ -199,7 +199,7 @@ MMA_TERMS = re.compile(r'rank-site: explain .*?label="((?:[^"\\]|\\.)*)" .* mma_
 
 
 def fit_mma(path, times):
-    """gh-ocannl-1495: prints the fitted tile-MMA and device-gather rates; False when unusable."""
+    """gh-ocannl-1495: prints the fitted tile-MMA and device-gather rates; False when nothing fits."""
     leaves = []
     with open(path) as f:
         for line in f:
@@ -263,8 +263,10 @@ def main():
     if not times:
         print(f"gh1442_agreement: no calibration rows in {args.tsv}", file=sys.stderr)
         return 2
-    if args.fit_mma is not None and not fit_mma(args.fit_mma, times):
-        return 2
+    if args.fit_mma is not None:
+        # A site with no timed tensorized leaf (a backend with no fp8 arm) has nothing to fit: the
+        # `mma-fit: none` line says so, and the agreement analysis goes on.
+        fit_mma(args.fit_mma, times)
     results = []
     picks_ok = True
     for spec in args.pick:
