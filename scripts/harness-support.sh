@@ -384,6 +384,38 @@ harness_require() { # executable prerequisites; missing host tools are coverage 
   done
   [ "$missing" = 0 ] || finish
 }
+# The real dune a leg runs against, the one probe every such leg shares
+# (gh-ocannl-1593): on PATH, or else through tools/opam-env.sh, which is where
+# a CI step finds setup-ocaml's switch. Found, it sets harness_dune to its path
+# and returns 0. Otherwise it sets harness_dune_absent to why there is none and
+# returns 1, and the caller skips with that reason. OCANNL_TOOL_HARNESS_NO_DUNE=1
+# hides a dune the host has, so a box with a toolchain shows the skips of the
+# toolchain-free CI job (tools/test-harnesses.sh --ci-shell sets it); any value
+# but empty, 0 or 1 is a FAIL, once, and hides it too. The opam environment is
+# sourced in a subshell, so the caller's PATH stays its own.
+harness_real_dune() {
+  harness_dune= harness_dune_absent=
+  case ${OCANNL_TOOL_HARNESS_NO_DUNE-} in
+    ''|0) ;;
+    1)
+      harness_dune_absent='dune hidden by OCANNL_TOOL_HARNESS_NO_DUNE=1, as on the toolchain-free CI job'
+      return 1 ;;
+    *)
+      harness_dune_absent="OCANNL_TOOL_HARNESS_NO_DUNE='$OCANNL_TOOL_HARNESS_NO_DUNE' is neither 0 nor 1"
+      if [ "${harness_dune_refused:-0}" != 1 ]; then
+        harness_dune_refused=1
+        report 1 'the real-dune probe: OCANNL_TOOL_HARNESS_NO_DUNE is 0 or 1' "$harness_dune_absent"
+      fi
+      return 1 ;;
+  esac
+  local opam_env
+  opam_env=$(dirname -- "${BASH_SOURCE[0]}")/../tools/opam-env.sh
+  harness_dune=$( (command -v dune >/dev/null 2>&1 || . "$opam_env" >/dev/null 2>&1
+    command -v dune) 2>/dev/null) || harness_dune=
+  [ -z "$harness_dune" ] || return 0
+  harness_dune_absent='no dune on PATH, nor through tools/opam-env.sh'
+  return 1
+}
 mutant() { # NAME AWK_PROGRAM [AWK_OPTION...], uses caller's SRC and TMP
   local program=$2 out="$TMP/$1.sh"
   shift 2

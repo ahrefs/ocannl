@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Exercise shared harness lifecycle, counted skips (and a strict run's list of
-# expected ones), the --only leg filter with its coverage account, function
-# leg bodies that abandon themselves or are abandoned at a failed errexit
-# check, and reason-specific rejection.
+# expected ones), the shared real-dune probe and its hiding switch, the --only
+# leg filter with its coverage account, function leg bodies that abandon
+# themselves or are abandoned at a failed errexit check, and reason-specific
+# rejection.
 # Usage: scripts/test-harness-support.sh [--keep] [--help]
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -25,6 +26,12 @@ case $MODE in
   abort) exit 50 ;;
   errexit) set -e; (exit 7) ;;
   unfinished) exit 0 ;;
+  dune)
+    # Asked twice, as several legs of one harness ask it.
+    for asked in 1 2; do
+      if harness_real_dune; then echo "FOUND $harness_dune"; else echo "ABSENT $harness_dune_absent"; fi
+    done
+    echo "PATH $PATH" ;;
   legs)
     # Each body leaves a trace, so a filtered leg is seen not to have run.
     if harness_leg 'alpha leg #odd'; then echo alpha >>"$RECORD.ran"; report 0 'alpha body'; fi
@@ -76,7 +83,7 @@ export SUPPORT=$HERE/harness-support.sh RECORD=$TMP/record MODE=pass
 # The probes' skip verdict is the subject; an ambient strict mode, or an
 # ambient list of expected skips, is not.
 unset OCANNL_TOOL_HARNESS_STRICT OCANNL_TOOL_HARNESS_EXPECTED_SKIPS \
-  OCANNL_TOOL_HARNESS_NAME OCANNL_TOOL_HARNESS_SKIP_RECORD
+  OCANNL_TOOL_HARNESS_NAME OCANNL_TOOL_HARNESS_SKIP_RECORD OCANNL_TOOL_HARNESS_NO_DUNE
 probe() {
   local rc=0
   bash "$TMP/probe.sh" "$@" >"$TMP/out" 2>&1 || rc=$?
@@ -124,6 +131,61 @@ for control in name record; do
     report 0 "strict mode lists nothing without the matching $control"
   else report 1 "strict mode lists nothing without the matching $control" "exit $rc; $(cat "$TMP/out")"; fi
 done
+# The shared real-dune probe (gh-ocannl-1593), on a copy of the support file
+# whose tools/opam-env.sh puts a stand-in dune on PATH: found through that
+# environment, the caller's PATH left its own; hidden by
+# OCANNL_TOOL_HARNESS_NO_DUNE=1 with the reason a skip prints; any other value
+# one FAIL however often the probe is asked; and a twin that never reads the
+# switch finds the dune it should hide, so the hidden check sees the switch.
+dune_repo=$TMP/dune-repo
+mkdir -p "$dune_repo/scripts" "$dune_repo/tools" "$dune_repo/opam-bin" "$TMP/dune-twin/scripts"
+cp "$HERE/harness-support.sh" "$dune_repo/scripts/harness-support.sh"
+printf '#!/bin/sh\nexit 0\n' >"$dune_repo/opam-bin/dune"
+chmod +x "$dune_repo/opam-bin/dune"
+printf 'PATH="%s:$PATH"\n' "$dune_repo/opam-bin" >"$dune_repo/tools/opam-env.sh"
+cp -R "$dune_repo/tools" "$TMP/dune-twin/" # its environment finds the same stand-in
+sed 's/case ${OCANNL_TOOL_HARNESS_NO_DUNE-} in/case "" in/' "$HERE/harness-support.sh" \
+  >"$TMP/dune-twin/scripts/harness-support.sh"
+dune_probe() { # SUPPORT_ROOT [SWITCH_VALUE]
+  local rc=0
+  (
+    [ $# -lt 2 ] || export OCANNL_TOOL_HARNESS_NO_DUNE="$2"
+    SUPPORT=$1/scripts/harness-support.sh PATH=/usr/bin:/bin MODE=dune "$BASH" "$TMP/probe.sh"
+  ) >"$TMP/out" 2>&1 || rc=$?
+  return "$rc"
+}
+found="FOUND $dune_repo/opam-bin/dune"
+hidden='ABSENT dune hidden by OCANNL_TOOL_HARNESS_NO_DUNE=1, as on the toolchain-free CI job'
+if PATH=/usr/bin:/bin command -v dune >/dev/null 2>&1; then
+  skip 'the real-dune probe finds a dune through the opam environment beside it' \
+    'a dune in the system directories: the probe never sources the opam environment'
+elif cmp -s "$HERE/harness-support.sh" "$TMP/dune-twin/scripts/harness-support.sh"; then
+  report 1 'the real-dune probe: its switch-blind twin' 'the switch could not be cut out of harness-support.sh'
+else
+  for value in unset 0; do
+    case $value in unset) dune_probe "$dune_repo" ;; *) dune_probe "$dune_repo" "$value" ;; esac; rc=$?
+    if [ "$rc" = 0 ] && [ "$(grep -cxF -- "$found" "$TMP/out")" = 2 ] \
+       && grep -qxF 'PATH /usr/bin:/bin' "$TMP/out" && grep -q 'all legs passed (0 skipped)' "$TMP/out"; then
+      report 0 "the real-dune probe finds a dune through the opam environment, the switch $value"
+    else report 1 "the real-dune probe finds a dune through the opam environment, the switch $value" "exit $rc; $(cat "$TMP/out")"; fi
+  done
+  dune_probe "$dune_repo" 1; rc=$?
+  if [ "$rc" = 0 ] && [ "$(grep -cxF -- "$hidden" "$TMP/out")" = 2 ] && ! grep -q '^FOUND' "$TMP/out" \
+     && grep -q 'all legs passed (0 skipped)' "$TMP/out"; then
+    report 0 'OCANNL_TOOL_HARNESS_NO_DUNE=1 hides the dune, naming itself as the reason'
+  else report 1 'OCANNL_TOOL_HARNESS_NO_DUNE=1 hides the dune, naming itself as the reason' "exit $rc; $(cat "$TMP/out")"; fi
+  dune_probe "$dune_repo" yes; rc=$?
+  if [ "$rc" = 1 ] && [ "$(grep -c '^FAIL  ' "$TMP/out")" = 1 ] \
+     && grep -qxF 'FAIL  the real-dune probe: OCANNL_TOOL_HARNESS_NO_DUNE is 0 or 1' "$TMP/out" \
+     && [ "$(grep -cxF "ABSENT OCANNL_TOOL_HARNESS_NO_DUNE='yes' is neither 0 nor 1" "$TMP/out")" = 2 ] \
+     && grep -q '1 leg(s) failed (0 skipped)' "$TMP/out"; then
+    report 0 'a switch neither 0 nor 1 is one FAIL however often the probe is asked, and hides the dune'
+  else report 1 'a switch neither 0 nor 1 is one FAIL however often the probe is asked, and hides the dune' "exit $rc; $(cat "$TMP/out")"; fi
+  dune_probe "$TMP/dune-twin" 1; rc=$?
+  if [ "$rc" = 0 ] && [ "$(grep -cxF -- "$found" "$TMP/out")" = 2 ] && ! grep -qxF -- "$hidden" "$TMP/out"; then
+    report 0 'negative control: a probe blind to the switch finds the dune it should hide'
+  else report 1 'negative control: a probe blind to the switch finds the dune it should hide' "exit $rc; $(cat "$TMP/out")"; fi
+fi
 MODE=fail probe; rc=$?
 if [ "$rc" = 1 ] && grep -q '1 leg(s) failed (0 skipped)' "$TMP/out" && ! grep -q 'aborted before finish' "$TMP/out"; then
   report 0 'failure controls exit and footer'
