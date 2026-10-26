@@ -1,0 +1,6 @@
+Metal: every function the table shares with the C table is probed or excluded with a reason: true
+Metal: every function the C table lacks is named Metal-only with a reason: true
+Metal: every excluded or Metal-only name is a function of the table: true
+Metal: the probed helpers take every probe shape: draws, lanes, counters, threefry, powers, codec: true
+Metal: every probed helper returns the C one's bytes, for every input and lane: true
+Metal: a copy whose uint4 indexing reverses its lanes differs from the C table somewhere: true

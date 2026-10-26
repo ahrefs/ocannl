@@ -11058,3 +11058,20 @@
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1580: the Metal table's device-free helpers, compiled as C++ beside the C table.
+
+(test
+ ; ocannl-backend: cc -- compiles the Metal table's helpers with the host compiler in C++ mode, no device.
+ (name metal_builtins_emulation)
+ (package neural_nets_lib)
+ (modules metal_builtins_emulation)
+ (deps ocannl_config)
+ (libraries
+  arrayjit.context
+  arrayjit.ir
+  arrayjit.builtins_metal
+  arrayjit.verdict
+  integer_power_cases
+  ctypes
+  ctypes.foreign))

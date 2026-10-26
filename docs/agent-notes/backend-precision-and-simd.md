@@ -2114,6 +2114,16 @@ files.
   `C_syntax.builtin_definitions` as a kernel prelude is, and compares them bitwise with the C ones.
   A new shared helper needs a probe shape there or a named exclusion (threefry: its CUDA-like round
   takes a C++ reference), and a dependency list missing an entry fails that compile.
+  The Metal table is one too (`arrayjit.builtins_metal`, gh-ocannl-1580), and
+  `metal_builtins_emulation` does the same for it with the host compiler in C++ mode (`-x c++`):
+  MSL is C++, so shims for `as_type`, `uint4`/`int4`/`float4`, `half`/`bfloat` (converting through
+  the C table's codecs) and `rotate` are all it needs, and each copy sits in a C++ namespace beside
+  the C table compiled as C in the same library. It also reaches what the CUDA-like test cannot:
+  the threefry functions, `ocannl_powi_f32` and the e5m2 codec. Every Metal function is either
+  shared with the C table (probed, or excluded: the f32-fallback double forms) or named Metal-only
+  with a reason. Its first run found Metal's `byte_to_uint4x32` taking `int8_t`, sign-extending
+  every byte from 0x80 up into a different counter than every other backend's. Under mingw without
+  a C++ front end the comparison is an `Environment` skip; elsewhere a missing one fails.
   The shared half RNG function returns `HALF_T`, while its OCaml wrapper explicitly extracts bits
   with `HALF_TO_UINT16`. `test_shared_builtins` executes separately compiled default and emulated
   half variants against the shipped stubs, with inlining disabled to exercise the C ABI.

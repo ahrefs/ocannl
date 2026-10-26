@@ -509,8 +509,10 @@ using namespace metal;|}, []);
     return uint4(uint32_t(x & 0xFFFFFFFF), uint32_t(x >> 32), 0, 0);
 }|},
       [] );
+    (* Unsigned, as Metal stores a byte ([uchar]) and as the C table reads it: a signed parameter
+       sign-extended every byte from 0x80 up into a different counter (gh-ocannl-1580). *)
     ( "byte_to_uint4x32",
-      {|uint4 byte_to_uint4x32(int8_t x) {
+      {|uint4 byte_to_uint4x32(uint8_t x) {
     return uint4(uint32_t(x), 0, 0, 0);
 }|},
       [] );
