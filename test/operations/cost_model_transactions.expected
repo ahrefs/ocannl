@@ -17,6 +17,7 @@ a 64 KiB block of 64 threads is alone: 64 of 1536 slots: true
 a block over the capacity still counts as one resident block: true
 a kernel without workgroup memory is bounded by its threads alone: 2 blocks of 640: true
 a serial unit stride is counted over its sector residues: excess 7, not a base-only 0: true
+a symbol in two coordinates steps by its summed flat stride: aligned, no excess: true
 a flattened Sub_axis map counts as its unflattened twin: excess 4 each: true
 a non-global node is not counted: the same column read from a workgroup tile costs nothing: true
 a Tile_mma statement's fallback is left out of the count: true

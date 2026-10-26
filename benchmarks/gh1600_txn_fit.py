@@ -16,7 +16,9 @@ Usage: gh1600_txn_fit.py CELL [CELL ...] [--band B] [--sector 32|64|128] [--rate
             the held-out check, on cells timed apart from the ones the rate was fitted on.
   --show    with --rate, list every candidate's measured median and re-scored rank.
   --no-coalesced  for a backend that does not admit the coalesced layouts (no occupancy capacity):
-            judge the admitted set alone.
+            judge the admitted set alone -- the `coal-` rows leave the population before anything
+            is scored, so neither the agreement nor the spread reads an ordering the backend never
+            ranks.
   --occupancy  re-score under the occupancy factor of a workgroup capacity CAP (bytes per
             multiprocessor) and TPM thread slots per multiprocessor (cost_model.ml's occupancy,
             from each kernel's wg= and thr=), replacing the one the listing priced (its occ=,
@@ -204,6 +206,8 @@ def main():
     cells = []
     for spec in args.cells:
         name, cands, bad = load_cell(spec)
+        if args.no_coalesced:
+            cands = {l: c for l, c in cands.items() if "coal-" not in l}
         if bad:
             for label, rank, offline in bad[:5]:
                 print(f"gh1600_txn_fit: {name}: {label!r} rank_ms={rank:.6f} but the kernel legs"
@@ -230,7 +234,7 @@ def main():
             _, base_adm_slow, _ = base[2].get("admitted", (None, 1.0, None))
             # The issue's criterion: the argmin is never a COALESCED leaf slower than the spread;
             # beside it, no agreement and no admitted-set argmin worse than the listing's own.
-            coalesced_ok = args.no_coalesced or "coal-" not in (pick or "") or slow <= spread
+            coalesced_ok = "coal-" not in (pick or "") or slow <= spread
             ok = (coalesced_ok and agree >= base[0] - 1e-9
                   and adm_slow <= base_adm_slow + 1e-9)
             rows.append((name, agree, pick, slow, best, ok, sets, ranks, cands))

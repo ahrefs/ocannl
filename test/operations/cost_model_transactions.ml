@@ -11,13 +11,13 @@
    broadcast reads; a two-slot block whose lanes wrap rows; a partial lane group; idle lanes past a
    narrow sibling nest's extent; a lane's register tile counted as one footprint (a 4-wide tile
    reads contiguously, a column tile does not); grid blocks and serial iterations multiplying the
-   count; the base residues a serial unit stride shifts through (a base-only count would read 0);
-   f16 against f32; a flattened [Sub_axis] map counting as its unflattened twin; non-global nodes
-   and [Tile_mma] statements left out; a dynamic gather counted one sector per lane and reported
-   uncovered. Then the leg: without a rate, or without an excess, the compute leg is bitwise what it
-   was; with them, it adds exactly the excess over the rate, each context's over its fill under a
-   launch model. And the occupancy factor: theoretical occupancy's exact fractions, and the compute
-   leg over it. *)
+   count; the base residues a serial unit stride shifts through (a base-only count would read 0),
+   stepped by a symbol's summed stride when it appears in two coordinates; f16 against f32; a
+   flattened [Sub_axis] map counting as its unflattened twin; non-global nodes and [Tile_mma]
+   statements left out; a dynamic gather counted one sector per lane and reported uncovered. Then
+   the leg: without a rate, or without an excess, the compute leg is bitwise what it was; with them,
+   it adds exactly the excess over the rate, each context's over its fill under a launch model. And
+   the occupancy factor: theoretical occupancy's exact fractions, and the compute leg over it. *)
 
 open Base
 open Verdict.Claims
@@ -170,7 +170,20 @@ let () =
          (copy d [| it k; it w |] x [| Ll_test.aff [ (1, k); (1, w) ] 0 |]))
   in
   p "a serial unit stride is counted over its sector residues: excess 7, not a base-only 0"
-    (Float.equal (excess code) 7.)
+    (Float.equal (excess code) 7.);
+  (* A symbol in two coordinates moves them together: [x[k, k + w]] over a 31-wide row steps by 31 +
+     1 cells, 128 bytes, so every group of 8 lanes reads one aligned sector. Taking each
+     coordinate's stride on its own (124 and 4 bytes) would average over unreachable misaligned
+     bases and read excess 7. *)
+  let x = node "tx_jx" [| 8; 31 |] and d = node "tx_jd" [| 8; 8 |] in
+  let k = Ll_test.sym () and w = Ll_test.sym () in
+  let joint =
+    Ll_test.loop_n k 8
+      (Ll_test.loop_n ~axis:wg w 8
+         (copy d [| it k; it w |] x [| it k; Ll_test.aff [ (1, k); (1, w) ] 0 |]))
+  in
+  p "a symbol in two coordinates steps by its summed flat stride: aligned, no excess"
+    (Float.equal (excess joint) 0.)
 
 let () =
   (* A flattened map: [Sub_axis] over [2; 32] indexed by one stride-2 lane term. *)

@@ -1039,21 +1039,26 @@ let memory_transactions ?(sector = transaction_sector_bytes) ~lane_width ~is_glo
           List.find_map lanes ~f:(fun (s', slot, _) ->
               if Idx.equal_symbol s s' then Some (coord l slot) else None)
         in
-        (* The residue step: the gcd of the sector and every varying byte stride of a symbol neither
-           a lane's nor the run's. *)
+        (* The residue step: the gcd of the sector and the varying byte stride of every symbol
+           neither a lane's nor the run's. A symbol in several coordinates moves them together, so
+           its stride is its summed flat one ([x[k, k + w]] steps by one row plus one cell), never
+           each coordinate's on its own. *)
         let step =
-          Array.foldi view ~init:sector ~f:(fun i g -> function
-            | Affine.Unknown _ -> g
-            | Affine.Known { terms; _ } ->
-                List.fold terms ~init:g ~f:(fun g (c, s) ->
-                    let varies =
-                      match List.Assoc.find a.a_loops s ~equal:Idx.equal_symbol with
-                      | Some r -> width r > 1
-                      | None -> true
-                    in
-                    if varies && not (is_lane s || in_tile s) then
-                      gcd g (Int.abs (c * strides.(i) * elt))
-                    else g))
+          let symbols =
+            Array.fold view ~init:[] ~f:(fun acc -> function
+              | Affine.Unknown _ -> acc
+              | Affine.Known { terms; _ } ->
+                  List.fold terms ~init:acc ~f:(fun acc (_, s) ->
+                      if List.mem acc s ~equal:Idx.equal_symbol then acc else s :: acc))
+          in
+          List.fold symbols ~init:sector ~f:(fun g s ->
+              let varies =
+                match List.Assoc.find a.a_loops s ~equal:Idx.equal_symbol with
+                | Some r -> width r > 1
+                | None -> true
+              in
+              if varies && not (is_lane s || in_tile s) then gcd g (Int.abs (flat_stride s * elt))
+              else g)
         in
         let step = if step <= 0 then sector else step in
         let residues = List.init (sector / step) ~f:(fun i -> i * step) in
