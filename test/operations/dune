@@ -10303,6 +10303,17 @@
   (env_var OCANNL_BACKEND))
  (libraries base ocannl stdio arrayjit.verdict ll_test))
 
+; gh-ocannl-1516: bfloat16 subnormals survive storage, loads, stores and arithmetic on every backend.
+
+(test
+ (name bf16_subnormal_storage)
+ (package neural_nets_lib)
+ (modules bf16_subnormal_storage)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (libraries base ocannl stdio arrayjit.verdict ll_test))
+
 ; gh-ocannl-1240: powers with a run-time exponent keep a negative base's integral powers under the
 ; GPU backends' fast math.
 

@@ -2206,9 +2206,26 @@ files.
   `precise::tanh` (within 2 ulps everywhere, and bitwise the legacy policy's `tanh`, whose functions
   are the precise ones). Cost: 1.4x (guard) and 4x (`precise::tanh`) on 1024 back-to-back
   calls per thread, none measurable on a 16M-element load-call-store stream. A cheaper `tanh` patch
-  (pass x through below 2^-12) fixed only the flush, so it was not taken. Metal `bfloat` flushes
-  subnormals in storage (2^-130 reads back 0 through any op), which is a storage property, not
-  these functions'. `unary_math_special_values` pins the values at f32, half and bf16, Metal-gated.
+  (pass x through below 2^-12) fixed only the flush, so it was not taken. Metal flushes bf16
+  subnormals in the narrowing back to `bfloat` (next entry), not in these functions.
+  `unary_math_special_values` pins the values at f32, half and bf16, Metal-gated.
+
+- **Metal's float ALU flushes f32-range subnormals; its storage does not** (gh-ocannl-1516).
+  bf16 shares f32's exponent range, so a bf16 subnormal is an f32 subnormal. Measured on M4 Max /
+  macOS 26 under the production policy, every leg that only moves bits keeps one bitwise: the host
+  transfer (a memcpy on Shared pools), a `bfloat` copy kernel, and the `(float)` widening load. Every
+  leg through the float ALU gives the zero of the input's sign: the `(bfloat)` narrowing store, f32
+  `+`, and `bfloat` `+` (computed in float). The "2^-130 reads back 0" of gh-ocannl-1435 was the
+  narrowing store after the function. The MSL specification allows flushing FP32 denormal operands
+  and results to zero even with fast math off, and `MTLCompileOptions` has no control for it. So
+  this is a stated boundary, not a fix. A bit-level narrowing helper was rejected: it would rescue
+  only an f32 subnormal copied straight from storage into a bf16 tensor, since the arithmetic
+  before nearly every store has already flushed it, and it would cost bit operations on every bf16
+  store. Half is unaffected: its subnormals (from 2^-24) are normal f32 values. The cc backends
+  keep every leg IEEE unless `cc_backend_fast_math` is on (`-ffast-math` may link a
+  flush-to-zero startup file). CUDA's `--use_fast_math` implies `--ftz=true`, and HIP compiles
+  with `-ffast-math`, so neither is claimed. `bf16_subnormal_storage` pins both families'
+  tables, with the C claim and the Metal boundary each failing on the other's output.
 
 - A float power whose exponent is only known at run time renders on CUDA and HIP through
   `ocannl_pow_f32`/`ocannl_pow_f64` (`Builtins_cc.cuda_like_power_builtins`, gh-ocannl-1240), half
