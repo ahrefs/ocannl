@@ -15,7 +15,17 @@
    would be crowned silently; the second run catches a zero that missed cells). The operands are
    small integers, so every sum is exact in f32 and in tf32 whatever the reassociation: the parity
    is bitwise. Gated on the seeder's own capability judgment for an f32 site, never on the seed
-   list. *)
+   list.
+
+   gh-ocannl-1598: two more legs at 64 out-channels, wider than the 32-lane workgroup the companions
+   are distributed over. Where the row pads to the intrinsic row tile ([0x0x0/<tm>x0]: 8 rows to
+   CUDA tf32's 16 at [cm8w], 6 rows to every mma backend's tile at [cm6w], which claims the flavor
+   is seeded), the accumulator fragment is workgroup-shared and lane 0 alone stores it back; the
+   unfused seed's relu companion then read [pr] from every lane before that store landed — 512 of
+   8192 cells wrong on CUDA (rog-nv-linux) while the fused twin, whose tail runs inside lane 0's
+   store-back, matched, as on cifar_resnet's stage-3 convs. The [-tf32] rule runs every claim with
+   [tf32_matmuls] on, which opens CUDA's tf32 tile to these f32 sites; at the default the CUDA run
+   skips them (a no-op elsewhere, where the rule repeats the run). *)
 
 open Base
 open Ocannl
@@ -51,9 +61,9 @@ let scratch (o : LL.optimized) =
     LL.optimize_ctx = LL.copy_optimize_ctx o.LL.optimize_ctx;
   }
 
-(* conv (row x row output, 8 in-channels, 16 out-channels, 3x3 window) + relu + scale, with the conv
-   output and the relu materialized like real convnet activations. *)
-let make_merged ~rows tag =
+(* conv (row x row output, 8 in-channels, [oc] out-channels, 3x3 window) + relu + scale, with the
+   conv output and the relu materialized like real convnet activations. *)
+let make_merged ?(oc = 16) ~rows tag =
   let x =
     NTDSL.init ~l:(tag ^ "x") ~prec:Ir.Ops.single ~b:[ 2 ]
       ~o:[ rows + 2; rows + 2; 8 ]
@@ -61,7 +71,7 @@ let make_merged ~rows tag =
       ()
   in
   let kern =
-    NTDSL.init ~l:(tag ^ "k") ~prec:Ir.Ops.single ~i:[ 3; 3; 8 ] ~o:[ 16 ]
+    NTDSL.init ~l:(tag ^ "k") ~prec:Ir.Ops.single ~i:[ 3; 3; 8 ] ~o:[ oc ]
       ~f:(Ll_test.weighted ~weights:[| 2; 1; 1; 3 |] ~modulus:5 ~offset:(-2.) ~stride:1.)
       ()
   in
@@ -123,13 +133,19 @@ let execute_seed ~name ~want ~transform y =
         && Array.length got = Array.length want
         && Array.for_all2_exn got want ~f:Float.equal
       in
-      if not matches then Stdio.eprintf "%s: values differ from the natural form\n" name;
+      if not matches then
+        Stdio.eprintf "%s: values differ from the natural form (%s of %d cells)\n" name
+          (if Array.length got = Array.length want then
+             Int.to_string (Array.counti got ~f:(fun i g -> not (Float.equal g want.(i))))
+           else "shape mismatch, all")
+          (Array.length want);
       `Ran (matches, Ll_test.rendered_tensorized census)
   | exception exn ->
       Stdio.eprintf "%s: failed (not part of the golden): %s\n" name (Exn.to_string exn);
       `Failed
 
-let leg ~tag ~rows =
+let leg ?oc ?(row_masked = false) ~tag ~rows () =
+  let make_merged ~rows n = make_merged ?oc ~rows n in
   let want =
     let y = make_merged ~rows (tag ^ "r") in
     fst (run ~name:(tag ^ "_ref") ~transform:(fun opt -> [ opt ]) y)
@@ -151,17 +167,24 @@ let leg ~tag ~rows =
     (real_stmts whole >= 3 && Option.exists segment ~f:(fun s -> real_stmts s >= 3));
   p (tag ^ ": the GPU leg seeds the whole routine") (not (List.is_empty whole_seeds));
   p (tag ^ ": the GPU leg seeds the merged segment") (not (List.is_empty seg_seeds));
+  (* The pad-masked whole-extent flavor (row padded to the intrinsic row tile, [0x0x0/<tm>x0]): its
+     accumulator fragment is workgroup-shared, transferred by lane 0 alone. *)
+  if row_masked then
+    p_exists (tag ^ ": a whole-routine GPU seed pads the row to the mma tile") whole_seeds
+      ~f:(fun sp -> sp.Autotune.sk_bm = 0 && sp.Autotune.sk_tm > 0);
   let whole_results =
     List.mapi whole_seeds ~f:(fun i sp ->
         let name = Printf.sprintf "%s_w%d" tag i in
+        Stdio.eprintf "%s = %s (not part of the golden)\n%!" name (Autotune.sketch_params_label sp);
         execute_seed ~name ~want
           ~transform:(fun opt ->
             [ Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:sp opt) opt ])
           (make_merged ~rows name))
   in
   let seg_results =
-    List.mapi seg_seeds ~f:(fun i _ ->
+    List.mapi seg_seeds ~f:(fun i sp ->
         let name = Printf.sprintf "%s_s%d" tag i in
+        Stdio.eprintf "%s = %s (not part of the golden)\n%!" name (Autotune.sketch_params_label sp);
         let applied = ref false in
         (* Compiled as a per-segment sketch candidate: the tuner's segmentation replayed, the conv
            segment sketched, every other one on its preset. *)
@@ -196,8 +219,10 @@ let leg ~tag ~rows =
 
 let () =
   if Lazy.force gpu_capable then (
-    leg ~tag:"cm8" ~rows:8;
-    leg ~tag:"cm16" ~rows:16)
+    leg ~tag:"cm8" ~rows:8 ();
+    leg ~tag:"cm16" ~rows:16 ();
+    leg ~tag:"cm8w" ~rows:8 ~oc:64 ();
+    leg ~tag:"cm6w" ~rows:6 ~oc:64 ~row_masked:true ())
   else
     (* A GPU withholding the capability says which aggregation lifts it (tf32 off on CUDA). *)
     let aggregation =
@@ -205,19 +230,25 @@ let () =
       | `Withheld aggregation when not on_cpu -> aggregation
       | `Withheld _ | `Advertised -> `Backend
     in
-    List.iter [ "cm8"; "cm16" ] ~f:(fun tag ->
+    List.iter
+      [ ("cm8", false); ("cm16", false); ("cm8w", false); ("cm6w", true) ]
+      ~f:(fun (tag, row_masked) ->
         List.iter
           ~f:(Verdict.skipped ~aggregation ~backend:backend_name)
-          [
-            tag
-            ^ ": the whole routine and its merged conv segment carry three or more real statements";
-            tag ^ ": the GPU leg seeds the whole routine";
-            tag ^ ": the GPU leg seeds the merged segment";
-            tag
-            ^ ": every whole-routine GPU seed compiles and matches the natural form exactly, run \
-               twice";
-            tag
-            ^ ": every merged-segment GPU seed compiles and matches the natural form exactly, run \
-               twice";
-            tag ^ ": every GPU seed's routine is labeled tensorized";
-          ])
+          ([
+             tag
+             ^ ": the whole routine and its merged conv segment carry three or more real statements";
+             tag ^ ": the GPU leg seeds the whole routine";
+             tag ^ ": the GPU leg seeds the merged segment";
+           ]
+          @ (if row_masked then [ tag ^ ": a whole-routine GPU seed pads the row to the mma tile" ]
+             else [])
+          @ [
+              tag
+              ^ ": every whole-routine GPU seed compiles and matches the natural form exactly, run \
+                 twice";
+              tag
+              ^ ": every merged-segment GPU seed compiles and matches the natural form exactly, \
+                 run twice";
+              tag ^ ": every GPU seed's routine is labeled tensorized";
+            ]))

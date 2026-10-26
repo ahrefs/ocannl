@@ -244,6 +244,7 @@
   (alias runtest-online_softmax_fp_licences)
   (alias runtest-online_softmax_block_fast_math)
   (alias runtest-qkv_zero_init-approximate)
+  (alias runtest-conv_merged_gpu_seeds-tf32)
   (alias runtest-fast_math_libmvec)
   (alias runtest-cc_post_compile_cause-artifact_missing)
   (alias runtest-cc_post_compile_cause-artifact_missing_dll)
@@ -7051,6 +7052,28 @@
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1598: the same claims with tf32_matmuls on, which opens CUDA's tf32 tile to the f32
+; conv sites, so the CUDA seeds the default run skips execute too (the pad-masked shared-fragment
+; flavor among them); a no-op elsewhere. One golden for both runs.
+
+(rule
+ (target conv_merged_gpu_seeds-tf32.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:conv_merged_gpu_seeds.exe} --ocannl_tf32_matmuls=true))))
+
+(rule
+ (alias runtest-conv_merged_gpu_seeds-tf32)
+ (package neural_nets_lib)
+ (action
+  (diff conv_merged_gpu_seeds.expected conv_merged_gpu_seeds-tf32.actual)))
 
 (test
  ; cc-vector-width: independent -- every seeding judgment runs on synthetic limits, and the host

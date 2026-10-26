@@ -3780,13 +3780,23 @@ let contract_tensorized_accumulator ~lane ~(masks : pad_mask list) (opt : Low_le
             }
         in
         promoted := Some fragment;
+        (* A shared fragment's transfers are lane 0's alone, so they are not aligned with the
+           per-lane geometry the site's companions take ([companion_geometry]): a sibling zeroing or
+           producer wrote [target]'s cells from every lane just before the init-load, and a
+           companion reads them from every lane right after the store-back. The outer barriers order
+           both, as the renderer's lane-0 fallback of a register-resident fragment scope does
+           ([C_syntax]'s [render_mma_fragment_scope]). Without the trailing one, CUDA's unfused
+           pad-masked conv seeds read the target before lane 0 stored it (gh-ocannl-1598: observed
+           at 64 out-channels over a 32-lane workgroup, cifar_resnet's stage-3 convs). *)
         Some
           (unflat_lines
-             ([ lane0 simd_width (transfer ~into_fragment:true) ]
+             ((if shared_frag then [ Workgroup_barrier ] else [])
+             @ [ lane0 simd_width (transfer ~into_fragment:true) ]
              @ (if shared_frag then [ Workgroup_barrier ] else [])
              @ [ reloop body ]
              @ (if shared_frag then [ Workgroup_barrier ] else [])
-             @ [ lane0 simd_width (transfer ~into_fragment:false) ]))
+             @ [ lane0 simd_width (transfer ~into_fragment:false) ]
+             @ if shared_frag then [ Workgroup_barrier ] else []))
     | _ -> None
   in
   (* Outermost-first: attempt the contraction at each serial loop before descending, so the

@@ -201,6 +201,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-config_var_fatal_spelling
   test/operations/dune                     @runtest-config_var_spellings
   test/operations/dune                     @runtest-config_var_warnings
+  test/operations/dune                     @runtest-conv_merged_gpu_seeds-tf32
   test/operations/dune                     @runtest-cost_model_selection
   test/operations/dune                     @runtest-dead_export_scan
   test/operations/dune                     @runtest-dead_export_scan_control
