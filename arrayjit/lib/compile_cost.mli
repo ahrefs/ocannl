@@ -22,10 +22,13 @@
     - [kernels]: the kernels the compiles rendered; [kernels_compiled]: the ones the vendor compiler
       was given, counted just before it runs, so a compile it refused still counts (on Metal, inside
       link). They differ only on a backend that reuses compiled kernels ([reuse_capable]).
+    - [pipelines_created]: the per-kernel pipeline objects the links created rather than reused
+      (Metal's compute pipeline states, gh-ocannl-1605), counted at the creation call; 0 on a
+      backend that has no such object.
     - [reuse_capable]: whether a compile in the bracket went through a backend's kernel code cache
-      ({!Kernel_code_cache}; HIP's), whether or not the cache was enabled: with it disabled
-      ([hip_kernel_cache_mib=0]) such a compile compiles every kernel, which is what a test gated on
-      this flag must then see fail.
+      ({!Kernel_code_cache}; HIP's, CUDA's, cc's, Metal's), whether or not the cache was enabled:
+      with it disabled ([hip_kernel_cache_mib=0]) such a compile compiles every kernel, which is
+      what a test gated on this flag must then see fail.
 
     A host wall-clock reading for diagnosis, not a timing claim. *)
 
@@ -37,6 +40,7 @@ type t = {
   link_s : float;
   kernels : int;
   kernels_compiled : int;
+  pipelines_created : int;
   reuse_capable : bool;
 }
 [@@deriving sexp_of]
@@ -66,6 +70,9 @@ val time_link : (unit -> 'a) -> 'a
 
 val record_kernels : rendered:int -> compiled:int -> unit
 (** Adds a compile's kernel counts. *)
+
+val record_pipeline_created : unit -> unit
+(** Counts one pipeline object created at link ([pipelines_created]). *)
 
 val record_reuse_capable : unit -> unit
 (** Marks the bracket as having compiled through a kernel code cache, enabled or not. *)
