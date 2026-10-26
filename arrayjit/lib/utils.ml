@@ -126,6 +126,8 @@ let known_config_keys =
       "hip_scratch_validation";
       "hip_kernel_cache_mib";
       "cuda_kernel_cache_mib";
+      "cuda_compile_programs";
+      "cuda_compile_program_min_kernels";
       "cc_kernel_cache_mib";
       "cc_kernel_part_weight";
       "cc_compile_jobs";
@@ -611,6 +613,11 @@ let config_key_classification : (config_key_class * string * string list) list =
        at once (gh-ocannl-1603): every function is compiled alone, never inlined across units, so \
        only the compile's cost changes",
       [ "cc_compile_jobs"; "cc_compile_unit_min_bytes" ] );
+    ( Execution_neutral,
+      "how many nvrtc programs a CUDA batch's kernel cache misses are compiled as, at once \
+       (gh-ocannl-1603): a kernel's code does not depend on the companions its program compiles \
+       beside it, so only the compile's cost changes",
+      [ "cuda_compile_programs"; "cuda_compile_program_min_kernels" ] );
     ( Execution_neutral,
       "identifier spelling in generated code and in printouts",
       [ "ll_ident_style"; "cd_ident_style"; "print_decimals_precision" ] );

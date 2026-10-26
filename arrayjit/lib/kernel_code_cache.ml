@@ -82,10 +82,68 @@ let stats c =
         n_evicted_groups = c.evicted_groups;
       })
 
+(* {2 Concurrent programs (gh-ocannl-1603)} *)
+
+type split = { max_programs : int; min_kernels : int }
+
+let programs_for split n =
+  if split.max_programs <= 1 || n <= 1 then 1
+  else Int.max 1 (Int.min (Int.min split.max_programs n) (n / Int.max 1 split.min_kernels))
+
+let chunks k idxs =
+  let a = Array.of_list idxs in
+  let n = Array.length a in
+  List.init k ~f:(fun t ->
+      let lo = t * n / k and hi = (t + 1) * n / k in
+      Array.to_list (Array.sub a ~pos:lo ~len:(hi - lo)))
+  |> List.filter ~f:(fun chunk -> not (List.is_empty chunk))
+
+let split_override : split option ref = ref None
+let current_split_override () = !split_override
+
+let with_split split f =
+  let saved = !split_override in
+  split_override := Some split;
+  Exn.protect ~f ~finally:(fun () -> split_override := saved)
+
+let split_capable_count = Stdlib.Atomic.make 0
+let concurrent_program_count = Stdlib.Atomic.make 0
+let record_split_capable () = Stdlib.Atomic.incr split_capable_count
+let split_capable_compiles () = Stdlib.Atomic.get split_capable_count
+let programs_compiled_concurrently () = Stdlib.Atomic.get concurrent_program_count
+
+type ('p, 'w) concurrent = {
+  split : split;
+  prepare : group:int -> n_groups:int -> string list -> int list -> unit -> 'w;
+  finish : group:int -> 'w -> 'p * int;
+  reraise : 'a. group:int -> int list -> exn -> Stdlib.Printexc.raw_backtrace -> 'a;
+  phase : (unit -> unit) -> unit;
+}
+
+(* Runs every thunk at once: the first on the calling domain, each other on a domain of its own (or,
+   when no domain can be spawned, on the calling domain after the first). Every one is joined before
+   this returns, and none raises out of it: a failure comes back as its exception and backtrace. *)
+let run_all thunks =
+  let capture f = try Ok (f ()) with exn -> Error (exn, Stdlib.Printexc.get_raw_backtrace ()) in
+  match thunks with
+  | [] -> []
+  | first :: rest ->
+      let spawned =
+        List.map rest ~f:(fun f ->
+            match Stdlib.Domain.spawn (fun () -> capture f) with
+            | d -> `Spawned d
+            | exception _ -> `Inline f)
+      in
+      let first = capture first in
+      first
+      :: List.map spawned ~f:(function
+        | `Spawned d -> Stdlib.Domain.join d
+        | `Inline f -> capture f)
+
 (* {2 Lookup, dedup and compile of the misses} *)
 
 let resolve c ~lock ~keys ~options ~symbols ?(always_lock = false)
-    ?(before_compile = fun ~n_compiled:_ ~n_groups:_ -> ()) ~compile_group () =
+    ?(before_compile = fun ~n_compiled:_ ~n_groups:_ -> ()) ?concurrent ~compile_group () =
   let n = Array.length keys in
   let found = Array.create ~len:n None in
   let all = List.init n ~f:Fn.id in
@@ -118,13 +176,55 @@ let resolve c ~lock ~keys ~options ~symbols ?(always_lock = false)
       List.map distinct ~f:(fun opts ->
           (opts, List.filter reps ~f:(fun i -> same options.(i) opts)))
     in
-    before_compile ~n_compiled:(List.length reps) ~n_groups:(List.length groups);
-    List.iteri groups ~f:(fun k (opts, idxs) ->
-        let program, bytes = compile_group ~group:k ~n_groups:(List.length groups) opts idxs in
-        let entries = List.map idxs ~f:(fun i -> (keys.(i), (program, symbols.(i)))) in
-        (* Published only now, after the compiler returned: a failed group leaves no entry. *)
-        publish c ~entries ~bytes;
-        List.iter idxs ~f:(fun i -> found.(i) <- Some (program, symbols.(i))));
+    let publish_group idxs (program, bytes) =
+      let entries = List.map idxs ~f:(fun i -> (keys.(i), (program, symbols.(i)))) in
+      (* Published only now, after the compiler returned: a failed group leaves no entry. *)
+      publish c ~entries ~bytes;
+      List.iter idxs ~f:(fun i -> found.(i) <- Some (program, symbols.(i)))
+    in
+    (* gh-ocannl-1603: with [concurrent], a group of enough representatives is split into several
+       programs of contiguous representatives; when any group splits, every program of the batch is
+       compiled at once. *)
+    let programs =
+      match concurrent with
+      | None -> None
+      | Some cc ->
+          let programs =
+            List.concat_map groups ~f:(fun (opts, idxs) ->
+                List.map
+                  (chunks (programs_for cc.split (List.length idxs)) idxs)
+                  ~f:(fun chunk -> (opts, chunk)))
+          in
+          if List.length programs > List.length groups then Some (cc, programs) else None
+    in
+    (match programs with
+    | None ->
+        before_compile ~n_compiled:(List.length reps) ~n_groups:(List.length groups);
+        List.iteri groups ~f:(fun k (opts, idxs) ->
+            publish_group idxs (compile_group ~group:k ~n_groups:(List.length groups) opts idxs))
+    | Some (cc, programs) ->
+        let n_groups = List.length programs in
+        before_compile ~n_compiled:(List.length reps) ~n_groups;
+        (* Prepared in batch order on this domain, before any compile starts. *)
+        let works =
+          List.mapi programs ~f:(fun k (opts, idxs) -> cc.prepare ~group:k ~n_groups opts idxs)
+        in
+        ignore (Stdlib.Atomic.fetch_and_add concurrent_program_count n_groups : int);
+        let results = ref [] in
+        cc.phase (fun () -> results := run_all works);
+        (* Every compile has returned: each one that succeeded is finished and published in batch
+           order on this domain, then the first failure, in batch order, is re-raised here. *)
+        let failure =
+          List.foldi (List.zip_exn programs !results) ~init:None
+            ~f:(fun k failure ((_, idxs), result) ->
+              match result with
+              | Ok work ->
+                  publish_group idxs (cc.finish ~group:k work);
+                  failure
+              | Error (exn, backtrace) -> Option.first_some failure (Some (k, idxs, exn, backtrace)))
+        in
+        Option.iter failure ~f:(fun (k, idxs, exn, backtrace) ->
+            cc.reraise ~group:k idxs exn backtrace));
     List.iter misses ~f:(fun i ->
         if Option.is_none found.(i) then found.(i) <- found.(Hashtbl.find_exn rep_of_key keys.(i)))
   in

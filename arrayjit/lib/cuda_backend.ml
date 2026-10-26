@@ -283,29 +283,27 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
       Stdio.Out_channel.output_string build_file.oc cu_src;
       build_file.finalize ())
 
-  (* One nvrtc program, [cu_src] with its conditional includes applied. [log_header] opens the
-     [.cu_log] artifact: the kernel cache's account of which kernels this program compiled. *)
-  let%diagn2_sexp compile_program ~name ?(log_header = "") ~options cu_src =
-    let name_cu = name ^ ".cu" in
-    [%log "compiling to PTX"];
-    (* [with_debug] only asks NVRTC to keep the compilation log on a SUCCESSFUL compile (a failing
-       one carries its log in the exception either way), and the only reader of that log is the
-       [.cu_log] build file written just below -- so it wants exactly the flag that writes it, and
-       that file's [Option.value_exn] is what makes the implication load-bearing. The [|| log_level
-       > 0] disjunct it used to carry made the log's retention hostage to a verbosity knob that
-       nothing here consults (gh-ocannl-595). Kernel debug codegen is separate: it comes from
-       [Utils.with_runtime_debug ()] via [--device-debug] in [nvrtc_options]. *)
-    let with_debug = Utils.settings.output_debug_files_in_build_directory in
-    [%log "nvrtc options", (options : string list)];
-    let ptx =
-      C_syntax.with_compiler_options ~compiler:"nvrtc" ~options
-        ~enrich:(fun exn ~suffix ->
-          match exn with
-          | Nvrtc.Nvrtc_error { status; message } ->
-              Some (Nvrtc.Nvrtc_error { status; message = message ^ suffix })
-          | _ -> None)
-        (fun () -> Nvrtc.compile_to_ptx ~cu_src ~name:name_cu ~options ~with_debug)
-    in
+  (* The nvrtc call alone: no logging and no artifact, so a concurrent compile (gh-ocannl-1603) can
+     run it on a domain of its own; [with_debug] is read by the caller, on the calling domain.
+     [with_debug] only asks NVRTC to keep the compilation log on a SUCCESSFUL compile (a failing one
+     carries its log in the exception either way), and the only reader of that log is the [.cu_log]
+     build file [write_ptx_artifacts] writes -- so it wants exactly the flag that writes it, and
+     that file's [Option.value_exn] is what makes the implication load-bearing. The [|| log_level >
+     0] disjunct it used to carry made the log's retention hostage to a verbosity knob that nothing
+     here consults (gh-ocannl-595). Kernel debug codegen is separate: it comes from
+     [Utils.with_runtime_debug ()] via [--device-debug] in [nvrtc_options]. *)
+  let nvrtc_compile ~name ~options ~with_debug cu_src =
+    C_syntax.with_compiler_options ~compiler:"nvrtc" ~options
+      ~enrich:(fun exn ~suffix ->
+        match exn with
+        | Nvrtc.Nvrtc_error { status; message } ->
+            Some (Nvrtc.Nvrtc_error { status; message = message ^ suffix })
+        | _ -> None)
+      (fun () -> Nvrtc.compile_to_ptx ~cu_src ~name:(name ^ ".cu") ~options ~with_debug)
+
+  (* A compiled program's [.ptx] and [.cu_log] artifacts; [log_header] opens the [.cu_log]: the
+     kernel cache's account of which kernels this program compiled. *)
+  let write_ptx_artifacts ~name ~log_header ptx =
     if Utils.settings.output_debug_files_in_build_directory then (
       let oc = Out_channel.open_text @@ Utils.build_file @@ name ^ ".ptx" in
       Stdio.Out_channel.output_string oc @@ Nvrtc.string_from_ptx ptx;
@@ -316,7 +314,17 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
       Stdio.Out_channel.output_string oc
       @@ Option.value_exn ~here:[%here] (Nvrtc.compilation_log ptx);
       Stdio.Out_channel.flush oc;
-      Stdio.Out_channel.close oc);
+      Stdio.Out_channel.close oc)
+
+  (* One nvrtc program, [cu_src] with its conditional includes applied. *)
+  let%diagn2_sexp compile_program ~name ?(log_header = "") ~options cu_src =
+    [%log "compiling to PTX"];
+    [%log "nvrtc options", (options : string list)];
+    let ptx =
+      nvrtc_compile ~name ~options ~with_debug:Utils.settings.output_debug_files_in_build_directory
+        cu_src
+    in
+    write_ptx_artifacts ~name ~log_header ptx;
     ptx
 
   let run_options () =
@@ -1537,8 +1545,51 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
      here gives up little. *)
   let kernel_compile_lock = Stdlib.Mutex.create ()
 
+  (* {2 Concurrent programs (gh-ocannl-1603)}
+
+     The cache cannot help a search's FIRST compile: every kernel misses, and the joint program of a
+     [gpt2_mini_train] step's 269 kernels took 4.73 s (nvrtc 3.49 s, load 1.24 s; rog, sm_120, nvrtc
+     13.4, [CUDA_CACHE_DISABLE=1], [benchmarks/gh1529_nvrtc_cost.sh]'s [chunks] rows). The same
+     kernels as 4 programs of contiguous kernels, compiled on 4 threads at once and loaded one after
+     another, took 2.56 s, as 8 programs 2.14-2.18 s; as 269 per-kernel programs on 8 threads, 7.22
+     s. So nvrtc does run apart programs in parallel, and only its per-program cost forbids going
+     fine. A group of misses is compiled as up to [cuda_compile_programs] programs of at least
+     [cuda_compile_program_min_kernels] kernels each, by [Kernel_code_cache.resolve]'s concurrent
+     path: one domain per program, the calling one included, every one joined under the compile
+     lock. A kernel's code does not depend on its companions (see the cache's comment above), and
+     its key is its own, so the partition changes neither what a kernel computes nor what it keys
+     as. Module loads stay where they were: lazy and serial, per program and context
+     ([module_of]). *)
+  let non_negative_int ~key value =
+    match Int.of_string_opt (String.strip value) with
+    | Some n when n >= 0 -> n
+    | _ ->
+        raise
+        @@ Utils.User_error
+             (Printf.sprintf "%s must be a non-negative integer; found: %s" key value)
+
+  let compile_split () : Kernel_code_cache.split =
+    match Kernel_code_cache.current_split_override () with
+    | Some split -> split
+    | None ->
+        let max_programs =
+          match
+            String.lowercase
+              (String.strip
+                 (Utils.get_global_arg ~default:"auto" ~arg_name:"cuda_compile_programs"))
+          with
+          | "auto" -> Int.min 8 (Stdlib.Domain.recommended_domain_count ())
+          | value -> non_negative_int ~key:"cuda_compile_programs" value
+        in
+        let min_kernels =
+          non_negative_int ~key:"cuda_compile_program_min_kernels"
+            (Utils.get_global_arg ~default:"16" ~arg_name:"cuda_compile_program_min_kernels")
+        in
+        { max_programs; min_kernels }
+
   let compile_kernels ~batch ~names bindings lowereds =
     Compile_cost.record_reuse_capable ();
+    Kernel_code_cache.record_split_capable ();
     let r =
       Compile.render_batch ~names bindings lowereds ~includes:(cuda_includes ())
         ~builtins:Builtins_cuda.builtins
@@ -1605,6 +1656,34 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
       in
       (new_program ptx, String.length (Nvrtc.string_from_ptx ptx))
     in
+    (* gh-ocannl-1603: the same program as [compile_group], in [Kernel_code_cache.resolve]'s three
+       stages. Here, on the calling domain: its source and artifact, its census record. On a domain
+       of its own: the nvrtc call alone, a failure raised as it is. Back here, in batch order: its
+       PTX artifacts and its program, or its failure attributed as [compile_group] attributes it --
+       here, because attribution prints the exception, and nvrtc's printer (cudajit's) uses
+       [Format.str_formatter], which is not domain-safe. The device time is the concurrent phase's
+       wall time, timed here: the census is domain-local, and a sum over the overlapping compiles
+       would overstate it. *)
+    let concurrent ~header :
+        (program, string * Nvrtc.compile_to_ptx_result) Kernel_code_cache.concurrent =
+      {
+        split = compile_split ();
+        prepare =
+          (fun ~group ~n_groups:_ options idxs ->
+            let artifact = name ^ ".part" ^ Int.to_string group in
+            let source = with_conditional_includes (r.assemble idxs) in
+            write_source_artifact ~name:artifact source;
+            Compile_cost.record_kernels ~rendered:0 ~compiled:(List.length idxs);
+            let with_debug = Utils.settings.output_debug_files_in_build_directory in
+            fun () -> (artifact, nvrtc_compile ~name:artifact ~options ~with_debug source));
+        finish =
+          (fun ~group:_ (artifact, ptx) ->
+            write_ptx_artifacts ~name:artifact ~log_header:!header ptx;
+            (new_program ptx, String.length (Nvrtc.string_from_ptx ptx)));
+        reraise = (fun ~group:_ idxs exn backtrace -> r.attribute idxs exn backtrace);
+        phase = Compile_cost.time_device;
+      }
+    in
     if not enabled then
       (* As before the cache: one program of every kernel, each looked up by its own name. *)
       let log_header = log_header n in
@@ -1631,6 +1710,7 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
           ~before_compile:(fun ~n_compiled ~n_groups ->
             header := log_header n_compiled;
             clear_artifacts ?log_header:(if n_groups = 0 then Some !header else None) ())
+          ~concurrent:(concurrent ~header)
           ~compile_group:(fun ~group ~n_groups options idxs ->
             compile_group ~log_header:!header ~group ~n_groups options idxs)
           ()

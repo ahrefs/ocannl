@@ -486,6 +486,25 @@ files.
   earlier run compiled reads warm. Measured that way (`gh1529_nvrtc_cost.sh ab`), the cache took a
   cold gpt2 b8 search's candidate compile from 3.46 s to 1.73 s (nvrtc 1.38 to 0.40 s, JIT 0.96 to
   0.17 s, 29 of 261 kernels compiled) and fit 40 candidates in a budget that fit 26.
+- **CUDA compiles a large group of misses as a few concurrent programs** (gh-ocannl-1603,
+  `cuda_compile_programs` default auto = min 8 / domain count, `cuda_compile_program_min_kernels`
+  default 16). A search's first compile misses every kernel; on rog (nvrtc 13.4,
+  `CUDA_CACHE_DISABLE=1`) a gpt2 step's 269 kernels took 4.73 s as one program, 2.56 s as 4 and
+  2.14-2.18 s as 8 contiguous programs compiled on as many threads and loaded serially, 7.22 s as
+  269 per-kernel programs on 8 threads (`gh1529_nvrtc_cost.sh`'s `chunks` rows): nvrtc parallelizes
+  across programs, and only its per-program cost forbids going fine. HIP stays one program (hiprtc
+  serializes in-process). The machinery is `Kernel_code_cache.resolve`'s `?concurrent` hook: after
+  dedup and option grouping, each group is cut into `programs_for` contiguous `chunks`; when any is
+  cut, every program is `prepare`d on the calling domain (artifacts, census), compiled at once (one
+  domain each, the caller's included, all joined under the compile lock), then `finish`ed and
+  published in batch order, the first failure re-raised after. Traps: `Compile_cost` is
+  domain-local, so `device_s` is the phase's wall time timed on the caller (`phase`), never a sum;
+  the worker runs only `nvrtc_compile` (no ppx_minidebug logging, no `Utils.build_file`, whose
+  artifact lock is process state). The partition is invisible to the key and to the schedule cache.
+  Tests: `kernel_code_cache` (fake compiler, a start barrier that a serialized run cannot pass),
+  `gpu_compile_programs` (a training step compiled whole and split in one process, bitwise parity,
+  claims gated on `Kernel_code_cache.split_capable_compiles`; `OCANNL_CUDA_KERNEL_CACHE_MIB=0` is
+  its negative control). Tests force the policy with `Kernel_code_cache.with_split`.
 - **An unchanged kernel must key alike whatever names the rest of the batch made it take**
   (gh-ocannl-1525). Three things renamed unchanged kernels between candidates: node names are
   disambiguated over the WHOLE batch (`get_ident`: a repeated label becomes `n<id>_<label>`, and the

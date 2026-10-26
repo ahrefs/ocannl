@@ -265,3 +265,137 @@ let () =
   let theirs = Stdlib.Domain.join d in
   p "two domains missing the same keys compile them once" (Atomic.get n_compiles = 1);
   p "and both get the one program" (Poly.equal mine theirs)
+
+(* gh-ocannl-1603: [resolve]'s concurrent path, against a fake compiler. A group of misses large
+   enough for the split is cut into contiguous programs, prepared and finished on the calling domain
+   in batch order, compiled at once on domains of their own -- each compile waits until all of them
+   have started, so a serialized run never gets past the first -- and every compile is joined before
+   a failure propagates. *)
+let () =
+  let split ~max_programs ~min_kernels = { K.max_programs; min_kernels } in
+  p "programs: bounded by the cap" (K.programs_for (split ~max_programs:4 ~min_kernels:2) 9 = 4);
+  p "programs: bounded by the least kernels per program"
+    (K.programs_for (split ~max_programs:4 ~min_kernels:2) 5 = 2);
+  p "programs: a cap of 1 never splits" (K.programs_for (split ~max_programs:1 ~min_kernels:1) 9 = 1);
+  p "programs: never more than the kernels"
+    (K.programs_for (split ~max_programs:8 ~min_kernels:0) 3 = 3);
+  p "chunks: contiguous, balanced by count"
+    (List.equal (List.equal Int.equal)
+       (K.chunks 3 [ 0; 1; 2; 3; 4; 5; 6; 7 ])
+       [ [ 0; 1 ]; [ 2; 3; 4 ]; [ 5; 6; 7 ] ]);
+  let c : ((int * int) * string) K.t = K.create ~capacity_bytes:(fun () -> 1000) in
+  let lock = Stdlib.Mutex.create () in
+  let me = (Stdlib.Domain.self () :> int) in
+  let started = Atomic.make 0 and met = Atomic.make 0 in
+  let log = ref [] in
+  let record what = log := what :: !log in
+  let fail_group = ref None and finished_late = Atomic.make false in
+  let serial_calls = ref 0 in
+  let concurrent ~split ~n_programs : (int * int, int * int) K.concurrent =
+    {
+      split;
+      prepare =
+        (fun ~group ~n_groups _opts idxs ->
+          record (`Prepared (group, n_groups, idxs, (Stdlib.Domain.self () :> int)));
+          fun () ->
+            Atomic.incr started;
+            let deadline = Unix.gettimeofday () +. 10. in
+            while Atomic.get started < n_programs && Float.(Unix.gettimeofday () < deadline) do
+              Unix.sleepf 0.001
+            done;
+            if Atomic.get started >= n_programs then Atomic.incr met;
+            if Option.exists !fail_group ~f:(Int.equal group) then failwith "nvrtc refused";
+            if group = n_programs - 1 then (
+              Unix.sleepf 0.05;
+              Atomic.set finished_late true);
+            (group, (Stdlib.Domain.self () :> int)));
+      finish =
+        (fun ~group (g, domain) ->
+          record (`Finished (group, (Stdlib.Domain.self () :> int)));
+          ((g, domain), 10));
+      reraise =
+        (fun ~group idxs exn backtrace ->
+          record (`Reraised (group, idxs, (Stdlib.Domain.self () :> int)));
+          Stdlib.Printexc.raise_with_backtrace exn backtrace);
+      phase = (fun f -> f ());
+    }
+  in
+  let resolve ~split ~n_programs keys =
+    Atomic.set started 0;
+    Atomic.set met 0;
+    log := [];
+    let n = Array.length keys in
+    K.resolve c ~lock ~keys ~options:(Array.create ~len:n [ "-O3" ])
+      ~symbols:(Array.map keys ~f:(fun k -> "s_" ^ k))
+      ~concurrent:(concurrent ~split ~n_programs)
+      ~compile_group:(fun ~group:_ ~n_groups:_ _ _ ->
+        Int.incr serial_calls;
+        ((-1, me), 10))
+      ()
+  in
+  let before = K.programs_compiled_concurrently () in
+  let r =
+    resolve
+      ~split:(split ~max_programs:3 ~min_kernels:2)
+      ~n_programs:3
+      [| "c0"; "c1"; "c2"; "c3"; "c4"; "c5"; "c2" |]
+  in
+  let log_in_order = List.rev !log in
+  let prepared =
+    List.filter_map log_in_order ~f:(function
+      | `Prepared (g, n, idxs, d) -> Some (g, n, idxs, d)
+      | _ -> None)
+  in
+  p "split: three programs of contiguous representatives, numbered in batch order"
+    (List.equal Poly.equal
+       (List.map prepared ~f:(fun (g, n, idxs, _) -> (g, n, idxs)))
+       [ (0, 3, [ 0; 1 ]); (1, 3, [ 2; 3 ]); (2, 3, [ 4; 5 ]) ]);
+  p_all "split: every program is prepared on the calling domain" prepared ~f:(fun (_, _, _, d) ->
+      d = me);
+  p "split: the compiles ran at once (each saw all three started before its deadline)"
+    (Atomic.get met = 3);
+  p "split: the first compile ran on the calling domain, the others on two more"
+    (fst (fst r.(0)) = 0
+    && snd (fst r.(0)) = me
+    && List.length
+         (List.dedup_and_sort ~compare:Int.compare
+            (List.map [ 0; 2; 4 ] ~f:(fun i -> snd (fst r.(i)))))
+       = 3);
+  p "split: every program is finished on the calling domain, in batch order"
+    (List.equal Poly.equal
+       (List.filter_map log_in_order ~f:(function `Finished (g, d) -> Some (g, d) | _ -> None))
+       [ (0, me); (1, me); (2, me) ]);
+  p_all "split: each kernel answers its own program" [ 0; 1; 2; 3; 4; 5 ] ~f:(fun i ->
+      fst (fst r.(i)) = i / 2);
+  p "split: a duplicate answers its representative's" (Poly.equal r.(6) r.(2));
+  p "split: each program is published under its kernels' keys"
+    (Option.exists (K.find c "c3") ~f:(fun (prog, sym) -> fst prog = 1 && String.equal sym "s_c3"));
+  p "split: no serial compile" (!serial_calls = 0);
+  p "split: the census counts three programs" (K.programs_compiled_concurrently () - before = 3);
+  let small = [| "d0"; "d1"; "d2"; "d3"; "d4"; "d5" |] in
+  let _ = resolve ~split:(split ~max_programs:3 ~min_kernels:4) ~n_programs:1 small in
+  p "too few kernels for two programs: one serial compile" (!serial_calls = 1);
+  p_empty "and none of the six misses prepared for a concurrent compile" ~over:(Array.to_list small)
+    !log;
+  fail_group := Some 1;
+  Atomic.set finished_late false;
+  let refused =
+    match
+      resolve
+        ~split:(split ~max_programs:3 ~min_kernels:2)
+        ~n_programs:3
+        [| "e0"; "e1"; "e2"; "e3"; "e4"; "e5" |]
+    with
+    | _ -> false
+    | exception Failure msg -> String.equal msg "nvrtc refused"
+  in
+  p "a refused program propagates its failure" refused;
+  p "after every compile was joined" (Atomic.get finished_late);
+  p_exists "re-raised on the calling domain, for the refused program's kernels" !log ~f:(function
+    | `Reraised (1, [ 2; 3 ], d) -> d = me
+    | _ -> false);
+  p "the programs that compiled are published, the refused one is not"
+    (Option.is_some (K.find c "e0")
+    && Option.is_some (K.find c "e5")
+    && Option.is_none (K.find c "e2")
+    && Option.is_none (K.find c "e3"))

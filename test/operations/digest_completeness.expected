@@ -224,6 +224,10 @@ execution-neutral -- how a cc batch is split into translation units and how many
   cc_compile_jobs [read at codegen]
   cc_compile_unit_min_bytes [read at codegen]
 
+execution-neutral -- how many nvrtc programs a CUDA batch's kernel cache misses are compiled as, at once (gh-ocannl-1603): a kernel's code does not depend on the companions its program compiles beside it, so only the compile's cost changes
+  cuda_compile_program_min_kernels [read at codegen]
+  cuda_compile_programs [read at codegen]
+
 execution-neutral -- identifier spelling in generated code and in printouts
   cd_ident_style
   ll_ident_style

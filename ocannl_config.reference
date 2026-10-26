@@ -1308,7 +1308,8 @@
 
 # Megabytes of compiled CUDA kernel code (PTX) kept for reuse within a process (gh-ocannl-1529),
 # the CUDA counterpart of hip_kernel_cache_mib: a batch of kernels compiles only the kernels no
-# earlier compile in this process produced, as one nvrtc program, and reuses the rest, a kernel
+# earlier compile in this process produced, as one nvrtc program (a few when many miss, see
+# cuda_compile_programs), and reuses the rest, a kernel
 # being reused only when its standalone source, with the names it owns renamed as on HIP, and its
 # complete nvrtc option list are identical. nvrtc and the driver's PTX JIT cost per kernel compiled
 # (about 13 ms and 5 ms on sm_120), so this keeps an autotuning candidate that changes a few kernels of a large routine from
@@ -1317,6 +1318,21 @@
 # it: every routine compiles as one program of all its kernels. Device debugging bypasses it, as on
 # HIP.
 #cuda_kernel_cache_mib=64
+
+# How many nvrtc programs the CUDA backend compiles a batch's kernel code cache misses as, at once
+# (gh-ocannl-1603): a group of misses under one option list is cut into up to this many programs of
+# contiguous kernels, each of at least cuda_compile_program_min_kernels, compiled concurrently (one
+# domain each) and loaded one after another. A search's first compile misses every kernel: on rog
+# (nvrtc 13.4) a gpt2_mini_train step's 269 kernels took 4.73 s as one program and 2.14-2.18 s as 8.
+# auto: the recommended domain count, at most 8. 1 (or 0) compiles the misses as one program. A
+# kernel's code does not depend on its program's other kernels, so results are bitwise unchanged.
+# With the kernel cache disabled (cuda_kernel_cache_mib=0) a batch is one program, as before.
+#cuda_compile_programs=auto
+
+# The least number of kernels a CUDA program of a split compile holds (see cuda_compile_programs):
+# nvrtc pays a fixed cost per program (about 18 ms, plus the headers), so a handful of misses -- a
+# search candidate's usual few changed kernels -- stays one program.
+#cuda_compile_program_min_kernels=16
 
 # Megabytes of compiled cc kernel libraries kept for reuse within a process (gh-ocannl-1525), the
 # cc counterpart of hip_kernel_cache_mib: a batch of kernels compiles only the kernels no earlier

@@ -246,6 +246,8 @@ let emitted_flips =
     ("cc_backend_post_compile_timeout", [ "2.5" ]);
     ("cc_compile_jobs", [ "1"; "4" ]);
     ("cc_compile_unit_min_bytes", [ "0"; "1048576" ]);
+    ("cuda_compile_programs", [ "1"; "4" ]);
+    ("cuda_compile_program_min_kernels", [ "1"; "64" ]);
     ("max_shape_error_origins", [ "3"; "9" ]);
     ("output_dlls_in_build_directory", flag);
     ("output_prec_in_ll_files", flag);
