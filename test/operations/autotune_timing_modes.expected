@@ -49,6 +49,13 @@ a caller floor above the calibration's is topped up with exactly the missing lau
 a reused window is judged for contention whole: true
 a batching depth reuses nothing and dispatches its whole window: true
 
+== singles far over the target take no depth-2 probe ==
+singles at or past the ratio settle at depth 1 on themselves, with no probe: true
+singles just under the ratio still take the depth-2 confirmation: true
+a skipped probe leaves the reading the singles' minimum, as the confirmed settle's: true
+under the ratio a fixed-dominated device's probe still batches it: true
+past the ratio a fixed term of the target's size is timed at depth 1 (the stated boundary): true
+
 == Metal queued contention retry ==
 a transiently contended Metal window retries once and admits the fresh window: true
 persistent Metal contention retries once and remains refused: true
@@ -79,7 +86,8 @@ a rescue probe is the calibration's last: true
 a stall retry is not started once the stalled confirmation has spent the budget: true
 a converging calibration is untouched by the budgets: every probe takes all twelve minima: true
 a converging calibration still reaches its affine target depth: true
-a 64 ms candidate's depth-2 confirmation stops at three minima: true
+a 64 ms candidate settles at depth 1 on its sixteen singles, with no probe: true
+an over-target probe stops at three minima once its wall passes two target-sized probes': true
 a slow candidate's superlinear first pair fits within the wall-relative tolerance: true
 a resolved calibration never settles on a batch whose launch work exceeds the target: true
 a refitted crossing never settles past the batches it was checked against: true

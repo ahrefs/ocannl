@@ -1096,6 +1096,24 @@ files.
   the 166 singles: their cost is the 16-sample floor plus the depth-2 probe, a different lever.
   Nothing is cut under a scripted `on_candidate_measured` (the physical window says nothing about
   a scripted rank). `autotune_hopeless_window` drives it with `on_batch_wall`.
+- **CUDA/HIP singles at twice the batch target or more take no depth-2 probe** (gh-ocannl-1627,
+  `Autotune.slow_singles_ratio`, settle `singles_far_over_target`). The provisional probe exists to
+  expose an inflated single window; for singles of `S` over the target it moves the depth off 1
+  only on a depth-2 batch under `S + target`, i.e. a fixed per-synchronization term above
+  `S - target`, which at `S >= 2 * target` is at least 10 ms -- the same order of implausibility
+  the hopeless cut's single gate rests on. The stated boundary (a fixed term of the target's size
+  past the ratio is timed at depth 1, not batched) is pinned in `autotune_timing_modes` beside the
+  same device under the ratio, which the probe still batches. Measured on minix (gfx1151,
+  **unified**, gpt2_mini_train b8, 600 s call budget, cold caches, 2 rounds of
+  `benchmarks/gh1525_reuse_ab.sh`, base `b09a180b` vs head): a single's timing call went from 23
+  launches and 3039 ms of calibration to 17 and 2246 ms (median attempt wall 3.6 -> 2.8 s), the
+  budget timed 166 singles instead of 132, and both arms still crowned `F_seeded` (same plans;
+  step p50 16.02/16.04 vs 16.06/15.95 ms). On rog (CUDA sm_120, the same driver and budget,
+  `CUDA_CACHE_DISABLE=1`) the same cut: 23 launches and 1086 ms to 17 and 800 ms (attempt wall
+  1.5 -> 1.2 s), 364 singles timed instead of 302, `F_seeded` crowned in both arms, same plans.
+  The 16-sample floor stays, being the window itself.
+  Synthetic calibration fixtures that pin probe behaviour must sit under the ratio (the
+  timing-modes slow devices were scaled to 16-19 ms for that).
 - A new scripted-ranking test takes the harness in `test/support/scripted_search.ml` (library
   `scripted_search`) rather than hand-rolling it: `Scripted_search.scripted` is the scope (the
   measurement script with each window's ordinal, label, digest and reading; the uncontended windows;
@@ -1720,6 +1738,9 @@ files.
   unchanged across a key's sweep. Arm A's wall was nonetheless only +6% (2055 vs 1934 s), because
   the shorter windows time faster. What would make the singles matter is a backdrop that IS the
   seeded composite (the seeded plan with one key replaced), not a different setting of this flag.
+  Their calibration, staffed or bare, no longer carries the depth-2 probe once they read twice the
+  batch target (gh-ocannl-1627, next to the hopeless-window bullet): ~26% of a bare single's timing
+  on minix.
   **The compile overhead is gone since gh-ocannl-1525** (stable kernel keys): on minix (gfx1151,
   **unified**, gpt2_mini_train b8, 300 s call budget, cold caches, 2 rounds of
   `benchmarks/gh1525_reuse_ab.sh`) a staffed candidate's median compile went from 4.10 s (68 of 261

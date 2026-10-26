@@ -215,6 +215,7 @@ type batch_settle =
   | Isolated_objective
   | Single_estimate
   | Singles_reach_target
+  | Singles_far_over_target
   | Measured_batch
   | Affine_projection
   | Wall_scaled
@@ -229,6 +230,7 @@ let batch_settle_name = function
   | Isolated_objective -> "isolated"
   | Single_estimate -> "single_estimate"
   | Singles_reach_target -> "singles_reach_target"
+  | Singles_far_over_target -> "singles_far_over_target"
   | Measured_batch -> "measured_batch"
   | Affine_projection -> "affine_projection"
   | Wall_scaled -> "wall_scaled"
@@ -781,11 +783,12 @@ let sample_min ~repeats ~sample = window_result (sample_window ~repeats ~sample 
    [at_least_ms] gates the calibration's synchronized singles, which are the reading only when the
    depth settles at 1: on cc and Metal that is exactly when their minimum reaches the batch target
    ({!queued_batch_ms}), and a minimum only falls, so a cut there is a cut of the reading itself. On
-   CUDA/HIP a depth-2 probe follows and could, in principle, settle deeper on a fixed-dominated
-   pair; the per-launch reading at any depth is at least the single's marginal part, so a single of
-   at least the target over [hopeless_ratio] times the reference is out of the running unless the
-   fixed per-batch synchronization term exceeds three quarters of it -- 7.5 ms at the target, two
-   orders of magnitude above the ~60 us round trip the batching amortizes. *)
+   CUDA/HIP singles under {!slow_singles_ratio} times the target are followed by a depth-2 probe,
+   which could, in principle, settle deeper on a fixed-dominated pair; the per-launch reading at any
+   depth is at least the single's marginal part, so a single of at least the target over
+   [hopeless_ratio] times the reference is out of the running unless the fixed per-batch
+   synchronization term exceeds three quarters of it -- 7.5 ms at the target, two orders of
+   magnitude above the ~60 us round trip the batching amortizes. *)
 let hopeless_ratio = 4.
 let hopeless_min_samples = 3
 
@@ -913,6 +916,24 @@ let queue_calibration_wall_ms = 8. *. Float.of_int queue_batch_probe_runs *. que
    wall budget were spent, so that [time_routine]'s documented dispatch maximum is a bound the code
    keeps rather than a reading of its control flow. *)
 let queue_calibration_max_probes = 9
+
+(* gh-ocannl-1627: how far over the batch target a CUDA/HIP candidate's synchronized singles must
+   read for the calibration to keep depth 1 without its provisional depth-2 probe. The probe exists
+   to expose an inflated single window, and for singles of [S] over the target it can move the depth
+   off 1 only through a fit whose marginal launch cost is below the target ([Fit_fixed_dominated],
+   or a non-monotone pair's retries): a depth-2 batch costing less than [S + target], i.e. a fixed
+   per-synchronization term above [S - target]. At twice the target that term is at least the target
+   itself, 10 ms -- over a hundred times the ~60 us round trip the batching amortizes, the same
+   order of implausibility {!hopeless_window}'s single gate already rests on; a stall that inflated
+   every one of the sixteen singles uniformly by that much is the boundary, as it is there. Below
+   the ratio the probe still runs: a ~16 ms candidate can genuinely be a few ms of fixed cost over a
+   sub-target launch.
+
+   What it saves is the probe's batches: three depth-2 batches, six launches, of the ~22 a slow
+   candidate dispatches. On minix (gfx1151) a gpt2_mini_train per-segment single times its whole
+   routine around an all-preset backdrop at ~130 ms, so the probe was ~0.8 s of its ~3 s timing,
+   once per single and with no effect on the depth it settled on. *)
+let slow_singles_ratio = 2.
 
 (* How far past its deepest batch probe a CUDA/HIP calibration may settle, as a multiple of that
    depth (gh-ocannl-1100): one doubling, the step the calibration's own unresolved retries take into
@@ -1540,6 +1561,14 @@ let calibrate_and_time_from ~hopeless_against ~started ~tagged ~on_retry ~on_cal
               queued_batch_depth_with_cap ~max_depth:queue_depth_cap single_estimate,
               None,
               (Single_estimate, None, None, None) )
+          else if Float.(single_estimate.ms >= slow_singles_ratio *. queued_batch_ms) then
+            (* gh-ocannl-1627: singles this far over the target settle at depth 1 whatever a depth-2
+               probe reads, short of a fixed synchronization term of at least the target
+               ({!slow_singles_ratio}); their window is the reading, as at every depth-1 settle. *)
+            ( single_estimate.samples,
+              1,
+              Some single_estimate.ms,
+              (Singles_far_over_target, None, None, None) )
           else
             let provisional_depth =
               queued_batch_depth_with_cap ~max_depth:queue_depth_cap single_estimate
