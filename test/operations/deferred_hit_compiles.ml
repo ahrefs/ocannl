@@ -18,7 +18,13 @@
    call's output bit for bit. And on [Autotune.tune_deferred] directly: a second [compile_deferred]
    returns the same routine and compiles nothing more; a relink the device refuses ships the untuned
    default in the schedule's place ([Autotune.shipped_substitute]), and that routine still computes
-   the output. *)
+   the output.
+
+   gh-ocannl-1666: a hit compiles nothing but its schedule. The serial baseline used to be compiled
+   by every search before the cache lookup and released unrun on a hit; now the base compile lowers
+   only, and the baseline is compiled where a search times it. Counted by the reports ([compiles]
+   against [replay_compiles]) and by the compile records ([Autotune.install_compile_observer]): on a
+   hit the baseline's only record is the base compile's, which rendered no kernel. *)
 
 open Base
 open Ocannl
@@ -66,11 +72,17 @@ type call = {
   compiled : int;  (** [Context.backend_compiles] over the whole call. *)
   output : float array;
   ios : SC.cache_io list;  (** The call's schedule-cache and placement-store operations. *)
+  baseline_records : Autotune.compile_record list;
+      (** The call's compile records of attempt [baseline], oldest first. *)
 }
+
+let records = ref []
+let () = Autotune.install_compile_observer (fun r -> records := r :: !records)
 
 let run ?placement_store tag =
   let reports = ref [] and shipped = ref None in
   delivered := 0;
+  records := [];
   let before = Context.backend_compiles () in
   let ((ctx, routine), ios), _record =
     Scripted_search.scripted ~measure (fun () ->
@@ -90,6 +102,14 @@ let run ?placement_store tag =
     match !shipped with Some s -> s | None -> failwith (tag ^ ": on_ship was not called")
   in
   let reports = List.rev !reports in
+  let baseline_records =
+    List.rev (List.filter !records ~f:(fun r -> String.equal r.Autotune.compile_attempt "baseline"))
+  in
+  List.iter baseline_records ~f:(fun r ->
+      Stdio.eprintf
+        "%s (not part of the golden): baseline record, stage %s verdict %s kernels %d\n%!" tag
+        r.Autotune.compile_stage r.Autotune.compile_verdict
+        r.Autotune.compile_cost.Ir.Compile_cost.kernels);
   Stdio.eprintf
     "%s (not part of the golden): shipped %s replayed %b, ship_compiles %d, call compiles %d, \
      reports [%s]\n\
@@ -100,13 +120,26 @@ let run ?placement_store tag =
             Printf.sprintf "%s compiles %d replay %d"
               (Autotune.outcome_name r.Autotune.outcome)
               r.Autotune.compiles r.Autotune.replay_compiles)));
-  { reports; shipped; compiled; output; ios }
+  { reports; shipped; compiled; output; ios; baseline_records }
 
 let replay (r : Autotune.report) =
   match r.Autotune.outcome with Autotune.Cache_replay -> true | _ -> false
 
 let searched (r : Autotune.report) =
   match r.Autotune.outcome with Autotune.Searched -> true | _ -> false
+
+(* gh-ocannl-1666: a cache hit's search compiled nothing but its replay. *)
+let compiled_only_its_replay (r : Autotune.report) =
+  r.Autotune.compiles = r.Autotune.replay_compiles
+
+(* ... and its baseline was lowered, never rendered: every record of attempt [baseline] is the base
+   compile's, refused before codegen with no kernel, and there is one per search. *)
+let baseline_only_lowered c =
+  List.length c.baseline_records = List.length c.reports
+  && List.for_all c.baseline_records ~f:(fun r ->
+      String.equal r.Autotune.compile_stage "base_compile"
+      && String.equal r.Autotune.compile_verdict "refused"
+      && r.Autotune.compile_cost.Ir.Compile_cost.kernels = 0)
 
 let accounted tag c =
   p
@@ -156,6 +189,9 @@ let () =
     (match warm.reports with [ r ] -> r.Autotune.replay_compiles = one_compile | _ -> false);
   hit_claim warm_ios "warm: the shipped routine took no compile -- the validated code, linked again"
     (warm.shipped.ship_compiles = 0);
+  hit_claim warm_ios "warm: the hit compiled nothing but its schedule -- no serial baseline"
+    (match warm.reports with [ r ] -> replay r && compiled_only_its_replay r | _ -> false);
+  hit_claim warm_ios "warm: its baseline was lowered, never rendered" (baseline_only_lowered warm);
   accounted "warm" warm;
   let shipped_report = bypass.shipped.ship_report in
   let bypass_ios = cold.ios @ bypass.ios in
@@ -167,6 +203,23 @@ let () =
   hit_claim bypass_ios "bypass: that hit compiled its schedule once"
     (Option.exists shipped_report ~f:(fun r -> r.Autotune.replay_compiles = one_compile));
   hit_claim bypass_ios "bypass: the shipped arm took no compile" (bypass.shipped.ship_compiles = 0);
+  hit_claim bypass_ios "bypass: each arm's hit compiled nothing but its schedule"
+    (List.length bypass.reports = 2
+    && List.for_all bypass.reports ~f:(fun r -> replay r && compiled_only_its_replay r));
+  hit_claim bypass_ios "bypass: no baseline was rendered" (baseline_only_lowered bypass);
+  (* Where a search times its baseline, it compiles it: on a CPU backend the cold searches' records
+     are not only the base compile's, so the claims above are not vacuous for want of any baseline
+     compile. A GPU backend never dispatches the serial form (gh-ocannl-532), so it compiles
+     none. *)
+  let dispatched = not (Ir.Schedule.backend_is_gpu (Context.backend_name (Context.auto ()))) in
+  p
+    "cold: each search compiled its serial baseline exactly where it is dispatched (CPU), after \
+     the base compile"
+    (List.length cold.baseline_records = (if dispatched then 2 else 1) * List.length cold.reports
+    && List.count cold.baseline_records ~f:(fun r ->
+           String.equal r.Autotune.compile_stage "baseline_compile"
+           && String.equal r.Autotune.compile_verdict "compiled")
+       = if dispatched then List.length cold.reports else 0);
   accounted "bypass" bypass;
   p_all2 "warm: the relinked routine computes the cold output bit for bit" warm.output cold.output
     ~f:Float.equal;

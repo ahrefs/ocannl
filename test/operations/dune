@@ -11109,6 +11109,22 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1666: the serial baseline's timing window ends, admitted, once its samples reach
+; Autotune.baseline_window_ms -- the rule pure, the sampling loop, and executed cc searches under
+; both objectives, on a scripted clock; each leg pins a bounded window and one under the bound.
+
+(test
+ (name autotune_baseline_window)
+ ; ocannl-backend: cc -- Context.cpu (); the claims are about window lengths on a scripted clock
+ ; cc-vector-width: independent -- the claims are about how many samples the baseline's window
+ ; takes on a scripted clock, never about which candidates the search seeds
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules autotune_baseline_window)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  (name set_equal_rows)
  (package neural_nets_lib)

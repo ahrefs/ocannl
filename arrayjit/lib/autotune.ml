@@ -800,18 +800,25 @@ let contention_ratio = 2.
 
    [hopeless] (gh-ocannl-1527, default never) is asked after every sample with the window so far,
    oldest first; when it answers, the loop raises {!Timing_hopeless} at once, so a window that
-   already proves its candidate out of the running stops taking samples. *)
+   already proves its candidate out of the running stops taking samples.
+
+   [bounded] (gh-ocannl-1666, default never) is asked, with the window so far, once it holds the
+   caller's [repeats]; when it answers [true] the window ends there, ADMITTED -- unlike [hopeless],
+   whose window is unranked. Checked before each fresh sample, so a resumed window that already
+   satisfies it takes none. *)
 type hopeless = { hopeless_ms : float; hopeless_threshold_ms : float; hopeless_samples : int }
 
 exception Timing_hopeless of hopeless
 
-let sample_window ?(prior = []) ?(hopeless = fun _ -> None) ~repeats ~sample () =
+let sample_window ?(prior = []) ?(hopeless = fun _ -> None) ?(bounded = fun _ -> false) ~repeats
+    ~sample () =
   let samples = ref (List.rev prior) in
   let total = ref (List.fold prior ~init:0. ~f:(fun total s -> total +. s.per_launch_ms)) in
   let count = ref (List.length prior) in
   while
-    !count < Int.max min_timing_samples (Int.max 1 repeats)
-    || (Float.(!total < min_timing_ms) && !count < max_timing_runs)
+    (!count < Int.max min_timing_samples (Int.max 1 repeats)
+    || (Float.(!total < min_timing_ms) && !count < max_timing_runs))
+    && not (!count >= Int.max 1 repeats && bounded (List.rev !samples))
   do
     let ({ per_launch_ms; _ } as timing_sample) = sample () in
     samples := timing_sample :: !samples;
@@ -900,6 +907,33 @@ let hopeless_window ?(at_least_ms = 0.) ~reference_ms samples =
       Some
         { hopeless_ms = r.ms; hopeless_threshold_ms = threshold_ms; hopeless_samples = r.samples }
     else None
+
+(* gh-ocannl-1666: the serial baseline's window bound. On cc every window takes at least
+   [min_timing_samples] samples, a floor that exists for sub-millisecond kernels, whose min-of-3 is
+   launch jitter; a slow serial baseline paid it in full -- sixteen synchronized singles of a
+   [gpt2_mini_train] b8 step plus the warmup, 56-80 s per placement arm, more than the whole base
+   compile once gh-ocannl-1603 outlined it. The baseline's window therefore ends, admitted, once it
+   holds [hopeless_min_samples] (and the caller's [repeats]) samples that are not dispersed and
+   whose [per_launch_ms] sum to at least [baseline_window_ms]: at most about that much sampled time,
+   or three samples of a routine slower than a third of it. A window under the bound -- every
+   millisecond-scale baseline -- keeps the floor exactly as before.
+
+   What it gives up, stated: noise only adds time, so a min-of-3 reads at least the min-of-16 of the
+   same samples, and the bounded baseline can only read slower than its full window would -- by the
+   jitter of seconds-long samples, where one sample's relative spread is far below the
+   sub-millisecond regime the floor was set for. It loses a near-tie it would have won, never wins
+   one it would have lost. Only the baseline is bounded: the candidates' ranking among themselves is
+   what the search is for, and it keeps the floor. [at_least_ms] gates a queued calibration's
+   singles exactly as {!hopeless_window}'s does: they are cut only where they are the reading. *)
+let baseline_window_ms = 3000.
+
+let window_bounded ?(at_least_ms = 0.) ~bound_ms samples =
+  List.length samples >= hopeless_min_samples
+  &&
+  let r = window_result samples in
+  (not r.dispersed) && Float.is_finite r.ms && Float.is_positive r.ms
+  && Float.(r.ms >= at_least_ms)
+  && Float.(List.sum (module Float) samples ~f:(fun s -> s.per_launch_ms) >= bound_ms)
 
 (* How a timing call turns a dispersed window into a verdict (gh-ocannl-1558). [Refuse_dispersed] is
    the dispersion-only rule, kept on GPU backends: host CPU accounting cannot see a device
@@ -1545,12 +1579,17 @@ let install_compile_observer f =
    returns the wall in milliseconds. Separated from [time_routine] so a test can drive the whole
    policy -- which depth a call settles on, which window it times, how many launches each costs --
    on an injected clock, with no device and no machine-dependent routine (gh-ocannl-1074). *)
-let calibrate_and_time_from ~hopeless_against ~started ~tagged ~on_retry ~on_call ~phase
-    ~retry_contended ~dispersion ~timing ~repeats ~queue_depth_cap ~batch =
+let calibrate_and_time_from ~window_bound_ms ~hopeless_against ~started ~tagged ~on_retry ~on_call
+    ~phase ~retry_contended ~dispersion ~timing ~repeats ~queue_depth_cap ~batch =
   (* gh-ocannl-1527: the cut of a hopeless window, against the reading the caller ranks it by. *)
   let hopeless ?at_least_ms () =
     Option.map hopeless_against ~f:(fun reference_ms samples ->
         hopeless_window ?at_least_ms ~reference_ms samples)
+  in
+  (* gh-ocannl-1666: the admitted early end of a bounded window ({!window_bounded}). *)
+  let bounded ?at_least_ms () =
+    Option.map window_bound_ms ~f:(fun bound_ms samples ->
+        window_bounded ?at_least_ms ~bound_ms samples)
   in
   (* The host-load reading the window's attribution starts from (gh-ocannl-1558): the span covers
      exactly the window's samples. Taken here, before the calibration's first single, for a depth-1
@@ -1635,6 +1674,7 @@ let calibrate_and_time_from ~hopeless_against ~started ~tagged ~on_retry ~on_cal
         let singles =
           sample_window ~repeats:queue_calibration_runs
             ?hopeless:(hopeless ~at_least_ms:queued_batch_ms ())
+            ?bounded:(bounded ~at_least_ms:queued_batch_ms ())
             ~sample:(fun () ->
               let wall = batch 1 in
               { per_launch_ms = wall; contention_ms = wall })
@@ -1984,7 +2024,7 @@ let calibrate_and_time_from ~hopeless_against ~started ~tagged ~on_retry ~on_cal
     and timed_walls = ref (List.rev_map reused ~f:(fun s -> s.contention_ms)) in
     let result =
       window_result
-      @@ sample_window ~prior:reused ?hopeless:(hopeless ()) ~repeats
+      @@ sample_window ~prior:reused ?hopeless:(hopeless ()) ?bounded:(bounded ()) ~repeats
            ~sample:(fun () ->
              let wall = batch depth in
              timed_wall_ms := !timed_wall_ms +. wall;
@@ -2122,8 +2162,9 @@ let calibrate_and_time_from ~hopeless_against ~started ~tagged ~on_retry ~on_cal
    timed from this call's own start, and the dispersion policy it picks by backend. *)
 let calibrate_and_time_with_retry_observer ~hopeless_against ~on_retry ~on_call ~phase
     ~retry_contended ~dispersion ~timing ~repeats ~queue_depth_cap ~batch =
-  calibrate_and_time_from ~hopeless_against ~started:(Mtime_clock.counter ()) ~tagged:false
-    ~on_retry ~on_call ~phase ~retry_contended ~dispersion ~timing ~repeats ~queue_depth_cap ~batch
+  calibrate_and_time_from ~window_bound_ms:None ~hopeless_against ~started:(Mtime_clock.counter ())
+    ~tagged:false ~on_retry ~on_call ~phase ~retry_contended ~dispersion ~timing ~repeats
+    ~queue_depth_cap ~batch
 
 (* Preserve the original all-labelled helper's source interface: an optional observer would not
    erase without adding a positional argument. *)
@@ -2142,7 +2183,7 @@ exception Timing_stopped
 (* [routine.bindings] exposes the routine's live binding refs — restore them after timing (Codex P2
    on PR #103), or the returned winner would stay bound to the tuner's midpoint test values. *)
 let time_routine ?(on_retry = fun () -> ()) ?(on_call = fun _ -> ()) ?(tag_failures = false) ?phase
-    ?(stop = fun () -> false) ?hopeless_against ~timing ~repeats cctx routine =
+    ?(stop = fun () -> false) ?hopeless_against ?window_bound_ms ~timing ~repeats cctx routine =
   let check_stop () = if stop () then raise Timing_stopped in
   (* The call's [setup_ms] runs from here: the pre-dispatch validation, the warmup and the
      calibration. *)
@@ -2191,8 +2232,8 @@ let time_routine ?(on_retry = fun () -> ()) ?(on_call = fun _ -> ()) ?(tag_failu
         Int.incr ordinal;
         wall
       in
-      calibrate_and_time_from ~hopeless_against ~started ~tagged:tag_failures ~on_retry ~on_call
-        ~phase ~timing ~repeats
+      calibrate_and_time_from ~window_bound_ms ~hopeless_against ~started ~tagged:tag_failures
+        ~on_retry ~on_call ~phase ~timing ~repeats
         ~retry_contended:(retry_contended_window_for_backend (Context.backend_name cctx))
         ~dispersion:(dispersion_policy_for_backend (Context.backend_name cctx))
         ~queue_depth_cap:(queue_depth_cap_for_backend (Context.backend_name cctx))
@@ -7791,7 +7832,18 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
        arise: the scratch hazard by this compile's candidate-grade protection (gh-ocannl-533), the
        GPU dispatch hazard by [dispatchable] (gh-ocannl-532), and the missing "did tuning beat the
        default?" reference by [report.default_ms] — the [config_thresholds] seed's measurement, not
-       a new baseline. *)
+       a new baseline.
+
+       gh-ocannl-1666: the base compile LOWERS ONLY, on every backend. Its transform captures and
+       then unwinds before codegen: on a GPU backend as the gh-ocannl-1340 refusal, on a CPU one as
+       a deferral ([base_deferred]). The serial baseline's own codegen, compile and link happen only
+       where it is timed -- the search below ([baseline_compile]) -- so a cache replay, a refused
+       lineage, a search-less call and a replayed abandonment pay for none of it. A cc cache replay
+       used to compile the whole serial routine (a C compile of ~10 s per [gpt2_mini_train] arm
+       after gh-ocannl-1603's outlining) only to release it unrun. The gh-ocannl-533 protection
+       moves with the compile: a typed rejection there declines the baseline exactly as it did here.
+       What the search pays instead: its baseline compile lowers once more, as every candidate
+       compile does. *)
     let base_capture = ref None in
     (* gh-ocannl-1388: the base lowering as the transform received it, for deriving the seeded
        untuned plan exactly as the untuned compile derives it inside its own transform: codegen
@@ -7799,6 +7851,9 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
        plan's decisions key on placement-sensitive digests. GPU only: the plan is CUDA/HIP's. *)
     let base_pristine = ref None in
     let base_undispatched = ref false in
+    (* gh-ocannl-1666: the base compile unwound before codegen on a dispatchable baseline, which the
+       search compiles where it times it ([baseline_compile]). *)
+    let base_deferred = ref false in
     progress_stage "base_compile";
     let base_compile_from = ref None in
     let base_outcome =
@@ -7831,15 +7886,29 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
                            "the serial baseline binds no hardware dimension on %s (gh-ocannl-532)"
                            backend;
                      } )));
-          [ opt ])
+          (* gh-ocannl-1666: a dispatchable baseline is compiled where it is timed, not here. The
+             typed unwind is the gh-ocannl-1340 one, so nothing is counted, rendered or linked; the
+             [Error] arm below drops it by [base_deferred], like the refusal above by
+             [base_undispatched]. *)
+          base_deferred := true;
+          raise
+            (Outcome.Cause_at
+               ( Outcome.Transform,
+                 Outcome.Not_dispatched
+                   {
+                     origin = "baseline";
+                     detail =
+                       "the serial baseline is compiled only where it is timed (gh-ocannl-1666)";
+                   } )))
         ~provenance:Outcome.Candidate ~candidate:"baseline" search_ctx comp bindings
     in
     (* gh-ocannl-1604: the base compile's cost on [budget_clock], from the transform's start (after
        the baseline's attempt hook, as a candidate's span starts after its own hook) to its return:
-       the search's first compile evidence, so its first candidate compile is projected too. On a
-       GPU the serial baseline is refused before codegen (gh-ocannl-1340), so this is its lowering's
-       transform alone and the first candidate's cold compile stays the evidence that counts. Zero
-       without a budget. *)
+       the search's first compile evidence, so its first candidate compile is projected too. The
+       base compile unwinds before codegen on every backend (gh-ocannl-1340, gh-ocannl-1666), so
+       this is its lowering's transform alone; on a CPU backend the search's [baseline_compile]
+       joins it as evidence, and on a GPU one the first candidate's cold compile is the evidence
+       that counts. Zero without a budget. *)
     let base_compile_s =
       Option.value_map !base_compile_from ~default:0. ~f:(fun c0 ->
           Float.max 0. (budget_clock () -. c0))
@@ -7948,25 +8017,23 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
       | Ok (bctx, broutine) -> (Some (bctx, broutine), None)
       (* Refused before codegen, not declined: the search records the refusal where it always has,
          as [Not_dispatched_key "baseline"], and the two accounts stay exclusive. *)
-      | Error failure when !base_undispatched && is_not_dispatched failure -> (None, None)
+      | Error failure when (!base_undispatched || !base_deferred) && is_not_dispatched failure ->
+          (None, None)
       | Error (Outcome.Classified classified) -> (None, Some classified)
       | Error (Outcome.Fatal _ as failure) -> raise_pre_search ~base:base_report failure
     in
-    (* gh-ocannl-550: the base compile runs BEFORE the cache is consulted — its lowering is what
-       every candidate and every replay derives from — so on the two paths that do not search, its
-       linked artifact is dead as soon as that decision is taken, and nothing downstream can reach
-       it. On the search path it is timed (where it is dispatchable) and then released like any
-       candidate. Without this, a warm-cache process leaked one full base-candidate pool per [tune]
-       call, permanently (the pool table roots it), which for a repeatedly-tuning process is the
-       very accumulation this issue is about.
-
-       A ref, because a cache replay releases it BEFORE the replay compile (gh-ocannl-1326) and a
-       stale entry that sends the call on to search relinks it where it is to be timed. *)
+    (* gh-ocannl-550: a linked baseline is device memory the pool table roots, invisible to the GC,
+       so whatever path the call takes releases it -- on the search path once it is timed, like any
+       candidate. Since gh-ocannl-1666 only the search links one ([baseline_compile]), and the paths
+       that do not search hold nothing to release; the releases there stay for a base compile that
+       ever links again. Without them, a warm-cache process leaked one full base-candidate pool per
+       [tune] call, permanently, which for a repeatedly-tuning process was the very accumulation
+       gh-ocannl-550 was about. A release empties the ref, so the search compiles a baseline exactly
+       where none is linked. *)
     let baseline_linked = ref baseline_linked in
-    let baseline_released = ref false in
     let release_baseline () =
       Option.iter !baseline_linked ~f:(fun (bctx, _) ->
-          baseline_released := true;
+          baseline_linked := None;
           release_quietly ~what:"the baseline compile" bctx)
     in
     release_baseline_hook := release_baseline;
@@ -8131,11 +8198,12 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
     let mma_summary c = c.routine.Context.mma in
     let mma_scalar_fallbacks c = (mma_summary c).Ir.C_syntax.scalar_fallbacks in
     let mma_statements c = (mma_summary c).Ir.C_syntax.statements in
-    (* The decline census outlives the cache branch: the baseline compile happens before the lookup
-       and can be declined whether or not a cached winner then replays (gh-ocannl-533), so a
-       cache-hit report has to carry that rejection too — [baseline_declined] with an empty census
-       would be an internally inconsistent diagnostic on exactly the warm-cache runs of the workload
-       that motivated the fix (Codex review, PR #271). *)
+    (* The decline census outlives the cache branch: the base compile happens before the lookup and
+       can be declined (an injected fault at its [baseline] attempt, gh-ocannl-533) whether or not a
+       cached winner then replays, so a cache-hit report has to carry that rejection too —
+       [baseline_declined] with an empty census would be an internally inconsistent diagnostic
+       (Codex review, PR #271). Since gh-ocannl-1666 a decline of the baseline's own codegen or link
+       arises only in the search ([baseline_compile]), which is where it is recorded. *)
     let declines : (Outcome.rejection_key, decline_acc) Hashtbl.Poly.t = Hashtbl.Poly.create () in
     (* A declined baseline is an ordinary entry in the census: it is the same evidence about the
        same device as any candidate's rejection, and dropping it would report a smaller
@@ -8151,11 +8219,14 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
     (* gh-ocannl-1242: why a cache entry under this key did not replay, when it was refused with a
        typed cause — set by the lookup below and carried by every report after it. *)
     let cache_replay_refusal = ref None in
+    (* Whether the baseline was declined, by the base compile or (gh-ocannl-1666) by the search's
+       [baseline_compile], which sets it: every report after a decline says so. *)
+    let baseline_declined_so_far = ref (Option.is_some baseline_decline) in
     let census () =
       {
         base_report with
         candidates_failed = failed_count declines;
-        baseline_declined = Option.is_some baseline_decline;
+        baseline_declined = !baseline_declined_so_far;
         declines = decline_summaries declines;
         privatize_drops = decline_summaries privatize_declines;
         cache_replay_refusal = !cache_replay_refusal;
@@ -8270,7 +8341,10 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
     in
     (* The base compile's own device-memory decline refuses nothing by itself (it bounds no
        candidate from below, above): the floor answers. Where the baseline was refused before
-       codegen (every GPU backend's), it allocated nothing, and the floor answers in its place. *)
+       codegen (every GPU backend's), it allocated nothing, and the floor answers in its place. A
+       CPU baseline, deferred (gh-ocannl-1666), is not probed here: its own link in the search
+       ([baseline_compile]) is the first memory evidence, as the base link was, and a refusal there
+       asks the floor; a cache replay's link answers for a hit. *)
     if Option.is_none lineage_refusal then
       if Option.exists baseline_decline ~f:is_device_memory then probe_floor ~account:false
       else if !base_undispatched then probe_floor ~account:true;
@@ -8289,8 +8363,8 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
             in
             (* gh-ocannl-1326: the replay must not find the baseline's working set still resident:
                on a step that uses over half the device it was refused at link while the baseline
-               held the rest, so every warm process re-searched. Dead on a hit, and relinked by the
-               search if this entry turns out stale. *)
+               held the rest, so every warm process re-searched. Since gh-ocannl-1666 none is linked
+               here (a no-op); the search compiles one if this entry turns out stale. *)
             release_baseline ();
             progress_stage "cache_replay";
             (* An entry written before the gh-ocannl-532 rule can name the serial baseline as the
@@ -8594,20 +8668,35 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
               execution_effect = Outcome.No_device_writes;
             }
         in
-        (* A stale cache entry released the baseline before its replay (gh-ocannl-1326); relink it
-           where it is to be timed. Not where it is not: an undispatched baseline is only ever
-           released. *)
+        (* gh-ocannl-1666: the serial baseline's compile, here where it is timed and nowhere else --
+           the base compile only lowered. Not where it is not timed: an undispatched baseline is
+           never compiled, and one the base compile declined (gh-ocannl-533) stays declined. Its
+           record is the [baseline_compile] stage's, attempt [baseline]; its cost on [budget_clock]
+           is the budget projection's evidence beside the base compile's ([base_compile_s]). *)
+        let baseline_compile_s = ref 0. in
         let baseline_decline =
-          if !baseline_released && dispatchable ~is_gpu [ base_opt ] then (
-            progress_stage "baseline_relink";
-            match compile_spec (Whole (W_saved ([], None))) with
+          if
+            Option.is_none baseline_decline && Option.is_none !baseline_linked
+            && dispatchable ~is_gpu [ base_opt ]
+          then (
+            progress_stage "baseline_compile";
+            let c0 = budget_clock () in
+            let compiled =
+              costed ~attempt:"baseline" ~verdict_of:outcome_verdict (fun () ->
+                  compile_candidate ?name ~label:"baseline" ~on_privatize_drops ~static_indices
+                    ~base_opt ~canon ~limits ~is_gpu ~is_cpu ~provenance:Outcome.Candidate
+                    search_ctx comp bindings
+                    (Whole (W_saved ([], None))))
+            in
+            if Option.is_some budget then baseline_compile_s := Float.max 0. (budget_clock () -. c0);
+            match compiled with
             | Ok c ->
                 baseline_linked := Some (c.cctx, c.routine);
                 baseline_decline
             | Error (Outcome.Classified classified) ->
-                baseline_linked := None;
                 record_decline declines classified;
-                (* The same footprint question as the base compile's (gh-ocannl-1554): a relink the
+                baseline_declined_so_far := true;
+                (* The same footprint question as the base compile's (gh-ocannl-1554): a link the
                    device refused bounds no candidate from below, the floor does. *)
                 if is_device_memory classified then probe_floor ~account:false;
                 Some classified
@@ -8691,7 +8780,9 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
                    nothing and condemns nothing, and propagates as the pre-search failure. *)
                 Outcome.tag Outcome.Preflight before_timing_window;
                 progress_stage "baseline_timing";
-                time_routine ~on_retry ~on_call ~tag_failures:true ~timing ~repeats b.cctx b.routine
+                (* gh-ocannl-1666: the one window that is bounded ({!window_bounded}). *)
+                time_routine ~on_retry ~on_call ~tag_failures:true
+                  ~window_bound_ms:baseline_window_ms ~timing ~repeats b.cctx b.routine
               with
               | timing_result -> (
                   let timing_result =
@@ -9175,7 +9266,7 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
              leaves [last_attempt] at [`Other]: the staffed sweep must neither retry it bare nor
              rank a stale dedup time for it. *)
           let budget_spent = ref false in
-          let costliest_compile_s = ref base_compile_s in
+          let costliest_compile_s = ref (Float.max base_compile_s !baseline_compile_s) in
           let spend_budget ~b ~elapsed reason =
             budget_spent := true;
             logf "budget of %gs %s (%.1f s elapsed, %d timed): crowning the incumbent" b reason

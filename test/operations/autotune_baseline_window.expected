@@ -1,0 +1,23 @@
+== the rule, pure ==
+the bound is reached at three samples of a third of it, not at two: true
+a window just short of the bound is not ended: true
+a sixteen-sample window under the bound is not ended: true
+a dispersed window is not ended, however long: true
+the gate keeps a minimum under it from ending the window, and admits one at it: true
+no finite positive minimum, no early end: true
+== the sampling loop ==
+a slow window ends at three samples under the bound: true
+... and takes its whole sixteen-sample floor without it: true
+a fast window keeps its floor under the bound: true
+the caller's repeats still wins: five repeats take five slow samples: true
+a resumed window that already meets the bound takes no fresh sample: true
+== executed cc searches ==
+isolated: a slow baseline's window ended at three samples: true
+isolated: ... admitted and ranked at its reading: true
+isolated: every other window, timed beside it, took its whole floor: true
+isolated: a fast baseline's window took its whole floor: true
+queued: a slow baseline's window ended at three samples: true
+queued: ... admitted and ranked at its reading: true
+queued: every other window, timed beside it, took its whole floor: true
+queued: a fast baseline's window took its whole floor: true
+autotune_baseline_window: done
