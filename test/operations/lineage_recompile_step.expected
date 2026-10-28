@@ -10,3 +10,8 @@ step 2: the parameter agrees bitwise with the materialized lineage: true
 step 3: compiles in the lineage that ran the earlier steps: true
 step 3: changes the parameter: true
 step 3: the parameter agrees bitwise with the materialized lineage: true
+after step 1, the lineage stores w.grad's template: true
+every later step's lineage stores as many template components as step 1's: true
+every recompile after the first emits a routine as large as the second: true
+eight more recompiles store as many template components as step 1: true
+eight more recompiles emit a routine as large as the second step's: true

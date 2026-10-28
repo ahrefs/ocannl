@@ -815,9 +815,9 @@ let free_pools_continuing ?before_free device ~free_pool pool_ids =
 
 (* Uncommitted compile deltas have no upload siblings. Use the same owned-pool classification as
    upload reference registration and context cleanup, freeing each pool once. *)
-let free_owned_pools ~device ~free_pool ~owned_elsewhere (ctx_buffers : ctx_buffers) : unit =
+let free_owned_pools ~device ~root ~free_pool ~owned_elsewhere (ctx_buffers : ctx_buffers) : unit =
   free_pools_continuing device ~free_pool
-    (Set.to_list (owned_pool_ids ~device ~owned_elsewhere ctx_buffers))
+    (Set.to_list (owned_pool_ids ~device ~root ~owned_elsewhere ctx_buffers))
 
 (** Adds a scheduler and brings a lowered no-device backend on par with lowered device backends. *)
 module Add_device
@@ -1167,6 +1167,11 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     dp_cached_constants : (Tn.t * buffer_loc) list;
         (** Constants a [constant_buffer_cache] hit already resolves on this device. *)
     dp_new_constants : group_layout option;
+        (** New host-literal constants: device-wide ([Constant_key.Shared]). *)
+    dp_new_root_constants : group_layout option;
+        (** New constants of the context's root ([Constant_key.Rooted]), in pools of their own: such
+            a pool is freed once no live release unit binds it (gh-ocannl-1654), so it must hold
+            nothing a device-wide entry points into. *)
   }
 
   (* Lay a group out into pools. With a liveness plan (the working group under [buffer_aliasing]),
@@ -1231,14 +1236,21 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     in
     let cached, fresh =
       List.partition_map constants ~f:(fun (key, node) ->
-          match Hashtbl.find context.device.constant_buffer_cache key with
+          match find_constant context.device ~root:context.constant_root key with
           | Some data -> First (key, data)
           | None -> Second (key, node))
+    in
+    let shared, rooted =
+      List.partition_tf fresh ~f:(fun (key, _) ->
+          match constant_key ~root:context.constant_root key with
+          | Constant_key.Shared _ -> true
+          | Constant_key.Rooted _ -> false)
     in
     {
       dp_working = plan_group ?arena:alias_spans ~cap ~constant:false working;
       dp_cached_constants = cached;
-      dp_new_constants = plan_group ~cap ~constant:true fresh;
+      dp_new_constants = plan_group ~cap ~constant:true shared;
+      dp_new_root_constants = plan_group ~cap ~constant:true rooted;
     }
 
   (* The pool allocations of one delta, counted at the shared seam: what [allocate_delta] and the
@@ -1386,11 +1398,14 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
          [finalize] (freed at device teardown). *)
       List.iter plan.dp_cached_constants ~f:(fun (key, data) ->
           ctx_buffers := Map.add_exn !ctx_buffers ~key ~data);
-      Option.iter plan.dp_new_constants ~f:(fun gl ->
+      List.iter
+        (List.filter_opt [ plan.dp_new_constants; plan.dp_new_root_constants ])
+        ~f:(fun gl ->
           pack gl ~register:(fun key ~alloc ->
+              let cache_key = constant_key ~root:context.constant_root key in
               let data =
-                Hashtbl.find_or_add device.constant_buffer_cache key ~default:(fun () ->
-                    cache_inserts := key :: !cache_inserts;
+                Hashtbl.find_or_add device.constant_buffer_cache cache_key ~default:(fun () ->
+                    cache_inserts := cache_key :: !cache_inserts;
                     alloc ())
               in
               ctx_buffers := Map.add_exn !ctx_buffers ~key ~data))
@@ -1473,12 +1488,18 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
           lowered
     in
     let plan = plan_delta context ~alias_spans lowered in
-    let groups = List.filter_opt [ plan.dp_working; plan.dp_new_constants ] in
+    let groups =
+      List.filter_opt [ plan.dp_working; plan.dp_new_constants; plan.dp_new_root_constants ]
+    in
     let bytes gl = List.sum (module Int) gl.gl_pools ~f:fst in
     let summary =
       {
         ld_working_bytes = Option.value_map plan.dp_working ~default:0 ~f:bytes;
-        ld_constant_bytes = Option.value_map plan.dp_new_constants ~default:0 ~f:bytes;
+        ld_constant_bytes =
+          List.sum
+            (module Int)
+            (List.filter_opt [ plan.dp_new_constants; plan.dp_new_root_constants ])
+            ~f:bytes;
         ld_pools = List.sum (module Int) groups ~f:(fun gl -> List.length gl.gl_pools);
         ld_liveness_planned = Option.is_some alias_spans;
       }
@@ -1546,7 +1567,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     in
     let fresh =
       List.filter constants ~f:(fun (key, _) ->
-          Set.mem touched key && not (Hashtbl.mem context.device.constant_buffer_cache key))
+          Set.mem touched key
+          && Option.is_none (find_constant context.device ~root:context.constant_root key))
     in
     let replaceable, kept =
       List.partition_tf fresh ~f:(fun (key, _) -> Schedule.may_replace_by_packed_tile plc key)
@@ -1600,8 +1622,18 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
        be refusing work, and that must not replace the link failure the caller has to classify. *)
     (try Device.await context.device with _ -> ());
     Option.iter free_pool ~f:(fun free_pool ->
-        free_owned_pools ~device:context.device ~free_pool
-          ~owned_elsewhere:(Map.mem context.ctx_buffers) ctx_buffers)
+        free_owned_pools ~device:context.device ~root:context.constant_root ~free_pool
+          ~owned_elsewhere:(Map.mem context.ctx_buffers) ctx_buffers;
+        (* gh-ocannl-1654 (review round 2): the delta's rooted constant pools no live unit holds --
+           allocated by this delta, with the link failing before (or, its holds given back, after)
+           the child that would have held them. After the owned pools: those are told apart from
+           constants by the cache, so an evicted pool would read as owned and be freed twice. *)
+        let unheld =
+          reclaim_rooted_constants context.device ~mode:`Unheld
+            (rooted_pools_of context.device ~root:context.constant_root
+               (Map.filter_keys ctx_buffers ~f:(fun key -> not (Map.mem context.ctx_buffers key))))
+        in
+        free_pools_continuing context.device ~free_pool (Set.to_list unheld))
 
   (* Runs [f] on a freshly allocated delta, freeing that delta if [f] raises. Everything after the
      allocation belongs inside: a failure past [make_child] discards the child too, so its pools are
@@ -1685,15 +1717,26 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
               (bindings, schedule, release_hook)
         in
         let context = make_child ~ctx_buffers ~optimize_ctx context in
-        (* gh-ocannl-1445: released with the context the routine's buffers live in. *)
-        Option.iter release_hook ~f:(fun hook ->
-            context.release_hooks := hook :: !(context.release_hooks));
-        let schedule =
-          Task.prepend schedule ~work:(fun () ->
-              check_merge_buffer context.device ~code_node:code.expected_merge_node)
-        in
-        sync_routine
-          { context; schedule; bindings; name = code.name; inputs; merge_buffer_input; outputs })
+        (* gh-ocannl-1654: a failure from here on discards the child unreleased; its holds are given
+           back so the delta's discard ([free_delta]) can reclaim the pools nothing else holds. *)
+        match
+          (* gh-ocannl-1445: released with the context the routine's buffers live in. *)
+          Option.iter release_hook ~f:(fun hook ->
+              context.release_hooks := hook :: !(context.release_hooks));
+          let schedule =
+            Task.prepend schedule ~work:(fun () ->
+                check_merge_buffer context.device ~code_node:code.expected_merge_node)
+          in
+          sync_routine
+            { context; schedule; bindings; name = code.name; inputs; merge_buffer_input; outputs }
+        with
+        | routine -> routine
+        | exception exn ->
+            let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+            ignore
+              (reclaim_rooted_constants context.device context.held_constant_pools ~mode:`Unhold
+                : Set.M(Int).t);
+            Stdlib.Printexc.raise_with_backtrace exn backtrace)
 end
 
 module Make_device_backend_from_lowered
@@ -1727,7 +1770,7 @@ let finalize (type dev runner event)
         Backend.await ctx.device;
         let owners = ctx.upload_arenas.pool_owners in
         let pools =
-          owned_pool_ids ~device:ctx.device
+          owned_pool_ids ~device:ctx.device ~root:ctx.constant_root
             ~owned_elsewhere:(fun key ->
               Option.exists ctx.parent ~f:(fun pc -> Map.mem pc.ctx_buffers key))
             ctx.ctx_buffers
@@ -1775,6 +1818,12 @@ let finalize (type dev runner event)
     match cleanup () with
     | () ->
         Alloc_census.count_context_released ();
+        (* gh-ocannl-1654: the root's constant pools this unit was the last live binder of. Past the
+           committed flag, like the hooks: the unit's own pools ARE freed, and the counts are
+           already given back, so a failed free leaks the pool rather than freeing it twice. *)
+        let unowned = reclaim_rooted_constants ctx.device ctx.held_constant_pools ~mode:`Release in
+        Option.iter Backend.free_pool ~f:(fun free_pool ->
+            free_pools_continuing ctx.device ~free_pool (Set.to_list unowned));
         let violations = arena_violations () in
         run_release_hooks ();
         if not (List.is_empty violations) then

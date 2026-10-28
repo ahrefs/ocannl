@@ -1096,7 +1096,11 @@ let case_carried_accepted ?b_w_code ?(then_uncovered = false) ~label ~tag ~w_cod
   materialize out;
   let b_w_code = Option.value b_w_code ~default:w_code in
   let llc_b = List.reduce_exn ~f:seq [ fill_v v; b_w_code ~w ~x ~v; read_w ~out ~w ] in
-  let before = Option.value (template_count ctx w ~f:(read_of v)) ~default:0 in
+  (* Which component B stores is read off the template's head: a re-store of the same setter
+     supersedes A's twin rather than adding a second copy (gh-ocannl-1653), so the count of reads of
+     [v] need not grow. *)
+  let head () = Option.bind (Hashtbl.find ctx.LL.computations w) ~f:List.hd in
+  let head_a = head () in
   let seed_b = [ (x, x_vals); (out, blank dim) ] in
   match consume_local ctx ~name:("sts_" ^ tag ^ "_b") llc_b with
   | Refused msg | Crashed msg ->
@@ -1107,7 +1111,10 @@ let case_carried_accepted ?b_w_code ?(then_uncovered = false) ~label ~tag ~w_cod
         (known_virtual o_b w && known_local o_b v && not (Set.mem (inputs o_b) v));
       p
         (label ^ ": B stored w's template again, reading v")
-        (Option.value (template_count ctx w ~f:(read_of v)) ~default:0 > before);
+        (match (head (), head_a) with
+        | Some ((_, body) as b), Some a ->
+            (not (phys_equal b a)) && count_scalar ~f:(read_of v) body > 0
+        | _ -> false);
       let got = execute ~name:("sts_" ^ tag ^ "_b") o_b ~seed:seed_b ~read:[ out ] in
       p_all2
         (label ^ ": out executes to its expected values")

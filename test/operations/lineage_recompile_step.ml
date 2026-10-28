@@ -47,14 +47,27 @@ let () =
   let grad t = (Option.value_exn ~here:[%here] t.Tensor.diff).grad in
   let y_grad = grad y and w_grad = grad w in
   let read ctx = Context.get_values ctx w.Tensor.value in
+  (* gh-ocannl-1653: what a recompile costs the lineage -- the stored template components every
+     later read replays, and the statements of the routine the compile emits. *)
+  let code_size (routine : Context.routine) =
+    List.sum
+      (module Int)
+      routine.Context.segments
+      ~f:(fun o -> Ll_test.count_stmt ~in_scopes:true ~f:(fun _ -> true) o.Ir.Low_level.llc)
+  in
+  let sizes = ref [] in
   (* One step: [Error] when the compile is refused (the base behaviour under test). *)
   let step ctx =
     match Context.compile ctx comp IDX.empty with
     | ctx, routine ->
+        sizes := code_size routine :: !sizes;
         let ctx = Context.run ctx routine in
         Ok (ctx, read ctx)
     | exception Utils.User_error msg -> Error msg
   in
+  let totals = ref [] in
+  let w_grad_components = ref 0 in
+  let last = ref None in
   let fresh () = Train.init_params (Context.auto ()) IDX.empty loss in
   let lineage = fresh () in
   Stdio.eprintf "backend: %s (not part of the golden)\n%!" (Context.backend_name lineage);
@@ -66,6 +79,16 @@ let () =
       match (step ctx_l, step ctx_r) with
       | Ok (ctx_l, got), Ok (ctx_r, expected) ->
           p (label ^ ": compiles in the lineage that ran the earlier steps") true;
+          totals := Context.stored_component_total ctx_l :: !totals;
+          Stdio.eprintf
+            "%s: %d stored components (w.grad: %d), routine of %d statements (not part of the \
+             golden)\n\
+             %!"
+            label (List.hd_exn !totals)
+            (Context.stored_components ctx_l w_grad)
+            (List.nth_exn !sizes 1);
+          if k = 1 then w_grad_components := Context.stored_components ctx_l w_grad;
+          last := Some ctx_l;
           if k = 1 then (
             let plc = Context.placements ctx_l and plc_r = Context.placements ctx_r in
             (* The shape under test: without these, the later steps would pass vacuously. *)
@@ -92,4 +115,43 @@ let () =
           p (label ^ ": compiles in the lineage that ran the earlier steps (" ^ msg ^ ")") false
       | _, Error msg -> p (label ^ ": the materialized reference compiles (" ^ msg ^ ")") false
   in
-  steps 1 ~before:snapshot lineage reference
+  steps 1 ~before:snapshot lineage reference;
+  (* gh-ocannl-1653: a recompile of the same step replaces the template components its re-trace
+     supersedes, so neither the lineage's stored templates nor the recompiled routine grow with the
+     number of recompiles. Before, every recompile prepended one more copy of each re-stored
+     component, which every later read -- the recompiled routine's own reads included --
+     replayed. *)
+  let totals = List.rev !totals in
+  (let backend = Context.backend_name lineage in
+   gated
+     ~when_:(Ir.Schedule.backend_is_cpu backend)
+     ~on:backend "after step 1, the lineage stores w.grad's template" (!w_grad_components > 0));
+  (match totals with
+  | first :: rest ->
+      p_all "every later step's lineage stores as many template components as step 1's" rest
+        ~f:(fun t -> t = first)
+  | [] -> p "the steps ran" false);
+  (* The lineage's own sizes, newest first, interleaved with the reference's: keep the lineage's. *)
+  let lineage_sizes = List.rev !sizes |> List.filteri ~f:(fun i _ -> i % 2 = 0) in
+  (match lineage_sizes with
+  | _ :: second :: rest ->
+      p_all "every recompile after the first emits a routine as large as the second" rest
+        ~f:(fun n -> n = second)
+  | _ -> p "the steps ran" false);
+  (* A longer chain, compile-only (nothing runs, so no value claim needs a tolerance): eight more
+     recompiles of the step in the lineage, each from the previous one's context. *)
+  match (!last, totals) with
+  | Some ctx, first :: _ ->
+      let chain =
+        List.folding_map (List.range 0 8) ~init:ctx ~f:(fun ctx _ ->
+            let ctx, routine = Context.compile ctx comp IDX.empty in
+            (ctx, (Context.stored_component_total ctx, code_size routine)))
+      in
+      Stdio.eprintf
+        "compile-only chain (stored components, statements): %s (not part of the golden)\n%!"
+        (String.concat ~sep:" " (List.map chain ~f:(fun (t, n) -> Printf.sprintf "(%d, %d)" t n)));
+      p_all "eight more recompiles store as many template components as step 1" chain
+        ~f:(fun (t, _) -> t = first);
+      p_all "eight more recompiles emit a routine as large as the second step's" chain
+        ~f:(fun (_, n) -> n = List.nth_exn lineage_sizes 1)
+  | _ -> p "the steps ran" false

@@ -90,7 +90,7 @@ type execution_ledger = {
       (** Per routine id, the [written_buffers] entries the routine's latest {!run} introduced —
           what [rollback_execution] withdraws for a run known not to have written. *)
   mutable observed_tokens : int Map.M(Buffer_key).t;
-      (** For each device-wide constant buffer this lineage wrote or adopted, the write token it
+      (** For each device-wide host-literal buffer this lineage wrote or adopted, the write token it
           left there or adopted ([shared_write_tokens], gh-ocannl-1623). A buffer whose current
           token differs was overwritten by another root since. *)
   token_undo : token_undo list Hashtbl.M(Int).t;
@@ -100,19 +100,21 @@ type execution_ledger = {
 (** Shared mutable state for execution tracking, allocated once per root context. Shared by
     reference across all contexts derived from the same root. *)
 
-(* gh-ocannl-1623: write tokens for the buffers independently created roots can SHARE. A node every
+(* gh-ocannl-1623: write tokens for the buffers independently created roots SHARE. A node every
    routine of a compile only reads (and that is not [context_owned]) is laid out in its device's
-   [constant_buffer_cache], which every root on the device resolves to the same location -- the same
-   [Buffer_key] -- while each root keeps a ledger of its own. A write one root makes there
-   ([set_values], a device copy, a routine whose later compile writes the node) changes the bytes
-   another root's routine reads, and that root's ledger, which saw its own earlier write, still says
-   "written": a silent wrong value. Every write into such a buffer mints a fresh token, kept here
-   and in the writing ledger's [observed_tokens]; a run whose ledger holds a different token for a
-   buffer it reads is refused ([check_lineage_runnable]). Within one root the ledger is shared, so
-   its compile siblings always agree and keep sharing as before. Keys are constant-cache locations
-   only: they live as long as the device, and no other location is ever shared across roots (pool
-   ids are minted per device and never reused). Ordering needs no extra edge: roots on one device
-   share its single FIFO runner. *)
+   [constant_buffer_cache]. Since gh-ocannl-1654 only a host-initialized literal is cached
+   device-wide there, uploaded once and resolved by every root on the device to the same location --
+   the same [Buffer_key] -- while each root keeps a ledger of its own; any other constant is cached
+   per root, so no write can reach another root through it. Host literals are writable through the
+   API all the same, and a write one root makes to one ([set_values], a device copy, a routine whose
+   later compile writes the node) changes the bytes another root's routine reads, and that root's
+   ledger, which saw its own earlier write, still says "written": a silent wrong value. Every write
+   into such a buffer mints a fresh token, kept here and in the writing ledger's [observed_tokens];
+   a run whose ledger holds a different token for a buffer it reads is refused
+   ([check_lineage_runnable]). Within one root the ledger is shared, so its compile siblings always
+   agree and keep sharing as before. Keys are constant-cache locations only: they live as long as
+   the device, and no other location is shared across roots (pool ids are minted per device and
+   never reused). Ordering needs no extra edge: roots on one device share its single FIFO runner. *)
 and token_undo = {
   tu_key : Buffer_key.t;
   tu_minted : int;
@@ -296,8 +298,9 @@ let buffer_key ctx tn =
           Option.map (Map.find c.BI.ctx_buffers tn) ~f:(fun loc -> (c.BI.device.device_id, loc)));
     }
 
-(* [tn]'s buffer key in [ctx] when that buffer is its device's cached constant for [tn] -- the one
-   kind of buffer independently created roots can share (gh-ocannl-1623, [shared_write_tokens]). *)
+(* [tn]'s buffer key in [ctx] when that buffer is its device's cached host literal for [tn] -- the
+   one kind of buffer independently created roots share (gh-ocannl-1623, [shared_write_tokens]):
+   every other constant is cached per root (gh-ocannl-1654, [BI.Constant_key]). *)
 let shared_constant_key ctx tn =
   Backends.query ctx.wrapped
     {
@@ -305,9 +308,8 @@ let shared_constant_key ctx tn =
         (fun _ c ->
           match Map.find c.BI.ctx_buffers tn with
           | Some loc
-            when Option.exists
-                   (Hashtbl.find c.BI.device.constant_buffer_cache tn)
-                   ~f:(BI.equal_buffer_loc loc) ->
+            when Option.exists (BI.find_shared_constant c.BI.device tn) ~f:(BI.equal_buffer_loc loc)
+            ->
               Some (c.BI.device.device_id, loc)
           | _ -> None);
     }
@@ -532,8 +534,8 @@ let finish_link ctx comp wrapped
      self-initialize at link time from [Host_inits] (gh-ocannl-333), so they are excluded. *)
   let read_inputs = Set.diff backend_inputs comp.Asgns.embedded_nodes in
   let inputs = Set.filter read_inputs ~f:(fun tn -> not (Ir.Host_inits.mem tn)) in
-  (* gh-ocannl-1623: the reads whose buffers may be device-wide constants another root overwrites,
-     host-initialized ones included -- [run] refuses a stale one ([shared_write_tokens]). *)
+  (* gh-ocannl-1623: the reads whose buffers are device-wide host literals, which another root may
+     overwrite -- [run] refuses a stale one ([shared_write_tokens]). *)
   let shared_reads =
     Set.filter read_inputs ~f:(fun tn -> Option.is_some (shared_constant_key updated_ctx tn))
   in
@@ -791,10 +793,10 @@ let check_lineage_runnable ctx routine =
               input whose allocation-time zeros are its correct value can instead be declared so \
               with Ir.Tnode.mark_zero_valid."
              routine.name missing_names));
-  (* gh-ocannl-1623: a buffer this lineage did write, or may read as zero or as its host init, but
-     that lives in a device-wide constant pool another root has written since: the bytes are that
-     root's, not this lineage's ([shared_write_tokens]). Checked after the class above, so a node
-     this lineage never wrote is reported as uninitialized, which is the more basic mistake. *)
+  (* gh-ocannl-1623: a host literal this lineage did write or reads as its host init, but whose
+     device-wide buffer another root has written since: the bytes are that root's, not this
+     lineage's ([shared_write_tokens]). Checked after the class above, so a node this lineage never
+     wrote is reported as uninitialized, which is the more basic mistake. *)
   let stale_inputs =
     Set.filter routine.shared_reads ~f:(fun tn ->
         Option.exists (shared_constant_key routine.context tn) ~f:(stale_in ctx.ledger))
@@ -806,11 +808,12 @@ let check_lineage_runnable ctx routine =
      raise
      @@ Utils.User_error
           (Printf.sprintf
-             "Context.run: routine %s: input nodes %s live in a device-wide constant buffer that \
-              another independently created context wrote after this lineage last wrote or copied \
-              it, so they no longer hold this lineage's values. Re-seed them in this lineage (e.g. \
-              Context.set_values), copy them from the writer with Context.copy, or give each \
-              context its own buffer with Ir.Tnode.set_context_owned before compiling."
+             "Context.run: routine %s: input nodes %s are host-initialized literals, whose one \
+              device-wide buffer another independently created context wrote after this lineage \
+              last wrote or copied it, so they no longer hold this lineage's values. Re-seed them \
+              in this lineage (e.g. Context.set_values), copy them from the writer with \
+              Context.copy, or give each context its own buffer with Ir.Tnode.set_context_owned \
+              before compiling."
              routine.name stale_names));
 
   (* Check execution dependencies *)
@@ -818,9 +821,15 @@ let check_lineage_runnable ctx routine =
   if not (Set.is_empty missing_deps) then
     let dep_names =
       Set.to_list missing_deps
-      |> List.filter_map ~f:(fun dep_id ->
-          Option.map (Hashtbl.find ctx.ledger.routine_names dep_id) ~f:(fun n ->
-              Printf.sprintf "%s (id=%d)" n dep_id))
+      |> List.map ~f:(fun dep_id ->
+          match Hashtbl.find ctx.ledger.routine_names dep_id with
+          | Some n -> Printf.sprintf "%s (id=%d)" n dep_id
+          | None ->
+              (* gh-ocannl-1654: only a retired merge-buffer transfer loses its name. *)
+              Printf.sprintf
+                "a merge-buffer fill (id=%d) that a later fill superseded (refill the merge buffer \
+                 and compile the consumer against the new fill)"
+                dep_id)
       |> String.concat ~sep:", "
     in
     failwith
@@ -958,6 +967,30 @@ let placements ctx =
 let inherits_computation ctx tn =
   Backends.query ctx.wrapped
     { q = (fun _ c -> Hashtbl.mem c.BI.optimize_ctx.Ir.Low_level.computations tn) }
+
+let stored_components ctx tn =
+  Backends.query ctx.wrapped
+    {
+      q =
+        (fun _ c ->
+          Option.value_map ~default:0 ~f:List.length
+            (Hashtbl.find c.BI.optimize_ctx.Ir.Low_level.computations tn));
+    }
+
+let ledger_entries ctx =
+  let l = ctx.ledger in
+  Hashtbl.length l.routine_names + Set.length l.executed
+  + Hashtbl.length l.merge_buffer_readers
+  + Hashtbl.length l.fresh_writes + Hashtbl.length l.token_undo
+
+let stored_component_total ctx =
+  Backends.query ctx.wrapped
+    {
+      q =
+        (fun _ c ->
+          Hashtbl.fold c.BI.optimize_ctx.Ir.Low_level.computations ~init:0
+            ~f:(fun ~key:_ ~data acc -> acc + List.length data));
+    }
 
 (* gh-ocannl-599: [Local] is the unobservable placement class -- routine-scoped scratch the backend
    may keep in registers or on the stack, never a context buffer a routine writes back. Host access
@@ -1241,9 +1274,14 @@ let copy ?(into_merge_buffer = BI.No) ~src ~dst tn =
      executed. Keeping its id in the immutable destination frontier still gives a later merge-buffer
      consumer the real read edge; it also preserves sibling-compilation semantics. *)
   let record_merge_transfer dst ~name =
+    (* gh-ocannl-1654: the retired transfer leaves no record behind -- its name included, so a long
+       merge loop keeps the ledger bounded. Its id is never reused: a consumer compiled against it
+       keeps depending on it, and is refused as depending on a superseded fill (see
+       [check_lineage_runnable]), the only kind of id the ledger forgets the name of. *)
     Option.iter dst.ledger.current_merge_buffer_writer ~f:(fun old_transfer_id ->
         dst.ledger.executed <- Set.remove dst.ledger.executed old_transfer_id;
-        Hashtbl.remove dst.ledger.merge_buffer_readers old_transfer_id);
+        Hashtbl.remove dst.ledger.merge_buffer_readers old_transfer_id;
+        Hashtbl.remove dst.ledger.routine_names old_transfer_id);
     let transfer_id = dst.ledger.next_id in
     dst.ledger.next_id <- transfer_id + 1;
     Hashtbl.set dst.ledger.routine_names ~key:transfer_id ~data:name;
@@ -1280,8 +1318,9 @@ let copy ?(into_merge_buffer = BI.No) ~src ~dst tn =
             (Set.singleton (module Tn) tn)
         else (
           (* The source and destination buffers are physically the same: nothing to transfer. Two
-             independently rooted contexts can share it (a cached constant buffer) while keeping
-             separate ledgers, so the destination's ledger learns the buffer holds a value -- the
+             independently rooted contexts can share it (a device-wide host literal, gh-ocannl-1654)
+             while keeping separate ledgers, so the destination's ledger learns the buffer holds a
+             value -- the
              one [check_lineage_runnable] asks of a read-only input (gh-ocannl-1462) -- when the
              source's ledger, or the source context, says it was written. Nothing was written now,
              so the access history stays as it is. *)

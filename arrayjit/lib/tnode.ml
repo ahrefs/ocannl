@@ -197,8 +197,8 @@ type t = {
           resolves [Never_virtual] to [On_device] rather than [Local] for observable nodes). *)
   mutable context_owned : bool;
       (** The node can be mutated independently in each context (a model parameter). Even when a
-          routine only reads it, it must use working storage rather than a device-wide constant
-          pool. Set at graph construction and never cleared. *)
+          routine only reads it, it must use working storage rather than a constant pool (cached per
+          root, or per device for a host literal). Set at graph construction and never cleared. *)
   mutable host_constant : bool;
       (** Declared value-constancy: the node's values are fixed at construction and always equal its
           registered host-init data (an ndarray-backed literal). Set by [Tensor.ndarray] (and

@@ -73,10 +73,11 @@ type routine = private {
           backend's raw read set: the execution-dependency frontier is built from the unfiltered
           backend inputs before these exclusions. *)
   shared_reads : Set.M(Ir.Tnode).t;
-      (** The non-embedded nodes the routine reads whose buffers are their device's cached constants
-          ({!Ir.Backend_intf.field-device.constant_buffer_cache}) — host-initialized ones included —
-          which independently created contexts on the device share: {!run} refuses one another root
-          wrote since this lineage last wrote or copied it (gh-ocannl-1623). *)
+      (** The non-embedded nodes the routine reads whose buffers are their device's cached host
+          literals ({!Ir.Backend_intf.Constant_key}), the one kind of buffer independently created
+          contexts on the device share: {!run} refuses one another root wrote since this lineage
+          last wrote or copied it (gh-ocannl-1623). Any other constant is cached per root
+          (gh-ocannl-1654), so no other root's write can reach it. *)
   outputs : Set.M(Ir.Tnode).t;
       (** The materialized nodes the routine writes — what {!run} marks initialized. *)
   routine_id : int;
@@ -447,9 +448,16 @@ val copy : ?into_merge_buffer:Ir.Backend_intf.merge_buffer_use -> src:t -> dst:t
     the result is the same release unit as [dst] (as for an upload into an existing buffer):
     releasing either releases both, and repeated copies do not deepen the lifecycle chain
     ({!lifecycle_depth}, gh-ocannl-1623). When [src] and [dst] already bind the same buffer (two
-    independently created contexts sharing a device-wide constant), nothing moves: [dst]'s ledger
-    adopts the value -- and its current write token -- only if [src]'s ledger vouches for it and no
-    other root has overwritten it since (see {!run}). *)
+    independently created contexts sharing a device-wide host literal, or two contexts of one root
+    sharing its constant), nothing moves: [dst]'s ledger adopts the value -- and its current write
+    token -- only if [src]'s ledger vouches for it and no other root has overwritten it since (see
+    {!run}). *)
+
+val ledger_entries : t -> int
+(** How many per-id records the context's execution ledger (shared by its root) holds: routine
+    names, executed ids, merge-buffer reader registrations and per-run write records. Each compile
+    adds its routine's; a merge-buffer fill retires its predecessor's entirely, so repeated fills
+    keep the count constant (gh-ocannl-1654). A diagnostic. *)
 
 val lifecycle_depth : t -> int
 (** How many lifecycle ancestors the context has: the [parent] links {!release}'s refusal of a
@@ -683,11 +691,12 @@ val release : t -> unit
     queries), only for touching buffers. The check walks the lifecycle chain, one atomic read per
     ancestor.
 
-    What it does {e not} free: per-device constants
+    What it does {e not} free: device-wide host-literal constants
     ({!Ir.Backend_intf.field-device.constant_buffer_cache} entries), which are shared across
-    contexts by design and outlive them. That is a real bound on what this can do for a schedule
-    search — a hoisted [Stage] candidate mints a fresh packed constant per application, so those
-    accumulate whatever the caller does here (gh-ocannl-565).
+    contexts by design and outlive them until device teardown. A root's other constants are freed
+    with the release of the last context binding them (gh-ocannl-1654). That is a real bound on what
+    this can do for a schedule search — a hoisted [Stage] candidate mints a fresh packed constant
+    per application, so those accumulate whatever the caller does here (gh-ocannl-565).
 
     This exists because releasing is otherwise not something a finalizer can be relied on to do
     (gh-ocannl-550): the backends' pool tables hold a strong reference to every slab they allocated,
@@ -706,6 +715,15 @@ val inherits_computation : t -> Ir.Tnode.t -> bool
 (** Whether an earlier routine of the context's compilation lineage stored a computation for the
     node (gh-ocannl-1274): a later compile that reads or updates it replays that inherited prefix,
     which the routine's own code does not show. Side-effect free. *)
+
+val stored_components : t -> Ir.Tnode.t -> int
+(** How many components the lineage's stored template for the node holds: what a later read of it
+    replays, one component per stored setter (gh-ocannl-1653). [0] when none is stored. A
+    diagnostic; side-effect free. *)
+
+val stored_component_total : t -> int
+(** {!stored_components} summed over every node of the lineage's computations table. A diagnostic
+    (gh-ocannl-1653); side-effect free. *)
 
 val decide_materialized : t -> Ir.Tnode.t list -> t
 (** A child context whose compilation lineage additionally decides [On_device] placement for the

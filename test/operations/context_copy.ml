@@ -14,7 +14,9 @@
    transfer fails the static check. 6. (gh-ocannl-1623, on the SELECTED backend) repeated copies --
    into an existing buffer, into a fresh destination followed by overwrites, and into the merge
    buffer -- keep the destination's lifecycle depth constant, and a copy's result is its
-   destination's release unit, in both directions. *)
+   destination's release unit, in both directions. The destination's execution ledger stays the same
+   size through all three (gh-ocannl-1654: a merge fill retires its predecessor's records, its name
+   included), and a consumer of a superseded fill is refused, naming it. *)
 
 open Base
 open Stdio
@@ -114,31 +116,46 @@ let scenario_copy_chain () =
      whether every read-back matched. *)
   let copy_loop ?into_merge_buffer ~src ~dst () =
     let src = ref src and dst = ref dst and depths = ref [] and matched = ref true in
+    let entries = ref [] in
     for i = 1 to iterations do
       let changing = i % 250 = 0 in
       if changing then src := Context.set_values !src tn (values i);
       dst := Context.copy ?into_merge_buffer ~src:!src ~dst:!dst tn;
       depths := Context.lifecycle_depth !dst :: !depths;
+      if i % 100 = 0 then entries := Context.ledger_entries !dst :: !entries;
       if changing && Option.is_none into_merge_buffer then
         matched := !matched && Poly.equal (Context.get_values !dst tn) (values i)
     done;
-    (!src, !dst, !depths, !matched)
+    (!src, !dst, (!depths, !entries), !matched)
+  in
+  let same_ledger label ~initial entries =
+    Verdict.p_all (label ^ ": every sampled ledger size is the initial one") entries ~f:(fun n ->
+        n = initial)
   in
   let ctx_a = root () and ctx_b = root () in
   let depth_b = Context.lifecycle_depth ctx_b in
+  let ledger_b = Context.ledger_entries ctx_b in
   Verdict.p "a compiled destination has a lifecycle ancestor" (depth_b >= 1);
-  let ctx_a, ctx_b, depths, matched = copy_loop ~src:ctx_a ~dst:ctx_b () in
+  let ctx_a, ctx_b, (depths, entries), matched = copy_loop ~src:ctx_a ~dst:ctx_b () in
+  same_ledger "copies into an existing buffer" ~initial:ledger_b entries;
   Verdict.p_all "copies into an existing buffer: every sampled depth is the initial one" depths
     ~f:(fun d -> d = depth_b);
   Verdict.p "copies into an existing buffer: each changed value reached the destination" matched;
   let ctx_c = Context.auto () in
   Verdict.p "a fresh root is at depth 0" (Context.lifecycle_depth ctx_c = 0);
   let ctx_c = Context.copy ~src:ctx_a ~dst:ctx_c tn in
-  let ctx_a, ctx_c, depths, matched = copy_loop ~src:ctx_a ~dst:ctx_c () in
+  let ledger_c = Context.ledger_entries ctx_c in
+  let ctx_a, ctx_c, (depths, entries), matched = copy_loop ~src:ctx_a ~dst:ctx_c () in
+  same_ledger "a fresh destination, then overwrites" ~initial:ledger_c entries;
   Verdict.p_all "a fresh destination, then overwrites: every sampled depth is 0" (0 :: depths)
     ~f:(fun d -> d = 0);
   Verdict.p "a fresh destination, then overwrites: each changed value reached it" matched;
-  let ctx_a, ctx_b, depths, _ = copy_loop ~into_merge_buffer:Copy ~src:ctx_a ~dst:ctx_b () in
+  let ctx_b = Context.copy ~into_merge_buffer:Copy ~src:ctx_a ~dst:ctx_b tn in
+  let ledger_m = Context.ledger_entries ctx_b in
+  let ctx_a, ctx_b, (depths, entries), _ =
+    copy_loop ~into_merge_buffer:Copy ~src:ctx_a ~dst:ctx_b ()
+  in
+  same_ledger "merge-buffer fills" ~initial:ledger_m entries;
   Verdict.p_all "merge-buffer fills: every sampled depth is the initial one" depths ~f:(fun d ->
       d = depth_b);
   (* The last fill carries [values iterations]; a consumer compiled afterwards adds it in. *)
@@ -151,6 +168,13 @@ let scenario_copy_chain () =
   let ctx_b = Context.run ctx_b consume in
   Verdict.p "the consumer compiled after the fills reads the last one"
     (Poly.equal (Context.get_values ctx_b tn) (Array.map (values iterations) ~f:(fun v -> v +. 1.)));
+  (* Refilled, the consumer's fill is superseded and forgotten; rerunning it is refused, naming
+     it. *)
+  let ctx_b = Context.copy ~into_merge_buffer:Copy ~src:ctx_a ~dst:ctx_b tn in
+  Verdict.p "a consumer of a superseded fill is refused, naming the fill"
+    (match Context.run ctx_b consume with
+    | _ -> false
+    | exception Failure msg -> String.is_substring msg ~substring:"that a later fill superseded");
   (* One release unit: releasing a copy's result releases its destination, and the reverse. *)
   let dead f =
     match f () with

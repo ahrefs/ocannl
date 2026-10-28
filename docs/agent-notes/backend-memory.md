@@ -171,47 +171,64 @@ files.
   `force_param_diff`), `Tnode.mark_zero_valid` marks any other read-only accumulator, and the mark
   never excuses read-before-write state. Before, a read-only input passed once merely allocated, and
   since `compile` allocates every input a forgotten data input read zeros. A node every routine only
-  reads may live in a device-wide constant pool that compile siblings SHARE, so a sibling-seeding
+  reads may live in a constant pool of its root that compile siblings SHARE, so a sibling-seeding
   test makes it `context_owned` to get a buffer per sibling (`chr_read_only_buffer`). Hand-built
   tests that accumulate from zero therefore seed the accumulator (`peel_census`) or mark it; state
   meant to start from zero inside a model is an inline declaration, an embedded node excluded from
   `inputs` (`Train.sgd_one`'s momentum). An SGD step compiled without `Train.init_params` never
   reaches this check: linking already refuses a parameter the prior context lacks.
-- **Independently created roots on one device share constant buffers, so a write in one is a
-  stale read in the other** (gh-ocannl-1623). Every non-`context_owned` node a compile only reads
-  (data inputs, `Host_inits` literals: only parameters are `context_owned`) lands in the device's
-  `constant_buffer_cache`, which every root resolves to one location, so one `Buffer_key`, while each
-  root keeps its own ledger. A wrong REFUSAL does not arise: a root that never wrote the node is
-  refused even after another root seeded it, and an explicit no-op `Context.copy` is how it adopts
-  that value. A wrong VALUE did: once both held a value, a later `set_values` by one root (or a run
-  of a routine compiled after the node was bound as a constant, which then writes the constant
-  buffer) changed the bytes the other read while its ledger still said "written"; a zero-valid node
-  read non-zero, and a `Host_inits` literal (not even in `routine.inputs`) read the overwrite. Every
-  write into a constant-cache buffer now mints a token (`Context.shared_write_tokens`, plus the
-  writer ledger's `observed_tokens`); `run` refuses a `routine.shared_reads` member whose current
-  token its ledger did not leave or adopt, a no-op copy adopts only from a source that is current,
-  and `rollback_execution` restores both tokens while nothing wrote since. Compile siblings and
-  descendants share a ledger, so sharing inside one root is unchanged. Ordering needs no edge: roots
-  on one device share its single FIFO runner (concurrent host domains are outside this, as for all
-  of `Context`). Not refused: `to_host`/`get_values` and real copies out of a stale source, since
-  reads check no initialization. The structural alternative, deduplicating constants per root
-  rather than per device, would remove the sharing itself. Guard: `context_handle_refusals`
-  (`chr_shared_copy`, `chr_shared_overwrite`, `chr_shared_writer`, `chr_shared_implicit`).
+- **Constants are cached per root; only host literals are shared across roots** (gh-ocannl-1654,
+  gh-ocannl-1623). Every non-`context_owned` node a compile only reads (data inputs, zero-valid
+  accumulators, `Host_inits` literals: only parameters are `context_owned`) lands in a constant pool
+  that outlives its contexts, cached in the device's `constant_buffer_cache` under a
+  `BI.Constant_key`: a `Host_inits` literal is `Shared` (one buffer per device, uploaded once), any
+  other node `Rooted` under the `constant_root` that `Device.make_context` mints and every derived
+  context inherits. Compile siblings and descendants of one root therefore share a constant (a
+  sibling-seeding test still needs `context_owned`), while independently created roots each bind
+  their own: a `set_values`, a writer routine or a device copy in one root never reaches another,
+  and a copy between roots is a real transfer. Before, every root bound one device-wide buffer for
+  every constant while keeping its own ledger, so one root's write was a silent wrong value in the
+  other (then refused as stale). The literal class keeps that hazard, since literals are writable
+  through the API: every write into a `Shared` buffer mints a token (`Context.shared_write_tokens`,
+  plus the writer ledger's `observed_tokens`); `run` refuses a `routine.shared_reads` member whose
+  current token its ledger did not leave or adopt, a no-op copy adopts only from a source that is
+  current, and `rollback_execution` restores both tokens while nothing wrote since. Ordering needs
+  no edge: roots on one device share its single FIFO runner (concurrent host domains are outside
+  this, as for all of `Context`). Not refused: `to_host`/`get_values` and real copies out of a stale
+  source, since reads check no initialization. Lookups (`plan_delta`, `link_floor`,
+  `owned_pool_ids`) go through `BI.find_constant`, root first; insertion through `BI.constant_key`.
+  Rooted constants pack into pools of their own (`dp_new_root_constants`), and each release unit
+  holds the rooted pools its `ctx_buffers` binds (`held_constant_pools`, counted in the device's
+  `rooted_constant_owners` at the three places a unit is minted: `make_context`, `make_child`, an
+  upload fork); the release of the last binder frees the pool and drops its cache entries, so
+  fresh roots compiled and released one after another hold memory flat, as the device-wide cache
+  did by reuse. A unit nobody releases keeps its pools, as for working pools. A link that fails
+  after `allocate_delta` reclaims the delta's rooted pools no unit holds in `free_delta`, after the
+  owned pools (an evicted pool would read as owned and be freed twice), and a failure after its
+  `make_child` first gives the discarded child's holds back (`reclaim_rooted_constants`'s modes). A new
+  place that mints a `finalized` flag must hold its rooted pools too, or a release frees a pool it
+  binds. Guard: `context_handle_refusals` (`chr_root_constants`, `chr_root_constants_release`,
+  `chr_shared_overwrite`, `chr_shared_writer`, `chr_shared_implicit`).
 - **A transfer adds no lifecycle level** (gh-ocannl-1623). `device_to_device` into a buffer `dst`
   already holds returns `dst` itself, and a merge-buffer fill returns `{ dst with
   merge_buffer_node }`: neither allocates in `dst`, so both are `dst`'s release unit (releasing
   either releases both, as in a linear upload chain). A `make_child` per copy grew the `parent`
   chain `check_live` walks by one level per transfer and retained every ancestor. Compiles and the
   `decide_*` recorders are genuine children and still add a level; `Context.lifecycle_depth` reads
-  it. Guard: `context_copy` scenario 6 (1000 copies per path, depth constant).
+  it. Nor does a merge fill add a ledger record (gh-ocannl-1654): it retires its predecessor's
+  `executed` entry, reader registrations and routine name, so a retired transfer is the one id
+  `routine_names` forgets, and the missing-dependency refusal reports an unnamed id as a superseded
+  fill; transfer ids are never reused. `Context.ledger_entries` reads the count. Guard: `context_copy`
+  scenario 6 (1000 copies per path, depth and ledger size constant).
 - **Read-only in one routine does not make a parameter a device-wide constant** (gh-ocannl-641).
   A host-backed parameter used only as another parameter's initializer input has no executable
   write in that routine. Its `Tnode.context_owned` construction marker keeps it in the working
   group nevertheless; both allocation and footprint scoring use `partition_layout_groups`.
   Two fresh contexts must retain independent parameter/state edits and resets. The marker changes
   allocation only, not the post-virtualization scalar recompute-price inputs.
-- **Two classes `release` cannot reach, so "bounded" always needs a qualifier.** (a) Per-device
-  constants: it skips every `constant_buffer_cache` key by design. That is right for a shared weight
+- **Two classes `release` cannot reach, so "bounded" always needs a qualifier.** (a) Device-wide
+  constants (host literals; a root's constants are freed with their last binder, above): it skips
+  every `Shared` `constant_buffer_cache` key by design. That is right for a shared weight
   and wrong for a hoisted `Stage` candidate, whose `apply_stage` mints a FRESH packed-constant tnode
   per application (`fresh_tile_id ()`), so a CPU search seeding `hoist` sketches grows one constant
   pool per such candidate — measured on `cc` at 1 → 109 constant pools over 181 candidates while

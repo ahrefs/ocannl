@@ -1,0 +1,31 @@
+reset-led accumulation, recompiled: x is virtual: true
+reset-led accumulation, recompiled: x's template holds 2, 2, 2 components after each routine: true
+reset-led accumulation, recompiled: every recompile emits a routine as large as the first, with as many guards: true
+reset-led accumulation, recompiled: out executes to its expected values: true
+reset-led accumulation, recompiled: the reading agrees with the materialized one: true
+plain overwrite, recompiled: x is virtual: true
+plain overwrite, recompiled: x's template holds 1, 1, 1 components after each routine: true
+plain overwrite, recompiled: every recompile emits a routine as large as the first, with as many guards: true
+plain overwrite, recompiled: out executes to its expected values: true
+plain overwrite, recompiled: the reading agrees with the materialized one: true
+two-slice block, recompiled: x is virtual: true
+two-slice block, recompiled: x's template holds 2, 2, 2 components after each routine: true
+two-slice block, recompiled: every recompile emits a routine as large as the first, with as many guards: true
+two-slice block, recompiled: out executes to its expected values: true
+two-slice block, recompiled: the reading agrees with the materialized one: true
+accumulations on an inherited value: x is virtual: true
+accumulations on an inherited value: x's template holds 2, 3, 4 components after each routine: true
+accumulations on an inherited value: out executes to its expected values: true
+accumulations on an inherited value: the reading agrees with the materialized one: true
+different code: x is virtual: true
+different code: x's template holds 1, 2 components after each routine: true
+different code: out executes to its expected values: true
+different code: the reading agrees with the materialized one: true
+a plain re-store behind an accumulation: x is virtual: true
+a plain re-store behind an accumulation: x's template holds 1, 2, 3 components after each routine: true
+a plain re-store behind an accumulation: out executes to its expected values: true
+a plain re-store behind an accumulation: the reading agrees with the materialized one: true
+a consumer-only routine: x is virtual: true
+a consumer-only routine: x's template holds 2, 2, 2 components after each routine: true
+a consumer-only routine: out executes to its expected values: true
+a consumer-only routine: the reading agrees with the materialized one: true

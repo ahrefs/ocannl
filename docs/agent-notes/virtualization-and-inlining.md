@@ -526,6 +526,24 @@ files.
   uninitialized-accumulation controls). Boundary: the rules apply to `Local` nodes only — a fresh
   node read only in a dead arm still gets the raw `37:read-only-input` placement (over-materializes,
   values correct).
+- **A store replaces the components it supersedes** (gh-ocannl-1653). A template replays as one
+  scope local written by each component in turn, oldest first, and `check_and_store_virtual` used to
+  prepend unconditionally, so a recompile in the lineage that ran a step added a whole copy of each
+  re-stored node's components (measured on `lineage_recompile_step`: 29 → 42 → 55 … stored
+  components, the recompiled routine 53 → 124 → 218 … 2950 statements over eleven compiles; a
+  single-setter node also gained the range guards of a multi-component one). `supersede` now runs at
+  store time, so the recompiled routine's own reads already replay the reduced list: a component
+  whose first statement is `Zero_out self` replaces the whole template (older components wrote only
+  the local it resets), and a PLAIN component (no read of `self`, no statement-level local) drops
+  its newest alpha-equivalent twin (CSE's comparator, `alpha_comparators`) when every component in
+  between is plain too: a masked assignment with the same mask and value overwrites its twin, and an
+  intervening accumulation must not end up replaying ahead of the local's first write. An
+  accumulation is never dropped (two identical ones both contribute). Boundary: a re-trace whose
+  template TEXT differs still prepends. A test counting components or reads of a template after a
+  same-code re-store must expect the count to stay, not grow (`stored_template_elision`'s carried
+  cases read the template's head instead). Guards: `lineage_template_supersession` (counts, sizes,
+  executed parity against materialized lineages, and the controls each mutant fails),
+  `lineage_recompile_step` (flat totals and routine sizes over eleven compiles).
 - **What a capture walk does to code its template drops** (gh-ocannl-1551). Phase 1 of a shared
   loop walks every setter of the body, though the stored template keeps only the candidate's. Two
   divergences from the emit walk were real (`capture_pass_side_effects.ml`): (1) a statement of
