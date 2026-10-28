@@ -494,3 +494,114 @@ let () =
   (* gh-ocannl-1600: and the memory-transaction rate, only where set. *)
   p "the staffed start's gate tag tells two memory-transaction rates apart"
     (apart (tag ~dram_rate:r_dram ()) (tag ~dram_rate:r_dram ~sector_rate:2e11 ()))
+
+(* gh-ocannl-1633: the serial re-reads of a one-block nest. The unscheduled wgrad is one block (no
+   [Grid] loop), so the per-block charge alone requested its distinct cells whatever the capacity.
+   Footprints, loops (o, i, k): the nest reads dy (256 KiB), x (512 KiB) and dw (128 KiB, the
+   accumulator) -- 896 KiB; one o-iteration reads a column of dy, all of x and a row of dw (515
+   KiB); one i-iteration a column of each operand and one dw cell (4100 bytes); one k-iteration 12
+   bytes. Past a loop's iteration footprint, a read invariant along it is re-read once per
+   iteration: x along o, dy along i, dw along k. *)
+let () =
+  let serial = hermetic base in
+  let interchanged =
+    let o = Ll_test.sym () and i = Ll_test.sym () and k = Ll_test.sym () in
+    Ll_test.optimize ~name:"cmr_wgrad_io"
+      (Ll_test.loop_n i nn
+         (Ll_test.loop_n o nm
+            (Ll_test.loop_n k nk
+               (Ll_test.set dw
+                  [| it o; it i |]
+                  (LL.Ternop
+                     ( Ir.Ops.FMA,
+                       (Ll_test.get dy [| it k; it o |], Ll_test.single),
+                       (Ll_test.get x [| it k; it i |], Ll_test.single),
+                       (Ll_test.get dw [| it o; it i |], Ll_test.single) ))))))
+  in
+  let req ?cache_capacity_bytes (o : LL.optimized) =
+    let r =
+      CM.reuse_traffic ?cache_capacity_bytes ~max_resident_threads:resident
+        ~is_global:(CM.global_in o) o.LL.llc
+    in
+    let of_ tn = List.Assoc.find r.CM.ru_requested tn ~equal:Tn.equal |> Option.value ~default:0 in
+    (r.CM.ru_working_set_bytes, of_ dy, of_ x, of_ dw)
+  in
+  let bytes tn = Tn.num_elems tn * elt in
+  let distinct = (bytes dy + bytes x + bytes dw, bytes dy, bytes x, bytes dw) in
+  let nest = bytes dy + bytes x + bytes dw in
+  let show (ws, a, b, c) = Printf.sprintf "ws=%d dy=%d x=%d dw=%d" ws a b c in
+  List.iter [ None; Some nest; Some 600_000; Some 65_536; Some 1_024; Some 8 ] ~f:(fun c ->
+      Stdio.eprintf "serial wgrad, capacity %s: %s (not part of the golden)\n"
+        (Option.value_map c ~default:"none" ~f:Int.to_string)
+        (show (req ?cache_capacity_bytes:c serial)));
+  let eq4 (a, b, c, d) (a', b', c', d') = a = a' && b = b' && c = c' && d = d' in
+  p "serial: with no capacity a one-block nest requests its distinct bytes"
+    (eq4 (req serial) distinct);
+  p "serial: at capacity (the nest's bytes) it requests its distinct bytes"
+    (eq4 (req ~cache_capacity_bytes:nest serial) distinct);
+  p "serial: past capacity, where every loop's iteration fits, it requests its distinct bytes"
+    (eq4 (req ~cache_capacity_bytes:600_000 serial) distinct);
+  p "serial: past an o-iteration, x is re-read once per o; dy and dw are kept"
+    (eq4 (req ~cache_capacity_bytes:65_536 serial) (nest, bytes dy, bytes x * nm, bytes dw));
+  p "serial: past an i-iteration, dy is re-read once per i as well"
+    (eq4 (req ~cache_capacity_bytes:1_024 serial) (nest, bytes dy * nn, bytes x * nm, bytes dw));
+  p "serial: past a k-iteration, the accumulator is re-read once per k as well"
+    (eq4 (req ~cache_capacity_bytes:8 serial) (nest, bytes dy * nn, bytes x * nm, bytes dw * nk));
+  p "serial: the loop interchange (i, o, k) moves the re-read from x to dy"
+    (eq4 (req ~cache_capacity_bytes:65_536 interchanged) (nest, bytes dy * nn, bytes x, bytes dw));
+  (* A read every loop indexes streams: nothing is re-read however small the cache. *)
+  let src = node ~dims:[| nm; nn |] "cmr_src" and dst = node ~dims:[| nm; nn |] "cmr_dst" in
+  List.iter [ src; dst ] ~f:Ll_test.materialize;
+  let streaming =
+    let o = Ll_test.sym () and i = Ll_test.sym () in
+    Ll_test.optimize ~name:"cmr_stream"
+      (Ll_test.loop_n o nm
+         (Ll_test.loop_n i nn (Ll_test.set dst [| it o; it i |] (Ll_test.get src [| it o; it i |]))))
+  in
+  p "serial: a read every loop indexes is never re-read"
+    (let r =
+       CM.reuse_traffic ~cache_capacity_bytes:0 ~is_global:(CM.global_in streaming) streaming.LL.llc
+     in
+     Option.equal Int.equal
+       (List.Assoc.find r.CM.ru_requested src ~equal:Tn.equal)
+       (Some (bytes src)));
+  (* The score: at a unit bandwidth and a negligible compute leg, the memory leg is the requested
+     bytes -- analyze's total plus x's re-reads -- exactly. *)
+  let unit_rank ?cache_capacity_bytes (o : LL.optimized) =
+    CM.ranking_seconds ~peak_flops:1e30 ~peak_memory_bandwidth:1. ?cache_capacity_bytes
+      ~max_resident_threads:resident ~is_global:(CM.global_in o) o.LL.llc
+  in
+  let total = CM.total_bytes (CM.analyze serial.LL.llc) in
+  p "serial: past an o-iteration the score charges x's re-reads"
+    (Option.equal Float.equal
+       (unit_rank ~cache_capacity_bytes:65_536 serial)
+       (Some (Float.of_int (total + (bytes x * (nm - 1))))));
+  p "serial: the score with no capacity is analyze's distinct bytes"
+    (Option.equal Float.equal (unit_rank serial) (Some (Float.of_int total)));
+  let capacities = [ 0; 8; 1_024; 65_536; 600_000; nest; 2 * nest ] in
+  p_all "serial: raising the capacity never raises the score"
+    (List.concat_map [ serial; interchanged ] ~f:(fun o ->
+         List.map
+           (List.zip_exn (List.drop_last_exn capacities) (List.tl_exn capacities))
+           ~f:(fun (lo, hi) -> (o, lo, hi))))
+    ~f:(fun (o, lo, hi) ->
+      le (rank ~cache_capacity_bytes:hi o) (rank ~cache_capacity_bytes:lo o)
+      && le
+           (rank ~cache_capacity_bytes:hi ~cache_bandwidth:cache o)
+           (rank ~cache_capacity_bytes:lo ~cache_bandwidth:cache o));
+  p_all "serial: completion_floor <= analyze <= the score, at every capacity" capacities
+    ~f:(fun c ->
+      le floor_bound (bound_of serial) && le (bound_of serial) (rank ~cache_capacity_bytes:c serial));
+  (* The descent is the one-block nest's: the Grid plans' charge does not move with it. *)
+  let plans = untiled :: List.filter_map scalar_blocktiles ~f:applied in
+  p_all ~min:2 "a Grid plan's requested bytes do not depend on the serial re-read charge" plans
+    ~f:(fun o ->
+      let charge ?cache_capacity_bytes () =
+        (CM.reuse_traffic ?cache_capacity_bytes ~max_resident_threads:resident
+           ~is_global:(CM.global_in o) o.LL.llc)
+          .CM.ru_requested
+      in
+      List.equal
+        (fun (a, b) (a', b') -> Tn.equal a a' && b = b')
+        (charge ())
+        (charge ~cache_capacity_bytes:0 ()))

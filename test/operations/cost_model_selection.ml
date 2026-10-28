@@ -500,6 +500,60 @@ let () =
           List.exists leaves ~f:(fun (_, ex) ->
               match ex.Autotune.ex_rank_ms with Some r -> Float.(r < preset) | None -> false)
       | _ -> false);
+  (* gh-ocannl-1633: and against the segment's CONFIGURED preset -- what a substitution ships where
+     it leaves the segment unsketched, here unannotated. Before the serial re-reads were priced, the
+     best leaf only tied it (2228.2 against 2228.2 ms): a one-block nest was charged its distinct
+     cells only. Now the first product's [bt_c] is re-read once per row of [bt_a], whose iteration
+     (a row of [bt_a] and all of [bt_c]) exceeds the capacity. *)
+  let rank_ms (ex : Autotune.explain) = ex.Autotune.ex_rank_ms in
+  List.iter below_explained.Autotune.x_segments ~f:(fun xs ->
+      let show = Option.value_map ~default:"n/a" ~f:Float.to_string in
+      Stdio.eprintf
+        "below_threshold_chain: segment %s: preset %s ms, configured %s ms, best leaf %s ms (not \
+         part of the golden)\n"
+        xs.Autotune.xs_segment
+        (show (Option.bind (List.hd xs.Autotune.xs_candidates) ~f:(fun (_, ex) -> rank_ms ex)))
+        (show (Option.bind xs.Autotune.xs_configured ~f:rank_ms))
+        (show
+           (List.min_elt ~compare:Float.compare
+              (List.filter_map (List.tl_exn xs.Autotune.xs_candidates) ~f:(fun (_, ex) ->
+                   rank_ms ex)))));
+  p_exists
+    "below the threshold some segment's sketch strictly beats the segment's configured preset"
+    below_explained.Autotune.x_segments ~f:(fun xs ->
+      match (Option.bind xs.Autotune.xs_configured ~f:rank_ms, xs.Autotune.xs_candidates) with
+      | Some configured, _ :: leaves ->
+          List.exists leaves ~f:(fun (_, ex) ->
+              match rank_ms ex with Some r -> Float.(r < configured) | None -> false)
+      | _ -> false);
+  (* The configured row is the configured schedule on the search's segment, re-derived here from the
+     exposed pieces and scored under the rule's envelope: a relabeled preset would not match. *)
+  let independent_configured =
+    let target = Ll_test.host_target () in
+    let _, tuples =
+      Autotune.sketch_segmentation ~presets:`Search ~is_gpu:target.Ll_test.is_gpu
+        ~is_cpu:target.Ll_test.is_cpu ~limits:target.Ll_test.limits ~static_indices:[]
+        (Context.lowered_for_decisions below_ctx below_comp Ir.Indexing.Empty)
+    in
+    List.filter_map tuples ~f:(fun (kind, pre, _, _) ->
+        match kind with
+        | `Normal ->
+            let sched =
+              Autotune.segment_preset ~presets:`Config ~is_gpu:target.Ll_test.is_gpu
+                ~is_cpu:target.Ll_test.is_cpu ~limits:target.Ll_test.limits pre
+            in
+            let o = Ir.Schedule.apply_classified ~static_indices:[] sched pre in
+            Ir.Cost_model.ranking_seconds ~peak_flops:1e12 ~peak_memory_bandwidth:1e6
+              ~cache_capacity_bytes:1048576 ~is_global:(Ir.Cost_model.global_in o) o.LL.llc
+            |> Option.map ~f:(fun s -> s *. 1e3)
+        | `Zeros | `Solo -> None)
+  in
+  p_all ~min:2
+    "each explained configured preset scores as the configured schedule on its search segment"
+    below_explained.Autotune.x_segments ~f:(fun xs ->
+      match Option.bind xs.Autotune.xs_configured ~f:rank_ms with
+      | Some r -> List.exists independent_configured ~f:(fun i -> approx i r)
+      | None -> false);
   Hashtbl.remove Utils.config_file_args "cpu_schedule_min_work";
   let below_ctx = Context.run below_ctx below_routine in
   let below_got = Context.get_values below_ctx bh.Tensor.value in
@@ -524,7 +578,9 @@ let () =
           | _ -> false));
   p_all "every explained per-segment ranking score is at least its bound" legs ~f:(fun (_, x) ->
       List.for_all x.Autotune.x_segments ~f:(fun xs ->
-          List.for_all xs.Autotune.xs_candidates ~f:(fun (_, ex) ->
+          List.for_all
+            (Option.to_list xs.Autotune.xs_configured @ List.map xs.Autotune.xs_candidates ~f:snd)
+            ~f:(fun ex ->
               match (ex.Autotune.ex_rank_ms, ex.Autotune.ex_floor_ms) with
               | Some r, Some f -> Float.(r >= f)
               | None, None -> true

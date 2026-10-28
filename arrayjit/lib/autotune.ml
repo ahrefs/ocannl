@@ -3139,7 +3139,8 @@ let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_ban
                 | None, None -> None
                 | _ ->
                     Some
-                      (CM.reuse_traffic ?max_resident_threads ~is_global:(CM.global_in o) o.LL.llc)
+                      (CM.reuse_traffic ?cache_capacity_bytes ?max_resident_threads
+                         ~is_global:(CM.global_in o) o.LL.llc)
               in
               (* gh-ocannl-1479: the compute nests' own launches, whether or not the cache tiers are
                  on. *)
@@ -3787,13 +3788,16 @@ let fiss_sketch_label ?(staff = []) ~fine entries =
    must strictly beat to enter a substitution. Not the configured thresholds: they leave a
    below-threshold nest unannotated, and fission coalesces adjacent unannotated segments back into
    one kernel, so on cc below [cpu_schedule_min_parallel] that segmentation was the single kernel
-   and the per-segment path never fired. Nor the configured preset as the threshold: the ranking
-   score charges no operand re-reads to an unannotated kernel (one block), so a segment's sketches
-   could at best tie its serial preset and no substitution would ever form. (What a substitution
-   SHIPS on the segments it leaves unsketched is the configured preset: [model_default]'s
-   [apply_fiss].) [None] where fission exposes no site; raises {!Outcome.Cause_at} as
-   {!Sched.fission_segmented} does. [tune] enumerates its per-segment seeds on it
-   ({!search_segment_entries}, gh-ocannl-1490), its finer pass with [arity_cuts]. *)
+   and the per-segment path never fired. The threshold stays the search's preset: until
+   gh-ocannl-1633 the ranking score charged an unannotated kernel (one block) no operand re-reads,
+   so a segment's sketches could at best tie its serial preset and no substitution formed. They are
+   charged now, where its nest spills the capacity, and the configured preset is listed beside it
+   ([model_explain]'s [xs_configured]); switching the threshold to it would change which segments
+   enter a substitution and are anchored under seeding on CUDA and HIP. (What a substitution SHIPS
+   on the segments it leaves unsketched is the configured preset: [model_default]'s [apply_fiss].)
+   [None] where fission exposes no site; raises {!Outcome.Cause_at} as {!Sched.fission_segmented}
+   does. [tune] enumerates its per-segment seeds on it ({!search_segment_entries}, gh-ocannl-1490),
+   its finer pass with [arity_cuts]. *)
 let model_segments ?arity_cuts ~is_gpu ~is_cpu ~limits ~static_indices (base : LL.optimized) =
   match
     sketch_segmentation ?arity_cuts ~presets:`Search ~is_gpu ~is_cpu ~limits ~static_indices base
@@ -7019,7 +7023,12 @@ type explain = {
   ex_anchor : bool;
 }
 
-type segment_explain = { xs_segment : string; xs_candidates : (string * explain) list }
+type segment_explain = {
+  xs_segment : string;
+  xs_candidates : (string * explain) list;
+  xs_configured : explain option;
+}
+
 type explanation = { x_routine : (string * explain) list; x_segments : segment_explain list }
 
 let model_explain ?name ?(coalesced = false) ctx comp bindings =
@@ -7212,6 +7221,17 @@ let model_explain ?name ?(coalesced = false) ctx comp bindings =
                      (* gh-ocannl-1600: the segment's coalesced menu, which [model_default]'s walk
                         on the segment searches too where it ranks them. *)
                      @ coalesced_explains ~label:(fun p -> sketch_params_label p ^ " @" ^ tag) pre);
+                (* gh-ocannl-1633: the segment under the configured preset -- what a substitution
+                   ships where it leaves the segment unsketched ([model_default]'s [apply_fiss]). *)
+                xs_configured =
+                  (let seg = scratch_of pre in
+                   match
+                     Sched.apply_classified ~static_indices
+                       (segment_preset ~presets:`Config ~is_gpu ~is_cpu ~limits seg)
+                       seg
+                   with
+                   | exception Outcome.Cause_at _ -> None
+                   | configured -> Some (explain [ configured ]));
               })
     in
     {

@@ -698,19 +698,21 @@ files.
   thresholds every nest below `cpu_schedule_min_parallel` (on GPU, `gpu_schedule_min_parallel`)
   gets an empty preset, so a small chain merged back into one kernel and the model never ranked a
   per-segment candidate on cc. The model now segments at `` `Search ``, as the search does, and a
-  segment's sketch must strictly beat the segment's SEARCH preset to enter a substitution. The
-  configured preset cannot be that threshold: the ranking score charges an unannotated kernel no
-  operand re-reads, because it is one block, so a below-threshold segment's best sketch only TIED
-  its serial preset (2228 against 2228 ms on a skinny chain) and no substitution formed. Under the
-  search's preset the same segment scores 33686 ms, and the sketch wins. What ships on the
+  segment's sketch must strictly beat the segment's SEARCH preset to enter a substitution. That
+  threshold was forced: before gh-ocannl-1633 the ranking score charged an unannotated kernel no
+  operand re-reads, so a below-threshold segment's best sketch only TIED its serial preset (2130
+  against 2130 ms on a skinny chain). Serial re-reads are priced now, and the configured preset
+  (`model_explain`'s `xs_configured`) scores 68190 ms there, as the search's does, so a sketch
+  beats both. The threshold stays the search's preset: switching it to the configured one (or the
+  smaller of the two) changes which segments enter a substitution and are anchored under seeding
+  on CUDA and HIP, which needs the seeded-anchor claims' GPU legs. What ships on the
   unsketched segments stays the configured preset, for two reasons. On GPU, `lane_geometry` (and
   with it a lane all-reduce, which reorders sums) is gated on `min_parallel`, so the search's
   preset can change a result that the seeded plan, under seeding, would not. On cc it fans a tiny
   segment out over the pool, and the score does not see that overhead. The incumbent is the
-  configured untuned pipeline, which the same blind spot keeps near the floor: below the threshold
-  on cc a substitution is now ranked, but it rarely beats the serial default.
+  configured untuned pipeline, priced for its serial re-reads where its nests spill the capacity.
   `test/operations/cost_model_selection`'s below-threshold leg pins the formation condition
-  (some segment's leaf strictly below its preset), not a pick.
+  against both presets (some segment's leaf strictly below each), not a pick.
 - **The seeded untuned default also splits long, narrow reductions, before segmenting, on CUDA
   and HIP** (gh-ocannl-1325, `Autotune.seeded_split_sites`, config
   `gpu_default_split_reduce_min_serial`; where it runs is `Autotune.seeded_split_backend`).

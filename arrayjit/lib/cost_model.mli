@@ -175,6 +175,22 @@ val roofline_seconds :
       [Local] nor workgroup-shared ({!global_in}): staged tiles and thread-private scratch keep
       their distinct-cell charge. Per node, the requested bytes are never below {!analyze}'s
       distinct read bytes.
+    - Serial re-reads of a one-block nest (gh-ocannl-1633). A nest with no [Grid] loop is one block,
+      so the per-block charge alone requests only its distinct cells, and a serial kernel's sketches
+      could at best tie it. Given a capacity, and only where that nest's bytes exceed it, a global
+      read is also re-requested once per iteration of each enclosing [Serial] loop it is invariant
+      along (no known coordinate of its map mentions the loop) whose one iteration — that loop and
+      every loop outside it standing still — touches more global read bytes than the capacity (each
+      node's accesses summed, capped at the node; the whole capped at the nest's bytes). A loop
+      whose iteration fits keeps the read cached: the untiled [i, j, k] matmul re-reads [B[k, j]]
+      once per [i] where a row of [A] and all of [B] do not fit, not [A[i, k]] once per [j], and no
+      accumulator once per [k]. Re-reads are therefore charged only in a spilling nest, at the DRAM
+      rate. Point-in-time boundary: one cache level; invariant loops only (overlap along a loop the
+      map mentions, a window's, counts as kept); reads the map does not describe (whole-node,
+      [Concat], dynamic, uninterpretable) keep their distinct charge; and a multi-block nest's
+      serial loops within a block re-read nothing. Without a capacity (the calibration's sweep, cc
+      and Metal at their shipped constants) the charge is exactly the per-block one. The working set
+      is unchanged.
     - Two tiers (the wave decision of 2026-10-18 on the measured HIP boxes, where cache-served
       re-reads ran at 1.5–2.8 TB/s against 235–261 GB/s from DRAM). Past capacity — the working set,
       per-block bytes times the blocks resident at once ([max_resident_threads] over the kernel's
@@ -251,7 +267,8 @@ type reuse = {
   ru_requested : (Tnode.t * int) list;
       (** Per global node read, in first-access order: the bytes its reads request under per-block
           caching — blocks times per-block cells times byte width, summed over its read accesses,
-          NOT capped by the node's size (re-reads are the point). *)
+          NOT capped by the node's size (re-reads are the point) — plus, given a capacity, a
+          one-block nest's serial re-reads (gh-ocannl-1633). *)
   ru_working_set_bytes : int;
       (** The largest over the kernel's launch nests of per-block global read bytes times resident
           blocks. *)
@@ -266,8 +283,15 @@ val global_in : Low_level.optimized -> Tnode.t -> bool
 (** Whether a node lives in global memory under the specialization's placements: neither [Local]
     (thread-private scratch, {!Tnode.Placements.is_local_peek}) nor a workgroup-shared tile. *)
 
-val reuse_traffic : ?max_resident_threads:int -> is_global:(Tnode.t -> bool) -> Low_level.t -> reuse
-(** The per-block read charge and working set of one kernel (see the section contract). *)
+val reuse_traffic :
+  ?cache_capacity_bytes:int ->
+  ?max_resident_threads:int ->
+  is_global:(Tnode.t -> bool) ->
+  Low_level.t ->
+  reuse
+(** The per-block read charge and working set of one kernel (see the section contract). Given
+    [cache_capacity_bytes], the charge includes the serial re-reads of a one-block nest that spills
+    it (gh-ocannl-1633); without it, the per-block charge alone. *)
 
 val requested_bytes : summary -> reuse -> int
 (** {!total_bytes} with each global node's read bytes raised to its requested bytes: all the traffic

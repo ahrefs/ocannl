@@ -721,7 +721,67 @@ let loop_axes (code : Low_level.t) =
   walk code;
   fun s -> Hashtbl.find tbl s |> Option.value ~default:Low_level.Serial
 
-let reuse_traffic ?max_resident_threads ~is_global (code : Low_level.t) : reuse =
+(* gh-ocannl-1633: the serial re-reads of a one-block nest. A nest with no [Grid] loop is one block,
+   whose per-block cells are its distinct cells, so the per-block model charged it no re-reads at
+   all: a serial kernel's sketches could at best tie it. Inside such a nest, read [a] is re-read
+   once per iteration of each enclosing [Serial] loop [L] it is invariant along (no known coordinate
+   of its map mentions [L]) whose one iteration -- [L] and every loop outside it standing still --
+   touches more global read bytes than the capacity: the cells [a] touches in one iteration of [L]
+   are evicted before the next one asks for them again. A loop whose iteration fits keeps them (an
+   innermost invariant loop, the accumulator's reduction, always does). The footprint sums each
+   node's accesses, capped at the node, and is capped at the nest's own bytes, so a re-read is
+   charged only in a nest whose working set spills -- at DRAM, never in the cache tier. Reads the
+   map does not describe (whole-node, [Concat], dynamic, uninterpretable) keep their distinct
+   charge. The result is each read's factor: the product of its re-reading loops' widths, 1 where
+   there are none. *)
+let serial_reread_factors ~is_serial ~is_global ~capacity ~nest_bytes
+    (accesses : Tn.t Affine.access list) : Tn.t Affine.access -> int =
+  let reads =
+    List.filter accesses ~f:(fun (a : Tn.t Affine.access) -> (not a.a_write) && is_global a.a_tn)
+  in
+  let elt (a : Tn.t Affine.access) = Ops.prec_in_bytes (Lazy.force a.a_tn.Tn.storage_prec) in
+  let footprints = Hashtbl.create (module Idx.Symbol) in
+  (* The global read bytes of one iteration of loop [s]: every read under [s], its loops through [s]
+     standing still. *)
+  let footprint s =
+    Hashtbl.find_or_add footprints s ~default:(fun () ->
+        let per_node = Hashtbl.create (module Tn) in
+        List.iter reads ~f:(fun (b : Tn.t Affine.access) ->
+            match List.findi b.a_loops ~f:(fun _ (s', _) -> Idx.equal_symbol s s') with
+            | None -> ()
+            | Some (depth, _) ->
+                let held = List.take b.a_loops (depth + 1) in
+                let fixed v = List.exists held ~f:(fun (h, _) -> Idx.equal_symbol h v) in
+                let cells = fst (access_cells ~fixed b) in
+                Hashtbl.update per_node b.a_tn ~f:(fun prev ->
+                    Option.value prev ~default:0 + (cells * elt b)));
+        min nest_bytes
+          (Hashtbl.fold per_node ~init:0 ~f:(fun ~key:tn ~data:bytes acc ->
+               acc + min bytes (Tn.num_elems tn * Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec)))))
+  in
+  fun (a : Tn.t Affine.access) ->
+    let dims = Lazy.force a.a_tn.Tn.dims in
+    let view = Affine.view ~dims a.a_map in
+    let described =
+      (not a.a_whole) && Option.is_none a.a_dyn_axis
+      && (not (Array.exists a.a_map ~f:(function Idx.Concat _ -> true | _ -> false)))
+      && not (Array.exists view ~f:(function Affine.Unknown _ -> true | Affine.Known _ -> false))
+    in
+    if not described then 1
+    else
+      let mentions s =
+        Array.exists view ~f:(function
+          | Affine.Known { terms; _ } ->
+              List.exists terms ~f:(fun (c, s') -> c <> 0 && Idx.equal_symbol s s')
+          | Affine.Unknown _ -> true)
+      in
+      List.fold a.a_loops ~init:1 ~f:(fun factor (s, (lo, hi)) ->
+          let w = hi - lo + 1 in
+          if w > 1 && is_serial s && (not (mentions s)) && footprint s > capacity then factor * w
+          else factor)
+
+let reuse_traffic ?cache_capacity_bytes ?max_resident_threads ~is_global (code : Low_level.t) :
+    reuse =
   let axis = loop_axes code in
   let is_grid s = Low_level.equal_axis_type (axis s) Low_level.Grid in
   let width (lo, hi) = max 0 (hi - lo + 1) in
@@ -734,7 +794,9 @@ let reuse_traffic ?max_resident_threads ~is_global (code : Low_level.t) : reuse 
   let requested = Hashtbl.create (module Tn) and order = ref [] in
   let nests = Hashtbl.create (module String) in
   let scratch = Hashtbl.create (module Tn) and scratch_order = ref [] in
-  List.iter (Low_level.affine_accesses code) ~f:(fun (a : Tn.t Affine.access) ->
+  let accesses = Low_level.affine_accesses code in
+  let one_block = ref [] in
+  List.iter accesses ~f:(fun (a : Tn.t Affine.access) ->
       if (not (is_global a.a_tn)) && not (Hashtbl.mem scratch a.a_tn) then (
         Hashtbl.set scratch ~key:a.a_tn ~data:();
         scratch_order := a.a_tn :: !scratch_order);
@@ -749,6 +811,7 @@ let reuse_traffic ?max_resident_threads ~is_global (code : Low_level.t) : reuse 
               ref 0)
         in
         cell := !cell + (blocks * per_block * w);
+        if List.is_empty grid then one_block := (a, per_block * w, cell) :: !one_block;
         let key = String.concat ~sep:"," (List.map grid ~f:(fun (s, _) -> Idx.symbol_ident s)) in
         let bytes, nest_blocks = Hashtbl.find nests key |> Option.value ~default:(0, blocks) in
         Hashtbl.set nests ~key ~data:(bytes + (per_block * w), max nest_blocks blocks)));
@@ -761,6 +824,18 @@ let reuse_traffic ?max_resident_threads ~is_global (code : Low_level.t) : reuse 
         in
         max acc (bytes * resident))
   in
+  (* gh-ocannl-1633: the one-block nest's serial re-reads, where it spills the capacity. *)
+  (match (cache_capacity_bytes, Hashtbl.find nests "") with
+  | Some capacity, Some (nest_bytes, _) when nest_bytes > capacity ->
+      let factor =
+        serial_reread_factors
+          ~is_serial:(fun s -> Low_level.equal_axis_type (axis s) Low_level.Serial)
+          ~is_global ~capacity ~nest_bytes accesses
+      in
+      List.iter !one_block ~f:(fun (a, bytes, cell) ->
+          let f = factor a in
+          if f > 1 then cell := !cell + ((f - 1) * bytes))
+  | _ -> ());
   {
     ru_requested = List.rev_map !order ~f:(fun tn -> (tn, !(Hashtbl.find_exn requested tn)));
     ru_working_set_bytes = working_set;
@@ -1295,7 +1370,7 @@ let ranking_seconds ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?ca
   let r =
     match (cache_capacity_bytes, cache_bandwidth) with
     | None, None -> None
-    | _ -> Some (reuse_traffic ?max_resident_threads ~is_global code)
+    | _ -> Some (reuse_traffic ?cache_capacity_bytes ?max_resident_threads ~is_global code)
   in
   ranking_seconds_of ?peak_flops ?peak_memory_bandwidth ?cache_capacity_bytes ?cache_bandwidth
     ?issue_rate ?dram_bandwidth ?mma_rate ?mma_flops ?device_gathers ?device_gather_rate ?launch

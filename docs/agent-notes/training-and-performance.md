@@ -123,6 +123,19 @@ files.
   at least `analyze`'s distinct bytes at DRAM bandwidth, so it is never below any bound, which
   `test/operations/cost_model_reuse` claims over every leaf of a sketch tree. Never feed the
   ranking score to a bound: a kernel that hits in cache would then trip `BOUND VIOLATION`.
+- A one-block nest (no `Grid` loop) is priced for its serial re-reads too (gh-ocannl-1633): the
+  per-block charge alone requests a single block's distinct cells, so a serial kernel scored at
+  its floor and its sketches could only tie it. Given a capacity, and only where the nest's bytes
+  exceed it, a read is re-requested once per iteration of each enclosing `Serial` loop it is
+  invariant along whose one iteration (that loop and the loops outside it held) reads more than
+  the capacity (`Cost_model.reuse_traffic ~cache_capacity_bytes`). The fit test is the point: a
+  rule without it (every invariant loop above a varying one) charges an inner tile once per outer
+  tile and gives a tiled sketch back its untiled count. A serial kernel and its `Grid` twin then
+  charge the same re-reads along the loops they tile (68190 ms both on `cost_model_selection`'s
+  below-threshold matmul). Boundaries: one cache level, invariant loops only (a window's overlap is kept), a
+  multi-block nest's within-block serial loops uncharged, and no capacity (cc and Metal as
+  shipped, the capacity calibration) means no change. `cost_model_reuse`'s serial leg pins the
+  exact counts.
 - Exact ranking ties go to fewer tile-MMA operand loads (gh-ocannl-1254), never a priced term.
   The count describes emitted code only through the backend's own arm description, never a
   cost-model copy of it: `mma_operand_loads` (which operands use `ldmatrix`; CUDA's

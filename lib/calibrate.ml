@@ -123,6 +123,8 @@ let working_set ?(m = 256) ?(n = 1024)
       Exn.protect
         ~finally:(fun () -> Context.release run_ctx)
         ~f:(fun () ->
+          (* No capacity: the per-block charge alone, without a spilling one-block nest's serial
+             re-reads (gh-ocannl-1633), which depend on the capacity this sweep fits. *)
           let reuse_of (o : Ir.Low_level.optimized) =
             Ir.Cost_model.reuse_traffic ?max_resident_threads ~is_global:(Ir.Cost_model.global_in o)
               o.Ir.Low_level.llc
