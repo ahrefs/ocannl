@@ -139,6 +139,9 @@ runs:
             -o Dir::Cache::Archives="$DEBS" -o APT::Keep-Downloaded-Packages=true \
             -o APT::Sandbox::User=root install $PACKAGES || status=$?
           if [ "$status" -eq 0 ]; then break; fi
+          # A stopped apt-get can leave its progress line open, and a workflow
+          # command is read only at the start of a line.
+          echo
           case $status in
             124 | 137) echo "::warning::fetch attempt $attempt/$ATTEMPTS outlived its ${MINUTES}-minute cap (a slow mirror session); stopped it" ;;
             *) echo "::warning::fetch attempt $attempt/$ATTEMPTS failed with status $status" ;;
