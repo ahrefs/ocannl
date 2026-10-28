@@ -1742,13 +1742,15 @@ struct
      into [__auto_type] locals before selecting between them. The arms are then plain values, so the
      compiler if-converts ([fcsel] / [bsl] on AArch64, [cmov] / blends on x86) instead of branching
      around an arm's load, as it must for a short-circuiting [?:]. The locals take each arm's own C
-     type and the final [?:] applies the usual arithmetic conversions to them, so the blend has
-     EXACTLY the type and value of the [?:] spelling it replaces -- a gate's double [0.0] literal
-     included, which an f32 helper function would round away (review round 1). It is a true select,
-     not a multiply by a mask: NaN, infinities and signed zeros pass unchanged. Inner blends shadow
-     the names in their own block, and no arm can mention them. Only at the two compute precisions
-     whose [?:] spellings above are the plain [Ops] ones; the bridged narrow precisions keep
-     [?:]. *)
+     type and the final selection, [OCANNL_SELECT] ([Builtins_cc]), applies the usual arithmetic
+     conversions to them, so the blend has EXACTLY the type and value of the [?:] spelling it
+     replaces -- a gate's double [0.0] literal included, which an f32 helper function would round
+     away (review round 1). [OCANNL_SELECT] is that [?:] over the locals, except under gcc, which
+     still branches on it at x86 (a float equality test, an arm converted to the result type) and
+     gets a select of the bit patterns instead (gh-ocannl-1660). It is a true select, not a multiply
+     by a mask: NaN, infinities and signed zeros pass unchanged. Inner blends shadow the names in
+     their own block, and no arm can mention them. Only at the two compute precisions whose [?:]
+     spellings above are the plain [Ops] ones; the bridged narrow precisions keep [?:]. *)
   let select_blend_syntax prec =
     let blend truth a b =
       let open PPrint in
@@ -1758,8 +1760,8 @@ struct
         ^^ string ";" ^^ break 1
         ^^ string "__auto_type ocannl_sel_b__ ="
         ^^ nest 2 (break 1 ^^ b)
-        ^^ string ";" ^^ break 1 ^^ string "(" ^^ truth
-        ^^ string ") ? ocannl_sel_a__ : ocannl_sel_b__; })")
+        ^^ string ";" ^^ break 1 ^^ string "OCANNL_SELECT(" ^^ truth
+        ^^ string ", ocannl_sel_a__, ocannl_sel_b__); })")
     in
     match prec with Ops.Single_prec _ | Ops.Double_prec _ -> Some blend | _ -> None
 

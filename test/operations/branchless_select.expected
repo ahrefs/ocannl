@@ -41,3 +41,4 @@ the reference gradient is discriminating (zero and nonzero cells): true
 pool backward: the inlined gradient equals the reference, bitwise: true
 pool backward: the inlined gradient equals the inlining-off run, bitwise: true
 pool backward: the inlined gradient's selects call the blend: true
+pool backward: no conditional branch on the inlined selects' lines (host compiler): true

@@ -151,7 +151,7 @@ test/operations/accum_width.ml [run by @test/operations/runtest-accum_width]
     "= single_to_bfloat16(v"
     "Vectorized reduction rendering"
     "single_to_bfloat16((bfloat16_to_single("
-test/operations/branchless_select.ml [run by @test/operations/runtest-branchless_select; also pins text this scan cannot name: untraced callback, forwarded parameter, opaque aggregate component, unsupplied application]
+test/operations/branchless_select.ml [run by @test/operations/runtest-branchless_select; also pins text this scan cannot name: untraced callback, forwarded parameter, opaque aggregate component, unsupplied application, mutation or unseen buffer write]
     ") != 0.0 ? ("
     "? ("
     "__auto_type ocannl_sel_a__"

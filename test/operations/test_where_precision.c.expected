@@ -115,6 +115,35 @@ ARRAYJIT_BUILTIN_LINKAGE float bfloat16_to_single(uint16_t bf16)
   return f;
 }
 
+
+/* The selection step of a branchless value select (gh-ocannl-1622, gh-ocannl-1660): T is its truth
+   expression, A and B its arms already evaluated into locals; the value and C type are those of
+   (T) ? (A) : (B). Under gcc, a select of the bit patterns: x86 gcc branches on that ?: (a float
+   equality test, an arm converted to the result type) even over two values. */
+#if defined(__GNUC__) && !defined(__clang__)
+  #define OCANNL_SELECT(T, A, B) ({ \
+    int ocannl_sel_t__ = ((T) != 0); \
+    __typeof__(0 ? (A) : (B)) ocannl_sel_x__ = (A), ocannl_sel_y__ = (B); \
+    _Static_assert(sizeof ocannl_sel_x__ == 4 || sizeof ocannl_sel_x__ == 8, \
+                   "OCANNL_SELECT: a 32- or 64-bit result"); \
+    if (sizeof ocannl_sel_x__ == 4) { \
+      uint32_t ocannl_sel_m__ = -(uint32_t)ocannl_sel_t__, ocannl_sel_u__, ocannl_sel_v__; \
+      __builtin_memcpy(&ocannl_sel_u__, &ocannl_sel_x__, 4); \
+      __builtin_memcpy(&ocannl_sel_v__, &ocannl_sel_y__, 4); \
+      ocannl_sel_u__ = (ocannl_sel_u__ & ocannl_sel_m__) | (ocannl_sel_v__ & ~ocannl_sel_m__); \
+      __builtin_memcpy(&ocannl_sel_x__, &ocannl_sel_u__, 4); \
+    } else { \
+      uint64_t ocannl_sel_m__ = -(uint64_t)ocannl_sel_t__, ocannl_sel_u__ = 0, ocannl_sel_v__ = 0; \
+      __builtin_memcpy(&ocannl_sel_u__, &ocannl_sel_x__, sizeof ocannl_sel_x__); \
+      __builtin_memcpy(&ocannl_sel_v__, &ocannl_sel_y__, sizeof ocannl_sel_y__); \
+      ocannl_sel_u__ = (ocannl_sel_u__ & ocannl_sel_m__) | (ocannl_sel_v__ & ~ocannl_sel_m__); \
+      __builtin_memcpy(&ocannl_sel_x__, &ocannl_sel_u__, sizeof ocannl_sel_x__); \
+    } \
+    ocannl_sel_x__; })
+#else
+  #define OCANNL_SELECT(T, A, B) ((T) ? (A) : (B))
+#endif
+
  void where_fwd(
     float *restrict where,
     unsigned char *restrict cond_condition,
@@ -130,6 +159,6 @@ ARRAYJIT_BUILTIN_LINKAGE float bfloat16_to_single(uint16_t bf16)
         HALF_TO_FLOAT(a_then_val[0]);
       __auto_type ocannl_sel_b__ =
         bfloat16_to_single(b_else_val[0]);
-      ((cond_condition[0]) != 0.0) ? ocannl_sel_a__ : ocannl_sel_b__; });
+      OCANNL_SELECT((cond_condition[0]) != 0.0, ocannl_sel_a__, ocannl_sel_b__); });
   /* end */
 }
