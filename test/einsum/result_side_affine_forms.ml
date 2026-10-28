@@ -14,8 +14,9 @@
    gradients of a strided, dilated transposed convolution and of a stride-and-offset scatter. The
    padded result-side window ([=+]) is refused by [Shape.refuse_result_side_padded_window]
    (gh-ocannl-1550, test [result_side_padded_window]); the recipe its message gives for that layer,
-   the full transposed convolution followed by a one-hot crop, runs here against PyTorch's
-   [ConvTranspose1d] semantics with [padding] and [output_padding] (gh-ocannl-1619).
+   the full transposed convolution followed by a crop, runs here against PyTorch's [ConvTranspose1d]
+   semantics with [padding] and [output_padding], the crop both as a slice of a concatenated axis
+   (gh-ocannl-1656) and as a one-hot window (gh-ocannl-1619).
 
    The audit found the offset forms wrong: shape inference sizes an affine axis without its offset,
    so an offset at or past the stride ([2*i+2], [1*i+1]) or any offset on an unpadded window
@@ -204,6 +205,38 @@ let run_forms () =
       let zeros = ndarray [ 1; 1 ] [| 0. |] in
       let%op cropped = a +* "s, i; k => s, 3*i<+k" w +* "s, o<+c; c => s, o" [ 0.; 1. ] in
       [%op (cropped, zeros) ++^ "s, a; s, b => s, a^b"]);
+  (* gh-ocannl-1656: the same three configurations with the crop as a true slice of the concatenated
+     axis -- the recipe the refusal message and the docs now give -- against the same oracle; the
+     one-hot crops above stay as an independent control. Integer components where the sizes are
+     literals, captured and set components where they are values, and the [output_padding > padding]
+     end grown by a replacement form instead of a concatenation. *)
+  executes "padded transposed conv recipe: 2*i<+2*k, then a slice, padding 2"
+    ~dims:[| 1; ((n - 1) * 2) - 4 + 4 + 1 |]
+    ~want:(conv_transpose ~stride:2 ~dilation:2 ~padding:2 ~output_padding:0 a_vals kernel_vals)
+    (fun () ->
+      let a = operand () in
+      let w = kernel () in
+      [%op a +* "s, i; k => s, 2*i<+2*k" w ++ "s, 2^o^2 => s, o"]);
+  executes
+    "padded transposed conv recipe: 2*i<+k, then a captured slice, padding 1, output_padding 1"
+    ~dims:[| 1; 2 * n |]
+    ~want:(conv_transpose ~stride:2 ~dilation:1 ~padding:1 ~output_padding:1 a_vals kernel_vals)
+    (fun () ->
+      let a = operand () in
+      let w = kernel () in
+      let padding = 1 and output_padding = 1 in
+      let%op full = a +* "s, i; k => s, 2*i<+k" w in
+      let%op cropped = full ++ "s, p^o^q => s, o" [ "p"; "q" ] in
+      Shape.set_dim p padding;
+      Shape.set_dim q (padding - output_padding);
+      cropped);
+  executes "padded transposed conv recipe: 3*i<+k, slice the start, pad the end, output_padding 2"
+    ~dims:[| 1; ((n - 1) * 3) - 2 + 2 + 2 + 1 |]
+    ~want:(conv_transpose ~stride:3 ~dilation:1 ~padding:1 ~output_padding:2 a_vals kernel_vals)
+    (fun () ->
+      let a = operand () in
+      let w = kernel () in
+      [%op a +* "s, i; k => s, 3*i<+k" w ++ "s, 1^o => s, o" ++ "s, a => s, a^1"]);
   (* Both terms of the index come from the operand: [res[i + 3j] = a[i, j]], injective for i < 3. *)
   let ij_vals = Array.init (2 * n) ~f:(fun x -> Float.of_int ((10 * (x / n)) + (x % n) + 1)) in
   executes "unary multi-term i<+3*j"

@@ -31,8 +31,10 @@ The `^` operator is fully integrated with the parser, shape inference, and lower
 - **Docs**: Comprehensive documentation in `syntax_extensions.md` (lines 503-549)
 - **Tests**: `test/operations/test_concat_graph.ml` — forward and gradient tests
 
-Patterns like `a; b => a^b` (concatenate), `a^b => a` (extract prefix), `3^a^5 => a`
-(extract middle), and integer-constant shifting all work correctly.
+The concatenation `a; b => a^b` works. (This proposal also claimed that `a^b => a` (extract
+prefix), `3^a^5 => a` (extract middle) and integer-constant shifting worked; they did not --
+extraction failed in projection inference and integer components did not parse -- until
+gh-ocannl-1656 implemented them.)
 
 ### The 3-way backprop bug
 
