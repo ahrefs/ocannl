@@ -544,7 +544,11 @@ let concat_component_text = function Concat_label l -> l | Concat_size n -> Int.
     the initialization by a replacement (gh-ocannl-1656). *)
 let concat_component_dim ~spec ~dim_var_env = function
   | Concat_label label ->
-      Row.Var (Hashtbl.find_or_add dim_var_env label ~default:(fun () -> Row.get_var ~name:label ()))
+      let v =
+        Hashtbl.find_or_add dim_var_env label ~default:(fun () -> Row.get_var ~name:label ())
+      in
+      Row.add_concat_component v;
+      Row.Var v
   | Concat_size n when n <= 0 ->
       raise
       @@ Row.Shape_error

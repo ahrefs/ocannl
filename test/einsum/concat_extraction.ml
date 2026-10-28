@@ -16,7 +16,8 @@
    single-operand [++^] ([Shape.Block]), whose lowerings differ. All values are small integers,
    exact in single precision. The [%cd] replace forms assign over a target holding sentinels and
    check that the untouched cells keep them. The refusals: an underdetermined component is a shape
-   error naming it, never an assertion failure; an empty integer component is refused. *)
+   error naming it, never a guess (and never an assertion failure); an empty integer component is
+   refused. *)
 
 open Base
 open Ocannl
@@ -227,8 +228,9 @@ let () =
   cd_replace ~label:"%cd middle, b => 1^b^c" ~name:"cdr_middle" ~dst:6 ~offset:1 ~src:3
     (fun ~tgt ~srct -> [%cd tgt =: id srct ~logic:"b => 1^b^c"])
 
-(* An underdetermined middle extraction is refused at closure with a message naming the components
-   and the fix, not an assertion failure; margins wider than the operand are a shape error. *)
+(* An underdetermined component is refused at closure with a message naming it and the fix -- not
+   closed to 1 (which used to pick the last element silently for [p^o => o] and a one-element tail
+   for [a => a^b]), and not an assertion failure (the uncaptured middle form). *)
 let refused ~label ~needle make =
   Verdict.case label (fun () ->
       Tensor.unsafe_reinitialize ();
@@ -254,6 +256,12 @@ let refused ~label ~needle make =
 
 let () =
   let x n = fst (leaf ~layout:Trailing ~rows:1 n) in
+  refused ~label:"uncaptured prefix, p^o => o" ~needle:"Shape.set_dim" (fun () ->
+      NTDSL.einsum1 "p^o => o" (x 5) ());
+  refused ~label:"uncaptured prefix through ++^, p^o => o" ~needle:"Shape.set_dim" (fun () ->
+      NTDSL.concat "p^o => o" [| x 5 |] ());
+  refused ~label:"uncaptured replacement, a => a^b" ~needle:"Shape.set_dim" (fun () ->
+      NTDSL.einsum1 "a => a^b" (x 3) ());
   refused ~label:"uncaptured middle, p^o^q => o" ~needle:"Shape.set_dim" (fun () ->
       NTDSL.einsum1 "p^o^q => o" (x 6) ());
   refused ~label:"margins wider than the operand, p^o => o with p = 6" ~needle:"exceed" (fun () ->

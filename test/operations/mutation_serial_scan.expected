@@ -7,6 +7,7 @@ tensor/row.ml: resolve_at_use_dim (Hash_set) -- accounted: every write noted or 
 tensor/row.ml: safe_to_guess (Hash_set) -- accounted: every write noted or at a boundary
 tensor/row.ml: used_in_spec_or_compose (Hash_set) -- accounted: every write noted or at a boundary
 tensor/row.ml: used_in_pointwise (Hash_set) -- accounted: every write noted or at a boundary
+tensor/row.ml: concat_component_vars (Hash_set) -- accounted: every write noted or at a boundary
 tensor/row.ml: resolve_at_use (Hash_set) -- accounted: every write noted or at a boundary
 tensor/row.ml: global_rank_edges (Hashtbl) -- accounted: every write noted or at a boundary
 tensor/row.ml: global_template_cache (Hashtbl) -- accounted: every write noted or at a boundary

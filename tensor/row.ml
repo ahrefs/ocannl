@@ -2616,6 +2616,29 @@ let add_used_in_pointwise v =
     note_mutation ();
     Hash_set.add used_in_pointwise v)
 
+(* gh-ocannl-1656: dimension variables naming a component of a concatenated einsum axis. Closure
+   never guesses one to dimension 1: an unsized component is a real segment, not a broadcast, and a
+   guess silently picks which elements an extraction ([p^o => o]) or replacement ([a => a^b])
+   touches. A discardable component (a block spec's, guessed to 0) is exempt. *)
+let concat_component_vars = Hash_set.create (module Dim_var)
+
+let add_concat_component v =
+  if not (Hash_set.mem concat_component_vars v) then (
+    note_mutation ();
+    Hash_set.add concat_component_vars v)
+
+let refuse_concat_component_guess env v =
+  if Hash_set.mem concat_component_vars v && not (Set.mem env.discardable_vars v) then
+    raise
+    @@ Shape_error
+         ( [%string
+             "the size of the concatenation component %{Dim_var.to_string v} is not determined, \
+              and closure does not guess one: it is a segment of the axis, not a broadcast. Size \
+              it: capture the component (the spec's trailing label list) and Shape.set_dim it, \
+              write its size as an integer component (e.g. 2^o => o), or pass the operation's \
+              result dims explicitly"],
+           [ Dim_mismatch [ Var v ] ] )
+
 (* gh-ocannl-544: row variables marked here are resolved by their use sites — at the final stages
    they may close to the GLB of their use sites' rows, acquiring axes their own arguments do not
    have. Unmarked (operation-result) variables close to an empty remainder instead: a use site must
@@ -4001,9 +4024,10 @@ let%debug5_sexp rec close_dim_terminal ~(stage : stage) ~is_param origin env (di
             raise
             @@ Shape_error
                  ("You forgot to specify the hidden dimension(s) 1", [ Dim_mismatch [ dim ] ])
-          else
+          else (
+            refuse_concat_component_guess env v;
             let guess_d = if Set.mem env.discardable_vars v then 0 else 1 in
-            [ Dim_eq { d1 = dim; d2 = get_bcast_dim ~d:guess_d ~proj_id:53 (); origin } ]
+            [ Dim_eq { d1 = dim; d2 = get_bcast_dim ~d:guess_d ~proj_id:53 (); origin } ])
       | _ when not (is_stage6_up stage) -> [ Terminal_dim (is_param, dim, origin) ]
       | _ -> [])
   | Affine _ ->
@@ -4396,6 +4420,7 @@ let%track5_sexp close_row_terminal ~(stage : stage) ~is_param origin env
 
 let%debug5_sexp eliminate_dim_entry stage origin env v ~glb constr =
   let guess_dim () =
+    refuse_concat_component_guess env v;
     if Set.mem env.discardable_vars v then get_default_dim ~d:0 ~proj_id:56 ()
     else get_bcast_dim ~d:1 ~proj_id:59 ()
   in
@@ -4474,6 +4499,7 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env
     | Concat dims -> List.concat_map dims ~f:finalize_dim_bounds
     | Var v -> (
         let guess_dim () =
+          refuse_concat_component_guess env v;
           if Set.mem env.discardable_vars v then get_default_dim ~d:0 ~proj_id:61 ()
           else get_bcast_dim ~d:1 ~proj_id:62 ()
         in

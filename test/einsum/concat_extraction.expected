@@ -100,6 +100,9 @@ ppx literal, x ++ "2^o => o": the operand's gradient is the segment's weights, z
 %cd prefix, a => a^b: the segment holds the source, every other cell its prior value: true
 %cd suffix, b => a^b: the segment holds the source, every other cell its prior value: true
 %cd middle, b => 1^b^c: the segment holds the source, every other cell its prior value: true
+uncaptured prefix, p^o => o: refused with a shape error naming the fix: true
+uncaptured prefix through ++^, p^o => o: refused with a shape error naming the fix: true
+uncaptured replacement, a => a^b: refused with a shape error naming the fix: true
 uncaptured middle, p^o^q => o: refused with a shape error naming the fix: true
 margins wider than the operand, p^o => o with p = 6: refused with a shape error naming the fix: true
 empty integer component, 0^o => o: refused with a shape error naming the fix: true
