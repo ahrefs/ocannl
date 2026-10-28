@@ -2780,8 +2780,8 @@ files.
   (`test/operations/autotune_budget.ml`). **The budget bounds wall time, not only the last start**
   (gh-ocannl-1556): checked only as attempts started, a 120 s budget ran 452 s on tuf, the slow
   candidate in flight finishing its whole compile and timing. Now an attempt also does not start
-  when the elapsed time plus TWO compiles as costly as the costliest so far would pass it
-  (`costliest_compile_s`, on the same clock): the attempt's own, and a reserve for the winner's
+  when the elapsed time plus TWO compiles of the projected cost would pass it
+  (`projected_compile_s`, on the same clock): the attempt's own, and a reserve for the winner's
   recompile, which runs after every check (gh-ocannl-1604); and a non-floor candidate's timing is
   abandoned before its first batch past the budget less that reserve (`time_routine ?stop`, raising
   `Timing_stopped`, caught inside the candidate's failure boundary as an unranked `Ok None`, not a
@@ -2789,9 +2789,16 @@ files.
   the `baseline` attempt hook, as a candidate's span starts after its hook), so the first candidate
   compile is projected too. The base compile lowers only (gh-ocannl-1666), so on CPU the search's
   `baseline_compile` joins it as evidence, and on GPU, where the baseline is never compiled, the
-  first candidate's cold compile sets it. The max is conservative under the kernel cache (a
-  cold compile keeps the projection high, and a cached recompile costs seconds) -- a cache-aware
-  estimate is the refinement if a budget's yield matters. The stop is strict (`elapsed + reserve >
+  first candidate's cold compile sets it. **The projection is cache-aware** (gh-ocannl-1667): a
+  plain max let the cold compile that filled the kernel code cache hold it for the whole search
+  while cached compiles cost seconds, so once a compile REUSES a kernel an earlier one published
+  (`Ir.Compile_cost.t`'s `kernels_reused`, counted by `Kernel_code_cache.resolve`'s lookups), the
+  compiles before it stop counting and the max restarts there (`projected_compile_s`); every later
+  compile counts in full, a cold one included. Reuse, not `kernels_compiled < kernels`: equal keys
+  within ONE batch compile once, so a cold compile already compiles fewer kernels than it renders.
+  Without the cache (or with it at 0 MiB) nothing reuses and the rule is the plain max. A test
+  that needs a cold baseline cannot clear the process-wide cache: it searches a chain no earlier
+  compile of the process rendered (`autotune_budget_overrun`'s `~rows`). The stop is strict (`elapsed + reserve >
   b`) and the projection admits an exact fit, so a virtual clock that charges a whole attempt as it
   starts (the scripted harness's attempt clock, under which every compile spans zero) cuts exactly
   where it did. `test/operations/autotune_budget_overrun.ml` charges the base compile, candidate

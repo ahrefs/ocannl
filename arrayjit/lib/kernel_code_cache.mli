@@ -126,7 +126,8 @@ val resolve :
     exception propagates; the next compile of those kernels compiles them afresh. [before_compile]
     runs under the lock ahead of the compiles, also when nothing is left to compile -- which happens
     under the lock only with [always_lock] (a caller that writes per-compile artifacts even for an
-    all-hit batch).
+    all-hit batch). The kernels the lookups answered are added to the enclosing
+    {!Compile_cost.with_census}'s [kernels_reused], once per call (gh-ocannl-1667).
 
     With [concurrent] (gh-ocannl-1603), each option list's representatives are cut into
     [programs_for concurrent.split] {!chunks}. When none is cut, the compile is the one above,

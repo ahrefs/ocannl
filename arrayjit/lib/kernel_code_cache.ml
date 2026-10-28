@@ -152,9 +152,13 @@ let resolve c ~lock ~keys ~options ~symbols ?(always_lock = false)
   (* Without the lock first, so an all-hit compile never waits on another domain's compiler; the
      misses are looked up again under it, where another domain may just have published them. *)
   List.iter all ~f:lookup;
+  (* gh-ocannl-1667: the kernels the lookups answered -- code an earlier compile published, not a
+     twin of this batch -- once per call, before anything of this batch is published. *)
+  let record_reused n_missed = Compile_cost.record_kernels_reused (n - n_missed) in
   let compile_misses () =
     List.iter (misses ()) ~f:lookup;
     let misses = misses () in
+    record_reused (List.length misses);
     (* One representative per distinct key, the first in batch order; the others share its code. *)
     let rep_of_key = Hashtbl.create (module String) in
     let reps =
@@ -228,7 +232,8 @@ let resolve c ~lock ~keys ~options ~symbols ?(always_lock = false)
     List.iter misses ~f:(fun i ->
         if Option.is_none found.(i) then found.(i) <- found.(Hashtbl.find_exn rep_of_key keys.(i)))
   in
-  if List.is_empty (misses ()) then (if always_lock then Stdlib.Mutex.protect lock compile_misses)
+  if List.is_empty (misses ()) then
+    if always_lock then Stdlib.Mutex.protect lock compile_misses else record_reused 0
   else Stdlib.Mutex.protect lock compile_misses;
   Array.map found ~f:(fun v -> Option.value_exn ~here:[%here] v)
 

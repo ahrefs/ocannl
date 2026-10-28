@@ -346,8 +346,9 @@ single-threaded segments that sum to the serial step
   search pass and on the replay, and its `budget_s` is the budget that arm's call resolved
   (gh-ocannl-1438; `null` for none). Each placement arm is its own search, so a two-arm search pass
   takes about twice S, plus the overrun: the excess of the compile in flight, or of the winner's
-  recompile (reserved at the costliest compile's cost, gh-ocannl-1604), over the costliest compile
-  before it, one timing batch, and the floors -- the base compile and the baseline's timing window
+  recompile (reserved at the projected compile cost, gh-ocannl-1604), over that projection: the
+  costliest compile before it, the cold compiles that filled the kernel code cache aside once a
+  compile reused a kernel (gh-ocannl-1667), one timing batch, and the floors -- the base compile and the baseline's timing window
   among them, charged but ahead of the first check. To bound the whole
   `Train.tune_placements` call instead, set `tune_call_budget_seconds`
   (`OCANNL_TUNE_CALL_BUDGET_SECONDS=T`, gh-ocannl-1440): one clock for the call, each search cut at

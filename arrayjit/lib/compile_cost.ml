@@ -8,6 +8,7 @@ type t = {
   link_s : float;
   kernels : int;
   kernels_compiled : int;
+  kernels_reused : int;
   pipelines_created : int;
   reuse_capable : bool;
 }
@@ -22,6 +23,7 @@ let empty =
     link_s = 0.;
     kernels = 0;
     kernels_compiled = 0;
+    kernels_reused = 0;
     pipelines_created = 0;
     reuse_capable = false;
   }
@@ -41,6 +43,7 @@ let add a b =
     link_s = a.link_s +. b.link_s;
     kernels = a.kernels + b.kernels;
     kernels_compiled = a.kernels_compiled + b.kernels_compiled;
+    kernels_reused = a.kernels_reused + b.kernels_reused;
     pipelines_created = a.pipelines_created + b.pipelines_created;
     reuse_capable = a.reuse_capable || b.reuse_capable;
   }
@@ -98,6 +101,8 @@ let time_link f = timed (fun r s -> { r with link_s = r.link_s +. s }) f
 let record_kernels ~rendered ~compiled =
   update (fun r ->
       { r with kernels = r.kernels + rendered; kernels_compiled = r.kernels_compiled + compiled })
+
+let record_kernels_reused n = update (fun r -> { r with kernels_reused = r.kernels_reused + n })
 
 let record_pipeline_created () =
   update (fun r -> { r with pipelines_created = r.pipelines_created + 1 })
