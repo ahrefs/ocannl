@@ -777,7 +777,7 @@ let nvrtc_offline_floor = 75
 let mxfp8_family_marker = "(mma-mxfp8)"
 let mxfp8_family_cc = 120
 
-let gpu_arch_options ~device_cc cu_src =
+let floor_arch_options ~device_cc cu_src =
   (* Two kinds of target, and the difference is the whole point of this function:
 
      - A FLOOR (every marker but one): the lowest arch whose PTX contains the instruction. PTX
@@ -863,3 +863,58 @@ let gpu_arch_options ~device_cc cu_src =
         let arch = max floor (min nvrtc_offline_floor device_cc) in
         [ Printf.sprintf "--gpu-architecture=compute_%d" arch ]
     | None -> []
+
+(* gh-ocannl-1674: which of the two PTX targets a compile takes. The floor is what ships; the native
+   target exists to be compared against it. *)
+type ptx_target = Floor | Native [@@deriving equal, sexp_of]
+
+let gpu_arch_options ?(target = Floor) ~device_cc cu_src =
+  match target with
+  | Native when device_cc > 0 ->
+      (* The device's own arch, marked or not: the PTX the driver's JIT then compiles is already at
+         the device's level, so no forward-JIT step sits between the two. The family marker keeps
+         its family target, which is the device's own arch already. *)
+      if
+        String.is_substring cu_src ~substring:mxfp8_family_marker
+        && device_cc / 10 = mxfp8_family_cc / 10
+      then [ Printf.sprintf "--gpu-architecture=compute_%da" device_cc ]
+      else [ Printf.sprintf "--gpu-architecture=compute_%d" device_cc ]
+  | Native | Floor -> floor_arch_options ~device_cc cu_src
+
+type ptx_compile = { device_cc : int; target : string option } [@@deriving sexp_of]
+
+let ptx_target_directive ptx =
+  (* The PTX module's [.target sm_80] (or [.target sm_80, debug]) directive: the arch nvrtc compiled
+     the program for, read from the emitted text rather than from the options it was given. *)
+  String.split_lines ptx
+  |> List.find_map ~f:(fun line ->
+      match String.lsplit2 (String.strip line) ~on:' ' with
+      | Some (".target", rest) ->
+          List.hd (String.split_on_chars (String.strip rest) ~on:[ ','; ' ' ])
+      | _ -> None)
+
+(* The innermost [with_ptx_target] extent: its target, and the programs compiled in it, newest
+   first. Nothing is recorded outside every extent, so a process that never asks keeps nothing. *)
+let active : (ptx_target * ptx_compile list ref) option ref = ref None
+let active_lock = Stdlib.Mutex.create ()
+
+let current_ptx_target () =
+  Stdlib.Mutex.protect active_lock (fun () -> Option.value_map !active ~default:Floor ~f:fst)
+
+let record_ptx_compile ~device_cc ptx =
+  let entry = { device_cc; target = ptx_target_directive ptx } in
+  Stdlib.Mutex.protect active_lock (fun () ->
+      Option.iter !active ~f:(fun (_, compiles) -> compiles := entry :: !compiles))
+
+let with_ptx_target target f =
+  let compiles = ref [] in
+  let saved =
+    Stdlib.Mutex.protect active_lock (fun () ->
+        let saved = !active in
+        active := Some (target, compiles);
+        saved)
+  in
+  let result =
+    Exn.protect ~f ~finally:(fun () -> Stdlib.Mutex.protect active_lock (fun () -> active := saved))
+  in
+  (result, List.rev !compiles)

@@ -1,0 +1,5 @@
+a whole-routine GPU seed pads the row to the mma tile: true
+every variant's floor and native compiles agree bit for bit: true
+every variant with floor PTX for another arch compiled native PTX, all for the device's arch: true
+some variant's floor compile compiled PTX for another arch: true
+every seed's routine is labeled tensorized at both targets: true

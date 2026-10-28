@@ -266,10 +266,14 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
 
   (* The options nvrtc compiles [cu_src] -- the source with its conditional includes applied --
      with: the target arch its markers floor (over the device set), the include paths, the numerics
-     flags, the debug flag. A function of the source and the device set alone, so the kernel code
-     cache keys on it (gh-ocannl-1529). *)
+     flags, the debug flag. A function of the source, the device set and the PTX target
+     ([Cuda_mma.with_ptx_target], gh-ocannl-1674) alone, so the kernel code cache keys on it
+     (gh-ocannl-1529). *)
   let nvrtc_options cu_src =
-    let arch_opts = Cuda_mma.gpu_arch_options ~device_cc:(min_compute_capability ()) cu_src in
+    let arch_opts =
+      Cuda_mma.gpu_arch_options ~target:(Cuda_mma.current_ptx_target ())
+        ~device_cc:(min_compute_capability ()) cu_src
+    in
     (* gh-ocannl-784: assembled by [Compiler_options.nvrtc], the pure module the HIP backend already
        shares, so the exact vector -- semantic state for fast-math numerics -- is pinned by a
        GPU-free test (arrayjit/test/test_cuda_compile_options.ml) instead of only by whichever box
@@ -1057,6 +1061,8 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
   let next_program_id = Atomic.make 0
 
   let new_program ptx =
+    (* Every program this process compiled, with the arch its PTX targets (gh-ocannl-1674). *)
+    Cuda_mma.record_ptx_compile ~device_cc:(min_compute_capability ()) (Nvrtc.string_from_ptx ptx);
     {
       program_id = Atomic.fetch_and_add next_program_id 1;
       ptx;

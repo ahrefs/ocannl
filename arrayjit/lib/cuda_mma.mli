@@ -271,7 +271,18 @@ val capability : cc:int -> Backend_intf.mma_capability option
 
 (** {1 nvrtc architecture targets} *)
 
-val gpu_arch_options : device_cc:int -> string -> string list
+type ptx_target =
+  | Floor  (** The shipping target described below. *)
+  | Native
+      (** The device's own arch, [compute_<cc>] for every source, marked or not (gh-ocannl-1674).
+          Not a shipping target: it exists so that a test can compile the same kernels at both
+          targets and compare what they compute. A miscompile or a data race that only nvrtc's code
+          for one target exposes then shows as a difference, with no reference of its own needed
+          (lukstafi/ocannl-staging#1430's lane-0 transfer was wrong at compute_80 to compute_90 and
+          right at compute_120). *)
+[@@deriving equal, sexp_of]
+
+val gpu_arch_options : ?target:ptx_target -> device_cc:int -> string -> string list
 (** The [--gpu-architecture] options one nvrtc compile of the given CUDA source gets, given the
     minimum compute capability across the attached devices: a pure function of the source's arch
     markers. A FLOOR target (forward-JIT-compiled on every later GPU) is the max of the triggered
@@ -279,4 +290,34 @@ val gpu_arch_options : device_cc:int -> string -> string list
     floor, [cp.async.] at {!async_copy_floor}, half/bf16 arithmetic at theirs -- raised to
     compute_75 where every device can load that (CUDA 13 dropped offline compilation below it). The
     [(mma-mxfp8)] marker instead selects a [compute_<cc>a] FAMILY target, only on a device of that
-    family (gh-ocannl-481 item 3, D4). *)
+    family (gh-ocannl-481 item 3, D4). A source with no marker gets no option: nvrtc's own default
+    arch. [~target:Native] (default [Floor]) gives every source the device's [compute_<cc>] instead,
+    the family marker its [compute_<cc>a]. *)
+
+type ptx_compile = {
+  device_cc : int;  (** The minimum compute capability across the attached devices. *)
+  target : string option;
+      (** The PTX's own [.target] directive ([sm_80], [sm_120a], ...): what nvrtc compiled for, read
+          from the emitted program; [None] if it has none. *)
+}
+[@@deriving sexp_of]
+(** One nvrtc program a backend compiled. *)
+
+val with_ptx_target : ptx_target -> (unit -> 'a) -> 'a * ptx_compile list
+(** [with_ptx_target target f] runs [f] with every CUDA compile in its extent targeting [target]
+    ({!current_ptx_target}), restoring the previous target afterwards, and returns [f]'s result with
+    the programs the backend compiled in the extent, oldest first: empty on a backend that compiles
+    no PTX, so a test gates its target claims on a compile having been recorded, never on a backend
+    name. Process-wide, not domain-local: for a test comparing the two targets in one process. The
+    CUDA kernel code cache keys on the complete option list, so a kernel compiled at one target is
+    never reused at the other (a cache hit compiles nothing, so records nothing). *)
+
+val current_ptx_target : unit -> ptx_target
+(** [Floor] outside every {!with_ptx_target}. *)
+
+val ptx_target_directive : string -> string option
+(** The arch of a PTX module's [.target] directive, without its [, debug] suffix. *)
+
+val record_ptx_compile : device_cc:int -> string -> unit
+(** Called by the CUDA backend with every program's PTX text, as nvrtc produced it; kept only inside
+    a {!with_ptx_target} extent. *)
