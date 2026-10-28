@@ -6,7 +6,9 @@ census: the declined schedule's routine is labeled scalar-fallback, not tensoriz
 per-chunk B~ re-pack matches the serial twin bitwise: true
 per-chunk B~ re-pack's routine is labeled tensorized: true
 per-chunk B~ re-pack under the cap pool-parallelizes: true
+Grid census: under the cap, both Grid loops are on the pool, the accumulation loop's tiles counted: true
 per-chunk B~ re-pack over the cap declines to serial: true
+Grid census: over the cap, the accumulation loop is the one serial loop, with its bytes and the cap: true
 seeds: standard, both hoistable: total=20 whole=4 packed=12 hoist=8 grid=4 packrest=0
 seeds: transposed B, hoistable: total=16 whole=0 packed=12 hoist=8 grid=4 packrest=0
 seeds: computed A x hoistable B: total=22 whole=4 packed=14 hoist=10 grid=6 packrest=2

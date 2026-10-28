@@ -1,7 +1,9 @@
 32^3 at 16x32, default floor: both Grid launches render serial: true
 32^3 at 16x32, default floor: values match the unscheduled kernel bitwise: true
 32^3 at 16x32, default floor: every Tile_mma renders the register tiling: true
+32^3 at 16x32, default floor: the Grid census records every launch serial for the floor: true
 32^3 at 16x32, floor disabled: the launches render pool-parallel: true
+32^3 at 16x32, floor disabled: the Grid census records every launch on the pool: true
 32^3 at 16x32, floor disabled: values match the unscheduled kernel bitwise: true
 128^3 at 16x32, default floor: the launches render pool-parallel: true
 128^3 at 16x32, default floor: values match the unscheduled kernel bitwise: true

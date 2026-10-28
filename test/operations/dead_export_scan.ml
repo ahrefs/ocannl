@@ -327,6 +327,15 @@ let exempt_zero_reference_exports =
     "C_syntax.compare_peel_site";
     "C_syntax.compare_peel_skip";
     "C_syntax.compare_peel_verdict";
+    (* gh-ocannl-1668: the Grid census's domain-local cells, which only its bracket and the
+       renderer's collection inside C_syntax touch, and the reason sentence the decline diagnostic
+       and the census line share. Top-level because the cells are domain-local state outside the
+       renderer functor, as the other censuses' are; hiding them is the job of an interface for
+       C_syntax, as for gh-ocannl-915's entries above. *)
+    "C_syntax.grid_census";
+    "C_syntax.grid_census_enabled";
+    "C_syntax.grid_pool_available";
+    "C_syntax.grid_serial_reason_string";
   ]
 
 (* gh-ocannl-1009: the type census, filled from its first run. Every entry is a live type the

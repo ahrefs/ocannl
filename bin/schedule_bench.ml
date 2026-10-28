@@ -570,7 +570,7 @@ let () =
     let ctx, routine =
       Context.compile ~lowered_transform:(fun o -> [ transform o ]) ctx comp Ir.Indexing.Empty
     in
-    let mma = routine.Context.mma in
+    let mma = routine.Context.mma and grid = routine.Context.grid in
     (* The unscheduled leg is the 1x1 launch: one GPU thread walking the whole m x n x k nest, which
        is seconds per run by n = 512 and minutes beyond it. Say so BEFORE the first kernel rather
        than after the last, and say how to cap it — a reader who does not know that the fifth
@@ -678,10 +678,14 @@ let () =
     (* The label is printed on EVERY timing line, including the untensorized variants: a suffix that
        appears only when there is something to say is a suffix a table reader does not miss when it
        is absent (gh-ocannl-626). *)
-    p "%-10s %8.3f ms  %8.2f GFLOP/s  (spot [%d] %.1f, chk %s, %s)  [%s]\n" variant (secs *. 1e3)
+    (* And the Grid census beside it (gh-ocannl-1668): a Grid-labeled CPU variant whose loop the
+       renderer kept serial is timed as a serial kernel. *)
+    p "%-10s %8.3f ms  %8.2f GFLOP/s  (spot [%d] %.1f, chk %s, %s)  [%s] [%s]\n" variant
+      (secs *. 1e3)
       (flops /. secs /. 1e9)
       spot values.(spot) (Bench_checksum.render checksum) agreement
-      (Ir.C_syntax.mma_summary_string mma);
+      (Ir.C_syntax.mma_summary_string mma)
+      (Ir.C_syntax.grid_summary_string grid);
     Bench_out.result ~variant ~check ~seconds:secs;
     (secs, mma)
   in

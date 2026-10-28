@@ -122,6 +122,14 @@ type routine = private {
           from the backend's name. On a backend that requests no workaround the accumulator sites
           are still reported, as {!Ir.C_syntax.Plain_accumulator}, with
           {!Ir.C_syntax.volatility_summary.requested} [= false]. *)
+  grid : Ir.C_syntax.grid_summary;
+      (** Which outermost [Grid] loops of this routine rendered on the CPU pool, and for each one
+          that did not, the rule that kept it serial -- the privatized tiles' per-chunk bytes over
+          [cc_grid_private_bytes_cap], the launch floor [cc_grid_min_updates], or a sharing rule
+          (gh-ocannl-1668). A field of the routine, beside {!mma}, because the serial loop computes
+          the same values: a timing labeled parallel that measured a serial loop is a false perf
+          number, as {!mma} guards against for tensorization. On a backend with no CPU pool
+          {!Ir.C_syntax.grid_summary.pool} is [false] and nothing is recorded. *)
   segments : Ir.Low_level.optimized list;
       (** The kernel segments this compile shipped, one per kernel in launch order — the scheduled
           code each kernel was generated from (gh-ocannl-1006). A field of the routine, beside

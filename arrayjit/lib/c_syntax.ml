@@ -565,6 +565,157 @@ let with_volatility_census f =
   restore ();
   (result, summarize_volatility_census ~requested entries)
 
+(* {2 The Grid census (gh-ocannl-1668)}
+
+   Whether each outermost [Grid] loop of a pool-backed CPU compile actually rendered on the pool,
+   and if not, which rule kept it serial. The serial loop is correct, so a decline is invisible in
+   the values and, unless [schedule_log_declines] is on, everywhere else: [narrow_gebp_bench]'s
+   [packmma_par] at n = 512 ran serially for want of the per-chunk privatization cap and was timed,
+   slower than its serial twin, under a parallel label (lukstafi/ocannl-staging#1457). Collected
+   where the decision is made ([collect_parallel_grid]) and bracketed by {!with_grid_census}, which
+   {!Context.compile} calls around every routine's codegen, so the summary is a field of the
+   compiled routine. *)
+
+(** Why an outermost [Grid] loop rendered serially on a pool-backed backend. *)
+type grid_serial_reason =
+  | Grid_opaque_body  (** An opaque statement or a barrier sits under the loop body. *)
+  | Grid_scope_local_escapes
+      (** A scope local is set under the loop but declared outside it, so its function-scope storage
+          would race across chunks. *)
+  | Grid_local_accessed_outside of string
+      (** This local is written grid-variantly (it fails the shared rule) and is also accessed
+          outside the loop body (it fails the privatization rule). *)
+  | Grid_local_not_covering of string
+      (** This local fails the shared rule, and its first access per iteration is not a standalone
+          covering write (it fails the privatization rule). *)
+  | Grid_private_over_cap of { private_bytes : int; cap : int }
+      (** Every local the loop needs privatized could be, but their combined per-chunk footprint
+          [private_bytes] exceeds [cap], the resolved [cc_grid_private_bytes_cap]
+          ({!per_chunk_private_bytes_cap}). *)
+  | Grid_below_min_updates of { updates : int; floor : int }
+      (** The launch's estimated scalar updates ({!grid_update_count}, saturating at [floor]) fall
+          below [floor], the resolved [cc_grid_min_updates]. *)
+  | Grid_offset_range of { from_ : int; to_ : int }
+      (** The loop does not start at 0, which the chunked rendering assumes. *)
+[@@deriving sexp_of, equal]
+
+type grid_site =
+  | Grid_pool of { private_bytes : int }
+      (** Rendered on the pool, each chunk privatizing [private_bytes] of tiles (0 when none). *)
+  | Grid_serial of grid_serial_reason
+[@@deriving sexp_of, equal]
+
+type grid_entry = { kernel : string; loop : string; site : grid_site } [@@deriving sexp_of]
+(** One outermost [Grid] loop: the kernel it is in, its loop index's identifier, the decision. *)
+
+type grid_summary = {
+  loops : grid_entry list;
+      (** The census entries of one compile, in emission order. Fissioned segments of one routine
+          contribute their kernels to the same summary. *)
+  pool : bool;
+      (** Whether any kernel of this compile was rendered with pool-parallel [Grid] loops available
+          at all: a pool-backed backend ([cc_parallel_grid] not [none]) with more than one chunk and
+          no [debug_log_from_routines]. [false] means no entry was recorded, and on a GPU backend
+          that a [Grid] loop is a hardware grid, not a serial loop. *)
+  pool_rendered : int;
+  serial : int;
+}
+[@@deriving sexp_of]
+(** What a compile's Grid census says about the routine it produced (gh-ocannl-1668). *)
+
+let grid_census_enabled =
+  let key : bool ref Stdlib.Domain.DLS.key = Stdlib.Domain.DLS.new_key (fun () -> ref false) in
+  fun () -> Stdlib.Domain.DLS.get key
+
+let grid_census =
+  let key : grid_entry list ref Stdlib.Domain.DLS.key =
+    Stdlib.Domain.DLS.new_key (fun () -> ref [])
+  in
+  fun () -> Stdlib.Domain.DLS.get key
+
+(* Set by [collect_parallel_grid] when its pool gate passes, read by the summary, for the reason
+   {!volatility_requested} is: a summary without it could not tell "no pool" from "no Grid loop". *)
+let grid_pool_available =
+  let key : bool ref Stdlib.Domain.DLS.key = Stdlib.Domain.DLS.new_key (fun () -> ref false) in
+  fun () -> Stdlib.Domain.DLS.get key
+
+(** The sentence a decline diagnostic and the census line say for a serial reason. *)
+let grid_serial_reason_string = function
+  | Grid_opaque_body -> "opaque statement or barrier under the loop body"
+  | Grid_scope_local_escapes ->
+      "a scope local is set under the loop but declared outside it (function-scope storage would \
+       race across chunks)"
+  | Grid_local_accessed_outside local ->
+      Printf.sprintf
+        "local %s is written grid-variantly (fails the shared rule) and is also accessed outside \
+         the loop body (fails the privatization rule)"
+        local
+  | Grid_local_not_covering local ->
+      Printf.sprintf
+        "local %s fails the shared rule, and its first access per iteration is not a standalone \
+         covering write (fails the privatization rule)"
+        local
+  | Grid_private_over_cap { private_bytes; cap } ->
+      Printf.sprintf
+        "its privatized tiles take %d bytes per chunk, over cc_grid_private_bytes_cap = %d"
+        private_bytes cap
+  | Grid_below_min_updates { updates; floor } ->
+      Printf.sprintf
+        "native fork/join has only %d estimated scalar updates per launch, below \
+         cc_grid_min_updates = %d"
+        updates floor
+  | Grid_offset_range { from_; to_ } ->
+      Printf.sprintf "its range %d..%d does not start at 0" from_ to_
+
+(** The one-line Grid census a report prints beside a routine (gh-ocannl-1668): how many outermost
+    [Grid] loops rendered on the pool, and why each of the others is serial. *)
+let grid_summary_string summary =
+  if not summary.pool then "grid: no pool-parallel rendering"
+  else
+    match summary.loops with
+    | [] -> "grid: no Grid loop"
+    | loops ->
+        let serial =
+          List.filter_map loops ~f:(fun e ->
+              match e.site with
+              | Grid_pool _ -> None
+              | Grid_serial why ->
+                  Some (Printf.sprintf "%s serial: %s" e.loop (grid_serial_reason_string why)))
+        in
+        Printf.sprintf "grid: %d of %d on the pool%s" summary.pool_rendered (List.length loops)
+          (if List.is_empty serial then "" else "; " ^ String.concat ~sep:"; " serial)
+
+(** Run [f] with the Grid census collecting, and return its result alongside the summary of what the
+    pool-parallel [Grid] rendering decided during it (gh-ocannl-1668). Nests additively and restores
+    the refs, exactly as {!with_census} does. *)
+let with_grid_census f =
+  let saved_enabled = !(grid_census_enabled ())
+  and saved_census = !(grid_census ())
+  and saved_pool = !(grid_pool_available ()) in
+  grid_census_enabled () := true;
+  grid_census () := [];
+  grid_pool_available () := false;
+  let restore () =
+    let inner = !(grid_census ()) in
+    let inner_pool = !(grid_pool_available ()) in
+    grid_census_enabled () := saved_enabled;
+    grid_census () := if saved_enabled then inner @ saved_census else saved_census;
+    grid_pool_available () := if saved_enabled then saved_pool || inner_pool else saved_pool
+  in
+  let result =
+    match f () with
+    | r -> r
+    | exception e ->
+        restore ();
+        raise e
+  in
+  let loops = List.rev !(grid_census ()) and pool = !(grid_pool_available ()) in
+  restore ();
+  let pool_rendered =
+    List.count loops ~f:(fun e -> match e.site with Grid_pool _ -> true | Grid_serial _ -> false)
+  in
+  (result, { loops; pool; pool_rendered; serial = List.length loops - pool_rendered })
+
 type mma_space = [ `Device | `Shared | `Thread | `Fragment of string ]
 (** The address space of a tile-MMA operand as the emission hooks see it. *)
 
@@ -3082,6 +3233,9 @@ module C_syntax (B : C_syntax_config) = struct
   }
 
   type render_ctx = {
+    grid_census : grid_entry list ref;
+    grid_census_enabled : bool ref;
+    grid_pool_available : bool ref;
     volatility_requested : bool ref;
     volatility_census : (string * volatility_site) list ref;
     volatility_census_enabled : bool ref;
@@ -4378,7 +4532,9 @@ module C_syntax (B : C_syntax_config) = struct
      check of [first_access_standalone_covering]) -- so no value flows between iterations and each
      chunk can own a block-scope copy. This is what in-kernel packing [Stage] tiles satisfy
      (gh-ocannl-469): the pack nest fully rewrites the tile before the micro-kernel reads it. The
-     combined per-chunk footprint is capped by [per_chunk_private_bytes_cap] (pool worker stacks).
+     combined per-chunk footprint of every privatized local is capped by
+     [per_chunk_private_bytes_cap], checked once the whole footprint is known, so a decline states
+     it (gh-ocannl-1668).
 
      Under [`Dispatch] (the blocks extension), a block cannot refer to a declaration with an array
      type at all -- even read-only -- but it captures pointers by value, so every non-privatized
@@ -4386,9 +4542,10 @@ module C_syntax (B : C_syntax_config) = struct
      ([current_local_ptr_alias]). [Set_local] scope locals must have their declaration within the
      loop body (block scope = per-chunk storage). Opaque statements and barriers disqualify.
 
-     Returns [Some (privatized, ptr_aliased)] when the loop can render in parallel. *)
+     Returns [Ok (privatized, ptr_aliased, private_bytes)] when the loop can render in parallel, and
+     otherwise the first rule that failed. *)
   let parallel_grid_safe ctx ~sym ~grid_range ~(global_counts : int Hashtbl.M(Int).t)
-      (body : Low_level.t) : (Tn.t list * Tn.t list) option =
+      (body : Low_level.t) : (Tn.t list * Tn.t list * int, grid_serial_reason) Result.t =
     let mentions_comp = Indexing.axis_index_mentions_symbol sym in
     let loop_ident = Indexing.symbol_ident sym in
     let locals : grid_local_info Hashtbl.M(Int).t = Hashtbl.create (module Int) in
@@ -4416,18 +4573,10 @@ module C_syntax (B : C_syntax_config) = struct
           if not (Hash_set.mem declared_scopes id) then (
             ok := false;
             escaped_scope := true));
-    if not !ok then (
-      if !opaque then
-        (declinef ctx) "Grid loop %s stays serial: opaque statement or barrier under the loop body"
-          loop_ident;
-      if !escaped_scope then
-        (declinef ctx)
-          "Grid loop %s stays serial: a scope local is set under the loop but declared outside it \
-           (function-scope storage would race across chunks)"
-          loop_ident;
-      None)
+    if not !ok then Error (if !opaque then Grid_opaque_body else Grid_scope_local_escapes)
     else
       let privatized = ref [] and ptr_aliased = ref [] in
+      let failed = ref None in
       let private_bytes = ref 0 in
       (* The box environment for the affine conflict query: the Grid loop itself plus every loop
          bound under its body. Loops enclosing the Grid loop are shared across chunks (chunks of one
@@ -4436,7 +4585,8 @@ module C_syntax (B : C_syntax_config) = struct
       let env = Affine.Loop_ranges.bind (Low_level.loop_ranges body) sym grid_range in
       let range = Affine.Loop_ranges.find env in
       let dup = Affine.Loop_ranges.mem env in
-      let feasible =
+      (* Stops at the first local no rule admits, which records why in [failed]. *)
+      let (_all_admitted : bool) =
         Hashtbl.for_all locals ~f:(fun info ->
             (* The legacy procedural shared rule (every access mentions [sym] and all accesses agree
                on every mentioning component), kept for [legality_crosscheck]. *)
@@ -4519,16 +4669,10 @@ module C_syntax (B : C_syntax_config) = struct
                 | None -> false
               in
               if not all_inside then (
-                (declinef ctx)
-                  "Grid loop %s stays serial: local %s is written grid-variantly (fails the shared \
-                   rule) and is also accessed outside the loop body (fails the privatization rule)"
-                  loop_ident (Tn.debug_name info.gl_tn);
+                failed := Some (Grid_local_accessed_outside (Tn.debug_name info.gl_tn));
                 false)
               else if not (first_access_standalone_covering info.gl_tn body) then (
-                (declinef ctx)
-                  "Grid loop %s stays serial: local %s fails the shared rule, and its first access \
-                   per iteration is not a standalone covering write (fails the privatization rule)"
-                  loop_ident (Tn.debug_name info.gl_tn);
+                failed := Some (Grid_local_not_covering (Tn.debug_name info.gl_tn));
                 false)
               else (
                 private_bytes :=
@@ -4536,22 +4680,22 @@ module C_syntax (B : C_syntax_config) = struct
                   + Tn.num_elems info.gl_tn
                     * Ops.prec_in_bytes (Lazy.force info.gl_tn.Tn.storage_prec);
                 privatized := info.gl_tn :: !privatized;
-                let fits = !private_bytes <= Lazy.force per_chunk_private_bytes_cap in
-                if not fits then
-                  (declinef ctx)
-                    "Grid loop %s stays serial: privatizing local %s brings the combined per-chunk \
-                     tile footprint to %d bytes, over cc_grid_private_bytes_cap = %d"
-                    loop_ident (Tn.debug_name info.gl_tn) !private_bytes
-                    (Lazy.force per_chunk_private_bytes_cap);
-                fits))
+                true))
       in
-      if feasible then Some (!privatized, !ptr_aliased) else None
+      let cap = Lazy.force per_chunk_private_bytes_cap in
+      match !failed with
+      | Some why -> Error why
+      | None when !private_bytes > cap ->
+          Error (Grid_private_over_cap { private_bytes = !private_bytes; cap })
+      | None -> Ok (!privatized, !ptr_aliased, !private_bytes)
 
   (* The outermost [Grid] loops safe to render in parallel, with each loop's privatized locals and
      (under [`Dispatch]) the pointer-aliased function-scope locals. Nested [Grid] loops render
      serially inside a chunk (still correct: write coverage holds per grid index). Runtime kernel
      logging writes to a shared FILE, so parallel rendering is skipped under
-     [debug_log_from_routines]. *)
+     [debug_log_from_routines]. Every outermost [Grid] loop of two or more iterations the pool gate
+     reaches is recorded in the Grid census, with the rule that kept it serial if one did
+     (gh-ocannl-1668). *)
   let collect_parallel_grid ctx (llc : Low_level.t) :
       Set.M(Indexing.Symbol).t * Tn.t list Map.M(Indexing.Symbol).t * Set.M(Tn).t =
     let empty =
@@ -4561,7 +4705,20 @@ module C_syntax (B : C_syntax_config) = struct
       Poly.equal B.parallel_grid_syntax `None
       || B.parallel_grid_chunks <= 1 || Utils.debug_log_from_routines ()
     then empty
-    else
+    else (
+      ctx.grid_pool_available := true;
+      let record ~repeated index site =
+        (match site with
+        | Grid_pool _ -> ()
+        | Grid_serial why ->
+            (declinef ctx) "Grid loop %s stays serial%s: %s" (Indexing.symbol_ident index)
+              (if repeated then " (a repeated launch)" else "")
+              (grid_serial_reason_string why));
+        if !(ctx.grid_census_enabled) then
+          ctx.grid_census :=
+            { kernel = ctx.current_kernel_name; loop = Indexing.symbol_ident index; site }
+            :: !(ctx.grid_census)
+      in
       (* Whole-kernel access counts per local, so [parallel_grid_safe] can tell when a local's
          accesses all sit inside one loop's body (the privatization rule). Same traversal, so the
          counts are comparable by construction. *)
@@ -4577,24 +4734,23 @@ module C_syntax (B : C_syntax_config) = struct
       let rec go ~repeated (llc : Low_level.t) =
         match llc with
         | Low_level.For_loop { axis = Grid; index; from_; to_; body; _ } -> (
-            if from_ = 0 && to_ >= 1 then
+            if from_ <> 0 && to_ > from_ then
+              record ~repeated index (Grid_serial (Grid_offset_range { from_; to_ }))
+            else if from_ = 0 && to_ >= 1 then
               match
                 (parallel_grid_safe ctx) ~sym:index ~grid_range:(from_, to_) ~global_counts body
               with
-              | Some _ when floor > 0 && grid_update_count ~cap:floor llc < floor ->
-                  (declinef ctx)
-                    "Grid loop %s stays serial: %s native fork/join has only %d estimated scalar \
-                     updates per launch, below cc_grid_min_updates = %d"
-                    (Indexing.symbol_ident index)
-                    (if repeated then "a repeated" else "its")
-                    (grid_update_count ~cap:floor llc)
-                    floor
-              | Some (privatized, ptr_aliased) ->
+              | Ok _ when floor > 0 && grid_update_count ~cap:floor llc < floor ->
+                  record ~repeated index
+                    (Grid_serial
+                       (Grid_below_min_updates { updates = grid_update_count ~cap:floor llc; floor }))
+              | Ok (privatized, ptr_aliased, private_bytes) ->
+                  record ~repeated index (Grid_pool { private_bytes });
                   syms := Set.add !syms index;
                   if not (List.is_empty privatized) then
                     privs := Map.set !privs ~key:index ~data:privatized;
                   aliases := List.fold ptr_aliased ~init:!aliases ~f:Set.add
-              | None -> ())
+              | Error why -> record ~repeated index (Grid_serial why))
         | For_loop { from_; to_; body; _ } -> go ~repeated:(repeated || to_ > from_) body
         | If { body; _ } -> go ~repeated body
         | Seq (a, b) ->
@@ -4603,7 +4759,7 @@ module C_syntax (B : C_syntax_config) = struct
         | _ -> ()
       in
       go ~repeated:false llc;
-      (!syms, !privs, !aliases)
+      (!syms, !privs, !aliases))
 
   (* gh-ocannl-1669: which of the [Local] arrays one scope declares go on the heap, given the bytes
      of stack [budget] the scope may use ([routine_stack_locals_bytes] for the function scope,
@@ -8042,6 +8198,9 @@ module C_syntax (B : C_syntax_config) = struct
         volatility_census_enabled = ref !(volatility_census_enabled ());
         volatility_census = volatility_census ();
         volatility_requested = volatility_requested ();
+        grid_census_enabled = ref !(grid_census_enabled ());
+        grid_census = grid_census ();
+        grid_pool_available = grid_pool_available ();
       }
     in
     (let parallel_grid, grid_private, local_ptr_alias = (collect_parallel_grid ctx) llc in

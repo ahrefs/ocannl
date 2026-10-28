@@ -16,9 +16,11 @@
 
    - The per-chunk privatization byte cap (config [cc_grid_private_bytes_cap], default 256KB): a
    grid-outermost packed GEMM that re-packs the B~ panel per chunk (gh-ocannl-475's alternative
-   shape) privatizes both tiles per chunk — under the default cap it fits at [n = 256] (80KB) and
-   declines at [n = 1024] (272KB), rendering serial. Compile-only; the stderr diagnostics themselves
-   are opt-in via [schedule_log_declines].
+   shape) privatizes its packed tiles and C fragment per chunk — under the default cap they fit at
+   [n = 256] (144KB) and decline at [n = 1024] (528KB), rendering serial. Compile-only; the stderr
+   diagnostics themselves are opt-in via [schedule_log_declines], so the routine's Grid census
+   ([Context.routine.grid], gh-ocannl-1668) is what says so by default: it names the declined loop's
+   per-chunk bytes and the cap, and records the loop that fits as pool-rendered with its own bytes.
 
    - The autotune seeding pre-filter ([Autotune.sketch_seed_params], gh-ocannl-479): tensorized
    candidates that statically must render the scalar fallback are not seeded — transposed-B sites
@@ -160,9 +162,11 @@ let () =
 
 (* === The per-chunk privatization cap: grid-outermost packed GEMM re-packing B~ per chunk
    (gh-ocannl-475's shape). Both packing Stages land inside the Grid body, so both tiles must
-   privatize per chunk: at [n = 256] the footprint (bk*n + bm*bk floats = 80KB) fits under the
-   default 256KB cap and the loop pool-parallelizes; at [n = 1024] (272KB) the cap trips and the
-   loop renders serial. Compile-only. === *)
+   privatize per chunk, and so must the row block's contraction fragment: at [n = 256] the footprint
+   (B~ bk*n + C fragment bm*n + A~ bm*bk floats = 144KB) fits under the default 256KB cap and the
+   loop pool-parallelizes; at [n = 1024] (528KB) the cap trips and the loop renders serial.
+   Compile-only. Both legs also read the routine's Grid census (gh-ocannl-1668): its pool-rendered
+   count must equal the emitted parallel constructs, and its bytes are that footprint. === *)
 let () =
   let bm, bk = (64, 64) in
   let bpack_schedule ~a ~b ~out (opt : LL.optimized) : Sched.schedule =
@@ -241,17 +245,57 @@ let () =
       gated ~when_:on_cpu ~on:backend_name "per-chunk B~ re-pack's routine is labeled tensorized"
         (Ir.C_syntax.equal_tensorization routine.Context.mma.Ir.C_syntax.tensorization
            Ir.C_syntax.Tensorized));
-    Generated.read name
+    (* The census line, for a reader of a failed run. *)
+    Stdio.eprintf "%s: %s (not part of the golden)\n%s\n%!" name
+      (Ir.C_syntax.grid_summary_string routine.Context.grid)
+      (Sexp.to_string_hum (Ir.C_syntax.sexp_of_grid_summary routine.Context.grid));
+    (* The source is read by each leg, by its routine name: returned inside a tuple, the
+       codegen-text inventory could not follow it. *)
+    (routine.Context.grid, Ir.Ops.prec_in_bytes (Lazy.force b.Tensor.value.Ir.Tnode.storage_prec))
   in
-  (let src = compile_bpack ~run_parity:true ~name:"tmd_bpack_fits" ~dim:256 () in
+  let cap = Lazy.force Ir.C_syntax.per_chunk_private_bytes_cap in
+  let per_chunk_bytes ~n = (bk * n) + (bm * n) + (bm * bk) in
+  let sites (g : Ir.C_syntax.grid_summary) = List.map g.loops ~f:(fun e -> e.Ir.C_syntax.site) in
+  (* The census exists only where the pool does: with [cc_parallel_grid] resolved to none (or one
+     chunk) nothing is recorded and no loop renders parallel. Gated on the backend's own predicate,
+     not on the census's [pool] field, which the claim checks instead. *)
+  let pool = on_cpu && Context.Cc_backend.pool_parallel_grid () in
+  let census_claim ~what (g : Ir.C_syntax.grid_summary) src claim =
+    gated ~when_:pool ~on:backend_name what
+      (g.pool && g.pool_rendered = count_parallel_constructs src && claim)
+  in
+  (let g, elem = compile_bpack ~run_parity:true ~name:"tmd_bpack_fits" ~dim:256 () in
+   let src = Generated.read "tmd_bpack_fits" in
    (* Two parallel loops: the expanded zeroing nest and the packed accumulation loop. *)
    gated ~when_:on_cpu ~on:backend_name "per-chunk B~ re-pack under the cap pool-parallelizes"
-     (count_parallel_constructs src = 2 && String.is_substring src ~substring:"tile_"));
-  let src = compile_bpack ~name:"tmd_bpack_over" ~dim:1024 () in
+     (count_parallel_constructs src = 2 && String.is_substring src ~substring:"tile_");
+   let bytes = per_chunk_bytes ~n:256 * elem in
+   census_claim
+     ~what:
+       "Grid census: under the cap, both Grid loops are on the pool, the accumulation loop's tiles \
+        counted"
+     g src
+     (g.serial = 0
+     && List.mem (sites g)
+          (Ir.C_syntax.Grid_pool { private_bytes = bytes })
+          ~equal:Ir.C_syntax.equal_grid_site
+     && bytes <= cap));
+  let g, elem = compile_bpack ~name:"tmd_bpack_over" ~dim:1024 () in
+  let src = Generated.read "tmd_bpack_over" in
   (* Only the zeroing nest parallelizes; the accumulation loop's per-chunk tiles trip the cap and it
      renders serial. *)
   gated ~when_:on_cpu ~on:backend_name "per-chunk B~ re-pack over the cap declines to serial"
-    (count_parallel_constructs src = 1)
+    (count_parallel_constructs src = 1);
+  let bytes = per_chunk_bytes ~n:1024 * elem in
+  census_claim
+    ~what:
+      "Grid census: over the cap, the accumulation loop is the one serial loop, with its bytes and \
+       the cap"
+    g src
+    (bytes > cap
+    && List.equal Ir.C_syntax.equal_grid_site
+         (List.filter (sites g) ~f:(function Ir.C_syntax.Grid_serial _ -> true | _ -> false))
+         [ Ir.C_syntax.Grid_serial (Grid_private_over_cap { private_bytes = bytes; cap }) ])
 
 (* === The seeding pre-filter (gh-ocannl-479) and the mixed grid-outermost seed (gh-ocannl-473).
    Synthetic limits pin the vector width (32 bytes = 8 f32 lanes), and seeds are enumerated on the

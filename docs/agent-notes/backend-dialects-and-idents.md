@@ -433,6 +433,21 @@ configuration.
   states `cc_grid_min_updates=0` for its compiles (`cpu_parallel`'s `top_six_nofloor`,
   `cpu_scratch_matmul_grid`, `schedule_pack_mma_matmul`); `grid_launch_floor` pins the floor itself.
 
+- **Whether a Grid loop ran on the pool is a field of the routine: `Context.routine.grid`**
+  (gh-ocannl-1668). A declined pool-parallel Grid renders a correct serial loop, so neither the
+  values nor (without `schedule_log_declines`) anything else said so: `narrow_gebp_bench`'s
+  `packmma_par` at n=512 was timed slower than serial `packmma` under its parallel label because
+  its per-chunk tiles were over `cc_grid_private_bytes_cap` (staging#1457). `collect_parallel_grid`
+  records every outermost Grid loop of two or more iterations as `Grid_pool { private_bytes }` or
+  `Grid_serial why` (`Grid_private_over_cap { private_bytes; cap }`, `Grid_below_min_updates`, the
+  sharing/privatization rules, an offset range), bracketed by `C_syntax.with_grid_census` inside
+  `Context.compile` beside the mma census. `pool = false` means no entry was recorded: no pool
+  backend, one chunk, or `debug_log_from_routines`; on a GPU a Grid is a hardware grid. The cap is
+  checked once, on the whole per-chunk footprint (every privatized local, the C fragment included),
+  so the bytes are deterministic. `grid_summary_string` is the bench line (`narrow_gebp_bench` and
+  `schedule_bench` print it beside the mma label; `narrow_gebp_bench` warns when `packmma_par`
+  rendered serially). `tile_mma_declines` (cap, both sides) and `grid_launch_floor` (floor) pin it.
+
 - `C_syntax.render_ctx` owns the state of one emission, including volatility observers, zero seeds,
   thread-binding analysis and codegen-minted accumulator scopes (gh-ocannl-769). `create_render_ctx`
   requires an optimized procedure; body-only `compile_main` callers pass that context explicitly.

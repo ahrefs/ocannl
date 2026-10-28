@@ -347,6 +347,7 @@ type routine = {
   mma : Ir.C_syntax.mma_summary;
   peel : Ir.C_syntax.peel_summary;
   volatility : Ir.C_syntax.volatility_summary;
+  grid : Ir.C_syntax.grid_summary;
   segments : Ir.Low_level.optimized list;
 }
 
@@ -422,6 +423,7 @@ type census =
   Ir.C_syntax.mma_summary
   * Ir.C_syntax.peel_summary
   * Ir.C_syntax.volatility_summary
+  * Ir.C_syntax.grid_summary
   * Ir.Low_level.optimized list
 
 (* gh-ocannl-1440: compiled code kept for a later link on the context it was compiled from. The
@@ -451,7 +453,7 @@ let finish_link ctx comp wrapped
       lp_inputs = backend_inputs;
       lp_merge_buffer_input = merge_buffer_input;
       lp_outputs = backend_outputs;
-    } ((mma, peel, volatility, segments) : census) =
+    } ((mma, peel, volatility, grid, segments) : census) =
   (* Allocate unique ID from shared ledger *)
   let id = ctx.ledger.next_id in
   ctx.ledger.next_id <- id + 1;
@@ -557,6 +559,7 @@ let finish_link ctx comp wrapped
       mma;
       peel;
       volatility;
+      grid;
       segments;
     }
   in
@@ -612,14 +615,17 @@ let compile_outcome ?name ?lowered_transform ?prelowered ~provenance ?candidate 
          (gh-ocannl-626): whether a routine tensorized is a property of the compiled routine, not of
          whichever timing harness remembered to bracket the global. Fissioned segments compile
          inside this bracket, so their kernels land in the same summary. *)
-      let (((outcome, mma), peel), volatility), segments =
+      let ((((outcome, mma), peel), volatility), grid), segments =
         (* And the reduction peel's own census (gh-ocannl-733), bracketed the same way and for the
            same reason: which decision produced a kernel is a property of the compiled routine, not
            of whichever test remembered to collect it. Likewise the volatility census
            (gh-ocannl-782): which of this routine's serial accumulations the Metal compiler-bug
            workaround pinned to memory, and therefore which of them are not register-resident. And
-           the shipped kernel segments themselves (gh-ocannl-1006). *)
+           the shipped kernel segments themselves (gh-ocannl-1006). And the Grid census
+           (gh-ocannl-1668): which outermost [Grid] loops rendered on the CPU pool, and why each
+           other one stayed serial. *)
         Backends.with_segments_census @@ fun () ->
+        Ir.C_syntax.with_grid_census @@ fun () ->
         Ir.C_syntax.with_volatility_census @@ fun () ->
         Ir.C_syntax.with_peel_census @@ fun () ->
         Ir.C_syntax.with_census (fun () ->
@@ -635,7 +641,7 @@ let compile_outcome ?name ?lowered_transform ?prelowered ~provenance ?candidate 
       match outcome with
       | Error failure -> Error failure
       | Ok (code, (wrapped, payload)) ->
-          let census = (mma, peel, volatility, segments) in
+          let census = (mma, peel, volatility, grid, segments) in
           (* After the link, which has allocated the routine's working pools: a [retain] that raises
              leaves the caller no context to release them through, so they are freed here before its
              exception propagates (review round 1). *)
