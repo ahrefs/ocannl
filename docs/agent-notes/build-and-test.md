@@ -2770,15 +2770,30 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     `@test/training/runtest-fused_classifier`. A narrower "tests that name the module" cut is no
     substitute: `test_vectorized_codegen.ml` never names `Register_tile`.
   - So that cut ranks, never drops (gh-ocannl-1431): an alias reached only by linking, none of
-    whose owners' own code (its sources, a project ppx's, the private libraries' modules it names)
-    names the changed module or a re-export of it -- nor, when git's hunks place every changed line
-    in top-level definitions, one of those definitions -- is LINK-ONLY: printed last, named on
-    stderr, left off by `--referenced-only`. On `low_level.ml` (592 reached): the whole module 340
-    referenced; one function changed, 27 (`optimize_proc`, which every compile runs and no test
-    names: the reason the default keeps them) to 239 (`simplify_llc`, which `Ll_test` calls).
-    The contract: LINK-ONLY is a heuristic ranking, and `--referenced-only` a deliberate trade
-    (faster, with a possible miss) for iterating mid-change, never for the pre-push run, which
-    takes the full default list.
+    whose owners' own code (its sources, a project ppx's, and of the private libraries it links
+    the top-level definitions that code names, comments blanked) names the changed module or a
+    re-export of it together with the module making the re-export -- nor, when git's hunks place
+    every changed line in top-level definitions, one of those definitions -- is LINK-ONLY: printed
+    last, named on stderr, left off by `--referenced-only` (a flag of the whole call: any position
+    before `--`). A changed line inside a `type` touches the type's name, the constructors and
+    fields that line names, and what ppx derivers make of the name; an attribute line, the whole
+    module. What made the cut blunt before gh-ocannl-1651: a helper library counted whole, so a
+    test calling one `Ll_test` function named every module any of its ~90 definitions or comments
+    named; and a re-export counted bare, so `module Lazy = Utils.Lazy` in `hip_backend.ml` made
+    every `Lazy.force` a mention of Utils. On `low_level.ml`: the whole module 325 referenced (397
+    before); one function changed, 27 (`optimize_proc`, which every compile runs and no test names:
+    the reason the default keeps them) to 42 (`simplify_llc`, 281 before). `utils.ml` as a whole
+    stays at every alias, honestly: `ocannl_ambient_env`, which every config-reading test's rule
+    runs, names Utils. A dune-only library split (staging's builtins_metal move) ranks by the
+    moved modules' names, 27 referenced of 682. The contract: LINK-ONLY is a heuristic ranking,
+    and `--referenced-only` a deliberate trade (faster, with a possible miss) for iterating
+    mid-change, never for the pre-push run, which takes the full default list.
+  - A module of a library this build does not compile (`cuda_backend.ml` on a Mac) stays UNMAPPED,
+    exit 3, but an OFF-BUILD line on stderr counts what a build compiling it reaches -- read from
+    the dune files' `libraries` (a `(select)` condition included), since dune describes none of
+    it here -- and names the aliases whose own code names the module: run those on a box that
+    builds it, with its backend selected (9 for `cuda_backend.ml`, 667 more only link it), or run
+    `affected` there for the ranked list.
   - A test or note edit gets a short, exact list: `test/operations/cost_model_template.ml` reaches
     its own alias plus the scans that read it (17 aliases in all);
     `docs/agent-notes/build-and-test.md` the 11 scans and the `doc_examples` aliases that read it, plus
