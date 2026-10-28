@@ -5425,6 +5425,19 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1669: cc declares Local arrays past the stack budget on the heap, function scope and
+; pool-chunk privatized tiles alike, each budget pinned on both sides and executed.
+
+(test
+ ; ocannl-backend: cc -- every execution context is an explicit Context.cpu ().
+ (name heap_local_arrays)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules heap_local_arrays)
+ (libraries base ocannl arrayjit.verdict test_utils ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-1458: Cost_model.fork_join_updates, the work count the CPU preset's per-dispatch gate
 ; and the renderer's launch floor share, over hand-built IR: what it counts and saturation.
 

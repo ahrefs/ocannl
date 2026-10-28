@@ -1551,6 +1551,9 @@ struct
 
   let parallel_grid_syntax = parallel_grid_syntax_setting ()
   let parallel_grid_chunks = parallel_grid_chunks_setting ()
+
+  (* gh-ocannl-1669: a CPU thread's stack is small and fixed, its heap is not. *)
+  let heap_local_arrays = true
   let vector_file = vector_file_setting ()
   let outline_part_weight () = match part_weight_setting () with 0 -> None | weight -> Some weight
 

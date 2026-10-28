@@ -63,23 +63,40 @@ let pool_slot_msl_typ () = if pool_slot_is_64 () then "ulong" else "uint"
    docs/proposals/tensorize-mma.md's unverified-T3 episode). *)
 let log_declines = lazy (Utils.get_global_flag ~default:false ~arg_name:"schedule_log_declines")
 
-(* Per-chunk private tiles live on the pool workers' stacks; libdispatch workers get 512KB by
-   default, so cap their combined footprint per Grid loop (declining just keeps the loop serial).
-   Config [cc_grid_private_bytes_cap] (gh-ocannl-474): raise it when the pool's worker stacks are
-   known larger (e.g. under [OMP_STACKSIZE]) — for instance to let a grid-outermost packed GEMM
-   privatize a whole B~ panel per chunk (gh-ocannl-475). At the top level, not inside {!C_syntax},
-   because it is also one of the codegen knobs the cc backend's cache-identity tag covers
-   (gh-ocannl-572) — the resolved cap must be one value, not two spellings of a default. *)
+(* How many bytes of [Local]-placement arrays a cc routine may declare on the stack
+   (gh-ocannl-1669); past it, {!C_syntax_config.heap_local_arrays} backends declare the rest on the
+   heap. The bound is set against the smallest thread stack such an array can land on: libdispatch's
+   pool workers get 512 KiB, and so does every secondary thread on macOS -- an OCaml domain (a
+   [multidev_cc] device) or systhread calling the routine -- where the 8 MiB main thread was the
+   only thing the unbounded declarations had been safe on. A pool-parallel [Grid] loop's privatized
+   tiles live on the stack of the thread running the chunk, and the calling thread runs chunks too,
+   on top of the routine's function-scope arrays: so a chunk gets half that stack and the function
+   scope a quarter, leaving the rest for the frames. These budget the stack; whether a Grid loop
+   privatizes at all is [per_chunk_private_bytes_cap]'s call, whose default is the chunk budget, so
+   a tile only goes to the heap where that cap was raised. *)
+let routine_stack_locals_bytes, chunk_stack_locals_bytes =
+  let smallest_thread_stack_bytes = 512 * 1024 in
+  (smallest_thread_stack_bytes / 4, smallest_thread_stack_bytes / 2)
+
+(* Per-chunk private tiles are one copy per chunk, so cap their combined footprint per Grid loop
+   (declining just keeps the loop serial). Config [cc_grid_private_bytes_cap] (gh-ocannl-474); the
+   default is [chunk_stack_locals_bytes], past which a chunk's tiles go to the heap rather than a
+   worker's stack (gh-ocannl-1669), so it can be raised whatever the workers' stacks — for instance
+   to let a grid-outermost packed GEMM privatize a whole B~ panel per chunk (gh-ocannl-475). At the
+   top level, not inside {!C_syntax}, because it is also one of the codegen knobs the cc backend's
+   cache-identity tag covers (gh-ocannl-572) — the resolved cap must be one value, not two spellings
+   of a default. *)
 let per_chunk_private_bytes_cap =
   lazy
     (match
        Int.of_string
          (String.strip
-            (Utils.get_global_arg ~arg_name:"cc_grid_private_bytes_cap" ~default:"262144"))
+            (Utils.get_global_arg ~arg_name:"cc_grid_private_bytes_cap"
+               ~default:(Int.to_string chunk_stack_locals_bytes)))
      with
     | n when n > 0 -> n
-    | _ -> 256 * 1024
-    | exception _ -> 256 * 1024)
+    | _ -> chunk_stack_locals_bytes
+    | exception _ -> chunk_stack_locals_bytes)
 
 (* Every pool-parallel CPU Grid launch must amortize one native fork/join: a launch whose estimated
    work ([grid_update_count]) is below this floor renders as a serial loop. Repeated inner launches
@@ -889,6 +906,15 @@ module type C_syntax_config = sig
       [__attribute__((aligned(32)))] (gh-ocannl-164). Applies to the plain stack-array branch only,
       never to workgroup-shared placements. *)
 
+  val heap_local_arrays : bool
+  (** Whether a [Local]-placement array past the stack budget is declared on the heap
+      (gh-ocannl-1669): the routine's function-scope arrays beyond [routine_stack_locals_bytes], a
+      pool-parallel [Grid] chunk's privatized tiles beyond [chunk_stack_locals_bytes], smallest
+      first on the stack. A heap array is [malloc]ed ([calloc]ed where its declaration
+      zero-initializes) [Ops.buffer_alignment]-aligned where the stack array would be declared, and
+      freed at the end of the same scope. [false] (the {!Pure_C_config} default) for the GPU
+      backends, whose thread-private arrays have no heap to go to. *)
+
   val warp_size : int
   (** SIMD-group (warp) width for the warp-shuffle rendering of [Workgroup_reduce] accumulation
       loops (gh-ocannl-462; llm.c's [warpReduceSum]/[blockReduce] idiom). Backends setting this to a
@@ -1569,6 +1595,10 @@ let derived_name (prefix, suffix) base = prefix ^ base ^ suffix
 (* A local array's alias pointer ([local_array_decl ~alias_ptr]). *)
 let mem_alias_derivation = ("", "_mem__")
 
+(* The allocation a heap-declared local array's aligned pointer points into ([local_array_decl
+   ~heap], gh-ocannl-1669): what [free] takes. *)
+let heap_local_derivation = ("", "_heap__")
+
 (* A pool-chunked [Grid] loop's chunk index and bounds. *)
 let grid_chunk_derivations = (("", "_chunk"), ("", "_lo"), ("", "_hi"))
 
@@ -1583,6 +1613,7 @@ let minted_derivations =
   let c, l, h = grid_chunk_derivations in
   [
     mem_alias_derivation;
+    heap_local_derivation;
     c;
     l;
     h;
@@ -2280,6 +2311,7 @@ struct
     ]
 
   let aligned_local_attr = Some (Printf.sprintf "__attribute__((aligned(%d)))" Ops.buffer_alignment)
+  let heap_local_arrays = false
 
   (* No shuffle intrinsics on plain C backends: a [Workgroup_reduce] accumulation loop renders as
      the serial fallback, which is exactly its serial meaning. *)
@@ -4538,31 +4570,76 @@ module C_syntax (B : C_syntax_config) = struct
       go ~repeated:false llc;
       (!syms, !privs, !aliases)
 
+  (* gh-ocannl-1669: which of the [Local] arrays one scope declares go on the heap, given the bytes
+     of stack [budget] the scope may use ([routine_stack_locals_bytes] for the function scope,
+     [chunk_stack_locals_bytes] for a pool chunk). The smallest take the stack -- they are the ones
+     an allocation per call would cost the most against -- in order of size, then of [tns], until
+     the next would overflow the budget; that one and every larger array take the heap. Empty on a
+     backend without [heap_local_arrays]. *)
+  let heap_locals ~budget (tns : Tn.t list) : Set.M(Tn).t =
+    let bytes tn = Tn.num_elems tn * Ops.prec_in_bytes (Lazy.force tn.Tn.storage_prec) in
+    if not B.heap_local_arrays then Set.empty (module Tn)
+    else
+      List.mapi tns ~f:(fun k tn -> (bytes tn, k, tn))
+      |> List.sort ~compare:(fun (b1, k1, _) (b2, k2, _) -> [%compare: int * int] (b1, k1) (b2, k2))
+      |> List.fold
+           ~init:(0, Set.empty (module Tn))
+           ~f:(fun (used, heap) (b, _, tn) ->
+             if Set.is_empty heap && used + b <= budget then (used + b, heap)
+             else (used, Set.add heap tn))
+      |> snd
+
+  (* The heap form of {!local_array_decl}: over-allocate by the alignment, round the pointer up. *)
+  let heap_local_decl ~typ ~ident ~zero_init (tn : Tn.t) : PPrint.document =
+    let raw = derived_name heap_local_derivation ident in
+    let align = Ops.buffer_alignment in
+    let size = Printf.sprintf "(size_t)%d * sizeof(%s) + %d" (Tn.num_elems tn) typ align in
+    PPrint.separate_map PPrint.hardline PPrint.string
+      [
+        Printf.sprintf "void * const %s = %s;" raw
+          (if zero_init then "calloc(1, " ^ size ^ ")" else "malloc(" ^ size ^ ")");
+        Printf.sprintf "if (!%s) abort();" raw;
+        Printf.sprintf "%s * const %s = (%s *)(((uintptr_t)%s + %d) & ~(uintptr_t)%d);" typ ident
+          typ raw (align - 1) (align - 1);
+      ]
+
+  (* Releases a {!local_array_decl ~heap} array at the end of its declaring scope. *)
+  let heap_local_free (tn : Tn.t) : PPrint.document =
+    PPrint.string (Printf.sprintf "free(%s);" (derived_name heap_local_derivation (get_ident tn)))
+
   (* Renders a [Local]-placement (routine-scope scratch) array declaration; shared by
      [compile_proc]'s function-scope [local_decls] and the per-chunk declarations of pool-parallel
      [Grid] loops. With [alias_ptr], the array gets a mangled name and a [const] pointer alias under
      the node's ident: [`Dispatch] blocks cannot refer to array declarations but capture pointers by
-     value, and array indexing syntax is unchanged through the pointer. *)
-  let local_array_decl ?(alias_ptr = false) ~zero_init (tn : Tn.t) : PPrint.document =
+     value, and array indexing syntax is unchanged through the pointer.
+
+     With [heap] (gh-ocannl-1669, see {!heap_locals}), the node's ident is instead a [const] pointer
+     into a heap allocation, aligned as the stack array would be: indexing is unchanged, a block
+     captures the pointer by value (so no alias is needed), and {!heap_local_free} releases it at
+     the end of the declaring scope. *)
+  let local_array_decl ?(alias_ptr = false) ?(heap = false) ~zero_init (tn : Tn.t) : PPrint.document
+      =
     let open PPrint in
     let typ = B.typ_of_prec @@ Lazy.force tn.Tn.storage_prec in
     let ident = get_ident tn in
-    let arr_name = if alias_ptr then derived_name mem_alias_derivation ident else ident in
-    let align_doc =
-      (* SIMD alignment for plain stack arrays (gh-ocannl-164). *)
-      match B.aligned_local_attr with
-      | Some attr -> string (" " ^ attr)
-      | None -> empty
-    in
-    let init_doc = if zero_init then string " = {0}" else empty in
-    let decl =
-      string typ ^^ space ^^ string arr_name
-      ^^ brackets (OCaml.int (Tn.num_elems tn))
-      ^^ align_doc ^^ init_doc ^^ semi
-    in
-    if alias_ptr then
-      decl ^^ hardline ^^ string (Printf.sprintf "%s * const %s = %s;" typ ident arr_name)
-    else decl
+    if heap then heap_local_decl ~typ ~ident ~zero_init tn
+    else
+      let arr_name = if alias_ptr then derived_name mem_alias_derivation ident else ident in
+      let align_doc =
+        (* SIMD alignment for plain stack arrays (gh-ocannl-164). *)
+        match B.aligned_local_attr with
+        | Some attr -> string (" " ^ attr)
+        | None -> empty
+      in
+      let init_doc = if zero_init then string " = {0}" else empty in
+      let decl =
+        string typ ^^ space ^^ string arr_name
+        ^^ brackets (OCaml.int (Tn.num_elems tn))
+        ^^ align_doc ^^ init_doc ^^ semi
+      in
+      if alias_ptr then
+        decl ^^ hardline ^^ string (Printf.sprintf "%s * const %s = %s;" typ ident arr_name)
+      else decl
 
   (* A [Zero_out] loop is redundant when the array's declaration already initializes it with [=
      {0}]. That happens for local (non-virtual, non-materialized) declarations whose traced node has
@@ -6212,24 +6289,26 @@ module C_syntax (B : C_syntax_config) = struct
     in
     (* Locals privatized to this loop (see [parallel_grid_safe]): block-scope arrays inside the
        chunk body, one copy per chunk -- iterations rewrite them wholly before reading, so per-chunk
-       storage matches the serial semantics. *)
+       storage matches the serial semantics. Past the chunk's stack budget they are heap arrays, one
+       allocation per chunk, freed when the chunk ends (gh-ocannl-1669). *)
+    let privatized = Option.value ~default:[] (Map.find !(ctx.current_grid_private) i) in
+    let heap = heap_locals ~budget:chunk_stack_locals_bytes privatized in
     let decls =
-      match Map.find !(ctx.current_grid_private) i with
-      | None | Some [] -> decls
-      | Some tns ->
-          let zero_init tn =
-            Hashtbl.find ctx.current_traced_store tn
-            |> Option.value_map ~default:false ~f:(fun node ->
-                node.Low_level.zero_initialized_by_code)
-          in
-          List.fold tns ~init:decls ~f:(fun acc tn ->
-              acc ^^ hardline ^^ local_array_decl ~zero_init:(zero_init tn) tn)
+      let zero_init tn =
+        Hashtbl.find ctx.current_traced_store tn
+        |> Option.value_map ~default:false ~f:(fun node -> node.Low_level.zero_initialized_by_code)
+      in
+      List.fold privatized ~init:decls ~f:(fun acc tn ->
+          acc ^^ hardline ^^ local_array_decl ~heap:(Set.mem heap tn) ~zero_init:(zero_init tn) tn)
     in
     let inner =
       string (Printf.sprintf "for (%s%s = %s; %s < %s; ++%s)" it ident lo ident hi ident)
       ^^ space ^^ lbrace
       ^^ nest 2 (hardline ^^ (body_doc ctx loop) ())
       ^^ hardline ^^ rbrace
+      ^^ concat_map
+           (fun tn -> hardline ^^ heap_local_free tn)
+           (List.filter privatized ~f:(Set.mem heap))
     in
     let comment =
       string
@@ -8377,66 +8456,75 @@ module C_syntax (B : C_syntax_config) = struct
        through pointer parameters of the same names (a dispatch-aliased one is already accessed
        through its pointer [ident]), so the statements render the same in a part as in place. *)
     let outlined_locals = ref [] in
+    let declared =
+      let plc = ctx.current_placements in
+      let touched, untouched = store_order ~llc ~traced_store in
+      List.filter_map (touched @ untouched) ~f:(fun tn ->
+          Option.some_if
+            ((not
+                (Tn.Placements.is_virtual_force plc tn (Site "333:local-decl-virtual-query")
+                || Tn.Placements.is_materialized_force plc tn
+                     (Site "336:local-decl-materialized-query")))
+            (* Privatized to a pool-parallel [Grid] loop: declared per chunk inside that loop's body
+               instead (see [parallel_grid_loop]). *)
+            && (not (Set.mem grid_privatized tn))
+            && not
+                 (Set.mem !(ctx.rendered_simdgroup_fragments) tn
+                 && not (Set.mem !(ctx.unscoped_simdgroup_fragments) tn)))
+            (tn, Hashtbl.find_exn traced_store tn))
+    in
+    (* gh-ocannl-1669: the thread-private ones past the function scope's stack budget are heap
+       arrays, freed after the main logic. *)
+    let heap =
+      heap_locals ~budget:routine_stack_locals_bytes
+        (List.filter_map declared ~f:(fun (tn, _) ->
+             Option.some_if (not (Set.mem workgroup_shared tn)) tn))
+    in
     let local_decls =
       string "/* Local declarations and initialization. */"
       ^^ hardline
       ^^ separate_map empty
            (fun (tn, node) ->
-             let plc = ctx.current_placements in
-             if
-               (not
-                  (Tn.Placements.is_virtual_force plc tn (Site "333:local-decl-virtual-query")
-                  || Tn.Placements.is_materialized_force plc tn
-                       (Site "336:local-decl-materialized-query")))
-               (* Privatized to a pool-parallel [Grid] loop: declared per chunk inside that loop's
-                  body instead (see [parallel_grid_loop]). *)
-               && (not (Set.mem grid_privatized tn))
-               && not
-                    (Set.mem !(ctx.rendered_simdgroup_fragments) tn
-                    && not (Set.mem !(ctx.unscoped_simdgroup_fragments) tn))
-             then
-               let is_shared = Set.mem workgroup_shared tn in
-               if is_shared then
-                 (* Workgroup-shared placement (axis-types proposal §3): one tile per workgroup
-                    instead of one per thread. [= {0}] is not allowed for shared declarations, so
-                    zero-initialization stays as explicit [Zero_out] code (never elided for shared
-                    nodes; see [zero_out_loop_redundant]); shared placements otherwise keep the
-                    backend's default layout (no [aligned_local_attr]).
+             let is_shared = Set.mem workgroup_shared tn in
+             if is_shared then
+               (* Workgroup-shared placement (axis-types proposal §3): one tile per workgroup
+                  instead of one per thread. [= {0}] is not allowed for shared declarations, so
+                  zero-initialization stays as explicit [Zero_out] code (never elided for shared
+                  nodes; see [zero_out_loop_redundant]); shared placements otherwise keep the
+                  backend's default layout (no [aligned_local_attr]).
 
-                    A [Swizzle_b128] tile is the exception: its layout contract is stated in 16-byte
-                    units, and the warp-cooperative loads that consume it ([ldmatrix], gh-ocannl-481
-                    item 3) require every row-group address to be 16-byte aligned. Row starts are
-                    16-byte multiples by the [Stage] validation, so aligning the base is what makes
-                    all of them aligned. The GNU attribute spelling is understood by every compiler
-                    that has a shared address space here (nvcc, hipcc, MSL's clang). *)
-                 (match (swizzle_of ctx) tn with
-                   | Some Low_level.Swizzle_b128 -> string "__attribute__((aligned(16))) "
-                   | Some Low_level.Swizzle_elem | None -> empty)
-                 ^^ string (Option.value_exn ~here:[%here] B.shared_decl_prefix)
-                 ^^ string (B.typ_of_prec @@ Lazy.force tn.storage_prec)
-                 ^^ space
-                 ^^ string (get_ident tn)
-                 (* A pipelined tile is [pt_depth] rotating copies (gh-487); the accesses select the
-                    copy via [pp_pipelined_rotation]. [Schedule.check_hardware_limits] accounts the
-                    same multiplier. *)
-                 ^^ brackets
-                      (OCaml.int
-                         (Tn.num_elems tn
-                         *
-                         match Map.find !(ctx.current_pipelined) tn with
-                         | Some { Low_level.pt_depth; _ } -> pt_depth
-                         | None -> 1))
-                 ^^ semi ^^ hardline
-               else (
-                 outlined_locals :=
-                   (B.typ_of_prec @@ Lazy.force tn.storage_prec, get_ident tn) :: !outlined_locals;
-                 local_array_decl
-                   ~alias_ptr:(Set.mem !(ctx.current_local_ptr_alias) tn)
-                   ~zero_init:node.Low_level.zero_initialized_by_code tn
-                 ^^ hardline)
-             else empty)
-           (let touched, untouched = store_order ~llc ~traced_store in
-            List.map (touched @ untouched) ~f:(fun tn -> (tn, Hashtbl.find_exn traced_store tn)))
+                  A [Swizzle_b128] tile is the exception: its layout contract is stated in 16-byte
+                  units, and the warp-cooperative loads that consume it ([ldmatrix], gh-ocannl-481
+                  item 3) require every row-group address to be 16-byte aligned. Row starts are
+                  16-byte multiples by the [Stage] validation, so aligning the base is what makes
+                  all of them aligned. The GNU attribute spelling is understood by every compiler
+                  that has a shared address space here (nvcc, hipcc, MSL's clang). *)
+               (match (swizzle_of ctx) tn with
+                 | Some Low_level.Swizzle_b128 -> string "__attribute__((aligned(16))) "
+                 | Some Low_level.Swizzle_elem | None -> empty)
+               ^^ string (Option.value_exn ~here:[%here] B.shared_decl_prefix)
+               ^^ string (B.typ_of_prec @@ Lazy.force tn.storage_prec)
+               ^^ space
+               ^^ string (get_ident tn)
+               (* A pipelined tile is [pt_depth] rotating copies (gh-487); the accesses select the
+                  copy via [pp_pipelined_rotation]. [Schedule.check_hardware_limits] accounts the
+                  same multiplier. *)
+               ^^ brackets
+                    (OCaml.int
+                       (Tn.num_elems tn
+                       *
+                       match Map.find !(ctx.current_pipelined) tn with
+                       | Some { Low_level.pt_depth; _ } -> pt_depth
+                       | None -> 1))
+               ^^ semi ^^ hardline
+             else (
+               outlined_locals :=
+                 (B.typ_of_prec @@ Lazy.force tn.storage_prec, get_ident tn) :: !outlined_locals;
+               local_array_decl
+                 ~alias_ptr:(Set.mem !(ctx.current_local_ptr_alias) tn)
+                 ~heap:(Set.mem heap tn) ~zero_init:node.Low_level.zero_initialized_by_code tn
+               ^^ hardline))
+           declared
     in
     body := !body ^^ local_decls ^^ hardline;
     (* gh-ocannl-1255: kernel-scope scratch of the accepted tile-MMA emissions (Metal's converted
@@ -8497,6 +8585,8 @@ module C_syntax (B : C_syntax_config) = struct
           (List.init (List.length part_docs) ~f:Fn.id)
     in
     body := !body ^^ main_logic;
+    List.iter declared ~f:(fun (tn, _) ->
+        if Set.mem heap tn then body := !body ^^ hardline ^^ heap_local_free tn);
 
     if Utils.debug_log_from_routines () && B.log_involves_file_management then
       body :=

@@ -538,13 +538,13 @@
 #cc_pool_core_class=auto
 
 # Byte cap on the combined footprint of the per-chunk privatized tiles of one pool-parallel Grid
-# loop (block-scope arrays living on the pool workers' stacks; see the privatization rule in
-# c_syntax.ml's parallel_grid_safe). A loop whose privatized locals exceed the cap renders serial
-# instead (log with schedule_log_declines). The default, 262144 (256KB), leaves headroom under
-# libdispatch's default 512KB worker stacks; raise it when the pool's worker stacks are known
-# larger (e.g. under OMP_STACKSIZE with the OpenMP rendering) — for instance to let a
-# grid-outermost packed GEMM re-pack a whole B~ panel per chunk. Values <= 0 fall back to the
-# default.
+# loop (block-scope arrays, one copy per chunk; see the privatization rule in c_syntax.ml's
+# parallel_grid_safe). A loop whose privatized locals exceed the cap renders serial instead (log
+# with schedule_log_declines). The default, 262144 (256KB), is also the stack budget of a chunk's
+# tiles: within it they live on the pool worker's stack (libdispatch's default is 512KB), and
+# past it the renderer declares them on the heap (gh-ocannl-1669), so raising the cap is safe
+# whatever the workers' stacks — for instance to let a grid-outermost packed GEMM re-pack a whole
+# B~ panel per chunk. Values <= 0 fall back to the default.
 #cc_grid_private_bytes_cap=262144
 
 # Work floor of one pool-parallel Grid launch, in estimated scalar updates per native fork/join

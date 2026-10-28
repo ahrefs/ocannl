@@ -136,20 +136,16 @@ let in_place_a_refusal ~bm ~bk ~ni ~nk =
    Grid to serial ([narrow_gebp_bench]'s default n = 512 at 64 x 256: [packmma_par] ran at 2.08 ms
    against serial [packmma]'s 1.78, and at 0.91 packing once, on rog). Below it the serial pre-pass
    is pure critical-path cost: gh-ocannl-1564's cells at n = 48 to 128 ran 8-24% slower packing
-   once. And only while the whole B~ fits [whole_b_bytes_cap]: it is routine-scope scratch, which cc
-   declares on the stack, so the cap is half the 8 MiB default main-thread stack. A hoisted B~ is
-   packed once at link time either way and keeps its per-k-block panel. *)
+   once. The whole B~ is routine-scope scratch at any size: past the cc stack budget the renderer
+   declares it on the heap (gh-ocannl-1669). A hoisted B~ is packed once at link time either way and
+   keeps its per-k-block panel. *)
 type b_pack = Per_row_block | Once
 
-let whole_b_bytes_cap = 4 * 1024 * 1024
-
-let grid_b_pack ~elem_bytes ~stage_a ~bm ~bk ~ni ~nj ~nk =
+let grid_b_pack ~elem_bytes ~stage_a ~bm ~bk ~ni ~nj =
   let per_chunk =
     elem_bytes * ((bk * nj) + (if stage_a then bm * bk else 0) + if ni % bm <> 0 then bm * nj else 0)
   in
-  if padded ~extent:nk ~block:bk * nj * elem_bytes > whole_b_bytes_cap then Per_row_block
-  else if per_chunk > Lazy.force Ir.C_syntax.per_chunk_private_bytes_cap then Once
-  else Per_row_block
+  if per_chunk > Lazy.force Ir.C_syntax.per_chunk_private_bytes_cap then Once else Per_row_block
 
 (* The k-block split (gh-ocannl-1631): with k padded, every element the packing nests copy is
    guarded by [bk*k_o + k_i < nk] (a [Where] storing the zero fringe), in every k block, although
@@ -181,7 +177,7 @@ let packed_schedule ~layout ?(hoist_b = false) ?(stage_a = true) ?b_pack ~tile_p
     | Some p -> p
     | None ->
         let prec = Option.value tile_prec ~default:(Lazy.force b.Ir.Tnode.storage_prec) in
-        grid_b_pack ~elem_bytes:(Ir.Ops.prec_in_bytes prec) ~stage_a ~bm ~bk ~ni ~nj ~nk
+        grid_b_pack ~elem_bytes:(Ir.Ops.prec_in_bytes prec) ~stage_a ~bm ~bk ~ni ~nj
   in
   let grid = match layout with Serial -> false | Grid_below_k | Grid_outermost -> true in
   let outer_i = if grid then LL.Grid else LL.Serial in

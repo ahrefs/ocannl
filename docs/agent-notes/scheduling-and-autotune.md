@@ -2010,7 +2010,8 @@ files.
   concurrently (free while row blocks <= workers; packing the whole B~ once, serially, ahead of the
   Grid ran 8-24% slower at n=48..128), but past `cc_grid_private_bytes_cap` the per-chunk panels
   decline the Grid to serial (n=512 at 64x256: 2.08 ms vs 0.91 packed once).
-  `Bench_gebp.grid_b_pack` switches at that cap, below a 4 MiB stack bound on the whole tile. A
+  `Bench_gebp.grid_b_pack` switches at that cap, at any whole-tile size (gh-ocannl-1669 put a
+  routine-scope tile past the cc stack budget on the heap; it had been held under 4 MiB). A
   `Stage` over `[k_o; k_i; j]` has no anchor, so its copy nest lands at the routine root;
   `Tensorize` accepts its padded read at `bk*k_o + k_i` because a pad-masked operand may now be an
   affine read whose range, over the enclosing loops, stays inside the tile.

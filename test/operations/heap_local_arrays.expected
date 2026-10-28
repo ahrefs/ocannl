@@ -1,0 +1,18 @@
+function scope, at the budget: hla_fs_at is a stack array: true
+function scope, at the budget: values: true
+function scope, one element over the budget: hla_fs_over is a heap array, freed: true
+function scope, one element over the budget: values: true
+function scope, two arrays over the budget together: hla_fs_large is a heap array, freed: true
+function scope, two arrays over the budget together: hla_fs_small is a stack array: true
+function scope, two arrays over the budget together: values: true
+function scope, 12 MiB: hla_fs_big is a heap array, freed: true
+function scope, 12 MiB: values: true
+Grid chunk, at the budget: the Grid renders on the pool: true
+Grid chunk, at the budget: a stack tile: true
+Grid chunk, at the budget: values: true
+Grid chunk, one element over the budget: the Grid renders on the pool: true
+Grid chunk, one element over the budget: a heap tile, freed: true
+Grid chunk, one element over the budget: values: true
+Grid chunk, 12 MiB: the Grid renders on the pool: true
+Grid chunk, 12 MiB: a heap tile, freed: true
+Grid chunk, 12 MiB: values: true
