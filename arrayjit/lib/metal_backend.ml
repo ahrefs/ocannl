@@ -1572,8 +1572,8 @@ module Impl = struct
       Some metal_file)
     else None
 
-  let%diagn_sexp compile_metal_source ~name ~routine_names ~source ~metal_file ~option_state ~device
-      =
+  (* The [MTLCompileOptions] an option state names. *)
+  let metal_compile_options option_state =
     let options = Me.CompileOptions.init () in
     List.iter option_state ~f:(function
       | Compiler_options.Language_version_3_1 ->
@@ -1589,6 +1589,11 @@ module Impl = struct
           Me.CompileOptions.set_math_floating_point_functions options
             Me.CompileOptions.MathFloatingPointFunctions.Fast
       | Enable_logging -> Me.CompileOptions.set_enable_logging options true);
+    options
+
+  let%diagn_sexp compile_metal_source ~name ~routine_names ~source ~metal_file ~option_state ~device
+      =
+    let options = metal_compile_options option_state in
     [%log "metal options", (Compiler_options.render_metal option_state : string)];
     (* The kernels this library compiles, counted where Metal's compiler runs (gh-ocannl-1314):
        [Compile_driver] counted them as rendered only. *)
@@ -1654,6 +1659,26 @@ module Impl = struct
 using namespace metal;|}
 
   let conditional_includes = [ ("simdgroup_load", "#include <metal_simdgroup_matrix>") ]
+
+  (* gh-ocannl-1338: the kernel-name harvest's view of this backend ([tools/vendor_idents.ml]): the
+     prelude with the conditional includes ahead of it, compiled for the first device under the
+     options a link compiles with. *)
+  let routine_name_probe () =
+    let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
+      let procs = [||]
+    end))
+    in
+    let prelude =
+      String.concat ~sep:"\n" (List.map conditional_includes ~f:snd) ^ "\n" ^ metal_includes
+    in
+    let device = (get_device ~ordinal:0).dev in
+    let options = metal_compile_options (metal_option_state ()) in
+    let compile source =
+      match Me.Library.on_device device ~source options with
+      | _ -> Ok ()
+      | exception Failure msg -> Error msg
+    in
+    Syntax.routine_name_probe ~prelude ~compile
 
   (* Metal compiles at link time, when a device is available: the rendering is retained, so the link
      can compile any subset of the kernels (gh-ocannl-1605). [artifact_name] is the name the link's

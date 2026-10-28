@@ -5,6 +5,11 @@ module Impl : sig
   (** Storage mode of the slab backing [pool_id] on [device]. After gh-ocannl-344 every pool is
       [Shared]; this is retained so tests can assert the allocator did not regress to another mode,
       without leaking the backend pointer into a shared type. *)
+
+  val routine_name_probe : unit -> Ir.C_syntax.routine_name_probe
+  (** What [tools/vendor_idents.exe] measures this backend's routine-name table through
+      (gh-ocannl-1338): the kernel prelude, [newLibraryWithSource:] on the first device under the
+      options a link compiles with, and the routine-name mangling. *)
 end
 
 val host_capabilities : unit -> (string * string) list

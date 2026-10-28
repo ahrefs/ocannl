@@ -815,11 +815,11 @@ module type C_syntax_config = sig
       (gh-ocannl-1338).
 
       A GPU dialect's vendor headers declare global types ([float4], [uint4], [half2]) and macros
-      ([M_PI_F], [MAXFLOAT], [CUDART_INF_FP16]) outside the reserved namespace, and the kernel body
-      spells the types: a parameter named [uint4] shadows the type for every later [device uint4*]
-      of the kernel, and a node named after a macro is macro-expanded before it is declared. A fixed
-      prefix closes that class by construction, where a blacklist would have to track every header
-      the toolchain's runtime compiler pulls in, including built-in ones no file holds. [""] for cc,
+      ([M_PI_F], [MAXFLOAT], [CUDARTAPI]) outside the reserved namespace, and the kernel body spells
+      the types: a parameter named [uint4] shadows the type for every later [device uint4*] of the
+      kernel, and a node named after a macro is macro-expanded before it is declared. A fixed prefix
+      closes that class by construction, where a blacklist would have to track every header the
+      toolchain's runtime compiler pulls in, including built-in ones no file holds. [""] for cc,
       whose only headers are the C library's: their macros and the types the renderer spells are
       already in [ident_blacklist], and the compiler's predefined macros are closed by rule
       ({!implementation_reserved}, {!system_macro_idents}). *)
@@ -2283,6 +2283,28 @@ let implementation_reserved name =
     (gh-ocannl-1525 review, gh-ocannl-1338). *)
 let system_macro_idents = [ "linux"; "unix"; "i386"; "sun"; "sparc"; "mips"; "vax"; "m68k" ]
 
+type routine_name_probe = {
+  prelude : string;
+      (** The source every kernel follows: the unconditional includes, with every conditional
+          include ahead of them, so a name any kernel's headers declare is measured. *)
+  kernel_definition : string -> string;
+      (** A minimal kernel DEFINITION of the given name, one line, as the backend declares one. *)
+  compile : string -> (unit, string) Result.t;
+      (** The backend's runtime compiler on a whole source; [Error] carries its report. *)
+  kernel_ident : string -> string;
+      (** The backend's routine-name mangling ({!C_syntax.kernel_ident}). *)
+  routine_floor_idents : string list;
+      (** What routine names avoid besides [vendor_routine_idents]: the node-name blacklist and the
+          C library's names. The reserved namespace ({!implementation_reserved}) is a rule, not a
+          list. *)
+  vendor_routine_idents : string list;  (** The backend's harvested table. *)
+}
+(** What [tools/vendor_idents.exe] needs from a backend to harvest, by experiment, the names its
+    toolchain declares at file scope -- the ones a routine name cannot take (gh-ocannl-707,
+    gh-ocannl-1338). Every field is the backend's own: the prelude its kernels start with, the shape
+    of its kernel definitions, its runtime compiler under the options its kernels compile with, and
+    the routine-name mangling with the tables behind it. *)
+
 (** [node_ident_prefix_for_backend backend_name] is the {!C_syntax_config.node_ident_prefix} of the
     named backend's dialect: ["t_"] for the GPU dialects ([metal], [cuda], [hip]), whose vendor
     headers declare global types and macros outside the reserved namespace, and [""] for the C
@@ -2826,6 +2848,13 @@ module C_syntax (B : C_syntax_config) = struct
 
   let routine_ident_table = Hash_set.of_list (module String) routine_ident_blacklist
 
+  (* For {!routine_name_probe}: the kernel-name harvest compiles a definition of this shape. *)
+  let probe_kernel_definition name =
+    B.main_kernel_prefix ^ " void " ^ name ^ "(" ^ B.buffer_prefix ^ "float *ocannl_probe_param"
+    ^ B.buffer_suffix ~pos:0 ^ ") {}"
+
+  let routine_floor_idents = ident_blacklist @ c_stdlib_idents
+
   let kernel_ident name =
     let sanitized =
       String.map name ~f:(fun c -> if Char.is_alphanum c || Char.equal c '_' then c else '_')
@@ -2837,6 +2866,18 @@ module C_syntax (B : C_syntax_config) = struct
     let sanitized = if implementation_reserved sanitized then "k" ^ sanitized else sanitized in
     let rec avoid s = if Hash_set.mem routine_ident_table s then avoid (s ^ "__") else s in
     avoid sanitized
+
+  (* gh-ocannl-1338: this dialect's half of a {!routine_name_probe}; the backend supplies its
+     prelude and compiler. *)
+  let routine_name_probe ~prelude ~compile =
+    {
+      prelude;
+      kernel_definition = probe_kernel_definition;
+      compile;
+      kernel_ident;
+      routine_floor_idents;
+      vendor_routine_idents = B.vendor_routine_idents;
+    }
 
   (* {3 Storage precision vs. compute precision (gh-ocannl-517)}
 

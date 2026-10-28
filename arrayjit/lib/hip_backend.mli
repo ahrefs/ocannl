@@ -5,6 +5,11 @@ module Impl : sig
   (** Compile one complete HIP source through the same option assembly as backend-generated kernels.
       Exposed for hardware-backed compiler regression probes; callers normally enter through
       {!compile}. *)
+
+  val routine_name_probe : unit -> Ir.C_syntax.routine_name_probe
+  (** What [tools/vendor_idents.exe] harvests this backend's routine-name table through
+      (gh-ocannl-1338): the kernel prelude (rocWMMA's include among it), {!hip_to_code}, and the
+      routine-name mangling. *)
 end
 
 val hip_include_options : unit -> string list

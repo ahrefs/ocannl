@@ -6,3 +6,5 @@ arrayjit/vendor_stubs/cudajit/cuda.mli
 arrayjit/vendor_stubs/cudajit/nvrtc.mli
 arrayjit/vendor_stubs/hipjit/hip.mli
 arrayjit/vendor_stubs/hipjit/hiprtc.mli
+arrayjit/lib/vendor_idents_cuda.ml
+arrayjit/lib/vendor_idents_hip.ml

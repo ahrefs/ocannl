@@ -78,6 +78,42 @@
   (language c)
   (names fp8_soak_stubs)))
 
+; gh-ocannl-1338: the routine-name harvest. Compiles every identifier token of the headers a GPU
+; backend's kernel prelude reaches as a kernel name, with that backend's own compiler, and checks
+; the backend's `vendor_routine_idents` table against what fails; for CUDA and HIP it also prints
+; the generated table module (`arrayjit/lib/vendor_idents_<backend>.ml`) the run regenerates. One
+; arm per vendor, selected as fp8_soak's are, so the arms are compiled only where their library is
+; installed. Not a rule on any alias: it needs the toolchain and takes minutes (about ten for HIP,
+; whose rocWMMA prelude dominates each compile). Run it on a box with the toolkit as
+; `tools/test-run.sh run exec tools/vendor_idents.exe -- <cuda|hip|metal>`.
+
+(executable
+ (name vendor_idents)
+ (modules
+  vendor_idents
+  vendor_idents_arm_cuda
+  vendor_idents_arm_hip
+  vendor_idents_arm_metal)
+ (libraries
+  base
+  stdio
+  arrayjit.ir
+  (select
+   vendor_idents_arm_cuda.ml
+   from
+   (arrayjit.cuda_backend -> vendor_idents_arm_cuda.cudajit.ml)
+   (-> vendor_idents_arm_cuda.missing.ml))
+  (select
+   vendor_idents_arm_hip.ml
+   from
+   (arrayjit.hip_backend -> vendor_idents_arm_hip.hipjit.ml)
+   (-> vendor_idents_arm_hip.missing.ml))
+  (select
+   vendor_idents_arm_metal.ml
+   from
+   (arrayjit.metal_backend -> vendor_idents_arm_metal.metal.ml)
+   (-> vendor_idents_arm_metal.missing.ml))))
+
 ; gh-ocannl-1371: the host-capability line every CI build job prints before building (ci.yml says
 ; why). Run from test/config so it resolves under the tests' configuration.
 

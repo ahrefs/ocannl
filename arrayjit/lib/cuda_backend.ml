@@ -178,7 +178,11 @@ let cuda_header_prelude =
 #define NAN __int_as_float(0x7fffffff)
 #endif|}
 
-module Impl : Ir.Backend_impl.Lowered_backend = struct
+module Impl : sig
+  include Ir.Backend_impl.Lowered_backend
+
+  val routine_name_probe : unit -> Ir.C_syntax.routine_name_probe
+end = struct
   include Backend_impl.Device (Device_stream) (Slab)
 
   (* The concrete [buffer_ptr]/[buffer] + sexps for the impl-facing interface (no longer carried by
@@ -1055,6 +1059,28 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
     ^
     if Utils.debug_log_from_routines () then "\n__device__ int printf (const char * format, ... );"
     else ""
+
+  (* gh-ocannl-1338: the kernel-name harvest's view of this backend ([tools/vendor_idents.ml]): the
+     prelude with the conditional includes ahead of it, compiled by nvrtc under the options a kernel
+     of that source compiles with. *)
+  let routine_name_probe () =
+    let module Syntax = C_syntax.C_syntax (Cuda_syntax_config (struct
+      let procs = [||]
+    end))
+    in
+    let prelude =
+      String.concat ~sep:"\n" (List.map Cuda_like_config.Cuda.conditional_includes ~f:snd)
+      ^ "\n" ^ cuda_includes ()
+    in
+    let compile source =
+      match
+        nvrtc_compile ~name:"vendor_idents_probe" ~options:(nvrtc_options source) ~with_debug:false
+          source
+      with
+      | _ -> Ok ()
+      | exception Nvrtc.Nvrtc_error { message; _ } -> Error message
+    in
+    Syntax.routine_name_probe ~prelude ~compile
 
   module Compile = C_syntax.Compile_driver (Cuda_syntax_config)
 

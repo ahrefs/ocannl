@@ -10,29 +10,33 @@ module Train = Ocannl.Train
    - a predefined macro ([__LINE__], [__STDC__]; on a GPU dialect [__CUDA_ARCH__],
    [__HIP_DEVICE_COMPILE__], [__METAL_VERSION__]): a declaration does not shadow a macro, it is
    expanded, so [float *__LINE__] reads as [float *42] whatever the body does; - a vendor header's
-   macro ([CUDART_INF_FP16], [HIPRT_INF_FP16], Metal's [M_PI_F], [MAXFLOAT]): the same, for names
-   outside the reserved namespace; - a vendor TYPE the body spells ([uint4] on Metal, the type of
-   every uint4x32 value, there in the body as the scope-local a virtual RNG draw is held in;
-   [float4], [half2]): a parameter of that name shadows the type for the rest of the kernel, so the
-   next declaration using it does not parse.
+   macro ([CUDARTAPI], [HIPRT_INF_FP16], Metal's [M_PI_F], [MAXFLOAT]): the same, for names outside
+   the reserved namespace; - a vendor TYPE the body spells ([uint4] on Metal, the type of every
+   uint4x32 value, there in the body as the scope-local a virtual RNG draw is held in; [float4],
+   [half2]): a parameter of that name shadows the type for the rest of the kernel, so the next
+   declaration using it does not parse.
 
    Each case below puts such nodes in one kernel and checks the executed value, not just that
    something compiled: the inputs are distinct powers of two, so the sum is exact and names every
    input it lost. The names are per backend, since only the dialect's own toolchain declares them;
-   the C-family names ([__LINE__], [__STDC__], [unix], [linux]) apply to every backend. Which code
+   the C-family names ([__LINE__], [__STDC__], the system macros) apply to every backend. Which code
    name each node ends up with is the mechanism's business, not this test's (the GPU dialects prefix
    every node identifier, cc disambiguates by rule), so it is not printed. *)
 
+(* Names each toolchain rejects as a kernel name, from the measured tables ([Ir.Vendor_idents_cuda],
+   [Ir.Vendor_idents_hip], Metal's grammar), one per class: a vendor type, a vendor macro, a
+   predefined macro of the device compile. *)
 let backend_names = function
   | "metal" -> [ "float4"; "uint4"; "M_PI_F"; "MAXFLOAT"; "HALF_MAX"; "__METAL_VERSION__" ]
-  | "cuda" -> [ "float4"; "half2"; "CUDART_INF_FP16"; "CUDART_ONE_BF16"; "__CUDA_ARCH__" ]
-  | "hip" -> [ "float4"; "half2"; "HIPRT_INF_FP16"; "__HIP_DEVICE_COMPILE__"; "__HIP__" ]
+  | "cuda" -> [ "half2"; "nv_bfloat16"; "CUDARTAPI"; "rsqrtf"; "__CUDA_ARCH__" ]
+  | "hip" -> [ "float4"; "half2"; "HIPRT_INF_FP16"; "FLT_MAX"; "__HIP_DEVICE_COMPILE__" ]
   | _ -> []
 
 (* Predefined by every C and C++ front end ([__LINE__], [__STDC__] -- nvrtc, hiprtc and MSL's clang
-   included), and by GCC and clang in their GNU dialects on the systems they name ([unix], [linux]):
-   harmless where a compiler leaves one undefined, a compile failure where it defines it. *)
-let common_names = [ "__LINE__"; "__STDC__"; "unix"; "linux" ]
+   included), and by GCC and clang in their GNU dialects on the systems they name
+   ({!Ir.C_syntax.system_macro_idents}: [unix], [linux], ...): harmless where a compiler leaves one
+   undefined, a compile failure where it defines it. *)
+let common_names = [ "__LINE__"; "__STDC__" ] @ Ir.C_syntax.system_macro_idents
 
 (* 16 elements, so a backend that moves data in vector packs ([float4] on Metal) spells its vector
    type in the body. Small integers: every sum below is exact. *)
