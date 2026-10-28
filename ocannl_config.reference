@@ -821,8 +821,24 @@
 # without the depth-2 probe (gh-ocannl-1627): on that minix workload a bare single's timing call
 # fell from 23 launches and ~3.0 s to 17 and ~2.2 s, the crowns unchanged. It shapes what a search
 # times, not what a crowned schedule means, so a warm schedule cache replays its winner whatever the
-# setting. No profile sets it.
+# setting. No profile sets it. Where `autotune_seeded_singles` (next) times the singles inside the
+# seeded plan, this key steers only the split-reduce sites' sweep.
 #autotune_staffed_singles=false
+
+# Whether `Autotune.tune` times its per-segment sketch singles inside the seeded untuned plan
+# (gh-ocannl-1664), where the search seeds one with a segmentation of its own (CUDA and HIP, under
+# the seeding settings). Each single is then that plan with one segment code's choice swapped for a
+# sketch, over the plan's own segments, whose seeds are enumerated there: its time is directly
+# comparable with the plan's, which the search times first. The keys are swept one at a time,
+# heaviest first, and a single joins the running seeded composite only by reading faster than it,
+# so the composite starts as the plan and every later single carries the changed choices. The
+# singles over the search's own segmentation (coarse and fine, bare or staffed) are not timed then:
+# each ran with every other segment on its preset, a backdrop several times the plan's time (131 to
+# 144 ms around an 18 ms plan on gpt2_mini_train/HIP), and in every measured arm no composite of
+# them beat the plan (gh-ocannl-1528). `false` restores those singles. It shapes what a search
+# times, not what a crowned schedule means, so a warm schedule cache replays its winner whatever
+# the setting. No profile sets it.
+#autotune_seeded_singles=true
 
 # Which units of each beam entry a beam-expansion round of `Autotune.tune` expands
 # (gh-ocannl-1229): `differing`, `full` or `head`. A fissioned routine's time is the sum of its

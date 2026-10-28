@@ -30,6 +30,10 @@ let is_gpu = Ir.Schedule.backend_is_gpu backend_name
 let seeds = Autotune.seeded_default_backend backend_name
 let staffed_key = "autotune_staffed_singles"
 
+(* gh-ocannl-1664: where the seeded plan has a segmentation of its own, the seeded singles replace
+   the staffed sweep; this test is about the staffed sweep, so it turns them off. *)
+let seeded_singles_key = "autotune_seeded_singles"
+
 (* The seeded rule under a reduction threshold, not the [auto] gate's ranking: what is claimed here
    is that the staffed start carries whatever the rule picks, so the test pins a rule that picks a
    sketch for these GEMMs. Under [auto] the ranking prices a launch at its fill (gh-ocannl-1479),
@@ -118,9 +122,11 @@ let () =
         Exn.protect
           ~finally:(fun () ->
             Hashtbl.remove Utils.config_file_args staffed_key;
+            Hashtbl.remove Utils.config_file_args seeded_singles_key;
             Hashtbl.remove Utils.config_file_args gate_key)
           ~f:(fun () ->
             Hashtbl.set Utils.config_file_args ~key:staffed_key ~data:"true";
+            Hashtbl.set Utils.config_file_args ~key:seeded_singles_key ~data:"false";
             Hashtbl.set Utils.config_file_args ~key:gate_key ~data:(Int.to_string k);
             Autotune.Seam.with_value Autotune.on_candidate_measured (fun ~label ~digest:_ _ms ->
                 measured := label :: !measured;

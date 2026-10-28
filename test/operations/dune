@@ -11051,6 +11051,25 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1664: seeded singles (autotune_seeded_singles) -- where the search seeds the seeded
+; untuned plan, its per-segment singles are the plan with one segment code's choice swapped, over the
+; plan's own segmentation. The menu and the swap are claimed structurally on a plan derived for
+; "cuda" on synthetic limits (every backend); the scripted search's timing basis and its sweep on
+; CUDA/HIP legs, skipped elsewhere.
+
+(test
+ ; cc-vector-width: independent -- on cc no search runs: the seeded plan is CUDA/HIP-only, gated on
+ ; the backend name, and the structural part derives its plan on synthetic limits.
+ (name autotune_seeded_singles)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules autotune_seeded_singles)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test scripted_search)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; ahrefs/ocannl#1387: a kernel the backend's compiler rejects is a typed decline (Backend_rejected
 ; at stage "compiler") on every backend, so the isolated per-kernel instrument declines that kernel
 ; instead of ending the table.

@@ -1657,6 +1657,27 @@ type report = {
           until a staffed single of that key is admitted (or the composite's own choice for it is
           reused), which shows the staff compatible: later refusals are the seeds' own and are not
           retried. *)
+  seeded_single_candidates : int;
+      (** The seeded singles proposed (gh-ocannl-1664, config [autotune_seeded_singles], default
+          on): where the search seeds a seeded plan ({!seeded_plan}) with a segmentation of its own,
+          its per-segment singles are timed inside that plan instead of over the search's own
+          segmentation around presets: for each keyed segment of the plan's segmentation
+          ({!seeded_single_seeds}), each seed the model pre-filter keeps, as the plan with that
+          segment code's choice swapped for the seed ({!seeded_swap}, labelled [F_swap[...]]). The
+          keys are swept one at a time, heaviest first; a key's single joins the running seeded
+          composite only by reading faster than it, and later singles carry the changed choices as
+          their staff. [fiss_sketch_candidates] is then [0]: the coarse and fine singles are not
+          seeded. [0] where no such plan is seeded (cc, Metal, the setting off). *)
+  seeded_single_timed : int;
+      (** Of the seeded singles, those that reached a timing window (refused windows included, as
+          for [fiss_sketch_timed]). The running composite's own choice for a key is never re-timed:
+          it is the plan's window, or the window that last changed it. *)
+  seeded_single_joins : int;
+      (** Keys whose choice the seeded sweep changed: each a single that read faster than the
+          running seeded composite and became it. *)
+  seeded_single_fallbacks : int;
+      (** Seeded singles refused with a non-empty staff and retried with the key swapped alone,
+          under [fiss_sketch_backdrop_fallbacks]' rule. *)
   split_reduce_candidates : int;
       (** Split-reduce seeds (gh-ocannl-484 task 3): one candidate per {!split_reduce_sites} site
           within the [max_split_reduce_sites] cap and eligible [num_blocks] value — the two-pass
@@ -2781,6 +2802,39 @@ val seeded_plan_digest : seeded_plan -> string
 val seeded_plan_label : seeded_plan -> string
 (** The search's label for the plan's seed:
     [F_seeded[<n> segs, <k> seeded, <s> sunk, <p> split, plan <digest prefix>]]. *)
+
+val seeded_swap : seeded_plan -> (seg_key * sketch_params) list -> seeded_plan
+(** [seeded_swap plan choices] (gh-ocannl-1664): [plan] with every segment a key of [choices] names
+    -- by its first unit in the plan's own segmentation -- decided [Seeded_sketch] of the key's
+    parameters, under the key's structural digest. The split prelude, the segmentation, every other
+    decision and the narrow-storage admission are [plan]'s own, so the swapped plan's replay cuts
+    and schedules as [plan]'s does except on the named segments. [plan] itself where it has no
+    segmentation of its own. *)
+
+val seeded_swap_label :
+  ?staff:(seg_key * sketch_params) list -> seeded_plan -> (seg_key * sketch_params) list -> string
+(** A seeded single's label: [F_swap[<entries>[ | staff <staff>]; plan <digest prefix>]], the
+    entries and staff rendered as {!fiss_sketch_label} renders its entries, the digest prefix the
+    one {!seeded_plan_label} prints for [plan]. *)
+
+val seeded_single_seeds :
+  ?census:(where:string -> Ir.Low_level.optimized -> unit) ->
+  capabilities:Ir.Backend_intf.codegen_capabilities ->
+  is_gpu:bool ->
+  is_cpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  static_indices:Ir.Indexing.static_symbol list ->
+  seeded_plan ->
+  Ir.Low_level.optimized ->
+  segment_seeds list
+(** The seeded singles' menu before {!tune}'s model pre-filter (gh-ocannl-1664): the keyed segments
+    of the plan's own segmentation, cut on a hermetic copy of the base lowering as an [F_seeded]
+    candidate cuts it -- the plan's split prelude applied whole-routine, then its recorded
+    segmentation replayed -- each with the seeds {!search_seeding} proposes for a segment
+    ({!sketch_seed_params} then {!coalesced_seed_params}); a segment with none is left out. Keys are
+    {!seg_key}s of that segmentation, so {!seeded_swap} finds their segments. Empty where the plan
+    has no segmentation of its own or it no longer applies. [census] as {!search_seeding}'s, tagged
+    [tune seeded segment <key tag>]. *)
 
 val refine_segments :
   coarse:(int * 'k * int * 'p) list ->

@@ -305,10 +305,19 @@ let () =
   claim "in the refused-seed search too, every seeded attempt compiled and was timed" (fun () ->
       p "in the refused-seed search too, every seeded attempt compiled and was timed"
         (match retried with Some (_, _, _, _, _, reached) -> reached | None -> false));
-  with_retried "a refused seeded window is retried after the seed pass"
+  (* gh-ocannl-1664: the seeded singles' incumbent is the plan's reading, so the retry precedes
+     them. *)
+  with_retried "a refused seeded window is retried once, before the singles inside it"
     (fun (_, _, windows, _, _, _) ->
+      let before_singles =
+        List.take_while windows ~f:(fun (label, _, _) ->
+            not (String.is_prefix label ~prefix:"F_swap["))
+      in
       match List.filter windows ~f:(fun (label, _, _) -> is_seeded label) with
-      | [ (_, _, first); (_, _, retry) ] -> Float.is_nan first && Float.(retry < 1e6)
+      | [ (_, _, first); (_, _, retry) ] ->
+          Float.is_nan first
+          && Float.(retry < 1e6)
+          && List.count before_singles ~f:(fun (label, _, _) -> is_seeded label) = 2
       | _ -> false);
   with_retried "the retried seeded plan is crowned and reported as seeded_ms"
     (fun (_, _, windows, r, _, _) ->

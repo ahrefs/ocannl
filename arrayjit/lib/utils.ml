@@ -193,6 +193,7 @@ let known_config_keys =
       "autotune_composite_playoff_margin";
       "autotune_finals_margin";
       "autotune_staffed_singles";
+      "autotune_seeded_singles";
       "autotune_round_expansion";
       "autotune_budget_seconds";
       "autotune_log";
@@ -449,6 +450,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "autotune_composite_playoff_margin";
         "autotune_finals_margin";
         "autotune_staffed_singles";
+        "autotune_seeded_singles";
         "autotune_round_expansion";
         "autotune_keep_fraction";
         "autotune_bound_pruning";
@@ -744,6 +746,7 @@ let config_key_defaults : (string * (config_value_kind * string)) list =
     ("autotune_composite_playoff_margin", (Float_number, "0.005"));
     ("autotune_finals_margin", (Float_number, "0.1"));
     ("autotune_staffed_singles", (Flag, "false"));
+    ("autotune_seeded_singles", (Flag, "true"));
     ("autotune_round_expansion", (Keyword, "differing"));
     ("autotune_budget_seconds", (Positive_float_or_unset, ""));
     ("autotune_keep_fraction", (Float_number, "1."));
