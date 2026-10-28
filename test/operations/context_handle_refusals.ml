@@ -14,12 +14,12 @@
    allocation-time zeros. It now has to have been written in the lineage -- by a run, an upload or a
    device copy -- and a caller that dropped the context [run] returned keeps that fact. A READ-ONLY
    input must be written the same way unless [Tnode.mark_zero_valid] declares zero its correct value
-   (gh-ocannl-1462). gh-ocannl-1623: independently created contexts on one device share the
-   device-wide constant buffer of a node every routine only reads; a write one of them makes there
-   is refused as stale to the others' routines until they re-seed or copy. (The tensor-level form of
-   the mistake -- an SGD step, which reads each parameter before writing it, compiled without
-   [Train.init_params] -- never gets this far: linking already refuses a parameter the prior context
-   lacks.) *)
+   (gh-ocannl-1462). gh-ocannl-1654: a node every routine only reads is a constant cached per root,
+   so independently created contexts hold their own buffer for it; only a host-initialized literal
+   is one device-wide buffer, and a write one root makes there is refused as stale to the others'
+   routines until they re-seed or copy (gh-ocannl-1623). (The tensor-level form of the mistake -- an
+   SGD step, which reads each parameter before writing it, compiled without [Train.init_params] --
+   never gets this far: linking already refuses a parameter the prior context lacks.) *)
 
 open Base
 open Verdict.Claims
@@ -325,7 +325,7 @@ let () =
   let base = Context.auto () in
   let x = node "chr_rob_x" and out = node "chr_rob_out" in
   (* Context-owned, so each sibling binds working storage of its own: a node every routine only
-     reads may otherwise live in one device-wide constant pool, which the siblings share. *)
+     reads may otherwise live in one constant pool of their root, which the siblings share. *)
   Ir.Tnode.set_context_owned x;
   let c_a, _r_a = link_shift ~ctx:base ~name:"chr_rob_a" ~src:x ~dst:out () in
   let c_b, r_b = link_shift ~ctx:base ~name:"chr_rob_b" ~src:x ~dst:out () in
@@ -351,48 +351,82 @@ let () =
     (ro_refused "chr_rob_src." (fun () -> Context.run c_use r_use));
   Context.release c_use
 
-(* Two independently rooted contexts -- separate ledgers -- can share one buffer for a node every
-   routine only reads (a device-wide constant pool). Copying it between them moves nothing, and must
-   still tell the destination's ledger that the buffer holds the source's value. *)
-let () =
-  Verdict.case "chr_shared_copy" @@ fun () ->
-  let x = node "chr_sc_x" in
-  let c_a, _r_a =
-    link_shift ~ctx:(Context.auto ()) ~name:"chr_sc_a" ~src:x ~dst:(node "chr_sc_out_a") ()
-  in
-  let out_b = node "chr_sc_out_b" in
-  let c_b, r_b = link_shift ~ctx:(Context.auto ()) ~name:"chr_sc_b" ~src:x ~dst:out_b () in
-  pf "chr_shared_copy: unseeded, the other root's consumer is refused"
-    (ro_refused "chr_sc_x." (fun () -> Context.run c_b r_b));
-  let c_a = Context.set_values c_a x seed in
-  pf "chr_shared_copy: seeded by the first root only, the other root's consumer is still refused"
-    (ro_refused "chr_sc_x." (fun () -> Context.run c_b r_b));
-  let c_b = Context.copy ~src:c_a ~dst:c_b x in
-  let c_b = Context.run c_b r_b in
-  pf "chr_shared_copy: after the copy, the other root's consumer runs from the copied value"
-    (Poly.equal (Context.get_values c_b out_b) shifted);
-  Context.release c_a;
-  Context.release c_b
-
-(* gh-ocannl-1623: once both roots hold a value for the shared buffer, a later write by one of them
-   changes the bytes the other's routine reads. Before, the other's ledger still said "written" and
-   its routine silently read the writer's values; it is now refused as stale until it re-seeds or
-   copies. *)
-let stale_refused name f =
-  refused ~needle:(name ^ " live in a device-wide constant buffer that another") f
-
+(* gh-ocannl-1654: a node every routine only reads is a constant, cached PER ROOT unless it is a
+   host-initialized literal. Two independently created contexts therefore bind buffers of their own
+   for a data input: one root's seed, write or writer run never reaches the other, and a copy
+   between them is a real transfer. Within one root the constant is shared as before. Before, every
+   root on the device bound one buffer for it, and a write in one was refused as stale in the
+   other. *)
 let seed2 = [| 100.; 200.; 300.; 400. |]
 let shifted2 = [| 101.; 202.; 303.; 404. |]
 
 let () =
+  Verdict.case "chr_root_constants" @@ fun () ->
+  let x = node "chr_rc_x" and out_a = node "chr_rc_out_a" and out_b = node "chr_rc_out_b" in
+  let lctx = LL.empty_optimize_ctx () in
+  let c_a, r_a = link_shift ~lctx ~ctx:(Context.auto ()) ~name:"chr_rc_a" ~src:x ~dst:out_a () in
+  let c_b, r_b = link_shift ~ctx:(Context.auto ()) ~name:"chr_rc_b" ~src:x ~dst:out_b () in
+  pf "chr_root_constants: a data input is no shared read in either root"
+    ((not (Set.mem r_a.Context.shared_reads x)) && not (Set.mem r_b.Context.shared_reads x));
+  pf "chr_root_constants: unseeded, a root's consumer is refused"
+    (ro_refused "chr_rc_x." (fun () -> Context.run c_b r_b));
+  let c_a = Context.set_values c_a x seed in
+  pf "chr_root_constants: seeded by the other root only, it is still refused"
+    (ro_refused "chr_rc_x." (fun () -> Context.run c_b r_b));
+  let c_b = Context.set_values c_b x seed2 in
+  let c_a = Context.run c_a r_a in
+  pf "chr_root_constants: each root runs from its own seed, the first"
+    (Poly.equal (Context.get_values c_a out_a) shifted);
+  let c_b = Context.run c_b r_b in
+  pf "chr_root_constants: and the second" (Poly.equal (Context.get_values c_b out_b) shifted2);
+  (* A writer compiled after [x] was bound as a constant writes the first root's buffer only. *)
+  let o_w = Ll_test.optimize_in lctx ~materialized:[ x ] ~name:"chr_rc_w" (fill x) in
+  let c_w, r_w = Ll_test.link ~ctx:c_a ~name:"chr_rc_w" o_w in
+  let c_w = Context.run c_w r_w in
+  let c_b = Context.run c_b r_b in
+  pf "chr_root_constants: the first root's writer leaves the second root's value as it was"
+    (Poly.equal (Context.get_values c_b out_b) shifted2);
+  let c_b = Context.run (Context.copy ~src:c_w ~dst:c_b x) r_b in
+  pf "chr_root_constants: a copy between the roots transfers the writer's value"
+    (Poly.equal (Context.get_values c_b out_b) [| 2.; 4.; 6.; 8. |]);
+  let c_w = Context.set_values c_w x seed in
+  pf "chr_root_constants: and a later write by the source leaves the copy as it was"
+    (Poly.equal (Context.get_values (Context.run c_b r_b) out_b) [| 2.; 4.; 6.; 8. |]);
+  (* Within one root the constant is one buffer: a write through another context value of the root
+     (here a descendant compiled from it) is what the root's routine reads. *)
+  let c_s, _ = link_shift ~ctx:c_b ~name:"chr_rc_sib" ~src:x ~dst:(node "chr_rc_out_s") () in
+  let c_s = Context.set_values c_s x seed2 in
+  pf "chr_root_constants: a write by another context of the same root is what it reads"
+    (Poly.equal (Context.get_values (Context.run c_b r_b) out_b) shifted2);
+  List.iter [ c_w; c_s; c_b ] ~f:Context.release
+
+(* A host-initialized literal is cached once per device: every root binds the same buffer for it
+   (gh-ocannl-1654). It is writable all the same, so a write one root makes there changes the bytes
+   the other's routine reads; that root is refused as stale until it re-seeds or copies
+   (gh-ocannl-1623). *)
+let literal name =
+  let h = node name in
+  let nd = Ir.Ndarray.create_array ~debug:name Ir.Ops.single ~dims:[| 4 |] ~padding:None in
+  Ir.Ndarray.fill_from_float nd 5.;
+  Ir.Host_inits.register h (lazy nd);
+  h
+
+let stale_refused name f =
+  refused ~needle:(name ^ " are host-initialized literals, whose one device-wide buffer another") f
+
+let () =
   Verdict.case "chr_shared_overwrite" @@ fun () ->
-  let x = node "chr_so_x" and out_a = node "chr_so_out_a" and out_b = node "chr_so_out_b" in
+  let x = literal "chr_so_x" and out_a = node "chr_so_out_a" and out_b = node "chr_so_out_b" in
   let c_a, r_a = link_shift ~ctx:(Context.auto ()) ~name:"chr_so_a" ~src:x ~dst:out_a () in
   let c_b, r_b = link_shift ~ctx:(Context.auto ()) ~name:"chr_so_b" ~src:x ~dst:out_b () in
-  pf "chr_shared_overwrite: the two roots read the same device-wide constant buffer"
+  pf "chr_shared_overwrite: the two roots read the same device-wide literal buffer"
     (Set.mem r_a.Context.shared_reads x && Set.mem r_b.Context.shared_reads x);
   let c_a = Context.set_values c_a x seed in
+  pf "chr_shared_overwrite: after the first root writes, the other root's run is refused"
+    (stale_refused "chr_so_x" (fun () -> Context.run c_b r_b));
   let c_b = Context.run (Context.copy ~src:c_a ~dst:c_b x) r_b in
+  pf "chr_shared_overwrite: copying admits the other root, reading the written value"
+    (Poly.equal (Context.get_values c_b out_b) shifted);
   let c_a = Context.set_values c_a x seed2 in
   pf "chr_shared_overwrite: after the first root writes again, the other root's run is refused"
     (stale_refused "chr_so_x" (fun () -> Context.run c_b r_b));
@@ -413,7 +447,7 @@ let () =
   let c_c, r_c = link_shift ~ctx:(Context.auto ()) ~name:"chr_so_c" ~src:x ~dst:out_c () in
   let c_c = Context.copy ~src:c_a ~dst:c_c x in
   pf "chr_shared_overwrite: a copy out of a stale root vouches for nothing"
-    (ro_refused "chr_so_x." (fun () -> Context.run c_c r_c));
+    (stale_refused "chr_so_x" (fun () -> Context.run c_c r_c));
   (* Within one root the buffer is shared as before: a write through another context value of the
      same root (here a descendant compiled from it) is that root's own. *)
   let c_s, _ = link_shift ~ctx:c_b ~name:"chr_so_sib" ~src:x ~dst:(node "chr_so_out_s") () in
@@ -422,12 +456,12 @@ let () =
     (Poly.equal (Context.get_values (Context.run c_b r_b) out_b) shifted2);
   List.iter [ c_a; c_s; c_b; c_c ] ~f:Context.release
 
-(* A routine that writes the shared buffer -- compiled from a context where an earlier routine bound
-   it as a constant -- makes the other root stale only by RUNNING, and a rollback of that run (known
-   not to have written) restores the other root's currency. *)
+(* A routine that writes the shared literal -- compiled from a context where an earlier routine
+   bound it as a constant -- makes the other root stale only by RUNNING, and a rollback of that run
+   (known not to have written) restores the other root's currency. *)
 let () =
   Verdict.case "chr_shared_writer" @@ fun () ->
-  let x = node "chr_sw_x" and out_a = node "chr_sw_out_a" and out_b = node "chr_sw_out_b" in
+  let x = literal "chr_sw_x" and out_a = node "chr_sw_out_a" and out_b = node "chr_sw_out_b" in
   let lctx = LL.empty_optimize_ctx () in
   let c_a, r_a = link_shift ~lctx ~ctx:(Context.auto ()) ~name:"chr_sw_a" ~src:x ~dst:out_a () in
   let o_w = Ll_test.optimize_in lctx ~materialized:[ x ] ~name:"chr_sw_w" (fill x) in
@@ -449,8 +483,9 @@ let () =
     (stale_refused "chr_sw_x" (fun () -> Context.run c_b r_b));
   List.iter [ c_w; c_a; c_b ] ~f:Context.release
 
-(* Allocation-time zeros and a host initialization are values too: another root's write replaces
-   them in the shared buffer, so a reader relying on either is refused once it happened. *)
+(* Allocation-time zeros and a host initialization are values too. A zero-valid data input is cached
+   per root, so another root's write leaves the zeros a reader relies on; a host literal is shared,
+   so a reader relying on its host initialization is refused once another root wrote it. *)
 let () =
   Verdict.case "chr_shared_implicit" @@ fun () ->
   let x = node "chr_si_zv" and out_a = node "chr_si_out_a" and out_b = node "chr_si_out_b" in
@@ -461,13 +496,10 @@ let () =
   pf "chr_shared_implicit: a zero-valid input runs from zeros"
     (Poly.equal (Context.get_values c_b out_b) [| 1.; 2.; 3.; 4. |]);
   let c_a = Context.set_values c_a x seed in
-  pf "chr_shared_implicit: another root's write makes the zero-valid reader stale"
-    (stale_refused "chr_si_zv" (fun () -> Context.run c_b r_b));
+  pf "chr_shared_implicit: another root's write leaves the zero-valid reader its zeros"
+    (Poly.equal (Context.get_values (Context.run c_b r_b) out_b) [| 1.; 2.; 3.; 4. |]);
   List.iter [ c_a; c_b ] ~f:Context.release;
-  let h = node "chr_si_host" and out_a = node "chr_si_hout_a" and out_b = node "chr_si_hout_b" in
-  let nd = Ir.Ndarray.create_array ~debug:"chr_si_host" Ir.Ops.single ~dims:[| 4 |] ~padding:None in
-  Ir.Ndarray.fill_from_float nd 5.;
-  Ir.Host_inits.register h (lazy nd);
+  let h = literal "chr_si_host" and out_a = node "chr_si_hout_a" and out_b = node "chr_si_hout_b" in
   let c_a, _ = link_shift ~ctx:(Context.auto ()) ~name:"chr_si_ha" ~src:h ~dst:out_a () in
   let c_b, r_b = link_shift ~ctx:(Context.auto ()) ~name:"chr_si_hb" ~src:h ~dst:out_b () in
   pf "chr_shared_implicit: a host-initialized input is not a required input, but a shared read"

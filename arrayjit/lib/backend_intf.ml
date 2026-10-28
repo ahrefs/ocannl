@@ -1208,6 +1208,26 @@ module type Device_config_common = sig
   val name : string
 end
 
+(** The key of a device's constant cache (gh-ocannl-1654). A node every routine of a compile only
+    reads, and that is not [context_owned], lives in a constant pool that outlives its contexts. A
+    host-initialized literal ({!Host_inits}) is [Shared]: one buffer per device, uploaded once,
+    which every root on the device binds. Any other such node -- a data input, a zero-valid
+    accumulator -- is [Rooted] under the {!field-context.constant_root} of the independently created
+    context that allocated it, so compile siblings and descendants of one root share it while
+    another root gets a buffer of its own: a write in one root can never change what another root
+    reads. *)
+module Constant_key = struct
+  module T = struct
+    type t = Shared of Tnode.t | Rooted of int * Tnode.t [@@deriving compare, sexp_of, hash]
+  end
+
+  include T
+  include Comparator.Make (T)
+end
+
+(** The source of {!field-context.constant_root}: one per {!Device.make_context}. *)
+let next_constant_root = Atomic.make 0
+
 type ('dev, 'runner, 'event) device = {
   dev : 'dev;
   ordinal : int;
@@ -1227,8 +1247,9 @@ type ('dev, 'runner, 'event) device = {
   mutable updating_for_merge_buffer : (Tnode.t * 'event option) option;
       (** The tensor node that was most recently scheduled to be in the device's merge buffer. See
           also {!field-updating_for}. *)
-  constant_buffer_cache : buffer_loc Hashtbl.M(Tnode).t;
-      (** Per-device cache for read-only/constant buffer allocations. *)
+  constant_buffer_cache : buffer_loc Hashtbl.M(Constant_key).t;
+      (** Per-device cache for read-only/constant buffer allocations: device-wide for host literals,
+          per root otherwise ({!Constant_key}). Its pools are freed at device teardown. *)
   mutable next_pool_id : int;
       (** Deterministic per-device pool-id counter, advanced by the shared allocator seam in tnode
           iteration order. Pool id 0 is reserved for the merge buffer; tnode pools start at 1. *)
@@ -1289,6 +1310,10 @@ type ('dev, 'runner, 'event) context = {
           the {!Low_level} IR, so this is concretely {!Low_level.optimize_ctx} (the abstraction for
           hypothetical assignments-level backends was retired; the [Assignments.comp -> code] seam
           can be reintroduced if such a backend ever materializes). *)
+  constant_root : int;
+      (** The independently created context this one derives from, as far as constants go: minted by
+          {!Device.make_context}, inherited by every derived context. Keys the non-literal entries
+          of {!field-device.constant_buffer_cache} ({!Constant_key}). *)
   merge_buffer_node : Tnode.t option;
       (** The tensor node that a {!Backend.device_to_device} transfer with [into_merge_buffer:Copy]
           placed (or will place) into this context's device's merge buffer. It is a static,
@@ -1298,15 +1323,30 @@ type ('dev, 'runner, 'event) context = {
 }
 [@@deriving sexp_of]
 
+(** Where a fresh constant allocation of [tn] by a context of [root] is cached ({!Constant_key}). *)
+let constant_key ~root tn =
+  if Host_inits.mem tn then Constant_key.Shared tn else Constant_key.Rooted (root, tn)
+
+(** The cached constant buffer of [tn] a context of [root] resolves to: its root's own, else the
+    device-wide literal. *)
+let find_constant device ~root tn =
+  match Hashtbl.find device.constant_buffer_cache (Constant_key.Rooted (root, tn)) with
+  | Some _ as found -> found
+  | None -> Hashtbl.find device.constant_buffer_cache (Constant_key.Shared tn)
+
+(** The device-wide (host-literal) constant buffer of [tn], the one kind every root shares. *)
+let find_shared_constant device tn =
+  Hashtbl.find device.constant_buffer_cache (Constant_key.Shared tn)
+
 (** Working pools in a context map, excluding compile ancestors and cached constant locations.
     Shared by ownership registration and cleanup so both use the same pool classification. *)
-let owned_pool_ids ~device ~owned_elsewhere ctx_buffers =
+let owned_pool_ids ~device ~root ~owned_elsewhere ctx_buffers =
   Map.fold ctx_buffers
     ~init:(Set.empty (module Int))
     ~f:(fun ~key ~data:loc pools ->
       if
         owned_elsewhere key
-        || Option.exists (Hashtbl.find device.constant_buffer_cache key) ~f:(equal_buffer_loc loc)
+        || Option.exists (find_constant device ~root key) ~f:(equal_buffer_loc loc)
       then pools
       else Set.add pools loc.pool_id)
 
@@ -1322,7 +1362,7 @@ let evolve_with_buffer ctx tn loc =
       let owners = ctx.upload_arenas.pool_owners in
       if fork then (
         let owned =
-          owned_pool_ids ~device:ctx.device ~owned_elsewhere:(fun key ->
+          owned_pool_ids ~device:ctx.device ~root:ctx.constant_root ~owned_elsewhere:(fun key ->
               Option.exists ctx.parent ~f:(fun pc -> Map.mem pc.ctx_buffers key))
         in
         Set.iter (owned !(ctx.upload_tip)) ~f:(fun pool_id ->

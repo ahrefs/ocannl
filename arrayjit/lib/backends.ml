@@ -815,9 +815,9 @@ let free_pools_continuing ?before_free device ~free_pool pool_ids =
 
 (* Uncommitted compile deltas have no upload siblings. Use the same owned-pool classification as
    upload reference registration and context cleanup, freeing each pool once. *)
-let free_owned_pools ~device ~free_pool ~owned_elsewhere (ctx_buffers : ctx_buffers) : unit =
+let free_owned_pools ~device ~root ~free_pool ~owned_elsewhere (ctx_buffers : ctx_buffers) : unit =
   free_pools_continuing device ~free_pool
-    (Set.to_list (owned_pool_ids ~device ~owned_elsewhere ctx_buffers))
+    (Set.to_list (owned_pool_ids ~device ~root ~owned_elsewhere ctx_buffers))
 
 (** Adds a scheduler and brings a lowered no-device backend on par with lowered device backends. *)
 module Add_device
@@ -1231,7 +1231,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     in
     let cached, fresh =
       List.partition_map constants ~f:(fun (key, node) ->
-          match Hashtbl.find context.device.constant_buffer_cache key with
+          match find_constant context.device ~root:context.constant_root key with
           | Some data -> First (key, data)
           | None -> Second (key, node))
     in
@@ -1388,9 +1388,10 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
           ctx_buffers := Map.add_exn !ctx_buffers ~key ~data);
       Option.iter plan.dp_new_constants ~f:(fun gl ->
           pack gl ~register:(fun key ~alloc ->
+              let cache_key = constant_key ~root:context.constant_root key in
               let data =
-                Hashtbl.find_or_add device.constant_buffer_cache key ~default:(fun () ->
-                    cache_inserts := key :: !cache_inserts;
+                Hashtbl.find_or_add device.constant_buffer_cache cache_key ~default:(fun () ->
+                    cache_inserts := cache_key :: !cache_inserts;
                     alloc ())
               in
               ctx_buffers := Map.add_exn !ctx_buffers ~key ~data))
@@ -1546,7 +1547,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     in
     let fresh =
       List.filter constants ~f:(fun (key, _) ->
-          Set.mem touched key && not (Hashtbl.mem context.device.constant_buffer_cache key))
+          Set.mem touched key
+          && Option.is_none (find_constant context.device ~root:context.constant_root key))
     in
     let replaceable, kept =
       List.partition_tf fresh ~f:(fun (key, _) -> Schedule.may_replace_by_packed_tile plc key)
@@ -1600,7 +1602,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
        be refusing work, and that must not replace the link failure the caller has to classify. *)
     (try Device.await context.device with _ -> ());
     Option.iter free_pool ~f:(fun free_pool ->
-        free_owned_pools ~device:context.device ~free_pool
+        free_owned_pools ~device:context.device ~root:context.constant_root ~free_pool
           ~owned_elsewhere:(Map.mem context.ctx_buffers) ctx_buffers)
 
   (* Runs [f] on a freshly allocated delta, freeing that delta if [f] raises. Everything after the
@@ -1727,7 +1729,7 @@ let finalize (type dev runner event)
         Backend.await ctx.device;
         let owners = ctx.upload_arenas.pool_owners in
         let pools =
-          owned_pool_ids ~device:ctx.device
+          owned_pool_ids ~device:ctx.device ~root:ctx.constant_root
             ~owned_elsewhere:(fun key ->
               Option.exists ctx.parent ~f:(fun pc -> Map.mem pc.ctx_buffers key))
             ctx.ctx_buffers
