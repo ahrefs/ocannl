@@ -217,7 +217,13 @@
 # without the option). A `dune build` naming an alias dune does not know
 # (`@test/operations/runtest-misspelt`) exits 2 under the verdict `ALIAS
 # REFUSED`, asked of dune before the batch's backends, the slot or the device
-# probe, and dune's build never started (see plan_aliases).
+# probe, and dune's build never started (see plan_aliases). And where the
+# batch's backends are resolved (a fleet slot, a width hazard, `plan`,
+# `--expect-backend`), a tree carrying a backend marker env_var_deps refuses
+# -- `; ocannl-backend: …` malformed, misplaced, or twice on one stanza --
+# exits 2 under the verdict `MARKER REFUSED`, the digest naming each marker's
+# dune file and line, before the slot and dune: an unreadable marker is not
+# read as every backend (tools/batch-backends.sh).
 #
 # Everything after the options is dune's argv, verbatim (default: `runtest`):
 #   tools/test-run.sh run runtest test/operations
@@ -2645,6 +2651,8 @@ digest() {
     2)
       if [ -s "$dir/alias-refused" ]; then
         verdict="ALIAS REFUSED (dune knows no such alias; nothing ran)"
+      elif [ -s "$dir/marker-refused" ]; then
+        verdict="MARKER REFUSED (a backend marker env_var_deps refuses; nothing ran)"
       elif [ -s "$dir/backend-refused" ]; then
         verdict="BACKEND REFUSED (the batch does not hold the backend --expect-backend names; nothing ran)"
       else
@@ -2734,6 +2742,7 @@ digest() {
     fi
   fi
   [ ! -s "$dir/alias-refused" ] || sed 's/^/alias refused: /' "$dir/alias-refused"
+  [ ! -s "$dir/marker-refused" ] || sed 's/^/marker refused: /' "$dir/marker-refused"
   if [ -s "$dir/backend-refused" ]; then
     echo "backend refused: $(cat "$dir/backend-refused")"
   elif [ -s "$dir/backend-warning" ]; then
@@ -3201,6 +3210,9 @@ case $sub in
       # it); a resolution that finished without its bounds is this script's own failure.
       if [ "$resolve_rc" != 0 ] && [ -s "$run_dir/alias-refused" ]; then
         sed 's/^/test-run: repeat: ALIAS REFUSED: /; $s/$/; no iteration ran/' "$run_dir/alias-refused"
+        exit "$resolve_rc"
+      elif [ "$resolve_rc" != 0 ] && [ -s "$run_dir/marker-refused" ]; then
+        sed 's/^/test-run: repeat: MARKER REFUSED: /; $s/$/; no iteration ran/' "$run_dir/marker-refused"
         exit "$resolve_rc"
       elif [ "$resolve_rc" != 0 ]; then
         printf 'test-run: repeat: the bounds were not resolved (exit %s; see %s/log), so no iteration ran\n' \
@@ -3675,6 +3687,16 @@ case $sub in
       # An expectation is judged on a resolution wherever the run is.
       [ -z "$expect_backends" ] || [ -n "$batch_resolved" ] || batch_resolve "$DUNE" "$run_dir/log" "$@"
     fi
+    # A backend marker env_var_deps refuses: the batch's backends are not
+    # guessed past it -- before the expectation, the slot, the probe and dune.
+    if [ -n "$batch_refused" ] && [ "$mode" != plan ]; then
+      { printf '%s' "$batch_refused" >"$run_dir/marker-refused.tmp" &&
+          mv -f "$run_dir/marker-refused.tmp" "$run_dir/marker-refused"; } ||
+        { echo "test-run: cannot record the marker refusal in $run_dir"; exit 126; }
+      printf '%s' "$batch_refused" | sed 's/^/test-run: MARKER REFUSED: /'
+      echo "test-run: fix the marker (docs/agent-notes/build-and-test.md#in-place-markers; dune build @test/operations/runtest-env_var_deps says the same); nothing ran"
+      exit 2
+    fi
     plan_backend_check
     if [ -n "$backend_refusal" ] && [ "$mode" != plan ]; then
       # Before the slot, the probe and dune: nothing ran, and the digest says why.
@@ -3734,6 +3756,10 @@ case $sub in
         if [ -n "$alias_refusal" ]; then
           echo "aliases: run would refuse this batch (ALIAS REFUSED, exit 2)"
           printf '%s\n' "$alias_refusal" | sed 's/^/  /'
+        fi
+        if [ -n "$batch_refused" ]; then
+          echo "markers: run would refuse this batch (MARKER REFUSED, exit 2)"
+          printf '%s' "$batch_refused" | sed 's/^/  /'
         fi
         if [ -n "$backend_refusal" ]; then
           echo "expect-backend: run would refuse this batch (BACKEND REFUSED, exit 2)"

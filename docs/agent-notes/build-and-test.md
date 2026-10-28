@@ -4163,6 +4163,19 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `OCANNL_BACKEND=cuda tools/test-run.sh run --expect-backend cuda build @...`. Leg 88 of
   `tools/test-test-run.sh` pins both, and its warning stays clear of the words leg 49's
   width-silence controls grep for (`cap`, `sdma`, `nvidia`, `dxg`).
+- **A tree carrying a backend marker `env_var_deps` refuses is `MARKER REFUSED`, not every
+  backend** (the chip from gh-ocannl-1652). A `; ocannl-backend: cuda` with no reason used to make
+  `Slot_kind` raise, which `ocannl_slot_kind` answered as `unknown:`, so the runner took the batch
+  to hold any backend: a GPU slot and a capped width for a typo the scan reports loudly.
+  `Slot_kind.marker_refusals` now answers each marker the shared contract
+  (`Dune_stanza_scan.backend_marker_contract`, plus `backend_rule_of`'s second marker) refuses as
+  `refused: <dune file>:<line>: <why>`, the reason worded by `Scan.backend_marker_malformed_reason`,
+  the same wording `env_var_deps` fails with. Wherever the runner resolves a batch's backends (a
+  fleet slot, a width hazard, `plan`, `--expect-backend`), it then exits 2 before the slot, the
+  probe and dune, the digest listing each marker under `marker refused:`. Off those paths nothing
+  is resolved and nothing is refused, so the scan remains the check of record. Leg 93 of
+  `tools/test-test-run.sh` pins the runner's half, and `slot_kind_cases` the parser's, on the
+  fixture stanza.
 - **`.github/fleet-leg` makes the fleet's `execution leg` refuse a GPU leg whose command names no
   backend** (gh-ocannl-1542; lukstafi/ludics-lite#766, lukstafi/ludics-lite#773). The runner's
   warning above reaches only someone who reads the log; four wave legs (for gh-ocannl-1340, 1452,

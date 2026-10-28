@@ -82,6 +82,7 @@ let () =
         | Reaches { reads_config = Some why; _ } -> why
         | Reaches { reads_config = None; _ } -> "<the configuration does not count>"
         | Unknown why -> "unknown: " ^ why
+        | Refused refused -> "refused: " ^ String.concat ~sep:"; " refused
       in
       printf "%-45s %s\n    %s\n" argv (Slot_kind.summary answer) why);
   let summary argv =

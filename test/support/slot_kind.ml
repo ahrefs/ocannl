@@ -100,7 +100,7 @@ let attached_aliases sexp =
 (** What a stanza's backend declaration says it holds: the backends its marker names, and whether it
     reads the configuration. Each rule [env_var_deps] fails is read the widening way -- a stanza
     both declaring and naming holds both, one declaring neither reads the configuration -- except a
-    second marker, which raises like any other marker the contract refuses. *)
+    second marker, which {!marker_refusals} refuses before any stanza is read. *)
 let backend_of_rule rule =
   let named { Scan.backend; _ } =
     String.split backend ~on:',' |> List.filter ~f:(fun b -> not (String.equal b "none"))
@@ -110,7 +110,8 @@ let backend_of_rule rule =
   | Scan.Declares_variable | Scan.Names_neither -> ([], true)
   | Scan.Names_backend (_, m) -> (named m, false)
   | Scan.Declares_and_names (_, m) -> (named m, true)
-  | Scan.Names_twice _ -> failwith "a stanza carrying two backend markers"
+  | Scan.Names_twice _ ->
+      failwith "a stanza carrying two backend markers, which marker_refusals refuses"
 
 let join dir sub = match (dir, sub) with "", s -> s | d, "" -> d | d, s -> d ^ "/" ^ s
 
@@ -486,16 +487,45 @@ let unread_head s =
                 List.mem l head ~equal:String.equal)))
         head
 
-(** The stanzas of one dune file, in [dir]. A marker the contract refuses is not read as absent: it
-    raises, and the caller takes the unreadable file as a GPU answer. *)
+(** Each backend marker of the dune file [dune_file] that [env_var_deps] refuses, as
+    [<dune file>:<line>: <why>]: the markers the shared contract ({!Scan.backend_marker_contract})
+    refuses -- one that does not parse, one inside no stanza, one on a stanza that runs nothing, one
+    outside a comment (which has no line) -- and a second marker on one stanza. Empty when every
+    marker reads. The decisions are the contract's and {!Scan.backend_rule_of}'s, the ones
+    [env_var_deps] fails the tree on, so the two cannot disagree about which markers are bad. *)
+let marker_refusals ~dune_file (contract : _ Scan.marker_contract) =
+  let at line why = Printf.sprintf "%s:%d: %s" dune_file line why in
+  List.map contract.Scan.contract_issues ~f:(function
+    | Scan.Malformed_marker { issue_line; issue_malformed; _ } ->
+        at issue_line
+          ("a backend marker that does not parse: "
+          ^ Scan.backend_marker_malformed_reason issue_malformed)
+    | Scan.Marker_outside_stanza { issue_line; _ } ->
+        at issue_line "a backend marker inside no stanza, which declares nothing"
+    | Scan.Marker_in_wrong_stanza { issue_line; issue_why; _ } ->
+        at issue_line ("a backend marker on a stanza it cannot declare for: " ^ issue_why)
+    | Scan.Marker_outside_comment
+        { issue_text_occurrences = in_text; issue_comment_occurrences = in_comments } ->
+        Printf.sprintf "%s: spells `%s` %d times and only %d of them are in a comment" dune_file
+          Scan.marker_sentinel in_text in_comments)
+  @ List.filter_map contract.Scan.contract_stanzas ~f:(fun marked ->
+      match Scan.backend_rule_of marked with
+      | Scan.Names_twice line -> Some (at line "a second backend marker on one stanza")
+      | _ -> None)
+
+(** The stanzas of one dune file, in [dir]; or, when {!marker_refusals} refuses any of its markers,
+    those refusals. A refused marker is read neither as absent nor as every backend: the caller
+    refuses the batch over it (gh-ocannl-1652's follow-up). *)
 let stanzas_of ~dir content =
   let contract = Scan.backend_marker_contract content in
-  if not (List.is_empty contract.Scan.contract_issues) then
-    failwith "a backend marker the env_var_deps contract refuses";
-  List.concat_map contract.Scan.contract_stanzas ~f:(fun marked ->
-      let st = marked.Scan.marker_stanza in
-      let named, reads_config = backend_of_rule (Scan.backend_rule_of marked) in
-      views_of ~dir:(join dir st.Scan.marked_subdir) ~named ~reads_config st.Scan.marked_sexp)
+  match marker_refusals ~dune_file:(join dir "dune") contract with
+  | _ :: _ as refused -> Error refused
+  | [] ->
+      Ok
+        (List.concat_map contract.Scan.contract_stanzas ~f:(fun marked ->
+             let st = marked.Scan.marker_stanza in
+             let named, reads_config = backend_of_rule (Scan.backend_rule_of marked) in
+             views_of ~dir:(join dir st.Scan.marked_subdir) ~named ~reads_config st.Scan.marked_sexp))
 
 type target =
   | Alias of { dir : string; alias : string; recursive : bool }
@@ -1029,10 +1059,13 @@ let unresolved_readers ~config_files ~stanzas dune_files =
     names, once, with the first stanza that names it, and gives in [reads_config] why the
     configuration counts -- [None] when every target is on {!config_free_aliases} or a plain
     compilation product, or when it builds nothing. [Unknown why] is an argv this does not model or
-    a dune file it could not read, which the caller takes as every backend. *)
+    a dune file it could not read, which the caller takes as every backend. [Refused refusals] is a
+    tree carrying a backend marker [env_var_deps] refuses, each [<dune file>:<line>: <why>]: the
+    caller refuses the batch rather than guess what the marker meant. *)
 type answer =
   | Reaches of { named : (string * string) list; reads_config : string option }
   | Unknown of string
+  | Refused of string list
 
 (* The environment variables that run a program or add what is built: dune's, as their options do,
    and the compiler's [OCAMLPARAM], which can name a preprocessor or a ppx. *)
@@ -1043,16 +1076,22 @@ let unmodelled_dune_env = [ "DUNE_DIFF_COMMAND"; "DUNE_INSTRUMENT_WITH"; "DUNE_R
 let builtin_aliases =
   [ "runtest"; "default"; "all"; "check"; "install"; "doc"; "doc-private"; "fmt"; "lint" ]
 
+(** Every dune file's stanzas; or [`Refused] with every refused marker of the tree, so that one
+    refusal names them all; or [`Unreadable] for the first file that could not be read. *)
 let read_stanzas dune_files =
-  List.fold_result dune_files ~init:[] ~f:(fun acc (dir, content) ->
+  List.fold_result dune_files ~init:([], []) ~f:(fun (acc, refused) (dir, content) ->
       match stanzas_of ~dir content with
-      | stanzas -> Ok (stanzas :: acc)
+      | Ok stanzas -> Ok (stanzas :: acc, refused)
+      | Error r -> Ok (acc, refused @ r)
       | exception exn ->
           Error
-            (Printf.sprintf "the dune file in %s is unreadable here (%s)"
-               (if String.is_empty dir then "." else dir)
-               (Exn.to_string exn)))
-  |> Result.map ~f:(fun l -> List.concat (List.rev l))
+            (`Unreadable
+               (Printf.sprintf "the dune file in %s is unreadable here (%s)"
+                  (if String.is_empty dir then "." else dir)
+                  (Exn.to_string exn))))
+  |> Result.bind ~f:(function
+    | l, [] -> Ok (List.concat (List.rev l))
+    | _, refused -> Error (`Refused refused))
 
 (** The stanza in [dir] declaring the compilation product [file], if any: an executable or test for
     [.exe]/[.bc], a library for [.cma]/[.cmxa]. *)
@@ -1110,7 +1149,8 @@ let answer ?(getenv = Stdlib.Sys.getenv_opt) ?(config_free = config_free_aliases
       | Ok None -> Reaches { named = []; reads_config = None }
       | Ok (Some targets) -> (
           match read_stanzas dune_files with
-          | Error why -> Unknown why
+          | Error (`Unreadable why) -> Unknown why
+          | Error (`Refused refused) -> Refused refused
           | Ok stanzas when List.exists stanzas ~f:(fun s -> Option.is_some (unread_head s)) ->
               (* A hole in the inventory is every batch's: what an [(include …)] brings in may sit
                  on any alias (Codex review round 3 on staging#1318). *)
@@ -1234,15 +1274,16 @@ let config_files_of ~root dune_files =
 (** Whether [answer] can hold a GPU by name: an unknown answer can. Whether a configuration that
     counts names one is the caller's question. *)
 let holds_gpu = function
-  | Unknown _ -> true
+  | Unknown _ | Refused _ -> true
   | Reaches { named; _ } ->
       List.exists named ~f:(fun (b, _) -> List.mem gpu_backends b ~equal:String.equal)
 
 (** [answer] on one line, as the slot_kind tests' goldens record it: [names <backend>,…] in
     [named]'s order, or [names nothing], then [ + reads config] when the configuration counts; or
-    [unknown: <why>]. *)
+    [unknown: <why>], or [refused: <refusal>; …]. *)
 let summary = function
   | Unknown why -> "unknown: " ^ why
+  | Refused refused -> "refused: " ^ String.concat ~sep:"; " refused
   | Reaches { named; reads_config } ->
       (match named with
         | [] -> "names nothing"
@@ -1273,7 +1314,8 @@ let summary = function
     {!Config_dep_resolution.analyze} reads them. *)
 let refusals ?(config_free = config_free_aliases) ~config_files dune_files =
   match read_stanzas dune_files with
-  | Error why -> [ why ]
+  | Error (`Unreadable why) -> [ why ]
+  | Error (`Refused refused) -> refused
   | Ok stanzas ->
       let closure_refusals ~what found =
         List.concat_map found ~f:(fun s ->

@@ -148,12 +148,13 @@ build @test/operations/scans a/t_cuda.exe reaches exactly names metal: true
 build ./a/t_cfg.exe reaches exactly names nothing: true
 build a/t_cfg.exe b/m.exe g/l.cmxa reaches exactly names nothing: true
 build a/t_cfg.exe @c/runtest reaches exactly names nothing + reads config: true
-runtest d (malformed marker)             unknown: the dune file in d is unreadable here ((Failure "a backend marker the env_var_deps contract refuses"))
-a malformed marker makes the tree unreadable, never CPU: true
+runtest d (malformed markers)            refused: d/dune:1: a backend marker that does not parse: no `--` separating the backend from the reason -- the grammar is `; ocannl-backend: <none|cc|multidev_cc|cuda|hip|metal> -- <reason>`; e/dune:2: a backend marker that does not parse: `vulkan` is not one of none, cc, multidev_cc, cuda, hip, metal
+a malformed marker refuses the batch, naming its dune file and line: true
+every refused marker of the tree is named, not only the first: true
 runtest d (no declaration)               names nothing + reads config
 a stanza declaring neither reads the configuration: true
-runtest d (two markers)                  unknown: the dune file in d is unreadable here ((Failure "a stanza carrying two backend markers"))
-a stanza carrying two markers makes the tree unreadable, never names nothing: true
+runtest d (two markers)                  refused: d/dune:3: a second backend marker on one stanza
+a stanza carrying two markers refuses the batch at the second, never names nothing: true
 build @d/se (a pin its marker names)     names hip + reads config
 a backend the action pins holds the batch through its marker: true
 build @d/runtest-t (a compiler response file) names nothing + reads config

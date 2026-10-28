@@ -321,18 +321,28 @@ let () =
   List.iter sets ~f:(fun (argv, want) ->
       let _, shown = judge argv in
       p (Printf.sprintf "%s reaches exactly %s" argv want) (String.equal shown want));
-  (* A marker the env_var_deps contract refuses is not read as no marker: the file is unreadable,
-     which the caller takes as a GPU. *)
+  (* A marker the env_var_deps contract refuses is read neither as no marker nor as every backend:
+     the answer refuses the batch, naming the marker's file and line -- each refused marker of the
+     tree, in one answer, as tools/test-run.sh reports them (MARKER REFUSED). *)
   let _, malformed =
     judge
       ~dune_files:
-        [ ("d", {dune|(test ; ocannl-backend: cuda
- (name t) (deps ocannl_config))|dune}) ]
+        [
+          ("d", {dune|(test ; ocannl-backend: cuda
+ (name t) (deps ocannl_config))|dune});
+          ( "e",
+            {dune|(test
+ ; ocannl-backend: vulkan -- a backend this repository has no word for.
+ (name u) (deps ocannl_config))|dune}
+          );
+        ]
       "runtest d"
   in
-  printf "%-40s %s\n" "runtest d (malformed marker)" malformed;
-  p "a malformed marker makes the tree unreadable, never CPU"
-    (String.is_prefix malformed ~prefix:"unknown: the dune file in d is unreadable");
+  printf "%-40s %s\n" "runtest d (malformed markers)" malformed;
+  p "a malformed marker refuses the batch, naming its dune file and line"
+    (String.is_prefix malformed ~prefix:"refused: d/dune:1: a backend marker that does not parse");
+  p "every refused marker of the tree is named, not only the first"
+    (String.is_substring malformed ~substring:"; e/dune:2: a backend marker that does not parse");
   (* The two declarations env_var_deps refuses that the contract does not are read the widening way:
      a stanza declaring neither reads the configuration, and a second marker is not read as none --
      it makes the file unreadable, where reading it as naming nothing would now drop the stanza from
@@ -358,8 +368,8 @@ let () =
       "runtest d"
   in
   printf "%-40s %s\n" "runtest d (two markers)" twice;
-  p "a stanza carrying two markers makes the tree unreadable, never names nothing"
-    (String.is_prefix twice ~prefix:"unknown: the dune file in d is unreadable");
+  p "a stanza carrying two markers refuses the batch at the second, never names nothing"
+    (String.equal twice "refused: d/dune:3: a second backend marker on one stanza");
   (* A backend the action fixes reaches the batch through the marker, which `env_var_deps` requires
      to name it (gh-ocannl-1518): this resolver never reads the action. *)
   let _, pinned =
@@ -911,7 +921,7 @@ let () =
         [ "build"; "@out/default/runtest" ]
     with
     | Slot_kind.Unknown _ -> true
-    | Slot_kind.Reaches _ -> false
+    | Slot_kind.Reaches _ | Slot_kind.Refused _ -> false
   in
   p "an alias rooted in a moved build directory is every backend" moved;
   (* ... and the environment twins of the options that run a program. *)
@@ -924,6 +934,6 @@ let () =
             ~dune_files:tree [ "build"; "@c/runtest" ]
         with
         | Slot_kind.Unknown _ -> true
-        | Slot_kind.Reaches _ -> false
+        | Slot_kind.Reaches _ | Slot_kind.Refused _ -> false
       in
       p (Printf.sprintf "%s set makes a batch every backend" var) unknown)
