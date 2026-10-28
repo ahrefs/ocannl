@@ -305,6 +305,14 @@ files.
   macro, `OCANNL_HALF_FMA`, defined by the same `#if` — so both configurations agree by
   construction rather than by inspection. Any new fp16 op admitted to the vector path needs the
   same treatment.
+- **Under the default `cc_backend_fp_contract=auto`, an f16 value depends on the kernel's shape on
+  a native-fp16 x86 host** (gh-ocannl-1679): there `FLOAT_TO_HALF` is a no-op cast, so gcc's own
+  `-ffp-contract=fast` fuses the IR's rounded product into its add (`vfmadd231sh`) wherever it
+  stays scalar, and keeps two roundings wherever the vectorizer took the products (gcc 13 packed
+  two rows of `reduction_forms`' unrolled RNG nest and fused the third). Only the AVX512-FP16 CI
+  runners show it; clang with `OCANNL_CC_BACKEND_FP_CONTRACT=fast` reproduces it on a Mac. A test
+  comparing two kernel shapes bitwise pins that key `off` in-process (`reduction_forms`,
+  `fp_licence_values`).
 - **`-march=native` is the wrong flag on ARM and was silently downgrading every CPU kernel.** Apple
   clang accepts it on arm64 and targets a *lower* baseline than passing nothing: 22
   `__ARM_FEATURE_*` macros against 26 with no flag and 33 with `-mcpu=native`, losing

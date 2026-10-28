@@ -77,6 +77,14 @@ module Sched = Ir.Schedule
 module Numerics = Ir.Numerics
 module Generated = Test_utils.Generated
 
+(* The C compiler's own contraction pinned off, before the first compile (gh-ocannl-1679): the value
+   claims compare kernels of DIFFERENT shapes bitwise, and a compiler free to fuse [a * b + c] fuses
+   them differently. On a native-fp16 x86 host (AVX512-FP16: the Sapphire/Emerald Rapids CI runners)
+   [FLOAT_TO_HALF] is a no-op cast, and gcc's default [-ffp-contract=fast] fused the RNG members'
+   [acc + x * draw] into one [vfmadd231sh] (one rounding) in the unrolled kernel's scalar row, while
+   the loop it is judged against vectorized the products and kept two roundings: one f16 ulp apart,
+   on those runners only. The claims are about OCANNL's renderings, not that licence. *)
+let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 let () = Generated.init ~backend_name
