@@ -70,7 +70,12 @@ let () =
   let o =
     Ll_test.optimize_scoped ~materialized:[ tn ] ~name:"sk_staged"
       ~raw:(Ll_test.set tn cell (Ir.Low_level.Constant 9.0))
-      (Ir.Low_level.Staged_compilation (fun () -> PPrint.string "sk_staged[0] = 2.0f;"))
+      (* Staged text is emitted verbatim, so it spells the node as the dialect emits it
+         (gh-ocannl-1338: [t_sk_staged] on a GPU backend). *)
+      (Ir.Low_level.Staged_compilation
+         (fun () ->
+           PPrint.string
+             (Ir.C_syntax.node_ident_prefix_for_backend backend_name ^ "sk_staged[0] = 2.0f;")))
   in
   let got = Ll_test.execute ~name:"sk_staged" o ~seed:[ (tn, [| -1.0 |]) ] ~read:[ tn ] in
   p "a kernel whose only access to a node is staged code still declares it, and the write lands"

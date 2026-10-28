@@ -54,7 +54,11 @@ let () =
   Stdio.eprintf "backend: %s (not part of the golden)\n%!" backend_name;
   let rejected =
     compile_staged ~id:13870 ~name:"cfd_rejected"
-      (PPrint.string "cfd_out[0] = ocannl_gh1387_undeclared_identifier;")
+      (* The node spelled as the dialect emits it (gh-ocannl-1338), so the one undeclared name is
+         the one meant. *)
+      (PPrint.string
+         (Ir.C_syntax.node_ident_prefix_for_backend backend_name
+         ^ "cfd_out[0] = ocannl_gh1387_undeclared_identifier;"))
   in
   p
     "a compiler-rejected kernel is a typed decline: the backend's own compiler stage, a codegen \
