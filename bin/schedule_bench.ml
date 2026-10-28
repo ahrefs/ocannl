@@ -18,11 +18,10 @@
    sk_hoist seed), pm_mixed (hoisted B~ plus an in-kernel per-chunk A~ pack; the sk_pack_rest seed),
    and pm_bpk (both operands packed in-kernel: A~ per chunk, B~ re-packed per row block while the
    per-chunk tiles fit the privatization cap, config cc_grid_private_bytes_cap, and past it packed
-   whole once ahead of the dispatch — [Bench_gebp.grid_b_pack], gh-ocannl-1631; past
-   [Bench_gebp.whole_b_bytes_cap] too, the Grid silently declines to serial: check with
-   --ocannl_schedule_log_declines=true). The packed variants are built by [Bench_gebp],
-   [narrow_gebp_bench]'s builder, which pads a row or reduction extent its block does not divide
-   (gh-ocannl-1562).
+   whole once ahead of the dispatch — [Bench_gebp.grid_b_pack], gh-ocannl-1631; whatever the Grid
+   declines to serial shows under --ocannl_schedule_log_declines=true). The packed variants are
+   built by [Bench_gebp], [narrow_gebp_bench]'s builder, which pads a row or reduction extent its
+   block does not divide (gh-ocannl-1562).
 
    The C-backend register-tiled variants (tensorize, packmma, packmma_par and the three
    grid-outermost flavors) take the renderer's own C-tile geometry unless [--tile=rm,rn,lanes] or

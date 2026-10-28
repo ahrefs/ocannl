@@ -349,6 +349,14 @@ files.
 - Building a test kernel that actually *has* a big scratch frame takes care: write the `Local`
   array in one loop and read it back in REVERSE in another. A forward read in the same order lets
   the compiler forward each store to its load and delete the array, leaving nothing to reject.
+- **The cc counterpart is a stack budget, not a refusal** (gh-ocannl-1669). A `Local` array (a
+  `Stage` tile, an explicit `Local` intent: nothing caps their size, unlike `Never_virtual`'s
+  `stack_threshold_in_bytes`) went on the stack at any size, safe only on the 8 MiB main thread;
+  libdispatch workers and macOS secondary threads (a `multidev_cc` domain) get 512 KiB. Now
+  `C_syntax.heap_locals` keeps a scope's smallest arrays on the stack within
+  `routine_stack_locals_bytes` (function scope) or `chunk_stack_locals_bytes` (a pool chunk's
+  privatized tiles) and `malloc`s the rest, freed in the same scope (GPU backends opt out through
+  `heap_local_arrays`). The 12 MiB legs of `test/operations/heap_local_arrays` segfault without it.
 - **On Metal an over-limit `threadgroup` allocation is refused by pipeline creation, not by the
   post-link check** (gh-ocannl-1226): `newComputePipelineStateWithFunction` fails first ("Threadgroup
   memory size (32772) exceeds the maximum threadgroup memory allowed (32768)"), so

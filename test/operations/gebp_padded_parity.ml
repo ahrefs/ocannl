@@ -445,7 +445,7 @@ let () =
     "the Grid-outermost B~ pack defaults to whole-once at 512^3 64x256 and per-row-block at 128^3 \
      16x32 and 76^3 64x256"
   in
-  let pick n bm bk = Bench_gebp.grid_b_pack ~elem_bytes:4 ~stage_a:true ~bm ~bk ~ni:n ~nj:n ~nk:n in
+  let pick n bm bk = Bench_gebp.grid_b_pack ~elem_bytes:4 ~stage_a:true ~bm ~bk ~ni:n ~nj:n in
   p label
     (match (pick 512 64 256, pick 128 16 32, pick 76 64 256) with
     | Bench_gebp.Once, Bench_gebp.Per_row_block, Bench_gebp.Per_row_block -> true

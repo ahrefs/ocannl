@@ -15,6 +15,8 @@ default_binop_syntax [Ir.C_syntax.default_binop_syntax]
 emit writes into ~buf [Ir.Low_level.Canonical_render.emit]
 function_header_doc [Ir.Low_level.function_header_doc]
 hardware_binding [Ir.C_syntax.C_syntax.hardware_binding]
+heap_local_decl [Ir.C_syntax.C_syntax.heap_local_decl]
+heap_local_free [Ir.C_syntax.C_syntax.heap_local_free]
 integer_power_doc [Ir.C_syntax.C_syntax.integer_power_doc]
 local_array_decl [Ir.C_syntax.C_syntax.local_array_decl]
 localize_or_serial [Ir.C_syntax.C_syntax.localize_or_serial]
@@ -254,6 +256,14 @@ test/operations/hardware_workgroup_reduce.ml [run by @test/operations/runtest-ha
     "__syncthreads()"
     "threadgroup float partial_sums[64]"
     "threadgroup_barrier"
+test/operations/heap_local_arrays.ml [run by @test/operations/runtest-heap_local_arrays; also pins text this scan cannot name: untraced callback, forwarded parameter, opaque aggregate component]
+    "Pool-backed Grid rendering"
+    "float " ^ ... ^ "["
+    "free"
+    "hla_fs_named"
+    sprintf "float %s[%d]"
+    sprintf "float * const %s = "
+    sprintf "free(%s);"
 test/operations/integer_power_domain.ml [run by @test/operations/runtest-integer_power_domain]
     ")["
     "ipow_once_input["
@@ -639,6 +649,7 @@ so, and the goldens' families say which backends a change has to be run on.
 @test/operations/runtest-hardware_axes_parity
 @test/operations/runtest-hardware_warp_shuffle
 @test/operations/runtest-hardware_workgroup_reduce
+@test/operations/runtest-heap_local_arrays
 @test/operations/runtest-integer_power_domain
 @test/operations/runtest-ll_printer_constants
 @test/operations/runtest-log_index_width_narrow
