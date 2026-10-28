@@ -485,6 +485,17 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name concat_extraction)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules concat_extraction)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name result_side_padded_window)
  (package neural_nets_lib)
  (deps

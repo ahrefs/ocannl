@@ -22,6 +22,12 @@ padded transposed conv recipe: 2*i<+k, then a one-hot crop, padding 1, output_pa
 padded transposed conv recipe: 2*i<+k, then a one-hot crop, padding 1, output_padding 1: values: true
 padded transposed conv recipe: 3*i<+k, crop the start, append a zero, output_padding 2: extent: true
 padded transposed conv recipe: 3*i<+k, crop the start, append a zero, output_padding 2: values: true
+padded transposed conv recipe: 2*i<+2*k, then a slice, padding 2: extent: true
+padded transposed conv recipe: 2*i<+2*k, then a slice, padding 2: values: true
+padded transposed conv recipe: 2*i<+k, then a captured slice, padding 1, output_padding 1: extent: true
+padded transposed conv recipe: 2*i<+k, then a captured slice, padding 1, output_padding 1: values: true
+padded transposed conv recipe: 3*i<+k, slice the start, pad the end, output_padding 2: extent: true
+padded transposed conv recipe: 3*i<+k, slice the start, pad the end, output_padding 2: values: true
 unary multi-term i<+3*j: extent: true
 unary multi-term i<+3*j: values: true
 unary window, kernel captured and set: extent: true

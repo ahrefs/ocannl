@@ -154,10 +154,38 @@ let test_whitespace_between_axes () =
   show "s a; s b => s a b";
   printf "\n"
 
+(* What a spec's axes READ as (gh-ocannl-1656): the docs' old single-char stride example
+   ["is*a+d*bc;b=>iac"] parses, as one affine axis with stride identifier [is] and kernel [bc] --
+   [*] and [+] select multichar mode -- while its comma-separated form is the three axes it meant; a
+   comma-free multichar spec is legitimate on its own ([sa; sb => sa^b]); and concatenation
+   components are labels or integer sizes. *)
+let test_axis_readings () =
+  printf "Testing what axes read as:\n";
+  let show spec =
+    match Einsum_parser.einsum_of_spec spec with
+    | rhses, result ->
+        let axes (l : Einsum_parser.parsed_axis_labels) =
+          Sexp.to_string_mach
+            (Sexp.List (List.map l.given_output ~f:Einsum_parser.sexp_of_axis_spec))
+        in
+        printf "  '%s' -> %s => %s\n" spec
+          (String.concat ~sep:"; " (List.map rhses ~f:axes))
+          (axes result)
+    | exception Einsum_parser.Parse_error msg -> printf "  '%s' -> %s\n" spec msg
+  in
+  show "is*a+d*bc;b=>iac";
+  show "i, s*a+d*b, c; b => i, a, c";
+  show "sa; sb => sa^b";
+  show "3^a^5 => a";
+  show "a => a^3";
+  show "p^o^1 => o";
+  printf "\n"
+
 let () =
   test_mode_detection ();
   test_single_char ();
   test_multichar ();
   test_row_variable_spellings ();
   test_whitespace_between_axes ();
+  test_axis_readings ();
   printf "All tests passed!\n"

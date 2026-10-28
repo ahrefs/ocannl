@@ -90,10 +90,19 @@ files.
   called from `einsum_n_constraints` and the `Permute` branch); a padded window's backward writes
   through the same window but reuses the forward projections, so it never comes through there.
   The refusal stays (gh-ocannl-1619, maintainer's call): its message gives the two-step recipe,
-  `<+` then a crop by an operand-side valid window over a one-hot literal, executed against
-  PyTorch's `ConvTranspose1d` in `result_side_affine_forms`. The crop is not a concat slice
-  because operand-side concat extraction (`p^o^q => o`, `p^o => o`) dies in projection inference
-  and integer concat components do not parse, whatever `syntax_extensions.md` once advertised.
+  `<+` then a crop by a slice (`"s, p^o^q => s, o"`), executed against PyTorch's
+  `ConvTranspose1d` in `result_side_affine_forms` beside the older one-hot-window crop.
+- Extraction and replacement (`p^o^q => o`, `b => a^b^c`, gh-ocannl-1656) are a concat TARGET
+  exactly one of whose components another access names. `solve_proj_equations` gives such a target
+  a SHIFT index (the named component's index plus the preceding extents) and the unnamed
+  components no iterator; as `Concat` segments, a width-1 named component (indexed `Fixed_idx 0`
+  like every dimension-1 axis) selected no segment and every segment hit the one cell. Concat
+  targets never get an ordinary product iterator: an extraction's target is an operand axis, which
+  is `Iterated`. A middle form's split is not carried by the closed shapes, so captured dims reach
+  `derive_projections`' local re-solve as size-only constraints, filtered out of
+  `get_proj_equations` (a dimension-1 size there would pin the axis at 0). Closure refuses to guess
+  a concat component to 1 (`Row.add_concat_component`); `++^`'s discardable components still
+  guess 0. Executed: `test/einsum/concat_extraction`.
 - An affine axis's constant offset is sized for by nothing: the dim formulas omit it, so an offset
   at or past the stride, or on an unpadded window, indexes past the extent. On the result side
   those writes were silently dropped (stride 1 died in `projection_of_solved_dims`); on an

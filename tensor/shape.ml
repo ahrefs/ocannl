@@ -535,6 +535,29 @@ let axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env:_ ~f labels =
   let output = to_row `Output ~implicit:false labels.bcast_output o_dims beg_o_dims in
   (batch, input, output)
 
+let concat_component_text = function Concat_label l -> l | Concat_size n -> Int.to_string n
+
+(** The dimension of one component of a concatenated axis: a label's variable (shared with the
+    spec's other slots through [dim_var_env]), or a fixed size no other slot names. A fixed size
+    carries no projection id: projection derivation gives it a fresh one, so the component is a
+    segment with its own iterator that no other access mentions -- skipped by an extraction, left to
+    the initialization by a replacement (gh-ocannl-1656). *)
+let concat_component_dim ~spec ~dim_var_env = function
+  | Concat_label label ->
+      let v =
+        Hashtbl.find_or_add dim_var_env label ~default:(fun () -> Row.get_var ~name:label ())
+      in
+      Row.add_concat_component v;
+      Row.Var v
+  | Concat_size n when n <= 0 ->
+      raise
+      @@ Row.Shape_error
+           ( [%string
+               "einsum spec %{spec}: a concatenation component of size %{n#Int} is empty; drop it \
+                from the concatenation"],
+             [] )
+  | Concat_size n -> Row.get_default_dim ~d:n ()
+
 (** Renders an affine axis spec as the einsum grammar reads it back ([[s*]o[=|<][+off]+[d*]k], or
     [s*o[+off]] without a window), for refusal messages. *)
 let render_affine_axis = function
@@ -549,7 +572,7 @@ let render_affine_axis = function
             "%{coeff stride}%{over_label}%{marker}%{offset}+%{coeff dilation}%{kernel_label}"])
   | Label s -> s
   | Fixed_index i -> Int.to_string i
-  | Concat_spec labels -> String.concat ~sep:"^" labels
+  | Concat_spec components -> String.concat ~sep:"^" (List.map components ~f:concat_component_text)
 
 (** Refuses an affine axis whose constant offset reaches past the axis's extent (gh-ocannl-1618), in
     any slot of an einsum spec. Shape inference sizes an affine axis without its offset
@@ -676,14 +699,8 @@ let einsum_slot_spec_to_dims_bio ?(fixed_index = `Pin_var) ~original_spec ~sh_id
           :: !extras;
         d
     | Affine_spec _ as axis_spec -> affine_dim_of_spec ~spec:original_spec ~dim_var_env axis_spec
-    | Concat_spec labels ->
-        let dims =
-          List.map labels ~f:(fun label ->
-              Row.Var
-                (Hashtbl.find_or_add dim_var_env label ~default:(fun () ->
-                     Row.get_var ~name:label ())))
-        in
-        Row.Concat dims
+    | Concat_spec components ->
+        Row.Concat (List.map components ~f:(concat_component_dim ~spec:original_spec ~dim_var_env))
   in
   let result = axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env ~f labels in
   (!extras, !proj_env_update, result)
@@ -705,6 +722,46 @@ let add_var_used_in_spec_or_compose row =
 let add_var_used_in_pointwise row =
   match row with Row.Row_var v -> Row.add_used_in_pointwise v | _ -> ()
 
+(** Refuses constraints a fully staged solve left unsolved (gh-ocannl-1656). The one known source is
+    a concatenated axis whose components the spec does not size: [p^o^q => o] fixes [p + q], not [p]
+    and [q], so name it with the fix; anything else keeps the plain report of the leftover. *)
+let refuse_unsolved ~where (unsolved : Row.constraint_ list) =
+  if not (List.is_empty unsolved) then
+    let concat =
+      List.find_map unsolved ~f:(function
+        | Row.Dim_eq { d1 = Row.Concat _ as c; _ } | Row.Dim_eq { d2 = Row.Concat _ as c; _ } ->
+            Some c
+        | _ -> None)
+    in
+    match concat with
+    | Some c ->
+        let concat_text = Row.dim_to_string Axis_size c in
+        raise
+        @@ Row.Shape_error
+             ( [%string
+                 "%{where}: the components of the concatenated axis %{concat_text} are not \
+                  determined -- only their sum is. Size all but one of them: capture the component \
+                  (the spec's trailing label list) and Shape.set_dim it, or write its size as an \
+                  integer component (e.g. 2^o^1 => o)"],
+               [ Row.Dim_mismatch [ c ] ] )
+    | None ->
+        raise
+        @@ Row.Shape_error
+             ( where ^ ": constraints left unsolved: "
+               ^ Sexp.to_string_hum ([%sexp_of: Row.constraint_ list] unsolved),
+               [] )
+
+(** The origin operation of the size-only constraints [bind_delayed_vars_to_envs] emits for
+    projection derivation; see there. *)
+let projection_sizing_operation = "set_dim (projection-local sizing)"
+
+let is_projection_sizing (c : Row.constraint_) =
+  match c with
+  | Dim_eq { origin; _ } ->
+      List.exists origin ~f:(fun (o : Row.constraint_origin) ->
+          Option.equal String.equal o.operation (Some projection_sizing_operation))
+  | _ -> false
+
 (** Shared helper: bind each [delayed_var_ref] to the dim/row variable resolved for its label in
     [dim_var_env]/[row_var_env]. Returns the constraints the binding implies: equality with a value
     already solved for the reference, and a tie to the variable another operation bound the
@@ -719,7 +776,14 @@ let add_var_used_in_pointwise row =
     arithmetic). Across a closure the reference carries its value in [solved_dim]/[solved_sym], a
     row's as its product: [var] then names a variable of the reset environment (or a
     projection-local one, rebound by [derive_projections]), free in the open work, so the tie to it
-    constrains nothing. Projection derivation emits none of these constraints. *)
+    constrains nothing.
+
+    Projection derivation emits no tie and no row constraint, but it does emit a dim binding's
+    solved value, tagged {!projection_sizing_operation}: the closed shapes carry every axis's extent
+    except the split of a concatenated axis into components, so a middle extraction ([p^o^q => o])
+    could not re-solve without it (gh-ocannl-1656). [derive_projections] gives these constraints to
+    its projection-local solve only, never to [Row.get_proj_equations] -- a size equates no index
+    (and a dimension-1 value there would pin the axis to [Fixed_idx 0]). *)
 let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~error_shapes
     dim_refs =
   (* Every refusal before any binding (gh-ocannl-1655): binding touches the reference, which would
@@ -795,13 +859,14 @@ let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~
       match Hashtbl.find dim_var_env label with
       | Some var ->
           Delayed_ref.set_var delayed_ref (`Dim var);
+          let solved_origin =
+            origin (if for_projections then projection_sizing_operation else "set_dim")
+          in
           let solved =
             match (delayed_ref.var_ref.solved_sym, delayed_ref.var_ref.solved_dim) with
-            | _ when for_projections -> []
             | Some sym, _ ->
                 [
-                  Row.Dim_eq
-                    { d1 = Row.Var var; d2 = Row.get_sym_dim sym; origin = origin "set_dim" };
+                  Row.Dim_eq { d1 = Row.Var var; d2 = Row.get_sym_dim sym; origin = solved_origin };
                 ]
             | None, Some solved_dim ->
                 [
@@ -809,7 +874,7 @@ let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~
                     {
                       d1 = Row.Var var;
                       d2 = Row.get_default_dim ~d:solved_dim ();
-                      origin = origin "set_dim";
+                      origin = solved_origin;
                     };
                 ]
             | None, None -> []
@@ -885,8 +950,8 @@ let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~
     map) and runs before any elaboration. Operand-side padded windows, unpadded ([<+]) and
     stride-only result axes are unaffected; the backward of an operand-side padded window reuses the
     forward's projections and never comes here with a reversed spec. The message gives the two-step
-    recipe (gh-ocannl-1619): the full transposed convolution, then a crop by an operand-side valid
-    window over a one-hot kernel, executed against PyTorch's [ConvTranspose1d] semantics in
+    recipe (gh-ocannl-1619): the full transposed convolution, then a crop by a slice of a
+    concatenated axis (gh-ocannl-1656), executed against PyTorch's [ConvTranspose1d] semantics in
     [test/einsum/result_side_affine_forms.ml]. *)
 let refuse_result_side_padded_window ~spec ~(error_shapes : t list) (ls_lhs : parsed_axis_labels) =
   Map.iter ls_lhs.labels ~f:(function
@@ -901,14 +966,14 @@ let refuse_result_side_padded_window ~spec ~(error_shapes : t list) (ls_lhs : pa
                   full transposed convolution, with the result-side window unpadded (<+; its \
                   result extent is stride*(n-1) + the dilated kernel extent for an operand extent \
                   n), then a crop of `padding` cells at its start and `padding - output_padding` \
-                  at its end (PyTorch's ConvTranspose arguments), written as an operand-side valid \
-                  window over a one-hot kernel: \"s, o<+c; c => s, o\" with c of extent 2*padding \
-                  - output_padding + 1 holding its 1 at position `padding`; when output_padding > \
-                  padding, crop only the start and append the output_padding - padding extra zero \
-                  cells by concatenation (if the full extent is at most padding, the result is all \
-                  zeros; see docs/syntax_extensions.md). With stride 1, dilation 1 and an odd \
-                  kernel size, the padded window on an operand with the kernel reversed (e.g. \"s, \
-                  o=+k; k => s, o\") is the same map in one step."],
+                  at its end (PyTorch's ConvTranspose arguments), written as a slice of a \
+                  concatenated axis: \"s, p^o^q => s, o\" with the components p = padding and q = \
+                  padding - output_padding captured and set (Shape.set_dim), or written as integer \
+                  components (\"s, 2^o^1 => s, o\"); when output_padding > padding, slice only the \
+                  start and pad the end with the output_padding - padding extra zero cells by a \
+                  replacement (\"s, a => s, a^r\"); see docs/syntax_extensions.md. With stride 1, \
+                  dilation 1 and an odd kernel size, the padded window on an operand with the \
+                  kernel reversed (e.g. \"s, o=+k; k => s, o\") is the same map in one step."],
                [ Shape_mismatch error_shapes ] )
     | Label _ | Fixed_index _ | Affine_spec _ | Concat_spec _ -> ())
 
@@ -2146,7 +2211,7 @@ let product_space_shape ~(shape : t) ~(logic : logic) : t =
       | Affine_spec { over_label; conv; _ } ->
           `Lbl over_label
           :: (match conv with Some { kernel_label; _ } -> [ `Lbl kernel_label ] | None -> [])
-      | Concat_spec ls -> [ `Cnc ls ]
+      | Concat_spec cs -> [ `Cnc cs ]
     in
     let row_items beg_specs bcast specs =
       List.concat_map beg_specs ~f:axis_items
@@ -2161,7 +2226,11 @@ let product_space_shape ~(shape : t) ~(logic : logic) : t =
   let lhs_labels =
     Set.of_list
       (module String)
-      (List.concat_map lhs_items ~f:(function `Lbl l -> [ l ] | `Cnc ls -> ls | `Rv _ -> []))
+      (List.concat_map lhs_items ~f:(function
+        | `Lbl l -> [ l ]
+        | `Cnc cs ->
+            List.filter_map cs ~f:(function Concat_label l -> Some l | Concat_size _ -> None)
+        | `Rv _ -> []))
   in
   let lhs_rvars =
     Set.of_list
@@ -2181,15 +2250,30 @@ let product_space_shape ~(shape : t) ~(logic : logic) : t =
               else (
                 seen_labels := Set.add !seen_labels l;
                 [ `Dim (lookup_var l) ])
-          | `Cnc ls ->
-              let is_known l = Set.mem lhs_labels l || Set.mem !seen_labels l in
-              if List.for_all ls ~f:is_known then []
-              else if List.exists ls ~f:is_known then
+          | `Cnc cs ->
+              (* A sized component ([3^o]) is named by no other slot, so it counts as unknown: [3^o
+                 => o] is an extraction, which has no product-space shape here, like [p^o => o]. *)
+              let is_known = function
+                | Concat_label l -> Set.mem lhs_labels l || Set.mem !seen_labels l
+                | Concat_size _ -> false
+              in
+              if List.for_all cs ~f:is_known then []
+              else if List.exists cs ~f:is_known then
                 cannot
-                  ("a concatenation axis is partially reduced over: " ^ String.concat ~sep:"^" ls)
+                  ("a concatenation axis is partially reduced over: "
+                  ^ String.concat ~sep:"^" (List.map cs ~f:concat_component_text))
               else (
-                seen_labels := List.fold ls ~init:!seen_labels ~f:Set.add;
-                [ `Dim (Row.Concat (List.map ls ~f:lookup_var)) ])
+                seen_labels :=
+                  List.fold cs ~init:!seen_labels ~f:(fun acc -> function
+                    | Concat_label l -> Set.add acc l
+                    | Concat_size _ -> acc);
+                [
+                  `Dim
+                    (Row.Concat
+                       (List.map cs ~f:(function
+                         | Concat_label l -> lookup_var l
+                         | Concat_size n -> Row.get_default_dim ~d:n ())));
+                ])
           | `Rv name ->
               if Set.mem lhs_rvars name || Set.mem !seen_rvars name then []
               else (
@@ -2926,7 +3010,7 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage5 unsolved local_env in
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage6 unsolved local_env in
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage7 unsolved local_env in
-  assert (List.is_empty unsolved);
+  refuse_unsolved ~where:"derive_projections" unsolved;
   let local_env = Row.populate_dim_proj_in_solved local_env in
   let rhs, skip_deriving =
     match update_step.logic with
@@ -2951,7 +3035,9 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
   (* Important: ineqs must not be substituted / solved before getting proj_equations, because
      get_inequalities provides indexing information that is lost after substitution. *)
   let proj_eqs : Row.proj_equation list =
-    Row.get_proj_equations (terminal_rows_for_inputs @ ineqs) proj_axis_env local_env
+    Row.get_proj_equations
+      (terminal_rows_for_inputs @ List.filter ineqs ~f:(fun c -> not (is_projection_sizing c)))
+      proj_axis_env local_env
   in
   (* resolved_padding is passed for verification only - to check that operation padding doesn't
      exceed already-locked padding. It won't be used to set padding on shapes (get_dim_padding only
@@ -3394,7 +3480,7 @@ let%debug4_sexp finish_inference_body (() : unit) : unit =
   let unsolved, env = Row.solve_inequalities ~stage:Stage5 unsolved env in
   let unsolved, env = Row.solve_inequalities ~stage:Stage6 unsolved env in
   let unsolved, env = Row.solve_inequalities ~stage:Stage7 unsolved env in
-  assert (List.is_empty unsolved);
+  refuse_unsolved ~where:"finish_inference" unsolved;
   let _active_update_steps : update_step list = !active_update_steps in
   List.iter ~f:(apply_env_step env) !active_update_steps;
   let _applied_update_steps : update_step list = !active_update_steps in
@@ -3616,15 +3702,8 @@ let shape_spec_to_dims_bio ~spec ~sh_id labels =
         Var (Hashtbl.find_or_add dim_var_env name ~default:(fun () -> Row.get_var ~name ()))
     | Fixed_index d -> Row.get_default_dim ~d ()
     | Affine_spec _ as axis_spec -> affine_dim_of_spec ~spec ~dim_var_env axis_spec
-    | Concat_spec labels ->
-        (* Convert each label in the concatenation to a dimension and wrap in Concat *)
-        let dims =
-          List.map labels ~f:(fun label ->
-              Row.Var
-                (Hashtbl.find_or_add dim_var_env label ~default:(fun () ->
-                     Row.get_var ~name:label ())))
-        in
-        Row.Concat dims
+    | Concat_spec components ->
+        Row.Concat (List.map components ~f:(concat_component_dim ~spec ~dim_var_env))
   in
   let row_var_env = Hashtbl.create (module String) in
   let result = axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env ~f labels in

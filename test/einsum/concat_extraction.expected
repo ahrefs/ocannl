@@ -1,0 +1,111 @@
+prefix dropped, p^o => o (++): the result has the expected dims: true
+prefix dropped, p^o => o (++): the forward is the operand's segment, every other result cell zero: true
+prefix dropped, p^o => o (++): the operand's gradient is the segment's weights, zero elsewhere: true
+prefix dropped, p^o => o (++^): the result has the expected dims: true
+prefix dropped, p^o => o (++^): the forward is the operand's segment, every other result cell zero: true
+prefix dropped, p^o => o (++^): the operand's gradient is the segment's weights, zero elsewhere: true
+suffix dropped, o^q => o (++): the result has the expected dims: true
+suffix dropped, o^q => o (++): the forward is the operand's segment, every other result cell zero: true
+suffix dropped, o^q => o (++): the operand's gradient is the segment's weights, zero elsewhere: true
+suffix dropped, o^q => o (++^): the result has the expected dims: true
+suffix dropped, o^q => o (++^): the forward is the operand's segment, every other result cell zero: true
+suffix dropped, o^q => o (++^): the operand's gradient is the segment's weights, zero elsewhere: true
+middle, p^o^q => o, unequal margins (++): the result has the expected dims: true
+middle, p^o^q => o, unequal margins (++): the forward is the operand's segment, every other result cell zero: true
+middle, p^o^q => o, unequal margins (++): the operand's gradient is the segment's weights, zero elsewhere: true
+middle, p^o^q => o, unequal margins (++^): the result has the expected dims: true
+middle, p^o^q => o, unequal margins (++^): the forward is the operand's segment, every other result cell zero: true
+middle, p^o^q => o, unequal margins (++^): the operand's gradient is the segment's weights, zero elsewhere: true
+middle, singleton selected segment (++): the result has the expected dims: true
+middle, singleton selected segment (++): the forward is the operand's segment, every other result cell zero: true
+middle, singleton selected segment (++): the operand's gradient is the segment's weights, zero elsewhere: true
+middle, singleton selected segment (++^): the result has the expected dims: true
+middle, singleton selected segment (++^): the forward is the operand's segment, every other result cell zero: true
+middle, singleton selected segment (++^): the operand's gradient is the segment's weights, zero elsewhere: true
+middle, zero-width suffix (++): the result has the expected dims: true
+middle, zero-width suffix (++): the forward is the operand's segment, every other result cell zero: true
+middle, zero-width suffix (++): the operand's gradient is the segment's weights, zero elsewhere: true
+middle, zero-width suffix (++^): the result has the expected dims: true
+middle, zero-width suffix (++^): the forward is the operand's segment, every other result cell zero: true
+middle, zero-width suffix (++^): the operand's gradient is the segment's weights, zero elsewhere: true
+batched rows, s, p^o => s, o (++): the result has the expected dims: true
+batched rows, s, p^o => s, o (++): the forward is the operand's segment, every other result cell zero: true
+batched rows, s, p^o => s, o (++): the operand's gradient is the segment's weights, zero elsewhere: true
+batched rows, s, p^o => s, o (++^): the result has the expected dims: true
+batched rows, s, p^o => s, o (++^): the forward is the operand's segment, every other result cell zero: true
+batched rows, s, p^o => s, o (++^): the operand's gradient is the segment's weights, zero elsewhere: true
+leading sliced axis, s -> p^o^q => s -> o (++): the result has the expected dims: true
+leading sliced axis, s -> p^o^q => s -> o (++): the forward is the operand's segment, every other result cell zero: true
+leading sliced axis, s -> p^o^q => s -> o (++): the operand's gradient is the segment's weights, zero elsewhere: true
+leading sliced axis, s -> p^o^q => s -> o (++^): the result has the expected dims: true
+leading sliced axis, s -> p^o^q => s -> o (++^): the forward is the operand's segment, every other result cell zero: true
+leading sliced axis, s -> p^o^q => s -> o (++^): the operand's gradient is the segment's weights, zero elsewhere: true
+integer prefix, 3^o => o (++): the result has the expected dims: true
+integer prefix, 3^o => o (++): the forward is the operand's segment, every other result cell zero: true
+integer prefix, 3^o => o (++): the operand's gradient is the segment's weights, zero elsewhere: true
+integer prefix, 3^o => o (++^): the result has the expected dims: true
+integer prefix, 3^o => o (++^): the forward is the operand's segment, every other result cell zero: true
+integer prefix, 3^o => o (++^): the operand's gradient is the segment's weights, zero elsewhere: true
+integer suffix, o^2 => o (++): the result has the expected dims: true
+integer suffix, o^2 => o (++): the forward is the operand's segment, every other result cell zero: true
+integer suffix, o^2 => o (++): the operand's gradient is the segment's weights, zero elsewhere: true
+integer suffix, o^2 => o (++^): the result has the expected dims: true
+integer suffix, o^2 => o (++^): the forward is the operand's segment, every other result cell zero: true
+integer suffix, o^2 => o (++^): the operand's gradient is the segment's weights, zero elsewhere: true
+integer middle, s, 1^o^2 => s, o (++): the result has the expected dims: true
+integer middle, s, 1^o^2 => s, o (++): the forward is the operand's segment, every other result cell zero: true
+integer middle, s, 1^o^2 => s, o (++): the operand's gradient is the segment's weights, zero elsewhere: true
+integer middle, s, 1^o^2 => s, o (++^): the result has the expected dims: true
+integer middle, s, 1^o^2 => s, o (++^): the forward is the operand's segment, every other result cell zero: true
+integer middle, s, 1^o^2 => s, o (++^): the operand's gradient is the segment's weights, zero elsewhere: true
+mixed, p^o^1 => o (++): the result has the expected dims: true
+mixed, p^o^1 => o (++): the forward is the operand's segment, every other result cell zero: true
+mixed, p^o^1 => o (++): the operand's gradient is the segment's weights, zero elsewhere: true
+mixed, p^o^1 => o (++^): the result has the expected dims: true
+mixed, p^o^1 => o (++^): the forward is the operand's segment, every other result cell zero: true
+mixed, p^o^1 => o (++^): the operand's gradient is the segment's weights, zero elsewhere: true
+replace prefix, a => a^b (++): the result has the expected dims: true
+replace prefix, a => a^b (++): the forward is the operand's segment, every other result cell zero: true
+replace prefix, a => a^b (++): the operand's gradient is the segment's weights, zero elsewhere: true
+replace prefix, a => a^b (++^): the result has the expected dims: true
+replace prefix, a => a^b (++^): the forward is the operand's segment, every other result cell zero: true
+replace prefix, a => a^b (++^): the operand's gradient is the segment's weights, zero elsewhere: true
+replace suffix, b => a^b (++): the result has the expected dims: true
+replace suffix, b => a^b (++): the forward is the operand's segment, every other result cell zero: true
+replace suffix, b => a^b (++): the operand's gradient is the segment's weights, zero elsewhere: true
+replace suffix, b => a^b (++^): the result has the expected dims: true
+replace suffix, b => a^b (++^): the forward is the operand's segment, every other result cell zero: true
+replace suffix, b => a^b (++^): the operand's gradient is the segment's weights, zero elsewhere: true
+replace middle, b => a^b^c (++): the result has the expected dims: true
+replace middle, b => a^b^c (++): the forward is the operand's segment, every other result cell zero: true
+replace middle, b => a^b^c (++): the operand's gradient is the segment's weights, zero elsewhere: true
+replace middle, b => a^b^c (++^): the result has the expected dims: true
+replace middle, b => a^b^c (++^): the forward is the operand's segment, every other result cell zero: true
+replace middle, b => a^b^c (++^): the operand's gradient is the segment's weights, zero elsewhere: true
+replace middle, singleton source, b => a^b^c (++): the result has the expected dims: true
+replace middle, singleton source, b => a^b^c (++): the forward is the operand's segment, every other result cell zero: true
+replace middle, singleton source, b => a^b^c (++): the operand's gradient is the segment's weights, zero elsewhere: true
+replace middle, singleton source, b => a^b^c (++^): the result has the expected dims: true
+replace middle, singleton source, b => a^b^c (++^): the forward is the operand's segment, every other result cell zero: true
+replace middle, singleton source, b => a^b^c (++^): the operand's gradient is the segment's weights, zero elsewhere: true
+integer padding, s, a => s, 2^a^1 (++): the result has the expected dims: true
+integer padding, s, a => s, 2^a^1 (++): the forward is the operand's segment, every other result cell zero: true
+integer padding, s, a => s, 2^a^1 (++): the operand's gradient is the segment's weights, zero elsewhere: true
+integer padding, s, a => s, 2^a^1 (++^): the result has the expected dims: true
+integer padding, s, a => s, 2^a^1 (++^): the forward is the operand's segment, every other result cell zero: true
+integer padding, s, a => s, 2^a^1 (++^): the operand's gradient is the segment's weights, zero elsewhere: true
+ppx literal, x ++ "2^o => o": the result has the expected dims: true
+ppx literal, x ++ "2^o => o": the forward is the operand's segment, every other result cell zero: true
+ppx literal, x ++ "2^o => o": the operand's gradient is the segment's weights, zero elsewhere: true
+slice inside a concatenation, 1^a; b => a^b: the forward is the first operand's tail, then the second operand: true
+slice inside a concatenation, 1^a; b => a^b: the first operand's gradient skips its dropped cell: true
+slice inside a concatenation, 1^a; b => a^b: the second operand's gradient is the suffix's weights: true
+%cd prefix, a => a^b: the segment holds the source, every other cell its prior value: true
+%cd suffix, b => a^b: the segment holds the source, every other cell its prior value: true
+%cd middle, b => 1^b^c: the segment holds the source, every other cell its prior value: true
+uncaptured prefix, p^o => o: refused with a shape error naming the fix: true
+uncaptured prefix through ++^, p^o => o: refused with a shape error naming the fix: true
+uncaptured replacement, a => a^b: refused with a shape error naming the fix: true
+uncaptured middle, p^o^q => o: refused with a shape error naming the fix: true
+margins wider than the operand, p^o => o with p = 6: refused with a shape error naming the fix: true
+empty integer component, 0^o => o: refused with a shape error naming the fix: true

@@ -17,7 +17,7 @@
    1, dilation 1, odd kernel size), and the unpadded result-side window ([<+]) is the full
    transposed convolution, extent included. A stride-only result axis still builds and runs. The
    message's two-step recipe for the strided or dilated case, the full transposed convolution then a
-   one-hot crop, is executed in [result_side_affine_forms] (gh-ocannl-1619). *)
+   slice, is executed in [result_side_affine_forms] (gh-ocannl-1619, gh-ocannl-1656). *)
 
 open Base
 open Ocannl

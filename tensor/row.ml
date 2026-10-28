@@ -2616,6 +2616,29 @@ let add_used_in_pointwise v =
     note_mutation ();
     Hash_set.add used_in_pointwise v)
 
+(* gh-ocannl-1656: dimension variables naming a component of a concatenated einsum axis. Closure
+   never guesses one to dimension 1: an unsized component is a real segment, not a broadcast, and a
+   guess silently picks which elements an extraction ([p^o => o]) or replacement ([a => a^b])
+   touches. A discardable component (a block spec's, guessed to 0) is exempt. *)
+let concat_component_vars = Hash_set.create (module Dim_var)
+
+let add_concat_component v =
+  if not (Hash_set.mem concat_component_vars v) then (
+    note_mutation ();
+    Hash_set.add concat_component_vars v)
+
+let refuse_concat_component_guess env v =
+  if Hash_set.mem concat_component_vars v && not (Set.mem env.discardable_vars v) then
+    raise
+    @@ Shape_error
+         ( [%string
+             "the size of the concatenation component %{Dim_var.to_string v} is not determined, \
+              and closure does not guess one: it is a segment of the axis, not a broadcast. Size \
+              it: capture the component (the spec's trailing label list) and Shape.set_dim it, \
+              write its size as an integer component (e.g. 2^o => o), or pass the operation's \
+              result dims explicitly"],
+           [ Dim_mismatch [ Var v ] ] )
+
 (* gh-ocannl-544: row variables marked here are resolved by their use sites — at the final stages
    they may close to the GLB of their use sites' rows, acquiring axes their own arguments do not
    have. Unmarked (operation-result) variables close to an empty remainder instead: a use site must
@@ -4001,9 +4024,10 @@ let%debug5_sexp rec close_dim_terminal ~(stage : stage) ~is_param origin env (di
             raise
             @@ Shape_error
                  ("You forgot to specify the hidden dimension(s) 1", [ Dim_mismatch [ dim ] ])
-          else
+          else (
+            refuse_concat_component_guess env v;
             let guess_d = if Set.mem env.discardable_vars v then 0 else 1 in
-            [ Dim_eq { d1 = dim; d2 = get_bcast_dim ~d:guess_d ~proj_id:53 (); origin } ]
+            [ Dim_eq { d1 = dim; d2 = get_bcast_dim ~d:guess_d ~proj_id:53 (); origin } ])
       | _ when not (is_stage6_up stage) -> [ Terminal_dim (is_param, dim, origin) ]
       | _ -> [])
   | Affine _ ->
@@ -4396,6 +4420,7 @@ let%track5_sexp close_row_terminal ~(stage : stage) ~is_param origin env
 
 let%debug5_sexp eliminate_dim_entry stage origin env v ~glb constr =
   let guess_dim () =
+    refuse_concat_component_guess env v;
     if Set.mem env.discardable_vars v then get_default_dim ~d:0 ~proj_id:56 ()
     else get_bcast_dim ~d:1 ~proj_id:59 ()
   in
@@ -4474,6 +4499,7 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env
     | Concat dims -> List.concat_map dims ~f:finalize_dim_bounds
     | Var v -> (
         let guess_dim () =
+          refuse_concat_component_guess env v;
           if Set.mem env.discardable_vars v then get_default_dim ~d:0 ~proj_id:61 ()
           else get_bcast_dim ~d:1 ~proj_id:62 ()
         in
@@ -5393,6 +5419,80 @@ let%debug4_sexp solve_proj_equations ?(clamp_padded = false) (eqs : proj_equatio
       | Some proj -> loop @@ Iterated proj);
   (* Any variables added during the above iteration have no valid projection chain *)
   List.iter !iterated_vars ~f:no_proj_assigned;
+  let repr_of p = fst @@ Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0 in
+  (* gh-ocannl-1656: a concatenated axis exactly one of whose components another access names is an
+     extraction ([p^o^q => o]: the result names [o]) or a replacement ([b => a^b^c]: the operand
+     names [b]). Its index is a SHIFT, not a [Concat]: the named component's index plus the extents
+     of the components before it ([s_o + p]). The unnamed components are iterated by nothing and get
+     no iterator -- as [Concat] segments they lowered to loops whose every block was empty, and a
+     width-1 named component, indexed at [Fixed_idx 0] like any dimension-1 axis, then selected no
+     segment at all, so every segment read into (wrote from) the one cell. A concatenation proper
+     ([a; b => a^b]: every component named) keeps its [Concat] index. *)
+  let named_reprs =
+    let rec named depth = function
+      | Proj (pid, _) -> [ pid ]
+      | Conv_input { over; conv; _ } -> (
+          named depth over @ match conv with Some { kernel; _ } -> named depth kernel | None -> [])
+      | Var v when depth < 8 -> (
+          match Hashtbl.find v_env v with Some p -> named (depth + 1) p | None -> [])
+      | Var _ | Solved _ | Concat _ -> []
+    in
+    let outside =
+      List.concat_map eqs ~f:(function
+        | Proj_eq (p1, p2) -> named 0 p1 @ named 0 p2
+        | Iterated p -> named 0 p)
+      |> List.map ~f:repr_of
+    in
+    (* A component another concatenated axis also has is named by that access too: in [1^a; b =>
+       a^b] the operand's [1^a] is a slice, and [a] is what the result's [a^b] concatenates. One
+       axis can reach several equations, so the concatenations are told apart by their components,
+       not counted per equation. *)
+    let concats =
+      List.concat_map eqs ~f:(function Proj_eq (p1, p2) -> [ p1; p2 ] | Iterated p -> [ p ])
+      |> List.filter_map ~f:(function
+        | Concat proj_dims ->
+            Some
+              (List.map proj_dims ~f:(fun (pid, _) -> repr_of pid)
+              |> List.sort ~compare:Proj_id.compare)
+        | _ -> None)
+      |> List.dedup_and_sort ~compare:[%compare: Proj_id.t list]
+    in
+    let shared =
+      List.concat_map concats ~f:(List.dedup_and_sort ~compare:Proj_id.compare)
+      |> List.sort_and_group ~compare:Proj_id.compare
+      |> List.filter_map ~f:(function p :: _ :: _ -> Some p | _ -> None)
+    in
+    Set.of_list (module Proj_id) (outside @ shared)
+  in
+  let all_concat_targets = !p_concat_targets in
+  let shift_targets, concat_targets =
+    List.partition_map all_concat_targets ~f:(fun ((target_pid, proj_dims) as target) ->
+        match List.filter proj_dims ~f:(fun (pid, _) -> Set.mem named_reprs (repr_of pid)) with
+        | [ (named_pid, _) ] when List.length proj_dims > 1 ->
+            let offset, _ =
+              List.fold proj_dims ~init:(0, false) ~f:(fun (offset, passed) (pid, { d; _ }) ->
+                  if passed || Proj_id.equal pid named_pid then (offset, true)
+                  else (offset + d, false))
+            in
+            First (target_pid, named_pid, offset, proj_dims)
+        | _ -> Second target)
+  in
+  p_concat_targets := concat_targets;
+  let shifted_components =
+    List.concat_map shift_targets ~f:(fun (_, _, _, proj_dims) -> List.map proj_dims ~f:fst)
+    |> Set.of_list (module Proj_id)
+  in
+  let kept_components =
+    List.concat_map concat_targets ~f:(fun (_, proj_dims) -> List.map proj_dims ~f:fst)
+    |> Set.of_list (module Proj_id)
+  in
+  p_concat_components :=
+    Set.union
+      (Set.diff !p_concat_components shifted_components)
+      (Set.inter !p_concat_components kept_components);
+  p_dims :=
+    List.filter !p_dims ~f:(fun (p, _) ->
+        Set.mem named_reprs (repr_of p) || not (Set.mem shifted_components p));
   let projs = ref @@ Map.empty (module Proj_id) in
   let concat_reprs =
     Set.of_list
@@ -5423,11 +5523,24 @@ let%debug4_sexp solve_proj_equations ?(clamp_padded = false) (eqs : proj_equatio
         let repr, _ = Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0 in
         Some repr)
   in
+  (* Likewise, a concatenated axis gets its index -- [Concat] over its components' iterators -- from
+     the deferred concat-target pass below, never an iterator of its own (gh-ocannl-1656). The
+     target is the result axis for a concatenation ([a; b => a^b]) but an OPERAND axis for an
+     extraction ([a^b => a]), and every operand axis is [Iterated]: without this exclusion it got a
+     fresh product iterator first and the deferred pass refused the conflict. Representatives are
+     taken after all unions; a target that is itself a concat component keeps its iterator. *)
+  let concat_target_reprs =
+    Set.of_list (module Proj_id)
+    @@ List.filter_map all_concat_targets ~f:(fun (p, _) ->
+        let repr, _ = Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0 in
+        if Set.mem concat_reprs repr then None else Some repr)
+  in
   List.iter !p_dims ~f:(fun (p, d) ->
       let repr, _ = Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0 in
       (* Include d=1 if it's a concat component - they need iterators for proper Concat indexing *)
       let needs_iterator = Idx.iterated d || (d = 1 && Set.mem !p_concat_components p) in
-      if needs_iterator && (not @@ Map.mem !projs repr) then
+      if needs_iterator && (not @@ Map.mem !projs repr) && not (Set.mem concat_target_reprs repr)
+      then
         Utils.mref_add product_dim ~key:repr ~data:d ~or_:(fun d2 ->
             (* TODO: consider updating padding *)
             if d <> d2 then
@@ -5556,6 +5669,31 @@ let%debug4_sexp solve_proj_equations ?(clamp_padded = false) (eqs : proj_equatio
                  ( [%string
                      "Concat target projection %{target_pid#Proj_id} conflicts with existing index"],
                    [ Index_mismatch [ existing_idx; expected_idx ] ] ));
+  List.iter shift_targets ~f:(fun (target_pid, named_pid, offset, _) ->
+      let expected_idx =
+        match Map.find !projs (repr_of named_pid) with
+        | Some (Idx.Iterator s) -> Idx.affine ~symbols:[ (1, s) ] ~offset
+        | Some (Idx.Fixed_idx k) -> Idx.Fixed_idx (k + offset)
+        | Some (Idx.Affine { symbols; offset = o }) -> Idx.affine ~symbols ~offset:(o + offset)
+        | None -> Idx.Fixed_idx offset (* a dimension-1 (or empty) named component *)
+        | Some idx ->
+            raise
+            @@ Shape_error
+                 ( [%string
+                     "Concat target projection %{target_pid#Proj_id}: the named component's index \
+                      cannot be shifted"],
+                   [ Index_mismatch [ idx ] ] )
+      in
+      let target_repr = repr_of target_pid in
+      match Map.find !projs target_repr with
+      | None -> projs := Map.set !projs ~key:target_repr ~data:expected_idx
+      | Some existing_idx when Idx.equal_axis_index existing_idx expected_idx -> ()
+      | Some existing_idx ->
+          raise
+          @@ Shape_error
+               ( [%string
+                   "Concat target projection %{target_pid#Proj_id} conflicts with existing index"],
+                 [ Index_mismatch [ existing_idx; expected_idx ] ] ));
 
   {
     v_env;

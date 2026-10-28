@@ -49,4 +49,12 @@ Testing whitespace between axes in multichar mode:
   '..batch shard.., x; y => x^y' -> Parse error at line 1, column 13 in spec: ..batch shard.., x; y => x^y
   's a; s b => s a b' -> 2 RHSes, result output axes: 3
 
+Testing what axes read as:
+  'is*a+d*bc;b=>iac' -> ((Affine_spec(stride is)(over_label a)(conv(((dilation d)(kernel_label bc)(use_padding Unspecified))))(stride_offset 0))); ((Label b)) => ((Label iac))
+  'i, s*a+d*b, c; b => i, a, c' -> ((Label i)(Affine_spec(stride s)(over_label a)(conv(((dilation d)(kernel_label b)(use_padding Unspecified))))(stride_offset 0))(Label c)); ((Label b)) => ((Label i)(Label a)(Label c))
+  'sa; sb => sa^b' -> ((Label sa)); ((Label sb)) => ((Concat_spec((Concat_label sa)(Concat_label b))))
+  '3^a^5 => a' -> ((Concat_spec((Concat_size 3)(Concat_label a)(Concat_size 5)))) => ((Label a))
+  'a => a^3' -> ((Label a)) => ((Concat_spec((Concat_label a)(Concat_size 3))))
+  'p^o^1 => o' -> ((Concat_spec((Concat_label p)(Concat_label o)(Concat_size 1)))) => ((Label o))
+
 All tests passed!

@@ -272,6 +272,10 @@ val add_used_in_pointwise : row_var -> unit
 (** Mark a row variable as used in a pointwise shape update. Meant specifically for input rows, to
     indicate that the variable can be guessed empty when it ends up in a parameter. *)
 
+val add_concat_component : dim_var -> unit
+(** Mark a dimension variable as naming a component of a concatenated einsum axis: closure refuses
+    to guess it to dimension 1 (gh-ocannl-1656). *)
+
 val add_resolve_at_use : row_var -> unit
 (** Mark a row variable as resolved by its use sites: at the final solver stages it may close to the
     GLB of its use sites' rows, acquiring axes its own arguments do not have. Unmarked variables

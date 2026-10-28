@@ -261,11 +261,14 @@ let substitute_identifiers_in_einsum_spec ~loc str_input =
               | [] -> ([], []))
         in
         base_segments @ marker_segments @ offset_segments @ window_segments
-    | Concat_spec labels ->
-        (* Join labels with " ^ " separator *)
-        List.concat_mapi labels ~f:(fun i label ->
+    | Concat_spec components ->
+        (* Join components with " ^ " separator *)
+        List.concat_mapi components ~f:(fun i component ->
             let prefix = if i > 0 then [ estring ~loc " ^ " ] else [] in
-            prefix @ [ estring ~loc label ])
+            let text =
+              match component with Concat_label l -> l | Concat_size n -> Int.to_string n
+            in
+            prefix @ [ estring ~loc text ])
   in
   (* Convert a list of axis_spec to segments with comma separators *)
   let axes_to_segments axes =
