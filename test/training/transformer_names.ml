@@ -170,11 +170,13 @@ let () =
     (snd @@ Asgns.collect_nodes_guess_output train_comp.Asgns.asgns)
     ~f:Train.set_materialized;
   (* Tune the step schedule empirically. [rounds:0] keeps only the preset seed candidates, which all
-     preserve reduction order — the trained values are schedule-invariant, so this file's expected
-     output stays deterministic no matter which seed wins. [timing_ctx] gives the tuner a scratch
-     lineage (with its own freshly initialized parameter buffers) to time candidates against, so the
-     timing runs cannot perturb the real training state (a step timed on all-zero data inputs
-     poisons parameters with inf/NaN through log 0). *)
+     preserve reduction order and, since gh-ocannl-1682 on gcc too, per-step rounding (the packed
+     seeds' explicit FMA against the serial loop's contracted one; [schedule_pad] pins it) — the
+     trained values are schedule-invariant, so this file's expected output stays deterministic no
+     matter which seed wins. [timing_ctx] gives the tuner a scratch lineage (with its own freshly
+     initialized parameter buffers) to time candidates against, so the timing runs cannot perturb
+     the real training state (a step timed on all-zero data inputs poisons parameters with inf/NaN
+     through log 0). *)
   let scratch = Train.init_params (Context.auto ()) bindings batch_loss in
   let ctx, sgd_step = Autotune.tune ~rounds:0 ~timing_ctx:scratch ctx train_comp bindings in
 

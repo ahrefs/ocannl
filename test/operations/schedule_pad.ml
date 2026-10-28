@@ -335,6 +335,124 @@ let () =
     (Ir.C_syntax.equal_tensorization routine.Context.mma.Ir.C_syntax.tensorization
        Ir.C_syntax.Tensorized)
 
+(* === Every 16 x 16 CPU packed seed against the serial twin on NON-DYADIC operands, bitwise
+   (gh-ocannl-1682). The leg above runs dyadic operands, whose products and partial sums are exact
+   under any rounding, so it cannot tell one rounding per k step from two. Here every product and
+   partial sum rounds (steps of a tenth and of a third, cycled over prime moduli). The register tile
+   spells its update as an explicit FMA; the serial loop's [acc + a * b] is the C compiler's to
+   contract, and gcc's x86 tunings used to decline exactly this loop-carried chain while clang fused
+   it, so the seeds agreed with the serial loop on a Mac and missed it by an ulp on Linux
+   ([Cc_backend.fp_contract_flag] now turns that heuristic off). Under [cc_backend_fp_contract=off]
+   (or [on] with a gcc before 14), or on a target without an FMA, nothing contracts the serial loop
+   and the two differ by design, so the claim is skipped there: a bitwise claim there needs
+   [fp_contract=true] (docs/agent-notes/backend-precision-and-simd.md). Each seed's distance from
+   the serial loop, and the compile line, go to stderr. === *)
+let () =
+  let mav =
+    Array.init (m_ext * k_ext)
+      ~f:(Ll_test.cycle_flat ~dims:[| m_ext; k_ext |] ~modulus:97 ~offset:(-1.3) ~stride:0.1)
+  in
+  let mbv =
+    Array.init (k_ext * n_ext)
+      ~f:(Ll_test.cycle_flat ~dims:[| k_ext; n_ext |] ~modulus:89 ~offset:(-0.7) ~stride:(1. /. 3.))
+  in
+  let mk name =
+    let ma =
+      TDSL.ndarray mav ~label:[ name ^ "a" ] ~input_dims:[ k_ext ] ~output_dims:[ m_ext ] ()
+    in
+    let mb =
+      TDSL.ndarray mbv ~label:[ name ^ "b" ] ~input_dims:[ n_ext ] ~output_dims:[ k_ext ] ()
+    in
+    let%op nc = ma * mb in
+    nc
+  in
+  let cpu_limits =
+    {
+      Ir.Backend_intf.no_hardware_limits with
+      simd_vector = { Ir.Vector_file.bytes = 32; registers = 16 };
+    }
+  in
+  let seeds = ref [] in
+  let want =
+    let nc0 = mk "nd0" in
+    let ctx, routine =
+      Context.compile
+        ~lowered_transform:(fun opt ->
+          seeds :=
+            List.filter
+              (Autotune.sketch_seed_params ~is_gpu:false ~is_cpu:true ~limits:cpu_limits opt)
+              ~f:(fun p ->
+                p.Autotune.sk_mma && (not p.Autotune.sk_gpu) && p.Autotune.sk_bm = bm
+                && p.Autotune.sk_bk = bk && (not p.Autotune.sk_epilogue)
+                && Option.is_none p.Autotune.sk_tile);
+          [ opt ])
+        (Context.auto ())
+        (named "nondyadic_serial" (Train.forward nc0))
+        Ir.Indexing.Empty
+    in
+    let ctx = Context.run ctx routine in
+    nonzero "nondyadic_serial" (Context.get_values ctx nc0.Tensor.value)
+  in
+  (* The bitwise claim is about what the compiler may contract, so it holds only where the serial
+     loop CAN be contracted: the kernel compile leaves contraction at the compiler's default or asks
+     for [fast] -- not [off], and not [on], which gcc before 14 treats as [off] in C -- and the
+     target has a fused multiply-add (the ISA the cc backend probed under its kernel flags).
+     Elsewhere the serial loop rounds twice by construction while the tile's FMA rounds once, as the
+     comment above says; a portable bitwise claim needs [fp_contract=true], where both carry the
+     IR's own [FMA]. *)
+  let kernel_flags = Context.Cc_backend.kernel_compiler_flags () in
+  let isa =
+    Option.value ~default:"none-probed"
+      (List.Assoc.find (Context.Cc_backend.host_capabilities ()) ~equal:String.equal "isa")
+  in
+  let contractible =
+    (not (String.is_substring kernel_flags ~substring:"-ffp-contract=off"))
+    && (not (String.is_substring kernel_flags ~substring:"-ffp-contract=on"))
+    && List.exists [ "fma"; "avx512f"; "neon" ] ~f:(fun sub ->
+        String.is_substring isa ~substring:sub)
+  in
+  if on_cpu then
+    Stdio.eprintf "kernel compile: %s %s, isa %s (not part of the golden)\n%!"
+      (Context.Cc_backend.compiler_command ())
+      kernel_flags isa;
+  let runs =
+    if not on_cpu then []
+    else
+      List.mapi !seeds ~f:(fun i (p : Autotune.sketch_params) ->
+          let nc = mk (Printf.sprintf "nd%d" (i + 1)) in
+          let ctx, routine =
+            Context.compile
+              ~lowered_transform:(fun o ->
+                [ Sched.apply (Autotune.sketch_schedule ~accum_prec ~p o) o ])
+              (Context.auto ())
+              (named (Printf.sprintf "nondyadic_seed_%d" i) (Train.forward nc))
+              Ir.Indexing.Empty
+          in
+          let tensorized =
+            Ir.C_syntax.equal_tensorization routine.Context.mma.Ir.C_syntax.tensorization
+              Ir.C_syntax.Tensorized
+          in
+          let ctx = Context.run ctx routine in
+          let got = Context.get_values ctx nc.Tensor.value in
+          let max_diff =
+            Array.foldi got ~init:0. ~f:(fun i acc g -> Float.max acc (Float.abs (g -. want.(i))))
+          in
+          Stdio.eprintf
+            "non-dyadic packed seed %d hoist=%b grid=%b pack_rest=%b: max |packed - serial| = %h \
+             (not part of the golden)\n\
+             %!"
+            i p.sk_hoist p.sk_grid p.sk_pack_rest max_diff;
+          (tensorized, got))
+  in
+  gated_all ~min:2 ~when_:on_cpu ~on:backend_name
+    "every 16x16 packed seed's routine is labeled tensorized" runs ~f:fst;
+  gated_all
+    ~aggregation:(if on_cpu then `Environment else `Backend)
+    ~min:2 ~when_:(on_cpu && contractible)
+    ~on:(if on_cpu then "a kernel compile that cannot contract the serial loop" else backend_name)
+    "every 16x16 packed seed matches the serial twin bitwise on non-dyadic operands" runs
+    ~f:(fun (_, got) -> Array.equal Float.equal got want)
+
 (* === Negative pin: a pad guard over an in-place operand (no zero-fringe staged tile) must be
    rejected — the intrinsic path would read past the operand's extent. === *)
 let () =

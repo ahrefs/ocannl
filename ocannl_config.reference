@@ -1605,6 +1605,11 @@
 # fuse `a*b+c` into a single rounding differs across compilers and targets, which is why the
 # `reproducible` profile pins it off and the `approximate` profile pins it to "fast"; the results
 # change either way, so this is a deliberate numerics choice, not an optimization level.
+# Every value but "off" also passes `--param=avoid-fma-max-bits=0` where the compiler takes it (gcc;
+# probed once per machine): gcc's x86 tunings otherwise decline to contract a loop-carried
+# `acc + a*b` accumulation, so a serial reduction rounded twice per step where the register-tiled
+# kernels' explicit FMA rounds once, and a matmul's value depended on which schedule ran it
+# (gh-ocannl-1682). Clang has no such heuristic and takes nothing extra.
 # It is NOT a lever on the no-FMA-target cliff documented at cc_backend_arch_flags: contraction
 # decides whether an `a*b+c` the codegen wrote as such may become one rounding, while the calls in
 # question are already fused by construction, and on a target without the instruction they stay
