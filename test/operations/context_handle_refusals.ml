@@ -425,6 +425,31 @@ let () =
       p_all "chr_root_constants_release: releasing each fresh root's context holds live pools flat"
         rest ~f:(fun (_, n) -> n = first)
   | [] -> pf "chr_root_constants_release: the roots ran" false);
+  (* A link failing after its delta was allocated leaves no binder; the discard reclaims the root's
+     new constant pool too (review round 2). *)
+  let failed =
+    List.init 6 ~f:(fun k ->
+        let raised =
+          match
+            Ir.Resource_fault_injection.with_callback
+              (fun point ->
+                if Ir.Resource_fault_injection.equal_point point Link_after_delta then
+                  failwith "chr_rr injected link failure")
+              ~f:(fun () ->
+                link_shift ~ctx:(Context.auto ()) ~name:(Printf.sprintf "chr_rr_f%d" k) ~src:x
+                  ~dst:out ())
+          with
+          | _ -> false
+          | exception Failure msg -> String.is_substring msg ~substring:"chr_rr injected"
+        in
+        (raised, live ()))
+  in
+  p_all "chr_root_constants_release: every injected link failure fired" failed ~f:fst;
+  (match failed with
+  | (_, first) :: rest ->
+      p_all "chr_root_constants_release: failed links into fresh roots hold live pools flat" rest
+        ~f:(fun (_, n) -> n = first)
+  | [] -> pf "chr_root_constants_release: the failed links ran" false);
   let root = Context.auto () in
   let out2 = node "chr_rr_out2" in
   let c1, _ = link_shift ~ctx:root ~name:"chr_rr_s1" ~src:x ~dst:out () in

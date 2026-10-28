@@ -59,6 +59,8 @@ chr_root_constants: and a later write by the source leaves the copy as it was: t
 chr_root_constants: a write by another context of the same root is what it reads: true
 chr_root_constants_release: every fresh root runs from its own seed: true
 chr_root_constants_release: releasing each fresh root's context holds live pools flat: true
+chr_root_constants_release: every injected link failure fired: true
+chr_root_constants_release: failed links into fresh roots hold live pools flat: true
 chr_root_constants_release: a sibling still binding the root's constant keeps it: true
 chr_root_constants_release: once every binder is released, the next compile allocates afresh: true
 chr_shared_overwrite: the two roots read the same device-wide literal buffer: true

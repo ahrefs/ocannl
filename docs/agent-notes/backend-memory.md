@@ -202,8 +202,10 @@ files.
   `rooted_constant_owners` at the three places a unit is minted: `make_context`, `make_child`, an
   upload fork); the release of the last binder frees the pool and drops its cache entries, so
   fresh roots compiled and released one after another hold memory flat, as the device-wide cache
-  did by reuse. A unit nobody releases keeps its pools, as for working pools; a discarded link's
-  rooted pool stays cached at count 0 until a later binder's release or device teardown. A new
+  did by reuse. A unit nobody releases keeps its pools, as for working pools. A link that fails
+  after `allocate_delta` reclaims the delta's rooted pools no unit holds in `free_delta`, after the
+  owned pools (an evicted pool would read as owned and be freed twice), and a failure after its
+  `make_child` first gives the discarded child's holds back (`reclaim_rooted_constants`'s modes). A new
   place that mints a `finalized` flag must hold its rooted pools too, or a release frees a pool it
   binds. Guard: `context_handle_refusals` (`chr_root_constants`, `chr_root_constants_release`,
   `chr_shared_overwrite`, `chr_shared_writer`, `chr_shared_implicit`).

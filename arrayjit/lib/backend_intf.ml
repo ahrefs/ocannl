@@ -1368,27 +1368,44 @@ let hold_rooted_constants device pools =
               1 + Option.value n ~default:0)));
   pools
 
-(** Uncount a finalized release unit's [pools]. The pools no live unit binds any more are dropped
-    from the cache (so no later compile resolves them) and returned, for the caller to free. *)
-let release_rooted_constants device pools =
+(** Give back rooted constant [pools] (gh-ocannl-1654), under the device's lock, in one of three
+    ways; returns the pools the caller must now free, already dropped from the cache so no later
+    compile resolves them:
+    - [`Release]: a finalized release unit's holds. The pools no live unit binds any more.
+    - [`Unhold]: the holds of a unit discarded before anyone could finalize it (a link failing after
+      its [make_child]). Nothing: the cache is left as it is, for the delta's discard to reclaim.
+    - [`Unheld]: of the pools a discarded delta binds, those no live unit holds. A pool another unit
+      holds, such as a cache hit an earlier compile of the root allocated, stays. *)
+let reclaim_rooted_constants device pools ~mode =
+  let unhold () =
+    Set.filter pools ~f:(fun pool_id ->
+        match Hashtbl.find device.rooted_constant_owners pool_id with
+        | Some n when n > 1 ->
+            Hashtbl.set device.rooted_constant_owners ~key:pool_id ~data:(n - 1);
+            false
+        | Some _ ->
+            Hashtbl.remove device.rooted_constant_owners pool_id;
+            true
+        | None -> false)
+  in
+  let evict unowned =
+    if not (Set.is_empty unowned) then
+      Hashtbl.filteri_inplace device.constant_buffer_cache ~f:(fun ~key ~data:loc ->
+          match key with
+          | Constant_key.Rooted _ -> not (Set.mem unowned loc.pool_id)
+          | Constant_key.Shared _ -> true);
+    unowned
+  in
   Stdlib.Mutex.protect device.rooted_constant_mutex (fun () ->
-      let unowned =
-        Set.filter pools ~f:(fun pool_id ->
-            match Hashtbl.find device.rooted_constant_owners pool_id with
-            | Some n when n > 1 ->
-                Hashtbl.set device.rooted_constant_owners ~key:pool_id ~data:(n - 1);
-                false
-            | Some _ ->
-                Hashtbl.remove device.rooted_constant_owners pool_id;
-                true
-            | None -> false)
-      in
-      if not (Set.is_empty unowned) then
-        Hashtbl.filteri_inplace device.constant_buffer_cache ~f:(fun ~key ~data:loc ->
-            match key with
-            | Constant_key.Rooted _ -> not (Set.mem unowned loc.pool_id)
-            | Constant_key.Shared _ -> true);
-      unowned)
+      match mode with
+      | `Release -> evict (unhold ())
+      | `Unhold ->
+          ignore (unhold () : Set.M(Int).t);
+          Set.empty (module Int)
+      | `Unheld ->
+          evict
+            (Set.filter pools ~f:(fun pool_id ->
+                 not (Hashtbl.mem device.rooted_constant_owners pool_id))))
 
 (** Working pools in a context map, excluding compile ancestors and cached constant locations.
     Shared by ownership registration and cleanup so both use the same pool classification. *)
