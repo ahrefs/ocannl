@@ -142,6 +142,16 @@ let gateless_dirs =
         "its one runtest action runs python3 over the benchmark orchestrator's own unit tests, \
          which import no OCANNL executable -- there is no startup check in reach to gate, the same \
          reason `config_dep_completeness` exempts it from the ocannl_config dependency" ) );
+    ( "arrayjit/vendor_stubs/cudajit/dune",
+      ( None,
+        "its actions diff checked-in interface copies against the installed cudajit's, or echo a \
+         skip line where it is absent (gh-ocannl-1652): they spawn no program, so no startup check \
+         is in reach to gate" ) );
+    ( "arrayjit/vendor_stubs/hipjit/dune",
+      ( None,
+        "its actions diff checked-in interface copies against the installed hipjit's, or echo a \
+         skip line where it is absent (gh-ocannl-1652): they spawn no program, so no startup check \
+         is in reach to gate" ) );
   ]
 
 (* gh-ocannl-1280: the credential variables no stanza may declare. Dune writes the environment of

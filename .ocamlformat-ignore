@@ -2,3 +2,7 @@ test/ppx/test_ppx_op_expected.ml
 test/ppx/test_ppx_name_conflict_expected.ml
 test/ppx/test_compose_logic_err_expected.ml
 test/ppx/test_raw_accum_expected.ml
+arrayjit/vendor_stubs/cudajit/cuda.mli
+arrayjit/vendor_stubs/cudajit/nvrtc.mli
+arrayjit/vendor_stubs/hipjit/hip.mli
+arrayjit/vendor_stubs/hipjit/hiprtc.mli

@@ -2,6 +2,8 @@ Directories whose sources this scan reads:
   arrayjit/lib
   arrayjit/lib/gen_builtins
   arrayjit/test
+  arrayjit/vendor_stubs/cudajit/typecheck
+  arrayjit/vendor_stubs/hipjit/typecheck
   benchmarks/runners/ocannl
   bin
   lib
@@ -23,8 +25,10 @@ Per-module tracing gates, and the library whose preprocessor_deps declares each:
   OCANNL_LOG_LEVEL_BACKENDS      arrayjit/lib/dune, library context (arrayjit/lib/backends.ml)
   OCANNL_LOG_LEVEL_BACKEND_IMPL  arrayjit/lib/dune, library ir (arrayjit/lib/backend_impl.ml)
   OCANNL_LOG_LEVEL_CC_BACKEND    arrayjit/lib/dune, library context (arrayjit/lib/cc_backend.ml)
+  OCANNL_LOG_LEVEL_CUDA_BACKEND  arrayjit/vendor_stubs/cudajit/typecheck/dune, library cuda_backend_stub_check (arrayjit/vendor_stubs/cudajit/typecheck/cuda_backend.ml)
   OCANNL_LOG_LEVEL_CUDA_BACKEND  arrayjit/lib/dune, library cuda_backend (arrayjit/lib/cuda_backend.ml)
   OCANNL_LOG_LEVEL_C_SYNTAX      arrayjit/lib/dune, library ir (arrayjit/lib/c_syntax.ml)
+  OCANNL_LOG_LEVEL_HIP_BACKEND   arrayjit/vendor_stubs/hipjit/typecheck/dune, library hip_backend_stub_check (arrayjit/vendor_stubs/hipjit/typecheck/hip_backend.ml)
   OCANNL_LOG_LEVEL_HIP_BACKEND   arrayjit/lib/dune, library hip_backend (arrayjit/lib/hip_backend.ml)
   OCANNL_LOG_LEVEL_INDEXING      arrayjit/lib/dune, library ir (arrayjit/lib/indexing.ml)
   OCANNL_LOG_LEVEL_LOW_LEVEL     arrayjit/lib/dune, library ir (arrayjit/lib/low_level.ml)
@@ -329,6 +333,8 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/training/dune                       @train-transformer_names
   benchmarks/runners/ocannl/dune (bin-smoke, metal-codegen) -- no gate: its bin-smoke action runs metal_queue_probe, linking metal, ctypes and unix without an OCANNL configuration reader; universe makes the canary rerun, but cannot check spellings
   benchmarks/dune -- no gate: its one runtest action runs python3 over the benchmark orchestrator's own unit tests, which import no OCANNL executable -- there is no startup check in reach to gate, the same reason `config_dep_completeness` exempts it from the ocannl_config dependency
+  arrayjit/vendor_stubs/cudajit/dune -- no gate: its actions diff checked-in interface copies against the installed cudajit's, or echo a skip line where it is absent (gh-ocannl-1652): they spawn no program, so no startup check is in reach to gate
+  arrayjit/vendor_stubs/hipjit/dune -- no gate: its actions diff checked-in interface copies against the installed hipjit's, or echo a skip line where it is absent (gh-ocannl-1652): they spawn no program, so no startup check is in reach to gate
 
 Credential variables no stanza may declare (tools/credential-env.sh, gh-ocannl-1280):
   GH_TOKEN | GITHUB_TOKEN | GH_ENTERPRISE_TOKEN | CLAUDE_CODE_MESSAGING_TOKEN | *_TOKEN | *_API_KEY
@@ -343,6 +349,11 @@ will copy them from, and the tallies go to stderr (gh-ocannl-659, gh-ocannl-665)
   arrayjit/lib/dune: markers: none
   arrayjit/lib/gen_builtins/dune: nothing that runs a test executable
   arrayjit/test/dune: declares OCANNL_BACKEND; markers: cc, cuda, metal, none
+  arrayjit/vendor_stubs/cudajit/dune: nothing that runs a test executable
+  arrayjit/vendor_stubs/cudajit/typecheck/dune: nothing that runs a test executable
+  arrayjit/vendor_stubs/dune: nothing that runs a test executable
+  arrayjit/vendor_stubs/hipjit/dune: nothing that runs a test executable
+  arrayjit/vendor_stubs/hipjit/typecheck/dune: nothing that runs a test executable
   benchmarks/dune: markers: none
   benchmarks/runners/ocannl/dune: markers: cuda, metal, none
   bin/dune: markers: cc, none

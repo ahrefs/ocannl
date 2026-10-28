@@ -1,0 +1,57 @@
+; The `cudajit` stand-in; the arrangement is described in `arrayjit/vendor_stubs/dune`.
+
+(library
+ (name cudajit_stub)
+ (wrapped false)
+ (modules cuda nvrtc)
+ (modules_without_implementation cuda nvrtc)
+ (libraries ctypes integers sexplib0))
+
+; One rule per copied interface, each on the alias named after it, and both aggregated onto
+; `runtest` below. Where `cudajit` is absent there is nothing to compare against, and building an
+; empty alias is an error while silence would read as a pass, so the alias says SKIPPED instead.
+; `diff` compares within the build directory, so a rule copies each installed interface in first.
+
+(rule
+ (enabled_if %{lib-available:cudajit.cuda})
+ (action
+  (copy %{lib:cudajit.cuda:cuda.mli} cuda.mli.installed)))
+
+(rule
+ (alias runtest-cuda)
+ (enabled_if %{lib-available:cudajit.cuda})
+ (action
+  (diff cuda.mli cuda.mli.installed)))
+
+(rule
+ (alias runtest-cuda)
+ (enabled_if
+  (not %{lib-available:cudajit.cuda}))
+ (action
+  (echo
+   "cudajit stub agreement (cuda.mli): SKIPPED -- cudajit is not installed here; it runs on a CUDA box.\n")))
+
+(rule
+ (enabled_if %{lib-available:cudajit.nvrtc})
+ (action
+  (copy %{lib:cudajit.nvrtc:nvrtc.mli} nvrtc.mli.installed)))
+
+(rule
+ (alias runtest-nvrtc)
+ (enabled_if %{lib-available:cudajit.nvrtc})
+ (action
+  (diff nvrtc.mli nvrtc.mli.installed)))
+
+(rule
+ (alias runtest-nvrtc)
+ (enabled_if
+  (not %{lib-available:cudajit.nvrtc}))
+ (action
+  (echo
+   "cudajit stub agreement (nvrtc.mli): SKIPPED -- cudajit is not installed here; it runs on a CUDA box.\n")))
+
+(alias
+ (name runtest)
+ (deps
+  (alias runtest-cuda)
+  (alias runtest-nvrtc)))

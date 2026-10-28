@@ -1,0 +1,33 @@
+; `arrayjit/lib/hip_backend.ml` compiled against the `hipjit` stand-in one directory up
+; (`arrayjit/vendor_stubs/dune` describes the arrangement). The stanza mirrors the `hip_backend`
+; library in `arrayjit/lib/dune` -- same preprocessing, same `arrayjit` libraries -- with
+; `hipjit_stub` in place of `hipjit.hip` and `hipjit.hiprtc`.
+
+(copy_files#
+ (files ../../../lib/hip_backend.{ml,mli}))
+
+(copy_files#
+ (files ../../../lib/hip_backend_impl.mli))
+
+; The vendor arm of `arrayjit.context`'s `select`, checked against the interface its fallback arm
+; also satisfies.
+
+(rule
+ (action
+  (copy# ../../../lib/hip_backend_impl.hipjit.ml hip_backend_impl.ml)))
+
+(library
+ (name hip_backend_stub_check)
+ (modules hip_backend hip_backend_impl)
+ (preprocessor_deps
+  (env_var OCANNL_LOG_LEVEL_HIP_BACKEND))
+ (libraries base hipjit_stub utils ir builtins_cc builtins_hip)
+ (preprocess
+  (pps
+   ppx_compare
+   ppx_hash
+   ppx_here
+   ppx_sexp_conv
+   ppx_string
+   ppx_variants_conv
+   ppx_minidebug)))

@@ -3928,6 +3928,10 @@
   ocannl_config
   (glob_files_rec ../../dune)
   (glob_files_rec ../../arrayjit/lib/*.ml)
+  ; gh-ocannl-1652: the `copy_files#` copies of the GPU backends compiled against the vendor
+  ; stubs. Their libraries declare the same tracing gates as the real ones, which this check
+  ; verifies against the sources the gates are declared for.
+  (glob_files_rec ../../arrayjit/vendor_stubs/*.ml)
   (glob_files_rec ../../tensor/*.ml)
   (glob_files_rec ../../lib/*.ml)
   (glob_files_rec ../../bin/*.ml)
