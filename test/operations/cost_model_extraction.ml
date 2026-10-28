@@ -13,10 +13,12 @@
    even when disjoint — with the op count flagged too when the arms' costs differ, unless an arm's
    cost lives entirely in a hoisted scope body, which executes unconditionally (gh-ocannl-637); -
    vectorized runs (gh-ocannl-578): bases spaced by at least the run length (or on distinct
-   in-bounds rows) count exactly, close-spaced or row-spilling bases stay a flagged upper bound, and
-   two stores on distinct rows are provably disjoint, so they sum exactly, while two binding one
-   loop symbol with different bounds stay a bound in either order; - a [Concat] coordinate: the
-   whole node (segment extents add); a map of another rank: the box-over-fiber bound, flagged.
+   in-bounds rows) count exactly, and so do close-spaced, windowed or row-spilling bases where the
+   run's value range meets the run-aware lower bound (gh-ocannl-1676; a dynamic gather's windowed
+   known column is capped by its value range the same way), while two stores on distinct rows are
+   provably disjoint, so they sum exactly, while two binding one loop symbol with different bounds
+   stay a bound in either order; - a [Concat] coordinate: the whole node (segment extents add); a
+   map of another rank: the box-over-fiber bound, flagged.
 
    The tail asserts the roofline bound is monotone in the envelope constants. *)
 
@@ -247,6 +249,34 @@ let () =
   gather_bound_sound ~name:"dynamic gather (flattened over a Sub_axis run)" s_flat v
     ~instances:(List.init 8 ~f:(fun _ row -> row))
     ~rows:8;
+  (* Range-limited (gh-ocannl-1676): for i < 4: for j < 4: G[i][j] = W[I[i][j]][i + j] over a 2x9
+     table. The known column [i + j] is non-injective: the box (16 points) bounds its image by 16,
+     and with 2 rows per column the box caps the count at 16 cells; the column's value range is the
+     7 values 0..6, so the count is 7 x 2 = 14 (56 B). The worst case over the data is 12: the two
+     corner columns are reached once each. *)
+  let w = fresh_tn "W" [| 2; 9 |] in
+  let g = fresh_tn "G" [| 4; 4 |] in
+  let ids5 = fresh_tn "I5" [| 4; 4 |] in
+  let range_limited =
+    Ll_test.loop_n i 4
+      (Ll_test.loop_n j 4
+         (Ll_test.set g
+            [| it i; it j |]
+            (Ll_test.gather ~tn:w
+               ~idcs:[| Idx.Fixed_idx 0; Idx.affine ~symbols:[ (1, i); (1, j) ] ~offset:0 |]
+               ~dyn_axis:0
+               ~dyn_value:(get ids5 [| it i; it j |], sp))))
+  in
+  let s_range = CM.analyze range_limited in
+  show_summary "dynamic gather (range-limited windowed column)" s_range;
+  gather_bound_sound ~name:"dynamic gather (range-limited windowed column)" s_range w
+    ~instances:
+      (List.concat_map (List.init 4 ~f:Fn.id) ~f:(fun a ->
+           List.init 4 ~f:(fun b row -> (row * 9) + a + b)))
+    ~rows:2;
+  let w_fp = List.Assoc.find_exn s_range.CM.per_node w ~equal:Tn.equal in
+  claim "the windowed gather is charged its column range times its rows (14 cells)"
+    (w_fp.CM.fp_read_bytes = 14 * 4);
 
   (* Overlapping writes: Zero_out S2 then a covering pointwise write — the per-direction sum (16 +
      16 B) is a union bound, capped by the node's 16 bytes and flagged approximate. *)
@@ -385,15 +415,47 @@ let () =
   let vec_of = vec_store v16 in
   show_summary "vectorized writes, disjoint runs (exact)" (CM.analyze (vec_of [| base4 i |]));
 
-  (* Close-spaced vec bases: setv4 V16[i] — runs from bases 1 apart may overlap, so the product
-     stays a flagged upper bound (claims 16 cells where 7 distinct are touched). *)
-  show_summary "vectorized writes, overlapping runs (bound)" (CM.analyze (vec_of [| it i |]));
+  (* Close-spaced vec bases: setv4 V16[i] — runs from bases 1 apart overlap into one interval: the
+     base image times the run length claims 16 cells, the run's value range [i + t] caps it at the 7
+     distinct cells, and the run-aware lower bound meets the cap, so the count is exact
+     (gh-ocannl-1676; it was a flagged 16-cell bound). *)
+  let s_overlap = CM.analyze (vec_of [| it i |]) in
+  show_summary "vectorized writes, overlapping runs (exact)" s_overlap;
+  let v16_fp = List.Assoc.find_exn s_overlap.CM.per_node v16 ~equal:Tn.equal in
+  claim "overlapping vector runs count their union exactly (7 cells)"
+    ((not v16_fp.CM.fp_approx) && v16_fp.CM.fp_write_bytes = 7 * 4);
 
-  (* Row-spilling vec runs: setv4 W46[i][4] on a 4x6 node — each run crosses into the next row,
-     where it could meet that row's base, so exactness is declined. *)
+  (* Row-spilling vec runs: setv4 W46[i][4] on a 4x6 node — each run crosses into the next row, so
+     the run is a unit term of the merged flat index [6*i + 4 + t]: the bases are 6 apart, the runs
+     4 long, and the flat lower bound meets the 16 cells (gh-ocannl-1676: exactness no longer needs
+     the runs to stay inside their rows). *)
   let w46 = fresh_tn "W46" [| 4; 6 |] in
   let vec_spill = vec_store w46 [| it i; Idx.Fixed_idx 4 |] in
-  show_summary "vectorized writes, row-spilling runs (bound)" (CM.analyze vec_spill);
+  show_summary "vectorized writes, row-spilling disjoint runs (exact)" (CM.analyze vec_spill);
+  (* Row-spilling runs that DO meet the next row's base: setv4 W53[i][0] on a 5x3 node, runs of 4
+     from bases 3 apart — the flat cells [3*i + t] are the one interval 0..12. *)
+  let w53 = fresh_tn "W53" [| 5; 3 |] in
+  let s_meet = CM.analyze (vec_store w53 [| it i; Idx.Fixed_idx 0 |]) in
+  show_summary "vectorized writes, row-spilling overlapping runs (exact)" s_meet;
+  let w53_fp = List.Assoc.find_exn s_meet.CM.per_node w53 ~equal:Tn.equal in
+  claim "row-spilling overlapping runs count their flat union exactly (13 cells)"
+    ((not w53_fp.CM.fp_approx) && w53_fp.CM.fp_write_bytes = 13 * 4);
+  (* A window of runs (gh-ocannl-1676): for i < 4: for j < 4: setv4 Y16[i + j] — the bases [i + j]
+     take 7 values, the runs extend them to the 10 cells 0..9, where the base image times the run
+     length claims the whole 16-cell node. *)
+  let y16 = fresh_tn "Y16" [| 16 |] in
+  let vec_window =
+    Ll_test.loop_n i 4
+      (Ll_test.loop_n j 4
+         (Ll_test.set_from_vec ~length:4 ~vec_unop:Ops.Uint4x32_to_prec_uniform y16
+            [| Idx.affine ~symbols:[ (1, i); (1, j) ] ~offset:0 |]
+            (get src [| it i |], sp)))
+  in
+  let s_window = CM.analyze vec_window in
+  show_summary "vectorized writes, windowed bases (exact)" s_window;
+  let y16_fp = List.Assoc.find_exn s_window.CM.per_node y16 ~equal:Tn.equal in
+  claim "a window of vector runs counts its 10 cells exactly"
+    ((not y16_fp.CM.fp_approx) && y16_fp.CM.fp_write_bytes = 10 * 4);
 
   (* Constant minor base on distinct rows: setv4 W44[i][0] on a 4x4 node — one in-bounds run per
      row, disjoint by rows, 16 cells exact. *)

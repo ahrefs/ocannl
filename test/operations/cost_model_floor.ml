@@ -320,6 +320,20 @@ let () =
   let domain box = List.map box ~f:(fun (sy, (lo, hi)) -> (sy, hi - lo + 1)) in
   let cases = ref [] in
   let record name bound image = cases := (name, bound, image) :: !cases in
+  (* gh-ocannl-1676: the upper side. [analyze]'s count of one access, run over the same box as a
+     program, against the true count — for a dynamic gather the WORST case over the data, which may
+     pick the dynamic coordinate per point independently. [exact] is [analyze]'s own verdict. *)
+  let upper = ref [] in
+  let record_upper name ~count ~exact ~truth = upper := (name, count, exact, truth) :: !upper in
+  let in_box box body =
+    List.fold_right box ~init:body ~f:(fun (sy, (lo, hi)) body ->
+        Ll_test.loop ~from_:lo ~upto:hi sy body)
+  in
+  let analyzed tn code =
+    let s = CM.analyze code in
+    let fp = List.Assoc.find_exn s.CM.per_node tn ~equal:Tn.equal in
+    ((fp.CM.fp_read_bytes + fp.CM.fp_write_bytes) / 4, not fp.CM.fp_approx)
+  in
   (* A static map: [cell] enumerates each point's cell tuple. *)
   let static_case name box idcs dims =
     let v = Affine.view ~dims idcs in
@@ -418,7 +432,22 @@ let () =
         record "dynamic gather" bound
           (List.length
              (List.dedup_and_sort cells ~compare:(fun (a1, b1) (a2, b2) ->
-                  match Int.compare a1 a2 with 0 -> Int.compare b1 b2 | c -> c))))
+                  match Int.compare a1 a2 with 0 -> Int.compare b1 b2 | c -> c))));
+    (* The worst case: each known value reached by [f] points pairs with at most [min f dsize]
+       distinct values of the data-chosen coordinate. *)
+    let fibers =
+      List.map (points box) ~f:(fun env -> eval env known)
+      |> List.sort_and_group ~compare:Int.compare
+      |> List.map ~f:List.length
+    in
+    let worst = List.sum (module Int) fibers ~f:(fun f -> min f dsize) in
+    let tn = fresh_tn "DG" dims and out = fresh_tn "DO" [||] in
+    let count, exact =
+      analyzed tn
+        (in_box box
+           (set out [||] (Ll_test.gather ~tn ~idcs ~dyn_axis ~dyn_value:(LL.Constant 0., sp))))
+    in
+    record_upper "dynamic gather" ~count ~exact ~truth:worst
   done;
   (* Vector runs of [len] consecutive flat cells from each base, over a rank-2 node. *)
   for _ = 1 to 200 do
@@ -431,14 +460,59 @@ let () =
     let csize = csize + len in
     let idcs = [| row; col |] and dims = [| rsize; csize |] in
     let range sy = List.Assoc.find box sy ~equal:Idx.equal_symbol in
-    let v = Affine.view ~range ~vec:(Affine.Run len) ~dims idcs in
-    let bound = Affine.image_cardinality_lb ~domain:(domain box) v in
+    let v = Affine.view ~dims idcs in
+    let bound = Affine.image_cardinality_lb ~range ~run:len ~domain:(domain box) v in
     let cells =
       List.concat_map (points box) ~f:(fun env ->
           let base = (eval env row * csize) + eval env col in
           List.init len ~f:(fun i -> base + i))
     in
-    record "vector run" bound (List.length (List.dedup_and_sort cells ~compare:Int.compare))
+    let truth = List.length (List.dedup_and_sort cells ~compare:Int.compare) in
+    record "vector run" bound truth;
+    let tn = fresh_tn "VR" dims in
+    let count, exact =
+      analyzed tn
+        (in_box box
+           (Ll_test.set_from_vec ~length:len ~vec_unop:Ops.Uint4x32_to_prec_uniform tn idcs
+              (LL.Constant 0., sp)))
+    in
+    record_upper "vector run" ~count ~exact ~truth
+  done;
+  (* Vector runs over random one- and two-coordinate bases (gh-ocannl-1676), windowed and strided,
+     some spilling out of their row: the cells are the flat offsets [base + t], [t < len]. *)
+  for _ = 1 to 200 do
+    let box = random_box () in
+    let len = 2 + Random.State.int rng 3 in
+    let pick () =
+      List.init
+        (1 + Random.State.int rng 2)
+        ~f:(fun _ -> (1 + Random.State.int rng 4, s.(Random.State.int rng 3)))
+    in
+    let col, csize = component box (pick ()) ~slack:0 in
+    let idcs, dims, flat =
+      if Random.State.bool rng then ([| col |], [| csize + len |], fun env -> eval env col)
+      else
+        let row, rsize = component box (pick ()) ~slack:0 in
+        (* A spilling row: the minor extent is the base range alone, or one short of the run. *)
+        let width = csize + Random.State.int rng (len + 1) in
+        ([| row; col |], [| rsize + len; width |], fun env -> (eval env row * width) + eval env col)
+    in
+    let cells =
+      List.concat_map (points box) ~f:(fun env -> List.init len ~f:(fun i -> flat env + i))
+    in
+    let truth = List.length (List.dedup_and_sort cells ~compare:Int.compare) in
+    let range sy = List.Assoc.find box sy ~equal:Idx.equal_symbol in
+    record "vector run (windowed)"
+      (Affine.image_cardinality_lb ~range ~run:len ~domain:(domain box) (Affine.view ~dims idcs))
+      truth;
+    let tn = fresh_tn "VW" dims in
+    let count, exact =
+      analyzed tn
+        (in_box box
+           (Ll_test.set_from_vec ~length:len ~vec_unop:Ops.Uint4x32_to_prec_uniform tn idcs
+              (LL.Constant 0., sp)))
+    in
+    record_upper "vector run (windowed)" ~count ~exact ~truth
   done;
   let cases = List.rev !cases in
   let kinds =
@@ -450,6 +524,24 @@ let () =
         (List.count of_kind ~f:(fun (_, b, i) -> b = i)));
   Verdict.p_all ~min:2000 "  the bound never exceeds the enumerated image" cases
     ~f:(fun (_, bound, image) -> bound <= image);
+  (* The upper side's census counts [analyze]'s count meeting the true (worst-case) count — a
+     different tightness from the lower bound's above. *)
+  let upper = List.rev !upper in
+  Stdio.printf "  -- analyze's count vs the true count (worst case over the data) --\n";
+  List.iter
+    (List.dedup_and_sort ~compare:String.compare (List.map upper ~f:(fun (n, _, _, _) -> n)))
+    ~f:(fun kind ->
+      let of_kind = List.filter upper ~f:(fun (n, _, _, _) -> String.equal n kind) in
+      Stdio.printf "  %-21s %4d cases, %4d counted exactly, %4d claimed exact\n" kind
+        (List.length of_kind)
+        (List.count of_kind ~f:(fun (_, c, _, t) -> c = t))
+        (List.count of_kind ~f:(fun (_, _, e, _) -> e)));
+  Verdict.p_all ~min:600 "  analyze's count never falls below the true count" upper
+    ~f:(fun (_, count, _, truth) -> count >= truth);
+  Verdict.p_all ~min:600 "  analyze's exact verdicts are the true count" upper
+    ~f:(fun (_, count, exact, truth) -> (not exact) || count = truth);
+  Verdict.p_none "  no dynamic gather is claimed exact" upper ~f:(fun (n, _, e, _) ->
+      e && String.equal n "dynamic gather");
   (* Tightness: overlapping and strided windows count their whole image. *)
   let window ~stride ~o ~k =
     let box = [ (s.(0), (0, o - 1)); (s.(1), (0, k - 1)) ] in
