@@ -168,7 +168,7 @@ test/operations/canonical_render.ml [renders generated text in memory; run by @t
     "}set <cr_d>[?,]"
     "}set <cr_d>[b0,]"
     "}set <cr_d>[s0,]"
-test/operations/cc_kernel_outline.ml [run by @test/operations/runtest-cc_kernel_outline]
+test/operations/cc_kernel_outline.ml [run by @test/operations/runtest-cc_kernel_outline; also pins text this scan cannot name: computed fragment]
     "ARRAYJIT_KERNEL_PART void "
 test/operations/cc_march_census.ml [run by @test/operations/runtest-cc_march_census-emission, @test/operations/runtest-cc_march_census-w16_native_foreign, @test/operations/runtest-cc_march_census-w16_native_host, @test/operations/runtest-cc_march_census-w16_wide_foreign, @test/operations/runtest-cc_march_census-w16_wide_host, @test/operations/runtest-cc_march_census-w32_native_foreign, @test/operations/runtest-cc_march_census-w32_native_host, @test/operations/runtest-cc_march_census-w32_wide_foreign, @test/operations/runtest-cc_march_census-w32_wide_host, @test/operations/runtest-cc_march_census-w64_native_foreign, @test/operations/runtest-cc_march_census-w64_native_host, @test/operations/runtest-cc_march_census-w64_wide_foreign, @test/operations/runtest-cc_march_census-w64_wide_host; also pins text this scan cannot name: untraced callback, forwarded parameter, opaque aggregate component, unvalidated haystack]
 test/operations/concat_loop_symbols.ml [renders generated text in memory; run by @test/operations/runtest-concat_loop_symbols]
@@ -551,7 +551,6 @@ test/operations/test_one_hot_embedding_lookup.ml [run by @test/operations/runtes
     "?"
     "double *restrict ids_wide"
 test/operations/test_uniform_virtual_lane.ml [run by @test/operations/runtest-test_uniform_virtual_lane; also pins text this scan cannot name: opaque aggregate component]
-    "Main logic"
     "_uniform_lane("
     "_uniform_vec("
 test/operations/thread_private_gate.ml [run by @test/operations/runtest-thread_private_gate; also pins text this scan cannot name: untraced callback, unvalidated haystack]
@@ -584,8 +583,7 @@ test/operations/tile_mma_narrow.ml [run by @test/operations/runtest-tile_mma_nar
     "narrow storage bridged"
     "narrow storage bridged: d:bfloat16."
     "narrow storage bridged: d:half."
-test/operations/uint4x32_fixed_index_parity.ml [run by @test/operations/runtest-uint4x32_fixed_index_parity; also pins text this scan cannot name: untraced callback, opaque aggregate component]
-    "Main logic"
+test/operations/uint4x32_fixed_index_parity.ml [run by @test/operations/runtest-uint4x32_fixed_index_parity; also pins text this scan cannot name: opaque aggregate component]
     ... ^ "["
 test/operations/vec_signed_zero.ml [run by @test/operations/runtest-vec_signed_zero]
     " - (ocannl_vec"

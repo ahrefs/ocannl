@@ -4921,7 +4921,7 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules asm_census_cases)
- (libraries base arrayjit.verdict test_utils))
+ (libraries base arrayjit.ir arrayjit.verdict test_utils))
 
 ; gh-ocannl-650 and its successors: the cc backend's emitted C compiled under foreign -march
 ; targets, with an instruction census of the accumulator loops. One executable run as one action per

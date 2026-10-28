@@ -3,6 +3,8 @@
 open Base
 module Census = Test_utils.Asm_census
 
+(* The statement lines of a generated kernel's source, as the census reads them. *)
+let main_logic source = Set.of_list (module Int) (Test_utils.Generated.main_logic_lines source)
 let routine = "census_kernel"
 
 (* {2 Assembler dialects this host cannot produce}
@@ -105,7 +107,7 @@ let dialect_probes () =
     String.concat ~sep:"\n"
       [
         "int f(void) {";
-        "  /* Main logic. */";
+        "  " ^ Ir.C_syntax.main_logic_marker;
         "  { /* one generated reduction */";
         "    /* A } in prose is not the end of the construct. */";
         "    const char *brace = \"{\";";
@@ -119,7 +121,7 @@ let dialect_probes () =
   in
   let clang_exact = Census.anchor_lines ~source:clang_source ~patterns:[ "START =" ] in
   let clang_range =
-    Census.anchor_block_lines ~source:clang_source ~after_pattern:"/* Main logic. */"
+    Census.anchor_block_lines ~source:clang_source ~within:(main_logic clang_source)
       ~patterns:[ "START =" ]
   in
   let clang_x86 =
@@ -215,7 +217,7 @@ let dialect_probes () =
          (Census.census_source_in
             (Census.parse ~asm:clang_x86 ~source_basename:(routine ^ ".c"))
             Census.Max_min ~source:clang_source ~patterns:[ "START =" ]
-            ~after_pattern:"/* Main logic. */"));
+            ~within:(main_logic clang_source)));
   Verdict.p "the fp8 combine selector rejects a deliberate libm regression outside its codec loop"
     ((not (has_libm innermost))
     && has_libm combine
@@ -259,7 +261,7 @@ let anchor_precedence_probe () =
     String.concat ~sep:"\n"
       [
         "int f(void) {";
-        "  /* Main logic. */";
+        "  " ^ Ir.C_syntax.main_logic_marker;
         "  { /* one generated reduction */";
         "    float acc_dot_bf16[K];";
         "    for (int i = 0; i < N; ++i) {";
@@ -311,9 +313,7 @@ let anchor_precedence_probe () =
   let parsed = Census.parse ~asm ~source_basename:(routine ^ ".c") in
   let read anchor = Census.census_in parsed Census.Fma ~anchor in
   let exact = read (Census.anchor_lines ~source ~patterns) in
-  let range =
-    read (Census.anchor_block_lines ~source ~after_pattern:"/* Main logic. */" ~patterns)
-  in
+  let range = read (Census.anchor_block_lines ~source ~within:(main_logic source) ~patterns) in
   (* Label AND span, so a reading that found the right loop under the wrong edge, or the wrong loop
      under a label rename, is not a pass. *)
   let is c ~label ~span =
@@ -326,8 +326,7 @@ let anchor_precedence_probe () =
   Verdict.p "the exact source anchor reads the accumulator loop" (is exact ~label:".Lk" ~span:8);
   Verdict.p "a census row takes its exact source anchor ahead of the brace-range fallback"
     (is
-       (Census.census_source_in parsed Census.Fma ~source ~patterns
-          ~after_pattern:"/* Main logic. */")
+       (Census.census_source_in parsed Census.Fma ~source ~patterns ~within:(main_logic source))
        ~label:".Lk" ~span:8)
 
 (* Residual diagnostics use the same classification and selected span as the totals. Classified

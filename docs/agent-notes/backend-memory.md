@@ -562,7 +562,9 @@ files.
   code has them: a reduction's `Local_scope` declared at the top level); the builtins needed
   internal linkage (`ARRAYJIT_BUILTIN_LINKAGE`, `static` in kernels) because every unit carries
   them, while the host header keeps them external for the stubs that link against `builtins.c`;
-  `OCANNL_`-prefixed macro names trip the environment-spelling scan. Windows compiles one unit.
+  `OCANNL_`-prefixed macro names trip the environment-spelling scan; a test reading a kernel's
+  statements must splice its parts back in (`Generated.main_logic`, build-and-test.md). Windows
+  compiles one unit.
   Arm A's base compile went from 30.7 to 8-13 s, arm B's from 102-157 to 11.7 s (correctness-grade
   diagnostics, shared box).
 - **Metal caches the library AND the pipeline states** (gh-ocannl-1605, `metal_kernel_cache_mib`,
