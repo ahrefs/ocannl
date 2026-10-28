@@ -218,7 +218,7 @@ let train ~on =
   let ctx = Train.update_once (Context.auto ()) loss in
   let grads =
     List.map params ~f:(fun p ->
-        ( Tn.debug_name p.Tensor.value,
+        ( Tn.label_name p.Tensor.value,
           Context.get_values ctx (Option.value_exn p.Tensor.diff).Tensor.grad ))
   in
   let loss_value = (Context.get_values ctx loss.Tensor.value).(0) in
@@ -682,7 +682,7 @@ let training ?mask_fill ?(layers = 1) ?(prefix = 2) ~d_k ~on ~bwd () =
   in
   let read ctx =
     List.map params ~f:(fun p ->
-        ( Tn.debug_name p.Tensor.value,
+        ( Tn.label_name p.Tensor.value,
           Context.get_values ctx (Option.value_exn p.Tensor.diff).Tensor.grad ))
   in
   let ctx = Context.run ctx routine in
@@ -768,7 +768,7 @@ let () =
      hold no loop (it needs [p] alone), where dQ's and dK's hold [dp]'s reduction. *)
   let writes_to name stmt =
     Ll_test.count_stmt stmt ~f:(function
-      | LL.Set { tn; _ } -> String.equal (Tn.debug_name tn) name
+      | LL.Set { tn; _ } -> String.equal (Tn.label_name tn) name
       | _ -> false)
     > 0
   in
@@ -818,7 +818,7 @@ let () =
   let fused_squares = square_buffers fused.optimized in
   printf "seq^2 buffers in the training step: composed backward %d, fused backward %d\n"
     composed_squares (Set.length fused_squares);
-  let names s = Set.to_list s |> List.map ~f:Tn.debug_name in
+  let names s = Set.to_list s |> List.map ~f:Tn.label_name in
   p "the fused step writes one seq^2 buffer, the scores the forward-only step also stores"
     (match names fused_squares with
     | [ scores ] ->
@@ -996,7 +996,7 @@ let leaf ?(prec = Ir.Ops.single) ?(fill = Float.neg_infinity) ?(tied = false)
   let lgrads =
     if grads then
       List.map leaves ~f:(fun t ->
-          ( Tn.debug_name t.Tensor.value,
+          ( Tn.label_name t.Tensor.value,
             Context.get_values ctx (Option.value_exn t.Tensor.diff).Tensor.grad ))
     else []
   in
@@ -1102,7 +1102,7 @@ let () =
     fst
       (Option.value_exn
          (List.findi stmts ~f:(fun _ s ->
-              Option.exists (target s) ~f:(fun tn -> String.equal (Tn.debug_name tn) name))))
+              Option.exists (target s) ~f:(fun tn -> String.equal (Tn.label_name tn) name))))
   in
   let insert_after pos extra =
     List.concat_mapi stmts ~f:(fun i s -> if i = pos then [ s; extra ] else [ s ])
@@ -1170,7 +1170,7 @@ let () =
      read the node rather than instantiate the definition's right-hand side everywhere. *)
   let reads_of name llc =
     Ll_test.count_scalar llc ~f:(function
-      | LL.Get (tn, _) -> String.equal (Tn.debug_name tn) name
+      | LL.Get (tn, _) -> String.equal (Tn.label_name tn) name
       | _ -> false)
   in
   let scores = position "scores" in

@@ -393,7 +393,7 @@ let () =
     | Aff.Barrier -> "barrier"
     | Aff.Staged -> "staged"
     | Aff.Mma -> "mma"
-    | Aff.Merge_read tn -> "merge-read " ^ Tn.debug_name tn
+    | Aff.Merge_read tn -> "merge-read " ^ Tn.label_name tn
   in
   List.iter effs ~f:(fun (e : Tn.t Aff.statement_effect) ->
       Stdio.printf "fx %-16s loops=[%s] path=[%s] %s%s%s\n" (show_kind e.e_kind)

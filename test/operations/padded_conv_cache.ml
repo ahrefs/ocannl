@@ -81,7 +81,7 @@ let () =
   let kernels =
     Set.to_list loss.Tensor.params
     |> List.filter ~f:(fun t ->
-        String.is_substring (Ir.Tnode.debug_name t.Tensor.value) ~substring:"kernel")
+        String.is_substring (Ir.Tnode.label_name t.Tensor.value) ~substring:"kernel")
   in
   let grads_of ctx =
     List.concat_map kernels ~f:(fun t ->

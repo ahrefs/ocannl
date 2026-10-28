@@ -247,8 +247,8 @@ let () =
     (List.equal String.equal names (List.map site_updates ~f:fst));
   p_all "the two base sites differ in every field" (site_fields site_lo) ~f:(fun (name, v) ->
       not (Sexp.equal v (List.Assoc.find_exn (site_fields site_hi) ~equal:String.equal name)));
-  p "the two base targets share a debug name"
-    (String.equal (Ir.Tnode.debug_name x1) (Ir.Tnode.debug_name x2));
+  p "the two base targets share a label name"
+    (String.equal (Ir.Tnode.label_name x1) (Ir.Tnode.label_name x2));
   p "the two base chains have equal length"
     (List.length site_lo.sr_swaps = List.length site_hi.sr_swaps);
   let label s = Autotune.split_sites_label [ (s, 32) ] in

@@ -80,7 +80,7 @@ let segments ?(in_place = false) ?preamble_reduction ~keep (o : LL.optimized) =
 
 let writes_named ~f stmt =
   List.exists (LL.affine_accesses stmt) ~f:(fun (a : Ir.Tnode.t Ir.Affine.access) ->
-      a.a_write && f (Ir.Tnode.debug_name a.a_tn))
+      a.a_write && f (Ir.Tnode.label_name a.a_tn))
 
 let reads_something stmt =
   List.exists (LL.affine_accesses stmt) ~f:(fun (a : Ir.Tnode.t Ir.Affine.access) -> not a.a_write)

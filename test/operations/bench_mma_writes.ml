@@ -73,7 +73,12 @@ let () =
                     String.drop_prefix line (pos + String.length " w:")))
           in
           let expected =
-            List.concat_map outputs ~f:(fun (_, out) -> [ Tn.debug_name out; Tn.debug_name out ])
+            List.concat_map outputs ~f:(fun (_, out) ->
+                let name =
+                  (Tn.debug_name out
+                   [@rendered_name "the census prints each write by its display name"])
+                in
+                [ name; name ])
           in
           p "the printed per-kernel rows retain exact destination ownership in launch order"
             (List.equal String.equal rows expected)))

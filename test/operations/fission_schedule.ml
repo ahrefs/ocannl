@@ -532,7 +532,7 @@ let () =
   let ctx = Context.run ctx routine in
   let w =
     List.find_exn (Set.to_list l.Tensor.params) ~f:(fun t ->
-        String.equal (Tn.debug_name t.Tensor.value) "w")
+        String.equal (Tn.label_name t.Tensor.value) "w")
   in
   let wg = Context.get_values ctx (grad_of w) in
   (* dl/dw = x. *)

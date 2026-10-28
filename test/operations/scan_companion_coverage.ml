@@ -372,7 +372,7 @@ let () =
       let is_target seg =
         has_scan seg.LL.llc
         && Option.exists (site_of ~limits:real_limits seg) ~f:(fun (site, _) ->
-            String.equal (Tn.debug_name site.Autotune.m_d) (Tn.debug_name z.Tensor.value))
+            String.equal (Tn.label_name site.Autotune.m_d) (Tn.label_name z.Tensor.value))
       in
       ( Option.exists target ~f:(fun seg -> has_scan seg.LL.llc),
         List.mapi seeds ~f:(fun idx sp ->

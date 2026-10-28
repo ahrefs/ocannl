@@ -278,10 +278,10 @@ let () =
             if Tn.equal tn reader then blank (Tn.num_elems tn)
             else Array.init (Tn.num_elems tn) ~f:(fun i -> Float.of_int (1 + (10 * k) + i)) ))
     in
-    let virt = execute ~name:("cmt_guard_" ^ Tn.debug_name self) o ~seed ~read:[ reader ] in
+    let virt = execute ~name:("cmt_guard_" ^ Tn.label_name self) o ~seed ~read:[ reader ] in
     let mat =
       execute
-        ~name:("cmt_guard_mat_" ^ Tn.debug_name self)
+        ~name:("cmt_guard_mat_" ^ Tn.label_name self)
         (optimize ~materialized:(self :: materialized) ~name:(name ^ " materialized") llc)
         ~seed ~read:[ reader ]
     in

@@ -30,7 +30,7 @@ let run tag ~stride ?out_channels () =
       let ctx =
         Set.fold y.Tensor.params ~init:ctx ~f:(fun ctx p ->
             let tn = p.Tensor.value in
-            let name = Ir.Tnode.debug_name tn in
+            let name = Ir.Tnode.label_name tn in
             let value =
               if
                 String.is_prefix name ~prefix:"kernel_downsample_"

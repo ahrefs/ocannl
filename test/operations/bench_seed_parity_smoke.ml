@@ -137,7 +137,7 @@ let () =
   let ctx =
     Set.fold loss.Tensor.params ~init:ctx ~f:(fun ctx p ->
         let tn = p.Tensor.value in
-        let dn = Ir.Tnode.debug_name tn in
+        let dn = Ir.Tnode.label_name tn in
         if String.is_substring dn ~substring:"sp_conv" then
           Context.set_values ctx tn
             (Array.create ~len:(Ir.Tnode.num_elems tn)

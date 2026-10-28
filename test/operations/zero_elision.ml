@@ -109,7 +109,7 @@ let step ~gate_on ~transform () =
   let ctx, routine = Context.compile ?lowered_transform ctx update Ir.Indexing.Empty in
   let read ctx =
     List.map params ~f:(fun p ->
-        ( Tn.debug_name p.Tensor.value,
+        ( Tn.label_name p.Tensor.value,
           Context.get_values ctx (Option.value_exn p.Tensor.diff).Tensor.grad ))
   in
   let ctx = Context.run ctx routine in

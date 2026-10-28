@@ -42,7 +42,7 @@ let check ~name ~expected ~tol measured =
 let weight_values ~ctx t =
   let w =
     Set.find_exn t.Tensor.params ~f:(fun p ->
-        String.is_prefix ~prefix:"w" (Ir.Tnode.debug_name p.Tensor.value))
+        String.is_prefix ~prefix:"w" (Ir.Tnode.label_name p.Tensor.value))
   in
   Context.get_values ctx w.Tensor.value
 

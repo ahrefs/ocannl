@@ -45,10 +45,10 @@ let run_once tag =
   let%cd add = out =: a + b in
   let code = Backend.compile root.BI.optimize_ctx Idx.Empty add in
   let routine = Backend.link root code in
-  (* Print [tn -> { pool_id; offset }] for every node in the freshly linked context, sorted by debug
-     name so the two runs are directly comparable. *)
+  (* Print [tn -> { pool_id; offset }] for every node in the freshly linked context, sorted by name
+     so the two runs are directly comparable. *)
   Map.to_alist routine.BI.context.BI.ctx_buffers
-  |> List.map ~f:(fun (tn, (loc : BI.buffer_loc)) -> (Tn.debug_name tn, loc.pool_id, loc.offset))
+  |> List.map ~f:(fun (tn, (loc : BI.buffer_loc)) -> (Tn.label_name tn, loc.pool_id, loc.offset))
   |> List.sort ~compare:(fun (a, _, _) (b, _, _) -> String.compare a b)
   |> List.iter ~f:(fun (name, pool_id, offset) ->
       Stdio.printf "%s: %-14s -> { pool_id = %d; offset = %d }\n" tag name pool_id offset)
@@ -75,7 +75,7 @@ let run_packed () =
   let loc name =
     Map.to_alist routine.BI.context.BI.ctx_buffers
     |> List.find_map ~f:(fun (tn, (l : BI.buffer_loc)) ->
-        if String.is_prefix (Tn.debug_name tn) ~prefix:name then Some l else None)
+        if String.is_prefix (Tn.label_name tn) ~prefix:name then Some l else None)
   in
   match (loc "p", loc "q", loc "a", loc "b") with
   | Some lp, Some lq, Some la, Some lb ->
@@ -115,7 +115,7 @@ let run_pooled_values_correct () =
   let loc name =
     Map.to_alist ctx.BI.ctx_buffers
     |> List.find_map ~f:(fun (tn, (l : BI.buffer_loc)) ->
-        if String.is_prefix (Tn.debug_name tn) ~prefix:name then Some l else None)
+        if String.is_prefix (Tn.label_name tn) ~prefix:name then Some l else None)
   in
   let lp = Option.value_exn ~here:[%here] (loc "p") in
   let lq = Option.value_exn ~here:[%here] (loc "q") in

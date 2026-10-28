@@ -97,7 +97,7 @@ let sentinel ~base i = -.(base +. Float.of_int i)
 (* Uploads [cells] as [tn]'s whole physical buffer, margins included. *)
 let upload_physical ctx tn cells =
   let dims = Lazy.force tn.Tn.dims in
-  let nd = Nd.create_array ~debug:(Tn.debug_name tn) Ir.Ops.single ~dims ~padding:None in
+  let nd = Nd.create_array ~debug:(Tn.label_name tn) Ir.Ops.single ~dims ~padding:None in
   let width = dims.(1) in
   Array.iteri cells ~f:(fun i value -> Nd.set_from_float nd [| i / width; i % width |] value);
   Context.from_host ctx tn nd

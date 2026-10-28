@@ -323,7 +323,7 @@ let get_debug_name ?code_name ?(namespace = default_namespace) ~id ~label () =
     that form sticks. Which renderers run depends on configuration -- with
     [output_debug_files_in_build_directory] the [.cd]/[.ll] printers name nodes the C emitter never
     asks about, such as a merge-buffer source -- so the same program can report different debug
-    names (gh-ocannl-1552). To find a node by name, compare {!label}. *)
+    names (gh-ocannl-1552). To find a node by name, compare {!label_name} (or {!label}). *)
 let debug_name tn =
   let id = tn.id and label = tn.label and code_name = tn.code_name in
   get_debug_name ?code_name ~namespace:tn.namespace ~id ~label ()
@@ -907,6 +907,22 @@ let no_grad_ident_label tn =
   in
   ( has_grad,
     Option.find_map result ~f:(fun s -> if Char.is_digit s.[0] then Some ("_" ^ s) else Some s) )
+
+(** [label_name tn] is the identifier the default ([heuristic]) style mints for [tn] when no other
+    node of its routine carries the same label: the label's identifier components (an initializer's
+    operator label such as [*.] dropped, numeric components last), a leading ["grad"] as a [.grad]
+    suffix, and [n<id>] for a label with no identifier component. It is computed from the label
+    alone, so unlike {!debug_name} -- which takes the [n<id>_] form once a routine repeats the
+    label, and before any code name is minted collapses repeated components ([kernel_downsample2]
+    for [kernel_downsample_downsample]) -- it never changes over the process, and it is the name to
+    find a node by (gh-ocannl-1606). {!label} is the raw join, operator labels included. *)
+let label_name tn =
+  let is_grad, ident = no_grad_ident_label tn in
+  let opt_grad = if is_grad then ".grad" else "" in
+  match ident with
+  | Some ident -> ident ^ opt_grad
+  | None when is_grad -> [%string "%{ident_prefix tn.namespace}%{tn.id - 1#Int}%{opt_grad}"]
+  | None -> id tn
 
 let styled_ident ~repeating_nograd_idents ~repeating_grad_idents style arr =
   let n = id arr in

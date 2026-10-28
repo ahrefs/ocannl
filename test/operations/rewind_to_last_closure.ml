@@ -402,7 +402,14 @@ let context_entry_points () =
   let%cd open_code = live =: open_draw in
   Tensor.rewind_to_last_closure ~reason:"rw: discarding an open draw" ();
   let tn = open_draw.Tensor.value in
-  let stale = [ discarded; "rw: discarding an open draw"; Ir.Tnode.debug_name tn ] in
+  let stale =
+    [
+      discarded;
+      "rw: discarding an open draw";
+      (Ir.Tnode.debug_name tn
+       [@rendered_name "the refusal names the node as the library renders it"]);
+    ]
+  in
   p "the discarded draw's dims were never forced" (not (Lazy.is_val tn.Ir.Tnode.dims));
   p "Context.set_values on a discarded node is refused, naming the rewind"
     (refused_with (fun () -> Context.set_values ctx tn [| 1. |]) ~substrings:stale);

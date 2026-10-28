@@ -38,7 +38,7 @@ let render_binder_events (llc : LL.t) : (Idx.symbol * bool) list =
   let buf = Buffer.create 4096 in
   LL.Canonical_render.emit ~buf
     {
-      LL.Canonical_render.emit_tn = (fun tn -> Buffer.add_string buf (Ir.Tnode.debug_name tn));
+      LL.Canonical_render.emit_tn = (fun tn -> Buffer.add_string buf (Ir.Tnode.label_name tn));
       emit_free_sym = (fun s -> Buffer.add_string buf (Idx.symbol_ident s));
       on_bind_loop = (fun s ~id:_ ~shadowed -> events := (s, shadowed) :: !events);
       mark_incomplete = (fun () -> ());

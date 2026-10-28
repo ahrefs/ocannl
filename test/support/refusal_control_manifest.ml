@@ -35,6 +35,16 @@ let raw_entries =
         "[scanner-refusal:69cf046689c576d9dca494c4b411d591] Tnode.create";
         "[scanner-refusal:aad2a5fc0b2e347174ab90714113a6f6] tensor.ml";
       ] );
+    ( "debug_name_scan.ml",
+      [
+        "[scanner-refusal:fe40918919ee07d96a2c92a926ae0b28] does not parse";
+        "[scanner-refusal:035b75b8ce8b0d0f0b1b390267c227e7] debug-name reader raised";
+        "[scanner-refusal:caf654cecf3e614544e6740b12c0ca6a] tree matches nothing";
+        "[scanner-refusal:cdb9f02e250554d24674371724942ae4] test_tnode_namespaces'";
+        "[scanner-refusal:693fe71b6aeb6d44bd88787308cf5017] cc_kernel_outline's";
+        "[scanner-refusal:94cdb1a16d792be58f07d154224626df] scope_over_materialized's";
+        "[scanner-refusal:f4f4d81c0884b6209eccd072274b494d] rewind_to_last_closure's";
+      ] );
     ( "render_decline_inventory.ml",
       [
         "[scanner-refusal:d5f512590dad4114be7fccd7fcad252d] control";

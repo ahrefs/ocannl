@@ -4846,16 +4846,25 @@ box.
 
 ## Test support and placement
 
-- Find a tensor by name through `Ir.Tnode.label`, never `Ir.Tnode.debug_name`. The debug name
+- Find a tensor by name through `Ir.Tnode.label_name`, never `Ir.Tnode.debug_name`. The debug name
   becomes the node's code name once a renderer has minted one. A label that two nodes of one
   routine share gets the `n<id>_<label>` form, and that form sticks. The `.cd`/`.ll` printers
   that `output_debug_files_in_build_directory` turns on name nodes the C emitter never asks
   about (a merge buffer's source). So `batch_norm_running`'s data-parallel lookup of the owner's
   `running_mean_parallel` held with the setting off and raised `Not_found_s` with it on, because
   the shard broadcast `n53_running_mean_parallel =: n13_running_mean_parallel.merge` had renamed
-  the owner (gh-ocannl-1552). Many tests still match on `debug_name`. That only holds while no
-  routine they print carries the label twice: data-parallel shards, param broadcasts and grad
-  all-reduces all do.
+  the owner (gh-ocannl-1552). `label_name` is the identifier the default style mints when no other
+  node of the routine shares the label, computed from the label alone, so it keeps the spellings
+  tests already used (`w1`, `q.grad`, `kernel_downsample_downsample`). Neither neighbour does: the
+  raw `label` join keeps an initializer's operator label (`*._w1`), and a debug name read before
+  any code name is minted collapses repeated components (`kernel_downsample2`). `debug_name_scan` (gh-ocannl-1606,
+  in `@test/operations/scans`) holds every `.ml` under `test/` and `arrayjit/test/` to this: a debug
+  name may be printed or raised, be a `Verdict` claim's label, or be the `~substring` needle of a
+  check that some rendered text names the node, directly or through `^`, `sprintf`, `String.concat`
+  or a `List.map ~f:` of it. Anything else is refused -- an equality, a find, an association key, a
+  bound or returned name -- with the closed list in its reader's header. A comparison with text a
+  renderer of the same process produced under the display name (a census row) marks the
+  application `[@rendered_name "<reason>"]`.
 
 - Insert a new stanza in `test/operations/dune` beside its topical neighbours, never at the end of
   the file. The file is grouped by subsystem rather than alphabetized, and the end is where every

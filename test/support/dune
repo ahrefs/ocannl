@@ -71,6 +71,7 @@
   operand_key_scan
   mutation_serial_scan
   open_node_scan
+  debug_name_scan
   tensorized_census_scan
   provenance_tag_scan
   scan_argv
