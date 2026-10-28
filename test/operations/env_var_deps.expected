@@ -82,6 +82,8 @@ Programs starting a search with a run that can select cc, each pinning the cc ve
   test/operations/dune, test autotune_dispersion_attribution (Autotune.tune): independent, by its marker
   test/operations/dune, test autotune_hopeless_window (Autotune.tune): independent, by its marker
   test/operations/dune, test autotune_labels (Autotune.tune, Scripted_search.search): independent, by its marker
+  test/operations/dune, test autotune_lowering_reuse (Autotune.tune): independent, by its marker
+  test/operations/dune, test autotune_lowering_reuse_drift (Scripted_search.search): independent, by its marker
   test/operations/dune, test autotune_measured_refusal (Autotune.tune): independent, by its marker
   test/operations/dune, test autotune_progress (Train.tune_placements): independent, by its marker
   test/operations/dune, test autotune_refusal_causes (Autotune.tune): independent, by its marker

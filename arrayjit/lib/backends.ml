@@ -1002,14 +1002,26 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
 
   let empty_optimize_ctx = Low_level.empty_optimize_ctx
 
-  let%debug3_sexp compile optim_ctx ?name ?lowered_transform ?prelowered bindings
+  let%debug3_sexp compile optim_ctx ?name ?lowered_transform ?prelowered ?reuse bindings
       (comp : Assignments.comp) : code =
     let (name : string), (lowered : Low_level.optimized) =
       match prelowered with
       | None ->
           Compile_cost.time_lower (fun () ->
-              lower_assignments ~limits:(Device.hardware_limits ()) optim_ctx ?name bindings
-                comp.asgns)
+              let lower () =
+                lower_assignments ~limits:(Device.hardware_limits ()) optim_ctx ?name bindings
+                  comp.asgns
+              in
+              (* gh-ocannl-1526: a search's later compiles take a private copy of its first
+                 compile's lowering instead of lowering again (see [Lowering_reuse]); the copy is
+                 still lowering cost, so it stays inside this timer. *)
+              match reuse with
+              | None -> lower ()
+              | Some cell ->
+                  Lowering_reuse.lower_or_reuse cell ~lineage:optim_ctx ~asgns:comp.asgns ~bindings
+                    ~name ~lower)
+      | Some _ when Option.is_some reuse ->
+          invalid_arg "Backend.compile: ?prelowered and ?reuse are exclusive"
       | Some (lowered : Low_level.optimized) ->
           (* gh-ocannl-562 test seam: the caller supplies the lowering. Substituting only the
              codegen input ([lowered_transform]) is not enough to execute hand-built IR — the

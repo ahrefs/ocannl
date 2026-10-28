@@ -595,8 +595,8 @@ let frontend_gate ?prelowered comp =
    before anything of [tn] is forced, for the same reason (gh-ocannl-1505). *)
 let check_node_valid tn = Option.iter !Tn.validity_check ~f:(fun check -> check tn)
 
-let compile_outcome ?name ?lowered_transform ?prelowered ~provenance ?candidate ?retain ctx comp
-    bindings =
+let compile_outcome ?name ?lowered_transform ?prelowered ?reuse ~provenance ?candidate ?retain ctx
+    comp bindings =
   (* Raised, not returned as an outcome: a dead handle is the caller's error, not a property of any
      candidate, and no search over it can succeed. *)
   check_live ~fn:"compile" ctx;
@@ -632,8 +632,8 @@ let compile_outcome ?name ?lowered_transform ?prelowered ~provenance ?candidate 
             Ir.Schedule_outcome.protect ~classify_backend:Backend.classify_failure ~provenance
               ~phase:Ir.Schedule_outcome.Transform ?candidate (fun () ->
                 let code =
-                  Backend.compile ?name ?lowered_transform ?prelowered bctx.BI.optimize_ctx bindings
-                    comp
+                  Backend.compile ?name ?lowered_transform ?prelowered ?reuse bctx.BI.optimize_ctx
+                    bindings comp
                 in
                 Utils.count_backend_compile ();
                 (code, Ir.Schedule_outcome.tag Ir.Schedule_outcome.Backend_link (link code))))
@@ -682,9 +682,9 @@ let relink_outcome rt =
   | Error failure -> Error failure
   | Ok (wrapped, payload) -> Ok (finish_link rt.rt_ctx rt.rt_comp wrapped payload rt.rt_census)
 
-let compile ?name ?lowered_transform ?prelowered ctx comp bindings =
+let compile ?name ?lowered_transform ?prelowered ?reuse ctx comp bindings =
   match
-    compile_outcome ?name ?lowered_transform ?prelowered
+    compile_outcome ?name ?lowered_transform ?prelowered ?reuse
       ~provenance:Ir.Schedule_outcome.User_schedule ctx comp bindings
   with
   | Ok result -> result

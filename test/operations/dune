@@ -9891,6 +9891,53 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1526: a search lowers its routine once and every candidate compile reuses that
+; lowering -- equal to a fresh one section by section, isolated across candidates, fewer fresh
+; lowerings than candidates, and each crowned candidate taking the reference step.
+
+(test
+ ; cc-vector-width: independent -- the claims compare lowerings and read the lineage's state; the
+ ; matmul SGD step compiles at least three candidates at any width.
+ (name autotune_lowering_reuse)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules autotune_lowering_reuse)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  ll_test
+  scripted_search
+  lowering_fingerprint)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1526 under node-bounds drift: the candidates of a search whose link proposes an index
+; tensor's bounds mid-search keep the base's (bounds-blind) lowering, and a warm call rebased on
+; the blind lowering (gh-ocannl-1614) reseeds its cell with it.
+
+(test
+ ; cc-vector-width: independent -- the claims compare lowerings and outputs exact by construction;
+ ; the fissioned gather is crowned at any width.
+ (name autotune_lowering_reuse_drift)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules autotune_lowering_reuse_drift)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  scripted_search
+  lowering_fingerprint)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; The search's test seams (Autotune.Seam) are per domain: two searches in two domains, each domain
 ; with its own value in every seam, and each observer sees only its own domain's search.
 

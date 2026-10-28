@@ -2734,6 +2734,35 @@ files.
   lineage that inlines a computation the caller holds materialized (`flip_twins`' inheriting
   lineage) runs fine but is refused too. `placement_store` run 6 ranks fissioned candidates first
   through `Autotune.on_candidate_measured`, which reproduced the old failure deterministically.
+- **A search lowers its routine once; every candidate compile reuses that lowering**
+  (gh-ocannl-1526). `tune` creates one `Ir.Lowering_reuse` cell and hands it (`?reuse`, through
+  `Context.compile_outcome` to `Backend.compile`) to the base compile, every candidate compile and
+  a winner compiled into `search_ctx` itself. The first compile lowers and keeps a snapshot taken
+  right after `lower_assignments` (before `maybe_sink_zeros`); each later compile gets a private
+  copy instead of lowering -- `copy_traced_store` (the mutable `traced_array` records) plus
+  `copy_optimize_ctx` -- and everything downstream (sink, transform, zero elision, alias planning,
+  codegen, `from_prior_context`, link) runs as on a fresh lowering, unlike `?prelowered`, which it
+  excludes. Its traps:
+  - Never hand the snapshot out uncopied: codegen forces placements into the fork it gets,
+    `plan_alias_spans` adds `alias_candidates`, fission folds segment stores back. The negative
+    control (snapshot shared) fails `autotune_lowering_reuse`'s audit and isolation claims;
+    `rebase`'s traced store is record-copied for the same reason.
+  - Ownership is physical (the source lineage table, `comp.asgns`, the `bindings` value, `name`):
+    a compile naming another owner raises rather than re-lowering, since re-lowering and then
+    rebasing is the inconsistent graft of the next item. A winner compiled into another lineage
+    (the caller's, after a `?timing_ctx` search) is never handed the cell and lowers afresh behind
+    `Lineage_refused`. The owner check does not detect a lineage table mutated in place; nothing in
+    a search does that (every compile forks it).
+  - Bounds drift is deliberately not an invalidation input: a link proposing an index tensor's
+    bounds makes a later fresh lowering fold guards the base kept, and before gh-ocannl-1526 every
+    later candidate grafted that drifted lineage fork onto the base's code. Reuse keeps the fork the
+    base code was decided under; the contract is equality with a fresh lowering under the base's
+    inputs (`autotune_lowering_reuse_drift`). When `blind_rebase` swaps in the bounds-blind base
+    (gh-ocannl-1614), `Lowering_reuse.reseed` swaps the snapshot with it, code and state together.
+  - Test seams: `with_audit` (each reuse also lowers fresh, compared through
+    `test/support/lowering_fingerprint`), `with_disabled` (the pre-1526 path) and
+    `with_created_observer`. A fingerprint comparing two separate compiles must rename
+    schedule-minted nodes (privatized partials and tiles get a fresh `uid` per compile: `~known`).
 - **A budget-cut crown is stored, but only a budgeted call replays it** (gh-ocannl-1409). With
   `autotune_budget_seconds`, `Autotune.tune` checks the budget as each attempt and each beam round
   starts (`budget_allows`), skips everything later except the untuned floors (the seeded plan and

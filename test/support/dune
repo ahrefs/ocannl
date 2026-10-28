@@ -166,3 +166,14 @@
  (package neural_nets_lib)
  (modules scripted_search)
  (libraries base ocannl arrayjit.utils))
+
+; gh-ocannl-1526: the structural fingerprint of a lowered routine the lowering-reuse tests compare
+; a search's reused lowering with a fresh one by.
+
+(library
+ (name lowering_fingerprint)
+ (package neural_nets_lib)
+ (modules lowering_fingerprint)
+ (libraries base arrayjit.ir)
+ (preprocess
+  (pps ppx_sexp_conv)))

@@ -1,0 +1,11 @@
+setup: nothing had proposed the ids' bounds before the cold search: true
+cold: the call searched: true
+cold: a link proposed the ids' bounds during the search: true
+cold: the drift happened mid-search -- a reuse differs from the fresh lowering it replaced: true
+precondition: the routine lowers to two programs, blind and bounded: true
+cold: the candidates' lowering is the base's, the routine as lowered before the search: true
+cold: ... and not the program a lowering after the drift gives: true
+cold: the shipped routine computes the host reference bit for bit: true
+warm: the call replayed the cold winner: true
+warm: its base was lowered after the drift, yet its cell holds the blind lowering (reseeded): true
+warm: the shipped routine computes the host reference bit for bit: true

@@ -1,0 +1,24 @@
+audited: the search compiled at least three candidates: true
+audited: the search made one cell and filled it once: true
+audited: every candidate compile reused the lowering, and the audit saw every reuse: true
+audited: every reuse equals a fresh lowering of the routine, section by section: true
+audited: the cell holds a snapshot: true
+the fingerprint is non-vacuous: the lineage places a node virtual: true
+the fingerprint is non-vacuous: the lineage stores a computation: true
+the fingerprint is non-vacuous: the lineage carries an inline preference: true
+the fingerprint discriminates a flipped placement: true
+the fingerprint discriminates a dropped inline preference: true
+the fingerprint discriminates a toggled traced flag: true
+isolation: the snapshot is unchanged from the base compile to the end of the search: true
+audited: the shipped routine takes the reference step: true
+reusing: every compile but the base's reused the lowering, the winner's into the search's own context included: true
+reusing: fewer fresh lowerings (analysis-cache lookups) than compiled candidates: true
+reusing: the shipped routine takes the reference step: true
+control: with reuse disabled, a fresh lowering per compiled candidate: true
+control: the shipped routine takes the reference step: true
+parity: at least three distinct candidates to crown: true
+parity: each crowned candidate ships the segments reuse-disabled ships, and takes the reference step: true
+ownership: the cell serves the context that filled it: true
+ownership: a compile from another context is refused: true
+timing_ctx: the candidates reused the lowering, the winner compiled into the caller's lineage did not: true
+timing_ctx: the shipped routine takes the reference step: true

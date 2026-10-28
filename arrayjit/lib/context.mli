@@ -178,6 +178,7 @@ val compile :
   ?name:string ->
   ?lowered_transform:(Ir.Low_level.optimized -> Ir.Low_level.optimized list) ->
   ?prelowered:Ir.Low_level.optimized ->
+  ?reuse:Ir.Lowering_reuse.t ->
   t ->
   Ir.Assignments.comp ->
   Ir.Indexing.unit_bindings ->
@@ -209,6 +210,13 @@ val compile :
     returned context's lineage state, so the caller owns its provenance; production code should not
     use this parameter.
 
+    [reuse] (gh-ocannl-1526) is a lowering cell ({!Ir.Lowering_reuse}) shared by the compiles of one
+    search: the first compile handed it lowers [comp] and leaves a snapshot, every later one takes a
+    private copy of that snapshot instead of lowering again, and everything downstream of lowering
+    (the transform, zero elision, analysis, codegen, link) runs as on a fresh lowering. Every
+    compile given one cell must name the same context, [comp], bindings and [name]; another raises
+    [Invalid_argument]. Exclusive with [prelowered].
+
     Refuses a {!release}d context with {!Ir.Utils.User_error}, raised rather than returned as an
     outcome by {!compile_outcome} as well. *)
 
@@ -222,6 +230,7 @@ val compile_outcome :
   ?name:string ->
   ?lowered_transform:(Ir.Low_level.optimized -> Ir.Low_level.optimized list) ->
   ?prelowered:Ir.Low_level.optimized ->
+  ?reuse:Ir.Lowering_reuse.t ->
   provenance:Ir.Schedule_outcome.provenance ->
   ?candidate:string ->
   ?retain:(retained -> unit) ->

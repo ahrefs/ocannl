@@ -4112,7 +4112,14 @@ let seeded_replay ?(fallback = true) ~limits ~accum_prec ~admit_narrow ~static_i
    context's lineage): link-time buffer allocation consults that fork, so placement mutations by
    schedule ops — fission's Local promotions above all — must land there or the allocator would miss
    buffers the kernels reference. Candidate hermeticity is unchanged: each compile forks the lineage
-   table anew. The traced store is copied from the base (schedule ops register their tiles in it).
+   table anew. The traced store is record-copied from the base (schedule ops register their tiles in
+   it, and write through its records).
+
+   gh-ocannl-1526: that "fresh" lowering is no longer one. The search's compiles share one
+   [Ir.Lowering_reuse] cell: the base compile lowers and keeps a snapshot, and every later compile
+   from [search_ctx] takes a private copy of it. So the fork a candidate keeps is the very one the
+   base code was decided under, where a re-lowering after a link had proposed node bounds would have
+   handed it a fork decided under drifted code. A compile into another lineage never gets the cell.
 
    gh-ocannl-1421: that is sound only while the fresh lowering is the base's program up to that
    drift. Within the lineage the base was lowered in it is. A compile into ANOTHER lineage -- the
@@ -4256,7 +4263,7 @@ let strict_replay_refusal ~static_indices ~canon ~limits ~is_gpu ~(base_opt : LL
       | (_ : Sched.segmentation * _) -> None
       | exception Outcome.Cause_at (_, cause) -> Some (Outcome.detail_of_cause cause))
 
-let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> ()) ?retain
+let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> ()) ?retain ?reuse
     ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu ~provenance ctx comp bindings spec :
     gated_compile =
   let candidate = match label with Some l -> l | None -> spec_label spec in
@@ -4289,7 +4296,9 @@ let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> (
   let rebase (fresh : LL.optimized) =
     {
       base_opt with
-      LL.traced_store = Hashtbl.copy base_opt.LL.traced_store;
+      (* Record copies, not a table copy sharing [traced_array]s: the schedule writes through this
+         store, and no candidate's writes may reach the base or a sibling (gh-ocannl-1526). *)
+      LL.traced_store = LL.copy_traced_store base_opt.LL.traced_store;
       LL.optimize_ctx = fresh.LL.optimize_ctx;
     }
   in
@@ -4337,8 +4346,8 @@ let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> (
           gate ~digest_after [ opt' ];
           [ opt' ]
         in
-        Context.compile_outcome ?name ~lowered_transform:transform ~provenance ~candidate ?retain
-          ctx comp bindings
+        Context.compile_outcome ?name ~lowered_transform:transform ?reuse ~provenance ~candidate
+          ?retain ctx comp bindings
     | Fiss flavor ->
         let transforms fresh =
           if strict_replay then pristine := Some (LL.copy_optimize_ctx fresh.LL.optimize_ctx);
@@ -4454,8 +4463,8 @@ let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> (
           gate ~digest_after posts;
           posts
         in
-        Context.compile_outcome ?name ~lowered_transform:transforms ~provenance ~candidate ?retain
-          ctx comp bindings
+        Context.compile_outcome ?name ~lowered_transform:transforms ?reuse ~provenance ~candidate
+          ?retain ctx comp bindings
   in
   (* The [Tile_mma] rendering census travels on the routine ([Context.routine.mma], gh-ocannl-626):
      [Context.compile] collects it around this candidate's kernel compiles, fissioned segments
@@ -4504,11 +4513,11 @@ let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> (
 
 (* The callers that do not deduplicate: a refused form arrives as the typed [Not_dispatched]
    failure, which each of them already handles as a failed or degenerate compile. *)
-let compile_candidate ?name ?label ?on_privatize_drops ?retain ~static_indices ~base_opt ~canon
-    ~limits ~is_gpu ~is_cpu ~provenance ctx comp bindings spec : compiled Outcome.outcome =
+let compile_candidate ?name ?label ?on_privatize_drops ?retain ?reuse ~static_indices ~base_opt
+    ~canon ~limits ~is_gpu ~is_cpu ~provenance ctx comp bindings spec : compiled Outcome.outcome =
   match
-    compile_candidate_gated ?name ?label ?on_privatize_drops ?retain ~static_indices ~base_opt
-      ~canon ~limits ~is_gpu ~is_cpu ~provenance ctx comp bindings spec
+    compile_candidate_gated ?name ?label ?on_privatize_drops ?retain ?reuse ~static_indices
+      ~base_opt ~canon ~limits ~is_gpu ~is_cpu ~provenance ctx comp bindings spec
   with
   | Compiled c -> Ok c
   | Failed failure -> Error failure
@@ -7959,6 +7968,10 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
     (* gh-ocannl-1666: the base compile unwound before codegen on a dispatchable baseline, which the
        search compiles where it times it ([baseline_compile]). *)
     let base_deferred = ref false in
+    (* gh-ocannl-1526: the search's one lowering. The base compile below fills it; every candidate
+       compile from [search_ctx] (and a winner compiled into [search_ctx] itself) takes a private
+       copy instead of lowering again -- the lineage state its rebased code was decided under. *)
+    let reuse = Ir.Lowering_reuse.create () in
     progress_stage "base_compile";
     let base_compile_from = ref None in
     let base_outcome =
@@ -8005,7 +8018,7 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
                      detail =
                        "the serial baseline is compiled only where it is timed (gh-ocannl-1666)";
                    } )))
-        ~provenance:Outcome.Candidate ~candidate:"baseline" search_ctx comp bindings
+        ~reuse ~provenance:Outcome.Candidate ~candidate:"baseline" search_ctx comp bindings
     in
     (* gh-ocannl-1604: the base compile's cost on [budget_clock], from the transform's start (after
        the baseline's attempt hook, as a candidate's span starts after its own hook) to its return:
@@ -8226,6 +8239,10 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
              lowering (digest %s), which this call rebases on (gh-ocannl-1614)"
             (dshort base_digest) (dshort blind_digest);
           if is_gpu then base_pristine := Some (scratch_of blind_opt);
+          (* The candidates' lineage state comes from the code they are rebased on: the blind
+             lowering's, not the bounded base compile's (gh-ocannl-1526). [blind_opt] is
+             [lower_assignments]' result, as the cell's snapshot is. *)
+          Ir.Lowering_reuse.reseed reuse blind_opt;
           (blind_opt, blind_canon, blind_digest, { base_report with source_digest = blind_digest })
     in
     let key = key_of canon in
@@ -8262,13 +8279,13 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
     in
     let compile_spec spec =
       costed ~attempt:(spec_label spec) ~verdict_of:outcome_verdict (fun () ->
-          compile_candidate ?name ~on_privatize_drops ~static_indices ~base_opt ~canon ~limits
-            ~is_gpu ~is_cpu ~provenance:Outcome.Candidate search_ctx comp bindings spec)
+          compile_candidate ?name ~on_privatize_drops ~reuse ~static_indices ~base_opt ~canon
+            ~limits ~is_gpu ~is_cpu ~provenance:Outcome.Candidate search_ctx comp bindings spec)
     in
     (* The search's own candidate compiles, deduplicated against [seen] before codegen. *)
     let compile_spec_deduped ~seen =
-      compile_candidate_gated ?name ~seen ~on_privatize_drops ~static_indices ~base_opt ~canon
-        ~limits ~is_gpu ~is_cpu ~provenance:Outcome.Candidate search_ctx comp bindings
+      compile_candidate_gated ?name ~seen ~on_privatize_drops ~reuse ~static_indices ~base_opt
+        ~canon ~limits ~is_gpu ~is_cpu ~provenance:Outcome.Candidate search_ctx comp bindings
     in
     (* Winner (and cache-hit) compiles target the caller's context; they replay against the same
        base lowering as the search's candidates, the caller's lineage lowering to it
@@ -8278,8 +8295,11 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
         ~attempt:(Option.value label ~default:(spec_label spec))
         ~verdict_of:outcome_verdict
         (fun () ->
-          compile_candidate ?name ?label ?retain ~static_indices ~base_opt ~canon ~limits ~is_gpu
-            ~is_cpu ~provenance ctx comp bindings spec)
+          (* The search's lowering serves a compile into [search_ctx] itself; another lineage (the
+             caller's, after a search on a [timing_ctx]) lowers afresh, behind [Lineage_refused]. *)
+          let reuse = Option.some_if (phys_equal ctx search_ctx) reuse in
+          compile_candidate ?name ?label ?retain ?reuse ~static_indices ~base_opt ~canon ~limits
+            ~is_gpu ~is_cpu ~provenance ctx comp bindings spec)
     in
     let flat_schedule = function
       | Whole_saved saved -> saved
@@ -8795,9 +8815,9 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
             let c0 = budget_clock () in
             let compiled =
               costed ~attempt:"baseline" ~verdict_of:outcome_verdict (fun () ->
-                  compile_candidate ?name ~label:"baseline" ~on_privatize_drops ~static_indices
-                    ~base_opt ~canon ~limits ~is_gpu ~is_cpu ~provenance:Outcome.Candidate
-                    search_ctx comp bindings
+                  compile_candidate ?name ~label:"baseline" ~on_privatize_drops ~reuse
+                    ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu
+                    ~provenance:Outcome.Candidate search_ctx comp bindings
                     (Whole (W_saved ([], None))))
             in
             if Option.is_some budget then baseline_compile_s := Float.max 0. (budget_clock () -. c0);

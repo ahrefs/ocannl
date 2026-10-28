@@ -1195,6 +1195,11 @@ val optimize_integer_pow : bool ref
 
 type traced_store = (Tnode.t, traced_array) Base.Hashtbl.t [@@deriving sexp_of]
 
+val copy_traced_store : traced_store -> traced_store
+(** A private copy of a traced store: the table AND its [traced_array] records (whose fields are
+    mutable), so writes through the copy never reach the original or a sibling copy. [Hashtbl.copy]
+    alone shares the records. *)
+
 type optimize_ctx = {
   computations : (Tnode.t, (Indexing.axis_index array option * t) list) Base.Hashtbl.t;
       (** The computations (of the tensor node) are retrieved for optimization just as they are
@@ -1547,6 +1552,13 @@ val validate_virtualization_decision_coverage : Tnode.Placements.t -> t -> unit
     virtual candidate's setter are excluded because cleanup drops the whole setter without visiting
     its right-hand side. Exposed so hand-built-IR tests can inject the otherwise-unreachable
     negative control directly at this boundary. *)
+
+val alpha_digest : ?syms:Indexing.symbol list -> ?tn_token:(Tnode.t -> string) -> t -> string
+(** A structural digest of [llc] that two lowerings of one routine agree on (gh-ocannl-1526): tensor
+    nodes by identity ([uid]), or by [tn_token] when given (to rename the nodes a compile mints);
+    loop binders, local-scope ids and free symbols -- each lowering mints its own -- alpha-renamed
+    by first occurrence, [syms] pre-registered in order (to name the free index symbols of a stored
+    computation's index tuple). Comments are skipped. *)
 
 val analysis_cache_stats : unit -> int * int
 (** gh-560: [(hits, misses)] of the process-global analysis cache consulted by [optimize]: sibling
