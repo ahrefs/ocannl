@@ -633,12 +633,13 @@ let () =
      those (multiples of 1/1024 below 200) — while every product and partial sum is exact in f32, so
      ANY association returns the exact sum. Bitwise equality with the host's exact sum therefore
      fails on a rendering that rounds a product, or an accumulator, to f16 anywhere; the host-side
-     claim before it pins that the inputs can tell. Every product is nonnegative, which is what
-     makes gfx11's WMMA exact here (gh-ocannl-1420: exactly rounded only when the products share a
-     sign). Not the numerics of the tensor unit against the scalar fallback: Metal's fallback for
-     this triple computes [fma((float)a, (float)b, acc)] in f32 and is exact too — the structure
-     claim is what tells the two apart. CUDA is skipped: its f16 -> f32 arm is the staged legs'
-     subject below, and whether wmma returns this exact sum has not been run. --- *)
+     claim before it pins that the inputs can tell. Every product is nonnegative, which with the
+     exact partials is what makes gfx11's WMMA exact here (gh-ocannl-1420: exact only when the
+     products share a sign; gh-ocannl-1509: on an inexact sum it is not correctly rounded). Not the
+     numerics of the tensor unit against the scalar fallback: Metal's fallback for this triple
+     computes [fma((float)a, (float)b, acc)] in f32 and is exact too — the structure claim is what
+     tells the two apart. CUDA is skipped: its f16 -> f32 arm is the staged legs' subject below, and
+     whether wmma returns this exact sum has not been run. --- *)
   let h32a = Ll_test.weighted ~weights:[| 3; 1 |] ~modulus:8 ~offset:1024. ~stride:0x1p-10 in
   let h32b = Ll_test.weighted ~weights:[| 1; 2 |] ~modulus:7 ~offset:0. ~stride:1. in
   let exact_h32 =
@@ -710,14 +711,14 @@ let () =
 
      The inputs are WIDTH-SENSITIVE, unlike [mah]/[mbh] above (Codex P1 round 3 on staging PR #477:
      f16-exact inputs cannot tell a wide arm that accidentally accumulates narrow from a correct
-     one). Cells are f16-exact (multiples of 1/8, magnitudes below 4), products are multiples of
-     1/64 with mean ~2.4, so the 32-term k-sums drift past 64 — where f16's spacing (1/16 and
-     coarser) can no longer represent them and per-step f16 narrowing visibly diverges — while every
-     product and partial sum stays exact in f32 (multiples of 1/64, magnitude below 2^8), so ANY
-     accumulation association gives the identical f32 value: the comparison against the host-side
-     once-narrowed wide reference is bitwise for the serial rendering, the PTX arm's whole-k f32
-     registers, and the recorded fallbacks alike, and a half-resident accumulator in any of them
-     fails it. --- *)
+     one). Cells are f16-exact (multiples of 3/8 up to 9/8, and of 5/16 up to 45/16), products are
+     multiples of 15/128 with mean ~1.2, so the 32-term k-sums reach ~40 — past 16, where f16's
+     spacing (1/64, then 1/32) can no longer represent the 1/128-multiple partials and per-step f16
+     narrowing visibly diverges — while every product and partial sum stays exact in f32 (multiples
+     of 1/128, magnitude below 2^6; the Bf16_wide leg claims this host-side), so ANY accumulation
+     association gives the identical f32 value: the comparison against the host-side once-narrowed
+     wide reference is bitwise for the serial rendering, the PTX arm's whole-k f32 registers, and
+     the recorded fallbacks alike, and a half-resident accumulator in any of them fails it. --- *)
   let fwa = Ll_test.cycle ~dims:[| n; n |] ~modulus:3 ~offset:1. ~stride:0.375 in
   let fwb = Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:0.5 ~stride:0.625 in
   let mwa = NTDSL.init ~l:"mwa" ~prec:Ir.Ops.half ~i:[ n ] ~o:[ n ] ~f:fwa () in
@@ -942,10 +943,11 @@ let () =
        16x16x16 [mma_sync] whose inputs were the old SIGNED [mbb] cycle: 227 of 256 cells off by up
        to one f32 ulp, 235 of 256 by up to 5.86e-3 in the bf16-accumulate arm. That was the
        mixed-sign residue of gfx11's WMMA (gh-ocannl-1420), not a property of the format: with every
-       product of one sign the instruction is exactly rounded, so the inputs above are nonnegative
-       and the claim is exact (gh-ocannl-1432). A wrong stride or a mis-mapped fragment moves values
-       by O(1); a sign-mixing input moves them by ulps, which is why a bitwise claim needs the sign
-       discipline and not a tolerance. *)
+       product of one sign and every partial sum exact the instruction returns the exact sum (on an
+       inexact sum it is not correctly rounded at either width, gh-ocannl-1509), so the inputs above
+       are nonnegative and exact, and the claim is exact (gh-ocannl-1432). A wrong stride or a
+       mis-mapped fragment moves values by O(1); a sign-mixing input moves them by ulps, which is
+       why a bitwise claim needs the sign discipline and not a tolerance. *)
     p_all2
       (Printf.sprintf "%s tensorized matmul matches the serial twin bitwise" tag)
       got want ~f:Float.equal;
@@ -1033,21 +1035,28 @@ let () =
      tiling renders as under the default policy (its accumulator is f32 either way).
 
      The inputs are [mwa]/[mwb]'s WIDTH-SENSITIVE cycles, which are bf16-exact too (at most five
-     significant bits): 32-term sums reach ~77, where bf16's spacing (1/2) cannot hold the
-     1/64-multiple partials, while every partial stays exact in f32. The claim is the issue's own
-     measure — the worst error against the EXACT product must drop to the narrowing rounding alone,
-     half a bf16 ulp, with no slack: the cycles are positive, so gfx11's f32 accumulate is exactly
-     rounded too (gh-ocannl-1420; the f32 ulp of slack it once carried for HIP went with
-     gh-ocannl-1432, which also added the stronger claim beside it: every partial sum is exact in
-     f32, so the tensorized result IS the once-narrowed wide reference, bitwise) — and it is
-     two-sided: the same bound over the same inputs, rendered under the default policy, must FAIL
-     wherever the backend keeps bf16 storage residency, which is what makes passing it evidence
-     rather than a property of easy inputs. On HIP that is no longer the default (its [Bf16_auto]
-     resolves wide since gh-ocannl-1051), so its negative control is the [Bf16_narrow] twin below:
-     gfx11's bf16-accumulate WMMA, or its narrow serial fallback, which the approximate profile
-     still ships. Metal's side of the negative control executes since gh-ocannl-923: its
-     default-policy [simdgroup_bfloat8x8] accumulate exceeds the bound (by 0.0937 on an M4 Max,
-     against -0.0234 under [Bf16_wide]). --- *)
+     significant bits): 32-term sums reach ~40, where bf16's spacing (1/4 above 32, 1/8 above 16)
+     cannot hold the 1/128-multiple partials, while every partial stays exact in f32. The claim is
+     the issue's own measure — the worst error against the EXACT product must drop to the narrowing
+     rounding alone, half a bf16 ulp, with no slack. The bound is derived from where the rounding
+     happens, not from how a unit rounds: every product is nonnegative and every partial sum exact
+     in f32 (claimed host-side below, from the init functions), so no accumulator rounds at all —
+     which is what it takes on HIP, whose f32 WMMA accumulator is no correctly rounded adder (one
+     guard bit, no sticky bit: under a full f32 ulp per inexact addition, gh-ocannl-1509) — and the
+     one rounding left is the [d] boundary's narrowing, to nearest even (HIP's [__float2bfloat16];
+     on every backend the bitwise claim beside it pins that conversion to the library's own codec),
+     so half an ulp. The f32 ulp of slack this once carried for HIP went with gh-ocannl-1432, which
+     also added the stronger claim beside it: the tensorized result IS the once-narrowed wide
+     reference, bitwise. And it is two-sided: the same bound over the same inputs, rendered under
+     the default policy, must FAIL wherever the backend keeps bf16 storage residency, which is what
+     makes passing it evidence rather than a property of easy inputs. On HIP that is no longer the
+     default (its [Bf16_auto] resolves wide since gh-ocannl-1051), so its negative control is the
+     [Bf16_narrow] twin below: gfx11's bf16-accumulate WMMA, or its narrow serial fallback, which
+     the approximate profile still ships — whose bf16 accumulator rounds TOWARD ZERO
+     (gh-ocannl-1509), a full bf16 ulp per inexact addition, which only carries the twin further
+     past the half-ulp bound (by 1.12 on gfx1151, gh-ocannl-1051). Metal's side of the negative
+     control executes since gh-ocannl-923: its default-policy [simdgroup_bfloat8x8] accumulate
+     exceeds the bound (by 0.0937 on an M4 Max, against -0.0234 under [Bf16_wide]). --- *)
   let bwa = NTDSL.init ~l:"bwa" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ] ~f:fwa () in
   let bwb = NTDSL.init ~l:"bwb" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ] ~f:fwb () in
   let exact_bw =
@@ -1125,6 +1134,20 @@ let () =
      %.3g, default policy %.3g, Bf16_narrow %.3g (not part of the golden)\n\
      %!"
     backend_name (worst_excess got_bw) (worst_excess got_bw_default) (worst_excess got_bw_narrow);
+  (* The bound's precondition, read off the init functions rather than restated: every product is a
+     nonnegative multiple of [q] (the cycles' values are multiples of 3/8 and 5/16, so their
+     products of 15/128), and every cell's sum is at most [2^24 q], so EVERY partial sum, in any
+     association a unit chooses, is a multiple of [q] below [2^24 q]: exact in f32. *)
+  (let q = Float.ldexp 1. (-7) in
+   p_all
+     "the width-sensitive inputs keep every product nonnegative and every f32 partial sum exact, \
+      so the narrowing is the one rounding the Bf16_wide bound allows for"
+     (List.init (n * n) ~f:Fn.id)
+     ~f:(fun t ->
+       let i = t / n and j = t % n in
+       let prods = List.init n ~f:(fun k -> fwa [| i; k |] *. fwb [| k; j |]) in
+       Float.(List.sum (module Float) prods ~f:Fn.id / q <= ldexp 1. 24)
+       && List.for_all prods ~f:(fun x -> Float.(x >= 0. && round_down (x / q) = x / q))));
   p_all2 "Bf16_wide bf16 serial rendering equals the once-narrowed wide reference bitwise" want_bw
     wide_ref_bw ~f:Float.equal;
   p "Bf16_wide uniform-bf16 tensorized matmul errs by the narrowing rounding alone"

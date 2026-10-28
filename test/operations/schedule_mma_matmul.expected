@@ -33,6 +33,7 @@ bfu_tb tensorized matmul matches the serial twin bitwise: true
 bfu_tb tensorized structure as expected: true
 bfu_m2 tensorized matmul matches the serial twin bitwise: true
 bfu_m2 tensorized structure as expected: true
+the width-sensitive inputs keep every product nonnegative and every f32 partial sum exact, so the narrowing is the one rounding the Bf16_wide bound allows for: true
 Bf16_wide bf16 serial rendering equals the once-narrowed wide reference bitwise: true
 Bf16_wide uniform-bf16 tensorized matmul errs by the narrowing rounding alone: true
 Bf16_wide uniform-bf16 tensorized matmul equals the once-narrowed wide reference bitwise: true

@@ -197,8 +197,9 @@ let run_seed ~label ~idx ~limits ~keep_mapping ~is_target ~build ~reference =
    online-softmax rewrite is one [Scan_loop] per cell of a [32 x cols] grid, writing the row max and
    normalizer it carries. The two share no node, so fission merges their nests unconditionally.
    [z]'s operands are small NONNEGATIVE integers (0..6 against 0..4), so every product and partial
-   sum is exact in f32 and of one sign, which is what makes gfx11's WMMA exactly rounded
-   (gh-ocannl-1420): leg 4 compares [z] bitwise on every backend (gh-ocannl-1432). *)
+   sum is exact in f32 and of one sign, which is what makes gfx11's WMMA exact (gh-ocannl-1420; on
+   an inexact sum it is not correctly rounded, gh-ocannl-1509): leg 4 compares [z] bitwise on every
+   backend (gh-ocannl-1432). *)
 let n = 32
 let kk = 32
 let red = 24

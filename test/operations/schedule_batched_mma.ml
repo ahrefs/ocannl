@@ -229,10 +229,11 @@ let () =
      [hh]-times larger than the minor dims, which is exactly the case gh-ocannl-528 introduced and
      the case a fragment load addresses differently from a scalar loop.
 
-     Bitwise on every backend, HIP's included: the operands are nonnegative, and gfx11's WMMA is
-     exactly rounded when every product shares a sign (gh-ocannl-1420). These legs held a 5%
-     tolerance while [wb]/[vb] were signed (worst measured 5.86e-03 in the uniform-bf16 combination:
-     the mixed-sign residue, not the format's), until gh-ocannl-1432. *)
+     Bitwise on every backend, HIP's included: the operands are nonnegative and every partial sum
+     exact, and gfx11's WMMA returns the exact sum when every product shares a sign (gh-ocannl-1420)
+     -- exactness matters too: on an inexact sum it is not correctly rounded (gh-ocannl-1509). These
+     legs held a 5% tolerance while [wb]/[vb] were signed (worst measured 5.86e-03 in the
+     uniform-bf16 combination: the mixed-sign residue, not the format's), until gh-ocannl-1432. *)
   let real_limits = Context.hardware_limits (Context.auto ()) in
   let has_uniform_bf16_tile =
     Ir.Backend_intf.advertises_mma_format real_limits ~a:Ir.Backend_intf.Mma_bf16
