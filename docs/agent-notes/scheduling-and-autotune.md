@@ -1583,6 +1583,18 @@ files.
   paid for and thrown away", charge each `on_candidate_attempt` the `Link_after_delta` hits and
   `on_candidate_preflight` runs that follow it, under `tune_deferred` so the shipping compile falls
   after the report (`autotune_serial_baseline`).
+- **The serial baseline's timing window is bounded** (gh-ocannl-1666). On cc every window takes at
+  least 16 samples, a floor set for sub-millisecond kernels. A seconds-long serial baseline paid
+  it in full: 16 singles plus the warmup of a `gpt2_mini_train` b8 step, 56-80 s per arm.
+  `Autotune.window_bounded` ends a window, admitted, at 3 or more undispersed samples summing to
+  `baseline_window_ms` (3 s). `tune` passes it to the baseline's window alone
+  (`time_routine ?window_bound_ms`). The bounded reading is a min over fewer samples, so it can only
+  read slower. The baseline can lose a near-tie, never win one it would have lost; it stays ranked at
+  index 1, so trajectories and early stopping are unchanged. The candidates keep the floor, since
+  ranking them is the search's job; extending the bound to every slow window is a separate policy
+  question. The issue's other option, skipping the window when the seeded plan is clearly faster, has
+  nothing to work with on cc: the seeded plan is CUDA/HIP-only, and a measured reference before the
+  baseline would reorder the trajectory (`autotune_baseline_window`).
 - **What a candidate's compile costs is on the record, per compile** (gh-ocannl-1314): every
   compile a `tune` call makes (the baseline, each candidate attempt, a replay, the winner, an
   untuned fallback) writes one `compiled` progress event and one `Autotune.compile_record` to the

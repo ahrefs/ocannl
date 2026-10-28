@@ -794,18 +794,25 @@ let contention_ratio = 2.
 
    [hopeless] (gh-ocannl-1527, default never) is asked after every sample with the window so far,
    oldest first; when it answers, the loop raises {!Timing_hopeless} at once, so a window that
-   already proves its candidate out of the running stops taking samples. *)
+   already proves its candidate out of the running stops taking samples.
+
+   [bounded] (gh-ocannl-1666, default never) is asked, with the window so far, once it holds the
+   caller's [repeats]; when it answers [true] the window ends there, ADMITTED -- unlike [hopeless],
+   whose window is unranked. Checked before each fresh sample, so a resumed window that already
+   satisfies it takes none. *)
 type hopeless = { hopeless_ms : float; hopeless_threshold_ms : float; hopeless_samples : int }
 
 exception Timing_hopeless of hopeless
 
-let sample_window ?(prior = []) ?(hopeless = fun _ -> None) ~repeats ~sample () =
+let sample_window ?(prior = []) ?(hopeless = fun _ -> None) ?(bounded = fun _ -> false) ~repeats
+    ~sample () =
   let samples = ref (List.rev prior) in
   let total = ref (List.fold prior ~init:0. ~f:(fun total s -> total +. s.per_launch_ms)) in
   let count = ref (List.length prior) in
   while
-    !count < Int.max min_timing_samples (Int.max 1 repeats)
-    || (Float.(!total < min_timing_ms) && !count < max_timing_runs)
+    (!count < Int.max min_timing_samples (Int.max 1 repeats)
+    || (Float.(!total < min_timing_ms) && !count < max_timing_runs))
+    && not (!count >= Int.max 1 repeats && bounded (List.rev !samples))
   do
     let ({ per_launch_ms; _ } as timing_sample) = sample () in
     samples := timing_sample :: !samples;
@@ -894,6 +901,33 @@ let hopeless_window ?(at_least_ms = 0.) ~reference_ms samples =
       Some
         { hopeless_ms = r.ms; hopeless_threshold_ms = threshold_ms; hopeless_samples = r.samples }
     else None
+
+(* gh-ocannl-1666: the serial baseline's window bound. On cc every window takes at least
+   [min_timing_samples] samples, a floor that exists for sub-millisecond kernels, whose min-of-3 is
+   launch jitter; a slow serial baseline paid it in full -- sixteen synchronized singles of a
+   [gpt2_mini_train] b8 step plus the warmup, 56-80 s per placement arm, more than the whole base
+   compile once gh-ocannl-1603 outlined it. The baseline's window therefore ends, admitted, once it
+   holds [hopeless_min_samples] (and the caller's [repeats]) samples that are not dispersed and
+   whose [per_launch_ms] sum to at least [baseline_window_ms]: at most about that much sampled time,
+   or three samples of a routine slower than a third of it. A window under the bound -- every
+   millisecond-scale baseline -- keeps the floor exactly as before.
+
+   What it gives up, stated: noise only adds time, so a min-of-3 reads at least the min-of-16 of the
+   same samples, and the bounded baseline can only read slower than its full window would -- by the
+   jitter of seconds-long samples, where one sample's relative spread is far below the
+   sub-millisecond regime the floor was set for. It loses a near-tie it would have won, never wins
+   one it would have lost. Only the baseline is bounded: the candidates' ranking among themselves is
+   what the search is for, and it keeps the floor. [at_least_ms] gates a queued calibration's
+   singles exactly as {!hopeless_window}'s does: they are cut only where they are the reading. *)
+let baseline_window_ms = 3000.
+
+let window_bounded ?(at_least_ms = 0.) ~bound_ms samples =
+  List.length samples >= hopeless_min_samples
+  &&
+  let r = window_result samples in
+  (not r.dispersed) && Float.is_finite r.ms && Float.is_positive r.ms
+  && Float.(r.ms >= at_least_ms)
+  && Float.(List.sum (module Float) samples ~f:(fun s -> s.per_launch_ms) >= bound_ms)
 
 (* How a timing call turns a dispersed window into a verdict (gh-ocannl-1558). [Refuse_dispersed] is
    the dispersion-only rule, kept on GPU backends: host CPU accounting cannot see a device
@@ -1539,12 +1573,17 @@ let install_compile_observer f =
    returns the wall in milliseconds. Separated from [time_routine] so a test can drive the whole
    policy -- which depth a call settles on, which window it times, how many launches each costs --
    on an injected clock, with no device and no machine-dependent routine (gh-ocannl-1074). *)
-let calibrate_and_time_from ~hopeless_against ~started ~tagged ~on_retry ~on_call ~phase
-    ~retry_contended ~dispersion ~timing ~repeats ~queue_depth_cap ~batch =
+let calibrate_and_time_from ~window_bound_ms ~hopeless_against ~started ~tagged ~on_retry ~on_call
+    ~phase ~retry_contended ~dispersion ~timing ~repeats ~queue_depth_cap ~batch =
   (* gh-ocannl-1527: the cut of a hopeless window, against the reading the caller ranks it by. *)
   let hopeless ?at_least_ms () =
     Option.map hopeless_against ~f:(fun reference_ms samples ->
         hopeless_window ?at_least_ms ~reference_ms samples)
+  in
+  (* gh-ocannl-1666: the admitted early end of a bounded window ({!window_bounded}). *)
+  let bounded ?at_least_ms () =
+    Option.map window_bound_ms ~f:(fun bound_ms samples ->
+        window_bounded ?at_least_ms ~bound_ms samples)
   in
   (* The host-load reading the window's attribution starts from (gh-ocannl-1558): the span covers
      exactly the window's samples. Taken here, before the calibration's first single, for a depth-1
@@ -1629,6 +1668,7 @@ let calibrate_and_time_from ~hopeless_against ~started ~tagged ~on_retry ~on_cal
         let singles =
           sample_window ~repeats:queue_calibration_runs
             ?hopeless:(hopeless ~at_least_ms:queued_batch_ms ())
+            ?bounded:(bounded ~at_least_ms:queued_batch_ms ())
             ~sample:(fun () ->
               let wall = batch 1 in
               { per_launch_ms = wall; contention_ms = wall })
@@ -1978,7 +2018,7 @@ let calibrate_and_time_from ~hopeless_against ~started ~tagged ~on_retry ~on_cal
     and timed_walls = ref (List.rev_map reused ~f:(fun s -> s.contention_ms)) in
     let result =
       window_result
-      @@ sample_window ~prior:reused ?hopeless:(hopeless ()) ~repeats
+      @@ sample_window ~prior:reused ?hopeless:(hopeless ()) ?bounded:(bounded ()) ~repeats
            ~sample:(fun () ->
              let wall = batch depth in
              timed_wall_ms := !timed_wall_ms +. wall;
@@ -2116,8 +2156,9 @@ let calibrate_and_time_from ~hopeless_against ~started ~tagged ~on_retry ~on_cal
    timed from this call's own start, and the dispersion policy it picks by backend. *)
 let calibrate_and_time_with_retry_observer ~hopeless_against ~on_retry ~on_call ~phase
     ~retry_contended ~dispersion ~timing ~repeats ~queue_depth_cap ~batch =
-  calibrate_and_time_from ~hopeless_against ~started:(Mtime_clock.counter ()) ~tagged:false
-    ~on_retry ~on_call ~phase ~retry_contended ~dispersion ~timing ~repeats ~queue_depth_cap ~batch
+  calibrate_and_time_from ~window_bound_ms:None ~hopeless_against ~started:(Mtime_clock.counter ())
+    ~tagged:false ~on_retry ~on_call ~phase ~retry_contended ~dispersion ~timing ~repeats
+    ~queue_depth_cap ~batch
 
 (* Preserve the original all-labelled helper's source interface: an optional observer would not
    erase without adding a positional argument. *)
@@ -2136,7 +2177,7 @@ exception Timing_stopped
 (* [routine.bindings] exposes the routine's live binding refs — restore them after timing (Codex P2
    on PR #103), or the returned winner would stay bound to the tuner's midpoint test values. *)
 let time_routine ?(on_retry = fun () -> ()) ?(on_call = fun _ -> ()) ?(tag_failures = false) ?phase
-    ?(stop = fun () -> false) ?hopeless_against ~timing ~repeats cctx routine =
+    ?(stop = fun () -> false) ?hopeless_against ?window_bound_ms ~timing ~repeats cctx routine =
   let check_stop () = if stop () then raise Timing_stopped in
   (* The call's [setup_ms] runs from here: the pre-dispatch validation, the warmup and the
      calibration. *)
@@ -2185,8 +2226,8 @@ let time_routine ?(on_retry = fun () -> ()) ?(on_call = fun _ -> ()) ?(tag_failu
         Int.incr ordinal;
         wall
       in
-      calibrate_and_time_from ~hopeless_against ~started ~tagged:tag_failures ~on_retry ~on_call
-        ~phase ~timing ~repeats
+      calibrate_and_time_from ~window_bound_ms ~hopeless_against ~started ~tagged:tag_failures
+        ~on_retry ~on_call ~phase ~timing ~repeats
         ~retry_contended:(retry_contended_window_for_backend (Context.backend_name cctx))
         ~dispersion:(dispersion_policy_for_backend (Context.backend_name cctx))
         ~queue_depth_cap:(queue_depth_cap_for_backend (Context.backend_name cctx))
@@ -8681,7 +8722,9 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
                    nothing and condemns nothing, and propagates as the pre-search failure. *)
                 Outcome.tag Outcome.Preflight before_timing_window;
                 progress_stage "baseline_timing";
-                time_routine ~on_retry ~on_call ~tag_failures:true ~timing ~repeats b.cctx b.routine
+                (* gh-ocannl-1666: the one window that is bounded ({!window_bounded}). *)
+                time_routine ~on_retry ~on_call ~tag_failures:true
+                  ~window_bound_ms:baseline_window_ms ~timing ~repeats b.cctx b.routine
               with
               | timing_result -> (
                   let timing_result =

@@ -3130,6 +3130,7 @@ exception Timing_hopeless of hopeless
 val sample_window :
   ?prior:timing_sample list ->
   ?hopeless:(timing_sample list -> hopeless option) ->
+  ?bounded:(timing_sample list -> bool) ->
   repeats:int ->
   sample:(unit -> timing_sample) ->
   unit ->
@@ -3140,7 +3141,9 @@ val sample_window :
     samples would, so it takes no fresh sample when [prior] already meets the floor and the top-up
     budget. [hopeless] (default: never) is asked after every fresh sample with the window so far,
     oldest first, and when it answers the loop raises {!Timing_hopeless} at once (gh-ocannl-1527).
-*)
+    [bounded] (default: never, gh-ocannl-1666) is asked before each fresh sample once the window
+    holds [max 1 repeats] samples; when it answers [true] the window ends there and is returned --
+    an admitted reading, unlike a hopeless one. {!window_bounded} is the rule the tuner passes. *)
 
 val window_result : timing_sample list -> timing_result
 (** A window's reading: its minimum [per_launch_ms], its sample count, its [spread], and the
@@ -3152,6 +3155,23 @@ val hopeless_ratio : float
 
 val hopeless_min_samples : int
 (** 3: the fewest samples {!hopeless_window} cuts on. *)
+
+val baseline_window_ms : float
+(** 3000: the sampled time at which the serial baseline's timing window may end ({!window_bounded},
+    gh-ocannl-1666). *)
+
+val window_bounded : ?at_least_ms:float -> bound_ms:float -> timing_sample list -> bool
+(** Whether a timing window, oldest sample first, has sampled enough to end before its sample floor
+    and still be ranked (gh-ocannl-1666): at least {!hopeless_min_samples} samples, which
+    {!window_result} does not find dispersed, whose minimum [per_launch_ms] is finite, positive and
+    at least [at_least_ms] (default 0), and whose [per_launch_ms] sum to at least [bound_ms].
+    {!tune} bounds the serial baseline's window alone, at {!baseline_window_ms}: on cc a
+    seconds-long serial step paid the sixteen-sample floor in full (56-80 s per [gpt2_mini_train]
+    placement arm). The floor is there for sub-millisecond kernels, whose min-of-3 is launch jitter;
+    a window under the bound keeps it. Noise only adds time, so a bounded reading is at least the
+    full window's: the baseline can lose a near-tie it would have won, never win one it would have
+    lost. The candidates keep the floor. [at_least_ms] gates a queued calibration's singles as
+    {!hopeless_window}'s does. *)
 
 val hopeless_window :
   ?at_least_ms:float -> reference_ms:float -> timing_sample list -> hopeless option
@@ -3409,6 +3429,7 @@ val time_routine :
   ?phase:string ->
   ?stop:(unit -> bool) ->
   ?hopeless_against:float ->
+  ?window_bound_ms:float ->
   timing:timing_mode ->
   repeats:int ->
   Context.t ->
@@ -3423,17 +3444,19 @@ val time_routine :
     bindings afterwards, runs one warmup, then minimizes the per-launch time over at least 16 and
     [repeats] timed runs, topping up until ~25 ms of per-launch samples has accumulated (up to 64
     runs unless the [repeats] floor is larger) so that a host stall cannot collapse the min-of-N.
-    Under [~timing:Queued] a "run" is a whole batch of dispatches whose depth is calibrated per
-    candidate to ~10 ms of wall, capped at 2048 on CUDA/HIP and at the historical 200 on cc/Metal,
-    and floored at 1. cc/Metal retain the historical synchronized-single estimate. On CUDA/HIP that
-    estimate instead seeds a provisional depth; when that is above 1, a provisional queued probe
-    separates fixed synchronization from marginal launch cost and selects the depth whose affine
-    wall estimate reaches the target. The batch probes take the minimum of twelve runs: unlike
-    ranked timing, they only choose scale and are already milliseconds long. Since gh-ocannl-1098
-    both are wall-budgeted: a probe stops at three minima once its own wall passes two target-sized
-    probes', and once the probes' summed wall reaches {!queue_calibration_wall_ms} no further probe
-    starts and the calibration ends unresolved. Up to four further probes validate the depth; a
-    resolved crossing shallower than the batches it was fitted from is sampled and checked like an
+    [window_bound_ms] (default: none) ends the window, admitted, as soon as {!window_bounded} holds
+    of it at that bound (gh-ocannl-1666: the serial baseline's window). Under [~timing:Queued] a
+    "run" is a whole batch of dispatches whose depth is calibrated per candidate to ~10 ms of wall,
+    capped at 2048 on CUDA/HIP and at the historical 200 on cc/Metal, and floored at 1. cc/Metal
+    retain the historical synchronized-single estimate. On CUDA/HIP that estimate instead seeds a
+    provisional depth; when that is above 1, a provisional queued probe separates fixed
+    synchronization from marginal launch cost and selects the depth whose affine wall estimate
+    reaches the target. The batch probes take the minimum of twelve runs: unlike ranked timing, they
+    only choose scale and are already milliseconds long. Since gh-ocannl-1098 both are
+    wall-budgeted: a probe stops at three minima once its own wall passes two target-sized probes',
+    and once the probes' summed wall reaches {!queue_calibration_wall_ms} no further probe starts
+    and the calibration ends unresolved. Up to four further probes validate the depth; a resolved
+    crossing shallower than the batches it was fitted from is sampled and checked like an
     interpolation. The first target-sized batch is confirmed at a 25% deeper depth (clamped to and
     measured at the cap) and retained only when the pair's inferred fixed component is below the
     target. A confirmation over 2x its supported base is retried once before an unresolved pair
