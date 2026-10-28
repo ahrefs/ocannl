@@ -10640,6 +10640,32 @@ let analysis_digest (static_indices : Indexing.static_symbol list) (llc : t) : s
   if not !cacheable then None
   else Some (Stdlib.Digest.to_hex (Stdlib.Digest.string (Buffer.contents buf)))
 
+let alpha_digest ?(syms = []) ?(tn_token = fun tn -> "t" ^ Int.to_string tn.Tn.uid) (llc : t) :
+    string =
+  let buf = Buffer.create 4096 in
+  let add = Buffer.add_string buf in
+  let free = Hashtbl.create (module Indexing.Symbol) in
+  let free_token s =
+    match Hashtbl.find free s with
+    | Some tok -> tok
+    | None ->
+        let tok = "f" ^ Int.to_string (Hashtbl.length free) in
+        Hashtbl.set free ~key:s ~data:tok;
+        tok
+  in
+  List.iter syms ~f:(fun s -> ignore (free_token s : string));
+  Canonical_render.emit ~buf
+    {
+      emit_tn = (fun tn -> add (tn_token tn));
+      emit_free_sym = (fun s -> add (free_token s));
+      on_bind_loop = (fun _ ~id:_ ~shadowed -> if shadowed then add "!shadowed");
+      mark_incomplete = (fun () -> add "!incomplete");
+      mma = Canonical_render.Structural_mma;
+      initial_tokens = [];
+    }
+    llc;
+  Stdlib.Digest.to_hex (Stdlib.Digest.string (Buffer.contents buf))
+
 (* gh-560: sibling candidate compiles of one routine (the placement A/B arms, flip refinements and
    schedule candidates of [Train.tune_placements] / [Autotune.tune] each re-lower the routine from
    the same assignments) share one [analyze_proc] result and replay only [specialize_proc]. Safe by

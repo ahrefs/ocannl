@@ -9,6 +9,7 @@ Sources naming a schedule cache directory, all with the `autotune_cache` prefix 
   test/operations/autotune_dispersion_attribution.ml
   test/operations/autotune_fission_sketch.ml
   test/operations/autotune_hopeless_window.ml
+  test/operations/autotune_lowering_reuse_drift.ml
   test/operations/autotune_mma_companion.ml
   test/operations/autotune_replay_refusal.ml
   test/operations/autotune_seeded_seed.ml

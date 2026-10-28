@@ -107,6 +107,7 @@
   schedule
   schedule_cache
   assignments
+  lowering_reuse
   task
   backend_intf
   backend_impl

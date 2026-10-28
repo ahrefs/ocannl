@@ -1678,6 +1678,7 @@ module type Backend = sig
     ?name:string ->
     ?lowered_transform:(Low_level.optimized -> Low_level.optimized list) ->
     ?prelowered:Low_level.optimized ->
+    ?reuse:Lowering_reuse.t ->
     Indexing.unit_bindings ->
     Assignments.comp ->
     code
@@ -1704,7 +1705,12 @@ module type Backend = sig
       schedule annotator — pass [~lowered_transform:(fun o -> [ o ])] to keep hand-built code
       exactly as written. A [prelowered] routine is also exempt from the GPU backends'
       post-transform zero elision ([gpu_elide_covered_zeros], {!Low_level.elide_covered_zeros}),
-      which every other compile's kernel list goes through. *)
+      which every other compile's kernel list goes through.
+
+      [reuse] (gh-ocannl-1526) is a search's lowering cell ({!Lowering_reuse}): the first compile
+      handed it lowers and leaves a snapshot, later ones take a private copy of the snapshot in
+      place of lowering again; everything downstream of lowering runs as on a fresh lowering (unlike
+      [prelowered], which it excludes). *)
 
   include Backend_device_common
 
