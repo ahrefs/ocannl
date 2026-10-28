@@ -2240,7 +2240,7 @@ files.
   calls per thread, none measurable on a 16M-element load-call-store stream. A cheaper `tanh` patch
   (pass x through below 2^-12) fixed only the flush, so it was not taken. Metal flushes bf16
   subnormals in the narrowing back to `bfloat` (next entry), not in these functions.
-  `unary_math_special_values` pins the values at f32, half and bf16, Metal-gated.
+  `unary_math_special_values` pins the values at f32, half and bf16 (its Metal claims; the other backends' are gh-ocannl-1336's, below).
 
 - **Metal's float ALU flushes f32-range subnormals; its storage does not** (gh-ocannl-1516).
   bf16 shares f32's exponent range, so a bf16 subnormal is an f32 subnormal. Measured on M4 Max /
@@ -2282,6 +2282,28 @@ files.
   moves a cross-entropy's `log(p) = -inf` threshold from 2^-149 to 2^-126, no more. Half results
   stay subnormal-capable (the f32 intermediate is normal). No helper was taken; the test bounds
   `exp` by `2 + |x|` ulps and accepts a result at the flushed input or flushed f32 result.
+
+- **CUDA's and HIP's fast-math unary functions, audited** (gh-ocannl-1336; `unary_math_special_values`,
+  measured on RTX 5070 Ti and gfx1102 discrete). **HIP** stays IEEE within the stated ulps,
+  subnormals kept: `-ffast-math` leaves ROCm's library functions precise. The exception was f32
+  `sinf`/`cosf` of ±inf, which returned 0.974869 and 0.222781 instead of NaN, hiding an upstream
+  overflow (bf16 widens into them). So f32 and bf16 `sin`/`cos` render through `Builtins_hip`'s
+  `ocannl_sinf`/`ocannl_cosf`, which classify the input by its bits and select the NaN bits in an
+  integer select: under `-fno-honor-nans`, a float compare or float select of NaN may fold away.
+  **CUDA** keeps every special value IEEE, so nothing there was fixed. Its f32 (and widened bf16)
+  functions are the fast intrinsics, accepted under their documented contracts (its half `h*`
+  functions meet the stated ulps). A training op reaching one of the accepted domains would be the
+  reason to add a helper; precise f32 under `--use_fast_math` exists only through double
+  (`(float)sin((double)x)`), since the flag rewrites `sinf` itself:
+  - `__sinf`/`__cosf`: 2^-21.41 absolute on [-pi, pi], so `sin(2^-26)` is 0. Past pi the error is
+    within `2^-23 |x|`, about the rounding the input angle already carries. From 2^22 the result
+    is any value in [-1, 1].
+  - `__logf`/`__log2f`: 2^-21.41 and 2^-22 absolute on [0.5, 2], so next to one they are up to
+    86% off relatively. The sign stays right over every f32 within 2^-13 of 1, which
+    `Nn_blocks.box_muller`'s `sqrt (-2 log u)` needs; a dense band claim pins that sign on every
+    backend.
+  - `__tanhf`: 2^-10.987 relative. `__expf`: `2 + 1.173 |x|` ulps, exact at the overflow edge.
+  - FTZ: f32 subnormals flush, as on Metal.
 
 - A float power whose exponent is only known at run time renders on CUDA and HIP through
   `ocannl_pow_f32`/`ocannl_pow_f64` (`Builtins_cc.cuda_like_power_builtins`, gh-ocannl-1240), half

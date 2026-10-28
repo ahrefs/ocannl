@@ -450,4 +450,4 @@
  (package arrayjit)
  (modules test_cuda_like_config)
  (deps ocannl_config ocannl_ambient)
- (libraries base pprint arrayjit.ir arrayjit.verdict))
+ (libraries base pprint arrayjit.ir arrayjit.builtins_hip arrayjit.verdict))

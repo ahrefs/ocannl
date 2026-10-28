@@ -10553,9 +10553,10 @@
   (env_var OCANNL_BACKEND))
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
 
-; gh-ocannl-1435: Metal sin, cos and tanh are IEEE on special inputs and accurate near zero and at
-; large magnitudes, at f32, half and bfloat16, under the fast math functions; gh-ocannl-1515: exp,
-; log, exp2 and log2 too, up to a recorded flush of f32 subnormals.
+; gh-ocannl-1336: every backend's f32, half and bfloat16 sin, cos, tanh, exp, log, exp2 and log2
+; over the fast-math risk domains -- cc and HIP within the stated ulps, CUDA's fast intrinsics within
+; their documented contracts, special values IEEE everywhere (HIP's sin/cos of +-inf fixed), and log
+; next to 1 of the right sign; gh-ocannl-1435/1515: Metal's, up to a recorded f32 subnormal flush.
 
 (test
  (name unary_math_special_values)

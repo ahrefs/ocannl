@@ -8,6 +8,11 @@ module Cuda = struct
   let bf16_arithmetic_intrinsics = true
   let bf16_relu = ("__hmax_nan(__ushort_as_bfloat16((unsigned short)0x0000U), ", ")")
   let tanh_approx = "__tanhf"
+
+  (* [--use_fast_math] lowers these to [__sinf]/[__cosf], which keep NaN for +-inf and NaN; their
+     absolute-error contract and the large-argument loss are accepted (gh-ocannl-1336). *)
+  let sin_f32 = "sinf"
+  let cos_f32 = "cosf"
   let fp8_from_float_fn = "(__nv_fp8_e5m2)"
   let conditional_includes = [ ("nvcuda::wmma", "#include <mma.h>") ]
 
@@ -24,6 +29,11 @@ module Hip = struct
   let bf16_arithmetic_intrinsics = false
   let bf16_relu = ("__float2bfloat16(fmaxf(0.0f, __bfloat162float(", ")))")
   let tanh_approx = "tanhf"
+
+  (* [Builtins_hip]'s NaN-preserving wrappers: under [-ffast-math], ROCm's [sinf]/[cosf] return a
+     finite value for +-inf (gh-ocannl-1336). *)
+  let sin_f32 = "ocannl_sinf"
+  let cos_f32 = "ocannl_cosf"
 
   (* ROCm's subnormal guard is one funnel for conversion and every operator arity. *)
   let fp8_from_prec_fn = function
@@ -51,6 +61,10 @@ module Make (Dialect : sig
   val bf16_arithmetic_intrinsics : bool
   val bf16_relu : string * string
   val tanh_approx : string
+
+  (* The f32 (and, widened, bfloat16) [sin]/[cos] functions. *)
+  val sin_f32 : string
+  val cos_f32 : string
   val fp8_from_float_fn : string
   val vendor_routine_idents : string list
 end) (Input : sig
@@ -556,12 +570,12 @@ struct
     | Log2, _ -> func "log2f"
     | Sin, Half_prec _ -> func "hsin"
     | Sin, Double_prec _ -> func "sin"
-    | Sin, Bfloat16_prec _ -> bf16_func "sinf"
-    | Sin, _ -> func "sinf"
+    | Sin, Bfloat16_prec _ -> bf16_func Dialect.sin_f32
+    | Sin, _ -> func Dialect.sin_f32
     | Cos, Half_prec _ -> func "hcos"
     | Cos, Double_prec _ -> func "cos"
-    | Cos, Bfloat16_prec _ -> bf16_func "cosf"
-    | Cos, _ -> func "cosf"
+    | Cos, Bfloat16_prec _ -> bf16_func Dialect.cos_f32
+    | Cos, _ -> func Dialect.cos_f32
     | Sqrt, Half_prec _ -> func "hsqrt"
     | Sqrt, Double_prec _ -> func "sqrt"
     | Sqrt, Bfloat16_prec _ -> bf16_func "sqrtf"

@@ -2,6 +2,9 @@ CUDA bfloat16 addition keeps its intrinsic: true
 HIP bfloat16 addition keeps its native operator: true
 CUDA approximate tanh keeps its intrinsic: true
 HIP approximate tanh keeps its library function: true
+HIP f32 and bfloat16 sin and cos render through the NaN-preserving wrappers: true
+HIP's NaN-preserving sin and cos wrappers are defined in its builtins table: true
+CUDA f32 sin and cos keep the library functions: true
 CUDA bfloat16 ReLU keeps NaN-propagating half intrinsic: true
 HIP bfloat16 ReLU keeps its float bridge: true
 every HIP arithmetic arity narrows fp8 through the guard: true

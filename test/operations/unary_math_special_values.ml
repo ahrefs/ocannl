@@ -1,6 +1,36 @@
-(* Metal's [sin], [cos] and [tanh] are IEEE on special inputs and accurate near zero and at large
-   magnitudes, at f32, half and bfloat16 (gh-ocannl-1435), and so are [exp], [log], [exp2] and
-   [log2] up to a recorded subnormal flush (gh-ocannl-1515).
+(* The f32, half and bfloat16 [sin], [cos], [tanh], [exp], [log], [exp2] and [log2] of every
+   backend, over the domains where fast math functions go wrong (gh-ocannl-1336): large-argument
+   [sin]/[cos], subnormal and near-zero [log], [exp]/[exp2] next to overflow and underflow, [log]
+   next to 1, and the special values. Every result is compared with the f64 function of the exact
+   stored input: NaN where it is NaN, the signed zero or infinity bitwise where it rounds to one,
+   and otherwise within a bound -- the "stated ulps" of the result precision (4 f32 ulps for
+   [sin]/[cos]/[log], 3 for [tanh]/[log2], 2 for [exp2], [2 + |x|] for [exp], one ulp of half or
+   bfloat16), or a backend's own documented contract.
+
+   cc (libm) is the reference: the stated ulps hold with subnormals kept. So does HIP, whose
+   [-ffast-math] keeps ROCm's precise library functions and AMDGPU's f32 denormals, measured on
+   gfx1102 (discrete memory), with one departure, fixed: ROCm's f32 [sinf]/[cosf] returned 0.974869
+   and 0.222781 for +-inf (bfloat16, widened into them, likewise), hiding an overflow upstream, so
+   f32 and bfloat16 [sin]/[cos] render through [Builtins_hip]'s NaN-preserving [ocannl_sinf]/
+   [ocannl_cosf]; the special-value claim fails without them.
+
+   CUDA's [--use_fast_math] lowers f32 (and widened bfloat16) [sinf]/[cosf]/[expf]/[logf]/[exp2f]/
+   [log2f] to its fast intrinsics, and [Tanh_approx] renders [__tanhf]; they keep the special values
+   IEEE, so the special-value claim holds there. The stated ulps do not, so CUDA's f32 and bfloat16
+   are claimed against the intrinsics' documented contracts instead, and the claim of the stated
+   ulps is skipped there, each departure an accepted vendor behaviour (measured on RTX 5070 Ti): -
+   [__sinf]/[__cosf] have an absolute-error contract, 2^-21.41 on [-pi, pi]: [sin(2^-26)] is 0 and
+   [sin(2^-20)] 2% low. Past pi the error grows with |x|, within [2^-23 |x|] measured (0.7 ulps of
+   the INPUT at 10000, the rounding a RoPE angle already carries). From 2^22, where the input's own
+   spacing is 0.5, the argument reduction is lost ([sin(2^30)] is 0, [cos] 1): any value in [-1, 1]
+   is accepted there. No training angle reaches it. - [__logf]/[__log2f] have an absolute-error
+   contract on [0.5, 2], 2^-21.41 and 2^-22: next to 1 the result is up to 86% off relatively
+   (2^-23.7 absolute) though of the right sign, which the dense band below pins for every backend,
+   since [Nn_blocks.box_muller] takes [sqrt (-2 log u)] for [u] just below 1. - [__tanhf] is a
+   2^-10.987 relative approximation; [__expf] is [2 + 1.173 |x|] ulps (exact at the overflow edge
+   [0x1.62e42ep+6], measured). - [--use_fast_math] implies [--ftz=true]: f32 subnormal inputs and
+   results flush, as on Metal. CUDA's half functions ([hsin], [hexp], ...) meet the stated ulps with
+   subnormals kept.
 
    Metal compiles with Safe arithmetic and fast math FUNCTIONS ([Compiler_options.metal]). Measured
    on M4 Max ([benchmarks/runners/ocannl/metal_f32_math_probe.ml]), the fast f32 [sin] and [cos]
@@ -8,33 +38,23 @@
    returns 0 for x from about 43.7 and NaN from about 44.4 up (+inf included), +0 for -0, flushes
    |x| < 2^-26 to 0, and is off by up to 2050 ulps around 2^-12 and 26 ulps around 2^-5. Half and
    bfloat16 [sin]/[cos] are the f32 builtin narrowed (gh-ocannl-1288), so they inherited the
-   special-value zeros. The backend now renders [sin]/[cos] through [ocannl_sin]/[ocannl_cos]
+   special-value zeros. The backend renders [sin]/[cos] through [ocannl_sin]/[ocannl_cos]
    ([Builtins_metal]: the fast function inside its domain, [precise::] outside it and for non-finite
-   inputs) and f32/bfloat16 [tanh] as [precise::tanh]. The inputs below include every case above, so
-   each claim fails under the plain fast spellings (checked on M4 Max against the previous
-   rendering).
+   inputs) and f32/bfloat16 [tanh] as [precise::tanh] (gh-ocannl-1435). Each Metal claim fails under
+   the plain fast spellings (checked on M4 Max against the previous rendering).
 
-   The claims compare against the f64 function of the exact stored input: NaN where it is NaN, the
-   signed zero bitwise where it is zero, and otherwise within a bound in ulps of the result
-   precision -- 4 f32 ulps for [sin]/[cos] (3.4 measured, as for [precise::]), 3 for [tanh] (2
-   measured), one ulp of half or bfloat16 (one rounding of an f32 result; the half [tanh] overload
-   measured 0.502).
+   Metal's [exp], [log], [exp2] and [log2] (gh-ocannl-1515) render bare: IEEE on the signed zeros,
+   infinities, NaN and negative inputs to [log]/[log2], under both policies, and [exp2]/[log2]
+   bitwise their [precise::] forms. Two departures are recorded rather than fixed. The fast f32
+   [exp] is up to 59.5 ulps off at large |x| (the [precise::] one 1.4), hence its bound [2 + |x|].
+   And all four flush f32 subnormals -- the inputs of [log]/[log2] ([log(+-2^-140)] is -inf), the
+   results of [exp]/[exp2] -- under [precise::] and the legacy policy too, so no spelling of the
+   function avoids it; such a result passes against f64 at the flushed input or the flushed f32
+   result. Fixed at 4 ulps for [exp] and without the flush allowance, the Metal f32 claim fails on
+   M4 Max at exp(31.86), exp(50), exp(82.4), exp(-95), exp2(-140) and the four subnormal logs.
 
-   [exp], [log], [exp2] and [log2] (gh-ocannl-1515) render bare: the same probe finds them IEEE on
-   the signed zeros, infinities, NaN and negative inputs to [log]/[log2], under both policies, and
-   [exp2]/[log2] bitwise their [precise::] forms. Two departures are recorded rather than fixed. The
-   fast f32 [exp] is up to 59.5 ulps off at large |x| (the [precise::] one 1.4; CUDA's [__expf]
-   promises [2 + 1.173 |x|]), hence its bound [2 + |x|]. And all four flush f32 subnormals -- the
-   inputs of [log]/[log2] ([log(+-2^-140)] is -inf), the results of [exp]/[exp2] -- under
-   [precise::] and the legacy policy too, so no spelling of the function avoids it, and CUDA's
-   [--use_fast_math] implies [--ftz=true] alike; such a result passes against f64 at the flushed
-   input or the flushed f32 result. Fixed at 4 ulps for [exp] and without the flush allowance, the
-   f32 claim fails on M4 Max at exp(31.86), exp(50), exp(82.4), exp(-95), exp2(-140) and the four
-   subnormal logs.
-
-   They are Metal-only: CUDA and HIP render their own fast intrinsics (CUDA's [tanh.approx.f32] is a
-   2^-11 relative approximation by contract; gh-ocannl-1336 audits their domains), and every backend
-   still compiles and runs the kernels. *)
+   A claim that does not apply to a backend is skipped there ([SKIPPED on <backend>] on stderr), and
+   its label names where it is skipped and why. Every backend compiles and runs every kernel. *)
 open Base
 open Ocannl.Operation.DSL_modules
 module LL = Ir.Low_level
@@ -44,6 +64,9 @@ open Verdict.Claims
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 let () = Stdio.eprintf "unary-math-special-values backend: %s\n" backend_name
 let is_metal = String.equal backend_name "metal"
+let is_cuda = String.equal backend_name "cuda"
+let is_hip = String.equal backend_name "hip"
+let is_cc = List.mem [ "cc"; "multidev_cc" ] backend_name ~equal:String.equal
 let f32 x = Int32.float_of_bits (Int32.bits_of_float x)
 let f16 x = Ops.half_to_single (Ops.single_to_half (f32 x))
 let bf16 x = Ops.bfloat16_to_single (Ops.single_to_bfloat16 (f32 x))
@@ -72,6 +95,10 @@ type case = {
   ulp : float -> float;
   bound : string -> float -> float;
   inputs : float list;
+  cuda_intrinsics : bool;
+      (** Whether CUDA renders the ops at this precision through its f32 fast intrinsics: f32, and
+          bfloat16 widened into f32 ([Cuda_like_config]'s [bf16_func]); half has its own [h*]
+          functions. *)
 }
 
 (* The spacing at [|v|] of a binary format with [mant] stored fraction bits and smallest normal
@@ -85,6 +112,7 @@ let cases =
     {
       label = "f32";
       prec = Ops.single;
+      cuda_intrinsics = true;
       round = f32;
       ulp = spacing ~mant:23 ~emin:(-126);
       (* The fast f32 [exp] is [exp2(x * log2(e))]-shaped: its error grows with |x| (59.5 ulps
@@ -130,11 +158,26 @@ let cases =
             128.;
             -140.;
             -150.;
+            0x1.62e42ep+6;
+            0x1.62e430p+6;
+            -0x1.5d58ap+6;
+            -0x1.9fe368p+6;
+            0x1.fffffep+6;
+            -149.;
+            0x1p-149;
+            -0x1p-149;
+            0x1.000002p+0;
+            0x1.fffffep-1;
+            0x1.388p+13;
+            0x1.921fb6p+1;
+            -0x1.921fb6p+5;
+            0x1p-100;
           ];
     };
     {
       label = "half";
       prec = Ops.half;
+      cuda_intrinsics = false;
       round = f16;
       ulp = spacing ~mant:10 ~emin:(-14);
       bound = (fun _ _ -> 1.);
@@ -165,11 +208,17 @@ let cases =
             1000.;
             30000.;
             65504.;
+            0x1.62p+3;
+            0x1.63p+3;
+            0x1.004p+0;
+            0x1.ffcp-1;
+            -0x1.1p+4;
           ];
     };
     {
       label = "bfloat16";
       prec = Ops.bfloat16;
+      cuda_intrinsics = true;
       round = bf16;
       ulp = spacing ~mant:7 ~emin:(-126);
       bound = (fun _ _ -> 1.);
@@ -223,49 +272,179 @@ let run c ~first_id =
          ~seed:[ (input, Array.of_list inputs); (out, Ll_test.blank (n * m)) ]
          ~read:[ out ]) )
 
+(* The f32 inputs within 2^-13 of 1, at the spacing of f32 on each side, and 1 itself: the arguments
+   of [Nn_blocks.box_muller]'s [log], whose largest is [1 - 2^-24]. *)
+let band =
+  List.init 2048 ~f:(fun k -> 1. -. Float.ldexp (Float.of_int (k + 1)) (-24))
+  @ [ 1. ]
+  @ List.init 1024 ~f:(fun k -> 1. +. Float.ldexp (Float.of_int (k + 1)) (-23))
+
+(* One f32 loop over [band]: [log] and [log2] of each input. *)
+let run_band () =
+  let n = List.length band in
+  let name = "umsv_band" in
+  let node = Ll_test.node_factory ~prec:Ops.single ~first_id:20400 ~dims:[| n |] () in
+  let input = node (name ^ "_in") in
+  let outs = List.map [ "log"; "log2" ] ~f:(fun op -> node (name ^ "_" ^ op)) in
+  List.iter (input :: outs) ~f:Ll_test.materialize;
+  let i = Ll_test.sym () in
+  let at = [| Ll_test.iter i |] in
+  let body =
+    List.fold2_exn outs [ Ops.Log; Ops.Log2 ] ~init:LL.Noop ~f:(fun acc out op ->
+        Ll_test.seq acc (Ll_test.set out at (LL.Unop (op, (Ll_test.get input at, Ops.single)))))
+  in
+  let o = Ll_test.optimize ~name (Ll_test.loop_n i n body) in
+  Ll_test.execute ~name o
+    ~seed:((input, Array.of_list band) :: List.map outs ~f:(fun out -> (out, Ll_test.blank n)))
+    ~read:outs
+
+(* What a result is held to, against the f64 value at the result's precision [c]. *)
+type contract =
+  | Ulps of float  (** Within this many ulps of [c]. *)
+  | Absolute of float  (** Within this absolute error, plus one ulp of [c] for the rounding. *)
+  | Relative of float  (** Within this relative error, plus one ulp of [c] for the rounding. *)
+  | Unit_range  (** Any finite value in [-1, 1]: an accepted loss of the argument reduction. *)
+
+(* Whether [v] meets [contract] against the f64 value [want]: NaN where [want] is NaN, the signed
+   zero or infinity bitwise where [want] rounds to one at [c]'s precision. *)
+let meets c contract ~want v =
+  let rounded = c.round want in
+  if Float.is_nan want then Float.is_nan v
+  else if Float.(rounded = 0.) || not (Float.is_finite rounded) then
+    Int64.equal (Int64.bits_of_float v) (Int64.bits_of_float rounded)
+  else
+    let err = Float.abs (v -. want) in
+    match contract with
+    | Ulps u -> Float.(err /. c.ulp want <= u)
+    | Absolute a -> Float.(err <= a +. c.ulp want)
+    | Relative r -> Float.(err <= (r *. abs want) +. c.ulp want)
+    | Unit_range -> Float.(is_finite v && abs v <= 1.)
+
+let stated c name x = Ulps (c.bound name x)
+
+(* CUDA's documented contracts for its fast f32 intrinsics (CUDA Math API, "Intrinsic Functions"),
+   with the growth of [__sinf]/[__cosf]'s error past pi as measured. *)
+let cuda_fast c name x =
+  let ax = Float.abs x in
+  match name with
+  | "sin" | "cos" ->
+      if Float.(ax >= 0x1p22) then Unit_range
+      else Absolute ((2. **. -21.41) +. if Float.(ax > Float.pi) then Float.ldexp ax (-23) else 0.)
+  | "tanh" -> Relative (2. **. -10.987)
+  | "exp" -> Ulps (2. +. (1.173 *. ax))
+  | "log" when Float.(0.5 <= x && x <= 2.) -> Absolute (2. **. -21.41)
+  | "log2" when Float.(0.5 <= x && x <= 2.) -> Absolute (2. **. -22.)
+  | _ -> stated c name x
+
 (* An f32 subnormal flushed to the zero of its sign. *)
 let flush v = if Float.(v <> 0. && abs v < 0x1p-126) then Float.copysign 0. v else v
+
+(* Whether [v = name x] meets [contract] at [c] -- with [~ftz], also against f64 at the flushed
+   input or of the flushed f32 result -- reporting a failure on stderr. [flushed] counts the results
+   that met it only by the flush. *)
+let judge ?(ftz = false) ?flushed c contract (name, reference, x, v) =
+  let want = reference x in
+  let ok =
+    meets c contract ~want v
+    || ftz
+       && (meets c contract ~want:(reference (flush x)) v
+          || meets c contract ~want:(flush (f32 want)) v)
+       &&
+       (Option.iter flushed ~f:Int.incr;
+        true)
+  in
+  if not ok then
+    Stdio.eprintf "(not part of the golden) %s %s %s(%h) = %h, f64 %h, %g ulps\n" backend_name
+      c.label name x v want
+      (Float.abs (v -. want) /. c.ulp want);
+  ok
+
+let is_special x = Float.(x = 0.) || not (Float.is_finite x)
 
 let () =
   Verdict.case "unary math special values" (fun () ->
       List.iteri cases ~f:(fun ci c ->
           let inputs, got = run c ~first_id:(19900 + (100 * ci)) in
           let n = List.length inputs in
+          let results =
+            List.mapi (Array.to_list got) ~f:(fun j v ->
+                let _, name, reference, ftz = List.nth_exn ops (j / n) in
+                (ftz, (name, reference, List.nth_exn inputs (j % n), v)))
+          in
+          let specials, finite =
+            List.partition_tf results ~f:(fun (_, (_, _, x, _)) -> is_special x)
+          in
+          let all = List.map ~f:snd in
+          p_all
+            (Printf.sprintf
+               "%s sin, cos, tanh, exp, log, exp2 and log2 of +-0, +-inf and NaN: NaN where f64 \
+                gives NaN, otherwise the signed zero or infinity f64 gives, or within the stated \
+                ulps of it (every backend)"
+               c.label) (all specials) ~f:(fun ((name, _, x, _) as r) ->
+              judge c (stated c name x) r);
+          gated_all
+            ~when_:(is_cc || is_hip || (is_cuda && not c.cuda_intrinsics))
+            ~on:backend_name
+            (Printf.sprintf
+               "%s sin, cos, tanh, exp, log, exp2 and log2 of finite nonzero inputs: within the \
+                stated ulps of f64 with subnormals kept (skipped on Metal and on CUDA's f32 \
+                intrinsics, accepted vendor behaviour claimed by their own contracts)"
+               c.label)
+            (all finite)
+            ~f:(fun ((name, _, x, _) as r) -> judge c (stated c name x) r);
           let flushed = ref 0 in
-          gated_alli ~when_:is_metal ~on:backend_name
+          gated_all ~when_:is_metal ~on:backend_name
             (Printf.sprintf
                "Metal %s sin, cos, tanh, exp, log, exp2 and log2: NaN where f64 gives NaN, the \
                 signed zero or infinity where f64 rounds to one, otherwise within the stated ulps \
                 of f64 -- for exp, log, exp2 and log2, of f64 at the input or the f32 result \
                 flushed from subnormal to zero"
-               c.label) (Array.to_list got) ~f:(fun j v ->
-              let _, name, reference, ftz = List.nth_exn ops (j / n) in
-              let x = List.nth_exn inputs (j % n) in
-              (* Whether [v] is [want] at [c]'s precision, and its error in ulps when finite. *)
-              let check want =
-                let rounded = c.round want in
-                if Float.is_nan want then (Float.is_nan v, Float.nan)
-                else if Float.(rounded = 0.) || not (Float.is_finite rounded) then
-                  (Int64.equal (Int64.bits_of_float v) (Int64.bits_of_float rounded), Float.nan)
-                else
-                  let err = Float.abs (v -. want) /. c.ulp want in
-                  (Float.(err <= c.bound name x), err)
-              in
-              let want = reference x in
-              let ok, err = check want in
-              let ok =
-                ok
-                || ftz
-                   && (fst (check (reference (flush x))) || fst (check (flush (f32 want))))
-                   &&
-                   (Int.incr flushed;
-                    true)
-              in
-              if not ok then
-                Stdio.eprintf "(not part of the golden) %s %s(%h) = %h, f64 %h, %g ulps\n" c.label
-                  name x v want err;
-              ok);
+               c.label) results ~f:(fun (ftz, ((name, _, x, _) as r)) ->
+              judge ~ftz ~flushed c (stated c name x) r);
           if is_metal then
             Stdio.eprintf
               "(not part of the golden) %s: %d results matched only with a subnormal flushed\n"
-              c.label !flushed))
+              c.label !flushed;
+          if c.cuda_intrinsics then (
+            let flushed = ref 0 in
+            gated_all ~when_:is_cuda ~on:backend_name
+              (Printf.sprintf
+                 "CUDA %s sin, cos, tanh, exp, log, exp2 and log2 under --use_fast_math: within \
+                  the fast intrinsics' contracts -- sin and cos absolute 2^-21.41 (plus 2^-23 |x| \
+                  past pi) below 2^22 and any value in [-1, 1] from there, tanh relative \
+                  2^-10.987, exp 2 + 1.173 |x| ulps, log and log2 absolute 2^-21.41 and 2^-22 on \
+                  [0.5, 2] and the stated ulps elsewhere, f32 subnormals flushed"
+                 c.label) (all results) ~f:(fun ((name, _, x, _) as r) ->
+                judge ~ftz:true ~flushed c (cuda_fast c name x) r);
+            if is_cuda then
+              Stdio.eprintf
+                "(not part of the golden) CUDA %s: %d results matched only with a subnormal \
+                 flushed, %d inputs from 2^22 held to [-1, 1] only\n"
+                c.label !flushed
+                (2 * List.count inputs ~f:(fun x -> Float.(is_finite x && abs x >= 0x1p22)))));
+      let f32_case = List.hd_exn cases in
+      let band_results =
+        List.concat
+          (List.map2_exn (run_band ())
+             [ ("log", Float.log); ("log2", Stdlib.Float.log2) ]
+             ~f:(fun got (name, reference) ->
+               List.map2_exn band (Array.to_list got) ~f:(fun x v -> (name, reference, x, v))))
+      in
+      p_all
+        "f32 log and log2 have the sign of x - 1 on every f32 within 2^-13 of 1, and are +0 at 1 \
+         -- Box-Muller's sqrt (-2 log u) needs log u <= 0 (every backend)"
+        band_results ~f:(fun (name, reference, x, v) ->
+          let ok =
+            if Float.(x < 1.) then Float.(v < 0.)
+            else if Float.(x > 1.) then Float.(v > 0.)
+            else Int64.equal (Int64.bits_of_float v) 0L
+          in
+          if not ok then
+            Stdio.eprintf "(not part of the golden) %s band %s(%h) = %h, f64 %h\n" backend_name name
+              x v (reference x);
+          ok);
+      p_all
+        "f32 log and log2 on every f32 within 2^-13 of 1: within the backend's contract -- the \
+         stated ulps of f64, CUDA's absolute 2^-21.41 and 2^-22 (every backend)"
+        band_results ~f:(fun ((name, _, x, _) as r) ->
+          judge f32_case (if is_cuda then cuda_fast f32_case name x else stated f32_case name x) r))
