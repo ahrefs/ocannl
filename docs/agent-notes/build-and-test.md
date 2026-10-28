@@ -959,6 +959,17 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   skip set and macOS adds the Linux-only legs `tools/harness-skips-ci-shell-darwin.txt` lists. A
   leg that needs a real dune takes it from `harness_real_dune`, never a probe of its own: one
   `--ci-shell` cannot hide runs green here and skips, unlisted, only on the job.
+- The real-dune checks run per PR on a job of their own (gh-ocannl-1650), not by giving the shell
+  job a dune: its no-dune skip set stays a test of its own. Their skips under `--ci-shell` live in
+  `tools/harness-skips-ci-shell-dune.txt`, which `--ci-shell` joins to the job's list and holds to
+  exactly the skips the hidden dune caused, told by the reason `harness_real_dune` gives
+  (`harness_dune_hidden_reason`; `skip()` records them in `OCANNL_TOOL_HARNESS_DUNE_SKIP_RECORD`):
+  such a skip listed elsewhere, or a dune-list skip with another reason, fails the tier. The
+  `harness-real-dune` job installs dune and runs `tools/test-harnesses.sh --ci-real-dune`: only
+  the legs `real_dune_legs` selects (an `--only` ERE per member), strict, and red unless every
+  dune-list check printed `PASS`. A new real-dune check therefore lands as a dune-list line, and
+  its leg's number in the selector if it is a new leg -- the job names the check it did not see
+  pass. A nested run of a harness copy unsets the record variable with the others.
 
 - Shell harness checks capture failures with `command || rc=$?`, preserving the caller's
   `errexit` state; an unconditional `set -e` after a check makes later unguarded failures

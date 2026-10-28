@@ -75,7 +75,8 @@ else
     { echo "harness-legs-alone.sh: cannot create a log directory" >&2; exit 2; }
   keep=0
 fi
-unset OCANNL_TOOL_HARNESS_EXPECTED_SKIPS OCANNL_TOOL_HARNESS_SKIP_RECORD OCANNL_TOOL_HARNESS_SKIP_LEGS
+unset OCANNL_TOOL_HARNESS_EXPECTED_SKIPS OCANNL_TOOL_HARNESS_SKIP_RECORD OCANNL_TOOL_HARNESS_SKIP_LEGS \
+  OCANNL_TOOL_HARNESS_DUNE_SKIP_RECORD
 # The runs' own output may not land in the checkout they are checked against
 # (both paths resolved physically, so a symbolic link cannot hide it).
 case "$logs/" in

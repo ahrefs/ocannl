@@ -955,6 +955,8 @@ jobs:
   # --ci-shell is that run spelled once: --shell against that list, with the
   # absences of this runner (no dune, not a fleet host) put on, so any box
   # with a toolchain reproduces the check before it pushes (gh-ocannl-1593).
+  # The checks it skips for want of a dune are listed apart, and held to
+  # exactly those, so the next job can run them.
   harnesses:
     if: github.event_name != 'workflow_dispatch' || !inputs.windows_only && inputs.ocaml_compiler == '5.5.x'
     name: Shell harnesses
@@ -966,6 +968,37 @@ jobs:
         ref: ${{ inputs.expected_sha }}
     - name: Test shell harnesses
       run: tools/test-harnesses.sh --ci-shell
+
+  # The shell harnesses' real-dune checks, per PR (gh-ocannl-1650). The job
+  # above hides dune and skips them, by its list
+  # tools/harness-skips-ci-shell-dune.txt; here a dune is installed, only the
+  # legs holding them run (tools/test-harnesses.sh's real_dune_legs, a minute
+  # or so), strict, and each listed check must PASS. A job of its own rather
+  # than dune in the one above: that job's no-dune skip set stays a test of
+  # its own, and setup-ocaml's cost lands only here. The scheduled legs-alone
+  # job below also runs them, alone, beside every other gated leg.
+  harness-real-dune:
+    if: github.event_name != 'workflow_dispatch' || !inputs.windows_only && inputs.ocaml_compiler == '5.5.x'
+    name: Shell harnesses (real dune)
+    runs-on: ubuntu-latest
+    # Setup and the dune install take most of it; the budget is the fmt job's,
+    # for the same apt pre-install cap (gh-ocannl-1649).
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        ref: ${{ inputs.expected_sha }}
+    - name: Pre-install setup-ocaml's apt packages
+      uses: ./.github/actions/setup-ocaml-debs
+    - uses: ocaml/setup-ocaml@v3
+      with:
+        ocaml-compiler: 5.5.x
+        allow-prerelease-opam: false
+        opam-pin: false
+    - name: Install Dune
+      run: opam install dune
+    - name: Test the real-dune harness checks
+      run: tools/test-harnesses.sh --ci-real-dune
 
   # Every gated leg of the hand-run harnesses, and every group of legs, run
   # alone (gh-ocannl-1367). A leg that needs what an EARLIER leg's body made
@@ -1069,7 +1102,7 @@ jobs:
   # run).
   notify-triage-routine:
     name: Fire CI-red triage routine
-    needs: [run, fmt, promotion-floor, harnesses, harness-legs-alone, torch-runner]
+    needs: [run, fmt, promotion-floor, harnesses, harness-real-dune, harness-legs-alone, torch-runner]
     if: >-
       failure() && github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
       && !(github.event_name == 'workflow_dispatch' && inputs.expected_sha)

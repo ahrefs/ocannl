@@ -1,0 +1,19 @@
+# The skips the `harnesses` CI job (no OCaml toolchain) shows only because it
+# has no dune: every check that runs against a real dune, which it takes
+# from scripts/harness-support.sh's harness_real_dune. `tools/test-harnesses.sh
+# --ci-shell` expects these beside tools/harness-skips-ci-shell.txt on every
+# platform, under the same rules, and holds this file to exactly the skips
+# whose reason is that dune was hidden: one listed in the other file, or one
+# listed here that skipped for another reason, fails the tier (gh-ocannl-1650).
+# The `harness-real-dune` CI job runs `tools/test-harnesses.sh --ci-real-dune`
+# with a dune installed, which requires every check listed here to PASS, per
+# PR. The line forms are the header of tools/test-harnesses.sh.
+
+tools/test-test-run.sh	a manual dune running beside a managed run keeps its live trace (real dune)
+tools/test-test-run.sh	credentials: the run's real dune trace names neither GH_TOKEN nor FOO_API_KEY, and does name the plain variable
+tools/test-test-run.sh	against a real dune: an unknown alias is refused, known ones run
+tools/test-test-run.sh	negative control: with the scrub cut out, the real trace names both credentials
+tools/test-test-run.sh	repeat --direct: one build, then each test's own rules replayed as dune ran them (real dune)
+tools/test-test-run.sh	negative control: with the replay cut out, dune's --force alone runs no target-producing test again (real dune)
+tools/test-test-run.sh	negative control: with the replay's inherited descriptors closed, a session-escaped descendant goes unseen (real dune)
+tools/test-test-run.sh	a real type error is BUILD FAILED naming the stale output; a red test alone stays FAIL (real dune)
