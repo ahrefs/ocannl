@@ -159,7 +159,6 @@ let exempt_zero_reference_exports =
     "Operation.uniform_at1";
     "Operation.wrap";
     "Ops.bfloat16_to_uint4x32";
-    "Ops.byte_to_uint4x32";
     "Ops.c_ptr_to_string";
     "Ops.double_to_uint4x32";
     "Ops.fp8_to_uint4x32";

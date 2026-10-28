@@ -89,6 +89,7 @@ arrayjit/test/test_vectorized_codegen.expected [c] markers c-align-attr c-decl-b
 arrayjit/test/test_zero_out_codegen.expected [c] markers c-align-attr c-decl-banner c-for c-logic-banner c-prec-cast; re-run by @arrayjit/test/runtest-test_zero_out_codegen
 test/einsum/inline_permuted_view-c_fwd.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end ll-loop; re-run by @test/einsum/runtest-inline_permuted_view-c_fwd
 test/einsum/test_cse-cse_d_fwd.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end ll-loop; re-run by @test/einsum/runtest-test_cse-cse_d_fwd
+test/operations/byte_counter_conversion.expected [derived] beside test/operations/byte_counter_conversion.ml; re-run by @test/operations/runtest-byte_counter_conversion
 test/operations/cache_key_agreement.expected [derived] beside test/operations/cache_key_agreement.ml; re-run by @test/operations/runtest-cache_key_agreement
 test/operations/canonical_render.expected [ll] markers ll-assign; re-run by @test/operations/runtest-canonical_render
 test/operations/concat_loop_symbols.expected [derived] beside test/operations/concat_loop_symbols.ml; re-run by @test/operations/runtest-concat_loop_symbols
@@ -160,6 +161,8 @@ test/operations/branchless_select.ml [run by @test/operations/runtest-branchless
     "bs_pool_inlined"
     ... ^ "("
     ... ^ "_v["
+test/operations/byte_counter_conversion.ml [run by @test/operations/runtest-byte_counter_conversion]
+    "byte_to_uint4x32("
 test/operations/cache_key_agreement.ml [run by @test/operations/runtest-cache_key_agreement]
 test/operations/canonical_render.ml [renders generated text in memory; run by @test/operations/runtest-canonical_render; also pins text this scan cannot name: opaque aggregate component, mutation or unseen buffer write]
     "?"
@@ -609,6 +612,7 @@ so, and the goldens' families say which backends a change has to be run on.
 @test/einsum/runtest-test_cse-cse_d_fwd
 @test/operations/runtest-accum_width
 @test/operations/runtest-branchless_select
+@test/operations/runtest-byte_counter_conversion
 @test/operations/runtest-cache_key_agreement
 @test/operations/runtest-canonical_render
 @test/operations/runtest-cc_kernel_outline
