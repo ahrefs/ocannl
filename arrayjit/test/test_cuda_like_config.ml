@@ -44,6 +44,23 @@ let () =
     (String.equal (render (Cuda.unop_syntax Ops.single Ops.Tanh_approx a)) "__tanhf(a)");
   p "HIP approximate tanh keeps its library function"
     (String.equal (render (Hip.unop_syntax Ops.single Ops.Tanh_approx a)) "tanhf(a)");
+  (* gh-ocannl-1336: HIP's fast-math [sinf]/[cosf] map +-inf to a finite value, so f32 and bfloat16
+     (widened into f32) route through [Builtins_hip]'s NaN-preserving wrappers; CUDA's keep NaN
+     there and render bare. *)
+  p_all "HIP f32 and bfloat16 sin and cos render through the NaN-preserving wrappers"
+    [
+      (Ops.single, Ops.Sin, "ocannl_sinf(a)");
+      (Ops.single, Ops.Cos, "ocannl_cosf(a)");
+      (Ops.bfloat16, Ops.Sin, "__float2bfloat16(ocannl_sinf(__bfloat162float(a)))");
+      (Ops.bfloat16, Ops.Cos, "__float2bfloat16(ocannl_cosf(__bfloat162float(a)))");
+    ]
+    ~f:(fun (prec, op, want) -> String.equal (render (Hip.unop_syntax prec op a)) want);
+  p_all "HIP's NaN-preserving sin and cos wrappers are defined in its builtins table"
+    [ "ocannl_sinf"; "ocannl_cosf" ] ~f:(fun key ->
+      List.exists Builtins_hip.builtins ~f:(fun (k, _, _) -> String.equal k key));
+  p "CUDA f32 sin and cos keep the library functions"
+    (String.equal (render (Cuda.unop_syntax Ops.single Ops.Sin a)) "sinf(a)"
+    && String.equal (render (Cuda.unop_syntax Ops.single Ops.Cos a)) "cosf(a)");
   p "CUDA bfloat16 ReLU keeps NaN-propagating half intrinsic"
     (String.equal
        (render (Cuda.unop_syntax Ops.bfloat16 Ops.Relu a))

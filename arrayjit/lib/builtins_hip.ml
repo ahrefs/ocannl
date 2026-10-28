@@ -60,6 +60,24 @@ __device__ __forceinline__ double ocannl_shfl_xor(double v, int lane_mask) {
   return __float2half(tanhf(__half2float(x)));
 }|},
       [] );
+    (* gh-ocannl-1336: under [-ffast-math] ROCm's f32 [sinf]/[cosf] return a finite value for +-inf
+       (0.974869 and 0.222781 on gfx1102), hiding an overflow upstream; every other special value,
+       and all of [exp]/[log]/[exp2]/[log2]/[tanhf], stays IEEE. The non-finite input is classified
+       by its bits and the NaN chosen as bits, in an integer select: [-ffast-math] keeps
+       [-fno-honor-nans], under which a float compare against NaN, or a float select of a NaN
+       constant, may fold away. *)
+    ( "ocannl_sinf",
+      {|__device__ __forceinline__ float ocannl_sinf(float x) {
+  return __uint_as_float((__float_as_uint(x) & 0x7FFFFFFFu) >= 0x7F800000u ? 0x7FC00000u
+                                                                         : __float_as_uint(sinf(x)));
+}|},
+      [] );
+    ( "ocannl_cosf",
+      {|__device__ __forceinline__ float ocannl_cosf(float x) {
+  return __uint_as_float((__float_as_uint(x) & 0x7FFFFFFFu) >= 0x7F800000u ? 0x7FC00000u
+                                                                         : __float_as_uint(cosf(x)));
+}|},
+      [] );
     ( "uint32_to_single_uniform",
       {|__device__ __forceinline__ float uint32_to_single_uniform(unsigned int x) {
   /* Use __uint2float_rn for correct rounding */
