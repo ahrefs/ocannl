@@ -20,6 +20,7 @@ the windows: the contenders, then the same in reverse: true
 the crown: the least of each contender's readings, the least of those: true
 a tie goes to the earlier contender: true
 a contender with no reading makes the finals inconclusive: true
+setup: every search is seed-only, as the benchmark runners tune: true
 setup: the scripted searches met the same candidates in the same order: true
 setup: the true best is a candidate, not the baseline or the floor: true
 off: the search crowns the runner-up, whose window read faster than the true best's: true
@@ -38,3 +39,8 @@ refused: the true best's finals windows were refused, so the finals are inconclu
 refused: the crown stays the first readings' head: true
 refused: nothing is outranked: true
 refused: the finals' refusals are not the search's: true
+lucky: the searches met the same candidates in the same order as the others: true
+lucky off: the search crowns the slower schedule, whose first window read fastest: true
+lucky on: the search's own windows, then the palindrome of the slower schedule and the true best: true
+lucky on: the finals crown the true best, swapping the head: true
+lucky on: the crowned routine computes the untuned output bit for bit: true

@@ -29,7 +29,14 @@
    runner-up first, as the palindrome [runner-up; best; best; runner-up], and crowns the true best,
    whose routine computes the untuned output bit for bit. A search whose finals windows of the true
    best are all refused is inconclusive and keeps the runner-up, and those refusals count neither as
-   candidate refusals nor against the search's cacheability. *)
+   candidate refusals nor against the search's cacheability.
+
+   Every real search here is SEED-ONLY ([~rounds:0], as the benchmark runners tune): its beam is the
+   [beam_width] fastest seeds, and the finals are what decides its near ties (gh-ocannl-1659). The
+   [lucky] pair scripts that issue's event -- one process of a 12-process A/A crowned a schedule 15%
+   slower than the one the other eleven crowned: a truly SLOWER third candidate whose first window
+   reads faster than the true best's clean one. With the finals off it is crowned; with them on the
+   palindrome [slower; best; best; slower] crowns the true best. *)
 
 open Base
 open Stdio
@@ -215,8 +222,10 @@ let reference = Scripted_search.untuned (fst chain) (snd chain)
    the untuned-default floor left out. The first is the true best (2.0 ms), the second the runner-up
    (2.1 ms), every later one far slower; the true best's first window reads 8% slow, within the
    default margin of the runner-up; [~refuse_best_finals] refuses every later window of the true
-   best (a reading that is not finite refuses it, as a degenerate clock reading would). *)
-let search ?(refuse_best_finals = false) ~settings ~tag () =
+   best (a reading that is not finite refuses it, as a degenerate clock reading would). Under
+   [~lucky] the true best's windows read clean instead, and the third candidate, truly slower (2.3
+   ms), reads its first window at 1.9 ms: the slower schedule's lucky window. *)
+let search ?(refuse_best_finals = false) ?(lucky = false) ~settings ~tag () =
   let seen = ref [] in
   let windows_of = Hashtbl.create (module String) in
   let rank label =
@@ -234,10 +243,11 @@ let search ?(refuse_best_finals = false) ~settings ~tag () =
       let k = Hashtbl.find windows_of w.label |> Option.value ~default:0 in
       Hashtbl.set windows_of ~key:w.label ~data:(k + 1);
       match j with
-      | 0 when k = 0 -> 2.0 *. 1.08
+      | 0 when k = 0 && not lucky -> 2.0 *. 1.08
       | 0 when refuse_best_finals -> Float.nan
       | 0 -> 2.0
       | 1 -> 2.1
+      | 2 when lucky -> if k = 0 then 1.9 else 2.3
       | j -> 2.5 +. (0.01 *. Float.of_int j)
   in
   let qg, comp = chain in
@@ -250,10 +260,10 @@ let search ?(refuse_best_finals = false) ~settings ~tag () =
       ~output:qg ~tag ~measure comp
   in
   let order = List.rev !seen in
-  let best = List.nth order 0 and runner_up = List.nth order 1 in
+  let best = List.nth order 0 and runner_up = List.nth order 1 and third = List.nth order 2 in
   eprintf
     "%s (not part of the golden): crown %s %.2f ms, finals %s (%d contenders, %d timed, %d \
-     admitted), true best %s, runner-up %s\n\
+     admitted), true best %s, runner-up %s, third %s\n\
      measured: %s\n\
      %!"
     tag o.report.Autotune.best_label o.report.Autotune.best_ms
@@ -262,15 +272,24 @@ let search ?(refuse_best_finals = false) ~settings ~tag () =
     o.report.Autotune.finals_timed o.report.Autotune.finals_admitted
     (Option.value best ~default:"none")
     (Option.value runner_up ~default:"none")
+    (Option.value third ~default:"none")
     (String.concat ~sep:"; " o.measured);
-  (o, best, runner_up)
+  (o, best, runner_up, third)
 
 let () =
-  let off, best, runner_up = search ~settings:[ (margin_key, "0") ] ~tag:"off" () in
-  let on, best_on, runner_up_on = search ~settings:[] ~tag:"on" () in
-  let refused, _, _ = search ~refuse_best_finals:true ~settings:[] ~tag:"refused" () in
+  let off, best, runner_up, _ = search ~settings:[ (margin_key, "0") ] ~tag:"off" () in
+  let on, best_on, runner_up_on, _ = search ~settings:[] ~tag:"on" () in
+  let refused, _, _, _ = search ~refuse_best_finals:true ~settings:[] ~tag:"refused" () in
+  let lucky_off, best_lucky, _, slower =
+    search ~lucky:true ~settings:[ (margin_key, "0") ] ~tag:"lucky off" ()
+  in
+  let lucky_on, _, _, slower_on = search ~lucky:true ~settings:[] ~tag:"lucky on" () in
   let best = Option.value_exn best and runner_up = Option.value_exn runner_up in
+  let slower = Option.value_exn slower in
   let crown (o : Scripted_search.observed) = o.report.Autotune.best_label in
+  p_all "setup: every search is seed-only, as the benchmark runners tune"
+    [ off; on; refused; lucky_off; lucky_on ] ~f:(fun (o : Scripted_search.observed) ->
+      o.report.Autotune.rounds_run = 0);
   p "setup: the scripted searches met the same candidates in the same order"
     (Option.equal String.equal best_on (Some best)
     && Option.equal String.equal runner_up_on (Some runner_up));
@@ -330,4 +349,22 @@ let () =
   p "refused: nothing is outranked" (not (Autotune.finals_outranked refused.report ~search_ms:2.1));
   p "refused: the finals' refusals are not the search's"
     (refused.report.Autotune.timings_contended = off.report.Autotune.timings_contended
-    && refused.report.Autotune.timings_unreadable = off.report.Autotune.timings_unreadable)
+    && refused.report.Autotune.timings_unreadable = off.report.Autotune.timings_unreadable);
+  (* gh-ocannl-1659: a slower schedule's lucky first window. *)
+  p "lucky: the searches met the same candidates in the same order as the others"
+    (Option.equal String.equal best_lucky (Some best)
+    && Option.equal String.equal slower_on (Some slower)
+    && (not (String.equal slower "baseline"))
+    && not (is_floor slower));
+  p "lucky off: the search crowns the slower schedule, whose first window read fastest"
+    (String.equal (crown lucky_off) slower);
+  p
+    "lucky on: the search's own windows, then the palindrome of the slower schedule and the true \
+     best"
+    (List.equal String.equal lucky_on.measured
+       (lucky_off.measured @ [ slower; best; best; slower ]));
+  p "lucky on: the finals crown the true best, swapping the head"
+    (String.equal (crown lucky_on) best
+    && Poly.equal lucky_on.report.Autotune.finals_outcome Autotune.Finals_swapped);
+  p_all2 "lucky on: the crowned routine computes the untuned output bit for bit" lucky_on.output
+    reference ~f:Float.equal

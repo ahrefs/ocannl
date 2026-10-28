@@ -16,21 +16,23 @@
    the batch loops outside and inside it) and the whole-routine seed count under the device's own
    limits -- then one [s1x1:] line per arm: [default] (the untuned compile,
    [Bench_harness.compile_default], so it honours [model_default_schedule]) and [tuned]
-   ([Autotune.tune] from an empty schedule cache, with its crowned label and counters). Both arms
-   are compiled first and then re-timed together ([Bench_retime], gh-ocannl-1524): each reading is
-   one [Autotune.time_routine] call under the configured [autotune_timing] -- the tuner's own
-   protocol, so on cc a 6-50 us site is timed in batches of up to 200 launches per synchronization
-   rather than one -- and the arms' calls are interleaved. An arm's [ms] is the median of its
-   readings, [ms_lo]/[ms_hi] their range and [ms_retimed] how many the admission gate kept; with
-   both arms an [s1x1-ratio:] line gives tuned over default, paired call by call, with its range and
-   whether every pair fell on one side of 1. Each arm also prints a [bench-result:] line (variant
-   [<site>/<arm>], the median), so [benchmarks/ab.py] can pair two builds of this runner round by
-   round -- the way to A/B a classifier change (gh-ocannl-1397 read a single min-of-200 synced
-   re-timing instead, and its unchanged control moved 0.69x). Inputs are small integers, so every
-   product and sum is exact in f32 whatever the schedule: [exact] is the shipped routine's output,
-   after its timing, against a host oracle reading the input at the stride, and the runner exits 1
-   when an arm disagrees -- else 3, the drivers' host-contention verdict, when an arm kept too few
-   admitted readings to state its spread. *)
+   ([Autotune.tune] from an empty schedule cache, with its crowned label and counters, and whether
+   the beam finals decided the crown: [finals] is the outcome, [finals_contenders] how many
+   contenders they re-timed, gh-ocannl-1659). Both arms are compiled first and then re-timed
+   together ([Bench_retime], gh-ocannl-1524): each reading is one [Autotune.time_routine] call under
+   the configured [autotune_timing] -- the tuner's own protocol, so on cc a 6-50 us site is timed in
+   batches of up to 200 launches per synchronization rather than one -- and the arms' calls are
+   interleaved. An arm's [ms] is the median of its readings, [ms_lo]/[ms_hi] their range and
+   [ms_retimed] how many the admission gate kept; with both arms an [s1x1-ratio:] line gives tuned
+   over default, paired call by call, with its range and whether every pair fell on one side of 1.
+   Each arm also prints a [bench-result:] line (variant [<site>/<arm>], the median), so
+   [benchmarks/ab.py] can pair two builds of this runner round by round -- the way to A/B a
+   classifier change (gh-ocannl-1397 read a single min-of-200 synced re-timing instead, and its
+   unchanged control moved 0.69x). Inputs are small integers, so every product and sum is exact in
+   f32 whatever the schedule: [exact] is the shipped routine's output, after its timing, against a
+   host oracle reading the input at the stride, and the runner exits 1 when an arm disagrees -- else
+   3, the drivers' host-contention verdict, when an arm kept too few admitted readings to state its
+   spread. *)
 
 open Base
 open Ocannl
@@ -173,10 +175,15 @@ let bench_site ~failed ~unstated ~tune ((name, b, h, w, ic, oc) as site) =
         | None -> ""
         | Some r ->
             Printf.sprintf
-              " outcome=%s crowned=%s best_ms=%.4f sketch_candidates=%d timed=%d failed=%d"
+              " outcome=%s crowned=%s best_ms=%.4f sketch_candidates=%d timed=%d failed=%d \
+               finals=%s finals_contenders=%d"
               (Autotune.outcome_name r.Autotune.outcome)
               r.Autotune.best_label r.Autotune.best_ms r.Autotune.sketch_candidates
               r.Autotune.candidates_timed r.Autotune.candidates_failed
+              (* One word per field: "not run" reads as [not_run]. *)
+              (String.substr_replace_all ~pattern:" " ~with_:"_"
+                 (Autotune.finals_outcome_name r.Autotune.finals_outcome))
+              (List.length r.Autotune.finals)
       in
       Stdio.printf "s1x1: backend=%s site=%s arm=%s compile_s=%.2f %s timing=%s exact=%b%s\n%!"
         backend name label compile_s
