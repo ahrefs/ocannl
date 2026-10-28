@@ -2971,6 +2971,11 @@ type segment_explain = {
           search visits on the segment, in visiting order, each labeled
           [<sketch parameters> @<key tag>] as an [F_sketch] label renders its entries
           ({!sketch_params_label}). *)
+  xs_configured : explain option;
+      (** The segment under the CONFIGURED preset ({!segment_preset} at [`Config], gh-ocannl-1633):
+          what {!model_default}'s substitution ships on a segment it leaves unsketched. A diagnostic
+          beside the threshold, not the threshold: a sketch must strictly beat ["preset"] to enter a
+          substitution. [None] where the preset fails to apply. *)
 }
 
 type explanation = {

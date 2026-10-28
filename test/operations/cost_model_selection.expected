@@ -34,6 +34,8 @@ below the threshold the configured segmentation is the single kernel: true
 below the threshold the search's segmentation cuts the chain: true
 below the threshold the explanation lists the chain's matmul segments, each with sketch leaves: true
 below the threshold some segment's sketch strictly beats the segment's preset: true
+below the threshold some segment's sketch strictly beats the segment's configured preset: true
+each explained configured preset scores as the configured schedule on its search segment: true
 the below-threshold pick computes the host's values exactly: true
 each explained segment is listed once: true
 each explained segment lists its preset first, admitted: true
