@@ -149,15 +149,16 @@ let () =
        licence, off by default (gh-ocannl-998) -- or, with [fp_contract] on, an FMA: Metal spells it
        [fma(], CUDA and HIP [fmaf(]. The three patterns are disjoint, so the counts add. *)
     p "unrolled register tile structure (GPU) or rejected (CPU)"
-      (count_sub "(acc_mc1[" + count_sub "fma(" + count_sub "fmaf(" = tm * tn
+      (count_sub ("(" ^ Generated.node_ident "acc_mc1" ^ "[") + count_sub "fma(" + count_sub "fmaf("
+       = tm * tn
       && count_sub "if (" = 2
       && String.is_substring src ~substring:"acc_mc1"
       &&
       (* This is intentionally dialect identity: the assertion counts the language's literal
          shared-address-space declaration in emitted source. *)
       if String.is_substring backend_name ~substring:"metal" then
-        count_sub "threadgroup float tile_" = 2
-      else count_sub "__shared__ float tile_" = 2))
+        count_sub ("threadgroup float " ^ Generated.node_ident "tile_") = 2
+      else count_sub ("__shared__ float " ^ Generated.node_ident "tile_") = 2))
   else (
     (match
        try

@@ -23,14 +23,14 @@ kernel void d_fwd(
 
   /* Pool base pointers. */
   device char* __pools[16] = { __pool0, __pool1, __pool2, __pool3, __pool4, __pool5, __pool6, __pool7, __pool8, __pool9, __pool10, __pool11, __pool12, __pool13, __pool14, __pool15 };
-  device bfloat* __restrict d = (device bfloat*)(__pools[__pool_slots[0]] + __pool_slots[1]);
-  device half* __restrict a = (device half*)(__pools[__pool_slots[2]] + __pool_slots[3]);
-  device half* __restrict b = (device half*)(__pools[__pool_slots[4]] + __pool_slots[5]);
-  device bfloat* __restrict c = (device bfloat*)(__pools[__pool_slots[6]] + __pool_slots[7]);
+  device bfloat* __restrict t_d = (device bfloat*)(__pools[__pool_slots[0]] + __pool_slots[1]);
+  device half* __restrict t_a = (device half*)(__pools[__pool_slots[2]] + __pool_slots[3]);
+  device half* __restrict t_b = (device half*)(__pools[__pool_slots[4]] + __pool_slots[5]);
+  device bfloat* __restrict t_c = (device bfloat*)(__pools[__pool_slots[6]] + __pool_slots[7]);
   /* Local declarations and initialization. */
 
   /* Main logic. */
   /* d fwd */
-  d[0] = (((bfloat)(a[0]) + (bfloat)(b[0])) * c[0]);
+  t_d[0] = (((bfloat)(t_a[0]) + (bfloat)(t_b[0])) * t_c[0]);
   /* end */
 }

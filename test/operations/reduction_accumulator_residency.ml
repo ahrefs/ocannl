@@ -577,7 +577,8 @@ let () =
   let source = Test_utils.Generated.read "res_guarded" in
   Verdict.p "conditional reduction casts its controlling device read"
     (Bool.equal
-       (String.is_substring source ~substring:"volatile float*)res_guard_mask")
+       (String.is_substring source
+          ~substring:("volatile float*)" ^ Test_utils.Generated.node_ident "res_guard_mask"))
        volatility.requested)
 
 (* {1 The volatility census's own bracket}

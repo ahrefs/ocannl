@@ -1,4 +1,11 @@
-module Impl : Ir.Backend_impl.Lowered_backend
+module Impl : sig
+  include Ir.Backend_impl.Lowered_backend
+
+  val routine_name_probe : unit -> Ir.C_syntax.routine_name_probe
+  (** What [tools/vendor_idents.exe] harvests this backend's routine-name table through
+      (gh-ocannl-1338): the kernel prelude, nvrtc under the options a kernel compiles with (so it
+      initializes the devices), and the routine-name mangling. *)
+end
 
 val cuda_include_options : unit -> string list
 (** The [-I] options an nvrtc compile needs in order to find the CUDA toolkit headers

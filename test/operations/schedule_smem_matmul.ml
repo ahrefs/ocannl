@@ -146,8 +146,10 @@ let () =
        declaration and barrier spellings in emitted source. *)
     let shared_ok =
       if String.is_substring backend_name ~substring:"metal" then
-        count_sub "threadgroup float tile_" = 2 && has "threadgroup_barrier"
-      else count_sub "__shared__ float tile_" = 2 && has "__syncthreads()"
+        count_sub ("threadgroup float " ^ Generated.node_ident "tile_") = 2
+        && has "threadgroup_barrier"
+      else
+        count_sub ("__shared__ float " ^ Generated.node_ident "tile_") = 2 && has "__syncthreads()"
     in
     (* All tile sizes divide the extents: Split remainder guards and Stage/Privatize edge guards
        fold; the only Ifs left are the two thread-0 load restrictions. The k loop accumulates into
@@ -236,8 +238,8 @@ let () =
       (* This is intentionally dialect identity: the assertion counts the literal shared-memory
          declaration token emitted by each language. *)
       if String.is_substring backend_name ~substring:"metal" then
-        count_sub "threadgroup float tile_" = 1
-      else count_sub "__shared__ float tile_" = 1))
+        count_sub ("threadgroup float " ^ Generated.node_ident "tile_") = 1
+      else count_sub ("__shared__ float " ^ Generated.node_ident "tile_") = 1))
   else (
     (match
        try

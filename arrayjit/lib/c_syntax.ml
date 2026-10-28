@@ -807,6 +807,23 @@ module type C_syntax_config = sig
       implementation's reserved namespace ([__x], [_X]) need no entry: {!implementation_reserved}
       closes that class by rule. [[]] for a dialect whose headers stop at the C floor. *)
 
+  val node_ident_prefix : string
+  (** Prepended to every identifier a tensor node takes in an emitted kernel -- a parameter, a
+      pool-pointer local, a kernel-scope or shared array -- and to nothing else: not to the node's
+      code name ({!Tnode.t.code_name}, what debug output and error messages show), not to the text
+      of a routine log line, not to scope locals ([v<scope>_<name>] already carries a prefix)
+      (gh-ocannl-1338).
+
+      A GPU dialect's vendor headers declare global types ([float4], [uint4], [half2]) and macros
+      ([M_PI_F], [MAXFLOAT], [CUDARTAPI]) outside the reserved namespace, and the kernel body spells
+      the types: a parameter named [uint4] shadows the type for every later [device uint4*] of the
+      kernel, and a node named after a macro is macro-expanded before it is declared. A fixed prefix
+      closes that class by construction, where a blacklist would have to track every header the
+      toolchain's runtime compiler pulls in, including built-in ones no file holds. [""] for cc,
+      whose only headers are the C library's: their macros and the types the renderer spells are
+      already in [ident_blacklist], and the compiler's predefined macros are closed by rule
+      ({!implementation_reserved}, {!system_macro_idents}). *)
+
   val ptr_param_style : [ `Per_param | `Pooled of int ]
   (** How materialized in-context tensor nodes are passed to the kernel. [`Per_param] (the default,
       used by C and CUDA) emits one typed pointer parameter per node, whose host side binds
@@ -2259,6 +2276,43 @@ let implementation_reserved name =
   String.is_prefix name ~prefix:"__"
   || (String.length name >= 2 && Char.equal name.[0] '_' && Char.is_uppercase name.[1])
 
+(** The predefined macros a C compiler may define OUTSIDE the reserved namespace: GCC and clang
+    define [unix] and [linux] (and the others on their targets) in their GNU dialects, the default.
+    A routine, or a node, declared under one of them is macro-expanded and does not compile. Every
+    other predefined macro is spelled [__x] or [_X], which {!implementation_reserved} closes
+    (gh-ocannl-1525 review, gh-ocannl-1338). *)
+let system_macro_idents = [ "linux"; "unix"; "i386"; "sun"; "sparc"; "mips"; "vax"; "m68k" ]
+
+type routine_name_probe = {
+  prelude : string;
+      (** The source every kernel follows: the unconditional includes, with every conditional
+          include ahead of them, so a name any kernel's headers declare is measured. *)
+  kernel_definition : string -> string;
+      (** A minimal kernel DEFINITION of the given name, one line, as the backend declares one. *)
+  compile : string -> (unit, string) Result.t;
+      (** The backend's runtime compiler on a whole source; [Error] carries its report. *)
+  kernel_ident : string -> string;
+      (** The backend's routine-name mangling ({!C_syntax.kernel_ident}). *)
+  routine_floor_idents : string list;
+      (** What routine names avoid besides [vendor_routine_idents]: the node-name blacklist and the
+          C library's names. The reserved namespace ({!implementation_reserved}) is a rule, not a
+          list. *)
+  vendor_routine_idents : string list;  (** The backend's harvested table. *)
+}
+(** What [tools/vendor_idents.exe] needs from a backend to harvest, by experiment, the names its
+    toolchain declares at file scope -- the ones a routine name cannot take (gh-ocannl-707,
+    gh-ocannl-1338). Every field is the backend's own: the prelude its kernels start with, the shape
+    of its kernel definitions, its runtime compiler under the options its kernels compile with, and
+    the routine-name mangling with the tables behind it. *)
+
+(** [node_ident_prefix_for_backend backend_name] is the {!C_syntax_config.node_ident_prefix} of the
+    named backend's dialect: ["t_"] for the GPU dialects ([metal], [cuda], [hip]), whose vendor
+    headers declare global types and macros outside the reserved namespace, and [""] for the C
+    backends (gh-ocannl-1338). The configs take their prefix from here, so a test that pins a node's
+    emitted identifier derives it from the same place rather than restating it. *)
+let node_ident_prefix_for_backend backend_name =
+  match String.lowercase backend_name with "metal" | "cuda" | "hip" -> "t_" | _ -> ""
+
 (** Every [<prefix><scalar><width>] spelling: the vector-type families GPU dialects declare as
     global type names, which a kernel definition of the same name collides with as "redefinition as
     a different kind of symbol". A generator rather than a list because the families are a grammar
@@ -2441,6 +2495,7 @@ struct
   (* The C preludes include only the standard headers, whose declarations {!c_stdlib_idents} and
      {!c_stdlib_macros} already cover. *)
   let vendor_routine_idents = []
+  let node_ident_prefix = ""
   let ptr_param_style = `Per_param
 
   (* Plain C backends bind no hardware axes: annotated loops fall back to serial [for] loops (sound
@@ -2712,28 +2767,32 @@ module C_syntax (B : C_syntax_config) = struct
     @ op_syntax_idents ~ternop_syntax:B.ternop_syntax ~binop_syntax:B.binop_syntax
         ~unop_syntax:B.unop_syntax ~vec_unop_syntax:B.vec_unop_syntax
         ~convert_precision:B.convert_precision
-    @ if B.heap_local_arrays then heap_local_idents ~typ:(B.typ_of_prec Ops.single) else []
+    @ (if B.heap_local_arrays then heap_local_idents ~typ:(B.typ_of_prec Ops.single) else [])
+    (* A node declared under a predefined macro is expanded, not declared (gh-ocannl-1338). *)
+    @ system_macro_idents
 
-  let get_ident =
-    (* [ocannl_] is the emitter's own namespace: typedefs minted per lane count
-       ([ocannl_vec<lanes><suffix>]), the partial-column staging names (gh-ocannl-1102), loop
-       counters. A node label there takes the [n<id>_] form, so no emitted declaration can shadow a
-       kernel parameter. *)
+  (* A node's CODE name: what {!Tnode.t.code_name} records, debug output and routine log lines show,
+     and scope locals ([v<scope>_<name>]) are spelled after. [ocannl_] is the emitter's own
+     namespace: typedefs minted per lane count ([ocannl_vec<lanes><suffix>]), the partial-column
+     staging names (gh-ocannl-1102), loop counters. A node label there takes the [n<id>_] form, so
+     no emitted declaration can shadow a kernel parameter. So does a label in the implementation's
+     reserved namespace ([__LINE__], [_Bool], a vendor's [__half]), where every compiler's
+     predefined macros live: a declaration does not shadow a macro, so a node named after one never
+     compiled (gh-ocannl-1525, gh-ocannl-1338). *)
+  let get_code_ident =
     Low_level.get_ident_within_code ~no_dots:true ~blacklist:ident_blacklist
-      ~reserved_prefixes:[ "ocannl_" ]
+      ~reserved_prefixes:[ "ocannl_" ] ~reserved:implementation_reserved
     @@ B.procs
+
+  (* The identifier a node takes in the emitted kernel: its code name behind the dialect's
+     {!C_syntax_config.node_ident_prefix} (gh-ocannl-1338). *)
+  let get_ident tn = B.node_ident_prefix ^ get_code_ident tn
 
   (* What a ROUTINE name must avoid: everything a node name must ({!ident_blacklist}) plus the
      standard-library functions and types the preludes' unconditional includes declare. The extra
      table applies here and not to node names because a routine definition takes FILE scope, where
      [void exp(...)] after [<math.h>] is a conflicting declaration, while a parameter or local named
      [exp] merely shadows it and is well-formed C (gh-ocannl-686 review round 1). *)
-
-  (* The predefined macros a C compiler may define OUTSIDE the reserved namespace: GCC and clang
-     define [unix] and [linux] (and the others on their targets) in their GNU dialects, the default.
-     A routine, or a node, declared under one of them is macro-expanded and does not compile. Every
-     other predefined macro is spelled [__x] or [_X], which [kernel_ident] and the kernel code
-     cache's canonical text already treat as reserved (gh-ocannl-1525 review). *)
 
   (** [kernel_ident name] is [name] made safe to emit as a kernel function's C identifier
       (gh-ocannl-686).
@@ -2783,12 +2842,18 @@ module C_syntax (B : C_syntax_config) = struct
       fails in the vendor compiler, and {!Compile_driver} (or Metal's link-time compile) reports
       that failure as the NAME's, through {!attribute_routine_name_failure} -- not as the "bug in
       OCANNL" gh-ocannl-686 was about. *)
-  let system_macro_idents = [ "linux"; "unix"; "i386"; "sun"; "sparc"; "mips"; "vax"; "m68k" ]
-
   let routine_ident_blacklist =
-    ident_blacklist @ c_stdlib_idents @ system_macro_idents @ B.vendor_routine_idents
+    (* [ident_blacklist] holds {!system_macro_idents} already. *)
+    ident_blacklist @ c_stdlib_idents @ B.vendor_routine_idents
 
   let routine_ident_table = Hash_set.of_list (module String) routine_ident_blacklist
+
+  (* For {!routine_name_probe}: the kernel-name harvest compiles a definition of this shape. *)
+  let probe_kernel_definition name =
+    B.main_kernel_prefix ^ " void " ^ name ^ "(" ^ B.buffer_prefix ^ "float *ocannl_probe_param"
+    ^ B.buffer_suffix ~pos:0 ^ ") {}"
+
+  let routine_floor_idents = ident_blacklist @ c_stdlib_idents
 
   let kernel_ident name =
     let sanitized =
@@ -2801,6 +2866,18 @@ module C_syntax (B : C_syntax_config) = struct
     let sanitized = if implementation_reserved sanitized then "k" ^ sanitized else sanitized in
     let rec avoid s = if Hash_set.mem routine_ident_table s then avoid (s ^ "__") else s in
     avoid sanitized
+
+  (* gh-ocannl-1338: this dialect's half of a {!routine_name_probe}; the backend supplies its
+     prelude and compiler. *)
+  let routine_name_probe ~prelude ~compile =
+    {
+      prelude;
+      kernel_definition = probe_kernel_definition;
+      compile;
+      kernel_ident;
+      routine_floor_idents;
+      vendor_routine_idents = B.vendor_routine_idents;
+    }
 
   (* {3 Storage precision vs. compute precision (gh-ocannl-517)}
 
@@ -3367,7 +3444,7 @@ module C_syntax (B : C_syntax_config) = struct
   (* The emitted name of a scope local. One definition, so that the volatility census below names
      the same identifier the declaration carries rather than a second spelling of the convention. *)
   let scope_local_ident Low_level.{ scope_id; tn } =
-    "v" ^ Int.to_string scope_id ^ "_" ^ get_ident tn
+    "v" ^ Int.to_string scope_id ^ "_" ^ get_code_ident tn
 
   (* The Metal compiler bug also reaches the localized spelling of a scalar accumulation
      (gh-ocannl-731): instead of a device-memory RMW, the loop updates a scope local and stores it
@@ -3595,7 +3672,7 @@ module C_syntax (B : C_syntax_config) = struct
 
   let pp_scope_id Low_level.{ scope_id; tn } =
     let open PPrint in
-    string ("v" ^ Int.to_string scope_id ^ "_" ^ get_ident tn)
+    string ("v" ^ Int.to_string scope_id ^ "_" ^ get_code_ident tn)
 
   (* {3 Vector-extension accumulator grids (gh-ocannl-468 / gh-ocannl-469)}
 
@@ -5283,7 +5360,7 @@ module C_syntax (B : C_syntax_config) = struct
         else
           (pp_ll ctx) ~log_set_locals ~in_loop
             (Low_level.loop_over_dims (Lazy.force tn.dims) ~body:(fun idcs ->
-                 Set { tn; idcs; llsc = Constant 0.0; debug = get_ident tn ^ " := 0" }))
+                 Set { tn; idcs; llsc = Constant 0.0; debug = get_code_ident tn ^ " := 0" }))
     | Set { tn; idcs; llsc; debug } -> (
         let ident_doc = string (get_ident tn) in
         let dims = Lazy.force tn.dims in
@@ -5405,7 +5482,7 @@ module C_syntax (B : C_syntax_config) = struct
                 in
                 let comment_base_msg = "# " ^ debug ^ "\n" in
                 let value_base_msg =
-                  Printf.sprintf "%s[%s]{=%s} = %s = %s\n" (get_ident tn) offset_spec
+                  Printf.sprintf "%s[%s]{=%s} = %s = %s\n" (get_code_ident tn) offset_spec
                     B.float_log_style B.float_log_style debug_val_str
                 in
                 let comment_log =
@@ -5484,8 +5561,8 @@ module C_syntax (B : C_syntax_config) = struct
             let log_param_doc = Option.map B.kernel_log_param ~f:(fun (_, name) -> string name) in
             let comment_base_msg = "# " ^ debug ^ "\n" in
             let value_base_msg =
-              Printf.sprintf "%s[%s]{=%s} = %s = %s\n" (get_ident tn) offset_spec B.float_log_style
-                B.float_log_style debug_val_str
+              Printf.sprintf "%s[%s]{=%s} = %s = %s\n" (get_code_ident tn) offset_spec
+                B.float_log_style B.float_log_style debug_val_str
             in
             let comment_log =
               B.pp_log_statement ~log_param_c_expr_doc:log_param_doc
@@ -5596,8 +5673,8 @@ module C_syntax (B : C_syntax_config) = struct
                 in
                 let offset_spec, offset_arg_doc = B.log_index_arg offset_doc in
                 let value_base_msg =
-                  Printf.sprintf "%s[%s]{=%s} = vec_result.v[%d] = %s\n" (get_ident tn) offset_spec
-                    B.float_log_style i B.float_log_style
+                  Printf.sprintf "%s[%s]{=%s} = vec_result.v[%d] = %s\n" (get_code_ident tn)
+                    offset_spec B.float_log_style i B.float_log_style
                 in
                 let log_args =
                   [
@@ -8022,8 +8099,10 @@ module C_syntax (B : C_syntax_config) = struct
         let log_offset_doc = pp_array_offset (idcs, dims) in
         let offset_spec, offset_arg_doc = B.log_index_arg log_offset_doc in
         let access_doc = string prefix ^^ ident_doc ^^ brackets offset_doc ^^ string postfix in
+        (* The message names the node by its code name, the access reads its identifier. *)
         let expr_doc =
-          string prefix ^^ ident_doc
+          string prefix
+          ^^ string (get_code_ident tn)
           ^^ brackets (string offset_spec)
           ^^ string postfix
           ^^ braces (string ("=" ^ B.float_log_style))
@@ -8038,7 +8117,7 @@ module C_syntax (B : C_syntax_config) = struct
         let prefix, postfix = B.convert_precision ~from:iprec ~to_:prec in
         let _defs, idx_e = (pp_scalar ctx) iprec iv in
         let idx_doc = string prefix ^^ idx_e ^^ string postfix in
-        let label = string (get_ident tn ^ "@dyn_idx") in
+        let label = string (get_code_ident tn ^ "@dyn_idx") in
         (label ^^ braces (string ("=" ^ B.float_log_style)), [ `Value idx_doc ])
     | Constant c ->
         let from_prec = Ops.double in

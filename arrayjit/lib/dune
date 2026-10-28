@@ -113,6 +113,8 @@
   backend_impl
   compiler_options
   c_syntax
+  vendor_idents_cuda
+  vendor_idents_hip
   cuda_like_config
   cuda_mma
   metal_mma

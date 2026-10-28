@@ -258,6 +258,7 @@ module Impl : sig
   include Ir.Backend_impl.Lowered_backend
 
   val hip_to_code : name:string -> string -> Hiprtc.compile_to_code_result
+  val routine_name_probe : unit -> Ir.C_syntax.routine_name_probe
 end = struct
   include Backend_impl.Device (Device_stream) (Slab)
 
@@ -1149,6 +1150,26 @@ end = struct
       let procs = [||]
     end) in
     C_syntax.codegen_capabilities (module Config)
+
+  (* gh-ocannl-1338: the kernel-name harvest's view of this backend ([tools/vendor_idents.ml]). The
+     conditional includes come first; the alias makes the source mention [rocwmma::], which is what
+     gives the rocWMMA tree's include path to [hiprtc_options], and declares nothing a probed name
+     could collide with but itself. *)
+  let routine_name_probe () =
+    let module Syntax = C_syntax.C_syntax (Hip_syntax_config (struct
+      let procs = [||]
+    end))
+    in
+    let prelude =
+      String.concat ~sep:"\n" (List.map Cuda_like_config.Hip.conditional_includes ~f:snd)
+      ^ "\nusing ocannl_probe_rocwmma_t = rocwmma::float16_t;\n" ^ hip_includes
+    in
+    let compile source =
+      match hip_to_code ~name:"vendor_idents_probe" source with
+      | _ -> Ok ()
+      | exception Hiprtc.Hiprtc_error { message; _ } -> Error message
+    in
+    Syntax.routine_name_probe ~prelude ~compile
 
   module Compile = C_syntax.Compile_driver (Hip_syntax_config)
 

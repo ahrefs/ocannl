@@ -110,8 +110,11 @@ let () =
        qualifier and workgroup barrier token, not whether the reduction was selected. *)
     let shared_ok =
       if String.is_substring backend_name ~substring:"metal" then
-        has "threadgroup float partial_sums[64]" && has "threadgroup_barrier"
-      else has "__shared__ float partial_sums[64]" && has "__syncthreads()"
+        has ("threadgroup float " ^ Generated.node_ident "partial_sums" ^ "[64]")
+        && has "threadgroup_barrier"
+      else
+        has ("__shared__ float " ^ Generated.node_ident "partial_sums" ^ "[64]")
+        && has "__syncthreads()"
     in
     p "shared tile and barrier rendered (GPU) or rejected (CPU)" shared_ok)
   else (

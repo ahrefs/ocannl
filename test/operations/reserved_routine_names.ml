@@ -176,12 +176,15 @@ let metal_exemplars =
     ("metal", "metal__");
   ]
 
+(* The CUDA and HIP tables are measured per toolchain (gh-ocannl-1338, [tools/vendor_idents.exe]),
+   which is why the two lists differ: nvrtc accepts a kernel named [float4] (CUDA's vector types are
+   structs, which a function of the same name hides) and rejects [rsqrtf] (a C-linkage math
+   function), while hiprtc does the opposite. *)
 let cuda_exemplars =
   [
     ("half2", "half2__");
-    ("float4", "float4__");
     ("nv_bfloat16", "nv_bfloat16__");
-    ("CUDART_INF_FP16", "CUDART_INF_FP16__");
+    ("CUDARTAPI", "CUDARTAPI__");
     ("rsqrtf", "rsqrtf__");
     ("__hadd", "k__hadd");
   ]
@@ -190,9 +193,8 @@ let hip_exemplars =
   [
     ("half2", "half2__");
     ("float4", "float4__");
-    ("hip_fp8_storage_t", "hip_fp8_storage_t__");
     ("HIPRT_INF_FP16", "HIPRT_INF_FP16__");
-    ("rsqrtf", "rsqrtf__");
+    ("FLT_MAX", "FLT_MAX__");
     ("__hadd", "k__hadd");
   ]
 

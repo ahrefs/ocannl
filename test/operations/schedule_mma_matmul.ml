@@ -1723,13 +1723,13 @@ let () =
               && update_has_trailing_barrier
           | _ -> false
         in
-        count_sub "threadgroup float tile_" = 2
+        count_sub ("threadgroup float " ^ Generated.node_ident "tile_") = 2
         && has "simdgroup_multiply_accumulate"
         && has "threadgroup_barrier" && has "tile_mma fragment update" && resident
-        && not (has "float fragment_")
+        && not (has ("float " ^ Generated.node_ident "fragment_"))
       else
         (* CUDA/HIP: the shared tiles, read by the scalar fallback. *)
-        count_sub "__shared__ float tile_" = 2 && has "__syncthreads()"
+        count_sub ("__shared__ float " ^ Generated.node_ident "tile_") = 2 && has "__syncthreads()"
     in
     p "staged+tensorized structure as expected" ok)
   else (

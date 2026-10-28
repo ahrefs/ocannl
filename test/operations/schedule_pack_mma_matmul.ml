@@ -178,8 +178,8 @@ let () =
    (* Two plain local tile arrays; on the C backends both operand pointers of the register tiling
       point into them (the accumulator streams from the real output). *)
    p "packed tiles feed the register-tiled micro-kernel"
-     (count_sub "float tile_" = 2
-     && (not (has "threadgroup float tile_"))
+     (count_sub ("float " ^ Generated.node_ident "tile_") = 2
+     && (not (has ("threadgroup float " ^ Generated.node_ident "tile_")))
      && (not (has "__shared__"))
      && rendered_as_scheduled ~what:"pmm_packed" census
      && ((not on_cpu)
@@ -315,7 +315,9 @@ let () =
              (String.substr_index src ~pattern:"dispatch_apply")
              (String.substr_index src ~pattern:"#pragma omp parallel for"))
       in
-      List.exists (String.substr_index_all src ~may_overlap:false ~pattern:"float tile_")
+      List.exists
+        (String.substr_index_all src ~may_overlap:false
+           ~pattern:("float " ^ Generated.node_ident "tile_"))
         ~f:(fun pos -> pos > par_pos)
     else true)
 
@@ -382,8 +384,9 @@ let () =
   let has s = String.is_substring src ~substring:s in
   p "grid + hoisted-pack renders pool-parallel with no in-kernel tile writes"
     (rendered_as_scheduled ~what:"pmm_gridpack" (census_of routine)
-    && ((not on_cpu) || (has_parallel_construct src && has "packed_gb" && not (has "float tile_")))
-    )
+    && ((not on_cpu)
+       || has_parallel_construct src && has "packed_gb"
+          && not (has ("float " ^ Generated.node_ident "tile_"))))
 
 (* === Mixed grid-outermost composition (autotune's [sk_pack_rest] seeds, gh-ocannl-473): the
    hoisted-pack shape with the non-hoistable A operand packed in-kernel — Grid row blocks stay
@@ -470,7 +473,10 @@ let () =
       has_parallel_construct src && has "packed_mgb"
       &&
       (* Exactly one in-kernel tile (A~), declared per chunk inside the parallel construct. *)
-      let tile_positions = String.substr_index_all src ~may_overlap:false ~pattern:"float tile_" in
+      let tile_positions =
+        String.substr_index_all src ~may_overlap:false
+          ~pattern:("float " ^ Generated.node_ident "tile_")
+      in
       let par_pos =
         Option.value_exn
           (Option.first_some
