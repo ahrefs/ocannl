@@ -178,7 +178,10 @@ files.
   one when no point reaches DRAM — a lower bound is neither `none` (unlimited) nor a value; minix's
   unified gfx1151 stayed at 1.7 TB/s requested to 10.8 GB, and its class constant is a separate,
   documented per-class decision. `bench_wgrad`'s `wgrad-model:` lines print each plan's per-kernel rank beside its
-  distinct-cell bound; `benchmarks/gh1253_cells.sh` runs the whole calibration on one box.
+  distinct-cell bound; `benchmarks/gh1253_cells.sh` runs the whole calibration on one box. Its
+  `EXPLAIN_ONLY=<run dir>` re-scores a past run's sites at the checkout's revision against that
+  run's `rank_<site>.tsv` rows, timing nothing: a ranking-score change's before/after agreement
+  check is two such runs (base, head) on one run dir, a correctness batch, not a measurement.
 - The ranking score divides by its own rates, never the bound's ceilings (gh-ocannl-1442):
   `issue_rate` (scalar operations, the effective rate of a register-blocktiled kernel with its
   staging) and `dram_bandwidth` (the STREAM rate), `Untimed` fields overridden by
