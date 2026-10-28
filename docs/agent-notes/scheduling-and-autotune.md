@@ -1370,6 +1370,17 @@ files.
   batch by batch shares that, which needs every contender resident at once. Scripted searches see
   the finals as extra admitted windows at the end of `measured` whenever two beam entries read
   within 10%: a test scripting near ties pins `autotune_finals_margin=0` or expects them.
+- **Seed-only tuning (`~rounds:0`, every benchmark runner) is decided by the same finals**
+  (gh-ocannl-1659): with no round, the beam is the `beam_width` fastest seeds and the finals run
+  over it, so no second shortlist exists or is needed. The issue's 1-in-12 crown of a `W_sketch`
+  15% slower than the presets (gh-1524's A/A on `bench_strided_1x1` s3b8, mac-studio cc) was
+  measured before the finals landed. That sketch reads ~10% over the presets, so whenever a lucky
+  window puts it at the head the second entry is a preset within the margin, and width 2 suffices;
+  `autotune_beam_finals`' `lucky` pair pins the event. Re-measured with the finals (24 processes,
+  12 mirrored rounds): every crown a preset (21 `W_preset`, 3 `F_preset`), the finals ran in all
+  24 (4 swapped the head), tuned medians 0.0323-0.0340 ms across processes, and the tuned A/A
+  ratio's range 0.976-1.033 (0.861-1.093 before). The runner's tuned line prints
+  `finals=<outcome> finals_contenders=<n>` for such a count.
 - "Crowned" is not "shipped", and neither is reproducible on a small routine. `Train.tune_placements`
   runs two searches and keeps one artifact, so a family can win the arm that is then discarded whole
   — read `report.best_label` / `best_tensorized` / `best_tensorization` / `mma_best_ms` per arm (the A/B calls `?report`
