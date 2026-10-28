@@ -705,6 +705,46 @@ let add_var_used_in_spec_or_compose row =
 let add_var_used_in_pointwise row =
   match row with Row.Row_var v -> Row.add_used_in_pointwise v | _ -> ()
 
+(** Refuses constraints a fully staged solve left unsolved (gh-ocannl-1656). The one known source is
+    a concatenated axis whose components the spec does not size: [p^o^q => o] fixes [p + q], not [p]
+    and [q], so name it with the fix; anything else keeps the plain report of the leftover. *)
+let refuse_unsolved ~where (unsolved : Row.constraint_ list) =
+  if not (List.is_empty unsolved) then
+    let concat =
+      List.find_map unsolved ~f:(function
+        | Row.Dim_eq { d1 = Row.Concat _ as c; _ } | Row.Dim_eq { d2 = Row.Concat _ as c; _ } ->
+            Some c
+        | _ -> None)
+    in
+    match concat with
+    | Some c ->
+        let concat_text = Row.dim_to_string Axis_size c in
+        raise
+        @@ Row.Shape_error
+             ( [%string
+                 "%{where}: the components of the concatenated axis %{concat_text} are not \
+                  determined -- only their sum is. Size all but one of them: capture the component \
+                  (the spec's trailing label list) and Shape.set_dim it, or write its size as an \
+                  integer component (e.g. 2^o^1 => o)"],
+               [ Row.Dim_mismatch [ c ] ] )
+    | None ->
+        raise
+        @@ Row.Shape_error
+             ( where ^ ": constraints left unsolved: "
+               ^ Sexp.to_string_hum ([%sexp_of: Row.constraint_ list] unsolved),
+               [] )
+
+(** The origin operation of the size-only constraints [bind_delayed_vars_to_envs] emits for
+    projection derivation; see there. *)
+let projection_sizing_operation = "set_dim (projection-local sizing)"
+
+let is_projection_sizing (c : Row.constraint_) =
+  match c with
+  | Dim_eq { origin; _ } ->
+      List.exists origin ~f:(fun (o : Row.constraint_origin) ->
+          Option.equal String.equal o.operation (Some projection_sizing_operation))
+  | _ -> false
+
 (** Shared helper: bind each [delayed_var_ref] to the dim/row variable resolved for its label in
     [dim_var_env]/[row_var_env]. Returns the constraints the binding implies: equality with a value
     already solved for the reference, and a tie to the variable another operation bound the
@@ -719,7 +759,14 @@ let add_var_used_in_pointwise row =
     arithmetic). Across a closure the reference carries its value in [solved_dim]/[solved_sym], a
     row's as its product: [var] then names a variable of the reset environment (or a
     projection-local one, rebound by [derive_projections]), free in the open work, so the tie to it
-    constrains nothing. Projection derivation emits none of these constraints. *)
+    constrains nothing.
+
+    Projection derivation emits no tie and no row constraint, but it does emit a dim binding's
+    solved value, tagged {!projection_sizing_operation}: the closed shapes carry every axis's extent
+    except the split of a concatenated axis into components, so a middle extraction ([p^o^q => o])
+    could not re-solve without it (gh-ocannl-1656). [derive_projections] gives these constraints to
+    its projection-local solve only, never to [Row.get_proj_equations] -- a size equates no index
+    (and a dimension-1 value there would pin the axis to [Fixed_idx 0]). *)
 let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~error_shapes
     dim_refs =
   (* Every refusal before any binding (gh-ocannl-1655): binding touches the reference, which would
@@ -795,13 +842,14 @@ let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~
       match Hashtbl.find dim_var_env label with
       | Some var ->
           Delayed_ref.set_var delayed_ref (`Dim var);
+          let solved_origin =
+            origin (if for_projections then projection_sizing_operation else "set_dim")
+          in
           let solved =
             match (delayed_ref.var_ref.solved_sym, delayed_ref.var_ref.solved_dim) with
-            | _ when for_projections -> []
             | Some sym, _ ->
                 [
-                  Row.Dim_eq
-                    { d1 = Row.Var var; d2 = Row.get_sym_dim sym; origin = origin "set_dim" };
+                  Row.Dim_eq { d1 = Row.Var var; d2 = Row.get_sym_dim sym; origin = solved_origin };
                 ]
             | None, Some solved_dim ->
                 [
@@ -809,7 +857,7 @@ let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~
                     {
                       d1 = Row.Var var;
                       d2 = Row.get_default_dim ~d:solved_dim ();
-                      origin = origin "set_dim";
+                      origin = solved_origin;
                     };
                 ]
             | None, None -> []
@@ -2926,7 +2974,7 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage5 unsolved local_env in
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage6 unsolved local_env in
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage7 unsolved local_env in
-  assert (List.is_empty unsolved);
+  refuse_unsolved ~where:"derive_projections" unsolved;
   let local_env = Row.populate_dim_proj_in_solved local_env in
   let rhs, skip_deriving =
     match update_step.logic with
@@ -2951,7 +2999,9 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
   (* Important: ineqs must not be substituted / solved before getting proj_equations, because
      get_inequalities provides indexing information that is lost after substitution. *)
   let proj_eqs : Row.proj_equation list =
-    Row.get_proj_equations (terminal_rows_for_inputs @ ineqs) proj_axis_env local_env
+    Row.get_proj_equations
+      (terminal_rows_for_inputs @ List.filter ineqs ~f:(fun c -> not (is_projection_sizing c)))
+      proj_axis_env local_env
   in
   (* resolved_padding is passed for verification only - to check that operation padding doesn't
      exceed already-locked padding. It won't be used to set padding on shapes (get_dim_padding only
@@ -3394,7 +3444,7 @@ let%debug4_sexp finish_inference_body (() : unit) : unit =
   let unsolved, env = Row.solve_inequalities ~stage:Stage5 unsolved env in
   let unsolved, env = Row.solve_inequalities ~stage:Stage6 unsolved env in
   let unsolved, env = Row.solve_inequalities ~stage:Stage7 unsolved env in
-  assert (List.is_empty unsolved);
+  refuse_unsolved ~where:"finish_inference" unsolved;
   let _active_update_steps : update_step list = !active_update_steps in
   List.iter ~f:(apply_env_step env) !active_update_steps;
   let _applied_update_steps : update_step list = !active_update_steps in
