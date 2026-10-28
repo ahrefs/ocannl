@@ -24,7 +24,7 @@
    runs far out of range on the inactive lanes) keep [?:]; a value select over an index guard blends
    outside and keeps the inner guard. Executed with the hazardous reads inactive. - Assembly, on
    cc's own compiler and kernel flags: no conditional branch is attributed to a select's source
-   lines, and those lines carry instructions (the realistic leg's census is printed only). - The
+   lines, and those lines carry instructions, the realistic leg's included (gh-ocannl-1660). - The
    realistic composition: a ReLU feeding a 2x2 max pool, backward through the default placements
    (the selects inlined into their consumers) — the gradient emits the blend and equals, bitwise,
    both an OCaml reference and the same program with inlining off. *)
@@ -87,11 +87,28 @@ let execute_leg ~name ~seed ~out llc =
   let _o, got = optimize_and_execute ~name llc ~seed ~read:[ out ] in
   List.hd_exn got
 
+(* The kernel statement lines a census of [source]'s selects reads: each line matching [patterns],
+   and every line of each blend's statement expression, from its [({] to its [})] -- a truth
+   expression too long for the selection's line wraps onto the line above it, where the max-pool
+   gate's comparison branched unseen by a census of the matching lines alone (gh-ocannl-1660).
+   Statement lines only ({!Generated.main_logic_lines}): the prelude's [OCANNL_SELECT] definition
+   spells the names too. *)
+let select_lines ~patterns source =
+  let lines = Array.of_list (String.split_lines source) in
+  let blocks =
+    Generated.brace_intervals lines
+    |> List.filter ~f:(fun (opening, _) -> has lines.(opening) blend_marker)
+    |> List.concat_map ~f:(fun (opening, closing) -> List.range (opening + 1) (closing + 2))
+  in
+  Set.inter
+    (Set.of_list (module Int) (Generated.main_logic_lines source))
+    (Set.union (Asm.anchor_lines ~source ~patterns) (Set.of_list (module Int) blocks))
+
 (* Whether [name]'s select compiled branch-free: compiled by the cc backend's own compiler with its
-   own kernel flags (at [-O3], its default level), no conditional branch is attributed to a source
-   line matching [patterns], and those lines carry instructions (an anchor naming nothing, or a
-   select folded away, fails). Each anchored line's own count goes to stderr, so a red run names the
-   line that branched. *)
+   own kernel flags (at [-O3], its default level), no conditional branch is attributed to a line
+   [select_lines] reads, and those lines carry instructions (an anchor naming nothing, or a select
+   folded away, fails). Each anchored line's own count goes to stderr, so a red run names the line
+   that branched. *)
 let compiled_branch_free ~patterns name =
   let src_path = Generated.path name in
   let source = Generated.read name in
@@ -112,7 +129,7 @@ let compiled_branch_free ~patterns name =
       let asm = Stdio.In_channel.read_all asm_path in
       (try Stdlib.Sys.remove asm_path with _ -> ());
       let parsed = Asm.parse ~asm ~source_basename:(Stdlib.Filename.basename src_path) in
-      let anchor = Asm.anchor_lines ~source ~patterns in
+      let anchor = select_lines ~patterns source in
       let lines = Array.of_list (String.split_lines source) in
       Set.iter anchor ~f:(fun l ->
           let b, i = Asm.conditional_branches_in parsed ~anchor:(Set.singleton (module Int) l) in
@@ -503,10 +520,17 @@ let () =
     let text = kernel_text "bs_pool_inlined" in
     p claim (has text blend_marker)
   else skipped claim;
-  (* The realistic kernel's branch census is printed, not claimed: it cannot carry a claim. On clang
-     it does not discriminate against the short-circuiting spelling at this size (the base compiler
-     already if-converts these few unrolled loads), and on gcc (CI's x86 leg) the select's closing
-     line also carries the tail of the enclosing index guard's [?:], which branches by design, so
-     DWARF attribution cannot separate the two. The hand-built legs above, one select per kernel,
-     carry the assembly claim on both compilers. *)
-  if on_cc then ignore (compiled_branch_free ~patterns:[ "ocannl_sel_" ] "bs_pool_inlined" : bool)
+  (* The realistic kernel's branch census (gh-ocannl-1660). gcc at x86 is where it bites: over the
+     blend's two values it still branched on both selects, the max-pool gate's float equality test
+     ([vucomiss], [jp], [je]: two flags defeat its if-conversion) and the ReLU gate, whose float arm
+     is converted to the double result inside a branch of its own -- 16 and 8 conditional branches
+     on gcc 15.2, until [OCANNL_SELECT] selected the bit patterns under gcc. Every one of them was
+     the select's: the enclosing index guards' [?:], which share the select's closing line, fold
+     away once the window loops unroll, and no branch was attributed to their lines. On clang the
+     claim does not discriminate at this size (the short-circuiting spelling already if-converts
+     these few unrolled loads); it holds there as it does on gcc. *)
+  let claim =
+    "pool backward: no conditional branch on the inlined selects' lines (host compiler)"
+  in
+  if on_cc then p claim (compiled_branch_free ~patterns:[ "ocannl_sel_" ] "bs_pool_inlined")
+  else skipped claim

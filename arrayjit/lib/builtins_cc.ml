@@ -1841,6 +1841,49 @@ ARRAYJIT_BUILTIN_LINKAGE uint64_t uint4x32_to_uint64_uniform_lane(uint4x32_t x, 
 }
 |},
       [ "uint4x32_t"; "uint4x32_to_uint64_uniform_vec" ] );
+    (* gh-ocannl-1660: the final step of cc's branchless value select ([Cc_backend]'s
+       [select_blend_syntax]), applied to the select's truth expression and the two arm locals. gcc
+       at x86 keeps a conditional branch for a [?:] even over two values: a float EQUALITY test
+       needs two flags (parity says unordered), which defeats its if-conversion ([ucomiss], [jp],
+       [je]), and an arm converted to the result type (a gate's double [0.0] against a float) is
+       sunk into a branch of its own. Selecting the bit patterns under an all-ones or all-zeros mask
+       leaves it nothing to branch on -- it turns the mask into [setcc] and [cmov], or vectorizes it
+       -- and moves the bits unchanged, NaN payloads, infinities and signed zeros included (a
+       multiply by the mask would not). Each arm is first converted to the result type, as [?:]
+       converts it, so the value and C type are those of the [?:]. The untaken width's block still
+       type-checks, so the 64-bit one copies [sizeof] the value: a float result never reads past its
+       4 bytes there. clang if-converts the plain spelling already and keeps it. *)
+    ( "OCANNL_SELECT",
+      {|
+/* The selection step of a branchless value select (gh-ocannl-1622, gh-ocannl-1660): T is its truth
+   expression, A and B its arms already evaluated into locals; the value and C type are those of
+   (T) ? (A) : (B). Under gcc, a select of the bit patterns: x86 gcc branches on that ?: (a float
+   equality test, an arm converted to the result type) even over two values. */
+#if defined(__GNUC__) && !defined(__clang__)
+  #define OCANNL_SELECT(T, A, B) ({ \
+    int ocannl_sel_t__ = ((T) != 0); \
+    __typeof__(0 ? (A) : (B)) ocannl_sel_x__ = (A), ocannl_sel_y__ = (B); \
+    _Static_assert(sizeof ocannl_sel_x__ == 4 || sizeof ocannl_sel_x__ == 8, \
+                   "OCANNL_SELECT: a 32- or 64-bit result"); \
+    if (sizeof ocannl_sel_x__ == 4) { \
+      uint32_t ocannl_sel_m__ = -(uint32_t)ocannl_sel_t__, ocannl_sel_u__, ocannl_sel_v__; \
+      __builtin_memcpy(&ocannl_sel_u__, &ocannl_sel_x__, 4); \
+      __builtin_memcpy(&ocannl_sel_v__, &ocannl_sel_y__, 4); \
+      ocannl_sel_u__ = (ocannl_sel_u__ & ocannl_sel_m__) | (ocannl_sel_v__ & ~ocannl_sel_m__); \
+      __builtin_memcpy(&ocannl_sel_x__, &ocannl_sel_u__, 4); \
+    } else { \
+      uint64_t ocannl_sel_m__ = -(uint64_t)ocannl_sel_t__, ocannl_sel_u__ = 0, ocannl_sel_v__ = 0; \
+      __builtin_memcpy(&ocannl_sel_u__, &ocannl_sel_x__, sizeof ocannl_sel_x__); \
+      __builtin_memcpy(&ocannl_sel_v__, &ocannl_sel_y__, sizeof ocannl_sel_y__); \
+      ocannl_sel_u__ = (ocannl_sel_u__ & ocannl_sel_m__) | (ocannl_sel_v__ & ~ocannl_sel_m__); \
+      __builtin_memcpy(&ocannl_sel_x__, &ocannl_sel_u__, sizeof ocannl_sel_x__); \
+    } \
+    ocannl_sel_x__; })
+#else
+  #define OCANNL_SELECT(T, A, B) ((T) ? (A) : (B))
+#endif
+|},
+      [] );
   ]
 
 let builtins =

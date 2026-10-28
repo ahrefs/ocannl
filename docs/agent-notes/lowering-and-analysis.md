@@ -51,6 +51,13 @@ files.
   (`test/operations/branchless_select`): clang if-converts `c ? a[i] : b[i]` on base by selecting
   the ADDRESS, so a branch claim needs a constant arm (`where cond g 0`, the backward shape); and a
   routine-local array is dereferenceable, so the realistic leg materializes the gated gradient.
+  Values in locals are not enough for gcc at x86 (gh-ocannl-1660): it keeps `ucomiss; jp; je` for a
+  `?:` whose test is a float EQUALITY (two flags defeat its if-conversion, the max-pool gate) and
+  sinks an arm's conversion to the result type into a branch (the ReLU gate's float arm against a
+  double `0.0`). So the blend's last step is the `OCANNL_SELECT` builtin, which under gcc selects
+  the bit patterns under a mask (it becomes setcc + cmov, or vectorizes) and elsewhere stays `?:`.
+  Read a census of a select line by its `.loc` columns before blaming a neighbouring construct: the
+  index guards sharing that line had folded away, and every branch sat at the select's own column.
 - The upper cost walk charges every operand that is *rendered*, which is more than can *execute*,
   and the two differ in exactly one way (gh-ocannl-637): a `Local_scope` anywhere in a statement's
   expression renders as statements hoisted OUT of it — `C_syntax.pp_scalar` returns definitions
