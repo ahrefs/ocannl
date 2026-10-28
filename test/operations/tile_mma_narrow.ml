@@ -168,7 +168,7 @@ let () =
      if on_cpu then
        (* Two f32 tile arrays: the widening (the C backends' [bfloat16_to_single]) rides the packing
           copy; the register tiling sees f32 panels, bridging only the accumulator. *)
-       count_sub "float tile_" = 2
+       count_sub ("float " ^ Generated.node_ident "tile_") = 2
        && has "bfloat16_to_single"
        && has "narrow storage bridged: d:bfloat16."
        && has "OCANNL_VEC_WIDEN_BFLOAT16" && has "OCANNL_VEC_NARROW_BFLOAT16"
