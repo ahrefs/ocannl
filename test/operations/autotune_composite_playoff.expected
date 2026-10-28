@@ -46,3 +46,18 @@ tune_placements: ~log reached its own arm lines, for both arms: true
 tune_placements: ~progress framed both arms: true
 tune_placements: both arm searches inherited both overrides (an untuned-control stage each): true
 streams: both overrides end with the tune_placements call: true
+contended: the three searches recombined the same composite: true
+contended: the singles tie, so every segment sends two alternates: true
+off: no playoff finals ran: true
+off: the first segment's slower alternate replaced R, read against R's contended window: true
+off: the true best was never timed: true
+on: every playoff alternate was a near tie, decided by a finals of the two: true
+on: four windows per finals, all admitted: true
+on: the first finals is the palindrome of the alternate and R, faster first reading first: true
+on: only the true best replaced R: true
+on: the true best is crowned: true
+on: the playoff's finals windows are not candidate timings or playoff windows: true
+on: every playoff window and playoff finals window is in the playoff phase: true
+refused: R's finals windows were refused, the alternates' admitted: true
+refused: the readings decided R's inconclusive finals, so its first segment was swapped as off: true
+refused: the finals' refusals are not the search's: true

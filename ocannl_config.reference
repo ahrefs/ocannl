@@ -792,8 +792,13 @@
 # near-tie contenders -- at most `autotune_beam_width` of them, drawn from the final beam and the
 # entries the rounds set aside -- re-time them together, each twice in adjacent windows (the
 # contenders, then the same in reverse), and crown by those readings alone; the default beam costs
-# at most four extra windows, and a beam of one holds no finals. 0 or less turns the finals off: the crown is then the
-# entry that read fastest, as before. It shapes which timed candidate is crowned, not what a
+# at most four extra windows, and a beam of one holds no finals. The composite playoff
+# (`autotune_composite_playoff_width`) decides its near ties the same way (gh-ocannl-1665): an
+# alternate composite reading within this margin of the incumbent it challenges is re-timed with it
+# in four adjacent windows, and replaces it only by winning those -- one segment's swap almost
+# always reads that close, so nearly every playoff alternate costs four more compiles and windows.
+# 0 or less turns both off: the crown is then the entry that read fastest, and an alternate replaces
+# the incumbent by reading faster, as before. It shapes which timed candidate is crowned, not what a
 # crowned schedule means, so a warm schedule cache replays its winner whatever the margin. No
 # profile sets it.
 #autotune_finals_margin=0.1

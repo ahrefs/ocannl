@@ -1334,7 +1334,10 @@ val finals_contenders : margin:float -> width:int -> ('a * float) list -> ('a * 
     every entry it ranked as an incumbent -- the final beam, then the beams accepted rounds replaced
     and the round a rejected round discarded -- with [margin] config [autotune_finals_margin]
     (default [0.1]) and [width] its [beam_width]; it re-times the contenders in {!finals_order} and
-    crowns by {!finals_crown}.
+    crowns by {!finals_crown}. The composite playoff decides its near ties the same way
+    (gh-ocannl-1665): its pool is the incumbent composite and one alternate, in that order, at width
+    2, so an alternate replaces the incumbent by winning a finals of the two when both qualify, and
+    by reading faster otherwise ([fiss_sketch_playoff_finals]).
 
     The width is the beam's so that every entry outside the finals that the beam ranked read no
     faster than every contender: each such entry was evicted from a beam (or a round's accumulator)
@@ -1624,8 +1627,23 @@ type report = {
           Changing the default margin or the default width bumps [Schedule_cache.entry_version].
           Includes refused windows, like [fiss_sketch_timed]. *)
   fiss_sketch_playoff_swaps : int;
-      (** Of [fiss_sketch_playoff_timed], the alternates that ran faster than the incumbent
-          composite and replaced it, so later segments' alternates build on them. *)
+      (** Of [fiss_sketch_playoff_timed], the alternates that beat the incumbent composite and
+          replaced it, so later segments' alternates build on them. An alternate whose reading is
+          within config [autotune_finals_margin] of the incumbent's beats it in a finals of the two
+          (gh-ocannl-1665: {!finals_order}, {!finals_crown}), since their search readings come from
+          different windows; any other by reading faster, as does one whose finals could not decide.
+      *)
+  fiss_sketch_playoff_finals : int;
+      (** Of [fiss_sketch_playoff_timed], the alternates whose near tie with the incumbent a finals
+          of the two decided, or tried to (gh-ocannl-1665). [0] with config [autotune_finals_margin]
+          [0] or less. *)
+  fiss_sketch_playoff_finals_timed : int;
+      (** Those finals' windows that ran, admitted or not: four per finals unless a recompile failed
+          or the budget stopped one. Counted here and NOT in [fiss_sketch_playoff_timed],
+          [candidates_timed], [timings_contended] or [finals_timed], as the beam finals' windows are
+          counted apart. *)
+  fiss_sketch_playoff_finals_admitted : int;
+      (** Of [fiss_sketch_playoff_finals_timed], the admitted windows. *)
   fiss_sketch_staffed_timed : int;
       (** Of [fiss_sketch_timed], the staffed singles' windows (gh-ocannl-1138, config
           [autotune_staffed_singles]): singles timed with the other keyed segments on the running

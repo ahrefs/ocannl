@@ -109,17 +109,17 @@ type observed = Scripted_search.observed
 let finals_off = ("autotune_finals_margin", "0")
 
 (* One search under the additive script [cost]. [?staffed] and [?width] state
-   [autotune_staffed_singles] and [autotune_composite_playoff_width] for this search only; [?start]
-   gives the running composite its start; [?refuse] refuses (at pre-dispatch validation, a contained
-   decline) every attempt whose label it holds for. *)
-let search ?(staffed = true) ?(log = false) ?(progress = false) ?keyed ?width ?start ?refuse
-    ?(cache_dir = "") ?chain ~tag ~cost () =
+   [autotune_staffed_singles] and [autotune_composite_playoff_width] for this search only, and
+   [~finals:true] leaves the finals at their default margin; [?start] gives the running composite
+   its start; [?refuse] refuses (at pre-dispatch validation, a contained decline) every attempt
+   whose label it holds for. *)
+let search ?(staffed = true) ?(finals = false) ?(log = false) ?(progress = false) ?keyed ?width
+    ?start ?refuse ?(cache_dir = "") ?chain ~tag ~cost () =
   let qg, comp = match chain with Some c -> c | None -> Fissioned_chain.chain_with_output () in
   let current = ref "" in
   let settings =
-    (staffed_key, Bool.to_string staffed)
-    :: finals_off
-    :: Option.value_map width ~default:[] ~f:(fun w -> [ (width_key, Int.to_string w) ])
+    ((staffed_key, Bool.to_string staffed) :: (if finals then [] else [ finals_off ]))
+    @ Option.value_map width ~default:[] ~f:(fun w -> [ (width_key, Int.to_string w) ])
   in
   let (o : observed) =
     Autotune.Seam.with_value Autotune.on_candidate_attempt (fun label -> current := label)
@@ -614,6 +614,28 @@ let () =
           Option.exists crowned_second ~f:(fun e -> List.mem (focus l) e ~equal:String.equal)
           && List.exists (focus l) ~f:(fun e -> String.equal (key_of e) first))
   | _ -> p "ties: the search swept the chain's two keys" false
+
+(* gh-ocannl-1665: [ties] with the finals on. Every alternate reads the running composite's time, a
+   near tie, so each is decided by a finals of the two; the running composite was timed by a staffed
+   single's window, under another spec, so its finals windows recompile it as the explicit composite
+   of its choices, and the tie keeps it. *)
+let () =
+  let off = search ~tag:"ties" ~cost:(fun _ -> 3.) () in
+  let o = search ~finals:true ~tag:"ties finals" ~cost:(fun _ -> 3.) () in
+  let r = o.report in
+  let alternates = List.filter off.measured ~f:is_composite in
+  p "ties finals: the same playoff alternates as with the finals off"
+    (r.Autotune.fiss_sketch_playoff_timed >= 1
+    && r.Autotune.fiss_sketch_playoff_timed = off.report.Autotune.fiss_sketch_playoff_timed);
+  p "ties finals: every alternate was decided by a finals, four windows each, all admitted"
+    (r.Autotune.fiss_sketch_playoff_finals = r.Autotune.fiss_sketch_playoff_timed
+    && r.Autotune.fiss_sketch_playoff_finals_timed = 4 * r.Autotune.fiss_sketch_playoff_finals
+    && r.Autotune.fiss_sketch_playoff_finals_admitted = r.Autotune.fiss_sketch_playoff_finals_timed
+    );
+  p_exists "ties finals: the running composite was re-timed as an explicit composite, no alternate"
+    (List.filter o.measured ~f:is_composite) ~f:(fun l ->
+      not (List.mem alternates l ~equal:String.equal));
+  p "ties finals: a tie keeps the running composite" (r.Autotune.fiss_sketch_playoff_swaps = 0)
 
 (* --- heavy: the keys are swept heaviest first --- *)
 
