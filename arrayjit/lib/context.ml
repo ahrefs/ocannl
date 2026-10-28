@@ -959,6 +959,24 @@ let inherits_computation ctx tn =
   Backends.query ctx.wrapped
     { q = (fun _ c -> Hashtbl.mem c.BI.optimize_ctx.Ir.Low_level.computations tn) }
 
+let stored_components ctx tn =
+  Backends.query ctx.wrapped
+    {
+      q =
+        (fun _ c ->
+          Option.value_map ~default:0 ~f:List.length
+            (Hashtbl.find c.BI.optimize_ctx.Ir.Low_level.computations tn));
+    }
+
+let stored_component_total ctx =
+  Backends.query ctx.wrapped
+    {
+      q =
+        (fun _ c ->
+          Hashtbl.fold c.BI.optimize_ctx.Ir.Low_level.computations ~init:0
+            ~f:(fun ~key:_ ~data acc -> acc + List.length data));
+    }
+
 (* gh-ocannl-599: [Local] is the unobservable placement class -- routine-scoped scratch the backend
    may keep in registers or on the stack, never a context buffer a routine writes back. Host access
    to such a node is meaningless, and nothing about it looks meaningless from the outside:

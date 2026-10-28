@@ -707,6 +707,15 @@ val inherits_computation : t -> Ir.Tnode.t -> bool
     node (gh-ocannl-1274): a later compile that reads or updates it replays that inherited prefix,
     which the routine's own code does not show. Side-effect free. *)
 
+val stored_components : t -> Ir.Tnode.t -> int
+(** How many components the lineage's stored template for the node holds: what a later read of it
+    replays, one component per stored setter (gh-ocannl-1653). [0] when none is stored. A
+    diagnostic; side-effect free. *)
+
+val stored_component_total : t -> int
+(** {!stored_components} summed over every node of the lineage's computations table. A diagnostic
+    (gh-ocannl-1653); side-effect free. *)
+
 val decide_materialized : t -> Ir.Tnode.t list -> t
 (** A child context whose compilation lineage additionally decides [On_device] placement for the
     given nodes: subsequent compiles from the returned context materialize them. This is the

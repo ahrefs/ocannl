@@ -1730,6 +1730,225 @@ let capture_hit_rejection = function
    [capture_hit] (gh-ocannl-1514, gh-ocannl-1551) is an inherited read that the capture walk
    producing [top_llc] met in the candidate's own code and left un-inlined (see [virtual_llc]'s
    [capture]): such a capture is never stored. *)
+(* The alpha-equivalence comparators of {!cse_equal_scalar} (documented there), over one set of
+   renaming maps: a fresh call compares one pair of trees. Shared with the stored-template
+   supersession of {!check_and_store_virtual} (gh-ocannl-1653), which compares statements. *)
+let alpha_comparators () =
+  (* The renaming maps must be partial bijections, not just functions: alpha-equivalence requires an
+     injective correspondence between bound variables. We therefore keep a reverse map alongside
+     each forward map and reject when a target is already claimed by a different source (Bug 1: a
+     forward-only map judged [t[i;j]] equal to [t[i;i]]). Renamings are registered ONLY at binder
+     sites ([For_loop] indices; [Local_scope] / [Declare_local] scope ids); use sites look the
+     mapping up and fall back to requiring exact equality for unmapped (free) names (Bug 2 -- the
+     stale-local bug above). The maps are persistent for the whole comparison (no scope push/pop on
+     entering binders): [Indexing.get_symbol] and [get_scope] are global counters, so symbols and
+     scope ids are globally unique and no binder shadows another within a single tree. If the IR
+     ever starts reusing symbol/scope ids, this assumption breaks and the maps would need
+     scoping. *)
+  let scope_renaming = Hashtbl.create (module Int) in
+  let scope_renaming_rev = Hashtbl.create (module Int) in
+  let sym_renaming = Hashtbl.create (module Indexing.Symbol) in
+  let sym_renaming_rev = Hashtbl.create (module Indexing.Symbol) in
+  let ids_bind (id1 : scope_id) (id2 : scope_id) =
+    Tn.equal id1.tn id2.tn
+    &&
+    match
+      (Hashtbl.find scope_renaming id1.scope_id, Hashtbl.find scope_renaming_rev id2.scope_id)
+    with
+    | Some mapped, _ -> Int.equal mapped id2.scope_id
+    | None, Some _ -> false (* id2 already claimed by a different source scope id *)
+    | None, None ->
+        Hashtbl.set scope_renaming ~key:id1.scope_id ~data:id2.scope_id;
+        Hashtbl.set scope_renaming_rev ~key:id2.scope_id ~data:id1.scope_id;
+        true
+  in
+  let ids_equal (id1 : scope_id) (id2 : scope_id) =
+    Tn.equal id1.tn id2.tn
+    &&
+    match Hashtbl.find scope_renaming id1.scope_id with
+    | Some mapped -> Int.equal mapped id2.scope_id
+    | None ->
+        (* Free scope id: no renaming -- requires the identical id, which must not be claimed as a
+           bound id of the other tree. *)
+        (not (Hashtbl.mem scope_renaming_rev id2.scope_id)) && Int.equal id1.scope_id id2.scope_id
+  in
+  let sym_bind (s1 : Indexing.symbol) (s2 : Indexing.symbol) =
+    match (Hashtbl.find sym_renaming s1, Hashtbl.find sym_renaming_rev s2) with
+    | Some mapped, _ -> Indexing.equal_symbol mapped s2
+    | None, Some _ -> false (* s2 already claimed by a different source symbol *)
+    | None, None ->
+        Hashtbl.set sym_renaming ~key:s1 ~data:s2;
+        Hashtbl.set sym_renaming_rev ~key:s2 ~data:s1;
+        true
+  in
+  let sym_equal (s1 : Indexing.symbol) (s2 : Indexing.symbol) =
+    match Hashtbl.find sym_renaming s1 with
+    | Some mapped -> Indexing.equal_symbol mapped s2
+    | None ->
+        (* Free symbol (bound outside the compared trees, e.g. an enclosing loop iterator): no
+           renaming -- requires the identical symbol, not claimed as a bound symbol of the other
+           tree. *)
+        (not (Hashtbl.mem sym_renaming_rev s2)) && Indexing.equal_symbol s1 s2
+  in
+  (* [orig_indices] carry call-site metadata, not value semantics: [inline_computation] already
+     substituted the call indices into the body, so body equality (with free symbols exact) alone
+     guarantees value equality. Free symbols in [orig_indices] therefore keep the legacy bijective
+     renaming -- consistently-renamed call sites of a producer whose body ignores an index (e.g. a
+     broadcast) still merge -- in maps of their own, so an orig-position renaming never justifies
+     renaming a free symbol inside a body. Bound symbols still follow the binder map. *)
+  let orig_sym_renaming = Hashtbl.create (module Indexing.Symbol) in
+  let orig_sym_renaming_rev = Hashtbl.create (module Indexing.Symbol) in
+  let orig_sym_equal (s1 : Indexing.symbol) (s2 : Indexing.symbol) =
+    match Hashtbl.find sym_renaming s1 with
+    | Some mapped -> Indexing.equal_symbol mapped s2
+    | None -> (
+        (not (Hashtbl.mem sym_renaming_rev s2))
+        &&
+        match (Hashtbl.find orig_sym_renaming s1, Hashtbl.find orig_sym_renaming_rev s2) with
+        | Some mapped, _ -> Indexing.equal_symbol mapped s2
+        | None, Some _ -> false (* s2 already claimed by a different source symbol *)
+        | None, None ->
+            Hashtbl.set orig_sym_renaming ~key:s1 ~data:s2;
+            Hashtbl.set orig_sym_renaming_rev ~key:s2 ~data:s1;
+            true)
+  in
+  let idx_equal_gen sym_equal (i1 : Indexing.axis_index) (i2 : Indexing.axis_index) =
+    match (i1, i2) with
+    | Indexing.Iterator s1, Indexing.Iterator s2 -> sym_equal s1 s2
+    | Fixed_idx n1, Fixed_idx n2 -> Int.equal n1 n2
+    | Sub_axis, Sub_axis -> true
+    | Affine { symbols = syms1; offset = o1 }, Affine { symbols = syms2; offset = o2 } ->
+        Int.equal o1 o2
+        && List.equal (fun (c1, s1) (c2, s2) -> Int.equal c1 c2 && sym_equal s1 s2) syms1 syms2
+    | Concat ss1, Concat ss2 -> List.equal sym_equal ss1 ss2
+    | _ -> false
+  in
+  let idx_equal = idx_equal_gen sym_equal in
+  let orig_idx_equal = idx_equal_gen orig_sym_equal in
+  let rec equal_t (a : t) (b : t) : bool =
+    match (a, b) with
+    | Noop, Noop -> true
+    | Comment s1, Comment s2 -> String.equal s1 s2
+    | Seq (a1, a2), Seq (b1, b2) -> equal_t a1 b1 && equal_t a2 b2
+    | ( For_loop { index = i1; from_ = f1; to_ = t1; body = bd1; axis = ax1 },
+        For_loop { index = i2; from_ = f2; to_ = t2; body = bd2; axis = ax2 } ) ->
+        Int.equal f1 f2 && Int.equal t1 t2 && equal_axis_type ax1 ax2 && sym_bind i1 i2
+        && equal_t bd1 bd2
+    | Zero_out tn1, Zero_out tn2 -> Tn.equal tn1 tn2
+    | Set { tn = tn1; idcs = i1; llsc = s1; _ }, Set { tn = tn2; idcs = i2; llsc = s2; _ } ->
+        Tn.equal tn1 tn2 && Array.equal idx_equal i1 i2 && equal_scalar s1 s2
+    | Set_local (id1, s1), Set_local (id2, s2) -> ids_equal id1 id2 && equal_scalar s1 s2
+    | Declare_local { id = id1; _ }, Declare_local { id = id2; _ } -> ids_bind id1 id2
+    (* Conservative: computations containing barriers are never judged alpha-equivalent --
+       deduplicating them would delete a synchronization point. *)
+    | Workgroup_barrier, _ -> false
+    (* Conservative in v1: guarded statements are not deduplicated. *)
+    | If _, _ -> false
+    | _ -> false
+  and equal_scalar (a : scalar_t) (b : scalar_t) : bool =
+    match (a, b) with
+    | ( Local_scope { id = id1; body = b1; orig_indices = oi1; mint = m1 },
+        Local_scope { id = id2; body = b2; orig_indices = oi2; mint = m2 } ) ->
+        (* Record the binder mapping through the checked path (Bug 3) before comparing the body, so
+           the binder and its nested [Set_local] / [Get_local] uses all agree via [ids_equal]. *)
+        equal_scope_mint m1 m2 && ids_bind id1 id2
+        && Array.equal orig_idx_equal oi1 oi2
+        && equal_t b1 b2
+    | Get_local id1, Get_local id2 -> ids_equal id1 id2
+    | Get (tn1, i1), Get (tn2, i2) -> Tn.equal tn1 tn2 && Array.equal idx_equal i1 i2
+    | ( Get_dynamic { tn = tn1; idcs = i1; dyn_axis = da1; dyn_value = v1 },
+        Get_dynamic { tn = tn2; idcs = i2; dyn_axis = da2; dyn_value = v2 } ) ->
+        Tn.equal tn1 tn2 && Int.equal da1 da2 && Array.equal idx_equal i1 i2 && equal_arg v1 v2
+    | Get_merge_buffer (tn1, i1), Get_merge_buffer (tn2, i2) ->
+        Tn.equal tn1 tn2 && Array.equal idx_equal i1 i2
+    | Ternop (op1, a1, a2, a3), Ternop (op2, b1, b2, b3) ->
+        Ops.equal_ternop op1 op2 && equal_arg a1 b1 && equal_arg a2 b2 && equal_arg a3 b3
+    | Binop (op1, a1, a2), Binop (op2, b1, b2) ->
+        Ops.equal_binop op1 op2 && equal_arg a1 b1 && equal_arg a2 b2
+    | Unop (op1, a1), Unop (op2, b1) -> Ops.equal_unop op1 op2 && equal_arg a1 b1
+    | Constant c1, Constant c2 -> Float.equal c1 c2
+    | Constant_bits i1, Constant_bits i2 -> Int64.equal i1 i2
+    | Embed_index idx1, Embed_index idx2 -> idx_equal idx1 idx2
+    | _ -> false
+  and equal_arg ((s1, p1) : scalar_arg) ((s2, p2) : scalar_arg) : bool =
+    Ops.equal_prec p1 p2 && equal_scalar s1 s2
+  in
+  (equal_t, equal_scalar, idx_equal)
+
+(* gh-ocannl-1653: the components of [self]'s stored template that a newly stored component [c]
+   supersedes. A template replays as one scope local written by each component in turn, oldest first
+   ([instantiate_computations]), and before this every store prepended, so a recompile in the
+   lineage that ran a step added a whole copy of each re-stored node's components: every later read
+   -- the recompiled routine's own included -- replayed them all, and a single-setter node
+   recompiled once replayed with the range guards of a multi-component one. Two rules, both
+   value-preserving by construction; everything else is prepended as before.
+
+   - A RESET supersedes everything older: a component whose first statement is [Zero_out self]
+   replays as [local := 0] at every read site, unconditionally, and older components write nothing
+   but that local (each component's other locals are its own). The template becomes [c] alone. - A
+   PLAIN component supersedes its newest alpha-equivalent twin. Plain: no read of [self] anywhere in
+   it (inlined scopes included) and no statement-level local, staged or exotic statement, so it
+   replays as a masked assignment [local := cond ? v : local] whose [v] does not depend on the
+   local. Its mask comes only from its [def_args] against the read site's indices (and the
+   template-wide component count), so an equivalent twin has the same mask and the same [v]: the
+   twin is overwritten wherever it wrote and the identity elsewhere. Only when every component
+   between the two is plain too: dropping the twin must not leave an accumulation replaying ahead of
+   the local's first write. An accumulation (which reads [self]) is never dropped this way: two
+   identical accumulations both contribute.
+
+   Applied at store time, so the recompiled routine's own reads already replay the reduced list.
+   Boundary: a re-trace whose template differs (its decisions changed between the compiles) still
+   prepends. *)
+let rec first_effective_statement (c : t) =
+  match c with
+  | Seq (a, b) -> (
+      match first_effective_statement a with
+      | Some _ as r -> r
+      | None -> first_effective_statement b)
+  | Noop | Comment _ -> None
+  | c -> Some c
+
+let plain_overwrite self (c : t) =
+  let rec stmt ~top (c : t) =
+    match c with
+    | Noop | Comment _ | Zero_out _ -> true
+    | Seq (a, b) -> stmt ~top a && stmt ~top b
+    | For_loop { body; _ } -> stmt ~top body
+    | Set { llsc; _ } -> scalar llsc
+    | Set_local (_, llsc) -> (not top) && scalar llsc
+    | Set_from_vec _ | Set_dynamic _ | Declare_local _ | Staged_compilation _ | Scan_loop _ | If _
+    | Workgroup_barrier | Tile_mma _ ->
+        false
+  and scalar (sc : scalar_t) =
+    match sc with
+    | Get (tn, _) | Get_merge_buffer (tn, _) -> not (Tn.equal tn self)
+    | Get_dynamic { tn; dyn_value = v, _; _ } -> (not (Tn.equal tn self)) && scalar v
+    | Local_scope { body; _ } -> stmt ~top:false body
+    | Constant _ | Constant_bits _ | Get_local _ | Embed_index _ -> true
+    | Ternop (_, (a, _), (b, _), (c, _)) -> scalar a && scalar b && scalar c
+    | Binop (_, (a, _), (b, _)) -> scalar a && scalar b
+    | Unop (_, (a, _)) -> scalar a
+  in
+  stmt ~top:true c
+
+let supersede ~self ((at, body) as c) (current : (Indexing.axis_index array option * t) list) =
+  match first_effective_statement body with
+  | Some (Zero_out tn) when Tn.equal tn self -> [ c ]
+  | _ when plain_overwrite self body ->
+      let equivalent (at', body') =
+        let equal_t, _, idx_equal = alpha_comparators () in
+        equal_t body body' && Option.equal (Array.equal idx_equal) at at'
+      in
+      let rec drop_newest acc = function
+        | [] -> current
+        | s :: rest ->
+            if equivalent s then List.rev_append acc rest
+            else if plain_overwrite self (snd s) then drop_newest (s :: acc) rest
+            else current
+      in
+      c :: drop_newest [] current
+  | _ -> c :: current
+
 let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx)
     ~(elide_stored : opaque:(Indexing.symbol -> bool) -> t -> t) ~(capture_hit : capture_hit option)
     ~guarded ~in_scan ~enclosing traced static_indices top_llc =
@@ -1985,7 +2204,7 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx)
         top_llc
     in
     Hashtbl.set optim_ctx.computations ~key:traced.tn
-      ~data:((!at_idcs, stored) :: current_computations)
+      ~data:(supersede ~self:traced.tn (!at_idcs, stored) current_computations)
   with Non_virtual i -> Tn.Placements.update optim_ctx.placements traced.tn Never_virtual (Site i)
 
 (* Loop symbols a scalar expression's value depends on, syntactically, resolving scalar scope-locals
@@ -5406,145 +5625,7 @@ let simplify_llc static_indices llc =
     virtual node at inner loop indices was judged equal to the enclosing iteration's recomputation
     and replaced by a [Get_local] of the outer, stale local). *)
 let cse_equal_scalar s1 s2 =
-  (* The renaming maps must be partial bijections, not just functions: alpha-equivalence requires an
-     injective correspondence between bound variables. We therefore keep a reverse map alongside
-     each forward map and reject when a target is already claimed by a different source (Bug 1: a
-     forward-only map judged [t[i;j]] equal to [t[i;i]]). Renamings are registered ONLY at binder
-     sites ([For_loop] indices; [Local_scope] / [Declare_local] scope ids); use sites look the
-     mapping up and fall back to requiring exact equality for unmapped (free) names (Bug 2 -- the
-     stale-local bug above). The maps are persistent for the whole comparison (no scope push/pop on
-     entering binders): [Indexing.get_symbol] and [get_scope] are global counters, so symbols and
-     scope ids are globally unique and no binder shadows another within a single tree. If the IR
-     ever starts reusing symbol/scope ids, this assumption breaks and the maps would need
-     scoping. *)
-  let scope_renaming = Hashtbl.create (module Int) in
-  let scope_renaming_rev = Hashtbl.create (module Int) in
-  let sym_renaming = Hashtbl.create (module Indexing.Symbol) in
-  let sym_renaming_rev = Hashtbl.create (module Indexing.Symbol) in
-  let ids_bind (id1 : scope_id) (id2 : scope_id) =
-    Tn.equal id1.tn id2.tn
-    &&
-    match
-      (Hashtbl.find scope_renaming id1.scope_id, Hashtbl.find scope_renaming_rev id2.scope_id)
-    with
-    | Some mapped, _ -> Int.equal mapped id2.scope_id
-    | None, Some _ -> false (* id2 already claimed by a different source scope id *)
-    | None, None ->
-        Hashtbl.set scope_renaming ~key:id1.scope_id ~data:id2.scope_id;
-        Hashtbl.set scope_renaming_rev ~key:id2.scope_id ~data:id1.scope_id;
-        true
-  in
-  let ids_equal (id1 : scope_id) (id2 : scope_id) =
-    Tn.equal id1.tn id2.tn
-    &&
-    match Hashtbl.find scope_renaming id1.scope_id with
-    | Some mapped -> Int.equal mapped id2.scope_id
-    | None ->
-        (* Free scope id: no renaming -- requires the identical id, which must not be claimed as a
-           bound id of the other tree. *)
-        (not (Hashtbl.mem scope_renaming_rev id2.scope_id)) && Int.equal id1.scope_id id2.scope_id
-  in
-  let sym_bind (s1 : Indexing.symbol) (s2 : Indexing.symbol) =
-    match (Hashtbl.find sym_renaming s1, Hashtbl.find sym_renaming_rev s2) with
-    | Some mapped, _ -> Indexing.equal_symbol mapped s2
-    | None, Some _ -> false (* s2 already claimed by a different source symbol *)
-    | None, None ->
-        Hashtbl.set sym_renaming ~key:s1 ~data:s2;
-        Hashtbl.set sym_renaming_rev ~key:s2 ~data:s1;
-        true
-  in
-  let sym_equal (s1 : Indexing.symbol) (s2 : Indexing.symbol) =
-    match Hashtbl.find sym_renaming s1 with
-    | Some mapped -> Indexing.equal_symbol mapped s2
-    | None ->
-        (* Free symbol (bound outside the compared trees, e.g. an enclosing loop iterator): no
-           renaming -- requires the identical symbol, not claimed as a bound symbol of the other
-           tree. *)
-        (not (Hashtbl.mem sym_renaming_rev s2)) && Indexing.equal_symbol s1 s2
-  in
-  (* [orig_indices] carry call-site metadata, not value semantics: [inline_computation] already
-     substituted the call indices into the body, so body equality (with free symbols exact) alone
-     guarantees value equality. Free symbols in [orig_indices] therefore keep the legacy bijective
-     renaming -- consistently-renamed call sites of a producer whose body ignores an index (e.g. a
-     broadcast) still merge -- in maps of their own, so an orig-position renaming never justifies
-     renaming a free symbol inside a body. Bound symbols still follow the binder map. *)
-  let orig_sym_renaming = Hashtbl.create (module Indexing.Symbol) in
-  let orig_sym_renaming_rev = Hashtbl.create (module Indexing.Symbol) in
-  let orig_sym_equal (s1 : Indexing.symbol) (s2 : Indexing.symbol) =
-    match Hashtbl.find sym_renaming s1 with
-    | Some mapped -> Indexing.equal_symbol mapped s2
-    | None -> (
-        (not (Hashtbl.mem sym_renaming_rev s2))
-        &&
-        match (Hashtbl.find orig_sym_renaming s1, Hashtbl.find orig_sym_renaming_rev s2) with
-        | Some mapped, _ -> Indexing.equal_symbol mapped s2
-        | None, Some _ -> false (* s2 already claimed by a different source symbol *)
-        | None, None ->
-            Hashtbl.set orig_sym_renaming ~key:s1 ~data:s2;
-            Hashtbl.set orig_sym_renaming_rev ~key:s2 ~data:s1;
-            true)
-  in
-  let idx_equal_gen sym_equal (i1 : Indexing.axis_index) (i2 : Indexing.axis_index) =
-    match (i1, i2) with
-    | Indexing.Iterator s1, Indexing.Iterator s2 -> sym_equal s1 s2
-    | Fixed_idx n1, Fixed_idx n2 -> Int.equal n1 n2
-    | Sub_axis, Sub_axis -> true
-    | Affine { symbols = syms1; offset = o1 }, Affine { symbols = syms2; offset = o2 } ->
-        Int.equal o1 o2
-        && List.equal (fun (c1, s1) (c2, s2) -> Int.equal c1 c2 && sym_equal s1 s2) syms1 syms2
-    | Concat ss1, Concat ss2 -> List.equal sym_equal ss1 ss2
-    | _ -> false
-  in
-  let idx_equal = idx_equal_gen sym_equal in
-  let orig_idx_equal = idx_equal_gen orig_sym_equal in
-  let rec equal_t (a : t) (b : t) : bool =
-    match (a, b) with
-    | Noop, Noop -> true
-    | Comment s1, Comment s2 -> String.equal s1 s2
-    | Seq (a1, a2), Seq (b1, b2) -> equal_t a1 b1 && equal_t a2 b2
-    | ( For_loop { index = i1; from_ = f1; to_ = t1; body = bd1; axis = ax1 },
-        For_loop { index = i2; from_ = f2; to_ = t2; body = bd2; axis = ax2 } ) ->
-        Int.equal f1 f2 && Int.equal t1 t2 && equal_axis_type ax1 ax2 && sym_bind i1 i2
-        && equal_t bd1 bd2
-    | Zero_out tn1, Zero_out tn2 -> Tn.equal tn1 tn2
-    | Set { tn = tn1; idcs = i1; llsc = s1; _ }, Set { tn = tn2; idcs = i2; llsc = s2; _ } ->
-        Tn.equal tn1 tn2 && Array.equal idx_equal i1 i2 && equal_scalar s1 s2
-    | Set_local (id1, s1), Set_local (id2, s2) -> ids_equal id1 id2 && equal_scalar s1 s2
-    | Declare_local { id = id1; _ }, Declare_local { id = id2; _ } -> ids_bind id1 id2
-    (* Conservative: computations containing barriers are never judged alpha-equivalent --
-       deduplicating them would delete a synchronization point. *)
-    | Workgroup_barrier, _ -> false
-    (* Conservative in v1: guarded statements are not deduplicated. *)
-    | If _, _ -> false
-    | _ -> false
-  and equal_scalar (a : scalar_t) (b : scalar_t) : bool =
-    match (a, b) with
-    | ( Local_scope { id = id1; body = b1; orig_indices = oi1; mint = m1 },
-        Local_scope { id = id2; body = b2; orig_indices = oi2; mint = m2 } ) ->
-        (* Record the binder mapping through the checked path (Bug 3) before comparing the body, so
-           the binder and its nested [Set_local] / [Get_local] uses all agree via [ids_equal]. *)
-        equal_scope_mint m1 m2 && ids_bind id1 id2
-        && Array.equal orig_idx_equal oi1 oi2
-        && equal_t b1 b2
-    | Get_local id1, Get_local id2 -> ids_equal id1 id2
-    | Get (tn1, i1), Get (tn2, i2) -> Tn.equal tn1 tn2 && Array.equal idx_equal i1 i2
-    | ( Get_dynamic { tn = tn1; idcs = i1; dyn_axis = da1; dyn_value = v1 },
-        Get_dynamic { tn = tn2; idcs = i2; dyn_axis = da2; dyn_value = v2 } ) ->
-        Tn.equal tn1 tn2 && Int.equal da1 da2 && Array.equal idx_equal i1 i2 && equal_arg v1 v2
-    | Get_merge_buffer (tn1, i1), Get_merge_buffer (tn2, i2) ->
-        Tn.equal tn1 tn2 && Array.equal idx_equal i1 i2
-    | Ternop (op1, a1, a2, a3), Ternop (op2, b1, b2, b3) ->
-        Ops.equal_ternop op1 op2 && equal_arg a1 b1 && equal_arg a2 b2 && equal_arg a3 b3
-    | Binop (op1, a1, a2), Binop (op2, b1, b2) ->
-        Ops.equal_binop op1 op2 && equal_arg a1 b1 && equal_arg a2 b2
-    | Unop (op1, a1), Unop (op2, b1) -> Ops.equal_unop op1 op2 && equal_arg a1 b1
-    | Constant c1, Constant c2 -> Float.equal c1 c2
-    | Constant_bits i1, Constant_bits i2 -> Int64.equal i1 i2
-    | Embed_index idx1, Embed_index idx2 -> idx_equal idx1 idx2
-    | _ -> false
-  and equal_arg ((s1, p1) : scalar_arg) ((s2, p2) : scalar_arg) : bool =
-    Ops.equal_prec p1 p2 && equal_scalar s1 s2
-  in
+  let _, equal_scalar, _ = alpha_comparators () in
   equal_scalar s1 s2
 
 (** Eliminates common subexpressions within each statement's scalar expression tree. Replaces
