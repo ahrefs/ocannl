@@ -581,6 +581,67 @@ let refuse_out_of_extent_offset ~spec ~stride ~stride_offset ~(conv : bool optio
          Drop the offset, and slice or pad the tensor separately to shift it."
   | None | Some _ -> ()
 
+(** Refuses a stride or a dilation below 1 (gh-ocannl-1657), invariants [Row.Affine] documents.
+    Before this, a zero dilation ran ([o=+0*k] multiplied one cell by every kernel tap) or died in
+    the dimension solver ([o<+0*k], an [Invalid_argument] dividing by zero). Integer literals in the
+    grammar are nonnegative, but a stride or a dilation spelled by an identifier under [%op] and
+    [%cd] takes its runtime value. *)
+let refuse_nonpositive_coefficient ~spec ~axis ~what value =
+  if value < 1 then
+    raise
+    @@ Row.Shape_error
+         ( [%string
+             "affine axis `%{Lazy.force axis}` in einsum spec \"%{spec}\" has %{what} \
+              %{value#Int}, which must be at least 1: at 0 every position of its label would map \
+              to the same cell"],
+           [] )
+
+(** The dimension of an affine axis spec. Refuses the coefficients and the offsets the dimension
+    formulas cannot size ([refuse_nonpositive_coefficient], [refuse_out_of_extent_offset]); every
+    route converting a parsed spec to dimensions goes through here. *)
+let affine_dim_of_spec ~spec ~dim_var_env axis_spec =
+  match axis_spec with
+  | Affine_spec { stride; over_label; conv; stride_offset } ->
+      let axis = lazy (render_affine_axis axis_spec) in
+      let stride_int =
+        try Int.of_string stride
+        with _ -> failwith ("Invalid stride value (expected integer): " ^ stride)
+      in
+      refuse_nonpositive_coefficient ~spec ~axis ~what:"stride" stride_int;
+      let over_dim =
+        Row.Var
+          (Hashtbl.find_or_add dim_var_env over_label ~default:(fun () ->
+               Row.get_var ~name:over_label ()))
+      in
+      let conv =
+        Option.map conv ~f:(fun { dilation; kernel_label; use_padding } ->
+            let dilation_int =
+              try Int.of_string dilation
+              with _ -> failwith ("Invalid dilation value (expected integer): " ^ dilation)
+            in
+            refuse_nonpositive_coefficient ~spec ~axis ~what:"dilation" dilation_int;
+            let use_padding_bool =
+              match use_padding with
+              | `True -> true
+              | `False -> false
+              | `Unspecified ->
+                  failwith
+                    "use_padding must be specified in convolution spec (use = for true, < for \
+                     false)"
+            in
+            let kernel =
+              Row.Var
+                (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () ->
+                     Row.get_var ~name:kernel_label ()))
+            in
+            { Row.dilation = dilation_int; kernel; use_padding = use_padding_bool })
+      in
+      refuse_out_of_extent_offset ~spec ~stride:stride_int ~stride_offset
+        ~conv:(Option.map conv ~f:(fun c -> c.use_padding))
+        ~axis;
+      Row.Affine { stride = stride_int; over = over_dim; conv; stride_offset }
+  | Label _ | Fixed_index _ | Concat_spec _ -> invalid_arg "affine_dim_of_spec: not an affine axis"
+
 let einsum_slot_spec_to_dims_bio ?(fixed_index = `Pin_var) ~original_spec ~sh_id ~row_var_env
     ~dim_var_env labels =
   let proj_env_update = ref @@ Row.dim_map_empty in
@@ -614,42 +675,7 @@ let einsum_slot_spec_to_dims_bio ?(fixed_index = `Pin_var) ~original_spec ~sh_id
             }
           :: !extras;
         d
-    | Affine_spec { stride; over_label; conv; stride_offset } as axis_spec ->
-        let stride_int =
-          try Int.of_string stride
-          with _ -> failwith ("Invalid stride value (expected integer): " ^ stride)
-        in
-        let over_dim =
-          Row.Var
-            (Hashtbl.find_or_add dim_var_env over_label ~default:(fun () ->
-                 Row.get_var ~name:over_label ()))
-        in
-        let conv =
-          Option.map conv ~f:(fun { dilation; kernel_label; use_padding } ->
-              let dilation_int =
-                try Int.of_string dilation
-                with _ -> failwith ("Invalid dilation value (expected integer): " ^ dilation)
-              in
-              let use_padding_bool =
-                match use_padding with
-                | `True -> true
-                | `False -> false
-                | `Unspecified ->
-                    failwith
-                      "use_padding must be specified in convolution spec (use = for true, < for \
-                       false)"
-              in
-              let kernel =
-                Row.Var
-                  (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () ->
-                       Row.get_var ~name:kernel_label ()))
-              in
-              { Row.dilation = dilation_int; kernel; use_padding = use_padding_bool })
-        in
-        refuse_out_of_extent_offset ~spec:original_spec ~stride:stride_int ~stride_offset
-          ~conv:(Option.map conv ~f:(fun c -> c.use_padding))
-          ~axis:(lazy (render_affine_axis axis_spec));
-        Row.Affine { stride = stride_int; over = over_dim; conv; stride_offset }
+    | Affine_spec _ as axis_spec -> affine_dim_of_spec ~spec:original_spec ~dim_var_env axis_spec
     | Concat_spec labels ->
         let dims =
           List.map labels ~f:(fun label ->
@@ -3589,39 +3615,7 @@ let shape_spec_to_dims_bio ~spec ~sh_id labels =
     | Label name ->
         Var (Hashtbl.find_or_add dim_var_env name ~default:(fun () -> Row.get_var ~name ()))
     | Fixed_index d -> Row.get_default_dim ~d ()
-    | Affine_spec { stride; over_label; conv; stride_offset } ->
-        let stride_int =
-          try Int.of_string stride
-          with _ -> failwith ("Invalid stride value (expected integer): " ^ stride)
-        in
-        let over_dim =
-          Row.Var
-            (Hashtbl.find_or_add dim_var_env over_label ~default:(fun () ->
-                 Row.get_var ~name:over_label ()))
-        in
-        let conv =
-          Option.map conv ~f:(fun { dilation; kernel_label; use_padding } ->
-              let dilation_int =
-                try Int.of_string dilation
-                with _ -> failwith ("Invalid dilation value (expected integer): " ^ dilation)
-              in
-              let use_padding_bool =
-                match use_padding with
-                | `True -> true
-                | `False -> false
-                | `Unspecified ->
-                    failwith
-                      "use_padding must be specified in convolution spec (use = for true, < for \
-                       false)"
-              in
-              let kernel =
-                Row.Var
-                  (Hashtbl.find_or_add dim_var_env kernel_label ~default:(fun () ->
-                       Row.get_var ~name:kernel_label ()))
-              in
-              { Row.dilation = dilation_int; kernel; use_padding = use_padding_bool })
-        in
-        Row.Affine { stride = stride_int; over = over_dim; conv; stride_offset }
+    | Affine_spec _ as axis_spec -> affine_dim_of_spec ~spec ~dim_var_env axis_spec
     | Concat_spec labels ->
         (* Convert each label in the concatenation to a dimension and wrap in Concat *)
         let dims =

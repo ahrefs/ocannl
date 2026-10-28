@@ -28,7 +28,8 @@ type dim =
   | Affine of { stride : int; over : dim; conv : convolution option; stride_offset : int }
       (** An affine transformation of a dimension. When [conv] is [None], this is strided
           iteration. When [conv] is [Some], this includes convolution parameters.
-          Invariants: [stride > 0], [dilation > 0] (when present), [0 <= stride_offset < stride]. *)
+          Invariants: [stride > 0], [dilation > 0] (when present), [0 <= stride_offset], and
+          [stride_offset < stride] unless the axis is a padded window. *)
 
 type bcast =
   | Row_var of row_var  (** The row can be inferred to have more axes. *)
@@ -59,7 +60,7 @@ OCANNL uses three distinct label-like mechanisms in its shape system. It is impo
 
 ### Affine indexing and convolutions
 
-The `Affine` constructor represents affine transformations of dimensions, supporting both strided iteration and convolution-style indexing. The key insight is that `stride_offset` is purely a projection-time concern—it selects which elements within each stride window are accessed, but does not affect dimension sizes. This allows the same input tensor to be used with different `stride_offset` values (0 to stride-1) without shape errors. Because the dimension formulas below leave the offset out, an offset is in bounds only when it is smaller than the stride and the axis has no unpadded window; einsum specs that break this are refused while the tensor is built (`Shape.refuse_out_of_extent_offset`, gh-ocannl-1618), in either slot. A padded window keeps its offset, since its padding absorbs it.
+The `Affine` constructor represents affine transformations of dimensions, supporting both strided iteration and convolution-style indexing. The key insight is that `stride_offset` is purely a projection-time concern—it selects which elements within each stride window are accessed, but does not affect dimension sizes. This allows the same input tensor to be used with different `stride_offset` values (0 to stride-1) without shape errors. Because the dimension formulas below leave the offset out, an offset is in bounds only when it is smaller than the stride and the axis has no unpadded window; einsum specs that break this are refused while the tensor is built (`Shape.refuse_out_of_extent_offset`, gh-ocannl-1618), in either slot. A padded window keeps its offset, at or past the stride too: a tap it moves past the margins reads the padding value. A stride or a dilation below 1 is refused there as well (`Shape.refuse_nonpositive_coefficient`, gh-ocannl-1657).
 
 **Dimension formulas** (during shape inference):
 
@@ -93,7 +94,7 @@ Equivalently, solving for output_dim: `output_dim = (input_dim - effective_kerne
 **Projection inference** handles `Affine` terms differently depending on `use_padding`:
 
 - If `use_padding = false`: the effective kernel span is incorporated during shape inference; projection inference just applies the index formula with the actual `stride_offset`.
-- If `use_padding = true`: kernel extent doesn't affect shape inference; padding is computed during projection inference, keyed by `proj_id`. The padding is the maximal dilated kernel extent encountered in constraints involving that projection id. A padded window can only index an operand: one in an einsum spec's result slot is refused during constraint generation (`Shape.refuse_result_side_padded_window`, gh-ocannl-1550), since writing through it would be a padded transposed convolution, whose projections are not defined.
+- If `use_padding = true`: kernel extent doesn't affect shape inference; padding is computed during projection inference, keyed by `proj_id`. The padding is the maximal dilated kernel extent (`effective_kernel_span`) encountered in constraints involving that projection id, split with the smaller half on the left: a window reads at `stride * o + offset + dilation * k - left` with `left = span / 2`, so it is centered for an odd kernel at stride 1, dilated or not (before gh-ocannl-1657 the margins were sized by the undilated kernel, leaving a dilated window off-center). A padded window can only index an operand: one in an einsum spec's result slot is refused during constraint generation (`Shape.refuse_result_side_padded_window`, gh-ocannl-1550), since writing through it would be a padded transposed convolution, whose projections are not defined.
 
 Shape inference does not maintain padding for axes of individual tensor nodes—these padding values are computed and updated during projections inference.
 

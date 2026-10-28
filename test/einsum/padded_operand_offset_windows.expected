@@ -1,0 +1,56 @@
+2*o=+1+k, kernel 3: extent: true
+2*o=+1+k, kernel 3: values: true
+3*o=+2+k, kernel 3: extent: true
+3*o=+2+k, kernel 3: values: true
+3*o=+1+k, kernel 4: extent: true
+3*o=+1+k, kernel 4: values: true
+2*o=+1+k, kernel 2: extent: true
+2*o=+1+k, kernel 2: values: true
+2*o=+1+2*k, kernel 3: extent: true
+2*o=+1+2*k, kernel 3: values: true
+o=+1+k (offset at the stride), kernel 3: extent: true
+o=+1+k (offset at the stride), kernel 3: values: true
+o=+2+k (offset past the stride), kernel 3: extent: true
+o=+2+k (offset past the stride), kernel 3: values: true
+2*o=+5+k (offset past the stride), kernel 3: extent: true
+2*o=+5+k (offset past the stride), kernel 3: values: true
+o=+2*k (dilated, no offset), kernel 3: extent: true
+o=+2*k (dilated, no offset), kernel 3: values: true
+2*o=+2*k, kernel 3: extent: true
+2*o=+2*k, kernel 3: values: true
+o=+1+3*k, kernel 2: extent: true
+o=+1+3*k, kernel 2: values: true
+max 2*o=+1+k, kernel 3: extent: true
+max 2*o=+1+k, kernel 3: values: true
+max o=+2+k (an all-outside window is the neutral element), kernel 3: extent: true
+max o=+2+k (an all-outside window is the neutral element), kernel 3: values: true
+max o=+1+2*k, kernel 3: extent: true
+max o=+1+2*k, kernel 3: values: true
+%op, identifier stride and dilation: stride*o=+1+dilation*k: extent: true
+%op, identifier stride and dilation: stride*o=+1+dilation*k: values: true
+sum pool, captured kernel over stretch 1.0: 2*o=+1+k: extent: true
+sum pool, captured kernel over stretch 1.0: 2*o=+1+k: values: true
+ternary 2*o=+1+k: extent: true
+ternary 2*o=+1+k: values: true
+two padded windows 2*a=+1+k, b=+1+2*l: extent: true
+two padded windows 2*a=+1+k, b=+1+2*l: values: true
+%cd ~logic 2*o=+1+2*k: extent: true
+%cd ~logic 2*o=+1+2*k: values: true
+gradient of 2*o=+1+2*k: d/dx: true
+gradient of 2*o=+1+2*k: d/dw: true
+gradient of o=+2+k: d/dx: true
+gradient of o=+2+k: d/dw: true
+gradient of max 2*o=+1+k: d/dx: true
+gradient of max 2*o=+1+k: d/dw: true
+zero dilation, padded window: affine axis `o=+0*k` in einsum spec "s, o=+0*k; k => s, o" has dilation 0, which must be at least 1: at 0 every position of its label would map to the same cell
+zero dilation, padded window: refused at construction, naming the affine axis o=+0*k: true
+zero dilation, unpadded window: refused at construction, naming the affine axis o<+0*k: true
+zero stride, padded window: affine axis `0*o=+k` in einsum spec "s, 0*o=+k; k => s, o" has stride 0, which must be at least 1: at 0 every position of its label would map to the same cell
+zero stride, padded window: refused at construction, naming the affine axis 0*o=+k: true
+zero stride, unpadded window: refused at construction, naming the affine axis 0*o<+k: true
+zero stride, operand without a window: refused at construction, naming the affine axis 0*o: true
+zero stride, result side: refused at construction, naming the affine axis 0*i: true
+zero dilation, result side: refused at construction, naming the affine axis i<+0*k: true
+zero dilation, %op identifier: refused at construction, naming the affine axis o=+0*k: true
+zero stride, %op identifier: refused at construction, naming the affine axis 0*o<+k: true
+zero dilation, %cd ~logic: refused at construction, naming the affine axis o=+0*k: true

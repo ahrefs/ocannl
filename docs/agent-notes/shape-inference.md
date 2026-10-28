@@ -102,6 +102,12 @@ files.
   `test/einsum/result_side_affine_forms` executes every accepted result-side form against an
   oracle — extend it when adding one. The `%op`/`%cd` renderer (`Ppx_shared`) re-renders specs, so
   a grammar form it renders wrong is a parse error of a spec the user never wrote.
+- A padded window's margins total the DILATED kernel extent, `left = span / 2` (the `Conv_input`
+  arm of `Row`'s projection derivation); sizing them by the undilated kernel left dilated windows
+  off-center, a wrong value no structural test saw (gh-ocannl-1657). Taps past the margins are
+  range-guarded in `Assignments` (`clamp_conds`), so any padded offset reads zero there.
+  `refuse_nonpositive_coefficient` refuses a stride or dilation below 1 at the same spot as the
+  offset refusal. `test/einsum/padded_operand_offset_windows` is the operand-side oracle audit.
 - Use-site row resolution is opt-in (gh-ocannl-544): an operation result's open row variables
   close DOWN to its arguments' shapes; a use site broadcasts the result in but cannot widen it.
   The resolve-at-use mark (`Row.add_resolve_at_use`, propagated through unification) grants the
