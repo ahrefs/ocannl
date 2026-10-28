@@ -814,7 +814,7 @@ files.
   bf16-accumulate arm — and is what the `approximate` payload names, which is how that regime did
   not move when HIP's auto went wide; `reproducible` pins `auto`. Why wide: gfx11's bf16-accumulate WMMA is not
   exactly rounded (it rounds toward zero, gh-ocannl-1509) — on gfx1151, `schedule_mma_matmul`'s width-sensitive bf16 leg (32-term sums near
-  77, exact in f32) exceeds the half-bf16-ulp narrowing bound by 1.12 under auto and sits inside it
+  40, exact in f32) exceeds the half-bf16-ulp narrowing bound by 1.12 under auto and sits inside it
   under `Bf16_wide` (a two-sided claim), and the bf16 k-split discriminator (256 + 1 per later block
   over nine blocks) returns 256 narrow and 264 wide; over a 2048-term staged GEMM
   (`bin/schedule_bench`, bf16) narrow reads 93 where the reference is 536. The flip was measured,
@@ -1228,11 +1228,11 @@ files.
   a schedule decision, kept off integer accumulations (gh-ocannl-824). `tile_mma_declines` pins
   the register-tiled census with the contraction licence off.
 ## SIMD operations and rounding
-- **gfx11's WMMA is exactly rounded only when the products share a sign** (gh-ocannl-1420; the
+- **gfx11's WMMA returns the exact sum only when the products share a sign** (gh-ocannl-1420; the
   bf16 builtins, gh-ocannl-1509). The
   raw `__builtin_amdgcn_wmma_{f32,f16}_16x16x16_f16_w32` returns `-2^-24` for `1*1 + 1*(-1)`, on
   gfx1151 and gfx1102 alike, at `-O0` and `-O3`, with no rocWMMA and no OCANNL involved, and so do
-  `__builtin_amdgcn_wmma_{f32,bf16}_16x16x16_bf16_w32` (measured on gfx1151 only). Signed
+  `__builtin_amdgcn_wmma_{f32,bf16}_16x16x16_bf16_w32` (likewise, gh-ocannl-1658). Signed
   small-integer operands miss in most f32 cells by a few `2^-24` at the products' scale, and the
   f16 arm, whose rounding absorbs residues that small elsewhere, misses in exactly its exact-zero
   cells (subnormal multiples of `2^-24`, either sign), in fragment scopes and per-statement tiles
@@ -1242,11 +1242,16 @@ files.
   signed data needs a stated bound. `tools/hip_wmma_sign_probe.hip` is the standalone reproducer:
   its exit status says whether the same-sign rule still holds on a new target or toolkit, for all
   four builtins (f16 and bf16 inputs, each at both accumulator widths), and it reports the
-  mixed-sign cases without judging them. Re-run it after a ROCm upgrade, and extend it to gfx12's
+  mixed-sign cases without judging them. `tools/hip-wmma-probe.sh` builds and runs it at `-O3` and
+  `-O0` and ends on a one-line verdict (holds / rounding news / SAME-SIGN RULE BROKE /
+  unavailable); `tools/sweep.sh` runs it after every HIP unit whose suite ran (minix's gfx1151 and
+  tuf's gfx1102) and says the verdict on the summary, never in the unit's outcome
+  (gh-ocannl-1658). Run it by hand after a ROCm upgrade, and extend it to gfx12's
   builtins when a gfx12 box exists.
 - **Where a gfx11 WMMA sum is inexact, only the f16 accumulator rounds to nearest even**
-  (gh-ocannl-1509, gfx1151; the probe's rounding cases, two nonzero products per cell so the sum
-  is the one rounding, report each arm's mode beside the recorded one). The bf16 accumulator
+  (gh-ocannl-1509 on gfx1151, gh-ocannl-1658 on gfx1102, every row alike; the probe's rounding
+  cases, two nonzero products per cell so the sum is the one rounding, report each arm's mode
+  beside the recorded one). The bf16 accumulator
   rounds TOWARD ZERO (515 -> 512, 518 -> 516; a mixed-sign f32 residue `1 - 2^-24` comes back
   `1 - 2^-8`), which is why the narrow bf16 arm drifts below its reference (the `Bf16_wide` bullet
   above). Both f32 accumulators behave as an adder with one guard bit and no sticky bit:
@@ -1275,9 +1280,24 @@ files.
   - *A claim gated on several GPU backends gets a leg on each before merge.* In wave-20261018o three
     master reds came from HIP-only behaviour (half_ops' `-0.0`, two-kernel-shape contraction) under
     CUDA-only legs.
-  - The bf16 builtins obey the same rule, though the probe covers only the f16 ones: with
-    nonnegative operands every bf16 leg of the ledger below is bitwise on gfx1151 and gfx1102, both
-    accumulator widths, and the bf16-accumulate arm rounds the k-split discriminator's ties to even.
+  - The bf16 builtins obey the same rule (the probe covers all four builtins since gh-ocannl-1509):
+    with nonnegative operands every bf16 leg of the ledger below is bitwise on gfx1151 and gfx1102,
+    both accumulator widths. The bf16-accumulate arm reads the k-split discriminator's tie, 257, as
+    256, which nearest-even and toward-zero both give, so that leg cannot tell the modes apart;
+    the probe's rounding cases can, and say toward zero.
+  - *A bound on an INEXACT HIP tensorized sum is derived from the measured modes, never from
+    nearest rounding* (gh-ocannl-1658). Per inexact addition: under one f32 ulp at an f32
+    accumulator (no sticky bit: the bits below the guard are cut, under half an ulp, and the guard
+    then rounds, up to half more; `2^25 + 3` -> `2^25` errs by 3/4 ulp), one full bf16 ulp at the
+    bf16 accumulator (toward zero), and half an f16 ulp at the f16 one (nearest even). The
+    gh-ocannl-1658 audit found no HIP bound that needed it: every HIP tensorized claim is bitwise on
+    exact same-sign data, and each tolerance in the ledger below bounds a rounding the WMMA unit
+    does not perform (the Bf16_wide bound: the `d` boundary's nearest-even narrowing of exact f32
+    partials, whose exactness `schedule_mma_matmul` claims host-side from the init functions;
+    `qkv_zero_init`: the serial reference's f16 products) or holds under any rounding (the
+    Bf16_narrow k-split envelope; the negative controls, which a toward-zero accumulator only
+    carries further past their bounds). A new bound over inexact data starts from these modes, and
+    from the probe's verdict on the box it runs on.
 - **The gh-ocannl-1432 sweep's ledger**, so the next audit of HIP tensorized claims starts from it.
   Made bitwise with nonnegative data: `schedule_mma_matmul`'s bf16 legs (`bf32`, `bfu*`; the old
   1e-5/5e-2 HIP tolerances were measured on a signed `mbb`), its staged f16->f32 leg (`approx` on

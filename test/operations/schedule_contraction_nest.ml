@@ -34,9 +34,9 @@
    candidate that drops a write and leaves the zero-initialized destination in place cannot pass
    (the companion leg compares the materialized pre-relu result as well as the relu'd tail, which
    legitimately zeros cells). GPU backends execute the blocktile family (workgroup-shared staging)
-   and, where the device advertises a uniform-bf16 tile, the tensorized family under the tolerance
-   schedule_mma_matmul documents for gfx1151's not-exactly-rounded WMMA; cc executes the CPU
-   families (packed and register-tiled pipelines included), so every backend executes a
+   and, where the device advertises a uniform-bf16 tile, the tensorized family, bitwise against the
+   serial twin on exact same-sign data (the leg below says why); cc executes the CPU families
+   (packed and register-tiled pipelines included), so every backend executes a
    multi-axis-contraction sketch. *)
 
 open Base
@@ -342,11 +342,12 @@ let leg ~tag ~ko_extents ~nk ?(companion = false) ~build () =
    [Context.hardware_limits], executing one candidate per tensorized shape this site seeds
    (unstaged, staged, batch-grid) and comparing it with the serial twin BITWISE -- the inputs keep
    every partial sum exact in bf16 and every product of one sign, which is what makes gfx11's WMMA
-   exactly rounded (gh-ocannl-1420; the leg held a 5% tolerance until gh-ocannl-1432) -- and
-   checking that the emitted source reaches the backend's intrinsic rather than the scalar fallback.
-   Where the device advertises no such tile (cc; an f32-only capability) the leg is reported
-   skipped; where it does, a shape the site fails to seed fails the shape's claims (gh-ocannl-1115)
-   -- the gate is the capability, never the seeds under test.
+   exact (gh-ocannl-1420; on an inexact sum it is not correctly rounded, gh-ocannl-1509; the leg
+   held a 5% tolerance until gh-ocannl-1432) -- and checking that the emitted source reaches the
+   backend's intrinsic rather than the scalar fallback. Where the device advertises no such tile
+   (cc; an f32-only capability) the leg is reported skipped; where it does, a shape the site fails
+   to seed fails the shape's claims (gh-ocannl-1115) -- the gate is the capability, never the seeds
+   under test.
 
    No pipelined-staged shape here: depth twins are seeded only for staged operands of at least 4
    bytes -- the async arms' element floor ([Autotune.sketch_params.sk_depth]) -- so a bf16 site

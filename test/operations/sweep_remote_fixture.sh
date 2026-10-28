@@ -200,6 +200,9 @@ for boot in linux wsl; do
   [ "$(remote_row "$local_record")" = "fail:1:$kind" ]
   grep -q '^  minix/hip: serial rerun: all clean$' <<<"$local_remote"
   grep -q '^  minix/hip: serial rerun: suite completed$' <<<"$local_remote"
+  # A HIP unit whose suite ran asks for the WMMA probe (gh-ocannl-1658), and a swept ref without
+  # tools/hip-wmma-probe.sh says so -- the controls after this loop give the fixture one.
+  grep -q '^  minix/hip: wmma probe: not at ' <<<"$local_remote"
   grep -q '^=== .* window: 1 ' "$(window_sidecar "$local_log")"
   grep -q '^=== serial rerun @test/runtest-state-probe: exit 0 ===$' "$local_log"
   grep -q '^=== suite completion: exit 0 ===$' "$local_log"
@@ -235,6 +238,45 @@ for boot in linux wsl; do
   [ -z "$(git -C "$remote_wt" status --porcelain)" ]
   grep -q 'exec -- dune runtest -j 3 remote-width$' "$remote_root/commands"
 done
+
+# The WMMA probe's verdict is the box's, never the unit's (gh-ocannl-1658): through the same remote
+# path, in the unit's own worktree, a stand-in at the swept ref prints the real script's verdict
+# line, which is said on the unit's summary -- a broken same-sign rule as a WARNING -- while the
+# unit's row stays its suite's outcome either way; a CPU unit on the same box asks for no probe.
+mkdir -p "$main/tools"
+cat >"$main/tools/hip-wmma-probe.sh" <<'EOF_WMMA'
+#!/bin/sh
+echo "probe ran in $PWD"
+case ${SWEEP_TEST_WMMA_RC:-0} in
+  0) echo 'hip-wmma-probe: verdict: holds (gfx-fixture)' ;;
+  1) echo 'hip-wmma-probe: verdict: SAME-SIGN RULE BROKE at -O3 (gfx-fixture)' ;;
+esac
+exit "${SWEEP_TEST_WMMA_RC:-0}"
+EOF_WMMA
+git -C "$main" add tools/hip-wmma-probe.sh
+git -C "$main" commit -qm 'stand-in wmma probe'
+git -C "$main" push -q origin master
+remote_reset
+wmma_holds=$(remote_sweep --only hip --target test/operations)
+local_record=$(sed -n 's/^run:  *//p' <<<"$wmma_holds")
+[ "$(remote_row "$local_record" | cut -d: -f1)" = incremental-pass ]
+grep -q "^  minix/hip: wmma probe: holds (gfx-fixture) -- $state/logs/[^ ]*-minix-hip-wmma-probe.log\$" \
+  <<<"$wmma_holds"
+wmma_log=$(sed -n 's/^  minix\/hip: wmma probe: holds (gfx-fixture) -- //p' <<<"$wmma_holds")
+grep -qx "probe ran in $remote_root/minix-amd-linux/ocannl-staging-worktrees/sweep" "$wmma_log"
+wmma_broke=$(SWEEP_TEST_WMMA_RC=1 remote_sweep --only hip --target test/operations)
+local_record=$(sed -n 's/^run:  *//p' <<<"$wmma_broke")
+[ "$(remote_row "$local_record" | cut -d: -f1)" = incremental-pass ]
+grep -q '^  minix/hip: WARNING -- wmma probe: SAME-SIGN RULE BROKE at -O3 (gfx-fixture): the bitwise HIP tensorized claims rest on that rule ' \
+  <<<"$wmma_broke"
+wmma_broke=$(SWEEP_TEST_WMMA_RC=5 remote_sweep --only hip --target test/operations)
+grep -q '^  minix/hip: wmma probe: could not run (exit 5) -- ' <<<"$wmma_broke"
+wmma_cpu=$(remote_sweep --only multidev_cc --target remote-cpu)
+grep -q '^  minix/multidev_cc: incremental-pass ' <<<"$wmma_cpu"
+absent 'wmma probe' <<<"$wmma_cpu"
+git -C "$main" rm -q tools/hip-wmma-probe.sh
+git -C "$main" commit -qm 'drop the stand-in wmma probe'
+git -C "$main" push -q origin master
 
 # Quiet kernel and no runtime name: test failure buys no serial call. A CPU
 # remote unit has no window and uses the default width.
