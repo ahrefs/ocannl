@@ -31,14 +31,15 @@ type summary = {
    value of its dynamic coordinate the data picks (the view's unknown group: the axis, flattened
    over any [Sub_axis] run before it): the image of its map with the placeholder standing still
    counts the known coordinates' tuples, and each pairs with at most every value of that coordinate
-   — an upper bound, capped by the box. A map of another rank than its node keeps the box/fiber
-   bound but never claims exactness: the renderer still computes one cell (one run, for a vector
-   store) per loop-box point from the symbols the map mentions, so the image is at most the box
-   divided by the unmentioned symbols' widths, though which cells is unknown. A [Concat] coordinate
-   falls back to the whole node: it is a choice of segment, each adding its cumulative offset, so
-   its extents ADD along the axis and no product of loop widths bounds them (segments of widths 1
-   and 3 name 4 cells where the box holds 3). Guarded accesses are counted guards-taken. All biases
-   over-count.
+   — an upper bound, capped by the box and by the coordinates' value ranges (gh-ocannl-1676). A
+   vector store's runs are capped the same way, each run one more unit term of the coordinate it
+   moves along. A map of another rank than its node keeps the box/fiber bound but never claims
+   exactness: the renderer still computes one cell (one run, for a vector store) per loop-box point
+   from the symbols the map mentions, so the image is at most the box divided by the unmentioned
+   symbols' widths, though which cells is unknown. A [Concat] coordinate falls back to the whole
+   node: it is a choice of segment, each adding its cumulative offset, so its extents ADD along the
+   axis and no product of loop widths bounds them (segments of widths 1 and 3 name 4 cells where the
+   box holds 3). Guarded accesses are counted guards-taken. All biases over-count.
 
    [fixed] (default: none) names enclosing loops whose symbols stand still: the count is then the
    cells ONE point of those loops touches — the box shrinks to the other loops, and a fixed symbol
@@ -68,48 +69,52 @@ let access_cells ?(fixed = fun (_ : Idx.symbol) -> false) (a : Tn.t Affine.acces
       | `Exact f -> (box / max 1 f, not uninterpretable)
       | `At_least f -> (box / max 1 f, false)
     in
+    let range s = List.Assoc.find a.a_loops s ~equal:Idx.equal_symbol in
     match a.a_dyn_axis with
     | Some _ ->
         (* The data picks a value of the coordinate the view marks unknown — the dynamic axis with
            any [Sub_axis] run before it, which the component flattens over (gh-ocannl-1162) — not
-           merely of the axis's own extent. *)
+           merely of the axis's own extent. The coordinates' value ranges cap the count as on a
+           static map (gh-ocannl-1676): the unknown one takes its whole size, so the cap holds for
+           every value the data picks. *)
+        let vd = Affine.view ?dyn_axis:a.a_dyn_axis ~dims a.a_map in
         let rows =
-          Array.fold (Affine.view ?dyn_axis:a.a_dyn_axis ~dims a.a_map) ~init:1
-            ~f:(fun n -> function
+          Array.fold vd ~init:1 ~f:(fun n -> function
             | Affine.Unknown { size; _ } -> n * size
             | Affine.Known _ -> n)
         in
-        (min node_cells (min box (image * rows)), true)
+        let range_ub = Affine.image_cardinality_range_ub ~domain vd in
+        (min node_cells (min box (min (image * rows) range_ub)), true)
     | None when a.a_vec_last ->
         (* Each map instance is the base of a run along the minor axis. When the base image is exact
            and the runs are provably pairwise disjoint ({!Affine.vec_runs_disjoint}), the product is
            the exact distinct-cell count (gh-ocannl-578); otherwise runs may overlap for strided
-           bases, so it is an upper bound. *)
+           bases, so it is an upper bound. The run's value range caps it too (gh-ocannl-1676: the
+           run is one more unit term of the coordinate it moves along, {!Affine.vec_run_frame}), and
+           where that cap meets the run-aware lower bound the count is exact as well — close or
+           overlapping bases, whose union is one interval. *)
         let disjoint_runs = Affine.vec_runs_disjoint ~dims a in
-        ( min node_cells (image * max 1 a.a_vec_len),
-          (not (exact_image && disjoint_runs)) || a.a_guarded )
+        let len = max 1 a.a_vec_len in
+        let v = Affine.view ~dims a.a_map in
+        let range_ub = Affine.image_cardinality_range_ub ~range ~run:len ~domain v in
+        let ub = min node_cells (min (image * len) range_ub) in
+        let met =
+          (not uninterpretable) && Affine.image_cardinality_lb ~range ~run:len ~domain v >= ub
+        in
+        (ub, (not ((exact_image && disjoint_runs) || met)) || a.a_guarded)
     | None when exact_image -> (min node_cells image, a.a_guarded)
     | None when uninterpretable -> (min node_cells image, true)
     | None ->
         (* gh-ocannl-1601: a non-injective interpretable map — an overlapping window's [s*o + d*k] —
            touches, per coordinate, at most the values between its extremes: [span + 1], where the
            span is [sum |c| * (w - 1)]. The coordinates' ranges multiply into a box holding the
-           image, so their product is an upper bound beside [box / fiber]; it is what keeps a padded
-           input's unread margin (the window's image is one row short of a buffer padded [1, 2]) off
-           the charge. Where it meets the lower bound {!Affine.image_cardinality_lb} (a unit-stride
-           or stride-at-most-window window), the count is exact. *)
+           image ({!Affine.image_cardinality_range_ub}), so their product is an upper bound beside
+           [box / fiber]; it is what keeps a padded input's unread margin (the window's image is one
+           row short of a buffer padded [1, 2]) off the charge. Where it meets the lower bound
+           {!Affine.image_cardinality_lb} (a unit-stride or stride-at-most-window window), the count
+           is exact. *)
         let v = Affine.view ~dims a.a_map in
-        let width s = List.Assoc.find domain s ~equal:Idx.equal_symbol |> Option.value ~default:1 in
-        let range_ub =
-          Array.fold v ~init:1 ~f:(fun acc -> function
-            | Affine.Known { terms; size; _ } ->
-                let span =
-                  List.sum (module Int) terms ~f:(fun (c, s) -> Int.abs c * (max 1 (width s) - 1))
-                in
-                acc * min size (span + 1)
-            | Affine.Unknown { size; _ } -> acc * size)
-        in
-        let ub = min node_cells (min image range_ub) in
+        let ub = min node_cells (min image (Affine.image_cardinality_range_ub ~domain v)) in
         (ub, a.a_guarded || Affine.image_cardinality_lb ~domain v < ub)
 
 (* Same-node accesses whose images provably share no cell: the union of their images is then the sum
@@ -490,10 +495,10 @@ let access_cells_floor (a : Tn.t Affine.access) : int * bool =
   else
     let dims = Lazy.force a.a_tn.Tn.dims in
     let range s = List.Assoc.find a.a_loops s ~equal:Idx.equal_symbol in
-    let vec = if a.a_vec_last && a.a_vec_len > 1 then Some (Affine.Run a.a_vec_len) else None in
-    let v = Affine.view ~range ?dyn_axis:a.a_dyn_axis ?vec ~dims a.a_map in
+    let run = if a.a_vec_last && a.a_vec_len > 1 then Some a.a_vec_len else None in
+    let v = Affine.view ?dyn_axis:a.a_dyn_axis ~dims a.a_map in
     let domain = List.map a.a_loops ~f:(fun (s, (lo, hi)) -> (s, hi - lo + 1)) in
-    (min (Tn.num_elems a.a_tn) (Affine.image_cardinality_lb ~domain v), false)
+    (min (Tn.num_elems a.a_tn) (Affine.image_cardinality_lb ~range ?run ~domain v), false)
 
 let floor_flops ~open_placement (code : Low_level.t) : int * bool =
   let exact = ref true in

@@ -378,12 +378,22 @@ files.
   site is the outermost kernel-window loop — `detect_conv` does NOT refuse singleton windows, so
   the condition is explicit); on matmul, a staged GPU mma geometry with `bk < m_nk` (a lattice box
   only once its LARGEST `bk` leaves two blocks — a whole-K box has no fragment unless pad masks
-  force one). The CPU packed shapes are left unpriced: whether they contract depends on the
-  packing shape's loop order (the hoisted-grid shapes do, serial does not), not on the geometry.
+  force one). On the CPU packed shapes it depends on the packing shape's loop order, not on the
+  geometry (gh-ocannl-1676): the grid-outermost shapes (`hoisted-grid`, `hoisted-grid-pack-rest`,
+  `grid-pack-rest`) keep the row-block loop outside `k_o`, which contracts once it runs twice;
+  `serial`, `hoisted` and plain `grid` sink the row blocks under `k_o`, and nothing qualifies. One
+  predicate chain carries that to all three readers — `packing_shape_flags` (the tree's leaves and
+  the floor), `cpu_pack_grid_outermost` (the builder's loop order and the floor),
+  `cpu_pack_contracts` — and `sketch_family_tree`'s `fragment_pins` checks it against the applied
+  schedules: a fragment node appears exactly where it says. Still unpriced (sound, not tight): a
+  mask-forced statement-site contraction, and one through the outer `m_ko` loops alone.
   **Pruning at real conv incumbents needed both halves of the byte accounting tight**: the floor
   prices a windowed read by `Affine.image_cardinality_lb` (sumset/interval counting per
   coordinate, products over symbol-disjoint coordinates), and `analyze` caps a non-injective
-  map's count by its coordinates' value ranges, exact where the two meet — before that, `analyze`
+  map's count by its coordinates' value ranges, exact where the two meet (since gh-ocannl-1676 on
+  dynamic gathers and vector runs too: `Affine.image_cardinality_range_ub`, with a vector run read
+  as one more unit term of the coordinate it moves along, or of the flat index where it can spill
+  — `Affine.vec_run_frame`, shared with the run-aware lower bound) — before that, `analyze`
   charged a padded input's whole buffer (`[1, 2]` padding leaves one unread row and column) and
   that uniform slack exceeded every two leaves' increment difference, so nothing fathomed. On
   cifar_resnet's stage-1 conv every leaf's `analyze` is now exactly floor + increment

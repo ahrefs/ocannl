@@ -219,6 +219,12 @@ let family_root_pins name ~is_gpu ~is_cpu ~limits opt =
    both operand tiles in kernel (written and read), while the CPU packed composition adds traffic
    only where it packs in kernel — every other shape packs at link time or per Grid chunk, replacing
    the original operand's reads rather than adding to them. *)
+let cpu_pack_contracts ~k_extent (p : Autotune.sketch_params) =
+  Autotune.cpu_pack_contracts ~m_nk:k_extent ~bk:p.Autotune.sk_bk
+    ~grid_outermost:
+      (Autotune.cpu_pack_grid_outermost ~sk_grid:p.Autotune.sk_grid ~sk_hoist:p.Autotune.sk_hoist
+         ~sk_pack_rest:p.Autotune.sk_pack_rest)
+
 let expected_inc ~elt_bytes ~n_extent ~k_extent (p : Autotune.sketch_params) =
   let bm = p.Autotune.sk_bm and bk = p.Autotune.sk_bk in
   let bn = if p.Autotune.sk_bn = 0 then n_extent else p.Autotune.sk_bn in
@@ -227,10 +233,13 @@ let expected_inc ~elt_bytes ~n_extent ~k_extent (p : Autotune.sketch_params) =
      contracts its accumulator into a fresh [bm x bn] fragment, written and read. *)
   let fragment = if p.Autotune.sk_mma && bk < k_extent then 2 * bm * bn * elt_bytes else 0 in
   if p.Autotune.sk_gpu then if bk > 0 then (2 * tile) + fragment else 0
-  else if
-    p.Autotune.sk_mma && bk > 0
-    && not (p.Autotune.sk_hoist || p.Autotune.sk_grid || p.Autotune.sk_pack_rest)
-  then tile
+  else if p.Autotune.sk_mma && bk > 0 then
+    let panels =
+      if not (p.Autotune.sk_hoist || p.Autotune.sk_grid || p.Autotune.sk_pack_rest) then tile else 0
+    in
+    (* gh-ocannl-1676: a CPU packed leaf prices its fragment where the shared predicate says it
+       contracts; [fragment_pins] checks the predicate against the applied schedules. *)
+    panels + if cpu_pack_contracts ~k_extent p then 2 * bm * bn * elt_bytes else 0
   else 0
 
 let prefixes path =
@@ -347,6 +356,143 @@ let soundness_pins name ~limits tree (opt : LL.optimized) =
     applied ~f:(fun (path, _, s) ->
       let total = Ir.Cost_model.total_bytes s in
       List.for_all ([] :: prefixes path) ~f:(fun pre -> floor.fr_bytes + inc pre <= total))
+
+(* gh-ocannl-1676: the CPU packed composition's contraction predicate ([Autotune.cpu_pack_contracts]
+   over the loop order [Autotune.cpu_pack_grid_outermost] the builder builds) judged against what
+   the applied schedules actually do — the authority being
+   [Schedule.contract_tensorized_accumulator]: a fresh fragment node appears on a packed leaf
+   exactly where the predicate says it contracts, and there it is charged written and read once at
+   its own storage width, which is exactly the leaf's increment (a grid-outermost shape adds no
+   panel bytes). [expect] says which regimes the fixture must reach: with [`Both] at least one
+   contracting and one non-contracting packed leaf, with [`Whole_k] a grid-outermost leaf whose
+   single reduction block keeps it from contracting. *)
+let fragment_pins name ~limits ~k_extent ~n_extent ~expect tree (opt : LL.optimized) =
+  let inc = Autotune.sketch_path_traffic_floor ~limits opt in
+  let base_nodes =
+    Set.of_list (module Ir.Tnode) (List.map (Ir.Cost_model.analyze opt.LL.llc).per_node ~f:fst)
+  in
+  let packed =
+    List.filter_map (Sspace.enumerate tree) ~f:(fun (path, p) ->
+        if p.Autotune.sk_gpu || (not p.Autotune.sk_mma) || p.Autotune.sk_bk = 0 then None
+        else
+          match
+            Ir.Schedule.apply (Autotune.sketch_schedule ~accum_prec:Fn.id ~p opt) (scratch opt)
+          with
+          | post -> Some (path, p, Ir.Cost_model.analyze post.LL.llc)
+          | exception _ -> None)
+  in
+  let fragments (s : Ir.Cost_model.summary) =
+    List.filter s.per_node ~f:(fun (tn, _) ->
+        (not (Set.mem base_nodes tn)) && List.mem tn.Ir.Tnode.label "fragment" ~equal:String.equal)
+  in
+  let contracts = cpu_pack_contracts ~k_extent in
+  Stdio.printf
+    "== %s: %d packed leaves applied, %d contracting by the predicate, %d with a fragment ==\n" name
+    (List.length packed)
+    (List.count packed ~f:(fun (_, p, _) -> contracts p))
+    (List.count packed ~f:(fun (_, _, s) -> not (List.is_empty (fragments s))));
+  Verdict.p_all
+    (name ^ ": a packed leaf mints a fragment exactly where the predicate says it contracts") packed
+    ~f:(fun (_, p, s) -> Bool.equal (contracts p) (not (List.is_empty (fragments s))));
+  let charge_claim () =
+    Verdict.p_all
+      (name ^ ": a contracting leaf's increment is its fragment's charge, written and read once")
+      (List.filter packed ~f:(fun (_, p, _) -> contracts p))
+      ~f:(fun (path, p, s) ->
+        match fragments s with
+        | [ (tn, fp) ] ->
+            let w = Ir.Ops.prec_in_bytes (Lazy.force tn.Ir.Tnode.storage_prec) in
+            let bn = if p.Autotune.sk_bn = 0 then n_extent else p.Autotune.sk_bn in
+            let charged = fp.Ir.Cost_model.fp_read_bytes + fp.Ir.Cost_model.fp_write_bytes in
+            charged = 2 * p.Autotune.sk_bm * bn * w && inc path = charged
+        | _ -> false)
+  in
+  match expect with
+  | `Both ->
+      charge_claim ();
+      Verdict.p_exists (name ^ ": some packed leaf contracts") packed ~f:(fun (_, p, _) ->
+          contracts p);
+      Verdict.p_exists (name ^ ": some packed leaf does not") packed ~f:(fun (_, p, _) ->
+          not (contracts p))
+  | `Whole_k ->
+      Verdict.p_none (name ^ ": no packed leaf contracts") packed ~f:(fun (_, p, _) -> contracts p);
+      Verdict.p_exists (name ^ ": a grid-outermost packed leaf runs its reduction in one block")
+        packed ~f:(fun (_, p, _) ->
+          Autotune.cpu_pack_grid_outermost ~sk_grid:p.Autotune.sk_grid ~sk_hoist:p.Autotune.sk_hoist
+            ~sk_pack_rest:p.Autotune.sk_pack_rest
+          && p.Autotune.sk_bk >= k_extent)
+
+(* gh-ocannl-1676: the pick audit — the family walk under the bound the fragment now raises against
+   the exhaustive answer, on a memory-dominated stand-in envelope (model-only: nothing executes).
+   Every leaf is applied and scored as the walk scores it; the walk from an unbeatable incumbent
+   must return the exhaustive first argmin, and must score no more leaves than the same walk under
+   the schedule-invariant floor alone (a sound raised bound only fathoms more). *)
+let pick_audit name ~limits (opt : LL.optimized) =
+  let limits =
+    {
+      limits with
+      Ir.Backend_intf.peak_flops = Some 1e12;
+      Ir.Backend_intf.peak_memory_bandwidth = Some 1e11;
+    }
+  in
+  let rank (o : LL.optimized) =
+    Ir.Cost_model.ranking_seconds ?peak_flops:limits.peak_flops
+      ?peak_memory_bandwidth:limits.peak_memory_bandwidth ~is_global:(Ir.Cost_model.global_in o)
+      o.LL.llc
+  in
+  let score segs =
+    List.fold segs ~init:(Some 0.) ~f:(fun acc o -> Option.map2 acc (rank o) ~f:Float.( + ))
+  in
+  match Autotune.sketch_family_tree ~is_gpu:false ~is_cpu:true ~limits opt with
+  | None -> Stdio.printf "== %s: no family claims the site ==\n" name
+  | Some tree -> (
+      let score_p p =
+        match
+          Ir.Schedule.apply (Autotune.sketch_schedule ~accum_prec:Fn.id ~p opt) (scratch opt)
+        with
+        | post -> score [ post ]
+        | exception _ -> None
+      in
+      let scored =
+        List.filter_map (Sspace.enumerate tree) ~f:(fun (_, p) ->
+            Option.map (score_p p) ~f:(fun s -> (p, s)))
+      in
+      let exhaustive =
+        List.fold scored ~init:None ~f:(fun acc (p, s) ->
+            match acc with Some (_, b) when Float.(s >= b) -> acc | _ -> Some (p, s))
+      in
+      let floor = Ir.Cost_model.completion_floor opt.LL.llc in
+      let floor_bound =
+        Ir.Cost_model.roofline_seconds ?peak_flops:limits.peak_flops
+          ?peak_memory_bandwidth:limits.peak_memory_bandwidth ~flops:floor.Ir.Cost_model.fr_flops
+          ~bytes:floor.Ir.Cost_model.fr_bytes ()
+      in
+      let _, zero_stats =
+        Sspace.search
+          ~bound:(fun ~path:_ _ -> floor_bound)
+          ~incumbent:Float.infinity ~score:score_p tree
+      in
+      match
+        Autotune.model_family_search ~capabilities:Ir.Backend_intf.no_codegen_capabilities
+          ~is_gpu:false ~is_cpu:true ~limits ~static_indices:[] ~peak_flops:limits.peak_flops
+          ~peak_memory_bandwidth:limits.peak_memory_bandwidth ~score ~incumbent:Float.infinity opt
+      with
+      | None -> Verdict.p (name ^ ": the family walk runs") false
+      | Some (pick, st, _) ->
+          Stdio.printf
+            "== %s: %d leaves scored exhaustively; the walk scores %d (%d fathomed), the \
+             floor-only walk %d ==\n"
+            name (List.length scored) st.Sspace.st_scored st.Sspace.st_fathomed
+            zero_stats.Sspace.st_scored;
+          Verdict.p
+            (name ^ ": the walk's pick is the exhaustive first argmin")
+            (Option.is_some exhaustive
+            && Option.equal
+                 (fun (p1, s1) (p2, s2) -> Poly.equal p1 p2 && Float.equal s1 s2)
+                 pick exhaustive);
+          Verdict.p
+            (name ^ ": the raised bound scores no more leaves than the floor alone")
+            (st.Sspace.st_scored <= zero_stats.Sspace.st_scored))
 
 let awkward_section name ~is_gpu ~is_cpu ~limits opt =
   match Autotune.matmul_sketch_tree ~is_gpu ~is_cpu ~limits opt with
@@ -1118,7 +1264,35 @@ let () =
   | None -> Stdio.printf "cpu traffic: no site detected\n"
   | Some tree ->
       traffic_pins "cpu simd32" ~limits:cpu_limits ~elt_bytes:4 ~n_extent:64 ~k_extent:64 tree opt;
-      soundness_pins "cpu simd32" ~limits:cpu_limits tree opt);
+      soundness_pins "cpu simd32" ~limits:cpu_limits tree opt;
+      fragment_pins "cpu simd32" ~limits:cpu_limits ~k_extent:64 ~n_extent:64 ~expect:`Both tree opt;
+      pick_audit "cpu simd32 pick audit" ~limits:cpu_limits opt);
+  (* The whole-K control (gh-ocannl-1676): a 64x16x64 site keeps the grid-outermost shapes, whose
+     single 16-deep reduction block contracts nothing. *)
+  (let a16 =
+     NTDSL.init ~l:"a16" ~prec:Ir.Ops.single ~o:[ 64; 16 ]
+       ~f:(Ll_test.cycle ~dims:[| 64; 16 |] ~modulus:13 ~offset:(-6.) ~stride:0.25)
+       ()
+   in
+   let b16 =
+     TDSL.ndarray
+       (Array.init (16 * 64)
+          ~f:(Ll_test.cycle_flat ~dims:[| 16; 64 |] ~modulus:17 ~offset:(-8.) ~stride:0.125))
+       ~label:[ "b16" ] ~output_dims:[ 16; 64 ] ()
+   in
+   let mk16 =
+     with_lowering ~name:"sft_k16"
+       (let%op l16 = a16 +* "ik;kj=>ij" b16 in
+        l16)
+   in
+   match Autotune.matmul_sketch_tree ~is_gpu:false ~is_cpu:true ~limits:cpu_limits mk16 with
+   | None -> Stdio.printf "cpu k16: no site detected\n"
+   | Some tree ->
+       traffic_pins "cpu k16" ~limits:cpu_limits ~elt_bytes:4 ~n_extent:64 ~k_extent:16 tree mk16;
+       soundness_pins "cpu k16" ~limits:cpu_limits tree mk16;
+       fragment_pins "cpu k16" ~limits:cpu_limits ~k_extent:16 ~n_extent:64 ~expect:`Whole_k tree
+         mk16;
+       pick_audit "cpu k16 pick audit" ~limits:cpu_limits mk16);
   check_wide_scope_edges ();
   (* Corner-judged box refutations: a workgroup-memory cap that admits only the smallest staged
      tiles refutes the large-tile half-boxes at their most favorable corner, pre-expansion — the

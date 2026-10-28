@@ -572,14 +572,28 @@ val lift_geometry_lattice :
 (** Lift geometry-lattice exclusions by their decision, preserving laziness, other exclusions and
     legality refutations. *)
 
+val cpu_pack_grid_outermost : sk_grid:bool -> sk_hoist:bool -> sk_pack_rest:bool -> bool
+(** Whether the CPU packed composition keeps its row-block loop outermost — above the
+    reduction-block loops instead of sunk under them: the hoisted-only Grid shape and the two
+    per-chunk packing shapes. The loop order [cpu_mma_pack_sketch_schedule] builds, and what the
+    certain-traffic floor reads off a path's packing shape (gh-ocannl-1676). *)
+
+val cpu_pack_contracts : m_nk:int -> grid_outermost:bool -> bk:int -> bool
+(** Whether a packed geometry's accumulator contraction is implied: grid-outermost, with the
+    reduction-block loop running at least twice ([bk < m_nk]). Then
+    [Schedule.contract_tensorized_accumulator] mints a fresh [bm x bn] fragment at the output's
+    storage precision, which {!sketch_path_traffic_floor} prices (gh-ocannl-1676). Exposed for
+    tests, which check it against the applied schedules. *)
+
 val sketch_path_traffic_floor :
   limits:Ir.Backend_intf.hardware_limits -> Ir.Low_level.optimized -> Family_decision.path -> int
 (** Additional bytes every completion below a path must move beyond
     {!Ir.Cost_model.completion_floor}: the matmul family's staged geometries, and the conv family's
     two staged operand tiles once its row geometry commits (gh-ocannl-1489), plus the accumulator
-    fragment [Tensorize]'s contraction mints wherever it is certain (gh-ocannl-1601). Detection runs
-    at partial application, in the claiming family's order; an unrecognized site or an uncommitted
-    staging decision contributes zero. *)
+    fragment [Tensorize]'s contraction mints wherever it is certain (gh-ocannl-1601; on CPU packed
+    shapes, {!cpu_pack_contracts}, gh-ocannl-1676). Detection runs at partial application, in the
+    claiming family's order; an unrecognized site or an uncommitted staging decision contributes
+    zero. *)
 
 (** {2 Constructing schedules and inspecting reductions} *)
 

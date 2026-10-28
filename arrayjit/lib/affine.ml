@@ -712,6 +712,72 @@ let fiber_cardinality_ub ~(domain : (Idx.symbol * int) list) (idcs : Idx.axis_in
     in
     `At_most (base * best)
 
+(* gh-ocannl-1676: the frame a vector run of [len] consecutive FLAT cells moves in, read off a view
+   built WITHOUT [?vec] — the run as one more term of one known coordinate, where {!apply_vec}'s
+   [Run] makes that coordinate opaque (the pair queries need the opacity; the cardinality counts do
+   not). The run moves along the minor coordinate ({!split_minor}); where it provably stays inside
+   it (apply_vec's own no-spill test, every symbol's range known), the cells are the tuples [(outer,
+   minor + t)] for [t < len]; otherwise the run can carry into the outer coordinates, and the cells
+   are the merged flat index plus [t]. [Some (v', r)]: the regrouped view and the position of the
+   coordinate [t] adds to; [None] when that coordinate is not known. *)
+let vec_run_frame ~range ~len (v : coord array) : (coord array * int) option =
+  if len <= 1 || Array.is_empty v then None
+  else
+    let outer, minor = split_minor v in
+    let no_spill =
+      Array.is_empty outer
+      ||
+      match minor with
+      | Known k -> (
+          match interval ~range (k.terms, k.offset) with
+          | Some (lo, hi) -> lo >= 0 && hi + len <= k.size
+          | None -> false)
+      | Unknown _ -> false
+    in
+    if no_spill then
+      match minor with
+      | Known _ -> Some (Array.append outer [| minor |], Array.length outer)
+      | Unknown _ -> None
+    else match merge (Array.to_list v) with Known _ as m -> Some ([| m |], 0) | Unknown _ -> None
+
+(* Saturating arithmetic below a cap every real count lies under: a saturated value is still a valid
+   upper bound once a caller takes its [min] with the node's cells, and still a valid lower bound by
+   itself. *)
+let card_cap = Int.max_value / 4
+let sat_add a b = if a > card_cap - b then card_cap else a + b
+let sat_mul a b = if a = 0 || b = 0 then 0 else if a > card_cap / b then card_cap else a * b
+
+(* A view's coordinates, each with its varying terms as [(|c|, Some symbol, width)] — the width the
+   symbol has in [domain], absent symbols fixed — plus, on the run's coordinate, the run's own
+   symbol-less unit term [(1, None, len)]: [t] ranges over [0, len) and occurs nowhere else, so the
+   cells are the image of an ordinary affine map over the extended box. [None] for an [Unknown]
+   coordinate. With [?run], a view whose run frame is not known is read as {!apply_vec}'s [Run]
+   reads it. *)
+let card_coords ~range ?run ~(domain : (Idx.symbol * int) list) (v : coord array) =
+  let width s = List.Assoc.find domain s ~equal:Idx.equal_symbol |> Option.value ~default:1 in
+  let varying terms =
+    List.filter_map terms ~f:(fun (c, s) ->
+        let w = width s in
+        if c = 0 || w <= 1 then None else Some (abs c, Some s, w))
+  in
+  let coords ?run_at v =
+    Array.to_list v
+    |> List.mapi ~f:(fun i c ->
+        match c with
+        | Known { terms; size; _ } ->
+            let extra =
+              match run_at with Some (r, len) when r = i -> [ (1, None, len) ] | _ -> []
+            in
+            `Known (varying terms @ extra, size)
+        | Unknown { size; _ } -> `Unknown size)
+  in
+  match run with
+  | None | Some 1 | Some 0 -> coords v
+  | Some len -> (
+      match vec_run_frame ~range ~len v with
+      | Some (v', r) -> coords ~run_at:(r, len) v'
+      | None -> coords (apply_vec ~range (Run len) v))
+
 (* gh-ocannl-1601: a lower bound on the distinct cells a viewed access touches, for the floor
    extraction's non-exact images (an overlapping window's [s*o + d*k]). Three integer facts, each
    only shrinking what is counted:
@@ -725,24 +791,19 @@ let fiber_cardinality_ub ~(domain : (Idx.symbol * int) list) (idcs : Idx.axis_in
    coordinate's [size] under the in-bounds assumption every view makes; - coordinates whose varying
    symbols are pairwise disjoint take their value sets independently, so the image's projection onto
    them is the product of their counts, and a projection has at most as many points as the image; -
-   an [Unknown] coordinate (a dynamic axis, a vector run, a [Concat]) is left out of the projection,
-   which stays a projection.
+   an [Unknown] coordinate (a dynamic axis, a [Concat], a vector run whose frame is not known) is
+   left out of the projection, which stays a projection.
+
+   A vector run ([?run], gh-ocannl-1676) is one more unit term of its frame's coordinate
+   ({!vec_run_frame}), its variable shared with no other coordinate.
 
    Arithmetic saturates at a cap below which every real count lies, so a saturated value is still a
    lower bound. *)
-let image_cardinality_lb ~(domain : (Idx.symbol * int) list) (v : coord array) : int =
+let image_cardinality_lb ?(range = fun _ -> None) ?run ~(domain : (Idx.symbol * int) list)
+    (v : coord array) : int =
   if List.exists domain ~f:(fun (_, w) -> w <= 0) then 0
   else
-    let width s = List.Assoc.find domain s ~equal:Idx.equal_symbol |> Option.value ~default:1 in
-    let cap = Int.max_value / 4 in
-    let sat_add a b = if a > cap - b then cap else a + b in
-    let sat_mul a b = if a = 0 || b = 0 then 0 else if a > cap / b then cap else a * b in
     let coord_lb terms size =
-      let terms =
-        List.filter_map terms ~f:(fun (c, s) ->
-            let w = width s in
-            if c = 0 || w <= 1 then None else Some (abs c, s, w))
-      in
       let g = List.fold terms ~init:0 ~f:(fun g (c, _, _) -> gcd g c) in
       let sorted =
         List.sort
@@ -755,18 +816,19 @@ let image_cardinality_lb ~(domain : (Idx.symbol * int) list) (v : coord array) :
             let span' = sat_add span d in
             if interval && c <= n then
               let n' = sat_add n d in
-              (n', span', n' < cap)
+              (n', span', n' < card_cap)
             else if c > span then (sat_mul n w, span', false)
             else (sat_add n (w - 1), span', false))
       in
-      ( List.map sorted ~f:(fun (_, s, _) -> s) |> List.dedup_and_sort ~compare:Idx.compare_symbol,
+      ( List.filter_map sorted ~f:(fun (_, s, _) -> s)
+        |> List.dedup_and_sort ~compare:Idx.compare_symbol,
         min n (max 1 size) )
     in
     let coords =
-      Array.to_list v
+      card_coords ~range ?run ~domain v
       |> List.filter_map ~f:(function
-        | Known { terms; size; _ } -> Some (coord_lb terms size)
-        | Unknown _ -> None)
+        | `Known (terms, size) -> Some (coord_lb terms size)
+        | `Unknown _ -> None)
       |> List.filter ~f:(fun (_, n) -> n > 1)
     in
     let disjoint s1 s2 = not (List.exists s1 ~f:(fun s -> List.mem s2 s ~equal:Idx.equal_symbol)) in
@@ -787,6 +849,21 @@ let image_cardinality_lb ~(domain : (Idx.symbol * int) list) (v : coord array) :
           if List.for_all chosen ~f:(disjoint syms) then (syms :: chosen, sat_mul acc n)
           else (chosen, acc))
       |> snd
+
+(* gh-ocannl-1601 / gh-ocannl-1676: the upper companion — the coordinates' value ranges. A known
+   coordinate's index lies between its extremes, [span + 1] values for [span = sum |c| * (w - 1)] (a
+   run's unit term adds [len - 1]), at most its [size]; an [Unknown] one takes its whole size. The
+   ranges multiply into a box holding the image. Saturates upward ({!card_cap}): the caller's [min]
+   with the node's cells keeps it a bound. *)
+let image_cardinality_range_ub ?(range = fun _ -> None) ?run ~(domain : (Idx.symbol * int) list)
+    (v : coord array) : int =
+  List.fold (card_coords ~range ?run ~domain v) ~init:1 ~f:(fun acc -> function
+    | `Known (terms, size) ->
+        let span =
+          List.fold terms ~init:0 ~f:(fun sp (c, _, w) -> sat_add sp (sat_mul c (w - 1)))
+        in
+        sat_mul acc (min (max 1 size) (sat_add span 1))
+    | `Unknown size -> sat_mul acc (max 1 size))
 
 (** {2 Projection-level predicates}
 

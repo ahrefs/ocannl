@@ -252,7 +252,12 @@ val fiber_cardinality_ub :
     whole fiber and the bound is exact. Otherwise the mentioned symbols' contribution is bounded per
     component (see the implementation), and the smallest component-wise bound is taken. *)
 
-val image_cardinality_lb : domain:(Indexing.symbol * int) list -> coord array -> int
+val image_cardinality_lb :
+  ?range:(Indexing.symbol -> (int * int) option) ->
+  ?run:int ->
+  domain:(Indexing.symbol * int) list ->
+  coord array ->
+  int
 (** [image_cardinality_lb ~domain v]: a lower bound on the distinct cells an access whose view is
     [v] touches over the loop box [domain] (symbol, width pairs; a symbol absent from it reads as
     fixed). Per [Known] coordinate, its terms' sumset counted after dividing the coefficients by
@@ -262,7 +267,27 @@ val image_cardinality_lb : domain:(Indexing.symbol * int) list -> coord array ->
     assumption of {!view}). Across coordinates, the best product over subsets whose varying symbols
     are pairwise disjoint (the image's projection onto them is a product); [Unknown] coordinates are
     left out. Exact on unit-stride and stride-at-most-window convolution windows ([s*o + k] with
-    [s <= K] counts [s*(O-1) + K]); [0] on an empty box (gh-ocannl-1601). *)
+    [s <= K] counts [s*(O-1) + K]); [0] on an empty box (gh-ocannl-1601).
+
+    [?run] (gh-ocannl-1676): the access is a vector store's base, each instance writing [run]
+    consecutive flat cells; [v] is then the view built WITHOUT [?vec], and [range] gives the
+    symbols' ranges. The run is one more unit term of the coordinate it moves along — the minor one
+    where it provably cannot spill out of it, the merged flat index otherwise — over a variable of
+    width [run] that no other coordinate shares. Where that coordinate is not known, [v] is read as
+    [view ~vec:(Run run)] reads it. *)
+
+val image_cardinality_range_ub :
+  ?range:(Indexing.symbol -> (int * int) option) ->
+  ?run:int ->
+  domain:(Indexing.symbol * int) list ->
+  coord array ->
+  int
+(** The upper companion of {!image_cardinality_lb} over the same coordinates (and the same [?run]
+    frame): the product of the coordinates' value ranges — a [Known] coordinate takes
+    [min size (span + 1)] for [span = Σ |c|·(w - 1)] (a run's term adds [run - 1]), an [Unknown] one
+    its whole size. An upper bound on the distinct cells under {!view}'s in-bounds assumption, for
+    every value a dynamic coordinate takes. Saturates upward at a cap above every real count, so a
+    caller's [min] with the node's cells keeps it a bound (gh-ocannl-1601, gh-ocannl-1676). *)
 
 (** {2 Projection-level predicates}
 

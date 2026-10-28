@@ -49,6 +49,12 @@
   F   rd=0    wr=32   rmw=0    exact
   flops=0 read=64 write=32 intensity=0.000
   table: 8 cells counted, worst case over the data 8
+== dynamic gather (range-limited windowed column) ==
+  W   rd=56   wr=0    rmw=0    approx
+  I5  rd=64   wr=0    rmw=0    exact
+  G   rd=0    wr=64   rmw=0    exact
+  flops=0 read=120 write=64 intensity=0.000
+  table: 14 cells counted, worst case over the data 12
 == zero-out then overwrite (union bound capped) ==
   S2  rd=0    wr=16   rmw=0    approx
   flops=0 read=0 write=16 intensity=0.000
@@ -93,14 +99,22 @@
   U   rd=16   wr=0    rmw=0    exact
   V16 rd=0    wr=64   rmw=0    exact
   flops=16 read=16 write=64 intensity=0.200
-== vectorized writes, overlapping runs (bound) ==
+== vectorized writes, overlapping runs (exact) ==
   U   rd=16   wr=0    rmw=0    exact
-  V16 rd=0    wr=64   rmw=0    approx
-  flops=16 read=16 write=64 intensity=0.200
-== vectorized writes, row-spilling runs (bound) ==
+  V16 rd=0    wr=28   rmw=0    exact
+  flops=16 read=16 write=28 intensity=0.364
+== vectorized writes, row-spilling disjoint runs (exact) ==
   U   rd=16   wr=0    rmw=0    exact
-  W46 rd=0    wr=64   rmw=0    approx
+  W46 rd=0    wr=64   rmw=0    exact
   flops=16 read=16 write=64 intensity=0.200
+== vectorized writes, row-spilling overlapping runs (exact) ==
+  U   rd=16   wr=0    rmw=0    exact
+  W53 rd=0    wr=52   rmw=0    exact
+  flops=16 read=16 write=52 intensity=0.235
+== vectorized writes, windowed bases (exact) ==
+  U   rd=16   wr=0    rmw=0    exact
+  Y16 rd=0    wr=40   rmw=0    exact
+  flops=64 read=16 write=40 intensity=1.143
 == vectorized writes, one run per row (exact) ==
   U   rd=16   wr=0    rmw=0    exact
   W44 rd=0    wr=64   rmw=0    exact
