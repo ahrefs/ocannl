@@ -227,25 +227,58 @@ let () =
       p (name ^ ": the later operand takes the closed size") (List.equal Int.equal (dims w2) [ 5 ]));
   (* A row holding a symbolic extent has no numeric product, so its closure records neither
      [solved_dim] nor [solved_sym], and the row variable the reference was bound to belongs to the
-     reset environment. The next binding is not tied to it and keeps its own shape. *)
-  Verdict.case "shared reference, reused after a closure that recorded no value" (fun () ->
-      Tensor.unsafe_reinitialize ();
-      let name = "after a valueless closure" in
-      let module Idx = Ir.Indexing in
-      let seq, _bindings = Idx.get_static_symbol ~static_range:6 Idx.Empty in
-      let e = Shape.get_variable_ref "e" in
-      Shape.set_sym_dim e seq;
-      let w1 = open_leaf "w1" in
-      let _ = capture e ~spec:"e=>e" w1 in
-      let d = Shape.get_variable_ref "d" in
-      let y1 = capture ~spec:"..d.. => ..d.." d w1 in
-      ignore (dims y1 : int list);
-      unsolved name d;
-      let w2 = open_leaf "w2" in
-      let _y2 = capture ~spec:"..d.. => ..d.." d w2 in
-      fix w2 [ 2; 3 ];
-      show name [ ("w2", w2) ];
-      p (name ^ ": the later operand keeps its own shape") (List.equal Int.equal (dims w2) [ 2; 3 ]));
+     reset environment: nothing carries the row across the closure. Reusing the reference -- a new
+     capture, by a row or by a dimension, or [set_dim] -- is refused, naming the closure
+     (gh-ocannl-1655); before, the next capture was silently left untied. *)
+  let closed_without_value name =
+    let module Idx = Ir.Indexing in
+    let seq, _bindings = Idx.get_static_symbol ~static_range:6 Idx.Empty in
+    let e = Shape.get_variable_ref "e" in
+    Shape.set_sym_dim e seq;
+    let w1 = open_leaf "w1" in
+    let _ = capture e ~spec:"e=>e" w1 in
+    let d = Shape.get_variable_ref "d" in
+    let y1 = capture ~spec:"..d.. => ..d.." d w1 in
+    ignore (dims y1 : int list);
+    unsolved name d;
+    d
+  in
+  List.iter
+    [
+      ( "captured again by a row",
+        fun d -> ignore (capture ~spec:"..d.. => ..d.." d (open_leaf "w2") : Tensor.t) );
+      ( "captured again by a dimension",
+        fun d -> ignore (capture ~spec:"d=>d" d (open_leaf "w2") : Tensor.t) );
+      ("set_dim", fun d -> Shape.set_dim d 6);
+    ]
+    ~f:(fun (how, reuse) ->
+      let name = "after a valueless closure, " ^ how in
+      Verdict.case ("shared reference, reused after a closure that recorded no value, " ^ how)
+        (fun () ->
+          Tensor.unsafe_reinitialize ();
+          let d = closed_without_value name in
+          let refused =
+            match reuse d with
+            | () -> None
+            | exception Row.Shape_error (msg, _) ->
+                Tensor.rewind_to_last_closure ~reason:"gh-1655 refusal case" ();
+                Some msg
+          in
+          Option.iter refused ~f:(Stdio.printf "%s: refused: %s\n" name);
+          p
+            (name ^ ": the reuse is refused, naming the reference and the closure")
+            (Option.exists refused ~f:(fun msg ->
+                 String.is_substring msg ~substring:"reference d was bound by shape inference"
+                 && String.is_substring msg ~substring:"has since closed"));
+          (* The refusal was rewound; a fresh reference in the same session still ties. *)
+          let d2 = Shape.get_variable_ref "d" in
+          let w2 = open_leaf "w2" and w3 = open_leaf "w3" in
+          let _y2 = capture ~spec:"..d.. => ..d.." d2 w2
+          and _y3 = capture ~spec:"..d.. => ..d.." d2 w3 in
+          fix w2 [ 2; 3 ];
+          p
+            (name ^ ": fresh work after the refusal ties as before")
+            (List.equal Int.equal (dims w3) [ 2; 3 ])));
   Verdict.case "shared reference, symbolic extent" (fun () ->
       Tensor.unsafe_reinitialize ();
       let name = "symbolic" in

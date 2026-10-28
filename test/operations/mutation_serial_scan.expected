@@ -16,6 +16,7 @@ tensor/row.ml: boundary drop_symbol_roles -- part of a rewind or session reset, 
 tensor/shape.ml: ref_uid (ref) -- exempt: a fresh-id counter: ids are never reused, so a rewind need not restore it
 tensor/shape.ml: open_refs (ref) -- accounted: every write noted or at a boundary
 tensor/shape.ml: discarded_refs (ref) -- accounted: every write noted or at a boundary
+tensor/shape.ml: row_numbered_refs (ref) -- accounted: every write noted or at a boundary
 tensor/shape.ml: update_uid (ref) -- exempt: a fresh-id counter: ids are never reused, so a rewind need not restore it
 tensor/shape.ml: with_error_trace (ref) -- accounted: every write noted or at a boundary
 tensor/shape.ml: unused_shapes (Hash_set) -- accounted: every write noted or at a boundary

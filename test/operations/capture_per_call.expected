@@ -32,9 +32,18 @@ solved first: the open operand takes the solved size: true
 solved first: a different size after the reference is solved is a shape error: true
 after a closure: w2 is 5
 after a closure: the later operand takes the closed size: true
-after a valueless closure: the reference is still unsolved when the operations have registered: true
-after a valueless closure: w2 is 2x3
-after a valueless closure: the later operand keeps its own shape: true
+after a valueless closure, captured again by a row: the reference is still unsolved when the operations have registered: true
+after a valueless closure, captured again by a row: refused: capturing it in spec "..d.. => ..d..": the row variable reference d was bound by shape inference that has since closed (or by a session since reset) without a solved value -- a row holding a symbolic extent has no numeric product -- so the closure kept nothing of it and relating it now would constrain a dead variable. Capture it afresh in an operation of the open work.
+after a valueless closure, captured again by a row: the reuse is refused, naming the reference and the closure: true
+after a valueless closure, captured again by a row: fresh work after the refusal ties as before: true
+after a valueless closure, captured again by a dimension: the reference is still unsolved when the operations have registered: true
+after a valueless closure, captured again by a dimension: refused: capturing it in spec "d=>d": the row variable reference d was bound by shape inference that has since closed (or by a session since reset) without a solved value -- a row holding a symbolic extent has no numeric product -- so the closure kept nothing of it and relating it now would constrain a dead variable. Capture it afresh in an operation of the open work.
+after a valueless closure, captured again by a dimension: the reuse is refused, naming the reference and the closure: true
+after a valueless closure, captured again by a dimension: fresh work after the refusal ties as before: true
+after a valueless closure, set_dim: the reference is still unsolved when the operations have registered: true
+after a valueless closure, set_dim: refused: Shape.set_dim: the row variable reference d was bound by shape inference that has since closed (or by a session since reset) without a solved value -- a row holding a symbolic extent has no numeric product -- so the closure kept nothing of it and relating it now would constrain a dead variable. Capture it afresh in an operation of the open work.
+after a valueless closure, set_dim: the reuse is refused, naming the reference and the closure: true
+after a valueless closure, set_dim: fresh work after the refusal ties as before: true
 symbolic, set before the registrations: both operands carry the symbolic extent: true
 symbolic, set after both open registrations: the reference is still unsolved when the operations have registered: true
 symbolic, set after both open registrations: both operands carry the symbolic extent: true
