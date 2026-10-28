@@ -1,2 +1,4 @@
 C backends: every leg keeps bfloat16 subnormals, bitwise IEEE: true
 Metal: storage, copies and widening keep bfloat16 subnormals bitwise; narrowing and arithmetic flush them to the signed zero, exact on normals: true
+CUDA: storage, copies, widening, narrowing and bfloat arithmetic keep bfloat16 subnormals bitwise; f32 arithmetic flushes them to the signed zero, exact on normals: true
+HIP: every leg keeps bfloat16 subnormals, bitwise IEEE: true

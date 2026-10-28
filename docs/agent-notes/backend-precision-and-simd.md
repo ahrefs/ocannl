@@ -2251,9 +2251,17 @@ files.
   before nearly every store has already flushed it, and it would cost bit operations on every bf16
   store. Half is unaffected: its subnormals (from 2^-24) are normal f32 values. The cc backends
   keep every leg IEEE unless `cc_backend_fast_math` is on (`-ffast-math` may link a
-  flush-to-zero startup file). CUDA's `--use_fast_math` implies `--ftz=true`, and HIP compiles
-  with `-ffast-math`, so neither is claimed. `bf16_subnormal_storage` pins both families'
-  tables, with the C claim and the Metal boundary each failing on the other's output.
+  flush-to-zero startup file). The fast-math GPU backends flush less than their flags suggest
+  (gh-ocannl-1680). CUDA's `--use_fast_math` implies `--ftz=true`, but that reaches only f32
+  instructions: on RTX 5070 Ti (sm_120) the f32 `+` is `add.ftz.f32` and flushes, while the
+  widening load (`mov.b32 {0,h}`), the narrowing store (`cvt.rn.bf16.f32`) and `bfloat` `+`
+  (`__hadd`, native `fma.rn.bf16`) keep subnormals -- so on CUDA a bf16 subnormal dies in f32
+  compute, not in bf16 compute or storage. HIP's `-ffast-math` leaves AMDGPU's f32 denormal mode
+  on (flushing would take `-fgpu-flush-denormals-to-zero`), so every HIP leg is IEEE, measured on
+  gfx1151 (unified) and gfx1102 (discrete). A binop computes at its result's precision, so an
+  f32-annotated `+` stored to a `bfloat` node is a `bfloat` `+`; f32 compute on bf16 data needs an
+  f32 destination. `bf16_subnormal_storage` pins all four tables, each per-backend claim failing
+  if its backend starts or stops flushing a leg.
 
 - **Metal's `exp`/`log`/`exp2`/`log2` render bare: IEEE on the special values, with two recorded
   departures** (gh-ocannl-1515; same probe, `metal_f32_math_probe.exe exp log exp2 log2`, M4 Max).
