@@ -110,7 +110,8 @@ let select_lines ~patterns source =
    folded away, fails). A loop's control that DWARF puts on such a line, an integer counter compared
    with a constant bound ([Asm.is_counter_test]), is set apart: gcc 13 attributes a peeled outer
    loop's test to the max-pool gate's line, where gcc 15 attributes it elsewhere. Each anchored
-   line's own count goes to stderr, so a red run names the line that branched. *)
+   line's own count goes to stderr, so a red run names the line that branched, and a red run also
+   prints each branch with the instruction before it ([Asm.explain_branch_claim]). *)
 let compiled_branch_free ~patterns name =
   let src_path = Generated.path name in
   let source = Generated.read name in
@@ -145,7 +146,12 @@ let compiled_branch_free ~patterns name =
         "branchless_select: %s: %d conditional branch(es), %d loop-counter test(s) set apart, in \
          %d instruction(s) on %d select line(s) (not part of the golden)\n"
         name branches counters instructions (Set.length anchor);
-      branches = 0 && instructions > 0
+      (* On a red, each branch with the instruction that set its flags, so the run itself tells a
+         select's branch from a loop control DWARF put on its line. *)
+      let sites, _ = Asm.conditional_branch_sites parsed ~anchor in
+      Asm.explain_branch_claim ~source ~prefix:("branchless_select: " ^ name)
+        ~holds:(branches = 0 && instructions > 0)
+        sites
 
 (* === The value legs. === *)
 

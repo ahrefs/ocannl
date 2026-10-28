@@ -58,6 +58,10 @@ files.
   the bit patterns under a mask (it becomes setcc + cmov, or vectorizes) and elsewhere stays `?:`.
   Read a census of a select line by its `.loc` columns before blaming a neighbouring construct: the
   index guards sharing that line had folded away, and every branch sat at the select's own column.
+  A red branch claim prints those columns itself: `Asm_census.explain_branch_claim` lists each
+  attributed branch with the instruction before it (what set its flags) and its source line, on
+  stderr only when the claim fails, so a loop control DWARF put on the line (gcc 13's `cmpl $1,
+  %r14d; jg`) is named by the run rather than by a Compiler Explorer recompile.
 - The upper cost walk charges every operand that is *rendered*, which is more than can *execute*,
   and the two differ in exactly one way (gh-ocannl-637): a `Local_scope` anywhere in a statement's
   expression renders as statements hoisted OUT of it — `C_syntax.pp_scalar` returns definitions

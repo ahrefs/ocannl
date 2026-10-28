@@ -1,3 +1,6 @@
+each branch attributed to a line comes with the instruction before it, a loop counter's test set apart: true
+a failing branch claim prints each branch with the instruction before it and its source line, off the golden: true
+a branch claim that holds prints nothing: true
 compiler plans ignore probe paths and GCC's derived dump names: true
 compiler plan normalization retains SDK paths and effective flags: true
 the census models GCC/GAS and Clang assembly on x86-64 and aarch64: true
