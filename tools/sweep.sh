@@ -27,6 +27,10 @@
 # every unit's outcome, including the ones after a failing one. Only a usable
 # harness failure (no local repo, etc.) aborts.
 #
+# A HIP unit whose suite ran is followed by tools/hip-wmma-probe.sh in its worktree
+# (hip_wmma_probe): the gfx11 WMMA instruction's same-sign rule and rounding modes,
+# asked again of each box's own toolkit, with a summary line of its own.
+#
 # Each machine's units run as one LANE, and the lanes run concurrently (see
 # run_lane): units that share a box run one after another, units on different
 # boxes do not wait for each other.
@@ -2521,6 +2525,10 @@ run_unit() { # machine backend host
     pass | incremental-pass | fail)
       box_check "$machine" "$host" "$wt" "${remote_repo:-$MAIN}" "${path_prefix:-}" ;;
   esac
+  case $outcome:$backend in
+    pass:hip | incremental-pass:hip | fail:hip)
+      hip_wmma_probe "$machine" "$backend" "$host" "$wt" "${path_prefix:-}" ;;
+  esac
 }
 
 # The box's measurement prerequisites (gh-ocannl-1062): benchmarks/check-box.sh, once per lane, in
@@ -2550,6 +2558,36 @@ else echo 'check-box: not at this revision'; exit 3; fi" "$log" "$path_prefix" b
       ;;
     3) say "  $machine: box check: not at $run_sha" ;;
     *) say "  $machine: box check: could not run (exit $rc) -- $log" ;;
+  esac
+}
+
+# The gfx11 WMMA probe (gh-ocannl-1658): tools/hip-wmma-probe.sh, after each HIP unit whose suite
+# ran, in that unit's worktree -- so pinned to $run_sha -- rebuilds tools/hip_wmma_sign_probe.hip
+# with the box's own hipcc and asks the INSTRUCTION again: whether every same-sign sum comes back
+# exact (what the bitwise HIP tensorized claims rest on) and how each accumulator rounds an inexact
+# one. Those move with the ROCm toolkit and the target, not with the swept code, so the daily run
+# on minix's gfx1151 and tuf's gfx1102 names a toolkit change the day it lands rather than leaving
+# it to be read off a red suite. Its verdict is the BOX's, like box_check's: said on a line of its
+# own, kept in <stamp>-<machine>-<backend>-wmma-probe.log, and never reaching the unit's outcome
+# (a broken rule is said as a WARNING; the suite's own bitwise claims are what turn the unit red).
+# A swept ref without the script says so.
+hip_wmma_probe() { # machine backend host wt path_prefix
+  local machine=$1 backend=$2 host=$3 wt=$4 path_prefix=$5 log rc verdict
+  log=$LOGS/$stamp-$machine-$backend-wmma-probe.log
+  run_on_unit_host "$host" "$wt" "cd \"$wt\" && if [ -f tools/hip-wmma-probe.sh ]; then \
+bash tools/hip-wmma-probe.sh; else echo 'hip-wmma-probe: not at this revision'; exit 3; fi" \
+    "$log" "$path_prefix" wmma-probe
+  rc=$?
+  say_unguarded "$log" "$machine/$backend: wmma probe"
+  verdict=$(sed -n 's/^hip-wmma-probe: verdict: //p' "$log" 2>/dev/null | tail -n 1)
+  case $rc:$verdict in
+    0:?*) say "  $machine/$backend: wmma probe: $verdict -- $log" ;;
+    1:?*)
+      say "  $machine/$backend: WARNING -- wmma probe: $verdict: the bitwise HIP tensorized claims rest on that rule (docs/agent-notes/backend-precision-and-simd.md) -- $log"
+      ;;
+    2:?*) say "  $machine/$backend: wmma probe: $verdict -- $log" ;;
+    3:*) say "  $machine/$backend: wmma probe: not at $run_sha" ;;
+    *) say "  $machine/$backend: wmma probe: could not run (exit $rc) -- $log" ;;
   esac
 }
 

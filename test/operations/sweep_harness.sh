@@ -70,7 +70,7 @@ on_error() {
     guard_held guard_refused guard_stalled \
     guard_absent \
     after_cancel prune_raced local_remote local_replaced local_busy local_prep_error local_control \
-    box_gap box_ready box_broken; do
+    box_gap box_ready box_broken wmma_holds wmma_broke wmma_cpu; do
     [ -n "${!name:-}" ] || continue
     printf -- '--- %s ---\n' "$name" >&2
     printf '%s\n' "${!name}" | replayed >&2

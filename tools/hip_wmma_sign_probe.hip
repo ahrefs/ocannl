@@ -30,7 +30,9 @@
  * has two nonzero products, both exact at the width, so their sum is the one rounding, and the
  * cells' residues tell the modes apart (see [cases]).
  *
- * Measured on gfx1151 (Radeon 8060S, unified memory; ROCm 7.1, clang 21; -O0 and -O3 alike).
+ * Measured on gfx1151 (Radeon 8060S, unified memory; ROCm 7.1, clang 21; -O0 and -O3 alike), and
+ * on gfx1102 (RX 7700S, discrete memory; the same toolkit) with every row the same (gh-ocannl-1658).
+ * tools/hip-wmma-probe.sh builds and runs it at both levels with a one-line verdict.
  * The f16 arms (gh-ocannl-1420, gfx1102 alike): the smallest mixed-sign case, 1*1 + 1*(-1),
  * returns -2^-24 on both widths; the issue's operands (i % 5 - 2 against i % 3 - 1) miss in 241
  * of 256 f32 cells (1 comes back as 1 - 2^-24), and the f16 arm, whose rounding absorbs residues

@@ -1224,7 +1224,7 @@ files.
   bf16 builtins, gh-ocannl-1509). The
   raw `__builtin_amdgcn_wmma_{f32,f16}_16x16x16_f16_w32` returns `-2^-24` for `1*1 + 1*(-1)`, on
   gfx1151 and gfx1102 alike, at `-O0` and `-O3`, with no rocWMMA and no OCANNL involved, and so do
-  `__builtin_amdgcn_wmma_{f32,bf16}_16x16x16_bf16_w32` (measured on gfx1151 only). Signed
+  `__builtin_amdgcn_wmma_{f32,bf16}_16x16x16_bf16_w32` (likewise, gh-ocannl-1658). Signed
   small-integer operands miss in most f32 cells by a few `2^-24` at the products' scale, and the
   f16 arm, whose rounding absorbs residues that small elsewhere, misses in exactly its exact-zero
   cells (subnormal multiples of `2^-24`, either sign), in fragment scopes and per-statement tiles
@@ -1234,11 +1234,16 @@ files.
   signed data needs a stated bound. `tools/hip_wmma_sign_probe.hip` is the standalone reproducer:
   its exit status says whether the same-sign rule still holds on a new target or toolkit, for all
   four builtins (f16 and bf16 inputs, each at both accumulator widths), and it reports the
-  mixed-sign cases without judging them. Re-run it after a ROCm upgrade, and extend it to gfx12's
+  mixed-sign cases without judging them. `tools/hip-wmma-probe.sh` builds and runs it at `-O3` and
+  `-O0` and ends on a one-line verdict (holds / rounding news / SAME-SIGN RULE BROKE /
+  unavailable); `tools/sweep.sh` runs it after every HIP unit whose suite ran (minix's gfx1151 and
+  tuf's gfx1102) and says the verdict on the summary, never in the unit's outcome
+  (gh-ocannl-1658). Run it by hand after a ROCm upgrade, and extend it to gfx12's
   builtins when a gfx12 box exists.
 - **Where a gfx11 WMMA sum is inexact, only the f16 accumulator rounds to nearest even**
-  (gh-ocannl-1509, gfx1151; the probe's rounding cases, two nonzero products per cell so the sum
-  is the one rounding, report each arm's mode beside the recorded one). The bf16 accumulator
+  (gh-ocannl-1509 on gfx1151, gh-ocannl-1658 on gfx1102, every row alike; the probe's rounding
+  cases, two nonzero products per cell so the sum is the one rounding, report each arm's mode
+  beside the recorded one). The bf16 accumulator
   rounds TOWARD ZERO (515 -> 512, 518 -> 516; a mixed-sign f32 residue `1 - 2^-24` comes back
   `1 - 2^-8`), which is why the narrow bf16 arm drifts below its reference (the `Bf16_wide` bullet
   above). Both f32 accumulators behave as an adder with one guard bit and no sticky bit:
