@@ -10941,6 +10941,19 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1673: a byte tensor converted to a uint4x32 counter on the device matches the host's
+; Ops.byte_to_uint4x32 for all 256 bytes, both sides of 0x80 (Metal once sign-extended bytes from
+; 0x80 up, gh-ocannl-1580). Backend-uniform; the backend the run used goes to stderr.
+
+(test
+ (name byte_counter_conversion)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules byte_counter_conversion)
+ (libraries base ocannl stdio test_utils arrayjit.verdict))
+
 ; gh-ocannl-1468: a uint4x32 counter set from a fixed index draws the same random bits whether it is
 ; inlined beneath its threefry or materialized (the simplify fold no longer re-keys the conversion on
 ; a double source).

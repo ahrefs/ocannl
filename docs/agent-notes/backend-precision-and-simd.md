@@ -2150,8 +2150,12 @@ files.
   the threefry functions, `ocannl_powi_f32` and the e5m2 codec. Every Metal function is either
   shared with the C table (probed, or excluded: the f32-fallback double forms) or named Metal-only
   with a reason. Its first run found Metal's `byte_to_uint4x32` taking `int8_t`, sign-extending
-  every byte from 0x80 up into a different counter than every other backend's. Under mingw without
-  a C++ front end the comparison is an `Environment` skip; elsewhere a missing one fails.
+  every byte from 0x80 up into a different counter than every other backend's. The emulation
+  never runs a device, so `byte_counter_conversion` (gh-ocannl-1673) executes the conversion on the
+  selected backend, all 256 bytes into a materialized `uint4x32` cast, against the host's
+  `Ops.byte_to_uint4x32`; it is backend-uniform, so the Metal leg is an `OCANNL_BACKEND=metal` run
+  (the sweep's, or by hand), and `int8_t` planted back fails it at exactly the bytes >= 0x80.
+  Under mingw without a C++ front end the comparison is an `Environment` skip; elsewhere a missing one fails.
   The shared half RNG function returns `HALF_T`, while its OCaml wrapper explicitly extracts bits
   with `HALF_TO_UINT16`. `test_shared_builtins` executes separately compiled default and emulated
   half variants against the shipped stubs, with inlining disabled to exercise the C ABI.

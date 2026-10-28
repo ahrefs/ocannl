@@ -1,0 +1,6 @@
+the counter is converted from its byte operand by byte_to_uint4x32: true
+256 bytes converted
+the byte tensor holds every byte value once, in order: true
+some probed byte is below 0x80: true
+some probed byte is 0x80 or above: true
+every counter cell equals the host's byte_to_uint4x32 of its byte: true
