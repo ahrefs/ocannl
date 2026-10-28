@@ -635,90 +635,38 @@ let anchor_lines ~source ~patterns =
       if List.exists patterns ~f:(fun p -> has_substr l ~sub:p) then Some (i + 1) else None)
   |> Set.of_list (module Int)
 
-(** [anchor_block_lines ~source ~after_pattern ~patterns] is the smallest brace-delimited source
-    range containing every occurrence of [patterns] after [after_pattern]. The generated-kernel
-    census uses a range rather than only the exact matching lines because clang may attribute an
-    inlined conversion to another line of the construct. Braces in comments and literals are
-    ignored, so prose or macro strings cannot silently widen the range.
+(** [anchor_block_lines ~source ~within ~patterns] is the smallest brace-delimited source range
+    containing every line of [within] (1-based line numbers) that holds one of [patterns]. The
+    generated-kernel census passes the kernel's statement lines ({!Generated.main_logic_lines}:
+    after its main-logic marker, an outlined kernel's parts included), and uses a range rather than
+    only the exact matching lines because clang may attribute an inlined conversion to another line
+    of the construct. Braces in comments and literals are ignored ({!Generated.brace_intervals}), so
+    prose or macro strings cannot silently widen the range.
 
-    An absent marker, absent anchor, or unbalanced enclosing block returns the empty set. Callers
-    already treat an empty anchor as a failed census rather than guessing at a wider range. *)
-let anchor_block_lines ~source ~after_pattern ~patterns =
+    An empty [within], an absent anchor, or unbalanced enclosing block returns the empty set.
+    Callers already treat an empty anchor as a failed census rather than guessing at a wider range.
+*)
+let anchor_block_lines ~source ~within ~patterns =
   let lines = String.split_lines source |> Array.of_list in
-  let after =
-    Array.find_mapi lines ~f:(fun i line ->
-        if has_substr line ~sub:after_pattern then Some i else None)
+  let matches =
+    Array.filter_mapi lines ~f:(fun i line ->
+        if Set.mem within (i + 1) && List.exists patterns ~f:(fun p -> has_substr line ~sub:p) then
+          Some i
+        else None)
+    |> Array.to_list
   in
-  match after with
-  | None -> Set.empty (module Int)
-  | Some after -> (
-      let matches =
-        Array.filter_mapi lines ~f:(fun i line ->
-            if i > after && List.exists patterns ~f:(fun p -> has_substr line ~sub:p) then Some i
-            else None)
-        |> Array.to_list
-      in
-      match
-        (List.min_elt matches ~compare:Int.compare, List.max_elt matches ~compare:Int.compare)
-      with
-      | Some first, Some last ->
-          let stack = ref [] and intervals = ref [] and in_comment = ref false in
-          Array.iteri lines ~f:(fun line_no line ->
-              let rec scan i quote escaped =
-                if i >= String.length line then ()
-                else if !in_comment then
-                  if
-                    i + 1 < String.length line
-                    && Char.equal line.[i] '*'
-                    && Char.equal line.[i + 1] '/'
-                  then (
-                    in_comment := false;
-                    scan (i + 2) quote false)
-                  else scan (i + 1) quote false
-                else
-                  match quote with
-                  | Some q ->
-                      if escaped then scan (i + 1) quote false
-                      else if Char.equal line.[i] '\\' then scan (i + 1) quote true
-                      else if Char.equal line.[i] q then scan (i + 1) None false
-                      else scan (i + 1) quote false
-                  | None ->
-                      if
-                        i + 1 < String.length line
-                        && Char.equal line.[i] '/'
-                        && Char.equal line.[i + 1] '/'
-                      then ()
-                      else if
-                        i + 1 < String.length line
-                        && Char.equal line.[i] '/'
-                        && Char.equal line.[i + 1] '*'
-                      then (
-                        in_comment := true;
-                        scan (i + 2) None false)
-                      else if Char.equal line.[i] '"' || Char.equal line.[i] '\'' then
-                        scan (i + 1) (Some line.[i]) false
-                      else if Char.equal line.[i] '{' then (
-                        stack := line_no :: !stack;
-                        scan (i + 1) None false)
-                      else if Char.equal line.[i] '}' then (
-                        (match !stack with
-                        | opening :: rest ->
-                            stack := rest;
-                            intervals := (opening, line_no) :: !intervals
-                        | [] -> ());
-                        scan (i + 1) None false)
-                      else scan (i + 1) None false
-              in
-              scan 0 None false);
-          List.filter !intervals ~f:(fun (opening, closing) -> opening <= first && last <= closing)
-          |> List.min_elt ~compare:(fun (o1, c1) (o2, c2) -> Int.compare (c1 - o1) (c2 - o2))
-          |> Option.value_map
-               ~default:(Set.empty (module Int))
-               ~f:(fun (opening, closing) ->
-                 List.range opening (closing + 1)
-                 |> List.map ~f:(fun zero_based -> zero_based + 1)
-                 |> Set.of_list (module Int))
-      | _ -> Set.empty (module Int))
+  match (List.min_elt matches ~compare:Int.compare, List.max_elt matches ~compare:Int.compare) with
+  | Some first, Some last ->
+      Generated.brace_intervals lines
+      |> List.filter ~f:(fun (opening, closing) -> opening <= first && last <= closing)
+      |> List.min_elt ~compare:(fun (o1, c1) (o2, c2) -> Int.compare (c1 - o1) (c2 - o2))
+      |> Option.value_map
+           ~default:(Set.empty (module Int))
+           ~f:(fun (opening, closing) ->
+             List.range opening (closing + 1)
+             |> List.map ~f:(fun zero_based -> zero_based + 1)
+             |> Set.of_list (module Int))
+  | _ -> Set.empty (module Int)
 
 (** {1 The census itself} *)
 
@@ -974,13 +922,14 @@ let census_in ?(selection = Innermost) ({ lines; frame; edges = loops; files } :
       })
 
 (** Prefer exact source anchors; only when none carries a loop, try the smallest enclosing construct
-    after [after_pattern]. Trying the range eagerly can select unrelated compiler loops nested
-    beside the accumulator (gh-ocannl-844). Shared by the real census and its pure controls. *)
-let census_source_in ?(selection = Innermost) parsed op_class ~source ~patterns ~after_pattern =
+    of the [within] lines ({!anchor_block_lines}). Trying the range eagerly can select unrelated
+    compiler loops nested beside the accumulator (gh-ocannl-844). Shared by the real census and its
+    pure controls. *)
+let census_source_in ?(selection = Innermost) parsed op_class ~source ~patterns ~within =
   let read anchor = census_in ~selection parsed op_class ~anchor in
   match read (anchor_lines ~source ~patterns) with
   | Some _ as profile -> profile
-  | None -> read (anchor_block_lines ~source ~patterns ~after_pattern)
+  | None -> read (anchor_block_lines ~source ~patterns ~within)
 
 (** [attributed_in p op_class ~anchor] is the profile of every instruction [p] attributes to a
     source line in [anchor], in a loop or not: the reading for a construct that is not a loop of its

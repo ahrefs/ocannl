@@ -389,3 +389,158 @@ let normalize_minted text =
   in
   scan 0;
   Buffer.contents out
+
+(** [brace_intervals lines] is every matched brace pair of a C source given as its lines, as
+    [(opening, closing)] 0-based line indices, ordered by their closing brace. Braces in comments
+    and in string or character literals are not braces, so prose or a macro string cannot open or
+    close a construct; an unmatched closing brace is dropped. *)
+let brace_intervals lines =
+  let stack = ref [] and intervals = ref [] and in_comment = ref false in
+  Array.iteri lines ~f:(fun line_no line ->
+      let len = String.length line in
+      let rec scan i quote escaped =
+        if i >= len then ()
+        else if !in_comment then
+          if i + 1 < len && Char.equal line.[i] '*' && Char.equal line.[i + 1] '/' then (
+            in_comment := false;
+            scan (i + 2) quote false)
+          else scan (i + 1) quote false
+        else
+          match quote with
+          | Some q ->
+              if escaped then scan (i + 1) quote false
+              else if Char.equal line.[i] '\\' then scan (i + 1) quote true
+              else if Char.equal line.[i] q then scan (i + 1) None false
+              else scan (i + 1) quote false
+          | None ->
+              if i + 1 < len && Char.equal line.[i] '/' && Char.equal line.[i + 1] '/' then ()
+              else if i + 1 < len && Char.equal line.[i] '/' && Char.equal line.[i + 1] '*' then (
+                in_comment := true;
+                scan (i + 2) None false)
+              else if Char.equal line.[i] '"' || Char.equal line.[i] '\'' then
+                scan (i + 1) (Some line.[i]) false
+              else if Char.equal line.[i] '{' then (
+                stack := line_no :: !stack;
+                scan (i + 1) None false)
+              else if Char.equal line.[i] '}' then (
+                (match !stack with
+                | opening :: rest ->
+                    stack := rest;
+                    intervals := (opening, line_no) :: !intervals
+                | [] -> ());
+                scan (i + 1) None false)
+              else scan (i + 1) None false
+      in
+      scan 0 None false);
+  List.rev !intervals
+
+(* The callee of a line that is one call statement, [f(args);]. *)
+let called_function line =
+  let line = String.strip line in
+  match String.lsplit2 line ~on:'(' with
+  | Some (callee, _) when String.is_suffix line ~suffix:");" ->
+      let callee = String.rstrip callee in
+      Option.some_if
+        ((not (String.is_empty callee))
+        && String.for_all callee ~f:(fun c -> Char.is_alphanum c || Char.equal c '_'))
+        callee
+  | _ -> None
+
+(** [main_logic_lines source] is the 1-based numbers of the lines of a generated source that hold
+    its kernels' statements, in program order: each kernel's lines after its
+    {!Ir.C_syntax.main_logic_marker}, up to the closing brace of its definition -- with, where the
+    kernel was rendered OUTLINED (gh-ocannl-1603), each call to one of its parts replaced by that
+    part's body lines. So a reading of a kernel's statements does not depend on whether a size
+    threshold moved them into parts: the parts are found from what the renderer emitted -- the
+    definitions carrying {!Ir.Kernel_outline.part_attribute}, and the calls the main logic makes to
+    them -- not from how they are named. The kernel's signature, its local declarations and the
+    prepended builtins are none of these lines.
+
+    A source with no marker, a marker outside any definition, or a part definition no kernel's main
+    logic calls (a reading that would silently miss its statements) fails the run through
+    {!Verdict}. The empty source -- what {!read} answers after already failing -- reads as no lines.
+*)
+let main_logic_lines source =
+  let lines = Array.of_list (String.split_lines source) in
+  let n = Array.length lines in
+  let intervals = brace_intervals lines in
+  (* A line opening several braces: its first opens the construct the line's header declares, and
+     that one closes last. *)
+  let closing_of = Hashtbl.create (module Int) in
+  List.iter intervals ~f:(fun (opening, closing) ->
+      Hashtbl.update closing_of opening ~f:(function
+        | Some c -> Int.max c closing
+        | None -> closing));
+  (* The outlined parts' definitions, by name: a header carrying the part attribute (its
+     preprocessor guard is not one) that opens a body before any [;] ends it as a declaration. *)
+  let parts = Hashtbl.create (module String) in
+  Array.iteri lines ~f:(fun h line ->
+      if
+        String.is_substring line ~substring:Ir.Kernel_outline.part_attribute
+        && not (String.is_prefix (String.lstrip line) ~prefix:"#")
+      then
+        match String.lsplit2 line ~on:'(' with
+        | None -> ()
+        | Some (prefix, _) -> (
+            let rec body_opening k =
+              if k >= n || String.mem lines.(k) ';' then None
+              else if String.mem lines.(k) '{' then Some k
+              else body_opening (k + 1)
+            in
+            match body_opening h with
+            | None -> ()
+            | Some opening ->
+                Option.iter (Hashtbl.find closing_of opening) ~f:(fun closing ->
+                    Hashtbl.set parts
+                      ~key:(Ir.Kernel_outline.trailing_ident prefix)
+                      ~data:(opening + 1, closing - 1))));
+  let reached = Hash_set.create (module String) in
+  let markers =
+    Array.filter_mapi lines ~f:(fun i line ->
+        Option.some_if (String.is_substring line ~substring:Ir.C_syntax.main_logic_marker) i)
+  in
+  if Array.is_empty markers && not (String.is_empty (String.strip source)) then
+    Verdict.fail
+      ("Generated.main_logic_lines: the source has no " ^ Ir.C_syntax.main_logic_marker
+     ^ " marker, so no kernel's statements can be told from the rest of it");
+  let numbered =
+    Array.to_list markers
+    |> List.concat_map ~f:(fun marker ->
+        (* The kernel's definition: the innermost brace pair around its marker. *)
+        let enclosing =
+          List.filter intervals ~f:(fun (opening, closing) -> opening < marker && marker < closing)
+          |> List.min_elt ~compare:(fun (o1, c1) (o2, c2) -> Int.compare (c1 - o1) (c2 - o2))
+        in
+        match enclosing with
+        | None ->
+            Verdict.fail
+              (Printf.sprintf
+                 "Generated.main_logic_lines: the marker on line %d is in no definition" (marker + 1));
+            []
+        | Some (_, closing) ->
+            List.range (marker + 1) closing
+            |> List.concat_map ~f:(fun k ->
+                match
+                  Option.bind
+                    (called_function lines.(k))
+                    ~f:(fun f -> Option.map (Hashtbl.find parts f) ~f:(fun body -> (f, body)))
+                with
+                | Some (f, (first, last)) ->
+                    Hash_set.add reached f;
+                    List.range first (last + 1)
+                | None -> [ k ]))
+  in
+  Hashtbl.iter_keys parts ~f:(fun f ->
+      if not (Hash_set.mem reached f) then
+        Verdict.fail
+          (Printf.sprintf
+             "Generated.main_logic_lines: the outlined part %s is called from no kernel's main \
+              logic, so a reading of the kernels' statements would miss its body"
+             f));
+  List.map numbered ~f:(fun k -> k + 1)
+
+(** [main_logic source] is the text of {!main_logic_lines}: the kernels' statements, an outlined
+    kernel's parts spliced in at their calls, one line per line. *)
+let main_logic source =
+  let lines = Array.of_list (String.split_lines source) in
+  String.concat ~sep:"\n" (List.map (main_logic_lines source) ~f:(fun k -> lines.(k - 1)))

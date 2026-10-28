@@ -94,17 +94,17 @@
    attributes an inlined function's instructions to the CALLEE's lines, so an exact anchor on a line
    whose only content is a call to a same-kernel conversion carries no [.loc] inside the loop at
    all. Every row tries its exact source lines first and, only when none is carried, falls back to
-   the smallest brace-delimited range containing its unique patterns after the generated function's
-   [Main logic] marker -- in that order, because the range also names the compiler's OWN loops
-   inside the construct, and the shortest of those is what [Innermost] would then report on the gcc
-   columns that never needed the widening. See [asm_census_cases.ml]. - {b whether a whole-vector
-   builtin is lowered whole-vector}, which is what the sharp scalarization claim reads -- see
-   {!packed_half_widen}. - {b how the assembler SPELLS a packed instruction}, which is what every
-   count reads. Apple's arm64 dialect carries the arrangement on the mnemonic ([fmla.4s v0, v1, v2])
-   rather than on the registers, and a census blind to that spelling reports a fully packed k-loop
-   as [vector=0 scalar_fp=0] -- 34 of its 49 instructions invisible -- which is how macos-latest
-   failed the vector-majority claim on [0 > 0] over a tile nothing was wrong with. See
-   [asm_census_cases.ml].
+   the smallest brace-delimited range containing its unique patterns among the generated kernel's
+   statements -- after its [Main logic] marker, an outlined kernel's parts included -- in that
+   order, because the range also names the compiler's OWN loops inside the construct, and the
+   shortest of those is what [Innermost] would then report on the gcc columns that never needed the
+   widening. See [asm_census_cases.ml]. - {b whether a whole-vector builtin is lowered
+   whole-vector}, which is what the sharp scalarization claim reads -- see {!packed_half_widen}. -
+   {b how the assembler SPELLS a packed instruction}, which is what every count reads. Apple's arm64
+   dialect carries the arrangement on the mnemonic ([fmla.4s v0, v1, v2]) rather than on the
+   registers, and a census blind to that spelling reports a fully packed k-loop as [vector=0
+   scalar_fp=0] -- 34 of its 49 instructions invisible -- which is how macos-latest failed the
+   vector-majority claim on [0 > 0] over a tile nothing was wrong with. See [asm_census_cases.ml].
 
    Before claiming a count is zero, ask whether the zero is the emission's, the compiler's, or the
    reader's: every census profile prints a [residual] count of instructions no classifier
@@ -1569,19 +1569,22 @@ type emitted = {
   kernel : string;  (** the routine's name, which is also its source file's basename *)
   src_path : string;
   source : string;
+  main_logic : Set.M(Int).t;
+      (** {!Generated.main_logic_lines} of [source]: the kernel's statement lines, its outlined
+          parts' bodies included *)
   loops : kernel_loop list;
 }
 
 (* A compiler may attribute an inlined conversion to the callee or to another statement in the
    generated construct. The exact tensor-derived lines remain the first choice: widening every GCC
    row eagerly admits unrelated nested compiler loops. When no loop carries an exact line, fall back
-   to the construct's brace-delimited source range. [Main logic] excludes the same names in the
-   function signature; the smallest enclosing block then distinguishes every reduction/tile from its
-   neighbours. *)
+   to the construct's brace-delimited source range. Reading only the kernel's statement lines
+   ({!Generated.main_logic_lines}) excludes the same names in the function signature, and follows a
+   kernel rendered outlined into its parts (gh-ocannl-1678); the smallest enclosing block then
+   distinguishes every reduction/tile from its neighbours. *)
 
 let loop_anchor_range (e : emitted) (loop : kernel_loop) =
-  Census.anchor_block_lines ~source:e.source ~after_pattern:"/* Main logic. */"
-    ~patterns:loop.anchors
+  Census.anchor_block_lines ~source:e.source ~within:e.main_logic ~patterns:loop.anchors
 
 let loop_selection (loop : kernel_loop) =
   match loop.kind with
@@ -1591,7 +1594,7 @@ let loop_selection (loop : kernel_loop) =
 
 let census_loop parsed (e : emitted) (loop : kernel_loop) =
   Census.census_source_in ~selection:(loop_selection loop) parsed loop.op_class ~source:e.source
-    ~patterns:loop.anchors ~after_pattern:"/* Main logic. */"
+    ~patterns:loop.anchors ~within:e.main_logic
 
 type row = {
   toolchain : string;
@@ -1670,13 +1673,15 @@ let emit_all ?(settings = fp16_settings) ~exe ~root ~widths () =
                                 }
                           | _ -> None)
                     in
+                    let source = Stdio.In_channel.read_all src_path in
                     Some
                       {
                         width;
                         fp16 = fp16_tag;
                         kernel;
                         src_path;
-                        source = Stdio.In_channel.read_all src_path;
+                        source;
+                        main_logic = Set.of_list (module Int) (Generated.main_logic_lines source);
                         loops;
                       })
           | _ ->

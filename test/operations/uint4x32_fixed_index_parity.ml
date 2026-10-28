@@ -52,11 +52,9 @@ let run ~virtual_counter ~prec ~packed output_dims =
 
 let bits_equal a b = Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b)
 
-(* The routine body only: the prepended builtins define every conversion. *)
-let body s =
-  match String.substr_index s ~pattern:"Main logic" with
-  | Some i -> String.subo s ~pos:i
-  | None -> s
+(* The kernel's statements only, an outlined kernel's parts included (gh-ocannl-1678): the prepended
+   builtins define every conversion. *)
+let body s = Generated.main_logic s
 
 let check ~name ~prec ~packed output_dims =
   Verdict.case name @@ fun () ->

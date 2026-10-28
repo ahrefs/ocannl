@@ -41,15 +41,10 @@ let run ~virtual_ ~prec ?input_dims output_dims =
 
 let bits_equal a b = Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b)
 
-(* Structural checks scan only the routine body: the prepended builtin definitions mention both the
-   vectorized and the lane builtins (the lane builtins are implemented via the _vec ones). *)
-let has sub s =
-  let body =
-    match String.substr_index s ~pattern:"Main logic" with
-    | Some i -> String.subo s ~pos:i
-    | None -> s
-  in
-  String.is_substring body ~substring:sub
+(* Structural checks scan only the kernel's statements: the prepended builtin definitions mention
+   both the vectorized and the lane builtins (the lane builtins are implemented via the _vec ones).
+   An outlined kernel's statements are its parts' bodies (gh-ocannl-1678). *)
+let has sub s = String.is_substring (Generated.main_logic s) ~substring:sub
 
 let check ~name ~prec ?input_dims output_dims =
   Verdict.case name @@ fun () ->

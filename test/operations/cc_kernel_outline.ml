@@ -101,4 +101,29 @@ let () =
     (part_definitions split_source >= 6);
   p "the split compile is compiled as more than one translation unit" (units >= 2);
   List.iter2_exn outputs (List.zip_exn whole split) ~f:(fun tn (whole, split) ->
-      p_all2 ("split and whole agree bit for bit on " ^ Tn.debug_name tn) split whole ~f:Float.equal)
+      p_all2 ("split and whole agree bit for bit on " ^ Tn.debug_name tn) split whole ~f:Float.equal);
+  (* gh-ocannl-1678: a test reading a kernel's statements out of its source follows its parts. The
+     split kernel's main logic only calls them, so the text after its marker -- how such tests read
+     before [Generated.main_logic] -- holds none of its statements, which the whole kernel's
+     does. *)
+  let after_marker source =
+    match String.substr_index source ~pattern:Ir.C_syntax.main_logic_marker with
+    | Some i -> String.subo source ~pos:i
+    | None -> ""
+  in
+  let split_statements = Generated.main_logic split_source
+  and whole_statements = Generated.main_logic whole_source in
+  let assignment line = String.mem line '=' in
+  p "the split kernel's statements, its parts spliced in at their calls, are the whole kernel's"
+    (String.equal
+       (Generated.normalize_minted split_statements)
+       (Generated.normalize_minted whole_statements));
+  p_exists "the split kernel's statements hold its assignments"
+    (String.split_lines split_statements)
+    ~f:assignment;
+  p_exists "the text after the whole kernel's marker holds its assignments"
+    (String.split_lines (after_marker whole_source))
+    ~f:assignment;
+  p_none "the text after the split kernel's own marker holds none of its assignments"
+    (String.split_lines (after_marker split_source))
+    ~f:assignment

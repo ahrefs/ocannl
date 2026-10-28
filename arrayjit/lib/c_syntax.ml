@@ -13,6 +13,11 @@ module Tn = Tnode
 
 type t = PPrint.document
 
+(** The comment every kernel's definition opens its main logic with: its statements, or -- outlined
+    (gh-ocannl-1603) -- the calls to its parts. A test reading a kernel's statements out of its
+    generated source starts there ([Test_utils.Generated.main_logic]). *)
+let main_logic_marker = "/* Main logic. */"
+
 (** Ordered XOR lane masks for one warp-shuffle reduction phase. The renderer and numeric reference
     models consume the same association (gh-ocannl-875). [width] is the active power-of-two prefix,
     either the warp width or the number of staged warp partials; a singleton needs no shuffle. Each
@@ -8597,7 +8602,7 @@ module C_syntax (B : C_syntax_config) = struct
         @ List.map locals ~f:snd)
     in
     let main_logic =
-      string "/* Main logic. */" ^^ hardline
+      string main_logic_marker ^^ hardline
       ^^
       if List.is_empty part_docs then main_logic_doc
       else

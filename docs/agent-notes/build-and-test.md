@@ -2335,6 +2335,19 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   empties the calling process's artifact directory, so from a library it runs in every executable
   linking it (gh-ocannl-723). The other way round is closed by `codegen_text_inventory`, which refuses a test source that reads
   `Utils.build_files_dir`/`Utils.build_file` itself.
+- A test asserting on a kernel's STATEMENTS -- not the prepended builtins, which spell every
+  conversion and vector builtin, nor the signature, which names every node -- reads them through
+  `Generated.main_logic` (text) or `Generated.main_logic_lines` (1-based line numbers, what the
+  asm census's brace-range fallback takes), never as the text after `/* Main logic. */`
+  (`C_syntax.main_logic_marker`). A large cc kernel is rendered outlined (gh-ocannl-1603): its main
+  logic only calls its `ARRAYJIT_KERNEL_PART` functions, which come BEFORE it in the file, so the
+  after-the-marker reading of an outlined kernel sees none of its statements -- a positive claim
+  goes red and a negative one ("emits no vectorized store") passes vacuously. The helpers splice
+  each part's body in at its call, finding the parts from the definitions the renderer emitted and
+  the calls the main logic makes, and fail the run on a part no kernel calls (gh-ocannl-1678).
+  Test-size kernels are never outlined at the default part weight, so check a reader under
+  `OCANNL_CC_KERNEL_PART_WEIGHT=1 OCANNL_CC_COMPILE_UNIT_MIN_BYTES=0 OCANNL_CC_COMPILE_JOBS=4`;
+  `test/operations/cc_kernel_outline` pins the splice against a whole compile.
 - **Before changing code generation, read the inventory**: `dune build
   @test/operations/runtest-codegen_text_inventory` prints, as its golden, every file in the tree
   that pins the TEXT of emitted code (gh-ocannl-712). Two populations, and no single search finds
