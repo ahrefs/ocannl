@@ -123,7 +123,7 @@ let claims =
   [
     "a whole-routine GPU seed pads the row to the mma tile";
     "every variant's floor and native compiles agree bit for bit";
-    "every variant's native compile compiled PTX, all of it for the device's own arch";
+    "every variant with floor PTX for another arch compiled native PTX, all for the device's arch";
     "some variant's floor compile compiled PTX for another arch";
     "every seed's routine is labeled tensorized at both targets";
   ]
@@ -179,7 +179,15 @@ let () =
       if not (Array.exists reference ~f:(fun v -> Float.(v <> 0.))) then
         failwith "ptx_target_parity: the natural form is all zeros, so the comparison is vacuous";
       p_all (List.nth_exn claims 1) results ~f:(fun (_, agree, _, _) -> agree);
-      p_all (List.nth_exn claims 2) results ~f:(fun (_, _, _, (_, _, nc)) ->
+      (* A variant whose floor compiles already targeted the device's arch (an sm_80 device's tf32
+         seeds) has the same option list at both targets, so its native compile may be served by the
+         kernel code cache and record nothing: only the others must compile at native. *)
+      let at_native (c : Mma.ptx_compile) =
+        Option.equal String.equal c.Mma.target (Some (native_arch c))
+      in
+      p_all (List.nth_exn claims 2)
+        (List.filter results ~f:(fun (_, _, (_, _, fc), _) -> not (List.for_all fc ~f:at_native)))
+        ~f:(fun (_, _, _, (_, _, nc)) ->
           (not (List.is_empty nc))
           && List.for_all nc ~f:(fun c ->
               Option.equal String.equal c.Mma.target (Some (native_arch c))));
