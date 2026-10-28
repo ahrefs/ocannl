@@ -3396,7 +3396,17 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   its 30-minute ceiling: the key carries the runner image (`ImageOS`) and a prefix restore of the
   previous digest's files, so a changed dependency refetches only itself; the caller refreshes the
   apt index first if it needs a current one, and keeps its own plain install of the same list
-  after the action as the fallback. The one-off `Failed to find any opam release that matches the specified version
+  after the action as the fallback. The fill is a step of its own with its own cap (gh-ocannl-1649):
+  `apt-get --download-only` in fresh attempts of `fetch-attempt-minutes` each, keeping finished
+  files, since the slowness is per apt session, not per runner -- so a 15-minute job ceiling
+  never has to clear a slow fill. **`actions/cache`'s post step inside a composite action that
+  another composite calls evaluates its inputs empty** (`[warning]Input required and not
+  supplied: path` at job end) and saves nothing, while the same action called straight from a
+  workflow saves: a cache whose restore says `Cache not found` on every run is read at its post
+  step, not its restore. So the action saves through an explicit `actions/cache/save` step right
+  after the fill -- which also keeps a fill that a later failure or cancellation follows (a post
+  step saves only on job success) -- and only a complete set, since an exact hit is never saved
+  over. The one-off `Failed to find any opam release that matches the specified version
   constraint` (2026-10-22 15:06-15:24Z, several jobs within seconds, green on rerun) is a different
   lookup: the action lists `ocaml/opam`'s releases through the GitHub API at every run and found
   no stable one in that answer. setup-ocaml v3.9.0 has no input that pins the opam version or

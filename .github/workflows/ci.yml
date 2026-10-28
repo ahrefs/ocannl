@@ -830,6 +830,10 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || !inputs.windows_only && inputs.ocaml_compiler == '5.5.x'
     name: Formatting
     runs-on: ubuntu-latest
+    # Clears the job's ~5 minutes plus the apt pre-install's own cap (its fill:
+    # three capped attempts of 2 minutes, `apt-debs-cache`), so a slow mirror
+    # session costs those minutes rather than the job (gh-ocannl-1649). The
+    # Dune-floor job below has the same budget for the same reason.
     timeout-minutes: 15
     steps:
     - uses: actions/checkout@v7

@@ -19,9 +19,26 @@ description: >-
 # match. That check is also what makes the prefix restore safe: on a changed
 # digest the newest entry for the same image is restored, apt takes the files
 # that still match and fetches only the rest, files the plan no longer names
-# are dropped, and the post step saves the result under the new key. The image
+# are dropped, and the result is saved under the new key. The image
 # (the runner's `ImageOS`) is in the key, so ubuntu-22.04 and ubuntu-24.04 never restore
 # each other's files.
+#
+# The fill is a step of its own with its own cap (gh-ocannl-1649), so a slow
+# mirror costs a bounded few minutes rather than the caller's job ceiling:
+# `apt-get --download-only` into the cache directory, each attempt a fresh
+# apt-get capped at `fetch-attempt-minutes`, keeping what earlier attempts
+# finished. The slowness is per apt session -- a slow run's later fetches from
+# the same mirror ran at MB/s -- so a fresh attempt is the remedy, not a longer
+# wait. The cap bounds slow SESSIONS: a mirror slow for every attempt leaves
+# the rest to the install, at the mirror's pace.
+#
+# The save is an explicit `actions/cache/save` step right after the fill, not
+# `actions/cache`'s post step, for two reasons. Run inside `setup-ocaml-debs`
+# -- a composite action calling this one -- the post step evaluated its inputs
+# empty (`Input required and not supplied: path`) and saved nothing, on every
+# job, so every run filled from the mirror. And a post step saves only when
+# the whole job succeeds, so a fill that a later failure or cancellation
+# followed was lost too. Only a complete fill is saved.
 #
 # This action does not refresh the apt index; a caller whose packages need a
 # current one (a stale image index 404s on superseded versions, gh-ocannl-698)
@@ -44,6 +61,17 @@ inputs:
       Cache key prefix naming this package set, versioned (e.g. `texlive-debs-v1`).
       Also names the archive directory under $RUNNER_TEMP.
     required: true
+  fetch-attempts:
+    description: >-
+      How many fresh `apt-get --download-only` runs the fill gets before it
+      gives up and leaves the rest to the install.
+    required: false
+    default: '3'
+  fetch-attempt-minutes:
+    description: >-
+      The cap on each of those runs, in minutes (a decimal is fine).
+    required: false
+    default: '2'
 
 runs:
   using: composite
@@ -82,26 +110,44 @@ runs:
         printf '%s\n' "$uris" | awk '{print $2}' >"$dir.files"
         echo "files=$dir.files" >>"$GITHUB_OUTPUT"
         echo "digest=$(printf '%s\n' "$uris" | sort | sha256sum | cut -c1-16)" >>"$GITHUB_OUTPUT"
-    - if: steps.plan.outputs.digest != ''
-      uses: actions/cache@v6
+    - id: restore
+      if: steps.plan.outputs.digest != ''
+      uses: actions/cache/restore@v6
       with:
         path: ${{ steps.plan.outputs.dir }}
         key: ${{ inputs.key }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.plan.outputs.image }}-${{ steps.plan.outputs.digest }}
         restore-keys: ${{ inputs.key }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.plan.outputs.image }}-
-    - if: steps.plan.outputs.digest != ''
+    # The fill, on its own and capped: download into the cache directory, a
+    # fresh apt-get per attempt.
+    - id: fetch
+      if: steps.plan.outputs.digest != ''
       shell: bash
       env:
         DEBS: ${{ steps.plan.outputs.dir }}
         FILES: ${{ steps.plan.outputs.files }}
         PACKAGES: ${{ steps.plan.outputs.packages }}
+        ATTEMPTS: ${{ inputs.fetch-attempts }}
+        MINUTES: ${{ inputs.fetch-attempt-minutes }}
       run: |
-        # The caller's own command, reading (and on a miss filling) the cache
-        # directory. Root downloads unsandboxed: the `_apt` user cannot reach
-        # a directory under the runner's home.
-        sudo apt-get --yes -o Dir::Cache::Archives="$DEBS" -o APT::Keep-Downloaded-Packages=true \
-          -o APT::Sandbox::User=root install $PACKAGES ||
-          echo "::warning::pre-installing the apt packages from the cache failed; the caller installs them itself"
-        # actions/cache's post step saves as the runner user.
+        # Root downloads unsandboxed: the `_apt` user cannot reach a directory
+        # under the runner's home. Every attempt keeps what the previous ones
+        # finished (whole files, and the partial one apt resumes).
+        status=1
+        for attempt in $(seq 1 "$ATTEMPTS"); do
+          status=0
+          sudo timeout --kill-after=30s "${MINUTES}m" apt-get --yes --download-only \
+            -o Dir::Cache::Archives="$DEBS" -o APT::Keep-Downloaded-Packages=true \
+            -o APT::Sandbox::User=root install $PACKAGES || status=$?
+          if [ "$status" -eq 0 ]; then break; fi
+          # A stopped apt-get can leave its progress line open, and a workflow
+          # command is read only at the start of a line.
+          echo
+          case $status in
+            124 | 137) echo "::warning::fetch attempt $attempt/$ATTEMPTS outlived its ${MINUTES}-minute cap (a slow mirror session); stopped it" ;;
+            *) echo "::warning::fetch attempt $attempt/$ATTEMPTS failed with status $status" ;;
+          esac
+        done
+        # The save runs as the runner user.
         sudo rm -rf "$DEBS/partial" "$DEBS/lock"
         sudo chown -R "$(id -u):$(id -g)" "$DEBS"
         # Drop what a prefix restore brought that this plan no longer names,
@@ -111,3 +157,29 @@ runs:
           grep -qxF -- "${f##*/}" "$FILES" || { echo "dropping stale ${f##*/}"; rm -f -- "$f"; }
         done
         ls -l "$DEBS"
+        if [ "$status" -eq 0 ]; then
+          echo "complete=true" >>"$GITHUB_OUTPUT"
+        else
+          echo "::warning::the cache directory is incomplete, so it is not saved; the install below fetches the rest itself"
+        fi
+    # Saved here, explicitly, rather than by actions/cache's post step: see the
+    # header. Only a complete set: an exact hit is never saved over, so an
+    # incomplete entry under the full key would stay incomplete.
+    - if: steps.fetch.outputs.complete == 'true' && steps.restore.outputs.cache-hit != 'true'
+      continue-on-error: true
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ steps.plan.outputs.dir }}
+        key: ${{ inputs.key }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.plan.outputs.image }}-${{ steps.plan.outputs.digest }}
+    - if: steps.plan.outputs.digest != ''
+      shell: bash
+      env:
+        DEBS: ${{ steps.plan.outputs.dir }}
+        PACKAGES: ${{ steps.plan.outputs.packages }}
+      run: |
+        # The caller's own command, reading the cache directory; whatever an
+        # incomplete fetch left out, it fetches itself (apt needs the
+        # `partial` directory the fill removed before its save).
+        mkdir -p "$DEBS/partial"
+        sudo apt-get --yes -o Dir::Cache::Archives="$DEBS" -o APT::Sandbox::User=root install $PACKAGES ||
+          echo "::warning::pre-installing the apt packages from the cache failed; the caller installs them itself"

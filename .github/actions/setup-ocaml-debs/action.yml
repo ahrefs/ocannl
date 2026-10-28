@@ -18,7 +18,8 @@ description: >-
 # and on 2026-10-22 it put one main shard at 37.5 minutes. The opam caches
 # were hits throughout; opam played no part.
 #
-# The cache mechanics are `apt-debs-cache`'s, which says how the key works.
+# The cache mechanics are `apt-debs-cache`'s, which says how the key works
+# and how the fill is capped and saved.
 # setup-ocaml itself is the fallback: its own install of the same list runs
 # next and fetches whatever this left. The package list restates
 # setup-ocaml's. If the action's list changes, the pre-install covers less,
