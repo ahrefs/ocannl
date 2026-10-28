@@ -400,6 +400,45 @@ let () =
     (Poly.equal (Context.get_values (Context.run c_b r_b) out_b) shifted2);
   List.iter [ c_w; c_s; c_b ] ~f:Context.release
 
+(* A root's constants live as long as a release unit binds them (gh-ocannl-1654): the release of the
+   last one frees the pool and drops its cache entries, so compiling the same graph into fresh
+   roots, each released, holds memory flat -- which the device-wide cache did by reusing one buffer,
+   and a per-root cache kept until device teardown would not. A root's sibling keeps the pool alive,
+   and once every binder is gone the root's next compile allocates afresh. *)
+let () =
+  Verdict.case "chr_root_constants_release" @@ fun () ->
+  let x = node "chr_rr_x" and out = node "chr_rr_out" in
+  let live () = Ir.Alloc_census.live_pools (Ir.Alloc_census.snapshot ()) in
+  let samples =
+    List.init 8 ~f:(fun k ->
+        let c, r =
+          link_shift ~ctx:(Context.auto ()) ~name:(Printf.sprintf "chr_rr_%d" k) ~src:x ~dst:out ()
+        in
+        let c = Context.run (Context.set_values c x seed) r in
+        let ok = Poly.equal (Context.get_values c out) shifted in
+        Context.release c;
+        (ok, live ()))
+  in
+  p_all "chr_root_constants_release: every fresh root runs from its own seed" samples ~f:fst;
+  (match samples with
+  | (_, first) :: rest ->
+      p_all "chr_root_constants_release: releasing each fresh root's context holds live pools flat"
+        rest ~f:(fun (_, n) -> n = first)
+  | [] -> pf "chr_root_constants_release: the roots ran" false);
+  let root = Context.auto () in
+  let out2 = node "chr_rr_out2" in
+  let c1, _ = link_shift ~ctx:root ~name:"chr_rr_s1" ~src:x ~dst:out () in
+  let c2, r2 = link_shift ~ctx:root ~name:"chr_rr_s2" ~src:x ~dst:out2 () in
+  let c1 = Context.set_values c1 x seed in
+  Context.release c1;
+  pf "chr_root_constants_release: a sibling still binding the root's constant keeps it"
+    (Poly.equal (Context.get_values (Context.run c2 r2) out2) shifted);
+  Context.release c2;
+  let c3, r3 = link_shift ~ctx:root ~name:"chr_rr_s3" ~src:x ~dst:out () in
+  pf "chr_root_constants_release: once every binder is released, the next compile allocates afresh"
+    (ro_refused "chr_rr_x." (fun () -> Context.run c3 r3));
+  Context.release c3
+
 (* A host-initialized literal is cached once per device: every root binds the same buffer for it
    (gh-ocannl-1654). It is writable all the same, so a write one root makes there changes the bytes
    the other's routine reads; that root is refused as stale until it re-seeds or copies

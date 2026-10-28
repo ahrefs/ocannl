@@ -197,9 +197,16 @@ files.
   this, as for all of `Context`). Not refused: `to_host`/`get_values` and real copies out of a stale
   source, since reads check no initialization. Lookups (`plan_delta`, `link_floor`,
   `owned_pool_ids`) go through `BI.find_constant`, root first; insertion through `BI.constant_key`.
-  Boundary: rooted constant pools, like all constant pools, are freed only at device teardown, so a
-  process creating many roots holds one constant set per root. Guard: `context_handle_refusals`
-  (`chr_root_constants`, `chr_shared_overwrite`, `chr_shared_writer`, `chr_shared_implicit`).
+  Rooted constants pack into pools of their own (`dp_new_root_constants`), and each release unit
+  holds the rooted pools its `ctx_buffers` binds (`held_constant_pools`, counted in the device's
+  `rooted_constant_owners` at the three places a unit is minted: `make_context`, `make_child`, an
+  upload fork); the release of the last binder frees the pool and drops its cache entries, so
+  fresh roots compiled and released one after another hold memory flat, as the device-wide cache
+  did by reuse. A unit nobody releases keeps its pools, as for working pools; a discarded link's
+  rooted pool stays cached at count 0 until a later binder's release or device teardown. A new
+  place that mints a `finalized` flag must hold its rooted pools too, or a release frees a pool it
+  binds. Guard: `context_handle_refusals` (`chr_root_constants`, `chr_root_constants_release`,
+  `chr_shared_overwrite`, `chr_shared_writer`, `chr_shared_implicit`).
 - **A transfer adds no lifecycle level** (gh-ocannl-1623). `device_to_device` into a buffer `dst`
   already holds returns `dst` itself, and a merge-buffer fill returns `{ dst with
   merge_buffer_node }`: neither allocates in `dst`, so both are `dst`'s release unit (releasing
@@ -217,9 +224,9 @@ files.
   group nevertheless; both allocation and footprint scoring use `partition_layout_groups`.
   Two fresh contexts must retain independent parameter/state edits and resets. The marker changes
   allocation only, not the post-virtualization scalar recompute-price inputs.
-- **Two classes `release` cannot reach, so "bounded" always needs a qualifier.** (a) Constants
-  (per device for host literals, per root otherwise): it skips every `constant_buffer_cache` key by
-  design. That is right for a shared weight
+- **Two classes `release` cannot reach, so "bounded" always needs a qualifier.** (a) Device-wide
+  constants (host literals; a root's constants are freed with their last binder, above): it skips
+  every `Shared` `constant_buffer_cache` key by design. That is right for a shared weight
   and wrong for a hoisted `Stage` candidate, whose `apply_stage` mints a FRESH packed-constant tnode
   per application (`fresh_tile_id ()`), so a CPU search seeding `hoist` sketches grows one constant
   pool per such candidate — measured on `cc` at 1 → 109 constant pools over 181 candidates while

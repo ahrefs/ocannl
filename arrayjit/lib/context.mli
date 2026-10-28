@@ -691,11 +691,12 @@ val release : t -> unit
     queries), only for touching buffers. The check walks the lifecycle chain, one atomic read per
     ancestor.
 
-    What it does {e not} free: constants ({!Ir.Backend_intf.field-device.constant_buffer_cache}
-    entries: host literals per device, other constants per root), which are shared across contexts
-    by design and outlive them until device teardown. That is a real bound on what this can do for a
-    schedule search — a hoisted [Stage] candidate mints a fresh packed constant per application, so
-    those accumulate whatever the caller does here (gh-ocannl-565).
+    What it does {e not} free: device-wide host-literal constants
+    ({!Ir.Backend_intf.field-device.constant_buffer_cache} entries), which are shared across
+    contexts by design and outlive them until device teardown. A root's other constants are freed
+    with the release of the last context binding them (gh-ocannl-1654). That is a real bound on what
+    this can do for a schedule search — a hoisted [Stage] candidate mints a fresh packed constant
+    per application, so those accumulate whatever the caller does here (gh-ocannl-565).
 
     This exists because releasing is otherwise not something a finalizer can be relied on to do
     (gh-ocannl-550): the backends' pool tables hold a strong reference to every slab they allocated,

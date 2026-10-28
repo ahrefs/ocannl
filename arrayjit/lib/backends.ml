@@ -1167,6 +1167,11 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     dp_cached_constants : (Tn.t * buffer_loc) list;
         (** Constants a [constant_buffer_cache] hit already resolves on this device. *)
     dp_new_constants : group_layout option;
+        (** New host-literal constants: device-wide ([Constant_key.Shared]). *)
+    dp_new_root_constants : group_layout option;
+        (** New constants of the context's root ([Constant_key.Rooted]), in pools of their own: such
+            a pool is freed once no live release unit binds it (gh-ocannl-1654), so it must hold
+            nothing a device-wide entry points into. *)
   }
 
   (* Lay a group out into pools. With a liveness plan (the working group under [buffer_aliasing]),
@@ -1235,10 +1240,17 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
           | Some data -> First (key, data)
           | None -> Second (key, node))
     in
+    let shared, rooted =
+      List.partition_tf fresh ~f:(fun (key, _) ->
+          match constant_key ~root:context.constant_root key with
+          | Constant_key.Shared _ -> true
+          | Constant_key.Rooted _ -> false)
+    in
     {
       dp_working = plan_group ?arena:alias_spans ~cap ~constant:false working;
       dp_cached_constants = cached;
-      dp_new_constants = plan_group ~cap ~constant:true fresh;
+      dp_new_constants = plan_group ~cap ~constant:true shared;
+      dp_new_root_constants = plan_group ~cap ~constant:true rooted;
     }
 
   (* The pool allocations of one delta, counted at the shared seam: what [allocate_delta] and the
@@ -1386,7 +1398,9 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
          [finalize] (freed at device teardown). *)
       List.iter plan.dp_cached_constants ~f:(fun (key, data) ->
           ctx_buffers := Map.add_exn !ctx_buffers ~key ~data);
-      Option.iter plan.dp_new_constants ~f:(fun gl ->
+      List.iter
+        (List.filter_opt [ plan.dp_new_constants; plan.dp_new_root_constants ])
+        ~f:(fun gl ->
           pack gl ~register:(fun key ~alloc ->
               let cache_key = constant_key ~root:context.constant_root key in
               let data =
@@ -1474,12 +1488,18 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
           lowered
     in
     let plan = plan_delta context ~alias_spans lowered in
-    let groups = List.filter_opt [ plan.dp_working; plan.dp_new_constants ] in
+    let groups =
+      List.filter_opt [ plan.dp_working; plan.dp_new_constants; plan.dp_new_root_constants ]
+    in
     let bytes gl = List.sum (module Int) gl.gl_pools ~f:fst in
     let summary =
       {
         ld_working_bytes = Option.value_map plan.dp_working ~default:0 ~f:bytes;
-        ld_constant_bytes = Option.value_map plan.dp_new_constants ~default:0 ~f:bytes;
+        ld_constant_bytes =
+          List.sum
+            (module Int)
+            (List.filter_opt [ plan.dp_new_constants; plan.dp_new_root_constants ])
+            ~f:bytes;
         ld_pools = List.sum (module Int) groups ~f:(fun gl -> List.length gl.gl_pools);
         ld_liveness_planned = Option.is_some alias_spans;
       }
@@ -1777,6 +1797,12 @@ let finalize (type dev runner event)
     match cleanup () with
     | () ->
         Alloc_census.count_context_released ();
+        (* gh-ocannl-1654: the root's constant pools this unit was the last live binder of. Past the
+           committed flag, like the hooks: the unit's own pools ARE freed, and the counts are
+           already given back, so a failed free leaks the pool rather than freeing it twice. *)
+        let unowned = release_rooted_constants ctx.device ctx.held_constant_pools in
+        Option.iter Backend.free_pool ~f:(fun free_pool ->
+            free_pools_continuing ctx.device ~free_pool (Set.to_list unowned));
         let violations = arena_violations () in
         run_release_hooks ();
         if not (List.is_empty violations) then

@@ -251,6 +251,8 @@ struct
       updating_for = Hashtbl.create (module Tnode);
       updating_for_merge_buffer = None;
       constant_buffer_cache = Hashtbl.create (module Constant_key);
+      rooted_constant_owners = Hashtbl.create (module Int);
+      rooted_constant_mutex = Stdlib.Mutex.create ();
       next_pool_id = merge_buffer_pool_id + 1;
     }
 
@@ -270,6 +272,7 @@ struct
       upload_arenas = fresh_upload_arenas ();
       release_hooks = ref [];
       optimize_ctx;
+      held_constant_pools = Set.empty (module Int);
       constant_root = Atomic.fetch_and_add next_constant_root 1;
       merge_buffer_node = None;
     }
@@ -289,6 +292,9 @@ struct
       upload_arenas = fresh_upload_arenas ();
       release_hooks = ref [];
       optimize_ctx;
+      held_constant_pools =
+        hold_rooted_constants parent.device
+          (rooted_pools_of parent.device ~root:parent.constant_root ctx_buffers);
       constant_root = parent.constant_root;
       merge_buffer_node;
     }
