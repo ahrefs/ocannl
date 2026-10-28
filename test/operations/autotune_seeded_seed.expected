@@ -10,7 +10,7 @@ the search crowned the seeded plan, its reading the report's seeded_ms and best_
 the crowned gradients are bitwise the untuned compile's: true
 the control: the plain default pipeline's bias gradient differs in some cell: true
 in the refused-seed search too, every seeded attempt compiled and was timed: true
-a refused seeded window is retried after the seed pass: true
+a refused seeded window is retried once, before the singles inside it: true
 the retried seeded plan is crowned and reported as seeded_ms: true
 a search that times nothing returns the untuned compile's gradients, bitwise: true
 a search-less tune with no cache ships the untuned compile's gradients, bitwise: true

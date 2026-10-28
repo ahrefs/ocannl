@@ -1787,7 +1787,9 @@ files.
   total 550 s). The staff's sketched kernels miss the HIP kernel code cache, though they are
   unchanged across a key's sweep. Arm A's wall was nonetheless only +6% (2055 vs 1934 s), because
   the shorter windows time faster. What would make the singles matter is a backdrop that IS the
-  seeded composite (the seeded plan with one key replaced), not a different setting of this flag.
+  seeded composite (the seeded plan with one key replaced), not a different setting of this flag:
+  the seeded singles (next bullet) are that backdrop, and where they run this flag steers only the
+  split-reduce sweep.
   Their calibration, staffed or bare, no longer carries the depth-2 probe once they read twice the
   batch target (gh-ocannl-1627, next to the hopeless-window bullet): ~26% of a bare single's timing
   on minix.
@@ -1830,6 +1832,30 @@ files.
   worth its approximate site matching.
   `test/operations/autotune_staffed_singles` scripts an additive landscape and seeds the start through
   the `Autotune.on_staffed_start` seam, which only a seeded plan fills in production.
+- **Seeded singles time a segment's sketches inside the seeded plan itself** (gh-ocannl-1664, config
+  `autotune_seeded_singles`, default on). Where the search seeds an `F_seeded` plan with a
+  segmentation of its own (CUDA/HIP under the seeding settings), each single is `F_swap`: the plan
+  with one segment code's decision replaced by `Seeded_sketch` of a seed (`Autotune.seeded_swap`),
+  compiled through the plan's own replay (`seeded_replay ~fallback:false`, so a swap that does not
+  apply declines rather than timing the default pipeline under its label). The keys are the plan's
+  OWN segments, of the split routine and without the search's zero fold, enumerated by
+  `Autotune.seeded_single_seeds` (the prelude applied, the recorded segmentation replayed, then
+  `search_seed_params` per keyed segment): the search's coarse keys share no digest with them, which
+  is why the staffed sweep could never start from the plan's recorded decisions. A single therefore
+  differs from the plan in at most its key's segments, so it reads on the plan's basis (about the
+  incumbent's time, not the preset backdrop's 131-144 ms around an 18 ms plan on minix) and is
+  ranked by the beam like any whole routine. The sweep is the staffed `sweeper` with the running
+  composite starting AS the plan (empty choices, `running_ms` = `seeded_ms`): a key it has not
+  changed keeps the plan's decision, only changed choices travel as staff (so the bare retry fires
+  only when a changed staff could be the culprit), and a key joins only by reading faster than the
+  running composite whole. The plan's refused window is retried BEFORE the sweep, since the sweep's
+  incumbent is its reading. With it on, the coarse and fine singles (bare or staffed), the coarse
+  and fine recombination composites and the playoff do not run: `fiss_sketch_candidates = 0`, and
+  the report's `seeded_single_*` fields count the sweep. The split-reduce singles are unchanged
+  (still around presets). `test/operations/autotune_seeded_singles` pins the menu and the swap
+  structurally on every backend (a plan derived for "cuda" on synthetic limits) and the timing
+  basis on CUDA/HIP from the windows' digests (segment counts equal to the plan's, a bare single
+  differing in at most its key's units).
 - **Beam rounds after the step search's composites bought nothing measured on gpt2_mini, at +150% search**
   (gh-ocannl-1137; a capped correctness-grade probe on a shared rog box, CUDA, approximate profile).
   A round is adopted only when its best beats the incumbent by `min_progress` (1%); a sub-1% best is

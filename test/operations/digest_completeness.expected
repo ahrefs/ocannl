@@ -116,6 +116,7 @@ search-shaping -- it steers the search: how wide, how long, what is proposed, wh
   autotune_round_expansion
   autotune_rounds
   autotune_search
+  autotune_seeded_singles
   autotune_split_reduce_max_sites
   autotune_staffed_singles
   model_peak_flops
