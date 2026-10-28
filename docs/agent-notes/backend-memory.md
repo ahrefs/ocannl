@@ -206,7 +206,11 @@ files.
   either releases both, as in a linear upload chain). A `make_child` per copy grew the `parent`
   chain `check_live` walks by one level per transfer and retained every ancestor. Compiles and the
   `decide_*` recorders are genuine children and still add a level; `Context.lifecycle_depth` reads
-  it. Guard: `context_copy` scenario 6 (1000 copies per path, depth constant).
+  it. Nor does a merge fill add a ledger record (gh-ocannl-1654): it retires its predecessor's
+  `executed` entry, reader registrations and routine name, so a retired transfer is the one id
+  `routine_names` forgets, and the missing-dependency refusal reports an unnamed id as a superseded
+  fill; transfer ids are never reused. `Context.ledger_entries` reads the count. Guard: `context_copy`
+  scenario 6 (1000 copies per path, depth and ledger size constant).
 - **Read-only in one routine does not make a parameter a device-wide constant** (gh-ocannl-641).
   A host-backed parameter used only as another parameter's initializer input has no executable
   write in that routine. Its `Tnode.context_owned` construction marker keeps it in the working

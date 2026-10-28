@@ -821,9 +821,15 @@ let check_lineage_runnable ctx routine =
   if not (Set.is_empty missing_deps) then
     let dep_names =
       Set.to_list missing_deps
-      |> List.filter_map ~f:(fun dep_id ->
-          Option.map (Hashtbl.find ctx.ledger.routine_names dep_id) ~f:(fun n ->
-              Printf.sprintf "%s (id=%d)" n dep_id))
+      |> List.map ~f:(fun dep_id ->
+          match Hashtbl.find ctx.ledger.routine_names dep_id with
+          | Some n -> Printf.sprintf "%s (id=%d)" n dep_id
+          | None ->
+              (* gh-ocannl-1654: only a retired merge-buffer transfer loses its name. *)
+              Printf.sprintf
+                "a merge-buffer fill (id=%d) that a later fill superseded (refill the merge buffer \
+                 and compile the consumer against the new fill)"
+                dep_id)
       |> String.concat ~sep:", "
     in
     failwith
@@ -970,6 +976,12 @@ let stored_components ctx tn =
           Option.value_map ~default:0 ~f:List.length
             (Hashtbl.find c.BI.optimize_ctx.Ir.Low_level.computations tn));
     }
+
+let ledger_entries ctx =
+  let l = ctx.ledger in
+  Hashtbl.length l.routine_names + Set.length l.executed
+  + Hashtbl.length l.merge_buffer_readers
+  + Hashtbl.length l.fresh_writes + Hashtbl.length l.token_undo
 
 let stored_component_total ctx =
   Backends.query ctx.wrapped
@@ -1262,9 +1274,14 @@ let copy ?(into_merge_buffer = BI.No) ~src ~dst tn =
      executed. Keeping its id in the immutable destination frontier still gives a later merge-buffer
      consumer the real read edge; it also preserves sibling-compilation semantics. *)
   let record_merge_transfer dst ~name =
+    (* gh-ocannl-1654: the retired transfer leaves no record behind -- its name included, so a long
+       merge loop keeps the ledger bounded. Its id is never reused: a consumer compiled against it
+       keeps depending on it, and is refused as depending on a superseded fill (see
+       [check_lineage_runnable]), the only kind of id the ledger forgets the name of. *)
     Option.iter dst.ledger.current_merge_buffer_writer ~f:(fun old_transfer_id ->
         dst.ledger.executed <- Set.remove dst.ledger.executed old_transfer_id;
-        Hashtbl.remove dst.ledger.merge_buffer_readers old_transfer_id);
+        Hashtbl.remove dst.ledger.merge_buffer_readers old_transfer_id;
+        Hashtbl.remove dst.ledger.routine_names old_transfer_id);
     let transfer_id = dst.ledger.next_id in
     dst.ledger.next_id <- transfer_id + 1;
     Hashtbl.set dst.ledger.routine_names ~key:transfer_id ~data:name;

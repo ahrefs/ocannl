@@ -453,6 +453,12 @@ val copy : ?into_merge_buffer:Ir.Backend_intf.merge_buffer_use -> src:t -> dst:t
     token -- only if [src]'s ledger vouches for it and no other root has overwritten it since (see
     {!run}). *)
 
+val ledger_entries : t -> int
+(** How many per-id records the context's execution ledger (shared by its root) holds: routine
+    names, executed ids, merge-buffer reader registrations and per-run write records. Each compile
+    adds its routine's; a merge-buffer fill retires its predecessor's entirely, so repeated fills
+    keep the count constant (gh-ocannl-1654). A diagnostic. *)
+
 val lifecycle_depth : t -> int
 (** How many lifecycle ancestors the context has: the [parent] links {!release}'s refusal of a
     released ancestor walks at every entry point. A root context is at depth 0; {!compile} and the
