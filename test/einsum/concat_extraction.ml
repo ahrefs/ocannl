@@ -1,12 +1,12 @@
 (* gh-ocannl-1656: operand-side concatenation -- slicing a segment out of a concatenated axis ([p^o
    => o], [o^q => o], [p^o^q => o]), the replace forms writing a segment of one ([a => a^b], [b =>
-   a^b^c]).
+   a^b^c]), and integer-sized components ([3^o => o], [a => 2^a^1]).
 
    Before the fix the extract forms died in projection inference: the concatenated axis is an
    OPERAND axis there, every operand axis is iterated, so it got a product iterator of its own and
    the deferred concat-target pass refused the conflict ("Concat target projection ... conflicts").
    A middle extraction also asserted in [derive_projections], whose projection-local re-solve saw
-   only the sum of the captured components.
+   only the sum of the captured components; integer components did not parse.
 
    Every case is executed and checked against a host oracle built from the definitions: the forward
    values, and the gradient of [sum (t *. w)] with distinct prime weights [w], over the WHOLE
@@ -16,7 +16,7 @@
    single-operand [++^] ([Shape.Block]), whose lowerings differ. All values are small integers,
    exact in single precision. The [%cd] replace forms assign over a target holding sentinels and
    check that the untouched cells keep them. The refusals: an underdetermined component is a shape
-   error naming it, never an assertion failure. *)
+   error naming it, never an assertion failure; an empty integer component is refused. *)
 
 open Base
 open Ocannl
@@ -162,6 +162,17 @@ let () =
   both ~label:"leading sliced axis, s -> p^o^q => s -> o" ~spec:"s -> p^o^q => s -> o"
     ~captures:(fun () -> [ capture "p" 1; capture "q" 2 ])
     ~layout:Leading ~rows:2 ~src:5 ~dst:2 ~offset:1 Extract;
+  (* Integer components: no capture needed, the spec sizes them. Through the non-ppx API, so that a
+     parser without them fails these cases rather than the build. *)
+  both ~label:"integer prefix, 3^o => o" ~spec:"3^o => o" ~layout:Trailing ~rows:1 ~src:5 ~dst:2
+    ~offset:3 Extract;
+  both ~label:"integer suffix, o^2 => o" ~spec:"o^2 => o" ~layout:Trailing ~rows:1 ~src:5 ~dst:3
+    ~offset:0 Extract;
+  both ~label:"integer middle, s, 1^o^2 => s, o" ~spec:"s, 1^o^2 => s, o" ~layout:Trailing ~rows:2
+    ~src:6 ~dst:3 ~offset:1 Extract;
+  both ~label:"mixed, p^o^1 => o" ~spec:"p^o^1 => o"
+    ~captures:(fun () -> [ capture "p" 2 ])
+    ~layout:Trailing ~rows:1 ~src:6 ~dst:3 ~offset:2 Extract;
   (* Replacement: the operand fills one segment of a fresh result, the rest is its zero init. *)
   both ~label:"replace prefix, a => a^b" ~spec:"a => a^b"
     ~captures:(fun () -> [ capture "b" 2 ])
@@ -174,7 +185,14 @@ let () =
     ~layout:Trailing ~rows:1 ~src:3 ~dst:6 ~offset:1 Replace;
   both ~label:"replace middle, singleton source, b => a^b^c" ~spec:"b => a^b^c"
     ~captures:(fun () -> [ capture "a" 2; capture "c" 1 ])
-    ~layout:Trailing ~rows:1 ~src:1 ~dst:4 ~offset:2 Replace
+    ~layout:Trailing ~rows:1 ~src:1 ~dst:4 ~offset:2 Replace;
+  both ~label:"integer padding, s, a => s, 2^a^1" ~spec:"s, a => s, 2^a^1" ~layout:Trailing ~rows:2
+    ~src:3 ~dst:6 ~offset:2 Replace;
+  (* The [%op] literal path: the PPX re-renders the parsed spec, integer components included. *)
+  run_case ~label:"ppx literal, x ++ \"2^o => o\"" ~layout:Trailing ~rows:1 ~src:5 ~dst:3 ~offset:2
+    ~mode:Extract (fun x ->
+      let%op t = x ++ "2^o => o" in
+      t)
 
 (* [%cd] replacement assigns into an existing target: the cells outside the segment keep the
    target's prior values (sentinels), which a fresh [++]/[++^] result instead zero-initializes. *)
@@ -205,7 +223,9 @@ let () =
   cd_replace ~label:"%cd prefix, a => a^b" ~name:"cdr_prefix" ~dst:5 ~offset:0 ~src:3
     (fun ~tgt ~srct -> [%cd tgt =: id srct ~logic:"a => a^b"]);
   cd_replace ~label:"%cd suffix, b => a^b" ~name:"cdr_suffix" ~dst:5 ~offset:2 ~src:3
-    (fun ~tgt ~srct -> [%cd tgt =: id srct ~logic:"b => a^b"])
+    (fun ~tgt ~srct -> [%cd tgt =: id srct ~logic:"b => a^b"]);
+  cd_replace ~label:"%cd middle, b => 1^b^c" ~name:"cdr_middle" ~dst:6 ~offset:1 ~src:3
+    (fun ~tgt ~srct -> [%cd tgt =: id srct ~logic:"b => 1^b^c"])
 
 (* An underdetermined middle extraction is refused at closure with a message naming the components
    and the fix, not an assertion failure; margins wider than the operand are a shape error. *)
@@ -237,4 +257,6 @@ let () =
   refused ~label:"uncaptured middle, p^o^q => o" ~needle:"Shape.set_dim" (fun () ->
       NTDSL.einsum1 "p^o^q => o" (x 6) ());
   refused ~label:"margins wider than the operand, p^o => o with p = 6" ~needle:"exceed" (fun () ->
-      NTDSL.einsum1 ~capture_dims:[ capture "p" 6 ] "p^o => o" (x 5) ())
+      NTDSL.einsum1 ~capture_dims:[ capture "p" 6 ] "p^o => o" (x 5) ());
+  refused ~label:"empty integer component, 0^o => o" ~needle:"is empty" (fun () ->
+      NTDSL.einsum1 "0^o => o" (x 5) ())

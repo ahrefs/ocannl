@@ -199,8 +199,14 @@ affine_expr:
   /* stride*over (no offset, no conv) */
   | stride = stride_value; STAR; over = IDENT
     { Affine_spec { stride; over_label = over; stride_offset = 0; conv = None } }
-  | head = IDENT; CARET; tail = separated_nonempty_list(CARET, IDENT)
+  | head = concat_component; CARET; tail = separated_nonempty_list(CARET, concat_component)
     { Concat_spec (head :: tail) }
+
+/* A component of a concatenated axis: a label, or an integer size no other slot names
+   (gh-ocannl-1656). [INT CARET] is told apart from a fixed index and a stride by its lookahead. */
+concat_component:
+  | l = IDENT { Concat_label l }
+  | n = INT { Concat_size n }
 
 /* Comma-separated axis specifications, nonempty, with up to two trailing commas. Every axis is
    followed by an optional comma because the single-char lexer emits a COMMA after each axis.

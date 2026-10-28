@@ -535,6 +535,25 @@ let axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env:_ ~f labels =
   let output = to_row `Output ~implicit:false labels.bcast_output o_dims beg_o_dims in
   (batch, input, output)
 
+let concat_component_text = function Concat_label l -> l | Concat_size n -> Int.to_string n
+
+(** The dimension of one component of a concatenated axis: a label's variable (shared with the
+    spec's other slots through [dim_var_env]), or a fixed size no other slot names. A fixed size
+    carries no projection id: projection derivation gives it a fresh one, so the component is a
+    segment with its own iterator that no other access mentions -- skipped by an extraction, left to
+    the initialization by a replacement (gh-ocannl-1656). *)
+let concat_component_dim ~spec ~dim_var_env = function
+  | Concat_label label ->
+      Row.Var (Hashtbl.find_or_add dim_var_env label ~default:(fun () -> Row.get_var ~name:label ()))
+  | Concat_size n when n <= 0 ->
+      raise
+      @@ Row.Shape_error
+           ( [%string
+               "einsum spec %{spec}: a concatenation component of size %{n#Int} is empty; drop it \
+                from the concatenation"],
+             [] )
+  | Concat_size n -> Row.get_default_dim ~d:n ()
+
 (** Renders an affine axis spec as the einsum grammar reads it back ([[s*]o[=|<][+off]+[d*]k], or
     [s*o[+off]] without a window), for refusal messages. *)
 let render_affine_axis = function
@@ -549,7 +568,7 @@ let render_affine_axis = function
             "%{coeff stride}%{over_label}%{marker}%{offset}+%{coeff dilation}%{kernel_label}"])
   | Label s -> s
   | Fixed_index i -> Int.to_string i
-  | Concat_spec labels -> String.concat ~sep:"^" labels
+  | Concat_spec components -> String.concat ~sep:"^" (List.map components ~f:concat_component_text)
 
 (** Refuses an affine axis whose constant offset reaches past the axis's extent (gh-ocannl-1618), in
     any slot of an einsum spec. Shape inference sizes an affine axis without its offset
@@ -676,14 +695,8 @@ let einsum_slot_spec_to_dims_bio ?(fixed_index = `Pin_var) ~original_spec ~sh_id
           :: !extras;
         d
     | Affine_spec _ as axis_spec -> affine_dim_of_spec ~spec:original_spec ~dim_var_env axis_spec
-    | Concat_spec labels ->
-        let dims =
-          List.map labels ~f:(fun label ->
-              Row.Var
-                (Hashtbl.find_or_add dim_var_env label ~default:(fun () ->
-                     Row.get_var ~name:label ())))
-        in
-        Row.Concat dims
+    | Concat_spec components ->
+        Row.Concat (List.map components ~f:(concat_component_dim ~spec:original_spec ~dim_var_env))
   in
   let result = axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env ~f labels in
   (!extras, !proj_env_update, result)
@@ -2194,7 +2207,7 @@ let product_space_shape ~(shape : t) ~(logic : logic) : t =
       | Affine_spec { over_label; conv; _ } ->
           `Lbl over_label
           :: (match conv with Some { kernel_label; _ } -> [ `Lbl kernel_label ] | None -> [])
-      | Concat_spec ls -> [ `Cnc ls ]
+      | Concat_spec cs -> [ `Cnc cs ]
     in
     let row_items beg_specs bcast specs =
       List.concat_map beg_specs ~f:axis_items
@@ -2209,7 +2222,11 @@ let product_space_shape ~(shape : t) ~(logic : logic) : t =
   let lhs_labels =
     Set.of_list
       (module String)
-      (List.concat_map lhs_items ~f:(function `Lbl l -> [ l ] | `Cnc ls -> ls | `Rv _ -> []))
+      (List.concat_map lhs_items ~f:(function
+        | `Lbl l -> [ l ]
+        | `Cnc cs ->
+            List.filter_map cs ~f:(function Concat_label l -> Some l | Concat_size _ -> None)
+        | `Rv _ -> []))
   in
   let lhs_rvars =
     Set.of_list
@@ -2229,15 +2246,30 @@ let product_space_shape ~(shape : t) ~(logic : logic) : t =
               else (
                 seen_labels := Set.add !seen_labels l;
                 [ `Dim (lookup_var l) ])
-          | `Cnc ls ->
-              let is_known l = Set.mem lhs_labels l || Set.mem !seen_labels l in
-              if List.for_all ls ~f:is_known then []
-              else if List.exists ls ~f:is_known then
+          | `Cnc cs ->
+              (* A sized component ([3^o]) is named by no other slot, so it counts as unknown: [3^o
+                 => o] is an extraction, which has no product-space shape here, like [p^o => o]. *)
+              let is_known = function
+                | Concat_label l -> Set.mem lhs_labels l || Set.mem !seen_labels l
+                | Concat_size _ -> false
+              in
+              if List.for_all cs ~f:is_known then []
+              else if List.exists cs ~f:is_known then
                 cannot
-                  ("a concatenation axis is partially reduced over: " ^ String.concat ~sep:"^" ls)
+                  ("a concatenation axis is partially reduced over: "
+                  ^ String.concat ~sep:"^" (List.map cs ~f:concat_component_text))
               else (
-                seen_labels := List.fold ls ~init:!seen_labels ~f:Set.add;
-                [ `Dim (Row.Concat (List.map ls ~f:lookup_var)) ])
+                seen_labels :=
+                  List.fold cs ~init:!seen_labels ~f:(fun acc -> function
+                    | Concat_label l -> Set.add acc l
+                    | Concat_size _ -> acc);
+                [
+                  `Dim
+                    (Row.Concat
+                       (List.map cs ~f:(function
+                         | Concat_label l -> lookup_var l
+                         | Concat_size n -> Row.get_default_dim ~d:n ())));
+                ])
           | `Rv name ->
               if Set.mem lhs_rvars name || Set.mem !seen_rvars name then []
               else (
@@ -3666,15 +3698,8 @@ let shape_spec_to_dims_bio ~spec ~sh_id labels =
         Var (Hashtbl.find_or_add dim_var_env name ~default:(fun () -> Row.get_var ~name ()))
     | Fixed_index d -> Row.get_default_dim ~d ()
     | Affine_spec _ as axis_spec -> affine_dim_of_spec ~spec ~dim_var_env axis_spec
-    | Concat_spec labels ->
-        (* Convert each label in the concatenation to a dimension and wrap in Concat *)
-        let dims =
-          List.map labels ~f:(fun label ->
-              Row.Var
-                (Hashtbl.find_or_add dim_var_env label ~default:(fun () ->
-                     Row.get_var ~name:label ())))
-        in
-        Row.Concat dims
+    | Concat_spec components ->
+        Row.Concat (List.map components ~f:(concat_component_dim ~spec ~dim_var_env))
   in
   let row_var_env = Hashtbl.create (module String) in
   let result = axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env ~f labels in

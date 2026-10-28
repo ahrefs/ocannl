@@ -25,10 +25,17 @@ type axis_spec =
     }
       (** Affine axis specification: stride*over + stride_offset [+ dilation*kernel]. Corresponds to
           [Row.Affine] in shape inference. *)
-  | Concat_spec of string list
-      (** Concatenation of multiple axis labels into a single axis. Corresponds to [Row.Concat] in
+  | Concat_spec of concat_component list
+      (** Concatenation of several components into a single axis. Corresponds to [Row.Concat] in
           shape inference. *)
 [@@deriving sexp_of]
+
+(** A component of a concatenated axis ([a^b], [3^a^5]). *)
+and concat_component =
+  | Concat_label of string  (** A dimension variable, shared with the spec's other slots. *)
+  | Concat_size of int
+      (** A component of a fixed size that no other slot names: in [3^a => a] it is skipped, in
+          [a => a^3] it is left to the result's initialization (gh-ocannl-1656). *)
 
 (** An index pointing to any of a shape's axes, including the kind of the axis
     ([Batch, Input, Output]) and the position (which is counted from the end to facilitate
