@@ -49,6 +49,8 @@ let register ~first_r1 (r1, t1) (r2, t2) =
     let y2 = capture_row r2 t2 in
     (capture_row r1 t1, y2)
 
+(* A refusal whose message satisfies [f]. *)
+let refused_with name refused ~f = p name (Option.exists refused ~f)
 let set_equal ~swap r1 r2 = if swap then Shape.set_equal r2 r1 else Shape.set_equal r1 r2
 
 let orders =
@@ -144,4 +146,105 @@ let () =
           ignore (capture_row r2 w : Tensor.t);
           let refused = shape_error (fun () -> set_equal ~swap r1 r2) in
           Option.iter refused ~f:(Stdio.printf "%s: refused: %s\n" name);
-          p (name ^ ": the call is refused") (Option.is_some refused)))
+          p (name ^ ": the call is refused") (Option.is_some refused)));
+  (* An unbound reference [set_equal] relates to a row reference is a number to the call -- the
+     row's product, given to it or taken from it -- so bound to a row afterwards it would leave the
+     two rows tied by product only, where binding it first makes the same call a [Row_eq] (the cases
+     above): that binding is refused (gh-ocannl-1655). Bound to a dimension, product equality is the
+     meaning either way, so it stands. *)
+  let numbered ~row_solved ~swap name =
+    let r1 = Shape.get_variable_ref "r" and r2 = Shape.get_variable_ref "s" in
+    if row_solved then ignore (capture_row r2 (fixed "x" [ 2; 3 ]) : Tensor.t)
+    else (
+      Shape.set_dim r1 6;
+      ignore (capture_row r2 (open_leaf "w") : Tensor.t));
+    p (name ^ ": r is unbound at the call") (match r1.var with `Not_set_yet -> true | _ -> false);
+    set_equal ~swap r1 r2;
+    r1
+  in
+  List.iter [ false; true ] ~f:(fun row_solved ->
+      List.iter [ false; true ] ~f:(fun swap ->
+          let name =
+            Printf.sprintf "unbound %s, set_equal %s, then bound to a row"
+              (if row_solved then "r, s solved by a fixed operand" else "r set_dim'd")
+              (if swap then "s r" else "r s")
+          in
+          Verdict.case name (fun () ->
+              Tensor.unsafe_reinitialize ();
+              let r1 = numbered ~row_solved ~swap name in
+              let refused =
+                shape_error (fun () -> ignore (capture_row r1 (open_leaf "v") : Tensor.t))
+              in
+              Option.iter refused ~f:(Stdio.printf "%s: refused: %s\n" name);
+              refused_with (name ^ ": the row binding is refused, naming the row reference") refused
+                ~f:(fun msg ->
+                  String.is_substring msg ~substring:"Variable reference r "
+                  && String.is_substring msg ~substring:"the row reference s ");
+              (* The refusal was rewound; fresh work in the same session still infers. *)
+              let v = open_leaf "v" in
+              fix v [ 2; 3 ];
+              p
+                (name ^ ": fresh work after the refusal infers")
+                (List.equal Int.equal (dims v) [ 2; 3 ]));
+          let name =
+            Printf.sprintf "unbound %s, set_equal %s, then bound to a dimension"
+              (if row_solved then "r, s solved by a fixed operand" else "r set_dim'd")
+              (if swap then "s r" else "r s")
+          in
+          Verdict.case name (fun () ->
+              Tensor.unsafe_reinitialize ();
+              let r1 = numbered ~row_solved ~swap name in
+              let v = open_leaf "v" in
+              let y = NTDSL.einsum1 ~capture_dims:[ r1 ] "r => r" v () in
+              show name [ ("v", v) ];
+              p
+                (name ^ ": the dimension takes the row's product")
+                (List.equal Int.equal (dims y) [ 6 ]))));
+  (* A row holding a symbolic extent has no numeric product, so the closure of the inference that
+     bound its reference records nothing: equating that reference with a dimension afterwards would
+     tie the dimension to a dead row variable (gh-ocannl-1655). Refused, naming the closure. A
+     closed row that kept its product still gives it to the dimension. *)
+  let closed_row ~symbolic =
+    let r = Shape.get_variable_ref "r" in
+    let x =
+      if symbolic then (
+        let seq = fst (Ir.Indexing.get_static_symbol ~static_range:6 Ir.Indexing.Empty) in
+        let e = Shape.get_variable_ref "e" in
+        Shape.set_sym_dim e seq;
+        let x = open_leaf "x" in
+        ignore (NTDSL.einsum1 ~capture_dims:[ e ] "e => e" x () : Tensor.t);
+        x)
+      else fixed "x" [ 2; 3 ]
+    in
+    (* Reading the capturing operation's dims closes the inference that bound [r]. *)
+    ignore (dims (capture_row r x) : int list);
+    r
+  in
+  List.iter [ false; true ] ~f:(fun swap ->
+      let order = if swap then "d r" else "r d" in
+      let name = "closed row holding a symbolic extent, set_equal " ^ order in
+      Verdict.case name (fun () ->
+          Tensor.unsafe_reinitialize ();
+          let r = closed_row ~symbolic:true in
+          p
+            (name ^ ": the closure recorded nothing for r")
+            (Option.is_none r.var_ref.solved_dim && Option.is_none r.var_ref.solved_sym);
+          let d = Shape.get_variable_ref "d" in
+          ignore (NTDSL.einsum1 ~capture_dims:[ d ] "d => d" (open_leaf "w") () : Tensor.t);
+          let refused = shape_error (fun () -> set_equal ~swap r d) in
+          Option.iter refused ~f:(Stdio.printf "%s: refused: %s\n" name);
+          refused_with (name ^ ": the call is refused, naming the closure") refused ~f:(fun msg ->
+              String.is_substring msg ~substring:"reference r was bound by shape inference"
+              && String.is_substring msg ~substring:"has since closed"));
+      let name = "closed row that kept its product, set_equal " ^ order in
+      Verdict.case name (fun () ->
+          Tensor.unsafe_reinitialize ();
+          let r = closed_row ~symbolic:false in
+          let d = Shape.get_variable_ref "d" in
+          let w = open_leaf "w" in
+          let y = NTDSL.einsum1 ~capture_dims:[ d ] "d => d" w () in
+          set_equal ~swap r d;
+          show name [ ("w", w) ];
+          p
+            (name ^ ": the dimension takes the closed product")
+            (List.equal Int.equal (dims y) [ 6 ])))

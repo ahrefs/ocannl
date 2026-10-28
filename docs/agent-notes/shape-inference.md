@@ -60,7 +60,14 @@ files.
   the `Ir.Indexing` second-kind refusal is an unreached backstop (pinned directly, and every meeting
   order, in `capture_per_call.ml`). After the closure `var` names a variable of the reset environment (or a
   projection-local one, `derive_projections` rebinds `var`), free in the open work, so the tie to
-  it constrains nothing and needs no guard. Pinned by the shared-reference cases of
+  it constrains nothing: a binding drops it and lets the `solved` arm carry the value. A closed
+  reference holding NO value (a `Sym` row) has lost its constraint, so every later relating use
+  refuses it naming the closure (gh-ocannl-1655, `refuse_closed_unsolved_ref`): the binding's
+  pre-pass, `set_dim`, `set_sym_dim`, `set_equal`, `set_scale`. Refuse at the use, not at the
+  closure: a `Sym` row that is never reused is a valid program. The checks run BEFORE `set_var`,
+  which touches the reference into `open_refs` and would make it read as open. An unbound
+  reference `set_equal` relates to a row reference is marked (`row_numbered_refs`), and binding it
+  to a row later is refused (product-only tie; binding it first gives `Row_eq`). Pinned by the shared-reference cases of
   `test/operations/capture_per_call.ml`, which assert the reference unsolved after both
   registrations: an operand of fixed size solves it at that step's Stage1 and exercises only the
   solved arm.

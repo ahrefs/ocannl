@@ -672,6 +672,11 @@ either reference has been solved to so far (gh-ocannl-1617): rows `2, 3` and `6`
 Product equality is what relates a dimension to a row (`set_equal` on a dimension and a row
 reference, or `Shape.set_dim` on a row reference). A row reference bound before a closure has kept
 only its product, so `set_equal` refuses it in a Row-Row pair; relate rows before the closure.
+A reference whose closure kept no value at all (a row holding a symbolic extent has no numeric
+product) is refused in any later capture, `set_dim` or `set_equal`, naming the closure
+(gh-ocannl-1655). And a reference made by `Shape.get_variable_ref` that `set_equal` relates to a
+row reference before it is bound is a number, the row's product: binding it to a row afterwards is
+refused, since the rows would be tied by product only; pass it to `~capture_dims` first.
 
 Capturing requires the specification to be a **literal string**: every capture pattern in
 `tensor/ppx_op.ml` and `tensor/ppx_cd.ml` matches on a string constant, so

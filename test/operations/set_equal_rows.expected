@@ -52,3 +52,41 @@ one reference closed, set_equal r s: the call is refused: true
 one reference closed, set_equal s r: r is solved to its product by the closure: true
 one reference closed, set_equal s r: refused: Shape.set_equal: the row variable reference r was bound by shape inference that has since closed, which keeps only its row's product 6; equating it with the row reference s needs the row itself, which the closure did not keep. Call set_equal before the closure, or capture the row afresh in an operation of the open work.
 one reference closed, set_equal s r: the call is refused: true
+unbound r set_dim'd, set_equal r s, then bound to a row: r is unbound at the call: true
+unbound r set_dim'd, set_equal r s, then bound to a row: refused: Variable reference r is captured as a row variable in spec "..r.. => ..r..", but Shape.set_equal related it to the row reference s while it was unbound, which equated only a number (the row's product): bound to a row now, it would leave the two rows tied by product alone, not as rows. Pass r to an operation's ~capture_dims before calling set_equal on it.
+unbound r set_dim'd, set_equal r s, then bound to a row: the row binding is refused, naming the row reference: true
+unbound r set_dim'd, set_equal r s, then bound to a row: fresh work after the refusal infers: true
+unbound r set_dim'd, set_equal r s, then bound to a dimension: r is unbound at the call: true
+unbound r set_dim'd, set_equal r s, then bound to a dimension: v is 6
+unbound r set_dim'd, set_equal r s, then bound to a dimension: the dimension takes the row's product: true
+unbound r set_dim'd, set_equal s r, then bound to a row: r is unbound at the call: true
+unbound r set_dim'd, set_equal s r, then bound to a row: refused: Variable reference r is captured as a row variable in spec "..r.. => ..r..", but Shape.set_equal related it to the row reference s while it was unbound, which equated only a number (the row's product): bound to a row now, it would leave the two rows tied by product alone, not as rows. Pass r to an operation's ~capture_dims before calling set_equal on it.
+unbound r set_dim'd, set_equal s r, then bound to a row: the row binding is refused, naming the row reference: true
+unbound r set_dim'd, set_equal s r, then bound to a row: fresh work after the refusal infers: true
+unbound r set_dim'd, set_equal s r, then bound to a dimension: r is unbound at the call: true
+unbound r set_dim'd, set_equal s r, then bound to a dimension: v is 6
+unbound r set_dim'd, set_equal s r, then bound to a dimension: the dimension takes the row's product: true
+unbound r, s solved by a fixed operand, set_equal r s, then bound to a row: r is unbound at the call: true
+unbound r, s solved by a fixed operand, set_equal r s, then bound to a row: refused: Variable reference r is captured as a row variable in spec "..r.. => ..r..", but Shape.set_equal related it to the row reference s while it was unbound, which equated only a number (the row's product): bound to a row now, it would leave the two rows tied by product alone, not as rows. Pass r to an operation's ~capture_dims before calling set_equal on it.
+unbound r, s solved by a fixed operand, set_equal r s, then bound to a row: the row binding is refused, naming the row reference: true
+unbound r, s solved by a fixed operand, set_equal r s, then bound to a row: fresh work after the refusal infers: true
+unbound r, s solved by a fixed operand, set_equal r s, then bound to a dimension: r is unbound at the call: true
+unbound r, s solved by a fixed operand, set_equal r s, then bound to a dimension: v is 6
+unbound r, s solved by a fixed operand, set_equal r s, then bound to a dimension: the dimension takes the row's product: true
+unbound r, s solved by a fixed operand, set_equal s r, then bound to a row: r is unbound at the call: true
+unbound r, s solved by a fixed operand, set_equal s r, then bound to a row: refused: Variable reference r is captured as a row variable in spec "..r.. => ..r..", but Shape.set_equal related it to the row reference s while it was unbound, which equated only a number (the row's product): bound to a row now, it would leave the two rows tied by product alone, not as rows. Pass r to an operation's ~capture_dims before calling set_equal on it.
+unbound r, s solved by a fixed operand, set_equal s r, then bound to a row: the row binding is refused, naming the row reference: true
+unbound r, s solved by a fixed operand, set_equal s r, then bound to a row: fresh work after the refusal infers: true
+unbound r, s solved by a fixed operand, set_equal s r, then bound to a dimension: r is unbound at the call: true
+unbound r, s solved by a fixed operand, set_equal s r, then bound to a dimension: v is 6
+unbound r, s solved by a fixed operand, set_equal s r, then bound to a dimension: the dimension takes the row's product: true
+closed row holding a symbolic extent, set_equal r d: the closure recorded nothing for r: true
+closed row holding a symbolic extent, set_equal r d: refused: Shape.set_equal: the row variable reference r was bound by shape inference that has since closed (or by a session since reset) without a solved value -- a row holding a symbolic extent has no numeric product -- so the closure kept nothing of it and relating it now would constrain a dead variable. Capture it afresh in an operation of the open work.
+closed row holding a symbolic extent, set_equal r d: the call is refused, naming the closure: true
+closed row that kept its product, set_equal r d: w is 6
+closed row that kept its product, set_equal r d: the dimension takes the closed product: true
+closed row holding a symbolic extent, set_equal d r: the closure recorded nothing for r: true
+closed row holding a symbolic extent, set_equal d r: refused: Shape.set_equal: the row variable reference r was bound by shape inference that has since closed (or by a session since reset) without a solved value -- a row holding a symbolic extent has no numeric product -- so the closure kept nothing of it and relating it now would constrain a dead variable. Capture it afresh in an operation of the open work.
+closed row holding a symbolic extent, set_equal d r: the call is refused, naming the closure: true
+closed row that kept its product, set_equal d r: w is 6
+closed row that kept its product, set_equal d r: the dimension takes the closed product: true

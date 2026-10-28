@@ -196,6 +196,20 @@ let touch_ref uid =
   Row.note_mutation ();
   if not (List.mem !open_refs uid ~equal:Int.equal) then open_refs := uid :: !open_refs
 
+(* Unbound references to which {!set_equal} handed a number across a row reference -- the row's
+   product, given to or taken from it -- with that row reference's label (gh-ocannl-1655). Such a
+   reference is a number to [set_equal], but bound to a row later it would leave the two rows tied
+   by product only, where binding it first makes the same call a [Row_eq]: the binding is refused.
+   The entry outlives closures (the tie is no better after one); the write touches the reference, so
+   a rewind of the call discards the reference itself. *)
+let row_numbered_refs : (int * string) list ref = ref []
+
+let note_row_numbered uid ~partner =
+  Row.note_mutation ();
+  touch_ref uid;
+  if not (List.Assoc.mem !row_numbered_refs uid ~equal:Int.equal) then
+    row_numbered_refs := (uid, partner) :: !row_numbered_refs
+
 let check_ref_live ~uid ~label =
   match List.Assoc.find !discarded_refs uid ~equal:Int.equal with
   | None -> ()
@@ -275,6 +289,38 @@ type delayed_var_ref = Delayed_ref.t = private {
 
 let get_variable_ref = Delayed_ref.make
 let check_ref_live = Delayed_ref.check_live
+
+(* Whether a bound reference was bound before the last closure (or session reset): its uid is no
+   longer in [open_refs]. [open_refs] also records solution writes, but in every reachable state it
+   agrees with "bound in the open work": a closed reference holding no solution is written only
+   through paths that call {!refuse_closed_unsolved_ref} before they touch it, and a closed one
+   holding a solution is touched again only by a binding, which checks before it binds. *)
+let bound_before_closure (r : delayed_var_ref) =
+  (match r.var with `Not_set_yet -> false | `Dim _ | `Row _ -> true)
+  && not (List.mem !open_refs r.uid ~equal:Int.equal)
+
+(* A reference bound before the last closure with no solution recorded -- a row holding a symbolic
+   extent has no numeric product, so its closure records nothing -- has lost its constraint: its
+   [var] names a variable of the reset environment, or a projection-local one, which nothing in the
+   open work constrains (gh-ocannl-1655). Relating it to anything is refused rather than letting the
+   relation bind a dead variable. *)
+let refuse_closed_unsolved_ref ~operation (r : delayed_var_ref) =
+  if
+    bound_before_closure r
+    && Option.is_none r.var_ref.solved_dim
+    && Option.is_none r.var_ref.solved_sym
+  then
+    let label = r.var_ref.ref_label in
+    let kind = match r.var with `Row _ -> "row" | `Dim _ | `Not_set_yet -> "dimension" in
+    raise
+    @@ Row.Shape_error
+         ( [%string
+             "%{operation}: the %{kind} variable reference %{label} was bound by shape inference \
+              that has since closed (or by a session since reset) without a solved value -- a row \
+              holding a symbolic extent has no numeric product -- so the closure kept nothing of \
+              it and relating it now would constrain a dead variable. Capture it afresh in an \
+              operation of the open work."],
+           [] )
 
 type compose_type =
   | Pointwise_bin
@@ -650,10 +696,38 @@ let add_var_used_in_pointwise row =
     constrains nothing. Projection derivation emits none of these constraints. *)
 let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~error_shapes
     dim_refs =
+  (* Every refusal before any binding (gh-ocannl-1655): binding touches the reference, which would
+     make one bound before the closure read as open work. Projection derivation rebinds references
+     to projection-local variables on purpose and emits no ties, so it is exempt. *)
+  if not for_projections then
+    List.iter dim_refs ~f:(fun delayed_ref ->
+        check_ref_live delayed_ref;
+        let label = delayed_ref.var_ref.ref_label in
+        refuse_closed_unsolved_ref ~operation:[%string "capturing it in spec \"%{spec}\""]
+          delayed_ref;
+        if (not (Hashtbl.mem dim_var_env label)) && Hashtbl.mem row_var_env label then
+          Option.iter (List.Assoc.find !row_numbered_refs delayed_ref.uid ~equal:Int.equal)
+            ~f:(fun partner ->
+              raise
+              @@ Row.Shape_error
+                   ( [%string
+                       "Variable reference %{label} is captured as a row variable in spec \
+                        \"%{spec}\", but Shape.set_equal related it to the row reference \
+                        %{partner} while it was unbound, which equated only a number (the row's \
+                        product): bound to a row now, it would leave the two rows tied by product \
+                        alone, not as rows. Pass %{label} to an operation's ~capture_dims before \
+                        calling set_equal on it."],
+                     [ Shape_mismatch error_shapes ] )));
   List.concat_map dim_refs ~f:(fun delayed_ref ->
       check_ref_live delayed_ref;
       let label = delayed_ref.var_ref.ref_label in
-      let previous_binding = if for_projections then `Not_set_yet else delayed_ref.var in
+      (* A previous binding from before the closure names a dead variable: the value it reached
+         travels in [solved_dim]/[solved_sym] (the [solved] arms below; the pre-pass refused a
+         reference holding none), and a tie to the dead variable would constrain nothing. *)
+      let previous_binding =
+        if for_projections || bound_before_closure delayed_ref then `Not_set_yet
+        else delayed_ref.var
+      in
       let origin operation =
         [
           {
@@ -688,7 +762,10 @@ let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~
             origin = shared_origin;
           }
       in
-      let unsolved = Option.is_none delayed_ref.var_ref.solved_dim in
+      let unsolved =
+        Option.is_none delayed_ref.var_ref.solved_dim
+        && Option.is_none delayed_ref.var_ref.solved_sym
+      in
       match Hashtbl.find dim_var_env label with
       | Some var ->
           Delayed_ref.set_var delayed_ref (`Dim var);
@@ -715,6 +792,17 @@ let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~
             match previous_binding with
             | `Dim v0 when not (Row.equal_dim_var v0 var) ->
                 [ Row.Dim_eq { d1 = Row.Var var; d2 = Row.Var v0; origin = shared_origin } ]
+            | `Row _ when Option.is_some delayed_ref.var_ref.solved_sym ->
+                (* Unreachable through [Shape] (gh-ocannl-1655): [set_sym_dim] refuses a row
+                   reference, a row's publication is a product only, and the row arm below refuses a
+                   symbolic reference before binding it. Kept as the row arm's refusal, not a silent
+                   drop of the row tie. *)
+                raise
+                @@ Row.Shape_error
+                     ( "Variable " ^ label
+                       ^ " was bound to a row variable but is solved to a symbolic dimension \
+                          (symbolic dimensions take no part in row products)",
+                       [ Shape_mismatch error_shapes ] )
             | `Row r0 when unsolved -> [ product_is r0 var ]
             | `Dim _ | `Row _ | `Not_set_yet -> []
           in
@@ -2144,6 +2232,7 @@ let product_space_shape ~(shape : t) ~(logic : logic) : t =
     creates a [Total_elems] constraint that will be reconciled during [finish_inference]. *)
 let%track7_sexp set_dim (delayed_var_ref : delayed_var_ref) (dim : int) : unit =
   check_ref_live delayed_var_ref;
+  refuse_closed_unsolved_ref ~operation:"Shape.set_dim" delayed_var_ref;
   match delayed_var_ref with
   | { var_ref = { solved_sym = Some _; ref_label; _ }; _ } ->
       raise
@@ -2207,6 +2296,7 @@ let%track7_sexp set_dim (delayed_var_ref : delayed_var_ref) (dim : int) : unit =
 let%track7_sexp set_sym_dim (delayed_var_ref : delayed_var_ref) (sym : Ir.Indexing.static_symbol) :
     unit =
   check_ref_live delayed_var_ref;
+  refuse_closed_unsolved_ref ~operation:"Shape.set_sym_dim" delayed_var_ref;
   (* Eagerly validate the declared range (raises [Utils.User_error] if absent or non-positive). *)
   let sym_dim = Row.get_sym_dim sym in
   let origin =
@@ -2273,6 +2363,19 @@ let refuse_closed_row_ref ~other (delayed_ref : delayed_var_ref) =
 let set_equal delayed_ref1 delayed_ref2 =
   check_ref_live delayed_ref1;
   check_ref_live delayed_ref2;
+  (* Before the solved-value dispatch: its arms forward to [set_dim], which would otherwise reach a
+     dead variable first (gh-ocannl-1655). *)
+  refuse_closed_unsolved_ref ~operation:"Shape.set_equal" delayed_ref1;
+  refuse_closed_unsolved_ref ~operation:"Shape.set_equal" delayed_ref2;
+  (* An unbound reference paired with a row reference is a number here; see [row_numbered_refs]. *)
+  let note_numbered () =
+    match (delayed_ref1.var, delayed_ref2.var) with
+    | `Not_set_yet, `Row _ ->
+        note_row_numbered delayed_ref1.uid ~partner:delayed_ref2.var_ref.ref_label
+    | `Row _, `Not_set_yet ->
+        note_row_numbered delayed_ref2.uid ~partner:delayed_ref1.var_ref.ref_label
+    | _ -> ()
+  in
   (* TODO: use provenance from the row variables once we have it there. *)
   match (delayed_ref1, delayed_ref2) with
   | { var = `Row row_var1; _ }, { var = `Row row_var2; _ } ->
@@ -2316,7 +2419,7 @@ let set_equal delayed_ref1 delayed_ref2 =
   | delayed_ref1, { var_ref = { solved_sym = Some sym; _ }; _ } -> set_sym_dim delayed_ref1 sym
   | { var_ref = { solved_dim = Some dim1; _ }; _ }, { var_ref = { solved_dim = Some dim2; _ }; _ }
     ->
-      if dim1 = dim2 then ()
+      if dim1 = dim2 then note_numbered ()
       else
         raise
         @@ Row.Shape_error
@@ -2326,10 +2429,12 @@ let set_equal delayed_ref1 delayed_ref2 =
                ] )
   | { var_ref = { solved_dim = Some dim; _ }; _ }, delayed_ref2 ->
       (* First is solved, second is not - set the second to match the first *)
-      set_dim delayed_ref2 dim
+      set_dim delayed_ref2 dim;
+      note_numbered ()
   | delayed_ref1, { var_ref = { solved_dim = Some dim; _ }; _ } ->
       (* Second is solved, first is not - set the first to match the second *)
-      set_dim delayed_ref1 dim
+      set_dim delayed_ref1 dim;
+      note_numbered ()
   | ( { var_ref = { solved_dim = None; ref_label = ref_label1; _ }; var = _; _ },
       { var_ref = { solved_dim = None; ref_label = ref_label2; _ }; var = `Not_set_yet; _ } )
   | ( { var_ref = { solved_dim = None; ref_label = ref_label1; _ }; var = `Not_set_yet; _ },
@@ -2395,6 +2500,8 @@ let set_equal delayed_ref1 delayed_ref2 =
 let set_scale ~factor delayed_ref_large delayed_ref_small =
   check_ref_live delayed_ref_large;
   check_ref_live delayed_ref_small;
+  refuse_closed_unsolved_ref ~operation:"Shape.set_scale" delayed_ref_large;
+  refuse_closed_unsolved_ref ~operation:"Shape.set_scale" delayed_ref_small;
   if factor < 1 then
     raise
     @@ Row.Shape_error ("Shape.set_scale: factor must be >= 1, got " ^ Int.to_string factor, []);
@@ -2531,6 +2638,7 @@ let unsafe_reinitialize () =
   discarded_updates := [];
   open_refs := [];
   discarded_refs := [];
+  row_numbered_refs := [];
   Row.reset_transient ();
   Row.drop_symbol_roles ()
 [@@mutation_serial.boundary "the session reset: it discards all state and clears the taint"]

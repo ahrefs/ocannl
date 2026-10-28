@@ -138,7 +138,12 @@ val get_variable_ref : string -> delayed_var_ref
     [finish_inference]) the operations' dimension variables are equated, as are their row variables,
     and a dimension variable with a row variable has the row's product. Across a closure the
     reference carries its solved value, for a row variable the product of its dimensions (see
-    {!set_dim}). *)
+    {!set_dim}).
+
+    A reference whose closure recorded no value -- a row holding a symbolic extent has no numeric
+    product -- has lost its constraint: capturing it again, or relating it by {!set_dim},
+    {!set_sym_dim}, {!set_equal} or {!set_scale}, raises [Row.Shape_error] naming the closure
+    (gh-ocannl-1655). *)
 
 val set_dim : delayed_var_ref -> int -> unit
 (** Sets the dimension resp. total elements of the dim resp. row variable reference to the given
@@ -167,7 +172,12 @@ val set_equal : delayed_var_ref -> delayed_var_ref -> unit
 
     A row reference bound by an inference that has since closed keeps only its row's product
     ([solved_dim]), so a Row-Row call involving it raises [Row.Shape_error]: relate the rows before
-    the closure. *)
+    the closure.
+
+    An unbound reference (from {!get_variable_ref}, not yet passed to [~capture_dims]) paired with a
+    row reference takes or gives a number, the row's product. Binding it to a row afterwards would
+    leave the two rows tied by product alone, so that binding raises [Row.Shape_error]
+    (gh-ocannl-1655): bind it first to have the rows equal. Binding it to a dimension stands. *)
 
 val set_scale : factor:int -> delayed_var_ref -> delayed_var_ref -> unit
 (** Asserts a multiplicative relation between two dimension variable references: the first ref

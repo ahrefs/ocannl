@@ -384,6 +384,12 @@ sh1_O \approx sh2_O
   before the last closure, whose row is gone;
 - dimension/row: `Total_elems([rho], Strided_var(coeff=1, var=alpha))`.
 
+A reference bound before the last closure that recorded no value for it (a row holding a symbolic
+extent has no numeric product) is refused by every later binding, `set_dim`, `set_sym_dim`,
+`set_equal` and `set_scale`: its variable is dead and nothing carries its value (gh-ocannl-1655).
+An unbound reference `set_equal` pairs with a row reference is a number (the row's product); a later
+binding of it to a row variable is refused, as it would tie the two rows by product only.
+
 `set_scale ~factor large small` is restricted to dimension variables. For
 `factor > 1`, unresolved dimension references generate:
 
