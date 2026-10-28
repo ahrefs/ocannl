@@ -684,7 +684,7 @@ gpu staged lattice: at every prefix the composed floor is within the leaf's anal
 lifted search at incumbent 6000: 22 expanded, 6 scored, 21 fathomed, 1 refuted, 0 excluded
 == cpu simd32: certain-traffic increments over 22 leaf paths ==
   levels on the leaf paths: fusion, geometry, packing, packing-shape, pipeline, register-tile, row-block, tensorized-form
-  priced above the schedule-invariant floor: 4; max increment 32768 bytes
+  priced above the schedule-invariant floor: 8; max increment 32768 bytes
 cpu simd32: every leaf's increment is the traffic its own parameters imply: true
 cpu simd32: the increment is monotone along every path's prefixes: true
 cpu simd32: the staging commitments price above the floor: true
@@ -697,6 +697,36 @@ cpu simd32: every leaf path commits its pipeline's shape level: true
 == cpu simd32: 22 leaf paths, 22 applied; floor 49152 bytes ==
 cpu simd32: the freshly minted nodes are charged at least the increment: true
 cpu simd32: at every prefix the composed floor is within the leaf's analyzed bytes: true
+== cpu simd32: 14 packed leaves applied, 4 contracting by the predicate, 4 with a fragment ==
+cpu simd32: a packed leaf mints a fragment exactly where the predicate says it contracts: true
+cpu simd32: a contracting leaf's increment is its fragment's charge, written and read once: true
+cpu simd32: some packed leaf contracts: true
+cpu simd32: some packed leaf does not: true
+== cpu simd32 pick audit: 22 leaves scored exhaustively; the walk scores 2 (2 fathomed), the floor-only walk 2 ==
+cpu simd32 pick audit: the walk's pick is the exhaustive first argmin: true
+cpu simd32 pick audit: the raised bound scores no more leaves than the floor alone: true
+== cpu k16: certain-traffic increments over 18 leaf paths ==
+  levels on the leaf paths: fusion, geometry, packing, packing-shape, pipeline, register-tile, row-block, tensorized-form
+  priced above the schedule-invariant floor: 2; max increment 5120 bytes
+cpu k16: every leaf's increment is the traffic its own parameters imply: true
+cpu k16: the increment is monotone along every path's prefixes: true
+cpu k16: the staging commitments price above the floor: true
+cpu k16: every leaf path commits its pipeline's shape level: true
+  staged geometry            5120 bytes
+    fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=serial > geometry=bm16 bn0 bk16 > register-tile=auto
+  unpriced geometry          0 bytes
+    fusion=unfused > pipeline=blocktile > packing=in-kernel > geometry=b16
+  lattice leaf               (none in this tree)
+== cpu k16: 18 leaf paths, 18 applied; floor 24576 bytes ==
+cpu k16: the freshly minted nodes are charged at least the increment: true
+cpu k16: at every prefix the composed floor is within the leaf's analyzed bytes: true
+== cpu k16: 10 packed leaves applied, 0 contracting by the predicate, 0 with a fragment ==
+cpu k16: a packed leaf mints a fragment exactly where the predicate says it contracts: true
+cpu k16: no packed leaf contracts: true
+cpu k16: a grid-outermost packed leaf runs its reduction in one block: true
+== cpu k16 pick audit: 18 leaves scored exhaustively; the walk scores 16 (1 fathomed), the floor-only walk 18 ==
+cpu k16 pick audit: the walk's pick is the exhaustive first argmin: true
+cpu k16 pick audit: the raised bound scores no more leaves than the floor alone: true
 MMA emission-scope serialization and comparison distinguish accumulator lifetimes: true
 a one-block staged matmul uses the per-statement wide-f16 capability: true
 a multi-axis contraction requires fragment-scope wide-f16 accumulation even with no explicit k-block: true

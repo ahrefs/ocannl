@@ -2347,6 +2347,38 @@ let cpu_mma_sketch_schedule (site : matmul_site) { sk_bm = bm; sk_tile = tile; _
     let tz, _lane = Sched.tensorize ?tile ~i:i_i ~j:site.m_j ~k:site.m_k ~simd_width:site.m_nj () in
     batch_hoist_swaps site @ zops @ [ sp_i ] @ sink site.m_j kb @ sink i_i kb @ [ tz ]
 
+(* gh-ocannl-1676: the CPU packed composition's loop order and what it implies, one spelling for the
+   family tree (which sets a leaf's flags from its packing shape), the builder (which orders the
+   loops by them) and the traffic floor (which prices the accumulator fragment off them).
+
+   [cpu_pack_grid_outermost]: the row-block loop [i_o] stays outermost — the hoisted-only Grid shape
+   and the two per-chunk packing shapes — instead of sinking under the reduction-block loops. Then
+   nothing inside [k_o] indexes the accumulator, so [Sched.contract_tensorized_accumulator] (the
+   authority) contracts there, minting a fresh [bm x bn] fragment, once [k_o] runs at least twice
+   ([cpu_pack_contracts]). In the other shapes [i_o] sits inside [k_o] and no loop qualifies; a
+   pad-masked statement-site contraction there, and a contraction through the outer reduction loops
+   alone ([m_ko]), are possible but not implied, so they are not claimed. *)
+let packing_shape_flags = function
+  | `Serial -> (false, false, false)
+  | `Hoisted -> (true, false, false)
+  | `Hoisted_grid -> (true, true, false)
+  | `Hoisted_grid_pack_rest -> (true, true, true)
+  | `Grid_pack_rest -> (false, true, true)
+  | `Grid -> (false, true, false)
+
+let with_packing_shape shape (p : sketch_params) =
+  let sk_hoist, sk_grid, sk_pack_rest = packing_shape_flags shape in
+  { p with sk_hoist; sk_grid; sk_pack_rest }
+
+let cpu_pack_grid_outermost ~sk_grid ~sk_hoist ~sk_pack_rest = sk_grid && (sk_hoist || sk_pack_rest)
+
+let cpu_pack_shape_grid_outermost shape =
+  let sk_hoist, sk_grid, sk_pack_rest = packing_shape_flags shape in
+  cpu_pack_grid_outermost ~sk_grid ~sk_hoist ~sk_pack_rest
+
+let cpu_pack_contracts ~m_nk ~grid_outermost ~bk =
+  grid_outermost && bk > 0 && blocks_of m_nk bk >= 2
+
 (* Cache-blocked, operand-packed tensorized CPU matmul: [Tile_mma] composed with the S4 packing
    pipeline (the remaining piece of gh-ocannl-469). GEBP loop structure, all-Serial: [j_o? { k_o {
    pack B~[bk x bn]; i_o { pack A~[bm x bk]; Tile_mma(bm, bn, bk) } } }] — the packing [Stage]s land
@@ -2391,7 +2423,7 @@ let cpu_mma_pack_sketch_schedule (site : matmul_site)
       _;
     } : Sched.schedule =
   let outer_i = if sk_grid then LL.Grid else LL.Serial in
-  let grid_outermost = sk_grid && (sk_hoist || sk_pack_rest) in
+  let grid_outermost = cpu_pack_grid_outermost ~sk_grid ~sk_hoist ~sk_pack_rest in
   let sp_i, i_o, i_i = Sched.split ~axis:site.m_i ~factor:bm ~outer:outer_i ~inner:LL.Serial in
   let sp_k, k_o, k_i = Sched.split ~axis:site.m_k ~factor:bk ~outer:LL.Serial ~inner:LL.Serial in
   let splits, j_col, j_swaps =
@@ -4139,10 +4171,10 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
               choice
                 [
                   ( Family_decision.Packing_shape `Serial,
-                    subt (fun () -> geoms ~f:(fun p _ _ -> leaf p)) );
+                    subt (fun () -> geoms ~f:(fun p _ _ -> leaf (with_packing_shape `Serial p))) );
                   ( Family_decision.Packing_shape `Hoisted,
                     if any_hoistable then
-                      subt (fun () -> geoms ~f:(fun p _ _ -> leaf { p with sk_hoist = true }))
+                      subt (fun () -> geoms ~f:(fun p _ _ -> leaf (with_packing_shape `Hoisted p)))
                     else Sspace.Refuted no_constant );
                   ( Family_decision.Packing_shape `Hoisted_grid,
                     if not any_hoistable then Sspace.Refuted no_constant
@@ -4184,7 +4216,7 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                                   "extents do not divide the blocks: the non-hoistable operand is \
                                    read in place and cannot absorb the zero-fringe pad"
                               else if not (grid_ok p) then Sspace.Refuted (too_few_blocks p)
-                              else leaf { p with sk_hoist = true; sk_grid = true })) );
+                              else leaf (with_packing_shape `Hoisted_grid p))) );
                   ( Family_decision.Packing_shape `Hoisted_grid_pack_rest,
                     if not any_hoistable then Sspace.Refuted no_constant
                     else if Option.is_some (Lazy.force grid_refutation) then
@@ -4197,14 +4229,7 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                             (subt (fun () ->
                                  geoms ~f:(fun p _ _ ->
                                      if not (grid_ok p) then Sspace.Refuted (too_few_blocks p)
-                                     else
-                                       leaf
-                                         {
-                                           p with
-                                           sk_hoist = true;
-                                           sk_grid = true;
-                                           sk_pack_rest = true;
-                                         }))) )
+                                     else leaf (with_packing_shape `Hoisted_grid_pack_rest p)))) )
                     else
                       subt (fun () ->
                           geoms ~f:(fun p _ _ ->
@@ -4219,14 +4244,7 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                               else
                                 match over_chunk_cap ~what:"per-chunk packed tile" rest_tile with
                                 | Some w -> Sspace.Refuted w
-                                | None ->
-                                    leaf
-                                      {
-                                        p with
-                                        sk_hoist = true;
-                                        sk_grid = true;
-                                        sk_pack_rest = true;
-                                      })) );
+                                | None -> leaf (with_packing_shape `Hoisted_grid_pack_rest p))) );
                   ( Family_decision.Packing_shape `Grid_pack_rest,
                     (* The builder hoists every hoistable source in the grid-outermost form
                        regardless of [sk_hoist], so only the non-hoistable tiles privatize per chunk
@@ -4245,7 +4263,7 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                               over_chunk_cap ~what:"per-chunk packed tiles" (privatized_bytes p)
                             with
                             | Some w -> Sspace.Refuted w
-                            | None -> leaf { p with sk_grid = true; sk_pack_rest = true })
+                            | None -> leaf (with_packing_shape `Grid_pack_rest p))
                     in
                     if Option.is_some (Lazy.force grid_refutation) then
                       Sspace.Refuted (Option.value_exn (Lazy.force grid_refutation))
@@ -4270,7 +4288,7 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                                     over_chunk_cap ~what:"per-chunk privatized A~ tile" a_tile
                                   with
                                   | Some w -> Sspace.Refuted w
-                                  | None -> leaf { p with sk_grid = true })) );
+                                  | None -> leaf (with_packing_shape `Grid p))) );
                 ]
             in
             subt (fun () ->
@@ -5316,7 +5334,7 @@ let sketch_path_traffic_floor ~(limits : Ir.Backend_intf.hardware_limits) (opt :
          output's storage precision, written by the init-load and read by the store-back: certain
          once that loop runs at least twice, i.e. [bk < m_nk]. A single-block reduction contracts
          only under pad masks, and the CPU pipelines' contraction depends on the packing shape's
-         loop order, so both price nothing here. *)
+         loop order — priced in the [Cpu_packed] arm below. *)
       let pd = Ir.Ops.prec_in_bytes (Lazy.force site.m_d.Ir.Tnode.storage_prec) in
       let fragment ~bm ~bn ~bk_max = if bk_max < site.m_nk then 2 * bm * bn * pd else 0 in
       fun path ->
@@ -5335,21 +5353,37 @@ let sketch_path_traffic_floor ~(limits : Ir.Backend_intf.hardware_limits) (opt :
             if bk > 0 then (2 * tile_bytes ~bm ~bn ~bk) + fragment ~bm ~bn ~bk_max:bk else 0
         | Some (Family_decision.Cpu_packed { g_bm = bm; g_bn = bn; g_bk = bk; _ }) ->
             (* CPU packed shapes: only in-kernel packing of both panels ([Packing_shape `Serial])
-               certainly ADDS traffic — the packing nest reads the original operands (already in the
-               base floor) and writes the panels, which the micro-kernel then reads. A hoisted panel
-               is packed at link time and REPLACES the original operand's reads, so its bytes are
-               not additional (with both operands hoisted the addition can be exactly zero — Codex
-               P1 on PR #327); the hoisted-only Grid and mixed grid-outermost shapes likewise
-               replace or split. Zero for all of those. bn = 0 encodes the full column extent. *)
-            let serial_packing =
-              List.exists decisions ~f:(function
-                | Family_decision.Packing_shape `Serial -> true
-                | _ -> false)
+               certainly ADDS panel traffic — the packing nest reads the original operands (already
+               in the base floor) and writes the panels, which the micro-kernel then reads. A
+               hoisted panel is packed at link time and REPLACES the original operand's reads, so
+               its bytes are not additional (with both operands hoisted the addition can be exactly
+               zero — Codex P1 on PR #327); the hoisted-only Grid and mixed grid-outermost shapes
+               likewise replace or split. Zero for all of those. bn = 0 encodes the full column
+               extent.
+
+               gh-ocannl-1676: the grid-outermost shapes keep the row-block loop outside the
+               reduction blocks, so their [k_o] contracts the accumulator into a fresh [bm x bn]
+               fragment once it runs twice ([cpu_pack_contracts], the predicate the builder's loop
+               order reads too), written by the init-load and read by the store-back. The serial
+               shape never contracts (its row blocks sit inside [k_o]), so the two charges never
+               meet. The packing shape sits above the geometry on every packed path. *)
+            let shape =
+              List.find_map decisions ~f:(function
+                | Family_decision.Packing_shape sh -> Some sh
+                | _ -> None)
             in
-            if serial_packing then
-              let bn_eff = if bn = 0 then site.m_nj else bn in
-              tile_bytes ~bm ~bn:bn_eff ~bk
-            else 0
+            let bn_eff = if bn = 0 then site.m_nj else bn in
+            let panels =
+              if Option.exists shape ~f:(Poly.equal `Serial) then tile_bytes ~bm ~bn:bn_eff ~bk
+              else 0
+            in
+            let contracts =
+              Option.exists shape ~f:(fun sh ->
+                  cpu_pack_contracts ~m_nk:site.m_nk
+                    ~grid_outermost:(cpu_pack_shape_grid_outermost sh)
+                    ~bk)
+            in
+            panels + if contracts then 2 * bm * bn_eff * pd else 0
         | Some (Family_decision.Cpu_blocktile _) ->
             (* The CPU blocktile pipeline stages nothing: its tiles are registers, and its hoisted
                flavor packs at link time. *)

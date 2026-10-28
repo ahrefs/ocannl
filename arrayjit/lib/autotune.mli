@@ -835,6 +835,19 @@ val lift_geometry_lattice :
     legality (the box refutations), and other exclusions stay excluded. {!model_default}'s family
     search applies this under config [model_default_geometry_lattice]. Exposed for tests. *)
 
+val cpu_pack_grid_outermost : sk_grid:bool -> sk_hoist:bool -> sk_pack_rest:bool -> bool
+(** Whether the CPU packed composition keeps its row-block loop outermost — above the
+    reduction-block loops instead of sunk under them: the hoisted-only Grid shape and the two
+    per-chunk packing shapes. The loop order [cpu_mma_pack_sketch_schedule] builds, and what the
+    certain-traffic floor reads off a path's packing shape (gh-ocannl-1676). *)
+
+val cpu_pack_contracts : m_nk:int -> grid_outermost:bool -> bk:int -> bool
+(** Whether a packed geometry's accumulator contraction is implied: grid-outermost, with the
+    reduction-block loop running at least twice ([bk < m_nk]). Then
+    [Schedule.contract_tensorized_accumulator] mints a fresh [bm x bn] fragment at the output's
+    storage precision, which {!sketch_path_traffic_floor} prices (gh-ocannl-1676). Exposed for
+    tests, which check it against the applied schedules. *)
+
 val sketch_path_traffic_floor :
   limits:Ir.Backend_intf.hardware_limits -> Ir.Low_level.optimized -> Family_decision.path -> int
 (** The certain-traffic increment (bytes) of a family-tree decision path (gh-ocannl-514 phase 5):
@@ -856,11 +869,13 @@ val sketch_path_traffic_floor :
     at the output's storage width, where every completion below the path contracts the accumulator
     (gh-ocannl-1601): a conv row geometry whose window has a loop of two or more iterations
     ([rows x out-channels]), a staged GPU mma geometry whose reduction runs in two or more blocks
-    ([bm x bn]; a lattice box only once its largest [bk] leaves two blocks). [0] when neither family
-    has a site or nothing is certain. Composed with the floor's legs, this is what makes the family
-    bound non-uniform across the tree — the schedule-invariant floor differentiates only placements
-    (phase 3), the increments differentiate the sketch-geometry subtrees. Detection runs once at
-    partial application; the returned closure is cheap per path. Exposed for tests. *)
+    ([bm x bn]; a lattice box only once its largest [bk] leaves two blocks), and a CPU packed
+    geometry under a grid-outermost packing shape whose reduction runs in two or more blocks
+    ({!cpu_pack_contracts}, gh-ocannl-1676). [0] when neither family has a site or nothing is
+    certain. Composed with the floor's legs, this is what makes the family bound non-uniform across
+    the tree — the schedule-invariant floor differentiates only placements (phase 3), the increments
+    differentiate the sketch-geometry subtrees. Detection runs once at partial application; the
+    returned closure is cheap per path. Exposed for tests. *)
 
 val sketch_schedule :
   accum_prec:(Ir.Ops.prec -> Ir.Ops.prec) ->
