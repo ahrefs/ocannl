@@ -3125,7 +3125,8 @@ let segments_legs ?capabilities ?capacity ?cache_bandwidth ?issue_rate ?dram_ban
                 | None, None -> None
                 | _ ->
                     Some
-                      (CM.reuse_traffic ?max_resident_threads ~is_global:(CM.global_in o) o.LL.llc)
+                      (CM.reuse_traffic ?cache_capacity_bytes ?max_resident_threads
+                         ~is_global:(CM.global_in o) o.LL.llc)
               in
               (* gh-ocannl-1479: the compute nests' own launches, whether or not the cache tiers are
                  on. *)

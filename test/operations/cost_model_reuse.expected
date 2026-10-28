@@ -43,3 +43,16 @@ the staffed start's gate tag tells two DRAM rates apart: true
 the staffed start's gate tag tells two tile-MMA rates apart: true
 the staffed start's gate tag tells two device-gather rates apart: true
 the staffed start's gate tag tells two memory-transaction rates apart: true
+serial: with no capacity a one-block nest requests its distinct bytes: true
+serial: at capacity (the nest's bytes) it requests its distinct bytes: true
+serial: past capacity, where every loop's iteration fits, it requests its distinct bytes: true
+serial: past an o-iteration, x is re-read once per o; dy and dw are kept: true
+serial: past an i-iteration, dy is re-read once per i as well: true
+serial: past a k-iteration, the accumulator is re-read once per k as well: true
+serial: the loop interchange (i, o, k) moves the re-read from x to dy: true
+serial: a read every loop indexes is never re-read: true
+serial: past an o-iteration the score charges x's re-reads: true
+serial: the score with no capacity is analyze's distinct bytes: true
+serial: raising the capacity never raises the score: true
+serial: completion_floor <= analyze <= the score, at every capacity: true
+a Grid plan's requested bytes do not depend on the serial re-read charge: true
