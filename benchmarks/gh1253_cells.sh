@@ -77,13 +77,15 @@
 # whose configuration seeds a plan the timing cell did not time (a profile's auto gate deciding
 # otherwise) gets a timing cell of its own under that profile, appended to the same TSV.
 # EXPLAIN_ONLY=<run dir> re-scores a past run's timed sites at this checkout's revision, timing
-# nothing (a correctness batch, not a measurement): per site of SITES only the `shipped` and
-# `ceilings` listing cells run (the RANK_ONLY constants; BENCH_PICK=1 adds the shipped arm's pick),
-# and gh1442_agreement.py joins them to <run dir>/rank_<site>.tsv -- that run's rows, read and never
-# written. Running it at two revisions against one run dir is the before/after agreement check of a
-# ranking-score change, on the same measured rows. It refuses before building anything when a
-# site's TSV is missing or empty, and when a timing knob is set (FIT_FILL, TIME_REPEATS,
-# PICK_PROFILES, PICK_GATE0, TXN_RATE); it ends with each site's `joined=` lines, prefixed by site.
+# no candidate (a correctness batch, not a measurement): per site of SITES only the `shipped` and
+# `ceilings` listing cells run (the RANK_ONLY constants), and gh1442_agreement.py joins them to
+# <run dir>/rank_<site>.tsv -- that run's rows, read and never written. BENCH_PICK=1 adds each
+# arm's pick line, whose pick_ms/untuned_ms are the cell's own in-process timing (advisory: a
+# rerun moves them, nothing else). Running it at two revisions against one run dir is the
+# before/after agreement check of a ranking-score change, on the same measured rows.
+# It refuses before building anything when a site's TSV is missing or empty, and when a timing
+# knob is set (FIT_FILL, TIME_REPEATS, PICK_PROFILES, PICK_GATE0, TXN_RATE); it ends with each
+# site's `joined=` lines, prefixed by site.
 # Both wgrad arms pin BENCH_TUNE=0 and model_default_schedule=false, so an ambient profile or
 # environment cannot swap the measured plans for tuned or model-picked ones.
 # The shipped-kernel rows (`bench: kernel ... w: wg_w.grad`) are the measured side of the table.
