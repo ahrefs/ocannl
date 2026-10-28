@@ -177,7 +177,7 @@
  ; each cell's summation order.
  (name bigram)
  (modules bigram)
- (libraries ocannl dataprep arrayjit.verdict)
+ (libraries ocannl dataprep arrayjit.verdict tune_crown)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -307,7 +307,7 @@
  ; no computed number.
  (name circles_conv)
  (modules circles_conv)
- (libraries ocannl dataprep arrayjit.verdict training_golden)
+ (libraries ocannl dataprep arrayjit.verdict training_golden tune_crown)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -402,7 +402,7 @@
  ; number.
  (name fsm_transformer)
  (modules fsm_transformer)
- (libraries ocannl arrayjit.verdict training_golden)
+ (libraries ocannl arrayjit.verdict training_golden tune_crown)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -448,7 +448,7 @@
  ; each cell's summation order.
  (name transformer_names)
  (modules transformer_names)
- (libraries ocannl dataprep arrayjit.verdict training_golden)
+ (libraries ocannl dataprep arrayjit.verdict training_golden tune_crown)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -492,7 +492,7 @@
 (executable
  (name bench_circles_step)
  (modules bench_circles_step)
- (libraries ocannl dataprep unix ll_test)
+ (libraries ocannl dataprep unix ll_test tune_crown)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

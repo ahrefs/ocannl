@@ -78,6 +78,7 @@ let () =
   (* What the timed artifact emitted, off the routine itself (gh-ocannl-626): a flip refinement or a
      timing_ctx replay fallback ships something no arm report describes. *)
   H.collect_shipped arms (H.Plain routine);
+  H.trace_crowns arms;
   let compile_s = Unix.gettimeofday () -. t0 in
   H.trace_search_done ~compile_s;
   (* Autotune's timing context re-ran param inits on [ctx]; restore fixture weights. *)

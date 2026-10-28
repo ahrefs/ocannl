@@ -702,6 +702,27 @@ let timing_decisions_wire decisions =
   List.map decisions ~f:(fun (settle, admission, calls) ->
       (Autotune.batch_settle_name settle, Autotune.batch_admission_name admission, calls))
 
+let named_arms t =
+  (* Arms are named by arrival order on a cold run, which reports both. A placement-store replay
+     (gh-ocannl-786) reports exactly one search -- the shipped placement's -- so a lone report is
+     named by what [on_ship] said shipped rather than as an arm A it may not be. *)
+  match (List.rev t.arm_reports, t.shipped) with
+  | [ r ], Some what -> [ (what, r) ]
+  | reports, _ ->
+      List.mapi reports ~f:(fun i r -> (Printf.sprintf "%c" (Char.of_int_exn (65 + i)), r))
+
+(** One stderr line per placement arm: its crowned candidate and how the beam finals decided it
+    ({!Tune_crown.fields}), then which placement shipped. The result line's [tune] object carries
+    each arm's [best_label] but not the finals, and a flip refinement that shipped is no arm, so the
+    [shipped] name is printed beside them. Prints nothing for an untuned cell. *)
+let trace_crowns t =
+  match named_arms t with
+  | [] -> ()
+  | named ->
+      List.iter named ~f:(fun (name, r) ->
+          Stdio.eprintf "bench: tune arm %s %s\n%!" name (Tune_crown.fields r));
+      Option.iter t.shipped ~f:(Stdio.eprintf "bench: tune shipped=%s\n%!")
+
 (** The [tune] JSON object, or [None] when no arm reported (an untuned cell). Times are
     milliseconds, and a time that was never measured is [null], not [inf]: [best_ms] is [infinity]
     when an arm timed nothing at all (every candidate failed and the GPU baseline was not
@@ -731,17 +752,9 @@ let timing_decisions_wire decisions =
     format for artifacts and readers that predate gh-ocannl-677; [state] is the one that names the
     outcome, [no_searches] the one that spares a reader deriving the third case from two zeros. *)
 let tune_json t =
-  match List.rev t.arm_reports with
+  match named_arms t with
   | [] -> None
-  | reports ->
-      (* Arms are named by arrival order on a cold run, which reports both. A placement-store replay
-         (gh-ocannl-786) reports exactly one search -- the shipped placement's -- so a lone report
-         is named by what [on_ship] said shipped rather than as an arm A it may not be. *)
-      let named =
-        match (reports, t.shipped) with
-        | [ r ], Some what -> [ (what, r) ]
-        | _ -> List.mapi reports ~f:(fun i r -> (Printf.sprintf "%c" (Char.of_int_exn (65 + i)), r))
-      in
+  | named ->
       let shipped =
         match t.shipped with
         | Some what -> what

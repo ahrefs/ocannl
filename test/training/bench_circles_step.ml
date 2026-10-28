@@ -107,7 +107,8 @@ let () =
   | Some r ->
       printf "tune: state=%s fissioned=%b candidates=%d baseline_ms=%.3f best_ms=%.3f\n"
         (Autotune.outcome_name r.Autotune.outcome)
-        r.Autotune.fissioned r.Autotune.candidates_timed r.Autotune.baseline_ms r.Autotune.best_ms
+        r.Autotune.fissioned r.Autotune.candidates_timed r.Autotune.baseline_ms r.Autotune.best_ms;
+      Tune_crown.eprint ~site:"bench_circles_step" r
   | None -> printf "tune: no report\n");
 
   (* --- Steady-state stepping, as the training loop does it. --- *)
