@@ -195,6 +195,44 @@ let () =
       let%op t = x ++ "2^o => o" in
       t)
 
+(* A slice inside a concatenation: [1^a; b => a^b] drops the first operand's first cell and
+   concatenates the rest with the second operand. [a] occurs only inside concatenated axes, so the
+   result's [a^b] must still count it as named by the first operand and stay a concatenation -- not
+   read as a replacement of [b] that the first operand never reaches. *)
+let () =
+  Verdict.case "slice inside a concatenation, 1^a; b => a^b" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let label = "slice inside a concatenation, 1^a; b => a^b" in
+      let x1, v1 = leaf ~layout:Trailing ~rows:1 3 in
+      let v2 = [| 101.; 102. |] in
+      let x2' =
+        Tensor.ndarray ~grad_spec:Tensor.Require_grad v2 ~batch_dims:[] ~input_dims:[]
+          ~output_dims:[ 2 ] ()
+      in
+      let t = TDSL.concat "1^a; b => a^b" [| x1; x2' |] () in
+      let w_values = Array.sub primes ~pos:0 ~len:4 in
+      let w =
+        Tensor.ndarray ~grad_spec:Tensor.Prohibit_grad w_values ~batch_dims:[] ~input_dims:[]
+          ~output_dims:[ 4 ] ()
+      in
+      let%op loss = (t *. w) ++ "...|... => |->0" in
+      Train.set_materialized t.Tensor.value;
+      Train.set_materialized (grad_of x1);
+      Train.set_materialized (grad_of x2');
+      let ctx = Train.update_once ~output_cd_file:false (Context.auto ()) loss in
+      pf_all2 "%s: the forward is the first operand's tail, then the second operand" label
+        (Context.get_values ctx t.value)
+        [| v1.(1); v1.(2); v2.(0); v2.(1) |]
+        ~f:Float.equal;
+      pf_all2 "%s: the first operand's gradient skips its dropped cell" label
+        (Context.get_values ctx (grad_of x1))
+        [| 0.; w_values.(0); w_values.(1) |]
+        ~f:Float.equal;
+      pf_all2 "%s: the second operand's gradient is the suffix's weights" label
+        (Context.get_values ctx (grad_of x2'))
+        [| w_values.(2); w_values.(3) |]
+        ~f:Float.equal)
+
 (* [%cd] replacement assigns into an existing target: the cells outside the segment keep the
    target's prior values (sentinels), which a fresh [++]/[++^] result instead zero-initializes. *)
 let cd_replace ~label ~name ~dst ~offset ~src make =

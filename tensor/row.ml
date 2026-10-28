@@ -5437,11 +5437,32 @@ let%debug4_sexp solve_proj_equations ?(clamp_padded = false) (eqs : proj_equatio
           match Hashtbl.find v_env v with Some p -> named (depth + 1) p | None -> [])
       | Var _ | Solved _ | Concat _ -> []
     in
-    List.concat_map eqs ~f:(function
-      | Proj_eq (p1, p2) -> named 0 p1 @ named 0 p2
-      | Iterated p -> named 0 p)
-    |> List.map ~f:repr_of
-    |> Set.of_list (module Proj_id)
+    let outside =
+      List.concat_map eqs ~f:(function
+        | Proj_eq (p1, p2) -> named 0 p1 @ named 0 p2
+        | Iterated p -> named 0 p)
+      |> List.map ~f:repr_of
+    in
+    (* A component another concatenated axis also has is named by that access too: in [1^a; b =>
+       a^b] the operand's [1^a] is a slice, and [a] is what the result's [a^b] concatenates. One
+       axis can reach several equations, so the concatenations are told apart by their components,
+       not counted per equation. *)
+    let concats =
+      List.concat_map eqs ~f:(function Proj_eq (p1, p2) -> [ p1; p2 ] | Iterated p -> [ p ])
+      |> List.filter_map ~f:(function
+        | Concat proj_dims ->
+            Some
+              (List.map proj_dims ~f:(fun (pid, _) -> repr_of pid)
+              |> List.sort ~compare:Proj_id.compare)
+        | _ -> None)
+      |> List.dedup_and_sort ~compare:[%compare: Proj_id.t list]
+    in
+    let shared =
+      List.concat_map concats ~f:(List.dedup_and_sort ~compare:Proj_id.compare)
+      |> List.sort_and_group ~compare:Proj_id.compare
+      |> List.filter_map ~f:(function p :: _ :: _ -> Some p | _ -> None)
+    in
+    Set.of_list (module Proj_id) (outside @ shared)
   in
   let all_concat_targets = !p_concat_targets in
   let shift_targets, concat_targets =
