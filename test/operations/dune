@@ -159,6 +159,9 @@
   (alias runtest-open_node_scan_control)
   (alias runtest-open_node_scan_refusal_control)
   (alias runtest-open_node_scan_cases)
+  (alias runtest-debug_name_scan)
+  (alias runtest-debug_name_scan_control)
+  (alias runtest-debug_name_scan_refusal_control)
   (alias runtest-census_total_ratchet)
   (alias runtest-workflow_job_timeouts)
   (alias runtest-shell_scripts_parse)
@@ -346,6 +349,9 @@
   (alias runtest-open_node_scan)
   (alias runtest-open_node_scan_control)
   (alias runtest-open_node_scan_refusal_control)
+  (alias runtest-debug_name_scan)
+  (alias runtest-debug_name_scan_control)
+  (alias runtest-debug_name_scan_refusal_control)
   (alias runtest-tensorized_census_ratchet)
   (alias runtest-provenance_tag_inventory)
   (alias runtest-census_total_ratchet)
@@ -3767,6 +3773,10 @@
   open_node_scan_control.expected
   open_node_scan_refusal_control.expected
   open_node_scan_cases.expected
+  debug_name_scan.ml
+  debug_name_scan.expected
+  debug_name_scan_control.expected
+  debug_name_scan_refusal_control.expected
   render_decline_inventory.ml
   render_decline_inventory.expected
   ocamlformat_ignore_scan.ml
@@ -3830,6 +3840,8 @@
    provenance_tag_inventory.expected,provenance_tag_scan_cases.expected
    open_node_scan.ml
    open_node_scan.expected,open_node_scan_control.expected,open_node_scan_refusal_control.expected,open_node_scan_cases.expected
+   debug_name_scan.ml
+   debug_name_scan.expected,debug_name_scan_control.expected,debug_name_scan_refusal_control.expected
    render_decline_inventory.ml
    render_decline_inventory.expected
    ocamlformat_ignore_scan.ml
@@ -9686,6 +9698,90 @@
  (modules open_node_scan_cases)
  (libraries base stdio test_utils arrayjit.verdict)
  (deps ocannl_config))
+
+; gh-ocannl-1606: a test reads a node's debug name only to show it, never to find the node -- the
+; debug name is a display name a renderer can change (gh-ocannl-1552). The reader states its closed
+; list of accepted forms in test/support/debug_name_scan.ml. The corpus is every .ml under test/ and
+; arrayjit/test/ as a source tree holds it.
+
+(executable
+ (name debug_name_scan)
+ (modules debug_name_scan)
+ (libraries base stdio test_utils arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- parses test sources without running a backend.
+ (target debug_name_scan.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (sandbox always)
+  (source_tree ..)
+  (source_tree ../../arrayjit/test))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:debug_name_scan.exe}
+    %{workspace_root}
+    %{dep:debug_name_scan.exe}
+    %{target}
+    %{dep:ocannl_config}))))
+
+(rule
+ (alias runtest-debug_name_scan)
+ (package neural_nets_lib)
+ (action
+  (diff debug_name_scan.expected debug_name_scan.actual)))
+
+; The shipping scanner on a committed tree: each refused form beside the nearest accepted one. Its
+; golden is the refusals, so a scanner that stopped reading cannot pass.
+
+(rule
+ ; ocannl-backend: none -- parses a committed fixture tree without running a backend.
+ (target debug_name_scan_control.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (source_tree debug_name_scan_fixture))
+ (action
+  (with-stdout-to
+   %{target}
+   (ignore-stderr
+    (with-accepted-exit-codes
+     1
+     (run %{dep:debug_name_scan.exe} --fixture debug_name_scan_fixture))))))
+
+(rule
+ (alias runtest-debug_name_scan_control)
+ (package neural_nets_lib)
+ (action
+  (diff debug_name_scan_control.expected debug_name_scan_control.actual)))
+
+; Each of the scanner's own refusals, reached through a synthetic input (gh-ocannl-800).
+
+(rule
+ ; ocannl-backend: none -- feeds synthetic sources to the scanner without running a backend.
+ (target debug_name_scan_refusal_control.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  debug_name_scan.ml)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:debug_name_scan.exe} --refusal-control))))
+
+(rule
+ (alias runtest-debug_name_scan_refusal_control)
+ (package neural_nets_lib)
+ (action
+  (diff
+   debug_name_scan_refusal_control.expected
+   debug_name_scan_refusal_control.actual)))
 
 ; gh-ocannl-1309: an executed claim about a tensorized routine whose item judges no mma census --
 ; parity alone also passes for a Tile_mma that declined to the scalar fallback (gh-ocannl-1283).

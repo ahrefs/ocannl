@@ -102,6 +102,12 @@ let allowed =
         "the line of the committed fixture tree a refusal names, moving only with that fixture";
     };
     {
+      golden = Golden "test/operations/debug_name_scan_control.expected";
+      pattern = {|^FAIL: test/operations/lookups\.ml:[0-9]+:|};
+      reason =
+        "the line of the committed fixture tree a refusal names, moving only with that fixture";
+    };
+    {
       golden = Golden "test/operations/env_var_deps.expected";
       pattern = {|diagnostics: at least [0-9]+ (count and details on stderr)|};
       reason = "the extracted-diagnostic floor, a hand-written constant of the scan";

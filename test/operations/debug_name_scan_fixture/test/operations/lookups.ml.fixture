@@ -1,0 +1,49 @@
+(* debug_name_scan_control's fixture: each form the reader refuses beside the nearest one it
+   accepts. Never compiled; the [.fixture] suffix keeps every build and other scan off it. *)
+module Tn = Ir.Tnode
+open Verdict.Claims
+
+(* Refused: an equality on the debug name, inside a find. *)
+let find_by_name nodes name = List.find nodes ~f:(fun tn -> String.equal (Tn.debug_name tn) name)
+
+(* Accepted: the same node found by label, its debug name only printed. *)
+let find_by_label nodes name =
+  let found = List.find nodes ~f:(fun tn -> String.equal (Tn.label tn) name) in
+  Option.iter found ~f:(fun tn -> Stdio.printf "found %s\n" (Tn.debug_name tn));
+  found
+
+(* Refused: the debug name as an association key. *)
+let by_name nodes = List.map nodes ~f:(fun tn -> (Tn.debug_name tn, tn))
+
+(* Refused: the names returned, through List.map. Accepted: the same list joined and printed. *)
+let names nodes = List.map nodes ~f:Tn.debug_name
+let show nodes = Stdio.eprintf "%s\n" (String.concat ~sep:", " (List.map nodes ~f:Tn.debug_name))
+
+(* Refused once, though spelled through [|>]. Accepted: a print through [@@]. *)
+let piped nodes = nodes |> List.map ~f:Tn.debug_name
+let show_one tn = Stdio.printf "%s\n" @@ Tn.debug_name tn
+
+(* Refused: the haystack of a substring check. Accepted: the needle in a refusal message. *)
+let is_kernel tn = String.is_substring (Tn.debug_name tn) ~substring:"kernel"
+let names_node msg tn = String.is_substring msg ~substring:("node " ^ Tn.debug_name tn ^ " ")
+
+(* Refused: a printf the source rebinds is an ordinary function. Accepted: a claim label. *)
+let shadowed tn =
+  let printf _ name = String.equal name "w" in
+  printf "%s" (Tn.debug_name tn)
+
+let labelled tn ok = p ("the run agrees on " ^ Tn.debug_name tn) ok
+
+(* Refused: an unapplied reference handed on. *)
+let namer = Tn.debug_name
+
+(* Accepted: a marked comparison with rendered text. Refused: a malformed marker, and one that
+   marks nothing. *)
+let census_row row tn =
+  String.equal row (Tn.debug_name tn [@rendered_name "the census row prints the display name"])
+
+let bad_marker row tn = String.equal row (Tn.debug_name tn [@rendered_name "census"])
+let stray = (1 [@rendered_name "a marker on a literal"])
+
+(* Refused: an interpolation the parse tree does not expose. *)
+let interpolated tn = [%string "node %{Tn.debug_name tn}"]

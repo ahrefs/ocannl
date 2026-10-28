@@ -151,6 +151,9 @@ module Open_node_scan = Open_node_scan
 (** Holding every tensor node a module of [tensor/] creates to [Tensor.note_open_node], the uid list
     a rewind discards by (gh-ocannl-1579). *)
 
+module Debug_name_scan = Debug_name_scan
+(** Holding every test's use of a node's debug name to display, never lookup (gh-ocannl-1606). *)
+
 module Tensorized_census_scan = Tensorized_census_scan
 (** Finding executed claims about a tensorized routine whose item judges no mma census, which parity
     alone cannot replace (gh-ocannl-1309). *)
