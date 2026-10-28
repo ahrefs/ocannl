@@ -145,6 +145,18 @@ let () =
     [ ("hla_fs_big", 4 * big_elems) ]
     ~heap:[ "hla_fs_big" ]
 
+(* A node labeled like a name the heap declarations call (local review of the PR): the renderer
+   reserves those names, so the node is declared under another and the library's [free] stays
+   visible -- otherwise the kernel calls the node and does not compile. *)
+let () =
+  let name = "hla_fs_named" in
+  let heap_tile = scratch name (floats routine_budget + 1) and named = scratch "free" 16 in
+  let src, got, want = run_leg ~name (routine ~name [ heap_tile; named ]) in
+  p "function scope, beside a node labeled free: the heap array, freed" (on_heap src ~ident:name);
+  p "function scope, beside a node labeled free: no array is declared as free"
+    (not (declared_on_stack src ~ident:"free"));
+  p_all2 "function scope, beside a node labeled free: values" got want ~f:Float.equal
+
 let grid_leg ~what ~name ~n ~heap =
   let tile = scratch (name ^ "_tile") n in
   let src, got, want = run_leg ~name (grid_routine ~name tile ~n) in

@@ -2522,11 +2522,41 @@ module C_syntax (B : C_syntax_config) = struct
      language's keywords, its builtins, its intrinsic globals) plus what its own operator rendering
      actually emits -- see {!op_syntax_idents} for why the second half has to be derived from [B]
      and not from the C spellings. *)
+  (* gh-ocannl-1669: the lines declaring a heap [Local] array of [elems] [typ]s under [ident] (over-
+     allocate by the alignment, round the pointer up), and the one freeing it. Ahead of
+     [ident_blacklist], which reserves what they emit ({!heap_local_idents}). *)
+  let heap_local_lines ~typ ~ident ~elems ~zero_init =
+    let raw = derived_name heap_local_derivation ident in
+    let align = Ops.buffer_alignment in
+    let size = Printf.sprintf "(size_t)%d * sizeof(%s) + %d" elems typ align in
+    [
+      Printf.sprintf "void * const %s = %s;" raw
+        (if zero_init then "calloc(1, " ^ size ^ ")" else "malloc(" ^ size ^ ")");
+      Printf.sprintf "if (!%s) abort();" raw;
+      Printf.sprintf "%s * const %s = (%s *)(((uintptr_t)%s + %d) & ~(uintptr_t)%d);" typ ident typ
+        raw (align - 1) (align - 1);
+    ]
+
+  let heap_local_free_line ident =
+    Printf.sprintf "free(%s);" (derived_name heap_local_derivation ident)
+
+  (* The names the heap declarations emit ([malloc], [free], [uintptr_t], ...), harvested from the
+     rendering itself over a placeholder node, so a tensor node never takes one and shadows the call
+     (the identifier rule of {!op_syntax_idents}). *)
+  let heap_local_idents ~typ =
+    List.concat_map
+      (heap_local_free_line "?"
+      :: List.concat_map [ true; false ] ~f:(fun zero_init ->
+          heap_local_lines ~typ ~ident:"?" ~elems:1 ~zero_init))
+      ~f:extract_idents
+    |> List.dedup_and_sort ~compare:String.compare
+
   let ident_blacklist =
     B.ident_blacklist
     @ op_syntax_idents ~ternop_syntax:B.ternop_syntax ~binop_syntax:B.binop_syntax
         ~unop_syntax:B.unop_syntax ~vec_unop_syntax:B.vec_unop_syntax
         ~convert_precision:B.convert_precision
+    @ if B.heap_local_arrays then heap_local_idents ~typ:(B.typ_of_prec Ops.single) else []
 
   let get_ident =
     (* [ocannl_] is the emitter's own namespace: typedefs minted per lane count
@@ -4589,23 +4619,14 @@ module C_syntax (B : C_syntax_config) = struct
              else (used, Set.add heap tn))
       |> snd
 
-  (* The heap form of {!local_array_decl}: over-allocate by the alignment, round the pointer up. *)
+  (* The heap form of {!local_array_decl}. *)
   let heap_local_decl ~typ ~ident ~zero_init (tn : Tn.t) : PPrint.document =
-    let raw = derived_name heap_local_derivation ident in
-    let align = Ops.buffer_alignment in
-    let size = Printf.sprintf "(size_t)%d * sizeof(%s) + %d" (Tn.num_elems tn) typ align in
     PPrint.separate_map PPrint.hardline PPrint.string
-      [
-        Printf.sprintf "void * const %s = %s;" raw
-          (if zero_init then "calloc(1, " ^ size ^ ")" else "malloc(" ^ size ^ ")");
-        Printf.sprintf "if (!%s) abort();" raw;
-        Printf.sprintf "%s * const %s = (%s *)(((uintptr_t)%s + %d) & ~(uintptr_t)%d);" typ ident
-          typ raw (align - 1) (align - 1);
-      ]
+      (heap_local_lines ~typ ~ident ~elems:(Tn.num_elems tn) ~zero_init)
 
   (* Releases a {!local_array_decl ~heap} array at the end of its declaring scope. *)
   let heap_local_free (tn : Tn.t) : PPrint.document =
-    PPrint.string (Printf.sprintf "free(%s);" (derived_name heap_local_derivation (get_ident tn)))
+    PPrint.string (heap_local_free_line (get_ident tn))
 
   (* Renders a [Local]-placement (routine-scope scratch) array declaration; shared by
      [compile_proc]'s function-scope [local_decls] and the per-chunk declarations of pool-parallel

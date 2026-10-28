@@ -259,6 +259,8 @@ test/operations/hardware_workgroup_reduce.ml [run by @test/operations/runtest-ha
 test/operations/heap_local_arrays.ml [run by @test/operations/runtest-heap_local_arrays; also pins text this scan cannot name: untraced callback, forwarded parameter, opaque aggregate component]
     "Pool-backed Grid rendering"
     "float " ^ ... ^ "["
+    "free"
+    "hla_fs_named"
     sprintf "float %s[%d]"
     sprintf "float * const %s = "
     sprintf "free(%s);"

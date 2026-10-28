@@ -7,6 +7,9 @@ function scope, two arrays over the budget together: hla_fs_small is a stack arr
 function scope, two arrays over the budget together: values: true
 function scope, 12 MiB: hla_fs_big is a heap array, freed: true
 function scope, 12 MiB: values: true
+function scope, beside a node labeled free: the heap array, freed: true
+function scope, beside a node labeled free: no array is declared as free: true
+function scope, beside a node labeled free: values: true
 Grid chunk, at the budget: the Grid renders on the pool: true
 Grid chunk, at the budget: a stack tile: true
 Grid chunk, at the budget: values: true
