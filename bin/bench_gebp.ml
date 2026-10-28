@@ -155,10 +155,9 @@ let grid_b_pack ~elem_bytes ~stage_a ~bm ~bk ~ni ~nj =
    guards in the edge block alone: the k analog of [Tensorize]'s full-row-block split
    (gh-ocannl-1563). The micro-kernel itself carries no k guard either way (its reduction masks are
    discharged against the zero-filled operands), so values are unchanged. Empty when k divides or
-   has no full block. *)
-let k_block_split ~nk ~bk ~k_o =
-  let full = nk / bk in
-  if nk % bk = 0 || full = 0 then [] else [ fst (Sched.partition ~axis:k_o ~breakpoints:[ full ]) ]
+   has no full block. The split is [Sched.pad_edge_partition], the spelling the autotuner's
+   [cpu_mma_pack_sketch_schedule] shares (gh-ocannl-1670). *)
+let k_block_split ~nk ~bk ~k_o = Sched.pad_edge_partition ~block_loop:k_o ~extent:nk ~block:bk
 
 let packed_schedule ~layout ?(hoist_b = false) ?(stage_a = true) ?b_pack ~tile_prec ?tile ~bm ~bk
     ~(a : Ir.Tnode.t) ~(b : Ir.Tnode.t) ~(c : Ir.Tnode.t) (opt : LL.optimized) : Sched.schedule =

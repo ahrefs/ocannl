@@ -346,7 +346,18 @@ let () =
    (or [on] with a gcc before 14), or on a target without an FMA, nothing contracts the serial loop
    and the two differ by design, so the claim is skipped there: a bitwise claim there needs
    [fp_contract=true] (docs/agent-notes/backend-precision-and-simd.md). Each seed's distance from
-   the serial loop, and the compile line, go to stderr. === *)
+   the serial loop, and the compile line, go to stderr.
+
+   The same seeds carry the k-block split (gh-ocannl-1670): every one, in each packing shape the
+   site seeds, partitions its k-block loop at the last full block ([Sched.pad_edge_partition]: k =
+   70 gives 4 full blocks and an edge block), so the serial-twin claim above covers the split seeds.
+   Each seed also runs with its [Partition] dropped (the unsplit composition the tuner seeded
+   before), bitwise equal to the split run under every contraction mode: a reorder of the k-chain,
+   or a multiply-add fused on one side only, would show on these operands. Structurally, the edge
+   segment keeps every [Where] the unsplit k-block loop held and the full segment holds no more;
+   where a seed packs in the kernel, the full segment holds fewer, having shed the k edge guards of
+   the zero-fringe packing nests (a hoisted operand's fringe is filled at link time, outside every k
+   loop). === *)
 let () =
   let mav =
     Array.init (m_ext * k_ext)
@@ -415,25 +426,70 @@ let () =
     Stdio.eprintf "kernel compile: %s %s, isa %s (not part of the golden)\n%!"
       (Context.Cc_backend.compiler_command ())
       kernel_flags isa;
+  (* [Where]s inside every loop binding [sym]. *)
+  let wheres_under sym llc =
+    List.sum
+      (module Int)
+      (Ll_test.loop_sites llc)
+      ~f:(fun s ->
+        if Ir.Indexing.equal_symbol s.Ll_test.ls_index sym then
+          let _, w, _ = Ll_test.census s.Ll_test.ls_stmt in
+          w
+        else 0)
+  in
+  (* One compile of seed [p]: with [~split:false] the seed's [Partition] is dropped. Returns whether
+     the routine is labeled tensorized, the readback, the [Partition] the seed's schedule carries
+     (read before any dropping, so the unsplit run still names its k-block loop as the [Partition]'s
+     axis), and the scheduled code. *)
+  let run_seed i (p : Autotune.sketch_params) ~split =
+    let nc = mk (Printf.sprintf "nd%d%c" (i + 1) (if split then 's' else 'u')) in
+    let applied = ref None in
+    let transform opt =
+      let sched = Autotune.sketch_schedule ~accum_prec ~p opt in
+      let partition =
+        List.find_map sched ~f:(function
+          | Sched.Partition { axis; breakpoints; segment_indices } ->
+              Some (axis, breakpoints, segment_indices)
+          | _ -> None)
+      in
+      let sched =
+        if split then sched
+        else List.filter sched ~f:(function Sched.Partition _ -> false | _ -> true)
+      in
+      let out = Sched.apply sched opt in
+      applied := Some (partition, out.LL.llc);
+      out
+    in
+    let ctx, routine =
+      Context.compile
+        ~lowered_transform:(fun o -> [ transform o ])
+        (Context.auto ())
+        (named
+           (Printf.sprintf "nondyadic_%s_%d" (if split then "seed" else "unsplit") i)
+           (Train.forward nc))
+        Ir.Indexing.Empty
+    in
+    let tensorized =
+      Ir.C_syntax.equal_tensorization routine.Context.mma.Ir.C_syntax.tensorization
+        Ir.C_syntax.Tensorized
+    in
+    let ctx = Context.run ctx routine in
+    let partition, llc = Option.value_exn !applied in
+    (tensorized, Context.get_values ctx nc.Tensor.value, partition, llc)
+  in
   let runs =
     if not on_cpu then []
     else
       List.mapi !seeds ~f:(fun i (p : Autotune.sketch_params) ->
-          let nc = mk (Printf.sprintf "nd%d" (i + 1)) in
-          let ctx, routine =
-            Context.compile
-              ~lowered_transform:(fun o ->
-                [ Sched.apply (Autotune.sketch_schedule ~accum_prec ~p o) o ])
-              (Context.auto ())
-              (named (Printf.sprintf "nondyadic_seed_%d" i) (Train.forward nc))
-              Ir.Indexing.Empty
+          let tensorized, got, partition, llc = run_seed i p ~split:true in
+          let _, unsplit, upartition, ullc = run_seed i p ~split:false in
+          (* The full and edge segments' [Where]s, against the unsplit k-block loop's. *)
+          let guards =
+            match (partition, upartition) with
+            | Some (_, _, [ seg_full; seg_edge ]), Some (k_o, _, _) ->
+                Some (wheres_under seg_full llc, wheres_under seg_edge llc, wheres_under k_o ullc)
+            | _ -> None
           in
-          let tensorized =
-            Ir.C_syntax.equal_tensorization routine.Context.mma.Ir.C_syntax.tensorization
-              Ir.C_syntax.Tensorized
-          in
-          let ctx = Context.run ctx routine in
-          let got = Context.get_values ctx nc.Tensor.value in
           let max_diff =
             Array.foldi got ~init:0. ~f:(fun i acc g -> Float.max acc (Float.abs (g -. want.(i))))
           in
@@ -442,16 +498,46 @@ let () =
              (not part of the golden)\n\
              %!"
             i p.sk_hoist p.sk_grid p.sk_pack_rest max_diff;
-          (tensorized, got))
+          (p, tensorized, got, unsplit, partition, guards))
   in
   gated_all ~min:2 ~when_:on_cpu ~on:backend_name
-    "every 16x16 packed seed's routine is labeled tensorized" runs ~f:fst;
+    "every 16x16 packed seed's routine is labeled tensorized" runs
+    ~f:(fun (_, tensorized, _, _, _, _) -> tensorized);
   gated_all
     ~aggregation:(if on_cpu then `Environment else `Backend)
     ~min:2 ~when_:(on_cpu && contractible)
     ~on:(if on_cpu then "a kernel compile that cannot contract the serial loop" else backend_name)
     "every 16x16 packed seed matches the serial twin bitwise on non-dyadic operands" runs
-    ~f:(fun (_, got) -> Array.equal Float.equal got want)
+    ~f:(fun (_, _, got, _, _, _) -> Array.equal Float.equal got want);
+  let shapes =
+    List.dedup_and_sort
+      (List.map runs ~f:(fun ((p : Autotune.sketch_params), _, _, _, _, _) ->
+           (p.sk_hoist, p.sk_grid, p.sk_pack_rest)))
+      ~compare:Poly.compare
+  in
+  gated ~when_:on_cpu ~on:backend_name "the 16x16 packed seeds span at least two packing shapes"
+    (List.length shapes >= 2);
+  gated_all ~when_:on_cpu ~on:backend_name
+    "every 16x16 packed seed partitions its k-block loop at the last full block" runs
+    ~f:(fun (_, _, _, _, partition, _) ->
+      match partition with Some (_, [ b ], [ _; _ ]) -> b = k_ext / bk | _ -> false);
+  gated_all ~when_:on_cpu ~on:backend_name
+    "every k-split packed seed matches its unsplit composition bitwise" runs
+    ~f:(fun (_, _, got, unsplit, _, _) -> Array.equal Float.equal got unsplit);
+  gated_all ~when_:on_cpu ~on:backend_name
+    "every k-split packed seed's edge k segment keeps the unsplit k-block loop's Wheres, its full \
+     segment no more"
+    runs ~f:(fun (_, _, _, _, _, guards) ->
+      match guards with
+      | Some (full, edge, unsplit) -> edge = unsplit && full <= unsplit
+      | None -> false);
+  (* Both operands are constants here, so a hoisting shape packs neither in the kernel: its k loop
+     holds no packing nest, only the row mask's guards. *)
+  gated_all ~min:2 ~when_:on_cpu ~on:backend_name
+    "every in-kernel-packing seed's full k segment sheds k edge guards"
+    (List.filter runs ~f:(fun ((p : Autotune.sketch_params), _, _, _, _, _) -> not p.sk_hoist))
+    ~f:(fun (_, _, _, _, _, guards) ->
+      match guards with Some (full, _, unsplit) -> full < unsplit | None -> false)
 
 (* === Negative pin: a pad guard over an in-place operand (no zero-fringe staged tile) must be
    rejected — the intrinsic path would read past the operand's extent. === *)

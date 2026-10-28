@@ -507,6 +507,16 @@ val partition : axis:Indexing.symbol -> breakpoints:int list -> optop * Indexing
     [Indexing.get_symbol]) and returns them in segment order, so subsequent ops in a
     programmatically built schedule can address individual segments. *)
 
+val pad_edge_partition : block_loop:Indexing.symbol -> extent:int -> block:int -> optop list
+(** The {!constructor-Partition} a {!constructor-Pad} of an axis of [extent] to a multiple of
+    [block] prescribes, once that axis is {!constructor-Split} by [block] into [block_loop] and an
+    inner loop: [block_loop] partitioned at its last full block, so every guard the pad left on the
+    inner loop ([block*block_loop + inner < extent], e.g. a zero-fringe {!constructor-Stage}'s edge
+    guard on each packed element) is interval-decided in the full blocks and folds there, and
+    survives only in the edge block (gh-ocannl-1631). Empty when [block] divides [extent] (no pad)
+    or the axis has no full block. The one spelling of this split for the packed GEBP builders: the
+    autotuner's packed sketch ([Sketch_families]) and [bin/bench_gebp.ml] (gh-ocannl-1670). *)
+
 val partition_breakpoints : axis:Indexing.symbol -> Low_level.t -> int list
 (** Derives candidate {!constructor-Partition} breakpoints of the [axis] loop from the guards
     already present in its body: statement [If] conditions and scalar [Where] conditions (e.g. the

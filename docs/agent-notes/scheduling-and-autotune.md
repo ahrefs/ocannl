@@ -2093,7 +2093,15 @@ files.
   now `Partition`s `k_o` at its last full block (what `Pad`'s contract prescribes); the full
   segment's guards fold. On rog, `narrow_gebp_bench` n=76 at 16x32 went from 1.487x to 1.236x its
   dividing 19x76 control (the pad waste is 1.33x), and n=48 at 16x32 serial from 3.38 to 2.64 us.
-  The autotuner's `cpu_mma_pack_sketch_schedule` pads the same way and does NOT split yet. The
+  The autotuner's `cpu_mma_pack_sketch_schedule` pads the same way and, since gh-ocannl-1670,
+  splits too, in every packing shape, through the one spelling both builders call,
+  `Schedule.pad_edge_partition` (after `Tensorize`, and only with the k pad). The padded seeds'
+  op lists changed, but no cache key did: a key is the code's digest plus configuration, never a
+  candidate's ops, so an entry crowned before keeps replaying its (valid) unsplit schedule until it
+  is searched again. `schedule_pad`'s non-dyadic seed leg pins the split per packing shape:
+  bitwise against the unsplit composition under every contraction mode, and bitwise against the
+  serial loop wherever the serial loop can contract (gh-ocannl-1682's gate: not
+  `cc_backend_fp_contract=off`/`on`, and an FMA target). The
   whole-K residual (16x76 vs 19x76: 1.095x against 1.053x row waste, block shapes differing too)
   is what two-site `Fuse_epilogue` fusion could at most recover, so it was not built.
   `Grid_outermost` B~ packing is a size call, not a fix: re-packing a panel per row block runs
