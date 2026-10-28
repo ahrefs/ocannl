@@ -1764,12 +1764,14 @@ val get_ident_within_code :
   ?no_dots:bool ->
   ?blacklist:string list ->
   ?reserved_prefixes:string list ->
+  ?reserved:(string -> bool) ->
   t array ->
   Tnode.t ->
   string
 (** The code-name minter for the nodes [llcs] mention. A node whose label ident is in [blacklist],
-    or starts with one of [reserved_prefixes], is treated as a repeating ident: it takes the
-    disambiguated [n<id>_<label>] form rather than the bare label, so it cannot equal a name the
+    starts with one of [reserved_prefixes], or satisfies [reserved] (a namespace given by rule, such
+    as the implementation's [__x] / [_X], gh-ocannl-1338), is treated as a repeating ident: it takes
+    the disambiguated [n<id>_<label>] form rather than the bare label, so it cannot equal a name the
     emitter declares. A prefix reserves a namespace whose members are minted on the fly -- the
     C-family emitters' [ocannl_vec<lanes><suffix>] typedefs, one per lane count (gh-ocannl-1102) --
     which no finite blacklist can list. *)

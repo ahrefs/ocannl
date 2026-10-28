@@ -23,14 +23,14 @@ kernel void where_fwd(
 
   /* Pool base pointers. */
   device char* __pools[16] = { __pool0, __pool1, __pool2, __pool3, __pool4, __pool5, __pool6, __pool7, __pool8, __pool9, __pool10, __pool11, __pool12, __pool13, __pool14, __pool15 };
-  device float* __restrict where = (device float*)(__pools[__pool_slots[0]] + __pool_slots[1]);
-  device uchar* __restrict cond_condition = (device uchar*)(__pools[__pool_slots[2]] + __pool_slots[3]);
-  device half* __restrict a_then_val = (device half*)(__pools[__pool_slots[4]] + __pool_slots[5]);
-  device bfloat* __restrict b_else_val = (device bfloat*)(__pools[__pool_slots[6]] + __pool_slots[7]);
+  device float* __restrict t_where = (device float*)(__pools[__pool_slots[0]] + __pool_slots[1]);
+  device uchar* __restrict t_cond_condition = (device uchar*)(__pools[__pool_slots[2]] + __pool_slots[3]);
+  device half* __restrict t_a_then_val = (device half*)(__pools[__pool_slots[4]] + __pool_slots[5]);
+  device bfloat* __restrict t_b_else_val = (device bfloat*)(__pools[__pool_slots[6]] + __pool_slots[7]);
   /* Local declarations and initialization. */
 
   /* Main logic. */
   /* where fwd */
-  where[0] = ((cond_condition[0]) ? (float)(a_then_val[0]) : (float)(b_else_val[0]));
+  t_where[0] = ((t_cond_condition[0]) ? (float)(t_a_then_val[0]) : (float)(t_b_else_val[0]));
   /* end */
 }

@@ -172,7 +172,7 @@ let () =
        && has "bfloat16_to_single"
        && has "narrow storage bridged: d:bfloat16."
        && has "OCANNL_VEC_WIDEN_BFLOAT16" && has "OCANNL_VEC_NARROW_BFLOAT16"
-     else count_sub "float tile_" = 2));
+     else count_sub ("float " ^ Generated.node_ident "tile_") = 2));
 
   (* === gh-ocannl-639: bf16 with partial sums that are NOT bf16-exact === *)
   (* Products are multiples of 15/128 with a nonzero mean (~0.23 drift per k step), so the running
@@ -244,7 +244,7 @@ let () =
    p "half hoisted pack converts on the host; only d crosses the narrow bridge"
      ((* One in-kernel tile (A~); the B~ panel is a constant-pool buffer packed (and widened) on the
          host, so no in-kernel copy of it exists. *)
-      count_sub "float tile_" = 1
+      count_sub ("float " ^ Generated.node_ident "tile_") = 1
      && rendered_as_scheduled ~what:"nrw_half_hoisted" census_h
      && ((not on_cpu)
         || has "narrow storage bridged: d:half."

@@ -178,8 +178,8 @@ let () =
    (* Two plain local tile arrays; on the C backends both operand pointers of the register tiling
       point into them (the accumulator streams from the real output). *)
    p "packed tiles feed the register-tiled micro-kernel"
-     (count_sub "float tile_" = 2
-     && (not (has "threadgroup float tile_"))
+     (count_sub ("float " ^ Generated.node_ident "tile_") = 2
+     && (not (has ("threadgroup float " ^ Generated.node_ident "tile_")))
      && (not (has "__shared__"))
      && rendered_as_scheduled ~what:"pmm_packed" census
      && ((not on_cpu)

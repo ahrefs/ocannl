@@ -5927,6 +5927,19 @@
 ; colliding routines and reads their emitted sources, so it needs both the backend selection and
 ; the build_files prefix Test_utils.Generated inspects.
 
+; gh-ocannl-1338: tensor nodes named after the toolchain's macros and vendor types, executed.
+
+(test
+ (name vendor_node_names)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules vendor_node_names)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  (name reserved_routine_names)
  (package neural_nets_lib)

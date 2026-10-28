@@ -1,0 +1,2 @@
+a kernel with a node named after a toolchain macro or vendor type computes its exact sum: true
+a node named uint4 coexists with a uint4x32 node of its kernel: true

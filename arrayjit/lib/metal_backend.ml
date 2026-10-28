@@ -720,6 +720,11 @@ module Impl = struct
           "lid";
         ]
 
+    (* gh-ocannl-1338: [metal_stdlib]'s global types and macros ([uint4] -- the storage type of
+       every uint4x32 node --, [float4], [M_PI_F], [MAXFLOAT]) cannot be shadowed by, or expand
+       into, a node's identifier. *)
+    let node_ident_prefix = C_syntax.node_ident_prefix_for_backend "metal"
+
     (* gh-ocannl-707: the file-scope names [metal_stdlib] puts in the GLOBAL namespace, which a
        [kernel void <name>(] definition collides with ("redefinition of 'float4' as different kind
        of symbol", "expected unqualified-id"). Harvested empirically rather than by reading: every

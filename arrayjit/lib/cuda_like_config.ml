@@ -213,6 +213,11 @@ struct
   (* Bound under another name at top level: [include C_syntax.Pure_C_config] above brings its own
      empty [vendor_routine_idents] into scope, which a same-named reference here would pick up. *)
   let vendor_routine_idents = vendor_header_idents
+
+  (* gh-ocannl-1338: the vendor headers' global types and macros ([half2], [float4],
+     [CUDART_INF_FP16], [HIPRT_INF_FP16]) cannot be shadowed by, or expand into, a node's
+     identifier. *)
+  let node_ident_prefix = C_syntax.node_ident_prefix_for_backend Dialect.name
   let fp8_from_float doc = PPrint.(group (string Dialect.fp8_from_float_fn ^^ parens doc))
   let main_kernel_prefix = "extern \"C\" __global__"
 

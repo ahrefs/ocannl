@@ -193,6 +193,21 @@ files.
   The GPU dialects reserve the C++ keywords on top of the C ones: CUDA, HIP and MSL are all parsed
   by a C++ front end, so `C_syntax.cpp_keywords` (one shared table, added to all three) covers
   plausible labels like `class`, `new`, `operator`, `bool` and `this` that plain C leaves free.
+- On the GPU dialects every node identifier also carries a fixed prefix (`node_ident_prefix`, `t_`,
+  from `C_syntax.node_ident_prefix_for_backend`), because their vendor headers declare global types
+  and macros outside the reserved namespace, and a blacklist would have to track headers the runtime
+  compilers carry built in (gh-ocannl-1338). The measured case: Metal stores a uint4x32 node as
+  `uint4`, so a node labelled `uint4` made the next `device uint4* ...` of its kernel fail to parse;
+  a node labelled after a macro (`M_PI_F`, `CUDART_INF_FP16`) is expanded, not declared. The prefix
+  is on the EMITTED identifier only (`get_ident`); the code name (`get_code_ident`: `Tn.code_name`,
+  debug output, routine-log message text) and scope locals (`v<scope>_<name>`) keep the bare name,
+  though a log line echoing kernel code (`# local ... := <code>`) shows the prefixed one. A claim
+  pinning a node's emitted identifier spells it `Generated.node_ident`, never a literal. On every
+  backend a label in the reserved namespace (`__LINE__`, `_Bool`, `__CUDA_ARCH__`) or a predefined
+  system macro (`linux`, `unix`) takes the `n<id>_` form instead; cc keeps bare names otherwise, its
+  only headers being the C library's, which `ident_blacklist` covers. Guard:
+  `test/operations/vendor_node_names.ml`, executed per backend (on base its macro labels fail on
+  every backend, `uint4` on Metal).
 - Routine names are the *other* identifier class reaching the emitted source, and they do not go
   through the node-name machinery at all — a node's colliding label is forced into `n<id>_<label>`
   and every local carries a `v<scope>_` / `wred_` / `__rmw_` prefix, but a routine name was emitted

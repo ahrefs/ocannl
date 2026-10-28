@@ -42,6 +42,8 @@ let () =
   let src = Generated.read "mggc_embed" in
   let has substring = String.is_substring src ~substring in
   Verdict.p "guarded gather source casts signed guard to float"
-    (has "? C[" && has ": (float)(0.0))" && has "(float)(ids[");
+    (has ("? " ^ Generated.node_ident "C" ^ "[")
+    && has ": (float)(0.0))"
+    && has ("(float)(" ^ Generated.node_ident "ids" ^ "["));
   Verdict.p "guarded gather source contains no double declarations"
     ((not (String.is_empty src)) && not (has "double"))

@@ -136,7 +136,7 @@ let () =
   let has sub = String.is_substring src ~substring:sub in
   p "no in-kernel scratch or copy nests; packed constants are buffer params"
     (has "packed_ma" && has "packed_mb"
-    && (not (has "float tile_"))
+    && (not (has ("float " ^ Generated.node_ident "tile_")))
     (* Shared-tile declarations — not the [[..._in_threadgroup]] parameter attributes every Metal
        kernel carries. *)
     && (not (has "threadgroup float"))

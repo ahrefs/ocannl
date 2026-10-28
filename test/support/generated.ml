@@ -322,6 +322,18 @@ let assert_emits ?ext ~routine ~contains claim =
 let assert_omits ?ext ~routine ~contains claim =
   Verdict.p claim (not (String.is_substring (read ?ext routine) ~substring:contains))
 
+(** [node_ident label] is the identifier a tensor node whose code name is [label] takes in this
+    run's emitted kernels: [label] behind the backend dialect's node-identifier prefix
+    ({!Ir.C_syntax.node_ident_prefix_for_backend}, gh-ocannl-1338). A claim pinning a node's
+    identifier in emitted text spells it through here, so it states the same identifier on every
+    backend. *)
+let node_ident label =
+  match !backend with
+  | Some b -> Ir.C_syntax.node_ident_prefix_for_backend b ^ label
+  | None ->
+      uninitialized "Generated.node_ident";
+      label
+
 (* An identifier spelled with a number a compile mints afresh: a loop symbol ([i<digits>],
    [Indexing.symbol_ident]), a node identifier spelling its id ([n<digits>], optionally followed by
    [_<label>]: [Tnode.styled_ident] for an unlabeled node or one whose label repeats in the kernel),
@@ -339,16 +351,22 @@ let is_minted_ident ident =
     | Some rest -> String.for_all rest ~f:Char.is_digit
     | None -> false)
   || Option.is_some (numbered ~prefix:"n")
+  (* A node identifier behind a GPU dialect's prefix ([t_n12_x], gh-ocannl-1338). *)
+  || (match !backend with
+    | Some b ->
+        Option.is_some (numbered ~prefix:(Ir.C_syntax.node_ident_prefix_for_backend b ^ "n"))
+    | None -> false)
   || match numbered ~prefix:"v" with Some rest -> String.mem rest '_' | None -> false
 
 (** [normalize_minted text] is a generated source with every identifier a compile spells with a
-    freshly minted number -- loop symbols [i<digits>], node identifiers [n<digits>[_<label>]],
-    scope-local scalars [v<digits>_<ident>] -- renamed [@0], [@1], ... by first appearance, and
-    every run of whitespace collapsed to one space (a longer identifier moves the pretty-printer's
-    line breaks). Two compiles of one program differ in nothing else -- not even across fresh builds
-    of it, which mint new node ids (gh-ocannl-1473) -- so their normalized sources are equal, and a
-    difference left is one in the code. Number literals are copied whole, so a hex float's letters
-    are not read as an identifier. *)
+    freshly minted number -- loop symbols [i<digits>], node identifiers [n<digits>[_<label>]]
+    (behind the backend's {!node_ident} prefix where it has one), scope-local scalars
+    [v<digits>_<ident>] -- renamed [@0], [@1], ... by first appearance, and every run of whitespace
+    collapsed to one space (a longer identifier moves the pretty-printer's line breaks). Two
+    compiles of one program differ in nothing else -- not even across fresh builds of it, which mint
+    new node ids (gh-ocannl-1473) -- so their normalized sources are equal, and a difference left is
+    one in the code. Number literals are copied whole, so a hex float's letters are not read as an
+    identifier. *)
 let normalize_minted text =
   let names = Hashtbl.create (module String) in
   let out = Buffer.create (String.length text) in
