@@ -859,17 +859,21 @@
 # seed pass, the composites, the playoff and the beam rounds are skipped -- and the search crowns
 # its incumbent, then compiles and ships it as a completed search would. The base compile and the
 # baseline's timing window count against it. A compile cannot be cancelled, so an attempt also does
-# not start when the elapsed time plus two compiles as costly as the costliest of the search so far
-# (the base compile's included) would pass the budget (gh-ocannl-1556, gh-ocannl-1604): one for the
-# attempt, one reserved for the winner's recompile, which follows every check. A candidate's timing
-# is abandoned, unranked, before its first batch past the budget less that reserve. The untuned floors are
+# not start when the elapsed time plus two compiles of the projected cost would pass the budget
+# (gh-ocannl-1556, gh-ocannl-1604): one for the attempt, one reserved for the winner's recompile,
+# which follows every check. The projection is the costliest compile of the search so far (the base
+# compile's included), except that once a compile reuses a kernel an earlier one compiled (the
+# backend's kernel code cache), the cold compiles before it -- which filled the cache -- stop
+# counting (gh-ocannl-1667). A candidate's timing is abandoned, unranked, before its first batch
+# past the budget less that reserve. The untuned floors are
 # exempt, so a cut search still measures what the caller would get without tuning and crowns
 # nothing slower: the seeded untuned plan (CUDA/HIP) and the default-pipeline seed. Where no
 # candidate reproduces the untuned default (automatic scheduling with schedule_fission=false and
 # no seeded plan), or the floor's windows were refused, a cut search ships the untuned default
 # and stores nothing instead of crowning what it reached (its report's best_ms is then infinite).
 # The tolerance: a search overruns its budget by at most the excess of the compile in flight, or of
-# the winner's recompile, over the costliest compile before it, one timing batch (a calibration
+# the winner's recompile (whose kernels the cache may have evicted), over the projection before it,
+# one timing batch (a calibration
 # probe or a timed window's batch, ~10 ms of launches on a GPU, or one run of a routine slower than
 # that), and the exempt floors -- among them the base compile and the baseline's timing window,
 # which precede every check and pass only a budget they alone exceed. Each search has its own budget: `Train.tune_placements` runs one per placement arm

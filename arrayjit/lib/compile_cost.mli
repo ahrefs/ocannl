@@ -22,6 +22,12 @@
     - [kernels]: the kernels the compiles rendered; [kernels_compiled]: the ones the vendor compiler
       was given, counted just before it runs, so a compile it refused still counts (on Metal, inside
       link). They differ only on a backend that reuses compiled kernels ([reuse_capable]).
+    - [kernels_reused]: the rendered kernels whose code an EARLIER compile published -- the hits of
+      {!Kernel_code_cache.resolve}'s lookups, before this compile's own programs are compiled. Not
+      the kernels that share a program with a twin of their own batch (equal keys compile once), so
+      [kernels_compiled + kernels_reused <= kernels], and a cold compile reuses none even when it
+      compiles fewer kernels than it rendered (gh-ocannl-1667: what tells a compile the cache served
+      from the cold one that filled it).
     - [pipelines_created]: the per-kernel pipeline objects the links created rather than reused
       (Metal's compute pipeline states, gh-ocannl-1605), counted at the creation call; 0 on a
       backend that has no such object.
@@ -40,6 +46,7 @@ type t = {
   link_s : float;
   kernels : int;
   kernels_compiled : int;
+  kernels_reused : int;
   pipelines_created : int;
   reuse_capable : bool;
 }
@@ -70,6 +77,9 @@ val time_link : (unit -> 'a) -> 'a
 
 val record_kernels : rendered:int -> compiled:int -> unit
 (** Adds a compile's kernel counts. *)
+
+val record_kernels_reused : int -> unit
+(** Adds kernels a compile took from code an earlier compile published ([kernels_reused]). *)
 
 val record_pipeline_created : unit -> unit
 (** Counts one pipeline object created at link ([pipelines_created]). *)

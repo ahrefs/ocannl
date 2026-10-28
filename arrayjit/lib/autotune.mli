@@ -1971,9 +1971,9 @@ val no_search_report : timing:timing_mode -> report
     - [compiled] ({!tune}, as every compile it makes RETURNS, gh-ocannl-1314; see
       {!compile_record}): [routine], [stage], [attempt], [verdict], [took_s] (this compile's wall),
       [lower_s], [transform_s], [codegen_s], [device_s] ([none] where the backend compiles at link),
-      [link_s], [kernels] and [kernels_compiled]. A candidate's [compiled] line follows its
-      [candidate] line; a compile killed before returning writes none, so the stream's last
-      [candidate] or [stage] line still names it.
+      [link_s], [kernels], [kernels_compiled] and [kernels_reused] (gh-ocannl-1667). A candidate's
+      [compiled] line follows its [candidate] line; a compile killed before returning writes none,
+      so the stream's last [candidate] or [stage] line still names it.
     - [stage] ({!tune}): [routine], [elapsed_s], [stage], [attempts], [compile_s], [timing_s],
       written BEFORE each step outside the candidates that can block for long: [base_compile],
       [cache_replay], [baseline_timing], [seed_enumeration] (the lowerings the seeds are derived
@@ -3910,23 +3910,26 @@ val tune :
     Budget (gh-ocannl-1409, config [autotune_budget_seconds], default none): a search whose
     wall-clock time since the call started has reached the budget attempts no further candidate, and
     crowns its incumbent as a completed search does. A compile cannot be cancelled, so the budget is
-    kept by checks against one clock (gh-ocannl-1556): an attempt (or beam round) starts only while
-    the elapsed time is below the budget and the elapsed time plus the costliest candidate compile
-    the search has made so far is within it; and a non-floor candidate's timing is abandoned before
-    its first batch past the budget ([time_routine]'s [stop]), the candidate unranked. A search
-    therefore overruns its budget by at most the excess of the compile in flight over the costliest
-    before it (all of the first candidate compile's), one timing batch, the exempt floors, the base
-    compile and the winner's recompile; the untuned floors (the seeded untuned plan and the
-    default-pipeline seed, {!default_seed_label}) are attempted regardless, so the crown is no
-    slower than what the caller ships untuned. Where the cut left the untuned default unmeasured --
-    no candidate reproduces it (automatic scheduling with [schedule_fission=false] and no seeded
-    plan), or its windows were refused -- the call ships the untuned default compile, stores nothing
-    and reports as a search that timed nothing ({!budget_floor_unmeasured}). The report's
-    [budget_cut] says the budget stopped something. A cut search with clean timings stores its crown
-    marked as cut ({!Ir.Schedule_cache.entry}'s [budget_cut]); a later call with a budget replays
-    it, and one without a budget searches in full and overwrites it. The budget's value is part of
-    the search trajectory's identity, so a cut search's [best_steps] serve early stopping only under
-    the same budget.
+    kept by checks against one clock (gh-ocannl-1556, gh-ocannl-1604): an attempt (or beam round)
+    starts only while the elapsed time is below the budget and the elapsed time plus two compiles of
+    the projected cost -- the attempt's own and a reserve for the winner's recompile -- is within
+    it; and a non-floor candidate's timing is abandoned before its first batch past the budget less
+    that reserve ([time_routine]'s [stop]), the candidate unranked. The projection is the costliest
+    compile the call has made, the base compile's included, except that once a compile has reused a
+    kernel an earlier one published ({!Ir.Compile_cost.t}'s [kernels_reused]), the cold compiles
+    before it, which filled the kernel code cache, stop counting (gh-ocannl-1667). A search
+    therefore overruns its budget by at most the excess of the compile in flight, or of the winner's
+    recompile, over the projection before it, one timing batch, and the exempt floors; the untuned
+    floors (the seeded untuned plan and the default-pipeline seed, {!default_seed_label}) are
+    attempted regardless, so the crown is no slower than what the caller ships untuned. Where the
+    cut left the untuned default unmeasured -- no candidate reproduces it (automatic scheduling with
+    [schedule_fission=false] and no seeded plan), or its windows were refused -- the call ships the
+    untuned default compile, stores nothing and reports as a search that timed nothing
+    ({!budget_floor_unmeasured}). The report's [budget_cut] says the budget stopped something. A cut
+    search with clean timings stores its crown marked as cut ({!Ir.Schedule_cache.entry}'s
+    [budget_cut]); a later call with a budget replays it, and one without a budget searches in full
+    and overwrites it. The budget's value is part of the search trajectory's identity, so a cut
+    search's [best_steps] serve early stopping only under the same budget.
 
     Untuned fallback (gh-ocannl-1441): every path on which {!tune} ships "the untuned default
     compile" -- search disabled with nothing to replay, a refused lineage, a deferred cache replay

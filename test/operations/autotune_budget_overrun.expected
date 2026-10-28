@@ -5,11 +5,20 @@ projection: the search ended within the budget, the winner's recompile included:
 projection: as many compiles started as fit in the budget beside the reserve: true
 projection: its attempts are a prefix of the control's, cut by the budget: true
 projection: the crowned routine computes the untuned output bit for bit: true
+base: the serial baseline's compile compiled its kernels and reused none: true
+base: the base compile's projection refused every non-floor compile: true
 base: the winner's recompile was charged once: true
 base: the search ended within the budget, the base compile and the winner's recompile included: true
-base: as many compiles started as the base compile's projection admits: true
-base: its attempts are a prefix of the control's, cut by the budget: true
+base: it was cut by the budget: true
 base: the crowned routine computes the untuned output bit for bit: true
+cache: the serial baseline's compile compiled its kernels and reused none: true
+cache: no compile after the first reusing one compiled cold: true
+cache: a projection held at the cold compiles' cost would have refused every later compile: true
+cache: as many non-floor compiles started after it as the cached compiles' projection admits: true
+cache: the winner's recompile was charged once: true
+cache: the search ended within the budget, the cold compiles and the winner's recompile included: true
+cache: it was cut by the budget: true
+cache: the crowned routine computes the untuned output bit for bit: true
 timing: the slow candidate was attempted: true
 timing: its timing was abandoned, unranked: true
 timing: the search completed, cut by its budget: true
@@ -20,6 +29,7 @@ timing: the crowned routine computes the untuned output bit for bit: true
 reserve: the slow candidate was attempted: true
 reserve: its timing was abandoned, unranked: true
 reserve: the winner's recompile was charged once: true
+reserve: two non-floor compiles preceded its timing: true
 reserve: its timing stopped at the first batch past the budget less the reserve: true
 reserve: the search, the winner's recompile included, passed the budget by one batch at most: true
 reserve: the crowned routine computes the untuned output bit for bit: true
