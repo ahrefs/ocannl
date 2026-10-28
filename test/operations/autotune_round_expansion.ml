@@ -95,8 +95,8 @@ type observed = {
       (** Every round candidate's parent tag and segment, as the round attempted them, timed or not.
       *)
   composites : (string * string) list;
-      (** Every timed composite's label and digest tag, in attempt order: the recombined composite,
-          then its alternates. *)
+      (** Every timed composite's label and digest tag, in the order of their first windows: the
+          recombined composite, then its alternates. *)
 }
 
 let gain = 1.0
@@ -113,6 +113,17 @@ let composite_ms ?seat ~n label =
     | Some seat when String.equal label seat -> 10.01
     | Some _ -> 10.5 +. (1. /. Float.of_int (n + 1))
 
+(* A composite window's scripted time, recording a first window in [composites] (newest first). A
+   composite timed already is being re-timed by a finals -- the playoff's near-tie finals
+   (gh-ocannl-1665) or the beam finals -- and reads as its first window did. *)
+let composite_window ?seat composites (w : Scripted_search.window) =
+  match List.findi (List.rev !composites) ~f:(fun _ (label, _) -> String.equal label w.label) with
+  | Some (n, _) -> composite_ms ?seat ~n w.label
+  | None ->
+      let n = List.length !composites in
+      composites := (w.label, Autotune.digest_tag w.digest) :: !composites;
+      composite_ms ?seat ~n w.label
+
 (* One search under [rule] (stated at the config-file level for this search only), seating as the
    beam's near-copy the alternate labelled [seat], or without one the last alternate timed. *)
 let search ?seat rule =
@@ -126,10 +137,7 @@ let search ?seat rule =
     let label = w.label and digest = w.digest in
     let ms =
       if is_single label then 100.
-      else if is_composite label then (
-        let n = List.length !composites in
-        composites := (label, Autotune.digest_tag digest) :: !composites;
-        composite_ms ?seat ~n label)
+      else if is_composite label then composite_window ?seat composites w
       else
         match round_move label with
         | None -> 1000.
@@ -255,10 +263,7 @@ let probe () =
         ~settings:[ (expansion_key, "full") ]
         ~measure:(fun w ->
           if is_single w.label then 100.
-          else if is_composite w.label then (
-            let n = List.length !composites in
-            composites := (w.label, Autotune.digest_tag w.digest) :: !composites;
-            composite_ms ~n w.label)
+          else if is_composite w.label then composite_window composites w
           else 1000.)
       @@ fun () ->
       match

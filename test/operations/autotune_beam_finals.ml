@@ -242,7 +242,12 @@ let search ?(refuse_best_finals = false) ~settings ~tag () =
   in
   let qg, comp = chain in
   let (o : Scripted_search.observed) =
-    Scripted_search.search ~settings ~output:qg ~tag ~measure comp
+    (* The composite playoff off: its alternates are composites the script reads within the finals
+       margin of each other, so its own near-tie finals (gh-ocannl-1665) would add windows between
+       the search's and the beam finals'. Those are [autotune_composite_playoff]'s subject. *)
+    Scripted_search.search
+      ~settings:(("autotune_composite_playoff_width", "0") :: settings)
+      ~output:qg ~tag ~measure comp
   in
   let order = List.rev !seen in
   let best = List.nth order 0 and runner_up = List.nth order 1 in

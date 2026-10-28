@@ -46,6 +46,10 @@ partial: the cut search's report says the staffed composite was timed: true
 ties: the playoff timed alternates: true
 ties: every composite window is the playoff's: true
 ties: only the first key plays; the last key's sweep ran inside the composite: true
+ties finals: the same playoff alternates as with the finals off: true
+ties finals: every alternate was decided by a finals, four windows each, all admitted: true
+ties finals: the running composite was re-timed as an explicit composite, no alternate: true
+ties finals: a tie keeps the running composite: true
 heavy: the model weighs the second enumerated key the heavier: true
 heavy: the keys are swept heaviest first: true
 split: the first site is swept bare: true

@@ -32,6 +32,12 @@
    segment's best now plays and the one 2% behind does not, so the margin, not the width, decides
    which singles enter.
 
+   Those searches pin the finals off ([autotune_finals_margin=0]), which also turns off the
+   playoff's own near-tie finals (gh-ocannl-1665): their composites differ by 0.1 ms in attempt
+   order, near ties that would each be re-timed. The [contended] searches at the end are that
+   mechanism's: an alternate within the finals margin of its incumbent is decided by a finals of the
+   two rather than by readings from different windows.
+
    [off] is [ties] with [autotune_composite_playoff_width=0] (gh-ocannl-1259): it must time exactly
    the candidates [ties] timed outside its playoff, in the same order, and crown the recombined
    composite; [one] is [ties] at width 1, which plays one alternate per segment and so fewer windows
@@ -409,3 +415,121 @@ let () =
     (progress_lines lines [ "event=search_done" ] = 2
     && progress_lines lines [ "event=stage"; "stage=untuned_control" ] = 2);
   p "streams: both overrides end with the tune_placements call" (streams_off ())
+
+(* gh-ocannl-1665: the playoff's near ties are decided in shared windows. The composites' times are
+   scripted by what each holds, relative to the recombined composite [R], the first composite timed:
+   an alternate choice at the first keyed segment costs 0.2 ms (it is slower), at the second it
+   saves 0.3 ms (faster), at any other 3 ms, around R's 10 ms -- so the true best is R with its
+   second segment swapped, at 9.7 ms. R's FIRST window reads 0.5 ms slow, a contended window; its
+   later ones read true. The singles tie, as in [ties], so every segment sends two alternates.
+
+   With the finals off ([autotune_finals_margin=0]) the playoff compares each alternate's reading
+   with R's contended one, the old comparison: the first segment's slower alternate (10.2 ms)
+   replaces R (10.5 ms), the second segment's alternates are then built on it, and the true best is
+   never timed, so nothing after the playoff can crown it. With the default margin every alternate
+   reads within it of its incumbent, so each is decided by a finals of the two -- the palindrome of
+   the two, faster first reading first: R wins its rematch against the first segment's alternates,
+   and the true best wins its own against R and is crowned. In [refused] every finals window of R is
+   refused (a reading that is not finite), so its finals are inconclusive and the readings decide,
+   as with the finals off; those refusals count neither as candidate refusals nor as playoff
+   windows. *)
+let () =
+  let search ?(refuse_r_finals = false) ~finals_margin ~tag () =
+    let r = ref None and windows_of = Hashtbl.create (module String) and calls = ref [] in
+    let composite (w : Scripted_search.window) =
+      let k = Option.value (Hashtbl.find windows_of w.label) ~default:0 in
+      Hashtbl.set windows_of ~key:w.label ~data:(k + 1);
+      if Option.is_none !r then r := Some w.label;
+      let r = Option.value_exn !r in
+      if String.equal w.label r then
+        if k = 0 then 10.5 else if refuse_r_finals then Float.nan else 10.
+      else
+        let r = entries r and e = entries w.label in
+        if List.length r <> List.length e then 1000.
+        else
+          List.foldi (List.zip_exn r e) ~init:10. ~f:(fun i acc (x, y) ->
+              if String.equal x y then acc else acc +. match i with 0 -> 0.2 | 1 -> -0.3 | _ -> 3.)
+    in
+    let settings =
+      Option.value_map finals_margin ~default:[] ~f:(fun m -> [ ("autotune_finals_margin", m) ])
+    in
+    let (o : Scripted_search.observed) =
+      Autotune.with_timing_call_observer
+        (fun c -> calls := c :: !calls)
+        (fun () ->
+          Scripted_search.search ~settings ~log:false ~tag
+            ~measure:(fun w ->
+              if is_single w.label then 100.
+              else if is_composite w.label then composite w
+              else 1000.)
+            (Fissioned_chain.chain ()))
+    in
+    let rep = o.report in
+    Stdio.eprintf
+      "%s (not part of the golden): playoff timed %d swaps %d finals %d (%d windows, %d admitted), \
+       crown %s %.2f ms\n\
+       measured: %s\n\
+       %!"
+      tag rep.Autotune.fiss_sketch_playoff_timed rep.fiss_sketch_playoff_swaps
+      rep.fiss_sketch_playoff_finals rep.fiss_sketch_playoff_finals_timed
+      rep.fiss_sketch_playoff_finals_admitted rep.best_label rep.best_ms
+      (String.concat ~sep:"; " o.measured);
+    let phases = List.rev_map !calls ~f:(fun c -> c.Autotune.decision.phase) in
+    (o, Option.value_exn !r, phases)
+  in
+  (* The true best's shape: R's choice at the first segment, another at the second. *)
+  let true_best ~r label = is_composite label && List.equal Int.equal (changed r label) [ 1 ] in
+  let off, r_off, _ = search ~finals_margin:(Some "0") ~tag:"contended off" () in
+  let on, r_on, phases_on = search ~finals_margin:None ~tag:"contended on" () in
+  let refused, r_refused, _ =
+    search ~refuse_r_finals:true ~finals_margin:None ~tag:"contended refused" ()
+  in
+  let crown (o : Scripted_search.observed) = o.report.Autotune.best_label in
+  p "contended: the three searches recombined the same composite"
+    (String.equal r_off r_on && String.equal r_off r_refused);
+  p "contended: the singles tie, so every segment sends two alternates"
+    (off.report.Autotune.fiss_sketch_playoff_timed
+    = 2 * List.length (Fissioned_chain.singles_per_segment off.measured));
+  (* The flaw: an alternate's reading against the incumbent's from an earlier window. *)
+  p "off: no playoff finals ran" (off.report.Autotune.fiss_sketch_playoff_finals = 0);
+  p "off: the first segment's slower alternate replaced R, read against R's contended window"
+    (match changed r_off (crown off) with 0 :: _ -> true | _ -> false);
+  p_none "off: the true best was never timed" off.measured ~f:(true_best ~r:r_off);
+  (* The fix. *)
+  p "on: every playoff alternate was a near tie, decided by a finals of the two"
+    (on.report.Autotune.fiss_sketch_playoff_finals >= 1
+    && on.report.Autotune.fiss_sketch_playoff_finals = on.report.Autotune.fiss_sketch_playoff_timed
+    );
+  p "on: four windows per finals, all admitted"
+    (on.report.Autotune.fiss_sketch_playoff_finals_timed
+     = 4 * on.report.Autotune.fiss_sketch_playoff_finals
+    && on.report.Autotune.fiss_sketch_playoff_finals_admitted
+       = on.report.Autotune.fiss_sketch_playoff_finals_timed);
+  (match List.filter on.measured ~f:is_composite with
+  | first :: alternate :: rest ->
+      p "on: the first finals is the palindrome of the alternate and R, faster first reading first"
+        (String.equal first r_on
+        && List.equal String.equal (List.take rest 4) [ alternate; r_on; r_on; alternate ])
+  | _ ->
+      p "on: the first finals is the palindrome of the alternate and R, faster first reading first"
+        false);
+  p "on: only the true best replaced R" (on.report.Autotune.fiss_sketch_playoff_swaps = 1);
+  p "on: the true best is crowned" (true_best ~r:r_on (crown on));
+  p "on: the playoff's finals windows are not candidate timings or playoff windows"
+    (on.report.Autotune.candidates_timed = off.report.Autotune.candidates_timed
+    && on.report.Autotune.fiss_sketch_playoff_timed = off.report.Autotune.fiss_sketch_playoff_timed
+    );
+  p "on: every playoff window and playoff finals window is in the playoff phase"
+    (List.count phases_on ~f:(Option.equal String.equal (Some "playoff"))
+    = on.report.Autotune.fiss_sketch_playoff_timed
+      + on.report.Autotune.fiss_sketch_playoff_finals_timed);
+  (* An inconclusive finals. *)
+  p "refused: R's finals windows were refused, the alternates' admitted"
+    (refused.report.Autotune.fiss_sketch_playoff_finals >= 1
+    && refused.report.Autotune.fiss_sketch_playoff_finals_admitted
+       < refused.report.Autotune.fiss_sketch_playoff_finals_timed);
+  p "refused: the readings decided R's inconclusive finals, so its first segment was swapped as off"
+    (match changed r_refused (crown refused) with 0 :: _ -> true | _ -> false);
+  p "refused: the finals' refusals are not the search's"
+    (refused.report.Autotune.timings_contended = off.report.Autotune.timings_contended
+    && refused.report.Autotune.timings_unreadable = off.report.Autotune.timings_unreadable)

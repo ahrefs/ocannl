@@ -1748,6 +1748,20 @@ files.
   moved 2.474 -> 2.427 ms (replicate means) with the spread narrowed 16x. Before reading a per-key
   crown as a ranking, compare the singles' gap with their backdrop's replicate spread; the
   `autotune_log` lines carry both.
+  Each playoff decision compares an alternate's window with the incumbent's, taken earlier, and a
+  one-segment swap moves the composite by about what a window's offset does, so (gh-ocannl-1665) an
+  alternate reading within `autotune_finals_margin` of its incumbent is decided by a finals of the
+  two, the beam finals' own `finals_readings` (palindrome windows, one compile each) and
+  `finals_crown`; outside the margin, with the margin off, under a spent budget or after an
+  inconclusive finals, the readings decide as before. One segment's swap almost always reads within
+  10%, so at the default margin nearly every alternate costs four more compiles and windows
+  (`report.fiss_sketch_playoff_finals{,_timed,_admitted}`, apart from `fiss_sketch_playoff_timed`,
+  in the `playoff` phase). The boundary: the playoff's final incumbent is not itself the crown --
+  the beam still ranks every composite by its search reading, so a playoff winner with a contended
+  first window enters the beam finals only while it stays among the `beam_width` fastest readings.
+  A test scripting near-tie composites with the beam finals on now sees playoff finals too: pin
+  `autotune_composite_playoff_width=0` (as `autotune_beam_finals` does) or expect them;
+  `autotune_composite_playoff`'s `contended` searches are the mechanism's own test.
 - **Staffed singles time a key's sketches inside the running composite** (gh-ocannl-1138, config
   `autotune_staffed_singles`, **default off: measured, not yet worth it**). With the seeded-rule start
   (below) on the gh-ocannl-1109 cell (gpt2_mini, approximate, rog/CUDA, one pair) the first 1% gain came at
