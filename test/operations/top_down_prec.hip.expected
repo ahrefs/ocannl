@@ -15,15 +15,15 @@
 #define NAN __builtin_nanf("")
 #endif
 extern "C" __global__ void d_fwd(
-    __hip_bfloat16 *__restrict__ d,
-    __half *__restrict__ a,
-    __half *__restrict__ b,
-    __hip_bfloat16 *__restrict__ c) {
+    __hip_bfloat16 *__restrict__ t_d,
+    __half *__restrict__ t_a,
+    __half *__restrict__ t_b,
+    __hip_bfloat16 *__restrict__ t_c) {
 
   /* Local declarations and initialization. */
 
   /* Main logic. */
   /* d fwd */
-  d[0] = ((__float2bfloat16(__half2float(a[0])) + __float2bfloat16(__half2float(b[0]))) * c[0]);
+  t_d[0] = ((__float2bfloat16(__half2float(t_a[0])) + __float2bfloat16(__half2float(t_b[0]))) * t_c[0]);
   /* end */
 }

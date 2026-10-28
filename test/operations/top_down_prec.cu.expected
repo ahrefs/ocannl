@@ -10,15 +10,15 @@
 #define NAN __int_as_float(0x7fffffff)
 #endif
 extern "C" __global__ void d_fwd(
-    __nv_bfloat16 *__restrict__ d,
-    __half *__restrict__ a,
-    __half *__restrict__ b,
-    __nv_bfloat16 *__restrict__ c) {
+    __nv_bfloat16 *__restrict__ t_d,
+    __half *__restrict__ t_a,
+    __half *__restrict__ t_b,
+    __nv_bfloat16 *__restrict__ t_c) {
 
   /* Local declarations and initialization. */
 
   /* Main logic. */
   /* d fwd */
-  d[0] = __hmul(__hadd((__nv_bfloat16)(a[0]), (__nv_bfloat16)(b[0])), c[0]);
+  t_d[0] = __hmul(__hadd((__nv_bfloat16)(t_a[0]), (__nv_bfloat16)(t_b[0])), t_c[0]);
   /* end */
 }
