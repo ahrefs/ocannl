@@ -84,8 +84,10 @@
  (deps
   (alias slow-env_spelling_gate)
   (alias slow-autotune_batched_companion)
+  (alias slow-autotune_batched_companion-tf32)
   (alias slow-autotune_fission_sketch)
   (alias slow-autotune_mma_companion)
+  (alias slow-autotune_mma_companion-tf32)
   (alias slow-autotune_arm_containment)
   (alias slow-tune_ship_arm)
   (alias slow-fp8_codec_exhaustive)
@@ -248,6 +250,10 @@
   (alias runtest-conv_merged_gpu_seeds-tf32)
   (alias runtest-tf32_reference_rounding-tf32)
   (alias runtest-bench_seed_parity_smoke-tf32)
+  (alias runtest-matmul_interchange-tf32)
+  (alias runtest-launch_predicate_parity-tf32)
+  (alias runtest-schedule_conv_gemm-tf32)
+  (alias runtest-epilogue_fusion_mma_seeds-tf32)
   (alias runtest-fast_math_libmvec)
   (alias runtest-cc_post_compile_cause-artifact_missing)
   (alias runtest-cc_post_compile_cause-artifact_missing_dll)
@@ -5844,6 +5850,27 @@
      (run %{dep:autotune_mma_companion.exe}))
     (diff autotune_mma_companion.expected autotune_mma_companion.actual)))))
 
+; gh-ocannl-1674: the same claims with tf32_matmuls on, so that on CUDA both unfused tensorized seed claims execute instead of
+; skipping; a repeat elsewhere. One golden for both runs.
+
+(rule
+ (alias slow-autotune_mma_companion-tf32)
+ (package neural_nets_lib)
+ (locks ocannl_training_test)
+ (deps
+  (alias slow-env_spelling_gate)
+  autotune_mma_companion.expected
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ ; Keep execution off @default as well as @runtest; @check still compiles the source.
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     autotune_mma_companion-tf32.actual
+     (run %{dep:autotune_mma_companion.exe} --ocannl_tf32_matmuls=true))
+    (diff autotune_mma_companion.expected autotune_mma_companion-tf32.actual)))))
+
 (executable
  ; cc-vector-width: independent -- the GPU seed lists ignore the cc width, and no CPU pipeline
  ; Grid-splits j at any width.
@@ -5872,6 +5899,29 @@
     (diff
      autotune_batched_companion.expected
      autotune_batched_companion.actual)))))
+
+; gh-ocannl-1674: the same claims with tf32_matmuls on, so that on CUDA the batched seed-existence claim and the mma seeds the structural and executed claims cover execute instead of
+; skipping; a repeat elsewhere. One golden for both runs.
+
+(rule
+ (alias slow-autotune_batched_companion-tf32)
+ (package neural_nets_lib)
+ (locks ocannl_training_test)
+ (deps
+  (alias slow-env_spelling_gate)
+  autotune_batched_companion.expected
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ ; Keep execution off @default as well as @runtest; @check still compiles the source.
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     autotune_batched_companion-tf32.actual
+     (run %{dep:autotune_batched_companion.exe} --ocannl_tf32_matmuls=true))
+    (diff
+     autotune_batched_companion.expected
+     autotune_batched_companion-tf32.actual)))))
 
 ; gh-ocannl-686: routine names that collide with a reserved word or a builtin. Executes the
 ; colliding routines and reads their emitted sources, so it needs both the backend selection and
@@ -5964,6 +6014,28 @@
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1674: the same claims with tf32_matmuls on, which opens CUDA's tf32 tile to the f32
+; operands, so its f32 conv+bias GPU sketch parity and census execute on CUDA instead of skipping; a no-op elsewhere. One golden for both
+; runs.
+
+(rule
+ (target launch_predicate_parity-tf32.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:launch_predicate_parity.exe} --ocannl_tf32_matmuls=true))))
+
+(rule
+ (alias runtest-launch_predicate_parity-tf32)
+ (package neural_nets_lib)
+ (action
+  (diff launch_predicate_parity.expected launch_predicate_parity-tf32.actual)))
 
 (test
  ; ocannl-backend: none -- builds Ir.Low_level by hand and judges the launch gate against MOCKED
@@ -6755,6 +6827,28 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1674: the same claims with tf32_matmuls on, which opens CUDA's tf32 tile to the f32
+; operands, so its f32 GPU conv legs execute on CUDA instead of skipping; a no-op elsewhere. One golden for both
+; runs.
+
+(rule
+ (target schedule_conv_gemm-tf32.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:schedule_conv_gemm.exe} --ocannl_tf32_matmuls=true))))
+
+(rule
+ (alias runtest-schedule_conv_gemm-tf32)
+ (package neural_nets_lib)
+ (action
+  (diff schedule_conv_gemm.expected schedule_conv_gemm-tf32.actual)))
+
 (test
  (name schedule_strided_1x1)
  (package neural_nets_lib)
@@ -7491,6 +7585,30 @@
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1674: the same claims with tf32_matmuls on, which opens CUDA's tf32 tile to the f32
+; operands, so its mma-gated epilogue seeds execute on CUDA instead of skipping; a no-op elsewhere. One golden for both
+; runs.
+
+(rule
+ (target epilogue_fusion_mma_seeds-tf32.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:epilogue_fusion_mma_seeds.exe} --ocannl_tf32_matmuls=true))))
+
+(rule
+ (alias runtest-epilogue_fusion_mma_seeds-tf32)
+ (package neural_nets_lib)
+ (action
+  (diff
+   epilogue_fusion_mma_seeds.expected
+   epilogue_fusion_mma_seeds-tf32.actual)))
 
 ; gh-ocannl-533: the HIP scratch pre-validator. Gated behind `slow`: meaningful only on HIP, and it
 ; deliberately compiles a kernel with a ~128 KiB per-work-item stack frame. `no-infer` keeps the
@@ -8348,6 +8466,28 @@
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here)))
+
+; gh-ocannl-1674: the same claims with tf32_matmuls on, which opens CUDA's tf32 tile to the f32
+; operands, so its real tensorized seeds and their census execute on CUDA instead of skipping; a no-op elsewhere. One golden for both
+; runs.
+
+(rule
+ (target matmul_interchange-tf32.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:matmul_interchange.exe} --ocannl_tf32_matmuls=true))))
+
+(rule
+ (alias runtest-matmul_interchange-tf32)
+ (package neural_nets_lib)
+ (action
+  (diff matmul_interchange.expected matmul_interchange-tf32.actual)))
 
 ; gh-ocannl-1324: the seeded untuned default seeds a backprop weight gradient on CUDA/HIP -- cutting
 ; the bias gradient's companion away first -- and nothing elsewhere, and the seeded routine's

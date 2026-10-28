@@ -221,6 +221,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-env_spelling_gate
   test/operations/dune                     @runtest-env_var_deps
   test/operations/dune                     @runtest-env_var_deps_control
+  test/operations/dune                     @runtest-epilogue_fusion_mma_seeds-tf32
   test/operations/dune                     @runtest-exit_stream_teardown
   test/operations/dune                     @runtest-fast_math_libmvec
   test/operations/dune                     @runtest-fixed_name_temporaries-logged
@@ -236,10 +237,12 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-gpu_cotenants
   test/operations/dune                     @runtest-hello_world_op
   test/operations/dune                     @runtest-kernel_attribution
+  test/operations/dune                     @runtest-launch_predicate_parity-tf32
   test/operations/dune                     @runtest-limits_field_classes
   test/operations/dune                     @runtest-ll_test_ratchet
   test/operations/dune                     @runtest-log_index_width_narrow
   test/operations/dune                     @runtest-log_index_width_wide
+  test/operations/dune                     @runtest-matmul_interchange-tf32
   test/operations/dune                     @runtest-metal_routine_log_delivery
   test/operations/dune                     @runtest-micrograd_demo_logging
   test/operations/dune                     @runtest-model_default_fallback
@@ -266,6 +269,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-render_decline_inventory
   test/operations/dune                     @runtest-routine_log_stream_files
   test/operations/dune                     @runtest-schedule_bench_padded
+  test/operations/dune                     @runtest-schedule_conv_gemm-tf32
   test/operations/dune                     @runtest-shell_scripts_parse
   test/operations/dune                     @runtest-sweep_components
   test/operations/dune                     @runtest-sweep_harness
@@ -288,8 +292,10 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @slow
   test/operations/dune                     @slow-autotune_arm_containment
   test/operations/dune                     @slow-autotune_batched_companion
+  test/operations/dune                     @slow-autotune_batched_companion-tf32
   test/operations/dune                     @slow-autotune_fission_sketch
   test/operations/dune                     @slow-autotune_mma_companion
+  test/operations/dune                     @slow-autotune_mma_companion-tf32
   test/operations/dune                     @slow-bf16_codec_exhaustive
   test/operations/dune                     @slow-env_spelling_gate
   test/operations/dune                     @slow-fp8_codec_exhaustive

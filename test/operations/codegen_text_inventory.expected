@@ -330,7 +330,7 @@ test/operations/runtime_integer_power.ml [run by @test/operations/runtest-runtim
 test/operations/scan_loop.ml [renders generated text in memory; run by @test/operations/runtest-scan_loop]
 test/operations/schedule_batch_grid.ml [run by @test/operations/runtest-schedule_batch_grid; also pins text this scan cannot name: untraced callback]
 test/operations/schedule_contraction_nest.ml [run by @test/operations/runtest-schedule_contraction_nest; also pins text this scan cannot name: computed fragment, untraced callback]
-test/operations/schedule_conv_gemm.ml [run by @test/operations/runtest-schedule_conv_gemm; also pins text this scan cannot name: untraced callback]
+test/operations/schedule_conv_gemm.ml [run by @test/operations/runtest-schedule_conv_gemm, @test/operations/runtest-schedule_conv_gemm-tf32; also pins text this scan cannot name: untraced callback]
     "fragment_"
     "geometry from the schedule"
     "tile_"
@@ -665,6 +665,7 @@ so, and the goldens' families say which backends a change has to be run on.
 @test/operations/runtest-schedule_batch_grid
 @test/operations/runtest-schedule_contraction_nest
 @test/operations/runtest-schedule_conv_gemm
+@test/operations/runtest-schedule_conv_gemm-tf32
 @test/operations/runtest-schedule_cpu_pack_matmul
 @test/operations/runtest-schedule_epilogue_fusion
 @test/operations/runtest-schedule_ldmatrix_matmul
