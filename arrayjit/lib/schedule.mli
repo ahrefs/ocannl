@@ -422,9 +422,12 @@ type optop =
           must be the first real statement after the last statement writing [target]: a perfect
           Serial nest over exactly [target]'s dims, assigning a different node at the identity index
           tuple, elementwise, with every read of [target] at that tuple, and no later statement
-          mentioning [target]. The store-back of [target] itself is kept. Elementwise tails never
-          reorder the reduction, so on the C backends the fused values are bitwise equal to the
-          two-kernel form. Apply after [Tensorize]/[Privatize].
+          mentioning [target]. At the fragment and whole-K sites the store-back must complete
+          [target]: one under an enclosing loop of extent > 1 that does not index it, or followed by
+          another write of [target] (a later segment of a [Partition]ed block loop, gh-ocannl-1670),
+          is refused. The store-back of [target] itself is kept. Elementwise tails never reorder the
+          reduction, so on the C backends the fused values are bitwise equal to the two-kernel form.
+          Apply after [Tensorize]/[Privatize].
 
           [shared] (GPU only, requires the fragment site): the fused tail is often [target]'s last
           consumer, so placement makes [target] routine-local — a per-thread array the fragment

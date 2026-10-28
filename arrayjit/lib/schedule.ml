@@ -4325,7 +4325,19 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
   in
   let fused = ref false in
   let rec fuse_at_fragment env llc =
-    if !fused then llc
+    if !fused then begin
+      (* Exactly-once, past the site: the relocated tail reads every output cell right after the
+         site's store-back, so nothing that follows may write the accumulator again. A [Partition]ed
+         block loop puts that second write in a later segment where no enclosing loop of extent > 1
+         betrays it: a padded packed seed's k-block split with one full block (gh-ocannl-1670)
+         leaves both segments single-trip, and its first segment's store-back holds the first k
+         block's partial sum alone. *)
+      if writes_tn target llc then
+        fail
+          "the accumulator is written again after the fragment store-back the tail would follow (a \
+           later segment of a partitioned loop) — the tail would read partial accumulations";
+      llc
+    end
     else
       match llc with
       | Seq (a, b) ->

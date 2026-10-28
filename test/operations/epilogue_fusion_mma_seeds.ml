@@ -213,10 +213,87 @@ let census tag ~m ~n ~k =
           Stdio.eprintf "%s: blocktile twin %s FAILED: %s\n" tag (geometry q) (Exn.to_string exn);
           false)
 
+(* The packed seeds' k-block split (gh-ocannl-1670) against [Fuse_epilogue]'s exactly-once
+   discipline, at the site where the two met in transformer_names: a batched GEMM of one full k
+   block and an edge block (k = 28 at the 16-deep block), a single row block (15 rows), and a tail
+   that broadcasts along the columns. The split leaves each segment's k-block loop a single trip, so
+   no enclosing loop of extent > 1 betrays the first segment's fragment store-back as partial; a
+   fused twin that relocated its tail there computed the tail from the first k block alone, and the
+   edge segment's later store-back never reached it. Every CPU mma epilogue twin that compiles must
+   match the untuned reference; on cc the packed ones refuse. *)
+let ksplit_tail () =
+  Tensor.unsafe_reinitialize ();
+  let b = 4 and m = 15 and k = 28 and n = 16 in
+  let xv =
+    Array.init
+      (b * m * k)
+      ~f:(Ll_test.cycle_flat ~dims:[| b * m; k |] ~modulus:13 ~offset:0. ~stride:0.25)
+  in
+  let wv =
+    Array.init (k * n) ~f:(Ll_test.cycle_flat ~dims:[| k; n |] ~modulus:17 ~offset:(-8.) ~stride:1.)
+  in
+  let pv = Array.init n ~f:(fun j -> Float.of_int (j % 5) -. 2.) in
+  let x = TDSL.ndarray xv ~label:[ "ks_x" ] ~batch_dims:[ b ] ~output_dims:[ m; k ] () in
+  let w = TDSL.ndarray wv ~label:[ "ks_w" ] ~output_dims:[ k; n ] () in
+  let pos = TDSL.ndarray pv ~label:[ "ks_pos" ] ~output_dims:[ n ] () in
+  let%op z = x +* "b|ik;kj=>b|ij" w in
+  Train.set_materialized z.Tensor.value;
+  let%op y = z + pos in
+  let fwd = named "ep1670_ksplit" (Train.forward y) in
+  let ctx = Context.auto () in
+  let limits = Context.hardware_limits ctx in
+  let capture = ref None in
+  let _ctx, _r =
+    Context.compile
+      ~lowered_transform:(fun opt ->
+        capture := Some opt;
+        [ opt ])
+      ctx fwd Ir.Indexing.Empty
+  in
+  let opt = Option.value_exn ~here:[%here] !capture in
+  let ep_params =
+    List.filter (Autotune.sketch_seed_params ~is_gpu ~is_cpu ~limits opt) ~f:(fun q ->
+        q.Autotune.sk_mma && q.Autotune.sk_epilogue)
+  in
+  let rctx = Context.auto () in
+  let rctx, rroutine = Context.compile rctx fwd Ir.Indexing.Empty in
+  let want = nonzero "ksplit_ref" (Context.get_values (Context.run rctx rroutine) y.Tensor.value) in
+  let ran =
+    List.filter_map ep_params ~f:(fun q ->
+        match
+          let ctx, routine =
+            Context.compile
+              ~lowered_transform:(fun opt ->
+                [ Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q opt) opt ])
+              (Context.auto ()) fwd Ir.Indexing.Empty
+          in
+          Context.get_values (Context.run ctx routine) y.Tensor.value
+        with
+        | got -> Some got
+        | exception Invalid_argument msg ->
+            Stdio.eprintf "ksplit: epilogue twin %s refused: %s (not part of the golden)\n%!"
+              (Autotune.sketch_params_label q) msg;
+            None)
+  in
+  gated ~when_:is_cpu ~on:backend_name "ksplit: the site seeds packed 16x16 epilogue twins"
+    (List.exists ep_params ~f:(fun q -> q.Autotune.sk_bm = 16 && q.Autotune.sk_bk = 16));
+  (* Gated like [census]'s claims, on the site's advertised tensorized pipeline: where the backend
+     advertises none (CUDA/HIP at f32 without tf32), no mma twin exists to run. On cc the
+     whole-extent twin always runs, so the population is never empty there. *)
+  let label = "ksplit: every running epilogue twin matches the untuned reference" in
+  match
+    Ll_test.tensorized_matmul_capability ~is_gpu ~is_cpu ~limits ~a:x.Tensor.value ~b:w.Tensor.value
+      ~d:z.Tensor.value
+  with
+  | `Advertised -> p_all label ran ~f:(fun got -> Array.for_all2_exn got want ~f:approx)
+  | `Withheld aggregation -> Verdict.skipped ~aggregation ~backend:backend_name label
+
 let () =
   (* Dividing extents: the whole-K [Tile_mma] site (unstaged and single-full-K-stage pipelines). *)
   census "div" ~m:32 ~n:32 ~k:32;
   (* Non-multiples of the intrinsic tiles: the pad-composition pipelines (gh-485), whose fragment
      store-back carries range masks — the guarded-writes rejection before the fix. *)
   census "nondiv" ~m:24 ~n:40 ~k:56;
+  (* The k-split's one-full-block site (gh-ocannl-1670), see [ksplit_tail]. *)
+  ksplit_tail ();
   printf "\nDone.\n%!"
