@@ -9,3 +9,4 @@
 128^3 at 16x32, default floor: values match the unscheduled kernel bitwise: true
 32^3 at 16x32: every Grid launch estimates below the default floor: true
 32^3 at 16x32: with MACs charged at par, the Tile_mma launch reaches the default floor: true
+every claim this test makes, in the order the off-CPU branch skips them: true
