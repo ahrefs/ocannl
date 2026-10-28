@@ -767,7 +767,12 @@ single-threaded segments that sum to the serial step
   (default 1e-3). Before each run the parameters are restored and every other written node is
   filled with NaN, so a seed that misses cells cannot pass on values another routine left.
   `BENCH_PARITY_PERTURB=1` is its negative control: every seeded segment's code is perturbed after
-  scheduling, and each perturbed seed must come back a mismatch. Exit 4 when a seed fails, 5 when no
+  scheduling, and each perturbed seed must come back a mismatch. The perturbation keeps a
+  persistent fragment's transfers plain copies, perturbing the target after the store-back
+  instead, and each seed is also compiled unperturbed: a perturbed seed whose tensor-core
+  statements render otherwise (its mma census differs) is `RERENDERED`, a failure, since it was
+  caught on a path the seed does not take (gh-ocannl-1677: perturbing the transfers dissolved the
+  fragment region, and most of cifar_resnet's CUDA tf32 seeds rendered as the scalar fallback). Exit 4 when a seed fails, 5 when no
   seed executed (gh-ocannl-1490; `test/operations/bench_seed_parity_smoke` runs both modes on an
   in-memory convnet). Candidates are timed, not value-checked, so this is how a seed's soundness
   on a real graph is checked: on `cifar_resnet` materialize-all, Metal, all 52 conv seeds match

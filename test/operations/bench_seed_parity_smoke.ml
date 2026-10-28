@@ -23,8 +23,14 @@
    images to multiples of 1/8, so every sum is exact whatever the order, except image 0's pool
    window that f32 decides and tf32 ties at zero ([image]). Every seed must match the rounded
    reference; against the plain reference a tf32-rounded conv seed must mismatch when nothing is
-   replayed, and match with the window's flip replayed. On an arm that reads f32 as f32 the three
-   tf32 claims skip. *)
+   replayed, and match with the window's flip replayed. On an arm that reads f32 as f32 the tf32
+   claims skip.
+
+   gh-ocannl-1677: the negative control must judge the path the seed takes. Every perturbed seed
+   renders its tensor-core statements as it does unperturbed (the library compiles it both ways and
+   reports [Rerendered] otherwise), and on a tf32 arm every seed with a rounded reference keeps it,
+   at the same nodes, when perturbed -- a seed whose perturbed statements fell back to the scalar
+   rendering has none. *)
 
 open Base
 open Ocannl
@@ -59,6 +65,8 @@ let claims_parity =
     "negative control: every executed perturbed seed is reported a mismatch";
     "negative control: no perturbed seed fails to reach its segment, raises, or has nothing to \
      perturb";
+    "negative control: every perturbed seed renders its tensor-core statements as it does \
+     unperturbed";
   ]
 
 (* Image 0's pattern repeats down every row, so it flips two cells of each pool window on columns
@@ -74,6 +82,8 @@ let claims_tf32 =
      mismatches";
     "tf32 replay: against the plain reference, the tied-at-zero window's flip is replayed and that \
      seed matches";
+    "tf32 negative control: every seed whose reference is rounded to tf32 is still rounded, at the \
+     same nodes, when perturbed";
   ]
 
 (* Image 0 is a tied-at-zero pool window, the shape a residual's pre-activation near 0 gives real
@@ -190,6 +200,9 @@ let () =
       p (List.nth_exn claims_parity 3) (not (List.is_empty (executed perturbed)));
       p_all (List.nth_exn claims_parity 4) (executed perturbed) ~f:mismatched;
       p_none (List.nth_exn claims_parity 5) perturbed ~f:broken;
+      p_none (List.nth_exn claims_parity 6) perturbed ~f:(function
+        | { P.verdict = Rerendered _; _ } -> true
+        | _ -> false);
       match tf32_withheld with
       | Some aggregation ->
           List.iter claims_tf32 ~f:(Verdict.skipped ~aggregation ~backend:backend_name)
@@ -204,4 +217,11 @@ let () =
           p_exists (List.nth_exn claims_tf32 1) plain ~f:(fun r -> mismatched r && ours r);
           let replayed = parity ~round:false ~select:P.conv_seed ~perturb:false () in
           p_exists (List.nth_exn claims_tf32 2) replayed ~f:(fun r ->
-              matched r && ours r && r.P.replayed && r.P.flipped > 0))
+              matched r && ours r && r.P.replayed && r.P.flipped > 0);
+          (* gh-ocannl-1677: the control judges the tensor-core path the seed takes -- a perturbed
+             seed whose statements fell back to the scalar rendering has no rounded reference. Not
+             vacuous: the first tf32 claim has some seed rounded. *)
+          p_all (List.nth_exn claims_tf32 3) (List.filter results ~f:rounded) ~f:(fun r ->
+              List.exists perturbed ~f:(fun q ->
+                  String.equal q.P.label r.P.label && mismatched q
+                  && List.equal String.equal q.P.rounded r.P.rounded)))

@@ -15,8 +15,9 @@
    gates) flipped against its reference is judged by a reference replaying them, within a bound on
    the flipped cells; BENCH_PARITY_REPLAY=0 turns that off. BENCH_PARITY_PERTURB=1 is the negative
    control: every seeded segment's code is perturbed, and each perturbed seed must be reported a
-   mismatch. Exits 4 when a seed fails (a mismatch, an unjudged seed, or under the control a
-   perturbation not detected), 5 when no seed was executed, 0 otherwise. *)
+   mismatch while rendering its tensor-core statements as it does unperturbed (gh-ocannl-1677).
+   Exits 4 when a seed fails (a mismatch, an unjudged seed, or under the control a perturbation not
+   detected or one that changed the rendering), 5 when no seed was executed, 0 otherwise. *)
 
 open Base
 open Ocannl

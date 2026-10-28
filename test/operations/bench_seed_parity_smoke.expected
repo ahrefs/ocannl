@@ -6,6 +6,8 @@ parity: no seed fails to reach its segment, or raises: true
 negative control: at least one perturbed seed executes: true
 negative control: every executed perturbed seed is reported a mismatch: true
 negative control: no perturbed seed fails to reach its segment, raises, or has nothing to perturb: true
+negative control: every perturbed seed renders its tensor-core statements as it does unperturbed: true
 tf32: some executed seed's reference is rounded to tf32: true
 tf32 control: against the plain reference, nothing replayed, some tf32-rounded conv seed mismatches: true
 tf32 replay: against the plain reference, the tied-at-zero window's flip is replayed and that seed matches: true
+tf32 negative control: every seed whose reference is rounded to tf32 is still rounded, at the same nodes, when perturbed: true

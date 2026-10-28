@@ -2828,9 +2828,13 @@ files.
   `BENCH_CENSUS_ONLY` (the census, no search) and `BENCH_PARITY` (each seed compiled as a
   per-segment candidate through `Autotune.sketch_replay` + `tuner_fission`, executed one step
   against the default pipeline, NaN-poisoned written nodes, a perturbed-code negative control) are
-  built on it (`Bench_seed_parity`). Perturbing a tensorized segment's `Set`s can make its
-  `Tile_mma` render as the scalar fallback: the control proves detection, not that the
-  tensorized path ran. **A parity oracle compares every written node, not the step's outcome**:
+  built on it (`Bench_seed_parity`). **A negative control must keep the rendering it judges**
+  (gh-ocannl-1677): the renderer takes a persistent fragment's region to the tensor cores only
+  while its lane-0 transfers are plain copies (`Low_level.fragment_region`), so perturbing every
+  `Set` rendered most of cifar_resnet's CUDA tf32 seeds as the scalar fallback -- caught, but on a
+  path the seed does not take. `perturb_code` keeps the transfers and bumps the target after the
+  store-back (the `Fuse_epilogue` shape), and each perturbed seed is compiled unperturbed too: a
+  differing mma census is `RERENDERED`, a failure. **A parity oracle compares every written node, not the step's outcome**:
   CUDA's two wrong pad-masked conv seeds on cifar_resnet (forward output off by 0.74, gh-ocannl-1598)
   moved the loss by 3e-5. **A tf32 seed is judged against a reference rounded as it rounds**
   (gh-ocannl-1602): `tf32_matmuls` lets only a *tensorized* f32 contraction read tf32, and the
