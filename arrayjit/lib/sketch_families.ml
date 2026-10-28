@@ -4086,17 +4086,9 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                  in-kernel tile exceeding the cap makes [parallel_grid_safe] decline the Grid
                  rendering — the candidate would run serially under a Grid label. Other per-chunk
                  locals can still trip the cap at render; passing here is necessary, not sufficient
-                 (the census and decline diagnostics cover the rest). *)
-              let chunk_cap =
-                match
-                  Int.of_string
-                    (String.strip
-                       (Utils.get_global_arg ~arg_name:"cc_grid_private_bytes_cap" ~default:"262144"))
-                with
-                | c when c > 0 -> c
-                | _ -> 256 * 1024
-                | exception _ -> 256 * 1024
-              in
+                 (the routine's Grid census and the decline diagnostics cover the rest). The
+                 renderer's own resolved cap, so the two cannot disagree about it. *)
+              let chunk_cap = Lazy.force Ir.C_syntax.per_chunk_private_bytes_cap in
               let over_chunk_cap ~what bytes =
                 if bytes > chunk_cap then
                   Some

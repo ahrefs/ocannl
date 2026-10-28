@@ -14,7 +14,11 @@
 
    The operands are the bench's own ([Bench_gebp.a_value]/[b_value]): they vary with every index
    pair and their products are small multiples of 1/8, so every rendering's reduction is exact and
-   bitwise is the right claim. *)
+   bitwise is the right claim.
+
+   The routine's Grid census (gh-ocannl-1668) says the same thing the emitted code does, and why:
+   under the default floor every launch is recorded serial for the floor, with its estimate below
+   it, and with the floor disabled every launch is recorded on the pool. *)
 
 open Base
 open Ocannl
@@ -72,8 +76,8 @@ let launch_macs launch =
   !total
 
 (* One compile and run of the [n^3] product: unscheduled ([layout = None]) or under the bench's
-   packed builder. Returns the readback, the [Tile_mma] census, the generated source and the
-   scheduled procedure. *)
+   packed builder. Returns the readback, the [Tile_mma] census, the generated source, the scheduled
+   procedure and the routine's Grid census. *)
 let run ~name ~n ~bm ~bk ~layout =
   let ma =
     NTDSL.init ~l:"ma" ~prec:Ir.Ops.single ~i:[ n ] ~o:[ n ]
@@ -110,7 +114,8 @@ let run ~name ~n ~bm ~bk ~layout =
   ( Context.get_values ctx mc.Tensor.value,
     Ll_test.renderings routine.Context.mma,
     Generated.read name,
-    !scheduled )
+    !scheduled,
+    routine.Context.grid )
 
 let grid = Some Bench_gebp.Grid_outermost
 
@@ -127,6 +132,8 @@ let () =
         "128^3 at 16x32, default floor: values match the unscheduled kernel bitwise";
         "32^3 at 16x32: every Grid launch estimates below the default floor";
         "32^3 at 16x32: with MACs charged at par, the Tile_mma launch reaches the default floor";
+        "32^3 at 16x32, default floor: the Grid census records every launch serial for the floor";
+        "32^3 at 16x32, floor disabled: the Grid census records every launch on the pool";
       ]
       ~f:(skipped ~backend:backend_name)
   else
@@ -135,24 +142,39 @@ let () =
     let pool = Context.Cc_backend.pool_parallel_grid () in
     Stdio.eprintf "cc pool-parallel grid: %b (not part of the golden)\n%!" pool;
     let floor = Ir.C_syntax.default_grid_min_updates in
-    let want32, _, _, _ = run ~name:"glf_ref32" ~n:32 ~bm:16 ~bk:32 ~layout:None in
-    let got32, census32, src32, sched32 = run ~name:"glf_small" ~n:32 ~bm:16 ~bk:32 ~layout:grid in
+    let want32, _, _, _, _ = run ~name:"glf_ref32" ~n:32 ~bm:16 ~bk:32 ~layout:None in
+    let got32, census32, src32, sched32, grid32 =
+      run ~name:"glf_small" ~n:32 ~bm:16 ~bk:32 ~layout:grid
+    in
     p "32^3 at 16x32, default floor: both Grid launches render serial"
       (not (has_parallel_construct src32));
     p_all2 "32^3 at 16x32, default floor: values match the unscheduled kernel bitwise" got32 want32
       ~f:Float.equal;
     p_all "32^3 at 16x32, default floor: every Tile_mma renders the register tiling" census32
       ~f:(fun r -> Poly.equal r Ir.C_syntax.Mma_register_tiled);
-    let got32_off, _, src32_off, _ =
+    (* Non-empty is part of the claim: a census that recorded nothing would pass a bare for-all. *)
+    let census_all (g : Ir.C_syntax.grid_summary) ~f =
+      g.pool && (not (List.is_empty g.loops)) && List.for_all g.loops ~f:(fun e -> f e.site)
+    in
+    gated ~when_:pool ~on:backend_name
+      "32^3 at 16x32, default floor: the Grid census records every launch serial for the floor"
+      (census_all grid32 ~f:(function
+        | Ir.C_syntax.Grid_serial (Grid_below_min_updates { updates; floor = f }) ->
+            f = floor && updates < floor
+        | _ -> false));
+    let got32_off, _, src32_off, _, grid32_off =
       with_floor "0" (fun () -> run ~name:"glf_small_nofloor" ~n:32 ~bm:16 ~bk:32 ~layout:grid)
     in
     gated ~when_:pool ~on:backend_name
       "32^3 at 16x32, floor disabled: the launches render pool-parallel"
       (has_parallel_construct src32_off);
+    gated ~when_:pool ~on:backend_name
+      "32^3 at 16x32, floor disabled: the Grid census records every launch on the pool"
+      (census_all grid32_off ~f:(function Ir.C_syntax.Grid_pool _ -> true | _ -> false));
     p_all2 "32^3 at 16x32, floor disabled: values match the unscheduled kernel bitwise" got32_off
       want32 ~f:Float.equal;
-    let want128, _, _, _ = run ~name:"glf_ref128" ~n:128 ~bm:16 ~bk:32 ~layout:None in
-    let got128, _, src128, _ = run ~name:"glf_large" ~n:128 ~bm:16 ~bk:32 ~layout:grid in
+    let want128, _, _, _, _ = run ~name:"glf_ref128" ~n:128 ~bm:16 ~bk:32 ~layout:None in
+    let got128, _, src128, _, _ = run ~name:"glf_large" ~n:128 ~bm:16 ~bk:32 ~layout:grid in
     gated ~when_:pool ~on:backend_name
       "128^3 at 16x32, default floor: the launches render pool-parallel"
       (has_parallel_construct src128);

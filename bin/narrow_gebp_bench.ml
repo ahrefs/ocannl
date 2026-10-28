@@ -32,8 +32,11 @@
    across the board even in a narrow-storage run. Each packed line carries its [C_syntax.mma_census]
    rendering, because a [Tile_mma] whose preconditions fail (a column extent below the compute
    vector width is one of several ways in) renders the scalar fallback while still reporting as
-   "packmma" — read the bracket, not the variant name, when deciding what a timing measured.
-   Readbacks stay outside the timed region (the [Context.get_values] trap,
+   "packmma" — read the bracket, not the variant name, when deciding what a timing measured. The
+   same goes for parallelism: each line also carries the routine's Grid census, and a run warns at
+   the end when [packmma_par]'s Grid loop rendered serially (past [cc_grid_private_bytes_cap], for
+   instance), which would otherwise be timed under the parallel label (gh-ocannl-1668). Readbacks
+   stay outside the timed region (the [Context.get_values] trap,
    docs/agent-notes/backend-precision-and-simd.md). *)
 
 open Base
@@ -171,7 +174,7 @@ let () =
     let ctx, routine =
       Context.compile ~lowered_transform:(fun o -> [ transform o ]) ctx comp Ir.Indexing.Empty
     in
-    let mma = routine.Context.mma in
+    let mma = routine.Context.mma and grid = routine.Context.grid in
     let ctx = Context.run ctx routine in
     let _ = Context.get_values ctx mc.Tensor.value in
     let start = Time_now.nanoseconds_since_unix_epoch () in
@@ -253,13 +256,14 @@ let () =
     let secs = Float.of_int63 Int63.(stop - start) /. 1e9 /. Float.of_int repeats in
     (* Printed on EVERY timing line, untensorized variants included: an absent suffix is one a table
        reader does not notice (gh-ocannl-626). *)
-    p "%-12s %8.3f ms  %8.2f GFLOP/s  (spot check [%d] %.2f, chk %s, %s)  [%s]\n" variant
+    p "%-12s %8.3f ms  %8.2f GFLOP/s  (spot check [%d] %.2f, chk %s, %s)  [%s] [%s]\n" variant
       (secs *. 1e3)
       (flops /. secs /. 1e9)
       spot values.(spot) (Bench_checksum.render checksum) agreement
-      (Ir.C_syntax.mma_summary_string mma);
+      (Ir.C_syntax.mma_summary_string mma)
+      (Ir.C_syntax.grid_summary_string grid);
     Bench_out.result ~variant ~check ~seconds:secs;
-    (secs, mma, values)
+    (secs, (mma, grid), values)
   in
   p
     "GEBP n=%d, %d repeats, blocking bm=%d bk=%d, register tile %s, storage %s, compute %s, packed \
@@ -307,7 +311,7 @@ let () =
       p "skipping the packed variants — this n is not schedulable:\n";
       List.iter unschedulable ~f:(fun reason -> p "  %s\n" reason)
   | [] ->
-      let t_pack, r_pack, v_pack =
+      let t_pack, (r_pack, _), v_pack =
         bench ~variant:"packmma"
           ~schedule:(Some (packed_schedule ~layout:Bench_gebp.Serial ~tile_prec ~tile))
           ~against:(Some ("naive", v_naive, naive_comparable))
@@ -317,7 +321,7 @@ let () =
          the same k-block boundaries, so nothing the comparability note excuses can separate them —
          and comparing par against naive instead would bury a par-only defect in the same expected
          DIFFERS output as block-boundary rounding. *)
-      let t_par, r_par, _ =
+      let t_par, (r_par, g_par), _ =
         bench ~variant:"packmma_par"
           ~schedule:(Some (packed_schedule ~layout:Bench_gebp.Grid_outermost ~tile_prec ~tile))
           ~against:(Some ("packmma", v_pack, true))
@@ -329,6 +333,16 @@ let () =
          backends this bench targets the two are the same set, but the latter also indicts
          [Mma_intrinsics], so it would false-warn the moment an arm runs on a GPU. That predicate
          now lives once, in [C_syntax] (gh-ocannl-626), so the two benches cannot disagree. *)
+      (* The parallel variant's label is a claim about its Grid loop: say when the renderer kept it
+         serial instead (gh-ocannl-1668). Only where the pool exists -- with no pool every variant is
+         serial by configuration, and the census line already says so. *)
+      if g_par.Ir.C_syntax.pool && g_par.Ir.C_syntax.serial > 0 then
+        p
+          "WARNING: %d of %d outermost Grid loop(s) of packmma_par rendered SERIALLY — its timing\n\
+           is not a pool-parallel timing (%s).\n"
+          g_par.Ir.C_syntax.serial
+          (List.length g_par.Ir.C_syntax.loops)
+          (Ir.C_syntax.grid_summary_string g_par);
       let all = Ir.C_syntax.merge_mma_summaries [ r_pack; r_par ] in
       statements := all.Ir.C_syntax.statements;
       let declined = all.Ir.C_syntax.scalar_fallbacks in
