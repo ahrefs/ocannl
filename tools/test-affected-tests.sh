@@ -185,14 +185,15 @@ for f in t2/gen-v1.expected t2/scenario_x.expected t2/scan.expected t3/neg.expec
   lib/stubbed_c.c t3/cexe_c.c docs/notes.md; do : >"$repo/$f"; done
 printf '{ }\nrule token = parse eof { () }\n' >"$repo/lib/lx.mll"
 # What the link-only ranking reads: t_core names Helper and its `used`; core re-exports Helper as
-# H, which gen names; nothing else names either.
+# H, which gen names as `Core.H` (a re-export is a name of the module making it); nothing else
+# names either.
 printf 'let used = 1\nlet unused = 2\n' >"$repo/lib/helper.ml"
 printf 'module H = Helper\n' >"$repo/lib/core.ml"
 printf 'let () = () (* uses Helper.used *)\n' >"$repo/t1/t_core.ml"
 printf 'let () = ()\n' >"$repo/t1/t_mid.ml"
 printf 'let () = ()\n' >"$repo/lib/plain_core.ml"
 printf '(rule (alias runtest-inc) (action (progn)))\n' >"$repo/t6/extra.inc"
-printf 'let () = () (* H *)\n' >"$repo/t2/gen.ml"
+printf 'let () = () (* Core.H *)\n' >"$repo/t2/gen.ml"
 git_q() { git -C "$repo" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
 git_q init -q && git_q add -A && git_q commit -qm fixture || exit 2
 
@@ -445,6 +446,36 @@ if harness_leg 'undescribed stanza'; then
   else report 1 'a module of a library this build does not compile is UNMAPPED, exit 3, its rule readers still listed' "exit $rc; $(cat "$out" "$err")"; fi
 fi
 
+if harness_leg 'off-build reach'; then
+  # What a build that compiles opt9 would reach (gh-ocannl-1651: cuda_backend.ml on a Mac): sel
+  # links it through a (select) by its local name, which dune lists by its public one, so this
+  # build has no edge to it; its tests are named when their own code names Opt9.
+  mkdir -p "$repo/t9/opt" || exit 2
+  printf '(library (name opt9) (public_name fx.opt9) (optional) (modules opt9) (libraries not_installed_anywhere))\n' \
+    >"$repo/t9/opt/dune"
+  printf 'let () = ()\n' >"$repo/t9/opt/opt9.ml"
+  cat >"$repo/t9/dune" <<'DUNE'
+(library
+ (name sel)
+ (public_name fx.sel)
+ (modules sel choice9)
+ (libraries (select choice9.ml from (opt9 -> choice9.on.ml) (-> choice9.off.ml))))
+(test (name t_sel_named) (modules t_sel_named) (libraries sel))
+(test (name t_sel_plain) (modules t_sel_plain) (libraries sel))
+DUNE
+  for f in sel choice9.on choice9.off t_sel_plain; do printf 'let () = ()\n' >"$repo/t9/$f.ml"; done
+  printf 'let () = ignore Opt9.x\n' >"$repo/t9/t_sel_named.ml"
+  git_q add -A t9 && git_q commit -qm select-optional || exit 2
+  affected --files t9/opt/opt9.ml
+  if [ "$rc" = 3 ] && grep -q 'UNMAPPED: t9/opt/opt9.ml' "$err" && [ ! -s "$out" ] &&
+     grep -q 'OFF-BUILD: t9/opt/opt9.ml is a module of library fx.opt9 (t9/opt), which this build does not compile. Where it is compiled, library fx.sel (t9) links it (by name or a (select)), reaching 2 per-test alias(es)' "$err" &&
+     grep -q '1 of them name the module in their own code (or hold code not all known), named below, 1 only link it' "$err" &&
+     [ "$(grep '^affected: off-build: ' "$err")" = 'affected: off-build: @t9/runtest-t_sel_named' ]; then
+    report 0 'an off-build module names what a build compiling it reaches, on stderr only, still exit 3'
+  else report 1 'an off-build module names what a build compiling it reaches, on stderr only, still exit 3' "exit $rc; $(cat "$out" "$err")"; fi
+  git_q reset -q --hard HEAD~1 && rm -rf "${repo:?}/t9" || exit 2
+fi
+
 if harness_leg 'off-build library edge'; then
   # offb requires offa by its local name; external-lib-deps names offa by its
   # public one, and neither is compiled here, so the edge is skipped, not fatal.
@@ -533,11 +564,32 @@ if harness_leg 'link-only'; then
   affected HEAD
   ordered 'a changed operator definition counts as the whole module (tokens hold identifiers)' \
     @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh @t1/runtest-t_mid @t1/runtest-t_mid-blind
+  # A type counts by its name, the constructors and fields its changed lines name, and what its
+  # derivers make of its name (gh-ocannl-1651): gen names only `Core.H`, so a new type leaves it last.
+  gen_first='@t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh @t1/runtest-t_mid @t1/runtest-t_mid-blind'
+  gen_last='@t1/runtest-t_core @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t5/slow-usesh @t1/runtest-t_mid @t1/runtest-t_mid-blind @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen'
   printf 'let used = 1\nlet unused = 2\ntype t = A | B\n' >"$repo/lib/helper.ml"
   affected HEAD
-  ordered 'a changed type definition counts as the whole module (its constructors are what users name)' \
-    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh @t1/runtest-t_mid @t1/runtest-t_mid-blind
+  # shellcheck disable=SC2086
+  ordered 'a new type ranks first only what names it, its constructors or what its derivers make' $gen_last
   git_q checkout -q -- lib/helper.ml || exit 2
+  # gen names one field of a record type, which then gains another.
+  printf 'let used = 1\nlet unused = 2\n\ntype r = {\n  first : int;\n}\n' >"$repo/lib/helper.ml"
+  printf 'let () = () (* Core.H.first *)\n' >"$repo/t2/gen.ml"
+  git_q commit -qam helper-record || exit 2
+  printf 'let used = 1\nlet unused = 2\n\ntype r = {\n  first : int;\n  second : int;\n}\n' >"$repo/lib/helper.ml"
+  affected HEAD
+  # shellcheck disable=SC2086
+  ordered 'a field added to a record ranks a test naming only another field last' $gen_last
+  printf 'let used = 1\nlet unused = 2\n\ntype r = {\n  first : float;\n}\n' >"$repo/lib/helper.ml"
+  affected HEAD
+  # shellcheck disable=SC2086
+  ordered '... and a changed field ranks first what names that field' $gen_first
+  printf 'let used = 1\nlet unused = 2\n\ntype r = {\n  first : int;\n}\n[@@deriving sexp]\n' >"$repo/lib/helper.ml"
+  affected HEAD
+  # shellcheck disable=SC2086
+  ordered '... and a changed attribute of a type counts as the whole module' $gen_first
+  git_q reset -q --hard HEAD~1 || exit 2
   # A new interface can hide any member: the whole module changed, whatever its hunks show.
   printf 'val used : int\n' >"$repo/lib/helper.mli"
   git_q add lib/helper.mli && git_q commit -qm helper-mli || exit 2
@@ -546,6 +598,84 @@ if harness_leg 'link-only'; then
     report 0 'a file new on one side changes its module as a whole'
   else report 1 'a file new on one side changes its module as a whole' "exit $rc; $(cat "$out")"; fi
   git_q reset -q --hard HEAD~1 || exit 2
+fi
+
+if harness_leg 'option order'; then
+  # `--referenced-only` is read in any position before `--` (gh-ocannl-1651): after the paths of
+  # `--files`, after a revision, after `--since BASE`; after `--` it is a pathspec like any word.
+  affected --referenced-only --files lib/helper.ml
+  cp "$out" "$TMP/lead" || exit 2
+  affected --files lib/helper.ml --referenced-only
+  if [ "$rc" = 0 ] && [ -s "$TMP/lead" ] && cmp -s "$TMP/lead" "$out"; then report 0 '--files PATH --referenced-only reads as the leading spelling'
+  else report 1 '--files PATH --referenced-only reads as the leading spelling' "exit $rc; got [$(tr '\n' ' ' <"$out")] want [$(tr '\n' ' ' <"$TMP/lead")]; $(tr '\n' '|' <"$err")"; fi
+  printf 'let used = 1\nlet unused = 2\nlet more = 3\n' >"$repo/lib/helper.ml"
+  affected --referenced-only HEAD
+  cp "$out" "$TMP/lead" || exit 2
+  affected HEAD --referenced-only
+  if [ "$rc" = 0 ] && [ -s "$TMP/lead" ] && cmp -s "$TMP/lead" "$out"; then report 0 'REV --referenced-only reads as the leading spelling'
+  else report 1 'REV --referenced-only reads as the leading spelling' "exit $rc; got [$(tr '\n' ' ' <"$out")] want [$(tr '\n' ' ' <"$TMP/lead")]; $(tr '\n' '|' <"$err")"; fi
+  affected --since HEAD --referenced-only
+  if [ "$rc" = 0 ] && cmp -s "$TMP/lead" "$out"; then report 0 '--since BASE --referenced-only reads as the leading spelling'
+  else report 1 '--since BASE --referenced-only reads as the leading spelling' "exit $rc; got [$(tr '\n' ' ' <"$out")]; $(tr '\n' '|' <"$err")"; fi
+  affected HEAD -- --referenced-only
+  if [ "$rc" = 0 ] && [ ! -s "$out" ]; then report 0 'after --, --referenced-only is a pathspec (matching nothing here)'
+  else report 1 'after --, --referenced-only is a pathspec (matching nothing here)' "exit $rc; got [$(tr '\n' ' ' <"$out")]; $(tr '\n' '|' <"$err")"; fi
+  git_q checkout -q -- lib/helper.ml || exit 2
+fi
+
+if harness_leg 'helper definitions'; then
+  # A private helper library counts by the definitions a test names (gh-ocannl-1651), its
+  # comments left out; a re-export counts only beside the module making it.
+  mkdir -p "$repo/t8" || exit 2
+  cat >"$repo/t8/dune" <<'DUNE'
+(library (name hlp) (modules hlp) (libraries core))
+(test (name t_hplain) (modules t_hplain) (libraries hlp))
+(test (name t_hnamed) (modules t_hnamed) (libraries hlp))
+(test (name t_hindirect) (modules t_hindirect) (libraries hlp))
+(test (name t_hbare) (modules t_hbare) (libraries core))
+DUNE
+  cat >"$repo/t8/hlp.ml" <<'ML'
+(* A header naming Core.H.used, as a doc would. *)
+open Stdlib
+
+(** plain reads nothing of Core.H. *)
+let plain () = ()
+
+let names_core () = ignore Core.H.used
+
+let indirect () = names_core ()
+ML
+  printf 'let () = Hlp.plain ()\n' >"$repo/t8/t_hplain.ml"
+  printf 'let () = Hlp.names_core ()\n' >"$repo/t8/t_hnamed.ml"
+  printf 'let () = Hlp.indirect ()\n' >"$repo/t8/t_hindirect.ml"
+  # `H` with no `Core` beside it is some other H: a local module, or Stdlib's.
+  printf 'module H = struct let used = 0 end\nlet () = ignore H.used\n' >"$repo/t8/t_hbare.ml"
+  git_q add -A t8 && git_q commit -qm helper-library || exit 2
+  affected --referenced-only --files lib/helper.ml
+  expect 'a helper library names a module through the definitions a test names, never its comments; a bare re-export name is no mention' 0 \
+    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen \
+    @t5/slow-usesh @t8/runtest-t_hindirect @t8/runtest-t_hnamed
+  if grep -qx 'affected: link-only: @t8/runtest-t_hplain' "$err" && grep -qx 'affected: link-only: @t8/runtest-t_hbare' "$err"; then
+    report 0 'what names neither is ranked link-only, and named on stderr'
+  else report 1 'what names neither is ranked link-only, and named on stderr' "$(cat "$err")"; fi
+  hctl() { # LABEL FROM TO: the mutant must list t_hplain under --referenced-only
+    local mutant=$repo/tools/affected-mutant.sh
+    if FROM=$2 TO=$3 perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
+        "$repo/tools/affected-tests.sh" >"$mutant"; then
+      rc=0
+      (cd "$TMP" && bash "$mutant" --referenced-only --files lib/helper.ml) >"$out" 2>"$err" || rc=$?
+      if [ "$rc" = 0 ] && grep -qx "$4" "$out"; then report 0 "negative control: $1"
+      else report 1 "negative control: $1" "exit $rc; $(cat "$out")"; fi
+    else report 1 "negative control: $1" "the mutation anchor does not occur exactly once"; fi
+    rm -f "$mutant"
+  }
+  hctl 'the definitions named are what leave an unnamed one out' \
+    'next if $done{"$f\0$k"} || ($c->{names} && !grep { $tok{$_} } @{$c->{names}});' 'next if $done{"$f\0$k"};' @t8/runtest-t_hplain
+  hctl 'blanking comments is what keeps a doc comment from naming a module' \
+    '    for my $l (split /\n/, code_of($s)) {' '    for my $l (split /\n/, $s) {' @t8/runtest-t_hplain
+  hctl 'naming the re-exporting module is what a re-exported name needs' \
+    'next if $via && !grep { $tok->{$_} } keys %$via;' '' @t8/runtest-t_hbare
+  git_q reset -q --hard HEAD~1 && rm -rf "${repo:?}/t8" || exit 2
 fi
 
 if harness_leg 'dune fragment'; then
@@ -764,7 +894,7 @@ if harness_leg 'negative controls'; then
     'return 0 unless $rank_links;' 'return 0;' \
     --referenced-only --files lib/helper.ml -- @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
   control 'a re-export is what ranks a test naming only the re-exported name' \
-    '$as{$_}{$as_name} = 1 for grep { $_ ne $as_name } @names;' '1;' \
+    '$as{$_}{$as_name}{$x} = 1 for grep { $_ ne $as_name } @names;' '1;' \
     --referenced-only --files lib/helper.ml -- @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh
   # shellcheck disable=SC2086
   control 'a rule-made target beside a golden is what makes a golden pair' \
@@ -986,6 +1116,51 @@ if harness_leg 'probe dune edits'; then
   if grep -q 'its whole directory, because --files names no revision' "$err"; then report 0 'a dune file kept whole says why'
   else report 1 'a dune file kept whole says why' "$(cat "$err")"; fi
   probe_restore
+fi
+if harness_leg 'probe library split'; then
+  # A dune-only split (gh-ocannl-1651): `moved` leaves library big for a new library small, which
+  # big links, and no module text changes. Both stanzas are reached by their modules, not as a
+  # whole: what names Big or Moved ranks first, what only links big is link-only. The tests live
+  # in a directory of their own, as the repository's do: an executable beside a split library has
+  # a link rule the comparison sees change, and is reached as a whole.
+  mkdir -p "$repo/p7/t" || exit 2
+  printf '(library (name big) (modules big moved))\n' >"$repo/p7/dune"
+  printf '(test (name p7a) (modules p7a) (libraries big))\n(test (name p7b) (modules p7b) (libraries big))\n(test (name p7c) (modules p7c) (libraries big))\n' \
+    >"$repo/p7/t/dune"
+  printf 'let f () = ()\n' >"$repo/p7/big.ml"
+  printf 'let g () = ()\n' >"$repo/p7/moved.ml"
+  printf 'let () = Big.f ()\n' >"$repo/p7/t/p7a.ml"
+  printf 'let () = Moved.g ()\n' >"$repo/p7/t/p7b.ml"
+  printf 'let () = ()\n' >"$repo/p7/t/p7c.ml"
+  for t in p7a p7b p7c; do : >"$repo/p7/t/$t.expected"; done
+  git_q add -A p7 && git_q commit -qm split-fixture || exit 2
+  split_to() { # BIG-EXTRA: rewrite p7/dune with moved split out, BIG-EXTRA added to big's fields
+    printf '(library (name big) (modules big) (libraries small)%s)\n(library (name small) (modules moved))\n' "$1" >"$repo/p7/dune"
+  }
+  split_to ''
+  affected --referenced-only HEAD
+  expect 'a library split in a dune file alone ranks first what names a module of either library' 0 @p7/t/runtest-p7a @p7/t/runtest-p7b
+  if grep -q 'p7/dune: compared with the old revision: .*2 library stanza(s) changed only in their modules or libraries' "$err" &&
+     grep -qx 'affected: link-only: @p7/t/runtest-p7c' "$err"; then
+    report 0 'the split says which stanzas it reached by their modules, and names the link-only alias'
+  else report 1 'the split says which stanzas it reached by their modules, and names the link-only alias' "$(cat "$err")"; fi
+  split_to ' (flags (:standard -w -a))'
+  affected --referenced-only HEAD
+  expect '... and a flags change beside it keeps big whole' 0 @p7/t/runtest-p7a @p7/t/runtest-p7b @p7/t/runtest-p7c
+  git_q checkout -q -- p7/dune || exit 2
+  mutant=$repo/tools/affected-mutant.sh
+  if FROM='if (@ix && $kind eq "library" && $membership_only->($r)) {' TO='if (0) {' \
+      perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
+      "$repo/tools/affected-tests.sh" >"$mutant"; then
+    split_to ''
+    rc=0
+    (cd "$TMP" && bash "$mutant" --referenced-only HEAD) >"$out" 2>"$err" || rc=$?
+    if [ "$rc" = 0 ] && grep -qx @p7/t/runtest-p7c "$out"; then report 0 'negative control: reading the membership change is what ranks the split'
+    else report 1 'negative control: reading the membership change is what ranks the split' "exit $rc; $(cat "$out")"; fi
+    git_q checkout -q -- p7/dune || exit 2
+  else report 1 'negative control: reading the membership change is what ranks the split' "the mutation anchor does not occur exactly once"; fi
+  rm -f "$mutant"
+  git_q reset -q --hard HEAD~1 && rm -rf "${repo:?}/p7" || exit 2
 fi
 # Probes that do not answer: an input the copy lacks (an ignored directory),
 # and a dune file including one. Each reads the change without the probe.

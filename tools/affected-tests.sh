@@ -9,6 +9,9 @@
 #   tools/test-run.sh affected [--referenced-only] REV | REV..REV | REV...REV [-- PATHSPEC...]
 #   tools/test-run.sh affected [--referenced-only] --files PATH...
 #
+# `--referenced-only` may stand anywhere before a `--` (after `--since BASE`, a
+# revision, or the `--files` paths too).
+#
 # The changed paths come from `git diff --name-only` with the given revision
 # argument, in git's own forms: one REV compares it with the working tree, so
 # uncommitted edits count, and files git does not track yet are added to that
@@ -182,14 +185,19 @@
 #     new on this side, plus, from the forms that differ, a changed library,
 #     executables or tests stanza (compile flags live in rules not asked) by its
 #     literal names as dune lists them here, and a changed `(alias)` stanza's
-#     per-test alias. A changed form of any other kind (`env`, `subdir`,
+#     per-test alias. A library form whose only differences are its literal
+#     `modules` and `libraries` (a split; gh-ocannl-1651) is reached by its
+#     modules instead, both sides' (its archive, alias-module and preprocessing
+#     rules changing with them), so the link-only ranking reads it. A changed form of any other kind (`env`, `subdir`,
 #     `include`, `dirs`, an unknown head, an `(alias)` with an action), a
 #     changed rule this reader cannot map to an owner, or a failed comparison
 #     keeps the reach below for that file, and says why.
 #
 # Exit: 0 every changed `.ml`/`.mli` was mapped; 3 the list is printed, but a
-# changed `.ml`/`.mli` is UNMAPPED (see stderr); 2 usage, git or dune failure,
-# nothing printed.
+# changed `.ml`/`.mli` is UNMAPPED (see stderr; for a module of a library this
+# build does not compile, an OFF-BUILD line counts what a build compiling it
+# would reach, read from the dune files, and names the aliases whose code names
+# it -- a CUDA module on a Mac); 2 usage, git or dune failure, nothing printed.
 set -u
 die() { echo "affected: $*" >&2; exit 2; }
 # One collation everywhere: `sort` and Perl's `sort` then agree bytewise, so
@@ -210,12 +218,24 @@ usage="usage: affected [--referenced-only] --since BASE | REV | REV..REV | REV..
 # Link-only aliases (see the Perl below) are printed last, and named on stderr;
 # --referenced-only leaves them off stdout.
 referenced_only=0
-if [ "${1:-}" = --referenced-only ]; then referenced_only=1; shift; fi
 mode=git
 old_rev= new_rev=
 revs=()
 paths=()
 since=
+# `--referenced-only` is a flag of the whole call, so it is read in any position
+# before a `--` (gh-ocannl-1651): `--since B --referenced-only` and `--files P
+# --referenced-only` mean what the leading spelling does. After `--` every word is
+# a pathspec.
+args=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    --referenced-only) referenced_only=1; shift ;;
+    --) args+=("$@"); break ;;
+    *) args+=("$1"); shift ;;
+  esac
+done
+set -- ${args[@]+"${args[@]}"}
 if [ "${1:-}" = --files ]; then
   shift
   [ $# -ge 1 ] || die "--files needs at least one path ($usage)"
@@ -224,6 +244,7 @@ if [ "${1:-}" = --files ]; then
 else
   while [ $# -gt 0 ]; do
     case $1 in
+      --files) die "--files comes first, before any revision argument ($usage)" ;;
       --) shift; paths=("$@"); break ;;
       --since)
         [ $# -ge 2 ] || die "--since needs the base branch, e.g. --since <remote>/master ($usage)"
@@ -1287,7 +1308,7 @@ for my $o (grep { /\.o$/ } @stub_targets) {
   for my $w (obj_owners($o)) { push @{$st[$w]{to}}, keys %{$runs{$o}}; push @{$st[$w]{gen_to}}, keys %{$runs{$o}} }
 }
 
-my (%hit, %dune_dirs, %data_dirs, %read_by, @unmapped, @unread);
+my (%hit, %dune_dirs, %data_dirs, %read_by, @unmapped, @unread, %unmapped_mod);
 # How a stanza was hit: by changed modules it owns (NAME => 1), or as a whole
 # (a generated module, a stub, a changed stanza, a tests directory's modules).
 my (%mod_hit, %whole_hit, %mod_paths);
@@ -1402,6 +1423,50 @@ if (@scoped) {
       my %left = map { $_ => ($side eq "new" ? $count{$_} : -$count{$_}) } keys %count;
       for my $r (@{$forms{$side}{$f} // []}) { push @changed_forms, { %$r, side => $side } if $left{$r->{canon}}-- > 0 }
     }
+    # A library form that changed only in which modules it holds and which
+    # libraries it links, by literal names (a split, a merge, a module moved
+    # between libraries, with no text of a module changed; gh-ocannl-1651), is
+    # reached by its modules rather than as a whole: what it links runs the same
+    # code, so its users are ranked by naming one of its modules, either side's.
+    # A library new or gone on one side counts when its form holds only such
+    # fields (and `name`, `public_name`, `package`, `synopsis`). Any other field
+    # that differs -- flags, preprocessing, stubs, `(select)`, `(re_export)` --
+    # keeps the stanza whole.
+    my %lib_forms;   # side -> library name -> its parsed form, undef when unread
+    for my $r (grep { $_->{head} eq "library" } @changed_forms) {
+      my $x = eval { parse_dune($r->{canon}, "a form of $f") };
+      $lib_forms{$r->{side}}{$_} = $x && @$x == 1 && ref $x->[0] ? $x->[0] : undef for @{$r->{names}};
+    }
+    my $form_fields = sub {   # parsed form -> {FIELD => field}, or undef for a form not read as fields
+      my ($x) = @_;
+      my %h;
+      for my $fl (@$x[1 .. $#$x]) {
+        return undef unless ref $fl && @$fl && !ref $fl->[0] && !exists $h{$fl->[0]};
+        $h{$fl->[0]} = $fl;
+      }
+      \%h;
+    };
+    my $literal = sub { my ($fl) = @_; !$fl || !grep { ref $_ || /^[:\\]|%\{/ } @$fl[1 .. $#$fl] };
+    my $membership_only = sub {   # changed library form -> 1 when only its membership differs
+      my ($r) = @_;
+      my $other = $r->{side} eq "new" ? "old" : "new";
+      my ($mine) = grep { defined } map { $lib_forms{$r->{side}}{$_} } @{$r->{names}};
+      my $f1 = $mine && $form_fields->($mine) or return 0;
+      my ($theirs) = grep { defined } map { $lib_forms{$other}{$_} } @{$r->{names}};
+      return 0 if !$theirs && grep { exists $lib_forms{$other}{$_} } @{$r->{names}};   # there, but unread
+      if ($theirs) {
+        my $f2 = $form_fields->($theirs) or return 0;
+        for my $k (sort keys %{{ %$f1, %$f2 }}) {
+          next if canon($f1->{$k} // []) eq canon($f2->{$k} // []);
+          return 0 unless ($k eq "modules" || $k eq "libraries") && $literal->($f1->{$k}) && $literal->($f2->{$k});
+        }
+        return 1;
+      }
+      return 0 if !$f1->{modules} || grep { !/^(?:name|public_name|package|modules|libraries|synopsis)$/ } keys %$f1;
+      return $literal->($f1->{modules}) && $literal->($f1->{libraries}) ? 1 : 0;
+    };
+    my (%split, %split_mods);   # stanza index -> 1; -> {Module => 1} its old side held
+    my $split_lib = sub { my ($sd, $n) = @_; scalar grep { $split{$_} && $st[$_]{dir} eq $sd && $st[$_]{units}{$n} } 0 .. $#st };
     for my $r (@changed_forms) {
       my $h = $r->{head};
       # A form the converter did not vouch for (an alias rule it left alone, an
@@ -1433,6 +1498,12 @@ if (@scoped) {
         for my $n (@{$r->{names}}) {
           my @ix = grep { $st[$_]{dir} eq $d && $st[$_]{kind} eq $kind
                           && ($kind eq "library" ? $st[$_]{units}{$n} : grep { $_ eq $n } @{$st[$_]{names}}) } 0 .. $#st;
+          if (@ix && $kind eq "library" && $membership_only->($r)) {
+            $split{$_} = 1 for @ix;
+            my ($x) = grep { defined } map { $lib_forms{$r->{side}}{$_} } @{$r->{names}};
+            for my $i (@ix) { $split_mods{$i}{ucfirst $_} = 1 for grep { !ref } @{dfield($x, "modules") // []} }
+            next;
+          }
           if (@ix) { $whole{$_} = 1 for @ix; next }
           # Gone from this side: nothing of it is left to run.
           my $gone = $r->{side} eq "old" && !grep({ $_ eq "$n.exe" } @{$targets->{$d} // []})
@@ -1475,15 +1546,24 @@ if (@scoped) {
           push @why, "a changed rule for $t, which no stanza here builds" if !@ix && $new_side;
         } elsif ($tb =~ /^([^.]+)\.pp\.mli?$/) {
           my @ix = @{$by_modkey{"$td\0" . ucfirst $1} // []};
+          # A module moved into a library that preprocesses differently: the module
+          # is what changed, and it ranks by its name (below).
+          next if @ix && !grep { !$split{$_} } @ix;
           $whole{$_} = 1 for @ix;
           push @why, "a changed rule for $t, whose module no stanza here owns" if !@ix && $new_side;
         } elsif ($tb =~ /\.o$/) {
           $whole{$_} = 1 for obj_owners($t);
         } elsif ($tb =~ /^(?:lib(.+)_stubs\.a|(.+)\.(?:cmxa|cma|cmxs|a))$/) {
-          my $n = $1 // $2;
+          my ($n, $stubs) = ($1 // $2, defined $1);
           my @ix = grep { $st[$_]{kind} eq "library" && $st[$_]{dir} eq $td && $st[$_]{units}{$n} } 0 .. $#st;
+          # A library's archive lists its modules: a membership change changes it.
+          next if !$stubs && @ix && !grep { !$split{$_} } @ix;
           $whole{$_} = 1 for @ix;
           push @why, "a changed rule for $t, which no library here makes" if !@ix && $new_side;
+        } elsif ($tb =~ /^(.+?)(?:__)?\.ml(?:-gen)?$/ && $split_lib->($td, $1)) {
+          # The alias module dune writes for a wrapped library (`LIB__.ml-gen`, or
+          # `LIB.ml-gen` when no module is named after it) names its modules.
+          next;
         } elsif ($tb =~ $artifact) {
           push @why, "a changed rule for $t, an artifact this reader does not map" if $new_side;
         } else {
@@ -1512,10 +1592,20 @@ if (@scoped) {
       next FILE;
     }
     $covered{$f} = 1;
+    # A stanza whose modules are not all known (a generated one) has no names to
+    # rank it by: whole.
+    $whole{$_} = 1 for grep { $st[$_]{gen_mod} || !$st[$_]{mods} } keys %split;
+    my @by_membership = grep { !$whole{$_} } sort { $a <=> $b } keys %split;
+    for my $i (@by_membership) {
+      $hit{$i} = 1;
+      for my $m (keys %{$st[$i]{mods}}, keys %{$split_mods{$i} // {}}) { $mod_hit{$i}{$m} = 1; $mod_paths{$m}{"\0membership"} = 1 }
+    }
     $hit{$_} = $whole_hit{$_} = 1 for keys %whole;
     $direct{"\@$_"} //= $direct_here{$_} for keys %direct_here;
     $delta_paths{$_} = 1 for @paths;
     push @parts, scalar(keys %whole) . " stanza(s) changed as a whole" if %whole;
+    push @parts, scalar(@by_membership) . " library stanza(s) changed only in their modules or libraries (" .
+      join(", ", map { label($_) } @by_membership) . "), reached by their modules" if @by_membership;
     push @parts, scalar(keys %direct_here) . " alias(es) whose own rules changed" if %direct_here;
     print STDERR "affected: $f: compared with the old revision: " . join(", ", @parts) . "\n";
   }
@@ -1586,6 +1676,7 @@ for my $p (@changed) {
       @ix = grep { $st[$_]{undescribed} && $st[$_]{dir} eq $d } 0 .. $#st;
       $how = "no stanza of this build owns $mod; reaching the stanzas dune lists here but does not build:";
       $unmapped = 1;
+      $unmapped_mod{$p} = [$d, $mod];
     }
     push @parts, "$how " . (@ix > 3 ? scalar(@ix) . " stanzas" : join(", ", map { label($_) } @ix)) if @ix;
   }
@@ -1660,17 +1751,26 @@ for (my $grew = 1; $grew;) {
 # links a library hit as a whole (by a stub, a generated module, a stanza
 # edit: no name says what changed there), and none names the changed part of
 # a changed module in its own code. Its own code: its stanza's sources,
-# the sources of a project ppx rewriter it is preprocessed with, and the
-# modules of the private (unpublished) libraries it links that that code names,
-# to a fixpoint. Names the changed part: mentions the module, or a name
-# re-exporting it (`module A = ...M` with A not M, or an `include ...M`), and,
-# when the git hunks place every changed line in a top-level definition, one of
-# those definitions too (see %path_defs). Mentions are tokens, comments and
-# strings included, so a name only ever errs towards "names it". What this does
-# NOT see: what the owner reaches through other library code (every compile
-# goes through Low_level.optimize_proc, which no test names; gh-ocannl-1235's
-# Register_tile miss was of this kind). So link-only aliases stay printed, LAST,
-# and named on stderr; `--referenced-only` leaves them off stdout.
+# the sources of a project ppx rewriter it is preprocessed with, and, of the
+# modules of the private (unpublished) libraries it links that that code
+# names, the top-level definitions it names, comments left out (def_chunks: a
+# definition by its name, a type by its name, constructors or fields, an
+# `open`, `include` or effect always), to a fixpoint (gh-ocannl-1651). Names
+# the changed part: mentions the module, or a name re-exporting it (`module A
+# = ...M` with A not M, or an `include ...M`) together with the module making
+# that re-export (A is a name of it, not a global one), and, when the git
+# hunks place every changed line in a top-level definition, one of those
+# definitions too (see %path_defs). Mentions are tokens, the owner's own
+# comments and strings included, so a name only ever errs towards "names it".
+# THE BOUNDARY, stated: this reads names, never scopes -- a token is a mention
+# wherever it stands, and a helper definition counts by its name alone, not by
+# whether the call resolves to it; it never sees what the owner reaches through
+# other library code (every compile goes through Low_level.optimize_proc, which
+# no test names; gh-ocannl-1235's Register_tile miss was of this kind), nor
+# through a public library's code, nor through what a project ppx's output
+# names (its sources count whole, so ppx_cd's `Ir.Indexing` makes every %cd
+# user name Indexing). So link-only aliases stay printed, LAST, and named on
+# stderr; `--referenced-only` leaves them off stdout.
 my %tok_cache;
 sub tokens_of {
   my ($f) = @_;
@@ -1678,6 +1778,79 @@ sub tokens_of {
     my %t;
     if (open my $fh, "<", $f) { local $/; my $s = <$fh> // ""; $t{$1} = 1 while $s =~ /\b([A-Za-z_][A-Za-z0-9_']*)/g }
     \%t;
+  };
+}
+# A private helper module's top-level definitions, each with the names it
+# answers to and the tokens of its code (gh-ocannl-1651): a helper library such
+# as test/support's ll_test names Autotune in a few of its ~90 definitions, and
+# every test linking it named Autotune through all of them. The code is read
+# with its comments blanked (code_of), so a doc comment naming a module is no
+# mention of it. A definition starts at a column-0 `let`, `val`, `external`,
+# `module`, `class`, `exception` or `type` naming one identifier, and runs to
+# the next column-0 line that is not `and` (an `and` adds its name). A `type`
+# answers to its name, its constructors and its fields. Everything else at
+# column 0 -- `open`, `include`, `let () =`, a pattern or operator binding, an
+# attribute -- counts always, as do a definition's own lines whatever names
+# they mention. A misread line boundary only merges two definitions, which errs
+# towards "names it".
+sub code_of {   # OCaml text with every comment blanked, newlines kept; strings inside comments are comment
+  my ($s) = @_;
+  my ($out, $depth) = ("", 0);
+  pos($s) = 0;
+  while (pos($s) < length $s) {
+    my $piece;
+    if ($s =~ /\G\(\*/gc) { $depth++; $piece = "  " }
+    elsif ($depth && $s =~ /\G\*\)/gc) { $depth--; $piece = "  " }
+    elsif ($s =~ /\G("(?:[^"\\]|\\.)*")/gcs || $s =~ /\G(\{([a-z_]*)\|.*?\|\2\})/gcs
+           || $s =~ /\G('(?:[^'\\\n]|\\(?:[\\'"ntbr ]|[0-9]{3}|x[0-9A-Fa-f]{2}|o[0-7]{3}))')/gc
+           || $s =~ /\G([^(*"{'\n]+|.)/gcs) { $piece = $1 }
+    $out .= $depth || $piece eq "  " ? $piece =~ s/[^\n]/ /gr : $piece;
+  }
+  return $out;
+}
+my %chunk_cache;
+sub def_chunks {   # FILE -> [{ names => [NAME...] or undef (always counted), tok => {TOKEN => 1} }]
+  my ($f) = @_;
+  return $chunk_cache{$f} //= do {
+    my $s = "";
+    if (open my $fh, "<", $f) { local $/; $s = <$fh> // "" }
+    my (@chunks, $cur);
+    for my $l (split /\n/, code_of($s)) {
+      if ($l =~ /^and\b/ && $cur) {
+        if ($cur->{names} && $l =~ /^and\s+(?:type\s+)?(?:'[\w']+\s+|\([^()]*\)\s+)?([A-Za-z_][\w']*)\b(?!\s*,)/) {
+          push @{$cur->{names}}, $1;
+        } else { $cur->{names} = undef }
+        push @{$cur->{lines}}, $l;
+        next;
+      }
+      if ($l =~ /^[^\s)\]}|]/ && $l !~ /^(?:end|done|in|then|else|with)\b/) {
+        push @chunks, $cur if $cur;
+        my ($name, $type);
+        $name = $1 if $l =~ /^let(?:%\w+)?\s+(?:rec\s+)?([a-z_][\w']*)\b(?!\s*,)/ && $1 ne "_";
+        $name = $1 if $l =~ /^(?:val|external)\s+([a-z_][\w']*)/;
+        $name = $1 if $l =~ /^(?:module|class|exception)\s+(?:rec\s+|type\s+)?([A-Za-z_][\w']*)/;
+        ($name, $type) = ($1, 1) if $l =~ /^type\s+(?:nonrec\s+)?(?:'[\w']+\s+|\([^()]*\)\s+)?([a-z_][\w']*)/;
+        $cur = { names => defined $name ? [$name] : undef, lines => [$l], type => $type };
+        next;
+      }
+      # A definition's own lines (indented, blank, or a closing `end`, `)`, `|`, ...).
+      if ($cur) { push @{$cur->{lines}}, $l } else { $cur = { names => undef, lines => [$l] } }
+    }
+    push @chunks, $cur if $cur;
+    for my $c (@chunks) {
+      my %t;
+      my $text = join("\n", @{$c->{lines}});
+      $t{$1} = 1 while $text =~ /\b([A-Za-z_][A-Za-z0-9_']*)/g;
+      # A type answers to its constructors and fields too: what users name. Read
+      # loosely (every capitalized word after `|`, `=`, `[` or `of`, every word
+      # before a `:`), which errs towards more names.
+      if ($c->{type} && $c->{names}) {
+        push @{$c->{names}}, $text =~ /(?:[|=\[]|\bof\b)\s*`?([A-Z][\w']*)/g;
+        push @{$c->{names}}, $text =~ /\b([a-z_][\w']*)\s*:(?!:)/g;
+      }
+      $c = { names => $c->{names}, tok => \%t };
+    }
+    \@chunks;
   };
 }
 sub dnames { my ($s) = @_; map { ref $_ ? () : $_ } map { @{dfield($s->{x}, $_) // []} } qw(name names public_name public_names) }
@@ -1770,14 +1943,23 @@ sub own_tokens {   # the names an owner's own code mentions, or undef when its c
         $priv{$j} = 1;
         push @q, @{$st[$j]{to}};
       }
+      # A helper module the code names counts by the definitions it names
+      # (def_chunks), to a fixpoint: a named definition's own mentions name more.
       my %done;
       for (my $grew = 1; $grew;) {
         $grew = 0;
         for my $j (sort keys %priv) {
           for my $m (sort keys %{$st[$j]{mods} // {}}) {
-            next if $done{"$j\0$m"} || !$tok{$m};
-            $done{"$j\0$m"} = $grew = 1;
-            $tok{$_} = 1 for map { keys %{tokens_of($_)} } @{$st[$j]{mods}{$m}};
+            next unless $tok{$m};
+            for my $f (@{$st[$j]{mods}{$m}}) {
+              my $chunks = def_chunks($f);
+              for my $k (0 .. $#$chunks) {
+                my $c = $chunks->[$k];
+                next if $done{"$f\0$k"} || ($c->{names} && !grep { $tok{$_} } @{$c->{names}});
+                $done{"$f\0$k"} = $grew = 1;
+                $tok{$_} = 1 for keys %{$c->{tok}};
+              }
+            }
           }
         }
       }
@@ -1789,23 +1971,44 @@ sub own_tokens {   # the names an owner's own code mentions, or undef when its c
 # hunks and both sides of the file: each changed line belongs to the nearest
 # definition starting at column 0 above it (`let`, `and`, `type`, `val`,
 # `module`, `external`, `exception`, `class`), on the side the line is on. A
-# line under `open`, `include`, a `let () =`/`let _ =` effect or a pattern
-# binding, or above every definition, touches the module as a whole; so does
-# any file without hunks (`--files`, a new file).
+# line in a `type` touches that type by its name, the constructors and fields
+# the line itself names, and the functions a deriver makes from the type's
+# name (gh-ocannl-1651: adding a field or a constructor is what users of the
+# others do not name); an attribute line there (`[@@deriving ...]`, `[@...]`)
+# touches the module as a whole. A line under `open`, `include`, an `and`, a
+# `let () =`/`let _ =` effect or a pattern binding, or above every definition,
+# touches the module as a whole; so does any file without hunks (`--files`, a
+# new file).
 my %path_defs;   # path -> {NAME => 1}, or undef: the whole module
-sub enclosing_def {
+sub type_names {   # TYPE-NAME CHANGED-LINE -> the names a change to that line of the type touches
+  my ($t, $line) = @_;
+  my $code = code_of($line);
+  my @n = ($t, $code =~ /(?:^|[|=\[]|\bof\b)\s*`?([A-Z][\w']*)/g, $code =~ /\b([a-z_][\w']*)\s*:(?!:)/g);
+  # What ppx_compare, ppx_hash, ppx_sexp_conv, ppx_enumerate, ppx_fields_conv and
+  # ppx_variants_conv make of it.
+  push @n, $t eq "t" ? qw(compare equal hash hash_fold_t sexp_of_t t_of_sexp all Fields Variants)
+                     : map { s/N/$t/r } qw(compare_N equal_N hash_N hash_fold_N sexp_of_N N_of_sexp all_of_N Fields_of_N Variants_of_N);
+  return [grep { !/^(?:of|mutable|private|nonrec)$/ } @n];
+}
+sub enclosing_def {   # -> [NAME...], or undef: the whole module
   my ($lines, $n) = @_;   # 1-based line number
   for (my $k = $n; $k >= 1; $k--) {
     my $l = $lines->[$k - 1] // next;
     next if $l =~ /^\s/ || $l eq "" || $l =~ /^(?:\(\*|\[\@|\)|;;|\||end\b|\})/;
-    # Whitelisted forms only: a `let` value, a `val`/`external`, a module, class
-    # or exception name. A `type` (its constructors and fields are what users
-    # name) and an `and` (of a type or of a value) touch the whole module.
+    # Whitelisted forms only: a `let` value, a `val`/`external`, a type, a module,
+    # class or exception name. An `and` (of a type or of a value) touches the
+    # whole module.
+    if ($l =~ /^type\s+(?:nonrec\s+)?(?:'[\w']+\s+|\([^()]*\)\s+)?([a-z_][\w']*)/) {
+      my $t = $1;
+      my $changed = $lines->[$n - 1] // "";
+      return undef if $changed =~ /\[\@/;
+      return type_names($t, $changed);
+    }
     return undef if $l =~ /^(?:type|and)\b/;
-    return $1 if $l =~ /^let\s+(?:rec\s+)?(?:%\w+\s+)?([a-z_][\w']*)\b(?!\s*,)/ && $1 ne "_";
-    return $1 if $l =~ /^let\s+(?:rec\s+)?\(\s*([^\s()]+)\s*\)/;   # an operator
-    return $1 if $l =~ /^(?:val|external)\s+([a-z_][\w']*)/ || $l =~ /^val\s+\(\s*([^\s()]+)\s*\)/;
-    return $1 if $l =~ /^(?:module|class|exception)\s+(?:rec\s+|type\s+)?([A-Za-z_][\w']*)/;
+    return [$1] if $l =~ /^let\s+(?:rec\s+)?(?:%\w+\s+)?([a-z_][\w']*)\b(?!\s*,)/ && $1 ne "_";
+    return [$1] if $l =~ /^let\s+(?:rec\s+)?\(\s*([^\s()]+)\s*\)/;   # an operator
+    return [$1] if $l =~ /^(?:val|external)\s+([a-z_][\w']*)/ || $l =~ /^val\s+\(\s*([^\s()]+)\s*\)/;
+    return [$1] if $l =~ /^(?:module|class|exception)\s+(?:rec\s+|type\s+)?([A-Za-z_][\w']*)/;
     return undef;   # open, include, let () =, a pattern: the whole module
   }
   return undef;
@@ -1831,19 +2034,20 @@ if (-f "$tmp/ml-diff") {
       next unless $count;
       @{$side{$which}} or do { %defs = ("\0whole" => 1); last };
       for my $n ($start .. $start + $count - 1) {
-        my $name = enclosing_def($side{$which}, $n);
-        if (!defined $name) { %defs = (); $defs{"\0whole"} = 1; last }
+        my $names = enclosing_def($side{$which}, $n);
+        if (!defined $names) { %defs = (); $defs{"\0whole"} = 1; last }
         # An operator or other non-identifier: tokens hold identifiers only, so the
         # whole module counts.
-        if ($name !~ /^[A-Za-z_][\w']*$/) { %defs = ("\0whole" => 1); last }
-        $defs{$name} = 1;
+        if (grep { !/^[A-Za-z_][\w']*$/ } @$names) { %defs = ("\0whole" => 1); last }
+        $defs{$_} = 1 for @$names;
       }
       last if $defs{"\0whole"};
     }
     $path_defs{$p} = %defs && !$defs{"\0whole"} ? \%defs : undef;
   }
 }
-# The names a changed module answers to: its own, and those re-exporting it.
+# The names a changed module answers to: its own, and those re-exporting it,
+# each with the modules it is visible through (below).
 # A stanza reached from one hit as a whole is never link-only: no name says
 # what changed there.
 # So is one whose generated module or stub a reached generator writes: what the
@@ -1858,18 +2062,25 @@ for (my $grew = 1; $grew;) {
   }
 }
 my $rank_links = 1;
-my %changed_names;   # NAME -> {changed module it answers for}
+my %changed_names;   # NAME -> {changed module it answers for => undef, or {module NAME is visible through => 1}}
 my %mod_defs;        # changed module -> {definition => 1}, or undef: the whole module
 if ($rank_links) {
   for my $m (map { keys %{$mod_hit{$_}} } grep { $st[$_]{kind} eq "library" } keys %mod_hit) {
-    $changed_names{$m}{$m} = 1;
+    $changed_names{$m}{$m} = undef;
     my @p = keys %{$mod_paths{$m}};
     $mod_defs{$m} = (grep { !$path_defs{$_} } @p) ? undef : { map { %{$path_defs{$_}} } @p };
   }
   $rank_links = 0 unless %changed_names;
 }
 if ($rank_links) {
-  my %as;   # M -> names under which some library module re-exports M
+  # M -> {name some library module re-exports M under => {that module => 1}}. A
+  # re-export is a name of the module that makes it: `module Lazy = Utils.Lazy`
+  # in hip_backend.ml is `Hip_backend.Lazy`, and code naming `Lazy` without
+  # naming Hip_backend means Stdlib's (gh-ocannl-1651: counted bare, it made
+  # every test calling `Lazy.force` name Utils). So a re-exported name names M
+  # only in code that also names the module re-exporting it (by a path, an
+  # `open`, or as the re-exporter's own sibling).
+  my %as;
   for my $j (grep { $st[$_]{kind} eq "library" } 0 .. $#st) {
     for my $x (keys %{$st[$j]{mods} // {}}) {
       for my $f (@{$st[$j]{mods}{$x}}) {
@@ -1898,17 +2109,23 @@ if ($rank_links) {
           # in it counts as re-exported, and the wrapper's users are never
           # link-only on its account.
           @names = $rhs =~ /\b([A-Z][\w']*)/g if !@names && $rhs =~ /\S/;
-          $as{$_}{$as_name} = 1 for grep { $_ ne $as_name } @names;
+          $as{$_}{$as_name}{$x} = 1 for grep { $_ ne $as_name } @names;
         }
       }
     }
   }
+  # To a fixpoint: a re-export of a re-export is visible through the outer
+  # re-exporter (whatever made the inner one visible is that library code's).
+  my $size = sub { my $c = $changed_names{$_[0]} // {}; join ",", map { $_ . ":" . (defined $c->{$_} ? join("+", sort keys %{$c->{$_}}) : "") } sort keys %$c };
   my @q = keys %changed_names;
   while (defined(my $m = shift @q)) {
     for my $n (keys %{$as{$m} // {}}) {
-      my $had = keys %{$changed_names{$n} // {}};
-      $changed_names{$n}{$_} = 1 for keys %{$changed_names{$m}};
-      push @q, $n if keys %{$changed_names{$n}} > $had;
+      my $had = $size->($n);
+      for my $orig (keys %{$changed_names{$m}}) {
+        next if exists $changed_names{$n}{$orig} && !defined $changed_names{$n}{$orig};   # already unconditional
+        $changed_names{$n}{$orig}{$_} = 1 for keys %{$as{$m}{$n}};
+      }
+      push @q, $n if $size->($n) ne $had;
     }
   }
 }
@@ -1919,6 +2136,8 @@ sub link_only {   # reached owners -> true when none of them names a changed mod
     my $tok = own_tokens($o) // return 0;
     for my $n (grep { $tok->{$_} } keys %changed_names) {
       for my $m (keys %{$changed_names{$n}}) {
+        my $via = $changed_names{$n}{$m};
+        next if $via && !grep { $tok->{$_} } keys %$via;
         my $defs = $mod_defs{$m};
         return 0 if !$defs || grep { $tok->{$_} } keys %$defs;
       }
@@ -1949,6 +2168,7 @@ my %read_any = map { %{$read_by{$_}} } keys %read_by;
 my %tier;
 for my $a (@al) {
   my %owners = (%{$a->{owners}}, map { %{$runs{$_} // {}} } @{$a->{own}});
+  $a->{all_owners} = \%owners;
   $aliased{$_} = 1 for keys %owners;
   $total{$a->{dir}}++ unless $a->{hidden};
   my $unknown = !%owners && !@{$a->{own}};
@@ -1996,6 +2216,57 @@ for my $n (grep { !$hidden{$_} } keys %tier) {
 }
 my @link_only = sort grep { $tier{$_} eq "link" && !$hidden{$_} } keys %tier;
 
+# An UNMAPPED module of a library this build does not compile (an optional
+# backend: cuda_backend.ml on a Mac; gh-ocannl-1651): what a build that does
+# compile it would reach, named on stderr for a box that builds it. Read from
+# the dune files, since dune describes none of it here: the stanzas whose
+# `libraries` name the library (plainly, or as a `(select)` condition, through
+# other off-build libraries naming it in turn), then what requires those, to a
+# fixpoint. Of the per-test aliases owned there, those whose own code names
+# the module (or is not all known) are named; the rest are counted as
+# link-only. Never on stdout: here they run without it.
+my @off_build;   # [path, library label, [seed labels], [named aliases], number of link-only ones]
+if (%unmapped_mod) {
+  my %st_of;   # dune stanza -> @st indices read from it
+  for my $i (0 .. $#st) { my $ds = static_of($i); push @{$st_of{$ds}}, $i if $ds }
+  my $atoms; $atoms = sub { map { ref $_ ? $atoms->(@$_) : $_ } @_ };
+  for my $p (sort keys %unmapped_mod) {
+    my ($d, $mod) = @{$unmapped_mod{$p}};
+    my @libs = grep {
+      my $ds = static_of($_);
+      my $m = $ds && dfield($ds->{x}, "modules");
+      $ds && $st[$_]{kind} eq "library" && $st[$_]{dir} eq $d && (!$m || grep { ref $_ || $_ eq lcfirst $mod || /^:/ } @$m)
+    } grep { $st[$_]{undescribed} } 0 .. $#st;
+    next unless @libs;
+    my %names = map { $_ => 1 } map { dnames(static_of($_)) } @libs;
+    my (%seed_ds, %seeds);
+    for (my $grew = 1; $grew;) {
+      $grew = 0;
+      for my $ds (grep { $_->{kind} =~ /^(?:library|executables?|tests?)$/ && !$seed_ds{$_} } @dstanzas) {
+        next unless grep { $names{$_} } $atoms->(@{dfield($ds->{x}, "libraries") // []});
+        $seed_ds{$ds} = $grew = 1;
+        # Another stanza this build leaves out passes it on by its own names.
+        if (grep { $st[$_]{undescribed} } @{$st_of{$ds} // []}) { $names{$_} = 1 for dnames($ds) }
+        $seeds{$_} = 1 for grep { !$st[$_]{undescribed} } @{$st_of{$ds} // []};
+      }
+    }
+    my %would = %seeds;
+    for (my $grew = 1; $grew;) {
+      $grew = 0;
+      for my $i (0 .. $#st) {
+        next if $would{$i} || !grep { $would{$_} } @{$st[$i]{to}};
+        $would{$i} = $grew = 1;
+      }
+    }
+    my (@named, $n_link);
+    for my $a (grep { !$_->{hidden} } @al) {
+      my @o = grep { $would{$_} } keys %{$a->{all_owners}} or next;
+      if (grep { my $t = own_tokens($_); !$t || $t->{$mod} } @o) { push @named, $a->{name} } else { $n_link++ }
+    }
+    push @off_build, [$p, label($libs[0]), [map { label($_) } sort { $a <=> $b } keys %seeds], [sort @named], $n_link // 0];
+  }
+}
+
 print "$_\n" for sort keys %out;
 print "$_\n" for $referenced_only ? () : @link_only;
 my $n_by_alias = grep { $out{$_} } keys %by_alias;
@@ -2015,6 +2286,17 @@ printf STDERR "affected: %s: %d blind per-test alias(es) (actions not described 
 printf STDERR "affected: %d of them blind because %s\n", $blind_why{$_}, $_ for sort keys %blind_why;
 print STDERR "affected: unread: $_ (no stanza owns it and no rule dune shows reads it; only blind aliases are listed for it)\n" for @unread;
 print STDERR "affected: UNMAPPED: $_ (no stanza of this build owns this module)\n" for @unmapped;
+for my $ob (@off_build) {
+  my ($p, $lib, $seeds, $named, $n_link) = @$ob;
+  my $n = @$named + $n_link;
+  printf STDERR "affected: OFF-BUILD: %s is a module of %s, which this build does not compile. Where it is compiled, %s"
+    . " link%s it (by name or a (select)), reaching %d per-test alias(es): run them on a box that builds it, with its backend"
+    . " selected, or run `affected` there for the ranked list. %d of them name the module in their own code (or hold code"
+    . " not all known)%s, %d only link it%s\n",
+    $p, $lib, (@$seeds ? (@$seeds > 3 ? scalar(@$seeds) . " stanzas" : join(", ", @$seeds)) : "no stanza"), (@$seeds == 1 ? "s" : ""),
+    $n, scalar(@$named), (@$named ? ", named below" : ""), $n_link, (@$seeds ? "" : "; nothing here links it");
+  print STDERR "affected: off-build: $_\n" for @$named;
+}
 if (@link_only) {
   my $what = join("; ", map { $_ . ($mod_defs{$_} ? " (" . join(", ", sort keys %{$mod_defs{$_}}) . ")" : "") }
                         sort keys %mod_defs);
