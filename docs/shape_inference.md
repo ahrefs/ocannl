@@ -28,7 +28,8 @@ type dim =
   | Affine of { stride : int; over : dim; conv : convolution option; stride_offset : int }
       (** An affine transformation of a dimension. When [conv] is [None], this is strided
           iteration. When [conv] is [Some], this includes convolution parameters.
-          Invariants: [stride > 0], [dilation > 0] (when present), [0 <= stride_offset < stride]. *)
+          Invariants: [stride > 0], [dilation > 0] (when present), [0 <= stride_offset], and
+          [stride_offset < stride] unless the axis is a padded window. *)
 
 type bcast =
   | Row_var of row_var  (** The row can be inferred to have more axes. *)
@@ -59,7 +60,7 @@ OCANNL uses three distinct label-like mechanisms in its shape system. It is impo
 
 ### Affine indexing and convolutions
 
-The `Affine` constructor represents affine transformations of dimensions, supporting both strided iteration and convolution-style indexing. The key insight is that `stride_offset` is purely a projection-time concern—it selects which elements within each stride window are accessed, but does not affect dimension sizes. This allows the same input tensor to be used with different `stride_offset` values (0 to stride-1) without shape errors. Because the dimension formulas below leave the offset out, an offset is in bounds only when it is smaller than the stride and the axis has no unpadded window; einsum specs that break this are refused while the tensor is built (`Shape.refuse_out_of_extent_offset`, gh-ocannl-1618), in either slot. A padded window keeps its offset, at or past the stride too: a tap it moves past the margins reads the padding value.
+The `Affine` constructor represents affine transformations of dimensions, supporting both strided iteration and convolution-style indexing. The key insight is that `stride_offset` is purely a projection-time concern—it selects which elements within each stride window are accessed, but does not affect dimension sizes. This allows the same input tensor to be used with different `stride_offset` values (0 to stride-1) without shape errors. Because the dimension formulas below leave the offset out, an offset is in bounds only when it is smaller than the stride and the axis has no unpadded window; einsum specs that break this are refused while the tensor is built (`Shape.refuse_out_of_extent_offset`, gh-ocannl-1618), in either slot. A padded window keeps its offset, at or past the stride too: a tap it moves past the margins reads the padding value. A stride or a dilation below 1 is refused there as well (`Shape.refuse_nonpositive_coefficient`, gh-ocannl-1657).
 
 **Dimension formulas** (during shape inference):
 

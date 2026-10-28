@@ -16,7 +16,11 @@
 
    The audit found the dilated window wrong: its margins were sized by the undilated kernel
    ([left=K/2]), so [o=+2*k] over a kernel of 3 read [o-1], [o+1], [o+3] instead of the centered
-   [o-2], [o], [o+2], with or without an offset. *)
+   [o-2], [o], [o+2], with or without an offset. It also found the documented [stride > 0] and
+   [dilation > 0] invariants unenforced: [o=+0*k] ran, multiplying one cell by every tap, and
+   [o<+0*k] died with an [Invalid_argument] in the dimension solver. A coefficient below 1 is now
+   refused while the tensor is built ([Shape.refuse_nonpositive_coefficient]), on every route and in
+   either slot; the refusals are pinned at the end. *)
 
 open Base
 open Ocannl
@@ -281,6 +285,90 @@ let run_gradients () =
     { stride = 2; offset = 1; dilation = 1 }
     ~n:8 ~w:k3 "s, 2*o=+1+k; k => s, o"
 
+(* {2 Refused coefficients} *)
+
+type outcome = Refused_at_construction of string | Refused_later of string | Ran
+
+(* [build] constructs the operation and returns the thunk that compiles and runs it. A failed case
+   leaves the session tainted (gh-ocannl-1301); it is rewound, so the next case starts from the last
+   closure. *)
+let attempt build =
+  let outcome =
+    match build () with
+    | exception Row.Shape_error (msg, _) -> Refused_at_construction msg
+    | run -> ( match run () with () -> Ran | exception e -> Refused_later (exn_message e))
+  in
+  if Option.is_some (Shape.taint_provenance ()) then Tensor.rewind_to_last_closure ();
+  outcome
+
+let forward t () = ignore (Train.forward_once (Context.auto ()) t : Context.t)
+
+let refused ?(print_message = false) label ~axis ~spec build =
+  case label (fun () ->
+      let claim_label =
+        Printf.sprintf "%s: refused at construction, naming the affine axis %s" label axis
+      in
+      match attempt build with
+      | Refused_at_construction msg ->
+          if print_message then Stdio.printf "%s: %s\n" label msg;
+          let names_it =
+            String.is_substring msg ~substring:("affine axis `" ^ axis ^ "`")
+            && String.is_substring msg ~substring:("einsum spec \"" ^ spec ^ "\"")
+            && String.is_substring msg ~substring:"must be at least 1"
+          in
+          if not names_it then Stdio.eprintf "%s: refused with another message: %s\n" label msg;
+          pf "%s" claim_label names_it
+      | Refused_later msg ->
+          Stdio.eprintf "%s: refused only after construction: %s\n" label msg;
+          pf "%s" claim_label false
+      | Ran ->
+          Stdio.eprintf "%s: was not refused\n" label;
+          pf "%s" claim_label false)
+
+let operand () = computed [ 1; 6 ] (ramp 6)
+let kernel () = ndarray [ 3 ] k3
+
+let run_refusals () =
+  Tensor.unsafe_reinitialize ();
+  refused ~print_message:true "zero dilation, padded window" ~axis:"o=+0*k"
+    ~spec:"s, o=+0*k; k => s, o" (fun () ->
+      forward (Operation.einsum "s, o=+0*k; k => s, o" ~grad_spec:pg (operand ()) (kernel ()) ()));
+  refused "zero dilation, unpadded window" ~axis:"o<+0*k" ~spec:"s, o<+0*k; k => s, o" (fun () ->
+      forward (Operation.einsum "s, o<+0*k; k => s, o" ~grad_spec:pg (operand ()) (kernel ()) ()));
+  refused ~print_message:true "zero stride, padded window" ~axis:"0*o=+k"
+    ~spec:"s, 0*o=+k; k => s, o" (fun () ->
+      forward (Operation.einsum "s, 0*o=+k; k => s, o" ~grad_spec:pg (operand ()) (kernel ()) ()));
+  refused "zero stride, unpadded window" ~axis:"0*o<+k" ~spec:"s, 0*o<+k; k => s, o" (fun () ->
+      forward (Operation.einsum "s, 0*o<+k; k => s, o" ~grad_spec:pg (operand ()) (kernel ()) ()));
+  refused "zero stride, operand without a window" ~axis:"0*o" ~spec:"s, 0*o => s, o" (fun () ->
+      forward (Operation.einsum1 "s, 0*o => s, o" ~grad_spec:pg (operand ()) ()));
+  refused "zero stride, result side" ~axis:"0*i" ~spec:"s, i => s, 0*i" (fun () ->
+      forward (Operation.einsum1 "s, i => s, 0*i" ~grad_spec:pg (operand ()) ()));
+  refused "zero dilation, result side" ~axis:"i<+0*k" ~spec:"s, i; k => s, i<+0*k" (fun () ->
+      forward (Operation.einsum "s, i; k => s, i<+0*k" ~grad_spec:pg (operand ()) (kernel ()) ()));
+  refused "zero dilation, %op identifier" ~axis:"o=+0*k" ~spec:"s, o=+0*k; k => s, o" (fun () ->
+      let dilation = 0 in
+      let x = operand () in
+      let w = kernel () in
+      let%op r = x +* "s, o=+dilation*k; k => s, o" w in
+      forward r);
+  refused "zero stride, %op identifier" ~axis:"0*o<+k" ~spec:"s, 0*o<+k; k => s, o" (fun () ->
+      let stride = 0 in
+      let x = operand () in
+      let w = kernel () in
+      let%op r = x +* "s, stride*o<+k; k => s, o" w in
+      forward r);
+  refused "zero dilation, %cd ~logic" ~axis:"o=+0*k" ~spec:"s, o=+0*k; k => s, o" (fun () ->
+      let x = operand () in
+      let w = kernel () in
+      let%cd asn = { sm } =:+ x * w ~logic:"s, o=+0*k; k => s, o" in
+      fun () ->
+        let ctx = Context.auto () in
+        let ctx, routine = Context.compile ~name:"cd_zero" ctx asn Ir.Indexing.Empty in
+        ignore (Context.run ctx routine : Context.t);
+        ignore (sm : Tensor.t))
+
 let () =
   run_forms ();
-  run_gradients ()
+  run_gradients ();
+  run_refusals ()

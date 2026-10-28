@@ -42,3 +42,15 @@ gradient of o=+2+k: d/dx: true
 gradient of o=+2+k: d/dw: true
 gradient of max 2*o=+1+k: d/dx: true
 gradient of max 2*o=+1+k: d/dw: true
+zero dilation, padded window: affine axis `o=+0*k` in einsum spec "s, o=+0*k; k => s, o" has dilation 0, which must be at least 1: at 0 every position of its label would map to the same cell
+zero dilation, padded window: refused at construction, naming the affine axis o=+0*k: true
+zero dilation, unpadded window: refused at construction, naming the affine axis o<+0*k: true
+zero stride, padded window: affine axis `0*o=+k` in einsum spec "s, 0*o=+k; k => s, o" has stride 0, which must be at least 1: at 0 every position of its label would map to the same cell
+zero stride, padded window: refused at construction, naming the affine axis 0*o=+k: true
+zero stride, unpadded window: refused at construction, naming the affine axis 0*o<+k: true
+zero stride, operand without a window: refused at construction, naming the affine axis 0*o: true
+zero stride, result side: refused at construction, naming the affine axis 0*i: true
+zero dilation, result side: refused at construction, naming the affine axis i<+0*k: true
+zero dilation, %op identifier: refused at construction, naming the affine axis o=+0*k: true
+zero stride, %op identifier: refused at construction, naming the affine axis 0*o<+k: true
+zero dilation, %cd ~logic: refused at construction, naming the affine axis o=+0*k: true

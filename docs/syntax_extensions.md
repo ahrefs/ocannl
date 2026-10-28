@@ -532,6 +532,7 @@ The affine axis syntax enables convolution and pooling operations directly in ei
 
 - **Input index formula**: `input_index = stride * output_position + dilation * kernel_position`
 - **Padded convolution** (`=+`): `input_size = stride * output_size` (padding compensates for kernel extent). The operand is zero-padded by margins totalling the effective kernel span (below), split with the smaller half on the left, `left = effective_kernel_span / 2`, and a padded window reads `input[stride * output_position + offset + dilation * kernel_position - left]`, a position outside the operand reading the padding value (0 for the add family; a max-family window is clamped to the operand instead). So with stride 1 and an odd kernel the window is centered, dilated or not: `o=+2*k` over a kernel of 3 reads `o - 2`, `o`, `o + 2` (gh-ocannl-1657).
+- **Stride and dilation are at least 1**: a coefficient of 0 (written as a literal, or the runtime value of an identifier under `%op`/`%cd`) is refused with a message naming the axis (gh-ocannl-1657).
 - **Valid convolution** (`<+`): No padding. The dimension relationship is:
   ```
   input_size = stride * (output_size - 1) + effective_kernel_span
