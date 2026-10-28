@@ -3434,7 +3434,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   opam's solver for the selected package/version set under the install's test/doc flags, hashes the
   normalized definitions of those exact versions too — minus the project's own packages — then
   derives every remote git pin from opam's live registry, resolves it with `git ls-remote`, and
-  digests the shas. The project packages are left out of the definition hash because `opam pin .`
+  digests the shas. A pin on a full 40-hex commit is taken as its own revision, with no lookup:
+  ls-remote matches ref NAMES only and answers a SHA with nothing, which the empty-resolution
+  guard refused, so `pin-depends` could not pin a commit (gh-ocannl-1672). An abbreviated SHA
+  still goes to ls-remote and fails loudly, since offline it cannot be told from a hex-named ref. The project packages are left out of the definition hash because `opam pin .`
   records the checkout's git ref in the pinned definition (`opam show --raw` prints
   `git+file://…#master` on a branch and `#HEAD` on the detached checkout every `pull_request` run
   gets), so hashing them keyed the cache by EVENT TYPE: for two days every PR run missed the
@@ -3462,7 +3465,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `.github/actions/pin-revisions/resolve.sh`, and `tools/test-pin-revisions.sh` exercises that exact
   production script with fake opam 2.5.2 and git outputs: sorting, duplicates, local-pin exclusion,
   project-package exclusion from the definition digest (and the loud failure when the solution
-  holds nothing else), the per-definition digest listing (asserted to carry a DISTINCT hash per
+  holds nothing else), full and abbreviated commit-SHA pins, the per-definition digest listing (asserted to carry a DISTINCT hash per
   definition, so a per-run constant naming nothing would go red), color suppression, empty
   registries and failed resolutions all have fault-injected negative controls. CI runs the harness
   once, in its toolchain-free `harnesses` job, because this

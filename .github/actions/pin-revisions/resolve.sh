@@ -186,11 +186,22 @@ while IFS= read -r spec; do
   url=${spec%%#*}
   ref=${spec#*#}
   [ "$ref" != "$spec" ] || ref=HEAD
-  # `awk` rather than `cut | head`: an annotated tag answers on two lines (the
-  # tag and its peeled commit), and a `head` that leaves early can hand its
-  # upstream a SIGPIPE, which `pipefail` would read as a failed resolution. awk
-  # consumes the whole answer and prints one line.
-  sha=$(git ls-remote "$url" "$ref" | awk 'NR==1{print $1}')
+  # A full commit SHA is already the revision. `git ls-remote` matches its
+  # patterns against ref NAMES only, so it answers a SHA pin with nothing, and
+  # the guard below would refuse every `pin-depends` entry pinned to a commit
+  # (gh-ocannl-1672). Only the full 40-hex form qualifies: an abbreviated SHA
+  # cannot be told apart from a hex-named branch or tag offline, so it still
+  # goes to ls-remote and fails loudly there. (SHA-256 object names, 64 hex,
+  # are out of scope until a pinned remote uses them.)
+  if [[ $ref =~ ^[0-9a-f]{40}$ ]]; then
+    sha=$ref
+  else
+    # `awk` rather than `cut | head`: an annotated tag answers on two lines
+    # (the tag and its peeled commit), and a `head` that leaves early can hand
+    # its upstream a SIGPIPE, which `pipefail` would read as a failed
+    # resolution. awk consumes the whole answer and prints one line.
+    sha=$(git ls-remote "$url" "$ref" | awk 'NR==1{print $1}')
+  fi
   # An empty sha would silently collapse the key onto whatever it hashed to
   # last time, serving a cache built from different sources.
   [ -n "$sha" ] || { echo "could not resolve $ref of $url" >&2; exit 1; }
