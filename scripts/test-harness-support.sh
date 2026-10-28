@@ -32,6 +32,10 @@ case $MODE in
       if harness_real_dune; then echo "FOUND $harness_dune"; else echo "ABSENT $harness_dune_absent"; fi
     done
     echo "PATH $PATH" ;;
+  dune_skips)
+    # A check skipped for the hidden dune beside one skipped for another reason.
+    harness_real_dune || skip 'hidden check' "$harness_dune_absent"
+    skip 'other check' 'no other host' ;;
   legs)
     # Each body leaves a trace, so a filtered leg is seen not to have run.
     if harness_leg 'alpha leg #odd'; then echo alpha >>"$RECORD.ran"; report 0 'alpha body'; fi
@@ -83,7 +87,8 @@ export SUPPORT=$HERE/harness-support.sh RECORD=$TMP/record MODE=pass
 # The probes' skip verdict is the subject; an ambient strict mode, or an
 # ambient list of expected skips, is not.
 unset OCANNL_TOOL_HARNESS_STRICT OCANNL_TOOL_HARNESS_EXPECTED_SKIPS \
-  OCANNL_TOOL_HARNESS_NAME OCANNL_TOOL_HARNESS_SKIP_RECORD OCANNL_TOOL_HARNESS_NO_DUNE
+  OCANNL_TOOL_HARNESS_NAME OCANNL_TOOL_HARNESS_SKIP_RECORD OCANNL_TOOL_HARNESS_NO_DUNE \
+  OCANNL_TOOL_HARNESS_DUNE_SKIP_RECORD
 probe() {
   local rc=0
   bash "$TMP/probe.sh" "$@" >"$TMP/out" 2>&1 || rc=$?
@@ -190,6 +195,19 @@ else
   if [ "$rc" = 0 ] && [ "$(grep -cxF -- "$found" "$TMP/out")" = 2 ] && ! grep -qxF -- "$hidden" "$TMP/out"; then
     report 0 'negative control: a probe blind to the switch finds the dune it should hide'
   else report 1 'negative control: a probe blind to the switch finds the dune it should hide' "exit $rc; $(cat "$TMP/out")"; fi
+  # The skips the hiding caused are told by their reason (gh-ocannl-1650):
+  # OCANNL_TOOL_HARNESS_DUNE_SKIP_RECORD gets the one skipped for it, under the
+  # harness's name, and not the one skipped for another reason.
+  : >"$TMP/dune-skips"
+  rc=0
+  (OCANNL_TOOL_HARNESS_NO_DUNE=1 OCANNL_TOOL_HARNESS_NAME=probe OCANNL_TOOL_HARNESS_DUNE_SKIP_RECORD=$TMP/dune-skips \
+    SUPPORT=$dune_repo/scripts/harness-support.sh PATH=$dune_tools MODE=dune_skips "$BASH" "$TMP/probe.sh"
+  ) >"$TMP/out" 2>&1 || rc=$?
+  if [ "$rc" = 0 ] && [ "$(cat "$TMP/dune-skips")" = "probe"$'\t'"hidden check" ] \
+     && grep -q 'all legs passed (2 skipped)' "$TMP/out"; then
+    report 0 "a skip for the hidden dune, and no other, is recorded as the hiding's"
+  else report 1 "a skip for the hidden dune, and no other, is recorded as the hiding's" \
+    "exit $rc; record: $(cat "$TMP/dune-skips"); $(cat "$TMP/out")"; fi
 fi
 MODE=fail probe; rc=$?
 if [ "$rc" = 1 ] && grep -q '1 leg(s) failed (0 skipped)' "$TMP/out" && ! grep -q 'aborted before finish' "$TMP/out"; then

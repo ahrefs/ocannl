@@ -8299,7 +8299,7 @@ self_run() { # tag: the copy under $TMP/self-<tag>, run on legs 79 and 70; sets 
   self_rc=0
   (
     unset OCANNL_TOOL_HARNESS_STRICT OCANNL_TOOL_HARNESS_EXPECTED_SKIPS \
-      OCANNL_TOOL_HARNESS_NAME OCANNL_TOOL_HARNESS_SKIP_RECORD
+      OCANNL_TOOL_HARNESS_NAME OCANNL_TOOL_HARNESS_SKIP_RECORD OCANNL_TOOL_HARNESS_DUNE_SKIP_RECORD
     mkdir -p "$root/tmp"
     TMPDIR=$root/tmp bash "$root/tools/test-test-run.sh" --only '^(79|70):'
   ) >"$root.out" 2>&1 || self_rc=$?

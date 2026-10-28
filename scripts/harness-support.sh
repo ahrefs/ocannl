@@ -292,6 +292,11 @@ skip() { # LABEL REASON
   fi
   skipped=$((skipped + 1))
   harness_skips+=("$1 -- $2")
+  # tools/test-harnesses.sh --ci-shell holds its list of hidden-dune skips to
+  # exactly the skips harness_real_dune's hiding caused, so it asks which
+  # those were: the ones whose reason is the probe's own (gh-ocannl-1650).
+  [ -z "${OCANNL_TOOL_HARNESS_DUNE_SKIP_RECORD:-}" ] || [ "$2" != "$harness_dune_hidden_reason" ] ||
+    printf '%s\t%s\n' "${OCANNL_TOOL_HARNESS_NAME:-}" "$1" >>"$OCANNL_TOOL_HARNESS_DUNE_SKIP_RECORD"
   # tools/harness-legs-alone.sh compares each leg's skips alone with the
   # same leg's in the full run, so it asks which leg each skip came from.
   [ -z "${OCANNL_TOOL_HARNESS_SKIP_LEGS:-}" ] ||
@@ -392,13 +397,16 @@ harness_require() { # executable prerequisites; missing host tools are coverage 
 # hides a dune the host has, so a box with a toolchain shows the skips of the
 # toolchain-free CI job (tools/test-harnesses.sh --ci-shell sets it); any value
 # but empty, 0 or 1 is a FAIL, once, and hides it too. The opam environment is
-# sourced in a subshell, so the caller's PATH stays its own.
+# sourced in a subshell, so the caller's PATH stays its own. A hidden dune's
+# reason is the one constant below: a caller skips with harness_dune_absent,
+# and skip() tells the skips the hiding caused by it (gh-ocannl-1650).
+harness_dune_hidden_reason='dune hidden by OCANNL_TOOL_HARNESS_NO_DUNE=1, as on the toolchain-free CI job'
 harness_real_dune() {
   harness_dune= harness_dune_absent=
   case ${OCANNL_TOOL_HARNESS_NO_DUNE-} in
     ''|0) ;;
     1)
-      harness_dune_absent='dune hidden by OCANNL_TOOL_HARNESS_NO_DUNE=1, as on the toolchain-free CI job'
+      harness_dune_absent=$harness_dune_hidden_reason
       return 1 ;;
     *)
       harness_dune_absent="OCANNL_TOOL_HARNESS_NO_DUNE='$OCANNL_TOOL_HARNESS_NO_DUNE' is neither 0 nor 1"

@@ -300,7 +300,7 @@ train_last = train_second.rstrip(',') + "]'"
 assert source.count(train_second) == 1 and source.count(',\n               ' + train_last) == 1, \
     'train 2/2 entries moved; update the mutants below'
 side_guard = "github.event_name != 'workflow_dispatch' || !inputs.windows_only && inputs.ocaml_compiler == '5.5.x'"
-assert source.count(side_guard) == 4, 'side-job guard text moved; update the mutants below'
+assert source.count(side_guard) == 5, 'side-job guard text moved; update the mutants below'
 compiler_axis = "&& format('[\"{0}\"]', inputs.ocaml_compiler)"
 assert compiler_axis in source, 'compiler axis text moved; update the mutants below'
 for label, mutant in (
@@ -315,6 +315,7 @@ for label, mutant in (
     ('schedule narrowed by compiler input', source.replace("github.event_name == 'workflow_dispatch' && inputs.ocaml_compiler", 'inputs.ocaml_compiler')),
     ('duplicate formatting job', source.replace(side_guard, "github.event_name != 'never'", 1)),
     ('harnesses in the Windows fallback', source.replace("  harnesses:\n    if: " + side_guard, "  harnesses:\n    if: github.event_name != 'never'")),
+    ('real-dune shell harnesses in the Windows fallback', source.replace("  harness-real-dune:\n    if: " + side_guard, "  harness-real-dune:\n    if: github.event_name != 'never'")),
     ('Dune-floor promotion harnesses in the Windows fallback', source.replace("  promotion-floor:\n    if: " + side_guard, "  promotion-floor:\n    if: github.event_name != 'never'")),
     ('CPU-torch benchmark tests in the Windows fallback', source.replace("  torch-runner:\n    if: " + side_guard, "  torch-runner:\n    if: github.event_name != 'never'")),
     ('formatting in the compiler dispatch', source.replace(side_guard, "github.event_name != 'workflow_dispatch' || !inputs.windows_only", 1)),

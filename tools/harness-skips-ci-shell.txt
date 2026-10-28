@@ -2,25 +2,18 @@
 # `tools/test-harnesses.sh --ci-shell` (the job's command) fails a member on
 # any skip not listed here, and the tier on a listed one that no longer occurs
 # (gh-ocannl-1236). Run it before pushing a leg that can skip: it hides the
-# host's dune and fleet tables, so a Linux box shows exactly this set, and a
-# macOS one this set plus tools/harness-skips-ci-shell-darwin.txt
-# (gh-ocannl-1593). The line forms are the header of tools/test-harnesses.sh:
-# `HARNESS<TAB>LABEL`, comments, empty lines.
+# host's dune and fleet tables, so a Linux box shows exactly this set plus
+# tools/harness-skips-ci-shell-dune.txt (the skips of a hidden dune, which
+# belong there and nowhere else, gh-ocannl-1650), and a macOS one also
+# tools/harness-skips-ci-shell-darwin.txt (gh-ocannl-1593). The line forms are
+# the header of tools/test-harnesses.sh: `HARNESS<TAB>LABEL`, comments, empty
+# lines.
 
 # Windows drive spellings exist only on Windows (MSYS / Git Bash).
 tools/test-test-run.sh	queries: missing state directly below a drive root matches the launch shell without writes
 tools/test-test-run.sh	queries: absent Windows drive spelling matches the launch shell
 tools/test-test-run.sh	queries: drive parent traversal matches the native launch shell without writes
 tools/test-test-run.sh	queries: existing Windows drive spelling matches the launch shell
-# A real dune: this job installs no toolchain; the fmt job runs a dune.
-tools/test-test-run.sh	a manual dune running beside a managed run keeps its live trace (real dune)
-tools/test-test-run.sh	credentials: the run's real dune trace names neither GH_TOKEN nor FOO_API_KEY, and does name the plain variable
-tools/test-test-run.sh	against a real dune: an unknown alias is refused, known ones run
-tools/test-test-run.sh	negative control: with the scrub cut out, the real trace names both credentials
-tools/test-test-run.sh	repeat --direct: one build, then each test's own rules replayed as dune ran them (real dune)
-tools/test-test-run.sh	negative control: with the replay cut out, dune's --force alone runs no target-producing test again (real dune)
-tools/test-test-run.sh	negative control: with the replay's inherited descriptors closed, a session-escaped descendant goes unseen (real dune)
-tools/test-test-run.sh	a real type error is BUILD FAILED naming the stale output; a red test alone stays FAIL (real dune)
 # MSYS link files and the symlink-copy mode exist only under Git Bash.
 tools/test-windows-opam-cache.sh	negative control: switch restored with system link files
 tools/test-windows-opam-cache.sh	negative control: MSYS deepcopy links
