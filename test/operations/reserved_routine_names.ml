@@ -299,6 +299,92 @@ let () =
       "k.c:3:6: error: conflicting types for 'other_fwd_v2'\n    3 | void other_fwd_v2(";
     ] ~f:(fun report -> Option.is_some (attributed report))
 
+(* The diagnostic headers each toolchain prints, read as what they are; a line that is no header
+   (gcc's context line, an echoed source line) opens no scope. *)
+let () =
+  let scope_of line =
+    match Ir.C_syntax.diagnostic_scopes line with [ (scope, _) ] -> Some scope | _ -> None
+  in
+  p_all "every toolchain's diagnostic header opens its own severity's scope"
+    [
+      ("k.c:3:10: error: expected ')'", `Error);
+      ("k.c:1:10: fatal error: 'x.h' file not found", `Error);
+      ("error: unknown argument: '-mocannl-no-such-flag'", `Error);
+      ("program_source:3:13: error: expected unqualified-id", `Error);
+      ("default_program(12): error: identifier \"x\" is undefined", `Error);
+      ("default_program(1): catastrophic error: cannot open source file \"x.h\"", `Error);
+      ("C:\\tmp\\k.c:3:10: error: expected ')'", `Error);
+      ("k.c:2:12: note: to match this '('", `Other);
+      ("k.c:3:10: warning: omitting the parameter name [-Wc23-extensions]", `Other);
+      ( "default_program(5): warning #177-D: variable \"x\" was declared but never referenced",
+        `Other );
+      ("default_program(2): remark #1234-D: something", `Other);
+      ("k.c: In function 'n2_fwd':", `Unscoped);
+      ("    2 | void n2_fwd(", `Unscoped);
+      ("1 warning and 2 errors generated.", `Unscoped);
+    ]
+    ~f:(fun (line, expected) -> Option.equal Poly.equal (scope_of line) (Some expected))
+
+(* Only an ERROR diagnostic's quoted lines count: clang's [note: to match this '('] quotes the
+   declaration line for an error anywhere in the parameter list. The first report is clang's, from a
+   real run, on the source a node labelled [__LINE__] gave before gh-ocannl-1338 renamed such
+   labels: the macro expands inside a parameter declaration, and the routine name has nothing to do
+   with it. The control is clang's report for two colliding definitions, from a real run: the note
+   quotes the first declaration, the error the second, and the name is blamed. *)
+let () =
+  let attributed report =
+    Ir.C_syntax.routine_name_in_diagnostics ~routine_names:[ "n2_fwd"; "dup_fwd" ] report
+  in
+  p_none "a declaration line quoted under a note, warning or remark does not blame the name"
+    [
+      (* clang (cc on macOS), from a real run *)
+      "k.c:3:10: error: expected ')'\n\
+      \    3 |   float *__LINE__,\n\
+      \      |          ^\n\
+       <scratch space>:27:1: note: expanded from here\n\
+      \   27 | 3\n\
+      \      | ^\n\
+       k.c:2:12: note: to match this '('\n\
+      \    2 | void n2_fwd(\n\
+      \      |            ^\n\
+       k.c:3:10: warning: omitting the parameter name in a function definition is a C23 extension \
+       [-Wc23-extensions]\n\
+      \    3 |   float *__LINE__,\n\
+      \      |          ^\n\
+       k.c:5:3: error: use of undeclared identifier 'n1_x'\n\
+      \    5 |   n1_x[0] = 1.0f;\n\
+      \      |   ^~~~\n\
+       1 warning and 2 errors generated.";
+      (* gcc's header format, the declaration quoted under a note *)
+      "k.c:9:5: error: too few arguments to function \u{2018}g\u{2019}\n\
+       k.c:2:6: note: declared here\n\
+      \    2 | void n2_fwd(";
+      (* a warning's quoted line, then an unrelated error *)
+      "k.c:2:6: warning: no previous prototype for function 'n2_fwd'\n\
+      \    2 | void n2_fwd(\n\
+       k.c:9:5: error: use of undeclared identifier 'x'";
+      (* EDG's numbered remark (nvrtc's header format) *)
+      "default_program(2): remark #1234-D: something about the declaration\n\
+      \  void n2_fwd(\n\
+      \       ^\n\
+       default_program(9): error: identifier \"x\" is undefined";
+    ] ~f:(fun report -> Option.is_some (attributed report));
+  p_all "an error quoting a declaration line blames the name, notes before or after it aside"
+    [
+      (* clang, from a real run *)
+      "r.c:8:6: error: redefinition of 'dup_fwd'\n\
+      \    8 | void dup_fwd(\n\
+      \      |      ^\n\
+       r.c:6:6: note: previous definition is here\n\
+      \    6 | void dup_fwd(\n\
+      \      |      ^\n\
+       2 errors generated.";
+      (* a note's scope ends at the next header: here an error's *)
+      "k.c:1:1: note: in file included from here\n\
+       k.c:6:6: error: expected unqualified-id\n\
+      \    6 | void dup_fwd(";
+    ] ~f:(fun report -> Option.equal String.equal (attributed report) (Some "dup_fwd"))
+
 (* Then executed. [random] is a POSIX/BSD extension, not C: the macOS and glibc [<stdlib.h>] the cc
    prelude includes declare it ([long random(void)]), so [void random(float *...)] is a conflicting
    declaration there, outside every table on purpose. Mingw's headers do not declare it, and no GPU

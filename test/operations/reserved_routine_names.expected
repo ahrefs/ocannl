@@ -35,6 +35,9 @@ every vendor-header identifier probed keeps its given name in the routine record
 every vendor-header identifier probed emits its mangled symbol: true
 compiler reports pointing at the routine's declaration blame its name: true
 compiler reports about a routine's body or another routine do not blame the name: true
+every toolchain's diagnostic header opens its own severity's scope: true
+a declaration line quoted under a note, warning or remark does not blame the name: true
+an error quoting a declaration line blames the name, notes before or after it aside: true
 a routine named after a header name no table holds runs or fails as its name's: true
 where the C headers declare random, the routine's compile failure names the routine: true
 where the C headers declare random, the name's failure quotes the compiler without the codegen-bug claim: true

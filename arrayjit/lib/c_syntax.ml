@@ -2330,6 +2330,45 @@ let vector_type_names ~prefixes ~scalars ~widths =
     says so -- gh-ocannl-686's complaint was a compile error reported as "a bug in OCANNL" while the
     cause, the name, appeared nowhere in it. *)
 
+(** [diagnostic_scopes report] pairs each line of [report], a compiler's failure output, with the
+    severity of the diagnostic it belongs to: [`Error] or [`Other] (a warning, note or remark) for a
+    diagnostic's header line and the lines after it up to the next header -- the source lines and
+    carets the compiler echoes for it -- and [`Unscoped] for lines before the first header. A header
+    is a line carrying [<severity>:] (or EDG's numbered [<severity> #<n>:]) at its start or after a
+    [": "]: gcc's and clang's [file:line:col: error:] (cc, hiprtc, Metal's [program_source:]),
+    nvrtc's [file(line): error:], [fatal error:] and EDG's [catastrophic error:] included. A
+    point-in-time reading of those formats: an unrecognized one leaves the whole report [`Unscoped].
+*)
+let diagnostic_scopes report =
+  let severities =
+    [
+      ("fatal error", `Error);
+      ("catastrophic error", `Error);
+      ("error", `Error);
+      ("warning", `Other);
+      ("note", `Other);
+      ("remark", `Other);
+    ]
+  in
+  let header_severity line =
+    let lower = String.lowercase line in
+    let len = String.length lower in
+    let severity_at pos (word, severity) =
+      let after = pos + String.length word in
+      if
+        after < len
+        && String.is_substring_at lower ~pos ~substring:word
+        && (Char.equal lower.[after] ':' || String.is_substring_at lower ~pos:after ~substring:" #")
+      then Some severity
+      else None
+    in
+    0 :: List.map (String.substr_index_all lower ~may_overlap:false ~pattern:": ") ~f:(( + ) 2)
+    |> List.find_map ~f:(fun pos -> List.find_map severities ~f:(severity_at pos))
+  in
+  List.folding_map (String.split_lines report) ~init:`Unscoped ~f:(fun scope line ->
+      let scope = Option.value (header_severity line) ~default:scope in
+      (scope, (scope, line)))
+
 (** [routine_name_in_diagnostics ~routine_names report] is the first of [routine_names] (emitted
     spellings) that [report], a compiler's failure output, attributes the failure to, if any. Two
     shapes count, both of them the compiler pointing at the routine's own declaration rather than at
@@ -2343,13 +2382,26 @@ let vector_type_names ~prefixes ~scalars ~widths =
       "redeclaration", "different kind of symbol") -- the shape of the declaration's own diagnostic
       when the compiler does not echo the line.
 
+    Both shapes are read in ERROR diagnostics only ({!diagnostic_scopes}): a quoted line belongs to
+    the diagnostic whose header precedes it, and one under a note, warning or remark does not count.
+    clang's ["note: to match this '('"] quotes [void <name>(] for an error anywhere in the parameter
+    list -- a node identifier a macro expands, gh-ocannl-1338's [__LINE__] -- and its
+    ["note: previous definition is here"] quotes the first of two colliding declarations, whose
+    error quotes the second.
+
     Deliberately not counted: a quoted name on any other error line --
     ["use of undeclared identifier 'name'"] is about the routine's BODY, where a node or local may
     share the routine's spelling, and blaming the name would both mislead the user and turn a
     schedule decline into a fatal error (PR review) -- nor gcc's ["In function 'name':"] context
     line, which precedes ANY error in the body. *)
 let routine_name_in_diagnostics ~routine_names report =
-  let lines = String.split_lines report in
+  let scoped = diagnostic_scopes report in
+  (* Lines an error diagnostic owns; a line before any recognized header is read as before, so a
+     report in a format with no recognized header attributes as it always did. *)
+  let in_error = function `Error | `Unscoped -> true | `Other -> false in
+  let lines =
+    List.filter_map scoped ~f:(fun (scope, line) -> if in_error scope then Some line else None)
+  in
   let is_ident_char c = Char.is_alphanum c || Char.equal c '_' in
   let quotes_declaration name =
     let pattern = "void " ^ name ^ "(" in
