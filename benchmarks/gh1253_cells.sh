@@ -78,11 +78,12 @@
 # otherwise) gets a timing cell of its own under that profile, appended to the same TSV.
 # EXPLAIN_ONLY=<run dir> re-scores a past run's timed sites at this checkout's revision, timing
 # no candidate (a correctness batch, not a measurement): per site of SITES only the `shipped` and
-# `ceilings` listing cells run (the RANK_ONLY constants), and gh1442_agreement.py joins them to
-# <run dir>/rank_<site>.tsv -- that run's rows, read and never written. BENCH_PICK=1 adds each
-# arm's pick line, whose pick_ms/untuned_ms are the cell's own in-process timing (advisory: a
-# rerun moves them, nothing else). Running it at two revisions against one run dir is the
-# before/after agreement check of a ranking-score change, on the same measured rows.
+# `ceilings` listing cells run (the RANK_ONLY constants, BENCH_TUNE=0 pinned), and
+# gh1442_agreement.py joins them to <run dir>/rank_<site>.tsv -- that run's rows, read and never
+# written. BENCH_PICK=1 adds each arm's pick line, whose pick_ms/untuned_ms are the cell's own
+# in-process timing (advisory: a rerun moves them, nothing else). Running it at two revisions
+# against one run dir is the before/after agreement check of a ranking-score change, on the same
+# measured rows.
 # It refuses before building anything when a site's TSV is missing or empty, and when a timing
 # knob is set (FIT_FILL, TIME_REPEATS, PICK_PROFILES, PICK_GATE0, TXN_RATE); it ends with each
 # site's `joined=` lines, prefixed by site.
@@ -287,9 +288,9 @@ for site in $sites; do
   dims=${site#*:}
   name=$(site_name "$site")
   if [[ -n "$rows_dir" ]]; then
-    cell "rank_${name}_${fitted_arm}" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
+    cell "rank_${name}_${fitted_arm}" env BENCH_TUNE=0 BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
       "--ocannl_backend=$backend" --ocannl_gpu_default_sketch_min_reduction=32
-    cell "rank_${name}_ceilings" env BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
+    cell "rank_${name}_ceilings" env BENCH_TUNE=0 BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
       "--ocannl_backend=$backend" --ocannl_gpu_default_sketch_min_reduction=32 "${ceilings[@]}"
     fit=()
     if [[ $kind == fp8mm ]]; then fit=(--fit-mma "$out/rank_${name}_${fitted_arm}.out"); fi
