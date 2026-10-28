@@ -35,9 +35,12 @@
    node counts.
 
    [perturb] is the negative control: the seeded segment's code is perturbed after scheduling (every
-   [Set] stores one more than it computes), so each perturbed seed that compiles must be reported a
-   mismatch. A point-in-time check of one step: it says nothing about seeds a later search proposes
-   on different code, and nothing about timing. *)
+   [Set] stores one more than it computes, a persistent fragment's transfers excepted:
+   [perturb_code]), so each perturbed seed that compiles must be reported a mismatch, and must
+   render its tensor-core statements as the seed compiled unperturbed does ([Rerendered] otherwise,
+   gh-ocannl-1677) -- a control caught on the scalar fallback says nothing of the tensor-core path
+   the seed takes. A point-in-time check of one step: it says nothing about seeds a later search
+   proposes on different code, and nothing about timing. *)
 
 open Base
 module LL = Ir.Low_level
@@ -50,7 +53,12 @@ type verdict =
   | Declined of string
       (** The candidate compile was refused, typed — a decline the search would have counted. *)
   | Not_applied  (** The seed never reached its segment: the replay did not find it. *)
-  | Not_perturbed  (** Negative control only: the seeded segment had no [Set] to perturb. *)
+  | Not_perturbed
+      (** Negative control only: the seeded segment had no statement [perturb_code] perturbs. *)
+  | Rerendered of string
+      (** Negative control only (gh-ocannl-1677): the perturbed seed's tensor-core statements did
+          not render as the unperturbed seed's (its mma census differs, or one of the two did not
+          compile), so a mismatch would be caught on a path the seed does not take. A failure. *)
   | Unjudged of string
       (** gh-ocannl-1602: the seed computes on a tf32 arm, but which reference accumulations its
           tensor-core statements replaced could not be established, so no reference with its
@@ -120,24 +128,73 @@ let census_lines ctx ~static_indices opt =
       : Autotune.search_seeding);
   List.rev !lines
 
-(* The negative control's perturbation: every [Set] stores one more than it computes. *)
-let rec perturb_code (c : LL.t) : LL.t =
-  match c with
-  | Set s ->
-      let prec = Lazy.force s.tn.Tn.storage_prec in
-      Set { s with llsc = Binop (Ir.Ops.Add, (s.llsc, prec), (Constant 1., prec)) }
-  | Seq (a, b) -> Seq (perturb_code a, perturb_code b)
-  | For_loop f -> For_loop { f with body = perturb_code f.body }
-  | If i -> If { i with body = perturb_code i.body }
-  | Scan_loop s -> Scan_loop { s with body = perturb_code s.body }
-  | _ -> c
+(* The negative control's perturbation: every [Set] stores one more than it computes, except a
+   persistent fragment's transfers (gh-ocannl-1677). [Schedule.contract_tensorized_accumulator]
+   brackets a tensorized reduction with lane 0's copies [fragment <- target] and [target <-
+   fragment], and the renderer takes the region to the tensor cores only while both are plain copies
+   ([LL.fragment_region]): perturbing them dissolved it, and the [Tile_mma] inside rendered as the
+   lane-0 scalar fallback, so the control judged a path the seed does not take. The transfers are
+   kept, and each store-back is followed by its own nest, lane 0 adding one to every target cell it
+   stored -- the shape [Fuse_epilogue]'s epilogue takes after the region, which the renderer places
+   after the hooks' visibility barrier. [fragments] are the routine's [simdgroup_fragments]; the
+   count is of the statements perturbed. That the perturbed seed renders as the unperturbed one does
+   is [parity]'s check, not this function's. *)
+let perturb_code ~fragments (c : LL.t) : LL.t * int =
+  let count = ref 0 in
+  let fragment tn = Set.mem fragments tn in
+  let store_back = function
+    | LL.Set { tn; llsc = Get (src, _); _ } -> fragment src && not (fragment tn)
+    | _ -> false
+  in
+  let rec stores_back (c : LL.t) =
+    match c with
+    | Set _ -> store_back c
+    | Seq (a, b) -> stores_back a || stores_back b
+    | For_loop { body; _ } | If { body; _ } -> stores_back body
+    | _ -> false
+  in
+  (* The store-back's nest, its loops and guards kept, every store turned into [target += 1] and
+     everything else dropped. *)
+  let rec bump (c : LL.t) : LL.t =
+    match c with
+    | Set ({ tn; idcs; _ } as s) when store_back c ->
+        Int.incr count;
+        let prec = Lazy.force tn.Tn.storage_prec in
+        Set { s with llsc = Binop (Ir.Ops.Add, (Get (tn, idcs), prec), (Constant 1., prec)) }
+    | Seq (a, b) -> Seq (bump a, bump b)
+    | For_loop f -> For_loop { f with body = bump f.body }
+    | If i -> If { i with body = bump i.body }
+    | _ -> Noop
+  in
+  let rec go ~bumped (c : LL.t) : LL.t =
+    match c with
+    | Set s when fragment s.tn || store_back c -> c
+    | Set s ->
+        Int.incr count;
+        let prec = Lazy.force s.tn.Tn.storage_prec in
+        Set { s with llsc = Binop (Ir.Ops.Add, (s.llsc, prec), (Constant 1., prec)) }
+    | For_loop ({ axis = Workgroup; _ } as f) when (not bumped) && stores_back c ->
+        Seq (For_loop { f with body = go ~bumped:true f.body }, bump c)
+    | Seq (a, b) -> Seq (go ~bumped a, go ~bumped b)
+    | For_loop f -> For_loop { f with body = go ~bumped f.body }
+    | If i -> If { i with body = go ~bumped i.body }
+    | Scan_loop s -> Scan_loop { s with body = go ~bumped s.body }
+    | _ -> c
+  in
+  let c = go ~bumped:false c in
+  (c, !count)
 
-let rec has_set (c : LL.t) =
-  match c with
-  | Set _ -> true
-  | Seq (a, b) -> has_set a || has_set b
-  | For_loop { body; _ } | If { body; _ } | Scan_loop { body; _ } -> has_set body
-  | _ -> false
+(* Two compiles' tensor-core statements rendered alike: the same renderings in emission order (the
+   kernel names aside). *)
+let same_renderings (a : Ir.C_syntax.mma_summary) (b : Ir.C_syntax.mma_summary) =
+  List.equal
+    (fun (_, r) (_, r') -> Ir.C_syntax.equal_mma_rendering r r')
+    a.Ir.C_syntax.renderings b.Ir.C_syntax.renderings
+
+let census_summary (m : Ir.C_syntax.mma_summary) =
+  Printf.sprintf "%s, %d tensor-core statements, %d scalar fallbacks"
+    (Ir.C_syntax.tensorization_name m.Ir.C_syntax.tensorization)
+    m.Ir.C_syntax.statements m.Ir.C_syntax.scalar_fallbacks
 
 (* gh-ocannl-1602: the reference's tf32 rounding. A tensorized f32 contraction on a tf32 arm reads
    both multiplicands rounded to tf32 (CUDA's [__float_to_tf32], [cvt.rna.tf32.f32]: an 11-bit
@@ -717,7 +774,10 @@ let parity ?tol ?(perturb = false) ?(round = true) ?(replay = true) ?replay_frac
   let one ~fine ~plan key p =
     let label = Autotune.fiss_sketch_label ~fine [ (key, p) ] in
     let seeded = ref [] and perturbed = ref true and segs = ref [] in
-    let transform fresh =
+    let transform ~perturb fresh =
+      seeded := [];
+      perturbed := true;
+      segs := [];
       let plan, schedule =
         Autotune.sketch_replay ~static_indices
           ~sketch:(fun p seg -> Autotune.sketch_schedule ~accum_prec ~p seg)
@@ -738,10 +798,30 @@ let parity ?tol ?(perturb = false) ?(round = true) ?(replay = true) ?replay_frac
           if List.mem !seeded i ~equal:Int.equal then (
             segs := (pre, post) :: !segs;
             if perturb then (
-              if not (has_set post.llc) then perturbed := false;
-              { post with llc = perturb_code post.llc })
+              let llc, count = perturb_code ~fragments:post.simdgroup_fragments post.llc in
+              if count = 0 then perturbed := false;
+              { post with llc })
             else post)
           else post)
+    in
+    let compile ~perturb =
+      Context.compile_outcome ~lowered_transform:(transform ~perturb)
+        ~provenance:Ir.Schedule_outcome.Candidate ~candidate:label ctx comp bindings
+    in
+    (* gh-ocannl-1677: under the negative control, the seed compiled unperturbed first, for its mma
+       census only: a perturbation that changes how the seed's tensor-core statements render (or
+       whether it compiles) is caught on a path the seed does not take, which proves nothing. *)
+    let unperturbed =
+      if not perturb then None
+      else
+        Some
+          (match compile ~perturb:false with
+          | Ok (cctx, routine) ->
+              Context.release cctx;
+              Ok routine.Context.mma
+          | Error (Classified c) ->
+              Error ("declined: " ^ Ir.Schedule_outcome.detail_of_cause c.Ir.Schedule_outcome.cause)
+          | Error (Fatal f) -> Error ("failed: " ^ Exn.to_string f.exn))
     in
     let census = ref Ir.C_syntax.empty_mma_summary in
     let result ?(rounded = []) ?(rounded_stmts = 0) ?(flipped = 0) ?(replayed = false) verdict
@@ -758,14 +838,17 @@ let parity ?tol ?(perturb = false) ?(round = true) ?(replay = true) ?replay_frac
         replayed;
       }
     in
-    match
-      Context.compile_outcome ~lowered_transform:transform ~provenance:Ir.Schedule_outcome.Candidate
-        ~candidate:label ctx comp bindings
-    with
-    | Error (Classified c) ->
-        result
-          (Declined (Ir.Schedule_outcome.detail_of_cause c.Ir.Schedule_outcome.cause))
-          ~tensorized:false ~compared:0
+    match compile ~perturb with
+    | Error (Classified c) -> (
+        let detail = Ir.Schedule_outcome.detail_of_cause c.Ir.Schedule_outcome.cause in
+        match unperturbed with
+        | Some (Ok mma) ->
+            result
+              (Rerendered
+                 (Printf.sprintf "the perturbed seed was declined (%s); unperturbed it compiles, %s"
+                    detail (census_summary mma)))
+              ~tensorized:false ~compared:0
+        | None | Some (Error _) -> result (Declined detail) ~tensorized:false ~compared:0)
     | Error (Fatal f) -> result (Failed (Exn.to_string f.exn)) ~tensorized:false ~compared:0
     | Ok (cctx, routine) -> (
         census := routine.Context.mma;
@@ -773,14 +856,27 @@ let parity ?tol ?(perturb = false) ?(round = true) ?(replay = true) ?replay_frac
           Ir.C_syntax.equal_tensorization routine.Context.mma.Ir.C_syntax.tensorization
             Ir.C_syntax.Tensorized
         in
+        let rerendered =
+          match unperturbed with
+          | None -> None
+          | Some (Error why) -> Some ("unperturbed, the seed " ^ why)
+          | Some (Ok mma) ->
+              if same_renderings mma routine.Context.mma then None
+              else
+                Some
+                  (Printf.sprintf "perturbed %s; unperturbed %s"
+                     (census_summary routine.Context.mma)
+                     (census_summary mma))
+        in
         let targets = if round then tf32_targets routine (List.rev !segs) else Ok [] in
         let executed =
           if List.is_empty !seeded then `Done (result Not_applied ~tensorized ~compared:0)
           else if not !perturbed then `Done (result Not_perturbed ~tensorized ~compared:0)
           else
-            match targets with
-            | Error why -> `Done (result (Unjudged why) ~tensorized ~compared:0)
-            | Ok targets -> (
+            match (rerendered, targets) with
+            | Some why, _ -> `Done (result (Rerendered why) ~tensorized ~compared:0)
+            | None, Error why -> `Done (result (Unjudged why) ~tensorized ~compared:0)
+            | None, Ok targets -> (
                 match
                   bind routine;
                   run ~unsafe ~poisoned:true cctx routine
@@ -943,8 +1039,8 @@ let passed ~perturb r =
   match (perturb, r.verdict) with
   | false, (Match _ | Declined _) -> true
   | true, (Mismatch _ | Declined _) -> true
-  | false, (Mismatch _ | Not_applied | Not_perturbed | Unjudged _ | Failed _)
-  | true, (Match _ | Not_applied | Not_perturbed | Unjudged _ | Failed _) ->
+  | false, (Mismatch _ | Not_applied | Not_perturbed | Rerendered _ | Unjudged _ | Failed _)
+  | true, (Match _ | Not_applied | Not_perturbed | Rerendered _ | Unjudged _ | Failed _) ->
       false
 
 let verdict_line r =
@@ -954,7 +1050,8 @@ let verdict_line r =
     | Mismatch { err; node } -> Printf.sprintf "MISMATCH worst %.3g at %s" err node
     | Declined d -> "DECLINED: " ^ d
     | Not_applied -> "NOT APPLIED: the seed never reached its segment"
-    | Not_perturbed -> "NOT PERTURBED: the seeded segment has no Set"
+    | Not_perturbed -> "NOT PERTURBED: the seeded segment has nothing to perturb"
+    | Rerendered d -> "RERENDERED: the perturbation changed the tensor-core rendering: " ^ d
     | Unjudged d -> "UNJUDGED: " ^ d
     | Failed d -> "FAILED: " ^ d
   in
