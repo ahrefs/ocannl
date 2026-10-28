@@ -1,0 +1,29 @@
+; gh-ocannl-1652, gh-ocannl-1290: type-checking stand-ins for the vendor binding packages, so the
+; GPU backends compile under `dune build @check` on every machine -- mac-studio and per-PR CI among
+; them -- rather than only on a box carrying the vendor toolkit. `arrayjit/lib/cuda_backend.ml` and
+; `hip_backend.ml` live in `(optional)` libraries over `cudajit`/`hipjit`, which dune skips
+; SILENTLY wherever the package is absent, so before this a CUDA-only compile clash (gh-ocannl-1511)
+; could merge unseen.
+;
+; Each subdirectory holds, for one package:
+;
+; - a stub library (`cudajit_stub`, `hipjit_stub`) whose `.mli` files are VERBATIM copies of the
+;   installed package's interfaces, never hand edits. They are kept out of `dune fmt`
+;   (`.ocamlformat-ignore`). The library is interface-only (`modules_without_implementation`): it
+;   type-checks and archives, and nothing can link it. `hipjit/hip_ffi.mli` is the one hand-written
+;   file: the single type `hip.mli` re-exports from hipjit's ctypes-generated `Hip_ffi`, which the
+;   compiler checks against that re-export.
+; - `typecheck/`, a library compiling `copy_files#` copies of the backend source and of the vendor
+;   arm of `arrayjit.context`'s `select` (`<backend>_backend_impl.<package>.ml`) against the stub,
+;   with the real backend's preprocessing and `arrayjit` libraries. Its errors name the original
+;   `arrayjit/lib/` file and line. Nothing links it; the real backend keeps linking the real
+;   package. The other vendor-gated `select` arms (`arrayjit/test`, `test/operations`, `tools`) are
+;   executables over the real backend and stay box-only.
+; - a `runtest-<module>` rule per copied interface (`runtest-cuda`, ...) diffing it against the
+;   installed one wherever the package is installed (rog for cudajit, minix and tuf for hipjit: the
+;   daily sweep runs it there as part of `runtest`), and a SKIPPED line elsewhere. The diff is the
+;   generator as well as the check: after a package upgrade on its box, the alias fails with the
+;   drift, and `dune promote` there rewrites the copies from the installed interfaces.
+;
+; What this proves is compilation against the interface, not behavior: the stub cannot catch a
+; vendor-library change that keeps its signatures.

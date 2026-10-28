@@ -1,0 +1,57 @@
+; The `hipjit` stand-in; the arrangement is described in `arrayjit/vendor_stubs/dune`.
+
+(library
+ (name hipjit_stub)
+ (wrapped false)
+ (modules hip hiprtc hip_ffi)
+ (modules_without_implementation hip hiprtc hip_ffi)
+ (libraries ctypes integers sexplib0))
+
+; One rule per copied interface, each on the alias named after it, and both aggregated onto
+; `runtest` below. Where `hipjit` is absent there is nothing to compare against, and building an
+; empty alias is an error while silence would read as a pass, so the alias says SKIPPED instead.
+; `diff` compares within the build directory, so a rule copies each installed interface in first.
+
+(rule
+ (enabled_if %{lib-available:hipjit.hip})
+ (action
+  (copy %{lib:hipjit.hip:hip.mli} hip.mli.installed)))
+
+(rule
+ (alias runtest-hip)
+ (enabled_if %{lib-available:hipjit.hip})
+ (action
+  (diff hip.mli hip.mli.installed)))
+
+(rule
+ (alias runtest-hip)
+ (enabled_if
+  (not %{lib-available:hipjit.hip}))
+ (action
+  (echo
+   "hipjit stub agreement (hip.mli): SKIPPED -- hipjit is not installed here; it runs on a HIP box.\n")))
+
+(rule
+ (enabled_if %{lib-available:hipjit.hiprtc})
+ (action
+  (copy %{lib:hipjit.hiprtc:hiprtc.mli} hiprtc.mli.installed)))
+
+(rule
+ (alias runtest-hiprtc)
+ (enabled_if %{lib-available:hipjit.hiprtc})
+ (action
+  (diff hiprtc.mli hiprtc.mli.installed)))
+
+(rule
+ (alias runtest-hiprtc)
+ (enabled_if
+  (not %{lib-available:hipjit.hiprtc}))
+ (action
+  (echo
+   "hipjit stub agreement (hiprtc.mli): SKIPPED -- hipjit is not installed here; it runs on a HIP box.\n")))
+
+(alias
+ (name runtest)
+ (deps
+  (alias runtest-hip)
+  (alias runtest-hiprtc)))

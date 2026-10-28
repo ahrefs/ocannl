@@ -8,6 +8,11 @@ raw-text floor reported by the claim at the end holds the count up.
 arrayjit/lib/dune: exempt rules (gen_builtins/generate.exe)
 arrayjit/lib/gen_builtins/dune: nothing that runs a test executable
 arrayjit/test/dune: tests, exe-running rules
+arrayjit/vendor_stubs/cudajit/dune: nothing that runs a test executable
+arrayjit/vendor_stubs/cudajit/typecheck/dune: nothing that runs a test executable
+arrayjit/vendor_stubs/dune: nothing that runs a test executable
+arrayjit/vendor_stubs/hipjit/dune: nothing that runs a test executable
+arrayjit/vendor_stubs/hipjit/typecheck/dune: nothing that runs a test executable
 benchmarks/dune: exempt rules (python3, handed %{dep:test_orchestrate.py})
 benchmarks/runners/ocannl/dune: exe-running rules, exempt rules (metal_queue_probe.exe)
 bin/dune: exe-running rules
