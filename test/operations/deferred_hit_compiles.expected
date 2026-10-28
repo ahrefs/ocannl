@@ -6,10 +6,15 @@ cold: the call's compiles are its reports' plus the ship's: true
 warm: the recorded decision replayed in one search, a schedule-cache hit: true
 warm: the hit compiled its schedule once, to validate it: true
 warm: the shipped routine took no compile -- the validated code, linked again: true
+warm: the hit compiled nothing but its schedule -- no serial baseline: true
+warm: its baseline was lowered, never rendered: true
 warm: the call's compiles are its reports' plus the ship's: true
 bypass: both arms compared afresh, and arm B shipped, a schedule-cache hit: true
 bypass: that hit compiled its schedule once: true
 bypass: the shipped arm took no compile: true
+bypass: each arm's hit compiled nothing but its schedule: true
+bypass: no baseline was rendered: true
+cold: each search compiled its serial baseline exactly where it is dispatched (CPU), after the base compile: true
 bypass: the call's compiles are its reports' plus the ship's: true
 warm: the relinked routine computes the cold output bit for bit: true
 bypass: the relinked routine computes the cold output bit for bit: true

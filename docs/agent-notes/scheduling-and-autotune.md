@@ -1583,6 +1583,21 @@ files.
   paid for and thrown away", charge each `on_candidate_attempt` the `Link_after_delta` hits and
   `on_candidate_preflight` runs that follow it, under `tune_deferred` so the shipping compile falls
   after the report (`autotune_serial_baseline`).
+- **The base compile lowers only; the serial baseline is compiled where it is timed**
+  (gh-ocannl-1666). The base compile's transform captures the lowering and unwinds before codegen
+  on every backend: on GPU as the gh-1340 refusal, on CPU as a deferral (`base_deferred`). Its
+  record is `base_compile`, verdict `refused`, no kernel. The search compiles the baseline at stage
+  `baseline_compile` (attempt `baseline`) and then times it. So a cache hit, a refused lineage, a
+  search-less call and a replayed abandonment compile no baseline. Before, a cc hit compiled the
+  whole serial routine and released it unrun, ~10 s of C compile per `gpt2_mini_train` arm.
+  What it costs: the search lowers once more for the baseline, as it does for every candidate,
+  until gh-ocannl-1526 removes that. Three things moved with the compile. The gh-533 decline is
+  recorded in the search (`baseline_declined_so_far`). The first CPU memory evidence is the
+  baseline's own link, with the floor probed only if that link is refused; there is no probe before
+  the cache on CPU, since on a hit the replay's link answers. And the budget's first compile
+  evidence is `base_compile_s` beside the baseline compile's span. The `"baseline"` attempt hook
+  still fires once per call, at the base compile, so tests that count searches by it are unchanged
+  (`deferred_hit_compiles` pins the hit's `compiles = replay_compiles`).
 - **The serial baseline's timing window is bounded** (gh-ocannl-1666). On cc every window takes at
   least 16 samples, a floor set for sub-millisecond kernels. A seconds-long serial baseline paid
   it in full: 16 singles plus the warmup of a `gpt2_mini_train` b8 step, 56-80 s per arm.
@@ -2690,8 +2705,9 @@ files.
   `Timing_stopped`, caught inside the candidate's failure boundary as an unranked `Ok None`, not a
   decline). The evidence starts at the base compile, measured from the transform's start (after
   the `baseline` attempt hook, as a candidate's span starts after its hook), so the first candidate
-  compile is projected too; on a GPU the baseline is refused before codegen, so there it is the
-  first candidate's cold compile that sets it. The max is conservative under the kernel cache (a
+  compile is projected too. The base compile lowers only (gh-ocannl-1666), so on CPU the search's
+  `baseline_compile` joins it as evidence, and on GPU, where the baseline is never compiled, the
+  first candidate's cold compile sets it. The max is conservative under the kernel cache (a
   cold compile keeps the projection high, and a cached recompile costs seconds) -- a cache-aware
   estimate is the refinement if a budget's yield matters. The stop is strict (`elapsed + reserve >
   b`) and the projection admits an exact fit, so a virtual clock that charges a whole attempt as it

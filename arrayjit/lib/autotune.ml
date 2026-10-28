@@ -7825,7 +7825,18 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
        arise: the scratch hazard by this compile's candidate-grade protection (gh-ocannl-533), the
        GPU dispatch hazard by [dispatchable] (gh-ocannl-532), and the missing "did tuning beat the
        default?" reference by [report.default_ms] — the [config_thresholds] seed's measurement, not
-       a new baseline. *)
+       a new baseline.
+
+       gh-ocannl-1666: the base compile LOWERS ONLY, on every backend. Its transform captures and
+       then unwinds before codegen: on a GPU backend as the gh-ocannl-1340 refusal, on a CPU one as
+       a deferral ([base_deferred]). The serial baseline's own codegen, compile and link happen only
+       where it is timed -- the search below ([baseline_compile]) -- so a cache replay, a refused
+       lineage, a search-less call and a replayed abandonment pay for none of it. A cc cache replay
+       used to compile the whole serial routine (a C compile of ~10 s per [gpt2_mini_train] arm
+       after gh-ocannl-1603's outlining) only to release it unrun. The gh-ocannl-533 protection
+       moves with the compile: a typed rejection there declines the baseline exactly as it did here.
+       What the search pays instead: its baseline compile lowers once more, as every candidate
+       compile does. *)
     let base_capture = ref None in
     (* gh-ocannl-1388: the base lowering as the transform received it, for deriving the seeded
        untuned plan exactly as the untuned compile derives it inside its own transform: codegen
@@ -7833,6 +7844,9 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
        plan's decisions key on placement-sensitive digests. GPU only: the plan is CUDA/HIP's. *)
     let base_pristine = ref None in
     let base_undispatched = ref false in
+    (* gh-ocannl-1666: the base compile unwound before codegen on a dispatchable baseline, which the
+       search compiles where it times it ([baseline_compile]). *)
+    let base_deferred = ref false in
     progress_stage "base_compile";
     let base_compile_from = ref None in
     let base_outcome =
@@ -7865,15 +7879,29 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
                            "the serial baseline binds no hardware dimension on %s (gh-ocannl-532)"
                            backend;
                      } )));
-          [ opt ])
+          (* gh-ocannl-1666: a dispatchable baseline is compiled where it is timed, not here. The
+             typed unwind is the gh-ocannl-1340 one, so nothing is counted, rendered or linked; the
+             [Error] arm below drops it by [base_deferred], like the refusal above by
+             [base_undispatched]. *)
+          base_deferred := true;
+          raise
+            (Outcome.Cause_at
+               ( Outcome.Transform,
+                 Outcome.Not_dispatched
+                   {
+                     origin = "baseline";
+                     detail =
+                       "the serial baseline is compiled only where it is timed (gh-ocannl-1666)";
+                   } )))
         ~provenance:Outcome.Candidate ~candidate:"baseline" search_ctx comp bindings
     in
     (* gh-ocannl-1604: the base compile's cost on [budget_clock], from the transform's start (after
        the baseline's attempt hook, as a candidate's span starts after its own hook) to its return:
-       the search's first compile evidence, so its first candidate compile is projected too. On a
-       GPU the serial baseline is refused before codegen (gh-ocannl-1340), so this is its lowering's
-       transform alone and the first candidate's cold compile stays the evidence that counts. Zero
-       without a budget. *)
+       the search's first compile evidence, so its first candidate compile is projected too. The
+       base compile unwinds before codegen on every backend (gh-ocannl-1340, gh-ocannl-1666), so
+       this is its lowering's transform alone; on a CPU backend the search's [baseline_compile]
+       joins it as evidence, and on a GPU one the first candidate's cold compile is the evidence
+       that counts. Zero without a budget. *)
     let base_compile_s =
       Option.value_map !base_compile_from ~default:0. ~f:(fun c0 ->
           Float.max 0. (budget_clock () -. c0))
@@ -7982,25 +8010,23 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
       | Ok (bctx, broutine) -> (Some (bctx, broutine), None)
       (* Refused before codegen, not declined: the search records the refusal where it always has,
          as [Not_dispatched_key "baseline"], and the two accounts stay exclusive. *)
-      | Error failure when !base_undispatched && is_not_dispatched failure -> (None, None)
+      | Error failure when (!base_undispatched || !base_deferred) && is_not_dispatched failure ->
+          (None, None)
       | Error (Outcome.Classified classified) -> (None, Some classified)
       | Error (Outcome.Fatal _ as failure) -> raise_pre_search ~base:base_report failure
     in
-    (* gh-ocannl-550: the base compile runs BEFORE the cache is consulted — its lowering is what
-       every candidate and every replay derives from — so on the two paths that do not search, its
-       linked artifact is dead as soon as that decision is taken, and nothing downstream can reach
-       it. On the search path it is timed (where it is dispatchable) and then released like any
-       candidate. Without this, a warm-cache process leaked one full base-candidate pool per [tune]
-       call, permanently (the pool table roots it), which for a repeatedly-tuning process is the
-       very accumulation this issue is about.
-
-       A ref, because a cache replay releases it BEFORE the replay compile (gh-ocannl-1326) and a
-       stale entry that sends the call on to search relinks it where it is to be timed. *)
+    (* gh-ocannl-550: a linked baseline is device memory the pool table roots, invisible to the GC,
+       so whatever path the call takes releases it -- on the search path once it is timed, like any
+       candidate. Since gh-ocannl-1666 only the search links one ([baseline_compile]), and the paths
+       that do not search hold nothing to release; the releases there stay for a base compile that
+       ever links again. Without them, a warm-cache process leaked one full base-candidate pool per
+       [tune] call, permanently, which for a repeatedly-tuning process was the very accumulation
+       gh-ocannl-550 was about. A release empties the ref, so the search compiles a baseline exactly
+       where none is linked. *)
     let baseline_linked = ref baseline_linked in
-    let baseline_released = ref false in
     let release_baseline () =
       Option.iter !baseline_linked ~f:(fun (bctx, _) ->
-          baseline_released := true;
+          baseline_linked := None;
           release_quietly ~what:"the baseline compile" bctx)
     in
     release_baseline_hook := release_baseline;
@@ -8165,11 +8191,12 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
     let mma_summary c = c.routine.Context.mma in
     let mma_scalar_fallbacks c = (mma_summary c).Ir.C_syntax.scalar_fallbacks in
     let mma_statements c = (mma_summary c).Ir.C_syntax.statements in
-    (* The decline census outlives the cache branch: the baseline compile happens before the lookup
-       and can be declined whether or not a cached winner then replays (gh-ocannl-533), so a
-       cache-hit report has to carry that rejection too — [baseline_declined] with an empty census
-       would be an internally inconsistent diagnostic on exactly the warm-cache runs of the workload
-       that motivated the fix (Codex review, PR #271). *)
+    (* The decline census outlives the cache branch: the base compile happens before the lookup and
+       can be declined (an injected fault at its [baseline] attempt, gh-ocannl-533) whether or not a
+       cached winner then replays, so a cache-hit report has to carry that rejection too —
+       [baseline_declined] with an empty census would be an internally inconsistent diagnostic
+       (Codex review, PR #271). Since gh-ocannl-1666 a decline of the baseline's own codegen or link
+       arises only in the search ([baseline_compile]), which is where it is recorded. *)
     let declines : (Outcome.rejection_key, decline_acc) Hashtbl.Poly.t = Hashtbl.Poly.create () in
     (* A declined baseline is an ordinary entry in the census: it is the same evidence about the
        same device as any candidate's rejection, and dropping it would report a smaller
@@ -8185,11 +8212,14 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
     (* gh-ocannl-1242: why a cache entry under this key did not replay, when it was refused with a
        typed cause — set by the lookup below and carried by every report after it. *)
     let cache_replay_refusal = ref None in
+    (* Whether the baseline was declined, by the base compile or (gh-ocannl-1666) by the search's
+       [baseline_compile], which sets it: every report after a decline says so. *)
+    let baseline_declined_so_far = ref (Option.is_some baseline_decline) in
     let census () =
       {
         base_report with
         candidates_failed = failed_count declines;
-        baseline_declined = Option.is_some baseline_decline;
+        baseline_declined = !baseline_declined_so_far;
         declines = decline_summaries declines;
         privatize_drops = decline_summaries privatize_declines;
         cache_replay_refusal = !cache_replay_refusal;
@@ -8304,7 +8334,10 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
     in
     (* The base compile's own device-memory decline refuses nothing by itself (it bounds no
        candidate from below, above): the floor answers. Where the baseline was refused before
-       codegen (every GPU backend's), it allocated nothing, and the floor answers in its place. *)
+       codegen (every GPU backend's), it allocated nothing, and the floor answers in its place. A
+       CPU baseline, deferred (gh-ocannl-1666), is not probed here: its own link in the search
+       ([baseline_compile]) is the first memory evidence, as the base link was, and a refusal there
+       asks the floor; a cache replay's link answers for a hit. *)
     if Option.is_none lineage_refusal then
       if Option.exists baseline_decline ~f:is_device_memory then probe_floor ~account:false
       else if !base_undispatched then probe_floor ~account:true;
@@ -8323,8 +8356,8 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
             in
             (* gh-ocannl-1326: the replay must not find the baseline's working set still resident:
                on a step that uses over half the device it was refused at link while the baseline
-               held the rest, so every warm process re-searched. Dead on a hit, and relinked by the
-               search if this entry turns out stale. *)
+               held the rest, so every warm process re-searched. Since gh-ocannl-1666 none is linked
+               here (a no-op); the search compiles one if this entry turns out stale. *)
             release_baseline ();
             progress_stage "cache_replay";
             (* An entry written before the gh-ocannl-532 rule can name the serial baseline as the
@@ -8625,20 +8658,35 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
               execution_effect = Outcome.No_device_writes;
             }
         in
-        (* A stale cache entry released the baseline before its replay (gh-ocannl-1326); relink it
-           where it is to be timed. Not where it is not: an undispatched baseline is only ever
-           released. *)
+        (* gh-ocannl-1666: the serial baseline's compile, here where it is timed and nowhere else --
+           the base compile only lowered. Not where it is not timed: an undispatched baseline is
+           never compiled, and one the base compile declined (gh-ocannl-533) stays declined. Its
+           record is the [baseline_compile] stage's, attempt [baseline]; its cost on [budget_clock]
+           is the budget projection's evidence beside the base compile's ([base_compile_s]). *)
+        let baseline_compile_s = ref 0. in
         let baseline_decline =
-          if !baseline_released && dispatchable ~is_gpu [ base_opt ] then (
-            progress_stage "baseline_relink";
-            match compile_spec (Whole (W_saved ([], None))) with
+          if
+            Option.is_none baseline_decline && Option.is_none !baseline_linked
+            && dispatchable ~is_gpu [ base_opt ]
+          then (
+            progress_stage "baseline_compile";
+            let c0 = budget_clock () in
+            let compiled =
+              costed ~attempt:"baseline" ~verdict_of:outcome_verdict (fun () ->
+                  compile_candidate ?name ~label:"baseline" ~on_privatize_drops ~static_indices
+                    ~base_opt ~canon ~limits ~is_gpu ~is_cpu ~provenance:Outcome.Candidate
+                    search_ctx comp bindings
+                    (Whole (W_saved ([], None))))
+            in
+            if Option.is_some budget then baseline_compile_s := Float.max 0. (budget_clock () -. c0);
+            match compiled with
             | Ok c ->
                 baseline_linked := Some (c.cctx, c.routine);
                 baseline_decline
             | Error (Outcome.Classified classified) ->
-                baseline_linked := None;
                 record_decline declines classified;
-                (* The same footprint question as the base compile's (gh-ocannl-1554): a relink the
+                baseline_declined_so_far := true;
+                (* The same footprint question as the base compile's (gh-ocannl-1554): a link the
                    device refused bounds no candidate from below, the floor does. *)
                 if is_device_memory classified then probe_floor ~account:false;
                 Some classified
@@ -9201,7 +9249,7 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
              leaves [last_attempt] at [`Other]: the staffed sweep must neither retry it bare nor
              rank a stale dedup time for it. *)
           let budget_spent = ref false in
-          let costliest_compile_s = ref base_compile_s in
+          let costliest_compile_s = ref (Float.max base_compile_s !baseline_compile_s) in
           let spend_budget ~b ~elapsed reason =
             budget_spent := true;
             logf "budget of %gs %s (%.1f s elapsed, %d timed): crowning the incumbent" b reason

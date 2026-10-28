@@ -1092,8 +1092,10 @@ type outcome =
           (gh-ocannl-550). *)
   | Cache_replay
       (** A cached winner replayed; no search ran in this process. The census is then empty except
-          for a declined baseline: the base compile precedes the lookup, so its rejection is real
-          information about this process on this device even though nothing was searched. *)
+          for a baseline the base compile declined: it precedes the lookup, so its rejection is real
+          information about this process on this device even though nothing was searched. The base
+          compile only lowers (gh-ocannl-1666), so a replay compiles no baseline and a decline of
+          its codegen or link cannot arise here. *)
   | Abandonment_replay of abandonment
       (** Cached timings under this call's search shape still satisfy its current [?abandon] rule.
           No search ran, the counters describe only the base compile, and {!tune} raises
@@ -1477,7 +1479,7 @@ type report = {
           window counts in [timings_contended] and in its cause's subset. This is the baseline's own
           record, where [timings_contended] counts every refused window: a claim about the
           baseline's measurement gates on it, so a loaded host reads as a skip that names its cause,
-          and every other [infinity] (a baseline never relinked, never dispatched, declined) still
+          and every other [infinity] (a baseline never compiled, never dispatched, declined) still
           fails the claim. An identical seed may time the same code later, which [default_ms]
           attributes by digest; [baseline_ms] stays the baseline's own reading. [None] on cache
           replay and search-disabled calls, which time nothing, and on a declined or undispatched
@@ -3394,7 +3396,7 @@ type compile_record = {
   compile_routine : string;
   compile_stage : string;
       (** [candidate] for a search attempt; otherwise the progress stage the compile ran in:
-          [base_compile], [cache_replay], [cache_replay_compile], [baseline_relink],
+          [base_compile], [cache_replay], [cache_replay_compile], [baseline_compile],
           [untuned_default_compile], [untuned_control], [winner_compile]. *)
   compile_attempt : string;  (** The candidate's label; [baseline] for the base compile. *)
   compile_verdict : string;
@@ -3802,17 +3804,17 @@ val tune :
     compiled from [ctx] out of its saved schedule, the one compile this costs over keeping it, and
     the returned routine is the only artifact left when [tune] returns. The bound holds across
     contained failures and across dedups — a deduplicated candidate has still paid for a compile and
-    a link. A cache replay is not co-resident with the base compile either: the baseline is released
-    before the replay compile.
+    a link. A cache replay is not co-resident with a baseline either: since gh-ocannl-1666 the base
+    compile only lowers, and the baseline is compiled by the search that times it.
 
     A device that refuses what every schedule of the base lowering must allocate — the floor of
     {!Context.probe_link_floor} (gh-ocannl-1554) — has answered for every candidate, a replay and
     the untuned fallback: the call reports {!Pre_search_failure} at [Backend_link] with
     [baseline_declined] and one device-memory decline as the baseline's account, and raises, instead
-    of declining every candidate in turn. The floor is asked before the cache is consulted, where
-    the baseline is refused before codegen (every GPU backend, gh-ocannl-1340) and where the base
-    compile's link, or a stale entry's baseline relink, is refused for device memory: the base
-    link's own delta bounds no candidate from below under the liveness planner (config
+    of declining every candidate in turn. The floor is asked before the cache is consulted where the
+    baseline is refused before codegen (every GPU backend, gh-ocannl-1340), and in the search where
+    the baseline's own link (on a CPU backend, gh-ocannl-1666) is refused for device memory: the
+    base link's own delta bounds no candidate from below under the liveness planner (config
     [buffer_aliasing]: one kernel overlaps no buffers a fissioned candidate can, and a CPU
     [Split_reduce] candidate refines its statement-grained spans) or on-chip fusion (a shared
     epilogue placement keeps its target off the device). The floor's refusal is decisive under a
