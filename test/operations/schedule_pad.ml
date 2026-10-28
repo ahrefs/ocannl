@@ -342,11 +342,11 @@ let () =
    spells its update as an explicit FMA; the serial loop's [acc + a * b] is the C compiler's to
    contract, and gcc's x86 tunings used to decline exactly this loop-carried chain while clang fused
    it, so the seeds agreed with the serial loop on a Mac and missed it by an ulp on Linux
-   ([Cc_backend.fp_contract_flag] now turns that heuristic off). Under [cc_backend_fp_contract=off],
-   or on a target without an FMA, nothing contracts the serial loop and the two differ by design, so
-   the claim is skipped there: a bitwise claim there needs [fp_contract=true]
-   (docs/agent-notes/backend-precision-and-simd.md). Each seed's distance from the serial loop, and
-   the compile line, go to stderr. === *)
+   ([Cc_backend.fp_contract_flag] now turns that heuristic off). Under [cc_backend_fp_contract=off]
+   (or [on] with a gcc before 14), or on a target without an FMA, nothing contracts the serial loop
+   and the two differ by design, so the claim is skipped there: a bitwise claim there needs
+   [fp_contract=true] (docs/agent-notes/backend-precision-and-simd.md). Each seed's distance from
+   the serial loop, and the compile line, go to stderr. === *)
 let () =
   let mav =
     Array.init (m_ext * k_ext)
@@ -394,10 +394,12 @@ let () =
     nonzero "nondyadic_serial" (Context.get_values ctx nc0.Tensor.value)
   in
   (* The bitwise claim is about what the compiler may contract, so it holds only where the serial
-     loop CAN be contracted: the kernel compile does not pin contraction off, and the target has a
-     fused multiply-add (the ISA the cc backend probed under its kernel flags). Elsewhere the serial
-     loop rounds twice by construction while the tile's FMA rounds once, as the comment above says;
-     a portable bitwise claim needs [fp_contract=true], where both carry the IR's own [FMA]. *)
+     loop CAN be contracted: the kernel compile leaves contraction at the compiler's default or asks
+     for [fast] -- not [off], and not [on], which gcc before 14 treats as [off] in C -- and the
+     target has a fused multiply-add (the ISA the cc backend probed under its kernel flags).
+     Elsewhere the serial loop rounds twice by construction while the tile's FMA rounds once, as the
+     comment above says; a portable bitwise claim needs [fp_contract=true], where both carry the
+     IR's own [FMA]. *)
   let kernel_flags = Context.Cc_backend.kernel_compiler_flags () in
   let isa =
     Option.value ~default:"none-probed"
@@ -405,6 +407,7 @@ let () =
   in
   let contractible =
     (not (String.is_substring kernel_flags ~substring:"-ffp-contract=off"))
+    && (not (String.is_substring kernel_flags ~substring:"-ffp-contract=on"))
     && List.exists [ "fma"; "avx512f"; "neon" ] ~f:(fun sub ->
         String.is_substring isa ~substring:sub)
   in
