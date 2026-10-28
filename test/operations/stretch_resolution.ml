@@ -31,7 +31,7 @@ let find_by_name root sub =
     if Hashtbl.mem visited t.Tensor.value.Tn.id then None
     else (
       Hashtbl.set visited ~key:t.Tensor.value.Tn.id ~data:();
-      if String.is_substring (Tn.debug_name t.Tensor.value) ~substring:sub then Some t
+      if String.is_substring (Tn.label_name t.Tensor.value) ~substring:sub then Some t
       else List.find_map t.Tensor.children ~f:(fun c -> walk c.Tensor.subtensor))
   in
   Option.value_exn ~here:[%here] (walk root)

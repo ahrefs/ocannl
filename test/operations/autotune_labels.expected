@@ -9,7 +9,7 @@ a staffed label is the bare one's focus followed by its staff: true
 staffs of different parameters print apart: true
 the per-field updates name exactly the site type's fields, in order: true
 the two base sites differ in every field: true
-the two base targets share a debug name: true
+the two base targets share a label name: true
 the two base chains have equal length: true
 changing any one field of the first base site changes its label: true
 changing any one field of the second base site changes its label: true

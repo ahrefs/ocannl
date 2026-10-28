@@ -43,7 +43,7 @@ let make_model () =
 
 let find_param root name =
   List.find_exn (Set.to_list root.Tensor.params) ~f:(fun t ->
-      String.equal (Tn.debug_name t.Tensor.value) name)
+      String.equal (Tn.label_name t.Tensor.value) name)
 
 (* The cast twin is the (unique, in this model) direct consumer of a master parameter. *)
 let find_consumer root master =

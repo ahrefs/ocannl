@@ -348,7 +348,7 @@ let () =
     let ctx = Train.update_once (Context.auto ()) loss in
     let grads =
       List.map params ~f:(fun p ->
-          ( Tn.debug_name p.Tensor.value,
+          ( Tn.label_name p.Tensor.value,
             Context.get_values ctx (Option.value_exn ~here:[%here] p.Tensor.diff).Tensor.grad ))
     in
     let loss_value = (Context.get_values ctx loss.Tensor.value).(0) in

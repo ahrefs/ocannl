@@ -65,12 +65,12 @@ let num_classes = 5
 let in_channels = 3
 let dims_of t = Array.to_list (Lazy.force t.Tensor.value.Ir.Tnode.dims)
 
-(* The parameter of [model] whose debug name is [name] followed by the model's label. *)
+(* The parameter of [model] whose label is [name] followed by the model's label. *)
 let param model name =
   let full = name ^ "_m" in
   match
     List.filter (Set.to_list model.Tensor.params) ~f:(fun p ->
-        String.equal (Ir.Tnode.debug_name p.Tensor.value) full)
+        String.equal (Ir.Tnode.label_name p.Tensor.value) full)
   with
   | [ p ] -> p
   | ps -> failwith (Printf.sprintf "expected one parameter %s, found %d" full (List.length ps))
@@ -148,7 +148,7 @@ let run ~num ~den ~widths =
           ok);
       p_all (tag ^ ": the listed shapes cover every parameter") (Set.to_list y.Tensor.params)
         ~f:(fun p ->
-          let name = Ir.Tnode.debug_name p.Tensor.value in
+          let name = Ir.Tnode.label_name p.Tensor.value in
           List.exists shapes ~f:(fun (listed, _) -> String.equal name (listed ^ "_m"))
           || List.mem
                [
@@ -165,7 +165,7 @@ let run ~num ~den ~widths =
             let tn = p.Tensor.value in
             let count = List.fold (dims_of p) ~init:1 ~f:( * ) in
             Context.set_values ctx tn
-              (Array.create ~len:count (oracle_value (Ir.Tnode.debug_name tn))))
+              (Array.create ~len:count (oracle_value (Ir.Tnode.label_name tn))))
       in
       let ctx, routine = Context.compile ctx (Train.forward y) Ir.Indexing.Empty in
       let ctx = Context.run ctx routine in

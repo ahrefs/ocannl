@@ -48,7 +48,7 @@ let run ~virtual_counter ~prec ~packed output_dims =
   Generated.arm routine;
   let ctx = Train.forward_once ctx u in
   let values = Context.get_values ctx u.value in
-  (values, Generated.read routine, Ir.Tnode.debug_name counter.value)
+  (values, Generated.read routine, counter.value)
 
 let bits_equal a b = Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b)
 
@@ -58,9 +58,11 @@ let body s = Generated.main_logic s
 
 let check ~name ~prec ~packed output_dims =
   Verdict.case name @@ fun () ->
-  let mat_vals, mat_src, counter_ident = run ~virtual_counter:false ~prec ~packed output_dims in
+  let mat_vals, mat_src, counter = run ~virtual_counter:false ~prec ~packed output_dims in
   let vir_vals, vir_src, _ = run ~virtual_counter:true ~prec ~packed output_dims in
-  let stores_counter src = String.is_substring (body src) ~substring:(counter_ident ^ "[") in
+  let stores_counter src =
+    String.is_substring (body src) ~substring:(Ir.Tnode.debug_name counter ^ "[")
+  in
   Stdio.printf "%s: %d values drawn\n" name (Array.length mat_vals);
   p (name ^ ": the materialized run stores the counter") (stores_counter mat_src);
   p (name ^ ": the virtual run inlines the counter") (not (stores_counter vir_src));

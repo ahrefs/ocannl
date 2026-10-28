@@ -501,7 +501,7 @@ let computes stmt ~writes =
   let accesses = LL.affine_accesses stmt in
   List.exists accesses ~f:(fun (a : Ir.Tnode.t Ir.Affine.access) -> not a.a_write)
   && List.exists accesses ~f:(fun (a : Ir.Tnode.t Ir.Affine.access) ->
-      a.a_write && writes (Ir.Tnode.debug_name a.a_tn))
+      a.a_write && writes (Ir.Tnode.label_name a.a_tn))
 
 (* The GPU pipeline's segments, as their top-level statements, each run on a fresh copy of the
    captured lowering. *)

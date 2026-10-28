@@ -12,7 +12,7 @@ let print_params ~name t =
   Set.to_list t.Tensor.params
   |> List.map ~f:(fun p ->
       Printf.sprintf "  %s: %s"
-        (Ir.Tnode.debug_name p.Tensor.value)
+        (Ir.Tnode.label_name p.Tensor.value)
         (Ir.Tnode.dims_to_string p.Tensor.value))
   |> List.sort ~compare:String.compare
   |> List.iter ~f:(printf "%s\n")

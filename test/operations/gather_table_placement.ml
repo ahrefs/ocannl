@@ -114,7 +114,8 @@ let () =
     Option.value_map rejection ~default:false ~f:(String.is_substring ~substring)
   in
   (* The three things the bare provenance collision did not say. *)
-  p "the refusal names the node" (says (Tn.debug_name tbl3));
+  p "the refusal names the node"
+    (Option.exists rejection ~f:(String.is_substring ~substring:(Tn.debug_name tbl3)));
   p "the refusal names the gather reading" (says "Get_dynamic");
   p "the refusal names the virtualization decision" (says "is virtual in this routine");
   p "the refusal says what to do instead" (says "set_materialized");

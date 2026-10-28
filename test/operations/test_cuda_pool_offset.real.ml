@@ -49,7 +49,7 @@ let () =
   let loc name =
     Map.to_alist ctx.BI.ctx_buffers
     |> List.find_map ~f:(fun (tn, (l : BI.buffer_loc)) ->
-        if String.is_prefix (Tn.debug_name tn) ~prefix:name then Some l else None)
+        if String.is_prefix (Tn.label_name tn) ~prefix:name then Some l else None)
   in
   let lp = Option.value_exn ~here:[%here] (loc "p") in
   let lq = Option.value_exn ~here:[%here] (loc "q") in

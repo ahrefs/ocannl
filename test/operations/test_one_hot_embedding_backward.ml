@@ -52,7 +52,7 @@ let grad_of t = (Option.value_exn t.Tensor.diff).Tensor.grad
 
 let param_by_label l name =
   List.find_exn (Set.to_list l.Tensor.params) ~f:(fun t ->
-      String.equal (Ir.Tnode.debug_name t.Tensor.value) name)
+      String.equal (Ir.Tnode.label_name t.Tensor.value) name)
 
 (* Lower the (already run, so shape/memory-mode-fixed) update comp and summarize the optimized IR:
    (#Set_dynamic, #For_loop over the vocabulary axis, #Trunc inside guards of scatters). *)

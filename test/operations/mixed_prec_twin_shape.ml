@@ -66,7 +66,7 @@ let leg ~label ~prec =
   ignore (Train.forward_once (Context.auto ()) loss : Context.t);
   let master =
     List.find_exn (Set.to_list loss.Tensor.params) ~f:(fun t ->
-        String.is_prefix (Tn.debug_name t.Tensor.value) ~prefix:"w")
+        String.is_prefix (Tn.label_name t.Tensor.value) ~prefix:"w")
   in
   let twin = find_consumer loss master in
   let m_dims = dims_of master and t_dims = dims_of twin in

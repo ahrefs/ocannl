@@ -37,7 +37,8 @@ let () =
     Option.value_map rejection ~default:false ~f:(String.is_substring ~substring)
   in
   p "the seam refusal names the pass boundary" (says "virtual_llc decision-coverage seam");
-  p "the seam refusal names the undecided node" (says (Tn.debug_name candidate));
+  p "the seam refusal names the undecided node"
+    (Option.exists rejection ~f:(String.is_substring ~substring:(Tn.debug_name candidate)));
   p "the seam refusal states the missing decision" (says "no virtualization decision");
   p "the seam refusal states which reads carry the obligation" (says "Get / Get_dynamic");
 

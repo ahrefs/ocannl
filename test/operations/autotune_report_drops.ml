@@ -101,7 +101,7 @@ let proposed = ref []
 
 let control =
   Autotune.Seam.with_value Autotune.on_privatize_proposal
-    (fun ~target ~over:_ -> proposed := Ir.Tnode.debug_name target :: !proposed)
+    (fun ~target ~over:_ -> proposed := Ir.Tnode.label_name target :: !proposed)
     (search ~tag:"control")
 
 let () =

@@ -65,7 +65,7 @@ type attempt = { a_where : string; a_targets : Ir.Tnode.t list; a_refusal : Outc
 
 let show_attempt a =
   Printf.sprintf "%s [%s]: %s" a.a_where
-    (String.concat ~sep:"," (List.map a.a_targets ~f:Ir.Tnode.debug_name))
+    (String.concat ~sep:"," (List.map a.a_targets ~f:Ir.Tnode.label_name))
     (match a.a_refusal with
     | None -> "applied"
     | Some cause -> Option.value (detail_of cause) ~default:"refused")

@@ -76,7 +76,7 @@ let () =
   let surface = Autotune.placement_surface (Context.cpu ()) comp Ir.Indexing.Empty in
   let groups =
     List.map surface.Autotune.ps_candidates ~f:(fun fc ->
-        ( Tn.debug_name fc.LL.fc_tn,
+        ( Tn.label_name fc.LL.fc_tn,
           LL.reading_to_string fc.LL.fc_default,
           List.map fc.LL.fc_alternatives ~f:(fun fa -> LL.reading_to_string fa.LL.fa_flip) ))
   in

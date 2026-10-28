@@ -37,7 +37,7 @@ module Tn = Ir.Tnode
 let diff_of t = Option.value_exn ~here:[%here] t.Tensor.diff
 let grad_of t = (diff_of t).Tensor.grad
 let zero_grads_of t = (diff_of t).Tensor.zero_grads
-let names s = String.concat ~sep:", " (List.map (Set.to_list s) ~f:Tn.debug_name)
+let names s = String.concat ~sep:", " (List.map (Set.to_list s) ~f:Tn.label_name)
 
 (* Set equality of the two fields, as one predicate. The positive claims below spell it as its two
    inclusions instead (each guarded against a vacuously empty side); this is the form the negative

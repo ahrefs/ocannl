@@ -301,7 +301,7 @@ let insert_before (llc : LL.t) ~before extra =
   let pos = Option.value_exn (List.findi stmts ~f:(fun _ s -> before s)) |> fst in
   LL.unflat_lines (List.take stmts pos @ extra @ List.drop stmts pos)
 
-let label_is name (tn : Tn.t) = String.equal (Tn.debug_name tn) name
+let label_is name (tn : Tn.t) = String.equal (Tn.label_name tn) name
 
 (* Whether [stmt] reads the node named [name] (the value pass reads the probabilities). *)
 let reads_node name stmt =
@@ -706,7 +706,7 @@ let training ?mask_fill ?(prefix = 2) ~seq ~d_k ~on ~block ~bwd () =
       let ctx = Context.run ctx routine in
       let grads =
         List.map params ~f:(fun p ->
-            ( Tn.debug_name p.Tensor.value,
+            ( Tn.label_name p.Tensor.value,
               Context.get_values ctx (Option.value_exn p.Tensor.diff).Tensor.grad ))
       in
       let loss = Array.fold (Context.get_values ctx loss.Tensor.value) ~init:0. ~f:( +. ) in

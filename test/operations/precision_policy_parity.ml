@@ -31,7 +31,7 @@ let make_model () =
 
 let find_param root name =
   List.find_exn (Set.to_list root.Tensor.params) ~f:(fun t ->
-      String.equal (Tn.debug_name t.Tensor.value) name)
+      String.equal (Tn.label_name t.Tensor.value) name)
 
 let prec_str tn = Ir.Ops.prec_string (Lazy.force tn.Tn.storage_prec)
 
@@ -86,7 +86,7 @@ let () =
       grad_prec = None;
     }
   in
-  let except tn = String.equal (Tn.debug_name tn) "b2" in
+  let except tn = String.equal (Tn.label_name tn) "b2" in
   let ctx_b, loss_b, y_b, x_b =
     run_leg base_ctx ~input_l:"xb"
       ~prepare:(fun loss -> PP.apply ~except policy loss)
