@@ -957,26 +957,64 @@ let attributed_in ({ lines; frame; files; _ } : parsed) op_class ~anchor =
 let is_conditional_branch ~mnemonic =
   is_branch ~mnemonic && not (List.mem [ "b"; "jmp"; "jmpq" ] mnemonic ~equal:String.equal)
 
-(** [conditional_branches_in p ~anchor] is [(branches, instructions)]: how many conditional branch
-    instructions, and how many instructions at all, [p] attributes to a source line in [anchor] —
-    attribution as in {!attributed_in}, by the last [.loc] above an instruction. The question it
-    answers is whether a construct COMPILED to a branch (gh-ocannl-1622: a value select whose arm
-    holds a load), which a loop census cannot tell from the loop's own control; the instruction
-    count is there so that a construct the compiler folded away, or an anchor naming nothing, reads
-    as [0] instructions rather than as a branch-free success. *)
+(** Whether an instruction compares an INTEGER register with an immediate ([cmpl $3, %r14d] on x86,
+    [cmp w3, #3] on AArch64): the shape of a loop's control testing its counter against a constant
+    bound, as unrolled and peeled loops do. A select over float data never compiles to it -- its
+    test is a floating-point compare, or a test of a boolean computed from one. *)
+let is_counter_test ~mnemonic ~rest =
+  let operands =
+    String.split rest ~on:',' |> List.map ~f:String.strip
+    |> List.filter ~f:(fun w -> not (String.is_empty w))
+  in
+  let int_reg r =
+    String.is_prefix r ~prefix:"%r" || String.is_prefix r ~prefix:"%e"
+    || (String.is_prefix r ~prefix:"w" || String.is_prefix r ~prefix:"x")
+       && String.length r > 1
+       && String.for_all (String.drop_prefix r 1) ~f:Char.is_digit
+  in
+  match (mnemonic, operands) with
+  | ("cmp" | "cmpb" | "cmpw" | "cmpl" | "cmpq"), [ imm; reg ] when String.is_prefix imm ~prefix:"$"
+    ->
+      int_reg reg
+  | "cmp", [ reg; imm ] when String.is_prefix imm ~prefix:"#" -> int_reg reg
+  | _ -> false
+
+(** [conditional_branches_in p ~anchor] is [(branches, counter_tests, instructions)]: how many
+    conditional branch instructions [p] attributes to a source line in [anchor], how many further
+    ones it attributes there that test a loop counter, and how many instructions it attributes there
+    at all -- attribution as in {!attributed_in}, by the last [.loc] above an instruction. The
+    question it answers is whether a construct COMPILED to a branch (gh-ocannl-1622: a value select
+    whose arm holds a load), which a loop census cannot tell from the loop's own control; the
+    instruction count is there so that a construct the compiler folded away, or an anchor naming
+    nothing, reads as [0] instructions rather than as a branch-free success.
+
+    A branch whose flags come from the instruction right before it, with no label between, and that
+    instruction is {!is_counter_test}, is counted apart (gh-ocannl-1660): DWARF attribution puts a
+    loop's control on whatever line the compiler last stepped through, and gcc 13 attributed a
+    peeled outer loop's [cmpl $1, %r14d; jg] to a select's line. It reads line-shaped forms only: a
+    loop control with a register bound counts as a branch (a false red, never a false green). *)
 let conditional_branches_in ({ lines; files; _ } : parsed) ~anchor =
-  let current = ref false and branches = ref 0 and instructions = ref 0 in
-  Array.iter lines ~f:(function
-    | Some (Directive (".loc" :: fno :: lno :: _)) -> (
-        current :=
-          match (Int.of_string_opt fno, Int.of_string_opt lno) with
-          | Some f, Some l -> Set.mem files f && Set.mem anchor l
-          | _ -> false)
-    | Some (Insn { mnemonic; _ }) when !current ->
-        Int.incr instructions;
-        if is_conditional_branch ~mnemonic then Int.incr branches
-    | _ -> ());
-  (!branches, !instructions)
+  let current = ref false and branches = ref 0 and counters = ref 0 and instructions = ref 0 in
+  let previous = ref None in
+  Array.iter lines ~f:(fun line ->
+      (match line with
+      | Some (Directive (".loc" :: fno :: lno :: _)) -> (
+          current :=
+            match (Int.of_string_opt fno, Int.of_string_opt lno) with
+            | Some f, Some l -> Set.mem files f && Set.mem anchor l
+            | _ -> false)
+      | Some (Insn { mnemonic; _ }) when !current -> (
+          Int.incr instructions;
+          if is_conditional_branch ~mnemonic then
+            match !previous with
+            | Some (mnemonic, rest) when is_counter_test ~mnemonic ~rest -> Int.incr counters
+            | _ -> Int.incr branches)
+      | _ -> ());
+      match line with
+      | Some (Insn { mnemonic; rest }) -> previous := Some (mnemonic, rest)
+      | Some (Label _) -> previous := None
+      | Some (Directive _) | None -> ());
+  (!branches, !counters, !instructions)
 
 (** {!census_in} over an assembly listing parsed for this one question. Convenient where a caller
     asks about one construct in one file; a caller asking about many should {!parse} once. *)

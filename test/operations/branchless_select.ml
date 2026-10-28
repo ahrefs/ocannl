@@ -107,8 +107,10 @@ let select_lines ~patterns source =
 (* Whether [name]'s select compiled branch-free: compiled by the cc backend's own compiler with its
    own kernel flags (at [-O3], its default level), no conditional branch is attributed to a line
    [select_lines] reads, and those lines carry instructions (an anchor naming nothing, or a select
-   folded away, fails). Each anchored line's own count goes to stderr, so a red run names the line
-   that branched. *)
+   folded away, fails). A loop's control that DWARF puts on such a line, an integer counter compared
+   with a constant bound ([Asm.is_counter_test]), is set apart: gcc 13 attributes a peeled outer
+   loop's test to the max-pool gate's line, where gcc 15 attributes it elsewhere. Each anchored
+   line's own count goes to stderr, so a red run names the line that branched. *)
 let compiled_branch_free ~patterns name =
   let src_path = Generated.path name in
   let source = Generated.read name in
@@ -132,15 +134,17 @@ let compiled_branch_free ~patterns name =
       let anchor = select_lines ~patterns source in
       let lines = Array.of_list (String.split_lines source) in
       Set.iter anchor ~f:(fun l ->
-          let b, i = Asm.conditional_branches_in parsed ~anchor:(Set.singleton (module Int) l) in
-          Stdio.eprintf "branchless_select: %s line %d: %d branch(es) in %d instruction(s): %s\n"
-            name l b i
+          let b, c, i = Asm.conditional_branches_in parsed ~anchor:(Set.singleton (module Int) l) in
+          Stdio.eprintf
+            "branchless_select: %s line %d: %d branch(es), %d loop-counter test(s), in %d \
+             instruction(s): %s\n"
+            name l b c i
             (String.strip lines.(l - 1)));
-      let branches, instructions = Asm.conditional_branches_in parsed ~anchor in
+      let branches, counters, instructions = Asm.conditional_branches_in parsed ~anchor in
       Stdio.eprintf
-        "branchless_select: %s: %d conditional branch(es) in %d instruction(s) on %d select \
-         line(s) (not part of the golden)\n"
-        name branches instructions (Set.length anchor);
+        "branchless_select: %s: %d conditional branch(es), %d loop-counter test(s) set apart, in \
+         %d instruction(s) on %d select line(s) (not part of the golden)\n"
+        name branches counters instructions (Set.length anchor);
       branches = 0 && instructions > 0
 
 (* === The value legs. === *)
