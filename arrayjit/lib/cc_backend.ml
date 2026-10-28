@@ -351,18 +351,53 @@ let arch_flags =
     | "none" -> ""
     | flags -> flags
 
+(* gh-ocannl-1682: gcc's x86 tunings (every [-mtune] a Zen or a recent Intel core selects, so
+   [-march=native] on the fleet's x86 boxes and on CI's runners) set [avoid-fma-max-bits], which
+   stops gcc from contracting [acc = acc + a * b] into an FMA when the add is a loop-carried
+   accumulation of a width up to those bits -- a latency heuristic for one serial chain. So under
+   gcc's own default [-ffp-contract=fast] the serial matmul loop rounds twice per step (measured on
+   rog-nv-linux, gcc 15.2: [vmulps]/[vaddps]), while a tensorized seed's register tile, which spells
+   its FMA explicitly ([C_syntax.vec_acc_fma]), rounds once; clang has no such heuristic and
+   contracts both, so the two agreed on a Mac and not on Linux, and a [rounds:0] tune's trained
+   values depended on which seed won the timing. With the heuristic off, contraction is decided by
+   the expression alone, as under clang. Probed rather than assumed (clang rejects the parameter
+   under [-Werror] as an unused argument), once per machine. The parameter is an empty answer
+   wherever the compiler does not take it. *)
+let fma_chain_param =
+  let flag = "--param=avoid-fma-max-bits=0" in
+  let probed =
+    lazy
+      (cached_probe ~name:"fma-chains"
+         ~compute:(fun () ->
+           if probe_compiles ~flags:("-Werror " ^ flag) ~data:"int ocannl_fma_chain_probe;\n" ()
+           then flag
+           else "")
+         ())
+  in
+  fun () -> Lazy.force probed
+
 (* Floating-point contraction beyond what the codegen selects explicitly (it emits `fmaf` where it
    wants an FMA): whether the compiler is free to fuse a*b+c on its own is compiler- and
-   target-discretionary, so a reproducible run pins it off. "auto" (the default) passes no flag,
-   leaving the compiler's own default -- which is what every OCANNL release before gh-ocannl-559
-   did. *)
+   target-discretionary, so a reproducible run pins it off. "auto" (the default) passes no
+   [-ffp-contract] flag, leaving the compiler's own default -- which is what every OCANNL release
+   before gh-ocannl-559 did. Every mode but "off" also turns gcc's FMA-chain avoidance off
+   ({!fma_chain_param}), so that what the compiler may contract does not depend on whether an
+   accumulation is loop-carried; under "off" nothing is contracted and the parameter is moot. *)
 let fp_contract_flag () =
+  let with_chains base =
+    match (base, fma_chain_param ()) with
+    | None, "" -> None
+    | None, param -> Some param
+    | Some flag, "" -> Some flag
+    | Some flag, param -> Some (flag ^ " " ^ param)
+  in
   match
     String.lowercase
       (String.strip (Utils.get_global_arg ~default:"auto" ~arg_name:"cc_backend_fp_contract"))
   with
-  | "auto" -> None
-  | ("off" | "on" | "fast") as mode -> Some ("-ffp-contract=" ^ mode)
+  | "auto" -> with_chains None
+  | "off" -> Some "-ffp-contract=off"
+  | ("on" | "fast") as mode -> with_chains (Some ("-ffp-contract=" ^ mode))
   | other -> invalid_arg ("cc_backend_fp_contract: expected auto | off | on | fast, got " ^ other)
 
 let simd_flags =

@@ -313,6 +313,19 @@ files.
   runners show it; clang with `OCANNL_CC_BACKEND_FP_CONTRACT=fast` reproduces it on a Mac. A test
   comparing two kernel shapes bitwise pins that key `off` in-process (`reduction_forms`,
   `fp_licence_values`).
+- **gcc's x86 tunings decline to contract a loop-carried accumulation** (gh-ocannl-1682): every
+  `-mtune` a Zen or a recent Intel core selects sets `avoid-fma-max-bits`, so under gcc's own
+  default `-ffp-contract=fast` the serial matmul loop's `acc = acc + a * b` stayed `vmulps`/`vaddps`
+  (two roundings), while the register tile's explicit FMA rounds once; clang has no such heuristic
+  and fuses both. Packed `rounds:0` seeds therefore matched the serial loop on a Mac and missed it
+  by an ulp on rog and minix, and `transformer_names`' samples moved with whichever seed won the
+  timing. `Cc_backend.fp_contract_flag` now adds `--param=avoid-fma-max-bits=0` (probed: clang
+  rejects it under `-Werror`) to every contraction mode but `off`, so contraction follows the
+  expression alone, as under clang (the parameter is in the codegen tag, so gcc boxes re-key).
+  `schedule_pad` pins packed = serial bitwise on non-dyadic operands for every packing shape. Under
+  `cc_backend_fp_contract=off` the two still differ by design on every compiler (nothing contracts
+  the serial loop; the tile's FMA is a schedule decision, gh-ocannl-998): a bitwise claim there
+  also needs `fp_contract=true`.
 - **`-march=native` is the wrong flag on ARM and was silently downgrading every CPU kernel.** Apple
   clang accepts it on arm64 and targets a *lower* baseline than passing nothing: 22
   `__ARM_FEATURE_*` macros against 26 with no flag and 33 with `-mcpu=native`, losing
