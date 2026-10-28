@@ -89,6 +89,15 @@ files.
   options (`Compiler_options.nvrtc`, the `--gpu-architecture=` from `Cuda_mma.gpu_arch_options`)
   and launches it at `Low_level.launch_dims`; `nvcc -arch=native` compiles for the device's own
   arch and hides this class.
+- **CUDA ships floor PTX, and a value can depend on which target nvrtc compiled for**
+  (gh-ocannl-1674). `Cuda_mma.with_ptx_target Native` compiles every kernel in its extent at the
+  device's own `compute_<cc>` instead of the marker floor (or nvrtc's default arch for an unmarked
+  kernel), and returns the `.target` each program's PTX actually carries; the kernel code cache
+  keys on the option list, so the two targets never share a kernel.
+  `test/operations/ptx_target_parity` compares the two bitwise on the cm8w conv seeds under tf32
+  and caught the restrict hazard above with no reference of its own (512 of 8192 cells, with
+  `lane_restrict` reverted). To cover another kernel class, compile it under both targets the same
+  way.
 - Query optional `MTLCompileOptions` properties on an initialized object, not through the nominal
   class's `instancesRespondToSelector:`. On macOS 26.6.2 that class-level query returned false for
   the macOS-15 math properties even though the object accepted them, silently selecting the macOS-14

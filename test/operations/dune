@@ -7254,6 +7254,19 @@
   (diff conv_merged_gpu_seeds.expected conv_merged_gpu_seeds-tf32.actual)))
 
 (test
+ ; gh-ocannl-1674: CUDA kernels compiled at the floor PTX and at the device's own arch compute the
+ ; same values, bit for bit.
+ (name ptx_target_parity)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules ptx_target_parity)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  ; cc-vector-width: independent -- every seeding judgment runs on synthetic limits, and the host
  ; tune has no sketch family.
  ; gh-ocannl-1407: the seeding census, on synthetic device limits, and its config key's stream.

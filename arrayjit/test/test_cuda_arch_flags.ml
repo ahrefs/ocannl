@@ -24,8 +24,8 @@
 
 open Base
 
-let check label ~device_cc src ~expected =
-  let got = Ir.Cuda_mma.gpu_arch_options ~device_cc src in
+let check ?target label ~device_cc src ~expected =
+  let got = Ir.Cuda_mma.gpu_arch_options ?target ~device_cc src in
   let render l = if List.is_empty l then "(none)" else String.concat ~sep:" " l in
   if not (List.equal String.equal got expected) then
     failwith (Printf.sprintf "%s: expected %s, got %s" label (render expected) (render got))
@@ -88,4 +88,30 @@ let () =
         ~device_cc:floor
         (Printf.sprintf "/* tile_mma 16x16x16 (%s) */" marker)
         ~expected:[ Printf.sprintf "--gpu-architecture=compute_%d" floor ]);
+  (* gh-ocannl-1674: the native target is the device's own arch for every source -- a plain kernel,
+     a floored one and a batch of floors alike -- and the family target on a family device. *)
+  let native = Ir.Cuda_mma.Native in
+  check ~target:native "native: a plain kernel" ~device_cc:120 "__global__ void k() {}"
+    ~expected:[ "--gpu-architecture=compute_120" ];
+  check ~target:native "native: a floored kernel" ~device_cc:120
+    "nvcuda::wmma::mma_sync(x); /* (wmma-tf32) */"
+    ~expected:[ "--gpu-architecture=compute_120" ];
+  check ~target:native "native: an Ampere device" ~device_cc:86 "/* (mma-fp8) */ __hfma(a, b, c)"
+    ~expected:[ "--gpu-architecture=compute_86" ];
+  check ~target:native "native: the family marker" ~device_cc:120 "/* (mma-mxfp8) */"
+    ~expected:[ "--gpu-architecture=compute_120a" ];
+  check ~target:native "native: no device, the floor policy" ~device_cc:0 "/* (wmma-tf32) */"
+    ~expected:[ "--gpu-architecture=compute_80" ];
+  (* The [.target] directive the PTX target record reads. *)
+  let directive ptx ~expected =
+    let got = Ir.Cuda_mma.ptx_target_directive ptx in
+    if not (Option.equal String.equal got expected) then
+      failwith
+        (Printf.sprintf "ptx_target_directive %S: expected %s, got %s" ptx
+           (Option.value expected ~default:"(none)")
+           (Option.value got ~default:"(none)"))
+  in
+  directive "//\n.version 8.8\n.target sm_80\n.address_size 64\n" ~expected:(Some "sm_80");
+  directive ".version 9.0\n  .target sm_120a, debug\n" ~expected:(Some "sm_120a");
+  directive ".version 9.0\n.address_size 64\n" ~expected:None;
   Stdio.print_endline "cuda gpu_arch_options: ok"
