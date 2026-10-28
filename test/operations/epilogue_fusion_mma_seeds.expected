@@ -16,5 +16,7 @@ nondiv: blocktile epilogue twins are seeded: true
 nondiv: every blocktile epilogue twin applies and validates: true
 nondiv: every blocktile epilogue twin drops the tail statement its unfused sibling keeps: true
 nondiv: every blocktile epilogue twin compiles, runs and matches the untuned reference: true
+ksplit: the site seeds packed 16x16 epilogue twins: true
+ksplit: every running epilogue twin matches the untuned reference: true
 
 Done.

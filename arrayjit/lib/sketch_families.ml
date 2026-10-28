@@ -2482,18 +2482,30 @@ let cpu_mma_pack_sketch_schedule (site : matmul_site)
      [Tensorize] masks the fragment transfers. An in-place operand read cannot absorb a pad, so the
      grid-outermost hoisted-only shape pads only if every operand packs. *)
   let both_staged = pad_composition_ok ~n_staged:(List.length stages) ~n_operands:2 in
+  let k_pad = if both_staged then pad_to ~axis:site.m_k ~extent:site.m_nk bk else [] in
   let pads =
     if not both_staged then []
     else
       pad_to ~axis:site.m_i ~extent:site.m_ni bm
       @ (if bn = 0 then [] else pad_to ~axis:site.m_j ~extent:site.m_nj bn)
-      @ pad_to ~axis:site.m_k ~extent:site.m_nk bk
+      @ k_pad
+  in
+  (* The k-block split of a padded k (gh-ocannl-1670, measured in the bench builder by
+     gh-ocannl-1631): the k pad leaves a [bk*k_o + k_i < nk] edge guard on every element the packing
+     nests copy, in every k block, though only the last block's can fail. Partitioning [k_o] at its
+     last full block folds them in the full segment and keeps them in the edge block alone; the
+     micro-kernel's reduction mask is discharged against the zero-fringe tiles either way, so values
+     are unchanged. It applies in every packing shape, after [Tensorize] (so the [Tile_mma] is
+     copied into both segments), and only with the k pad: an unpadded k divides or is refuted. *)
+  let k_split =
+    if List.is_empty k_pad then []
+    else Sched.pad_edge_partition ~block_loop:k_o ~extent:site.m_nk ~block:bk
   in
   let tz, _lane = Sched.tensorize ?tile ~i:i_i ~j:j_col ~k:k_i ~simd_width:1 () in
   let kb = k_blocks site [ k_o ] in
   batch_hoist_swaps site @ pads @ zops @ splits @ j_swaps @ sink j_col kb @ sink i_i kb
   @ (if grid_outermost then [] else sink i_o kb)
-  @ stages @ [ tz ]
+  @ stages @ [ tz ] @ k_split
 
 (* Adjacent-transposition reorder of a perfect serial nest: [Swap]s that turn [current] (nest order,
    outermost first) into [target]. Selection sort — for each target position, bubble the wanted loop

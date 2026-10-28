@@ -2093,7 +2093,26 @@ files.
   now `Partition`s `k_o` at its last full block (what `Pad`'s contract prescribes); the full
   segment's guards fold. On rog, `narrow_gebp_bench` n=76 at 16x32 went from 1.487x to 1.236x its
   dividing 19x76 control (the pad waste is 1.33x), and n=48 at 16x32 serial from 3.38 to 2.64 us.
-  The autotuner's `cpu_mma_pack_sketch_schedule` pads the same way and does NOT split yet. The
+  The autotuner's `cpu_mma_pack_sketch_schedule` pads the same way and, since gh-ocannl-1670,
+  splits too, in every packing shape, through the one spelling both builders call,
+  `Schedule.pad_edge_partition` (after `Tensorize`, and only with the k pad). The padded seeds'
+  op lists changed, but no cache key did: a key is the code's digest plus configuration, never a
+  candidate's ops, so an entry crowned before keeps replaying its (valid) unsplit schedule until it
+  is searched again. `schedule_pad`'s non-dyadic seed leg pins the split per packing shape:
+  bitwise against the unsplit composition under every contraction mode, and bitwise against the
+  serial loop wherever the serial loop can contract (gh-ocannl-1682's gate: not
+  `cc_backend_fp_contract=off`/`on`, and an FMA target).
+  **The split met `Fuse_epilogue`'s exactly-once check from below.** With ONE full k block
+  (16 < nk < 32) both segments' k-block loops are single-trip, so no enclosing loop of extent > 1
+  showed the first segment's fragment store-back to be partial: the fused twin relocated its tail
+  there, computing it from the first k block alone, and the edge segment's store-back completed the
+  accumulator afterwards. transformer_names' one-hot embedding (k = vocab 28) crowned that twin
+  and dropped half the vocabulary from `tok_embed`; loss stayed under its thresholds and only the
+  sampled names moved, which read as a timing-dependent golden. `fuse_at_fragment` now refuses any
+  write of the accumulator after the fused site, which also covers a row-block `Partition`'s edge
+  segment (never descended, so never fused); `epilogue_fusion_mma_seeds`' `ksplit` leg pins it on
+  that site's shape. A training golden that moves when only the crowned seed changes is worth a
+  value check of the crowned candidate before it is filed as nondeterminism. The
   whole-K residual (16x76 vs 19x76: 1.095x against 1.053x row waste, block shapes differing too)
   is what two-site `Fuse_epilogue` fusion could at most recover, so it was not built.
   `Grid_outermost` B~ packing is a size call, not a fix: re-packing a panel per row block runs

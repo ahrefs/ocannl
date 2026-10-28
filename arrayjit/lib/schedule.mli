@@ -422,9 +422,12 @@ type optop =
           must be the first real statement after the last statement writing [target]: a perfect
           Serial nest over exactly [target]'s dims, assigning a different node at the identity index
           tuple, elementwise, with every read of [target] at that tuple, and no later statement
-          mentioning [target]. The store-back of [target] itself is kept. Elementwise tails never
-          reorder the reduction, so on the C backends the fused values are bitwise equal to the
-          two-kernel form. Apply after [Tensorize]/[Privatize].
+          mentioning [target]. At the fragment and whole-K sites the store-back must complete
+          [target]: one under an enclosing loop of extent > 1 that does not index it, or followed by
+          another write of [target] (a later segment of a [Partition]ed block loop, gh-ocannl-1670),
+          is refused. The store-back of [target] itself is kept. Elementwise tails never reorder the
+          reduction, so on the C backends the fused values are bitwise equal to the two-kernel form.
+          Apply after [Tensorize]/[Privatize].
 
           [shared] (GPU only, requires the fragment site): the fused tail is often [target]'s last
           consumer, so placement makes [target] routine-local — a per-thread array the fragment
@@ -506,6 +509,16 @@ val partition : axis:Indexing.symbol -> breakpoints:int list -> optop * Indexing
 (** Builds a {!constructor-Partition} with one fresh index symbol per segment (via
     [Indexing.get_symbol]) and returns them in segment order, so subsequent ops in a
     programmatically built schedule can address individual segments. *)
+
+val pad_edge_partition : block_loop:Indexing.symbol -> extent:int -> block:int -> optop list
+(** The {!constructor-Partition} a {!constructor-Pad} of an axis of [extent] to a multiple of
+    [block] prescribes, once that axis is {!constructor-Split} by [block] into [block_loop] and an
+    inner loop: [block_loop] partitioned at its last full block, so every guard the pad left on the
+    inner loop ([block*block_loop + inner < extent], e.g. a zero-fringe {!constructor-Stage}'s edge
+    guard on each packed element) is interval-decided in the full blocks and folds there, and
+    survives only in the edge block (gh-ocannl-1631). Empty when [block] divides [extent] (no pad)
+    or the axis has no full block. The one spelling of this split for the packed GEBP builders: the
+    autotuner's packed sketch ([Sketch_families]) and [bin/bench_gebp.ml] (gh-ocannl-1670). *)
 
 val partition_breakpoints : axis:Indexing.symbol -> Low_level.t -> int list
 (** Derives candidate {!constructor-Partition} breakpoints of the [axis] loop from the guards

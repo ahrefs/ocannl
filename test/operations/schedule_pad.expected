@@ -10,4 +10,9 @@ seeded packed pad-composition matches the serial twin bitwise: true
 seeded packed pad-composition's routine is labeled tensorized: true
 every 16x16 packed seed's routine is labeled tensorized: true
 every 16x16 packed seed matches the serial twin bitwise on non-dyadic operands: true
+the 16x16 packed seeds span at least two packing shapes: true
+every 16x16 packed seed partitions its k-block loop at the last full block: true
+every k-split packed seed matches its unsplit composition bitwise: true
+every k-split packed seed's edge k segment keeps the unsplit k-block loop's Wheres, its full segment no more: true
+every in-kernel-packing seed's full k segment sheds k edge guards: true
 pad guard over an unstaged operand is rejected: true
