@@ -119,23 +119,35 @@ let run ~name ~n ~bm ~bk ~layout =
 
 let grid = Some Bench_gebp.Grid_outermost
 
+(* Every claim, in the order the CPU branch below emits them. Off a CPU backend each is skipped by
+   name, so this list IS the golden's order there. It once had the Grid census claims appended while
+   the CPU branch emits them mid-sequence, which reddened master's HIP golden. So the CPU branch
+   records the name of each claim it makes ([named]), and its last claim holds that record equal to
+   this list. *)
+let claim_order =
+  [
+    "32^3 at 16x32, default floor: both Grid launches render serial";
+    "32^3 at 16x32, default floor: values match the unscheduled kernel bitwise";
+    "32^3 at 16x32, default floor: every Tile_mma renders the register tiling";
+    "32^3 at 16x32, default floor: the Grid census records every launch serial for the floor";
+    "32^3 at 16x32, floor disabled: the launches render pool-parallel";
+    "32^3 at 16x32, floor disabled: the Grid census records every launch on the pool";
+    "32^3 at 16x32, floor disabled: values match the unscheduled kernel bitwise";
+    "128^3 at 16x32, default floor: the launches render pool-parallel";
+    "128^3 at 16x32, default floor: values match the unscheduled kernel bitwise";
+    "32^3 at 16x32: every Grid launch estimates below the default floor";
+    "32^3 at 16x32: with MACs charged at par, the Tile_mma launch reaches the default floor";
+  ]
+
+let order_claim = "every claim this test makes, in the order the off-CPU branch skips them"
+let emitted = ref []
+
+let named name =
+  emitted := name :: !emitted;
+  name
+
 let () =
-  if not on_cpu then
-    List.iter
-      [
-        "32^3 at 16x32, default floor: both Grid launches render serial";
-        "32^3 at 16x32, default floor: values match the unscheduled kernel bitwise";
-        "32^3 at 16x32, default floor: every Tile_mma renders the register tiling";
-        "32^3 at 16x32, floor disabled: the launches render pool-parallel";
-        "32^3 at 16x32, floor disabled: values match the unscheduled kernel bitwise";
-        "128^3 at 16x32, default floor: the launches render pool-parallel";
-        "128^3 at 16x32, default floor: values match the unscheduled kernel bitwise";
-        "32^3 at 16x32: every Grid launch estimates below the default floor";
-        "32^3 at 16x32: with MACs charged at par, the Tile_mma launch reaches the default floor";
-        "32^3 at 16x32, default floor: the Grid census records every launch serial for the floor";
-        "32^3 at 16x32, floor disabled: the Grid census records every launch on the pool";
-      ]
-      ~f:(skipped ~backend:backend_name)
+  if not on_cpu then List.iter (claim_order @ [ order_claim ]) ~f:(skipped ~backend:backend_name)
   else
     (* Without a native pool (cc_parallel_grid resolved to none) no Grid renders parallel at all, so
        the legs that expect a parallel construct are skipped; which branch ran goes to stderr. *)
@@ -146,18 +158,21 @@ let () =
     let got32, census32, src32, sched32, grid32 =
       run ~name:"glf_small" ~n:32 ~bm:16 ~bk:32 ~layout:grid
     in
-    p "32^3 at 16x32, default floor: both Grid launches render serial"
+    p
+      (named "32^3 at 16x32, default floor: both Grid launches render serial")
       (not (has_parallel_construct src32));
-    p_all2 "32^3 at 16x32, default floor: values match the unscheduled kernel bitwise" got32 want32
-      ~f:Float.equal;
-    p_all "32^3 at 16x32, default floor: every Tile_mma renders the register tiling" census32
-      ~f:(fun r -> Poly.equal r Ir.C_syntax.Mma_register_tiled);
+    p_all2
+      (named "32^3 at 16x32, default floor: values match the unscheduled kernel bitwise")
+      got32 want32 ~f:Float.equal;
+    p_all (named "32^3 at 16x32, default floor: every Tile_mma renders the register tiling")
+      census32 ~f:(fun r -> Poly.equal r Ir.C_syntax.Mma_register_tiled);
     (* Non-empty is part of the claim: a census that recorded nothing would pass a bare for-all. *)
     let census_all (g : Ir.C_syntax.grid_summary) ~f =
       g.pool && (not (List.is_empty g.loops)) && List.for_all g.loops ~f:(fun e -> f e.site)
     in
     gated ~when_:pool ~on:backend_name
-      "32^3 at 16x32, default floor: the Grid census records every launch serial for the floor"
+      (named
+         "32^3 at 16x32, default floor: the Grid census records every launch serial for the floor")
       (census_all grid32 ~f:(function
         | Ir.C_syntax.Grid_serial (Grid_below_min_updates { updates; floor = f }) ->
             f = floor && updates < floor
@@ -166,23 +181,28 @@ let () =
       with_floor "0" (fun () -> run ~name:"glf_small_nofloor" ~n:32 ~bm:16 ~bk:32 ~layout:grid)
     in
     gated ~when_:pool ~on:backend_name
-      "32^3 at 16x32, floor disabled: the launches render pool-parallel"
+      (named "32^3 at 16x32, floor disabled: the launches render pool-parallel")
       (has_parallel_construct src32_off);
     gated ~when_:pool ~on:backend_name
-      "32^3 at 16x32, floor disabled: the Grid census records every launch on the pool"
+      (named "32^3 at 16x32, floor disabled: the Grid census records every launch on the pool")
       (census_all grid32_off ~f:(function Ir.C_syntax.Grid_pool _ -> true | _ -> false));
-    p_all2 "32^3 at 16x32, floor disabled: values match the unscheduled kernel bitwise" got32_off
-      want32 ~f:Float.equal;
+    p_all2
+      (named "32^3 at 16x32, floor disabled: values match the unscheduled kernel bitwise")
+      got32_off want32 ~f:Float.equal;
     let want128, _, _, _, _ = run ~name:"glf_ref128" ~n:128 ~bm:16 ~bk:32 ~layout:None in
     let got128, _, src128, _, _ = run ~name:"glf_large" ~n:128 ~bm:16 ~bk:32 ~layout:grid in
     gated ~when_:pool ~on:backend_name
-      "128^3 at 16x32, default floor: the launches render pool-parallel"
+      (named "128^3 at 16x32, default floor: the launches render pool-parallel")
       (has_parallel_construct src128);
-    p_all2 "128^3 at 16x32, default floor: values match the unscheduled kernel bitwise" got128
-      want128 ~f:Float.equal;
+    p_all2
+      (named "128^3 at 16x32, default floor: values match the unscheduled kernel bitwise")
+      got128 want128 ~f:Float.equal;
     let launches = Option.value_map sched32 ~default:[] ~f:grid_launches in
-    p_all "32^3 at 16x32: every Grid launch estimates below the default floor" launches ~f:(fun l ->
-        Ir.C_syntax.grid_update_count ~cap:floor l < floor);
-    p_all "32^3 at 16x32: with MACs charged at par, the Tile_mma launch reaches the default floor"
+    p_all (named "32^3 at 16x32: every Grid launch estimates below the default floor") launches
+      ~f:(fun l -> Ir.C_syntax.grid_update_count ~cap:floor l < floor);
+    p_all
+      (named
+         "32^3 at 16x32: with MACs charged at par, the Tile_mma launch reaches the default floor")
       (List.filter launches ~f:(fun l -> launch_macs l > 0))
-      ~f:(fun l -> launch_macs l >= floor)
+      ~f:(fun l -> launch_macs l >= floor);
+    p order_claim (List.equal String.equal (List.rev !emitted) claim_order)
