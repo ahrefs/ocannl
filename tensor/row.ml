@@ -5111,9 +5111,13 @@ let%track7_sexp get_proj_index (proj_env : proj_env) (proj : proj) : Idx.axis_in
         (* Subtract padding if use_padding is true *)
         let offset =
           if use_padding then (
-            (* Left padding smaller than right when split needed *)
-            let right_padding = (kernel_size + 1) / 2 in
-            let left_padding = kernel_size - right_padding in
+            (* The margins total the DILATED kernel extent, left smaller than right when split
+               needed, so a dilated window is centered like a dense one: [o=+2*k] over a kernel of 3
+               reads [o - 2], [o], [o + 2]. Sizing them by the undilated kernel left a dilated
+               window off-center, its right taps past the margins (gh-ocannl-1657). *)
+            let span = effective_kernel_span ~dilation ~kernel_size in
+            let right_padding = (span + 1) / 2 in
+            let left_padding = span - right_padding in
             let operation_padding : axis_padding =
               Ir.Ops.{ left = left_padding; right = right_padding }
             in
