@@ -37,6 +37,15 @@ if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1
   skip "every digest leg" "neither sha256sum nor shasum is on PATH"
   finish
 fi
+# The digest the subject publishes: 12 hex of a SHA-256, from whichever tool
+# the host carries (the check above guarantees one).
+expected_hash12() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | cut -c1-12
+  else
+    shasum -a 256 | cut -c1-12
+  fi
+}
 harness_scratch "test-pin-revisions"
 
 
@@ -94,6 +103,20 @@ case " $* " in
           'neural_nets_lib.dev git git+file:///checkout#deadbeef' \
           'zeta.dev git git+https://example.invalid/zeta.git#main' \
           'arrayjit.dev git git+file:///checkout#deadbeef' | emit "$@"
+        ;;
+      # A pin-depends entry on a commit, beside mixed-a's pins (gh-ocannl-1672).
+      sha-pin)
+        printf '%s\n' \
+          'zeta.dev git git+https://example.invalid/zeta.git#main' \
+          "metal.dev git git+https://example.invalid/metal.git#$FAKE_COMMIT" \
+          'arrayjit.dev git git+file:///checkout#deadbeef' \
+          'alpha.dev git git+https://example.invalid/alpha.git' | emit "$@"
+        ;;
+      short-sha-pin)
+        printf '%s\n' \
+          'zeta.dev git git+https://example.invalid/zeta.git#main' \
+          "metal.dev git git+https://example.invalid/metal.git#$FAKE_SHORT_COMMIT" \
+          'alpha.dev git git+https://example.invalid/alpha.git' | emit "$@"
         ;;
       *) echo "unknown pin fixture: $FAKE_PIN_FIXTURE" >&2; exit 64 ;;
     esac
@@ -215,6 +238,11 @@ case "${2:-}" in
   https://example.invalid/zeta.git)
     printf '%s\trefs/heads/main\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     ;;
+  https://example.invalid/metal.git)
+    # A real `git ls-remote` matches its patterns against ref NAMES, so a
+    # commit-SHA pattern gets an empty answer and exit 0 -- reproduce exactly
+    # that, rather than refusing, so the subject's own guard decides.
+    ;;
   git+file:*|file:*)
     printf '%s\trefs/heads/local\n' cccccccccccccccccccccccccccccccccccccccc
     ;;
@@ -227,6 +255,12 @@ case "${2:-}" in
 esac
 FAKE_GIT
 chmod +x "$TMP/bin/opam" "$TMP/bin/git"
+
+# The commit pins of the sha-pin fixtures. The short one is a prefix of the
+# full one: an abbreviated SHA is indistinguishable offline from a hex-named
+# branch or tag, so it must still be resolved (and here, fail loudly).
+FAKE_COMMIT=b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5
+FAKE_SHORT_COMMIT=b5b5b5b5
 
 printf '%s\n' \
   'solution-digest=34956fded534' \
@@ -250,6 +284,8 @@ run_subject() { # run_subject SUBJECT LABEL PIN_FIXTURE RESOLUTION
       FAKE_LIST_FIXTURE="${FAKE_LIST_FIXTURE:-mixed}" \
       FAKE_SHOW_FIXTURE="${FAKE_SHOW_FIXTURE:-complete}" \
       FAKE_RESOLUTION="$resolution" \
+      FAKE_COMMIT="$FAKE_COMMIT" \
+      FAKE_SHORT_COMMIT="$FAKE_SHORT_COMMIT" \
       FAKE_OPAM_ROOT="$TMP/opam-root" \
       FAKE_OPAM_CALLS="$dir/opam.calls" \
       FAKE_GIT_CALLS="$dir/git.calls" \
@@ -332,6 +368,34 @@ oracle_resolution_loud() { # oracle_resolution_loud SUBJECT LABEL
     && ! grep -q '^digest=' "$dir/github-output"
 }
 
+# A full-SHA pin is its own resolved revision: no ls-remote call names it (the
+# other remotes are still resolved, in sorted spec order), and the pin digest
+# covers the commit in its sorted place. The expected digest is derived from
+# the three revisions here rather than pinned, so it states the contract: the
+# SHA enters the key exactly as ls-remote's answer would have.
+oracle_sha_pin() { # oracle_sha_pin SUBJECT LABEL
+  local subject=$1 label=$2 dir="$TMP/runs/$2" expected
+  expected=$(printf %s \
+    "1111111111111111111111111111111111111111${FAKE_COMMIT}aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
+    | expected_hash12)
+  run_subject "$subject" "$label" sha-pin ok
+  [ "$(cat "$dir/status")" -eq 0 ] \
+    && grep -qxF "digest=$expected" "$dir/github-output" \
+    && cmp -s "$TMP/expected-git-calls" "$dir/git.calls" \
+    && grep -qxF "https://example.invalid/metal.git#$FAKE_COMMIT -> $FAKE_COMMIT" "$dir/stdout"
+}
+
+# An abbreviated SHA is NOT taken as resolved: it reaches ls-remote, whose
+# empty answer trips the loud resolution guard.
+oracle_short_sha_loud() { # oracle_short_sha_loud SUBJECT LABEL
+  local subject=$1 label=$2 dir="$TMP/runs/$2"
+  run_subject "$subject" "$label" short-sha-pin ok
+  [ "$(cat "$dir/status")" -ne 0 ] \
+    && grep -qxF "ls-remote https://example.invalid/metal.git $FAKE_SHORT_COMMIT" "$dir/git.calls" \
+    && grep -qxF "could not resolve $FAKE_SHORT_COMMIT of https://example.invalid/metal.git" "$dir/stderr" \
+    && ! grep -q '^digest=' "$dir/github-output"
+}
+
 oracle_project_only_loud() { # oracle_project_only_loud SUBJECT LABEL
   local subject=$1 label=$2 dir="$TMP/runs/$2"
   FAKE_LIST_FIXTURE=project-only run_subject "$subject" "$label" mixed-a ok
@@ -369,6 +433,16 @@ if oracle_happy "$SRC" shipping-happy mixed-a; then
   report 0 "OPAMCOLOR=always: no ANSI reaches names, URLs, or outputs"
 else
   report 1 "shipping happy path" "see $TMP/runs/shipping-happy"
+fi
+if oracle_sha_pin "$SRC" shipping-sha-pin; then
+  report 0 "full commit-SHA pin: taken as resolved, no ls-remote, digest covers it"
+else
+  report 1 "full commit-SHA pin" "see $TMP/runs/shipping-sha-pin"
+fi
+if oracle_short_sha_loud "$SRC" shipping-short-sha-pin; then
+  report 0 "abbreviated SHA pin: still resolved, fails loudly without a pin digest"
+else
+  report 1 "abbreviated SHA pin" "see $TMP/runs/shipping-short-sha-pin"
 fi
 if oracle_project_only_loud "$SRC" shipping-project-only; then
   report 0 "all-project solution: fails loudly without a solution digest"
@@ -428,6 +502,10 @@ reason_solution_published() {
 }
 reason_digest_published() {
   [ "$(cat "$TMP/runs/$1/status")" = 0 ] && grep -q '^digest=' "$TMP/runs/$1/github-output"
+}
+reason_sha_lookup() {
+  grep -qxF "could not resolve $FAKE_COMMIT of https://example.invalid/metal.git" \
+    "$TMP/runs/$1/stderr"
 }
 reason_storage() { grep -q 'repo/default/repo' "$TMP/runs/$1/stderr"; }
 reason_color() { has_escape "$TMP/runs/$1/stdout" "$TMP/runs/$1/stderr"; }
@@ -498,6 +576,22 @@ if [ -n "$empty_mutant" ]; then
   expect_rejected "silent empty-registry digest is detected" "$empty_mutant" oracle_empty_loud "" reason_digest_published
 else
   report 1 "negative control: empty-registry mutant constructed"
+fi
+
+sha_mutant=$(mutant sha-shortcut \
+  'index($0, "if [[ $ref =~ ^[0-9a-f]{40}$ ]]; then") { print "  if false; then"; changed++; next } { print } END { if (changed != 1) exit 9 }')
+if [ -n "$sha_mutant" ]; then
+  expect_rejected "dropping the full-SHA shortcut is detected" "$sha_mutant" oracle_sha_pin "" reason_sha_lookup
+else
+  report 1 "negative control: full-SHA shortcut mutant constructed"
+fi
+
+sha_width_mutant=$(mutant sha-shortcut-width \
+  'index($0, "if [[ $ref =~ ^[0-9a-f]{40}$ ]]; then") { sub(/\{40\}/, "+"); changed++ } { print } END { if (changed != 1) exit 9 }')
+if [ -n "$sha_width_mutant" ]; then
+  expect_rejected "taking an abbreviated SHA as resolved is detected" "$sha_width_mutant" oracle_short_sha_loud "" reason_digest_published
+else
+  report 1 "negative control: abbreviated-SHA mutant constructed"
 fi
 
 storage_mutant=$(mutant opam-storage \
