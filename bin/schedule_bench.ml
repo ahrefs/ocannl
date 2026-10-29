@@ -251,12 +251,40 @@ let () =
       | Ir.Ops.Single_prec _ -> 24
       | Ir.Ops.Half_prec _ -> 11
       | Ir.Ops.Bfloat16_prec _ -> 8
-      | Ir.Ops.Fp8_prec _ -> 4
+      (* e5m2: two stored mantissa bits. *)
+      | Ir.Ops.Fp8_prec _ -> 3
       | _ -> 0
     in
     (* Integers up to 2^bits are exact; the bound, in units of 1/a_step. *)
     let bound = Float.of_int k *. Float.of_int (a_levels * b_max) in
     Float.(bound <= 2. ** Float.of_int significand_bits)
+  in
+  let backend = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc") in
+  (* The bound is half of what makes a tensorized cell exact on HIP. gfx11's WMMA returns the exact
+     sum only when every product of a dot product shares a sign (gh-ocannl-1420): on mixed-sign
+     products it misses by ulps even where every partial sum is exact. So a computation whose census
+     records a tensorized rendering on HIP is covered by [exact_reduction] only when the products
+     share a sign, which is read off the operands like the bound (gh-ocannl-1693). mb spans -8..8,
+     so they never do here — on purpose, see above.
+
+     Today that exclusion changes no verdict, because no HIP tensor-unit cell reaches an exact
+     verdict: the bound holds at f16 only to k = 5, while the tensorized GPU variants (mma_pd1/2)
+     need [mma_bk = 32] to divide k and are skipped below it — as would be any WMMA tile, 16 deep;
+     HIP's WMMA takes no f32 operands, so f32's k <= 43690 falls back to scalar code; and bf16 never
+     holds the bound. It keys on the census rather than on those three facts, so a padded tile, a
+     new operand combination or a finer [a_levels] cannot silently turn mixed-sign rounding into a
+     WRONG RESULT. *)
+  let products_share_sign =
+    let one_signed v =
+      Array.for_all v ~f:(fun x -> Float.(x >= 0.)) || Array.for_all v ~f:(fun x -> Float.(x <= 0.))
+    in
+    one_signed mav && one_signed mbv
+  in
+  let sign_sensitive_tensor_unit (mma : Ir.C_syntax.mma_summary) =
+    String.is_substring backend ~substring:"hip"
+    && (not products_share_sign)
+    && List.exists mma.Ir.C_syntax.renderings ~f:(fun (_, r) ->
+        Ir.C_syntax.is_tensorized_rendering r)
   in
   let ma = TDSL.ndarray mav ~label:[ "ma" ] ~input_dims:[ k ] ~output_dims:[ m ] () in
   let mb = TDSL.ndarray mbv ~label:[ "mb" ] ~input_dims:[ n ] ~output_dims:[ k ] () in
@@ -516,9 +544,11 @@ let () =
      TIMING costs the timing only: the oracle is materialized by one untimed run of the same
      unscheduled kernel, on demand and once. When the naive leg does run, its own output is that
      oracle and no extra run happens. *)
+  (* The oracle's values with its census: a reference the default schedule tensorized on HIP is as
+     sign-sensitive as a tensorized variant. *)
   let reference = ref None in
   let disagreements = ref 0 in
-  (* Variants whose cells departed from the reference where [exact_reduction] does not hold. *)
+  (* Variants whose cells departed from the reference where the exact verdict does not apply. *)
   let rounded = ref 0 in
   let unscheduled_output () =
     (* Announced like any other work that can make the reader wait: this runs only when the naive
@@ -540,7 +570,7 @@ let () =
     let stop = Time_now.nanoseconds_since_unix_epoch () in
     let secs = Float.of_int63 Int63.(stop - start) /. 1e9 in
     if Float.(secs >= 0.5) then p "%-10s %.1f s\n" "reference" secs;
-    values
+    (values, routine.Context.mma)
   in
   let reference_output () =
     match !reference with
@@ -642,15 +672,21 @@ let () =
     let checksum = Bench_checksum.whole_output ~row_stride:n values in
     (* The unscheduled leg, when it runs, IS the oracle — same kernel, so re-running it would only
        burn time. Any other variant is compared against it. *)
-    if Option.is_none schedule && Option.is_none !reference then reference := Some values;
+    if Option.is_none schedule && Option.is_none !reference then reference := Some (values, mma);
     let agreement, check =
-      let r = reference_output () in
+      let r, reference_mma = reference_output () in
+      (* Exact wherever the bound holds, unless either side summed on a sign-sensitive tensor
+         unit. *)
+      let exact =
+        exact_reduction
+        && not (sign_sensitive_tensor_unit mma || sign_sensitive_tensor_unit reference_mma)
+      in
       if phys_equal r values then
         ("reference", Bench_out.Unchecked "the oracle the other variants are compared against")
       else begin
         let d = Bench_checksum.first_difference ~reference:r values in
         match d with
-        | Some (Bench_checksum.Cell _) when not exact_reduction ->
+        | Some (Bench_checksum.Cell _) when not exact ->
             Int.incr rounded;
             (* How far and how widely, relative to the largest reference magnitude, so a reader can
                tell rounding (a few ulps of the output scale) from a misplaced row (the scale
@@ -664,7 +700,9 @@ let () =
             ( Printf.sprintf
                 "%s — %s rounding expected: %d of %d cells, max |diff| %.4g (%.2g of max |ref|)"
                 (Bench_checksum.render_agreement ~name:"reference" d)
-                (Ir.Ops.prec_string operand_prec) !differing (Array.length values) !max_diff
+                (if exact_reduction then "mixed-sign tensor-unit (gh-ocannl-1420)"
+                 else Ir.Ops.prec_string operand_prec)
+                !differing (Array.length values) !max_diff
                 (if Float.(!magnitude > 0.) then !max_diff /. !magnitude else Float.nan),
               Bench_out.Unchecked "differs from the oracle, where rounding is expected" )
         | _ ->
@@ -723,7 +761,6 @@ let () =
         List.iter reasons ~f:(fun reason -> p "             %s\n" reason);
         Float.nan
   in
-  let backend = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc") in
   (* HIP belongs here too: the backend renders workgroup-shared placement exactly as CUDA and Metal
      do, so the shared/staged/tensorized variants — including the gh-ocannl-487 [mma_pd1]/[mma_pd2]
      pipelining pair — are expressible on it. Omitting it silently routed every HIP run into the CPU
@@ -867,23 +904,24 @@ let () =
      speedup of a kernel already known to be wrong, which is the same hazard `Verdict` exists for on
      the test side. Where [exact_reduction] holds there is no rounding to excuse it: every product
      and partial sum fits the significand, so every leg's reduction is exact whatever order it sums
-     in. Where it does not (bf16 always, f16 past k = 5), a cell difference is reported and counted
-     but does not fail the run. *)
+     in. Where it does not (bf16 always, f16 past k = 5), or where a HIP tensor unit summed the
+     mixed-sign products, a cell difference is reported and counted but does not fail the run. *)
   if !disagreements > 0 then
     p
       "WRONG RESULT: %d variant(s) did not reproduce the reference output cell for cell — the \
        DIFFERS/SIZE lines above name the first cell and both values. %s\n"
       !disagreements
       (if exact_reduction then
-         "At these operands and k every variant's reduction is exact whatever order it sums in, so \
-          this is not rounding."
+         "At these operands and k every variant counted here sums exactly whatever order it sums \
+          in, so this is not rounding."
        else "A size mismatch is not rounding at any precision.");
   if !rounded > 0 then
     p
       "NOTE: %d variant(s) differ from the reference cell for cell at %s operands — not a verdict: \
        k-term partial sums round, so a different summation order legitimately moves low bits. \
        Compare the max |diff| on the DIFFERS lines against the output scale; exactness is checked \
-       only where k * %d <= 2^significand.\n"
+       only where k * %d <= 2^significand, and on HIP not where a tensor unit summed mixed-sign \
+       products.\n"
       !rounded (Ir.Ops.prec_string operand_prec) (a_levels * b_max);
   if !failures > 0 then
     p "%d variant(s) failed at m=%d n=%d k=%d — see the FAILED lines above.\n" !failures m n k;
