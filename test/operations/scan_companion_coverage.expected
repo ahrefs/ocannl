@@ -19,6 +19,7 @@ attention: the shared segment's family is refuted on companion coverage: true
 attention: the arity_cuts segmentation frees the scores from the scan: true
 attention: the freed scores seed a tensorized candidate: true
 --- leg 4: executed, every seed of the aligned shared segment ---
+z inputs: every cell's products share a sign and every partial sum is exact in f32: true
 aligned, executed: the matmul's segment under the real limits also holds the scan: true
 aligned, executed: every GPU seed of the shared segment computes z and the softmax, tensorized where the tile is advertised: true
 --- leg 5: executed, every seed of the attention's score segment ---

@@ -544,17 +544,16 @@ let () =
      and parity is bitwise on every backend and either rendering path. One sign matters as much as
      exactness: gfx11's WMMA is exactly rounded only when every product shares a sign
      (gh-ocannl-1420), and with [mbh] signed the staged f16 -> f32 leg below missed by f32 ulps on
-     HIP (gh-ocannl-1432). --- *)
-  let mah =
-    NTDSL.init ~l:"mah" ~prec:Ir.Ops.half ~i:[ n ] ~o:[ n ]
-      ~f:(Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:0. ~stride:0.125)
-      ()
-  in
-  let mbh =
-    NTDSL.init ~l:"mbh" ~prec:Ir.Ops.half ~i:[ n ] ~o:[ n ]
-      ~f:(Ll_test.cycle ~dims:[| n; n |] ~modulus:7 ~offset:0. ~stride:0.25)
-      ()
-  in
+     HIP (gh-ocannl-1432). The premise is derived from the init functions, not restated. --- *)
+  let mah_f = Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:0. ~stride:0.125 in
+  let mbh_f = Ll_test.cycle ~dims:[| n; n |] ~modulus:7 ~offset:0. ~stride:0.25 in
+  p_all
+    "half inputs: every cell's products share a sign and every partial sum is exact in f16 (so in \
+     f32 too)"
+    (Ll_test.matmul_products ~m:n ~n ~k:n mah_f mbh_f)
+    ~f:(Ll_test.exact_partials ~sig_bits:11);
+  let mah = NTDSL.init ~l:"mah" ~prec:Ir.Ops.half ~i:[ n ] ~o:[ n ] ~f:mah_f () in
+  let mbh = NTDSL.init ~l:"mbh" ~prec:Ir.Ops.half ~i:[ n ] ~o:[ n ] ~f:mbh_f () in
   let%op mch0 = mah * mbh in
   Tn.update_prec mch0.Tensor.value Ir.Ops.half;
   let ctx_hs = Context.auto () in
@@ -665,6 +664,11 @@ let () =
     ~f:(fun x -> not (f16_exact x));
   p_exists "f16->f32 direct exact sums are not f16-representable" (Array.to_list exact_h32)
     ~f:(fun x -> not (f16_exact x));
+  p_all
+    "f16->f32 direct inputs: every cell's products share a sign and every partial sum is exact in \
+     f32"
+    (Ll_test.matmul_products ~m:n ~n ~k:n h32a h32b)
+    ~f:(Ll_test.exact_partials ~sig_bits:24);
   (let claim_value = "f16->f32 direct tensorized matmul equals the exact sum bitwise" in
    let claim_struct = "f16->f32 direct tensorized structure as expected" in
    if on_cuda then (
@@ -891,27 +895,22 @@ let () =
      representable in bf16 (8 significant bits): the result is EXACT regardless of accumulation
      order or accumulator width, and parity is bitwise on every backend and either rendering path —
      HIP's included, because the products share a sign (gh-ocannl-1420; gh-ocannl-1432 moved [mbb]
-     off its signed cycle). --- *)
-  let mab =
-    NTDSL.init ~l:"mab" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ]
-      ~f:(Ll_test.cycle ~dims:[| n; n |] ~modulus:3 ~offset:0. ~stride:0.25)
-      ()
-  in
-  let mbb =
-    NTDSL.init ~l:"mbb" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ]
-      ~f:(Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:0. ~stride:0.5)
-      ()
-  in
-  let mtab =
-    NTDSL.init ~l:"mtab" ~prec:Ir.Ops.bfloat16 ~o:[ n; n ]
-      ~f:(Ll_test.cycle ~dims:[| n; n |] ~modulus:3 ~offset:0. ~stride:0.25)
-      ()
-  in
-  let mtbb =
-    NTDSL.init ~l:"mtbb" ~prec:Ir.Ops.bfloat16 ~o:[ n; n ]
-      ~f:(Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:0. ~stride:0.5)
-      ()
-  in
+     off its signed cycle). The premise is derived from the init functions, in each of the three
+     operand orientations the legs below contract, not restated. --- *)
+  let bfa_f = Ll_test.cycle ~dims:[| n; n |] ~modulus:3 ~offset:0. ~stride:0.25 in
+  let bfb_f = Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:0. ~stride:0.5 in
+  p_all
+    "bf16 inputs, in all three orientations: every cell's products share a sign and every partial \
+     sum is exact in bf16"
+    (Ll_test.matmul_products ~m:n ~n ~k:n bfa_f bfb_f
+    (* [bfu_ta]'s "ki;kj=>ij" and [bfu_tb]'s "ik;jk=>ij". *)
+    @ Ll_test.matmul_products ~m:n ~n ~k:n (fun ik -> bfa_f [| ik.(1); ik.(0) |]) bfb_f
+    @ Ll_test.matmul_products ~m:n ~n ~k:n bfa_f (fun kj -> bfb_f [| kj.(1); kj.(0) |]))
+    ~f:(Ll_test.exact_partials ~sig_bits:8);
+  let mab = NTDSL.init ~l:"mab" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ] ~f:bfa_f () in
+  let mbb = NTDSL.init ~l:"mbb" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ] ~f:bfb_f () in
+  let mtab = NTDSL.init ~l:"mtab" ~prec:Ir.Ops.bfloat16 ~o:[ n; n ] ~f:bfa_f () in
+  let mtbb = NTDSL.init ~l:"mtbb" ~prec:Ir.Ops.bfloat16 ~o:[ n; n ] ~f:bfb_f () in
   let bf16_leg ?bm ~tag ~acc_prec ~build ~check () =
     let mcb0 = build () in
     Tn.update_prec mcb0.Tensor.value acc_prec;
@@ -1134,20 +1133,16 @@ let () =
      %.3g, default policy %.3g, Bf16_narrow %.3g (not part of the golden)\n\
      %!"
     backend_name (worst_excess got_bw) (worst_excess got_bw_default) (worst_excess got_bw_narrow);
-  (* The bound's precondition, read off the init functions rather than restated: every product is a
-     nonnegative multiple of [q] (the cycles' values are multiples of 3/8 and 5/16, so their
-     products of 15/128), and every cell's sum is at most [2^24 q], so EVERY partial sum, in any
-     association a unit chooses, is a multiple of [q] below [2^24 q]: exact in f32. *)
-  (let q = Float.ldexp 1. (-7) in
-   p_all
-     "the width-sensitive inputs keep every product nonnegative and every f32 partial sum exact, \
-      so the narrowing is the one rounding the Bf16_wide bound allows for"
-     (List.init (n * n) ~f:Fn.id)
-     ~f:(fun t ->
-       let i = t / n and j = t % n in
-       let prods = List.init n ~f:(fun k -> fwa [| i; k |] *. fwb [| k; j |]) in
-       Float.(List.sum (module Float) prods ~f:Fn.id / q <= ldexp 1. 24)
-       && List.for_all prods ~f:(fun x -> Float.(x >= 0. && round_down (x / q) = x / q))));
+  (* The bound's precondition, read off the init functions rather than restated
+     ({!Ll_test.exact_partials}): every product of a cell shares a sign, and the cell's magnitudes
+     sum to at most [2^24] of the products' finest grain (the cycles' values are multiples of 3/8
+     and 5/16, so the grain is 1/128), so EVERY partial sum, in any association a unit chooses, is
+     exact in f32. *)
+  p_all
+    "the width-sensitive inputs keep each cell's products of one sign and every f32 partial sum \
+     exact, so the narrowing is the one rounding the Bf16_wide bound allows for"
+    (Ll_test.matmul_products ~m:n ~n ~k:n fwa fwb)
+    ~f:(Ll_test.exact_partials ~sig_bits:24);
   p_all2 "Bf16_wide bf16 serial rendering equals the once-narrowed wide reference bitwise" want_bw
     wide_ref_bw ~f:Float.equal;
   p "Bf16_wide uniform-bf16 tensorized matmul errs by the narrowing rounding alone"
@@ -1977,18 +1972,19 @@ let () =
   let claim_h32k_staged_struct =
     "f16->f32 k-split, fragment scope: the f32 fragment stays resident with d unconverted"
   in
+  let kw = 144 in
+  let ksa_f idcs = if idcs.(1) % bm = 0 then 1. else 0. in
+  let ksb_f idcs = if idcs.(0) % bm <> 0 then 0. else if idcs.(0) = 0 then 2048. else 1. in
+  (* The bitwise premise of the value claims, read off the init functions: one sign, and every
+     partial sum exact in f32 (the negative control rounds at f16 on purpose). *)
+  p_all
+    "f16->f32 k-split inputs: every cell's products share a sign and every partial sum is exact in \
+     f32"
+    (Ll_test.matmul_products ~m:n ~n ~k:kw ksa_f ksb_f)
+    ~f:(Ll_test.exact_partials ~sig_bits:24);
   if on_metal || Lazy.force cuda_h32_wmma || (on_hip && Lazy.force hip_mma) then (
-    let kw = 144 in
-    let ksa =
-      NTDSL.init ~l:"h32ksa" ~prec:Ir.Ops.half ~i:[ kw ] ~o:[ n ]
-        ~f:(fun idcs -> if idcs.(1) % bm = 0 then 1. else 0.)
-        ()
-    in
-    let ksb =
-      NTDSL.init ~l:"h32ksb" ~prec:Ir.Ops.half ~i:[ n ] ~o:[ kw ]
-        ~f:(fun idcs -> if idcs.(0) % bm <> 0 then 0. else if idcs.(0) = 0 then 2048. else 1.)
-        ()
-    in
+    let ksa = NTDSL.init ~l:"h32ksa" ~prec:Ir.Ops.half ~i:[ kw ] ~o:[ n ] ~f:ksa_f () in
+    let ksb = NTDSL.init ~l:"h32ksb" ~prec:Ir.Ops.half ~i:[ n ] ~o:[ kw ] ~f:ksb_f () in
     let run ~staged ~d_prec ~name =
       let%op t = ksa * ksb in
       Tn.update_prec t.Tensor.value d_prec;

@@ -11,10 +11,12 @@ tf32 transposed-A matmul emits the expected wmma layout: true
 tensorized matmul values match the serial twin: true
 C-backend fallback matches bitwise: true
 tensorized structure as expected: true
+half inputs: every cell's products share a sign and every partial sum is exact in f16 (so in f32 too): true
 half tensorized matmul matches the serial twin bitwise: true
 half tensorized structure as expected: true
 f16->f32 direct inputs hold products that f16 cannot represent: true
 f16->f32 direct exact sums are not f16-representable: true
+f16->f32 direct inputs: every cell's products share a sign and every partial sum is exact in f32: true
 f16->f32 direct tensorized matmul equals the exact sum bitwise: true
 f16->f32 direct tensorized structure as expected: true
 Fp16_wide half serial rendering equals the once-narrowed wide reference bitwise: true
@@ -23,6 +25,7 @@ Fp16_wide mma seeds match the backend's advertised emission scopes: true
 Fp16_wide half tensorized structure as expected: true
 Fp16_wide with narrow_compute_f32 off matches the independent wide reference: true
 Fp16_wide with narrow_compute_f32 off declines the register tiling (no narrow C-tile accumulator): true
+bf16 inputs, in all three orientations: every cell's products share a sign and every partial sum is exact in bf16: true
 bf32 tensorized matmul matches the serial twin bitwise: true
 bf32 tensorized structure as expected: true
 bfu tensorized matmul matches the serial twin bitwise: true
@@ -33,7 +36,7 @@ bfu_tb tensorized matmul matches the serial twin bitwise: true
 bfu_tb tensorized structure as expected: true
 bfu_m2 tensorized matmul matches the serial twin bitwise: true
 bfu_m2 tensorized structure as expected: true
-the width-sensitive inputs keep every product nonnegative and every f32 partial sum exact, so the narrowing is the one rounding the Bf16_wide bound allows for: true
+the width-sensitive inputs keep each cell's products of one sign and every f32 partial sum exact, so the narrowing is the one rounding the Bf16_wide bound allows for: true
 Bf16_wide bf16 serial rendering equals the once-narrowed wide reference bitwise: true
 Bf16_wide uniform-bf16 tensorized matmul errs by the narrowing rounding alone: true
 Bf16_wide uniform-bf16 tensorized matmul equals the once-narrowed wide reference bitwise: true
@@ -69,6 +72,7 @@ staged+tensorized uniform-f16 matmul matches the serial twin bitwise: true
 staged+tensorized uniform-f16 fragment residency: true
 staged+tensorized Fp16_wide matmul equals the once-narrowed wide reference bitwise: true
 staged+tensorized Fp16_wide fragment residency converts d once: true
+f16->f32 k-split inputs: every cell's products share a sign and every partial sum is exact in f32: true
 f16->f32 k-split, direct scope: every cell accumulates to 2056 in f32: true
 f16->f32 k-split, fragment scope: every cell accumulates to 2056 in f32: true
 f16->f16 k-split under Fp16_auto, direct scope: no cell reaches 2056 (the discriminator discriminates): true

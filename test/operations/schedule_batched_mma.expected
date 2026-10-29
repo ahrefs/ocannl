@@ -9,6 +9,7 @@ interior-batch: gpu mma seeds present: true
 interior-batch: gpu staged sketch builds: true
 variance-like site: no cpu mma seeds: true
 variance-like site: no gpu mma seeds: true
+bf16 inputs of both batched shapes: every cell's products share a sign and every partial sum is exact in bf16: true
 batched_lb bf16: the backend's advertised tile is seeded: true
 batched_lb bf16: a sampled batch-serial candidate compiles and runs: true
 batched_lb bf16: every running batch-serial candidate matches the serial twin bitwise: true

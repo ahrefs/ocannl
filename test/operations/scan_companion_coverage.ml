@@ -199,23 +199,17 @@ let run_seed ~label ~idx ~limits ~keep_mapping ~is_target ~build ~reference =
    [z]'s operands are small NONNEGATIVE integers (0..6 against 0..4), so every product and partial
    sum is exact in f32 and of one sign, which is what makes gfx11's WMMA exact (gh-ocannl-1420; on
    an inexact sum it is not correctly rounded, gh-ocannl-1509): leg 4 compares [z] bitwise on every
-   backend (gh-ocannl-1432). *)
+   backend (gh-ocannl-1432). Leg 4 derives that premise from these init functions. *)
 let n = 32
 let kk = 32
 let red = 24
+let z_a_f = Ll_test.weighted ~weights:[| 3; 1 |] ~modulus:7 ~offset:0. ~stride:1.
+let z_b_f = Ll_test.weighted ~weights:[| 1; 2 |] ~modulus:5 ~offset:0. ~stride:1.
 
 let indep ~tag ~cols =
   Tensor.unsafe_reinitialize ();
-  let a =
-    NTDSL.init ~l:(tag ^ "_a") ~prec:Ir.Ops.half ~b:[] ~i:[] ~o:[ n; kk ]
-      ~f:(Ll_test.weighted ~weights:[| 3; 1 |] ~modulus:7 ~offset:0. ~stride:1.)
-      ()
-  in
-  let b =
-    NTDSL.init ~l:(tag ^ "_b") ~prec:Ir.Ops.half ~b:[] ~i:[] ~o:[ kk; n ]
-      ~f:(Ll_test.weighted ~weights:[| 1; 2 |] ~modulus:5 ~offset:0. ~stride:1.)
-      ()
-  in
+  let a = NTDSL.init ~l:(tag ^ "_a") ~prec:Ir.Ops.half ~b:[] ~i:[] ~o:[ n; kk ] ~f:z_a_f () in
+  let b = NTDSL.init ~l:(tag ^ "_b") ~prec:Ir.Ops.half ~b:[] ~i:[] ~o:[ kk; n ] ~f:z_b_f () in
   let%op z = a +* "ik;kj=>ij" b in
   Tn.update_prec z.Tensor.value Ir.Ops.single;
   Train.set_materialized z.Tensor.value;
@@ -333,6 +327,10 @@ let () =
     ~f:(fun sp -> sp.Autotune.sk_mma);
 
   Stdio.printf "--- leg 4: executed, every seed of the aligned shared segment ---\n";
+  (* [z]'s bitwise premise, from its init functions ("ik;kj=>ij"), on every backend. *)
+  p_all "z inputs: every cell's products share a sign and every partial sum is exact in f32"
+    (Ll_test.matmul_products ~m:n ~n ~k:kk z_a_f z_b_f)
+    ~f:(Ll_test.exact_partials ~sig_bits:24);
   let real_limits = Context.hardware_limits (Context.auto ()) in
   let leg4_holds_scan, leg4 =
     if not is_gpu then (false, [])

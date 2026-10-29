@@ -177,3 +177,83 @@ let () =
     (match List.findi (partials ~dims:row_axis) ~f:(fun _ s -> not (bf16_exact s)) with
     | Some (i, s) -> i = 10 && Float.equal s (275.0 /. 64.0)
     | None -> false)
+
+(* --- {!Ll_test.exact_partials}, the HIP bitwise legs' derived premise (gh-ocannl-1693). Its
+   soundness is checked against an independent oracle rather than against its own arithmetic: every
+   partial sum of any association is the sum of some subset of the products, so where it accepts a
+   cell, every subset sum must be representable at the width it was asked about. *)
+
+(* Whether [x] is representable with [bits] significant bits, exponent range aside. *)
+let representable ~bits x =
+  Float.(x = 0.)
+  ||
+  let m, _ = Float.frexp x in
+  Float.is_integer (Float.ldexp m bits)
+
+let subset_sums cell =
+  List.fold cell ~init:[ 0. ] ~f:(fun sums x -> sums @ List.map sums ~f:(fun s -> s +. x))
+
+let widths = [ 2; 3; 4; 5; 6 ]
+
+(* Small cells of one sign at several grains (powers of two, and 3/8 and 3/2, whose grains are finer
+   than their values), some holding zeros: enough of them straddle every width's bound. *)
+let cells =
+  List.concat_map (List.range 1 9) ~f:(fun len ->
+      List.concat_map [ 0.125; 0.375; 0.5; 1.5; 3. ] ~f:(fun stride ->
+          List.concat_map [ 3; 5; 7 ] ~f:(fun modulus ->
+              List.concat_map [ 1.; -1. ] ~f:(fun sign ->
+                  List.map [ 0; 1 ] ~f:(fun lift ->
+                      List.init len ~f:(fun t ->
+                          sign *. Float.of_int ((t * 2 % modulus) + lift) *. stride))))))
+
+let () =
+  let accepts ~bits cell = Ll_test.exact_partials ~sig_bits:bits cell in
+  p_all
+    "exact_partials is sound: where it accepts a cell, every partial sum of every association is \
+     exact at that width" (List.cartesian_product widths cells) ~f:(fun (bits, cell) ->
+      (not (accepts ~bits cell))
+      || List.for_all (subset_sums cell) ~f:(fun s -> representable ~bits s));
+  p_all "exact_partials accepts some of those cells, and refuses some, at every width" widths
+    ~f:(fun bits ->
+      List.exists cells ~f:(accepts ~bits) && List.exists cells ~f:(fun c -> not (accepts ~bits c)));
+  p_all
+    "exact_partials' bound is tight: it accepts 2^p grains and refuses 2^p + 1, whose sum is \
+     inexact at p bits"
+    [ 3; 5; 8; 11; 24 ] ~f:(fun bits ->
+      let top = Float.ldexp 1. bits in
+      accepts ~bits [ top -. 1.; 1. ]
+      && (not (accepts ~bits [ top; 1. ]))
+      && not (representable ~bits (top +. 1.)));
+  p
+    "exact_partials refuses mixed signs even where every partial sum is exact (gfx11's WMMA \
+     premise)"
+    ((not (accepts ~bits:24 [ 1.; -1. ])) && not (accepts ~bits:24 [ 0.5; 0.25; -0.125 ]));
+  p "exact_partials reads zeros as signless, and an empty or all-zero cell as exact"
+    (accepts ~bits:8 [ 1.; 0.; 2. ]
+    && accepts ~bits:8 [ -1.; -0.; -2. ]
+    && accepts ~bits:8 []
+    && accepts ~bits:8 [ 0.; -0. ]);
+  p "exact_partials refuses a non-finite product"
+    ((not (accepts ~bits:24 [ 1.; Float.infinity ])) && not (accepts ~bits:24 [ Float.nan ]));
+  p "exact_partials refuses a width outside 1 .. 52, and takes both ends"
+    (refuses (fun () -> accepts ~bits:0 [ 1. ])
+    && refuses (fun () -> accepts ~bits:53 [ 1. ])
+    && accepts ~bits:1 [ 1.; 1. ]
+    && accepts ~bits:52 [ 1. ]);
+  p "grain_exponent is the weight of the lowest set bit, and none for zero"
+    (List.equal (Option.equal Int.equal)
+       (List.map [ 0.375; 6.; 1.; -0.75; 0x1p-20; 0.; Float.nan ] ~f:Ll_test.grain_exponent)
+       [ Some (-3); Some 1; Some 0; Some (-2); Some (-20); None; None ]);
+  (* The ledger's own operands: [schedule_mma_matmul]'s bf16 cycles pass at bf16, while the same B
+     cycle recentred on zero (values -1 .. 1), the shape of the signed operands gh-ocannl-1432
+     retired, is refused for its sign alone — it still passes the bound. *)
+  let n = 32 in
+  let a = Ll_test.cycle ~dims:[| n; n |] ~modulus:3 ~offset:0. ~stride:0.25 in
+  let b ~offset = Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset ~stride:0.5 in
+  let products ~offset = Ll_test.matmul_products ~m:n ~n ~k:n a (b ~offset) in
+  p_all "schedule_mma_matmul's bf16 operands keep every cell exact in bf16" (products ~offset:0.)
+    ~f:(accepts ~bits:8);
+  p_exists "their cycle recentred on zero is refused at bf16" (products ~offset:(-2.)) ~f:(fun c ->
+      not (accepts ~bits:8 c));
+  p_all "and it is the sign that refuses it: the magnitudes still fit bf16" (products ~offset:(-2.))
+    ~f:(fun c -> accepts ~bits:8 (List.map c ~f:Float.abs))

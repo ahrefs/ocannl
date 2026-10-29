@@ -718,25 +718,15 @@ let () =
   let hb = 2 and eb = 16 in
   let wb_f = Ll_test.cycle ~dims:[| jj; hb; eb |] ~modulus:5 ~offset:(-5.) ~stride:0.5 in
   let attb_f = Ll_test.cycle ~dims:[| bb; ss; hb; eb |] ~modulus:3 ~offset:1. ~stride:0.125 in
-  (let products =
-     List.concat_map (List.range 0 jj) ~f:(fun j ->
-         List.concat_map
-           (List.range 0 (bb * ss))
-           ~f:(fun bs ->
+  p_all
+    "out_proj bf16 inputs: every cell's products share a sign and every partial sum is exact in \
+     bf16"
+    (List.concat_map (List.range 0 jj) ~f:(fun j ->
+         List.init (bb * ss) ~f:(fun bs ->
              List.init (hb * eb) ~f:(fun t ->
                  let h = t / eb and e = t % eb in
-                 wb_f [| j; h; e |] *. attb_f [| bs / ss; bs % ss; h; e |])))
-   in
-   let sums =
-     List.chunks_of products ~length:(hb * eb) |> List.map ~f:(List.sum (module Float) ~f:Fn.id)
-   in
-   p_all "out_proj bf16 inputs: every product is a negative multiple of 1/16" products ~f:(fun x ->
-       Float.(x < 0.) && Float.is_integer (x *. 16.));
-   (* With one sign, every partial sum of a cell -- in any association -- is a multiple of 1/16 no
-      larger in magnitude than the cell's full sum; at most 16 (256 sixteenths), that needs at most
-      8 significant bits, which bf16 holds. *)
-   p_all "out_proj bf16 inputs: every cell's sum is at most 16 in magnitude, so exact in bf16" sums
-     ~f:(fun x -> Float.(abs x <= 16.)));
+                 wb_f [| j; h; e |] *. attb_f [| bs / ss; bs % ss; h; e |]))))
+    ~f:(Ll_test.exact_partials ~sig_bits:8);
   let wb () = NTDSL.init ~l:"cn_wb" ~prec:Ir.Ops.bfloat16 ~o:[ jj ] ~i:[ hb; eb ] ~f:wb_f () in
   let attb () =
     NTDSL.init ~l:"cn_attb" ~prec:Ir.Ops.bfloat16 ~b:[ bb; ss ] ~o:[ hb; eb ] ~f:attb_f ()
