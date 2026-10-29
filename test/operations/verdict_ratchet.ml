@@ -5379,8 +5379,12 @@ let run_ambiguous_remedy_controls () =
 let base_dir = Dune.base_dir
 let repo_relative = Dune.repo_relative
 
+(* The sources arrive as a `@<path>` response file: the list outgrew a Windows command line
+   (gh-ocannl-1720); see [Test_utils.Scan_argv]. *)
+let argv = Test_utils.Scan_argv.expand Stdlib.Sys.argv
+
 let () =
-  (match Option.bind (List.nth (Array.to_list Stdlib.Sys.argv) 1) ~f:refusal_fixture with
+  (match Option.bind (List.nth (Array.to_list argv) 1) ~f:refusal_fixture with
   | None -> ()
   | Some source ->
       let claims = quantified_claims (Sources.structure_of source) in
@@ -5390,14 +5394,14 @@ let () =
       List.iter claims ~f:(fun claim ->
           Verdict.fail (quantified_failure "control_fixture.ml" claim));
       Stdlib.exit 1);
-  if Array.length Stdlib.Sys.argv < 2 then (
-    eprintf "Usage: %s <workspace_root> <source...>\n" Stdlib.Sys.argv.(0);
+  if Array.length argv < 2 then (
+    eprintf "Usage: %s <workspace_root> <source...>\n" argv.(0);
     Stdlib.exit 1);
-  let base = base_dir Stdlib.Sys.argv.(1) in
+  let base = base_dir argv.(1) in
   (* Reported repository-relative, opened as dune handed them over: the working directory is the
      rule's own, deep in the build tree. *)
   let arguments =
-    Array.to_list (Array.subo Stdlib.Sys.argv ~pos:2)
+    Array.to_list (Array.subo argv ~pos:2)
     |> List.map ~f:(fun path -> (repo_relative base path, path))
   in
   let on_disk = Map.of_alist_reduce (module String) arguments ~f:(fun first _ -> first) in

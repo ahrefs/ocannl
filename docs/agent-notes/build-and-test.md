@@ -1522,7 +1522,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   and dune has no boundary-preserving expansion, where argv preserved boundaries. It is given up
   loudly — every word of a response file is a dependency dune materialized, so `Scan_argv.expand`
   refuses a word that names nothing on disk rather than scanning two phantoms in place of one file.
-  The repository has no such path today.
+  The repository has no such path today. The scans still expanding `%{deps}` into argv keep
+  growing toward the cap: `verdict_ratchet` crossed it in 2026-10, a day after measuring 32.5K
+  characters (gh-ocannl-1720).
 - A Windows checkout with `core.symlinks=false` (git's default there without Developer Mode) writes
   every git symlink as a small TEXT FILE holding the link target. The repository has around twenty —
   `docs/in-progress/` and `docs/research/` are views onto `docs/proposals/` — so any scan that reads
@@ -2328,7 +2330,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   ~backend_name`, called before the first compile, empties this executable's own subdirectory, so
   existence IS freshness — no mtime, no clock granularity. What licenses that sweep is narrower than
   "the directory is scoped": only the DEFAULT, executable-derived subdirectory is inherently
-  process-private, since dune runs one process per executable. Any configured `build_files_prefix`
+  process-private, since dune runs one process per executable -- unless a second stanza runs the
+  SAME executable (a `-tf32` rerun, a mode argument). Those stanzas share the subdirectory and must
+  share a dune `(locks <exe>)`, or one run's `init` sweeps the other's artifacts mid-run: on
+  Windows the delete is refused while the kernels are loaded, and elsewhere it succeeds and the
+  swept run fails to compile or read (`cc_kept_library`; `schedule_conv_gemm`, gh-ocannl-1720).
+  Any configured `build_files_prefix`
   is refused outright — a second executable can be given the same prefix, so deleting there is
   unsafe, and without deletion a deterministic compile's re-emitted identical kernel is
   indistinguishable from a stale one (deletion is the only write signal that does not depend on
