@@ -7,6 +7,234 @@ commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue 
 
 ## [Unreleased]
 
+## [1.1.3] -- 2026-10-31
+
+> The training experience a newcomer meets. A training loop can stop and resume in a fresh
+> process with a bit-identical continuation (`Ocannl.Checkpoint`). Optimizer state is recognized
+> from the update that carries it, not from a naming convention. A context reads a virtual node by
+> recomputing it, and refuses an unreadable one with a classified reason. Plots gain tick labels
+> and legends. Compiling a tensor's code twice in one lineage, and a backprop whose upstream
+> gradient no routine computes, are refused instead of silently dropping gradient. The headline
+> number comes from beyond the milestone: per-nest cc parallelism makes the untuned
+> `cifar_resnet` cc step 2.2–3.65× faster on three CPUs. The nulls: the small `mlp_bn` step
+> regressed about 15% on an M4 Max, the new cost-model terms moved no measured pick under the
+> seeded default, and seeded singles bought about 2.6% on one HIP cell. Experiment tracking
+> (gh-ocannl-122) moved to v1.2.2, and cumulative/top-k operations (gh-ocannl-952) to v1.2.
+
+### Added
+
+- `Ocannl.Checkpoint` resumes training (gh-ocannl-96):
+  - `training_state ~routines loss` collects the loss's parameters plus everything a compiled
+    routine carries between runs, such as optimizer moments, derived from the lowered code.
+  - `save` writes that state and a `progress` record (step, epoch, data position, an optional
+    `Stdlib.Random.State.t`, free-form `extra` pairs) to one atomic `Persistence` file.
+  - `restore` refuses a state set different from the one saved. Device randomness is
+    counter-based, so a resumed run keeps its seed and derives counters from the restored step.
+
+  Guide: `docs/tensors_and_contexts.md` § Stopping and Resuming Training.
+- Virtual nodes are readable from a `Context` by recomputation (gh-ocannl-777). `Context.to_host`
+  and `get_values` compile and run a throwaway routine that recomputes the node from the reading
+  context. `Context.observability` answers in advance, without compiling: stored, host-initialized,
+  recomputable, or refused as needing another context, reading routine-local scratch, an aliased
+  buffer, a merge buffer or a launch index, or not computed by any routine of the lineage. A
+  refused read raises a `User_error` with that reason; `Tensor.print` and `Train.printf` show it
+  as a placeholder such as `<unobservable: reads Local h>` or `<not-computed>`.
+- `PrintBox_utils.plot` labels intermediate ticks on both axes, takes
+  `~legend:[(marker, description); ...]`, and puts the y-axis label above the plot
+  (gh-ocannl-103).
+- Launch values: `?launch_values` on `Train.run_once`, `forward_once`, `update_once` and
+  `Parallel.data_parallel`, whose handle gains `set_launch_value` (gh-ocannl-1629).
+- Einsum concatenation works on the operand side, for extraction (`p^o => o`) and replacement
+  (`a => a^b`), and integer components such as `3^o => o` parse (gh-ocannl-1656).
+- Kernel code caches, so a tuning candidate recompiles only the kernels it changed:
+  - CUDA (`cuda_kernel_cache_mib`, default 64) and cc (`cc_kernel_cache_mib`, default 256) join
+    HIP's, and cache keys ignore the names a kernel binds and a segment's position
+    (gh-ocannl-1529, gh-ocannl-1525).
+  - Metal keeps compiled libraries and pipeline states (`metal_kernel_cache_mib`, default 64)
+    (gh-ocannl-1605).
+  - Large first compiles run concurrently: CUDA splits them into up to `cuda_compile_programs`
+    nvrtc programs, and cc into up to `cc_compile_jobs` translation units (gh-ocannl-1603).
+- `gpu_default_seed_narrow_storage` (default `false`; on under `approximate`, pinned off under
+  `reproducible`) seeds the untuned CUDA/HIP default into contractions whose accumulator is wider
+  than their storage, such as bf16 gradients (gh-ocannl-1405).
+- Tuning search:
+  - Beam finals re-time near-tie contenders together before crowning
+    (`autotune_finals_margin`, default 0.1), and the composite playoff swaps an alternate only if
+    it wins a shared finals (gh-ocannl-1635, gh-ocannl-1665).
+  - `autotune_seeded_singles` (default `true`): on CUDA and HIP, per-segment singles are timed
+    inside the seeded untuned plan. Stored schedules re-tune once (gh-ocannl-1664).
+  - `autotune_strict_replay` (default `false`) rebuilds each fissioned candidate from its saved
+    form after linking and fails the search on a difference (gh-ocannl-1560).
+- `Context.link_floor` and `Context.probe_link_floor` plan and trial-allocate the device memory
+  every schedule of a lowering needs. `Autotune.tune` refuses a whole search only when that floor
+  does not fit, including under `buffer_aliasing` (gh-ocannl-1554).
+- Ranking-score terms for launch fill (`model_multiprocessors`, read from IOKit on Apple silicon;
+  `model_fill_threads`), tile-MMA and device-gather rates (`model_mma_rate`,
+  `model_device_gather_rate`), and a serial kernel's operand re-reads past a configured cache
+  capacity. Search bounds price overlapping convolution windows, so conv searches prune more
+  (gh-ocannl-1479, gh-ocannl-1495, gh-ocannl-1638, gh-ocannl-1633, gh-ocannl-1601).
+- Diagnostics:
+  - `log_config_json` (default `false`) prints each resolved setting to stderr as one JSON line;
+    `Utils.resolved_config ()` returns the same records (gh-ocannl-1566).
+  - `Context.routine.grid` records whether each outermost cc `Grid` loop rendered pool-parallel
+    or serial, and why (gh-ocannl-1668).
+  - Under `autotune_log`, an untuned compile names the gate that decided seeding
+    (gh-ocannl-1641). `Autotune.report` gains finals, re-timed, hopeless-window and dispersion
+    fields (gh-ocannl-1632, gh-ocannl-1527, gh-ocannl-1558).
+  - `Tnode.label_name` names a node from its label alone, stable where `debug_name` is not
+    (gh-ocannl-1606).
+- Benchmark drivers: a shared hermetic cell runner (`benchmarks/cells.py`) and a two-revision A/B
+  driver (`benchmarks/ab.py`), one result reader (`bench_output.py`), cells that record a
+  shipped-untuned substitution and their GPU co-tenants, and median-with-range re-timing
+  (gh-ocannl-1565, gh-ocannl-1443, gh-ocannl-1559, gh-ocannl-1521, gh-ocannl-1520,
+  gh-ocannl-1524, gh-ocannl-1490, gh-ocannl-1557).
+
+### Changed
+
+- Persistent state is declared by its update (gh-ocannl-793). A node a routine reads at its own
+  store position before writing it, as `=:` reading its own left-hand side or a non-clearing `=+`
+  does, is read-before-write `On_device`, never virtual. Optimizer moments and momentum need no
+  naming convention, and `Train.sgd_one`'s label match is gone. A virtual node with no stored
+  computation is refused with its cause and remedy, not as "Stale optimize_ctx".
+- Printing a tensor no routine computed shows `<not-computed>`. It used to run the tensor's
+  forward code, and parameter initialization, as a side effect of printing (gh-ocannl-777).
+- Routine composition is checked per compilation lineage (gh-ocannl-1724):
+  - Compiling a tensor's code twice along one threaded context, forward code included, is
+    refused, naming the fragment and the earlier routine. `Context.run` the first routine again,
+    or compile from an older context; siblings never collide.
+  - A routine whose backprop needs an upstream gradient that no routine of its own lineage
+    computes is refused at run, naming any sibling that does and the fix; a sibling never
+    satisfies it. Terms, parameters included, create no such requirement.
+  - `Train.forward_once` no longer discards backprop code, and `*_once` now simply means compile
+    and run one time. A later loss whose backprop reads a leaf the once-run left routine-local is
+    refused with a named fix instead of silently training nothing; with the leaf materialized it
+    trains like a fresh graph.
+- A launch parameter (a static index, batch-slice index or symbolic extent) starts unassigned, and
+  a routine with one unassigned is refused before it compiles or runs, naming each. It used to run
+  at index 0; code that means 0 must say so (gh-ocannl-940, gh-ocannl-1629).
+- The default cc schedule parallelizes each top-level nest on its own, when one fork-join does at
+  least `cpu_schedule_min_work` scalar updates (default 16384). That key replaces the element-count
+  `cpu_schedule_min_parallel`. Below `cc_grid_min_updates` (default 16384) a top-level `Grid`
+  launch renders serially, so a small kernel no longer pays a fork-join per call (gh-ocannl-1458,
+  gh-ocannl-1564).
+- cc renders value-dependent selects (`where`, and the ReLU, max-pool and saturation gates of
+  backward passes) without branches when both arms are safe, so step time no longer follows
+  activation sparsity; values are bitwise unchanged. On x86 gcc, every `cc_backend_fp_contract`
+  mode but `off` makes packed matmul seeds round like the serial loop (gh-ocannl-1622,
+  gh-ocannl-1660, gh-ocannl-1682).
+- Capture references and row equations:
+  - A capture reference shared by two operations, or a pair of row references passed to
+    `Shape.set_equal`, equates them as rows with the same axes, whatever the solver resolved
+    first (gh-ocannl-1545, gh-ocannl-1617).
+  - A capture solved to a symbolic extent records the symbol at closure, and a capture a closed
+    inference left without a value is refused with a `Row.Shape_error` when later related, instead
+    of the constraint being dropped (gh-ocannl-1616, gh-ocannl-1655).
+- A padded (`=+`) window in an einsum result slot, a padded transposed convolution, is refused at
+  shape inference. The message and `docs/syntax_extensions.md` give the two-step recipe: the full
+  transposed convolution, then a crop (gh-ocannl-1550, gh-ocannl-1619).
+- Tuning budgets: `autotune_budget_seconds` counts the base compile, reserves the winner's
+  recompile, uses a cache-aware compile estimate, and stops timing once the budget is spent. On
+  slow HIP candidates it used to overshoot badly (gh-ocannl-1556, gh-ocannl-1604, gh-ocannl-1667).
+- Tuning spends less per candidate: a search lowers its routine once, a timing window is cut early
+  once it is hopeless, a slow GPU single skips the depth-2 probe, and on cc a slow serial baseline
+  stops sampling after about 3 s (gh-ocannl-1526, gh-ocannl-1527, gh-ocannl-1627, gh-ocannl-1666).
+- On CPU backends, a timing window dispersed by a many-core routine's own variance is admitted
+  unless a host-load reading shows a co-tenant, so such searches cache again (gh-ocannl-1558).
+- `model_default` ranks per segment on the search's own segmentation (gh-ocannl-1512).
+- Generated kernels name tensor nodes so that labels like `linux`, `unix` or `uint4`, or labels
+  in C's reserved namespace, compile on every backend (gh-ocannl-1338).
+- Host reads and writes allocate a constant amount whatever the cell count. The callbacks of
+  `Ndarray.init_array` and `fold_bigarray` receive one reused index array: copy it to keep it
+  (gh-ocannl-1333).
+- `Low_level.optimize` refuses an operand precision annotation it cannot honor, naming the node;
+  it used to ignore it silently (gh-ocannl-1709).
+- A host refusal of a library the cc backend just built (code signing, system policy) is reported
+  as an environment refusal quoting the loader, not as an OCANNL symbol bug (gh-ocannl-1717).
+- `Context` refuses more lifecycle misuse with a `Utils.User_error`: an entry point on a context
+  whose ancestor was released, and a read-only input never written in its lineage
+  (`Ir.Tnode.mark_zero_valid` marks a validly zero one) (gh-ocannl-1462).
+
+### Retired API
+
+- `Train.ensure_printable`, `Context.register_for_print` and the global `for_print_proxies` table:
+  reads recompute instead (gh-ocannl-777).
+- `Tensor.discard_backprop_code` and the `Discarded` handout (gh-ocannl-1724).
+- `Shape.update_step`, `Shape.delayed_var_ref` and the `Ir.Indexing.variable_ref` record are
+  private: build them with `Shape.make_update_step`, `Shape.get_variable_ref` and
+  `Ir.Indexing.variable_ref`, and solve the last with `Ir.Indexing.set_solved_dim` or
+  `set_solved_sym` (gh-ocannl-1573).
+
+### Fixed
+
+- Tuning trains nothing it should not: a search restores its lineage's parameters, optimizer
+  buffers and counters before every timing window and at the end. Candidates used to be timed on
+  drifting weights, and a search without `timing_ctx` trained the caller's context
+  (gh-ocannl-1621).
+- A second `Autotune.tune` of a routine replays the stored winner even when a link in between
+  proposed node value bounds (gh-ocannl-1614).
+- `Fuse_epilogue` no longer fuses a k-split matmul whose accumulator is written again after the
+  fused site; a tuned `transformer_names` embedding used to drop tokens (gh-ocannl-1670).
+- Pad-masked tensor-core sites on CUDA compute the right forward, fixing wrong tf32 conv seeds on
+  `cifar_resnet` (gh-ocannl-1598).
+- Routine-local scratch across a lineage: capture walks refuse only the consumer of an inherited
+  `Local` or uninlinable read and no longer replay an accumulation twice; reads covered by the
+  routine's own writes, or only in a dead arm, compile; a training step recompiled in its own
+  lineage compiles; a stored template over uninitialized scratch is refused instead of computing
+  NaN (gh-ocannl-1551, gh-ocannl-1620, gh-ocannl-1645, gh-ocannl-1646).
+- Recompiles in one lineage no longer stack copies of each virtual node's computation, and long
+  merge loops and copy chains keep the ledger and lifecycle chain bounded. Independently created
+  contexts share read-only constants safely: a read of one another root overwrote is refused
+  (gh-ocannl-1653, gh-ocannl-1654, gh-ocannl-1623).
+- Einsum windows: affine offsets past the extent, where result writes were silently dropped, are
+  refused, and offset specs parse; dilated padded windows are centered on the dilated kernel span;
+  a one-operand padded max window with a captured kernel differentiates (gh-ocannl-1618,
+  gh-ocannl-1657, gh-ocannl-1691).
+- A scalar node written at a fixed index and read through a one-iteration loop no longer raises in
+  `update_memory_mode` (gh-ocannl-1690).
+- cc puts large `Local` arrays on the heap past a stack budget instead of segfaulting a worker's
+  stack (gh-ocannl-1669). Tuned cc matmul search no longer offers `mma-cpu` sketches that fail
+  validation (gh-ocannl-1561).
+- Float special values under fast math:
+  - HIP `sin`/`cos` of ±inf return NaN, `sqrt`/`rsqrt` keep subnormals, and `fmod` of zeros or
+    infinities returns NaN (gh-ocannl-1336, gh-ocannl-1684);
+  - CUDA `pow` returns C's results at ±1, ±inf and NaN; Metal `fmod` is the precise one
+    (gh-ocannl-1684, gh-ocannl-1515);
+  - Metal bf16 storage, copies and widening loads keep subnormals; arithmetic flushes them
+    (gh-ocannl-1516);
+  - float `Mod` compiles on cc and at half precision on CUDA and HIP (gh-ocannl-1684).
+- On Metal, byte counters from 0x80 up are no longer sign-extended into RNG counters, so their
+  draws match other backends (gh-ocannl-1580).
+- Metal routine logging no longer crashes the host: messages are buffered natively and drained at
+  `await` (gh-ocannl-1594).
+- With `debug_log_to_stream_files=true`, CUDA and HIP device `printf` reaches the stream files and
+  never stdout (gh-ocannl-1636).
+- The device-init watchdog covers HIP's driver init when a compile forces it first, and a region
+  inherited across `fork` no longer disarms the child's (gh-ocannl-1446). A failed device
+  allocation's unwind frees every pool (gh-ocannl-1555). A tensor node header's `mem in bytes`
+  prints whenever the dims are resolved (gh-ocannl-1369).
+
+### Measured performance and limitations
+
+**cc parallelism** (untuned step p50, base vs per-nest schedule): `cifar_resnet` goes from 403.6
+to **110.5 ms (3.65×)** on an M4 Max, 339.6 to 153.3 ms on the x86 RTX box and 338.1 to 149.9 ms
+on a Zen 5 box; `gpt2_mini_train` gains 2.4× on the M4 Max. The small `mlp_bn` step's median
+regressed about 15% on the M4 Max. Branch-free selects then made the `cifar_resnet` cc step
+independent of the weights' activation sparsity. A padded serial packed GEBP now costs 4% over a
+dividing size at m = k = 500, down from 18% (cc, AVX2; gh-ocannl-1563). Each untuned cc direct
+conv is a scalar multiply-add chain the C compiler cannot vectorize without reassociation, which
+is why Winograd's fewer, vectorizable multiplies gave 1.1.2's 2.22× step; tuning or
+`winograd_conv` remains the cure (gh-ocannl-1549).
+
+**Search cost.** Kernel caches cut a candidate's compile: on an M4 Max cc from 7.45 to 4.11 s,
+on CUDA (`gpt2_mini_train` batch 8) from 3.46 to 1.73 s, and on Metal from 1.6–2.1 s to 0.6 s, so
+the same budgets time far more candidates. The tuned steps did not get faster from it.
+
+**Nulls.** Under the seeded untuned default, the launch-fill, MMA-rate and re-read terms of the
+ranking score left every measured pick unchanged; they help `model_default` only with seeding
+off. Seeded singles measured a tuned HIP `gpt2_mini_train` batch-8 step about 2.6% faster. Under
+the GPU backends' fast math, the saturation gate and HIP's NaN-condition select still disagree
+with cc on special values; the tests gate that divergence (gh-ocannl-1647).
+
 ## [1.1.2] -- 2026-10-25
 
 > Performance beyond transformers, plus a much faster untuned GPU training step. A reduced
