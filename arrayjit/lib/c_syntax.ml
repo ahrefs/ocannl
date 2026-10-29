@@ -163,6 +163,15 @@ let mma_census =
   in
   fun () -> Stdlib.Domain.DLS.get key
 
+(* gh-ocannl-1707: the persistent-fragment scopes a compile rendered through the backend's fragment
+   hook ([render_mma_fragment_scope]), one kernel name per scope. The per-statement census above
+   cannot tell them apart: a [Tile_mma] inside such a scope, one aliased back to its target when the
+   hook declines, and one over a shared pad-masked fragment all record [Mma_intrinsics]. Bracketed
+   with it by {!with_census}. *)
+let mma_scope_census =
+  let key : string list ref Stdlib.Domain.DLS.key = Stdlib.Domain.DLS.new_key (fun () -> ref []) in
+  fun () -> Stdlib.Domain.DLS.get key
+
 let is_tensorized_rendering = function
   | Mma_intrinsics | Mma_intrinsics_ldmatrix | Mma_register_tiled -> true
   | Mma_scalar_fallback -> false
@@ -200,13 +209,18 @@ type mma_summary = {
   tensorization : tensorization;
   statements : int;  (** [Tile_mma] statements emitted: [List.length renderings]. *)
   scalar_fallbacks : int;  (** Of those, how many rendered as the lane-0 scalar fallback. *)
+  fragment_scopes : int;
+      (** gh-ocannl-1707: persistent-fragment regions ([Low_level.fragment_region]) the backend's
+          fragment hook rendered, the accumulator register-resident across the whole reduction. Not
+          counted: a region whose hook declined (its [Tile_mma]s alias the target per statement, or
+          fall back), and a pad-masked contraction's fragment, which is never marked as one. *)
 }
 [@@deriving sexp_of]
 (** What a compile's {!mma_census} says about the routine it produced (gh-ocannl-626). Derived once,
     where the routine is compiled, so that "did this tensorize" is a property of the compiled
     routine rather than of whichever call site remembered to bracket the global. *)
 
-let summarize_census renderings =
+let summarize_census ?(fragment_scopes = 0) renderings =
   let statements = List.length renderings in
   let scalar_fallbacks =
     List.count renderings ~f:(fun (_, r) -> equal_mma_rendering r Mma_scalar_fallback)
@@ -216,12 +230,14 @@ let summarize_census renderings =
     else if scalar_fallbacks = statements then Scalar_fallback
     else Tensorized
   in
-  { renderings; tensorization; statements; scalar_fallbacks }
+  { renderings; tensorization; statements; scalar_fallbacks; fragment_scopes }
 
 let empty_mma_summary = summarize_census []
 
 let merge_mma_summaries summaries =
-  summarize_census (List.concat_map summaries ~f:(fun s -> s.renderings))
+  summarize_census
+    ~fragment_scopes:(List.sum (module Int) summaries ~f:(fun s -> s.fragment_scopes))
+    (List.concat_map summaries ~f:(fun s -> s.renderings))
 
 (** The one-line census a timing report prints beside a measurement (gh-ocannl-626): the
     {!tensorization} label first — a reader scanning a table for a mismatch reads that word, not a
@@ -256,15 +272,18 @@ let mma_summary_string summary =
     domain's brackets cannot replace or contribute to this domain's collection. *)
 let with_census f =
   let saved_enabled = !(mma_census_enabled ()) and saved_census = !(mma_census ()) in
+  let saved_scopes = !(mma_scope_census ()) in
   mma_census_enabled () := true;
   mma_census () := [];
+  mma_scope_census () := [];
   (* Nesting is additive, not shadowing: an enclosing collection (a bench bracketing several
      compiles, each of which collects its own summary) must still see the inner entries, or wrapping
      the compile path in this helper would silently empty every outer bracket. *)
   let restore () =
-    let inner = !(mma_census ()) in
+    let inner = !(mma_census ()) and inner_scopes = !(mma_scope_census ()) in
     mma_census_enabled () := saved_enabled;
-    mma_census () := if saved_enabled then inner @ saved_census else saved_census
+    mma_census () := if saved_enabled then inner @ saved_census else saved_census;
+    mma_scope_census () := if saved_enabled then inner_scopes @ saved_scopes else saved_scopes
   in
   let result =
     match f () with
@@ -274,8 +293,9 @@ let with_census f =
         raise e
   in
   let renderings = List.rev !(mma_census ()) in
+  let fragment_scopes = List.length !(mma_scope_census ()) in
   restore ();
-  (result, summarize_census renderings)
+  (result, summarize_census ~fragment_scopes renderings)
 
 (* {2 The peel census (gh-ocannl-733)}
 
@@ -3371,6 +3391,7 @@ module C_syntax (B : C_syntax_config) = struct
     peel_census : (string * peel_site) list ref;
     peel_census_enabled : bool ref;
     mma_census : (string * mma_rendering) list ref;
+    mma_scope_census : string list ref;
     mma_census_enabled : bool ref;
     current_placements : Tn.Placements.t;
         (** Set by [compile_proc]: the per-compilation-lineage placement resolution
@@ -5146,8 +5167,10 @@ module C_syntax (B : C_syntax_config) = struct
                       | Some _ -> Some (render_with (Active_target (fragment, target_op)))
                       | None -> None)
             in
-            if Option.is_some fragment_doc then
+            if Option.is_some fragment_doc then (
               ctx.emitted_mma_triples := (d_prec, a_prec, b_prec) :: !(ctx.emitted_mma_triples);
+              if !(ctx.mma_census_enabled) then
+                ctx.mma_scope_census := ctx.current_kernel_name :: !(ctx.mma_scope_census));
             match rendered with
             | Some doc ->
                 ctx.rendered_simdgroup_fragments :=
@@ -8324,6 +8347,7 @@ module C_syntax (B : C_syntax_config) = struct
         accum_scope_ids = Hash_set.copy accum_scope_ids;
         mma_census_enabled = ref !(mma_census_enabled ());
         mma_census = mma_census ();
+        mma_scope_census = mma_scope_census ();
         peel_census_enabled = ref !(peel_census_enabled ());
         peel_census = peel_census ();
         volatility_census_enabled = ref !(volatility_census_enabled ());

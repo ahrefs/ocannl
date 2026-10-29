@@ -11,4 +11,5 @@ the negative control detects the old shared zero-state reset: true
 a child domain summarizes only its own renderings: true
 a main-domain census excludes a child domain's renderings: true
 main-domain attribution survives overlapping collection brackets: true
+a nested census counts its own persistent-fragment scopes, and the enclosing one counts them too: true
 suspending the outer peel census does not suspend a nested compile: true
