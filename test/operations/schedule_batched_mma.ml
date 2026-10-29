@@ -359,28 +359,35 @@ let () =
      so is every association of the sum, the tensor unit's included -- one sign is what makes that
      hold on gfx11 (gh-ocannl-1420). *)
   let ss2 = 32 and kk2 = 32 and jj2 = 32 in
-  let xb =
-    bf16_init ~l:"xb" ~o:[ bt; ss2; kk2 ]
-      ~f:(Ll_test.cycle ~dims:[| bt; ss2; kk2 |] ~modulus:3 ~offset:0. ~stride:0.25)
-  in
-  let wb =
-    bf16_init ~l:"wb" ~o:[ kk2; jj2 ]
-      ~f:(Ll_test.cycle ~dims:[| kk2; jj2 |] ~modulus:5 ~offset:0. ~stride:0.5)
-  in
+  let xb_f = Ll_test.cycle ~dims:[| bt; ss2; kk2 |] ~modulus:3 ~offset:0. ~stride:0.25 in
+  let wb_f = Ll_test.cycle ~dims:[| kk2; jj2 |] ~modulus:5 ~offset:0. ~stride:0.5 in
+  let attb_f = Ll_test.cycle ~dims:[| bt; ss2; hh; kk2 |] ~modulus:3 ~offset:0. ~stride:0.25 in
+  let vb_f = Ll_test.cycle ~dims:[| bt; kk2; hh; jj2 |] ~modulus:5 ~offset:0. ~stride:0.5 in
+  (* The premise above, read off the init functions: the cells of "bsk;kj=>bsj" (the batch and row
+     axes flattened into the rows of a plain matmul) and of "bihk;bkhj=>bihj". *)
+  p_all
+    "bf16 inputs of both batched shapes: every cell's products share a sign and every partial sum \
+     is exact in bf16"
+    (Ll_test.matmul_products ~m:(bt * ss2) ~n:jj2 ~k:kk2
+       (fun bs_k -> xb_f [| bs_k.(0) / ss2; bs_k.(0) % ss2; bs_k.(1) |])
+       wb_f
+    @ List.concat_map
+        (List.range 0 (bt * ss2 * hh))
+        ~f:(fun bih ->
+          let b = bih / (ss2 * hh) and i = bih / hh % ss2 and h = bih % hh in
+          List.init jj2 ~f:(fun j ->
+              List.init kk2 ~f:(fun k -> attb_f [| b; i; h; k |] *. vb_f [| b; k; h; j |]))))
+    ~f:(Ll_test.exact_partials ~sig_bits:8);
+  let xb = bf16_init ~l:"xb" ~o:[ bt; ss2; kk2 ] ~f:xb_f in
+  let wb = bf16_init ~l:"wb" ~o:[ kk2; jj2 ] ~f:wb_f in
   bf16_leg ~tag:"batched_lb" ~build:(fun () ->
       let%op t = xb +* "bsk;kj=>bsj" wb in
       Tn.update_prec t.Tensor.value Ir.Ops.bfloat16;
       t);
   (* The interior-batch shape: [h] sits between the tile roles, so [lda]/[ldb]/[ldd] are all
      [hh]-times the minor dim (64 here, against minor dims of 32). *)
-  let attb =
-    bf16_init ~l:"attb" ~o:[ bt; ss2; hh; kk2 ]
-      ~f:(Ll_test.cycle ~dims:[| bt; ss2; hh; kk2 |] ~modulus:3 ~offset:0. ~stride:0.25)
-  in
-  let vb =
-    bf16_init ~l:"vb" ~o:[ bt; kk2; hh; jj2 ]
-      ~f:(Ll_test.cycle ~dims:[| bt; kk2; hh; jj2 |] ~modulus:5 ~offset:0. ~stride:0.5)
-  in
+  let attb = bf16_init ~l:"attb" ~o:[ bt; ss2; hh; kk2 ] ~f:attb_f in
+  let vb = bf16_init ~l:"vb" ~o:[ bt; kk2; hh; jj2 ] ~f:vb_f in
   bf16_leg ~tag:"batched_ib" ~build:(fun () ->
       let%op t = attb +* "bihk;bkhj=>bihj" vb in
       Tn.update_prec t.Tensor.value Ir.Ops.bfloat16;

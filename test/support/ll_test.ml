@@ -317,6 +317,70 @@ let weighted ~weights ~modulus ~offset ~stride idcs =
     [test/operations/discriminating_values] pins each of those numbers. *)
 let drift ~dims = cycle ~dims ~modulus:13 ~offset:20. ~stride:0.015625
 
+(** {1 Exact reductions} *)
+
+(** [grain_exponent x] is the [e] of the largest power of two [2^e] that divides the nonzero finite
+    [x]: the weight of its lowest set significand bit, so [x] is an odd integer times [2^e]. [None]
+    for zero, which every power divides, and for a non-finite [x]. *)
+let grain_exponent x =
+  if Float.(x = 0.) || not (Float.is_finite x) then None
+  else
+    let m, e = Float.frexp (Float.abs x) in
+    (* [m] is in [0.5, 1), so [m * 2^53] is an integer below [2^53]: exact, and an OCaml [int]. *)
+    let bits = Float.to_int (Float.ldexp m 53) in
+    Some (e - 53 + Int.ctz bits)
+
+(** [exact_partials ~sig_bits products] is whether a reduction summing [products] returns their
+    EXACT sum whatever association it chooses, at an accumulator of [sig_bits] significant bits (24
+    for f32, 11 for f16, 8 for bf16), on a tensor unit whose exactness also needs one sign: gfx11's
+    WMMA returns the exact sum only when every product shares a sign (gh-ocannl-1420), and on an
+    inexact sum it is not correctly rounded (gh-ocannl-1509), so a HIP bitwise claim rests on both
+    conditions together (docs/agent-notes/backend-precision-and-simd.md). Derived from the products
+    themselves — a site passes the products of its own init functions ({!matmul_products}) rather
+    than restating their grid and range in prose (gh-ocannl-1693):
+
+    - every nonzero product has the same sign; and
+    - with [2^g] the finest grain of any product ({!grain_exponent}), the sum of their magnitudes is
+      at most [2^sig_bits] grains.
+
+    Then every partial sum, in any association (each is the sum of some subset of the products, a
+    single product included), is a multiple of [2^g] no larger in magnitude than the whole sum: an
+    integer count of grains at most [2^sig_bits], which [sig_bits] bits hold exactly.
+
+    It is SUFFICIENT, not necessary: [false] does not exhibit an inexact partial sum (a cell can
+    exceed the bound and still land only on representable values), so a claim that data DO leave
+    exactness — a discrimination claim — exhibits the crossing instead, as {!cycle}'s doc says.
+    Outside it: whether the operands are exact at their storage precision (an init value a narrow
+    format rounds is not the value the host multiplied, so that is the site's own claim), and the
+    exponent range (the grain has to be representable in the accumulator, which the small dyadic
+    data of these tests always are). The host computes each product in f64, exactly whenever the
+    operands' significant bits add up to at most 53, as two f32 values' do. [sig_bits] is at most
+    52, so the f64 sum of the magnitudes cannot round past the bound and accept a cell beyond it. *)
+let exact_partials ~sig_bits products =
+  if sig_bits < 1 || sig_bits > 52 then
+    invalid_arg (Printf.sprintf "Ll_test.exact_partials: ~sig_bits:%d is outside 1 .. 52" sig_bits);
+  let nonzero = List.filter products ~f:(fun x -> Float.(x <> 0.)) in
+  let grains = List.filter_map nonzero ~f:grain_exponent in
+  let one_sign =
+    List.for_all nonzero ~f:Float.is_positive || List.for_all nonzero ~f:Float.is_negative
+  in
+  match List.min_elt grains ~compare:Int.compare with
+  | None -> List.is_empty nonzero
+  | Some g ->
+      one_sign
+      && List.length grains = List.length nonzero
+      && Float.(ldexp (List.sum (module Float) nonzero ~f:abs) (Int.neg g) <= ldexp 1. sig_bits)
+
+(** [matmul_products ~m ~n ~k a b] is the cells of the product of an [m x k] operand by a [k x n]
+    one, row-major, each as the [k] products its reduction sums: [a [|i; kk|] *. b [|kk; j|]]. That
+    is the index order of the init functions of an [~o:[m] ~i:[k]] by [~o:[k] ~i:[n]] matmul, so a
+    site passes the [~f] it initialized its operands with, and a transposed or batched contraction
+    builds its cells by hand. *)
+let matmul_products ~m ~n ~k a b =
+  List.init (m * n) ~f:(fun t ->
+      let i = t / n and j = t % n in
+      List.init k ~f:(fun kk -> a [| i; kk |] *. b [| kk; j |]))
+
 (** {1 Optimization} *)
 
 (** [optimize_in ctx ~name llc] runs the backends' own pipeline ([analyze_proc] ->

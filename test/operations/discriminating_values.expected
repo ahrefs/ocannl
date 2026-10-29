@@ -21,3 +21,14 @@ every drift cell is exact in bf16: true
 a drift reduction leaves bf16 exactness within the extents these tests reduce: true
 every drift partial sum stays exact in f32: true
 the 16-wide row's first bf16-inexact partial sum is the eleventh, at 275/64: true
+exact_partials is sound: where it accepts a cell, every partial sum of every association is exact at that width: true
+exact_partials accepts some of those cells, and refuses some, at every width: true
+exact_partials' bound is tight: it accepts 2^p grains and refuses 2^p + 1, whose sum is inexact at p bits: true
+exact_partials refuses mixed signs even where every partial sum is exact (gfx11's WMMA premise): true
+exact_partials reads zeros as signless, and an empty or all-zero cell as exact: true
+exact_partials refuses a non-finite product: true
+exact_partials refuses a width outside 1 .. 52, and takes both ends: true
+grain_exponent is the weight of the lowest set bit, and none for zero: true
+schedule_mma_matmul's bf16 operands keep every cell exact in bf16: true
+their cycle recentred on zero is refused at bf16: true
+and it is the sign that refuses it: the magnitudes still fit bf16: true

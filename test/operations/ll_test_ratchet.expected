@@ -2,7 +2,7 @@ Source floor: test/ >= 200
 Source floor: arrayjit/test/ >= 20
 Adoption threshold: 1 record construction or 1 private traversal
 Ll_builders values outside the IR surface (adopt nothing): (none)
-Ll_test values outside the IR surface (adopt nothing): backend_accum_prec, base_ctx, blank, blind_axis, close, count, coverage_verified, cycle, cycle_flat, drift, flat, hooks_of, ignore1, max_modulus, no_hooks, place_residues, refused_as_local, same, sentinel, uncovered_residues, unflat, weighted
+Ll_test values outside the IR surface (adopt nothing): backend_accum_prec, base_ctx, blank, blind_axis, close, count, coverage_verified, cycle, cycle_flat, drift, exact_partials, flat, grain_exponent, hooks_of, ignore1, matmul_products, max_modulus, no_hooks, place_residues, refused_as_local, same, sentinel, uncovered_residues, unflat, weighted
 Adopted tests still hand-building IR (non-refusing census):
 arrayjit/test/test_cross_cse.ml -- records=2 traversals=2
 arrayjit/test/test_local_scope_init.ml -- records=6 traversals=0

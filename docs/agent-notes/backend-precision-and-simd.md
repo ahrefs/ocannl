@@ -1275,9 +1275,16 @@ files.
   neither** (gh-ocannl-1432; gh-ocannl-1457, backend enforcement of the licence, builds on this
   rule). The rule, as the sweep applied it:
   - *One sign.* Every product a HIP-tensorized reduction sums shares a sign (half and bf16 operands:
-    HIP tensorizes nothing else; f32 and fp8 decline to the scalar fallback). Say so in the data's
-    comment; derive it host-side where it is cheap (`schedule_contraction_nest`'s `out_proj bf16
-    inputs` claims compute it from the init functions).
+    HIP tensorizes nothing else; f32 and fp8 decline to the scalar fallback). Derive it host-side
+    with exactness in one claim, never in prose alone: `Ll_test.exact_partials ~sig_bits` over the
+    cells' products (`Ll_test.matmul_products` from the operands' init functions) accepts a cell
+    whose nonzero products share a sign and whose magnitudes sum to at most `2^sig_bits` of their
+    finest power-of-two grain, so every partial sum of every association is exact (gh-ocannl-1693;
+    prose rationales had the magnitudes wrong twice, gh-ocannl-1658). It is sufficient, not
+    necessary: a discrimination claim (the data DO leave a width) exhibits the inexact partial sum
+    instead. A bench without the per-cell products derives the same two conditions from the operand
+    range and keys the sign condition on the census: `schedule_bench` withholds its exact verdict
+    from a computation that rendered a tensor unit on HIP while its operands are signed.
   - *The contraction licence for two kernel shapes over inexact arithmetic.* HIP's clang
     `-ffast-math` contracts `acc + a * b` per kernel, so two kernel shapes (a seed and the default
     schedule, a fission against no fission) round differently whenever a product or partial sum is
@@ -1312,6 +1319,7 @@ files.
     carries further past their bounds). A new bound over inexact data starts from these modes, and
     from the probe's verdict on the box it runs on.
 - **The gh-ocannl-1432 sweep's ledger**, so the next audit of HIP tensorized claims starts from it.
+  Each bitwise leg below states its premise as an `exact_partials` claim (gh-ocannl-1693).
   Made bitwise with nonnegative data: `schedule_mma_matmul`'s bf16 legs (`bf32`, `bfu*`; the old
   1e-5/5e-2 HIP tolerances were measured on a signed `mbb`), its staged f16->f32 leg (`approx` on
   HIP), the Bf16_wide bound (its f32-ulp HIP slack is gone, and a bitwise claim against the
