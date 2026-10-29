@@ -1,6 +1,6 @@
 # OCANNL Roadmap
 
-**v1.1.3 released October 31, 2026: the training experience a newcomer meets — resumable checkpoints, persistent state declared by its update, virtual nodes readable by recomputation, plot legends, and refusals where gradient used to drop silently. Next: reusable tensor programs (v1.2, November 15, 2026).**
+**v1.1.3 released October 29, 2026: the training experience a newcomer meets — resumable checkpoints, persistent state declared by its update, virtual nodes readable by recomputation, plot legends, and refusals where gradient used to drop silently. Next: reusable tensor programs (v1.2, November 15, 2026).**
 
 This roadmap outlines the development plan for OCANNL through version 1.0 and beyond. Dates indicate **end of period** targets. Through v1.0 the schedule was pinned to conference deadlines; it is now project-internal, and the dates below are aspirational rather than external commitments.
 
@@ -486,7 +486,7 @@ Over 220 issues closed between the v1.1.1 tag and this one.
 
 ---
 
-## v1.1.3 — October 31, 2026 (released)
+## v1.1.3 — October 29, 2026 (released)
 **Theme: The training experience a newcomer meets**
 
 Renamed from v1.1.2 in the September 29 split, and cut on October 13 to what the v1.2

@@ -7,7 +7,7 @@ commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue 
 
 ## [Unreleased]
 
-## [1.1.3] -- 2026-10-31
+## [1.1.3] -- 2026-10-29
 
 > The training experience a newcomer meets. A training loop can stop and resume in a fresh
 > process with a bit-identical continuation (`Ocannl.Checkpoint`). Optimizer state is recognized
