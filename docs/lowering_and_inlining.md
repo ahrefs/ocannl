@@ -332,7 +332,8 @@ order, which is what decides whether a code can fire. The exit codes:
 - `11:already-non-virtual` — Tensor already marked non-virtual.
 - `12:no-setter` — No setter found.
 - `13:call-site-index-mismatch` — Index mismatch at a particular inlining site (per-site fallback to
-  materialization).
+  materialization). A producer `Fixed_idx 0` on an axis of extent 1 is not a mismatch against a
+  symbolic call index: both address the axis's only cell (gh-ocannl-1690).
 - `14:empty-inlined-body` — Empty computation list at inline time.
 - `19:declare-local` — `Declare_local` encountered during virtualization (see the note below: no
   longer defensive).

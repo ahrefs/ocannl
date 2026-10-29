@@ -200,6 +200,14 @@ files.
   `x[0] += a[s]` is rejected because the sibling read escapes (`Non_virtual 9`), and an accumulator
   read more than `virtualize_max_visits` times is capped (`1:visit-cap`) — a flippable policy
   prior, decided in `decide_placements` before any legality question is asked.
+- **A committed-virtual node has no consumption-time fallback** (gh-ocannl-1690):
+  `40:scalar-constexpr` commits a constant scalar `Virtual` in `decide_placements`, before any read
+  site is asked, so a `Non_virtual` from `instantiate_computations` against it cannot decline to
+  materialization — `Tn.Placements.update` raises "already virtual". Every in-bounds spelling of
+  its cell must be servable: on an extent-1 axis a producer `Fixed_idx 0` read at a symbolic index
+  (a one-iteration loop) is the same cell, which `same_unit_cell` accepts with no guard. A new
+  consumption-time refusal must not reach such a node; pinned by the `unit_axis_*` rows of
+  `test/operations/virtual_rejection_boundary.ml`, with executed parity.
 - **Where a virtualization candidate is refused is readable off its placement PROVENANCE, and four
   phases write into the same table** (gh-ocannl-658, pinned row by row in
   `test/operations/virtual_rejection_boundary.ml`): `decide_placements` applies the heuristic caps

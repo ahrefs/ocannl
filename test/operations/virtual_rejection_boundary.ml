@@ -368,6 +368,63 @@ let row_block_components () =
   row ~label:"block_components" ~llc ~cand:x ~out ~seed:[] ~expected:[| 1.; 2.; 20.; 21. |]
     ~verdict:Accepted
 
+(* gh-ocannl-1690: one cell, two spellings. On an axis of extent 1 a producer position [Fixed_idx 0]
+   and a read through a one-iteration loop address the same cell, so the read site is served with no
+   guard and no refusal. The consumer reads the candidate both ways -- [x[u]] under [for u = 0 to 0]
+   for cells [0..n-1], [x[0]] for cell [n] -- and adds [tick t], so every output cell names both the
+   producer's value and the consumer iteration that read it. [~committed] rows are constant
+   producers, which [decide_placements] commits virtual AHEAD of any read site
+   ([40:scalar-constexpr]): before the fix the loop read's [13:call-site-index-mismatch] tried to
+   retract that commitment and raised in [Tnode.update_memory_mode] instead of compiling. *)
+let unit_axis_row ~label ~x ~producer ~seed ~value ~committed =
+  let out = mk ~dims:[| n + 1 |] (label ^ "_out") in
+  materialize out;
+  let t = sym () and u = sym () in
+  let llc =
+    seq producer
+      (seq
+         (loop_n t n (loop ~upto:0 u (set out [| iter t |] (add (get x [| iter u |]) (tick t)))))
+         (set out [| fixed n |] (mul (c 2.) (get x [| fixed 0 |]))))
+  in
+  if committed then
+    p
+      (label ^ ": the candidate is committed virtual before any read site")
+      (Option.equal Ir.Tnode.equal_provenance
+         (rejection_code (optimize ~name:(label ^ "_probe") llc) x)
+         (Some (Ir.Tnode.Site "40:scalar-constexpr")));
+  row ~label ~llc ~cand:x ~out ~seed
+    ~expected:
+      (Array.init (n + 1) ~f:(fun i -> if i < n then value +. 1. +. Float.of_int i else 2. *. value))
+    ~verdict:Accepted
+
+(* The issue's shape: a constant written at [Fixed_idx 0]. *)
+let row_unit_axis_fixed_producer () =
+  let x = mk ~dims:[| 1 |] "ua_fixed_x" in
+  unit_axis_row ~label:"unit_axis_fixed_producer" ~x
+    ~producer:(set x [| fixed 0 |] (c 7.))
+    ~seed:[] ~value:7. ~committed:true
+
+(* The same producer position with a value read from an input: nothing commits it ahead of the
+   reads, so before the fix the loop read declined virtualization (13) rather than raising. The
+   value is a bare read so the node stays simple: a computed one ([2 + inp[0]]) is complex, and its
+   five reads trip the visit cap before any read site is asked. *)
+let row_unit_axis_computed_producer () =
+  let x = mk ~dims:[| 1 |] "ua_comp_x" and inp = mk ~dims:[| 1 |] "ua_comp_in" in
+  materialize inp;
+  unit_axis_row ~label:"unit_axis_computed_producer" ~x
+    ~producer:(set x [| fixed 0 |] (get inp [| fixed 0 |]))
+    ~seed:[ (inp, [| 7. |]) ]
+    ~value:7. ~committed:false
+
+(* The mirror spelling: the producer writes through the one-iteration loop, and the [Fixed_idx 0]
+   read binds its symbol. *)
+let row_unit_axis_loop_producer () =
+  let x = mk ~dims:[| 1 |] "ua_loop_x" in
+  let i = sym () in
+  unit_axis_row ~label:"unit_axis_loop_producer" ~x
+    ~producer:(loop ~upto:0 i (set x [| iter i |] (c 7.)))
+    ~seed:[] ~value:7. ~committed:true
+
 (* gh-ocannl-483 made this arm live: the algebraic rewrite tier runs on the raw lowered code BEFORE
    [Low_level.optimize], and [Online_softmax.hoist] declares its cached probability cell as a
    [Declare_local] beside the statement that consumes it. What the walk refuses is the CONSTRUCTOR,
@@ -434,6 +491,9 @@ let () =
   row_noninjective ();
   row_fixed_component ();
   row_block_components ();
+  row_unit_axis_fixed_producer ();
+  row_unit_axis_computed_producer ();
+  row_unit_axis_loop_producer ();
   row_hoisted_local ();
   row_scan_recurrence ();
   p_all "every phase-table entry is exercised by a row" phase_table ~f:(fun (site, _) ->

@@ -2943,13 +2943,30 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
       | Indexing.Fixed_idx _ | Indexing.Sub_axis -> false
       | Indexing.Concat _ -> false (* unreachable: rejected by check_idcs *)
     in
+    (* gh-ocannl-1690: an axis of extent 1 has one cell, so a producer position [Fixed_idx 0] there
+       addresses the same cell as every in-bounds symbolic call index -- typically a read through a
+       one-iteration loop. The two forms are equal: no guard, no refusal. (Refusing is not even
+       always possible: a constant producer is committed [Virtual] ahead of any read site, so a
+       [Non_virtual] here would try to retract that commitment.) A [Fixed_idx] call index other than
+       0 would read out of bounds, and stays a mismatch. *)
+    let dims = Lazy.force self.Tn.dims in
+    let same_unit_cell i (lhs_ind : Indexing.axis_index) (rhs_ind : Indexing.axis_index) =
+      i < Array.length dims
+      && dims.(i) = 1
+      && (match lhs_ind with Indexing.Fixed_idx 0 -> true | _ -> false)
+      &&
+      match rhs_ind with
+      | Indexing.Iterator _ | Indexing.Affine _ -> true
+      | Indexing.Fixed_idx _ | Indexing.Sub_axis | Indexing.Concat _ -> false
+    in
     let guards =
       Array.foldi def_args_arr ~init:[] ~f:(fun i guards lhs_ind ->
           if bound_pos.(i) then guards
           else
             let rhs_ind = call_args.(i) in
             let lhs' = subst env lhs_ind in
-            if Indexing.equal_axis_index lhs' rhs_ind then guards
+            if Indexing.equal_axis_index lhs' rhs_ind || same_unit_cell i lhs_ind rhs_ind then
+              guards
             else if depends_on_symbol lhs_ind then (lhs_ind, rhs_ind) :: guards
             else raise @@ Non_virtual "13:call-site-index-mismatch")
     in
