@@ -4905,10 +4905,18 @@ let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
         let kernel_size =
           match subst_dim ~keep_affine:true env kernel with
           | Var v as dim ->
+              (* gh-ocannl-1691: no operand axis carries the kernel, and a padded window's extent
+                 equation omits it, so nothing sized it. A captured, set kernel reaches here solved
+                 (the projection-local sizing constraints of [Shape.bind_delayed_vars_to_envs]). *)
+              let name = Option.value v.name ~default:(Dim_var.to_string v) in
+              let window = if use_padding then "a padded (=+) window's" else "the window's" in
               raise
               @@ Shape_error
-                   ( "projection_of_solved_dims: still not fully inferred for variable "
-                     ^ Sexp.to_string_hum ([%sexp_of: dim_var] v),
+                   ( [%string
+                       "the window kernel %{name} has no size: no operand axis carries it, and \
+                        %{window} extents do not determine it. Capture the kernel label and set it \
+                        (x ++ \"s, 2*o=+k => s, o\" [\"k\"], then Shape.set_dim k 3), or give the \
+                        window a kernel operand of known extent (x +* \"s, 2*o=+k; k => s, o\" w)"],
                      [ Dim_mismatch [ dim ] ] )
           | Dim { d; _ } -> d
           | Sym _ as dim ->

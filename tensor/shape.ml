@@ -2110,6 +2110,54 @@ let infer_equal (sh1 : t) (sh2 : t) =
     :: Row.Row_eq { r1 = sh1.output; r2 = sh2.output; origin = get_origin `Output }
     :: !active_constraints
 
+(** The ties of [product_space_shape]'s fresh re-elaboration to the operation's captures
+    (gh-ocannl-1691). The operand equalities tie every label an operand row carries to the
+    operation's own solution, but a label only an affine axis names -- the kernel of a one-operand
+    window, [x @^^ "s, 2*o=+1+k => s, o" ["k"]] -- has no operand axis, so without a tie its fresh
+    variable stays free and closes to 1, and the proxy disagrees with the projections at lowering.
+    Each captured label's fresh variable is equated to the variable the operation bound the
+    reference to (which a later [Shape.set_dim] constrains) and to any value it already holds.
+    Unlike {!bind_delayed_vars_to_envs}, the reference is NOT rebound: the proxy is a derived view
+    of the operation, not a new capture. A binding from before the last closure names a dead
+    variable, so only the held value is used then. *)
+let capture_ties_for_proxy ~spec ~dim_var_env ~row_var_env (dim_refs : delayed_var_ref list) :
+    Row.constraint_ list =
+  List.concat_map dim_refs ~f:(fun delayed_ref ->
+      let label = delayed_ref.var_ref.ref_label in
+      let origin =
+        [
+          {
+            Row.lhs_name = label;
+            lhs_kind = `Output;
+            rhs_name = spec;
+            rhs_kind = `Output;
+            operation = Some "product-space capture tie";
+          };
+        ]
+      in
+      let binding = if bound_before_closure delayed_ref then `Not_set_yet else delayed_ref.var in
+      let row_of var = Row.get_row_for_var Row.empty_provenance var in
+      match (Hashtbl.find dim_var_env label, Hashtbl.find row_var_env label) with
+      | Some var, _ ->
+          let held =
+            match (delayed_ref.var_ref.solved_sym, delayed_ref.var_ref.solved_dim) with
+            | Some sym, _ -> [ Row.Dim_eq { d1 = Row.Var var; d2 = Row.get_sym_dim sym; origin } ]
+            | None, Some d ->
+                [ Row.Dim_eq { d1 = Row.Var var; d2 = Row.get_default_dim ~d (); origin } ]
+            | None, None -> []
+          in
+          let tie =
+            match binding with
+            | `Dim v0 -> [ Row.Dim_eq { d1 = Row.Var var; d2 = Row.Var v0; origin } ]
+            | `Row _ | `Not_set_yet -> []
+          in
+          held @ tie
+      | None, Some var -> (
+          match binding with
+          | `Row r0 -> [ Row.Row_eq { r1 = row_of var; r2 = row_of r0; origin } ]
+          | `Dim _ | `Not_set_yet -> [])
+      | None, None -> [])
+
 (** The product-space proxy shape of an einsum-family operation (gh-512): the result's axes followed
     by the reduced-over (contracted) axes, matching the product-space order of [derive_projections]
     — result rows in [to_dims] order, then contracted axes by first occurrence over the RHS slots
@@ -2129,19 +2177,19 @@ let product_space_shape ~(shape : t) ~(logic : logic) : t =
   let invalid msg error_shapes =
     raise @@ Row.Shape_error ("product_space_shape: " ^ msg, [ Shape_mismatch error_shapes ])
   in
-  let spec, ls_rhs_list, ls_lhs, rhs_shapes =
+  let spec, dim_refs, ls_rhs_list, ls_lhs, rhs_shapes =
     match logic with
-    | Broadcast (Einsum (spec, _), sh1, sh2) -> (
+    | Broadcast (Einsum (spec, dim_refs), sh1, sh2) -> (
         match einsum_of_spec spec with
-        | [ ls1; ls2 ], ls_lhs -> (spec, [ ls1; ls2 ], ls_lhs, [ sh1; sh2 ])
+        | [ ls1; ls2 ], ls_lhs -> (spec, dim_refs, [ ls1; ls2 ], ls_lhs, [ sh1; sh2 ])
         | _ -> invalid ("invalid binary einsum spec: " ^ spec) [ cur_sh; sh1; sh2 ])
-    | Transpose (Permute (spec, _), sh1) -> (
+    | Transpose (Permute (spec, dim_refs), sh1) -> (
         match einsum_of_spec spec with
-        | [ ls1 ], ls_lhs -> (spec, [ ls1 ], ls_lhs, [ sh1 ])
+        | [ ls1 ], ls_lhs -> (spec, dim_refs, [ ls1 ], ls_lhs, [ sh1 ])
         | _ -> invalid ("invalid permutation spec: " ^ spec) [ cur_sh; sh1 ])
-    | Broadcast_tern (Einsum_tern (spec, _), sh1, sh2, sh3) -> (
+    | Broadcast_tern (Einsum_tern (spec, dim_refs), sh1, sh2, sh3) -> (
         match einsum_of_spec spec with
-        | [ ls1; ls2; ls3 ], ls_lhs -> (spec, [ ls1; ls2; ls3 ], ls_lhs, [ sh1; sh2; sh3 ])
+        | [ ls1; ls2; ls3 ], ls_lhs -> (spec, dim_refs, [ ls1; ls2; ls3 ], ls_lhs, [ sh1; sh2; sh3 ])
         | _ -> invalid ("invalid ternary einsum spec: " ^ spec) [ cur_sh; sh1; sh2; sh3 ])
     | _ ->
         invalid
@@ -2154,8 +2202,9 @@ let product_space_shape ~(shape : t) ~(logic : logic) : t =
     invalid ("cannot express the product space of " ^ spec ^ " as a shape: " ^ msg) error_shapes
   in
   (* Re-elaborate the spec with fresh (name-shared) variables and re-emit the operand equalities:
-     the fresh variables converge to the operation's own solution, while the operation's
-     delayed-variable bindings (Shape.set_dim targets) stay authoritative. *)
+     the fresh variables converge to the operation's own solution. A label no operand row carries (a
+     one-operand window's captured kernel, gh-ocannl-1691) is reached by no equality; the capture
+     ties below tie it to the operation's own binding, which [Shape.set_dim] constrains. *)
   let row_var_env = Hashtbl.create (module String) in
   let dim_var_env = Hashtbl.create (module String) in
   let constraints = ref [] in
@@ -2189,6 +2238,7 @@ let product_space_shape ~(shape : t) ~(logic : logic) : t =
   List.iteri (List.zip_exn ls_rhs_list rhs_shapes) ~f:(fun idx (ls, sh) ->
       ignore (elaborate ~label:(Printf.sprintf "Product-space ARGUMENT %d" (idx + 1)) ls sh));
   ignore (elaborate ~label:"Product-space RESULT" ls_lhs cur_sh);
+  constraints := capture_ties_for_proxy ~spec ~dim_var_env ~row_var_env dim_refs @ !constraints;
   active_constraints := !constraints @ !active_constraints;
   (* The proxy's result rows: a SEPARATE, constraint-free elaboration (shared variable environments,
      so named variables coincide with the constrained ones) in which fixed-index axes are pinned to

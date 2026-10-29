@@ -154,8 +154,8 @@ let run_forms () =
        let w = ndarray [ 3 ] k3 in
        [%op x +* "s, stride*o=+1+dilation*k; k => s, o" w]));
   (* A padded sum pool: the kernel label is captured and set, and the kernel is a stretched constant
-     1, the pooling layers' idiom ([Nn_blocks.max_pool2d]): projection inference needs an operand
-     carrying the window's extent, so the unary [x ++ "s, 2*o=+1+k => s, o"] is not the route. *)
+     1, the pooling layers' idiom ([Nn_blocks.max_pool2d]). The one-operand route, with no kernel
+     tensor, is executed under "One-operand windows" below. *)
   executes "sum pool, captured kernel over stretch 1.0: 2*o=+1+k" ~dims:[| 1; 4 |]
     ~want:(padded_window { stride = 2; offset = 1; dilation = 1 } (ramp 8) (Array.create ~len:3 1.))
     (fun () ->
@@ -285,6 +285,167 @@ let run_gradients () =
     { stride = 2; offset = 1; dilation = 1 }
     ~n:8 ~w:k3 "s, 2*o=+1+k; k => s, o"
 
+(* {2 One-operand windows}
+
+   A window needs no kernel tensor: [x ++ "s, 2*o=+1+k => s, o" ["k"]] with [Shape.set_dim k 3] is a
+   sum pool, and [x @^^ ...] a max pool, where no operand carries the kernel's extent. Projection
+   derivation re-solves each step locally from the closed shapes, which hold every operand axis but
+   not the kernel; the captured kernel's solved size reaches that solve as a projection-local sizing
+   constraint (gh-ocannl-1656), so the window gets its extent from the capture (gh-ocannl-1691). The
+   oracle is the binary one over an all-ones kernel (sum) or an all-zeros one (max). *)
+
+(* The unpadded ([<]) window: result position [o] reads [stride*o + dilation*k], over an extent of
+   [(n - span) / stride + 1], with no offset (refused, gh-ocannl-1618). *)
+let valid_window ?(reduce = `Sum) ~stride ~dilation x ~kk =
+  let n = Array.length x in
+  let span = (dilation * (kk - 1)) + 1 in
+  Array.init
+    (((n - span) / stride) + 1)
+    ~f:(fun o ->
+      let taps = List.init kk ~f:(fun k -> x.((stride * o) + (dilation * k))) in
+      match reduce with
+      | `Sum -> List.fold taps ~init:0. ~f:( +. )
+      | `Max -> List.fold taps ~init:Float.neg_infinity ~f:Float.max)
+
+let ones kk = Array.create ~len:kk 1.
+let zeros kk = Array.create ~len:kk 0.
+
+let run_unary_forms () =
+  executes "one-operand padded sum 2*o=+1+k, kernel 3" ~dims:[| 1; 4 |]
+    ~want:(padded_window { stride = 2; offset = 1; dilation = 1 } (ramp 8) (ones 3))
+    (fun () ->
+      let x = computed [ 1; 8 ] (ramp 8) in
+      let%op r = x ++ "s, 2*o=+1+k => s, o" [ "k" ] in
+      Shape.set_dim k 3;
+      r);
+  executes "one-operand padded sum o=+2*k (dilated), kernel 3" ~dims:[| 1; 6 |]
+    ~want:(padded_window { stride = 1; offset = 0; dilation = 2 } (ramp 6) (ones 3))
+    (fun () ->
+      let x = computed [ 1; 6 ] (ramp 6) in
+      let%op r = x ++ "s, o=+2*k => s, o" [ "k" ] in
+      Shape.set_dim k 3;
+      r);
+  executes "one-operand padded sum 3*o=+1+k, kernel 4, raw ~capture_dims" ~dims:[| 1; 3 |]
+    ~want:(padded_window { stride = 3; offset = 1; dilation = 1 } (ramp 9) (ones 4))
+    (fun () ->
+      let k = Shape.get_variable_ref "k" in
+      let r =
+        Operation.einsum1 ~capture_dims:[ k ] "s, 3*o=+1+k => s, o" ~grad_spec:pg
+          (computed [ 1; 9 ] (ramp 9))
+          ()
+      in
+      Shape.set_dim k 4;
+      r);
+  executes "one-operand valid sum 2*o<+k, kernel 3" ~dims:[| 1; 4 |]
+    ~want:(valid_window ~stride:2 ~dilation:1 (ramp 9) ~kk:3)
+    (fun () ->
+      let x = computed [ 1; 9 ] (ramp 9) in
+      let%op r = x ++ "s, 2*o<+k => s, o" [ "k" ] in
+      Shape.set_dim k 3;
+      r);
+  executes "one-operand valid sum o<+2*k (dilated), kernel 2" ~dims:[| 1; 4 |]
+    ~want:(valid_window ~stride:1 ~dilation:2 (ramp 6) ~kk:2)
+    (fun () ->
+      let x = computed [ 1; 6 ] (ramp 6) in
+      let%op r = x ++ "s, o<+2*k => s, o" [ "k" ] in
+      Shape.set_dim k 2;
+      r);
+  executes "one-operand padded max 2*o=+1+k, kernel 3" ~dims:[| 1; 4 |]
+    ~want:(padded_window ~reduce:`Max { stride = 2; offset = 1; dilation = 1 } (ramp 8) (zeros 3))
+    (fun () ->
+      let x = computed [ 1; 8 ] (ramp 8) in
+      let%op r = x @^^ "s, 2*o=+1+k => s, o" [ "k" ] in
+      Shape.set_dim k 3;
+      r);
+  executes "one-operand valid max 2*o<+k, kernel 2" ~dims:[| 1; 4 |]
+    ~want:(valid_window ~reduce:`Max ~stride:2 ~dilation:1 (ramp 8) ~kk:2)
+    (fun () ->
+      let x = computed [ 1; 8 ] (ramp 8) in
+      let%op r = x @^^ "s, 2*o<+k => s, o" [ "k" ] in
+      Shape.set_dim k 2;
+      r);
+  (* [Nn_blocks.max_pool2d ~use_padding:true]'s window without its constant kernel: two padded axes,
+     window 3, stride 2. The values are not monotone along either axis, so the argmax moves within
+     the window. *)
+  let n1 = 4 and n2 = 6 and kk = 3 in
+  let win = { stride = 2; offset = 0; dilation = 1 } in
+  let x_vals =
+    [|
+      3.;
+      9.;
+      1.;
+      7.;
+      4.;
+      2.;
+      8.;
+      0.;
+      6.;
+      11.;
+      5.;
+      10.;
+      2.;
+      12.;
+      7.;
+      3.;
+      9.;
+      1.;
+      6.;
+      4.;
+      13.;
+      0.;
+      8.;
+      5.;
+    |]
+  in
+  let want =
+    Array.init
+      (n1 / 2 * (n2 / 2))
+      ~f:(fun i ->
+        let a = i / (n2 / 2) and b = i % (n2 / 2) in
+        List.fold (taps win ~n:n1 ~kk a) ~init:Float.neg_infinity ~f:(fun acc (r, _, r_in) ->
+            List.fold (taps win ~n:n2 ~kk b) ~init:acc ~f:(fun acc (c, _, c_in) ->
+                if r_in && c_in then Float.max acc x_vals.((r * n2) + c) else acc)))
+  in
+  executes "one-operand padded 2-D max pool 2*a=+k, 2*b=+l, window 3"
+    ~dims:[| n1 / 2; n2 / 2 |]
+    ~want
+    (fun () ->
+      let x = computed ~spec:"a, b => a, b" [ n1; n2 ] x_vals in
+      let%op r = x @^^ "2*a=+k, 2*b=+l => a, b" [ "k"; "l" ] in
+      Shape.set_dim k kk;
+      Shape.set_dim l kk;
+      r)
+
+(* The gradient of a one-operand window with respect to its operand, against [oracle_grads] over the
+   implicit kernel; [build] makes the window over [x] and sets its kernel. *)
+let unary_gradient ?(reduce = `Sum) label win ~n ~kk build =
+  case label (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let m = n / win.stride in
+      let src = ndarray ~grad_spec:Tensor.Require_grad [ 1; n ] (ramp n) in
+      let c = ndarray [ 1; m ] (Array.init m ~f:(fun o -> Float.of_int (o + 1))) in
+      let%op x = src ++ "s, c => s, c" in
+      let r = build x in
+      let%op loss = (r *. c) ++ "s, o => 0" in
+      Train.set_materialized (grad_of x);
+      let ctx = Train.update_once ~output_cd_file:false (Context.auto ()) loss in
+      let w = match reduce with `Sum -> ones kk | `Max -> zeros kk in
+      let dx, _ = oracle_grads ~reduce win (ramp n) w in
+      pf_all2 "%s: d/dx" label (Context.get_values ctx (grad_of x)) dx ~f:Float.equal)
+
+let run_unary_gradients () =
+  unary_gradient "gradient of one-operand padded sum 2*o=+1+2*k"
+    { stride = 2; offset = 1; dilation = 2 } ~n:8 ~kk:3 (fun x ->
+      let%op r = x ++ "s, 2*o=+1+2*k => s, o" [ "k" ] in
+      Shape.set_dim k 3;
+      r);
+  (* Stride 2 under a window of 3: the windows overlap, so the product-space gate decides. *)
+  unary_gradient ~reduce:`Max "gradient of one-operand padded max 2*o=+1+k"
+    { stride = 2; offset = 1; dilation = 1 } ~n:8 ~kk:3 (fun x ->
+      let%op r = x @^^ "s, 2*o=+1+k => s, o" [ "k" ] in
+      Shape.set_dim k 3;
+      r)
+
 (* {2 Refused coefficients} *)
 
 type outcome = Refused_at_construction of string | Refused_later of string | Ran
@@ -327,6 +488,43 @@ let refused ?(print_message = false) label ~axis ~spec build =
 
 let operand () = computed [ 1; 6 ] (ramp 6)
 let kernel () = ndarray [ 3 ] k3
+
+(* A one-operand padded window whose kernel nothing sizes -- not captured, or captured and never set
+   -- has no extent for the kernel: a padded window's extent equation omits it. It is refused naming
+   the kernel and the two remedies, where it used to die with the internal
+   [projection_of_solved_dims: still not fully inferred]. (An unpadded window's extent equation does
+   determine the kernel, so the unpadded form is not here.) The refusal comes at projection
+   derivation, after construction, so the session is rewound by [attempt]. *)
+let refused_unsized ?(print_message = false) label build =
+  case label (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let claim_label = label ^ ": refused, naming the unsized kernel and the remedies" in
+      match attempt (fun () -> forward (build ())) with
+      | Refused_later msg | Refused_at_construction msg ->
+          if print_message then Stdio.printf "%s: %s\n" label msg;
+          let names_it =
+            String.is_substring msg ~substring:"the window kernel k has no size"
+            && String.is_substring msg ~substring:"Shape.set_dim"
+            && String.is_substring msg ~substring:"kernel operand"
+          in
+          if not names_it then Stdio.eprintf "%s: refused with another message: %s\n" label msg;
+          pf "%s" claim_label names_it
+      | Ran ->
+          Stdio.eprintf "%s: was not refused\n" label;
+          pf "%s" claim_label false)
+
+let run_unsized_kernels () =
+  refused_unsized ~print_message:true "one-operand padded sum, kernel not captured" (fun () ->
+      let x = computed [ 1; 8 ] (ramp 8) in
+      [%op x ++ "s, 2*o=+1+k => s, o"]);
+  refused_unsized "one-operand padded sum, kernel captured but not set" (fun () ->
+      let x = computed [ 1; 8 ] (ramp 8) in
+      let%op r = x ++ "s, 2*o=+1+k => s, o" [ "k" ] in
+      ignore (k : Shape.delayed_var_ref);
+      r);
+  refused_unsized "one-operand padded max, kernel not captured" (fun () ->
+      let x = computed [ 1; 8 ] (ramp 8) in
+      [%op x @^^ "s, 2*o=+1+k => s, o"])
 
 let run_refusals () =
   Tensor.unsafe_reinitialize ();
@@ -371,4 +569,7 @@ let run_refusals () =
 let () =
   run_forms ();
   run_gradients ();
+  run_unary_forms ();
+  run_unary_gradients ();
+  run_unsized_kernels ();
   run_refusals ()

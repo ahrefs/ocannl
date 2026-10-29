@@ -8,7 +8,8 @@
     Design principles, OCANNL fundamentals, and common patterns:
     - "Principle of least commitment": use row variables where axis count doesn't matter
     - Einsum specs here often use single-char mode (no commas) but with spaces for readability
-    - Pooling uses constant kernels (stretch 0.0) to propagate window dimensions
+    - Pooling passes a constant kernel (stretch 0.0) carrying the window dimensions; a one-operand
+      window with a captured, set kernel ([x @^^ "..., 2*o=+k => ..., o" ["k"]]) computes the same
     - conv2d uses convolution syntax: "stride*out+kernel," (often in multi-char mode)
     - Input axes (before →) for kernels show intent (and end up rightmost for memory locality)
     - Inline params \{ \} are always learnable and are lifted to unit parameter ()
@@ -545,11 +546,14 @@ let%op max_pool2d ?(stride = 2) ?(window_size = 2) ?(use_padding = false) () x =
   in
   Shape.set_dim wh window_size;
   Shape.set_dim ww window_size;
-  (* NOTE: projections inference runs per-assignment in a distinct phase from shape inference, so
-     for it to know about the window size, we use a constant kernel = 0.0 to propagate the shape.
-     [stretch] makes the kernel's shape resolve at this use site — it acquires the window axes from
-     the einsum spec (gh-ocannl-544; plain operation results close down to their arguments' shapes).
-     See: https://github.com/ahrefs/ocannl/discussions/381 *)
+  (* NOTE: the constant kernel = 0.0 carries the window size as an operand axis. Projection
+     inference runs per-assignment in a distinct phase from shape inference; it once needed an
+     operand carrying the window's extent (https://github.com/ahrefs/ocannl/discussions/381), but
+     since gh-ocannl-1656/1691 a captured, set kernel sizes a one-operand window too: the spec
+     without its kernel slot, [x @^^ "... | stride*oh< + wh, ... => ... | oh, ..." ["wh"; ...]],
+     computes the same. The layers keep the binary form. [stretch] makes the kernel's shape resolve
+     at this use site — it acquires the window axes from the einsum spec (gh-ocannl-544; plain
+     operation results close down to their arguments' shapes). *)
   Shape.set_dim pwh window_size;
   Shape.set_dim pww window_size;
   if use_padding then
