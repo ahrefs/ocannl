@@ -45,6 +45,9 @@ unit_axis_loop_producer: the candidate is committed virtual before any read site
 unit_axis_loop_producer: inlined: true
 unit_axis_loop_producer: executed values are the reference: true
 unit_axis_loop_producer: the two placements agree: true
+unit_axis_flattened: rejected at consumption time as 13:call-site-index-mismatch: true
+unit_axis_flattened: executed values are the reference: true
+unit_axis_flattened: the two placements agree: true
 hoisted_local: rejected at store time as 19:declare-local: true
 hoisted_local: executed values are the reference: true
 hoisted_local: the two placements agree: true

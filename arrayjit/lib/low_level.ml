@@ -2943,21 +2943,28 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
       | Indexing.Fixed_idx _ | Indexing.Sub_axis -> false
       | Indexing.Concat _ -> false (* unreachable: rejected by check_idcs *)
     in
-    (* gh-ocannl-1690: an axis of extent 1 has one cell, so a producer position [Fixed_idx 0] there
-       addresses the same cell as every in-bounds symbolic call index -- typically a read through a
-       one-iteration loop. The two forms are equal: no guard, no refusal. (Refusing is not even
-       always possible: a constant producer is committed [Virtual] ahead of any read site, so a
-       [Non_virtual] here would try to retract that commitment.) A [Fixed_idx] call index other than
-       0 would read out of bounds, and stays a mismatch. *)
-    let dims = Lazy.force self.Tn.dims in
+    (* gh-ocannl-1690: a coordinate of extent 1 has one cell, so a producer position [Fixed_idx 0]
+       there addresses the same cell as every in-bounds symbolic call index -- typically a read
+       through a one-iteration loop. The two forms are equal: no guard, no refusal. (Refusing is not
+       even always possible: a constant producer is committed [Virtual] ahead of any read site, so a
+       [Non_virtual] here would try to retract that commitment.) The extent is the COORDINATE's on
+       both sides ([Affine.axis_extents]), not the axis's dim: after a [Sub_axis] run a component is
+       a flattened index over the run's extent product, so [x[Sub_axis; t]] on dims [4; 1] reads
+       four cells. A [Fixed_idx] call index other than 0 would read out of bounds, and stays a
+       mismatch. *)
+    let unit_extent =
+      lazy
+        (let dims = Lazy.force self.Tn.dims in
+         let def_ext = Affine.axis_extents ~dims def_args_arr
+         and call_ext = Affine.axis_extents ~dims call_args in
+         fun i -> i < Array.length dims && def_ext.(i) = 1 && call_ext.(i) = 1)
+    in
     let same_unit_cell i (lhs_ind : Indexing.axis_index) (rhs_ind : Indexing.axis_index) =
-      i < Array.length dims
-      && dims.(i) = 1
-      && (match lhs_ind with Indexing.Fixed_idx 0 -> true | _ -> false)
-      &&
-      match rhs_ind with
-      | Indexing.Iterator _ | Indexing.Affine _ -> true
-      | Indexing.Fixed_idx _ | Indexing.Sub_axis | Indexing.Concat _ -> false
+      (match lhs_ind with Indexing.Fixed_idx 0 -> true | _ -> false)
+      && (match rhs_ind with
+        | Indexing.Iterator _ | Indexing.Affine _ -> true
+        | Indexing.Fixed_idx _ | Indexing.Sub_axis | Indexing.Concat _ -> false)
+      && (Lazy.force unit_extent) i
     in
     let guards =
       Array.foldi def_args_arr ~init:[] ~f:(fun i guards lhs_ind ->

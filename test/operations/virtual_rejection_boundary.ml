@@ -425,6 +425,26 @@ let row_unit_axis_loop_producer () =
     ~producer:(loop ~upto:0 i (set x [| iter i |] (c 7.)))
     ~seed:[] ~value:7. ~committed:true
 
+(* The boundary of the unit-cell rule: what counts is the extent of the COORDINATE a component
+   indexes, not its axis's dim. After a [Sub_axis] run the component is a flattened index over the
+   run's whole extent product ([Affine.axis_extents]), so on dims [4; 1] the read [x[Sub_axis; t]]
+   addresses four cells and the [Fixed_idx 0] component's write is the first of them only. The
+   fixed-index component cannot be served at the symbolic read, exactly as in
+   [row_fixed_component]. *)
+let row_unit_axis_flattened () =
+  let x = mk ~dims:[| n; 1 |] "ua_flat_x" and out = mk "ua_flat_out" in
+  materialize out;
+  let s = sym () and t = sym () in
+  let llc =
+    seq
+      (loop_n s n (set x [| Idx.Sub_axis; iter s |] (tick s)))
+      (seq
+         (set x [| Idx.Sub_axis; fixed 0 |] (c 9.))
+         (loop_n t n (set out [| iter t |] (get x [| Idx.Sub_axis; iter t |]))))
+  in
+  row ~label:"unit_axis_flattened" ~llc ~cand:x ~out ~seed:[] ~expected:[| 9.; 2.; 3.; 4. |]
+    ~verdict:(Rejected (Consumption, Ir.Tnode.Site "13:call-site-index-mismatch"))
+
 (* gh-ocannl-483 made this arm live: the algebraic rewrite tier runs on the raw lowered code BEFORE
    [Low_level.optimize], and [Online_softmax.hoist] declares its cached probability cell as a
    [Declare_local] beside the statement that consumes it. What the walk refuses is the CONSTRUCTOR,
@@ -494,6 +514,7 @@ let () =
   row_unit_axis_fixed_producer ();
   row_unit_axis_computed_producer ();
   row_unit_axis_loop_producer ();
+  row_unit_axis_flattened ();
   row_hoisted_local ();
   row_scan_recurrence ();
   p_all "every phase-table entry is exercised by a row" phase_table ~f:(fun (site, _) ->
