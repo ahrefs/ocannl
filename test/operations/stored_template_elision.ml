@@ -578,7 +578,9 @@ let local_scratch ?(stored = true) ~label ~tag () =
     else
       seq
         (loop_n s dim
-           (if_ (lt (embed s) (ic dim)) (set v [| iter s |] (add (get a [| iter s |]) (c 1000.)))))
+           (if_idx
+              (lt (embed s) (ic dim))
+              (set v [| iter s |] (add (get a [| iter s |]) (c 1000.)))))
         (loop_n s2 dim (set outa [| iter s2 |] (get v [| iter s2 |])))
   in
   let name = "sts_" ^ tag ^ "_a" in
@@ -1017,7 +1019,7 @@ let case_local_reads () =
   case_local_refused ~label:"local: a guarded write, then an unguarded read" ~tag:"lu4" (fun ~v ->
       let s = sym () in
       seq
-        (loop_n s dim (if_ (lt (embed s) (ic 2)) (set v [| iter s |] (ramp 500. s))))
+        (loop_n s dim (if_idx (lt (embed s) (ic 2)) (set v [| iter s |] (ramp 500. s))))
         (read_v ~tag:"lu4" ~v))
 
 (* gh-ocannl-1645: routine A stores a virtual [w]'s template while [v] is undecided, and only A's
@@ -1035,7 +1037,7 @@ let cells_v ~a ~v =
 let guarded_v ~a ~v =
   let s = sym () in
   loop_n s dim
-    (if_ (lt (embed s) (ic dim)) (set v [| iter s |] (add (get a [| iter s |]) (c 1000.))))
+    (if_idx (lt (embed s) (ic dim)) (set v [| iter s |] (add (get a [| iter s |]) (c 1000.))))
 
 let carried_scratch ?(v_code = cells_v) ~label ~tag ~w_code ~read_w () =
   let a = mk (tag ^ "a") and outa = mk (tag ^ "outa") and outw = mk (tag ^ "outw") in
@@ -1231,7 +1233,7 @@ let case_replays () =
     ~c_code:(fun ~w ~x ~v ~out ->
       let s = sym () in
       seq
-        (loop_n s dim (if_ (lt (embed s) (ic 2)) (set v [| iter s |] (ramp 500. s))))
+        (loop_n s dim (if_idx (lt (embed s) (ic 2)) (set v [| iter s |] (ramp 500. s))))
         (replay ~w ~x ~v ~out))
     `Refused;
   case_replayed ~label:"replayed: the write after the replay" ~tag:"rp5"
@@ -1251,7 +1253,7 @@ let case_replays () =
     ~c_code:(fun ~w ~x:_ ~v ~out ->
       let s = sym () in
       loop_n s dim
-        (if_
+        (if_idx
            (lt (embed s) (ic 2))
            (seq (set v [| iter s |] (ramp 500. s)) (set out [| iter s |] (get w [| iter s |])))))
     (`Accepted (Array.init dim ~f:(fun i -> if i < 2 then covered_vals.(i) else sentinel)));

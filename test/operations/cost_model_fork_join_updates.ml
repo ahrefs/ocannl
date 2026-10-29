@@ -43,7 +43,7 @@ let () =
   let i = sym () and j = sym () in
   p "an empty loop costs nothing" (work (loop ~from_:5 ~upto:4 i (set_at y (iter i) (c 1.))) = 0);
   p "a whole-node zero costs its cells" (work (zero y) = 100);
-  let guarded = loop_n j 10 (if_ (lt (embed j) (ic 5)) (set_at y (iter j) (c 1.))) in
+  let guarded = loop_n j 10 (if_idx (lt (embed j) (ic 5)) (set_at y (iter j) (c 1.))) in
   p "a guarded body is charged guards-taken (a store per iteration)" (work guarded = 10)
 
 let () =

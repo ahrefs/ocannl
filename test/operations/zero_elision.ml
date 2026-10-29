@@ -283,7 +283,7 @@ let () =
           (Ll_test.loop_n i i_n
              (Ll_test.loop_n s s_n
                 (Ll_test.set out cell
-                   (Ll_test.add (Ll_test.get out cell)
+                   (Ll_test.add_own (Ll_test.get out cell)
                       (Ll_test.get src [| Ll_test.iter r; Ll_test.iter i; Ll_test.iter s |]))))) )
   in
   let src_values =

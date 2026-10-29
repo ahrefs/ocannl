@@ -11231,6 +11231,93 @@ let slice_alias_violation (root : t) : string option =
 let validate_no_slice_aliases ?(site = "Low_level.validate_no_slice_aliases") (llc : t) : unit =
   Option.iter (slice_alias_violation llc) ~f:(fun msg -> invalid_arg (site ^ ": " ^ msg))
 
+(* gh-ocannl-1709: the slots are [elide_unevaluated_operands]'s, i.e. [C_syntax.pp_scalar_op]'s.
+   [dest] is the node whose value the slot feeds, [None] under a guard. *)
+let operand_precision_violation (llc : t) : string option =
+  let exception Malformed of string in
+  let tn_prec (tn : Tn.t) = Lazy.force tn.Tn.storage_prec in
+  let rec stmt (c : t) : unit =
+    match c with
+    | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ | Zero_out _ ->
+        ()
+    | Seq (a, b) ->
+        stmt a;
+        stmt b
+    | For_loop { body; _ } -> stmt body
+    | Scan_loop { carried; body; _ } ->
+        List.iter carried ~f:(fun cr ->
+            scalar ~dest:(Some cr.prev.tn) ~prec:(tn_prec cr.prev.tn) cr.init);
+        stmt body
+    | Set { tn; llsc; _ } -> scalar ~dest:(Some tn) ~prec:(tn_prec tn) llsc
+    | Set_dynamic { tn; dyn_value; llsc; _ } ->
+        own ~dest:(Some tn) dyn_value;
+        scalar ~dest:(Some tn) ~prec:(tn_prec tn) llsc
+    | Set_from_vec { tn; arg = a; _ } -> own ~dest:(Some tn) a
+    | Set_local (id, v) -> scalar ~dest:(Some id.tn) ~prec:(tn_prec id.tn) v
+    | If { cond; body } ->
+        own ~dest:None cond;
+        stmt body
+    | Tile_mma { fallback; _ } -> stmt fallback
+  (* A heterogeneous slot: evaluated at its own annotation, so the annotation is the semantics. *)
+  and own ~dest ((sc, ann) : scalar_arg) = scalar ~dest ~prec:ann sc
+  (* A homogeneous slot: evaluated at [prec] whatever it says, so it may only say [prec] or the
+     operand's own precision ({!scalar_precision}, which [mk_binop] writes). *)
+  and at ~dest ~prec ~what ((sc, ann) : scalar_arg) =
+    let natural = scalar_precision sc in
+    if not (Ops.equal_prec ann prec || Ops.equal_prec ann natural) then begin
+      let ps = Ops.prec_string in
+      let descriptive =
+        if Ops.equal_prec prec natural then ps prec else ps prec ^ " or " ^ ps natural
+      in
+      raise
+        (Malformed
+           (Printf.sprintf
+              "%s %s is annotated %s, but a homogeneous operator evaluates its operands at its \
+               result precision, here %s, so the annotation would be silently ignored (the \
+               operand's own precision is %s). Annotate the operand %s; to compute at %s, make the \
+               destination (a node, or a local over one) %s"
+              what
+              (match dest with
+              | Some tn -> "in the value stored to " ^ Tn.debug_name tn
+              | None -> "in a guard condition")
+              (ps ann) (ps prec) (ps natural) descriptive (ps ann) (ps ann)))
+    end;
+    scalar ~dest ~prec sc
+  and scalar ~dest ~prec (sc : scalar_t) : unit =
+    let operand i name = Printf.sprintf "Operand %d of %s" i (Sexp.to_string_hum name) in
+    match sc with
+    | Constant _ | Constant_bits _ | Embed_index _ | Get _ | Get_local _ | Get_merge_buffer _ -> ()
+    | Get_dynamic { dyn_value; _ } -> own ~dest dyn_value
+    | Local_scope { body; _ } -> stmt body
+    | Ternop (op, a, b, c) when Ops.is_homogeneous_prec_ternop op ->
+        let what i = operand i (Ops.sexp_of_ternop op) in
+        at ~dest ~prec ~what:(what 1) a;
+        at ~dest ~prec ~what:(what 2) b;
+        at ~dest ~prec ~what:(what 3) c
+    | Ternop (Ops.Where, cond, a, b) ->
+        own ~dest cond;
+        at ~dest ~prec ~what:"The then-arm of Where" a;
+        at ~dest ~prec ~what:"The else-arm of Where" b
+    | Ternop (_, a, b, c) ->
+        own ~dest a;
+        own ~dest b;
+        own ~dest c
+    | Binop (op, a, b) when Ops.is_homogeneous_prec_binop op ->
+        let what i = operand i (Ops.sexp_of_binop op) in
+        at ~dest ~prec ~what:(what 1) a;
+        at ~dest ~prec ~what:(what 2) b
+    | Binop (_, a, b) ->
+        own ~dest a;
+        own ~dest b
+    | Unop (op, a) when Ops.is_homogeneous_prec_unop op ->
+        at ~dest ~prec ~what:("The operand of " ^ Sexp.to_string_hum (Ops.sexp_of_unop op)) a
+    | Unop (_, a) -> own ~dest a
+  in
+  match stmt llc with () -> None | exception Malformed msg -> Some msg
+
+let validate_operand_precisions ?(site = "Low_level.validate_operand_precisions") (llc : t) : unit =
+  Option.iter (operand_precision_violation llc) ~f:(fun msg -> invalid_arg (site ^ ": " ^ msg))
+
 let optimize_proc (input_ctx : optimize_ctx) static_indices llc =
   (* gh-ocannl-584: the pipeline's entry gate for scope purity, ahead of the analysis cache so a
      digest hit cannot skip it. Codegen's gate alone would not do: [hoist_cross_statement_cse] lifts
@@ -11246,6 +11333,9 @@ let optimize_proc (input_ctx : optimize_ctx) static_indices llc =
   (* gh-ocannl-1485: no access of a bufferless slice-alias view, whoever built the code -- the
      assignments lowering, the rewrite tier, or a hand-built routine. *)
   validate_no_slice_aliases ~site:"Low_level.optimize_proc" llc;
+  (* gh-ocannl-1709: an operand annotation a homogeneous operator would ignore is a request, not a
+     description, refused while it is still the builder's shape. *)
+  validate_operand_precisions ~site:"Low_level.optimize_proc" llc;
   specialize_proc input_ctx (cached_analyze_proc static_indices llc)
 
 let code_hum_margin = ref 100

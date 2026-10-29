@@ -222,6 +222,19 @@ files.
   scope-locals they write are excluded by a whole-proc scan (`rng_scope_local_uids`), because a
   `Declare_local` carries no value to test. And a `Set` whose value contains no operator renders at
   storage precision, so a copy loop stays a copy instead of a round-trip through f32.
+- **An operand's precision annotation under a homogeneous operator is never semantics**
+  (gh-ocannl-1709): the operator evaluates every operand at its own result precision (the
+  destination node's, a local's, a `Where` condition's or a guard's annotation), whatever the
+  `scalar_arg` says. `Low_level.optimize` refuses, on the way in, an annotation that is neither
+  that precision nor the operand's own (`scalar_precision`, what `mk_binop`/`apply_op` and the
+  assignments lowering write, so an f32 sum of bf16 loads annotated bf16 is fine), naming the
+  destination, both precisions and the remedy: to compute at another precision, store to a node or
+  local of that precision. In hand-built IR, `Ll_builders`' `add`/`mul`/`binop` and `where_` arms
+  are `single` and the `cmp` family is index precision: under a non-`single` store use `add_own`,
+  and guard an index comparison with `if_idx`, never `if_` (a `Constant`'s own precision is
+  `single`, so `lt (embed s) (ic 5)` under a `single` guard is refused). Only the optimizer's
+  input is checked: its own output re-annotates elided operands freely, and a `?prelowered` routine
+  skips the check.
 - **Which bits an RNG conversion consumes is fixed per precision, and it is the same on every
   backend** (gh-ocannl-951). The scalar `uint4x32_to_{bfloat16,half}_uniform` take the single draw
   of the key's first 32 bits (`uint32_to_single_uniform`) and narrow it; the `_vec`/`_lane` forms
