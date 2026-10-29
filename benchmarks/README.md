@@ -771,7 +771,8 @@ single-threaded segments that sum to the serial step
   scheduling, and each perturbed seed must come back a mismatch. The perturbation keeps a
   persistent fragment's transfers plain copies, perturbing the target after the store-back
   instead, and each seed is also compiled unperturbed: a perturbed seed whose tensor-core
-  statements render otherwise (its mma census differs) is `RERENDERED`, a failure, since it was
+  statements render otherwise (its mma census differs, persistent-fragment scopes included) is
+  `RERENDERED`, a failure, since it was
   caught on a path the seed does not take (gh-ocannl-1677: perturbing the transfers dissolved the
   fragment region, and most of cifar_resnet's CUDA tf32 seeds rendered as the scalar fallback). Exit 4 when a seed fails, 5 when no
   seed executed (gh-ocannl-1490; `test/operations/bench_seed_parity_smoke` runs both modes on an

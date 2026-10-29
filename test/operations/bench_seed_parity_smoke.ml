@@ -30,7 +30,15 @@
    renders its tensor-core statements as it does unperturbed (the library compiles it both ways and
    reports [Rerendered] otherwise), and on a tf32 arm every seed with a rounded reference keeps it,
    at the same nodes, when perturbed -- a seed whose perturbed statements fell back to the scalar
-   rendering has none. *)
+   rendering has none.
+
+   gh-ocannl-1707: that control judges the persistent-fragment region only where a seed has one. A
+   pad-masked accumulator never does (its fragment is workgroup-shared or a local array, never
+   marked), and CUDA's 16-row wmma tile masked every seed of an 8-wide step, so its smoke passed
+   with gh-ocannl-1677's defect restored. The images are 16 wide, which CUDA's and Metal's row tiles
+   divide, and where the backend renders an f32 persistent-fragment scope some executed conv seed
+   must hold its accumulator in one, by the census of the scopes the fragment hook rendered. The
+   persistent-fragment scope count is also part of the rendering the control compares. *)
 
 open Base
 open Ocannl
@@ -42,7 +50,7 @@ module P = Bench_seed_parity
 
 let batch = 8
 let n_batches = 2
-let side = 8
+let side = 16
 let chans = 8
 let classes = 4
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
@@ -70,10 +78,14 @@ let claims_parity =
   ]
 
 (* Image 0's pattern repeats down every row, so it flips two cells of each pool window on columns
-   2-3 in every row band and out-channel: on the order of a hundred of the step's few thousand
-   selection cells, far above the default bound (one in a hundred thousand), which is sized for real
-   graphs. The smoke states its own fraction. *)
+   2-3 in every row band and out-channel: 1376 flipped decision cells on CUDA's tf32 arm, within the
+   fraction stated here but far above the default bound (one in a hundred thousand), which is sized
+   for real graphs. *)
 let replay_fraction = 0.05
+
+let claim_persistent =
+  "persistent fragment: some executed conv seed holds its accumulator in a persistent-fragment \
+   scope, the region the negative control keeps"
 
 let claims_tf32 =
   [
@@ -88,9 +100,9 @@ let claims_tf32 =
 
 (* Image 0 is a tied-at-zero pool window, the shape a residual's pre-activation near 0 gives real
    graphs (gh-ocannl-1602: cifar_resnet's u31). Every row of image 0 holds, column by column, 0, a,
-   -1, 0, -1, a, 0, 0, where a = 1 + 2^-12 (tf32 rounds it to 1). A conv output cell (h, w) reads
-   columns w+o..w+o+2 for the padded conv's offset o, 0 or -1, so at either offset exactly one of
-   the window's (rows 2-3, columns 2-3) two columns sums to a - 1 = 2^-12 per row and channel --
+   -1, 0, -1, a, then zeros, where a = 1 + 2^-12 (tf32 rounds it to 1). A conv output cell (h, w)
+   reads columns w+o..w+o+2 for the padded conv's offset o, 0 or -1, so at either offset exactly one
+   of the window's (rows 2-3, columns 2-3) two columns sums to a - 1 = 2^-12 per row and channel --
    positive in f32, exactly 0 in tf32 -- and the other to -2: after the relu, f32 picks that
    column's cells as the window's max, while under tf32 all four cells tie at 0 and the pool's
    backward routes the gradient to every one. *)
@@ -164,9 +176,21 @@ let () =
     else if P.f32_reads_tf32_under_tf32_policy limits then Some `Environment
     else Some `Backend
   in
+  (* gh-ocannl-1707: whether the backend renders an f32 accumulator in a persistent-fragment scope:
+     the capability the seeder judges a multi-window conv's emission scope by, derived from the
+     backend's fragment hook. *)
+  let fragment_scope_advertised =
+    match limits.Ir.Backend_intf.mma with
+    | None -> false
+    | Some mma ->
+        Option.is_some
+          (Autotune.mma_tile_for_precisions_in_scope mma ~scope:Ir.Backend_intf.Mma_fragment_scope
+             ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single)
+  in
   match gpu_withheld with
   | Some aggregation ->
-      List.iter (claims_parity @ claims_tf32)
+      List.iter
+        ((claims_parity @ [ claim_persistent ]) @ claims_tf32)
         ~f:(Verdict.skipped ~aggregation ~backend:backend_name)
   | None -> (
       let parity ?(round = true) ?(replay = true) ?(select = P.any_seed) ~perturb () =
@@ -203,6 +227,13 @@ let () =
       p_none (List.nth_exn claims_parity 6) perturbed ~f:(function
         | { P.verdict = Rerendered _; _ } -> true
         | _ -> false);
+      (* gh-ocannl-1707: the smoke must reach the region gh-ocannl-1677's control dissolved, or the
+         negative control above judges no seed on it: on CUDA every seed of the 8-wide step was
+         pad-masked (16-row wmma tiles), and a masked accumulator is never a persistent fragment.
+         The census counts the scopes the fragment hook rendered, so the claim is the renderer's
+         own. *)
+      Verdict.gated_exists ~when_:fragment_scope_advertised ~on:backend_name claim_persistent
+        (executed results) ~f:(fun r -> r.P.conv && r.P.mma.Ir.C_syntax.fragment_scopes > 0);
       match tf32_withheld with
       | Some aggregation ->
           List.iter claims_tf32 ~f:(Verdict.skipped ~aggregation ~backend:backend_name)
