@@ -99,12 +99,16 @@ commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue 
 - Printing a tensor no routine computed shows `<not-computed>`. It used to run the tensor's
   forward code, and parameter initialization, as a side effect of printing (gh-ocannl-777).
 - Routine composition is checked per compilation lineage (gh-ocannl-1724):
-  - Compiling a tensor's code twice along one threaded context is refused, naming the fragment
-    and the earlier routine. `Context.run` the first routine again, or compile from an older
-    context; siblings are fine.
-  - A routine whose gradient flow needs a fragment that no routine in its lineage owns is refused
-    at run. This ends the silent gradient drop after `forward_once`, and `*_once` now simply means
-    compile and run one time.
+  - Compiling a tensor's code twice along one threaded context, forward code included, is
+    refused, naming the fragment and the earlier routine. `Context.run` the first routine again,
+    or compile from an older context; siblings never collide.
+  - A routine whose backprop needs an upstream gradient that no routine of its own lineage
+    computes is refused at run, naming any sibling that does and the fix; a sibling never
+    satisfies it. Terms, parameters included, create no such requirement.
+  - `Train.forward_once` no longer discards backprop code, and `*_once` now simply means compile
+    and run one time. A later loss whose backprop reads a leaf the once-run left routine-local is
+    refused with a named fix instead of silently training nothing; with the leaf materialized it
+    trains like a fresh graph.
 - A launch parameter (a static index, batch-slice index or symbolic extent) starts unassigned, and
   a routine with one unassigned is refused before it compiles or runs, naming each. It used to run
   at index 0; code that means 0 must say so (gh-ocannl-940, gh-ocannl-1629).
@@ -205,9 +209,9 @@ commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue 
 - With `debug_log_to_stream_files=true`, CUDA and HIP device `printf` reaches the stream files and
   never stdout (gh-ocannl-1636).
 - The device-init watchdog covers HIP's driver init when a compile forces it first, and a region
-  inherited across `fork` no longer disarms the child's (gh-ocannl-1446). A failed device allocation's unwind frees every pool
-  (gh-ocannl-1555). A tensor node header's `mem in bytes` prints whenever the dims are resolved
-  (gh-ocannl-1369).
+  inherited across `fork` no longer disarms the child's (gh-ocannl-1446). A failed device
+  allocation's unwind frees every pool (gh-ocannl-1555). A tensor node header's `mem in bytes`
+  prints whenever the dims are resolved (gh-ocannl-1369).
 
 ### Measured performance and limitations
 
