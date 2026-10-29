@@ -7,15 +7,13 @@
    coverage: in [ell[0] = 5000; out[i] = ell[i]] the copy-position reads consume ell's incoming
    cells 1.., and an accumulation with no preceding definite initialization consumes its own entry
    values. Both must classify [read_before_write] -- a routine input, excluded from buffer aliasing
-   -- where pre-split they read as output-only. The strict classification closes over the SETTLED
-   placements ([reconcile_traced_store], review round 1): a node that stays virtual is exempt by
-   construction -- no interface, and exemption-dependent coverage is exactly the shape of the
-   virtualizer's partial-write producers (affine_lowering.ml AC6) -- while a node decided
-   non-virtual AFTER [decide_placements] (a [check_and_store_virtual] legality rejection, the fan-in
-   guard) is still reached. Controls pin the boundaries: coverage by a real prior write still
-   suppresses the flag (routine-complete lowered flows emit the initialization before accumulations,
-   so they are unaffected), and a GUARDED full write still counts as raw coverage (the guards-taken
-   contract; guard strictness is splice-only).
+   -- where pre-split they read as output-only. Since gh-ocannl-793 the placement decision reads
+   them the same way: exemption-dependent coverage means the entry value is consumed, which lowering
+   emits only from a non-initializing accumulation ([=:] reading its lhs, [=+]), so such a node is
+   never virtual and offers no [`Inline] flip. Controls pin the boundaries: coverage by a real prior
+   write still suppresses the flag (routine-complete lowered flows emit the initialization before
+   accumulations, so they are unaffected), and a GUARDED full write still counts as raw coverage
+   (the guards-taken contract; guard strictness is splice-only).
 
    Phase 2 (gh-617, decided as option 1) pins recompute-at-read as the semantics of deferred
    (virtual) computations: a virtual node is a named computation, not a snapshot -- inlining
@@ -105,12 +103,11 @@ let phase1 () =
     execute ~name:"ssem_zeroed" o_ctrl ~seed:[ (y, blank dim); (b, b_vals) ] ~read:[ y ]
   in
   p "zero-initialized accumulation: the sentinel seed is overwritten" (same got_ctrl [ b_vals ]);
-  (* Placement-freedom control: an UNDECIDED partial-write producer consumed at the copy position --
-     the triangular-scatter genre of affine_lowering.ml's AC6 (injective, so no neutral init is
-     emitted; off-region cells fall back to the init the INLINING prepends) -- must keep its
-     virtualization eligibility: a virtual node has no interface, so the strict verdict binds only
-     once a node is known non-virtual. The materialized reading of this genre is ell above; AC6
-     executes both readings. *)
+  (* An UNDECIDED partial-write producer consumed at the copy position, with no initialization: the
+     off-region cells the consumer reads are z's entry values, so z is read-before-write and never
+     virtual (gh-ocannl-793). Lowering emits this shape only from a non-initializing accumulation
+     ([=:] or [=+] over a partial projection) -- an initializing [=:+] scatter, affine_lowering.ml's
+     AC6, is emitted behind a neutral fill and stays virtualizable. *)
   let z = mk ~dims:[| 3; 4 |] "z" in
   let src = mk ~dims:[| 3; 2 |] "zsrc" in
   materialize src;
@@ -125,18 +122,31 @@ let phase1 () =
       (loop_n a 3 (loop_n b 4 (set zout [| iter a; iter b |] (get z [| iter a; iter b |]))))
   in
   let o_und = optimize ~name:"ssem_undecided" llc_und in
-  p "undecided partial-write producer: keeps its virtualization eligibility" (known_virtual o_und z);
-  (* Late placement decision (review round 1, P1): an UNDECIDED node can become non-virtual AFTER
-     [decide_placements] -- here [check_and_store_virtual] rejects the non-injective multi-affine
-     scatter map [s1+s2] during [virtual_llc] ([Non_virtual 51]) -- and the strict verdict must
-     still reach it: the classification closes over the settled placements in
-     [reconcile_traced_store]. The scatter writes cells 0..3 of a 6-cell node, so the consumer's
-     copy-position reads of cells 4..5 are exemption-dependent, and a decide-time-only strict
-     verdict (which sees the node still undecided) would classify x2 output-only. The flip also
-     promotes x2 [On_device] (review round 3): a late-rejected candidate is otherwise only
-     [Never_virtual], which would default to [Local] -- routine scratch with no incoming contents,
-     contradicting the entry values the reads consume. The executed leg is the pin: it seeds x2 and
-     reads back the preserved cells, which a [Local] placement cannot even seed. *)
+  p "uninitialized partial-write producer: not virtualized" (not (known_virtual o_und z));
+  p "uninitialized partial-write producer: read-before-write and an input"
+    (read_before_write o_und z && Set.mem (inputs o_und) z);
+  let z_old = Array.init 12 ~f:(fun i -> 500. +. Float.of_int i) in
+  let src_vals = Array.init 6 ~f:(fun i -> 100. +. Float.of_int i) in
+  let got_und =
+    execute ~name:"ssem_undecided" o_und
+      ~seed:[ (z, z_old); (src, src_vals); (zout, blank 12) ]
+      ~read:[ zout ]
+  in
+  (* Row a writes cells a and a+1 from src[a, 0..1]; every other cell keeps the seed. *)
+  p "uninitialized partial-write producer: off-region cells read the incoming values"
+    (same got_und
+       [
+         Array.init 12 ~f:(fun i ->
+             let a = i / 4 and b = i % 4 in
+             if b - a = 0 || b - a = 1 then src_vals.((a * 2) + b - a) else z_old.(i));
+       ]);
+  (* A node [check_and_store_virtual] would reject anyway (the non-injective multi-affine scatter
+     map [s1+s2], [Non_virtual 51]): the scatter writes cells 0..3 of a 6-cell node, so the
+     consumer's copy-position reads of cells 4..5 are exemption-dependent, and [decide_placements]
+     makes x2 read-before-write and [On_device] before the virtualizer sees it. [On_device] matters:
+     a merely [Never_virtual] node would default to [Local] -- routine scratch with no incoming
+     contents, contradicting the entry values the reads consume. The executed leg is the pin: it
+     seeds x2 and reads back the preserved cells, which a [Local] placement cannot even seed. *)
   let x2 = mk ~dims:[| 6 |] "x2" in
   Tn.set_observable x2;
   let a2 = mk ~dims:[| 3; 2 |] "a2" in
@@ -152,8 +162,7 @@ let phase1 () =
   in
   let o_late = optimize ~name:"ssem_late" llc_late in
   p "non-injective scatter, undecided: not virtualized" (not (known_virtual o_late x2));
-  p "non-injective scatter, undecided: read-before-write despite deciding after the placement pass"
-    (read_before_write o_late x2);
+  p "non-injective scatter, undecided: read-before-write" (read_before_write o_late x2);
   p "non-injective scatter, undecided: an input of the routine" (Set.mem (inputs o_late) x2);
   (* Last-writer-wins over the s1-major, s2-minor iteration: cell c holds a2[s1_max, c - s1_max]
      with s1_max = min (c, 2); cells 4..5 keep the seed. *)
@@ -208,10 +217,10 @@ let phase1 () =
   let o_guard = optimize ~name:"ssem_guardcov" llc_guard in
   p "guarded full write: raw guards-taken coverage keeps xg off read-before-write"
     (not (read_before_write o_guard xg));
-  (* Cap-selected exemption-dependent producer (review round 4): the reduction cap materializes r
-     (Never_virtual 39) before the closing pass promotes it On_device -- the promotion must not cost
-     r its [`Inline] flip candidacy (a virtual reading has no interface to classify, so the
-     placement search remains free to try it), and the interface must say input. *)
+  (* An uninitialized accumulator past the reduction cap: r's in-place update consumes its entry
+     values, so it is read-before-write whatever the cap decides, and the placement search must not
+     offer an [`Inline] flip -- a virtual reading would accumulate from the neutral element instead
+     of the seed, changing the value (gh-ocannl-793). *)
   assert (LL.virtualize_settings.max_inline_reduction = 16);
   let r = mk "r" in
   Tn.set_observable r;
@@ -232,10 +241,13 @@ let phase1 () =
   let o_cap = optimize ~name:"ssem_cap" llc_cap in
   p "cap-selected accumulator: read-before-write and an input"
     (read_before_write o_cap r && Set.mem (inputs o_cap) r);
-  p "cap-selected accumulator: keeps its Inline flip candidacy"
-    (List.exists o_cap.LL.flip_candidates ~f:(fun fc ->
-         Tn.equal fc.LL.fc_tn r
-         && List.exists fc.LL.fc_alternatives ~f:(fun fa -> LL.equal_reading fa.LL.fa_flip `Inline)));
+  (* Emptiness is the passing case: a routine with no flip candidates at all offers r none. *)
+  p "cap-selected accumulator: offers no Inline flip"
+    (not
+       (List.exists o_cap.LL.flip_candidates ~f:(fun fc ->
+            Tn.equal fc.LL.fc_tn r
+            && List.exists fc.LL.fc_alternatives ~f:(fun fa ->
+                LL.equal_reading fa.LL.fa_flip `Inline))));
   let r_seed = [| 71.; 72.; 73.; 74. |] in
   let ar_vals =
     Array.init 40 ~f:(fun i ->

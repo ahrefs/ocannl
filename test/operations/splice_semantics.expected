@@ -7,15 +7,17 @@ uninitialized accumulation: updated in place over the incoming values: true
 zero-initialized accumulation: covered by the real write, not read-before-write: true
 zero-initialized accumulation: y is not an input: true
 zero-initialized accumulation: the sentinel seed is overwritten: true
-undecided partial-write producer: keeps its virtualization eligibility: true
+uninitialized partial-write producer: not virtualized: true
+uninitialized partial-write producer: read-before-write and an input: true
+uninitialized partial-write producer: off-region cells read the incoming values: true
 non-injective scatter, undecided: not virtualized: true
-non-injective scatter, undecided: read-before-write despite deciding after the placement pass: true
+non-injective scatter, undecided: read-before-write: true
 non-injective scatter, undecided: an input of the routine: true
 non-injective scatter, undecided: uncovered cells read the incoming values: true
 unobservable late input: promoted to a persistent buffer (an interface input, not scratch): true
 guarded full write: raw guards-taken coverage keeps xg off read-before-write: true
 cap-selected accumulator: read-before-write and an input: true
-cap-selected accumulator: keeps its Inline flip candidacy: true
+cap-selected accumulator: offers no Inline flip: true
 cap-selected accumulator: accumulates over the incoming values: true
 scratch producer: tmp resolved to routine-local scratch: true
 in-place update of an earlier routine's Local scratch: materialize-first User_error: true
