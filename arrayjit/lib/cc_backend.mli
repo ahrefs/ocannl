@@ -118,3 +118,24 @@ val with_split_settings : split_settings -> (unit -> 'a) -> 'a
 val translation_units_compiled : unit -> int
 (** How many translation units this process has compiled as parts of a split batch (each unit of a
     batch split into several counts; an unsplit compile counts none). *)
+
+type load_refusal =
+  | Load_defect
+      (** Anything else, an undefined symbol or a missing dependency in particular: the kernel's
+          link line is OCANNL's bug (gh-ocannl-1077). *)
+  | Code_signing_refusal
+      (** The loader's code-signing or system policy refused the library (macOS dyld). *)
+  | Library_missing  (** The library the compiler built is not there to load. *)
+[@@deriving sexp_of, equal]
+
+val classify_load_refusal : library_present:bool -> string -> load_refusal
+(** [classify_load_refusal ~library_present dlerror] says why [dlopen] refused a library the compile
+    produced (gh-ocannl-1717): the two environment classes are reported as
+    [Schedule_outcome.Environment] rejections, [Load_defect] as a [Compiler_bug]. The signing class
+    is read off the text; the missing class off [library_present] alone (whether the library's path
+    exists after the refusal), since a missing dependency and a signing refusal's list of tried
+    paths both read like a missing file. Exposed for [test/operations/cc_load_refusal_classes]. *)
+
+val load_refusal_severity : load_refusal -> Ir.Schedule_outcome.severity
+(** The severity of the [dlopen]-stage rejection each class raises: [Compiler_bug] for
+    [Load_defect], [Environment] for the other two. *)

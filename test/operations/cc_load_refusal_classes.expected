@@ -1,0 +1,16 @@
+glibc: undefined symbol is Load_defect: true
+dyld: symbol not found in flat namespace is Load_defect: true
+glibc: a missing dependency, the library present is Load_defect: true
+dyld: a missing dependency, the library present is Load_defect: true
+dyld: signature not valid, load disallowed by system policy is Code_signing_refusal: true
+dyld: missing code signature is Code_signing_refusal: true
+dyld: a signing refusal, the library gone since is Code_signing_refusal: true
+glibc: the library itself missing is Library_missing: true
+dyld: the library itself missing is Library_missing: true
+LoadLibrary: the library itself missing is Library_missing: true
+Load_defect raises severity Compiler_bug
+Code_signing_refusal raises severity Environment
+Library_missing raises severity Environment
+some case is a signing refusal: true
+some case is a missing library: true
+some case is a link defect: true

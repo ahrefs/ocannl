@@ -1,0 +1,17 @@
+library artifacts requested: yes
+debug artifacts requested: no
+backend: cc
+strict failure classification is off: true
+every file in the temp directory after the rejected compile was there before it: true
+the unrelated temporary file is preserved: true
+the candidate compile is fatal, not a contained decline: true
+the fatal failure is at Backend_link: true
+the fatal failure carries its Backend_rejected cause: true
+the rejecting backend is cc: true
+the stage matches the injected post-compile failure: true
+the severity is Environment: true
+the detail carries the injected failure diagnostic: true
+the detail carries the compile/link command: true
+Context.compile raises Failure with the post-compile diagnostic: true
+Autotune.tune raises: true
+autotune reports a pre-search failure at Backend_link: true

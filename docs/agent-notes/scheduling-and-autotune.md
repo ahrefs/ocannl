@@ -1514,13 +1514,20 @@ files.
   under permissive classification. A JIT rejecting one candidate's PTX stays a counted decline.
   `test/operations/cc_dlopen_cause` manufactures one via the compiler command. Missing artifacts
   after a successful compiler exit and signing failures are also fatal: they violate the
-  host/toolchain contract, rather than establish that a schedule is unsuitable. `Compiler_bug`
-  here identifies that broken backend contract; the actual cause may be an external tool or
-  filesystem. A search must surface it instead of quietly falling back. The
-  `cc_dlopen_cause` modes provoke all three paths with permissive classification on Unix;
-  Windows cannot run the shell fixtures or defer undefined symbols to dlopen. The
-  `test_schedule_outcome` unit test pins all three stages across provenance and strictness on
-  every platform.
+  host/toolchain contract, rather than establish that a schedule is unsuitable. Fatal is not the
+  same as OCANNL's bug: the severity says whose fault it is (gh-ocannl-1717). A missing artifact,
+  a code-signing refusal at `dlopen` (macOS, seen transiently under load) and a library gone
+  before its load are `Environment`, rendered as `Failure` and reported as retryable;
+  `Cc_backend.classify_load_refusal` reads the signing class off the dlerror text but the missing
+  class off whether the library still exists, since dyld's signing refusal lists a path with
+  "no such file" and a missing dependency reads like a missing file everywhere. An undefined
+  symbol or missing dependency stays `Compiler_bug`. A search must surface all of them instead of
+  quietly falling back. The `cc_dlopen_cause` modes provoke each path with permissive
+  classification on Unix (`code_signing` strips the library's signature, which only arm64 macOS
+  refuses); Windows cannot run the shell fixtures or defer undefined symbols to dlopen.
+  `cc_load_refusal_classes` pins the classes over canned loader texts, and the
+  `test_schedule_outcome` unit test pins all three stages across severity, provenance and
+  strictness on every platform.
 - **A search restores its lineage's training state around every timing window** (gh-ocannl-1621).
   Every timed run of a training step is a step: unrestored, a 200 s cifar_resnet/cc search left
   its scratch weights with 61k zero grad entries against the fixture's 50k, the shipped routine

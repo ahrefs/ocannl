@@ -75,28 +75,34 @@ let () =
   (* gh-ocannl-1077, gh-ocannl-1142: typed, yet fatal. Post-compile host-boundary failures must not
      become candidate declines under any provenance or strictness; their fatal records keep the
      cause and render it into the public exception. *)
+  (* gh-ocannl-1717: an [Environment] refusal at the same stages (code signing, a missing library)
+     is just as fatal, and renders as [Failure] rather than [Invalid_argument]. *)
   List.iter [ dlopen_stage; artifact_missing_stage; codesign_stage ] ~f:(fun stage ->
-      let detail = "post-compile diagnostic: " ^ stage in
-      let rejection = backend_rejection ~stage detail in
-      List.iter [ Candidate; Cache_replay; Advisory; User_schedule ] ~f:(fun provenance ->
-          List.iter [ true; false ] ~f:(fun strict ->
-              let fatal =
-                protect ~strict ~classify_backend:no_backend_classification ~provenance
-                  ~phase:Transform (fun () -> raise (Cause_at (Backend_link, rejection)))
-                |> expect_fatal
-              in
-              assert (equal_phase fatal.phase Backend_link);
-              assert (Option.equal equal_cause fatal.cause (Some rejection));
-              assert (
-                match fatal.exn with Invalid_argument msg -> String.equal msg detail | _ -> false);
-              (* The same stage at another phase remains an ordinary decline. *)
-              let contained_elsewhere =
-                protect ~strict ~classify_backend:no_backend_classification ~provenance
-                  ~phase:Transform (fun () -> raise (Cause_at (Backend_compile, rejection)))
-                |> expect_classified
-              in
-              assert (equal_phase contained_elsewhere.phase Backend_compile);
-              assert (equal_cause contained_elsewhere.cause rejection))));
+      List.iter [ Compiler_bug; Environment ] ~f:(fun severity ->
+          let detail = "post-compile diagnostic: " ^ stage in
+          let rejection = backend_rejection ~stage ~severity detail in
+          List.iter [ Candidate; Cache_replay; Advisory; User_schedule ] ~f:(fun provenance ->
+              List.iter [ true; false ] ~f:(fun strict ->
+                  let fatal =
+                    protect ~strict ~classify_backend:no_backend_classification ~provenance
+                      ~phase:Transform (fun () -> raise (Cause_at (Backend_link, rejection)))
+                    |> expect_fatal
+                  in
+                  assert (equal_phase fatal.phase Backend_link);
+                  assert (Option.equal equal_cause fatal.cause (Some rejection));
+                  assert (
+                    match (severity, fatal.exn) with
+                    | Compiler_bug, Invalid_argument msg | Environment, Failure msg ->
+                        String.equal msg detail
+                    | _ -> false);
+                  (* The same stage at another phase remains an ordinary decline. *)
+                  let contained_elsewhere =
+                    protect ~strict ~classify_backend:no_backend_classification ~provenance
+                      ~phase:Transform (fun () -> raise (Cause_at (Backend_compile, rejection)))
+                    |> expect_classified
+                  in
+                  assert (equal_phase contained_elsewhere.phase Backend_compile);
+                  assert (equal_cause contained_elsewhere.cause rejection)))));
   (* gh-ocannl-1350: a toolchain that compiles no trivial kernel rejects every candidate alike, so
      its typed rejection at [Backend_compile] ends a search too, rendered as a user error; the same
      stage at link, or the compiler stage at compile, stays a decline. *)

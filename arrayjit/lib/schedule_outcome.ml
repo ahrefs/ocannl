@@ -23,7 +23,8 @@ type resource =
   | Device_memory
 [@@deriving sexp_of, compare, equal]
 
-type severity = Expected | Compiler_bug | Configuration [@@deriving sexp_of, compare, equal]
+type severity = Expected | Compiler_bug | Configuration | Environment
+[@@deriving sexp_of, compare, equal]
 
 type execution_effect = No_device_writes | Writes_may_have_occurred
 [@@deriving sexp_of, compare, equal]
@@ -202,6 +203,7 @@ let exception_of_cause cause =
   match cause with
   | Resource_exceeded _ | Backend_rejected { severity = Configuration; _ } ->
       Utils.User_error (detail_of_cause cause)
+  | Backend_rejected { severity = Environment; _ } -> Failure (detail_of_cause cause)
   | Illegal_schedule _ | Unsupported _ | Backend_rejected _ | Unclassified _ | Seed_evicted _
   | Not_dispatched _ ->
       Invalid_argument (detail_of_cause cause)

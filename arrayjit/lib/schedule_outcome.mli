@@ -58,6 +58,14 @@ type severity =
           compiler setting the compiler does not accept, a compiler command that names no compiler,
           a broken local toolchain. A user error, so {!exception_of_cause} renders it as
           [Utils.User_error]. *)
+  | Environment
+      (** The host refused an artifact the compiler built, for a reason that is neither the code nor
+          the configuration (gh-ocannl-1717): a code-signing or system-policy refusal at load, a
+          library that is missing after a successful compile. Typically transient -- a policy daemon
+          or a filesystem under load -- so rerunning usually succeeds. {!exception_of_cause} renders
+          it as [Failure]: the operation failed, but the caller misused nothing (which
+          [Invalid_argument] would claim) and has nothing to fix (which [Utils.User_error] would).
+      *)
 [@@deriving sexp_of, compare, equal]
 
 type execution_effect = No_device_writes | Writes_may_have_occurred
@@ -107,10 +115,13 @@ val exception_of_cause : cause -> exn
 
 val dlopen_stage : string
 (** The [stage] of a {!Backend_rejected} raised when the host's dynamic loader refuses a kernel the
-    compiler built — [dlopen] on an undefined symbol, a missing dependency (gh-ocannl-1077). *)
+    compiler built. [Compiler_bug] for an undefined symbol or a missing dependency (gh-ocannl-1077);
+    {!Environment} for a code-signing or policy refusal, or a library gone by the time it is loaded
+    (gh-ocannl-1717). *)
 
 val artifact_missing_stage : string
-(** The compiler reported success but its library did not appear before the timeout. *)
+(** The compiler reported success but its library did not appear before the timeout: an
+    {!Environment} rejection (gh-ocannl-1717). *)
 
 val codesign_stage : string
 (** The requested host signing step rejected the compiled library. *)
