@@ -60,7 +60,7 @@ let swaps_are expected ops =
 
 (* [for r, q, o: d[o] = f(d[o], a[r,q,o])], the bias gradient's order, with [f] the accumulation
    [acc] builds; [idx] is the accumulator's index map over [(r, q, o)]. *)
-let reduce3 ~tag ?(narrow = false) ?(acc = fun d a -> Ll_test.add d a) ~idx ~d_dims () =
+let reduce3 ~tag ?(narrow = false) ?(acc = fun d a -> Ll_test.add_own d a) ~idx ~d_dims () =
   let a = node ~dims:[| nr; nq; no |] ("rs_" ^ tag ^ "_a") in
   let d = (if narrow then node_bf16 else node) ~dims:d_dims ("rs_" ^ tag ^ "_d") in
   List.iter [ a; d ] ~f:Ll_test.materialize;

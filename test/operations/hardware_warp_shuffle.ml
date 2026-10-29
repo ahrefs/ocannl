@@ -400,7 +400,8 @@ let () =
 
 let () =
   (* Lane-dependent: [flag := i < 32] in a workgroup loop over [i], then [if flag] around the tree
-     over the same [i]. *)
+     over the same [i].The flag is a [single] local, so its comparison computes at [single] and says
+     so: {!Ll_test.lt}'s index-precision annotation would be refused there (gh-ocannl-1709). *)
   let n = 128 in
   let u = wnode ~dims:[| n |] "wf_u" and acc = wnode "wf_acc" and flag_node = wnode "wf_flag" in
   List.iter [ u; acc ] ~f:L.materialize;
@@ -416,7 +417,7 @@ let () =
     LL.unflat_lines
       ([
          L.declare_local flag;
-         L.loop_n ~axis:lanes i n (LL.Set_local (flag, L.lt (L.embed i) (L.ic 32)));
+         L.loop_n ~axis:lanes i n (LL.Set_local (flag, L.binop Ir.Ops.Cmplt (L.embed i) (L.ic 32)));
        ]
       @ (if also_unguarded then [ tree ~i:tree_i reduce ] else [])
       @ [ L.if_ (LL.Get_local flag) (tree ~i:tree_i reduce) ])
@@ -568,7 +569,8 @@ let () =
     LL.unflat_lines
       [
         L.declare_local flag;
-        L.loop_n ~axis:lanes i n (LL.Set_local (flag, L.lt (L.embed i) (L.ic (n / 2))));
+        L.loop_n ~axis:lanes i n
+          (LL.Set_local (flag, L.binop Ir.Ops.Cmplt (L.embed i) (L.ic (n / 2))));
         L.if_ (LL.Get_local flag)
           (L.loop_n ~axis:reduce tree_i n
              (L.set_at acc f0 (L.add (L.get acc [| f0 |]) (L.get u [| it tree_i |]))));

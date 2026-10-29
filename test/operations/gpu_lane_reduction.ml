@@ -128,20 +128,23 @@ let dk_nest ?(minted = true) ?guard ?(flag_below = 32) ~name ~e_n ~d_n () =
   let flag_lane, guarded =
     match guard with
     | None -> (None, [ reduction ])
-    | Some `Uniform -> (None, [ L.if_ (L.lt (L.embed s) (L.ic (s_n - 2))) reduction ])
+    | Some `Uniform -> (None, [ L.if_idx (L.lt (L.embed s) (L.ic (s_n - 2))) reduction ])
     | Some ((`Lane_flag | `First_or_flag) as g) ->
         let flag_node = node ~dims:[| 1 |] (name ^ "_flag") in
         L.virtualize flag_node;
         let flag = LL.get_scope flag_node and a = L.sym () in
+        (* The flag is a [single] local, so its comparisons compute at [single] and say so:
+           {!Ll_test.lt}'s index-precision annotation would be refused there (gh-ocannl-1709). *)
         let cond =
           match g with
           | `Lane_flag -> LL.Get_local flag
-          | `First_or_flag -> L.binop Ir.Ops.Or (L.lt (L.embed s) (L.ic 1)) (LL.Get_local flag)
+          | `First_or_flag ->
+              L.binop Ir.Ops.Or (L.binop Ir.Ops.Cmplt (L.embed s) (L.ic 1)) (LL.Get_local flag)
         in
         ( Some a,
           [
             L.declare_local flag;
-            L.loop_n a e_n (LL.Set_local (flag, L.lt (L.embed a) (L.ic flag_below)));
+            L.loop_n a e_n (LL.Set_local (flag, L.binop Ir.Ops.Cmplt (L.embed a) (L.ic flag_below)));
             L.if_ cond reduction;
           ] )
   in

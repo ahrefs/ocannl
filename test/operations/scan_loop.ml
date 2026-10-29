@@ -554,7 +554,7 @@ let () =
     let s = carry ~init:(c 0.) st in
     let llc =
       scan ~upto:(n - 1) i ~carried:[ s ]
-        (seq (set_next s (add (prev s) (get x [| iter i |]))) (set_at out (iter i) (next s)))
+        (seq (set_next s (add_own (prev s) (get x [| iter i |]))) (set_at out (iter i) (next s)))
     in
     let o = optimize ~name:label llc in
     (List.hd_exn

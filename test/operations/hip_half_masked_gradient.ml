@@ -55,7 +55,7 @@ let () =
   let llc =
     L.loop_n ~axis:LL.Grid b batches
       (L.loop_n ~axis:LL.Grid q queries
-         (L.loop_n ~axis:LL.Workgroup h 256 (L.if_ (L.lt (L.embed h) (L.c 8.)) body)))
+         (L.loop_n ~axis:LL.Workgroup h 256 (L.if_idx (L.lt (L.embed h) (L.ic 8)) body)))
   in
   let optimized = L.optimize ~materialized:nodes ~name:"hip_half_masked_gradient" llc in
   let ctx, routine = L.link ~ctx ~name:"hip_half_masked_gradient" optimized in

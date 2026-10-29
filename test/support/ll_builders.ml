@@ -229,6 +229,13 @@ let binop op a b : LL.scalar_t = LL.Binop (op, (a, single), (b, single))
 let add a b = binop Ops.Add a b
 let mul a b = binop Ops.Mul a b
 
+(** [add_own a b] is {!add} with each operand annotated at its OWN precision
+    ({!Ir.Low_level.scalar_precision}), the form the assignments lowering writes: what a store whose
+    precision is not [single] takes. A binary operator computes at its destination's precision
+    whatever its operands say, and [optimize] refuses an annotation that is neither that precision
+    nor the operand's own (gh-ocannl-1709), so {!add}'s [single] under a [half] store is refused. *)
+let add_own a b = LL.apply_op (Ops.Binop Ops.Add) [| a; b |]
+
 (** {2 Index-precision scalars}
 
     The builders above are single-precision, which is what a value computation is. A GUARD is not: a
