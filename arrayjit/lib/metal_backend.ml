@@ -1298,7 +1298,16 @@ module Impl = struct
           ( Ops.Byte_prec _ | Ops.Uint16_prec _ | Ops.Int32_prec _ | Ops.Uint32_prec _
           | Ops.Int64_prec _ | Ops.Uint64_prec _ ) ) ->
           f "%"
-      | Mod, _ -> math "fmod"
+      (* The fast [fmod] is [x - y * trunc(x / y)]-shaped (gh-ocannl-1684, M4 Max): NaN for a finite
+         [x] over an infinite [y], where C returns [x], and [+0] for an exact remainder of a
+         negative [x], where C returns [-0]. [precise::fmod] is C's; it has no half overload, so
+         half widens (the remainder is exact in half: no rounding back). *)
+      | Mod, Ops.Half_prec _ ->
+          fun v1 v2 ->
+            group
+              (string "(half)precise::fmod(" ^^ string "(float)" ^^ parens v1 ^^ comma ^^ space
+             ^^ string "(float)" ^^ parens v2 ^^ rparen)
+      | Mod, _ -> math "precise::fmod"
       | Max, _ -> math "fmax"
       | Min, _ -> math "fmin"
       (* Comparisons and logical connectives are precision-independent and spelled the same in MSL

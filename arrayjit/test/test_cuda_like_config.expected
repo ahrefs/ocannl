@@ -4,6 +4,9 @@ CUDA approximate tanh keeps its intrinsic: true
 HIP approximate tanh keeps its library function: true
 HIP f32 and bfloat16 sin and cos render through the NaN-preserving wrappers: true
 HIP's NaN-preserving sin and cos wrappers are defined in its builtins table: true
+HIP sqrt, rsqrt and fmod render through their wrappers: true
+HIP's sqrt and fmod wrappers are defined in its builtins table: true
+CUDA sqrt, rsqrt and fmod keep the library functions, half fmod widened: true
 CUDA f32 sin and cos keep the library functions: true
 CUDA bfloat16 ReLU keeps NaN-propagating half intrinsic: true
 HIP bfloat16 ReLU keeps its float bridge: true

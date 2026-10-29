@@ -168,7 +168,37 @@ let () =
         [ (-2., 0.5); (-1.5, -1.5); (-0.75, 2.5); (-2., Float.nan); (-2., 0x1p-149) ]
       in
       p_all "negative bases under fractional or NaN exponents stay NaN" fractional ~f:(fun (x, y) ->
-          Float.is_nan (f32_pow x y) && Float.is_nan (f64_pow x y)))
+          Float.is_nan (f32_pow x y) && Float.is_nan (f64_pow x y));
+      (* gh-ocannl-1684: C's powers that the lowering reads as NaN -- [inf * log2(1)], and [log2] of
+         a negative base under a non-integral exponent -- measured on CUDA. [-0]'s survive the
+         lowering ([log2(-0)] is -inf), so they are pinned but not part of the negative control. *)
+      let lost =
+        [
+          (1., Float.infinity);
+          (1., Float.neg_infinity);
+          (1., Float.nan);
+          (-1., Float.infinity);
+          (-1., Float.neg_infinity);
+          (Float.neg_infinity, 0.5);
+          (Float.neg_infinity, -0.5);
+          (Float.neg_infinity, 1.5);
+        ]
+      in
+      p_all
+        "the emulated vendor powf loses C's powers of +-1 under infinite or NaN exponents, or of \
+         -inf under fractional ones"
+        lost ~f:(fun (x, y) -> Float.is_nan (raw x y));
+      p_all
+        "C's powers of +-1 under infinite or NaN exponents, and of -0 and -inf under fractional \
+         ones, bitwise"
+        (lost @ [ (-0., 0.5); (-0., -0.5); (-0., 1.5) ])
+        ~f:(fun (x, y) ->
+          let want = Float.pow x y in
+          let ok = bits (f32_pow x y) = bits want && bits (f64_pow x y) = bits want in
+          if not ok then
+            Printf.eprintf "(not part of the golden) pow(%h, %h): f32 %h, f64 %h, want %h\n" x y
+              (f32_pow x y) (f64_pow x y) want;
+          ok))
 
 (* [integer_power_domain]'s domain: its bases under its exponents and its large ones alike. *)
 let powi_cases =
