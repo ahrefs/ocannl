@@ -1,6 +1,6 @@
 # OCANNL Roadmap
 
-**v1.1.2 released October 25, 2026: performance beyond transformers, measured on a reduced ResNet-style leg, and a much faster untuned GPU training step. Next: the training experience (v1.1.3, October 31) and reusable tensor programs (v1.2, November 15, 2026).**
+**v1.1.3 released October 31, 2026: the training experience a newcomer meets — resumable checkpoints, persistent state declared by its update, virtual nodes readable by recomputation, plot legends, and refusals where gradient used to drop silently. Next: reusable tensor programs (v1.2, November 15, 2026).**
 
 This roadmap outlines the development plan for OCANNL through version 1.0 and beyond. Dates indicate **end of period** targets. Through v1.0 the schedule was pinned to conference deadlines; it is now project-internal, and the dates below are aspirational rather than external commitments.
 
@@ -486,21 +486,36 @@ Over 220 issues closed between the v1.1.1 tag and this one.
 
 ---
 
-## v1.1.3 — October 31, 2026
+## v1.1.3 — October 31, 2026 (released)
 **Theme: The training experience a newcomer meets**
 
 Renamed from v1.1.2 in the September 29 split, and cut on October 13 to what the v1.2
-demonstration's newcomer path needs:
+demonstration's newcomer path needs. Every issue the milestone held at the tag closed. Experiment
+tracking (#122) moved to v1.2.2 on October 29, and cumulative/top-k operations (#952) moved to v1.2
+on October 28. The lineage composition check (#1724) joined during the release wave. About 137
+issues closed between the v1.1.2 tag and this one, most of them in v1.2.1.
 
-- Resumable checkpoints (#96), experiment tracking (#122), plot legends and axis ticks (#103).
-- Explicit persistent optimizer state (#793) and computed-value observability (#777).
-- Interfaces for `lib/` (#1010), so the user-facing surface is stated rather than arguable.
-- **Recovery for REPL and notebook use** (#1301): a failed tensor construction taints the session
-  instead of silently corrupting the next one, and `rewind_to_last_closure` discards the open
-  state. It relies on closure being a commit: `finish_inference` is global and empties the solver,
-  and a closed tensor cannot be spoiled by a later failed inference. A guard on writes to closed
-  shapes makes that premise enforced rather than assumed.
-- MobileNet width multiplier (#880) and cumulative/top-k operations (#952).
+- [x] Resumable checkpoints (#96): `Ocannl.Checkpoint` stops and resumes a training loop in a
+  fresh process with a bit-identical continuation. Plot legends and axis ticks (#103).
+- [x] Explicit persistent optimizer state (#793): read-before-write is declared by the update
+  operator, not a label match. Computed-value observability (#777): a context reads a virtual
+  node by recomputing it, `Context.observability` classifies an unreadable one up front, and the
+  for-print proxies retired.
+- [x] Routine composition checked per lineage (#1724): a duplicate compile is refused, and so is
+  a backprop whose upstream gradient no routine owns, so `forward_once` no longer drops gradient
+  silently.
+- [x] Interfaces for `lib/` (#1010), so the user-facing surface is stated rather than arguable
+  (shipped in v1.1.2).
+- [x] **Recovery for REPL and notebook use** (#1301): a failed tensor construction taints the
+  session instead of silently corrupting the next one, and `rewind_to_last_closure` discards the
+  open state. It relies on closure being a commit: `finish_inference` is global and empties the
+  solver, and a closed tensor cannot be spoiled by a later failed inference. A guard on writes to
+  closed shapes makes that premise enforced rather than assumed. (Shipped in v1.1.2.)
+- [x] MobileNet width multiplier (#880), shipped in v1.1.2.
+- **Beyond the milestone**: per-nest cc parallelism (#1458) makes the untuned `cifar_resnet` cc
+  step 2.2–3.65× faster on three CPUs. Kernel code caches on cc, CUDA and Metal (#1525, #1529,
+  #1605) roughly halve a tuning candidate's compile. Launch parameters start unassigned and
+  are refused rather than run at 0 (#940, #1629).
 
 **Moved to v1.2.2 on October 13**: model surgery (#33), LSTM (#60), Bonsai RNN (#182), digit
 addition (#427), BERT/ModernBERT (#297), DisTrO (#278), Gemma 3 with real weights (#570), the
@@ -561,7 +576,7 @@ consolidation and consumer work deferred from v1.1.1 and v1.1.3.
 | **1.1** | Oct 4, 2026 | **released** | **Fused attention and better transformer scheduling**; tuned f32 inference improves over the same-night August anchor, while approximate performance remains workload-dependent |
 | **1.1.1** | Oct 15, 2026 | **released** (bounded set) | **Consolidation after the transformer work**: the release gate met (CI green, three soundness fixes, the full-step training comparison), backward-contraction sketches for training, and broad search and diagnostics follow-through |
 | **1.1.2** | Oct 25, 2026 | **released** | **Performance beyond transformers**: a reduced ResNet-style leg, Winograd under `approximate`, CPU sketch economy, and a 5× faster untuned GPU training step at batch 256 |
-| 1.1.3  | Oct 31, 2026 | planned | The training experience: checkpoints, tracking, plots, `lib/` interfaces, REPL/notebook recovery |
+| **1.1.3** | Oct 31, 2026 | **released** | **The training experience a newcomer meets**: resumable checkpoints, persistent state declared by its update, virtual nodes readable by recomputation, plot legends, lineage composition checks, and a 2.2–3.65× faster untuned cc `cifar_resnet` step |
 | 1.2    | Nov 15, 2026 | planned | Reusable tensor programs: shape schemes with checkpoint rollback, beside an end-to-end newcomer path; standalone ArrayJIT optional |
 | 1.2.1 / 1.2.2 | undated | overflow | Consolidation deferred from v1.1.1 / models, reproductions and explorations deferred from v1.1.3 |
 | 1.3    | undated | design spaces | Feature-grade and hardware-gated work moved out of v1.2: CDNA MFMA, CUDA pinned/constant memory, PoPE, a looping compilation pipeline, scan licences |
