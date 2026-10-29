@@ -103,6 +103,7 @@ let main () =
           ]
       in
       PrintBox_text.output Stdio.stdout plot_lr;
+      Stdio.print_endline "";
       (* Testing how the syntax extension %op creates labels for the resulting tensors: *)
       Stdio.printf "mlp_result's name: %s\n%!" @@ Tensor.debug_name result.mlp_result;
       (* Note: mlp_result is not included in the resulting tensor's label, because the identifier

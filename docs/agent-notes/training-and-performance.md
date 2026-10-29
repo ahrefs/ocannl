@@ -26,6 +26,14 @@ files.
   matching the params' grad `Fetch`es; intermediate grads must keep their per-micro-step zeroing
   since backprop `=+` relies on it), `Outlier_detector` (z-score vs sliding window; nan during
   warmup, and a constant window gives std 0 → infinite z). Executed parity: `loop_utils.ml`.
+- Plots (`PrintBox_utils.plot`, gh-ocannl-103) draw their tick labels and legend AROUND the upstream
+  `printbox-ext-plot` canvas (its `axes = false` rendering, through an extension of our own with a
+  text, Markdown and HTML handler), because 0.12 labels only the axis ends and exports neither its
+  data window nor its cell mapping. `data_window` and `cell_of` restate them, so a printbox upgrade
+  that changes either moves labels off their markers with no compile error: `plot_axes` is the pin
+  (markers at round values must sit on the rows and columns labeled with them), and its negative
+  control is an off-by-one in `cell_of`. The text layout reads the canvas's frame lines, so a
+  canvas that stops rendering as `dimy + 2` framed lines is refused loudly rather than mislabeled.
 - Optimizer state that survives across invocations of a routine is declared by its update: an
   assignment reading its own lhs without the clearing `=:` prefix (`=:` naming its lhs, `=+`, ...)
   is read-before-write, which `decide_placements` keeps `On_device` and never virtual

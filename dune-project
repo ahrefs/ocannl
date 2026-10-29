@@ -161,6 +161,11 @@
    (>= 0.12))
   (printbox-ext-plot
    (>= 0.12))
+  (printbox-html
+   (>= 0.12))
+  (printbox-md
+   (>= 0.12))
+  tyxml
   (menhir
    (>= 20240715))
   (pprint

@@ -21,6 +21,9 @@
   printbox
   printbox-text
   printbox-ext-plot
+  printbox-html
+  printbox-md
+  tyxml
   einsum_parser
   stdio
   sexplib
