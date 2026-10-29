@@ -56,10 +56,20 @@ let get tn idcs : LL.scalar_t = LL.Get (tn, idcs)
 let zero tn : LL.t = LL.Zero_out tn
 let seq a b : LL.t = LL.Seq (a, b)
 
-(** [if_ cond body] guards [body] on [cond] being nonzero ({!Ir.Low_level.If}). The condition is
-    read at index precision only when it is an index expression; a value read (the usual flag
-    tensor) keeps the node's precision, which is what {!single} is here. *)
-let if_ cond body : LL.t = LL.If { cond = (cond, single); body }
+(** [if_at prec cond body] guards [body] on [cond] being nonzero ({!Ir.Low_level.If}), the condition
+    read at [prec] — the caller's claim, unchecked here. Prefer {!if_}, which reads the condition's
+    own precision, or {!if_idx}. *)
+let if_at prec cond body : LL.t = LL.If { cond = (cond, prec); body }
+
+(** [if_ cond body] is {!if_at} with the condition read at its OWN precision
+    ({!Ir.Low_level.scalar_precision}, the function the operand-precision check reads an operand's
+    own precision with): a value read (the usual flag tensor or local) at its node's precision, and
+    a comparison {!cmp} built at the index precision its operands carry. A fixed annotation could
+    not serve both: under a [single] guard an index comparison evaluates at [single], and its
+    [Constant] operands' index-precision annotation is neither that nor their own [single], which
+    [optimize] refuses (gh-ocannl-1709). {!if_idx} pins index precision whatever the condition is.
+*)
+let if_ cond body : LL.t = if_at (LL.scalar_precision cond) cond body
 
 (** [loop ~upto s body] iterates [s] over [0 .. upto] INCLUSIVE, mirroring
     {!Ir.Low_level.For_loop}'s own bounds; [upto < 0] is a dead loop, which is a case worth
@@ -229,12 +239,17 @@ let binop op a b : LL.scalar_t = LL.Binop (op, (a, single), (b, single))
 let add a b = binop Ops.Add a b
 let mul a b = binop Ops.Mul a b
 
-(** [add_own a b] is {!add} with each operand annotated at its OWN precision
-    ({!Ir.Low_level.scalar_precision}), the form the assignments lowering writes: what a store whose
-    precision is not [single] takes. A binary operator computes at its destination's precision
-    whatever its operands say, and [optimize] refuses an annotation that is neither that precision
-    nor the operand's own (gh-ocannl-1709), so {!add}'s [single] under a [half] store is refused. *)
-let add_own a b = LL.apply_op (Ops.Binop Ops.Add) [| a; b |]
+(** [binop_own op a b] is {!binop} with each operand annotated at its OWN precision
+    ({!Ir.Low_level.scalar_precision}), built by {!Ir.Low_level.apply_op}, the constructor the
+    assignments lowering uses: what a store whose precision is not [single] takes. A binary operator
+    computes at its destination's precision whatever its operands say, and [optimize] refuses an
+    annotation that is neither that precision nor the operand's own (gh-ocannl-1709), so {!binop}'s
+    [single] under a [half] or [bfloat16] store is refused while an own-precision annotation is
+    accepted under every store. *)
+let binop_own op a b = LL.apply_op (Ops.Binop op) [| a; b |]
+
+let add_own a b = binop_own Ops.Add a b
+let mul_own a b = binop_own Ops.Mul a b
 
 (** {2 Index-precision scalars}
 
@@ -264,11 +279,18 @@ let conj a b = cmp Ops.And a b
 let disj a b = cmp Ops.Or a b
 
 (** [where_ cond then_ else_] is the [Where] ternop, its condition read at index precision and its
-    arms at [single] — the shape a zero-fringe guard renders as. *)
+    arms at [single] — the shape a zero-fringe guard renders as. Under a store that is not [single],
+    use {!where_own}. *)
 let where_ cond then_ else_ : LL.scalar_t =
   LL.Ternop (Ops.Where, (cond, iprec ()), (then_, single), (else_, single))
 
-(** [if_idx cond body] is {!if_} with the condition read at INDEX precision: the standing of a
-    launch-extent or fringe guard, whose condition is an index expression rather than a value read.
-*)
-let if_idx cond body : LL.t = LL.If { cond = (cond, iprec ()); body }
+(** [where_own cond then_ else_] is {!where_} with every operand at its OWN precision, as
+    {!binop_own} builds a binop: the arms are accepted under any store, and the condition is read as
+    {!if_} reads one (a {!cmp}-built comparison at index precision, a value read at its node's
+    precision). *)
+let where_own cond then_ else_ = LL.apply_op (Ops.Ternop Ops.Where) [| cond; then_; else_ |]
+
+(** [if_idx cond body] is {!if_} with the condition read at INDEX precision whatever it is: the
+    standing of a launch-extent or fringe guard. For a {!cmp}-built condition it builds what {!if_}
+    builds; it differs on a value-read condition, which it converts to an index. *)
+let if_idx cond body : LL.t = if_at (iprec ()) cond body
