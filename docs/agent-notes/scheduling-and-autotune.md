@@ -1374,7 +1374,10 @@ files.
   (crown = first readings' head). `best_ms` stays the crown's SEARCH reading, so it can exceed
   another entry's (the untuned default's `default_ms`) exactly when that entry lost the finals:
   a claim that `best_ms <= default_ms` "by construction" now reads `|| Autotune.finals_outranked
-  r ~search_ms:d` (the report's `finals` list holds each contender's two readings). No cache bump: an old
+  r ~search_ms:d` (the report's `finals` list holds each contender's two readings), and so does a
+  claim that `mma_best_ms` undercuts `best_ms` only inside a rejected round's `Autotune.min_progress`
+  band: a swap widens that gap to the finals' margin (gh-1716, `autotune_smoke`'s ubuntu flake, 4.2%).
+  A cache replay carries both times but no finals, so judge the gap on the storing search's report. No cache bump: an old
   crown is a correctly timed schedule chosen with more noise. The boundary, measured under a
   scripted clock (`autotune_beam_finals`): window-granular re-timing removes offsets that LAST
   across adjacent windows (drift, co-tenant episodes -- what survives a window's own
