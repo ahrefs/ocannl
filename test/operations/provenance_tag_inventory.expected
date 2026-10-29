@@ -180,6 +180,7 @@ test/operations/footprint_materialization.ml -- 13
 test/operations/gather_table_placement.ml -- 17 152
 test/operations/local_host_access.ml -- 39
 test/operations/model_default_placements.expected -- 9
+test/operations/persistent_state.ml -- 29
 test/operations/provenance_tag_inventory.ml -- 176 178
 test/operations/scan_loop.expected -- 148
 test/operations/scan_loop.ml -- 148

@@ -1696,6 +1696,31 @@ let inherited_local_read_rejection (tn : Tn.t) : string =
      in this routine before the read, or mark it as materialized (e.g. via Train.set_materialized) \
      in the routine that computes it."]
 
+(* gh-ocannl-793: an inlined read of a virtual node for which neither this routine nor an earlier
+   routine of the lineage stored a computation. The decider never virtualizes a read-before-write
+   node it decides itself, so a node this routine writes got here through a [Virtual] placement made
+   elsewhere: an intent, or an earlier routine. *)
+let missing_computation_rejection (plc : Tn.Placements.t) (traced : traced_array) : string =
+  let tn = traced.tn in
+  let name = Tn.debug_name tn in
+  let cause =
+    if traced.has_assignment || traced.zeroed_out then
+      [%string
+        "This routine writes %{name}, but reads it before it does, or reads its own previous value \
+         -- an =: whose right-hand side names %{name}, or =+ and the other accumulations without \
+         the =: prefix: such a node carries state from one run of the routine to the next, which a \
+         virtual node has no buffer to hold."]
+    else
+      "No routine compiled into this context computes it: the context passed in does not descend \
+       from the compilation of the routine that does."
+  in
+  [%string
+    "the node %{name} is placed virtual (%{Tn.debug_memory_mode (Tn.Placements.get plc tn)}), but \
+     neither this routine nor an earlier routine of its compilation lineage stored a computation \
+     to inline at its reads. %{cause} Mark %{name} as materialized (e.g. via \
+     Train.set_materialized) before its first compilation, or drop the placement that made it \
+     virtual."]
+
 (* gh-ocannl-1551: the refusal of an INHERITED computation that cannot be instantiated at a read
    site ([code] is [instantiate_computations]' rejection), shared like the one above. *)
 let inherited_uninlinable_rejection (tn : Tn.t) ~(code : string) : string =
@@ -3117,11 +3142,7 @@ let%track7_sexp inline_computation ?(fresh_symbol = Indexing.get_symbol) ?on_inh
   let computations =
     Hashtbl.find optim_ctx.computations traced.tn
     |> Option.value_or_thunk ~default:(fun () ->
-        raise
-        @@ Utils.User_error
-             [%string
-               "Stale optimize_ctx: No computations found for #%{traced.tn.Tn.id#Int}: \
-                %{Tn.debug_name traced.tn}"])
+        raise @@ Utils.User_error (missing_computation_rejection optim_ctx.placements traced))
   in
   (* Review round 2 of the gh-610/611 PR: a computation INHERITED from an earlier routine of the
      lineage that reads a merge buffer must not be consumed here — merge-buffer contents are
