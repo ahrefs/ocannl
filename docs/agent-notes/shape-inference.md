@@ -117,6 +117,15 @@ files.
   range-guarded in `Assignments` (`clamp_conds`), so any padded offset reads zero there.
   `refuse_nonpositive_coefficient` refuses a stride or dilation below 1 at the same spot as the
   offset refusal. `test/einsum/padded_operand_offset_windows` is the operand-side oracle audit.
+- A one-operand window (`x @^^ "s, 2*o=+k => s, o" ["k"]`, no kernel tensor) gets its kernel's
+  extent from the capture alone, in two places that re-elaborate the spec with FRESH variables
+  (gh-ocannl-1691): `derive_projections`' local solve (the projection-sizing constraints, which
+  gh-ocannl-1656 added for concat splits and which fixed the forward as a side effect) and
+  `product_space_shape`, the `*_pspace` gate proxy of a max-family backward, which ties each
+  captured label to the operation's binding (`capture_ties_for_proxy`; untied, the kernel closed to
+  1 and lowering died in `Indexing.prod_project_for`). A new fresh re-elaboration of a spec needs
+  the same tie: operand equalities reach only labels an operand row carries. A padded kernel
+  nothing sizes is refused in `Row.get_proj_equations` (the `Conv_input` arm) naming the kernel.
 - Use-site row resolution is opt-in (gh-ocannl-544): an operation result's open row variables
   close DOWN to its arguments' shapes; a use site broadcasts the result in but cannot widen it.
   The resolve-at-use mark (`Row.add_resolve_at_use`, propagated through unification) grants the

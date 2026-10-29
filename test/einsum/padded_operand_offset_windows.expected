@@ -42,6 +42,28 @@ gradient of o=+2+k: d/dx: true
 gradient of o=+2+k: d/dw: true
 gradient of max 2*o=+1+k: d/dx: true
 gradient of max 2*o=+1+k: d/dw: true
+one-operand padded sum 2*o=+1+k, kernel 3: extent: true
+one-operand padded sum 2*o=+1+k, kernel 3: values: true
+one-operand padded sum o=+2*k (dilated), kernel 3: extent: true
+one-operand padded sum o=+2*k (dilated), kernel 3: values: true
+one-operand padded sum 3*o=+1+k, kernel 4, raw ~capture_dims: extent: true
+one-operand padded sum 3*o=+1+k, kernel 4, raw ~capture_dims: values: true
+one-operand valid sum 2*o<+k, kernel 3: extent: true
+one-operand valid sum 2*o<+k, kernel 3: values: true
+one-operand valid sum o<+2*k (dilated), kernel 2: extent: true
+one-operand valid sum o<+2*k (dilated), kernel 2: values: true
+one-operand padded max 2*o=+1+k, kernel 3: extent: true
+one-operand padded max 2*o=+1+k, kernel 3: values: true
+one-operand valid max 2*o<+k, kernel 2: extent: true
+one-operand valid max 2*o<+k, kernel 2: values: true
+one-operand padded 2-D max pool 2*a=+k, 2*b=+l, window 3: extent: true
+one-operand padded 2-D max pool 2*a=+k, 2*b=+l, window 3: values: true
+gradient of one-operand padded sum 2*o=+1+2*k: d/dx: true
+gradient of one-operand padded max 2*o=+1+k: d/dx: true
+one-operand padded sum, kernel not captured: the window kernel k has no size: no operand axis carries it, and a padded (=+) window's extents do not determine it. Capture the kernel label and set it (x ++ "s, 2*o=+k => s, o" ["k"], then Shape.set_dim k 3), or give the window a kernel operand of known extent (x +* "s, 2*o=+k; k => s, o" w)
+one-operand padded sum, kernel not captured: refused, naming the unsized kernel and the remedies: true
+one-operand padded sum, kernel captured but not set: refused, naming the unsized kernel and the remedies: true
+one-operand padded max, kernel not captured: refused, naming the unsized kernel and the remedies: true
 zero dilation, padded window: affine axis `o=+0*k` in einsum spec "s, o=+0*k; k => s, o" has dilation 0, which must be at least 1: at 0 every position of its label would map to the same cell
 zero dilation, padded window: refused at construction, naming the affine axis o=+0*k: true
 zero dilation, unpadded window: refused at construction, naming the affine axis o<+0*k: true
