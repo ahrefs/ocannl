@@ -1692,12 +1692,23 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name recompute_on_read)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules recompute_on_read)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  ; ocannl-backend: cc -- `Context.cpu ()`: the query reads metadata, nothing here depends on the backend.
  (name observability_query)
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules observability_query)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -1712,8 +1723,8 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
- ; ocannl-backend: cc -- `Context.cpu ()` and Train.printf, exercising the recompute-through-
- ; to_host proxy path on that context.
+ ; ocannl-backend: cc -- `Context.cpu ()` and Train.printf, exercising recompute-on-read
+ ; through Context.to_host and the printer's observability placeholders on that context.
  (name for_print_test)
  (package neural_nets_lib)
  (deps ocannl_config)

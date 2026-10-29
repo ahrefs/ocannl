@@ -1915,7 +1915,9 @@ let forward_once ?output_cd_file ?(skip_init = false) ?reinit_all ?(bindings = I
     run_once ?output_cd_file ~skip_init ?reinit_all ~bindings ?launch_values ?budget ?max_candidates
       ?budget_report ~f:forward ctx t
   in
-  (* gh-ocannl-777's recompute-on-read path should retire this forward-root consumption cleanup. *)
+  (* The [once]: the tensor is not reusable after this run, so its backprop handout is discarded.
+     Whether this discard survives, or the contract is enforced by a per-lineage duplicate-fragment
+     check instead, is gh-ocannl-1724's. *)
   Tensor.discard_backprop_code t;
   ctx
 
@@ -1924,34 +1926,9 @@ let update_once ?output_cd_file ?(skip_init = false) ?reinit_all ?(bindings = ID
   run_once ?output_cd_file ~skip_init ?reinit_all ~bindings ?launch_values ?budget ?max_candidates
     ?budget_report ~f:grad_update ctx t
 
-(* For-print materialization (gh-ocannl-333 AC 5): the [%cd "for_print" =: t] trick. When a tensor's
-   value is not already materialized in the printing context, recompile a copy of it ([for_print = t
-   + 0]) into a fresh device-resident node and register that node as a for-print proxy, so the
-   printer reads the tensor's value through it.
-
-   This is best-effort: it works for recomputable (e.g. virtual / fetch-defined) tensors. For a
-   tensor that is materialized elsewhere but simply absent from this context, the copy cannot be
-   linked (its operand has no value here) — in that case we fall back to the metadata placeholder
-   rather than crash. A fresh copy is built each call because [forward_once] consumes the copy's
-   forward root; the for-print node is registered as the source's proxy for subsequent reads. *)
-let ensure_printable (ctx : Context.t) (t : Tensor.t) : Context.t =
-  if Context.mem ctx t.Tensor.value then ctx
-  else
-    try
-      let for_print =
-        let%op for_print = t + 0 in
-        for_print
-      in
-      let ctx = forward_once ctx for_print in
-      Context.register_for_print ~src:t.Tensor.value ~proxy:for_print.Tensor.value;
-      ctx
-    with _ -> ctx
-
 let%debug7_sexp printf ?here ?(with_grad = true) ?(with_code = false) ?(with_low_level = false)
     ?(style = `Default) (ctx : Context.t) (t : Tensor.t) : unit =
-  let ctx = ensure_printable ctx t in
   Tensor.print ?here ~force:true ~ctx ~with_grad ~with_code ~with_low_level style t
 
 let printf_tree ?here ?with_value ?(with_grad = true) ?(depth = 9) (ctx : Context.t) t =
-  let ctx = ensure_printable ctx t in
   Tensor.print_tree ?here ~force:true ~ctx ?with_value ~with_grad ~depth t

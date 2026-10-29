@@ -143,47 +143,27 @@ let () =
      with Utils.User_error _ -> true)
 
 (* --- The replay filter, on hand-built code --- *)
-let mk label =
-  Tn.create (Tn.Specified Ir.Ops.single)
-    ~id:(9000 + String.length label)
-    ~label:[ label ]
-    ~unpadded_dims:(lazy [| 4 |])
-    ~padding:(lazy None)
-    ()
-
 let () =
-  let self = mk "rf_self"
-  and sib = mk "rf_sibling"
-  and src = mk "rf_src"
-  and sib_src = mk "rf_sib_src" in
-  let i = Ir.Indexing.get_symbol () and launch = Ir.Indexing.get_symbol () in
-  let it = Ir.Indexing.Iterator i in
-  let get tn idx = Ll.Get (tn, [| idx |]) in
-  let set tn llsc = Ll.Set { tn; idcs = [| it |]; llsc; debug = "" } in
+  let open Ll_test in
+  let mk = node_factory ~first_id:9000 ~dims:[| 4 |] () in
+  let self = mk "rf_self" and sib = mk "rf_sibling" and src = mk "rf_src" in
+  let sib_src = mk "rf_sib_src" in
+  let i = sym () and launch = sym () in
   let body extra =
-    Ll.For_loop
-      {
-        index = i;
-        from_ = 0;
-        to_ = 3;
-        axis = Ll.Serial;
-        body =
-          Ll.Seq
-            ( set self (Ll.Binop (Ir.Ops.Add, (get src it, Ir.Ops.single), (extra, Ir.Ops.single))),
-              (* The sibling setter reads its own source at a launch index. *)
-              set sib (get sib_src (Ir.Indexing.Iterator launch)) );
-      }
+    loop_n i 4
+      (seq
+         (set self [| iter i |] (add (get src [| iter i |]) extra))
+         (* The sibling setter reads its own source at a launch index. *)
+         (set sib [| iter i |] (get sib_src [| iter launch |])))
   in
-  let facts = Ll.replay_facts ~self (body (Ll.Constant 1.)) in
+  let facts = Ll.replay_facts ~self (body (c 1.)) in
   p "the replay reads self's source" (Set.equal facts.replay_reads (Set.singleton (module Tn) src));
   p "a sibling setter's read and launch symbol are not the replay's"
     (Set.is_empty facts.replay_free_symbols);
-  let facts = Ll.replay_facts ~self (body (Ll.Embed_index (Ir.Indexing.Iterator launch))) in
+  let facts = Ll.replay_facts ~self (body (embed launch)) in
   p "self's own launch symbol is free"
     (Set.equal facts.replay_free_symbols (Set.singleton (module Ir.Indexing.Symbol) launch));
-  let facts = Ll.replay_facts ~self (body (Ll.Get_merge_buffer (sib_src, [| it |]))) in
+  let facts = Ll.replay_facts ~self (body (Ll.Get_merge_buffer (sib_src, [| iter i |]))) in
   p "a merge-buffer read in self's setter is reported" facts.replay_merge_reads;
-  let dead =
-    Ll.For_loop { index = i; from_ = 1; to_ = 0; axis = Ll.Serial; body = set self (get src it) }
-  in
+  let dead = loop ~from_:1 ~upto:0 i (set self [| iter i |] (get src [| iter i |])) in
   p "a dead loop replays nothing" (Set.is_empty (Ll.replay_facts ~self dead).replay_reads)

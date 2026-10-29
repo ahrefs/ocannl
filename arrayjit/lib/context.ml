@@ -1185,6 +1185,7 @@ let observability_tag = function
         ("<not-in-context: needs "
         ^ String.concat ~sep:", " (List.map leaves ~f:Tn.debug_name)
         ^ ">")
+  | Unobservable_local [ _ ] -> Some "<unobservable: Local>"
   | Unobservable_local path ->
       Some ("<unobservable: reads Local " ^ Tn.debug_name (List.last_exn path) ^ ">")
   | Unobservable_merge path ->
@@ -1266,18 +1267,6 @@ let explain_observability ctx (tn : Tn.t) (obs : observability) : string option 
             routine computing it into this context first"
            name)
 
-(* For-print proxies (gh-ocannl-333 AC 5): when a tensor's node is not materialized in a context,
-   [Train.printf] recompiles a copy ([%cd "for_print" =: t]) into a fresh node and registers it here
-   as a proxy for the source node, so {!to_host} can read the source's value through the copy. The
-   table is keyed by the source node and holds the proxy node; it is read-only from [to_host]'s
-   point of view and is for printing only — never a general host cache. (Keyed by the tnode, whose
-   identity is the never-reused [uid]: an id-keyed table here would resolve stale proxies for reused
-   ids after [Tensor.unsafe_reinitialize].) *)
-let for_print_proxies : Tn.t Hashtbl.M(Tn).t = Hashtbl.create (module Tn)
-
-let register_for_print ~(src : Tn.t) ~(proxy : Tn.t) =
-  Hashtbl.set for_print_proxies ~key:src ~data:proxy
-
 (* A deep copy of a host [Ndarray] (same precision, dims, and layout). Used so reads of shared
    initialization buffers hand the caller a private buffer it may mutate. *)
 let copy_nd (src : Nd.t) : Nd.t =
@@ -1294,74 +1283,204 @@ let copy_nd (src : Nd.t) : Nd.t =
     }
     src
 
-(** Transfers [tn]'s device buffer into a fresh host [Ndarray] and returns it. Raises if the node is
-    not present in the context (and has no host-init data or for-print proxy). *)
-let to_host ctx (tn : Tn.t) : Nd.t =
-  check_live ~fn:"to_host" ctx;
-  check_node_valid tn;
-  check_not_poisoned ctx;
-  (* An [\@|] slice view is addressed through its parent (gh-ocannl-293 293a): an eligible slice
-     owns no buffer, and an ineligible (copy) slice's value is recomputed from the parent each run.
-     Reject direct host reads uniformly -- read the parent tensor instead. [slice_of] is set eagerly
-     at construction, so this also covers the window before lowering decides eligibility. *)
-  (match Tn.slice_of tn with
-  | Some (parent, _) ->
-      raise
-      @@ Utils.User_error
-           (Printf.sprintf
-              "Context.to_host: node %s is an @| slice view; read its parent %s instead"
-              (Tn.debug_name tn) (Tn.debug_name parent))
-  | None -> ());
-  let nd = host_buffer tn in
-  (* [transfer] awaits pending device writes feeding the node, attempts the device-to-host copy, and
-     awaits its completion before the host buffer is read. *)
-  let transfer node =
+let release ctx =
+  let retire_readers () =
+    Hashtbl.to_alist ctx.ledger.merge_buffer_readers
+    |> List.iter ~f:(fun (transfer_id, readers) ->
+        let remaining =
+          List.filter readers ~f:(fun (_, context_id) -> context_id <> ctx.context_id)
+        in
+        if List.is_empty remaining then Hashtbl.remove ctx.ledger.merge_buffer_readers transfer_id
+        else Hashtbl.set ctx.ledger.merge_buffer_readers ~key:transfer_id ~data:remaining)
+  in
+  match
     Backends.query ctx.wrapped
       {
         q =
           (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) c ->
-            Backend.await c.BI.device;
-            if Backend.to_host c node nd then (
-              Backend.await c.BI.device;
-              true)
-            else false);
+            Backends.finalize (module Backend) c);
       }
+  with
+  | () -> retire_readers ()
+  | exception exn ->
+      (* gh-ocannl-1445: a release hook (graph execs) that fails runs after the pools were freed and
+         leaves the context finalized, so it is a released consumer all the same. *)
+      let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+      if Backends.query ctx.wrapped { q = (fun _ c -> Atomic.get c.BI.finalized) } then
+        retire_readers ();
+      Stdlib.Printexc.raise_with_backtrace exn backtrace
+
+(* {2 Recompute-on-read (gh-ocannl-777)}
+
+   A [Recomputable] node is read through a throwaway routine [proxy =: tn], compiled from the
+   reading context so its lowering inlines [tn]'s stored computation (recompute-at-read, gh-617),
+   built as plain assignments: no tensor, so no shape inference and no forward root. [proxy] is a
+   fresh materialized node with [tn]'s precision and layout (unpadded dims and padding), so the
+   transfer fills a host buffer [get_values] reads with [tn]'s own padding. The child context is
+   released whatever happens, and its private ledger records retired, so repeated reads leave the
+   parent's buffers, frontier, placements and ledger as they were. *)
+let recompute_namespace = "observe"
+let recompute_provenance = Tn.Site "777:recompute-on-read"
+
+let recompute_id =
+  let c = ref (-1) in
+  fun () ->
+    Int.incr c;
+    !c
+
+let identity_copy ~(lhs : Tn.t) ~(rhs : Tn.t) : Asgns.t =
+  let dims = Tn.dims_without_padding rhs in
+  let axes =
+    Array.map dims ~f:(fun d ->
+        if d > 1 then
+          let s = Idx.get_symbol () in
+          (Idx.Iterator s, Some [ (d, s) ])
+        else (Idx.Fixed_idx 0, None))
   in
-  (* Read through a for-print proxy, if a copy of [tn] was materialized for printing. *)
-  let from_proxy () =
-    match Hashtbl.find for_print_proxies tn with
-    | Some proxy when transfer proxy -> Some nd
-    | _ -> None
+  let idcs = Array.map axes ~f:fst in
+  let projections : Idx.projections =
+    {
+      components = Array.filter_map axes ~f:snd;
+      lhs_dims = dims;
+      rhs_dims = [| dims |];
+      project_lhs = idcs;
+      project_rhs = [| idcs |];
+      extent_syms = [];
+      debug_info =
+        { spec = "recompute-on-read"; derived_for = Sexp.Atom (Tn.debug_name rhs); trace = [] };
+    }
   in
-  match local_placement ctx tn with
-  | Some prov -> (
+  Asgns.Accum_op
+    {
+      initialize_neutral = false;
+      accum = Ir.Ops.Arg2;
+      lhs;
+      rhs = Asgns.Unop { op = Ir.Ops.Identity; rhs = Asgns.Node rhs };
+      projections = Lazy.from_val projections;
+      projections_debug = "recompute-on-read";
+    }
+
+(* Undoes the throwaway routine's ledger records after its context is released: they are private to
+   it -- nothing is compiled from the child, and its output is the fresh [proxy] -- and a stale
+   [written_buffers] entry for the freed proxy buffer would otherwise vouch for whatever a later
+   allocation places at the same location. *)
+let retire_recompute_records ctx (routine : routine) =
+  rollback_execution ctx routine.routine_id;
+  Hashtbl.remove ctx.ledger.routine_names routine.routine_id
+
+let recompute_to_host ctx (tn : Tn.t) (nd : Nd.t) : Nd.t =
+  let proxy =
+    Tn.create ~namespace:recompute_namespace
+      (Tn.Specified (Lazy.force tn.Tn.storage_prec))
+      ~id:(recompute_id ()) ~label:("recompute" :: tn.Tn.label)
+      ~unpadded_dims:(lazy (Tn.dims_without_padding tn))
+      ~padding:tn.Tn.padding ()
+  in
+  Tn.update_memory_mode proxy Tn.On_device recompute_provenance;
+  let comp =
+    {
+      Asgns.asgns = identity_copy ~lhs:proxy ~rhs:tn;
+      embedded_nodes = Set.singleton (module Tn) proxy;
+    }
+  in
+  let name = Printf.sprintf "recompute_%d" tn.Tn.uid in
+  let child, routine = compile ~name ctx comp Idx.Empty in
+  let child = ref child in
+  let read () =
+    child := run !child routine;
+    let copied =
+      Backends.query !child.wrapped
+        {
+          q =
+            (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) c ->
+              Backend.await c.BI.device;
+              if Backend.to_host c proxy nd then (
+                Backend.await c.BI.device;
+                true)
+              else false);
+        }
+    in
+    if not copied then
+      failwith
+        (Printf.sprintf "Context.to_host: internal error: the recompute of %s left no buffer for it"
+           (Tn.debug_name tn));
+    (* The fringe of a padded node holds its committed padding value, whatever the scratch buffer's
+       fringe held: the interior is moved into a freshly allocated buffer, which [host_buffer] fills
+       with that value. *)
+    match Lazy.force tn.Tn.padding with
+    | None -> nd
+    | Some (padding, _) ->
+        let fresh = host_buffer tn in
+        Nd.set_flat_values ~padding fresh (Nd.retrieve_flat_values ~padding nd);
+        fresh
+  in
+  match read () with
+  | nd ->
+      release !child;
+      retire_recompute_records ctx routine;
+      nd
+  | exception exn ->
+      let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+      (try
+         release !child;
+         retire_recompute_records ctx routine
+       with release_exn ->
+         Stdio.eprintf "Context.to_host: releasing the recompute context of %s also failed: %s\n%!"
+           (Tn.debug_name tn) (Exn.to_string release_exn));
+      Stdlib.Printexc.raise_with_backtrace exn backtrace
+
+(** Transfers [tn]'s value into a fresh host [Ndarray] and returns it: its device buffer, its
+    host-init data, or its recomputation ({!observability}); refuses with the reason otherwise. *)
+let to_host ctx (tn : Tn.t) : Nd.t =
+  check_live ~fn:"to_host" ctx;
+  check_node_valid tn;
+  check_not_poisoned ctx;
+  let refuse reason =
+    raise
+    @@ Utils.User_error
+         (Printf.sprintf "Context.to_host: %s (backend %s)" reason (backend_name ctx))
+  in
+  let obs = observability ctx tn in
+  match obs with
+  | Stored ->
+      (* [transfer] awaits pending device writes feeding the node, attempts the device-to-host copy,
+         and awaits its completion before the host buffer is read. *)
+      let nd = host_buffer tn in
+      let copied =
+        Backends.query ctx.wrapped
+          {
+            q =
+              (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) c ->
+                Backend.await c.BI.device;
+                if Backend.to_host c tn nd then (
+                  Backend.await c.BI.device;
+                  true)
+                else false);
+          }
+      in
+      if copied then nd
+      else
+        failwith
+          (Printf.sprintf "Context.to_host: internal error: no transfer for %s, which has a buffer"
+             (Tn.debug_name tn))
+  | Host_init ->
+      (* An ndarray-backed literal that is not part of any computation in this context (so it was
+         never allocated on the device): its value is its registered host initialization data.
+         Return a private copy so a mutating caller (e.g. [set_value]'s read-modify-write) cannot
+         corrupt the shared initialization buffer used to initialize other contexts. *)
+      copy_nd (Lazy.force (Option.value_exn ~here:[%here] (Ir.Host_inits.find tn)))
+  | Recomputable -> recompute_to_host ctx tn (host_buffer tn)
+  | Unobservable_local [ _ ] ->
       (* A [Local] node's own buffer, if the context has one at all, holds only what a host write
          put there, and its host-init data predates every run -- neither is what the routines
-         computed. The one honest read is a for-print proxy: a separate, materialized node
-         recomputing the value. *)
-      match from_proxy () with
-      | Some nd -> nd
-      | None -> refuse_local ~fn:"to_host" ctx tn prov)
-  | None -> (
-      if transfer tn then nd
-      else
-        match Ir.Host_inits.find tn with
-        | Some init ->
-            (* An ndarray-backed literal that is not part of any computation in this context (so it
-               was never allocated on the device): its value is its registered host initialization
-               data. Return a private copy so a mutating caller (e.g. [set_value]'s
-               read-modify-write) cannot corrupt the shared initialization buffer used to initialize
-               other contexts. *)
-            copy_nd (Lazy.force init)
-        | None -> (
-            match from_proxy () with
-            | Some nd -> nd
-            | None ->
-                raise
-                @@ Utils.User_error
-                     (Printf.sprintf
-                        "Context.to_host: node %s is not present in context (backend %s)"
-                        (Tn.debug_name tn) (backend_name ctx))))
+         computed. *)
+      refuse_local ~fn:"to_host" ctx tn (Option.value_exn ~here:[%here] (local_placement ctx tn))
+  | Needs_context _ | Not_computed ->
+      refuse
+        (Printf.sprintf "node %s is not present in context: %s" (Tn.debug_name tn)
+           (Option.value_exn ~here:[%here] (explain_observability ctx tn obs)))
+  | Unobservable_local _ | Unobservable_merge _ | Launch_bound _ | Slice_view _ ->
+      refuse (Option.value_exn ~here:[%here] (explain_observability ctx tn obs))
 
 (** Uploads the host buffer [nd] into [tn]'s device buffer, allocating it if needed, and returns a
     context in which [tn] is marked initialized (so a subsequent {!run} reading [tn] succeeds). *)
@@ -1430,8 +1549,8 @@ let copy ?(into_merge_buffer = BI.No) ~src ~dst tn =
   check_not_poisoned src;
   check_not_poisoned dst;
   (* The fallback also serves nodes with no device buffer in [src]: [to_host] reads host-init
-     literals and for-print proxies. A merge buffer cannot be filled host-side, so [Copy] raises
-     where the fallback would engage. *)
+     literals and recomputes virtual nodes. A merge buffer cannot be filled host-side, so [Copy]
+     raises where the fallback would engage. *)
   let host_roundtrip what =
     match into_merge_buffer with
     | BI.No -> from_host dst tn (to_host src tn)
@@ -1691,33 +1810,6 @@ let global_debug_info ctx =
         (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) _c ->
           Backend.get_global_debug_info ());
     }
-
-let release ctx =
-  let retire_readers () =
-    Hashtbl.to_alist ctx.ledger.merge_buffer_readers
-    |> List.iter ~f:(fun (transfer_id, readers) ->
-        let remaining =
-          List.filter readers ~f:(fun (_, context_id) -> context_id <> ctx.context_id)
-        in
-        if List.is_empty remaining then Hashtbl.remove ctx.ledger.merge_buffer_readers transfer_id
-        else Hashtbl.set ctx.ledger.merge_buffer_readers ~key:transfer_id ~data:remaining)
-  in
-  match
-    Backends.query ctx.wrapped
-      {
-        q =
-          (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) c ->
-            Backends.finalize (module Backend) c);
-      }
-  with
-  | () -> retire_readers ()
-  | exception exn ->
-      (* gh-ocannl-1445: a release hook (graph execs) that fails runs after the pools were freed and
-         leaves the context finalized, so it is a released consumer all the same. *)
-      let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-      if Backends.query ctx.wrapped { q = (fun _ c -> Atomic.get c.BI.finalized) } then
-        retire_readers ();
-      Stdlib.Printexc.raise_with_backtrace exn backtrace
 
 (* gh-560: the analyze-only entry points — lowering and optimization without backend codegen or
    linking. [Backends.lower_assignments] forks the lineage state itself, so the result is read off a
