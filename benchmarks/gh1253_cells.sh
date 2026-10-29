@@ -76,6 +76,17 @@
 # model_default against the plain default, no anchor. A pick
 # whose configuration seeds a plan the timing cell did not time (a profile's auto gate deciding
 # otherwise) gets a timing cell of its own under that profile, appended to the same TSV.
+# EXPLAIN_ONLY=<run dir> re-scores a past run's timed sites at this checkout's revision, timing
+# no candidate (a correctness batch, not a measurement): per site of SITES only the `shipped` and
+# `ceilings` listing cells run (the RANK_ONLY constants, BENCH_TUNE=0 pinned), and
+# gh1442_agreement.py joins them to <run dir>/rank_<site>.tsv -- that run's rows, read and never
+# written. BENCH_PICK=1 adds each arm's pick line, whose pick_ms/untuned_ms are the cell's own
+# in-process timing (advisory: a rerun moves them, nothing else). Running it at two revisions
+# against one run dir is the before/after agreement check of a ranking-score change, on the same
+# measured rows.
+# It refuses before building anything when a site's TSV is missing or empty, and when a timing
+# knob is set (FIT_FILL, TIME_REPEATS, PICK_PROFILES, PICK_GATE0, TXN_RATE); it ends with each
+# site's `joined=` lines, prefixed by site.
 # Both wgrad arms pin BENCH_TUNE=0 and model_default_schedule=false, so an ambient profile or
 # environment cannot swap the measured plans for tuned or model-picked ones.
 # The shipped-kernel rows (`bench: kernel ... w: wg_w.grad`) are the measured side of the table.
@@ -89,11 +100,49 @@ fi
 backend=$1
 out=$2
 cap=${3:-900}
+sites=${SITES:-wgrad:8,128,256,1024 wgrad:256,128,256,1024 fp8mm:8192,32,4096}
+site_name() {
+  local kind=${1%%:*} dims=${1#*:}
+  echo "${kind}_${dims//,/x}"
+}
+rows_dir=""
+if [[ -n "${EXPLAIN_ONLY:-}" ]]; then
+  for knob in FIT_FILL PICK_GATE0; do
+    if [[ ${!knob:-0} != 0 ]]; then
+      echo "$0: EXPLAIN_ONLY times nothing, but $knob=${!knob} asks for cells it does not run" >&2
+      exit 2
+    fi
+  done
+  for knob in PICK_PROFILES TXN_RATE; do
+    if [[ -n "${!knob:-}" ]]; then
+      echo "$0: EXPLAIN_ONLY times nothing, but $knob=${!knob} asks for cells it does not run" >&2
+      exit 2
+    fi
+  done
+  if [[ ${TIME_REPEATS:-1} != 1 ]]; then
+    echo "$0: EXPLAIN_ONLY times nothing, but TIME_REPEATS=$TIME_REPEATS asks for cells it does not run" >&2
+    exit 2
+  fi
+  if [[ ! -d "$EXPLAIN_ONLY" ]]; then
+    echo "$0: EXPLAIN_ONLY=$EXPLAIN_ONLY is not a directory" >&2
+    exit 2
+  fi
+  rows_dir=$(cd "$EXPLAIN_ONLY" && pwd) # absolute: the cells run from the checkout's root
+  missing=0
+  for site in $sites; do
+    tsv="$rows_dir/rank_$(site_name "$site").tsv"
+    if [[ ! -s "$tsv" ]]; then
+      echo "$0: EXPLAIN_ONLY: no timing rows for site $site: $tsv is missing or empty" >&2
+      missing=$((missing + 1))
+    fi
+  done
+  if [[ $missing -gt 0 ]]; then exit 2; fi
+fi
 case "$backend" in
 cuda | hip) ;;
 metal)
-  if [[ ${RANK_ONLY:-0} != 1 ]]; then
-    echo "$0: BACKEND metal needs RANK_ONLY=1 (the calibration cells are CUDA/HIP only)" >&2
+  if [[ ${RANK_ONLY:-0} != 1 && -z "$rows_dir" ]]; then
+    echo "$0: BACKEND metal needs RANK_ONLY=1 or EXPLAIN_ONLY (the calibration cells are CUDA/HIP only)" >&2
     exit 2
   fi
   ;;
@@ -121,9 +170,15 @@ cd "$root"
 echo "gh1253_cells: revision $(git rev-parse HEAD) backend $backend host $(hostname) at $(date -u +%FT%TZ)"
 git status --porcelain --untracked-files=no | sed 's/^/  dirty: /'
 
-dune build tools/calibrate_bandwidth.exe tools/calibrate_cache_capacity.exe \
-  tools/calibrate_issue_rate.exe benchmarks/runners/ocannl/bench_wgrad.exe \
-  benchmarks/runners/ocannl/bench_rank_site.exe
+if [[ -n "$rows_dir" ]]; then
+  echo "   EXPLAIN_ONLY: the shipped and ceilings listings joined to the rows in $rows_dir"
+  if [[ -s "$rows_dir/driver.log" ]]; then sed -n '1s/^/   rows from: /p' "$rows_dir/driver.log"; fi
+  dune build benchmarks/runners/ocannl/bench_rank_site.exe
+else
+  dune build tools/calibrate_bandwidth.exe tools/calibrate_cache_capacity.exe \
+    tools/calibrate_issue_rate.exe benchmarks/runners/ocannl/bench_wgrad.exe \
+    benchmarks/runners/ocannl/bench_rank_site.exe
+fi
 bandwidth=$root/_build/default/tools/calibrate_bandwidth.exe
 calibrate=$root/_build/default/tools/calibrate_cache_capacity.exe
 issue=$root/_build/default/tools/calibrate_issue_rate.exe
@@ -167,7 +222,9 @@ issue_flags() {
 }
 mp_flag=()
 if [[ -n "${MULTIPROCESSORS:-}" ]]; then mp_flag=("--multiprocessors=$MULTIPROCESSORS"); fi
-if [[ ${RANK_ONLY:-0} == 1 ]]; then
+if [[ -n "$rows_dir" ]]; then
+  fitted_arm=shipped
+elif [[ ${RANK_ONLY:-0} == 1 ]]; then
   fitted_arm=shipped
   echo "   RANK_ONLY: agreement cells only, under the shipped constants"
   if [[ ${FIT_FILL:-0} == 1 ]]; then
@@ -226,10 +283,22 @@ done
 ceilings+=(--ocannl_model_issue_rate=none --ocannl_model_dram_bandwidth=none
   --ocannl_model_fill_threads=none --ocannl_model_mma_rate=none
   --ocannl_model_device_gather_rate=none)
-for site in ${SITES:-wgrad:8,128,256,1024 wgrad:256,128,256,1024 fp8mm:8192,32,4096}; do
+for site in $sites; do
   kind=${site%%:*}
   dims=${site#*:}
-  name="${kind}_${dims//,/x}"
+  name=$(site_name "$site")
+  if [[ -n "$rows_dir" ]]; then
+    cell "rank_${name}_${fitted_arm}" env BENCH_TUNE=0 BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
+      "--ocannl_backend=$backend" --ocannl_gpu_default_sketch_min_reduction=32
+    cell "rank_${name}_ceilings" env BENCH_TUNE=0 BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" "$rank_site" \
+      "--ocannl_backend=$backend" --ocannl_gpu_default_sketch_min_reduction=32 "${ceilings[@]}"
+    fit=()
+    if [[ $kind == fp8mm ]]; then fit=(--fit-mma "$out/rank_${name}_${fitted_arm}.out"); fi
+    python3 "$root/benchmarks/gh1442_agreement.py" "$rows_dir/rank_${name}.tsv" \
+      "ceilings=$out/rank_${name}_ceilings.out" "${fitted_arm}=$out/rank_${name}_${fitted_arm}.out" \
+      ${fit[@]+"${fit[@]}"} | tee "$out/rank_${name}_agreement.txt" || failed=$((failed + 1))
+    continue
+  fi
   timed=true
   for rep in $(seq 1 "${TIME_REPEATS:-1}"); do
     suffix=""
@@ -327,5 +396,12 @@ for site in ${SITES:-wgrad:8,128,256,1024 wgrad:256,128,256,1024 fp8mm:8192,32,4
   fi
 done
 
+if [[ -n "$rows_dir" ]]; then
+  echo "gh1253_cells: agreement against $rows_dir"
+  for site in $sites; do
+    name=$(site_name "$site")
+    sed -n "s/^\([a-z]*: joined=\)/$name \1/p" "$out/rank_${name}_agreement.txt" 2>/dev/null || true
+  done
+fi
 echo "gh1253_cells: $failed failed cell(s)"
 exit $((failed > 0 ? 1 : 0))
