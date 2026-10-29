@@ -1812,7 +1812,16 @@ val fragment_transfer :
     store back otherwise — as
     [(lane, lane width, fragment, target, target indices, copy symbols innermost-first)]. The
     renderer's fragment-scope recognition and the cost model's operand-load count (gh-ocannl-1254)
-    both read regions through it. *)
+    both read regions through it.
+
+    A pad-masked contraction's store-back, its [Set] under the masks' [If]s, is not a transfer, and
+    that is a recorded decline rather than a missed match (gh-ocannl-1707): the contraction never
+    marks a masked fragment as a simdgroup fragment (it is workgroup-shared on a staged GPU
+    pipeline, a local array otherwise), so its region would render literally even if recognized. The
+    intrinsic loads and stores move whole tiles, so a masked persistent fragment would need its
+    transfers staged through a padded scratch tile, in every backend's fragment hook. A marked
+    fragment's region that this function does not recognize is refused by
+    [Schedule.fragment_scope_violations]. *)
 
 val lane_selected_writes : t -> Tnode.t list
 (** The nodes [llc] writes under a lane-selecting guard ([if lane == 0] of an enclosing [Workgroup]

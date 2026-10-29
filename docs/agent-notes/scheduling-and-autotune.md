@@ -3002,7 +3002,15 @@ files.
   `Set` rendered most of cifar_resnet's CUDA tf32 seeds as the scalar fallback -- caught, but on a
   path the seed does not take. `perturb_code` keeps the transfers and bumps the target after the
   store-back (the `Fuse_epilogue` shape), and each perturbed seed is compiled unperturbed too: a
-  differing mma census is `RERENDERED`, a failure. **A parity oracle compares every written node, not the step's outcome**:
+  differing mma census is `RERENDERED`, a failure. **A control only judges the region where a seed
+  has one** (gh-ocannl-1707): a pad-masked accumulator is never a persistent fragment
+  (`contract_tensorized_accumulator` makes it workgroup-shared or local, unmarked, a recorded
+  decline), and CUDA's 16-row wmma tile masked every seed of the smoke's 8-wide step, so the smoke
+  passed there with the defect restored. The census now counts the scopes the fragment hook
+  rendered (`mma_summary.fragment_scopes`, compared by the control and printed on the verdict
+  line), and the smoke, at 16-wide images, claims some conv seed renders one wherever the backend
+  advertises an f32 `Mma_fragment_scope`. Before citing a parity control as covering the tensor-core
+  path, check its seeds' verdict lines for a persistent-fragment scope. **A parity oracle compares every written node, not the step's outcome**:
   CUDA's two wrong pad-masked conv seeds on cifar_resnet (forward output off by 0.74, gh-ocannl-1598)
   moved the loss by 3e-5. **A tf32 seed is judged against a reference rounded as it rounds**
   (gh-ocannl-1602): `tf32_matmuls` lets only a *tensorized* f32 contraction read tf32, and the

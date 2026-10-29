@@ -67,6 +67,7 @@ type verdict =
 
 type seed_result = {
   label : string;  (** The candidate's label as the search prints it ([F_sketch[...]]). *)
+  conv : bool;  (** The seed is a conv family's ([conv_seed]). *)
   verdict : verdict;
   tensorized : bool;  (** The routine's mma census says it rendered tensorized. *)
   mma : Ir.C_syntax.mma_summary;
@@ -185,16 +186,19 @@ let perturb_code ~fragments (c : LL.t) : LL.t * int =
   (c, !count)
 
 (* Two compiles' tensor-core statements rendered alike: the same renderings in emission order (the
-   kernel names aside). *)
+   kernel names aside), and as many persistent-fragment scopes (gh-ocannl-1707): a region whose hook
+   declines keeps its statements' intrinsic rendering, aliased to the target, so the scope count is
+   what tells that region from the persistent one. *)
 let same_renderings (a : Ir.C_syntax.mma_summary) (b : Ir.C_syntax.mma_summary) =
   List.equal
     (fun (_, r) (_, r') -> Ir.C_syntax.equal_mma_rendering r r')
     a.Ir.C_syntax.renderings b.Ir.C_syntax.renderings
+  && a.Ir.C_syntax.fragment_scopes = b.Ir.C_syntax.fragment_scopes
 
 let census_summary (m : Ir.C_syntax.mma_summary) =
-  Printf.sprintf "%s, %d tensor-core statements, %d scalar fallbacks"
+  Printf.sprintf "%s, %d tensor-core statements, %d scalar fallbacks, %d persistent-fragment scopes"
     (Ir.C_syntax.tensorization_name m.Ir.C_syntax.tensorization)
-    m.Ir.C_syntax.statements m.Ir.C_syntax.scalar_fallbacks
+    m.Ir.C_syntax.statements m.Ir.C_syntax.scalar_fallbacks m.Ir.C_syntax.fragment_scopes
 
 (* gh-ocannl-1602: the reference's tf32 rounding. A tensorized f32 contraction on a tf32 arm reads
    both multiplicands rounded to tf32 (CUDA's [__float_to_tf32], [cvt.rna.tf32.f32]: an 11-bit
@@ -828,6 +832,7 @@ let parity ?tol ?(perturb = false) ?(round = true) ?(replay = true) ?replay_frac
         ~tensorized ~compared =
       {
         label;
+        conv = conv_seed p;
         verdict;
         tensorized;
         mma = !census;
@@ -1055,8 +1060,11 @@ let verdict_line r =
     | Unjudged d -> "UNJUDGED: " ^ d
     | Failed d -> "FAILED: " ^ d
   in
-  Printf.sprintf "%s: %s (compared %d nodes%s%s)" r.label v r.compared
+  Printf.sprintf "%s: %s (compared %d nodes%s%s%s)" r.label v r.compared
     (if r.tensorized then ", tensorized" else "")
+    (match r.mma.Ir.C_syntax.fragment_scopes with
+    | 0 -> ""
+    | n -> Printf.sprintf ", %d persistent-fragment scope%s" n (if n = 1 then "" else "s"))
     (match r.rounded with
     | [] -> ""
     | l ->

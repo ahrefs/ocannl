@@ -133,21 +133,39 @@ let () =
   let (), outer =
     Cs.with_census (fun () ->
         Cs.mma_census () := [ ("main", Cs.Mma_scalar_fallback) ];
+        Cs.mma_scope_census () := [ "main" ];
         let inner =
           Stdlib.Domain.spawn (fun () ->
               let (), summary =
-                Cs.with_census (fun () -> Cs.mma_census () := [ ("child", Cs.Mma_register_tiled) ])
+                Cs.with_census (fun () ->
+                    Cs.mma_census () := [ ("child", Cs.Mma_register_tiled) ];
+                    Cs.mma_scope_census () := [ "child"; "child" ])
               in
               summary)
         in
         let child = Stdlib.Domain.join inner in
         p "a child domain summarizes only its own renderings"
-          (child.statements = 1 && child.scalar_fallbacks = 0))
+          (child.statements = 1 && child.scalar_fallbacks = 0 && child.fragment_scopes = 2))
   in
   p "a main-domain census excludes a child domain's renderings"
-    (outer.statements = 1 && outer.scalar_fallbacks = 1);
+    (outer.statements = 1 && outer.scalar_fallbacks = 1 && outer.fragment_scopes = 1);
   p_all "main-domain attribution survives overlapping collection brackets" outer.renderings
     ~f:(fun (name, _) -> String.equal name "main")
+
+(* gh-ocannl-1707: the persistent-fragment scope census nests as the statement census does: an inner
+   bracket summarizes its own scopes, and they count toward the enclosing one too. *)
+let () =
+  let inner = ref Cs.empty_mma_summary in
+  let (), outer =
+    Cs.with_census (fun () ->
+        Cs.mma_scope_census () := [ "outer" ];
+        let (), summary = Cs.with_census (fun () -> Cs.mma_scope_census () := [ "inner" ]) in
+        inner := summary)
+  in
+  p
+    "a nested census counts its own persistent-fragment scopes, and the enclosing one counts them \
+     too"
+    (!inner.fragment_scopes = 1 && outer.fragment_scopes = 2)
 
 let () =
   let (), _ =

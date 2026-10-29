@@ -3626,7 +3626,11 @@ let contract_tensorized_accumulator ~lane ~(masks : pad_mask list) (opt : Low_le
      fragment is placed in workgroup-shared memory: the guarded transfers are not recognizable as a
      fragment-resident scope, and per-thread [Local] arrays are not loadable by the simdgroup/wmma
      intrinsics — a threadgroup-resident fragment keeps the intrinsic path firing, at the cost of a
-     per-statement load/store round-trip and a barrier pair around the reduction loop. *)
+     per-statement load/store round-trip and a barrier pair around the reduction loop. A masked
+     fragment is therefore never marked in [simdgroup_fragments] and never reaches the
+     persistent-fragment rendering: a recorded decline (gh-ocannl-1707, see
+     [Low_level.fragment_transfer]), which the seed-parity smoke's shapes avoid so that its negative
+     control still judges a persistent region. *)
   let masked = not (List.is_empty masks) in
   let shared_frag = masked && not (Set.is_empty opt.workgroup_shared) in
   let iprec = Ops.index_prec () in
