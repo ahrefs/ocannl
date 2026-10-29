@@ -770,6 +770,23 @@ onto p. The resulting representation is <code>Accum_unop</code> where
 <code>Identity</code>. Both variants end up with the same result, and
 even with the same computation, because the second variant’s computation
 will get optimized (unless configured not to).</p>
+<p><strong>Reading the lhs, and state that persists across
+runs.</strong> Only the <code>=:</code>-prefixed accumulating operators
+(<code>=:+</code>, <code>=:*</code>, <code>=:@^</code>, …) clear the lhs
+first; plain <code>=:</code> is an assignment that does not, and
+<code>=+</code>, <code>=-</code>, <code>=*</code>, … accumulate onto
+whatever the lhs holds. So an assignment whose right-hand side names its
+own lhs under <code>=:</code>, and every non-clearing accumulation,
+reads the lhs’s previous value: what an earlier statement of the same
+routine wrote, or else what the previous run of the routine left. A node
+read that way is read-before-write, and the compiler keeps it in a
+device buffer that persists between runs — never virtual, never inlined.
+This is how optimizer state is declared, with no extra annotation:
+<code>Train.sgd_update ~momentum</code> writes
+<code>{ sgd_momentum } =: (!.momentum *. sgd_momentum) + sgd_delta</code>,
+and the buffer carries the velocity from one step to the next. Forcing
+such a node virtual (e.g. <code>Train.set_virtual</code>) is refused at
+compilation.</p>
 <p>Advanced note: when a <code>~projections</code> parameter is in scope
 but no assignment-specific <code>~projections</code> argument is given –
 the typical case in <code>tensor/operation.ml</code> – the actual
@@ -1228,10 +1245,14 @@ e.g. <code>&quot;2*i+3*k&quot;</code>, but under the <code>%op</code> and
 <code>%cd</code> syntax extensions, it can also be an identifier of an
 integer value,
 e.g. <code>let stride = 2 and dilation = 3 in [%op &quot;input&quot; +* &quot;stride * a + dilation * b; b=&gt;a,&quot; &quot;kernel&quot;]</code>.</li>
-<li>Note the comma above. The syntax extension’s expansion of stride and
-dilation respects the “multichar” mode. Without the comma we are limited
-to single-character identifiers,
-e.g. <code>let s = 2 and d = 3 in [%op &quot;input&quot; +* &quot;is*a+d*bc;b=&gt;iac&quot; &quot;kernel&quot;]</code>.</li>
+<li>Note the comma above: <code>*</code> and <code>+</code> select the
+multichar mode, so a spec with a stride or a window always separates its
+axes by commas,
+e.g. <code>let s = 2 and d = 3 in [%op &quot;input&quot; +* &quot;i, s*a+d*b, c; b =&gt; i, a, c&quot; &quot;kernel&quot;]</code>.
+Without the commas the spec still parses, as something else:
+<code>&quot;is*a+d*bc;b=&gt;iac&quot;</code> is ONE affine axis with the stride
+identifier <code>is</code> and the kernel <code>bc</code>, and a result
+axis named <code>iac</code>.</li>
 </ul></li>
 <li>The use_padding modifier before <code>+</code> specifies whether
 padding is used:
@@ -1317,9 +1338,21 @@ directly in einsum notation. The semantics:</p>
 <ul>
 <li><p><strong>Input index formula</strong>:
 <code>input_index = stride * output_position + dilation * kernel_position</code></p></li>
-<li><p><strong>Padded convolution</strong> (<code>=+</code>): Input and
-output dimensions are equal (padding compensates for kernel
-extent)</p></li>
+<li><p><strong>Padded convolution</strong> (<code>=+</code>):
+<code>input_size = stride * output_size</code> (padding compensates for
+kernel extent). The operand is zero-padded by margins totalling the
+effective kernel span (below), split with the smaller half on the left,
+<code>left = effective_kernel_span / 2</code>, and a padded window reads
+<code>input[stride * output_position + offset + dilation * kernel_position - left]</code>,
+a position outside the operand reading the padding value (0 for the add
+family; a max-family window is clamped to the operand instead). So with
+stride 1 and an odd kernel the window is centered, dilated or not:
+<code>o=+2*k</code> over a kernel of 3 reads <code>o - 2</code>,
+<code>o</code>, <code>o + 2</code> (gh-ocannl-1657).</p></li>
+<li><p><strong>Stride and dilation are at least 1</strong>: a
+coefficient of 0 (written as a literal, or the runtime value of an
+identifier under <code>%op</code>/<code>%cd</code>) is refused with a
+message naming the axis (gh-ocannl-1657).</p></li>
 <li><p><strong>Valid convolution</strong> (<code>&lt;+</code>): No
 padding. The dimension relationship is:</p>
 <pre><code>input_size = stride * (output_size - 1) + effective_kernel_span</code></pre>
@@ -1342,24 +1375,42 @@ result-side window (<code>=&gt; s, 2*i&lt;+k</code>), whose result
 extent is
 <code>stride * (operand_size - 1) + effective_kernel_span</code>, then
 crop <code>padding</code> cells at its start and
-<code>padding - output_padding</code> at its end. The crop is an
-operand-side valid window over a one-hot kernel of extent
-<code>2 * padding - output_padding + 1</code> holding its 1 at position
-<code>padding</code>, written as an ndarray literal: ```ocaml
+<code>padding - output_padding</code> at its end. The crop is a slice of
+a concatenated axis (see <a href="#axis-concatenation-with-the--operator">Axis concatenation</a>
+below): <code>&quot;s, p^o^q =&gt; s, o&quot;</code> with <code>p = padding</code>
+and <code>q = padding - output_padding</code>, written as integer
+components when they are literals: ```ocaml
 doc-check=padded_conv_transpose open Ocannl.Nn_blocks.DSL_modules</p>
 <p>(* ConvTranspose1d with stride 2, kernel 3, padding 1, output_padding
 1 (2x upsampling): the full result has extent 2n + 1, and the crop drops
 1 cell at the start, none at the end. <em>) let%op upsample x w = (x
-+</em> “s, i; k =&gt; s, 2<em>i&lt;+k” w) +</em>”s, o&lt;+c; c =&gt; s,
-o” [ 0.; 1. ] ``<code>When</code>output_padding &gt;
-padding<code>(allowed while</code>output_padding<code>stays below the stride or the dilation), the end grows instead of shrinking: crop only the start (a one-hot kernel of extent</code>padding
-+ 1<code>with its 1 last; none at</code>padding =
++</em> “s, i; k =&gt; s, 2<em>i&lt;+k” w) ++ ”s, 1^o =&gt; s, o”
+``<code>When</code>output_padding &gt;
+padding<code>(allowed while</code>output_padding<code>stays below the stride or the dilation), the end grows instead of shrinking: slice only the start (</code>”s,
+p^o =&gt; s, o”<code>; nothing at</code>padding =
 0<code>), then append the</code>output_padding -
-padding<code>missing cells, which no kernel tap reaches and so are zero, by concatenation with a zero tensor:</code>(cropped,
-zeros) ++^ “s, a; s, b =&gt; s,
-a^b”<code>. The crop needs the full extent to exceed</code>padding<code>; a full transposed convolution of at most</code>padding<code>cells (possible only here, e.g. one input cell, kernel extent 1, stride 5, padding 2, output_padding 4) puts no tap inside the result, which is then all zeros, and the valid window refuses it with a shape error. The border is computed and then dropped, and the crop multiplies by the kernel&#39;s zeros, so a non-finite border value would reach the result as NaN. With stride 1, dilation 1 and an odd kernel size there is a one-step form: the padded window on an operand with the kernel reversed,</code>“s,
+padding<code>missing cells, which no kernel tap reaches and so are zero, by a replacement form:</code>”s,
+a =&gt; s, a^r”<code>with</code>r = output_padding -
+padding<code>. The slice needs the full extent to exceed</code>padding<code>; a full transposed convolution of at most</code>padding<code>cells (possible only here, e.g. one input cell, kernel extent 1, stride 5, padding 2, output_padding 4) puts no tap inside the result, which would be all zeros, and the slice refuses it with a shape error. An operand-side valid window over a one-hot kernel (</code>”s,
+o&lt;+c; c =&gt; s, o”<code>,</code>c<code>of extent</code>2 </em>
+padding - output_padding +
+1<code>holding its 1 at position</code>padding<code>) computes the same crop by multiplication, so a non-finite border value would reach its result as NaN; the slice copies. With stride 1, dilation 1 and an odd kernel size there is a one-step form: the padded window on an operand with the kernel reversed,</code>”s,
 o=+k; k =&gt; s,
 o”<code>. The recipe and the reversed-kernel form are executed against oracles in</code>test/einsum/result_side_affine_forms.ml<code>and</code>test/einsum/result_side_padded_window.ml`.</p></li>
+<li><p><strong>A window needs no kernel tensor</strong>: in a
+one-operand spec the kernel label is captured and set,
+<code>x ++ &quot;s, 2*o=+1+k =&gt; s, o&quot; [&quot;k&quot;]</code> then
+<code>Shape.set_dim k 3</code> is a padded sum pool and
+<code>x @^^ &quot;s, 2*o=+1+k =&gt; s, o&quot; [&quot;k&quot;]</code> a padded max pool,
+gradients included; unpadded (<code>&lt;+</code>) windows work the same
+way (gh-ocannl-1691). A padded window’s extents do not determine its
+kernel, so a padded kernel nothing sizes (not captured, or never set) is
+refused with a shape error naming it; an unpadded window’s kernel is
+solved from its extents like any other dimension. The pooling layers’
+constant kernel operand (<code>stretch 0.0</code> in
+<code>Nn_blocks.max_pool2d</code>) is the two-operand form of the same
+window. Executed in
+<code>test/einsum/padded_operand_offset_windows.ml</code>.</p></li>
 <li><p><strong>Offsets stay inside the axis</strong>: shape inference
 sizes an affine axis without its constant offset, so an offset must be
 smaller than the stride on an axis without a window (<code>2*i+1</code>,
@@ -1367,7 +1418,13 @@ the odd half of <code>interleave</code>, is fine; <code>2*i+2</code> and
 <code>1*i+1</code> are not), and an unpadded window takes none
 (<code>2*o&lt;+1+k</code>). Shape inference refuses such a spec, in
 either slot, with a message naming the axis (gh-ocannl-1618). A padded
-window keeps its offset, which its padding absorbs.</p></li>
+window keeps its offset, at or past the stride too: it shifts the window
+against the margins, and a tap it moves past them reads the padding
+value (<code>o=+1+k</code> over a kernel of 3 reads <code>o</code>,
+<code>o + 1</code>, <code>o + 2</code>, zero past the end). Padded
+operand windows with offsets, forward and gradient, are executed against
+an oracle in
+<code>test/einsum/padded_operand_offset_windows.ml</code>.</p></li>
 <li><p><strong>Result-side forms</strong> (writing through the index):
 stride-only and stride-and-offset axes scatter with gaps; unpadded
 windows, strided, dilated or both, several in one result, or with both
@@ -1485,28 +1542,41 @@ of <code>b</code></td>
 </tr>
 </tbody>
 </table>
-<p><strong>Shape inference behavior</strong>: When the argument and
-result shapes are both known, prefix and suffix operations
-(<code>a^b =&gt; a</code>, <code>a^b =&gt; b</code>,
-<code>a =&gt; a^b</code>, <code>b =&gt; a^b</code>) don’t need
-additional dimension information. Middle operations
-(<code>a^b^c =&gt; b</code>, <code>b =&gt; a^b^c</code>) require
-providing dimension constraints for the unmatched components.</p>
-<p><strong>Status of the slicing forms</strong>: the concatenation
-<code>a; b =&gt; a^b</code> and block tensors are implemented and
-tested. The extract forms (<code>a^b =&gt; a</code>,
-<code>a^b =&gt; b</code>, <code>a^b^c =&gt; b</code>: a concatenated
-axis on an operand whose other components no operand supplies) are not
-implemented: with the unmatched components captured and set, projection
-inference still fails (with “Concat target projection … conflicts with
-existing index” for the prefix and suffix forms, an internal assertion
-for the middle one; gh-ocannl-1619 probed them). The replace forms have
-no test. Integer-sized components (<code>3^a =&gt; a</code> to skip 3
-elements, <code>3^a^5 =&gt; a</code> for a middle portion) are planned
-but do not parse: a component must be a label. Until the extract forms
-land, a contiguous crop is an operand-side valid window over a one-hot
-kernel (<code>&quot;s, o&lt;+c; c =&gt; s, o&quot;</code> with the 1 at the crop’s
-start offset; see the padded transposed convolution above).</p>
+<p><strong>Integer constants in concatenation</strong>: an integer
+component specifies the size of that segment, rather than indexing into
+a fixed dimension. For example: - <code>3^a =&gt; a</code>: skip 3
+elements at the beginning of the input - <code>a =&gt; a^3</code>:
+assign to all but the last 3 elements of the result -
+<code>3^a^5 =&gt; a</code>: extract the middle portion, skipping 3 at
+the start and 5 at the end</p>
+<p>No other slot names an integer component, so it is skipped: an
+extraction does not read it, a replacement does not write it. An integer
+component must be positive.</p>
+<p><strong>Sizing the components</strong>: every component must have a
+size. A component another slot names gets it from that tensor; the
+others take an integer, or a captured variable set with
+<code>Shape.set_dim</code>
+(<code>x ++ &quot;p^o^q =&gt; o&quot; [&quot;p&quot;; &quot;q&quot;]</code>, then
+<code>Shape.set_dim p 2</code> and <code>Shape.set_dim q 1</code>). An
+extraction’s result closes down to its operand, so it cannot size
+<code>o</code> from a use site: in <code>p^o =&gt; o</code> either
+<code>p</code> or the result is sized explicitly, and a middle form
+needs two of its three components. Shape inference never guesses an
+unsized component to 1, as it would close an unconstrained axis: it
+refuses with a message naming the component. (A block spec’s component
+no operand supplies may still be inferred empty.)</p>
+<p><strong>Extraction and replacement</strong>: a concatenated axis
+exactly one of whose components the other side names is a slice: its
+index is the named component’s index shifted by the sizes of the
+components before it, and the other components are iterated by nothing.
+<code>++</code> and <code>++^</code> results are zero-initialized, so a
+replacement into a fresh result zero-pads it
+(<code>a =&gt; 2^a^1</code>); a <code>%cd</code> assignment
+<code>target =: source ~logic:&quot;a =&gt; a^b&quot;</code> writes the segment
+and leaves the rest of <code>target</code> unchanged. The gradient of an
+extraction flows into the selected segment only. These forms are
+executed against oracles in
+<code>test/einsum/concat_extraction.ml</code>.</p>
 <p><strong>N-ary einsum for multiple tensors</strong>: The einsum parser
 supports any number of RHS tensors separated by semicolons. This enables
 operations like:</p>
@@ -1648,7 +1718,14 @@ dimension to a row (<code>set_equal</code> on a dimension and a row
 reference, or <code>Shape.set_dim</code> on a row reference). A row
 reference bound before a closure has kept only its product, so
 <code>set_equal</code> refuses it in a Row-Row pair; relate rows before
-the closure.</p>
+the closure. A reference whose closure kept no value at all (a row
+holding a symbolic extent has no numeric product) is refused in any
+later capture, <code>set_dim</code> or <code>set_equal</code>, naming
+the closure (gh-ocannl-1655). And a reference made by
+<code>Shape.get_variable_ref</code> that <code>set_equal</code> relates
+to a row reference before it is bound is a number, the row’s product:
+binding it to a row afterwards is refused, since the rows would be tied
+by product only; pass it to <code>~capture_dims</code> first.</p>
 <p>Capturing requires the specification to be a <strong>literal
 string</strong>: every capture pattern in <code>tensor/ppx_op.ml</code>
 and <code>tensor/ppx_cd.ml</code> matches on a string constant, so
