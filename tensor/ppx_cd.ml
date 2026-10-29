@@ -172,7 +172,8 @@ let assignment ~punned ~lhs ~rhses ?body_for_lhs ?raw_body () =
   in
   let tensor_vbs = List.filter_map rhses ~f:(fun rhs -> rhs.vb) in
   let body =
-    [%expr { Ir.Assignments.asgns = [%e body]; embedded_nodes = Base.Set.empty (module Ir.Tnode) }]
+    (* A hand-written body's own assignments own no tensor fragment (gh-ocannl-1724). *)
+    [%expr Ir.Assignments.to_comp [%e body]]
   in
   let comps =
     List.fold (body :: List.rev forward_args) ~init:[%expr []] ~f:(fun xs x ->
@@ -185,9 +186,7 @@ let assignment ~punned ~lhs ~rhses ?body_for_lhs ?raw_body () =
   let expr =
     if is_for_lhs then
       [%expr
-        Option.value
-          ~default:
-            Ir.Assignments.{ asgns = Noop; embedded_nodes = Base.Set.empty (module Ir.Tnode) }
+        Option.value ~default:Ir.Assignments.empty_comp
         @@ Option.map [%e lhs.array_opt] ~f:(fun lhs -> [%e body])]
     else body
   in
@@ -285,10 +284,7 @@ let guess_pun_hint ~no_filler_label ~punned ~bad_pun_hints filler_typ filler =
   | No_grad_tensor_intro { name; _ }, _, _ -> Hashtbl.find punned name
   | _, _, true -> None
 
-let empty_tns ~loc = [%expr Base.Set.empty (module Ir.Tnode)]
-
-let empty_comp ~loc =
-  [%expr { Ir.Assignments.asgns = Ir.Assignments.Noop; embedded_nodes = [%e empty_tns ~loc] }]
+let empty_comp ~loc = [%expr Ir.Assignments.empty_comp]
 
 let setup_array ~punned ~bad_pun_hints ~for_slot
     { typ = filler_typ; slot; expr = filler; vbs; array_opt_of_code } =
@@ -388,10 +384,9 @@ let setup_array ~punned ~bad_pun_hints ~for_slot
       let fwd_code_or_noop =
         Some
           [%expr
-            {
-              Ir.Assignments.asgns = Ir.Assignments.Noop;
-              embedded_nodes = Base.Set.singleton (module Ir.Tnode) [%e filler].Tensor.value;
-            }]
+            Ir.Assignments.comp
+              ~embedded:(Base.Set.singleton (module Ir.Tnode) [%e filler].Tensor.value)
+              Ir.Assignments.Noop]
       in
       { (default_setup false) with fwd_code_or_noop; tensor = Some filler }
   | _, Function ->
@@ -1427,9 +1422,9 @@ let translate ?ident_label (expr : expression) : result =
             [%expr
               let __comment_block = [%e block] in
               {
+                __comment_block with
                 Ir.Assignments.asgns =
                   Ir.Assignments.Block_comment ([%e comment], __comment_block.Ir.Assignments.asgns);
-                embedded_nodes = __comment_block.Ir.Assignments.embedded_nodes;
               }];
         }
     | [%expr
@@ -1459,11 +1454,11 @@ let translate ?ident_label (expr : expression) : result =
             [%expr
               let __comment_block = [%e block] in
               {
+                __comment_block with
                 Ir.Assignments.asgns =
                   Ir.Assignments.Block_comment
                     ( String.concat_array ~sep:" " [%e Ast_helper.Exp.array ~loc:pexp_loc elements],
                       __comment_block.Ir.Assignments.asgns );
-                embedded_nodes = __comment_block.Ir.Assignments.embedded_nodes;
               }];
         }
     | [%expr
@@ -1900,8 +1895,8 @@ let translate ?ident_label (expr : expression) : result =
           [%expr
             let uncommented_comp = [%e res.expr] in
             {
-              Ir.Assignments.embedded_nodes = uncommented_comp.Ir.Assignments.embedded_nodes;
-              asgns =
+              uncommented_comp with
+              Ir.Assignments.asgns =
                 Ir.Assignments.Block_comment
                   ([%e string_expr], uncommented_comp.Ir.Assignments.asgns);
             }];

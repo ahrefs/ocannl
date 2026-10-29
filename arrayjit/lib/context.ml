@@ -1434,10 +1434,7 @@ let recompute_to_host ctx (tn : Tn.t) (nd : Nd.t) : Nd.t =
   in
   Tn.update_memory_mode proxy Tn.On_device recompute_provenance;
   let comp =
-    {
-      Asgns.asgns = identity_copy ~lhs:proxy ~rhs:tn;
-      embedded_nodes = Set.singleton (module Tn) proxy;
-    }
+    Asgns.comp ~embedded:(Set.singleton (module Tn) proxy) (identity_copy ~lhs:proxy ~rhs:tn)
   in
   let name = Printf.sprintf "recompute_%d" tn.Tn.uid in
   let child, routine = compile ~name ctx comp Idx.Empty in

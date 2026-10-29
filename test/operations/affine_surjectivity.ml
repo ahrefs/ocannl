@@ -198,7 +198,7 @@ let execute_case ?make_projection ?(reverse = false) name ~n ~m ~dims ~indices ~
     Stdio.eprintf "%s: backend=%s\n%!" name (Context.backend_name ctx);
     let ctx = Context.set_values ctx src values in
     let ctx = Context.set_values ctx dst (Array.create ~len:(Array.length expected) 12345.) in
-    let comp = { A.asgns; embedded_nodes = Set.singleton (module Tn) dst } in
+    let comp = A.comp ~embedded:(Set.singleton (module Tn) dst) asgns in
     let ctx, routine =
       Context.compile
         ~name:(name ^ if explicit_init then "_reference" else "_candidate")
@@ -355,7 +355,7 @@ let () =
     let ctx =
       Array.fold dsts ~init:ctx ~f:(fun ctx dst -> Context.set_values ctx dst [| 12345.; 12345. |])
     in
-    let comp = { A.asgns; embedded_nodes = Set.of_array (module Tn) dsts } in
+    let comp = A.comp ~embedded:(Set.of_array (module Tn) dsts) asgns in
     let ctx, routine =
       Context.compile
         ~name:(name ^ if explicit_init then "_reference" else "_candidate")

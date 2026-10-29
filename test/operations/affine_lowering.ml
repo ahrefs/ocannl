@@ -159,7 +159,7 @@ let run_scatter_then_copy ~materialize_dst =
   let copy = copy_asgn ~dst:out ~src:dst (copy_proj t ~n:6) in
   let asgns = Asgns.Seq (scatter, copy) in
   (* [dst] and [out] are produced by the comp (embedded); [src] is the only external input. *)
-  let comp = { Asgns.asgns; embedded_nodes = Set.of_list (module Tn) [ dst; out ] } in
+  let comp = Asgns.comp ~embedded:(Set.of_list (module Tn) [ dst; out ]) asgns in
   let ctx = Context.auto () in
   let ctx = Context.set_values ctx src [| 10.; 11.; 12.; 13.; 14.; 15. |] in
   let ctx, routine = Context.compile ~name:"affine_scatter_copy" ctx comp Idx.Empty in
@@ -205,7 +205,7 @@ let run_triangular ~materialize_dst =
   let scatter = scatter_asgn ~dst ~src (tri_scatter_proj s1 s2) in
   let copy = copy_asgn ~dst:out ~src:dst (tri_copy_proj a b) in
   let asgns = Asgns.Seq (scatter, copy) in
-  let comp = { Asgns.asgns; embedded_nodes = Set.of_list (module Tn) [ dst; out ] } in
+  let comp = Asgns.comp ~embedded:(Set.of_list (module Tn) [ dst; out ]) asgns in
   let ctx = Context.auto () in
   let ctx = Context.set_values ctx src [| 0.; 1.; 2.; 3.; 4.; 5. |] in
   let ctx, routine = Context.compile ~name:"tri_scatter_copy" ctx comp Idx.Empty in

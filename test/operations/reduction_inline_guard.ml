@@ -85,7 +85,7 @@ let run_dead ~kdim =
   let prod = mk ~dims:[| n |] "prod_dead" in
   let reduce = reduce_asgn ~dst:prod ~src:a (reduce_proj i k ~n ~kdim) in
   let asgns = Asgns.Block_comment ("reduction_dead", reduce) in
-  let comp = { Asgns.asgns; embedded_nodes = Set.of_list (module Tn) [ prod ] } in
+  let comp = Asgns.comp ~embedded:(Set.of_list (module Tn) [ prod ]) asgns in
   let ctx = Context.auto () in
   let ctx = Context.set_values ctx a (Array.create ~len:(n * kdim) 1.) in
   let ctx, _routine = Context.compile ctx comp Idx.Empty in
@@ -102,7 +102,7 @@ let run ~kdim =
   let reduce = reduce_asgn ~dst:prod ~src:a (reduce_proj i k ~n ~kdim) in
   let copy = copy_asgn ~dst:out ~src:prod (copy_proj t ~n) in
   let asgns = Asgns.Block_comment ("reduction_inline_guard", Asgns.Seq (reduce, copy)) in
-  let comp = { Asgns.asgns; embedded_nodes = Set.of_list (module Tn) [ prod; out ] } in
+  let comp = Asgns.comp ~embedded:(Set.of_list (module Tn) [ prod; out ]) asgns in
   let ctx = Context.auto () in
   (* a[i, k] = (i+1) * (k+1), so prod[i] = (i+1) * kdim*(kdim+1)/2. *)
   let values =

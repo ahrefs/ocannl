@@ -287,7 +287,10 @@ let%debug7_sexp rec init_params ?skip (t : t) : Asgns.comp =
           Set.add (Set.union embedded_nodes rs.forward.embedded_nodes) rs.value
         else embedded_nodes
   in
-  { Asgns.asgns; embedded_nodes }
+  (* Initialization owns no fragment (gh-ocannl-1724): it is re-run on purpose ([reinit_all], and
+     [Train.run_once] initializing missing parameters on every call), and the seed is a singleton --
+     so the parameters' forward fragments are not carried here. *)
+  Asgns.comp ~embedded:embedded_nodes asgns
 
 let initial_default_prec =
   Ir.Ops.prec_of_string (Utils.get_global_arg ~default:"single" ~arg_name:"default_prec")
@@ -469,6 +472,15 @@ let register_constant_host_init tn values =
        | [| value |] -> Nd.fill_from_float ?padding:pads nd value
        | _ -> Nd.set_flat_values ?padding:pads ~cycle:true nd values);
        nd))
+
+(* gh-ocannl-1724, the leaf rule -- its one point. Whether a differentiable tensor built by
+   [Tensor.term] (a leaf: no operands, [grad_asn] the constant [empty_comp]) owns the backprop
+   fragment [(grad, Bprop)], and therefore generates a requirement in a later consumer that finds it
+   no longer a backprop root. Parameters never do ([force_param_diff] gives them an empty backprop).
+   [true] is the issue's stated rule (only parameters exempt): a non-parameter [Require_grad] leaf
+   shared by two separately compiled losses needs its first consumer's routine in the second's
+   lineage. The alternative, exempting every leaf, awaits the maintainer's decision. *)
+let leaf_owns_backprop_fragment = true
 
 let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un) ?terminal_op
@@ -743,9 +755,14 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
      is registered (gh-ocannl-1301): a construction that fails before that leaves no link on its
      operands, so it does not taint the session. *)
   List.iter top_down_ts ~f:(fun ti -> update_infer_prec ti ti.value v.Tn.storage_prec);
+  (* The forward fragment of [t] (gh-ocannl-1724): [(v, Fwd)] plus, through [Asgns.sequence], the
+     fragments of the forward-root children embedded above. *)
   let forward =
-    Asgns.
-      { asgns = forward.asgns; embedded_nodes = Set.union forward.embedded_nodes !embedded_nodes }
+    {
+      forward with
+      embedded_nodes = Set.union forward.embedded_nodes !embedded_nodes;
+      owned = Set.add forward.owned (v, Asgns.Fwd);
+    }
   in
   List.iter ordered_ts ~f:(fun ti -> remove_fwd_root ti);
   let t = { t with forward } in
@@ -788,7 +805,7 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
          {!Train.zero_params_grads} does) must be able to allocate them rather than require them of
          a prior context. *)
       Asgns.sequence @@ zeros
-      @ [ { Asgns.asgns = fetch_zeros g shape; embedded_nodes = Set.singleton (module Tn) g } ]
+      @ [ Asgns.comp ~embedded:(Set.singleton (module Tn) g) (fetch_zeros g shape) ]
     in
     let embedded_nodes = ref @@ Set.singleton (module Tn) g in
     (* The code needs to be included in the reverse order to which it was computed. This guarantees
@@ -802,6 +819,13 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
             Set.add (Set.union !embedded_nodes diff.backprop.embedded_nodes) diff.grad;
           diff.backprop)
     in
+    (* The backprop fragments this one's gradient writes flow into without carrying them
+       (gh-ocannl-1724): a differentiable non-parameter child that is no longer a backprop root had
+       its backprop embedded by an earlier consumer, or handed out, so some other routine of the
+       lineage must propagate from its gradient. Derived from the child's own ownership: a child
+       whose backprop owns no fragment (a parameter, root or not; a leaf, unless
+       [leaf_owns_backprop_fragment]) generates no requirement. *)
+    let requires = ref Asgns.no_fragments in
     let bcks =
       List.filter_map ordered_ts ~f:(fun ti ->
           if is_bck_root ti then
@@ -811,7 +835,14 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
                   embedded_nodes := Set.add !embedded_nodes diff.grad);
               None)
             else bprop ti
-          else None)
+          else (
+            (match ti.diff with
+            | Some diff
+              when (not (Set.mem t.params ti))
+                   && Set.mem diff.backprop.owned (diff.grad, Asgns.Bprop) ->
+                requires := Set.add !requires (diff.grad, Asgns.Bprop)
+            | _ -> ());
+            None))
     in
     (* Mirror of the forward-fragment ordering above (gh-461), with the edge reversed: a fragment
        accumulating into a node's gradient must precede the fragment that embeds the node's backprop
@@ -849,10 +880,15 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
       Asgns.sequence
       @@ (Shape.with_construction_window (fun () -> grad_asn ~t ~g ~projections) :: bcks)
     in
+    (* The backprop fragment of [t]: [(g, Bprop)] plus the embedded children's fragments. *)
     let backprop =
       {
-        Asgns.asgns = backprop.asgns;
+        backprop with
         embedded_nodes = Set.union backprop.embedded_nodes !embedded_nodes;
+        owned =
+          (if List.is_empty orig_ts && not leaf_owns_backprop_fragment then backprop.owned
+           else Set.add backprop.owned (g, Asgns.Bprop));
+        requires = Set.union backprop.requires !requires;
       }
     in
     (* As in the forward-only branch: the root changes below count, and nothing after them fails. *)
@@ -1066,8 +1102,7 @@ let force_param_diff t =
   let diff =
     {
       grad = g;
-      zero_grads =
-        { Asgns.asgns = fetch_zeros g t.shape; embedded_nodes = Set.singleton (module Tn) g };
+      zero_grads = Asgns.comp ~embedded:(Set.singleton (module Tn) g) (fetch_zeros g t.shape);
       backprop = Asgns.empty_comp;
     }
   in
