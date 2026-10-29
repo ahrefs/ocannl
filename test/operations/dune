@@ -10700,6 +10700,17 @@
   (env_var OCANNL_BACKEND))
  (libraries base ocannl stdio arrayjit.verdict ll_test))
 
+; gh-ocannl-1709: an operand annotation a homogeneous operator would ignore is refused at optimize.
+
+(test
+ (name operand_precision_annotation)
+ (package neural_nets_lib)
+ (modules operand_precision_annotation)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (libraries base ocannl stdio arrayjit.verdict ll_test))
+
 ; gh-ocannl-1240: powers with a run-time exponent keep a negative base's integral powers under the
 ; GPU backends' fast math.
 

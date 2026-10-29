@@ -1,0 +1,7 @@
+the old leg's form -- a single-annotated addition of bfloat loads stored to a bfloat node -- is refused, naming the destination, both precisions and the remedy: true
+a unary operand annotated half under a bfloat store is refused: true
+a Where arm annotated half under a single store is refused: true
+the fixed leg -- the same addition stored to a single node -- is accepted: true
+operands annotated with their own precision (apply_op's form) under a wider store are accepted: true
+single loads annotated single under a bfloat store (own precision, narrowed) are accepted: true
+a Where condition keeps any annotation (a heterogeneous slot): true

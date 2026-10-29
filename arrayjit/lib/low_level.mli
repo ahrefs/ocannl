@@ -1043,6 +1043,29 @@ val validate_no_slice_aliases : ?site:string -> t -> unit
     hand-built IR), and in [C_syntax.compile_proc] on the way out (covering schedule transforms and
     a [?prelowered] routine that skipped {!optimize}). *)
 
+val operand_precision_violation : t -> string option
+(** gh-ocannl-1709: the predicate form of {!validate_operand_precisions} — [None] when every
+    homogeneous operand slot's annotation is descriptive, else a description of the first one that
+    is not. *)
+
+val validate_operand_precisions : ?site:string -> t -> unit
+(** gh-ocannl-1709: a homogeneous operator (every binop but [Uint4x32_to_prec_uniform_lane], every
+    unop but [Uint4x32_to_prec_uniform1], [FMA], [Mul3], and [Where]'s two arms) evaluates its
+    operands at its result precision — the destination node's for a [Set], the local's for a
+    [Set_local], a [Where] condition's or a guard's own annotation inside one — so the precision a
+    {!scalar_arg} carries there is never semantics. It may still describe: the evaluation precision
+    itself, or the operand's own precision ({!scalar_precision}), which is what {!apply_op} and the
+    assignments lowering write (an [f32] sum of [bf16] loads annotates its operands [bf16]). Any
+    other annotation reads as a request to compute at that precision which the renderer would
+    silently drop, so this raises [Invalid_argument], prefixed with [site], naming the destination
+    node, the annotation, the evaluation and the operand's own precision, and the remedy (to compute
+    at the annotated precision, store to a node or local of that precision). Heterogeneous slots (a
+    [Where] condition, a guard, a [Get_dynamic] index, a [Set_from_vec] argument, the heterogeneous
+    operators' operands) keep their annotation and are not checked against anything. Applied by
+    {!optimize} on the way in, so it covers the assignments lowering, the rewrite tier and
+    hand-built IR routed through {!optimize}, never the optimizer's own output; a [?prelowered]
+    routine that skips {!optimize} is not checked. *)
+
 val validate_parallel :
   ?warp_size:int ->
   ?reassociable:(Tnode.t -> bool) ->
