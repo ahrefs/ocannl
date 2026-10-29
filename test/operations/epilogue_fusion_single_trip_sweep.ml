@@ -76,7 +76,7 @@ let all_twins : twin list ref = ref []
 
 (* One site: [build ()] makes the graph and returns the reduction output (materialized, the fusion
    target) and the tail's output. *)
-let sweep ?(needs_tile = false) tag build =
+let sweep tag build =
   Tensor.unsafe_reinitialize ();
   let z, y = build () in
   Train.set_materialized z.Tensor.value;
@@ -148,16 +148,18 @@ let sweep ?(needs_tile = false) tag build =
     (List.length twins) (List.length ran)
     (List.count twins ~f:(fun t -> t.partitioned));
   all_twins := !all_twins @ twins;
-  (* A family that seeds only through a tensorized pipeline (the convolution family's GPU leg needs
-     an advertised tile for its f32 operands: CUDA outside tf32, HIP) has no twins where the backend
-     withholds one; the gate is that capability, the seeder's own judgment, never the seed list
-     under test (gh-ocannl-1115). Every operand here is created single-precision. *)
+  (* The convolution family seeds its GPU leg only through a tensorized pipeline (an advertised tile
+     for its f32 operands: none on CUDA outside tf32, nor on HIP), so a site the seeder judges a
+     conv has no twins where the backend withholds one. The gate is that capability, the seeder's
+     own judgment, never the seed list under test (gh-ocannl-1115); a site the matmul family takes
+     (a 1x1 window) keeps its claims everywhere. Every operand here is created single-precision. *)
   let capability =
-    if not needs_tile then `Advertised
-    else
-      Ll_test.tensorized_capability ~is_gpu ~is_cpu ~limits ~a_prec:Ir.Ops.single
-        ~b_prec:Ir.Ops.single
-        ~d_prec:(Lazy.force z.Tensor.value.Ir.Tnode.storage_prec)
+    match fst (Autotune.family_seeding ~capabilities ~is_gpu ~is_cpu ~limits opt) with
+    | Autotune.Seeding_conv _ ->
+        Ll_test.tensorized_capability ~is_gpu ~is_cpu ~limits ~a_prec:Ir.Ops.single
+          ~b_prec:Ir.Ops.single
+          ~d_prec:(Lazy.force z.Tensor.value.Ir.Tnode.storage_prec)
+    | Autotune.Seeding_matmul _ | Autotune.Seeding_none -> `Advertised
   in
   let when_, aggregation =
     match capability with
@@ -246,9 +248,9 @@ let () =
   (* One full column block and an edge, with a relu tail. *)
   sweep "coledge" (gemm ~with_relu:true ~m:32 ~k:32 ~n:20 "coledge");
   (* A 3x3 window. *)
-  sweep ~needs_tile:true "conv3" (conv ~hw:11 ~ic:4 ~kw:3 ~oc:8 "conv3");
+  sweep "conv3" (conv ~hw:11 ~ic:4 ~kw:3 ~oc:8 "conv3");
   (* A 1x1 window: the kernel loops are single-trip. *)
-  sweep ~needs_tile:true "conv1" (conv ~hw:8 ~ic:8 ~kw:1 ~oc:16 "conv1");
+  sweep "conv1" (conv ~hw:8 ~ic:8 ~kw:1 ~oc:16 "conv1");
   (* The CPU packed seeds partition their padded k-block loop (gh-ocannl-1670), so on a C backend
      the sweep reaches Partition-carrying twins: the class this sweep exists for is in its
      population, admitted or refused. *)
