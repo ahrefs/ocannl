@@ -163,8 +163,14 @@ let () =
      lineage (with its own freshly initialized parameter buffers) to time candidates against, so the
      timing runs cannot perturb the real training state (a step timed on all-zero data inputs
      poisons parameters with inf/NaN through log 0). *)
+  (* The crown and the finals outcome go to stderr ([Tune_crown]): a golden diff on another box is
+     traced to the seed that won without rerunning under [autotune_log]. *)
   let scratch = Train.init_params (Context.auto ()) bindings batch_loss in
-  let ctx, sgd_step = Autotune.tune ~rounds:0 ~timing_ctx:scratch ctx train_comp bindings in
+  let ctx, sgd_step =
+    Autotune.tune ~rounds:0 ~timing_ctx:scratch
+      ~report:(Tune_crown.eprint ~site:"fsm_transformer")
+      ctx train_comp bindings
+  in
   (* Compile the inference routine using the context from training compilation, which already
      contains the mask constant and all model weight buffers. This is forward-only: no backprop, no
      SGD update. *)

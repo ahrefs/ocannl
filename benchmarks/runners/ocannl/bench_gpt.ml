@@ -85,6 +85,7 @@ let () =
   (* What the timed artifact emitted, off the routines themselves (gh-ocannl-626): a flip refinement
      or a timing_ctx replay fallback ships something no arm report describes. *)
   H.collect_shipped arms routines;
+  H.trace_crowns arms;
   let compile_s = Unix.gettimeofday () -. t0 in
   H.trace_search_done ~compile_s;
   let ctx = if tune then H.inject ctx st batch_loss mapping else ctx in

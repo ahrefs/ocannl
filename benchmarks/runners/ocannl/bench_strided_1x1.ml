@@ -175,15 +175,10 @@ let bench_site ~failed ~unstated ~tune ((name, b, h, w, ic, oc) as site) =
         | None -> ""
         | Some r ->
             Printf.sprintf
-              " outcome=%s crowned=%s best_ms=%.4f sketch_candidates=%d timed=%d failed=%d \
-               finals=%s finals_contenders=%d"
+              " outcome=%s crowned=%s best_ms=%.4f sketch_candidates=%d timed=%d failed=%d %s"
               (Autotune.outcome_name r.Autotune.outcome)
               r.Autotune.best_label r.Autotune.best_ms r.Autotune.sketch_candidates
-              r.Autotune.candidates_timed r.Autotune.candidates_failed
-              (* One word per field: "not run" reads as [not_run]. *)
-              (String.substr_replace_all ~pattern:" " ~with_:"_"
-                 (Autotune.finals_outcome_name r.Autotune.finals_outcome))
-              (List.length r.Autotune.finals)
+              r.Autotune.candidates_timed r.Autotune.candidates_failed (Tune_crown.finals_fields r)
       in
       Stdio.printf "s1x1: backend=%s site=%s arm=%s compile_s=%.2f %s timing=%s exact=%b%s\n%!"
         backend name label compile_s

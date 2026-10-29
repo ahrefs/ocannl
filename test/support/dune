@@ -158,6 +158,15 @@
  (modules tune_counts)
  (libraries base stdio arrayjit.autotune arrayjit.verdict))
 
+; The crowned candidate and the finals outcome of a tuning call's report, as the line the training
+; tests print on stderr and the tuning benches print beside their results.
+
+(library
+ (name tune_crown)
+ (package neural_nets_lib)
+ (modules tune_crown)
+ (libraries base stdio arrayjit.autotune))
+
 ; The scripted-search harness of the autotune tests: the measurement, attempt and budget-clock
 ; seams, per-search settings and cache-I/O recording around a search whose ranking the test scripts.
 ; A test reading the search's stderr captures it through [stderr_capture].
