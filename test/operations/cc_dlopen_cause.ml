@@ -23,7 +23,14 @@
 
    Windows cannot manufacture the dlopen failure: a PE DLL link resolves every import, so the
    undefined reference fails the compile before there is anything to load, and the claims skip
-   there. *)
+   there.
+
+   gh-ocannl-1717 splits the severity: an undefined symbol stays a [Compiler_bug], while a missing
+   artifact is the environment's refusal ([Environment], rendered as [Failure]), and so is the
+   fourth mode, [code_signing]: the stub runs the real compiler, then strips the library's code
+   signature, so arm64 macOS's loader refuses it at [dlopen] as it refused the transient
+   [schedule_conv_gemm] library (a host that enforces no signatures loads it, and the claims skip).
+   [cc_load_refusal_classes] pins the classes over canned loader texts. *)
 
 open Base
 open Ocannl
@@ -32,16 +39,65 @@ open Verdict.Claims
 module Outcome = Ir.Schedule_outcome
 
 let undefined_symbol = "ocannl_gh1077_undefined_expf"
-let expected_stage = Stdlib.Sys.argv.(1)
 
-let detail_substring, skip_reason =
-  match expected_stage with
+(* The mode names the injected failure; the stage is the one it is rejected at. *)
+let mode = Stdlib.Sys.argv.(1)
+
+(* arm64 macOS refuses to map unsigned code; other hosts load an unsigned library. Read off the
+   host, never off the run under test. *)
+let enforces_code_signatures =
+  let ask command =
+    try
+      let ic = Unix.open_process_in command in
+      let answer = String.strip (Stdio.In_channel.input_all ic) in
+      ignore (Unix.close_process_in ic : Unix.process_status);
+      answer
+    with _ -> ""
+  in
+  (not Sys.win32) && String.equal (ask "uname -s") "Darwin" && String.equal (ask "uname -m") "arm64"
+
+let expected_stage, detail_substring, expected_severity, applicable, skip_reason =
+  let unix_fixture = "Windows, where the Unix shell fixtures cannot run" in
+  match mode with
   | "dlopen" ->
-      (undefined_symbol, "a PE DLL link, which refuses the undefined reference before dlopen")
+      ( Outcome.dlopen_stage,
+        undefined_symbol,
+        Outcome.Compiler_bug,
+        not Sys.win32,
+        "a PE DLL link, which refuses the undefined reference before dlopen" )
   | "artifact_missing" ->
-      ("not found after successful compilation", "Windows, where the Unix shell fixtures cannot run")
-  | "codesign" -> ("exit code 42", "Windows, where the Unix shell fixtures cannot run")
-  | stage -> invalid_arg ("unknown post-compile probe stage: " ^ stage)
+      ( Outcome.artifact_missing_stage,
+        "not found after successful compilation",
+        Outcome.Environment,
+        not Sys.win32,
+        unix_fixture )
+  | "codesign" ->
+      (Outcome.codesign_stage, "exit code 42", Outcome.Compiler_bug, not Sys.win32, unix_fixture)
+  | "code_signing" ->
+      ( Outcome.dlopen_stage,
+        "code signature",
+        Outcome.Environment,
+        enforces_code_signatures,
+        "a host whose loader enforces no code signatures (only arm64 macOS does)" )
+  | mode -> invalid_arg ("unknown post-compile probe mode: " ^ mode)
+
+let severity_name severity = Sexp.to_string (Outcome.sexp_of_severity severity)
+
+let exception_name severity =
+  match
+    Outcome.exception_of_cause
+      (Outcome.Backend_rejected { backend = "cc"; stage = ""; severity; detail = "" })
+  with
+  | Invalid_argument _ -> "Invalid_argument"
+  | Failure _ -> "Failure"
+  | Utils.User_error _ -> "User_error"
+  | exn -> Stdlib.Printexc.exn_slot_name exn
+
+let raised_expected severity exn =
+  match (exception_name severity, exn) with
+  | "Invalid_argument", Invalid_argument msg | "Failure", Failure msg ->
+      String.is_substring msg ~substring:detail_substring
+  | _ -> false
 
 let phase_name phase = Sexp.to_string (Outcome.sexp_of_phase phase)
 
@@ -68,7 +124,7 @@ let run () =
   let ctx = Context.auto () in
   Stdio.printf "backend: %s\n" (Context.backend_name ctx);
   let compiler_command = Utils.get_global_arg ~default:"" ~arg_name:"cc_backend_compiler_command" in
-  if String.equal expected_stage Outcome.dlopen_stage then
+  if String.equal mode "dlopen" then
     p "the compiler command renames expf to the undefined symbol"
       (String.is_substring compiler_command ~substring:("-Dexpf=" ^ undefined_symbol));
   p "strict failure classification is off"
@@ -78,7 +134,7 @@ let run () =
   let comp = Train.forward y in
   (* 1. The containment-aware compile, as a search candidate would run it. *)
   let fatal =
-    if Sys.win32 then None
+    if not applicable then None
     else
       match
         Context.compile_outcome ~provenance:Outcome.Candidate ~candidate:"post-compile probe" ctx
@@ -102,7 +158,7 @@ let run () =
   let rejection_has f = Option.exists rejection ~f in
   (* 2. The public compile renders the cause through the exception contract. *)
   let compile_exn =
-    if Sys.win32 then None
+    if not applicable then None
     else
       match Context.compile ctx comp Ir.Indexing.Empty with
       | _ -> None
@@ -114,7 +170,7 @@ let run () =
      report. *)
   let report = ref None in
   let tune_raised =
-    if Sys.win32 then false
+    if not applicable then false
     else
       match
         Autotune.tune ~search:true ~beam_width:1 ~rounds:0 ~repeats:1 ~cache_dir:""
@@ -131,7 +187,7 @@ let run () =
     | Some { Autotune.outcome = Autotune.Pre_search_failure { phase; _ }; _ } -> Some phase
     | Some _ | None -> None
   in
-  let claim = gated ~aggregation:`Environment ~when_:(not Sys.win32) ~on:skip_reason in
+  let claim = gated ~aggregation:`Environment ~when_:applicable ~on:skip_reason in
   let added =
     List.filter !artifacts ~f:(fun path -> not (List.mem before path ~equal:String.equal))
   in
@@ -139,7 +195,7 @@ let run () =
      (gh-ocannl-1247, gh-ocannl-1335). *)
   Stdio.eprintf "added to the temp directory (not part of the golden): %s\n%!"
     (String.concat ~sep:" " added);
-  gated_all ~aggregation:`Environment ~when_:(not Sys.win32) ~on:skip_reason
+  gated_all ~aggregation:`Environment ~when_:applicable ~on:skip_reason
     "every file in the temp directory after the rejected compile was there before it" !artifacts
     ~f:(fun path -> List.mem before path ~equal:String.equal);
   claim "the unrelated temporary file is preserved"
@@ -153,16 +209,17 @@ let run () =
   claim "the rejecting backend is cc" (rejection_has (fun (b, _, _, _) -> String.equal b "cc"));
   claim "the stage matches the injected post-compile failure"
     (rejection_has (fun (_, stage, _, _) -> String.equal stage expected_stage));
-  claim "the severity is Compiler_bug"
-    (rejection_has (fun (_, _, severity, _) -> Outcome.equal_severity severity Outcome.Compiler_bug));
+  claim
+    ("the severity is " ^ severity_name expected_severity)
+    (rejection_has (fun (_, _, severity, _) -> Outcome.equal_severity severity expected_severity));
   claim "the detail carries the injected failure diagnostic"
     (rejection_has (fun (_, _, _, detail) -> String.is_substring detail ~substring:detail_substring));
   claim "the detail carries the compile/link command"
     (rejection_has (fun (_, _, _, detail) -> String.is_substring detail ~substring:compiler_command));
-  claim "Context.compile raises Invalid_argument with the post-compile diagnostic"
-    (match compile_exn with
-    | Some (Invalid_argument msg) -> String.is_substring msg ~substring:detail_substring
-    | _ -> false);
+  claim
+    ("Context.compile raises " ^ exception_name expected_severity
+   ^ " with the post-compile diagnostic")
+    (Option.exists compile_exn ~f:(raised_expected expected_severity));
   claim "Autotune.tune raises" tune_raised;
   claim "autotune reports a pre-search failure at Backend_link"
     (Option.exists pre_search_phase ~f:(Outcome.equal_phase Outcome.Backend_link))
@@ -181,8 +238,7 @@ let run_in_private_directory () =
       Unix.rmdir dir)
 
 let () =
-  if Sys.win32 || not (String.equal expected_stage Outcome.codesign_stage) then
-    run_in_private_directory ()
+  if Sys.win32 || not (String.equal mode "codesign") then run_in_private_directory ()
   else
     let dir = Stdlib.Filename.temp_file "ocannl gh1142 " "" in
     Stdlib.Sys.remove dir;

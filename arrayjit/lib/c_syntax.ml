@@ -2469,10 +2469,14 @@ let missing_include report =
 let attribute_routine_name_failure ?report ~routine_names exn backtrace =
   match exn with
   | Schedule_outcome.Cause_at
-      (_, Schedule_outcome.Backend_rejected { severity = Schedule_outcome.Configuration; _ }) ->
+      ( _,
+        Schedule_outcome.Backend_rejected
+          { severity = Schedule_outcome.(Configuration | Environment); _ } ) ->
       (* A toolchain configuration that compiles no trivial kernel either (gh-ocannl-1350) is not
          the routine name's failure, however the compiler's output echoes its declaration -- a
-         configuration-wide [-Werror] does. *)
+         configuration-wide [-Werror] does. Nor is a host's refusal of the built library
+         (gh-ocannl-1717), whose report names the library's path, which is named after the
+         routine. *)
       Stdlib.Printexc.raise_with_backtrace exn backtrace
   | _ -> (
       let report =

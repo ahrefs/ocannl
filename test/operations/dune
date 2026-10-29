@@ -264,6 +264,9 @@
   (alias runtest-cc_post_compile_cause-codesign)
   (alias runtest-cc_post_compile_cause-codesign_dll)
   (alias runtest-cc_post_compile_cause-codesign_debug)
+  (alias runtest-cc_post_compile_cause-code_signing)
+  (alias runtest-cc_post_compile_cause-code_signing_dll)
+  (alias runtest-cc_post_compile_cause-code_signing_debug)
   (alias runtest-cc_dlopen_cause)
   (alias runtest-cc_dlopen_cause_dll)
   (alias runtest-cc_dlopen_cause_debug)
@@ -813,6 +816,18 @@
  (action
   (diff fast_math_libmvec.expected fast_math_libmvec.actual)))
 
+; gh-ocannl-1717: which dlopen refusals are the environment's (code signing, a library gone before
+; its load) and which are OCANNL's link bug, over canned dlerror texts.
+
+(test
+ ; ocannl-backend: cc -- calls the cc backend's pure dlopen-refusal classifier over canned texts;
+ ; it creates no context and loads no kernel.
+ (name cc_load_refusal_classes)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules cc_load_refusal_classes)
+ (libraries base stdio arrayjit.ir arrayjit.context arrayjit.verdict))
+
 ; gh-ocannl-1077: a cc kernel that compiles but fails at dlopen surfaces as a typed Backend_link
 ; cause, and autotune does not absorb it. The compiler command renames `expf` to a symbol nothing
 ; defines; strict classification is off so the autotune claims discriminate (the header of
@@ -1086,6 +1101,97 @@
   (diff
    cc_post_compile_cause-codesign_debug.expected
    cc_post_compile_cause-codesign_debug.actual)))
+
+; gh-ocannl-1717: a real code-signing refusal at dlopen -- the stub runs the real compiler, then
+; strips the library's signature -- is an Environment rejection, not a symbol bug. Only arm64 macOS
+; enforces signatures; elsewhere the library loads and the claims skip (the test's header).
+
+(rule
+ ; ocannl-backend: cc -- explicitly pinned to the cc post-compile boundary.
+ (target cc_post_compile_cause-code_signing.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  cc_post_compile_stub.sh)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_dlopen_cause.exe}
+    code_signing
+    --ocannl_backend=cc
+    --ocannl_strict_failure_classification=false
+    --ocannl_cc_backend_probe_cache=false
+    "--ocannl_cc_backend_compiler_command=sh '%{dep:cc_post_compile_stub.sh}' code_signing %{ocaml-config:c_compiler}"
+    --ocannl_output_debug_files_in_build_directory=false
+    --ocannl_output_dlls_in_build_directory=false))))
+
+(rule
+ (alias runtest-cc_post_compile_cause-code_signing)
+ (package neural_nets_lib)
+ (action
+  (diff
+   cc_post_compile_cause-code_signing.expected
+   cc_post_compile_cause-code_signing.actual)))
+
+(rule
+ ; ocannl-backend: cc -- explicitly pinned to the cc post-compile boundary.
+ (target cc_post_compile_cause-code_signing_dll.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  cc_post_compile_stub.sh)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_dlopen_cause.exe}
+    code_signing
+    --ocannl_backend=cc
+    --ocannl_strict_failure_classification=false
+    --ocannl_cc_backend_probe_cache=false
+    "--ocannl_cc_backend_compiler_command=sh '%{dep:cc_post_compile_stub.sh}' code_signing %{ocaml-config:c_compiler}"
+    --ocannl_output_debug_files_in_build_directory=false
+    --ocannl_output_dlls_in_build_directory=true))))
+
+(rule
+ (alias runtest-cc_post_compile_cause-code_signing_dll)
+ (package neural_nets_lib)
+ (action
+  (diff
+   cc_post_compile_cause-code_signing_dll.expected
+   cc_post_compile_cause-code_signing_dll.actual)))
+
+(rule
+ ; ocannl-backend: cc -- explicitly pinned to the cc post-compile boundary.
+ (target cc_post_compile_cause-code_signing_debug.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  cc_post_compile_stub.sh)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_dlopen_cause.exe}
+    code_signing
+    --ocannl_backend=cc
+    --ocannl_strict_failure_classification=false
+    --ocannl_cc_backend_probe_cache=false
+    "--ocannl_cc_backend_compiler_command=sh '%{dep:cc_post_compile_stub.sh}' code_signing %{ocaml-config:c_compiler}"
+    --ocannl_output_debug_files_in_build_directory=true
+    --ocannl_output_dlls_in_build_directory=false))))
+
+(rule
+ (alias runtest-cc_post_compile_cause-code_signing_debug)
+ (package neural_nets_lib)
+ (action
+  (diff
+   cc_post_compile_cause-code_signing_debug.expected
+   cc_post_compile_cause-code_signing_debug.actual)))
 
 ; gh-ocannl-1197: a successful cc compile and a compiler-rejected one leave no temporary source or
 ; library behind unless debug files (both) or library output (the library) are requested. The

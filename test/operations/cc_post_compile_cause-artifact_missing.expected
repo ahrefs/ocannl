@@ -9,9 +9,9 @@ the fatal failure is at Backend_link: true
 the fatal failure carries its Backend_rejected cause: true
 the rejecting backend is cc: true
 the stage matches the injected post-compile failure: true
-the severity is Compiler_bug: true
+the severity is Environment: true
 the detail carries the injected failure diagnostic: true
 the detail carries the compile/link command: true
-Context.compile raises Invalid_argument with the post-compile diagnostic: true
+Context.compile raises Failure with the post-compile diagnostic: true
 Autotune.tune raises: true
 autotune reports a pre-search failure at Backend_link: true
