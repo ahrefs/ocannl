@@ -1,12 +1,12 @@
                 #8 *._d
                  8.00
                 #9 grad_*._d unknown
-                <not-in-context>
-         #6 + unknown              │#4 c non-emb
-         <not-in-context>          │ 2.00
+                <not-computed>
+         #6 +                      │#4 c non-emb
+          4.00                     │ 2.00
          #7 grad_+ unknown         │#5 grad_c unknown
-         <not-in-context>          │<not-in-context>
+         <not-computed>            │<not-computed>
 #0 a non-emb     │#2 b non-emb     │
  2.00            │ 2.00            │
 #1 grad_a unknown│#3 grad_b unknown│
-<not-in-context> │<not-in-context> │
+<not-computed>   │<not-computed>   │

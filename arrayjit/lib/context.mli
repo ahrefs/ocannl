@@ -459,7 +459,7 @@ val copy : ?into_merge_buffer:Ir.Backend_intf.merge_buffer_use -> src:t -> dst:t
     invalidates their old transfer dependency so they cannot silently re-run against new bytes. A
     cross-backend copy falls back to a host round-trip ([Copy] raises). Nodes absent from [src]'s
     device buffers fall back to the host round-trip as well, serving host-init literals and
-    for-print proxies.
+    recomputable virtual nodes ({!to_host}).
 
     A copy into a buffer [dst] already holds, and a merge-buffer fill, allocate nothing in [dst], so
     the result is the same release unit as [dst] (as for an upload into an existing buffer):
@@ -494,11 +494,12 @@ val lifecycle_depth : t -> int
     - [On_device] (materialized) nodes have a context buffer; {!to_host}/{!get_values} read it
       directly.
     - [Virtual] nodes have no buffer anywhere, but they remain observable: their defining
-      computation is tracked, so their value can be recomputed on demand — [Train.printf] does this
-      via the for-print proxy mechanism ({!register_for_print}); raw {!to_host} on them raises
-      unless a proxy or host-init data exists. Observability is inductive: it holds only when every
-      node the tracked computation reads is itself observable — a [Virtual] node depending (even
-      transitively through other [Virtual] nodes) on a [Local] node inherits its unobservability.
+      computation is tracked, so {!to_host}/{!get_values} recompute their value on demand, compiling
+      a throwaway routine behind the read (gh-ocannl-777). Observability is inductive: it holds only
+      when every node the tracked computation reads is itself observable — a [Virtual] node
+      depending (even transitively through other [Virtual] nodes) on a [Local] node inherits its
+      unobservability, unless a materialized node between them shields it. {!observability} answers
+      the question up front, without compiling.
     - [Local] nodes are routine-scoped scratch and {b unobservable}: their computation is not
       tracked, and they are stored (to whatever degree the optimizer decides on) only within a
       single routine invocation. This is a deliberate opt-out from the observability guarantee that
@@ -508,27 +509,92 @@ val lifecycle_depth : t -> int
       compiled. Host access to a node this lineage placed [Local] {b raises}
       ({!Ir.Utils.User_error}) in both directions (gh-ocannl-599): the routines never read the
       buffer a host write would allocate, and never write one for a host read, so a permitted
-      transfer would report the uploaded copy back as if it were a computed value. A for-print proxy
-      is still read, since it is a separate materialized node. *)
+      transfer would report the uploaded copy back as if it were a computed value. *)
 
 val mem : t -> Ir.Tnode.t -> bool
 (** Whether the node has a device buffer allocated in this context. *)
 
-val register_for_print : src:Ir.Tnode.t -> proxy:Ir.Tnode.t -> unit
-(** Registers [proxy] as a for-print copy of [src] (gh-ocannl-333 AC 5): when [src] is not present
-    in a context, {!to_host}/{!get_values} on [src] read through [proxy] instead. Used by
-    [Train.printf] to render the value of a tensor that is not directly materialized in the context.
-*)
+(** Whether a host read of a node can be served from a context, and if not, why (gh-ocannl-777). *)
+type observability =
+  | Stored  (** The node has a buffer in the context; a read transfers it. *)
+  | Host_init  (** No buffer, but registered host initialization data; a read copies it. *)
+  | Recomputable
+      (** [Virtual], and every node one replay of its stored computations reads is present
+          (materialized with a buffer here, or host-initialized) or itself recomputable; a read
+          recomputes it. *)
+  | Needs_context of Ir.Tnode.t list
+      (** Materialized nodes the read needs — the node itself, or the leaves its recomputation reads
+          — that this lineage placed [On_device] but this context holds no buffer for: readable from
+          a context that does. Ordered by node, without repetition. *)
+  | Unobservable_local of Ir.Tnode.t list
+      (** The dependency path from the node to a node this lineage placed [Local] (the node itself
+          when the path is a singleton). Recomputation would read routine-scoped scratch, so the
+          node is unobservable; a materialized node between them would have shielded it. *)
+  | Unobservable_aliased of Ir.Tnode.t list
+      (** The dependency path to a materialized node whose buffer the liveness memory planner
+          aliased ([buffer_aliasing]; the node itself when the path is a singleton): its values are
+          not preserved past its last read in the routine computing it, so neither a host read nor a
+          recompute reading it observes them. *)
+  | Unobservable_merge of Ir.Tnode.t list
+      (** The dependency path to a virtual node whose stored computation reads a merge buffer:
+          transient to the routine receiving the transfer, so not replayable from a host read. *)
+  | Launch_bound of Ir.Tnode.t list * Ir.Indexing.symbol list
+      (** The dependency path to a virtual node whose stored computation mentions static (launch)
+          indices of the routine that stored it, and those indices. A host read supplies no
+          bindings. Conservative: the inliner could bind such a symbol where it occurs in the
+          producer's write index, but the value it stands for is a launch's, not the read's. *)
+  | Slice_view of Ir.Tnode.t  (** An [\@|] slice view of the given parent: read the parent. *)
+  | Not_computed
+      (** No buffer, no host initialization data, and no computation stored by any routine of this
+          context's lineage (e.g. the context does not descend from the compile that computes it).
+      *)
+
+val observability : t -> Ir.Tnode.t -> observability
+(** Classifies a host read of the node from this context without compiling, from the lineage's
+    {!placements}, the context's buffers, the host initialization registry and the stored
+    computations. For a [Virtual] node the walk follows each stored computation exactly as a replay
+    would read it — the statements the inliner keeps, every operand — into other virtual nodes, and
+    stops at materialized ones. A path ends at the first offending node in program order; when
+    several reasons apply, [Unobservable_local] is reported over [Unobservable_aliased], over
+    [Unobservable_merge], over [Launch_bound], over [Needs_context]. Pure: no placement is decided,
+    nothing is compiled. A [Recomputable] answer describes structure and availability; the
+    recompute's own compile and run keep their checks (e.g. an input no routine of the lineage wrote
+    is refused by {!run}). Refuses a {!release}d context and a discarded node like {!to_host}.
+    Raises [Failure] (an internal error) if a stored computation reads a node this lineage left
+    undecided. *)
+
+val observability_tag : observability -> string option
+(** A short placeholder for printers, such as [<unobservable: reads Local #7 h>]; [None] for the
+    three readable answers. *)
+
+val explain_observability : t -> Ir.Tnode.t -> observability -> string option
+(** The full reason a read of the node from this context is refused, naming the dependency path, the
+    [Local] node's placement provenance, and the remedy; [None] for the readable answers. *)
 
 val to_host : t -> Ir.Tnode.t -> Ir.Ndarray.t
-(** Transfers the node's device buffer into a fresh host [Ndarray] and returns it. Raises if the
-    node is not present in the context (and has no host-init data or for-print proxy), and if this
-    lineage placed the node [Local] -- routine-scoped scratch, whose buffer no routine writes (see
-    the on-demand host access section above). Refuses a {!release}d context with
-    {!Ir.Utils.User_error}, as do {!from_host}, {!copy} (either side) and the accessors built on
-    them; and, before forcing anything of the node, a node the frontend discarded (a
-    [Tensor.rewind_to_last_closure] stale handle; gh-ocannl-1301, gh-ocannl-1505), as do the same
-    entry points. *)
+(** Returns the node's value in a fresh host [Ndarray], classified first by {!observability}:
+    - [Stored]: its device buffer is transferred;
+    - [Host_init]: a private copy of its host initialization data;
+    - [Recomputable]: it is recomputed (gh-ocannl-777). A throwaway routine copying the node into a
+      fresh materialized node is compiled from this context, so its lowering inlines the node's
+      stored computation; it is run, the copy transferred, and its context released (with its ledger
+      records), so the context's buffers, frontier and placements are as they were. A release that
+      fails before freeing raises from the read, and the next recompute retries it. Every such read
+      compiles: no routine is cached. The value is recompute-at-read (gh-617): the stored
+      computation evaluated over its leaves as they are now, which differs from the value the
+      producing routine computed if a leaf was written since. The array has the node's layout; a
+      padded node's fringe holds its committed padding value. The recompute's compile and run keep
+      their own checks: a leaf no routine of the lineage wrote is refused by {!run}, and such a
+      failure propagates, as does any failure after a [Recomputable] answer.
+    - any other answer: {!Ir.Utils.User_error} with {!explain_observability}'s reason (a node whose
+      buffer the liveness planner aliased; a [Local] node, including its placement provenance and
+      whether raising a heuristic cap could keep it virtual instead; a node not present in the
+      context; an [\@|] slice view, whose parent is read instead).
+
+    Refuses a {!release}d context with {!Ir.Utils.User_error}, as do {!from_host}, {!copy} (either
+    side) and the accessors built on them; and, before forcing anything of the node, a node the
+    frontend discarded (a [Tensor.rewind_to_last_closure] stale handle; gh-ocannl-1301,
+    gh-ocannl-1505), as do the same entry points. *)
 
 val from_host : t -> Ir.Tnode.t -> Ir.Ndarray.t -> t
 (** Uploads the host buffer into the node's device buffer (allocating it if needed) and returns a

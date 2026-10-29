@@ -742,8 +742,9 @@ val printf :
   unit
 (** [printf] is a wrapper around {!Tensor.print} that assumes [~force:true], and by default sets
     [~with_code:false], [~with_grad:true], and [~style:`Default]. It takes an explicit context and
-    retrieves values on demand (gh-ocannl-333). If the tensor's value is not already materialized in
-    [ctx], it is recomputed via the [for_print] copy trick so real values are still shown. *)
+    retrieves values on demand (gh-ocannl-333): a virtual node is recomputed by {!Context.to_host}
+    (gh-ocannl-777), and a node that cannot be read from [ctx] is shown as a placeholder naming why
+    ({!Context.observability_tag}). *)
 
 val printf_tree :
   ?here:Lexing.position ->
@@ -755,4 +756,4 @@ val printf_tree :
   unit
 (** [printf_tree] is a wrapper around {!Tensor.print_tree} that assumes [~force:true], and by
     default sets [~with_value:true], [~with_grad:true], and [~depth:9]. It takes an explicit context
-    and retrieves values on demand (recomputing via [for_print] if not already materialized). *)
+    and retrieves values on demand, like {!printf}. *)

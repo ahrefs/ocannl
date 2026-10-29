@@ -1364,19 +1364,22 @@ let header t =
 
 (* On-demand value retrieval for printing (gh-ocannl-333). Values live only on devices; rendering
    them requires an explicit context, off by default for [Tensor.print] and on for [Train.printf].
-   When no context is supplied, or the node is not present in the context, a placeholder is shown
-   instead of the values. *)
+   gh-ocannl-777: whether the node can be read is asked first ({!Context.observability}); a readable
+   node is read -- a virtual one recomputed -- and any failure of that read propagates, while an
+   unreadable one is shown as a placeholder naming why. No context: [<no-context>]. *)
+let retrieve_for_print ?ctx (tn : Tn.t) : (Nd.t, string) Either.t =
+  match ctx with
+  | None -> Second "<no-context>"
+  | Some ctx -> (
+      let obs = Context.observability ctx tn in
+      match Context.observability_tag obs with
+      | None -> First (Context.to_host ctx tn)
+      | Some tag -> Second tag)
+
 let optional_payload ?ctx ~present ~missing v =
-  match
-    Option.bind ctx ~f:(fun ctx ->
-        try Some (Context.to_host ctx v) with
-        | Session_error _ as stale -> raise stale (* A discarded node, gh-ocannl-1301. *)
-        | _ -> None)
-  with
-  | Some nd -> present nd
-  | None ->
-      let tag = if Option.is_none ctx then "<no-context>" else "<not-in-context>" in
-      `Vlist (false, [ `Text (missing ()); `Text tag ])
+  match retrieve_for_print ?ctx v with
+  | First nd -> present nd
+  | Second tag -> `Vlist (false, [ `Text (missing ()); `Text tag ])
 
 type array_print_style =
   [ `Default | `Inline | `Label_layout of (string * int) list | `N5_layout of string ]
@@ -1568,15 +1571,10 @@ let%debug5_sexp to_doc ?ctx ~force ~with_grad ~with_code ?(with_low_level = fals
   let open PPrint in
   (* Create document for tensor value *)
   let has_grad = with_grad && Option.is_some t.diff in
-  let retrieve tn =
-    Option.bind ctx ~f:(fun ctx -> try Some (Context.to_host ctx tn) with _ -> None)
-  in
   let value_doc =
-    match retrieve t.value with
-    | None ->
-        let tag = if Option.is_none ctx then " <no-context>" else " <not-in-context>" in
-        string prefix_str ^^ string tag ^^ if has_grad then break 1 else empty
-    | Some arr -> (
+    match retrieve_for_print ?ctx t.value with
+    | Second tag -> string prefix_str ^^ string (" " ^ tag) ^^ if has_grad then break 1 else empty
+    | First arr -> (
         match style with
         | `Inline ->
             string prefix_str ^^ space
@@ -1592,11 +1590,9 @@ let%debug5_sexp to_doc ?ctx ~force ~with_grad ~with_code ?(with_low_level = fals
     if with_grad then
       match t.diff with
       | Some diff -> (
-          match retrieve diff.grad with
-          | None ->
-              let tag = if Option.is_none ctx then " <no-context>" else " <not-in-context>" in
-              string (grad_txt diff) ^^ string tag
-          | Some arr -> (
+          match retrieve_for_print ?ctx diff.grad with
+          | Second tag -> string (grad_txt diff) ^^ string (" " ^ tag)
+          | First arr -> (
               match style with
               | `Inline ->
                   string (grad_txt diff)

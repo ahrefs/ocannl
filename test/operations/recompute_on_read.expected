@@ -1,0 +1,25 @@
+the pipeline leaves v, v2 and w virtual: true
+the materialized arm stores them: true
+v recomputed equals v stored, bitwise: true
+v2 (reading the virtual v) recomputed equals v2 stored, bitwise: true
+w (with a dimension-1 axis) recomputed equals w stored, bitwise: true
+the reduction r read back matches r stored: true
+v holds 1.5 x, cell by cell: true
+to_host returns the node's own layout: true
+a repeated read agrees: true
+a read gives the parent no buffer for the node: true
+repeated reads leave the parent's ledger as it was: true
+and free the throwaway context's pools: true
+after a write to x, v reads 1.5 x of the new x: true
+the materialized arm keeps the value its run computed: true
+a transfer failure during the recompute propagates: true
+the throwaway context's pools are released on that failure too: true
+the parent context still reads afterwards: true
+a release failing before it frees propagates from the read: true
+the next read succeeds: true
+and its retry frees the pools the failed release kept: true
+and retires the failed read's ledger records: true
+the pipeline placed h Local and u virtual: true
+reading u, which depends on the Local h, is refused, naming the path and h's provenance: true
+reading a node no routine of the lineage computes is refused as not computed: true
+reading e, which embeds a launch index, is refused, naming the index: true

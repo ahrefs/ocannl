@@ -435,11 +435,12 @@ whose computation is not tracked): an observable node resolves `On_device` where
 unobservable one would default to `Local`, and an observable node still *undecided* at a
 forcing point materializes only because nothing was stored to recompute it from. What
 actually breaks observation is a recomputation that transitively depends on a `Local` node
-with no materialized node shielding the dependency. (Implementation status: the placement
-guards are in; recompute-on-read exists today as the best-effort for-print path behind
-`Train.printf` / `printf_tree` (`ensure_printable` in `lib/train.ml`) — a `for_print` copy
-compiled and registered as a read proxy — while bare `Context.get_values` raises for a node with no buffer, host-init
-data, or proxy; the full contract is the manifesto's stated goal state.) Decisions land in
+with no materialized node shielding the dependency. Both halves are implemented:
+`Context.to_host` / `get_values` recompute a virtual node through a throwaway routine compiled
+from the reading context (gh-ocannl-777), and `Context.observability` answers up front, without
+compiling, whether a read can be served — and if not, why: the path to the `Local` node, the
+absent leaves, a launch index the stored computation depends on. `Train.printf` shows that reason
+in place of the value. Decisions land in
 `Placements` on the `optimize_ctx`, which is *forked per compile* (`copy_optimize_ctx` in
 `Backends.lower_assignments`): the same tensor can be virtual in one routine and on-device in
 another.

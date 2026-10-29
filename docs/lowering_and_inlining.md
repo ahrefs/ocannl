@@ -513,10 +513,12 @@ The optimization behavior is controlled by `virtualize_settings`:
 The optimization process works closely with OCANNL's memory mode system:
 
 - **Virtual**: computations are inlined, no storage allocated; the node remains observable because
-  its defining computation is tracked in the optimization context, so later routines (and printing)
-  can recompute the value. Observability is inductive: it requires the nodes the computation reads
-  to be observable themselves, so a **Virtual** node that (transitively) depends on a **Local**
-  node inherits its unobservability.
+  its defining computation is tracked in the optimization context, so later routines -- and host
+  reads, which `Context.to_host` serves by compiling a throwaway copy routine (gh-ocannl-777) --
+  recompute the value. Observability is inductive: it requires the nodes the computation reads to
+  be observable themselves, so a **Virtual** node that (transitively) depends on a **Local** node
+  inherits its unobservability, unless a materialized node between them shields it.
+  `Context.observability` answers the question without compiling.
 - **Never_virtual**: an unresolved request that the tensor must be stored (the provenance tag
   indicates why); resolves to **Local** or **On_device** depending on `stack_threshold_in_bytes`.
 - **Local**: routine-scoped scratch, stored to whatever degree the optimizer decides on (e.g. a

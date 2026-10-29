@@ -386,6 +386,11 @@ let buffer_overlaps (ctx_buffers : Backend_intf.ctx_buffers) tn (loc : Backend_i
       && l.offset < loc.offset + size
       && loc.offset < l.offset + size_in_bytes_of key)
 
+let buffer_aliased (ctx_buffers : Backend_intf.ctx_buffers) tn =
+  match Map.find ctx_buffers tn with
+  | Some loc -> buffer_overlaps ctx_buffers tn loc
+  | None -> false
+
 let aliased_read_error ~what tn =
   raise
   @@ Utils.User_error

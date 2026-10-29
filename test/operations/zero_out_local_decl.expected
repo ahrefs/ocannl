@@ -1,8 +1,8 @@
-      #4 *._out
-       0.00  0.00  0.00  0.00
-#3 => unknown   │  #2 => unknown
-<not-in-context>│  <not-in-context>
-[#1 =>_sparse]  │#1 =>_sparse unknown
-                │<not-in-context>
-                │  #0 0...3 unknown
-                │  <not-in-context>
+                      #4 *._out
+                       0.00  0.00  0.00  0.00
+#3 => unknown                     │#2 => unknown
+<unobservable: reads Local sparse>│<unobservable: reads Local sparse>
+[#1 =>_sparse]                    │      #1 =>_sparse unknown
+                                  │      <unobservable: Local>
+                                  │     #0 0...3
+                                  │      0.00  1.00  2.00  3.00

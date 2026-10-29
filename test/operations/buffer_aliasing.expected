@@ -11,7 +11,9 @@ gate-off: read h1: ok
 gate-off: read h4: ok
 gate-off: read out: ok
 gate-on: read h1: raises buffer-aliased
+gate-on: h1 is classified aliased up front: true
 gate-on: read h4: raises buffer-aliased
+gate-on: h4 is classified aliased up front: true
 gate-on: read out: ok
 chain: result parity across buffer_aliasing: true
 chain: footprint reduced: true

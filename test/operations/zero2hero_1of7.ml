@@ -18,26 +18,26 @@ let%expect_test "Graph drawing recompile" =
   Train.printf_tree ~with_grad:true ~depth:9 ctx f_nd;
   [%expect
     {|
-                                                                   #15 +_f_nd
-                                                                    6.00e+1
-                                                                   #16 grad_+_f_nd unknown
-                                                                   <not-in-context>
-                                                      #13 - unknown                                                       │#2 5 Const/24:literal-constant
-                                                      <not-in-context>                                                    │<not-in-context>
-                                                      #14 grad_- unknown                                                  │
-                                                      <not-in-context>                                                    │
-                                  #11 *. unknown                                    │         #4 *. unknown               │
-                                  <not-in-context>                                  │         <not-in-context>            │
-                                  #12 grad_*. unknown                               │         #5 grad_*. unknown          │
-                                  <not-in-context>                                  │         <not-in-context>            │
-    #10 3 Const/24:literal-constant│              #7 **. unknown                    │#3 4 Const/24:literal-constant│[#0 x]│
-    <not-in-context>               │              <not-in-context>                  │<not-in-context>              │      │
-                                   │              #8 grad_**. unknown               │                              │      │
-                                   │              <not-in-context>                  │                              │      │
-                                   │#0 x non-emb     │#6 2 Const/24:literal-constant│                              │      │
-                                   │ 5.00            │<not-in-context>              │                              │      │
-                                   │#1 grad_x unknown│                              │                              │      │
-                                   │<not-in-context> │                              │                              │      │
+                     #15 +_f_nd
+                      6.00e+1
+                     #16 grad_+_f_nd unknown
+                     <not-computed>
+                    #13 -                             │#2 5
+                     5.50e+1                          │ 5.00
+                    #14 grad_- unknown                │
+                    <not-computed>                    │
+          #11 *.                   │#4 *.             │
+           7.50e+1                 │ 2.00e+1          │
+          #12 grad_*. unknown      │#5 grad_*. unknown│
+          <not-computed>           │<not-computed>    │
+    #10 3 │  #7 **.                │#3 4  │[#0 x]     │
+     3.00 │   2.50e+1              │ 4.00 │           │
+          │  #8 grad_**. unknown   │      │           │
+          │  <not-computed>        │      │           │
+          │#0 x non-emb     │#6 2  │      │           │
+          │ 5.00            │ 2.00 │      │           │
+          │#1 grad_x unknown│      │      │           │
+          │<not-computed>   │      │      │           │
     |}];
   let%op f = (3 *. ({ x = [ 5 ] } **. 2)) - (4 *. x) + 5 in
   Train.every_non_literal_materialized f;
@@ -48,26 +48,26 @@ let%expect_test "Graph drawing recompile" =
   Train.printf_tree ~with_grad:true ~depth:9 ctx f;
   [%expect
     {|
-                                                                        #32 +_f
-                                                                         6.00e+1
-                                                                        #33 grad_+_f
-                                                                         1.00
-                                                         #30 -                                                           │#19 5 Const/24:literal-constant
-                                                          5.50e+1                                                        │<not-in-context>
-                                                         #31 grad_-                                                      │
-                                                          1.00                                                           │
-                                     #28 *.                                      │              #21 *.                   │
-                                      7.50e+1                                    │               2.00e+1                 │
-                                     #29 grad_*.                                 │              #22 grad_*.              │
-                                      1.00                                       │               -1.00                   │
-    #27 3 Const/24:literal-constant│                #24 **.                      │#20 4 Const/24:literal-constant│[#17 x]│
-    <not-in-context>               │                 2.50e+1                     │<not-in-context>               │       │
-                                   │                #25 grad_**.                 │                               │       │
-                                   │                 3.00                        │                               │       │
-                                   │#17 x non-emb│#23 2 Const/24:literal-constant│                               │       │
-                                   │ 5.00        │<not-in-context>               │                               │       │
-                                   │#18 grad_x   │                               │                               │       │
-                                   │ 2.60e+1     │                               │                               │       │
+                      #32 +_f
+                       6.00e+1
+                      #33 grad_+_f
+                       1.00
+                    #30 -                     │#19 5
+                     5.50e+1                  │ 5.00
+                    #31 grad_-                │
+                     1.00                     │
+            #28 *.             │ #21 *.       │
+             7.50e+1           │  2.00e+1     │
+            #29 grad_*.        │ #22 grad_*.  │
+             1.00              │  -1.00       │
+    #27 3 │    #24 **.         │#20 4 │[#17 x]│
+     3.00 │     2.50e+1        │ 4.00 │       │
+          │    #25 grad_**.    │      │       │
+          │     3.00           │      │       │
+          │#17 x non-emb│#23 2 │      │       │
+          │ 5.00        │ 2.00 │      │       │
+          │#18 grad_x   │      │      │       │
+          │ 2.60e+1     │      │      │       │
     |}];
   let xs = Array.init 10 ~f:Float.(fun i -> of_int i - 5.) in
   let ys =
@@ -149,16 +149,16 @@ let%expect_test "Graph drawing fetch" =
   Train.printf_tree ~with_grad:false ~depth:9 ctx f5;
   [%expect
     {|
-                                                                                #9 +_f_5
-                                                                                 6.00e+1
-                                                                #8 -                                                                  │#1 5 Const/24:literal-constant
-                                                                 5.50e+1                                                              │<not-in-context>
-                                 #7 *.                                  │                          #3 *.                              │
-                                  7.50e+1                               │                           2.00e+1                           │
-    #6 3 Const/24:literal-constant│              #5 **.                 │#2 4 Const/24:literal-constant│#0 5 Const/24:literal-constant│
-    <not-in-context>              │               2.50e+1               │<not-in-context>              │<not-in-context>              │
-                                  │[#0 5]│#4 2 Const/24:literal-constant│                              │                              │
-                                  │      │<not-in-context>              │                              │                              │
+                    #9 +_f_5
+                     6.00e+1
+                #8 -                  │#1 5
+                 5.50e+1              │ 5.00
+         #7 *.          │  #3 *.      │
+          7.50e+1       │   2.00e+1   │
+    #6 3  │  #5 **.     │#2 4  │#0 5  │
+     3.00 │   2.50e+1   │ 4.00 │ 5.00 │
+          │[#0 5]│#4 2  │      │      │
+          │      │ 2.00 │      │      │
     |}];
   let size = 100 in
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in
@@ -356,18 +356,18 @@ let%expect_test "Simple gradients virtual" =
   Train.printf_tree ~with_grad:true ~depth:9 ctx l;
   [%expect
     {|
-                   #12 *._l
-                    -8.00
-                   #13 grad_*._l unknown
-                   <not-in-context>
-             #8 +_d unknown               │#10 f non-emb
-             <not-in-context>             │ -2.00
-             #9 grad_+_d unknown          │#11 grad_f
-             <not-in-context>             │ 4.00
-      #4 *._e unknown        │#6 c non-emb│
-      <not-in-context>       │ 1.00e+1    │
-      #5 grad_*._e unknown   │#7 grad_c   │
-      <not-in-context>       │ -2.00      │
+                       #12 *._l
+                        -8.00
+                       #13 grad_*._l
+                        1.00
+                 #8 +_d                   │#10 f non-emb
+                  4.00                    │ -2.00
+                 #9 grad_+_d              │#11 grad_f
+                  -2.00                   │ 4.00
+          #4 *._e            │#6 c non-emb│
+           -6.00             │ 1.00e+1    │
+          #5 grad_*._e       │#7 grad_c   │
+           -2.00             │ -2.00      │
     #0 a non-emb│#2 b non-emb│            │
      2.00       │ -3.00      │            │
     #1 grad_a   │#3 grad_b   │            │
@@ -382,18 +382,18 @@ let%expect_test "Simple gradients virtual" =
   Train.printf_tree ~with_grad:true ~depth:9 ctx l;
   [%expect
     {|
-                   #12 *._l
-                    -8.00
-                   #13 grad_*._l unknown
-                   <not-in-context>
-             #8 +_d unknown               │#10 f non-emb
-             <not-in-context>             │ -2.40
-             #9 grad_+_d unknown          │#11 grad_f
-             <not-in-context>             │ 4.00
-      #4 *._e unknown        │#6 c non-emb│
-      <not-in-context>       │ 1.02e+1    │
-      #5 grad_*._e unknown   │#7 grad_c   │
-      <not-in-context>       │ -2.00      │
+                       #12 *._l
+                        -8.00
+                       #13 grad_*._l
+                        1.00
+                 #8 +_d                   │#10 f non-emb
+                  6.56                    │ -2.40
+                 #9 grad_+_d              │#11 grad_f
+                  -2.40                   │ 4.00
+          #4 *._e            │#6 c non-emb│
+           -3.64             │ 1.02e+1    │
+          #5 grad_*._e       │#7 grad_c   │
+           -2.40             │ -2.00      │
     #0 a non-emb│#2 b non-emb│            │
      1.40       │ -2.60      │            │
     #1 grad_a   │#3 grad_b   │            │
@@ -405,18 +405,18 @@ let%expect_test "Simple gradients virtual" =
   Train.printf_tree ~with_grad:true ~depth:9 ctx l;
   [%expect
     {|
-                   #12 *._l
-                    -1.57e+1
-                   #13 grad_*._l unknown
-                   <not-in-context>
-             #8 +_d unknown               │#10 f non-emb
-             <not-in-context>             │ -2.40
-             #9 grad_+_d unknown          │#11 grad_f
-             <not-in-context>             │ 6.56
-      #4 *._e unknown        │#6 c non-emb│
-      <not-in-context>       │ 1.02e+1    │
-      #5 grad_*._e unknown   │#7 grad_c   │
-      <not-in-context>       │ -2.40      │
+                       #12 *._l
+                        -1.57e+1
+                       #13 grad_*._l
+                        1.00
+                 #8 +_d                   │#10 f non-emb
+                  6.56                    │ -2.40
+                 #9 grad_+_d              │#11 grad_f
+                  -2.40                   │ 6.56
+          #4 *._e            │#6 c non-emb│
+           -3.64             │ 1.02e+1    │
+          #5 grad_*._e       │#7 grad_c   │
+           -2.40             │ -2.40      │
     #0 a non-emb│#2 b non-emb│            │
      1.40       │ -2.60      │            │
     #1 grad_a   │#3 grad_b   │            │
@@ -465,14 +465,14 @@ let%expect_test "2D neuron virtual" =
   Train.printf_tree ~with_grad:true ~depth:9 ctx v;
   [%expect
     {|
-              #8 +_v
-               7.00e-1
-              #9 grad_+_v unknown
-              <not-in-context>
-         #6 * unknown          │#4 b non-emb
-         <not-in-context>      │ 6.70
-         #7 grad_* unknown     │#5 grad_b
-         <not-in-context>      │ 1.00
+                  #8 +_v
+                   7.00e-1
+                  #9 grad_+_v
+                   1.00
+       #6 * unknown            │#4 b non-emb
+       <unobservable: Local>   │ 6.70
+       #7 grad_*               │#5 grad_b
+        1.00                   │ 1.00
     #0 w non-emb │#2 x non-emb │
      -3.00  1.00 │ 2.00  0.00  │
     #1 grad_w    │#3 grad_x    │

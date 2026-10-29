@@ -2587,6 +2587,99 @@ let computation_reads_merge ~self code =
       | Affine.Barrier | Affine.Staged | Affine.Mma ->
           false)
 
+type replay_facts = {
+  replay_reads : Set.M(Tn).t;
+  replay_merge_reads : bool;
+  replay_free_symbols : Set.M(Indexing.Symbol).t;
+}
+
+(* gh-ocannl-777: what one replay of a stored computation of [self] touches, for
+   [Context.observability]. The statements kept are exactly the ones [instantiate_computations]'
+   [loop_proc] keeps -- loops (a dead one replays nothing), [self]'s own setters, scope-local
+   assignments -- and the sibling setters of a shared-loop body it drops are dropped here too, so a
+   read or a launch symbol only a sibling uses cannot refuse the node. Every operand is visited: the
+   stored body already had its never-evaluated operands elided ([elide_stored]), and an observation
+   needs every node the replay may load, not the cost collector's wider arm. A free symbol is an
+   index symbol no enclosing loop of the replayed code binds: a static (launch) index of the routine
+   that stored the computation. The match arms are exhaustive on purpose, so a new constructor has
+   to decide what a replay of it reads. *)
+let replay_facts ~(self : Tn.t) (code : t) : replay_facts =
+  let reads = ref (Set.empty (module Tn)) in
+  let merge = ref false in
+  let free = ref (Set.empty (module Indexing.Symbol)) in
+  let note_symbol bound s = if not (Set.mem bound s) then free := Set.add !free s in
+  let note_index bound (idx : Indexing.axis_index) =
+    match idx with
+    | Indexing.Iterator s -> note_symbol bound s
+    | Indexing.Affine { symbols; _ } -> List.iter symbols ~f:(fun (_, s) -> note_symbol bound s)
+    | Indexing.Concat syms -> List.iter syms ~f:(note_symbol bound)
+    | Indexing.Fixed_idx _ | Indexing.Sub_axis -> ()
+  in
+  let note_read tn = if not (Tn.equal tn self) then reads := Set.add !reads tn in
+  let rec scalar bound (llsc : scalar_t) =
+    match llsc with
+    | Local_scope { id = _; body; orig_indices; mint = _ } ->
+        Array.iter orig_indices ~f:(note_index bound);
+        stmt bound body
+    | Get_local _ | Constant _ | Constant_bits _ -> ()
+    | Get (tn, idcs) ->
+        note_read tn;
+        Array.iter idcs ~f:(note_index bound)
+    | Get_dynamic { tn; idcs; dyn_axis = _; dyn_value = v, _ } ->
+        note_read tn;
+        Array.iter idcs ~f:(note_index bound);
+        scalar bound v
+    | Get_merge_buffer (_, idcs) ->
+        merge := true;
+        Array.iter idcs ~f:(note_index bound)
+    | Embed_index idx -> note_index bound idx
+    | Ternop (_, (a, _), (b, _), (c, _)) ->
+        scalar bound a;
+        scalar bound b;
+        scalar bound c
+    | Binop (_, (a, _), (b, _)) ->
+        scalar bound a;
+        scalar bound b
+    | Unop (_, (a, _)) -> scalar bound a
+  and stmt bound (code : t) =
+    match code with
+    | Noop | Comment _ | Staged_compilation _ | Declare_local _ | Workgroup_barrier -> ()
+    | Seq (a, b) ->
+        stmt bound a;
+        stmt bound b
+    | For_loop { from_; to_; _ } when to_ < from_ -> ()
+    | For_loop { index; body; _ } -> stmt (Set.add bound index) body
+    | Scan_loop { from_; to_; _ } when to_ < from_ -> ()
+    | Scan_loop { index; carried; body; _ } ->
+        List.iter carried ~f:(fun c -> scalar bound c.init);
+        stmt (Set.add bound index) body
+    | Zero_out _ -> ()
+    | Set { tn; idcs; llsc; debug = _ } ->
+        if Tn.equal tn self then (
+          Array.iter idcs ~f:(note_index bound);
+          scalar bound llsc)
+    | Set_dynamic { tn; idcs; dyn_axis = _; dyn_value = v, _; llsc; _ } ->
+        if Tn.equal tn self then (
+          Array.iter idcs ~f:(note_index bound);
+          scalar bound v;
+          scalar bound llsc)
+    | Set_from_vec { tn; idcs; length = _; vec_unop = _; arg = a, _; debug = _ } ->
+        if Tn.equal tn self then (
+          Array.iter idcs ~f:(note_index bound);
+          scalar bound a)
+    | Set_local (_, llsc) -> scalar bound llsc
+    | If { cond = c, _; body } ->
+        scalar bound c;
+        stmt bound body
+    | Tile_mma { fallback; _ } -> stmt bound fallback
+  in
+  stmt (Set.empty (module Indexing.Symbol)) code;
+  {
+    replay_reads = !reads;
+    replay_merge_reads = !merge || computation_reads_merge ~self code;
+    replay_free_symbols = !free;
+  }
+
 (* The instantiation half of [inline_computation] (gh-ocannl-1011): [computations] (a
    stored-template list, newest first) replayed at [call_args] as the body of the scope [id], or the
    rejection code of the read site. Loop symbols it keeps come from [fresh_symbol]; the lane-extract

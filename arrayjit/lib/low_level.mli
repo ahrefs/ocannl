@@ -380,6 +380,24 @@ val evaluation_reads : self:Tnode.t -> scalar_t -> Set.M(Tnode).t
 val evaluation_reads_of_proc : self:Tnode.t -> t -> Set.M(Tnode).t
 (** {!evaluation_reads} of a statement: one replay of a stored computation of [self]. *)
 
+type replay_facts = {
+  replay_reads : Set.M(Tnode).t;
+      (** Every tensor node one replay may load, [self] excluded — all operands, not the cost
+          collector's wider arm ({!evaluation_reads_of_proc} answers a cost question). *)
+  replay_merge_reads : bool;
+      (** The replay reads a merge buffer (the inliner's own taint predicate, or a merge read in
+          [self]'s setters). *)
+  replay_free_symbols : Set.M(Indexing.Symbol).t;
+      (** Index symbols no loop of the replayed code binds: static (launch) indices of the routine
+          that stored the computation. *)
+}
+
+val replay_facts : self:Tnode.t -> t -> replay_facts
+(** gh-ocannl-777: what one replay of a stored computation of [self] reads, for
+    [Context.observability]. Only the statements the inliner's instantiation keeps are visited —
+    loops (a dead one replays nothing), [self]'s own setters, scope-local assignments — so the
+    sibling setters a shared-loop body carries cannot contribute a read or a symbol. *)
+
 module Canonical_render : sig
   (** gh-563: the one canonical rendering of lowered code, shared by both digest consumers —
       {!analysis_cache_stats}' cache (keyed inside [optimize]) and [Schedule_cache.canonicalize]
