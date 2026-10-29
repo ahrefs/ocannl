@@ -1,0 +1,14 @@
+if_ over a cmp comparison with a constant operand is accepted: true
+if_ over a conjunction of comparisons is accepted: true
+if_ over a value-read flag is accepted: true
+if_idx over a cmp comparison is accepted: true
+if_ and if_idx build the same guard over a cmp comparison: true
+the old if_'s form -- a cmp comparison annotated single -- is refused under every store: true
+add_own accumulating a load is accepted: true
+mul_own of a load and a constant is accepted: true
+where_own over a cmp comparison with a constant arm is accepted: true
+where_own over a value-read flag with nested own-precision arms is accepted: true
+where_own's condition guards an if_ the same way: true
+binop, add, mul and where_ (single arms) are accepted under a single store: true
+binop over narrow loads (single annotations) is refused under a narrow store: true
+where_'s single arms over narrow loads are refused under a narrow store: true

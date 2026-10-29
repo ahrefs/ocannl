@@ -10859,6 +10859,18 @@
   (env_var OCANNL_BACKEND))
  (libraries base ocannl stdio arrayjit.verdict ll_test))
 
+; gh-ocannl-1709 post-wave (staging#1514): the hand-built-IR builders build what the operand-precision
+; check accepts under single, half and bfloat16 stores; the old if_ and single-armed narrow shapes
+; stay refused.
+
+(test
+ ; ocannl-backend: none -- pure validation of hand-built IR; links no backend and compiles nothing.
+ (name ll_builder_precisions)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules ll_builder_precisions)
+ (libraries base stdio arrayjit.ir arrayjit.verdict arrayjit.ll_builders))
+
 ; gh-ocannl-1240: powers with a run-time exponent keep a negative base's integral powers under the
 ; GPU backends' fast math.
 
