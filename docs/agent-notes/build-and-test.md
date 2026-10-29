@@ -1524,13 +1524,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   refuses a word that names nothing on disk rather than scanning two phantoms in place of one file.
   The repository has no such path today.
 - A Windows checkout with `core.symlinks=false` (git's default there without Developer Mode) writes
-  every git symlink as a small TEXT FILE holding the link target. The repository has 19 of them —
+  every git symlink as a small TEXT FILE holding the link target. The repository has around twenty —
   `docs/in-progress/` and `docs/research/` are views onto `docs/proposals/` — so any scan that reads
   documentation sees 29-byte stubs, and `config_usage_scan` reports an exemption count drifting to
   zero. It is not a repository bug and must not be "fixed" in the exemption list: CI's Windows job
   enables symlink evaluation (setup-ocaml runs `fsutil behavior set symlinkEvaluation`) and sees the
   real files. On a hand-run Windows box, `git config core.symlinks true`, then delete and re-check-out
-  the 19 paths (`git ls-files -s | awk '$1=="120000"'`) before trusting any doc-reading scan.
+  those paths (`git ls-files -s | awk '$1=="120000"'`) before trusting any doc-reading scan.
 - `os.kill(pid, 0)` is not a liveness probe on Windows and must not be used as one. CPython
   implements `os.kill` there as `OpenProcess` followed by `TerminateProcess(handle, sig)`, so signal
   0 KILLS the process it was asked about, and a pid that already exited raises `OSError`

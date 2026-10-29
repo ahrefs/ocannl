@@ -11560,3 +11560,20 @@
  (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(test
+ ; ocannl-backend: none -- renders plots of literal points through PrintBox and links no backend.
+ (name plot_axes)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules plot_axes)
+ (libraries
+  base
+  ocannl
+  stdio
+  printbox
+  printbox-text
+  printbox-html
+  printbox-md
+  printbox-ext-plot
+  arrayjit.verdict))

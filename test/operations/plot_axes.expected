@@ -1,0 +1,79 @@
+=== Diagonal y = x, markers at the integers 0..10 ===
+y
+  ┌────────────────────────────────────────────────────────────────────────────────────────────────────┐
+10┤                                                                                                   #│
+  │                                                                                                    │
+  │                                                                                                    │
+  │                                                                                                    │
+ 9┤                                                                                         #          │
+  │                                                                                                    │
+  │                                                                                                    │
+  │                                                                                                    │
+ 8┤                                                                               #                    │
+  │                                                                                                    │
+  │                                                                                                    │
+  │                                                                                                    │
+ 7┤                                                                     #                              │
+  │                                                                                                    │
+  │                                                                                                    │
+  │                                                                                                    │
+ 6┤                                                           #                                        │
+  │                                                                                                    │
+  │                                                                                                    │
+  │                                                                                                    │
+ 5┤                                                 #                                                  │
+  │                                                                                                    │
+  │                                                                                                    │
+  │                                                                                                    │
+ 4┤                                       #                                                            │
+  │                                                                                                    │
+  │                                                                                                    │
+  │                                                                                                    │
+ 3┤                             #                                                                      │
+  │                                                                                                    │
+  │                                                                                                    │
+  │                                                                                                    │
+ 2┤                   #                                                                                │
+  │                                                                                                    │
+  │                                                                                                    │
+  │                                                                                                    │
+ 1┤         #                                                                                          │
+  │                                                                                                    │
+  │                                                                                                    │
+ 0┤#                                                                                                   │
+  └┬──────────────────┬───────────────────┬───────────────────┬───────────────────┬───────────────────┬┘
+   0                  2                   4                   6                   8                  10
+                                                    x
+the canvas has 40 rows: true
+every labeled y row carries a marker: true
+every y label is a number: true
+every x tick mark has a label over its column: true
+under every x tick mark, the marker sits on the row with the same y label: true
+=== Two series with a legend, small ===
+f(x)
+     ┌─────────────────────────┐
+ 3.80┤                       * │
+     │#                    **# │
+     │ ##                **##  │
+    2┤   ##           ***###   │
+     │     ###     ***###      │
+    0┤        ########         │
+     │        ***              │
+   -2┤     ***                 │
+     │   **                    │
+-3.80┤***                      │
+     └┬──────────┬────────────┬┘
+      -1.90      0         1.90
+                  x
+          ┌────────────────────┐
+          │# x^2               │
+          │* 2x, its derivative│
+          └────────────────────┘
+as_canvas renders exactly the upstream canvas: true
+the HTML embeds the upstream canvas: true
+the HTML legend lists every description: true
+the HTML x axis labels its left end: true
+the HTML x axis labels its right end: true
+the HTML x axis has interior ticks: true
+the HTML y axis has interior ticks: true
+the Markdown rendering carries the legend: true

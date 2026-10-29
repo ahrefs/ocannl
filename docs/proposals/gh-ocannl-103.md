@@ -2,6 +2,17 @@
 
 Issue: [#103](https://github.com/ahrefs/ocannl/issues/103)
 
+**Status: implemented** (wave-20261029), with the tick labels on the OCANNL side after all: the
+coordinator's recommendation on the issue overrode the "Direction" below, because v1.1.3's opam
+release cannot depend on an unreleased printbox. `PrintBox_utils.plot` renders the upstream canvas
+alone (`axes = false`) and lays the tick labels and the `~legend` box out around it, in a PrintBox
+extension of its own with text, Markdown and HTML handlers. The fragility the Direction warned
+about is real and contained: `data_window` restates the upstream data window, and
+`test/operations/plot_axes` pins the restatement against the rendered canvas (markers at round
+values must land on the rows and columns labeled with them). The proper upstream change
+(printbox#50: intermediate ticks and a legend in `printbox-ext-plot`, plus unit-carrying CSS in
+its HTML canvas) remains worth sending; once released, `plot` can delegate to it.
+
 ## Current state
 
 `PrintBox_utils.plot` is still a thin wrapper over `printbox-ext-plot` 0.12.

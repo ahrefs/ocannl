@@ -39,10 +39,15 @@ val plot :
   ?axes:bool ->
   ?size:int * int ->
   ?small:bool ->
+  ?legend:(string * string) list ->
   PrintBox_ext_plot.plot_spec list ->
   PrintBox.t
-(** A plot box over [printbox-ext-plot]'s defaults. [~as_canvas] drops the labels and axes; [~small]
-    quarters the size in both directions. *)
+(** A plot box over [printbox-ext-plot]'s defaults. With axes (the default), both axes carry tick
+    labels: the two ends of the data window and the multiples of a round step between them, each
+    labeled row and column marked on the canvas frame; the y-axis label sits above the plot and the
+    x-axis label below it. [~legend] lists [(marker, description)] pairs, rendered as a box below
+    the plot, right-aligned. [~as_canvas] drops the labels and axes; [~small] quarters the size in
+    both directions. The layout has text, Markdown and HTML renderings (gh-ocannl-103). *)
 
 type table_row_spec =
   | Benchmark of {
