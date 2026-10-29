@@ -1,0 +1,30 @@
+h is placed Local by the pipeline: true
+m is materialized: true
+v and u are virtual: true
+v, shielded from h by the materialized m, is recomputable: true
+u, reading h directly, is unobservable along the path u -> h: true
+h itself is unobservable: true
+the stored output and an input are stored: true
+the reason names h's placement provenance: true
+u: <unobservable: reads Local h>
+  node u is virtual, and recomputing it reads h, which this lineage placed Local (provenance 39:inline-reduction-cap -> 432:is-local-materialized-query): routine-scoped scratch, kept by no routine, so u cannot be observed (dependency path u -> h). Materialize h -- e.g. Train.set_materialized or Context.decide_materialized -- before the first routine using it is compiled, or materialize u itself.
+an ndarray literal outside every routine is host-initialized: true
+a tensor no routine of the lineage computes is not computed: true
+v read from a context not descending from its compile is not computed: true
+v from an unrelated context: <not-computed>
+  node v has no buffer in this context, no host initialization data, and no computation stored by any routine of this context's compilation lineage: compile (and run) a routine computing it into this context first
+the queries decided no placement, stored nothing and compiled nothing: true
+the diamond's d is virtual: true
+d over its two present leaves is recomputable: true
+a materialized node absent from the context needs a context: true
+w3: <not-in-context: needs oq_w3>
+  node oq_w3 is materialized (placed On_device) but has no buffer in this context: read it from a context its computing routine ran in
+e is virtual: true
+e depends on the launch index k: true
+a slice view is read through its parent: true
+a released context is refused: true
+the replay reads self's source: true
+a sibling setter's read and launch symbol are not the replay's: true
+self's own launch symbol is free: true
+a merge-buffer read in self's setter is reported: true
+a dead loop replays nothing: true

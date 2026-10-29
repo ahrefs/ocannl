@@ -1042,6 +1042,230 @@ let refuse_local ~fn ctx (tn : Tn.t) prov =
            the first routine using the node is compiled.%s Backend: %s"
           fn (Tn.debug_name tn) (Tn.provenance_to_string prov) alternative (backend_name ctx))
 
+(* {2 Observability (gh-ocannl-777)}
+
+   Whether a host read of a node can be served from this context, answered from the lineage's
+   metadata alone -- placements, the context's buffers, [Host_inits] and the stored computations --
+   without compiling. A [Virtual] node is observable by recomputation exactly when every node one
+   replay of its stored computations reads is: materialized and present (which shields whatever
+   produced it, a [Local] dependency included), host-initialized, or itself virtual and observable.
+   The walk reads what the inliner would replay ({!Ir.Low_level.replay_facts}), not the cost
+   collector's approximation. *)
+type observability =
+  | Stored
+  | Host_init
+  | Recomputable
+  | Needs_context of Tn.t list
+  | Unobservable_local of Tn.t list
+  | Unobservable_merge of Tn.t list
+  | Launch_bound of Tn.t list * Idx.symbol list
+  | Slice_view of Tn.t
+  | Not_computed
+
+let computations ctx =
+  Backends.query ctx.wrapped { q = (fun _ c -> c.BI.optimize_ctx.Ir.Low_level.computations) }
+
+(* The verdict on one virtual node's stored computations, in precedence order: an unobservable
+   dependency is reported over a launch dependence, which is reported over absent leaves -- the
+   first cannot be fixed by reading from another context, the last can. Paths start at the node the
+   verdict is about. *)
+type walk_verdict =
+  | W_local of Tn.t list
+  | W_merge of Tn.t list
+  | W_launch of Tn.t list * Idx.symbol list
+  | W_missing of Set.M(Tn).t
+  | W_ok
+
+let verdict_rank = function
+  | W_local _ -> 0
+  | W_merge _ -> 1
+  | W_launch _ -> 2
+  | W_missing _ -> 3
+  | W_ok -> 4
+
+(* Combines two verdicts: the higher-precedence one wins, the first (program order) on a tie, and
+   absent leaves accumulate. *)
+let combine_verdicts v1 v2 =
+  match (v1, v2) with
+  | W_missing a, W_missing b -> W_missing (Set.union a b)
+  | _ -> if verdict_rank v2 < verdict_rank v1 then v2 else v1
+
+let observability_internal_error tn what =
+  failwith
+    (Printf.sprintf
+       "Context.observability: internal error: %s %s (a compile that stored the computation \
+        reading it should have decided it)"
+       (Tn.debug_name tn) what)
+
+let walk_virtual ctx (root : Tn.t) : walk_verdict =
+  let plc = placements ctx in
+  let comps = computations ctx in
+  let memo = Hashtbl.create (module Tn) in
+  let present tn = mem ctx tn || Ir.Host_inits.mem tn in
+  let prefix v = function
+    | W_local path -> W_local (v :: path)
+    | W_merge path -> W_merge (v :: path)
+    | W_launch (path, syms) -> W_launch (v :: path, syms)
+    | (W_missing _ | W_ok) as w -> w
+  in
+  let rec walk (v : Tn.t) : walk_verdict =
+    match Hashtbl.find memo v with
+    | Some w -> w
+    | None ->
+        (* A cycle through virtual nodes cannot be stored (a node's replay excludes itself, and a
+           read of a virtual node inlines its already-stored template); the in-progress mark only
+           keeps the walk finite. *)
+        Hashtbl.set memo ~key:v ~data:W_ok;
+        let components =
+          match Hashtbl.find comps v with
+          | Some (_ :: _ as cs) -> cs
+          | Some [] | None -> observability_internal_error v "is virtual with no stored computation"
+        in
+        (* Stored newest first; walked oldest first, so "first" means program order. *)
+        let w =
+          List.fold (List.rev components) ~init:W_ok ~f:(fun acc (_, body) ->
+              let facts = Ir.Low_level.replay_facts ~self:v body in
+              let acc =
+                if facts.replay_merge_reads then combine_verdicts acc (W_merge [ v ]) else acc
+              in
+              let acc =
+                if Set.is_empty facts.replay_free_symbols then acc
+                else combine_verdicts acc (W_launch ([ v ], Set.to_list facts.replay_free_symbols))
+              in
+              Set.fold facts.replay_reads ~init:acc ~f:(fun acc r ->
+                  combine_verdicts acc (read_verdict v r)))
+        in
+        Hashtbl.set memo ~key:v ~data:w;
+        w
+  and read_verdict v r =
+    match Tn.Placements.get plc r with
+    | Some (Tn.Local, _) -> W_local [ v; r ]
+    | _ when present r -> W_ok
+    | Some (Tn.Virtual, _) -> prefix v (walk r)
+    | Some (Tn.Effectively_constant, _) when Hashtbl.mem comps r -> prefix v (walk r)
+    | Some (Tn.On_device, _) -> W_missing (Set.singleton (module Tn) r)
+    | Some ((Tn.Effectively_constant | Tn.Never_virtual), _) | None ->
+        observability_internal_error r "is read by a stored computation but has no placement"
+  in
+  walk root
+
+let observability ctx (tn : Tn.t) : observability =
+  check_live ~fn:"observability" ctx;
+  check_node_valid tn;
+  match Tn.slice_of tn with
+  | Some (parent, _) -> Slice_view parent
+  | None -> (
+      let plc = placements ctx in
+      match Tn.Placements.get plc tn with
+      | Some (Tn.Local, _) -> Unobservable_local [ tn ]
+      | placement -> (
+          if mem ctx tn then Stored
+          else if Ir.Host_inits.mem tn then Host_init
+          else
+            match placement with
+            | Some ((Tn.Virtual | Tn.Effectively_constant), _)
+              when Hashtbl.mem (computations ctx) tn -> (
+                match walk_virtual ctx tn with
+                | W_ok -> Recomputable
+                | W_local path -> Unobservable_local path
+                | W_merge path -> Unobservable_merge path
+                | W_launch (path, syms) -> Launch_bound (path, syms)
+                | W_missing leaves -> Needs_context (Set.to_list leaves))
+            | Some (Tn.On_device, _) -> Needs_context [ tn ]
+            | Some ((Tn.Virtual | Tn.Effectively_constant | Tn.Never_virtual | Tn.Local), _) | None
+              ->
+                Not_computed))
+
+let path_to_string path = String.concat ~sep:" -> " (List.map path ~f:Tn.debug_name)
+
+let observability_tag = function
+  | Stored | Host_init | Recomputable -> None
+  | Needs_context leaves ->
+      Some
+        ("<not-in-context: needs "
+        ^ String.concat ~sep:", " (List.map leaves ~f:Tn.debug_name)
+        ^ ">")
+  | Unobservable_local path ->
+      Some ("<unobservable: reads Local " ^ Tn.debug_name (List.last_exn path) ^ ">")
+  | Unobservable_merge path ->
+      Some ("<unobservable: " ^ Tn.debug_name (List.last_exn path) ^ " reads a merge buffer>")
+  | Launch_bound (_, syms) ->
+      Some
+        ("<unobservable: depends on launch index "
+        ^ String.concat ~sep:", " (List.map syms ~f:Idx.symbol_ident)
+        ^ ">")
+  | Slice_view parent -> Some ("<slice-view: read " ^ Tn.debug_name parent ^ ">")
+  | Not_computed -> Some "<not-computed>"
+
+let explain_observability ctx (tn : Tn.t) (obs : observability) : string option =
+  let name = Tn.debug_name tn in
+  match obs with
+  | Stored | Host_init | Recomputable -> None
+  | Needs_context [ leaf ] when Tn.equal leaf tn ->
+      Some
+        (Printf.sprintf
+           "node %s is materialized (placed On_device) but has no buffer in this context: read it \
+            from a context its computing routine ran in"
+           name)
+  | Needs_context leaves ->
+      Some
+        (Printf.sprintf
+           "node %s is virtual and would be recomputed, but its computation reads %s, materialized \
+            in this lineage yet absent from this context: read it from a context holding %s"
+           name
+           (String.concat ~sep:", " (List.map leaves ~f:Tn.debug_name))
+           (if List.length leaves = 1 then "that node" else "those nodes"))
+  | Unobservable_local [ _ ] ->
+      (* The root itself is Local: [to_host] reports it through [refuse_local], with its provenance
+         and the cap advice. *)
+      Some (Printf.sprintf "node %s is placed Local (routine-scoped scratch)" name)
+  | Unobservable_local path ->
+      let local = List.last_exn path in
+      let prov =
+        match Tn.Placements.get (placements ctx) local with
+        | Some (_, prov) -> Tn.provenance_to_string prov
+        | None -> "undecided"
+      in
+      Some
+        (Printf.sprintf
+           "node %s is virtual, and recomputing it reads %s, which this lineage placed Local \
+            (provenance %s): routine-scoped scratch, kept by no routine, so %s cannot be observed \
+            (dependency path %s). Materialize %s -- e.g. Train.set_materialized or \
+            Context.decide_materialized -- before the first routine using it is compiled, or \
+            materialize %s itself."
+           name (Tn.debug_name local) prov name (path_to_string path) (Tn.debug_name local) name)
+  | Unobservable_merge path ->
+      Some
+        (Printf.sprintf
+           "node %s is virtual, and recomputing it replays a read of a merge buffer (in the stored \
+            computation of %s, dependency path %s): merge-buffer contents are transient to the \
+            routine receiving the transfer, so %s cannot be observed by recomputation. Materialize \
+            %s to observe it."
+           name
+           (Tn.debug_name (List.last_exn path))
+           (path_to_string path) name name)
+  | Launch_bound (path, syms) ->
+      Some
+        (Printf.sprintf
+           "node %s is virtual, and its stored computation (dependency path %s) depends on the \
+            launch index %s, whose value is bound only for a launch of the routine that stored it: \
+            a host read has no binding to supply, so %s cannot be observed by recomputation. \
+            Materialize %s to observe it."
+           name (path_to_string path)
+           (String.concat ~sep:", " (List.map syms ~f:Idx.symbol_ident))
+           name name)
+  | Slice_view parent ->
+      Some
+        (Printf.sprintf "node %s is an @| slice view; read its parent %s instead" name
+           (Tn.debug_name parent))
+  | Not_computed ->
+      Some
+        (Printf.sprintf
+           "node %s has no buffer in this context, no host initialization data, and no computation \
+            stored by any routine of this context's compilation lineage: compile (and run) a \
+            routine computing it into this context first"
+           name)
+
 (* For-print proxies (gh-ocannl-333 AC 5): when a tensor's node is not materialized in a context,
    [Train.printf] recompiles a copy ([%cd "for_print" =: t]) into a fresh node and registers it here
    as a proxy for the source node, so {!to_host} can read the source's value through the copy. The

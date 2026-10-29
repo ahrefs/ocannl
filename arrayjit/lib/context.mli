@@ -514,6 +514,57 @@ val lifecycle_depth : t -> int
 val mem : t -> Ir.Tnode.t -> bool
 (** Whether the node has a device buffer allocated in this context. *)
 
+(** Whether a host read of a node can be served from a context, and if not, why (gh-ocannl-777). *)
+type observability =
+  | Stored  (** The node has a buffer in the context; a read transfers it. *)
+  | Host_init  (** No buffer, but registered host initialization data; a read copies it. *)
+  | Recomputable
+      (** [Virtual], and every node one replay of its stored computations reads is present
+          (materialized with a buffer here, or host-initialized) or itself recomputable; a read
+          recomputes it. *)
+  | Needs_context of Ir.Tnode.t list
+      (** Materialized nodes the read needs — the node itself, or the leaves its recomputation reads
+          — that this lineage placed [On_device] but this context holds no buffer for: readable from
+          a context that does. Ordered by node, without repetition. *)
+  | Unobservable_local of Ir.Tnode.t list
+      (** The dependency path from the node to a node this lineage placed [Local] (the node itself
+          when the path is a singleton). Recomputation would read routine-scoped scratch, so the
+          node is unobservable; a materialized node between them would have shielded it. *)
+  | Unobservable_merge of Ir.Tnode.t list
+      (** The dependency path to a virtual node whose stored computation reads a merge buffer:
+          transient to the routine receiving the transfer, so not replayable from a host read. *)
+  | Launch_bound of Ir.Tnode.t list * Ir.Indexing.symbol list
+      (** The dependency path to a virtual node whose stored computation mentions static (launch)
+          indices of the routine that stored it, and those indices. A host read supplies no
+          bindings. Conservative: the inliner could bind such a symbol where it occurs in the
+          producer's write index, but the value it stands for is a launch's, not the read's. *)
+  | Slice_view of Ir.Tnode.t  (** An [\@|] slice view of the given parent: read the parent. *)
+  | Not_computed
+      (** No buffer, no host initialization data, and no computation stored by any routine of this
+          context's lineage (e.g. the context does not descend from the compile that computes it).
+      *)
+
+val observability : t -> Ir.Tnode.t -> observability
+(** Classifies a host read of the node from this context without compiling, from the lineage's
+    {!placements}, the context's buffers, the host initialization registry and the stored
+    computations. For a [Virtual] node the walk follows each stored computation exactly as a replay
+    would read it — the statements the inliner keeps, every operand — into other virtual nodes, and
+    stops at materialized ones. A path ends at the first offending node in program order; when
+    several reasons apply, [Unobservable_local] is reported over [Unobservable_merge], over
+    [Launch_bound], over [Needs_context]. Pure: no placement is decided, nothing is compiled. A
+    [Recomputable] answer describes structure and availability; the recompute's own compile and run
+    keep their checks (e.g. an input no routine of the lineage wrote is refused by {!run}). Refuses
+    a {!release}d context and a discarded node like {!to_host}. Raises [Failure] (an internal error)
+    if a stored computation reads a node this lineage left undecided. *)
+
+val observability_tag : observability -> string option
+(** A short placeholder for printers, such as [<unobservable: reads Local #7 h>]; [None] for the
+    three readable answers. *)
+
+val explain_observability : t -> Ir.Tnode.t -> observability -> string option
+(** The full reason a read of the node from this context is refused, naming the dependency path, the
+    [Local] node's placement provenance, and the remedy; [None] for the readable answers. *)
+
 val register_for_print : src:Ir.Tnode.t -> proxy:Ir.Tnode.t -> unit
 (** Registers [proxy] as a for-print copy of [src] (gh-ocannl-333 AC 5): when [src] is not present
     in a context, {!to_host}/{!get_values} on [src] read through [proxy] instead. Used by
