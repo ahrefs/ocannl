@@ -1,0 +1,12 @@
+the training state carries a momentum buffer for every parameter beyond the parameters: true
+the interrupted run stops mid-epoch: true
+the interrupted run's losses are the uninterrupted run's first ones: true
+the fresh process restores the step, epoch, data position and batch order: true
+the resumed run's final parameters equal the uninterrupted run's, bit for bit: true
+the resumed run's per-step losses equal the uninterrupted run's, bit for bit: true
+the restored host generator draws what the saved one would have: true
+a resume restoring the parameters but not the momentum ends elsewhere: true
+a resume restarting the host generator ends elsewhere: true
+restoring a state set without the momentum is refused, naming the difference: true
+a plain Persistence checkpoint is refused as recording no progress: true
+an appending save replaces the metadata key it names and keeps the others: true

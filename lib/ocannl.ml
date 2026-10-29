@@ -14,6 +14,7 @@ module Parallel = Parallel
 module Nn_blocks = Nn_blocks
 module Demo_models = Demo_models
 module Persistence = Persistence
+module Checkpoint = Checkpoint
 module Precision_policy = Precision_policy
 module Mixed_prec = Mixed_prec
 module Safetensors = Safetensors

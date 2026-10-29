@@ -27,6 +27,12 @@ type checkpoint_header = {
           relative to it. Files written before the field existed are read as [alignment = 1], i.e.
           payloads packed back to back. Compare GGUF's [general.alignment]. *)
   tensors : tensor_meta list;
+  metadata : (string * string) list;
+      (** Free-form key-value pairs riding with the tensors (gh-ocannl-96): what {!Checkpoint} keeps
+          of a training run's host-side progress, so that it is published in the same atomic write
+          as the state it describes. Written only when non-empty, so a checkpoint without metadata
+          is byte-identical to one written before the field existed; readers predating it ignore the
+          field. *)
 }
 
 (** {2 S-expression serialization for checkpoint types} *)
@@ -129,11 +135,22 @@ let tensor_meta_of_sexp sexp =
 
 let sexp_of_checkpoint_header h =
   Sexp.List
-    [
-      Sexp.List [ Sexp.Atom "version"; Sexp.Atom (Int.to_string h.version) ];
-      Sexp.List [ Sexp.Atom "alignment"; Sexp.Atom (Int.to_string h.alignment) ];
-      Sexp.List [ Sexp.Atom "tensors"; Sexp.List (List.map h.tensors ~f:sexp_of_tensor_meta) ];
-    ]
+    ([
+       Sexp.List [ Sexp.Atom "version"; Sexp.Atom (Int.to_string h.version) ];
+       Sexp.List [ Sexp.Atom "alignment"; Sexp.Atom (Int.to_string h.alignment) ];
+       Sexp.List [ Sexp.Atom "tensors"; Sexp.List (List.map h.tensors ~f:sexp_of_tensor_meta) ];
+     ]
+    @
+    if List.is_empty h.metadata then []
+    else
+      [
+        Sexp.List
+          [
+            Sexp.Atom "metadata";
+            Sexp.List
+              (List.map h.metadata ~f:(fun (k, v) -> Sexp.List [ Sexp.Atom k; Sexp.Atom v ]));
+          ];
+      ])
 
 let checkpoint_header_of_sexp sexp =
   let fields =
@@ -164,7 +181,18 @@ let checkpoint_header_of_sexp sexp =
     | Sexp.List metas -> List.map metas ~f:tensor_meta_of_sexp
     | _ -> failwith "bad tensors"
   in
-  { version; alignment; tensors }
+  (* Absent in checkpoints written without metadata, and in every one written before the field
+     existed. *)
+  let metadata =
+    match List.Assoc.find fields "metadata" ~equal:String.equal with
+    | None -> []
+    | Some (Sexp.List pairs) ->
+        List.map pairs ~f:(function
+          | Sexp.List [ Sexp.Atom k; Sexp.Atom v ] -> (k, v)
+          | _ -> failwith "bad metadata entry")
+    | Some _ -> failwith "bad metadata"
+  in
+  { version; alignment; tensors; metadata }
 
 (** {2 File I/O helpers} *)
 
@@ -219,7 +247,9 @@ let validate_header header =
   let ids = List.map header.tensors ~f:meta_key in
   let unique_ids = Set.of_list (module String) ids in
   if Set.length unique_ids <> List.length ids then
-    failwith "checkpoint contains duplicate tensor IDs"
+    failwith "checkpoint contains duplicate tensor IDs";
+  if List.contains_dup header.metadata ~compare:(fun (k1, _) (k2, _) -> String.compare k1 k2) then
+    failwith "checkpoint contains duplicate metadata keys"
 
 (** {2 Payload ingestion: mapped or decoded (gh-ocannl-467)} *)
 
@@ -296,9 +326,11 @@ let compute_byte_length prec dims padding =
 
 (** {2 Public API} *)
 
-let save ~ctx ~appending ?(alignment = default_alignment) t_set path =
+let save ~ctx ~appending ?(alignment = default_alignment) ?(metadata = []) t_set path =
   if alignment < 1 then
     invalid_arg ("Persistence.save: alignment must be positive, got " ^ Int.to_string alignment);
+  if List.contains_dup metadata ~compare:(fun (k1, _) (k2, _) -> String.compare k1 k2) then
+    invalid_arg "Persistence.save: duplicate metadata keys";
   let tn_list = Set.to_list t_set in
   (* Retrieve each tnode's data from its device buffer on demand (gh-ocannl-333). *)
   let host_of = Hashtbl.create (module Int) in
@@ -329,11 +361,13 @@ let save ~ctx ~appending ?(alignment = default_alignment) t_set path =
         (meta, tn))
   in
   (* If appending, read existing file and merge *)
+  let existing_metadata = ref [] in
   let all_entries =
     if appending && Stdlib.Sys.file_exists path then begin
       let ic = Stdlib.open_in_bin path in
       let existing_header = read_header ic in
       validate_header existing_header;
+      existing_metadata := existing_header.metadata;
       (* Read the data offset for seeking *)
       let data_start = Stdlib.pos_in ic in
       (* Read existing binary payloads for non-overlapping tensors *)
@@ -390,6 +424,11 @@ let save ~ctx ~appending ?(alignment = default_alignment) t_set path =
           alignment;
           tensors =
             List.map entries_with_offsets ~f:(function `Existing (m, _) -> m | `New (m, _) -> m);
+          (* Like the tensors: an appending save replaces the keys it names and keeps the rest. *)
+          metadata =
+            List.filter !existing_metadata ~f:(fun (k, _) ->
+                not (List.Assoc.mem metadata k ~equal:String.equal))
+            @ metadata;
         }
       in
       write_header oc header;
@@ -406,6 +445,15 @@ let save ~ctx ~appending ?(alignment = default_alignment) t_set path =
               let _n = Nd.write_payload_to_channel ?padding nd oc in
               ());
           cursor := meta.offset + meta.byte_length))
+
+let metadata path =
+  let ic = Stdlib.open_in_bin path in
+  Exn.protect
+    ~finally:(fun () -> Stdlib.close_in_noerr ic)
+    ~f:(fun () ->
+      let header = read_header ic in
+      validate_header header;
+      header.metadata)
 
 let load ~ctx ?prefix_namespace ?mmap path =
   let prefix_namespace =
@@ -472,14 +520,17 @@ let load ~ctx ?prefix_namespace ?mmap path =
   in
   result
 
-let restore ~ctx ?mmap t_set path =
-  if Set.is_empty t_set then ctx
+let restore ~ctx ?mmap ?check_metadata t_set path =
+  if Set.is_empty t_set && Option.is_none check_metadata then ctx
   else begin
     let reader = open_reader ?mmap path in
     let ic = reader.ic in
     match
       let header = read_header ic in
       validate_header header;
+      (* Read through the same channel as the payloads: a concurrent atomic save replaces the
+         directory entry, not this open file, so the metadata and the tensors are one snapshot. *)
+      Option.iter check_metadata ~f:(fun check -> check header.metadata);
       let reader = { reader with data_start = Stdlib.pos_in ic } in
       validate_extents reader header;
       (* Build lookup map *)

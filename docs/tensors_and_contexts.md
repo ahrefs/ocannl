@@ -22,6 +22,7 @@ This document describes how to work with tensors and execution contexts in OCANN
   - [Parameter Initialization](#parameter-initialization)
   - [Forward and Backward Passes](#forward-and-backward-passes)
   - [Training Loops](#training-loops)
+  - [Stopping and Resuming Training](#stopping-and-resuming-training)
 - [Randomness and Parameter Initialization](#randomness-and-parameter-initialization)
   - [Counter-Based PRNG](#counter-based-prng)
   - [Initialization Functions](#initialization-functions)
@@ -459,6 +460,43 @@ done
 ```
 
 See [migration_guide.md](migration_guide.md) for more training patterns.
+
+### Stopping and Resuming Training
+
+`Checkpoint` (gh-ocannl-96) saves what a training loop needs to resume and continue exactly as
+the uninterrupted run would have. Two kinds of state are involved:
+
+- **Device state**: `Checkpoint.training_state ~routines loss` is the loss's `params` plus every
+  node the compiled routines carry from one run to the next — the optimizer's moments (an SGD
+  momentum buffer), accumulators. It is read off the lowered routines (a node the routine both
+  writes and reads before writing), so it needs no labels or registration: an update reading its
+  own state without the clearing `=:` prefix declares that state persistent.
+- **Host-side progress**: a `Checkpoint.progress` record of the step and epoch counters, the
+  position in the data, an optional `Stdlib.Random.State.t` (say, the generator shuffling the
+  data), and free-form `extra` key-value pairs.
+
+`Checkpoint.save` writes both into one file, in one atomic write (a crash mid-save leaves the
+previous checkpoint whole). A resumed process rebuilds the same model and routines in the same
+order — the checkpoint matches nodes by id — initializes the parameters as usual, then restores:
+
+```ocaml
+let state = Checkpoint.training_state ~routines:[ routine ] loss in
+(* Every so often: *)
+Checkpoint.save ~ctx
+  ~progress:{ step; epoch; position; host_rng = Some rng; extra = [] }
+  state path;
+(* In the resumed process, after rebuilding the program and Train.init_params: *)
+let ctx, progress = Checkpoint.restore ~ctx state path in
+(* ... continue the loop from progress.step, progress.epoch, progress.position,
+   re-arming step-dependent inputs (e.g. a scheduled learning rate) from progress.step *)
+```
+
+`Checkpoint.restore` refuses a state set different from the one saved (a set missing the
+optimizer moments would silently restart them) and a plain `Persistence` checkpoint, which
+records no progress. Device-side randomness needs nothing saved: random operations are
+counter-based (see [Counter-Based PRNG](#counter-based-prng)), so the same seed with counters
+derived from the restored step draws the same numbers. `test/training/resume_checkpoint.ml`
+resumes a run in a fresh process and checks it matches the uninterrupted one bit for bit.
 
 ## Randomness and Parameter Initialization
 

@@ -43,6 +43,13 @@ files.
   and weight decay through the wrapper, match an independent closed-form host recurrence, and
   differ from the same default trajectory. Reach for that shape rather than a structural check,
   since `~momentum` had been dead on arrival with a green suite behind it.
+- Resumable checkpoints (gh-ocannl-96, `lib/checkpoint.ml`): the device state is derived, never
+  labeled — `Checkpoint.carried_state` is the routine interface's read-before-write set intersected
+  with its written set, unioned over `routine.segments` (their traced stores are slices of the
+  routine's one store, so the flags are routine-wide). The host progress rides in the
+  `Persistence` header's `metadata` field, published in the same atomic write; restore refuses a
+  state set differing from the recorded one. Executed oracle: `test/training/resume_checkpoint.ml`
+  (fresh-process resume, bit for bit on cc, with momentum- and RNG-dropping controls).
 - `Train.to_routine` returns `Context.t * Context.routine` (gh-ocannl-772), like `Context.compile`
   and `Train.run_once`. `routine.Context.context` is the same value, so both spellings work; prefer
   chaining the returned context.
