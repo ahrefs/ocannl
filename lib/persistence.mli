@@ -10,7 +10,13 @@
     the payloads be mapped rather than copied (see {!load}). *)
 
 val save :
-  ctx:Context.t -> appending:bool -> ?alignment:int -> Ocannl_tensor.Tensor.tn_set -> string -> unit
+  ctx:Context.t ->
+  appending:bool ->
+  ?alignment:int ->
+  ?metadata:(string * string) list ->
+  Ocannl_tensor.Tensor.tn_set ->
+  string ->
+  unit
 (** [save ~ctx ~appending t_set path] writes tensor data to a checkpoint file.
 
     When [~appending:false], creates a fresh checkpoint (overwriting any existing file). When
@@ -30,7 +36,16 @@ val save :
     of the model.
 
     [?alignment] (default 32, GGUF's [general.alignment] default) is the boundary payload offsets
-    are rounded up to. It buys SIMD-friendly data pointers; mapping works at any alignment. *)
+    are rounded up to. It buys SIMD-friendly data pointers; mapping works at any alignment.
+
+    [?metadata] (default none) is a list of key-value pairs stored in the header, published in the
+    same atomic write as the tensors and read back by {!metadata} (gh-ocannl-96). An appending save
+    replaces the keys it names and keeps the file's others, as it does tensors. Raises
+    [Invalid_argument] on a duplicate key. *)
+
+val metadata : string -> (string * string) list
+(** [metadata path] reads the key-value pairs a {!save} stored in the checkpoint's header, without
+    reading any payload: empty for a checkpoint saved without them. *)
 
 val load :
   ctx:Context.t ->
@@ -66,7 +81,13 @@ val load :
     [A-Za-z_][A-Za-z0-9_]*; [None] and [Some ""] keep the file namespaces as-is. Pre-namespace
     checkpoints that recorded the namespace as [""] are read as the default namespace [ocannl]. *)
 
-val restore : ctx:Context.t -> ?mmap:bool -> Ocannl_tensor.Tensor.tn_set -> string -> Context.t
+val restore :
+  ctx:Context.t ->
+  ?mmap:bool ->
+  ?check_metadata:((string * string) list -> unit) ->
+  Ocannl_tensor.Tensor.tn_set ->
+  string ->
+  Context.t
 (** [restore ~ctx t_set path] updates existing tensor device buffers from a checkpoint file,
     returning the updated context.
 
@@ -74,6 +95,11 @@ val restore : ctx:Context.t -> ?mmap:bool -> Ocannl_tensor.Tensor.tn_set -> stri
     legacy [""] namespace match the default namespace — reads it into a temporary host buffer (or
     maps it, see {!load}'s [?mmap]), and uploads it into the node's device buffer in [ctx] via
     {!Context.from_host} (gh-ocannl-333).
+
+    [?check_metadata] is called with the header's {!save} metadata before any tensor is read or
+    uploaded, from the same open file as the payloads, so a concurrent save over [path] cannot pair
+    one checkpoint's metadata with another's tensors; an exception it raises aborts the restore with
+    [ctx] untouched. Given, it is called even for an empty [t_set].
 
     Raises if:
     - A tensor in [t_set] is missing from the file

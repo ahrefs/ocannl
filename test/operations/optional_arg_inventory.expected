@@ -21,6 +21,7 @@ non-discard use; `unimplemented` must therefore be visible to callers as an unde
   lib/calibrate.ml:working_set ?m -- implemented
   lib/calibrate.ml:working_set ?n -- implemented
   lib/calibrate.ml:working_set ?repeats -- implemented
+  lib/checkpoint.ml:training_state ?extra -- implemented
   lib/demo_models.ml:lenet ?label -- implemented
   lib/demo_models.ml:lenet ?out_channels1 -- implemented
   lib/demo_models.ml:lenet ?out_channels2 -- implemented
@@ -126,8 +127,10 @@ non-discard use; `unimplemented` must therefore be visible to callers as an unde
   lib/parallel.ml:data_parallel ?weight_decay -- implemented
   lib/persistence.ml:load ?mmap -- implemented
   lib/persistence.ml:load ?prefix_namespace -- implemented
+  lib/persistence.ml:restore ?check_metadata -- implemented
   lib/persistence.ml:restore ?mmap -- implemented
   lib/persistence.ml:save ?alignment -- implemented
+  lib/persistence.ml:save ?metadata -- implemented
   lib/precision_policy.ml:apply ?except -- implemented
   lib/safetensors.ml:to_ndarray ?prec -- implemented
   lib/train.ml:CDSL.disable_all_debugs ?restore_defaults -- implemented

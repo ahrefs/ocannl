@@ -539,6 +539,23 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; resume_checkpoint is the executed oracle for resumable training checkpoints (gh-ocannl-96): a run
+; stopped mid-epoch and resumed by `Checkpoint.restore` in a fresh process (the test re-executes
+; itself) must match the uninterrupted run bit for bit, with controls showing each piece of the
+; saved state matters.
+
+(test
+ ; ocannl-backend: cc -- every context is an explicit `Context.cpu ()`: the bit-for-bit claim is
+ ; made on cc.
+ (name resume_checkpoint)
+ (package neural_nets_lib)
+ (locks ocannl_training_test)
+ (deps ocannl_config)
+ (modules resume_checkpoint)
+ (libraries base ocannl stdio unix arrayjit.verdict fresh_process)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; loop_utils is the executed oracle for the gh-ocannl-465 training-loop utilities: LR schedules,
 ; global-norm clipping folded into the SGD step, gradient accumulation vs. a single big batch, and
 ; the z-score outlier detector.

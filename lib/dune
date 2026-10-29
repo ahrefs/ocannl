@@ -35,6 +35,7 @@
   demo_models
   ocannl
   persistence
+  checkpoint
   precision_policy
   mixed_prec
   safetensors)
