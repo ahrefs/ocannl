@@ -534,7 +534,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:533:21
-    [4]: =>_ho3 shape 0:2,1:5|4:4,5:7->2:6,3:3  <not-in-context>
+    [4]: =>_ho3 shape 0:2,1:5|4:4,5:7->2:6,3:3  <not-in-context: needs ho3>
     |}];
 
   let%op ho4 = hey2 ++ "...b|...i->...o => i|o->b" in
@@ -543,7 +543,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:542:21
-    [7]: =>_ho4 shape 0:5|2:7->1:3  <not-in-context>
+    [5]: =>_ho4 shape 0:5|2:7->1:3  <not-in-context: needs ho4>
     |}];
   let%op ho5 = hey ++ "...|...->...o => |->o" in
   let ctx = Train.forward_once ctx ho5 in
@@ -569,7 +569,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     {|
     HERE: test/einsum/einsum_trivia.ml:567:21
     ┌───────────────────────────────────────┐
-    │[10]: =>_ho5 shape 0:4                 │
+    │[6]: =>_ho5 shape 0:4                  │
     │┌┬────────────────────────────────────┐│
     │││axis 0                              ││
     │├┼────────────────────────────────────┤│
@@ -585,7 +585,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     {|
     HERE: test/einsum/einsum_trivia.ml:583:21
     ┌───────────────────────────────────────┐
-    │[14]: =>_ho6 shape 0:4                 │
+    │[8]: =>_ho6 shape 0:4                  │
     │┌┬────────────────────────────────────┐│
     │││axis 0                              ││
     │├┼────────────────────────────────────┤│
@@ -602,7 +602,7 @@ let%expect_test "einsum1 broadcast or sum out prefix axes" =
     {|
     HERE: test/einsum/einsum_trivia.ml:600:21
     ┌─────────────────────────────────────────────┐
-    │[16]: =>_ho7 shape 0:3,1:2,2:4               │
+    │[10]: =>_ho7 shape 0:3,1:2,2:4               │
     │┌──────┬────────────────────────────────────┐│
     ││      │axis 2                              ││
     │├──────┼────────────────────────────────────┤│
@@ -926,7 +926,7 @@ let%expect_test "outer_sum simulating axis concatenation" =
   [%expect
     {|
     HERE: test/einsum/einsum_trivia.ml:925:21
-    [1]: =>_ti shape 0:4,1:3  <not-in-context>
+    [1]: =>_ti shape 0:4,1:3  <unobservable: Local>
     |}];
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ctx tk;
   [%expect

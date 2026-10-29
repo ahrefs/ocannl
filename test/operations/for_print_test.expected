@@ -1,4 +1,6 @@
 not in context before print: true
+[0]: r4 shape 0:4  <not-computed>
+t is virtual in the lineage that computed y: true
 ┌───────────────────────────┐
 │[0]: r4 shape 0:4          │
 │┌┬────────────────────────┐│
@@ -7,3 +9,9 @@ not in context before print: true
 │││ 0.00  1.00  2.00  3.00 ││
 │└┴────────────────────────┘│
 └───────────────────────────┘
+   #2 *._y
+    0.00  2.00  4.00  6.00
+#0 r4                   │#1 2
+ 0.00  1.00  2.00  3.00 │ 2.00
+[7]: +_u shape 0:2  <unobservable: reads Local h>
+a failing read of a stored node propagates out of the printer: true

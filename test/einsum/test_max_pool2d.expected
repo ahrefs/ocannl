@@ -163,36 +163,11 @@ Expected max pool output: [[9, 8], [7, 6]]
 Expected loss (sum): 9 + 8 + 7 + 6 = 30
 Backprop completed successfully!
 HERE: test/einsum/test_max_pool2d.ml:173:21
-[9]: =>_loss shape 0:1  <not-in-context>
-grad_=>_loss <not-in-context>
+[9]: =>_loss shape 0:1  <not-in-context: needs loss>
+grad_=>_loss <not-computed>
 HERE: test/einsum/test_max_pool2d.ml:174:21
-┌─────────────────────────┐
-│[0]: x shape 0:4,1:4,2:1 │
-│┌──────┬──────┐          │
-││      │axis 2│          │
-│├──────┼──────┤          │
-││0 @ 0 │ 9.00 │          │
-││axis 1│ 1.00 │          │
-││      │ 2.00 │          │
-││      │ 3.00 │          │
-│├──────┼──────┤          │
-││1 @ 0 │ 4.00 │          │
-││axis 1│ 5.00 │          │
-││      │ 0.00 │          │
-││      │ 8.00 │          │
-│├──────┼──────┤          │
-││2 @ 0 │ 1.00 │          │
-││axis 1│ 7.00 │          │
-││      │ 2.00 │          │
-││      │ 3.00 │          │
-│├──────┼──────┤          │
-││3 @ 0 │ 4.00 │          │
-││axis 1│ 5.00 │          │
-││      │ 6.00 │          │
-││      │ 0.00 │          │
-│└──────┴──────┘          │
-└─────────────────────────┘
-grad_x <not-in-context>
+[0]: x shape 0:4,1:4,2:1  <not-in-context: needs x>
+grad_x <not-in-context: needs x.grad>
 Testing max_pool2d with use_padding=true (stride=2, window=3)...
 pool reads its operand directly (no copy): true
 operand padding unforced before compilation: true

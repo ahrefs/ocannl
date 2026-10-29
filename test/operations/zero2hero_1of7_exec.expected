@@ -1,52 +1,52 @@
-                                                               #15 +_f_nd
-                                                                6.00e+1
-                                                               #16 grad_+_f_nd unknown
-                                                               <not-in-context>
-                                                  #13 - unknown                                                       │#2 5 Const/24:literal-constant
-                                                  <not-in-context>                                                    │<not-in-context>
-                                                  #14 grad_- unknown                                                  │
-                                                  <not-in-context>                                                    │
-                              #11 *. unknown                                    │         #4 *. unknown               │
-                              <not-in-context>                                  │         <not-in-context>            │
-                              #12 grad_*. unknown                               │         #5 grad_*. unknown          │
-                              <not-in-context>                                  │         <not-in-context>            │
-#10 3 Const/24:literal-constant│              #7 **. unknown                    │#3 4 Const/24:literal-constant│[#0 x]│
-<not-in-context>               │              <not-in-context>                  │<not-in-context>              │      │
-                               │              #8 grad_**. unknown               │                              │      │
-                               │              <not-in-context>                  │                              │      │
-                               │#0 x non-emb     │#6 2 Const/24:literal-constant│                              │      │
-                               │ 5.00            │<not-in-context>              │                              │      │
-                               │#1 grad_x unknown│                              │                              │      │
-                               │<not-in-context> │                              │                              │      │                                                                    #32 +_f
-                                                                     6.00e+1
-                                                                    #33 grad_+_f
-                                                                     1.00
-                                                     #30 -                                                           │#19 5 Const/24:literal-constant
-                                                      5.50e+1                                                        │<not-in-context>
-                                                     #31 grad_-                                                      │
-                                                      1.00                                                           │
-                                 #28 *.                                      │              #21 *.                   │
-                                  7.50e+1                                    │               2.00e+1                 │
-                                 #29 grad_*.                                 │              #22 grad_*.              │
-                                  1.00                                       │               -1.00                   │
-#27 3 Const/24:literal-constant│                #24 **.                      │#20 4 Const/24:literal-constant│[#17 x]│
-<not-in-context>               │                 2.50e+1                     │<not-in-context>               │       │
-                               │                #25 grad_**.                 │                               │       │
-                               │                 3.00                        │                               │       │
-                               │#17 x non-emb│#23 2 Const/24:literal-constant│                               │       │
-                               │ 5.00        │<not-in-context>               │                               │       │
-                               │#18 grad_x   │                               │                               │       │
-                               │ 2.60e+1     │                               │                               │       │graph_drawing_recompile ys: count=10 min=4.00 max=100.00 first=100.00
-                                                                            #9 +_f_5
-                                                                             6.00e+1
-                                                            #8 -                                                                  │#1 5 Const/24:literal-constant
-                                                             5.50e+1                                                              │<not-in-context>
-                             #7 *.                                  │                          #3 *.                              │
-                              7.50e+1                               │                           2.00e+1                           │
-#6 3 Const/24:literal-constant│              #5 **.                 │#2 4 Const/24:literal-constant│#0 5 Const/24:literal-constant│
-<not-in-context>              │               2.50e+1               │<not-in-context>              │<not-in-context>              │
-                              │[#0 5]│#4 2 Const/24:literal-constant│                              │                              │
-                              │      │<not-in-context>              │                              │                              │graph_drawing_fetch ys: count=100 min=3.67 max=100.00 first=100.00
+                 #15 +_f_nd
+                  6.00e+1
+                 #16 grad_+_f_nd unknown
+                 <not-computed>
+                #13 -                             │#2 5
+                 5.50e+1                          │ 5.00
+                #14 grad_- unknown                │
+                <not-computed>                    │
+      #11 *.                   │#4 *.             │
+       7.50e+1                 │ 2.00e+1          │
+      #12 grad_*. unknown      │#5 grad_*. unknown│
+      <not-computed>           │<not-computed>    │
+#10 3 │  #7 **.                │#3 4  │[#0 x]     │
+ 3.00 │   2.50e+1              │ 4.00 │           │
+      │  #8 grad_**. unknown   │      │           │
+      │  <not-computed>        │      │           │
+      │#0 x non-emb     │#6 2  │      │           │
+      │ 5.00            │ 2.00 │      │           │
+      │#1 grad_x unknown│      │      │           │
+      │<not-computed>   │      │      │           │                  #32 +_f
+                   6.00e+1
+                  #33 grad_+_f
+                   1.00
+                #30 -                     │#19 5
+                 5.50e+1                  │ 5.00
+                #31 grad_-                │
+                 1.00                     │
+        #28 *.             │ #21 *.       │
+         7.50e+1           │  2.00e+1     │
+        #29 grad_*.        │ #22 grad_*.  │
+         1.00              │  -1.00       │
+#27 3 │    #24 **.         │#20 4 │[#17 x]│
+ 3.00 │     2.50e+1        │ 4.00 │       │
+      │    #25 grad_**.    │      │       │
+      │     3.00           │      │       │
+      │#17 x non-emb│#23 2 │      │       │
+      │ 5.00        │ 2.00 │      │       │
+      │#18 grad_x   │      │      │       │
+      │ 2.60e+1     │      │      │       │graph_drawing_recompile ys: count=10 min=4.00 max=100.00 first=100.00
+                #9 +_f_5
+                 6.00e+1
+            #8 -                  │#1 5
+             5.50e+1              │ 5.00
+     #7 *.          │  #3 *.      │
+      7.50e+1       │   2.00e+1   │
+#6 3  │  #5 **.     │#2 4  │#0 5  │
+ 3.00 │   2.50e+1   │ 4.00 │ 5.00 │
+      │[#0 5]│#4 2  │      │      │
+      │      │ 2.00 │      │      │graph_drawing_fetch ys: count=100 min=3.67 max=100.00 first=100.00
 graph_drawing_fetch dys: count=100 min=-34.00 max=25.40 first=-34.00
                    #12 *._l
                     -8.00
@@ -93,48 +93,48 @@ graph_drawing_fetch dys: count=100 min=-34.00 max=25.40 first=-34.00
 #0 a non-emb│#2 b non-emb│            │
  1.40       │ -2.60      │            │
 #1 grad_a   │#3 grad_b   │            │
- 6.24       │ -3.36      │            │               #12 *._l
-                -8.00
-               #13 grad_*._l unknown
-               <not-in-context>
-         #8 +_d unknown               │#10 f non-emb
-         <not-in-context>             │ -2.00
-         #9 grad_+_d unknown          │#11 grad_f
-         <not-in-context>             │ 4.00
-  #4 *._e unknown        │#6 c non-emb│
-  <not-in-context>       │ 1.00e+1    │
-  #5 grad_*._e unknown   │#7 grad_c   │
-  <not-in-context>       │ -2.00      │
+ 6.24       │ -3.36      │            │                   #12 *._l
+                    -8.00
+                   #13 grad_*._l
+                    1.00
+             #8 +_d                   │#10 f non-emb
+              4.00                    │ -2.00
+             #9 grad_+_d              │#11 grad_f
+              -2.00                   │ 4.00
+      #4 *._e            │#6 c non-emb│
+       -6.00             │ 1.00e+1    │
+      #5 grad_*._e       │#7 grad_c   │
+       -2.00             │ -2.00      │
 #0 a non-emb│#2 b non-emb│            │
  2.00       │ -3.00      │            │
 #1 grad_a   │#3 grad_b   │            │
- 6.00       │ -4.00      │            │               #12 *._l
-                -8.00
-               #13 grad_*._l unknown
-               <not-in-context>
-         #8 +_d unknown               │#10 f non-emb
-         <not-in-context>             │ -2.40
-         #9 grad_+_d unknown          │#11 grad_f
-         <not-in-context>             │ 4.00
-  #4 *._e unknown        │#6 c non-emb│
-  <not-in-context>       │ 1.02e+1    │
-  #5 grad_*._e unknown   │#7 grad_c   │
-  <not-in-context>       │ -2.00      │
+ 6.00       │ -4.00      │            │                   #12 *._l
+                    -8.00
+                   #13 grad_*._l
+                    1.00
+             #8 +_d                   │#10 f non-emb
+              6.56                    │ -2.40
+             #9 grad_+_d              │#11 grad_f
+              -2.40                   │ 4.00
+      #4 *._e            │#6 c non-emb│
+       -3.64             │ 1.02e+1    │
+      #5 grad_*._e       │#7 grad_c   │
+       -2.40             │ -2.00      │
 #0 a non-emb│#2 b non-emb│            │
  1.40       │ -2.60      │            │
 #1 grad_a   │#3 grad_b   │            │
- 6.00       │ -4.00      │            │               #12 *._l
-                -1.57e+1
-               #13 grad_*._l unknown
-               <not-in-context>
-         #8 +_d unknown               │#10 f non-emb
-         <not-in-context>             │ -2.40
-         #9 grad_+_d unknown          │#11 grad_f
-         <not-in-context>             │ 6.56
-  #4 *._e unknown        │#6 c non-emb│
-  <not-in-context>       │ 1.02e+1    │
-  #5 grad_*._e unknown   │#7 grad_c   │
-  <not-in-context>       │ -2.40      │
+ 6.00       │ -4.00      │            │                   #12 *._l
+                    -1.57e+1
+                   #13 grad_*._l
+                    1.00
+             #8 +_d                   │#10 f non-emb
+              6.56                    │ -2.40
+             #9 grad_+_d              │#11 grad_f
+              -2.40                   │ 6.56
+      #4 *._e            │#6 c non-emb│
+       -3.64             │ 1.02e+1    │
+      #5 grad_*._e       │#7 grad_c   │
+       -2.40             │ -2.40      │
 #0 a non-emb│#2 b non-emb│            │
  1.40       │ -2.60      │            │
 #1 grad_a   │#3 grad_b   │            │
@@ -149,14 +149,14 @@ graph_drawing_fetch dys: count=100 min=-34.00 max=25.40 first=-34.00
 #0 w non-emb │#2 x non-emb │
  -3.00  1.00 │ 2.00  0.00  │
 #1 grad_w    │#3 grad_x    │
- 2.00  0.00  │ -3.00  1.00 │          #8 +_v
-           7.00e-1
-          #9 grad_+_v unknown
-          <not-in-context>
-     #6 * unknown          │#4 b non-emb
-     <not-in-context>      │ 6.70
-     #7 grad_* unknown     │#5 grad_b
-     <not-in-context>      │ 1.00
+ 2.00  0.00  │ -3.00  1.00 │              #8 +_v
+               7.00e-1
+              #9 grad_+_v
+               1.00
+   #6 * unknown            │#4 b non-emb
+   <unobservable: Local>   │ 6.70
+   #7 grad_*               │#5 grad_b
+    1.00                   │ 1.00
 #0 w non-emb │#2 x non-emb │
  -3.00  1.00 │ 2.00  0.00  │
 #1 grad_w    │#3 grad_x    │

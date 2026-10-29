@@ -14,11 +14,12 @@ type memory_mode =
   | Virtual
       (** The tensor node's computations are inlined on a per-scalar basis. The node has no buffer
           in any context; its defining computation is tracked (in [Low_level.optimize_ctx]), so it
-          remains observable: its value can be recomputed on demand, including by later routines and
-          for printing. Observability is inductive, not intrinsic: recomputation requires the nodes
-          the tracked computation reads to be observable themselves, so a [Virtual] node that
-          depends -- directly or transitively through other [Virtual] nodes -- on a [Local] node
-          inherits its unobservability (the recompilation raises the same [User_error]). *)
+          remains observable: its value can be recomputed on demand, by later routines and by host
+          reads ([Context.to_host], gh-ocannl-777). Observability is inductive, not intrinsic:
+          recomputation requires the nodes the tracked computation reads to be observable
+          themselves, so a [Virtual] node that depends -- directly or transitively through other
+          [Virtual] nodes, with no materialized node between -- on a [Local] node inherits its
+          unobservability ([Context.observability] reports the path). *)
   | Never_virtual  (** An as-yet-unresolved request; resolves to [Local] or [On_device]. *)
   | Local
       (** Routine-scoped scratch: the tensor node exists only for the duration of a single call to a
