@@ -13,6 +13,8 @@ module Cuda = struct
      absolute-error contract and the large-argument loss are accepted (gh-ocannl-1336). *)
   let sin_f32 = "sinf"
   let cos_f32 = "cosf"
+  let sqrt_f32 = "sqrtf"
+  let fmod_f32 = "fmodf"
   let fp8_from_float_fn = "(__nv_fp8_e5m2)"
   let conditional_includes = [ ("nvcuda::wmma", "#include <mma.h>") ]
 
@@ -34,6 +36,11 @@ module Hip = struct
      finite value for +-inf (gh-ocannl-1336). *)
   let sin_f32 = "ocannl_sinf"
   let cos_f32 = "ocannl_cosf"
+
+  (* [Builtins_hip]'s wrappers (gh-ocannl-1684): under [-ffast-math], [sqrtf] reads an f32 subnormal
+     as zero, and [fmodf] returns a signed zero where C returns NaN. *)
+  let sqrt_f32 = "ocannl_sqrtf"
+  let fmod_f32 = "ocannl_fmodf"
 
   (* ROCm's subnormal guard is one funnel for conversion and every operator arity. *)
   let fp8_from_prec_fn = function
@@ -65,6 +72,11 @@ module Make (Dialect : sig
   (* The f32 (and, widened, bfloat16) [sin]/[cos] functions. *)
   val sin_f32 : string
   val cos_f32 : string
+
+  (* The f32 (and, widened, bfloat16 -- and for [fmod], half) [sqrt] -- also under [Recip_sqrt] --
+     and [fmod] functions. *)
+  val sqrt_f32 : string
+  val fmod_f32 : string
   val fp8_from_float_fn : string
   val vendor_routine_idents : string list
 end) (Input : sig
@@ -446,8 +458,16 @@ struct
     | Mod, Bfloat16_prec _ ->
         fun v1 v2 ->
           group
-            (string "__float2bfloat16(fmodf(__bfloat162float("
+            (string ("__float2bfloat16(" ^ Dialect.fmod_f32 ^ "(__bfloat162float(")
             ^^ v1 ^^ string "), __bfloat162float(" ^^ v2 ^^ string ")))")
+    (* A [__half] operand converts to both [float] and [double], so [fmod] on two of them is an
+       ambiguous call (gh-ocannl-1684): widen, as [ToPowOf] does. The remainder is exact in half. *)
+    | Mod, Half_prec _ ->
+        fun v1 v2 ->
+          group
+            (string ("__float2half(" ^ Dialect.fmod_f32 ^ "(__half2float(")
+            ^^ v1 ^^ string "), __half2float(" ^^ v2 ^^ string ")))")
+    | Mod, Single_prec _ -> func Dialect.fmod_f32
     | Mod, _ -> func "fmod"
     (* Comparisons and logical connectives are precision-independent and spelled the same in HIP C++
        as in C, so they render through the shared default -- fp8 already bridged above. The
@@ -578,7 +598,8 @@ struct
     | Cos, _ -> func Dialect.cos_f32
     | Sqrt, Half_prec _ -> func "hsqrt"
     | Sqrt, Double_prec _ -> func "sqrt"
-    | Sqrt, Bfloat16_prec _ -> bf16_func "sqrtf"
+    | Sqrt, Bfloat16_prec _ -> bf16_func Dialect.sqrt_f32
+    | Sqrt, Single_prec _ -> func Dialect.sqrt_f32
     | Sqrt, _ -> func "sqrtf"
     | Recip, Byte_prec _ ->
         invalid_arg
@@ -595,8 +616,9 @@ struct
          ^ ".unop_syntax: Recip_sqrt not supported for byte/integer precisions")
     | Recip_sqrt, Half_prec _ -> func "hrsqrt"
     | Recip_sqrt, Double_prec _ -> f "(1.0 / sqrt(" "))"
-    | Recip_sqrt, Single_prec _ -> f "(1.0f / sqrtf(" "))"
-    | Recip_sqrt, Bfloat16_prec _ -> f "__float2bfloat16(1.0f / sqrtf(__bfloat162float(" ")))"
+    | Recip_sqrt, Single_prec _ -> f ("(1.0f / " ^ Dialect.sqrt_f32 ^ "(") "))"
+    | Recip_sqrt, Bfloat16_prec _ ->
+        f ("__float2bfloat16(1.0f / " ^ Dialect.sqrt_f32 ^ "(__bfloat162float(") ")))"
     | Recip_sqrt, _ -> f "(1 / sqrtf(" "))"
     | Neg, _ -> f "(-(" "))"
     | Trunc, Double_prec _ -> func "trunc"

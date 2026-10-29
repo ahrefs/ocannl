@@ -78,6 +78,33 @@ __device__ __forceinline__ double ocannl_shfl_xor(double v, int lane_mask) {
                                                                          : __float_as_uint(cosf(x)));
 }|},
       [] );
+    (* gh-ocannl-1684: under [-ffast-math] hiprtc lowers [sqrtf], and [1.0f / sqrtf], to the
+       hardware square root, which reads an f32 subnormal as the zero of its sign: [sqrt(2^-140)] is
+       +0 and its reciprocal +inf on gfx1102, though AMDGPU's f32 denormals are otherwise kept. A
+       subnormal, classified by its bits (zero exponent field, nonzero magnitude), is scaled by 2^32
+       into the normal range and its root scaled back by 2^-16: powers of two, so the root is the
+       correctly rounded one. A negative subnormal still gives NaN. *)
+    ( "ocannl_sqrtf",
+      {|__device__ __forceinline__ float ocannl_sqrtf(float x) {
+  unsigned int bits = __float_as_uint(x);
+  return ((bits & 0x7F800000u) == 0u && (bits & 0x7FFFFFFFu) != 0u)
+             ? sqrtf(x * 4294967296.0f) * 1.52587890625e-05f
+             : sqrtf(x);
+}|},
+      [] );
+    (* gh-ocannl-1684: under [-ffast-math] ROCm's [fmodf] returns the signed zero of [x] where C
+       returns NaN, for [fmod(+-0, +-0)] and [fmod(+-inf, +-inf)] on gfx1102. C's NaN domain short
+       of a NaN operand -- an infinite dividend or a zero modulus -- is classified by the bits and
+       the NaN chosen as bits in an integer select, as in [ocannl_sinf]; a NaN operand propagates
+       through [fmodf] itself. *)
+    ( "ocannl_fmodf",
+      {|__device__ __forceinline__ float ocannl_fmodf(float x, float y) {
+  return __uint_as_float(((__float_as_uint(x) & 0x7FFFFFFFu) >= 0x7F800000u
+                          || (__float_as_uint(y) & 0x7FFFFFFFu) == 0u)
+                             ? 0x7FC00000u
+                             : __float_as_uint(fmodf(x, y)));
+}|},
+      [] );
     ( "uint32_to_single_uniform",
       {|__device__ __forceinline__ float uint32_to_single_uniform(unsigned int x) {
   /* Use __uint2float_rn for correct rounding */

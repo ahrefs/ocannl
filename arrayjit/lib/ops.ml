@@ -638,7 +638,10 @@ let interpret_binop =
     | Satur01_gate -> if v1 > 0.0 && v1 < 1.0 then v2 else 0.0
     | Max -> max v1 v2
     | Min -> min v1 v2
-    | Mod -> v1 % v2
+    (* What every backend computes: C's [fmod] on floats, and C's [%] on integers -- both truncate
+       the quotient, so the remainder has the sign of [v1]. [Base]'s float [%] does not: it raises
+       on a negative modulus and returns a nonnegative remainder (gh-ocannl-1684). *)
+    | Mod -> Stdlib.Float.rem v1 v2
     | Cmplt -> if v1 < v2 then 1. else 0.
     | Cmple -> if v1 <= v2 then 1. else 0.
     | Cmpeq -> if v1 = v2 then 1. else 0.
@@ -783,6 +786,10 @@ let binop_c_syntax prec v =
       | Uint64_prec _ | Fp8_prec _ ) ) ->
       ("fmin(", ",", ")")
   | Min, _ -> ("fminf(", ",", ")")
+  (* C's [%] takes integer operands only; a float remainder is [fmod], which truncates the quotient
+     as [%] does on integers (gh-ocannl-1684). *)
+  | Mod, Double_prec _ -> ("fmod(", ",", ")")
+  | Mod, (Single_prec _ | Half_prec _ | Bfloat16_prec _ | Fp8_prec _) -> ("fmodf(", ",", ")")
   | Mod, _ -> ("(", " %", ")")
   | Cmplt, _ -> ("(", " <", ")")
   | Cmple, _ -> ("(", " <=", ")")

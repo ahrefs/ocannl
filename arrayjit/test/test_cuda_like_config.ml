@@ -58,6 +58,37 @@ let () =
   p_all "HIP's NaN-preserving sin and cos wrappers are defined in its builtins table"
     [ "ocannl_sinf"; "ocannl_cosf" ] ~f:(fun key ->
       List.exists Builtins_hip.builtins ~f:(fun (k, _, _) -> String.equal k key));
+  (* gh-ocannl-1684: HIP's fast-math [sqrtf] reads an f32 subnormal as zero and its [fmodf] gives a
+     signed zero where C gives NaN, so f32 and bfloat16 (widened) route through [Builtins_hip]'s
+     wrappers, and half [fmod] widens into them too -- on both dialects, since two [__half] operands
+     make [fmod] an ambiguous call. *)
+  p_all "HIP sqrt, rsqrt and fmod render through their wrappers"
+    [
+      (Hip.unop_syntax Ops.single Ops.Sqrt a, "ocannl_sqrtf(a)");
+      ( Hip.unop_syntax Ops.bfloat16 Ops.Sqrt a,
+        "__float2bfloat16(ocannl_sqrtf(__bfloat162float(a)))" );
+      (Hip.unop_syntax Ops.single Ops.Recip_sqrt a, "(1.0f / ocannl_sqrtf(a))");
+      ( Hip.unop_syntax Ops.bfloat16 Ops.Recip_sqrt a,
+        "__float2bfloat16(1.0f / ocannl_sqrtf(__bfloat162float(a)))" );
+      (Hip.binop_syntax Ops.single Ops.Mod a b, "ocannl_fmodf(a, b)");
+      ( Hip.binop_syntax Ops.bfloat16 Ops.Mod a b,
+        "__float2bfloat16(ocannl_fmodf(__bfloat162float(a), __bfloat162float(b)))" );
+      ( Hip.binop_syntax Ops.half Ops.Mod a b,
+        "__float2half(ocannl_fmodf(__half2float(a), __half2float(b)))" );
+    ]
+    ~f:(fun (doc, want) -> String.equal (render doc) want);
+  p_all "HIP's sqrt and fmod wrappers are defined in its builtins table"
+    [ "ocannl_sqrtf"; "ocannl_fmodf" ] ~f:(fun key ->
+      List.exists Builtins_hip.builtins ~f:(fun (k, _, _) -> String.equal k key));
+  p_all "CUDA sqrt, rsqrt and fmod keep the library functions, half fmod widened"
+    [
+      (Cuda.unop_syntax Ops.single Ops.Sqrt a, "sqrtf(a)");
+      (Cuda.unop_syntax Ops.single Ops.Recip_sqrt a, "(1.0f / sqrtf(a))");
+      (Cuda.binop_syntax Ops.single Ops.Mod a b, "fmodf(a, b)");
+      ( Cuda.binop_syntax Ops.half Ops.Mod a b,
+        "__float2half(fmodf(__half2float(a), __half2float(b)))" );
+    ]
+    ~f:(fun (doc, want) -> String.equal (render doc) want);
   p "CUDA f32 sin and cos keep the library functions"
     (String.equal (render (Cuda.unop_syntax Ops.single Ops.Sin a)) "sinf(a)"
     && String.equal (render (Cuda.unop_syntax Ops.single Ops.Cos a)) "cosf(a)");

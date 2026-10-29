@@ -2318,6 +2318,28 @@ files.
   - `__tanhf`: 2^-10.987 relative. `__expf`: `2 + 1.173 |x|` ulps, exact at the overflow edge.
   - FTZ: f32 subnormals flush, as on Metal.
 
+- **`sqrt`, `rsqrt`, `pow` and `fmod` on the special values, audited** (gh-ocannl-1684; the same
+  test, extended: the unary pair joins the op table, the binary pair runs over a grid of ±0, ±inf,
+  NaN and dyadic operands with exact results, against C's `pow`/`fmod`). **HIP** (measured on gfx1102
+  discrete; the fixed rendering also passes on gfx1151 unified): `-ffast-math` lowers f32 `sqrtf` and `1.0f / sqrtf` to the hardware
+  root, which reads a subnormal input as the zero of its sign (`sqrt(2^-140) = +0`, `rsqrt = +inf`)
+  although AMDGPU's f32 denormals stay on everywhere else; and ROCm's `fmodf` returns the signed
+  zero of `x` for `fmod(±0, ±0)` and `fmod(±inf, ±inf)`, where C gives NaN (`-fno-honor-nans`). Both
+  are fixed by `Builtins_hip` wrappers selected through the dialect's `sqrt_f32`/`fmod_f32`:
+  `ocannl_sqrtf` scales a bit-classified subnormal by 2^32 and the root by 2^-16 (exact), and
+  `ocannl_fmodf` selects the NaN bits for an infinite dividend or zero modulus in an integer
+  select, like `ocannl_sinf`; bf16 widens into both and half `fmod` into the second. HIP `pow` was
+  already C's on the whole grid, `pow(1, NaN) = pow(-1, ±inf) = 1` included. **Metal**: `sqrt`/
+  `rsqrt` flush subnormal inputs like its other f32 functions (the test's flush allowance), and the
+  fast `fmod` is `x - y * trunc(x / y)`-shaped -- NaN for a finite `x` over an infinite `y`, `+0`
+  for an exact remainder of a negative `x` -- so `Mod` renders `precise::fmod` (half widened);
+  Metal `pow` was C's. **Every backend's `fmod` had gaps short of the special values**: cc's float
+  `Mod` rendered C's `%`, a compile error (now `fmodf`/`fmod`); half `Mod` on CUDA/HIP was an
+  ambiguous `fmod(__half, __half)` call (now widened); and the host fold (`Ops.interpret_binop`)
+  used `Base`'s float `%`, which raises on a negative modulus and returns a nonnegative remainder
+  (now `Float.rem`, the truncating remainder every backend computes). f64 `fmod`/`sqrt` on HIP are
+  unaudited: the test has no f64 case, since Metal has no f64.
+
 - A float power whose exponent is only known at run time renders on CUDA and HIP through
   `ocannl_pow_f32`/`ocannl_pow_f64` (`Builtins_cc.cuda_like_power_builtins`, gh-ocannl-1240), half
   and bf16 widened into the f32 one. CUDA's `--use_fast_math` lowers `powf` to
