@@ -31,6 +31,20 @@ end
    equality for same-backend transfers. Nothing here matches the constructors: each dispatcher goes
    through the one match [Backends] keeps per direction. *)
 
+(* A fragment as the lineage records it (gh-ocannl-1724): by its node's uid -- never reused -- and
+   side, so a context does not keep the nodes of every fragment it compiled alive for diagnostics
+   (the refusals take names from the comp or routine at hand). *)
+module Fragment_key = struct
+  module T = struct
+    type t = int * Asgns.side [@@deriving compare, sexp_of]
+  end
+
+  include T
+  include Comparator.Make (T)
+
+  let of_fragment ((tn, side) : Asgns.Fragment.t) = (tn.Tn.uid, side)
+end
+
 type compile_frontier = {
   last_writer : int Map.M(Tn).t;
       (** For each tnode, the routine_id of the most recent routine that writes it. *)
@@ -40,7 +54,7 @@ type compile_frontier = {
       (** The node and synthetic routine id of the most recent merge-buffer transfer in this
           compilation lineage. Unlike [last_writer], this names the transient merge slab write, not
           a write to the node's ordinary context buffer. *)
-  owners : (int * string) Map.M(Asgns.Fragment).t;
+  owners : (int * string) Map.M(Fragment_key).t;
       (** For each tensor-generated code fragment compiled in this lineage, the routine (id, name)
           that owns it (gh-ocannl-1724). Only a successful link adds to it, and nothing removes from
           it: an external write supersedes a value, not the code that computes it. *)
@@ -102,7 +116,7 @@ type execution_ledger = {
   token_undo : token_undo list Hashtbl.M(Int).t;
       (** Per routine id, the tokens the routine's latest {!run} minted — what [rollback_execution]
           restores for a run known not to have written. *)
-  mutable fragment_registry : (int * string) list Map.M(Asgns.Fragment).t;
+  mutable fragment_registry : (int * string) list Map.M(Fragment_key).t;
       (** Every routine (id, name) of this root that owns each fragment, sibling lineages included
           (gh-ocannl-1724). Diagnostic only: it lets a requirement refusal name an owner compiled in
           a sibling lineage. Ownership itself is the frontier's [owners] -- a sibling never
@@ -173,7 +187,7 @@ let empty_frontier =
     last_writer = Map.empty (module Tn);
     last_readers = Map.empty (module Tn);
     merge_buffer_writer = None;
-    owners = Map.empty (module Asgns.Fragment);
+    owners = Map.empty (module Fragment_key);
     lineage_routines = Set.empty (module Int);
   }
 
@@ -191,7 +205,7 @@ let create_ledger () =
     fresh_writes = Hashtbl.create (module Int);
     observed_tokens = Map.empty (module Buffer_key);
     token_undo = Hashtbl.create (module Int);
-    fragment_registry = Map.empty (module Asgns.Fragment);
+    fragment_registry = Map.empty (module Fragment_key);
   }
 
 type t = {
@@ -536,11 +550,11 @@ let finish_link ctx comp wrapped
      compiled from [ctx] does not see them), and the root's diagnostic registry. *)
   let owners =
     Set.fold comp.Asgns.owned ~init:frontier.owners ~f:(fun owners fragment ->
-        Map.set owners ~key:fragment ~data:(id, name))
+        Map.set owners ~key:(Fragment_key.of_fragment fragment) ~data:(id, name))
   in
   ctx.ledger.fragment_registry <-
     Set.fold comp.Asgns.owned ~init:ctx.ledger.fragment_registry ~f:(fun registry fragment ->
-        Map.add_multi registry ~key:fragment ~data:(id, name));
+        Map.add_multi registry ~key:(Fragment_key.of_fragment fragment) ~data:(id, name));
   let new_frontier =
     {
       frontier with
@@ -648,7 +662,9 @@ let check_no_duplicate_fragments ?name ctx (comp : Asgns.comp) =
   let duplicates =
     Set.to_list comp.owned
     |> List.filter_map ~f:(fun fragment ->
-        Option.map (Map.find ctx.frontier.owners fragment) ~f:(fun owner -> (fragment, owner)))
+        Option.map
+          (Map.find ctx.frontier.owners (Fragment_key.of_fragment fragment))
+          ~f:(fun owner -> (fragment, owner)))
   in
   if not (List.is_empty duplicates) then
     let listed =
@@ -681,7 +697,7 @@ let lineage_frontier ctx routine =
   else routine.context.frontier
 
 let sibling_owners ctx frontier fragment =
-  Map.find_multi ctx.ledger.fragment_registry fragment
+  Map.find_multi ctx.ledger.fragment_registry (Fragment_key.of_fragment fragment)
   |> List.filter ~f:(fun (id, _) -> not (Set.mem frontier.lineage_routines id))
 
 let describe_owners owners =
@@ -707,7 +723,10 @@ let describe_unmet ctx frontier fragment =
 
 let check_requirements ctx routine =
   let frontier = lineage_frontier ctx routine in
-  let unmet = Set.filter routine.requires ~f:(fun f -> not (Map.mem frontier.owners f)) in
+  let unmet =
+    Set.filter routine.requires ~f:(fun f ->
+        not (Map.mem frontier.owners (Fragment_key.of_fragment f)))
+  in
   if not (Set.is_empty unmet) then
     let listed =
       Set.to_list unmet |> List.map ~f:(describe_unmet ctx frontier) |> String.concat ~sep:"; "
@@ -728,7 +747,10 @@ let check_requirements ctx routine =
 let lacks_node_error ctx (comp : Asgns.comp) tn =
   let base = "The linked context lacks node " ^ Tn.debug_name tn in
   let fragment = (tn, Asgns.Bprop) in
-  if Set.mem comp.requires fragment && not (Map.mem ctx.frontier.owners fragment) then
+  if
+    Set.mem comp.requires fragment
+    && not (Map.mem ctx.frontier.owners (Fragment_key.of_fragment fragment))
+  then
     Utils.User_error
       (Printf.sprintf
          "%s: no routine in this lineage propagates from %s -- this computation accumulates into \

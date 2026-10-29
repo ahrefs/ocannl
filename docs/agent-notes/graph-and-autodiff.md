@@ -31,7 +31,9 @@ files.
   `~terminal_backprop:true`) owns no backprop fragment and is never required — the maintainer's
   "exempt all terms". Zeroing, `init_params`, hand-written `%cd` assignments and the host-read
   recompute proxy own nothing; `embedded_nodes` stays an INITIALIZATION claim and is not ownership.
-  `Context.compile` refuses a comp owning a fragment its frontier's `owners` already holds;
+  `Context.compile` refuses a comp owning a fragment its frontier's `owners` already holds (keyed
+  by node uid: a context must not keep every compiled node alive, which `moons_demo_variant`'s
+  accessible-headers golden caught);
   `Context.run` refuses unmet `requires` against the running context's frontier when it descends
   from the routine's compile (same ledger, routine in `lineage_routines`), else the routine's own —
   never a sibling's (the ledger's `fragment_registry` only names one in the refusal). Traps: a
