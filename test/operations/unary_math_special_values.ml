@@ -28,6 +28,15 @@
    them the f32 stated-ulps claim and the [pow]/[fmod] claim of every precision fail. HIP's [pow] --
    the [ocannl_pow_f32] helper over ROCm's [powf] -- was already C's on the whole grid.
 
+   On CUDA (RTX 5070 Ti), [sqrt], [rsqrt] and [fmod] are C's on the special values, f32 subnormals
+   flushed as the CUDA claim allows. Its [pow] was not: [__powf] reads [pow(+-1, +-inf)] and [pow(1,
+   NaN)] as NaN ([inf * log2(1)]) and [pow(-inf, 0.5)] as NaN ([log2] of a negative base), where C
+   gives 1, 1 and +inf. The shared helper ([Builtins_cc.cuda_like_power_builtins]) now answers those
+   cases itself, at every precision (half and bfloat16 widen into it); the host emulation
+   [runtime_power_fast_math_emulation] pins them GPU-free. The f32 magnitude stays [__powf]'s,
+   claimed against its contract ([cuda_powf]: 3 and 5 ulps measured at [pow(0.25, 3)] and [pow(0.25,
+   -3)]).
+
    CUDA's [--use_fast_math] lowers f32 (and widened bfloat16) [sinf]/[cosf]/[expf]/[logf]/[exp2f]/
    [log2f] to its fast intrinsics, and [Tanh_approx] renders [__tanhf]; they keep the special values
    IEEE, so the special-value claim holds there. The stated ulps do not, so CUDA's f32 and bfloat16
@@ -458,6 +467,15 @@ let cuda_fast c name x =
   | "log2" when Float.(0.5 <= x && x <= 2.) -> Absolute (2. **. -22.)
   | _ -> stated c name x
 
+(* CUDA's [--use_fast_math] [powf] is [__powf], [exp2(y * log2(x))] through the intrinsics: their 2
+   ulps each, the logarithm's relative error carried into the result scaled by [|y log2 |x||] (times
+   [ln 2] and the product's rounding, together under 2). Measured at 5 ulps for [pow(0.25, -3)]. *)
+let cuda_powf x y =
+  (* [0 * log2 0] and [inf * log2 1] are NaN: their exact results ([pow(0, 0) = pow(1, inf) = 1])
+     carry no logarithm error. *)
+  let k = Float.abs (y *. Stdlib.Float.log2 (Float.abs x)) in
+  Ulps (2. +. (2. *. if Float.is_finite k then k else 0.))
+
 (* An f32 subnormal flushed to the zero of its sign. *)
 let flush v = if Float.(v <> 0. && abs v < 0x1p-126) then Float.copysign 0. v else v
 
@@ -537,11 +555,16 @@ let () =
           p_all
             (Printf.sprintf
                "%s %s over +-0, +-inf, NaN and dyadic operands: NaN where C gives NaN, otherwise \
-                the signed zero or infinity C gives, or within the stated ulps of it, fmod exactly \
-                (every backend)"
+                the signed zero or infinity C gives, or within the stated ulps of it -- CUDA's f32 \
+                pow within __powf's 2 + 2 |y log2 |x|| -- and fmod exactly (every backend)"
                c.label binop_names)
             (run_binary c ~first_id:(20500 + (100 * ci)))
-            ~f:(fun ((name, _, x, _, _) as r) -> judge2 c (stated c name x) r);
+            ~f:(fun ((name, _, x, y, _) as r) ->
+              judge2 c
+                (if is_cuda && Ops.equal_prec c.prec Ops.single && String.equal name "pow" then
+                   cuda_powf x y
+                 else stated c name x)
+                r);
           p_all
             (Printf.sprintf
                "%s fmod of constant operands, folded on the host: exactly C's fmod, the remainder \

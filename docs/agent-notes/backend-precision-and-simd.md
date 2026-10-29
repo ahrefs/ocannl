@@ -2329,7 +2329,11 @@ files.
   `ocannl_sqrtf` scales a bit-classified subnormal by 2^32 and the root by 2^-16 (exact), and
   `ocannl_fmodf` selects the NaN bits for an infinite dividend or zero modulus in an integer
   select, like `ocannl_sinf`; bf16 widens into both and half `fmod` into the second. HIP `pow` was
-  already C's on the whole grid, `pow(1, NaN) = pow(-1, ±inf) = 1` included. **Metal**: `sqrt`/
+  already C's on the whole grid, `pow(1, NaN) = pow(-1, ±inf) = 1` included. **CUDA** (RTX 5070 Ti):
+  `sqrt`/`rsqrt`/`fmod` are C's (subnormals flushed, as `--ftz=true` implies), but `__powf` read
+  `pow(±1, ±inf)`, `pow(1, NaN)` and `pow(-inf, 0.5)` as NaN, so the shared `ocannl_pow_f32`/`_f64`
+  helper answers `|x| = 1` and a non-integral power of `-0`/`-inf` itself (the next entry);
+  `__powf`'s magnitude is claimed against `2 + 2 |y log2 |x||` ulps (5 measured). **Metal**: `sqrt`/
   `rsqrt` flush subnormal inputs like its other f32 functions (the test's flush allowance), and the
   fast `fmod` is `x - y * trunc(x / y)`-shaped -- NaN for a finite `x` over an infinite `y`, `+0`
   for an exact remainder of a negative `x` -- so `Mod` renders `precise::fmod` (half widened);

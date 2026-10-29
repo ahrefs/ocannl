@@ -145,8 +145,11 @@ let integer_power_builtins ~prefix ~supports_double ~dialect =
    exponent -- fractional, or NaN -- keeps the vendor domain, so a negative base under a fractional
    exponent stays NaN. A zero exponent gives 1 for every base -- signed zeros, infinities and NaN
    included -- as in C and as the integer-power helper defines it: the fast-math lowering reads [0 *
-   log2(0)] and [0 * log2(inf)] as NaN. A domain fix, not a correctly rounded [pow]: the magnitude
-   is the vendor's.
+   log2(0)] and [0 * log2(inf)] as NaN. Likewise C's other powers the lowering reads as NaN
+   (gh-ocannl-1684, measured on CUDA): [pow(+1, y)] is 1 for every [y], NaN included, and [pow(-1,
+   +-inf)] is 1, where [inf * log2(1)] is NaN; and a non-integral exponent of [-0] or [-inf] takes
+   the base's magnitude, as C does ([pow(-inf, 0.5) = +inf]), where [log2] of a negative base is
+   NaN. A domain fix, not a correctly rounded [pow]: the magnitude is the vendor's.
 
    Both operands are classified by their bits, which fast math can neither fold nor flush: the
    base's sign bit, so [-0] counts as negative ([(-0)^3 = -0]); and the exponent's magnitude bits,
@@ -171,14 +174,18 @@ let cuda_like_power_builtins =
     ( name,
       Printf.sprintf
         {|%s %s %s(%s x, %s y) {
-  %s y_magnitude = %s(y) & %s;
+  %s y_magnitude = %s(y) & %s, x_magnitude = %s(x) & %s;
   if (y_magnitude == 0) return 1;
+  if (x_magnitude == %s && (!(%s) || y_magnitude == %s)) return 1;
+  if ((%s) && (x_magnitude == 0 || x_magnitude == %s)
+      && (y_magnitude < %s || (y_magnitude < %s && %s(y) != y))) return %s(%s(x), y);
   if (!(%s) || y_magnitude < %s || y_magnitude > %s || %s(y) != y) return %s(x, y);
   %s magnitude = %s(%s(x), y);
   return (%s(y) < %s && ((%s)y & 1) != 0) ? -magnitude : magnitude;
 }|}
-        prefix typ name typ typ bits_typ to_bits magnitude_mask x_negative one infinity trunc pow
-        typ pow fabs fabs int_limit int_typ,
+        prefix typ name typ typ bits_typ to_bits magnitude_mask to_bits magnitude_mask one
+        x_negative infinity x_negative infinity one infinity trunc pow fabs x_negative one infinity
+        trunc pow typ pow fabs fabs int_limit int_typ,
       [] )
   in
   integer_power_builtins ~prefix ~supports_double:true ~dialect:`Cuda_like
