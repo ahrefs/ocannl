@@ -245,7 +245,10 @@ files.
   by the same experiment (`tools/vendor_idents.exe`, below); and whatever a later SDK adds fails
   through `C_syntax.attribute_routine_name_failure`, which turns a compiler report quoting a
   routine's `void <name>(` line, or an error line quoting the name, into a `Utils.User_error`
-  naming the routine. A Metal compile error is a `Failure` carrying the whole source, where every
+  naming the routine. Only an ERROR diagnostic's lines count (`C_syntax.diagnostic_scopes` assigns
+  each echoed source line to the header before it): clang's `note: to match this '('` quotes the
+  declaration line for an error anywhere in the parameter list, and blaming the name there sent a
+  macro-expanded node identifier to the user as a routine-name collision. A Metal compile error is a `Failure` carrying the whole source, where every
   declaration appears, so attribution there reads the compiler's message alone. The attributed
   message quotes the report less its "This is a bug in OCANNL. Please file an issue with …" line,
   which cc's report carries for the unattributed case. cc builds that line with

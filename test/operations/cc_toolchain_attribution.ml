@@ -10,7 +10,12 @@
    setting's name), [compiler_command] names a compiler that does not exist, and [codegen] -- the
    control -- keeps the toolchain intact but renames [float] to an undeclared type in the compiler
    command, so only the generated code fails to compile, and a trivial kernel (which declares no
-   float) still does: the bug claim stays. *)
+   float) still does: the bug claim stays. [macro_label] is a second such control: the compiler
+   command defines the computation's node label as [__LINE__], so the node's parameter declaration
+   fails to compile -- what a node labelled [__LINE__] did before gh-ocannl-1338 renamed such
+   labels. clang then quotes the routine's [void <name>(] line under its [note: to match this '('],
+   which must not make the failure the routine NAME's: only an error's quoted lines blame the
+   name. *)
 
 open Base
 open Ocannl
@@ -25,7 +30,7 @@ let culprit =
   match mode with
   | "arch_flags" | "include_flag" -> Some "cc_backend_arch_flags"
   | "compiler_command" -> Some "cc_backend_compiler_command"
-  | "codegen" -> None
+  | "codegen" | "macro_label" -> None
   | other -> invalid_arg ("cc_toolchain_attribution: unknown mode " ^ other)
 
 (* The settings a toolchain failure can name: the compiler command and every setting a kernel
@@ -83,7 +88,15 @@ let () =
   let ctx = Context.auto () in
   Stdio.printf "backend: %s\n" (Context.backend_name ctx);
   let x = TDSL.range 16 in
-  let%op y = (2. *. x) + 1. in
+  let y =
+    if String.equal mode "macro_label" then
+      (* The label the [macro_label] rule's compiler command defines as a macro. *)
+      let%op gh1338_macro_node = (2. *. x) + 1. in
+      gh1338_macro_node
+    else
+      let%op y = (2. *. x) + 1. in
+      y
+  in
   Train.set_materialized y.value;
   let comp = Train.forward y in
   let outcome =

@@ -281,6 +281,7 @@
   (alias runtest-cc_toolchain_attribution-include_flag)
   (alias runtest-cc_toolchain_attribution-compiler_command)
   (alias runtest-cc_toolchain_attribution-codegen)
+  (alias runtest-cc_toolchain_attribution-macro_label)
   (alias runtest-micrograd_demo_logging)
   (alias runtest-n3_fwd_with_prec-unoptimized)
   (alias runtest-top_down_prec-unoptimized)
@@ -1459,6 +1460,31 @@
   (diff
    cc_toolchain_attribution-codegen.expected
    cc_toolchain_attribution-codegen.actual)))
+
+(rule
+ ; ocannl-backend: cc -- the toolchain is the cc compile's; the command line pins the backend.
+ (target cc_toolchain_attribution-macro_label.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_toolchain_attribution.exe}
+    macro_label
+    --ocannl_backend=cc
+    --ocannl_cc_backend_probe_cache=false
+    "--ocannl_cc_backend_compiler_command=%{ocaml-config:c_compiler} -Dgh1338_macro_node=__LINE__"))))
+
+(rule
+ (alias runtest-cc_toolchain_attribution-macro_label)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff
+   cc_toolchain_attribution-macro_label.expected
+   cc_toolchain_attribution-macro_label.actual)))
 
 ; gh-ocannl-1268: a process's startup removes the temporary cc libraries of processes that are gone
 ; (Windows keeps a loaded DLL past its routine's exit) and keeps those of running processes. Two

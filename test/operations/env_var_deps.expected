@@ -202,6 +202,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-cc_toolchain_attribution-codegen
   test/operations/dune                     @runtest-cc_toolchain_attribution-compiler_command
   test/operations/dune                     @runtest-cc_toolchain_attribution-include_flag
+  test/operations/dune                     @runtest-cc_toolchain_attribution-macro_label
   test/operations/dune                     @runtest-census_total_ratchet
   test/operations/dune                     @runtest-changelog_unreleased_scan
   test/operations/dune                     @runtest-codegen_text_inventory
