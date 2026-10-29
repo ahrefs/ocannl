@@ -16,7 +16,7 @@
 # #options (26-28, 37, 89), #width (29-34, 48-52, 64, 70), #digest (35-36,
 # 68-69, 71-73, 80, 87, 92), #fresh (81), #lifecycle (40-47, 65, 74: the run/start
 # lifecycle with its signal legs, and both fork-window negative controls),
-# #source (59-63, 66), #slot (53-58, 78, 88), #device (75-77, 91), #credentials (79, 90),
+# #source (59-63, 66), #slot (53-58, 78, 88, 93), #device (75-77, 91), #credentials (79, 90),
 # #bisect (82), #harness (86). A body that cannot go on (an extraction that
 # matched nothing, a fixture that is not what its checks assume) ends with
 # `harness_abandon DETAIL; return`, failing that leg alone: never `exit`,
@@ -225,6 +225,11 @@
 #      answers --read=backend, ocannl_slot_kind asks Test_utils.Slot_kind and
 #      prints the grammar batch_resolve parses, and Slot_kind's config_dirs is
 #      BATCH_CONFIG_DIRS.
+#  93 sits after leg 58: a tree carrying a backend marker env_var_deps refuses
+#      (gh-ocannl-1652's chip) is MARKER REFUSED, exit 2, before the slot and
+#      dune -- naming the marker's dune file and line in the digest and the
+#      log, cut short or beside a `names` line too; `plan` says run would
+#      refuse it and `repeat` runs no iteration; the repaired marker runs --gpu.
 #  78. a test configuration's backend counts only where ocannl_slot_kind says
 #      it does (gh-ocannl-1227: a batch off its configuration-free list or a
 #      plain build): beside a hip configuration on a small SDMA pool, a batch
@@ -5964,9 +5969,10 @@ fi
   slot_detail="$slot_reach_exe.ml does not ask Test_utils.Slot_kind"
 # The reachability tool's grammar is the one batch_resolve parses: a `names
 # <backend>: <why>` line per backend, a `reads config: <why>` line when a
-# configuration counts, then `end`; or one `unknown: <why>`.
+# configuration counts, then `end`; or one `unknown: <why>`; or a `refused:
+# <dune file>:<line>: <why>` line per refused backend marker, then `end`.
 for form in 'printf "names %s: %s\n"' 'printf "reads config: %s\n"' 'printf "end\n"' \
-            'printf "unknown: %s\n"'; do
+            'printf "unknown: %s\n"' 'printf "refused: %s\n"'; do
   [ -z "$slot_detail" ] || break
   grep -qF "$form" "$HERE/../$slot_reach_exe.ml" ||
     slot_detail="$slot_reach_exe.ml has no $form"
@@ -5986,6 +5992,72 @@ else
 fi
 }
 harness_leg_run '58: the backend readers are test/config'\''s #slot' leg_58
+
+# Leg 93: a backend marker env_var_deps refuses is MARKER REFUSED, not every
+# backend (the chip from gh-ocannl-1652). A dune file `d/dune` opening
+# `(test ; ocannl-backend: cuda` -- no reason -- is answered by ocannl_slot_kind
+# with one `refused: <dune file>:<line>: <why>` line, then `end`: the refusal is
+# read out of test/operations/slot_kind_cases.expected, where Slot_kind's own
+# answer for that very fixture stanza is recorded, not restated here. The runner used to read any line
+# outside its grammar as every backend and run the batch under --gpu; now it
+# refuses before the slot and dune (exit 2, no slot or dune call), the digest
+# and the run's log naming the file and line. A refusal cut
+# short of its `end`, or beside a `names` line, is refused all the same;
+# `plan` says run would refuse it; `repeat` runs no iteration. The control:
+# the same tree with the marker repaired answers `names cuda` and runs --gpu.
+leg_93() {
+local d= label="batch: a backend marker env_var_deps refuses is MARKER REFUSED before the slot and dune, not every backend"
+local refused
+refused=$(sed -n 's/^runtest d (malformed markers)  *\(refused: d\/dune:1: .*\); e\/dune:2: .*/\1/p' \
+  "$HERE/../test/operations/slot_kind_cases.expected")
+case $refused in
+  'refused: d/dune:1: a backend marker that does not parse: '*) ;;
+  *) harness_abandon "slot_kind_cases.expected records no refusal of the d/dune:1 fixture marker: '$refused'"; return ;;
+esac
+FAKE_REACH="$refused\nend" slot_probe marker-refused hold cc cc run build @cheap
+{ [ "$argv_rc" = 2 ] && [ -z "$argv_calls" ] && [ -z "$slot_calls" ]; } ||
+  d="refused: exit $argv_rc (want 2); dune calls: ${argv_calls:-<none>}; slot calls: ${slot_calls:-<none>} (want none)"
+if [ -z "$d" ]; then
+  case $argv_out in
+    *"verdict: MARKER REFUSED (a backend marker env_var_deps refuses; nothing ran) (exit 2)"*"marker refused: d/dune:1: a backend marker that does not parse"*) ;;
+    *) d="refused: the digest: $argv_out" ;;
+  esac
+fi
+{ [ -n "$d" ] || { [ -n "$argv_dir" ] && grep -qF 'test-run: batch: refused marker: d/dune:1:' "$argv_dir/log" &&
+    grep -qF 'test-run: MARKER REFUSED: d/dune:1: a backend marker that does not parse' "$argv_dir/log"; }; } ||
+  d="refused: the log does not record the marker and the refusal: $(cat "$argv_dir/log" 2>/dev/null)"
+for probe in "cut-short:$refused" "beside-names:names cc: it reaches x in y, which names cc\n$refused\nend"; do
+  [ -z "$d" ] || break
+  FAKE_REACH=${probe#*:} slot_probe "marker-refused-${probe%%:*}" hold cc cc run build @cheap
+  { [ "$argv_rc" = 2 ] && [ -z "$argv_calls" ] && [ -z "$slot_calls" ] &&
+      grep -q 'verdict: MARKER REFUSED' <<<"$argv_out"; } ||
+    d="${probe%%:*}: exit $argv_rc (want 2); dune calls: ${argv_calls:-<none>}; slot calls: ${slot_calls:-<none>}; digest: $argv_out"
+done
+if [ -z "$d" ]; then
+  FAKE_REACH="$refused\nend" slot_probe marker-refused-plan hold cc cc plan build @cheap
+  case $argv_out in
+    *"markers: run would refuse this batch (MARKER REFUSED, exit 2)"*"  d/dune:1: a backend marker that does not parse"*) ;;
+    *) d="plan: exit $argv_rc; output: $argv_out" ;;
+  esac
+  [ -n "$d" ] || [ -z "$argv_calls" ] || d="plan ran dune: $argv_calls"
+fi
+if [ -z "$d" ]; then
+  FAKE_REACH="$refused\nend" OCANNL_TOOL_FLEET_WORKER=$slot_fake FAKE_FW_CALLS=$TMP/marker-repeat.fw \
+    FAKE_FW_MODE=hold repeat_probe marker-repeat stable 2 build @cheap
+  { [ "$repeat_rc" = 2 ] && [ -z "$(cat "$TMP/marker-repeat.calls" 2>/dev/null)" ] &&
+      grep -qF "MARKER REFUSED: d/dune:1:" <<<"$repeat_out"; } ||
+    d="repeat: exit $repeat_rc (want 2); dune calls: $(cat "$TMP/marker-repeat.calls" 2>/dev/null); output: $repeat_out"
+fi
+if [ -z "$d" ]; then
+  FAKE_REACH="names cuda: it reaches t in d, which names cuda\nend" slot_probe marker-repaired hold cc cc run build @cheap
+  { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build @cheap" ] &&
+      [ "$slot_calls" = "execution slot --wait 600 --gpu -- dune build @cheap" ] &&
+      ! grep -q 'MARKER REFUSED' <<<"$argv_err$argv_out"; } ||
+    d="the repaired marker (control): exit $argv_rc; dune calls: ${argv_calls:-<none>}; slot calls: ${slot_calls:-<none>}; digest: $argv_out"
+fi
+if [ -z "$d" ]; then report 0 "$label"; else report 1 "$label" "$d"; fi
+}
+harness_leg_run '93: a backend marker env_var_deps refuses is MARKER REFUSED #slot' leg_93
 
 # Leg 78: a test configuration's backend counts only where ocannl_slot_kind
 # says it does -- every batch but one of its configuration-free aliases or a

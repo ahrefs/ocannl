@@ -44,6 +44,16 @@
 # narrower width or a wait for a GPU token, never a GPU batch at dune's default
 # width or outside the tokens.
 #
+# One answer is neither: a tree carrying a backend marker env_var_deps refuses
+# (malformed, misplaced, or a second one on a stanza). ocannl_slot_kind then
+# answers one `refused: <dune file>:<line>: <why>` line per such marker -- the
+# decision is Scan.backend_marker_contract's, the one env_var_deps fails the
+# tree on -- and batch_refused carries them. Reading that as every backend
+# would take a GPU slot and a capped width for a typo the scan reports
+# loudly; tools/test-run.sh refuses the batch instead (MARKER REFUSED, exit 2,
+# before the slot and dune). batch_unknown is set beside it, so every reader
+# of the resolution that does not refuse still fails closed.
+#
 # The readers are built by the run's first phase (tools/test-run.sh's
 # `_resolve`, the supervisor's child), so the worktree lock, the run's cap, its
 # process group and its signal handling cover them as they cover dune -- they
@@ -74,6 +84,7 @@ batch_canonical() { # <name>; the canonical name of a deprecated alias
 
 batch_holds=    # one line per backend the batch can hold: `<backend> <why>`
 batch_unknown=  # non-empty: the set could not be read, and why -- every backend
+batch_refused=  # the refused backend markers, one `<dune file>:<line>: <why>` per line
 # shellcheck disable=SC2034  # read by tools/test-run.sh, which sources this file
 batch_resolved= # non-empty once batch_resolve ran
 
@@ -119,7 +130,7 @@ batch_box_has_hazard() {
 batch_resolve() { # <dune> <log> dune-argv...
   local dune=$1 log=$2 a v reader reach out line rest b ended= d reads=
   shift 2
-  batch_holds= batch_unknown= batch_resolved=1
+  batch_holds= batch_unknown= batch_refused= batch_resolved=1
   if [ "${1:-}" = exec ]; then
     batch_unknown="dune exec runs a program that may pick its own backend"
   fi
@@ -178,6 +189,9 @@ batch_resolve() { # <dune> <log> dune-argv...
           batch_add "$b" "${rest#*: }"
           ;;
         'reads config: '*) reads=${line#reads config: } ;;
+        # A refusal is kept whatever follows it: cut short or not, the tool
+        # found a marker the contract refuses.
+        'refused: '*) batch_refused="$batch_refused${line#refused: }"$'\n' ;;
         end) ended=1 ;;
         'unknown: '*) batch_unknown=${line#unknown: }; break ;;
         *) batch_unknown="ocannl_slot_kind answered '${line}'"; break ;;
@@ -185,6 +199,8 @@ batch_resolve() { # <dune> <log> dune-argv...
     done <<<"$out"
     [ -n "$batch_unknown" ] || [ -n "$ended" ] ||
       batch_unknown="ocannl_slot_kind's answer was cut short: '${out}'"
+    [ -z "$batch_refused" ] ||
+      batch_unknown="the tree carries a backend marker env_var_deps refuses"
   fi
   if [ -z "$batch_unknown" ] && [ -n "$reads" ]; then
     batch_say "$log" "reads the configuration: $reads"
@@ -211,6 +227,11 @@ batch_resolve() { # <dune> <log> dune-argv...
         break
       fi
     done
+  fi
+  if [ -n "$batch_refused" ]; then
+    while IFS= read -r line; do
+      [ -z "$line" ] || batch_say "$log" "refused marker: $line"
+    done <<<"$batch_refused"
   fi
   if [ -n "$batch_unknown" ]; then
     batch_say "$log" "its backends are unread, so it is taken to hold any: $batch_unknown"

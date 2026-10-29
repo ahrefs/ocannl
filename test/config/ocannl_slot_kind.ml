@@ -4,8 +4,10 @@
    root with the dune argv as its arguments. Prints one `names <backend>: <why>` line per backend a
    reachable stanza's marker names, then a `reads config: <why>` line unless every target is a
    configuration-free alias or a plain compilation product, then `end`; or a single `unknown: <why>`
-   line when the argv is unmodelled or the tree cannot be read. An answer without its `end` line is
-   read as unknown too, so a crash cannot pass for a batch that names nothing. *)
+   line when the argv is unmodelled or the tree cannot be read; or one `refused: <dune file>:<line>:
+   <why>` line per backend marker env_var_deps refuses, then `end`, which the runner refuses the
+   batch over (MARKER REFUSED) rather than read as every backend. An answer without its `end` line
+   is read as unknown too, so a crash cannot pass for a batch that names nothing. *)
 
 open Base
 open Stdio
@@ -18,6 +20,9 @@ let () =
       let config_files = Test_utils.Slot_kind.config_files_of ~root:"." files in
       match Test_utils.Slot_kind.answer ~config_files ~dune_files:files argv with
       | Unknown why -> printf "unknown: %s\n" why
+      | Refused refused ->
+          List.iter refused ~f:(fun why -> printf "refused: %s\n" why);
+          printf "end\n"
       | Reaches { named; reads_config } ->
           List.iter named ~f:(fun (backend, why) -> printf "names %s: %s\n" backend why);
           Option.iter reads_config ~f:(fun why -> printf "reads config: %s\n" why);

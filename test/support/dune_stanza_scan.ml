@@ -1756,6 +1756,14 @@ let parse_backend_declaration ~declaration:backend ~reason =
       ]
   else Ok { backend = String.concat ~sep:"," named; reason }
 
+(** What is wrong with one malformed backend marker, phrased for the author of the comment: the one
+    wording [env_var_deps] fails it with and [Slot_kind] refuses a batch over. *)
+let backend_marker_malformed_reason =
+  marker_malformed_reason ~sentinel:marker_sentinel ~separator_subject:"backend"
+    ~grammar:
+      (Printf.sprintf "%s <%s> -- <reason>" marker_sentinel
+         (String.concat ~sep:"|" marker_backends))
+
 let parse_marker text =
   match
     parse_marker_text ~sentinel:marker_sentinel ~parse_declaration:parse_backend_declaration text
@@ -1764,14 +1772,7 @@ let parse_marker text =
   | Parsed_marker marker -> Some (Marker marker)
   | Malformed_marker_text malformed ->
       Some
-        (Malformed
-           (List.map malformed
-              ~f:
-                (marker_malformed_reason ~sentinel:marker_sentinel ~separator_subject:"backend"
-                   ~grammar:
-                     (Printf.sprintf "%s <%s> -- <reason>" marker_sentinel
-                        (String.concat ~sep:"|" marker_backends)))
-           |> String.concat ~sep:"; "))
+        (Malformed (List.map malformed ~f:backend_marker_malformed_reason |> String.concat ~sep:"; "))
 
 type marked_stanza = {
   marked_head : string;  (** the atom the stanza opens with, or ["<not a stanza>"] *)
