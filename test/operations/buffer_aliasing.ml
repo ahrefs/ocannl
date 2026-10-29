@@ -145,7 +145,12 @@ let chain_phase ~label () =
     match Context.get_values ctx t.Tensor.value with
     | (_ : float array) -> printf "%s: read %s: ok\n" label name
     | exception Utils.User_error msg when String.is_substring msg ~substring:"buffer-aliased" ->
-        printf "%s: read %s: raises buffer-aliased\n" label name
+        printf "%s: read %s: raises buffer-aliased\n" label name;
+        (* gh-ocannl-777: the query answers the same without attempting the read. *)
+        pf "%s: %s is classified aliased up front" label name
+          (match Context.observability ctx t.Tensor.value with
+          | Unobservable_aliased [ v ] -> Tn.equal v t.Tensor.value
+          | _ -> false)
   in
   read "h1" h1;
   read "h4" h4;

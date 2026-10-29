@@ -530,6 +530,11 @@ type observability =
       (** The dependency path from the node to a node this lineage placed [Local] (the node itself
           when the path is a singleton). Recomputation would read routine-scoped scratch, so the
           node is unobservable; a materialized node between them would have shielded it. *)
+  | Unobservable_aliased of Ir.Tnode.t list
+      (** The dependency path to a materialized node whose buffer the liveness memory planner
+          aliased ([buffer_aliasing]; the node itself when the path is a singleton): its values are
+          not preserved past its last read in the routine computing it, so neither a host read nor a
+          recompute reading it observes them. *)
   | Unobservable_merge of Ir.Tnode.t list
       (** The dependency path to a virtual node whose stored computation reads a merge buffer:
           transient to the routine receiving the transfer, so not replayable from a host read. *)
@@ -550,12 +555,13 @@ val observability : t -> Ir.Tnode.t -> observability
     computations. For a [Virtual] node the walk follows each stored computation exactly as a replay
     would read it — the statements the inliner keeps, every operand — into other virtual nodes, and
     stops at materialized ones. A path ends at the first offending node in program order; when
-    several reasons apply, [Unobservable_local] is reported over [Unobservable_merge], over
-    [Launch_bound], over [Needs_context]. Pure: no placement is decided, nothing is compiled. A
-    [Recomputable] answer describes structure and availability; the recompute's own compile and run
-    keep their checks (e.g. an input no routine of the lineage wrote is refused by {!run}). Refuses
-    a {!release}d context and a discarded node like {!to_host}. Raises [Failure] (an internal error)
-    if a stored computation reads a node this lineage left undecided. *)
+    several reasons apply, [Unobservable_local] is reported over [Unobservable_aliased], over
+    [Unobservable_merge], over [Launch_bound], over [Needs_context]. Pure: no placement is decided,
+    nothing is compiled. A [Recomputable] answer describes structure and availability; the
+    recompute's own compile and run keep their checks (e.g. an input no routine of the lineage wrote
+    is refused by {!run}). Refuses a {!release}d context and a discarded node like {!to_host}.
+    Raises [Failure] (an internal error) if a stored computation reads a node this lineage left
+    undecided. *)
 
 val observability_tag : observability -> string option
 (** A short placeholder for printers, such as [<unobservable: reads Local #7 h>]; [None] for the
@@ -572,17 +578,18 @@ val to_host : t -> Ir.Tnode.t -> Ir.Ndarray.t
     - [Recomputable]: it is recomputed (gh-ocannl-777). A throwaway routine copying the node into a
       fresh materialized node is compiled from this context, so its lowering inlines the node's
       stored computation; it is run, the copy transferred, and its context released (with its ledger
-      records), so the context's buffers, frontier and placements are as they were. Every such read
+      records), so the context's buffers, frontier and placements are as they were. A release that
+      fails before freeing raises from the read, and the next recompute retries it. Every such read
       compiles: no routine is cached. The value is recompute-at-read (gh-617): the stored
       computation evaluated over its leaves as they are now, which differs from the value the
       producing routine computed if a leaf was written since. The array has the node's layout; a
       padded node's fringe holds its committed padding value. The recompute's compile and run keep
       their own checks: a leaf no routine of the lineage wrote is refused by {!run}, and such a
       failure propagates, as does any failure after a [Recomputable] answer.
-    - any other answer: {!Ir.Utils.User_error} with {!explain_observability}'s reason (a [Local]
-      node, including its placement provenance and whether raising a heuristic cap could keep it
-      virtual instead; a node not present in the context; an [\@|] slice view, whose parent is read
-      instead).
+    - any other answer: {!Ir.Utils.User_error} with {!explain_observability}'s reason (a node whose
+      buffer the liveness planner aliased; a [Local] node, including its placement provenance and
+      whether raising a heuristic cap could keep it virtual instead; a node not present in the
+      context; an [\@|] slice view, whose parent is read instead).
 
     Refuses a {!release}d context with {!Ir.Utils.User_error}, as do {!from_host}, {!copy} (either
     side) and the accessors built on them; and, before forcing anything of the node, a node the

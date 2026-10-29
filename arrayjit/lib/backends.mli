@@ -54,6 +54,12 @@ val with_segments_census : (unit -> 'a) -> 'a * Ir.Low_level.optimized list
     reading is restored on exit, exception or not. [Context.compile_outcome] is the one caller, and
     stores the result on the routine as its [segments]. *)
 
+val buffer_aliased : Ir.Backend_intf.ctx_buffers -> Ir.Tnode.t -> bool
+(** gh-ocannl-777: whether the node's buffer in these context buffers overlaps another node's — the
+    liveness planner aliased it ([buffer_aliasing]), so its values are not preserved past its last
+    read within the routine computing it, and a host read or a later routine's read of it is refused
+    (the [aliased_read_error] of [to_host] and of linking). [false] for a node with no buffer. *)
+
 val finalize :
   'dev 'runner 'event.
   (module Ir.Backend_intf.Backend

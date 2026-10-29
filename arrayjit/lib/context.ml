@@ -1057,10 +1057,14 @@ type observability =
   | Recomputable
   | Needs_context of Tn.t list
   | Unobservable_local of Tn.t list
+  | Unobservable_aliased of Tn.t list
   | Unobservable_merge of Tn.t list
   | Launch_bound of Tn.t list * Idx.symbol list
   | Slice_view of Tn.t
   | Not_computed
+
+let aliased ctx (tn : Tn.t) =
+  Backends.query ctx.wrapped { q = (fun _ c -> Backends.buffer_aliased c.BI.ctx_buffers tn) }
 
 let computations ctx =
   Backends.query ctx.wrapped { q = (fun _ c -> c.BI.optimize_ctx.Ir.Low_level.computations) }
@@ -1071,6 +1075,7 @@ let computations ctx =
    verdict is about. *)
 type walk_verdict =
   | W_local of Tn.t list
+  | W_aliased of Tn.t list
   | W_merge of Tn.t list
   | W_launch of Tn.t list * Idx.symbol list
   | W_missing of Set.M(Tn).t
@@ -1078,10 +1083,11 @@ type walk_verdict =
 
 let verdict_rank = function
   | W_local _ -> 0
-  | W_merge _ -> 1
-  | W_launch _ -> 2
-  | W_missing _ -> 3
-  | W_ok -> 4
+  | W_aliased _ -> 1
+  | W_merge _ -> 2
+  | W_launch _ -> 3
+  | W_missing _ -> 4
+  | W_ok -> 5
 
 (* Combines two verdicts: the higher-precedence one wins, the first (program order) on a tie, and
    absent leaves accumulate. *)
@@ -1104,6 +1110,7 @@ let walk_virtual ctx (root : Tn.t) : walk_verdict =
   let present tn = mem ctx tn || Ir.Host_inits.mem tn in
   let prefix v = function
     | W_local path -> W_local (v :: path)
+    | W_aliased path -> W_aliased (v :: path)
     | W_merge path -> W_merge (v :: path)
     | W_launch (path, syms) -> W_launch (v :: path, syms)
     | (W_missing _ | W_ok) as w -> w
@@ -1140,6 +1147,7 @@ let walk_virtual ctx (root : Tn.t) : walk_verdict =
   and read_verdict v r =
     match Tn.Placements.get plc r with
     | Some (Tn.Local, _) -> W_local [ v; r ]
+    | _ when aliased ctx r -> W_aliased [ v; r ]
     | _ when present r -> W_ok
     | Some (Tn.Virtual, _) -> prefix v (walk r)
     | Some (Tn.Effectively_constant, _) when Hashtbl.mem comps r -> prefix v (walk r)
@@ -1159,7 +1167,8 @@ let observability ctx (tn : Tn.t) : observability =
       match Tn.Placements.get plc tn with
       | Some (Tn.Local, _) -> Unobservable_local [ tn ]
       | placement -> (
-          if mem ctx tn then Stored
+          if aliased ctx tn then Unobservable_aliased [ tn ]
+          else if mem ctx tn then Stored
           else if Ir.Host_inits.mem tn then Host_init
           else
             match placement with
@@ -1168,6 +1177,7 @@ let observability ctx (tn : Tn.t) : observability =
                 match walk_virtual ctx tn with
                 | W_ok -> Recomputable
                 | W_local path -> Unobservable_local path
+                | W_aliased path -> Unobservable_aliased path
                 | W_merge path -> Unobservable_merge path
                 | W_launch (path, syms) -> Launch_bound (path, syms)
                 | W_missing leaves -> Needs_context (Set.to_list leaves))
@@ -1188,6 +1198,8 @@ let observability_tag = function
   | Unobservable_local [ _ ] -> Some "<unobservable: Local>"
   | Unobservable_local path ->
       Some ("<unobservable: reads Local " ^ Tn.debug_name (List.last_exn path) ^ ">")
+  | Unobservable_aliased path ->
+      Some ("<unobservable: buffer of " ^ Tn.debug_name (List.last_exn path) ^ " aliased>")
   | Unobservable_merge path ->
       Some ("<unobservable: " ^ Tn.debug_name (List.last_exn path) ^ " reads a merge buffer>")
   | Launch_bound (_, syms) ->
@@ -1235,6 +1247,18 @@ let explain_observability ctx (tn : Tn.t) (obs : observability) : string option 
             Context.decide_materialized -- before the first routine using it is compiled, or \
             materialize %s itself."
            name (Tn.debug_name local) prov name (path_to_string path) (Tn.debug_name local) name)
+  | Unobservable_aliased path ->
+      let victim = List.last_exn path in
+      Some
+        (Printf.sprintf
+           "%s: tensor node %s was buffer-aliased by the liveness memory planner (config \
+            buffer_aliasing): its buffer is shared with other nodes and its values are not \
+            preserved past its last read within the routine that computes it (dependency path %s). \
+            Mark %s observable (Tnode.set_observable) before compiling that routine, or disable \
+            buffer_aliasing."
+           (if Tn.equal victim tn then "node " ^ name ^ " cannot be read"
+            else "node " ^ name ^ " is virtual, and recomputing it reads " ^ Tn.debug_name victim)
+           (Tn.debug_name victim) (path_to_string path) (Tn.debug_name victim))
   | Unobservable_merge path ->
       Some
         (Printf.sprintf
@@ -1368,7 +1392,39 @@ let retire_recompute_records ctx (routine : routine) =
   rollback_execution ctx routine.routine_id;
   Hashtbl.remove ctx.ledger.routine_names routine.routine_id
 
+(* A throwaway context whose release raised before its pools were freed (the backend keeps a retry
+   ledger: [finalize] resumes where it stopped). The caller never held the handle, so ownership
+   stays here: each later recompute retries these first, and its records are retired once the
+   release commits. A release whose pools were freed but whose release hook then raised is
+   committed: its records are retired at once, as [release] retires merge readers in that case. *)
+let pending_recompute_releases : (t * t * routine) list ref = ref []
+let pending_recompute_mutex = Stdlib.Mutex.create ()
+
+let release_recompute ~parent child (routine : routine) =
+  match release child with
+  | () -> retire_recompute_records parent routine
+  | exception exn ->
+      let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+      if Atomic.get (release_flag child.wrapped) then retire_recompute_records parent routine
+      else
+        Stdlib.Mutex.protect pending_recompute_mutex (fun () ->
+            pending_recompute_releases := (child, parent, routine) :: !pending_recompute_releases);
+      Stdlib.Printexc.raise_with_backtrace exn backtrace
+
+let retry_pending_recompute_releases () =
+  let pending =
+    Stdlib.Mutex.protect pending_recompute_mutex (fun () ->
+        let p = !pending_recompute_releases in
+        pending_recompute_releases := [];
+        p)
+  in
+  (* Each failure was reported when it happened, and a failed retry is queued again, so a retry's
+     own exception is not this read's to raise. *)
+  List.iter pending ~f:(fun (child, parent, routine) ->
+      try release_recompute ~parent child routine with _ -> ())
+
 let recompute_to_host ctx (tn : Tn.t) (nd : Nd.t) : Nd.t =
+  retry_pending_recompute_releases ();
   let proxy =
     Tn.create ~namespace:recompute_namespace
       (Tn.Specified (Lazy.force tn.Tn.storage_prec))
@@ -1416,16 +1472,16 @@ let recompute_to_host ctx (tn : Tn.t) (nd : Nd.t) : Nd.t =
   in
   match read () with
   | nd ->
-      release !child;
-      retire_recompute_records ctx routine;
+      release_recompute ~parent:ctx !child routine;
       nd
   | exception exn ->
       let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-      (try
-         release !child;
-         retire_recompute_records ctx routine
+      (try release_recompute ~parent:ctx !child routine
        with release_exn ->
-         Stdio.eprintf "Context.to_host: releasing the recompute context of %s also failed: %s\n%!"
+         Stdio.eprintf
+           "Context.to_host: releasing the recompute context of %s also failed (retried at the \
+            next recompute): %s\n\
+            %!"
            (Tn.debug_name tn) (Exn.to_string release_exn));
       Stdlib.Printexc.raise_with_backtrace exn backtrace
 
@@ -1479,7 +1535,8 @@ let to_host ctx (tn : Tn.t) : Nd.t =
       refuse
         (Printf.sprintf "node %s is not present in context: %s" (Tn.debug_name tn)
            (Option.value_exn ~here:[%here] (explain_observability ctx tn obs)))
-  | Unobservable_local _ | Unobservable_merge _ | Launch_bound _ | Slice_view _ ->
+  | Unobservable_local _ | Unobservable_aliased _ | Unobservable_merge _ | Launch_bound _
+  | Slice_view _ ->
       refuse (Option.value_exn ~here:[%here] (explain_observability ctx tn obs))
 
 (** Uploads the host buffer [nd] into [tn]'s device buffer, allocating it if needed, and returns a

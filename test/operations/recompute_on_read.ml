@@ -121,7 +121,23 @@ let () =
   p "a transfer failure during the recompute propagates" injected;
   p "the throwaway context's pools are released on that failure too"
     ((Ir.Alloc_census.snapshot ()).live_working_pools = pools);
-  p "the parent context still reads afterwards" (Array.length (get ctx' v) = rows * cols)
+  p "the parent context still reads afterwards" (Array.length (get ctx' v) = rows * cols);
+  (* --- A release of the throwaway context that fails before freeing is retried --- the caller
+     never held that context, so the next recompute retries it, and its ledger records are retired
+     once it commits. *)
+  let pools = (Ir.Alloc_census.snapshot ()).live_working_pools in
+  let ledger = Context.ledger_entries ctx' in
+  let failed_release =
+    Ir.Resource_fault_injection.with_callback
+      (function Ir.Resource_fault_injection.Finalize_before_free -> failwith "injected" | _ -> ())
+      ~f:(fun () ->
+        match get ctx' v with _ -> false | exception Failure msg -> String.equal msg "injected")
+  in
+  p "a release failing before it frees propagates from the read" failed_release;
+  p "the next read succeeds" (Array.length (get ctx' v) = rows * cols);
+  p "and its retry frees the pools the failed release kept"
+    ((Ir.Alloc_census.snapshot ()).live_working_pools = pools);
+  p "and retires the failed read's ledger records" (Context.ledger_entries ctx' = ledger)
 
 (* --- Refusals, each naming its reason --- *)
 let () =

@@ -632,7 +632,9 @@ files.
   skips merge reads and charges one `Where` arm. A new statement or scalar constructor, or a change to
   what instantiation keeps, must update `replay_facts` too: its match arms are exhaustive for that
   reason. A materialized node with a buffer ends the walk (it shields a `Local` dependency behind
-  it); answers rank `Unobservable_local` > `Unobservable_merge` > `Launch_bound` > `Needs_context`.
+  it); answers rank `Unobservable_local` > `Unobservable_aliased` (a buffer the `buffer_aliasing`
+  planner shares, which `to_host` and linking refuse) > `Unobservable_merge` > `Launch_bound` >
+  `Needs_context`.
   `Launch_bound` exists because `check_and_store_virtual` walks with `env_dom = static_indices`, so a
   template can keep a launch symbol a bindings-free recompute cannot supply; it is conservative (the
   inliner could bind a write-index occurrence). `Needs_context` for a virtual node's LEAF is
@@ -640,7 +642,9 @@ files.
   that stores the template, and descendants inherit buffers -- so tests pin it on a materialized
   root. `Context.to_host` compiles `proxy =: tn` (plain Assignments, identity projections, `proxy` in
   namespace `observe` with `tn`'s unpadded dims and padding), runs it, transfers, releases the child
-  and retires its private ledger records (`rollback_execution` plus the routine name); a padded
+  and retires its private ledger records (`rollback_execution` plus the routine name) -- a release
+  failing before it frees is queued and retried by the next recompute, since no caller holds the
+  child; a padded
   read's fringe is refilled host-side with the padding value. Printers ask the query first and show
   `observability_tag`; a failure after a readable answer propagates (no catch-all). Guards:
   `observability_query`, `recompute_on_read` (bitwise parity against a materialized run, ledger and
