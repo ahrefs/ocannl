@@ -10102,6 +10102,22 @@
  (action
   (run %{test} %{dep:ll_test_ratchet.exe})))
 
+; gh-ocannl-1724: the lineage checks -- a fragment compiled twice in one lineage is refused at
+; compile, a routine whose required backprop fragment no routine of its lineage owns is refused at
+; run; siblings are alternatives. Executed values, every backend.
+
+(test
+ (name lineage_fragments)
+ (package neural_nets_lib)
+ (locks ocannl_training_test)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules lineage_fragments)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  (name consume_code_replay)
  (package neural_nets_lib)

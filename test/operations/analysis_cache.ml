@@ -119,7 +119,9 @@ let phase2 () =
   ignore mc;
   let comp = Train.forward t2 in
   let ctx = Context.auto () in
-  let (ctx, _routine), _, _ = delta (fun () -> Context.compile ctx comp Idx.Empty) in
+  (* The second compile is a sibling: from the root, not the first compile's context, whose lineage
+     already holds [t2]'s forward fragment (gh-ocannl-1724). *)
+  let (_ctx1, _routine), _, _ = delta (fun () -> Context.compile ctx comp Idx.Empty) in
   let captured = ref [] in
   let (_ctx2, _routine2), h2, m2 =
     delta (fun () ->

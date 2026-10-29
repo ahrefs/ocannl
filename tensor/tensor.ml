@@ -473,19 +473,15 @@ let register_constant_host_init tn values =
        | _ -> Nd.set_flat_values ?padding:pads ~cycle:true nd values);
        nd))
 
-(* gh-ocannl-1724, the leaf rule -- its one point. Whether a differentiable tensor built by
-   [Tensor.term] (a leaf: no operands, [grad_asn] the constant [empty_comp]) owns the backprop
-   fragment [(grad, Bprop)], and therefore generates a requirement in a later consumer that finds it
-   no longer a backprop root. Parameters never do ([force_param_diff] gives them an empty backprop).
-   [true] is the issue's stated rule (only parameters exempt): a non-parameter [Require_grad] leaf
-   shared by two separately compiled losses needs its first consumer's routine in the second's
-   lineage. The alternative, exempting every leaf, awaits the maintainer's decision. *)
-let leaf_owns_backprop_fragment = true
-
+(* [terminal_backprop] (gh-ocannl-1724): the tensor's backprop is terminal by construction -- set by
+   {!term}, whose [grad_asn] is the constant [empty_comp] -- so it owns no backprop fragment, and a
+   later consumer finding it no longer a backprop root generates no requirement for it. Parameters
+   are built by [term] too (and [force_param_diff] gives them an empty backprop besides). Decided by
+   the maintainer ("exempt all terms", ahrefs/ocannl#1724): there is no code to propagate. *)
 let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un) ?terminal_op
-    ?shape_logic ~op_asn ~grad_asn ?(grad_spec = If_needed) ?(top_down_prec = false) make_shape
-    (orig_ts : t list) : t =
+    ?shape_logic ?(terminal_backprop = false) ~op_asn ~grad_asn ?(grad_spec = If_needed)
+    ?(top_down_prec = false) make_shape (orig_ts : t list) : t =
   List.iter orig_ts ~f:(fun t ->
       if t.value.id >= session_state.next_id then
         raise
@@ -823,8 +819,8 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
        (gh-ocannl-1724): a differentiable non-parameter child that is no longer a backprop root had
        its backprop embedded by an earlier consumer, or handed out, so some other routine of the
        lineage must propagate from its gradient. Derived from the child's own ownership: a child
-       whose backprop owns no fragment (a parameter, root or not; a leaf, unless
-       [leaf_owns_backprop_fragment]) generates no requirement. *)
+       whose backprop owns no fragment (a term, parameters included -- [terminal_backprop])
+       generates no requirement. *)
     let requires = ref Asgns.no_fragments in
     let bcks =
       List.filter_map ordered_ts ~f:(fun ti ->
@@ -886,8 +882,7 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
         backprop with
         embedded_nodes = Set.union backprop.embedded_nodes !embedded_nodes;
         owned =
-          (if List.is_empty orig_ts && not leaf_owns_backprop_fragment then backprop.owned
-           else Set.add backprop.owned (g, Asgns.Bprop));
+          (if terminal_backprop then backprop.owned else Set.add backprop.owned (g, Asgns.Bprop));
         requires = Set.union backprop.requires !requires;
       }
     in
@@ -991,8 +986,8 @@ let%track7_sexp term ?init_data ?fetch_op ?grad_spec ?(label = []) ?(top_down_pr
   in
   let grad_spec = Option.value grad_spec ~default:If_needed in
   (* Note: terminal_op is used for both tensor creation and shape inference. *)
-  op ~label ?compose_op:None ?transpose_op:None ?terminal_op ~op_asn ~grad_asn ~grad_spec
-    ~top_down_prec make_shape []
+  op ~label ?compose_op:None ?transpose_op:None ?terminal_op ~terminal_backprop:true ~op_asn
+    ~grad_asn ~grad_spec ~top_down_prec make_shape []
 
 let float_to_label v = Float.to_string v |> String.chop_suffix_if_exists ~suffix:"."
 

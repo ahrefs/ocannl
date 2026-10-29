@@ -40,6 +40,12 @@ type compile_frontier = {
       (** The node and synthetic routine id of the most recent merge-buffer transfer in this
           compilation lineage. Unlike [last_writer], this names the transient merge slab write, not
           a write to the node's ordinary context buffer. *)
+  owners : (int * string) Map.M(Asgns.Fragment).t;
+      (** For each tensor-generated code fragment compiled in this lineage, the routine (id, name)
+          that owns it (gh-ocannl-1724). Only a successful link adds to it, and nothing removes from
+          it: an external write supersedes a value, not the code that computes it. *)
+  lineage_routines : Set.M(Int).t;
+      (** The routines compiled in this lineage: this context's compile ancestry. *)
 }
 (** Immutable compile-time frontier for execution dependency tracking. Each context carries its own
     frontier; only the context returned by [compile] receives the updated frontier. The original
@@ -96,6 +102,11 @@ type execution_ledger = {
   token_undo : token_undo list Hashtbl.M(Int).t;
       (** Per routine id, the tokens the routine's latest {!run} minted — what [rollback_execution]
           restores for a run known not to have written. *)
+  mutable fragment_registry : (int * string) list Map.M(Asgns.Fragment).t;
+      (** Every routine (id, name) of this root that owns each fragment, sibling lineages included
+          (gh-ocannl-1724). Diagnostic only: it lets a requirement refusal name an owner compiled in
+          a sibling lineage. Ownership itself is the frontier's [owners] -- a sibling never
+          satisfies a requirement. *)
 }
 (** Shared mutable state for execution tracking, allocated once per root context. Shared by
     reference across all contexts derived from the same root. *)
@@ -162,6 +173,8 @@ let empty_frontier =
     last_writer = Map.empty (module Tn);
     last_readers = Map.empty (module Tn);
     merge_buffer_writer = None;
+    owners = Map.empty (module Asgns.Fragment);
+    lineage_routines = Set.empty (module Int);
   }
 
 let create_ledger () =
@@ -178,6 +191,7 @@ let create_ledger () =
     fresh_writes = Hashtbl.create (module Int);
     observed_tokens = Map.empty (module Buffer_key);
     token_undo = Hashtbl.create (module Int);
+    fragment_registry = Map.empty (module Asgns.Fragment);
   }
 
 type t = {
@@ -344,6 +358,7 @@ type routine = {
   outputs : Set.M(Tn).t;
   routine_id : int;
   execution_deps : Set.M(Int).t;
+  requires : Set.M(Asgns.Fragment).t;
   mma : Ir.C_syntax.mma_summary;
   peel : Ir.C_syntax.peel_summary;
   volatility : Ir.C_syntax.volatility_summary;
@@ -517,8 +532,23 @@ let finish_link ctx comp wrapped
         let existing = Option.value (Map.find lr tn) ~default:empty_int_set in
         Map.set lr ~key:tn ~data:(Set.add existing id))
   in
+  (* gh-ocannl-1724: the fragments this routine owns join the returned lineage only (a sibling
+     compiled from [ctx] does not see them), and the root's diagnostic registry. *)
+  let owners =
+    Set.fold comp.Asgns.owned ~init:frontier.owners ~f:(fun owners fragment ->
+        Map.set owners ~key:fragment ~data:(id, name))
+  in
+  ctx.ledger.fragment_registry <-
+    Set.fold comp.Asgns.owned ~init:ctx.ledger.fragment_registry ~f:(fun registry fragment ->
+        Map.add_multi registry ~key:fragment ~data:(id, name));
   let new_frontier =
-    { frontier with last_writer = new_last_writer; last_readers = new_last_readers }
+    {
+      frontier with
+      last_writer = new_last_writer;
+      last_readers = new_last_readers;
+      owners;
+      lineage_routines = Set.add frontier.lineage_routines id;
+    }
   in
 
   (* Register in shared ledger *)
@@ -556,6 +586,7 @@ let finish_link ctx comp wrapped
       outputs;
       routine_id = id;
       execution_deps = deps;
+      requires = comp.Asgns.requires;
       mma;
       peel;
       volatility;
@@ -584,8 +615,21 @@ let frontend_gate ?prelowered comp =
   !Tn.session_gate ();
   Option.iter !Tn.validity_check ~f:(fun check ->
       let read, written = Ir.Assignments.collect_nodes_guess_output comp.Ir.Assignments.asgns in
+      (* The fragment metadata's nodes too (gh-ocannl-1724): optimization may have removed the code
+         that mentions them, and a stale handle must not get past the gate as metadata. *)
+      let fragment_nodes fragments =
+        Set.map (module Tn) fragments ~f:(fun ((tn, _) : Asgns.Fragment.t) -> tn)
+      in
       Set.iter
-        (Set.union_list (module Tn) [ read; written; comp.Ir.Assignments.embedded_nodes ])
+        (Set.union_list
+           (module Tn)
+           [
+             read;
+             written;
+             comp.Ir.Assignments.embedded_nodes;
+             fragment_nodes comp.Asgns.owned;
+             fragment_nodes comp.Asgns.requires;
+           ])
         ~f:check;
       (* A prelowered program replaces the comp's lowering: its nodes are the ones that run. *)
       Option.iter prelowered ~f:(fun (p : Ir.Low_level.optimized) ->
@@ -595,12 +639,114 @@ let frontend_gate ?prelowered comp =
    before anything of [tn] is forced, for the same reason (gh-ocannl-1505). *)
 let check_node_valid tn = Option.iter !Tn.validity_check ~f:(fun check -> check tn)
 
+(* gh-ocannl-1724: every tensor-generated fragment is compiled into exactly one routine of a
+   lineage. A backprop fragment is a [+=], so a second copy double-counts a gradient; a second
+   forward copy is a reuse the caller meant as [Context.run] of the first routine. Siblings
+   (compiled from a context that does not descend from the owner) are alternatives and never
+   collide. *)
+let check_no_duplicate_fragments ?name ctx (comp : Asgns.comp) =
+  let duplicates =
+    Set.to_list comp.owned
+    |> List.filter_map ~f:(fun fragment ->
+        Option.map (Map.find ctx.frontier.owners fragment) ~f:(fun owner -> (fragment, owner)))
+  in
+  if not (List.is_empty duplicates) then
+    let listed =
+      List.map duplicates ~f:(fun (fragment, (id, owner)) ->
+          Printf.sprintf "%s (compiled by routine %s, id=%d)"
+            (Asgns.Fragment.describe fragment)
+            owner id)
+      |> String.concat ~sep:"; "
+    in
+    raise
+    @@ Utils.User_error
+         (Printf.sprintf
+            "Context.compile%s: this computation carries code fragments already compiled in this \
+             context's lineage: %s. A fragment is compiled into one routine of a lineage -- a \
+             second copy of a backprop fragment would double-count a gradient. Run the earlier \
+             routine again with Context.run instead of recompiling it; to compile an alternative \
+             version, compile from a context that does not descend from that routine (a sibling)."
+            (match name with None -> "" | Some n -> " (" ^ n ^ ")")
+            listed)
+
+(* The frontier deciding which routines count as a routine's lineage at run time: the running
+   context's, when it descends from the routine's compile -- same root, and the routine among its
+   compile ancestry -- so an owner compiled after the routine counts; otherwise the routine's own
+   compile context's, i.e. the routine and its ancestors. A sibling's never counts. *)
+let lineage_frontier ctx routine =
+  if
+    phys_equal ctx.ledger routine.context.ledger
+    && Set.mem ctx.frontier.lineage_routines routine.routine_id
+  then ctx.frontier
+  else routine.context.frontier
+
+let sibling_owners ctx frontier fragment =
+  Map.find_multi ctx.ledger.fragment_registry fragment
+  |> List.filter ~f:(fun (id, _) -> not (Set.mem frontier.lineage_routines id))
+
+let describe_owners owners =
+  List.rev owners
+  |> List.map ~f:(fun (id, name) -> Printf.sprintf "%s (id=%d)" name id)
+  |> String.concat ~sep:", "
+
+(* gh-ocannl-1724: a routine whose gradient writes flow into a backprop fragment it does not carry
+   needs that fragment owned in its own lineage -- otherwise nothing ever propagates from that
+   gradient, and the drop is silent (the dangling write is dead code). Checked at run, not at
+   compile: the owner may legitimately be compiled after the routine. *)
+(* A required fragment's description, with any owner the root compiled outside [frontier]. *)
+let describe_unmet ctx frontier fragment =
+  let described = Asgns.Fragment.describe fragment in
+  match sibling_owners ctx frontier fragment with
+  | [] -> described ^ " (no routine of this root context compiled it)"
+  | owners ->
+      Printf.sprintf
+        "%s (owned by %s, compiled outside this lineage -- in a sibling, or after the context this \
+         runs from -- which does not count: a sibling is an alternative, not a part of this \
+         computation)"
+        described (describe_owners owners)
+
+let check_requirements ctx routine =
+  let frontier = lineage_frontier ctx routine in
+  let unmet = Set.filter routine.requires ~f:(fun f -> not (Map.mem frontier.owners f)) in
+  if not (Set.is_empty unmet) then
+    let listed =
+      Set.to_list unmet |> List.map ~f:(describe_unmet ctx frontier) |> String.concat ~sep:"; "
+    in
+    raise
+    @@ Utils.User_error
+         (Printf.sprintf
+            "Context.run: routine %s accumulates into gradients whose backprop code no routine of \
+             its lineage carries: %s. That backprop was embedded in another tensor's when it was \
+             built, or handed out to an earlier Train.grad_update (or dropped by \
+             Train.forward_once). Compile the routine carrying it in this lineage: compile one of \
+             the two routines from the context the other's compile returned, and run from the \
+             later context."
+            routine.name listed)
+
+(* The public form of a backend's missing-prior-node failure, with what the lineage knows about the
+   node when the computation requires a backprop fragment propagating from it (gh-ocannl-1724): the
+   dangling gradient is materialized, so the link fails before [run]'s requirement check could. *)
+let lacks_node_error ctx (comp : Asgns.comp) tn =
+  let base = "The linked context lacks node " ^ Tn.debug_name tn in
+  let fragment = (tn, Asgns.Bprop) in
+  if Set.mem comp.requires fragment && not (Map.mem ctx.frontier.owners fragment) then
+    Utils.User_error
+      (Printf.sprintf
+         "%s: no routine in this lineage propagates from %s -- this computation accumulates into \
+          it, but %s. Compile the routine carrying that backprop first, and compile this one from \
+          the context its compile returned."
+         base (Tn.debug_name tn)
+         (describe_unmet ctx ctx.frontier fragment))
+  else Utils.User_error base
+
 let compile_outcome ?name ?lowered_transform ?prelowered ?reuse ~provenance ?candidate ?retain ctx
     comp bindings =
   (* Raised, not returned as an outcome: a dead handle is the caller's error, not a property of any
      candidate, and no search over it can succeed. *)
   check_live ~fn:"compile" ctx;
   frontend_gate ?prelowered comp;
+  (* Likewise lineage-wide, and after the gate, so a discarded node is reported as such. *)
+  check_no_duplicate_fragments ?name ctx comp;
   (* Compile and link on the backend context; only backend-independent routine components (and the
      rewrapped context) escape the dispatch. Unwrapped rather than through [Backends.with_backend]
      so that a [retain]ed link (gh-ocannl-1440) can rewrap the context it links later. *)
@@ -608,7 +754,12 @@ let compile_outcome ?name ?lowered_transform ?prelowered ?reuse ~provenance ?can
   | Backends.Unwrapped (impl, bctx) -> (
       let module Backend = (val impl.Backends.bi_module) in
       let link code () =
-        let r = Ir.Compile_cost.time_link (fun () -> Backend.link bctx code) in
+        let r =
+          try Ir.Compile_cost.time_link (fun () -> Backend.link bctx code)
+          with Backends.Prior_context_lacks tn ->
+            let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+            Stdlib.Printexc.raise_with_backtrace (lacks_node_error ctx comp tn) backtrace
+        in
         (impl.Backends.bi_wrap r.BI.context, payload_of r)
       in
       (* The [Tile_mma] rendering census is collected HERE, once, around this routine's codegen
@@ -753,6 +904,9 @@ let check_lineage_runnable ctx routine =
   if not (phys_equal (upload_lineage ctx.wrapped) (upload_lineage routine.context.wrapped)) then
     check_live ~fn:"run (the routine's compile context)" routine.context;
   check_not_poisoned ctx;
+  (* Ahead of the initialization and dependency checks: an unpropagated gradient is the more basic
+     mistake, and its missing producer can surface below as an unrelated-looking input. *)
+  check_requirements ctx routine;
   (* Check that all required inputs are initialized, in two classes.
 
      A READ-BEFORE-WRITE input (the routine both reads it first and writes it: a counter, a running

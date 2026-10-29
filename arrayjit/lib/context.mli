@@ -87,6 +87,10 @@ type routine = private {
           hazards on ordinary tensor-node accesses plus the transfer routine supplying any
           merge-buffer read. An empty set means the routine is independent of all previously
           compiled or transferred routines in its lineage. *)
+  requires : Set.M(Ir.Assignments.Fragment).t;
+      (** The computation's {!Ir.Assignments.field-requires}: the backprop fragments its gradient
+          writes flow into without carrying them. {!run} refuses the routine unless a routine of its
+          lineage owns each one (gh-ocannl-1724). *)
   mma : Ir.C_syntax.mma_summary;
       (** How this routine's [Tile_mma] statements actually rendered (gh-ocannl-626): the
           {!Ir.C_syntax.mma_census} of this compile, collected by {!compile} itself and summarized
@@ -218,7 +222,14 @@ val compile :
     [Invalid_argument]. Exclusive with [prelowered].
 
     Refuses a {!release}d context with {!Ir.Utils.User_error}, raised rather than returned as an
-    outcome by {!compile_outcome} as well. *)
+    outcome by {!compile_outcome} as well. Likewise refuses, before lowering anything, a [comp]
+    owning a tensor fragment ({!Ir.Assignments.field-owned}) that a routine of this context's
+    compilation lineage already owns (gh-ocannl-1724), naming each fragment and that routine: a
+    fragment is compiled into one routine of a lineage -- a second copy of a backprop fragment would
+    double-count a gradient. Re-running the earlier routine is {!run}'s job; an alternative compile
+    (another [lowered_transform], a placement arm) is compiled as a sibling, from a context that
+    does not descend from the owner. The lineage records a routine's fragments only once its link
+    succeeds. *)
 
 type retained
 (** Compiled code that a successful {!compile_outcome} handed to its [retain] callback: the
@@ -314,6 +325,16 @@ val run : t -> routine -> t
     binds, not merely the node in some context -- unless allocation-time zero is declared its
     correct value ({!Ir.Tnode.mark_zero_valid}; every gradient is marked at creation, being an
     accumulator), so a forgotten data input is refused rather than read as zeros (gh-ocannl-1462).
+
+    Before any of that, the routine's {!field-requires} (gh-ocannl-1724): each backprop fragment its
+    gradient writes flow into must be owned by a routine of its lineage, or nothing would ever
+    propagate from that gradient (a silent drop: the unread write is dead code). The lineage is
+    [t]'s when [t] descends from the routine's compile (same root context, the routine among [t]'s
+    compile ancestry), so an owner compiled after the routine counts; otherwise the routine's own
+    compile context's -- the routine and its ancestors. A routine compiled in a sibling never
+    counts, even one that ran: a sibling is an alternative, not a part of this computation. The
+    refusal ({!Ir.Utils.User_error}) names the fragment and any owner compiled outside the lineage;
+    the fix is to compile one routine from the context the other's compile returned.
 
     A node every routine of a compile only reads (and that is not made context-owned by
     [Ir.Tnode.set_context_owned]) lives in its device's constant pool, which every independently
