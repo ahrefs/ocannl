@@ -241,7 +241,7 @@ let exec ~name ~n (llc, dst, src) ~src_vals =
         projections_debug = "carrier";
       }
   in
-  let comp = { Asgns.asgns = carrier; embedded_nodes = Set.of_list (module Tn) [ dst ] } in
+  let comp = Asgns.comp ~embedded:(Set.of_list (module Tn) [ dst ]) carrier in
   let ctx = Context.auto () in
   let ctx = Context.set_values ctx src src_vals in
   let ctx, routine =

@@ -46,6 +46,12 @@ val score_footprint :
     the driver page-rounds pool bases. Enumeration is canonical (by {!Ir.Tnode.uid}) so the greedy
     coloring is reproducible across processes. *)
 
+exception Prior_context_lacks of Ir.Tnode.t
+(** Raised by a backend's [link] for a node the code needs from a prior context that the linked
+    context does not hold. [Context] is [link]'s one caller and turns it into a
+    {!Ir.Utils.User_error} naming the node, with what its compilation lineage knows about it
+    (gh-ocannl-1724). *)
+
 val with_segments_census : (unit -> 'a) -> 'a * Ir.Low_level.optimized list
 (** gh-ocannl-1006: runs [f] and returns, beside its result, the kernel segments the backend compile
     inside it shipped — one element per kernel, in launch order, exactly what the compile's

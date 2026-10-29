@@ -4,9 +4,12 @@ new consumer starts as a forward root: true
 new consumer starts as a backprop root: true
 forward replay keeps comp identity with a newer root: true
 backprop replay keeps comp identity with a newer root: true
+a forward replay in the first routine's lineage is refused: true
+a backprop replay in the first routine's lineage is refused: true
 recompiled forward reads changed inputs: true
 recompiled backprop resets and recomputes gradients: true
 replay leaves the newer forward root intact: true
 replay leaves the newer backprop root intact: true
 new consumer executes after replay: true
+the consumer's backprop requires y's, which the composed routine carries: true
 new consumer and replayed fragment compose gradients: true

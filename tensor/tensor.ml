@@ -35,12 +35,12 @@ type diff = { grad : (Tn.t[@sexp.opaque]); zero_grads : Asgns.comp; backprop : A
 
 (* What became of the tensor's code once it stopped being a root. A root leaves the session's root
    map when a consumer embeds it, when it is handed out ([consume_forward_code], [take_forward_code]
-   -- the [%cd] embedding path -- or [consume_backprop_code]) and when it is discarded
-   ([discard_backprop_code], the [Train.forward_once] path); repeated handout is allowed only for
-   [Taken], so every non-embedding removal records its kind here. The cell is mutable and shared by
-   record copies that preserve code ownership; [param] starts a fresh cell when it changes
+   -- the [%cd] embedding path -- or [consume_backprop_code]); repeated handout is allowed for
+   [Taken], so every non-embedding removal records its kind here. A second copy of handed-out code
+   in one compilation lineage is the lineage's to refuse (gh-ocannl-1724). The cell is mutable and
+   shared by record copies that preserve code ownership; [param] starts a fresh cell when it changes
    ownership. Markers stay on tensors rather than accumulating in session-global storage. *)
-type handout = Not_handed_out | Taken | Discarded [@@deriving sexp_of, equal]
+type handout = Not_handed_out | Taken [@@deriving sexp_of, equal]
 type consumption = { mutable fwd : handout; mutable bprop : handout } [@@deriving sexp_of]
 
 module rec Self : sig
@@ -195,10 +195,9 @@ let record_checkpoint () =
 
 let () = Shape.set_on_closure record_checkpoint
 
-(* An external handout of closed work (code given to a caller, or a backprop root dropped by a
-   forward-only run) is a closed-world act: record it in the checkpoint too, so a rewind never
-   resurrects a root whose code the caller holds. Embeddings by constructions are not recorded --
-   those constructions are what a rewind discards. *)
+(* An external handout of closed work (code given to a caller) is a closed-world act: record it in
+   the checkpoint too, so a rewind never resurrects a root whose code the caller holds. Embeddings
+   by constructions are not recorded -- those constructions are what a rewind discards. *)
 let record_handout_in_checkpoint ~fwd t =
   if t.value.id < checkpoint.ck_mark then
     if fwd then checkpoint.ck_fwd <- Map.remove checkpoint.ck_fwd t.value.id
@@ -211,15 +210,6 @@ let record_handout_in_checkpoint ~fwd t =
    alike), with the provenance of the rewind that discarded each. *)
 let discarded_nodes : (int, string) Hashtbl.t = Hashtbl.create (module Int)
 let discarded_by (tn : Tn.t) = Hashtbl.find discarded_nodes tn.uid
-
-(* Marks only what it removes: a backprop code handed out before the forward-only run stays [Taken],
-   so later consumption can still return the code rather than reject a discard that dropped
-   nothing. *)
-let discard_backprop_code t =
-  if is_bprop_root t then (
-    record_handout_in_checkpoint ~fwd:false t;
-    remove_bprop_root t;
-    t.consumption.bprop <- Discarded)
 
 let with_unchanged_roots ~f =
   let fwd_roots = session_state.forward_roots in
@@ -287,7 +277,10 @@ let%debug7_sexp rec init_params ?skip (t : t) : Asgns.comp =
           Set.add (Set.union embedded_nodes rs.forward.embedded_nodes) rs.value
         else embedded_nodes
   in
-  { Asgns.asgns; embedded_nodes }
+  (* Initialization owns no fragment (gh-ocannl-1724): it is re-run on purpose ([reinit_all], and
+     [Train.run_once] initializing missing parameters on every call), and the seed is a singleton --
+     so the parameters' forward fragments are not carried here. *)
+  Asgns.comp ~embedded:embedded_nodes asgns
 
 let initial_default_prec =
   Ir.Ops.prec_of_string (Utils.get_global_arg ~default:"single" ~arg_name:"default_prec")
@@ -470,10 +463,15 @@ let register_constant_host_init tn values =
        | _ -> Nd.set_flat_values ?padding:pads ~cycle:true nd values);
        nd))
 
+(* [terminal_backprop] (gh-ocannl-1724): the tensor's backprop is terminal by construction -- set by
+   {!term}, whose [grad_asn] is the constant [empty_comp] -- so it owns no backprop fragment, and a
+   later consumer finding it no longer a backprop root generates no requirement for it. Parameters
+   are built by [term] too (and [force_param_diff] gives them an empty backprop besides). Decided by
+   the maintainer ("exempt all terms", ahrefs/ocannl#1724): there is no code to propagate. *)
 let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un) ?terminal_op
-    ?shape_logic ~op_asn ~grad_asn ?(grad_spec = If_needed) ?(top_down_prec = false) make_shape
-    (orig_ts : t list) : t =
+    ?shape_logic ?(terminal_backprop = false) ~op_asn ~grad_asn ?(grad_spec = If_needed)
+    ?(top_down_prec = false) make_shape (orig_ts : t list) : t =
   List.iter orig_ts ~f:(fun t ->
       if t.value.id >= session_state.next_id then
         raise
@@ -743,9 +741,14 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
      is registered (gh-ocannl-1301): a construction that fails before that leaves no link on its
      operands, so it does not taint the session. *)
   List.iter top_down_ts ~f:(fun ti -> update_infer_prec ti ti.value v.Tn.storage_prec);
+  (* The forward fragment of [t] (gh-ocannl-1724): [(v, Fwd)] plus, through [Asgns.sequence], the
+     fragments of the forward-root children embedded above. *)
   let forward =
-    Asgns.
-      { asgns = forward.asgns; embedded_nodes = Set.union forward.embedded_nodes !embedded_nodes }
+    {
+      forward with
+      embedded_nodes = Set.union forward.embedded_nodes !embedded_nodes;
+      owned = Set.add forward.owned (v, Asgns.Fwd);
+    }
   in
   List.iter ordered_ts ~f:(fun ti -> remove_fwd_root ti);
   let t = { t with forward } in
@@ -788,7 +791,7 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
          {!Train.zero_params_grads} does) must be able to allocate them rather than require them of
          a prior context. *)
       Asgns.sequence @@ zeros
-      @ [ { Asgns.asgns = fetch_zeros g shape; embedded_nodes = Set.singleton (module Tn) g } ]
+      @ [ Asgns.comp ~embedded:(Set.singleton (module Tn) g) (fetch_zeros g shape) ]
     in
     let embedded_nodes = ref @@ Set.singleton (module Tn) g in
     (* The code needs to be included in the reverse order to which it was computed. This guarantees
@@ -802,6 +805,14 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
             Set.add (Set.union !embedded_nodes diff.backprop.embedded_nodes) diff.grad;
           diff.backprop)
     in
+    (* The backprop fragments this one's gradient writes flow into without carrying them
+       (gh-ocannl-1724): a differentiable non-parameter child that is no longer a backprop root had
+       its backprop embedded by an earlier consumer, or handed out, so some other routine of the
+       lineage must propagate from its gradient. Derived from the child's own ownership: a child
+       whose backprop owns no fragment (a term, parameters included -- [terminal_backprop])
+       generates no requirement; nor does one whose gradient this operation's [grad_asn] does not
+       write (a [where] predicate, a comparison's operands), filtered below. *)
+    let requires = ref Asgns.no_fragments in
     let bcks =
       List.filter_map ordered_ts ~f:(fun ti ->
           if is_bck_root ti then
@@ -811,7 +822,14 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
                   embedded_nodes := Set.add !embedded_nodes diff.grad);
               None)
             else bprop ti
-          else None)
+          else (
+            (match ti.diff with
+            | Some diff
+              when (not (Set.mem t.params ti))
+                   && Set.mem diff.backprop.owned (diff.grad, Asgns.Bprop) ->
+                requires := Set.add !requires (diff.grad, Asgns.Bprop)
+            | _ -> ());
+            None))
     in
     (* Mirror of the forward-fragment ordering above (gh-461), with the edge reversed: a fragment
        accumulating into a node's gradient must precede the fragment that embeds the node's backprop
@@ -845,14 +863,20 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     (* [grad_asn] runs inside the construction window too: the operands' roots are already removed
        and the result's not yet installed, so a closure here would checkpoint an incomplete graph
        (gh-ocannl-1301). *)
-    let backprop =
-      Asgns.sequence
-      @@ (Shape.with_construction_window (fun () -> grad_asn ~t ~g ~projections) :: bcks)
+    let own_grad_asn = Shape.with_construction_window (fun () -> grad_asn ~t ~g ~projections) in
+    let backprop = Asgns.sequence (own_grad_asn :: bcks) in
+    let requires =
+      let written = Asgns.collect_written own_grad_asn.asgns in
+      Set.filter !requires ~f:(fun ((grad, _) : Asgns.Fragment.t) -> Set.mem written grad)
     in
+    (* The backprop fragment of [t]: [(g, Bprop)] plus the embedded children's fragments. *)
     let backprop =
       {
-        Asgns.asgns = backprop.asgns;
+        backprop with
         embedded_nodes = Set.union backprop.embedded_nodes !embedded_nodes;
+        owned =
+          (if terminal_backprop then backprop.owned else Set.add backprop.owned (g, Asgns.Bprop));
+        requires = Set.union backprop.requires requires;
       }
     in
     (* As in the forward-only branch: the root changes below count, and nothing after them fails. *)
@@ -955,8 +979,8 @@ let%track7_sexp term ?init_data ?fetch_op ?grad_spec ?(label = []) ?(top_down_pr
   in
   let grad_spec = Option.value grad_spec ~default:If_needed in
   (* Note: terminal_op is used for both tensor creation and shape inference. *)
-  op ~label ?compose_op:None ?transpose_op:None ?terminal_op ~op_asn ~grad_asn ~grad_spec
-    ~top_down_prec make_shape []
+  op ~label ?compose_op:None ?transpose_op:None ?terminal_op ~terminal_backprop:true ~op_asn
+    ~grad_asn ~grad_spec ~top_down_prec make_shape []
 
 let float_to_label v = Float.to_string v |> String.chop_suffix_if_exists ~suffix:"."
 
@@ -1066,8 +1090,7 @@ let force_param_diff t =
   let diff =
     {
       grad = g;
-      zero_grads =
-        { Asgns.asgns = fetch_zeros g t.shape; embedded_nodes = Set.singleton (module Tn) g };
+      zero_grads = Asgns.comp ~embedded:(Set.singleton (module Tn) g) (fetch_zeros g t.shape);
       backprop = Asgns.empty_comp;
     }
   in
@@ -1158,16 +1181,10 @@ let%debug7_sexp param ?(require_grad = true) ~t (name : string) ?(more_label = [
 let debug_name t = Tn.debug_name t.value
 let debug_grad t = Tn.debug_name (Option.value_exn t.diff).grad
 
-(* Taken code can be handed out repeatedly. Other non-roots still need a reason: discarded backprop,
-   a parameter's absent forward code, or code owned by a tensor consumer. *)
+(* Taken code can be handed out repeatedly. Other non-roots still need a reason: a parameter's
+   absent forward code, or code owned by a tensor consumer. *)
 let not_a_root_reason ~(handout : handout) ~what ~name t =
   match handout with
-  | Discarded ->
-      [%string
-        "Tensor.consume_%{what}_code: the %{what} code of %{name} was discarded \
-         (Train.forward_once runs a differentiable tensor forward-only and drops its backprop \
-         root); to backpropagate, build the tensor afresh and use Train.update_once or \
-         Train.grad_update"]
   | Taken -> assert false (* The consume functions return before reaching this rejection. *)
   | Not_handed_out when String.equal what "forward" && Set.mem t.params t ->
       [%string

@@ -85,17 +85,48 @@ type t =
   | Fetch of { array : Tn.t; fetch_op : fetch_op; dims : int array Lazy.t }
 [@@deriving sexp_of]
 
+type side = Fwd | Bprop [@@deriving sexp, compare, equal]
+
+(* A code fragment generated from a tensor, identified by its owner node and side (gh-ocannl-1724):
+   [(t.value, Fwd)] is [t]'s forward code, the code defining [t.value]; [(t.grad, Bprop)] is [t]'s
+   backprop code, the code propagating FROM [t.grad] into its children's gradients -- which other
+   fragments write too, so a fragment is not identified by the node it writes. *)
+module Fragment = struct
+  module T = struct
+    type t = Tn.t * side [@@deriving compare, sexp_of]
+  end
+
+  include T
+  include Comparator.Make (T)
+
+  let describe ((tn, side) : t) =
+    match side with
+    | Fwd -> "the forward code of " ^ Tn.debug_name tn ^ " (defining it)"
+    | Bprop -> "the backprop code propagating from " ^ Tn.debug_name tn
+end
+
 type comp = {
   asgns : t;
   embedded_nodes : Set.M(Tn).t;
       (** The nodes in {!field-asgns} that are not in [embedded_nodes] need to already be in
           contexts linked with the {!comp}. *)
+  owned : Set.M(Fragment).t;
+      (** The tensor-generated code fragments this computation carries (gh-ocannl-1724). *)
+  requires : Set.M(Fragment).t;
+      (** The backprop fragments this computation's gradient writes flow into, which it does not
+          carry itself: some routine of the lineage must own each one. *)
 }
 [@@deriving sexp_of]
 (** Computations based on assignments. Note: the [arrayjit] library makes use of, but does not
-    produce nor verify the {!field-embedded_nodes} associated to some given {!field-asgns}. *)
+    produce the {!field-embedded_nodes}, {!field-owned} and {!field-requires} associated to some
+    given {!field-asgns}; [Context] checks [owned] and [requires] per compilation lineage. *)
 
-let to_comp asgns = { asgns; embedded_nodes = Set.empty (module Tnode) }
+let no_fragments = Set.empty (module Fragment)
+
+let comp ?(owned = no_fragments) ?(requires = no_fragments) ~embedded asgns =
+  { asgns; embedded_nodes = embedded; owned; requires }
+
+let to_comp asgns = comp ~embedded:(Set.empty (module Tnode)) asgns
 let empty_comp = to_comp Noop
 
 (** The buffers an [accum_rhs] mentions, in argument order. For [Rev_sides] these are the WRITTEN-TO
@@ -216,6 +247,8 @@ let sequence l =
   {
     asgns = sequential (List.map l ~f:(fun c -> c.asgns));
     embedded_nodes = Set.union_list (module Tn) (List.map l ~f:(fun c -> c.embedded_nodes));
+    owned = Set.union_list (module Fragment) (List.map l ~f:(fun c -> c.owned));
+    requires = Set.union_list (module Fragment) (List.map l ~f:(fun c -> c.requires));
   }
 
 let collect_neutral_elem (asgns : t) : float option =

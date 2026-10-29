@@ -1911,15 +1911,8 @@ let%track3_sexp run_once ?(output_cd_file = false) ?(skip_init = false) ?reinit_
 
 let forward_once ?output_cd_file ?(skip_init = false) ?reinit_all ?(bindings = IDX.empty)
     ?launch_values ?budget ?max_candidates ?budget_report ctx t =
-  let ctx =
-    run_once ?output_cd_file ~skip_init ?reinit_all ~bindings ?launch_values ?budget ?max_candidates
-      ?budget_report ~f:forward ctx t
-  in
-  (* The [once]: the tensor is not reusable after this run, so its backprop handout is discarded.
-     Whether this discard survives, or the contract is enforced by a per-lineage duplicate-fragment
-     check instead, is gh-ocannl-1724's. *)
-  Tensor.discard_backprop_code t;
-  ctx
+  run_once ?output_cd_file ~skip_init ?reinit_all ~bindings ?launch_values ?budget ?max_candidates
+    ?budget_report ~f:forward ctx t
 
 let update_once ?output_cd_file ?(skip_init = false) ?reinit_all ?(bindings = IDX.empty)
     ?launch_values ?budget ?max_candidates ?budget_report ctx t =

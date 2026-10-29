@@ -74,6 +74,12 @@ let () =
     Ir.Assignments.sequence
       [ Train.grad_update loss; Train.sgd_update ~learning_rate ~momentum:0.5 loss ]
   in
+  (* gh-ocannl-1724: a lineage refuses a tensor fragment compiled twice. This test's recompiles in
+     one lineage exercise compiling and tuning a step its lineage already compiled, which an unowned
+     copy of the program -- the same assignments, no fragment metadata -- still does. *)
+  let comp =
+    Ir.Assignments.comp ~embedded:comp.Ir.Assignments.embedded_nodes comp.Ir.Assignments.asgns
+  in
   (* A lineage holding stored computations (the warm-up step's) and an inline preference. *)
   let lineage () =
     let ctx = Train.init_params (Context.auto ()) IDX.empty loss in

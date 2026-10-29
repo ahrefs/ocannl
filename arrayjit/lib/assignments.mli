@@ -54,8 +54,43 @@ type t =
   | Fetch of { array : Tnode.t; fetch_op : fetch_op; dims : int array Utils.Lazy.t }
 [@@deriving sexp_of]
 
-type comp = { asgns : t; embedded_nodes : Set.M(Tnode).t } [@@deriving sexp_of]
+type side = Fwd | Bprop [@@deriving sexp, compare, equal]
 
+(** A code fragment generated from a tensor, identified by its owner node and side (gh-ocannl-1724):
+    [(t.value, Fwd)] is [t]'s forward code; [(t.grad, Bprop)] is [t]'s backprop code, the code
+    propagating {i from} [t.grad] into its children's gradients. *)
+module Fragment : sig
+  type t = Tnode.t * side [@@deriving compare, sexp_of]
+  type comparator_witness
+
+  val comparator : (t, comparator_witness) Comparator.t
+
+  val describe : t -> string
+  (** E.g. "the backprop code propagating from grad_t", for refusal messages. *)
+end
+
+type comp = {
+  asgns : t;
+  embedded_nodes : Set.M(Tnode).t;
+      (** The nodes in {!field-asgns} that are not in [embedded_nodes] need to already be in
+          contexts linked with the {!comp} -- an initialization claim, not ownership. *)
+  owned : Set.M(Fragment).t;
+      (** The tensor-generated code fragments this computation carries. [Context.compile] refuses a
+          computation owning a fragment some routine of its compilation lineage already owns. *)
+  requires : Set.M(Fragment).t;
+      (** The backprop fragments its gradient writes flow into that it does not carry itself.
+          [Context.run] refuses the routine unless a routine of its own lineage (never a sibling)
+          owns each one. *)
+}
+[@@deriving sexp_of]
+(** Computations based on assignments. [Tensor] construction fills in all three sets; zeroing,
+    initialization and hand-written [%cd] assignments own and require nothing. *)
+
+val comp :
+  ?owned:Set.M(Fragment).t -> ?requires:Set.M(Fragment).t -> embedded:Set.M(Tnode).t -> t -> comp
+(** The computation constructor; [owned] and [requires] default to empty. *)
+
+val no_fragments : Set.M(Fragment).t
 val to_comp : t -> comp
 val empty_comp : comp
 val context_nodes : plc:Tnode.Placements.t -> t -> Tnode.t_set

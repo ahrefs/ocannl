@@ -70,7 +70,7 @@ let make_comp ~name ~src ~x ~out ~repeat_cell0 =
   in
   let asgns = Asgns.Block_comment (name, Asgns.Seq (produce, consume)) in
   let embedded_nodes = Set.of_list (module Tn) [ x; out ] in
-  { Asgns.asgns; embedded_nodes }
+  Asgns.comp ~embedded:embedded_nodes asgns
 
 let () =
   let src = mk ~dims:[| n |] "src" in

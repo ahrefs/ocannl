@@ -778,6 +778,16 @@ let%track6_sexp lower_assignments ~limits optim_ctx ?name bindings asgns =
       optim_ctx ~unoptim_ll_source ~ll_source ~cd_source ~name (Indexing.bound_symbols bindings)
       asgns )
 
+(* A node the code needs from a prior context that the linked context does not hold. Structured, so
+   that [Context] -- the one caller of [link] -- can name the node in its lineage's terms
+   (gh-ocannl-1724) before turning it into the public [Utils.User_error]. *)
+exception Prior_context_lacks of Tn.t
+
+let () =
+  Stdlib.Printexc.register_printer (function
+    | Prior_context_lacks tn -> Some ("The linked context lacks node " ^ Tnode.debug_name tn)
+    | _ -> None)
+
 let%debug3_sexp verify_prior_context ~(plc : Tn.Placements.t) ~ctx_arrays ~from_prior_context : unit
     =
   Set.iter from_prior_context ~f:(fun tn ->
@@ -788,7 +798,7 @@ let%debug3_sexp verify_prior_context ~(plc : Tn.Placements.t) ~ctx_arrays ~from_
            self-initialize in this context at link time from [Host_inits] (gh-ocannl-333), so they
            need not be present in a prior context. *)
         && not (Host_inits.mem tn)
-      then raise @@ Utils.User_error ("The linked context lacks node " ^ Tnode.debug_name tn))
+      then raise @@ Prior_context_lacks tn)
 
 (* Free one pool and drop its census entry -- the pair every cleanup path must keep together, or a
    freed slab stays counted (gh-ocannl-550). *)

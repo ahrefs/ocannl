@@ -1,0 +1,49 @@
+A: w.grad = 6 w: true
+B: the backprop's read of the once-run's scratch leaf is refused, naming it and the fix: true
+B: the loss compiles and runs in the once-run's lineage: true
+B: w.grad equals the fresh graph's: true
+B': the loss compiles and runs: true
+B': w.grad equals the fresh graph's: true
+B': t.grad is the loss's seed times 3: true
+G1: the step compiles and runs: true
+G1: w is trained: true
+G2: the step compiles and runs: true
+G2: w is trained: true
+G2: v is trained: true
+the materialized reference: w.grad = 24 w: true
+u is not stored by the once-run: true
+the loss over the once-run's virtual intermediate compiles and runs: true
+w.grad equals the materialized reference's: true
+C: the second, on the returned context, is refused naming t's forward fragment: true
+C: the refusal left the first run's value: true
+C: the same compile as a sibling is accepted: true
+C: the sibling computes t: true
+D: the second, on the returned context, is refused naming loss's backprop fragment: true
+D: the same compile as a sibling is accepted: true
+D: the sibling trains w: true
+E: Train.forward t in the once-run's lineage is refused: true
+E: as a sibling it is accepted: true
+F: Train.grad_update loss in the once-run's lineage is refused: true
+F: as a sibling it is accepted: true
+l2 requires h's backprop fragment: true
+with no owner compiled, l2 is refused at run naming h's backprop fragment: true
+an owner compiled -- and run -- in a sibling does not count, and is named: true
+l2 compiled in l1's lineage is accepted (no claim on the gradient values): true
+run from the context before the owner's compile, l2's routine is refused: true
+run from the owner's descendant, l2's routine is accepted: true
+the two roots' routines share an id: true
+another root's owner with the same id lends nothing: true
+a non-root parameter child generates no requirement: true
+two losses over one parameter, one lineage: true
+zero_params_grads beside grad_update ~accum_steps: true
+momentum SGD steps twice: true
+init_params ~reinit_all after training: true
+a non-root operand whose gradient the operation does not write is not required: true
+forward owns its own and its embedded children's fragments, repeated operands once: true
+backprop owns its own and its embedded children's fragments: true
+a %cd embedding carries the operand's forward fragment: true
+a %cd assignment's own code owns nothing beyond its embedded operands' fragments: true
+a term owns no backprop fragment: true
+a consumer of a term that is no longer a backprop root requires nothing of it: true
+a second loss over a shared Require_grad leaf trains without the first's backprop: true
+the leaf's gradient is the second loss's: true

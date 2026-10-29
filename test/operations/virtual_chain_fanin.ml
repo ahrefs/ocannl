@@ -1276,12 +1276,10 @@ let phase6 () =
   let out11 = TDSL.O.( + ) v11 v11 in
   Train.set_materialized out11.Tensor.value;
   let overwrite_w4 : Ir.Assignments.comp =
-    {
-      asgns =
-        Ir.Assignments.Fetch
-          { array = w4.Tensor.value; fetch_op = Ir.Assignments.Constant 0.; dims = lazy [| dim |] };
-      embedded_nodes = Set.singleton (module Tn) w4.Tensor.value;
-    }
+    Ir.Assignments.comp
+      ~embedded:(Set.singleton (module Tn) w4.Tensor.value)
+      (Ir.Assignments.Fetch
+         { array = w4.Tensor.value; fetch_op = Ir.Assignments.Constant 0.; dims = lazy [| dim |] })
   in
   let comp_consume_then_write =
     Ir.Assignments.sequence [ Tensor.consume_forward_code out11; overwrite_w4 ]

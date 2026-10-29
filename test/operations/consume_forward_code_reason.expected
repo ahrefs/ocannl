@@ -6,10 +6,6 @@ subterm: does not claim a prior consumption: true
 second backprop consume: returns the same comp: true
 backprop subterm: says the code is embedded in a consumer: true
 after a %cd embedding: returns the tensor's comp: true
-discarded backprop: says it was discarded: true
-discarded backprop: names forward_once: true
-discarded backprop: does not blame a consumer: true
-discard after consume: preserves replay: true
 consumption inside with_unchanged_roots is undone: true
 and the root can then be consumed once: true
 first handout still rejects a conflicting root: true

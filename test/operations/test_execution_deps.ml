@@ -205,8 +205,12 @@ let test_merge_buffer_read_dependency () =
   Train.set_materialized merge_output.Tensor.value;
   Train.set_materialized destination_tick.Tensor.value;
   let source_write = [%cd merge_value =: source_values] in
+  (* Unowned copies (the same assignments, no fragment metadata): the test compiles the writer twice
+     along one lineage, which a lineage refuses for the tensor fragments it embeds
+     (gh-ocannl-1724). *)
   let named_source_write name =
-    { source_write with asgns = Ir.Assignments.Block_comment (name, source_write.asgns) }
+    Ir.Assignments.comp ~embedded:source_write.embedded_nodes
+      (Ir.Assignments.Block_comment (name, source_write.asgns))
   in
   let source_root = Context.auto () in
   let source_ctx, source_writer =
@@ -248,11 +252,10 @@ let test_merge_buffer_read_dependency () =
       merge_value.Tensor.value
   in
   let consumer_comp = [%cd merge_output =: merge_value.merge] in
+  (* Unowned, like the source writer: the consumer is compiled again along its lineage below. *)
   let consumer_comp =
-    {
-      consumer_comp with
-      asgns = Ir.Assignments.Block_comment ("merge_dep_consumer", consumer_comp.asgns);
-    }
+    Ir.Assignments.comp ~embedded:consumer_comp.embedded_nodes
+      (Ir.Assignments.Block_comment ("merge_dep_consumer", consumer_comp.asgns))
   in
   let consumer_ctx, consumer = Context.compile merge_ctx consumer_comp IDX.empty in
   Verdict.p "merge consumer has exactly the transfer dependency"

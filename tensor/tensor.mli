@@ -23,15 +23,14 @@ type projections = {
 type handout =
   | Not_handed_out
   | Taken
-  | Discarded
       (** What became of one side of a tensor's code once it stopped being a root: [Taken] by
           {!consume_forward_code}, {!take_forward_code} (the [%cd] embedding path) or
-          {!consume_backprop_code}; [Discarded] by {!discard_backprop_code}; [Not_handed_out] while
-          it is a root, and for a parameter or a subterm whose code a consumer embeds. *)
+          {!consume_backprop_code}; [Not_handed_out] while it is a root, and for a parameter or a
+          subterm whose code a consumer embeds. *)
 
 type consumption = { mutable fwd : handout; mutable bprop : handout }
 (** A mutable cell shared by every copy of the record, so the marker follows the tensor; it is what
-    lets the consume functions say "already consumed" or "discarded" rather than "not a root". *)
+    lets the consume functions say "already consumed" rather than "not a root". *)
 
 type diff = {
   grad : tn;
@@ -99,13 +98,6 @@ val take_forward_code : t -> comp
     that embeds a tensor's forward code goes through -- {!consume_forward_code} and the [%cd]
     operands' embedding alike -- so that a later {!consume_forward_code} on the same tensor returns
     the same comp. *)
-
-val discard_backprop_code : t -> unit
-(** Drops [t] from the backprop roots without handing its code out, and marks it so: the
-    forward-only run of a differentiable tensor ({!Train.forward_once}). A later
-    {!consume_backprop_code} then reports the discard rather than a consumer that does not exist.
-    Every route by which a root leaves the root maps without a consumer records itself this way --
-    the bare removal is not exported. *)
 
 val with_unchanged_roots : f:(unit -> 'a) -> 'a
 (** Runs [f] and restores the forward and backprop root maps afterwards, including the consumption
@@ -282,9 +274,10 @@ val consume_backprop_code : t -> comp
 (** A backprop root is a differentiable tensor not currently receiving gradients from another
     tensor. Checks non-embedded reads against other live backprop roots on the first handout and
     removes [t] from the backprop roots. Subsequent calls return the same comp without checking or
-    modifying newer roots, as for {!consume_forward_code}. Non-differentiable tensors, embedded
-    subtensors and discarded backprop remain rejected. The returned code does not include
-    [zero_grads] or seeding the output gradient; callers must still arrange those for each run. *)
+    modifying newer roots, as for {!consume_forward_code}; compiling the replayed code a second time
+    in one compilation lineage is refused by [Context.compile] (gh-ocannl-1724). Non-differentiable
+    tensors and embedded subtensors remain rejected. The returned code does not include [zero_grads]
+    or seeding the output gradient; callers must still arrange those for each run. *)
 
 val iter_embedded : f:(tn -> unit) -> t -> unit
 (** [iter_embedded t] iterates over all descendant nodes that are embedded, i.e. are members of
