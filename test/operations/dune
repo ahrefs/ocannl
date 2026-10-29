@@ -4575,7 +4575,11 @@
 
 (rule
  ; ocannl-backend: none -- links no backend: it reads test sources through Verdict_scan as text.
- (target verdict_ratchet.actual)
+ ; gh-ocannl-1720: the file list goes over as a `@<path>` response file, as `env_var_deps`' does.
+ ; Expanded into argv, this command line was about 32,500 characters on Windows on 2026-10-28 and
+ ; crossed the 32,767 cap within a day, where `CreateProcess` fails with `No such file or
+ ; directory`. See `test/support/scan_argv.ml`.
+ (targets verdict_ratchet.actual verdict_ratchet.filelist)
  (package neural_nets_lib)
  (deps
   (alias runtest-env_spelling_gate)
@@ -4584,9 +4588,16 @@
   (glob_files_rec ../../test/*.ml)
   (glob_files_rec ../../arrayjit/test/*.ml))
  (action
-  (with-stdout-to
-   %{target}
-   (run %{dep:verdict_ratchet.exe} %{workspace_root} %{deps}))))
+  (progn
+   (with-stdout-to
+    verdict_ratchet.filelist
+    (echo "%{deps}"))
+   (with-stdout-to
+    verdict_ratchet.actual
+    (run
+     %{dep:verdict_ratchet.exe}
+     %{workspace_root}
+     @verdict_ratchet.filelist)))))
 
 (rule
  (alias runtest-verdict_ratchet)
@@ -7000,6 +7011,10 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
+ ; gh-ocannl-1720: one executable, one build_files/ subdirectory, which `Generated.init` empties at
+ ; startup: without the lock the -tf32 rerun below sweeps this run's artifacts mid-run (on Windows
+ ; the delete is refused, the kernel libraries being loaded, and the rerun fails).
+ (locks schedule_conv_gemm)
  (modules schedule_conv_gemm)
  (libraries
   base
@@ -7023,6 +7038,8 @@
   (alias runtest-env_spelling_gate)
   ocannl_config
   (env_var OCANNL_BACKEND))
+ ; The plain run's lock: both runs own build_files/schedule_conv_gemm/ (gh-ocannl-1720).
+ (locks schedule_conv_gemm)
  (action
   (with-stdout-to
    %{target}
