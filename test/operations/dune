@@ -7637,6 +7637,20 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1712: every whole-routine seed's fused-epilogue twin, executed bitwise against the
+; unfused reference, on sites whose seeds produce single-trip loops and partitioned segments.
+
+(test
+ (name epilogue_fusion_single_trip_sweep)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules epilogue_fusion_single_trip_sweep)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-1674: the same claims with tf32_matmuls on, which opens CUDA's tf32 tile to the f32
 ; operands, so its mma-gated epilogue seeds execute on CUDA instead of skipping; a no-op elsewhere. One golden for both
 ; runs.

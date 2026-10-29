@@ -413,4 +413,107 @@ let () =
          (String.is_substring msg ~substring:"Schedule.Fuse_epilogue"
          && String.is_substring msg ~substring:"does not index it")
    | None -> p "epf_partial_storeback rejected with a targeted error" false);
+  (* gh-ocannl-1712: the k-block [Partition] of the padded packed seeds (gh-ocannl-1670), hand-built
+     on their transformer_names geometry: a batched GEMM of 15 rows, padded to one 16-row block, and
+     k = 28, padded to two 16-deep blocks and partitioned at the last full block by the seeds' own
+     spelling ([Sched.pad_edge_partition]), on the width-1 lane the CPU packed pipelines tensorize
+     with. Where the k-block loop sits decides the store-back. Under the row-block loop, the
+     accumulator contraction spans the k-block loop and both its segments, and the one store-back
+     follows the whole reduction: the fusion is sound, and its values must equal the two-kernel run
+     (exactly: every value is a small dyadic). With the k-block loop above the row blocks (the
+     packed seeds' order), the accumulator's base indices name the row block bound inside it, so
+     nothing contracts across it: each single-trip segment stores its own partial accumulation back,
+     inside the batch loop that encloses both, and no enclosing loop of extent > 1 betrays the first
+     store-back as partial. That fusion must be refused for the second segment's write. *)
+  let b_pad = 2 and m_pad = 15 and k_pad = 28 in
+  let make_padded_graph tag =
+    let mav =
+      Array.init
+        (b_pad * m_pad * k_pad)
+        ~f:(Ll_test.cycle_flat ~dims:[| b_pad * m_pad; k_pad |] ~modulus:13 ~offset:0. ~stride:0.25)
+    in
+    let mbv =
+      Array.init (k_pad * n)
+        ~f:(Ll_test.cycle_flat ~dims:[| k_pad; n |] ~modulus:17 ~offset:(-8.) ~stride:1.)
+    in
+    let ma =
+      TDSL.ndarray mav ~label:[ "ma" ^ tag ] ~batch_dims:[ b_pad ] ~output_dims:[ m_pad; k_pad ] ()
+    in
+    let mb = TDSL.ndarray mbv ~label:[ "mb" ^ tag ] ~output_dims:[ k_pad; n ] () in
+    let bias = TDSL.ndarray bv ~label:[ "bias" ^ tag ] ~output_dims:[ n ] () in
+    let%op prod = ma +* "b|ik;kj=>b|ij" mb in
+    let%op mc = prod + bias in
+    (ma, mb, prod, mc)
+  in
+  let partitioned_k ~k_outermost (ma : Tensor.t) (mb : Tensor.t) (prod : Tensor.t)
+      (opt : LL.optimized) =
+    let paths = Ll_test.nest_paths opt.LL.llc in
+    let i, j, k =
+      match List.find_exn paths ~f:(fun p -> List.length p = 4) with
+      | [ _b; i; j; k ] -> (i, j, k)
+      | _ -> assert false
+    in
+    let sp_i, i_o, i_i = Sched.split ~axis:i ~factor:bm ~outer:LL.Serial ~inner:LL.Serial in
+    let sp_k, k_o, k_i = Sched.split ~axis:k ~factor:bm ~outer:LL.Serial ~inner:LL.Serial in
+    (* The CPU packed pipelines' width-1 lane, as the seeds tensorize. *)
+    let tz, _lane = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 () in
+    let stage source tile_loops =
+      Sched.Stage
+        {
+          source;
+          tile_loops;
+          shared = false;
+          cooperative = None;
+          hoisted = false;
+          swizzle = None;
+          pad_stride = None;
+          pipeline_depth = 1;
+          tile_prec = None;
+        }
+    in
+    Sched.apply
+      ([
+         Sched.Pad { axis = i; to_multiple_of = bm };
+         Sched.Pad { axis = k; to_multiple_of = bm };
+         sp_i;
+         sp_k;
+         Sched.Swap { outer = j; inner = k_o };
+         Sched.Swap { outer = i_i; inner = k_o };
+       ]
+      @ (if k_outermost then [ Sched.Swap { outer = i_o; inner = k_o } ] else [])
+      @ [ stage ma.Tensor.value [ i_i; k_i ]; stage mb.Tensor.value [ k_i; j ]; tz ]
+      @ Sched.pad_edge_partition ~block_loop:k_o ~extent:k_pad ~block:bm
+      @ [ Sched.Fuse_epilogue { target = prod.Tensor.value; shared = false } ])
+      opt
+  in
+  let want_padded =
+    let _, _, _, mc = make_padded_graph "7r" in
+    nonzero "epf_padded_ref" (run_with "epf_padded_ref" (fun opt -> opt) mc)
+  in
+  (let ma, mb, prod, mc = make_padded_graph "7s" in
+   let got = run_with "epf_partition_spanned" (partitioned_k ~k_outermost:false ma mb prod) mc in
+   p_all2 "epf_partition_spanned (one store-back after both segments) fused values match two-kernel"
+     got want_padded ~f:Float.equal);
+  (let ma, mb, prod, mc = make_padded_graph "7o" in
+   let label =
+     "epf_partition_outermost (a store-back per single-trip segment) rejected with a targeted error"
+   in
+   match
+     try
+       ignore
+         (Context.compile
+            ~lowered_transform:(fun o -> [ partitioned_k ~k_outermost:true ma mb prod o ])
+            (Context.auto ())
+            (named "epf_partition_outermost" (Train.forward mc))
+            Ir.Indexing.Empty
+           : Context.t * Context.routine);
+       None
+     with Invalid_argument msg -> Some msg
+   with
+   | Some msg ->
+       Stdio.eprintf "epf_partition_outermost: %s (not part of the golden)\n%!" msg;
+       p label
+         (String.is_substring msg ~substring:"Schedule.Fuse_epilogue"
+         && String.is_substring msg ~substring:"written again")
+   | None -> p label false);
   ignore prod4

@@ -2112,7 +2112,18 @@ files.
   write of the accumulator after the fused site, which also covers a row-block `Partition`'s edge
   segment (never descended, so never fused); `epilogue_fusion_mma_seeds`' `ksplit` leg pins it on
   that site's shape. A training golden that moves when only the crowned seed changes is worth a
-  value check of the crowned candidate before it is filed as nondeterminism. The
+  value check of the crowned candidate before it is filed as nondeterminism. The class is swept
+  since gh-ocannl-1712: `epilogue_fusion_single_trip_sweep` runs the fused twin of every
+  whole-routine seed (`search_seeding`'s `ss_whole`, flag-flipped) on nine single-trip sites
+  (k-splits, k of one block and below one, row and column edges, 3x3 and 1x1 convs) BITWISE
+  against the unfused run, exact because every input is a small dyadic; none admitted differed on
+  cc or Metal, and on cc all but one Partition-carrying twin is refused (the one admitted, on
+  four full k blocks, is equal). `schedule_epilogue_fusion` pins the seeds' geometry by hand both
+  ways: k-block loop under the row block (the contraction spans both segments; fuses, equal) and
+  above it (a store-back per segment; refused). The pin
+  needs a loop enclosing both segments (the batch loop, as in transformer_names): unbatched, the
+  edge segment is the last top-level writer, `fuse_at_fragment` never descends a segment starting
+  above 0, and the refusal comes from the plain-write path ("guarded writes") instead. The
   whole-K residual (16x76 vs 19x76: 1.095x against 1.053x row waste, block shapes differing too)
   is what two-site `Fuse_epilogue` fusion could at most recover, so it was not built.
   `Grid_outermost` B~ packing is a size call, not a fix: re-packing a panel per row block runs

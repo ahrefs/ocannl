@@ -1,0 +1,21 @@
+ksplit1b: every fused twin swept runs or is refused typed: true
+ksplit1b: every admitted fused twin equals the unfused reference bitwise: true
+ksplit1: every fused twin swept runs or is refused typed: true
+ksplit1: every admitted fused twin equals the unfused reference bitwise: true
+ksplit4: every fused twin swept runs or is refused typed: true
+ksplit4: every admitted fused twin equals the unfused reference bitwise: true
+kone: every fused twin swept runs or is refused typed: true
+kone: every admitted fused twin equals the unfused reference bitwise: true
+ksub: every fused twin swept runs or is refused typed: true
+ksub: every admitted fused twin equals the unfused reference bitwise: true
+rowedge: every fused twin swept runs or is refused typed: true
+rowedge: every admitted fused twin equals the unfused reference bitwise: true
+coledge: every fused twin swept runs or is refused typed: true
+coledge: every admitted fused twin equals the unfused reference bitwise: true
+conv3: every fused twin swept runs or is refused typed: true
+conv3: every admitted fused twin equals the unfused reference bitwise: true
+conv1: every fused twin swept runs or is refused typed: true
+conv1: every admitted fused twin equals the unfused reference bitwise: true
+the sweep reaches Partition-carrying fused twins: true
+
+Done.

@@ -10,3 +10,5 @@ tuned matmul+tail matches two-kernel: true
 epf_bad_input rejected with a targeted error: true
 epf_bad_transpose rejected with a targeted error: true
 epf_partial_storeback rejected with a targeted error: true
+epf_partition_spanned (one store-back after both segments) fused values match two-kernel: true
+epf_partition_outermost (a store-back per single-trip segment) rejected with a targeted error: true
