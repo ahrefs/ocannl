@@ -613,7 +613,85 @@ let compilation_plan_probe () =
             (normalized ~sdk:"/tmp/probe aaa/include" "aaa")
             (normalized ~sdk:"/tmp/probe bbb/include" "aaa")))
 
+(* {2 A failing branch claim names its branches}
+
+   CI's gcc 13.3 attributed a peeled loop's control, [cmpl $1, %r14d; jg], to a select's line, and
+   [branchless_select] printed only the count: naming the branch took a recompile on Compiler
+   Explorer. A census branch claim that fails now prints each attributed conditional branch with the
+   instruction before it and its source line; one that holds prints nothing. The fixture carries a
+   select's own branch ([vucomiss; jp]), a counter test set apart, a counter-shaped compare that a
+   label separates from the branch after it (a join, whose flags may come from another path, so the
+   branch is counted), and a branch on another line, which is not attributed. *)
+let branch_explanation_probe () =
+  let source = "int f(void) {\n  ACC = SELECT(c, g, 0.0);\n  return 0;\n}\n" in
+  let anchor = Census.anchor_lines ~source ~patterns:[ "SELECT" ] in
+  let asm =
+    String.concat ~sep:"\n"
+      [
+        "\t.file 1 \"/build/census_kernel.c\"";
+        "f:";
+        ".L2:";
+        "\t.loc 1 2 9";
+        "\tvucomiss\t%xmm1, %xmm0";
+        "\tjp\t.L3";
+        "\tcmpl\t$1, %r14d";
+        "\tjg\t.L2";
+        "\tcmpl\t$7, %r14d";
+        ".L3:";
+        "\tjne\t.L2";
+        "\t.loc 1 3 3";
+        "\tjne\t.L2";
+        "\tret";
+      ]
+  in
+  let parsed = Census.parse ~asm ~source_basename:"census_kernel.c" in
+  let sites, instructions = Census.conditional_branch_sites parsed ~anchor in
+  Verdict.p
+    "each branch attributed to a line comes with the instruction before it, a loop counter's test \
+     set apart"
+    (Poly.equal
+       (List.map sites ~f:(fun (s : Census.branch_site) ->
+            (s.source_line, s.source_column, s.branch, s.preceding, s.label_between, s.counter_test)))
+       [
+         (2, Some 9, "jp .L3", Some "vucomiss %xmm1, %xmm0", false, false);
+         (2, Some 9, "jg .L2", Some "cmpl $1, %r14d", false, true);
+         (2, Some 9, "jne .L2", Some "cmpl $7, %r14d", true, false);
+       ]
+    && instructions = 6
+    && Poly.equal (Census.conditional_branches_in parsed ~anchor) (2, 1, 6));
+  (* What a claim prints, captured from a file standing in for stderr. *)
+  let explain ~holds =
+    let path = Stdlib.Filename.temp_file "ocannl_census_explain_" ".txt" in
+    let out = Stdio.Out_channel.create path in
+    let result = Census.explain_branch_claim ~out ~source ~prefix:"probe" ~holds sites in
+    Stdio.Out_channel.close out;
+    let text = Stdio.In_channel.read_all path in
+    (try Stdlib.Sys.remove path with _ -> ());
+    (result, text)
+  in
+  let failed, printed = explain ~holds:false in
+  Stdio.eprintf "asm_census_cases: a failing branch claim prints:\n%s" printed;
+  let printed_lines = String.split_lines printed in
+  Verdict.p
+    "a failing branch claim prints each branch with the instruction before it and its source line, \
+     off the golden"
+    ((not failed)
+    && List.length printed_lines = 3
+    && List.for_all printed_lines ~f:(fun l ->
+        String.is_suffix l ~suffix:"(not part of the golden)"
+        && String.is_substring l ~substring:"line 2:9"
+        && String.is_substring l ~substring:"ACC = SELECT(c, g, 0.0);")
+    && List.for_all2_exn printed_lines
+         [
+           "jp .L3 after vucomiss %xmm1, %xmm0";
+           "jg .L2 after cmpl $1, %r14d";
+           "jne .L2 after cmpl $7, %r14d (a label between)";
+         ] ~f:(fun l pair -> String.is_substring l ~substring:pair));
+  let held, silent = explain ~holds:true in
+  Verdict.p "a branch claim that holds prints nothing" (held && String.is_empty silent)
+
 let () =
+  branch_explanation_probe ();
   compilation_plan_probe ();
   dialect_probes ();
   anchor_precedence_probe ();

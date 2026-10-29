@@ -979,42 +979,124 @@ let is_counter_test ~mnemonic ~rest =
   | "cmp", [ reg; imm ] when String.is_prefix imm ~prefix:"#" -> int_reg reg
   | _ -> false
 
+type branch_site = {
+  source_line : int;  (** the source line in the anchor the branch is attributed to *)
+  source_column : int option;  (** that [.loc]'s column, where it states one *)
+  asm_line : int;  (** 1-based, in the listing *)
+  branch : string;  (** the conditional branch, mnemonic and operands *)
+  preceding : string option;  (** the instruction before it in the listing, labels skipped *)
+  label_between : bool;  (** whether a label separates the two *)
+  counter_test : bool;  (** set apart as a loop counter's test, rather than counted *)
+}
+(** One conditional branch {!conditional_branch_sites} attributes to an anchored source line, with
+    what a reader needs to tell a construct's own branch from a loop's control DWARF attributed to
+    it: the instruction that set its flags (gh-ocannl-1660 identified gcc 13's peeled loop control
+    [cmpl $1, %r14d; jg] by recompiling on Compiler Explorer, because the census printed counts
+    only). *)
+
+let insn_text ~mnemonic ~rest = if String.is_empty rest then mnemonic else mnemonic ^ " " ^ rest
+
+(** [conditional_branch_sites p ~anchor] is [(sites, instructions)]: every conditional branch [p]
+    attributes to a source line in [anchor], in listing order, and how many instructions it
+    attributes there at all -- attribution as in {!attributed_in}, by the last [.loc] above an
+    instruction. {!conditional_branches_in} is its count. *)
+let conditional_branch_sites ({ lines; files; _ } : parsed) ~anchor =
+  let current = ref None and sites = ref [] and instructions = ref 0 in
+  (* The previous instruction, and whether a label came after it. *)
+  let previous = ref None and label_between = ref false in
+  Array.iteri lines ~f:(fun k line ->
+      (match line with
+      | Some (Directive (".loc" :: fno :: lno :: rest)) -> (
+          current :=
+            match (Int.of_string_opt fno, Int.of_string_opt lno) with
+            | Some f, Some l when Set.mem files f && Set.mem anchor l ->
+                Some (l, Option.bind (List.hd rest) ~f:Int.of_string_opt)
+            | _ -> None)
+      | Some (Insn { mnemonic; rest }) -> (
+          match !current with
+          | Some (source_line, source_column) ->
+              Int.incr instructions;
+              if is_conditional_branch ~mnemonic then
+                let counter_test =
+                  (not !label_between)
+                  &&
+                  match !previous with
+                  | Some (mnemonic, rest) -> is_counter_test ~mnemonic ~rest
+                  | None -> false
+                in
+                sites :=
+                  {
+                    source_line;
+                    source_column;
+                    asm_line = k + 1;
+                    branch = insn_text ~mnemonic ~rest;
+                    preceding =
+                      Option.map !previous ~f:(fun (mnemonic, rest) -> insn_text ~mnemonic ~rest);
+                    label_between = !label_between;
+                    counter_test;
+                  }
+                  :: !sites
+          | None -> ())
+      | _ -> ());
+      match line with
+      | Some (Insn { mnemonic; rest }) ->
+          previous := Some (mnemonic, rest);
+          label_between := false
+      | Some (Label _) -> label_between := true
+      | Some (Directive _) | None -> ());
+  (List.rev !sites, !instructions)
+
 (** [conditional_branches_in p ~anchor] is [(branches, counter_tests, instructions)]: how many
     conditional branch instructions [p] attributes to a source line in [anchor], how many further
     ones it attributes there that test a loop counter, and how many instructions it attributes there
-    at all -- attribution as in {!attributed_in}, by the last [.loc] above an instruction. The
-    question it answers is whether a construct COMPILED to a branch (gh-ocannl-1622: a value select
-    whose arm holds a load), which a loop census cannot tell from the loop's own control; the
-    instruction count is there so that a construct the compiler folded away, or an anchor naming
-    nothing, reads as [0] instructions rather than as a branch-free success.
+    at all ({!conditional_branch_sites}, counted). The question it answers is whether a construct
+    COMPILED to a branch (gh-ocannl-1622: a value select whose arm holds a load), which a loop
+    census cannot tell from the loop's own control; the instruction count is there so that a
+    construct the compiler folded away, or an anchor naming nothing, reads as [0] instructions
+    rather than as a branch-free success.
 
     A branch whose flags come from the instruction right before it, with no label between, and that
     instruction is {!is_counter_test}, is counted apart (gh-ocannl-1660): DWARF attribution puts a
     loop's control on whatever line the compiler last stepped through, and gcc 13 attributed a
     peeled outer loop's [cmpl $1, %r14d; jg] to a select's line. It reads line-shaped forms only: a
     loop control with a register bound counts as a branch (a false red, never a false green). *)
-let conditional_branches_in ({ lines; files; _ } : parsed) ~anchor =
-  let current = ref false and branches = ref 0 and counters = ref 0 and instructions = ref 0 in
-  let previous = ref None in
-  Array.iter lines ~f:(fun line ->
-      (match line with
-      | Some (Directive (".loc" :: fno :: lno :: _)) -> (
-          current :=
-            match (Int.of_string_opt fno, Int.of_string_opt lno) with
-            | Some f, Some l -> Set.mem files f && Set.mem anchor l
-            | _ -> false)
-      | Some (Insn { mnemonic; _ }) when !current -> (
-          Int.incr instructions;
-          if is_conditional_branch ~mnemonic then
-            match !previous with
-            | Some (mnemonic, rest) when is_counter_test ~mnemonic ~rest -> Int.incr counters
-            | _ -> Int.incr branches)
-      | _ -> ());
-      match line with
-      | Some (Insn { mnemonic; rest }) -> previous := Some (mnemonic, rest)
-      | Some (Label _) -> previous := None
-      | Some (Directive _) | None -> ());
-  (!branches, !counters, !instructions)
+let conditional_branches_in parsed ~anchor =
+  let sites, instructions = conditional_branch_sites parsed ~anchor in
+  let counters = List.count sites ~f:(fun s -> s.counter_test) in
+  (List.length sites - counters, counters, instructions)
+
+(** [branch_site_to_line ?source s] is one stderr line naming [s]: its source line (and column), the
+    branch, the instruction before it, and, given the [source] the listing was compiled from, that
+    line's text. *)
+let branch_site_to_line ?source s =
+  let text =
+    Option.bind source ~f:(fun source ->
+        List.nth (String.split_lines source) (s.source_line - 1)
+        |> Option.map ~f:(fun l -> ": " ^ String.strip l))
+  in
+  Printf.sprintf "line %d%s, asm line %d: %s after %s%s -- %s%s" s.source_line
+    (Option.value_map s.source_column ~default:"" ~f:(Printf.sprintf ":%d"))
+    s.asm_line s.branch
+    (Option.value s.preceding ~default:"(no instruction)")
+    (if s.label_between then " (a label between)" else "")
+    (if s.counter_test then "set apart as a loop-counter test" else "counted")
+    (Option.value text ~default:"")
+
+(** [explain_branch_claim ?out ?source ~prefix ~holds sites] is [holds], and when it is [false]
+    prints every site of [sites] -- each conditional branch with the instruction before it and its
+    source line ({!branch_site_to_line}) -- to [out] (stderr by default), one line each behind
+    [prefix] and tagged [(not part of the golden)]. A claim that holds prints nothing, so a golden
+    cannot depend on what a compiler emitted around it. *)
+let explain_branch_claim ?(out = Stdio.stderr) ?source ~prefix ~holds sites =
+  if not holds then (
+    if List.is_empty sites then
+      Stdio.Out_channel.fprintf out
+        "%s: no conditional branch on the anchored lines (not part of the golden)\n" prefix;
+    List.iter sites ~f:(fun s ->
+        Stdio.Out_channel.fprintf out "%s: %s (not part of the golden)\n" prefix
+          (branch_site_to_line ?source s));
+    Stdio.Out_channel.flush out);
+  holds
 
 (** {!census_in} over an assembly listing parsed for this one question. Convenient where a caller
     asks about one construct in one file; a caller asking about many should {!parse} once. *)
