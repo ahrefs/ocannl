@@ -5591,7 +5591,14 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules autotune_smoke)
- (libraries base ocannl stdio arrayjit.verdict arrayjit.ll_builders ll_test)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  arrayjit.ll_builders
+  ll_test
+  tune_crown)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

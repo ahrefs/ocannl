@@ -1873,11 +1873,13 @@ type report = {
           [mma_best_ms >= best_ms] (gh-ocannl-716). A beam round is accepted only when it improves
           on the incumbent by at least [min_progress] (1%); a round that improves by less is
           rejected with the incumbent still crowned, yet its candidates were timed, so a tensorized
-          one among them can have lowered [mma_best_ms] below [best_ms] by up to that band. Callers
-          reading the margin as a profitability ratio ({!family_profit_of_report}) are unaffected —
-          a ratio just under 1.0 means the family tied the winner inside the beam's own tolerance —
-          but a caller asserting the strict inequality is asserting a coin toss, which is how it
-          reached a CI failure.
+          one among them can have lowered [mma_best_ms] below [best_ms] by up to that band. And when
+          the beam finals swapped the crown, a tensorized contender they ranked behind it can sit
+          below [best_ms] by up to the finals' margin, [best_ms] being the crown's SEARCH reading
+          ({!finals_outranked}, gh-ocannl-1716). Callers reading the margin as a profitability ratio
+          ({!family_profit_of_report}) are unaffected — a ratio just under 1.0 means the family tied
+          the winner inside the beam's own tolerance — but a caller asserting the strict inequality
+          is asserting a coin toss, which is how it reached a CI failure.
 
           Its population is {e structural} — timed candidates whose schedule contains a
           [Schedule.Tensorize] — and therefore differs from [mma_timed]'s label-promised one, in
@@ -1935,12 +1937,22 @@ val contention_refusals : report -> int
     causes {!timing_admission} names partition the report's refusals. A skip or a retry excused by a
     loaded host reads this, not [timings_contended], which a degenerate clock reading also grows. *)
 
+val min_progress : float
+(** The fraction (0.01) by which a beam round's best reading must undercut the incumbent's for the
+    round to be adopted. A round that improves by less is timed and discarded with the incumbent
+    still crowned, so an entry of that round can read below [best_ms] by less than this fraction
+    (gh-ocannl-716): the band, beside {!finals_outranked}, in which another entry's search reading
+    may sit below the crown's. *)
+
 val finals_outranked : report -> search_ms:float -> bool
 (** Whether the beam finals crowned the report's winner over a contender that read [search_ms] in
     the search (gh-ocannl-1635): [finals_outcome] is [Finals_swapped], and a contender of that
-    search reading has an admitted finals reading no faster than the crown's. The one way [best_ms],
-    the crown's search reading, can exceed the search reading of another entry the beam ranked --
-    the untuned default's [default_ms] among them ({!finals_contenders}). *)
+    search reading has an admitted finals reading no faster than the crown's. Outside a rejected
+    round's {!min_progress} band, the one way [best_ms], the crown's search reading, can exceed the
+    search reading of another entry the beam ranked -- the untuned default's [default_ms] among them
+    ({!finals_contenders}) -- and by up to the finals' margin, config [autotune_finals_margin]: a
+    claim that another entry's reading undercuts [best_ms] only inside the round band reads
+    [|| finals_outranked r ~search_ms] (gh-ocannl-1716). *)
 
 val no_search_report : timing:timing_mode -> report
 (** The report of a {!tune} call that never searched (config [autotune_search=false], gh-ocannl-559,

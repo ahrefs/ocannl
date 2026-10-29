@@ -18,13 +18,19 @@ a replayed second report has no declines: true
 searched report labels a winner exactly when it has a winning time: PASS
 searched report's tensorized flag agrees with the schedule it carries: PASS
 searched report's scalar fallbacks do not exceed its Tile_mma statements: PASS
-searched report's best tensorized time undercuts the winner only inside the beam's progress band: PASS
+searched report's best tensorized time undercuts the winner only inside the beam's progress band, or where the finals outranked it: PASS
 searched report's tensorizing winner was itself timed in the tensorized family: PASS
 second report labels a winner exactly when it has a winning time: PASS
 second report's tensorized flag agrees with the schedule it carries: PASS
 second report's scalar fallbacks do not exceed its Tile_mma statements: PASS
-second report's best tensorized time undercuts the winner only inside the beam's progress band: PASS
+second report's best tensorized time undercuts the winner only inside the beam's progress band, or where the finals outranked it: PASS
 second report's tensorizing winner was itself timed in the tensorized family: PASS
+band claim: the CI event's undercut breaks the bare round band: true
+band claim: the undercut is explained when the finals ranked that contender behind the crown: true
+band claim negative control: the undercut with no finals run is refused: true
+band claim negative control: finals that kept the search's head explain no undercut: true
+band claim negative control: a swap over other contenders does not explain the undercut: true
+band claim: an undercut inside the round band needs no finals: true
 second report names its winner, or the load refused it every timing: true
 cached schedule replays to correct elementwise values: true
 cached schedule replays to correct matmul values: true

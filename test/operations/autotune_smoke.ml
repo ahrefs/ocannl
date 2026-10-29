@@ -271,10 +271,10 @@ let () =
   in
   (* Why [mma_best_ms >= best_ms] is not an invariant, which is what flaked on macOS CI
      (gh-ocannl-716). The beam accepts a round only when it improves on the incumbent by at least
-     [Autotune.min_progress] (0.01, private). A round that improves by LESS is rejected and the
-     incumbent stays crowned — but its candidates were timed, and a tensorized one among them has
-     already lowered [mma_best_ms]. So [mma_best_ms] can sit strictly below [best_ms], by less than
-     that band: not a report-assembly fault, just what "the winner is the incumbent" means.
+     [Autotune.min_progress] (0.01). A round that improves by LESS is rejected and the incumbent
+     stays crowned — but its candidates were timed, and a tensorized one among them has already
+     lowered [mma_best_ms]. So [mma_best_ms] can sit strictly below [best_ms], by less than that
+     band: not a report-assembly fault, just what "the winner is the incumbent" means.
 
      Whether the band is REACHABLE is a property of the clock against the workload, which is why
      repeats on a quiet machine do not reproduce it. Times land on the platform's timer ticks (41.7
@@ -285,10 +285,26 @@ let () =
      where the band spans ~57 ticks and is wide open, and a contended CI runner inflates the [cc]
      times the same way.
 
+     The beam finals (gh-ocannl-1635) open a second, wider gap, which is what flaked on ubuntu CI
+     (gh-ocannl-1716: a tensorized 0.001741 ms under a crowned 0.001818 ms, 4.2%). The entries read
+     within [autotune_finals_margin] (10%) of the fastest are re-timed together in adjacent windows
+     and the crown follows THOSE readings, while [best_ms] stays the crown's SEARCH reading. So a
+     tensorized contender that read fastest in its own window and lost the finals sits below
+     [best_ms] by up to the finals' margin: the finals measured that its search reading was its
+     window's luck. That is the noise-aware tolerance, and it is the finals' own evidence, never a
+     number: an undercut past the round band holds exactly when the report's [finals] record that
+     contender's search reading with a finals reading no faster than the crown's
+     ([Autotune.finals_outranked]). A report whose finals did not swap the crown, or swapped it over
+     other contenders, still fails it — the controls after the two [winner_contract]s pin that on
+     scripted reports.
+
      The other three conjuncts below are decided by the winner's schedule and its rendering census,
      not by measured times, and cannot flip on a repeat. So the two timing-dependent ones state
-     their precondition instead: the band here, and [<=] rather than [=] below. *)
-  let beam_min_progress = 0.01 in
+     their precondition instead: the band and the finals here, and [<=] rather than [=] below. *)
+  let undercut_explained (r : Autotune.report) ~search_ms =
+    Float.(search_ms >= r.Autotune.best_ms *. (1. -. Autotune.min_progress))
+    || Autotune.finals_outranked r ~search_ms
+  in
   let winner_contract ~which (r : Autotune.report) =
     let d fmt = Printf.ksprintf (fun s () -> s) fmt in
     let ms f = if Float.is_inf f then "inf" else Printf.sprintf "%.6f" f in
@@ -299,10 +315,11 @@ let () =
        candidate that undercut the crowned incumbent sub-threshold, which the band above says is
        legal. *)
     Stdio.eprintf
-      "%s: label=%S best_ms=%s mma_best_ms=%s mma-best=%+.6f tensorized=%b mma=%d/%d scalar\n%!"
+      "%s: label=%S best_ms=%s mma_best_ms=%s mma-best=%+.6f tensorized=%b mma=%d/%d scalar %s\n%!"
       which r.Autotune.best_label (ms r.Autotune.best_ms) (ms r.Autotune.mma_best_ms)
       (r.Autotune.mma_best_ms -. r.Autotune.best_ms)
-      r.Autotune.best_tensorized r.Autotune.best_mma_scalar_fallbacks r.Autotune.best_mma_statements;
+      r.Autotune.best_tensorized r.Autotune.best_mma_scalar_fallbacks r.Autotune.best_mma_statements
+      (Tune_crown.finals_fields r);
     Verdict.pass_fail
       (which ^ " labels a winner exactly when it has a winning time")
       (Bool.equal (String.is_empty r.Autotune.best_label) (Float.is_inf r.Autotune.best_ms))
@@ -325,15 +342,21 @@ let () =
         (d "%d scalar of %d statements" r.Autotune.best_mma_scalar_fallbacks
            r.Autotune.best_mma_statements);
     (* The best timed tensorized candidate cannot beat the crowned winner outright — only undercut
-       it inside the progress band above, which is the precondition the bare inequality was missing.
-       [infinity >= infinity *. 0.99] holds, so a search that timed nothing passes; a finite
-       [mma_best_ms] under an infinite [best_ms] would not, and should not. *)
+       it inside the round band, or where the finals outranked it (both above), which are the
+       preconditions the bare inequality was missing. [infinity >= infinity *. 0.99] holds, so a
+       search that timed nothing passes; a finite [mma_best_ms] under an infinite [best_ms] would
+       not, and should not. Excluded on a cache hit: its two times are the storing search's,
+       replayed from the entry, while the finals that explain a gap between them are not -- that
+       search's own report carries them, and here that is the searched report, judged above. *)
     Verdict.pass_fail
-      (which ^ "'s best tensorized time undercuts the winner only inside the beam's progress band")
-      Float.(r.Autotune.mma_best_ms >= r.Autotune.best_ms *. (1. -. beam_min_progress))
+      (which
+     ^ "'s best tensorized time undercuts the winner only inside the beam's progress band, or \
+        where the finals outranked it")
+      (replayed r || undercut_explained r ~search_ms:r.Autotune.mma_best_ms)
       ~detail:
-        (d "mma_best_ms=%s best_ms=%s (band %.0f%%)" (ms r.Autotune.mma_best_ms)
-           (ms r.Autotune.best_ms) (beam_min_progress *. 100.));
+        (d "mma_best_ms=%s best_ms=%s (band %.0f%%) finals=%s" (ms r.Autotune.mma_best_ms)
+           (ms r.Autotune.best_ms) (Autotune.min_progress *. 100.)
+           (Autotune.finals_outcome_name r.Autotune.finals_outcome));
     (* A winner that tensorizes was itself timed as a tensorized candidate, so it is a member of the
        population [mma_best_ms] minimizes over: [<=], not [=] — a sub-threshold round candidate may
        hold the minimum, which is the same band as above and equally not a fault. Keyed on labels
@@ -352,6 +375,43 @@ let () =
   in
   winner_contract ~which:"searched report" r1;
   winner_contract ~which:"second report" r2;
+  (* Controls for the band claim above, on scripted reports (gh-ocannl-1716): the readings are the
+     ubuntu CI event's, a tensorized candidate at [t] under a crown read at [w], 4.2% apart -- past
+     the round band. Every other field is the searched report's; only the times and the finals are
+     scripted, so each control exercises the same predicate the live claim reads. *)
+  let t = 0.001741 and w = 0.001818 in
+  let scripted ?(finals = []) finals_outcome =
+    { r1 with Autotune.best_ms = w; mma_best_ms = t; finals_outcome; finals }
+  in
+  let contender label search finals_ms =
+    {
+      Autotune.contender_label = label;
+      contender_search_ms = search;
+      contender_finals_ms = Some finals_ms;
+    }
+  in
+  p "band claim: the CI event's undercut breaks the bare round band"
+    Float.(t < w *. (1. -. Autotune.min_progress));
+  p "band claim: the undercut is explained when the finals ranked that contender behind the crown"
+    (undercut_explained ~search_ms:t
+       (scripted Autotune.Finals_swapped
+          ~finals:[ contender "tensorized" t 0.0019; contender "crown" w 0.00175 ]));
+  p "band claim negative control: the undercut with no finals run is refused"
+    (not (undercut_explained ~search_ms:t (scripted Autotune.Finals_not_run)));
+  p "band claim negative control: finals that kept the search's head explain no undercut"
+    (not
+       (undercut_explained ~search_ms:t
+          (scripted Autotune.Finals_kept
+             ~finals:[ contender "tensorized" t 0.0019; contender "crown" w 0.00175 ])));
+  p "band claim negative control: a swap over other contenders does not explain the undercut"
+    (not
+       (undercut_explained ~search_ms:t
+          (scripted Autotune.Finals_swapped
+             ~finals:[ contender "other" 0.0018 0.0019; contender "crown" w 0.00175 ])));
+  p "band claim: an undercut inside the round band needs no finals"
+    (undercut_explained
+       ~search_ms:(w *. (1. -. (Autotune.min_progress /. 2.)))
+       (scripted Autotune.Finals_not_run));
   (* A winner is named exactly when one was timed (the conjunct above), so the second call names one
      unless its own windows were refused: a replay carries the cached label, and a re-search that
      the load emptied has none to carry (gh-ocannl-892). EVERY window, not merely one (Codex P2 on

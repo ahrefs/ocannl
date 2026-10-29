@@ -641,7 +641,8 @@ let decline_summaries declines =
 let failed_count declines =
   Hashtbl.fold declines ~init:0 ~f:(fun ~key:_ ~data:acc count -> count + acc.da_count)
 
-(* A candidate round-improvement below this fraction of the incumbent ends the search. *)
+(* A candidate round-improvement below this fraction of the incumbent ends the search (exported:
+   claims about the crown's band read it, gh-ocannl-1716). *)
 let min_progress = 0.01
 
 (* Which units of each beam entry a round expands (gh-ocannl-1229; config
