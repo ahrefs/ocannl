@@ -26,11 +26,14 @@ files.
   matching the params' grad `Fetch`es; intermediate grads must keep their per-micro-step zeroing
   since backprop `=+` relies on it), `Outlier_detector` (z-score vs sliding window; nan during
   warmup, and a constant window gives std 0 → infinite z). Executed parity: `loop_utils.ml`.
-- Optimizer state that survives across invocations of a routine must be MATERIALIZED, or lowering
-  fails with `Stale optimize_ctx: No computations found for #N: <node>` — the virtualizer treats an
-  undetermined read-before-write node as an inlining candidate, and the computation defining it is
-  in the previous invocation, not this one. `sgd_one` materializes its `sgd_momentum` buffer for
-  exactly this reason (gh-ocannl-772); a new optimizer with its own buffers owes the same. The
+- Optimizer state that survives across invocations of a routine is declared by its update: an
+  assignment reading its own lhs without the clearing `=:` prefix (`=:` naming its lhs, `=+`, ...)
+  is read-before-write, which `decide_placements` keeps `On_device` and never virtual
+  (gh-ocannl-793) — `sgd_one`'s `sgd_momentum` needs no materialization call, nor will Adam's
+  moments. In the lowered code this is an uncovered read of the statement's own store position (a
+  `Covered_rmw_exempt` verdict); the clearing `=:+` family never emits one, lowering to a plain
+  store when injective and behind a neutral fill otherwise. `test/operations/persistent_state.ml`
+  pins it on a plain accumulator, with the refusal a forced `Virtual` placement gets. The
   option matrix has executed coverage in `test/operations/sgd_variants.ml`, which compares a
   multi-step trajectory against a host simulation and sends non-default momentum through all four
   construction paths (`sgd_one`, `sgd_update`, `Mixed_prec.scaled_sgd_update`,

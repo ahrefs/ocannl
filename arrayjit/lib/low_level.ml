@@ -1696,6 +1696,31 @@ let inherited_local_read_rejection (tn : Tn.t) : string =
      in this routine before the read, or mark it as materialized (e.g. via Train.set_materialized) \
      in the routine that computes it."]
 
+(* gh-ocannl-793: an inlined read of a virtual node for which neither this routine nor an earlier
+   routine of the lineage stored a computation. The decider never virtualizes a read-before-write
+   node it decides itself, so a node this routine writes got here through a [Virtual] placement made
+   elsewhere: an intent, or an earlier routine. *)
+let missing_computation_rejection (plc : Tn.Placements.t) (traced : traced_array) : string =
+  let tn = traced.tn in
+  let name = Tn.debug_name tn in
+  let cause =
+    if traced.has_assignment || traced.zeroed_out then
+      [%string
+        "This routine writes %{name}, but reads it before it does, or reads its own previous value \
+         -- an =: whose right-hand side names %{name}, or =+ and the other accumulations without \
+         the =: prefix: such a node carries state from one run of the routine to the next, which a \
+         virtual node has no buffer to hold."]
+    else
+      "No routine compiled into this context computes it: the context passed in does not descend \
+       from the compilation of the routine that does."
+  in
+  [%string
+    "the node %{name} is placed virtual (%{Tn.debug_memory_mode (Tn.Placements.get plc tn)}), but \
+     neither this routine nor an earlier routine of its compilation lineage stored a computation \
+     to inline at its reads. %{cause} Mark %{name} as materialized (e.g. via \
+     Train.set_materialized) before its first compilation, or drop the placement that made it \
+     virtual."]
+
 (* gh-ocannl-1551: the refusal of an INHERITED computation that cannot be instantiated at a read
    site ([code] is [instantiate_computations]' rejection), shared like the one above. *)
 let inherited_uninlinable_rejection (tn : Tn.t) ~(code : string) : string =
@@ -3117,11 +3142,7 @@ let%track7_sexp inline_computation ?(fresh_symbol = Indexing.get_symbol) ?on_inh
   let computations =
     Hashtbl.find optim_ctx.computations traced.tn
     |> Option.value_or_thunk ~default:(fun () ->
-        raise
-        @@ Utils.User_error
-             [%string
-               "Stale optimize_ctx: No computations found for #%{traced.tn.Tn.id#Int}: \
-                %{Tn.debug_name traced.tn}"])
+        raise @@ Utils.User_error (missing_computation_rejection optim_ctx.placements traced))
   in
   (* Review round 2 of the gh-610/611 PR: a computation INHERITED from an earlier routine of the
      lineage that reads a merge buffer must not be consumed here — merge-buffer contents are
@@ -9397,18 +9418,19 @@ let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads
   in
   Hashtbl.iter traced_store ~f:(fun traced ->
       let tn = traced.tn in
-      (* The gh-ocannl-618 split of the read-modify-write exemption by consumer: the placement
-         decisions here accept exemption-dependent coverage ([`Covered_rmw_exempt]) as covered,
-         mirroring the retired tracer — a statement's read of its own store position is not a visit.
-         The routine-INTERFACE classification does not, but it cannot run here: placements are not
-         settled (the fan-in guard below and [check_and_store_virtual]'s legality rejections still
-         flip candidates non-virtual), so the strict verdict is applied by [reconcile_traced_store]
-         over the FINAL code, once every node's standing is known. *)
+      (* Exemption-dependent coverage ([`Covered_rmw_exempt]) is NOT coverage here (gh-ocannl-793):
+         its uncovered read is a statement reading its own store position before anything in the
+         routine wrote it, i.e. the value the previous invocation left. Lowering emits that only
+         from an accumulation that does not initialize -- [=:] reading its own lhs, [=+] and the
+         other operators without the [=:] prefix -- since the initializing [=:+] family lowers to a
+         plain store when injective and behind a neutral fill otherwise. Such a node is
+         read-before-write, persistent state like an SGD momentum buffer, and virtualizing it would
+         leave the read nothing to inline. *)
       let covered =
         lazy
           (match (Lazy.force reads_covered) tn with
-          | `Covered | `Covered_rmw_exempt _ -> true
-          | `Unknown _ -> false)
+          | `Covered -> true
+          | `Covered_rmw_exempt _ | `Unknown _ -> false)
       in
       (* gh-ocannl-616: the explicit request for the footprint form, ahead of the caps — an
          undecided local producer, or an inherited virtual node with a stored template. The request
@@ -9800,25 +9822,16 @@ let refuse_uncovered_local_reads (plc : Tn.Placements.t)
    under a guard — so such reads are re-judged with the same per-cell machinery the raw pipeline
    uses, [reads_covered_query] over the final code's affine accesses (review round 2: syntactic
    priority is not coverage). The query is built lazily: routines without a
-   read-after-write-of-a-traced-node pattern never pay for it. - The gh-ocannl-618 strict interface
-   classification closes over the settled placements: a read-modify-write-exempt read still consumes
-   the entry values of a node that owns a buffer ([ell[0] = 5000; out[i] = ell[i]] reads ell's
-   incoming cells 1.. at the copy position, an accumulation with no preceding definite
-   initialization reads its own), so every non-virtual written node whose RAW-analysis coverage is
-   exemption-dependent flips to [read_before_write] and is promoted [On_device]. This cannot run in
-   [decide_placements] (review round 1 of the gh-617/618 PR): an undecided node can become
-   non-virtual AFTER it — the fan-in guard, a [check_and_store_virtual] legality rejection — and
-   only here is every node's standing known. Nodes that stay virtual are exempt by construction: a
-   virtual node has no interface, and exemption-dependent coverage is exactly the shape of the
-   virtualizer's partial-write producers (an injective scatter emits no neutral init; inlining
-   prepends the init fallback). - Read-only entries whose node the final code never touches are
-   dropped (an all-virtual routine's deferred-computation leaves): they would otherwise read back as
-   phantom inputs, parameters, allocations and dependencies of a schedule that does not touch them.
-   The prune is deliberately no wider than that genre: an entry recording a raw WRITE keeps its
-   place even when no access survives — the vanished write is not splicing's doing (out-of-contract
-   scope writes probed at the analysis level per gh-584, optimizer elisions), and the raw
-   decision-level facts are the deliverable there. Committed-[Virtual] entries stay too — they are
-   not interface material (no parameter, no allocation) but remain introspectable.
+   read-after-write-of-a-traced-node pattern never pay for it. (Raw reads whose coverage is only
+   read-modify-write-exempt need nothing here: [decide_placements] already made such nodes
+   read-before-write and never virtual, gh-ocannl-793.) - Read-only entries whose node the final
+   code never touches are dropped (an all-virtual routine's deferred-computation leaves): they would
+   otherwise read back as phantom inputs, parameters, allocations and dependencies of a schedule
+   that does not touch them. The prune is deliberately no wider than that genre: an entry recording
+   a raw WRITE keeps its place even when no access survives — the vanished write is not splicing's
+   doing (out-of-contract scope writes probed at the analysis level per gh-584, optimizer elisions),
+   and the raw decision-level facts are the deliverable there. Committed-[Virtual] entries stay too
+   — they are not interface material (no parameter, no allocation) but remain introspectable.
 
    Merge-buffer reads reconcile separately, via the return value: the result says whether the final
    code still reads the merge buffer, so the caller can drop a raw-declared [merge_node] whose read
@@ -9828,10 +9841,7 @@ let refuse_uncovered_local_reads (plc : Tn.Placements.t)
    changes which transfer it observes — that computation must not be shared across routines. *)
 let reconcile_traced_store (plc : Tn.Placements.t) (traced_store : traced_store)
     ~(spliced_reads : Tnode.t Hash_set.t) ~(static_indices : Indexing.static_symbol list)
-    ~(merge_node : Tnode.t option)
-    ~(raw_coverage :
-       (Tn.t -> [ `Covered | `Covered_rmw_exempt of string | `Unknown of string ]) Lazy.t)
-    ~(cap_inline_flips : Tnode.t Hash_set.t) (llc : t) : bool * Set.M(Tnode).t =
+    ~(merge_node : Tnode.t option) (llc : t) : bool * Set.M(Tnode).t =
   let accessed = Hash_set.create (module Tnode) in
   let written_seen = Hash_set.create (module Tnode) in
   let fresh_read = Hash_set.create (module Tnode) in
@@ -9957,51 +9967,6 @@ let reconcile_traced_store (plc : Tn.Placements.t) (traced_store : traced_store)
         traced.read_before_write <- true;
         Hash_set.add flipped_rbw tn)
       else traced.read_only <- true);
-  (* The gh-ocannl-618 strict interface classification, over the SETTLED placements (see the header
-     comment): every non-virtual written node whose reads are covered only thanks to the
-     read-modify-write exemption consumes its entry values, so it must not classify output-only
-     (aliasing-eligible, absent from link-time input verification). Judged on the RAW analysis'
-     verdict ([raw_coverage] — review round 4): the fact being closed over is a property of the
-     program as analyzed, and the final code can only obscure it — [rewrite_one_hot_reductions]
-     turns a raw copy-position self-read into a [Get_dynamic] of a data-chosen row, a different read
-     than the one the exemption is defined on, so a final-code query both loses real exemption facts
-     (an uninitialized embedding-gradient accumulation) and mints spurious [`Unknown]s (round 3's
-     threefry materialization). ONLY the [`Covered_rmw_exempt] verdict flips: this pass closes the
-     exemption split, it does not re-litigate coverage — genuinely uncovered raw reads were already
-     flipped by [decide_placements], and spliced reads have their own strict path above. A flipped
-     node is also promoted [On_device], like [decide_placements]' own rule (same provenance 36): a
-     late-rejected candidate is otherwise only [Never_virtual], which [is_materialized_force] would
-     default to [Local] — routine scratch with no incoming contents, contradicting the entry values
-     the reads consume. Two bookkeeping consequences of promoting (round 4): a cap-provenance entry
-     (1/39/41) is recorded in [cap_inline_flips] before being overwritten, so the node keeps its
-     [`Inline] flip candidacy (a virtual reading needs no interface classification — the search
-     remains free to try it); and a node an EARLIER routine of the lineage committed [Local] cannot
-     be promoted — its scratch buffer does not persist, so the in-place update is rejected with the
-     materialize-before-first-use error rather than [Placements.update]'s internal transition
-     failure. Deliberately NOT recorded in [flipped_rbw]: these are raw-analysis-genre facts, and
-     the prior-context demand override is for splice-created flips only (a raw pattern's entry
-     values arrive through the assignments layer's curated flows). *)
-  Hashtbl.iteri traced_store ~f:(fun ~key:tn ~data:traced ->
-      if
-        (traced.has_assignment || traced.zeroed_out)
-        && (not traced.read_before_write)
-        && not (Tn.Placements.known_virtual plc tn)
-      then
-        match (Lazy.force raw_coverage) tn with
-        | `Covered | `Unknown _ -> ()
-        | `Covered_rmw_exempt _ when Tn.Placements.known_not_materialized plc tn ->
-            (* gh-ocannl-1620: routine-local scratch an earlier routine placed. [decide_placements]
-               judged its reads on the code the emit walk evaluates, refusing every one this
-               routine's writes do not strictly cover (an in-place update among them); what is left
-               of a raw exemption-dependent verdict is a read in a dead arm, which consumes
-               nothing. *)
-            ()
-        | `Covered_rmw_exempt _ ->
-            (match Tn.Placements.raw_entry plc tn with
-            | Some (Never_virtual, p) when is_cap_provenance p -> Hash_set.add cap_inline_flips tn
-            | _ -> ());
-            traced.read_before_write <- true;
-            Tn.Placements.update plc tn On_device Read_before_write);
   (* A node mentioned ONLY in dead code still needs a registry entry (its identifier renders, so a
      parameter must declare it and the prune must not drop it) but no interface flags: it neither
      reads nor writes at runtime, and advertising either would create phantom dependencies for
@@ -10432,11 +10397,10 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
     post_virtualization_pipeline input_ctx.placements traced_store ~input_scopes ~static_indices
       virtual_llc_result
   in
-  let cap_inline_flips = Hash_set.create (module Tnode) in
   refuse_uncovered_local_reads input_ctx.placements ~static_indices llc;
   let uses_merge, spliced_rbw =
     reconcile_traced_store input_ctx.placements traced_store ~spliced_reads ~static_indices
-      ~merge_node:an.an_merge_node ~raw_coverage:an.an_reads_covered ~cap_inline_flips llc
+      ~merge_node:an.an_merge_node llc
   in
   (match llc with
   | Noop -> [%log "routine optimized to an empty schedule: every target virtualized (gh-611)"]
@@ -10518,12 +10482,6 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
                 Some
                   ( `Materialize,
                     if Option.is_some per_cell then [ `Inline; `Footprint ] else [ `Inline ] )
-            (* A cap-selected node the reconcile-stage interface classification promoted [On_device
-               36] (gh-618 round 4): the promotion is the interface consequence of the cap's own
-               materialization, not a legality/intent decision, so the [`Inline] flip stays
-               searchable — a virtual reading has no interface to classify. *)
-            | Some (On_device, Read_before_write) when Hash_set.mem cap_inline_flips tn ->
-                Some (`Materialize, [ `Inline ])
             | _ -> None
           in
           match flips with

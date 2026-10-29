@@ -365,6 +365,10 @@ let exempt_quantified_helpers =
        the mma subset over" );
     ( "test/operations/schedule_batched_mma.ml:variance-like site: no gpu mma seeds",
       "the same site, on the GPU seeder" );
+    ( "test/operations/splice_semantics.ml:cap-selected accumulator: offers no Inline flip",
+      "a read-before-write node carries its entry value, so no flip candidate for it is the \
+       designed reading, and a routine with no flip candidates at all offers it none; the claim \
+       beside it pins the node read-before-write and an input" );
     ( "test/operations/conv_detection_boundary.ml:refused",
       "a refused conv site is deliberately recognized by no family, so both seeders yield no seeds \
        of any kind and there is no seed population to quantify over; the claim beside it pins the \

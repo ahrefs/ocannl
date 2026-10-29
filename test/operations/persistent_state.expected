@@ -1,0 +1,4 @@
+the accumulator carries its value across runs: true
+forced virtual: compilation is refused, naming the node and its placement: true
+forced virtual: the refusal names the cause and the remedy: true
+refusal: the node acc_x is placed virtual (Virt/29:set-virtual), but neither this routine nor an earlier routine of its compilation lineage stored a computation to inline at its reads. This routine writes acc_x, but reads it before it does, or reads its own previous value -- an =: whose right-hand side names acc_x, or =+ and the other accumulations without the =: prefix: such a node carries state from one run of the routine to the next, which a virtual node has no buffer to hold. Mark acc_x as materialized (e.g. via Train.set_materialized) before its first compilation, or drop the placement that made it virtual.

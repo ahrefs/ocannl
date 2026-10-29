@@ -187,20 +187,16 @@ files.
   provenance test for "inherited" missed consumption through an update of an inherited virtual
   (rounds 6-7). The rmw part is split more finely (gh-ocannl-618):
   `reads_covered_query` returns a three-way verdict, and exemption-dependent coverage
-  (`` `Covered_rmw_exempt ``) counts as covered for the tracer-mirroring placement heuristics
-  (the visit cap) but as uncovered for the `read_before_write` interface classification of a
-  node that ends up owning a buffer — a copy-position read after a partial write, or an
-  accumulation with no preceding definite initialization, consumes entry values raw or spliced
-  alike (`splice_semantics.ml` phase 1; routine-complete lowered flows are unaffected because
-  lowering emits the initialization first). The strict classification runs in
-  `reconcile_traced_store`, over the SETTLED placements, and promotes the flipped node
-  `On_device` (an entry-consuming node must not resolve to `Local` scratch — round 3) — not in
-  `decide_placements`, where two wrong timings lurk: judging undecided nodes strictly destroys the virtualizer's partial-write
-  producers (an injective scatter emits no neutral init; inlining prepends the init fallback —
-  `affine_lowering.ml` AC6 broke under that reading), while judging only already-decided nodes
-  misses candidates flipped non-virtual AFTER the decider (the fan-in guard, a
-  `check_and_store_virtual` legality rejection such as a guarded RMW — the PR's round-1 P1).
-  A node that stays virtual is exempt by construction: it has no interface. `from_prior_context` (both `Backends.compile` and `from_prior_context_batch`)
+  (`` `Covered_rmw_exempt ``) is UNCOVERED everywhere a node's standing is decided — a
+  copy-position read after a partial write, or an accumulation with no preceding definite
+  initialization, consumes entry values raw or spliced alike (`splice_semantics.ml` phase 1).
+  `decide_placements` makes such a node read-before-write `On_device` before virtualization, so it
+  is never virtual and offers no `Inline` flip (gh-ocannl-793): in code lowered from `%cd` the
+  verdict means `=:` reading its own lhs or a non-clearing accumulation (`=+`, ...) — persistent
+  state — because the clearing `=:+` family lowers to a plain store when injective and behind a
+  neutral fill otherwise, which is also why the partial-write scatters of `affine_lowering.ml`
+  AC6 stay virtualizable. (Visit counting is a separate question: a statement's read at its own
+  write position is not a visit, `read_multiplicity_query`.) `from_prior_context` (both `Backends.compile` and `from_prior_context_batch`)
   reconciles in BOTH directions: the raw-assignments set is filtered by the reconciled traced
   store (raw over-approximates the residual schedule — a deferral-only routine must link on a
   fresh context) and, for routines carrying an assignments program, unioned with the reconciled
@@ -382,7 +378,7 @@ files.
   (`a_stmt_write`) only when the two dynamic coordinates agree — both static, or the same axis
   with an equal runtime value (`Low_level.stmt_write_for_read`) — so a gather inside a fixed-row
   `Set`, or a static read inside a scatter, is never exempt. No placement outcome shows that verdict
-  today (a gathered table is committed non-virtual at the read, and `reconcile_traced_store`
+  today (a gathered table is committed non-virtual at the read, and `decide_placements`
   promotes exemption-dependent writers anyway), so its tests assert `reads_covered_query` itself.
   The structural facts pass reads a gather the same way (gh-ocannl-1327): `trace_node_facts`
   records the table as read (`read_by_other`, the setter's fan-in sink) and as touched first, with

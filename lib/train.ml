@@ -233,6 +233,8 @@ let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = 
            sgd_delta =+ !.weight_decay *. p
        | None -> sgd_delta =: p.grad + (!.weight_decay *. p));
        if Float.(momentum > 0.0) then (
+         (* [=:] reading its own lhs makes the buffer read-before-write: the compiler keeps it on
+            the device, carrying its value from one step to the next (gh-ocannl-793). *)
          (match update_gate with
          | None -> { sgd_momentum } =: (!.momentum *. sgd_momentum) + sgd_delta
          | Some gate ->
@@ -245,18 +247,6 @@ let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = 
        | Some gate -> sgd_delta =: where gate sgd_delta 0
        | None -> Asgns.empty_comp);
        p =- learning_rate * sgd_delta ~logic:".")]
-  |> fun comp ->
-  (* The momentum buffer is optimizer state: it is read before it is written, and the value it
-     carries into the next step is the whole point of it. Left undetermined it is a virtualization
-     candidate, and inlining a node whose defining computation is in a PREVIOUS invocation of the
-     routine has no meaning -- lowering fails outright ("No computations found for #N:
-     sgd_momentum_..."), which is why [~momentum] was unusable until gh-ocannl-772 covered it. The
-     label's head is the inline declaration's identifier, so this names exactly the node the [%cd]
-     payload above declared. *)
-  if Float.(momentum > 0.0) then
-    Set.iter comp.Asgns.embedded_nodes ~f:(fun tn ->
-        match tn.Tn.label with "sgd_momentum" :: _ -> set_materialized tn | _ -> ());
-  comp
 
 let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov ?grad_unscale ?grad_scale
     ?update_gate ?params loss =

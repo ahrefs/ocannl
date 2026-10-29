@@ -11546,3 +11546,17 @@
   integer_power_cases
   ctypes
   ctypes.foreign))
+
+; persistent_state pins gh-ocannl-793 on a plain %cd accumulator: an =: whose right-hand side names
+; its lhs persists across runs with no materialization call, and forcing it virtual is refused with
+; a message naming the node, its placement and the remedy.
+
+(test
+ ; ocannl-backend: cc -- every execution context is an explicit Context.cpu ().
+ (name persistent_state)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules persistent_state)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
