@@ -333,6 +333,14 @@ let () =
       let w = leaf "lf_md_w" in
       let%op t = w *. w in
       let%op u = t + w in
+      (* [t] is no longer a backprop root ([u] embedded it); as a [where] predicate it receives no
+         gradient, so a consumer using it only there requires nothing of it. *)
+      let x = leaf "lf_md_wx" in
+      let%op c = where t x !.0. in
+      p "a non-root operand whose gradient the operation does not write is not required"
+        (not
+           (Set.mem (Option.value_exn ~here:[%here] c.diff).backprop.requires
+              (grad_of t, Asgns.Bprop)));
       let fwd = u.forward.owned in
       p "forward owns its own and its embedded children's fragments, repeated operands once"
         (Set.equal fwd

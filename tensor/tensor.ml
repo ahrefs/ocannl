@@ -810,7 +810,8 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
        its backprop embedded by an earlier consumer, or handed out, so some other routine of the
        lineage must propagate from its gradient. Derived from the child's own ownership: a child
        whose backprop owns no fragment (a term, parameters included -- [terminal_backprop])
-       generates no requirement. *)
+       generates no requirement; nor does one whose gradient this operation's [grad_asn] does not
+       write (a [where] predicate, a comparison's operands), filtered below. *)
     let requires = ref Asgns.no_fragments in
     let bcks =
       List.filter_map ordered_ts ~f:(fun ti ->
@@ -862,9 +863,11 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     (* [grad_asn] runs inside the construction window too: the operands' roots are already removed
        and the result's not yet installed, so a closure here would checkpoint an incomplete graph
        (gh-ocannl-1301). *)
-    let backprop =
-      Asgns.sequence
-      @@ (Shape.with_construction_window (fun () -> grad_asn ~t ~g ~projections) :: bcks)
+    let own_grad_asn = Shape.with_construction_window (fun () -> grad_asn ~t ~g ~projections) in
+    let backprop = Asgns.sequence (own_grad_asn :: bcks) in
+    let requires =
+      let written = Asgns.collect_written own_grad_asn.asgns in
+      Set.filter !requires ~f:(fun ((grad, _) : Asgns.Fragment.t) -> Set.mem written grad)
     in
     (* The backprop fragment of [t]: [(g, Bprop)] plus the embedded children's fragments. *)
     let backprop =
@@ -873,7 +876,7 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
         embedded_nodes = Set.union backprop.embedded_nodes !embedded_nodes;
         owned =
           (if terminal_backprop then backprop.owned else Set.add backprop.owned (g, Asgns.Bprop));
-        requires = Set.union backprop.requires !requires;
+        requires = Set.union backprop.requires requires;
       }
     in
     (* As in the forward-only branch: the root changes below count, and nothing after them fails. *)

@@ -38,6 +38,7 @@ two losses over one parameter, one lineage: true
 zero_params_grads beside grad_update ~accum_steps: true
 momentum SGD steps twice: true
 init_params ~reinit_all after training: true
+a non-root operand whose gradient the operation does not write is not required: true
 forward owns its own and its embedded children's fragments, repeated operands once: true
 backprop owns its own and its embedded children's fragments: true
 a %cd embedding carries the operand's forward fragment: true
