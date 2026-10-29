@@ -77,3 +77,5 @@ the HTML x axis labels its right end: true
 the HTML x axis has interior ticks: true
 the HTML y axis has interior ticks: true
 the Markdown rendering carries the legend: true
+a plot far from the origin renders with its end labels: true
+the Markdown rendering is a code block: true

@@ -159,3 +159,19 @@ let () =
   in
   p "the Markdown rendering carries the legend"
     (String.is_substring md ~substring:"2x, its derivative")
+
+let () =
+  (* A constant coordinate far from the origin: the window falls back to a unit span, and the axis
+     keeps only its end labels rather than enumerating multiples beyond the integers. *)
+  let far =
+    [ BPlot.Scatterplot { points = [| (1e20, 1.); (1e20, 2.) |]; content = PrintBox.line "#" } ]
+  in
+  let text = render (PrintBox_utils.plot ~small:true far) in
+  p "a plot far from the origin renders with its end labels"
+    (String.is_substring text ~substring:"1.00e+20")
+
+let () =
+  (* The Markdown rendering keeps the layout preformatted, so viewers do not collapse its
+     alignment. *)
+  let md = PrintBox_md.to_string PrintBox_md.Config.default (PrintBox_utils.plot diagonal) in
+  p "the Markdown rendering is a code block" (String.is_substring md ~substring:"```")

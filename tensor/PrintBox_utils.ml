@@ -192,6 +192,9 @@ let axis_ticks ~cells ~lo ~hi ~prec ~target ~extent ~min_gap =
   let interior =
     match step with
     | None -> []
+    (* A window far from the origin relative to its width (a constant coordinate of 1e20, say) has
+       multiples of the step beyond the integers: such an axis keeps its two end labels. *)
+    | Some (step, _) when Float.(abs (lo /. step) > 1e15 || abs (hi /. step) > 1e15) -> []
     | Some (step, _) ->
         let first = Float.to_int (Float.round_up (lo /. step)) in
         let last = Float.to_int (Float.round_down (hi /. step)) in
@@ -406,7 +409,9 @@ let () =
     | Labeled_plot p -> String.concat ~sep:"\n" (text_layout ~style p)
     | _ -> invalid_arg "PrintBox_utils: unrecognized plot extension");
   PrintBox_md.register_extension ~key:"Ocannl_labeled_plot" (fun config -> function
-    | Labeled_plot p -> PrintBox_md.to_string config (B.lines (text_layout ~style:false p))
+    | Labeled_plot p ->
+        PrintBox_md.to_string config
+          (B.lines_with_style B.Style.preformatted (text_layout ~style:false p))
     | _ -> invalid_arg "PrintBox_utils: unrecognized plot extension");
   PrintBox_html.register_extension ~key:"Ocannl_labeled_plot" (fun config -> function
     | Labeled_plot p -> (html_layout config p :> PrintBox_html.toplevel_html)
