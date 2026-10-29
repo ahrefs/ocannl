@@ -7,9 +7,11 @@
    descend from the owner, are alternatives: they never collide, and never satisfy a requirement.
 
    The probe legs are the issue's: [w] is a [Require_grad] leaf [1;2;3] or a parameter, [t = w *.
-   w], [loss = t *. 3], so [d loss / d w = 6 w] -- exact by construction, compared bitwise. Owner
-   presence is NOT proof of a correct gradient: the shared-trunk legs only assert the checks'
-   verdicts (the zeroing order between two routines over one trunk is a separate hazard). *)
+   w], [loss = t *. 3], so [d loss / d w = 6 w] -- exact by construction, compared bitwise. With the
+   once-contract retired, [forward_once t] leaves [t]'s backprop to a later loss (B, G1, G2, and the
+   virtual-intermediate leg, held to fresh graphs). Owner presence is NOT proof of a correct
+   gradient: the shared-trunk legs only assert the checks' verdicts (the zeroing order between two
+   routines over one trunk is a separate hazard). *)
 open Base
 open Ocannl
 open Nn_blocks.DSL_modules
@@ -44,12 +46,12 @@ let accepted name f =
       None
 
 let duplicate_named msg tn =
-  has msg "already compiled in this context's lineage" && has msg (Ir.Tnode.debug_name tn)
+  has msg "already compiled in this context's lineage" && has msg (Ir.Tnode.label_name tn)
 
 (* Either refusal of an unpropagated gradient: [Context.run]'s requirement check, or -- when the
    dangling gradient is materialized, so the link fails first -- the link error's lineage hint. *)
 let unpropagated msg tn =
-  let name = Ir.Tnode.debug_name tn in
+  let name = Ir.Tnode.label_name tn in
   (has msg "no routine of its lineage carries" && has msg ("propagating from " ^ name))
   || has msg ("no routine in this lineage propagates from " ^ name)
 
@@ -66,20 +68,114 @@ let () =
       let%op loss = t *. 3. in
       let ctx = Train.update_once (Context.auto ()) loss in
       exact "A: w.grad = 6 w" (Context.get_values ctx (grad_of w)) [| 6.; 12.; 18. |]);
+  (* B: [forward_once t], then a loss built on [t]. [forward_once] no longer drops [t]'s backprop
+     (the once-contract retired, gh-ocannl-1724): the loss embeds it. Before, the gradient code for
+     [w] was silently never compiled. That backprop reads [w] (d t / d w = 2 w), which the once-run
+     computed as routine-local scratch: refused, naming [w] and the fix. With [w] materialized, it
+     trains [w] exactly as the fresh graph does. *)
   case "B: forward_once, then a loss over it" (fun () ->
-      let _w, t = probe "lf_b" in
+      let w, t = probe "lf_b" in
       let ctx = Train.forward_once (Context.auto ()) t in
       let%op loss = t *. 3. in
       let msg = refusal "B" (fun () -> Train.update_once ctx loss) in
-      p "B: refused, naming t's backprop fragment" (unpropagated msg (grad_of t)));
+      p "B: the backprop's read of the once-run's scratch leaf is refused, naming it and the fix"
+        (has msg (Ir.Tnode.label_name w.value)
+        && has msg "routine-local scratch" && has msg "Train.set_materialized"));
+  case "B, w materialized" (fun () ->
+      let w, t = probe "lf_bm" in
+      Train.set_materialized w.value;
+      let ctx = Train.forward_once (Context.auto ()) t in
+      let%op loss = t *. 3. in
+      Option.iter
+        (accepted "B: the loss compiles and runs in the once-run's lineage" (fun () ->
+             Train.update_once ctx loss))
+        ~f:(fun ctx ->
+          exact "B: w.grad equals the fresh graph's"
+            (Context.get_values ctx (grad_of w))
+            [| 6.; 12.; 18. |]));
   case "B': B with t.grad materialized" (fun () ->
-      let _w, t = probe "lf_b2" in
+      let w, t = probe "lf_b2" in
+      Train.set_materialized w.value;
       Train.set_materialized (grad_of t);
       let ctx = Train.forward_once (Context.auto ()) t in
       let%op loss = t *. 3. in
-      let msg = refusal "B'" (fun () -> Train.update_once ctx loss) in
-      p "B': the link error says no routine of the lineage propagates from t.grad"
-        (has msg ("no routine in this lineage propagates from " ^ Ir.Tnode.debug_name (grad_of t))));
+      Option.iter
+        (accepted "B': the loss compiles and runs" (fun () -> Train.update_once ctx loss))
+        ~f:(fun ctx ->
+          exact "B': w.grad equals the fresh graph's"
+            (Context.get_values ctx (grad_of w))
+            [| 6.; 12.; 18. |];
+          exact "B': t.grad is the loss's seed times 3"
+            (Context.get_values ctx (grad_of t))
+            [| 3.; 3.; 3. |]));
+  (* G1/G2: a parameter model evaluated with [forward_once], then trained. Before, G1 raised "the
+     loss trains no parameters" and G2 a link error over [y.grad]. *)
+  let model prefix =
+    let w = TDSL.param ~values:[| 1.; 2.; 3. |] (prefix ^ "_w") ~output_dims:[ 3 ] () in
+    let x = TDSL.ndarray [| 1.; 1.; 1. |] ~label:[ prefix ^ "_x" ] ~output_dims:[ 3 ] () in
+    let%op y = w *. x in
+    (w, y)
+  in
+  let train ctx loss =
+    let ctx = Train.init_params ctx IDX.empty loss in
+    let ctx, step =
+      Train.to_routine ctx IDX.empty
+        (Asgns.sequence
+           [ Train.grad_update loss; Train.sgd_update ~learning_rate:(TDSL.O.( !. ) 0.5) loss ])
+    in
+    Context.run ctx step
+  in
+  case "G1: forward_once of a parameter model, then training" (fun () ->
+      let w, y = model "lf_g1" in
+      let ctx = Train.forward_once (Context.auto ()) y in
+      let%op loss = y *. 3. in
+      Option.iter
+        (accepted "G1: the step compiles and runs" (fun () -> train ctx loss))
+        ~f:(fun ctx ->
+          (* d loss / d w = 3 x = 3, so w - 0.5 * 3. *)
+          exact "G1: w is trained" (Context.get_values ctx w.value) [| -0.5; 0.5; 1.5 |]));
+  case "G2: G1 with a head parameter" (fun () ->
+      let w, y = model "lf_g2" in
+      let ctx = Train.forward_once (Context.auto ()) y in
+      let v = TDSL.param ~values:[| 2.; 2.; 2. |] "lf_g2_v" ~output_dims:[ 3 ] () in
+      let%op loss = v *. y in
+      Option.iter
+        (accepted "G2: the step compiles and runs" (fun () -> train ctx loss))
+        ~f:(fun ctx ->
+          (* d loss / d w = v x = 2, d loss / d v = y = w x. *)
+          exact "G2: w is trained" (Context.get_values ctx w.value) [| 0.; 1.; 2. |];
+          exact "G2: v is trained" (Context.get_values ctx v.value) [| 1.5; 1.; 0.5 |]));
+  (* The once-run's intermediate [u] is virtual in its routine; the loss's backprop through [t]
+     reads it (d t / d u = 2 u), so the later routine must recompute it (the cross-routine splice,
+     gh-ocannl-610/611). Held to a fresh graph that materializes [u]. *)
+  case "virtual intermediate of the once-run" (fun () ->
+      let graph prefix =
+        let w = leaf (prefix ^ "_w") in
+        let%op u = w *. 2. in
+        let%op t = u *. u in
+        Train.set_materialized (grad_of w);
+        (w, u, t)
+      in
+      let w_ref, u_ref, t_ref = graph "lf_vi_ref" in
+      Train.set_materialized u_ref.value;
+      let%op loss_ref = t_ref *. 3. in
+      let ctx_ref = Train.update_once (Context.auto ()) loss_ref in
+      let reference = Context.get_values ctx_ref (grad_of w_ref) in
+      (* loss = 3 (2 w)^2 = 12 w^2. *)
+      exact "the materialized reference: w.grad = 24 w" reference [| 24.; 48.; 72. |];
+      let w, u, t = graph "lf_vi" in
+      (* [w] materialized, so only [u] is the once-run's unstored intermediate. *)
+      Train.set_materialized w.value;
+      let ctx = Train.forward_once (Context.auto ()) t in
+      p "u is not stored by the once-run" (not (Context.is_initialized ctx u.value));
+      let%op loss = t *. 3. in
+      Option.iter
+        (accepted "the loss over the once-run's virtual intermediate compiles and runs" (fun () ->
+             Train.update_once ctx loss))
+        ~f:(fun ctx ->
+          exact "w.grad equals the materialized reference's"
+            (Context.get_values ctx (grad_of w))
+            reference));
   case "C: forward_once twice" (fun () ->
       let _w, t = probe "lf_c" in
       let ctx0 = Context.auto () in

@@ -16,9 +16,34 @@ files.
   embedding: `consume_forward_code` and `consume_backprop_code` return the original comp without
   checking or modifying roots built since the first handout (gh-ocannl-955). This is equivalent to
   retaining the comp, including the caller's responsibility for execution order and gradient
-  zeroing/seeding. Parameters, embedded subtensors, and discarded backprop remain rejected
-  (`consume_forward_code_reason.ml`, executed replay in `consume_code_replay.ml`). The bare root
-  removers are not exported: a route that drops a root without a consumer records its kind.
+  zeroing/seeding; compiling the replay a second time in ONE lineage is the lineage's to refuse
+  (next bullet), so a replay compiles as a sibling. Parameters and embedded subtensors remain
+  rejected (`consume_forward_code_reason.ml`, executed sibling replay in `consume_code_replay.ml`).
+  The bare root removers are not exported: a route that drops a root without a consumer records
+  its kind.
+- Fragment ownership is checked per compilation lineage, not per tensor (gh-ocannl-1724). A
+  fragment is `(Tnode.t * side)`: `(t.value, Fwd)` is `t`'s forward code, `(t.grad, Bprop)` the
+  code propagating FROM `t.grad` (other fragments write that gradient too, so the written node is
+  not the identity). `Tensor.op` fills `comp.owned` (own fragment plus embedded children's) and
+  `comp.requires` (`(ti.grad, Bprop)` for each differentiable non-parameter child whose backprop it
+  skipped because the child was no longer a backprop root), derived from the child's own `owned`,
+  so a tensor built by `Tensor.term` (leaves and parameters: constant-empty `grad_asn`,
+  `~terminal_backprop:true`) owns no backprop fragment and is never required — the maintainer's
+  "exempt all terms". Zeroing, `init_params`, hand-written `%cd` assignments and the host-read
+  recompute proxy own nothing; `embedded_nodes` stays an INITIALIZATION claim and is not ownership.
+  `Context.compile` refuses a comp owning a fragment its frontier's `owners` already holds;
+  `Context.run` refuses unmet `requires` against the running context's frontier when it descends
+  from the routine's compile (same ledger, routine in `lineage_routines`), else the routine's own —
+  never a sibling's (the ledger's `fragment_registry` only names one in the refusal). Traps: a
+  required gradient is a `+=` (read-before-write), so with the gradient materialized — always under
+  `Train.to_routine`, which materializes guessed outputs — the LINK fails first, and
+  `Backends.Prior_context_lacks` carries the node to `Context`'s lineage hint; a test that needs
+  the run-time check allocates the gradient first (a zeroing routine). Owner presence is not proof
+  of a correct gradient: a skipped child's ZEROING is skipped too, so two routines over one trunk
+  (or one term) accumulate without a common reset. A test that recompiles one program along a
+  lineage to exercise lowering compiles an unowned copy (`Asgns.comp ~embedded asgns`). The
+  `Train.*_once` functions mean "compile and run one time"; `forward_once` drops nothing, so a loss
+  built after it trains through it (`lineage_fragments.ml`).
 
 - The `projections` handle an `op_asn` receives is a promise: `Tensor.op` creates the operation's
   shape update step only after `op_asn` returns, because the step's `neutral_elem` is immutable and
@@ -42,7 +67,7 @@ files.
 - Rewind restores the graph-root maps WHOLESALE from the closure checkpoint and resets the restored
   roots' handout markers — a `Taken` marker does not mean "handed to a caller": `%cd` embedding
   calls `take_forward_code` too (gh-ocannl-1301). External handouts of closed work
-  (`consume_*_code`, `discard_backprop_code`) are recorded into the checkpoint as they happen, and
+  (`consume_*_code`) are recorded into the checkpoint as they happen, and
   `with_unchanged_roots` restores the checkpoint with the maps. A rewind discards exactly the nodes
   the frontend allocated since the closure, by uid (gh-ocannl-1505): a new `Tn.create` site in
   `tensor.ml` must call `note_open_node`, or its node outlives the rewind as a live handle (an id or

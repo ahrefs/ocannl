@@ -35,12 +35,12 @@ type diff = { grad : (Tn.t[@sexp.opaque]); zero_grads : Asgns.comp; backprop : A
 
 (* What became of the tensor's code once it stopped being a root. A root leaves the session's root
    map when a consumer embeds it, when it is handed out ([consume_forward_code], [take_forward_code]
-   -- the [%cd] embedding path -- or [consume_backprop_code]) and when it is discarded
-   ([discard_backprop_code], the [Train.forward_once] path); repeated handout is allowed only for
-   [Taken], so every non-embedding removal records its kind here. The cell is mutable and shared by
-   record copies that preserve code ownership; [param] starts a fresh cell when it changes
+   -- the [%cd] embedding path -- or [consume_backprop_code]); repeated handout is allowed for
+   [Taken], so every non-embedding removal records its kind here. A second copy of handed-out code
+   in one compilation lineage is the lineage's to refuse (gh-ocannl-1724). The cell is mutable and
+   shared by record copies that preserve code ownership; [param] starts a fresh cell when it changes
    ownership. Markers stay on tensors rather than accumulating in session-global storage. *)
-type handout = Not_handed_out | Taken | Discarded [@@deriving sexp_of, equal]
+type handout = Not_handed_out | Taken [@@deriving sexp_of, equal]
 type consumption = { mutable fwd : handout; mutable bprop : handout } [@@deriving sexp_of]
 
 module rec Self : sig
@@ -195,10 +195,9 @@ let record_checkpoint () =
 
 let () = Shape.set_on_closure record_checkpoint
 
-(* An external handout of closed work (code given to a caller, or a backprop root dropped by a
-   forward-only run) is a closed-world act: record it in the checkpoint too, so a rewind never
-   resurrects a root whose code the caller holds. Embeddings by constructions are not recorded --
-   those constructions are what a rewind discards. *)
+(* An external handout of closed work (code given to a caller) is a closed-world act: record it in
+   the checkpoint too, so a rewind never resurrects a root whose code the caller holds. Embeddings
+   by constructions are not recorded -- those constructions are what a rewind discards. *)
 let record_handout_in_checkpoint ~fwd t =
   if t.value.id < checkpoint.ck_mark then
     if fwd then checkpoint.ck_fwd <- Map.remove checkpoint.ck_fwd t.value.id
@@ -211,15 +210,6 @@ let record_handout_in_checkpoint ~fwd t =
    alike), with the provenance of the rewind that discarded each. *)
 let discarded_nodes : (int, string) Hashtbl.t = Hashtbl.create (module Int)
 let discarded_by (tn : Tn.t) = Hashtbl.find discarded_nodes tn.uid
-
-(* Marks only what it removes: a backprop code handed out before the forward-only run stays [Taken],
-   so later consumption can still return the code rather than reject a discard that dropped
-   nothing. *)
-let discard_backprop_code t =
-  if is_bprop_root t then (
-    record_handout_in_checkpoint ~fwd:false t;
-    remove_bprop_root t;
-    t.consumption.bprop <- Discarded)
 
 let with_unchanged_roots ~f =
   let fwd_roots = session_state.forward_roots in
@@ -1188,16 +1178,10 @@ let%debug7_sexp param ?(require_grad = true) ~t (name : string) ?(more_label = [
 let debug_name t = Tn.debug_name t.value
 let debug_grad t = Tn.debug_name (Option.value_exn t.diff).grad
 
-(* Taken code can be handed out repeatedly. Other non-roots still need a reason: discarded backprop,
-   a parameter's absent forward code, or code owned by a tensor consumer. *)
+(* Taken code can be handed out repeatedly. Other non-roots still need a reason: a parameter's
+   absent forward code, or code owned by a tensor consumer. *)
 let not_a_root_reason ~(handout : handout) ~what ~name t =
   match handout with
-  | Discarded ->
-      [%string
-        "Tensor.consume_%{what}_code: the %{what} code of %{name} was discarded \
-         (Train.forward_once runs a differentiable tensor forward-only and drops its backprop \
-         root); to backpropagate, build the tensor afresh and use Train.update_once or \
-         Train.grad_update"]
   | Taken -> assert false (* The consume functions return before reaching this rejection. *)
   | Not_handed_out when String.equal what "forward" && Set.mem t.params t ->
       [%string

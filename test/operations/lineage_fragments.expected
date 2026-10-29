@@ -1,6 +1,19 @@
 A: w.grad = 6 w: true
-B: refused, naming t's backprop fragment: true
-B': the link error says no routine of the lineage propagates from t.grad: true
+B: the backprop's read of the once-run's scratch leaf is refused, naming it and the fix: true
+B: the loss compiles and runs in the once-run's lineage: true
+B: w.grad equals the fresh graph's: true
+B': the loss compiles and runs: true
+B': w.grad equals the fresh graph's: true
+B': t.grad is the loss's seed times 3: true
+G1: the step compiles and runs: true
+G1: w is trained: true
+G2: the step compiles and runs: true
+G2: w is trained: true
+G2: v is trained: true
+the materialized reference: w.grad = 24 w: true
+u is not stored by the once-run: true
+the loss over the once-run's virtual intermediate compiles and runs: true
+w.grad equals the materialized reference's: true
 C: the second, on the returned context, is refused naming t's forward fragment: true
 C: the refusal left the first run's value: true
 C: the same compile as a sibling is accepted: true

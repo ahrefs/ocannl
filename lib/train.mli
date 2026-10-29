@@ -379,7 +379,16 @@ val run_once :
 
     If [output_cd_file] is true, the global setting [output_debug_files_in_build_directory] must be
     true, and the update code is output to a file before shape inference potentially crashes at
-    [init_params]. *)
+    [init_params].
+
+    [once] is literal: this compiles [f t] and runs it one time. The tensor stays usable -- a loss
+    built on it after a {!forward_once} trains through it -- and reuse is a property of the
+    compilation lineage, not of the tensor (gh-ocannl-1724): the returned context's lineage holds
+    the code fragments [f t] carries, so compiling them again from it ({!run_once} of the same
+    tensor, or {!forward}/{!grad_update} of it through {!to_routine}) is refused by
+    {!Context.compile}. To run a computation repeatedly, compile it with {!to_routine} and run the
+    routine with {!Context.run}; to compile an alternative version, start from a context that does
+    not descend from this one (a sibling). *)
 
 val forward_once :
   ?output_cd_file:bool ->

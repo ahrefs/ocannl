@@ -717,10 +717,9 @@ let check_requirements ctx routine =
          (Printf.sprintf
             "Context.run: routine %s accumulates into gradients whose backprop code no routine of \
              its lineage carries: %s. That backprop was embedded in another tensor's when it was \
-             built, or handed out to an earlier Train.grad_update (or dropped by \
-             Train.forward_once). Compile the routine carrying it in this lineage: compile one of \
-             the two routines from the context the other's compile returned, and run from the \
-             later context."
+             built, or handed out to an earlier Train.grad_update. Compile the routine carrying it \
+             in this lineage: compile one of the two routines from the context the other's compile \
+             returned, and run from the later context."
             routine.name listed)
 
 (* The public form of a backend's missing-prior-node failure, with what the lineage knows about the
