@@ -78,16 +78,19 @@ On CUDA, approximate inference had been 28% *slower* than exact in the
 turned that slowdown into a speedup, at about 3× the allocator high-water mark
 ([PR #952](https://github.com/lukstafi/ocannl-staging/pull/952)).
 
-In exact numerics, OCANNL remains slower than exact-pinned `torch.compile`:
+OCANNL remains slower than `torch.compile` and tinygrad BEAM=2 in both regimes. Exact pairs
+OCANNL's default numerics with exact-pinned PyTorch; approximate pairs
+`--ocannl_profile=approximate` with PyTorch's defaults (tf32, SDPA). tinygrad has no exact pin
+and runs its defaults in both columns.
 
-| backend | slower than `torch.compile` | slower than tinygrad BEAM=2 |
+| backend | exact: slower than `torch.compile` / tinygrad | approximate: slower than `torch.compile` / tinygrad |
 |---|---|---|
-| CUDA | 3.31× | 2.17× |
-| Metal | 2.82× | 3.39× |
-| unified-memory HIP | 1.36× | 1.39× |
-| discrete HIP | 1.11× | 1.36× |
+| CUDA | 3.31× / 2.17× | 4.24× / 1.56× |
+| Metal | 2.82× / 3.39× | 2.60× / 2.76× |
+| unified-memory HIP | 1.36× / 1.39× | 1.35× / 1.42× |
+| discrete HIP | 1.11× / 1.36× | 1.19× / 1.45× |
 
-The Metal ratio to PyTorch is flattered: PyTorch on that box reads slower than it did in October.
+The Metal ratios to PyTorch are flattered: PyTorch on that box reads slower than it did in October.
 
 The campaign did not produce controlled training measurements.
 
