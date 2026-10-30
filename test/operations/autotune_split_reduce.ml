@@ -346,13 +346,23 @@ let () =
      Empty static bindings, so their preflight binding validation cannot decline; CPU launch/sync
      failures are fatal. Every observed family preflight therefore completes a window before the
      admitted hook or normal return, including refused windows. Compile declines and dedups never
-     reach this observer. Thus the exact counter relationship survives arbitrary timing refusals. *)
-  List.iter [ false; true ] ~f:(fun composite ->
+     reach this observer. Thus the exact counter relationship survives arbitrary timing refusals. A
+     window belongs to the attempt announced before it, and an attempt takes at most one, so its
+     preflight consumes the flag: the beam finals re-time near-tie contenders with no attempt of
+     their own, and a still-raised flag counted their windows as the family's whenever the selected
+     window was refused on a loaded host. The [refuse] search scripts that refusal (an unreadable
+     reading for every selected window) so the relationship is pinned on any host; it clears the
+     physical contention flag, so only an unbatched or unreadable window can keep a composite from
+     being formed, and then no selected window is reached. *)
+  List.iter
+    [ (false, false); (true, false); (true, true) ]
+    ~f:(fun (composite, refuse) ->
       let partial = ref None and injected = ref false and selected = ref false in
-      let split_attempt = ref false and windows = ref 0 in
+      let split_attempt = ref false and windows = ref 0 and selected_windows = ref 0 in
       let old_preflight = Autotune.Seam.get Autotune.on_candidate_preflight in
       let old_attempt = Autotune.Seam.get Autotune.on_candidate_attempt in
       let old_timed = Autotune.Seam.get Autotune.on_candidate_timed in
+      let old_measured = Autotune.Seam.get Autotune.on_candidate_measured in
       ( Autotune.Seam.set Autotune.on_candidate_attempt @@ fun label ->
         split_attempt := String.is_prefix label ~prefix:"F_split[";
         (* A multi-site window: the recombined composite's, or a staffed single's
@@ -362,7 +372,13 @@ let () =
           && Bool.equal composite
                (String.mem label ',' || String.is_substring label ~substring:" | staff ") );
       ( Autotune.Seam.set Autotune.on_candidate_preflight @@ fun _ ->
-        if !split_attempt then Int.incr windows );
+        if !split_attempt then (
+          Int.incr windows;
+          if !selected then Int.incr selected_windows;
+          split_attempt := false) );
+      if refuse then
+        Autotune.Seam.set Autotune.on_candidate_measured (fun ~label:_ ~digest:_ ms ->
+            if !selected then Float.nan else ms);
       ( Autotune.Seam.set Autotune.on_candidate_timed @@ fun _ ~timed_so_far:_ ->
         if !selected then (
           injected := true;
@@ -371,9 +387,12 @@ let () =
         ~finally:(fun () ->
           Autotune.Seam.set Autotune.on_candidate_attempt old_attempt;
           Autotune.Seam.set Autotune.on_candidate_preflight old_preflight;
-          Autotune.Seam.set Autotune.on_candidate_timed old_timed)
+          Autotune.Seam.set Autotune.on_candidate_timed old_timed;
+          Autotune.Seam.set Autotune.on_candidate_measured old_measured)
         ~f:(fun () ->
+          let tune f = if refuse then Autotune.with_uncontended_test_windows f else f () in
           match
+            tune @@ fun () ->
             Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""
               ~report:(fun r -> partial := Some r)
               (Context.cpu ())
@@ -383,10 +402,21 @@ let () =
           | ctx, _ -> Context.release ctx
           | exception Stdlib.Exit when !injected -> ());
       let claim =
-        if composite then "partial report retains admitted split-reduce composite"
+        if refuse then "a refused split-reduce composite window leaves the family count exact"
+        else if composite then "partial report retains admitted split-reduce composite"
         else "partial report retains admitted split-reduce single"
       in
       match !partial with
+      | Some r when refuse && !selected_windows = 0 && r.Autotune.timings_contended > 0 ->
+          (* Refused singles staff no composite, so no selected window was reached. *)
+          skipped ~aggregation:`Environment ~backend:"cc" claim
+      | r when refuse ->
+          p claim
+            ((not !injected)
+            && Option.exists r ~f:(fun r ->
+                !selected_windows > 0
+                && r.Autotune.split_reduce_timed = !windows
+                && r.Autotune.timings_unreadable >= !selected_windows))
       | Some r when !injected ->
           p claim
             (!windows > 0

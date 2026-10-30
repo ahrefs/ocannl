@@ -15,6 +15,7 @@ best-timed singles recombined into a composite: true
 tuned multi-site routine matches the serial reference: true
 partial report retains admitted split-reduce single: true
 partial report retains admitted split-reduce composite: true
+a refused split-reduce composite window leaves the family count exact: true
 the bias gradient yields a split-reduce site: true
 the site carries an enabling interchange: true
 conv-gradient split-reduce candidates seeded: true
