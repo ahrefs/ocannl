@@ -1,5 +1,7 @@
 # gh-ocannl-1181: GPT-2-mini against PyTorch and tinygrad on four boxes, with a same-night August anchor
 
+> **2026-10-30: re-run.** [report-tagline-gpt2-20261030.md](report-tagline-gpt2-20261030.md) repeats this protocol at `1fc57811` with this report's master `a723dc5b` as the same-window anchor. It has a quotable tuf master figure and a minix PyTorch figure for the first time.
+
 **Measured 2026-10-03/04 on rog-nv-linux (CUDA), minix-amd-linux (HIP, unified memory),
 tuf-amd-linux (HIP, discrete VRAM) and mac-studio (Metal), each box in its own exclusive timing
 window.** OCANNL is master `a723dc5b` against the August commit `7014dc44`, both rebuilt and
