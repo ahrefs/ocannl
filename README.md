@@ -63,14 +63,36 @@ options, including TF32 on supported CUDA hardware, fast math on CPU, and attent
 that reduce intermediate storage. Check the resulting accuracy and speed on your workload.
 
 Start with the default numerics; the approximate profile is opt-in and has no general speedup
-guarantee. The [October 3–4 tuned inference comparison](benchmarks/report-tagline-gpt2.md)
-measured `gpt2_mini` f32 at **3.504 ms exact versus 4.493 ms approximate on CUDA** (28% slower),
-**8.334 versus 7.457 ms on Metal** (11% lower latency), and **4.757 versus 4.692 ms on
-unified-memory HIP** (essentially neutral). Discrete-HIP master timings failed the clean-replay
-requirement, and the campaign did not produce controlled training measurements. Since then,
-v1.1.1's CUDA attention fallback has made tuned approximate inference on the same CUDA box
-**2.48 ms against 3.50 ms exact**, at about 3× the allocator high-water mark
+guarantee. The [October 30 tuned inference comparison](benchmarks/report-tagline-gpt2-20261030.md)
+measured `gpt2_mini` f32 inference at:
+
+| backend | exact | approximate | approximate vs exact |
+|---|---|---|---|
+| CUDA | 3.283 ms | 2.364 ms | 28% lower latency |
+| Metal | 7.002 ms | 5.693 ms | 19% lower latency |
+| unified-memory HIP | 4.310 ms | 4.409 ms | 2% slower |
+| discrete HIP | 5.487 ms | 5.874 ms | 7% slower |
+
+On CUDA, approximate inference had been 28% *slower* than exact in the
+[October 3–4 comparison](benchmarks/report-tagline-gpt2.md). v1.1.1's CUDA attention fallback
+turned that slowdown into a speedup, at about 3× the allocator high-water mark
 ([PR #952](https://github.com/lukstafi/ocannl-staging/pull/952)).
+
+OCANNL remains slower than `torch.compile` and tinygrad BEAM=2 in both regimes. Exact pairs
+OCANNL's default numerics with exact-pinned PyTorch; approximate pairs
+`--ocannl_profile=approximate` with PyTorch's defaults (tf32, SDPA). tinygrad has no exact pin
+and runs its defaults in both columns.
+
+| backend | exact: slower than `torch.compile` / tinygrad | approximate: slower than `torch.compile` / tinygrad |
+|---|---|---|
+| CUDA | 3.31× / 2.17× | 4.24× / 1.56× |
+| Metal | 2.82× / 3.39× | 2.60× / 2.76× |
+| unified-memory HIP | 1.36× / 1.39× | 1.35× / 1.42× |
+| discrete HIP | 1.11× / 1.36× | 1.19× / 1.45× |
+
+The Metal ratios to PyTorch are flattered: PyTorch on that box reads slower than it did in October.
+
+The campaign did not produce controlled training measurements.
 
 The separate [October 3 default-schedule sweep](benchmarks/report-gh720-transformer.md)
 measured approximate f32 slower at all eight HIP endpoints, with Metal inference improvements
