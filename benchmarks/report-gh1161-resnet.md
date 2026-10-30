@@ -1,5 +1,7 @@
 # Benchmark results — cifar_resnet baseline (gh-ocannl-1161)
 
+> **2026-10-30 (gh-ocannl-1401): re-measured, with tuned cells.** [report-gh1161-resnet-20261030.md](report-gh1161-resnet-20261030.md) repeats this table at `1fc57811` on the same three boxes and fixtures, and adds the tuned cells this baseline could not quote: every `cifar_resnet{,_b1}/{cc,cuda,metal,hip}/tuned/exact` cell, the fission-off CUDA cell, and the minix redo, each a pass-2 replay from a fresh absolute cache. The tables below remain the Oct 16 baseline.
+
 > Checked-in baseline record for the reduced ResNet-style conv leg (`cifar_resnet` at batch 64,
 > `cifar_resnet_b1` at batch 1; the workload and the cell names are in [README.md](README.md#cifar_resnet-cell-names)).
 > These are the **untuned** (`default`) cells, exact and approximate, that the v1.1.2 conv issues
