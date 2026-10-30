@@ -1074,6 +1074,12 @@ The anchor's store (m4-max's, which provisioning copies from) lacks `gpt2_mini_b
 `gpt2_mini_train_b256`; rog alone holds the latter. The cifar and mlp fixtures exist only as
 rog-nv's and minix's `raw-v1` rows, on no box's disk. minix and tuf compare different torch builds.
 
+Since gh-ocannl-1357 (2026-10-30), rog-nv's and minix's `gpt2_mini` and `lenet` rows record the
+bytes on their disks (`content-v1`, the m4-max bytes), so the last column reads none for both
+boxes; reports measured on the replaced `raw-v1` files say so at their top. The same day's audit
+found minix's store holding `gpt2_mini_train_b256` too, and the cifar_conv, cifar_stride and mlp
+fixtures still on neither box.
+
 ## Methodology notes / fairness pitfalls
 
 - **The regime column: exact vs `approximate`** (gh-ocannl-719, the first leg of the
