@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """gh-ocannl-1181: the sponsor-tagline matrix for `gpt2_mini` on one box.
 
-One invocation measures one box's GPU column across three frameworks, with the August anchor
-re-measured beside today's master in the same window:
+One invocation measures one box's GPU column across three frameworks, with an anchor commit (the
+August `7014dc44` by default, `--anchor-commit` for another) re-measured beside today's master in
+the same window:
 
 - OCANNL tuned at the checkout this file lives in (`master`), under the exact regime and under
-  `--ocannl_profile=approximate`, and OCANNL tuned exact at the August commit (`--aug`, a second
+  `--ocannl_profile=approximate`, and OCANNL tuned exact at the anchor commit (`--aug`, a second
   checkout whose `bench_gpt.exe` is run unchanged: history is selected by executable path, never
-  patched). Tuned cells keep orchestrate's two-pass protocol: a search process, then a fresh
+  patched). The arm keeps its name, `ocannl-aug-exact`, whichever commit anchors it. Tuned cells keep orchestrate's two-pass protocol: a search process, then a fresh
   process that replays the cached winners and supplies the timings (gh-ocannl-644).
 - PyTorch eager and `torch.compile`, each under the exact pin (`highest` matmul precision, cudnn
   tf32 off, composed attention) and under torch's own defaults (`--regime approximate`).
@@ -59,6 +60,7 @@ ARMS = {
     "torch-defaults-eager": ("pytorch", None, "approximate", "eager"),
 }
 BEAM = 2
+AUGUST = "7014dc4463d00ef1b5d7ef9a24d02ba3556973ee"
 RUNNER = "_build/default/benchmarks/runners/ocannl/bench_gpt.exe"
 COMPLETION_PASSES = 2
 
@@ -68,9 +70,12 @@ def parse_args(argv=None):
     ap.add_argument("--backend", choices=["cuda", "hip", "metal"])
     # --box is also the box label stamped on every row (a measurement-box ID since the box gate).
     box_gate.add_arguments(ap)
-    ap.add_argument("--aug", type=Path, help="checkout of 7014dc44 with its bench_gpt.exe built")
+    ap.add_argument("--aug", type=Path,
+                    help="checkout of the anchor commit with its bench_gpt.exe built")
+    ap.add_argument("--anchor-commit", default=AUGUST, metavar="SHA",
+                    help="the commit --aug must be at (a prefix of it; default the August 7014dc44)")
     ap.add_argument("--no-anchor", metavar="REASON",
-                    help="run without the August arm, recording why (it did not build, say)")
+                    help="run without the anchor arm, recording why (it did not build, say)")
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--workloads", nargs="+", default=["gpt2_mini"])
     ap.add_argument("--arms", nargs="+", choices=list(ARMS), default=list(ARMS))
@@ -91,8 +96,10 @@ def parse_args(argv=None):
     if not a.summarize:
         if not a.backend or not a.box:
             ap.error("--backend and --box are required to measure")
+        if len(a.anchor_commit) < 8 or any(c not in "0123456789abcdef" for c in a.anchor_commit):
+            ap.error("--anchor-commit takes a lowercase hex commit prefix of at least 8 digits")
         if "ocannl-aug-exact" in a.arms and not (a.aug or a.no_anchor):
-            ap.error("the August arm needs --aug, or --no-anchor with the reason")
+            ap.error("the anchor arm needs --aug, or --no-anchor with the reason")
     return a
 
 
@@ -175,6 +182,7 @@ def environment(a, fixtures):
         "driver_sha256": raw_sha256(driver),
         "master_tree": str(HERE.parent),
         "aug_tree": str(a.aug) if a.aug else None,
+        "anchor_commit": a.anchor_commit,
         "no_anchor": a.no_anchor,
         "fixtures": fixtures,
         "arms": a.arms,
@@ -242,8 +250,8 @@ def measure(a):
         else:
             trees["aug"] = a.aug.resolve()
             shas["aug"] = git_sha(trees["aug"])
-            if not shas["aug"].startswith("7014dc44"):
-                raise SystemExit(f"--aug is at {shas['aug']}, not the August commit 7014dc44")
+            if not shas["aug"].startswith(a.anchor_commit):
+                raise SystemExit(f"--aug is at {shas['aug']}, not the anchor commit {a.anchor_commit}")
 
     # A row is stamped with its tree's HEAD, so that HEAD must be what runs: a tree with tracked
     # modifications is refused, and the runner of every tree an arm uses is built from it here,
@@ -362,7 +370,8 @@ def measure(a):
                     cmd = [str(root / RUNNER),
                            f"--ocannl_backend={ocannl_backend}", *o.ocannl_regime_args(regime)]
                     if tree == "master":
-                        # The August runner predates the progress flag (gh-ocannl-1061).
+                        # The August runner predates the progress flag (gh-ocannl-1061); the
+                        # anchor arm goes without it whichever commit anchors it.
                         cmd += o.ocannl_variant_args(variant)
                     if reuse:
                         # The search this replay's cache came from, already gated in repeat 0.
