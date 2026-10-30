@@ -351,12 +351,14 @@ let () =
      preflight consumes the flag: the beam finals re-time near-tie contenders with no attempt of
      their own, and a still-raised flag counted their windows as the family's whenever the selected
      window was refused on a loaded host. The [refuse] search scripts that refusal (an unreadable
-     reading for every selected window) so the relationship is pinned on any host. *)
+     reading for every selected window) so the relationship is pinned on any host; it clears the
+     physical contention flag, so only an unbatched or unreadable window can keep a composite from
+     being formed, and then no selected window is reached. *)
   List.iter
     [ (false, false); (true, false); (true, true) ]
     ~f:(fun (composite, refuse) ->
       let partial = ref None and injected = ref false and selected = ref false in
-      let split_attempt = ref false and windows = ref 0 in
+      let split_attempt = ref false and windows = ref 0 and selected_windows = ref 0 in
       let old_preflight = Autotune.Seam.get Autotune.on_candidate_preflight in
       let old_attempt = Autotune.Seam.get Autotune.on_candidate_attempt in
       let old_timed = Autotune.Seam.get Autotune.on_candidate_timed in
@@ -372,6 +374,7 @@ let () =
       ( Autotune.Seam.set Autotune.on_candidate_preflight @@ fun _ ->
         if !split_attempt then (
           Int.incr windows;
+          if !selected then Int.incr selected_windows;
           split_attempt := false) );
       if refuse then
         Autotune.Seam.set Autotune.on_candidate_measured (fun ~label:_ ~digest:_ ms ->
@@ -387,7 +390,9 @@ let () =
           Autotune.Seam.set Autotune.on_candidate_timed old_timed;
           Autotune.Seam.set Autotune.on_candidate_measured old_measured)
         ~f:(fun () ->
+          let tune f = if refuse then Autotune.with_uncontended_test_windows f else f () in
           match
+            tune @@ fun () ->
             Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""
               ~report:(fun r -> partial := Some r)
               (Context.cpu ())
@@ -402,16 +407,16 @@ let () =
         else "partial report retains admitted split-reduce single"
       in
       match !partial with
-      | Some r when refuse && !windows = 0 && r.Autotune.timings_contended > 0 ->
-          (* A single refused under real load staffs no composite, so none was selected. *)
+      | Some r when refuse && !selected_windows = 0 && r.Autotune.timings_contended > 0 ->
+          (* Refused singles staff no composite, so no selected window was reached. *)
           skipped ~aggregation:`Environment ~backend:"cc" claim
       | r when refuse ->
           p claim
             ((not !injected)
             && Option.exists r ~f:(fun r ->
-                !windows > 0
+                !selected_windows > 0
                 && r.Autotune.split_reduce_timed = !windows
-                && r.Autotune.timings_unreadable > 0))
+                && r.Autotune.timings_unreadable >= !selected_windows))
       | Some r when !injected ->
           p claim
             (!windows > 0
