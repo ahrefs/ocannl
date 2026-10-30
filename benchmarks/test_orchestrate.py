@@ -2840,7 +2840,8 @@ class FixtureDigestTest(unittest.TestCase):
 
     def test_checked_in_divergence_accounts_for_copies_of_m4_max(self):
         # gh-ocannl-720 copies the transformer fixtures to other boxes instead of regenerating
-        # them, and gh-ocannl-1161 the cifar_resnet ones to rog-nv and minix. Pin that recorded
+        # them, gh-ocannl-1161 the cifar_resnet ones to rog-nv and minix, and gh-ocannl-1357
+        # re-recorded rog-nv's and minix's lenet as the m4-max copies they hold. Pin that recorded
         # policy and keep missing/different origins visible for every entry.
         digests = HERE / "fixtures" / fixture_digest.DIGEST_FILE
         entries, declared = fixture_digest._read_document(digests)
@@ -2851,10 +2852,12 @@ class FixtureDigestTest(unittest.TestCase):
         self.assertTrue(resnet, "no cifar_resnet workload specs found")
         on_tuf = {name for name, recorded in entries.items() if any(e.origin == "tuf" for e in recorded)}
         self.assertEqual(on_tuf, expected, "TUF must record every GPT fixture copy")
-        copied = expected | resnet
-        # Which boxes hold each family's copies: TUF's GPT copies, the resnet leg's three boxes.
+        lenet = {"lenet.safetensors"}
+        copied = expected | resnet | lenet
+        # Which boxes hold each family's copies: TUF's GPT copies, the resnet leg's three boxes,
+        # and lenet's re-recorded rows.
         copy_boxes = {name: {"m4-max", "tuf"} for name in expected}
-        copy_boxes.update({name: {"m4-max", "minix", "rog-nv"} for name in resnet})
+        copy_boxes.update({name: {"m4-max", "minix", "rog-nv"} for name in resnet | lenet})
 
         for name, recorded in entries.items():
             self.assertTrue(recorded, name)
