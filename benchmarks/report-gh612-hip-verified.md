@@ -1,5 +1,9 @@
 # gh-ocannl-612 on HIP, verified: every ratio on an artifact that shipped and was executed
 
+> **2026-10-30 (gh-ocannl-1357): measured on the replaced raw-v1 files, not comparable byte-for-byte
+> with later content-v1 reports.** Its `gpt2_mini` is minix's 13,871,360-byte raw-v1 file (`10839bd1…`; md5 `5b3dfff8…` below). The files on those boxes have since been replaced by the
+> m4-max content-v1 bytes, which `fixtures/DIGESTS.txt` now records for rog-nv and minix.
+
 Measurement report, and the closing half of [`report-gh612-hip.md`](report-gh612-hip.md). That
 report measured [#573](https://github.com/ahrefs/ocannl/issues/573) and
 [#574](https://github.com/ahrefs/ocannl/issues/574) on the Radeon 8060S and stated one limitation in

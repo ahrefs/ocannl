@@ -1,5 +1,9 @@
 # Benchmark results
 
+> **2026-10-30 (gh-ocannl-1357): measured on the replaced raw-v1 files, not comparable byte-for-byte
+> with later content-v1 reports.** Its `gpt2_mini` is minix's raw-v1 file (`10839bd1…`), and its `lenet` predates any recorded digest. The files on those boxes have since been replaced by the
+> m4-max content-v1 bytes, which `fixtures/DIGESTS.txt` now records for rog-nv and minix.
+
 platform: Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.43 x86_64 | ocannl commit: e687da82 | parity tol: 0.002 (max rel diff over first parity steps vs pytorch/cpu/eager; reduced precisions get their own envelope: bf16 0.004, f16 0.002, f16-static 0.002, f16-gated16 0.002)
 > The HIP/ROCm leg of the **gh-ocannl-538** re-measurement sweep, run from scratch on minix-pc:
 > AMD Ryzen AI Max+ 395 (Strix Halo, Zen 5, 16C/32T) with the Radeon 8060S iGPU (gfx1151,

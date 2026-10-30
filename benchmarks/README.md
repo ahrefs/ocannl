@@ -140,7 +140,8 @@ endpoint, whereas HIP's invalid exact-f16 and beyond-exact approximate rows are 
 
 The v1.1.2 conv issues each close against a named cell of the `cifar_resnet` leg, before and
 after, on one box; the untuned baseline cells on rog-nv (CUDA), m4-max (Metal) and minix (HIP) are
-in [report-gh1161-resnet.md](report-gh1161-resnet.md). A **step cell** is `<workload>/<backend>/<variant>/<regime>` (the regime
+in [report-gh1161-resnet.md](report-gh1161-resnet.md), re-measured with the tuned cells on 2026-10-30 in
+[report-gh1161-resnet-20261030.md](report-gh1161-resnet-20261030.md). A **step cell** is `<workload>/<backend>/<variant>/<regime>` (the regime
 `exact` or `approximate`), e.g. `cifar_resnet_b1/cuda/tuned/exact`: the step p50 of that
 `orchestrate.py` row. A **site cell** is a step cell plus a site family, e.g.
 `cifar_resnet_b1/cuda/tuned/exact · sc1x1s2`: the summed min-of-20 kernel times of the kernels the
@@ -1073,6 +1074,12 @@ packages, recorded freeze, device round trip, `Python.h` and toolchain; the gaps
 The anchor's store (m4-max's, which provisioning copies from) lacks `gpt2_mini_b1` and
 `gpt2_mini_train_b256`; rog alone holds the latter. The cifar and mlp fixtures exist only as
 rog-nv's and minix's `raw-v1` rows, on no box's disk. minix and tuf compare different torch builds.
+
+Since gh-ocannl-1357 (2026-10-30), rog-nv's and minix's `gpt2_mini` and `lenet` rows record the
+bytes on their disks (`content-v1`, the m4-max bytes), so the last column reads none for both
+boxes; reports measured on the replaced `raw-v1` files say so at their top. The same day's audit
+found minix's store holding `gpt2_mini_train_b256` too, and the cifar_conv, cifar_stride and mlp
+fixtures still on neither box.
 
 ## Methodology notes / fairness pitfalls
 
