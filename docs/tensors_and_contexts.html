@@ -136,6 +136,14 @@ Loops</a></li>
 <li><a href="#stopping-and-resuming-training" id="toc-stopping-and-resuming-training">Stopping and Resuming
 Training</a></li>
 </ul></li>
+<li><a href="#reusable-tensor-programs" id="toc-reusable-tensor-programs">Reusable Tensor Programs</a>
+<ul>
+<li><a href="#one-function-two-shapes" id="toc-one-function-two-shapes">One Function, Two Shapes</a></li>
+<li><a href="#a-shape-mistake-named" id="toc-a-shape-mistake-named">A
+Shape Mistake, Named</a></li>
+<li><a href="#recovering-a-session-from-a-failed-construction" id="toc-recovering-a-session-from-a-failed-construction">Recovering a
+Session from a Failed Construction</a></li>
+</ul></li>
 <li><a href="#randomness-and-parameter-initialization" id="toc-randomness-and-parameter-initialization">Randomness and
 Parameter Initialization</a>
 <ul>
@@ -191,6 +199,13 @@ Passes</a></li>
 <li><a href="#training-loops">Training Loops</a></li>
 <li><a href="#stopping-and-resuming-training">Stopping and Resuming
 Training</a></li>
+</ul></li>
+<li><a href="#reusable-tensor-programs">Reusable Tensor Programs</a>
+<ul>
+<li><a href="#one-function-two-shapes">One Function, Two Shapes</a></li>
+<li><a href="#a-shape-mistake-named">A Shape Mistake, Named</a></li>
+<li><a href="#recovering-a-session-from-a-failed-construction">Recovering a
+Session from a Failed Construction</a></li>
 </ul></li>
 <li><a href="#randomness-and-parameter-initialization">Randomness and
 Parameter Initialization</a>
@@ -602,6 +617,21 @@ dependencies remain satisfied.</p>
 <span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a><span class="co">(* Re-execution works — deps are still satisfied *)</span></span>
 <span id="cb14-14"><a href="#cb14-14" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.run ctx grad_routine <span class="kw">in</span></span>
 <span id="cb14-15"><a href="#cb14-15" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> _ctx = Context.run ctx sgd_routine <span class="kw">in</span></span></code></pre></div>
+<h4 id="shared-gradients">Shared Gradients</h4>
+<p>A tensor shared by two losses – an optimized
+<code>Require_grad</code> input under a content and a style objective, a
+parameter, a trunk – receives each loss’s contribution to its gradient
+from that loss’s backprop, but only its first-constructed consumer
+carries its gradient zeroing (and, for a trunk, the backprop propagating
+from it). Two <code>Train.grad_update</code> routines over it in one
+lineage would compute neither loss’s gradient, so
+<code>Context.compile</code> refuses the second, naming the gradient and
+both routines (gh-ocannl-1744). Compute the objectives in one routine,
+as <code>Train.grad_update</code> of a loss over their sum; or compile
+<code>Train.zero_params_grads ~params</code> first and then a
+<code>Train.grad_update ~accum_steps:1</code> per objective, neither of
+which zeroes the shared leaf: after the reset and both runs, its
+gradient is the sum’s.</p>
 <h2 id="the-train-module">The Train Module</h2>
 <p>The <code>Train</code> module provides high-level utilities for
 training workflows.</p>
@@ -695,11 +725,77 @@ then restores:</p>
 <p><code>Checkpoint.restore</code> refuses a state set different from
 the one saved (a set missing the optimizer moments would silently
 restart them) and a plain <code>Persistence</code> checkpoint, which
-records no progress. Device-side randomness needs nothing saved: random
-operations are counter-based (see <a href="#counter-based-prng">Counter-Based PRNG</a>), so the same seed
-with counters derived from the restored step draws the same numbers.
+records no progress. Device-side randomness needs no generator state
+saved: random operations are counter-based (see <a href="#counter-based-prng">Counter-Based PRNG</a>), so the same seed
+with counters derived from the restored step draws the same numbers. The
+checkpoint therefore records the seeds
+(<code>Tensor.random_seeds</code>: every one the session created,
+including a graph’s scoped seed), and <code>Checkpoint.restore</code>
+refuses a program built under different ones, naming both; a checkpoint
+from before the seed was recorded restores with a warning instead.
 <code>test/training/resume_checkpoint.ml</code> resumes a run in a fresh
 process and checks it matches the uninterrupted one bit for bit.</p>
+<h2 id="reusable-tensor-programs">Reusable Tensor Programs</h2>
+<p>A <code>%op</code> function is a tensor program defined once and
+applied many times. It gets a <em>shape scheme</em> automatically: the
+shape constraints its body imposes, traced once when its closure is
+built and checked at every application (<a href="syntax_extensions.md#automatic-shape-schemes">Automatic shape
+schemes</a>; the mechanism is in <a href="shape_inference.md#shape-schemes">Shape schemes</a>). The tutorial
+<a href="../test/operations/reusable_tensor_programs.ml"><code>test/operations/reusable_tensor_programs.ml</code></a>
+walks through what that buys, in three steps; its <code>%expect</code>
+blocks are its real output, checked by
+<code>dune build @test/operations/runtest-reusable_tensor_programs</code>,
+and every excerpt below is checked to be verbatim from it.</p>
+<h3 id="one-function-two-shapes">One Function, Two Shapes</h3>
+<p>The layer’s <code>()</code> application creates its parameters
+<code>w</code> and <code>b</code> and returns the function that uses
+them; the input size of <code>w</code> is left to inference:</p>
+<p><code>ocaml doc-excerpt=test/operations/reusable_tensor_programs.ml let%op mlp_layer ~hid () x = relu (({ w; o = [ hid ] } * x) + { b = 0.; o = [ hid ] })</code></p>
+<p><code>Tensor.Scheme.to_string</code> prints a scheme like a type,
+<code>batch|input-&gt;output</code> for the argument, then
+<code>=&gt;</code> and the result. A row variable <code>..&#39;a..</code>
+stands for any number of axes and is generalized: each application gets
+its own. <code>..&#39;_a..</code> is fixed, shared by every application
+(here, the input row of <code>w</code>), the way OCaml prints a weak
+type variable. The indented lines are the broadcasting relations,
+<code>r ⊑ o</code> reading “the result row <code>r</code> refines the
+operand row <code>o</code>”:</p>
+<p><code>text doc-excerpt=test/operations/reusable_tensor_programs.ml layer : ..&#39;a..|..&#39;b..-&gt;..&#39;c.. =&gt; ..&#39;d..|..&#39;e..-&gt;..&#39;f..,4   ..&#39;_a.. ⊑ ..&#39;c..   ..&#39;d.. ⊑ ..&#39;a..   ..&#39;e.. ⊑ ..&#39;_b..   ..&#39;e.. ⊑ ..&#39;b..</code></p>
+<p>The same <code>layer</code> then applies at batch shapes
+<code>2</code> and <code>5,7</code>, each application checked against
+the scheme before its body builds, giving results of shapes
+<code>2|4</code> and <code>5,7|4</code>.</p>
+<h3 id="a-shape-mistake-named">A Shape Mistake, Named</h3>
+<p>A shape mistake inside a tensor function is reported naming the
+function, and as early as the mistake allows. One that no argument can
+fix – here a bias declared with the hidden size instead of the output
+size – fails when the closure is built, and
+<code>Tensor.Scheme.check_definition</code> finds it at program start
+from a trial configuration:</p>
+<p><code>ocaml doc-excerpt=test/operations/reusable_tensor_programs.ml let%op two_layer ~hid ~out () x =   let h = relu (({ w1; o = [ hid ] } * x) + { b1 = 0.; o = [ hid ] }) in   ({ w2; o = [ out ] } * h) + { b2 = 0.; o = [ hid ] }</code></p>
+<p><code>text doc-excerpt=test/operations/reusable_tensor_programs.ml checking the definition two_layer: tracing the shape scheme two_layer: solved dimensions for axis: mismatch   conflicting sizes: 2 vs 8</code></p>
+<p>One that depends on the argument fails at the application, before the
+body runs: a residual block whose layer is 4 wide, applied to 3
+features, reads</p>
+<p><code>text doc-excerpt=test/operations/reusable_tensor_programs.ml Shape_error: applying the shape scheme residual_block to x: dimension comparison for axis: mismatch   conflicting sizes: 4 vs 3</code></p>
+<p>With the scheme opted out (<code>[@@ocannl.no_scheme]</code>), the
+same mistakes surface only inside the body, naming neither the function
+nor the argument, and leave the session tainted.</p>
+<h3 id="recovering-a-session-from-a-failed-construction">Recovering a
+Session from a Failed Construction</h3>
+<p>At a toplevel or in a notebook, a construction that fails inside its
+body taints the session: every later construction is refused, naming the
+first failure. Take a checkpoint before trying things out, and rewind to
+it after a failure; <code>Tensor.with_checkpoint</code> rewinds only
+when its body raises:</p>
+<p><code>ocaml doc-excerpt=test/operations/reusable_tensor_programs.ml let before_model = Tensor.checkpoint ~label:&quot;before the model&quot; () in</code></p>
+<p><code>ocaml doc-excerpt=test/operations/reusable_tensor_programs.ml Tensor.rewind before_model; (* [Tensor.with_checkpoint] does both in one phrase: it rewinds only when its body raises. *) attempt (fun () -&gt; Tensor.with_checkpoint (fun () -&gt; [%op x + { bias = 0.; o = [ 5 ] }]));</code></p>
+<p>The rewind discards everything created since the checkpoint – a
+failed construction, and the parameters of an attempt the scheme refused
+– and clears the taint; the session then builds, compiles and runs the
+right model. <code>Tensor.rewind_to_last_closure</code> recovers without
+a checkpoint, discarding everything opened since shape inference last
+closed (at the last compile, say).</p>
 <h2 id="randomness-and-parameter-initialization">Randomness and
 Parameter Initialization</h2>
 <p>OCANNL uses a deterministic, counter-based approach to random number

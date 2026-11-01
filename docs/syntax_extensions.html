@@ -152,13 +152,7 @@ inline declarations: inline output dimensions, initial values</a></li>
 <li><a href="#need-to-lift-the-applications-of-configuration-arguments-up-to-the-unit-parameter" id="toc-need-to-lift-the-applications-of-configuration-arguments-up-to-the-unit-parameter">Need
 to lift the applications of configuration arguments (up to the unit
 parameter)</a></li>
-</ul></li>
-<li><a href="#the-syntax-extension-extend_dsls" id="toc-the-syntax-extension-extend_dsls">The syntax extension
-%%extend_dsls</a></li>
-<li><a href="#implementation-details" id="toc-implementation-details">Implementation details</a>
-<ul>
-<li><a href="#the-hard-coded-to-the-power-of-operator" id="toc-the-hard-coded-to-the-power-of-operator">The hard-coded
-to-the-power-of operator</a></li>
+<li><a href="#automatic-shape-schemes" id="toc-automatic-shape-schemes">Automatic shape schemes</a></li>
 <li><a href="#intricacies-of-the-syntax-extension-cd" id="toc-intricacies-of-the-syntax-extension-cd">Intricacies of the
 syntax extension %cd</a></li>
 <li><a href="#embedded-nodes" id="toc-embedded-nodes">Embedded
@@ -656,7 +650,9 @@ extension point, like in the example above, or directly under a function
 taking a unit parameter <code>()</code>, the function parameter (to the
 right of <code>()</code>) should be a tensor. That’s because
 <code>%op</code> uses this tensor’s (value’s) label to enrich the label
-of the resulting tensor.</p>
+of the resulting tensor, and because automatic shape schemes take such
+an unlabelled parameter to be a tensor (see <a href="#automatic-shape-schemes">Automatic shape schemes</a>). A labelled
+or optional parameter there may be anything.</p>
 <p>When the declaration is followed by a literal float, the float
 provides the initial value to initialize the tensor. Otherwise, the
 tensor value cells are initialized with the default parameter
@@ -1844,13 +1840,16 @@ comments:</p>
 <span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>  | Block_comment <span class="kw">of</span> <span class="dt">string</span> * t</span>
 <span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>  ...</span></code></pre></div>
 <p>Schematic example:
-<code>~~(&quot;space&quot; &quot;separated&quot; &quot;comment&quot; &quot;tensor p debug_name:&quot; p; &lt;scope of the comment&gt;)</code>.
+<code>~~(&quot;space&quot; &quot;separated&quot; &quot;comment&quot; &quot;tensor p label_name:&quot; p; &lt;scope of the comment&gt;)</code>.
 The content of the comment uses application syntax, must be composed of
 strings, <code>&lt;tensor&gt;</code>, <code>&lt;tensor&gt;.value</code>
 (equivalent to <code>&lt;tensor&gt;</code>),
 <code>&lt;tensor&gt;.grad</code> components, where
 <code>&lt;tensor&gt;</code> is any tensor expression or tensor
-identifier.</p>
+identifier. A tensor component renders as its value node’s
+<code>Ir.Tnode.label_name</code> (with <code>.grad</code> appended for a
+<code>.grad</code> component), so the comment does not depend on which
+code names a renderer minted first.</p>
 <p>This syntax used to be very important, because comments in
 assignments are used to derive file names for generated code. Now, the
 <code>%cd</code> syntax automatically introduces block comments for code
@@ -1966,51 +1965,180 @@ architectures:</p>
 <span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a>        mlp_layer ~label:[ <span class="st">&quot;L&quot;</span> ^ <span class="dt">Int</span>.to_string i ] ~hid_dim ())</span>
 <span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">in</span></span>
 <span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">fun</span> x -&gt; <span class="dt">List</span>.fold layers ~init:x ~f:(<span class="kw">fun</span> x layer -&gt; layer x)</span></code></pre></div>
-<h2 id="the-syntax-extension-extend_dsls">The syntax extension
-%%extend_dsls</h2>
-<p>This syntax extension creates a module <code>DSL_modules</code> with
-the same submodules as <code>Operation.DSL_modules</code>. It removes
-the boilerplate associated with introducing new operators into the
-modules <code>TDSL</code>, <code>NTDSL</code> and their <code>O</code>
-submodules. The payload (i.e. content) of <code>%%extend_dsls</code>
-must be non-recursive let-bindings. They are parsed using a slight
-variant of the <code>%op</code> syntax, and are inserted into the DSL
-modules. The identifiers of the root operator functions of the
-definitions, if unqualified, are prefixed with the appropriate module,
-similarly to the behavior of inline definitions. Initialization
-expressions remain forward-only.</p>
-<p>The DSL modules expose the value <code>grad_spec</code> that can be
-useful for defining operators via a “scheme” function. See the example
-using the <code>box_muller</code> helper at the beginning of
-<code>lib/nn_blocks.ml</code>. The definitions there use the
-<code>%oc</code> escape extension to avoid the prefixing mentioned
-above.</p>
-<h2 id="implementation-details">Implementation details</h2>
-<h3 id="the-hard-coded-to-the-power-of-operator">The hard-coded
-to-the-power-of operator</h3>
-<p>OCANNL has a built-in numerical binary operation to-power-of:
-<code>Ops.ToPowOf</code>. As part of assignments, the corresponding
-operator is <code>**</code>. Here is the full definition of the
-to-power-of tensor operation from <a href="../tensor/operation.ml">Operation</a>:</p>
-<div class="sourceCode" id="cb25"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> <span class="kw">rec</span> pointpow ?(label : <span class="dt">string</span> <span class="dt">list</span> = []) ~grad_spec p t1 : Tensor.t =</span>
-<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> <span class="kw">module</span> NTDSL = <span class="kw">struct</span></span>
-<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">include</span> Initial_NTDSL</span>
-<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">module</span> O = <span class="kw">struct</span></span>
-<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>      <span class="kw">include</span> NDO_without_pow</span>
-<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a>      <span class="kw">let</span> ( **. ) ?label base <span class="dt">exp</span> = pointpow ?label ~grad_spec:Tensor.Prohibit_grad <span class="dt">exp</span> base</span>
-<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">end</span></span>
-<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">end</span> <span class="kw">in</span></span>
-<span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> p_t = NTDSL.number p <span class="kw">in</span></span>
-<span id="cb25-12"><a href="#cb25-12" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%cd op_asn ~t ~t1 ~t2 ~projections = v =: v1 ** v2 ~projections <span class="kw">in</span></span>
-<span id="cb25-13"><a href="#cb25-13" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%cd grad_asn =</span>
-<span id="cb25-14"><a href="#cb25-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">if</span> Tensor.is_prohibit_grad grad_spec <span class="kw">then</span> <span class="kw">fun</span> ~v:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ -&gt; Asgns.Noop</span>
-<span id="cb25-15"><a href="#cb25-15" aria-hidden="true" tabindex="-1"></a>    <span class="kw">else</span> <span class="kw">if</span> Float.equal p <span class="fl">2.0</span> <span class="kw">then</span> <span class="kw">fun</span> ~v:_ ~g ~t1 ~t2:_ ~projections -&gt; g1 =+ p_t *. t1 * g</span>
-<span id="cb25-16"><a href="#cb25-16" aria-hidden="true" tabindex="-1"></a>    <span class="kw">else</span> <span class="kw">if</span> Float.equal p <span class="fl">1.0</span> <span class="kw">then</span> <span class="kw">fun</span> ~v:_ ~g ~t1 ~t2:_ ~projections -&gt; g1 =+ g</span>
-<span id="cb25-17"><a href="#cb25-17" aria-hidden="true" tabindex="-1"></a>    <span class="kw">else</span> <span class="kw">fun</span> ~v:_ ~g ~t1 ~t2:_ ~projections -&gt; g1 =+ p_t *. (t1 **. (p -. <span class="dv">1</span>.)) * g</span>
-<span id="cb25-18"><a href="#cb25-18" aria-hidden="true" tabindex="-1"></a>  <span class="kw">in</span></span>
-<span id="cb25-19"><a href="#cb25-19" aria-hidden="true" tabindex="-1"></a>  Tensor.binop ~label:(<span class="st">&quot;**.&quot;</span> :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn ~grad_spec t1 p_t</span></code></pre></div>
+<h3 id="automatic-shape-schemes">Automatic shape schemes</h3>
+<p>A <code>%op</code> function gets a <em>shape scheme</em>
+automatically (gh-ocannl-1751), on top of the explicit layer
+<code>Tensor.Scheme</code> (gh-ocannl-404, see <a href="./shape_inference.md#shape-schemes">shape inference</a>). By
+default its applications are checked against the scheme (<em>checking
+mode</em>, described first); <code>op_shape_schemes=guided</code> makes
+them register <em>guided</em> by it instead (gh-ocannl-1761, below):</p>
+<ul>
+<li><strong>When it is traced.</strong> The closure built at the
+<code>()</code> application traces the scheme of the function it
+returns, after the closure’s inline <code>{ w }</code> parameters exist,
+so their dimensions are fixed in the scheme and everything the function
+creates is fresh per application. <code>block conf ()</code> gets one
+scheme per closure: a later <code>block conf&#39; ()</code> traces its own.
+A function without a <code>()</code> stage
+(<code>let%op gelu x = ...</code>) is traced at its first application
+instead: tracing it at the definition would run at module
+initialization.</li>
+<li><strong>What an application does.</strong> It checks the scheme
+against its arguments’ shapes, in a window that is always rewound, then
+runs the body, which builds and registers the graph as it always has. In
+checking mode the scheme only checks; guided registration, below, lets
+it stand in for the body’s own constraint derivation.</li>
+<li><strong>What it reports.</strong> A shape error that does not depend
+on the arguments raises when the closure is built, as
+<code>tracing the shape scheme &lt;function&gt;: ...</code>. One that
+does raises at the application, before the body runs, as
+<code>applying the shape scheme &lt;function&gt; to &lt;arguments&gt;: ...</code>.</li>
+</ul>
+<p>To see a function’s scheme, trace it explicitly with
+<code>Tensor.Scheme.trace</code> (the same trace the closure ran) and
+print it with <code>Tensor.Scheme.to_string</code>. The newcomer
+tutorial <a href="./tensors_and_contexts.md#reusable-tensor-programs">Reusable
+Tensor Programs</a> prints one, shows both kinds of report, and recovers
+a REPL session from a failed construction.</p>
+<p><strong>Which functions qualify.</strong> The returned function –
+right after <code>()</code>, or the function a unit body ends in,
+through <code>let</code>, <code>;</code> and <code>let open</code>, as
+in <code>Nn_blocks.mlp</code> – must take only tensors. The ppx has no
+types, so it decides syntactically:</p>
+<ul>
+<li>an unlabelled variable parameter is a tensor (the convention
+above);</li>
+<li>a labelled <code>~x</code> is a tensor only when <code>x</code>
+occurs directly as an operand of a tensor operation (an einsum or
+concatenation, <code>+</code>, <code>*</code>, <code>*.</code>,
+<code>relu</code>, …) and is never rebound in the body;</li>
+<li>an optional or defaulted parameter, and any other pattern, is
+not.</li>
+</ul>
+<p>A function with a parameter that is not a tensor –
+<code>dropout ~rate () ~train_step x</code>,
+<code>multi_head_attention ... () ~train_step ?mask x</code>, the
+transformer blocks – stays unschemed, and expands exactly as before: its
+parameter’s value does not exist yet when the closure is built, and the
+body may branch on it. So do <code>let%op rec</code> and
+<code>function</code>-case bodies. An unlabelled parameter that is not a
+tensor, against the convention, is a compile error; opt out.</p>
+<p><strong>Refused traces degrade silently.</strong> A function whose
+trace a scheme cannot carry – random number generation inside it
+(including a closure built inside it whose parameters take the default
+random initialization), an external capture reference, forcing dims or
+projections, a body that cannot run on tracers – stays unschemed, once
+the trace’s rewind succeeded. It is a valid function, and its
+applications report what they always reported.</p>
+<p><strong>Side effects.</strong> The trace runs the body once more per
+closure. Under the rewind it leaves no shape state, no tensor and no
+session id behind (traces and checks allocate tensor ids, node uids and
+shape-variable ids from reserved ranges, so printed ids and shapes,
+compilation choices, generated code and random draws are the same with
+or without schemes), but OCaml side effects of the body (a counter, a
+print) happen.</p>
+<p><strong>Guided registration (opt-in, gh-ocannl-1761).</strong> Under
+<code>op_shape_schemes=guided</code>, an application instantiates the
+scheme once against its arguments’ shapes – the trace’s constraints,
+renamed, solved together with the arguments – and then runs the body,
+whose shape registration follows the trace:</p>
+<ul>
+<li><strong>What is guided.</strong> Each update step the body builds
+that matches the trace’s next step – the same operation and spec, the
+same arguments and pre-existing tensors in the same operand positions,
+its own new tensors corresponding one-to-one with the trace’s, and a new
+result tensor created with the trace’s dimensions – registers without
+deriving or solving its own constraints: its new shapes are unified with
+the scheme’s rows for them, and the step is registered for closure and
+projections as inline. Closed shapes, projections, tensor ids, node
+uids, generated code and values are those of inline construction; only
+the ids of open shape variables (printed before the closure)
+differ.</li>
+<li><strong>What falls back.</strong> A matched step registers normally
+(still tied to the scheme) when its constraints read more than the
+shapes: capture references, a <code>uint4x32</code> conversion, a batch
+slice, a terminal whose constraints come from its data (a reshaped
+array, <code>Constant_fill</code>, a slice). A step the trace lacked
+registers normally; so do the gradient helpers an operation’s backprop
+code builds, which depend on which operands need gradients (the trace’s
+arguments take none) and are left out of the trace’s skeleton. A nested
+<code>%op</code> application runs its body plain, under the outer guide.
+An application whose trace applied a scheme explicitly, or one made
+where no checkpoint can be taken, is checked instead.</li>
+<li><strong>The determinism contract.</strong> The function’s graph must
+not depend on state outside its closure and its arguments’ shapes. A
+trace step the body does not build raises
+<code>applying the shape scheme &lt;function&gt; to &lt;arguments&gt;: the function built a different graph than at its trace ...</code>
+and taints the session. A body that closes inference (forcing dims),
+takes a checkpoint or rewinds is refused while guided: its trace could
+not have done that either. A registration that falls back runs beside
+the scheme’s constraints, so it does not make a graph that changes
+between applications supported: opt such a function out.</li>
+<li><strong>Errors.</strong> An argument-dependent error raises before
+the body runs, as in checking mode, and leaves the session as it was.
+<code>Tensor.Scheme.registration_counts</code> reports the guided,
+fallback and unmatched steps.</li>
+<li><strong>Cost.</strong> Guided registration is not cheaper than
+checking mode: the instantiated constraints stand beside the steps’ ties
+until the closure, and solving the ties re-solves them, so it is slower
+than inline registration, superlinearly in the model’s depth
+(gh-ocannl-1752’s measurement, <a href="./shape_inference.md#what-schemes-buy-measured">shape
+inference</a>). That is why it is not the default.</li>
+</ul>
+<p><strong>Opting out.</strong> <code>[@@ocannl.no_scheme]</code> on the
+binding, or <code>[@ocannl.no_scheme]</code> on a <code>fun</code>
+expression, leaves a function unschemed: for a body whose constraints
+depend on something other than its closure and its arguments’ shapes
+(mutable state, say), or whose side effects must run exactly once per
+application. The configuration key <code>op_shape_schemes=off</code>
+switches the schemes off for the whole process.</p>
+<h4 id="checking-a-definition-early">Checking a definition early</h4>
+<p>A block’s <code>()</code> trace reports an argument-independent error
+only when the closure is built. To catch it at the definition, apply the
+definition to a trial or default configuration with
+<code>Tensor.Scheme.check_definition</code>, which runs the trial in a
+window that is always rewound and allocates no session id, and names the
+definition in its error:</p>
+<p>```ocaml doc-check=op_schemes_check_definition open
+Ocannl.Nn_blocks.DSL_modules</p>
+<p>let%op block ~hid_dim () x = relu (({ w } * x) + { b = 0.; o = [
+hid_dim ] }) let () = ignore (Tensor.Scheme.check_definition
+~name:“block” (fun () -&gt; ignore (block ~hid_dim:8 ())))</p>
+<pre><code>
+It catches the errors that hold for every configuration, and the configuration-dependent ones of the trial configuration only; it costs one trace (and the trial&#39;s construction) at program start. Prefer it to a bare `let _ = block conf ()`, which leaves the trial&#39;s parameters registered in the session. It does not reach the functions that stay unschemed (`~train_step` after `()`), beyond the sub-blocks their trial builds. `lib/nn_blocks.ml` does not run it at load time; `test/operations/nn_blocks_definitions` runs it over every schemed block.
+
+## The syntax extension %%extend_dsls
+
+This syntax extension creates a module `DSL_modules` with the same submodules as `Operation.DSL_modules`. It removes the boilerplate associated with introducing new operators into the modules `TDSL`, `NTDSL` and their `O` submodules. The payload (i.e. content) of `%%extend_dsls` must be non-recursive let-bindings. They are parsed using a slight variant of the `%op` syntax, and are inserted into the DSL modules. The identifiers of the root operator functions of the definitions, if unqualified, are prefixed with the appropriate module, similarly to the behavior of inline definitions. Initialization expressions remain forward-only.
+
+The DSL modules expose the value `grad_spec` that can be useful for defining operators via a &quot;scheme&quot; function. See the example using the `box_muller` helper at the beginning of `lib/nn_blocks.ml`. The definitions there use the `%oc` escape extension to avoid the prefixing mentioned above.
+
+## Implementation details
+
+### The hard-coded to-the-power-of operator
+
+OCANNL has a built-in numerical binary operation to-power-of: `Ops.ToPowOf`. As part of assignments, the corresponding operator is `**`. Here is the full definition of the to-power-of tensor operation from [Operation](../tensor/operation.ml):
+
+```ocaml
+let rec pointpow ?(label : string list = []) ~grad_spec p t1 : Tensor.t =
+  let module NTDSL = struct
+    include Initial_NTDSL
+
+    module O = struct
+      include NDO_without_pow
+
+      let ( **. ) ?label base exp = pointpow ?label ~grad_spec:Tensor.Prohibit_grad exp base
+    end
+  end in
+  let p_t = NTDSL.number p in
+  let%cd op_asn ~t ~t1 ~t2 ~projections = v =: v1 ** v2 ~projections in
+  let%cd grad_asn =
+    if Tensor.is_prohibit_grad grad_spec then fun ~v:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ -&gt; Asgns.Noop
+    else if Float.equal p 2.0 then fun ~v:_ ~g ~t1 ~t2:_ ~projections -&gt; g1 =+ p_t *. t1 * g
+    else if Float.equal p 1.0 then fun ~v:_ ~g ~t1 ~t2:_ ~projections -&gt; g1 =+ g
+    else fun ~v:_ ~g ~t1 ~t2:_ ~projections -&gt; g1 =+ p_t *. (t1 **. (p -. 1.)) * g
+  in
+  Tensor.binop ~label:(&quot;**.&quot; :: label) ~compose_op:Pointwise_bin ~op_asn ~grad_asn ~grad_spec t1 p_t</code></pre>
 <p>On the <code>Tensor</code> level, this is implemented as a binary
 tensor operation, but it is exposed as a unary tensor operation! To
 avoid the complexities of propagating gradient into the exponent,
