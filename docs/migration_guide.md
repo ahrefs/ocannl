@@ -710,9 +710,10 @@ OCANNL's random initialization has some important nuances:
 (* Parameter init - happens once, deterministic is fine *)
 { w = uniform () }
 
-(* Training randomness - needs train_step for proper key splitting *)
+(* Training randomness - needs train_step for proper key splitting: the step counter as a tensor,
+   e.g. ~train_step:(Some !@step_n); None for evaluation *)
 dropout ~rate:0.5 () ~train_step x
-(* internally uses: uniform_at !@train_step *)
+(* internally uses: uniform_at train_step *)
 ```
 
 ## Further Resources

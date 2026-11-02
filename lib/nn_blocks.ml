@@ -187,12 +187,15 @@ let%op gelu x = 0.5 *. x *. (1.0 + tanh (0.7978845608028654 *. (x + (0.044715 *.
 
 let%op mlp_layer ~label ~hid_dim () x = relu (({ w } * x) + { b = 0.; o = [ hid_dim ] })
 
-(** Masks and scales by 1/keep_prob to maintain expected value. When [train_step = None], the
-    dropout rate is ignored and the tensor is returned unmodified. *)
-let%op dropout ~rate () ~train_step x =
+(** Masks and scales by 1/keep_prob to maintain expected value. [train_step] is the training step
+    counter, e.g. [Some !@step_n] for a static symbol [step_n]: it seeds the dropout mask. When
+    [train_step = None] (evaluation), the dropout rate is ignored and the tensor is returned
+    unmodified. Each case has its own shape scheme (gh-ocannl-1792); with [rate > 0] the training
+    case's random draw leaves that case unschemed. *)
+let%op dropout ~rate () ~(train_step : Tensor.t option) x =
   match train_step with
   | Some train_step when Float.(rate > 0.0) ->
-      x *. (!.rate < uniform_at !@train_step) /. (1.0 - !.rate)
+      x *. (!.rate < uniform_at train_step) /. (1.0 - !.rate)
   | _ -> x
 
 (** Multi-layer perceptron of depth [List.length hid_dims + 1], with a linear output layer. *)
@@ -334,7 +337,8 @@ let%op rope ~freqs ~positions x =
 let default_mask_fill = Float.neg_infinity
 
 let%op multi_head_attention ~label ~num_heads ~d_k ~d_v ?temperature ?(dropout_rate = 0.0)
-    ?(mask_fill = default_mask_fill) ?(pos_embed = No_pos_embed) () ~train_step ?mask x =
+    ?(mask_fill = default_mask_fill) ?(pos_embed = No_pos_embed) () ~(train_step : Tensor.t option)
+    ?(mask : Tensor.t option) x =
   (match pos_embed with RoPE _ -> assert (Int.(d_k % 2 = 0)) | _ -> ());
   let q = { w_q } * x in
   let k = { w_k } * x in
@@ -378,7 +382,7 @@ let%op transformer_encoder_block ~label ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1
   let ffn = mlp ~label:("ffn" :: label) ~hid_dims:[ d_ff ] () in
   let ln1 = layer_norm ~label:("ln1" :: label) ~epsilon () in
   let ln2 = layer_norm ~label:("ln2" :: label) ~epsilon () in
-  fun ~train_step input ->
+  fun ~(train_step : Tensor.t option) input ->
     let x1 = ln1 (input + mha ~train_step input) in
     ln2 (x1 + ffn x1)
 
@@ -394,11 +398,13 @@ let%op decoder_only_block ~label ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1e-5) ?(
   let ffn = mlp ~label:("ffn" :: label) ~hid_dims:[ d_ff ] () in
   let ln1 = layer_norm ~label:("ln1" :: label) ~epsilon () in
   let ln2 = layer_norm ~label:("ln2" :: label) ~epsilon () in
-  fun ~train_step x ~mask ->
+  fun ~(train_step : Tensor.t option) x ~(mask : Tensor.t) ->
     let x1 = ln1 (x + masked_mha ~train_step ~mask x) in
     ln2 (x1 + ffn x1)
 
-(** Stack of {!decoder_only_block} layers. *)
+(** Stack of {!decoder_only_block} layers. The stacks are plain functions, not schemed: their layers
+    are, per presence pattern, and a scheme of the whole stack would trace the whole model, which
+    costs superlinearly in depth (gh-ocannl-1792 measured 96 s of tracing at depth 4). *)
 let decoder_only ~label ~num_layers ~num_heads ~d_k ~d_v ~d_ff ?epsilon ?dropout_rate ?mask_fill
     ?(pos_embed = No_pos_embed) () =
   let layers =
@@ -407,11 +413,12 @@ let decoder_only ~label ~num_layers ~num_heads ~d_k ~d_v ~d_ff ?epsilon ?dropout
           ~label:(("layer" ^ Int.to_string i) :: label)
           ~num_heads ~d_k ~d_v ~d_ff ?epsilon ?dropout_rate ?mask_fill ~pos_embed ())
   in
-  fun ~train_step x ~mask -> List.fold layers ~init:x ~f:(fun x layer -> layer ~train_step x ~mask)
+  fun ~(train_step : Tensor.t option) x ~(mask : Tensor.t) ->
+    List.fold layers ~init:x ~f:(fun x layer -> layer ~train_step x ~mask)
 
 (* Cross-attention does not apply RoPE — position encoding is for self-attention only. *)
-let%op cross_attention ~label ~num_heads ~d_k ~d_v ?temperature ?(dropout_rate = 0.0) () ~train_step
-    x ~enc_output =
+let%op cross_attention ~label ~num_heads ~d_k ~d_v ?temperature ?(dropout_rate = 0.0) ()
+    ~(train_step : Tensor.t option) x ~enc_output =
   let q = { w_q } * x in
   let k = { w_k } * enc_output in
   let v = { w_v } * enc_output in
@@ -438,7 +445,7 @@ let%op transformer_decoder_block ~label ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1
   let ln1 = layer_norm ~label:("ln1" :: label) ~epsilon () in
   let ln2 = layer_norm ~label:("ln2" :: label) ~epsilon () in
   let ln3 = layer_norm ~label:("ln3" :: label) ~epsilon () in
-  fun ~train_step target ~enc_output ~mask ->
+  fun ~(train_step : Tensor.t option) target ~(enc_output : Tensor.t) ~(mask : Tensor.t) ->
     let x1 = ln1 (target + masked_mha ~train_step ~mask target) in
     let x2 = ln2 (x1 + cross_mha ~train_step x1 ~enc_output) in
     ln3 (x2 + ffn x2)
@@ -451,7 +458,8 @@ let transformer_encoder ~label ~num_layers ~num_heads ~d_k ~d_v ~d_ff ?(epsilon 
           ~label:(("layer" ^ Int.to_string i) :: label)
           ~num_heads ~d_k ~d_v ~d_ff ~epsilon ~pos_embed ())
   in
-  fun ~train_step x -> List.fold layers ~init:x ~f:(fun x layer -> layer ~train_step x)
+  fun ~(train_step : Tensor.t option) x ->
+    List.fold layers ~init:x ~f:(fun x layer -> layer ~train_step x)
 
 let transformer_decoder ~label ~num_layers ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1e-5) ?mask_fill
     ?(pos_embed = No_pos_embed) () =
@@ -461,7 +469,7 @@ let transformer_decoder ~label ~num_layers ~num_heads ~d_k ~d_v ~d_ff ?(epsilon 
           ~label:(("layer" ^ Int.to_string i) :: label)
           ~num_heads ~d_k ~d_v ~d_ff ~epsilon ?mask_fill ~pos_embed ())
   in
-  fun ~train_step target ~enc_output ~mask ->
+  fun ~(train_step : Tensor.t option) target ~(enc_output : Tensor.t) ~(mask : Tensor.t) ->
     List.fold layers ~init:target ~f:(fun x layer -> layer ~train_step x ~enc_output ~mask)
 
 (** {2 Convolutional Neural Network Building Blocks} *)
@@ -631,7 +639,7 @@ let batch_norm_state ~label ~epsilon ~momentum ~inference_spec () =
   let running_variance = NTDSL.param ~value:1. "running_variance" ~more_label:label () in
   List.iter [ gamma; beta; running_variance ] ~f:(fun p ->
       Shape.infer_equal p.Tensor.shape running_mean.Tensor.shape);
-  fun ~train_step ~moments x ->
+  fun ~(train_step : Tensor.t option) ~moments x ->
     let mean, variance, update =
       match train_step with
       | None -> (running_mean, running_variance, false)
@@ -668,18 +676,19 @@ let batch_norm_state ~label ~epsilon ~momentum ~inference_spec () =
 
 (** Batch normalization for CNN layers, reducing batch and spatial axes per channel.
 
-    [Some train_step] normalizes with the batch mean and population variance and updates stored
-    statistics after each execution. [None] uses the stored statistics without updating them.
+    [Some train_step] (any tensor: only its presence is read) normalizes with the batch mean and
+    population variance and updates stored statistics after each execution. [None] uses the stored
+    statistics without updating them. Each case has its own shape scheme (gh-ocannl-1792).
     [momentum] defaults to [0.9] and is the retained fraction:
     [running = momentum * running + (1 - momentum) * batch]. Running mean/variance initialize to
     [0]/[1]; gamma/beta initialize to [1]/[0]. Statistics are non-trainable model state, initialized
     and persisted with the parameters. The variance uses the population divisor in both modes. *)
-let batch_norm2d ~label ?(epsilon = 1e-5) ?(momentum = 0.9) () =
+let%op batch_norm2d ~label ?(epsilon = 1e-5) ?(momentum = 0.9) () =
   let normalize =
     batch_norm_state ~label ~epsilon ~momentum
       ~inference_spec:"... | h, w, ..c..; | ..c.. => ... | h, w, ..c.." ()
   in
-  let%op moments x =
+  let moments x =
     let total_size = dim o *. dim h *. dim w in
     let mean = (x ++ "..o.. | h, w, ..c.. => | ..c.." [ "o"; "h"; "w" ]) /. total_size in
     let centered =
@@ -688,29 +697,29 @@ let batch_norm2d ~label ?(epsilon = 1e-5) ?(momentum = 0.9) () =
     let variance = ((centered *. centered) ++ "... | h, w, ..c.. => | ..c..") /. total_size in
     (mean, variance)
   in
-  fun ~train_step x -> normalize ~train_step ~moments x
+  fun ~(train_step : Tensor.t option) x -> normalize ~train_step ~moments x
 
 (** Batch normalization for MLP layers, reducing the batch axes and preserving channel axes.
     Training/inference behavior, initialization and the [momentum] recurrence are as in
     {!batch_norm2d}. *)
-let batch_norm1d ~label ?(epsilon = 1e-5) ?(momentum = 0.9) () =
+let%op batch_norm1d ~label ?(epsilon = 1e-5) ?(momentum = 0.9) () =
   let normalize =
     batch_norm_state ~label ~epsilon ~momentum ~inference_spec:"... | ..c..; | ..c.. => ... | ..c.."
       ()
   in
-  let%op moments x =
+  let moments x =
     let mean = (x ++ "..o.. | ..c.. => | ..c.." [ "o" ]) /. dim o in
     let centered = x - mean in
     let variance = ((centered *. centered) ++ "... | ..c.. => | ..c..") /. dim o in
     (mean, variance)
   in
-  fun ~train_step x -> normalize ~train_step ~moments x
+  fun ~(train_step : Tensor.t option) x -> normalize ~train_step ~moments x
 
 (** Conv block with conv -> batch norm -> activation pattern; [out_channels] goes to {!conv2d}. *)
 let%op conv_bn_relu ~label ?(kernel_size = 3) ?(stride = 1) ?out_channels () =
   let conv = conv2d ~label:("conv" :: label) ~kernel_size ~stride ?out_channels () in
   let bn = batch_norm2d ~label:("bn" :: label) () in
-  fun ~train_step x -> relu (bn ~train_step (conv x))
+  fun ~(train_step : Tensor.t option) x -> relu (bn ~train_step (conv x))
 
 (** Residual block for ResNet-style architectures. Features skip connections that help with gradient
     flow in deep networks. Both convolutions use [out_channels], or preserve the input channel row
@@ -730,7 +739,7 @@ let%op resnet_block ~label ?(stride = 1) ?out_channels () =
       fun train_step x -> downsample_bn ~train_step (downsample_conv x)
     else fun _train_step x -> x
   in
-  fun ~train_step x ->
+  fun ~(train_step : Tensor.t option) x ->
     (* Capture channel rows without forcing inference: upstream tensors may still have open shapes.
        The identity permutations retain spatial and batch axes verbatim. *)
     let x =
@@ -761,6 +770,6 @@ let%op vgg_block ~label ~num_convs ?(kernel_size = 3) () =
         conv_bn_relu ~label:(("conv" ^ Int.to_string i) :: label) ~kernel_size ())
   in
   let pool = max_pool2d ~stride:2 () in
-  fun ~train_step x ->
+  fun ~(train_step : Tensor.t option) x ->
     let x = List.fold convs ~init:x ~f:(fun x conv -> conv ~train_step x) in
     pool x

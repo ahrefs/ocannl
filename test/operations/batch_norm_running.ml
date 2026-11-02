@@ -63,7 +63,8 @@ let trajectory spatial momentum =
   let ctx, testing =
     Context.compile ~name:"bn_inference" ctx (Tensor.consume_forward_code inference) IDX.empty
   in
-  let y = layer ~train_step:(Some 0) x in
+  (* Batch norm reads only whether a training step is given: any tensor serves as the payload. *)
+  let y = layer ~train_step:(Some x) x in
   Train.set_materialized y.Tensor.value;
   let ctx, training =
     Context.compile ~name:"bn_training" ctx (Tensor.consume_forward_code y) IDX.empty
@@ -126,7 +127,7 @@ let gradient spatial =
   in
   let w = NTDSL.init ~l:"weights" ~prec:Ir.Ops.single ~b ~o ~f:(lookup weights) () in
   let layer = make ~label:[ "gradient" ] ~epsilon ~momentum:0.5 () in
-  let y = layer ~train_step:(Some 0) x in
+  let y = layer ~train_step:(Some x) x in
   let%op loss = (y *. w) ++ "... | ... => | ->0" in
   let dx = (Option.value_exn x.Tensor.diff).grad in
   Train.set_materialized dx;
@@ -161,7 +162,7 @@ let precision_policy spatial =
   in
   let x = NTDSL.init ~l:"policy_input" ~prec:Ir.Ops.single ~b ~o ~f:lookup () in
   let layer = make ~label:[ "policy" ] ~epsilon ~momentum:0.5 () in
-  let y = layer ~train_step:(Some 0) x in
+  let y = layer ~train_step:(Some x) x in
   Ocannl.Precision_policy.apply (Ocannl.Precision_policy.uniform Ir.Ops.half) y;
   let states = Set.filter y.params ~f:(fun p -> Option.is_none p.Tensor.diff) in
   p "precision policy has two non-trainable state parameters" (Set.length states = 2);
@@ -199,7 +200,7 @@ let data_parallel_claims ~label () =
     let layer =
       Ocannl.Nn_blocks.batch_norm1d ~label:[ "parallel" ] ~epsilon:0.25 ~momentum:0.5 ()
     in
-    let y = layer ~train_step:(Some 0) x in
+    let y = layer ~train_step:(Some x) x in
     [%op ((y - target) **. 2.) ++ "... | ... => | ->0"]
   in
   Ocannl.Parallel.data_parallel ~backend_name:"cc" ~n_shards:2 ~bindings:IDX.empty ~learning_rate

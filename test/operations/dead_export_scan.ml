@@ -317,8 +317,6 @@ let exempt_zero_reference_exports =
        usable for a custom normalization over the same running-state semantics. *)
     "Nn_blocks.batch_norm_state";
     "Nn_blocks.box_muller";
-    "Nn_blocks.cross_attention";
-    "Nn_blocks.dropout";
     "Nn_blocks.kaiming";
     "Nn_blocks.kaiming_at";
     "Nn_blocks.kaiming_impl";
@@ -328,8 +326,6 @@ let exempt_zero_reference_exports =
     "Nn_blocks.normal_at1";
     "Nn_blocks.reduce_specified_axes";
     "Nn_blocks.set_uint32_id";
-    "Nn_blocks.transformer_decoder_block";
-    "Nn_blocks.vgg_block";
     "Nn_blocks.xavier";
     "Nn_blocks.xavier_at";
     "Nn_blocks.xavier_impl";

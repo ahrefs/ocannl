@@ -669,13 +669,13 @@ The output shape is determined by:
 2. **Explicit dimensions** via `TDSL.uniform_at ~output_dims:[...] counter ()`
 
 ```ocaml
-(* Dropout with training-step-dependent randomness *)
-let%op dropout ~rate () ~train_step x =
+(* Dropout with training-step-dependent randomness. The caller passes the step counter as a
+   scalar tensor, e.g. [~train_step:(Some !@step_n)] for a static symbol [step_n]. *)
+let%op dropout ~rate () ~(train_step : Tensor.t option) x =
   match train_step with
   | Some train_step when Float.(rate > 0.0) ->
-      (* !@train_step embeds the step counter as a scalar tensor *)
       (* Shape is inferred from pointwise comparison with x *)
-      x *. (!.rate < uniform_at !@train_step) /. (1.0 - !.rate)
+      x *. (!.rate < uniform_at train_step) /. (1.0 - !.rate)
   | _ -> x
 ```
 
