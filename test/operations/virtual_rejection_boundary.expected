@@ -94,6 +94,12 @@ block_components_offset_loop: the two placements agree: true
 block_components_offset_affine: inlined: true
 block_components_offset_affine: executed values are the reference: true
 block_components_offset_affine: the two placements agree: true
+block_components_structural_loop: inlined: true
+block_components_structural_loop: executed values are the reference: true
+block_components_structural_loop: the two placements agree: true
+block_components_structural_cells: inlined: true
+block_components_structural_cells: executed values are the reference: true
+block_components_structural_cells: the two placements agree: true
 unit_axis_fixed_producer: the candidate is committed virtual as a scalar constexpr: true
 unit_axis_fixed_producer: inlined: true
 unit_axis_fixed_producer: executed values are the reference: true

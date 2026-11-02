@@ -3064,7 +3064,16 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
             then (
               List.iter pterms ~f:(fun (c, ps) ->
                   let _, cs = List.find_exn cterms ~f:(fun (cc, _) -> cc = c) in
-                  env := Map.set !env ~key:ps ~data:(Indexing.Iterator cs));
+                  env := Map.set !env ~key:ps ~data:(Indexing.Iterator cs);
+                  (* As for a pass-1 binding: in a multi-component replay the call-site symbol
+                     ranges over the whole node, the producer's over its own loop, so the component
+                     replays only where [cs] falls in that loop (Codex review of gh-ocannl-1795's
+                     PR: [x[s + 1]] for [s] in 0..1, read at [x[t + 1]], wrote cell 3 at [t =
+                     2]). *)
+                  if set_computation_count > 1 then
+                    range_guards :=
+                      (1, Indexing.Fixed_idx 0, Indexing.Iterator cs, symbol_range ps)
+                      :: !range_guards);
               bound_pos.(i) <- true;
               true)
             else false

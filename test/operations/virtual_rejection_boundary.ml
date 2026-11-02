@@ -745,6 +745,32 @@ let row_block_components_offset_affine () =
   row ~label:"block_components_offset_affine" ~llc ~cand:x ~out ~seed:[]
     ~expected:[| 1.; 2.; 21.; 22. |] ~verdict:Accepted
 
+(* A structural affine match binds producer symbols pairwise ([s + 1] read at [t + 1] binds [s :=
+   t]), which in a multi-component replay needs the same range guard a pass-1 binding gets: the
+   partial component writes cells 1..2 only, so at [t = 2] (cell 3) it must not replay. Without the
+   guard it overwrote cell 3 with [22]. Two shapes: a covering loop under the partial one, and
+   cell-by-cell ends whose union with it covers the node (Codex review of PR #1630). *)
+let row_block_components_structural ~cells =
+  let label = "block_components_structural" ^ if cells then "_cells" else "_loop" in
+  let x = mk (label ^ "_x") and out = mk ~dims:[| n - 1 |] (label ^ "_out") in
+  materialize out;
+  let s = sym () and s2 = sym () and t = sym () in
+  let base =
+    if cells then [ set x [| fixed 0 |] (c 10.); set x [| fixed 3 |] (c 30.) ]
+    else [ loop_n s n (set x [| iter s |] (tick s)) ]
+  in
+  let llc =
+    List.reduce_exn ~f:seq
+      (base
+      @ [
+          loop_n s2 2 (set x [| aff [ (1, s2) ] 1 |] (ramp 20. s2));
+          loop_n t (n - 1) (set out [| iter t |] (get x [| aff [ (1, t) ] 1 |]));
+        ])
+  in
+  row ~label ~llc ~cand:x ~out ~seed:[]
+    ~expected:(if cells then [| 20.; 21.; 30. |] else [| 20.; 21.; 4. |])
+    ~verdict:Accepted
+
 (* gh-ocannl-1690: one cell, two spellings. On an axis of extent 1 a producer position [Fixed_idx 0]
    and a read through a one-iteration loop address the same cell, so the read site is served with no
    guard and no refusal. The consumer reads the candidate both ways -- [x[u]] under [for u = 0 to 0]
@@ -1051,6 +1077,8 @@ let () =
   row_block_components ();
   row_block_components_offset_loop ();
   row_block_components_offset_affine ();
+  row_block_components_structural ~cells:false;
+  row_block_components_structural ~cells:true;
   row_unit_axis_fixed_producer ();
   row_unit_axis_computed_producer ();
   row_unit_axis_loop_producer ();
