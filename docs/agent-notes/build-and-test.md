@@ -4039,6 +4039,35 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   box's row — from the first native boot on (gh-ocannl-1030). Only a selected remote unit is
   resolved, so a local-only run needs no table; the header's `destinations:` line names the boot
   each GPU lane addressed.
+- A unit whose backend field is not a backend is a configuration VARIANT (gh-ocannl-1778), keyed by
+  its own name in logs, history, unit state, `--only` and the run record, and mapped back to its
+  backend wherever the backend decides (`unit_backend`, `unit_dune_env`, `unit_suite`). The one so
+  far, `cc-outlined`, last in the local lane, runs `@runtest` on cc with
+  `OCANNL_CC_KERNEL_PART_WEIGHT=1 OCANNL_CC_COMPILE_UNIT_MIN_BYTES=0`: every kernel large enough
+  outlined, so a kernel-text reader added after the per-test `-outlined` reruns is still checked
+  against outlined text. A VALUE golden that moves there is a finding (outlining runs the same
+  statements in order); a golden holding kernel text moves by design. A variant takes no `@train`
+  or `@slow` and is left out of the skip aggregation, which covers backends. The two keys are in
+  the ambient record, so the local cc unit and this one each rebuild the other's test runs.
+  Each machine's units form a lane — sequential within the box, which shares one worktree, lock and
+  device, concurrent with the other boxes' lanes (gh-ocannl-976) — so wall-clock is the longest lane
+  (the local one, metal's suite), and the remote units start while the routine's freshly woken WSL
+  VMs are still up. The CPU pair is split across boxes on purpose: it takes a unit off that longest
+  lane, and runs a CPU backend's goldens under Linux as well as macOS every day. Rows reach the
+  history in completion order, each appended under a lock. multidev_cc needs no hardware
+  and is there anyway: it keeps its own `micrograd_demo_logging` debug-log golden, which
+  `dune runtest` diffs only under `OCANNL_BACKEND=multidev_cc` — a spelling neither test/config's
+  pinned `backend=cc` nor CI ever sets. gh-ocannl-700 is the cost of that gap: `eefa827e`
+  (gh-ocannl-461) reordered backprop fragments, re-promoted the cc golden, and left multidev's
+  stale and master red under that backend for six weeks. **A backend with its own goldens and no
+  leg here is a silent regression channel, hardware or not** — add the leg when you add the
+  goldens. That multidev_cc's leg lives here rather than in CI is a decision, recorded at the
+  runtest step in `ci.yml` (gh-ocannl-756): a second per-PR runtest leg would roughly double the
+  ubuntu job's ~28min test time, while the daily sweep gates the backend at a ~30-commit bisect
+  window without taxing any merge. The sweep records a row per unit in
+  `~/.ocannl-sweep/history.tsv` and never
+  exits non-zero for test failures — its exit code is not a verdict, the history file is. A daily
+  scheduled task drives it.
 - **hip runs twice, once on each side of the unified/discrete line** (gh-ocannl-1035): minix's
   gfx1151 is an iGPU whose device memory IS host memory, so a missing or misplaced host↔device
   transfer can read the right bytes there, and only tuf-amd-linux's discrete RX 7700S (gfx1102)

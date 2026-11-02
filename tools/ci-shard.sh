@@ -188,6 +188,7 @@ schedule_cache_numerics 34
 schedule_strided_1x1 32
 autotune_budget 30
 cc_march_census-emission 30
+cc_march_census-emission-outlined 30
 operations_tutorials 30
 autotune_serial_baseline 29
 env_var_deps 28
@@ -413,6 +414,7 @@ accum_width 34
 schedule_strided_1x1 33
 autotune_budget 31
 cc_march_census-emission 30
+cc_march_census-emission-outlined 30
 operations_tutorials 30
 '
 
