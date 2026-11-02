@@ -5255,8 +5255,9 @@ box.
   `Ll_test` entry point: the seeded untuned plan derived with `Autotune.seeded_plan
   ~backend:"cuda"` on `Ll_test.captured_lowering` and counted by `Ll_test.seeded_census`; the
   tuner's segmentation under `Ll_test.synthetic_gpu`; GPU seeds at the stand-in tile
-  `Ll_test.f32_mma_limits` (or a format the leg names); the scheduled IR of a shared-memory
-  schedule read by `Ll_test.guards_and_barriers` instead of a dialect's spelling; and
+  `Ll_test.f32_mma_limits` (`Ll_test.f16_mma_limits` for an f16 site: the f32 tile advertises no
+  f16 format, so under it the site's tensorized pipeline is withheld); the scheduled IR of a
+  shared-memory schedule read by `Ll_test.guards_and_barriers` instead of a dialect's spelling; and
   workgroup-memory estimates under `Ll_test.gpu_like_capabilities`, the capabilities
   `C_syntax.codegen_capabilities` derives for a shuffle-capable dialect. Each leg is labelled
   `structural` and carries a control in the same leg (the host's backend, a threshold above the
@@ -5266,8 +5267,11 @@ box.
   renderer state, is asked through the render itself: `C_syntax.Compile_driver.binding_race`
   renders a routine in a dialect without compiling and answers the refusal's detail, and
   `Ll_test.cuda_like_binding_race` asks it of `Cuda_like_config`'s CUDA syntax on any host
-  (gh-ocannl-1780; `hardware_warp_shuffle` judges every racing body and every rendering one).
-  The inventory and each skipped entry's reason are in gh-ocannl-1626's closing comment.
+  (gh-ocannl-1780; `hardware_warp_shuffle` judges every racing body and every rendering one). A
+  test-local seeding helper that reads the running backend takes an optional
+  `Ll_test.tuner_target` defaulting to it, so the same probe feeds the device leg and the stand-in
+  one (`schedule_strided_1x1`'s f16 sites). The inventory and each skipped entry's reason are in
+  gh-ocannl-1626's closing comment.
 
 - `refused_action_streams` (gh-ocannl-1005) holds accepted-failure Dune actions to the same
   stream contract as fresh-child controls: a run whose owning executable directly declares

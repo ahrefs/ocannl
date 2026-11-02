@@ -105,6 +105,10 @@ let device_limits = Context.hardware_limits (Context.auto ())
 (* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
 let accum_prec = (Context.codegen_capabilities (Context.auto ())).Ir.Backend_intf.accum_prec
 
+(* What the seeding helpers below seed for: the running backend by default, or a stand-in GPU whose
+   matrix unit a structural leg names (gh-ocannl-1780), so cc judges a GPU leg's seeding premise. *)
+let device_target = { Ll_test.is_gpu = not on_cpu; is_cpu = on_cpu; limits = device_limits }
+
 (* A 1x1 site: [b] images of [h x w x ic] channels, [oc] out-channels, at [stride]; built either as
    a bare einsum over constant operands, or through the production blocks. *)
 type site = {
@@ -212,18 +216,20 @@ let seg_key seg =
   Ir.Schedule_cache.digest
     (Ir.Schedule_cache.canonicalize ~static_indices:[] ~with_placements:false seg)
 
-let default_preset seg =
-  if on_cpu then Sched.default_cpu ~min_work:0 seg
-  else Sched.default_gpu ~min_parallel:1 ~limits:device_limits seg
+let default_preset ?(target = device_target) seg =
+  if target.Ll_test.is_cpu then Sched.default_cpu ~min_work:0 seg
+  else Sched.default_gpu ~min_parallel:1 ~limits:target.limits seg
 
-let fission ~arity_cuts ~preset opt =
-  let zero_sched tns = if on_cpu then [] else Sched.zero_expansion ~limits:device_limits tns in
-  Sched.fission_scheduled ~promote_locals:(not on_cpu) ~arity_cuts ~preset ~zero_sched
+let fission ?(target = device_target) ~arity_cuts ~preset opt =
+  let zero_sched tns =
+    if target.Ll_test.is_cpu then [] else Sched.zero_expansion ~limits:target.limits tns
+  in
+  Sched.fission_scheduled ~promote_locals:(not target.is_cpu) ~arity_cuts ~preset ~zero_sched
     ~static_indices:[] opt
 
 (* The keyed segments of one segmentation, on a hermetic copy of the lowering; [None] when the
    routine does not fission (the tuner then runs no per-segment flavor). *)
-let segment_seeds ~seeds_of ~arity_cuts (opt : LL.optimized) =
+let segment_seeds ?target ~seeds_of ~arity_cuts (opt : LL.optimized) =
   let scratch =
     {
       opt with
@@ -231,7 +237,7 @@ let segment_seeds ~seeds_of ~arity_cuts (opt : LL.optimized) =
       LL.optimize_ctx = LL.copy_optimize_ctx opt.LL.optimize_ctx;
     }
   in
-  match fission ~arity_cuts ~preset:default_preset scratch with
+  match fission ?target ~arity_cuts ~preset:(default_preset ?target) scratch with
   | [] | [ _ ] -> None
   | tuples ->
       Some
@@ -380,31 +386,31 @@ type probed = {
 
 (* The probe: the site and whole-routine seeds on the optimized routine, and the keyed per-segment
    seeds — exactly as the tuner's two flavors see them. *)
-let probe ~tag s =
+let probe ?(target = device_target) ~tag s =
+  let { Ll_test.is_gpu; is_cpu; limits = target_limits } = target in
   let seed_limits =
-    if on_cpu then
+    if is_cpu then
       [
-        device_limits;
+        target_limits;
         {
-          device_limits with
-          Ir.Backend_intf.simd_vector = { device_limits.simd_vector with bytes = 16 };
+          target_limits with
+          Ir.Backend_intf.simd_vector = { target_limits.simd_vector with bytes = 16 };
         };
       ]
-    else [ device_limits ]
+    else [ target_limits ]
   in
-  let is_gpu = not on_cpu and is_cpu = on_cpu in
   let seeds_of opt =
     dedup
       (List.concat_map seed_limits ~f:(fun limits ->
            Autotune.sketch_seed_params ~is_gpu ~is_cpu ~limits opt))
   in
-  let device_seeds_of opt = Autotune.sketch_seed_params ~is_gpu ~is_cpu ~limits:device_limits opt in
+  let device_seeds_of opt = Autotune.sketch_seed_params ~is_gpu ~is_cpu ~limits:target_limits opt in
   let keyed ~seeds_of opt =
-    Option.map (segment_seeds ~seeds_of ~arity_cuts:false opt) ~f:(fun coarse ->
+    Option.map (segment_seeds ~target ~seeds_of ~arity_cuts:false opt) ~f:(fun coarse ->
         let fine =
-          if on_cpu then []
+          if is_cpu then []
           else
-            Option.value ~default:[] (segment_seeds ~seeds_of ~arity_cuts:true opt)
+            Option.value ~default:[] (segment_seeds ~target ~seeds_of ~arity_cuts:true opt)
             |> List.filter ~f:(fun (k, _) ->
                 not (List.exists coarse ~f:(fun (c, _) -> String.equal c k)))
         in
@@ -500,8 +506,8 @@ let stride_on_row o =
    ([Ll_test.tensorized_capability], gh-ocannl-1115): the register tiling on the C backends, an
    advertised fragment format on a GPU. Read off the probed site's nodes, at the leg's precision
    when no site was found (the stride claim then fails on its own). *)
-let capability s (o : probed) =
-  let is_gpu = not on_cpu and is_cpu = on_cpu and limits = device_limits in
+let capability ?(target = device_target) s (o : probed) =
+  let { Ll_test.is_gpu; is_cpu; limits } = target in
   match o.site with
   | Some m ->
       Ll_test.tensorized_matmul_capability ~is_gpu ~is_cpu ~limits ~a:m.Autotune.m_a
@@ -805,10 +811,47 @@ let padded = "... | 2*oh=+kh, 2*ow=+kw, ..ic..; |kh, kw, ..ic.. -> ..oc.. => ...
    only the tensorized-seed claims wait on the f16 capability (an advertised f16 fragment format:
    HIP's rocWMMA, CUDA, Metal), where the operands reach the Stage + Tensorize pipelines. The C
    backends' seeding pre-filters to uniform f32/f64, so there every claim is skipped. *)
-let f16_leg ~row ~what ~tag s =
+let f16_leg ?(controls = false) ~row ~what ~tag s =
   ignore
     (seed_leg ~leg:(Verdict.leg ~when_:(not on_cpu) ~on:backend_name ()) ~row ~what ~tag s
-      : probed Lazy.t)
+      : probed Lazy.t);
+  (* gh-ocannl-1780: the leg's seeding premise on every backend, cc included -- the same probe, on
+     the host's lowering of the site, seeding for a GPU at a stand-in f16 matrix unit
+     ([Ll_test.f16_mma_limits]). Running and rendering the seeds stays the device leg's. The
+     controls take the matrix unit away: with none, the seeds stay but none is tensorized; at
+     [Ll_test.f32_mma_limits], which advertises no f16 format, the site's tensorized pipeline is
+     withheld. *)
+  let target = Ll_test.synthetic_gpu ~limits:Ll_test.f16_mma_limits () in
+  let o = probe ~target ~tag:(tag ^ "_standin") s in
+  let label claim = what ^ " (structural, stand-in f16 matrix unit): " ^ claim in
+  let seg_seeds (o : probed) =
+    Option.value_map o.device_segs ~default:[] ~f:(List.concat_map ~f:(fun (_, _, q) -> q))
+  in
+  let mma (q : Autotune.sketch_params) = q.Autotune.sk_mma in
+  let advertised ~target o =
+    match capability ~target s o with `Advertised -> true | `Withheld _ -> false
+  in
+  p
+    (label (structure_claim row))
+    (match row with `Batch -> stride_on_batch_loops o | `Strided -> stride_on_row o);
+  p (label "the stand-in advertises the site's f16 tensorized pipeline") (advertised ~target o);
+  p_all
+    (label "the stand-in's limits seed both flavors")
+    [ List.length o.device_whole; List.length (seg_seeds o) ]
+    ~f:(fun n -> n > 0);
+  p_exists (label "the whole-routine seeds include tensorized ones") o.device_whole ~f:mma;
+  p_exists (label "the per-segment seeds include tensorized ones") (seg_seeds o) ~f:mma;
+  if controls then (
+    let bare = probe ~target:(Ll_test.synthetic_gpu ()) ~tag:(tag ^ "_nounit") s in
+    p_none
+      (what ^ " (structural control, no matrix unit): the seeds stay, and none is tensorized")
+      (bare.device_whole @ seg_seeds bare)
+      ~f:mma;
+    p
+      (what
+     ^ " (structural control, the f32 stand-in): Ll_test.f32_mma_limits withholds the site's f16 \
+        tensorized pipeline")
+      (not (advertised ~target:(Ll_test.synthetic_gpu ~limits:Ll_test.f32_mma_limits ()) o)))
 
 let () =
   let f32 = Ir.Ops.single in
@@ -868,7 +911,7 @@ let () =
      divides, so the staged pipelines pad it and the compacted tile's edge guards hold. *)
   run_leg ~row:`Strided ~what:"batch of one, valid 7x7" ~tag:"s11v"
     { prec = f32; b = 1; h = 7; w = 7; ic = 4; oc = 8; stride = 2; build = `Einsum valid };
-  f16_leg ~row:`Strided ~what:"downsample einsum f16" ~tag:"s11h"
+  f16_leg ~controls:true ~row:`Strided ~what:"downsample einsum f16" ~tag:"s11h"
     {
       prec = Ir.Ops.half;
       b = 2;
