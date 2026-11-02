@@ -113,14 +113,8 @@ test/operations/accum_width.ml [run by @test/operations/runtest-accum_width]
     "= " ^ ... ^ "v"
     "Vectorized reduction rendering"
     ... ^ "(bfloat16_to_single("
-test/operations/branchless_select.ml [run by @test/operations/runtest-branchless_select, @test/operations/runtest-branchless_select-no_hip_fast_math; also pins text this scan cannot name: computed fragment, untraced callback, forwarded parameter, opaque aggregate component, unsupplied application, mutation or unseen buffer write]
+test/operations/branchless_select.ml [run by @test/operations/runtest-branchless_select, @test/operations/runtest-branchless_select-no_hip_fast_math, @test/operations/runtest-branchless_select-outlined; also pins text this scan cannot name: computed fragment, untraced callback, opaque aggregate component, unsupplied application, mutation or unseen buffer write]
     ") != 0.0 ? ("
-    "bs_gather_guard"
-    "bs_index_guard"
-    "bs_nan_fill"
-    "bs_nested_guard"
-    "bs_pool_inlined"
-    ... ^ "("
     ... ^ "_v["
 test/operations/build_file_descriptors.ml [run by @test/operations/runtest-build_file_descriptors; also pins text this scan cannot name: untraced callback]
 test/operations/cache_key_agreement.ml [run by @test/operations/runtest-cache_key_agreement]
@@ -566,6 +560,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-accum_width
 @test/operations/runtest-branchless_select
 @test/operations/runtest-branchless_select-no_hip_fast_math
+@test/operations/runtest-branchless_select-outlined
 @test/operations/runtest-build_file_descriptors
 @test/operations/runtest-cache_key_agreement
 @test/operations/runtest-canonical_render
@@ -727,7 +722,7 @@ test/operations/autotune_timing_modes.ml [through Ll_test.link; run by @test/ope
 test/operations/back_to_back_runs.ml [prelowered compile; run by @test/operations/runtest-back_to_back_runs]
 test/operations/bench_self_test.ml [through Bench_harness.run_self_test; through Bench_harness.time_shipped_segments; run by @test/operations/runtest-bench_self_test]
 test/operations/bf16_subnormal_storage.ml [through Ll_test.execute; run by @test/operations/runtest-bf16_subnormal_storage, @test/operations/runtest-bf16_subnormal_storage-reproducible]
-test/operations/branchless_select.ml [through Ll_test.optimize_and_execute; run by @test/operations/runtest-branchless_select, @test/operations/runtest-branchless_select-no_hip_fast_math]
+test/operations/branchless_select.ml [through Ll_test.optimize_and_execute; run by @test/operations/runtest-branchless_select, @test/operations/runtest-branchless_select-no_hip_fast_math, @test/operations/runtest-branchless_select-outlined]
 test/operations/canonical_render.ml [staged callback; run by @test/operations/runtest-canonical_render]
 test/operations/capture_pass_side_effects.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-capture_pass_side_effects]
 test/operations/cc_kernel_outline.ml [through Ll_test.execute; run by @test/operations/runtest-cc_kernel_outline]
@@ -822,6 +817,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-bf16_subnormal_storage-reproducible
 @test/operations/runtest-branchless_select
 @test/operations/runtest-branchless_select-no_hip_fast_math
+@test/operations/runtest-branchless_select-outlined
 @test/operations/runtest-canonical_render
 @test/operations/runtest-capture_pass_side_effects
 @test/operations/runtest-cc_kernel_outline
