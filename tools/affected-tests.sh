@@ -2645,7 +2645,7 @@ print STDERR "$_\n" for @why_lines;
   my $n_all = 0;
   $n_all += $_ for values %total;
   my $n_first = keys %out;
-  my @slow = sort grep { m{(?:^\@|/)slow-[^/]*$} } keys %out;
+  my @slow = sort grep { m{(?:^\@|/)slow-[^/]*$} } keys %out, @link_only;   # link-only ones too: CI runs none
   printf STDERR "affected: CROSS-CUTTING: %d of the %d per-test aliases rank first, so this change is cross-cutting:"
     . " the PR's CI run owns the full list%s; locally run the tests that exercise the change, named in the PR"
     . " body, and `dune build \@check`\n", $n_first, $n_all,

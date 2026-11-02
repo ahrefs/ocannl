@@ -335,6 +335,21 @@ if harness_leg 'dune-project'; then
     affected --files lib/leaf.ml
     if [ "$rc" = 0 ] && [ -s "$out" ] && ! grep -q 'CROSS-CUTTING' "$err"; then report 0 "$cross_label"
     else report 1 "$cross_label" "a narrow change: exit $rc; $(tr '\n' '|' <"$err")"; fi
+    # The slow- aliases ranked link-only count too (local review): with core's helper changed, 10 of
+    # the 31 rank first by a mutant threshold, slow-gen among the link-only ones.
+    mutant=$repo/tools/affected-mutant.sh
+    if FROM='if $n_all && 2 * $n_first > $n_all;' TO='if $n_all && $n_first;' \
+        perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
+        "$repo/tools/affected-tests.sh" >"$mutant"; then
+      printf 'let used = 1\nlet unused = 3\n' >"$repo/lib/helper.ml"
+      rc=0
+      (cd "$TMP" && bash "$mutant" HEAD -- lib) >"$out" 2>"$err" || rc=$?
+      git_q checkout -q -- lib/helper.ml || exit 2
+      if [ "$rc" = 0 ] && grep -qx 'affected: link-only: @t2/slow-gen' "$err" && grep -q 'but its 2 slow- alias(es)' "$err"; then
+        report 0 'the slow- aliases kept local include the link-only ones'
+      else report 1 'the slow- aliases kept local include the link-only ones' "exit $rc; $(tr '\n' '|' <"$err")"; fi
+    else report 1 'the slow- aliases kept local include the link-only ones' "the mutation anchor does not occur exactly once"; fi
+    rm -f "$mutant"
   else report 1 "$cross_label" "dune-project: exit $rc; $(tr '\n' '|' <"$err")"; fi
 fi
 
