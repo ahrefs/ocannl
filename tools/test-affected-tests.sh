@@ -328,6 +328,13 @@ if harness_leg 'dune-project'; then
     @t2/runtest-scenario_x @t2/slow-gen @t3/runtest-cfgread @t3/runtest-esc @t3/runtest-neg @t3/runtest-py @t3/runtest-t_plain @t3/runtest-t_stub \
     @t3/runtest-uses @t4/runtest-gated @t4/runtest-objs @t4/runtest-t_gate @t4/runtest-t_gate-pre \
     @t4/sub/runtest-t_sub @t5/slow-usesh @t6/runtest-dyn @t6/runtest-inc @t7/runtest-g7 @t7/runtest-inc
+  # A first tier spanning most of the suite says so (gh-ocannl-1765); a narrow one does not.
+  cross_label='a first tier over half the per-test aliases is called cross-cutting, a narrow one is not'
+  if [ "$rc" = 0 ] && grep -q '^affected: CROSS-CUTTING: 31 of the 31 per-test aliases rank first' "$err"; then
+    affected --files lib/leaf.ml
+    if [ "$rc" = 0 ] && [ -s "$out" ] && ! grep -q 'CROSS-CUTTING' "$err"; then report 0 "$cross_label"
+    else report 1 "$cross_label" "a narrow change: exit $rc; $(tr '\n' '|' <"$err")"; fi
+  else report 1 "$cross_label" "dune-project: exit $rc; $(tr '\n' '|' <"$err")"; fi
 fi
 
 if harness_leg 'dune file elsewhere'; then
@@ -544,13 +551,51 @@ if harness_leg 'link-only'; then
   else report 1 'an alias whose unknown action might read a changed path is never ranked link-only' "exit $rc; $(cat "$out")"; fi
   printf 'let used = 1\nlet unused = 3\n' >"$repo/lib/helper.ml"
   affected HEAD
-  # t_core links mid, whose (select) module is code not all known: never link-only.
+  # t_core links mid, whose (select) module is a copy of the arm this build chose, so read
+  # through it (gh-ocannl-1765; before, code not all known, never link-only).
   ordered 'a change to one definition ranks first only what names it' \
-    @t1/runtest-t_core @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t5/slow-usesh @t1/runtest-t_mid @t1/runtest-t_mid-blind @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen
+    @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t5/slow-usesh @t1/runtest-t_core @t1/runtest-t_mid @t1/runtest-t_mid-blind @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen
   printf 'let used = 2\nlet unused = 2\n' >"$repo/lib/helper.ml"
   affected HEAD
   ordered '... and t_core names `used`' \
     @t1/runtest-t_core @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t5/slow-usesh @t1/runtest-t_mid @t1/runtest-t_mid-blind @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen
+  # A changed line holding no code changes no definition (gh-ocannl-1765): the blank line and
+  # doc comment above an added definition were attributed to the definition above them, so a
+  # test naming only that neighbour ranked first.
+  printf 'let () = () (* Core.H.used *)\n' >"$repo/t2/gen.ml"
+  printf 'let used = 1\nlet unused = 2\n' >"$repo/lib/helper.ml"
+  git_q commit -qam gen-names-used || exit 2
+  printf 'let used = 1\n\n(** A doc. *)\nlet added = 0\nlet unused = 2\n' >"$repo/lib/helper.ml"
+  inert_label='an added definition touches no neighbour through the blank line or doc comment above it'
+  affected --referenced-only HEAD
+  if [ "$rc" = 0 ] && ! grep -qx @t2/runtest-gen-v1 "$out" && grep -qF 'a changed module, Helper (added), but' "$err"; then
+    report 0 "$inert_label"
+  else report 1 "$inert_label" "exit $rc; $(tr '\n' ' ' <"$out"); $(tr '\n' '|' <"$err")"; fi
+  mutant=$repo/tools/affected-mutant.sh
+  if FROM='        next if $inert{$which}{$n};' TO='' \
+      perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
+      "$repo/tools/affected-tests.sh" >"$mutant"; then
+    rc=0
+    (cd "$TMP" && bash "$mutant" --referenced-only HEAD) >"$out" 2>"$err" || rc=$?
+    if [ "$rc" = 0 ] && grep -qx @t2/runtest-gen-v1 "$out"; then report 0 "negative control: $inert_label"
+    else report 1 "negative control: $inert_label" "exit $rc; $(cat "$out")"; fi
+  else report 1 "negative control: $inert_label" "the mutation anchor does not occur exactly once"; fi
+  rm -f "$mutant"
+  printf 'let used = 1\n(* A note, "quoted". *)\nlet unused = 2\n' >"$repo/lib/helper.ml"
+  affected HEAD --why @t2/runtest-gen-v1
+  if [ "$rc" = 0 ] && grep -qF 'names Helper (`H`, re-exporting Helper from Core: `Core.H` at t2/gen.ml (its own source)) but no definition of it changed (only comments or blank lines did)' "$err" \
+      && grep -qF 'Helper (no definition: only comments or blank lines changed)' "$err"; then
+    report 0 'a comment-only change changes no definition, and says so'
+  else report 1 'a comment-only change changes no definition, and says so' "exit $rc; $(tr '\n' '|' <"$err")"; fi
+  # A blank line inside a string literal is a changed value, not an inert line.
+  printf 'let used = 1\nlet unused = 2\nlet text = {|a\nb|}\n' >"$repo/lib/helper.ml"
+  git_q commit -qam helper-text || exit 2
+  printf 'let used = 1\nlet unused = 2\nlet text = {|a\n\nb|}\n' >"$repo/lib/helper.ml"
+  affected HEAD --why @t2/runtest-gen-v1
+  if [ "$rc" = 0 ] && grep -qF 'Helper (text)' "$err"; then
+    report 0 'a blank line inside a string literal changes the definition holding it'
+  else report 1 'a blank line inside a string literal changes the definition holding it' "exit $rc; $(tr '\n' '|' <"$err")"; fi
+  git_q reset -q --hard HEAD~2 || exit 2
   mutant=$repo/tools/affected-mutant.sh
   if FROM='my @d = sort grep { $tok->{$_} } keys %$defs;' TO='my @d = sort keys %$defs;' \
       perl -0pe '$n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
@@ -573,7 +618,7 @@ if harness_leg 'link-only'; then
   # A type counts by its name, the constructors and fields its changed lines name, and what its
   # derivers make of its name (gh-ocannl-1651): gen names only `Core.H`, so a new type leaves it last.
   gen_first='@t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh @t1/runtest-t_mid @t1/runtest-t_mid-blind'
-  gen_last='@t1/runtest-t_core @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t5/slow-usesh @t1/runtest-t_mid @t1/runtest-t_mid-blind @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen'
+  gen_last='@t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t5/slow-usesh @t1/runtest-t_core @t1/runtest-t_mid @t1/runtest-t_mid-blind @t2/runtest-gen-v1 @t2/runtest-scenario_x @t2/slow-gen'
   printf 'let used = 1\nlet unused = 2\ntype t = A | B\n' >"$repo/lib/helper.ml"
   affected HEAD
   # shellcheck disable=SC2086
@@ -590,7 +635,8 @@ if harness_leg 'link-only'; then
   printf 'let used = 1\nlet unused = 2\n\ntype r = {\n  first : float;\n}\n' >"$repo/lib/helper.ml"
   affected HEAD
   # shellcheck disable=SC2086
-  ordered '... and a changed field ranks first what names that field' $gen_first
+  ordered '... and a changed field ranks first what names that field' \
+    @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen @t5/slow-usesh @t1/runtest-t_core @t1/runtest-t_mid @t1/runtest-t_mid-blind
   printf 'let used = 1\nlet unused = 2\n\ntype r = {\n  first : int;\n}\n[@@deriving sexp]\n' >"$repo/lib/helper.ml"
   affected HEAD
   # shellcheck disable=SC2086
@@ -656,10 +702,16 @@ helper_fixture() {
 (test (name t_hnamed) (modules t_hnamed) (libraries hlp))
 (test (name t_hindirect) (modules t_hindirect) (libraries hlp))
 (test (name t_hbare) (modules t_hbare) (libraries core))
+(test (name t_hbeside) (modules t_hbeside) (libraries core))
+(test (name t_hopen) (modules t_hopen) (libraries core))
+(test (name t_halias) (modules t_halias) (libraries core))
+(test (name t_hcross) (modules t_hcross) (libraries hlp))
+(test (name t_hsel) (modules t_hsel) (libraries (select t_hsel.ml from (core -> t_hsel.real.ml) (-> t_hsel.missing.ml))))
 DUNE
   cat >"$repo/t8/hlp.ml" <<'ML'
 (* A header naming Core.H.used, as a doc would. *)
 open Stdlib
+open! Core
 
 (** plain reads nothing of Core.H. *)
 let plain () = ()
@@ -673,6 +725,17 @@ ML
   printf 'let () = Hlp.indirect ()\n' >"$repo/t8/t_hindirect.ml"
   # `H` with no `Core` beside it is some other H: a local module, or Stdlib's.
   printf 'module H = struct let used = 0 end\nlet () = ignore H.used\n' >"$repo/t8/t_hbare.ml"
+  # Nor beside a token of Core that neither qualifies nor opens it (gh-ocannl-1765) ...
+  printf 'module H = struct let used = 0 end\nlet () = ignore H.used (* not from Core *)\n' >"$repo/t8/t_hbeside.ml"
+  # ... while an open of Core makes a bare `H` Core's.
+  printf 'open Core\nlet () = ignore H.used\n' >"$repo/t8/t_hopen.ml"
+  # ... and so does a qualifier through a local alias of Core.
+  printf 'module C = Core\nlet () = ignore C.H.used\n' >"$repo/t8/t_halias.ml"
+  # An open in the helper opens nothing in the test calling it: this `H` is its own.
+  printf 'module H = struct let used = 0 end\nlet () = Hlp.plain (); ignore H.used\n' >"$repo/t8/t_hcross.ml"
+  # A `(select)` module is read through every arm (gh-ocannl-1765), the one not built here too.
+  printf 'let () = ()\n' >"$repo/t8/t_hsel.real.ml"
+  printf 'let () = ignore Core.H.used\n' >"$repo/t8/t_hsel.missing.ml"
   git_q add -A t8 && git_q commit -qm helper-library || exit 2
 }
 
@@ -683,8 +746,9 @@ if harness_leg 'helper definitions'; then
   affected --referenced-only --files lib/helper.ml
   expect 'a helper library names a module through the definitions a test names, never its comments; a bare re-export name is no mention' 0 \
     @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen \
-    @t5/slow-usesh @t8/runtest-t_hindirect @t8/runtest-t_hnamed
-  if grep -qx 'affected: link-only: @t8/runtest-t_hplain' "$err" && grep -qx 'affected: link-only: @t8/runtest-t_hbare' "$err"; then
+    @t5/slow-usesh @t8/runtest-t_hindirect @t8/runtest-t_hnamed @t8/runtest-t_hopen @t8/runtest-t_halias @t8/runtest-t_hsel
+  if grep -qx 'affected: link-only: @t8/runtest-t_hplain' "$err" && grep -qx 'affected: link-only: @t8/runtest-t_hbare' "$err" \
+      && grep -qx 'affected: link-only: @t8/runtest-t_hbeside' "$err" && grep -qx 'affected: link-only: @t8/runtest-t_hcross' "$err"; then
     report 0 'what names neither is ranked link-only, and named on stderr'
   else report 1 'what names neither is ranked link-only, and named on stderr' "$(cat "$err")"; fi
   hctl() { # LABEL FROM TO: the mutant must list t_hplain under --referenced-only
@@ -701,9 +765,11 @@ if harness_leg 'helper definitions'; then
   hctl 'the definitions named are what leave an unnamed one out' \
     'next if $done{"$f\0$k"} || ($c->{names} && !(@by = grep { $tok{$_} } @{$c->{names}}));' 'next if $done{"$f\0$k"};' @t8/runtest-t_hplain
   hctl 'blanking comments is what keeps a doc comment from naming a module' \
-    '    for my $l (split /\n/, code_of($s)) {' '    for my $l (split /\n/, $s) {' @t8/runtest-t_hplain
+    '    my $code = code_of($s);' '    my $code = $s;' @t8/runtest-t_hplain
   hctl 'naming the re-exporting module is what a re-exported name needs' \
-    'next if $via && !@beside;' '' @t8/runtest-t_hbare
+    'next if $via && !@by;' '' @t8/runtest-t_hbare
+  hctl 'a qualified path or an open, not any token of the re-exporting module, is what a re-exported name needs' \
+    'my @by = $via ? grep { $through->($_, $n) } sort keys %$via : ();' 'my @by = $via ? grep { $tok->{$_} } sort keys %$via : ();' @t8/runtest-t_hbeside
   git_q reset -q --hard HEAD~1 && rm -rf "${repo:?}/t8" || exit 2
 fi
 
@@ -722,19 +788,28 @@ if harness_leg 'explain'; then
   }
   printf 'let used = 2\nlet unused = 2\n' >"$repo/lib/helper.ml"
   affected HEAD --why @t8/runtest-t_hindirect --why t8/runtest-t_hplain --why @t2/runtest-gen-v1 \
-    --why @t2/runtest-scan --why @t3/runtest-neg --why @t9/runtest-none
+    --why @t2/runtest-scan --why @t3/runtest-neg --why @t9/runtest-none --why @t8/runtest-t_hopen --why @t8/runtest-t_hbeside \
+    --why @t8/runtest-t_hsel
   cp "$out" "$TMP/why-out" || exit 2
   why_has 'helper: the changed definition is named through the helper definitions a test names, back to its own source' \
     'affected: why @t8/runtest-t_hindirect: REFERENCED: printed first' \
     'affected: why @t8/runtest-t_hindirect: its owner tests t_hindirect (t8) -> library hlp (t8) -> library core (lib), which lib/helper.ml (its module Helper) reached' \
-    'affected: why @t8/runtest-t_hindirect:   referenced: it names Helper: `H` at t8/hlp.ml (definition `names_core`) <- `names_core` at t8/hlp.ml (definition `indirect`) <- `indirect` at t8/t_hindirect.ml (its own source), re-exporting Helper from Core, with `Core` at t8/hlp.ml (definition `names_core`) <- `names_core` at t8/hlp.ml (definition `indirect`) <- `indirect` at t8/t_hindirect.ml (its own source); and its changed definition(s): `used` at t8/hlp.ml (definition `names_core`) <- `names_core` at t8/hlp.ml (definition `indirect`) <- `indirect` at t8/t_hindirect.ml (its own source)'
+    'affected: why @t8/runtest-t_hindirect:   referenced: it names Helper: `H`, re-exporting Helper from Core: `Core.H` at t8/hlp.ml (definition `names_core`) <- `names_core` at t8/hlp.ml (definition `indirect`) <- `indirect` at t8/t_hindirect.ml (its own source); and its changed definition(s): `used` at t8/hlp.ml (definition `names_core`) <- `names_core` at t8/hlp.ml (definition `indirect`) <- `indirect` at t8/t_hindirect.ml (its own source)'
   why_has 'link-only: what names neither the module nor a re-export of it says so (the leading @ optional)' \
     'affected: why @t8/runtest-t_hplain: LINK-ONLY: printed last; --referenced-only leaves it off' \
     'affected: why @t8/runtest-t_hplain: its owner tests t_hplain (t8) -> library hlp (t8) -> library core (lib), which lib/helper.ml (its module Helper) reached' \
-    'affected: why @t8/runtest-t_hplain:   link-only on its account: its code (its sources, its project ppx'"'"'s, the helper definitions it names) names neither Helper nor a re-export of it beside the module making it (H beside Core)'
+    'affected: why @t8/runtest-t_hplain:   link-only on its account: its code (its sources, its project ppx'"'"'s, the helper definitions it names) names neither Helper nor a re-export of it through the module making it (H through Core)'
   why_has 're-export: a test naming the module through a re-export, but no changed definition, is link-only and told so' \
     'affected: why @t2/runtest-gen-v1: LINK-ONLY: printed last; --referenced-only leaves it off' \
-    'affected: why @t2/runtest-gen-v1:   link-only on its account: its code (its sources, its project ppx'"'"'s, the helper definitions it names) names Helper (`H` at t2/gen.ml (its own source), re-exporting Helper from Core, with `Core` at t2/gen.ml (its own source)) but none of its changed definitions (used)'
+    'affected: why @t2/runtest-gen-v1:   link-only on its account: its code (its sources, its project ppx'"'"'s, the helper definitions it names) names Helper (`H`, re-exporting Helper from Core: `Core.H` at t2/gen.ml (its own source)) but none of its changed definitions (used)'
+  why_has 're-export: an open of the re-exporting module is the reference, any other token of it is not (gh-ocannl-1765)' \
+    'affected: why @t8/runtest-t_hopen: REFERENCED: printed first' \
+    'affected: why @t8/runtest-t_hopen:   referenced: it names Helper: `H`, re-exporting Helper from Core: `open Core: H` at t8/t_hopen.ml (its own source); and its changed definition(s): `used` at t8/t_hopen.ml (its own source)' \
+    'affected: why @t8/runtest-t_hbeside: LINK-ONLY: printed last; --referenced-only leaves it off' \
+    'affected: why @t8/runtest-t_hbeside:   link-only on its account: its code (its sources, its project ppx'"'"'s, the helper definitions it names) names neither Helper nor a re-export of it through the module making it (H through Core)'
+  why_has 'select: a (select) module is read through every arm, the one this build did not choose included (gh-ocannl-1765)' \
+    'affected: why @t8/runtest-t_hsel: REFERENCED: printed first' \
+    'affected: why @t8/runtest-t_hsel:   referenced: it names Helper: `H`, re-exporting Helper from Core: `Core.H` at t8/t_hsel.missing.ml (its own source); and its changed definition(s): `used` at t8/t_hsel.missing.ml (its own source)'
   why_has 'a scan: its own rule reads the changed path; an alias nothing reaches, and a name dune does not list, say so' \
     'affected: why @t2/runtest-scan: REFERENCED: printed first' \
     'affected: why @t2/runtest-scan: the rule of its own target t2/scan.actual reads lib/helper.ml' \
@@ -748,7 +823,14 @@ if harness_leg 'explain'; then
   affected --files lib/helper.ml --why @t2/runtest-gen-v1
   why_has 're-export: with the whole module changed, the re-export beside its module is the reference' \
     'affected: why @t2/runtest-gen-v1: REFERENCED: printed first' \
-    'affected: why @t2/runtest-gen-v1:   referenced: it names Helper: `H` at t2/gen.ml (its own source), re-exporting Helper from Core, with `Core` at t2/gen.ml (its own source); and Helper changed as a whole'
+    'affected: why @t2/runtest-gen-v1:   referenced: it names Helper: `H`, re-exporting Helper from Core: `Core.H` at t2/gen.ml (its own source); and Helper changed as a whole'
+  # ... and, its code known, it is link-only for a definition no arm names (it was "code not all
+  # known", so first, before).
+  printf 'let used = 1\nlet unused = 3\n' >"$repo/lib/helper.ml"
+  affected HEAD --why @t8/runtest-t_hsel
+  why_has 'select: with every arm read, a test naming no changed definition is link-only' \
+    'affected: why @t8/runtest-t_hsel: LINK-ONLY: printed last; --referenced-only leaves it off'
+  printf 'let used = 2\nlet unused = 2\n' >"$repo/lib/helper.ml"
   # `--why all` explains every listed alias, and its verdicts are the tiers the list was ranked
   # by: REFERENCED or BLIND for each alias printed first, LINK-ONLY for each one printed last.
   affected HEAD --why all

@@ -2999,7 +2999,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   - So that cut ranks, never drops (gh-ocannl-1431): an alias reached only by linking, none of
     whose owners' own code (its sources, a project ppx's, and of the private libraries it links
     the top-level definitions that code names, comments blanked) names the changed module or a
-    re-export of it together with the module making the re-export -- nor, when git's hunks place
+    re-export of it read through the module making the re-export -- nor, when git's hunks place
     every changed line in top-level definitions, one of those definitions -- is LINK-ONLY: printed
     last, named on stderr, left off by `--referenced-only` (a flag of the whole call: any position
     before `--`). A changed line inside a `type` touches the type's name, the constructors and
@@ -3012,7 +3012,26 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     the reason the default keeps them) to 42 (`simplify_llc`, 281 before). `utils.ml` as a whole
     stays at every alias, honestly: `ocannl_ambient_env`, which every config-reading test's rule
     runs, names Utils. A dune-only library split (staging's builtins_metal move) ranks by the
-    moved modules' names, 27 referenced of 682. The contract: LINK-ONLY is a heuristic ranking,
+    moved modules' names, 27 referenced of 682. Three readings narrowed it further (gh-ocannl-1765).
+    A re-export is read through its re-exporter: `Tn` names `Tnode` where `Context.Tn` qualifies it
+    (a local `module C = Context` too), or in a file that opens or includes the re-exporter (`open`,
+    `let open`, `X.( )`), or in the re-exporter's own source -- an open in a helper opens nothing in
+    the test calling it, and any other token of the re-exporter no longer counts (`Tn` beside a
+    `Tensor.print`). A `(select)` module counts by every arm's file (a `tests` stanza, read from its
+    dune form), and a described stanza's copied module (a select arm, a `copy#`: a rule that runs
+    nothing and reads one OCaml file) by the file it copies; both were "code not all known", so
+    always first (12 of the 21 code-referenced owners of the `tnode.ml` case below). And a changed
+    line holding no code -- blank or comment only, outside every literal -- touches no definition:
+    the blank line or doc comment above an added definition had touched the definition above it
+    (the `walk_scalar` sighting), and a comment-only edit now ranks every linking alias last. One
+    added function in `tnode.ml` went from 628 aliases to 24 under `--referenced-only`, all of them
+    scans reading the file. The re-export reading alone moved no count on the real edits tried
+    (`tnode.ml`, `indexing.ml`, `ndarray.ml`, `assignments.ml`, `low_level.ml`): every owner it
+    stopped counting also names the module itself, or is reached through `ppx_ocannl`'s sources,
+    which name `Assignments`, `Indexing` and more for every `%cd`/`%op` user (the boundary above).
+    When the first tier still spans over half the suite, stderr says CROSS-CUTTING: the PR's CI
+    run owns the full list then, and the local run is the tests exercising the change (AGENTS.md).
+    The contract: LINK-ONLY is a heuristic ranking,
     and `--referenced-only` a deliberate trade (faster, with a possible miss) for iterating
     mid-change, never for the pre-push run, which takes the full default list.
   - `--why ALIAS` (repeatable; `--why all` for every listed alias) explains a rank on stderr, in
@@ -3026,10 +3045,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     `owner_names` serves both the ranking and the explanation), so it cannot disagree with the
     list. Reach for it before instrumenting the script: gh-ocannl-1651's causes took four
     instrumented copies to find. On a three-definition `tnode.ml` edit (720 aliases, 37
-    referenced) it shows the shape of the residue: of the 21 owners referenced by code, 12 hold
-    code not all known (a generated test module, a `(select)`), 6 name a changed definition with
-    the module (4 as `Tn` beside a re-exporter such as `Context` or `Tensor`, 2 as `Tnode`), 4 of
-    them through a `test/support` helper definition.
+    referenced) it showed the shape of the residue: of the 21 owners referenced by code, 12 held
+    code not all known (a generated test module, a `(select)`: read through their arms since
+    gh-ocannl-1765), 6 named a changed definition with the module (4 listed with `Tn` beside a
+    re-exporter such as `Context` or `Tensor`, but each also names `Tnode`, so the stricter
+    re-export reading keeps them), 4 of them through a `test/support` helper definition.
   - A module of a library this build does not compile (`cuda_backend.ml` on a Mac) stays UNMAPPED,
     exit 3, but an OFF-BUILD line on stderr counts what a build compiling it reaches -- read from
     the dune files' `libraries` (a `(select)` condition included), since dune describes none of

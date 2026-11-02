@@ -23,7 +23,7 @@
 # rule of its own that reads a changed path, an alias its rules need; and per
 # reached owner, the library chain to the stanza a changed path reached, then
 # what made it referenced -- the token naming the changed module, a
-# re-export of it (with the module making it), or a changed definition, and
+# re-export of it (with where its re-exporter qualifies or opens it), or a changed definition, and
 # where that token stands (a source of its own, a project ppx's, or a helper
 # library's definition, traced back to the token in the owner's code that
 # pulled that definition in) -- or why its code counts as not all known, or,
@@ -764,7 +764,8 @@ for my $e (@{$ws->[0]}) {
         # `X.ml`; any other file with no source makes its code not all known.
         my $src = -e $rel ? $rel : $rel =~ s/\.pp(\.mli?)$/$1/r;
         # (A wrapped library's alias module, `NAME.ml-gen`, is dune's and names only its modules.)
-        if (-e $src) { push @{$st[$i]{mods}{$name}}, $src } elsif ($rel !~ /\.ml-gen$/) { $st[$i]{gen_mod} = 1 }
+        if (-e $src) { push @{$st[$i]{mods}{$name}}, $src }
+        elsif ($rel !~ /\.ml-gen$/) { $st[$i]{gen_mod} = 1; push @{$st[$i]{gen_files}}, [$name, $rel] }
         my $k = "$d\0$name";
         push @{$by_modkey{$k}}, $i unless grep { $_ == $i } @{$by_modkey{$k} // []};
       }
@@ -1302,6 +1303,21 @@ for my $t (sort keys %queried) {
   }
   fold($_) for sort keys %queried;
 }
+# A generated module file that is a plain copy -- its rule runs nothing and reads
+# one OCaml source, a `(select)` arm or a `copy#` -- has that source as its code
+# (gh-ocannl-1765: a select arm made a test's code "not all known").
+sub copy_source {   # generated module file -> its one source, or undef
+  my ($g) = @_;
+  return undef if !$reads{$g} || %{$runs{$g} // {}} || @{$globs{$g} // []} || %{$adeps{$g} // {}};
+  my @src = keys %{$reads{$g}};
+  return @src == 1 && $src[0] =~ /\.mli?\z/ && -f $src[0] ? $src[0] : undef;
+}
+for my $s (grep { $_->{gen_files} } @st) {
+  my @src = map { copy_source($_->[1]) } @{$s->{gen_files}};
+  next if grep { !defined } @src;
+  push @{$s->{mods}{$s->{gen_files}[$_][0]}}, $src[$_] for 0 .. $#src;
+  $s->{gen_mod} = 0;
+}
 
 # A stub object belongs to the library whose stub archive (`libNAME_stubs.a`,
 # NAME its local name) reads it. One no archive reads is linked into an
@@ -1809,8 +1825,8 @@ for (my $grew = 1; $grew;) {
 # definition by its name, a type by its name, constructors or fields, an
 # `open`, `include` or effect always), to a fixpoint (gh-ocannl-1651). Names
 # the changed part: mentions the module, or a name re-exporting it (`module A
-# = ...M` with A not M, or an `include ...M`) together with the module making
-# that re-export (A is a name of it, not a global one), and, when the git
+# = ...M` with A not M, or an `include ...M`) qualified by, or with an open of,
+# the module making that re-export (A is a name of it, not a global one), and, when the git
 # hunks place every changed line in a top-level definition, one of those
 # definitions too (see %path_defs). Mentions are tokens, the owner's own
 # comments and strings included, so a name only ever errs towards "names it".
@@ -1823,12 +1839,52 @@ for (my $grew = 1; $grew;) {
 # names (its sources count whole, so ppx_cd's `Ir.Indexing` makes every %cd
 # user name Indexing). So link-only aliases stay printed, LAST, and named on
 # stderr; `--referenced-only` leaves them off stdout.
+# Beside the tokens, the keys a re-exported name is read through
+# (gh-ocannl-1765), each made within one file, since an `open` in a helper
+# opens nothing in the test calling it: `X.N` for each qualified step of a
+# path (`Ocannl.Context.Tn` gives `Ocannl.Context` and `Context.Tn`); `open X:
+# N` for each capitalized token N of a file that may use X's names bare --
+# `open X`/`open! X`, `include X`, `let open X in`, a local open `X.(...)` (or
+# `.[`, `.{`), each by the path's last module, and X's own source; and `alias M
+# X: N` for `M.N` in a file that binds `module M = ...X`. No key can collide
+# with an identifier token. UNIT is the text the keys are for (a definition of
+# a helper module), SCOPE the whole file its opens and aliases are read from.
+sub file_scope {   # SCOPE FILE -> [{X opened => 1}, {M => {X => 1}}]
+  my ($scope, $f) = @_;
+  my (%open, %alias);
+  $open{$1} = 1 while $scope =~ /\b([A-Z][\w']*)\s*\.\s*[(\[{]/g;
+  while ($scope =~ /\b(?:open!?|include|module\s+([A-Z][\w']*)\s*=)\s*((?:[A-Z][\w']*\s*\.\s*)*[A-Z][\w']*)/g) {
+    my ($m, $path) = ($1, $2);
+    my ($x) = $path =~ /([A-Z][\w']*)\z/;
+    if (defined $m) { $alias{$m}{$x} = 1 } else { $open{$x} = 1 }
+  }
+  $open{ucfirst $1} = 1 if $f =~ m{([A-Za-z_][\w']*)\.mli?\z};
+  return [\%open, \%alias];
+}
+sub qual_keys {   # UNIT [OPENS ALIASES] (file_scope) -> (KEY...)
+  my ($unit, $sc) = @_;
+  my ($open, $alias) = @$sc;
+  my (@k, %cap);
+  while ($unit =~ /\b([A-Z][\w']*)\s*\.\s*(?=([A-Za-z_][\w']*))/g) {
+    my ($m, $n) = ($1, $2);
+    push @k, "$m.$n";
+    push @k, map { "alias $m $_: $n" } keys %{$alias->{$m} // {}};
+  }
+  $cap{$1} = 1 while $unit =~ /\b([A-Z][\w']*)/g;
+  for my $x (keys %$open) { push @k, map { "open $x: $_" } keys %cap }
+  return @k;
+}
 my %tok_cache;
 sub tokens_of {
   my ($f) = @_;
   return $tok_cache{$f} //= do {
     my %t;
-    if (open my $fh, "<", $f) { local $/; my $s = <$fh> // ""; $t{$1} = 1 while $s =~ /\b([A-Za-z_][A-Za-z0-9_']*)/g }
+    if (open my $fh, "<", $f) {
+      local $/;
+      my $s = <$fh> // "";
+      $t{$1} = 1 while $s =~ /\b([A-Za-z_][A-Za-z0-9_']*)/g;
+      $t{$_} = 1 for qual_keys($s, file_scope($s, $f));
+    }
     \%t;
   };
 }
@@ -1846,7 +1902,7 @@ sub tokens_of {
 # they mention. A misread line boundary only merges two definitions, which errs
 # towards "names it".
 sub code_of {   # OCaml text with every comment blanked, newlines kept; strings inside comments are comment
-  my ($s) = @_;
+  my ($s, $mark) = @_;   # MARK: every line a literal spans is made non-blank (`S`), its newlines kept
   my ($out, $depth) = ("", 0);
   pos($s) = 0;
   while (pos($s) < length $s) {
@@ -1855,7 +1911,10 @@ sub code_of {   # OCaml text with every comment blanked, newlines kept; strings 
     elsif ($depth && $s =~ /\G\*\)/gc) { $depth--; $piece = "  " }
     elsif ($s =~ /\G("(?:[^"\\]++|\\.)*+")/gcs || $s =~ /\G(\{([a-z_]*)\|.*?\|\2\})/gcs
            || $s =~ /\G('(?:[^'\\\n]|\\(?:[\\'"ntbr ]|[0-9]{3}|x[0-9A-Fa-f]{2}|o[0-7]{3}))')/gc
-           || $s =~ /\G([^(*"{'\n]+|.)/gcs) { $piece = $1 }
+           || $s =~ /\G([^(*"{'\n]+|.)/gcs) {
+      $piece = $1;
+      $piece = $piece =~ s/[^\n]/S/gr =~ s/\n/\nS/gr if $mark && !$depth && $piece =~ /^["'{]./s;
+    }
     $out .= $depth || $piece eq "  " ? $piece =~ s/[^\n]/ /gr : $piece;
   }
   return $out;
@@ -1867,7 +1926,9 @@ sub def_chunks {   # FILE -> [{ names => [NAME...] or undef (always counted), to
     my $s = "";
     if (open my $fh, "<", $f) { local $/; $s = <$fh> // "" }
     my (@chunks, $cur);
-    for my $l (split /\n/, code_of($s)) {
+    my $code = code_of($s);
+    my $scope = file_scope($code, $f);
+    for my $l (split /\n/, $code) {
       if ($l =~ /^and\b/ && $cur) {
         if ($cur->{names} && $l =~ /^and\s+(?:type\s+)?(?:'[\w']+\s+|\([^()]*\)\s+)?([A-Za-z_][\w']*)\b(?!\s*,)/) {
           push @{$cur->{names}}, $1;
@@ -1893,6 +1954,7 @@ sub def_chunks {   # FILE -> [{ names => [NAME...] or undef (always counted), to
       my %t;
       my $text = join("\n", @{$c->{lines}});
       $t{$1} = 1 while $text =~ /\b([A-Za-z_][A-Za-z0-9_']*)/g;
+      $t{$_} = 1 for qual_keys($text, $scope);
       # A type answers to its constructors and fields too: what users name. Read
       # loosely (every capitalized word after `|`, `=`, `[` or `of`, every word
       # before a `:`), which errs towards more names.
@@ -1947,10 +2009,32 @@ sub stanza_sources {   # an @st entry's source files, or undef when they are not
   my @files;
   for my $n (@names) {
     my @f = grep { -f } map { in_dir($s->{dir}, "$n.$_") } "ml", "mli";
+    # A `(select)` module: every arm's file, whichever this build chose.
+    unless (@f) {
+      for my $ext ("ml", "mli") {
+        my $arms = select_arms($ds, "$n.$ext") // next;
+        return sources_unknown($i, "its module " . ucfirst($n) . " is a (select) with an arm not read here")
+          if !@$arms || grep { !-f } @$arms;
+        push @f, @$arms;
+      }
+    }
     @f or return sources_unknown($i, "its module " . ucfirst($n) . " has no source here (generated)");
     push @files, @f;
   }
   return \@files;
+}
+sub select_arms {   # a dune stanza's `(select FILE from (... -> ARM)...)` -> [each ARM's path], or undef: no such select
+  my ($ds, $file) = @_;
+  for my $l (@{dfield($ds->{x}, "libraries") // []}) {
+    next unless ref $l && @$l > 1 && !ref $l->[0] && $l->[0] eq "select" && !ref $l->[1] && $l->[1] eq $file;
+    my @arms;
+    for my $arm (@$l[3 .. $#$l]) {
+      return [] unless ref $arm && @$arm >= 2 && !ref $arm->[-1] && !ref $arm->[-2] && $arm->[-2] eq "->";
+      push @arms, in_dir($ds->{dir}, $arm->[-1]);
+    }
+    return \@arms;
+  }
+  return undef;
 }
 sub is_private { my $ds = static_of($_[0]); $ds && !grep { defined dfield($ds->{x}, $_) } qw(public_name public_names) }
 sub flag_atoms {   # every atom of some flags fields, undef for a part not read as atoms
@@ -2100,6 +2184,11 @@ if (-f "$tmp/ml-diff") {
   for my $p (keys %hunks) {
     my %defs;
     my %side = map { my $f = "$tmp/$_/$p"; ($_ => [-f $f ? split(/\n/, slurp($f), -1) : ()]) } qw(old new);
+    # A changed line holding no code -- blank, or comment only, outside every
+    # literal -- changes no definition (gh-ocannl-1765: the blank line above an
+    # added definition was attributed to the definition above it).
+    my %inert = map { my $f = "$tmp/$_/$p"; my @l = -f $f ? split(/\n/, code_of(slurp($f), 1), -1) : ();
+                      ($_ => { map { $l[$_] =~ /\S/ ? () : ($_ + 1 => 1) } 0 .. $#l }) } qw(old new);
     # A file new on this side (an `.mli` added beside its `.ml`, say) or gone from
     # it can hide or expose any member: the whole module.
     if (!-f "$tmp/old/$p" || !-f "$tmp/new/$p") { $path_defs{$p} = undef; next }
@@ -2108,6 +2197,7 @@ if (-f "$tmp/ml-diff") {
       next unless $count;
       @{$side{$which}} or do { %defs = ("\0whole" => 1); last };
       for my $n ($start .. $start + $count - 1) {
+        next if $inert{$which}{$n};
         my $names = enclosing_def($side{$which}, $n);
         if (!defined $names) { %defs = (); $defs{"\0whole"} = 1; last }
         # An operator or other non-identifier: tokens hold identifiers only, so the
@@ -2117,7 +2207,8 @@ if (-f "$tmp/ml-diff") {
       }
       last if $defs{"\0whole"};
     }
-    $path_defs{$p} = %defs && !$defs{"\0whole"} ? \%defs : undef;
+    # No definition at all: only comments or blank lines changed.
+    $path_defs{$p} = $defs{"\0whole"} ? undef : \%defs;
   }
 }
 # The names a changed module answers to: its own, and those re-exporting it,
@@ -2152,8 +2243,10 @@ if ($rank_links) {
   # in hip_backend.ml is `Hip_backend.Lazy`, and code naming `Lazy` without
   # naming Hip_backend means Stdlib's (gh-ocannl-1651: counted bare, it made
   # every test calling `Lazy.force` name Utils). So a re-exported name names M
-  # only in code that also names the module re-exporting it (by a path, an
-  # `open`, or as the re-exporter's own sibling).
+  # only where the module re-exporting it qualifies it (`Context.Tn`), or is
+  # opened, included or aliased, or in that module's own code (qual_keys): any
+  # other token of the re-exporter is not enough (gh-ocannl-1765: `Tn` beside a
+  # `Tensor.print` made four of a `tnode.ml` edit's owners referenced).
   my %as;
   for my $j (grep { $st[$_]{kind} eq "library" } 0 .. $#st) {
     for my $x (keys %{$st[$j]{mods} // {}}) {
@@ -2258,25 +2351,34 @@ sub owner_names {
   }
   my $tok = own_tokens($o) // return (1, "its code is not all known: " . ($st[$o]{unknown_why} // "a reason not recorded"));
   my @missed;
+  my %aliases;   # X -> {the local aliases M of `module M = ...X` in this code => 1}
+  for (keys %$tok) { $aliases{$2}{$1} = 1 if /^alias (\S+) (\S+):/ }
+  my $through = sub {   # RE-EXPORTER NAME -> the key (qual_keys) reading NAME as RE-EXPORTER's, or undef
+    my ($x, $n) = @_;
+    my ($k) = grep { $tok->{$_} } "$x.$n", "open $x: $n", map { "alias $_ $x: $n" } sort keys %{$aliases{$x} // {}};
+    return $k;
+  };
   for my $m (sort keys %mod_defs) {
     my (@as, $why);
     for my $n (sort grep { $tok->{$_} && exists $changed_names{$_}{$m} } keys %changed_names) {
       my $via = $changed_names{$n}{$m};
-      my @beside = $via ? sort grep { $tok->{$_} } keys %$via : ();
-      next if $via && !@beside;
+      my @by = $via ? grep { $through->($_, $n) } sort keys %$via : ();
+      next if $via && !@by;
+      # A re-export is told by where it is read through its re-exporter.
       push @as, $n eq $m ? tok_where($o, $n)
-        : tok_where($o, $n) . ", re-exporting $m from " . join("/", @beside) . ", with " . join(" and ", map { tok_where($o, $_) } @beside);
+        : "`$n`, re-exporting $m from " . join("/", @by) . ": " . join(" and ", map { tok_where($o, $through->($_, $n)) } @by);
     }
     my $defs = $mod_defs{$m};
     if (@as && !$defs) { return (1, "it names $m: " . join("; ", @as) . "; and $m changed as a whole") }
     if (@as) {
       my @d = sort grep { $tok->{$_} } keys %$defs;
       return (1, "it names $m: " . join("; ", @as) . "; and its changed definition(s): " . join("; ", map { tok_where($o, $_) } @d)) if @d;
-      push @missed, "names $m (" . join("; ", @as) . ") but none of its changed definitions (" . join(", ", sort keys %$defs) . ")";
+      push @missed, "names $m (" . join("; ", @as) . ") but " . (%$defs ? "none of its changed definitions (" . join(", ", sort keys %$defs) . ")"
+        : "no definition of it changed (only comments or blank lines did)");
     } else {
       my @re = sort grep { $_ ne $m && exists $changed_names{$_}{$m} } keys %changed_names;
-      push @missed, "names neither $m nor a re-export of it beside the module making it"
-        . (@re ? " (" . join(", ", map { my $v = $changed_names{$_}{$m}; "$_ beside " . join("/", sort keys %$v) } @re) . ")" : "");
+      push @missed, "names neither $m nor a re-export of it through the module making it"
+        . (@re ? " (" . join(", ", map { my $v = $changed_names{$_}{$m}; "$_ through " . join("/", sort keys %$v) } @re) . ")" : "");
     }
   }
   return (0, "its code (its sources, its project ppx's, the helper definitions it names) " . join("; ", @missed));
@@ -2492,7 +2594,8 @@ for my $ob (@off_build) {
   print STDERR "affected: off-build: $_\n" for @$named;
 }
 if (@link_only) {
-  my $what = join("; ", map { $_ . ($mod_defs{$_} ? " (" . join(", ", sort keys %{$mod_defs{$_}}) . ")" : "") }
+  my $what = join("; ", map { $_ . (!$mod_defs{$_} ? "" : %{$mod_defs{$_}} ? " (" . join(", ", sort keys %{$mod_defs{$_}}) . ")"
+                                    : " (no definition: only comments or blank lines changed)") }
                         sort keys %mod_defs);
   printf STDERR "affected: %d LINK-ONLY alias(es), %s: each links the library of a changed module, %s, but no code of"
     . " its own names the changed part, so it is reached only through other library code. A change in what that"
@@ -2503,6 +2606,17 @@ if (@link_only) {
   print STDERR "affected: link-only: $_\n" for @link_only;
 }
 print STDERR "$_\n" for @why_lines;
+# A first tier spanning most of the suite (gh-ocannl-1765): the ranking cannot
+# narrow this change, so say so, and who runs the whole list.
+{
+  my $n_all = 0;
+  $n_all += $_ for values %total;
+  my $n_first = keys %out;
+  printf STDERR "affected: CROSS-CUTTING: %d of the %d per-test aliases rank first, so this change is cross-cutting:"
+    . " the PR's CI run owns the full list; locally run the tests that exercise the change, named in the PR"
+    . " body, and `dune build \@check`\n", $n_first, $n_all
+    if $n_all && 2 * $n_first > $n_all;
+}
 printf STDERR "affected: %d alias(es) from %d changed path(s)%s%s\n", scalar(keys %out) + ($referenced_only ? 0 : @link_only),
   scalar(@changed), (@link_only ? sprintf(", %d of them link-only%s", scalar(@link_only), $referenced_only ? " and left off" : "") : ""),
   @unmapped ? "; INCOMPLETE, see UNMAPPED above" : "";
