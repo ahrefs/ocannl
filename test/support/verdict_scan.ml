@@ -822,6 +822,12 @@ let tolerance_census content =
     is [e]'s and [Lazy.force x] (or [Base]'s [force]) is [x]'s: a leg's evidence lives in lazies
     only its claims force.
 
+    The same model of what runs bounds the population: a function value or [lazy] inside the make
+    function is deferred, and its claims are no population, unless a collection-module function
+    calls it back. A leg claim nested in a make function is a claim that make function makes: its
+    population is every enclosing leg's too. Anything else the reader cannot follow is outside the
+    model: such a leg is counted as UNCOMPARED (below), never refused.
+
     A leg claim applied in part -- without its [~leg], its label and its make function in place, an
     [in_legf] with exactly as many arguments as its literal format takes before the make function
     ({!format_arity}) -- or named as a value is reported unread. A complete one whose [~leg] reaches
@@ -2669,7 +2675,7 @@ let gate_census content =
         let at = position expr in
         match leg_stack with
         | [] -> ()
-        | collector :: _ -> (
+        | collectors -> (
             (* [rows |> p_all label ~f] and [p_all label ~f @@ rows] are the application they
                spell. *)
             let callee, arguments =
@@ -2688,9 +2694,13 @@ let gate_census content =
                   true
               | _ -> false
             in
+            (* Every enclosing leg's: a leg claim nested in a make function is a claim that make
+               function makes. *)
             if (not verdicts) && self#helper env callee then
-              collector.handed <-
-                List.map arguments ~f:(fun (_, argument) -> (at, argument, env)) @ collector.handed;
+              List.iter collectors ~f:(fun collector ->
+                  collector.handed <-
+                    List.map arguments ~f:(fun (_, argument) -> (at, argument, env))
+                    @ collector.handed);
             match Verdict_callee.resolve owners callee with
             | Some { member; ownership = Verdicts | Ambiguous | Free; _ } -> (
                 let positional =
@@ -2704,8 +2714,10 @@ let gate_census content =
                     | _ -> None)
                 in
                 let add boolean expressions =
-                  collector.populations <-
-                    List.map expressions ~f:(fun e -> (at, e, boolean, env)) @ collector.populations
+                  List.iter collectors ~f:(fun collector ->
+                      collector.populations <-
+                        List.map expressions ~f:(fun e -> (at, e, boolean, env))
+                        @ collector.populations)
                 in
                 let last n = List.drop positional (List.length positional - n) in
                 match List.Assoc.find leg_population_slots member ~equal:String.equal with
@@ -3213,32 +3225,48 @@ let gate_census content =
     and Metal, CUDA and HIP went red (gh-ocannl-1668). gh-ocannl-1703 migrated about thirty such
     tests; this reader keeps the form from regrowing.
 
-    {2 What is read}
+    {2 The model (the boundary, stated once)}
 
-    A SKIP is a [skipped] {!Verdict_callee} reads as [Verdict]'s ([Verdict.skipped], an opened one),
-    or one a [let] of the source binds to a skip or its application (the per-test
-    [let skipped = Verdict.skipped ~backend:backend_name]) -- never a parameter or another binding
-    of the name, nor another module's -- applied or not. An EVALUATING claim is an application of
-    any other {!Verdict_callee.members} name but [fail] and [case] that the resolver reads as
-    [Verdict]'s. Two shapes are refused:
+    This reader decides skip lists under a BOUNDED, static model of what runs. It reads exactly the
+    constructs listed below; anything else is outside the model and is read CONSERVATIVELY: as no
+    skip list, never refused. A construct outside the model can hide a skip list from this reader;
+    it is never a reason to report one. Widening the model is a change to this header first.
 
-    - an ITERATED skip: an argument of a collection-module function ({!collection_modules}, but
-      [Option] and [Result], whose iteration runs at most once) that is a skip itself, partially
-      applied or not ([List.iter labels ~f:skipped], [~f:(Verdict.skipped ~backend)]), or a function
-      written there whose body makes a skip and no evaluating claim
-      ([~f:(fun l -> skipped (tag ^ l))]); and the body of a [for] or [while] loop that makes a skip
-      and no evaluating claim. A loop whose callback evaluates the claim on one side of its gate and
-      skips it on the other is one claim written once, and passes;
-    - a SKIP RUN: one branch of an [if] (either), or one case of a [match] or [function], whose code
-      applies two or more skips. A branch is read down to the branches nested in it, which are
-      judged on their own, and not into a function written in it.
+    - A SKIP is a [skipped] {!Verdict_callee} reads as [Verdict]'s ([Verdict.skipped], an opened
+      one), or one a [let] of the source binds to a skip or its application (the per-test
+      [let skipped = Verdict.skipped ~backend:backend_name]), through [open]s of the standard
+      libraries; never a parameter or other binding of the name, nor another module's. A skip RUNS
+      where it is applied to its label (a positional argument); a partial skip is a callback, read
+      only where a collection function is handed it.
+    - An EVALUATING claim is an application of any other {!Verdict_callee.members} name but [fail]
+      and [case] that the resolver reads as [Verdict]'s.
+    - What RUNS: the code written in place. A function value and a [lazy] are DEFERRED -- their
+      bodies are not read as run -- except a function a collection-module function calls back.
+    - A COLLECTION ITERATION is a complete ({!applied_fully}) application of a function of
+      {!collection_modules} -- the module resolved through the source's own module aliases and
+      structures, [Option] and [Result] excluded (at most one run), [Seq]/[Sequence] only through
+      their consuming functions -- written directly or through [|>]/[@@]; its argument is CALLED
+      BACK where {!calls_back} says so, in either library's order.
+    - A BRANCH is one branch of an [if], or one case of a [match] or [function].
 
-    {2 What is not read}
+    Two shapes are refused:
 
-    A skip routed through a wrapper of another name ([let skip_all () = skipped "a"; skipped "b"]
-    applied in a branch), a list of labels iterated by a function of the source rather than a
-    collection module's, and a run of single skips spread across nested branches. Each is a place a
-    skip list can hide from this reader; none is a place it reports one that is not there. *)
+    - an ITERATED skip: a called-back argument of a collection iteration that is a skip itself,
+      partially applied or not ([List.iter labels ~f:skipped], [~f:(Verdict.skipped ~backend)]), or
+      a function written there whose run code makes a skip and no evaluating claim
+      ([~f:(fun l -> skipped (tag ^ l))]); and the body of a [for] or [while] loop whose run code
+      makes a skip and no evaluating claim. A loop whose callback evaluates the claim on one side of
+      its gate and skips it on the other is one claim written once, and passes;
+    - a SKIP RUN: a branch whose run code applies two or more skips, read down to the branches
+      nested in it, which are judged on their own.
+
+    {2 Outside the model}
+
+    Known examples, each read as no skip list: a skip routed through a wrapper of another name
+    ([let skip_all () = skipped "a"; skipped "b"] applied in a branch); labels iterated by a
+    function of the source rather than a collection module's; a partial iteration stored and applied
+    later; a run of single skips spread across nested branches; a deferred value that some other
+    code forces or calls. *)
 
 type skip_list_kind =
   | Iterated  (** A skip handed to an iteration, or a loop body that only skips. *)
@@ -3373,7 +3401,12 @@ let skip_list_census content =
           (* Applied skips only: a skip handed on as a value is an iteration's argument, which the
              walk reads where it is handed. *)
           (match e.pexp_desc with
-          | Pexp_apply (callee, _) when is_skip_head callee -> found_skips := e :: !found_skips
+          | Pexp_apply (callee, arguments)
+            when is_skip_head callee
+                 && List.exists arguments ~f:(fun (label, _) ->
+                     Poly.equal label Ppxlib.Asttypes.Nolabel) ->
+              (* A skip handed its label; a partial one is a callback, read where it is handed. *)
+              found_skips := e :: !found_skips
           | Pexp_apply (callee, _) when is_evaluating_head callee -> Int.incr evaluating
           | _ -> ());
           match e.pexp_desc with
@@ -3384,7 +3417,8 @@ let skip_list_census content =
               (* A function value or lazy inside the callback or loop body is deferred: what it
                  skips is not skipped here. *)
               ()
-          | (Pexp_ifthenelse _ | Pexp_match _ | Pexp_function _) when not branches -> (
+          | (Pexp_ifthenelse _ | Pexp_match _ | Pexp_function _ | Pexp_lazy _) when not branches
+            -> (
               match e.pexp_desc with
               | Pexp_ifthenelse (condition, _, _) -> self#expression condition
               | Pexp_match (scrutinee, _) -> self#expression scrutinee

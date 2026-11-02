@@ -363,6 +363,13 @@ let () = List.iter labels ~f:skipped|ocaml},
       ( "a lazy sequence a map only builds",
         {ocaml|let deferred = Stdlib.Seq.map (Verdict.skipped ~backend:"cc") (Stdlib.List.to_seq labels)|ocaml},
         [] );
+      ( "a partial skip a loop body only builds",
+        {ocaml|let () = for _i = 1 to 2 do let _emit = Verdict.skipped ~backend:"cc" in () done|ocaml},
+        [] );
+      ( "a lazy a branch only builds",
+        {ocaml|let () =
+  if on_gpu then ignore (lazy (Verdict.skipped ~backend:"cc" "a"; Verdict.skipped ~backend:"cc" "b"))|ocaml},
+        [] );
       ( "an Option iteration, which runs at most once",
         {ocaml|let () = Option.iter maybe_label ~f:skipped|ocaml},
         [] );

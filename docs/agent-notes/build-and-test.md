@@ -1968,7 +1968,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `skipped` the resolver reads as `Verdict`'s, or a `let` binds to one (`Verdict_scan.skip_list_census`) and
   refuses one handed to a collection-module iteration, a callback or loop body that only skips,
   and a branch of an `if`/`match` applying two or more; the sites that predate the rule are
-  `exempt_skip_lists` entries, each with its reason.
+  `exempt_skip_lists` entries, each with its site count and reason. Both readers work under one
+  BOUNDED model of what runs, stated once in `verdict_scan.ml`'s skip-list header (*The model*):
+  a function value or `lazy` is deferred unless a collection function calls it back, and a
+  construct outside the model is read conservatively -- no skip list, an uncompared leg -- never
+  refused. Extending the model starts in that header.
 - A negative control confirms the run REACHED its last row, not only that `FAIL:` lines appeared
   (gh-ocannl-1067): the claims it printed, passed plus failed, number the golden's lines, or the
   rows run under `Verdict.case`. A raise ends a run at the case that raised, and the rows after it

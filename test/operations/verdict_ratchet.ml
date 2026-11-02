@@ -4717,6 +4717,15 @@ let () =
       let _deferred () = p label true in
       check_rows label rows)|ocaml},
       [ "rows" ] );
+    ( "refuses an outer leg's gate on the population a nested leg claim ranges over",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let outer = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:"cc" () in
+  let inner = Verdict.leg ~when_:true ~on:"cc" () in
+  in_leg ~leg:outer "rows" (fun label ->
+      in_leg ~leg:inner label (fun label -> p_all label rows ~f:Fn.id))|ocaml},
+      [ "rows" ] );
     ( "accepts a leg gated on a capability over a population built from the same program",
       {ocaml|open Verdict.Claims
 let () =
