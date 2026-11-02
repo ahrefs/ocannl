@@ -5465,6 +5465,36 @@ let () = Verdict.p_all2 "matches" got want ~f:approx|ocaml},
       {ocaml|let p_all2 _ _ _ ~f:_ = ()
 let () = p_all2 "matches" got want ~f:(fun a b -> Float.(abs (a - b) < 1e-3))|ocaml},
       [] );
+    ( "refuses a plain claim over an array helper bounding a difference inline",
+      {ocaml|open Verdict.Claims
+let () = p "x" (Array.for_all2_exn a b ~f:(fun x y -> Float.(abs (x - y) < 1e-5)))|ocaml},
+      [ "2:an inline function" ] );
+    ( "refuses a tolerance helper reaching p, p_all and p_exists, and a value computed through one",
+      {ocaml|let approx a b = Float.(abs (a - b) < 1e-3)
+let () =
+  let ok = Array.for_all2_exn got want ~f:approx in
+  Verdict.p "x" ok;
+  Verdict.p_all "y" runs ~f:(fun (g, w) -> approx g w);
+  Verdict.p_exists "z" runs ~f:(fun (g, w) -> approx g w)|ocaml},
+      [ "4:ok"; "5:approx"; "6:approx" ] );
+    ( "accepts a scalar bound in the claim, a discrimination margin, a maximum-error helper and \
+       within",
+      {ocaml|let max_err a b = Array.fold2_exn a b ~init:0. ~f:(fun m x y -> Float.max m (Float.abs (x -. y)))
+let () =
+  Verdict.p "scalar" Float.(abs (got - 2.) < 1e-6);
+  Verdict.p_all "moved" pairs ~f:(fun (a, b) -> Float.(abs (a - b) > 1e-4));
+  Verdict.p "bounded max" Float.(max_err a b < 1e-3);
+  Verdict.p_all "seeds" runs ~f:(fun (g, w) -> Verdict.within "x" g w ~tol:(fun _ -> 1e-3))|ocaml},
+      [] );
+    ( "does not read the closure of a leg or a case, whose claims are read where written",
+      {ocaml|let () =
+  Verdict.in_leg ~leg "x" (fun () -> ignore (List.for_all xs ~f:(fun a -> Float.(abs (a - b) < 1e-3))));
+  Verdict.case "y" (fun () -> ignore (List.for_all xs ~f:(fun a -> Float.(abs (a - b) < 1e-3))))|ocaml},
+      [] );
+    ( "does not read a p the source binds itself",
+      {ocaml|let p _ _ = ()
+let () = p "x" (Array.for_all2_exn a b ~f:(fun x y -> Float.(abs (x - y) < 1e-5)))|ocaml},
+      [] );
   ]
 
 let tolerance_findings source =
@@ -5487,7 +5517,9 @@ let refuse_hand_rolled_tolerance ~fail ~source (site : Scan.tolerance_site) =
        "%s:%d compares float readbacks through `%s` with %s, which hand-rolls a tolerance (an \
         `abs` of a difference): a failure prints a bare `false`, naming no cell, no values and no \
         magnitude. Write it as `Verdict.p_close <label> got want ~tol:(fun want -> <bound>)` (or \
-        `pf_close`, `pass_fail_close`), whose failure names all three on stderr (gh-ocannl-1224)%s"
+        `pf_close`, `pass_fail_close`), or as `Verdict.within` where the check feeds a claim that \
+        stays one row (an aggregate, a conjunction, a gated value), whose failure names all three \
+        on stderr (gh-ocannl-1224, gh-ocannl-1470)%s"
        source site.tolerance_line site.tolerance_callee
        (if String.equal site.predicate "an inline function" then site.predicate
         else "`" ^ site.predicate ^ "`")
@@ -5515,7 +5547,9 @@ let run_tolerance_refusal_control () =
     "%s:%d compares float readbacks through `%s` with %s, which hand-rolls a tolerance (an `abs` \
      of a difference): a failure prints a bare `false`, naming no cell, no values and no \
      magnitude. Write it as `Verdict.p_close <label> got want ~tol:(fun want -> <bound>)` (or \
-     `pf_close`, `pass_fail_close`), whose failure names all three on stderr (gh-ocannl-1224)%s"
+     `pf_close`, `pass_fail_close`), or as `Verdict.within` where the check feeds a claim that \
+     stays one row (an aggregate, a conjunction, a gated value), whose failure names all three on \
+     stderr (gh-ocannl-1224, gh-ocannl-1470)%s"
   and raised_format =
     "the tolerance reader raised %s on %s, which parses -- a defect of \
      Verdict_scan.tolerance_census, not of the source, and the source's parity predicates went \
@@ -6023,7 +6057,7 @@ let () =
   eprintf "Verdict claim labels read for line breaks: %d.\n" !label_sites;
   eprintf "Verdict claim values read for a folded gate: %d.\n" !folded_claim_sites;
   eprintf "Skips read for a hand-written skip list: %d.\n" !skips_read;
-  eprintf "Verdict parity claims whose predicate was read for a hand-rolled tolerance: %d.\n"
+  eprintf "Verdict claims whose arguments were read for a hand-rolled tolerance: %d.\n"
     !parity_sites;
   printf "\n";
   (* Stated so that `true` is the passing reading, as every line of a golden should be. *)

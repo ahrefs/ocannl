@@ -715,7 +715,7 @@ let raw_entries =
         "[scanner-refusal:1decd3d7c917569b94d9f613373fc1c2] population or gate";
         "[scanner-refusal:c2cbc4e8a5802e3ad11a4c22d434e95b] run-constant gate into";
         "[scanner-refusal:bff7d0c903bdd22694f18ebeaf0d916f] folded-gate reader raised";
-        "[scanner-refusal:ac1d55bdf5afdaf0a236eb7741190229] compares float readbacks";
+        "[scanner-refusal:0599e4e661e8f3457de44f5cb1b23a1a] compares float readbacks";
         "[scanner-refusal:e10fe49d52c241506e850ae9e6766dc9] tolerance reader raised";
         "[scanner-refusal:0f307832357ee7ca58b9798a86530dac] arguments the rule's";
         "[scanner-refusal:53b71ea33a69d24c941985f4eb35406b] prints the claim";
