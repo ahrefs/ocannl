@@ -109,9 +109,6 @@ KPROF_CELL = re.compile(r"(\w+)-(gpt2_mini\w*)-(\w+)-(kprof\d+)\.out")
 # The trace exports a cell may carry, by suffix: (what traced it, its reader).
 EXPORTS = {"_cuda_gpu_trace.csv": "nsys", "_kernel_trace.csv": "rocprofv3"}
 MEMORY_MODEL = re.compile(r"^kprof: memory model (unified|discrete)\b(.*)$")
-# The kernel table's opening legend, as Bench_harness.kernel_timing_legend prints it to stderr:
-# `bench: per-kernel table (median of N timing calls ..., autotune_timing=MODE; each kernel alone)`.
-TIMING_LEGEND = re.compile(r"^bench: per-kernel table \(.*\bautotune_timing=(\w+)")
 SEG = re.compile(r"^(.*)__seg(\d+)$")
 ISOLATED = re.compile(r"^(.*)__kernel(\d+)$")
 # A node minted under a namespace of its own: Tnode.ident_prefix renders it `<namespace>__n<id>`.
@@ -162,15 +159,15 @@ def memory_model(path):
 
 
 def table_timing(path):
-    """The autotune_timing the cell's kernel table was re-timed under, from its opening legend, or
-    None when the .err has no legend (a cell from before gh-ocannl-1694, or one whose table never
-    opened). A bench-line reader with no attribution logic in it: it is written to move into
-    benchmarks/bench_output.py beside the other bench-line readers (gh-ocannl-1767) as it stands."""
-    for line in open(path):
-        m = TIMING_LEGEND.match(line.rstrip("\n"))
-        if m:
-            return m.group(1)
-    return None
+    """The autotune_timing the cell's kernel table was re-timed under, read by
+    bench_output.kernel_table_timing off its opening legend; None when the .err has no legend (a
+    cell from before gh-ocannl-1694, or one whose table never opened)."""
+    with open(path) as f:
+        text = f.read()
+    try:
+        return bench_output.kernel_table_timing(text)
+    except ValueError as e:
+        raise Refused("%s: %s" % (Path(path).name, e))
 
 
 def export(out, stem):

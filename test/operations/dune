@@ -12004,6 +12004,7 @@
         %{dep:bench_line_samples.exe}
         harness
         --ocannl_backend=cc
+        --ocannl_autotune_timing=isolated
         --ocannl_schedule_log_launches=true))))
     (with-stdout-to
      bench_lines_trace.out
