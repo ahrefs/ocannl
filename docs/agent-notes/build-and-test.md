@@ -3642,6 +3642,16 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   no stable one in that answer. setup-ocaml v3.9.0 has no input that pins the opam version or
   skips the lookup, so there is nothing to pin here short of replacing the action; a re-run is the
   remedy, and a deterministic form of the same message is gh-ocannl-1543's.
+- **Every `sudo apt-get update` in the workflows is capped and retried** (gh-ocannl-1809).
+  Unbounded, the same mirror stalled the refresh itself on 2026-11-01 and held four job attempts to
+  their 45-minute ceiling, a cancel that reads like a test hang (the tell: the log stops inside
+  `Update apt package index`, before `actions/checkout`). Each copy caps an `apt-get update`
+  session with `sudo timeout` (240s, apt's own per-connection timeout and retries inside it), gives
+  a fresh session one more try, and ends within about 9 minutes with an `::error` saying whether it
+  stalled; `ci.yml`'s matrix-job copy carries the rationale. It is inline, not a local action, on
+  purpose: a `ci.yml` dispatch with `expected_sha` checks out that commit, which may predate any
+  new action under `.github/actions/`, so a step that `uses:` one fails the red-span bisection of
+  older commits.
 - Where this repository PARSES opam's output, it freezes the format with `--cli=2.1` rather than
   tracking opam — `.github/actions/pin-revisions/resolve.sh` does it for both `opam show --raw
   --sort` and `opam pin list`. Re-verified against a real opam 2.6.0 (2026-09-17): the definition
