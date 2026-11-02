@@ -109,6 +109,9 @@ KPROF_CELL = re.compile(r"(\w+)-(gpt2_mini\w*)-(\w+)-(kprof\d+)\.out")
 # The trace exports a cell may carry, by suffix: (what traced it, its reader).
 EXPORTS = {"_cuda_gpu_trace.csv": "nsys", "_kernel_trace.csv": "rocprofv3"}
 MEMORY_MODEL = re.compile(r"^kprof: memory model (unified|discrete)\b(.*)$")
+# The kernel table's opening legend, as Bench_harness.kernel_timing_legend prints it to stderr:
+# `bench: per-kernel table (median of N timing calls ..., autotune_timing=MODE; each kernel alone)`.
+TIMING_LEGEND = re.compile(r"^bench: per-kernel table \(.*\bautotune_timing=(\w+)")
 SEG = re.compile(r"^(.*)__seg(\d+)$")
 ISOLATED = re.compile(r"^(.*)__kernel(\d+)$")
 # A node minted under a namespace of its own: Tnode.ident_prefix renders it `<namespace>__n<id>`.
@@ -155,6 +158,18 @@ def memory_model(path):
         m = MEMORY_MODEL.match(line.rstrip("\n"))
         if m:
             return m.group(1), m.group(2).strip()
+    return None
+
+
+def table_timing(path):
+    """The autotune_timing the cell's kernel table was re-timed under, from its opening legend, or
+    None when the .err has no legend (a cell from before gh-ocannl-1694, or one whose table never
+    opened). A bench-line reader with no attribution logic in it: it is written to move into
+    benchmarks/bench_output.py beside the other bench-line readers (gh-ocannl-1767) as it stands."""
+    for line in open(path):
+        m = TIMING_LEGEND.match(line.rstrip("\n"))
+        if m:
+            return m.group(1)
     return None
 
 
@@ -218,6 +233,17 @@ def attribute(out, name):
     rec = result_line(out / name)
     stem = name[:-4]
     rows = table(out / (stem + ".err"))
+    # Isolated timing is what makes the isolated column a set of synchronized singles the trace can
+    # join one for one (gh-ocannl-1694); under queued timing the re-timed runs overlap and their
+    # device durations are not the kernel alone, so a cell that does not state it is refused
+    # rather than attributed (gh-ocannl-1797).
+    timing = table_timing(out / (stem + ".err"))
+    if timing is None:
+        raise Refused("%s: the kernel table states no autotune_timing (its legend is missing); a kprof"
+                      " cell pins --ocannl_autotune_timing=isolated" % name)
+    if timing != "isolated":
+        raise Refused("%s: the kernel table was re-timed under autotune_timing=%s, not isolated"
+                      % (name, timing))
     csv_path, tracer = export(out, stem)
     model = memory_model(out / (stem + ".err"))
     if tracer == "rocprofv3" and model is None:

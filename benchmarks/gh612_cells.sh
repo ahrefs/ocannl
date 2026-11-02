@@ -777,9 +777,9 @@ cmd_profiles() { (
   for c in "$@"; do
     local d="$OUT_ROOT/$c"
     if [ ! -s "$d/armA.path" ]; then echo "MISSING armA.path: $c" >&2; missing=$((missing+1)); continue; fi
-    local k; k=$(ls "$d"/kernels-*.csv 2>/dev/null | wc -l)
+    local k; k=$(ls "$d"/kernels-*.csv 2>/dev/null | wc -l | tr -d ' ')
     [ "$k" -eq "$want" ] || { echo "WRONG run count: $c has $k kernels-*.csv, want $want" >&2; missing=$((missing+1)); continue; }
-    local b; b=$(ls "$d"/bucket-*.txt 2>/dev/null | wc -l)
+    local b; b=$(ls "$d"/bucket-*.txt 2>/dev/null | wc -l | tr -d ' ')
     [ "$b" -eq "$k" ] || { echo "profile artifact mismatch: $c has $k CSVs but $b bucket files" >&2; missing=$((missing+1)); }
   done
   [ "$missing" -eq 0 ] || { echo "gh612_cells: $missing cell(s) lack a complete profile" >&2; exit 1; }

@@ -714,7 +714,9 @@ single-threaded segments that sum to the serial step
   `benchmarks/kernel_attribution.py` joins each segment's median device time over the timed steps
   with the same compile's isolated minimum (a kprof cell re-times its isolated kernels as
   synchronized singles, `--ocannl_autotune_timing=isolated`, so the trace holds a few hundred of
-  them per kernel; gh-ocannl-1694). Rows are flagged `ISO` (isolated more than 10% off
+  them per kernel; gh-ocannl-1694). A cell whose kernel-table legend does not state
+  `autotune_timing=isolated` -- queued, or no legend at all, as in a cell recorded before
+  gh-ocannl-1694 -- is refused (gh-ocannl-1797). Rows are flagged `ISO` (isolated more than 10% off
   in-step) or `SPREAD` (in-step p90/p10 above 1.10), and cells of one kernel list get a cross-cell
   repeatability table. Each cell also states its common in-step/isolated factor F, the median ratio
   over its kernels of at least 0.5 ms with the per-step factor's p10..p90, and flags `OWN` a
