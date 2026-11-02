@@ -2331,9 +2331,16 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   line carries the `FAIL: ` prefix `tools/mutation-run.sh` counts. An aggregate claim over
   candidates whose count no golden pins (`p_all "every seed matches" runs ~f:…`) takes
   `Verdict.within` as its predicate: `p_close`'s check and stderr line, no claim of its own
-  (`schedule_strided_1x1` is the exemplar). `verdict_ratchet` refuses the hand-rolled form
-  (`Verdict_scan.tolerance_census`): a parity predicate applying `abs` to a difference, inline or
-  through a name bound to such a function, partial applications included.
+  (`schedule_strided_1x1` is the exemplar), and so does a conjunction or a `gated` value that must
+  stay one golden row (`p name (Verdict.within name a b ~tol && Verdict.within name c d ~tol)`).
+  `verdict_ratchet` refuses the hand-rolled form (`Verdict_scan.tolerance_census`): a parity
+  predicate applying `abs` to a difference, inline or through a name bound to such a function,
+  partial applications included; and, in any other claim's arguments, a function BOUNDING an
+  abs-of-difference (`<`/`<=`) or a name bound to anything holding one -- a helper, or a value
+  computed through it (`let ok = Array.for_all2_exn got want ~f:approx in p "x" ok`; gh-ocannl-1470).
+  A scalar bound written in the claim itself, a discrimination margin (`abs (a - b) > m`) and a
+  maximum-error helper stay unread by design; a shared helper of another module
+  (`Ll_test.close`) is beyond it.
 - Guarantees that fire only on an empty collection are never exercised by a green suite, so
   `verdict_quantified` stages them: the satisfied forms run directly, and each refusal runs as a
   CHILD process whose streams the parent captures. Capturing is not tidiness — a refusal prints

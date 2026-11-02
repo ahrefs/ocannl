@@ -43,10 +43,9 @@ let bitwise_gpu = on_gpu && not (String.equal backend_name "hip")
 
 (* Within 2^-16 of the output's largest magnitude: wide of contraction drift (a rounding per
    product), narrow of a lost, stale or misplaced product, which moves a cell by a product. *)
-let within ~want got =
+let within ~what_ran name ~want got =
   let top = Array.fold want ~init:0. ~f:(fun m v -> Float.max m (Float.abs v)) in
-  Array.length got = Array.length want
-  && Array.for_all2_exn got want ~f:(fun g w -> Float.(abs (g -. w) <= top /. 65536.))
+  Verdict.within ~what_ran name got want ~tol:(fun _ -> top /. 65536.)
 
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
@@ -172,9 +171,11 @@ let leg ~tag ~layout cand reversed =
   gated ~when_:on_gpu ~on:backend_name
     (Printf.sprintf "%s: the family's output is not all zeros" tag)
     (Array.exists want ~f:(fun v -> Float.(v <> 0.)));
-  gated_all ~when_:on_gpu ~on:backend_name
-    (Printf.sprintf "%s: the family's scalar blocktile seeds agree within 2^-16 of its scale" tag)
-    outs ~f:(fun (_, got) -> within ~want got);
+  (let claim =
+     Printf.sprintf "%s: the family's scalar blocktile seeds agree within 2^-16 of its scale" tag
+   in
+   gated_all ~when_:on_gpu ~on:backend_name claim outs ~f:(fun (q, got) ->
+       within ~what_ran:(label q) claim ~want got));
   gated_all ~when_:bitwise_gpu ~on:backend_name
     (Printf.sprintf "%s: the family's scalar blocktile seeds agree bitwise among themselves" tag)
     outs ~f:(fun (q, got) ->
@@ -203,9 +204,12 @@ let leg ~tag ~layout cand reversed =
     Stdio.eprintf
       "coalesce_numerics: %s: the serial reference %s the family (not part of the golden)\n%!" tag
       (if Array.equal Float.equal (run_with fwd cand Fn.id) want then "matches" else "differs from");
-  gated_all ~when_:on_gpu ~on:backend_name
-    (Printf.sprintf "%s: every scalar blocktile %s seed computes the family's values within 2^-16"
-       tag lt) coal_outs ~f:(fun (_, got) -> Option.exists got ~f:(within ~want));
+  (let claim =
+     Printf.sprintf "%s: every scalar blocktile %s seed computes the family's values within 2^-16"
+       tag lt
+   in
+   gated_all ~when_:on_gpu ~on:backend_name claim coal_outs ~f:(fun (q, got) ->
+       Option.exists got ~f:(within ~what_ran:(label q) claim ~want)));
   gated_all ~when_:bitwise_gpu ~on:backend_name
     (Printf.sprintf "%s: every scalar blocktile %s seed computes the family's values bitwise" tag lt)
     coal_outs ~f:(fun (q, got) ->

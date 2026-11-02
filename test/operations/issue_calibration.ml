@@ -25,7 +25,7 @@ let point ~ops ~ms =
     ip_contexts = [];
   }
 
-let close a b = Float.(abs (a -. b) <= 1e-9 *. abs b)
+let close name got want = Verdict.within name got want ~tol:(fun w -> 1e-9 *. Float.abs w)
 
 let () =
   (* 2e12 operations/s with a 0.1 ms intercept: exact dyadic-free inputs, so compare closely. *)
@@ -33,15 +33,19 @@ let () =
     List.map [ 1; 2; 4; 8 ] ~f:(fun g ->
         point ~ops:(g * 1_000_000_000) ~ms:(0.1 +. (0.5 *. Float.of_int g)))
   in
-  p "an exact line fits its rate and intercept"
-    (match Cal.fit_issue_rate line with
-    | Cal.Issue_fit { rate; latency_ms; max_residual; points } ->
-        close rate 2e12 && close latency_ms 0.1 && Float.(max_residual < 1e-9) && points = 4
-    | Cal.Issue_unfittable _ -> false);
-  p "points without operations are not fitted"
-    (match Cal.fit_issue_rate (point ~ops:0 ~ms:5. :: line) with
-    | Cal.Issue_fit { rate; points; _ } -> close rate 2e12 && points = 4
-    | Cal.Issue_unfittable _ -> false);
+  (let label = "an exact line fits its rate and intercept" in
+   p label
+     (match Cal.fit_issue_rate line with
+     | Cal.Issue_fit { rate; latency_ms; max_residual; points } ->
+         close label [| rate; latency_ms |] [| 2e12; 0.1 |]
+         && Float.(max_residual < 1e-9)
+         && points = 4
+     | Cal.Issue_unfittable _ -> false));
+  (let label = "points without operations are not fitted" in
+   p label
+     (match Cal.fit_issue_rate (point ~ops:0 ~ms:5. :: line) with
+     | Cal.Issue_fit { rate; points; _ } -> close label [| rate |] [| 2e12 |] && points = 4
+     | Cal.Issue_unfittable _ -> false));
   p "a time that does not grow with the operations fits nothing"
     (match Cal.fit_issue_rate [ point ~ops:1_000 ~ms:2.; point ~ops:2_000 ~ms:1. ] with
     | Cal.Issue_unfittable _ -> true
@@ -101,11 +105,14 @@ let () =
     @ List.map [ 1; 4; 16; 64; 256 ] ~f:(fun b ->
         lpoint ~blocks:b ~threads:256 ((1 lsl 30) + (b * 8192)))
   in
-  let rel a b = Float.(abs (a -. b) <= 1e-6 *. abs b) in
-  p "the fill fit recovers the saturating threads and the full-fill rate"
-    (match Cal.fit_fill ~multiprocessors:np sweep with
-    | Cal.Fill_fit f -> f.saturation = t && rel f.rate rate && Float.(f.max_residual < 1e-6)
-    | Cal.Fill_unfittable _ -> false);
+  let rel name got want =
+    Verdict.within name [| got |] [| want |] ~tol:(fun w -> 1e-6 *. Float.abs w)
+  in
+  (let label = "the fill fit recovers the saturating threads and the full-fill rate" in
+   p label
+     (match Cal.fit_fill ~multiprocessors:np sweep with
+     | Cal.Fill_fit f -> f.saturation = t && rel label f.rate rate && Float.(f.max_residual < 1e-6)
+     | Cal.Fill_unfittable _ -> false));
   (* The pre-fill fit over a reduction-extent sweep of one partially filled launch (16 blocks of 64
      threads: fill 1024 / 8960) reads the full-fill rate times that fill -- the depressed rate the
      launch fit normalizes. *)
@@ -118,18 +125,23 @@ let () =
           Cal.ip_contexts = [ context ~blocks:16 ~threads:64 ~ops ~tile:false ];
         })
   in
-  p "the pre-fill fit over a partially filled launch reads the full-fill rate times its fill"
-    (match Cal.fit_issue_rate ksweep with
-    | Cal.Issue_fit { rate = raw; _ } -> rel raw (rate *. partial_fill) && Float.(raw < 0.5 *. rate)
-    | Cal.Issue_unfittable _ -> false);
-  p "under the fill model the same sweep reads the full-fill rate"
-    (match
-       Cal.fit_issue_rate
-         ~fill:{ Ir.Cost_model.fm_multiprocessors = np; fm_fill_threads = t }
-         ksweep
-     with
-    | Cal.Issue_fit { rate = normalized; _ } -> rel normalized rate
-    | Cal.Issue_unfittable _ -> false);
+  (let label =
+     "the pre-fill fit over a partially filled launch reads the full-fill rate times its fill"
+   in
+   p label
+     (match Cal.fit_issue_rate ksweep with
+     | Cal.Issue_fit { rate = raw; _ } ->
+         rel label raw (rate *. partial_fill) && Float.(raw < 0.5 *. rate)
+     | Cal.Issue_unfittable _ -> false));
+  (let label = "under the fill model the same sweep reads the full-fill rate" in
+   p label
+     (match
+        Cal.fit_issue_rate
+          ~fill:{ Ir.Cost_model.fm_multiprocessors = np; fm_fill_threads = t }
+          ksweep
+      with
+     | Cal.Issue_fit { rate = normalized; _ } -> rel label normalized rate
+     | Cal.Issue_unfittable _ -> false));
   p "the uncapped form fits the capped sweep worse"
     (match Cal.fit_fill ~multiprocessors:np sweep with
     | Cal.Fill_fit { uncapped = Some (_, r); max_residual; _ } -> Float.(r > max_residual)
@@ -155,21 +167,22 @@ let () =
      with
     | Cal.Fill_unfittable _ -> true
     | Cal.Fill_fit _ -> false);
-  p "the rate is the caller's lead geometry's, whatever the series' names sort to"
-    (let scaled =
-       List.map sweep ~f:(fun lp ->
-           if String.equal lp.Cal.lp_geometry "t256" then { lp with lp_ms = 2. *. lp.Cal.lp_ms }
-           else lp)
-     in
-     let t256_first =
-       List.filter scaled ~f:(fun lp -> String.equal lp.Cal.lp_geometry "t256")
-       @ List.filter scaled ~f:(fun lp -> String.equal lp.Cal.lp_geometry "t64")
-     in
-     match
-       (Cal.fit_fill ~multiprocessors:np scaled, Cal.fit_fill ~multiprocessors:np t256_first)
-     with
-     | Cal.Fill_fit a, Cal.Fill_fit b -> rel a.rate rate && rel b.rate (rate /. 2.)
-     | _ -> false);
+  (let label = "the rate is the caller's lead geometry's, whatever the series' names sort to" in
+   p label
+     (let scaled =
+        List.map sweep ~f:(fun lp ->
+            if String.equal lp.Cal.lp_geometry "t256" then { lp with lp_ms = 2. *. lp.Cal.lp_ms }
+            else lp)
+      in
+      let t256_first =
+        List.filter scaled ~f:(fun lp -> String.equal lp.Cal.lp_geometry "t256")
+        @ List.filter scaled ~f:(fun lp -> String.equal lp.Cal.lp_geometry "t64")
+      in
+      match
+        (Cal.fit_fill ~multiprocessors:np scaled, Cal.fit_fill ~multiprocessors:np t256_first)
+      with
+      | Cal.Fill_fit a, Cal.Fill_fit b -> rel label a.rate rate && rel label b.rate (rate /. 2.)
+      | _ -> false));
   p "fewer than three points refuse"
     (match Cal.fit_fill ~multiprocessors:np (List.take sweep 2) with
     | Cal.Fill_unfittable _ -> true

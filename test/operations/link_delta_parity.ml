@@ -382,8 +382,7 @@ let fusion () =
     "fusion (not part of the golden): unscheduled %s, fused linked %s, floor %s, the target %d B\n\
      %!"
     (show unscheduled) (show measured) (show_floor f) prod_bytes;
-  p "fusion: the fused candidate computes the right values"
-    (Array.equal (fun a b -> Float.(abs (a - b) <= 1e-3)) got want);
+  p_close "fusion: the fused candidate computes the right values" got want ~tol:(fun _ -> 1e-3);
   p "fusion: the floor is at most the fused candidate's allocation" (below f measured);
   p "fusion: the floor leaves the fusion target out on a GPU backend, and nothing on a CPU one"
     (if on_gpu then f.lf_off_device_bytes >= prod_bytes else f.lf_off_device_bytes = 0);

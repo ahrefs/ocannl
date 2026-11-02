@@ -149,7 +149,8 @@ let () =
                 if not (Ll_test.rendered_tensorized census) then
                   Stdio.eprintf "mc: GPU tensorized seed %d rendered %s\n" k
                     (Ir.C_syntax.mma_summary_string census);
-                ( Array.for_all2_exn got expected ~f:(fun a b -> Float.(abs (a - b) < 1e-3)),
+                ( Verdict.within ~what_ran:(Printf.sprintf "seed %d" k) claim got expected
+                    ~tol:(fun _ -> 1e-3),
                   Ll_test.rendered_tensorized census )
             | exception exn ->
                 Stdio.eprintf "mc: GPU tensorized seed %d FAILED %s\n" k (Exn.to_string exn);

@@ -752,6 +752,11 @@ refuses a partially applied tolerance function and a renaming of one: true
 accepts an exact or bitwise parity predicate, which has no tolerance to name: true
 does not read a predicate name a later binding takes over: true
 does not read a p_all2 the source binds itself: true
+refuses a plain claim over an array helper bounding a difference inline: true
+refuses a tolerance helper reaching p, p_all and p_exists, and a value computed through one: true
+accepts a scalar bound in the claim, a discrimination margin, a maximum-error helper and within: true
+does not read the closure of a leg or a case, whose claims are read where written: true
+does not read a p the source binds itself: true
 refuses a planted hand-rolled tolerance, and names a tolerance reader that raised: true
 the readers agree on a claim qualified by Verdict: true
 the readers agree on a claim an open of Verdict.Claims brings in: true
@@ -882,7 +887,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:1decd3d7c917569b94d9f613373fc1c2] population or gate
   [scanner-refusal:c2cbc4e8a5802e3ad11a4c22d434e95b] run-constant gate into
   [scanner-refusal:bff7d0c903bdd22694f18ebeaf0d916f] folded-gate reader raised
-  [scanner-refusal:ac1d55bdf5afdaf0a236eb7741190229] compares float readbacks
+  [scanner-refusal:0599e4e661e8f3457de44f5cb1b23a1a] compares float readbacks
   [scanner-refusal:e10fe49d52c241506e850ae9e6766dc9] tolerance reader raised
   [scanner-refusal:b3bbed986e758647a2db67f9428972c6] claims through Verdict
   [scanner-refusal:63d9475f3df44af6baac8bdc03a3310b] every quantified binding

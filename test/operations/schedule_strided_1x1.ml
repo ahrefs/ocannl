@@ -574,9 +574,10 @@ let seed_leg ?(declines = false) ?(row = `Batch)
     (fun label ->
       let o = Lazy.force o in
       p label (match row with `Batch -> stride_on_batch_loops o | `Strided -> stride_on_row o));
-  let close ~tol ~want got =
-    Array.length got = Array.length want
-    && Array.for_all2_exn got want ~f:(fun a b -> Float.(abs (a - b) < tol b))
+  (* Which run diverged from which form and by how much, so a red claim names its seed: the
+     differing cells, the worst one with both values, and the form's magnitude, on stderr. *)
+  let close ~tol ~against ~want name what_ran got =
+    Verdict.within ~what_ran (Printf.sprintf "%s, against the %s form" name against) got want ~tol
   in
   let exact _ = 1e-3 in
   (* Where values are inexact (the block's batch norms divide by a square root, and its two 3x3
@@ -584,16 +585,8 @@ let seed_leg ?(declines = false) ?(row = `Batch)
      forms that reorder a reduction differ by a few ulps: a relative 1e-5 admits about 80 of
      them. *)
   let rounding b = 1e-3 +. (1e-5 *. Float.abs b) in
-  let matches_ref ~want got = close ~tol:exact ~want got in
-  let matches got = matches_ref ~want:(Lazy.force unscheduled) got in
-  (* Which run diverged from which form and by how much, so a red claim names its seed: the
-     differing cells, the worst one with both values, and the form's magnitude, on stderr. *)
-  let report ?(tol = exact) ~against ~want name what_ran got =
-    ignore
-      (Verdict.within ~what_ran
-         (Printf.sprintf "%s, against the %s form" name against)
-         got want ~tol
-        : bool)
+  let matches (name, q) got =
+    close ~tol:exact ~against:"unscheduled" ~want:(Lazy.force unscheduled) name (show q) got
   in
   (* The tuner's own seeding must propose, whatever the pinned-width population adds on cc. *)
   (let flavors () =
@@ -614,7 +607,9 @@ let seed_leg ?(declines = false) ?(row = `Batch)
      bare sites' exact integers changes nothing, and in the block may round its inexact sums by a
      few ulps (a misread operand is off by far more). *)
   let whole_tol = if declines then rounding else exact in
-  let whole_matches got = close ~tol:whole_tol ~want:(Lazy.force unscheduled) got in
+  let whole_matches (name, q) got =
+    close ~tol:whole_tol ~against:"unscheduled" ~want:(Lazy.force unscheduled) name (show q) got
+  in
   (* Every candidate run, in this order: the whole-routine seeds, the default-preset segmentations
      (the block only) and the per-segment seeds. *)
   let runs =
@@ -630,10 +625,7 @@ let seed_leg ?(declines = false) ?(row = `Batch)
        let whole_runs =
          List.mapi o.whole ~f:(fun i q ->
              let name = Printf.sprintf "%s_w%d" tag i in
-             let r = run_whole_candidate name s q in
-             Option.iter r ~f:(fun (got, _) ->
-                 report ~tol:whole_tol ~against:"unscheduled" ~want:unscheduled name (show q) got);
-             (name, q, r))
+             (name, q, run_whole_candidate name s q))
        in
        (* The form a per-segment seed is compared against: on the bare sites the unscheduled one,
           whose values are exact integers; in the block, the default-preset run of the seed's own
@@ -653,8 +645,7 @@ let seed_leg ?(declines = false) ?(row = `Batch)
                         %!"
                        name what_ran
                        (Array.fold2_exn got unscheduled ~init:0. ~f:(fun m a b ->
-                            Float.max m (Float.abs (a -. b))));
-                   report ~tol:rounding ~against:"unscheduled" ~want:unscheduled name what_ran got);
+                            Float.max m (Float.abs (a -. b)))));
                (arity_cuts, got))
        in
        let seg_want arity_cuts =
@@ -668,21 +659,20 @@ let seed_leg ?(declines = false) ?(row = `Batch)
          List.mapi seg_seeds ~f:(fun i (arity_cuts, key, q) ->
              let name = Printf.sprintf "%s_s%d" tag i in
              let r = run_seg_candidate name s ~arity_cuts ~key q in
-             Option.iter r ~f:(fun (hit, (got, _)) ->
+             Option.iter r ~f:(fun (hit, _) ->
                  if not hit then
                    Stdio.eprintf
                      "%s (%s): no final segment carried its key (not part of the golden)\n%!" name
-                     (show q);
-                 Option.iter (seg_want arity_cuts) ~f:(fun (against, want) ->
-                     report ~against ~want name (show q) got));
+                     (show q));
              ( name,
                (key, q),
                Option.map r ~f:(fun (hit, (got, census)) -> (arity_cuts, hit, got, census)) ))
        in
-       let seg_ok (arity_cuts, hit, got, _) =
-         hit
-         && Option.value_map (seg_want arity_cuts) ~default:false ~f:(fun (_, want) ->
-             matches_ref ~want got)
+       let seg_ok (name, (_, q), r) =
+         Option.value_map r ~default:false ~f:(fun (arity_cuts, hit, got, _) ->
+             hit
+             && Option.value_map (seg_want arity_cuts) ~default:false ~f:(fun (against, want) ->
+                 close ~tol:exact ~against ~want name (show q) got))
        in
        (whole_runs, seg_baselines, seg_runs, seg_ok))
   in
@@ -699,7 +689,6 @@ let seed_leg ?(declines = false) ?(row = `Batch)
     let _, _, _, seg_ok = Lazy.force runs in
     seg_ok r
   in
-  let values runs = List.map runs ~f:(fun (_, _, r) -> r) in
   (* A tensorized seed whose [Tile_mma] declines at codegen renders the scalar fallback, which
      computes the same values, so parity cannot say it ran tensorized: every executed [sk_mma] seed
      also answers for its routine's mma census (gh-ocannl-1283). The block-tile seeds request no
@@ -732,14 +721,12 @@ let seed_leg ?(declines = false) ?(row = `Batch)
     (* The bare sites: each flavor seeds, and every seed runs — a decline fails. *)
     in_leg ~leg (what ^ ": every whole-routine seed runs and matches the unscheduled form")
       (fun label ->
-        p_all label
-          (values (whole_runs ()))
-          ~f:(Option.value_map ~default:false ~f:(fun (got, _) -> matches got)));
+        p_all label (whole_runs ()) ~f:(fun (name, q, r) ->
+            Option.value_map r ~default:false ~f:(fun (got, _) -> matches (name, q) got)));
     in_leg ~leg
       (what
      ^ ": every per-segment seed runs, scheduling the segment it was keyed on, and matches the \
-        unscheduled form") (fun label ->
-        p_all label (values (seg_runs ())) ~f:(Option.value_map ~default:false ~f:seg_ok));
+        unscheduled form") (fun label -> p_all label (seg_runs ()) ~f:seg_ok);
     in_leg ~leg
       (what
      ^ ": the whole-routine seeds include tensorized ones, and every one renders tensorized per \
@@ -764,10 +751,9 @@ let seed_leg ?(declines = false) ?(row = `Batch)
         rounding for a whole-routine seed, its segmentation on the default preset for a \
         per-segment one") (fun label ->
         p_all label
-          (List.map
-             (values (whole_runs ()))
-             ~f:(Option.value_map ~default:true ~f:(fun (got, _) -> whole_matches got))
-          @ List.map (values (seg_runs ())) ~f:(Option.value_map ~default:true ~f:seg_ok))
+          (List.map (whole_runs ()) ~f:(fun (name, q, r) ->
+               Option.value_map r ~default:true ~f:(fun (got, _) -> whole_matches (name, q) got))
+          @ List.map (seg_runs ()) ~f:(fun ((_, _, r) as run) -> Option.is_none r || seg_ok run))
           ~f:Fn.id);
     (* gh-ocannl-1147: the main branch reads [x] too, at its own index vector, and [Stage] leaves
        that read on the source. A whole-routine seed that declined here would leave the C backends,
@@ -777,9 +763,8 @@ let seed_leg ?(declines = false) ?(row = `Batch)
      ^ ": on the C backends, which do not fission the block, every whole-routine seed runs (its \
         operand Stage leaves the main branch's read of the input on the source) and matches the \
         unscheduled form up to f32 rounding") (fun label ->
-        gated_all ~when_:on_cpu ~on:backend_name label
-          (values (whole_runs ()))
-          ~f:(Option.value_map ~default:false ~f:(fun (got, _) -> whole_matches got)));
+        gated_all ~when_:on_cpu ~on:backend_name label (whole_runs ()) ~f:(fun (name, q, r) ->
+            Option.value_map r ~default:false ~f:(fun (got, _) -> whole_matches (name, q) got)));
     in_leg ~leg
       (what
      ^ ": every tensorized seed either tuner flavor proposes declines with a typed cause or \
@@ -794,9 +779,12 @@ let seed_leg ?(declines = false) ?(row = `Batch)
         unscheduled form up to f32 rounding") (fun label ->
         if on_cpu then skipped label
         else
-          p_all label (seg_baselines ()) ~f:(fun (_, got) ->
+          p_all label (seg_baselines ()) ~f:(fun (arity_cuts, got) ->
               Option.value_map got ~default:false
-                ~f:(close ~tol:rounding ~want:(Lazy.force unscheduled)))));
+                ~f:
+                  (close ~tol:rounding ~against:"unscheduled" ~want:(Lazy.force unscheduled)
+                     (Printf.sprintf "%s_f%b" tag arity_cuts)
+                     (Printf.sprintf "default preset, arity cuts %b" arity_cuts)))));
   o
 
 (* [conv_detection_boundary]'s [cdb_k11s] witness: a valid-mode 1x1 window at stride 2 over a 7x7

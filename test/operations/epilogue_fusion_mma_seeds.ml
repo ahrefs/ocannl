@@ -48,7 +48,7 @@ let named name (comp : Asgns.comp) : Asgns.comp =
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 let is_gpu = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend_name)
 let is_cpu = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name backend_name)
-let approx a b = Float.(abs (a - b) < 1e-3 *. (1. +. abs b))
+let tol w = 1e-3 *. (1. +. Float.abs w)
 
 let census tag ~m ~n ~k =
   Tensor.unsafe_reinitialize ();
@@ -137,7 +137,11 @@ let census tag ~m ~n ~k =
       with
       | got, census ->
           Int.incr n_ran;
-          if Array.for_all2_exn got want ~f:approx then Int.incr n_correct;
+          if
+            Verdict.within ~what_ran:(Autotune.sketch_params_label q)
+              (tag ^ ": every running twin matches the untuned reference")
+              got want ~tol
+          then Int.incr n_correct;
           (* A twin whose [Tile_mma] declined to the scalar fallback runs and matches too; only the
              routine's census says it ran tensorized (gh-ocannl-1283). *)
           if Ll_test.rendered_tensorized census then Int.incr n_rendered
@@ -208,7 +212,10 @@ let census tag ~m ~n ~k =
         in
         Context.get_values (Context.run ctx routine) mc.Tensor.value
       with
-      | got -> Array.for_all2_exn got want ~f:approx
+      | got ->
+          Verdict.within ~what_ran:(geometry q)
+            (bt_label "compiles, runs and matches the untuned reference")
+            got want ~tol
       | exception exn ->
           Stdio.eprintf "%s: blocktile twin %s FAILED: %s\n" tag (geometry q) (Exn.to_string exn);
           false)
@@ -269,7 +276,7 @@ let ksplit_tail () =
           in
           Context.get_values (Context.run ctx routine) y.Tensor.value
         with
-        | got -> Some got
+        | got -> Some (Autotune.sketch_params_label q, got)
         | exception Invalid_argument msg ->
             Stdio.eprintf "ksplit: epilogue twin %s refused: %s (not part of the golden)\n%!"
               (Autotune.sketch_params_label q) msg;
@@ -285,7 +292,8 @@ let ksplit_tail () =
     Ll_test.tensorized_matmul_capability ~is_gpu ~is_cpu ~limits ~a:x.Tensor.value ~b:w.Tensor.value
       ~d:z.Tensor.value
   with
-  | `Advertised -> p_all label ran ~f:(fun got -> Array.for_all2_exn got want ~f:approx)
+  | `Advertised ->
+      p_all label ran ~f:(fun (what_ran, got) -> Verdict.within ~what_ran label got want ~tol)
   | `Withheld aggregation -> Verdict.skipped ~aggregation ~backend:backend_name label
 
 let () =

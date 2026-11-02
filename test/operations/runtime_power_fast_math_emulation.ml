@@ -124,19 +124,14 @@ let () =
       let raw = bind "probe_raw_f32" in
       p_all "the emulated vendor powf loses every negative base under an integral exponent" cases
         ~f:(fun (x, n) -> Float.is_nan (raw x (Float.of_int n)));
-      let matches ~narrow ~tol pow =
-       fun (x, n) ->
-        let got = pow x (Float.of_int n) in
-        let want = narrow (Float.pow x (Float.of_int n)) in
-        let ok = Float.abs (got -. want) <= tol *. Float.abs want in
-        if not ok then
-          Printf.eprintf "(not part of the golden) %h^%d: got %h want %h\n" x n got want;
-        ok
-      in
-      p_all "f32: negative bases under integral exponents match the integer power" cases
-        ~f:(matches ~narrow:f32 ~tol:0x1p-18 f32_pow);
-      p_all "f64: negative bases under integral exponents match the integer power" cases
-        ~f:(matches ~narrow:Fun.id ~tol:0x1p-40 f64_pow);
+      (* Each case's power through [pow], and its integer-power reference narrowed by [narrow]. *)
+      let powers pow = Array.of_list (List.map (fun (x, n) -> pow x (Float.of_int n)) cases) in
+      let reference ~narrow = powers (fun x y -> narrow (Float.pow x y)) in
+      let relative tol want = tol *. Float.abs want in
+      p_close "f32: negative bases under integral exponents match the integer power"
+        (powers f32_pow) (reference ~narrow:f32) ~tol:(relative 0x1p-18);
+      p_close "f64: negative bases under integral exponents match the integer power"
+        (powers f64_pow) (reference ~narrow:Fun.id) ~tol:(relative 0x1p-40);
       let mirrored pow (x, n) =
         let n = Float.of_int n in
         let neg = pow x n and pos = pow (-.x) n in

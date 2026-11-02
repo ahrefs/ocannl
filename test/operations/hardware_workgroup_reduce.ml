@@ -29,7 +29,9 @@ open Verdict.Claims
 let n = 64
 let vv = Array.init n ~f:(fun i -> (Float.of_int i *. 0.5) -. 7.)
 let expected_sum = Array.fold vv ~init:0. ~f:( +. )
-let approx a b = Float.(abs (a - b) < 1e-3)
+
+(* Scalar parity: an absolute 1e-3 around the reference. *)
+let tol _ = 1e-3
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 let skipped = Verdict.skipped ~backend:backend_name
 let has_barriers = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend_name)
@@ -89,7 +91,7 @@ let () =
   let ctx_s, routine_s = Context.compile ctx_s serial_comp Ir.Indexing.Empty in
   let ctx_s = Context.run ctx_s routine_s in
   let got_s0 = Context.get_values ctx_s s0.Tensor.value in
-  p "serial reduction correct" (approx got_s0.(0) expected_sum);
+  p_close "serial reduction correct" [| got_s0.(0) |] [| expected_sum |] ~tol;
 
   (* --- Workgroup-shared tree reduction --- *)
   let%op s1 = v ++ "i=>0" in
@@ -104,7 +106,9 @@ let () =
     in
     let ctx_a = Context.run ctx_a routine_a in
     let got_s1 = Context.get_values ctx_a s1.Tensor.value in
-    p "workgroup reduction parity (GPU) or clean rejection (CPU)" (approx got_s1.(0) expected_sum);
+    p_close "workgroup reduction parity (GPU) or clean rejection (CPU)"
+      [| got_s1.(0) |]
+      [| expected_sum |] ~tol;
     let src = Generated.read "sum_wg_reduce" in
     let has sub = String.is_substring src ~substring:sub in
     (* This is intentionally dialect identity: the claim pins each language's shared-address-space

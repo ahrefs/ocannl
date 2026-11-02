@@ -175,11 +175,11 @@ let () =
   eprintf "running normalizers: %s (not part of the golden)\n%!"
     (String.concat ~sep:" " (Array.to_list (Array.map got ~f:(Printf.sprintf "%.9g"))));
   let close_tol w = Float.(1e-5 *. max 1. (abs w)) in
-  let close g w = Float.(abs (g - w) <= close_tol w) in
   p_close "every running normalizer is within 1e-5 relative of the host recurrence" got want
     ~tol:close_tol;
-  p "the final normalizer equals the direct sum of exp(x - max x) within 1e-5 relative"
-    (close got.(n - 1) final_direct);
+  p_close "the final normalizer equals the direct sum of exp(x - max x) within 1e-5 relative"
+    [| got.(n - 1) |]
+    [| final_direct |] ~tol:close_tol;
   p_alli
     "the trajectory is strictly increasing, as a sum of positive terms rescaled to a growing max"
     (Array.to_list got) ~f:(fun k v -> k = 0 || Float.( > ) v got.(k - 1));

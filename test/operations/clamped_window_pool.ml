@@ -73,13 +73,9 @@ let find_pool_loop ~n (llc : LL.t) : Idx.symbol option =
          site.Ll_test.ls_extent = n && guarded site.Ll_test.ls_stmt))
     ~f:(fun site -> site.Ll_test.ls_index)
 
-(* Non-empty by construction (gh-ocannl-746): [Array.for_all2_exn] answers [true] on two empty
-   arrays, and a readback and the reference it is compared against go empty TOGETHER -- the
-   reference went through the same path. {!Verdict.p_all2} is the claim-shaped form; the sites
-   reached through this helper keep a boolean, so the guard lives here. *)
-let close a b =
-  (not (Array.is_empty a)) && Array.for_all2_exn a b ~f:(fun x y -> Float.(abs (x - y) < 1e-5))
-
+(* Parity to an absolute 1e-5, through {!Verdict.p_close}: it refuses an empty pair (gh-ocannl-746)
+   and names the worst cell on a failure (gh-ocannl-1470). *)
+let tol _ = 1e-5
 let fa a = String.concat ~sep:" " (Array.to_list a |> List.map ~f:(fun v -> Printf.sprintf "%g" v))
 
 let () =
@@ -117,7 +113,7 @@ let () =
         opt)
   in
   pr "clamped pool = [%s]\n" (fa want);
-  p "clamped values match the -inf-margins semantics" (close want [| -14.; -12.; -10.; -9. |]);
+  p_close "clamped values match the -inf-margins semantics" want [| -14.; -12.; -10.; -9. |] ~tol;
   p "operand stays unpadded"
     (match Lazy.force x.Tensor.value.Ir.Tnode.padding with None -> true | Some _ -> false);
   p "result stays unpadded"
@@ -150,7 +146,7 @@ let () =
     (List.equal Int.equal !bps [ 1; 3 ]);
   (let ifs, wheres, _ = !part_census in
    p "interior segment is guard-free (one Where per boundary segment)" (ifs = 0 && wheres = 2));
-  p "partitioned pool matches reference" (close got_part want);
+  p_close "partitioned pool matches reference" got_part want ~tol;
 
   (* === 3: Backward — the argmax scatter transposes the clamp (guarded writes). Non-overlapping
      windows (stride 2 = window 2, left margin 1): y_0 = x_0 (left-clipped), y_1 = max(x_1, x_2),
@@ -181,7 +177,7 @@ let () =
   let ctx = Context.run ctx routine in
   let bxg = Context.get_values ctx (Option.value_exn ~here:[%here] bx.Tensor.diff).grad in
   pr "pool input gradient = [%s]\n" (fa bxg);
-  p "gradient lands on each clipped window's argmax" (close bxg [| 1.; 0.; 1.; 0.; 1.; 0. |]);
+  p_close "gradient lands on each clipped window's argmax" bxg [| 1.; 0.; 1.; 0.; 1.; 0. |] ~tol;
   (let ifs, _, _ = !bwd_census in
    p "backward scatter writes are If-guarded" (ifs > 0));
   p "differentiable operand stays unpadded"
@@ -211,8 +207,8 @@ let () =
   let cv = Context.get_values ctx conv_out.Tensor.value in
   pr "shared pooled = [%s]\n" (fa pv);
   pr "shared conv = [%s]\n" (fa cv);
-  p "pool never reads the 0-margins" (close pv [| -15.; -13.; -11.; -9. |]);
-  p "conv sums with 0-margins" (close cv [| -31.; -45.; -42.; -39.; -36.; -33.; -30.; -19. |]);
+  p_close "pool never reads the 0-margins" pv [| -15.; -13.; -11.; -9. |] ~tol;
+  p_close "conv sums with 0-margins" cv [| -31.; -45.; -42.; -39.; -36.; -33.; -30.; -19. |] ~tol;
 
   (* === 5: The gate is the accumulation identity — a padded add-family window ([+++], neutral 0)
      still demands margins (the physical-halo mechanism). === *)

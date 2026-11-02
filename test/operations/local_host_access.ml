@@ -37,13 +37,9 @@ let sum_x = Float.of_int (inner * (inner - 1) / 2)
 let h_expected = Array.init rows ~f:(fun i -> Float.of_int (i + 1) *. sum_x)
 let sentinel = Array.create ~len:rows (-1.)
 
-(* Non-empty by construction (gh-ocannl-746): [Array.for_all2_exn] answers [true] on two empty
-   arrays, and a readback and the reference it is compared against go empty TOGETHER -- the
-   reference went through the same path. {!Verdict.p_all2} is the claim-shaped form; the sites
-   reached through this helper keep a boolean, so the guard lives here. *)
-let close got expected =
-  (not (Array.is_empty got))
-  && Array.for_all2_exn got expected ~f:(fun v w -> Float.(abs (v -. w) <= 1e-3))
+(* Readbacks to an absolute 1e-3, through {!Verdict.p_close}: it refuses an empty pair
+   (gh-ocannl-746) and names the worst cell on a failure (gh-ocannl-1470). *)
+let tol _ = 1e-3
 
 (* The program: [h = a * x] — the contraction whose extent trips the cost guard — consumed by an
    observable output. [~materialize_h] is the one difference between the two arms. *)
@@ -148,11 +144,13 @@ let () =
     (match Ir.Tnode.Placements.get (Context.placements mat_ctx) mat_hv with
     | Some (Ir.Tnode.On_device, _) -> true
     | _ -> false);
-  p "materialized: get_values returns the computed contraction"
-    (close (Context.get_values mat_ctx mat_hv) h_expected);
+  p_close "materialized: get_values returns the computed contraction"
+    (Context.get_values mat_ctx mat_hv)
+    h_expected ~tol;
   let mat_ctx = Context.set_values mat_ctx mat_hv sentinel in
-  p "materialized: set_values/get_values round-trip"
-    (close (Context.get_values mat_ctx mat_hv) sentinel);
+  p_close "materialized: set_values/get_values round-trip"
+    (Context.get_values mat_ctx mat_hv)
+    sentinel ~tol;
 
   (* --- Precision control: an undecided node keeps the ordinary refusal --- [fresh] belongs to no
      routine of this lineage, so no placement was decided for it; the guard must not claim it is

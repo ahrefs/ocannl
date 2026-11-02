@@ -126,13 +126,11 @@ let leg ~prec ~prec_name ~tol ~first_id shape =
   let packed = run ~prec ~shape ~axis:LL.Vectorized ~name ~first_id in
   let twin = run ~prec ~shape ~axis:LL.Serial ~name:(name ^ "_twin") ~first_id:(first_id + 50) in
   routines := name :: (name ^ "_twin") :: !routines;
-  p_alli (label ^ ": the Serial twin is within the precision's rounding of the f64 reference")
-    (Array.to_list twin) ~f:(fun i v ->
-      let want = reference shape i in
-      let ok = Float.(abs (v - want) <= tol * abs want) in
-      if not ok then
-        Stdio.eprintf "(not part of the golden) %s cell %d: twin %h, reference %h\n" label i v want;
-      ok);
+  p_close
+    (label ^ ": the Serial twin is within the precision's rounding of the f64 reference")
+    twin
+    (Array.init (Array.length twin) ~f:(reference shape))
+    ~tol:(fun want -> tol *. Float.abs want);
   p_alli (label ^ ": the Vectorized loop equals its Serial twin bitwise") (Array.to_list packed)
     ~f:(fun i v ->
       let ok = same_bits v twin.(i) in
@@ -264,10 +262,9 @@ let () =
       let twin = run_fp8 ~axis:LL.Serial ~name:"pk_fp8_twin" ~first_id:29_550 in
       routines := "pk_fp8" :: "pk_fp8_twin" :: !routines;
       (* e5m2 keeps two fraction bits: one rounding is within 2^-3 relative. *)
-      p_alli "fp8: the Serial twin is within e5m2 rounding of the f64 reference"
-        (Array.to_list twin) ~f:(fun i v ->
-          let want = (1. +. (Float.of_int i /. 4.)) *. 0.5 in
-          Float.(abs (v - want) <= 0x1p-3 * abs want));
+      p_close "fp8: the Serial twin is within e5m2 rounding of the f64 reference" twin
+        (Array.init (Array.length twin) ~f:(fun i -> (1. +. (Float.of_int i /. 4.)) *. 0.5))
+        ~tol:(fun want -> 0x1p-3 *. Float.abs want);
       p_alli "fp8: the Vectorized loop equals its Serial twin bitwise" (Array.to_list packed)
         ~f:(fun i v ->
           let ok = same_bits v twin.(i) in

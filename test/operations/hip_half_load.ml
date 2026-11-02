@@ -76,5 +76,7 @@ let () =
   p_all "half-load replay leaves every masked lane exactly zero" cases ~f:(fun values ->
       Array.for_alli values ~f:(fun i v -> i / (heads * keys) >= i % keys || Float.equal v 0.));
   p_all "half-load replay preserves max subtraction within half resolution" cases ~f:(fun values ->
-      Array.for_alli values ~f:(fun i v ->
-          i / (heads * keys) < i % keys || Float.(abs (v - (exp (-1.) / 2.)) < 0.001)))
+      let unmasked = Array.filteri values ~f:(fun i _ -> i / (heads * keys) >= i % keys) in
+      Verdict.within "half-load replay preserves max subtraction within half resolution" unmasked
+        (Array.create ~len:(Array.length unmasked) (Float.exp (-1.) /. 2.))
+        ~tol:(fun _ -> 0.001))

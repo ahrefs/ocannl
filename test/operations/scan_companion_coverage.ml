@@ -140,8 +140,6 @@ let lowering ~name comp =
    with _ -> ());
   Option.value_exn ~message:"the lowering was captured" !captured
 
-let close ~tol g w = Float.(abs (g -. w) <= tol *. max 1. (abs w))
-
 (* Compile [comp] with [transform] (none: the untuned pipeline) and read [outs] back, with the
    routine's mma census. *)
 let execute ?transform ~name ~init comp outs =
@@ -174,22 +172,14 @@ let run_seed ~label ~idx ~limits ~keep_mapping ~is_target ~build ~reference =
   in
   match build ~transform with
   | got, census ->
+      (* Each differing output names its worst cell on stderr ([Verdict.within]). *)
       let ok =
         !applied
         && List.for_all2_exn got reference ~f:(fun (g, tol) (w, _) ->
-            (not (Array.is_empty g)) && Array.for_all2_exn g w ~f:(close ~tol))
+            Verdict.within ~what_ran:(Printf.sprintf "seed %d" idx) label g w ~tol:(fun w ->
+                tol *. Float.max 1. (Float.abs w)))
       in
-      if not ok then (
-        Stdio.eprintf "%s: seed %d applied=%b, values differ\n" label idx !applied;
-        List.iteri (List.zip_exn got reference) ~f:(fun o ((g, _), (w, _)) ->
-            let worst = ref (-1, 0.) in
-            Array.iteri g ~f:(fun i gv ->
-                let d = Float.abs (gv -. w.(i)) in
-                if Float.(d > snd !worst) then worst := (i, d));
-            let i, d = !worst in
-            if i >= 0 then
-              Stdio.eprintf "  output %d: worst cell %d of %d, got %.9g want %.9g (diff %.3g)\n" o i
-                (Array.length g) g.(i) w.(i) d));
+      if not ok then Stdio.eprintf "%s: seed %d applied=%b, values differ\n" label idx !applied;
       (ok, Some census)
   | exception exn ->
       Stdio.eprintf "%s: seed %d FAILED %s\n" label idx (Exn.to_string exn);

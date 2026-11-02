@@ -45,7 +45,6 @@ let died_before_search (r : Autotune.report) =
 (* Either failing state: what a caller ranking or attributing arms asks. *)
 let failed (r : Autotune.report) = Option.is_some (Autotune.terminal_failure r)
 let approx_tol _ = 1e-4
-let approx a b = Float.(abs (a - b) < approx_tol b)
 let n = 8
 
 let clean_cache dir =
@@ -322,7 +321,10 @@ let () =
         with
         | ctx_c, routine_c ->
             let ctx_c = Context.run ctx_c routine_c in
-            Array.for_all2_exn (Context.get_values ctx_c t2.Tensor.value) expected ~f:approx
+            Verdict.within
+              "an arm failing with the same exception its callback raised is still contained"
+              (Context.get_values ctx_c t2.Tensor.value)
+              expected ~tol:approx_tol
         | exception Stdlib.Exit -> false)
   in
   p "an arm failing with the same exception its callback raised is still contained"
@@ -436,7 +438,8 @@ let () =
     let ctx_n = Context.run ctx_n routine_n in
     let values = Context.get_values ctx_n t2.Tensor.value in
     ( List.rev !reports,
-      (not (Array.is_empty values)) && Array.for_all2_exn values expected ~f:approx )
+      Verdict.within "control: an uninjected search completes and ships" values expected
+        ~tol:approx_tol )
   in
   let control_reports, control_ships = negative_control () in
   p_all "control: an uninjected search declines nothing at pre-dispatch validation" control_reports

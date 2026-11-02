@@ -884,3 +884,22 @@ The skip-list reader's cases are `verdict_scan_cases`' skip-list rows, run under
 | A skip runs where it is handed its label (PR review round 7) | `verdict_scan.ml`: a partial skip counted as run | a partial skip a loop body only builds | `20261102T222141Z-19889` |
 | A lazy in a branch is deferred, as in a callback (PR review round 7) | `verdict_scan.ml`: branch counting reads lazies as run | a lazy a branch only builds | `20261102T222153Z-22786` |
 | An Option iteration runs at most once | `verdict_scan.ml`: Option read as a collection iteration | an Option iteration, which runs at most once | `20261102T202018Z-64542` |
+
+## gh-ocannl-1470 mutation runs
+
+The tolerance reader now also reads every other Verdict claim's arguments (`helper_claim_callees`:
+the label aside, and not the `p_close` family, `fail`, `skipped`, `in_leg`, `in_legf` or `case`)
+for a function BOUNDING an abs-of-difference, or a name its scope binds to anything holding one --
+a helper, or a value computed through it. Each run used tools/mutation-run.sh `--batch` on
+`test/support/verdict_scan.ml` and the focused verdict_ratchet alias (macbook-pro, M4 Pro); each
+mutant exited 1 on exactly the listed false claims, and the source was restored byte-for-byte. The
+two batches' baselines exited 0 (`20261102T215754Z-24690`, `20261102T215951Z-74446`).
+
+| Mechanism | Mutation | Controls | Run |
+|---|---|---|---|
+| A function bounding an abs-of-difference, reaching a claim, is a hand-rolled tolerance | `verdict_scan.ml`: no inline function read as bounding one | Failed: `refuses a plain claim over an array helper bounding a difference inline`, `refuses a tolerance helper reaching p, p_all and p_exists, and a value computed through one` | `20261102T215803Z-33156` |
+| A value computed through a tolerance helper carries it | `verdict_scan.ml`: only a binding to a function becomes a tolerance name | Failed: refuses a tolerance helper reaching p, p_all and p_exists, and a value computed through one | `20261102T215824Z-40257` |
+| Only a BOUNDED difference counts outside a parity predicate | `verdict_scan.ml`: any abs-of-difference inside a function counts | Failed: `accepts a scalar bound in the claim, a discrimination margin, a maximum-error helper and within`, and the corpus claim | `20261102T220013Z-84431` |
+| A maximum-error helper is no tolerance name outside a parity predicate | `verdict_scan.ml`: a parity-only name resolves as a tolerance in any claim | Failed: accepts a scalar bound in the claim, a discrimination margin, a maximum-error helper and within, and the corpus claim | `20261102T220034Z-92761` |
+| A leg's or a case's closure is not read as the claim's value | `verdict_scan.ml`: `in_leg`, `in_legf` and `case` read as claims | Failed: `does not read the closure of a leg or a case, whose claims are read where written`, and the corpus claim | `20261102T215852Z-51469` |
+| Only Verdict's claims are read, plain ones included | `verdict_scan.ml`: every claim-named callee read as Verdict's | Failed: `does not read a p the source binds itself`, does not read a p_all2 the source binds itself, and the corpus claim | `20261102T215912Z-56632` |

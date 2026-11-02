@@ -38,7 +38,12 @@ let () = Generated.init ~backend_name
 (* Embedding table C with C[o,i] = o*vocab + i, so row i (over the input axis) is distinctive. *)
 let cvals = Array.init (embed * vocab) ~f:Float.of_int
 let approx_tol _ = 1e-4
-let approx a b = Float.(abs (a - b) < approx_tol b)
+
+(* The first [n] cells of a readback, and the cells after them: a batch's in-range rows and the zero
+   rows that follow. *)
+let head a n = Array.sub a ~pos:0 ~len:n
+let tail a n = Array.sub a ~pos:n ~len:(Array.length a - n)
+let zeros a = Array.create ~len:(Array.length a) 0.
 
 (* Lower the (shape-forced) forward comp and report (#Get_dynamic, #For_loop, index-tensor-is-input,
    #Trunc). The [Trunc] count distinguishes the guard flavors: float-prec ids need the integrality
@@ -184,10 +189,10 @@ let () =
   let ctx2 = forward_prefilled ctx2 embedded2 in
   let got2 = Context.get_values ctx2 embedded2.Tensor.value in
   let row1 = Array.init embed ~f:(fun o -> Float.of_int ((o * vocab) + 1)) in
-  p_alli "in-range row of OOB batch is correct" (Array.to_list got2) ~f:(fun i v ->
-      i >= embed || approx v row1.(i));
-  p_alli "out-of-range index gives a zero embedding row" (Array.to_list got2) ~f:(fun i v ->
-      i < embed || approx v 0.);
+  p_close "in-range row of OOB batch is correct" (head got2 embed) row1 ~tol:approx_tol;
+  p_close "out-of-range index gives a zero embedding row" (tail got2 embed)
+    (zeros (tail got2 embed))
+    ~tol:approx_tol;
 
   (* --- Fractional index yields a zero row (one-hot semantics: every [k == 1.5] is false). The
      guard's integrality check ([idx == trunc(idx)]) must reject it rather than gather row 1. --- *)
@@ -197,10 +202,10 @@ let () =
   let ctx_f = forward_prefilled ctx_f embedded3 in
   let got3 = Context.get_values ctx_f embedded3.Tensor.value in
   let row2 = Array.init embed ~f:(fun o -> Float.of_int ((o * vocab) + 2)) in
-  p_alli "integer row of fractional batch is correct" (Array.to_list got3) ~f:(fun i v ->
-      i >= embed || approx v row2.(i));
-  p_alli "fractional index gives a zero embedding row" (Array.to_list got3) ~f:(fun i v ->
-      i < embed || approx v 0.);
+  p_close "integer row of fractional batch is correct" (head got3 embed) row2 ~tol:approx_tol;
+  p_close "fractional index gives a zero embedding row" (tail got3 embed)
+    (zeros (tail got3 embed))
+    ~tol:approx_tol;
 
   (* --- Fallback: an ordinary matmul (not a one-hot reduction) is not rewritten --- *)
   let a =
@@ -232,8 +237,9 @@ let () =
   let ctx5 = Context.cpu () in
   let ctx5 = Train.forward_once ctx5 cids in
   let cid_vals = Context.get_values ctx5 cids.Tensor.value in
-  p_all2 "class_ids_of_int_list stores compact ids" cid_vals (Array.of_list id_list) ~f:(fun v i ->
-      approx v (Float.of_int i));
+  p_close "class_ids_of_int_list stores compact ids" cid_vals
+    (Array.of_list_map id_list ~f:Float.of_int)
+    ~tol:approx_tol;
 
   (* --- Integer-precision ids: [class_ids_of_int_list] stores uint32 IDs and [one_hot_of_ids] flows
      the integer precision into the gather (threefry-style backward precision). The guard then needs
@@ -251,10 +257,13 @@ let () =
     Array.concat_map [| 1; 3; 0 |] ~f:(fun idx ->
         Array.init embed ~f:(fun o -> Float.of_int ((o * vocab) + idx)))
   in
-  p_alli "uint32 ids: forward equals direct gather of table rows" (Array.to_list got_int)
-    ~f:(fun i v -> i >= 3 * embed || approx v expected_int.(i));
-  p_alli "uint32 ids: out-of-range id gives a zero embedding row" (Array.to_list got_int)
-    ~f:(fun i v -> i < 3 * embed || approx v 0.);
+  p_close "uint32 ids: forward equals direct gather of table rows"
+    (head got_int (3 * embed))
+    expected_int ~tol:approx_tol;
+  p_close "uint32 ids: out-of-range id gives a zero embedding row"
+    (tail got_int (3 * embed))
+    (zeros (tail got_int (3 * embed)))
+    ~tol:approx_tol;
   let dyn_int, _, _, truncs_int = inspect embedded_int ids_int.Tensor.value in
   p "uint32 ids: optimized IR contains a Get_dynamic gather" (dyn_int >= 1);
   p "uint32 ids: guard has no integrality Trunc" (truncs_int = 0);

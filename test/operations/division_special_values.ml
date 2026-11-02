@@ -196,7 +196,10 @@ let estimate_domain c ((_, x, y, _) as r) =
 let within_estimate c ((name, x, y, v) as r) =
   let want = c.round (x /. y) in
   let ok =
-    exact c r || Float.(is_finite want && want <> 0. && abs (v -. want) <= 2. *. c.ulp want)
+    exact c r
+    || Float.(is_finite want && want <> 0.)
+       && Verdict.within ~what_ran:(Printf.sprintf "%s %s %s(%h, %h)" backend_name c.label name x y)
+            "within 2 ulps of C's quotient" [| v |] [| want |] ~tol:(fun w -> 2. *. c.ulp w)
   in
   if not ok then
     Stdio.eprintf "(not part of the golden) %s %s %s(%h, %h) = %h, C %h\n" backend_name c.label name

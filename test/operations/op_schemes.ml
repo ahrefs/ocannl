@@ -641,8 +641,8 @@ let () =
       let ctx = Ocannl.Train.forward_once (Context.auto ()) y in
       let yv = Context.get_values ctx y.value in
       let expected = [| 150.; 400. |] in
-      p_all "executed: each output is the sum of its row, against the closed form" (List.range 0 2)
-        ~f:(fun i -> Array.length yv = 2 && Float.(abs (yv.(i) - expected.(i)) <= 1e-3));
+      p_close "executed: each output is the sum of its row, against the closed form" yv expected
+        ~tol:(fun _ -> 1e-3);
       p "the closure published the reference's solution, the size of the summed axis"
         (Option.equal Int.equal r.var_ref.solved_dim (Some 5));
       (* The reference changed since the trace (it was unbound then): a conflicting application is

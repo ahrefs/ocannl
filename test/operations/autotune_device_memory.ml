@@ -112,12 +112,10 @@ let memory_declines (r : Autotune.report) =
 
 let approx_tol _ = 1e-4
 
-(* [approx_tol]'s closeness as a value, for claims gated on whether their leg runs: never true of
-   two empty readbacks. *)
-let close got want =
-  Array.length got > 0
-  && Array.length got = Array.length want
-  && Array.for_all2_exn got want ~f:(fun a b -> Float.(abs (a - b) <= 1e-4 * max 1. (abs b)))
+(* Closeness as a value, for claims gated on whether their leg runs: relative above magnitude one,
+   never true of two empty readbacks. [name] is the claim's label, for the stderr diagnostic. *)
+let close name got want =
+  Verdict.within name got want ~tol:(fun w -> 1e-4 *. Float.max 1. (Float.abs w))
 
 let attempted f =
   let attempts = ref [] in
@@ -216,7 +214,9 @@ let floor_scenarios ~backend_name ~on_gpu ~baseline_links ~check_values comp =
     "the chain searched in room for its default compile computes the right values"
     (match result with
     | Ok (ctx, routine) ->
-        close (Context.get_values (Context.run ctx routine) chain.Tensor.value) chain_expected
+        close "the chain searched in room for its default compile computes the right values"
+          (Context.get_values (Context.run ctx routine) chain.Tensor.value)
+          chain_expected
     | Error _ -> false);
   Context.release ctx_ref;
   Unix.putenv "OCANNL_BUFFER_ALIASING" "false";
@@ -281,7 +281,11 @@ let floor_scenarios ~backend_name ~on_gpu ~baseline_links ~check_values comp =
     | Ok (ctx, routine) ->
         let ctx_ref, routine_ref = Context.compile (Context.auto ()) fused_comp Ir.Indexing.Empty in
         let want = Context.get_values (Context.run ctx_ref routine_ref) fused.Tensor.value in
-        close (Context.get_values (Context.run ctx routine) fused.Tensor.value) want
+        close
+          "where the backend tensorizes it, the shared-fusable step searched in room for its floor \
+           ships a routine computing the right values"
+          (Context.get_values (Context.run ctx routine) fused.Tensor.value)
+          want
     | Error _ -> false);
   (* 6d: where the baseline links, a refusal of that link alone -- the device admits the floor --
      declines the baseline and nothing more: the search runs on its candidates. *)
@@ -313,7 +317,11 @@ let floor_scenarios ~backend_name ~on_gpu ~baseline_links ~check_values comp =
     && Option.exists !report ~f:(fun r -> searched r && r.Autotune.baseline_declined));
   Verdict.gated ~when_:baseline_links ~on:backend_name
     "the step searched past its refused base link computes the right values"
-    (match result with Ok (ctx, routine) -> check_values ctx routine | Error _ -> false)
+    (match result with
+    | Ok (ctx, routine) ->
+        check_values "the step searched past its refused base link computes the right values" ctx
+          routine
+    | Error _ -> false)
 
 let () =
   let mav =
@@ -621,6 +629,6 @@ let () =
   let _, reports, _, _ = run5 ~arm:false in
   p "nothing was recorded: the next call compares both arms again" (List.length reports = 2);
   floor_scenarios ~backend_name ~on_gpu ~baseline_links
-    ~check_values:(fun ctx routine ->
-      close (Context.get_values (Context.run ctx routine) t2.Tensor.value) expected)
+    ~check_values:(fun name ctx routine ->
+      close name (Context.get_values (Context.run ctx routine) t2.Tensor.value) expected)
     comp

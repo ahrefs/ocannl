@@ -324,7 +324,10 @@ let () =
         in
         let ctx = Context.run ctx routine in
         let got = Context.get_values ctx mcm.Tensor.value in
-        Array.for_all2_exn got got_serial ~f:(fun a b -> Float.(abs (a - b) < 1e-2))
+        Verdict.within ~what_ran:(Printf.sprintf "move %d" idx)
+          "on the IR it was compiled from, each renderer decline states one of the oracle's \
+           violations, and a fixture with none compiles and runs"
+          got got_serial ~tol:(fun _ -> 1e-2)
     | _ :: _, Error (SO.Classified { phase = SO.Backend_codegen; cause; _ })
       when List.exists vs ~f:(decline_states cause) ->
         true

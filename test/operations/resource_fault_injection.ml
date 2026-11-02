@@ -40,14 +40,8 @@ let constant_allocated before after =
 
 let live_constant_delta before after = after.AC.live_constant_pools - before.AC.live_constant_pools
 
-(* Non-empty by construction (gh-ocannl-746): [Array.for_all2_exn] answers [true] on two empty
-   arrays, and a readback and the reference it is compared against go empty TOGETHER -- the
-   reference went through the same path. {!Verdict.p_all2} is the claim-shaped form; the sites
-   reached through this helper keep a boolean, so the guard lives here. *)
-let approx_array a b =
-  (not (Array.is_empty a))
-  && Array.length a = Array.length b
-  && Array.for_all2_exn a b ~f:(fun x y -> Float.(abs (x - y) < 1e-5))
+(* The absolute tolerance every readback here is held to against its reference. *)
+let tol _ = 1e-5
 
 let cache_entry backend best_ms =
   Cache_plant.entry ~backend ~source_digest:"gh571-source" ~best_ms ~baseline_ms:(best_ms +. 1.) ()
@@ -117,8 +111,9 @@ let () =
   let linked_ctx, linked_routine = Context.compile (Context.cpu ()) comp Ir.Indexing.Empty in
   let linked_ctx = Context.run linked_ctx linked_routine in
   let after_run = AC.snapshot () in
-  p "link control runs and computes the reference"
-    (approx_array (Context.get_values linked_ctx y.Tensor.value) expected);
+  p_close "link control runs and computes the reference"
+    (Context.get_values linked_ctx y.Tensor.value)
+    expected ~tol;
   Context.release linked_ctx;
   let after_release = AC.snapshot () in
   p "link control releases its committed pool exactly once"
@@ -175,8 +170,9 @@ let () =
   p "two-pool unwind control allocates one working and one constant pool"
     (working_allocated before after_run = 1
     && after_run.AC.constant_pools_allocated - before.AC.constant_pools_allocated = 1);
-  p "two-pool unwind control computes the reference"
-    (approx_array (Context.get_values unwind_ctx uy.Tensor.value) expected);
+  p_close "two-pool unwind control computes the reference"
+    (Context.get_values unwind_ctx uy.Tensor.value)
+    expected ~tol;
   Context.release unwind_ctx;
 
   (* A fresh host-transfer destination is the second shared allocation site. Failure after allocate
@@ -199,8 +195,9 @@ let () =
   let before = AC.snapshot () in
   let transfer_ctx = Context.from_host (Context.cpu ()) x.Tensor.value nd in
   let after_copy = AC.snapshot () in
-  p "transfer control copies the requested values"
-    (approx_array (Context.get_values transfer_ctx x.Tensor.value) values);
+  p_close "transfer control copies the requested values"
+    (Context.get_values transfer_ctx x.Tensor.value)
+    values ~tol;
   Context.release transfer_ctx;
   let after_release = AC.snapshot () in
   p "transfer control releases its destination exactly once"
@@ -262,8 +259,9 @@ let () =
     && pools_freed held after_failed_overwrite = 0
     && live_working_delta held after_failed_overwrite = 0);
   let read_ctx = Context.from_host read_ctx x.Tensor.value nd in
-  p "existing from-host control retries in place"
-    (approx_array (Context.get_values read_ctx x.Tensor.value) values);
+  p_close "existing from-host control retries in place"
+    (Context.get_values read_ctx x.Tensor.value)
+    values ~tol;
   let held = AC.snapshot () in
   let raised, hits =
     injected FI.To_host_before_copy (fun () -> Context.to_host read_ctx x.Tensor.value)
@@ -273,7 +271,9 @@ let () =
   p "to-host failure retained the source for retry"
     (live_working_delta held after_failed_read = 0
     && pools_freed held after_failed_read = 0
-    && approx_array (Context.get_values read_ctx x.Tensor.value) values);
+    && Verdict.within "to-host failure retained the source for retry"
+         (Context.get_values read_ctx x.Tensor.value)
+         values ~tol);
   Context.release read_ctx;
 
   (* gh-ocannl-1125: uploads of nodes the context does not hold share upload arenas. The first arena
@@ -302,21 +302,28 @@ let () =
     (working_allocated held after_failed_append = 0
     && pools_freed held after_failed_append = 0
     && live_working_delta held after_failed_append = 0);
-  let reads tn nd =
-    approx_array (Context.get_values arena_ctx tn) (Ir.Ndarray.retrieve_flat_values nd)
+  let reads what tn nd =
+    Verdict.within ~what_ran:what "failed arena append leaves its pool-mates' values intact"
+      (Context.get_values arena_ctx tn)
+      (Ir.Ndarray.retrieve_flat_values nd)
+      ~tol
   in
   p "failed arena append leaves its pool-mates' values intact"
-    (reads x.Tensor.value nd && reads w.Tensor.value nd_w);
+    (reads "x" x.Tensor.value nd && reads "w" w.Tensor.value nd_w);
   let arena_ctx = Context.from_host arena_ctx v.Tensor.value nd_v in
   let after_retry_append = AC.snapshot () in
   p "arena-append retry lands in the arena without a pool of its own"
     (working_allocated before_arena after_retry_append = 3
-    && approx_array
+    && Verdict.within ~what_ran:"v"
+         "arena-append retry lands in the arena without a pool of its own"
          (Context.get_values arena_ctx v.Tensor.value)
          (Ir.Ndarray.retrieve_flat_values nd_v)
-    && approx_array
+         ~tol
+    && Verdict.within ~what_ran:"w"
+         "arena-append retry lands in the arena without a pool of its own"
          (Context.get_values arena_ctx w.Tensor.value)
-         (Ir.Ndarray.retrieve_flat_values nd_w));
+         (Ir.Ndarray.retrieve_flat_values nd_w)
+         ~tol);
   Context.release arena_ctx;
   let after_arena_release = AC.snapshot () in
   p "arena control releases each of its three pools exactly once"
@@ -363,20 +370,26 @@ let () =
       p_all "failed device-copy append preserves every existing pool-mate"
         [ (x.Tensor.value, nd); (z.Tensor.value, arena_nd 10.); (w.Tensor.value, nd_w) ]
         ~f:(fun (tn, nd) ->
-          approx_array (Context.get_values destination tn) (Ir.Ndarray.retrieve_flat_values nd)));
+          Verdict.within
+            ~what_ran:(label ^ " " ^ Ir.Tnode.label_name tn)
+            "failed device-copy append preserves every existing pool-mate"
+            (Context.get_values destination tn)
+            (Ir.Ndarray.retrieve_flat_values nd)
+            ~tol));
   let destination = Context.copy v.Tensor.value ~src:source ~dst:destination in
   let after = AC.snapshot () in
   p "device-copy retry reuses the restored arena bump"
     (working_allocated held after = 0
     && pools_freed held after = 0
-    && approx_array
+    && Verdict.within "device-copy retry reuses the restored arena bump"
          (Context.get_values destination v.Tensor.value)
-         (Ir.Ndarray.retrieve_flat_values nd_v));
+         (Ir.Ndarray.retrieve_flat_values nd_v)
+         ~tol);
   Context.release source;
-  p "copied destination survives releasing its source"
-    (approx_array
-       (Context.get_values destination v.Tensor.value)
-       (Ir.Ndarray.retrieve_flat_values nd_v));
+  p_close "copied destination survives releasing its source"
+    (Context.get_values destination v.Tensor.value)
+    (Ir.Ndarray.retrieve_flat_values nd_v)
+    ~tol;
   let held = AC.snapshot () in
   Context.release destination;
   let after = AC.snapshot () in

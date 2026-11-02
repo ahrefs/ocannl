@@ -208,7 +208,7 @@ let () =
         (Array.foldi hoisted ~init:0. ~f:(fun o m v -> Float.max m (Float.abs (v -. exact.(o)))));
       p_exists "the bias gradient is not trivially zero" (Array.to_list exact) ~f:(fun v ->
           Float.(abs v > 1.));
-      p_alli "the hoisted split's gradient is within the f32 tolerance of the f64 reference"
-        (Array.to_list hoisted) ~f:(fun o v -> Float.(abs (v - exact.(o)) <= tolerance));
+      p_close "the hoisted split's gradient is within the f32 tolerance of the f64 reference"
+        hoisted exact ~tol:(fun _ -> tolerance);
       p_all2 "the hoisted split computes bitwise the unhoisted split's gradient" hoisted unhoisted
         ~f:bitwise
