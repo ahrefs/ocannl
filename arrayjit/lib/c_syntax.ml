@@ -3381,25 +3381,62 @@ module C_syntax (B : C_syntax_config) = struct
     | Local_scope _ | Get_local _ | Get_merge_buffer _ | Get _ | Constant_bits _ | Embed_index _ ->
         false
 
-  let pp_scalar_op ~operand (prec : Ops.prec) (vcomp : Low_level.scalar_t) :
+  (* gh-ocannl-1622: a value select renders as the backend's blend where it has one at this (float)
+     compute precision and evaluating every arm is safe; otherwise it short-circuits. *)
+  let blend_for prec ~cond ~arms =
+    if not (Ops.is_float prec) then None
+    else
+      match B.select_blend_syntax prec with
+      | Some (Blend_over_locals _) when List.exists arms ~f:(fun (a, _) -> holds_nan_literal a) ->
+          (* gh-ocannl-1695: the GPU dialects compile under no-NaNs fast math (HIP's [-ffast-math]),
+             where a NaN literal bound to a local is the one NaN the optimizer can see, and a select
+             of it is its to drop: blended, a masked attention's [where mask s NAN] came back finite
+             on gfx1151 where the short-circuiting spelling kept the NaN rows (online_softmax,
+             online_softmax_block). The mask fill keeps [?:]. *)
+          None
+      | Some blend when Low_level.speculable_select ~cond ~arms -> Some blend
+      | _ -> None
+
+  (* The expression of a ternary operator over its rendered operands at [prec], as {!binop_expr}. *)
+  let ternop_expr ?(blend = true) prec op ~v1 ~v2 ~v3 e1 e2 e3 =
+    let open PPrint in
+    match
+      (op, if blend then blend_for prec ~cond:v1 ~arms:[ (v2, prec); (v3, prec) ] else None)
+    with
+    | Ops.Where, Some (Blend_truth blend) ->
+        (* The truth is the short-circuiting spelling's own test ([Ops.ternop_c_syntax]'s float
+           arm), so a NaN condition still selects the then-arm. *)
+        blend (parens e1 ^^ string " != 0.0") e2 e3
+    | Ops.Where, Some (Blend_over_locals decl) ->
+        Over_locals.blend_where ~decl ~ternop_syntax:B.ternop_syntax prec e1 e2 e3
+    | _ -> group (B.ternop_syntax prec op e1 e2 e3)
+
+  (* The expression of a binary operator over its rendered operands [e1], [e2] at [prec]; [v1], [v2]
+     are the operands themselves, which the select blend's speculability reads. *)
+  let binop_expr ?(blend = true) prec op ~v1 ~v2 e1 e2 =
+    let open PPrint in
+    let gate_blend () = if blend then blend_for prec ~cond:v1 ~arms:[ (v2, prec) ] else None in
+    (* Each truth is the short-circuiting spelling's own test ([Ops.binop_c_syntax]'s float arms),
+       arms in its order: [Satur01_gate] yields its second operand where the test FAILS. *)
+    match op with
+    | Ops.Relu_gate | Ops.Satur01_gate -> (
+        match (op, gate_blend (), prec) with
+        | Ops.Relu_gate, Some (Blend_truth blend), _ ->
+            blend (parens e1 ^^ string " > 0.0") e2 (string "0.0")
+        | _, Some (Blend_truth blend), Ops.Single_prec _ ->
+            blend (string "fabsf(floorf(" ^^ e1 ^^ string ")) > 0.0") (string "0.0") e2
+        | _, Some (Blend_truth blend), _ ->
+            blend (string "fabs(floor(" ^^ e1 ^^ string ")) > 0.0") (string "0.0") e2
+        | _, Some (Blend_over_locals decl), _ ->
+            (* The dialect's own gate over its operand's value: the GPU [Satur01_gate] tests [0 < x
+               && x < 1], not cc's [fabs(floor(x)) > 0]. *)
+            Over_locals.blend_gate ~decl ~binop_syntax:B.binop_syntax prec op e1 e2
+        | _, None, _ -> group (B.binop_syntax prec op e1 e2))
+    | _ -> group (B.binop_syntax prec op e1 e2)
+
+  let pp_scalar_op_at ~operand (prec : Ops.prec) (vcomp : Low_level.scalar_t) :
       (int * PPrint.document) list * PPrint.document =
     let open PPrint in
-    (* gh-ocannl-1622: a value select renders as the backend's blend where it has one at this
-       (float) compute precision and evaluating every arm is safe; otherwise it short-circuits. *)
-    let blend_for prec ~cond ~arms =
-      if not (Ops.is_float prec) then None
-      else
-        match B.select_blend_syntax prec with
-        | Some (Blend_over_locals _) when List.exists arms ~f:(fun (a, _) -> holds_nan_literal a) ->
-            (* gh-ocannl-1695: the GPU dialects compile under no-NaNs fast math (HIP's
-               [-ffast-math]), where a NaN literal bound to a local is the one NaN the optimizer can
-               see, and a select of it is its to drop: blended, a masked attention's [where mask s
-               NAN] came back finite on gfx1151 where the short-circuiting spelling kept the NaN
-               rows (online_softmax, online_softmax_block). The mask fill keeps [?:]. *)
-            None
-        | Some blend when Low_level.speculable_select ~cond ~arms -> Some blend
-        | _ -> None
-    in
     match vcomp with
     | Ternop (Ops.FMA, _, _, _) when not (Ops.is_float prec) ->
         (* gh-ocannl-873: hand-built low-level IR can bypass the simplifier's float-only FMA rewrite
@@ -3445,16 +3482,7 @@ module C_syntax (B : C_syntax_config) = struct
                 (d1, e1, d2, e2, d3, e3)
         in
         let defs = List.concat [ d1; d2; d3 ] in
-        let expr =
-          match (op, blend_for prec ~cond:v1 ~arms:[ (v2, prec); (v3, prec) ]) with
-          | Ops.Where, Some (Blend_truth blend) ->
-              (* The truth is the short-circuiting spelling's own test ([Ops.ternop_c_syntax]'s
-                 float arm), so a NaN condition still selects the then-arm. *)
-              blend (parens e1 ^^ string " != 0.0") e2 e3
-          | Ops.Where, Some (Blend_over_locals decl) ->
-              Over_locals.blend_where ~decl ~ternop_syntax:B.ternop_syntax prec e1 e2 e3
-          | _ -> group (B.ternop_syntax prec op e1 e2 e3)
-        in
+        let expr = ternop_expr prec op ~v1 ~v2 ~v3 e1 e2 e3 in
         (defs, expr)
     | Binop (Ops.ToPowOf, (base, _), (Constant exponent, _))
       when Ops.is_float prec && Float.is_finite exponent && Float.is_integer exponent ->
@@ -3483,27 +3511,7 @@ module C_syntax (B : C_syntax_config) = struct
                 (d1, e1, d2, e2)
             in
             let defs = List.concat [ d1; d2 ] in
-            let gate_blend () = blend_for prec ~cond:v1 ~arms:[ (v2, prec) ] in
-            let expr =
-              (* Each truth is the short-circuiting spelling's own test ([Ops.binop_c_syntax]'s
-                 float arms), arms in its order: [Satur01_gate] yields its second operand where the
-                 test FAILS. *)
-              match op with
-              | Ops.Relu_gate | Ops.Satur01_gate -> (
-                  match (op, gate_blend (), prec) with
-                  | Ops.Relu_gate, Some (Blend_truth blend), _ ->
-                      blend (parens e1 ^^ string " > 0.0") e2 (string "0.0")
-                  | _, Some (Blend_truth blend), Ops.Single_prec _ ->
-                      blend (string "fabsf(floorf(" ^^ e1 ^^ string ")) > 0.0") (string "0.0") e2
-                  | _, Some (Blend_truth blend), _ ->
-                      blend (string "fabs(floor(" ^^ e1 ^^ string ")) > 0.0") (string "0.0") e2
-                  | _, Some (Blend_over_locals decl), _ ->
-                      (* The dialect's own gate over its operand's value: the GPU [Satur01_gate]
-                         tests [0 < x && x < 1], not cc's [fabs(floor(x)) > 0]. *)
-                      Over_locals.blend_gate ~decl ~binop_syntax:B.binop_syntax prec op e1 e2
-                  | _, None, _ -> group (B.binop_syntax prec op e1 e2))
-              | _ -> group (B.binop_syntax prec op e1 e2)
-            in
+            let expr = binop_expr prec op ~v1 ~v2 e1 e2 in
             (defs, expr))
     | Unop (op, (v, v_prec)) ->
         let arg_prec =
@@ -3517,6 +3525,120 @@ module C_syntax (B : C_syntax_config) = struct
     | Local_scope _ | Get_local _ | Get_merge_buffer _ | Get _ | Get_dynamic _ | Constant _
     | Constant_bits _ | Embed_index _ ->
         invalid_arg "C_syntax.pp_scalar_op: not an operator node"
+
+  (* gh-ocannl-1785: the float precision a float-valued subexpression at an integer compute
+     precision is computed in -- C's [double], what cc's [sin()] and [fmin()] compute in, where the
+     backend has it; [single] on Metal. *)
+  let int_math_prec = if B.supports_f64 then Ops.double else Ops.single
+
+  let convert_doc ~from ~to_ doc =
+    let pre, post = B.convert_precision ~from ~to_ in
+    PPrint.(string pre ^^ doc ^^ string post)
+
+  (* gh-ocannl-1785: an operator at an integer compute precision [p]. The expression is typed
+     [int_math_prec] exactly when {!Low_level.float_valued} says the value is float-valued, and is
+     otherwise what the integer tables render. A float-valued subexpression is computed in float --
+     a real-valued operator at [int_math_prec], an operator following a float-valued operand there
+     too, its integer operands converted up -- and converted to [p] once: by the caller
+     ([pp_scalar_op], at the store or scope holding it), or at a [Mod] operand, the one operator
+     whose integer spelling takes integers only. A comparison of a float-valued operand compares in
+     float and yields an integer truth; a [Where] condition keeps its own type, as in C. A select
+     short-circuits, as at any integer compute precision: the blend is decided per compute precision
+     ([blend_for]), and this one is an integer. An operator with no float-valued operand renders
+     through the integer tables as it always did, so the integer tables only ever meet integer
+     operands. *)
+  let rec integer_op ~operand p (vcomp : Low_level.scalar_t) :
+      (int * PPrint.document) list * PPrint.document =
+    let f = int_math_prec in
+    let fv = Low_level.float_valued in
+    let is_op : Low_level.scalar_t -> bool = function
+      | Unop _ | Binop _ | Ternop _ -> true
+      | _ -> false
+    in
+    (* A homogeneous operand at [p], left unconverted: typed [f] exactly when it is float-valued. *)
+    let sub v = if is_op v then integer_op ~operand p v else operand p v in
+    let widen v =
+      let d, e = sub v in
+      if fv v then (d, e) else (d, convert_doc ~from:p ~to_:f e)
+    in
+    let narrow v =
+      let d, e = sub v in
+      if fv v then (d, convert_doc ~from:f ~to_:p e) else (d, e)
+    in
+    let table () = pp_scalar_op_at ~operand p vcomp in
+    match vcomp with
+    | Unop (op, (v, _)) -> (
+        match Ops.unop_integer_valuation op with
+        | Real_valued ->
+            let d, e = widen v in
+            (d, PPrint.group (B.unop_syntax f op e))
+        | Follows_operands when fv v ->
+            let d, e = sub v in
+            (d, PPrint.group (B.unop_syntax f op e))
+        | Truth when fv v ->
+            let d, e = sub v in
+            (d, convert_doc ~from:f ~to_:p (PPrint.group (B.unop_syntax f op e)))
+        | Follows_operands | Truth | Integer_only | Projection | Integer_table -> table ())
+    | Binop (op, (v1, _), (v2, _)) -> (
+        let any = fv v1 || fv v2 in
+        let both render =
+          let d1, e1 = render v1 in
+          let d2, e2 = render v2 in
+          (d1 @ d2, e1, e2)
+        in
+        match Ops.binop_integer_valuation op with
+        | Real_valued ->
+            let defs, e1, e2 = both widen in
+            (defs, binop_expr ~blend:false f op ~v1 ~v2 e1 e2)
+        | Follows_operands when any ->
+            let defs, e1, e2 = both widen in
+            (defs, binop_expr ~blend:false f op ~v1 ~v2 e1 e2)
+        | Truth when any ->
+            let defs, e1, e2 = both widen in
+            (defs, convert_doc ~from:f ~to_:p (binop_expr ~blend:false f op ~v1 ~v2 e1 e2))
+        | Integer_only when any ->
+            let defs, e1, e2 = both narrow in
+            (defs, binop_expr p op ~v1 ~v2 e1 e2)
+        | Projection -> (
+            match Ops.binop_conditionality op with
+            | Ops.Only_first -> sub v1
+            | Ops.Only_second -> sub v2
+            | Ops.Both_operands | Ops.Gated_second -> table ())
+        | Follows_operands | Truth | Integer_only | Integer_table -> table ())
+    | Ternop (op, (v1, v1_prec), (v2, _), (v3, _)) -> (
+        match (Ops.ternop_integer_valuation op, op) with
+        | Follows_operands, Ops.Where ->
+            (* The condition at its own precision, unconverted: C tests a float-valued condition
+               against zero as it stands. *)
+            let v1_prec = comp_prec v1_prec in
+            let d1, e1 =
+              if Ops.is_integer v1_prec && is_op v1 then integer_op ~operand v1_prec v1
+              else operand v1_prec v1
+            in
+            let arms_prec, render = if fv v2 || fv v3 then (f, widen) else (p, sub) in
+            let d2, e2 = render v2 in
+            let d3, e3 = render v3 in
+            (List.concat [ d1; d2; d3 ], ternop_expr ~blend:false arms_prec op ~v1 ~v2 ~v3 e1 e2 e3)
+        | Follows_operands, _ when fv v1 || fv v2 || fv v3 ->
+            let d1, e1 = widen v1 in
+            let d2, e2 = widen v2 in
+            let d3, e3 = widen v3 in
+            (List.concat [ d1; d2; d3 ], ternop_expr ~blend:false f op ~v1 ~v2 ~v3 e1 e2 e3)
+        | (Real_valued | Follows_operands | Truth | Integer_only | Projection | Integer_table), _ ->
+            table ())
+    | Local_scope _ | Get_local _ | Get_merge_buffer _ | Get _ | Get_dynamic _ | Constant _
+    | Constant_bits _ | Embed_index _ ->
+        invalid_arg "C_syntax.pp_scalar_op: not an operator node"
+
+  (* The operator arms of [pp_scalar]: at an integer compute precision through {!integer_op},
+     converting a float-valued result to the precision once, here. *)
+  let pp_scalar_op ~operand (prec : Ops.prec) (vcomp : Low_level.scalar_t) :
+      (int * PPrint.document) list * PPrint.document =
+    if Ops.is_integer prec then
+      let defs, doc = integer_op ~operand prec vcomp in
+      if Low_level.float_valued vcomp then (defs, convert_doc ~from:int_math_prec ~to_:prec doc)
+      else (defs, doc)
+    else pp_scalar_op_at ~operand prec vcomp
 
   (* The signature's coupling contract: an accumulator resides at least as wide as the arithmetic
      that feeds it. The failure mode this catches is an [include]-time stale pairing — a backend

@@ -34,9 +34,10 @@
    scalar). The heterogeneous [uint4x32] consumers ({!Ops.is_homogeneous_prec_unop} and friends)
    take a [uint4x32] block and produce every scalar precision. Each homogeneous arithmetic arm is
    swept twice, over buffer reads and with an inlined [a + b] as its first operand ([Inlined]),
-   since integer promotion types the two differently. Conversions are every ordered pair of distinct
-   storage precisions the backend can store ({!Ir.Backend_intf.codegen_capabilities}'s
-   [supports_f64]).
+   since integer promotion types the two differently; at an integer storage precision, a third time
+   over an inlined real-valued [Sqrt(a)] ([Inlined_real], gh-ocannl-1785). Conversions are every
+   ordered pair of distinct storage precisions the backend can store
+   ({!Ir.Backend_intf.codegen_capabilities}'s [supports_f64]).
 
    gh-ocannl-1768 extended the sweep in three directions.
 
@@ -75,6 +76,12 @@ type arm =
       (** A homogeneous arithmetic arm whose first operand is an inlined [a + b] rather than a
           buffer read: C-family integer promotion types that sum [int] where the read is [uchar], so
           an arm that compiles over a read can still be an ambiguous call over an expression. *)
+  | Inlined_real of arm
+      (** A homogeneous arithmetic arm at an integer storage precision whose first operand is an
+          inlined real-valued [Sqrt(a)]: a float-valued subexpression at an integer compute
+          precision, which the renderer computes in float and converts once (gh-ocannl-1785), so an
+          integer arm never meets a float operand -- no mixed [min(uchar, double)], no [%] over a
+          double. *)
   | Lanes of arm
       (** A homogeneous arithmetic arm applied cell by cell over a [Vectorized] loop, every operand
           read at the loop index: what the explicit-SIMD rendering takes (gh-ocannl-1768). *)
@@ -92,6 +99,7 @@ let rec arm_name = function
   | Vector op -> "vec_unop " ^ Sexp.to_string (Ops.sexp_of_vec_unop op)
   | Convert_from q -> "convert from " ^ Ops.prec_string q
   | Inlined arm -> arm_name arm ^ " over an inlined operand"
+  | Inlined_real arm -> arm_name arm ^ " over an inlined real-valued operand"
   | Lanes arm -> arm_name arm ^ " over vector lanes"
   | Lanes_uniform arm -> arm_name arm ^ " over vector lanes, its last operand uniform"
   | Reduce op -> "vector reduction " ^ Sexp.to_string (Ops.sexp_of_binop op)
@@ -99,7 +107,7 @@ let rec arm_name = function
 
 let is_vector_arm = function
   | Lanes _ | Lanes_uniform _ | Reduce _ | Reduce_fma -> true
-  | Unary _ | Binary _ | Ternary _ | Vector _ | Convert_from _ | Inlined _ -> false
+  | Unary _ | Binary _ | Ternary _ | Vector _ | Convert_from _ | Inlined _ | Inlined_real _ -> false
 
 (* A value select: an operator that yields one of its operands, the other evaluated only
    conditionally, which the backend's [select_blend_syntax] may render branchless (gh-ocannl-1622).
@@ -115,7 +123,7 @@ let rec is_select = function
       match Ops.binop_conditionality op with
       | Ops.Gated_second -> true
       | Ops.Both_operands | Ops.Only_first | Ops.Only_second -> false)
-  | Inlined arm -> is_select arm
+  | Inlined arm | Inlined_real arm -> is_select arm
   | Unary _ | Vector _ | Convert_from _ | Lanes _ | Lanes_uniform _ | Reduce _ | Reduce_fma -> false
 
 type verdict =
@@ -197,12 +205,15 @@ let arms_at ~precs store =
       | Unary op -> Ops.is_homogeneous_prec_unop op
       | Binary op -> Ops.is_homogeneous_prec_binop op
       | Ternary op -> Ops.is_homogeneous_prec_ternop op
-      | Vector _ | Convert_from _ | Inlined _ | Lanes _ | Lanes_uniform _ | Reduce _ | Reduce_fma ->
+      | Vector _ | Convert_from _ | Inlined _ | Inlined_real _ | Lanes _ | Lanes_uniform _
+      | Reduce _ | Reduce_fma ->
           false
     in
     arithmetic
     @ List.filter_map arithmetic ~f:(fun arm ->
         if homogeneous arm then Some (Inlined arm) else None)
+    @ List.filter_map arithmetic ~f:(fun arm ->
+        if homogeneous arm && Ops.is_integer store then Some (Inlined_real arm) else None)
     @ List.map Ops.all_of_vec_unop ~f:(fun op -> Vector op)
     @ conversions
 
@@ -297,6 +308,7 @@ let rec statement o k arm : LL.t =
   let s = o.store in
   let store llsc = Ll_test.set o.out [| Idx.Fixed_idx k |] llsc in
   let sum = (LL.Binop (Ops.Add, read o.a s, read o.b s), s) in
+  let real = (LL.Unop (Ops.Sqrt, read o.a s), s) in
   match arm with
   | Lanes _ | Lanes_uniform _ | Reduce _ | Reduce_fma ->
       invalid_arg "op_table_compile: a vector arm is a loop of its own (vector_statement)"
@@ -304,6 +316,10 @@ let rec statement o k arm : LL.t =
   | Inlined (Binary op) -> store (LL.Binop (op, sum, read o.c s))
   | Inlined (Ternary op) -> store (LL.Ternop (op, sum, read o.b s, read o.c s))
   | Inlined arm -> statement o k arm
+  | Inlined_real (Unary op) -> store (LL.Unop (op, real))
+  | Inlined_real (Binary op) -> store (LL.Binop (op, real, read o.c s))
+  | Inlined_real (Ternary op) -> store (LL.Ternop (op, real, read o.b s, read o.c s))
+  | Inlined_real arm -> statement o k arm
   | Unary op when Ops.is_homogeneous_prec_unop op -> store (LL.Unop (op, read o.a s))
   | Unary op -> store (LL.Unop (op, read o.block Ops.uint4x32))
   | Binary op when Ops.is_homogeneous_prec_binop op -> store (LL.Binop (op, read o.a s, read o.b s))
@@ -426,7 +442,8 @@ let rec c_reference_refuses ~store ~compute arm =
   | Ternary op -> raises (fun () -> Ops.ternop_c_syntax compute op)
   | Vector op -> raises (fun () -> Ops.vec_unop_c_syntax compute op)
   | Convert_from from -> raises (fun () -> Ops.c_convert_precision ~from ~to_:store)
-  | Inlined arm | Lanes arm | Lanes_uniform arm -> c_reference_refuses ~store ~compute arm
+  | Inlined arm | Inlined_real arm | Lanes arm | Lanes_uniform arm ->
+      c_reference_refuses ~store ~compute arm
   | Reduce op -> c_reference_refuses ~store ~compute (Binary op)
   | Reduce_fma -> c_reference_refuses ~store ~compute (Ternary Ops.FMA)
 
@@ -540,15 +557,31 @@ let () =
   p_none ~min:200 "no in-domain arm renders and then fails the backend's compiler" all_results
     ~f:(fun (_, (_, verdict)) -> match verdict with Failed _ -> true | _ -> false);
   p_empty "every failing routine's failure is pinned to one arm" ~over:cases !unexplained;
-  (* A backend may render MORE than the C reference (CUDA renders integer [Recip] as an integer
-     division), never refuse more: a refusal outside the C reference's is an operator a user of this
-     backend alone cannot use, or an arm the sweep built wrongly. At a float precision the reference
-     refuses nothing but a conversion out of packed RNG state. *)
+  (* A backend may render MORE than the C reference (every backend renders integer [Recip] in float,
+     gh-ocannl-1785, where the C table refuses it), never refuse more: a refusal outside the C
+     reference's is an operator a user of this backend alone cannot use, or an arm the sweep built
+     wrongly. At a float precision the reference refuses nothing but a conversion out of packed RNG
+     state. *)
   p_all "every refused arm is one the C reference refuses too" all_results
     ~f:(fun (case, (arm, v)) ->
       match v with
       | Refused _ -> c_reference_refuses ~store:case.store ~compute:case.compute arm
       | Compiled | Failed _ -> true);
+  (* gh-ocannl-1785: a plain conversion out of packed RNG state is refused on every backend, with
+     one message naming the operators that do convert random bits -- where Metal used to read it as
+     the uniform conversion and CUDA/HIP as lane 0. The rule above only bounds refusals, so it
+     cannot say this. *)
+  let out_of_packed =
+    List.filter all_results ~f:(fun (_, (arm, _)) ->
+        match arm with Convert_from q -> is_packed q | _ -> false)
+  in
+  p_all ~min:1 "every plain conversion out of uint4x32 is refused, with the shared message"
+    out_of_packed ~f:(fun (case, (_, v)) ->
+      match v with
+      | Refused why ->
+          String.is_substring why
+            ~substring:(Ops.no_plain_uint4x32_conversion_message ~to_:case.store)
+      | Compiled | Failed _ -> false);
   p_all "every storage precision the backend holds compiled at least one arm" precs ~f:(fun p ->
       List.exists all_results ~f:(fun (case, (_, v)) ->
           Ops.equal_prec case.store p && match v with Compiled -> true | _ -> false));
@@ -669,10 +702,8 @@ let () =
    type, where casting them to an integer type to resolve the overload gives 2 * 0.
 
    [two * Min(Sin(b), Sqrt(Neg(a)))] over [a = b = 1] is 1: a floating comparison keeps [fmin]'s NaN
-   handling, where a plain [<] selects the NaN, an invalid conversion at the byte store. (Both
-   operands are float-valued: an integer read against a float intermediate is a mixed-type call
-   CUDA's integer [min] does not resolve, the float-intermediate class the sweep leaves out -- see
-   docs/agent-notes/backend-dialects-and-idents.md.)
+   handling, where a plain [<] selects the NaN, an invalid conversion at the byte store. (The mixed
+   case, an integer read against a float intermediate, is gh-ocannl-1785's, below.)
 
    [two * Trunc(Sin(a))] over [a = 1] is 0: an operand at an integer precision can be float-valued,
    so integer [Trunc] is not the identity (that gives 2 * 0.84 = 1.68, stored 1). *)
@@ -733,6 +764,171 @@ let () =
           ~read:[ out ]
       in
       p claim (Ll_test.same got [ [| want |] ]))
+
+(* gh-ocannl-1785: the rule for a float-valued subexpression at an integer compute precision, made
+   explicit on every backend. It is computed in float -- through the operators that follow their
+   operands, as C's usual arithmetic conversions do -- and converted to the integer precision once:
+   at the store or scope holding it, or at an operand of [Mod], whose integer spelling takes
+   integers only. Comparisons and [Not] yield a truth value, an integer. Each case below is
+   discriminating: its float intermediate has a fractional part a premature conversion would drop,
+   or that a different conversion point would keep.
+
+   [Mod(c, Sqrt(a))] over [10, 8] is 0: the divisor converts at the operand, 10 % 2, where a float
+   remainder gives fmod(10, 2.83) = 1.51, stored 1 -- and C's [%] over a double does not compile.
+
+   [two * Min(Sin(a), b)] over [a = b = 1] is 1: a float against an integer read compares in float
+   (CUDA's integer [min] did not resolve the mixed call), where converting the sine first gives 0.
+
+   [three * Recip(two)] is 1: an integer [Recip] divides in float, 3 * 0.5, where integer division
+   gives 0 (refused on cc and at byte on CUDA/HIP, integer division at int32 there, float on Metal).
+
+   [Exp(Sqrt(a))] over [a = 2] is 4: a chain of math stays float, exp(1.41) = 4.11, where converting
+   between the two calls gives exp(1) = 2.72, stored 2.
+
+   [two * Where(cond, Sin(a), b)] over [1, 1, 5] is 1: a float-valued select arm keeps the select
+   float, 2 * 0.84, where converting the arm gives 0.
+
+   [three * (Not(Sin(a)) / two)] over [a = 0] is 0: [Not] yields the truth value 1, an integer, so 1
+   / 2 is integer division, where a float-typed truth gives 3 * 0.5 = 1.5, stored 1.
+
+   int32 [two * Sin(a)] over [a = -1] is -1: the conversion truncates toward zero (-1.68), not to
+   the floor (-2). *)
+let () =
+  let run ~prec ~name claim llsc seed want =
+    let out = node ~prec (name ^ "_out") in
+    let llc = Ll_test.set out at0 llsc in
+    let inputs = List.map seed ~f:fst in
+    let got =
+      Ll_test.execute ~name
+        { (Ll_test.optimize ~materialized:(out :: inputs) ~name llc) with LL.llc }
+        ~seed:(List.map seed ~f:(fun (tn, v) -> (tn, [| v |])))
+        ~read:[ out ]
+    in
+    p claim (Ll_test.same got [ [| want |] ])
+  in
+  let byte = Ops.byte in
+  let mk label = node ~prec:byte ("realv_" ^ label) in
+  let unop op v = (LL.Unop (op, v), byte) in
+  let binop op v1 v2 = (LL.Binop (op, v1, v2), byte) in
+  let a = mk "a" and b = mk "b" and c = mk "c" and cond = mk "cond" in
+  let two = mk "two" and three = mk "three" in
+  run ~prec:byte ~name:"optbl_realv_mod" "byte Mod converts a float-valued operand at the operand"
+    (fst (binop Ops.Mod (read c byte) (unop Ops.Sqrt (read a byte))))
+    [ (c, 10.); (a, 8.) ]
+    0.;
+  run ~prec:byte ~name:"optbl_realv_min" "byte Min of a float and an integer compares in float"
+    (fst (binop Ops.Mul (read two byte) (binop Ops.Min (unop Ops.Sin (read a byte)) (read b byte))))
+    [ (two, 2.); (a, 1.); (b, 1.) ]
+    1.;
+  run ~prec:byte ~name:"optbl_realv_recip" "byte Recip divides in float"
+    (fst (binop Ops.Mul (read three byte) (unop Ops.Recip (read two byte))))
+    [ (three, 3.); (two, 2.) ]
+    1.;
+  run ~prec:byte ~name:"optbl_realv_chain" "byte math over math stays float until the store"
+    (fst (unop Ops.Exp (unop Ops.Sqrt (read a byte))))
+    [ (a, 2.) ]
+    4.;
+  run ~prec:byte ~name:"optbl_realv_where" "byte Where with a float-valued arm selects in float"
+    (fst
+       (binop Ops.Mul (read two byte)
+          (LL.Ternop (Ops.Where, read cond byte, unop Ops.Sin (read a byte), read b byte), byte)))
+    [ (two, 2.); (cond, 1.); (a, 1.); (b, 5.) ]
+    1.;
+  run ~prec:byte ~name:"optbl_realv_not" "byte Not of a float-valued operand is an integer truth"
+    (fst
+       (binop Ops.Mul (read three byte)
+          (binop Ops.Div (unop Ops.Not (unop Ops.Sin (read a byte))) (read two byte))))
+    [ (three, 3.); (a, 0.); (two, 2.) ]
+    0.;
+  let int32 = Ops.int32 in
+  let i_a = node ~prec:int32 "realv_i_a" and i_two = node ~prec:int32 "realv_i_two" in
+  run ~prec:int32 ~name:"optbl_realv_int32" "int32 conversion of a float truncates toward zero"
+    (LL.Binop (Ops.Mul, read i_two int32, (LL.Unop (Ops.Sin, read i_a int32), int32)))
+    [ (i_two, 2.); (i_a, -1.) ]
+    (-1.)
+
+(* gh-ocannl-1785: the rule holds through the optimizer, not only over hand-built trees.
+
+   The constant case runs the SIMPLIFIED code (the cases above replace it with the hand-built tree):
+   [Mod(10, Sqrt(8))] over constants folds only where folding agrees with the renderer, so it is 0
+   as over runtime inputs, where folding the math in double gives [Float.rem 10 2.83] = 1.51, stored
+   1.
+
+   The parity legs execute one program twice, its producer virtualized and then materialized, and
+   compare both with the value worked out by hand. Each producer is discriminating, varying with its
+   cell and carrying a fractional part a misplaced conversion drops or keeps:
+
+   - a single-precision [s = x + y] read by a byte product [t = s * k]: inlined and collapsed, the
+   sum would be computed at byte, [(uchar)0.5 + (uchar)0.75 = 0] where the materialized [s] holds
+   1.25, read as 1; - a byte [s = Sqrt(a)] read by a byte product [t = s * k]: inlined and
+   collapsed, the root would reach the product unrounded, [3 * 2.83 = 8] where the materialized [s]
+   holds 2, so [t = 6]. *)
+let () =
+  let byte = Ops.byte in
+  let out = node ~prec:byte "realv_fold_out" in
+  let name = "optbl_realv_fold" in
+  let c v = (LL.Constant v, byte) in
+  let llc = Ll_test.set out at0 (LL.Binop (Ops.Mod, c 10., (LL.Unop (Ops.Sqrt, c 8.), byte))) in
+  let got =
+    Ll_test.execute ~name (Ll_test.optimize ~materialized:[ out ] ~name llc) ~seed:[] ~read:[ out ]
+  in
+  p "byte Mod over folded constants agrees with the renderer" (Ll_test.same got [ [| 0. |] ]);
+  let n = 4 in
+  let leg ~label ~tag ~producer_prec ~producer ~inputs ~k ~want =
+    let fresh ?(prec = byte) suffix =
+      Int.incr next_id;
+      Tn.create (Tn.Specified prec) ~id:!next_id
+        ~label:[ "realv_" ^ tag ^ "_" ^ suffix ]
+        ~unpadded_dims:(lazy [| n |])
+        ~padding:(lazy None)
+        ()
+    in
+    let s = fresh ~prec:producer_prec "s" and t = fresh "t" in
+    let kn = node ~prec:byte ("realv_" ^ tag ^ "_k") in
+    let ins =
+      List.map inputs ~f:(fun (prec, suffix, values) -> (fresh ~prec suffix, prec, values))
+    in
+    List.iter ins ~f:(fun (tn, _, _) -> Ll_test.materialize tn);
+    Ll_test.materialize t;
+    let i = Ll_test.sym () in
+    let at_i = [| Idx.Iterator i |] in
+    let reads = List.map ins ~f:(fun (tn, prec, _) -> (LL.Get (tn, at_i), prec)) in
+    let llc =
+      Ll_test.loop_n i n
+        (LL.Seq
+           ( Ll_test.set s at_i (producer reads),
+             Ll_test.set t at_i
+               (LL.Binop (Ops.Mul, (LL.Get (s, at_i), producer_prec), read kn byte)) ))
+    in
+    let seed = (kn, [| k |]) :: List.map ins ~f:(fun (tn, _, values) -> (tn, values)) in
+    let materialized = t :: kn :: List.map ins ~f:(fun (tn, _, _) -> tn) in
+    let run ~name ~materialized =
+      let o = Ll_test.optimize ~materialized ~name llc in
+      (o, Ll_test.execute ~name o ~seed ~read:[ t ])
+    in
+    let inlined_o, inlined = run ~name:("optbl_realv_" ^ tag ^ "_inl") ~materialized in
+    let _, materialized_run =
+      run ~name:("optbl_realv_" ^ tag ^ "_mat") ~materialized:(s :: materialized)
+    in
+    p (label ^ ": the producer was virtualized") (Ll_test.known_virtual inlined_o s);
+    p
+      (label ^ ": the materialized run gives the worked value")
+      (Ll_test.same materialized_run [ want ]);
+    p
+      (label ^ ": the virtualized run agrees with the materialized one")
+      (Ll_test.same inlined [ want ])
+  in
+  leg ~label:"float sum under a byte product" ~tag:"sum" ~producer_prec:Ops.single
+    ~producer:(function [ x; y ] -> LL.Binop (Ops.Add, x, y) | _ -> assert false)
+    ~inputs:
+      [
+        (Ops.single, "x", [| 0.5; 1.5; 2.25; 3.5 |]); (Ops.single, "y", [| 0.75; 0.75; 0.5; 0.25 |]);
+      ]
+    ~k:4. ~want:[| 4.; 8.; 8.; 12. |];
+  leg ~label:"byte root under a byte product" ~tag:"root" ~producer_prec:byte
+    ~producer:(function [ a ] -> LL.Unop (Ops.Sqrt, a) | _ -> assert false)
+    ~inputs:[ (byte, "a", [| 8.; 15.; 3.; 24. |]) ]
+    ~k:3. ~want:[| 6.; 9.; 3.; 12. |]
 
 (* gh-ocannl-1768: what the parameter guards cover in the two tables they guard. An entry the guard
    cannot read is either not a function -- a macro, a type, a constant, which have no parameter

@@ -1,6 +1,7 @@
 no in-domain arm renders and then fails the backend's compiler: true
 every failing routine's failure is pinned to one arm: true
 every refused arm is one the C reference refuses too: true
+every plain conversion out of uint4x32 is refused, with the shared message: true
 every storage precision the backend holds compiled at least one arm: true
 at each precision, the explicit-SIMD rendering takes every vector arm or none: true
 some precision's vector arms take the explicit-SIMD rendering: true
@@ -15,5 +16,19 @@ byte math over an integer operand keeps its float result until the store: true
 byte Min compares float-valued operands as floats: true
 byte Min of a float and a NaN intermediate is the float, as fmin's is: true
 byte Trunc truncates a float-valued operand: true
+byte Mod converts a float-valued operand at the operand: true
+byte Min of a float and an integer compares in float: true
+byte Recip divides in float: true
+byte math over math stays float until the store: true
+byte Where with a float-valued arm selects in float: true
+byte Not of a float-valued operand is an integer truth: true
+int32 conversion of a float truncates toward zero: true
+byte Mod over folded constants agrees with the renderer: true
+float sum under a byte product: the producer was virtualized: true
+float sum under a byte product: the materialized run gives the worked value: true
+float sum under a byte product: the virtualized run agrees with the materialized one: true
+byte root under a byte product: the producer was virtualized: true
+byte root under a byte product: the materialized run gives the worked value: true
+byte root under a byte product: the virtualized run agrees with the materialized one: true
 every function of the cc and Metal tables is guarded or named as skipped: true
 every function named as skipped is one the guards skip: true

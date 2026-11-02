@@ -557,6 +557,17 @@ val speculable_select : cond:scalar_t -> arms:scalar_arg list -> bool
     whose [blends_value_selects] fact holds it charges an admitted select's arms by their union
     (gh-ocannl-1775). *)
 
+val float_valued : scalar_t -> bool
+(** gh-ocannl-1785: whether the expression, evaluated at an INTEGER compute precision, is
+    float-valued -- the one reading of {!Ops.unop_integer_valuation} and its siblings over an
+    expression tree. A real-valued operator is; an operator that follows its operands is when one of
+    its value operands is; a projection is its selected operand; everything else (a leaf, a
+    [Local_scope] read, a truth value, [Mod], the heterogeneous and refused operators) is not.
+    [C_syntax] renders by it -- computing a float-valued subexpression in float and converting it
+    once, at the store or scope holding it or at a [Mod] operand -- and the simplifier keeps the
+    scope boundaries and folds that conversion depends on. Meaningless at a float precision, where
+    every value is a float. *)
+
 val mentions_rng_conversion : scalar_t -> bool
 (** Whether an RNG lane conversion occurs anywhere in the expression (not inside a [Local_scope]).
     Such a conversion picks its result type and the random bits it consumes from the precision it
