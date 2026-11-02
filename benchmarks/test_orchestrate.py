@@ -3507,6 +3507,24 @@ class FixtureDigestTest(unittest.TestCase):
             self.assertEqual(refused.exception.code, 2, f"{what}: {err.getvalue()}")
         self.assertEqual(self.names_cli(digests, "gpt2_mini")[0], 0, "control: the name exists")
 
+    def test_unexpected_error_exits_2_not_the_verdict_1(self):
+        # gh-ocannl-1797: 1 is a verdict ("not recorded"), so a crash must not exit with Python's
+        # default 1. The control: the same command, unpatched, still exits with its verdict.
+        digests = self.dir / fixture_digest.DIGEST_FILE
+        fixture_digest.record(digests, [self.fixture("gpt2_mini.safetensors")], "m4-max")
+        argv = ["--check-names", "gpt2_mini", "--digests", str(digests),
+                "--workloads-dir", str(self.dir / "no-workloads")]
+        with unittest.mock.patch.object(fixture_digest, "read_digests",
+                                        side_effect=RuntimeError("injected")):
+            with contextlib.redirect_stderr(io.StringIO()) as err, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                code = fixture_digest.cli(argv)
+        self.assertEqual(code, 2, err.getvalue())
+        self.assertIn("RuntimeError: injected", err.getvalue())
+        self.assertIn("not a verdict", err.getvalue())
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(fixture_digest.cli(argv), 0, "control: the unpatched run is a verdict")
+
     def record_matching_cli(self, digests, *fixtures, origin):
         """`--record-matching` as `origin`: (exit status or SystemExit message, stdout)."""
         argv = ["--record-matching", *map(str, fixtures), "--digests", str(digests)]
