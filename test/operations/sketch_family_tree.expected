@@ -787,7 +787,7 @@ gpu outer contraction: a contracting leaf's fragment is charged its block, writt
 gpu outer contraction: regime witnessed: unstaged whole-K under the outer loop: a fragment: true
   staged, one k block, outer loop: a fragment      6 applied leaves
 gpu outer contraction: regime witnessed: staged, one k block, outer loop: a fragment: true
-== gpu outer contraction pick audit: 16 leaves scored exhaustively; the walk scores 4 (6 fathomed), the floor-only walk 16 ==
+== gpu outer contraction pick audit: 16 leaves scored exhaustively; the walk scores 3 (3 fathomed), the floor-only walk 3 ==
 gpu outer contraction pick audit: the walk's pick is the exhaustive first argmin: true
 gpu outer contraction pick audit: the raised bound scores no more leaves than the floor alone: true
 == cpu awkward 20^3: certain-traffic increments over 5 leaf paths ==

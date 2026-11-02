@@ -2251,25 +2251,93 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
            ^ Tn.debug_name source
            ^ ": their threads would race on the shared tile; restructure the schedule so the \
               workgroup loops enclose the staging point (or reuse them as tile loops)"));
-    (* Restrict redundant cooperative loading along in-scope workgroup axes that do not participate
-       in this tile: one representative thread ([w == 0]) loads for all. *)
+    (* In-scope workgroup axes that do not participate in this tile would load redundantly. Each one
+       is folded into a serial copy loop of its own (gh-ocannl-1661), the [Divide_inner] /
+       [Drop_inner] partition of the lane-aware mode above with the axis's own threads as the lanes:
+       [s := w * s + t] over [e / w] steps when the axis extent [w] divides the loop's extent [e]
+       (the innermost such loop, so consecutive threads touch consecutive minor-axis elements), else
+       [s := t] under [t < e] when [e <= w] (the longest such loop). Only an axis no remaining loop
+       admits keeps the representative-thread discipline: one thread ([t == 0]) loads for all. The
+       restriction it replaces serialized the whole copy onto one row of threads, whose few loads in
+       flight bound deep-K staged tiles (gh-ocannl-1661: 1.9x at gpt2_mini's outproj on CUDA). The
+       lane-aware mode keeps the restriction: its lane loop already partitions the copy. *)
+    let restrict t body =
+      If
+        {
+          cond =
+            ( Binop (Ops.Cmpeq, (Embed_index (Indexing.Iterator t), iprec), (Constant 0., iprec)),
+              iprec );
+          body;
+        }
+    in
+    (* [fold_copy_loop ~s' ~f nest] replaces the copy loop [s'] of [nest] by [f] of its body. *)
+    let rec fold_copy_loop ~s' ~f = function
+      | For_loop { index; body; _ } when Indexing.equal_symbol index s' -> f body
+      | For_loop fl -> For_loop { fl with body = fold_copy_loop ~s' ~f fl.body }
+      | If { cond; body } -> If { cond; body = fold_copy_loop ~s' ~f body }
+      | stmt -> stmt
+    in
     let load_nest =
       if not shared then load_nest
       else
+        let unfolded =
+          ref
+            (if Option.is_some cooperative then []
+             else List.map fresh ~f:(fun (s, s') -> (s', extent s)))
+        in
         List.fold in_scope ~init:load_nest ~f:(fun body fl ->
             match fl.axis with
             | (Workgroup | Workgroup_reduce)
-              when not (List.mem reused fl.index ~equal:Indexing.equal_symbol) ->
-                If
-                  {
-                    cond =
-                      ( Binop
-                          ( Ops.Cmpeq,
-                            (Embed_index (Indexing.Iterator fl.index), iprec),
-                            (Constant 0., iprec) ),
-                        iprec );
-                    body;
-                  }
+              when not (List.mem reused fl.index ~equal:Indexing.equal_symbol) -> (
+                let t = fl.index and w = fl.to_ - fl.from_ + 1 in
+                let divide = List.filter !unfolded ~f:(fun (_, e) -> e % w = 0) |> List.last in
+                let drop =
+                  List.filter !unfolded ~f:(fun (_, e) -> e <= w)
+                  |> List.max_elt ~compare:(fun (_, e1) (_, e2) -> Int.compare e1 e2)
+                in
+                let take s' =
+                  unfolded :=
+                    List.filter !unfolded ~f:(fun (s'', _) -> not (Indexing.equal_symbol s' s''))
+                in
+                match (fl.from_, divide, drop) with
+                | 0, Some (s', e), _ when w > 1 ->
+                    take s';
+                    fold_copy_loop ~s'
+                      ~f:(fun cbody ->
+                        For_loop
+                          {
+                            index = s';
+                            from_ = 0;
+                            to_ = (e / w) - 1;
+                            axis = Serial;
+                            body =
+                              map_code
+                                ~fidx:
+                                  (subst_axis_index ~sym:s'
+                                     ~by:{ terms = [ (w, s'); (1, t) ]; offset = 0 })
+                                cbody;
+                          })
+                      body
+                | 0, None, Some (s', e) when w > 1 ->
+                    take s';
+                    fold_copy_loop ~s'
+                      ~f:(fun cbody ->
+                        If
+                          {
+                            cond =
+                              ( Binop
+                                  ( Ops.Cmplt,
+                                    (Embed_index (Indexing.Iterator t), iprec),
+                                    (Constant (Float.of_int e), iprec) ),
+                                iprec );
+                            body =
+                              map_code
+                                ~fidx:
+                                  (subst_axis_index ~sym:s' ~by:{ terms = [ (1, t) ]; offset = 0 })
+                                cbody;
+                          })
+                      body
+                | _ -> restrict t body)
             | _ -> body)
     in
     (* The lane loop wraps the (possibly lane-restricted) load nest, including the [w == 0]

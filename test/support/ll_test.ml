@@ -1396,6 +1396,32 @@ let guards_and_barriers llc =
     ~on_exit:(function LL.For_loop _ -> stack := List.tl_exn !stack | _ -> ());
   (List.rev !guards, !barriers)
 
+(** [tile_store_partitions ~tiles llc]: per store into a node of [tiles], in preorder, the number of
+    [Workgroup] loops enclosing it and whether its index names every one of them -- a copy
+    partitioned across the block's threads (gh-ocannl-1661), where a thread pinned to a
+    representative value, or replicating the copy, leaves a workgroup symbol out of the index. *)
+let tile_store_partitions ~tiles llc =
+  let stack = ref [] and stores = ref [] in
+  let names s (idx : Idx.axis_index) =
+    match idx with
+    | Idx.Iterator s' -> Idx.equal_symbol s s'
+    | Idx.Affine { symbols; _ } -> List.exists symbols ~f:(fun (_, s') -> Idx.equal_symbol s s')
+    | Idx.Concat _ | Idx.Fixed_idx _ | Idx.Sub_axis -> false
+  in
+  walk llc
+    ~on_stmt:(function
+      | LL.For_loop { index; axis = LL.Workgroup | LL.Workgroup_reduce; _ } ->
+          stack := Some index :: !stack
+      | LL.For_loop _ -> stack := None :: !stack
+      | LL.Set { tn; idcs; _ } when Set.mem tiles tn ->
+          let wg = List.filter_opt !stack in
+          stores :=
+            (List.length wg, List.for_all wg ~f:(fun s -> Array.exists idcs ~f:(names s)))
+            :: !stores
+      | _ -> ())
+    ~on_exit:(function LL.For_loop _ -> stack := List.tl_exn !stack | _ -> ());
+  List.rev !stores
+
 (* A shuffle-capable C dialect with barriers and shared declarations at 32-lane simdgroups. *)
 module Gpu_like_config = struct
   include Ir.C_syntax.Pure_C_config (struct

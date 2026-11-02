@@ -6721,6 +6721,17 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name stage_copy_partition)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules stage_copy_partition)
+ (libraries base ocannl arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_ocannl)))
+
+(test
  (name schedule_smem_matmul)
  (package neural_nets_lib)
  (deps

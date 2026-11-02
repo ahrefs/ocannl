@@ -1,0 +1,14 @@
+divide: the serial twin has a nonzero cell: true
+divide: staged matmul matches the serial twin: true
+divide: no guard survives over the tile copies: true
+divide: every tile store is partitioned across both Workgroup loops: true
+drop: the serial twin has a nonzero cell: true
+drop: staged matmul matches the serial twin: true
+drop: exactly the two copies are guarded: true
+drop: each guard is the thread bound t < e: true
+drop: every tile store is partitioned across both Workgroup loops: true
+restrict: the serial twin has a nonzero cell: true
+restrict: staged matmul matches the serial twin: true
+restrict: exactly the two copies are guarded: true
+restrict: each guard is the representative t == 0: true
+restrict: every tile store sits under both Workgroup loops, indexed by one: true
