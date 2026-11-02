@@ -62,6 +62,7 @@ type scope =
           [Schedule_cache.codegen_tag] gates on *)
   | Cuda_hip  (** the CUDA and HIP backends' own tags *)
   | Cuda  (** the CUDA backend's own tag *)
+  | Hip  (** the HIP backend's own tag *)
 
 let in_scope scope backend =
   match scope with
@@ -70,6 +71,7 @@ let in_scope scope backend =
   | Gpu -> Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend)
   | Cuda_hip -> List.mem [ "cuda"; "hip" ] (String.lowercase backend) ~equal:String.equal
   | Cuda -> String.equal (String.lowercase backend) "cuda"
+  | Hip -> String.equal (String.lowercase backend) "hip"
 
 let scope_name = function
   | Every_backend -> "every backend"
@@ -77,6 +79,7 @@ let scope_name = function
   | Gpu -> "GPU backends"
   | Cuda_hip -> "CUDA and HIP"
   | Cuda -> "CUDA"
+  | Hip -> "HIP"
 
 (* How a flip reaches the reader. *)
 type resolver =
@@ -155,6 +158,7 @@ let keyed_flips =
     ("buffer_aliasing", config flag);
     ("gpu_graph_capture", config ~scope:Cuda_hip flag);
     ("cuda_fast_math", config ~scope:Cuda flag);
+    ("hip_fast_math", config ~scope:Hip flag);
     ("gpu_elide_covered_zeros", config ~scope:Gpu flag);
     ("gpu_default_seed_narrow_storage", config ~scope:Cuda_hip flag);
     ("autotune_timing", config [ "isolated"; "queued" ]);

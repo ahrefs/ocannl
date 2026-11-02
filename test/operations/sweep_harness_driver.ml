@@ -101,7 +101,7 @@ let () =
   in
   let hip_options =
     Ir.Compiler_options.hiprtc ~target_archs:[] ~hip_include_options:[] ~rocwmma_include_options:[]
-      ~uses_rocwmma:false ~with_debug:false ()
+      ~uses_rocwmma:false ~fast_math:true ~with_debug:false ()
     |> Ir.Compiler_options.render
   in
   (* The two slots [Cuda_backend] discovers at compile time (the CUDA_PATH include directory and

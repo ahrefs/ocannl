@@ -54,6 +54,7 @@ test/operations/concat_loop_symbols.expected [derived] beside test/operations/co
 test/operations/cost_model_floor.expected [derived] beside test/operations/cost_model_floor.ml; re-run by @test/operations/runtest-cost_model_floor
 test/operations/gpu_lane_reduction.expected [derived] beside test/operations/gpu_lane_reduction.ml; re-run by @test/operations/runtest-gpu_lane_reduction
 test/operations/gpu_serial_lanes.expected [derived] beside test/operations/gpu_serial_lanes.ml; re-run by @test/operations/runtest-gpu_serial_lanes
+test/operations/half_unary_math.expected [derived] beside test/operations/half_unary_math.ml; re-run by @test/operations/runtest-half_unary_math
 test/operations/ll_printer_constants.expected [derived] beside test/operations/ll_printer_constants.ml; re-run by @test/operations/runtest-ll_printer_constants
 test/operations/log_index_width_narrow.c.expected [c] extension .c.expected; markers c-decl-banner c-for c-logic-banner c-prec-cast c-restrict ll-assign routine-log; re-run by @test/operations/runtest-log_index_width_narrow
 test/operations/log_index_width_wide.c.expected [c] extension .c.expected; markers c-decl-banner c-for c-logic-banner c-prec-cast c-restrict ll-assign routine-log; re-run by @test/operations/runtest-log_index_width_wide
@@ -112,7 +113,7 @@ test/operations/accum_width.ml [run by @test/operations/runtest-accum_width]
     "= " ^ ... ^ "v"
     "Vectorized reduction rendering"
     ... ^ "(bfloat16_to_single("
-test/operations/branchless_select.ml [run by @test/operations/runtest-branchless_select; also pins text this scan cannot name: computed fragment, untraced callback, forwarded parameter, opaque aggregate component, unsupplied application, mutation or unseen buffer write]
+test/operations/branchless_select.ml [run by @test/operations/runtest-branchless_select, @test/operations/runtest-branchless_select-no_hip_fast_math; also pins text this scan cannot name: computed fragment, untraced callback, forwarded parameter, opaque aggregate component, unsupplied application, mutation or unseen buffer write]
     ") != 0.0 ? ("
     "bs_gather_guard"
     "bs_index_guard"
@@ -195,8 +196,7 @@ test/operations/half_float_power.ml [run by @test/operations/runtest-half_float_
     "hexp2("
     "ocannl_powi_"
     "pow("
-test/operations/half_unary_math.ml [run by @test/operations/runtest-half_unary_math]
-    "(half)" ^ ... ^ "((float)("
+test/operations/half_unary_math.ml [run by @test/operations/runtest-half_unary_math, @test/operations/runtest-half_unary_math-reproducible; also pins text this scan cannot name: untraced callback]
 test/operations/hardware_axes_parity.ml [run by @test/operations/runtest-hardware_axes_parity]
     " = 0;"
     " = 7;"
@@ -570,6 +570,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/einsum/runtest-test_cse-cse_d_fwd
 @test/operations/runtest-accum_width
 @test/operations/runtest-branchless_select
+@test/operations/runtest-branchless_select-no_hip_fast_math
 @test/operations/runtest-build_file_descriptors
 @test/operations/runtest-cache_key_agreement
 @test/operations/runtest-canonical_render
@@ -608,6 +609,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-grid_launch_floor
 @test/operations/runtest-half_float_power
 @test/operations/runtest-half_unary_math
+@test/operations/runtest-half_unary_math-reproducible
 @test/operations/runtest-hardware_axes_parity
 @test/operations/runtest-hardware_warp_shuffle
 @test/operations/runtest-hardware_workgroup_reduce
@@ -728,7 +730,7 @@ test/operations/autotune_timing_modes.ml [through Ll_test.link; run by @test/ope
 test/operations/back_to_back_runs.ml [prelowered compile; run by @test/operations/runtest-back_to_back_runs]
 test/operations/bench_self_test.ml [through Bench_harness.run_self_test; through Bench_harness.time_shipped_segments; run by @test/operations/runtest-bench_self_test]
 test/operations/bf16_subnormal_storage.ml [through Ll_test.execute; run by @test/operations/runtest-bf16_subnormal_storage, @test/operations/runtest-bf16_subnormal_storage-reproducible]
-test/operations/branchless_select.ml [through Ll_test.optimize_and_execute; run by @test/operations/runtest-branchless_select]
+test/operations/branchless_select.ml [through Ll_test.optimize_and_execute; run by @test/operations/runtest-branchless_select, @test/operations/runtest-branchless_select-no_hip_fast_math]
 test/operations/canonical_render.ml [staged callback; run by @test/operations/runtest-canonical_render]
 test/operations/capture_pass_side_effects.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-capture_pass_side_effects]
 test/operations/cc_kernel_outline.ml [through Ll_test.execute; run by @test/operations/runtest-cc_kernel_outline]
@@ -740,7 +742,7 @@ test/operations/cost_model_template.ml [through Ll_test.execute; through Ll_test
 test/operations/cpu_fork_join_chains.ml [prelowered compile; through Ll_test.execute; run by @test/operations/runtest-cpu_fork_join_chains]
 test/operations/cuda_launch_reservation.ml [through Ll_test.execute; through Ll_test.link; run by @test/operations/runtest-cuda_launch_reservation]
 test/operations/default_prefill.ml [through Ll_test.link; run by @test/operations/runtest-default_prefill]
-test/operations/division_special_values.ml [through Ll_test.execute; run by @test/operations/runtest-division_special_values]
+test/operations/division_special_values.ml [through Ll_test.execute; run by @test/operations/runtest-division_special_values, @test/operations/runtest-division_special_values-reproducible]
 test/operations/dynamic_axis_coverage.ml [through Ll_test.execute; run by @test/operations/runtest-dynamic_axis_coverage]
 test/operations/fixed_name_temporaries.ml [through Ll_test.execute; through Ll_test.execute_with_census; through Ll_test.run_routine; run by @test/operations/runtest-fixed_name_temporaries-logged, @test/operations/runtest-fixed_name_temporaries-plain]
 test/operations/float_literal_forms.ml [through Ll_test.execute; run by @test/operations/runtest-float_literal_forms]
@@ -753,7 +755,7 @@ test/operations/gpu_parallel_prefix.ml [through Ll_test.execute; run by @test/op
 test/operations/gpu_serial_lanes.ml [prelowered compile; through Ll_test.execute; run by @test/operations/runtest-gpu_serial_lanes]
 test/operations/gpu_small_leading_axis.ml [through Ll_test.execute; run by @test/operations/runtest-gpu_small_leading_axis]
 test/operations/half_float_power.ml [through Ll_test.execute; run by @test/operations/runtest-half_float_power]
-test/operations/half_unary_math.ml [through Ll_test.execute; run by @test/operations/runtest-half_unary_math]
+test/operations/half_unary_math.ml [through Ll_test.execute; run by @test/operations/runtest-half_unary_math, @test/operations/runtest-half_unary_math-reproducible]
 test/operations/hardware_warp_shuffle.ml [prelowered compile; through Ll_test.execute; run by @test/operations/runtest-hardware_warp_shuffle]
 test/operations/heap_local_arrays.ml [through Ll_test.execute; run by @test/operations/runtest-heap_local_arrays]
 test/operations/hip_half_load.ml [through Ll_test.link; run by @test/operations/runtest-hip_half_load]
@@ -822,6 +824,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-bf16_subnormal_storage
 @test/operations/runtest-bf16_subnormal_storage-reproducible
 @test/operations/runtest-branchless_select
+@test/operations/runtest-branchless_select-no_hip_fast_math
 @test/operations/runtest-canonical_render
 @test/operations/runtest-capture_pass_side_effects
 @test/operations/runtest-cc_kernel_outline
@@ -847,6 +850,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-cuda_launch_reservation
 @test/operations/runtest-default_prefill
 @test/operations/runtest-division_special_values
+@test/operations/runtest-division_special_values-reproducible
 @test/operations/runtest-dynamic_axis_coverage
 @test/operations/runtest-fixed_name_temporaries-logged
 @test/operations/runtest-fixed_name_temporaries-plain
@@ -861,6 +865,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-gpu_small_leading_axis
 @test/operations/runtest-half_float_power
 @test/operations/runtest-half_unary_math
+@test/operations/runtest-half_unary_math-reproducible
 @test/operations/runtest-hardware_warp_shuffle
 @test/operations/runtest-heap_local_arrays
 @test/operations/runtest-hip_half_load

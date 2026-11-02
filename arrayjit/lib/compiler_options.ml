@@ -41,13 +41,39 @@ let hip_target_options ~target_archs =
   then [ "-Xclang"; "-target-feature"; "-Xclang"; "-real-true16" ]
   else []
 
-let hiprtc ~target_archs ~hip_include_options ~rocwmma_include_options ~uses_rocwmma ~with_debug
-    ?(with_line_info = false) () =
+(* gh-ocannl-1779: the math switches, by the [hip_fast_math] key -- the HIP counterpart of
+   [nvrtc_math_options]. On (the default, [performance] and [approximate]), the umbrella with its
+   overrides, as above. Off (what [profile=reproducible] sets), no umbrella and the IEEE switches
+   spelled out, so a hiprtc default cannot move one. Contraction is the one that matters most:
+   [-ffp-contract=fast] is what loses the low part of ROCm's extended-precision f64 [pow] (204-206
+   ulps, gh-ocannl-1730). Measured on gfx1151 for gh-ocannl-1779 with [unary_math_special_values]:
+   this vector, and this vector without [-ffp-contract=off] (hiprtc's own default), hold f64 [pow]
+   to 2 ulps; with [-ffp-contract=fast] in its place, [pow(2^-1000, 1)] is 204 ulps off again and
+   f32 functions leave their stated ulps. hipcc's driver defaults to fast-honor-pragmas, so the
+   default is not one to rely on: [-ffp-contract=off] is the counterpart of the [reproducible]
+   payload's [cc_backend_fp_contract=off] and of nvrtc's [--fmad=false]. [-fno-associative-math] is
+   clang's default without the umbrella; it stays spelled so the gh-ocannl-735 reduction-order guard
+   is a member of both vectors. The off state is "clang's IEEE semantics, contraction off", not
+   strict arithmetic in every respect: explicit intrinsics the codegen asks for ([__builtin_fma],
+   the [Builtins_hip] wrappers, which are IEEE under either state) stay what they are. *)
+let hip_math_options ~fast_math =
+  if fast_math then clang_fast_math_options ~reassociate:false
+  else
+    [
+      "-ffp-contract=off";
+      "-fno-associative-math";
+      "-fhip-fp32-correctly-rounded-divide-sqrt";
+      "-fno-gpu-flush-denormals-to-zero";
+      "-fno-gpu-approx-transcendentals";
+    ]
+
+let hiprtc ~target_archs ~hip_include_options ~rocwmma_include_options ~uses_rocwmma ~fast_math
+    ~with_debug ?(with_line_info = false) () =
   hip_include_options
   @ (if uses_rocwmma then rocwmma_include_options @ [ "-std=c++17" ] else [])
   (* These are compiler options rather than kernel-body pragmas so they also govern the bf16 and f16
      operators while the HIP headers are parsed. *)
-  @ clang_fast_math_options ~reassociate:false
+  @ hip_math_options ~fast_math
   @ hip_target_options ~target_archs
   @ if with_debug then [ "-g" ] else if with_line_info then [ "-gline-tables-only" ] else []
 

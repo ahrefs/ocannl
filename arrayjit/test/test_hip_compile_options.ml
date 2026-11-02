@@ -8,9 +8,9 @@
 
 open Base
 
-let build ~uses_rocwmma ~with_debug =
+let build ?(fast_math = true) ~uses_rocwmma ~with_debug () =
   Ir.Compiler_options.hiprtc ~target_archs:[] ~hip_include_options:[ "-Ihip" ]
-    ~rocwmma_include_options:[ "-Irocwmma" ] ~uses_rocwmma ~with_debug ()
+    ~rocwmma_include_options:[ "-Irocwmma" ] ~uses_rocwmma ~fast_math ~with_debug ()
 
 let () =
   let cases =
@@ -47,11 +47,11 @@ let () =
      that fails exits nonzero, which is exactly when dune discards the redirected stdout. *)
   List.iter cases ~f:(fun (uses_rocwmma, with_debug, want) ->
       Stdio.eprintf "rocwmma=%b debug=%b:\n  got:  %s\n  want: %s\n" uses_rocwmma with_debug
-        (Ir.Compiler_options.render (build ~uses_rocwmma ~with_debug))
+        (Ir.Compiler_options.render (build ~uses_rocwmma ~with_debug ()))
         (Ir.Compiler_options.render want));
   Verdict.p_all "every HIPRTC variant keeps both fast-math overrides, in order, after the umbrella"
     cases ~f:(fun (uses_rocwmma, with_debug, want) ->
-      List.equal String.equal (build ~uses_rocwmma ~with_debug) want);
+      List.equal String.equal (build ~uses_rocwmma ~with_debug ()) want);
   let affected =
     [ [ "gfx1102" ]; [ "gfx1102:xnack-" ]; [ "gfx1151"; "gfx1102" ]; [ "gfx1102"; "gfx1100" ] ]
   in
@@ -69,7 +69,7 @@ let () =
     ~f:(fun (uses_rocwmma, with_debug, _) ->
       let options =
         Ir.Compiler_options.hiprtc ~target_archs:[ "gfx1102" ] ~hip_include_options:[ "-Ihip" ]
-          ~rocwmma_include_options:[ "-Irocwmma" ] ~uses_rocwmma ~with_debug ()
+          ~rocwmma_include_options:[ "-Irocwmma" ] ~uses_rocwmma ~fast_math:true ~with_debug ()
       in
       List.mem options "-real-true16" ~equal:String.equal);
   (* gh-ocannl-1222: HIPRTC 9.0's [-amdgpu-waitcnt-forcezero] (and its load-only sibling) puts a
@@ -79,5 +79,47 @@ let () =
     (List.concat_map (affected @ unaffected) ~f:(fun target_archs ->
          List.map cases ~f:(fun (uses_rocwmma, with_debug, _) ->
              Ir.Compiler_options.hiprtc ~target_archs ~hip_include_options:[ "-Ihip" ]
-               ~rocwmma_include_options:[ "-Irocwmma" ] ~uses_rocwmma ~with_debug ())))
+               ~rocwmma_include_options:[ "-Irocwmma" ] ~uses_rocwmma ~fast_math:true ~with_debug ())))
     ~f:(List.exists ~f:(String.is_prefix ~prefix:"-amdgpu-waitcnt-"))
+
+(* gh-ocannl-1779: the precise policy ([hip_fast_math] off, as [profile=reproducible] sets it): no
+   umbrella, and clang's IEEE switches spelled out with contraction off -- HIP clang's default is
+   [-ffp-contract=fast-honor-pragmas], so dropping the umbrella alone would still contract. *)
+let precise =
+  [
+    "-ffp-contract=off";
+    "-fno-associative-math";
+    "-fhip-fp32-correctly-rounded-divide-sqrt";
+    "-fno-gpu-flush-denormals-to-zero";
+    "-fno-gpu-approx-transcendentals";
+  ]
+
+let () =
+  let cases =
+    [
+      (false, false, [ "-Ihip" ] @ precise);
+      (false, true, [ "-Ihip" ] @ precise @ [ "-g" ]);
+      (true, false, [ "-Ihip"; "-Irocwmma"; "-std=c++17" ] @ precise);
+      (true, true, [ "-Ihip"; "-Irocwmma"; "-std=c++17" ] @ precise @ [ "-g" ]);
+    ]
+  in
+  List.iter cases ~f:(fun (uses_rocwmma, with_debug, want) ->
+      Stdio.eprintf "precise rocwmma=%b debug=%b:\n  got:  %s\n  want: %s\n" uses_rocwmma with_debug
+        (Ir.Compiler_options.render (build ~fast_math:false ~uses_rocwmma ~with_debug ()))
+        (Ir.Compiler_options.render want));
+  Verdict.p_all
+    "every precise HIPRTC variant drops the fast-math umbrella and spells the IEEE switches, \
+     contraction off"
+    cases ~f:(fun (uses_rocwmma, with_debug, want) ->
+      List.equal String.equal (build ~fast_math:false ~uses_rocwmma ~with_debug ()) want);
+  Verdict.p_all ~min:2 "the fast-math umbrella is in the HIPRTC vector exactly when fast math is on"
+    [ true; false ] ~f:(fun fast_math ->
+      Bool.equal fast_math
+        (List.mem
+           (build ~fast_math ~uses_rocwmma:false ~with_debug:false ())
+           "-ffast-math" ~equal:String.equal));
+  Verdict.p_all ~min:2 "both HIPRTC math policies keep the reduction-order guard (gh-ocannl-735)"
+    [ true; false ] ~f:(fun fast_math ->
+      List.mem
+        (Ir.Compiler_options.hip_math_options ~fast_math)
+        "-fno-associative-math" ~equal:String.equal)

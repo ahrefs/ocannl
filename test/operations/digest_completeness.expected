@@ -75,8 +75,9 @@ keyed: codegen -- a codegen knob whose effect is not a property of the lowered c
   output_debug_files_in_build_directory [read at codegen]
   prefer_backend_uniformity [read at codegen]
 
-keyed: codegen -- a CUDA compile knob (gh-ocannl-1710): it picks nvrtc's math switches and the f32 tanh spelling when a kernel is rendered and compiled, after the lowered code the digest names; the CUDA tag carries the precise regime as a component derived from those switches
+keyed: codegen -- a GPU compile knob (gh-ocannl-1710, gh-ocannl-1779): it picks nvrtc's or hiprtc's math switches -- and on CUDA the f32 tanh and half function spellings -- when a kernel is rendered and compiled, after the lowered code the digest names; the backend's tag carries the precise regime as a component derived from those switches
   cuda_fast_math [read at codegen]
+  hip_fast_math [read at codegen]
 
 keyed: codegen -- it changes the emitted code or the mechanics a search measures in, without being a property of the lowered code: an aliasing candidate's kernel parameter drops its [restrict] qualifier (the liveness planner may overlap its bytes, gh-ocannl-489), and GPU graph capture fires only for multi-segment routines, so it moves a fissioned candidate's launch overhead relative to a whole-routine one
   buffer_aliasing [read at codegen]

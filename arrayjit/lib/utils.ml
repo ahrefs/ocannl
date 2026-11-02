@@ -129,6 +129,7 @@ let known_config_keys =
       "cuda_compile_programs";
       "cuda_compile_program_min_kernels";
       "cuda_fast_math";
+      "hip_fast_math";
       "cc_kernel_cache_mib";
       "cc_kernel_part_weight";
       "cc_compile_jobs";
@@ -389,10 +390,11 @@ let config_key_classification : (config_key_class * string * string list) list =
         "prefer_backend_uniformity";
       ] );
     ( Keyed "codegen",
-      "a CUDA compile knob (gh-ocannl-1710): it picks nvrtc's math switches and the f32 tanh \
-       spelling when a kernel is rendered and compiled, after the lowered code the digest names; \
-       the CUDA tag carries the precise regime as a component derived from those switches",
-      [ "cuda_fast_math" ] );
+      "a GPU compile knob (gh-ocannl-1710, gh-ocannl-1779): it picks nvrtc's or hiprtc's math \
+       switches -- and on CUDA the f32 tanh and half function spellings -- when a kernel is \
+       rendered and compiled, after the lowered code the digest names; the backend's tag carries \
+       the precise regime as a component derived from those switches",
+      [ "cuda_fast_math"; "hip_fast_math" ] );
     ( Keyed "codegen",
       "it changes the emitted code or the mechanics a search measures in, without being a property \
        of the lowered code: an aliasing candidate's kernel parameter drops its [restrict] \
@@ -1538,8 +1540,17 @@ cc_backend_fast_math=false
 # whose --fmad=true leaves a*b+c contraction to each target's JIT. nvrtc instead gets
 # --ftz=false --prec-div=true --prec-sqrt=true --fmad=false, and the f32 tanh is the
 # library's. Unlike the cc pins this is not CUDA's default, so under this profile CUDA
-# computes different (more precise) math than under the default one.
+# computes different (more precise) math than under the default one. That includes the half
+# functions (hexp, hsin, hrcp, htanh_approx, ...), hardware approximations whatever nvrtc's
+# switches say: they render as the precise f32 function of the widened operand, narrowed once
+# (gh-ocannl-1779).
 cuda_fast_math=false
+# HIP's counterpart (gh-ocannl-1779): no -ffast-math, whose finite-math, reciprocal and
+# approximate-function licences rewrite divisions, square roots and NaN tests, and whose
+# -ffp-contract=fast loses the low part of ROCm's extended-precision f64 pow (204-206 ulps).
+# hiprtc instead gets -ffp-contract=off and clang's IEEE switches spelled out. Not HIP's
+# default either: under this profile HIP too computes different (more precise) math.
+hip_fast_math=false
 # Explicit SIMD rendering reassociates strict-FP reductions into per-lane accumulator chains,
 # so the summation order would follow the probed vector width. 0 keeps the serial order.
 cc_vector_bytes=0
@@ -1547,7 +1558,7 @@ cc_vector_bytes=0
 # The numerics gates at their exact defaults, so that a profile switch never silently changes
 # what math is being done (they are the orthogonal axis; see the issue). fp16_arithmetic=auto
 # resolves deterministically per backend (gh-ocannl-680), so pinning the default keeps the
-# principle: apart from CUDA's fast math above, this profile changes no math, and same-machine
+# principle: apart from the GPU fast-math keys above, this profile changes no math, and same-machine
 # runs stay reproducible.
 # bf16_arithmetic=auto likewise (gh-ocannl-838).
 tf32_matmuls=false
@@ -1667,6 +1678,12 @@ tune_inline_flips=2
 # its result; a sunk one (a bias gradient) keeps its summation order but rounds to storage once
 # instead of after every step.
 gpu_default_seed_narrow_storage=true
+# The GPU compilers' fast math (gh-ocannl-1710, gh-ocannl-1779), stated at the value it already
+# defaults to: the `reproducible` profile turns both off, and stating them here makes an explicit
+# `cuda_fast_math=false` or `hip_fast_math=false` beside this profile a departure the regime
+# report (`Utils.profile_payload_sources`) names, as for every other key of this payload.
+cuda_fast_math=true
+hip_fast_math=true
 |}
 
 (** The embedded profile payloads, by name. Each is literally a partial [ocannl_config] file: same

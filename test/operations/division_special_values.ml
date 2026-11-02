@@ -16,8 +16,9 @@
    builtins, which no fast-math flag reaches, so HIP's f64 is held to both claims.
 
    HIP's f32 and half division (and bfloat16, through f32) stay fast math's estimate, as CUDA's f32
-   is under [--use_fast_math]: a recorded boundary of the fast policy, not fixed here -- a
-   [hip_fast_math] key (gh-ocannl-1779) that drops the umbrella is what makes them IEEE. Measured on
+   is under [--use_fast_math]: a recorded boundary of the fast policy -- [hip_fast_math] off
+   (gh-ocannl-1779, what [profile=reproducible] sets) drops the umbrella and makes them IEEE, held
+   to both claims like every other precision (the [-reproducible] rule). Measured on
    gfx1151: quotients 1 ulp off ([3 / 3] is [1 - 2^-24], [1 / 0.75] [0x1.555554p+0]), a subnormal
    divisor's reciprocal overflowing to infinity, an f32 divisor from 2^126 up flushing its
    reciprocal to zero ([1 / FLT_MAX] is 0, [inf / FLT_MAX] NaN), half [+-0 / subnormal] NaN. Those
@@ -47,6 +48,7 @@ let is_metal = String.equal backend_name "metal"
 let is_cuda = String.equal backend_name "cuda"
 let is_hip = String.equal backend_name "hip"
 let cuda_fast_math = Ir.Cuda_like_config.cuda_fast_math ()
+let hip_fast_math = Ir.Cuda_like_config.hip_fast_math ()
 let f32 x = Int32.float_of_bits (Int32.bits_of_float x)
 let f16 x = Ops.half_to_single (Ops.single_to_half (f32 x))
 let specials = [ -0.; 0.; Float.infinity; Float.neg_infinity; Float.nan ]
@@ -175,9 +177,10 @@ let decided_by_special c (_, x, y, _) =
   (is_special x || is_special y) && not (is_subnormal c x || is_subnormal c y)
 
 (* Whether this backend renders [c]'s division as a reciprocal estimate, [x * rcp(y)]: HIP's f32 and
-   half under [-ffast-math], and CUDA's f32 under [--use_fast_math] ([--prec-div=false]). *)
+   half under [-ffast-math] ([hip_fast_math]), and CUDA's f32 under [--use_fast_math]
+   ([--prec-div=false]). *)
 let estimates c =
-  (is_hip && not (Ops.equal_prec c.prec Ops.double))
+  (is_hip && hip_fast_math && not (Ops.equal_prec c.prec Ops.double))
   || (is_cuda && cuda_fast_math && Ops.equal_prec c.prec Ops.single)
 
 (* The pairs an estimate's contract covers: no subnormal operand or quotient, and for f32 a divisor
@@ -240,10 +243,11 @@ let () =
                   ~f:(within_estimate c)));
       (* The negative control, on the device: HIP's f32 division is still the reciprocal estimate
          its f64 division was, and the judgement of the first claim must reject some of its results
-         -- [+-inf / FLT_MAX] is NaN there. When [hip_fast_math] (gh-ocannl-1779) can turn the
-         estimate off, this leg opens only where it is on. *)
+         -- [+-inf / FLT_MAX] is NaN there. [hip_fast_math] off (gh-ocannl-1779) turns the estimate
+         off, so this leg opens only where it is on. *)
       let f32_case = List.nth_exn cases 1 and f32_results = List.nth_exn results 1 in
-      Verdict.in_leg ~leg:(Verdict.leg ~when_:is_hip ~on:backend_name ())
+      Verdict.in_leg
+        ~leg:(Verdict.leg ~when_:(is_hip && hip_fast_math) ~on:backend_name ())
         "negative control: HIP's f32 x / y under -ffast-math, a reciprocal estimate, departs from \
          C's quotient on some pair with a special operand, where the f32 claim above would fail it"
         (fun label ->

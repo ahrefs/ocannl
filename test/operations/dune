@@ -265,6 +265,9 @@
   (alias runtest-qkv_zero_init-approximate)
   (alias runtest-unary_math_special_values-reproducible)
   (alias runtest-bf16_subnormal_storage-reproducible)
+  (alias runtest-division_special_values-reproducible)
+  (alias runtest-half_unary_math-reproducible)
+  (alias runtest-branchless_select-no_hip_fast_math)
   (alias runtest-conv_merged_gpu_seeds-tf32)
   (alias runtest-tf32_reference_rounding-tf32)
   (alias runtest-bench_seed_parity_smoke-tf32)
@@ -5557,10 +5560,38 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
+ (locks branchless_select)
  (modules branchless_select)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1779: the same executable with HIP's fast math off (hip_fast_math=false, as the
+; reproducible profile sets it -- the key alone, since the profile's cc pins move the cc compiler's
+; select lowering, which the default run's census already covers): there HIP honors NaN, and its
+; NaN-condition selects are held to the select's semantics exactly (ahrefs/ocannl#1647's HIP
+; entries but bs_sat01_gate are fast math's). No other backend reads the key. The golden is the
+; default run's. Both runs share the build_files/branchless_select/ that
+; Generated.init empties, hence the shared lock.
+
+(rule
+ (target branchless_select-no_hip_fast_math.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (locks branchless_select)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:branchless_select.exe} --ocannl_hip_fast_math=false))))
+
+(rule
+ (alias runtest-branchless_select-no_hip_fast_math)
+ (package neural_nets_lib)
+ (action
+  (diff branchless_select.expected branchless_select-no_hip_fast_math.actual)))
 
 (test
  (name narrow_rng_nesting)
@@ -11778,7 +11809,8 @@
   (env_var OCANNL_BACKEND))
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
 
-; gh-ocannl-1288: Metal half unary math builtins are the f32 builtin narrowed once.
+; gh-ocannl-1288: Metal half unary math builtins are the f32 builtin narrowed once; CUDA's too under
+; cuda_fast_math=false (gh-ocannl-1779).
 
 (test
  (name half_unary_math)
@@ -11787,7 +11819,35 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
+ (locks half_unary_math)
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
+
+; gh-ocannl-1779: the same executable under the reproducible profile, which turns CUDA's fast math
+; off (cuda_fast_math=false): there CUDA's half functions render as the precise f32 function of
+; the widened operand, narrowed once, and both claims open on CUDA too. The golden differs from the
+; default run's in its regime line only. Both runs share the build_files/half_unary_math/ that
+; Generated.init empties, hence the shared lock.
+
+(rule
+ (target half_unary_math-reproducible.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (locks half_unary_math)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:half_unary_math.exe} --ocannl_profile=reproducible))))
+
+(rule
+ (alias runtest-half_unary_math-reproducible)
+ (package neural_nets_lib)
+ (action
+  (diff
+   half_unary_math-reproducible.expected
+   half_unary_math-reproducible.actual)))
 
 ; gh-ocannl-1782: every backend's f64, f32 and half division and reciprocal over +-0, +-inf, NaN,
 ; subnormal operands and overflowing and underflowing quotients, held to C's correctly rounded
@@ -11802,6 +11862,31 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (libraries base ocannl stdio arrayjit.verdict ll_test))
+
+; gh-ocannl-1779: the same executable under the reproducible profile, which turns HIP's fast math
+; off (hip_fast_math=false): there HIP's f32 and half division are IEEE, held to both claims, and
+; the negative control's leg is skipped. CUDA's f32 likewise (cuda_fast_math=false). The golden
+; is the default run's.
+
+(rule
+ (target division_special_values-reproducible.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:division_special_values.exe} --ocannl_profile=reproducible))))
+
+(rule
+ (alias runtest-division_special_values-reproducible)
+ (package neural_nets_lib)
+ (action
+  (diff
+   division_special_values.expected
+   division_special_values-reproducible.actual)))
 
 ; gh-ocannl-1336: every backend's f32, half and bfloat16 sin, cos, tanh, exp, log, exp2 and log2
 ; over the fast-math risk domains -- cc and HIP within the stated ulps, CUDA's fast intrinsics within
@@ -11819,8 +11904,9 @@
 
 ; gh-ocannl-1710: the same executable under the reproducible profile, which turns CUDA's fast math
 ; off (cuda_fast_math=false): there CUDA's f32 and bfloat16 functions are held to the stated ulps
-; with subnormals kept, as cc's and HIP's are. The golden differs from the default run's in its
-; regime line only; no other backend reads the key.
+; with subnormals kept, as cc's and HIP's are. gh-ocannl-1779: it turns HIP's off too
+; (hip_fast_math=false), and HIP's f64 pow is held to cc's and CUDA's 2 ulps. The golden differs
+; from the default run's in its regime lines only; no other backend reads the keys.
 
 (rule
  (target unary_math_special_values-reproducible.actual)

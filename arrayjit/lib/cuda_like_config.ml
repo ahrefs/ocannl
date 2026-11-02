@@ -6,6 +6,12 @@ open Base
     the rendering and the CUDA schedule-cache regime cannot disagree. *)
 let cuda_fast_math () = Utils.get_global_flag ~default:true ~arg_name:"cuda_fast_math"
 
+(** HIP's math policy (gh-ocannl-1779): whether hiprtc compiles with [-ffast-math]
+    ([Compiler_options.hip_math_options]). On by default; [profile=reproducible] turns it off. The
+    one reader of the key, so the compile and the HIP schedule-cache regime cannot disagree. Unlike
+    CUDA's, it changes no rendering: [Builtins_hip]'s wrappers are IEEE under either state. *)
+let hip_fast_math () = Utils.get_global_flag ~default:true ~arg_name:"hip_fast_math"
+
 module Cuda = struct
   let name = "CUDA"
   let backend_facts = Backend_intf.cuda_facts
@@ -24,6 +30,13 @@ module Cuda = struct
   (* [tanh.approx.f32], a hardware approximation, under fast math only: with [cuda_fast_math] off
      the f32 tanh is the library's, as it is on cc, HIP and Metal ([precise::tanh]). *)
   let tanh_approx () = if cuda_fast_math () then "__tanhf" else "tanhf"
+
+  (* gh-ocannl-1779: CUDA's half functions ([hexp], [hsin], [hsqrt], [hrcp], [htanh_approx], ...)
+     are hardware approximations ([ex2.approx], [sin.approx], [rcp.approx], [tanh.approx] in
+     cuda_fp16.hpp) whatever nvrtc's switches say, so under [cuda_fast_math] off they render as the
+     precise f32 function of the widened operand, narrowed once: the precise f32 result rounded to
+     half, not a correctly rounded half function. *)
+  let precise_half_functions () = not (cuda_fast_math ())
 
   (* Under [--use_fast_math] nvrtc lowers these to [__sinf]/[__cosf], which keep NaN for +-inf and
      NaN; their absolute-error contract and the large-argument loss are accepted (gh-ocannl-1336).
@@ -59,6 +72,10 @@ module Hip = struct
   let bf16_relu = ("__float2bfloat16(fmaxf(0.0f, __bfloat162float(", ")))")
   let tanh_approx () = "tanhf"
 
+  (* hip_fp16.h's half functions are ROCm's OCML f16 library functions ([__ocml_exp_f16], ...), and
+     [htanh_approx] is [Builtins_hip]'s f32 route already. *)
+  let precise_half_functions () = false
+
   (* [Builtins_hip]'s NaN-preserving wrappers: under [-ffast-math], ROCm's [sinf]/[cosf] return a
      finite value for +-inf (gh-ocannl-1336). *)
   let sin_f32 = "ocannl_sinf"
@@ -77,7 +94,7 @@ module Hip = struct
 
   (* gh-ocannl-1782: under [-ffast-math], f64 [/] is a reciprocal estimate, NaN for every [x / 0],
      [x / inf] and overflowing quotient; [Builtins_hip.ocannl_div_f64] is the IEEE quotient. It does
-     not depend on the umbrella, so a [hip_fast_math] key (gh-ocannl-1779) that drops [-ffast-math]
+     not depend on the umbrella, so [hip_fast_math] off (gh-ocannl-1779), which drops [-ffast-math],
      leaves it correct; only f32 and half division change with that key. *)
   let div_f64 = Some "ocannl_div_f64"
 
@@ -108,6 +125,10 @@ module Make (Dialect : sig
   val bf16_arithmetic_intrinsics : bool
   val bf16_relu : string * string
   val tanh_approx : unit -> string
+
+  (* Whether the half unary functions ([Exp] ... [Tanh_approx]) render as the f32 rendering of the
+     widened operand, narrowed once, rather than as the vendor's half functions. *)
+  val precise_half_functions : unit -> bool
 
   (* The f32 (and, widened, bfloat16) [sin]/[cos] functions. *)
   val sin_f32 : string
@@ -621,6 +642,10 @@ struct
           "))"
     | Satur01, Single_prec _ -> f "fmaxf(0.0f, fminf(1.0f, " "))"
     | Satur01, _ -> f "fmax(0.0, fmin(1.0, " "))"
+    | (Exp | Log | Exp2 | Log2 | Sin | Cos | Sqrt | Recip | Recip_sqrt | Tanh_approx), Half_prec _
+      when Dialect.precise_half_functions () ->
+        fun expr ->
+          f "__float2half(" ")" (unop_syntax Ops.single v (string "__half2float" ^^ parens expr))
     | Exp, Half_prec _ -> func "hexp"
     | Exp, Double_prec _ -> func "exp"
     | Exp, Bfloat16_prec _ -> bf16_func "expf"

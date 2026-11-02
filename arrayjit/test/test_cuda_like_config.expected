@@ -2,6 +2,8 @@ CUDA bfloat16 addition keeps its intrinsic: true
 HIP bfloat16 addition keeps its native operator: true
 CUDA approximate tanh is its intrinsic under fast math, and the library's without it: true
 HIP approximate tanh keeps its library function: true
+CUDA half unary functions are its intrinsics under fast math, and the precise f32 function of the widened operand narrowed once without it: true
+HIP half unary functions are ROCm's half functions under either hip_fast_math: true
 HIP f32 and bfloat16 sin and cos render through the NaN-preserving wrappers: true
 HIP's NaN-preserving sin and cos wrappers are defined in its builtins table: true
 HIP sqrt, rsqrt and fmod render through their wrappers: true
