@@ -559,12 +559,148 @@ let () =
   let below_got = Context.get_values below_ctx bh.Tensor.value in
   p_all2 "the below-threshold pick computes the host's values exactly" below_got bh_expected
     ~f:Float.equal;
+  (* --- A segment priced at its configured preset (gh-ocannl-1687) ---
+
+     A below-threshold chain (as above) of four segments: two independent products shaped like the
+     chain's first one, [qe = qa * qc] and [qh = qb * qd], each a segment some sketch of which
+     strictly beats both of its presets (the positive control); their pointwise sum [qs]; and a
+     tall, narrow product [qg = qf * qs]: 4096 rows of [qf] times the 64x64 [qs]. Under the search's
+     preset [qg]'s rows are a [Grid], so every one of 4096 blocks re-reads all of [qs] (16 KiB), a
+     64 MiB working set past the rule's 1 MiB capacity; under the configured one the nest is
+     unannotated, one block, and an iteration of its row loop -- one row of [qf] and all of [qs] --
+     fits, so [qs] is read once. The configured preset ships wherever a substitution leaves the
+     segment unsketched, so it is the price a sketch of the segment must beat; a reuse-tiled leaf
+     re-reads [qs] once per row tile and lies between the two, and none beats the configured preset.
+     Before gh-ocannl-1687 the segment's walk ran against the search's preset alone, and the
+     substitution carried a leaf of this segment that only tied its configured preset (3162 ms
+     each): a sketch shipped for no modeled gain, where a leaf between the two would have shipped a
+     pipeline worse than leaving the segment out. Two sketched products make the per-segment
+     substitution the pick: a whole-routine sketch tiles one site. The pick is checked against the
+     explanation's own rows: each entry of the picked substitution ranks strictly below the lower of
+     its segment's two presets. Every value is a dyadic below 2^24 eighth-units, so the values are
+     exact. *)
+  let qm = 64 and qk = 4096 and qn = 64 and qp = 4096 in
+  let qav = Array.init (qm * qk) ~f:(cyc ~dims:[| qm; qk |] ~modulus:3) in
+  let qcv = Array.init (qk * qn) ~f:(cyc ~dims:[| qk; qn |] ~modulus:5) in
+  let qbv = Array.init (qm * qk) ~f:(cyc ~dims:[| qm; qk |] ~modulus:5) in
+  let qdv = Array.init (qk * qn) ~f:(cyc ~dims:[| qk; qn |] ~modulus:3) in
+  let qfv = Array.init (qp * qm) ~f:(cyc ~dims:[| qp; qm |] ~modulus:3) in
+  let qg_expected =
+    let qe = host_mm qav qcv ~rows:qm ~inner:qk ~cols:qn in
+    let qh = host_mm qbv qdv ~rows:qm ~inner:qk ~cols:qn in
+    host_mm qfv (Array.mapi qe ~f:(fun i e -> e +. qh.(i))) ~rows:qp ~inner:qm ~cols:qn
+  in
+  let priced_comp, qg =
+    let mat ~label values ~o ~i =
+      TDSL.ndarray values ~label:[ label ] ~input_dims:[ i ] ~output_dims:[ o ] ()
+    in
+    let qa = mat ~label:"cp_a" qav ~o:qm ~i:qk and qc = mat ~label:"cp_c" qcv ~o:qk ~i:qn in
+    let qb = mat ~label:"cp_b" qbv ~o:qm ~i:qk and qd = mat ~label:"cp_d" qdv ~o:qk ~i:qn in
+    let qf = mat ~label:"cp_f" qfv ~o:qp ~i:qm in
+    let%op qe = qa * qc in
+    Train.set_materialized qe.Tensor.value;
+    let%op qh = qb * qd in
+    Train.set_materialized qh.Tensor.value;
+    let%op qs = qe + qh in
+    Train.set_materialized qs.Tensor.value;
+    let%op qg = qf * qs in
+    Train.set_materialized qg.Tensor.value;
+    (named "configured_price_chain" (Train.forward qg), qg)
+  in
+  Hashtbl.set Utils.config_file_args ~key:"cpu_schedule_min_work" ~data:"1000000000000";
+  let priced_choice = ref None in
+  let priced_ctx = Context.auto () in
+  let priced_explained = Autotune.model_explain priced_ctx priced_comp Ir.Indexing.Empty in
+  let priced_ctx, priced_routine =
+    Autotune.model_default
+      ~report:(fun r -> priced_choice := Some r)
+      priced_ctx priced_comp Ir.Indexing.Empty
+  in
+  Hashtbl.remove Utils.config_file_args "cpu_schedule_min_work";
+  let priced = Option.value_exn ~here:[%here] !priced_choice in
+  (* A segment's two presets and its leaves' ranks. *)
+  let presets (xs : Autotune.segment_explain) =
+    match (xs.Autotune.xs_candidates, Option.bind xs.Autotune.xs_configured ~f:rank_ms) with
+    | ("preset", { Autotune.ex_rank_ms = Some search; _ }) :: _, Some configured ->
+        Some (search, configured)
+    | _ -> None
+  in
+  let leaf_ranks (xs : Autotune.segment_explain) =
+    List.filter_map (List.tl_exn xs.Autotune.xs_candidates) ~f:(fun (label, ex) ->
+        Option.map (rank_ms ex) ~f:(fun r -> (label, r)))
+  in
+  List.iter priced_explained.Autotune.x_segments ~f:(fun xs ->
+      let show = Option.value_map ~default:"n/a" ~f:Float.to_string in
+      Stdio.eprintf
+        "configured_price_chain: segment %s: search preset %s ms, configured %s ms, best leaf %s \
+         ms (not part of the golden)\n"
+        xs.Autotune.xs_segment
+        (show (Option.map (presets xs) ~f:fst))
+        (show (Option.map (presets xs) ~f:snd))
+        (show (List.min_elt ~compare:Float.compare (List.map (leaf_ranks xs) ~f:snd))));
+  Stdio.eprintf "configured_price_chain: picked %s, rank %s ms (not part of the golden)\n"
+    priced.Autotune.mc_label
+    (Option.value_map ~default:"n/a" ~f:Float.to_string priced.Autotune.mc_rank_ms);
+  (* The premise: a segment whose configured preset ranks strictly below its search preset, with a
+     leaf strictly between them -- the leaf the search-only price admitted. *)
+  p_exists "a segment has a leaf strictly between its configured and its search preset"
+    priced_explained.Autotune.x_segments ~f:(fun xs ->
+      match presets xs with
+      | Some (search, configured) when Float.(configured < search) ->
+          List.exists (leaf_ranks xs) ~f:(fun (_, r) -> Float.(configured < r && r < search))
+      | _ -> false);
+  (* The positive control: a segment some leaf of which strictly beats both presets. *)
+  p_exists "a segment has a leaf strictly below both of its presets"
+    priced_explained.Autotune.x_segments ~f:(fun xs ->
+      match presets xs with
+      | Some (search, configured) ->
+          List.exists (leaf_ranks xs) ~f:(fun (_, r) -> Float.(r < Float.min search configured))
+      | None -> false);
+  (* The pick's per-segment entries, read off its label against each segment's listed leaves (the
+     same reading as [listed_pick] below): a leaf belongs to the pick where its label is one of the
+     comma-separated entries, matched whole. *)
+  let picked_entries =
+    match String.chop_prefix priced.Autotune.mc_label ~prefix:"F_sketch[" with
+    | None -> []
+    | Some rest -> (
+        match String.chop_suffix rest ~suffix:"]" with
+        | None -> []
+        | Some entries ->
+            let rec read text = function
+              | [] -> if String.is_empty text then Some [] else None
+              | (xs : Autotune.segment_explain) :: later -> (
+                  match read text later with
+                  | Some found -> Some found
+                  | None ->
+                      List.find_map (leaf_ranks xs) ~f:(fun (leaf, r) ->
+                          match String.chop_prefix text ~prefix:leaf with
+                          | Some "" -> Some [ (xs, r) ]
+                          | Some after -> (
+                              match String.chop_prefix after ~prefix:"," with
+                              | Some next when not (String.is_empty next) ->
+                                  Option.map (read next later) ~f:(fun l -> (xs, r) :: l)
+                              | _ -> None)
+                          | None -> None))
+            in
+            Option.value ~default:[] (read entries priced_explained.Autotune.x_segments))
+  in
+  p "the pick is a per-segment substitution" (not (List.is_empty picked_entries));
+  p_all "each entry of the picked substitution ranks strictly below its segment's lower preset"
+    picked_entries ~f:(fun (xs, r) ->
+      match presets xs with
+      | Some (search, configured) -> Float.(r < Float.min search configured)
+      | None -> false);
+  let priced_ctx = Context.run priced_ctx priced_routine in
+  let priced_got = Context.get_values priced_ctx qg.Tensor.value in
+  p_all2 "the configured-price pick computes the host's values exactly" priced_got qg_expected
+    ~f:Float.equal;
   let legs =
     [
       (large, large_explained);
       (small, small_explained);
       (chain, chain_explained);
       (below, below_explained);
+      (priced, priced_explained);
     ]
   in
   p_all "each explained segment is listed once" legs ~f:(fun (_, x) ->

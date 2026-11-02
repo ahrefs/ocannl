@@ -3920,26 +3920,37 @@ let fiss_sketch_label ?(staff = []) ~fine entries =
 (* gh-ocannl-1512: the per-segment view [model_default] ranks and [model_explain] lists -- exactly
    what {!tune}'s seed enumeration derives: {!sketch_segmentation} at [`Search] of [base], when it
    splits the routine or exposes a changed lowering, as the plan and one [(key, pre, post)] per
-   keyed segment, [post] being the segment under the search's preset: the threshold its sketches
-   must strictly beat to enter a substitution. Not the configured thresholds: they leave a
-   below-threshold nest unannotated, and fission coalesces adjacent unannotated segments back into
-   one kernel, so on cc below [cpu_schedule_min_parallel] that segmentation was the single kernel
-   and the per-segment path never fired. The threshold stays the search's preset: until
-   gh-ocannl-1633 the ranking score charged an unannotated kernel (one block) no operand re-reads,
-   so a segment's sketches could at best tie its serial preset and no substitution formed. They are
-   charged now, where its nest spills the capacity, and the configured preset is listed beside it
-   ([model_explain]'s [xs_configured]); switching the threshold to it would change which segments
-   enter a substitution and are anchored under seeding on CUDA and HIP. (What a substitution SHIPS
-   on the segments it leaves unsketched is the configured preset: [model_default]'s [apply_fiss].)
-   [None] where fission exposes no site; raises {!Outcome.Cause_at} as {!Sched.fission_segmented}
-   does. [tune] enumerates its per-segment seeds on it ({!search_segment_entries}, gh-ocannl-1490),
-   its finer pass with [arity_cuts]. *)
+   keyed segment, [post] being the segment under the search's preset. The segmentation is the
+   search's, not the configured thresholds': they leave a below-threshold nest unannotated, and
+   fission coalesces adjacent unannotated segments back into one kernel, so on cc below
+   [cpu_schedule_min_parallel] that segmentation was the single kernel and the per-segment path
+   never fired. What a segment's sketches must strictly beat to enter a substitution is the lower of
+   [post]'s score and the segment under its CONFIGURED preset ({!configured_segment},
+   gh-ocannl-1687): a substitution ships the configured preset on every segment it leaves unsketched
+   ([model_default]'s [apply_fiss]), so a sketch that only beats the search's preset makes the
+   shipped pipeline worse than leaving the segment out. [None] where fission exposes no site; raises
+   {!Outcome.Cause_at} as {!Sched.fission_segmented} does. [tune] enumerates its per-segment seeds
+   on it ({!search_segment_entries}, gh-ocannl-1490), its finer pass with [arity_cuts]. *)
 let model_segments ?arity_cuts ~is_gpu ~is_cpu ~limits ~static_indices (base : LL.optimized) =
   match
     sketch_segmentation ?arity_cuts ~presets:`Search ~is_gpu ~is_cpu ~limits ~static_indices base
   with
   | _, tuples when not (fission_exposes_sites ~static_indices base tuples) -> None
   | plan, tuples -> Some (plan, keyed_segments ~static_indices plan tuples)
+
+(* gh-ocannl-1633, gh-ocannl-1687: a keyed segment under the CONFIGURED preset, on a hermetic copy
+   of [pre] -- what a per-segment substitution ships on a segment it leaves unsketched. [None] where
+   the preset fails to apply. One derivation for [model_explain]'s [xs_configured] row and
+   [model_default]'s threshold, so the explained row is the price. *)
+let configured_segment ~is_gpu ~is_cpu ~limits ~static_indices (pre : LL.optimized) =
+  let seg = scratch_of pre in
+  match
+    Sched.apply_classified ~static_indices
+      (segment_preset ~presets:`Config ~is_gpu ~is_cpu ~limits seg)
+      seg
+  with
+  | exception Outcome.Cause_at _ -> None
+  | configured -> Some configured
 
 (* gh-ocannl-1490: the search's seeding, as one value a driver can take without a search -- the
    seeding census without a budget hack, and the seeds a per-seed parity check executes. [tune]
@@ -6893,15 +6904,40 @@ let model_default ?name ?report ctx comp bindings =
                             log_seeding ~capabilities
                               ~where:("model_default segment " ^ seg_key_tag key)
                               ~is_gpu ~is_cpu ~limits pre;
-                            (* The segment's family tree searched with the segment's own
-                               default-preset score as incumbent, anchored at the seeded plan's own
-                               sketch on the segment under seeding (gh-ocannl-1477). *)
+                            (* gh-ocannl-1687: the segment under its configured preset -- what the
+                               substitution ships if it leaves the segment unsketched -- scored
+                               beside the search's. A sketch enters only by strictly beating the
+                               lower of the two; where the configured one has no score, the segment
+                               forms no strict entry: an unpriced alternative must not lower the
+                               bar. *)
+                            let configured =
+                              Option.bind
+                                (configured_segment ~is_gpu ~is_cpu ~limits ~static_indices pre)
+                                ~f:(fun c -> score [ c ])
+                            in
+                            Option.iter configured ~f:(fun cs ->
+                                if Float.(cs < bs) then
+                                  logf
+                                    "model_default: segment %s priced at its configured \
+                                     preset                                      (%.6f ms, search \
+                                     preset %.6f ms)"
+                                    (seg_key_tag key) (cs *. 1e3) (bs *. 1e3));
+                            (* The segment's family tree searched with that price as incumbent,
+                               anchored at the seeded plan's own sketch on the segment under seeding
+                               (gh-ocannl-1477). *)
                             let threshold, anchor =
                               anchored
                                 ~seeded:(seeded_record_for_key ~plan ~record:seeded_record key)
-                                ~incumbent:bs pre
+                                ~incumbent:
+                                  (Option.value_map configured ~default:bs ~f:(Float.min bs))
+                                pre
                             in
-                            match Option.join (tree_search ~incumbent:threshold pre) with
+                            let strict =
+                              match configured with
+                              | None -> None
+                              | Some _ -> Option.join (tree_search ~incumbent:threshold pre)
+                            in
+                            match strict with
                             | Some (p, _s) -> Some (`Strict (key, p))
                             | None -> Option.map anchor ~f:(fun (p, _) -> `Anchor (key, p))))
                   in
@@ -7399,8 +7435,9 @@ let model_explain ?name ?(coalesced = false) ctx comp bindings =
     (* gh-ocannl-1438: [model_default]'s per-segment substitution, as it derives it
        ({!model_segments}: the search's fold-zeros segmentation of the searched program, when it
        splits the routine or exposes a changed lowering, gh-ocannl-1512) -- one entry per keyed
-       segment: the segment under the search's preset, the incumbent its sketches must strictly
-       beat, then the sketch leaves it searches there. *)
+       segment: the segment under the search's preset, then the sketch leaves it searches there, and
+       the segment under the configured preset; its sketches must strictly beat the lower of the two
+       presets (gh-ocannl-1687). *)
     let x_segments =
       match model_segments ~is_gpu ~is_cpu ~limits ~static_indices base with
       | exception Outcome.Cause_at _ -> []
@@ -7422,14 +7459,8 @@ let model_explain ?name ?(coalesced = false) ctx comp bindings =
                 (* gh-ocannl-1633: the segment under the configured preset -- what a substitution
                    ships where it leaves the segment unsketched ([model_default]'s [apply_fiss]). *)
                 xs_configured =
-                  (let seg = scratch_of pre in
-                   match
-                     Sched.apply_classified ~static_indices
-                       (segment_preset ~presets:`Config ~is_gpu ~is_cpu ~limits seg)
-                       seg
-                   with
-                   | exception Outcome.Cause_at _ -> None
-                   | configured -> Some (explain [ configured ]));
+                  Option.map (configured_segment ~is_gpu ~is_cpu ~limits ~static_indices pre)
+                    ~f:(fun configured -> explain [ configured ]);
               })
     in
     {
