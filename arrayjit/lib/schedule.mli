@@ -425,7 +425,10 @@ type optop =
           mentioning [target]. At the fragment and whole-K sites the store-back must complete
           [target]: one under an enclosing loop of extent > 1 that does not index it, or followed by
           another write of [target] (a later segment of a [Partition]ed block loop, gh-ocannl-1670),
-          is refused. The store-back of [target] itself is kept. Elementwise tails never reorder the
+          is refused. A later segment that is itself the last writer — the top-level edge segment of
+          an unbatched k-split — is judged: its store-back completes [target] and takes the tail
+          (gh-ocannl-1733), unless it runs more than once or its own index covers only part of the
+          output. The store-back of [target] itself is kept. Elementwise tails never reorder the
           reduction, so on the C backends the fused values are bitwise equal to the two-kernel form.
           Apply after [Tensorize]/[Privatize].
 

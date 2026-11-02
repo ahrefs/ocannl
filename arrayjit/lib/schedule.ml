@@ -4111,8 +4111,11 @@ let apply_tensorize op (opt : Low_level.optimized) : Low_level.optimized =
     written by the reduction statement; and the store-back tiles cover [target]'s index space
     bijectively, with no surplus enclosing loop (extent > 1, not indexing the site) re-executing the
     store-back per iteration (so the relocated tail writes each output element exactly once, from
-    the completed accumulation). Nodes related by buffer aliasing ([Tnode.alias_of]) are not
-    analyzed — sole-consumption is judged by node identity. *)
+    the completed accumulation). A Serial loop starting above 0 — a [Partition]'s later segment, the
+    last writer of an unbatched k-split (gh-ocannl-1733) — is descended where every enclosing loop
+    is single-trip, its trip count counted for the surplus check; a site indexed by such a loop
+    covers only that segment's part of the output and is refused. Nodes related by buffer aliasing
+    ([Tnode.alias_of]) are not analyzed — sole-consumption is judged by node identity. *)
 let settled_on_device plc tn =
   match Tn.Placements.get plc tn with Some (Tn.On_device, _) -> true | _ -> false
 
@@ -4396,7 +4399,16 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
         fail "the accumulator's base indices must be affine (no Concat, no flattened Sub_axis)"
   in
   let fused = ref false in
-  let rec fuse_at_fragment env llc =
+  (* [env] holds every loop descended into, with its trip count, for the surplus-loop checks.
+     [shifted] lists the descended loops starting above 0 (a [Partition]'s later segments,
+     gh-ocannl-1733): [covers_bijectively]'s mixed radix assumes zero-based loops, so these are left
+     out of the env it judges the cover over. A site indexed by one covers only the segment's part
+     of the output and is refused; a site that does not mention it (the k-block loop of a k-split)
+     is judged as usual. *)
+  let cover_env ~shifted env =
+    List.filter env ~f:(fun (s, _) -> not (List.mem shifted s ~equal:Indexing.equal_symbol))
+  in
+  let rec fuse_at_fragment ~shifted env llc =
     if !fused then begin
       (* Exactly-once, past the site: the relocated tail reads every output cell right after the
          site's store-back, so nothing that follows may write the accumulator again. A [Partition]ed
@@ -4413,8 +4425,8 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
     else
       match llc with
       | Seq (a, b) ->
-          let a' = fuse_at_fragment env a in
-          Seq (a', fuse_at_fragment env b)
+          let a' = fuse_at_fragment ~shifted env a in
+          Seq (a', fuse_at_fragment ~shifted env b)
       | For_loop fc -> (
           match match_storeback (For_loop fc) with
           | Some (lane, width, loops, guards, st_idcs) ->
@@ -4439,7 +4451,7 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
                       fail
                         "the fragment store-back carries a guard that is not a per-axis range mask \
                          of the output");
-              if not (covers_bijectively ~guarded ~env:env' st_idcs) then
+              if not (covers_bijectively ~guarded ~env:(cover_env ~shifted env') st_idcs) then
                 fail "the fragment store-back tiles do not cover the output space bijectively";
               fused := true;
               let tail_leaf =
@@ -4471,7 +4483,7 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
                   site_idcs.(rank - 2) <- add_symbol site_idcs.(rank - 2) fi;
                   site_idcs.(rank - 1) <- add_symbol site_idcs.(rank - 1) fj;
                   let env' = ((fi, m) :: (fj, n) :: env : (Indexing.symbol * int) list) in
-                  if not (covers_bijectively ~env:env' site_idcs) then
+                  if not (covers_bijectively ~env:(cover_env ~shifted env') site_idcs) then
                     fail "the Tile_mma tiles do not cover the output space bijectively";
                   fused := true;
                   let body =
@@ -4498,11 +4510,32 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
                   | Workgroup | Workgroup_reduce -> For_loop fc
                   | _ when fc.from_ = 0 ->
                       For_loop
-                        { fc with body = fuse_at_fragment ((fc.index, fc.to_ + 1) :: env) fc.body }
+                        {
+                          fc with
+                          body = fuse_at_fragment ~shifted ((fc.index, fc.to_ + 1) :: env) fc.body;
+                        }
+                  (* A Serial loop starting above 0 — a [Partition]'s later segment, the last
+                     top-level writer of an unbatched k-split (gh-ocannl-1733) — is judged too, but
+                     only where every enclosing loop is single-trip: then each statement before it
+                     ran exactly once, and before it, so the last write in program order is the last
+                     in execution order. Under a loop of extent > 1 an earlier segment's write of a
+                     later iteration would follow the site unseen by the textual written-again
+                     check. *)
+                  | Serial
+                    when fc.from_ > 0 && fc.to_ >= fc.from_
+                         && List.for_all env ~f:(fun (_, e) -> e <= 1) ->
+                      For_loop
+                        {
+                          fc with
+                          body =
+                            fuse_at_fragment ~shifted:(fc.index :: shifted)
+                              ((fc.index, fc.to_ - fc.from_ + 1) :: env)
+                              fc.body;
+                        }
                   | _ -> For_loop fc)))
       | other -> other
   in
-  let red_stmt' = fuse_at_fragment [] red_stmt in
+  let red_stmt' = fuse_at_fragment ~shifted:[] [] red_stmt in
   let red_stmt' =
     if !fused then red_stmt'
     else begin
