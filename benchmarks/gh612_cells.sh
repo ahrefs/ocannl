@@ -230,11 +230,6 @@ cmd_search() { (
     key=$(entry_key "$entry")
     echo "fissioned winner ${key:-<no stored key>} (entry $(basename "$entry")): $kinds"
   done
-  # The crowned arm A candidate's calibration line: analytic FLOPs and bytes at the emitted kernel
-  # count. The report's constant-FLOPs check and its 528 -> 472 MB traffic figure are read from here.
-  local lbl; lbl=$(sed -n '1,/arm A (default placements) best/p' "$out/search.err" \
-    | grep -o 'best: [0-9.]* ms ([A-Za-z_]*\[[^]]*\]' | sed 's/.*(//')
-  [ -n "${lbl:-}" ] && grep -F "calibration: $lbl" "$out/search.err" | head -1
   # Return the BENCHMARK's status, not the last grep's. Printing evidence from a failed run and then
   # exiting 0 is how cmd_sweep came to accept a failed cell and still call the series balanced.
   return "$st"
@@ -314,8 +309,10 @@ cmd_snap() { (
 # report-gh569-hip.md used and the only one that rules out a torn tail.
 pick_armA() {
   local out=$1
-  local n; n=$(grep -o "$ROUTINE seg 0/[0-9]*" "$out/launches.err" | awk -F/ '$2>1{print $2; exit}')
-  [ -n "$n" ] || { echo "no fissioned compile in $out/launches.err" >&2; return 1; }
+  # bench_output's one reader of the launch lines (gh-ocannl-1767): the first fissioned compile's
+  # segment count.
+  local n; n=$(python3 "$HERE/bench_output.py" schedule-segs "$out/launches.err" "$ROUTINE") ||
+    { echo "no fissioned compile in $out/launches.err" >&2; return 1; }
   local f
   for f in "$out"/armsnap/*.hip; do
     [ "$(grep -c '__global__' "$f")" = "$n" ] || continue
@@ -510,11 +507,11 @@ print(f"the five kernels (4x FFN GEMM1 + lm_head): {sum(ms.get(i,0) for i in fiv
 # Part 1's launch-geometry census, aggregated by RESIDENT BLOCK COUNT -- the quantity that made the
 # gh-569 story legible and the one Part 5 turns on.
 geo={}
-for m in re.finditer(r'seg (\d+)/(\d+) grid=\[(\d+);(\d+);(\d+)\] block=\[(\d+);(\d+);(\d+)\]',
-                     open(os.path.join(out,"launches.err")).read()):
-    if int(m.group(2))!=len(sigs): continue
-    g=[int(m.group(i)) for i in (3,4,5)]; b=[int(m.group(i)) for i in (6,7,8)]
-    geo[int(m.group(1))]=(g[0]*g[1]*g[2], b[0]*b[1]*b[2])
+sys.path.insert(0,sys.argv[3]); import bench_output  # the launch lines' one reader (gh-ocannl-1767)
+for l in bench_output.schedule_launches(open(os.path.join(out,"launches.err")).read()):
+    if l["segs"]!=len(sigs): continue
+    g,b=l["grid"],l["block"]
+    geo[l["seg"]]=(g[0]*g[1]*g[2], b[0]*b[1]*b[2])
 agg=collections.defaultdict(lambda:[0,0.0])
 for i in sigs:
     if i in geo: agg[geo[i][0]][0]+=1; agg[geo[i][0]][1]+=ms.get(i,0.0)
@@ -523,9 +520,8 @@ for blk,(n,t) in sorted(agg.items()):
     print(f"  {blk:5} | {n:3} | {t:6.2f} | {100*t/tot:4.1f}%")
 EOF
   echo "--- launch geometry (arm A) ---"
-  local n; n=$(grep -o "$ROUTINE seg 0/[0-9]*" "$out/launches.err" | awk -F/ '$2>1{print $2; exit}')
-  grep -E "$ROUTINE seg [0-9]+/$n " "$out/launches.err" \
-    | sed -E 's/.*(seg [0-9]+).*grid=(\[[^]]*\]).*block=(\[[^]]*\]).*/\1 grid=\2 block=\3/'
+  local n; n=$(python3 "$HERE/bench_output.py" schedule-segs "$out/launches.err" "$ROUTINE") || n=
+  [ -z "$n" ] || python3 "$HERE/bench_output.py" schedule-geometry "$out/launches.err" "$ROUTINE" "$n"
 }
 
 # Cap sweep with BALANCED order: within a block the list runs FORWARD on the first rep and reversed

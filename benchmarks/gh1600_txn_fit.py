@@ -48,17 +48,11 @@ cells read what model_default actually ships.
 
 import argparse
 import math
-import re
 import statistics
 import sys
 
-EXPLAIN = re.compile(r'rank-site: explain .*?label="((?:[^"\\]|\\.)*)" rank_ms=(\S+)'
-                     r'(?:.* admitted=(true|false))?')
-KERNELS = re.compile(r'rank-site: kernels .*?label="((?:[^"\\]|\\.)*)" kernels=(\S*)')
+import bench_output
 
-
-def unescape(text):
-    return text.encode().decode("unicode_escape")
 
 
 def replicates(path):
@@ -104,14 +98,15 @@ def listing(path):
     """Label -> (rank_ms, position, admitted, kernels)."""
     ranks, kernels = {}, {}
     with open(path) as f:
-        for line in f:
-            m = EXPLAIN.search(line)
-            if m and m.group(2) != "n/a":
-                ranks[unescape(m.group(1))] = (float(m.group(2)), len(ranks), m.group(3) != "false")
-                continue
-            m = KERNELS.search(line)
-            if m:
-                kernels[unescape(m.group(1))] = [parse_kernel(k) for k in m.group(2).split(";") if k]
+        # bench_output's one reader of the rank-site lines (gh-ocannl-1767).
+        lines = bench_output.rank_site_lines(f.read())
+    for kind, fields, _ in lines:
+        if kind == "explain" and fields.get("rank_ms", "n/a") != "n/a":
+            ranks[fields["label"]] = (float(fields["rank_ms"]), len(ranks),
+                                      fields.get("admitted") != "false")
+        elif kind == "kernels" and "label" in fields:
+            kernels[fields["label"]] = [parse_kernel(k)
+                                        for k in fields.get("kernels", "").split(";") if k]
     return {l: (r, pos, adm, kernels.get(l)) for l, (r, pos, adm) in ranks.items()}
 
 

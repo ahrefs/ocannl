@@ -81,7 +81,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import strict_json  # noqa: E402
 from display_safe import display_value, log_line, table_lines  # noqa: E402
-from gh1002_cells import KERNEL  # noqa: E402  (the one reader of the kernel-table row)
+import bench_output  # noqa: E402  (the one reader of the kernel-table row)
 import gpu_cotenants  # noqa: E402  (the co-tenant record's writer and reader)
 
 ISO_TOLERANCE = 0.10
@@ -136,14 +136,14 @@ def table(path):
     time. table_ms is the row's own time (a median since gh-ocannl-1694, a min-of-20 before). io is
     (bytes read, bytes written, flags) by the cost model, or None on a row from before
     gh-ocannl-1444."""
-    rows, totals = {}, set()
-    for line in open(path):
-        m = KERNEL.match(line.rstrip("\n"))
-        if m:
-            totals.add(int(m["n"]))
-            io = None if m["read"] is None else (int(m["read"]), int(m["written"]), m["io_flags"])
-            rows[int(m["i"])] = (float(m["ms"]), "grid=[%s] block=[%s]" % (m["grid"], m["block"]),
-                                 m["writes"], io)
+    try:
+        with open(path) as f:
+            read = bench_output.kernel_rows(f.read())
+    except ValueError as e:
+        raise Refused("%s: %s" % (path.name, e)) from None
+    totals = {r["n"] for r in read}
+    rows = {r["i"]: (r["ms"], "grid=[%s] block=[%s]" % (r["grid"], r["block"]),
+                     " ".join(r["writes"]), r["io"]) for r in read if r["ms"] is not None}
     if len(totals) != 1 or sorted(rows) != list(range(next(iter(totals)))):
         raise Refused("%s: the kernel table is missing or incomplete" % path.name)
     return rows

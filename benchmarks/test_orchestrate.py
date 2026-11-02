@@ -29,6 +29,7 @@ import orchestrate
 import strict_json
 from runners import bench_common
 from test.test_cell_group import CellGroupTest  # imported so unittest.main includes shared tests
+from test.test_bench_line_scan import BenchLineReaderScanTest  # noqa: F401  (likewise)
 from test_cells import (  # noqa: F401  (likewise)
     AbDriverTest, CellCommandTest, ConfigRecordsExpectTest, Gh1051AbDriverTest, Gh1180DriverTest,
     Gh1253FlipDriverTest, Gh1279DriverTest, Gh1557DriverTest, Gh740DriverTest, ProseTraceScanTest)
@@ -4280,10 +4281,11 @@ class Gh1161SitesTest(unittest.TestCase):
                 lines.append(f"bench: kernel {row[0]} grid=[1;1;1] block=[32;1;1] UNTIMED (none of "
                              "its 6 timing calls was admitted) w: n1")
             else:
-                # The row as gh-ocannl-1694 prints it: the median, then its range.
+                # The row as Bench_harness prints it: the median, then its range (gh-ocannl-1694),
+                # the geometry, the global-memory bytes (gh-ocannl-1444) and the censuses.
                 lines.append(f"bench: kernel {row[0]} {row[1]:.4f} ms ms_lo={row[1]:.6f} "
                              f"ms_hi={row[1]:.6f} ms_retimed=6/6 grid=[1;1;1] block=[1;1;1] "
-                             f"mma:not-requested vol:0 w: {' '.join(row[2])}")
+                             f"io:4096/1024 mma:not-requested vol:0 w: {' '.join(row[2])}")
         lines.append(json.dumps(result, separators=(",", ":")))
         (self.dir / orchestrate.cell_log_name(label)).write_text("\n".join(lines) + "\n")
 
@@ -8690,6 +8692,27 @@ class ReportScriptsDisplayTest(unittest.TestCase):
             text=True, capture_output=True, timeout=60)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assert_display_safe(proc.stdout)
+
+    def test_gh1051_split_reads_timing_lines_from_before_the_grid_census(self):
+        # gh1051_boundary_split.sh times two revisions around gh-ocannl-1064, which predate
+        # gh-ocannl-1668: their timing lines carry the mma census alone. The ab mode's current
+        # benches print both, and a line in neither layout is refused (gh-ocannl-1767).
+        import gh1051_cells
+
+        legacy = "".join(f"{v}   1.5 ms   10.0 GFLOP/s   (x chk 1.0/2.0, y)  [Mma_intrinsics 2]\n"
+                         for v in ("parallel", "smem", "regtile", "mma_pd1", "mma_pd2"))
+        with self.assertRaises(ValueError):
+            gh1051_cells.parse_text(legacy)
+        both = (bench_output.TIMING_CENSUSES, bench_output.TIMING_CENSUSES_BEFORE_1668)
+        self.assertEqual(gh1051_cells.parse_text(legacy, both)["mma_pd1"][2], "Mma_intrinsics 2")
+        for arm in ("before", "after"):
+            (self.dir / f"n64_r1_{arm}.log").write_text(legacy)
+            (self.dir / f"n64_r1_{arm}.log.status").write_text("0\n")
+        proc = subprocess.run(
+            [sys.executable, str(HERE / "gh1051_cells.py"), "split", str(self.dir), self.HOSTILE],
+            text=True, capture_output=True, timeout=60)
+        self.assertNotIn("censuses", proc.stdout + proc.stderr)
+        self.assertNotIn("MISSING timing", proc.stdout + proc.stderr)
 
     def test_gh1181_summary_shows_the_box_and_workload(self):
         import gh1181_cells

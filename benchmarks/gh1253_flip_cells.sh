@@ -97,7 +97,7 @@ done
 
 # One summary line per cell, in the order the cells ran; a cell its run did not find clean fails.
 python3 - "$root/benchmarks" "$out" "${fixtures[@]}" <<'EOF' | tee -a "$out/summary.txt" || failed=$((failed + 1))
-import json, re, sys
+import json, sys
 sys.path.insert(0, sys.argv[1])
 import bench_output
 import cells
@@ -125,8 +125,7 @@ for fixture in sys.argv[3:]:
         err = cells.cell_stream(run, r, "stderr")
         # Each field is optional (a cell may seed nothing, or log no derivation): a missing one
         # reads `none logged`/`?`.
-        census = re.findall(r"seeded_default: [0-9]* of [0-9]* segments seeded.*", err)
-        derive = re.findall(r"seeded_default: plan derived in ([0-9.]* s)", err)
+        derive, census = bench_output.seeded_default(err)
         # The median as the result line states it (bin_cells' reader already held it to a time).
         ms = json.dumps(bench_output.field(
             bench_output.result_record(cells.cell_stream(run, r, "stdout")), "step_ms.p50"))

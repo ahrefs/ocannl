@@ -927,8 +927,14 @@ single-threaded segments that sum to the serial step
   over a stderr a driver kept itself.
 - `bench_output.py` — the one reader of what OCANNL's benches print (gh-ocannl-1443): `bench-result:`
   lines, the runners' result line (the last stdout line opening a JSON object, read strictly;
-  `strict_json.py field` asks it for one field from a shell driver), `bench: checkpoint` lines and
-  the `timing-trace: compile` records. A driver that needs a new format adds its reader here.
+  `strict_json.py field` asks it for one field from a shell driver), `bench: checkpoint` lines, the
+  `timing-trace:` records, and the text lines listed in its `FORMATS` (gh-ocannl-1767): the GEBP
+  benches' timing line and header, kernel-table rows, `rank-site:` lines, the launch-geometry trace
+  and the seeded-default census. A shell driver asks through its command line (`trace-has`,
+  `trace-digest`, `rank-site-field`, `schedule-segs`, `schedule-geometry`). A driver that needs a
+  new format adds its reader and its `FORMATS` entry here; `test/operations/bench_line_readers`
+  holds the readers to lines the producers print, and `test/test_bench_line_scan.py` refuses a
+  bench-line pattern anywhere else.
 
 ## Historical Metal fixture provenance
 

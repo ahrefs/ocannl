@@ -1,0 +1,49 @@
+== the registry
+every format's readers are bench_output's: true
+seeded_default: not pinned here -- Autotune.seeded_apply logs it on CUDA and HIP only (seeded_default_backend); no CPU run prints it
+== the GEBP timing line (bin/schedule_bench, bin/narrow_gebp_bench)
+schedule: the timing lines name the variants the bench-result records do: true
+schedule: each line's ms is its record's time: true
+schedule: the mma census is read as the mma census, the grid census as the grid census: true
+schedule: the packed variants' census reads Mma_register_tiled: true
+schedule: each line states its checksum: true
+schedule: gh1051_cells reads each variant's mma census as bench_output does: true
+gebp: the timing lines name the variants the bench-result records do: true
+gebp: each line's ms is its record's time: true
+gebp: the mma census is read as the mma census, the grid census as the grid census: true
+gebp: the packed variants' census reads Mma_register_tiled: true
+gebp: each line states its checksum: true
+gebp: gh1051_cells reads each variant's mma census as bench_output does: true
+gebp: the header names the geometry --rn=2 requested, as gh1180_tie_ab.sh asks: true
+== the per-kernel table (Bench_harness.time_shipped_kernels)
+the table states one count: true
+the rows are the table's kernels, each once, in order: true
+the injected refusals read as a DECLINED and an UNTIMED row with no time: true
+the timed rows are the ones the table counts as timed: true
+a timed row reads its range, geometry, bytes and writes: true
+gh1002_cells reads the table with an untimed kernel as incomplete: true
+kernel_attribution refuses it as incomplete: true
+gh1161_sites reads every kernel as listed, the refused two untimed: true
+== the launch-geometry trace (schedule_log_launches)
+the harness run traced its launches: true
+each launch reads a 3-D grid and block: true
+each compile's launches are its segments, in order: true
+schedule-segs finds no fissioned compile of a one-kernel routine: true
+schedule-geometry prints each of its launches: true
+== the timing trace (Bench_harness.install_timing_trace)
+the search printed a summary: true
+the summary's attempts and timing calls are the trace's attempt and call lines: true
+every compile line reads as a compile record: true
+a compile record's kernel counts read in order: true
+trace-has answers what the trace holds: true
+trace-digest counts the attempts: true
+== the rank-site lines (bench_rank_site)
+several candidates are explained, each with its kernels line: true
+one pick, of an explained candidate, at the rank its explain line states: true
+gh1442_agreement scores each explained candidate, admitted as its line says: true
+gh1442_agreement reads the pick and the seeded plan it names: true
+gh1442_agreement reads the pick's own timing and its paired ratio: true
+gh1600_txn_fit lists each candidate with its kernels: true
+rank-site-field prints the pick's seeded_label, as gh1253_cells.sh asks: true
+an OCaml literal decodes as OCaml writes it: true
+every pinned format was read off a producer's line here: true

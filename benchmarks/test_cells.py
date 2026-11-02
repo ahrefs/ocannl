@@ -222,15 +222,21 @@ class AbDriverTest(StubRunTest):
 
 
 # narrow_gebp_bench's lines that gh1180_tie_ab.sh judges: the header naming the requested geometry,
-# the packed rows' census, and the bench-result lines it pairs. CENSUS and EXIT vary per test.
+# the packed rows' census, and the bench-result lines it pairs. CENSUS and EXIT vary per test. The
+# timing lines are in the bench's own format, the mma census followed by gh-ocannl-1668's grid
+# census (test/operations/bench_line_readers holds the reader to the lines the bench prints): a
+# reader taking the last bracket for the mma census reads the grid census and fails every cell.
 GEBP_BODY = '''
 import json
 rn = next(a.split("=")[1] for a in argv if a.startswith("--rn="))
-print(f"GEBP n=64, 3 repeats, blocking bm=8 bk=16, register tile 4x{{rn}} rn{{rn}} (requested)")
+print(f"GEBP n=64, 3 repeats, blocking bm=8 bk=16, register tile rm4 rn{{rn}} lanes4 (requested), "
+      "storage single, compute single, packed panels (storage)")
 secs = 0.001 * int(rn)
 census = "CENSUS".replace("RN", rn)
-print(f"packmma       1.0 ms     5.00 GFLOP/s  [{{census}}]")
-print(f"packmma_par   1.0 ms     9.00 GFLOP/s  [{{census}}]")
+print(f"packmma         1.000 ms      5.00 GFLOP/s  (spot check [65] 0.50, chk -1.5/2.25, = naive)  "
+      f"[{{census}}] [grid: no Grid loop]")
+print(f"packmma_par     1.000 ms      9.00 GFLOP/s  (spot check [65] 0.50, chk -1.5/2.25, = packmma)  "
+      f"[{{census}}] [grid: 1 of 2 on the pool; i45 serial: below cc_grid_min_updates = 16384]")
 print("bench-result: " + json.dumps({{"variant": "packmma", "seconds": secs, "check": "passed",
                                       "check_note": ""}}))
 print("bench-result: " + json.dumps({{"variant": "packmma_par", "seconds": secs / 2,

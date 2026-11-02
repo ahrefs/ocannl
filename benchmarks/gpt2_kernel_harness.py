@@ -33,12 +33,10 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import bench_output  # noqa: E402
+
 SIG_RE = re.compile(r'extern\s+"C"\s+__global__\s+void\s+(\w+__seg(\d+))\s*\(([^)]*)\)', re.S)
-# One line per segment from config [schedule_log_launches]; the routine's segment COUNT
-# disambiguates the placement arms, which compile the same routine name at different fissions.
-LAUNCH_RE = re.compile(
-    r"^schedule: (\S+) seg (\d+)/(\d+) grid=\[(\d+);(\d+);(\d+)\] block=\[(\d+);(\d+);(\d+)\]", re.M
-)
 
 BUF_BYTES = 32 << 20
 
@@ -64,14 +62,14 @@ def parse_kernels(src: Path):
 
 
 def parse_launches(log: Path, routine: str, n_segs: int):
-    """seg index -> (grid, block) for the compile that fissioned `routine` into `n_segs` kernels."""
+    """seg index -> (grid, block) for the compile that fissioned `routine` into `n_segs` kernels:
+    the lines config [schedule_log_launches] prints, one per segment, read by bench_output's one
+    reader of them (gh-ocannl-1767). The segment COUNT disambiguates the placement arms, which
+    compile the same routine name at different fissions."""
     geo = {}
-    for m in LAUNCH_RE.finditer(log.read_text()):
-        rname, seg, total = m.group(1), int(m.group(2)), int(m.group(3))
-        if rname != routine or total != n_segs:
-            continue
-        geo[seg] = (tuple(int(m.group(i)) for i in (4, 5, 6)),
-                    tuple(int(m.group(i)) for i in (7, 8, 9)))
+    for launch in bench_output.schedule_launches(log.read_text()):
+        if launch["routine"] == routine and launch["segs"] == n_segs:
+            geo[launch["seg"]] = (launch["grid"], launch["block"])
     return geo
 
 

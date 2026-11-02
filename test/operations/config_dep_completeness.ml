@@ -103,6 +103,11 @@ let exempt_sites =
        command line -- disabling the config-file search outright -- and the control fails a cell \
        that resolved any setting from a config file, so no `ocannl_config` reaches what it checks"
     );
+    ( "test/operations:python3, handed %{dep:bench_line_readers.py}, ../..",
+      "the bench-line readers' check (gh-ocannl-1767) reads, through stdlib Python modules, the \
+       lines its rule's OCANNL runs captured before it -- each a `run` of its own, under the \
+       rule's `ocannl_config` -- and its one subprocess is bench_output.py's command line; the \
+       Python step launches no OCANNL executable" );
     ( "test/operations:python3, handed %{dep:../../benchmarks/config_records.py}",
       "the resolved-configuration reader (gh-ocannl-1766), run over a stream the OCaml half of the \
        test kept in a rule of its own, which lists `ocannl_config`; the reader is stdlib Python \

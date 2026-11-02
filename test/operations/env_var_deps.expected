@@ -65,6 +65,7 @@ Programs starting a search with a run that can select cc, each pinning the cc ve
   test/operations/dune, executable autotune_mma_companion (Autotune.tune): independent, by its marker
   test/operations/dune, executable autotune_routine_name (Autotune.tune): independent, by its marker
   test/operations/dune, executable bandwidth_calibration (Calibrate.stream): independent, by its marker
+  test/operations/dune, executable bench_line_samples (Autotune.tune): independent, by its marker
   test/operations/dune, executable cc_dlopen_cause (Autotune.tune): independent, by its marker
   test/operations/dune, executable cost_model_selection (Autotune.tune): independent, by its marker
   test/operations/dune, executable flip_abandonment (Autotune.tune, Train.tune_placements): independent, by its marker
@@ -168,6 +169,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-autotune_routine_name
   test/operations/dune                     @runtest-backend_golden_family_scan
   test/operations/dune                     @runtest-bandwidth_calibration
+  test/operations/dune                     @runtest-bench_line_readers
   test/operations/dune                     @runtest-bench_seed_parity_smoke-tf32
   test/operations/dune                     @runtest-bf16_subnormal_storage-reproducible
   test/operations/dune                     @runtest-bin_cells

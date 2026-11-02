@@ -920,7 +920,20 @@ files.
   driver imports them rather than re-deriving env scrubbing, supervision, the visiting order or the
   sign test, and reads bench output only through `benchmarks/bench_output.py` (gh-ocannl-1443): five
   private result-line readers had drifted apart (first vs last `{` line, a substring filter, a
-  lenient fallback) before they were folded. A bench that refuses its measurement for host
+  lenient fallback) before they were folded. The text lines are its too (gh-ocannl-1767): the GEBP
+  timing line and header, kernel-table rows, `timing-trace:`, `rank-site:`, `schedule: ... seg`
+  launch lines and `seeded_default:`, each listed in its `FORMATS` with the producer that prints it;
+  a shell driver asks through `python3 bench_output.py <command> FILE` instead of grepping. The
+  failure this closed: when gh-ocannl-1668 appended `[grid: ...]` to the timing line, the two
+  last-bracket readers took the grid census for the mma census (gh1051 until gh-ocannl-1607,
+  gh1180_tie_ab.sh until gh-ocannl-1767, which then failed every real cell), and their tests fed
+  hand-written one-bracket lines. So the timing reader takes censuses left to right and requires
+  exactly the two the producers print, refusing a third rather than guessing;
+  `test/operations/bench_line_readers` runs every reader, and the drivers' functions over it, on
+  lines the producers print on cc (a new format adds a capture there, or says in `FORMATS` why no
+  CPU run prints it), and `benchmarks/test/test_bench_line_scan.py` refuses a bench-line pattern in
+  any other script. A stub bench in `test_cells.py` prints the real format, trailing census
+  included. A bench that refuses its measurement for host
   contention exits 3, and the drivers keep that apart from a failure (a 1 outranks a 3).
   A driver whose cells are a SEQUENCE rather than a design of arms (fits feeding later cells, a
   search then replays of its cache) runs each through `cells.py cell` (gh-ocannl-1607): the same

@@ -481,37 +481,19 @@ def run(args):
 # ---------------------------------------------------------------------------------------------
 # Summaries
 
-# The kernel table's row (Bench_harness.time_shipped_kernels). `io:<read>/<written>` (global-memory
-# bytes by the cost model; a `~` marks an upper bound, a `?` code the model cannot see) is
-# gh-ocannl-1444's and absent from older rows; the groups are named so that a field added to the row
-# renumbers nothing. Since gh-ocannl-1694 `ms` is the median of the kernel's timing calls and
-# `ms_lo=.. ms_hi=.. ms_retimed=<admitted>/<calls>` (Bench_retime.bounds_fields; `nan` below its
-# min_readings) its range; an older row's `ms` is a min-of-20 and carries no range.
-KERNEL = re.compile(r"^bench: kernel (?P<i>\d+)/(?P<n>\d+) (?P<ms>[0-9.]+) ms "
-                    r"(?:ms_lo=(?P<lo>-?nan|[0-9.]+) ms_hi=(?P<hi>-?nan|[0-9.]+) "
-                    r"ms_retimed=(?P<admitted>\d+)/(?P<calls>\d+) )?"
-                    r"grid=\[(?P<grid>[0-9;]+)\] block=\[(?P<block>[0-9;]+)\] "
-                    r"(?:io:(?P<read>\d+)/(?P<written>\d+)(?P<io_flags>[~?]*) )?"
-                    r"mma:(?P<mma>.*?) (?:vol:.*?)?w: (?P<writes>.*)$")
-
-
 def kernels(base):
     """The cell's per-kernel table, or None when it is incomplete: a kernel that declined to compile
     on its own (DECLINED), or none of whose timing calls was admitted (UNTIMED), has no time, and
     summing the rest would under-report the step. `lo`/`hi` are the row's range (None on a row
     without one, NaN where the row states none)."""
-    ks, totals = [], set()
     try:
-        for line in open(str(base) + ".err"):
-            m = KERNEL.match(line.rstrip("\n"))
-            if m:
-                totals.add(int(m["n"]))
-                ks.append({"i": int(m["i"]), "ms": float(m["ms"]),
-                           "lo": None if m["lo"] is None else float(m["lo"]),
-                           "hi": None if m["hi"] is None else float(m["hi"]),
-                           "grid": m["grid"], "block": m["block"], "w": m["writes"].split()})
-    except OSError:
+        with open(str(base) + ".err") as f:
+            rows = bench_output.kernel_rows(f.read())  # its one reader (gh-ocannl-1767)
+    except (OSError, ValueError):
         return None
+    totals = {r["n"] for r in rows}
+    ks = [{"i": r["i"], "ms": r["ms"], "lo": r["lo"], "hi": r["hi"], "grid": r["grid"],
+           "block": r["block"], "w": r["writes"]} for r in rows if r["ms"] is not None]
     if len(totals) != 1 or [k["i"] for k in ks] != list(range(next(iter(totals)))):
         return None
     return ks
