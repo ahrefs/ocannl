@@ -3080,21 +3080,34 @@ module Source_tokens : sig
   type t
 
   val scan : string -> t
+  val scan_static : string -> t
   val mentions : t -> string -> bool
+  val mentions_indexed : t -> string -> bool
+  val joined : t list -> t option
 end = struct
-  type t = string list
+  (* [closed]: the text ends outside any comment or literal, so the tokens of it joined to more text
+     by a newline are its tokens followed by that text's. *)
+  type t = { tokens : string array; closed : bool }
+
+  (* Single-character tokens, shared rather than allocated per occurrence. *)
+  let char_tokens = Array.init 256 ~f:(fun c -> String.of_char (Char.of_int_exn c))
 
   let scan source =
     let n = String.length source in
+    let closed = ref true in
     let ident c = Char.is_alphanum c || Char.equal c '_' in
     let rec quoted quote i =
-      if i >= n then n
+      if i >= n then (
+        closed := false;
+        n)
       else if Char.equal source.[i] '\\' then quoted quote (i + 2)
       else if Char.equal source.[i] quote then i + 1
       else quoted quote (i + 1)
     in
     let rec block i =
-      if i + 1 >= n then n
+      if i + 1 >= n then (
+        closed := false;
+        n)
       else if Char.equal source.[i] '*' && Char.equal source.[i + 1] '/' then i + 2
       else block (i + 1)
     in
@@ -3112,29 +3125,71 @@ end = struct
       else if ident source.[i] then
         let j = word (i + 1) in
         scan j (String.sub source ~pos:i ~len:(j - i) :: acc)
-      else scan (i + 1) (String.of_char source.[i] :: acc)
+      else scan (i + 1) (char_tokens.(Char.to_int source.[i]) :: acc)
     in
-    scan 0 []
+    let tokens = Array.of_list (scan 0 []) in
+    { tokens; closed = !closed }
 
-  let mentions tokens marker =
-    let rec prefix pattern tokens =
-      match (pattern, tokens) with
-      | [], _ -> true
-      | p :: ps, t :: ts when String.equal p t -> prefix ps ts
-      | _ -> false
+  (* gh-ocannl-1675: the scans of text that does not change between preludes -- a backend's includes
+     and builtin definitions, the same physical strings every time -- kept per domain, by physical
+     identity. Bounded: a caller that passes fresh strings only refills it. *)
+  let static_scans =
+    let key : (int, (string * t) list) Hashtbl.t Stdlib.Domain.DLS.key =
+      Stdlib.Domain.DLS.new_key (fun () -> Hashtbl.create (module Int))
     in
-    let pattern = scan marker in
-    let rec search = function
+    fun () -> Stdlib.Domain.DLS.get key
+
+  let scan_static source =
+    let table = static_scans () in
+    let len = String.length source in
+    match List.find (Hashtbl.find_multi table len) ~f:(fun (s, _) -> phys_equal s source) with
+    | Some (_, t) -> t
+    | None ->
+        let t = scan source in
+        if Hashtbl.length table > 4096 then Hashtbl.clear table;
+        Hashtbl.add_multi table ~key:len ~data:(source, t);
+        t
+
+  (* The tokens of [parts] joined by newlines, when that is the parts' tokens in order: every part
+     but the last ends outside any comment or literal (a newline ends a line comment and separates
+     tokens). [None] otherwise, and the joined text has to be scanned. *)
+  let joined parts =
+    match List.rev parts with
+    | [] -> Some { tokens = [||]; closed = true }
+    | last :: earlier ->
+        if List.for_all earlier ~f:(fun t -> t.closed) then
+          Some
+            { tokens = Array.concat (List.map parts ~f:(fun t -> t.tokens)); closed = last.closed }
+        else None
+
+  let follows tokens j pattern =
+    let n = Array.length tokens in
+    let rec go j = function
+      | [] -> true
+      | p :: ps -> j < n && String.equal p tokens.(j) && go (j + 1) ps
+    in
+    go j pattern
+
+  let mentions { tokens; _ } marker =
+    let pattern = Array.to_list (scan marker).tokens in
+    (not (List.is_empty pattern)) && Array.existsi tokens ~f:(fun i _ -> follows tokens i pattern)
+
+  (* [mentions] for many markers over one scan: where each token occurs, computed once. *)
+  let mentions_indexed { tokens; _ } =
+    let at = Hashtbl.create (module String) in
+    for i = Array.length tokens - 1 downto 0 do
+      Hashtbl.add_multi at ~key:tokens.(i) ~data:i
+    done;
+    fun marker ->
+      match Array.to_list (scan marker).tokens with
       | [] -> false
-      | _ :: rest as tokens -> prefix pattern tokens || search rest
-    in
-    (not (List.is_empty pattern)) && search tokens
+      | first :: rest ->
+          List.exists (Hashtbl.find_multi at first) ~f:(fun i -> follows tokens (i + 1) rest)
 end
 
 let source_mentions ~marker source = Source_tokens.mentions (Source_tokens.scan source) marker
 
-let prepend_conditional_includes ~conditional_includes source =
-  let tokens = Source_tokens.scan source in
+let prepend_conditional_includes_scanned ~conditional_includes ~tokens source =
   let headers =
     List.filter_map conditional_includes ~f:(fun (marker, header) ->
         if Source_tokens.mentions tokens marker && not (Source_tokens.mentions tokens header) then
@@ -3142,6 +3197,10 @@ let prepend_conditional_includes ~conditional_includes source =
         else None)
   in
   String.concat headers ^ source
+
+let prepend_conditional_includes ~conditional_includes source =
+  prepend_conditional_includes_scanned ~conditional_includes ~tokens:(Source_tokens.scan source)
+    source
 
 (** Keep the vendor exception constructor/status while attaching the actual option vector. The
     mapper returns [None] for unrelated exceptions, which retain their original backtrace. *)
@@ -4197,7 +4256,7 @@ module C_syntax (B : C_syntax_config) = struct
        genuine uses are code tokens and survive. Removed regions become a single space so tokens
        cannot concatenate across them. *)
     let tokens = Source_tokens.scan doc_string in
-    let mentions_token key = Source_tokens.mentions tokens key in
+    let mentions_token = Source_tokens.mentions_indexed tokens in
     (* gh-ocannl-1768: under the parameter-guard seam, a backend with a guard dialect takes the
        seam's definition overrides, and guards every function its prelude defines -- a function only
        a macro of the table calls included, since that macro expands at its use in the kernel, after
@@ -4229,6 +4288,13 @@ module C_syntax (B : C_syntax_config) = struct
     List.iter definitions ~f:(fun definition ->
         Buffer.add_string result_buffer definition;
         Buffer.add_string result_buffer "\n");
+    (* gh-ocannl-1675: the text is its parts joined by newlines, so its tokens are theirs -- the
+       includes' and the definitions', scanned once per domain, then the guards' and the kernels',
+       scanned above -- whenever no part ends inside a comment or literal ([Source_tokens.joined]).
+       Scanning the whole prelude again for every kernel was most of what an all-hit Metal link
+       paid, where the kernel code cache builds each kernel's key. *)
+    let parts = ref (List.rev_map definitions ~f:Source_tokens.scan_static) in
+    parts := !parts @ [ Source_tokens.scan_static includes ];
     Option.iter (Option.bind guards ~f:snd) ~f:(fun dialect ->
         let guarded =
           List.filter_map builtins ~f:(fun (key, definition, _) ->
@@ -4241,10 +4307,17 @@ module C_syntax (B : C_syntax_config) = struct
         if not (List.is_empty guarded) then (
           Param_guards.note_emitted (List.length guarded);
           List.iter (Param_guards.prelude dialect :: guarded) ~f:(fun line ->
+              parts := Source_tokens.scan line :: !parts;
               Buffer.add_string result_buffer line;
               Buffer.add_string result_buffer "\n")));
     Buffer.add_string result_buffer doc_string;
-    prepend_conditional_includes ~conditional_includes (Buffer.contents result_buffer)
+    let source = Buffer.contents result_buffer in
+    let tokens =
+      match Source_tokens.joined (List.rev (tokens :: !parts)) with
+      | Some tokens -> tokens
+      | None -> Source_tokens.scan source
+    in
+    prepend_conditional_includes_scanned ~conditional_includes ~tokens source
 
   open Indexing
   open Doc_helpers

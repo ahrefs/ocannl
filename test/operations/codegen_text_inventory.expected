@@ -13,6 +13,7 @@ compile_proc [Ir.C_syntax.C_syntax.compile_proc]
 default_binop_syntax [Ir.C_syntax.default_binop_syntax]
 emit writes into ~buf [Ir.Low_level.Canonical_render.emit]
 function_header_doc [Ir.Low_level.function_header_doc]
+joined [Ir.C_syntax.Source_tokens.joined]
 pp_axis_index [Ir.Indexing.Doc_helpers.pp_axis_index]
 pp_indices [Ir.Indexing.Doc_helpers.pp_indices]
 pp_static_symbol [Ir.Indexing.Doc_helpers.pp_static_symbol]
@@ -37,6 +38,7 @@ mma_syntax [Ir.C_syntax.C_syntax_config.mma_syntax Ir.C_syntax.Pure_C_config.mma
 pp_comma [Ir.Indexing.Doc_helpers.pp_comma]
 pp_log_statement [Ir.C_syntax.C_syntax_config.pp_log_statement Ir.C_syntax.Pure_C_config.pp_log_statement Ir.Cuda_like_config.Make.pp_log_statement]
 scan [Ir.C_syntax.Source_tokens.scan]
+scan_static [Ir.C_syntax.Source_tokens.scan_static]
 styled_log_arg [Ir.C_syntax.C_syntax_config.styled_log_arg Ir.C_syntax.Pure_C_config.styled_log_arg Ir.Cuda_like_config.Make.styled_log_arg]
 uint4x32_log_lane [Ir.C_syntax.C_syntax_config.uint4x32_log_lane Ir.C_syntax.Pure_C_config.uint4x32_log_lane Ir.Cuda_like_config.Make.uint4x32_log_lane]
 
@@ -481,6 +483,7 @@ test/operations/schedule_swizzle_matmul.ml [run by @test/operations/runtest-sche
     "__syncthreads()"
     "threadgroup float " ^ ...
     "threadgroup_barrier"
+test/operations/source_tokens_joined.ml [renders generated text in memory; run by @test/operations/runtest-source_tokens_joined]
 test/operations/test_bounds_folded_gather.ml [run by @test/operations/runtest-test_bounds_folded_gather]
     "!= 0 ?"
     "!= 0.0 ?"
@@ -642,6 +645,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-schedule_register_matmul
 @test/operations/runtest-schedule_smem_matmul
 @test/operations/runtest-schedule_swizzle_matmul
+@test/operations/runtest-source_tokens_joined
 @test/operations/runtest-test_bounds_folded_gather
 @test/operations/runtest-test_log_stmt_format
 @test/operations/runtest-test_metal_guarded_gather_codegen

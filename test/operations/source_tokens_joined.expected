@@ -1,0 +1,21 @@
+mentions_indexed answers mentions: cc builtins: true
+joined answers for the parts: cc builtins: true
+joined mentions what the joined text mentions: cc builtins: true
+mentions_indexed answers mentions: metal builtins: true
+joined answers for the parts: metal builtins: true
+joined mentions what the joined text mentions: metal builtins: true
+mentions_indexed answers mentions: a marker straddling two parts: true
+joined answers for the parts: a marker straddling two parts: true
+joined mentions what the joined text mentions: a marker straddling two parts: true
+mentions_indexed answers mentions: a line comment ending a part: true
+joined answers for the parts: a line comment ending a part: true
+joined mentions what the joined text mentions: a line comment ending a part: true
+mentions_indexed answers mentions: a block comment open across parts: true
+joined declines the parts: a block comment open across parts: true
+mentions_indexed answers mentions: a literal open across parts: true
+joined declines the parts: a literal open across parts: true
+the cc corpus mentions some builtin key: true
+a marker straddling two parts is mentioned: true
+an open block comment hides what its part's own scan reads: true
+scan_static remembers a physical string: true
+scan_static mentions what scan does: true

@@ -1088,7 +1088,21 @@ module Source_tokens : sig
   type t
 
   val scan : string -> t
+
+  val scan_static : string -> t
+  (** [scan], remembered per domain for this very string (by physical identity): for text a caller
+      passes unchanged again and again, such as a backend's includes and builtin definitions. *)
+
   val mentions : t -> string -> bool
+  (** Whether the code tokens contain [marker]'s tokens in sequence. *)
+
+  val mentions_indexed : t -> string -> bool
+  (** [mentions_indexed t] answers [mentions t] for any marker, after one pass indexing [t]: for
+      many markers over one scan. *)
+
+  val joined : t list -> t option
+  (** The scan of the parts' texts joined by newlines, from their scans: [None] when a part other
+      than the last ends inside a comment or a literal, where the joined text has to be scanned. *)
 end
 
 (** The plain-C defaults of {!C_syntax_config}, the cc backend's, which other backends override. *)
