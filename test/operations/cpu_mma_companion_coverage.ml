@@ -303,8 +303,8 @@ let () =
    materialized product is a companion of the unfused flavor, whose hardware-binding shapes are
    excluded and recovered by the lift; the fused flavor's demand skips the tail its fusion relocates
    into the accumulation nest, so it keeps them. The fused flavor's k-blocked packed twins are a
-   different matter -- [Fuse_epilogue] refuses a [Tile_mma] under a k-block loop, whatever the
-   companions (gh-ocannl-1612). *)
+   different matter, whatever the companions: [Fuse_epilogue] refuses a [Tile_mma] under a k-block
+   loop, and the tree refutes them on it (gh-ocannl-1612, pinned by cpu_seed_validity). *)
 let () =
   let tag = "tail64" in
   let x = ints "tail_x" ~rows:64 ~cols:32 7 in

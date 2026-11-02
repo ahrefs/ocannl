@@ -457,6 +457,24 @@ files.
   without `~fork_join`, which is why nothing noticed. A label's `0x0x0` is the whole-triple form
   (unsplit row), not a zero-size tile. `test/operations/cpu_mma_companion_coverage`, the
   `conv_tail_exec` leg of `conv_family_tree`.
+- **The fused flavor does not offer packed twins `Fuse_epilogue` always refuses** (gh-ocannl-1612).
+  The packed shapes that sink the row-block loop under the reduction-block loops (Serial, Hoisted,
+  the plain Grid shape; not `cpu_pack_grid_outermost`) write the accumulator once per reduction
+  block, and no contraction mints a fragment above those loops. `cpu_pack_fused_partial_witness`
+  refutes such a geometry in the fused flavor where the exactly-once rule refuses every completion:
+  with no k `Partition`, wherever a reduction-block loop repeats (`mma-cpu 16x0x16 ep` and its
+  `grid` twin at k = 32 were offered at every search and declined at every compile); with one, where
+  a loop of extent > 1 encloses both segments (a batch, outer contraction or column-block loop),
+  or where `full_block_split` splits a Serial row-block edge off. An unbatched partitioned twin
+  stays offered (gh-ocannl-1733 admits its last segment). Each clause restates an op's rule, so
+  `test/operations/cpu_seed_validity` pins the witness two-sided against `Fuse_epilogue` over
+  k-split sites, every clause firing, and checks every seed the CPU trees offer (companion lift and
+  coalesced branch included) against the cc compile path's `validate_parallel ~fork_join:true`.
+  Making the twins valid instead, by a tail under `If k_o = last` right after the micro-kernel, was
+  not built: new `Fuse_epilogue` machinery with no measured win (an elementwise CPU pass over the
+  output is cheap beside the GEMM), and the grid-outermost shapes already give the
+  tail-after-the-whole-reduction order. A test that read a tree change through a flag-flipped
+  population (`epilogue_fusion_single_trip_sweep` flips `ss_whole`) still sees these twins, refused.
 ## Family decisions and launch geometry
 - **The family tree's decisions are DATA, and reading one back means matching on it — never
   re-parsing a label** (gh-ocannl-591). `Ir.Schedule_space` is parameterized over the decision type
@@ -2205,7 +2223,7 @@ files.
   runs once per output tile, which is what `Fuse_epilogue` relocates a tail to, and
   `fuse_at_fragment` fuses at one site only (a row-block split's later segment covers only the edge
   rows and is refused on cover); under a k-block loop it refuses either form on exactly-once, so
-  splitting there costs nothing. The
+  splitting there costs nothing (and the tree does not offer those fused twins, gh-ocannl-1612). The
   `Grid` flavors are untouched (a `Grid` loop is not split; `Grid_outermost` contracts at `k_o`).
   The census then reports two register-tiled `Tile_mma`s for one padded serial GEBP;
   `gebp_padded_parity` pins where each row block accumulates.

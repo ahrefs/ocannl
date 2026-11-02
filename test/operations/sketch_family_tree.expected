@@ -605,18 +605,22 @@ fusion = unfused
 fusion = fused
 tree leaves = flat enumeration: true
 every fused leaf follows every unfused leaf: true
+unfused leaves whose fused twin is refuted on exactly-once: 0
 every unfused leaf has its fused twin, in order: true
 the fused flavor twins the unfused leaves geometry for geometry: true
 refuted: 0 unfused, 0 fused; excluded: 1 unfused, 1 fused
-== fusable tail cpu: 34 seeds (12 unfused + 22 fused), 34 choice nodes, depth 6 ==
+== fusable tail cpu: 28 seeds (12 unfused + 16 fused), 31 choice nodes, depth 6 ==
 fusion = unfused
 fusion = fused
 tree leaves = flat enumeration: true
 every fused leaf follows every unfused leaf: true
+unfused leaves whose fused twin is refuted on exactly-once: 4
+the fused flavor refutes those geometries naming gh-ocannl-1612: true
+no such twin is a fused leaf: true
 every unfused leaf has its fused twin, in order: true
 every fused leaf without an unfused twin is a CPU tensorized shape binding a hardware dimension: true
 the unfused flavor excludes those shapes beside its companion: true
-refuted: 0 unfused, 13 fused; excluded: 11 unfused, 7 fused
+refuted: 0 unfused, 16 fused; excluded: 11 unfused, 7 fused
 == gpu tight smem: 9 seeds ==
 tree leaves = flat enumeration: true
 -- refuted --
