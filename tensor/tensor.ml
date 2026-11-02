@@ -1736,9 +1736,13 @@ module Scheme = struct
   (* The trace proper, to run inside a rewound window. *)
   let trace_core ?sabotage ~label arity f =
     let var_mark = Row.var_mark () in
+    (* The tracers' terminal steps are the trace's work, discarded with it: not inline
+       registrations. Made after [var_mark], so that their variables are generalized, and before the
+       trace's constraint window opens. *)
     let tracers =
-      List.init arity ~f:(fun i ->
-          term ~grad_spec:Prohibit_grad ~label:[ [%string "%{label}.arg%{i#Int}"] ] ())
+      Shape.as_tracing ~label (fun () ->
+          List.init arity ~f:(fun i ->
+              term ~grad_spec:Prohibit_grad ~label:[ [%string "%{label}.arg%{i#Int}"] ] ()))
     in
     Shape.Scheme.trace ?sabotage ~var_mark ~label
       ~args:(List.map tracers ~f:(fun t -> t.shape))
