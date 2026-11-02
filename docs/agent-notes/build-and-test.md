@@ -3400,8 +3400,15 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   hook. The real
   download is deliberately x86_64 Linux/Debian-family-only, since its cc kernels execute on the
   host; `--dry-run` validates and prints the complete staging plan on macOS and other hosts. This is compiler/codegen evidence, not an OS emulator: the
-  GCC patch release is whichever candidate the configured apt indexes serve (the exact version and
-  target are printed and major 13 is enforced), and the clang leg has a Linux cross sysroot rather
+  GCC 13 packages come from an isolated scratch index over Ubuntu 24.04 (noble), the series
+  `ubuntu-latest` runs, so a newer host's own `gcc-13` (resolute's 13.4 on minix) cannot stand in
+  for CI's 13.3 (gh-ocannl-1696; the exact version and target are printed and major 13 is
+  enforced). `--toolchain DIR` keeps that GCC in DIR, staged on first use and reused unfetched
+  afterwards: minix keeps one at `/home/lukstafi/.local/opt/x86_64-linux-gnu-gcc-13`, the census
+  leg is one run per `cc_march_census` piece (`tools/ci-compiler-test.sh --toolchain <dir>
+  @test/operations/runtest-cc_march_census-<piece>`), and a fresh-build-directory run costs
+  seconds to minutes once dune's cache is warm. Run it under the fleet's slot with `--cpu`. The
+  clang leg has a Linux cross sysroot rather
   than the macOS SDK, ABI, linker or runtime. It therefore complements CI and the GPU boxes rather
   than replacing either. Fetches, extraction and the test harness are attached children: an outer
   cancellation forwards `TERM` and reaps the active child before scratch cleanup.
