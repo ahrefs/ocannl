@@ -2961,6 +2961,24 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
         [%string
           "inline_computation: call_args too short, maybe stale optimization context? Tnode: \
            %{Tn.debug_name self} #%{self.Tn.id#Int} n: %{n#Int}"];
+    (* gh-ocannl-1795: the producer and the read must index the node in the same coordinate layout
+       -- a [Sub_axis] at the same positions on both sides. Every step below solves RAW positions
+       pairwise, which is sound only when position [i] names the same coordinate on both sides
+       ({!Affine.view}): after a [Sub_axis] run the next component is a flattened index over the
+       run's extent product, not its own axis's. A one-sided [Sub_axis] bound a producer symbol to
+       the run placeholder, which the substitution then carried into the replay's other reads (a
+       transposed operand read [a[t; Sub_axis]]), into an affine read (where it silently counts as
+       0), and into guards ([Embed_index Sub_axis], which renders as nothing) -- each measured to
+       miscompute. Such a read site is refused; normalizing both sides into common coordinates is
+       separate work. With the layouts agreeing, no symbol is ever bound to [Sub_axis]: pass 1 binds
+       to a call index that is not one, and the solving rounds bind to [Iterator]s and affine forms
+       of the call's symbols. *)
+    if
+      not
+        (Array.for_alli def_args_arr ~f:(fun i lhs ->
+             let is_sub = function Indexing.Sub_axis -> true | _ -> false in
+             Bool.equal (is_sub lhs) (is_sub call_args.(i))))
+    then raise @@ Non_virtual "13:call-site-index-mismatch";
     (* [bound_pos.(i)] marks positions that DEFINE bindings (no consistency guard for them).
        [range_guards] collects [(uc, rest, rhs, (lo, width))] tuples: the solved symbol's value must
        fall in [lo, lo + width), its producer loop's bounds. *)
@@ -3072,8 +3090,9 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
     (* Remaining non-binding positions become consistency guards: [subst(producer_pos) = call_site].
        [Fixed_idx]/[Sub_axis] carry no symbol: a [Fixed_idx] position read at a symbolic index is
        guarded too, under a fallback proof ([fixed_guardable], gh-ocannl-1735); a static mismatch
-       between two fixed cells, or any [Sub_axis] position, stays materialized via [Non_virtual 13].
-       Guards are materialized at the [Set] node with the live (freshened) env. *)
+       between two fixed cells stays materialized via [Non_virtual 13], and a [Sub_axis] position
+       equals its counterpart (the layout gate above). Guards are materialized at the [Set] node
+       with the live (freshened) env. *)
     let depends_on_symbol (idx : Indexing.axis_index) =
       match idx with
       | Indexing.Iterator s -> not (Set.mem static_indices s)

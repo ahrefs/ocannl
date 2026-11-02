@@ -640,6 +640,65 @@ let row_unit_axis_flattened () =
   row ~label:"unit_axis_flattened" ~llc ~cand:x ~out ~seed:[] ~expected:[| 9.; 2.; 3.; 4. |]
     ~verdict:Accepted
 
+(* === Mismatched coordinate layouts (gh-ocannl-1795) ===
+
+   The mirror of [row_unit_axis_flattened]: there the producer and the read both flatten the node
+   through [Sub_axis], so position by position they name the same coordinate. Here only the READ
+   does, and the inliner solves raw positions pairwise: it bound the producer's first symbol to the
+   run placeholder and carried it on. Each of these inlined and miscomputed before the layout gate
+   (the values in each comment); each read site is now refused, and the node materializes. *)
+
+(* Into a guard: the diagonal's repeated symbol becomes [Sub_axis == t] ([Embed_index Sub_axis]
+   renders as nothing), which printed [1; 0; 0; 0]. *)
+let row_flattened_read_diagonal () =
+  let x = mk ~dims:[| 2; 2 |] "frd_x" and out = mk "frd_out" in
+  materialize out;
+  let s = sym () and t = sym () in
+  let llc =
+    seq (zero x)
+      (seq
+         (loop_n s 2 (set x [| iter s; iter s |] (tick s)))
+         (loop_n t n (set out [| iter t |] (get x [| Idx.Sub_axis; iter t |]))))
+  in
+  row ~label:"flattened_read_diagonal" ~llc ~cand:x ~out ~seed:[] ~expected:[| 1.; 0.; 0.; 2. |]
+    ~verdict:(Rejected (Consumption, Ir.Tnode.Site "13:call-site-index-mismatch"))
+
+(* Into a fixed guard and the range guards: [2 == t] compares the producer's column with the flat
+   index, and the covering component's guards bound the flat index by the row count, which printed
+   [1; 2; 90; 4; 0; 0; 0; 0]. *)
+let row_flattened_read_fixed_component () =
+  let x = mk ~dims:[| 2; 4 |] "frf_x" and out = mk ~dims:[| 8 |] "frf_out" in
+  materialize out;
+  let i = sym () and k = sym () and s = sym () and t = sym () in
+  let llc =
+    seq
+      (loop_n i 2 (loop_n k 4 (set x [| iter i; iter k |] (tag i k))))
+      (seq
+         (loop_n s 2 (set x [| iter s; fixed 2 |] (ramp 90. s)))
+         (loop_n t 8 (set out [| iter t |] (get x [| Idx.Sub_axis; iter t |]))))
+  in
+  row ~label:"flattened_read_fixed_component" ~llc ~cand:x ~out ~seed:[]
+    ~expected:[| 1.; 2.; 90.; 4.; 11.; 12.; 91.; 14. |]
+    ~verdict:(Rejected (Consumption, Ir.Tnode.Site "13:call-site-index-mismatch"))
+
+(* Into the replay's other reads, with no guard at all: a transposing producer [x[i; k] := a[k; i]]
+   replayed as [a[t; Sub_axis]], which printed [1; 3; 5; 0; 0; 0]. *)
+let row_flattened_read_transpose () =
+  let a = mk ~dims:[| 3; 2 |] "frt_a" and x = mk ~dims:[| 2; 3 |] "frt_x" in
+  let out = mk ~dims:[| 6 |] "frt_out" in
+  materialize a;
+  materialize out;
+  let i = sym () and k = sym () and t = sym () in
+  let llc =
+    seq
+      (loop_n i 2 (loop_n k 3 (set x [| iter i; iter k |] (get a [| iter k; iter i |]))))
+      (loop_n t 6 (set out [| iter t |] (get x [| Idx.Sub_axis; iter t |])))
+  in
+  row ~label:"flattened_read_transpose" ~llc ~cand:x ~out
+    ~seed:[ (a, [| 1.; 2.; 3.; 4.; 5.; 6. |]) ]
+    ~expected:[| 1.; 3.; 5.; 2.; 4.; 6. |]
+    ~verdict:(Rejected (Consumption, Ir.Tnode.Site "13:call-site-index-mismatch"))
+
 (* === A refused scalar constexpr declines (gh-ocannl-1735) ===
 
    A constant scalar is exempt from the heuristic caps, but its [40:scalar-constexpr] commitment now
@@ -805,6 +864,9 @@ let () =
   row_unit_axis_computed_producer ();
   row_unit_axis_loop_producer ();
   row_unit_axis_flattened ();
+  row_flattened_read_diagonal ();
+  row_flattened_read_fixed_component ();
+  row_flattened_read_transpose ();
   row_hoisted_local ();
   row_scan_recurrence ();
   row_constexpr_cap_exempt ();

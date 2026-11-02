@@ -81,6 +81,15 @@ unit_axis_loop_producer: the two placements agree: true
 unit_axis_flattened: inlined: true
 unit_axis_flattened: executed values are the reference: true
 unit_axis_flattened: the two placements agree: true
+flattened_read_diagonal: rejected at consumption time as 13:call-site-index-mismatch: true
+flattened_read_diagonal: executed values are the reference: true
+flattened_read_diagonal: the two placements agree: true
+flattened_read_fixed_component: rejected at consumption time as 13:call-site-index-mismatch: true
+flattened_read_fixed_component: executed values are the reference: true
+flattened_read_fixed_component: the two placements agree: true
+flattened_read_transpose: rejected at consumption time as 13:call-site-index-mismatch: true
+flattened_read_transpose: executed values are the reference: true
+flattened_read_transpose: the two placements agree: true
 hoisted_local: rejected at store time as 19:declare-local: true
 hoisted_local: executed values are the reference: true
 hoisted_local: the two placements agree: true
