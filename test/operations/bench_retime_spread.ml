@@ -91,3 +91,59 @@ let () =
   p "env: an odd count is refused (the design mirrors every batch)" (Option.is_none (calls "5"));
   p "env: a count below min_readings is refused" (Option.is_none (calls "2"));
   p "env: a non-number is refused" (Option.is_none (calls "six"))
+
+(* gh-ocannl-1763: the dominant-kernel instrument's screen. [screen_keep] picks which screened
+   kernels are re-timed: every refused one, and of the rest those within [screen_ratio] of the
+   slowest reading, at most [at_most], the slowest first. The instrument applies it after EACH
+   reading and releases what it drops as it goes, which is sound only if that incremental use keeps
+   exactly what one application to every reading keeps -- claimed below over scripted sequences. *)
+let () =
+  let names l = String.concat ~sep:" " l in
+  let kept, dropped =
+    R.screen_keep
+      [ ("a", Some 1.); ("b", Some 4.); ("c", Some 2.5); ("d", None); ("e", Some 1.875) ]
+  in
+  printf "screen: kept [%s] dropped [%s]\n" (names kept) (names dropped);
+  p "screen: within 2x of the slowest is kept, below it dropped, a refused reading kept"
+    (List.equal String.equal kept [ "b"; "c"; "d" ] && List.equal String.equal dropped [ "a"; "e" ]);
+  let kept, _ = R.screen_keep [ ("half", Some 2.); ("slowest", Some 4.) ] in
+  p "screen: a reading exactly at the cut is kept"
+    (List.equal String.equal kept [ "half"; "slowest" ]);
+  let kept, dropped =
+    R.screen_keep ~at_most:3
+      [ ("p", Some 1.5); ("q", Some 1.75); ("r", Some 2.); ("s", Some 1.25); ("t", Some 1.875) ]
+  in
+  p "screen: the cap keeps the slowest readings, in input order"
+    (List.equal String.equal kept [ "q"; "r"; "t" ] && List.equal String.equal dropped [ "p"; "s" ]);
+  let kept, _ =
+    R.screen_keep ~at_most:2 [ ("w", Some 2.); ("x", Some 2.); ("y", Some 2.); ("z", None) ]
+  in
+  p "screen: a tie at the cap goes to the earlier entry; refused readings are outside the cap"
+    (List.equal String.equal kept [ "w"; "x"; "z" ]);
+  p "screen: with every reading refused, everything is kept"
+    (Poly.equal (R.screen_keep [ ("u", None); ("v", None) ]) ([ "u"; "v" ], []));
+  p "screen: nothing to screen keeps nothing, drops nothing"
+    (Poly.equal (R.screen_keep ([] : (string * float option) list)) ([], []));
+  (* Scripted sequences: a linear congruential stream of dyadic readings in [1/8, 8), every seventh
+     refused, screened at several caps and ratios. *)
+  let sequence ~seed ~len =
+    let state = ref seed in
+    List.init len ~f:(fun k ->
+        state := ((!state * 1103515245) + 12345) % 2147483648;
+        let r =
+          if !state % 7 = 0 then None else Some (Float.of_int (1 + (!state / 7 % 63)) /. 8.)
+        in
+        (k, r))
+  in
+  let cases =
+    List.concat_map [ 1; 2; 3; 8 ] ~f:(fun at_most ->
+        List.concat_map [ 1.5; 2.; 4. ] ~f:(fun ratio ->
+            List.map [ 11; 29; 47; 1763 ] ~f:(fun seed -> (at_most, ratio, sequence ~seed ~len:40))))
+  in
+  p_all "screen: applied after each reading, it keeps what one application to all of them keeps"
+    cases ~f:(fun (at_most, ratio, entries) ->
+      let keep held =
+        fst (R.screen_keep ~ratio ~at_most (List.map held ~f:(fun e -> (e, snd e))))
+      in
+      let incremental = List.fold entries ~init:[] ~f:(fun held e -> keep (held @ [ e ])) in
+      List.equal (fun (a, _) (b, _) -> Int.equal a b) incremental (keep entries))

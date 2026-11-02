@@ -1242,7 +1242,9 @@ fixtures still on neither box.
   column), `Bench_harness.dominant_kernel` compiles every kernel the step **shipped** — the
   routine's own `Context.routine.segments`, so a tuned cell's searched winner is what gets timed,
   not the default pipeline a re-lowering would produce — as a routine of its own through the
-  `?prelowered` seam, times each as the median of its timing calls (*Per-kernel tables* under Methodology notes),
+  `?prelowered` seam, screens each with one timing call, re-times the candidates -- those within
+  2x of the slowest reading, at most eight, plus any whose reading was refused -- together as the
+  median of their timing calls (*Per-kernel tables* under Methodology notes; gh-ocannl-1763),
   and takes the slowest by median; the result line carries that kernel's range beside it
   (`seg_ms_lo`, `seg_ms_hi`; `null` below four admitted readings). The
   cell reads `41.3% f32 memory · k3/12 0.412 ms w1.grad`: the attainment, its ceiling, the roofline
@@ -1280,7 +1282,8 @@ fixtures still on neither box.
     cost counts against it, since the kernel is timed with its launches.
   The Python runners carry `"dominant_kernel": null` (they expose no per-kernel counts), printed
   `—`. `BENCH_DOMINANT_KERNEL=0` turns the instrument off for an OCANNL cell — it costs one compile
-  and four timing calls per kernel of the step — and its row then prints `—` too. The instrument has a wall-clock budget
+  and one timing call per kernel of the step, then four calls per candidate — and its row then
+  prints `—` too. The instrument has a wall-clock budget
   of its own, `BENCH_DOMINANT_KERNEL_BUDGET_S` (default 600 s; gh-ocannl-1260): past it the column
   is `no-kernel`, "instrument over budget", and the cell keeps its result line instead of losing it
   to the cell's cap. On POSIX a kernel still compiling or timing is interrupted at the budget; on
@@ -1553,7 +1556,11 @@ fixtures still on neither box.
     of ~10 ms on a fast kernel), about half a second whatever the kernel's size, against 21 runs
     before. At six calls a kernel, `gpt2_mini_train` on Metal (178 kernels) took the instrument 3 s
     per kernel, about 545 s of its 600 s `BENCH_DOMINANT_KERNEL_BUDGET_S`, hence the kernel default
-    of four. With the table on, its
+    of four. Four calls a kernel still cost 371-381 s of a 377-386 s cell, so since gh-ocannl-1763
+    the dominant-kernel instrument screens every kernel with ONE call and re-times only the
+    candidates its screen leaves (the column's passage above), closing with a `bench: dominant
+    kernel: screened ..` stderr line that states both stages' wall time; with the table on, every
+    kernel is still re-timed, so a table costs what it did. With the table on, its
     closing `bench: per-kernel table:` line states the instrument's wall time. A kprof cell pins
     `--ocannl_autotune_timing=isolated`, whose synchronized singles keep its trace to a few hundred
     isolated records per kernel.

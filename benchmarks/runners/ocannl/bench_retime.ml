@@ -150,17 +150,77 @@ let configured_timing () =
     Timing dispatches each routine many times against its live buffers ({!Autotune.time_routine}
     restores nothing), so a caller checking a routine's output runs it once more afterwards from
     inputs that are not its own outputs, as an exactness oracle must anyway. *)
+let configured_repeats () = Utils.registered_int ~arg_name:"autotune_repeats"
+
+(** [read_once (ctx, routine)]: one reading -- one {!Autotune.time_routine} call under
+    {!configured_timing} and the configured [autotune_repeats], admitted through
+    {!Autotune.admitted_timing_ms} ([None] when refused). {!retime} is made of these. *)
+let read_once ?(timing = configured_timing ()) ((ctx, routine) : Context.t * Context.routine) =
+  Autotune.admitted_timing_ms
+    (Autotune.time_routine ~timing ~repeats:(configured_repeats ()) ctx routine)
+
 let retime ?calls (routines : (Context.t * Context.routine) list) =
   let calls = Option.value_or_thunk calls ~default:calls_of_env in
   let timing = configured_timing () in
-  let repeats = Utils.registered_int ~arg_name:"autotune_repeats" in
   let routines = Array.of_list routines in
   let arms = Array.length routines in
   let readings = Array.init arms ~f:(fun _ -> Array.create ~len:calls None) in
   if arms > 0 then
     Array.iteri (Bench_design.orders ~arms ~batches:calls) ~f:(fun batch order ->
-        Array.iter order ~f:(fun a ->
-            let ctx, routine = routines.(a) in
-            readings.(a).(batch) <-
-              Autotune.admitted_timing_ms (Autotune.time_routine ~timing ~repeats ctx routine)));
+        Array.iter order ~f:(fun a -> readings.(a).(batch) <- read_once ~timing routines.(a)));
   (timing, Array.to_list readings)
+
+(** {1 Screening many routines for the slowest (gh-ocannl-1763)}
+
+    Re-timing every one of a step's kernels with a spread costs [calls] timing calls each, about
+    half a second a call whatever the kernel's size: on a 178-kernel [gpt2_mini_train] step on
+    Metal, about 2.1 s a kernel and 371-381 s of a 377-386 s cell. Only the slowest kernel's time is
+    reported, so the many kernels that are nowhere near it need no spread: each is SCREENED with one
+    reading ({!read_once}), and only the kernels whose screen reading comes within {!screen_ratio}
+    of the slowest one -- at most {!screen_at_most} of them -- are re-timed, together, in one
+    {!retime} session, where the slowest is decided by median with its range as before.
+
+    A reading is a minimum over a calibrated window, so noise only raises it above the kernel's
+    floor. The truly slowest kernel is therefore left out only when some other kernel's single
+    reading came out more than twice the slowest's own -- a window inflated past 2x that the
+    admission gate still passed -- and then the inflated kernel is re-timed and the wrong one can be
+    named. A kernel whose screen reading was refused is not ruled out: it is always a candidate,
+    outside the cap, since nothing is known of it. *)
+
+(** A kernel is a candidate when its screen reading is at least the slowest one over this. *)
+let screen_ratio = 2.
+
+(** The most screened kernels re-timed, the slowest readings first: on a step whose many kernels all
+    read within {!screen_ratio} of one another (identical layers), the cap keeps the re-timing
+    bounded. Those left out read below every candidate, so the cap can mis-name the slowest only
+    among kernels a single reading did not order -- ones whose re-timed ranges would most likely
+    overlap anyway. *)
+let screen_at_most = 8
+
+(** [screen_keep ?ratio ?at_most entries]: [(kept, dropped)], each in [entries]' order, of entries
+    paired with their screen reading ([None]: refused). Kept: every refused entry, and of the others
+    those reading at least [slowest /. ratio] ([ratio] default {!screen_ratio}), at most [at_most]
+    (default {!screen_at_most}) of them, the slowest first, ties to the earlier entry.
+
+    Applied after each new reading to the entries kept so far, it keeps exactly what it keeps
+    applied once to all of them: the slowest reading only grows, so an entry it drops stays below
+    the final cut, and one dropped by the cap has [at_most] entries above it that are dropped, if
+    ever, only for something that drops it too. So a caller may release what it drops as it goes. *)
+let screen_keep ?(ratio = screen_ratio) ?(at_most = screen_at_most) entries =
+  let indexed = List.mapi entries ~f:(fun k (x, r) -> (k, x, r)) in
+  let slowest =
+    List.fold indexed ~init:Float.neg_infinity ~f:(fun m (_, _, r) ->
+        match r with Some r -> Float.max m r | None -> m)
+  in
+  let read = List.filter_map indexed ~f:(fun (k, _, r) -> Option.map r ~f:(fun r -> (k, r))) in
+  let ranked =
+    List.filter read ~f:(fun (_, r) -> Float.(r >= slowest /. ratio))
+    |> List.stable_sort ~compare:(fun (_, a) (_, b) -> Float.compare b a)
+  in
+  let top = List.map (List.take ranked at_most) ~f:fst in
+  let kept_index k = List.mem top k ~equal:Int.equal in
+  let kept, dropped =
+    List.partition_tf indexed ~f:(fun (k, _, r) -> Option.is_none r || kept_index k)
+  in
+  let strip = List.map ~f:(fun (_, x, _) -> x) in
+  (strip kept, strip dropped)

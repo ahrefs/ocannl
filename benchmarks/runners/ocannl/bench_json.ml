@@ -306,11 +306,14 @@ type kernel = {
   writes : string;  (** The nodes it writes, the label a reader finds it by. *)
   seg_ms : float;
       (** Its per-launch time on its own: the median of its timing calls under the configured
-          [autotune_timing] (gh-ocannl-1694; a min-of-20 of synchronized launches before). *)
+          [autotune_timing] (gh-ocannl-1694; a min-of-20 of synchronized launches before), taken in
+          the re-timing of the kernels the one-call screen left as candidates (gh-ocannl-1763). *)
   seg_ms_lo : float;
       (** The least of those readings; NaN ([null]) below [Bench_retime.min_readings] of them. *)
   seg_ms_hi : float;  (** The greatest, likewise. *)
-  segments_ms : float;  (** The medians, summed over the kernels that were timed. *)
+  segments_ms : float;
+      (** The kernels' times, summed over those that were timed: a re-timed candidate's median, a
+          screened kernel's one reading (gh-ocannl-1763). *)
   tensorization : string;  (** [Ir.C_syntax.tensorization_name] of its own compile. *)
   flops : int;
   bytes : int;
