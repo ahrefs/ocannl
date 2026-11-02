@@ -951,7 +951,6 @@
  (libraries
   base
   stdio
-  unix
   ctypes
   ctypes.foreign
   arrayjit.ir

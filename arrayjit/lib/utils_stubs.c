@@ -99,6 +99,28 @@ CAMLprim value ocannl_process_alive(value v_pid) {
 #endif
 }
 
+/* The host platform, as the compiler that built this library targets it (gh-ocannl-1741): one
+   answer for the cc backend's kernel link flags and for the tests gating on macOS behavior, read
+   without a subprocess. The kernels are compiled for the same host, so the build target is the
+   right question. */
+CAMLprim value ocannl_host_is_darwin(value unit) {
+  (void)unit;
+#if defined(__APPLE__)
+  return Val_true;
+#else
+  return Val_false;
+#endif
+}
+
+CAMLprim value ocannl_host_is_arm64(value unit) {
+  (void)unit;
+#if defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64)
+  return Val_true;
+#else
+  return Val_false;
+#endif
+}
+
 /* Where the C runtime's [stderr] is a modifiable lvalue, so the two stubs below can replace the
    stream (glibc, Darwin). One spelling for both, and published through
    [ocannl_c_stderr_replaceable] so a test can gate on the very predicate the stubs use rather than

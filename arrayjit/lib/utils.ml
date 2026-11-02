@@ -2860,6 +2860,14 @@ external detach_c_stderr : unit -> bool = "ocannl_detach_c_stderr"
 let c_stderr_detached =
   get_global_flag ~default:true ~arg_name:"detach_c_stderr" && detach_c_stderr ()
 
+external host_is_darwin_stub : unit -> bool = "ocannl_host_is_darwin"
+external host_is_arm64_stub : unit -> bool = "ocannl_host_is_arm64"
+
+(* gh-ocannl-1741: the build target's answer, so no caller shells out to [uname]. See the
+   interface. *)
+let host_is_darwin = host_is_darwin_stub ()
+let host_is_darwin_arm64 = host_is_darwin && host_is_arm64_stub ()
+
 external c_stderr_replaceable : unit -> bool = "ocannl_c_stderr_replaceable"
 (** Whether this C runtime's [stderr] can be replaced at all (glibc, Darwin): the predicate both
     {!detach_c_stderr} and {!collapse_c_stderr_noise} are compiled under, so a test can tell a host
