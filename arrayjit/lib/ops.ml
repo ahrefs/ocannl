@@ -250,6 +250,20 @@ let equal_prec p1 p2 =
   | Double_prec _, _ ->
       false
 
+(** Whether every value of precision [from] converts to [to_] exactly, so that a conversion through
+    [to_] is the identity on it: equal precisions, or a float widening (fp8 into any wider float --
+    both e4m3 and e5m2 fit half's and bfloat16's exponent ranges and significands -- half or
+    bfloat16 into single or double, single into double). Integer conversions are conservatively
+    [false] (gh-ocannl-1788). *)
+let widens_exactly ~from ~to_ =
+  match (from, to_) with
+  | _ when equal_prec from to_ -> true
+  | Fp8_prec _, (Half_prec _ | Bfloat16_prec _ | Single_prec _ | Double_prec _)
+  | (Half_prec _ | Bfloat16_prec _), (Single_prec _ | Double_prec _)
+  | Single_prec _, Double_prec _ ->
+      true
+  | _ -> false
+
 let compare_prec p1 p2 =
   match (p1, p2) with
   | Void_prec, Void_prec -> 0

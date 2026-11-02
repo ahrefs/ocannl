@@ -1698,7 +1698,10 @@ val simplify_llc : Indexing.static_symbol list -> t -> t
 
     Exact: every rewrite preserves IEEE results (the [x * 1] and [x - (+0)] identities, constant
     folding, guard folds); integer arithmetic is reassociated as {!fp_algebra_step} does with no
-    licence. A leaf it does not rewrite keeps its annotation (gh-ocannl-1788), so a [?prelowered]
+    licence. A single-assignment [Local_scope] is collapsed into its reader only where its rounding
+    to its own precision is not part of the value (gh-ocannl-1788): the slot evaluates at the
+    scope's precision, or the value is a load whose storage precision the scope's widens exactly
+    ([Ops.widens_exactly]). A leaf it does not rewrite keeps its annotation, so a [?prelowered]
     routine's request on a load still reaches {!validate_operand_precisions} at codegen. The
     licensed floating-point algebra runs once, on the raw lowering, in the rewrite tier member
     [Fp_algebra] (gh-ocannl-998), so neither this pass nor the schedule transforms that rerun it can

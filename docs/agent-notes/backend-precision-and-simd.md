@@ -240,9 +240,9 @@ files.
   `test/operations/ll_builder_precisions` pins each builder under `single`, `half` and `bfloat16`
   stores. `C_syntax.compile_proc` repeats the check on the way out (gh-ocannl-1739), so a
   `?prelowered` routine, which skips `optimize`, meets it there. The optimizer's own rewrites leave
-  stale annotations (a scope of another precision collapsed into its reader keeps the scope's
-  precision on a product of wider loads; `mixed_prec_twin_shape`'s virtualized bf16 cast twin was
-  one), so `post_virtualization_pipeline` ends in `describe_operand_precisions`, which rewrites each
+  stale annotations (a widening scope over a load collapsed into its reader leaves the scope's
+  precision on the load; constant folding; the elided operands), so `post_virtualization_pipeline`
+  ends in `describe_operand_precisions`, which rewrites each
   annotation the gate would refuse to the slot's precision: sound only there, because the entry gate
   already refused every builder's request. `Schedule.apply` re-describes a schedule's result
   (`Privatize`'s widened tile evaluates at `acc_prec`; its trailing simplify collapses scopes too)

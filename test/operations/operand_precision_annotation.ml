@@ -21,7 +21,8 @@
    gh-ocannl-1788: that includes a request on a load. [simplify] used to re-annotate every load at
    its storage precision, which erased such a request before the gate could judge it (and, in a
    heterogeneous slot, changed the precision the renderer evaluates the load at); it now keeps a
-   leaf's annotation. *)
+   leaf's annotation. It also collapses a scope only where that is exact, so the collapse cases
+   below collapse a widening scope over a load. *)
 open Base
 open Ocannl.Operation.DSL_modules
 module LL = Ir.Low_level
@@ -73,29 +74,29 @@ let prelowered ?(scheduled = false) ?(value = fun ~x p -> LL.Binop (Ops.Add, (x,
   in
   (fst (link_outcome name o), Ir.Tnode.label_name out_bf)
 
-(* A virtual bfloat node computed from a single input and read in a single sum, annotated with its
-   own precision there (what the lowering writes). Inlining makes the read a bfloat scope, and
-   simplification collapses the scope into the sum: the operand is now a single product still
-   annotated bfloat16, which describes neither the slot nor the product. *)
+(* A virtual single node copying a bfloat input, read in a bfloat sum, annotated with its own
+   precision there (what the lowering writes). Inlining makes the read a single scope over a bfloat
+   load, which simplification collapses into the sum -- exactly, since bfloat16 widens to single
+   without loss (gh-ocannl-1788): the operand is now a bfloat load still annotated single, which
+   describes neither the slot nor the load. *)
 let optimized_collapse name =
   let s1 = Ll_test.sym () and s2 = Ll_test.sym () in
   let i1 = [| Ll_test.iter s1 |] and i2 = [| Ll_test.iter s2 |] in
-  let in_f = fnode (name ^ "_in_f") and mid_bf = bnode (name ^ "_mid_bf") in
-  let out_f = fnode (name ^ "_out_f") in
-  List.iter [ in_f; out_f ] ~f:Ll_test.materialize;
-  Ll_test.virtualize mid_bf;
+  let in_bf = bnode (name ^ "_in_bf") and mid_f = fnode (name ^ "_mid_f") in
+  let out_bf = bnode (name ^ "_out_bf") in
+  List.iter [ in_bf; out_bf ] ~f:Ll_test.materialize;
+  Ll_test.virtualize mid_f;
   let llc =
     LL.unflat_lines
       [
-        Ll_test.loop_n s1 n
-          (Ll_test.set mid_bf i1
-             (LL.Binop (Ops.Mul, (Ll_test.get in_f i1, f32), (LL.Constant 2., f32))));
+        Ll_test.loop_n s1 n (Ll_test.set mid_f i1 (Ll_test.get in_bf i1));
         Ll_test.loop_n s2 n
-          (Ll_test.set out_f i2
-             (LL.Binop (Ops.Add, (Ll_test.get in_f i2, f32), (Ll_test.get mid_bf i2, bf))));
+          (Ll_test.set out_bf i2
+             (LL.Binop (Ops.Add, (Ll_test.get in_bf i2, bf), (Ll_test.get mid_f i2, f32))));
       ]
   in
-  (Ll_test.optimize ~materialized:[ in_f; out_f ] ~name llc, mid_bf)
+  let o = Ll_test.optimize ~materialized:[ in_bf; out_bf ] ~name llc in
+  (o, mid_f)
 
 (* A single store of [x + (x + x) * x] whose product's first operand is annotated bfloat16: stale,
    since that operand is a single sum. The product, annotated bfloat16 in turn, describes it as
@@ -110,25 +111,22 @@ let stale_nested () =
   let product = LL.Binop (Ops.Mul, (sum, bf), x) in
   Ll_test.loop_n s n (Ll_test.set out_f i (LL.Binop (Ops.Add, x, (product, bf))))
 
-(* A [?prelowered] single sum whose second operand is a bfloat scope over a single product,
-   annotated bfloat16: the scope's own precision, so descriptive as written. A schedule's trailing
-   simplify collapses the scope into the sum, leaving the product annotated bfloat16. *)
+(* A [?prelowered] bfloat sum whose second operand is a single scope over a bfloat load, annotated
+   single: the scope's own precision, so descriptive as written. A schedule's trailing simplify
+   collapses the scope into the sum (exactly: the widening loses nothing), leaving the load
+   annotated single. *)
 let scheduled_collapse name =
   let s = Ll_test.sym () in
   let i = [| Ll_test.iter s |] in
-  let in_f = fnode (name ^ "_in_f") and mid_bf = bnode (name ^ "_mid_bf") in
-  let out_f = fnode (name ^ "_out_f") in
-  List.iter [ in_f; out_f ] ~f:Ll_test.materialize;
-  let x = (Ll_test.get in_f i, f32) in
-  let product = LL.Binop (Ops.Mul, x, x) in
-  let id = LL.get_scope mid_bf in
-  let scope =
-    LL.Local_scope
-      { id; body = LL.Set_local (id, product); orig_indices = i; mint = LL.Inlined_computation }
-  in
-  let sum operand = Ll_test.loop_n s n (Ll_test.set out_f i (LL.Binop (Ops.Add, x, operand))) in
-  let o = Ll_test.optimize_scoped ~name ~raw:(sum (product, f32)) (sum (scope, bf)) in
-  Ir.Schedule.apply [ Ir.Schedule.Retype { axis = s; ty = LL.Serial } ] o
+  let in_bf = bnode (name ^ "_in_bf") and mid_f = fnode (name ^ "_mid_f") in
+  let out_bf = bnode (name ^ "_out_bf") in
+  List.iter [ in_bf; out_bf ] ~f:Ll_test.materialize;
+  let x = (Ll_test.get in_bf i, bf) in
+  let scope = Ll_test.scope mid_f ~orig_indices:i (fst x) in
+  let sum operand = Ll_test.loop_n s n (Ll_test.set out_bf i (LL.Binop (Ops.Add, x, operand))) in
+  let o = Ll_test.optimize_scoped ~name ~raw:(sum x) (sum (scope, f32)) in
+  let o = Ir.Schedule.apply [ Ir.Schedule.Retype { axis = s; ty = LL.Serial } ] o in
+  (o, Ll_test.count_scopes o.LL.llc)
 
 (* A [?prelowered] bfloat store selecting on a bfloat load whose condition slot -- a heterogeneous
    one, evaluated at its own annotation -- is annotated half, through a schedule. Returns the
@@ -225,16 +223,18 @@ let () =
       accepted "its descriptive twin compiles through the same schedule"
         (prelowered ~scheduled:true ~value:plus_one "opx_ok_sch" ~annotate:bf);
       let o, mid = optimized_collapse "opx_col" in
-      p "the bfloat node read in the single sum is inlined, so the case reaches the scope collapse"
-        (Ll_test.known_virtual o mid);
+      p
+        "the single node read in the bfloat sum is inlined and its scope collapsed, so the case \
+         reaches the stale annotation"
+        (Ll_test.known_virtual o mid && Ll_test.count_scopes o.LL.llc = 0);
       p "the optimizer's output re-describes the collapsed scope's stale bfloat16 annotation"
         (Option.is_none (LL.operand_precision_violation o.LL.llc));
       accepted "the optimized routine compiles through the exit gate" (link_outcome "opx_col" o);
-      let o = scheduled_collapse "opx_sch" in
+      let o, scopes = scheduled_collapse "opx_sch" in
       p
         "a descriptive ?prelowered routine stays descriptive through a schedule whose simplify \
-         collapses a bfloat scope"
-        (Option.is_none (LL.operand_precision_violation o.LL.llc));
+         collapses a single scope"
+        (scopes = 0 && Option.is_none (LL.operand_precision_violation o.LL.llc));
       accepted "the scheduled routine compiles through the exit gate" (link_outcome "opx_sch" o);
       p
         "describing repairs a nested operand before its parent, whose operand's own precision the \

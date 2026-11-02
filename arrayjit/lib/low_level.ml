@@ -5523,7 +5523,10 @@ let simplify_llc static_indices llc =
      comparison folds. *)
   let rec loop_proc ~ienv (llc : t) : t =
     let loop = loop_proc ~ienv in
-    let loop_scalar = loop_scalar ~ienv in
+    (* At the slot's evaluation precision (gh-ocannl-1788): a statement's value slot is evaluated at
+       its node's (or local's) precision, a heterogeneous slot at its own annotation. *)
+    let loop_scalar ~eval = loop_scalar ~ienv ~eval in
+    let own ((_, p) as arg) = loop_scalar ~eval:p arg in
     match llc with
     | Noop -> Noop
     | Seq (c1, c2) ->
@@ -5546,28 +5549,32 @@ let simplify_llc static_indices llc =
             scan_config with
             carried =
               List.map carried ~f:(fun c ->
-                  { c with init = fst (loop_scalar (c.init, Lazy.force c.prev.tn.Tn.storage_prec)) });
+                  let p = Lazy.force c.prev.tn.Tn.storage_prec in
+                  { c with init = fst (loop_scalar ~eval:p (c.init, p)) });
             body = loop_proc ~ienv:(ienv_extend ienv index ~from_ ~to_) body;
           }
     | Zero_out _ -> llc
     | Set { tn; idcs; llsc; debug } ->
-        Set { tn; idcs; llsc = fst (loop_scalar (llsc, Lazy.force tn.Tn.storage_prec)); debug }
+        let p = Lazy.force tn.Tn.storage_prec in
+        Set { tn; idcs; llsc = fst (loop_scalar ~eval:p (llsc, p)); debug }
     | Set_dynamic { tn; idcs; dyn_axis; dyn_value; llsc; debug } ->
         (* gh-466: reached via [Schedule.apply]'s simplify of post-rewrite code. The scatter itself
            is never folded; its index value and RHS are. *)
+        let p = Lazy.force tn.Tn.storage_prec in
         Set_dynamic
           {
             tn;
             idcs;
             dyn_axis;
-            dyn_value = loop_scalar dyn_value;
-            llsc = fst (loop_scalar (llsc, Lazy.force tn.Tn.storage_prec));
+            dyn_value = own dyn_value;
+            llsc = fst (loop_scalar ~eval:p (llsc, p));
             debug;
           }
     | Set_from_vec { tn; idcs; length; vec_unop; arg; debug } ->
-        Set_from_vec { tn; idcs; length; vec_unop; arg = loop_scalar arg; debug }
+        Set_from_vec { tn; idcs; length; vec_unop; arg = own arg; debug }
     | Set_local (id, llsc) ->
-        Set_local (id, fst (loop_scalar (llsc, Lazy.force id.tn.Tn.storage_prec)))
+        let p = Lazy.force id.tn.Tn.storage_prec in
+        Set_local (id, fst (loop_scalar ~eval:p (llsc, p)))
     | Declare_local _ -> llc
     | Comment _ -> llc
     | Staged_compilation _ -> llc
@@ -5579,7 +5586,7 @@ let simplify_llc static_indices llc =
         (* Construct-then-fold (axis-types proposal §2): a guard whose condition the interval
            environment decides is erased -- provably true folds to the body, provably false to
            [Noop]. The comparison folds happen inside [loop_scalar]. *)
-        let c', _ = loop_scalar (c, cprec) in
+        let c', _ = own (c, cprec) in
         match c' with
         | Constant f when Float.(f = 0.) -> Noop
         | Constant _ -> loop body
@@ -5591,8 +5598,13 @@ let simplify_llc static_indices llc =
                 cond = (c', cprec);
                 body = loop_proc ~ienv:(ienv_narrow_from_cond ienv ~cprec c') body;
               })
-  and loop_scalar ~ienv ((llsc, prec) : scalar_t * Ops.prec) : scalar_t * Ops.prec =
-    let loop_scalar = loop_scalar ~ienv in
+  and loop_scalar ~ienv ~eval ((llsc, prec) : scalar_t * Ops.prec) : scalar_t * Ops.prec =
+    (* [prec] is the operand's annotation, [eval] the precision its slot evaluates it at: the
+       enclosing homogeneous operator's evaluation precision, or a heterogeneous slot's own
+       annotation (gh-ocannl-1788). A homogeneous child keeps [eval]; a heterogeneous one is
+       evaluated at its own annotation. *)
+    let own ((_, p) as arg) = loop_scalar ~ienv ~eval:p arg in
+    let loop_scalar = loop_scalar ~ienv ~eval in
     let loop_proc = loop_proc ~ienv in
     (* gh-ocannl-1498: in a [uint4x32] slot the SOURCE precision of what renders there picks the
        conversion, so a rewrite that hands a child the wrapper's place -- a projection, an
@@ -5605,8 +5617,22 @@ let simplify_llc static_indices llc =
     (* A scope converts its value into its own precision before the slot converts it again; in a
        [uint4x32] slot, collapsing a scope of another precision would drop that step and re-key the
        conversion. *)
-    let collapsible (id : scope_id) =
-      (not packed) || Ops.equal_prec (Lazy.force id.tn.Tn.storage_prec) prec
+    let collapsible (id : scope_id) (v : scalar_t) =
+      let scope_prec = Lazy.force id.tn.Tn.storage_prec in
+      ((not packed) || Ops.equal_prec scope_prec prec)
+      (* gh-ocannl-1788: a scope also rounds its value to its own precision. Collapsing it is exact
+         only when the slot evaluates at that same precision, or when the value is a load whose
+         storage precision the scope's widens exactly -- the rounding is then the identity.
+         Otherwise a narrow scope collapsed into a wider slot would skip its rounding (a bfloat16
+         cast read in a single sum, wherever the scope's local is declared narrow: the GPU backends,
+         and cc under [narrow_compute_f32=false]), and a wide scope collapsed into a narrower slot
+         would evaluate its arithmetic narrow. *)
+      && (Ops.equal_prec scope_prec eval
+         ||
+         match v with
+         | Get (tn, _) | Get_merge_buffer (tn, _) | Get_dynamic { tn; _ } ->
+             Ops.widens_exactly ~from:(Lazy.force tn.Tn.storage_prec) ~to_:scope_prec
+         | _ -> false)
     in
     let local_scope_body, llsc' =
       match llsc with
@@ -5630,12 +5656,11 @@ let simplify_llc static_indices llc =
        ({!validate_operand_precisions}), and in a heterogeneous slot -- where the annotation is the
        evaluation precision -- it changed what the renderer computes. *)
     | Get _ -> (llsc, prec)
-    | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, vprec } ->
+    | Get_dynamic { tn; idcs; dyn_axis; dyn_value } ->
         (* gh-343: defensive -- simplify runs before the one-hot rewrite, so this is unreachable in
            practice; still simplify the dynamic index sub-expression and never fold to a
            constant. *)
-        let v', vprec' = loop_scalar (v, vprec) in
-        (Get_dynamic { tn; idcs; dyn_axis; dyn_value = (v', vprec') }, prec)
+        (Get_dynamic { tn; idcs; dyn_axis; dyn_value = own dyn_value }, prec)
     (* Collapsing a single-assignment scope into the enclosing expression demotes its hoisted reads
        to in-expression reads, i.e. moves them relative to any sibling scope body's effects. That is
        unconditionally sound under scope purity (gh-ocannl-584, {!validate_scope_bodies}): sibling
@@ -5644,12 +5669,13 @@ let simplify_llc static_indices llc =
        semantics in a heterogeneous slot, and in a homogeneous one the slot's precision or the
        scope's -- the latter, when the two differ, describes neither the value nor the slot, which
        {!describe_operand_precisions} repairs downstream. *)
-    | Local_scope { id; body = Set_local (id2, v); _ } when equal_scope_id id id2 && collapsible id
-      ->
+    | Local_scope { id; body = Set_local (id2, v); _ }
+      when equal_scope_id id id2 && collapsible id v ->
         ignore (Lazy.force id.tn.Tn.dims);
         (fst (loop_scalar (v, Lazy.force id.tn.Tn.storage_prec)), prec)
     | Local_scope { id; body = Seq (Set_local (id1, v1), Set_local (id2, v2)); _ }
-      when equal_scope_id id id1 && equal_scope_id id id2 && collapsible id ->
+      when equal_scope_id id id1 && equal_scope_id id id2
+           && collapsible id (substitute_float ~var:(Get_local id) ~value:v1 v2) ->
         ignore (Lazy.force id.tn.Tn.dims);
         let result = substitute_float ~var:(Get_local id) ~value:v1 v2 in
         (fst (loop_scalar (result, Lazy.force id.tn.Tn.storage_prec)), prec)
@@ -5685,7 +5711,8 @@ let simplify_llc static_indices llc =
           (v1, prec1),
           (v2, prec2) ) ->
         let slot operand_prec = if Ops.is_homogeneous_prec_binop op then prec else operand_prec in
-        (Binop (op, loop_scalar (v1, slot prec1), loop_scalar (v2, slot prec2)), prec)
+        let at_own (v, p) = own (v, slot p) in
+        (Binop (op, at_own (v1, prec1), at_own (v2, prec2)), prec)
     | Binop (ToPowOf, (Constant _, prec1), (Constant exponent, prec2))
       when Ops.is_float (Ops.promote_prec prec1 prec2)
            && Float.is_finite exponent && Float.is_integer exponent ->
@@ -5747,7 +5774,7 @@ let simplify_llc static_indices llc =
         (* A [Where]'s branches, and every operand of a homogeneous ternop, render at its slot. *)
         let llv1 = if Ops.is_homogeneous_prec_ternop op then at_slot llv1 else llv1 in
         let llv2 = at_slot llv2 and llv3 = at_slot llv3 in
-        let v1 = loop_scalar llv1 in
+        let v1 = if Ops.is_homogeneous_prec_ternop op then loop_scalar llv1 else own llv1 in
         let v2 = loop_scalar llv2 in
         let v3 = loop_scalar llv3 in
         let result = (Ternop (op, v1, v2, v3), prec) in
@@ -5769,7 +5796,7 @@ let simplify_llc static_indices llc =
     | Unop (Identity, llsc) -> loop_scalar (at_slot llsc)
     | Unop (op, (Constant c, _)) -> (Constant (Ops.interpret_unop op c), prec)
     | Unop (op, llsc) ->
-        let v = loop_scalar llsc in
+        let v = if Ops.is_homogeneous_prec_unop op then loop_scalar llsc else own llsc in
         let result = (Unop (op, v), prec) in
         if equal_scalar_arg llsc v then result else loop_scalar result
   in
