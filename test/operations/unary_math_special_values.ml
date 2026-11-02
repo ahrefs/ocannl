@@ -98,6 +98,8 @@
    at [pow(2^-1060, 0.5)]. That one is recorded, not fixed: contraction is the backend's policy for
    every kernel and the library function is precompiled, so HIP's f64 [pow] skips the 2-ulp claim
    and is held to [log_scaled_pow]'s [2 + 2 |y log2 |x||] instead, its special values still C's.
+   That is HIP's default policy: with [hip_fast_math] off, as [profile=reproducible] sets it
+   (gh-ocannl-1779), hiprtc gets [-ffp-contract=off], and HIP's f64 [pow] is held to the 2 ulps.
 
    A claim that does not apply to a backend is skipped there ([SKIPPED on <backend>] on stderr), and
    its label names where it is skipped and why. Every backend compiles and runs every kernel. *)
@@ -117,6 +119,10 @@ let is_cc = List.mem [ "cc"; "multidev_cc" ] backend_name ~equal:String.equal
 (* gh-ocannl-1710: CUDA's math policy, through the reader its compile and rendering use. Its fast
    intrinsics (and their contracts) apply only when it is on. *)
 let cuda_fast_math = Ir.Cuda_like_config.cuda_fast_math ()
+
+(* gh-ocannl-1779: HIP's, likewise. Off, hiprtc contracts nothing, so ROCm's f64 [pow] keeps the low
+   part of its extended-precision [y log x] and is held to cc's and CUDA's 2 ulps. *)
+let hip_fast_math = Ir.Cuda_like_config.hip_fast_math ()
 let f32 x = Int32.float_of_bits (Int32.bits_of_float x)
 let f16 x = Ops.half_to_single (Ops.single_to_half (f32 x))
 let bf16 x = Ops.bfloat16_to_single (Ops.single_to_bfloat16 (f32 x))
@@ -598,6 +604,8 @@ let () =
       (* Backend-uniform: the policy the run was configured with, on every backend. *)
       Stdio.printf "CUDA math policy (cuda_fast_math): %s\n"
         (if cuda_fast_math then "fast" else "precise");
+      Stdio.printf "HIP math policy (hip_fast_math): %s\n"
+        (if hip_fast_math then "fast" else "precise");
       List.iteri cases ~f:(fun ci c ->
           let fast_intrinsics = c.cuda_intrinsics && cuda_fast_math in
           let inputs, got = run c ~first_id:(19900 + (100 * ci)) in
@@ -748,15 +756,17 @@ let () =
          NaN, otherwise the signed zero or infinity C gives, and fmod exactly (skipped on Metal, \
          which has no f64)"
         (binary_part ~finite_pow:false) ~f:(fun r -> judge2 c (Ulps 0.) r);
-      f64_claim ~when_:(not is_hip)
+      f64_claim
+        ~when_:(not (is_hip && hip_fast_math))
         "f64 pow's finite nonzero results over the same operands: within 2 ulps of C's pow \
-         (skipped on Metal, which has no f64, and on HIP, whose pow under -ffp-contract=fast loses \
-         the low part of its extended-precision y log x, claimed by the next line)"
-        (binary_part ~finite_pow:true) ~f:(fun ((name, _, x, _, _) as r) ->
-          judge2 c (stated c name x) r);
-      f64_claim ~when_:is_hip
-        "HIP f64 pow's finite nonzero results over the same operands: within 2 + 2 |y log2 |x|| \
-         ulps of C's pow"
+         (skipped on Metal, which has no f64, and on HIP under hip_fast_math, whose pow under \
+         -ffp-contract=fast loses the low part of its extended-precision y log x, claimed by the \
+         next line)"
+        (binary_part ~finite_pow:true)
+        ~f:(fun ((name, _, x, _, _) as r) -> judge2 c (stated c name x) r);
+      f64_claim ~when_:(is_hip && hip_fast_math)
+        "HIP f64 pow's finite nonzero results over the same operands under hip_fast_math: within 2 \
+         + 2 |y log2 |x|| ulps of C's pow"
         (binary_part ~finite_pow:true) ~f:(fun ((_, _, x, y, _) as r) ->
           judge2 c (log_scaled_pow x y) r);
       f64_claim

@@ -38,6 +38,7 @@ Profile "reproducible" sets:
   fp_finite_math=false
   cc_backend_fast_math=false
   cuda_fast_math=false
+  hip_fast_math=false
   cc_vector_bytes=0
   tf32_matmuls=false
   fp16_arithmetic=auto
@@ -85,7 +86,7 @@ Profile "approximate" sets:
 
 every key the performance profile sets, the approximate profile sets to the same value: true
 the approximate profile sets keys the performance profile does not: true
-only the reproducible profile states cuda_fast_math, and it states false: true
+only the reproducible profile states cuda_fast_math and hip_fast_math, and it states false: true
 bootstrap resolution preserves precedence and source descriptions: true
 profile selection normalizes and falls through each source: true
 truncated bootstrap sources report the ordinary default: true

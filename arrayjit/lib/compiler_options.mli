@@ -10,21 +10,29 @@ val hip_target_options : target_archs:string list -> string list
     containing gfx1102 is covered because HIP compilation is backend-wide and its artifact can link
     on any device. *)
 
+val hip_math_options : fast_math:bool -> string list
+(** hiprtc's math switches under the [hip_fast_math] key (gh-ocannl-1779): the clang fast-math
+    umbrella with its left-to-right overrides ([-fno-associative-math], [-fhonor-infinities]) when
+    on; when off, no umbrella and clang's IEEE switches spelled out, contraction off
+    ([-ffp-contract=off -fno-associative-math -fhip-fp32-correctly-rounded-divide-sqrt
+      -fno-gpu-flush-denormals-to-zero -fno-gpu-approx-transcendentals]). Used by both the compiler
+    and the HIP schedule-cache regime. *)
+
 val hiprtc :
   target_archs:string list ->
   hip_include_options:string list ->
   rocwmma_include_options:string list ->
   uses_rocwmma:bool ->
+  fast_math:bool ->
   with_debug:bool ->
   ?with_line_info:bool ->
   unit ->
   string list
-(** The hiprtc (HIP) option vector: includes, then the clang fast-math umbrella with its
-    left-to-right overrides ([-fno-associative-math], [-fhonor-infinities]), the target's
-    half-register workaround, then debug -- or, without it, [?with_line_info]'s line tables
-    ([-gline-tables-only], default off): source-line attribution in the code object, which the
-    debug-artifact runs carry so an ISA census can read the code that ran (gh-ocannl-1695). Line
-    tables do not change the code generated. *)
+(** The hiprtc (HIP) option vector: includes, then {!hip_math_options}, the target's half-register
+    workaround, then debug -- or, without it, [?with_line_info]'s line tables ([-gline-tables-only],
+    default off): source-line attribution in the code object, which the debug-artifact runs carry so
+    an ISA census can read the code that ran (gh-ocannl-1695). Line tables do not change the code
+    generated. *)
 
 val nvrtc_reassociation_opt_in : string
 (** nvrtc's opt-IN for floating-point reassociation. It exists here only so {!nvrtc} can be checked

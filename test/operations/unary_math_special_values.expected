@@ -1,4 +1,5 @@
 CUDA math policy (cuda_fast_math): fast
+HIP math policy (hip_fast_math): fast
 f32 sin, cos, tanh, exp, log, exp2, log2, sqrt and rsqrt of +-0, +-inf and NaN: NaN where f64 gives NaN, otherwise the signed zero or infinity f64 gives, or within the stated ulps of it (every backend): true
 f32 sin, cos, tanh, exp, log, exp2, log2, sqrt and rsqrt of finite nonzero inputs: within the stated ulps of f64 with subnormals kept (skipped on Metal and on CUDA's f32 intrinsics under --use_fast_math, accepted vendor behaviour claimed by their own contracts): true
 Metal f32 sin, cos, tanh, exp, log, exp2, log2, sqrt and rsqrt: NaN where f64 gives NaN, the signed zero or infinity where f64 rounds to one, otherwise within the stated ulps of f64 -- for exp, log, exp2, log2, sqrt and rsqrt, of f64 at the input or the f32 result flushed from subnormal to zero: true
@@ -21,6 +22,6 @@ f32 log and log2 on every f32 within 2^-13 of 1: within the backend's contract -
 f64 sqrt and rsqrt of +-0, +-inf and NaN: NaN where f64 gives NaN, otherwise the signed zero or infinity f64 gives (skipped on Metal, which has no f64): true
 f64 sqrt and rsqrt of finite nonzero inputs, subnormals among them: within the stated ulps of the host's f64 (1 for sqrt, 2 for rsqrt) with subnormals kept (skipped on Metal, which has no f64): true
 f64 pow and fmod over +-0, +-inf, NaN, dyadic and subnormal operands: NaN where C gives NaN, otherwise the signed zero or infinity C gives, and fmod exactly (skipped on Metal, which has no f64): true
-f64 pow's finite nonzero results over the same operands: within 2 ulps of C's pow (skipped on Metal, which has no f64, and on HIP, whose pow under -ffp-contract=fast loses the low part of its extended-precision y log x, claimed by the next line): true
-HIP f64 pow's finite nonzero results over the same operands: within 2 + 2 |y log2 |x|| ulps of C's pow: true
+f64 pow's finite nonzero results over the same operands: within 2 ulps of C's pow (skipped on Metal, which has no f64, and on HIP under hip_fast_math, whose pow under -ffp-contract=fast loses the low part of its extended-precision y log x, claimed by the next line): true
+HIP f64 pow's finite nonzero results over the same operands under hip_fast_math: within 2 + 2 |y log2 |x|| ulps of C's pow: true
 f64 fmod of constant operands, subnormal ones among them, folded on the host: exactly C's fmod (skipped on Metal, which has no f64): true

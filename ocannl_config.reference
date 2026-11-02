@@ -1421,10 +1421,29 @@
 # rendered as the `__tanhf` intrinsic. Off (what the `reproducible` profile sets): no umbrella, and
 # exactly `--ftz=false --prec-div=true --prec-sqrt=true --fmad=false` -- nvrtc's IEEE values, with
 # contraction off as `cc_backend_fp_contract=off` is for cc -- and the f32 tanh is the library's
-# `tanhf`. That is not strict arithmetic in every respect: explicit intrinsics the codegen asks for
-# (`fmaf`, the half-precision `h*` functions) stay what they are. The precise regime is part of the
-# CUDA schedule cache's identity. An explicit setting outranks the profile, as for every key.
+# `tanhf`, and the half-precision functions (`hexp`, `hsin`, `hrcp`, `htanh_approx`, ..., hardware
+# approximations whatever the switches say) render as the precise f32 function of the widened
+# operand, narrowed once (gh-ocannl-1779). That is not strict arithmetic in every respect: explicit
+# intrinsics the codegen asks for (`fmaf`, half arithmetic) stay what they are. The precise regime
+# is part of the CUDA schedule cache's identity. An explicit setting outranks the profile, as for
+# every key.
 #cuda_fast_math=true
+
+# Whether the HIP backend compiles with clang's `-ffast-math` (gh-ocannl-1779), the HIP counterpart
+# of cuda_fast_math. On (the default, and under the `performance` and `approximate` profiles): hiprtc
+# gets `-ffast-math -fno-associative-math -fhonor-infinities` -- the umbrella's finite-math,
+# reciprocal, approximate-function and contraction (`-ffp-contract=fast`) licences, with
+# reassociation and infinities restored (gh-ocannl-735). Off (what the `reproducible` profile
+# sets): no umbrella, and exactly `-ffp-contract=off -fno-associative-math
+# -fhip-fp32-correctly-rounded-divide-sqrt -fno-gpu-flush-denormals-to-zero
+# -fno-gpu-approx-transcendentals` -- clang's IEEE semantics with contraction off, as
+# `cc_backend_fp_contract=off` is for cc, every switch explicit so a toolchain default cannot move
+# one. Under fast math (its `-ffp-contract=fast`) ROCm's f64 pow is 204-206 ulps off at extreme
+# operands; off, it is within cc's and CUDA's 2 ulps.
+# The rendered code does not change: the backend's IEEE wrappers (f64 division, f32 sin, cos, sqrt,
+# fmod, ...) apply under either state. The precise regime is part of the HIP schedule cache's
+# identity. An explicit setting outranks the profile, as for every key.
+#hip_fast_math=true
 
 # Megabytes of compiled cc kernel libraries kept for reuse within a process (gh-ocannl-1525), the
 # cc counterpart of hip_kernel_cache_mib: a batch of kernels compiles only the kernels no earlier
@@ -2171,8 +2190,17 @@
 # # whose --fmad=true leaves a*b+c contraction to each target's JIT. nvrtc instead gets
 # # --ftz=false --prec-div=true --prec-sqrt=true --fmad=false, and the f32 tanh is the
 # # library's. Unlike the cc pins this is not CUDA's default, so under this profile CUDA
-# # computes different (more precise) math than under the default one.
+# # computes different (more precise) math than under the default one. That includes the half
+# # functions (hexp, hsin, hrcp, htanh_approx, ...), hardware approximations whatever nvrtc's
+# # switches say: they render as the precise f32 function of the widened operand, narrowed once
+# # (gh-ocannl-1779).
 # cuda_fast_math=false
+# # HIP's counterpart (gh-ocannl-1779): no -ffast-math, whose finite-math, reciprocal and
+# # approximate-function licences rewrite divisions, square roots and NaN tests, and whose
+# # -ffp-contract=fast loses the low part of ROCm's extended-precision f64 pow (204-206 ulps).
+# # hiprtc instead gets -ffp-contract=off and clang's IEEE switches spelled out. Not HIP's
+# # default either: under this profile HIP too computes different (more precise) math.
+# hip_fast_math=false
 # # Explicit SIMD rendering reassociates strict-FP reductions into per-lane accumulator chains,
 # # so the summation order would follow the probed vector width. 0 keeps the serial order.
 # cc_vector_bytes=0
@@ -2180,7 +2208,7 @@
 # # The numerics gates at their exact defaults, so that a profile switch never silently changes
 # # what math is being done (they are the orthogonal axis; see the issue). fp16_arithmetic=auto
 # # resolves deterministically per backend (gh-ocannl-680), so pinning the default keeps the
-# # principle: apart from CUDA's fast math above, this profile changes no math, and same-machine
+# # principle: apart from the GPU fast-math keys above, this profile changes no math, and same-machine
 # # runs stay reproducible.
 # # bf16_arithmetic=auto likewise (gh-ocannl-838).
 # tf32_matmuls=false

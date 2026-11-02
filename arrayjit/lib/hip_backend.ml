@@ -428,6 +428,7 @@ end = struct
        option matrix is tested without hipjit in arrayjit/test. *)
     Compiler_options.hiprtc ~target_archs ~hip_include_options:hip_include_opt
       ~rocwmma_include_options:rocwmma_include_opt ~uses_rocwmma
+      ~fast_math:(Cuda_like_config.hip_fast_math ())
       ~with_debug:(Utils.with_runtime_debug ())
       ~with_line_info:Utils.settings.output_debug_files_in_build_directory ()
 
@@ -1930,11 +1931,18 @@ end = struct
       (* Derive the cache regime from the same option selector the compiler uses. A pre-workaround
          crown is not evidence for the target-workaround regime. Limits describe this backend's
          device set, so include every device's policy. *)
+      ^ (let target_archs = hiprtc_target_archs () in
+         match Compiler_options.hip_target_options ~target_archs with
+         | [] -> ""
+         | options -> "/hiprtc-target:" ^ Compiler_options.render options)
+      (* gh-ocannl-1779: the math policy, derived from the same switches the compile passes, as
+         CUDA's [/nvrtc-math:]. Only the precise regime adds a component, so every key crowned under
+         fast math -- the default, [performance], [approximate] -- stays valid, and a fast-math
+         crown does not replay under [profile=reproducible]. *)
       ^
-      let target_archs = hiprtc_target_archs () in
-      match Compiler_options.hip_target_options ~target_archs with
-      | [] -> ""
-      | options -> "/hiprtc-target:" ^ Compiler_options.render options
+      let fast_math = Cuda_like_config.hip_fast_math () in
+      if fast_math then ""
+      else "/hiprtc-math:" ^ Compiler_options.render (Compiler_options.hip_math_options ~fast_math)
       (* No [bf16_accum_wide] component (gh-ocannl-1117): gh-ocannl-1051 added one by hand when
          [Bf16_auto] went wide here with the configured mode unchanged, but what a mode resolves to
          is now cache identity by derivation — [Schedule_cache.codegen_tag] tabulates this backend's

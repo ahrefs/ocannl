@@ -54,6 +54,45 @@ let () =
       String.equal got want);
   p "HIP approximate tanh keeps its library function"
     (String.equal (render (Hip.unop_syntax Ops.single Ops.Tanh_approx a)) "tanhf(a)");
+  (* gh-ocannl-1779: CUDA's half functions are hardware approximations under either switch set, so
+     under [cuda_fast_math] off they render as the precise f32 function of the widened operand,
+     narrowed once; HIP's half functions are ROCm's OCML ones whatever [hip_fast_math] says. *)
+  let half_rows =
+    [
+      (Ops.Exp, "hexp(a)", "__float2half(expf(__half2float(a)))");
+      (Ops.Log, "hlog(a)", "__float2half(logf(__half2float(a)))");
+      (Ops.Exp2, "hexp2(a)", "__float2half(exp2f(__half2float(a)))");
+      (Ops.Log2, "hlog2(a)", "__float2half(log2f(__half2float(a)))");
+      (Ops.Sin, "hsin(a)", "__float2half(sinf(__half2float(a)))");
+      (Ops.Cos, "hcos(a)", "__float2half(cosf(__half2float(a)))");
+      (Ops.Sqrt, "hsqrt(a)", "__float2half(sqrtf(__half2float(a)))");
+      (Ops.Recip, "hrcp(a)", "__float2half((1.0f / (__half2float(a))))");
+      (Ops.Recip_sqrt, "hrsqrt(a)", "__float2half((1.0f / sqrtf(__half2float(a))))");
+      (Ops.Tanh_approx, "htanh_approx(a)", "__float2half(tanhf(__half2float(a)))");
+    ]
+  in
+  let with_key key value f =
+    let previous = Hashtbl.find Utils.config_file_args key in
+    Hashtbl.set Utils.config_file_args ~key ~data:value;
+    let result = f () in
+    (match previous with
+    | None -> Hashtbl.remove Utils.config_file_args key
+    | Some data -> Hashtbl.set Utils.config_file_args ~key ~data);
+    result
+  in
+  let policies = [ "true"; "false" ] in
+  p_all ~min:20
+    "CUDA half unary functions are its intrinsics under fast math, and the precise f32 function of \
+     the widened operand narrowed once without it" (List.cartesian_product policies half_rows)
+    ~f:(fun (value, (op, intrinsic, widened)) ->
+      with_key "cuda_fast_math" value (fun () ->
+          String.equal
+            (render (Cuda.unop_syntax Ops.half op a))
+            (if Ir.Cuda_like_config.cuda_fast_math () then intrinsic else widened)));
+  p_all ~min:20 "HIP half unary functions are ROCm's half functions under either hip_fast_math"
+    (List.cartesian_product policies half_rows) ~f:(fun (value, (op, intrinsic, _)) ->
+      with_key "hip_fast_math" value (fun () ->
+          String.equal (render (Hip.unop_syntax Ops.half op a)) intrinsic));
   (* gh-ocannl-1336: HIP's fast-math [sinf]/[cosf] map +-inf to a finite value, so f32 and bfloat16
      (widened into f32) route through [Builtins_hip]'s NaN-preserving wrappers; CUDA's keep NaN
      there and render bare. *)

@@ -2120,9 +2120,36 @@ files.
   `bf16_subnormal_storage` and `unary_math_special_values` with their `-reproducible` rules: the
   default run must flush f32 arithmetic bitwise, the reproducible one must not, and its f32 and
   bfloat16 functions meet the stated ulps with subnormals kept.
+  Since gh-ocannl-1779 the key also picks CUDA's half unary functions: `hexp`, `hsin`, `hrcp`,
+  `htanh_approx`, ... are hardware approximations under ANY nvrtc switches, so with the key off
+  they render as `__float2half(<f32 fn>(__half2float(x)))` (dialect `precise_half_functions`) --
+  the precise f32 result narrowed once, not a correctly rounded half function, and independent of
+  the architecture (only the intrinsics vary by sm), so no sm_89-vs-sm_120 measurement gates it.
+  Pinned by `test_cuda_like_config` (every half row under both values) and on CUDA by
+  `half_unary_math-reproducible` (the relationship claim Metal's half functions already met).
+- **HIP's fast math is a key too, off under `reproducible`** (gh-ocannl-1779): `hip_fast_math`
+  (default `true`, one reader `Cuda_like_config.hip_fast_math`) picks
+  `Compiler_options.hip_math_options` -- the umbrella with its overrides, or no umbrella and
+  `-ffp-contract=off -fno-associative-math -fhip-fp32-correctly-rounded-divide-sqrt
+  -fno-gpu-flush-denormals-to-zero -fno-gpu-approx-transcendentals`. It changes no rendering: the
+  `Builtins_hip` wrappers (`ocannl_div_f64`, sin/cos/sqrt/fmod) are IEEE under either state. Keyed as
+  `/hiprtc-math:<switches>` in HIP's `codegen_tag`, precise regime only. Measured on gfx1151
+  (`unary_math_special_values`): precise holds f64 `pow` to cc's and CUDA's 2 ulps; the vector
+  WITHOUT `-ffp-contract=off` (hiprtc's own default) did too, and with `-ffp-contract=fast` in
+  its place `pow(2^-1000, 1)` was 204 ulps off again and f32 functions left their stated ulps --
+  contraction is the 1730 loss, and `off` is spelled so no toolchain default can move it. Precise
+  f32 and half division is bitwise IEEE (`division_special_values-reproducible`). It lifts five of
+  `branchless_select`'s six HIP `known_divergence_1647` entries (`bs_where_f32`, `bs_where_hcond`,
+  `bs_where_bf16`, `bs_where_zero`, `bs_nested_guard`; gated on the key, held exactly by
+  `branchless_select-no_hip_fast_math`); `bs_sat01_gate` is the cross-backend semantics gap and stays.
+  The DEFAULT is unchanged: `-fhonor-nans` after the fast umbrella lifts the same five but makes the
+  `ocannl_fmod*` wrappers return `x` for `fmod(x, NaN)` at every precision (their NaN test is
+  shaped for finite-math), so it is no drop-in; `-ffp-contract=on` for the default is unmeasured
+  for throughput. Both are performance-graded follow-ups. Like CUDA's key, only `reproducible`
+  states it (`config_profiles`): the default IS the `approximate` value.
 - **CUDA and HIP compile with fast-math umbrellas by default; Metal pins safe arithmetic while
   retaining fast math functions**: CUDA passes `--use_fast_math` (unless `cuda_fast_math` is off,
-  above), HIP `-ffast-math`, and Metal selects
+  above), HIP `-ffast-math` (unless `hip_fast_math` is off, above), and Metal selects
   `MathMode.Safe` plus `MathFloatingPointFunctions.Fast` (measured below). `cc` is the exception
   (opt-in `cc_backend_fast_math`). HIP additionally
   passes `-fno-associative-math` **after** the umbrella flag: fast math had let hiprtc reorder
