@@ -210,6 +210,11 @@ let () =
           p_all "checking leaves the closure the constraint store it has without schemes" cells
             ~f:(fun ((w, n, _), off) ->
               (get w n `Check).counts.closure_constraints = off.counts.closure_constraints);
+          p_all "checking leaves the body's inline registrations those it has without schemes" cells
+            ~f:(fun ((w, n, _), off) ->
+              let c = (get w n `Check).counts in
+              c.inline_registrations = off.counts.inline_registrations
+              && c.inline_constraints = off.counts.inline_constraints);
           p_all "checking instantiates a scheme at every depth" cells ~f:(fun ((w, n, _), _) ->
               let c = (get w n `Check).counts in
               c.checked_applications > 0 && c.instantiated_constraints > 0))

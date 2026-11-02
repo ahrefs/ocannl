@@ -2192,6 +2192,10 @@ exception Untraceable_scheme of string
 
 let tracing_in_progress () = not (List.is_empty !tracing)
 
+let as_tracing ~label f =
+  tracing := label :: !tracing;
+  Exn.protect ~f ~finally:(fun () -> match !tracing with _ :: rest -> tracing := rest | [] -> ())
+
 (** {3 Session consistency (gh-ocannl-1301)}
 
     [finish_inference] is the session's only commit point. A construction that fails after mutating
@@ -4728,16 +4732,14 @@ module Scheme = struct
     in
     let refuse msg = raise @@ Untraceable_scheme msg in
     try
-      tracing := label :: !tracing;
       trace_touches := Some [];
       let results, touched =
         Exn.protect
           ~f:(fun () ->
-            let results = f () in
-            (results, Option.value !trace_touches ~default:[]))
-          ~finally:(fun () ->
-            trace_touches := outer_touches;
-            match !tracing with _ :: rest -> tracing := rest | [] -> ())
+            as_tracing ~label (fun () ->
+                let results = f () in
+                (results, Option.value !trace_touches ~default:[])))
+          ~finally:(fun () -> trace_touches := outer_touches)
       in
       let constraints = List.rev (window ~mark:constraints_mark !active_constraints) in
       if List.exists constraints ~f:Row.has_lazy_coefficient then

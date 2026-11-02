@@ -434,6 +434,11 @@ exception Untraceable_scheme of string
 val tracing_in_progress : unit -> bool
 (** Whether a shape-scheme trace is running. *)
 
+val as_tracing : label:string -> (unit -> 'a) -> 'a
+(** [as_tracing ~label f] runs [f] as part of the shape-scheme trace [label]: its update steps are
+    not counted or timed as inline registrations. {!Scheme.trace} runs its function this way, and
+    [Tensor.Scheme] makes a trace's tracers this way just before the trace starts. *)
+
 type registration_counts = {
   checked_applications : int;
   inline_registrations : int;
