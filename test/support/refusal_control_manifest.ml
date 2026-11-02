@@ -1186,6 +1186,24 @@ let owns_line ~rivals ~format line =
 (** The claim label a [raw_direct_evidence] entry names, without its [": true"]. *)
 let evidence_label claim = Option.value (String.chop_suffix claim ~suffix:": true") ~default:claim
 
+(** Whether the control claim [label] answers for the direct failure whose [format] it is checked
+    against: the claim passed, and one of the lines of the runs it made ([claim_lines]) is the
+    refusal's own ({!owns_line} against [rivals]). The one test {!standing} applies to the claim an
+    entry names and {!answering_claims} to every passed claim. *)
+let claim_answers ~passed_labels ~claim_lines ~rivals ~format label =
+  List.mem passed_labels label ~equal:String.equal
+  && List.exists (claim_lines label) ~f:(owns_line ~rivals ~format)
+
+(** The passed claims of this run that answer for [diagnostic] ({!claim_answers}), in the order they
+    passed, each once: the candidates a new direct failure's [raw_direct_evidence] entry can name
+    (gh-ocannl-1571). *)
+let answering_claims ~passed_labels ~claim_lines ~rivals diagnostic =
+  let format = diagnostic.Refusal_control_scan.format in
+  List.fold passed_labels ~init:[] ~f:(fun seen label ->
+      if List.mem seen label ~equal:String.equal then seen else label :: seen)
+  |> List.rev
+  |> List.filter ~f:(claim_answers ~passed_labels ~claim_lines ~rivals ~format)
+
 (** The [standing] of a direct failure [diagnostic] under [key], from the tables and this run's
     observations, so that the rule can be pinned on tables the repository does not have to contain.
     The refusal RAN when its caught branch was [observed], or when one of the scanner's [refused]
@@ -1205,9 +1223,7 @@ let standing ~direct_evidence ~catalogue_only ~observed ~refused ~claim_lines ~r
   let answered =
     match List.Assoc.find direct_evidence key ~equal:String.equal with
     | None -> false
-    | Some claim ->
-        let label = evidence_label claim in
-        List.mem passed_labels label ~equal:String.equal && owned (claim_lines label)
+    | Some claim -> claim_answers ~passed_labels ~claim_lines ~rivals ~format (evidence_label claim)
   in
   match (List.Assoc.mem catalogue_only key ~equal:String.equal, ran) with
   | true, true -> Executed_yet_catalogue_only
@@ -1369,6 +1385,38 @@ let closing_row = "End of synthetic controls."
 *)
 let not_printed_head = "Refusal marker not printed (not part of the golden): "
 
+type offer = { key : string; claim : string }
+(** A run's offer for a direct failure its row lists with no [raw_direct_evidence] or
+    [raw_catalogue_only] entry, that ran unanswered (gh-ocannl-1571): its [key] (without the
+    [test/operations/] prefix) and a passed [claim] that answers for it ({!answering_claims}).
+    {!print_section} writes one per answering claim on stderr ({!offer_lines}), and
+    [tools/refusal-manifest-sync.sh]'s engine reads them back from the runs' logs ({!parse_offer})
+    to print the entry ready to paste for each failure the audit would refuse -- printed by none of
+    its goldens. Which claim answers is still the manifest's judgment, so an entry is offered, never
+    written; and since a scan whose control runs in another process observes its refusals there, a
+    run whose claims answer for nothing says nothing: what no run answers for is the engine's to
+    name, from the goldens. *)
+
+let offer_head = "Refusal evidence offer (not part of the golden): "
+let offer_answered_by = " answered by: "
+
+(** One stderr line per answering claim of [claims]. A label spanning lines cannot travel on one, so
+    it is never offered: an entry naming it is a hand edit. *)
+let offer_lines ~key claims =
+  List.filter_map claims ~f:(fun claim ->
+      Option.some_if (not (String.mem claim '\n')) (offer_head ^ key ^ offer_answered_by ^ claim))
+
+(** The offer a log [line] carries, or [None] for any other line. *)
+let parse_offer line =
+  Option.bind
+    (String.chop_prefix (String.rstrip line) ~prefix:offer_head)
+    ~f:(fun rest ->
+      Option.map (String.substr_index rest ~pattern:offer_answered_by) ~f:(fun at ->
+          {
+            key = String.prefix rest at;
+            claim = String.drop_prefix rest (at + String.length offer_answered_by);
+          }))
+
 (** The section [print] ends a scan's golden with: its heading, then the marker of each of
     [diagnostics] that [expected] (the source's registered row) lists and this run exercised -- a
     claim's once Verdict recorded it passing, a direct failure's once its refusal ran -- and the
@@ -1440,7 +1488,22 @@ let print_section ~source ~expected diagnostics =
                      "%s is listed in `raw_catalogue_only`, yet this run executed it -- move its \
                       key to `raw_direct_evidence`, or drop it if the control observes it itself"
                      key)
-            | Unexercised -> why marker diagnostic));
+            | Unexercised ->
+                why marker diagnostic;
+                (* A direct failure no entry classifies: offer the claims that answer for it. *)
+                if
+                  not
+                    (List.Assoc.mem direct_evidence key ~equal:String.equal
+                    || List.Assoc.mem catalogue_only key ~equal:String.equal)
+                then
+                  let claims =
+                    answering_claims ~passed_labels:(Verdict.passed_labels ())
+                      ~claim_lines:(claim_lines ~source) ~rivals diagnostic
+                  in
+                  let key =
+                    Option.value (String.chop_prefix key ~prefix:"test/operations/") ~default:key
+                  in
+                  List.iter (offer_lines ~key claims) ~f:(eprintf "%s\n")));
   List.iter
     (minus expected (List.map diagnostics ~f:Refusal_control_scan.marker))
     ~f:(fun marker -> not_printed marker "its diagnostic is no longer in the source");
@@ -1503,7 +1566,8 @@ let print source =
             eprintf
               "  direct failures new to the row with no `raw_direct_evidence` entry, none recorded \
                through `observe_failure` in this run: unless the scan's separate control run \
-               records it, each needs a hand-written entry naming the control output that observes \
-               it, under the key\n";
+               records it, each needs an entry naming the control claim that observes it, under \
+               the key below -- once the row lists it, a run offers the claims that answer for it, \
+               and tools/refusal-manifest-sync.sh prints the entry ready to paste\n";
             List.iter keys ~f:(eprintf "    %S\n"));
   print_section ~source ~expected diagnostics

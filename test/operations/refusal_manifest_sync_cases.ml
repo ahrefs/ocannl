@@ -458,3 +458,71 @@ let check () = Verdict.fail "another scanner's refusal"
   p_all ~min:20 "every row's marker list spans a bracketed list of the manifest text" live.rows
     ~f:(fun r ->
       Char.equal live_text.[r.list_start] '[' && Char.equal live_text.[r.list_stop - 1] ']')
+
+(* gh-ocannl-1571: which direct failures need an entry -- listed by their row, classified by no
+   table, printed by none of their goldens -- and the entries offered for them, from the claims the
+   runs logged, rendered ready to paste; nothing for a synced manifest. *)
+let () =
+  let first = identity_of before "%s keeps the first refusal"
+  and second = identity_of before "the second refusal reads the old way" in
+  let key identity = "synthetic_scan.ml:" ^ identity in
+  let marker identity =
+    List.find_map_exn (Scan.diagnostics before) ~f:(fun d ->
+        Option.some_if (String.equal d.Scan.identity identity) (Scan.marker d))
+  in
+  let text ?(rows = markers before)
+      ?(evidence = [ (key first, "the malformed tree is refused: true") ]) ?(catalogue = []) () =
+    manifest ~rows:[ ("synthetic_scan.ml", rows) ] ~evidence ~catalogue
+  in
+  let needing ?(goldens = [ "Synthetic controls:\n" ]) text =
+    Sync.needing_entries ~text
+      ~diagnostics_of:(fun _ -> Some (Scan.diagnostics before))
+      ~goldens_of:(fun _ -> goldens)
+  in
+  p "a listed direct failure no table classifies and no golden prints needs an entry, alone"
+    (List.equal String.equal (needing (text ())) [ key second ]);
+  p_empty "one a golden of its source prints -- a control observing it elsewhere -- needs none"
+    ~over:[ key second ]
+    (needing ~goldens:[ "Synthetic controls:\n  " ^ marker second ^ "\n" ] (text ()));
+  p_empty "nor does one an evidence or a catalogue-only entry classifies: a synced manifest"
+    ~over:[ key second ]
+    (needing (text ~evidence:[ (key first, "c: true"); (key second, "c: true") ] ())
+    @ needing (text ~catalogue:[ (key second, "unreachable") ] ()));
+  p_empty "nor one its row does not list yet: that is the row's sync, not an entry's"
+    ~over:[ key second ]
+    (needing
+       (text ~rows:(List.filter (markers before) ~f:(Fn.non (String.equal (marker second)))) ()));
+  let control = "the malformed tree is refused" and sibling = "the last claim keeps its words" in
+  let logged = Manifest.offer_lines ~key:(key second) [ control ] @ [ "unrelated stderr" ] in
+  let read lines = List.filter_map lines ~f:Manifest.parse_offer in
+  p "an offer line is read back as it was written, and no other line is"
+    (Poly.equal (read logged) [ { Manifest.key = key second; claim = control } ]);
+  p_none ~min:1
+    "a line carrying an offer only after other text is no offer: offers start their line"
+    (List.map logged ~f:(fun line -> "noise " ^ line))
+    ~f:(fun line -> Option.is_some (Manifest.parse_offer line));
+  p_empty "a label spanning lines is never offered on a line" ~over:[ "two\nlines" ]
+    (Manifest.offer_lines ~key:(key second) [ "two\nlines" ]);
+  let render ?(needing = [ key second ]) offered =
+    Sync.render_offers ~manifest_path:"manifest.ml" ~needing offered
+  in
+  let one = render (read logged) in
+  p "a failure one claim answers for is offered as the entry naming that claim, under one heading"
+    (List.equal String.equal
+       (String.split_lines one |> List.tl_exn)
+       [ Printf.sprintf "    ( %s, %s );" (quote (key second)) (quote (control ^ ": true")) ]);
+  let several =
+    render
+      (read
+         (Manifest.offer_lines ~key:(key second) [ control; sibling ]
+         @ Manifest.offer_lines ~key:(key second) [ control ]))
+  in
+  p "several claims, from one run or several, are offered once each, as alternatives"
+    (List.length (String.split_lines several) = 3
+    && String.is_substring several ~substring:"answered by 2 passed claims");
+  p "a failure no run's claim answers for is named with what settles it, with no entry"
+    (let none = render [] in
+     String.is_substring none ~substring:"answered by no passed claim"
+     && not (String.is_substring none ~substring:"    ( "));
+  p "an offer for a key needing no entry renders nothing: a synced manifest is quiet"
+    (String.is_empty (render ~needing:[] (read logged)))

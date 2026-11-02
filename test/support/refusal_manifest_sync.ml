@@ -508,3 +508,67 @@ let touched_sources plan =
     | Rekeyed { new_key = key; _ } | Relabeled { key; _ } ->
         Option.to_list (Option.map (String.lsplit2 key ~on:':') ~f:fst))
   |> List.dedup_and_sort ~compare:String.compare
+
+(** The keys (without the [test/operations/] prefix) of the direct failures the catalogue audit
+    would refuse for want of an entry (gh-ocannl-1571): each one a row of the manifest [text] lists
+    -- its source's current diagnostics given by [diagnostics_of] -- that neither
+    [raw_direct_evidence] nor [raw_catalogue_only] classifies, and whose marker none of the goldens
+    [goldens_of] gives for its source prints. A failure a control observes in another process is
+    printed by that control's golden, so it is no such key: a synced manifest has none. *)
+let needing_entries ~text ~diagnostics_of ~goldens_of =
+  let tables = read_tables text in
+  let classified =
+    List.map (tables.direct_evidence @ tables.catalogue_only) ~f:(fun e -> e.key.value)
+  in
+  List.concat_map tables.rows ~f:(fun row ->
+      let goldens = goldens_of row.source in
+      Option.value (diagnostics_of row.source) ~default:[]
+      |> List.filter_map ~f:(fun d ->
+          let key = row.source ^ ":" ^ d.Scan.identity and marker = Scan.marker d in
+          match d.Scan.kind with
+          | Scan.Fail
+            when List.mem row.markers marker ~equal:String.equal
+                 && (not (List.mem classified key ~equal:String.equal))
+                 && not (List.exists goldens ~f:(String.is_substring ~substring:marker)) ->
+              Some key
+          | Scan.Fail | Scan.Claim -> None))
+  |> List.stable_dedup ~compare:String.compare
+
+(** The [raw_direct_evidence] entries for the keys [needing] an entry ({!needing_entries}), from the
+    claims runs [offered] ({!Refusal_control_manifest.offer}, read back from their logs), ready to
+    paste into the manifest at [manifest_path] (gh-ocannl-1571): a claim offered by several runs is
+    printed once, several claims are each printed as the alternatives they are, and a key no run's
+    claim answered for is named with what settles it. An offer for a key needing nothing -- one
+    another golden prints, or one an entry already classifies -- is no entry to add. Which claim the
+    entry names stays the reader's choice, so nothing is written. *)
+let render_offers ~manifest_path ~needing offered =
+  let buffer = Buffer.create 256 in
+  let add fmt = Printf.bprintf buffer fmt in
+  List.iter needing ~f:(fun key ->
+      let claims =
+        List.filter_map offered ~f:(fun o ->
+            Option.some_if (String.equal o.Refusal_control_manifest.key key) o.claim)
+        |> List.stable_dedup ~compare:String.compare
+      in
+      let entry claim = add "    ( %s, %s );\n" (quote key) (quote (claim ^ evidence_suffix)) in
+      match claims with
+      | [] ->
+          add
+            "offer: %s, a direct failure with no `raw_direct_evidence` or `raw_catalogue_only` \
+             entry, printed by none of its goldens, is answered by no passed claim of the runs: \
+             write a control claim whose refused run prints it (Refusal_control_manifest.refuses), \
+             or give it a `raw_catalogue_only` entry in %s with the reason none can\n"
+            key manifest_path
+      | [ claim ] ->
+          add
+            "offer: %s, a direct failure with no entry, is answered by the passed claim below; \
+             paste the entry into `raw_direct_evidence` in %s:\n"
+            key manifest_path;
+          entry claim
+      | claims ->
+          add
+            "offer: %s, a direct failure with no entry, is answered by %d passed claims; paste \
+             into `raw_direct_evidence` in %s the ONE entry whose claim asserts on this refusal:\n"
+            key (List.length claims) manifest_path;
+          List.iter claims ~f:entry);
+  Buffer.contents buffer
