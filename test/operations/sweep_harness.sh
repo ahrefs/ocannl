@@ -252,6 +252,11 @@ if [ -n "${SWEEP_TEST_CREDENTIALS:-}" ]; then
   printf '%s\t%s\n' "$*" "${GH_TOKEN+GH_TOKEN }${FOO_API_KEY+FOO_API_KEY }${SWEEP_TEST_CREDENTIAL_PLAIN+plain}" \
     >>"$SWEEP_TEST_CREDENTIALS"
 fi
+# A diagnostic leg the sweep starts under opam (gh-ocannl-1705): `exec -- bash tools/<leg>.sh ...`
+# runs the swept ref's script itself, in opam's environment as the real one would.
+case "$1 $2 $3 ${4:-}" in
+  "exec -- bash tools/"*) shift 2; exec "$@" ;;
+esac
 # What the unit's test actions record (gh-ocannl-1114). Where the sweep names a
 # records directory, the fixture text's skip records are re-announced by the
 # real Verdict, through a copy of the probe named fixture.exe: `replay` is the
@@ -4027,5 +4032,7 @@ grep -q "^sweep: declared measurement box 'spare' has no sweep unit$" <<<"$matri
 # A startup refusal swept nothing and writes NO record: that absence is the
 # signal, and it is what distinguishes this exit 2 from a lane-stopped one.
 [ "$(ls "$state"/logs/*-run.tsv | wc -l)" -eq "$records_before" ]
+
+. "$(dirname "$0")/sweep_leg_scripts.sh"
 
 printf 'sweep execution accounting, RTC context, dxg window evidence, fingerprinting, run record and skip aggregation: PASS\n'

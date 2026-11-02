@@ -278,6 +278,108 @@ git -C "$main" rm -q tools/hip-wmma-probe.sh
 git -C "$main" commit -qm 'drop the stand-in wmma probe'
 git -C "$main" push -q origin master
 
+# The other diagnostic legs (gh-ocannl-1705), each a stand-in at the swept ref printing its real
+# script's verdict line, started under opam in the unit's worktree with the row's arguments: on a
+# CUDA unit the vendor-ident check, the tf32 parity and -- after a green suite only -- the native-PTX
+# rerun; on a HIP unit the vendor-ident check beside the WMMA probe; on a CPU unit none. Each says
+# its verdict on the unit's summary, a WARNING where its condition holds (its own negative
+# control: quiet with status 0, firing with 1), and never moves the unit's row.
+mkdir -p "$main/tools"
+for leg in vendor-idents-check:vendor-idents cuda-tf32-parity:cuda-tf32-parity \
+  cuda-native-ptx-rerun:cuda-native-ptx; do
+  cat >"$main/tools/${leg%%:*}.sh" <<EOF_LEG
+#!/bin/sh
+echo "leg ran in \$PWD with: \$*"
+# A hung test under the leg's dune, as the fake opam's hang_test starts one: perl renamed dune,
+# its child leading its own group, so the per-test cap's watcher takes it as a test.
+if [ ${leg%%:*} = cuda-native-ptx-rerun ] && [ -n "\${SWEEP_TEST_DIAG_HANG:-}" ]; then
+  exec perl -e '\$0 = "dune"; my (\$pidf, \$secs) = @ARGV;
+    my \$c = fork(); die "fork: \$!" unless defined \$c;
+    if (!\$c) { setpgrp(0, 0); open my \$f, ">", "\$pidf.tmp" or die; print \$f "\$\$\\n"; close \$f;
+               rename "\$pidf.tmp", \$pidf; exec "sleep", \$secs; exit 127 }
+    \$SIG{TERM} = sub { kill "KILL", -\$c; exit 143 };
+    waitpid(\$c, 0); exit 0' "\$SWEEP_TEST_DIAG_HANG_PID" "\$SWEEP_TEST_DIAG_HANG"
+fi
+case \${SWEEP_TEST_DIAG_RC:-0} in
+  0) echo '${leg#*:}: verdict: holds (fixture)' ;;
+  1) echo '${leg#*:}: verdict: BROKE (fixture)' ;;
+esac
+exit "\${SWEEP_TEST_DIAG_RC:-0}"
+EOF_LEG
+done
+git -C "$main" add tools
+git -C "$main" commit -qm 'stand-in diagnostic legs'
+git -C "$main" push -q origin master
+remote_reset
+rog_wt=$remote_root/rog-nv-linux/ocannl-staging-worktrees/sweep
+: >"$fleet_calls"
+diag_holds=$(remote_sweep --only cuda --target test/operations)
+# rog's tokens bind: the suite and the two legs that hold the device each take one, the
+# vendor-ident check -- nvrtc compiles, no device work -- takes none.
+[ "$(grep -c '^execution slot --gpu --wait 1800 -- sh -c ' "$fleet_calls")" -eq 3 ]
+local_record=$(sed -n 's/^run:  *//p' <<<"$diag_holds")
+[ "$(awk -F '\t' '$1 == "unit" && $3 == "cuda" {print $4}' "$local_record")" = incremental-pass ]
+for line in 'vendor idents: holds (fixture)' 'tf32 parity: holds (fixture)' \
+  'native ptx: holds (fixture)'; do
+  grep -q "^  rog-nv/cuda: $line -- $state/logs/[^ ]*-rog-nv-cuda-[a-z0-9-]*\.log\$" <<<"$diag_holds"
+done
+absent 'WARNING' <<<"$diag_holds"
+diag_log() { sed -n "s/^  rog-nv\/cuda: $1: .* -- //p" <<<"$2"; }
+grep -qx "leg ran in $rog_wt with: cuda" "$(diag_log 'vendor idents' "$diag_holds")"
+grep -qx "leg ran in $rog_wt with: --fixture-dir $remote_root/rog-nv-linux/ocannl-staging/benchmarks/fixtures" \
+  "$(diag_log 'tf32 parity' "$diag_holds")"
+grep -qx "leg ran in $rog_wt with: -j $(box_jobs_sweep_jobs rog-nv cuda rog-nv-linux) @test/operations/runtest" \
+  "$(diag_log 'native ptx' "$diag_holds")"
+grep -q '	exec -- bash tools/cuda-native-ptx-rerun.sh -j ' "$remote_root/commands"
+diag_fires=$(SWEEP_TEST_DIAG_RC=1 remote_sweep --only cuda --target test/operations)
+local_record=$(sed -n 's/^run:  *//p' <<<"$diag_fires")
+[ "$(awk -F '\t' '$1 == "unit" && $3 == "cuda" {print $4}' "$local_record")" = incremental-pass ]
+grep -q '^  rog-nv/cuda: WARNING -- vendor idents: BROKE (fixture): a routine named like ' <<<"$diag_fires"
+grep -q '^  rog-nv/cuda: WARNING -- tf32 parity: BROKE (fixture): a tensorized conv seed ' <<<"$diag_fires"
+grep -q '^  rog-nv/cuda: WARNING -- native ptx: BROKE (fixture): green at the floor PTX target ' \
+  <<<"$diag_fires"
+diag_odd=$(SWEEP_TEST_DIAG_RC=5 remote_sweep --only cuda --target test/operations)
+[ "$(grep -c '^  rog-nv/cuda: [a-z0-9 ]*: could not run (exit 5) -- ' <<<"$diag_odd")" -eq 3 ]
+# A red suite compares nothing at the native target: the rerun is not asked, the others are.
+: >"$remote_root/commands"
+diag_red=$(SWEEP_TEST_OPAM_RC=1 remote_sweep --only cuda --target test/operations)
+grep -q '^  rog-nv/cuda: fail ' <<<"$diag_red"
+grep -q '^  rog-nv/cuda: vendor idents: holds (fixture) -- ' <<<"$diag_red"
+grep -q '^  rog-nv/cuda: tf32 parity: holds (fixture) -- ' <<<"$diag_red"
+absent 'native ptx' <<<"$diag_red"
+absent 'cuda-native-ptx-rerun' "$remote_root/commands"
+diag_hip=$(remote_sweep --only hip --target test/operations)
+grep -q '^  minix/hip: vendor idents: holds (fixture) -- ' <<<"$diag_hip"
+grep -qx "leg ran in $remote_root/minix-amd-linux/ocannl-staging-worktrees/sweep with: hip" \
+  "$(sed -n 's/^  minix\/hip: vendor idents: .* -- //p' <<<"$diag_hip")"
+absent 'tf32 parity\|native ptx' <<<"$diag_hip"
+diag_cpu=$(remote_sweep --only multidev_cc --target remote-cpu)
+grep -q '^  minix/multidev_cc: incremental-pass ' <<<"$diag_cpu"
+absent 'vendor idents\|tf32 parity\|native ptx\|wmma probe' <<<"$diag_cpu"
+# A --slow sweep's native rerun takes `@slow` as the unit did, and with it only the leg's cap.
+diag_slow=$(remote_sweep --only cuda --slow --target test/operations)
+grep -qx "leg ran in $rog_wt with: -j $(box_jobs_sweep_jobs rog-nv cuda rog-nv-linux) @test/operations/runtest @slow" \
+  "$(diag_log 'native ptx' "$diag_slow")"
+# A test the native rerun hangs on ends the leg at the per-test cap, named, as the unit's own would
+# (the watcher is the unit's, test_cap_start_cmd); the leg's timeout never moves the unit's row.
+case $(perl -e '$0 = "dune"; print qx{ps -o comm= -p $$}' 2>/dev/null) in
+  *dune*)
+    diag_hang_pid=$tmp/diag-hung-test.pid
+    rm -f "$diag_hang_pid"
+    diag_hang=$(SWEEP_TEST_DIAG_HANG=60 SWEEP_TEST_DIAG_HANG_PID=$diag_hang_pid SWEEP_TEST_TEST_CAP=2 \
+      remote_sweep --only cuda --target test/operations)
+    local_record=$(sed -n 's/^run:  *//p' <<<"$diag_hang")
+    [ "$(awk -F '\t' '$1 == "unit" && $3 == "cuda" {print $4}' "$local_record")" = incremental-pass ]
+    grep -q "^  rog-nv/cuda: native ptx: timeout (exit 142), hung test past the per-test cap: pid $(cat "$diag_hang_pid") has run [0-9]*s, past the 2s cap: sleep 60" \
+      <<<"$diag_hang"
+    if hung_test_survives "$diag_hang_pid" remote; then exit 1; fi
+    ;;
+esac
+git -C "$main" rm -q tools/vendor-idents-check.sh tools/cuda-tf32-parity.sh \
+  tools/cuda-native-ptx-rerun.sh
+git -C "$main" commit -qm 'drop the stand-in diagnostic legs'
+git -C "$main" push -q origin master
+
 # Quiet kernel and no runtime name: test failure buys no serial call. A CPU
 # remote unit has no window and uses the default width.
 remote_reset
@@ -544,7 +646,12 @@ controls = [
     ('no-retry', 'sweep', '    [ -n "$GUEST_ID" ] && return 0', '    return 0 # lost identity retry', 'error:vm-replaced:dxg'),
     ('no-credential-scrub', 'sweep', '''  printf 'opam exec -- sh -c %s sweep-dune dune' \\''', "  printf 'opam exec -- dune'; : \\", 'credentials reached dune'),
     # A suite leg that skips its GPU token (gh-ocannl-1177): the rerun's legs still take one, so
-    # only the count of held legs can tell.
+    # only the count of held legs can tell (the diagnostic legs' count, gh-ocannl-1705, is the
+    # first to).
+    # The native-PTX rerun after a red floor suite (gh-ocannl-1705), and diagnostic legs that hold
+    # the device without a token.
+    ('native-on-red', 'sweep', '      ran:pass | ran:incremental-pass | ran:fail | green:pass | green:incremental-pass) ;;', '      ran:* | green:*) ;;', 'unexpected match for native ptx'),
+    ('diag-leg-without-token', 'sweep', '    if [ -n "$TOKEN_TAKE" ] && [ "$gpu" = gpu ]; then', '    if [ -n "$TOKEN_TAKE" ] && [ "$leg" = serial-rerun ]; then', 'execution slot --gpu --wait 1800'),
     ('suite-without-token', 'sweep', '''    [ -z "$TOKEN_TAKE" ] || remote=$(gpu_token_take_cmd "$TOKEN_FW" "$TOKEN_WAIT" "$wt.gpu-token" "$remote")''', '    :', 'execution slot --gpu --wait 1800'),
 ]
 # A shell between the far-side supervisor and test_cmd's `sh -c`: its watcher's "$PPID" is then

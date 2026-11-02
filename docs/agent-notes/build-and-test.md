@@ -4226,7 +4226,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `skip (no GPU token on <box>: ...)` naming the holders (never a third batch), a measurement
   refusing the take is a `skip` too, and a take the fleet's machinery cannot answer runs the leg
   without a token under a `gpu token: WARNING` line, failing open as the registry read does. The
-  RTC context and the box check hold no GPU test and take none; workers' batches and the GPU
+  RTC context, the box check and the diagnostic legs not marked `gpu` hold no GPU test and take
+  none (the `gpu` ones take theirs, gh-ocannl-1705); workers' batches and the GPU
   integration loop (lukstafi/ludics-lite#615) wait for the same tokens, with no precedence either
   way. `OCANNL_TOOL_FLEET_WORKER=none` reads and takes nothing. The fleet's `kind` is the SLOT's:
   on a box whose tokens do not bind every slot is `gpu`, so a `--cpu` batch there, or one that fell
@@ -4244,6 +4245,29 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   said as `<box>: box check: ready`, `ENVIRONMENT GAP (not a test failure)` with the GAP lines,
   `not at <sha>` for a ref without the script, or `could not run`, and logged to
   `logs/<stamp>-<box>-box-check.log`; no history row, unit state or run-record field reads it.
+- **A GPU unit whose suite ran is followed by its backend's diagnostic legs** (gh-ocannl-1705; the
+  first was gh-ocannl-1658's WMMA probe): one row per leg in `DIAGNOSTIC_LEGS` (backend, `ran` or
+  `green`, `gpu` or not, log suffix, label, verdict prefix, command, what a WARNING means), each a
+  `tools/` script run in the unit's worktree that ends on `<prefix>: verdict: <text>` and exits 0
+  holds, 1 WARNING, 2 unavailable. HIP: `hip-wmma-probe.sh` and `vendor-idents-check.sh hip` (the
+  generated routine-name table against the toolkit's headers, about ten minutes); CUDA:
+  `vendor-idents-check.sh cuda` (about 40 s on rog), `cuda-tf32-parity.sh` (bench_conv_diag's seed
+  parity on cifar_resnet's materialize-all step under `tf32_matmuls`, the box's main-checkout
+  fixture; about 40 s) and, after a GREEN suite only, `cuda-native-ptx-rerun.sh` (the unit's own
+  targets again, `@slow` too on a `--slow` sweep, under `OCANNL_CUDA_PTX_TARGET=native` and the
+  unit's per-test cap, a hang said as `timeout` naming the test; in the same `_build`, so every test
+  action re-executes and the next floor unit re-executes them back). The `gpu` legs (parity, native) take a
+  GPU token where the unit does; the scripts that run dune go through `opam exec` and scrub the
+  credential variables themselves. A ref without a leg's script is said `not at <sha>` from the
+  local clone, before any transport or token. The verdict is the box's, like the box check's: said
+  on the summary (`<box>/<backend>: <label>: ...`, a WARNING naming what it means), logged to
+  `logs/<stamp>-<box>-<backend>-<suffix>.log`, and never in the unit's outcome, row or
+  fingerprint. Each script also runs by hand, from any directory, after a toolkit upgrade. A new leg
+  is a row and a script with that contract; `sweep_remote_fixture.sh` drives the rows through
+  stand-ins (and the `native-on-red`, `diag-leg-without-token` mutants), `sweep_leg_scripts.sh` the
+  real scripts against a fake dune. On 2026-11-02 the parity leg's first run on master said
+  `STEP BROKE`: building cifar_resnet raised `Shape_error: tracing the shape scheme model: occurs
+  check failed` under the default `op_shape_schemes=check` (green with it `off`).
 - **The per-run record `~/.ocannl-sweep/logs/<stamp>-run.tsv` is what a consumer reads; the stdout
   summary is for humans** (gh-ocannl-977). Its absence is itself a verdict: a run that refused at
   startup swept nothing and writes no record, which is what distinguishes that exit 2 from a

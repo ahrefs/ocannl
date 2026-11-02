@@ -27,9 +27,12 @@
 # every unit's outcome, including the ones after a failing one. Only a usable
 # harness failure (no local repo, etc.) aborts.
 #
-# A HIP unit whose suite ran is followed by tools/hip-wmma-probe.sh in its worktree
-# (hip_wmma_probe): the gfx11 WMMA instruction's same-sign rule and rounding modes,
-# asked again of each box's own toolkit, with a summary line of its own.
+# A GPU unit whose suite ran is followed by its backend's diagnostic legs in its
+# worktree (diagnostic_legs, gh-ocannl-1705): on HIP the gfx11 WMMA instruction's
+# same-sign rule and rounding modes (tools/hip-wmma-probe.sh) and the routine-name
+# table's harvest check; on CUDA that check, cifar_resnet's tf32 seed parity and,
+# after a green suite, the suite again at the native PTX target. Each asks the box's
+# own toolkit or device, and says its verdict on a summary line of its own.
 #
 # Each machine's units run as one LANE, and the lanes run concurrently (see
 # run_lane): units that share a box run one after another, units on different
@@ -1971,14 +1974,17 @@ suite_completion_cmd() { # backend wt
 # Run a post-unit shell command where the unit's worktree lives, under its lock
 # and the unit's CAP, appending to the log (the serial rerun's legs, the box check).
 # The serial rerun's legs -- its stanzas and the completion pass -- hold the GPU, so
-# where the unit takes a token they each take one too (gh-ocannl-1177); the box check
-# runs no GPU test and takes none.
-run_on_unit_host() { # host wt cmd log path_prefix [leg]
-  local host=$1 wt=$2 cmd=$3 log=$4 path_prefix=$5 leg=${6:-serial-rerun} remote budget=$(( CAP + 300 ))
+# where the unit takes a token they each take one too (gh-ocannl-1177), as does a
+# diagnostic leg its row marks `gpu` (diagnostic_legs); the box check runs no GPU test
+# and takes none.
+run_on_unit_host() { # host wt cmd log path_prefix [leg [gpu]]
+  local host=$1 wt=$2 cmd=$3 log=$4 path_prefix=$5 leg=${6:-serial-rerun} gpu=${7:-} remote
+  local budget=$(( CAP + 300 ))
+  [ "$leg" != serial-rerun ] || gpu=gpu
   if [ -n "$host" ]; then
     remote=$(remote_capped "$CAP" "$path_prefix $(remote_lock_cmd "$wt") $cmd" \
       "$(sleep_guard_why "$host" "$leg")")
-    if [ -n "$TOKEN_TAKE" ] && [ "$leg" = serial-rerun ]; then
+    if [ -n "$TOKEN_TAKE" ] && [ "$gpu" = gpu ]; then
       remote=$(gpu_token_take_cmd "$TOKEN_FW" "$TOKEN_WAIT" "$wt.gpu-token" "$remote")
       budget=$(( budget + TOKEN_WAIT ))
     fi
@@ -2569,10 +2575,8 @@ run_unit() { # machine backend host
     pass | incremental-pass | fail)
       box_check "$machine" "$host" "$wt" "${remote_repo:-$MAIN}" "${path_prefix:-}" ;;
   esac
-  case $outcome:$backend in
-    pass:hip | incremental-pass:hip | fail:hip)
-      hip_wmma_probe "$machine" "$backend" "$host" "$wt" "${path_prefix:-}" ;;
-  esac
+  diagnostic_legs "$machine" "$backend" "$host" "$wt" "${path_prefix:-}" "$outcome" \
+    "${remote_repo:-$MAIN}"
 }
 
 # The box's measurement prerequisites (gh-ocannl-1062): benchmarks/check-box.sh, once per lane, in
@@ -2605,34 +2609,96 @@ else echo 'check-box: not at this revision'; exit 3; fi" "$log" "$path_prefix" b
   esac
 }
 
-# The gfx11 WMMA probe (gh-ocannl-1658): tools/hip-wmma-probe.sh, after each HIP unit whose suite
-# ran, in that unit's worktree -- so pinned to $run_sha -- rebuilds tools/hip_wmma_sign_probe.hip
-# with the box's own hipcc and asks the INSTRUCTION again: whether every same-sign sum comes back
-# exact (what the bitwise HIP tensorized claims rest on) and how each accumulator rounds an inexact
-# one. Those move with the ROCm toolkit and the target, not with the swept code, so the daily run
-# on minix's gfx1151 and tuf's gfx1102 names a toolkit change the day it lands rather than leaving
-# it to be read off a red suite. Its verdict is the BOX's, like box_check's: said on a line of its
-# own, kept in <stamp>-<machine>-<backend>-wmma-probe.log, and never reaching the unit's outcome
-# (a broken rule is said as a WARNING; the suite's own bitwise claims are what turn the unit red).
-# A swept ref without the script says so.
-hip_wmma_probe() { # machine backend host wt path_prefix
-  local machine=$1 backend=$2 host=$3 wt=$4 path_prefix=$5 log rc verdict
-  log=$LOGS/$stamp-$machine-$backend-wmma-probe.log
-  run_on_unit_host "$host" "$wt" "cd \"$wt\" && if [ -f tools/hip-wmma-probe.sh ]; then \
-bash tools/hip-wmma-probe.sh; else echo 'hip-wmma-probe: not at this revision'; exit 3; fi" \
-    "$log" "$path_prefix" wmma-probe
-  rc=$?
-  say_unguarded "$log" "$machine/$backend: wmma probe"
-  verdict=$(sed -n 's/^hip-wmma-probe: verdict: //p' "$log" 2>/dev/null | tail -n 1)
-  case $rc:$verdict in
-    0:?*) say "  $machine/$backend: wmma probe: $verdict -- $log" ;;
-    1:?*)
-      say "  $machine/$backend: WARNING -- wmma probe: $verdict: the bitwise HIP tensorized claims rest on that rule (docs/agent-notes/backend-precision-and-simd.md) -- $log"
-      ;;
-    2:?*) say "  $machine/$backend: wmma probe: $verdict -- $log" ;;
-    3:*) say "  $machine/$backend: wmma probe: not at $run_sha" ;;
-    *) say "  $machine/$backend: wmma probe: could not run (exit $rc) -- $log" ;;
-  esac
+# The backend-scoped diagnostic legs (gh-ocannl-1705; the first, the gfx11 WMMA probe, gh-ocannl-1658):
+# questions whose answers move with a box's toolkit, its device or its own arch rather than only with
+# the swept code, asked after a GPU unit whose suite ran, in that unit's worktree -- so pinned to
+# $run_sha -- each by a script of tools/ that prints `<prefix>: verdict: <text>` as its last line and
+# exits 0 (holds), 1 (a WARNING: the leg found what it exists to find), 2 (unavailable: nothing was
+# judged) or anything else (could not run). Its verdict is the BOX's, like box_check's: said on a
+# line of its own, kept in <stamp>-<machine>-<backend>-<log>.log, and never reaching the unit's
+# outcome or its history row; the suite's own claims are what turn a unit red. A swept ref without
+# the script says so. One row per leg, `|`-separated:
+#   backend   the unit's backend the leg follows
+#   when      ran: after pass, incremental-pass or fail; green: after pass or incremental-pass only
+#   gpu       gpu: the leg holds the device for minutes, so it takes a GPU token where the unit does
+#             (run_on_unit_host); -: it does not
+#   log       the leg's log suffix, also its leg name for the sleep guard
+#   label     what the summary line calls it
+#   prefix    the script's verdict prefix
+#   command   the script and its arguments, from the worktree, under `opam exec` where it runs dune
+#             (each such script scrubs the credential variables itself, inside opam's environment,
+#             as switch_dune_cmd does for the unit's own legs); {fixtures} is the box's fixture store
+#             (its main checkout's benchmarks/fixtures, as box_check reads), {jobs} the unit's dune
+#             width as `-j N` (empty for none), {suite} the unit's own dune targets (`@slow`
+#             included where the unit ran it); a command naming {suite} runs under the unit's
+#             per-test cap (test_cap_start_cmd), and a timeout names the hung test
+#   why       what a WARNING means, said after it
+# wmma probe: the gfx11 WMMA instruction's same-sign rule and rounding modes, rebuilt with the box's
+# hipcc (tools/hip-wmma-probe.sh). vendor idents: whether the generated routine-name table still
+# matches the toolkit's headers (tools/vendor-idents-check.sh, gh-ocannl-1338), so an SDK upgrade is
+# noticed the day it lands. tf32 parity: every tensorized conv seed of cifar_resnet's training step
+# against the default pipeline (tools/cuda-tf32-parity.sh), a real graph where the sweep's own CUDA
+# suite runs with tf32 off. native ptx: the unit's suite again at the device's own PTX target
+# (tools/cuda-native-ptx-rerun.sh), after a green floor suite only, since a red one compares nothing.
+DIAGNOSTIC_LEGS='hip|ran|-|wmma-probe|wmma probe|hip-wmma-probe|bash tools/hip-wmma-probe.sh|the bitwise HIP tensorized claims rest on that rule (docs/agent-notes/backend-precision-and-simd.md)
+hip|ran|-|vendor-idents|vendor idents|vendor-idents|opam exec -- bash tools/vendor-idents-check.sh hip|a routine named like the new declaration fails to compile until the table is regenerated (docs/agent-notes/backend-dialects-and-idents.md)
+cuda|ran|-|vendor-idents|vendor idents|vendor-idents|opam exec -- bash tools/vendor-idents-check.sh cuda|a routine named like the new declaration fails to compile until the table is regenerated (docs/agent-notes/backend-dialects-and-idents.md)
+cuda|ran|gpu|tf32-parity|tf32 parity|cuda-tf32-parity|opam exec -- bash tools/cuda-tf32-parity.sh --fixture-dir {fixtures}|a tensorized conv seed the autotuner can crown computes another step than the default pipeline (benchmarks/README.md, BENCH_PARITY)
+cuda|green|gpu|native-ptx|native ptx|cuda-native-ptx|opam exec -- bash tools/cuda-native-ptx-rerun.sh {jobs} {suite}|green at the floor PTX target and red at the native one: a miscompile or a race one target exposes (docs/agent-notes/backend-precision-and-simd.md)'
+
+diagnostic_legs() { # machine backend host wt path_prefix outcome repo
+  local machine=$1 backend=$2 host=$3 wt=$4 path_prefix=$5 outcome=$6 repo=$7
+  local row leg_backend when gpu suffix label prefix command why log rc verdict script jobs suite
+  local watched hung
+  # The rows on fd 3, so nothing a leg starts can read them from stdin.
+  while IFS= read -r row <&3; do
+    IFS='|' read -r leg_backend when gpu suffix label prefix command why <<<"$row"
+    [ "$leg_backend" = "$backend" ] || continue
+    case $when:$outcome in
+      ran:pass | ran:incremental-pass | ran:fail | green:pass | green:incremental-pass) ;;
+      *) continue ;;
+    esac
+    jobs=$(box_jobs_sweep_jobs "$machine" "$backend" "$host")
+    script=tools/${command#* tools/}
+    script=${script%% *}
+    # The unit's own targets, `@slow` included where the unit ran it (test_cmd).
+    if [ -n "$TARGET" ]; then suite="@$TARGET/runtest"; else suite='@runtest @train'; fi
+    [ "$SLOW" != 1 ] || suite="$suite @slow"
+    # A leg that runs the suite runs it under the unit's per-test cap (test_cap_start_cmd), which
+    # leaves a leg reaching `@slow` to the leg's own cap, as it does the unit's.
+    watched=
+    case $command in
+      *'{suite}'*)
+        # shellcheck disable=SC2086  # the targets are word-split on purpose
+        watched=$(test_cap_start_cmd "$backend" "$wt" $suite) || watched=
+        ;;
+    esac
+    command=${command//\{fixtures\}/\"$repo/benchmarks/fixtures\"}
+    command=${command//\{jobs\}/${jobs:+-j $jobs}}
+    command=${command//\{suite\}/$suite}
+    [ -z "$watched" ] || command="$watched$command; rc=\$?; $(test_cap_stop_cmd)exit \$rc"
+    # Asked of the swept commit here, before any transport or token: a ref without the script
+    # costs nothing, where asking the far side would first wait for a GPU token.
+    if ! git -C "$MAIN" cat-file -e "$full_sha:$script" 2>/dev/null; then
+      say "  $machine/$backend: $label: not at $run_sha"
+      continue
+    fi
+    log=$LOGS/$stamp-$machine-$backend-$suffix.log
+    run_on_unit_host "$host" "$wt" "cd \"$wt\" || exit 127; $command" "$log" "$path_prefix" \
+      "$suffix" "$gpu"
+    rc=$?
+    say_unguarded "$log" "$machine/$backend: $label"
+    verdict=$(sed -n "s/^$prefix: verdict: //p" "$log" 2>/dev/null | tail -n 1)
+    hung=$(sed -n 's/^sweep: per-test cap: //p' "$log" 2>/dev/null | head -n 1)
+    case $rc:$verdict in
+      0:?* | 2:?*) say "  $machine/$backend: $label: $verdict -- $log" ;;
+      1:?*) say "  $machine/$backend: WARNING -- $label: $verdict: $why -- $log" ;;
+      124:* | 137:* | 142:*)
+        say "  $machine/$backend: $label: timeout (exit $rc)${hung:+, hung test past the per-test cap: $hung} -- $log"
+        ;;
+      *) say "  $machine/$backend: $label: could not run (exit $rc) -- $log" ;;
+    esac
+  done 3<<<"$DIAGNOSTIC_LEGS"
 }
 
 # Publish the lane's buffered unit lines as one block, under a run-wide lock so

@@ -1389,7 +1389,7 @@ files.
   `-O0` and ends on a one-line verdict (holds / rounding news / SAME-SIGN RULE BROKE /
   unavailable); `tools/sweep.sh` runs it after every HIP unit whose suite ran (minix's gfx1151 and
   tuf's gfx1102) and says the verdict on the summary, never in the unit's outcome
-  (gh-ocannl-1658). Run it by hand after a ROCm upgrade, and extend it to gfx12's
+  (gh-ocannl-1658; it is the first of the sweep's per-backend diagnostic legs, gh-ocannl-1705). Run it by hand after a ROCm upgrade, and extend it to gfx12's
   builtins when a gfx12 box exists.
 - **Where a gfx11 WMMA sum is inexact, only the f16 accumulator rounds to nearest even**
   (gh-ocannl-1509 on gfx1151, gh-ocannl-1658 on gfx1102, every row alike; the probe's rounding

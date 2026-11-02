@@ -7,7 +7,8 @@
 # leg's shell text (local, or sent to a remote box, whose own environment holds its own token),
 # tools/machine-verify-far.sh inside every `opam exec` on the verified machine, and the other tools/
 # wrappers that start dune themselves (fmt-check.sh, promote.sh, dune-quiet.sh, api-drift.sh,
-# ci-shard.sh, typecheck-scan-cases.sh). That is the boundary: a bare `dune`, or a one-off driver
+# ci-shard.sh, typecheck-scan-cases.sh, and the sweep's diagnostic legs vendor-idents-check.sh,
+# cuda-tf32-parity.sh and cuda-native-ptx-rerun.sh). That is the boundary: a bare `dune`, or a one-off driver
 # outside tools/, records whatever the session exports (gh-ocannl-1280 leaves it to the fleet not to
 # export the token everywhere). `test/operations/env_var_deps` reads `credential_env_patterns` below
 # and refuses a dune stanza that declares a match as an `(env_var ...)` dependency or reads one
