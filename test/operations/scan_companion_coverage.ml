@@ -332,7 +332,7 @@ let () =
   (* [z]'s bitwise premise, from its init functions ("ik;kj=>ij"), on every backend. *)
   p_all "z inputs: every cell's products share a sign and every partial sum is exact in f32"
     (Ll_test.matmul_products ~m:n ~n ~k:kk z_a_f z_b_f)
-    ~f:(Ll_test.exact_partials ~sig_bits:24);
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   let real_limits = Context.hardware_limits (Context.auto ()) in
   let leg4_holds_scan, leg4 =
     if not is_gpu then (false, [])

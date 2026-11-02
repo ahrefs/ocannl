@@ -385,7 +385,7 @@ let () =
           let b = bih / (ss2 * hh) and i = bih / hh % ss2 and h = bih % hh in
           List.init jj2 ~f:(fun j ->
               List.init kk2 ~f:(fun k -> attb_f [| b; i; h; k |] *. vb_f [| b; k; h; j |]))))
-    ~f:(Ll_test.exact_partials ~sig_bits:8);
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.bfloat16));
   let xb = bf16_init ~l:"xb" ~o:[ bt; ss2; kk2 ] ~f:xb_f in
   let wb = bf16_init ~l:"wb" ~o:[ kk2; jj2 ] ~f:wb_f in
   bf16_leg ~tag:"batched_lb" ~build:(fun () ->

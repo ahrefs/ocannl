@@ -334,13 +334,14 @@ let grain_exponent x =
     Some (e - 53 + Int.ctz bits)
 
 (** [exact_partials ~sig_bits products] is whether a reduction summing [products] returns their
-    EXACT sum whatever association it chooses, at an accumulator of [sig_bits] significant bits (24
-    for f32, 11 for f16, 8 for bf16), on a tensor unit whose exactness also needs one sign: gfx11's
-    WMMA returns the exact sum only when every product shares a sign (gh-ocannl-1420), and on an
-    inexact sum it is not correctly rounded (gh-ocannl-1509), so a HIP bitwise claim rests on both
-    conditions together (docs/agent-notes/backend-precision-and-simd.md). Derived from the products
-    themselves — a site passes the products of its own init functions ({!matmul_products}) rather
-    than restating their grid and range in prose (gh-ocannl-1693):
+    EXACT sum whatever association it chooses, at an accumulator of [sig_bits] significant bits
+    ([Ir.Ops.significand_bits] of its precision, which a site passes rather than a literal), on a
+    tensor unit whose exactness also needs one sign: gfx11's WMMA returns the exact sum only when
+    every product shares a sign (gh-ocannl-1420), and on an inexact sum it is not correctly rounded
+    (gh-ocannl-1509), so a HIP bitwise claim rests on both conditions together
+    (docs/agent-notes/backend-precision-and-simd.md). Derived from the products themselves — a site
+    passes the products of its own init functions ({!matmul_products}) rather than restating their
+    grid and range in prose (gh-ocannl-1693):
 
     - every nonzero product has the same sign; and
     - with [2^g] the finest grain of any product ({!grain_exponent}), the sum of their magnitudes is

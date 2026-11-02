@@ -195,7 +195,7 @@ let dk_nest ?(minted = true) ?guard ?(flag_below = 32) ~name ~e_n ~d_n () =
     (Printf.sprintf "%s: every partial sum of every dp and every K cell is exact in f32" name)
     (List.map (cells [| b_n; s_n; t_n; h_n |]) ~f:(fun i -> dp_terms i.(0) i.(1) i.(2) i.(3))
     @ List.map (cells k_dims) ~f:k_terms)
-    ~f:(Ll_test.exact_partials ~sig_bits:24);
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   {
     name;
     opt;

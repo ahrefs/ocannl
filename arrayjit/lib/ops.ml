@@ -319,6 +319,22 @@ let prec_in_bytes = function
   | Single_prec _ -> 4
   | Double_prec _ -> 8
 
+(** The significand width of a floating-point precision, the implicit leading bit included: a format
+    with [p] such bits holds every integer up to [2^p] exactly. 53 for double, 24 for single, 11 for
+    half, 8 for bfloat16 and 3 for fp8 (e5m2: two stored mantissa bits). The one table behind
+    exactness bounds such as [schedule_bench]'s and the tests' [Ll_test.exact_partials ~sig_bits]
+    (gh-ocannl-1741). Raises [Invalid_argument] on a non-float precision, which has no significand.
+*)
+let significand_bits = function
+  | Double_prec _ -> 53
+  | Single_prec _ -> 24
+  | Half_prec _ -> 11
+  | Bfloat16_prec _ -> 8
+  | Fp8_prec _ -> 3
+  | ( Void_prec | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _
+    | Uint64_prec _ | Uint4x32_prec _ ) as prec ->
+      invalid_arg ("Ops.significand_bits: not a floating-point precision: " ^ prec_string prec)
+
 (* Byte alignment of tensor buffers: pool bases and per-node offsets within multi-tenant pools. 32
    suffices for AVX/AVX2 and NEON vector loads; AVX-512 would need 64 — raise it here
    (gh-ocannl-164; every consumer parameterizes on this constant, nothing hardcodes 32). *)
