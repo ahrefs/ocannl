@@ -328,9 +328,10 @@ if harness_leg 'dune-project'; then
     @t2/runtest-scenario_x @t2/slow-gen @t3/runtest-cfgread @t3/runtest-esc @t3/runtest-neg @t3/runtest-py @t3/runtest-t_plain @t3/runtest-t_stub \
     @t3/runtest-uses @t4/runtest-gated @t4/runtest-objs @t4/runtest-t_gate @t4/runtest-t_gate-pre \
     @t4/sub/runtest-t_sub @t5/slow-usesh @t6/runtest-dyn @t6/runtest-inc @t7/runtest-g7 @t7/runtest-inc
-  # A first tier spanning most of the suite says so (gh-ocannl-1765); a narrow one does not.
+  # A first tier spanning most of the suite says so (gh-ocannl-1765), keeping the slow- aliases
+  # no CI job runs local (slow-gen, slow-usesh); a narrow one does not.
   cross_label='a first tier over half the per-test aliases is called cross-cutting, a narrow one is not'
-  if [ "$rc" = 0 ] && grep -q '^affected: CROSS-CUTTING: 31 of the 31 per-test aliases rank first' "$err"; then
+  if [ "$rc" = 0 ] && grep -q '^affected: CROSS-CUTTING: 31 of the 31 per-test aliases rank first, so this change is cross-cutting: the PR'"'"'s CI run owns the full list but its 2 slow- alias(es), which no CI job runs: run those locally too;' "$err"; then
     affected --files lib/leaf.ml
     if [ "$rc" = 0 ] && [ -s "$out" ] && ! grep -q 'CROSS-CUTTING' "$err"; then report 0 "$cross_label"
     else report 1 "$cross_label" "a narrow change: exit $rc; $(tr '\n' '|' <"$err")"; fi
@@ -712,6 +713,10 @@ helper_fixture() {
 (test (name t_hbeside) (modules t_hbeside) (libraries core))
 (test (name t_hopen) (modules t_hopen) (libraries core))
 (test (name t_halias) (modules t_halias) (libraries core))
+(test (name t_haopen) (modules t_haopen) (libraries core))
+(executable (name t_hgen) (modules t_hgen) (libraries core))
+(rule (target t_hgen.ml) (deps t_hgen.src.ml) (action (with-stdout-to %{target} (echo "let () = ignore Core.H.unused\n"))))
+(rule (alias runtest-t_hgen) (action (run %{exe:t_hgen.exe})))
 (test (name t_hcross) (modules t_hcross) (libraries hlp))
 (library (name hinc) (modules hinc) (libraries core))
 (test (name t_hinc) (modules t_hinc) (libraries hinc))
@@ -740,6 +745,10 @@ ML
   printf 'open Core\nlet () = ignore H.used\n' >"$repo/t8/t_hopen.ml"
   # ... and so does a qualifier through a local alias of Core.
   printf 'module C = Core\nlet () = ignore C.H.used\n' >"$repo/t8/t_halias.ml"
+  # ... or an open of that alias (local review).
+  printf 'module C = Core\nlet () = let open C in ignore H.used\n' >"$repo/t8/t_haopen.ml"
+  # A generated module whose rule is no copy is not read through its one input (local review).
+  printf 'let () = ()\n' >"$repo/t8/t_hgen.src.ml"
   # An open in the helper opens nothing in the test calling it: this `H` is its own.
   printf 'module H = struct let used = 0 end\nlet () = Hlp.plain (); ignore H.used\n' >"$repo/t8/t_hcross.ml"
   # `include` re-exports Helper's members as Hinc's own: `Hinc.used` names Helper (local review).
@@ -758,7 +767,7 @@ if harness_leg 'helper definitions'; then
   affected --referenced-only --files lib/helper.ml
   expect 'a helper library names a module through the definitions a test names, never its comments; a bare re-export name is no mention' 0 \
     @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen \
-    @t5/slow-usesh @t8/runtest-t_hindirect @t8/runtest-t_hnamed @t8/runtest-t_hopen @t8/runtest-t_halias @t8/runtest-t_hsel @t8/runtest-t_hinc
+    @t5/slow-usesh @t8/runtest-t_hindirect @t8/runtest-t_hnamed @t8/runtest-t_hopen @t8/runtest-t_halias @t8/runtest-t_hsel @t8/runtest-t_hinc @t8/runtest-t_haopen @t8/runtest-t_hgen
   if grep -qx 'affected: link-only: @t8/runtest-t_hplain' "$err" && grep -qx 'affected: link-only: @t8/runtest-t_hbare' "$err" \
       && grep -qx 'affected: link-only: @t8/runtest-t_hbeside' "$err" && grep -qx 'affected: link-only: @t8/runtest-t_hcross' "$err"; then
     report 0 'what names neither is ranked link-only, and named on stderr'
@@ -842,9 +851,12 @@ if harness_leg 'explain'; then
   # ... and, its code known, it is link-only for a definition no arm names (it was "code not all
   # known", so first, before).
   printf 'let used = 1\nlet unused = 3\n' >"$repo/lib/helper.ml"
-  affected HEAD --why @t8/runtest-t_hsel
+  affected HEAD --why @t8/runtest-t_hsel --why @t8/runtest-t_hgen
   why_has 'select: with every arm read, a test naming no changed definition is link-only' \
     'affected: why @t8/runtest-t_hsel: LINK-ONLY: printed last; --referenced-only leaves it off'
+  why_has 'a generated module whose rule is no copy stays code not all known, whatever its one input names' \
+    'affected: why @t8/runtest-t_hgen: REFERENCED: printed first' \
+    'affected: why @t8/runtest-t_hgen:   referenced: its code is not all known: it has a generated module (a (select), a rule'"'"'s output)'
   printf 'let used = 2\nlet unused = 2\n' >"$repo/lib/helper.ml"
   # `--why all` explains every listed alias, and its verdicts are the tiers the list was ranked
   # by: REFERENCED or BLIND for each alias printed first, LINK-ONLY for each one printed last.

@@ -3033,7 +3033,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     stopped counting also names the module itself, or is reached through `ppx_ocannl`'s sources,
     which name `Assignments`, `Indexing` and more for every `%cd`/`%op` user (the boundary above).
     When the first tier still spans over half the suite, stderr says CROSS-CUTTING: the PR's CI
-    run owns the full list then, and the local run is the tests exercising the change (AGENTS.md).
+    run owns the full list then, but for its `slow-` aliases, which no CI job runs (CI builds
+    `@train` or `@default @runtest @bin-smoke`; `@check` only compiles `@slow`), so the local run
+    is those plus the tests exercising the change (AGENTS.md).
     The contract: LINK-ONLY is a heuristic ranking,
     and `--referenced-only` a deliberate trade (faster, with a possible miss) for iterating
     mid-change, never for the pre-push run, which takes the full default list.

@@ -1142,7 +1142,7 @@ sub compiled_owners {
   return grep { $st[$_]{dir} eq $d && ($e ? $st[$_]{kind} ne "library" : $st[$_]{kind} eq "library")
                 && $st[$_]{units}{$x} } 0 .. $#st;
 }
-my (%runs, %reads, %globs, %via, %adeps);
+my (%runs, %reads, %globs, %via, %adeps, %copies_one);
 my %queried;
 # An alias some stanza makes depend on files (a rule with targets, an
 # `(alias)` stanza, `copy_files`): `dune rules @ALIAS` expands those
@@ -1229,9 +1229,16 @@ while (@queue) {
         fail("a dependency \"$k\" in dune rules output is outside this helper's boundary");
       }
     }
+    # A copy (`copy`, `copy#`, a `(select)` arm's copy-line-directive), its
+    # `chdir` read past: what copy_source vouches for.
+    my $act = field($rule, "action");
+    $act = $act->[2] while ref $act && @$act == 3 && !ref $act->[0] && $act->[0] eq "chdir";
+    my $is_copy = ref $act && @$act && !ref $act->[0]
+      && ($act->[0] =~ /^copy#?$/ || ($act->[0] eq "ext" && @$act == 2 && !ref $act->[1] && $act->[1] =~ /^"?\((?:copy-line-directive|copy#?)\s/));
     for my $f (@files) {
       my $t = strip_ctx($f) // next;
       $runs{$t} = \%r; $reads{$t} = \%p; $globs{$t} = \@g; $via{$t} = [sort keys %v]; $adeps{$t} = \%ad;
+      $copies_one{$t} = 1 if $is_copy;
     }
     $next{$_} = 1 for grep { !$queried{$_} } keys %v;
   }
@@ -1303,12 +1310,15 @@ for my $t (sort keys %queried) {
   }
   fold($_) for sort keys %queried;
 }
-# A generated module file that is a plain copy -- its rule runs nothing and reads
-# one OCaml source, a `(select)` arm or a `copy#` -- has that source as its code
-# (gh-ocannl-1765: a select arm made a test's code "not all known").
+# A generated module file that is a plain copy -- its rule's action is a copy
+# (a `(select)` arm, `copy#`), it runs nothing and reads one OCaml source -- has
+# that source as its code (gh-ocannl-1765: a select arm made a test's code "not
+# all known"). Any other action (a `sed`, an `echo`) may write what its input
+# never names.
 sub copy_source {   # generated module file -> its one source, or undef
   my ($g) = @_;
-  return undef if !$reads{$g} || %{$runs{$g} // {}} || @{$globs{$g} // []} || %{$adeps{$g} // {}};
+  return undef if !$copies_one{$g} || !$reads{$g} || %{$runs{$g} // {}} || @{$globs{$g} // []} || %{$adeps{$g} // {}}
+    || @{$via{$g} // []};
   my @src = keys %{$reads{$g}};
   return @src == 1 && $src[0] =~ /\.mli?\z/ && -f $src[0] ? $src[0] : undef;
 }
@@ -1857,6 +1867,11 @@ sub file_scope {   # SCOPE FILE -> [{X opened => 1}, {M => {X => 1}}]
     my ($m, $path) = ($1, $2);
     my ($x) = $path =~ /([A-Z][\w']*)\z/;
     if (defined $m) { $alias{$m}{$x} = 1 } else { $open{$x} = 1 }
+  }
+  # An open of a local alias opens what it aliases (local review), to a fixpoint.
+  for (my $grew = 1; $grew;) {
+    $grew = 0;
+    for my $m (keys %open) { for my $x (keys %{$alias{$m} // {}}) { $grew = $open{$x} = 1 unless $open{$x} } }
   }
   $open{ucfirst $1} = 1 if $f =~ m{([A-Za-z_][\w']*)\.mli?\z};
   return [\%open, \%alias];
@@ -2624,14 +2639,17 @@ if (@link_only) {
 }
 print STDERR "$_\n" for @why_lines;
 # A first tier spanning most of the suite (gh-ocannl-1765): the ranking cannot
-# narrow this change, so say so, and who runs the whole list.
+# narrow this change, so say so, and who runs the whole list -- except its
+# `slow-` aliases, which no CI job runs (local review): those stay local.
 {
   my $n_all = 0;
   $n_all += $_ for values %total;
   my $n_first = keys %out;
+  my @slow = sort grep { m{(?:^\@|/)slow-[^/]*$} } keys %out;
   printf STDERR "affected: CROSS-CUTTING: %d of the %d per-test aliases rank first, so this change is cross-cutting:"
-    . " the PR's CI run owns the full list; locally run the tests that exercise the change, named in the PR"
-    . " body, and `dune build \@check`\n", $n_first, $n_all
+    . " the PR's CI run owns the full list%s; locally run the tests that exercise the change, named in the PR"
+    . " body, and `dune build \@check`\n", $n_first, $n_all,
+    (@slow ? sprintf(" but its %d slow- alias(es), which no CI job runs: run those locally too", scalar @slow) : "")
     if $n_all && 2 * $n_first > $n_all;
 }
 printf STDERR "affected: %d alias(es) from %d changed path(s)%s%s\n", scalar(keys %out) + ($referenced_only ? 0 : @link_only),
