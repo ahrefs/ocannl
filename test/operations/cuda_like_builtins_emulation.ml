@@ -17,6 +17,9 @@
    Negative controls: a copy of each vendor table whose [__hiloint2double] swaps its words must
    differ from the C table somewhere (or the comparison does not reach the 64-bit helpers), and a
    HIP fp8 guard whose zero drops its sign must differ from the codec somewhere. *)
+(* cc-fp-contract: no-contraction -- host probes of RNG-bit and fp8 conversion helpers, no
+   multiply-add *)
+
 open Verdict.Claims
 module B = Context.Builtins_cc
 module Cc = Context.Cc_backend

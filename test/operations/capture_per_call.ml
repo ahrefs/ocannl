@@ -81,7 +81,12 @@ let () =
           ~f:(function [| r; _ |] -> if r < n / 2 then 1. else 3. | _ -> 0.)
           ()
       in
-      let ys = List.map [ 2; 4 ] ~f:(fun n -> (n, bn ~train_step:(Some 0) (batch n))) in
+      (* Batch norm reads only the training step's presence: the batch serves as the payload. *)
+      let ys =
+        List.map [ 2; 4 ] ~f:(fun n ->
+            let x = batch n in
+            (n, bn ~train_step:(Some x) x))
+      in
       List.iter ys ~f:(fun (_, y) -> observe y);
       let ctx =
         List.fold ys ~init:(Context.auto ()) ~f:(fun ctx (_, y) -> Train.forward_once ctx y)

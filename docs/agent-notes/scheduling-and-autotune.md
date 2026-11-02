@@ -376,22 +376,29 @@ files.
   `Tensorize`'s accumulator fragment (`rows x noc_p` at the output's width, written and read) where
   every completion contracts: on conv, a window loop of two or more iterations (the contraction
   site is the outermost kernel-window loop — `detect_conv` does NOT refuse singleton windows, so
-  the condition is explicit); on matmul, a staged GPU mma geometry with `bk < m_nk` (a lattice box
-  only once its LARGEST `bk` leaves two blocks — a whole-K box has no fragment unless pad masks
-  force one). On the CPU packed shapes it depends on the packing shape's loop order, not on the
-  geometry (gh-ocannl-1676): the grid-outermost shapes (`hoisted-grid`, `hoisted-grid-pack-rest`,
-  `grid-pack-rest`) keep the row-block loop outside `k_o`, which contracts once it runs twice;
-  `serial`, `hoisted` and plain `grid` sink the row blocks under `k_o`, and nothing qualifies. One
-  predicate chain carries that to all three readers — `packing_shape_flags` (the tree's leaves and
-  the floor), `cpu_pack_grid_outermost` (the builder's loop order and the floor),
-  `cpu_pack_contracts` — and `sketch_family_tree`'s `fragment_pins` checks it against the applied
-  schedules: a fragment node appears exactly where it says. Still unpriced (sound, not tight): a
-  mask-forced statement-site contraction, and one through the outer `m_ko` loops alone.
+  the condition is explicit). On matmul one predicate says where (gh-ocannl-1706,
+  `matmul_fragment_certain`, built from the pieces the builders' loop order and staging read): a
+  reduction-block loop of two or more iterations enclosing the micro-kernel without indexing the
+  accumulator — an outer `m_ko` loop on every tensorized form (the whole-triple row block and the
+  unstaged GPU form included), a staged GPU geometry's `k_o`, and on the CPU packed shapes either
+  one only under the grid-outermost order (`hoisted-grid`, `hoisted-grid-pack-rest`,
+  `grid-pack-rest` keep `i_o` above every reduction-block loop; `serial`, `hoisted` and plain
+  `grid` sink it under them) — or pad masks: a staged row or column block that does not divide its
+  extent makes `Tensorize` force the contraction, at the statement site where no loop qualifies
+  (edge blocks only under `full_block_split`). A reduction pad masks nothing. A lattice box counts a
+  mask only where every completion pads (the pinned lane-width column, or a non-dividing singleton
+  `bm` box: divisibility is not monotone in the block size). One fragment however many reasons
+  force it. `sketch_family_tree`'s `fragment_pins` checks the predicate against the applied
+  schedules over every tensorized leaf, reading the fragment off `simdgroup_fragments` /
+  `masked_fragments`, not its label. Still unpriced (sound): the GPU masked loop site's second
+  tile (`pad_scratch`, gh-ocannl-1736) and conv's mask-forced fragments (a 1x1 window with pads).
   **Pruning at real conv incumbents needed both halves of the byte accounting tight**: the floor
   prices a windowed read by `Affine.image_cardinality_lb` (sumset/interval counting per
   coordinate, products over symbol-disjoint coordinates), and `analyze` caps a non-injective
-  map's count by its coordinates' value ranges, exact where the two meet (since gh-ocannl-1676 on
-  dynamic gathers and vector runs too: `Affine.image_cardinality_range_ub`, with a vector run read
+  map's count by its coordinates' value sets, exact where the two meet (since gh-ocannl-1676 on
+  dynamic gathers and vector runs too; since gh-ocannl-1706 the upper side is the same
+  gcd-normalized sumset walk as the lower, `Affine.coord_card`, so holes no longer count:
+  `Affine.image_cardinality_ub`, with a vector run read
   as one more unit term of the coordinate it moves along, or of the flat index where it can spill
   — `Affine.vec_run_frame`, shared with the run-aware lower bound) — before that, `analyze`
   charged a padded input's whole buffer (`[1, 2]` padding leaves one unread row and column) and
@@ -1307,11 +1314,16 @@ files.
   for a `Grid` loop (`Autotune.schedule_asks_grid`, read off the saved schedule) while its census
   records a serial one (`Autotune.grid_rendered_serially`); each also gets a `NOTE grid-serial`
   line in `autotune_log`. Keyed on the schedule because the label under-promises: the whole-triple
-  `W_sketch[mma-cpu 16x0x0]` carries no ` grid` token yet Grid-splits its row loop, and at 64^3 the
-  launch floor keeps that loop serial. The seeding pre-filter weighs only the packed tiles it knows
-  against the cap; the contracted `bm x bn` accumulator fragment of a grid-outermost shape is weighed
-  only at render, which is how `test/operations/autotune_grid_record` gets a timed hoisted-grid seed
-  rendered serially for the cap.
+  `W_sketch[mma-cpu 16x0x0]` carries no ` grid` token yet Grid-splits its row loop (at 64^3 that
+  loop is on the pool; its zeroing nest's Grid, 64^2 updates, is under the launch floor). The
+  seeding pre-filter weighs a Grid shape's known per-chunk locals against the cap: its in-kernel
+  packed tiles plus, under a grid-outermost shape, the contracted `bm x bn` accumulator fragment,
+  whether the loop order or the pad masks mint it (`cpu_pack_fragment_bytes`, gh-ocannl-1793,
+  gh-ocannl-1706), the sum the renderer's `Grid_private_over_cap` reports. Refusing a geometry moves the shape's pad-waste minimum, so a padded geometry can surface
+  in its place; `test/operations/autotune_grid_record` compiles every hoisted-grid geometry of two
+  sites and pins proposed-iff-within-cap against each record. Not weighed: the plain `grid` shape's
+  pad-masked statement-site tile, and the launch floor (the in-kernel `Grid` shape's
+  row-block launch sits under the k-blocks and is below it at 64^3, so it is timed serial).
 - **A test decides how a `Tile_mma` rendered from the census, never the source** (gh-ocannl-1316).
   The lane-0 fallback's `if (lane == 0)` guard also wraps the C backends' register tiling, so
   `"== 0)"` never told the two apart; "no intrinsic spelling" says nothing about a statement that

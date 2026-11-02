@@ -31,6 +31,10 @@ kernel void d_fwd(
 
   /* Main logic. */
   /* d fwd */
-  t_d[0] = (((bfloat)(t_a[0]) + (bfloat)(t_b[0])) * t_c[0]);
+  {
+    half v1_n6;
+    v1_n6 = (t_a[0] + t_b[0]);
+    t_d[0] = ((bfloat)(v1_n6) * t_c[0]);
+  }
   /* end */
 }

@@ -73,7 +73,10 @@ type sketch_params = {
             operands pack inside the Grid body and privatize per chunk — each chunk re-packs its own
             B~ panel (redundant copies, but one dispatch instead of one per k-block). Needs the
             tiles under the renderer's per-chunk privatization cap (config
-            [cc_grid_private_bytes_cap]).
+            [cc_grid_private_bytes_cap]). All three grid-outermost shapes also privatize the
+            [bm x bn] accumulator fragment their contraction mints inside the Grid body
+            ({!matmul_fragment_certain}), which seeding weighs against the same cap
+            (gh-ocannl-1793).
           - Without [sk_hoist] or [sk_pack_rest], in-kernel packing: the per-row-block A~ packing
             Stage lands inside the Grid body — its tile is privatized to per-chunk block-scope
             storage by the renderer ([C_syntax.parallel_grid_safe]'s privatization rule) — while the
@@ -592,11 +595,17 @@ val cpu_pack_grid_outermost : sk_grid:bool -> sk_hoist:bool -> sk_pack_rest:bool
     per-chunk packing shapes. The loop order [cpu_mma_pack_sketch_schedule] builds, and what the
     certain-traffic floor reads off a path's packing shape (gh-ocannl-1676). *)
 
-val cpu_pack_contracts : m_nk:int -> grid_outermost:bool -> bk:int -> bool
-(** Whether a packed geometry's accumulator contraction is implied: grid-outermost, with the
-    reduction-block loop running at least twice ([bk < m_nk]). Then
-    [Schedule.contract_tensorized_accumulator] mints a fresh [bm x bn] fragment at the output's
-    storage precision, which {!sketch_path_traffic_floor} prices (gh-ocannl-1676). Exposed for
+val matmul_fragment_certain : Ir.Low_level.optimized -> sketch_params -> bool
+(** Whether every application of the matmul tensorized sketch [p] to [opt] has
+    [Schedule.contract_tensorized_accumulator] mint the fresh [bm x bn] accumulator fragment, at the
+    output's storage precision, that {!sketch_path_traffic_floor} prices (gh-ocannl-1676,
+    gh-ocannl-1706). Certain where a reduction-block loop of two or more iterations encloses the
+    micro-kernel without indexing the accumulator — an outer contraction loop ([m_ko]) on every
+    tensorized form; the k-block loop of a staged GPU geometry; on the CPU packed composition,
+    either one only under the grid-outermost loop order ({!cpu_pack_grid_outermost}) — and wherever
+    pad masks on the row or column force the contraction (a staged geometry whose row or column
+    block does not divide its extent, every operand staged). The same predicates the builders' loop
+    order and staging read. [false] off the uncoalesced matmul tensorized sketches. Exposed for
     tests, which check it against the applied schedules. *)
 
 val sketch_path_traffic_floor :
@@ -604,10 +613,10 @@ val sketch_path_traffic_floor :
 (** Additional bytes every completion below a path must move beyond
     {!Ir.Cost_model.completion_floor}: the matmul family's staged geometries, and the conv family's
     two staged operand tiles once its row geometry commits (gh-ocannl-1489), plus the accumulator
-    fragment [Tensorize]'s contraction mints wherever it is certain (gh-ocannl-1601; on CPU packed
-    shapes, {!cpu_pack_contracts}, gh-ocannl-1676). Detection runs at partial application, in the
-    claiming family's order; an unrecognized site or an uncommitted staging decision contributes
-    zero. *)
+    fragment [Tensorize]'s contraction mints wherever it is certain (gh-ocannl-1601; on the matmul
+    family, {!matmul_fragment_certain}, gh-ocannl-1676, gh-ocannl-1706). Detection runs at partial
+    application, in the claiming family's order; an unrecognized site or an uncommitted staging
+    decision contributes zero. *)
 
 (** {2 Constructing schedules and inspecting reductions} *)
 

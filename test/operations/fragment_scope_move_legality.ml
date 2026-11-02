@@ -43,6 +43,9 @@
    HIP's tensorized half results, the bases' included, and per-statement tiles alike; same-sign data
    is exact on that unit, as on every other backend's. *)
 
+(* cc-fp-contract: not-cc -- executed parity needs a GPU advertising a half tile; C backends compile
+   nothing *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

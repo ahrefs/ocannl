@@ -177,6 +177,10 @@ module Open_node_scan = Open_node_scan
 module Debug_name_scan = Debug_name_scan
 (** Holding every test's use of a node's debug name to display, never lookup (gh-ocannl-1606). *)
 
+module Label_dispatch_scan = Label_dispatch_scan
+(** Holding the compiler's reads of a node's label or namespace, and of a backend's name, to
+    display, a copied label or a marked site, never a decision (gh-ocannl-1783). *)
+
 module Tensorized_census_scan = Tensorized_census_scan
 (** Finding executed claims about a tensorized routine whose item judges no mma census, which parity
     alone cannot replace (gh-ocannl-1309). *)

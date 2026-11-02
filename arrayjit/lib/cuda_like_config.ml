@@ -34,6 +34,9 @@ module Cuda = struct
   let fmod_f32 = "fmodf"
   let fmod_f64 = "fmod"
   let recip_sqrt_f64 = ("(1.0 / sqrt(", "))")
+
+  (* nvrtc's [--use_fast_math] touches only f32 division ([--prec-div=false]): f64 [/] is IEEE. *)
+  let div_f64 = None
   let fp8_from_float_fn = "(__nv_fp8_e5m2)"
   let conditional_includes = [ ("nvcuda::wmma", "#include <mma.h>") ]
 
@@ -72,6 +75,12 @@ module Hip = struct
      and +inf, where ROCm's own [rsqrt] is C's [1 / sqrt] there and correctly rounded elsewhere. *)
   let fmod_f64 = "ocannl_fmod"
   let recip_sqrt_f64 = ("rsqrt(", ")")
+
+  (* gh-ocannl-1782: under [-ffast-math], f64 [/] is a reciprocal estimate, NaN for every [x / 0],
+     [x / inf] and overflowing quotient; [Builtins_hip.ocannl_div_f64] is the IEEE quotient. It does
+     not depend on the umbrella, so a [hip_fast_math] key (gh-ocannl-1779) that drops [-ffast-math]
+     leaves it correct; only f32 and half division change with that key. *)
+  let div_f64 = Some "ocannl_div_f64"
 
   (* ROCm's subnormal guard is one funnel for conversion and every operator arity. *)
   let fp8_from_prec_fn = function
@@ -117,6 +126,9 @@ module Make (Dialect : sig
      operand. *)
   val fmod_f64 : string
   val recip_sqrt_f64 : string * string
+
+  (* The f64 [Div] (and [Recip], as [1.0 / x]) function, where a plain [/] is not IEEE. *)
+  val div_f64 : string option
   val fp8_from_float_fn : string
   val vendor_routine_idents : string list
 end) (Input : sig
@@ -264,6 +276,8 @@ struct
     | Add, _ -> f "+"
     | Sub, _ -> f "-"
     | Mul, _ -> f "*"
+    | Div, Double_prec _ when Option.is_some Dialect.div_f64 ->
+        func (Option.value_exn Dialect.div_f64)
     | Div, _ -> f "/"
     (* Through [Builtins_cc.cuda_like_power_builtins] (gh-ocannl-1240): fast math lowers the vendor
        [pow] to [exp2(y * log2(x))], NaN for a negative base even under an integral exponent known
@@ -645,7 +659,8 @@ struct
           (Dialect.error_prefix ^ ".unop_syntax: Recip not supported for byte/integer precisions")
     | Recip, Half_prec _ -> func "hrcp"
     | Recip, Single_prec _ -> f "(1.0f / (" "))"
-    | Recip, Double_prec _ -> f "(1.0 / (" "))"
+    | Recip, Double_prec _ -> (
+        match Dialect.div_f64 with Some div -> f (div ^ "(1.0, ") ")" | None -> f "(1.0 / (" "))")
     (* [1 / bf16] is ambiguous: the int operand can pair with any of the bfloat16 conversions. *)
     | Recip, Bfloat16_prec _ -> f "__float2bfloat16(1.0f / __bfloat162float(" "))"
     | Recip, _ -> f "(1 / (" "))"

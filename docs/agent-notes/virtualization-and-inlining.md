@@ -93,6 +93,24 @@ files.
   `Zero_out`s. The raw analysis entry points `analyze_proc`/`specialize_proc` deliberately do NOT
   validate — they are the probes that must stay conservative on IR they may not trust
   (`test/operations/affine_extraction.ml`); everything past them does.
+- **A scope's collapse is exact, or it does not happen** (gh-ocannl-1788). A `Local_scope` rounds
+  its value to its own precision (codegen declares its local at the backend's `compute_prec` of it),
+  so `simplify_llc` collapses a float scope into a float slot only when the slot evaluates at the
+  scope's precision, or when the value is a load whose storage the scope's precision widens exactly
+  (`Ops.widens_exactly`). The slot's precision is `loop_scalar`'s `~eval`, threaded as
+  `walk_operand_precisions` threads it: a homogeneous operand keeps its parent's, a heterogeneous
+  one takes its own annotation (the annotation alone cannot tell, since a scope operand is annotated
+  at its own precision). The collapse used to be unconditional, so a virtualized bf16 cast read in
+  an f32 sum lost its rounding wherever the local is declared bf16: Metal, CUDA and HIP by default,
+  cc under `narrow_compute_f32=false`. cc's default declares it f32, which is why nothing on the
+  default CPU path noticed. A wide scope over arithmetic collapsed into a narrow slot computed the
+  arithmetic narrow. `test/operations/scope_collapse_rounding` executes each shape against the
+  uncollapsed `?prelowered` form under both policies; `top_down_prec`'s goldens show it end to end
+  (a half sum read in a bfloat16 product was computed at bfloat16 on Metal). A scope or slot of an
+  integer precision still collapses unconditionally: the gh-343 gather rewrite recognizes a one-hot
+  comparison only once its scope has collapsed into the float product (`test_bounds_folded_gather`
+  and the tune-cache tests went red when it did not). A kept scope is what the pattern-matching
+  passes then see: the explicit-SIMD renderings decline a loop holding one (`scalar_mentions`).
 - The scope-TARGET contract, companion of the body contract above (gh-ocannl-681): a `Local_scope`
   over X denotes THE INLINED COMPUTATION OF X, so `LL.optimize` accepts one only while X is virtual,
   and REJECTS it over a materialized X (`scope_target_rejection` in `low_level.ml`, raised from
@@ -211,17 +229,34 @@ files.
   split. Pinned by the `constexpr_*` rows of `test/operations/virtual_rejection_boundary.ml` (a
   guarded setter refused as 142, a flattened read refused as 13, the cap exemption), with
   executed parity.
-- **A fixed-index producer position is guarded only over a proved fallback** (gh-ocannl-1735). On an
-  extent-1 coordinate a producer `Fixed_idx 0` read at a symbolic index is the same cell
-  (`same_unit_cell`, no guard). On a wider one `instantiate_computations` guards `k == index`, and
-  where the guard is false the replay's shared local carries on, which is the materialized value
-  only if that local is defined: `fixed_guardable` requires a `Zero_out` of the node or another
-  component that `Affine.covers_box` proves covers it (`covered_by_other`). Without the proof the
-  site still refuses as 13 — declared-virtual nodes skip the coverage rule, and a guard would read a
-  zero no write put there. Unions of partial covers (cell-by-cell writers) prove nothing, which is
-  why the 13 vehicles of `scope_over_materialized`, `stored_template_elision` and
-  `capture_pass_side_effects` still refuse; Fixed-vs-Fixed and `Sub_axis` mismatches are 13
-  outright. Rows: `fixed_component_*` in `virtual_rejection_boundary.ml`.
+- **A fixed-index producer position is guarded only over a proved fallback** (gh-ocannl-1735,
+  gh-ocannl-1795). On an extent-1 coordinate a producer `Fixed_idx 0` read at a symbolic index is
+  the same cell (`same_unit_cell`, no guard). On a wider one `instantiate_computations` guards
+  `k == index`, and where the guard is false the replay's shared local carries on, which is the
+  materialized value only if that local is defined: `fixed_guardable` requires a `Zero_out` of the
+  node or `union_covers` — the components' writes TOGETHER cover the node, the guarded component
+  included (`Affine.union_covers_box`: each write a box over its live loops, a diagonal or strided
+  write proving nothing). The proof is about the node, not the read: a union covering only the
+  cells read still refuses as 13 (`fixed_component_read_covered_only`), since the read's range is
+  unknown where the template is instantiated. Declared-virtual and inherited nodes skip the
+  coverage rule, so for them the proof is all there is. A component fixed at a cell other than a
+  fixed read's is omitted at that read site before any guard is built (`Omitted`; all omitted is
+  still 13). A host-constant literal (`Tn.known_host_constant`) takes neither the union nor the
+  omission: its per-cell `Constant_fill` components would replay as a guard per cell, and a later
+  `Context.set_values` must reach its readers, so a multi-cell literal read off its own cell stays
+  a buffer read (`recompute_on_read`, `test_one_hot_embedding_lookup` pin what that keeps). Rows: `fixed_component_*` and `declared_virtual_union` in
+  `virtual_rejection_boundary.ml`. Equality guards from repeated symbols and range guards carry no
+  such proof — they rely on the coverage rule, so a declared-virtual node read where no write
+  reaches falls back on the init.
+- **The inliner solves raw index positions pairwise, so both sides must share one coordinate
+  layout** (gh-ocannl-1795): a `Sub_axis` on one side only refuses the read site as 13 — it bound a
+  producer symbol to the run placeholder, which then miscomputed in guards, affine reads and
+  transposed operand reads (`flattened_read_*` rows). Range guards bound a solved symbol by its
+  loop's `[from_, from_ + width)`, not `[0, width)` (`block_components_offset_*`), and a
+  structural affine match (`s + 1` read at `t + 1`) gets one too in a multi-component replay, as a
+  pass-1 binding does (`block_components_structural_*`); with several terms the read need
+  not decompose a cell as the producer's loops do, so there the match is left to unit solving
+  (`block_components_two_terms`).
 - **Where a virtualization candidate is refused is readable off its placement PROVENANCE, and four
   phases write into the same table** (gh-ocannl-658, pinned row by row in
   `test/operations/virtual_rejection_boundary.ml`): `decide_placements` applies the heuristic caps
@@ -625,6 +660,15 @@ files.
   was the same six artifacts replayed in an unbalanced order; three replay sets of them spanned
   5.5-6.5%, so an identical schedule varies ~1pp run to run -- all three non-overlapping), and balancing that order matters: a fixed order
   confounds the cap with session position, which was worth ~1.4pp of an apparent 7.1%.
+- **The fan-in traversal must not enter a node already materialized** (gh-ocannl-1777). A whole
+  step's setter-reads graph is cyclic through its parameters (a parameter reads its gradient, which
+  reads activations that read the parameter), and the cycle guard memoizes whatever it computed under
+  a placeholder, so entering
+  them made `inline_fanin` (the proxy price's multiplier) depend on where the `traced_store`
+  iteration started: on uid hashes, hence on how many nodes the session minted before. Any
+  decision read off a Tnode-keyed table's iteration order has the same trap; equal-cost flip
+  candidates are ordered by first access in the raw code, never by uid, and consumers sort stably.
+  `test/operations/flip_order_minting.ml` is the shift-the-uids pattern for checking a decision.
 - **A candidate whose captured computation contains a `Scan_loop` is refused, and the refusal has
   two doors** (gh-ocannl-696, `test/operations/scan_loop.ml` legs 5 and 5b): `virtual_llc` threads
   `~in_scan` beside `~guarded`, so a per-statement store inside the scan hits `Non_virtual 148` in

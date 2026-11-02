@@ -61,11 +61,13 @@
       [^]; any argument of [sprintf] (unqualified, or under [Printf], [Stdlib.Printf] or
       [Base.Printf]); any argument of [String.concat] (or [Base.String.concat],
       [Stdlib.String.concat]); [List.map] (or [Base.List.map]) whose [~f] is a reference itself,
-      unapplied; a type constraint or coercion; a local open's body ([Tn.( ... )]); a partial
-      application standing for the whole one; and each [%{...}] interpolation of a [[%string ...]],
-      which the scan parses out of the literal as ppx_string v0.17 splits it (from [%{] to the next
-      [}], the value before the last [#]). Its lines are counted in the decoded literal, so within a
-      literal with escapes or line continuations a finding's line can be early.
+      unapplied (a marker may sit on that application); a list literal's elements, when the list
+      itself sits in an accepted position; a type constraint or coercion; a local open's body
+      ([Tn.( ... )]); a partial application standing for the whole one; and each [%{...}]
+      interpolation of a [[%string ...]], which the scan parses out of the literal as ppx_string
+      v0.17 splits it (from [%{] to the next [}], the value before the last [#]). Its lines are
+      counted in the decoded literal, so within a literal with escapes or line continuations a
+      finding's line can be early.
     - {b Trust in the names above}: a sink, transparent function, operator or module head spelled
       unqualified is trusted only when no binding of the source is in scope for it (resolved by
       {!Lexical_scope}: a [let printf = ...], a parameter named [printf], a [module String = ...]
@@ -99,20 +101,108 @@ type report = {
   findings : string list;  (** Each refusal, as [file:line: message]. *)
 }
 
-let reference_names = [ "debug_name"; "debug_grad" ]
-let is_reference_name name = List.mem reference_names name ~equal:String.equal
 let printed = "printed or raised"
 let claim_label = "a claim label"
 let needle = "a needle"
 let marked = "marked [@rendered_name]"
 let message_only = "marked [@message_only]"
 let alias = "a debug-name alias"
+let logged = "a log payload"
+let copied = "copied onto a new node"
+let forwarded = "forwarded under its own label"
+let label_read = "marked [@label_read]"
+let composed = "composed into a message"
 
-(** Each marker attribute's name, with the position it puts its target in. *)
-let markers = [ ("rendered_name", marked); ("message_only", message_only) ]
+type marker = { attr : string; position : string; says : string }
+(** A marker attribute: its name, the position it puts its target in, and what its reason must say
+    (the tail of the malformed-marker refusal). *)
+
+type rule = {
+  references : string list;
+      (** Value identifiers, under any module path, that are references -- except a bare one a
+          parameter or a pattern binds. *)
+  parameter_references : string list;
+      (** The subset of [references] that stays a reference where a parameter or a pattern binds it
+          bare: a value whose every holder is judged, not only its producer. *)
+  qualified_references : string list;
+      (** Names that are references only qualified ([Tn.label]), or bare where no binding of the
+          source is in scope (an [open] brought them in): bare, they are common local names. *)
+  values : string list;
+      (** Reference names that may be read unapplied, as the value itself: judged by the position
+          the identifier sits in rather than refused for not being applied. *)
+  fields : string list;
+      (** Record fields, under any type path, whose read ([e.label], [e.Tn.label]) is a reference
+          judged like an application's result, and whose destructuring in a pattern is refused. *)
+  rule_markers : marker list;
+  raised : string list;
+      (** Exception constructors, by last component under any path, whose whole payload is printed
+          or raised. *)
+  copy_slots : bool;
+      (** The [~label] and [~namespace] arguments of [Tn.create] / [Tnode.create] (any module path
+          ending in one of those, its head trusted even when the source binds it, as
+          [module Tn = Tnode] does) are accepted, a list cons there transparent. *)
+  composed_is_display : bool;
+      (** An operand of [^], of [sprintf] or of a [[%string]] interpolation is accepted outright,
+          rather than taking the position of the text it is composed into: that text is a message,
+          and the spelling no longer stands alone in it. [String.concat] stays transparent, since a
+          label list joined whole is the label. *)
+  log_regions : bool;
+      (** Every reference inside the payload of a [[%log...]] extension (ppx_minidebug's) is
+          accepted: such a payload is evaluated only to be shown. *)
+  remedy : string;
+  node_argument : string;  (** How a refusal names the argument of an applied reference. *)
+  unparsed_mention : string;  (** How a refusal names a reference an unparsed [%string] mentions. *)
+  marker_targets : string;
+      (** What a marker may be attached to, as a stray marker's refusal says. *)
+}
+(** What one reading refuses and accepts. [debug_name_rule] is the reading this header describes; a
+    second rule ([Label_dispatch_scan]'s, gh-ocannl-1783) reuses the walker with the knobs below,
+    each of which adds references or accepted positions and none of which the default turns on. *)
+
+let debug_name_rule =
+  {
+    references = [ "debug_name"; "debug_grad" ];
+    parameter_references = [];
+    qualified_references = [];
+    values = [];
+    fields = [];
+    rule_markers =
+      [
+        {
+          attr = "rendered_name";
+          position = marked;
+          says = "which rendered text the display name is compared with";
+        };
+        {
+          attr = "message_only";
+          position = message_only;
+          says = "which message the display name reaches";
+        };
+      ];
+    raised = [];
+    copy_slots = false;
+    composed_is_display = false;
+    log_regions = false;
+    remedy =
+      "a debug name is a display name a renderer can change (gh-ocannl-1552), so find a node by \
+       Tnode.label_name; the accepted forms are in test/support/debug_name_scan.ml";
+    node_argument = "the node argument of debug_name";
+    unparsed_mention = "a debug-name reference";
+    marker_targets = "an application of debug_name to a node or a [%string] interpolating one";
+  }
+
+(** Every position name a report of [rule] can carry, in a stable order. *)
+let positions_of rule =
+  [ printed; claim_label; needle ]
+  @ List.map rule.rule_markers ~f:(fun m -> m.position)
+  @ [ alias ]
+  @ (if rule.composed_is_display then [ composed ] else [])
+  @ (if rule.log_regions then [ logged ] else [])
+  @ (if rule.copy_slots then [ copied ] else [])
+  @ if List.is_empty rule.parameter_references then [] else [ forwarded ]
 
 (** Every position name a report can carry, in a stable order. *)
-let positions = [ printed; claim_label; needle; marked; message_only; alias ]
+let positions = positions_of debug_name_rule
 
 (* The extension a [[%string ...]] becomes once its interpolations are parsed: one [Pstr_eval] item
    per interpolation, in order. A [[%string]] whose literal does not split and parse keeps its own
@@ -306,22 +396,34 @@ type head_kind =
   | Reference
   | Sink
   | Transparent
+  | Composing
   | List_map
   | Is_substring
   | Claim
+  | Create
   | Other of string
 
 type position = Accepted of string | Consumed | Refused of string
 
 let spelled txt = Longident.name txt
 
-let scan ~file source =
+let scan ?(rule = debug_name_rule) ~file source =
   let structure = expand_strings#structure (parse ~file source) in
   let bound = bound_by_source structure in
   let parameters = bound_as_parameter structure in
+  let mem names name = List.mem names name ~equal:String.equal in
+  let is_reference_name name = mem rule.references name || mem rule.qualified_references name in
   let names_reference txt (loc : Location.t) =
-    is_reference_name (last txt) && not (Hash_set.mem parameters (key loc))
+    let name = last txt in
+    if mem rule.references name then
+      mem rule.parameter_references name || not (Hash_set.mem parameters (key loc))
+    else if mem rule.qualified_references name then
+      match txt with
+      | Lident _ -> Option.value (Hashtbl.find bound (key loc)) ~default:true |> not
+      | Ldot _ | Lapply _ -> true
+    else false
   in
+  let is_field txt = mem rule.fields (last txt) in
   let is_reference e =
     match e.pexp_desc with Pexp_ident { txt; loc } -> names_reference txt loc | _ -> false
   in
@@ -333,14 +435,14 @@ let scan ~file source =
   let finding (loc : Location.t) message =
     findings := Printf.sprintf "%s:%d: %s" file (line loc) message :: !findings
   in
-  let remedy =
-    "a debug name is a display name a renderer can change (gh-ocannl-1552), so find a node by \
-     Tnode.label_name; the accepted forms are in test/support/debug_name_scan.ml"
-  in
+  let remedy = rule.remedy in
+  let log_depth = ref 0 in
   let refuse loc what desc =
     finding loc (Printf.sprintf "%s is used as %s -- %s" what desc remedy)
   in
-  let judge loc what = function
+  let judge loc what position =
+    let position = if !log_depth > 0 then Accepted logged else position in
+    match position with
     | Accepted form -> accepted := (line loc, form) :: !accepted
     | Refused desc -> refuse loc what desc
     | Consumed -> ()
@@ -361,14 +463,20 @@ let scan ~file source =
           | None -> false
         in
         let claim = Verdict_callee.resolve verdicts head in
+        let creates =
+          rule.copy_slots
+          &&
+          match Option.map path ~f:List.rev with
+          | Some ("create" :: ("Tn" | "Tnode") :: _) -> true
+          | _ -> false
+        in
         match claim with
         | Some { ownership = Verdicts | Ambiguous; _ } -> Claim
+        | _ when creates -> Create
         | _ when not (trusted loc) -> Other (spelled txt)
         | _ when List.exists sink_names ~f:(under sink_modules) -> Sink
-        | _
-          when under [ [] ] "^" || under sprintf_modules "sprintf" || under string_modules "concat"
-          ->
-            Transparent
+        | _ when under [ [] ] "^" || under sprintf_modules "sprintf" -> Composing
+        | _ when under string_modules "concat" -> Transparent
         | _ when under list_modules "map" -> List_map
         | _ when under base_string_modules "is_substring" -> Is_substring
         | _ -> Other (spelled txt))
@@ -394,9 +502,10 @@ let scan ~file source =
     let f = peel f in
     match f.pexp_desc with Pexp_apply _ -> flatten f | _ -> (f, [])
   in
-  let marker_position (a : attribute) =
-    List.Assoc.find markers a.attr_name.txt ~equal:String.equal
+  let marker_of (a : attribute) =
+    List.find rule.rule_markers ~f:(fun m -> String.equal m.attr a.attr_name.txt)
   in
+  let marker_position a = Option.map (marker_of a) ~f:(fun m -> m.position) in
   let is_marker a = Option.is_some (marker_position a) in
   let consumed_markers = Hash_set.Poly.create () in
   let all_markers = ref [] in
@@ -425,10 +534,16 @@ let scan ~file source =
         finding a.attr_loc
           (Printf.sprintf "a [@%s] marker needs one string literal of at least two words saying %s"
              a.attr_name.txt
-             (if String.equal a.attr_name.txt "rendered_name" then
-                "which rendered text the display name is compared with"
-              else "which message the display name reaches"));
+             (Option.value_map (marker_of a) ~default:"" ~f:(fun m -> m.says)));
         false
+  in
+  let is_forwarded_name name = mem rule.parameter_references name in
+  let is_forwarded = function
+    | Labelled name | Optional name -> is_forwarded_name name
+    | Nolabel -> false
+  in
+  let rec peel_pattern p =
+    match p.ppat_desc with Ppat_constraint (inner, _) -> peel_pattern inner | _ -> p
   in
   let pending = ref [] in
   let assign e position = pending := (e, position) :: !pending in
@@ -485,6 +600,16 @@ let scan ~file source =
                      && interpolates_reference ~is_reference items ->
                   Some a
               | _, (head, [ (Nolabel, _) ]) when is_reference head -> Some a
+              | _, (head, args)
+                when (match classify_head head with List_map -> true | _ -> false)
+                     && List.exists args ~f:(function
+                       | Labelled "f", f -> is_reference (peel f)
+                       | _ -> false) ->
+                  Some a
+              | Pexp_field (_, { txt; _ }), _ when is_field txt -> Some a
+              | Pexp_ident { txt; loc }, _
+                when names_reference txt loc && mem rule.values (last txt) ->
+                  Some a
               | _ -> None)
         in
         let position =
@@ -494,14 +619,26 @@ let scan ~file source =
           | None -> position
         in
         (match e.pexp_desc with
+        | Pexp_ident { txt; loc } when names_reference txt loc && mem rule.values (last txt) -> (
+            match position with Consumed -> () | _ -> judge loc (spelled txt) position)
         | Pexp_ident { txt; loc } when names_reference txt loc -> (
             match position with
             | Consumed -> ()
+            | (Accepted _ | Refused _) when !log_depth > 0 -> judge loc (spelled txt) position
             | Accepted _ | Refused _ ->
                 let desc = match position with Refused d -> d | _ -> "a value" in
                 finding loc
                   (Printf.sprintf "%s is referenced without being applied to a node, as %s -- %s"
                      (spelled txt) desc remedy))
+        | Pexp_field (_, { txt; _ }) when is_field txt ->
+            judge e.pexp_loc (Printf.sprintf "the %s field" (spelled txt)) position
+        | Pexp_construct
+            ({ txt = Lident "::"; _ }, Some { pexp_desc = Pexp_tuple [ head; tail ]; _ })
+          when match position with Accepted _ -> true | Consumed | Refused _ -> false ->
+            assign head position;
+            assign tail position
+        | Pexp_construct ({ txt; _ }, Some payload) when mem rule.raised (last txt) ->
+            assign payload (Accepted printed)
         | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> assign inner position
         | Pexp_open (_, body) -> assign body position
         | Pexp_construct ({ txt = Lident ("Failure" | "Invalid_argument"); _ }, Some payload) ->
@@ -537,15 +674,21 @@ let scan ~file source =
               in
               let argument_position =
                 match classify_head head with
-                | Reference -> Refused "the node argument of debug_name"
+                | Reference -> Refused rule.node_argument
                 | Sink -> Accepted printed
                 | Transparent -> position
+                | Composing -> if rule.composed_is_display then Accepted composed else position
                 | Is_substring -> (
                     match label with
                     | Labelled "substring" -> Accepted needle
                     | _ -> Refused "an argument of String.is_substring other than ~substring")
+                | _ when is_forwarded label -> Accepted forwarded
                 | Claim when index = 1 -> Accepted claim_label
                 | Claim -> Refused "an argument of a Verdict claim other than its label"
+                | Create -> (
+                    match label with
+                    | Labelled ("label" | "namespace") -> Accepted copied
+                    | _ -> Refused "an argument of Tn.create other than ~label or ~namespace")
                 | List_map -> (
                     match label with
                     | Labelled "f" when is_reference (peel arg) -> Consumed
@@ -582,24 +725,63 @@ let scan ~file source =
             | _ -> ())
         | Pexp_extension ({ txt; _ }, PStr items) when String.equal txt interpolations_tag ->
             List.iter items ~f:(function
-              | { pstr_desc = Pstr_eval (value, _); _ } -> assign value position
+              | { pstr_desc = Pstr_eval (value, _); _ } ->
+                  assign value (if rule.composed_is_display then Accepted composed else position)
               | _ -> ())
         | Pexp_extension ({ txt = "string"; _ }, PStr [ { pstr_desc = Pstr_eval (payload, _); _ } ])
           -> (
             match payload.pexp_desc with
             | Pexp_constant (Pconst_string (s, _, _))
-              when List.exists reference_names ~f:(fun name ->
-                       String.is_substring s ~substring:name) ->
+              when List.exists
+                     (rule.references @ rule.qualified_references @ rule.fields)
+                     ~f:(fun name -> String.is_substring s ~substring:name) ->
                 finding e.pexp_loc
                   (Printf.sprintf
-                     "a [%%string] payload mentions a debug-name reference in an interpolation \
-                      that does not parse, so this scan cannot read it -- %s"
-                     remedy)
+                     "a [%%string] payload mentions %s in an interpolation that does not parse, so \
+                      this scan cannot read it -- %s"
+                     rule.unparsed_mention remedy)
             | _ -> ())
         | _ -> ());
+        let region =
+          match e.pexp_desc with
+          | Pexp_extension ({ txt; _ }, _) -> rule.log_regions && String.is_prefix txt ~prefix:"log"
+          | _ -> false
+        in
+        if region then Int.incr log_depth;
         enclosing := kind_of e :: !enclosing;
         super#expression e;
-        enclosing := List.tl !enclosing |> Option.value ~default:[]
+        enclosing := List.tl !enclosing |> Option.value ~default:[];
+        if region then Int.decr log_depth
+
+      (* A destructured reference field is a read this scan cannot follow. *)
+      method! pattern p =
+        (match p.ppat_desc with
+        | Ppat_record (fields, _) ->
+            List.iter fields ~f:(fun ({ txt; loc }, field_pattern) ->
+                let binds = match field_pattern.ppat_desc with Ppat_any -> false | _ -> true in
+                if is_field txt && binds then
+                  finding loc
+                    (Printf.sprintf
+                       "the %s field is destructured in a pattern, a read this scan cannot follow \
+                        -- %s"
+                       (spelled txt) remedy))
+        | _ -> ());
+        super#pattern p
+
+      (* A parameter-reference name renamed on entry ([~backend_name:b]) would leave the value under
+         a name no reference spells. *)
+      method! function_param fp =
+        (match fp.pparam_desc with
+        | Pparam_val ((Labelled name | Optional name), _, pat) when is_forwarded_name name -> (
+            match (peel_pattern pat).ppat_desc with
+            | Ppat_var { txt; _ } when String.equal txt name -> ()
+            | _ ->
+                finding fp.pparam_loc
+                  (Printf.sprintf
+                     "the ~%s parameter is bound to another name, which no reference spells -- %s"
+                     name remedy))
+        | _ -> ());
+        super#function_param fp
     end
   in
   walker#structure structure;
@@ -607,7 +789,6 @@ let scan ~file source =
       if not (Hash_set.mem consumed_markers (key a.attr_loc)) then
         finding a.attr_loc
           (Printf.sprintf
-             "a [@%s] marker is attached to something other than an application of debug_name to a \
-              node or a [%%string] interpolating one, so it marks nothing"
-             a.attr_name.txt));
+             "a [@%s] marker is attached to something other than %s, so it marks nothing"
+             a.attr_name.txt rule.marker_targets));
   { accepted = List.rev !accepted; findings = List.rev !findings }

@@ -408,6 +408,16 @@ a loss over their sum; or compile `Train.zero_params_grads ~params` first and th
 `Train.grad_update ~accum_steps:1` per objective, neither of which zeroes the shared leaf: after the
 reset and both runs, its gradient is the sum's.
 
+A routine that accumulates into a gradient without zeroing it sums every run's contribution until
+something resets the gradient. `Context.run` therefore refuses its run once it has run as many times
+as its computation allows since the gradient's last reset -- once, or `k` times for
+`Train.grad_update ~accum_steps:k`, the explicit opt-in for accumulating over micro-steps
+(gh-ocannl-1781). A reset is a run of a routine zeroing the gradient (`Train.zero_params_grads`, a
+plain `Train.grad_update` of the loss carrying the zeroing) or a write from outside a run
+(`Context.set_values`, `Context.from_host`, `Context.copy`). The refusal names the gradient and any
+routine of the lineage that zeroes it but has not run since. Counting is per routine, so the common
+reset above -- one reset, then one run of each objective's update -- stays legal.
+
 ## The Train Module
 
 The `Train` module provides high-level utilities for training workflows.
@@ -569,16 +579,27 @@ let%op two_layer ~hid ~out () x =
 ```
 
 ```text doc-excerpt=test/operations/reusable_tensor_programs.ml
-checking the definition two_layer: tracing the shape scheme two_layer: solved dimensions for axis: mismatch
+Shape_error: checking the definition two_layer: tracing the shape scheme two_layer: solved dimensions for axis: mismatch
   conflicting sizes: 2 vs 8
+  failed constraint: 'a = 8
+    from two_layer (output) with b2 (output): pointwise_binary
 ```
 
+That is what the toplevel prints for the exception (`Printexc.to_string`): the message, the
+sizes in conflict, the constraint that failed, and the tensors it relates with their axis kinds
+and the operation that related them. Variables are named by first appearance (`'a`, `..'b..`),
+and so is a tensor of a trace or a check (`n'1`), whose id comes from a reserved range;
+`Shape.error_to_string_hum` gives the same text, and the setting `shape_error_full_sexp=true`
+restores the solver's raw constraint sexp.
+
 One that depends on the argument fails at the application, before the body runs: a residual
-block whose layer is 4 wide, applied to 3 features, reads
+block whose layer is 4 wide, applied to 3 features, reads (the first lines)
 
 ```text doc-excerpt=test/operations/reusable_tensor_programs.ml
 Shape_error: applying the shape scheme residual_block to x: dimension comparison for axis: mismatch
   conflicting sizes: 4 vs 3
+  failed constraint: 4 ⊑ 3
+    from residual_block (output) with (its trace's solution) (output): the trace of the shape scheme residual_block
 ```
 
 With the scheme opted out (`[@@ocannl.no_scheme]`), the same mistakes surface only inside the
@@ -648,13 +669,13 @@ The output shape is determined by:
 2. **Explicit dimensions** via `TDSL.uniform_at ~output_dims:[...] counter ()`
 
 ```ocaml
-(* Dropout with training-step-dependent randomness *)
-let%op dropout ~rate () ~train_step x =
+(* Dropout with training-step-dependent randomness. The caller passes the step counter as a
+   scalar tensor, e.g. [~train_step:(Some !@step_n)] for a static symbol [step_n]. *)
+let%op dropout ~rate () ~(train_step : Tensor.t option) x =
   match train_step with
   | Some train_step when Float.(rate > 0.0) ->
-      (* !@train_step embeds the step counter as a scalar tensor *)
       (* Shape is inferred from pointwise comparison with x *)
-      x *. (!.rate < uniform_at !@train_step) /. (1.0 - !.rate)
+      x *. (!.rate < uniform_at train_step) /. (1.0 - !.rate)
   | _ -> x
 ```
 

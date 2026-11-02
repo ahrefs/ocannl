@@ -1680,11 +1680,15 @@ let epilogue_tail_loop_syms ~(target : Ir.Tnode.t) (opt : LL.optimized) : Idx.sy
    [threadgroup_barrier(mem_threadgroup | mem_device)] on Metal, [__syncthreads()] on CUDA and HIP.
    The barrier spans the whole workgroup, so the ordering holds for any lane width the renderer
    emits; [qkv_zero_init] executes every seed of a folded projection against a materialized run. *)
-(* The materialized nodes a statement writes, by debug name: what a companion witness names. *)
+(* The materialized nodes a statement writes: whether there are any is decided on this list, never
+   on the names below (gh-ocannl-1783). *)
+let materialized_written ~plc (stmt : LL.t) : Ir.Tnode.t list =
+  List.filter (LL.write_demand stmt).written ~f:(Ir.Tnode.Placements.is_materialized_peek plc)
+
+(* The same nodes by debug name: what a companion witness names. *)
 let materialized_writes ~plc (stmt : LL.t) : string =
-  (LL.write_demand stmt).written
-  |> List.filter ~f:(Ir.Tnode.Placements.is_materialized_peek plc)
-  |> List.map ~f:Ir.Tnode.debug_name
+  (List.map (materialized_written ~plc stmt) ~f:Ir.Tnode.debug_name
+   [@message_only "names the written nodes in a companion witness"])
   |> List.dedup_and_sort ~compare:String.compare
   |> String.concat ~sep:","
 
@@ -1708,7 +1712,7 @@ let companion_demand ~(site_syms : (Idx.symbol * int) list) ~(skip : Idx.symbol 
       | LL.Noop | LL.Comment _ -> false
       | LL.Zero_out tn when List.exists expanded_zeros ~f:(Ir.Tnode.equal tn) -> false
       | _ ->
-          (not (String.is_empty (materialized_writes ~plc stmt)))
+          (not (List.is_empty (materialized_written ~plc stmt)))
           && (not (mentions site_sym_list stmt))
           && not (mentions skip stmt))
 
@@ -2400,17 +2404,25 @@ let cpu_mma_sketch_schedule (site : matmul_site) { sk_bm = bm; sk_tile = tile; _
     let tz, _lane = Sched.tensorize ?tile ~i:i_i ~j:site.m_j ~k:site.m_k ~simd_width:site.m_nj () in
     batch_hoist_swaps site @ zops @ [ sp_i ] @ sink site.m_j kb @ sink i_i kb @ [ tz ]
 
-(* gh-ocannl-1676: the CPU packed composition's loop order and what it implies, one spelling for the
-   family tree (which sets a leaf's flags from its packing shape), the builder (which orders the
-   loops by them) and the traffic floor (which prices the accumulator fragment off them).
+(* gh-ocannl-1676 / gh-ocannl-1706: the CPU packed composition's loop order and what it implies, one
+   spelling for the family tree (which sets a leaf's flags from its packing shape), the builder
+   (which orders the loops and stages the operands by them) and the traffic floor (which prices the
+   accumulator fragment off them).
 
    [cpu_pack_grid_outermost]: the row-block loop [i_o] stays outermost — the hoisted-only Grid shape
-   and the two per-chunk packing shapes — instead of sinking under the reduction-block loops. Then
-   nothing inside [k_o] indexes the accumulator, so [Sched.contract_tensorized_accumulator] (the
-   authority) contracts there, minting a fresh [bm x bn] fragment, once [k_o] runs at least twice
-   ([cpu_pack_contracts]). In the other shapes [i_o] sits inside [k_o] and no loop qualifies; a
-   pad-masked statement-site contraction there, and a contraction through the outer reduction loops
-   alone ([m_ko]), are possible but not implied, so they are not claimed. *)
+   and the two per-chunk packing shapes — instead of sinking under the reduction-block loops ([m_ko]
+   and [k_o], {!k_blocks}). Then nothing inside the outermost reduction-block loop indexes the
+   accumulator, so [Sched.contract_tensorized_accumulator] (the authority) contracts there, minting
+   a fresh [bm x bn] fragment, once one of those loops runs at least twice ([cpu_pack_contracts],
+   the predicate {!matmul_mma_scope} already reads for the format scope). In the other shapes [i_o]
+   sits inside every reduction-block loop and no loop qualifies.
+
+   [cpu_pack_stage]: how the shape stages an operand — hoisted (packed at link time), in kernel, or
+   not at all (read in place, only in the grid-outermost shapes). Pads need every operand staged
+   ({!pad_composition_ok}), and a padded row or column block masks the accumulator: [Tensorize] then
+   forces the contraction — at a qualifying loop, or else at the statement site (confined to the
+   edge blocks by [full_block_split] where it can be) — so a fragment is minted whatever the loop
+   order ([cpu_pack_acc_masked]). *)
 let packing_shape_flags = function
   | `Serial -> (false, false, false)
   | `Hoisted -> (true, false, false)
@@ -2425,12 +2437,78 @@ let with_packing_shape shape (p : sketch_params) =
 
 let cpu_pack_grid_outermost ~sk_grid ~sk_hoist ~sk_pack_rest = sk_grid && (sk_hoist || sk_pack_rest)
 
-let cpu_pack_shape_grid_outermost shape =
-  let sk_hoist, sk_grid, sk_pack_rest = packing_shape_flags shape in
-  cpu_pack_grid_outermost ~sk_grid ~sk_hoist ~sk_pack_rest
+(* Whether some reduction-block loop enclosing the micro-kernel runs at least twice: an outer
+   contraction loop ([m_ko]) or the k-block loop a [bk > 0] split mints. *)
+let reduction_blocks_repeat (site : matmul_site) ~bk =
+  Ir.Backend_intf.equal_mma_emission_scope (matmul_mma_scope site ~bk)
+    Ir.Backend_intf.Mma_fragment_scope
 
-let cpu_pack_contracts ~m_nk ~grid_outermost ~bk =
-  grid_outermost && bk > 0 && blocks_of m_nk bk >= 2
+let cpu_pack_contracts (site : matmul_site) ~grid_outermost ~bk =
+  grid_outermost && reduction_blocks_repeat site ~bk
+
+let cpu_pack_stage (site : matmul_site) ~sk_hoist ~sk_grid ~sk_pack_rest src :
+    [ `Hoisted | `In_kernel ] option =
+  if cpu_pack_grid_outermost ~sk_grid ~sk_hoist ~sk_pack_rest then
+    if site_hoistable site src then Some `Hoisted
+    else if sk_pack_rest then Some `In_kernel
+    else None
+  else if sk_hoist && site_hoistable site src then Some `Hoisted
+  else Some `In_kernel
+
+let cpu_pack_acc_masked (site : matmul_site) ~sk_hoist ~sk_grid ~sk_pack_rest ~bm ~bn =
+  let staged = cpu_pack_stage site ~sk_hoist ~sk_grid ~sk_pack_rest in
+  pad_composition_ok
+    ~n_staged:(List.count [ site.m_a; site.m_b ] ~f:(fun tn -> Option.is_some (staged tn)))
+    ~n_operands:2
+  && matmul_acc_masked site ~bm ~bn:(if bn = 0 then site.m_nj else bn)
+
+(* gh-ocannl-1706: whether every completion of a CPU packed geometry mints the accumulator fragment:
+   by the loop order, or forced by the pad masks. One fragment either way. *)
+let cpu_pack_fragment (site : matmul_site) ~sk_hoist ~sk_grid ~sk_pack_rest ~bm ~bn ~bk =
+  cpu_pack_contracts site
+    ~grid_outermost:(cpu_pack_grid_outermost ~sk_grid ~sk_hoist ~sk_pack_rest)
+    ~bk
+  || cpu_pack_acc_masked site ~sk_hoist ~sk_grid ~sk_pack_rest ~bm ~bn
+
+(* gh-ocannl-1706: the GPU tensorized pipeline keeps its row and column blocks on [Grid] loops above
+   every reduction-block loop ([gpu_mma_sketch_schedule]), so the outermost one that runs twice
+   contracts — the k-block loop of a staged geometry, or an outer contraction loop ([m_ko]) even
+   over the unstaged whole-K block. A staged geometry pads a non-dividing row or column block, which
+   forces the contraction where no loop qualifies. *)
+let gpu_mma_fragment (site : matmul_site) ~bm ~bn ~bk =
+  reduction_blocks_repeat site ~bk || (bk > 0 && matmul_acc_masked site ~bm ~bn)
+
+(* gh-ocannl-1706: the CPU whole-triple form ([cpu_mma_sketch_schedule]) sinks its rows and columns
+   under the outer contraction loops, which then enclose the [Tile_mma] without indexing the
+   accumulator: an [m_ko] loop of two or more iterations contracts it into a [rows x m_nj] fragment.
+   It never pads (its menu requires divisibility). *)
+let whole_triple_fragment (site : matmul_site) = reduction_blocks_repeat site ~bk:0
+
+let matmul_fragment_certain (opt : LL.optimized) (p : sketch_params) =
+  if (not p.sk_mma) || p.sk_conv || Option.is_some p.sk_coalesce then false
+  else
+    match detect_matmul_canonical opt with
+    | None -> false
+    | Some (site, _, _) ->
+        if p.sk_gpu then gpu_mma_fragment site ~bm:p.sk_bm ~bn:p.sk_bn ~bk:p.sk_bk
+        else if p.sk_bk > 0 then
+          cpu_pack_fragment site ~sk_hoist:p.sk_hoist ~sk_grid:p.sk_grid
+            ~sk_pack_rest:p.sk_pack_rest ~bm:p.sk_bm ~bn:p.sk_bn ~bk:p.sk_bk
+        else whole_triple_fragment site
+
+(* The bytes of the [bm x bn] accumulator fragment a packed geometry's contraction mints, at the
+   output's storage precision ([Sched.contract_tensorized_accumulator] mints it at its target's), or
+   0 where [cpu_pack_fragment] does not imply one (gh-ocannl-1706: the loop order or the pad masks).
+   [bn = 0] is the full column extent. One spelling for its two readers: the traffic floor charges
+   its init-load and store-back, and the seeding pre-filter weighs it against the per-chunk
+   privatization cap, since under a grid-outermost shape it lives inside the row-block [Grid] loop's
+   body and the renderer privatizes it per chunk (gh-ocannl-1793). *)
+let cpu_pack_fragment_bytes (site : matmul_site) ~shape ~bm ~bn ~bk =
+  let sk_hoist, sk_grid, sk_pack_rest = packing_shape_flags shape in
+  if cpu_pack_fragment site ~sk_hoist ~sk_grid ~sk_pack_rest ~bm ~bn ~bk then
+    let bn_eff = if bn = 0 then site.m_nj else bn in
+    bm * bn_eff * Ir.Ops.prec_in_bytes (Lazy.force site.m_d.Ir.Tnode.storage_prec)
+  else 0
 
 (* Cache-blocked, operand-packed tensorized CPU matmul: [Tile_mma] composed with the S4 packing
    pipeline (the remaining piece of gh-ocannl-469). GEBP loop structure, all-Serial: [j_o? { k_o {
@@ -2510,18 +2588,11 @@ let cpu_mma_pack_sketch_schedule (site : matmul_site)
       }
   in
   let stages =
-    if grid_outermost then
-      List.filter_map
-        [ (site.m_b, [ k_i; j_col ]); (site.m_a, [ i_i; k_i ]) ]
-        ~f:(fun (src, tls) ->
-          if site_hoistable site src then Some (stage ~hoisted:true src tls)
-          else if sk_pack_rest then Some (stage ~hoisted:false src tls)
-          else None)
-    else
-      [
-        stage ~hoisted:(sk_hoist && site_hoistable site site.m_b) site.m_b [ k_i; j_col ];
-        stage ~hoisted:(sk_hoist && site_hoistable site site.m_a) site.m_a [ i_i; k_i ];
-      ]
+    List.filter_map
+      [ (site.m_b, [ k_i; j_col ]); (site.m_a, [ i_i; k_i ]) ]
+      ~f:(fun (src, tls) ->
+        Option.map (cpu_pack_stage site ~sk_hoist ~sk_grid ~sk_pack_rest src) ~f:(fun kind ->
+            stage ~hoisted:(Poly.equal kind `Hoisted) src tls))
   in
   let zops =
     if not sk_grid then []
@@ -4181,21 +4252,42 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                 Printf.sprintf "bm=%d gives %d row block(s); a Grid split needs at least 2" p.sk_bm
                   (blocks_of site.m_ni p.sk_bm)
               in
-              (* Per-chunk privatized-tile floor for the Grid shapes ([C_syntax]'s
-                 [per_chunk_private_bytes_cap], config [cc_grid_private_bytes_cap]): a known
-                 in-kernel tile exceeding the cap makes [parallel_grid_safe] decline the Grid
-                 rendering — the candidate would run serially under a Grid label. Other per-chunk
-                 locals can still trip the cap at render; passing here is necessary, not sufficient
-                 (the routine's Grid census and the decline diagnostics cover the rest). The
-                 renderer's own resolved cap, so the two cannot disagree about it. *)
+              (* Per-chunk privatized-bytes floor for the Grid shapes ([C_syntax]'s
+                 [per_chunk_private_bytes_cap], config [cc_grid_private_bytes_cap]): the known
+                 per-chunk locals of a shape's row-block [Grid] body exceeding the cap make
+                 [parallel_grid_safe] decline the Grid rendering — the candidate would be timed
+                 serially under a Grid label. The known locals are the shape's in-kernel packed
+                 tiles ([tiles]) plus, under a grid-outermost shape, the [bm x bn] accumulator
+                 fragment its contraction mints inside that body — by the loop order or the pad
+                 masks ([cpu_pack_fragment_bytes], gh-ocannl-1793, gh-ocannl-1706) — the renderer's
+                 [Grid_private_over_cap] sums the same locals. Other per-chunk locals can still trip
+                 the cap at render (the plain [grid] shape's pad-masked statement-site tile, which
+                 its branch does not weigh); passing here is necessary, not sufficient (the
+                 routine's Grid census and the decline diagnostics cover the rest). The renderer's
+                 own resolved cap, so the two cannot disagree about it. *)
               let chunk_cap = Lazy.force Ir.C_syntax.per_chunk_private_bytes_cap in
-              let over_chunk_cap ~what bytes =
+              let over_chunk_cap ~shape ~what ~tiles p =
+                let fragment =
+                  cpu_pack_fragment_bytes site ~shape ~bm:p.sk_bm ~bn:p.sk_bn ~bk:p.sk_bk
+                in
+                let bytes = tiles + fragment in
                 if bytes > chunk_cap then
+                  let fragment_what () =
+                    Printf.sprintf "the contracted %dx%d accumulator fragment" p.sk_bm
+                      (if p.sk_bn = 0 then site.m_nj else p.sk_bn)
+                  in
+                  let what =
+                    if fragment = 0 then Printf.sprintf "%s (%d bytes)" what bytes
+                    else if tiles = 0 then Printf.sprintf "%s (%d bytes)" (fragment_what ()) bytes
+                    else
+                      Printf.sprintf "%s plus %s (%d + %d = %d bytes)" what (fragment_what ()) tiles
+                        fragment bytes
+                  in
                   Some
                     (Printf.sprintf
-                       "%s (%d bytes) exceeds the per-chunk privatization cap (%d, config \
+                       "%s exceeds the per-chunk privatization cap (%d, config \
                         cc_grid_private_bytes_cap)"
-                       what bytes chunk_cap)
+                       what chunk_cap)
                 else None
               in
               (* One packing shape's geometries: the shared menu judged per shape. The shape level
@@ -4284,7 +4376,12 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                                   "extents do not divide the blocks: the non-hoistable operand is \
                                    read in place and cannot absorb the zero-fringe pad"
                               else if not (grid_ok p) then Sspace.Refuted (too_few_blocks p)
-                              else leaf (with_packing_shape `Hoisted_grid p))) );
+                              else
+                                (* No in-kernel tile: the hoisted panels live in the constant pool,
+                                   and the rest is read in place. *)
+                                match over_chunk_cap ~shape:`Hoisted_grid ~what:"" ~tiles:0 p with
+                                | Some w -> Sspace.Refuted w
+                                | None -> leaf (with_packing_shape `Hoisted_grid p))) );
                   ( Family_decision.Packing_shape `Hoisted_grid_pack_rest,
                     if not any_hoistable then Sspace.Refuted no_constant
                     else if Option.is_some (Lazy.force grid_refutation) then
@@ -4297,7 +4394,14 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                             (subt (fun () ->
                                  geoms ~f:(fun p _ _ ->
                                      if not (grid_ok p) then Sspace.Refuted (too_few_blocks p)
-                                     else leaf (with_packing_shape `Hoisted_grid_pack_rest p)))) )
+                                     else
+                                       match
+                                         over_chunk_cap ~shape:`Hoisted_grid_pack_rest ~what:""
+                                           ~tiles:0 p
+                                       with
+                                       | Some w -> Sspace.Refuted w
+                                       | None -> leaf (with_packing_shape `Hoisted_grid_pack_rest p))))
+                        )
                     else
                       subt (fun () ->
                           geoms ~f:(fun p _ _ ->
@@ -4310,7 +4414,10 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                               in
                               if not (grid_ok p) then Sspace.Refuted (too_few_blocks p)
                               else
-                                match over_chunk_cap ~what:"per-chunk packed tile" rest_tile with
+                                match
+                                  over_chunk_cap ~shape:`Hoisted_grid_pack_rest
+                                    ~what:"per-chunk packed tile" ~tiles:rest_tile p
+                                with
                                 | Some w -> Sspace.Refuted w
                                 | None -> leaf (with_packing_shape `Hoisted_grid_pack_rest p))) );
                   ( Family_decision.Packing_shape `Grid_pack_rest,
@@ -4328,7 +4435,8 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                           if not (grid_ok p) then Sspace.Refuted (too_few_blocks p)
                           else
                             match
-                              over_chunk_cap ~what:"per-chunk packed tiles" (privatized_bytes p)
+                              over_chunk_cap ~shape:`Grid_pack_rest ~what:"per-chunk packed tiles"
+                                ~tiles:(privatized_bytes p) p
                             with
                             | Some w -> Sspace.Refuted w
                             | None -> leaf (with_packing_shape `Grid_pack_rest p))
@@ -4348,12 +4456,16 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                         subt (fun () ->
                             geoms ~f:(fun p _ _ ->
                                 (* The per-row-block A~ tile privatizes per chunk; the read-only B~
-                                   panel is shared and does not count against the cap. *)
+                                   panel is shared and does not count against the cap. The row
+                                   blocks sit inside the reduction blocks, so no loop contracts the
+                                   accumulator; a pad-masked statement-site fragment is not weighed
+                                   here (necessary, not sufficient, as above). *)
                                 let a_tile = p.sk_bm * p.sk_bk * prec_bytes in
                                 if not (grid_ok p) then Sspace.Refuted (too_few_blocks p)
                                 else
                                   match
-                                    over_chunk_cap ~what:"per-chunk privatized A~ tile" a_tile
+                                    over_chunk_cap ~shape:`Grid ~what:"per-chunk privatized A~ tile"
+                                      ~tiles:a_tile p
                                   with
                                   | Some w -> Sspace.Refuted w
                                   | None -> leaf (with_packing_shape `Grid p))) );
@@ -5193,8 +5305,9 @@ let seeding_census_lines ~where (c : seeding_census) : string list =
     | Seeding_none -> []
     | Seeding_matmul { tree; _ } -> refutation_lines tree
     | Seeding_conv { site; real_stmts; tree } ->
-        detail "conv site %s: zeroed=%b real_stmts=%d" (Ir.Tnode.debug_name site.c_d) site.c_zeroed
-          real_stmts
+        detail "conv site %s: zeroed=%b real_stmts=%d"
+          (Ir.Tnode.debug_name site.c_d [@message_only "a seeding report line"])
+          site.c_zeroed real_stmts
         :: refutation_lines tree
   in
   (* gh-ocannl-1736: the axes that padded each seed, one line per distinct reason with its seed
@@ -5450,16 +5563,17 @@ let sketch_path_traffic_floor ~(limits : Ir.Backend_intf.hardware_limits) (opt :
             | Some tile -> tile
             | None -> m.Ir.Backend_intf.mma_tile)
       in
-      (* gh-ocannl-1601: the accumulator fragment of a staged tensorized geometry. The GPU mma
-         pipeline's reduction-block loop ([blocks_of m_nk bk] iterations, serial, enclosing the
-         micro-kernel without indexing the accumulator) is the contraction site of
-         [Sched.contract_tensorized_accumulator], which mints a fresh [bm x bn] fragment at the
-         output's storage precision, written by the init-load and read by the store-back: certain
-         once that loop runs at least twice, i.e. [bk < m_nk]. A single-block reduction contracts
-         only under pad masks, and the CPU pipelines' contraction depends on the packing shape's
-         loop order — priced in the [Cpu_packed] arm below. *)
+      (* gh-ocannl-1601 / gh-ocannl-1706: the accumulator fragment.
+         [Sched.contract_tensorized_accumulator] mints one fresh [bm x bn] node at the output's
+         storage precision — written by the init-load, read by the store-back, so [analyze] charges
+         it at least [2 * bm * bn * pd] — wherever every completion contracts: a reduction-block
+         loop of two or more iterations enclosing the micro-kernel without indexing the accumulator
+         ([k_o], or an outer [m_ko] loop), or pad masks on the row or column, which force the
+         contraction at the statement site where no loop qualifies. The pipelines' own predicates
+         say which: [gpu_mma_fragment], [cpu_pack_fragment], [whole_triple_fragment]. One node
+         however many reasons force it. *)
       let pd = Ir.Ops.prec_in_bytes (Lazy.force site.m_d.Ir.Tnode.storage_prec) in
-      let fragment ~bm ~bn ~bk_max = if bk_max < site.m_nk then 2 * bm * bn * pd else 0 in
+      let fragment ~bm ~bn certain = if certain then 2 * bm * bn * pd else 0 in
       fun path ->
         let decisions = List.map path ~f:snd in
         let committed =
@@ -5472,8 +5586,9 @@ let sketch_path_traffic_floor ~(limits : Ir.Backend_intf.hardware_limits) (opt :
             2 * tile_bytes ~bm ~bn ~bk
         | Some (Family_decision.Gpu_mma { g_bm = bm; g_bn = bn; g_bk = bk; _ }) ->
             (* Staged mma geometries (bk > 0) stage both operand tiles in kernel; unstaged read in
-               place. *)
-            if bk > 0 then (2 * tile_bytes ~bm ~bn ~bk) + fragment ~bm ~bn ~bk_max:bk else 0
+               place, but still contract under an outer reduction loop. *)
+            (if bk > 0 then 2 * tile_bytes ~bm ~bn ~bk else 0)
+            + fragment ~bm ~bn (gpu_mma_fragment site ~bm ~bn ~bk)
         | Some (Family_decision.Cpu_packed { g_bm = bm; g_bn = bn; g_bk = bk; _ }) ->
             (* CPU packed shapes: only in-kernel packing of both panels ([Packing_shape `Serial])
                certainly ADDS panel traffic — the packing nest reads the original operands (already
@@ -5484,12 +5599,12 @@ let sketch_path_traffic_floor ~(limits : Ir.Backend_intf.hardware_limits) (opt :
                likewise replace or split. Zero for all of those. bn = 0 encodes the full column
                extent.
 
-               gh-ocannl-1676: the grid-outermost shapes keep the row-block loop outside the
-               reduction blocks, so their [k_o] contracts the accumulator into a fresh [bm x bn]
-               fragment once it runs twice ([cpu_pack_contracts], the predicate the builder's loop
-               order reads too), written by the init-load and read by the store-back. The serial
-               shape never contracts (its row blocks sit inside [k_o]), so the two charges never
-               meet. The packing shape sits above the geometry on every packed path. *)
+               The fragment (gh-ocannl-1676, gh-ocannl-1706): the grid-outermost shapes keep the
+               row-block loop outside every reduction-block loop, so the outermost one running twice
+               contracts the accumulator; on any shape a padded row or column block forces the
+               contraction ([cpu_pack_fragment], read by the builder's loop order and staging too).
+               A padded serial shape therefore pays both its panels and the fragment. The packing
+               shape sits above the geometry on every packed path. *)
             let shape =
               List.find_map decisions ~f:(function
                 | Family_decision.Packing_shape sh -> Some sh
@@ -5500,13 +5615,10 @@ let sketch_path_traffic_floor ~(limits : Ir.Backend_intf.hardware_limits) (opt :
               if Option.exists shape ~f:(Poly.equal `Serial) then tile_bytes ~bm ~bn:bn_eff ~bk
               else 0
             in
-            let contracts =
-              Option.exists shape ~f:(fun sh ->
-                  cpu_pack_contracts ~m_nk:site.m_nk
-                    ~grid_outermost:(cpu_pack_shape_grid_outermost sh)
-                    ~bk)
-            in
-            panels + if contracts then 2 * bm * bn_eff * pd else 0
+            panels
+            + 2
+              * Option.value_map shape ~default:0 ~f:(fun shape ->
+                  cpu_pack_fragment_bytes site ~shape ~bm ~bn ~bk)
         | Some (Family_decision.Cpu_blocktile _) ->
             (* The CPU blocktile pipeline stages nothing: its tiles are registers, and its hoisted
                flavor packs at link time. *)
@@ -5531,5 +5643,27 @@ let sketch_path_traffic_floor ~(limits : Ir.Backend_intf.hardware_limits) (opt :
                 | _ -> acc)
             in
             let bm = corner `Bm tm_t in
-            (2 * tile_bytes ~bm ~bn:w ~bk:(corner `Bk tk_t)) + fragment ~bm ~bn:w ~bk_max
-        | None -> 0)
+            (* Pad masks only where every completion pads: the pinned column block not dividing
+               [m_nj], or a singleton row box not dividing [m_ni] (a wider box may hold dividing
+               members, and divisibility is not monotone in the block size). *)
+            let masked =
+              (not (block_divides w site.m_nj))
+              || List.exists decisions ~f:(function
+                | Family_decision.Lattice_box { lb_axis = `Bm; lb_lo; lb_hi } ->
+                    lb_lo = lb_hi && not (block_divides lb_lo site.m_ni)
+                | _ -> false)
+            in
+            (2 * tile_bytes ~bm ~bn:w ~bk:(corner `Bk tk_t))
+            + fragment ~bm ~bn:w (bk_max < site.m_nk || reduction_blocks_repeat site ~bk:0 || masked)
+        | None ->
+            (* The CPU whole-triple form commits a row block, not a geometry: it stages nothing, and
+               its fragment ([rows x m_nj]) is certain under an outer contraction loop
+               ([whole_triple_fragment]). *)
+            List.find_map decisions ~f:(function
+              | Family_decision.Row_block bm ->
+                  Some
+                    (fragment
+                       ~bm:(if bm = 0 then site.m_ni else bm)
+                       ~bn:site.m_nj (whole_triple_fragment site))
+              | _ -> None)
+            |> Option.value ~default:0)

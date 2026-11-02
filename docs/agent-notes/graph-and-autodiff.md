@@ -64,16 +64,29 @@ files.
   update) accumulates into a gradient it neither zeroes nor embeds, so no routine allocates it: the
   LINK fails before this check sees anything, and `Context.lacks_node_error` names the missing reset
   and `zero_params_grads` (`lacks_grad_reset_hint.ml`).
+- Past the link, a gradient a routine accumulates into without zeroing is a RUN-history question
+  (gh-ocannl-1781): the ledger's `accumulated` counts, per gradient buffer and per routine, the runs
+  since the buffer's last reset (a run of a routine whose `zeroes` holds it, or
+  `record_external_writes`, zero or not), and `run` refuses the run past the comp's
+  `accumulation_runs` (default 1; `grad_update ~accum_steps:k` states k), naming any lineage zeroer
+  that did not run. A static "no zeroer in the lineage" rule would miss the usual bug (a reset
+  compiled and skipped) and refuse a `set_values` reset. Per routine, so `Z; A1; A2` cycles stay
+  legal; the autotuner's `time_routine` passes `run ~timing:true` (its repeats count, are not
+  refused), and its gh-1621 state restore puts back the history saved with the snapshot
+  (`save_accumulation_history`), since restoring uploads are no reset; a hand-written `%cd` zeroing
+  is no reset (`never_zeroed_grad.ml`).
 - Within ONE comp, `owned` is a set, so a fragment carried twice merged unseen while `asgns` ran
   it twice: `Asgns.sequence` refuses members sharing a fragment, naming it (gh-ocannl-1746,
   `fragment_sequenced_twice.ml`). A comp built past `sequence` (a hand-made `Seq`) owes the same
   disjointness. The check found OCANNL's own duplicate: a `%cd` `op_asn` naming an operand tensor
   (`deinterleave_even`'s `id t1`) re-embedded the operand's forward beside `Tensor.op`'s `fwds`,
-  so `Tensor.op` hides the root operands from the root map while `op_asn` runs. Trap: `%cd`
-  evaluates a statement sequence's members right to left, so the LAST statement naming a root
-  tensor embeds its forward code — an explicit `t.forward` before a statement naming `t` is now
-  refused as a second copy, and an earlier statement reading that root reads it before it is
-  computed.
+  so `Tensor.op` hides the root operands from the root map while `op_asn` runs. `%cd` builds a
+  statement sequence in source order (gh-ocannl-1770: `ppx_cd`'s `source_ordered_list` let-binds
+  every member but the last, since OCaml evaluates a list literal right to left), so the FIRST
+  statement naming a root tensor embeds its forward code and later ones read it computed; an
+  explicit `t.forward` belongs before the statements naming `t` — after one, it is refused as a
+  second copy (`cd_source_order.ml`). Any new ppx site that builds a list of comps with effects
+  (takes, embeddings) owes the same binding.
 - The backprop-root map is weak and the forward-root map strong (gh-ocannl-1745). A backprop
   entry is an ephemeron keyed by the tensor's `consumption` cell (`Weak_root` in `tensor.ml`),
   live while any ownership-preserving record copy is reachable, so a graph dropped after its

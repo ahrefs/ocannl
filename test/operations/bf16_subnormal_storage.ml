@@ -32,6 +32,9 @@
    subnormal RESULT of normal inputs: the f32 halving leg takes the normal 2^-126 to the subnormal
    2^-127. The other normal controls (-2^-126, 1.5) are exact everywhere. Each claim pins its
    hardware's measured behaviour, so it fails if that backend starts or stops flushing. *)
+(* cc-fp-contract: no-contraction -- the legs copy, convert, add or halve; no product feeds an add
+   *)
+
 open Base
 open Ocannl.Operation.DSL_modules
 module LL = Ir.Low_level

@@ -448,7 +448,10 @@ let get_padding tn = Lazy.force tn.padding
 let ident_prefix namespace =
   if String.equal namespace default_namespace then "n" else namespace ^ "__n"
 
-let id { id; namespace; _ } = ident_prefix namespace ^ Int.to_string id
+let id tn =
+  ident_prefix (tn.namespace [@label_read "the namespace prefixes the node's display identifier"])
+  ^ Int.to_string tn.id
+
 let label a = String.concat ~sep:"_" a.label
 
 let is_alphanum_ s =
@@ -501,8 +504,9 @@ let get_debug_name ?code_name ?(namespace = default_namespace) ~id ~label () =
     program can report different debug names (gh-ocannl-1552). To find a node by name, compare
     {!label_name} (or {!label}). *)
 let debug_name tn =
-  let id = tn.id and label = tn.label and code_name = tn.code_name in
-  get_debug_name ?code_name ~namespace:tn.namespace ~id ~label ()
+  get_debug_name ?code_name:tn.code_name
+    ~namespace:(tn.namespace [@label_read "Tnode spells display names from the namespace"])
+    ~id:tn.id ~label:(tn.label [@label_read "Tnode spells display names from the label"]) ()
 
 let debug_memory_mode = function
   | None -> "unknown"
@@ -647,14 +651,19 @@ let transition_memory_mode ~debug_name:name current mode provenance =
 
 let update_memory_mode tn mode provenance =
   tn.memory_mode_intent <-
-    Some (transition_memory_mode ~debug_name:(debug_name tn) tn.memory_mode_intent mode provenance)
+    Some
+      (transition_memory_mode
+         ~debug_name:(debug_name tn [@message_only "names the node in the transition's refusal"])
+         tn.memory_mode_intent mode provenance)
 
 let update_prec ?only_if tn prec =
-  Prec_cell.update_prec ?only_if ~name:(fun () -> debug_name tn) tn.delayed_prec_unsafe prec
+  Prec_cell.update_prec ?only_if
+    ~name:(fun () -> (debug_name tn [@message_only "names the node in a precision conflict"]))
+    tn.delayed_prec_unsafe prec
 
 let update_infer_prec ?only_if tn delayed_prec =
   Prec_cell.update_infer_prec ?only_if
-    ~name:(fun () -> debug_name tn)
+    ~name:(fun () -> (debug_name tn [@message_only "names the node in a precision conflict"]))
     tn.delayed_prec_unsafe delayed_prec
 
 let get_specified_prec tn =
@@ -934,7 +943,8 @@ module Placements = struct
 
   let sexp_of_t p =
     [%sexp_of: (string * (memory_mode * provenance)) list]
-      (List.map (Hashtbl.to_alist p.table) ~f:(fun (tn, d) -> (debug_name tn, d)))
+      (List.map (Hashtbl.to_alist p.table) ~f:(fun (tn, d) ->
+           ((debug_name tn [@message_only "the placements' sexp shows each node by name"]), d)))
 
   let create () = { table = Hashtbl.create (module Key) }
   let copy p = { table = Hashtbl.copy p.table }
@@ -946,7 +956,10 @@ module Placements = struct
 
   let update p tn mode provenance =
     Hashtbl.set p.table ~key:tn
-      ~data:(transition_memory_mode ~debug_name:(debug_name tn) (get p tn) mode provenance)
+      ~data:
+        (transition_memory_mode
+           ~debug_name:(debug_name tn [@message_only "names the node in the transition's refusal"])
+           (get p tn) mode provenance)
 
   (** Kernel-fission escape hatch: strengthen a routine-scoped [Local] decision to [On_device].
       [Local] is only ever a compiler decision (never declared intent), premised on the node's
@@ -1125,7 +1138,10 @@ let dims_to_string ?(with_axis_numbers = false) arr =
     [n<id>_] form once a routine repeats the label -- it never changes over the process, and it is
     the name to find a node by (gh-ocannl-1606). {!label} is the raw join, operator labels included.
 *)
-let label_name tn = get_debug_name ~namespace:tn.namespace ~id:tn.id ~label:tn.label ()
+let label_name tn =
+  get_debug_name
+    ~namespace:(tn.namespace [@label_read "Tnode spells display names from the namespace"])
+    ~id:tn.id ~label:(tn.label [@label_read "Tnode spells display names from the label"]) ()
 
 let styled_ident ~repeating_nograd_idents ~repeating_grad_idents style arr =
   let n = id arr in
@@ -1135,7 +1151,9 @@ let styled_ident ~repeating_nograd_idents ~repeating_grad_idents style arr =
       let label = label arr in
       if String.is_empty label then n else [%string "%{n}_%{label}"]
   | `Heuristic_ocannl grad_sep -> (
-      let is_grad, ident = no_grad_ident_label arr.label in
+      let is_grad, ident =
+        no_grad_ident_label (arr.label [@label_read "minting a display identifier for the node"])
+      in
       let opt_grad =
         match (grad_sep, is_grad) with
         | `Dot_grad, true -> ".grad"
@@ -1143,7 +1161,9 @@ let styled_ident ~repeating_nograd_idents ~repeating_grad_idents style arr =
         | (`Dot_grad | `Under_grad), _ -> ""
       in
       let n_id = if is_grad then arr.id - 1 else arr.id in
-      let np = ident_prefix arr.namespace in
+      let np =
+        ident_prefix (arr.namespace [@label_read "minting a display identifier for the node"])
+      in
       match ident with
       | Some ident ->
           if Hashtbl.mem (if is_grad then repeating_grad_idents else repeating_nograd_idents) ident
@@ -1192,8 +1212,16 @@ module Registry = Stdlib.Weak.Make (struct
   (* Deliberately keyed by the presentational ([namespace], [id]) pair, not [uid]: [find ~id]
      queries with a mock tnode carrying only the target pair (e.g. to resolve "n42" from debug
      output back to a live node). Note the id-reuse caveat on {!find}. *)
-  let equal a1 a2 = equal_int a1.id a2.id && equal_string a1.namespace a2.namespace
-  let hash nd = Int.hash nd.id lxor String.hash nd.namespace
+  let equal a1 a2 =
+    equal_int a1.id a2.id
+    && equal_string
+         (a1.namespace [@label_read "the registry's presentational key, for debug lookup"])
+         (a2.namespace [@label_read "the registry's presentational key, for debug lookup"])
+
+  let hash nd =
+    Int.hash nd.id
+    lxor String.hash
+           (nd.namespace [@label_read "the registry's presentational key, for debug lookup"])
 end)
 
 let registry = Registry.create 16
@@ -1455,7 +1483,10 @@ let print_accessible_headers ?(pred = fun _ -> true) () =
   Stdlib.Gc.full_major ();
   let results =
     Registry.fold
-      (fun arr acc -> if pred arr then ((arr.namespace, arr.id), header arr) :: acc else acc)
+      (fun arr acc ->
+        if pred arr then
+          (((arr.namespace [@label_read "orders the printed headers"]), arr.id), header arr) :: acc
+        else acc)
       registry []
   in
   List.sort results ~compare:(fun ((ns_a, a), _) ((ns_b, b), _) ->
@@ -1469,7 +1500,10 @@ let%debug_sexp log_accessible_headers ?(pred = fun _ -> true) () =
   Stdlib.Gc.full_major ();
   let results =
     Registry.fold
-      (fun arr acc -> if pred arr then ((arr.namespace, arr.id), header arr) :: acc else acc)
+      (fun arr acc ->
+        if pred arr then
+          (((arr.namespace [@label_read "orders the printed headers"]), arr.id), header arr) :: acc
+        else acc)
       registry []
   in
   List.sort results ~compare:(fun ((ns_a, a), _) ((ns_b, b), _) ->

@@ -116,7 +116,11 @@ val grad_update :
     [1/accum_steps] (folded with [loss_scale] if both are given), so after [accum_steps] runs the
     leaf gradients hold the mean of the micro-batch gradients — matching a single batch
     [accum_steps] times larger under a mean-reduced loss. Run the optimizer step once per cycle,
-    after the last micro-step.
+    after the last micro-step. The code states the cycle
+    ({!Ir.Assignments.field-accumulation_runs}): [Context.run] refuses the routine's
+    [accum_steps + 1]-th run since the gradients' last reset (gh-ocannl-1781) -- without the
+    argument, its second -- so a forgotten {!zero_params_grads} is refused rather than summing every
+    step's gradient.
 
     Two objectives sharing a tensor (content and style losses over one [Require_grad] image, two
     losses over one parameter) each carry only their own contribution to its gradient, and only the
@@ -192,7 +196,11 @@ val sgd_update :
 (** Maps {!sgd_one} over the parameters [loss] trains ({!trainable_params}, or [?params]): a
     parameter frozen behind {!Operation.stop_gradient} takes no step — in particular no weight decay
     (gh-ocannl-673). A [~grad_spec:Require_grad] leaf (input optimization) takes a step only when
-    passed in [?params]; raises when the default set is empty, as for a loss with no parameters. *)
+    passed in [?params]; raises when the default set is empty, as for a loss with no parameters.
+    Such a leaf must be data-backed ([Operation.init ~grad_spec:Require_grad]): a stepped tensor
+    whose value [loss]'s forward code re-establishes with a fetch on every run -- a
+    [Tensor.term_init] or literal with at most [limit_constant_fill_size] values -- raises
+    [Session_error] naming it, since the next forward pass would undo each step (gh-ocannl-1776). *)
 
 val sequential_loop : f:(unit -> unit) -> (Ir.Indexing.static_symbol * int ref) list -> unit
 (** All and only bindings with associated ranges are iterated, with the binding's initial value

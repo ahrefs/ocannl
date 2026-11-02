@@ -24,6 +24,10 @@ extern "C" __global__ void d_fwd(
 
   /* Main logic. */
   /* d fwd */
-  t_d[0] = ((__float2bfloat16(__half2float(t_a[0])) + __float2bfloat16(__half2float(t_b[0]))) * t_c[0]);
+  {
+    __half v1_n6;
+    v1_n6 = __hadd(t_a[0], t_b[0]);
+    t_d[0] = (__float2bfloat16(__half2float(v1_n6)) * t_c[0]);
+  }
   /* end */
 }

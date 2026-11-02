@@ -21,6 +21,12 @@
    [stop_gradient] is neither required nor zeroed; and the DEFAULT [zero_params_grads] resets the
    input's gradient too, so the second cycle starts clean.
 
+   3. A fetch-defined leaf (gh-ocannl-1776): [sgd_update ~params:{x}] refuses a [Tensor.term_init]
+   leaf below [limit_constant_fill_size], naming it and [Operation.init] as the fix. The trap it
+   guards is shown executed by bypassing the refusal through [sgd_one]: the second step lands where
+   the first did, because the forward re-fetched [x]. The data-backed twin, same values, same loss,
+   is accepted and steps along the host oracle.
+
    (A loss with no parameters at all -- the default stepped set empty, the refusal naming [?params],
    the default reset still selecting the leaf -- is pinned in test/training/loop_utils.ml, beside
    the gh-ocannl-670 refusals.) *)
@@ -133,6 +139,61 @@ let accumulation () =
   close "cycle 2: x's gradient starts clean" (values ctx (grad_of x)) [| 4.; 12. |];
   close "cycle 2: w's gradient starts clean" (values ctx (grad_of w)) [| 1.; 4. |]
 
+let fresh_learning_rate () =
+  let%op learning_rate = 0.125 in
+  Train.every_non_literal_materialized learning_rate;
+  learning_rate
+
+(* Compiles [grad_update l] followed by [step] into one routine and runs it twice, returning [x]
+   after each run. *)
+let two_steps l x step =
+  let ctx = Train.init_params (Context.auto ()) IDX.empty l in
+  let ctx, routine = Context.compile ctx (Asgns.sequence [ Train.grad_update l; step ]) IDX.empty in
+  let ctx = Context.run ctx routine in
+  let first = values ctx x.Tensor.value in
+  let ctx = Context.run ctx routine in
+  (first, values ctx x.Tensor.value)
+
+let fetch_defined_leaf () =
+  printf "=== 3. Fetch-defined leaf ===\n";
+  Tensor.unsafe_reinitialize ();
+  let x =
+    Tensor.term_init [| 1.; 2. |] ~label:[ "xfetch" ] ~output_dims:[ 2 ]
+      ~grad_spec:Tensor.Require_grad ()
+  in
+  let%op l = { wfetch = [ 2.; 3. ] } *. x *. x in
+  let learning_rate = fresh_learning_rate () in
+  (match Train.sgd_update ~learning_rate ~params:(Set.singleton (module Tensor) x) l with
+  | _ -> Verdict.p "sgd_update ~params:{x} refuses the fetch-defined leaf" false
+  | exception Tensor.Session_error (msg, culprit) ->
+      eprintf "refusal: %s (not part of the golden)\n" msg;
+      Verdict.p "sgd_update ~params:{x} refuses the fetch-defined leaf" true;
+      Verdict.p "the refusal names the leaf" (String.is_substring msg ~substring:"xfetch");
+      Verdict.p "the refusal names Operation.init as the fix"
+        (String.is_substring msg ~substring:"Operation.init");
+      Verdict.p "the refusal carries the leaf"
+        (Option.exists culprit ~f:(fun c -> Ir.Tnode.equal c.Tensor.value x.Tensor.value)));
+  (* The trap, executed: [sgd_one] is the per-tensor step [sgd_update] maps, and it sees no loss to
+     check against. Step 1 at x = (1, 2) gives (0.5, 0.5) as in section 1; the data-backed leaf
+     would then reach (0.25, 0.125), but the forward re-fetches x = (1, 2) first. *)
+  let first, second = two_steps l x (Train.sgd_one ~learning_rate x) in
+  close "bypassed: step 1 moves x by lr * 2 w x" first [| 0.5; 0.5 |];
+  close "bypassed: step 2 lands where step 1 did -- the forward re-fetched x" second [| 0.5; 0.5 |];
+  (* The negative control: the data-backed twin. *)
+  let xd = data_leaf ~l:"xdata" [| 1.; 2. |] in
+  let%op ld = { wdata = [ 2.; 3. ] } *. xd *. xd in
+  let learning_rate = fresh_learning_rate () in
+  match Train.sgd_update ~learning_rate ~params:(Set.singleton (module Tensor) xd) ld with
+  | exception Tensor.Session_error (msg, _) ->
+      Verdict.p ("the data-backed twin is accepted (refused: " ^ msg ^ ")") false
+  | step ->
+      Verdict.p "the data-backed twin is accepted" true;
+      let first, second = two_steps ld xd step in
+      close "data-backed: step 1 moves x by lr * 2 w x" first [| 0.5; 0.5 |];
+      close "data-backed: step 2 moves x by the gradient taken at the updated x" second
+        [| 0.25; 0.125 |]
+
 let () =
   input_optimization ();
-  accumulation ()
+  accumulation ();
+  fetch_defined_leaf ()

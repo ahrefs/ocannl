@@ -240,14 +240,17 @@ files.
   `test/operations/ll_builder_precisions` pins each builder under `single`, `half` and `bfloat16`
   stores. `C_syntax.compile_proc` repeats the check on the way out (gh-ocannl-1739), so a
   `?prelowered` routine, which skips `optimize`, meets it there. The optimizer's own rewrites leave
-  stale annotations (a scope of another precision collapsed into its reader keeps the scope's
-  precision on a product of wider loads; `mixed_prec_twin_shape`'s virtualized bf16 cast twin was
-  one), so `post_virtualization_pipeline` ends in `describe_operand_precisions`, which rewrites each
+  stale annotations (a widening scope over a load collapsed into its reader leaves the scope's
+  precision on the load; constant folding; the elided operands), so `post_virtualization_pipeline`
+  ends in `describe_operand_precisions`, which rewrites each
   annotation the gate would refuse to the slot's precision: sound only there, because the entry gate
   already refused every builder's request. `Schedule.apply` re-describes a schedule's result
   (`Privatize`'s widened tile evaluates at `acc_prec`; its trailing simplify collapses scopes too)
   only when the program it started from passes the check, so a prelowered routine's own requests
-  still reach the gate.
+  still reach the gate. A load's request reaches it too: `simplify_llc` keeps every leaf's
+  annotation (gh-ocannl-1788). It used to re-annotate a load at its storage precision, which erased
+  such a request before the gate, and in a heterogeneous slot (a `Where` condition, a guard) changed
+  the precision the renderer evaluates the load at.
 - **Which bits an RNG conversion consumes is fixed per precision, and it is the same on every
   backend** (gh-ocannl-951). The scalar `uint4x32_to_{bfloat16,half}_uniform` take the single draw
   of the key's first 32 bits (`uint32_to_single_uniform`) and narrow it; the `_vec`/`_lane` forms
@@ -352,6 +355,21 @@ files.
   `cc_backend_fp_contract=off` the two still differ by design on every compiler (nothing contracts
   the serial loop; the tile's FMA is a schedule decision, gh-ocannl-998): a bitwise claim there
   also needs `fp_contract=true`.
+- **A bitwise claim on cc is held to the compilers and hosts the fleet lacks** (gh-ocannl-1696).
+  Only `cc_backend_fp_contract=off` means the same thing to every compiler: gcc before 14 treats
+  `-ffp-contract=on` as `off` in C, `auto` and `fast` contract by kernel shape (the two entries
+  above), and only the AVX512-FP16 CI runners compute f16 natively -- no fleet box has
+  `avx512_fp16`, so a native-fp16 VALUE claim is checked on CI alone. `test/operations/fp_contract_pin_scan`
+  lists every test source whose string literals claim bitwise equality, each either pinned
+  in-process (`Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"` before the first compile) or
+  carrying one marker comment `cc-fp-contract` + colon + `<kind> -- <reason>`, the kinds a closed
+  vocabulary the scan's golden prints (`exact-operands`, `no-contraction`, `same-shape`, `gated`,
+  `not-cc`, `not-executed`). A new bitwise claim comparing two kernel shapes on inexact operands
+  pins; a marker is for a claim contraction cannot reach, and says why. Mind the previous entry:
+  under `off` a packed tile's explicit FMA still differs from the serial loop, so such a claim
+  needs the IR licence too, or a runtime gate (`schedule_pad`'s, kind `gated`). The census and a
+  test's executed values against CI's gcc 13.3 are checked locally with
+  `tools/ci-compiler-test.sh --toolchain <dir>` (build-and-test.md, *What CI actually covers*).
 - **`-march=native` is the wrong flag on ARM and was silently downgrading every CPU kernel.** Apple
   clang accepts it on arm64 and targets a *lower* baseline than passing nothing: 22
   `__ARM_FEATURE_*` macros against 26 with no flag and 33 with `-mcpu=native`, losing
@@ -1030,6 +1048,19 @@ files.
   development selector `simplify_fp_algebra` (six arm families) is retired with no alias;
   `benchmarks/gh998_cells.py` ablates the three keys, and a result line records each under
   `fp_licences` with its source.
+- **A virtualized uniform keeps its own precision's scope wherever its reader's differs**
+  (gh-ocannl-1769). The lane-extract form sizes its lane index for the DRAW's precision (8 lanes per
+  block at f16), while a conversion renders at the precision of the store holding it, so
+  `simplify_llc`'s scope collapse (`rng_collapsible`, keyed on the store precision it threads as
+  `~render`) keeps an RNG-carrying scope of another precision. Collapsed, an f16 draw in an f32
+  master's initializer read lanes 4..7 of a 4-lane f32 block: undefined behavior that x86/gcc read
+  as zeros and `1.4e27` (an infinite loss from step 0) and arm64/clang as other, finite garbage, so
+  byte-identical C diverged by platform. `Precision_policy`'s walk reaches that draw because it
+  treats a parameter's initializer as an activation. `test_uniform_virtual_lane`'s `draw into` rows
+  pin the parity; diagnosis recipe: break on the kernel under gdb and read its argument buffers.
+  The collapse still drops a narrow NON-RNG scope's conversion, so a virtual cast twin reads its f32
+  master unrounded (`mixed_prec_twin_rounding`: `Twin_virtual` and `Twin_auto` give `1 + 2^-12`
+  where `Twin_materialized` gives `1`).
 - **HIP's wide-f16/bf16 d boundary reads coordinates from the accumulator type, not from a
   second fragment type** (gh-ocannl-789, rewired by gh-ocannl-1064; `arrayjit/lib/hip_backend.ml`'s
   `mma_d_boundary_lines`). Under `Fp16_wide`/`Bf16_wide` the uniform arm pairs a `float` accumulator
@@ -2110,6 +2141,22 @@ files.
   and `x - x = 0` fold to a constant, silently disabling an overflow gate (the shape
   `Mixed_prec.gated_scaled_update` needs). It is the same reason `Builtins_metal`'s fp8 codec is
   written in integer/bitcast form rather than float arithmetic.
+- **HIP's f64 division is a builtin expansion, because no hiprtc lever reaches f64 alone**
+  (gh-ocannl-1782). Under `-ffast-math`, hiprtc rendered f64 `x / y` as a Newton-refined reciprocal
+  estimate: NaN for every `x / 0`, `x / inf` and `inf / y`, measured on gfx1151.
+  `-fapprox-func` makes the estimate and `-freciprocal-math` the `x * (1 / y)` rounding; dropping
+  both makes every precision exact, at the cost of every f32 division. The approximation follows
+  the kernel's `"approx-func-fp-math"` function attribute, so an instruction-level pragma cannot
+  undo it, and hiprtc ignores `#pragma float_control` anyway ("not supported on this target").
+  ROCm's `__ocml_div_rte_f64` is declared in `math_fwd.h` but absent from the device library.
+  `Builtins_hip.ocannl_div_f64` writes out LLVM's own `LowerFDIV64` in `__builtin_amdgcn_div_scale`
+  / `rcp` / `__builtin_fma` / `div_fmas` / `div_fixup`, and `Cuda_like_config`'s `div_f64` routes
+  f64 `Div` and `Recip` through it. HIP's f32, half and bfloat16 division stay the estimate,
+  as CUDA's f32 does under `--use_fast_math`. That is a recorded boundary of the fast policy:
+  1-ulp quotients (`3 / 3 = 1 - 2^-24`), subnormal divisors overflowing, and f32 divisors from
+  2^126 flushing their reciprocal (`inf / FLT_MAX` NaN). A `hip_fast_math` key (gh-ocannl-1779)
+  that drops the umbrella is what lifts it. The helper is correct under either policy. Pinned by
+  `division_special_values`, whose HIP f32 leg is the on-device negative control.
 - **gfx1102 compiles without `real-true16`, and HIPRTC never gets `-amdgpu-waitcnt-*`**
   (`Compiler_options.hip_target_options`, gh-ocannl-1182/1222). In true16 mode, 16-bit values live
   in VGPR halves, and a pending D16 high-half load raced a low-half update of the same register,
@@ -2243,6 +2290,15 @@ files.
   The shared half RNG function returns `HALF_T`, while its OCaml wrapper explicitly extracts bits
   with `HALF_TO_UINT16`. `test_shared_builtins` executes separately compiled default and emulated
   half variants against the shipped stubs, with inlining disabled to exercise the C ABI.
+- What a builtin's parameter type is and what its call site passes are compared by the
+  parameter guards (`C_syntax.Param_guards`, gh-ocannl-1768), a test seam `op_table_compile` runs
+  its whole cc and Metal sweep under: each function a kernel's prelude defines is shadowed by a
+  macro whose guard fails the compile when the operand's type narrows into the parameter's (C++'s
+  narrowing rule; in C a `_Static_assert` over `__typeof__`). Their first run found the store
+  conversions into bf16 and fp8 passing `int` (a comparison) and `double` (a `0.0` or `1.0 /`
+  literal) to `float` parameters; the C and Metal conversions now cast to `float` first, which is
+  value-neutral. A guarded argument loses a literal's constant exemption, so a guarded kernel
+  calling `ocannl_shfl_xor(v, 16)` would fail: extend the seam to warp kernels with that in mind.
 
 - Known integral `ToPowOf` constants render through `ocannl_powi_f32` or `ocannl_powi_f64`
   independently of the optional power simplifier (gh-ocannl-1185): CUDA fast-math `powf` loses

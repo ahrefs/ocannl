@@ -19,6 +19,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 
 source = Path(sys.argv[1]).read_text()
 
@@ -582,6 +583,118 @@ for label, mutant, needle in (
     else:
         raise AssertionError('accepted mutant: ' + label)
 print('PASS the triage job waits for every other job')
+
+
+# The disk watchdog (gh-ocannl-1771): run the start step's and the report step's own scripts with
+# stub df/sudo/pkill and the polls shortened, the free space moved under the watchdog's feet.
+def step_script(name):
+    step = source.split('    - name: %s\n' % name, 1)
+    assert len(step) == 2, 'step missing: ' + name
+    step = step[1].split('\n    - ', 1)[0]
+    assert "runner.os == 'Linux'" in step.split('      run: |\n', 1)[0], name + ' is not Linux-only'
+    return '\n'.join(line[8:] for line in itertools.takewhile(
+        lambda line: line.startswith('        ') or not line.strip(),
+        step.split('      run: |\n', 1)[1].splitlines()))
+
+
+watch_start = step_script('Free disk space and start the disk watchdog (Linux)')
+watch_report = step_script('Report the disk headroom (Linux)')
+assert 'always()' in source.split('    - name: Report the disk headroom (Linux)\n', 1)[1].split('\n', 1)[0], \
+    'the headroom report does not run on a cancelled or red job'
+state_dir = '/dev/shm/ocannl-disk-watch'
+timing = 'floor_mb=1024 poll=5 grace=15 min= tripped='
+assert watch_start.count(state_dir) == 1 and watch_report.count(state_dir) == 1, 'watchdog state moved'
+assert watch_start.count(timing) == 1, 'watchdog timings moved'
+watch_root = Path(sys.argv[2]) / 'disk-watch'
+watch_bin = watch_root / 'bin'
+watch_bin.mkdir(parents=True)
+for name, body in (
+        # df: one line per path argument, every filesystem with $DF_AVAIL MB free.
+        ('df', 'echo "Filesystem 1M-blocks Used Available Capacity Mounted on"\n'
+               'for a in "$@"; do case $a in -*) ;; *) echo "stub 99999 1 $(cat "$DF_AVAIL") 1% $a" ;; esac; done\n'),
+        ('sudo', 'echo "$*" >> "$WATCH_LOG/sudo"\n'),
+        ('pkill', 'echo "$*" >> "$WATCH_LOG/pkill"\n')):
+    (watch_bin / name).write_text('#!/usr/bin/env bash\n' + body)
+    (watch_bin / name).chmod(0o755)
+
+
+def watch_run(start, report):
+    # (tripped before the floor, report exit and output while healthy, report exit and output after
+    # the trip, pkill's calls, sudo's calls); the watchdog is killed however this ends.
+    run = watch_root / ('run%d' % len(list(watch_root.glob('run*'))))
+    state, log = run / 'state', run / 'log'
+    log.mkdir(parents=True)
+    avail = run / 'avail'
+    avail.write_text('50000\n')
+    env = dict(os.environ, PATH=str(watch_bin) + os.pathsep + os.environ['PATH'], DF_AVAIL=str(avail),
+               WATCH_LOG=str(log), GITHUB_WORKSPACE=str(run))
+    start = start.replace(state_dir, str(state)).replace(timing, 'floor_mb=1024 poll=0.05 grace=0 min= tripped=')
+    report = report.replace(state_dir, str(state))
+
+    def wait_for(path):
+        for _ in range(100):
+            if path.exists() and path.read_text().strip():
+                return True
+            time.sleep(0.05)
+        return False
+
+    def report_run():
+        r = subprocess.run(['bash', '-e', '-c', report], env=env, capture_output=True, text=True, timeout=30)
+        return r.returncode, r.stdout
+
+    # A new session: its group is the watchdog's too, killed at the end. The step must return at
+    # once, its output closed to the watchdog (on GitHub a held pipe keeps the step running).
+    proc = subprocess.Popen(['bash', '-e', '-c', start], env=env, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, start_new_session=True)
+    try:
+        out, _ = proc.communicate(timeout=5)
+        assert proc.returncode == 0, 'watchdog start step: ' + out
+        wait_for(state / 'min')
+        healthy = report_run()
+        early = (state / 'tripped').exists()
+        # Atomically: a df reading the file mid-truncation would report 1 MB free.
+        (run / 'avail.new').write_text('600\n')
+        os.replace(run / 'avail.new', avail)
+        wait_for(state / 'tripped')
+        time.sleep(0.3)
+        after = report_run()
+        read = lambda path: path.read_text() if path.exists() else ''
+        return early, healthy, after, read(log / 'pkill'), read(log / 'sudo'), read(state / 'min')
+    finally:
+        try:
+            os.killpg(proc.pid, 9)
+        except ProcessLookupError:
+            pass
+
+
+def watch_ok(start, report):
+    early, healthy, after, pkill, sudo, low = watch_run(start, report)
+    return (not early and healthy[0] == 0 and 'watchdog saw: 50000 MB at ' in healthy[1]
+            and '::error' not in healthy[1] and after[0] == 1
+            and '::error title=disk space::Free disk space fell to 600 MB' in after[1]
+            and pkill.startswith('-TERM -x dune\n-KILL -x dune\n-TERM -x dune\n') and low.startswith('600 MB at ')
+            and sudo.startswith('rm -rf /usr/local/lib/android '))
+
+
+assert watch_ok(watch_start, watch_report), watch_run(watch_start, watch_report)
+print('PASS the disk watchdog stops dune under its floor and the report names disk space, red')
+for label, start, report in (
+        ('a floor never reached', watch_start.replace('-lt "$floor_mb"', '-lt 0'), watch_report),
+        ('a watchdog that stops dune only once',
+         watch_start.replace('pkill -KILL -x dune || true\n', 'pkill -KILL -x dune || true\n  return 0\n'),
+         watch_report),
+        ('a watchdog that only asks dune to stop', watch_start.replace('pkill -KILL -x dune', 'true'), watch_report),
+        ('a watchdog holding the step\'s output', watch_start.replace('disk_watch </dev/null >/dev/null 2>&1 &', 'disk_watch &'),
+         watch_report),
+        ('a report that stays green on a trip', watch_start, watch_report.replace('  exit 1\n', '', 1)),
+        ('no cleanup', watch_start.replace('sudo rm -rf', 'true'), watch_report)):
+    assert (start, report) != (watch_start, watch_report), label
+    try:
+        ok = watch_ok(start, report)
+    except (AssertionError, subprocess.TimeoutExpired):
+        ok = False
+    assert not ok, 'accepted mutant: ' + label
+    print('PASS rejected mutant: disk watchdog with', label)
 PY
 report "$rc" "ci matrix controls"
 finish

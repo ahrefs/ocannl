@@ -208,21 +208,37 @@ let grad_update ?(setup_for_parallel = false) ?accum_steps ?accum_loss ?loss_sca
   in
   let inv_accum = 1. /. Float.of_int (Option.value accum_steps ~default:1) in
   (* Note: the %cd syntax for [loss.grad] does not modify roots. *)
-  [%cd
-    ~~(loss "forward and gradient update";
-       (* In the accumulating branch, referencing [loss] embeds its forward code (the single
-          consumption of it), so the one statement computes the loss and accumulates it. *)
-       (match accum_loss with
-       | Some acc -> acc =+ loss
-       | None -> loss.forward);
-       ~~(loss "zero grads and backprop";
-          zero_grads;
-          (match (loss_scale, accum_steps) with
-          | Some scale, None -> loss.grad =: scale
-          | Some scale, Some _ -> loss.grad =: scale * !.inv_accum ~logic:"."
-          | None, Some _ -> loss.grad =: !.inv_accum
-          | None, None -> loss.grad =: 1);
-          loss.backprop))]
+  let comp =
+    [%cd
+      ~~(loss "forward and gradient update";
+         (* In the accumulating branch, referencing [loss] embeds its forward code (the single
+            consumption of it), so the one statement computes the loss and accumulates it. *)
+         (match accum_loss with
+         | Some acc -> acc =+ loss
+         | None -> loss.forward);
+         ~~(loss "zero grads and backprop";
+            zero_grads;
+            (match (loss_scale, accum_steps) with
+            | Some scale, None -> loss.grad =: scale
+            | Some scale, Some _ -> loss.grad =: scale * !.inv_accum ~logic:"."
+            | None, Some _ -> loss.grad =: !.inv_accum
+            | None, None -> loss.grad =: 1);
+            loss.backprop))]
+  in
+  match accum_steps with
+  | None -> comp
+  | Some k ->
+      (* gh-ocannl-1781: the explicit opt-in -- every gradient this micro-step accumulates into
+         without zeroing (the stripped leaves, and a shared leaf another loss carries the zeroing
+         of) may take [k] runs per reset. *)
+      {
+        comp with
+        accumulation_runs =
+          Set.fold
+            (Set.diff comp.Asgns.accumulates comp.Asgns.zeroes)
+            ~init:(Map.empty (module Tn))
+            ~f:(fun runs g -> Map.set runs ~key:g ~data:k);
+      }
 
 let zero_params_grads ?params loss =
   let one_param p =
@@ -300,15 +316,39 @@ let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = 
        | None -> Asgns.empty_comp);
        p =- learning_rate * sgd_delta ~logic:".")]
 
+(* gh-ocannl-1776: a stepped tensor whose value [loss]'s forward code re-establishes with a fetch on
+   every run. A [Tensor.term_init] (or literal) leaf with at most [limit_constant_fill_size] values
+   is such a fetch op, not data, so the next forward pass would silently overwrite every step.
+   Refused, naming the fix, rather than promoted to a data-backed node behind the user's back: a
+   hidden memory-mode change is the kind of semantics gh-ocannl-1743's audit removed. Only a [Fetch]
+   re-establishes; a read-modify-write the forward makes (a running statistic) builds on the stepped
+   value instead. *)
+let refuse_fetch_defined ~fn_name loss stepped =
+  let fetched =
+    Asgns.fold_leaves loss.Tensor.forward.Asgns.asgns
+      ~init:(Set.empty (module Tn))
+      ~f:(fun acc -> function Asgns.Fetch { array; _ } -> Set.add acc array | _ -> acc)
+  in
+  Set.iter stepped ~f:(fun p ->
+      if Set.mem fetched p.Tensor.value then
+        raise
+        @@ Tensor.Session_error
+             ( fn_name ^ ": " ^ Tensor.debug_name p
+               ^ " is fetch-defined: the loss's forward code re-establishes its value on every run \
+                  (a [Tensor.term_init] or literal with at most [limit_constant_fill_size] values \
+                  is a fetch, not data), which would silently undo each step. Build an optimized \
+                  input data-backed, with [Operation.init ~grad_spec:Require_grad], or make it a \
+                  parameter",
+               Some p ))
+
 let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov ?grad_unscale ?grad_scale
     ?update_gate ?params loss =
   let f =
     sgd_one ~learning_rate ?momentum ?weight_decay ?nesterov ?grad_unscale ?grad_scale ?update_gate
   in
-  let comp =
-    Set.to_list (stepped_params_for ~fn_name:"Train.sgd_update" ?params loss)
-    |> List.map ~f |> Asgns.sequence
-  in
+  let stepped = stepped_params_for ~fn_name:"Train.sgd_update" ?params loss in
+  refuse_fetch_defined ~fn_name:"Train.sgd_update" loss stepped;
+  let comp = Set.to_list stepped |> List.map ~f |> Asgns.sequence in
   { comp with asgns = Asgns.Block_comment ("sgd_update", comp.asgns) }
 
 let%track3_sexp sequential_loop ~f lowered_bindings =

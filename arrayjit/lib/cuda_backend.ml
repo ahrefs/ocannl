@@ -1346,7 +1346,90 @@ end = struct
             program.modules <- (ctx, run_module) :: program.modules;
             run_module)
 
-  let link_proc ~prior_context ~name ~symbol ~(kparams : (string * kparam_source) list)
+  (* gh-ocannl-1773: a launch can be refused device memory ([CUDA_ERROR_OUT_OF_MEMORY] out of
+     [cu_launch_kernel]) although it allocates no buffer. The driver backs every kernel's local
+     memory (its [__local_depot]: [Local] arrays, spills) for every thread the device can keep
+     resident -- per-thread bytes x threads per multiprocessor x multiprocessors, whatever the
+     launch geometry -- grows that reservation at the first launch needing more, and keeps it for
+     the context's life. Measured on rog-nv's RTX 5070 Ti (46 x 1536 resident threads): the
+     unscheduled [schedule_strided_1x1] resnet-block reference, one thread with a 48 KiB depot, took
+     the process from 160 MiB to 3520 MiB until it exited. Under a concurrent GPU batch that
+     reservation is what fails, and it can succeed once a neighbour process exits, so the launch
+     backs off and retries -- unless the reservation exceeds the device's total memory, which no
+     wait helps. The driver's own exception is re-raised when the back-off gives up: its text is
+     what the sweep's serial-rerun table keys on ([tools/sweep.sh] [ENVIRONMENT_REFUSALS]), and
+     [classify_failure] already contains it in a search as a [No_device_writes] decline. *)
+  let launch_memory_backoff_seconds = [ 0.5; 1.; 2.; 4.; 8. ]
+  let launch_memory_retries = Atomic.make 0
+  let launch_memory_refusals = Atomic.make 0
+
+  let is_out_of_memory = function
+    | Cu.Cuda_error { status; _ } -> (
+        match Cu.sexp_of_result status with
+        | Sexp.Atom "CUDA_ERROR_OUT_OF_MEMORY" -> true
+        | _ -> false)
+    | _ -> false
+
+  (* The local depot bytes [symbol]'s entry declares in [ptx] ([.local ... __local_depotN[bytes];]),
+     0 when it declares none. A lower bound on the per-thread local memory: the JIT's own spills and
+     callee frames are not in the PTX. *)
+  let ptx_local_depot_bytes ptx ~symbol =
+    let entry = ".entry " ^ symbol ^ "(" in
+    match String.substr_index ptx ~pattern:entry with
+    | None -> 0
+    | Some start ->
+        let body_start = start + String.length entry in
+        let stop =
+          Option.value ~default:(String.length ptx)
+            (String.substr_index ~pos:body_start ptx ~pattern:".entry ")
+        in
+        let body = String.sub ptx ~pos:body_start ~len:(stop - body_start) in
+        let depot = "__local_depot" in
+        List.sum
+          (module Int)
+          (String.substr_index_all body ~may_overlap:false ~pattern:depot)
+          ~f:(fun i ->
+            let rest = String.drop_prefix body (i + String.length depot) in
+            let rest = String.lstrip rest ~drop:Char.is_digit in
+            match String.chop_prefix rest ~prefix:"[" with
+            | None -> 0
+            | Some rest -> (
+                match String.lsplit2 rest ~on:']' with
+                | Some (n, _) -> Option.value ~default:0 (Int.of_string_opt n)
+                | None -> 0))
+
+  let launch_with_memory_backoff ~(device : device) ~name ~ptx ~symbol launch =
+    let rec attempt pauses =
+      try launch ()
+      with exn when is_out_of_memory exn ->
+        let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+        let a = Cu.Device.get_attributes device.dev.dev in
+        let resident = a.multiprocessor_count * a.max_threads_per_multiprocessor in
+        let depot = ptx_local_depot_bytes (Lazy.force ptx) ~symbol in
+        let reservation = depot * resident in
+        let free, total = try Cu.Device.get_free_and_total_mem () with _ -> (-1, -1) in
+        let hopeless = total >= 0 && reservation > total in
+        let give_up = hopeless || List.is_empty pauses in
+        Stdio.eprintf
+          "cuda: launching %s was refused device memory (CUDA_ERROR_OUT_OF_MEMORY): its local \
+           memory reservation is %d B per thread x %d resident threads = %d B, with %d of %d B \
+           free; %s (gh-ocannl-1773)\n\
+           %!"
+          name depot resident reservation free total
+          (if hopeless then "more than the device holds, so not retried"
+           else if give_up then "giving up after the back-off"
+           else Printf.sprintf "retrying in %gs" (List.hd_exn pauses));
+        if give_up then (
+          Atomic.incr launch_memory_refusals;
+          Stdlib.Printexc.raise_with_backtrace exn backtrace)
+        else (
+          Atomic.incr launch_memory_retries;
+          Unix.sleepf (List.hd_exn pauses);
+          attempt (List.tl_exn pauses))
+    in
+    attempt launch_memory_backoff_seconds
+
+  let link_proc ~prior_context ~name ~symbol ~ptx ~(kparams : (string * kparam_source) list)
       ~(launch : Low_level.launch_dims) ~ctx_buffers lowered_bindings run_module =
     let func = Cu.Module.get_function run_module ~name:symbol in
     let device = prior_context.device in
@@ -1394,10 +1477,11 @@ end = struct
          all-Serial kernels launch 1x1x1, as before. Static [__shared__] declarations do not use the
          dynamic pool, so [shared_mem_bytes] stays 0. *)
       let launch_kernel () =
-        S.launch_kernel func ~grid_dim_x:launch.Low_level.grid.(0)
-          ~grid_dim_y:launch.Low_level.grid.(1) ~grid_dim_z:launch.Low_level.grid.(2)
-          ~block_dim_x:launch.Low_level.block.(0) ~block_dim_y:launch.Low_level.block.(1)
-          ~block_dim_z:launch.Low_level.block.(2) ~shared_mem_bytes:0 device.runner args
+        launch_with_memory_backoff ~device ~name ~ptx ~symbol (fun () ->
+            S.launch_kernel func ~grid_dim_x:launch.Low_level.grid.(0)
+              ~grid_dim_y:launch.Low_level.grid.(1) ~grid_dim_z:launch.Low_level.grid.(2)
+              ~block_dim_x:launch.Low_level.block.(0) ~block_dim_y:launch.Low_level.block.(1)
+              ~block_dim_z:launch.Low_level.block.(2) ~shared_mem_bytes:0 device.runner args)
       in
       if Utils.debug_log_from_routines () then
         (* The routine's log lines are device-side [printf]: under [debug_log_to_stream_files] the
@@ -1428,8 +1512,9 @@ end = struct
       List.map idx_params ~f:(fun s -> (s, Indexing.fresh_launch_param ()))
     in
     let task =
-      link_proc ~prior_context ~name:code.name ~symbol:code.symbol ~kparams:code.kparams
-        ~launch:code.launch ~ctx_buffers lowered_bindings run_module
+      link_proc ~prior_context ~name:code.name ~symbol:code.symbol
+        ~ptx:(lazy (Nvrtc.string_from_ptx code.code.ptx))
+        ~kparams:code.kparams ~launch:code.launch ~ctx_buffers lowered_bindings run_module
     in
     (lowered_bindings, task)
 
@@ -1446,8 +1531,9 @@ end = struct
           let program, symbol = code_batch.programs.(i) in
           let run_module = module_of prior_context program in
           set_ctx ctx;
-          link_proc ~prior_context ~name ~symbol ~kparams ~launch ~ctx_buffers lowered_bindings
-            run_module)
+          link_proc ~prior_context ~name ~symbol
+            ~ptx:(lazy (Nvrtc.string_from_ptx program.ptx))
+            ~kparams ~launch ~ctx_buffers lowered_bindings run_module)
     in
     (lowered_bindings, procs)
 
@@ -1645,6 +1731,9 @@ end = struct
       [
         ("live_streams", [%sexp_of: int] @@ Cu.Stream.get_total_live_streams ());
         ("live_graph_execs", [%sexp_of: int] @@ live_graph_execs ());
+        (* gh-ocannl-1773: launches refused device memory, retried and given up on. *)
+        ("launch_memory_retries", [%sexp_of: int] @@ Atomic.get launch_memory_retries);
+        ("launch_memory_refusals", [%sexp_of: int] @@ Atomic.get launch_memory_refusals);
       ]
 
   let static_properties () =

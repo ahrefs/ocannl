@@ -28,6 +28,9 @@
    unit-lane [Tile_mma] must not reach hardware intrinsics): the widened packing is still exercised
    for value parity. *)
 
+(* cc-fp-contract: exact-operands -- dyadic operands keep every product and sum exact, the native
+   f16 accumulators included *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

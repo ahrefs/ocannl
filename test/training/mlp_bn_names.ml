@@ -160,7 +160,7 @@ let () =
   let%op mk_logits () ~train_step x = ({ w2 } * hidden ~train_step x) + { b2 } in
   let logits = mk_logits () in
 
-  let train_logits = logits ~train_step:(Some step_n) input_batch in
+  let train_logits = logits ~train_step:(Some (NTDSL.embed_symbol step_n)) input_batch in
   (* Numerically stable log-softmax cross-entropy, matching transformer_names.ml. *)
   let%op max_l = train_logits @^^ "... | ... => ... | 0" in
   let%op shifted = train_logits - max_l in

@@ -520,6 +520,24 @@ exact_partials_ratchet.ml: [scanner-refusal:958e88eddd55da1a156f3795cd586c78] be
 exact_partials_ratchet.ml: [scanner-refusal:b30b6b3be7749ff984d2979f5a8fe292] arrayjit package's test (claim) is catalogued beside exact_partials_ratchet.expected, exact_partials_scan_cases.expected: true
 exact_partials_ratchet.ml: [scanner-refusal:392052035d276f11311768815316b580] every sentence claiming (claim) is catalogued beside exact_partials_ratchet.expected, exact_partials_scan_cases.expected: true
 exact_partials_ratchet.ml: [scanner-refusal:fa85b1960c6367c9216c627d02ede0e7] every exemption row (claim) is catalogued beside exact_partials_ratchet.expected, exact_partials_scan_cases.expected: true
+fp_contract_pin_scan.ml has exactly the explicitly assigned refusal controls: true
+fp_contract_pin_scan.ml: [scanner-refusal:106879e8d84d7b106e818ac1ddc61a4f] listed as pinned (claim) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:777651b1b86abfe512e2d3a3f485ce6d] marked claim is (claim) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:0917e598d504b434f3e3c9567742fcc6] claim with neither (claim) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:9d3c109a283ee3d6803e356b583bdff2] claim in capitals (claim) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:3ef51a84cfe8ca3b03690fcda8b63c21] to another mode (claim) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:19ba2d6c29ec6da6833b4f6102b96167] an unknown kind (claim) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:6a15033dd60a8451f9ff4ba97f4280cb] one-word reason is (claim) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:be5184012422a01273ca348715955f05] sentinel that does (claim) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:b79e2ebc86bfefafc47281afbf5f0550] markers are refused (claim) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:3237007207743bc53ec1c1951d1214b7] together are refused (claim) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:b52b141cf7d13778997e41d81205de03] claim is refused (claim) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:e28d8e210f8906b6927a78032d5a7f50] case the word (claim) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:5af7923d754adb0ac1030df866493123] every test source (claim) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:b30b6b3be7749ff984d2979f5a8fe292] arrayjit package's test (claim) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:3cf4cde03d1a75d1846d0bbad2327014] the mode in-process (claim) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:cd11cea99124c2fa6c076ec8734ee25f] listed source carries (claim) is catalogued beside fp_contract_pin_scan.expected: true
+fp_contract_pin_scan.ml: [scanner-refusal:9bedd04370c001da7559696548d4a37b] cc_backend_fp_contract=off (claim) is catalogued beside fp_contract_pin_scan.expected: true
 operand_key_ratchet.ml has exactly the explicitly assigned refusal controls: true
 tensorized_census_ratchet.ml has exactly the explicitly assigned refusal controls: true
 tensorized_census_ratchet.ml: [scanner-refusal:e553a74d077e12582953b27756595d9e] executed tensorized parity (claim) is catalogued beside tensorized_census_ratchet.expected, tensorized_census_scan_cases.expected: true
@@ -543,6 +561,16 @@ debug_name_scan.ml: [scanner-refusal:f4f4d81c0884b6209eccd072274b494d] rewind_to
 debug_name_scan.ml: [scanner-refusal:faf8bd39d9f3358220e041edafe252a2] Session_error (claim) is catalogued beside debug_name_scan.expected, debug_name_scan_control.expected, debug_name_scan_refusal_control.expected: true
 debug_name_scan.ml: [scanner-refusal:c622584e09b7ad9b23646841eb389ca9] @message_only (claim) is catalogued beside debug_name_scan.expected, debug_name_scan_control.expected, debug_name_scan_refusal_control.expected: true
 debug_name_scan.ml: [scanner-refusal:3c688ea5897f696f0882bff06b550c6e] debug_name (claim) is catalogued beside debug_name_scan.expected, debug_name_scan_control.expected, debug_name_scan_refusal_control.expected: true
+label_dispatch_scan.ml has exactly the explicitly assigned refusal controls: true
+label_dispatch_scan.ml: [scanner-refusal:7fe4eca3a2beb271d0627103af78040c] does not parse (direct failure) is catalogued beside label_dispatch_scan.expected, label_dispatch_scan_control.expected, label_dispatch_scan_refusal_control.expected: true
+label_dispatch_scan.ml: [scanner-refusal:1705e6ff4f79cfed2aa6028e5b60cadc] label-dispatch reader raised (direct failure) is catalogued beside label_dispatch_scan.expected, label_dispatch_scan_control.expected, label_dispatch_scan_refusal_control.expected: true
+label_dispatch_scan.ml: [scanner-refusal:20abdf23cc9b4767a5eb4f75bb006965] source under arrayjit/lib/ (direct failure) is catalogued beside label_dispatch_scan.expected, label_dispatch_scan_control.expected, label_dispatch_scan_refusal_control.expected: true
+label_dispatch_scan.ml: [scanner-refusal:298ad457cb53221b4d5bf26c57db10cb] online_softmax's (claim) is catalogued beside label_dispatch_scan.expected, label_dispatch_scan_control.expected, label_dispatch_scan_refusal_control.expected: true
+label_dispatch_scan.ml: [scanner-refusal:a134c194b11e19f42951ac9ae0496f39] scan reads backends' (claim) is catalogued beside label_dispatch_scan.expected, label_dispatch_scan_control.expected, label_dispatch_scan_refusal_control.expected: true
+label_dispatch_scan.ml: [scanner-refusal:5478be505fa459772de23c278bbd2980] ~backend_name (claim) is catalogued beside label_dispatch_scan.expected, label_dispatch_scan_control.expected, label_dispatch_scan_refusal_control.expected: true
+label_dispatch_scan.ml: [scanner-refusal:1953375f4f82df9f942fae5674bb2e4d] @label_read (claim) is catalogued beside label_dispatch_scan.expected, label_dispatch_scan_control.expected, label_dispatch_scan_refusal_control.expected: true
+label_dispatch_scan.ml: [scanner-refusal:753c4e61524edee33f56c2a0183bca9f] memory_budget's (claim) is catalogued beside label_dispatch_scan.expected, label_dispatch_scan_control.expected, label_dispatch_scan_refusal_control.expected: true
+label_dispatch_scan.ml: [scanner-refusal:17bc0c94b9ab448cbc75a7f5df828695] low_level's (claim) is catalogued beside label_dispatch_scan.expected, label_dispatch_scan_control.expected, label_dispatch_scan_refusal_control.expected: true
 render_decline_inventory.ml has exactly the explicitly assigned refusal controls: true
 render_decline_inventory.ml: [scanner-refusal:d5f512590dad4114be7fccd7fcad252d] control (claim) is catalogued beside render_decline_inventory.expected: true
 render_decline_inventory.ml: [scanner-refusal:93267baf53efdf52a09d9a689b122ee2] render-time typed declines (claim) is catalogued beside render_decline_inventory.expected: true
@@ -631,6 +659,7 @@ test_config_consistency.ml: [scanner-refusal:c56af001748a614d221709bf11098511] t
 test_config_consistency.ml: [scanner-refusal:e583c416783b3632963a66636f20f65e] string literal in (direct failure) is catalogued beside config_scan_lexing.expected, test_config_consistency.expected: true
 test_config_consistency.ml: [scanner-refusal:b4c59d5ad7a9c4e591998fccf8f039aa] exempted functions that (direct failure) is catalogued beside config_scan_lexing.expected, test_config_consistency.expected: true
 test_config_consistency.ml: [scanner-refusal:4e4d383baae3810309379fe0b2c3e9ef] registered default goes (claim) is catalogued beside config_scan_lexing.expected, test_config_consistency.expected: true
+test_config_consistency.ml: [scanner-refusal:18e6c65c27f35f658858a12b7c8dfd72] literal default is (claim) is catalogued beside config_scan_lexing.expected, test_config_consistency.expected: true
 test_config_consistency.ml: [scanner-refusal:e72f69460ef84de5e85f6c2bbe7bef5b] docs/agent-notes/build-and-test.md (claim) is catalogued beside config_scan_lexing.expected, test_config_consistency.expected: true
 test_config_consistency.ml: [scanner-refusal:55743888dd2a4a2234ee1d3f031ea47e] meets its source-count (claim) is catalogued beside config_scan_lexing.expected, test_config_consistency.expected: true
 test_config_consistency.ml: [scanner-refusal:2314f0c5d2762ecb0069dfb64d5c8a54] known_config_keys (claim) is catalogued beside config_scan_lexing.expected, test_config_consistency.expected: true

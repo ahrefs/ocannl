@@ -20,6 +20,7 @@ the mixed-precision run backs the scale off after the stop step: true
 the mixed-precision run skips an outlier step after the stop step: true
 the mixed-precision run takes an optimizer step after the stop step: true
 the mixed-precision run's losses are finite: true
+the mixed-precision loss is an f16 activation: true
 the mixed-precision masters stay single: true
 the resumed mixed-precision run's losses, z-scores, skips and scales equal the uninterrupted run's, bit for bit: true
 the resumed mixed-precision run's final master weights equal the uninterrupted run's, bit for bit: true

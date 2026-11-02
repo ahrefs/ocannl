@@ -778,17 +778,50 @@ let card_coords ~range ?run ~(domain : (Idx.symbol * int) list) (v : coord array
       | Some (v', r) -> coords ~run_at:(r, len) v'
       | None -> coords (apply_vec ~range (Run len) v))
 
+(* gh-ocannl-1601 / gh-ocannl-1706: the distinct values of one known coordinate, bounded on both
+   sides by one walk — so the two bounds take the same branch at every step and meet exactly where
+   the walk is exact. The value set is the sumset of the terms' sets [{c*x : x < w}] ([w] values per
+   nonzero term). Dividing every coefficient by their gcd keeps the count. Adding the terms in
+   ascending [|c|] order:
+
+   - an interval of [n] values plus a term with [|c| <= n] stays an interval, of [n + |c|*(w-1)]
+   values (the translates overlap or abut): exact; - a set of span [span] plus a term with [|c| >
+   span] has [n*w] values (the translates are disjoint): exact when [n] was, and [|S + T| <= |S| *
+   |T|] bounds it from above either way; - otherwise the translates may overlap in holes: the
+   integer sumset bound [|S + T| >= |S| + |T| - 1] gives at least [n + w - 1], and at most the
+   product or the values between the extremes, [min (n*w) (span' + 1)].
+
+   Both are at most the coordinate's [size] under the in-bounds assumption every view makes. The
+   upper side never exceeds the coordinate's value range [span + 1]: each branch stays within the
+   extremes of the normalized coordinate. Returns the coordinate's varying symbols with [(lb, ub)];
+   arithmetic saturates ({!card_cap}). *)
+let coord_card terms size =
+  let g = List.fold terms ~init:0 ~f:(fun g (c, _, _) -> gcd g c) in
+  let sorted =
+    List.sort
+      ~compare:(fun (c1, _, _) (c2, _, _) -> Int.compare c1 c2)
+      (List.map terms ~f:(fun (c, s, w) -> (c / max 1 g, s, w)))
+  in
+  let lb, ub, _, _ =
+    List.fold sorted ~init:(1, 1, 0, true) ~f:(fun (lb, ub, span, interval) (c, _, w) ->
+        let d = sat_mul c (w - 1) in
+        let span' = sat_add span d in
+        if interval && c <= lb then
+          let n' = sat_add lb d in
+          (n', n', span', n' < card_cap)
+        else if c > span then (sat_mul lb w, sat_mul ub w, span', false)
+        else (sat_add lb (w - 1), min (sat_mul ub w) (sat_add span' 1), span', false))
+  in
+  let size = max 1 size in
+  ( List.filter_map sorted ~f:(fun (_, s, _) -> s) |> List.dedup_and_sort ~compare:Idx.compare_symbol,
+    min lb size,
+    min ub size )
+
 (* gh-ocannl-1601: a lower bound on the distinct cells a viewed access touches, for the floor
    extraction's non-exact images (an overlapping window's [s*o + d*k]). Three integer facts, each
    only shrinking what is counted:
 
-   - one coordinate's value set is the sumset of its terms' sets [{c*x : x < w}], which has [w]
-   values per nonzero term. Dividing every coefficient by their gcd keeps the count. Adding the
-   terms in ascending [|c|] order: an interval of [n] values plus a term with [|c| <= n] stays an
-   interval, of [n + |c|*(w-1)] values (the translates overlap or abut); a set of span [span] plus a
-   term with [|c| > span] has [n*w] values (the translates are disjoint); otherwise the integer
-   sumset bound [|S + T| >= |S| + |T| - 1] gives at least [n + w - 1]. The count is at most the
-   coordinate's [size] under the in-bounds assumption every view makes; - coordinates whose varying
+   - one coordinate's value set is counted from below by {!coord_card}; - coordinates whose varying
    symbols are pairwise disjoint take their value sets independently, so the image's projection onto
    them is the product of their counts, and a projection has at most as many points as the image; -
    an [Unknown] coordinate (a dynamic axis, a [Concat], a vector run whose frame is not known) is
@@ -803,31 +836,12 @@ let image_cardinality_lb ?(range = fun _ -> None) ?run ~(domain : (Idx.symbol * 
     (v : coord array) : int =
   if List.exists domain ~f:(fun (_, w) -> w <= 0) then 0
   else
-    let coord_lb terms size =
-      let g = List.fold terms ~init:0 ~f:(fun g (c, _, _) -> gcd g c) in
-      let sorted =
-        List.sort
-          ~compare:(fun (c1, _, _) (c2, _, _) -> Int.compare c1 c2)
-          (List.map terms ~f:(fun (c, s, w) -> (c / max 1 g, s, w)))
-      in
-      let n, _, _ =
-        List.fold sorted ~init:(1, 0, true) ~f:(fun (n, span, interval) (c, _, w) ->
-            let d = sat_mul c (w - 1) in
-            let span' = sat_add span d in
-            if interval && c <= n then
-              let n' = sat_add n d in
-              (n', span', n' < card_cap)
-            else if c > span then (sat_mul n w, span', false)
-            else (sat_add n (w - 1), span', false))
-      in
-      ( List.filter_map sorted ~f:(fun (_, s, _) -> s)
-        |> List.dedup_and_sort ~compare:Idx.compare_symbol,
-        min n (max 1 size) )
-    in
     let coords =
       card_coords ~range ?run ~domain v
       |> List.filter_map ~f:(function
-        | `Known (terms, size) -> Some (coord_lb terms size)
+        | `Known (terms, size) ->
+            let syms, lb, _ = coord_card terms size in
+            Some (syms, lb)
         | `Unknown _ -> None)
       |> List.filter ~f:(fun (_, n) -> n > 1)
     in
@@ -850,19 +864,17 @@ let image_cardinality_lb ?(range = fun _ -> None) ?run ~(domain : (Idx.symbol * 
           else (chosen, acc))
       |> snd
 
-(* gh-ocannl-1601 / gh-ocannl-1676: the upper companion — the coordinates' value ranges. A known
-   coordinate's index lies between its extremes, [span + 1] values for [span = sum |c| * (w - 1)] (a
-   run's unit term adds [len - 1]), at most its [size]; an [Unknown] one takes its whole size. The
-   ranges multiply into a box holding the image. Saturates upward ({!card_cap}): the caller's [min]
-   with the node's cells keeps it a bound. *)
-let image_cardinality_range_ub ?(range = fun _ -> None) ?run ~(domain : (Idx.symbol * int) list)
+(* gh-ocannl-1601 / gh-ocannl-1676 / gh-ocannl-1706: the upper companion over the same coordinates.
+   The image lies in the product of its coordinates' value sets, whatever symbols they share: a
+   known coordinate contributes {!coord_card}'s upper count (a run's unit term is one more term), an
+   [Unknown] one its whole size. Never above the coordinates' value ranges. Saturates upward
+   ({!card_cap}): the caller's [min] with the node's cells keeps it a bound. *)
+let image_cardinality_ub ?(range = fun _ -> None) ?run ~(domain : (Idx.symbol * int) list)
     (v : coord array) : int =
   List.fold (card_coords ~range ?run ~domain v) ~init:1 ~f:(fun acc -> function
     | `Known (terms, size) ->
-        let span =
-          List.fold terms ~init:0 ~f:(fun sp (c, _, w) -> sat_add sp (sat_mul c (w - 1)))
-        in
-        sat_mul acc (min (max 1 size) (sat_add span 1))
+        let _, _, ub = coord_card terms size in
+        sat_mul acc ub
     | `Unknown size -> sat_mul acc (max 1 size))
 
 (** {2 Projection-level predicates}
@@ -1434,6 +1446,39 @@ let vec_runs_disjoint ~dims (a : 'tn access) : bool =
           let g = List.fold cts ~init:0 ~f:(fun g (c, _) -> gcd g c) in
           lo >= 0 && hi + a.a_vec_len <= size && (g = 0 || g >= a.a_vec_len))
 
+(* Exact box-union coverage of the lattice box [target] (inclusive per-axis bounds) by [boxes] (each
+   one inclusive bound pair per axis), by coordinate-compression sweep: the first axis is cut at
+   every box boundary, and the boxes spanning an elementary strip recurse on the remaining axes.
+   [?budget] bounds the number of strips visited; exhausting it answers [false] (no proof). *)
+let boxes_cover ?budget (target : (int * int) list) (boxes : (int * int) list list) : bool =
+  let exception Exhausted in
+  let spend () =
+    Option.iter budget ~f:(fun b ->
+        Int.decr b;
+        if !b < 0 then raise Exhausted)
+  in
+  let rec go (target : (int * int) list) (boxes : (int * int) list list) =
+    spend ();
+    match target with
+    | [] -> not (List.is_empty boxes)
+    | (lo, hi) :: rest_t ->
+        if lo > hi then true
+        else
+          let cuts =
+            lo :: List.concat_map boxes ~f:(function (bl, bh) :: _ -> [ bl; bh + 1 ] | [] -> [])
+            |> List.filter ~f:(fun x -> x >= lo && x <= hi)
+            |> List.dedup_and_sort ~compare:Int.compare
+          in
+          List.for_all cuts ~f:(fun x ->
+              let spanning =
+                List.filter_map boxes ~f:(function
+                  | (bl, bh) :: rest when bl <= x && x <= bh -> Some rest
+                  | _ -> None)
+              in
+              go rest_t spanning)
+  in
+  try go target boxes with Exhausted -> false
+
 let read_covered_before ?(thread = fun _ -> false) ?(static_range = fun _ -> None) ~dims
     ~(read : 'tn access) ~(writes : 'tn access list) () : [ `Covered | `Unknown of string ] =
   let exception Fail of string in
@@ -1642,28 +1687,6 @@ let read_covered_before ?(thread = fun _ -> false) ?(static_range = fun _ -> Non
            (pointwise writes tile it). *)
         let by_sig = Hashtbl.create (module String) in
         List.iter analyzed ~f:(fun ((s, _, _) as a) -> Hashtbl.add_multi by_sig ~key:s ~data:a);
-        let rec boxes_cover (target : (int * int) list) (boxes : (int * int) list list) =
-          match target with
-          | [] -> not (List.is_empty boxes)
-          | (lo, hi) :: rest_t ->
-              if lo > hi then true
-              else
-                let cuts =
-                  lo
-                  :: List.concat_map boxes ~f:(function
-                    | (bl, bh) :: _ -> [ bl; bh + 1 ]
-                    | [] -> [])
-                  |> List.filter ~f:(fun x -> x >= lo && x <= hi)
-                  |> List.dedup_and_sort ~compare:Int.compare
-                in
-                List.for_all cuts ~f:(fun x ->
-                    let spanning =
-                      List.filter_map boxes ~f:(function
-                        | (bl, bh) :: rest when bl <= x && x <= bh -> Some rest
-                        | _ -> None)
-                    in
-                    boxes_cover rest_t spanning)
-        in
         let union_covers group =
           match group with
           | [] -> false
@@ -1691,6 +1714,75 @@ let read_covered_before ?(thread = fun _ -> false) ?(static_range = fun _ -> Non
       end
     end
   with Fail witness -> `Unknown witness
+
+(** {2 The union-covering query}
+
+    [union_covers_box writes]: whether the accesses together touch every cell of their node, each as
+    its symbols range over its own bounds ([range], [None] for a symbol with no known range) — the
+    definite-coverage companion of {!covers_box} for a node written piecewise (gh-ocannl-1795), with
+    no exactly-once promise. Sound and conservative: an access is evidence only where its written
+    set is proved to be a box, and [false] means "not proved".
+
+    The views are re-coarsened to their common frame ({!common_frame}); maps of different ranks
+    answer [false]. Each coordinate's image is the exact progression of its linear form
+    ([ap_of_form ~exact:true]; width-1 symbols fold into the offset), admitted when it is a single
+    cell or a contiguous run, and clipped to the coordinate's extent. The product of those images is
+    the access's written set only when no varying symbol occurs in two coordinates — a diagonal
+    [x[i; i]] has a full-sized bounding box and an off-diagonal hole — so such an access proves
+    nothing, as does one with an [Unknown] coordinate, an unranged symbol, a strided image, an empty
+    range (a dead loop) or a magnitude beyond [2^30]. The admitted boxes are decided by
+    {!boxes_cover} with a strip budget; exhausting it, or more than [max_boxes] accesses, answers
+    [false]. *)
+let union_covers_box ?(max_boxes = 4096) ?(budget = 1_000_000)
+    (writes : ((Idx.symbol -> (int * int) option) * coord array) list) : bool =
+  if List.is_empty writes || List.length writes > max_boxes then false
+  else
+    match common_frame (List.map writes ~f:snd) with
+    | None -> false
+    | Some views ->
+        let limit = 1 lsl 30 in
+        let small x = x >= -limit && x <= limit in
+        let box_of (range, view) : (int * int) list option =
+          let exception Decline in
+          try
+            let varying = ref [] in
+            let interval = function
+              | Unknown _ -> raise Decline
+              | Known { size; terms; offset; _ } -> (
+                  if not (small offset && small size) then raise Decline;
+                  let offset = ref offset in
+                  let terms =
+                    List.filter_map terms ~f:(fun (c, s) ->
+                        match range s with
+                        | None -> raise Decline
+                        | Some (lo, hi) ->
+                            if lo > hi || not (small c && small lo && small hi) then raise Decline;
+                            if lo = hi then (
+                              offset := !offset + (c * lo);
+                              None)
+                            else (
+                              if List.mem !varying s ~equal:Idx.equal_symbol then raise Decline;
+                              varying := s :: !varying;
+                              Some (c, (lo, hi))))
+                  in
+                  match ap_of_form ~exact:true terms !offset with
+                  | Some { ap_lo; ap_hi; ap_step } when ap_step <= 1 ->
+                      let lo = max ap_lo 0 and hi = min ap_hi (size - 1) in
+                      if lo > hi then raise Decline else (lo, hi)
+                  | _ -> raise Decline)
+            in
+            Some (Array.to_list (Array.map view ~f:interval))
+          with Decline -> None
+        in
+        let boxes = List.filter_map (List.zip_exn (List.map writes ~f:fst) views) ~f:box_of in
+        let target =
+          match views with
+          | [] -> []
+          | v :: _ ->
+              Array.to_list
+                (Array.map v ~f:(function Known { size; _ } | Unknown { size; _ } -> (0, size - 1)))
+        in
+        boxes_cover ~budget:(ref budget) target boxes
 
 (** {2 Crosscheck}
 

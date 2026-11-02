@@ -32,6 +32,9 @@
    consumers) — the gradient emits the blend and equals, bitwise, both an OCaml reference and the
    same program with inlining off. *)
 
+(* cc-fp-contract: exact-operands -- selects, adds and a pool gradient multiplying dyadic weights by
+   one *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

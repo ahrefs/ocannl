@@ -695,7 +695,9 @@ let from_env ~tune =
             "tune_ship_arm=%s forces a placement candidate instead of replaying the control's \
              decision: leave it at auto"
             forced);
-      (match Utils.get_global_arg_with_source ~arg_name:"autotune_cache_dir" ~default:"" with
+      (match
+         Utils.get_global_arg_with_source ~arg_name:"autotune_cache_dir" ~default:"autotune_cache"
+       with
       | _, Utils.From_default ->
           fail
             "the arm's cache goes into the configured schedule cache: pass \

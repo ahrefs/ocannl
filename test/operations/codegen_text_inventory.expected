@@ -153,9 +153,9 @@ arrayjit/test/test_stage_b_where_debug.ml [renders generated text in memory; run
 arrayjit/test/test_vectorized_codegen.ml [renders generated text in memory; run by @arrayjit/test/runtest-test_vectorized_codegen]
 arrayjit/test/test_zero_out_codegen.ml [renders generated text in memory; run by @arrayjit/test/runtest-test_zero_out_codegen]
 test/operations/accum_width.ml [run by @test/operations/runtest-accum_width]
-    "= single_to_bfloat16(v"
+    "= " ^ ... ^ "v"
     "Vectorized reduction rendering"
-    "single_to_bfloat16((bfloat16_to_single("
+    ... ^ "(bfloat16_to_single("
 test/operations/branchless_select.ml [run by @test/operations/runtest-branchless_select; also pins text this scan cannot name: computed fragment, untraced callback, forwarded parameter, opaque aggregate component, unsupplied application, mutation or unseen buffer write]
     ") != 0.0 ? ("
     "bs_gather_guard"
@@ -165,6 +165,7 @@ test/operations/branchless_select.ml [run by @test/operations/runtest-branchless
     "bs_pool_inlined"
     ... ^ "("
     ... ^ "_v["
+test/operations/build_file_descriptors.ml [run by @test/operations/runtest-build_file_descriptors; also pins text this scan cannot name: untraced callback]
 test/operations/cache_key_agreement.ml [run by @test/operations/runtest-cache_key_agreement]
 test/operations/canonical_render.ml [renders generated text in memory; run by @test/operations/runtest-canonical_render; also pins text this scan cannot name: opaque aggregate component, mutation or unseen buffer write]
     "?"
@@ -301,6 +302,7 @@ test/operations/narrow_storage_compute.ml [run by @test/operations/runtest-narro
     "vector_size"
 test/operations/online_softmax_block_mma.ml [run by @test/operations/runtest-online_softmax_block_mma]
     "simdgroup_multiply_accumulate"
+test/operations/op_table_compile.ml [run by @test/operations/runtest-op_table_compile; also pins text this scan cannot name: untraced callback]
 test/operations/reduction_accumulator_residency.ml [run by @test/operations/runtest-reduction_accumulator_residency; also pins text this scan cannot name: untraced callback]
     " " ^ ...
     "["
@@ -608,6 +610,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/einsum/runtest-test_cse-cse_d_fwd
 @test/operations/runtest-accum_width
 @test/operations/runtest-branchless_select
+@test/operations/runtest-build_file_descriptors
 @test/operations/runtest-cache_key_agreement
 @test/operations/runtest-canonical_render
 @test/operations/runtest-cc_kernel_outline
@@ -658,6 +661,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-n3_fwd_with_prec-unoptimized
 @test/operations/runtest-narrow_storage_compute
 @test/operations/runtest-online_softmax_block_mma
+@test/operations/runtest-op_table_compile
 @test/operations/runtest-reduction_accumulator_residency
 @test/operations/runtest-reduction_forms
 @test/operations/runtest-reserved_routine_names
@@ -773,6 +777,9 @@ test/operations/compile_failure_declines.ml [staged callback; prelowered compile
 test/operations/context_handle_refusals.ml [through Ll_test.link; run by @test/operations/runtest-context_handle_refusals]
 test/operations/cost_model_template.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-cost_model_template]
 test/operations/cpu_fork_join_chains.ml [prelowered compile; through Ll_test.execute; run by @test/operations/runtest-cpu_fork_join_chains]
+test/operations/cuda_launch_reservation.ml [through Ll_test.execute; through Ll_test.link; run by @test/operations/runtest-cuda_launch_reservation]
+test/operations/default_prefill.ml [through Ll_test.link; run by @test/operations/runtest-default_prefill]
+test/operations/division_special_values.ml [through Ll_test.execute; run by @test/operations/runtest-division_special_values]
 test/operations/dynamic_axis_coverage.ml [through Ll_test.execute; run by @test/operations/runtest-dynamic_axis_coverage]
 test/operations/fixed_name_temporaries.ml [through Ll_test.execute; through Ll_test.execute_with_census; through Ll_test.run_routine; run by @test/operations/runtest-fixed_name_temporaries-logged, @test/operations/runtest-fixed_name_temporaries-plain]
 test/operations/float_literal_forms.ml [through Ll_test.execute; run by @test/operations/runtest-float_literal_forms]
@@ -803,6 +810,7 @@ test/operations/operand_precision_annotation.ml [through Ll_test.link; run by @t
 test/operations/padded_conv_cache.ml [through Ll_test.optimize_and_execute; run by @test/operations/runtest-padded_conv_cache]
 test/operations/peel_census.ml [prelowered compile; run by @test/operations/runtest-peel_census]
 test/operations/peel_dead_level.ml [through Ll_test.execute; run by @test/operations/runtest-peel_dead_level]
+test/operations/prefix_scan.ml [staged callback; through Ll_test.optimize_and_execute; run by @test/operations/runtest-prefix_scan, @test/operations/runtest-prefix_scan_fp_licences]
 test/operations/prelowered_seam.ml [staged callback; prelowered compile; through Ll_test.link; through Ll_test.optimize_and_execute; run by @test/operations/runtest-prelowered_seam]
 test/operations/privatize_recheck.ml [through Ll_test.execute; run by @test/operations/runtest-privatize_recheck]
 test/operations/qkv_zero_init.ml [prelowered compile; through Ll_test.execute; through Ll_test.link; run by @test/operations/runtest-qkv_zero_init, @test/operations/runtest-qkv_zero_init-approximate]
@@ -814,6 +822,7 @@ test/operations/routine_log_stream_files.ml [through Ll_test.run_routine; run by
 test/operations/runtime_integer_power.ml [through Ll_test.execute; run by @test/operations/runtest-runtime_integer_power]
 test/operations/scan_loop.ml [staged callback; through Ll_test.execute; through Ll_test.link; through Ll_test.optimize_and_execute; through Ll_test.run; run by @test/operations/runtest-scan_loop]
 test/operations/schedule_coalesce.ml [prelowered compile; through Ll_test.execute; run by @test/operations/runtest-schedule_coalesce]
+test/operations/scope_collapse_rounding.ml [through Ll_test.execute; run by @test/operations/runtest-scope_collapse_rounding]
 test/operations/scope_over_materialized.ml [through Ll_test.execute; run by @test/operations/runtest-scope_over_materialized]
 test/operations/shipped_kernels_alone.ml [staged callback; through Bench_harness.time_shipped_kernels; through Ll_test.execute; run by @test/operations/runtest-shipped_kernels_alone]
 test/operations/simplify_const_left_sub.ml [through Ll_test.execute; run by @test/operations/runtest-simplify_const_left_sub]
@@ -873,6 +882,9 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-context_handle_refusals
 @test/operations/runtest-cost_model_template
 @test/operations/runtest-cpu_fork_join_chains
+@test/operations/runtest-cuda_launch_reservation
+@test/operations/runtest-default_prefill
+@test/operations/runtest-division_special_values
 @test/operations/runtest-dynamic_axis_coverage
 @test/operations/runtest-fixed_name_temporaries-logged
 @test/operations/runtest-fixed_name_temporaries-plain
@@ -908,6 +920,8 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-padded_conv_cache
 @test/operations/runtest-peel_census
 @test/operations/runtest-peel_dead_level
+@test/operations/runtest-prefix_scan
+@test/operations/runtest-prefix_scan_fp_licences
 @test/operations/runtest-prelowered_seam
 @test/operations/runtest-privatize_recheck
 @test/operations/runtest-qkv_zero_init
@@ -920,6 +934,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-runtime_integer_power
 @test/operations/runtest-scan_loop
 @test/operations/runtest-schedule_coalesce
+@test/operations/runtest-scope_collapse_rounding
 @test/operations/runtest-scope_over_materialized
 @test/operations/runtest-shipped_kernels_alone
 @test/operations/runtest-simplify_const_left_sub

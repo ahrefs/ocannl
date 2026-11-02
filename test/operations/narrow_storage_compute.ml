@@ -31,6 +31,12 @@ module Asgns = Ir.Assignments
 module Tn = Ir.Tnode
 module L = Ll_test
 
+(* The C compiler's own contraction pinned off, before the first compile (gh-ocannl-1696): the
+   native-fp16 leg compares a vectorized half kernel with its serial twin bitwise on products half
+   cannot hold exactly ([a *. b + a]), and on an AVX512-FP16 host gcc's default [-ffp-contract=fast]
+   may fuse one shape's scalar product into its add and not the other's (gh-ocannl-1679). The claims
+   are about OCANNL's renderings, not that licence. *)
+let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 
 open Verdict.Claims

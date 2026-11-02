@@ -1552,10 +1552,12 @@ type optimized = {
           discharge pad guards on the intrinsic path. *)
   flip_candidates : flip_candidate list;
       (** gh-555: the searchable inlining decision dimensions of this compile, one per node, most
-          expensive first by each node's most expensive alternative, as decided at the whole-routine
-          specialization (schedule-transform copies inherit the whole-routine list). Excluded: nodes
-          never assigned or never read, scalar constexprs and pure one-hot selector producers, and
-          nodes placed by legality, intent or observability rather than the heuristic policy. *)
+          expensive first by each node's most expensive alternative, equal costs in program order
+          (the node's first access in the raw lowered code, gh-ocannl-1777; never node id, which
+          follows construction order), as decided at the whole-routine specialization
+          (schedule-transform copies inherit the whole-routine list). Excluded: nodes never assigned
+          or never read, scalar constexprs and pure one-hot selector producers, and nodes placed by
+          legality, intent or observability rather than the heuristic policy. *)
   spliced_rbw : Set.M(Tnode).t;
       (** gh-610 review round 6: the nodes whose [read_before_write] was set by the FINAL-code
           reconciliation (a spliced read preceding, or not definitely covered by, the routine's own
@@ -1696,9 +1698,14 @@ val simplify_llc : Indexing.static_symbol list -> t -> t
 
     Exact: every rewrite preserves IEEE results (the [x * 1] and [x - (+0)] identities, constant
     folding, guard folds); integer arithmetic is reassociated as {!fp_algebra_step} does with no
-    licence. The licensed floating-point algebra runs once, on the raw lowering, in the rewrite tier
-    member [Fp_algebra] (gh-ocannl-998), so neither this pass nor the schedule transforms that rerun
-    it can contract or reassociate across an inlining boundary. *)
+    licence. A single-assignment [Local_scope] is collapsed into its reader only where its rounding
+    to its own precision is not part of the value (gh-ocannl-1788): the slot evaluates at the
+    scope's precision, or the value is a load whose storage precision the scope's widens exactly
+    ([Ops.widens_exactly]). A leaf it does not rewrite keeps its annotation, so a [?prelowered]
+    routine's request on a load still reaches {!validate_operand_precisions} at codegen. The
+    licensed floating-point algebra runs once, on the raw lowering, in the rewrite tier member
+    [Fp_algebra] (gh-ocannl-998), so neither this pass nor the schedule transforms that rerun it can
+    contract or reassociate across an inlining boundary. *)
 
 val without_node_bounds : (unit -> 'a) -> 'a
 (** Runs the thunk with interval folding ({!simplify_llc} and the transforms' trailing

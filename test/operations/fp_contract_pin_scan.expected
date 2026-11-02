@@ -1,0 +1,115 @@
+case: a pinned claim is listed as pinned: true
+case: a marked claim is listed with its kind: true
+case: a claim with neither pin nor marker is refused: true
+case: a claim in capitals is a claim too: true
+case: a pin to another mode is no pin: true
+case: a marker of an unknown kind is refused: true
+case: a one-word reason is refused: true
+case: a sentinel that does not open its comment is refused: true
+case: two markers are refused: true
+case: a pin and a marker together are refused: true
+case: a marker with no claim is refused: true
+case: the word in a comment is no claim: true
+every test source lexes: true
+the walk read the arrayjit package's test sources too: true
+some listed source pins the mode in-process: true
+some listed source carries a marker: true
+every test source claiming bitwise equality pins cc_backend_fp_contract=off or carries one well-formed marker, and every marker disposes of a claim: true
+
+Kinds:
+exact-operands -- every product and partial sum is exact at the compared precision, so a fused multiply-add rounds where the separate ones do: nowhere
+no-contraction -- the compared values involve no floating product feeding an add: nothing for the compiler to fuse
+same-shape -- on cc, both sides run the same kernel code, so they contract alike
+gated -- the claim reads the kernel's flags and target at run time and skips where they differ
+not-cc -- only a GPU backend evaluates the claim; cc skips it
+not-executed -- no claim is about executed values: fixtures, codegen text, host arithmetic
+
+Test sources whose string literals claim bitwise equality:
+test/operations/autotune_grid_record.ml -- exact-operands: Ll_test.exact_partials derives the operands' sums exact at f32
+test/operations/autotune_seeded_seed.ml -- not-cc: the value claims hold only where CUDA or HIP seeds or splits; cc skips them
+test/operations/bf16_subnormal_storage.ml -- no-contraction: the legs copy, convert, add or halve; no product feeds an add
+test/operations/branchless_select.ml -- exact-operands: selects, adds and a pool gradient multiplying dyadic weights by one
+test/operations/coalesce_numerics.ml -- not-cc: the executed bitwise claims are gated on a hardware grid, so cc skips them
+test/operations/codegen_text_scan_cases.ml -- not-executed: the bitwise text is fixture prose a codegen-text scan classifies
+test/operations/cost_model_fill.ml -- not-executed: the bitwise claim compares cost-model scores computed in OCaml
+test/operations/cost_model_transactions.ml -- not-executed: the bitwise claims compare cost-model legs computed in OCaml
+test/operations/cpu_parallel.ml -- same-shape: one compiled pure-add routine runs twice and its results are compared
+test/operations/cuda_like_builtins_emulation.ml -- no-contraction: host probes of RNG-bit and fp8 conversion helpers, no multiply-add
+test/operations/division_special_values.ml -- no-contraction: every kernel divides or takes a reciprocal of a stored operand; no product feeds an add, so contraction has nothing to fuse.
+test/operations/epilogue_fusion_single_trip_sweep.ml -- exact-operands: quarters and small integers, every sum far inside f32's mantissa
+test/operations/fixed_name_temporaries.ml -- no-contraction: the claim compares two threefry draws converted to uniform floats
+test/operations/fp_contract_pin_scan.ml -- not-executed: its bitwise text is fixture sources and claim names, no kernels
+test/operations/fp_licence_values.ml -- pinned off
+test/operations/fragment_scope_move_legality.ml -- not-cc: executed parity needs a GPU advertising a half tile; C backends compile nothing
+test/operations/gebp_padded_parity.ml -- exact-operands: Bench_gebp products are multiples of an eighth and every sum stays exact in f32
+test/operations/gpu_packed_prec.ml -- no-contraction: each lane does one operation, an explicit fma among them; no product meets an add
+test/operations/grid_launch_floor.ml -- exact-operands: Bench_gebp products are multiples of an eighth and every sum stays exact in f32
+test/operations/lineage_recompile_step.ml -- exact-operands: integer inputs, eighth-step weights and a dyadic rate stay exact for the three steps
+test/operations/masked_persistent_fragment.ml -- not-cc: executed claims need a GPU advertising an f16 tile; cc skips them
+test/operations/matmul_interchange.ml -- exact-operands: positive quarters and eighths with an explicit fma; every gradient sum is exact
+test/operations/model_seeded_anchor.ml -- not-cc: the bitwise claim is gated on CUDA or HIP model seeding; cc skips it
+test/operations/narrow_storage_compute.ml -- pinned off
+test/operations/nonoverlap_pool_grads.ml -- exact-operands: small integer inputs and a unit loss gradient; every max, product and sum exact
+test/operations/prefix_scan.ml -- exact-operands: every product multiplies by an exact 0/1 selector, and the integer data's sums are derived exact below
+test/operations/print_tree_one_recompute.ml -- exact-operands: integer inputs and small integer polynomials, exact in f32
+test/operations/ptx_target_parity.ml -- not-cc: the floor-versus-native claims need CUDA PTX compiles; cc skips them
+test/operations/recompute_on_read.ml -- exact-operands: inputs are eighths and the elementwise products stay exact in f32
+test/operations/reduction_sink.ml -- same-shape: on cc seeded_default sinks nothing, so both sides compile the same kernel
+test/operations/runtime_integer_power.ml -- not-cc: the mirror claim runs on CUDA, HIP and Metal; cc's pow is libm and skipped
+test/operations/runtime_power_fast_math_emulation.ml -- no-contraction: host probes of pow helpers: multiply chains and bit casts, no add
+test/operations/schedule_batch_grid.ml -- exact-operands: products are small multiples of an eighth and sums stay exact in f32
+test/operations/schedule_batched_mma.ml -- exact-operands: dyadic cycles, and Ll_test.exact_partials for the bf16 leg
+test/operations/schedule_coalesce.ml -- exact-operands: every executed leg derives Ll_test.exact_partials over its cycles
+test/operations/schedule_contraction_nest.ml -- exact-operands: half-integer times quarter-step cycles, Ll_test.exact_partials for bf16
+test/operations/schedule_conv_gemm.ml -- exact-operands: small integer inputs, kernels and bias make every product and sum exact
+test/operations/schedule_epilogue_fusion.ml -- exact-operands: quarter-step and integer operands make every product and sum exact
+test/operations/schedule_mma_matmul.ml -- exact-operands: dyadic or derived-exact operands; the full-mantissa leg has an explicit fma on both sides
+test/operations/schedule_pack_mma_matmul.ml -- exact-operands: dyadic cycles times integers make every product and sum exact
+test/operations/schedule_pad.ml -- gated: the non-dyadic serial-twin claim reads the kernel flags and the FMA ISA first
+test/operations/schedule_pipelined_matmul.ml -- not-cc: the bitwise legs need shared placement, which the C backends refuse
+test/operations/schedule_split_reduce.ml -- pinned off
+test/operations/scope_collapse_rounding.ml -- pinned off
+test/operations/seeded_default.ml -- same-shape: cc seeds no untuned default, so both sides are the plain compile
+test/operations/seeded_narrow_storage.ml -- same-shape: on cc both seeded and model defaults compile the plain default pipeline
+test/operations/seeded_refine_blocks.ml -- same-shape: cc seeds no untuned default, so both sides are the plain compile
+test/operations/seeded_split_reduce.ml -- same-shape: on cc seeded_default splits nothing, so both kernels are the default plan
+test/operations/simplify_if_narrowing.ml -- no-contraction: the executed cases are guarded copies and selects
+test/operations/simplify_rng_operands.ml -- no-contraction: threefry bit draws and their uniform conversions, no product feeding an add
+test/operations/split_reduce_block_hoist.ml -- exact-operands: the only product multiplies by the unit loss gradient, so fusing it rounds nothing
+test/operations/split_reduce_pair.ml -- exact-operands: sixteenths: every product and sum is exact in f32
+test/operations/tensorized_census_scan_cases.ml -- not-executed: the bitwise text is synthetic sources for the census scan's label rule
+test/operations/test_uniform_odd_sizes.ml -- no-contraction: uniform draws: bit conversions and an exact power-of-two scale
+test/operations/test_uniform_virtual_lane.ml -- no-contraction: uniform draws times one, converted with an exact power-of-two scale
+test/operations/tf32_reference_rounding.ml -- exact-operands: weights of one and zero and an explicit-fma split; the hardware leg is GPU-only
+test/operations/tile_bf16_row_groups.ml -- exact-operands: an explicit fma by one and minus zero for every bf16 code, exact for every input
+test/operations/tile_mma_declines.ml -- exact-operands: quarters times small integers, every sum exact in f32
+test/operations/tile_mma_geometry.ml -- exact-operands: quarter, integer and half-step cycles, exact at f32, bf16 and half
+test/operations/tile_mma_narrow.ml -- exact-operands: dyadic operands keep every product and sum exact, the native f16 accumulators included
+test/operations/tune_footprint_default.ml -- exact-operands: small integer operands make every sum of products exact in f32
+test/operations/uint4x32_fixed_index_parity.ml -- no-contraction: threefry draws from an inlined and a materialized counter: bit operations only
+test/operations/vec_signed_zero.ml -- exact-operands: eighths and signed zeros; the fma leg is an explicit fma in both kernels
+test/operations/verdict_ratchet.ml -- not-executed: the bitwise text is a scan's fixture sources and justification prose
+test/operations/winograd_conv.ml -- exact-operands: bounded integer fixtures with dyadic transforms, every sum exact in f32
+test/operations/wrap_prec_convert.ml -- no-contraction: a same-precision wrap readback compared with host data is a pure copy
+test/operations/zero_elision.ml -- pinned off
+test/support/tensorized_census_scan.ml -- not-executed: a scan reader matching the word in claim labels
+
+Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:106879e8d84d7b106e818ac1ddc61a4f] listed as pinned
+  [scanner-refusal:777651b1b86abfe512e2d3a3f485ce6d] marked claim is
+  [scanner-refusal:0917e598d504b434f3e3c9567742fcc6] claim with neither
+  [scanner-refusal:9d3c109a283ee3d6803e356b583bdff2] claim in capitals
+  [scanner-refusal:3ef51a84cfe8ca3b03690fcda8b63c21] to another mode
+  [scanner-refusal:19ba2d6c29ec6da6833b4f6102b96167] an unknown kind
+  [scanner-refusal:6a15033dd60a8451f9ff4ba97f4280cb] one-word reason is
+  [scanner-refusal:be5184012422a01273ca348715955f05] sentinel that does
+  [scanner-refusal:b79e2ebc86bfefafc47281afbf5f0550] markers are refused
+  [scanner-refusal:3237007207743bc53ec1c1951d1214b7] together are refused
+  [scanner-refusal:b52b141cf7d13778997e41d81205de03] claim is refused
+  [scanner-refusal:e28d8e210f8906b6927a78032d5a7f50] case the word
+  [scanner-refusal:5af7923d754adb0ac1030df866493123] every test source
+  [scanner-refusal:b30b6b3be7749ff984d2979f5a8fe292] arrayjit package's test
+  [scanner-refusal:3cf4cde03d1a75d1846d0bbad2327014] the mode in-process
+  [scanner-refusal:cd11cea99124c2fa6c076ec8734ee25f] listed source carries
+  [scanner-refusal:9bedd04370c001da7559696548d4a37b] cc_backend_fp_contract=off
+End of synthetic controls.

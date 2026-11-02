@@ -158,8 +158,11 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
             with
             | [] -> None
             | dirs -> Some (fc.LL.fc_tn, dirs))
-        |> List.sort ~compare:(fun (ta, da) (tb, db) ->
-            match Int.compare (cheapest da) (cheapest db) with 0 -> Tn.compare ta tb | c -> c)
+        (* Stable: equal costs keep the surface's order, which is program order among ties
+           (gh-ocannl-1777) -- a node-id tie-break would let unrelated node minting move the cut and
+           the acceptance order below. *)
+        |> List.stable_sort ~compare:(fun (_, da) (_, db) ->
+            Int.compare (cheapest da) (cheapest db))
       in
       let considered = List.take all max_candidates in
       let bp_dropped = List.length all - List.length considered in
@@ -180,7 +183,8 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
                   let fp = score [ (tn, dir) ] in
                   let relief = bp_baseline.LL.fp_total - fp.LL.fp_total in
                   logf "candidate %s (%s): recompute cost %d, solo relief %d bytes"
-                    (Tn.debug_name tn) (direction_name dir) fa.LL.fa_recompute_cost relief;
+                    (Tn.debug_name tn [@message_only "a memory-budget log line"])
+                    (direction_name dir) fa.LL.fa_recompute_cost relief;
                   (dir, fa.LL.fa_recompute_cost, relief)) ))
       in
       (* Descending by relief per unit of recompute cost, then by relief. *)
@@ -193,9 +197,10 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
       in
       (* A node ranks where its best direction does. *)
       let ranked =
-        List.sort scored ~compare:(fun (ta, da) (tb, db) ->
+        (* Stable, as above: ties keep the cheapest-first order. *)
+        List.stable_sort scored ~compare:(fun (_, da) (_, db) ->
             let best d = List.min_elt d ~compare:by_ratio |> Option.value_exn in
-            match by_ratio (best da) (best db) with 0 -> Tn.compare ta tb | c -> c)
+            by_ratio (best da) (best db))
       in
       (* Round 2: accept a prefix, re-scoring the CUMULATIVE vector each time. Inlining one node
          moves the others' live spans, so a candidate's solo relief is not what it is worth here. A
@@ -214,9 +219,10 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
          the group (no group is reconsidered once discarded — this is a bounded planner, not a
          search over subsets). - equal: the group is merely neutral. Commit the candidate alone but
          KEEP holding it: committing it would pay recompute for zero bytes, and discarding it would
-         throw away a flip that may still be half of a later pair. Dropping neutral holds eagerly
-         measurably costs relief (on test/operations/memory_budget_planner's step, 1196164 ->
-         1228932 bytes).
+         throw away a flip that may still be half of a later pair. (The measurement once cited here,
+         1196164 -> 1228932 bytes on test/operations/memory_budget_planner's step, was taken under
+         proxy costs that depended on node uids, gh-ocannl-1777; with those fixed the step reaches
+         1229060 bytes under either policy on cc, so the case rests on the pairing argument.)
 
          Speculatives never joined by a paying flip are discarded at the end, so no recompute is
          ever paid for zero bytes. The relief of a joint commit is reported on the flip that closed
@@ -225,7 +231,9 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
       (* Held (node, recompute cost) pairs, most recently held first. *)
       let speculative = ref [] in
       let names l =
-        String.concat ~sep:", " (List.map l ~f:(fun ((tn, _), _) -> Tn.debug_name tn))
+        String.concat ~sep:", "
+          (List.map l ~f:(fun ((tn, _), _) ->
+               (Tn.debug_name tn [@message_only "a memory-budget log line"])))
       in
       (* One node, one group (gh-ocannl-616 review round 6): a node offering both directions has
          them scored against the same incumbent — each alone and jointly with the held group — and
@@ -273,7 +281,8 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
             in
             if marginal > 0 then (
               logf "accept %s (%s)%s: %d bytes (solo %d), cost %d%s, footprint now %d"
-                (Tn.debug_name tn) dir sibling_note marginal solo cost
+                (Tn.debug_name tn [@message_only "a memory-budget log line"])
+                dir sibling_note marginal solo cost
                 (match (verdict, held) with
                 | _, [] -> ""
                 | `Load_bearing, _ -> Printf.sprintf " jointly with %s" (names held)
@@ -299,7 +308,7 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
                  the cheaper recompute on a tie. The solo relief was measured against the original
                  baseline, which earlier accepted flips can have made stale. *)
               logf "hold %s (%s)%s: no marginal relief yet (solo was %d); speculative"
-                (Tn.debug_name tn)
+                (Tn.debug_name tn [@message_only "a memory-budget log line"])
                 (direction_name (snd dec))
                 sibling_note solo;
               speculative := (dec, cost) :: held)

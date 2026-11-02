@@ -857,11 +857,17 @@ val cpu_pack_grid_outermost : sk_grid:bool -> sk_hoist:bool -> sk_pack_rest:bool
     per-chunk packing shapes. The loop order [cpu_mma_pack_sketch_schedule] builds, and what the
     certain-traffic floor reads off a path's packing shape (gh-ocannl-1676). *)
 
-val cpu_pack_contracts : m_nk:int -> grid_outermost:bool -> bk:int -> bool
-(** Whether a packed geometry's accumulator contraction is implied: grid-outermost, with the
-    reduction-block loop running at least twice ([bk < m_nk]). Then
-    [Schedule.contract_tensorized_accumulator] mints a fresh [bm x bn] fragment at the output's
-    storage precision, which {!sketch_path_traffic_floor} prices (gh-ocannl-1676). Exposed for
+val matmul_fragment_certain : Ir.Low_level.optimized -> sketch_params -> bool
+(** Whether every application of the matmul tensorized sketch [p] to [opt] has
+    [Schedule.contract_tensorized_accumulator] mint the fresh [bm x bn] accumulator fragment, at the
+    output's storage precision, that {!sketch_path_traffic_floor} prices (gh-ocannl-1676,
+    gh-ocannl-1706). Certain where a reduction-block loop of two or more iterations encloses the
+    micro-kernel without indexing the accumulator — an outer contraction loop ([m_ko]) on every
+    tensorized form; the k-block loop of a staged GPU geometry; on the CPU packed composition,
+    either one only under the grid-outermost loop order ({!cpu_pack_grid_outermost}) — and wherever
+    pad masks on the row or column force the contraction (a staged geometry whose row or column
+    block does not divide its extent, every operand staged). The same predicates the builders' loop
+    order and staging read. [false] off the uncoalesced matmul tensorized sketches. Exposed for
     tests, which check it against the applied schedules. *)
 
 val sketch_path_traffic_floor :
@@ -885,11 +891,13 @@ val sketch_path_traffic_floor :
     at the output's storage width, where every completion below the path contracts the accumulator
     (gh-ocannl-1601): a conv row geometry whose window has a loop of two or more iterations
     ([rows x out-channels]), a staged GPU mma geometry whose reduction runs in two or more blocks
-    ([bm x bn]; a lattice box only once its largest [bk] leaves two blocks), and a CPU packed
-    geometry under a grid-outermost packing shape whose reduction runs in two or more blocks
-    ({!cpu_pack_contracts}, gh-ocannl-1676). [0] when neither family has a site or nothing is
-    certain. Composed with the floor's legs, this is what makes the family bound non-uniform across
-    the tree — the schedule-invariant floor differentiates only placements (phase 3), the increments
+    ([bm x bn]; a lattice box only once its largest [bk] leaves two blocks), and wherever
+    {!matmul_fragment_certain} says every completion contracts: an outer contraction loop of two or
+    more iterations, the grid-outermost CPU packed shapes' repeated reduction blocks, pad masks on a
+    staged row or column, the CPU whole-triple row block under an outer contraction loop
+    (gh-ocannl-1676, gh-ocannl-1706). [0] when neither family has a site or nothing is certain.
+    Composed with the floor's legs, this is what makes the family bound non-uniform across the tree
+    — the schedule-invariant floor differentiates only placements (phase 3), the increments
     differentiate the sketch-geometry subtrees. Detection runs once at partial application; the
     returned closure is cheap per path. Exposed for tests. *)
 
@@ -2458,7 +2466,8 @@ val rank_flip_candidates :
     [`Enablement] sorts family-unlocking [`Materialize] flips ([enablement] members) first and
     family-breaking [`Inline] flips (members of either set) last, cost-descending within each class.
     The unit ranked is the candidate (gh-ocannl-1017): each node's alternatives are sorted by that
-    order and the node ranks where its best-ranked alternative does, so a top-N prefix is N nodes.
+    order and the node ranks where its best-ranked alternative does, so a top-N prefix is N nodes;
+    equal ranks keep the input's order (gh-ocannl-1777: the surface's program order, never node id).
     [`Profitable] (gh-ocannl-579) is [`Enablement] weighed against [profit] per
     {!effective_flip_ordering} — the prior models expressibility, and on a device where the family
     it unlocks is measured hopeless, promotion is pure opportunity cost that displaces the winning

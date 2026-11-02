@@ -16,6 +16,8 @@
    a training run's losses unchanged. On CUDA and HIP the seeding must seed, refine and not fall
    back; elsewhere it must leave the default alone. *)
 
+(* cc-fp-contract: same-shape -- cc seeds no untuned default, so both sides are the plain compile *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

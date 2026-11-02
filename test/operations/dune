@@ -156,6 +156,7 @@
   (alias runtest-ll_test_scan_cases)
   (alias runtest-exact_partials_ratchet)
   (alias runtest-exact_partials_scan_cases)
+  (alias runtest-fp_contract_pin_scan)
   (alias runtest-operand_key_ratchet)
   (alias runtest-tensorized_census_ratchet)
   (alias runtest-tensorized_census_scan_cases)
@@ -170,6 +171,9 @@
   (alias runtest-debug_name_scan)
   (alias runtest-debug_name_scan_control)
   (alias runtest-debug_name_scan_refusal_control)
+  (alias runtest-label_dispatch_scan)
+  (alias runtest-label_dispatch_scan_control)
+  (alias runtest-label_dispatch_scan_refusal_control)
   (alias runtest-census_total_ratchet)
   (alias runtest-workflow_job_timeouts)
   (alias runtest-shell_scripts_parse)
@@ -256,6 +260,7 @@
   (alias runtest-bin_cells)
   (alias runtest-online_softmax_fast_math)
   (alias runtest-online_softmax_fp_licences)
+  (alias runtest-prefix_scan_fp_licences)
   (alias runtest-online_softmax_block_fast_math)
   (alias runtest-qkv_zero_init-approximate)
   (alias runtest-unary_math_special_values-reproducible)
@@ -316,6 +321,7 @@
   (alias runtest-exit_stream_teardown)
   (alias runtest-config_var_warnings)
   (alias runtest-config_var_fatal_spelling)
+  (alias runtest-autotune_cache_dir_records)
   (alias runtest-test_config_consistency)
   (alias runtest-render_decline_inventory)
   (alias runtest-digest_completeness)
@@ -336,6 +342,7 @@
   (alias runtest-refused_action_streams)
   (alias runtest-verdict_ratchet)
   (alias runtest-exact_partials_ratchet)
+  (alias runtest-fp_contract_pin_scan)
   (alias runtest-autotune_bound_pruning)
   (alias runtest-bandwidth_calibration)
   (alias runtest-autotune_routine_name)
@@ -371,6 +378,9 @@
   (alias runtest-debug_name_scan)
   (alias runtest-debug_name_scan_control)
   (alias runtest-debug_name_scan_refusal_control)
+  (alias runtest-label_dispatch_scan)
+  (alias runtest-label_dispatch_scan_control)
+  (alias runtest-label_dispatch_scan_refusal_control)
   (alias runtest-tensorized_census_ratchet)
   (alias runtest-provenance_tag_inventory)
   (alias runtest-census_total_ratchet)
@@ -687,6 +697,15 @@
  (libraries base ocannl stdio arrayjit.verdict))
 
 (test
+ ; ocannl-backend: none -- builds Row constraints by hand and solves their projection equations with
+ ; Row.solve_proj_equations; there is no lowering and no context in the run.
+ (name proj_var_cycle)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules proj_var_cycle)
+ (libraries base ocannl stdio unix arrayjit.verdict))
+
+(test
  ; ocannl-backend: none -- hand-built Dim_ineq/Dim_eq through Row.solve_inequalities; the solver
  ; runs before any backend is chosen.
  (name test_concat_dim_solver)
@@ -745,6 +764,49 @@
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; The prefix-scan rewrite (gh-ocannl-1758): the triangular-selector contraction (cumsum, cummax)
+; as one scan per row, forward and backward -- executed parity against the materialized-mask
+; reduction and host oracles, structure, near misses. Picks its backend from the environment.
+
+(test
+ (name prefix_scan)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules prefix_scan)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; The same executable with the floating-point licences on (gh-ocannl-998), as the `approximate`
+; profile has them: their tier member runs after this rewrite, and contraction would otherwise turn
+; the reduction's `y + v * mask` into an FMA the recognizer does not read. The golden differs in its
+; regime line only.
+
+(rule
+ ; ocannl-backend: cc -- the licences are backend-independent; the command line pins cc beside them.
+ (target prefix_scan_fp_licences.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:prefix_scan.exe}
+    --ocannl_backend=cc
+    --ocannl_fp_contract=true
+    --ocannl_fp_reassociate=true
+    --ocannl_fp_finite_math=true))))
+
+(rule
+ (alias runtest-prefix_scan_fp_licences)
+ (package neural_nets_lib)
+ (action
+  (diff prefix_scan_fp_licences.expected prefix_scan_fp_licences.actual)))
 
 ; The Winograd F(2x2, 3x3) conv rewrite (gh-ocannl-505): exact and tolerance parity against the
 ; direct form, structure, declines. Picks its backend from the environment.
@@ -1738,6 +1800,20 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1769: whether a mixed-precision cast twin rounds its f32 master to f16 under each
+; placement, executed on a master value f16 cannot represent.
+
+(test
+ (name mixed_prec_twin_rounding)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules mixed_prec_twin_rounding)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-544: operation results close down to their arguments' shapes — a use site broadcasts
 ; them in but cannot silently widen them; the [stretch] wrapper requests use-site resolution by
 ; name (also covers the shape-inferred-constant idiom that replaced [0.5 + 0.5]).
@@ -2613,6 +2689,20 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1774: Ll_test.run_linked's default prefill, and the localized-accumulator zero seed
+; against a closed form from a prefilled output.
+
+(test
+ (name default_prefill)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules default_prefill)
+ (libraries base stdio ocannl arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-878: real-graph maximum-one reachability and executed index-zero-write probe.
 
 (test
@@ -3319,6 +3409,62 @@
    %{test}
    --ocannl_autotune_timing=isolated
    --ocannl_profile=approximate)))
+
+; gh-ocannl-1766: one read of `autotune_cache_dir` behind `Autotune.resolve_cache_dir`, so an unset
+; key leaves one record in the resolved-configuration stream, held there by the reader every bench
+; driver checks its cells with (`benchmarks/config_records.py`, which refuses a key resolved two
+; ways). The executable's claims go to stdout and its stream to stderr; the reader's line for the
+; key follows the claims in the golden.
+
+(executable
+ (name autotune_cache_dir_records)
+ (modules autotune_cache_dir_records)
+ (libraries base arrayjit.utils arrayjit.autotune arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- links arrayjit.autotune (and so arrayjit.context) for
+ ; Autotune.resolve_cache_dir alone, which reads one key and opens no device.
+ (targets
+  autotune_cache_dir_records.claims
+  autotune_cache_dir_records.stream)
+ (deps
+  ocannl_config
+  (alias runtest-env_spelling_gate))
+ (action
+  (with-stdout-to
+   autotune_cache_dir_records.claims
+   (with-stderr-to
+    autotune_cache_dir_records.stream
+    (run %{dep:autotune_cache_dir_records.exe} --ocannl_log_config_json=true)))))
+
+(rule
+ ; ocannl-backend: none -- runs the stream reader in Python over the stream the rule above kept.
+ (alias runtest-autotune_cache_dir_records)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  autotune_cache_dir_records.expected
+  autotune_cache_dir_records.claims
+  autotune_cache_dir_records.stream
+  ../../benchmarks/config_records.py
+  ../../benchmarks/strict_json.py
+  (sandbox always preserve_file_kind))
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     autotune_cache_dir_records.actual
+     (progn
+      (cat autotune_cache_dir_records.claims)
+      (run
+       python3
+       %{dep:../../benchmarks/config_records.py}
+       show
+       autotune_cache_dir_records.stream
+       autotune_cache_dir)))
+    (diff
+     autotune_cache_dir_records.expected
+     autotune_cache_dir_records.actual)))))
 
 ; gh-ocannl-605: the environment and commandline spellings of a configuration key. The rule sets
 ; the synthetic keys the executable looks up -- `demo_key` in the one environment spelling that
@@ -4048,6 +4194,8 @@
   exact_partials_ratchet.ml
   exact_partials_ratchet.expected
   exact_partials_scan_cases.expected
+  fp_contract_pin_scan.ml
+  fp_contract_pin_scan.expected
   operand_key_ratchet.ml
   operand_key_ratchet.expected
   operand_key_scan_cases.expected
@@ -4066,6 +4214,10 @@
   debug_name_scan.expected
   debug_name_scan_control.expected
   debug_name_scan_refusal_control.expected
+  label_dispatch_scan.ml
+  label_dispatch_scan.expected
+  label_dispatch_scan_control.expected
+  label_dispatch_scan_refusal_control.expected
   render_decline_inventory.ml
   render_decline_inventory.expected
   ocamlformat_ignore_scan.ml
@@ -4127,6 +4279,8 @@
    ll_test_ratchet.expected,ll_test_scan_cases.expected
    exact_partials_ratchet.ml
    exact_partials_ratchet.expected,exact_partials_scan_cases.expected
+   fp_contract_pin_scan.ml
+   fp_contract_pin_scan.expected
    operand_key_ratchet.ml
    operand_key_ratchet.expected,operand_key_scan_cases.expected
    tensorized_census_ratchet.ml
@@ -4137,6 +4291,8 @@
    open_node_scan.expected,open_node_scan_control.expected,open_node_scan_refusal_control.expected,open_node_scan_cases.expected
    debug_name_scan.ml
    debug_name_scan.expected,debug_name_scan_control.expected,debug_name_scan_refusal_control.expected
+   label_dispatch_scan.ml
+   label_dispatch_scan.expected,label_dispatch_scan_control.expected,label_dispatch_scan_refusal_control.expected
    render_decline_inventory.ml
    render_decline_inventory.expected
    ocamlformat_ignore_scan.ml
@@ -4916,6 +5072,43 @@
  (modules exact_partials_scan_cases)
  (libraries base prose_lexemes test_utils arrayjit.verdict))
 
+; gh-ocannl-1696: a test source claiming bitwise equality of executed values pins
+; cc_backend_fp_contract=off or carries an in-place marker saying why contraction cannot move a bit;
+; the golden lists every such source with its disposition. Same arrangement as
+; exact_partials_ratchet. The reader's boundary is in fp_contract_pin_scan.ml's header.
+
+(executable
+ (name fp_contract_pin_scan)
+ (modules fp_contract_pin_scan)
+ (libraries base stdio prose_lexemes test_utils arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- links no backend: it reads test sources as text.
+ (targets fp_contract_pin_scan.actual fp_contract_pin_scan.filelist)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (glob_files_rec ../../test/*.ml)
+  (glob_files_rec ../../arrayjit/test/*.ml))
+ (action
+  (progn
+   (with-stdout-to
+    fp_contract_pin_scan.filelist
+    (echo "%{deps}"))
+   (with-stdout-to
+    fp_contract_pin_scan.actual
+    (run
+     %{dep:fp_contract_pin_scan.exe}
+     %{workspace_root}
+     @fp_contract_pin_scan.filelist)))))
+
+(rule
+ (alias runtest-fp_contract_pin_scan)
+ (package neural_nets_lib)
+ (action
+  (diff fp_contract_pin_scan.expected fp_contract_pin_scan.actual)))
+
 ; gh-ocannl-712: what in this tree pins the TEXT of generated code, enumerated. The blast radius of
 ; a codegen change is two populations no single search finds -- goldens holding emitted kernel or IR
 ; source, in `test/` and `arrayjit/test/` BOTH, and test sources asserting on emitted text from a
@@ -5371,7 +5564,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules narrow_storage_compute)
- (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test unix)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -7234,6 +7427,27 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1777: the flip surface and the planner's choice are invariant under unrelated node
+; minting and construction order. Lowers and plans only; it runs no training step.
+
+(test
+ (name flip_order_minting)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules flip_order_minting)
+ (libraries
+  base
+  ocannl
+  stdio
+  unix
+  arrayjit.memory_budget
+  arrayjit.verdict
+  ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  ; cc-vector-width: independent -- the tune claim is a fused-to-unfused ratio, which the width moves
  ; symmetrically.
@@ -8133,7 +8347,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules schedule_split_reduce)
- (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (libraries base ocannl stdio arrayjit.verdict ll_test unix)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -8445,6 +8659,22 @@
   (env_var OCANNL_BACKEND))
  (modules graph_exec_release)
  (libraries base ocannl stdio arrayjit.utils arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1773: a CUDA launch refused device memory for its local-memory reservation, forced
+; through the real driver and declined at once when it can never fit (cuda only; elsewhere every
+; claim skips). Its `--contended` leg, retried while a child process holds the device's memory,
+; needs the box to itself, so no alias runs it (the test's header says how).
+
+(test
+ (name cuda_launch_reservation)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules cuda_launch_reservation)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -10429,6 +10659,96 @@
    debug_name_scan_refusal_control.expected
    debug_name_scan_refusal_control.actual)))
 
+; gh-ocannl-1783: the compiler under arrayjit/lib/ reads a node's label or namespace, and a
+; backend's name, only to show them, to copy a label onto a node it mints, or at a marked site --
+; never to decide (gh-ocannl-1721, gh-ocannl-1722, gh-ocannl-1723). The reading states its closed
+; list of accepted forms in test/support/label_dispatch_scan.ml; the walker is debug_name_scan's.
+
+(executable
+ (name label_dispatch_scan)
+ (modules label_dispatch_scan)
+ (libraries base stdio test_utils arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- parses compiler sources without running a backend.
+ (target label_dispatch_scan.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (sandbox always)
+  label_dispatch_scan.ml
+  (source_tree ../../arrayjit/lib))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:label_dispatch_scan.exe}
+    %{workspace_root}
+    %{dep:label_dispatch_scan.exe}
+    %{target}
+    %{dep:ocannl_config}))))
+
+(rule
+ (alias runtest-label_dispatch_scan)
+ (package neural_nets_lib)
+ (action
+  (diff label_dispatch_scan.expected label_dispatch_scan.actual)))
+
+; The shipping scanner on a committed tree: each refused form beside the nearest accepted one,
+; the pre-gh-ocannl-1721 and pre-gh-ocannl-1722 dispatches among them. Its golden is the refusals, so
+; a scanner that stopped reading cannot pass.
+
+(rule
+ ; ocannl-backend: none -- parses a committed fixture tree without running a backend.
+ (target label_dispatch_scan_control.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (source_tree label_dispatch_scan_fixture))
+ (action
+  (with-stdout-to
+   %{target}
+   (ignore-stderr
+    (with-accepted-exit-codes
+     1
+     (run
+      %{dep:label_dispatch_scan.exe}
+      --fixture
+      label_dispatch_scan_fixture))))))
+
+(rule
+ (alias runtest-label_dispatch_scan_control)
+ (package neural_nets_lib)
+ (action
+  (diff
+   label_dispatch_scan_control.expected
+   label_dispatch_scan_control.actual)))
+
+; Each of the scanner's own refusals, reached through a synthetic input (gh-ocannl-800).
+
+(rule
+ ; ocannl-backend: none -- feeds synthetic sources to the scanner without running a backend.
+ (target label_dispatch_scan_refusal_control.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  label_dispatch_scan.ml)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:label_dispatch_scan.exe} --refusal-control))))
+
+(rule
+ (alias runtest-label_dispatch_scan_refusal_control)
+ (package neural_nets_lib)
+ (action
+  (diff
+   label_dispatch_scan_refusal_control.expected
+   label_dispatch_scan_refusal_control.actual)))
+
 ; gh-ocannl-1309: an executed claim about a tensorized routine whose item judges no mma census --
 ; parity alone also passes for a Tile_mma that declined to the scalar fallback (gh-ocannl-1283).
 ; The reader states its closed lists of recognised forms. Same arrangement as ll_test_ratchet.
@@ -10639,6 +10959,26 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1781: a gradient accumulated into without zeroing is refused once its routine has run
+; as many times as its computation allows (one, or k under Train.grad_update ~accum_steps:k) since
+; the gradient's last reset -- a zeroing routine's run or an upload; the timing loop's repeats are
+; not refused. Executed values, every backend.
+
+(test
+ ; cc-vector-width: independent -- the one search is there to restore a gradient buffer; the claims
+ ; read the ledger's accumulation history and the restored values, never what the search seeds,
+ ; keeps or crowns.
+ (name never_zeroed_grad)
+ (package neural_nets_lib)
+ (locks /ocannl_training_test)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules never_zeroed_grad)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  (name fragment_sequenced_twice)
  (package neural_nets_lib)
@@ -10646,6 +10986,20 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules fragment_sequenced_twice)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1770: a %cd statement sequence is built in source order, so the first statement naming a
+; forward root embeds its code and the later ones read it computed. Executed values, every backend.
+
+(test
+ (name cd_source_order)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules cd_source_order)
  (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
@@ -11391,6 +11745,20 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
+
+; gh-ocannl-1782: every backend's f64, f32 and half division and reciprocal over +-0, +-inf, NaN,
+; subnormal operands and overflowing and underflowing quotients, held to C's correctly rounded
+; quotient -- HIP's -ffast-math reciprocal estimate had made every f64 x / 0, x / inf and
+; overflowing quotient NaN.
+
+(test
+ (name division_special_values)
+ (package neural_nets_lib)
+ (modules division_special_values)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (libraries base ocannl stdio arrayjit.verdict ll_test))
 
 ; gh-ocannl-1336: every backend's f32, half and bfloat16 sin, cos, tanh, exp, log, exp2 and log2
 ; over the fast-math risk domains -- cc and HIP within the stated ulps, CUDA's fast intrinsics within
@@ -12257,7 +12625,14 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules scheme_payoff)
- (libraries base ocannl stdio mtime mtime.clock.os arrayjit.verdict)
+ (libraries
+  base
+  ocannl
+  stdio
+  mtime
+  mtime.clock.os
+  arrayjit.verdict
+  bench_out)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -12479,6 +12854,7 @@
 
 ; op_table_compile (gh-ocannl-1731): every in-domain (operator, precision) arm of the selected
 ; backend's operator tables renders and compiles, under every numerics policy's compute precision.
+; gh-ocannl-1768: its explicit-SIMD and select-blend renderings too, under builtin parameter guards.
 
 (test
  (name op_table_compile)
@@ -12487,7 +12863,14 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules op_table_compile)
- (libraries base ocannl stdio arrayjit.verdict test_utils ll_test))
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.builtins_metal
+  arrayjit.verdict
+  test_utils
+  ll_test))
 
 ; gh-ocannl-1747: a released lineage gives its buffers back (pool table, used-memory gauge, driver
 ; free bytes where there is a reading) and its nodes and host-init data to the GC; an unreleased one
@@ -12561,3 +12944,39 @@
  (name runtest)
  (deps
   (alias runtest-routine_log_rng_init)))
+
+(test
+ (name build_file_descriptors)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules build_file_descriptors)
+ (libraries base ocannl stdio arrayjit.verdict test_utils)
+ (preprocess
+  (pps ppx_ocannl)))
+
+; gh-ocannl-1788: simplify collapses a scope into its reader only where its rounding is not part of the
+; value; executed against the uncollapsed form under both narrow-compute policies.
+
+(test
+ (name scope_collapse_rounding)
+ (package neural_nets_lib)
+ (modules scope_collapse_rounding)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test))
+
+;; gh-ocannl-1799: shape errors raised inside a scheme trace or check, printed readably.
+
+(test
+ (name scheme_error_rendering)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules scheme_error_rendering)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))

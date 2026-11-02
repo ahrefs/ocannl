@@ -49,6 +49,9 @@
    non-dividing row split, which is what kept the bench's gate in place. A k remainder alone does
    not need the pad (its guard lands inside [k_i]), so the k-only site is no part of that pin. *)
 
+(* cc-fp-contract: exact-operands -- Bench_gebp products are multiples of an eighth and every sum
+   stays exact in f32 *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

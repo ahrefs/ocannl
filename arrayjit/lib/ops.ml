@@ -250,6 +250,20 @@ let equal_prec p1 p2 =
   | Double_prec _, _ ->
       false
 
+(** Whether every value of precision [from] converts to [to_] exactly, so that a conversion through
+    [to_] is the identity on it: equal precisions, or a float widening (fp8 into any wider float --
+    both e4m3 and e5m2 fit half's and bfloat16's exponent ranges and significands -- half or
+    bfloat16 into single or double, single into double). Integer conversions are conservatively
+    [false] (gh-ocannl-1788). *)
+let widens_exactly ~from ~to_ =
+  match (from, to_) with
+  | _ when equal_prec from to_ -> true
+  | Fp8_prec _, (Half_prec _ | Bfloat16_prec _ | Single_prec _ | Double_prec _)
+  | (Half_prec _ | Bfloat16_prec _), (Single_prec _ | Double_prec _)
+  | Single_prec _, Double_prec _ ->
+      true
+  | _ -> false
+
 let compare_prec p1 p2 =
   match (p1, p2) with
   | Void_prec, Void_prec -> 0
@@ -996,12 +1010,16 @@ let c_convert_precision ~from ~to_ =
       ("", "")
   (* BFloat16 conversions *)
   | Bfloat16_prec _, Single_prec _ -> ("bfloat16_to_single(", ")")
-  | Single_prec _, Bfloat16_prec _ -> ("single_to_bfloat16(", ")")
+  (* The [float] casts below state the precision the operand holds: an operator rendered at [single]
+     can be C-typed [int] (a comparison) or [double] (a [0.0] or [1.0 /] literal), which the
+     builtin's [float] parameter would otherwise narrow implicitly -- the conversion class the
+     parameter guards refuse (gh-ocannl-1768). Value-neutral: the call converted the same way. *)
+  | Single_prec _, Bfloat16_prec _ -> ("single_to_bfloat16((float)(", "))")
   | Bfloat16_prec _, Double_prec _ -> ("(double)bfloat16_to_single(", ")")
   | Double_prec _, Bfloat16_prec _ -> ("single_to_bfloat16((float)", ")")
   (* FP8 conversions *)
   | Fp8_prec _, Single_prec _ -> ("fp8_to_single(", ")")
-  | Single_prec _, Fp8_prec _ -> ("single_to_fp8(", ")")
+  | Single_prec _, Fp8_prec _ -> ("single_to_fp8((float)(", "))")
   | Fp8_prec _, Double_prec _ -> ("(double)fp8_to_single(", ")")
   (* One step, not via f32: see [double_to_fp8]. *)
   | Double_prec _, Fp8_prec _ -> ("double_to_fp8(", ")")

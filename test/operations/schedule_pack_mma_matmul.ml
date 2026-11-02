@@ -47,6 +47,9 @@
    legal everywhere; a unit-lane [Tile_mma] must not reach hardware simdgroup intrinsics) and the
    Grid case skips its transform; every printed boolean holds on every backend. *)
 
+(* cc-fp-contract: exact-operands -- dyadic cycles times integers make every product and sum
+   exact *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

@@ -119,6 +119,9 @@ type comp = {
       (** The gradients whose tensor-generated zeroing this computation carries (gh-ocannl-1744). *)
   accumulates : Set.M(Tn).t;
       (** The gradients its tensor-generated backprop accumulates into (gh-ocannl-1744). *)
+  accumulation_runs : int Map.M(Tn).t;
+      (** The runs one reset spans, for a gradient accumulated into without zeroing it
+          (gh-ocannl-1781); absent means one. *)
 }
 [@@deriving sexp_of]
 (** Computations based on assignments. Note: the [arrayjit] library makes use of, but does not
@@ -131,8 +134,8 @@ let no_fragments = Set.empty (module Fragment)
 let no_nodes = Set.empty (module Tn)
 
 let comp ?(owned = no_fragments) ?(requires = no_fragments) ?(zeroes = no_nodes)
-    ?(accumulates = no_nodes) ~embedded asgns =
-  { asgns; embedded_nodes = embedded; owned; requires; zeroes; accumulates }
+    ?(accumulates = no_nodes) ?(accumulation_runs = Map.empty (module Tn)) ~embedded asgns =
+  { asgns; embedded_nodes = embedded; owned; requires; zeroes; accumulates; accumulation_runs }
 
 let to_comp asgns = comp ~embedded:(Set.empty (module Tnode)) asgns
 let empty_comp = to_comp Noop
@@ -270,8 +273,9 @@ let refuse_shared_fragments l shared =
            recomputes, re-running any state update the forward carries. Sequence each fragment \
            once: a computation that embeds a fragment already carries it (Train.grad_update \
            carries its loss's forward and backprop code); in [%%cd], a statement naming a \
-           forward-root tensor embeds its forward code, so an explicit [t.forward] beside a \
-           statement naming [t] is a second copy -- drop the explicit one."
+           forward-root tensor embeds its forward code, and statements are built in source order, \
+           so an explicit [t.forward] after a statement naming [t] is a second copy -- drop it, or \
+           move it first."
           listed)
 
 let sequence l =
@@ -287,6 +291,21 @@ let sequence l =
     requires = Set.union_list (module Fragment) (List.map l ~f:(fun c -> c.requires));
     zeroes = Set.union_list (module Tn) (List.map l ~f:(fun c -> c.zeroes));
     accumulates = Set.union_list (module Tn) (List.map l ~f:(fun c -> c.accumulates));
+    accumulation_runs =
+      (* A member accumulating into a stated gradient without zeroing it, and stating nothing, takes
+         its implicit one into the minimum. *)
+      List.fold l
+        ~init:(Map.empty (module Tn))
+        ~f:(fun runs c ->
+          Map.merge_skewed runs c.accumulation_runs ~combine:(fun ~key:_ -> Int.min))
+      |> Map.mapi ~f:(fun ~key:g ~data:runs ->
+          if
+            List.exists l ~f:(fun c ->
+                Set.mem c.accumulates g
+                && (not (Set.mem c.zeroes g))
+                && not (Map.mem c.accumulation_runs g))
+          then 1
+          else runs);
   }
 
 let collect_neutral_elem (asgns : t) : float option =
@@ -1443,7 +1462,10 @@ let get_ident_within_code ?no_dots c =
   let nograd_idents = Hashtbl.create (module String) in
   let grad_idents = Hashtbl.create (module String) in
   let visit tn =
-    let is_grad, ident = Tn.no_grad_ident_label tn.Tn.label in
+    let is_grad, ident =
+      Tn.no_grad_ident_label
+        (tn.Tn.label [@label_read "minting display identifiers for the generated code"])
+    in
     let idents = if is_grad then grad_idents else nograd_idents in
     Option.iter ident
       ~f:

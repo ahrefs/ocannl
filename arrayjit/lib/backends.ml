@@ -348,7 +348,10 @@ let score_footprint ~(facts : backend_facts) ~(limits : hardware_limits)
   let bump ~what group =
     let _, segment_sizes =
       plan_pool_segments ~cap ~what
-        ~debug_name:(fun i -> Tn.debug_name (fst (List.nth_exn group i)))
+        ~debug_name:(fun i ->
+          (Tn.debug_name
+             (fst (List.nth_exn group i))
+           [@message_only "names a pool member in the segment planner's log"]))
         (layout_items group)
     in
     List.fold segment_sizes ~init:0 ~f:( + )
@@ -407,7 +410,10 @@ let aliased_read_error ~what tn =
    now the static [check_merge_buffer_static] performed at link time (gh-ocannl-288); this remains
    as a defensive backstop for transfers that are scheduled without a downstream link. *)
 let check_merge_buffer device ~code_node =
-  let name = function Some tn -> Tnode.debug_name tn | None -> "none" in
+  let name = function
+    | Some tn -> ( Tnode.debug_name tn [@message_only "names the node in the mismatch error"])
+    | None -> "none"
+  in
   match (device.updating_for_merge_buffer, code_node) with
   | _, None -> ()
   | Some (actual, _), Some expected when Tnode.equal actual expected -> ()
@@ -424,7 +430,10 @@ let check_merge_buffer device ~code_node =
    linked [code] expects. This is the "static verification in the right direction" of gh-ocannl-288:
    the transfer routine's context chains naturally into the consumer's link. *)
 let check_merge_buffer_static ~merge_buffer_node ~code_node =
-  let name = function Some tn -> Tnode.debug_name tn | None -> "none" in
+  let name = function
+    | Some tn -> ( Tnode.debug_name tn [@message_only "names the node in the mismatch error"])
+    | None -> "none"
+  in
   match (merge_buffer_node, code_node) with
   | _, None -> ()
   | Some actual, Some expected when Tnode.equal actual expected -> ()
@@ -1238,7 +1247,10 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       | None ->
           let assignments, segment_sizes =
             plan_pool_segments ~cap ~what:"Backends.allocate_delta"
-              ~debug_name:(fun i -> Tn.debug_name (fst (List.nth_exn group i)))
+              ~debug_name:(fun i ->
+                (Tn.debug_name
+                   (fst (List.nth_exn group i))
+                 [@message_only "names a pool member in the segment planner's log"]))
               (layout_items group)
           in
           let seg_align = Array.of_list_map segment_sizes ~f:(fun _ -> 1) in
@@ -1406,7 +1418,10 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       if gl.gl_arena && log_buffer_aliasing () then
         let _, bump_sizes =
           plan_pool_segments ~cap:(pool_cap ()) ~what:"Backends.allocate_delta"
-            ~debug_name:(fun i -> Tn.debug_name (fst (List.nth_exn gl.gl_group i)))
+            ~debug_name:(fun i ->
+              (Tn.debug_name
+                 (fst (List.nth_exn gl.gl_group i))
+               [@message_only "names a pool member in the segment planner's log"]))
             (layout_items gl.gl_group)
         in
         let dedicated = List.fold bump_sizes ~init:0 ~f:( + ) in
@@ -1965,8 +1980,15 @@ let accepted_names =
 
 let get_backend ?backend_name () =
   let name =
-    Option.value_or_thunk backend_name ~default:(fun () ->
-        Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+    Option.value_or_thunk
+      (backend_name [@label_read "the user's choice of a backend by name: this IS the selection"])
+      ~default:(fun () ->
+        (* The key's one default is [""], as [Context.auto] reads it, where it means "probe"; here
+           an unset key means [cc]. Two defaults would resolve one unset key two ways, and the
+           resolved-configuration stream would carry both (gh-ocannl-1766). *)
+        match Utils.get_global_arg ~arg_name:"backend" ~default:"" with
+        | "" -> "cc"
+        | name -> name)
     |> String.lowercase
   in
   match List.Assoc.find accepted_names ~equal:String.equal name with

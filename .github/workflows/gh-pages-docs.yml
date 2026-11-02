@@ -88,7 +88,18 @@ jobs:
         run: pandoc --from=markdown+tex_math_dollars+tex_math_single_backslash --to=html5 --section-divs --katex --toc -s --embed-resources --css=docs/html/style.css docs/blog/a-tensor-is-not-its-storage.md -o docs/html/a-tensor-is-not-its-storage.html
 
       - name: Update apt package index
-        run: sudo apt-get update
+        # Capped and retried: ci.yml's matrix-job copy says why (gh-ocannl-1809).
+        run: |
+          for attempt in 1 2; do
+            rc=0
+            sudo timeout --kill-after=15 240 apt-get update -o Acquire::Retries=3 \
+              -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 || rc=$?
+            [ "$rc" -eq 0 ] && exit 0
+            case $rc in 124|137) last="stalled past 240s (apt mirror stall)" ;; *) last="failed with exit $rc" ;; esac
+            echo "::warning title=apt-get update::attempt $attempt of 2 $last"
+          done
+          echo "::error title=apt-get update::sudo apt-get update did not complete in 2 capped attempts; the last $last. The apt index refresh precedes the change under test: re-run the job."
+          exit 1
 
       # texlive is 180 MB from the runner's mirror, which on a slow run serves
       # it at tens of kB/s and outlives the job's ceiling (gh-ocannl-1546); the

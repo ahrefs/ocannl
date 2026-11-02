@@ -1,0 +1,22 @@
+the update accumulates into w's gradient without zeroing it: true
+one run: w.grad = 2w: true
+the second run is refused, naming the gradient, the routine and the missing reset: true
+the refusal dispatched nothing: w.grad = 2w: true
+an upload of the gradient resets it: true
+reset by upload, run: w.grad = 2w: true
+a second such cycle: the same: true
+reset before each step: w.grad = 2w: true
+the refusal names the lineage's zeroing routine, which has not run since: true
+the reset, then the step: w.grad = 2w: true
+a micro-step states its span for the leaf gradient: true
+a plain update states none: true
+sequenced with an accumulator stating nothing, the span is its implicit one: true
+a cycle of two micro-steps: w.grad = 2w: true
+the third micro-step is refused, naming the declared span: true
+the next cycle: w.grad = 2w: true
+two micro-steps over the seed: w.grad = 2w: true
+refused, and no routine of the lineage zeroes it: true
+the autotuner's timing loop repeats an accumulating routine: true
+the reset, then the step: w.grad = 2w: true
+a run after a withdrawn one: true
+the search restored the gradient: w.grad = 2w: true

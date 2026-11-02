@@ -27,7 +27,10 @@ files.
   carry observation intent like a parameter's. Optimizing an input therefore takes `?params` on the
   step and needs a DATA-BACKED leaf (`Operation.init`): a `term_init` below
   `limit_constant_fill_size` is a fetch op its forward code re-establishes every run, undoing the
-  step. Executed: `require_grad_leaves.ml`; the saliency host read, `observable_grads.ml` leg 4.
+  step. `sgd_update` refuses any stepped node a `Fetch` in the loss's forward writes, naming
+  `Operation.init` (gh-ocannl-1776); the per-tensor `sgd_one` sees no loss and does not check.
+  Executed: `require_grad_leaves.ml` (section 3 runs the trap through `sgd_one`); the saliency
+  host read, `observable_grads.ml` leg 4.
 - Training-loop utilities (gh-465, `lib/train.ml`): `Lr_schedule` (host floats; feed via
   `scheduled_learning_rate`'s data-backed `host_scalar` — a fetch-defined constant would be
   re-fetched each step, undoing `set_values`), `grad_l2_norm`/`clip_by_global_norm` +
@@ -35,7 +38,8 @@ files.
   can be recomputed on the host from the buffers to cross-check), `grad_update ~accum_steps` +
   `zero_params_grads` (leaf-gradient zeroing is filtered OUT of the micro-step's `zero_grads` tree
   by matching the leaves' grad `Fetch`es; intermediate grads must keep their per-micro-step zeroing
-  since backprop `=+` relies on it), `Outlier_detector` (z-score vs sliding window; nan during
+  since backprop `=+` relies on it; the micro-step states its span, so the caller's cycle reset is
+  still owed and `Context.run` refuses run k+1 without it, gh-ocannl-1781), `Outlier_detector` (z-score vs sliding window; nan during
   warmup, and a constant window gives std 0 → infinite z). Executed parity: `loop_utils.ml`.
 - Plots (`PrintBox_utils.plot`, gh-ocannl-103) draw their tick labels and legend AROUND the upstream
   `printbox-ext-plot` canvas (its `axes = false` rendering, through an extension of our own with a
@@ -903,10 +907,10 @@ files.
   pins, hermetic environment, supervision and records check, one process per call, exit 125 when a
   group survives its cleanup. No driver reads the prose `log_config_sourcing` trace any more --
   `config_records.py expect FILE KEY=VALUE...` is the check over a stderr a driver kept itself, and
-  `test_cells.py` refuses a driver that names the prose trace. Two traps the conversion met: a tuned
-  cell must pin `autotune_cache_dir` (`Autotune.resolve_cache_dir` reads it under two defaults, so a
-  defaulted key resolves two ways and the reader refuses the cell, gh-ocannl-1697), and a driver
-  that measures revisions older than the stream (gh-ocannl-1566) cannot use it at all
+  `test_cells.py` refuses a driver that names the prose trace. The reader refuses a key resolved
+  two ways in one process, which an unset key read under two defaults would be:
+  `test_config_consistency` holds every key's literal defaults to one value (gh-ocannl-1766). A
+  driver that measures revisions older than the stream (gh-ocannl-1566) cannot use it at all
   (`gh1051_boundary_split.sh`, README).
 - **Interleaved timing visits arms in `Bench_design`'s spread mirrored rotation** (`bin/bench_design.ml`,
   gh-ocannl-743). Mirroring each batch cancels LINEAR drift (every pair exchanged, equal mean

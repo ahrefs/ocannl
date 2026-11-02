@@ -410,6 +410,25 @@ val taint_session : provenance:string -> unit
 val exn_summary : exn -> string
 (** The message of a [Row.Shape_error] or [Utils.User_error], else the printed exception. *)
 
+val reserved_id_base : int
+(** The base of the reserved range from which a window that is always rewound -- a shape-scheme
+    trace, a definition check -- allocates its tensors' ids, above every session id
+    (gh-ocannl-1751). [Tensor] allocates from it; {!error_to_string_hum} recognizes such ids. *)
+
+val error_to_string_hum : string -> Row.error_trace list -> string
+(** [error_to_string_hum msg trace] renders a [Row.Shape_error (msg, trace)] for a person
+    (gh-ocannl-1799): the message, then one indented line per finding -- the conflicting sizes or
+    rows (or the one axis or row the message is about), the shapes involved, the failed constraint
+    (with [⊑] for "refines", as in [Tensor.Scheme.to_string]), and the tensors it relates with their
+    axis kinds and the operation that related them. Variables are named by first appearance (['a],
+    ..['b].., followed by [:<name>] for a named dimension variable), and a tensor of a trace or a
+    check, whose id comes from the reserved range, by first appearance too ([n'1], [#'1]), so the
+    text depends on neither the session's id counters nor the reserved ones; a session tensor keeps
+    its id. This is what [Printexc.to_string] -- and so the toplevel -- prints for a
+    [Row.Shape_error] (prefixed ["Shape_error: "]), and what its sexp converter ([Exn.to_string])
+    carries, one atom per line; the setting [shape_error_full_sexp=true] restores the full
+    constraint sexp to both. *)
+
 val with_taint_on_failure : describe:(exn -> string) -> (unit -> 'a) -> 'a
 (** Runs [f]; if it raises after the session was mutated, taints the session with [describe exn],
     then re-raises with the original backtrace. *)
@@ -448,6 +467,7 @@ type registration_counts = {
   inline_constraints : int;
   closures : int;
   closure_constraints : int;
+  rank_search_visits : int;
 }
 [@@deriving sexp_of]
 (** Registration statistics (gh-ocannl-1752), process-wide since the last reset: checked [%op]
@@ -458,7 +478,10 @@ type registration_counts = {
     scheme instantiation's renamed trace constraints (C'), its renamed solution equations (E'), and
     its boundary and anchor equations -- checked instantiations included, though their window is
     rewound -- and every registration's own inequalities outside a trace. [closure_constraints] sums
-    the store's size at the entry of each [finish_inference] ([closures] counts them). *)
+    the store's size at the entry of each [finish_inference] ([closures] counts them).
+
+    [rank_search_visits] is the rank-cycle search's work counter (gh-ocannl-1802): the states it
+    visited, for every rank fact recorded since the reset, inside traces too. *)
 
 type registration_times = {
   tracing_s : float;

@@ -24,6 +24,9 @@
    The negative pin: a pad guard over an operand read in place (no zero-fringe staged tile) must be
    rejected — the intrinsic path would read out of bounds. *)
 
+(* cc-fp-contract: gated -- the non-dyadic serial-twin claim reads the kernel flags and the FMA ISA
+   first *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

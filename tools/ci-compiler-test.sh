@@ -12,6 +12,10 @@
 #                     invoke this cross compiler as well as the host compiler.
 #   --dry-run         Validate arguments, create the scratch layout, and print
 #                     every fetch/extract/test step without fetching or running.
+#   --toolchain DIR   Keep the GCC 13 in DIR (absolute) rather than in scratch:
+#                     staged there on first use, reused unfetched afterwards
+#                     (gh-ocannl-1696; minix keeps one at
+#                     /home/lukstafi/.local/opt/x86_64-linux-gnu-gcc-13).
 #   --keep            Keep the scratch directory even on success (a failing
 #                     run always keeps it, so the build tree's diagnostics --
 #                     e.g. cc_march_census_kernels/<piece>/rows.txt -- survive it;
@@ -28,7 +32,10 @@
 #
 # The real fetch is Linux/Debian-family only: it deliberately uses the
 # no-root recipe established by gh-ocannl-752, `apt-get download` followed by
-# `dpkg-deb -x` into a temporary prefix. --dry-run is portable and is the
+# `dpkg-deb -x` into a temporary prefix. The GCC 13 packages come from an
+# isolated scratch index over Ubuntu 24.04 (noble), the series ubuntu-latest
+# runs, so a newer host's own gcc-13 (resolute's 13.4) cannot stand in for
+# CI's 13.3 (gh-ocannl-1696). --dry-run is portable and is the
 # supported way to inspect and validate the staging plan elsewhere. The real
 # host must be x86_64 because the fetched compiler produces executable x86_64
 # cc kernels, not merely cross-compiled assembly.
@@ -64,6 +71,7 @@ aarch64_clang=0
 jobs=4
 cap=3600
 alias_name=
+toolchain=
 
 while [ $# -gt 0 ]; do
   case $1 in
@@ -74,6 +82,11 @@ while [ $# -gt 0 ]; do
     --dry-run)
       dry_run=1
       shift
+      ;;
+    --toolchain)
+      [ $# -ge 2 ] || die "--toolchain needs a directory"
+      toolchain=$2
+      shift 2
       ;;
     --keep)
       keep=1
@@ -101,6 +114,10 @@ done
 
 case $jobs in 1 | 2 | 3 | 4) ;; *) die "jobs must be between 1 and 4" ;; esac
 case $cap in '' | *[!0-9]*) die "cap must be a non-negative integer" ;; esac
+case $toolchain in
+  '' | /*) ;;
+  *) die "--toolchain must be an absolute directory: $toolchain" ;;
+esac
 case $alias_name in
   @*/runtest-?*) ;;
   '') usage ;;
@@ -183,6 +200,13 @@ build_dir="$scratch/dune-build"
 wrapper_dir="$scratch/bin"
 mkdir -p "$deb_dir" "$prefix" "$build_dir" "$wrapper_dir" ||
   die "cannot stage scratch directories"
+# GCC 13's packages go to their own prefix: scratch's by default, the
+# persistent --toolchain directory when one is named, which then holds GCC 13
+# alone (the clang proxy's packages always stay in scratch).
+gcc_prefix=${toolchain:-$prefix}
+gcc_deb_dir="$scratch/gcc-debs"
+gcc_suite=noble
+gcc_keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg
 
 gcc_packages=(gcc-13-x86-64-linux-gnu cpp-13-x86-64-linux-gnu libgcc-13-dev)
 clang_packages=(clang-21 libclang-cpp21 libllvm21 libclang-common-21-dev)
@@ -200,7 +224,8 @@ echo "test alias:       $alias_name"
 echo "dune jobs:        $jobs"
 echo "test cap:         ${cap}s"
 echo "scratch:          $scratch"
-echo "host toolchain:   GCC 13 x86_64-linux-gnu (Ubuntu CI proxy)"
+echo "host toolchain:   GCC 13 x86_64-linux-gnu from Ubuntu $gcc_suite (Ubuntu CI proxy)"
+echo "toolchain prefix: ${toolchain:-scratch (pass --toolchain DIR to keep it)}"
 echo "real host:        x86_64 Linux with Debian-family apt indexes"
 echo "test runner:      tools/test-run.sh from the resolved repository"
 echo "environment:      clear OCANNL config, compiler selectors, and LD_* overrides"
@@ -215,10 +240,15 @@ echo "mode:             $([ "$dry_run" -eq 1 ] && echo DRY RUN || echo execute)"
 echo "=== end plan ==="
 
 if [ "$dry_run" -eq 1 ]; then
-  echo "ci-compiler-test: planned package download (host compiler):"
-  print_command apt-get download "${gcc_packages[@]}"
-  echo "ci-compiler-test: planned extraction:"
-  print_command dpkg-deb -x '<each downloaded .deb>' "$prefix"
+  if [ -n "$toolchain" ] && [ -x "$toolchain/usr/bin/x86_64-linux-gnu-gcc-13" ]; then
+    echo "ci-compiler-test: planned reuse of the staged GCC 13 in $toolchain (no download)"
+  else
+    echo "ci-compiler-test: planned package download (host compiler):"
+    echo "  source: isolated Ubuntu $gcc_suite index signed by $gcc_keyring"
+    print_command apt-get '<isolated noble options>' download "${gcc_packages[@]}"
+    echo "ci-compiler-test: planned extraction:"
+    print_command dpkg-deb -x '<each downloaded GCC .deb>' "$gcc_prefix"
+  fi
   if [ "$aarch64_clang" -eq 1 ]; then
     echo "ci-compiler-test: planned package download (aarch64 clang proxy):"
     echo "  source: isolated https://apt.llvm.org/<VERSION_CODENAME>/ index with pinned signing key"
@@ -270,7 +300,51 @@ download_packages() {
     die "apt-get could not download the $label packages"
 }
 
-download_packages "GCC 13 host" "${gcc_packages[@]}"
+gcc_binary="$gcc_prefix/usr/bin/x86_64-linux-gnu-gcc-13"
+if [ -n "$toolchain" ] && [ -x "$gcc_binary" ]; then
+  echo "ci-compiler-test: reusing the staged GCC 13 in $toolchain (no download)"
+else
+  [ -r "$gcc_keyring" ] || die "the Ubuntu archive keyring is absent: $gcc_keyring"
+  gcc_apt="$scratch/gcc-apt"
+  mkdir -p "$gcc_apt/lists/partial" "$gcc_apt/archives/partial" "$gcc_apt/sourceparts" \
+    "$gcc_apt/trustedparts" "$gcc_deb_dir" "$gcc_prefix" ||
+    die "cannot stage the isolated $gcc_suite index"
+  : >"$gcc_apt/sources.list" || die "cannot write the isolated $gcc_suite source"
+  # An empty dpkg status too: the host's would offer its own installed gcc-13
+  # (resolute's 13.4) as the candidate, which the noble index cannot serve.
+  : >"$gcc_apt/status" || die "cannot write the isolated $gcc_suite status"
+  for s in "$gcc_suite" "$gcc_suite-updates" "$gcc_suite-security"; do
+    printf 'deb [arch=amd64 signed-by=%s] http://archive.ubuntu.com/ubuntu %s main universe\n' \
+      "$gcc_keyring" "$s" >>"$gcc_apt/sources.list" ||
+      die "cannot write the isolated $gcc_suite source"
+  done
+  gcc_apt_options=(
+    -o "Dir::Etc::sourcelist=$gcc_apt/sources.list"
+    -o "Dir::Etc::sourceparts=$gcc_apt/sourceparts"
+    -o "Dir::Etc::trusted=/dev/null"
+    -o "Dir::Etc::trustedparts=$gcc_apt/trustedparts"
+    -o "Dir::State::lists=$gcc_apt/lists"
+    -o "Dir::State::status=$gcc_apt/status"
+    -o "Dir::Cache::archives=$gcc_apt/archives"
+    -o APT::Architecture=amd64
+    -o APT::Architectures=amd64
+    -o Acquire::Languages=none
+    -o APT::Get::List-Cleanup=0
+  )
+  echo "ci-compiler-test: GCC 13 source: Ubuntu $gcc_suite (isolated scratch index)"
+  run_tracked apt-get -q "${gcc_apt_options[@]}" update ||
+    die "cannot update the isolated $gcc_suite index"
+  echo "ci-compiler-test: apt download (GCC 13 host):"
+  print_command apt-get '<isolated noble options>' download "${gcc_packages[@]}"
+  run_tracked_in "$gcc_deb_dir" apt-get "${gcc_apt_options[@]}" download "${gcc_packages[@]}" ||
+    die "apt-get could not download the GCC 13 host packages from $gcc_suite"
+  set -- "$gcc_deb_dir"/*.deb
+  [ -e "$1" ] || die "apt-get reported success but downloaded no GCC 13 .deb files"
+  for deb in "$@"; do
+    echo "ci-compiler-test: extracting $(basename "$deb") into $gcc_prefix"
+    run_tracked dpkg-deb -x "$deb" "$gcc_prefix" || die "cannot extract $deb"
+  done
+fi
 if [ "$aarch64_clang" -eq 1 ]; then
   os_release=/etc/os-release
   [ -f "$os_release" ] || die "cannot identify the Debian-family release: $os_release is absent"
@@ -321,18 +395,16 @@ if [ "$aarch64_clang" -eq 1 ]; then
   download_packages "arm64 sysroot" "${arm64_packages[@]}"
 fi
 
-set -- "$deb_dir"/*.deb
-[ -e "$1" ] || die "apt-get reported success but downloaded no .deb files"
-for deb in "$@"; do
-  echo "ci-compiler-test: extracting $(basename "$deb")"
-  run_tracked dpkg-deb -x "$deb" "$prefix" || die "cannot extract $deb"
-done
-
-gcc_binary="$prefix/usr/bin/x86_64-linux-gnu-gcc-13"
-if [ ! -x "$gcc_binary" ]; then
-  gcc_binary="$prefix/usr/bin/gcc-13"
+if [ "$aarch64_clang" -eq 1 ]; then
+  set -- "$deb_dir"/*.deb
+  [ -e "$1" ] || die "apt-get reported success but downloaded no clang .deb files"
+  for deb in "$@"; do
+    echo "ci-compiler-test: extracting $(basename "$deb")"
+    run_tracked dpkg-deb -x "$deb" "$prefix" || die "cannot extract $deb"
+  done
 fi
-[ -x "$gcc_binary" ] || die "extracted GCC 13 binary was not found under $prefix/usr/bin"
+
+[ -x "$gcc_binary" ] || die "extracted GCC 13 binary was not found at $gcc_binary"
 
 gcc_log="$scratch/gcc-invocations.log"
 gcc_wrapper="$wrapper_dir/gcc-13"

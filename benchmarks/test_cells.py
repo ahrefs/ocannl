@@ -508,7 +508,7 @@ def prose_trace_readers(root):
             continue
         for i, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
             if PROSE_TRACE.search(line):
-                found.append(f"{path.relative_to(root)}:{i}")
+                found.append(f"{path.relative_to(root).as_posix()}:{i}")
     return found
 
 

@@ -2302,8 +2302,11 @@ let time_routine ?(on_retry = fun () -> ()) ?(on_call = fun _ -> ()) ?(tag_failu
   let started = Mtime_clock.counter () in
   let saved_bindings = List.map routine.Context.bindings ~f:(fun (_ss, r) -> (r, !r)) in
   let run ctx =
-    if tag_failures then Outcome.tag Outcome.Launch (fun () -> Context.run ctx routine)
-    else Context.run ctx routine
+    (* [~timing]: a gradient the routine accumulates into without zeroing is not refused for the
+       repeats (gh-ocannl-1781); the search restores the lineage around its windows
+       (gh-ocannl-1621). *)
+    if tag_failures then Outcome.tag Outcome.Launch (fun () -> Context.run ~timing:true ctx routine)
+    else Context.run ~timing:true ctx routine
   in
   let sync ctx =
     if tag_failures then Outcome.tag Outcome.Sync (fun () -> Context.sync ctx) else Context.sync ctx
@@ -4024,7 +4027,8 @@ let search_seeding ?census ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices
    s-expression, so a new field fails there until it is rendered here. No token contains [','], the
    entries' separator. *)
 let split_site_label (s, num_blocks) =
-  let name = Ir.Tnode.debug_name s.sr_target and id = Ir.Tnode.id s.sr_target in
+  let name = (Ir.Tnode.debug_name s.sr_target [@message_only "spells the split site's row label"])
+  and id = Ir.Tnode.id s.sr_target in
   Printf.sprintf "%s %s red%d out%d cost%d b%d%s%s%s%s"
     (if String.equal name id then name else name ^ "#" ^ id)
     (Idx.symbol_ident s.sr_axis) s.sr_red s.sr_out s.sr_cost num_blocks
@@ -5269,15 +5273,13 @@ let rank_flip_candidates ~ordering ?(profit = Unmeasured) ~enablement ~disableme
           List.stable_sort fc.LL.fc_alternatives ~compare:(fun a b ->
               by_rank fc.LL.fc_tn a fc.LL.fc_tn b);
       })
-  |> List.sort ~compare:(fun (a : LL.flip_candidate) (b : LL.flip_candidate) ->
-      match
-        by_rank a.LL.fc_tn
-          (List.hd_exn a.LL.fc_alternatives)
-          b.LL.fc_tn
-          (List.hd_exn b.LL.fc_alternatives)
-      with
-      | 0 -> Ir.Tnode.compare a.LL.fc_tn b.LL.fc_tn
-      | c -> c)
+  (* Stable: equal ranks keep the input's order -- the surface's program order among ties
+     (gh-ocannl-1777), never node id, which unrelated node minting moves. *)
+  |> List.stable_sort ~compare:(fun (a : LL.flip_candidate) (b : LL.flip_candidate) ->
+      by_rank a.LL.fc_tn
+        (List.hd_exn a.LL.fc_alternatives)
+        b.LL.fc_tn
+        (List.hd_exn b.LL.fc_alternatives))
 
 let offers_materialize (fc : LL.flip_candidate) =
   List.exists fc.LL.fc_alternatives ~f:(fun fa -> LL.equal_reading fa.LL.fa_flip `Materialize)
@@ -6482,12 +6484,11 @@ let seeded_transform ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed
    the matmul family, whatever the seeding would pick at the size, so every timed point of a fit
    runs the same geometry. Applied and validated as [model_default] applies a whole-routine pick. *)
 let pinned_sketch_transform ~select ?(on_leaf = fun (_ : sketch_params) -> ()) ctx bindings =
-  let backend = Context.backend_name ctx in
   if not (Ir.Backend_intf.binds_hardware_grid (Context.backend_facts ctx)) then
     raise
       (Utils.User_error
          (Printf.sprintf "Autotune.pinned_sketch_transform: backend %s has no GPU sketch family"
-            backend));
+            (Context.backend_name ctx)));
   let limits = Context.hardware_limits ctx in
   let capabilities = Context.codegen_capabilities ctx in
   let accum_prec = capabilities.Ir.Backend_intf.accum_prec in
@@ -7117,7 +7118,11 @@ let model_default ?name ?report ctx comp bindings =
             match best with
             | Some (vector, s) when not (List.is_empty vector) ->
                 let mat, inl, fp = LL.partition_readings vector in
-                let names tns = String.concat ~sep:"," (List.map tns ~f:Ir.Tnode.debug_name) in
+                let names tns =
+                  String.concat ~sep:","
+                    (List.map tns ~f:Ir.Tnode.debug_name
+                     [@message_only "names the placement pick in the logf line below"])
+                in
                 logf
                   "model_default: placement pick: materialize [%s], inline [%s], footprint [%s] \
                    (model %.6f ms)"
@@ -7170,7 +7175,11 @@ let model_default ?name ?report ctx comp bindings =
           (if !picked then
              (* The emitted label carries the placement decision: the in-compile selection only
                 names the pipeline it chose under those placements. *)
-             let names tns = String.concat ~sep:"," (List.map tns ~f:Ir.Tnode.debug_name) in
+             let names tns =
+               String.concat ~sep:","
+                 (List.map tns ~f:Ir.Tnode.debug_name
+                  [@message_only "spells the placements in the choice's report label"])
+             in
              choice :=
                {
                  !choice with
@@ -7521,19 +7530,21 @@ let search_setting () = Utils.registered_flag ~arg_name:"autotune_search"
    search happened to leave in ./autotune_cache (gh-ocannl-559; Codex P2 on PR #291): the latter
    would make two reproducible runs differ on local state, which is the leak that turning the search
    off exists to close. Shared with [Train.tune_placements], whose placement-decision store lives in
-   the same directory (gh-ocannl-786) and must open or not open it by the same rule. *)
+   the same directory (gh-ocannl-786) and must open or not open it by the same rule.
+
+   The key is read ONCE, under its one default, and "chosen" is that read's source (gh-ocannl-1766):
+   two reads under two defaults resolved one defaulted key two ways, which the
+   resolved-configuration stream records as two records and [benchmarks/config_records.py] refuses.
+   It is read even when the caller passes [cache_dir], so the stream reports the key whichever way
+   the call went. *)
 let resolve_cache_dir ?cache_dir ~search () =
+  let configured, source =
+    Utils.get_global_arg_with_source ~arg_name:"autotune_cache_dir" ~default:"autotune_cache"
+  in
   let cache_dir_chosen =
-    Option.is_some cache_dir
-    ||
-    match snd (Utils.get_global_arg_with_source ~arg_name:"autotune_cache_dir" ~default:"") with
-    | Utils.From_default -> false
-    | _ -> true
+    Option.is_some cache_dir || match source with Utils.From_default -> false | _ -> true
   in
-  let cache_dir =
-    Option.value cache_dir
-      ~default:(Utils.get_global_arg ~arg_name:"autotune_cache_dir" ~default:"autotune_cache")
-  in
+  let cache_dir = Option.value cache_dir ~default:configured in
   (* A search-less [tune] replays only a cache someone asked for. *)
   if search || cache_dir_chosen then cache_dir else ""
 
@@ -7734,7 +7745,12 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
         Utils.registered_float ~arg_name:"autotune_keep_fraction")
   in
   let static_indices = Idx.bound_symbols bindings in
-  let backend = Context.backend_name ctx in
+  let backend =
+    (Context.backend_name ctx
+     [@label_read
+       "keys calibration rows and log lines, and is compared for equality with the timing \
+        context's; backend capabilities come from the facts below"])
+  in
   let facts = Context.backend_facts ctx in
   let device = Context.ordinal ctx in
   (* The tuned computation's name, for the calibration rows and log lines of every candidate
@@ -8293,18 +8309,23 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
     let timing_snapshot =
       lazy
         (let snapshot = snapshot_timing_state search_ctx base_opt in
+         (* gh-ocannl-1781: a restore is not a reset -- the gradients get back the values they held
+            before the search, and with them the accumulation history they had then, which the
+            restoring uploads clear and the timing runs extend. *)
+         let restore_history = Context.save_accumulation_history search_ctx in
          logf
            "timing state: %d written node(s) of the search lineage, %d bytes, restored before each \
             timing window"
            (List.length snapshot)
            (List.sum (module Int) snapshot ~f:(fun (_, nd) -> Ir.Ndarray.size_in_bytes nd));
-         snapshot)
+         (snapshot, restore_history))
     in
     let timing_state_dirty = ref false in
     let restore_timing_snapshot () =
-      let snapshot = Lazy.force timing_snapshot in
+      let snapshot, restore_history = Lazy.force timing_snapshot in
       if !timing_state_dirty then (
         restore_timing_state search_ctx snapshot;
+        restore_history ();
         timing_state_dirty := false)
     in
     (* Called right before every [time_routine] of the search, after the lineage-wide preflight (so
@@ -8514,7 +8535,8 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
     in
     let on_privatize_drops drops =
       List.iter drops ~f:(fun (d : privatize_drop) ->
-          logf "privatize proposal for %s over %s dropped: %s" (Ir.Tnode.debug_name d.pd_target)
+          logf "privatize proposal for %s over %s dropped: %s"
+            (Ir.Tnode.debug_name d.pd_target [@message_only "an autotune log line"])
             (Idx.symbol_ident d.pd_over)
             (Outcome.detail_of_cause d.pd_cause);
           record_decline ~warn:false privatize_declines

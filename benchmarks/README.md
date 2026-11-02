@@ -914,9 +914,6 @@ single-threaded segments that sum to the serial step
   the configuration stream (gh-ocannl-1566) and the `bench-result:` line, so neither the treatment
   check nor bin_cells' reader has anything to read there. No driver reads the prose
   `log_config_sourcing` trace: `test_cells.py` refuses one that does.
-  The tuned cells pin `--ocannl_autotune_cache_dir` (a path of their own, or `autotune_cache`, which
-  resolves inside the cell's own directory): `Autotune.resolve_cache_dir` reads the key under two
-  defaults, so a defaulted key resolves two ways and `config_records.py` refuses the cell.
 - `cells.py cell` — one cell from a shell driver (gh-ocannl-1607): `python3 benchmarks/cells.py
   cell --backend B --dir DIR [--stdout F] [--stderr F] [--timeout S] [--expect KEY=VALUE]... --
   [NAME=VALUE]... EXE [ARGS...]` runs EXE with the pins ahead of ARGS from DIR (created, refused

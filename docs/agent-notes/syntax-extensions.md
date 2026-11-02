@@ -22,6 +22,13 @@ files.
   alike, because a shared `delayed_var_ref` pins the first call's solution and a second size then
   fails inference (gh-ocannl-1507). A lifted initializer cannot name one; a capture that would
   shadow a lifted name is a clash, found through the `ocannl.bound_capture` marker `let_opt` checks.
+- Label sources: only a toplevel `%op` function WITHOUT `()` reads its parameters' labels into
+  the result's (the no-unit arm of `translate`); after `()`, no parameter is one. There every
+  parameter except an optional one is read as `p.Tensor.value.Ir.Tnode.label`, so a labelled or
+  unlabelled non-tensor parameter is a type error at the parameter ("not a record type"), never a
+  ppx message; optional ones are skipped (gh-ocannl-1787) since `?x` is an option and a default
+  marks configuration. This is separate from `tensor_params`' scheme classification, which
+  requires operand evidence for a labelled parameter.
 - `%cd` composition seams verified by ppx expansion (gh-465, `Train.sgd_one`/`grad_update`): an
   OCaml variable of `Asgns.comp` type in statement position splices verbatim (so a
   programmatically built fragment can sit inside a `%cd` body); an inline declaration `{ x }`
@@ -40,5 +47,13 @@ files.
   takes the default random initialization makes the enclosing trace refused (an RNG lazy in the
   window), so the enclosing function degrades to unschemed; and a body's OCaml side effects run
   once more per closure, so a test counting body runs opts out with `[@@ocannl.no_scheme]`.
+- Option-valued tensors in schemes (gh-ocannl-1792): only an annotation classifies them
+  (`~(p : Tensor.t option)`, `?(p : Tensor.t option)`; `?(p : Tensor.t)` is an OCaml type error), and
+  `(x : Tensor.t)` is evidence for a forwarded labelled tensor. The handle keeps one slot per
+  presence pattern, `[_variants]` entry points, all-required expansions byte-identical. A scheme over
+  a whole stack is a trap: a trace window's solve is superlinear in depth (`decoder_only` at depth 4
+  traced for 96 s against 1 s at depth 2), so the stacks stay plain `let` and only the blocks scheme.
+  A caller's `Some !@step_n` that nothing reads (dropout rate 0, batch norm) is an unconsumed forward
+  root and shifts later printed ids by one.
 - A dimension capture needs a literal spec containing `=>`; this example captures the reduced axis.
   Doc-check `note_dimension_capture`: `let sum_last x = let open Ocannl.Nn_blocks.DSL_modules in [%op x ++ "ab => a" ["b"]]`.

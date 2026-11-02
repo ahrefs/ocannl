@@ -26,6 +26,26 @@ let raw_entries =
         "[scanner-refusal:392052035d276f11311768815316b580] every sentence claiming";
         "[scanner-refusal:fa85b1960c6367c9216c627d02ede0e7] every exemption row";
       ] );
+    ( "fp_contract_pin_scan.ml",
+      [
+        "[scanner-refusal:106879e8d84d7b106e818ac1ddc61a4f] listed as pinned";
+        "[scanner-refusal:777651b1b86abfe512e2d3a3f485ce6d] marked claim is";
+        "[scanner-refusal:0917e598d504b434f3e3c9567742fcc6] claim with neither";
+        "[scanner-refusal:9d3c109a283ee3d6803e356b583bdff2] claim in capitals";
+        "[scanner-refusal:3ef51a84cfe8ca3b03690fcda8b63c21] to another mode";
+        "[scanner-refusal:19ba2d6c29ec6da6833b4f6102b96167] an unknown kind";
+        "[scanner-refusal:6a15033dd60a8451f9ff4ba97f4280cb] one-word reason is";
+        "[scanner-refusal:be5184012422a01273ca348715955f05] sentinel that does";
+        "[scanner-refusal:b79e2ebc86bfefafc47281afbf5f0550] markers are refused";
+        "[scanner-refusal:3237007207743bc53ec1c1951d1214b7] together are refused";
+        "[scanner-refusal:b52b141cf7d13778997e41d81205de03] claim is refused";
+        "[scanner-refusal:e28d8e210f8906b6927a78032d5a7f50] case the word";
+        "[scanner-refusal:5af7923d754adb0ac1030df866493123] every test source";
+        "[scanner-refusal:b30b6b3be7749ff984d2979f5a8fe292] arrayjit package's test";
+        "[scanner-refusal:3cf4cde03d1a75d1846d0bbad2327014] the mode in-process";
+        "[scanner-refusal:cd11cea99124c2fa6c076ec8734ee25f] listed source carries";
+        "[scanner-refusal:9bedd04370c001da7559696548d4a37b] cc_backend_fp_contract=off";
+      ] );
     ("refused_action_streams.ml", []);
     ("operand_key_ratchet.ml", []);
     ( "tensorized_census_ratchet.ml",
@@ -55,6 +75,18 @@ let raw_entries =
         "[scanner-refusal:faf8bd39d9f3358220e041edafe252a2] Session_error";
         "[scanner-refusal:c622584e09b7ad9b23646841eb389ca9] @message_only";
         "[scanner-refusal:3c688ea5897f696f0882bff06b550c6e] debug_name";
+      ] );
+    ( "label_dispatch_scan.ml",
+      [
+        "[scanner-refusal:7fe4eca3a2beb271d0627103af78040c] does not parse";
+        "[scanner-refusal:1705e6ff4f79cfed2aa6028e5b60cadc] label-dispatch reader raised";
+        "[scanner-refusal:20abdf23cc9b4767a5eb4f75bb006965] source under arrayjit/lib/";
+        "[scanner-refusal:298ad457cb53221b4d5bf26c57db10cb] online_softmax's";
+        "[scanner-refusal:a134c194b11e19f42951ac9ae0496f39] scan reads backends'";
+        "[scanner-refusal:5478be505fa459772de23c278bbd2980] ~backend_name";
+        "[scanner-refusal:1953375f4f82df9f942fae5674bb2e4d] @label_read";
+        "[scanner-refusal:753c4e61524edee33f56c2a0183bca9f] memory_budget's";
+        "[scanner-refusal:17bc0c94b9ab448cbc75a7f5df828695] low_level's";
       ] );
     ( "render_decline_inventory.ml",
       [
@@ -660,6 +692,7 @@ let raw_entries =
         "[scanner-refusal:e583c416783b3632963a66636f20f65e] string literal in";
         "[scanner-refusal:b4c59d5ad7a9c4e591998fccf8f039aa] exempted functions that";
         "[scanner-refusal:4e4d383baae3810309379fe0b2c3e9ef] registered default goes";
+        "[scanner-refusal:18e6c65c27f35f658858a12b7c8dfd72] literal default is";
         "[scanner-refusal:e72f69460ef84de5e85f6c2bbe7bef5b] docs/agent-notes/build-and-test.md";
         "[scanner-refusal:55743888dd2a4a2234ee1d3f031ea47e] meets its source-count";
         "[scanner-refusal:2314f0c5d2762ecb0069dfb64d5c8a54] known_config_keys";

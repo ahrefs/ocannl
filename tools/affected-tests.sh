@@ -410,7 +410,7 @@ sub forms_of {
     next if $s =~ /\G\s+/gc || $s =~ /\G;[^\n]*/gc;
     if ($s =~ /\G\(/gc) { push @stack, []; next }
     if ($s =~ /\G\)/gc) { @stack > 1 or return undef; my $l = pop @stack; push @{$stack[-1]}, $l; next }
-    if ($s =~ /\G("(?:[^"\\\n]|\\.)*")/gc) { push @{$stack[-1]}, $1; next }
+    if ($s =~ /\G("(?:[^"\\\n]++|\\.)*+")/gc) { push @{$stack[-1]}, $1; next }
     if ($s =~ /\G([^\s()";]+)/gc) { push @{$stack[-1]}, $1; next }
     return undef;
   }
@@ -691,7 +691,7 @@ sub parse_sexp {
       @stack > 1 or fail("unbalanced output from $what at byte " . (pos($s) - 1) . ": ..." . around($s, pos($s) - 1) . "...");
       my $l = pop @stack; push @{$stack[-1]}, $l; next;
     }
-    if ($s =~ /\G"((?:[^"\\]|\\.)*)"/gcs) {
+    if ($s =~ /\G"((?:[^"\\]++|\\.)*+)"/gcs) {
       my $a = $1; $a =~ s/\\(.)/$1 eq "n" ? "\n" : $1/ge;
       push @{$stack[-1]}, $a; next;
     }
@@ -1057,7 +1057,7 @@ sub parse_dune {
       $str .= "\n$1" while $s =~ /\G\n[ \t]*"\\[|>]([^\n]*)/gc;
       $put->("\x01" . $str); next;
     }
-    if ($s =~ /\G"((?:[^"\\]|\\.)*)"/gcs) {
+    if ($s =~ /\G"((?:[^"\\]++|\\.)*+)"/gcs) {
       my $a = $1 =~ s/\\\n[ \t]*//gr;
       $a =~ s/\\(x[0-9A-Fa-f]{2}|[0-9]{3}|.)/length $1 > 1 ? ($1 =~ m{^x} ? chr hex substr($1, 1) : chr $1)
                                             : $1 eq "n" ? "\n" : $1 eq "t" ? "\t" : $1 eq "r" ? "\r" : $1/gse;
@@ -1853,7 +1853,7 @@ sub code_of {   # OCaml text with every comment blanked, newlines kept; strings 
     my $piece;
     if ($s =~ /\G\(\*/gc) { $depth++; $piece = "  " }
     elsif ($depth && $s =~ /\G\*\)/gc) { $depth--; $piece = "  " }
-    elsif ($s =~ /\G("(?:[^"\\]|\\.)*")/gcs || $s =~ /\G(\{([a-z_]*)\|.*?\|\2\})/gcs
+    elsif ($s =~ /\G("(?:[^"\\]++|\\.)*+")/gcs || $s =~ /\G(\{([a-z_]*)\|.*?\|\2\})/gcs
            || $s =~ /\G('(?:[^'\\\n]|\\(?:[\\'"ntbr ]|[0-9]{3}|x[0-9A-Fa-f]{2}|o[0-7]{3}))')/gc
            || $s =~ /\G([^(*"{'\n]+|.)/gcs) { $piece = $1 }
     $out .= $depth || $piece eq "  " ? $piece =~ s/[^\n]/ /gr : $piece;

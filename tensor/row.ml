@@ -1453,7 +1453,9 @@ let check_empty_row ~origin r =
       else raise @@ Shape_error ("check_empty_row: row is not empty", [ Row_mismatch [ r ] ])
 
 let s_dim_one_in_entry v ~value (in_ : dim_entry) : _ * dim_entry =
-  let from_ = [%sexp_of: dim_var * dim_entry] (v, drop_origin in_) in
+  (* Every entry of the environment passes here at each dimension solution: build the provenance
+     only for an entry that yields an inequality (gh-ocannl-1802). *)
+  let from_ = lazy ([%sexp_of: dim_var * dim_entry] (v, drop_origin in_)) in
   match in_ with
   | Solved_dim in_ -> ([], Solved_dim (s_dim_one v ~value ~in_))
   | Bounds_dim { is_in_param; has_uniq_constr_unless; res; opnd; glb; constr; origin } ->
@@ -1462,16 +1464,21 @@ let s_dim_one_in_entry v ~value (in_ : dim_entry) : _ * dim_entry =
       let opnd_v, opnd = find_v opnd in
       let ineqs0 =
         match (opnd_v, glb) with
-        | _ :: _, Some glb -> [ Dim_ineq { res = glb; opnd = value; from_; origin } ]
+        | _ :: _, Some glb ->
+            [ Dim_ineq { res = glb; opnd = value; from_ = Lazy.force from_; origin } ]
         | _ -> []
       in
       let ineqs1 =
         if List.is_empty opnd_v then []
-        else List.map res ~f:(fun res -> Dim_ineq { res = Var res; opnd = value; from_; origin })
+        else
+          List.map res ~f:(fun res ->
+              Dim_ineq { res = Var res; opnd = value; from_ = Lazy.force from_; origin })
       in
       let ineqs2 =
         if List.is_empty res_v then []
-        else List.map opnd ~f:(fun opnd -> Dim_ineq { res = value; opnd = Var opnd; from_; origin })
+        else
+          List.map opnd ~f:(fun opnd ->
+              Dim_ineq { res = value; opnd = Var opnd; from_ = Lazy.force from_; origin })
       in
       ( ineqs0 @ ineqs1 @ ineqs2,
         Bounds_dim
@@ -2689,13 +2696,58 @@ let is_resolve_at_use v = Set.mem !resolve_at_use v
    divergence detection needs this side table. *)
 let global_rank_edges : (row_var * int) list Map.M(Row_var).t ref = ref (Map.empty (module Row_var))
 
+(* gh-ocannl-1802: a level per variable of the rank graph, kept so that every edge [v -> w] has
+   [level v <= level w] -- a topological order up to ties, which the zero-weight cycles of equal
+   ranks need. A path [w ~> v] climbs levels, so it stays within [[level w, level v]]: a new edge
+   with [level v < level w] closes no cycle, and otherwise the search from [w] need not leave the
+   levels up to [level v]. That bounds it by the new edge's endpoints, where it used to walk
+   everything [w] reaches, all the inference's history below it. *)
+let global_rank_levels : int Map.M(Row_var).t ref = ref (Map.empty (module Row_var))
+
+(* The rank-cycle search's work counter (gh-ocannl-1802): the states it visited since the last
+   reset, reported by [Shape.registration_counts]. *)
+let rank_search_visit_count = ref 0
+[@@mutation_serial.exempt "a work counter of the rank-cycle search, not inference state"]
+
+let rank_search_visits () = !rank_search_visit_count
+let reset_rank_search_visits () = rank_search_visit_count := 0
+
+let unbounded_rank_search = ref false
+[@@mutation_serial.exempt "a test switch, set only around a test's own run"]
+
+let with_unbounded_rank_search f =
+  unbounded_rank_search := true;
+  Exn.protect ~f ~finally:(fun () -> unbounded_rank_search := false)
+
+(* The levels of a new edge's endpoints, placing a variable new to the graph next to the other. *)
+let rank_levels v w =
+  let levels = !global_rank_levels in
+  let place v l =
+    note_mutation ();
+    global_rank_levels := Map.set !global_rank_levels ~key:v ~data:l
+  in
+  match (Map.find levels v, Map.find levels w) with
+  | Some lv, Some lw -> (lv, lw)
+  | Some lv, None ->
+      place w (lv + 1);
+      (lv, lv + 1)
+  | None, Some lw ->
+      place v (lw - 1);
+      (lw - 1, lw)
+  | None, None ->
+      place v 0;
+      place w 1;
+      (0, 1)
+
 (* Would adding [rank v >= rank w + k] close a cycle of positive total weight? A path [w ~> v] of
    total weight [s] entails [rank v >= rank v + s + k]: contradiction iff [s + k > 0]. Stored
    weights are nonnegative, so for [k > 0] reachability suffices, and for [k = 0] the path must
-   contain a positive edge; DFS over (node, still-needs-positive) states. *)
-let closes_positive_rank_cycle ~src:v ~dst:w k =
+   contain a positive edge; DFS over (node, still-needs-positive) states, within the levels up to
+   [max_level]. [Error ()] when the cycle closes, else the variables the search reached. *)
+let rank_cycle_search ~src:v ~dst:w ~max_level k =
   let visited_need = Hash_set.create (module Row_var) in
   let visited_done = Hash_set.create (module Row_var) in
+  let levels = !global_rank_levels in
   let rec dfs u need_positive =
     (equal_row_var u v && not need_positive)
     ||
@@ -2703,10 +2755,11 @@ let closes_positive_rank_cycle ~src:v ~dst:w k =
     (not (Hash_set.mem visited u))
     &&
     (Hash_set.add visited u;
+     Int.incr rank_search_visit_count;
      List.exists (Map.find_multi !global_rank_edges u) ~f:(fun (u', k') ->
-         dfs u' (need_positive && k' = 0)))
+         Map.find_exn levels u' <= max_level && dfs u' (need_positive && k' = 0)))
   in
-  dfs w (k = 0)
+  if dfs w (k = 0) then Error () else Ok (Hash_set.union visited_need visited_done)
 
 (* Record the entailed fact [rank v >= rank w + k]; raise if it makes the ranks unsatisfiable, which
    would otherwise diverge by minting ever-fresh template variables (rank-cycle check, transitive
@@ -2715,15 +2768,27 @@ let add_rank_edge ~rows v w k =
   if equal_row_var v w then (
     if k > 0 then
       raise @@ Shape_error ("Infinite number of axes by self-reference", [ Row_mismatch rows ]))
-  else if closes_positive_rank_cycle ~src:v ~dst:w k then
-    raise
-    @@ Shape_error
-         ("Infinite number of axes by rank cycle among row variables", [ Row_mismatch rows ])
   else
     let edges = Map.find_multi !global_rank_edges v in
+    (* A recorded edge passed the search when it was added, and repeating it adds no path. *)
     if not (List.mem edges (w, k) ~equal:(fun (w1, k1) (w2, k2) -> equal_row_var w1 w2 && k1 = k2))
     then (
       note_mutation ();
+      let level_v, level_w = rank_levels v w in
+      (if !unbounded_rank_search || level_v >= level_w then
+         let max_level = if !unbounded_rank_search then Int.max_value else level_v in
+         match rank_cycle_search ~src:v ~dst:w ~max_level k with
+         | Error () ->
+             raise
+             @@ Shape_error
+                  ( "Infinite number of axes by rank cycle among row variables",
+                    [ Row_mismatch rows ] )
+         | Ok reached ->
+             (* Restore the order for the new edge: what [w] reaches up to [level v] rises to it
+                (anything it reaches higher up was not visited, and is already above). *)
+             global_rank_levels :=
+               Hash_set.fold reached ~init:!global_rank_levels ~f:(fun levels u ->
+                   Map.update levels u ~f:(fun l -> Int.max level_v (Option.value_exn l))));
       global_rank_edges := Map.add_multi !global_rank_edges ~key:v ~data:(w, k))
 
 (* Equate two rows, no broadcasting. Does not resolve inequalities. *)
@@ -3494,6 +3559,7 @@ type globals = {
   g_concat_component_vars : Set.M(Dim_var).t;
   g_resolve_at_use : Set.M(Row_var).t;
   g_rank_edges : (row_var * int) list Map.M(Row_var).t;
+  g_rank_levels : int Map.M(Row_var).t;
   g_template_cache : (row_var * int * int, row_var) Map.Poly.t;
 }
 
@@ -3507,6 +3573,7 @@ let capture_globals () =
     g_concat_component_vars = !concat_component_vars;
     g_resolve_at_use = !resolve_at_use;
     g_rank_edges = !global_rank_edges;
+    g_rank_levels = !global_rank_levels;
     g_template_cache = !global_template_cache;
   }
 
@@ -3520,6 +3587,7 @@ let restore_globals
       g_concat_component_vars;
       g_resolve_at_use;
       g_rank_edges;
+      g_rank_levels;
       g_template_cache;
     } =
   pending_roles := g_pending_roles;
@@ -3530,6 +3598,7 @@ let restore_globals
   concat_component_vars := g_concat_component_vars;
   resolve_at_use := g_resolve_at_use;
   global_rank_edges := g_rank_edges;
+  global_rank_levels := g_rank_levels;
   global_template_cache := g_template_cache
 [@@mutation_serial.boundary
   "part of a rewind: puts back the solver's inference sets as a checkpoint captured them"]
@@ -3545,6 +3614,7 @@ let globals_differences
       g_concat_component_vars = a6;
       g_resolve_at_use = a7;
       g_rank_edges = a8;
+      g_rank_levels = a10;
       g_template_cache = a9;
     }
     {
@@ -3556,6 +3626,7 @@ let globals_differences
       g_concat_component_vars = b6;
       g_resolve_at_use = b7;
       g_rank_edges = b8;
+      g_rank_levels = b10;
       g_template_cache = b9;
     } =
   List.filter_map
@@ -3568,6 +3639,7 @@ let globals_differences
       ("Row.concat_component_vars", phys_equal a6 b6);
       ("Row.resolve_at_use", phys_equal a7 b7);
       ("Row.global_rank_edges", phys_equal a8 b8);
+      ("Row.global_rank_levels", phys_equal a10 b10);
       ("Row.global_template_cache", phys_equal a9 b9);
     ]
     ~f:(fun (name, same) -> if same then None else Some name)
@@ -5572,7 +5644,17 @@ let get_dim_index proj_env =
         (* Symbolic axes index like their materialized (maximum-extent) dimension. *)
         loop (Dim (solved_dim_of_sym s))
     | Dim { d; _ } when not @@ Idx.iterated d -> Idx.Fixed_idx 0
-    | Dim { proj_id = None; _ } -> assert false
+    | Dim { d; basis; proj_id = None } as dim ->
+        (* gh-ocannl-1790: every route through [Shape] freshens the projection ids of the step's
+           shapes ([Shape.fresh_proj_ids]) before deriving the equations and indexing those dims, so
+           only a direct caller indexing some other dim reaches this. *)
+        raise
+        @@ Shape_error
+             ( [%string
+                 "get_dim_index: an iterated axis (d=%{d#Int}, basis=%{basis}) has no projection \
+                  id, so the projection environment never saw it: index the dims the projection \
+                  equations were derived from (their ids come from Row.fresh_row_proj)"],
+               [ Dim_mismatch [ dim ] ] )
     | Var v when Hashtbl.mem proj_env.v_env v ->
         get_proj_index proj_env @@ Hashtbl.find_exn proj_env.v_env v
     | Var v as dim ->
@@ -5609,6 +5691,27 @@ let%debug4_sexp solve_proj_equations ?(clamp_padded = false) (eqs : proj_equatio
   let p_concat_components = ref @@ Set.empty (module Proj_id) in
   (* proj_ids that are Concat components *)
   let proj_classes = ref @@ Map.empty (module Proj_id) in
+  (* gh-ocannl-1790: the bindings must stay acyclic, since every reader of [v_env] follows them
+     without a visited set ([get_proj_index], [dim_to_proj], the deferred passes below). [resolve]
+     follows the bindings at the head of a projection; [occurrence v p] is the chain of variables
+     through which [v] occurs in [p], a window's [over] and [kernel] included, if it does. Both
+     terminate because the binding arm of [loop] keeps the bindings acyclic. *)
+  let rec resolve = function
+    | Var v as p -> ( match Hashtbl.find v_env v with Some p -> resolve p | None -> p)
+    | p -> p
+  in
+  let rec occurrence v = function
+    | Var w when equal_dim_var v w -> Some []
+    | Var w ->
+        Option.bind (Hashtbl.find v_env w) ~f:(fun p ->
+            Option.map (occurrence v p) ~f:(fun chain -> w :: chain))
+    | Conv_input { over; conv; _ } -> (
+        match occurrence v over with
+        | Some _ as found -> found
+        | None -> Option.bind conv ~f:(fun { kernel; _ } -> occurrence v kernel))
+    | Proj _ | Solved _ | Concat _ -> None
+  in
+  let var_name (v : dim_var) = Option.value v.name ~default:(Dim_var.to_string v) in
   let rec loop (eq : proj_equation) : unit =
     match eq with
     | Proj_eq (Proj (p1, { d; _ }), Proj (p2, _)) when Proj_id.equal p1 p2 ->
@@ -5659,8 +5762,27 @@ let%debug4_sexp solve_proj_equations ?(clamp_padded = false) (eqs : proj_equatio
     | Proj_eq (Var v1, Var v2) when equal_dim_var v1 v2 -> ()
     | Proj_eq (Var v, p) | Proj_eq (p, Var v) -> (
         match Hashtbl.find v_env v with
-        | None -> Hashtbl.add_exn v_env ~key:v ~data:p
-        | Some p2 -> loop (Proj_eq (p, p2)))
+        | Some p2 -> loop (Proj_eq (p, p2))
+        | None -> (
+            match (resolve p, occurrence v p) with
+            | Var w, _ when equal_dim_var v w ->
+                (* The equation already holds through the bindings ([b = a] after [a = b]): binding
+                   [v] would close the chain into a cycle. *)
+                ()
+            | _, None -> Hashtbl.add_exn v_env ~key:v ~data:p
+            | _, Some chain ->
+                (* [v] occurs inside a window of its own projection ([v = 2*v]), directly or through
+                   the variables of [chain]: no binding can index it. *)
+                let through =
+                  if List.is_empty chain then ""
+                  else " (through " ^ String.concat ~sep:", " (List.map chain ~f:var_name) ^ ")"
+                in
+                raise
+                @@ Shape_error
+                     ( [%string
+                         "solve_proj_equations: the projection variable %{var_name v} is equated \
+                          to a window over itself%{through}: the projection equations are cyclic"],
+                       [ Projection_mismatch [ Var v; p ] ] )))
     | Iterated (Solved _) -> ()
     | Iterated (Proj (pid, { d; _ })) -> p_dims := (pid, d) :: !p_dims
     | Iterated (Conv_input { over; conv = None; _ }) ->
@@ -5731,18 +5853,17 @@ let%debug4_sexp solve_proj_equations ?(clamp_padded = false) (eqs : proj_equatio
      segment at all, so every segment read into (wrote from) the one cell. A concatenation proper
      ([a; b => a^b]: every component named) keeps its [Concat] index. *)
   let named_reprs =
-    let rec named depth = function
+    let rec named = function
       | Proj (pid, _) -> [ pid ]
       | Conv_input { over; conv; _ } -> (
-          named depth over @ match conv with Some { kernel; _ } -> named depth kernel | None -> [])
-      | Var v when depth < 8 -> (
-          match Hashtbl.find v_env v with Some p -> named (depth + 1) p | None -> [])
-      | Var _ | Solved _ | Concat _ -> []
+          named over @ match conv with Some { kernel; _ } -> named kernel | None -> [])
+      | Var v -> ( match Hashtbl.find v_env v with Some p -> named p | None -> [])
+      | Solved _ | Concat _ -> []
     in
     let outside =
       List.concat_map eqs ~f:(function
-        | Proj_eq (p1, p2) -> named 0 p1 @ named 0 p2
-        | Iterated p -> named 0 p)
+        | Proj_eq (p1, p2) -> named p1 @ named p2
+        | Iterated p -> named p)
       |> List.map ~f:repr_of
     in
     (* A component another concatenated axis also has is named by that access too: in [1^a; b =>

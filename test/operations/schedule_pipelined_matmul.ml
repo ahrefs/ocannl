@@ -36,6 +36,8 @@
    must reject the compile cleanly (the same pinning as the SMEM matmul test); the schedule-level
    validation errors are the typed Illegal_schedule declines autotune candidates see. *)
 
+(* cc-fp-contract: not-cc -- the bitwise legs need shared placement, which the C backends refuse *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

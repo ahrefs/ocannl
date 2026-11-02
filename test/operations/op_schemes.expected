@@ -42,3 +42,32 @@ the loss, the parameters (random initialization included) and their gradients ar
 control (no id neutrality): the traces shift the session's ids: true
 control (no id neutrality): and its node uids: true
 control (no id neutrality): and its shape variable ids: true
+both patterns are traced at (): true
+two option-valued parameters: all four patterns are traced at (): true
+control (opted out): nothing is traced: true
+two masked applications, different masks: the masked scheme is checked twice: true
+and neither checks nor traces the unmasked one: true
+an unmasked application checks the unmasked scheme: true
+and not the masked one: true
+a labelled option and an omitted optional select their pattern: true
+the unmasked application succeeds: true
+a mask conflicting with the masked pattern raises, naming the pattern: true
+the body did not run: true
+control (opted out): the body's own error, after the body started: true
+the closure's creation raises, naming the masked pattern: true
+check_definition reports it, naming the definition and the pattern: true
+control (opted out): the closure builds, and an unmasked application succeeds: true
+picky: the training pattern is unschemed: true
+picky: the evaluation pattern is traced at () and checked at its application: true
+noisy_step: the training pattern is unschemed: true
+noisy_step: the evaluation pattern is traced at () and checked at its application: true
+a training application runs unchecked: true
+without a () stage, the first application traces every pattern: true
+the other pattern's first application checks: true
+and does not trace: true
+after a session reset, the applied pattern alone is traced again, and checked: true
+the other pattern is not traced: true
+the traces allocated no session id: true
+successful and failed variant traces left the session as it was: true
+a labelled tensor annotated [Tensor.t] gets a scheme without operand evidence: true
+control: the same parameter unannotated stays unschemed, beside a schemed witness: true

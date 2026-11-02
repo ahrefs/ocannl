@@ -1,0 +1,16 @@
+let namespace = "online_softmax"
+
+(* Refused: the pre-gh-ocannl-1722 tile-role fold, by namespace and label head -- both public inputs
+   to Tnode.create. *)
+let fold_tile_role (tn : Tn.t) =
+  if not (String.equal tn.Tn.namespace namespace) then None
+  else
+    match tn.Tn.label with
+    | l :: _ when String.equal l scores_label -> Some `Scores
+    | l :: _ when String.equal l numerator_label -> Some `Numerator
+    | _ -> None
+
+(* Accepted: the tile node itself, its label copied from the node it is like. *)
+let tile_node ~label ~(like : Tn.t) ~dims prec =
+  Tn.create ~namespace (Tn.Specified prec) ~id:(fresh_id ()) ~label:(label :: like.Tn.label)
+    ~unpadded_dims:(lazy dims) ()

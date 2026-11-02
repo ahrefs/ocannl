@@ -1,0 +1,8 @@
+S: a is written by exactly one leaf: true
+S: a is written before pp: true
+S: pp = a + 1: true
+S: qq = a + 2: true
+S: rr = a + 3: true
+F: a is written by exactly one leaf: true
+F: pf = a + 1: true
+R: refused as a second copy, the hint naming the order: true

@@ -803,6 +803,11 @@ type select_blend =
   | Blend_truth of (PPrint.document -> PPrint.document -> PPrint.document -> PPrint.document)
   | Blend_over_locals of string
 
+(** How a dialect spells a builtin's parameter guard ({!Param_guards}): [C_guards] a compile-time
+    assertion over the operand's [__typeof__] (GNU C), [Cxx_guards] a braced initialization, which
+    C++ (and so MSL) rejects when it narrows. *)
+type param_guard_dialect = C_guards | Cxx_guards
+
 (* The names a blend binds its arms to, in its own block, so an inner blend shadows an outer one's
    and no arm can mention them. *)
 let blend_local_a = "ocannl_sel_a__"
@@ -964,6 +969,11 @@ module type C_syntax_config = sig
     PPrint.document
 
   val binop_syntax : Ops.prec -> Ops.binop -> PPrint.document -> PPrint.document -> PPrint.document
+
+  val builtin_param_guards : param_guard_dialect option
+  (** The dialect of the builtin parameter guards a kernel's prelude carries under the test seam
+      {!Param_guards.with_guards} (gh-ocannl-1768); [None] (the {!Pure_C_config} default) guards
+      nothing. *)
 
   val select_blend_syntax : Ops.prec -> select_blend option
   (** A branchless rendering of a value select at this compute precision (gh-ocannl-1622), in one of
@@ -1827,6 +1837,273 @@ let builtin_definitions builtins ~keys =
   let needed = List.fold keys ~init:(Set.empty (module String)) ~f:add in
   List.filter_map builtins ~f:(fun (key, definition, _) ->
       if Set.mem needed key then Some definition else None)
+
+(** Builtin parameter guards (gh-ocannl-1768): a check that every builtin call a kernel makes passes
+    each argument at a type the parameter holds without narrowing, enabled by the test seam
+    {!Param_guards.with_guards}.
+
+    A builtin's parameter type and the C type of the operand its call site passes were never
+    compared: the call converts implicitly, and a conversion that changes the value rather than the
+    representation is silent. That is how [half] reached [half_to_uint4x32] by VALUE on cc and Metal
+    (gh-ocannl-1704: 1.5 became counter 1), while every test of the table fed it raw bits on both
+    sides. Under the seam each function a kernel calls is shadowed, after every definition and
+    before the kernel, by a function-like macro that passes each argument through a guard naming the
+    parameter type read off the function's own definition. The guard is the C++ narrowing rule --
+    the one MSL's own compiler applies to a braced initialization: floating to integer, integer to
+    floating, a narrower floating type, or an integer type whose range does not hold the operand's
+    all fail, while a type the parameter holds exactly (a promotion, a wider type) passes. In C it
+    is a [_Static_assert] over [__typeof__] of the argument, which evaluates the argument once, and
+    in the C++ dialects the braced initialization itself. A failing guard fails the kernel's
+    compile, which is what [test/operations/op_table_compile] claims never happens to an in-domain
+    arm.
+
+    A definition the guard cannot read is left unguarded, with the reason {!parameter_types} gives:
+    a macro (no parameter types), a template or an overload set (the compiler picks the parameter
+    type per call), a definition with no function, or a parameter passed by pointer, reference or
+    array. *)
+module Param_guards : sig
+  val parameter_types : key:string -> string -> (string list, string) Result.t
+  (** The parameter types of the function [key] that a table entry's [definition] defines, read off
+      its signature, or why there are none to guard: {!a_macro} and {!not_a_function} for an entry
+      that is no function, another reason for a function the guard skips. *)
+
+  val a_macro : string
+  (** The reason given for a macro. *)
+
+  val not_a_function : string
+  (** The reason given for an entry that names [key] nowhere as a call or a definition: a type, a
+      constant, a header. *)
+
+  val prelude : param_guard_dialect -> string
+  (** The helpers the guards of {!guard} expand to, emitted once before them. *)
+
+  val guard : param_guard_dialect -> key:string -> string list -> string
+  (** The macro shadowing [key], whose parameters have these types. *)
+
+  val with_guards : ?guard:bool -> ?overrides:(string * string) list -> (unit -> 'a) -> 'a
+  (** [with_guards ?guard ?overrides f] runs [f] with every kernel prelude of a backend that
+      declares a {!param_guard_dialect} guarding the functions the kernel calls (unless [guard] is
+      [false]), and with each [(key, definition)] of [overrides] replacing that key's definition in
+      the backend's table -- how a test plants a defect, and shows both that it compiles unguarded
+      and that the guards catch it. A test seam: kernels are never guarded outside it. An override
+      naming a key the table lacks fails the prelude's assembly. *)
+
+  val active : unit -> (bool * (string * string) list) option
+  (** [Some (guard, overrides)] inside {!with_guards}, [None] outside it. *)
+
+  val note_emitted : int -> unit
+
+  val emitted : unit -> int
+  (** How many guards the preludes assembled in this process carried: zero where no backend declares
+      a dialect, which is how a test sees that its guards were never emitted. *)
+end = struct
+  let is_ident c = Char.is_alphanum c || Char.equal c '_'
+
+  (* The definition with its comments blanked out, so neither a commented-out signature nor a
+     parenthesis in prose is read. *)
+  let strip_comments s =
+    let b = Bytes.of_string s in
+    let n = String.length s in
+    let blank i = if not (Char.equal s.[i] '\n') then Bytes.set b i ' ' in
+    let rec go i =
+      if i + 1 >= n then ()
+      else if Char.equal s.[i] '/' && Char.equal s.[i + 1] '*' then block i
+      else if Char.equal s.[i] '/' && Char.equal s.[i + 1] '/' then line i
+      else go (i + 1)
+    and block i =
+      if i >= n then ()
+      else if i + 1 < n && Char.equal s.[i] '*' && Char.equal s.[i + 1] '/' then (
+        blank i;
+        blank (i + 1);
+        go (i + 2))
+      else (
+        blank i;
+        block (i + 1))
+    and line i =
+      if i >= n || Char.equal s.[i] '\n' then go i
+      else (
+        blank i;
+        line (i + 1))
+    in
+    go 0;
+    Bytes.to_string b
+
+  let words s =
+    String.split_on_chars s ~on:[ ' '; '\t'; '\n'; '\r' ]
+    |> List.filter ~f:(fun w -> not (String.is_empty w))
+
+  let normalize s = String.concat ~sep:" " (words s)
+
+  (* The text of the line holding position [i], up to [i]. *)
+  let line_prefix s i =
+    let start =
+      match String.rindex_from s (max 0 (i - 1)) '\n' with Some j when i > 0 -> j + 1 | _ -> 0
+    in
+    String.sub s ~pos:start ~len:(i - start)
+
+  (* The position just past the parenthesis closing the one at [i], if any. *)
+  let close_paren s i =
+    let n = String.length s in
+    let rec go j depth =
+      if j >= n then None
+      else
+        match s.[j] with
+        | '(' -> go (j + 1) (depth + 1)
+        | ')' -> if depth = 1 then Some (j + 1) else go (j + 1) (depth - 1)
+        | _ -> go (j + 1) depth
+    in
+    go i 0
+
+  let split_top_commas s =
+    let parts = ref [] and depth = ref 0 and start = ref 0 in
+    String.iteri s ~f:(fun i c ->
+        match c with
+        | '(' | '<' | '[' | '{' -> Int.incr depth
+        | ')' | '>' | ']' | '}' -> Int.decr depth
+        | ',' when !depth = 0 ->
+            parts := String.sub s ~pos:!start ~len:(i - !start) :: !parts;
+            start := i + 1
+        | _ -> ());
+    List.rev (String.sub s ~pos:!start ~len:(String.length s - !start) :: !parts)
+
+  let param_type param =
+    let p = normalize param in
+    if
+      String.exists p ~f:(fun c -> Char.equal c '*' || Char.equal c '&' || Char.equal c '[')
+      || String.is_substring p ~substring:"..."
+    then Error "a parameter passed by pointer, reference or array"
+    else
+      match words p with
+      | [] -> Error "an empty parameter"
+      | [ ty ] -> Ok ty
+      | ws -> Ok (String.concat ~sep:" " (List.drop_last_exn ws))
+
+  let a_macro = "a macro"
+  let not_a_function = "no function definition"
+
+  let parameter_types ~key definition =
+    let s = strip_comments definition in
+    let n = String.length s and k = String.length key in
+    let tokens = words (String.map s ~f:(fun c -> if is_ident c then c else ' ')) in
+    if List.mem tokens "template" ~equal:String.equal then Error "a template"
+    else
+      let other = ref false in
+      let rec scan i ~macro ~signatures =
+        match String.substr_index s ~pattern:key ~pos:i with
+        | None -> (macro, List.rev signatures)
+        | Some j -> (
+            let whole =
+              (j = 0 || not (is_ident s.[j - 1])) && (j + k >= n || not (is_ident s.[j + k]))
+            in
+            let rec skip_ws p = if p < n && Char.is_whitespace s.[p] then skip_ws (p + 1) else p in
+            let after = skip_ws (j + k) in
+            if (not whole) || after >= n || not (Char.equal s.[after] '(') then
+              scan (j + k) ~macro ~signatures
+            else if String.is_prefix (String.lstrip (line_prefix s j)) ~prefix:"#" then
+              scan (j + k) ~macro:true ~signatures
+            else
+              match close_paren s after with
+              | None ->
+                  other := true;
+                  scan (j + k) ~macro ~signatures
+              | Some past ->
+                  let body = skip_ws past in
+                  if body < n && Char.equal s.[body] '{' then
+                    let params = String.sub s ~pos:(after + 1) ~len:(past - after - 2) in
+                    scan past ~macro ~signatures:(normalize params :: signatures)
+                  else (
+                    other := true;
+                    scan past ~macro ~signatures))
+      in
+      let macro, signatures = scan 0 ~macro:false ~signatures:[] in
+      match List.dedup_and_sort signatures ~compare:String.compare with
+      | [] when macro -> Error a_macro
+      | [] when !other -> Error "a call or a declaration, but no definition the guard can read"
+      | [] -> Error not_a_function
+      | _ :: _ :: _ -> Error "an overload set, or definitions differing in their parameters"
+      | [ params ] ->
+          if String.equal params "" || String.equal params "void" then Ok []
+          else
+            let types = List.map (split_top_commas params) ~f:param_type in
+            Result.all types
+
+  (* The C types whose guard is the scalar narrowing rule; any other parameter type (a struct, a
+     vector) must be the operand's type exactly. *)
+  let scalar_words =
+    [
+      "const";
+      "volatile";
+      "signed";
+      "unsigned";
+      "char";
+      "short";
+      "int";
+      "long";
+      "float";
+      "double";
+      "_Float16";
+      "_Bool";
+      "bool";
+      "HALF_T";
+      "int8_t";
+      "uint8_t";
+      "int16_t";
+      "uint16_t";
+      "int32_t";
+      "uint32_t";
+      "int64_t";
+      "uint64_t";
+      "size_t";
+    ]
+
+  let is_scalar ty = List.for_all (words ty) ~f:(List.mem scalar_words ~equal:String.equal)
+
+  let prelude = function
+    | C_guards ->
+        {|/* gh-ocannl-1768: builtin parameter guards. An argument passes when its type IS the
+   parameter's, or when the parameter holds every value of it: C++'s narrowing rule. */
+#define ocannl_pg_flt__(T) (__builtin_classify_type((T)0) == 8)
+#define ocannl_pg_sgn__(T) ((T)-1 < (T)0)
+#define ocannl_pg_holds__(A, P) \
+  __builtin_choose_expr(ocannl_pg_flt__(A), ocannl_pg_flt__(P) && sizeof(A) <= sizeof(P), \
+    __builtin_choose_expr(ocannl_pg_flt__(P), 0, \
+      ocannl_pg_sgn__(A) == ocannl_pg_sgn__(P) ? sizeof(A) <= sizeof(P) \
+        : !ocannl_pg_sgn__(A) && sizeof(A) < sizeof(P)))
+#define ocannl_pg_scalar__(P, x, msg) ({ _Static_assert( \
+  __builtin_types_compatible_p(__typeof__(x), P) || ocannl_pg_holds__(__typeof__(x), P), msg); (x); })
+#define ocannl_pg_exact__(P, x, msg) ({ _Static_assert( \
+  __builtin_types_compatible_p(__typeof__(x), P), msg); (x); })|}
+    | Cxx_guards ->
+        {|/* gh-ocannl-1768: builtin parameter guards. A braced initialization rejects a narrowing. */
+template <typename P, typename A> inline P ocannl_param_guard__(A x) { return P{x}; }|}
+
+  let guard dialect ~key types =
+    let args = List.mapi types ~f:(fun i _ -> Printf.sprintf "ocannl_pg_a%d__" i) in
+    let guarded =
+      List.mapi (List.zip_exn types args) ~f:(fun i (ty, a) ->
+          match dialect with
+          | C_guards ->
+              Printf.sprintf
+                "%s(%s, %s, \"gh-ocannl-1768: %s's parameter %d (%s) narrows its operand\")"
+                (if is_scalar ty then "ocannl_pg_scalar__" else "ocannl_pg_exact__")
+                ty a key (i + 1) ty
+          | Cxx_guards -> Printf.sprintf "ocannl_param_guard__<%s>(%s)" ty a)
+    in
+    Printf.sprintf "#define %s(%s) (%s)(%s)" key (String.concat ~sep:", " args) key
+      (String.concat ~sep:", " guarded)
+
+  let state : (bool * (string * string) list) option ref = ref None
+  let count = Atomic.make 0
+
+  let with_guards ?(guard = true) ?(overrides = []) f =
+    let saved = !state in
+    state := Some (guard, overrides);
+    Exn.protect ~f ~finally:(fun () -> state := saved)
+
+  let active () = !state
+  let note_emitted k = ignore (Atomic.fetch_and_add count k : int)
+  let emitted () = Atomic.get count
+end
 
 (** The cc builtin a whole-vector widening bridge from 16-bit storage [store_prec] (bf16 or fp16) to
     [lanes] lanes of [prec] calls, [None] for any other storage precision. An f32 bridge at 4, 8 or
@@ -2735,6 +3012,7 @@ struct
 
   let binop_syntax = default_binop_syntax
   let select_blend_syntax _prec = None
+  let builtin_param_guards = None
 
   let unop_syntax prec op v =
     let op_prefix, op_suffix = Ops.unop_c_syntax prec op in
@@ -3802,15 +4080,51 @@ module C_syntax (B : C_syntax_config) = struct
        cannot concatenate across them. *)
     let tokens = Source_tokens.scan doc_string in
     let mentions_token key = Source_tokens.mentions tokens key in
+    (* gh-ocannl-1768: under the parameter-guard seam, a backend with a guard dialect takes the
+       seam's definition overrides, and guards every function its prelude defines -- a function only
+       a macro of the table calls included, since that macro expands at its use in the kernel, after
+       the guards. *)
+    let guards =
+      match (Param_guards.active (), B.builtin_param_guards) with
+      | Some (guard, overrides), Some dialect -> Some (overrides, Option.some_if guard dialect)
+      | _ -> None
+    in
+    let builtins =
+      match guards with
+      | None -> builtins
+      | Some (overrides, _) ->
+          List.iter overrides ~f:(fun (key, _) ->
+              if not (List.exists builtins ~f:(fun (k, _, _) -> String.equal k key)) then
+                invalid_arg ("C_syntax.Param_guards: no builtin to override named " ^ key));
+          List.map builtins ~f:(fun ((key, _, deps) as entry) ->
+              match List.Assoc.find overrides ~equal:String.equal key with
+              | Some definition -> (key, definition, deps)
+              | None -> entry)
+    in
     let used =
       List.filter_map builtins ~f:(fun (key, _, _) ->
           if (not (List.mem routine_names key ~equal:String.equal)) && mentions_token key then
             Some key
           else None)
     in
-    List.iter (builtin_definitions builtins ~keys:used) ~f:(fun definition ->
+    let definitions = builtin_definitions builtins ~keys:used in
+    List.iter definitions ~f:(fun definition ->
         Buffer.add_string result_buffer definition;
         Buffer.add_string result_buffer "\n");
+    Option.iter (Option.bind guards ~f:snd) ~f:(fun dialect ->
+        let guarded =
+          List.filter_map builtins ~f:(fun (key, definition, _) ->
+              if not (List.mem definitions definition ~equal:phys_equal) then None
+              else
+                match Param_guards.parameter_types ~key definition with
+                | Ok (_ :: _ as types) -> Some (Param_guards.guard dialect ~key types)
+                | Ok [] | Error _ -> None)
+        in
+        if not (List.is_empty guarded) then (
+          Param_guards.note_emitted (List.length guarded);
+          List.iter (Param_guards.prelude dialect :: guarded) ~f:(fun line ->
+              Buffer.add_string result_buffer line;
+              Buffer.add_string result_buffer "\n")));
     Buffer.add_string result_buffer doc_string;
     prepend_conditional_includes ~conditional_includes (Buffer.contents result_buffer)
 
@@ -4973,10 +5287,16 @@ module C_syntax (B : C_syntax_config) = struct
                 | None -> false
               in
               if not all_inside then (
-                failed := Some (Grid_local_accessed_outside (Tn.debug_name info.gl_tn));
+                failed :=
+                  Some
+                    (Grid_local_accessed_outside
+                       (Tn.debug_name info.gl_tn [@message_only "the decline cause's message"]));
                 false)
               else if not (first_access_standalone_covering info.gl_tn body) then (
-                failed := Some (Grid_local_not_covering (Tn.debug_name info.gl_tn));
+                failed :=
+                  Some
+                    (Grid_local_not_covering
+                       (Tn.debug_name info.gl_tn [@message_only "the decline cause's message"]));
                 false)
               else (
                 private_bytes :=
@@ -6047,7 +6367,7 @@ module C_syntax (B : C_syntax_config) = struct
           (declinef ctx)
             "marked simdgroup fragment %s rendered outside its recognized fragment scope; falling \
              back from the intended persistent intrinsic path"
-            (Tn.debug_name d_tn));
+            (Tn.debug_name d_tn [@message_only "a declinef message"]));
         (* [ld] is the statement's recorded leading-dimension stride for this operand
            ([Tile_mma.ldd]/[lda]/[ldb]) — the minor dim of the tnode's last axis in the plain case,
            a larger stride when interior batch axes sit between the tile roles (gh-ocannl-528). *)

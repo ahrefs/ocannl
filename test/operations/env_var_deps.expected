@@ -109,6 +109,7 @@ Programs starting a search with a run that can select cc, each pinning the cc ve
   test/operations/dune, test fission_replay_segmentation (Autotune.tune): independent, by its marker
   test/operations/dune, test gpu_kernel_cache (Autotune.tune): independent, by its marker
   test/operations/dune, test inline_flip_tune (Train.tune_placements): independent, by its marker
+  test/operations/dune, test never_zeroed_grad (Autotune.tune): independent, by its marker
   test/operations/dune, test padded_conv_cache (Autotune.tune): independent, by its marker
   test/operations/dune, test placement_store (Train.tune_placements): independent, by its marker
   test/operations/dune, test schedule_cache_device (Autotune.tune): independent, by its marker
@@ -162,6 +163,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-atomic_file_rename_scan
   test/operations/dune                     @runtest-atomic_file_rename_scan_control
   test/operations/dune                     @runtest-autotune_bound_pruning
+  test/operations/dune                     @runtest-autotune_cache_dir_records
   test/operations/dune                     @runtest-autotune_routine_name
   test/operations/dune                     @runtest-backend_golden_family_scan
   test/operations/dune                     @runtest-bandwidth_calibration
@@ -251,6 +253,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-flip_twins
   test/operations/dune                     @runtest-foreign_c_stderr
   test/operations/dune                     @runtest-foreign_c_stderr_noise
+  test/operations/dune                     @runtest-fp_contract_pin_scan
   test/operations/dune                     @runtest-generated_lock_scan
   test/operations/dune                     @runtest-generated_lock_scan_control
   test/operations/dune                     @runtest-generated_provenance
@@ -259,6 +262,9 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-gpu_cotenants
   test/operations/dune                     @runtest-hello_world_op
   test/operations/dune                     @runtest-kernel_attribution
+  test/operations/dune                     @runtest-label_dispatch_scan
+  test/operations/dune                     @runtest-label_dispatch_scan_control
+  test/operations/dune                     @runtest-label_dispatch_scan_refusal_control
   test/operations/dune                     @runtest-launch_predicate_parity-tf32
   test/operations/dune                     @runtest-limits_field_classes
   test/operations/dune                     @runtest-ll_test_ratchet
@@ -284,6 +290,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-optional_arg_inventory
   test/operations/dune                     @runtest-optional_arg_inventory_control
   test/operations/dune                     @runtest-placement_surface
+  test/operations/dune                     @runtest-prefix_scan_fp_licences
   test/operations/dune                     @runtest-primitive_ops
   test/operations/dune                     @runtest-provenance_tag_inventory
   test/operations/dune                     @runtest-qkv_zero_init-approximate

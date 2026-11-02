@@ -18,6 +18,7 @@ code-borne (digest) -- an optimizer decision: it changes the code that comes out
   online_softmax
   online_softmax_backward
   online_softmax_block
+  prefix_scan
   virtualize_footprint_materialization
   virtualize_max_inline_fanin
   virtualize_max_inline_reduction
@@ -220,6 +221,7 @@ execution-neutral -- a check that can refuse or report, but never changes what i
   hip_scratch_validation [read at codegen]
   legality_crosscheck
   max_shape_error_origins
+  shape_error_full_sexp
 
 execution-neutral -- shape-only checking at graph construction (gh-ocannl-1751): a scheme check is rewound and its traces allocate no session id, so the graph, its tensor ids and the code it lowers to are the same either way; only where a shape error is reported, and the construction's cost, change
   op_shape_schemes

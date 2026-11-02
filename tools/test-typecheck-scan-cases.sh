@@ -245,7 +245,7 @@ cat >"$ptable" <<'EOF'
 let cases =
   [
     ("a well-typed op arm", {ocaml|let%op f ?(stride = 1) () x = x ++ "stride*o+k => o"|ocaml});
-    ("an op arm without its unit parameter", {ocaml|let%op f ?(stride = 1) x = x ++ "stride*o+k => o"|ocaml});
+    ("an op arm without its unit parameter", {ocaml|let%op f ~stride x = x ++ "stride*o+k => o"|ocaml});
     ("an extension no preprocessor expands", {ocaml|[%%no_such_extension let x = 1]|ocaml});
     ("a plain arm beside them", {ocaml|let y = not use_padding|ocaml});
   ]
@@ -297,7 +297,7 @@ leg11() {
   has "the op arm the stanza's ppx makes well-typed is accepted" "ok        $ptable:3: a well-typed op arm"
   has "an op arm without its unit parameter is rejected by name" \
     "REJECTED  $ptable:4: an op arm without its unit parameter"
-  has "with the compiler's reading of the expansion" "which is not a record type"
+  has "with the compiler's reading of the expansion" "The value stride has type Tensor.t"
   has "at its own line of the table, through the ppx" "File \"$ptable\", line 4"
   has "an extension no preprocessor expands is rejected" \
     "REJECTED  $ptable:5: an extension no preprocessor expands"
@@ -309,7 +309,7 @@ leg11() {
 
   local stub="$TMP/p/variant.mli"
   { cat "$pstub"
-    printf '%s\n' '[@@@known_rejection ("an op arm without its unit parameter", "not a record type")]'
+    printf '%s\n' '[@@@known_rejection ("an op arm without its unit parameter", "has type Tensor.t")]'
     printf '%s\n' '[@@@known_rejection ("an extension no preprocessor expands", "Uninterpreted extension")]'
   } >"$stub"
   run --stub "$stub" "$ptable"

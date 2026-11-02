@@ -341,7 +341,8 @@ let row_noninjective () =
 (* Two setters at different index maps as SEPARATE statements store fine, as two components -- the
    index-map comparison is per invocation -- and the verdict waits for a read site. The fixed-index
    component is served at the symbolic read by an equality guard ([0 == t]): its fallback is the
-   covering component's value, which this routine's covering loop proves defined at every cell. *)
+   covering component's value, which the components' union (here the loop alone) proves defined at
+   every cell. *)
 let row_fixed_component () =
   let x = mk "fcmp_x" and out = mk "fcmp_out" in
   materialize out;
@@ -478,10 +479,11 @@ let declared_virtual_fixed_component () =
     | exception Utils.User_error msg ->
         String.is_substring msg ~substring:"13:call-site-index-mismatch")
 
-(* === Consumption-time rejection === *)
+(* === Disjoint components and unions of partial covers (gh-ocannl-1795) === *)
 
-(* A fixed component read at a DIFFERENT fixed cell is a static mismatch, not a guard: the read site
-   cannot be served, and there is no partial answer, so the whole node materializes. *)
+(* A fixed component read at a DIFFERENT fixed cell never writes it: the component is omitted at
+   that read site, and the covering loop alone serves it. Before gh-ocannl-1795 this static mismatch
+   refused the whole node as 13. *)
 let row_fixed_component_fixed_read () =
   let x = mk "fcfr_x" and out = mk ~dims:[| 1 |] "fcfr_out" in
   materialize out;
@@ -492,12 +494,11 @@ let row_fixed_component_fixed_read () =
       (seq (set x [| fixed 0 |] (c 9.)) (set out [| fixed 0 |] (get x [| fixed 2 |])))
   in
   row ~label:"fixed_component_fixed_read" ~llc ~cand:x ~out ~seed:[] ~expected:[| 3. |]
-    ~verdict:(Rejected (Consumption, Ir.Tnode.Site "13:call-site-index-mismatch"))
+    ~verdict:Accepted
 
-(* The proof's conservative edge: three components that cover the node only TOGETHER -- a loop over
-   cells 0..2 and fixed writes at 3 -- prove nothing on their own, so the fixed component refuses
-   and the node materializes, the correct (if costlier) reading. Unions of partial covers are not
-   proved. *)
+(* Components that cover the node only TOGETHER -- a loop over cells 0..2 and a fixed write at 3:
+   their union defines every cell, so the fixed component's guard [3 == t] has a fallback, and the
+   loop's range guard [0 <= t < 3] keeps it off cell 3. *)
 let row_fixed_component_partial_cover () =
   let x = mk "fcpc_x" and out = mk "fcpc_out" in
   materialize out;
@@ -508,8 +509,190 @@ let row_fixed_component_partial_cover () =
       (seq (set x [| fixed 3 |] (c 9.)) (loop_n t n (set out [| iter t |] (get x [| iter t |]))))
   in
   row ~label:"fixed_component_partial_cover" ~llc ~cand:x ~out ~seed:[]
-    ~expected:[| 1.; 2.; 3.; 9. |]
+    ~expected:[| 1.; 2.; 3.; 9. |] ~verdict:Accepted
+
+(* Cell-by-cell writers and nothing else: no loop, no [Zero_out], every component a guard, and the
+   union of four single cells the whole node. Each cell reads a materialized [src], so the node is
+   computed, not a literal table (next row). *)
+let row_fixed_component_cells () =
+  let x = mk "fcce_x" and src = mk ~dims:[| 1 |] "fcce_src" and out = mk "fcce_out" in
+  materialize src;
+  materialize out;
+  let t = sym () in
+  let cells =
+    List.init n ~f:(fun k ->
+        set x [| fixed k |] (add (c (31. +. Float.of_int k)) (get src [| fixed 0 |])))
+  in
+  let llc =
+    List.reduce_exn ~f:seq (cells @ [ loop_n t n (set out [| iter t |] (get x [| iter t |])) ])
+  in
+  row ~label:"fixed_component_cells" ~llc ~cand:x ~out
+    ~seed:[ (src, [| 100. |]) ]
+    ~expected:[| 131.; 132.; 133.; 134. |] ~verdict:Accepted
+
+(* The same cells as constants: a literal table, the in-kernel spelling of a [Tensor.ndarray] or
+   [Tensor.term_init] literal. Its symbolic read stays a buffer read -- a guard per cell would be
+   the cost, and a parameter's initial values would become code -- refused as 13 as before. *)
+let row_fixed_component_literal_table () =
+  let x = mk "fclt_x" and out = mk "fclt_out" in
+  materialize out;
+  let t = sym () in
+  let cells = List.init n ~f:(fun k -> set x [| fixed k |] (c (31. +. Float.of_int k))) in
+  let llc =
+    List.reduce_exn ~f:seq (cells @ [ loop_n t n (set out [| iter t |] (get x [| iter t |])) ])
+  in
+  row ~label:"fixed_component_literal_table" ~llc ~cand:x ~out ~seed:[]
+    ~expected:[| 31.; 32.; 33.; 34. |]
     ~verdict:(Rejected (Consumption, Ir.Tnode.Site "13:call-site-index-mismatch"))
+
+(* Overlaps in both orders over a piecewise cover: [x[1] := 9] is overwritten by the later loop over
+   cells 0..1; [x[0] += 100] after the loop accumulates onto its value; cell 3 is stored, then
+   accumulated. The replay applies the components oldest first over one shared local, so the last
+   writer wins and each accumulation reads the value before it. *)
+let row_fixed_component_overlaps () =
+  let x = mk "fcov_x" and out = mk "fcov_out" in
+  materialize out;
+  let s = sym () and t = sym () in
+  let llc =
+    List.reduce_exn ~f:seq
+      [
+        set x [| fixed 1 |] (c 9.);
+        loop_n s 2 (set x [| iter s |] (tick s));
+        set x [| fixed 2 |] (c 50.);
+        set x [| fixed 3 |] (c 60.);
+        set x [| fixed 0 |] (add (get x [| fixed 0 |]) (c 100.));
+        set x [| fixed 3 |] (add (get x [| fixed 3 |]) (c 5.));
+        loop_n t n (set out [| iter t |] (get x [| iter t |]));
+      ]
+  in
+  row ~label:"fixed_component_overlaps" ~llc ~cand:x ~out ~seed:[]
+    ~expected:[| 101.; 2.; 50.; 65. |] ~verdict:Accepted
+
+(* Two dimensions: rows written by separate loops, and a fixed cell of row 1. Read along row 1 the
+   cell is guarded ([2 == t]) and row 0's loop is omitted; read along row 0, both of row 1's
+   components are omitted. No single component covers the node; the row loops do together. *)
+let row_fixed_component_rows ~read_row =
+  let label = Printf.sprintf "fixed_component_rows_read%d" read_row in
+  let x = mk ~dims:[| 2; n |] (label ^ "_x") and out = mk (label ^ "_out") in
+  materialize out;
+  let s = sym () and s2 = sym () and t = sym () in
+  let llc =
+    List.reduce_exn ~f:seq
+      [
+        loop_n s n (set x [| fixed 0; iter s |] (ramp 10. s));
+        loop_n s2 n (set x [| fixed 1; iter s2 |] (ramp 20. s2));
+        set x [| fixed 1; fixed 2 |] (c 9.);
+        loop_n t n (set out [| iter t |] (get x [| fixed read_row; iter t |]));
+      ]
+  in
+  row ~label ~llc ~cand:x ~out ~seed:[]
+    ~expected:(if read_row = 0 then [| 10.; 11.; 12.; 13. |] else [| 20.; 21.; 9.; 23. |])
+    ~verdict:Accepted
+
+(* Omission is decided for the whole component before any of its positions is guarded: [x[1; 2]]
+   read along row 0 is disjoint at its first position, while its second ([2 == t]) would need a
+   fallback this node cannot prove -- row 1 is otherwise never written. Processed position by
+   position, the second would refuse the read site as 13. *)
+let row_fixed_component_disjoint_first () =
+  let x = mk ~dims:[| 2; n |] "fcdf_x" and out = mk "fcdf_out" in
+  materialize out;
+  let s = sym () and t = sym () in
+  let llc =
+    List.reduce_exn ~f:seq
+      [
+        loop_n s n (set x [| fixed 0; iter s |] (ramp 10. s));
+        set x [| fixed 1; fixed 2 |] (c 9.);
+        loop_n t n (set out [| iter t |] (get x [| fixed 0; iter t |]));
+      ]
+  in
+  row ~label:"fixed_component_disjoint_first" ~llc ~cand:x ~out ~seed:[]
+    ~expected:[| 10.; 11.; 12.; 13. |] ~verdict:Accepted
+
+(* === Consumption-time rejection === *)
+
+(* The proof's conservative edge: the components cover every cell the READ reaches (0..2), so the
+   coverage rule admits the node, but not the node -- cell 3 is never written. The proof is about
+   the node, since a read site's range is not known where the template is instantiated, so the fixed
+   component's guard has no fallback and the read site refuses; the node materializes, the correct
+   (if costlier) reading. *)
+let row_fixed_component_read_covered_only () =
+  let x = mk "fcro_x" and out = mk ~dims:[| n - 1 |] "fcro_out" in
+  materialize out;
+  let s = sym () and t = sym () in
+  let llc =
+    seq
+      (loop_n s 2 (set x [| iter s |] (tick s)))
+      (seq
+         (set x [| fixed 2 |] (c 9.))
+         (loop_n t (n - 1) (set out [| iter t |] (get x [| iter t |]))))
+  in
+  row ~label:"fixed_component_read_covered_only" ~llc ~cand:x ~out ~seed:[]
+    ~expected:[| 1.; 2.; 9. |]
+    ~verdict:(Rejected (Consumption, Ir.Tnode.Site "13:call-site-index-mismatch"))
+
+(* Declared-virtual nodes skip the coverage rule and have no materialization to fall back on, so
+   they are where the union proof alone decides: a complete union inlines, and every way of not
+   covering the node refuses -- loudly -- rather than reading a zero no write put there. *)
+let declared_virtual_union () =
+  (* Cells read a materialized [src] (seeded 100), so no node here is a literal table. *)
+  let src = mk ~dims:[| 1 |] "dvu_src" in
+  materialize src;
+  let case ?(width = n) ~label ~dims ~writes ~read_at expect =
+    let x = mk ~dims (label ^ "_x") and out = mk (label ^ "_out") in
+    virtualize x;
+    materialize out;
+    let t = sym () in
+    let llc =
+      List.reduce_exn ~f:seq
+        (writes x @ [ loop_n t width (set out [| iter t |] (add (get x (read_at t)) (tick t))) ])
+    in
+    match expect with
+    | `Inlined expected ->
+        let o = optimize ~name:label llc in
+        p (label ^ ": inlined") (known_virtual o x && count_get o x = 0);
+        p
+          (label ^ ": executed values are the reference")
+          (same
+             (execute ~name:label o ~seed:[ (src, [| 100. |]); (out, blank n) ] ~read:[ out ])
+             [ expected ])
+    | `Refused code ->
+        p
+          (label ^ ": refused as " ^ code)
+          (match optimize ~name:label llc with
+          | (_ : Ir.Low_level.optimized) -> false
+          | exception Utils.User_error msg -> String.is_substring msg ~substring:code)
+  in
+  let cell x k v = set x [| fixed k |] (add (c v) (get src [| fixed 0 |])) in
+  let flat t = [| iter t |] in
+  case ~label:"dvu_cells" ~dims:[| n |]
+    ~writes:(fun x -> List.init n ~f:(fun k -> cell x k (31. +. Float.of_int k)))
+    ~read_at:flat
+    (`Inlined [| 132.; 134.; 136.; 138. |]);
+  (* A duplicated cell instead of a missing one: four writes, three cells. *)
+  case ~label:"dvu_duplicate" ~dims:[| n |]
+    ~writes:(fun x -> [ cell x 0 31.; cell x 0 41.; cell x 2 33.; cell x 3 34. ])
+    ~read_at:flat (`Refused "13:call-site-index-mismatch");
+  (* A loop over cell 0 that never runs proves nothing about cell 0. *)
+  case ~label:"dvu_dead_loop" ~dims:[| n |]
+    ~writes:(fun x ->
+      let s = sym () in
+      loop ~upto:(-1) s (set x [| iter s |] (tick s))
+      :: List.init (n - 1) ~f:(fun k -> cell x (k + 1) (32. +. Float.of_int k)))
+    ~read_at:flat (`Refused "13:call-site-index-mismatch");
+  (* A diagonal's bounding box is the whole [2; 2] node, but cell [1; 0] is a hole. Read along row
+     1, the fixed component [x[1; 1]]'s guard [1 == t] falls back on that hole at [t = 0] (so does
+     the diagonal's own [1 == t]); taking the diagonal for a box would admit it and print a zero. *)
+  case ~label:"dvu_diagonal" ~width:2 ~dims:[| 2; 2 |]
+    ~writes:(fun x ->
+      let s = sym () in
+      [ loop_n s 2 (set x [| iter s; iter s |] (tick s)); set x [| fixed 1; fixed 1 |] (c 9.) ])
+    ~read_at:(fun t -> [| fixed 1; iter t |])
+    (`Refused "13:call-site-index-mismatch");
+  (* Every component disjoint from the fixed read: nothing is left to replay. *)
+  case ~label:"dvu_all_disjoint" ~dims:[| n |]
+    ~writes:(fun x -> [ cell x 0 31.; cell x 1 32. ])
+    ~read_at:(fun _ -> [| fixed 3 |])
+    (`Refused "13:call-site-index-mismatch")
 
 (* === Accepted === *)
 
@@ -527,6 +710,88 @@ let row_block_components () =
          (loop_n t n (set out [| iter t |] (get x [| iter t |]))))
   in
   row ~label:"block_components" ~llc ~cand:x ~out ~seed:[] ~expected:[| 1.; 2.; 20.; 21. |]
+    ~verdict:Accepted
+
+(* The same selection when a component's loop does not start at 0 (gh-ocannl-1795): the second
+   component writes cells 1..2 only, so its range guard is [1 <= t < 3]. A guard over the loop's
+   WIDTH from 0 ([0 <= t < 2]) let it overwrite cell 0 with [20] and left cell 2 at [3]. *)
+let row_block_components_offset_loop () =
+  let x = mk "blko_x" and out = mk "blko_out" in
+  materialize out;
+  let s = sym () and s2 = sym () and t = sym () in
+  let llc =
+    seq
+      (loop_n s n (set x [| iter s |] (tick s)))
+      (seq
+         (loop ~from_:1 ~upto:2 s2 (set x [| iter s2 |] (ramp 20. s2)))
+         (loop_n t n (set out [| iter t |] (get x [| iter t |]))))
+  in
+  row ~label:"block_components_offset_loop" ~llc ~cand:x ~out ~seed:[]
+    ~expected:[| 1.; 21.; 22.; 4. |] ~verdict:Accepted
+
+(* The unit-coefficient solve's range guard, over the same offset loop: [x[s2 + 1]] for [s2] in 1..2
+   writes cells 2..3, so [s2 = t - 1] must fall in [1, 3). *)
+let row_block_components_offset_affine () =
+  let x = mk "blka_x" and out = mk "blka_out" in
+  materialize out;
+  let s = sym () and s2 = sym () and t = sym () in
+  let llc =
+    seq
+      (loop_n s n (set x [| iter s |] (tick s)))
+      (seq
+         (loop ~from_:1 ~upto:2 s2 (set x [| aff [ (1, s2) ] 1 |] (ramp 20. s2)))
+         (loop_n t n (set out [| iter t |] (get x [| iter t |]))))
+  in
+  row ~label:"block_components_offset_affine" ~llc ~cand:x ~out ~seed:[]
+    ~expected:[| 1.; 2.; 21.; 22. |] ~verdict:Accepted
+
+(* A structural affine match binds producer symbols pairwise ([s + 1] read at [t + 1] binds [s :=
+   t]), which in a multi-component replay needs the same range guard a pass-1 binding gets: the
+   partial component writes cells 1..2 only, so at [t = 2] (cell 3) it must not replay. Without the
+   guard it overwrote cell 3 with [22]. Two shapes: a covering loop under the partial one, and
+   cell-by-cell ends whose union with it covers the node (Codex review of PR #1630). *)
+let row_block_components_structural ~cells =
+  let label = "block_components_structural" ^ if cells then "_cells" else "_loop" in
+  let x = mk (label ^ "_x") and out = mk ~dims:[| n - 1 |] (label ^ "_out") in
+  materialize out;
+  let s = sym () and s2 = sym () and t = sym () in
+  let base =
+    if cells then [ set x [| fixed 0 |] (c 10.); set x [| fixed 3 |] (c 30.) ]
+    else [ loop_n s n (set x [| iter s |] (tick s)) ]
+  in
+  let llc =
+    List.reduce_exn ~f:seq
+      (base
+      @ [
+          loop_n s2 2 (set x [| aff [ (1, s2) ] 1 |] (ramp 20. s2));
+          loop_n t (n - 1) (set out [| iter t |] (get x [| aff [ (1, t) ] 1 |]));
+        ])
+  in
+  row ~label ~llc ~cand:x ~out ~seed:[]
+    ~expected:(if cells then [| 20.; 21.; 30. |] else [| 20.; 21.; 4. |])
+    ~verdict:Accepted
+
+(* With several terms the read's symbols need not decompose a cell the way the producer's loops do:
+   [x[2u + v]] for [v] in 0..3 reads cells the producer writes as [x[2s + t]] for [t] in 0..1, so a
+   pairwise binding [t := v] with its range guard would drop cells the component writes. In a
+   multi-component replay the match is left to unit-coefficient solving, which keeps [s]'s loop and
+   guards the decomposition that holds. [tag s t] separates the two decompositions (Codex
+   review). *)
+let row_block_components_two_terms () =
+  let x = mk ~dims:[| 6 |] "blk2_x" and out = mk ~dims:[| 2; n |] "blk2_out" in
+  materialize out;
+  let s = sym () and t = sym () and u = sym () and v = sym () in
+  let llc =
+    List.reduce_exn ~f:seq
+      [
+        set x [| fixed 0 |] (c 10.);
+        loop_n s 3 (loop_n t 2 (set x [| aff [ (2, s); (1, t) ] 0 |] (tag s t)));
+        loop_n u 2
+          (loop_n v n (set out [| iter u; iter v |] (get x [| aff [ (2, u); (1, v) ] 0 |])));
+      ]
+  in
+  row ~label:"block_components_two_terms" ~llc ~cand:x ~out ~seed:[]
+    ~expected:[| 1.; 2.; 11.; 12.; 11.; 12.; 21.; 22. |]
     ~verdict:Accepted
 
 (* gh-ocannl-1690: one cell, two spellings. On an axis of extent 1 a producer position [Fixed_idx 0]
@@ -606,6 +871,65 @@ let row_unit_axis_flattened () =
   in
   row ~label:"unit_axis_flattened" ~llc ~cand:x ~out ~seed:[] ~expected:[| 9.; 2.; 3.; 4. |]
     ~verdict:Accepted
+
+(* === Mismatched coordinate layouts (gh-ocannl-1795) ===
+
+   The mirror of [row_unit_axis_flattened]: there the producer and the read both flatten the node
+   through [Sub_axis], so position by position they name the same coordinate. Here only the READ
+   does, and the inliner solves raw positions pairwise: it bound the producer's first symbol to the
+   run placeholder and carried it on. Each of these inlined and miscomputed before the layout gate
+   (the values in each comment); each read site is now refused, and the node materializes. *)
+
+(* Into a guard: the diagonal's repeated symbol becomes [Sub_axis == t] ([Embed_index Sub_axis]
+   renders as nothing), which printed [1; 0; 0; 0]. *)
+let row_flattened_read_diagonal () =
+  let x = mk ~dims:[| 2; 2 |] "frd_x" and out = mk "frd_out" in
+  materialize out;
+  let s = sym () and t = sym () in
+  let llc =
+    seq (zero x)
+      (seq
+         (loop_n s 2 (set x [| iter s; iter s |] (tick s)))
+         (loop_n t n (set out [| iter t |] (get x [| Idx.Sub_axis; iter t |]))))
+  in
+  row ~label:"flattened_read_diagonal" ~llc ~cand:x ~out ~seed:[] ~expected:[| 1.; 0.; 0.; 2. |]
+    ~verdict:(Rejected (Consumption, Ir.Tnode.Site "13:call-site-index-mismatch"))
+
+(* Into a fixed guard and the range guards: [2 == t] compares the producer's column with the flat
+   index, and the covering component's guards bound the flat index by the row count, which printed
+   [1; 2; 90; 4; 0; 0; 0; 0]. *)
+let row_flattened_read_fixed_component () =
+  let x = mk ~dims:[| 2; 4 |] "frf_x" and out = mk ~dims:[| 8 |] "frf_out" in
+  materialize out;
+  let i = sym () and k = sym () and s = sym () and t = sym () in
+  let llc =
+    seq
+      (loop_n i 2 (loop_n k 4 (set x [| iter i; iter k |] (tag i k))))
+      (seq
+         (loop_n s 2 (set x [| iter s; fixed 2 |] (ramp 90. s)))
+         (loop_n t 8 (set out [| iter t |] (get x [| Idx.Sub_axis; iter t |]))))
+  in
+  row ~label:"flattened_read_fixed_component" ~llc ~cand:x ~out ~seed:[]
+    ~expected:[| 1.; 2.; 90.; 4.; 11.; 12.; 91.; 14. |]
+    ~verdict:(Rejected (Consumption, Ir.Tnode.Site "13:call-site-index-mismatch"))
+
+(* Into the replay's other reads, with no guard at all: a transposing producer [x[i; k] := a[k; i]]
+   replayed as [a[t; Sub_axis]], which printed [1; 3; 5; 0; 0; 0]. *)
+let row_flattened_read_transpose () =
+  let a = mk ~dims:[| 3; 2 |] "frt_a" and x = mk ~dims:[| 2; 3 |] "frt_x" in
+  let out = mk ~dims:[| 6 |] "frt_out" in
+  materialize a;
+  materialize out;
+  let i = sym () and k = sym () and t = sym () in
+  let llc =
+    seq
+      (loop_n i 2 (loop_n k 3 (set x [| iter i; iter k |] (get a [| iter k; iter i |]))))
+      (loop_n t 6 (set out [| iter t |] (get x [| Idx.Sub_axis; iter t |])))
+  in
+  row ~label:"flattened_read_transpose" ~llc ~cand:x ~out
+    ~seed:[ (a, [| 1.; 2.; 3.; 4.; 5.; 6. |]) ]
+    ~expected:[| 1.; 3.; 5.; 2.; 4.; 6. |]
+    ~verdict:(Rejected (Consumption, Ir.Tnode.Site "13:call-site-index-mismatch"))
 
 (* === A refused scalar constexpr declines (gh-ocannl-1735) ===
 
@@ -762,14 +1086,30 @@ let () =
   row_fixed_component_accumulating ();
   row_fixed_component_zero_init ();
   row_fixed_component_uninitialized ();
+  declared_virtual_fixed_component ();
   row_fixed_component_fixed_read ();
   row_fixed_component_partial_cover ();
-  declared_virtual_fixed_component ();
+  row_fixed_component_cells ();
+  row_fixed_component_literal_table ();
+  row_fixed_component_overlaps ();
+  row_fixed_component_rows ~read_row:0;
+  row_fixed_component_rows ~read_row:1;
+  row_fixed_component_disjoint_first ();
+  row_fixed_component_read_covered_only ();
+  declared_virtual_union ();
   row_block_components ();
+  row_block_components_offset_loop ();
+  row_block_components_offset_affine ();
+  row_block_components_structural ~cells:false;
+  row_block_components_structural ~cells:true;
+  row_block_components_two_terms ();
   row_unit_axis_fixed_producer ();
   row_unit_axis_computed_producer ();
   row_unit_axis_loop_producer ();
   row_unit_axis_flattened ();
+  row_flattened_read_diagonal ();
+  row_flattened_read_fixed_component ();
+  row_flattened_read_transpose ();
   row_hoisted_local ();
   row_scan_recurrence ();
   row_constexpr_cap_exempt ();

@@ -79,6 +79,10 @@ let widens_bf16 =
    CPU-only rendering or grep cc's generated C). *)
 let cc_leg = Verdict.leg ~when_:on_cpu ~on:backend_name ()
 
+(* How cc narrows an f32 value into bf16 storage: the C reference's own spelling, read rather than
+   restated, so a change to it cannot leave the emission checks below matching nothing. *)
+let bf16_narrowing = fst (Ir.Ops.c_convert_precision ~from:Ir.Ops.single ~to_:Ir.Ops.bfloat16)
+
 module Generated = Test_utils.Generated
 
 let () = Generated.init ~backend_name
@@ -436,7 +440,8 @@ let default_bf16_block () =
       (* Per-step narrowing reads the bf16 accumulator back and narrows the sum again; once per
          cell, the f32 accumulator is narrowed by the store. The update is a plain add: contraction
          is a licence, off by default (gh-ocannl-998). *)
-      p label ((not (has "single_to_bfloat16((bfloat16_to_single(")) && has "= single_to_bfloat16(v"));
+      p label
+        ((not (has (bf16_narrowing ^ "(bfloat16_to_single("))) && has ("= " ^ bf16_narrowing ^ "v")));
   (* Structural: a merge-buffer read is a separate read-only staging buffer, so [p =+ p.merge] stays
      a recognizable accumulation (no same-node merge REDUCTION is constructible — merge buffers are
      node-shaped — so the recognizer shape is the whole reachable surface). *)
@@ -1105,7 +1110,7 @@ let default_bf16_block () =
     (fun label ->
       let src = Generated.read ~ext:".c" "aw_bf16_naive_off" in
       let has s = String.is_substring src ~substring:s in
-      p label (has "single_to_bfloat16((bfloat16_to_single("))
+      p label (has (bf16_narrowing ^ "(bfloat16_to_single(")))
 
 let () = Test_utils.with_policy bf16_auto default_bf16_block
 
