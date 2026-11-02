@@ -226,6 +226,19 @@ val covers_box : range:(Indexing.symbol -> (int * int) option) -> coord array ->
     exactly composes to the coordinate's size, or [0] on a unit-size coordinate. Generalizes (and is
     checked against) the procedural per-axis rule of [C_syntax.first_access_standalone_covering]. *)
 
+val union_covers_box :
+  ?max_boxes:int ->
+  ?budget:int ->
+  ((Indexing.symbol -> (int * int) option) * coord array) list ->
+  bool
+(** [union_covers_box writes]: whether the viewed accesses TOGETHER touch every cell of their node,
+    each as its symbols range over its own bounds — definite coverage of a node written piecewise
+    (gh-ocannl-1795), with no exactly-once promise (that is {!covers_box}). Sound and conservative:
+    an access is evidence only where its written set is proved to be a product of contiguous
+    per-coordinate runs (in the views' common frame, no varying symbol shared by two coordinates,
+    every symbol ranged, no dead range); [false] means "not proved", and so does exceeding
+    [max_boxes] (default 4096) accesses or the sweep's strip [budget] (default 10^6). *)
+
 (** {2 Counting} *)
 
 val fiber_cardinality :

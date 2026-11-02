@@ -885,6 +885,171 @@ let () =
   p "a mixed guard's static bound is not something the cell must separate"
     (match pending [ w; k; s ] with Some [ x ] -> Idx.equal_symbol x w | _ -> false)
 
+(* gh-ocannl-1795: [union_covers_box] -- definite coverage of a node by a SET of accesses, each over
+   its own loop bounds. Oracle: enumerate each access's symbols and collect the row-major flat cells
+   it writes (a [Sub_axis] adds zero and keeps its stride, as the renderer reads it), ignoring
+   out-of-bounds addresses; the node is covered when every flat cell is hit. Soundness is the claim:
+   a [true] query must be covered by the enumeration. Exactness is claimed where the query promises
+   it -- every access a box (each varying symbol in one coordinate, a unit coefficient, no dead
+   range) -- and the precision it gives up elsewhere (diagonals, strides) is printed. *)
+type ucb_write = { w_ranges : (Idx.symbol * (int * int)) list; w_idcs : Idx.axis_index array }
+
+let ucb_flat_cells ~dims (w : ucb_write) =
+  let mentioned =
+    Array.to_list w.w_idcs
+    |> List.concat_map ~f:(function
+      | Idx.Iterator s -> [ s ]
+      | Idx.Affine { symbols; _ } -> List.map symbols ~f:snd
+      | _ -> [])
+    |> List.dedup_and_sort ~compare:Idx.compare_symbol
+  in
+  let numel = Array.fold dims ~init:1 ~f:( * ) in
+  List.filter_map (envs w.w_ranges mentioned) ~f:(fun env ->
+      let rank = Array.length dims in
+      let stride = ref 1 and flat = ref 0 and ok = ref true in
+      for a = rank - 1 downto 0 do
+        (match w.w_idcs.(a) with
+        | Idx.Sub_axis -> ()
+        | idx -> (
+            match eval_idx env idx with
+            | Some v -> flat := !flat + (v * !stride)
+            | None -> ok := false));
+        stride := !stride * dims.(a)
+      done;
+      if !ok && !flat >= 0 && !flat < numel then Some !flat else None)
+
+let ucb_oracle ~dims writes =
+  let numel = Array.fold dims ~init:1 ~f:( * ) in
+  let hit = Array.create ~len:numel false in
+  List.iter writes ~f:(fun w -> List.iter (ucb_flat_cells ~dims w) ~f:(fun c -> hit.(c) <- true));
+  Array.for_all hit ~f:Fn.id
+
+(* [hide]: symbols the query is not told the range of (a static index), which the oracle still
+   enumerates. *)
+let ucb_query ?(hide = []) ~dims writes =
+  let range w s =
+    if List.mem hide s ~equal:Idx.equal_symbol then None else find_range w.w_ranges s
+  in
+  Aff.union_covers_box (List.map writes ~f:(fun w -> (range w, Aff.view ~dims w.w_idcs)))
+
+(* Whether the query promises exactness on this set: every access a box (a dead range writes the
+   empty box, which the query's declining it represents exactly). *)
+let ucb_boxes writes =
+  List.for_all writes ~f:(fun w ->
+      let varying = List.filter w.w_ranges ~f:(fun (_, (lo, hi)) -> lo < hi) in
+      List.for_all varying ~f:(fun (s, _) ->
+          Array.count w.w_idcs ~f:(function
+            | Idx.Iterator s' -> Idx.equal_symbol s s'
+            | Idx.Affine { symbols; _ } ->
+                List.exists symbols ~f:(fun (_, s') -> Idx.equal_symbol s s')
+            | _ -> false)
+          <= 1)
+      && Array.for_all w.w_idcs ~f:(function Idx.Affine _ -> false | _ -> true))
+
+let () =
+  Stdio.printf "\n=== union_covers_box ===\n";
+  let cov ?hide ~name ~dims writes =
+    let query = ucb_query ?hide ~dims writes and oracle = ucb_oracle ~dims writes in
+    let ok = (not query) || oracle in
+    if not ok then unsound name;
+    Stdio.printf "%-34s query %-12b oracle %-12b%s\n" name query oracle
+      (if ok then "" else "  UNSOUND")
+  in
+  let fx k = Idx.Fixed_idx k and it s = Idx.Iterator s in
+  let w ?(ranges = []) idcs = { w_ranges = ranges; w_idcs = idcs } in
+  let i = sym () and j = sym () and k = sym () and a = sym () and b = sym () in
+  cov ~name:"singletons cover" ~dims:[| 3 |] [ w [| fx 0 |]; w [| fx 1 |]; w [| fx 2 |] ];
+  cov ~name:"singletons miss a cell" ~dims:[| 3 |] [ w [| fx 0 |]; w [| fx 2 |] ];
+  cov ~name:"duplicate cell, one missing" ~dims:[| 3 |] [ w [| fx 0 |]; w [| fx 0 |]; w [| fx 2 |] ];
+  cov ~name:"loop plus the last cell" ~dims:[| 3 |]
+    [ w ~ranges:[ (i, (0, 1)) ] [| it i |]; w [| fx 2 |] ];
+  cov ~name:"non-zero-based loop plus cell 0" ~dims:[| 3 |]
+    [ w ~ranges:[ (i, (1, 2)) ] [| it i |]; w [| fx 0 |] ];
+  cov ~name:"dead loop proves nothing" ~dims:[| 3 |]
+    [ w ~ranges:[ (i, (1, 0)) ] [| it i |]; w [| fx 1 |]; w [| fx 2 |] ];
+  cov ~name:"unranged symbol proves nothing" ~hide:[ k ] ~dims:[| 3 |]
+    [ w ~ranges:[ (k, (0, 2)) ] [| it k |] ];
+  cov ~name:"row strips cover" ~dims:[| 2; 3 |]
+    [ w ~ranges:[ (j, (0, 2)) ] [| fx 0; it j |]; w ~ranges:[ (i, (0, 2)) ] [| fx 1; it i |] ];
+  cov ~name:"strips plus a cell, a gap" ~dims:[| 2; 3 |]
+    [ w ~ranges:[ (j, (0, 2)) ] [| fx 0; it j |]; w ~ranges:[ (i, (0, 1)) ] [| fx 1; it i |] ];
+  cov ~name:"diagonal, one off-diagonal" ~dims:[| 2; 2 |]
+    [ w ~ranges:[ (i, (0, 1)) ] [| it i; it i |]; w [| fx 0; fx 1 |] ];
+  cov ~name:"diagonal, both off-diagonals" ~dims:[| 2; 2 |]
+    [ w ~ranges:[ (i, (0, 1)) ] [| it i; it i |]; w [| fx 0; fx 1 |]; w [| fx 1; fx 0 |] ];
+  cov ~name:"strided halves 2i, 2i+1" ~dims:[| 6 |]
+    [
+      w ~ranges:[ (i, (0, 2)) ] [| aff [ (2, i) ] 0 |];
+      w ~ranges:[ (j, (0, 2)) ] [| aff [ (2, j) ] 1 |];
+    ];
+  cov ~name:"mixed radix a+3b" ~dims:[| 12 |]
+    [ w ~ranges:[ (a, (0, 2)); (b, (0, 3)) ] [| aff [ (1, a); (3, b) ] 0 |] ];
+  cov ~name:"flattened run meets a row" ~dims:[| 2; 2 |]
+    [
+      w ~ranges:[ (i, (0, 1)) ] [| Idx.Sub_axis; it i |]; w ~ranges:[ (j, (0, 1)) ] [| fx 1; it j |];
+    ];
+  (* Exhaustive sweep: every access built from per-axis choices (a fixed cell, a contiguous loop, a
+     dead loop, a stride-2 loop), every set of up to three on a [3] node and up to two on a [2; 3]
+     node, plus diagonals sharing one symbol across both axes. *)
+  let choices n =
+    List.init n ~f:(fun c -> `Fixed c)
+    @ List.concat_map (List.init n ~f:Fn.id) ~f:(fun lo ->
+        List.init (n - lo) ~f:(fun d -> `Loop (lo, lo + d)))
+    @ [ `Loop (1, 0) ]
+    @ if n >= 3 then [ `Stride (0, (n - 1) / 2) ] else []
+  in
+  let build dims_choices =
+    let ranges = ref [] in
+    let idcs =
+      Array.of_list
+        (List.map dims_choices ~f:(function
+          | `Fixed c -> fx c
+          | `Loop r ->
+              let s = sym () in
+              ranges := (s, r) :: !ranges;
+              it s
+          | `Stride r ->
+              let s = sym () in
+              ranges := (s, r) :: !ranges;
+              aff [ (2, s) ] 0))
+    in
+    w ~ranges:!ranges idcs
+  in
+  let diagonals n m =
+    List.init (min n m) ~f:(fun hi ->
+        let s = sym () in
+        w ~ranges:[ (s, (0, hi)) ] [| it s; it s |])
+  in
+  let one_d = List.map (choices 3) ~f:(fun c -> build [ c ]) in
+  let two_d =
+    List.concat_map (choices 2) ~f:(fun c0 -> List.map (choices 3) ~f:(fun c1 -> build [ c0; c1 ]))
+    @ diagonals 2 3
+  in
+  (* Every non-empty ordered list of at most [k] accesses from [pool], repetitions included. *)
+  let sets_upto k pool =
+    let rec go k =
+      if k = 0 then [ [] ]
+      else [] :: List.concat_map (go (k - 1)) ~f:(fun s -> List.map pool ~f:(fun x -> x :: s))
+    in
+    List.filter (go k) ~f:(fun s -> not (List.is_empty s))
+  in
+  let tally = Hashtbl.create (module String) and inexact = ref 0 and cases = ref 0 in
+  let sweep ~dims sets =
+    List.iter sets ~f:(fun writes ->
+        Int.incr cases;
+        let query = ucb_query ~dims writes and oracle = ucb_oracle ~dims writes in
+        if query && not oracle then unsound "union_covers_box sweep";
+        if ucb_boxes writes && not (Bool.equal query oracle) then Int.incr inexact;
+        Hashtbl.incr tally (Printf.sprintf "query %b / oracle %b" query oracle))
+  in
+  sweep ~dims:[| 3 |] (sets_upto 3 one_d);
+  sweep ~dims:[| 2; 3 |] (sets_upto 2 two_d);
+  Hashtbl.to_alist tally
+  |> List.sort ~compare:(fun (x, _) (y, _) -> String.compare x y)
+  |> List.iter ~f:(fun (key, n) -> Stdio.printf "%-28s %d\n" key n);
+  Verdict.claim "union_covers_box sweep: the sweep enumerated access sets" (!cases > 0);
+  Verdict.claim "union_covers_box sweep: exact on every set of boxes" (!inexact = 0)
+
 (* The tally, last: every section above has run by now, so a case any of them found unsound is
    counted here as well as failing its own claim. *)
 let () = Stdio.printf "\nunsound cases: %d\n" !unsound_count

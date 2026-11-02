@@ -119,4 +119,23 @@ a mixed guard defers to the cell, naming the enclosing symbol            true
 a mixed guard names every enclosing symbol it mentions, once             true
 a mixed guard's static bound is not something the cell must separate     true
 
+=== union_covers_box ===
+singletons cover                   query true         oracle true        
+singletons miss a cell             query false        oracle false       
+duplicate cell, one missing        query false        oracle false       
+loop plus the last cell            query true         oracle true        
+non-zero-based loop plus cell 0    query true         oracle true        
+dead loop proves nothing           query false        oracle false       
+unranged symbol proves nothing     query false        oracle true        
+row strips cover                   query true         oracle true        
+strips plus a cell, a gap          query false        oracle false       
+diagonal, one off-diagonal         query false        oracle false       
+diagonal, both off-diagonals       query false        oracle true        
+strided halves 2i, 2i+1            query false        oracle true        
+mixed radix a+3b                   query true         oracle true        
+flattened run meets a row          query true         oracle true        
+query false / oracle false   5190
+query false / oracle true    166
+query true / oracle true     799
+
 unsound cases: 0
