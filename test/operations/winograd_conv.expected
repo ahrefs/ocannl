@@ -68,8 +68,9 @@ the replaced kernel changes the direct output: true
 first call: Winograd matches the direct form bitwise: true
 second call, new kernel: Winograd matches the direct form bitwise: true
 --- leg 4: training -- parameter gradients agree with the direct form ---
-the direct step's forward mints nothing: true
-the rewritten step's forward writes both convs' transforms (6 minted buffers): true
+the direct step mints nothing: true
+the rewritten step writes both forward convs' and the second conv's data-gradient transforms (9 minted buffers): true
+the rewritten step writes the hidden activation's gradient from a minted product buffer: true
 the loss agrees within 1e-4 relative: true
 parameters with gradients: 4
 the same parameters carry gradients in both runs: true

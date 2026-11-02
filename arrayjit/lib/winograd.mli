@@ -35,15 +35,35 @@
     which this rewrite carries through: a batch of one is a fixed index here);
     [test/operations/winograd_conv] pins the two to agree on the eligible sites.
 
-    Only the forward accumulation is rewritten: a conv's data gradient writes at affine indices and
-    its weight gradient's "window" is the feature map, so both keep the direct form.
+    {b The data gradient} (gh-ocannl-1548). A conv's data gradient lowers to the scatter
+    [dx[.., o + k, ..] += gy[.., o, ..] * w[.., k, ..]]: the destination carries the two [o + k]
+    axes and both operands read plainly. It equals the gather
+    [dx[.., j, ..] = sum_i gy~[.., j + i - 2, ..] * w[.., 2 - i, ..]] for [j] from 0 to [n + 1] --
+    exactly the scatter's write range -- with [gy~] the upstream gradient extended by zero outside
+    its loop's domain (0 to [n - 1]): a 3x3 conv with the kernel flipped and the channel roles
+    exchanged. The rewrite computes that gather with the same four nests: the kernel transform reads
+    the flipped taps, and the input transform reads [gy] at [2 t + i - 2] under the gh-504 clamp's
+    index guards ([Where (0 <= idx && idx < n, gy[idx], 0)], each read carrying only the bounds it
+    can cross), so no read leaves the source's domain and no padded copy is materialized. An odd
+    gather extent (an odd [n]) keeps the ORIGINAL scatter on disjoint boxes: the last row is the
+    scatter's [o_h = n_h - 1, k_h = 2]; the last column, over the rows above it, is
+    [o_w = n_w - 1, k_w = 2] with [o_h + k_h <= n_h] (two boxes when both extents are odd); empty
+    boxes are skipped. Recognition mirrors the forward's: a perfect serial nest of [d = d + x * y]
+    (either order, or [fma]) whose destination has exactly two unit-coefficient offset-free [o + k]
+    axes and is otherwise plain or fixed; one operand reads the two [o]s plainly, the other the two
+    window symbols (each over [0..2]); separability; exactly one result channel (in the destination
+    and the kernel), one reduction channel (in [gy] and the kernel), the rest batch axes; loops from
+    0; three distinct single-precision nodes. A spatial extent of one is lowered as a fixed index,
+    so such a conv's data gradient is left alone. The weight gradient, whose "window" is the feature
+    map, keeps the direct form.
 
     The transformed-domain arithmetic changes rounding beyond reassociation (the kernel transform
     scales by halves and quarters, the tile transforms add and subtract), so results move within the
     [approximate] tier's tolerance; on inputs whose every partial sum is exactly representable the
     two forms agree bitwise, since every coefficient is dyadic. The rewrite is idempotent, as the
-    tier's fixpoint requires: transformed reads index [2 t + i], the contractions have no window,
-    and a remainder strip's output loop does not start at 0. *)
+    tier's fixpoint requires: transformed reads index [2 t + i], the contractions have no window, a
+    forward remainder strip's output loop does not start at 0, and every data-gradient remainder box
+    fixes a window loop at 2. *)
 
 val enabled : unit -> bool
 (** Whether the rewrite applies: the programmatic override if one is set, else the config key
