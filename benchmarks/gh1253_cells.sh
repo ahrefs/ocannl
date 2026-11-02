@@ -48,6 +48,12 @@
 #                      score of each candidate under the fitted rates and with both rates off (the
 #                      capacity and cache tier as fitted either way); benchmarks/gh1442_agreement.py
 #                      joins them into OUT/rank_<site>_agreement.txt.
+# CAPACITY_ONLY=1 (gh-ocannl-1687) runs the bandwidth and calibrate cells alone and stops: the
+# DRAM rate and the cache capacity, and nothing else. It is the only mode BACKEND cc takes: cc's
+# advisory model_cache_capacity is that cell's fit, on the plain default pipeline, whose Grid
+# iterations the score reads as resident blocks (ahrefs/ocannl#1610). On cc the calibrate cell
+# splits on its sweep's own rate contrast, over finer extents, not against the STREAM rate: the
+# untiled contraction is issue-bound there, below DRAM bandwidth even when cached.
 # RANK_ONLY=1 (gh-ocannl-1278) runs the agreement cells alone, under the shipped per-class
 # constants: no calibration or wgrad cell runs, and the `fitted` arm is named `shipped` (the
 # defaults, no model_* flag), beside `ceilings`. With it, SITES may name bench_rank_site's
@@ -145,8 +151,18 @@ if [[ -n "${EXPLAIN_ONLY:-}" ]]; then
   done
   if [[ $missing -gt 0 ]]; then exit 2; fi
 fi
+if [[ ${CAPACITY_ONLY:-0} == 1 && ( ${RANK_ONLY:-0} == 1 || -n "$rows_dir" ) ]]; then
+  echo "$0: CAPACITY_ONLY runs the calibration cells alone; it takes neither RANK_ONLY nor EXPLAIN_ONLY" >&2
+  exit 2
+fi
 case "$backend" in
 cuda | hip) ;;
+cc)
+  if [[ ${CAPACITY_ONLY:-0} != 1 ]]; then
+    echo "$0: BACKEND cc needs CAPACITY_ONLY=1 (its seeding, wgrad and agreement cells are GPU-shaped)" >&2
+    exit 2
+  fi
+  ;;
 metal)
   if [[ ${RANK_ONLY:-0} != 1 && -z "$rows_dir" ]]; then
     echo "$0: BACKEND metal needs RANK_ONLY=1 or EXPLAIN_ONLY (the calibration cells are CUDA/HIP only)" >&2
@@ -154,7 +170,7 @@ metal)
   fi
   ;;
 *)
-  echo "$0: BACKEND must be cuda, hip or metal, got $backend" >&2
+  echo "$0: BACKEND must be cuda, hip, metal or cc, got $backend" >&2
   exit 2
   ;;
 esac
@@ -258,7 +274,17 @@ else
   bw=$(fitted model_peak_memory_bandwidth "$out/bandwidth.out")
   if [[ -n "$bw" ]]; then model+=("--ocannl_model_dram_bandwidth=$bw"); fi
   echo "   model flags after bandwidth: ${model[*]:-none}"
-  cell calibrate "$calibrate" --repeats=10 ${model[@]+"${model[@]}"}
+  calibrate_flags=(${model[@]+"${model[@]}"})
+  if [[ $backend == cc ]]; then
+    # gh-ocannl-1687: on cc the untiled contraction is issue-bound -- its requested rate sits far
+    # below the STREAM rate on both sides of the knee (4-16 against 119 GB/s on minix's Zen 5),
+    # so a split against the DRAM rate reads every point as spilled. The fit splits on the
+    # sweep's own contrast instead (no DRAM rate), at two points per octave around the knee where
+    # x (k x 1024 floats) outgrows the last-level cache.
+    calibrate_flags=(--ocannl_model_dram_bandwidth=none
+      --ks=256,512,1024,2048,3072,4096,6144,8192,12288,16384,24576,32768)
+  fi
+  cell calibrate "$calibrate" --repeats=10 ${calibrate_flags[@]+"${calibrate_flags[@]}"}
   capacity=$(fitted model_cache_capacity "$out/calibrate.out")
   if [[ -n "$capacity" ]]; then
     model+=("--ocannl_model_cache_capacity=$capacity")
@@ -270,6 +296,11 @@ else
   fi
   cache_bw=$(fitted model_cache_bandwidth "$out/calibrate.out")
   if [[ -n "$cache_bw" ]]; then model+=("--ocannl_model_cache_bandwidth=$cache_bw"); fi
+  if [[ ${CAPACITY_ONLY:-0} == 1 ]]; then
+    echo "gh1253_cells: CAPACITY_ONLY: fitted ${model[*]:-nothing}; $failed cell(s) failed"
+    if [[ $failed -gt 0 ]]; then exit 1; fi
+    exit 0
+  fi
   # The capacity and cache tier as fitted, without the rates: the ceilings arm of the agreement cells.
   tiers=(${model[@]+"${model[@]}"})
   cell issue "$issue" --repeats=10 ${mp_flag[@]+"${mp_flag[@]}"} \
