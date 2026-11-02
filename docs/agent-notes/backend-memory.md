@@ -389,6 +389,24 @@ files.
   precision (`<not-in-yet>` only while the dims are unresolved), not `Lazy.is_val` of the size
   (gh-ocannl-1369), after a HIP-only forcing turned the backend-uniform
   `test/einsum/moons_demo_variant` golden red on HIP alone.
+- **A CUDA launch can be refused device memory with no buffer in sight** (gh-ocannl-1773). The
+  driver backs a kernel's local memory (its PTX `__local_depot`: `Local` arrays, spills) for every
+  thread the device keeps resident -- depot x threads per multiprocessor x multiprocessors, whatever
+  the launch geometry -- and keeps the grown reservation for the context's life. Measured on rog-nv
+  (46 x 1536 threads): `schedule_strided_1x1`'s unscheduled resnet-block reference, ONE thread with
+  a 48 KiB depot (three 16 KiB `Local` nodes, each exactly at `stack_threshold_in_bytes`), took its
+  process from 160 MiB to 3520 MiB until exit, and under a second GPU batch `cu_launch_kernel`
+  answered `CUDA_ERROR_OUT_OF_MEMORY` (the 2026-10-02 and 10-31 flakes). `link_proc` now retries
+  such a launch over a 15.5 s back-off (`launch_with_memory_backoff`; a stderr line per refusal
+  states the reservation), at once re-raising the driver's exception when the reservation exceeds
+  total memory. The exception stays the driver's: the sweep's serial rerun keys on its text, and
+  `classify_failure` already declines it `No_device_writes` in a search. The backend's global debug
+  info counts `launch_memory_retries` and `launch_memory_refusals`. Nothing bounds the frame itself
+  on CUDA (`stack_threshold_in_bytes` is per node, HIP's `max_thread_private_bytes` gate HIP-only),
+  and the reservation scales with the device: on a 132 x 2048 device the same 48 KiB frame is 13 GiB. The graph-launch path (`Cu.Graph.launch`) has no back-off.
+  Guard: `test/operations/cuda_launch_reservation` (a hopeless frame declined; by hand, under an
+  exclusive hold, `--contended` outwaits a child process holding the memory -- in a shared batch
+  that child refused its neighbours, `schedule_strided_1x1` among them).
 - Building a test kernel that actually *has* a big scratch frame takes care: write the `Local`
   array in one loop and read it back in REVERSE in another. A forward read in the same order lets
   the compiler forward each store to its load and delete the array, leaving nothing to reject.

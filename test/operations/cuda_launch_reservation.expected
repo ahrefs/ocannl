@@ -1,0 +1,3 @@
+hopeless: the launch is declined as the driver's out-of-memory refusal, with no device writes: true
+hopeless: refused once, without a retry: true
+hopeless: the context then runs a small-frame kernel correctly: true
