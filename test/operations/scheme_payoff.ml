@@ -81,15 +81,22 @@ type run = {
 
 let seconds started = Mtime.Span.to_float_ns (Mtime_clock.count started) /. 1e9
 
-let run_one (mode : mode) w n =
+(* [~unbounded]: with the rank-cycle search walking everything a new edge's target reaches, as
+   before gh-ocannl-1802 bounded it by the edge's endpoints: the reference for its work counter. *)
+let run_one ?(unbounded = false) (mode : mode) w n =
   Tensor.For_testing.set_op_shape_schemes (Some mode);
   Tensor.unsafe_reinitialize ();
   Tensor.Scheme.reset_registration_counts ();
   Tensor.Scheme.reset_registration_times ();
   let started = Mtime_clock.counter () in
-  let y = w.build n in
-  let construction_s = seconds started in
-  let result_dims = Array.to_list (Shape.to_dims y.Tensor.shape) in
+  let infer () =
+    let y = w.build n in
+    let construction_s = seconds started in
+    (y, construction_s, Array.to_list (Shape.to_dims y.Tensor.shape))
+  in
+  let y, construction_s, result_dims =
+    if unbounded then Ocannl.Row.with_unbounded_rank_search infer else infer ()
+  in
   let total_s = seconds started in
   let params =
     Set.to_list y.Tensor.params
@@ -222,10 +229,17 @@ let () =
             List.concat_map depths ~f:(fun n ->
                 List.map modes ~f:(fun mode -> ((w.w_name, n, mode), run_one mode w n))))
       in
+      let unbounded =
+        List.concat_map workloads ~f:(fun w ->
+            List.map depths ~f:(fun n -> ((w.w_name, n), run_one ~unbounded:true `Off w n)))
+      in
       Tensor.For_testing.set_op_shape_schemes None;
       Stdio.eprintf "(not part of the golden) %s\n" row_header;
       List.iter results ~f:(fun ((w, n, mode), r) ->
           Stdio.eprintf "(not part of the golden) %s\n" (count_row w n mode r.counts));
+      List.iter unbounded ~f:(fun ((w, n), r) ->
+          Stdio.eprintf "(not part of the golden) unbounded rank search: %s\n"
+            (count_row w n `Off r.counts));
       Stdio.eprintf "(not part of the golden) %s\n" time_header;
       List.iter results ~f:(fun ((w, n, mode), r) ->
           Stdio.eprintf "(not part of the golden) %s\n" (time_row w n mode r));
@@ -244,4 +258,21 @@ let () =
               && c.inline_constraints = off.counts.inline_constraints);
           p_all "checking instantiates a scheme at every depth" cells ~f:(fun ((w, n, _), _) ->
               let c = (get w n `Check).counts in
-              c.checked_applications > 0 && c.instantiated_constraints > 0))
+              c.checked_applications > 0 && c.instantiated_constraints > 0));
+      (* gh-ocannl-1802: the rank-cycle search bounded by the new edge's endpoints' levels, against
+         the unbounded walk it replaced. *)
+      let unbounded_visits w n =
+        (List.Assoc.find_exn unbounded (w, n) ~equal:Poly.equal).counts.rank_search_visits
+      in
+      let saving w n = unbounded_visits w n - (get w n `Off).counts.rank_search_visits in
+      Verdict.case "the rank-cycle search, bounded by the new edge's endpoints" (fun () ->
+          p_all "the bounded search closes the shapes the unbounded one closes" unbounded
+            ~f:(fun ((w, n), r) -> List.equal (List.equal Int.equal) r.dims (get w n `Off).dims);
+          p_all "the bounded search visits fewer states than the unbounded one" unbounded
+            ~f:(fun ((w, n), _) -> saving w n > 0);
+          let deeper =
+            List.cartesian_product workloads
+              (List.zip_exn (List.drop_last_exn depths) (List.tl_exn depths))
+          in
+          p_all "the bounded search's saving grows with depth" deeper ~f:(fun (w, (n, n')) ->
+              saving w.w_name n < saving w.w_name n'))
